@@ -78,11 +78,13 @@ import itertools
 import json
 import multiprocessing
 import pathlib
+import secrets
 import select
 import signal
 import socket
 import sys
 import threading
+import time
 import types
 from collections.abc import Generator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -122,7 +124,7 @@ MISDIRECTED_REQUEST = 421
 #: sampler (``linuxperf``) or tracers (``nsys`` / ``rocprofv3``), PAPI counts alone (``papi``),
 #: or -- ``none`` -- no instrument at all: the agent's own instrumented source, run once.
 #: ``opt-report`` runs nothing: it is the compiler's report on a build that is never timed.
-PROFILE_TOOLS = ("linuxperf", "papi", "nsys", "rocprofv3", "none", "opt-report")
+PROFILE_TOOLS = ("linuxperf", "papi", "nsys", "rocprofv3", "rocprof-compute", "ncu", "none", "opt-report")
 
 #: The profile tool that answers the compiler's optimization report, for any compiled language.
 OPT_REPORT_TOOL = "opt-report"
@@ -209,6 +211,17 @@ DEVICE_TOOLS = {"cuda": "nsys", "hip": "rocprofv3"}
 #: The default tracer of a host-language submission this arm builds for the AMD GPU
 #: (:func:`~hpcagent_bench.harness.gpu_profiling.offload_traced`). The host tools still serve it.
 OFFLOAD_DEVICE_TOOL = DEVICE_TOOLS["hip"]
+
+#: The compute profiler per device language: a second, replayed run that counts what the trace cannot.
+COMPUTE_DEVICE_TOOLS = {"cuda": "ncu", "hip": "rocprof-compute"}
+
+#: An OpenMP-offload build is counted as AMD dispatches, like its trace.
+OFFLOAD_COMPUTE_TOOL = COMPUTE_DEVICE_TOOLS["hip"]
+
+
+def request_label() -> str:
+    """A folder name for one request's staged report: sortable by time, unique across judge restarts."""
+    return f"{time.strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(3)}"
 
 
 def as_json_object(value: object) -> dict[str, object]:
@@ -1027,13 +1040,18 @@ class JudgeHandler(BaseHTTPRequestHandler):
         instrument that can actually see its run. Naming a tool the language cannot use is the
         request's fault: 400, with the tool that serves it. In particular a host call graph of a
         device kernel shows only the synchronization it waited in, PAPI cannot count a device
-        kernel (``ncu`` / ``rocprof-compute`` are not judge routes and not the agent's to run
-        either -- a profile taken outside this endpoint describes a build the judge never timed),
-        and a device kernel has no host-side bracket for ``none`` to run in.
+        kernel (its counters come from ``ncu`` / ``rocprof-compute``, tools of their own here), and a
+        device kernel has no host-side bracket for ``none`` to run in.
 
         On an OpenMP-offload arm a ``c``/``cpp``/``fortran`` submission defaults to ``rocprofv3``
         (:data:`OFFLOAD_DEVICE_TOOL`): the sandbox builds it with the offload leg that grades it and
         the trace reads its AMD dispatches. ``linuxperf``, ``papi`` and ``none`` still serve it.
+
+        ``ncu`` (``cuda``) and ``rocprof-compute`` (``hip`` and offload builds) are the compute
+        profilers: a SEPARATE run of the same build that replays the work once per counter pass, so
+        they answer counts and utilizations, never a time. The payload carries the headline rows and
+        the full report is copied into the agent's shared folder (:mod:`report_staging`), beside
+        ``source_file`` or under the run's inline folder.
 
         ``linuxperf`` builds with debug symbols and re-runs the graded measurement per thread count
         under ``perf``; ``counters: true`` adds PAPI hardware counts for the ``counter_group``
@@ -1052,6 +1070,7 @@ class JudgeHandler(BaseHTTPRequestHandler):
         defaults to the graded one (:func:`grading_residency`); a GPU language reads ``host`` as
         ``device``, and a residency the task refuses is a 400.
         """
+        from hpcagent_bench.harness.compute_profiling import profile_compute_submission
         from hpcagent_bench.harness.gpu_profiling import GpuProfilerUnavailable, offload_traced, profile_gpu_submission
         from hpcagent_bench.harness.papi import PapiUnavailable
         from hpcagent_bench.harness.profiling import (
@@ -1061,32 +1080,38 @@ class JudgeHandler(BaseHTTPRequestHandler):
             profile_submission,
             run_agent_build,
         )
+        from hpcagent_bench.harness.report_staging import report_home
         from hpcagent_bench.perf_reports import PerfUnavailable
 
         device_tool = DEVICE_TOOLS.get(task.language)
-        offload_tool = OFFLOAD_DEVICE_TOOL if device_tool is None and offload_traced(task.language) else None
+        compute_tool = COMPUTE_DEVICE_TOOLS.get(task.language)
+        offloaded = device_tool is None and offload_traced(task.language)
+        offload_tool = OFFLOAD_DEVICE_TOOL if offloaded else None
+        offload_compute_tool = OFFLOAD_COMPUTE_TOOL if offloaded else None
         tool = body.text_or_none("tool") or device_tool or offload_tool or "linuxperf"
         if tool not in PROFILE_TOOLS:
             return self._send(400, {"error": f"unknown tool {tool!r}: one of {', '.join(PROFILE_TOOLS)}"})
         if tool == OPT_REPORT_TOOL:
             return self._opt_report(submission, task)
-        if device_tool is not None and tool != device_tool:
+        if device_tool is not None and tool not in (device_tool, compute_tool):
             return self._send(
                 400,
                 {
                     "error": f"tool {tool!r} does not serve {task.language!r}: "
-                    f"trace a device submission with {device_tool!r}"
+                    f"trace a device submission with {device_tool!r}, or count it with {compute_tool!r}"
                 },
             )
-        if device_tool is None and tool in DEVICE_TOOLS.values() and tool != offload_tool:
+        device_only = (*DEVICE_TOOLS.values(), *COMPUTE_DEVICE_TOOLS.values())
+        if device_tool is None and tool in device_only and tool not in (offload_tool, offload_compute_tool):
             served = (
                 "'linuxperf', 'papi' or 'none'"
                 if offload_tool is None
-                else f"'linuxperf', 'papi', 'none' or {offload_tool!r}"
+                else f"'linuxperf', 'papi', 'none', {offload_tool!r} or {offload_compute_tool!r}"
             )
+            verb = "counts" if tool in COMPUTE_DEVICE_TOOLS.values() else "traces"
             return self._send(
                 400,
-                {"error": f"tool {tool!r} traces a device submission: profile {task.language!r} with {served}"},
+                {"error": f"tool {tool!r} {verb} a device submission: profile {task.language!r} with {served}"},
             )
         try:
             task = dataclasses.replace(task, residency=body.text("residency", task.residency))
@@ -1130,6 +1155,20 @@ class JudgeHandler(BaseHTTPRequestHandler):
                             reps=body.optional_count("reps"),
                             threads=body.count("threads", 1),
                             counter_group=body.text("counter_group", DEFAULT_COUNTER_GROUP),
+                        )
+                    )
+                elif tool in (compute_tool, offload_compute_tool):
+                    payload = as_json_object(
+                        profile_compute_submission(
+                            submission,
+                            task,
+                            preset=preset,
+                            datatype=self.cfg.datatype,
+                            reps=body.optional_count("reps"),
+                            device_kernel=body.text_or_none("device_kernel"),
+                            home=report_home(
+                                body.text_or_none("source_file"), body.text_or_none("run_id"), tool, request_label()
+                            ),
                         )
                     )
                 elif tool in (device_tool, offload_tool):

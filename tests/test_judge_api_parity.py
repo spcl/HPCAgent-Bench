@@ -23,10 +23,11 @@ ALIAS_ROUTES = {"oracle"}
 
 
 def post_routes() -> Set[str]:
-    """The POST routes ``do_POST`` accepts, read from its own guard tuple."""
-    source = inspect.getsource(service.JudgeHandler.do_POST)
+    """The POST routes the handler accepts, read from ``serve_post``'s own guard tuple (``do_POST`` only
+    wraps it in the abandoned-client watcher)."""
+    source = inspect.getsource(service.JudgeHandler.serve_post)
     match = re.search(r"route not in \(([^)]*)\)", source)
-    assert match, "do_POST no longer guards its routes with a literal tuple -- update this reader"
+    assert match, "serve_post no longer guards its routes with a literal tuple -- update this reader"
     return set(re.findall(r"\"([a-z]+)\"", match.group(1)))
 
 

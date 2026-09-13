@@ -93,8 +93,12 @@ def stage_report(
             omitted.append((relative, f"{size} bytes would pass the {max_total_bytes}-byte request cap"))
             continue
         target = judge_dir / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(path, target)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, target)
+        except OSError as exc:  # a full or read-only mount costs the copy, never the answer
+            omitted.append((relative, f"copy failed: {exc.strerror or exc}"))
+            continue
         files.append(relative)
         total += size
     return StagedReport(agent_dir, tuple(files), tuple(omitted))

@@ -7,14 +7,14 @@ when: "you are profiling a cuda submission (tool nsys, the NVIDIA device trace)"
 `profile` (`POST /profile`) on a `cuda` submission wraps Nsight Systems (`nsys`) around the same
 measured child `score` times, on the same build. A GPU has no call stack to sample, so `nsys`
 RECORDS instead: CUPTI hands it one activity record per kernel launch and per memory operation.
-`nsys` answers **which kernel, how many times and when**; nothing on this route answers **why that
-kernel is slow**. Host instruments are the `profiling` skill; a `hip` submission is `rocprof`'s.
+`nsys` answers **which kernel, how many times and when**; `tool:"ncu"` answers **what the device did
+inside it** (below). Host instruments are the `profiling` skill; a `hip` submission is `rocprof`'s.
 
 ## How it runs
 
 - Body: the `score` body plus e.g. `"tool":"nsys","reps":3,"min_percent":0`.
-- `tool` defaults to `nsys` for `cuda`. Any other `tool` except `tool:"opt-report"` is a 400 naming
-  `nsys`, with no `cause`. Only `cuda` reaches `nsys`: on any other language (OpenMP-offload, OpenACC and
+- `tool` defaults to `nsys` for `cuda`. Any other `tool` except `tool:"ncu"` and `tool:"opt-report"`
+  is a 400 naming `nsys`, with no `cause`. Only `cuda` reaches `nsys`: on any other language (OpenMP-offload, OpenACC and
   Triton arms included) `tool:"nsys"` is a 400.
 - `reps` defaults to `measurement.repeat`; one warmup rep (`measurement.warmup`) runs first.
 - `min_percent` (0-100, else a 400; default 1): kernels below it are dropped and counted in
@@ -153,7 +153,7 @@ and `kernels[]` before and after: the route sets no graph-trace option.
 
 **Resident is not busy.** `nsys` records that a kernel was RESIDENT, not whether the device was
 SATURATED: a kernel filling the timeline on a few SMs gives the same rows and `device_pct` as one at
-peak. Saturation is unmeasured on this route. A low `device_pct` (with `min_percent` 0) IS
+peak. Saturation is not in the trace; `tool:"ncu"` counts it. A low `device_pct` (with `min_percent` 0) IS
 conclusive: the device was idle for that share of the call.
 
 ## `cuda_gpu_trace` -- geometry bounds occupancy
@@ -167,16 +167,38 @@ conclusive: the device was idle for that share of the call.
   per-SM register and shared-memory budgets (not in the payload), bound how many blocks are
   resident per SM at once.
 
-Achieved occupancy is a per-SM counter: not here, not inferable from here, and `occupancy_note`
-says so. Report it as unmeasured rather than deriving a number that looks measured.
+Achieved occupancy is a per-SM counter: not in this trace and not inferable from it, and
+`occupancy_note` says so. Ask `tool:"ncu"` for it, or report it as unmeasured rather than deriving a
+number that looks measured.
 
-## What nsys cannot answer, and ncu is not here
+## What nsys cannot answer: ask `tool:"ncu"`
 
 `nsys` records activity, not counters: no achieved occupancy, no stall reason, no cache hit rate.
 The trace's per-copy `Throughput (MBps)` column is not in the payload; divide `total` by `total_ns`.
-Nsight Compute (`ncu`) owns the counter questions and is **not on this route**: `counters:true` is
-`counters_unsupported`, and PAPI's `cuda` and `nvml` components are not reachable through
-`/profile`. Name a counter question as unanswered rather than guessing.
+Nsight Compute (`ncu`) owns the counter questions, and `profile` serves it as `tool:"ncu"` on a
+`cuda` submission. `counters:true` stays `counters_unsupported`, and PAPI's `cuda` and `nvml`
+components are not reachable through `/profile`.
+
+- **A separate run of the same build.** `ncu` replays ONE launch once per counter pass, clocks
+  pinned and caches flushed, so no number it returns is a time and none goes next to `elapsed_ns`
+  or a score. Trace first: `kernels[]` names the kernel and how often it launched.
+- **Body:** the `score` body plus `"tool":"ncu"`. `device_kernel` is the exact `name` from
+  `kernels[]`; a `regex:` value is a 400, because it matches every kernel whose name contains it.
+  Without it, the first launch after the warmup launches is counted. `reps` defaults to 1.
+- **Answer:** `metrics[]` rows (`section`, `metric`, `value`, `unit`; a column not reported is null),
+  keyed by raw metric id: Speed Of Light memory throughput, the three memory limits (unit access,
+  interconnect request, SM memory issue rate), L1/TEX throughput, active warps, and the hardware
+  and launch warps-per-scheduler maxima. `kernels` is null: one launch has no share table.
+  `metrics_missing` says why when the export carried none of them.
+- **The whole report** is in your shared workspace at `report_dir`: `report.ncu-rep`,
+  `details.txt` (every section, body tables included) and `raw.csv` (every metric by id).
+  `report_files` lists what arrived; `report_omitted` names each file left behind and why.
+- This route has not run on an NVIDIA part in this deployment. An empty `metrics[]` with
+  `metrics_missing` set is the reader not recognising the export, and `details.txt` still has it.
+- **Refusals**, 503 with `cause`: `ncu_missing` (no `ncu` on the judge), `not_linux`, `no_gpu`,
+  `insufficient_permissions` (the profiling gate below), `ncu_failed` (no report; the output is
+  quoted), `ncu_report_missing` (clean exit, no report: no launch matched, so check `device_kernel`
+  and that the kernel launches more often than the warmup does), `timed_out`.
 
 For device counter numbers met elsewhere:
 
