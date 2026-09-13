@@ -17,7 +17,7 @@ from collections.abc import Callable
 
 import pytest
 
-from hpcagent_bench import config
+from hpcagent_bench import config, osinfo
 from hpcagent_bench.harness import recording
 from hpcagent_bench.harness.envelope import Submission
 from hpcagent_bench.harness.scoring import Score, VerifyResult
@@ -91,7 +91,7 @@ def test_connect_creates_the_current_schema(tmp_path) -> None:
 def test_every_graded_row_carries_the_node_it_ran_on(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``cpu`` names the hardware MODEL, so on a homogeneous cluster it is one string for the whole
     campaign and a candidate timed on one node divided by a baseline timed on another reads as a
-    software speed-up. ``host`` is what tells the two nodes apart, and the DDL carrying the column
+    software speed-up. ``node`` is what tells the two nodes apart, and the DDL carrying the column
     proves nothing on its own -- every WRITER has to stamp it, on all three graded tables.
 
     The node name is pinned through ``$HPCAGENT_BENCH_HOST`` rather than read off this machine: an
@@ -104,7 +104,76 @@ def test_every_graded_row_carries_the_node_it_ran_on(tmp_path: pathlib.Path, mon
     recording.record(_correct_score(correct=False), _sub(), task, verify=_ok_verify(), run_id="t", path=db)
     recording.record_call(_correct_score(), task, status="ok", route="score", run_id="t", path=db)
     for table in ("submissions", "attempts", "calls"):
-        assert [row["host"] for row in _rows(db, table)] == ["nid001234"], f"{table} lost the node identity"
+        assert [row["node"] for row in _rows(db, table)] == ["nid001234"], f"{table} lost the node identity"
+
+
+def test_the_host_override_wins_over_slurm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``$HPCAGENT_BENCH_HOST`` is an explicit override -- a user who sets it means it -- so it wins
+    even when ``$SLURMD_NODENAME`` is also set. The resolution order is ``osinfo.node_name``'s
+    contract, not an accident of dict/env lookup order."""
+    monkeypatch.setenv("HPCAGENT_BENCH_HOST", "override-name")
+    monkeypatch.setenv("SLURMD_NODENAME", "nid005")
+    assert osinfo.node_name() == "override-name"
+
+
+def test_a_fresh_db_never_gets_the_legacy_host_column(tmp_path: pathlib.Path) -> None:
+    """One name, one fact: a row records the machine once, under ``node``. ``host`` was the branch's
+    own column before ``node`` merged from main and must not reappear on a fresh DB."""
+    db = str(tmp_path / "r.db")
+    recording.record(_correct_score(), _sub(), Task(KERNEL, "restricted", "c"), verify=_ok_verify(), path=db)
+    conn = sqlite3.connect(db)
+    try:
+        for table in ("submissions", "attempts", "calls"):
+            columns = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            assert "host" not in columns
+    finally:
+        conn.close()
+
+
+def legacy_host_only_db(tmp_path: pathlib.Path) -> str:
+    """An archived DB from before ``node`` merged from main: ``host`` is populated and ``node`` does
+    not exist at all -- built by dropping ``node`` off a fresh DB, the same way
+    :func:`test_a_shard_recorded_before_a_column_existed_opens_into_the_fresh_schema` simulates an
+    old shard."""
+    db = str(tmp_path / "r.db")
+    task = Task(KERNEL, "restricted", "c")
+    recording.record(_correct_score(), _sub(), task, verify=_ok_verify(), path=db)
+    recording.record(_correct_score(correct=False, build_ok=False), _sub(), task, path=db)
+    _call(db, "ok", score=_correct_score())
+    conn = sqlite3.connect(db)
+    try:
+        for table in ("submissions", "attempts", "calls"):
+            conn.execute(f"ALTER TABLE {table} DROP COLUMN node")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN host TEXT")
+            conn.execute(f"UPDATE {table} SET host = 'nid001234'")
+        conn.commit()
+    finally:
+        conn.close()
+    return db
+
+
+def test_a_db_with_only_the_legacy_host_column_still_reads_the_node(tmp_path: pathlib.Path) -> None:
+    """Opening an archive that predates the ``node`` merge must not lose the machine identity even
+    though every future write goes to ``node``."""
+    db = legacy_host_only_db(tmp_path)
+    recording.connect(db).close()
+    for table in ("submissions", "attempts", "calls"):
+        assert [row["node"] for row in _rows(db, table)] == ["nid001234"], f"{table} did not backfill node"
+
+
+def test_a_db_carrying_both_columns_keeps_its_own_node_value(tmp_path: pathlib.Path) -> None:
+    """A DB written during the window when both columns were stamped already has its own trusted
+    ``node``; the legacy ``host`` value must never override it."""
+    db = legacy_host_only_db(tmp_path)
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("ALTER TABLE submissions ADD COLUMN node TEXT")
+        conn.execute("UPDATE submissions SET node = 'real-node'")
+        conn.commit()
+    finally:
+        conn.close()
+    recording.connect(db).close()
+    assert _rows(db, "submissions")[0]["node"] == "real-node"
 
 
 def test_connect_creates_a_missing_table(tmp_path) -> None:
