@@ -303,7 +303,8 @@ CREATE TABLE IF NOT EXISTS runs (
     rep        INTEGER NOT NULL DEFAULT 1,  -- 1-based repetition of this arm
     arm        TEXT,                        -- provenance only; nothing may parse it
     first_seen INTEGER,                     -- epoch ms (UTC) the run first wrote a row
-    harness    TEXT                         -- agent harness; NULL = the arm named none
+    harness    TEXT,                        -- agent harness; NULL = the arm named none
+    commit_sha TEXT                         -- hpcagent_bench commit the arm was submitted from; NULL = unknown
 );
 """
 
@@ -331,6 +332,7 @@ CREATE TABLE IF NOT EXISTS packets (
 #: older writer's INSERT omits it and must still succeed.
 ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("runs", "harness", "TEXT"),
+    ("runs", "commit_sha", "TEXT"),
     ("submissions", "timing_reduction", "TEXT"),
     ("calls", "timing_reduction", "TEXT"),
     ("submissions", "node", "TEXT"),
@@ -719,6 +721,15 @@ def harness_tag() -> str | None:
     return harness or None
 
 
+def commit_tag() -> str | None:
+    """``record.commit`` -- the hpcagent_bench commit the arm was submitted from, or None if unknown.
+
+    Stamped at submission because the judge cannot ask git: the container sees the tree without its
+    repository, so ``git rev-parse`` there fails, and every row of every campaign recorded NULL."""
+    commit = str(config.get("record.commit", "") or "").strip()
+    return commit or None
+
+
 class Identity(NamedTuple):
     """WHO produced a row. One row of ``runs``, and the tuple every figure groups by."""
 
@@ -730,6 +741,7 @@ class Identity(NamedTuple):
     rep: int
     arm: str | None
     harness: str | None
+    commit_sha: str | None
 
 
 def identity() -> Identity:
@@ -743,6 +755,7 @@ def identity() -> Identity:
         rep_tag(),
         arm_tag(),
         harness_tag(),
+        commit_tag(),
     )
 
 
@@ -785,8 +798,20 @@ def upsert_run(conn: sqlite3.Connection, run_id: str, ts: int, language: str | N
         who = who._replace(language=language)
     conn.execute(
         "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm, "
-        "first_seen, harness) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (run_id, who.experiment, who.model, who.language, who.device, who.packet, who.rep, who.arm, ts, who.harness),
+        "first_seen, harness, commit_sha) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            run_id,
+            who.experiment,
+            who.model,
+            who.language,
+            who.device,
+            who.packet,
+            who.rep,
+            who.arm,
+            ts,
+            who.harness,
+            who.commit_sha,
+        ),
     )
     record_packet_definition(conn, who.packet, who.language or "", ts)
 
@@ -1016,7 +1041,11 @@ def upsert_benchmark(conn: sqlite3.Connection, spec: BenchSpec) -> None:
 
 
 def _commit_sha() -> str | None:
-    """Best-effort current git commit (provenance); ``None`` outside a repo."""
+    """The commit the arm was submitted from (``record.commit``), else this checkout's own; ``None``
+    when neither is known."""
+    stamped = commit_tag()
+    if stamped is not None:
+        return stamped
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=5, check=False
