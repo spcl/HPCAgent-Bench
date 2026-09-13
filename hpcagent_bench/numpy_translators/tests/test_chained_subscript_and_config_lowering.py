@@ -18,15 +18,21 @@ translation is orthogonal to the config flags -- one binary handles all of them)
 """
 
 import ast
+import dataclasses
+import json
+import pathlib
+from typing import Mapping
 
 import numpy as np
 import pytest
 from _op_oracle import run_op
+from _op_oracle import _bench_info as synthesize_bench_info
 
 from numpyto_common.frontend import _collect_bool_preset_names
+from numpyto_common.frontend import parse_kernel
 from numpyto_common.lib_nodes import _reads_complex
 from numpyto_common import lowering
-from numpyto_common.lowering import ChainedSubscriptFlattener
+from numpyto_common.lowering import ChainedSubscriptFlattener, lower
 
 _ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
@@ -150,29 +156,218 @@ def test_a_gather_through_a_partial_slice_offsets_the_index_array() -> None:
     assert ok, r
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the flattener keeps the exact two-step A[2, :3, :][:, idx]; a later lowering pass still "
-    "merges it into a 5-axis index the emitter refuses (before: flat A[2, :3, idx], SIG11)",
-)
-def test_an_index_array_split_from_a_scalar_by_a_slice_keeps_its_axis_order() -> None:
-    # ``A[2][:3, idx]`` is (3, P), the flat ``A[2, :3, idx]`` is (P, 3). The pre-harvest phase used
-    # to emit the flat form, which crashed the C kernel.
-    src = "import numpy as np\ndef f(A, idx, out):\n    out[:, :] = A[2][:3, idx]\n"
-    F, X, Y, P = 3, 5, 7, 2
-    A = np.random.default_rng(5).standard_normal((F, X, Y))
-    idx = np.array([0, 2], dtype=np.int64)
+def lowered_source(
+    src: str,
+    arrays: Mapping[str, np.ndarray],
+    outputs: Mapping[str, tuple[int, ...]],
+    shapes: Mapping[str, str],
+    syms: Mapping[str, int],
+    workdir: pathlib.Path,
+) -> str:
+    """Kernel ``gather`` after lowering, as source, through the real file-reading entry point."""
+    kernel = workdir / "gather_numpy.py"
+    kernel.write_text(src)
+    info = workdir / "bench_info.json"
+    dtypes = {name: str(array.dtype) for name, array in arrays.items() if array.dtype.kind == "i"}
+    info.write_text(
+        json.dumps(synthesize_bench_info("gather", list(arrays), list(outputs), dict(shapes), dict(syms), dtypes))
+    )
+    return ast.unparse(lower(parse_kernel(kernel, info)).tree)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ChainCase:
+    """One kernel body over named arrays, the statement lowering must emit, and the output numpy writes."""
+
+    body: str
+    arrays: dict[str, np.ndarray]
+    shapes: dict[str, str]
+    out: tuple[int, ...]
+    lowered: str
+
+
+def check_chain_case(case: ChainCase, syms: Mapping[str, int], workdir: pathlib.Path) -> None:
+    src = f"import numpy as np\ndef gather({', '.join(case.arrays)}, out):\n    {case.body}\n"
+    shapes = {**case.shapes, "out": "(" + ",".join(str(extent) for extent in case.out) + ")"}
+    assert case.lowered in lowered_source(src, case.arrays, {"out": case.out}, shapes, syms, workdir)
+    dtypes = {name: str(array.dtype) for name, array in case.arrays.items() if array.dtype.kind == "i"}
     res = run_op(
         src,
-        "f",
-        {"A": A, "idx": idx},
-        {"out": (3, P)},
-        {"F": F, "X": X, "Y": Y, "P": P},
-        shapes={"A": "(F,X,Y)", "idx": "(P,)", "out": "(3,P)"},
+        "gather",
+        dict(case.arrays),
+        {"out": case.out},
+        dict(syms),
+        shapes=shapes,
         backends=ABI_BACKENDS,
+        dtypes=dtypes,
     )
     ok, r = _ok(res)
     assert ok, r
+
+
+VIEW_RNG = np.random.default_rng(5)
+VIEW_A = VIEW_RNG.standard_normal((3, 5, 7))
+VIEW_B = VIEW_RNG.standard_normal((3, 5, 7, 6))
+VIEW_IDX = np.array([0, 2], dtype=np.int64)
+VIEW_PAIR = np.array([[6], [1], [3], [0]], dtype=np.int64)
+VIEW_JDX = np.array([5, 0, 2, 4, 1], dtype=np.int64)
+VIEW_SYMS = {"F": 3, "X": 5, "Y": 7, "Z": 6, "P": 2, "Q": 4, "R": 5}
+A_IDX_SHAPES = {"A": "(F,X,Y)", "idx": "(P,)"}
+
+#: ``(chained, naive flat)`` numpy shapes: each chain below would transpose if merged into one subscript.
+VIEW_PREMISES = {
+    "integer-before-slice": (VIEW_A[2][:3, VIEW_IDX].shape, VIEW_A[2, :3, VIEW_IDX].shape),
+    "loop-integer-partial-slice": (VIEW_A[1][1:4, VIEW_IDX].shape, VIEW_A[1, 1:4, VIEW_IDX].shape),
+    "integer-after-slice": (VIEW_B[:, 2][1:3, :, VIEW_IDX].shape, VIEW_B[1:3, 2, :, VIEW_IDX].shape),
+    "two-index-arrays": (VIEW_B[2][:3, VIEW_PAIR, VIEW_JDX].shape, VIEW_B[2, :3, VIEW_PAIR, VIEW_JDX].shape),
+    "length-one-slice": (VIEW_A[2][1:2, VIEW_IDX].shape, VIEW_A[2, 1:2, VIEW_IDX].shape),
+    "newaxis-before": (VIEW_A[2][None, :3, VIEW_IDX].shape, VIEW_A[2, None, :3, VIEW_IDX].shape),
+    "newaxis-after": (VIEW_A[2][:3, VIEW_IDX, None].shape, VIEW_A[2, :3, VIEW_IDX, None].shape),
+}
+
+VIEW_GATHERS = {
+    "integer-before-slice": ChainCase(
+        "out[:, :] = A[2][:3, idx]",
+        {"A": VIEW_A, "idx": VIEW_IDX},
+        A_IDX_SHAPES,
+        (3, 2),
+        "out[si0, si1] = A[2, si0, idx[si1]]",
+    ),
+    "loop-integer-partial-slice": ChainCase(
+        "for i in range(3):\n        out[i, :, :] = A[i][1:4, idx]",
+        {"A": VIEW_A, "idx": VIEW_IDX},
+        A_IDX_SHAPES,
+        (3, 3, 2),
+        "out[i, si1, si2] = A[i, si1 + 1, idx[si2]]",
+    ),
+    "integer-after-slice": ChainCase(
+        "out[:, :, :] = B[:, 2][1:3, :, idx]",
+        {"B": VIEW_B, "idx": VIEW_IDX},
+        {"B": "(F,X,Y,Z)", "idx": "(P,)"},
+        (2, 7, 2),
+        "out[si0, si1, si2] = B[si0 + 1, 2, si1, idx[si2]]",
+    ),
+    "two-index-arrays": ChainCase(
+        "out[:, :, :] = B[2][:3, pair, jdx]",
+        {"B": VIEW_B, "pair": VIEW_PAIR, "jdx": VIEW_JDX},
+        {"B": "(F,X,Y,Z)", "pair": "(Q,1)", "jdx": "(R,)"},
+        (3, 4, 5),
+        "out[si0, si1, si2] = B[2, si0, pair[si1, 0], jdx[si2]]",
+    ),
+    "length-one-slice": ChainCase(
+        "out[:, :] = A[2][1:2, idx]",
+        {"A": VIEW_A, "idx": VIEW_IDX},
+        A_IDX_SHAPES,
+        (1, 2),
+        "out[si0, si1] = A[2, 0 + 1, idx[si1]]",
+    ),
+    "newaxis-before": ChainCase(
+        "out[:, :, :] = A[2][None, :3, idx]",
+        {"A": VIEW_A, "idx": VIEW_IDX},
+        A_IDX_SHAPES,
+        (1, 3, 2),
+        "out[si0, si1, si2] = A[2, si1, idx[si2]]",
+    ),
+    "newaxis-after": ChainCase(
+        "out[:, :, :] = A[2][:3, idx, None]",
+        {"A": VIEW_A, "idx": VIEW_IDX},
+        A_IDX_SHAPES,
+        (3, 2, 1),
+        "out[si0, si1, si2] = A[2, si0, idx[si1]]",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(VIEW_GATHERS))
+def test_an_index_array_split_from_a_scalar_by_a_slice_keeps_its_axis_order(name: str, tmp_path: pathlib.Path) -> None:
+    # ``A[2][:3, idx]`` is (3, P), the flat ``A[2, :3, idx]`` is (P, 3). The pre-harvest phase used to emit
+    # the flat form (SIG11 in C); the two-step form then reached the emitter as a 5-axis index. Lowering now
+    # reads the view's axes at the statement iterators and composes them onto the base, one element read.
+    chained, flat = VIEW_PREMISES[name]
+    assert chained != flat
+    check_chain_case(VIEW_GATHERS[name], VIEW_SYMS, tmp_path)
+
+
+def test_adjacent_index_arrays_behind_a_slice_share_one_broadcast_block(tmp_path: pathlib.Path) -> None:
+    # ``C[:3, pair, jdx]``: pair (Q, 1) and jdx (R,) broadcast to ONE (Q, R) block after the slice axis.
+    # Each array used to take iterators of its own, so ``jdx`` was left unindexed.
+    case = ChainCase(
+        "out[:, :, :] = C[:3, pair, jdx]",
+        {"C": VIEW_B[0], "pair": VIEW_PAIR, "jdx": VIEW_JDX},
+        {"C": "(X,Y,Z)", "pair": "(Q,1)", "jdx": "(R,)"},
+        VIEW_B[0][:3, VIEW_PAIR, VIEW_JDX].shape,
+        "out[si0, si1, si2] = C[si0, pair[si1, 0], jdx[si2]]",
+    )
+    check_chain_case(case, VIEW_SYMS, tmp_path)
+
+
+GATHER_RNG = np.random.default_rng(11)
+COUNTS = np.array([1.0, 4.0, 2.0])
+MAT = np.array([2, 0, 1, 2], dtype=np.int64)
+LIM = np.arange(5, dtype=np.float64)
+TABLE = GATHER_RNG.standard_normal((3, 2, 5))
+GATHER_SYMS = {"M": 3, "P": 4, "J": 5, "X": 2, "Y": 5, "Q": 3}
+COUNT_SHAPES = {"counts": "(M,)", "mat": "(P,)", "lim": "(J,)"}
+
+NEWAXIS_GATHERS = {
+    "xsbench-two-statements": ChainCase(
+        "valid = lim[None, :] < counts[mat][:, None]\n    out[:, :] = np.where(valid, conc, 0.0)",
+        {"counts": COUNTS, "mat": MAT, "lim": LIM, "conc": GATHER_RNG.standard_normal((4, 5))},
+        {**COUNT_SHAPES, "conc": "(P,J)"},
+        (4, 5),
+        "valid[si0, si1] = lim[si1] < counts[mat[si0]]",
+    ),
+    "rank-3-base": ChainCase(
+        "out[:, :, :, :] = B[mat][:, None] + 1.0",
+        {"B": TABLE, "mat": MAT},
+        {"B": "(M,X,Y)", "mat": "(P,)"},
+        (4, 1, 2, 5),
+        "out[si0, si1, si2, si3] = B[mat[si0], si2, si3] + 1.0",
+    ),
+    "rank-3-base-on-where": ChainCase(
+        "out[:, :, :, :] = np.where(B[mat][:, None] > 0.0, 1.0, -1.0)",
+        {"B": TABLE, "mat": MAT},
+        {"B": "(M,X,Y)", "mat": "(P,)"},
+        (4, 1, 2, 5),
+        "1.0 if B[mat[__r0], __r2, __r3] > 0.0 else -1.0",
+    ),
+    "inside-a-2d-index-on-where": ChainCase(
+        "out[:, :, :] = np.where(x[aj][:, None, :] > 0.5, 1.0, 0.0)",
+        {"x": np.array([0.2, 0.9, 0.6]), "aj": np.array([[2, 0, 1], [1, 1, 0], [0, 2, 2], [2, 1, 0]], dtype=np.int64)},
+        {"x": "(M,)", "aj": "(P,Q)"},
+        (4, 1, 3),
+        "1.0 if x[aj[__r0, __r2]] > 0.5 else 0.0",
+    ),
+    "inside-the-index-on-where": ChainCase(
+        "out[:, :] = np.where(lim[None, :] < counts[mat[:, None]], 1.0, 0.0)",
+        {"counts": COUNTS, "mat": MAT, "lim": LIM},
+        COUNT_SHAPES,
+        (4, 5),
+        "1.0 if lim[__r1] < counts[mat[__r0]] else 0.0",
+    ),
+    "newaxis-before-the-gathered-axis": ChainCase(
+        "out[:, :] = counts[mat][None, :] + lim[:, None]",
+        {"counts": COUNTS, "mat": MAT, "lim": LIM},
+        COUNT_SHAPES,
+        (5, 4),
+        "out[si0, si1] = counts[mat[si1]] + lim[si0]",
+    ),
+    "newaxes-separating-advanced-entries": ChainCase(
+        "out[:, :, :] = G[None, mat, None, 2]",
+        {"G": GATHER_RNG.standard_normal((3, 5)), "mat": MAT},
+        {"G": "(M,J)", "mat": "(P,)"},
+        (4, 1, 1),
+        "out[si0, si1, si2] = G[mat[si0], 2]",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(NEWAXIS_GATHERS))
+def test_a_newaxis_beside_a_gathered_axis_reads_each_gathered_row(name: str, tmp_path: pathlib.Path) -> None:
+    # xsbench's ``num_nucs[mat][:, None]`` now flattens to ``num_nucs[mat, None]``. A newaxis in a slice-free
+    # gather inserts a unit axis and reads no source axis, and one inside an index array is a result axis of
+    # that array; both used to shift the gather onto the column iterator.
+    check_chain_case(NEWAXIS_GATHERS[name], GATHER_SYMS, tmp_path)
 
 
 # pure: a boolean preset value is a config-flag name (typed bool)
