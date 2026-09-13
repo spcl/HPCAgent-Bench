@@ -24,7 +24,7 @@ from collections.abc import Callable, Sequence
 from typing import Dict, FrozenSet, Iterator, List, Optional, Set, Tuple, Union
 
 from numpyto_common import dtypes
-from numpyto_common.lib_nodes import _const_int, _iter_extent_of, _parse_einsum_subscripts, extent_is_scalar
+from numpyto_common.lib_nodes import _iter_extent_of, _parse_einsum_subscripts, extent_is_scalar
 from numpyto_common.ordered import OrderedSet
 
 #: Tuple-shape lengths currently known to :func:`expr_rank`. Set by
@@ -394,6 +394,13 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
         # rank-preserving methods ``x.astype(dt)`` / ``x.copy()`` (receiver's rank).
         if isinstance(value.func, ast.Attribute) and value.func.attr in ("astype", "copy", "ravel"):
             return expr_rank(value.func.value, ranks) if value.func.attr != "ravel" else 1
+        # Method forms only: ``np.conj(z)`` names ``np`` as its receiver and takes the fallback below.
+        if (
+            isinstance(value.func, ast.Attribute)
+            and attr is None
+            and value.func.attr in ("flatten", "conj", "conjugate")
+        ):
+            return 1 if value.func.attr == "flatten" else expr_rank(value.func.value, ranks)
         # ``x.reshape((a, b))`` method form.
         if isinstance(value.func, ast.Attribute) and value.func.attr == "reshape" and value.args:
             # Multi-arg spelling: ONE positional argument per dimension, so the rank is the

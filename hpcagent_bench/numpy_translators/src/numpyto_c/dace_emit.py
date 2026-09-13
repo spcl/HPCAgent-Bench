@@ -2813,99 +2813,6 @@ def parse_expr(text: str) -> ast.expr:
     return ast.parse(text, mode="eval").body
 
 
-#: Calls that hand back their operand's shape unchanged, so a rank propagates straight through one.
-RANK_PRESERVING_CALLS = ("copy", "asarray", "ascontiguousarray", "array", "ravel", "conj", "conjugate")
-
-
-def ranks_including_aliases(fn_ast: ast.FunctionDef, declared: Dict[str, int]) -> Dict[str, int]:
-    """Ranks of the declared arrays, carried across the aliases the desugars mint.
-
-    ``np.searchsorted``'s sorted operand is materialised into ``__ss0 = np.ascontiguousarray(egrid)``
-    before this ever runs, and a lowering that only knows the DECLARED names sees a rank it cannot
-    read and declines -- leaving the very callback it exists to remove.
-    """
-    ranks = dict(declared)
-    assigns = [
-        node
-        for node in ast.walk(fn_ast)
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-    ]
-    for _ in range(len(assigns) + 1):
-        grown = False
-        for node in assigns:
-            bound = node.targets[0]
-            if not isinstance(bound, ast.Name):
-                continue
-            name = bound.id
-            if name in ranks:
-                continue
-            rank = rank_of(node.value, ranks)
-            if rank is not None:
-                ranks[name] = rank
-                grown = True
-        if not grown:
-            break
-    return ranks
-
-
-def rank_of(source: ast.expr, ranks: Dict[str, int]) -> Optional[int]:
-    """Rank of one right-hand side, when a reshape, a subscript or a pass-through decides it."""
-    if isinstance(source, ast.Name):
-        return ranks.get(source.id)
-    if isinstance(source, ast.Subscript):
-        return rank_of_subscript(source, ranks)
-    if isinstance(source, ast.UnaryOp):
-        return rank_of(source.operand, ranks)
-    if isinstance(source, ast.BinOp):  # broadcast: the wider operand decides
-        left, right = rank_of(source.left, ranks), rank_of(source.right, ranks)
-        return max(left, right) if left is not None and right is not None else None
-    if not isinstance(source, ast.Call):
-        return None
-    if np_call_name(source) in RANK_PRESERVING_CALLS and source.args:
-        return rank_of(source.args[0], ranks)
-    if np_call_name(source) == "reshape" and len(source.args) == 2:
-        return len(source.args[1].elts) if isinstance(source.args[1], ast.Tuple) else 1
-    if not isinstance(source.func, ast.Attribute):
-        return None
-    attr = source.func.attr
-    if attr in ("ravel", "flatten"):
-        return 1
-    if attr == "reshape" and source.args:
-        return len(source.args[0].elts) if isinstance(source.args[0], ast.Tuple) else len(source.args)
-    if attr in RANK_PRESERVING_CALLS or attr == "astype":
-        return rank_of(source.func.value, ranks)
-    return None
-
-
-def rank_of_subscript(node: ast.Subscript, ranks: Dict[str, int]) -> Optional[int]:
-    """Rank a subscript leaves: a slice keeps its axis, an integer drops it, ``None`` adds one.
-
-    ls3df reaches ``np.linalg.norm`` through ``psi_frag[f][..., 0]``, so a rank map that stops at
-    the declared arrays cannot tell whether the operand is the vector the norm is defined for.
-    An index that is itself an ARRAY replaces the axis with its own rank, which is why a known
-    index rank is read rather than assumed to be a scalar.
-    """
-    base = rank_of(node.value, ranks)
-    if base is None:
-        return None
-    elements = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
-    kept, consumed = 0, 0
-    for element in elements:
-        if isinstance(element, ast.Constant) and element.value is Ellipsis:
-            continue  # stands for the axes nothing else indexes, which the tail below already keeps
-        if isinstance(element, ast.Constant) and element.value is None:
-            kept += 1  # np.newaxis consumes no axis of the operand
-            continue
-        consumed += 1
-        if isinstance(element, ast.Slice):
-            kept += 1
-        elif isinstance(element, ast.Name):
-            kept += max(ranks.get(element.id, 0), 0)  # an index ARRAY puts its own rank in place
-    if consumed > base:
-        return None
-    return kept + base - consumed  # every axis no element indexes stays, ellipsis written or not
-
-
 class LowerCallsDaceCannotReplace(ast.NodeTransformer):
     """Rewrite every call in :data:`CALLS_WITHOUT_A_DACE_REPLACEMENT` into something dace replaces.
 
@@ -3986,7 +3893,7 @@ def render_program(
     # lowerings below spell their extents as .shape reads for those passes to resolve like any other.
     declared_ranks = {nm: len(dims) for nm, dims in arr_shapes.items()}
     complex_arrays = {nm for nm, dt in arr_dtypes.items() if "complex" in dt}
-    fn_ast = LowerCallsDaceCannotReplace(ranks_including_aliases(fn_ast, declared_ranks), complex_arrays).visit(fn_ast)
+    fn_ast = LowerCallsDaceCannotReplace(rank_table(fn_ast, declared_ranks), complex_arrays).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
     fn_ast = _ShapeToSymbol(arr_shapes).visit(fn_ast)
     # ... and every remaining .shape read, including on a transient: one unresolved read makes the

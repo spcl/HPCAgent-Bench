@@ -38,8 +38,6 @@ from numpyto_c.dace_emit import (
     DesugarContractionFreeEinsum,
     ResolveShapeReads,
     RewriteBuiltinDtype,
-    rank_of_subscript,
-    ranks_including_aliases,
     _AnnotateEmptyDtype,
     _CopyScalarAlias,
     _DesugarChainedAssign,
@@ -74,6 +72,7 @@ from numpyto_common.frontend import (
     symbol_sign_from_bindings,
 )
 from numpyto_common.ir import ArrayDesc, KernelIR, SymbolDesc, stamp_symbol_assumptions  # noqa: E402
+from numpyto_common.numpy_desugar import expr_rank, rank_table
 
 _KERNELS = foundation_kernels()
 
@@ -1856,8 +1855,61 @@ def test_a_rank_is_carried_through_the_aliases_the_earlier_desugars_mint() -> No
     fn = ast.parse(
         "def k(a, b):\n    c = np.ascontiguousarray(a)\n    d = c.reshape((n, m))\n    e = d.ravel()\n    f = -e + b\n"
     ).body[0]
-    ranks = ranks_including_aliases(fn, {"a": 2, "b": 1})
+    ranks = rank_table(fn, {"a": 2, "b": 1})
     assert ranks["c"] == 2 and ranks["d"] == 2 and ranks["e"] == 1 and ranks["f"] == 1
+
+
+def test_a_flatten_is_one_axis_and_a_conjugate_keeps_every_axis_of_its_receiver() -> None:
+    """ls3df's fragment is complex and reaches ``np.linalg.norm`` through a conjugate; a table that
+    cannot rank ``z.conj()`` or ``a.flatten()`` leaves every handler above declining on them. The
+    expected ranks are numpy's own ``.ndim``, and ``np.conj(z)`` pins that the function form still
+    ranks its ARGUMENT rather than the ``np`` receiver."""
+    fn = ast.parse(
+        "def k(a, z):\n    f = a.flatten()\n    c = z.conj()\n    d = z.conjugate()\n    e = np.conj(z)\n"
+    ).body[0]
+    ranks = rank_table(fn, {"a": 3, "z": 2})
+    scope = {"np": np, "a": np.zeros((2, 3, 4)), "z": np.ones((2, 5), dtype=complex)}
+    want = {stmt.targets[0].id: eval(ast.unparse(stmt.value), scope).ndim for stmt in fn.body}  # noqa: S307
+    assert want == {"f": 1, "c": 2, "d": 2, "e": 2}
+    assert {name: ranks[name] for name in want} == want
+
+
+def test_a_scatter_index_gathered_through_two_index_arrays_loops_over_one_broadcast_block() -> None:
+    """``J[ia, ib, :]`` pairs ``ia`` with ``ib`` elementwise into ONE axis, plus the sliced one, so
+    ``idx`` is rank 2. Summing the index ranks called it rank 3, and the scatter over it opened a
+    third loop reading ``idx.shape[2]`` off a matrix."""
+    src = "def k(J, ia, ib, w, out):\n    idx = J[ia, ib, :]\n    np.add.at(out, idx, w)\n    __probe__ = out\n"
+    ranks = rank_table(ast.parse(src).body[0], {"J": 3, "ia": 1, "ib": 1, "w": 2, "out": 1})
+    program = lowered(src, ranks)
+    assert "out[idx[__scatter0_0, __scatter0_1]] += w[__scatter0_0, __scatter0_1]" in program, program
+    assert "idx.shape[2]" not in program, program
+    J, ia, ib = np.arange(18).reshape(3, 3, 2) % 4, np.array([0, 2]), np.array([1, 1])
+    w = np.array([[1.0, 2.0], [4.0, 8.0]])
+    got = run_lowered(src, ranks, J=J, ia=ia, ib=ib, w=w, out=np.zeros(4))
+    want = np.zeros(4)
+    np.add.at(want, J[ia, ib, :], w)
+    assert np.array_equal(got, want) and got[2] == 5.0, f"{got} != {want}"
+
+
+def test_a_gather_the_desugar_hoists_into_a_loop_stays_a_vector_so_its_searchsorted_is_lowered() -> None:
+    """The gather desugar rewrites ``A[ia, ib]`` into a loop filling ``np.empty(ia.shape, ...)``. A
+    rank table that cannot read a constructor's shape argument leaves ``v`` unranked, the searchsorted
+    handler declines, and the call stays a callback dace cannot type."""
+    tree = ast.parse("def k(A, ia, ib, t, out):\n    v = A[ia, ib]\n    out[:] = np.searchsorted(t, v)\n")
+    kir = KernelIR(tree=tree.body[0], kernel_name="k", input_args=["A", "ia", "ib", "t", "out"])
+    kir.arrays.extend(
+        [
+            ArrayDesc(name="A", dtype="float64", shape=("N", "N")),
+            ArrayDesc(name="ia", dtype="int64", shape=("M",), is_index=True),
+            ArrayDesc(name="ib", dtype="int64", shape=("M",), is_index=True),
+            ArrayDesc(name="t", dtype="float64", shape=("N",)),
+            ArrayDesc(name="out", dtype="int64", shape=("M",), is_output=True),
+        ]
+    )
+    kir.symbols.extend([SymbolDesc(name="N"), SymbolDesc(name="M")])
+    program = ast.unparse(_kernel_program(emit_dace(kir), "k"))
+    assert "np.searchsorted" not in program, program
+    assert "while __bisect0_lo < __bisect0_hi:" in program, program
 
 
 def test_an_axis_no_element_indexes_survives_whether_an_ellipsis_is_written_or_not() -> None:
@@ -1874,7 +1926,7 @@ def test_an_axis_no_element_indexes_survives_whether_an_ellipsis_is_written_or_n
         ("psi[:, ja, 0]", 4),
     ):
         node = ast.parse(src).body[0].value
-        assert rank_of_subscript(node, ranks) == want, f"{src}: {rank_of_subscript(node, ranks)} != {want}"
+        assert expr_rank(node, ranks) == want, f"{src}: {expr_rank(node, ranks)} != {want}"
 
 
 def respelled(src: str) -> str:
