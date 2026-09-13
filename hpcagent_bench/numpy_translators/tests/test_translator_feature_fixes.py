@@ -1520,6 +1520,34 @@ def test_repeat_axis_lowers_to_gather_loop() -> None:
     assert "np.repeat" not in out and "// " in out and "for " in out
 
 
+def test_repeat_axis_outside_the_known_rank_is_left_verbatim() -> None:
+    """An ``axis`` outside the rank table's rank means the rank estimate is wrong. Wrapping it
+    into range lowered ``axis=2`` on a rank-2 operand as a repeat along axis 0."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+
+    src = "def k(x, out):\n    out[:] = np.repeat(x, 2, axis=2)\n"
+    kir = _py_kir("k", src, [("x", "float64", ("A", "B")), ("out", "float64", ("A", "B"))], [], ["x", "out"])
+
+    assert desugar_for_python_backend(src, kir, backend="numba") == src
+
+
+def test_repeat_negative_axis_lowers_to_the_numpy_result() -> None:
+    """``axis=-1`` parses as a negated literal; it lowers like the positive axis it names."""
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+
+    src = "def k(x, out):\n    out[:] = np.repeat(x, 3, axis=-1)\n"
+    kir = _py_kir("k", src, [("x", "float64", ("A", "B")), ("out", "float64", ("A", "C"))], [], ["x", "out"])
+    x, out = np.arange(6.0).reshape(2, 3), np.empty((2, 9))
+
+    got = desugar_for_python_backend(src, kir, backend="numba")
+    namespace = {"np": np}
+    exec(compile(got, "<desugared>", "exec"), namespace)
+    namespace["k"](x, out)
+
+    assert "np.repeat" not in got and "x[__rp0_i0, __rp0_i1 // 3]" in got
+    assert np.array_equal(out, np.repeat(x, 3, axis=-1))
+
+
 def test_reshape_of_transpose_forced_contiguous() -> None:
     """np.reshape of a transpose (non-contiguous) gets np.ascontiguousarray;
     numba's reshape requires contiguous (stockham's reshape(tmp_perm, (N,)))."""
@@ -2037,7 +2065,7 @@ def _exec_source(src, args) -> None:
 
 def _keepdims_src(call):
     """A kernel whose reduction operand has NO known rank: ``t`` is bound at two
-    different ranks, so ``_drop_rank_conflicts`` forgets it and ``ReduceAxisInline``
+    different ranks, so ``_drop_rank_conflicts`` forgets it and ``hoist_reduce_axis``
     (which needs the rank to build its loop nest) declines -- leaving the keepdims
     pass as the only thing between the kwarg and dace. Every ML port stages one ``x``
     through differently-shaped rebindings exactly like this."""
@@ -2112,7 +2140,7 @@ def test_keepdims_bails_when_the_axes_do_not_resolve(call) -> None:
 
 
 def test_keepdims_left_to_the_loop_lowering_when_the_rank_is_known() -> None:
-    """No churn: with the operand's rank in hand ``ReduceAxisInline`` still lowers the
+    """No churn: with the operand's rank in hand ``hoist_reduce_axis`` still lowers the
     same call to its explicit loop nest, and this pass never sees it."""
     src = "def kernel(x, out):\n    m = np.sum(x, axis=1, keepdims=True)\n    out[:] = x - m\n"
     out = _desugar(src, _D3, [], ["x", "out"], "dace")
