@@ -206,6 +206,47 @@ RUN set -eux; \
     <assert the result>            # fail the BUILD, not the campaign
 ```
 
+### Agent harnesses
+
+Both judge-agent images install the same harnesses from checked-in pins under `containers/agent/harness/`.
+
+| harness | pin | in the image |
+|---|---|---|
+| Claude Code | `@anthropic-ai/claude-code` 2.1.197 | `/opt/harness/node`, `claude` on PATH |
+| Codex CLI | `@openai/codex` 0.154.0 | `/opt/harness/node`, `codex` |
+| Qwen Code | `@qwen-code/qwen-code` 0.23.3 | `/opt/harness/node`, `qwen` |
+| OpenCode | `opencode-ai` 1.18.30 | `/opt/harness/node`, `opencode` |
+| mini-SWE-agent | `mini-swe-agent==2.4.6` | `/opt/harness/miniswe` venv |
+| OpenHands | `openhands-sdk==1.47.0`, `openhands-tools==1.47.0` | `/opt/harness/openhands` venv |
+| SWE-agent | v1.1.0, commit `0f3acafacabc0def8cc76b4e48acb4b6cf302cb9` | `/opt/harness/sweagent` venv, config and tools in `/opt/harness/sweagent/share` |
+
+- `node/package.json` holds the four CLIs at exact versions; `node/package-lock.json` is what `npm ci` installs,
+  with the linux x64 and arm64 binary packages.
+- `requirements-{miniswe,openhands,sweagent}.txt` is a full freeze per venv.
+- `pins.env` holds uv 0.12.13, node 20.20.2 (both sha256-checked per architecture by `install_tools.sh`) and
+  `HARNESS_PYTHON=3.12`, the base image's `/usr/bin/python3.12` every venv is built on.
+- `freeze.sh` holds the top-level Python harness pins and regenerates every lock file.
+
+Codex CLI, Qwen Code, OpenCode and SWE-agent are installed and gated, but no driver runs them yet. Qwen Code declares
+node >= 22, so `npm ci` warns EBADENGINE on node 20. SWE-agent reads `SWE_AGENT_CONFIG_DIR`, `SWE_AGENT_TOOLS_DIR`
+and `SWE_AGENT_TRAJECTORY_DIR`; the image points them at `/opt/harness/sweagent/share`, and a run must point the
+trajectory dir somewhere writable.
+
+To bump a pin, edit it, regenerate, test, rebuild:
+
+```bash
+# a CLI: node/package.json. A Python harness: its freeze line in freeze.sh.
+# uv or node: pins.env, with both sha256 values from uv's .sha256 files or node's SHASUMS256.txt.
+containers/agent/harness/freeze.sh      # rewrites requirements-*.txt and node/package-lock.json
+tools/run_tests.sh tests/test_harness_pins.py
+```
+
+`freeze.sh` starts from the current lock files, so it moves only what the changed pin forces; delete a lock file first
+to re-resolve it from scratch, which a `HARNESS_PYTHON` change needs. The build is the single `build_and_verify.sbatch`
+command above. Each image's final gate fails the build unless every CLI's `--version` matches `package.json`, uv and
+node match `pins.env`, claude-code is 2.1.197, all three venvs import their harness, and none can import
+`hpcagent_bench`.
+
 ### Bumping an engine version
 `vllm/Dockerfile` and `sglang/Dockerfile` take `ARG`s (`VLLM_VERSION`, `AITER_REF`, ...).
 `build.sh` passes `EXTRA_BUILD_ARGS` through, so a candidate build is:
