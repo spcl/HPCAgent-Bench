@@ -44,6 +44,9 @@ twins :func:`nsys_record`, and :func:`rocprof_reports` feeds the SAME :func:`ker
 :func:`memory_stats` readers, so the rows are vendor-independent and everything downstream of them
 -- :func:`render_report`, the payload, the endpoint -- needs no vendor branch. ``nsys`` itself
 still refuses ``hip`` with ``rocprof_unsupported``: it traces CUDA and cannot see an AMD queue.
+A ``c``/``cpp``/``fortran`` submission on an OpenMP-offload arm takes the AMD arm too
+(:func:`offload_traced`): the sandbox builds it with the AMD offload leg, so its kernels are AMD
+dispatches.
 
 **Which AMD tool, and what it is not.** ``rocprofv3`` is the supported one; ``rocprof`` v1 and its
 ``--stats`` / ``results.stats.csv`` output are DEPRECATED (superseded across ROCm 6.x) and are kept
@@ -94,11 +97,11 @@ import sys
 from dataclasses import dataclass
 from typing import NotRequired, Sequence, TypedDict
 
-from hpcagent_bench import config, osinfo
+from hpcagent_bench import config, languages, osinfo
 from hpcagent_bench.frameworks.forked import run_command
 from hpcagent_bench.harness import papi, profiling, timing
 from hpcagent_bench.harness.envelope import Submission
-from hpcagent_bench.harness.sandbox import Sandbox
+from hpcagent_bench.harness.sandbox import OFFLOAD_VENDOR, Sandbox
 from hpcagent_bench.harness.task import Task
 from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.support.bindings.contract import binding_from_spec
@@ -446,6 +449,27 @@ def nsys_check(language: str) -> str:
     return exe
 
 
+def offload_traced(language: str) -> bool:
+    """Whether this arm builds a ``language`` submission for the AMD GPU with an offload leg.
+
+    Static tables only, no driver or device probe: the declared model has an AMD leg
+    (``languages.OFFLOAD_REFS``) that compiles ``language`` (``languages.OFFLOAD_BUILD_DRIVER``),
+    and the sandbox builds for AMD. Not cached: the model is read from the environment.
+    """
+    model = languages.offload_model()
+    family = languages.OFFLOAD_FAMILY.get(model, "")
+    return (
+        OFFLOAD_VENDOR == "amd"
+        and model in languages.OFFLOAD_REFS.get((family, OFFLOAD_VENDOR), {})
+        and (family, OFFLOAD_VENDOR, language) in languages.OFFLOAD_BUILD_DRIVER
+    )
+
+
+def traces_amd(language: str) -> bool:
+    """Whether a ``language`` submission's kernels are AMD dispatches: ``hip``, or an offload build."""
+    return language == "hip" or offload_traced(language)
+
+
 def gpu_check(language: str) -> tuple[str, str]:
     """``(tool, executable)`` for the profiler ``language`` needs, probed BEFORE anything is built,
     or :class:`GpuProfilerUnavailable`. ``tool`` is what the payload reports.
@@ -454,7 +478,7 @@ def gpu_check(language: str) -> tuple[str, str]:
     payload -- takes the tool as data. Probed once per request and passed to the trace, never
     cached across requests: device access can change between them.
     """
-    if language == "hip":
+    if traces_amd(language):
         return rocprof_check()
     return "nsys", nsys_check(language)
 
@@ -1078,12 +1102,13 @@ def profile_gpu_once(
     branch. Both arms return the same :class:`GpuRun`; a profiler that outlives ``timeout`` is
     ``timed_out``, never the raw exception. ``profiler`` is this request's :func:`gpu_check`
     answer; the AMD arm traces with it instead of re-running the rocminfo probe."""
+    amd = traces_amd(language)
     try:
-        if language == "hip":
+        if amd:
             return profile_amd_once(root, request_file, profiler=profiler, timeout=timeout, min_percent=min_percent)
         return profile_nvidia_once(root, request_file, language=language, timeout=timeout, min_percent=min_percent)
     except subprocess.TimeoutExpired as wedged:
-        tool = "rocprof" if language == "hip" else "nsys"
+        tool = "rocprof" if amd else "nsys"
         raise GpuProfilerUnavailable(
             "timed_out", f"{tool} wedged past {timeout:g}s and was killed: {wedged.cmd}"
         ) from wedged
@@ -1249,7 +1274,7 @@ def profile_gpu_submission(
     SUBMISSION chooses and the profiler reports rather than varies.
     """
     if counters:
-        tool = AMD_COUNTER_NOTE if task.language == "hip" else "Nsight Compute, which /profile does not serve"
+        tool = AMD_COUNTER_NOTE if traces_amd(task.language) else "Nsight Compute, which /profile does not serve"
         raise GpuProfilerUnavailable(
             "counters_unsupported",
             "PAPI counts host CPU events, which say nothing about a device kernel; "
