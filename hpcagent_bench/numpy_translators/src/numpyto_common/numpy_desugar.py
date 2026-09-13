@@ -1570,6 +1570,24 @@ class _FftInline(ast.NodeTransformer):
         out.append(node)
         return out
 
+    def visit_Return(self, node: ast.Return) -> ast.Return | list[ast.stmt]:
+        """``return <expr carrying np.fft.X(a)>`` -> bind the value, lower the binding, return the name.
+
+        The Assign forms above are where the loop DFT is built, so a transform the reference returns
+        directly (cegterg's ``return np.fft.ifftn(...).reshape(...)``) survived into a numba body, which
+        has no ``np.fft`` at all. A binding the Assign lowering declines leaves the return untouched."""
+        if node.value is None or not any(np_submodule_attr(n, "fft") is not None for n in ast.walk(node.value)):
+            return node
+        name = f"__fret{self._ctr}"
+        binding = ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=copy.deepcopy(node.value))
+        ast.copy_location(binding, node)
+        ast.fix_missing_locations(binding)
+        lowered = self.visit_Assign(binding)
+        stmts = lowered if isinstance(lowered, list) else [lowered]
+        if any(np_submodule_attr(n, "fft") is not None for s in stmts for n in ast.walk(s)):
+            return node
+        return [*stmts, ast.copy_location(ast.Return(value=ast.Name(id=name, ctx=ast.Load())), node)]
+
 
 class _SubstituteFftCalls(ast.NodeTransformer):
     """Replace every ``np.fft.*`` call ``visitor`` accepts with the Name it returns."""
@@ -6078,9 +6096,10 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
         return axes
 
     def _outer_product(self, value: ast.AST, rank: int) -> bool:
-        """True when some elementwise node of THIS rank puts two operands' non-1 extents in
-        different axes, one of them axis 0 -- exactly the shape numba's analysis asserts on, and
-        exactly the one peeling axis 0 dissolves."""
+        """True when some elementwise node of THIS rank broadcasts a singleton axis in a shape numba's
+        analysis asserts on and peeling axis 0 dissolves: two operands' non-1 extents in different
+        axes, one of them axis 0 (floyd's outer product), or two full-rank operands that share a non-1
+        axis 0 and split on a later axis (cegterg's column-vector ``g2[:, None] * X_b``)."""
         for node in ast.walk(value):
             ops = self._operands(node)
             if ops is None:
@@ -6091,11 +6110,11 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
             if max((len(e) for e in exts), default=0) != rank:
                 continue
             padded = [[_ONE] * (rank - len(e)) + e for e in exts]
-            for a in padded:
-                for b in padded:
-                    if a[0] == _ONE or b[0] != _ONE:
+            for ia, a in enumerate(padded):
+                for ib, b in enumerate(padded):
+                    if a[0] == _ONE or not any(a[j] == _ONE and b[j] != _ONE for j in range(1, rank)):
                         continue
-                    if any(a[j] == _ONE and b[j] != _ONE for j in range(1, rank)):
+                    if b[0] == _ONE or (len(exts[ia]) == rank and len(exts[ib]) == rank):
                         return True
         return False
 
@@ -6198,6 +6217,10 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
                 continue
             for i, operand in enumerate(ops):
                 bare = _without_leading_newaxis(operand)
+                if bare is None and isinstance(operand, ast.UnaryOp):
+                    # ``-ew[lo:hi][None, :]``: a sign around the newaxis broadcasts the same way.
+                    inner = _without_leading_newaxis(operand.operand)
+                    bare = None if inner is None else ast.UnaryOp(op=operand.op, operand=inner)
                 if bare is None:
                     continue
                 trial = list(ops)
@@ -6232,8 +6255,10 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
         target = node.targets[0]
         base = target.id if isinstance(target, ast.Name) else self._store_base(target, rank)
         # A target the value also READS is a whole-array update: row i would see the rows the loop
-        # already rewrote, which numpy's all-at-once semantics never do.
-        if base is None or any(isinstance(n, ast.Name) and n.id == base for n in ast.walk(node.value)):
+        # already rewrote, which numpy's all-at-once semantics never do. That store, and one that is not
+        # a whole-array slice (``H[lo:hi, :]``), fills a fresh temp and is assigned from it afterwards.
+        direct = base is not None and not any(isinstance(n, ast.Name) and n.id == base for n in ast.walk(node.value))
+        if not direct and not isinstance(target, (ast.Name, ast.Subscript)):
             return node
         temp, ivar = f"__ob{self._ctr}", f"__ob{self._ctr}_i"
         row = self._peel(copy.deepcopy(node.value), ivar, rank)
@@ -6243,20 +6268,445 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
         self._ctr += 1
         self.changed = True
         out: List[ast.stmt] = []
+        dest = base if direct and base is not None else f"{temp}_o"
+        shape = ", ".join(ext)
         if isinstance(target, ast.Name):
             # A bare Name is a BINDING, so the loop alone would leave it unbound. The probe row
             # carries the promoted dtype (mandelbrot's ``X + Y[:, None] * 1j`` is complex, which
             # neither operand is); only its dtype is read, never its values.
             out.append(ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=probe))
-            out.append(ast.parse(f"{base} = np.empty(({', '.join(ext)},), {temp}.dtype)").body[0])
-        store = ast.parse(f"{base}[{ivar}] = 0").body[0]
+            out.append(ast.parse(f"{dest} = np.empty(({shape},), {temp}.dtype)").body[0])
+        elif not direct and isinstance(target, ast.Subscript):
+            # The store casts into the target's own dtype, so the temp takes that dtype directly.
+            out.append(ast.parse(f"{dest} = np.empty(({shape},), ({ast.unparse(target.value)}).dtype)").body[0])
+        store = ast.parse(f"{dest}[{ivar}] = 0").body[0]
         store.value = row
         loop = ast.parse(f"for {ivar} in range({ext[0]}): pass").body[0]
         loop.body = [store]
         out.append(loop)
+        if not direct:
+            out.append(ast.Assign(targets=[target], value=ast.Name(id=dest, ctx=ast.Load())))
         for s in out:
             ast.copy_location(s, node)
+            ast.fix_missing_locations(s)
         return out
+
+
+#: Backends whose kernel is called positionally through ``kir.input_args`` and nothing else, so a
+#: defaulted parameter outside that list is a constant -- the fold the native frontend already does.
+DEFAULT_FOLDING_BACKENDS = frozenset({"numba", "pythran"})
+
+
+def has_defaulted_parameters(fn: ast.FunctionDef) -> bool:
+    """True when ``fn`` declares a positional or keyword-only parameter with a default."""
+    return bool(fn.args.defaults) or any(d is not None for d in fn.args.kw_defaults)
+
+
+def fold_kernel_defaults(fn: ast.FunctionDef, input_args: Sequence[str]) -> bool:
+    """Fold the kernel's defaulted parameters the harness never passes into body constants, through the
+    native frontend's own :func:`numpyto_common.frontend._fold_default_args`. True when one folded.
+
+    numba counts a keyword-only parameter as required, so cegterg's 17 QE flags
+    (``*, noncolin=False, deeq_nc=None, ...``) made its njit entry expect 42 arguments for the 25 the
+    harness passes."""
+    # Imported here: frontend imports this module at its top.
+    from numpyto_common.frontend import _fold_default_args
+
+    before = ast.dump(fn.args)
+    _fold_default_args(fn, list(input_args))
+    return ast.dump(fn.args) != before
+
+
+def name_store_counts(fn: ast.FunctionDef) -> dict[str, int]:
+    """How many times each name is bound in ``fn``: every Store/Del plus one per parameter."""
+    counts: dict[str, int] = {}
+    for a in fn.args.posonlyargs + fn.args.args + fn.args.kwonlyargs:
+        counts[a.arg] = counts.get(a.arg, 0) + 1
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            counts[node.id] = counts.get(node.id, 0) + 1
+    return counts
+
+
+def fold_constant_helper_arguments(tree: ast.Module, kernel_name: str) -> bool:
+    """Substitute a helper parameter that EVERY call site passes the same ``True``/``False``/``None``
+    literal into that helper's body (numba only). True when one was substituted.
+
+    numba types both arms of ``if lda_plus_u:`` even when every caller passes ``False``, so a ``None``
+    buffer read under the dead arm (cegterg's ``np.asarray(wfcu)``) fails typing. The substituted
+    literal is what lets :class:`_DeadBranchElim` drop that arm first. A helper whose name escapes as a
+    value, a call with keywords or a starred argument, or a parameter the body rebinds is left alone."""
+    helpers = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name != kernel_name}
+    sites: dict[str, list[ast.Call]] = {}
+    callee_names: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in helpers:
+            sites.setdefault(node.func.id, []).append(node)
+            callee_names.add(id(node.func))
+    escaped = {
+        n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id in helpers and id(n) not in callee_names
+    }
+    changed = False
+    for name, fn in helpers.items():
+        calls = sites.get(name, [])
+        if not calls or name in escaped or fn.args.vararg or fn.args.kwarg or fn.args.posonlyargs:
+            continue
+        if any(c.keywords or any(isinstance(a, ast.Starred) for a in c.args) for c in calls):
+            continue
+        if any(isinstance(n, (ast.Lambda, ast.FunctionDef)) and n is not fn for n in ast.walk(fn)):
+            continue
+        stores = name_store_counts(fn)
+        # A literal spelled as a subscript base, attribute owner or callee (``None[:, 0]``) is a
+        # SyntaxWarning at compile time even under a dead arm, so such a parameter stays a name.
+        structural: set[str] = set()
+        for n in ast.walk(fn):
+            if isinstance(n, (ast.Subscript, ast.Attribute)) and isinstance(n.value, ast.Name):
+                structural.add(n.value.id)
+            elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+                structural.add(n.func.id)
+        subst: dict[str, object] = {}
+        for i, param in enumerate(fn.args.args):
+            if stores.get(param.arg, 0) != 1 or param.arg in structural:
+                continue
+            passed = [c.args[i] if i < len(c.args) else None for c in calls]
+            if not all(isinstance(p, ast.Constant) and (p.value is None or isinstance(p.value, bool)) for p in passed):
+                continue
+            values = {repr(p.value) for p in passed if isinstance(p, ast.Constant)}
+            if len(values) == 1 and isinstance(passed[0], ast.Constant):
+                subst[param.arg] = passed[0].value
+        for node in ast.walk(fn):
+            for field, value in ast.iter_fields(node):
+                if isinstance(value, ast.Name) and isinstance(value.ctx, ast.Load) and value.id in subst:
+                    setattr(node, field, ast.copy_location(ast.Constant(value=subst[value.id]), value))
+                    changed = True
+                elif isinstance(value, list):
+                    for k, item in enumerate(value):
+                        if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Load) and item.id in subst:
+                            value[k] = ast.copy_location(ast.Constant(value=subst[item.id]), item)
+                            changed = True
+    return changed
+
+
+class SliceObjectInline(ast.NodeTransformer):
+    """``b = slice(lo, hi)`` read back as ``X[b, :]`` -> ``X[lo:hi, :]`` (numba only).
+
+    A Name index reads as a SCALAR to :func:`expr_rank`, so ``X[b, :]`` ranked 1 where it is 2, and a
+    broadcast built on it was placed on the wrong axes. Substituting the slice is exact when the binding
+    is the name's only store and every name ``lo``/``hi`` read is bound at most once: then no store can
+    fall between the binding and a use. Runs before the rank table is built."""
+
+    def __init__(self, fn: ast.FunctionDef) -> None:
+        self.changed = False
+        self.slices: dict[str, ast.Slice] = {}
+        if any(isinstance(n, (ast.Lambda, ast.FunctionDef)) and n is not fn for n in ast.walk(fn)):
+            return
+        stores = name_store_counts(fn)
+        for node in ast.walk(fn):
+            if not (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+                and node.value.func.id == "slice"
+                and 1 <= len(node.value.args) <= 3
+                and not node.value.keywords
+            ):
+                continue
+            args = node.value.args
+            if any(isinstance(a, ast.Starred) for a in args) or stores.get(node.targets[0].id, 0) != 1:
+                continue
+            read = {n.id for a in args for n in ast.walk(a) if isinstance(n, ast.Name)}
+            if any(stores.get(r, 0) > 1 for r in read):
+                continue
+            bounds = [None, args[0], None] if len(args) == 1 else [*args, None][:3]
+            lower, upper, step = (
+                None if b is None or (isinstance(b, ast.Constant) and b.value is None) else b for b in bounds
+            )
+            self.slices[node.targets[0].id] = ast.Slice(lower=lower, upper=upper, step=step)
+
+    def entry(self, e: ast.expr) -> ast.expr:
+        if isinstance(e, ast.Name) and isinstance(e.ctx, ast.Load) and e.id in self.slices:
+            self.changed = True
+            return copy.deepcopy(self.slices[e.id])
+        return e
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)
+        if isinstance(node.slice, ast.Tuple):
+            node.slice.elts = [self.entry(e) for e in node.slice.elts]
+        else:
+            node.slice = self.entry(node.slice)
+        return node
+
+
+def reachable_functions(funcs: list[ast.FunctionDef], entry: str) -> set[str]:
+    """Names of the functions ``entry`` reaches through any Name reference, itself included; every name
+    when ``entry`` is not among ``funcs``."""
+    by_name = {fn.name: fn for fn in funcs}
+    if entry not in by_name:
+        return set(by_name)
+    seen: set[str] = set()
+    stack = [entry]
+    while stack:
+        name = stack.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        stack.extend(n.id for n in ast.walk(by_name[name]) if isinstance(n, ast.Name) and n.id in by_name)
+    return seen
+
+
+def infer_param_kinds(
+    funcs: list[ast.FunctionDef], kernel_name: str, kernel_kinds: dict[str, str]
+) -> dict[str, dict[str, str]]:
+    """Per-function dtype-KIND seeds that cross helper boundaries, as :func:`_infer_param_ranks` does for
+    ranks: a helper parameter takes the kind every call site passes (sites that disagree or cannot be
+    typed leave it unknown), and a name bound to a helper call takes the kind that helper returns.
+    Iterated to a fixpoint so a helper calling a helper resolves too.
+
+    Only call sites the kernel REACHES are read: numba compiles nothing else, and cegterg's
+    ``assemble_HS`` oracle helper passes an untyped ``deeq`` that would otherwise veto the kernel's."""
+    by_name = {fn.name: fn for fn in funcs}
+    reachable = reachable_functions(funcs, kernel_name)
+    seeds: dict[str, dict[str, str]] = {fn.name: {} for fn in funcs}
+    if kernel_name in seeds:
+        seeds[kernel_name] = dict(kernel_kinds)
+    for _ in range(6):
+        tables = {fn.name: _dtype_table(fn, seeds[fn.name]) for fn in funcs}
+        returns: dict[str, str] = {}
+        for fn in funcs:
+            kinds = {
+                _dtype_kind(r.value, tables[fn.name]) for r in ast.walk(fn) if isinstance(r, ast.Return) and r.value
+            }
+            kind = next(iter(kinds)) if len(kinds) == 1 else None
+            if kind is not None:
+                returns[fn.name] = kind
+        observed: dict[tuple[str, str], set[str | None]] = {}
+        for fn in funcs:
+            if fn.name not in reachable:
+                continue
+            table = tables[fn.name]
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                    value = node.value
+                    if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id in by_name:
+                        observed.setdefault((fn.name, node.targets[0].id), set()).add(returns.get(value.func.id))
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in by_name):
+                    continue
+                if node.keywords or any(isinstance(a, ast.Starred) for a in node.args):
+                    continue
+                params = [a.arg for a in by_name[node.func.id].args.args]
+                for pname, arg in zip(params, node.args):
+                    kind = _dtype_kind(arg, table)
+                    if kind is None and isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name):
+                        kind = returns.get(arg.func.id)
+                    observed.setdefault((node.func.id, pname), set()).add(kind)
+        new: dict[str, dict[str, str]] = {name: dict(seed) for name, seed in seeds.items()}
+        for (owner, name), kinds in observed.items():
+            kind = next(iter(kinds)) if len(kinds) == 1 else None
+            if kind is None or (owner == kernel_name and name in kernel_kinds):
+                continue
+            new[owner][name] = kind
+        if new == seeds:
+            break
+        seeds = new
+    return seeds
+
+
+class ReshapeFortranOrderInline(ast.NodeTransformer):
+    """``x.reshape(d0, ..., dk, order="F")`` -> ``np.ascontiguousarray(x.T).reshape((dk, ..., d0)).T``
+    (numba only).
+
+    numba's ``reshape`` takes no keyword at all (``assert not kws`` in its typing template). Reading and
+    filling in Fortran order is reading and filling the axis-reversed array in C order, so the transposed
+    spelling puts every element where numpy does. A shape passed as one name cannot be reversed here and
+    stays verbatim."""
+
+    def __init__(self) -> None:
+        self.changed = False
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        f = node.func
+        if not (isinstance(f, ast.Attribute) and f.attr == "reshape" and node.args and len(node.keywords) == 1):
+            return node
+        if isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy"):
+            return node  # ``np.reshape(x, shape, order=...)`` is the function form, not this method
+        kw = node.keywords[0]
+        if kw.arg != "order" or not (isinstance(kw.value, ast.Constant) and kw.value.value == "F"):
+            return node
+        if len(node.args) == 1 and isinstance(node.args[0], ast.Tuple):
+            dims = list(node.args[0].elts)
+        elif len(node.args) > 1 or isinstance(node.args[0], ast.Constant):
+            dims = list(node.args)
+        else:
+            return node
+        if any(isinstance(d, ast.Starred) for d in dims):
+            return node
+        shape = ", ".join(ast.unparse(d) for d in reversed(dims))
+        self.changed = True
+        return ast.copy_location(
+            _expr_of(f"np.ascontiguousarray(({ast.unparse(f.value)}).T).reshape(({shape},)).T"), node
+        )
+
+
+class NumbaDtypeFixups(ast.NodeTransformer):
+    """Two spellings numba's dtype-strict typing refuses where numpy accepts them (numba only).
+
+    * ``np.zeros(n, dtype=bool)``: numba reads the builtin ``bool`` as no dtype at all
+      (``Cannot parse input types to function np.empty(int64, Function(<class 'bool'>))``).
+      ``np.bool_`` is the same dtype.
+    * ``A @ B`` over one real and one complex operand: ``'@' arguments must all have the same dtype``.
+      numpy promotes the real side, and casting it to the complex operand's own ``.dtype`` is that
+      promotion, width included. Only a matmul whose two kinds are both KNOWN is touched, and only when
+      the complex side is a name, so reading its dtype evaluates nothing twice."""
+
+    def __init__(self, kinds: dict[str, str]) -> None:
+        self.kinds = kinds
+        self.changed = False
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        attr = _np_attr(node)
+        if attr is None:
+            return node
+        for kw in node.keywords:
+            if kw.arg == "dtype" and isinstance(kw.value, ast.Name) and kw.value.id == "bool":
+                kw.value = ast.copy_location(_expr_of("np.bool_"), kw.value)
+                self.changed = True
+        if attr in ("zeros", "ones", "empty") and len(node.args) > 1:
+            dt = node.args[1]
+            if isinstance(dt, ast.Name) and dt.id == "bool":
+                node.args[1] = ast.copy_location(_expr_of("np.bool_"), dt)
+                self.changed = True
+        return node
+
+    def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        self.generic_visit(node)
+        if not isinstance(node.op, ast.MatMult):
+            return node
+        left, right = _dtype_kind(node.left, self.kinds), _dtype_kind(node.right, self.kinds)
+        if left == "float" and right == "complex" and isinstance(node.right, ast.Name):
+            node.left = cast_like(node.left, node.right.id)
+        elif left == "complex" and right == "float" and isinstance(node.left, ast.Name):
+            node.right = cast_like(node.right, node.left.id)
+        else:
+            return node
+        self.changed = True
+        return node
+
+
+def cast_like(operand: ast.expr, like: str) -> ast.expr:
+    """``operand.astype(like.dtype)``."""
+    method = ast.Attribute(value=operand, attr="astype", ctx=ast.Load())
+    return ast.Call(func=method, args=[_expr_of(f"{like}.dtype")], keywords=[])
+
+
+def helper_return_ranks(
+    funcs: list[ast.FunctionDef], param_ranks: dict[str, dict[str, int]], kernel_name: str, kernel_seed: dict[str, int]
+) -> dict[str, int]:
+    """``{function: rank of what it returns}`` over the call-site parameter ranks, two rounds so a helper
+    returning another helper's result resolves (numba only). Without it a name bound to a helper call has
+    no rank, and a broadcast over it is not peeled -- cegterg's ``r = _fft_g2r(...)``."""
+    returns: dict[str, int] = {}
+    for _ in range(2):
+        for fn in funcs:
+            seed = dict(param_ranks.get(fn.name, {}))
+            if fn.name == kernel_name:
+                seed.update(kernel_seed)
+            rank = _return_rank(fn, rank_table(fn, seed, call_returns=returns), seed_ranks=seed)
+            if rank is not None:
+                returns[fn.name] = rank
+    return returns
+
+
+def agreed_param_ranks(
+    funcs: list[ast.FunctionDef],
+    kernel_name: str,
+    param_ranks: dict[str, dict[str, int]],
+    kernel_seed: dict[str, int],
+    returns: dict[str, int],
+) -> dict[str, dict[str, int]]:
+    """Parameter ranks that hold at EVERY call site the kernel reaches, plus the kernel's own.
+
+    :func:`_infer_param_ranks` merges call sites by MAX, which is right for sizing a table and wrong for
+    deciding a branch: a helper called with a vector at one site and a matrix at another would have its
+    ``x.ndim == 2`` test answered for both. A parameter only reaches here when every reachable site
+    passes it one known rank, and never for a helper whose name escapes as a value."""
+    by_name = {fn.name: fn for fn in funcs}
+    reachable = reachable_functions(funcs, kernel_name)
+    callee_names: set[int] = set()
+    observed: dict[tuple[str, str], set[int | None]] = {}
+    for fn in funcs:
+        if fn.name not in reachable:
+            continue
+        seed = dict(param_ranks.get(fn.name, {}))
+        if fn.name == kernel_name:
+            seed.update(kernel_seed)
+        ranks = rank_table(fn, seed, call_returns=returns)
+        for node in ast.walk(fn):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in by_name):
+                continue
+            callee_names.add(id(node.func))
+            unreadable = bool(node.keywords) or any(isinstance(a, ast.Starred) for a in node.args)
+            params = [a.arg for a in by_name[node.func.id].args.args]
+            for i, pname in enumerate(params):
+                rank = None if unreadable or i >= len(node.args) else expr_rank(node.args[i], ranks)
+                observed.setdefault((node.func.id, pname), set()).add(rank)
+    escaped = {n.id for n in ast.walk(ast.Module(body=list(funcs), type_ignores=[])) if isinstance(n, ast.Name)}
+    escaped = {name for name in escaped if name in by_name} - {
+        n.func.id
+        for fn in funcs
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and id(n.func) in callee_names
+    }
+    agreed: dict[str, dict[str, int]] = {fn.name: {} for fn in funcs}
+    if kernel_name in agreed:
+        agreed[kernel_name] = dict(kernel_seed)
+    for (callee, pname), ranks_seen in observed.items():
+        rank = next(iter(ranks_seen)) if len(ranks_seen) == 1 else None
+        if rank is not None and callee != kernel_name and callee not in escaped:
+            agreed[callee][pname] = rank
+    return agreed
+
+
+class NdimFold(ast.NodeTransformer):
+    """``x.ndim`` for a parameter bound once with an agreed rank -> that rank, then ``K == K'`` and
+    ``a if <bool constant> else b`` folded (numba only). cegterg's ``vrs2 = vrs if vrs.ndim == 2 else
+    vrs[:, None]`` has two branch ranks, so the rank table forgot ``vrs2`` and every broadcast built on it;
+    the fold keeps the branch that runs."""
+
+    def __init__(self, fn: ast.FunctionDef, agreed: dict[str, int]) -> None:
+        stores = name_store_counts(fn)
+        self.known = {name: rank for name, rank in agreed.items() if stores.get(name, 0) == 1}
+        self.changed = False
+
+    def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+        self.generic_visit(node)
+        if node.attr == "ndim" and isinstance(node.value, ast.Name) and node.value.id in self.known:
+            self.changed = True
+            return ast.copy_location(ast.Constant(value=self.known[node.value.id]), node)
+        return node
+
+    def visit_Compare(self, node: ast.Compare) -> ast.AST:
+        self.generic_visit(node)
+        if len(node.ops) != 1 or not isinstance(node.ops[0], (ast.Eq, ast.NotEq)):
+            return node
+        left, right = node.left, node.comparators[0]
+        ints = [c for c in (left, right) if isinstance(c, ast.Constant) and type(c.value) is int]
+        if len(ints) != 2:
+            return node
+        equal = ints[0].value == ints[1].value
+        self.changed = True
+        return ast.copy_location(ast.Constant(value=equal if isinstance(node.ops[0], ast.Eq) else not equal), node)
+
+    def visit_IfExp(self, node: ast.IfExp) -> ast.AST:
+        self.generic_visit(node)
+        if isinstance(node.test, ast.Constant) and isinstance(node.test.value, bool):
+            self.changed = True
+            return node.body if node.test.value else node.orelse
+        return node
 
 
 def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) -> str:
@@ -6282,7 +6732,17 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
     lower_linalg = _LINALG_LOWERABLE - _NATIVE_LINALG.get(backend, _LINALG_LOWERABLE)
     lower_solve_rhs_ranks = _LOWER_SOLVE_RHS_RANKS.get(backend, frozenset())
     tree = ast.parse(source)
+    changed = False
+    kernel = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == kir.kernel_name), None)
+    if backend in DEFAULT_FOLDING_BACKENDS and kernel is not None and has_defaulted_parameters(kernel):
+        changed = fold_kernel_defaults(kernel, kir.input_args)
     all_funcs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+    if backend == "numba":
+        changed = fold_constant_helper_arguments(tree, kir.kernel_name) or changed
+        for fn in all_funcs:
+            inline = SliceObjectInline(fn)
+            inline.visit(fn)
+            changed = changed or inline.changed
     kir_seed: Dict[str, int] = {a.name: len(a.shape) for a in kir.arrays}
     kir_dtype_seed: Dict[str, str] = {
         a.name: _kind_of_dtype_str(vars(a).get("dtype")) for a in kir.arrays if _kind_of_dtype_str(vars(a).get("dtype"))
@@ -6293,14 +6753,26 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
     # rank-only callers, and a direct attribute read makes the whole desugar raise for every backend.
     kir_array_dtypes: Dict[str, str] = {a.name: vars(a)["dtype"] for a in kir.arrays if "dtype" in vars(a)}
     param_ranks = _infer_param_ranks(all_funcs, kir.kernel_name, kir_seed)
+    param_kinds = infer_param_kinds(all_funcs, kir.kernel_name, kir_dtype_seed) if backend == "numba" else {}
+    return_ranks = (
+        helper_return_ranks(all_funcs, param_ranks, kir.kernel_name, kir_seed) if backend == "numba" else None
+    )
+    agreed_ranks = (
+        agreed_param_ranks(all_funcs, kir.kernel_name, param_ranks, kir_seed, return_ranks)
+        if return_ranks is not None
+        else {}
+    )
     eigh_aliases = _eigh_alias_names(tree)
-    changed = False
     for fn in all_funcs or [tree]:
         is_kernel = vars(fn).get("name") == kir.kernel_name
         seed = dict(param_ranks.get(vars(fn).get("name"), {}))
         if is_kernel:
             seed.update(kir_seed)
-        ranks = rank_table(fn, seed)
+        if return_ranks is not None and isinstance(fn, ast.FunctionDef):
+            fold = NdimFold(fn, agreed_ranks.get(fn.name, {}))
+            fold.visit(fn)
+            changed = changed or fold.changed
+        ranks = rank_table(fn, seed, call_returns=return_ranks)
         dtypes = _dtype_table(fn, kir_dtype_seed if is_kernel else {})
         noncontig = _noncontig_names(fn)
         masked_gathers = _masked_reduce_map(fn, ranks, dtypes)
@@ -6352,6 +6824,15 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             ValueHoist(HISTOGRAM_HOIST, tables),
             ValueHoist(REPEAT_AXIS_HOIST, tables),
             _ReshapeContiguousInline(noncontig),
+            # numba only: its reshape takes no ``order=`` and its ``@`` / dtype typing is strict.
+            *(
+                [
+                    ReshapeFortranOrderInline(),
+                    NumbaDtypeFixups(_dtype_table(fn, param_kinds.get(vars(fn).get("name"), {}))),
+                ]
+                if backend == "numba"
+                else []
+            ),
             ValueHoist(INT_MATMUL_HOIST, tables),
             _ComplexAccessorToFunc(conjugate_only=True),
             _ElementalUfuncToPrimitive(),
