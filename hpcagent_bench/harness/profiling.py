@@ -777,6 +777,14 @@ def count_metrics(
     }
 
 
+def parent_refusal(cause: str, reason: str) -> papi.PerThreadReport:
+    """A per-thread refusal made in the PARENT, rendered like the child's own: ``text`` is what the
+    route hands the agent, and a blank one reads as a kernel that did nothing."""
+    report = papi.missing_report(cause, reason)
+    report["text"] = papi.render_thread_report(report)
+    return report
+
+
 def count_threads(
     root: pathlib.Path, request_file: pathlib.Path, *, threads: int, timeout: float
 ) -> papi.PerThreadReport:
@@ -793,12 +801,12 @@ def count_threads(
     try:
         proc = run_command(argv, env=env, cwd=str(root), timeout=timeout + COUNT_PROCESS_GRACE_S)
     except subprocess.TimeoutExpired:
-        return papi.missing_report(
+        return parent_refusal(
             "run_failed", f"per-thread counting wedged past {timeout + COUNT_PROCESS_GRACE_S:g}s and was killed"
         )
     result = child_result(proc.stdout)
     if result is None:
-        return papi.missing_report(
+        return parent_refusal(
             "run_failed",
             f"per-thread counting died (exit {proc.returncode}): {(proc.stderr or proc.stdout).strip()[-300:]}",
         )
