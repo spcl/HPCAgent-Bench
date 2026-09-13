@@ -2,6 +2,7 @@
 
 import ast
 import copy
+import dataclasses
 import math
 import pathlib
 import re
@@ -22,6 +23,7 @@ from numpyto_common.emitter import (
 from numpyto_common.frontend import _names_used_as_int
 from numpyto_common.lib_nodes import BLAS_GEMM_MARKER
 from numpyto_common.lowering import _walk_complex, helper_returns_int, integer_valued_locals
+from numpyto_common.statement_desugar import binding_names
 
 #: Whole-identifier matcher for scanning a shape-token string for the names it references.
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
@@ -3067,10 +3069,8 @@ def emit_c_helpers(kir: KernelIR, cpp: bool = False, isopar: bool = False) -> st
 
 
 #: Identifiers the C standard headers this emitter already includes (``<stdlib.h>``, ``<string.h>``,
-#: ``<math.h>``, ``<complex.h>`` and their C++ spellings) declare at FILE SCOPE. A pinned knob
-#: spelled like one of these cannot be declared beside it: C23 rejects the ``constexpr`` as an
-#: underspecified declaration of a name already in this scope, C++ as a redeclaration as a
-#: different kind of entity. ``atol`` (rk45_ensemble's absolute tolerance) is the live case.
+#: ``<math.h>``, ``<complex.h>`` and their C++ spellings) declare at FILE SCOPE. A kernel name spelled
+#: like one of these is respelled before it is emitted -- see :func:`c_spelling`.
 _STDLIB_STRING_NAMES = (
     "abort abs aligned_alloc at_quick_exit atexit atof atoi atol atoll bcmp bcopy bsearch bzero"
     " calloc div exit free getenv index labs ldiv llabs lldiv malloc mblen mbstowcs mbtowc memchr"
@@ -3091,18 +3091,185 @@ _LIBM_BASE_NAMES = (
     " significand sin sinh sqrt tan tanh tgamma trunc y0 y1 yn"
 ).split()
 
-RESERVED_FILE_SCOPE_NAMES = frozenset(
-    _STDLIB_STRING_NAMES + [base + suffix for base in _LIBM_BASE_NAMES for suffix in ("", "f", "l")]
+#: C23 and C++ keywords a Python identifier can spell. ``I`` from ``<complex.h>`` is not listed: the C
+#: header undefines it.
+C_KEYWORD_NAMES = (
+    "alignas alignof and_eq auto bitand bitor bool case catch char char8_t char16_t char32_t co_await"
+    " co_return co_yield compl concept const const_cast constexpr decltype default delete do double"
+    " dynamic_cast enum explicit export extern false float friend goto inline int long mutable namespace"
+    " new noexcept not_eq nullptr operator or_eq private protected public register reinterpret_cast"
+    " requires restrict short signed sizeof static static_assert static_cast struct switch template this"
+    " thread_local throw true typedef typeid typename typeof typeof_unqual union unsigned using virtual"
+    " void volatile wchar_t xor xor_eq"
+).split()
+
+RESERVED_C_NAMES = frozenset(
+    _STDLIB_STRING_NAMES + [base + suffix for base in _LIBM_BASE_NAMES for suffix in ("", "f", "l")] + C_KEYWORD_NAMES
 )
 
-#: Prefix carried by the DECLARATION of a pinned knob whose name a header already owns. Every USE
-#: keeps the reference's own spelling, through the ``#define`` emitted beside the declaration.
-PINNED_ALIAS_PREFIX = "__npb_pin_"
+#: Appended to a name C or C++ owns, as often as it takes to reach a spelling the kernel does not use.
+RESPELLING_SUFFIX = "_"
 
 
-def pinned_const_name(name: str) -> str:
-    """The identifier a pinned knob is declared under -- its own, unless a header already owns it."""
-    return PINNED_ALIAS_PREFIX + name if name in RESERVED_FILE_SCOPE_NAMES else name
+def names_bound_by(tree: ast.AST) -> OrderedSet[str]:
+    """Every name ``tree`` binds: parameters, assignment and loop targets, comprehension variables."""
+    bound: OrderedSet[str] = OrderedSet()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, ast.Assign):
+            bound.update(name.id for target in node.targets for name in binding_names(target))
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.For, ast.comprehension, ast.NamedExpr)):
+            bound.update(name.id for name in binding_names(node.target))
+    return bound
+
+
+def declared_names(kir: KernelIR) -> OrderedSet[str]:
+    """Every name the kernel or one of its helpers declares: parameters, locals, pinned knobs, helpers."""
+    declared: OrderedSet[str] = OrderedSet(helper.kernel_name for helper in kir.helpers)
+    for unit in (kir, *kir.helpers):
+        declared.update(unit.input_args)
+        declared.update(desc.name for desc in (*unit.symbols, *unit.arrays, *unit.scalars))
+        declared.update((*unit.pinned_consts, *unit.zeros_locals, *unit.int_locals, *unit.local_dtypes))
+        declared.update(names_bound_by(unit.tree))
+    return declared
+
+
+def spelled_names(kir: KernelIR, declared: OrderedSet[str]) -> OrderedSet[str]:
+    """Every identifier the kernel spells anywhere, which a respelling must never capture."""
+    spelled: OrderedSet[str] = OrderedSet(declared)
+    for unit in (kir, *kir.helpers):
+        spelled.update(node.id for node in ast.walk(unit.tree) if isinstance(node, ast.Name))
+        spelled.update(token for desc in unit.arrays for dim in desc.shape for token in _IDENT_RE.findall(str(dim)))
+    return spelled
+
+
+def reserved_name_respellings(kir: KernelIR) -> Dict[str, str]:
+    """``{name: spelling}`` for each declared name that C or C++ already owns (:data:`RESERVED_C_NAMES`).
+
+    Spelled verbatim, such a declaration does not compile: a pinned ``atol`` redeclares <stdlib.h>'s
+    at file scope, a helper ``round`` conflicts with libm's, a local ``exp`` shadows the function the
+    body then calls, and ``default`` is a syntax error. The spelling is deterministic and never
+    captures another identifier the kernel spells.
+    """
+    declared = declared_names(kir)
+    reserved = [name for name in declared if name in RESERVED_C_NAMES]
+    if not reserved:
+        return {}
+    spelled = spelled_names(kir, declared)
+    respellings: Dict[str, str] = {}
+    for name in reserved:
+        spelling = name + RESPELLING_SUFFIX
+        while spelling in spelled:
+            spelling += RESPELLING_SUFFIX
+        spelled.add(spelling)
+        respellings[name] = spelling
+    return respellings
+
+
+class ReservedNameRespelling(ast.NodeTransformer):
+    """Respell each name in ``respellings``, except the callee of a call into C: ``exp(x)`` stays libm's ``exp``."""
+
+    def __init__(self, respellings: Dict[str, str], helpers: OrderedSet[str]) -> None:
+        self.respellings = respellings
+        self.helpers = helpers
+
+    def visit_Name(self, node: ast.Name) -> ast.Name:
+        node.id = self.respellings.get(node.id, node.id)
+        return node
+
+    def visit_arg(self, node: ast.arg) -> ast.arg:
+        node.arg = self.respellings.get(node.arg, node.arg)
+        return node
+
+    def visit_Call(self, node: ast.Call) -> ast.Call:
+        if isinstance(node.func, ast.Name) and node.func.id not in self.helpers:
+            node.args = [self.visit(arg) for arg in node.args]
+            node.keywords = [self.visit(keyword) for keyword in node.keywords]
+            return node
+        self.generic_visit(node)
+        return node
+
+
+def respelled_shape(dims: Tuple[str, ...], respellings: Dict[str, str]) -> Tuple[str, ...]:
+    """``dims`` with every identifier inside a shape token respelled; a non-string token stays as it is."""
+    return tuple(
+        _IDENT_RE.sub(lambda m: respellings.get(m.group(0), m.group(0)), dim) if isinstance(dim, str) else dim
+        for dim in dims
+    )
+
+
+def respelled_parameters(unit: KernelIR, respellings: Dict[str, str]) -> KernelIR:
+    """``unit`` with its parameter tables and pinned knobs respelled."""
+    return dataclasses.replace(
+        unit,
+        input_args=[respellings.get(n, n) for n in unit.input_args],
+        symbols=[dataclasses.replace(desc, name=respellings.get(desc.name, desc.name)) for desc in unit.symbols],
+        arrays=[
+            dataclasses.replace(
+                desc, name=respellings.get(desc.name, desc.name), shape=respelled_shape(desc.shape, respellings)
+            )
+            for desc in unit.arrays
+        ],
+        scalars=[dataclasses.replace(desc, name=respellings.get(desc.name, desc.name)) for desc in unit.scalars],
+        pinned_consts={respellings.get(n, n): value for n, value in unit.pinned_consts.items()},
+    )
+
+
+def respelled_locals(unit: KernelIR, respellings: Dict[str, str]) -> KernelIR:
+    """``unit`` with the local-declaration tables the C emitters read respelled."""
+    return dataclasses.replace(
+        unit,
+        int_locals=[respellings.get(n, n) for n in unit.int_locals],
+        local_dtypes={respellings.get(n, n): dtype for n, dtype in unit.local_dtypes.items()},
+        zeros_locals={
+            respellings.get(n, n): respelled_shape(dims, respellings) for n, dims in unit.zeros_locals.items()
+        },
+        zeros_fills={respellings.get(n, n): kind for n, kind in unit.zeros_fills.items()},
+        reassign_shapes={
+            respellings.get(n, n): [respelled_shape(dims, respellings) for dims in shapes]
+            for n, shapes in unit.reassign_shapes.items()
+        },
+    )
+
+
+def respelled_unit(unit: KernelIR, respellings: Dict[str, str], helpers: OrderedSet[str]) -> KernelIR:
+    """A copy of one kernel or helper with every name a C emitter prints respelled; ``unit`` is untouched.
+
+    Tables no C emitter reads (``sparse``, ``inlined_consts``, ``symbol_signs``, ``scalar_call_temps``,
+    ``shape_only_consts``) keep the kernel's spelling.
+    """
+    respelled = dataclasses.replace(
+        unit,
+        tree=ReservedNameRespelling(respellings, helpers).visit(copy.deepcopy(unit.tree)),
+        # The kernel's own symbol is the ABI's; only a helper's name is ours to respell.
+        kernel_name=respellings.get(unit.kernel_name, unit.kernel_name)
+        if unit.kernel_name in helpers
+        else unit.kernel_name,
+        helpers=[respelled_unit(helper, respellings, helpers) for helper in unit.helpers],
+    )
+    return respelled_locals(respelled_parameters(respelled, respellings), respellings)
+
+
+def c_spelling(kir: KernelIR) -> KernelIR:
+    """``kir`` as the C and C++ emitters print it: every name C or C++ owns respelled.
+
+    Only the emitted source changes. The binding keeps the kernel's own names, which is sound because
+    the harness passes arguments by POSITION -- and position is the one thing a respelling could move,
+    since the ABI sorts by name (``y0`` < ``y0A``, but ``y0_`` > ``y0A``). A respelling that would
+    reorder a signature is refused rather than emitted.
+    """
+    respellings = reserved_name_respellings(kir)
+    if not respellings:
+        return kir
+    spelled = respelled_unit(kir, respellings, OrderedSet(helper.kernel_name for helper in kir.helpers))
+    for unit, spelled_unit in zip((kir, *kir.helpers), (spelled, *spelled.helpers), strict=True):
+        if [respellings.get(n, n) for n in unit.param_order()] != spelled_unit.param_order():
+            raise NotImplementedError(
+                f"respelling {respellings} for C would reorder the ABI of {unit.kernel_name}: "
+                f"{unit.param_order()} -> {spelled_unit.param_order()}"
+            )
+    return spelled
 
 
 def pinned_const_block(kir: KernelIR) -> str:
@@ -3114,9 +3281,8 @@ def pinned_const_block(kir: KernelIR) -> str:
     compiler unroll on them. It is declared here, by NAME, rather than folded into a literal at
     every use, so the emitted code still reads like the reference it came from.
 
-    A knob whose name a header already declares is the one exception: the declaration takes an
-    aliased name and a ``#define`` maps the reference's spelling onto it, which keeps every use
-    site -- body, helper, VLA bound in the signature -- reading as the reference wrote it.
+    A knob whose name C or C++ already owns (rk45_ensemble's ``atol``) arrives here respelled by
+    :func:`c_spelling`, at this declaration and at every use alike.
     """
     if not kir.pinned_consts:
         return ""
@@ -3126,10 +3292,7 @@ def pinned_const_block(kir: KernelIR) -> str:
     for name in sorted(kir.pinned_consts):
         value = kir.pinned_consts[name]
         ctype = type_of.get(name, _c_type("float64"))
-        declared = pinned_const_name(name)
-        if declared != name:
-            lines.append(f"#define {name} {declared}")
-        lines.append(f"constexpr {ctype} {declared} = {c_literal(value, ctype)};")
+        lines.append(f"constexpr {ctype} {name} = {c_literal(value, ctype)};")
     return "\n".join(lines) + "\n\n"
 
 
@@ -3150,6 +3313,7 @@ def c_literal(value, ctype: str = "double") -> str:
 
 def emit_c(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     name = fn_name or f"{kir.kernel_name}_d_c"
+    kir = c_spelling(kir)
     helpers = emit_c_helpers(kir)
     signature = _emit_signature(kir, name)
     body = _emit_body(kir, indent="        ")
@@ -3161,6 +3325,7 @@ def emit_c(kir: KernelIR, fn_name: Optional[str] = None) -> str:
 
 def emit_cpp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     name = fn_name or f"{kir.kernel_name}_d"
+    kir = c_spelling(kir)
     helpers = emit_c_helpers(kir, cpp=True)
     signature = _emit_signature(kir, name)
     # restrict is a C99 keyword; C++ accepts it as __restrict__, so rewrite it for the C++ output.
@@ -3207,6 +3372,7 @@ def emit_cpp_isopar(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     the same code emit_cpp does.
     """
     name = fn_name or f"{kir.kernel_name}_d"
+    kir = c_spelling(kir)
     helpers = emit_c_helpers(kir, cpp=True, isopar=True)
     signature = _emit_signature(kir, name).replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ", isopar=True)
@@ -3220,6 +3386,7 @@ def emit_c_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     """C99 with OpenMP #pragma omp parallel for on each outermost independent/reduction loop; same symbol as emit_c."""
     parallelism.require_parallelizable(kir)
     name = fn_name or f"{kir.kernel_name}_d_c"
+    kir = c_spelling(kir)
     helpers = emit_c_helpers(kir)
     signature = _emit_signature(kir, name)
     body = _emit_body(kir, indent="        ", parallel=True)
@@ -3230,6 +3397,7 @@ def emit_cpp_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     """C++ counterpart of :func:`emit_c_omp` (see it); same symbol as :func:`emit_cpp`."""
     parallelism.require_parallelizable(kir)
     name = fn_name or f"{kir.kernel_name}_d"
+    kir = c_spelling(kir)
     helpers = emit_c_helpers(kir, cpp=True)
     signature = _emit_signature(kir, name).replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ", parallel=True)
@@ -3267,6 +3435,7 @@ def _emit_pluto_signature(kir: KernelIR, fn_name: str, multidim: Set[str]) -> st
 
 def emit_pluto(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     name = fn_name or f"{kir.kernel_name}_d_pluto"
+    kir = c_spelling(kir)
     # Rank>=2 array params are direct VLA parameters so polycc/pet see affine references; rank-1 stays flat/cast-view.
     multidim = {a.name for a in kir.arrays if len(a.shape) >= 2}
     signature = _emit_pluto_signature(kir, name, multidim)

@@ -11,8 +11,9 @@ parameter; see tests/test_spec_dimensions_config.py for that half.
 
 import json
 import pathlib
+import re
 import tempfile
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
@@ -194,29 +195,27 @@ def _libc_name_kir() -> KernelIR:
     return _kir(src=_LIBC_NAME_SRC, pinned=False, pinned_config={"atol": 1.0e-09, "rtol": 1.0e-06}, **_LIBC_NAME_BENCH)
 
 
-def test_a_pinned_knob_named_like_a_libc_function_is_declared_under_an_alias() -> None:
+@pytest.mark.parametrize("emit", [emit_c, emit_cpp], ids=["c", "cpp"])
+def test_a_pinned_knob_named_like_a_libc_function_is_declared_under_a_respelled_name(emit: Callable[..., str]) -> None:
     """``atol`` is rk45_ensemble's absolute tolerance AND ``long atol(const char *)`` in <stdlib.h>.
 
     A file-scope ``constexpr double atol`` therefore lands beside a declaration the headers already
     made: C23 rejects it as "underspecified declaration of 'atol', which is already declared in this
     scope", C++ as "'constexpr const double atol' redeclared as different kind of entity", and the
     C++ leg then fails a second time on ``atol + rtol`` -- no ``operator+`` for a function and a
-    double. The declaration takes an emitter-owned name and a ``#define`` maps the knob's own
-    spelling onto it, so only the declaration line moves and every use reads like the reference.
+    double. The knob is respelled ``atol_`` at its declaration and at every use, the same respelling
+    every other name C or C++ owns takes (see test_c_reserved_name_respelling.py).
     """
     kir = _libc_name_kir()
     assert kir.pinned_consts == {"atol": 1.0e-09, "rtol": 1.0e-06}
-    c = emit_c(kir, fn_name="f")
-    assert "#define atol __npb_pin_atol" in c
-    assert "constexpr double __npb_pin_atol = 1e-09;" in c
-    # The sibling knob no header owns is the control: it keeps its own name, alias-free.
-    assert "constexpr double rtol = 1e-06;" in c
-    assert "#define rtol" not in c
-    body = c.split("void f(", 1)[1]
-    assert "atol" in body and "__npb_pin_atol" not in body, "the use site must read as the reference wrote it"
-    cpp = emit_cpp(kir, fn_name="f")
-    assert "#define atol __npb_pin_atol" in cpp
-    assert "constexpr double __npb_pin_atol = 1e-09;" in cpp
+    text = emit(kir, fn_name="f")
+    declarations = text[text.index("constexpr double atol_") :]
+    assert declarations.startswith("constexpr double atol_ = 1e-09;\n")
+    # The sibling knob no header owns is the control: it keeps its own name.
+    assert "constexpr double rtol = 1e-06;" in declarations
+    body = declarations.split("void f(", 1)[1]
+    assert "(atol_ + rtol)" in body, "the use site must read the respelled declaration"
+    assert re.search(r"\batol\b", declarations) is None, "past the headers, nothing may still spell <stdlib.h>'s atol"
 
 
 @have_gcc
