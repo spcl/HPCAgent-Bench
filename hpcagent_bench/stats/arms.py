@@ -30,7 +30,9 @@ PAIRED_LANGUAGES: tuple[str, str] = ("c", "fortran")
 
 
 def load_observations(artifact: pathlib.Path) -> pd.DataFrame:
-    return pd.read_csv(artifact / "data" / "llr40_observations.csv", low_memory=False)
+    """The artifact's observations recorded under a real arm (:func:`population.condition_rows`)."""
+    frame = pd.read_csv(artifact / "data" / "llr40_observations.csv", low_memory=False)
+    return population.condition_rows(frame)
 
 
 def stamp_denominator(observations: pd.DataFrame) -> pd.DataFrame:
