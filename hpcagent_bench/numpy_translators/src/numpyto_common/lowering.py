@@ -3374,8 +3374,12 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
         """:func:`index_rank` per entry, or ``None`` when one is unsized or may be a mask."""
         ranks: List[int] = []
         for elt in elts:
-            rank = 0 if isinstance(elt, ast.Slice) else index_rank(elt, self.shape_table)
-            if rank is None or (rank > 0 and reads_a_mask(elt, self.bool_names)):
+            if isinstance(elt, ast.Slice):
+                ranks.append(0)
+                continue
+            # A mask local has no shape-table entry, so index_rank reports it as one position.
+            rank = None if reads_a_mask(elt, self.bool_names) else index_rank(elt, self.shape_table)
+            if rank is None:
                 return None
             ranks.append(rank)
         return ranks
