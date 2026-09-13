@@ -202,6 +202,13 @@ those names). The binding JSON emits `args` already in this canonical order, so
 every language stub and the host glue agree byte-for-byte; an implementer who
 writes the signature in this order can never transpose same-typed arguments.
 
+The sort key is always the **binding name** (the manifest argument name), never the
+spelling a language needs. The C/C++ emitter respells a name C or C++ already owns --
+a standard-library function or a keyword, e.g. `atol`, `exp`, `round`, `new` -- as
+`name_` in the generated signature and body, at the same position; the host binds
+arguments by position, so the respelling is invisible to it. A respelling that would
+move an argument within this order is refused at emit time rather than emitted.
+
 ## 5. Const-ness
 
 - **Every scalar input is `const`** (`const long NI`, `const double alpha`).
