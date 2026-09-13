@@ -284,6 +284,7 @@ CAUSES = (
     "rocprof_failed",
     "rocprof_report_missing",
     "kernel_share_missing",
+    "timed_out",
 )
 
 #: Column prefixes that carry a kernel's share of device time, in priority order.
@@ -1063,10 +1064,17 @@ def profile_gpu_once(
     root: pathlib.Path, request_file: pathlib.Path, *, language: str, timeout: float, min_percent: float
 ) -> GpuRun:
     """Trace ONE run of the measurement and read the reports off it, with the VENDOR as the only
-    branch. Both arms return the same :class:`GpuRun`."""
-    if language == "hip":
-        return profile_amd_once(root, request_file, timeout=timeout, min_percent=min_percent)
-    return profile_nvidia_once(root, request_file, language=language, timeout=timeout, min_percent=min_percent)
+    branch. Both arms return the same :class:`GpuRun`; a profiler that outlives ``timeout`` is
+    ``timed_out``, never the raw exception."""
+    try:
+        if language == "hip":
+            return profile_amd_once(root, request_file, timeout=timeout, min_percent=min_percent)
+        return profile_nvidia_once(root, request_file, language=language, timeout=timeout, min_percent=min_percent)
+    except subprocess.TimeoutExpired as wedged:
+        tool = "rocprof" if language == "hip" else "nsys"
+        raise GpuProfilerUnavailable(
+            "timed_out", f"{tool} wedged past {timeout:g}s and was killed: {wedged.cmd}"
+        ) from wedged
 
 
 def profile_nvidia_once(

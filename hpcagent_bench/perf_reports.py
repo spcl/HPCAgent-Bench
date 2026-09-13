@@ -196,7 +196,7 @@ UNKNOWN: str = "[unknown]"
 class PerfUnavailable(RuntimeError):
     """``perf`` cannot sample here. ``cause`` is the machine-readable reason
     (``not_linux`` / ``perf_missing`` / ``no_perf_events`` / ``perf_event_paranoid`` /
-    ``perf_record_failed`` / ``no_samples``); the message names the fix. Raised instead of
+    ``perf_record_failed`` / ``no_samples`` / ``timed_out``); the message names the fix. Raised instead of
     returning an empty profile -- a profile nobody can tell apart from "nothing was hot" is
     worse than an error."""
 
