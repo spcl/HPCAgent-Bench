@@ -699,12 +699,12 @@ SHARD_ENV = "HPCAGENT_BENCH_DACE_PARSE_SHARD"
 WORKFLOW = REPO / ".github" / "workflows" / "tests.yml"
 
 
-def ci_parse_shards() -> Tuple[List[int], int]:
-    """``(shard indices the port-fidelity matrix runs, the count they are shards OF)``."""
+def ci_parse_shards(job_name: str = "port-fidelity") -> Tuple[List[int], int]:
+    """``(shard indices the named job's matrix runs, the count they are shards OF)``."""
     import yaml
 
     jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
-    job = jobs["port-fidelity"]
+    job = jobs[job_name]
     indices = [int(s) for s in job["strategy"]["matrix"]["shard"]]
     # Step-level env or the job's -- the variable sits on the step it belongs to here, but a later
     # edit hoisting it to the job must not turn this gate into a silent pass.
@@ -713,7 +713,7 @@ def ci_parse_shards() -> Tuple[List[int], int]:
         spec = env.get(SHARD_ENV)
         if spec:
             counts.add(int(str(spec).rsplit("/", 1)[-1]))
-    assert len(counts) == 1, f"port-fidelity names {counts or 'no'} shard counts; it has to name exactly one"
+    assert len(counts) == 1, f"{job_name} names {counts or 'no'} shard counts; it has to name exactly one"
     return indices, counts.pop()
 
 
