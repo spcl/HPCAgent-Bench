@@ -793,8 +793,8 @@ def test_gpu_check_picks_the_profiler_by_language_and_reports_which(monkeypatch)
     """One probe, before anything is built, and the vendor is the only branch in it."""
     monkeypatch.setattr(gpu_profiling, "nsys_check", lambda _lang: "/usr/bin/nsys")
     monkeypatch.setattr(gpu_profiling, "rocprof_check", lambda: ("rocprofv3", "/opt/rocm/bin/rocprofv3"))
-    assert gpu_profiling.gpu_check("cuda") == "nsys"
-    assert gpu_profiling.gpu_check("hip") == "rocprofv3"
+    assert gpu_profiling.gpu_check("cuda") == ("nsys", "/usr/bin/nsys")
+    assert gpu_profiling.gpu_check("hip") == ("rocprofv3", "/opt/rocm/bin/rocprofv3")
 
 
 def test_render_report_marks_the_amd_fields_that_have_no_counterpart() -> None:
@@ -868,3 +868,28 @@ def test_no_message_this_module_returns_hands_the_agent_a_command() -> None:
             f"an outward-facing message hands the agent {hit.group(0)!r}: {text[:120]!r}. Name the tool "
             "that owns the question and say /profile does not serve it; the measurement goes through the route"
         )
+
+
+def test_the_amd_occupancy_note_promises_no_agent_report_column_the_payload_does_not_return() -> None:
+    """The note rides in every AMD payload, so a column it says comes back is one an agent then
+    searches the rows for; it named three agent-report columns no payload field carries."""
+    header = ROCPROF_CSVS[gpu_profiling.AGENT_INFO_CSV].splitlines()[0]
+    columns = [name.strip('"') for name in header.split(",")]
+    returned = gpu_profiling.GpuPayload.__required_keys__ | gpu_profiling.GpuPayload.__optional_keys__
+    returned |= gpu_profiling.LaunchRow.__required_keys__
+    note = gpu_profiling.AMD_OCCUPANCY_NOTE
+    promised = [col for col in columns if re.search(rf"\b{re.escape(col)}\b", note) and col not in returned]
+    assert not promised, f"AMD_OCCUPANCY_NOTE names agent-report columns the payload never returns: {promised}"
+
+
+def test_the_amd_counter_note_gives_the_papi_this_image_builds_as_the_reason() -> None:
+    """The AMD image builds PAPI 7.2.0 without rocp_sdk. Calling the component newer than that PAPI
+    sends a reader after a PAPI upgrade that would not add it."""
+    dockerfile = pathlib.Path(__file__).resolve().parents[1] / "containers/cluster/ce-images/judge-agent-amd/Dockerfile"
+    built = re.search(r'--with-components="([^"]+)"', dockerfile.read_text())
+    assert built, "the AMD image no longer names its PAPI components in one --with-components list"
+    components = built.group(1).split()
+    assert "rocm" in components and "rocp_sdk" not in components, components
+    note = gpu_profiling.AMD_COUNTER_NOTE
+    assert "postdates" not in note, note
+    assert re.search(r"rocp_sdk is not built into the PAPI installed here", note), note

@@ -53,12 +53,41 @@ CLUSTER_ENV_FILE=.env.cpf-llr-focus40-oss120b-c sbatch \
     --time=08:00:00 --partition=mi300 --job-name=cpf-llr40-oss120b-c beverin.sbatch
 ```
 
-### Splitting a roster across waves
+### Complement waves: submit only what an arm still owes
 
-A model whose agent count cannot hold a full kernel list in one arm needs the list split into
-disjoint halves with their own arm labels, each submitted as a separate job. Verify the halves are
-disjoint and their union is the full list before trusting a wave; nothing enforces that for you. A
-retry arm holds only the kernels an earlier wave never submitted.
+An arm's coverage is the union of its judge rows (`submissions` or `attempts`) over every job that
+ran that arm name, across all run roots. A kernel is scored by the best agent that reached it, so
+rerunning the whole roster gives the finished kernels a second agent: the next wave runs only the
+complement.
+
+```bash
+cd experiments
+python remaining_kernels.py --run-root "${SCRATCH}/hpcagent-bench-runs/cpf-llr-focus40-<date>" \
+    --run-root <every other root that ran the campaign> --tag llr-focus40 --out-dir owed/
+```
+
+`--out-dir` writes one `<arm>.txt` per arm that still owes kernels and deletes the list of an arm
+that owes nothing. `--exclude-job <id>` drops a job whose rows measured a superseded or contaminated
+treatment.
+
+Every family launcher takes such a list as `KERNELS_FILE` and sizes the allocation from it:
+`submit-cpf-llr40.sh` and `submit-gpu-llr40.sh` (`submit-next-wave.sh` drives both for
+llr-focus40), `submit-llrblind.sh` (writes `problems-<experiment>-<lang>[-skills]-owed.jsonl`
+beside the full list), `submit-git-scicomp.sh` and `submit-scicomp-dc.sh`. A list names kernels by
+their short name, the manifest basename.
+
+- **Split a long list for a slow model.** `split -l 10 owed/<arm>.txt chunk-` and submit each chunk
+  with `DEPEND_ON=<previous job id>` (an `afterany` chain), so one judge and one inference server
+  carry a chunk's agents instead of the whole arm's. Parallel chains are independent lanes.
+- **Hold a wave behind a priority one.** `scontrol hold <ids>` after submitting, and
+  `scontrol release <ids>` once the priority arms are queued.
+- **Keep an experiment's problem files frozen.** Copy `problems-<experiment>-*.jsonl` into the
+  submitting tree instead of regenerating them: `make_problems.py` output follows the current skill
+  pages, so a regenerated list is a different treatment.
+- **Submit from a pinned worktree at `origin/main`** and leave it untouched while its jobs run;
+  `containers/agent` is mounted from the submitting tree.
+- **Status of every arm:** `python wave_board.py --out wave-board.html` renders one page with each
+  arm's kernel coverage and its slurm jobs.
 
 ## What worked
 
@@ -117,6 +146,20 @@ the vLLM path that builds on first request and dies.
   arm's agents at their per-agent timeout while kernels remain to grade. A shorter kernel list does
   not buy an agent more time.
 - **Never edit an env file or a launcher script while jobs run** -- roles re-source them.
+- **Never export `CPF_*` in the submitting shell.** `sbatch --export=ALL` copies it into the job.
+  `materialize_shared.sh` then stages the CPF drop-in source into every task that sees
+  `CPF_DROPIN_DIR`, which hands a control arm the cpfsrc treatment, and `prepare_job.sh` refuses a
+  non-C arm against the drop-in view. `submit_arm_job` strips `CPF_DROPIN_DIR`, `CPF_FORMS_DIR` and
+  `HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR` from the sbatch environment; the arm env
+  file pins them for the arms whose packet asks. A control arm's `shared/tasks/<kernel>/` must hold
+  no `<kernel>.c` drop-in.
+- **One inference server does not carry 120 qwen3.8 agents.** Sessions end on
+  `API Error: The operation timed out` and the arm records almost nothing, while oss120b survives
+  the same load. Chunk the roster (see complement waves).
+- **An agent-exit promotion reads every judge rank DB.** A shard file with no schema is skipped; a
+  shard whose tables lack a column still fails the promotion.
+- **Harness smokes** (`SMOKE=1 ./submit-harness-focus20.sh`) default to a 2 h wall clock and a
+  3000 s agent timeout: one edit, build and judge cycle plus the promotion does not fit 25-40 min.
 
 ## Agents
 
