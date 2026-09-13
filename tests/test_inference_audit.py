@@ -69,8 +69,8 @@ LLR40_C_OVER_FORTRAN_LOG_DELTAS: tuple[float, ...] = (
     0.000000,
 )
 
-#: The same population shifted so its MEAN is exactly zero -- the null the percentile bootstrap of a
-#: mean-of-logs claims to cover 95% of the time.
+#: The same population shifted so its MEAN is exactly zero -- the null a 95% interval around the
+#: mean-of-logs has to cover 95% of the time.
 ZERO_MEAN_DELTAS: np.ndarray = np.asarray(LLR40_C_OVER_FORTRAN_LOG_DELTAS, dtype=float)
 ZERO_MEAN_DELTAS = ZERO_MEAN_DELTAS - ZERO_MEAN_DELTAS.mean()
 
@@ -113,8 +113,8 @@ def test_the_efficacy_significance_flag_holds_its_nominal_level_on_skewed_paired
 ) -> None:
     """The verdict is written into the shipped efficacy CSV, so a flag that fires far more often than 5%
     under a true null turns an absent effect into a published finding. It is measured on the verdict
-    itself, not on the bootstrap bar around ``rho``: that bar under-covers at small n and carries no
-    test, and reading a verdict off it is exactly the regression this would catch."""
+    itself, not on the bootstrap bar around ``rho``: that bar carries no test, and reading a verdict
+    off it is exactly the regression this would catch."""
     population = ZERO_MEAN_DELTAS - summary.paired_change(ZERO_MEAN_DELTAS).estimate
     rate = verdict_false_positive_rate(population, n_pairs, trials=1500, seed=20260911)
     assert rate <= max_false_positive_rate, (
@@ -140,6 +140,37 @@ def test_the_hodges_lehmann_interval_holds_its_nominal_level_on_skewed_paired_de
     rate = paired_change_false_positive_rate(population, n_pairs, trials=1500, seed=20260911)
     assert rate <= max_false_positive_rate, (
         f"summary.paired_change missed its own pseudo-median on {rate:.1%} of samples at n={n_pairs}"
+    )
+
+
+def mean_interval_miss_rate(population: np.ndarray, n: int, trials: int, seed: int) -> float:
+    """Share of samples of size ``n`` whose bootstrap interval around ``ln rho`` misses the zero mean."""
+    rng = np.random.default_rng(seed)
+    misses = 0
+    for trial in range(trials):
+        sample = rng.choice(population, size=n, replace=True).tolist()
+        low, high = efficacy.bootstrap_interval(sample, resamples=999, seed=efficacy.BOOTSTRAP_SEED + trial)
+        misses += int(not low <= 0.0 <= high)
+    return misses / trials
+
+
+@pytest.mark.parametrize(
+    "n_pairs, max_miss_rate",
+    [
+        pytest.param(6, 0.08, id="n=6"),
+        pytest.param(10, 0.08, id="n=10"),
+    ],
+)
+def test_the_interval_around_rho_holds_its_nominal_level_on_skewed_paired_deltas(
+    n_pairs: int, max_miss_rate: float
+) -> None:
+    """Every ``*_ci_low_pct``/``*_ci_high_pct`` column is this interval, so it has to cover the mean it
+    bounds. On this shape an equal-tailed studentized bootstrap missed the zero mean on 11.7% of samples
+    at n = 6 and 12.6% at n = 10, and the percentile bootstrap on 21.7% and 16.0%; the symmetric
+    studentized interval misses on 3.2% and 3.7%."""
+    rate = mean_interval_miss_rate(ZERO_MEAN_DELTAS, n_pairs, trials=600, seed=20260911)
+    assert rate <= max_miss_rate, (
+        f"efficacy.bootstrap_interval missed the zero mean on {rate:.1%} of samples at n={n_pairs}"
     )
 
 
