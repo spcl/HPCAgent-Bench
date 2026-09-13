@@ -21,10 +21,11 @@ This module owns the second edit plus the runtime helpers:
   (the repo's no-``getattr`` rule), compose autopar / CUDA for the mode, and
   substitute the compile-command template. It returns the argv; it does NOT run
   it (the caller owns process launching).
-* :func:`report_flags` -- resolve a block's optional ``report_ref`` the same way,
-  giving the flags that make the compiler explain its vectorizer decisions.
+* :func:`report_flags` / :func:`submission_toolchain` -- the family-keyed report flags
+  (:data:`REPORT_REFS`) that make the compiler explain its vectorizer decisions.
 """
 
+import dataclasses
 import functools
 import glob
 import logging
@@ -36,7 +37,8 @@ import shutil
 import subprocess
 import tempfile
 import textwrap
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+import types
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import yaml
 
@@ -1472,16 +1474,51 @@ def isopar_capability() -> flags.AutoparProbe:
     )
 
 
+#: Optimization-report flags per toolchain FAMILY, as a :mod:`hpcagent_bench.flags` constant name. The
+#: ONE table: the judge's ``opt-report`` profile tool, the harness's perf reports and the opt-reports
+#: skill all read it. Keyed by the family of the DRIVER, not the block: an OpenMP-offload arm runs
+#: amdclang over the gcc block's line, and gcc's ``-fopt-info`` is an error to amdclang.
+REPORT_REFS: Mapping[str, str] = types.MappingProxyType(
+    {
+        "gcc": "GCC_OPT_REPORT",
+        "llvm": "CLANG_OPT_REPORT",
+        "nvhpc": "NVHPC_OPT_REPORT",
+        "oneapi": "ICX_OPT_REPORT",
+    }
+)
+
+#: Device drivers outside :data:`COMPILER_FAMILIES`, by the family whose report flags they take.
+#: hipcc is ROCm's clang. nvcc is absent: it has no vectorizer report.
+DEVICE_DRIVER_FAMILY: Mapping[str, str] = types.MappingProxyType({"hipcc": "llvm"})
+
+
+def block_family(block: dict[str, Any]) -> str:
+    """The toolchain family of a ``compilers.yaml`` block, or ``""`` (nvcc, the MPI wrappers)."""
+    spack = (block.get("install") or {}).get("spack")
+    for family, name in COMPILER_FAMILIES.items():
+        if name == spack:
+            return family
+    return DEVICE_DRIVER_FAMILY.get(block.get("cc", ""), "")
+
+
+@functools.lru_cache(maxsize=None, typed=True)
+def family_report_flags(family: str) -> str:
+    """:data:`REPORT_REFS` resolved to flags; ``""`` for a family with no report channel."""
+    ref = REPORT_REFS.get(family)
+    if ref is None:
+        return ""
+    flag_vars = vars(flags)
+    if ref not in flag_vars:
+        raise KeyError(f"REPORT_REFS[{family!r}] = {ref!r} is not a constant in hpcagent_bench.flags")
+    return flag_vars[ref]
+
+
 def report_flags(lang: str, *, compiler: Optional[str] = None) -> str:
     """The optimization-report flags for ``lang`` (or an explicit ``compiler`` block).
 
-    Resolved from ``compilers.yaml``'s ``report_ref`` -> a constant NAME in
-    :mod:`hpcagent_bench.flags`, looked up via ``vars(flags)`` -- the same indirection
-    ``baseline_ref``/``autopar_ref`` use, so no caller string-literals a report flag.
-
-    Returns ``""`` for a compiler with no report channel wired (nvcc, the MPI
-    wrappers, ...): the caller then reports "not supported" rather than guessing a
-    flag its compiler may reject.
+    The block's family (:func:`block_family`) looked up in :data:`REPORT_REFS`. Returns ``""`` for a
+    compiler with no report channel (nvcc, the MPI wrappers): the caller then reports "not
+    supported" rather than guessing a flag its compiler may reject.
     """
     compilers = _load_compilers()
     if compiler is not None:
@@ -1490,13 +1527,68 @@ def report_flags(lang: str, *, compiler: Optional[str] = None) -> str:
         block = compilers[compiler]
     else:
         _, block = _compiler_for_lang(compilers, lang)
-    ref = block.get("report_ref")
-    if ref is None:
+    return family_report_flags(block_family(block))
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Toolchain:
+    """What builds one submission on THIS arm: the block's compile line, run by ``driver``."""
+
+    language: str
+    #: The ``compilers.yaml`` block whose compile/link templates and baseline flags the build uses.
+    compiler: str
+    #: The program that compiles: the block's ``cc``, or an offload leg's own driver.
+    driver: str
+    #: The DRIVER's family, which is what :data:`REPORT_REFS` keys on.
+    family: str
+    report_flags: str
+
+
+def submission_toolchain(lang: str, requested: Optional[str] = None, *, vendor: str = "amd") -> Toolchain:
+    """The toolchain :meth:`~hpcagent_bench.harness.sandbox.Sandbox.build` compiles ``lang`` with.
+
+    Family: arm pin, else ``requested``, else the default (:func:`resolve_family`); a family this
+    image wires no block for falls back to the default block. An offload arm swaps the driver for
+    its leg's (:func:`offload_build_driver`) and takes that leg's family.
+
+    :raises KeyError: an unknown family, or a pinned family that builds no ``lang`` here.
+    """
+    compilers = _load_compilers()
+    name = compiler_for_family(lang, resolve_family(lang, requested))
+    if name is None:
+        name, _ = _compiler_for_lang(compilers, lang)
+    block = compilers[name]
+    model = offload_model()
+    leg_driver = offload_build_driver(model, vendor, lang) if model else ""
+    family = offload_family(model) if leg_driver else block_family(block)
+    return Toolchain(
+        language=lang,
+        compiler=name,
+        driver=leg_driver or block["cc"],
+        family=family,
+        report_flags=family_report_flags(family),
+    )
+
+
+def compiler_version(driver: str) -> str:
+    """First line of ``driver --version``, or ``""`` when it is not on PATH or does not answer."""
+    path = shutil.which(driver)
+    if path is None:
         return ""
-    flag_vars = vars(flags)
-    if ref not in flag_vars:
-        raise KeyError(f"report_ref {ref!r} is not a constant in hpcagent_bench.flags")
-    return flag_vars[ref]
+    try:
+        return executable_version(path)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return ""
+
+
+@functools.lru_cache(maxsize=None, typed=True)
+def executable_version(path: str) -> str:
+    """First line of ``<path> --version``. Keyed by the resolved path; a failure raises, so it is not cached."""
+    probe = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=30, check=False)
+    lines = (probe.stdout or probe.stderr).strip().splitlines()
+    if not lines:
+        raise ValueError(f"{path} --version printed nothing")
+    return lines[0].strip()
 
 
 #: The repo's C/C++ style file. clang-format and clang-tidy both discover a ``.clang-format`` by

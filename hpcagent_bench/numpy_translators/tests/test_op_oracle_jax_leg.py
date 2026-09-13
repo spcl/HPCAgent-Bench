@@ -9,8 +9,6 @@ leg therefore runs in a spawned interpreter, which inherits no lock and so needs
 imported here" escape hatch.
 """
 
-from __future__ import annotations
-
 import numpy as np
 import pytest
 
