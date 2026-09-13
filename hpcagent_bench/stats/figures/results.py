@@ -64,7 +64,7 @@ from matplotlib.patches import Patch, Rectangle  # noqa: E402
 # scipy ships no type stubs, so what it hands back is converted explicitly at each call site.
 from scipy.stats import norm  # noqa: E402 # pyright: ignore[reportMissingTypeStubs]
 
-from hpcagent_bench.stats import inference
+from hpcagent_bench.stats import inference, population
 from hpcagent_bench.stats import summary  # noqa: E402
 from hpcagent_bench.harness import recording  # noqa: E402
 from hpcagent_bench.paths import PLOTS_DIR  # noqa: E402
@@ -327,6 +327,19 @@ def machine_groups(data: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
     return sorted(grouped, key=lambda pair: pair[0])
 
 
+def one_node_per_kernel(data: pd.DataFrame) -> None:
+    """Refuse a kernel whose candidate and baseline rows name two different nodes.
+
+    :func:`machine_groups` partitions on ``(cpu, gpu)``, which cannot separate two nodes of one
+    homogeneous cluster; every speed-up here divides one kernel's framework cells by its baseline
+    cell, so all of a kernel's rows must come from one node (:func:`population.one_node`). A frame
+    without the column predates it and is not checked."""
+    if "node" not in data.columns:
+        return
+    for kernel, rows in data.groupby("benchmark"):
+        population.one_node(rows["node"].tolist(), label=str(kernel))
+
+
 def machine_output(output: str, label: str) -> str:
     """``plots/heatmap.pdf`` -> ``plots/heatmap.<machine>.pdf``.
 
@@ -468,6 +481,7 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
     Split from :func:`plot_heatmap` so the per-machine partition happens once, above the drawing,
     rather than being threaded through it.
     """
+    one_node_per_kernel(data)
     # Per-cell cleaned median + CI (the median drives best-selection AND the plotted value).
     summary = cell_summary(data)
     best = summary[["benchmark", "domain", "framework", "time"]].copy()
@@ -855,6 +869,7 @@ def corpus_comparisons(
     as a finding. Kernels are returned in the shared report order so the table is deterministic.
     """
     data = load_results(db, benchmark, preset, datatype, variant, baseline)
+    one_node_per_kernel(data)
     kernels = list(dict.fromkeys(cast("list[str]", data["benchmark"].tolist())))
     ordered = reorder_rows(kernels, BY_DWARF)[0]
     # Ordered: the key order reaches the report table, so it must not depend on hash order.
