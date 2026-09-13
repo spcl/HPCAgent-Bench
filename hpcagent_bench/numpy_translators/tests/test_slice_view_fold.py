@@ -184,23 +184,25 @@ def test_chained_index_array_split_by_a_slice_is_not_flattened() -> None:
     # numpy's advanced-index FRONT-PLACEMENT rule, checked against numpy first: a plain integer is
     # an advanced index beside an index array, so ``A[2][:3, idx]`` keeps its slice axis in place
     # (3, 2) while the flattened ``A[2, :3, idx]`` has the pair SEPARATED and moves the broadcast
-    # result to the front (2, 3). Flattening the chain would transpose the result silently.
-    from numpyto_common.lowering import _ChainedSubscriptFlattener
+    # result to the front (2, 3). Flattening the chain would transpose the result silently, so the
+    # chain stays two-step with its slice folded inward, which numpy lays out like the original.
+    from numpyto_common.lowering import ChainedSubscriptFlattener
 
     A = np.arange(3 * 5 * 7).reshape(3, 5, 7)
     idx = np.array([0, 2])
     assert A[2][:3, idx].shape == (3, 2) and A[2, :3, idx].shape == (2, 3)
     assert np.array_equal(A[2][:3, idx], A[2, :3, idx].T)  # a transpose, not the same array
+    assert np.array_equal(A[2][:3, idx], A[2, :3][:, idx])
 
     shapes = {"A": ("F", "X", "Y"), "idx": ("P",)}
     tree = ast.parse("def f(A, idx, out):\n    out[:] = A[2][:3, idx]\n")
-    _ChainedSubscriptFlattener(shapes).visit(tree)
+    ChainedSubscriptFlattener(shapes).visit(tree)
     ast.fix_missing_locations(tree)
-    assert "A[2][:3, idx]" in ast.unparse(tree), "the split-run chain was flattened into a transpose"
+    assert "A[2, :3][:, idx]" in ast.unparse(tree), "the split-run chain must stay two-step, slice folded inward"
 
     # One unbroken advanced run still composes exactly -- ``A[2][idx]`` and ``A[2, idx]`` agree.
     assert np.array_equal(A[2][idx], A[2, idx])
     kept = ast.parse("def f(A, idx, out):\n    out[:] = A[2][idx]\n")
-    _ChainedSubscriptFlattener(shapes).visit(kept)
+    ChainedSubscriptFlattener(shapes).visit(kept)
     ast.fix_missing_locations(kept)
     assert "A[2, idx]" in ast.unparse(kept), "a single advanced run must still flatten"

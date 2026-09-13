@@ -1306,7 +1306,7 @@ class _CBodyEmitter(BaseEmitter):
         the outermost is scalar. A surviving slice there makes the outer index relative to the
         sliced range -- ``a[1:3][0]`` is ``a[1]``, not ``a[1:3, 0]`` -- so concatenating it drops
         the offset and returns the wrong row from code that compiles clean. The bare-``:`` case is
-        composed upstream (``_ChainedSubscriptFlattener``); anything still chained here is refused
+        composed upstream (``ChainedSubscriptFlattener``); anything still chained here is refused
         rather than guessed at.
         """
         chain: List[str] = []
