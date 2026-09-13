@@ -74,11 +74,11 @@ def _vcut_init(a, cutoff, security=6.0):
     n = [int(np.ceil(cutoff * np.sqrt(np.sum((a[i, :] * a[i, :]))) / tpi)) for i in range(3)]
     n1, n2, n3 = n
 
-    # --- Ewald split params (vcut_formula) ---
+    # Ewald split params (vcut_formula)
     rwigner = 0.5 * np.sqrt(1.0 / np.max(np.sum((b * b), axis=0))) * tpi
     sigma = 3.0 / rwigner
 
-    # --- long-range real-space grid over one unit cell (full grid, weight 1) ---
+    # long-range real-space grid over one unit cell (full grid, weight 1)
     m = [max(1, int(security * np.sqrt(np.sum((a[:, i] * a[:, i]))) * sigma)) for i in range(3)]
     m1, m2, m3 = m
     F = np.stack(
@@ -98,7 +98,7 @@ def _vcut_init(a, cutoff, security=6.0):
     weight = a_omega / (m1 * m2 * m3)
     wtmp = weight * tmp  # (Nr,)
 
-    # --- table nodes q_i = b.(i1,i2,i3), only inside the cutoff sphere ---
+    # table nodes q_i = b.(i1,i2,i3), only inside the cutoff sphere
     idx = (
         np.stack(
             np.meshgrid(np.arange(-n1, n1 + 1), np.arange(-n2, n2 + 1), np.arange(-n3, n3 + 1), indexing="ij"), axis=-1
@@ -429,7 +429,7 @@ def vexx_all_paths(
     vcut_corrected=None,
 ):
     """Apply the Fock exchange operator to psi, accumulate onto hpsi in place -- ALL QE config paths (US/PAW/noncolin/tqr/negrp)."""
-    # ---- config gate: the WS-vcut path needs its precomputed table as input ----
+    # config gate: the WS-vcut path needs its precomputed table as input
     if use_coulomb_vcut_ws and vcut_corrected is None:
         raise NotImplementedError(
             "vexx_k_numpy: use_coulomb_vcut_ws (Wigner-Seitz truncated Coulomb) "
@@ -464,8 +464,8 @@ def vexx_all_paths(
     # local working exxbuff (rotated for negrp>1); shape (nrxxs*npol, nbnd, nks)
     exxbuff_w = exxbuff.copy()
 
-    # ---- setup: every one of my bands scattered to the grid, to real space, in one batched IFFT
-    # per polarization (independent across bands -- Sec. 25 "for i: y[i] = f(x[i])") ----
+    # setup: every one of my bands scattered to the grid, to real space, in one batched IFFT
+    # per polarization (independent across bands -- Sec. 25 "for i: y[i] = f(x[i])")
     ibnd_all = ibands[:my_n, eg].astype(np.int64)
     valid = (ibnd_all != 0) & (ibnd_all <= m)
     temppsic = np.zeros((nrxxs, npol, my_n), dtype=np.complex128, order="F")
@@ -494,7 +494,7 @@ def vexx_all_paths(
         coulomb_fac = np.zeros((ngm, nqs), dtype=g.dtype)
         coulomb_done = np.zeros(nqs, dtype=bool)
 
-    # ---- main loop over q-points ------------------------------------------
+    # main loop over q-points
     for iq in range(1, nqs + 1):
         ikq = int(index_xkq[current_ik - 1, iq - 1])
         ik = int(index_xk[ikq])
@@ -568,9 +568,9 @@ def vexx_all_paths(
                 for jbnd in range(jstart, jend + 1):
                     buf = jbnd - all_start_tmp + iexx_start - 1  # exxbuff col (0-based)
                     phi_stack = exxbuff_w[:, buf, ikq].reshape(npol, nrxxs)
-                    # ---- rhoc = conj(phi) * psi / omega ----
+                    # rhoc = conj(phi) * psi / omega
                     rhoc = np.sum(np.conj(phi_stack) * temppsic[:, :, ii].T, axis=0) * omega_inv
-                    # ---- US real-space augmentation (tqr) on rho ----
+                    # US real-space augmentation (tqr) on rho
                     if okvan and tqr:
                         _addusxx_r(
                             rhoc,
@@ -584,7 +584,7 @@ def vexx_all_paths(
                             ofsbeta0,
                         )
                     rhocg = fwfft(rhoc)
-                    # ---- US G-space augmentation ----
+                    # US G-space augmentation
                     if okvan and not tqr:
                         _addusxx_g(
                             rhocg,
@@ -599,9 +599,9 @@ def vexx_all_paths(
                             eigqts_use,
                             sfac_use,
                         )
-                    # ---- vc = facb * rhoc * occ / nqs ----
+                    # vc = facb * rhoc * occ / nqs
                     vc = facb * rhocg * (x_occupation[jbnd - 1, ik] * nqs_inv)
-                    # ---- US G-space non-local potential ----
+                    # US G-space non-local potential
                     if okvan and not tqr:
                         _newdxx_g(
                             vc,
@@ -618,7 +618,7 @@ def vexx_all_paths(
                             omega,
                         )
                     vcr = invfft(vc)
-                    # ---- US real-space non-local potential (tqr) ----
+                    # US real-space non-local potential (tqr)
                     if okvan and tqr:
                         _newdxx_r(
                             vcr,
@@ -633,7 +633,7 @@ def vexx_all_paths(
                             omega,
                             nrxxs,
                         )
-                    # ---- PAW Fock-kernel contraction ----
+                    # PAW Fock-kernel contraction
                     if okpaw:
                         _paw_newdxx(
                             x_occupation[jbnd - 1, ik] * nqs_inv,
@@ -645,13 +645,13 @@ def vexx_all_paths(
                             nh,
                             ofsbeta0,
                         )
-                    # ---- result += vc * phi ----
+                    # result += vc * phi
                     result[:, :, ii] += vcr[:, None] * phi_stack.T
             # circular-shift the band-group's exxbuff slab left (MPI exchange).
             if negrp > 1:
                 exxbuff_w[:, :, ikq] = np.roll(exxbuff_w[:, :, ikq], -1, axis=1)
 
-    # ---- finalize: result(r) -> G-sphere, accumulate onto hpsi ------------
+    # finalize: result(r) -> G-sphere, accumulate onto hpsi
     for ii in range(my_n):
         ibnd = int(ibands[ii, eg])
         if ibnd == 0 or ibnd > m:

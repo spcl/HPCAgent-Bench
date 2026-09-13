@@ -485,7 +485,7 @@ def pin_build_caching() -> None:
             os.environ.setdefault(f"CMAKE_{lang}_COMPILER_LAUNCHER", ccache)
 
 
-# ----- Pipeline registry: adding a new SDFG pipeline is one entry here. -----
+# Pipeline registry: adding a new SDFG pipeline is one entry here.
 
 
 @dataclass(frozen=True, slots=True)
@@ -838,7 +838,7 @@ def stage_to_device(cupy: DeviceStagingModule, arr: AnyArray) -> ArrayLike:
     return darr
 
 
-# ----- Compiled-SDFG wrapper: exposes .sdfg for timing hooks. -----
+# Compiled-SDFG wrapper: exposes .sdfg for timing hooks.
 
 
 class TimedCompiledSDFG:
@@ -873,7 +873,7 @@ class TimedCompiledSDFG:
             retained.clear()
 
 
-# ----- Framework -----
+# Framework
 
 
 class DaceFramework(Framework):
@@ -916,7 +916,7 @@ class DaceFramework(Framework):
 
         return cp_copy_func
 
-    # ----- Pipeline assembly ----------------------------------------------
+    # Pipeline assembly
 
     def autogen_targets(self) -> Sequence[str]:
         return ("dace",)
@@ -1029,7 +1029,7 @@ class DaceFramework(Framework):
         ct_impl = self._import_kernel(bench)
         return [(ct_impl, "dace")]
 
-    # ----- Optimize phase: build 3 pipelines, verify + score, pick fastest ----
+    # Optimize phase: build 3 pipelines, verify + score, pick fastest
 
     def optimize(self, program: KernelImpl, bench: Benchmark, bdata: BenchData) -> TimedCompiledSDFG:
         """Build this flavor's pipelines, verify + score each, and return the fastest correct compiled variant."""
@@ -1185,7 +1185,7 @@ class DaceFramework(Framework):
         )
         return outputs
 
-    # ----- Reports ---------------------------------------------------------
+    # Reports
     #
     # DaCe is a SOURCE-GENERATING backend, so its reports come from the artifacts it leaves in the
     # SDFG's build folder rather than from DaCe's own bookkeeping. What DaCe can and cannot tell us:
@@ -1288,7 +1288,7 @@ class DaceFramework(Framework):
                 chunks.append(f"$ {shlex.join(cmd)}\n{proc.stderr}")
         return "\n".join(chunks)
 
-    # ----- Timing override -------------------------------------------------
+    # Timing override
 
     def create_timer(self, program: KernelImpl) -> Timer:
         """Enable SDFG-level Timer instrumentation for TimedCompiledSDFG programs; else default host timing."""
@@ -1327,7 +1327,7 @@ class DaceFramework(Framework):
             except Exception:
                 pass
 
-    # ----- Argument plumbing (unchanged from the original) -----------------
+    # Argument plumbing (unchanged from the original)
 
     def params(self, bench: Benchmark, impl: KernelImpl | None = None) -> list[str]:
         return [p for p in bench.info["parameters"]["L"].keys() if p not in bench.info["input_args"]]

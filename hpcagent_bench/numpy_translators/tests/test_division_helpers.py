@@ -75,7 +75,7 @@ def test_cpp_division_helpers_match_python() -> None:
     _check(cpp=True)
 
 
-# --- the _Generic association list must cover every dtype the corpus can reach ------------------
+# the _Generic association list must cover every dtype the corpus can reach
 # `default:` is a silent catch-all: a type absent from the list does not fail to compile, it picks
 # the INTEGER helper. Two dtypes fell through -- see each test for what that cost.
 _F16_DRIVER = """#include <stdio.h>

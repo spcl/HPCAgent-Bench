@@ -111,7 +111,7 @@ def install(monkeypatch, rows: Sequence[dict], events: Dict[str, Tuple[str, ...]
     monkeypatch.setattr(papi, "native_events", lambda name: events.get(name, ()))
 
 
-# ------------------------------ the tables: what is promised ------------------------------ #
+# the tables: what is promised
 def test_every_gpu_group_names_metrics_that_exist() -> None:
     """A group is what a caller asks for, so a name no metric answers is a request the wrapper
     accepts and cannot serve."""
@@ -188,7 +188,7 @@ def test_the_caveats_state_the_three_constraints_and_ship_with_the_numbers() -> 
     assert "one device" in text and "context" in text, "uncounted work looks like a kernel that did nothing"
 
 
-# ------------------------------ the component probe ------------------------------ #
+# the component probe
 def test_the_component_struct_prefix_matches_papi_h() -> None:
     """The offsets are the contract with libpapi. Get one wrong and ctypes reads the right bytes
     at the wrong place: a component's name comes back as garbage, or `disabled` as some other
@@ -276,7 +276,7 @@ def test_the_component_report_covers_every_gpu_component_with_a_verdict(monkeypa
         assert row["purpose"], f"{name}: no statement of what the component even is"
 
 
-# ------------------------------ resolution: one surface, two vendors ------------------------------ #
+# resolution: one surface, two vendors
 def resolved(metric: str, vendor: str, events: Dict[str, Tuple[str, ...]], blocked: Dict[str, str] = None):
     return papi.resolve_gpu(metric, vendor, events, blocked or {})
 
@@ -360,7 +360,7 @@ def test_every_device_that_matched_is_reported_even_though_one_is_counted() -> N
     assert row["matches"] == list(two)
 
 
-# ------------------------------ the permission gate ------------------------------ #
+# the permission gate
 def test_the_nvidia_restricted_profiling_gate_is_detected_and_named(monkeypatch, tmp_path) -> None:
     """The most common device-counter failure and the one that looks least like itself: the
     driver serves counters to root only, and CUPTI then fails with ERR_NVGPUCTRPERM -- a message
@@ -432,7 +432,7 @@ def test_an_absent_amd_device_is_not_reported_as_a_permission_problem(monkeypatc
     assert papi.permission_reason("amd") is None
 
 
-# ------------------------------ vendor selection ------------------------------ #
+# vendor selection
 def test_a_host_with_no_gpu_refuses_by_cause_rather_than_measuring_nothing(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(papi, "VENDOR_DEVICES", {"nvidia": tmp_path / "a", "amd": tmp_path / "b"})
     assert papi.gpu_vendors() == ()
@@ -458,7 +458,7 @@ def test_an_unknown_vendor_is_refused_rather_than_silently_replaced() -> None:
     assert "intel" in str(excinfo.value) and "nvidia" in str(excinfo.value)
 
 
-# ------------------------------ the whole snapshot ------------------------------ #
+# the whole snapshot
 def test_the_feature_set_partitions_every_metric_into_supported_or_a_reason(monkeypatch) -> None:
     """The query an agent, a test and any endpoint all start from -- answerable with no workload,
     which on a GPU matters more than on a CPU: the usual answer is 'never compiled in', and
@@ -501,7 +501,7 @@ def test_the_feature_set_only_enumerates_the_components_the_ask_needs(monkeypatc
     assert "cuda" not in asked, f"asked {asked}: a power metric enumerated the kernel-counter component"
 
 
-# ------------------------------ measurement: absence is never a zero ------------------------------ #
+# measurement: absence is never a zero
 def worker(
     monkeypatch, *, supported=None, unsupported=None, permission=None, device: bool = False, vendor: str = "nvidia"
 ) -> dict:
@@ -630,7 +630,7 @@ def test_a_group_costs_one_run_per_metric_and_ships_the_caveats(monkeypatch) -> 
     assert counted["vendor"] == "amd" and counted["caveats"] == list(papi.GPU_CAVEATS)
 
 
-# ------------------------------ against a real PAPI ------------------------------ #
+# against a real PAPI
 @requires_papi
 def test_the_component_table_is_read_from_libpapi_not_from_a_list() -> None:
     """No component is hardcoded anywhere, so this is what proves the struct read works at all --

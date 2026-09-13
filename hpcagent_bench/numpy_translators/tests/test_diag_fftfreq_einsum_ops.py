@@ -46,9 +46,7 @@ def _oracle_available() -> None:
         pytest.skip("gcc/g++/gfortran needed for the native numerical check")
 
 
-# --------------------------------------------------------------------------- #
 # Registration                                                                #
-# --------------------------------------------------------------------------- #
 
 
 def test_ops_registered() -> None:
@@ -56,9 +54,7 @@ def test_ops_registered() -> None:
     assert ("np", "fft.fftfreq") in NP_CALL_EXPANDERS
 
 
-# --------------------------------------------------------------------------- #
 # np.diag                                                                     #
-# --------------------------------------------------------------------------- #
 
 
 def test_diag_1d_builds_offset_matrix() -> None:
@@ -99,9 +95,7 @@ def test_diag_subscript_operand_reads_the_slice() -> None:
     assert "betas[__dg_i + 1]" in out
 
 
-# --------------------------------------------------------------------------- #
 # np.fft.fftfreq                                                              #
-# --------------------------------------------------------------------------- #
 
 
 def test_fftfreq_formula_default_spacing() -> None:
@@ -118,9 +112,7 @@ def test_fftfreq_uses_d_kwarg() -> None:
     assert "N * h" in out
 
 
-# --------------------------------------------------------------------------- #
 # np.einsum with a NON-Name (Subscript) operand                              #
-# --------------------------------------------------------------------------- #
 
 
 def test_einsum_materializes_subscript_operand() -> None:
@@ -149,9 +141,7 @@ def test_einsum_bare_name_fast_path_unchanged() -> None:
     assert "o[__es_i, __es_k] +=" in out
 
 
-# --------------------------------------------------------------------------- #
 # Numerical oracle: emit + compile + run each op on c / cpp / fortran.        #
-# --------------------------------------------------------------------------- #
 
 
 def test_diag_tridiagonal_e2e() -> None:

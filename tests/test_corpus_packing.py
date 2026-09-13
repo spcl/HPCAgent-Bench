@@ -76,9 +76,7 @@ def corpus() -> Dict[str, object]:
     return KERNELS.specs()
 
 
-# --------------------------------------------------------------------------- #
 # It is a partition, and it is the same one twice.                             #
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("ranks", RANK_COUNTS)
 def test_the_packing_covers_every_kernel_exactly_once(ranks: int) -> None:
     """No overlap, no gap -- a mix of known and unknown costs, and a rank count that divides
@@ -147,9 +145,7 @@ def test_each_shard_keeps_the_selection_order() -> None:
         assert shard == [name for name in names if name in shard]
 
 
-# --------------------------------------------------------------------------- #
 # Unknowns are packed last, and a corpus of pure unknowns falls back.          #
-# --------------------------------------------------------------------------- #
 def test_an_unknown_cost_cannot_skew_the_packing() -> None:
     """The knowns are balanced first; the unknowns are dealt round-robin on top.
 
@@ -203,9 +199,7 @@ def test_one_rank_still_runs_the_whole_selection_in_order(corpus) -> None:
     assert shard_names(names, (0, 1), "M") == names
 
 
-# --------------------------------------------------------------------------- #
 # The packer earns its place, or it does not.                                  #
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("ranks", MEASURED_RANKS)
 @pytest.mark.parametrize("preset", PRESETS)
 def test_lpt_beats_the_stride_on_the_real_corpus(corpus, preset: str, ranks: int) -> None:
@@ -238,9 +232,7 @@ def test_lpt_lands_within_a_percent_of_a_perfectly_balanced_split(corpus, ranks:
     assert packed_max < 1.01 * ideal, f"LPT max load {packed_max:.3f} is more than 1% above the ideal {ideal:.3f}"
 
 
-# --------------------------------------------------------------------------- #
 # The memory dimension: refuse, do not OOM.                                    #
-# --------------------------------------------------------------------------- #
 def test_an_over_budget_packing_is_refused_by_name_and_number() -> None:
     """Four XL-ceiling kernels on four ranks of a node that holds only two of them is twice the
     concurrent working set the node has. The refusal has to name the kernel and the number, or it

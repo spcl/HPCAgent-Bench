@@ -94,7 +94,7 @@ def test_parquet_roundtrip(tmp_path) -> None:
     assert table.column("id").to_pylist() == [r.id for r in rows]
 
 
-# --- per-layout granularity (sub-benchmark rows) ---------------------------
+# per-layout granularity (sub-benchmark rows)
 
 
 def test_sparse_kernel_is_one_row_per_layout() -> None:
@@ -141,7 +141,7 @@ def test_binding_failure_is_isolated_to_its_own_row(monkeypatch) -> None:
     assert rows["cg[bcsr]"].signature and rows["cg[bcsr]"].warnings == "[]"
 
 
-# --- collision-proof selection (#9) + single-build write+push (#8) ----------
+# collision-proof selection (#9) + single-build write+push (#8)
 
 
 def test_build_count_matches_resolved_not_collapsible_stems() -> None:

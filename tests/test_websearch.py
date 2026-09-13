@@ -38,7 +38,7 @@ def _body(req):
     return json.loads(req.data.decode("utf-8"))
 
 
-# --- the config dataclass -----------------------------------------------------
+# the config dataclass
 
 
 def test_config_coerces_and_validates() -> None:
@@ -50,7 +50,7 @@ def test_config_coerces_and_validates() -> None:
         WebSearchConfig(max_results=0)
 
 
-# --- provider selection -------------------------------------------------------
+# provider selection
 
 
 def test_explicit_config_provider_wins(monkeypatch) -> None:
@@ -97,7 +97,7 @@ def test_empty_query_raises() -> None:
         search("   ", WebSearchConfig(provider="tavily", api_key="K"), transport=lambda req: {})
 
 
-# --- request shaping (representative providers) -------------------------------
+# request shaping (representative providers)
 
 
 def _capture(provider, canned=None):
@@ -142,7 +142,7 @@ def test_perplexity_request_is_a_chat_completion() -> None:
     assert _body(req)["messages"][0]["content"] == "gemm avx512"
 
 
-# --- response normalization (every provider -> one shape) ---------------------
+# response normalization (every provider -> one shape)
 
 _CANNED = {
     Provider.TAVILY: ({"results": [{"title": "T", "url": "http://a", "content": "C"}], "answer": "ANS"}, "ANS"),
@@ -195,7 +195,7 @@ def test_api_key_override_bypasses_env() -> None:
     assert resp.provider == "tavily" and resp.results == []
 
 
-# --- CLI ----------------------------------------------------------------------
+# CLI
 
 
 def test_cli_list_reports_configured(capsys, monkeypatch) -> None:

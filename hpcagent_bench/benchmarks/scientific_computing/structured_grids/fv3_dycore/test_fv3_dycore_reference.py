@@ -42,7 +42,7 @@ def _load(name):
     return m
 
 
-# --- PPM coefficients (pyfv3/stencils/ppm.py) ---
+# PPM coefficients (pyfv3/stencils/ppm.py)
 P1 = 7.0 / 12.0
 P2 = -1.0 / 12.0
 C1 = -2.0 / 14.0
@@ -54,7 +54,7 @@ if HAVE_GT4PY:
     FloatFieldIJ = gtscript.Field[gtscript.IJ, np.float64]
     FloatFieldK = gtscript.Field[gtscript.K, np.float64]
 
-    # ---------- xppm GTScript (verbatim from pyfv3/stencils/xppm.py) ----------
+    # xppm GTScript (verbatim from pyfv3/stencils/xppm.py)
     @gtscript.function
     def _x_fx1_fn(courant, br, b0, bl):
         if courant > 0.0:
@@ -115,7 +115,7 @@ if HAVE_GT4PY:
             al = P1 * (q[-1, 0, 0] + q) + P2 * (q[-2, 0, 0] + q[1, 0, 0])
             xflux = _x_get_flux(q, courant, al)
 
-    # ---------- yppm GTScript (verbatim from pyfv3/stencils/yppm.py) ----------
+    # yppm GTScript (verbatim from pyfv3/stencils/yppm.py)
     @gtscript.function
     def _y_fx1_fn(courant, br, b0, bl):
         if courant > 0.0:
@@ -176,7 +176,7 @@ if HAVE_GT4PY:
             al = P1 * (q[0, -1, 0] + q) + P2 * (q[0, -2, 0] + q[0, 1, 0])
             yflux = _y_get_flux(q, courant, al)
 
-    # ---------- fvtp2d GTScript (verbatim from pyfv3/stencils/fvtp2d.py) ----------
+    # fvtp2d GTScript (verbatim from pyfv3/stencils/fvtp2d.py)
     @gtscript.function
     def _apply_x_flux_divergence(q, q_x_flux):
         return q + q_x_flux - q_x_flux[1, 0, 0]
@@ -208,7 +208,7 @@ if HAVE_GT4PY:
             with horizontal(region[:-1, :]):
                 y_flux = 0.5 * (q_axya + q_ya) * y_unit_flux
 
-    # ---------- delnflux GTScript (verbatim from pyfv3/stencils/delnflux.py) ----------
+    # delnflux GTScript (verbatim from pyfv3/stencils/delnflux.py)
     @gtscript.function
     def _fx_calculation(q, del6_v):
         return del6_v * (q[-1, 0, 0] - q)
@@ -274,7 +274,7 @@ if HAVE_GT4PY:
             fx = fx + 0.5 * damp * (mass[-1, 0, 0] + mass) * fx2
             fy = fy + 0.5 * damp * (mass[0, -1, 0] + mass) * fy2
 
-    # ---------- c_sw GTScript (verbatim from pyfv3/stencils/c_sw.py) ----------
+    # c_sw GTScript (verbatim from pyfv3/stencils/c_sw.py)
     def _geoadjust_ut(ut: FloatField, dy: FloatFieldIJ, sin_sg3: FloatFieldIJ, sin_sg1: FloatFieldIJ, dt2: np.float64):
         with computation(PARALLEL), interval(...):
             ut[0, 0, 0] = dt2 * ut * dy * sin_sg3[-1, 0] if ut > 0 else dt2 * ut * dy * sin_sg1
@@ -390,7 +390,7 @@ if HAVE_GT4PY:
             vf = v * dxc
             divg_d = rarea_c * (vf[0, -1, 0] - vf + uf[-1, 0, 0] - uf)
 
-    # ---------- d2a2c_vect GTScript (verbatim from pyfv3/stencils/d2a2c_vect.py) ----------
+    # d2a2c_vect GTScript (verbatim from pyfv3/stencils/d2a2c_vect.py)
     A1 = 9.0 / 16.0
     A2 = -1.0 / 16.0
 
@@ -443,7 +443,7 @@ if HAVE_GT4PY:
             vc = _lagrange_y_func(vtmp)
             vt = _contravariant(vc, u, cosa_v, rsin_v)
 
-    # ---------- d_sw GTScript (verbatim from pyfv3/stencils/d_sw.py) ----------
+    # d_sw GTScript (verbatim from pyfv3/stencils/d_sw.py)
     @gtscript.function
     def _flux_increment(gx, gy, rarea):
         return (gx - gx[1, 0, 0] + gy - gy[0, 1, 0]) * rarea
@@ -585,7 +585,7 @@ if HAVE_GT4PY:
             mask = _y_advection_mask(bl, b0, br)
             updated_v = _y_apply_flux(cfl, v, fx0, mask)
 
-    # ---------- fxadv GTScript (verbatim from pyfv3/stencils/fxadv.py) ----------
+    # fxadv GTScript (verbatim from pyfv3/stencils/fxadv.py)
     def _fxadv_fluxes(
         sin_sg1: FloatFieldIJ,
         sin_sg2: FloatFieldIJ,
@@ -621,7 +621,7 @@ if HAVE_GT4PY:
                     cry = dt * vc_contra * rdya
                     y_area_flux = dx * dt * vc_contra * sin_sg2
 
-    # ---------- divergence_damping GTScript (verbatim from divergence_damping.py) ----------
+    # divergence_damping GTScript (verbatim from divergence_damping.py)
     @gtscript.function
     def _damp_tmp(q, da_min_c, d2_bg, dddmp):
         mintmp = min(0.2, dddmp * abs(q))
@@ -688,7 +688,7 @@ if HAVE_GT4PY:
             shear = _doubly_periodic_a2b_ord4(wk)
             smag_c = dt * ((shear * shear) + (smag_c_t * smag_c_t)) ** 0.5
 
-    # ---------- d_sw compute_kinetic_energy (grid_type>=3) + heat_source ----------
+    # d_sw compute_kinetic_energy (grid_type>=3) + heat_source
     def _compute_ke_gt4(
         vc: FloatField,
         uc: FloatField,
@@ -761,7 +761,7 @@ if HAVE_GT4PY:
                 dampterm = _heat_damping_term(ubt, vbt, gx, gy, rsin2, cosa_s, u2, v2, du2, dv2)
                 heat_source = delp * (heat_source - kefrac * dampterm)
 
-    # ---------- nonhydro vertical GTScript (sim1 / riem_c / updatedzc) ----------
+    # nonhydro vertical GTScript (sim1 / riem_c / updatedzc)
     # FV3 physical constants (ndsl UFS/GFDL default set), kept identical to the numpy port.
     _RDGAS = 8314.47 / 28.965
     _GRAV = 9.80665
@@ -992,7 +992,7 @@ if HAVE_GT4PY:
             gz_kp1 = gz[0, 0, 1] + _DZ_MIN
             gz = gz if gz > gz_kp1 else gz_kp1
 
-    # ---------- D-grid vertical GTScript (riem_solver3 / updatedzd / nh_p_grad) ----------
+    # D-grid vertical GTScript (riem_solver3 / updatedzd / nh_p_grad)
     _KAPPA = (8314.47 / 28.965) / (3.5 * (8314.47 / 28.965))  # 1/3.5 (UFS)
     _RGRAV = 1.0 / 9.80665
 
@@ -1188,7 +1188,7 @@ if HAVE_GT4PY:
                 )
             ) * rdy
 
-    # ---------- vertical remap GTScript (fillz / map_single) ----------
+    # vertical remap GTScript (fillz / map_single)
     IntFieldIJ = gtscript.Field[gtscript.IJ, np.int64]
 
     def _fix_tracer(q: FloatField, dp: FloatField, zfix: IntFieldIJ, sum0: FloatFieldIJ, sum1: FloatFieldIJ):
@@ -1295,7 +1295,7 @@ if HAVE_GT4PY:
                 q = qsum / (pe2[0, 0, 1] - pe2)
             lev = lev - 1
 
-    # ---------- moist_cv GTScript (pyfv3/stencils/moist_cv.py) ----------
+    # moist_cv GTScript (pyfv3/stencils/moist_cv.py)
     _CV_AIR = (3.5 * (8314.47 / 28.965)) - (8314.47 / 28.965)
     _RVGAS = 8314.47 / 18.015
     _CV_VAP = 3.0 * _RVGAS
@@ -1364,7 +1364,7 @@ if HAVE_GT4PY:
             gz = qliquid + qrain + qice + qsnow + qgraupel
             pt = _last_pt(pt, dtmp, pkz, gz, qvapor, zvir)
 
-    # ---------- remap_profile GTScript (verbatim, iv=1/kord=8 active branches) ----
+    # remap_profile GTScript (verbatim, iv=1/kord=8 active branches)
     BoolField = gtscript.Field[np.bool_]
 
     @gtscript.function
@@ -1527,7 +1527,7 @@ if HAVE_GT4PY:
             with interval(-1, None):
                 a4_1, a4_2, a4_3, a4_4 = _rp_posdef_iv1(a4_1, a4_2, a4_3, a4_4)
 
-    # ---------- tracer_2d_1l GTScript (verbatim) ----------
+    # tracer_2d_1l GTScript (verbatim)
     @gtscript.function
     def _tr_flux_x(cx, dxa, dy, sin_sg3, sin_sg1):
         return cx * dxa[-1, 0] * dy * sin_sg3[-1, 0] if cx > 0 else cx * dxa * dy * sin_sg1
@@ -1812,7 +1812,7 @@ def test_delnflux_higher_order_matches_gt4py(nord):
     rng = np.random.default_rng(5)
     q = rng.standard_normal((nx, ny, nk))
 
-    # --- numpy port ---
+    # numpy port
     fx = np.zeros((nx, ny, nk))
     fy = np.zeros((nx, ny, nk))
     fx2 = np.zeros((nx, ny, nk))
@@ -1820,7 +1820,7 @@ def test_delnflux_higher_order_matches_gt4py(nord):
     d2 = np.zeros((nx, ny, nk))
     npy.delnflux_higher_order(q, fx, fy, del6_v, del6_u, rarea, damp, fx2, fy2, d2, nord, nhalo, ni, nj, nk)
 
-    # --- GT4Py reconstruction of DelnFluxNoSG (same bounds) ---
+    # GT4Py reconstruction of DelnFluxNoSG (same bounds)
     isc, iec, jsc, jec = nhalo, nhalo + ni - 1, nhalo, nhalo + nj - 1
     nmax = nord
     gd2 = np.zeros((nx, ny, nk))
@@ -1918,7 +1918,7 @@ def test_fvtp2d_composition_matches_gt4py(hord):
         3,
     )
 
-    # --- GT4Py reference of the identical chain ---
+    # GT4Py reference of the identical chain
     ord_outer = hord
     ord_inner = 8 if hord == 10 else hord
     assert ord_inner < 8 and ord_outer < 8  # restrict to the mord<8 path
@@ -2432,7 +2432,7 @@ def test_d2a2c_gt4_composition_matches_gt4py():
         nk,
     )
 
-    # --- GT4Py reference, same window sequence ---
+    # GT4Py reference, same window sequence
     gutmp = np.full((nx, ny, nk), 1e30)
     gvtmp = np.full((nx, ny, nk), 1e30)
     sy = gtscript.stencil(backend="numpy", definition=_lagrange_interp_y_p1)
@@ -2501,7 +2501,7 @@ def test_c_sw_gt4_composition_matches_gt4py(nord):
     isc, iec, jsc, jec = nhalo, nhalo + ni - 1, nhalo, nhalo + nj - 1
     dt2 = 0.5
 
-    # --- numpy composed c_sw ---
+    # numpy composed c_sw
     uc = f["uc"].copy()
     vc = f["vc"].copy()
     ua = np.zeros((nx, ny, nk))
@@ -2559,7 +2559,7 @@ def test_c_sw_gt4_composition_matches_gt4py(nord):
         nk,
     )
 
-    # --- GT4Py reconstruction of the same chain ---
+    # GT4Py reconstruction of the same chain
     guc = f["uc"].copy()
     gvc = f["vc"].copy()
     gua = np.zeros((nx, ny, nk))
@@ -3444,7 +3444,7 @@ def test_divergence_damping_gt4_composition_matches_gt4py(nord):
         nk,
     )
 
-    # --- GT4Py reference of the same chain ---
+    # GT4Py reference of the same chain
     gdd = f["divg_d"].copy()
     gvc = f["vc"].copy()
     guc = f["uc"].copy()
@@ -3738,7 +3738,7 @@ def test_d_sw_gt4_composition_matches_gt4py():
             a[n] = np.zeros((nx, ny, nk))
         return a
 
-    # --- numpy composition ---
+    # numpy composition
     a = args_copy()
     mets = {
         n: f[n]
@@ -3798,7 +3798,7 @@ def test_d_sw_gt4_composition_matches_gt4py():
         **mets,
     )
 
-    # --- GT4Py-stencil reconstruction of the same chain ---
+    # GT4Py-stencil reconstruction of the same chain
     g = args_copy()
     z = lambda: np.zeros((nx, ny, nk))
     uc_contra = z()
@@ -4476,7 +4476,7 @@ def test_riem_solver3_matches_gt4py():
     # pe must be a valid hydrostatic interface pressure profile
     pe = np.cumsum(np.concatenate([np.full((nx, ny, 1), ptop), f["delp"][:, :, :-1]], axis=2), axis=2)
 
-    # --- numpy ---
+    # numpy
     delz = f["gz"][:, :, 1:] - f["gz"][:, :, :-1]
     delz = np.concatenate([delz, delz[:, :, -1:]], axis=2)  # layer field padded to kz
     zh = f["gz"].copy()
@@ -4514,7 +4514,7 @@ def test_riem_solver3_matches_gt4py():
         nk,
     )
 
-    # --- GT4Py chain (same windows) ---
+    # GT4Py chain (same windows)
     gzh = f["gz"].copy()
     gp = pe.copy()
     gppe = np.zeros((nx, ny, kz))

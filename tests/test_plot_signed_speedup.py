@@ -49,7 +49,7 @@ def summary_for(cells) -> pd.DataFrame:
     return plotting.cell_summary(pd.DataFrame(rows))
 
 
-# --- the signed transform ---------------------------------------------------------------------
+# the signed transform
 
 
 @pytest.mark.parametrize("ratio,expected", [(1.0, 0.0), (2.0, 1.0), (3.0, 2.0), (0.5, -1.0), (0.25, -3.0)])
@@ -74,7 +74,7 @@ def test_an_unusable_ratio_is_nan_never_zero(ratio: float) -> None:
     assert math.isnan(value), f"{ratio} became {value}, which will be plotted"
 
 
-# --- band assignment --------------------------------------------------------------------------
+# band assignment
 
 
 @pytest.mark.parametrize(
@@ -121,7 +121,7 @@ def test_band_limits_are_anchored_at_the_band_edge_and_open_only_at_the_top() ->
     assert speedup.band_limits(speedup.BAND_HIGH, [-40.0]) == (pytest.approx(-42.0), -9.0)
 
 
-# --- points from the results summary ------------------------------------------------------------
+# points from the results summary
 
 
 def test_points_carry_the_median_speedup_over_the_baseline() -> None:
@@ -186,7 +186,7 @@ def test_a_crash_is_kept_out_of_the_limits_that_measured_points_set() -> None:
     assert all(not math.isnan(point.change) for point in measured)
 
 
-# --- the figures ---------------------------------------------------------------------------------
+# the figures
 
 
 def rendered_panels(monkeypatch: pytest.MonkeyPatch, points, kernels, output: str) -> int:
@@ -379,7 +379,7 @@ def test_a_db_with_only_the_baseline_fails_loudly(tmp_path: pathlib.Path) -> Non
             speedup.plot_signed_speedup(db=str(db), preset="S", output=str(tmp_path / "speedup.pdf"), usetex=False)
 
 
-# --- the boxes -----------------------------------------------------------------------------------
+# the boxes
 
 
 def test_a_boxs_samples_are_divided_by_a_fixed_baseline_not_paired_elementwise() -> None:
@@ -484,7 +484,7 @@ def test_the_demo_draws_enough_repetitions_for_a_box() -> None:
     assert speedup.demo_points() == points, "the demo seed must keep the boxes reproducible too"
 
 
-# --- the square embed figure ---------------------------------------------------------------------
+# the square embed figure
 
 
 def two_framework_points(kernels, band: str, magnitude: float = 3.0):

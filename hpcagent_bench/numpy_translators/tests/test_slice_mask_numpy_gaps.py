@@ -42,7 +42,7 @@ def _run(
 
 _A = np.linspace(0.5, 3.0, 6)
 
-# --- reverse / strided slices --------------------------------------------- #
+# reverse / strided slices
 
 
 def test_reverse_whole_array_assign() -> None:
@@ -61,7 +61,7 @@ def test_strided_reverse_step2() -> None:
     assert ok, res
 
 
-# --- boolean-mask reductions ---------------------------------------------- #
+# boolean-mask reductions
 
 
 def test_masked_sum_inline() -> None:
@@ -96,7 +96,7 @@ def test_integer_gather_reduction_not_masked() -> None:
     assert ok, res
 
 
-# --- masked reductions as an EXPLICIT LOOP -------------------------------- #
+# masked reductions as an EXPLICIT LOOP
 #
 # The vectorised ``np.sum(a[m])`` above is the source form; a DaCe loop-nest
 # extractor (nest-forge) lowers the SAME masked reduction to an explicit
@@ -133,7 +133,7 @@ def test_masked_count_explicit_loop_staged_scalar() -> None:
     assert ok, res
 
 
-# --- any / all / count_nonzero -------------------------------------------- #
+# any / all / count_nonzero
 
 
 def test_any_all_named_mask() -> None:
@@ -174,7 +174,7 @@ def test_any_all_axis() -> None:
     assert ok, res
 
 
-# --- ~ (bitwise-not on a boolean mask = logical negation) ----------------- #
+# ~ (bitwise-not on a boolean mask = logical negation)
 
 _S = np.linspace(-1.0, 3.0, 6)
 

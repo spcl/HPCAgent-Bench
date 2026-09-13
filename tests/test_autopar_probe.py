@@ -113,7 +113,7 @@ def test_every_gated_framework_names_a_real_probe() -> None:
         assert probe_name in vars(flags), f"{framework} names flags.{probe_name}, which does not exist"
 
 
-# --- <execution> / cpp_isopar -------------------------------------------------------------
+# <execution> / cpp_isopar
 # A different silent-serial route than Polly's: no flag is involved at all. libstdc++ chooses the
 # parallel-algorithm backend PER TRANSLATION UNIT from ``__has_include(<tbb/tbb.h>)``, so a host
 # without the TBB headers compiles the same source, links, and returns the same right answers from

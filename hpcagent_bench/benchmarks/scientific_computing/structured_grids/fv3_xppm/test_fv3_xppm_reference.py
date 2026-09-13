@@ -38,7 +38,7 @@ def _load(name):
     return m
 
 
-# --- PPM coefficients (pyFV3/stencils/ppm.py) ---
+# PPM coefficients (pyFV3/stencils/ppm.py)
 P1 = 7.0 / 12.0
 P2 = -1.0 / 12.0
 C1 = -2.0 / 14.0

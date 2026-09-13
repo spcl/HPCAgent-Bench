@@ -80,10 +80,10 @@ def validate_sparse_config(
     :param source: Human-readable label for error messages
         (typically the YAML file path).
     """
-    # ---- Rule 1: format must be in SUPPORTED_SPARSE_FORMATS ----------
-    # ---- Rule 2: required buffer roles per format --------------------
-    # ---- Rule 3: buffer dtype in _NUMERIC_DTYPES ---------------------
-    # ---- Rule 4: index buffers must be int32 / int64 -----------------
+    # Rule 1: format must be in SUPPORTED_SPARSE_FORMATS
+    # Rule 2: required buffer roles per format
+    # Rule 3: buffer dtype in _NUMERIC_DTYPES
+    # Rule 4: index buffers must be int32 / int64
     for arr_name, layout in sparse_layouts.items():
         if not isinstance(layout, SparseLayout):
             raise _err(source, f"sparse_layouts.{arr_name}", f"expected SparseLayout, got {type(layout).__name__}")
@@ -118,10 +118,10 @@ def validate_sparse_config(
                 if buf.role in INDEX_ROLES and buf.dtype not in _INT_DTYPES:
                     raise _err(source, bpath, f"index buffer must be int32 or int64, got {buf.dtype!r}.")
 
-    # ---- Rule 5: configuration names every layout-bearing array ------
-    # ---- Rule 6: configuration's chosen format must be declared ------
-    # ---- Rule 7: no-mixing rule (at most one non-dense sparse format) -
-    # ---- Rule 10: distinct configurations must produce distinct files
+    # Rule 5: configuration names every layout-bearing array
+    # Rule 6: configuration's chosen format must be declared
+    # Rule 7: no-mixing rule (at most one non-dense sparse format) -
+    # Rule 10: distinct configurations must produce distinct files
     seen_config_arrays: Dict[frozenset, str] = {}
     for cfg_name, cfg in configurations.items():
         cfg_path = f"configurations.{cfg_name}"
@@ -168,7 +168,7 @@ def validate_sparse_config(
             )
         seen_config_arrays[fingerprint] = cfg_name
 
-    # ---- Rule 8: distribution points to a real configuration ---------
+    # Rule 8: distribution points to a real configuration
     for dist_name, dist in distributions.items():
         dpath = f"distributions.{dist_name}"
         if dist.configuration not in configurations:
@@ -178,7 +178,7 @@ def validate_sparse_config(
                 f"configuration {dist.configuration!r} not in configurations (defined: {sorted(configurations)}).",
             )
 
-    # ---- Rule 9: array_args lists logical names ----------------------
+    # Rule 9: array_args lists logical names
     # Logical names live in sparse_layouts.keys() OR are non-sparse;
     # if any array_args looks like a physical buffer name (i.e. matches
     # a physical name registered in any layout variant), that's the
@@ -197,7 +197,7 @@ def validate_sparse_config(
                 f"{arg!r} is a physical buffer name. Use the logical array name {logical!r} from sparse_layouts.",
             )
 
-    # ---- Rule 11: buffers follow the <logical>_<role> naming convention --
+    # Rule 11: buffers follow the <logical>_<role> naming convention
     # Every physical buffer name MUST be exactly ``<logical>_<role>`` so that
     # the unpacked C-ABI argument names are mechanically derivable from the
     # logical array + its layout (see CONTRIBUTING.md "Sparse benchmark ABI").

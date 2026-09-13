@@ -77,9 +77,7 @@ def _lower_local_dtypes(src, func, shapes, syms, inputs, outputs, dtypes):
         return dict(lower(parse_kernel(npy, bi)).local_dtypes)
 
 
-# --------------------------------------------------------------------------- #
 # (a) reduction method on a Call receiver: np.abs(x - y).sum()                 #
-# --------------------------------------------------------------------------- #
 
 
 def test_reduction_method_on_call_receiver() -> None:
@@ -100,9 +98,7 @@ def test_reduction_method_on_call_receiver() -> None:
     _assert_native_ok(status, "abs(x-y).sum()")
 
 
-# --------------------------------------------------------------------------- #
 # (b) a Call used as a subscript index: v[np.argmax(np.abs(v))] (sign gauge)   #
-# --------------------------------------------------------------------------- #
 
 
 def test_computed_index_call_in_subscript() -> None:
@@ -123,9 +119,7 @@ def test_computed_index_call_in_subscript() -> None:
     _assert_native_ok(status, "v[argmax(abs(v))]")
 
 
-# --------------------------------------------------------------------------- #
 # (b') argmax / argmin OVER a computed operand: idx = np.argmax(np.abs(v))     #
-# --------------------------------------------------------------------------- #
 # The sibling of (b): there the argmax is a subscript INDEX (hoisted by
 # _ComputedIndexCallHoister); here it is the assignment RHS whose OPERAND is a
 # non-Name expression. The reduction-operand hoist must spill ``np.abs(v)`` into a
@@ -165,9 +159,7 @@ def test_argreduction_over_computed_operand() -> None:
     _assert_native_ok(st_min, "idx = argmin(v * v)")
 
 
-# --------------------------------------------------------------------------- #
 # (c) simultaneous whole-array rebind in a loop: x, y = y, x + y (Fibonacci)   #
-# --------------------------------------------------------------------------- #
 # The chebyshev kernel USES the rebound arrays in-place (``X, Y, sigma = Y,
 # Ynew, sigma_new`` then reads X / Y), so the in-place form below mirrors the
 # real usage: the loop rebinds the whole arrays each iteration and the final
@@ -199,10 +191,8 @@ def test_inloop_whole_array_swap() -> None:
     _assert_native_ok(status, "x, y = y, x + y")
 
 
-# --------------------------------------------------------------------------- #
 # (d) a .real / .imag scalar temp of a COMPLEX array is tagged REAL, not       #
 #     complex (the eigh / eigvalsh cyclic-Jacobi compile-blocker)             #
-# --------------------------------------------------------------------------- #
 
 
 def test_real_accessor_scalar_tagged_real() -> None:

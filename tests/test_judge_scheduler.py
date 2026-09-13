@@ -73,7 +73,7 @@ def test_judge_config_gpu_box_defaults_no_cpu_slot() -> None:
         config.clear_override("judge.cpu_slots_per_node")
 
 
-# ---- the plan: how much each rank reserves, and who warms what --------------------------------
+# the plan: how much each rank reserves, and who warms what
 
 
 def demands(*sizes: int) -> list[KernelDemand]:
@@ -157,7 +157,7 @@ def test_the_digest_cache_is_not_a_sizing_term() -> None:
     assert sum(j.cache_bytes for j in plan.judges) < (1 << 20)
 
 
-# ---- the reservation: the plan becoming memory the judge holds --------------------------------
+# the reservation: the plan becoming memory the judge holds
 
 
 def test_reserving_more_host_memory_than_exists_fails_at_startup() -> None:

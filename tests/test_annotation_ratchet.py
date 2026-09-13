@@ -19,12 +19,11 @@ are for -- not debt this gate should book.
 """
 
 import collections
+import functools
 import json
 import pathlib
 import subprocess
 import sys
-
-import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 BASELINE = pathlib.Path(__file__).with_name("annotation_baseline.json")
@@ -34,6 +33,16 @@ ROOTS = ("hpcagent_bench", "tests", "scripts", "experiments", "tools")
 EXCLUDE = "hpcagent_bench/benchmarks"
 
 
+@functools.lru_cache(maxsize=None, typed=True)
+def tracked() -> frozenset:
+    """Repo-relative paths git TRACKS. A checkout is all CI has, so an untracked file that only
+    exists on one machine must not move a shared baseline -- ``scripts/infer_output_args.py`` is
+    gitignored, and counting it made the baseline name a file CI cannot find."""
+    proc = subprocess.run(["git", "ls-files", "-z"], cwd=REPO, capture_output=True, text=True, check=True)
+    return frozenset(proc.stdout.split("\0"))
+
+
+@functools.lru_cache(maxsize=None, typed=True)
 def violations() -> collections.Counter:
     """``{repo-relative path: ANN violation count}`` from ruff itself, not a reimplementation."""
     proc = subprocess.run(
@@ -58,8 +67,11 @@ def violations() -> collections.Counter:
     if proc.returncode not in (0, 1):  # 0 = clean, 1 = findings; anything else is ruff failing
         raise RuntimeError(f"ruff could not run (rc={proc.returncode}):\n{proc.stderr[-2000:]}")
     found = collections.Counter()
+    known = tracked()
     for item in json.loads(proc.stdout or "[]"):
-        found[str(pathlib.Path(item["filename"]).resolve().relative_to(REPO))] += 1
+        path = str(pathlib.Path(item["filename"]).resolve().relative_to(REPO))
+        if path in known:
+            found[path] += 1
     return found
 
 
@@ -87,9 +99,11 @@ def test_the_baseline_does_not_overstate_the_debt() -> None:
     )
 
 
-def test_the_baseline_names_files_that_exist() -> None:
-    missing = sorted(f for f in json.loads(BASELINE.read_text()) if not (REPO / f).exists())
-    assert not missing, f"the baseline names files that are gone: {missing[:10]}"
+def test_the_baseline_names_files_the_checkout_has() -> None:
+    """Tracked, not merely present: an entry for a file only one machine has cannot be cleared
+    anywhere else, and that is what a gitignored script did to this baseline."""
+    missing = sorted(set(json.loads(BASELINE.read_text())) - tracked())
+    assert not missing, f"the baseline names files no checkout has: {missing[:10]}"
 
 
 if __name__ == "__main__":

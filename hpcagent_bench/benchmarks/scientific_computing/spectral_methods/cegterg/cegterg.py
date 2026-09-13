@@ -60,7 +60,7 @@ def initialize(ngrid, nvec, npol=1, uspp=False, lrot=False, nks=1, current_k=1, 
     nnr = n1 * n2 * n3
     grid = (n1, n2, n3)
 
-    # ---- global G-sphere (Miller indices + FFT-grid map) ----
+    # global G-sphere (Miller indices + FFT-grid map)
     hmax = ngrid // 2 - 1
     cutoff2 = hmax * hmax
     mill, nl_list = [], []
@@ -80,7 +80,7 @@ def initialize(ngrid, nvec, npol=1, uspp=False, lrot=False, nks=1, current_k=1, 
     npw = ngm  # all G active at every k
     npwx = ngm
 
-    # ---- k-points and per-k kinetic energy |k+G|^2 (anisotropic metric) ----
+    # k-points and per-k kinetic energy |k+G|^2 (anisotropic metric)
     AX, AY, AZ = 1.0, 1.7, 2.6
     xk = np.zeros((3, nks))
     if nks > 1:
@@ -99,11 +99,11 @@ def initialize(ngrid, nvec, npol=1, uspp=False, lrot=False, nks=1, current_k=1, 
         nlk[:, k] = nl[order]
     npw_arr = np.full(nks, npw, dtype=np.int64)
 
-    # ---- spin-resolved local potential V(r) (k-independent) ----
+    # spin-resolved local potential V(r) (k-independent)
     vrs = (0.5 * rng.standard_normal((nnr, npol))).astype(real_dtype)
     vrs -= vrs.mean(axis=0, keepdims=True)
 
-    # ---- ultrasoft non-local projectors + block-diagonal deeq / qq_at ----
+    # ultrasoft non-local projectors + block-diagonal deeq / qq_at
     nat, nh = _NAT, _NH
     nkb = nat * nh if uspp else 0
     if uspp:
@@ -125,7 +125,7 @@ def initialize(ngrid, nvec, npol=1, uspp=False, lrot=False, nks=1, current_k=1, 
         deeq = np.zeros((0, 0), dtype=real_dtype)
         qq = np.zeros((0, 0), dtype=real_dtype)
 
-    # ---- initial guess evc for current_k (active rows filled, tail zero) ----
+    # initial guess evc for current_k (active rows filled, tail zero)
     ck0 = current_k - 1
     kdim = npw if npol == 1 else npwx * npol
     evc = np.zeros((npwx * npol, nvec), dtype=complex_dtype)
@@ -140,7 +140,7 @@ def initialize(ngrid, nvec, npol=1, uspp=False, lrot=False, nks=1, current_k=1, 
         for ip in range(npol):  # pack each spinor's active rows
             evc[ip * npwx : ip * npwx + npw, :] = g0[ip * npw : ip * npw + npw, :].astype(complex_dtype)
 
-    # ---- g_psi preconditioner diagonals (QE usnldiag, computed OUTSIDE cegterg) ----
+    # g_psi preconditioner diagonals (QE usnldiag, computed OUTSIDE cegterg)
     # Mirrors cegterg.f90 dataflow: c_bands calls usnldiag -> g_psi_mod%h_diag/s_diag
     # for the current k-point, and cegterg's g_psi consumes them as data.
     #   h_diag = g2kin + V(G=0) + diag(vkb . deeq . vkbᴴ)

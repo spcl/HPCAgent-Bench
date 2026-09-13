@@ -125,7 +125,7 @@ def survey() -> int:
         elapsed = time.monotonic() - t0
         print(f"[{idx:>3}/{len(all_stems)}] {short:<34} AFFINE  {status:<32} ({b})  [{elapsed:6.1f}s]", flush=True)
 
-    # ---- per-kernel table (affine survey set) --------------------------------
+    # per-kernel table (affine survey set)
     print("\n" + "=" * 78)
     print("AFFINE SURVEY -- per-kernel results")
     print("=" * 78)
@@ -134,7 +134,7 @@ def survey() -> int:
     for short, status, _b in affine_rows:
         print(f"{short:<34} {'yes':<8} {status}")
 
-    # ---- summary -------------------------------------------------------------
+    # summary
     counts = {
         "ok": 0,
         "miscompile": 0,
@@ -163,14 +163,14 @@ def survey() -> int:
     print(f"  other-skip (no-scop/timeout/etc.)     : {counts['other-skip']}")
     print(f"  other-fail (emit/no-source/error/...) : {counts['other-fail']}")
 
-    # ---- highlighted kernels -------------------------------------------------
+    # highlighted kernels
     print("\n" + "=" * 78)
     print("HIGHLIGHTED KERNELS")
     print("=" * 78)
     for h in HIGHLIGHT:
         print(f"  {h:<10}: {highlight_status.get(h, 'NOT FOUND in loop_level_reasoning+scientific_computing stems')}")
 
-    # ---- miscompiles vs clean compile failures -------------------------------
+    # miscompiles vs clean compile failures
     print("\n" + "=" * 78)
     print("AFFINE MISCOMPILES (genuine Pluto correctness bugs -- xfail candidates)")
     print("=" * 78)

@@ -15,7 +15,7 @@ import pytest
 from numpyto_common.lib_nodes import (
     NP_CALL_EXPANDERS,
     _matmul_result_shape,
-    _parse_einsum_subscripts,
+    parse_einsum_subscripts,
     dims_agree,
     expand_cumprod,
     expand_cumsum,
@@ -48,9 +48,7 @@ def _unparse(stmts: list[ast.stmt]) -> str:
     return ast.unparse(mod)
 
 
-# --------------------------------------------------------------------------- #
 # A.1  np.matmul call-form normalizes to the ``@`` BinOp                       #
-# --------------------------------------------------------------------------- #
 
 
 def test_matmul_call_normalized_to_binop() -> None:
@@ -68,9 +66,7 @@ def test_matmul_call_three_args_left_alone() -> None:
     assert isinstance(tree.body[0].value, ast.Call)
 
 
-# --------------------------------------------------------------------------- #
 # A.2  batched matmul result-shape (both-batched is the new case)              #
-# --------------------------------------------------------------------------- #
 
 
 def test_matmul_result_shape_both_batched() -> None:
@@ -87,9 +83,7 @@ def test_matmul_result_shape_batch_mismatch_is_none() -> None:
     assert _matmul_result_shape(("B", "M", "K"), ("C", "K", "N")) is None
 
 
-# --------------------------------------------------------------------------- #
 # A.2b shape tokens from two vocabularies still name one extent                #
-# --------------------------------------------------------------------------- #
 
 
 def test_dims_agree_needs_no_aliases_when_spelled_alike() -> None:
@@ -215,29 +209,25 @@ def test_matmul_result_shape_aliased_batch_dim_still_checks_rank() -> None:
     assert _matmul_result_shape(("batch", "M", "K"), ("batch_size", "H", "K", "N"), aliases) is None
 
 
-# --------------------------------------------------------------------------- #
 # A.3  einsum subscript parse + loop structure                                 #
-# --------------------------------------------------------------------------- #
 
 
 def test_parse_einsum_explicit() -> None:
-    assert _parse_einsum_subscripts("ij,jk->ik") == (["ij", "jk"], "ik")
+    assert parse_einsum_subscripts("ij,jk->ik") == (["ij", "jk"], "ik")
 
 
 def test_parse_einsum_implicit_output() -> None:
     # numpy implicit output = singly-occurring indices, alphabetical.
-    assert _parse_einsum_subscripts("ij,jk") == (["ij", "jk"], "ik")
+    assert parse_einsum_subscripts("ij,jk") == (["ij", "jk"], "ik")
 
 
 def test_parse_einsum_ellipsis_unsupported() -> None:
     with pytest.raises(NotImplementedError):
-        _parse_einsum_subscripts("...ij->...i")
+        parse_einsum_subscripts("...ij->...i")
 
 
-# --------------------------------------------------------------------------- #
 # A.4  batched (>=3-D) matmul desugaring for the verbatim Python backends      #
 #      (numba / pythran cannot type stacked ``@``; lower to a loop of GEMMs)   #
-# --------------------------------------------------------------------------- #
 from types import SimpleNamespace  # noqa: E402
 
 from numpyto_common.numpy_desugar import desugar_for_python_backend  # noqa: E402
@@ -361,9 +351,7 @@ def test_einsum_seissol_three_operand() -> None:
     assert "out[__es_b, __es_k, __es_p] +=" in out
 
 
-# --------------------------------------------------------------------------- #
 # A.4  tensordot / inner / vdot                                                #
-# --------------------------------------------------------------------------- #
 
 
 def test_tensordot_axes1_is_matmul_contraction() -> None:
@@ -395,9 +383,7 @@ def test_vdot_complex_conjugates_first_operand() -> None:
     assert "np.conj(u[__vd])" in out
 
 
-# --------------------------------------------------------------------------- #
 # B.5  trace / diagonal direct                                                 #
-# --------------------------------------------------------------------------- #
 
 
 def test_trace_sums_diagonal() -> None:
@@ -410,9 +396,7 @@ def test_diagonal_copies_diagonal() -> None:
     assert "out[__dg] = a[__dg, __dg]" in out
 
 
-# --------------------------------------------------------------------------- #
 # B.6  cumsum / cumprod prefix scan                                            #
-# --------------------------------------------------------------------------- #
 
 
 def test_cumsum_1d_prefix_recurrence() -> None:
@@ -438,9 +422,7 @@ def test_cumsum_axis1_scans_inner_axis() -> None:
     assert "out[__cs0, __cs1] = out[__cs0, __cs1 - 1] + a[__cs0, __cs1]" in out
 
 
-# --------------------------------------------------------------------------- #
 # B.7  median: copy + sort + pick middle                                       #
-# --------------------------------------------------------------------------- #
 
 
 def test_median_sorts_and_picks_middle() -> None:
@@ -452,9 +434,7 @@ def test_median_sorts_and_picks_middle() -> None:
     assert "% 2" in out  # even/odd parity test
 
 
-# --------------------------------------------------------------------------- #
 # C.8  np.roll modular index                                                   #
-# --------------------------------------------------------------------------- #
 
 
 def test_roll_uses_modular_source_index() -> None:
@@ -463,9 +443,7 @@ def test_roll_uses_modular_source_index() -> None:
     assert "out[__rl0] = a[((__rl0 - 3) % N + N) % N]" in out
 
 
-# --------------------------------------------------------------------------- #
 # C.9  reshape method-form + ellipsis expansion                                #
-# --------------------------------------------------------------------------- #
 
 
 def test_reshape_method_varargs_to_func() -> None:
@@ -501,9 +479,7 @@ def test_ellipsis_leading_expands_to_full_slices() -> None:
     assert isinstance(elts[1], ast.Slice) and isinstance(elts[2], ast.Slice)
 
 
-# --------------------------------------------------------------------------- #
 # C.10 np.tril mask (mirror of triu)                                          #
-# --------------------------------------------------------------------------- #
 
 
 def test_tril_registered() -> None:
@@ -564,9 +540,7 @@ def test_linalg_norm_ord1_inf_vector_and_matrix() -> None:
         expand_linalg_norm(_name("s"), [_name("a"), ast.Constant(value=1)], {"a": ("M", "N", "P")})
 
 
-# --------------------------------------------------------------------------- #
 # Numerical oracle: emit + compile + run each op, compare vs numpy.            #
-# --------------------------------------------------------------------------- #
 
 
 def _oracle() -> types.ModuleType:
@@ -784,10 +758,8 @@ def test_triu_of_inline_full_mask_e2e() -> None:
     _assert_ok(status, "triu_of_inline_full_mask")
 
 
-# --------------------------------------------------------------------------- #
 # Reshape order= (C vs F): expand_reshape must honour column-major reshape so   #
 # QE vexx_k's order="F" FFT band-pair reshapes lower correctly.                #
-# --------------------------------------------------------------------------- #
 
 
 def _reshape_src_index(order: str | None) -> str:

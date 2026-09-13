@@ -1320,10 +1320,8 @@ def count_metric(
     return run.result
 
 
-# --------------------------------------------------------------------------------------------
 # Per-thread CPI/IPC: the imbalance a process-wide count averages away. See the module docstring
 # for why one EventSet cannot produce this, and count_per_thread for the traps.
-# --------------------------------------------------------------------------------------------
 
 
 def missing_report(cause: str, reason: str) -> MissingThreadReport:
@@ -1872,13 +1870,11 @@ def render_thread_report(report: PerThreadReport) -> str:
     return "\n".join(lines + [f"  {note}" for note in report["caveats"]])
 
 
-# --------------------------------------------------------------------------------------------
 # PAPI on the GPU. Everything above counts a CPU through PAPI's preset table; a device is counted
 # through PAPI's COMPONENTS, and which of them exist is a property of how libpapi was BUILT rather
 # than of the machine it runs on. gpu_feature_set answers "what is actually here" without running
 # a workload; count_gpu_metric is the measurement. See the two notes below for what a device count
 # does NOT mean -- above all that it is not a timing.
-# --------------------------------------------------------------------------------------------
 
 #: The NVIDIA driver's control node -- present iff an NVIDIA GPU is visible to THIS process (a
 #: container started without ``--gpus`` has none). :mod:`hpcagent_bench.harness.gpu_profiling`

@@ -101,10 +101,8 @@ def failing_polycc(cmd: Any, **kwargs: Any) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(cmd, 1, "", "pet: data dependent conditions not supported")
 
 
-# --------------------------------------------------------------------------------------------------
 # Decline, never fall back. Each of these has a tempting "just build the C++ instead" answer, and
 # taking it is how the column reported clang numbers under Pluto's name for as long as it did.
-# --------------------------------------------------------------------------------------------------
 
 
 def test_absent_polycc_declines_instead_of_building_the_untransformed_source(tmp_path, monkeypatch) -> None:
@@ -214,9 +212,7 @@ def test_call_args_declines_when_the_binding_is_absent(tmp_path, monkeypatch) ->
         framework.call_args(ManifestFreeBench(), no_impl, {}, {})
 
 
-# --------------------------------------------------------------------------------------------------
 # What the timed library is built FROM, and how it is invoked.
-# --------------------------------------------------------------------------------------------------
 
 
 def test_the_build_selects_polyccs_output_over_the_emitted_cpp(tmp_path, monkeypatch) -> None:
@@ -481,10 +477,8 @@ def test_the_pet_shim_shadows_one_header_and_leads_the_rest_of_the_path(tmp_path
     assert sorted(p.name for p in (pathlib.Path(first) / "bits").iterdir()) == ["math-vector.h"]
 
 
-# --------------------------------------------------------------------------------------------------
 # Marshalling: consuming polycc's order. test_native_autogen pins that the emitted order DIFFERS from
 # the canonical one; this pins that call_args actually reorders the values by it.
-# --------------------------------------------------------------------------------------------------
 
 
 def test_call_args_marshals_in_polyccs_order_not_the_canonical_abis(tmp_path, monkeypatch) -> None:
@@ -525,11 +519,9 @@ def test_call_args_still_allocates_declared_outputs_after_reordering(tmp_path, m
     assert args == [8, "allocated:C"]
 
 
-# --------------------------------------------------------------------------------------------------
 # The oracle gate: what the column refuses to TIME. assert_affine reads subscripts, so it cannot see
 # a transform that is affine and wrong -- pet drops every statement whose only write is a
 # scop-external scalar (KNOWN_POLYCC_ISSUES POLYCC-009), rc 0 and no diagnostic.
-# --------------------------------------------------------------------------------------------------
 
 #: What the oracle reports for pagerank: its transformed output computes inf where the source computes 1.0.
 MISCOMPILE_VERDICT = "skip:unsupported:pluto-miscompile:rank:nonfinite=48/48"
@@ -653,9 +645,7 @@ def test_a_kernel_the_oracle_grades_ok_is_still_timed(monkeypatch) -> None:
     assert order[:2] == ["gate", "timer"], "the oracle was consulted after the timer was built"
 
 
-# --------------------------------------------------------------------------------------------------
 # Preflight: report the cause once, up front, rather than once per declined kernel.
-# --------------------------------------------------------------------------------------------------
 
 
 def test_preflight_is_fatal_for_a_pluto_job_without_polycc(monkeypatch) -> None:
@@ -683,9 +673,7 @@ def test_preflight_does_not_gate_columns_that_never_run_polycc(monkeypatch) -> N
     assert preflight.run(["numpy"])[0] == 0
 
 
-# --------------------------------------------------------------------------------------------------
 # End to end on the real toolchain: transform, compile, call, and check the arithmetic.
-# --------------------------------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(pluto_transform.polycc_exe() is None, reason=NO_POLYCC)
@@ -763,14 +751,12 @@ def test_a_stale_library_is_rebuilt_rather_than_timed(tmp_path) -> None:
     assert stale.read_bytes()[:4] == b"\x7fELF", "a stale .so was returned instead of rebuilt"
 
 
-# --------------------------------------------------------------------------------------------------
 # Atomic publication, the properties `test_a_failed_polycc_never_writes_out_directly` and
 # `test_concurrent_runs_on_the_same_out_do_not_corrupt_each_other` above do NOT cover: what a reader
 # sees WHILE a transform is in flight, that what lands is the post-processed whole, that the expiry
 # path is as safe as the non-zero-exit one, and that no scratch survives a SUCCESSFUL run either.
 # These drive stand-in polycc's, so they run on a box with no Pluto installed, where the real
 # concurrency test above skips.
-# --------------------------------------------------------------------------------------------------
 
 
 def emitted_to(cmd: List[str]) -> pathlib.Path:
@@ -907,9 +893,7 @@ def test_no_scratch_survives_a_successful_or_expired_run(tmp_path, monkeypatch, 
     assert polycc_scratch(out.parent) == [], "a polycc scratch file survived the run"
 
 
-# --------------------------------------------------------------------------------------------------
 # An oracle defect must not be reported as a polycc defect.
-# --------------------------------------------------------------------------------------------------
 
 
 def test_run_pluto_takes_the_index_array_set(tmp_path) -> None:

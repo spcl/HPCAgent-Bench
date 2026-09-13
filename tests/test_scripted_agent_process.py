@@ -25,7 +25,7 @@ def _emitter_and_gcc():
     return importlib.util.find_spec("numpyto_c") is not None and shutil.which("gcc")
 
 
-# --- the ScriptedAgent primitive ---------------------------------------------
+# the ScriptedAgent primitive
 
 
 def test_scripted_agent_replays_steps_and_books_tokens() -> None:
@@ -53,7 +53,7 @@ def test_scripted_agent_rejects_empty_script() -> None:
         ScriptedAgent([])
 
 
-# --- the full status ladder through the improve loop (fast: score is faked) ---
+# the full status ladder through the improve loop (fast: score is faked)
 #
 # A tag in the source drives a fake Score, so every branch of the loop is walked
 # without a compile. This replaces the module-global runner.score the loop calls.
@@ -166,7 +166,7 @@ def test_the_trajectory_rows_language_comes_from_the_run(monkeypatch, tmp_path) 
     assert got == ("fortran",)  # the ARM's language, from the run, once
 
 
-# --- real end-to-end: a scripted repair through the forked solve_task ----------
+# real end-to-end: a scripted repair through the forked solve_task
 
 
 def test_scripted_repair_build_error_then_correct_real() -> None:
@@ -185,7 +185,7 @@ def test_scripted_repair_build_error_then_correct_real() -> None:
     assert row.tokens == 30  # two calls x 15
 
 
-# --- the container tools loop: a scripted verify -> score -> submit session ----
+# the container tools loop: a scripted verify -> score -> submit session
 
 #: A gemm that COMPILES and runs safely but is WRONG (it drops alpha/beta), so the
 #: judge grades it correct=False -- the failing round of a scripted tool session.

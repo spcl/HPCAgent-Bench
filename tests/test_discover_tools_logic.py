@@ -22,7 +22,7 @@ from hpcagent_bench.harness import discover_tools
 _MISSING_NAME = "hpcagent_bench_test_definitely_absent_tool_9f3c1a"
 
 
-# --- _as_list: scalar/list normalization, shared by every pkgconfig/soname/header spec field ------
+# _as_list: scalar/list normalization, shared by every pkgconfig/soname/header spec field
 def test_as_list_wraps_a_bare_scalar() -> None:
     assert discover_tools._as_list("libfoo.so") == ["libfoo.so"]
 
@@ -35,7 +35,7 @@ def test_as_list_of_empty_list_stays_empty() -> None:
     assert discover_tools._as_list([]) == []
 
 
-# --- _run_version: tries each version arg in order, stops at the first regex match ----------------
+# _run_version: tries each version arg in order, stops at the first regex match
 def test_run_version_returns_none_when_no_version_args_are_given() -> None:
     assert discover_tools._run_version("anything", None) is None
     assert discover_tools._run_version("anything", []) is None
@@ -67,7 +67,7 @@ def test_run_version_returns_none_when_no_arg_yields_a_version(monkeypatch: pyte
     assert discover_tools._run_version("tool", ["--help"]) is None
 
 
-# --- detect_binary: absent-name degrade path (no mocking -- the name genuinely cannot resolve) ----
+# detect_binary: absent-name degrade path (no mocking -- the name genuinely cannot resolve)
 def test_detect_binary_reports_not_found_for_a_name_that_cannot_exist() -> None:
     assert discover_tools.detect_binary({"names": [_MISSING_NAME]}) == {"found": False}
 
@@ -95,7 +95,7 @@ def test_detect_binary_found_path_picks_the_first_matching_name_and_lists_all_va
     }
 
 
-# --- detect_library / detect_header: nothing declared, or nothing resolvable, is "not found" ------
+# detect_library / detect_header: nothing declared, or nothing resolvable, is "not found"
 def test_detect_library_with_no_criteria_reports_not_found() -> None:
     assert discover_tools.detect_library({}) == {"found": False}
 
@@ -105,7 +105,7 @@ def test_detect_header_delegates_to_detect_library_on_the_header_field() -> None
     assert result == {"found": False}
 
 
-# --- missing_for_target: the pure filter behind the CLI's --require exit code ----------------------
+# missing_for_target: the pure filter behind the CLI's --require exit code
 def _report(**tools: dict[str, Any]) -> dict[str, Any]:
     return {"categories": {"compilers": tools}}
 

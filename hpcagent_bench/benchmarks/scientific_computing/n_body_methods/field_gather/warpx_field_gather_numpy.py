@@ -162,7 +162,7 @@ def _gather_shape_n(
     else:
         zdir = 0
 
-    # ------------------------------------------------------------------ x dir
+    # x dir
     if geom != GEOM_1D_Z:
         if geom == GEOM_RZ or geom == GEOM_RCYLINDER:
             rp = np.sqrt(xp * xp + yp * yp)
@@ -207,7 +207,7 @@ def _gather_shape_n(
         j_by = np.where(by_type[0] == NODE, j_node_v, j_cell_v)
         j_bz = np.where(bz_type[0] == NODE, j_node_v, j_cell_v)
 
-    # ------------------------------------------------------------------ y dir
+    # y dir
     if geom == GEOM_3D:
         y = (yp - xyzmin[1]) * dinv[1]
         sy_node = np.zeros((o + 1, n), dtype=xp.dtype)
@@ -242,7 +242,7 @@ def _gather_shape_n(
         k_by = np.where(by_type[1] == NODE, k_node, k_cell)
         k_bz = np.where(bz_type[1] == NODE, k_node_v, k_cell_v)
 
-    # ------------------------------------------------------------------ z dir
+    # z dir
     if geom != GEOM_RCYLINDER and geom != GEOM_RSPHERE:
         z = (zp - xyzmin[2]) * dinv[2]
         sz_node = np.zeros((o + 1, n), dtype=xp.dtype)
@@ -279,7 +279,7 @@ def _gather_shape_n(
 
     lox, loy, loz = lo[0], lo[1], lo[2]
 
-    # ================================================================ gather
+    # gather
     if geom == GEOM_1D_Z:
         Eyp += _tap1(ey_arr[:, 0, 0, 0], sz_ey, lox + l_ey, n_sz_ey)
         Exp += _tap1(ex_arr[:, 0, 0, 0], sz_ex, lox + l_ex, n_sz_ex)
@@ -479,7 +479,7 @@ def warpx_field_gather(
     )
 
 
-# --- Standard staggered Yee-grid IndexType layout per geometry ---------------
+# Standard staggered Yee-grid IndexType layout per geometry
 # YEE[geom, field, dir] is the amrex CellIndex (CELL / NODE) of one field component
 # on one axis. Rows are indexed by the GEOM_* code; the field axis is ordered
 # (ex, ey, ez, bx, by, bz). Axis dir0 is x in XZ/3D, r in RZ/RCYLINDER/RSPHERE, and

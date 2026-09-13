@@ -62,7 +62,7 @@ def test_a_user_root_shadows_a_variant_of_the_same_name(tmp_path, variant_root) 
     assert "SHADOWED" in build_prompt(TASK, prompt_config=PromptConfig.variant("var1"))
 
 
-# --------------------------------- the sweep --------------------------------- #
+# the sweep
 def test_unset_is_one_run_with_no_variant() -> None:
     """The default is the plain task.j2, NOT a variant named 'default'."""
     assert _resolve_prompt_variants(None) == [None]
@@ -98,7 +98,7 @@ def test_a_run_resolves_exactly_one_variant(variant_root, monkeypatch) -> None:
         assert all(marker in p for p in agent.prompts), f"{name} did not render its own template"
 
 
-# ------------------------ the distributed path expands too ------------------------ #
+# the distributed path expands too
 def test_static_pipeline_takes_a_variant_per_task() -> None:
     """A variant sweep must not silently collapse to one run on the pipeline path: the
     (task, variant) product is expanded by the caller and carried alongside the tasks."""

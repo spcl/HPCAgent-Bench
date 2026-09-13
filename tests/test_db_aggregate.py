@@ -19,16 +19,18 @@ import pytest
 from hpcagent_bench.harness import recording
 
 
-def _seed(path: str, *, run: str, kernels: list[str], with_results: bool = True) -> None:
-    """Write one shard: dimension rows (benchmarks + the run's identity), a prompt, one row in each
-    id-bearing log table."""
+def _seed(path: str, *, run: str, kernels: list[str], with_results: bool = True, language: str = "c") -> None:
+    """Write one shard: dimension rows, the run identity, and one row in each id-bearing log table.
+
+    The measurement tables carry no ``language`` of their own -- the identity a figure groups by is
+    one ``runs`` row joined by ``run_id`` -- so the shard has to hold that row or the merged DB
+    describes rows nothing can attribute."""
     conn = recording.connect(path)
     try:
-        # The arm's language is one runs row per run, not a column on every measurement row.
         conn.execute(
-            "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm) "
-            "VALUES (?, 'aggregate', 'qwen38', 'c', 'cpu', '', 1, 'aggregate-qwen38-c')",
-            (run,),
+            "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm, first_seen) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (run, "agg", "stub-model", language, "cpu", "", 1, run.split(".")[0], 1),
         )
         for kernel in kernels:
             conn.execute(
@@ -90,8 +92,8 @@ def test_shard_paths_ignores_the_base_and_unrelated_files(tmp_path) -> None:
 
 def test_aggregate_merges_every_table_and_reassigns_ids(tmp_path) -> None:
     base = str(tmp_path / "hpcagent_bench.db")
-    _seed(recording.shard_db_path(0, base), run="r0", kernels=["gemm", "jacobi_2d"])
-    _seed(recording.shard_db_path(1, base), run="r1", kernels=["gemm", "spmv"])
+    _seed(recording.shard_db_path(0, base), run="r0", kernels=["gemm", "jacobi_2d"], language="c")
+    _seed(recording.shard_db_path(1, base), run="r1", kernels=["gemm", "spmv"], language="fortran")
 
     recording.aggregate(base)
 
@@ -105,11 +107,37 @@ def test_aggregate_merges_every_table_and_reassigns_ids(tmp_path) -> None:
     try:
         ids = [r[0] for r in conn.execute("SELECT id FROM submissions")]
         runs = {r[0] for r in conn.execute("SELECT run_id FROM submissions")}
+        tagged = sorted(
+            conn.execute("SELECT runs.language, COUNT(*) FROM submissions JOIN runs USING (run_id) GROUP BY 1")
+        )
     finally:
         conn.close()
     # Both shards number their own rows from 1; the destination must reassign, not collide.
     assert len(set(ids)) == 4
     assert runs == {"r0", "r1"}
+    # A merged measurement row must still reach its arm: the identity is on `runs`, so a merge that
+    # carried the measurements and dropped the identity would leave four rows nothing can group.
+    assert tagged == [("c", 2), ("fortran", 2)]
+
+
+def test_two_ranks_of_one_run_merge_instead_of_colliding(tmp_path: pathlib.Path) -> None:
+    """``runs`` is keyed by ``run_id`` and every rank of a run writes its own shard with that same
+    row -- :func:`recording.upsert_run` calls a second rank writing it "the normal case". Merged
+    with a plain INSERT the second copy raises UNIQUE and takes the WHOLE merge down, so a
+    multi-rank campaign would lose every table, not one row."""
+    base = str(tmp_path / "hpcagent_bench.db")
+    for rank in (0, 1):
+        _seed(recording.shard_db_path(rank, base), run="llr2-c.n0.p3.w1", kernels=["gemm"], language="c")
+
+    recording.aggregate(base)
+
+    assert _count(base, "runs") == 1
+    assert _count(base, "submissions") == 2
+    conn = sqlite3.connect(base)
+    try:
+        assert [r[0] for r in conn.execute("SELECT language FROM runs")] == ["c"]
+    finally:
+        conn.close()
 
 
 def test_aggregate_merges_a_run_id_shared_by_multiple_shards(tmp_path) -> None:
@@ -128,7 +156,7 @@ def test_aggregate_merges_a_run_id_shared_by_multiple_shards(tmp_path) -> None:
         rows = conn.execute("SELECT run_id, model, arm FROM runs").fetchall()
     finally:
         conn.close()
-    assert rows == [("shared", "qwen38", "aggregate-qwen38-c")]
+    assert rows == [("shared", "stub-model", "shared")]
     # The row logs still concatenate; only the run's identity dedups.
     assert _count(base, "submissions") == 2
 

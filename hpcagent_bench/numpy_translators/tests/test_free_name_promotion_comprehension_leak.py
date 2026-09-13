@@ -77,7 +77,7 @@ def test_except_handler_name_not_promoted() -> None:
     assert "err" not in kir.input_args
 
 
-# --- end-to-end pin: the real kernel this was found on --------------------- #
+# end-to-end pin: the real kernel this was found on
 
 
 def test_distribution_search_no_longer_leaks_fr() -> None:

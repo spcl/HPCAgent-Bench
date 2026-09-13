@@ -56,7 +56,7 @@ def _check(a, dist, grid):
     return tiles
 
 
-# --- The core matrix: scheme x dim x ranks x dtype, on the near-square N-D grid ---
+# The core matrix: scheme x dim x ranks x dtype, on the near-square N-D grid
 @pytest.mark.parametrize("dtype", DTYPES)
 @pytest.mark.parametrize("scheme", ["block", "block_cyclic", "cyclic"])
 @pytest.mark.parametrize("ndim", [1, 2, 3, 4])
@@ -77,7 +77,7 @@ def test_block_cyclic_tiles_1d(ranks, block_size) -> None:
     _check(a, ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block_cyclic", block_size=block_size),)), grid)
 
 
-# --- Canonical ScaLAPACK grid shapes on a 2-D array: 1xR (block-col), Rx1 (block-row), PxQ (2-D) ---
+# Canonical ScaLAPACK grid shapes on a 2-D array: 1xR (block-col), Rx1 (block-row), PxQ (2-D)
 @pytest.mark.parametrize("scheme", ["block", "block_cyclic", "cyclic"])
 @pytest.mark.parametrize("dims", [(1, 4), (4, 1), (2, 2), (2, 3), (3, 2), (1, 6), (6, 1)])
 def test_roundtrip_2d_grid_shapes(dims, scheme) -> None:
@@ -121,7 +121,7 @@ def test_3d_array_on_2d_grid_trailing_axis_replicated() -> None:
     _check(a, dist, grid)
 
 
-# --- The two headline cases, validated element-by-element against an independent owner reference ---
+# The two headline cases, validated element-by-element against an independent owner reference
 def _owner_grid(shape, dist, grid):
     """owner[idx] = the single rank that owns global element `idx` under `dist` (independent cross-check)."""
     owner = np.full(shape, -1, dtype=np.int64)
@@ -174,7 +174,7 @@ def test_block_cyclic_2d_block_tuple_matches_scalapack_owner(grid_dims, mb, nb) 
     np.testing.assert_array_equal(owner, expect)
 
 
-# --- Replicated + the length-1 / scalar convention (rank 0 authoritative on gather) ---
+# Replicated + the length-1 / scalar convention (rank 0 authoritative on gather)
 @pytest.mark.parametrize("ranks", RANKS)
 @pytest.mark.parametrize("shape", [(1,), (5,), (3, 4), (2, 2, 2)])
 def test_replicated_full_copy_and_gather_from_rank0(ranks, shape) -> None:
@@ -189,7 +189,7 @@ def test_replicated_full_copy_and_gather_from_rank0(ranks, shape) -> None:
     np.testing.assert_array_equal(out, a)
 
 
-# --- Ragged + edge sizes: size < ranks, length-1 axis, length-0 axis ---
+# Ragged + edge sizes: size < ranks, length-1 axis, length-0 axis
 @pytest.mark.parametrize("scheme", ["block", "block_cyclic", "cyclic"])
 @pytest.mark.parametrize("n", [1, 2, 3, 5, 7])
 def test_size_smaller_or_ragged_vs_ranks_1d(n, scheme) -> None:
@@ -218,7 +218,7 @@ def test_length_zero_axis() -> None:
     assert out.shape == (0, 4)
 
 
-# --- Partition completeness, stated directly (disjoint + covering) ---
+# Partition completeness, stated directly (disjoint + covering)
 @pytest.mark.parametrize("scheme", ["block", "block_cyclic", "cyclic"])
 @pytest.mark.parametrize("ranks", [2, 3, 4, 6])
 def test_owned_indices_partition_each_axis(ranks, scheme) -> None:
@@ -242,7 +242,7 @@ def test_scatter_tiles_disjoint_and_cover(ranks, ndim) -> None:
     np.testing.assert_array_equal(gather(tiles, dist, grid, a.shape, a.dtype), a)
 
 
-# --- The default distribution + factor_grid helpers ---
+# The default distribution + factor_grid helpers
 @pytest.mark.parametrize("ranks", RANKS)
 @pytest.mark.parametrize("ndim", [1, 2, 3])
 def test_default_distribution_roundtrip(ranks, ndim) -> None:

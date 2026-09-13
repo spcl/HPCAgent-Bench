@@ -36,7 +36,7 @@ WAIT_S = 30.0
 
 
 def peer_closed(sock: socket.socket) -> bool:
-    readable, _, _ = select.select([sock], [], [], 0)
+    readable = select.select([sock], [], [], 0)[0]
     try:
         return bool(readable) and not sock.recv(1, socket.MSG_PEEK)
     except OSError:

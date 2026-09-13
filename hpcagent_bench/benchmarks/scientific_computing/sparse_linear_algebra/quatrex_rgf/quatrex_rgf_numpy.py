@@ -110,7 +110,7 @@ def quatrex_rgf(
     cj = np.zeros((BS, BS), dtype=np.complex128)
 
     for e in range(NE):
-        # ---- first block ------------------------------------------------
+        # first block
         m[:] = a_diag[e, 0, :, :]
         xr = np.linalg.inv(m)
         xr_d[0, :, :] = xr
@@ -119,7 +119,7 @@ def quatrex_rgf(
         xl_d[0, :, :] = xr @ sigma_lesser_diag[e, 0, :, :] @ xr_jj_dag
         xg_d[0, :, :] = xr @ sigma_greater_diag[e, 0, :, :] @ xr_jj_dag
 
-        # ---- forwards sweep ---------------------------------------------
+        # forwards sweep
         for i in range(NB - 1):
             j = i + 1
             cj[:] = np.conj(a_lower[e, i])
@@ -144,7 +144,7 @@ def quatrex_rgf(
             t3[:] = sigma_greater_diag[e, j, :, :] + a_lower[e, i, :, :] @ xg_d[i, :, :] @ a_ji_dag + dag - t2
             xg_d[j, :, :] = xr @ t3 @ xr_jj_dag
 
-        # ---- last diagonal block goes straight out ------------------------
+        # last diagonal block goes straight out
         cj[:] = np.conj(xl_d[NB - 1])
         dag[:] = cj.T
         x_lesser_diag[e, NB - 1, :, :] = 0.5 * (xl_d[NB - 1, :, :] - dag)
@@ -153,7 +153,7 @@ def quatrex_rgf(
         x_greater_diag[e, NB - 1, :, :] = 0.5 * (xg_d[NB - 1, :, :] - dag)
         x_retarded_diag[e, NB - 1, :, :] = xr_d[NB - 1, :, :]
 
-        # ---- backwards sweep ----------------------------------------------
+        # backwards sweep
         for i in range(NB - 2, -1, -1):
             j = i + 1
 
@@ -174,7 +174,7 @@ def quatrex_rgf(
 
             xr_ii_a_ij_xr_jj_a_ji[:] = xr_ii_a_ij @ xr_jj_a_ji
 
-            # ---- lesser ---------------------------------------------------
+            # lesser
             t1[:] = (
                 xr_ii_a_ij_xr_jj_a_ji @ xl_d[i, :, :]
                 - xr_d[i, :, :] @ sigma_lesser_upper[e, i, :, :] @ xr_jj_dag_a_ij_dag_xr_ii_dag
@@ -200,7 +200,7 @@ def quatrex_rgf(
             dag[:] = cj.T
             x_lesser_diag[e, i, :, :] = 0.5 * (t3 - dag)
 
-            # ---- greater --------------------------------------------------
+            # greater
             t1[:] = (
                 xr_ii_a_ij_xr_jj_a_ji @ xg_d[i, :, :]
                 - xr_d[i, :, :] @ sigma_greater_upper[e, i, :, :] @ xr_jj_dag_a_ij_dag_xr_ii_dag
@@ -226,7 +226,7 @@ def quatrex_rgf(
             dag[:] = cj.T
             x_greater_diag[e, i, :, :] = 0.5 * (t3 - dag)
 
-            # ---- retarded (last: the backward passes above read the old value)
+            # retarded (last: the backward passes above read the old value)
             t3[:] = xr_d[i, :, :] + xr_ii_a_ij_xr_jj_a_ji @ xr_d[i, :, :]
             xr_d[i, :, :] = t3
             x_retarded_diag[e, i, :, :] = t3

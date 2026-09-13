@@ -165,7 +165,7 @@ def cegterg(
     ck0 = int(current_k) - 1
     npw_k = int(np.asarray(npw).reshape(-1)[ck0])
 
-    # ---- slice per current_k + coerce layout (mirrors cegterg_numpy preprocessing) ----
+    # slice per current_k + coerce layout (mirrors cegterg_numpy preprocessing)
     g2 = _f(np.asarray(g2kin)[:, ck0], np.float64)
     vrs_a = np.asarray(vrs)
     if vrs_a.ndim == 1:

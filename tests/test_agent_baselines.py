@@ -57,7 +57,7 @@ def correct_score(speedup: float, baseline_ns: int = 250) -> Score:
     )
 
 
-# --------------------------- the reward is a TOTAL function --------------------------- #
+# the reward is a TOTAL function
 @pytest.mark.parametrize(
     "label,score",
     [
@@ -125,7 +125,7 @@ def test_row_reward_treats_a_build_error_as_neutral() -> None:
     assert row_reward(row) == 1.0
 
 
-# --------------------------- the registry: three baselines --------------------------- #
+# the registry: three baselines
 def test_the_three_baselines_are_registered_in_comparison_order() -> None:
     assert list(BASELINES) == ["bare", "tools", "optimas"]
 
@@ -179,7 +179,7 @@ def test_the_bare_prompt_drops_the_skills_the_tools_prompt_keeps() -> None:
     assert len(rendered["bare"]) < len(rendered["tools"])
 
 
-# --------------------------- model choice + sampling hyperparameters --------------------------- #
+# model choice + sampling hyperparameters
 def test_a_model_spec_builds_the_backend_it_names() -> None:
     agent = ModelSpec(backend="openai", model="my-model").agent(complete_fn=lambda p: REPLY)
     assert isinstance(agent, OpenAIAgent) and agent.model_id == "my-model"
@@ -246,7 +246,7 @@ def test_complete_returns_the_raw_reply_for_every_agent() -> None:
     assert agent.complete("hello") == "echo:hello"
 
 
-# --------------------------- Optimas: global reward, local reward, search --------------------------- #
+# Optimas: global reward, local reward, search
 def test_local_reward_is_fit_only_on_observed_global_rewards() -> None:
     local = LocalReward()
     assert local.estimate("a") is None and local.best() is None
@@ -381,7 +381,7 @@ def test_the_search_survives_a_global_reward_that_is_all_failure(monkeypatch) ->
     assert row_reward(row) == 1.0 and math.isfinite(row_reward(row))
 
 
-# --------------------------- per-model config: every family the bench must drive --------------- #
+# per-model config: every family the bench must drive
 def test_every_required_model_family_has_a_preset() -> None:
     """GPT, Claude, Kimi and self-hosted open models, small AND large."""
     assert set(MODELS) == {"gpt", "claude", "kimi", "open-large", "open-small"}
@@ -479,7 +479,7 @@ def test_estimated_tokens_is_monotone_and_never_zero_for_real_text() -> None:
     assert estimated_tokens("a" * 4000) > estimated_tokens("a" * 400)
 
 
-# --------------------------- replay from the log is the reproducibility mechanism --------------- #
+# replay from the log is the reproducibility mechanism
 def test_a_logged_run_replays_without_a_provider(tmp_path) -> None:
     """Providers disagree on determinism, so the LOG is the mechanism: prompt + reply + request."""
     db, store = str(tmp_path / "t.db"), str(tmp_path / "store")
@@ -546,7 +546,7 @@ def test_completions_are_appended_not_deduped(tmp_path) -> None:
         conn.close()
 
 
-# --------------------------- the optional dependency degrades cleanly --------------------------- #
+# the optional dependency degrades cleanly
 @pytest.mark.skipif(importlib.util.find_spec("optimas") is None, reason="upstream optimas-ai not installed")
 def test_upstream_optimas_opro_drives_the_propose_seam(monkeypatch) -> None:
     """The REAL OPRO, wired to our LocalReward as its metric. No network: the proposer LLM is stubbed.

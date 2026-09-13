@@ -13,12 +13,15 @@ Five semantic bugs in ``numpyto_jax.core`` are pinned here:
 5. ``out[i] = np.sum(a[i])`` (a per-row whole-array reduction) lowers to the
    axis reduction ``jnp.sum(a, axis=tuple(range(1, a.ndim)))``, not the
    rank-collapsing ``jnp.sum(a)`` (a scalar instead of one value per row).
+6. a ``from __future__`` import carried over from the kernel source leads the
+   emitted module instead of trailing the jax preamble, so the result compiles.
 
 The source-level asserts verify the emitted code directly (they never import
 jax, so the fork-based ``run_op`` jax path below stays clean); the numerical
 asserts round-trip each idiom through the ``run_op`` oracle against numpy.
 """
 
+import ast
 import types
 import sys
 
@@ -28,9 +31,7 @@ import pytest
 from numpyto_jax.core import emit_jax
 
 
-# --------------------------------------------------------------------------- #
 # Source-level: the emitted module text carries each fix.                      #
-# --------------------------------------------------------------------------- #
 def test_emitted_module_enables_x64() -> None:
     src = "import numpy as np\ndef f(a, out):\n    out[:] = a / 3.0\n"
     out = emit_jax(src, "f")
@@ -61,9 +62,45 @@ def test_chained_subscript_store_preserves_full_array() -> None:
     assert "a[1].at" not in out  # the row-collapsing form is gone
 
 
-# --------------------------------------------------------------------------- #
+# A kernel source in the shape the repo ships since the future-import sweep:
+# module docstring, then ``from __future__ import annotations``, then numpy.
+_FUTURE_BELOW_DOCSTRING = (
+    '"""Kernel with the future import below its docstring."""\n'
+    "from __future__ import annotations\n"
+    "import numpy as np\n"
+    "\n"
+    "\n"
+    "def f(a, out):\n"
+    "    out[:] = a * 2.0\n"
+)
+_FUTURE_ABOVE_DOCSTRING = (
+    "from __future__ import annotations\n"
+    '"""Kernel with the future import above its docstring."""\n'
+    "import numpy as np\n"
+    "\n"
+    "\n"
+    "def f(a, out):\n"
+    "    out[:] = a * 2.0\n"
+)
+
+
+@pytest.mark.parametrize("src", [_FUTURE_BELOW_DOCSTRING, _FUTURE_ABOVE_DOCSTRING])
+@pytest.mark.parametrize("jit", [False, True])
+def test_carried_future_import_leads_the_emitted_module(src: str, jit: bool) -> None:
+    """A future import is legal only as the module's first statement, and the
+    emitter prepends its own jax preamble to the carried-over imports. Placed
+    after that preamble the emitted module raises ``SyntaxError: from __future__
+    imports must occur at the beginning of the file`` on compile -- which is what
+    the sparse jax oracle hit. ``ast.parse`` does NOT catch this (the check runs
+    in the compiler, not the parser), so the gate here is ``compile``."""
+    out = emit_jax(src, "f", jit=jit)
+    body = ast.parse(out).body
+    assert isinstance(body[0], ast.ImportFrom) and body[0].module == "__future__", out.splitlines()[:8]
+    assert sum(isinstance(n, ast.ImportFrom) and n.module == "__future__" for n in body) == 1
+    compile(out, "<jax>", "exec")
+
+
 # Numerical: each idiom round-trips through the run_op oracle vs numpy (jax).  #
-# --------------------------------------------------------------------------- #
 def _oracle() -> types.ModuleType:
     import shutil
 

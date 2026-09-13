@@ -42,9 +42,7 @@ def _assert_forms(res: dict) -> None:
         assert st == "ok" or st.startswith("skip"), f"{b} FAILed (wrong result): {res}"
 
 
-# --------------------------------------------------------------------------- #
 # form 1: in-place output buffer                                              #
-# --------------------------------------------------------------------------- #
 
 
 def test_inplace_output_buffer() -> None:
@@ -61,9 +59,7 @@ def test_inplace_output_buffer() -> None:
     _assert_forms(res)
 
 
-# --------------------------------------------------------------------------- #
 # form 2: single array return -> ret_arr0                                     #
-# --------------------------------------------------------------------------- #
 
 
 def test_return_single_array() -> None:
@@ -95,9 +91,7 @@ def test_return_reduction_result() -> None:
     _assert_forms(res)
 
 
-# --------------------------------------------------------------------------- #
 # form 3: tuple return -> ret_arr0, ret_arr1 (both in the output ABI)         #
-# --------------------------------------------------------------------------- #
 
 
 def test_return_tuple_of_arrays() -> None:
@@ -115,9 +109,7 @@ def test_return_tuple_of_arrays() -> None:
     _assert_forms(res)
 
 
-# --------------------------------------------------------------------------- #
 # form 4: scalar return -> hpcagent_bench_ret0 (1-element buffer)                   #
-# --------------------------------------------------------------------------- #
 
 
 def test_return_scalar() -> None:
@@ -134,9 +126,7 @@ def test_return_scalar() -> None:
     _assert_forms(res)
 
 
-# --------------------------------------------------------------------------- #
 # form 5: returned transposed VIEW -> materialized ret_arr0 (reversed shape)  #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize("expr", ["x.T", "np.transpose(x)", "x.transpose(1, 0)", "x.transpose((1, 0))"])
@@ -168,9 +158,7 @@ def test_return_transposed_axes_3d() -> None:
     _assert_forms(res)
 
 
-# --------------------------------------------------------------------------- #
 # the C-based ABI carries every promoted return as an OUTPUT BUFFER parameter #
-# --------------------------------------------------------------------------- #
 
 
 def _binding_ptr_args(src: str, inputs: list[str], shapes: dict[str, str], syms: dict[str, int]) -> list[str]:

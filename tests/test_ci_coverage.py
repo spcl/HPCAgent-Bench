@@ -199,7 +199,7 @@ def test_the_combined_total_is_built_from_every_job_not_one_of_them() -> None:
         "merge-multiple creates, or it finds nothing at all"
     )
     # ACCOUNTED FOR, not combined: coverage.py hashes the databases and skips exact duplicates,
-    # and the port-fidelity / ports-cegterg shards split parametrized cases of one test file, so
+    # and the port-fidelity shards split parametrized cases of one test file, so
     # every shard past the first is byte-identical and legitimately skipped. Demanding
     # "Combined N" made that a permanent red. The check that matters is combined + skipped == N,
     # which still refuses a file that was neither.
@@ -424,7 +424,7 @@ def test_every_integration_marked_translator_file_reaches_a_leg() -> None:
 
 #: The standing per-container budget, in minutes. Not a suggestion: a job over it becomes the run's
 #: critical path, and the whole shape of tests.yml -- four matrix jobs over a slice knob, the trees
-#: split apart, hf-export lifted off mpi -- exists to hold it. Raising this number is a decision
+#: split apart -- exists to hold it. Raising this number is a decision
 #: somebody makes here, once, instead of one job at a time in a comment nobody reads.
 CONTAINER_BUDGET_MINUTES = 45
 

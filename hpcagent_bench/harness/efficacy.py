@@ -157,7 +157,7 @@ def bootstrap_interval(
     rng = random.Random(seed)
     studentized: list[float] = []
     for _ in range(resamples):
-        draw = [deltas[rng.randrange(n)] for _ in range(n)]
+        draw = [deltas[rng.randrange(n)] for position in range(n)]
         spread = standard_error(draw)
         gap = abs(math.fsum(draw) / n - mean)
         studentized.append(gap / spread if spread > 0.0 else (math.inf if gap > 0.0 else 0.0))
@@ -278,8 +278,9 @@ class Efficacy:
     property of the form, and ``test_swapping_the_arms_negates_q`` is what holds it).
 
     ``tasks`` is what the pairing KEPT and ``unmatched`` is what it DROPPED: every task at least one
-    of the four mappings carries and another lacks. The survivors are not a fair sample of the
-    roster, so a result that names only them lets a claim about forty tasks rest on two.
+    of the four mappings carries and another lacks -- a name in only one arm's score mapping, only
+    one arm's cost mapping, or absent altogether. The survivors are not a fair sample of the roster,
+    so a result that names only them lets a claim about forty tasks rest on two.
     """
 
     score: Ratio
@@ -374,7 +375,9 @@ def efficacy(
     Keyed by task rather than positional, and INTERSECTED rather than zipped, because an arm that
     crashed on a kernel has no row for it: pairing by position would silently compare kernel k in
     one arm against kernel k+1 in the other. The task order is sorted so the bootstrap draws the
-    same resamples for the same set however the callers built their mappings.
+    same resamples for the same set however the callers built their mappings. Every name absent
+    from the intersection is recorded on the result as ``unmatched``, not just dropped, so a
+    caller cannot report "N tasks" while quietly comparing on fewer.
     """
     if cost_weight is None:
         cost_weight = 1.0 - score_weight
@@ -384,10 +387,11 @@ def efficacy(
     if score_weight < 0.0 or cost_weight < 0.0:
         raise ValueError(f"a negative weight inverts the quantity it weights; got {score_weight}, {cost_weight}")
 
+    universe = set(before_scores) | set(after_scores) | set(before_costs) | set(after_costs)
     shared = sorted(set(before_scores) & set(after_scores) & set(before_costs) & set(after_costs))
     if not shared:
         raise ValueError("the arms share no task, so there is nothing paired to compare")
-    seen = set(before_scores) | set(after_scores) | set(before_costs) | set(after_costs)
+    unmatched = tuple(sorted(universe - set(shared)))
 
     score = ratio(
         [before_scores[t] for t in shared],
@@ -411,7 +415,7 @@ def efficacy(
         score_weight=score_weight,
         cost_weight=cost_weight,
         tasks=tuple(shared),
-        unmatched=tuple(sorted(seen - set(shared))),
+        unmatched=unmatched,
     )
 
 

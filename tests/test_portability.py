@@ -14,9 +14,7 @@ from hpcagent_bench import config, flags, osinfo
 from hpcagent_bench.harness import native_call
 
 
-# --------------------------------------------------------------------------- #
 # osinfo: the single OS/arch source of truth
-# --------------------------------------------------------------------------- #
 def test_default_mp_context_is_fork_on_linux_spawn_on_macos(monkeypatch) -> None:
     monkeypatch.setattr(osinfo, "IS_MACOS", True)
     assert osinfo.default_mp_context() == "spawn"
@@ -45,9 +43,7 @@ def test_is_arm_matches_the_machine_string(monkeypatch) -> None:
         assert not osinfo.is_arm()
 
 
-# --------------------------------------------------------------------------- #
 # flag matrix: glibc-only pieces gated to Linux, arch flag per-arch
-# --------------------------------------------------------------------------- #
 def test_clang_baseline_glibc_pieces_are_linux_only() -> None:
     # The OpenMP-runtime pin and `libmvec` (glibc vector libm) are Linux-only; the clang baseline
     # must carry them iff we are on Linux. Whole token, never the bare library name: `libomp` is a
@@ -72,9 +68,7 @@ def test_arch_flag_is_mcpu_on_apple_silicon_march_elsewhere() -> None:
     assert ("-mcpu=native" in flags.CPU_BASELINE_GCC) != ("-march=native" in flags.CPU_BASELINE_GCC)
 
 
-# --------------------------------------------------------------------------- #
 # ru_maxrss units + missing-compiler robustness
-# --------------------------------------------------------------------------- #
 def test_rss_scale_is_bytes_on_macos_kilobytes_on_linux() -> None:
     assert native_call._RSS_TO_BYTES == (1 if osinfo.IS_MACOS else 1024)
 

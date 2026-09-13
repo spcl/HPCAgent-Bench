@@ -25,7 +25,7 @@ def _stmt(src: str) -> ast.stmt:
     return ast.parse(src).body[0]
 
 
-# --- A: cross-axis write to a written array is a race -----------------------------------------------
+# A: cross-axis write to a written array is a race
 def test_inplace_transpose_is_not_parallel_safe() -> None:
     src = "for i in range(N):\n    for j in range(N):\n        A[i, j] = A[j, i] + 1.0\n"
     assert not loop_is_parallel_safe(_stmt(src))
@@ -37,7 +37,7 @@ def test_transpose_of_readonly_source_stays_parallel_safe() -> None:
     assert loop_is_parallel_safe(_stmt(src))
 
 
-# --- B: loop-carried scalar read before write -------------------------------------------------------
+# B: loop-carried scalar read before write
 def test_carried_scalar_read_before_write_is_not_parallel_safe() -> None:
     # b[i] reads the PREVIOUS iteration's s (a lag) -> serial-only.
     src = "for i in range(N):\n    b[i] = s\n    s = a[i]\n"
@@ -55,7 +55,7 @@ def test_carried_scalar_inside_inner_loop_is_not_parallel_safe() -> None:
     assert not loop_is_parallel_safe(_stmt(src))
 
 
-# --- C: captured accumulator is a scan, not a reduction ---------------------------------------------
+# C: captured accumulator is a scan, not a reduction
 def test_prefix_scan_capture_is_not_a_reduction() -> None:
     src = "for i in range(N):\n    s = s + a[i]\n    out[i] = s\n"
     assert loop_reduction(_stmt(src)) is None

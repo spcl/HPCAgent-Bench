@@ -39,9 +39,7 @@ def _norm_axis(expr: str, ranks: dict[str, int]) -> int | ast.expr:
     return kw.value.value if isinstance(kw.value, ast.Constant) else kw.value
 
 
-# --------------------------------------------------------------------------- #
 # the rewrite, in isolation: axis-preserving vs axis-adding, rank sourcing     #
-# --------------------------------------------------------------------------- #
 
 
 def test_axis_preserving_uses_operand_rank() -> None:
@@ -74,9 +72,7 @@ def test_out_of_range_negative_left_verbatim() -> None:
     assert isinstance(node, ast.UnaryOp)
 
 
-# --------------------------------------------------------------------------- #
 # end to end through the desugar (flip further lowers to a reverse-step slice) #
-# --------------------------------------------------------------------------- #
 
 
 def test_flip_negative_axis_lowers_to_reverse_slice() -> None:
@@ -102,9 +98,7 @@ def test_positive_stack_axis_returned_verbatim() -> None:
     )
 
 
-# --------------------------------------------------------------------------- #
 # numerical: pythran now matches numpy for negative-axis flip / stack          #
-# --------------------------------------------------------------------------- #
 
 
 def _pythran_ok(res: dict[str, str]) -> tuple[bool, dict[str, str]]:

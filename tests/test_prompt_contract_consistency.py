@@ -82,7 +82,7 @@ def test_the_prompt_has_a_bullet_for_exactly_the_tools_the_agent_is_served(
     assert "{{TOOLS}}" in PROMPT.read_text(encoding="utf-8"), f"{PROMPT.name} lost the tool-list slot"
     monkeypatch.setenv("AGENT_SUBMISSION_POLICY_FILE", str(PROMPT.parent / policy))
     driver = driver_module()
-    policy_bullet, _ = driver.submission_policy_text()
+    policy_bullet = driver.submission_policy_text()[0]
     registry = driver.tool_registry()
     tool_list = registry.prompt_tool_list().replace("{{SUBMISSION_POLICY_TOOL}}", policy_bullet)
     listed = set(TOOL_BULLET_RE.findall(tool_list))

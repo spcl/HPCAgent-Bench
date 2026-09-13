@@ -154,10 +154,10 @@ def kill(agent: subprocess.Popen[bytes]) -> None:
 
 
 def test_a_submission_queued_last_is_graded_before_the_queued_scores(judge: tuple[str, int, Grades]) -> None:
-    url, _, grades = judge
+    url, grades = judge[0], judge[2]
     holder = started(url, "score")
     grades.wait_for(lambda: len(grades.order) == 1)
-    scores = [started(url, "score") for _ in range(QUEUED)]
+    scores = [started(url, "score") for queued_index in range(QUEUED)]
     grades.wait_for(lambda: grades.arrived == 1 + QUEUED)
     time.sleep(SETTLE_S)
     submit = started(url, "submit")

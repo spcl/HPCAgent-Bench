@@ -27,7 +27,9 @@ unsupported constructs raise ``EmitError`` so the driver can fall back.
 
 import ast
 import copy
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Tuple
+
+from numpyto_common.statement_desugar import DesugarArrayIteration, SplitChainedAssign
 
 
 class EmitError(Exception):
@@ -1341,7 +1343,8 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
     # lowers to ``jnp.where``.
     concrete = _concrete_params(funcs, func_name, kernel_static) if jit else {}
 
-    head = [
+    future_imports, extra_imports = _extra_imports(tree)
+    head = future_imports + [
         "import jax",
         # numpy defaults to 64-bit; jax narrows to 32-bit unless x64 is
         # enabled -- set at the TOP of the module so it applies before any
@@ -1353,7 +1356,7 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
     ]
     # Carry over the module's own imports (minus numpy -- jnp replaces it) so
     # e.g. a TSVC kernel's ``from math import sin, sqrt`` resolves.
-    head += _extra_imports(tree)
+    head += extra_imports
     head += ["", ""]
     consts = _module_constants(tree, func_name)
     if consts:
@@ -1662,19 +1665,27 @@ def _functionalize_bare_expr(call: ast.AST) -> Optional[ast.Assign]:
     return None
 
 
-def _extra_imports(tree: ast.Module) -> List[str]:
-    """The module's own import statements, minus ``numpy`` (``jnp`` stands in)."""
-    out: List[str] = []
+def _extra_imports(tree: ast.Module) -> Tuple[List[str], List[str]]:
+    """The module's own import statements, minus ``numpy`` (``jnp`` stands in),
+    split into ``(future, other)``.
+
+    A ``from __future__`` import is only legal as the first statement of a module
+    (a docstring may precede it), and the kernel source may carry one wherever it
+    likes. The emitted module puts the future group ahead of the jax preamble, so
+    the assembled source compiles whatever the kernel's own ordering was."""
+    future: List[str] = []
+    other: List[str] = []
     for s in tree.body:
         if isinstance(s, ast.Import):
             names = [a for a in s.names if a.name.split(".")[0] != "numpy"]
             if names:
-                out.append(ast.unparse(ast.Import(names=names)))
+                other.append(ast.unparse(ast.Import(names=names)))
         elif isinstance(s, ast.ImportFrom):
-            if (s.module or "").split(".")[0] == "numpy":
+            root = (s.module or "").split(".")[0]
+            if root == "numpy":
                 continue
-            out.append(ast.unparse(s))
-    return out
+            (future if root == "__future__" else other).append(ast.unparse(s))
+    return future, other
 
 
 def _module_constants(tree: ast.Module, func_name: str) -> List[str]:
@@ -1825,36 +1836,13 @@ def _desugar_foreach(fn: ast.FunctionDef) -> None:
     ``for b in data``, contour_integral's ``for z in int_pts``). Only a plain
     Name iterable is handled."""
 
-    class _T(ast.NodeTransformer):
-        def visit_For(self, node: ast.For) -> ast.For:
-            self.generic_visit(node)
-            it = node.iter
-            if isinstance(it, ast.Call) and isinstance(it.func, ast.Name) and it.func.id == "range":
-                return node
-            # A constant-literal sequence (lulesh's ``faces``) is concrete in
-            # the emitted function -- leave the for literal so it unrolls.
-            if isinstance(it, ast.Name) and (it.id in _MODULE_CONSTS or it.id in _LOCAL_CONSTS):
-                return node
-            if not (isinstance(node.target, ast.Name) and isinstance(it, ast.Name)):
-                return node
-            idx = "_fe_" + node.target.id
-            bind = ast.Assign(
-                targets=[ast.Name(id=node.target.id, ctx=ast.Store())],
-                value=ast.Subscript(
-                    value=ast.Name(id=it.id, ctx=ast.Load()), slice=ast.Name(id=idx, ctx=ast.Load()), ctx=ast.Load()
-                ),
-            )
-            shape0 = ast.Subscript(
-                value=ast.Attribute(value=ast.Name(id=it.id, ctx=ast.Load()), attr="shape", ctx=ast.Load()),
-                slice=ast.Constant(value=0),
-                ctx=ast.Load(),
-            )
-            node.target = ast.Name(id=idx, ctx=ast.Store())
-            node.iter = ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[shape0], keywords=[])
-            node.body = [bind] + node.body
-            return ast.fix_missing_locations(node)
+    def leading_extent(array: str) -> Optional[ast.expr]:
+        # A constant-literal sequence (lulesh's ``faces``) is concrete in the emitted function: it unrolls.
+        if array in _MODULE_CONSTS or array in _LOCAL_CONSTS:
+            return None
+        return ast.parse(f"{array}.shape[0]", mode="eval").body
 
-    _T().visit(fn)
+    DesugarArrayIteration(leading_extent, lambda target, ordinal: "_fe_" + target).visit(fn)
     ast.fix_missing_locations(fn)
 
 
@@ -1893,22 +1881,12 @@ _CHAIN_CTR = [0]
 
 
 def _expand_chained_assigns(fn: ast.FunctionDef) -> None:
-    """``a = b = rhs`` -> ``__chain = rhs; a = __chain; b = __chain`` so each
-    target is a single assignment the later passes can rewrite (covariance /
-    correlation write the same row+column from one dot)."""
-
-    class _T(ast.NodeTransformer):
-        def visit_Assign(self, node: ast.Assign) -> ast.Assign | List[ast.stmt]:
-            self.generic_visit(node)
-            if len(node.targets) <= 1:
-                return node
-            _CHAIN_CTR[0] += 1
-            tmp = f"__chain{_CHAIN_CTR[0]}"
-            out = [ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=node.value)]
-            out += [ast.Assign(targets=[t], value=ast.Name(id=tmp, ctx=ast.Load())) for t in node.targets]
-            return [ast.copy_location(s, node) for s in out]
-
-    _T().visit(fn)
+    """``a = b = rhs`` -> one assignment per target, ``rhs`` evaluated once, so the later passes
+    rewrite each target alone (covariance / correlation write the same row+column from one dot).
+    An array ``rhs`` stays one name: a functional ``.at[].set`` rebinds only the name it writes."""
+    split = SplitChainedAssign(lambda ordinal: f"__chain{_CHAIN_CTR[0] + ordinal + 1}")
+    split.visit(fn)
+    _CHAIN_CTR[0] += split.temps
     ast.fix_missing_locations(fn)
 
 

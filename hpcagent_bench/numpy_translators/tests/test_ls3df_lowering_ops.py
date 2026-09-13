@@ -31,9 +31,7 @@ def _unparse(node):
     return ast.unparse(ast.fix_missing_locations(node))
 
 
-# --------------------------------------------------------------------------- #
 # .shape / .shape[k] on a newaxis-subscript base                              #
-# --------------------------------------------------------------------------- #
 
 
 def test_shape_index_on_newaxis_subscript_folds_to_static_dim() -> None:
@@ -65,9 +63,7 @@ def test_shape_fold_leaves_name_base_untouched_when_unknown() -> None:
     assert "shape" in _unparse(tree.body[0].value)
 
 
-# --------------------------------------------------------------------------- #
 # _iter_extent_of: fftfreq + method-form reshape                              #
-# --------------------------------------------------------------------------- #
 
 
 def test_iter_extent_of_fftfreq_is_length_n() -> None:
@@ -92,9 +88,7 @@ def test_iter_extent_of_method_reshape_resolves_neg1() -> None:
     assert "/" in _unparse(ext[0])
 
 
-# --------------------------------------------------------------------------- #
 # shape-tuple local forward-substitution                                       #
-# --------------------------------------------------------------------------- #
 
 
 def test_tuple_local_propagator_inlines_and_drops_assignment() -> None:
@@ -113,9 +107,7 @@ def test_tuple_local_propagator_skips_reassigned_name() -> None:
     assert "shp = (a, b)" in _unparse(tree)
 
 
-# --------------------------------------------------------------------------- #
 # mutated scalar excluded from inlined-dim substitution                        #
-# --------------------------------------------------------------------------- #
 
 
 def test_collect_inlined_scalar_defs_excludes_augassigned_counter() -> None:
@@ -130,9 +122,7 @@ def test_collect_inlined_scalar_defs_excludes_multiply_assigned() -> None:
     assert "__inl1_m" not in _collect_inlined_scalar_defs(fn)
 
 
-# --------------------------------------------------------------------------- #
 # compound shape token survives .size as a real BinOp (not a mangled Name)     #
-# --------------------------------------------------------------------------- #
 
 
 def test_size_of_compound_token_reparses_to_binop() -> None:
@@ -143,9 +133,7 @@ def test_size_of_compound_token_reparses_to_binop() -> None:
     assert _unparse(val) == "na - 1"
 
 
-# --------------------------------------------------------------------------- #
 # expand_copy allocates its target                                             #
-# --------------------------------------------------------------------------- #
 
 
 def test_expand_copy_emits_allocation_marker() -> None:
@@ -158,9 +146,7 @@ def test_expand_copy_emits_allocation_marker() -> None:
     assert stmts[0].targets[0].id == "Cm"
 
 
-# --------------------------------------------------------------------------- #
 # per-call-unique linalg working buffer                                        #
-# --------------------------------------------------------------------------- #
 
 
 def _inv_buffer_names(stmts):

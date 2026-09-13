@@ -265,7 +265,7 @@ def test_harbor_env_for_maps_and_raises() -> None:
         containers.harbor_env_for("podman")  # podman is launched directly, not via Harbor
 
 
-# --- install_apptainer retry: both fetches are live-network; subprocess/sleep stubbed, stays pure-unit ---
+# install_apptainer retry: both fetches are live-network; subprocess/sleep stubbed, stays pure-unit
 
 
 def _stub_installer(monkeypatch, bash_returncodes, curl_error=None):

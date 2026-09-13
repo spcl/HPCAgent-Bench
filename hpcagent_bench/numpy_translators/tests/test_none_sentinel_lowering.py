@@ -59,9 +59,7 @@ def _kir_for(
     return parse_kernel(npy, bi)
 
 
-# --------------------------------------------------------------------------------------------- #
 # (a) a helper that returns None OR a tuple
-# --------------------------------------------------------------------------------------------- #
 
 _TAP_RANGE_SRC = (
     "import numpy as np\n"
@@ -272,9 +270,7 @@ def test_none_or_tuple_helper_wrong_guard_shape_still_refuses() -> None:
         )
 
 
-# --------------------------------------------------------------------------------------------- #
 # (b) a first-iteration accumulator
-# --------------------------------------------------------------------------------------------- #
 
 _ACC_TERNARY_SRC = (
     "import numpy as np\n"
@@ -348,9 +344,7 @@ def test_accumulator_straight_line_no_loop_still_refuses() -> None:
         emit_c(lower(kir), fn_name="f")
 
 
-# --------------------------------------------------------------------------------------------- #
 # (c) a default-argument sentinel
-# --------------------------------------------------------------------------------------------- #
 
 _DEFAULT_STRIDE_SRC = (
     "import numpy as np\n"
@@ -433,10 +427,8 @@ def test_a_sentinel_an_is_none_test_still_inspects_is_kept() -> None:
     assert "seen = None" in ast.unparse(fn)
 
 
-# --------------------------------------------------------------------------------------------- #
 # Unit-level pin: the adjacency fix in isolation, mirroring the sibling
 # test_generator_tuple_fold.py's own direct desugar_tuples() unit test.
-# --------------------------------------------------------------------------------------------- #
 
 
 def test_drop_dead_none_bindings_adjacency_unit() -> None:

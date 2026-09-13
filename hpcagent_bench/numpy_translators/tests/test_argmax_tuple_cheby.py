@@ -44,9 +44,7 @@ def _assert_native_ok(status, label) -> None:
         assert status[b] == "ok", f"{label}: native {b} did not validate: {status}"
 
 
-# --------------------------------------------------------------------------- #
 # (a) an argmax Call in ONE position of a 2-D tuple subscript                  #
-# --------------------------------------------------------------------------- #
 
 
 def test_argmax_call_in_tuple_subscript() -> None:
@@ -69,9 +67,7 @@ def test_argmax_call_in_tuple_subscript() -> None:
     _assert_native_ok(status, "v[argmax(abs(w)), col]")
 
 
-# --------------------------------------------------------------------------- #
 # (b) a simultaneous in-loop 3-way rebind of two arrays + one scalar           #
-# --------------------------------------------------------------------------- #
 
 
 def test_inloop_three_way_array_scalar_swap() -> None:
@@ -104,9 +100,7 @@ def test_inloop_three_way_array_scalar_swap() -> None:
     _assert_native_ok(status, "av, bv, acc = bv, av+bv, 2*acc+1")
 
 
-# --------------------------------------------------------------------------- #
 # End-to-end: the two benchmarks the two fixes unblock.                        #
-# --------------------------------------------------------------------------- #
 
 
 def test_rayleigh_ritz_rotation_benchmark() -> None:

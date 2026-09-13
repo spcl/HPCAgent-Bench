@@ -49,7 +49,9 @@ def monitor_report_fixture():
 
 
 def seed_shard(path: pathlib.Path, *, run_id: str, kernel: str = "gemm", ts: int = 1) -> None:
-    """One valid submissions row in a fresh shard DB, same shape as test_db_aggregate.py's _seed."""
+    """One valid submissions row plus the run it belongs to, in a fresh shard DB -- the same shape
+    as test_db_aggregate.py's ``_seed``. The measurement row carries no ``language``; the identity a
+    figure groups by is the ``runs`` row joined by ``run_id``."""
     conn = recording.connect(str(path))
     try:
         conn.execute(
@@ -58,9 +60,9 @@ def seed_shard(path: pathlib.Path, *, run_id: str, kernel: str = "gemm", ts: int
         )
         # The arm's language is one runs row per run, not a column on the measurement row.
         conn.execute(
-            "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm) "
-            "VALUES (?, 'validate', 'qwen38', 'c', 'cpu', '', 1, 'validate-qwen38-c')",
-            (run_id,),
+            "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm, first_seen) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (run_id, "validate", "stub-model", "c", "cpu", "", 1, run_id.split(".")[0], ts),
         )
         conn.execute(
             "INSERT INTO submissions(run_id, ts, benchmark, preset, datatype, "
@@ -102,7 +104,7 @@ def build_run_dir(
     return run_dir
 
 
-# --- an intact run: everything PASSes ---------------------------------------------------------------
+# an intact run: everything PASSes
 def test_intact_run_passes_every_check(tmp_path, validate_run) -> None:
     run_dir = build_run_dir(tmp_path)
     results = validate_run.run_checks(run_dir)
@@ -118,7 +120,7 @@ def test_db_shards_check_reports_per_shard_and_merged_totals(tmp_path, validate_
     assert "merged=3" in result.summary  # one submissions row per rank, none dedup
 
 
-# --- the exact hole TASK 3 asks for: a missing claude.log + an empty agent dir ------------------------
+# the exact hole TASK 3 asks for: a missing claude.log + an empty agent dir
 def test_missing_log_and_empty_agent_dir_fail_only_those_checks(tmp_path, validate_run) -> None:
     run_dir = build_run_dir(tmp_path, drop_log=True, empty_agent=True)
 
@@ -145,7 +147,7 @@ def test_report_prints_a_pass_fail_line_per_check(tmp_path, validate_run, capsys
     assert "agent_logs" in out
 
 
-# --- graceful degradation: a missing subtree is a FAIL, never a traceback -----------------------------
+# graceful degradation: a missing subtree is a FAIL, never a traceback
 @pytest.mark.parametrize(
     "check_name,expected_summary",
     [
@@ -179,7 +181,7 @@ def test_monitor_csv_with_no_data_rows_is_flagged(tmp_path, validate_run) -> Non
     assert "judge-nid002.csv" in result.summary
 
 
-# --- a corrupt shard must fail loudly, not disappear into a partial merge -----------------------------
+# a corrupt shard must fail loudly, not disappear into a partial merge
 def test_merge_results_standalone_reports_corrupt_shard_and_fails_cleanly(tmp_path) -> None:
     run_dir = build_run_dir(tmp_path, ranks=2)
     bad_shard = run_dir / "judge" / "rank-1" / "hpcagent_bench.db"
@@ -194,7 +196,7 @@ def test_merge_results_standalone_reports_corrupt_shard_and_fails_cleanly(tmp_pa
     assert "rank-1" in result.stderr and "hpcagent_bench.db" in result.stderr
 
 
-# --- the per-call trajectory must survive the merge, not just the leaderboard rows --------------------
+# the per-call trajectory must survive the merge, not just the leaderboard rows
 def test_merge_results_carries_the_call_trajectory(tmp_path) -> None:
     """The judge writes a ``calls`` row for EVERY grade, so that table -- not ``submissions`` -- is
     where an arm's failures-before-success live. A merge that copied only the tables it was written
@@ -224,11 +226,17 @@ def test_merge_results_carries_the_call_trajectory(tmp_path) -> None:
     conn = sqlite3.connect(str(out))
     try:
         assert [row[0] for row in conn.execute("SELECT route FROM calls ORDER BY run_id")] == ["score", "score"]
+        # A calls row holds no language of its own: it names a run, and the run names the arm's
+        # language. Carrying `calls` without `runs` would merge a trajectory nothing can attribute.
+        attributed = [
+            row[0] for row in conn.execute("SELECT r.language FROM calls JOIN runs r USING (run_id) ORDER BY run_id")
+        ]
     finally:
         conn.close()
+    assert attributed == ["c", "c"]
 
 
-# --- monitor_report must skip a garbage CSV, not lose the good ones with it ---------------------------
+# monitor_report must skip a garbage CSV, not lose the good ones with it
 def test_monitor_report_skips_garbage_csv_and_still_reports_the_rest(
     tmp_path, monitor_report, capsys, monkeypatch
 ) -> None:

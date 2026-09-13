@@ -45,11 +45,9 @@ class Mode(enum.Enum):
     GPU_HIP = "gpu_hip"
 
 
-# ---------------------------------------------------------------------------
 # CPU compiler baselines (single source of truth for ``-O3``, ``-march=...``,
 # math flags, PIC). Append-only -- changing a constant here propagates to
 # every framework that references it.
-# ---------------------------------------------------------------------------
 
 # Two deliberate defaults live here. (1) -ffast-math is OFF: finite-math, reciprocal and approx-func
 # rewrites change what a kernel computes. The FP-relax knobs below (no errno, no FP traps, no
@@ -168,21 +166,17 @@ FLANG_BASELINE = f"-O3 {ARCH_NATIVE} -fopenmp {_FP_ASSOC_FLANG} {_FP_CONTRACT} -
 #: PROBE-GATED at use (languages._veclib_accepted), since an older flang rejects it. Empty off Linux.
 VECLIB_FLANG = "-fveclib=libmvec" if osinfo.IS_LINUX else ""
 
-# ---------------------------------------------------------------------------
 # Warnings -- a diagnostic axis, not an optimization one, so it is a separate
 # constant appended after the baseline (``warnings_ref`` in compilers.yaml,
 # resolved by languages._resolve_baseline the same way autopar is) rather than
 # folded into CPU_BASELINE_*.
-# ---------------------------------------------------------------------------
 
 #: -Wall -Wextra, one spelling for gcc, g++, clang, clang++ and gfortran. Deliberately NOT
 #: ``-Werror``: tests/test_warnings_ratchet.py tracks the warning count and only allows it down.
 WARNINGS_BASIC = "-Wall -Wextra"
 
-# ---------------------------------------------------------------------------
 # C++ parallel algorithms (<execution>). LINK-side only, and only for the source that
 # uses them -- see languages.stdpar_link_flags for when it is appended.
-# ---------------------------------------------------------------------------
 
 #: The runtime libstdc++ implements ``std::execution::par`` / ``par_unseq`` over; link-side only.
 #: libstdc++ picks the backend per TU (``_GLIBCXX_USE_TBB_PAR_BACKEND __has_include(<tbb/tbb.h>)``):
@@ -195,11 +189,9 @@ STDPAR_LINK_TBB = "-ltbb"
 #: :func:`languages.mimalloc_link_flags` asks by linking.
 LINK_MIMALLOC = "-lmimalloc"
 
-# ---------------------------------------------------------------------------
 # Multi-core autopar deltas. Each is appended on top of the CPU baseline.
 # ``GCC_AUTOPAR`` and similar carry a ``{n}`` placeholder that
 # :func:`compose_autopar` substitutes with the resolved core count.
-# ---------------------------------------------------------------------------
 
 #: LLVM Polly + OpenMP. ``-fopenmp=libomp`` pins clang to LLVM's own OpenMP runtime, the one its
 #: codegen emits calls into.
@@ -261,12 +253,10 @@ CPU_BASELINE_CLANG_PLUTO = CPU_BASELINE_CLANG.replace(_OPENMP_CLANG, PLUTO_PAR)
 #: NVHPC pure-source CPU auto-parallelization (analogue of GCC ``-ftree-parallelize-loops``).
 NVHPC_CONCUR = "-Mconcur"
 
-# ---------------------------------------------------------------------------
 # Autopar capability probe. An autopar flag set being ACCEPTED (compiles, links, runs) is not
 # evidence it parallelizes anything, so the only evidence trusted here is ``nm`` on a compiled
 # object: an undefined parallel-runtime reference, or a defined symbol matching the compiler's
 # outline-body naming (Polly's ``*_polly_subfn``, GCC Graphite's ``*_loopfn``/``*._omp_fn``).
-# ---------------------------------------------------------------------------
 
 
 class AutoparVerdict(enum.Enum):
@@ -496,7 +486,6 @@ def pluto_capability() -> AutoparProbe:
     return probe_autopar("clang", composed, NO_OUTLINE_PATTERN, _OPENMP_PROBE_SOURCE)
 
 
-# ---------------------------------------------------------------------------
 # Optimization-report flags -- what the vectorizer DID and did NOT do, to stderr.
 # Referenced by a compiler block's ``report_ref`` in ``compilers.yaml``. OFF by default: added only
 # when a report is requested, and then only to the SEPARATE compile-only run that
@@ -504,7 +493,6 @@ def pluto_capability() -> AutoparProbe:
 #
 # Both compilers report to STDERR: GCC's ``=<file>`` form APPENDS across compiles and clang's
 # ``-foptimization-record-file=`` CLOBBERS, while stderr gives both one capture path.
-# ---------------------------------------------------------------------------
 
 #: GCC / gfortran vectorization report. ``optimized`` carries the vector WIDTH, ``missed`` the
 #: refusal REASON. Not ``-fopt-info-all`` (mostly non-vectorizer noise) and not
@@ -524,10 +512,8 @@ CLANG_OPT_REPORT = (
 #: is the only route to threads this vendor has (see the note on the absent ``ICX_AUTOPAR``).
 ICX_OPT_REPORT = "-qopt-report=3 -qopt-report-phase=par,vec"
 
-# ---------------------------------------------------------------------------
 # GPU baselines. The arch suffix (``-arch=sm_<SM>`` / ``--offload-arch=<gfx>``)
 # is appended by the framework after :func:`detect_sm` / :func:`detect_gfx`.
-# ---------------------------------------------------------------------------
 
 #: NVCC baseline -- the host pass receives the CPU relax set via ``-Xcompiler`` and the device
 #: pass keeps nvcc's IEEE defaults (``-prec-div``/``-prec-sqrt`` true, no flush-to-zero).
@@ -578,11 +564,9 @@ OMP_TARGET_LLVM_AMD = "-fopenmp --offload-arch={arch}"
 
 OPENACC_NVHPC_NVIDIA = "-acc -gpu={arch}"
 
-# ---------------------------------------------------------------------------
 # Probes -- minimal, environment-overridable, fail-soft. Frameworks rely on
 # these to fill the host-specific bits without each having to spawn its own
 # ``nvidia-smi`` subprocess.
-# ---------------------------------------------------------------------------
 
 #: sysfs node listing the SMT siblings of a logical CPU, e.g. ``"0,8"`` for both halves of
 #: one physical core. Two logical CPUs on the same core report the SAME string, which is
@@ -715,9 +699,7 @@ def detect_gfx() -> str:
     return "gfx90a"
 
 
-# ---------------------------------------------------------------------------
 # Environment helpers
-# ---------------------------------------------------------------------------
 
 
 def cpu_env(mode: Mode, threads: int | None = None) -> dict[str, str]:
@@ -741,9 +723,7 @@ def cpu_env(mode: Mode, threads: int | None = None) -> dict[str, str]:
     }
 
 
-# ---------------------------------------------------------------------------
 # Composition helpers -- frameworks call these instead of string-literal'ing.
-# ---------------------------------------------------------------------------
 
 
 def compose_autopar(baseline: str, autopar: str | None, mode: Mode, cores: int | None = None) -> str:

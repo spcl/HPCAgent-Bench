@@ -107,7 +107,7 @@ def test_int32_accumulator_wraps() -> None:
     _assert_ok(_run(src, {"x": x}, ["out"], {"x": "int32", "out": "int32"}, 4))
 
 
-# --- ``**`` and ``<<`` overflow their own width exactly like ``*`` (a narrow base run through
+# ``**`` and ``<<`` overflow their own width exactly like ``*`` (a narrow base run through
 # enough of the ring), so they need the same re-wrap. Both were previously EXCLUDED from
 # ``_WRAP_BINOPS`` on the false premise that they "stay within their operands' range" -- true for
 # ``//``/``%``, false for these two: ``16 ** 2`` == 256 (needs 9 bits) and ``50 << 2`` == 200 (needs
@@ -155,7 +155,7 @@ def test_int64_pow_and_lshift_are_not_wrapped() -> None:
     _assert_ok(_run(src_shift, {"x": x}, ["out"], {"x": "int64", "out": "int64"}, 3))
 
 
-# --- the wrap must NOT fire where numpy promotes -------------------------------------------------
+# the wrap must NOT fire where numpy promotes
 def test_int64_operands_are_not_wrapped() -> None:
     # int64 IS the compute width; a wrap here would be a no-op at best and must not truncate.
     src = "import numpy as np\ndef f(x, out):\n    for i in range(x.shape[0]):\n        out[i] = x[i] * x[i]\n"

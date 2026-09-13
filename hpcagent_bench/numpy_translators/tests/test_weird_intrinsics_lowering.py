@@ -56,7 +56,7 @@ def _need_toolchain() -> None:
 
 #: (label, source, inputs, out_shape, syms, shapes, skip_backends)
 _CASES = [
-    # -- np.maximum / np.minimum: value + broadcast (no NaN) -- all backends must agree ----------
+    # np.maximum / np.minimum: value + broadcast (no NaN) -- all backends must agree
     (
         "maximum_broadcast",
         "import numpy as np\ndef f(a, b, out):\n    out[:] = np.maximum(a, b)\n",
@@ -75,7 +75,7 @@ _CASES = [
         {"a": "(N,)", "b": "(N,)", "out": "(N,)"},
         {},
     ),
-    # -- np.maximum with NaN in the data -- numpy PROPAGATES; fmax/fmin/Fortran MAX do not --------
+    # np.maximum with NaN in the data -- numpy PROPAGATES; fmax/fmin/Fortran MAX do not
     (
         "maximum_nan_propagation",
         "import numpy as np\ndef f(a, b, out):\n    out[:] = np.maximum(a, b)\n",
@@ -85,7 +85,7 @@ _CASES = [
         {"a": "(N,)", "b": "(N,)", "out": "(N,)"},
         _NAN_SUPPRESS,
     ),
-    # -- np.clip: in-range + clamp both ends (clip = maximum(minimum)) ----------------------------
+    # np.clip: in-range + clamp both ends (clip = maximum(minimum))
     (
         "clip_bounds",
         "import numpy as np\ndef f(a, out):\n    out[:] = np.clip(a, 0.0, 5.0)\n",
@@ -95,7 +95,7 @@ _CASES = [
         {"a": "(N,)", "out": "(N,)"},
         {},
     ),
-    # -- np.where: elementwise select (mandelbrot / go_fast idiom) ---------------------------------
+    # np.where: elementwise select (mandelbrot / go_fast idiom)
     (
         "where_select",
         "import numpy as np\ndef f(a, b, out):\n    out[:] = np.where(a > b, a, b)\n",
@@ -117,7 +117,7 @@ _CASES = [
         {"a": "(N,)", "out": "(N,)"},
         {},
     ),
-    # -- np.std (ddof=0 default): srad/azimint statistic ------------------------------------------
+    # np.std (ddof=0 default): srad/azimint statistic
     (
         "std_default",
         "import numpy as np\ndef f(a, out):\n    out[0] = np.std(a)\n",
@@ -127,7 +127,7 @@ _CASES = [
         {"a": "(N,)", "out": "(1,)"},
         {},
     ),
-    # -- np.tanh: transcendental (deep_learning / activation) ------------------------------------
+    # np.tanh: transcendental (deep_learning / activation)
     (
         "tanh_elementwise",
         "import numpy as np\ndef f(a, out):\n    out[:] = np.tanh(a)\n",
@@ -159,7 +159,7 @@ _CASES = [
         {"a": "(N,)", "out": "(N,)"},
         {},
     ),
-    # -- np.sign: value + NaN -- numpy sign(nan)=nan, C (x>0)-(x<0) gives 0 -----------------------
+    # np.sign: value + NaN -- numpy sign(nan)=nan, C (x>0)-(x<0) gives 0
     (
         "sign_with_nan",
         "import numpy as np\ndef f(a, out):\n    out[:] = np.sign(a)\n",
@@ -193,12 +193,10 @@ def test_weird_intrinsic_matches_numpy(label, src, inputs, out_shape, syms, shap
     _skip(status, label)
 
 
-# ------------------------------------------------------------------------------------------------
 # Dtype-sensitive edges (int64 width, float32 precision). These need a non-float64 ``dtypes``
 # override, which the float64-only parametrized table above cannot thread, so each is a dedicated
 # test. They target the numpyto_c (C / C++) width + precision lowering; a non-owned backend that
 # genuinely cannot express the edge carries a documented skip.
-# ------------------------------------------------------------------------------------------------
 
 
 def test_int_cast_past_2_31() -> None:

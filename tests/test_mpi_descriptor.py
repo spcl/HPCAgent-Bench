@@ -41,7 +41,7 @@ def _dist_1d(scheme, parts, block_size: int = 1):
     return Grid((parts,)), ArrayDist(axes=(AxisDist(grid_dim=0, scheme=scheme, block_size=block_size),))
 
 
-# --- Grid rank <-> coords is a bijection --------------------------------------------
+# Grid rank <-> coords is a bijection
 
 
 @pytest.mark.parametrize("dims", [(1,), (4,), (2, 3), (2, 2, 2), (1, 4), (4, 1), (2, 1, 3)])
@@ -57,7 +57,7 @@ def test_grid_rank_coords_roundtrip(dims) -> None:
     assert len(seen) == g.nranks
 
 
-# --- 1D block bounds: balanced + contiguous + complete ------------------------------
+# 1D block bounds: balanced + contiguous + complete
 
 
 @pytest.mark.parametrize("n,parts", [(10, 3), (12, 4), (7, 4), (1, 4), (5, 5), (100, 7), (3, 8)])
@@ -76,7 +76,7 @@ def test_block_bounds_partition_and_balance(n, parts) -> None:
     assert max(sizes) - min(sizes) <= 1
 
 
-# --- the big roundtrip matrix -------------------------------------------------------
+# the big roundtrip matrix
 
 _SHAPES_1D = [(12,), (13,), (1,), (7,), (256,)]
 _SHAPES_2D = [(6, 6), (7, 5), (5, 7), (1, 9), (9, 1), (2, 2)]
@@ -144,7 +144,7 @@ def test_roundtrip_nd_leading_axis(shape, scheme) -> None:
         assert is_partition(shape, dist, g)
 
 
-# --- block-cyclic ownership formula -------------------------------------------------
+# block-cyclic ownership formula
 
 
 def test_block_cyclic_owner_formula() -> None:
@@ -157,7 +157,7 @@ def test_block_cyclic_owner_formula() -> None:
         assert got == want
 
 
-# --- factor_grid + default_distribution ---------------------------------------------
+# factor_grid + default_distribution
 
 
 @pytest.mark.parametrize("nranks", [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 16, 17])
@@ -179,7 +179,7 @@ def test_default_distribution_is_a_roundtrip_partition(nranks, shape) -> None:
     assert is_partition(shape, dist, g)
 
 
-# --- edge: more ranks than elements along the axis ----------------------------------
+# edge: more ranks than elements along the axis
 
 
 @pytest.mark.parametrize("scheme", ["block", "block_cyclic", "cyclic"])
@@ -193,7 +193,7 @@ def test_more_ranks_than_elements(scheme) -> None:
     assert np.array_equal(back, a)
 
 
-# --- negatives + edge cases the invariants themselves must catch --------------------
+# negatives + edge cases the invariants themselves must catch
 
 
 def test_is_partition_false_for_overlapping_dist() -> None:
@@ -227,7 +227,7 @@ def test_default_distribution_rejects_grid_wider_than_array() -> None:
         default_distribution((12,), Grid((2, 2)))
 
 
-# --- Descriptor.from_submission: semantic layer over the raw distribution dict -------
+# Descriptor.from_submission: semantic layer over the raw distribution dict
 
 
 def _binding_2d() -> Binding:
@@ -382,7 +382,7 @@ def test_local_size_scalars_no_shapes_leaves_symbols_global() -> None:
     assert d2.local_size_scalars({"N": 8}, 0)["N"] == 4
 
 
-# --- Nrow/Ncol decouple: a size symbol's per-rank value must be unambiguous -----------------
+# Nrow/Ncol decouple: a size symbol's per-rank value must be unambiguous
 
 
 def _binding_square() -> Binding:
@@ -492,7 +492,7 @@ def test_local_size_scalars_allows_symbol_on_count_equivalent_schemes() -> None:
     assert d.local_size_scalars({"LEN": 16}, 0)["LEN"] == 4
 
 
-# --- A real v2 no-halo kernel: CLOUDSC column physics decomposed over `klon` --------------
+# A real v2 no-halo kernel: CLOUDSC column physics decomposed over `klon`
 
 
 def _split_over_klon(binding: Binding, ranks: int) -> dict:
@@ -573,7 +573,7 @@ def test_cloudsc_weak_scaling_grows_only_klon() -> None:
     assert sized["klon"] == 8192 * 4 and sized["nlev"] == 90
 
 
-# --- Block-cyclic on an equal-edge processor hypercube -------------------------------------
+# Block-cyclic on an equal-edge processor hypercube
 
 
 @pytest.mark.parametrize("nranks,ndim,dims", [(4, 1, (4,)), (4, 2, (2, 2)), (8, 3, (2, 2, 2)), (9, 2, (3, 3))])
@@ -625,7 +625,7 @@ def test_envelope_allows_block_cyclic_on_equal_hypercube() -> None:
     )
 
 
-# --- 2-D block-cyclic builder: default for block_cyclic/grid_ndim>1 kernels -----------
+# 2-D block-cyclic builder: default for block_cyclic/grid_ndim>1 kernels
 
 
 def test_blockcyclic_builder_deals_leading_axes_over_hypercube() -> None:
@@ -687,7 +687,7 @@ def test_distribution_from_shapes_emits_block_cyclic_width() -> None:
     assert cyc["arrays"]["A"]["axes"][0] == {"grid_dim": 0, "scheme": "cyclic"}
 
 
-# --- Per-array residency: any array on host or device, independently -----------------------
+# Per-array residency: any array on host or device, independently
 
 
 def test_from_submission_captures_per_array_location() -> None:

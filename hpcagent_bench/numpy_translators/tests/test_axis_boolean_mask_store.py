@@ -110,9 +110,7 @@ def test_an_array_rhs_over_a_masked_axis_is_declined() -> None:
         emit_c(lower(parse_kernel(d / "am_numpy.py", d / "bi.json")), fn_name="am")
 
 
-# --------------------------------------------------------------------------- #
 # A mask that ranks BELOW the target: ``A[m] = v`` is ``A[m, :] = v``          #
-# --------------------------------------------------------------------------- #
 
 #: cp2k_density_matrix_trs4's filter step: a per-row norm test zeroing whole rows of a
 #: (nblocks, bs * bs) buffer. Checked against the WHOLE shape the mask never matched, so it fell to

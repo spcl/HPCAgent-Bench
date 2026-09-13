@@ -25,9 +25,7 @@ from hpcagent_bench.support.sanitize import build_name_map, mangle, strip_commen
 
 TREE_SITTER = tree_sitter_available()
 
-# --------------------------------------------------------------------------- #
 # Sample snippets
-# --------------------------------------------------------------------------- #
 
 C_SRC = """\
 // leading comment mentioning relu and kernel
@@ -57,9 +55,7 @@ def relu(a):
     return [helper(v) for v in a]
 '''
 
-# --------------------------------------------------------------------------- #
 # Comment stripping
-# --------------------------------------------------------------------------- #
 
 
 def test_strip_comments_c_removes_all_comments() -> None:
@@ -90,9 +86,7 @@ def test_strip_comments_python_removes_comments_and_keeps_strings() -> None:
     assert "def helper(x):" in out
 
 
-# --------------------------------------------------------------------------- #
 # License / attribution preservation
-# --------------------------------------------------------------------------- #
 
 APP_PY = """\
 # All content is under Creative Commons Attribution CC-BY 4.0,
@@ -182,9 +176,7 @@ def test_paren_c_only_notice_preserved() -> None:
     assert "(c) 2020 Jane Doe" in out
 
 
-# --------------------------------------------------------------------------- #
 # Name map construction
-# --------------------------------------------------------------------------- #
 
 
 def test_build_name_map_ordering_and_precedence() -> None:
@@ -204,9 +196,7 @@ def test_build_name_map_dedups() -> None:
     assert len(nm) == 2
 
 
-# --------------------------------------------------------------------------- #
 # Mangling
-# --------------------------------------------------------------------------- #
 
 
 def test_mangle_c_consistent_and_boundary_safe() -> None:
@@ -261,9 +251,7 @@ def test_mangle_python_consistent() -> None:
     assert "for v in a" in out
 
 
-# --------------------------------------------------------------------------- #
 # Compilation gate
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not available")
@@ -278,9 +266,7 @@ def test_mangled_c_still_compiles() -> None:
     assert proc.returncode == 0, f"gcc rejected mangled C:\n{proc.stderr}"
 
 
-# --------------------------------------------------------------------------- #
 # tree-sitter parity (only when installed)
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.skipif(

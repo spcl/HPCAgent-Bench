@@ -66,7 +66,7 @@ def test_call_point_carries_the_attempt_wall_clock() -> None:
     assert CallPoint(1, 0, 1.5, True, "ok", 12.5).seconds == 12.5
 
 
-# --------------------------- the loop, with a fake agent --------------------------- #
+# the loop, with a fake agent
 class RecordingAgent(Agent):
     """Records the prompt of every attempt and always fails to build, so the loop keeps going."""
 

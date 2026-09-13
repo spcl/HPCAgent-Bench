@@ -36,13 +36,21 @@ import itertools
 import math
 import os
 import re
-from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple, Union
+from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 from numpyto_common import dtypes
 from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR, SymbolDesc, stamp_symbol_assumptions
 from numpyto_common.ordered import OrderedSet
 from numpyto_common.subscripts import has_slice_subscript, is_ellipsis, is_full_slice
 from numpyto_common.numpy_desugar import np_submodule_attr
+from numpyto_common.statement_desugar import (
+    DesugarArrayIteration,
+    SplitChainedAssign,
+    bind,
+    element_read,
+    indexed_loop,
+    pair_names,
+)
 from numpyto_common.lib_nodes import (
     ARRAY_METHOD_SHAPE_OPS,
     ArrayMethodRewriter,
@@ -1211,64 +1219,14 @@ class _ScalarTimesMatmulRewriter(ast.NodeTransformer):
         return node
 
 
-class _ArrayIterRewriter(ast.NodeTransformer):
-    """Rewrite ``for x in arr:`` into ``for __i in range(N): x = arr[__i]``.
-
-    Numpy / Python permits direct iteration over an array (each iteration
-    yields one element of the leading axis). C / Fortran have no
-    equivalent, so we desugar to a counted loop with a leading-axis
-    subscript. ``arr`` must be a bare Name whose shape is known --
-    otherwise the loop falls through unchanged for downstream emit to
-    flag.
-
-    Records each loop-var's source array name in :attr:`var_to_array`
-    so the emitter can inherit the element dtype (``for b in data:``
-    where ``data`` is ``uint8`` should declare ``b`` as ``uint8_t``).
-    """
-
-    def __init__(self, shape_table) -> None:
-        self.shape_table = shape_table
-        self._counter = [0]
-        #: Mapping from synthesised loop-var name to the source array.
-        self.var_to_array: Dict[str, str] = {}
-
-    def visit_For(self, node: ast.For) -> ast.AST:
-        self.generic_visit(node)
-        if isinstance(node.iter, ast.Name) and isinstance(node.target, ast.Name):
-            shape = self.shape_table.get(node.iter.id)
-            if shape:
-                self._counter[0] += 1
-                iv = f"__ai{self._counter[0]}"
-                self.var_to_array[node.target.id] = node.iter.id
-                # Build the per-iteration assignment ``x = arr[__i]``.
-                preamble = ast.Assign(
-                    targets=[ast.Name(id=node.target.id, ctx=ast.Store())],
-                    value=ast.Subscript(
-                        value=ast.Name(id=node.iter.id, ctx=ast.Load()),
-                        slice=ast.Name(id=iv, ctx=ast.Load()),
-                        ctx=ast.Load(),
-                    ),
-                )
-                bound = (
-                    ast.Constant(value=int(shape[0])) if shape[0].isdigit() else ast.Name(id=shape[0], ctx=ast.Load())
-                )
-                return ast.For(
-                    target=ast.Name(id=iv, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[bound], keywords=[]),
-                    body=[preamble] + node.body,
-                    orelse=node.orelse,
-                )
-        return node
-
-
 class _EnumerateZipRewriter(ast.NodeTransformer):
     """Desugar ``for x in enumerate(arr):`` and ``for x in zip(a, b):``
     to plain ``for __i in range(N):`` with the per-iteration assignments
     inlined as the first statement of the loop body.
     """
 
-    def __init__(self, shape_table) -> None:
-        self.shape_table = shape_table
+    def __init__(self, extent_of: Callable[[str], Optional[ast.expr]]) -> None:
+        self.extent_of = extent_of
 
     @staticmethod
     def _enumerate_start(call: ast.Call) -> ast.expr:
@@ -1310,71 +1268,30 @@ class _EnumerateZipRewriter(ast.NodeTransformer):
                     )
                     out.extend(copy.deepcopy(stmt) for stmt in node.body)
                 return out
-            if it.func.id == "enumerate" and it.args and isinstance(it.args[0], ast.Name):
-                arr = it.args[0]
-                shape = self.shape_table.get(arr.id)
-                if shape and isinstance(node.target, ast.Tuple) and len(node.target.elts) == 2:
-                    idx_name, val_name = node.target.elts[0], node.target.elts[1]
-                    start = self._enumerate_start(it)
-                    ei = "__ei"
+            pair = pair_names(node.target)
+            if pair is not None and it.func.id == "enumerate" and it.args and isinstance(it.args[0], ast.Name):
+                sequence = it.args[0].id
+                extent = self.extent_of(sequence)
+                if extent is not None:
                     # idx = start + __ei ; val = arr[__ei]
-                    idx_assign = ast.Assign(
-                        targets=[ast.Name(id=idx_name.id, ctx=ast.Store())],
-                        value=ast.BinOp(left=copy.deepcopy(start), op=ast.Add(), right=ast.Name(id=ei, ctx=ast.Load())),
+                    position = ast.BinOp(
+                        left=copy.deepcopy(self._enumerate_start(it)),
+                        op=ast.Add(),
+                        right=ast.Name(id="__ei", ctx=ast.Load()),
                     )
-                    val_assign = ast.Assign(
-                        targets=[ast.Name(id=val_name.id, ctx=ast.Store())],
-                        value=ast.Subscript(
-                            value=ast.Name(id=arr.id, ctx=ast.Load()),
-                            slice=ast.Name(id=ei, ctx=ast.Load()),
-                            ctx=ast.Load(),
-                        ),
-                    )
-                    new_for = ast.For(
-                        target=ast.Name(id=ei, ctx=ast.Store()),
-                        iter=ast.Call(
-                            func=ast.Name(id="range", ctx=ast.Load()),
-                            args=[ast.Name(id=shape[0], ctx=ast.Load())],
-                            keywords=[],
-                        ),
-                        body=[idx_assign, val_assign] + node.body,
-                        orelse=node.orelse,
-                    )
-                    return new_for
-            if it.func.id == "zip" and len(it.args) == 2 and all(isinstance(a, ast.Name) for a in it.args):
-                a, b = it.args
-                shape = self.shape_table.get(a.id)
-                if shape and isinstance(node.target, ast.Tuple) and len(node.target.elts) == 2:
-                    x_name, y_name = node.target.elts[0], node.target.elts[1]
-                    new_for = ast.For(
-                        target=ast.Name(id="__zi", ctx=ast.Store()),
-                        iter=ast.Call(
-                            func=ast.Name(id="range", ctx=ast.Load()),
-                            args=[ast.Name(id=shape[0], ctx=ast.Load())],
-                            keywords=[],
-                        ),
-                        body=[
-                            ast.Assign(
-                                targets=[ast.Name(id=x_name.id, ctx=ast.Store())],
-                                value=ast.Subscript(
-                                    value=ast.Name(id=a.id, ctx=ast.Load()),
-                                    slice=ast.Name(id="__zi", ctx=ast.Load()),
-                                    ctx=ast.Load(),
-                                ),
-                            ),
-                            ast.Assign(
-                                targets=[ast.Name(id=y_name.id, ctx=ast.Store())],
-                                value=ast.Subscript(
-                                    value=ast.Name(id=b.id, ctx=ast.Load()),
-                                    slice=ast.Name(id="__zi", ctx=ast.Load()),
-                                    ctx=ast.Load(),
-                                ),
-                            ),
-                        ]
-                        + node.body,
-                        orelse=node.orelse,
-                    )
-                    return new_for
+                    binds = [bind(pair[0], position), bind(pair[1], element_read(sequence, "__ei"))]
+                    return indexed_loop(node, "__ei", extent, binds)
+            if (
+                pair is not None
+                and it.func.id == "zip"
+                and len(it.args) == 2
+                and all(isinstance(a, ast.Name) for a in it.args)
+            ):
+                left, right = it.args[0].id, it.args[1].id
+                extent = self.extent_of(left)
+                if extent is not None:
+                    binds = [bind(pair[0], element_read(left, "__zi")), bind(pair[1], element_read(right, "__zi"))]
+                    return indexed_loop(node, "__zi", extent, binds)
         return node
 
 
@@ -2406,8 +2323,27 @@ def _ctor_shape_arg(call: ast.Call) -> Optional[ast.expr]:
     return None
 
 
+def is_scalar_helper_call(node: ast.AST, scalar_helpers: Optional[Set[str]]) -> bool:
+    """Whether ``node`` calls a kernel helper emitted as a by-value SCALAR function.
+
+    Such a call is rank 0 whatever its arguments are. :func:`_iter_extent_of` reads a call it does
+    not recognise as ELEMENTWISE and answers with the broadcast join of the arguments, which sizes
+    a reduction's scalar result like the array it reduces -- and the caller then broadcasts the
+    call over that buffer, one invocation per element.
+    """
+    return (
+        bool(scalar_helpers)
+        and isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in scalar_helpers
+    )
+
+
 def _harvest_local_shapes(
-    tree: ast.AST, shape_table: Dict[str, Tuple[str, ...]], dtype_table: Optional[Dict[str, str]] = None
+    tree: ast.AST,
+    shape_table: Dict[str, Tuple[str, ...]],
+    dtype_table: Optional[Dict[str, str]] = None,
+    scalar_helpers: Optional[Set[str]] = None,
 ) -> None:
     """Pre-scan the body for ``name = np.<alloc>(...)`` and seed the
     shape table with the inferred output shapes.
@@ -2473,15 +2409,17 @@ def _harvest_local_shapes(
         # solve(A, b)`` like the SQUARE A rather than like b. A 1-D b then has
         # its reads padded to a phantom second dim (``x[i]`` -> ``x[i, :]``).
         # Register what the solve / inv / cholesky expanders actually write.
-        _lin_op = np_submodule_attr(rhs, "linalg")
-        if _lin_op in ("solve", "inv", "cholesky"):
+        linalg_op = np_submodule_attr(rhs, "linalg")
+        if linalg_op in ("solve", "inv", "cholesky"):
             # ``solve`` returns x with b's shape; ``inv`` / ``cholesky`` are
             # shape-preserving in their single operand.
-            _src_arg = rhs.args[1] if _lin_op == "solve" and len(rhs.args) >= 2 else (rhs.args[0] if rhs.args else None)
-            if isinstance(_src_arg, ast.Name):
-                _src_shape = shape_table.get(_src_arg.id)
-                if _src_shape:
-                    shape_table[target.id] = tuple(_src_shape)
+            source_arg = (
+                rhs.args[1] if linalg_op == "solve" and len(rhs.args) >= 2 else (rhs.args[0] if rhs.args else None)
+            )
+            if isinstance(source_arg, ast.Name):
+                linalg_source_shape = shape_table.get(source_arg.id)
+                if linalg_source_shape:
+                    shape_table[target.id] = tuple(linalg_source_shape)
             continue
         if not (
             isinstance(rhs, ast.Call)
@@ -2489,6 +2427,8 @@ def _harvest_local_shapes(
             and isinstance(rhs.func.value, ast.Name)
             and rhs.func.value.id == "np"
         ):
+            if is_scalar_helper_call(rhs, scalar_helpers):
+                continue
             # Last-ditch: a BinOp / UnaryOp / Compare / BoolOp / Subscript
             # whose operands have known shapes -- mirror the (broadcast /
             # slice / gather) extent. Lets the harvest see ``x = a + b``, a
@@ -3204,85 +3144,403 @@ def _advanced_runs(dims: List[ast.AST]) -> List[List[int]]:
     return runs
 
 
-class _CollapseChainedSubscripts(ast.NodeTransformer):
-    """Collapse a chained subscript ``A[i][j]`` into a single ``A[i, j]``.
+#: Where one result axis of a subscript comes from, so two spellings compare axis for axis:
+#: ``("axis", i)`` inner slice i, ``("trail", t)`` the t-th base axis after the inner's entries,
+#: ``("rest", 0)`` every base axis after those, ``("adv", k)`` / ``("outer", k)`` the k-th broadcast
+#: axis of the inner / outer index arrays, ``("new", i)`` the newaxis at outer entry i.
+AxisLabel = Tuple[str, int]
+#: One subscript entry as numpy lays out its result: a ``"slice"`` or ``"newaxis"`` keeps its one
+#: labelled axis, a ``"scalar"`` keeps none, an ``"array"`` keeps its right-aligned broadcast axes.
+IndexEntry = Tuple[str, Tuple[AxisLabel, ...]]
 
-    Helper inlining leaves chained indexing where the source sliced a view then
-    indexed it -- vexx_k's ``tabxx_qr[ia][:, ijtoh[ih, jh]]`` (a real-space
-    Q-table column) and ``becxx[:, jbnd, ikq][ikb]`` (a beta-projection row).
-    numpy basic indexing associates: ``A[i][rest] == A[i, rest]`` for a scalar
-    ``i``, and an index applied to a full-slice axis selects that axis
-    (``A[:, j, k][m] == A[m, j, k]``). Flattening to a SINGLE subscript up front
-    lets every downstream shape harvest / scalarizer / scatter path treat the
-    access uniformly, instead of mis-mapping a loop iterator onto the inner ``:``
-    (which corrupts the fancy-scatter store and the dot-product operand).
 
-    Conservative: every inner index must be a scalar or a FULL ``:`` slice, and the
-    outer indices must fit the surviving (slice + trailing) axes -- any partial slice,
-    strided slice, gather, or ``newaxis`` in the inner subscript is left untouched.
+def result_axes(entries: Sequence[IndexEntry]) -> Optional[List[AxisLabel]]:
+    """numpy's result-axis order for one subscript, or ``None`` when its index arrays do not line up.
 
-    The base's shape is only needed to count the axes the inner subscript did NOT name,
-    which the outer indices reach only after exhausting the inner ``:`` positions. When
-    they do not (``A[:, :, :, 0][:, :, 0]``, what a double ``np.squeeze(.., axis=-1)``
-    rewrites to), the mapping is the same at every rank, so an unknown base collapses too
-    -- which is what lets this run BEFORE the shape harvest, early enough for the SSA
-    rank-rebind rename to see the real result rank.
+    Slices and newaxes keep their axes in order. The broadcast axes of the index arrays sit where the
+    advanced entries (arrays AND scalars) are when those form one unbroken run, and move to the FRONT
+    once a slice or newaxis separates them.
+    """
+    kept = [axes[0] for kind, axes in entries if kind in ("slice", "newaxis")]
+    arrays = [axes for kind, axes in entries if kind == "array"]
+    if not arrays:
+        return kept
+    broadcast: List[AxisLabel] = []
+    for offset in range(max(len(axes) for axes in arrays), 0, -1):
+        labels = OrderedSet(axes[-offset] for axes in arrays if len(axes) >= offset)
+        if len(labels) != 1:
+            return None
+        broadcast.extend(labels)
+    advanced = [kind in ("scalar", "array") for kind, axes in entries]
+    first = advanced.index(True)
+    last = len(advanced) - 1 - advanced[::-1].index(True)
+    if not all(advanced[first : last + 1]):
+        return broadcast + kept
+    before = sum(1 for kind, axes in entries[:first] if kind in ("slice", "newaxis"))
+    return kept[:before] + broadcast + kept[before:]
+
+
+def index_rank(elt: ast.expr, shape_table: Mapping[str, Sequence[str]]) -> Optional[int]:
+    """Rank of what a subscript entry selects with: 0 for one position, ``k`` for an index array of
+    rank ``k``, ``None`` when a sized array feeds the entry but its result cannot be sized."""
+    if not any(isinstance(n, ast.Name) and shape_table.get(n.id) for n in ast.walk(elt)):
+        return 0
+    extent = _iter_extent_of(elt, shape_table)
+    if extent:
+        return len(extent)
+    if isinstance(elt, ast.Subscript) and isinstance(elt.value, ast.Name):
+        dims = _slice_dims(elt)
+        if len(dims) == len(shape_table.get(elt.value.id) or ()) and all(
+            not isinstance(d, ast.Slice)
+            and not _is_newaxis(d)
+            and not is_ellipsis(d)
+            and index_rank(d, shape_table) == 0
+            for d in dims
+        ):
+            return 0  # every axis picked by one position: ``ijtoh[ih, jh]``
+    return None
+
+
+def reads_a_mask(elt: ast.expr, bool_names: FrozenSet[str] | Set[str]) -> bool:
+    """Whether an index entry may be a boolean mask, which selects by value rather than position."""
+    return any(
+        isinstance(n, (ast.Compare, ast.BoolOp)) or (isinstance(n, ast.Name) and n.id in bool_names)
+        for n in ast.walk(elt)
+    )
+
+
+def compose_onto_view(view: ast.Slice, use: ast.expr, use_is_array: bool) -> Optional[ast.expr]:
+    """The entry for the base axis ``view`` kept, once ``use`` indexes that kept axis, or ``None``
+    when a single entry cannot say it."""
+    if is_full_slice(view):
+        return use
+    if is_full_slice(use):
+        return view
+    if isinstance(use, ast.Slice):
+        return _compose_kept_axis(view, use) if _rebases_onto_view_axis(view, use) else None
+    from_end = (isinstance(use, ast.UnaryOp) and isinstance(use.op, ast.USub)) or (
+        isinstance(use, ast.Constant) and isinstance(use.value, int) and use.value < 0
+    )
+    if view.step is not None or from_end or not (use_is_array or _is_scalar_index(use)):
+        return None  # a stride, or a position counted from the view's END, is not ``lower + use``
+    return use if view.lower is None else ast.BinOp(left=copy.deepcopy(view.lower), op=ast.Add(), right=use)
+
+
+def entry_model(elt: ast.expr, rank: int, label: AxisLabel, broadcast_rank: int, family: str) -> IndexEntry:
+    """The layout of one entry: a slice or newaxis keeps ``label``, an index array its right-aligned
+    axes of the ``family`` broadcast."""
+    if _is_newaxis(elt):
+        return ("newaxis", (label,))
+    if isinstance(elt, ast.Slice):
+        return ("slice", (label,))
+    if rank == 0:
+        return ("scalar", ())
+    return ("array", tuple((family, broadcast_rank - rank + axis) for axis in range(rank)))
+
+
+def index_slot(entries: List[ast.expr]) -> ast.expr:
+    """The ``slice`` field for a subscript with ``entries``."""
+    return entries[0] if len(entries) == 1 else ast.Tuple(elts=entries, ctx=ast.Load())
+
+
+#: Field values that can hold no subscript, so a chain scan never descends into them.
+LEAF_TYPES = frozenset(
+    {type(None), str, int, float, complex, bool, bytes, type(Ellipsis), ast.Name, ast.Constant}
+    | {
+        leaf
+        for family in (ast.expr_context, ast.operator, ast.unaryop, ast.cmpop, ast.boolop)
+        for leaf in family.__subclasses__()
+    }
+)
+
+
+def outermost_chains(tree: ast.AST) -> List[Tuple[ast.AST, str, Optional[int], ast.Subscript]]:
+    """``(parent, field, position, chain)`` for every ``A[i][j]`` under ``tree`` that no other chain
+    contains; ``position`` is ``None`` for a single-node field."""
+    found: List[Tuple[ast.AST, str, Optional[int], ast.Subscript]] = []
+    stack: List[ast.AST] = [tree]
+    while stack:
+        node = stack.pop()
+        values = vars(node)
+        for field in node._fields:
+            value = values.get(field)
+            kind = type(value)
+            if kind in LEAF_TYPES:
+                continue
+            for pos, item in enumerate(value) if kind is list else ((None, value),):
+                if type(item) in LEAF_TYPES:
+                    continue
+                if type(item) is ast.Subscript and type(item.value) is ast.Subscript:
+                    found.append((node, field, pos, item))
+                elif isinstance(item, ast.AST):
+                    stack.append(item)
+    return found
+
+
+class ChainedSubscriptFlattener(ast.NodeTransformer):
+    """Rewrite a chained subscript ``A[inner][outer]`` into one that selects the same elements in the
+    same axis order.
+
+    Helper inlining leaves these where the source sliced a view and indexed it -- vexx_k's
+    ``tabxx_qr[ia][:, ijtoh[ih, jh]]`` and ``becxx[:, jbnd, ikq][ikb]``. The outer entries index the
+    inner's RESULT axes in order, and each composes with what made its axis: a bare ``:`` takes it
+    as-is, a partial slice rebases it (``a[1:3][0]`` -> ``a[1 + 0]``), an index array's axis indexes
+    INTO the array (``A[idx][j]`` -> ``A[idx[j]]``), and an axis after the inner's entries takes it
+    appended (``psi[f][..., 0]`` -> ``psi[f, ..., 0]``).
+
+    numpy moves the broadcast axes of advanced indices to the FRONT once a slice separates them, so
+    ``A[2][:3, idx]`` (3, P) and ``A[2, :3, idx]`` (P, 3) differ. The flat form is emitted only when
+    :func:`result_axes` lays both out the same. Otherwise the chain stays two-step with its outer
+    slices folded inward, ``A[2, :3][:, idx]``, which numpy lays out like the original.
+
+    ``explicit_trailing_axes`` spells out every base axis a known rank names (``A[i][j]`` on rank 3 ->
+    ``A[i, j, :]``), for phases whose consumers look for an explicit ``Slice``. ``bool_names`` are
+    masks: ``A[mask][j]`` is not ``A[mask[j]]``.
     """
 
-    def __init__(self, shape_table: Dict[str, Tuple[str, ...]]) -> None:
+    def __init__(
+        self,
+        shape_table: Mapping[str, Sequence[str]],
+        *,
+        bool_names: FrozenSet[str] | Set[str] = frozenset(),
+        explicit_trailing_axes: bool = False,
+    ) -> None:
         self.shape_table = shape_table
+        self.bool_names = bool_names
+        self.explicit_trailing_axes = explicit_trailing_axes
+
+    def visit(self, node: ast.AST) -> ast.AST:
+        """Rewrite every chain under ``node``; only a chain's own subtree pays the transformer walk."""
+        if type(node) is ast.Subscript and type(node.value) is ast.Subscript:
+            return self.visit_Subscript(node)
+        for parent, field, pos, chain in outermost_chains(node):
+            rewritten = self.visit_Subscript(chain)
+            if pos is None:
+                vars(parent)[field] = rewritten
+            else:
+                vars(parent)[field][pos] = rewritten
+        return node
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
-        self.generic_visit(node)  # collapse inner chains first (bottom-up)
-        inner = node.value
-        if not isinstance(inner, ast.Subscript) or not isinstance(inner.value, ast.Name):
+        self.generic_visit(node)  # bottom-up: a longer chain arrives with its inner already rewritten
+        if not isinstance(node.value, ast.Subscript):
             return node
-        base_shape = self.shape_table.get(inner.value.id)
-        inner_idx = _slice_dims(inner)
-        outer_idx = _slice_dims(node)
-        # A newaxis or ellipsis in either subscript shifts the axis alignment by an
-        # unknown number of axes -- basic-index associativity no longer holds, bail.
-        if any(isinstance(x, ast.Constant) and (x.value is None or x.value is Ellipsis) for x in inner_idx + outer_idx):
-            return node
-        # Map inner indices onto base axes: a full ``:`` survives as a result axis,
-        # a scalar consumes its axis. Anything else (partial / strided slice, or a
-        # fancy index-array) bails.
-        new_idx: List[ast.AST] = []
-        result_axes: List[int] = []
-        for ix in inner_idx:
-            if is_full_slice(ix):
-                result_axes.append(len(new_idx))
-                new_idx.append(ix)
-            elif isinstance(ix, ast.Slice):
-                return node
-            elif isinstance(ix, ast.Name) and ix.id in self.shape_table:
-                # An inner index that is itself an ARRAY is a fancy GATHER, not a
-                # scalar axis-consume: ``A[idx][j] == A[idx[j]]`` (a gathered row),
-                # NOT the ``A[idx, j]`` a collapse would emit. numpy basic-index
-                # associativity does not hold for an advanced index, so leave the
-                # chain untouched (the docstring's gather exclusion).
-                return node
+        rewritten = self.rewrite_chain(node, node.value)
+        return node if rewritten is None else ast.copy_location(rewritten, node)
+
+    def entry_ranks(self, elts: List[ast.expr]) -> Optional[List[int]]:
+        """:func:`index_rank` per entry, or ``None`` when one is unsized or may be a mask."""
+        ranks: List[int] = []
+        for elt in elts:
+            if isinstance(elt, ast.Slice):
+                ranks.append(0)
+                continue
+            # A mask local has no shape-table entry, so index_rank reports it as one position.
+            rank = None if reads_a_mask(elt, self.bool_names) else index_rank(elt, self.shape_table)
+            if rank is None:
+                return None
+            ranks.append(rank)
+        return ranks
+
+    def rewrite_chain(self, node: ast.Subscript, inner: ast.Subscript) -> Optional[ast.expr]:
+        """The single or folded two-step form of ``inner[outer]``, or ``None`` to keep the chain."""
+        base = inner.value
+        shape = self.shape_table.get(base.id) if isinstance(base, ast.Name) else None
+        rank = len(shape) if shape else None
+        inner_elts = _slice_dims(inner)
+        ellipses = [pos for pos, elt in enumerate(inner_elts) if is_ellipsis(elt)]
+        if ellipses:
+            if len(ellipses) > 1 or rank is None or rank < len(inner_elts) - 1:
+                return None
+            width = rank - len(inner_elts) + 1
+            inner_elts[ellipses[0] : ellipses[0] + 1] = [ast.Slice() for axis in range(width)]
+        if any(_is_newaxis(elt) for elt in inner_elts) or (rank is not None and len(inner_elts) > rank):
+            return None
+        if self.explicit_trailing_axes and rank is not None:
+            inner_elts.extend(ast.Slice() for axis in range(rank - len(inner_elts)))
+        outer_elts = _slice_dims(node)
+        inner_ranks = self.entry_ranks(inner_elts)
+        outer_ranks = self.entry_ranks(outer_elts)
+        if inner_ranks is None or outer_ranks is None:
+            return None
+        if any(is_ellipsis(elt) for elt in outer_elts):
+            # An Ellipsis spans an uncounted number of axes: only appending after a scalar inner is exact.
+            if any(inner_ranks) or any(outer_ranks) or any(isinstance(elt, ast.Slice) for elt in inner_elts):
+                return None
+            return ast.Subscript(value=base, slice=index_slot([*inner_elts, *outer_elts]), ctx=node.ctx)
+
+        adv_rank = max(inner_ranks, default=0)
+        inner_model = [
+            entry_model(elt, elt_rank, ("axis", pos), adv_rank, "adv")
+            for pos, (elt, elt_rank) in enumerate(zip(inner_elts, inner_ranks))
+        ]
+        consuming = sum(1 for elt in outer_elts if not _is_newaxis(elt))
+        trail_count = rank - len(inner_elts) if rank is not None else consuming
+        tail_labels: List[AxisLabel] = [("trail", t) for t in range(trail_count)]
+        if rank is None:
+            tail_labels.append(("rest", 0))
+        inner_axes = result_axes([*inner_model, *(("slice", (label,)) for label in tail_labels)])
+        if inner_axes is None or consuming > sum(1 for label in inner_axes if label[0] != "rest"):
+            return None
+
+        slots: List[ast.expr] = list(inner_elts)
+        slot_models: List[IndexEntry] = list(inner_model)
+        slot_newaxes: List[List[int]] = [[] for elt in inner_elts]
+        tail: List[Tuple[ast.expr, IndexEntry]] = []
+        adv_uses: Dict[int, Tuple[ast.expr, IndexEntry]] = {}
+        adv_newaxes: Dict[int, List[int]] = {}
+        folded_inner: List[ast.expr] = list(inner_elts)
+        folded_tail: List[ast.expr] = []
+        folded_outer: List[ast.expr] = list(outer_elts)
+        folded = False
+        flat_ok = True
+        outer_rank = max(outer_ranks, default=0)
+        outer_model: List[IndexEntry] = []
+        pending: List[int] = []
+        consumed = 0
+        for i, (elt, elt_rank) in enumerate(zip(outer_elts, outer_ranks)):
+            if _is_newaxis(elt):
+                outer_model.append(("newaxis", (("new", i),)))
+                pending.append(i)
+                continue
+            label = inner_axes[consumed]
+            consumed += 1
+            if pending and newaxis_after_last_gather(label, inner_axes, consumed - 1, adv_rank):
+                return None
+            self.attach_newaxes(pending, label, slot_newaxes, adv_newaxes, tail)
+            pending.clear()
+            model = entry_model(elt, elt_rank, label, outer_rank, "outer")
+            outer_model.append(model)
+            kind, index = label
+            if kind == "adv":
+                adv_uses[index] = (elt, model)
+                continue
+            if kind == "axis":
+                composed = compose_onto_view(inner_elts[index], elt, elt_rank > 0)
+                if composed is None:
+                    flat_ok = False
+                    continue
+                slots[index] = composed
+                slot_models[index] = model
+                if isinstance(elt, ast.Slice) and not is_full_slice(elt):
+                    folded_inner[index] = composed
             else:
-                new_idx.append(ix)
-        # Base axes the inner subscript did not name are trailing result axes. Unknown base
-        # -> none can be named here; the outer indices then have to fit the inner's own ``:``
-        # positions, where the mapping does not depend on the rank.
-        if not base_shape:
-            trailing = 0
+                tail.append((elt, model))
+                if isinstance(elt, ast.Slice) and not is_full_slice(elt):
+                    folded_tail.extend(ast.Slice() for gap in range(index - len(folded_tail)))
+                    folded_tail.append(elt)
+            if isinstance(elt, ast.Slice) and not is_full_slice(elt):
+                folded_outer[i] = ast.Slice()
+                folded = True
+        if pending:
+            label = inner_axes[consumed] if consumed < len(inner_axes) else ("rest", 0)
+            if newaxis_after_last_gather(label, inner_axes, consumed, adv_rank):
+                return None
+            self.attach_newaxes(
+                pending,
+                label,
+                slot_newaxes,
+                adv_newaxes,
+                tail,
+            )
+        outer_model.extend(("slice", (label,)) for label in inner_axes[consumed:])
+        expected = result_axes(outer_model)
+
+        arrays = [pos for pos, elt_rank in enumerate(inner_ranks) if elt_rank > 0]
+        if len(arrays) > 1 and any(not is_full_slice(use) for use, model in adv_uses.values()):
+            flat_ok = flat_ok and self.same_broadcast_extents([inner_elts[pos] for pos in arrays])
+        for pos in arrays if flat_ok else ():
+            indexed = self.index_into_array(inner_elts[pos], inner_ranks[pos], adv_rank, adv_uses, adv_newaxes)
+            if indexed is None:
+                flat_ok = False
+                break
+            slots[pos], slot_models[pos] = indexed
+        if flat_ok and expected is not None:
+            entries: List[ast.expr] = []
+            layout: List[IndexEntry] = []
+            for pos, slot in enumerate(slots):
+                entries.extend(ast.Constant(value=None) for i in slot_newaxes[pos])
+                layout.extend(("newaxis", (("new", i),)) for i in slot_newaxes[pos])
+                entries.append(slot)
+                layout.append(slot_models[pos])
+            entries.extend(entry for entry, model in tail)
+            layout.extend(model for entry, model in tail)
+            used_trails = sum(1 for label in inner_axes[:consumed] if label[0] == "trail")
+            layout.extend(("slice", (label,)) for label in tail_labels[used_trails:])
+            if result_axes(layout) == expected:
+                return ast.Subscript(value=base, slice=index_slot(entries), ctx=node.ctx)
+        if not folded:
+            return None
+        folded_base = ast.Subscript(value=base, slice=index_slot([*folded_inner, *folded_tail]), ctx=ast.Load())
+        return ast.Subscript(value=folded_base, slice=index_slot(folded_outer), ctx=node.ctx)
+
+    @staticmethod
+    def attach_newaxes(
+        pending: List[int],
+        label: AxisLabel,
+        slot_newaxes: List[List[int]],
+        adv_newaxes: Dict[int, List[int]],
+        tail: List[Tuple[ast.expr, IndexEntry]],
+    ) -> None:
+        """Place the outer newaxes that sit just before result axis ``label``."""
+        kind, index = label
+        if kind == "axis":
+            slot_newaxes[index].extend(pending)
+        elif kind == "adv":
+            adv_newaxes.setdefault(index, []).extend(pending)
         else:
-            trailing = len(base_shape) - len(new_idx)
-            if trailing < 0:
-                return node
-        for _ in range(trailing):
-            result_axes.append(len(new_idx))
-            new_idx.append(ast.Slice())
-        # The outer indices apply positionally to the surviving result axes.
-        if len(outer_idx) > len(result_axes):
-            return node
-        for oi, ax in zip(outer_idx, result_axes):
-            new_idx[ax] = oi
-        slot = new_idx[0] if len(new_idx) == 1 else ast.Tuple(elts=new_idx, ctx=ast.Load())
-        return ast.copy_location(ast.Subscript(value=inner.value, slice=slot, ctx=node.ctx), node)
+            tail.extend((ast.Constant(value=None), ("newaxis", (("new", i),))) for i in pending)
+
+    def same_broadcast_extents(self, arrays: List[ast.expr]) -> bool:
+        """Whether index arrays share every broadcast axis at one extent, so indexing one axis of each
+        never indexes a length-1 axis that was only broadcast."""
+        extents: List[Tuple[ast.expr, ...]] = []
+        for array in arrays:
+            extent = _iter_extent_of(array, self.shape_table)
+            if extent is None:
+                return False
+            extents.append(extent)
+        for offset in range(1, max(len(extent) for extent in extents) + 1):
+            if len(OrderedSet(ast.unparse(extent[-offset]) for extent in extents if len(extent) >= offset)) > 1:
+                return False
+        return True
+
+    def index_into_array(
+        self,
+        array: ast.expr,
+        array_rank: int,
+        broadcast_rank: int,
+        uses: Dict[int, Tuple[ast.expr, IndexEntry]],
+        newaxes: Dict[int, List[int]],
+    ) -> Optional[Tuple[ast.expr, IndexEntry]]:
+        """``array`` indexed by the outer entries that landed on its broadcast axes, with its layout."""
+        entries: List[ast.expr] = []
+        model: List[IndexEntry] = []
+        for axis in range(array_rank):
+            k = broadcast_rank - array_rank + axis
+            entries.extend(ast.Constant(value=None) for i in newaxes.get(k, []))
+            model.extend(("newaxis", (("new", i),)) for i in newaxes.get(k, []))
+            use = uses.get(k)
+            entries.append(ast.Slice() if use is None else copy.deepcopy(use[0]))
+            model.append(("slice", (("adv", k),)) if use is None else use[1])
+        labels = result_axes(model)
+        if labels is None:
+            return None
+        while entries and is_full_slice(entries[-1]):
+            entries.pop()
+        layout: IndexEntry = ("array", tuple(labels)) if labels else ("scalar", ())
+        if not entries:
+            return array, layout
+        indexed = ast.Subscript(value=array, slice=index_slot(entries), ctx=ast.Load())
+        return (self.visit_Subscript(indexed) if isinstance(array, ast.Subscript) else indexed), layout
+
+
+def newaxis_after_last_gather(label: AxisLabel, inner_axes: List[AxisLabel], position: int, adv_rank: int) -> bool:
+    """Whether outer newaxes just before result axis ``inner_axes[position]`` sit right after the index
+    arrays' LAST broadcast axis (``A[idx][:, None]``). No flat form survives that: at base level
+    (``A[idx, None]``) and inside the array (``A[idx[:, None]]``) the scalarizers read the newaxis as one
+    more gathered axis, so the chain stays two-step."""
+    return label[0] != "adv" and position > 0 and inner_axes[position - 1] == ("adv", adv_rank - 1)
 
 
 def _name_of_subscript(node: ast.Subscript) -> Optional[str]:
@@ -3342,97 +3600,6 @@ def _shift_index(idx: ast.AST, offset: ast.AST) -> ast.AST:
     return _binop(idx, ast.Add(), copy.deepcopy(offset))
 
 
-class _ChainedSubscriptFlattener(ast.NodeTransformer):
-    """Flatten a chained subscript ``A[i0, i1, ...][rest]`` into the single
-    combined subscript ``A[i0, i1, ..., rest]`` -- but ONLY when the inner
-    index is entirely SCALAR (int / Name), so each inner index consumes a
-    leading source axis and the outer index continues on the remaining axes
-    (exactly numpy combined basic indexing). ``psi_frag[f][..., 0]`` ->
-    ``psi_frag[f, ..., 0]``. A ``Slice``/``Ellipsis``/``newaxis`` inner index is
-    NOT flattened -- ``A[1:3][0]`` != ``A[1:3, 0]`` -- so those are left intact.
-    Runs before the ellipsis/scalarize passes so they only ever see a subscript
-    whose base is a Name."""
-
-    def __init__(self, shape_table: Optional[Dict[str, Tuple[str, ...]]] = None) -> None:
-        #: Known array shapes, used only to tell a scalar index Name from an index ARRAY.
-        #: Empty means "assume every bare Name is a scalar", the pre-gather-aware behaviour.
-        self.shape_table = shape_table or {}
-
-    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
-        self.generic_visit(node)  # collapse nested chains bottom-up first
-        inner = node.value
-        if not isinstance(inner, ast.Subscript):
-            return node
-        inner_elts = list(inner.slice.elts) if isinstance(inner.slice, ast.Tuple) else [inner.slice]
-        if not all(_is_scalar_index(e) for e in inner_elts):
-            return self._index_through_full_slices(node, inner, inner_elts)
-        # A bare Name that is a known ARRAY is an advanced index, and numpy basic-index
-        # associativity does not hold for one: ``A[idx][j] == A[idx[j]]``, NOT ``A[idx, j]``.
-        # Collapsing it produced a subscript with more indices than the base has axes, and the
-        # scalarizer then handed the outer iterators to the wrong axes -- ``x[aj][:, None, :, :]``
-        # came out as ``x[aj[si0, si1], si2, :, :]``.
-        if any(isinstance(n, ast.Name) and self.shape_table.get(n.id) for e in inner_elts for n in ast.walk(e)):
-            return node
-        outer_elts = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
-        combined = inner_elts + outer_elts
-        # numpy's FRONT-PLACEMENT rule: a plain integer counts as an advanced index beside an index
-        # array, and once the advanced indices are SEPARATED by a slice their broadcast result moves
-        # to the front of the result shape. ``A[2][:3, idx]`` is (3, 2) while ``A[2, :3, idx]`` is
-        # (2, 3) -- flattening the chain silently TRANSPOSES it. Splitting a run is the whole test:
-        # ``A[2][idx]`` keeps one run and composes exactly.
-        if any(isinstance(n, ast.Name) and self.shape_table.get(n.id) for e in outer_elts for n in ast.walk(e)) and len(
-            _advanced_runs(combined)
-        ) > len(_advanced_runs(outer_elts)):
-            return node
-        return ast.copy_location(
-            ast.Subscript(value=inner.value, slice=ast.Tuple(elts=combined, ctx=ast.Load()), ctx=node.ctx), node
-        )
-
-    def _index_through_full_slices(
-        self, node: ast.Subscript, inner: ast.Subscript, inner_elts: List[ast.expr]
-    ) -> ast.AST:
-        """``A[:, :, :h][:, k]`` -> ``A[:, k, :h]``: an outer index lands on the axis the inner
-        slice at the same result position left whole.
-
-        The outer subscript indexes the inner's RESULT, whose axes are the inner's SLICE positions
-        in order, so outer entry ``i`` composes with slice position ``i``. A bare ``:`` leaves the
-        source axis as it was, so a scalar outer index substitutes straight into it. A PARTIAL
-        slice shifts the origin -- ``a[1:3][0]`` is ``a[1]`` -- so the index composes as
-        ``lower + k`` instead. A slice-valued outer entry rebases the same way, through
-        :func:`_compose_kept_axis` (``out[:s, :s][:, 0::2]`` -> ``out[:s, 0:s:2]``, the db2 wavelet
-        pass filtering a quadrant view). An index array declines: it is advanced indexing, which
-        does not compose this way.
-        """
-        outer_elts = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
-        if any(_is_newaxis(e) or is_ellipsis(e) for e in inner_elts + outer_elts):
-            return node  # a newaxis / Ellipsis shifts which source axis a position names
-        combined = list(inner_elts)
-        slice_positions = [i for i, e in enumerate(combined) if isinstance(e, ast.Slice)]
-        if len(outer_elts) > len(slice_positions):
-            return node
-        for outer, position in zip(outer_elts, slice_positions):
-            if is_full_slice(outer):
-                continue  # selects the whole result axis, so the inner slice stands unchanged
-            inner_slice = combined[position]
-            if any(isinstance(n, ast.Name) and self.shape_table.get(n.id) for n in ast.walk(outer)):
-                return node  # an index ARRAY is advanced indexing, which does not compose this way
-            if isinstance(outer, ast.Slice):
-                if not _rebases_onto_view_axis(inner_slice, outer):
-                    return node
-                combined[position] = _compose_kept_axis(inner_slice, outer)
-                continue
-            if not (_is_scalar_index(outer) and inner_slice.step is None):
-                return node
-            combined[position] = (
-                outer
-                if inner_slice.lower is None
-                else ast.BinOp(left=copy.deepcopy(inner_slice.lower), op=ast.Add(), right=outer)
-            )
-        return ast.copy_location(
-            ast.Subscript(value=inner.value, slice=ast.Tuple(elts=combined, ctx=ast.Load()), ctx=node.ctx), node
-        )
-
-
 def _is_scalar_index(elt: ast.expr) -> bool:
     """A subscript element that selects (consumes) a single source axis: an int
     Constant, a bare Name (loop iter / symbol), or integer ARITHMETIC over those
@@ -3467,7 +3634,7 @@ class _EllipsisExpander(ast.NodeTransformer):
     """Replace ``...`` (Ellipsis) in a subscript with the explicit full slices
     it stands for, using the array's rank: ``a[..., 0]`` on a 3-D array ->
     ``a[:, :, 0]``. Chained subscripts are flattened to a Name base first by
-    _ChainedSubscriptFlattener; a base that is an EXPRESSION is sized through
+    ChainedSubscriptFlattener; a base that is an EXPRESSION is sized through
     :func:`_iter_extent_of`, which is all the rank costs."""
 
     def __init__(self, array_shapes: Dict[str, List[str]]) -> None:
@@ -3992,57 +4159,6 @@ def _fold_slice_view_aliases(tree: ast.AST, array_shapes: Dict[str, List[str]]) 
     return OrderedSet(name for name in good if name not in live)
 
 
-class _FlattenChainedSubscripts(ast.NodeTransformer):
-    """Flatten a chained subscript ``B[inner][outer]`` into ONE combined subscript
-    ``B[combined]`` -- the outer index addresses the axes the inner FULL-slices, in
-    order. ``deexx[:, ii][ikb]`` -> ``deexx[ikb, ii]``; ``tabxx_qr[ia, :, :][:, k]``
-    -> ``tabxx_qr[ia, :, k]``. Unlike :func:`_fold_subarray_aliases` (scalar-prefix
-    aliases), this handles slices interleaved in the inner index and applies to any
-    chained subscript, not just single-assign aliases -- the QE ultrasoft
-    augmentation reads ``tabxx_qr[ia][:, ijtoh[ih, jh]]`` / ``deexx[:, ii][ikb]``.
-    A non-full inner slice (``a[1:5][k]``) carries an offset the flat combine can't
-    express, so it is left untouched."""
-
-    def __init__(self, shapes: Dict[str, List[str]]) -> None:
-        self.shapes = shapes
-
-    @staticmethod
-    def _is_special(e) -> bool:  # np.newaxis (``None``) / Ellipsis -- rank-shifting
-        return isinstance(e, ast.Constant) and (e.value is None or e.value is Ellipsis)
-
-    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
-        self.generic_visit(node)  # flatten inner chains first (bottom-up)
-        inner = node.value
-        if not (isinstance(inner, ast.Subscript) and isinstance(inner.value, ast.Name)):
-            return node
-        shape = self.shapes.get(inner.value.id)
-        if not shape:
-            return node
-        rank = len(shape)
-        inner_idx = list(inner.slice.elts) if isinstance(inner.slice, ast.Tuple) else [inner.slice]
-        if len(inner_idx) > rank or any(self._is_special(e) for e in inner_idx):
-            return node
-        inner_idx = inner_idx + [ast.Slice() for _ in range(rank - len(inner_idx))]  # pad trailing ``:``
-        if any(isinstance(e, ast.Slice) and not is_full_slice(e) for e in inner_idx):
-            return node
-        outer_idx = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
-        n_kept = sum(1 for e in inner_idx if isinstance(e, ast.Slice))
-        if len(outer_idx) != n_kept or any(self._is_special(e) for e in outer_idx):
-            return node
-        combined: List[ast.expr] = []
-        oi = 0
-        for e in inner_idx:
-            if isinstance(e, ast.Slice):
-                combined.append(copy.deepcopy(outer_idx[oi]))
-                oi += 1
-            else:
-                combined.append(copy.deepcopy(e))
-        sl = ast.Tuple(elts=combined, ctx=ast.Load()) if len(combined) > 1 else combined[0]
-        return ast.copy_location(
-            ast.Subscript(value=ast.Name(id=inner.value.id, ctx=ast.Load()), slice=sl, ctx=node.ctx), node
-        )
-
-
 def _refuse_scalarising_a_contraction(value: ast.expr) -> None:
     """Raise if ``value`` still holds an array-level ``@``.
 
@@ -4126,6 +4242,8 @@ class SliceFusion(ast.NodeTransformer):
 
     def __init__(self, array_shapes: Dict[str, List[str]]) -> None:
         self.array_shapes = array_shapes
+        #: Monotonic id for the invariant-read temps staged ahead of a fused nest.
+        self.invariant_ctr: List[int] = [0]
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
@@ -4198,8 +4316,12 @@ class SliceFusion(ast.NodeTransformer):
             ctx=ast.Store(),
         )
 
+        # A loop-invariant ELEMENT read of the array this statement writes is served from a
+        # slot a previous iteration may already have stored to, so it is staged ahead of the
+        # nest -- see :class:`_HoistInvariantSelfReads`.
+        hoister = _HoistInvariantSelfReads(lhs_name, self.array_shapes, self.invariant_ctr)
         rhs_rewriter = _SliceToScalarRewriter(self.array_shapes, iter_vars, ranges, lhs_name, lhs_dims)
-        new_rhs = rhs_rewriter.visit(copy.deepcopy(value))
+        new_rhs = rhs_rewriter.visit(hoister.visit(copy.deepcopy(value)))
         # A top-level RHS Name (``corr[i+1:M, i] = __mm4``) isn't visited by
         # NodeTransformer unless asked -- subscriptify it explicitly.
         new_rhs = rhs_rewriter._maybe_subscriptify(new_rhs)
@@ -4224,6 +4346,8 @@ class SliceFusion(ast.NodeTransformer):
                     orelse=[],
                 )
             ]
+        if hoister.staged:
+            return [*hoister.staged, *body]
         return body[0] if len(body) == 1 else body
 
     def _axis_length(self, array_name: str, axis: int) -> ast.AST:
@@ -4289,6 +4413,75 @@ class SliceFusion(ast.NodeTransformer):
         if k is not None:
             return _binop(self._axis_length(name, axis), ast.Sub(), _const(k))
         return idx
+
+
+#: Prefix of the temps :class:`_HoistInvariantSelfReads` stages ahead of a fused loop nest.
+INVARIANT_SELF_READ_PREFIX = "__sfinv"
+
+
+class _HoistInvariantSelfReads(ast.NodeTransformer):
+    """Stage every loop-invariant ELEMENT read of the array a fused assignment writes.
+
+    :class:`SliceFusion` turns ``A[k, k:] = A[k, k:] / A[k, k]`` into a loop that stores one
+    element per iteration, and the ``si1 == k`` iteration overwrites the pivot ``A[k, k]``:
+    every later iteration then divides by the value it just stored. numpy evaluates the whole
+    RHS against the PRE-assignment array, so the pivot is read once, ahead of the nest. The
+    Gauss-elimination family (``row -= factor * pivot_row``) is where this bites.
+
+    Invariance is decided structurally -- full rank, no ``Slice``, no newaxis, no index array
+    in any axis -- so the staged value is by construction the one every iteration would have
+    loaded. That is why staging is also correct for a NON-aliasing kernel (cholesky / lu read
+    ``A[k, k]`` while writing rows ``k + 1:``): same value, one load instead of a trip count's
+    worth. A read under an ``IfExp`` / ``BoolOp`` keeps its guard -- hoisting past the test
+    that exists to keep the element from being addressed would fault where numpy does not.
+    """
+
+    def __init__(self, lhs_name: str, array_shapes: Dict[str, List[str]], counter: List[int]) -> None:
+        self.lhs_name = lhs_name
+        self.array_shapes = array_shapes
+        self.counter = counter
+        #: ``<name> = <read>`` assignments to place before the nest, in staging order.
+        self.staged: List[ast.stmt] = []
+        self._by_source: Dict[str, str] = {}
+
+    def visit_IfExp(self, node: ast.IfExp) -> ast.AST:
+        return node
+
+    def visit_BoolOp(self, node: ast.BoolOp) -> ast.AST:
+        return node
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)
+        if not self._is_invariant_element(node):
+            return node
+        key = ast.unparse(node)
+        name = self._by_source.get(key)
+        if name is None:
+            self.counter[0] += 1
+            name = f"{INVARIANT_SELF_READ_PREFIX}{self.counter[0]}"
+            self._by_source[key] = name
+            self.staged.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=node))
+        return ast.Name(id=name, ctx=ast.Load())
+
+    def _is_invariant_element(self, node: ast.Subscript) -> bool:
+        """True when ``node`` reads ONE element of the written array at an index no iter var moves."""
+        if not (isinstance(node.value, ast.Name) and node.value.id == self.lhs_name):
+            return False
+        if not isinstance(node.ctx, ast.Load):
+            return False
+        rank = len(self.array_shapes.get(self.lhs_name) or ())
+        dims = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+        if rank == 0 or len(dims) != rank:
+            return False
+        for dim in dims:
+            if isinstance(dim, ast.Slice) or _is_newaxis(dim):
+                return False
+            if isinstance(dim, ast.Attribute) and dim.attr == "newaxis":
+                return False
+            # An index ARRAY makes the read a gather, whose result is not one element.
+            if any(isinstance(n, ast.Name) and n.id in self.array_shapes for n in ast.walk(dim)):
+                return False
+        return True
 
 
 class _SliceToScalarRewriter(ast.NodeTransformer):
@@ -5490,8 +5683,16 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
     ``__hpcagent_bench_zeros__()`` (which the emitter already swallows).
     """
 
-    def __init__(self, shapes: Dict[str, List[str]], local_dtypes: Optional[Dict[str, str]] = None) -> None:
+    def __init__(
+        self,
+        shapes: Dict[str, List[str]],
+        local_dtypes: Optional[Dict[str, str]] = None,
+        scalar_helpers: Optional[Set[str]] = None,
+    ) -> None:
         self.shapes: Dict[str, List[str]] = dict(shapes)
+        #: By-value scalar helpers -- see :func:`is_scalar_helper_call`. A call to one is rank 0
+        #: even though its ARGUMENTS carry slices (``bratu_dot(Q[p, :, :], w, N)``).
+        self.scalar_helpers: Set[str] = set(scalar_helpers or ())
         self.new_locals: Dict[str, Tuple[str, ...]] = {}
         # Side-effect: when the RHS contains a complex literal like
         # ``1j``, infer that the fresh local should be declared as
@@ -5509,6 +5710,8 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
             return node
         target = node.targets[0]
         if not isinstance(target, ast.Name):
+            return node
+        if is_scalar_helper_call(node.value, self.scalar_helpers):
             return node
         if not (has_slice_subscript(node.value) or self._is_array_binop(node.value)):
             return node
@@ -6861,7 +7064,14 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
     arithmetic in C and as undefined Fortran.
     """
 
-    def __init__(self, shape_table, real_arrays=None, local_dtypes=None, scalar_defs=None) -> None:
+    def __init__(
+        self,
+        shape_table: Dict[str, Any],
+        real_arrays: Optional[Set[str]] = None,
+        local_dtypes: Optional[Dict[str, str]] = None,
+        scalar_defs: Optional[Dict[str, ast.expr]] = None,
+        scalar_helpers: Optional[Set[str]] = None,
+    ) -> None:
         # We mutate ``shape_table`` to track Name aliases per Assign in
         # source order. Use a local copy so the caller's table is not
         # repeatedly clobbered when an alias gets reassigned.
@@ -6871,6 +7081,8 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
         #: is a genuinely NEW local whose shape the later slice-fusion pass needs;
         #: see :attr:`discovered_shapes`.
         self._input_keys = set(shape_table)
+        #: Kernel helpers emitted as by-value scalar functions -- see :func:`is_scalar_helper_call`.
+        self.scalar_helpers: Set[str] = set(scalar_helpers or ())
         #: Shared dtype tag table. Alias / BinOp expansions propagate
         #: dtype here so the emitter sees the right C type for a
         #: complex-RHS local that was never directly declared.
@@ -7460,7 +7672,11 @@ class _WholeArrayAssignRewriter(ast.NodeTransformer):
                 and node.value.func.id == "__hpcagent_bench_zeros__"
             )
         ):
-            ext = _iter_extent_of(node.value, self.shape_table)
+            ext = (
+                None
+                if is_scalar_helper_call(node.value, self.scalar_helpers)
+                else _iter_extent_of(node.value, self.shape_table)
+            )
             # All-size-1 broadcast -> a scalar local, not a ``T x[1]`` array (see extent_is_scalar).
             if ext is not None and not extent_is_scalar(ext):
                 self.shape_table[target.id] = tuple(ast.unparse(e) for e in ext)
@@ -8259,18 +8475,6 @@ class _SubscriptifyNames(ast.NodeTransformer):
         return node
 
 
-class _ChainedAssignRewriter(ast.NodeTransformer):
-    """Rewrite ``s0 = s1 = s2 = 0.0`` into three separate assignments."""
-
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
-        self.generic_visit(node)
-        if len(node.targets) <= 1:
-            return node
-        # ``a = b = c = X`` -> [a=X, b=X, c=X] in source order.
-        text = "\n".join(f"{ast.unparse(t)} = {ast.unparse(node.value)}" for t in node.targets)
-        return ast.parse(text).body
-
-
 def _target_base_name(node: ast.AST) -> Optional[str]:
     """Root name of an assignment target (``out[i][j]`` -> ``out``, a bare ``x``
     -> ``x``), or ``None`` when the target is not name-rooted."""
@@ -8666,6 +8870,9 @@ class LoweringContext:
         ] = None
         #: Target renders a dense 2-D float GEMM as a BLAS call; see :func:`lower`.
         self.blas: bool = False
+        #: By-value scalar helpers this IR can call but does not itself list -- a HELPER body's
+        #: own IR carries no helper list, so its siblings are handed down by :func:`lower`.
+        self.sibling_scalar_helpers: Set[str] = set()
         #: The working (lowered) IR -- what :func:`lower` returns.
         self.kir = lowered
         #: Shortcut to the function-body AST every pass rewrites in place.
@@ -8691,7 +8898,7 @@ class LoweringContext:
         #: re-used by the slice-normalise phase (both resolve ``__inl`` tokens).
         self.resolve_inl_table: Optional[Callable[[Dict], None]] = None
         # Rewriter handles whose post-visit state a later phase consumes.
-        self.iter_rewriter: Optional[_ArrayIterRewriter] = None
+        self.iter_rewriter: Optional[DesugarArrayIteration] = None
         self.wa_rewriter: Optional[_WholeArrayAssignRewriter] = None
         self.lib_rewriter: object = None
         self.zeros: Optional[_ZerosRewriter] = None
@@ -8769,16 +8976,24 @@ def _lp_normalize_calls(ctx: LoweringContext) -> None:
     # to a fresh temp so the index is a bare Name the backends emit; the spilled
     # ``__ix = np.argmax(...)`` is expanded by the later LibNode reduction pass.
     _ComputedIndexCallHoister().visit(tree)
-    ctx.iter_rewriter = _ArrayIterRewriter(ash)
+
+    def leading_extent(array: str) -> Optional[ast.expr]:
+        shape = ash.get(array)
+        return _token_to_ast(shape[0]) if shape else None
+
+    ctx.iter_rewriter = DesugarArrayIteration(leading_extent, lambda target, ordinal: f"__ai{ordinal + 1}")
     ctx.iter_rewriter.visit(tree)
-    _EnumerateZipRewriter(ash).visit(tree)
+    _EnumerateZipRewriter(leading_extent).visit(tree)
     _BuiltinCastRewriter().visit(tree)
     # The LOCAL array shapes too, exactly as the two later _MathRewriter sites do. With only
     # the declared arrays, an inlined helper's temps look like scalars, and np.maximum on two
     # of them took the scalar rename: __npb_fmax(double *, double *).
     _MathRewriter(set(ash.keys()) | set(ctx.lib_shape_table.keys()), defer_array_capable=True).visit(tree)
     _DaceMapRewriter().visit(tree)
-    _ChainedAssignRewriter().visit(tree)
+    # ``a = b = v``: ``v`` once -- a temp for a scalar, one name for an array's one buffer.
+    chain_ranks = {name: len(shape) for name, shape in ash.items()}
+    chain_ranks.update((desc.name, 0) for desc in (*ctx.kir.scalars, *ctx.kir.symbols))
+    SplitChainedAssign(lambda ordinal: f"__chain{ordinal}", seed_ranks=chain_ranks).visit(tree)
     tuple_rewriter = _TupleAssignRewriter(ash)
     tuple_rewriter.visit(tree)
     # Stash the int-locals so the emitter can declare them.
@@ -8819,7 +9034,7 @@ def _lp_pre_libnode_normalize(ctx: LoweringContext) -> None:
     # Pre-pass: collapse chained subscripts ``A[i][j]`` -> ``A[i, j]`` (vexx_k's
     # ``tabxx_qr[ia][:, ijtoh[ih, jh]]`` / ``becxx[:, jbnd, ikq][ikb]``) so the
     # harvest, scalarizers and fancy-scatter store all see a single-level access.
-    _CollapseChainedSubscripts(ctx.arrays_shapes).visit(tree)
+    ChainedSubscriptFlattener(ctx.arrays_shapes, bool_names=ctx.bool_names, explicit_trailing_axes=True).visit(tree)
     ast.fix_missing_locations(tree)
     # Pre-pass: lower ``Xi, Yi = np.mgrid[a:b, c:d]`` tuple-unpack assignments to a
     # pair of per-element init loops -- before the main harvest so the resulting
@@ -8846,6 +9061,12 @@ def _lp_pre_libnode_normalize(ctx: LoweringContext) -> None:
     # bound is the right symbol.
     _BooleanMaskReductionRewriter(ctx.arrays_shapes, ctx.bool_names).visit(tree)
     ast.fix_missing_locations(tree)
+
+
+def scalar_return_helpers(ctx: "LoweringContext") -> Set[str]:
+    """Names of the by-value SCALAR helpers reachable from the body being lowered."""
+    own = {h.kernel_name for h in ctx.original_kir.helpers if h.return_kind == "scalar"}
+    return own | ctx.sibling_scalar_helpers
 
 
 def _lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
@@ -8898,7 +9119,7 @@ def _lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
     # so each version registers under its own name and downstream passes (harvest /
     # LibNodeRewriter / lifter) see unambiguous shapes per local.
     _ssa_rename_reassigned(tree, ctx.arrays_shapes)
-    _harvest_local_shapes(tree, ctx.lib_shape_table, ctx.local_dtypes)
+    _harvest_local_shapes(tree, ctx.lib_shape_table, ctx.local_dtypes, scalar_return_helpers(ctx))
     # Unify a mixed real/complex conditional's branches (``d = z.real if flag else
     # z``) so Fortran ``merge`` (strict same-type) and the JIT type unifiers see a
     # uniform complex select instead of a real-vs-complex pair (QE vexx gamma_only
@@ -9004,7 +9225,7 @@ def _lp_normalize_index_access(ctx: LoweringContext) -> None:
     """Consolidated index-access normalisation, run once after every array shape is
     known (post ``resolve-inlined-shapes``). Three rewrites, in order:
 
-    1. :class:`_ChainedSubscriptFlattener` -- collapse a scalar-chained subscript
+    1. :class:`ChainedSubscriptFlattener` -- flatten a chained subscript
        ``A[f][..., 0]`` -> ``A[f, ..., 0]`` so the base is always a Name.
     2. :class:`_EllipsisExpander` -- replace ``...`` with the explicit full slices
        its array's rank implies (``a[..., 0]`` on a 3-D array -> ``a[:, :, 0]``).
@@ -9020,7 +9241,7 @@ def _lp_normalize_index_access(ctx: LoweringContext) -> None:
     which at this point holds only the declared arrays."""
     tree = ctx.tree
     shapes = ctx.lib_shape_table
-    _ChainedSubscriptFlattener(shapes).visit(tree)
+    ChainedSubscriptFlattener(shapes, bool_names=ctx.bool_names).visit(tree)
     _EllipsisExpander(shapes).visit(tree)
     _PadImplicitTrailingSlices(shapes).visit(tree)
     # Re-fold ``<array-expr>.shape`` / ``.shape[k]`` now that every post-inline
@@ -9092,6 +9313,7 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
     # by the zeros pass as local arrays.
     ctx.lib_rewriter = LibNodeRewriter(
         ctx.lib_shape_table,
+        scalar_helpers=scalar_return_helpers(ctx),
         known_arrays=set(ctx.arrays_shapes.keys()),
         local_dtypes=ctx.local_dtypes,
         sparse=ctx.original_kir.sparse,
@@ -9277,6 +9499,7 @@ def _lp_whole_array_and_zeros(ctx: LoweringContext) -> None:
         real_arrays,
         local_dtypes=ctx.local_dtypes,
         scalar_defs=_collect_inlined_scalar_defs(tree, None),
+        scalar_helpers=scalar_return_helpers(ctx),
     )
     ctx.wa_rewriter.visit(tree)
     # Fold the shapes the whole-array pass inferred for genuinely-new locals
@@ -9345,7 +9568,7 @@ def _lp_slice_normalize_and_lift(ctx: LoweringContext) -> None:
     # index, then fold scalar-prefix sub-array aliases (``low = A[i, j]; low[k]`` ->
     # ``A[i, j, k]``, xsbench). Trailing-slice padding is done once, earlier, in the
     # ``normalize-index-access`` phase.
-    _FlattenChainedSubscripts(shapes).visit(tree)
+    ChainedSubscriptFlattener(shapes, bool_names=ctx.bool_names, explicit_trailing_axes=True).visit(tree)
     _fold_subarray_aliases(tree, shapes)
     # Fold a name bound to a partial/strided VIEW (a real Slice with bounds/step,
     # not just a scalar prefix) into every further-subscripted use, composing the
@@ -9364,7 +9587,9 @@ def _lp_slice_normalize_and_lift(ctx: LoweringContext) -> None:
     # a ``Name = np.zeros(extent); Name[:] = expr`` pair so slice fusion can lower
     # the per-element loop. Computes the shape from the iteration extent of the RHS,
     # registers the new local in both ``shapes`` and ``zeros_locals``.
-    ctx.lifter = _LiftFreshArrayFromSlices(shapes, local_dtypes=ctx.local_dtypes)
+    ctx.lifter = _LiftFreshArrayFromSlices(
+        shapes, local_dtypes=ctx.local_dtypes, scalar_helpers=scalar_return_helpers(ctx)
+    )
     new_locals = ctx.lifter.run(tree)
     if new_locals:
         for name, shape in new_locals.items():
@@ -9560,7 +9785,10 @@ def _lp_lower_helpers(ctx: LoweringContext) -> None:
     return-extraction is a parse_kernel step, not a lowering pass)."""
     for helper in ctx.original_kir.helpers:
         retype_int_helper_scalars(helper)
-    ctx.kir.helpers = [lower(h) for h in ctx.original_kir.helpers]
+    # A helper body calls its SIBLINGS, and its own IR lists none of them; hand the by-value
+    # scalar ones down so the shape passes read such a call as rank 0 rather than elementwise.
+    siblings = scalar_return_helpers(ctx)
+    ctx.kir.helpers = [lower(h, scalar_helpers=siblings) for h in ctx.original_kir.helpers]
 
 
 #: The lowering pipeline as data: an ordered list of ``(name, phase)`` pairs run
@@ -9735,6 +9963,7 @@ def lower(
         Callable[[Tuple[str, str], ast.Call, Dict[str, Tuple[str, ...]], Dict[str, str]], bool]
     ] = None,
     blas: bool = False,
+    scalar_helpers: Optional[Set[str]] = None,
 ) -> KernelIR:
     """Return a lowered copy of ``kir`` ready for backend emission.
 
@@ -9769,6 +9998,7 @@ def lower(
     ctx = LoweringContext(kir, copy.deepcopy(kir))
     ctx.native_call = native_call
     ctx.blas = blas
+    ctx.sibling_scalar_helpers = set(scalar_helpers or ())
     for _name, _phase in _LOWER_PHASES:
         _phase(ctx)
         if check is not None:
@@ -9845,6 +10075,78 @@ _INT_PRESERVING_OPS = (
     ast.BitOr,
     ast.BitXor,
 )
+
+
+def integer_valued_locals(kir: KernelIR) -> Set[str]:
+    """Body-computed scalar locals that provably hold an INTEGER value.
+
+    Shared by the C and Fortran emitters: a local absent from every dtype table otherwise falls
+    back to the kernel float type, and then an integer accumulator that grows past 2**53 (``h = 1``
+    then ``h = h * 3`` for 35 rounds) is silently rounded -- no cast, no warning, just the wrong
+    last digits -- while a padded allocation extent becomes a REAL array bound gfortran rejects
+    under ``-std=f2018``.
+
+    Greatest fixpoint: every unpinned assigned local starts ASSUMED integer, then any local
+    with an assignment whose right-hand side is not provably integer under the current
+    assumption is dropped, until nothing changes. The optimistic start is what lets a
+    self-referential accumulator hold (``h = h * 3`` needs ``h`` integer to prove ``h``
+    integer); the drop rule is what keeps ``x = 0.5`` and reads of float arrays out. Names
+    whose dtype is already pinned (params, arrays, ``local_dtypes``) are never candidates --
+    they only feed the right-hand-side test."""
+    pinned: Dict[str, bool] = {a.name: dtypes.is_integer(a.dtype) for a in kir.arrays}
+    pinned.update({s.name: dtypes.is_integer(s.dtype) for s in kir.scalars})
+    pinned.update({n: dtypes.is_integer(dt) for n, dt in kir.local_dtypes.items()})
+    for name in kir.int_locals:
+        pinned[name] = True
+    for sym in kir.symbols:
+        pinned[sym.name] = True
+    # Assignments per candidate; a for-loop target is emitted as an int64 counter.
+    assigns: Dict[str, List[ast.expr]] = {}
+    for node in ast.walk(kir.tree):
+        if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+            pinned[node.target.id] = True
+        elif isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name):
+                    assigns.setdefault(tgt.id, []).append(node.value)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            assigns.setdefault(node.target.id, []).append(ast.BinOp(left=node.target, op=node.op, right=node.value))
+    candidates = {n for n in assigns if n not in pinned}
+    assumed = candidates | {n for n, is_int in pinned.items() if is_int}
+    array_dtypes = {a.name: a.dtype for a in kir.arrays}
+
+    def provable(node: ast.AST) -> bool:
+        if isinstance(node, ast.Constant):
+            return isinstance(node.value, int) and not isinstance(node.value, bool)
+        if isinstance(node, ast.Name):
+            return node.id in assumed
+        if isinstance(node, ast.Subscript):
+            base = node.value
+            while isinstance(base, ast.Subscript):
+                base = base.value
+            if not isinstance(base, ast.Name):
+                return False
+            dt = kir.local_dtypes.get(base.id) or array_dtypes.get(base.id)
+            return dt is not None and dtypes.is_integer(dt)
+        if isinstance(node, ast.BinOp):
+            return isinstance(node.op, _INT_PRESERVING_OPS) and provable(node.left) and provable(node.right)
+        if isinstance(node, ast.UnaryOp):
+            return isinstance(node.op, (ast.USub, ast.UAdd, ast.Invert)) and provable(node.operand)
+        if isinstance(node, ast.IfExp):
+            return provable(node.body) and provable(node.orelse)
+        # int(x) / len(x) are integer whatever the argument is.
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            return node.func.id in ("int", "len")
+        return False
+
+    changed = True
+    while changed:
+        changed = False
+        for name in sorted(candidates & assumed):
+            if not all(provable(v) for v in assigns[name]):
+                assumed.discard(name)
+                changed = True
+    return candidates & assumed
 
 
 def _integer_bindings(fn: ast.FunctionDef, name: str) -> List[ast.expr]:

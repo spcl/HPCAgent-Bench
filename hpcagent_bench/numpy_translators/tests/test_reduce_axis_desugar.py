@@ -30,9 +30,7 @@ def _kir(kernel_name, **arrays):
     return SimpleNamespace(kernel_name=kernel_name, arrays=arrs)
 
 
-# --------------------------------------------------------------------------- #
 # axis parsing: negative literals + tuple forms                               #
-# --------------------------------------------------------------------------- #
 
 
 def test_const_int_handles_negation() -> None:
@@ -56,9 +54,7 @@ def test_axis_list_normalizes_negative_and_tuple() -> None:
     assert _axis_list(parse("(1, 2, 3)"), 2) is None
 
 
-# --------------------------------------------------------------------------- #
 # the rewrite: keepdims, sum, tuple axis                                       #
-# --------------------------------------------------------------------------- #
 
 
 def test_negative_axis_now_reduces() -> None:
@@ -117,9 +113,7 @@ def test_reduce_axis_stmts_mean_divides_by_element_count() -> None:
     assert "/ (__rd0_d1 * __rd0_d2)" in body  # divisor is the product of reduced dims
 
 
-# --------------------------------------------------------------------------- #
 # body-usage rank evidence (fixes the reshaped-local poisoning)               #
-# --------------------------------------------------------------------------- #
 
 
 def test_param_body_rank_evidence_from_shape_and_subscript() -> None:
@@ -150,9 +144,7 @@ def test_body_evidence_overrides_poisoned_callsite_rank() -> None:
     assert "[]" not in got  # no scalar-index over-reduction was emitted
 
 
-# --------------------------------------------------------------------------- #
 # numerical: bit-exact vs numpy on numba (the reduction the raw njit rejects)  #
-# --------------------------------------------------------------------------- #
 # numba is the backend these reductions block (keepdims / tuple axis raise a
 # TypingError when njit'd verbatim); the op-oracle now emits through the same
 # desugar the real oracle uses, so ``ok`` here means genuinely-lowered-and-exact.
@@ -186,9 +178,7 @@ def test_tuple_axis_pool_matches_numpy_on_numba() -> None:
     )
 
 
-# --------------------------------------------------------------------------- #
 # method-form reductions on an EXPRESSION receiver                            #
-# --------------------------------------------------------------------------- #
 # ``X.sum(...)`` only ever reached the expanders when X was a bare Name. An
 # expression receiver walked through to the emitter and died there as "call to
 # ((data - mean) ** 2).sum not supported" (correlation, nbody, vgg16, srad and

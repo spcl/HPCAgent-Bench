@@ -28,7 +28,7 @@ def _run(src, ins, outs, syms, shapes):
 _X = np.linspace(-2.0, 2.0, 6)
 _A = np.arange(24, dtype=np.float64).reshape(4, 6)
 
-# --- np.inf / np.nan (Fortran ieee_value) --------------------------------- #
+# np.inf / np.nan (Fortran ieee_value)
 
 
 def test_neg_inf_masking() -> None:
@@ -53,7 +53,7 @@ def test_nan_fill() -> None:
     assert ok, res
 
 
-# --- np.flip (N-D, axis-aware) --------------------------------------------- #
+# np.flip (N-D, axis-aware)
 
 
 def test_flip_axis0_and_axis1() -> None:
@@ -79,7 +79,7 @@ def test_flip_all_axes() -> None:
     assert ok, res
 
 
-# --- np.reshape(-1) -------------------------------------------------------- #
+# np.reshape(-1)
 
 
 def test_reshape_row_neg1() -> None:
@@ -108,7 +108,7 @@ def test_reshape_neg1_on_intermediate_local() -> None:
     assert ok, res
 
 
-# --- np.ones_like (was missing from NP_ZEROS_ALIASES) ---------------------- #
+# np.ones_like (was missing from NP_ZEROS_ALIASES)
 
 
 def test_ones_like() -> None:

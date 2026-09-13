@@ -519,11 +519,9 @@ def correctness_iterations() -> int:
     return config.get_int("fuzz.correctness_iterations")
 
 
-# --------------------------------------------------------------------------- #
 # configs x shapes: enumerate the config space, and sample shapes against a
 # FIXED config namespace (the perf protocol times every config crossed with a
 # small set of shapes -- see docs/DESIGN_perf_protocol_configs_shapes.md).
-# --------------------------------------------------------------------------- #
 
 #: ``max_configs`` value meaning NO cap. The cap bounds how much we TIME; it must
 #: never bound what we GRADE -- a config that is never evaluated is a branch the

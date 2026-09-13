@@ -179,41 +179,55 @@ def test_roll_sliced_self_assign() -> None:
     assert ok, res
 
 
-# --------------------------------------------------------------------------- #
 # Chained gather: associativity does NOT hold for an advanced index            #
-# --------------------------------------------------------------------------- #
 
 
-def test_chained_gather_is_not_flattened_into_one_subscript() -> None:
+def test_chained_gather_composes_the_outer_index_into_the_index_array() -> None:
     """``A[idx][j] == A[idx[j]]``, NOT ``A[idx, j]``.
 
-    Flattening it produced a subscript with more indices than the base has axes, and the
-    scalarizer then handed the outer iterators to the wrong axes.
+    Flattening positionally produced a subscript with more indices than the base has axes, and the
+    scalarizer then handed the outer iterators to the wrong axes. An outer entry that lands on a
+    gathered axis indexes the index array instead, a newaxis between two of them included.
     """
     import ast as _ast
 
-    from numpyto_common.lowering import _ChainedSubscriptFlattener
+    from numpyto_common.lowering import ChainedSubscriptFlattener
+
+    x = np.arange(12.0).reshape(4, 3)
+    aj = np.array([[2, 0], [1, 3], [3, 3]])
+    assert np.array_equal(x[aj][:, None, :, :], x[aj[:, None], :])
 
     tree = _ast.parse("y = x[aj][:, None, :, :]")
-    _ChainedSubscriptFlattener({"x": ("n", "3"), "aj": ("p", "j")}).visit(tree)
-    assert _ast.unparse(tree).strip() == "y = x[aj][:, None, :, :]"
+    ChainedSubscriptFlattener({"x": ("n", "3"), "aj": ("p", "j")}).visit(tree)
+    assert _ast.unparse(tree).strip() == "y = x[aj[:, None], :]"
+
+
+def test_a_newaxis_after_the_last_gathered_axis_keeps_the_chain() -> None:
+    """``A[idx][:, None]`` stays two-step. Flattened to ``A[idx, None]`` or ``A[idx[:, None]]``, the
+    scalarizers read the newaxis as one more gathered axis and indexed ``idx`` with the column iterator
+    (xsbench's ``num_nucs[mat][:, None]``)."""
+    import ast
+
+    from numpyto_common.lowering import ChainedSubscriptFlattener
+
+    tree = ast.parse("y = counts[mat][:, None]")
+    ChainedSubscriptFlattener({"counts": ("m",), "mat": ("p",)}).visit(tree)
+    assert ast.unparse(tree).strip() == "y = counts[mat][:, None]"
 
 
 def test_chained_scalar_index_is_still_flattened() -> None:
     """A genuinely scalar inner index keeps the existing collapse: ``psi[f][..., 0]``."""
     import ast as _ast
 
-    from numpyto_common.lowering import _ChainedSubscriptFlattener
+    from numpyto_common.lowering import ChainedSubscriptFlattener
 
     tree = _ast.parse("y = psi[f][..., 0]")
-    _ChainedSubscriptFlattener({"psi": ("F", "X", "Y", "K")}).visit(tree)
+    ChainedSubscriptFlattener({"psi": ("F", "X", "Y", "K")}).visit(tree)
     assert _ast.unparse(tree).strip() == "y = psi[f, ..., 0]"
 
 
-# --------------------------------------------------------------------------- #
 # Broadcast gather: several advanced indices in ONE subscript numpy-broadcast  #
 # instead of summing their ranks (icon_gather's A[idx, lev, blk] regression)   #
-# --------------------------------------------------------------------------- #
 
 
 def test_gather_two_broadcast_arrays_plus_scalar_axis() -> None:
