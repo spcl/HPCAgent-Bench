@@ -40,6 +40,7 @@ two path components it needs -- ``relative_path`` / ``module_name`` -- as plain 
 """
 
 import dataclasses
+import heapq
 import pathlib
 import shutil
 import subprocess
@@ -192,6 +193,11 @@ CallGraphJSON = dict[str, "str | float | list[CallGraphJSON]"]
 #: all). Kept in the graph rather than dropped: a dropped frame silently re-parents its callees.
 UNKNOWN: str = "[unknown]"
 
+#: Most nodes one serialised or rendered call graph carries, hottest first. The tree ships in a
+#: /profile answer the agent keeps in context, and ``min_percent`` 0 on a deep profile would
+#: otherwise carry every call path perf saw.
+CALL_GRAPH_NODE_LIMIT: int = 200
+
 
 class PerfUnavailable(RuntimeError):
     """``perf`` cannot sample here. ``cause`` is the machine-readable reason
@@ -300,25 +306,51 @@ class CallNode:
         """Hottest first, ties broken by name -- so two runs of the same profile render the same."""
         return sorted(self.children.values(), key=lambda n: (-n.total_samples, n.symbol, n.dso))
 
-    def to_json(self, total: int, min_percent: float) -> CallGraphJSON:
-        """Serialise the subtree, omitting children below ``min_percent`` of ``total`` samples."""
+    def to_json(self, total: int, min_percent: float, limit: int = CALL_GRAPH_NODE_LIMIT) -> CallGraphJSON:
+        """Serialise the subtree, omitting children below ``min_percent`` of ``total`` samples and
+        keeping at most ``limit`` nodes (:func:`shown_nodes`). ``truncated`` on the root says
+        whether the limit cut anything."""
+        kept, truncated = shown_nodes(self, total, min_percent, limit)
+        tree = self.subtree_json(total, kept)
+        tree["truncated"] = truncated
+        return tree
+
+    def subtree_json(self, total: int, kept: set[int]) -> CallGraphJSON:
+        """This node and its descendants whose ``id`` is in ``kept``."""
         return {
             "symbol": self.symbol,
             "dso": self.dso,
             "self_pct": percent(self.self_samples, total),
             "total_pct": percent(self.total_samples, total),
             "samples": self.total_samples,
-            "children": [
-                c.to_json(total, min_percent)
-                for c in self.ordered_children()
-                if percent(c.total_samples, total) >= min_percent
-            ],
+            "children": [c.subtree_json(total, kept) for c in self.ordered_children() if id(c) in kept],
         }
 
 
 def percent(part: int, whole: int) -> float:
     """``part`` as a percentage of ``whole``, rounded to 2 decimals (0.0 when nothing was sampled)."""
     return round(100.0 * part / whole, 2) if whole else 0.0
+
+
+def shown_nodes(root: CallNode, total: int, min_percent: float, limit: int) -> tuple[set[int], bool]:
+    """``(ids of the nodes to show, whether the limit dropped one)`` for the tree under ``root``.
+
+    The ``limit`` hottest nodes at or above ``min_percent``, popped from a frontier of shown
+    parents' children: the tree stays connected and a cut removes the coldest branches first.
+    """
+    kept: set[int] = set()
+    frontier: list[tuple[int, int, CallNode]] = [(-root.total_samples, 0, root)]
+    pushed = 1
+    while frontier:
+        if len(kept) >= limit:
+            return kept, True
+        node = heapq.heappop(frontier)[2]
+        kept.add(id(node))
+        for child in node.ordered_children():
+            if percent(child.total_samples, total) >= min_percent:
+                heapq.heappush(frontier, (-child.total_samples, pushed, child))
+                pushed += 1
+    return kept, False
 
 
 def stacks(data: pathlib.Path) -> list[list[tuple[str, str]]]:
@@ -454,13 +486,17 @@ def hotspots(root: CallNode, total: int, limit: int = 10) -> list[Hotspot]:
     ]
 
 
-def render_call_graph(root: CallNode, total: int, *, min_percent: float = 1.0) -> str:
+def render_call_graph(
+    root: CallNode, total: int, *, min_percent: float = 1.0, limit: int = CALL_GRAPH_NODE_LIMIT
+) -> str:
     """The call graph as an indented text tree, hottest branch first.
 
     Two columns then the tree: ``total%`` (this frame and everything it called) and ``self%``
     (this frame alone) -- the two numbers that separate "the path that dominates" from "the
-    function that dominates". Branches below ``min_percent`` are omitted, and the footer says so.
+    function that dominates". Branches below ``min_percent`` are omitted, the same ``limit`` as
+    :meth:`CallNode.to_json` applies, and the footer says both.
     """
+    kept, truncated = shown_nodes(root, total, min_percent, limit)
     lines: list[str] = ["  total%   self%  symbol", "  ------  ------  " + "-" * 40]
 
     def walk(node: CallNode, depth: int) -> None:
@@ -471,9 +507,10 @@ def render_call_graph(root: CallNode, total: int, *, min_percent: float = 1.0) -
             f"{prefix}{node.symbol}{dso}"
         )
         for child in node.ordered_children():
-            if percent(child.total_samples, total) >= min_percent:
+            if id(child) in kept:
                 walk(child, depth + 1)
 
     walk(root, 0)
-    lines.append(f"  ({total} samples of {PERF_EVENT}; branches below {min_percent:g}% omitted)")
+    cut = f"; cut to the {limit} hottest nodes" if truncated else ""
+    lines.append(f"  ({total} samples of {PERF_EVENT}; branches below {min_percent:g}% omitted{cut})")
     return "\n".join(lines)
