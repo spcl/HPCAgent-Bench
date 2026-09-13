@@ -39,7 +39,7 @@ def _seed_repo(d):
     return seed
 
 
-# --- init_base ------------------------------------------------------------------------------
+# init_base
 
 
 def test_init_base_commits_seed_on_main_clean_tree(tmp_path) -> None:
@@ -57,7 +57,7 @@ def test_init_base_seed_sha_is_reproducible(tmp_path) -> None:
     assert _seed_repo(a) == _seed_repo(b)  # identical content + fixed identity/date -> same sha
 
 
-# --- evaluate: opened / allowed / conflict-free ---------------------------------------------
+# evaluate: opened / allowed / conflict-free
 
 
 def test_evaluate_unchanged_repo_is_not_opened(tmp_path) -> None:
@@ -158,7 +158,7 @@ def test_evaluate_non_git_dir_is_not_opened(tmp_path) -> None:
     assert not pr.opened and "not a git repo" in pr.detail
 
 
-# --- merges_clean ---------------------------------------------------------------------------
+# merges_clean
 
 
 def test_merges_clean_true_for_divergent_but_nonoverlapping(tmp_path) -> None:
@@ -192,7 +192,7 @@ def test_merges_clean_false_on_overlapping_conflict(tmp_path) -> None:
     assert repo_pr.merges_clean(str(tmp_path), "A", "B") is False
 
 
-# --- accepts (truth table) ------------------------------------------------------------------
+# accepts (truth table)
 
 
 def _pr(
@@ -261,7 +261,7 @@ def test_gitignore_excludes_built_lib_from_pr(tmp_path) -> None:
     assert not any("libk.so" in c for c in pr.changed)
 
 
-# --- _gate_repo_pr: acceptance agrees with the dispersion gate, reject floors every win field -----
+# _gate_repo_pr: acceptance agrees with the dispersion gate, reject floors every win field
 
 
 def test_gate_rejects_dispersion_gated_win(monkeypatch) -> None:

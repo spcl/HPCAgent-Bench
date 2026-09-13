@@ -88,7 +88,7 @@ def steps(kir) -> List[Optional[object]]:
     return out
 
 
-# ---- structural: an ABI step stays a name, whatever the manifest says it equals ---- #
+# structural: an ABI step stays a name, whatever the manifest says it equals
 
 
 def test_manifest_scalar_step_stays_symbolic() -> None:
@@ -155,7 +155,7 @@ def test_two_distinct_manifest_steps_walk_their_own_stride() -> None:
     )
 
 
-# ---- the guard still fires on a step that is genuinely not compile-time ---- #
+# the guard still fires on a step that is genuinely not compile-time
 
 
 def test_a_bounded_step_absent_from_the_manifest_lowers_symbolically() -> None:
@@ -242,7 +242,7 @@ def test_an_unbounded_symbolic_step_is_still_refused() -> None:
         parse(src, ["x", "out"], ["x", "out"], {"x": "(N,)", "out": "(1,)"}, {"N": 12})
 
 
-# ---- numerical: every backend walks the declared stride ---- #
+# numerical: every backend walks the declared stride
 
 
 def test_manifest_step_matches_numpy_on_every_backend() -> None:

@@ -308,7 +308,7 @@ def test_harden_off_records_on_score_verdict_alone(tmp_path) -> None:
     assert table == "submission" and _count(db, "submissions") == 1
 
 
-# --- (tokens, score) trajectory (the `calls` table) -------------------------
+# (tokens, score) trajectory (the `calls` table)
 
 
 def _stored_sources(db):
@@ -418,7 +418,7 @@ def test_record_trajectory_empty_is_noop(tmp_path) -> None:
     assert recording.record_trajectory(Task(KERNEL, "restricted", "c"), (), path=db) == 0
 
 
-# --- one served grade = one call row (the judge-side trajectory) ------------
+# one served grade = one call row (the judge-side trajectory)
 
 
 @pytest.fixture
@@ -590,10 +590,8 @@ def test_end_to_end_score_verify_record(tmp_path) -> None:
     assert table == "submission" and _count(db, "submissions") == 1
 
 
-# --------------------------------------------------------------------------- #
 # execution provenance (native vs container) -- so a containerized number is
 # never compared against a native one unknowingly.
-# --------------------------------------------------------------------------- #
 @pytest.fixture
 def _reset_execution():
     yield

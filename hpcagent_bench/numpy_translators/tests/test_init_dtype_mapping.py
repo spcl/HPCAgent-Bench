@@ -98,13 +98,11 @@ def test_by_name_dtype_is_recorded(tmp_path: pathlib.Path) -> None:
     assert "val" not in dtypes  # float default, never recorded
 
 
-# --------------------------------------------------------------------------- #
 # The DECLARED half: a manifest states an array's element type on its           #
 # ``init.arrays`` entry, and the reader must pick it up from THAT spelling.     #
 # Reading only ``init.dtypes`` (the retired one, which now carries symbols)     #
 # silently defaulted every declared array to float64: complex buffers lost      #
 # their imaginary part and int index arrays emitted as doubles.                 #
-# --------------------------------------------------------------------------- #
 
 
 def test_declared_dtypes_reads_the_arrays_entry() -> None:

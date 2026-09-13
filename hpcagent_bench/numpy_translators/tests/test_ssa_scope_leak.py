@@ -192,7 +192,7 @@ def test_rebinding_confined_to_a_loop_body_does_not_escape() -> None:
     _assert_ok(_run(src))
 
 
-# --- holes found by review of the first fix; each was CONFIRMED before being closed -------------
+# holes found by review of the first fix; each was CONFIRMED before being closed
 # These drive the PASS directly instead of emitting and running. The property under test belongs to
 # the lowering pass, and going end-to-end is actively unsafe here: the while-loop case below is a
 # non-terminating kernel whenever the guard fails, so a regression would HANG the suite for minutes

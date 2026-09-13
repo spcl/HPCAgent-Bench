@@ -171,7 +171,7 @@ def spgemm_hash(A_indices, A_indptr, B_indices, B_indptr, N, M, C_indices, C_ind
     bin_offset = np.zeros((NBINS,), dtype=np.int64)
     rows_in_bins = np.zeros((M,), dtype=np.int64)
 
-    # -- 1. row analysis: the product count bounds how many columns row i can produce ----
+    # 1. row analysis: the product count bounds how many columns row i can produce
     for i in range(M):
         products = 0
         for j in range(A_indptr[i], A_indptr[i + 1]):
@@ -181,7 +181,7 @@ def spgemm_hash(A_indices, A_indptr, B_indices, B_indptr, N, M, C_indices, C_ind
             products = N
         prod[i] = products
 
-    # -- 2. bin the rows by that estimate (histogram, exclusive scan, scatter) ----------
+    # 2. bin the rows by that estimate (histogram, exclusive scan, scatter)
     for b in range(NBINS):
         bin_size[b] = 0
     for i in range(M):
@@ -202,7 +202,7 @@ def spgemm_hash(A_indices, A_indptr, B_indices, B_indptr, N, M, C_indices, C_ind
             rows_in_bins[bin_offset[chosen] + bin_size[chosen]] = i
             bin_size[chosen] = bin_size[chosen] + 1
 
-    # -- 3. symbolic phase: count the distinct columns of each row with a hash set ------
+    # 3. symbolic phase: count the distinct columns of each row with a hash set
     for r in range(M):
         row = rows_in_bins[r]
         if row >= 0:
@@ -231,14 +231,14 @@ def spgemm_hash(A_indices, A_indptr, B_indices, B_indptr, N, M, C_indices, C_ind
                                 slot = 0
             row_nnz[row] = distinct
 
-    # -- 4. exclusive scan of the row counts -> the CSR row pointers of C ---------------
+    # 4. exclusive scan of the row counts -> the CSR row pointers of C
     running = 0
     for i in range(M):
         C_indptr[i] = running
         running = running + row_nnz[i]
     C_indptr[M] = running
 
-    # -- 5a. re-bin, now by the exact row nnz (upstream's fill phase bins again) --------
+    # 5a. re-bin, now by the exact row nnz (upstream's fill phase bins again)
     for b in range(NBINS):
         bin_size[b] = 0
     for i in range(M):
@@ -259,7 +259,7 @@ def spgemm_hash(A_indices, A_indptr, B_indices, B_indptr, N, M, C_indices, C_ind
             rows_in_bins[bin_offset[chosen] + bin_size[chosen]] = i
             bin_size[chosen] = bin_size[chosen] + 1
 
-    # -- 5b. numeric phase: hash again, sort the table, compact into C_indices ----------
+    # 5b. numeric phase: hash again, sort the table, compact into C_indices
     for r in range(M):
         row = rows_in_bins[r]
         if row >= 0:

@@ -44,7 +44,7 @@ def _md5(path: pathlib.Path) -> str:
     return hashlib.md5(path.read_bytes()).hexdigest()
 
 
-# --- the knobs -------------------------------------------------------------
+# the knobs
 
 
 def test_all_knobs_default_off() -> None:
@@ -68,7 +68,7 @@ def test_unknown_kind_is_rejected() -> None:
         perf_reports.enabled("no_such_report")
 
 
-# --- the flag table --------------------------------------------------------
+# the flag table
 
 
 def test_report_flags_resolve_per_compiler_family() -> None:
@@ -98,7 +98,7 @@ def test_report_flags_never_name_a_missing_constant() -> None:
         report_flags(lang, compiler=cpp_runtime.FRAMEWORK_COMPILER.get(framework))
 
 
-# --- the writer ------------------------------------------------------------
+# the writer
 
 
 def test_report_path_mirrors_the_benchmark_tree() -> None:
@@ -153,7 +153,7 @@ def test_two_implementations_do_not_overwrite_each_others_report(tmp_path, monke
     assert a.read_text() == "SERIAL" and b.read_text() == "PARALLEL"
 
 
-# --- the default contract --------------------------------------------------
+# the default contract
 
 
 def test_frameworks_without_a_report_answer_not_supported() -> None:
@@ -164,7 +164,7 @@ def test_frameworks_without_a_report_answer_not_supported() -> None:
     assert numpy.generated_source(object(), None) is None
 
 
-# --- native: the real report -----------------------------------------------
+# native: the real report
 
 
 def test_native_opt_report_names_the_vectorized_and_the_refused_loop(backend) -> None:
@@ -207,7 +207,7 @@ def test_opt_report_does_not_leave_a_second_copy_of_the_library(backend) -> None
     assert list(backend.rglob("*.so")) == []
 
 
-# --- native: the real disassembly ------------------------------------------
+# native: the real disassembly
 
 
 def test_native_lowered_code_disassembles_the_timed_library(backend) -> None:
@@ -245,7 +245,7 @@ def test_objdump_of_a_non_object_is_not_supported(tmp_path) -> None:
     assert perf_reports.objdump(junk) is None
 
 
-# --- native: the auto-generated input --------------------------------------
+# native: the auto-generated input
 
 
 def test_generated_source_concatenates_both_precision_sources(backend) -> None:
@@ -278,7 +278,7 @@ def test_native_framework_generated_source_hook_dumps_the_input(backend, monkeyp
     assert text is not None and "void probe_fp64" in text
 
 
-# --- numba -----------------------------------------------------------------
+# numba
 
 
 def test_numba_lowered_code_dumps_real_instructions() -> None:

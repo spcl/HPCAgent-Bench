@@ -42,7 +42,7 @@ def cap_bytes(preset: str, datatype: str = "float64", workspace=None) -> float:
         return sizing.kernel_memory_gb(BenchSpec.load(KERNEL), preset, datatype, workspace) * sizing.BYTES_PER_GB
 
 
-# --- the formula ------------------------------------------------------------
+# the formula
 
 
 def test_the_cap_is_two_copies_of_the_declared_arrays() -> None:
@@ -76,7 +76,7 @@ def test_concrete_params_override_the_preset() -> None:
     assert derived * sizing.BYTES_PER_GB == pytest.approx(2 * (4096 + 1) * 8)
 
 
-# --- the floor / fallback rule ----------------------------------------------
+# the floor / fallback rule
 
 
 def test_the_global_budget_is_a_floor_never_a_ceiling() -> None:
@@ -124,7 +124,7 @@ def test_a_pinned_dtype_is_not_narrowed_by_the_run_precision() -> None:
     )
 
 
-# --- the cap is a real limit, enforced in the child --------------------------
+# the cap is a real limit, enforced in the child
 
 
 def hungry_kernel(tmp_path, gigabytes: float):

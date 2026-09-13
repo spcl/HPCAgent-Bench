@@ -49,7 +49,7 @@ def case(
     CASES[name] = (body, build, rc, out, why, lang)
 
 
-# --- the page's own code samples -------------------------------------------------------------
+# the page's own code samples
 case(
     "sample-devproof",
     PROLOGUE
@@ -97,7 +97,7 @@ int main(void) {
     why="page lines 79-90: requires unified_shared_memory compiles, then aborts with an OFFLOAD ERROR memory access fault",
 )
 
-# --- the map-clause claims -------------------------------------------------------------------
+# the map-clause claims
 case(
     "map-array-bounds",
     PROLOGUE
@@ -181,7 +181,7 @@ int main(void) {
     why="page lines 104-107: one target data around the body, inner regions carrying no map clauses",
 )
 
-# --- enter/exit data map-type restrictions ---------------------------------------------------
+# enter/exit data map-type restrictions
 case(
     "enter-data-to-ok",
     PROLOGUE
@@ -228,7 +228,7 @@ int main(void) {
     why="page line 111: omitting the map-type on enter data is a compile error",
 )
 
-# --- the constructs ---------------------------------------------------------------------------
+# the constructs
 case(
     "construct-full-spelling",
     PROLOGUE
@@ -331,7 +331,7 @@ int main(void) {
     why="page: declare target is NOT needed for a callee in the same TU -- the compiler device-compiles it implicitly",
 )
 
-# --- round 2: pin down the two claims round 1 refuted, and the case round 1 tested wrong -------
+# round 2: pin down the two claims round 1 refuted, and the case round 1 tested wrong
 case(
     "declare-target-callee-in-another-tu",
     PROLOGUE
@@ -388,7 +388,7 @@ int main(void) {
     why="round 2: the CORRECT use_device_ptr spelling -- round 1 handed is_device_ptr a host pointer",
 )
 
-# --- Fortran ----------------------------------------------------------------------------------
+# Fortran
 case(
     "fortran-map-bounds-and-declare-target",
     r"""

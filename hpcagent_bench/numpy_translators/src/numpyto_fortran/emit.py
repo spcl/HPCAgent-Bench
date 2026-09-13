@@ -575,9 +575,7 @@ def _int_literal_value(node: ast.AST) -> Optional[int]:
     return None
 
 
-# ---------------------------------------------------------------------------
 # Body walker
-# ---------------------------------------------------------------------------
 
 # Operator tables live in numpyto_common.operators, keyed by target; the
 # Fortran backend reads its column. Local aliases keep the existing call sites.

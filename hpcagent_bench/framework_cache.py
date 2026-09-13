@@ -129,7 +129,7 @@ def write_atomic(path: pathlib.Path, data: bytes) -> None:
     os.replace(tmp, path)
 
 
-# ----- Generated framework SIBLING sources (dace/jax/cupy/numba/pythran) --------------------
+# Generated framework SIBLING sources (dace/jax/cupy/numba/pythran)
 
 
 def load_generated(cache_dir: pathlib.Path, canonical: pathlib.Path, fingerprint: str) -> bool:
@@ -159,7 +159,7 @@ def save_generated(cache_dir: pathlib.Path, canonical: pathlib.Path, fingerprint
     write_atomic(sidecar_path(cached), fingerprint.encode())
 
 
-# ----- DaCe base SDFG (compressed .sdfgz, one file per device) -------------------------------
+# DaCe base SDFG (compressed .sdfgz, one file per device)
 
 
 def sdfg_cache_path(cache_dir: pathlib.Path, module_name: str, device_tag: str) -> pathlib.Path:

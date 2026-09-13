@@ -25,7 +25,7 @@ import pytest
 from hpcagent_bench import framework_cache as fc
 from tests.optional_imports import import_or_skip
 
-# --- freshness key --------------------------------------------------------------------------
+# freshness key
 
 
 def test_source_fingerprint_tracks_source_and_bench_info(tmp_path) -> None:
@@ -65,7 +65,7 @@ def test_kernel_cache_dir_creates_dir_with_gitkeep(tmp_path) -> None:
     assert (cache / ".gitkeep").exists(), "the .cache/ dir must be kept via a .gitkeep"
 
 
-# --- autogen SOURCE cache: hit / restore / INVALIDATE ---------------------------------------
+# autogen SOURCE cache: hit / restore / INVALIDATE
 
 
 def test_generated_source_cache_hit_restore_and_invalidation(tmp_path) -> None:
@@ -239,7 +239,7 @@ def test_ensure_never_touches_a_hand_override(tmp_path, monkeypatch) -> None:
         KERNELS.refresh()
 
 
-# --- base-class hook: a clean no-op default -------------------------------------------------
+# base-class hook: a clean no-op default
 
 
 def test_base_framework_cache_hook_is_a_noop() -> None:
@@ -258,7 +258,7 @@ def test_base_framework_cache_hook_is_a_noop() -> None:
     assert calls["n"] == 2
 
 
-# --- DaCe SDFG cache: .sdfgz round-trip, invalidation, corruption tolerance ------------------
+# DaCe SDFG cache: .sdfgz round-trip, invalidation, corruption tolerance
 
 
 def test_sdfg_cache_roundtrip_invalidation_and_corruption(tmp_path, monkeypatch) -> None:
@@ -334,7 +334,7 @@ def test_dace_build_with_cache_bypasses_build_on_hit_and_invalidates_on_precisio
     assert builds["n"] == 2
 
 
-# --- .gitignore: keep the dir, ignore the contents ------------------------------------------
+# .gitignore: keep the dir, ignore the contents
 
 
 def test_cache_tree_is_fully_gitignored() -> None:

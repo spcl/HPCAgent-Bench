@@ -76,7 +76,7 @@ def assistant_line(message_id: str, usage_block: dict, block: str = "text") -> s
     )
 
 
-# --- the injected budget sentence -------------------------------------------------------------
+# the injected budget sentence
 
 
 def test_seconds_only_states_the_wall_clock(driver) -> None:
@@ -128,7 +128,7 @@ def test_round_clean_keeps_two_significant_digits(driver, value, expected) -> No
     assert driver.round_clean(value) == expected
 
 
-# --- the env-var contract ---------------------------------------------------------------------
+# the env-var contract
 
 
 @pytest.mark.parametrize(("raw", "expected"), [(None, 0.0), ("", 0.0), ("0", 0.0), ("3600", 3600.0), ("junk", 0.0)])
@@ -147,7 +147,7 @@ def test_budget_tokens_reads_the_env(driver, monkeypatch, raw, expected) -> None
     assert driver.budget_tokens() == expected
 
 
-# --- token accounting -------------------------------------------------------------------------
+# token accounting
 
 
 def test_a_turn_costs_input_plus_cache_plus_output(driver) -> None:
@@ -233,7 +233,7 @@ def test_read_new_lines_leaves_a_partial_tail_for_the_next_poll(driver, tmp_path
     assert driver.read_new_lines(log, offset) == (offset, [])
 
 
-# --- the watcher, against a real process --------------------------------------------------------
+# the watcher, against a real process
 
 #: A stand-in agent: writes its transcript to stdout the way claude does, then refuses to exit.
 FAKE_AGENT = (

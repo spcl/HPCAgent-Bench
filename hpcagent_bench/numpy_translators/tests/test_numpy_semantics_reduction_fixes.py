@@ -55,9 +55,7 @@ def _src(stmts):
     return ast.unparse(mod)
 
 
-# --------------------------------------------------------------------------- #
 # Fix 2: integer sum/prod accumulate in int64 (not a float 0.0 / 1.0)         #
-# --------------------------------------------------------------------------- #
 
 
 def test_sum_integer_uses_int_accumulator_and_int64_dtype() -> None:
@@ -104,9 +102,7 @@ def test_integer_sum_prod_numeric_all_backends() -> None:
     assert ok, res
 
 
-# --------------------------------------------------------------------------- #
 # Fix 1: NaN propagation in max / min / argmax / argmin                       #
-# --------------------------------------------------------------------------- #
 
 
 def test_max_emits_nan_test() -> None:
@@ -165,9 +161,7 @@ def test_argmax_argmin_first_nan_index_all_backends() -> None:
     assert ok, res
 
 
-# --------------------------------------------------------------------------- #
 # Fix 3: zero-size reduction refuses to lower (no OOB seed)                    #
-# --------------------------------------------------------------------------- #
 
 
 def test_max_zero_length_axis_refuses() -> None:
@@ -189,9 +183,7 @@ def test_max_zero_length_kept_axis_ok() -> None:
     expand_max(_target(), args, {"a": ("0", "M")}, kws)  # must not raise
 
 
-# --------------------------------------------------------------------------- #
 # Fix 4: std / var honor ddof (divide by N - ddof)                            #
-# --------------------------------------------------------------------------- #
 
 
 def test_std_ddof_changes_divisor() -> None:
@@ -219,9 +211,7 @@ def test_var_ddof_numeric_all_backends() -> None:
     assert ok, res
 
 
-# --------------------------------------------------------------------------- #
 # Fix 5: sum / prod / max / min honor initial=                                #
-# --------------------------------------------------------------------------- #
 
 
 def test_sum_initial_seeds_accumulator() -> None:
@@ -252,9 +242,7 @@ def test_initial_numeric_all_backends() -> None:
     assert ok, res
 
 
-# --------------------------------------------------------------------------- #
 # Fix 6: mean / std / var preserve a FLOAT input's dtype (float32 stays f32)  #
-# --------------------------------------------------------------------------- #
 
 
 def test_mean_float_input_preserves_dtype_in_desugar() -> None:
@@ -269,9 +257,7 @@ def test_var_float_input_preserves_dtype_in_desugar() -> None:
     assert "s.dtype" in _src(_reduce_axis_stmts("t", "s", "std", [0], 2, 0, elem_is_float=True))
 
 
-# --------------------------------------------------------------------------- #
 # Fix 6b: AXIS sum/prod accumulate in int64 for a bool / narrow-int input      #
-# --------------------------------------------------------------------------- #
 
 
 def test_axis_sum_prod_integer_input_allocates_int64() -> None:
@@ -308,9 +294,7 @@ def test_axis_sum_int32_overflow_all_backends() -> None:
     assert ok, res
 
 
-# --------------------------------------------------------------------------- #
 # Fix 7: concatenate accepts a negative-literal axis (axis=-1)                #
-# --------------------------------------------------------------------------- #
 
 
 def test_concatenate_negative_axis_all_backends() -> None:
@@ -330,9 +314,7 @@ def test_concatenate_negative_axis_all_backends() -> None:
     assert ok, res
 
 
-# --------------------------------------------------------------------------- #
 # Fix 8/9: elementwise broadcasts BOTH operands (and symmetric size-1)         #
-# --------------------------------------------------------------------------- #
 
 
 def _ext(*toks):
@@ -394,9 +376,7 @@ def test_multiply_broadcast_row_vector_all_backends() -> None:
     assert ok, res
 
 
-# --------------------------------------------------------------------------- #
 # Fix 10: an Ellipsis subscript entry fills all otherwise-unindexed axes       #
-# --------------------------------------------------------------------------- #
 
 
 def test_expr_rank_ellipsis() -> None:
@@ -407,9 +387,7 @@ def test_expr_rank_ellipsis() -> None:
     assert expr_rank(ast.parse("a[0, ...]", mode="eval").body, ranks) == 2
 
 
-# --------------------------------------------------------------------------- #
 # Fix 11: int / int is TRUE division (float64), not integer division          #
-# --------------------------------------------------------------------------- #
 
 
 def test_int_true_division_all_backends() -> None:

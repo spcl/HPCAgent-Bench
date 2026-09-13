@@ -51,7 +51,7 @@ def _ok(res: dict[str, str]) -> tuple[bool, dict[str, str]]:
     return (all(v == "ok" or v.startswith("skip") for v in res.values()) and any(v == "ok" for v in res.values())), res
 
 
-# --- np.sort (1-D) -------------------------------------------------------- #
+# np.sort (1-D)
 
 
 def test_sort_1d() -> None:
@@ -64,7 +64,7 @@ def test_sort_1d() -> None:
     assert ok, r
 
 
-# --- np.maximum/minimum.accumulate (running max / min prefix scan) -------- #
+# np.maximum/minimum.accumulate (running max / min prefix scan)
 
 
 def test_cummax_cummin() -> None:
@@ -79,7 +79,7 @@ def test_cummax_cummin() -> None:
         assert ok, (op, r)
 
 
-# --- np.<ufunc>.reduce (axis=None full reduction) ------------------------- #
+# np.<ufunc>.reduce (axis=None full reduction)
 #
 # nest-forge emits an explicit ``axis=None`` (or a tuple axis) form. A bare
 # ``np.add.reduce(a)`` on a 1-D array would lower to ``np.sum(a, axis=0)`` and hit
@@ -114,7 +114,7 @@ def test_ufunc_reduce() -> None:
         assert ok, (op, r)
 
 
-# --- np.fft.fft / np.fft.ifft with norm= ---------------------------------- #
+# np.fft.fft / np.fft.ifft with norm=
 #
 # Complex in/out; native-only because the python-backend fft loop hardcodes the
 # 'backward' convention (ignores norm), which would silently mis-scale.
@@ -174,7 +174,7 @@ def test_fft_ifft_norm_ortho() -> None:
         assert ok, (spec, r)
 
 
-# --- ScatterConflictCheck TAGCOUNT round-trip (int-array reduction) -------- #
+# ScatterConflictCheck TAGCOUNT round-trip (int-array reduction)
 #
 # nest-forge's emit_scatter_conflict_check emits `int(np.max(idx))` over an int64
 # index array to size the ownership buffer. This guards that the whole TAGCOUNT

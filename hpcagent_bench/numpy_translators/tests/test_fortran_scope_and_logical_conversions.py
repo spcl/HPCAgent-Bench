@@ -95,9 +95,7 @@ def compiles_with_implicit_none(text: str) -> str:
     return "" if r.returncode == 0 else (r.stderr or r.stdout)
 
 
-# --------------------------------------------------------------------------- #
 # A. a local sized by a loop iterator                                          #
-# --------------------------------------------------------------------------- #
 
 #: ``r[:k]`` inside the ``k`` loop spills into a temp whose ONLY extent is the loop variable --
 #: durbin's shape, reduced to the one statement that carries it.
@@ -166,9 +164,7 @@ def test_the_iterator_sized_temp_computes_the_reference_numbers() -> None:
     assert status["c"] == "ok", status
 
 
-# --------------------------------------------------------------------------- #
 # B. a kept helper's scalar result dummy follows the kernel's precision        #
-# --------------------------------------------------------------------------- #
 
 #: nussinov's shape: a kept helper returning a non-literal scalar, so the result dummy takes the
 #: float path rather than the all-integer-literals one.
@@ -225,9 +221,7 @@ def test_the_kernel_float_precision_is_where_the_kind_comes_from() -> None:
     assert dtypes.fortran_kind(dtypes.accumulator_dtype("float64")) == "real(c_double)"
 
 
-# --------------------------------------------------------------------------- #
 # C. LOGICAL <-> numeric, in both directions                                   #
-# --------------------------------------------------------------------------- #
 
 #: ``m[i] = <int>`` stores a number into a bool; ``a[i] + m[i]`` reads a bool as a number.
 _LOGICAL_BOTH_WAYS = (
@@ -331,9 +325,7 @@ def test_a_kept_helpers_mask_is_logical_to_its_own_body_too() -> None:
     assert not compiles_with_implicit_none(text)
 
 
-# --------------------------------------------------------------------------- #
 # D. sibling loops that shared a Python name must not share a DO variable      #
-# --------------------------------------------------------------------------- #
 
 #: ``np.linalg.solve`` lowers to a Gauss-Jordan nest that reuses ONE Python loop name (``__sol_c``)
 #: across six sibling loops -- legal in Python and in C, where each ``for`` scopes its own

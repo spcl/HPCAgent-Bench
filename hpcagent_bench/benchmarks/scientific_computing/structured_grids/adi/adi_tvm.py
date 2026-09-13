@@ -203,7 +203,7 @@ def _run(N, TSTEPS, u_host, exe_f1, exe_b1, exe_f2, exe_b2, dev, dtype_np, b1=2.
     ucol = tvm.runtime.tensor(np.empty((N,), dtype_np), device=dev)
 
     for _ in range(1, TSTEPS + 1):
-        # ---- Phase 1: column sweep, unknown v[j, m] ----
+        # Phase 1: column sweep, unknown v[j, m]
         v[0, 1 : N - 1] = 1.0
         p[1 : N - 1, 0] = 0.0
         q[1 : N - 1, 0] = v[0, 1 : N - 1]
@@ -227,7 +227,7 @@ def _run(N, TSTEPS, u_host, exe_f1, exe_b1, exe_f2, exe_b2, dev, dtype_np, b1=2.
             exe_b1(T(p[:, j]), T(q[:, j]), T(v[j + 1, :]), vrow)
             v[j, 1 : N - 1] = vrow.numpy()[1 : N - 1]
 
-        # ---- Phase 2: row sweep, unknown u[m, j] ----
+        # Phase 2: row sweep, unknown u[m, j]
         u_host[1 : N - 1, 0] = 1.0
         p[1 : N - 1, 0] = 0.0
         q[1 : N - 1, 0] = u_host[1 : N - 1, 0]

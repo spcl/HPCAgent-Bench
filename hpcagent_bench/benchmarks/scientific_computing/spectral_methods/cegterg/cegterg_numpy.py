@@ -80,9 +80,7 @@ def _conj_transpose(A, m, n):
     return C
 
 
-# ---------------------------------------------------------------------------
 # In-place Hermitian projection used by the reduced Davidson problem.
-# ---------------------------------------------------------------------------
 def _hermitianize(hc, sc, nbase, nb1=1):
     """Make the reduced ``hc`` / ``sc`` exactly Hermitian (cegterg.f90:730-737 and
     :489-506): strictly-real diagonal, upper triangle mirrored from the lower one
@@ -165,9 +163,7 @@ def _diaghg(hc, sc, n, nvec, w_out, v_out):
     v_out[:n, :nvec] = v[:, :nvec]
 
 
-# ---------------------------------------------------------------------------
 # FFT helpers used by the collinear local potential and meta-GGA term.
-# ---------------------------------------------------------------------------
 def _fft_g2r(block, gmap, nnr, n1, n2, n3, m):
     """Scatter ``block`` to the FFT grid, inverse FFT, and return the real-space
     representation (column-major ordering, matching QE)."""
@@ -182,9 +178,7 @@ def _fft_r2g(r, gmap, nnr, n1, n2, n3, m):
     return g[gmap, :]
 
 
-# ---------------------------------------------------------------------------
 # Collinear S-operator and H-operator (no closures).
-# ---------------------------------------------------------------------------
 def _apply_s_psi_collinear(X, vkb, qq, npw_k, npwx, npol, m, ck0, uspp, nkb):
     """S |psi> = |psi> + ultrasoft Q for the collinear case."""
     S = np.zeros((npwx * npol, m), dtype=np.complex128)
@@ -279,9 +273,7 @@ def _apply_h_psi_collinear(
     return H
 
 
-# ---------------------------------------------------------------------------
 # Non-collinear S-operator and H-operator (no closures).
-# ---------------------------------------------------------------------------
 def _apply_s_psi_noncollinear(X, vkb, qq, npw_k, npwx, ck0, uspp, m):
     """S |psi> for the non-collinear case (npol == 2)."""
     npol = 2
@@ -351,9 +343,7 @@ def _apply_h_psi_noncollinear(X, g2kin, vrs, nlk, vkb, deeq_nc, npw_k, npwx, nnr
     return H
 
 
-# ---------------------------------------------------------------------------
 # Diagonal preconditioner (no closure).
-# ---------------------------------------------------------------------------
 def _apply_g_psi(colset, shift, hd, sd, kdim):
     """Apply the smoothed diagonal preconditioner in place.
     ``hd`` / ``sd`` are the active diagonals already folded to length ``kdim``."""
@@ -439,7 +429,7 @@ def cegterg(
     noncolin = 1 if noncolin else 0
     domag = 1 if domag else 0
     nnr = n1 * n2 * n3
-    # ---- config guards (catch not-appropriate configurations) ----
+    # config guards (catch not-appropriate configurations)
     if exx_active:
         raise NotImplementedError("cegterg_numpy: exact exchange (exx_is_active) is active -- not supported")
     if lspinorb:
@@ -482,7 +472,7 @@ def cegterg(
 
     empty_ethr = max(ethr * 5.0, 1.0e-5)
 
-    # ---- work space (cegterg.f90:144-179) ----
+    # work space (cegterg.f90:144-179)
     psi = np.zeros((npwx * npol, nvecx), dtype=np.complex128)
     hpsi = np.zeros((npwx * npol, nvecx), dtype=np.complex128)
     # Allocated whatever `uspp` is, and read only under it: one name that is an array on one
@@ -559,7 +549,7 @@ def cegterg(
         _diaghg(hc, sc, nbase, nvec, ew, vc)
         e[:nvec] = ew[:nvec]
 
-    # ============================ iterate ===================================
+    # iterate
     for kter in range(1, _MAXTER + 1):
         dav_iter = kter
 

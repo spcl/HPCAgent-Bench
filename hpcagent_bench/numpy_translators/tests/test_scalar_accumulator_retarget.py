@@ -80,9 +80,7 @@ def _joined(src: str) -> str:
 #: named, which is what the C leg spells ``__mm1``/``__cb1``.
 LOCAL_SCALAR_REAL = re.compile(r"^\s*real\(c_\w+\) :: (\w+)\s*$", re.MULTILINE)
 
-# --------------------------------------------------------------------------- #
 # A  the rewrite                                                               #
-# --------------------------------------------------------------------------- #
 
 
 def test_plain_assign_retargets_onto_the_destination_cell() -> None:
@@ -148,9 +146,7 @@ def test_sliced_destination_is_left_alone() -> None:
     assert _retarget_scalar_accumulator(*_pattern("t[0:2]", "a[__mml1]")) is None
 
 
-# --------------------------------------------------------------------------- #
 # B  the aliasing guard                                                        #
-# --------------------------------------------------------------------------- #
 
 
 def _misses(target: str, body: str, iterable: str = "range(i)") -> bool:
@@ -188,9 +184,7 @@ def test_guard_declines_the_retarget_end_to_end() -> None:
     assert _retarget_scalar_accumulator(*_pattern("B[i, j]", "A[__mml1, i] * B[__mml1, j]", augmented=True)) is None
 
 
-# --------------------------------------------------------------------------- #
 # C  the emitted C for the three PolyBench kernels                             #
-# --------------------------------------------------------------------------- #
 
 
 def test_symm_reduces_into_temp2_with_no_scalar() -> None:
@@ -238,9 +232,7 @@ def test_fortran_carries_the_same_retarget() -> None:
     assert not LOCAL_SCALAR_REAL.findall(trmm), LOCAL_SCALAR_REAL.findall(trmm)
 
 
-# --------------------------------------------------------------------------- #
 # D  numerics: emit + compile + run against the PolyBench recurrence           #
-# --------------------------------------------------------------------------- #
 
 M, N = 9, 7
 

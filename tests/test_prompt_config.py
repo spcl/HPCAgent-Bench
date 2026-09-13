@@ -95,7 +95,7 @@ def test_reference_paragraph_gated_on_the_sidecar_and_the_knob() -> None:
     assert "ported from" not in off
 
 
-# -- named prompt variants -------------------------------------------------------
+# named prompt variants
 
 
 def test_variant_applies_the_preset_overrides() -> None:

@@ -242,7 +242,7 @@ def test_sparse_layout_is_a_subbenchmark(framework, dtype, fptype) -> None:
     assert np.allclose(y, y_ref, rtol=rt, atol=rt)
 
 
-# --- Canonical integer width: int64 symbols/iterators + int32-array promotion ---
+# Canonical integer width: int64 symbols/iterators + int32-array promotion
 
 
 def test_symbols_and_iterators_are_int64() -> None:

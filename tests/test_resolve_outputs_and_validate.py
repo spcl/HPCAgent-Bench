@@ -15,7 +15,7 @@ import numpy as np
 from hpcagent_bench.frameworks.utilities import resolve_outputs, validate
 
 
-# --- resolve_outputs: the count-match rule ---------------------------------------------------------
+# resolve_outputs: the count-match rule
 def test_full_return_set_matching_output_args_count_is_used_verbatim() -> None:
     # jax-style: the kernel returned exactly its declared outputs.
     assert resolve_outputs((1, 2, 3), inplace_values=[99, 98, 97], output_args=["a", "b", "c"]) == [1, 2, 3]
@@ -43,7 +43,7 @@ def test_empty_everything_is_the_empty_list() -> None:
     assert resolve_outputs(None, inplace_values=[], output_args=[]) == []
 
 
-# --- resolve_outputs: interleaving a PARTIAL return with in-place buffers ---------------------------
+# resolve_outputs: interleaving a PARTIAL return with in-place buffers
 #
 # nbody is the kernel that needs this: it writes pos/vel through their buffers and RETURNS KE/PE,
 # so the two sets have to be interleaved in output_args order rather than concatenated. Without the
@@ -87,7 +87,7 @@ def test_without_names_the_concatenation_rule_is_unchanged() -> None:
     ]
 
 
-# --- validate: count check + per-pair aggregation ---------------------------------------------------
+# validate: count check + per-pair aggregation
 def test_validate_true_when_every_pair_matches() -> None:
     assert validate([np.array([1.0, 2.0])], [np.array([1.0, 2.0])]) is True
 

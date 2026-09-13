@@ -40,9 +40,7 @@ def _ivars(*names):
     return [ast.Name(id=n, ctx=ast.Load()) for n in names]
 
 
-# --------------------------------------------------------------------------- #
 # A. ``_SubscriptifyNames`` -- newaxis binds the slice to the right iter       #
-# --------------------------------------------------------------------------- #
 
 
 def _subscriptify(src, iters, shapes):
@@ -72,9 +70,7 @@ def test_plain_slice_pair_unchanged_by_newaxis_fix() -> None:
     assert out == "A[__w0, j]"
 
 
-# --------------------------------------------------------------------------- #
 # B. ``np.argmax(a, axis=k)`` hoists to an int64 INDEX ARRAY                    #
-# --------------------------------------------------------------------------- #
 
 
 def _hoist(src, shapes):
@@ -106,9 +102,7 @@ def test_argmax_no_axis_stays_scalar() -> None:
     assert scal and not arr
 
 
-# --------------------------------------------------------------------------- #
 # C. Partial-subscript LHS row copy: ``back[t] = cb``                          #
-# --------------------------------------------------------------------------- #
 
 
 def test_partial_subscript_assign_expands_to_copy_loop() -> None:
@@ -133,9 +127,7 @@ def test_full_subscript_assign_not_expanded() -> None:
     assert not isinstance(out, list)  # untouched single Assign
 
 
-# --------------------------------------------------------------------------- #
 # D. ``np.<dtype>(x)`` scalar cast (full emit pipeline, C + Fortran)           #
-# --------------------------------------------------------------------------- #
 
 _CAST_KERNEL = """import numpy as np
 

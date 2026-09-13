@@ -63,8 +63,8 @@ def test_non_llm_agent_costs_zero_tokens() -> None:
     assert row.tokens == 0 and row.trajectory[0].tokens == 0
 
 
-# --- the SDK -> TokenUsage capture seam (untested otherwise: every agent test
-#     injects complete_fn, bypassing the real _backend) ---
+# the SDK -> TokenUsage capture seam (untested otherwise: every agent test
+# injects complete_fn, bypassing the real _backend)
 
 
 class _FakeAnthropicUsage:

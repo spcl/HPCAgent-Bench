@@ -1765,7 +1765,7 @@ def compute_geopotential(zh, gz, nhalo, ni, nj, nk):
     gz[:, :, : nk + 1] = zh[:, :, : nk + 1] * GRAV
 
 
-# --- updatedzc (UpdateGeopotentialHeightOnCGrid), grid_type>=3 ---
+# updatedzc (UpdateGeopotentialHeightOnCGrid), grid_type>=3
 def update_dz_c(dp_ref, zs, area, ut, vt, gz, gz_x, gz_y, ws, dt, nhalo, ni, nj, nk):
     """``update_dz_c``: step gz (on interfaces, kz=nk+1) forward on the C-grid."""
     nx = nhalo + ni + nhalo
@@ -1828,7 +1828,7 @@ def update_dz_c_gt4(zs, ut, vt, gz, ws, dp_ref, area, dt, nhalo, ni, nj, nk):
     update_dz_c(dp_ref, zs, area, ut, vt, gz, gz_x, gz_y, ws, dt, nhalo, ni, nj, nk)
 
 
-# --- sim1_solver: vertical tridiagonal sound-wave / pressure solve ---
+# sim1_solver: vertical tridiagonal sound-wave / pressure solve
 def sim1_solver(w, dm, gm, dz, ptr, pm, pe, pem, ws, cp3, dt, t1g, rdt, p_fac, nhalo, ni, nj, nk):
     """``sim1_solver``: per-column tridiagonal solve for w and dz (Chapter 7)."""
     for i in range(nhalo - 1, nhalo + ni + 1):
@@ -1917,7 +1917,7 @@ def sim1_solver(w, dm, gm, dz, ptr, pm, pe, pem, ws, cp3, dt, t1g, rdt, p_fac, n
                 dz[i, j, k] = -dm[i, j, k] * RDGAS * ptr[i, j, k] * np.exp((cp3[i, j, k] - 1.0) * np.log(maxp))
 
 
-# --- riem_solver_c (NonhydrostaticVerticalSolverCGrid), grid_type>=3 ---
+# riem_solver_c (NonhydrostaticVerticalSolverCGrid), grid_type>=3
 def riem_c_precompute(delpc, cappa, w3, w, gz, dm, q_con, pem, dz, gm, pm, ptop, nhalo, ni, nj, nk):
     """``precompute`` of riem_solver_c: dm/w/pem/peg/dz/gm/pm setup over the [-1,+1] block.
     pem/peg are forward cumulative sums, ptop as the scan seed (same add order as the loop)."""
@@ -1971,7 +1971,7 @@ def riem_solver_c_gt4(dt2, cappa, ptop, hs, ws, ptc, q_con, delpc, gz, pef, w3, 
     riem_c_finalize(pe, pem, hs, dz, pef, gz, ptop, nhalo, ni, nj, nk)
 
 
-# --- p_grad_c (nonhydrostatic, dyn_core) ---
+# p_grad_c (nonhydrostatic, dyn_core)
 def p_grad_c_nonhydro(rdxc, rdyc, uc, vc, delpc, pkc, gz, dt2, nhalo, ni, nj, nk):
     """``p_grad_c_stencil`` (nonhydrostatic, wk=delpc): updates uc/vc with the backward-in-time pressure gradient."""
     i_start, i_end = nhalo, nhalo + ni - 1
@@ -1998,7 +1998,7 @@ KAPPA = RDGAS / (3.5 * RDGAS)  # = 1/3.5 (UFS)
 RGRAV = 1.0 / GRAV
 
 
-# --- riem_solver3 (NonhydrostaticVerticalSolver, D-grid) ---
+# riem_solver3 (NonhydrostaticVerticalSolver, D-grid)
 def riem3_precompute(
     delp, cappa, pe, pe_init, dm, zh, q_con, p_int, log_p_int, pk3, gm, dz, p_gas, ptop, peln1, ptk, nhalo, ni, nj, nk
 ):
@@ -2235,7 +2235,7 @@ def _sim1_column(w, dm, gm, dz, ptr, pm, pe, pem, ws, cp3, dt, t1g, rdt, p_fac, 
         dz[i, j, k] = -dm[i, j, k] * RDGAS * ptr[i, j, k] * np.exp((cp3[i, j, k] - 1.0) * np.log(maxp))
 
 
-# --- updatedzd (UpdateHeightOnDGrid) ---
+# updatedzd (UpdateHeightOnDGrid)
 def cubic_spline_constants(dp0, nk):
     """``cubic_spline_interpolation_constants``: gk/beta/gamma columns (length nk) from dp0."""
     gk = [0.0] * nk
@@ -2353,7 +2353,7 @@ def update_dz_d_gt4(
     apply_height_fluxes(area, height, fx, fy, xaf_i, yaf_i, hxd, hyd, surface_height, ws, dt, nhalo, ni, nj, nk)
 
 
-# --- nh_p_grad (NonHydrostaticPressureGradient), grid_type==4 ---
+# nh_p_grad (NonHydrostaticPressureGradient), grid_type==4
 def set_k0_and_calc_wk(pp, pk3, wk, top_value, nhalo, ni, nj, nk):
     """``set_k0_and_calc_wk``: pp[k0]=0, pk3[k0]=top_value, wk=pk3[k+1]-pk3[k] over the B-block."""
     i_start, i_end = nhalo, nhalo + ni - 1

@@ -73,7 +73,7 @@ def declared_functions() -> list:
     return DECLARED_IN_HEADER.findall(flags.VECMATH_H.read_text())
 
 
-# --- Config guards: no toolchain needed, so they run in every job -----------------------
+# Config guards: no toolchain needed, so they run in every job
 
 
 def test_the_vecmath_header_ships_with_the_package() -> None:
@@ -199,7 +199,7 @@ def test_the_header_declares_nothing_libmvec_does_not_export() -> None:
         )
 
 
-# --- Behavioural guards: gcc/g++/gfortran are present in every job that runs these -------
+# Behavioural guards: gcc/g++/gfortran are present in every job that runs these
 
 
 @LINUX_ONLY
@@ -263,7 +263,7 @@ def test_the_fortran_baseline_compiles_without_warnings(tmp_path) -> None:
     assert "not for Fortran" not in proc.stderr, f"gfortran was handed a C-only flag:\n{proc.stderr}"
 
 
-# --- Why the header, and not -D__FAST_MATH__ --------------------------------------------
+# Why the header, and not -D__FAST_MATH__
 
 
 @LINUX_ONLY

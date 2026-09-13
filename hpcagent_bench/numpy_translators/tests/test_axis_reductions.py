@@ -48,9 +48,7 @@ def _count_for_loops(stmts: list[ast.stmt]) -> int:
     return n
 
 
-# --------------------------------------------------------------------------- #
 # A. ``read_axis_keepdims`` parsing                                          #
-# --------------------------------------------------------------------------- #
 
 
 def test_read_axis_none_no_keepdims() -> None:
@@ -88,9 +86,7 @@ def test_read_axis_positional_tuple() -> None:
     assert read_axis_keepdims(args, kws) == ([0, 2], False)
 
 
-# --------------------------------------------------------------------------- #
 # B. Loop structure for axis=int                                              #
-# --------------------------------------------------------------------------- #
 
 
 def test_sum_axis_0_emits_two_loops_for_2d() -> None:
@@ -108,9 +104,7 @@ def test_sum_axis_1_emits_two_loops_for_3d() -> None:
     assert _count_for_loops(stmts) == 3
 
 
-# --------------------------------------------------------------------------- #
 # C. Axis-tuple reductions                                                    #
-# --------------------------------------------------------------------------- #
 
 
 def test_sum_axis_tuple_2_of_4_emits_correct_loop_count() -> None:
@@ -180,9 +174,7 @@ def test_sum_axis_tuple_rejects_duplicates() -> None:
         expand_sum(_target("out"), args, {"arr": ("N", "M", "K")}, kws)
 
 
-# --------------------------------------------------------------------------- #
 # D. Reducing over an expand_dims / squeeze operand                           #
-# --------------------------------------------------------------------------- #
 
 
 def _reshape_to_index(src: str, ranks: Dict[str, int]) -> str:
@@ -261,9 +253,7 @@ def test_instance_norm_over_expanded_operand() -> None:
     assert all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
 
-# --------------------------------------------------------------------------- #
 # E. Full-reduction accumulation -- one chain in source order, no blocking.     #
-# --------------------------------------------------------------------------- #
 
 
 def _full_sum_stmts(shape: tuple[str, ...]) -> list[ast.stmt]:

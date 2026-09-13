@@ -93,9 +93,7 @@ def sw4_rhs4sg(u, lu, mu, la, strx, stry, strz, acof, bope, ghcof, N_I, N_J, N_K
     for j in range(N_J):
         sy[j, :] = stry[j]
 
-    # ------------------------------------------------------------------
     # Interior: centred fourth-order SBP stencil, global k in [7, nk-6].
-    # ------------------------------------------------------------------
     for K in range(8, N_K - 8):
         sxc = strx[IC:ICE]
         sxm1 = strx[IM1:IM1E]
@@ -735,7 +733,6 @@ def sw4_rhs4sg(u, lu, mu, la, strx, stry, strz, acof, bope, ghcof, N_I, N_J, N_K
         lu[1, K, JC:JCE, IC:ICE] = cof * r2
         lu[2, K, JC:JCE, IC:ICE] = cof * r3
 
-    # ------------------------------------------------------------------
     # Upper SBP closure (onesided[4] == 1): global k in [1, 6].
     # The centred stencil still applies in x and y; the z second derivative uses
     # the variable-coefficient operator `acof`, the z mixed terms use `bope`, and
@@ -743,7 +740,6 @@ def sw4_rhs4sg(u, lu, mu, la, strx, stry, strz, acof, bope, ghcof, N_I, N_J, N_K
     # deliberately NOT applied here -- upstream: "leave out the z-supergrid
     # stretching strz, since it will never be used together with the
     # sbp-boundary operator" (rhs4sg_rev.C:398).
-    # ------------------------------------------------------------------
     for K in range(2, 8):
         kb = K - 2  # 0-based boundary-point index; upstream acof/bope/ghcof row k = kb+1
 
@@ -1177,14 +1173,12 @@ def sw4_rhs4sg(u, lu, mu, la, strx, stry, strz, acof, bope, ghcof, N_I, N_J, N_K
         lu[1, K, JC:JCE, IC:ICE] = a1 * lu[1, K, JC:JCE, IC:ICE] + cof * r2
         lu[2, K, JC:JCE, IC:ICE] = a1 * lu[2, K, JC:JCE, IC:ICE] + cof * r3
 
-    # ------------------------------------------------------------------
     # Lower SBP closure (onesided[5] == 1): global k in [nk-5, nk].
     # The mirror image of the block above: all coefficient arrays are indexed by
     # the boundary-relative index kb = nk-k+1 (upstream comment at
     # rhs4sg_rev.C:647), all field arrays by the mirrored plane nk-q+1, and every
     # `bope` accumulation carries the opposite sign because the outward normal is
     # reversed.
-    # ------------------------------------------------------------------
     for K in range(N_K - 8, N_K - 2):
         kb = N_K - K - 3  # 0-based; upstream kb = nk-k+1 = N_K-K-2
 

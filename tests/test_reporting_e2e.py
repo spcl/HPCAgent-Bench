@@ -205,7 +205,7 @@ def test_reporting_pipeline_end_to_end(tmp_path, capsys) -> None:
 
     assert db.exists() and db.stat().st_size > 0
 
-    # --- the reporting path: heatmap + distribution grid + median CI -------------------
+    # the reporting path: heatmap + distribution grid + median CI
     heatmap = work / "heatmap.pdf"
     violin = work / "dist_violin.pdf"
     box = work / "dist_box.pdf"
@@ -241,7 +241,7 @@ def test_reporting_pipeline_end_to_end(tmp_path, capsys) -> None:
         assert pdf.stat().st_size > 1000, f"{pdf} looks empty ({pdf.stat().st_size} bytes)"
         assert pdf.read_bytes()[:4] == b"%PDF"
 
-    # --- the stats path: cleaned median + finite bootstrap CI --------------------------
+    # the stats path: cleaned median + finite bootstrap CI
     assert not data.empty and "numpy" in set(data["framework"])
 
     summary = cell_summary(data)

@@ -288,14 +288,14 @@ def _emit_signature(kir: KernelIR, fn_name: str, order: Optional[List[str]] = No
     return f"void {fn_name}({', '.join(parts)})"
 
 
-# --- Body walker ---
+# Body walker
 
 # Operator tables live in numpyto_common.operators, keyed by target; local aliases keep existing call sites.
 _BINOP = operators.BINOP["c"]
 _CMPOP = operators.CMPOP["c"]
 _BOOLOP = operators.BOOLOP["c"]
 
-# --- cpp_isopar: loop shapes that have a faithful <algorithm> / <numeric> spelling ---
+# cpp_isopar: loop shapes that have a faithful <algorithm> / <numeric> spelling
 
 #: The execution policy every converted call carries. ``par_unseq`` is the strongest one: element
 #: access functions may run on another thread AND be interleaved (vectorized) with each other on
@@ -498,7 +498,7 @@ class _CBodyEmitter(BaseEmitter):
         #: Memoised _float_scalar_names() result.
         self._fsn_cache: Optional[Set[str]] = None
 
-    # ----- statement-level ------------------------------------------------
+    # statement-level
 
     def numpy_note(self, node: ast.stmt, indent: str) -> str:
         """No provenance note in the ISO-parallel C++ form.
@@ -602,7 +602,7 @@ class _CBodyEmitter(BaseEmitter):
         # Loop iterators are the int64 ABI integer, matching the size symbols they range over.
         return f"{omp_prefix}{indent}for ({_c_type('int')} {var} = {lo}; {cond}; {inc}) {{\n{body}\n{indent}}}"
 
-    # ----- ISO standard-algorithm forms (cpp_isopar) ----------------------
+    # ISO standard-algorithm forms (cpp_isopar)
 
     def _isopar_loop(self, node: ast.For, indent: str, lo: str, hi: str) -> Optional[str]:
         """``node`` spelled as a standard-algorithm call, or None when no faithful spelling exists.
@@ -1203,7 +1203,7 @@ class _CBodyEmitter(BaseEmitter):
             return f"{indent}{lhs} = {fns.demote}({fns.promote}({lhs}) {op} ({rhs}));"
         return f"{indent}{lhs} {op}= {rhs};"
 
-    # ----- expression-level -----------------------------------------------
+    # expression-level
 
     def wrap_narrow(self, text: str, wrap: str) -> str:
         return f"(({_c_type(wrap)})({text}))"
@@ -1945,7 +1945,7 @@ class _CBodyEmitter(BaseEmitter):
         return False
 
 
-# --- Top-level emitters ---
+# Top-level emitters
 
 
 def _negative_const_k(node: ast.AST):

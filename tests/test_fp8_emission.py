@@ -55,7 +55,7 @@ def _src(tmp_path, precision, backend):
     return hits[0]
 
 
-# --- 1. The registry resolves both fp8 formats to a 1-byte C / Fortran type ---
+# 1. The registry resolves both fp8 formats to a 1-byte C / Fortran type
 
 
 @pytest.mark.parametrize("cli,canon,mlname", FP8_FORMATS)
@@ -89,7 +89,7 @@ def test_fp8_registry_does_not_disturb_other_dtypes() -> None:
     assert dtypes.c_type("int8") != dtypes.c_type("fp8_e4m3")
 
 
-# --- 2+3. It emits for c/cpp/fortran, and the emitted source compiles ---
+# 2+3. It emits for c/cpp/fortran, and the emitted source compiles
 
 
 @pytest.mark.parametrize("backend", ["c", "cpp", "fortran"])
@@ -135,7 +135,7 @@ def test_fp8_prelude_only_when_used(tmp_path, cli, canon, mlname) -> None:
     assert "__npb_fp8" not in fp64_c
 
 
-# --- 4. Numeric: the compiled kernel vs the ml_dtypes fp8 reference ---
+# 4. Numeric: the compiled kernel vs the ml_dtypes fp8 reference
 
 
 def _run_scaled_add(so, symbol, x8, y8, alpha8):

@@ -38,9 +38,7 @@ from numpyto_numba.emit import emit_numba
 from numpyto_pythran.emit import _pythran_scalar_type
 
 
-# --------------------------------------------------------------------------- #
 # Shared oracle loader (mirrors test_jax_semantics_fixes).                     #
-# --------------------------------------------------------------------------- #
 def _oracle() -> types.ModuleType:
     import shutil
 
@@ -67,9 +65,7 @@ def _assert_ok(status: dict[str, str], backend: str, label: str) -> None:
     assert not s.startswith("FAIL"), f"{label}: {s}"
 
 
-# --------------------------------------------------------------------------- #
 # 1. numba: prange only on a provably-independent loop.                        #
-# --------------------------------------------------------------------------- #
 _SCAN = (
     "import numpy as np\n"
     "def scan(x, a):\n"
@@ -159,9 +155,7 @@ def test_numba_parallel_scan_stays_correct() -> None:
     np.testing.assert_allclose(a, np.cumsum(x))
 
 
-# --------------------------------------------------------------------------- #
 # 2. pythran: dtype fail-loud + NaN-propagating max/min/sign.                  #
-# --------------------------------------------------------------------------- #
 def test_pythran_scalar_type_resolves_int_bool() -> None:
     # Known non-float dtypes map to their pythran spelling (not float64).
     assert _pythran_scalar_type("int", "x") == "int"
@@ -225,9 +219,7 @@ def test_pythran_sign_propagates_nan() -> None:
     _assert_ok(st, "pythran", "pythran-sign-nan")
 
 
-# --------------------------------------------------------------------------- #
 # 3. cupy: consistent ``cp`` binding + import-form handling.                   #
-# --------------------------------------------------------------------------- #
 _CUPY_SRC = "import numpy\ndef f(a, out):\n    out[:] = numpy.sqrt(a) + numpy.pi\n"
 
 

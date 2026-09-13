@@ -58,7 +58,7 @@ def test_iterations_default() -> None:
     assert fuzz.iterations() >= 1
 
 
-# --- discrete-set fuzzing ---------------------------------------------------
+# discrete-set fuzzing
 
 SET_PARAMS = {
     "L": {"nproma": 64, "istep": 1},
@@ -91,7 +91,7 @@ def test_set_sampling_reproducible() -> None:
     assert fuzz.sample_params(SET_PARAMS, 3) == fuzz.sample_params(SET_PARAMS, 3)
 
 
-# --- construct: keep a structurally-constrained size valid by construction -----
+# construct: keep a structurally-constrained size valid by construction
 
 # The lulesh pattern: numElem must be a PERFECT CUBE (edge**3) -- sample the edge
 # from a set and cube it so every fuzz draw is a valid mesh (a plain [lo, hi] range
@@ -118,7 +118,7 @@ def test_construct_cube_always_perfect_cube() -> None:
     assert len(seen) > 1  # the draw actually varies across cubes
 
 
-# --- correctness-only size cap ----------------------------------------------
+# correctness-only size cap
 
 # A big-L kernel whose fuzz range (derived [L, XL]) is well above any correctness cap.
 _BIG = {"L": {"NI": 7000, "NJ": 8000}, "XL": {"NI": 12000, "NJ": 13000}}
@@ -202,7 +202,7 @@ def test_sample_params_honors_size_cap(monkeypatch) -> None:
     assert uncapped["NI"] > 256
 
 
-# --- config_names: declared config knobs must never be fuzzed as sizes -----
+# config_names: declared config knobs must never be fuzzed as sizes
 
 # Mirrors the corpus defect this module's docstring calls out: a config-shaped int
 # (RNG seed / block-recursion cutoff) sitting in the same flat preset dict as a

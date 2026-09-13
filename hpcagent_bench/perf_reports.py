@@ -153,9 +153,7 @@ def objdump(lib: pathlib.Path) -> str | None:
     return proc.stdout
 
 
-# ---------------------------------------------------------------------------
 # perf sampling: record a process, fold its stacks into a call graph, render it.
-# ---------------------------------------------------------------------------
 
 #: The sampled event: USER-space cycles. Kernel-space samples need a lower
 #: ``perf_event_paranoid`` than a plain user account has and answer a different question

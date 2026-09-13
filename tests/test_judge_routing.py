@@ -94,7 +94,7 @@ def recorder(monkeypatch):
     return rec
 
 
-# ------------------------------ the client itself ------------------------------ #
+# the client itself
 def test_two_clients_never_cross_talk(recorder) -> None:
     """The adversarial case: interleave calls on two clients and check EVERY request went
     to the client it was made on. A shared/global base_url would show up here."""
@@ -158,7 +158,7 @@ def test_the_kernel_travels_in_the_request_not_the_client(recorder) -> None:
     ]
 
 
-# --------------------------- routing through the pipeline --------------------------- #
+# routing through the pipeline
 def fake_solve(barrier):
     """A solve_task stub that holds every worker until ALL have picked up a task.
 
@@ -283,7 +283,7 @@ def test_no_judge_url_means_no_http_grade(monkeypatch, recorder) -> None:
     assert recorder.calls == []
 
 
-# ------------------ the rank rides along: which judge did I MEAN to reach ------------------ #
+# the rank rides along: which judge did I MEAN to reach
 def test_every_endpoint_carries_the_rank(recorder) -> None:
     """The URL proves nothing on the wire -- a wrong URL reaches a wrong but LIVE judge. So the
     rank must be on EVERY request, GET and POST alike, or the judge cannot check the routing."""
@@ -335,7 +335,7 @@ def test_two_clients_carry_two_ranks(recorder) -> None:
     assert set(pairs) == {("judge-a:8000", 0), ("judge-b:8000", 1)}
 
 
-# ------------------ the run identity rides along too, exactly like the rank ------------------ #
+# the run identity rides along too, exactly like the rank
 def test_the_run_identity_rides_on_every_post(monkeypatch, recorder) -> None:
     """Who made the call is the LAUNCHER's to say. ``start_agents.sh`` / ``agent_driver.py``
     compose ``$OPTARENA_RUN_ID`` / ``$OPTARENA_OPTIMIZER`` per agent, and the judge records
@@ -381,7 +381,7 @@ def test_the_environment_beats_a_caller_supplied_identity_field(monkeypatch, rec
     assert body["optimizer"] == "optarena-vllm"
 
 
-# ------------------------- the judge refuses a mis-routed request ------------------------- #
+# the judge refuses a mis-routed request
 def test_a_matching_rank_is_no_error() -> None:
     assert rank_error(2, 2) is None
     assert rank_error(0, "0") is None  # a GET query arrives as a string
@@ -427,7 +427,7 @@ def test_health_answers_any_rank_and_reports_its_own(make_judge) -> None:
     assert JudgeClient(url, rank=0).health()["rank"] == 2
 
 
-# -------------------- the round-robin assigns the rank, not the agent -------------------- #
+# the round-robin assigns the rank, not the agent
 def test_the_round_robin_index_is_the_rank_each_worker_sends(monkeypatch, recorder) -> None:
     """4 workers over 2 judges: the rank a request carries must be the SAME ``w % J`` that chose
     its URL. A rank derived anywhere else could agree here and drift later."""

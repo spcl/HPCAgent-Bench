@@ -55,7 +55,6 @@ def is_timestep_loop(node: ast.AST, timestep_symbols: tuple[str, ...] = TIMESTEP
     return any(s in nm.lower() for nm in names for s in syms)
 
 
-# --------------------------------------------------------------------------- #
 # Parallel-loop analysis (OpenMP parallel-scope emission).
 #
 # A *source-form* dependence check (not a full polyhedral analysis): decide,
@@ -64,7 +63,6 @@ def is_timestep_loop(node: ast.AST, timestep_symbols: tuple[str, ...] = TIMESTEP
 # without changing results. Errs toward serial: anything not proven independent
 # stays a plain loop. The imperative backends (C / Fortran) consume these; the
 # same predicates gate numba's ``prange`` (single source of truth).
-# --------------------------------------------------------------------------- #
 
 
 class UnsupportedParallelError(NotImplementedError):

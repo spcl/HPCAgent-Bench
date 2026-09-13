@@ -30,9 +30,7 @@ def _all_ok(res: dict[str, str]) -> tuple[bool, dict[str, str]]:
     return all(v == "ok" or v.startswith("skip") for v in res.values()), res
 
 
-# --------------------------------------------------------------------------- #
 # _negative_const_k: -1 is a UnaryOp, not a Constant                          #
-# --------------------------------------------------------------------------- #
 
 
 def test_negative_const_k_recognizes_forms() -> None:
@@ -43,9 +41,7 @@ def test_negative_const_k_recognizes_forms() -> None:
     assert _negative_const_k(ast.parse("True", mode="eval").body) is None  # bool is not an index
 
 
-# --------------------------------------------------------------------------- #
 # the C emit turns ``a[-1]`` into ``a[N - 1]`` (no literal ``[-1]``)          #
-# --------------------------------------------------------------------------- #
 
 
 def _emit_c(src: str, inputs: list[str], shapes: dict[str, str], syms: dict[str, int]) -> str:
@@ -91,9 +87,7 @@ def test_c_emit_leaves_positive_index_alone() -> None:
     assert "a[2]" in c
 
 
-# --------------------------------------------------------------------------- #
 # numerical: bit-exact vs numpy across every backend                          #
-# --------------------------------------------------------------------------- #
 
 
 def test_bare_negative_index_read() -> None:

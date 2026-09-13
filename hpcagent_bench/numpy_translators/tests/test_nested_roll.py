@@ -69,9 +69,7 @@ def _lower_source(src: str, func: str, shapes: dict[str, str], syms: dict[str, i
     return ast.unparse(kir.tree)
 
 
-# --------------------------------------------------------------------------- #
 # Registration / structural                                                   #
-# --------------------------------------------------------------------------- #
 
 
 def test_roll_registered() -> None:
@@ -89,9 +87,7 @@ def test_subscript_operand_roll_is_hoisted() -> None:
     assert "np.roll(" not in lowered, lowered
 
 
-# --------------------------------------------------------------------------- #
 # End-to-end numerical                                                        #
-# --------------------------------------------------------------------------- #
 
 
 def test_nested_roll_subscript_operand_e2e() -> None:

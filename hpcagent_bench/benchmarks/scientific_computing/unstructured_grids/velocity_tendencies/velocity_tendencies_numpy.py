@@ -115,11 +115,11 @@ def velocity_tendencies(
     vn = p_prog_vn  # (nproma, nlev,   nblks_e)
     w = p_prog_w  # (nproma, nlevp1, nblks_c)
 
-    # ---- gather helper: A[idx[:,:,n], jk, blk[:,:,n]] -> (nproma, nblks)
+    # gather helper: A[idx[:,:,n], jk, blk[:,:,n]] -> (nproma, nblks)
     def gat(A, idx, blk, n, jk):
         return A[idx[:, :, n], jk, blk[:, :, n]]
 
-    # ===== z_w_v = cells2verts_scalar_ri(w, cells_aw_verts) (6 cells/vertex) ==
+    # z_w_v = cells2verts_scalar_ri(w, cells_aw_verts) (6 cells/vertex)
     vci = p_patch_verts_cell_idx  # (nproma, nblks_v, 6)
     vcb = p_patch_verts_cell_blk
     awv = p_int_cells_aw_verts  # (nproma, 6, nblks_v)
@@ -131,7 +131,7 @@ def velocity_tendencies(
                 acc_zwv += awv[:, n, :] * gat(w, vci, vcb, n, jk)
             z_w_v[:, jk, :] = acc_zwv
 
-    # ===== zeta = rot_vertex_ri(vn, geofac_rot) (6 edges/vertex) =============
+    # zeta = rot_vertex_ri(vn, geofac_rot) (6 edges/vertex)
     vei = p_patch_verts_edge_idx  # (nproma, nblks_v, 6)
     veb = p_patch_verts_edge_blk
     grot = p_int_geofac_rot  # (nproma, 6, nblks_v)
@@ -142,7 +142,7 @@ def velocity_tendencies(
             acc_zeta += gat(vn, vei, veb, n, jk) * grot[:, n, :]
         zeta[:, jk, :] = acc_zeta
 
-    # ===== istep == 1 edge block ===========================================
+    # istep == 1 edge block
     vt = p_diag_vt  # (nproma, nlev,   nblks_e)
     vn_ie = p_diag_vn_ie  # (nproma, nlevp1, nblks_e)
     vn_ie_ubc = p_diag_vn_ie_ubc  # (nproma, 2,      nblks_e)
@@ -189,7 +189,7 @@ def velocity_tendencies(
             + wgtfacq_e[:, 2, :] * vn[:, nlev - 3, :]
         )
 
-    # ===== z_v_grad_w (edges, lvn_only=.false.) ============================
+    # z_v_grad_w (edges, lvn_only=.false.)
     eci = p_patch_edges_cell_idx  # (nproma, nblks_e, 2)
     ecb = p_patch_edges_cell_blk
     evi = p_patch_edges_vertex_idx  # (nproma, nblks_e, 4)
@@ -215,7 +215,7 @@ def velocity_tendencies(
                     + z_vt_ie[:, jk, :] * (z_vt_ie[:, jk, :] * invr_ifc[jk] + fn_e)
                 )
 
-    # ===== cell block: z_ekinh, w_concorr_c, z_w_con_c(_full), ddt_w_adv ====
+    # cell block: z_ekinh, w_concorr_c, z_w_con_c(_full), ddt_w_adv
     cei = p_patch_cells_edge_idx  # (nproma, nblks_c, 3)
     ceb = p_patch_cells_edge_blk
     ebln = p_int_e_bln_c_s  # (nproma, 3, nblks_c)
@@ -326,7 +326,7 @@ def velocity_tendencies(
     # no separate (nblks_c, nlev) accumulator needed.
     levelmask = cfl_clip[:, :nlev, :].any(axis=(0, 2))  # (nlev,)
 
-    # ===== edge block: ddt_vn_apc_pc / ddt_vn_cor_pc =======================
+    # edge block: ddt_vn_apc_pc / ddt_vn_cor_pc
     cgk = p_metrics_coeff_gradekin  # (nproma, 2, nblks_e)
     c_lin_e = p_int_c_lin_e  # (nproma, 2, nblks_e)
     f_e = p_patch_edges_f_e  # (nproma, nblks_e)

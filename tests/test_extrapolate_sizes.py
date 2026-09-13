@@ -55,9 +55,7 @@ def measured(preset: str, wall_ms: Optional[float], nbytes: Optional[int]) -> "e
     return ex.Measured(preset=preset, wall_ms=wall_ms, nbytes=nbytes)
 
 
-# --------------------------------------------------------------------------------------------
 # fit_exponent: the core power-law recovery, on exact synthetic data.
-# --------------------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("k", [1.0, 2.0, 3.0])
@@ -113,11 +111,9 @@ def test_fit_exponent_needs_two_usable_points() -> None:
     assert "fewer than two" in why
 
 
-# --------------------------------------------------------------------------------------------
 # extrapolate: the XL projection built on top of the fit -- time-bound vs. memory-bound, the
 # per-symbol scale, and config knobs excluded from the proposal. A minimal stand-in spec exposes
 # only the two attributes extrapolate() reads (parameters, config_names).
-# --------------------------------------------------------------------------------------------
 
 
 class FakeInit:
@@ -208,10 +204,8 @@ def test_extrapolate_reports_the_fit_refusal_as_its_own_problem() -> None:
     assert "cache level" in out.problem
 
 
-# --------------------------------------------------------------------------------------------
 # measure: pins ONE precision rather than the CLI's own "all" default -- most kernels declare
 # fp64 AND fp32, and an unpinned sweep would pool both clocks into read_wall_times' "best".
-# --------------------------------------------------------------------------------------------
 
 
 def test_measure_pins_one_precision(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
@@ -230,10 +224,8 @@ def test_measure_pins_one_precision(monkeypatch: pytest.MonkeyPatch, tmp_path: p
     assert ex.MEASURE_PRECISION == "fp64"  # matches hpcagent_bench.sizing.DEFAULT_DTYPE
 
 
-# --------------------------------------------------------------------------------------------
 # measured_points: never anchor a fit on two different clocks. measure()/materialised_bytes()
 # are mocked so only the series-selection logic (the actual bug this closes) is exercised.
-# --------------------------------------------------------------------------------------------
 
 
 def test_measured_points_never_mixes_native_and_python_across_presets(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -275,10 +267,8 @@ def test_measured_points_uses_native_when_every_point_has_it(monkeypatch: pytest
     assert by_preset["M"].wall_ms == 20.0
 
 
-# --------------------------------------------------------------------------------------------
 # materialised_bytes: the Benchmark(...).get_data(preset) fallback for hand-initialized kernels
 # must resolve by canonical path-key, not by spec.short_name (they diverge for ~26 real kernels).
-# --------------------------------------------------------------------------------------------
 
 
 def test_materialised_bytes_resolves_hand_initialized_kernel_by_path_key() -> None:

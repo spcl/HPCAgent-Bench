@@ -958,7 +958,7 @@ def lulesh(
     dtcourant = 1.0e20
     dthydro = 1.0e20
     for _ in range(int(nsteps)):
-        # --- TimeIncrement: variable dt selection (matches the Fortran) ------
+        # TimeIncrement: variable dt selection (matches the Fortran)
         targetdt = _STOPTIME - time
         if _DTFIXED <= 0.0 and cycle != 0:
             olddt = deltatime
@@ -983,7 +983,7 @@ def lulesh(
             deltatime = targetdt
         time = time + deltatime
         cycle = cycle + 1
-        # --- LagrangeLeapFrog ------------------------------------------------
+        # LagrangeLeapFrog
         _lagrange_nodal(
             deltatime,
             nodelist,

@@ -33,7 +33,7 @@ def _sub(src):
     return ast.parse(src).body[0].value
 
 
-# --- timestep detection (JAX consumer) ------------------------------------------------------------
+# timestep detection (JAX consumer)
 def test_timestep_for_is_flagged() -> None:
     assert is_timestep_loop(_stmt("for t in range(TSTEPS):\n    step(t)\n"))
 
@@ -50,7 +50,7 @@ def test_non_for_node_is_not_timestep() -> None:
     assert not is_timestep_loop(_stmt("a[1:-1] = b[:-2] + b[2:]\n"))
 
 
-# --- subscript_idx_safe ---------------------------------------------------------------------------
+# subscript_idx_safe
 def test_bare_index_is_safe() -> None:
     assert subscript_idx_safe(_sub("a[i]"), "i")
 
@@ -75,7 +75,7 @@ def test_multidim_bare_in_one_axis_is_safe() -> None:
     assert subscript_idx_safe(_sub("a[i, j]"), "i")
 
 
-# --- loop_is_parallel_safe ------------------------------------------------------------------------
+# loop_is_parallel_safe
 def test_elementwise_map_is_parallel_safe() -> None:
     assert loop_is_parallel_safe(_stmt("for i in range(N):\n    c[i] = a[i] + b[i]\n"))
 
@@ -98,7 +98,7 @@ def test_scatter_is_not_parallel_safe() -> None:
     assert not loop_is_parallel_safe(_stmt("for i in range(N):\n    a[p[i]] = a[p[i]] + b[i]\n"))
 
 
-# --- loop_reduction -------------------------------------------------------------------------------
+# loop_reduction
 def test_sum_reduction_assign_form() -> None:
     assert loop_reduction(_stmt("for i in range(N):\n    s = s + a[i]\n")) == ("+", "s")
 
@@ -132,7 +132,7 @@ def test_private_temp_is_not_a_reduction() -> None:
     assert loop_reduction(_stmt("for i in range(N):\n    x = a[i] * 2.0\n    c[i] = x\n")) is None
 
 
-# --- collapsible_depth -----------------------------------------------------------------------------
+# collapsible_depth
 def test_collapse_depth_perfectly_nested_rectangular_map() -> None:
     # 3 perfectly-nested, rectangular, independent levels -> the whole nest collapses.
     node = _stmt(
@@ -186,7 +186,7 @@ def test_collapse_depth_stops_at_timestep_bound() -> None:
     assert collapsible_depth(node) == 1
 
 
-# --- has_indirect_scatter / any_parallelizable_loop -----------------------------------------------
+# has_indirect_scatter / any_parallelizable_loop
 def test_scatter_write_is_indirect() -> None:
     assert has_indirect_scatter(ast.parse("for i in range(N):\n    out[idx[i]] += x[i]\n"))
 
@@ -207,7 +207,7 @@ def test_any_parallelizable_false_for_scatter_only() -> None:
     assert not any_parallelizable_loop(ast.parse("for i in range(N):\n    out[idx[i]] += x[i]\n"))
 
 
-# --- emit_c_omp (end to end: parse -> lower -> emit) -----------------------------------------------
+# emit_c_omp (end to end: parse -> lower -> emit)
 def _kir(src, args, shapes, dtypes=None, params=None):
     from numpyto_common.frontend import parse_kernel
     from numpyto_common.lowering import lower

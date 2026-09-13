@@ -156,9 +156,7 @@ def test_a_knob_only_in_init_scalars_loads() -> None:
     assert spec.parameters == {"S": {"N": 16}, "M": {"N": 32}}
 
 
-# --------------------------------------------------------------------------- #
 # The TWO compositions of ``config:``, told apart by YAML shape.
-# --------------------------------------------------------------------------- #
 def test_a_mapping_config_crosses_its_domains_into_a_product() -> None:
     spec = BenchSpec.from_dict(
         _raw(

@@ -44,7 +44,7 @@ def tree_sitter_available() -> bool:
     return importlib.util.find_spec("tree_sitter_language_pack") is not None
 
 
-# --- tree-sitter API adapter -------------------------------------------------
+# tree-sitter API adapter
 # We support whichever tree-sitter the grammar bundle ships. The bundled binding
 # in tree-sitter-language-pack 1.x differs from the official ``tree-sitter`` PyPI
 # wheel: ``Node.kind`` instead of ``Node.type``, ``Tree.root_node`` is a method,

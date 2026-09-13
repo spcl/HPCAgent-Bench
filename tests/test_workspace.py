@@ -31,10 +31,8 @@ from hpcagent_bench.support.bindings.glue import gen_host_glue
 from hpcagent_bench.support.bindings.stubs import LANGS, gen_call_stub
 
 
-# --------------------------------------------------------------------------- #
 # A hand-built binding: y[i] = a * x[i]  (pointers x,y ; symbol N ; scalar a).
 # Canonical order is already pointers-then-scalars, each name-sorted.
-# --------------------------------------------------------------------------- #
 def _binding() -> Binding:
     args = (
         Arg(name="x", kind="ptr", dtype="float64", is_const=True),
@@ -45,9 +43,7 @@ def _binding() -> Binding:
     return Binding(kernel="wstest", config="dense", args=args, symbols={lang: "wstest_fp64" for lang in LANGS})
 
 
-# --------------------------------------------------------------------------- #
 # Pure resolvers
-# --------------------------------------------------------------------------- #
 def test_workspace_bytes_scales_with_symbols() -> None:
     b = _binding()
     data = {"x": None, "y": None, "N": 32, "a": 2.0}
@@ -80,9 +76,7 @@ def test_alloc_workspace_alignment_and_null() -> None:
     assert buf.ctypes.data % WORKSPACE_ALIGN == 0  # 256-byte aligned base
 
 
-# --------------------------------------------------------------------------- #
 # ABI surface: pair present as the trailing args, never in the ordinary arg list
-# --------------------------------------------------------------------------- #
 def test_stub_and_glue_carry_workspace_trailing() -> None:
     b = _binding()
     for lang in LANGS:
@@ -136,9 +130,7 @@ def test_binding_json_describes_workspace_and_keeps_args_clean() -> None:
     assert not (set(RESERVED_ARG_NAMES) & {a["name"] for a in j["args"]})
 
 
-# --------------------------------------------------------------------------- #
 # Envelope round-trip
-# --------------------------------------------------------------------------- #
 def test_submission_carries_workspace_bytes() -> None:
     sub = Submission.from_obj({"language": "c", "source": "x", "workspace_bytes": "8*N"})
     assert sub.workspace_bytes == "8*N"
@@ -149,11 +141,9 @@ def test_submission_carries_workspace_bytes() -> None:
     assert plain.workspace_bytes is None and "workspace_bytes" not in plain.to_json()
 
 
-# --------------------------------------------------------------------------- #
 # Native round-trip: the kernel branches on whether it got usable scratch, so
 # the OUTPUT reveals exactly what the harness passed (buffer + correct size, or
 # NULL/too-small).  y = a*x  normally;  y = a*x + MARKER  when scratch is used.
-# --------------------------------------------------------------------------- #
 _MARKER = 1000.0
 _WS_KERNEL = r"""
 #include <stdint.h>

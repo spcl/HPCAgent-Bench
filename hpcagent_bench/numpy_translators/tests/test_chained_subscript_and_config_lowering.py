@@ -43,7 +43,7 @@ def _unparse(node: ast.AST) -> str:
     return ast.unparse(ast.fix_missing_locations(node))
 
 
-# ---- structural: chained subscript collapses to a single subscript ----
+# structural: chained subscript collapses to a single subscript
 
 
 def _collapse(expr: str, shapes) -> str:
@@ -92,7 +92,7 @@ def test_collapse_bails_on_ellipsis_inner() -> None:
     assert _collapse("A[..., j][k]", {"A": ("n", "m", "p")}) == "A[..., j][k]"
 
 
-# ---- pure: a boolean preset value is a config-flag name (typed bool) ----
+# pure: a boolean preset value is a config-flag name (typed bool)
 
 
 def test_bool_preset_names_picks_boolean_flags_not_int_symbols() -> None:
@@ -104,7 +104,7 @@ def test_bool_preset_names_picks_boolean_flags_not_int_symbols() -> None:
     assert _collect_bool_preset_names(params) == {"okvan", "tqr"}
 
 
-# ---- numeric: bit-close to numpy across every backend ----
+# numeric: bit-close to numpy across every backend
 
 
 def test_chained_column_dot_matches_numpy() -> None:
@@ -184,7 +184,7 @@ def test_shape_of_complex_array_is_integer_bound() -> None:
     assert ok, r
 
 
-# ---- .shape / len / .size resolve to the SYMBOLIC dims that were provided ----
+# .shape / len / .size resolve to the SYMBOLIC dims that were provided
 # ``_ShapeMidExpressionRewriter`` rewrites an inline extent read against the array's
 # declared shape tuple, so ``A.shape[k]`` emits the k-th shape SYMBOL (not a native
 # ``.shape`` the C / Fortran backends cannot lower).
@@ -229,7 +229,7 @@ def test_shape_of_unknown_array_is_left_untouched() -> None:
     assert _rewrite_shape("A.shape[0]", {}) == "A.shape[0]"
 
 
-# ---- .shape read is INTEGER even off a complex array (skips the complex walk) ----
+# .shape read is INTEGER even off a complex array (skips the complex walk)
 
 
 def test_reads_complex_skips_shape_subtree_bare_and_compound() -> None:
@@ -251,7 +251,7 @@ def test_reads_complex_still_detects_a_genuine_complex_value_read() -> None:
     assert _reads_complex(_expr("(1 + 2j)"), dt) is True
 
 
-# ---- trailing implicit-axis pad reads at the LOCAL slice offset (iter - start) ----
+# trailing implicit-axis pad reads at the LOCAL slice offset (iter - start)
 
 
 def _pad_trailing(rhs_expr: str, start, source_shape):
@@ -282,7 +282,7 @@ def test_trailing_pad_no_offset_for_zero_start() -> None:
     assert _pad_trailing("dH[a, b]", 0, ("A", "B", "M")) == "dH[a, b, si]"
 
 
-# ---- iter-start offset copies the shared start node (no AST aliasing) ----
+# iter-start offset copies the shared start node (no AST aliasing)
 
 
 def test_iter_minus_start_copies_shared_start_node() -> None:

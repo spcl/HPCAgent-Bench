@@ -37,9 +37,7 @@ def _block0(nranks: int, arrays) -> Descriptor:
     return Descriptor(grid=Grid((nranks,)), arrays={n: ad for n in arrays}, symbol_axes={"N": [("x", 0)]})
 
 
-# --------------------------------------------------------------------------------------- #
 # Infile: tiles, localised scalars, per-rank workspace
-# --------------------------------------------------------------------------------------- #
 def test_infile_roundtrip_localises_symbol_and_workspace() -> None:
     N, R = 10, 4  # ragged: 10 over 4 -> 3,3,2,2
     b, desc = _yax_binding(), _block0(4, ("x", "y"))
@@ -131,9 +129,7 @@ def test_unpack_rejects_bad_magic() -> None:
         unpack_infile(b"\x00" * 64)
 
 
-# --------------------------------------------------------------------------------------- #
 # Outfile + the full scatter -> compute -> gather round-trip (what the drivers actually do)
-# --------------------------------------------------------------------------------------- #
 def test_outfile_roundtrip() -> None:
     tiles = [np.arange(3.0), np.arange(3.0, 5.0)]  # ragged per-rank output tiles
     raw = pack_outfile(2, 4, [0.1, 0.2, 0.3, 0.05], [("y", "float64", tiles)])

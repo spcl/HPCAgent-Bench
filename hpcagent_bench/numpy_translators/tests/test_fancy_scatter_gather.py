@@ -180,9 +180,7 @@ def test_roll_sliced_self_assign() -> None:
     assert ok, res
 
 
-# --------------------------------------------------------------------------- #
 # Chained gather: associativity does NOT hold for an advanced index            #
-# --------------------------------------------------------------------------- #
 
 
 def test_chained_gather_is_not_flattened_into_one_subscript() -> None:
@@ -211,10 +209,8 @@ def test_chained_scalar_index_is_still_flattened() -> None:
     assert _ast.unparse(tree).strip() == "y = psi[f, ..., 0]"
 
 
-# --------------------------------------------------------------------------- #
 # Broadcast gather: several advanced indices in ONE subscript numpy-broadcast  #
 # instead of summing their ranks (icon_gather's A[idx, lev, blk] regression)   #
-# --------------------------------------------------------------------------- #
 
 
 def test_gather_two_broadcast_arrays_plus_scalar_axis() -> None:

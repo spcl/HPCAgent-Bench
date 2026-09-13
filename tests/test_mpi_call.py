@@ -52,7 +52,7 @@ def _driver(cmd) -> str:
     return Path(cmd[0]).name
 
 
-# --- build_mpi_executable_commands: pure command shape (no compiler needed) ---
+# build_mpi_executable_commands: pure command shape (no compiler needed)
 def test_build_commands_compile_each_source_and_link_executable() -> None:
     cmds = build_mpi_executable_commands([("c", Path("k.c"))], Path("d.c"), Path("bench"))
     assert len(cmds) == 3  # compile kernel, compile driver, link
@@ -115,7 +115,7 @@ def test_mpi_wrapper_flags_missing_wrapper_is_empty() -> None:
     assert mpi_wrapper_flags("definitely-not-a-real-compiler-xyz") == ([], [])
 
 
-# --- with_oversubscribe: family-aware, idempotent launcher rewrite (pure, no launch) ---
+# with_oversubscribe: family-aware, idempotent launcher rewrite (pure, no launch)
 def test_oversubscribe_no_op_for_mpich_hydra() -> None:
     # Hydra oversubscribes by default and rejects --oversubscribe (OpenMPI-only), so it stays untouched.
     assert mpi_call.with_oversubscribe(["mpiexec.mpich", "-n"]) == ["mpiexec.mpich", "-n"]
@@ -139,7 +139,7 @@ def test_oversubscribe_leaves_srun_to_the_scheduler() -> None:
     assert mpi_call.with_oversubscribe([]) == []
 
 
-# --- Sandbox.build_mpi: delivery handling ---
+# Sandbox.build_mpi: delivery handling
 def test_build_mpi_any_delivery_unsupported() -> None:
     b = _yax_binding()
     sub = Submission(language="c", library="/tmp/does-not-matter.so")
@@ -189,7 +189,7 @@ def test_build_mpi_writes_both_gpu_translation_units() -> None:
     assert written == (_CUDA_HOST_TU, _CUDA_DEVICE_TU), "the device kernels must not land in the host unit"
 
 
-# --- End to end: build -> scatter -> launch -> gather (gated on a working MPI toolchain) ---
+# End to end: build -> scatter -> launch -> gather (gated on a working MPI toolchain)
 def test_build_mpi_and_run_round_trip(tmp_path) -> None:
     tc = c_toolchain()
     if tc is None:
@@ -227,7 +227,7 @@ def test_run_nonzero_exit_is_scored_runtimeerror(tmp_path) -> None:
         )
 
 
-# --- device residency (E1): the launch argv + the H2D/D2H staging ---------------------------------
+# device residency (E1): the launch argv + the H2D/D2H staging
 
 
 def _cuda_available() -> bool:

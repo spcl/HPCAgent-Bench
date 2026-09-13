@@ -70,9 +70,7 @@ def submissions(rows: list[dict[str, object]]) -> pd.DataFrame:
     return out
 
 
-# --------------------------------------------------------------------------- #
 # Defect 1: an aggregate refuses a mixed-denominator slice.
-# --------------------------------------------------------------------------- #
 def test_a_blank_or_adhoc_arm_is_not_a_condition() -> None:
     """A DB-shaped frame keeps a blank arm as a string, where pandas grouping would not drop it."""
     frame = pd.DataFrame({"arm": ["llr40v9-m-c", "adhoc", "", " ", None], "benchmark": ["k1"] * 5})
@@ -149,9 +147,7 @@ def test_a_job_that_graded_against_two_references_is_refused_not_stamped(analyze
         analyze.stamp_denominator(rows)
 
 
-# --------------------------------------------------------------------------- #
 # Defect 2: an arm comparison is over one kernel set, and it says which.
-# --------------------------------------------------------------------------- #
 def test_an_arm_comparison_is_computed_over_one_kernel_set() -> None:
     """Each arm's geomean was over whatever it solved, so ranking the arms ranked coverage too:
     across the 21 llr40 arms ``corr(log geomean, n_kernels)`` was -0.30, meaning solving more
@@ -230,9 +226,7 @@ def test_the_mcnemar_definition_here_agrees_with_the_login_node_copy(ablation) -
             assert mine == pytest.approx(theirs), f"{only_left}/{only_right}: {mine} against {theirs}"
 
 
-# --------------------------------------------------------------------------- #
 # Defect 3: the episode key is what the docstring claims it is.
-# --------------------------------------------------------------------------- #
 def test_the_episode_key_is_the_run_id_scoped_by_the_job_that_produced_it() -> None:
     """``runs.run_id`` is a PRIMARY KEY inside ONE results database and a launcher derives it from
     the rank layout, so two jobs of one arm reuse it -- 154 of 226 llr40 run_ids appear under more
@@ -368,9 +362,7 @@ def test_the_score_change_figure_scores_graded_rows_and_costs_call_rows() -> Non
     assert population.kernel_tokens(rows).tolist() == [900.0]
 
 
-# --------------------------------------------------------------------------- #
 # The two shipped reductions must not disagree.
-# --------------------------------------------------------------------------- #
 def campaign_shard(run_dir: pathlib.Path) -> None:
     """One arm, two episodes on one kernel, each improving and then regressing on its last row.
 

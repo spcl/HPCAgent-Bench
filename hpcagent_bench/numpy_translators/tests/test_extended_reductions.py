@@ -41,9 +41,7 @@ def _count_for_loops(stmts: list[ast.stmt]) -> int:
     return n
 
 
-# ---------------------------------------------------------------------------
 # A. np.var                                                                   #
-# ---------------------------------------------------------------------------
 
 
 def test_var_axis_none_two_dim() -> None:
@@ -77,9 +75,7 @@ def test_var_keepdims_writes_const_zero_on_reduced_axis() -> None:
     assert seen_const_zero
 
 
-# ---------------------------------------------------------------------------
 # B. np.any / np.all                                                          #
-# ---------------------------------------------------------------------------
 
 
 def test_any_axis_int_one_dim_result() -> None:
@@ -104,9 +100,7 @@ def test_count_nonzero_axis_negative() -> None:
     assert _count_for_loops(stmts) == 3
 
 
-# ---------------------------------------------------------------------------
 # C. np.argmax / np.argmin                                                    #
-# ---------------------------------------------------------------------------
 
 
 def test_argmax_axis_none_full_reduction() -> None:
@@ -155,9 +149,7 @@ def test_argmax_axis_tuple_duplicate_rejected() -> None:
         expand_argmax(_target("out"), args, {"A": ("N", "M")}, kws)
 
 
-# ---------------------------------------------------------------------------
 # D. np.linalg.norm (full axis + keepdims)                                    #
-# ---------------------------------------------------------------------------
 
 
 def test_linalg_norm_full_reduction() -> None:

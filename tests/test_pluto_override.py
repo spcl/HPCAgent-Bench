@@ -197,13 +197,11 @@ def test_oracle_pluto_leg_transforms_the_override_path_not_a_generated_copy(
     )
 
 
-# --------------------------------------------------------------------------------------------------
 # fp32. PolyBench/C ships one DATA_TYPE per kernel and the tracked overrides fix it to `double`,
 # while the benchmarks they back call `initialize(..., datatype=np.float32)`. So the timed column
 # asks for `<base>_fp32`, the library exports only `<base>_fp64`, and the measurement dies inside
 # `cpp_runtime.call` with "no symbol for fp32" -- job 4391506, four of four override-backed lvl1
 # kernels (gemm, seidel_2d, syrk, trmm), none of them a Pluto transformation failure.
-# --------------------------------------------------------------------------------------------------
 
 
 def test_the_fp32_specialization_retypes_and_renames_nothing_else(tmp_path) -> None:

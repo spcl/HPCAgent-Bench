@@ -29,9 +29,7 @@ def _ivar(name: str) -> ast.Name:
     return ast.Name(id=name, ctx=ast.Load())
 
 
-# --------------------------------------------------------------------------- #
 # A. Plain shape lookup                                                        #
-# --------------------------------------------------------------------------- #
 
 
 def test_bare_name_returns_full_shape() -> None:
@@ -44,9 +42,7 @@ def test_unknown_name_returns_none() -> None:
     assert _iter_extent_of(_expr("A"), {}) is None
 
 
-# --------------------------------------------------------------------------- #
 # B. Slicing                                                                   #
-# --------------------------------------------------------------------------- #
 
 
 def test_full_slice_yields_full_extent() -> None:
@@ -77,9 +73,7 @@ def test_subscript_omitted_trailing_axes_filled_in() -> None:
     assert ast.unparse(ext[1]) == "M"
 
 
-# --------------------------------------------------------------------------- #
 # C. ``np.newaxis`` (== ``None``) extent                                       #
-# --------------------------------------------------------------------------- #
 
 
 def test_newaxis_trailing_inserts_length_1() -> None:
@@ -110,9 +104,7 @@ def test_newaxis_between_existing_axes_on_2d() -> None:
     assert _unparse_ext(ext) == ("N", "1", "M")
 
 
-# --------------------------------------------------------------------------- #
 # D. Broadcast extents through BinOp                                           #
-# --------------------------------------------------------------------------- #
 
 
 def test_binop_extent_picks_wider_operand() -> None:
@@ -143,9 +135,7 @@ def test_binop_broadcast_short_against_2d() -> None:
     assert _unparse_ext(ext) == ("N", "M")
 
 
-# --------------------------------------------------------------------------- #
 # E. Scalarisation -- iter consumption                                         #
-# --------------------------------------------------------------------------- #
 
 
 def test_scalarize_bare_name_uses_single_iter() -> None:
@@ -168,9 +158,7 @@ def test_scalarize_broadcasted_1d_subscripts_trailing_iter() -> None:
     assert ast.unparse(out) == "b[j]"
 
 
-# --------------------------------------------------------------------------- #
 # F. Scalarisation -- newaxis drops its iter                                   #
-# --------------------------------------------------------------------------- #
 
 
 def test_scalarize_y_newaxis_drops_inner_iter() -> None:
@@ -209,9 +197,7 @@ def test_scalarize_conv2d_pattern_simplified() -> None:
     assert ast.unparse(out) == "input[n, h, w] * weights[h, w, c]"
 
 
-# --------------------------------------------------------------------------- #
 # G. Reduction extents -- existing ``np.sum`` etc.                             #
-# --------------------------------------------------------------------------- #
 # Full reduction-call extent is handled in ``_expand_axis_reduction``;
 # the extent helper itself only sees the array argument.
 
@@ -224,9 +210,7 @@ def test_extent_of_reduction_argument_drops_axis() -> None:
     assert _unparse_ext(ext) == ("N", "M")
 
 
-# --------------------------------------------------------------------------- #
 # F. Advanced (gather) indexing under a newaxis                                #
-# --------------------------------------------------------------------------- #
 
 _GATHER_SHAPES = {
     "x": ("n_atoms", "3"),

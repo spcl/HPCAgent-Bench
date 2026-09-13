@@ -58,9 +58,7 @@ def lowered(src: str, func: str, inputs, outputs, shapes, syms):
     return lower(parse_kernel(npy, bi))
 
 
-# --------------------------------------------------------------------------------------------- #
 # a slice indexing THROUGH a partial slice
-# --------------------------------------------------------------------------------------------- #
 
 _DWT_SRC = (
     "import numpy as np\n"
@@ -111,9 +109,7 @@ def test_two_bounded_stops_still_decline_because_numpy_clamps_between_them() -> 
     assert any(isinstance(n, ast.Subscript) and isinstance(n.value, ast.Subscript) for n in ast.walk(kir.tree))
 
 
-# --------------------------------------------------------------------------------------------- #
 # a masked select through a view, feeding several reductions
-# --------------------------------------------------------------------------------------------- #
 
 _MASK_SRC = (
     "import numpy as np\n"
@@ -164,9 +160,7 @@ def test_the_masked_select_is_fused_away_rather_than_materialised() -> None:
     assert any(n.id == "match" for n in ast.walk(kir.tree) if isinstance(n, ast.Name))
 
 
-# --------------------------------------------------------------------------------------------- #
 # ``a = b = None`` sentinels the branches below fill
-# --------------------------------------------------------------------------------------------- #
 
 _SENTINEL_SRC = (
     "import numpy as np\n"
@@ -226,9 +220,7 @@ def test_a_sentinel_a_test_still_inspects_is_kept() -> None:
     assert [n for n in ast.walk(fn) if isinstance(n, ast.Constant) and n.value is None]
 
 
-# --------------------------------------------------------------------------------------------- #
 # a bare list literal used as a fancy index
-# --------------------------------------------------------------------------------------------- #
 
 _LIST_SRC = (
     "import numpy as np\n"

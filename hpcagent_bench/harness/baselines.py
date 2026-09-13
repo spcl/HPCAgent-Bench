@@ -356,7 +356,6 @@ class AgentBaseline:
         )
 
 
-# --------------------------------------------------------------------------------------------
 # The ``optimas`` baseline: a reward-driven prompt search around the loop above.
 #
 # Optimas (Wu et al., "Optimizing Compound AI Systems with Globally Aligned Local Rewards",
@@ -400,7 +399,6 @@ class AgentBaseline:
 # The in-repo implementation below stays the DEFAULT and the control: it is zero-dependency, always
 # runs in CI, keeps proposals inside this run's token accounting and offline test seam, and cannot
 # break on an upstream pin. requirements/agent-optimas.txt has the working install.
-# --------------------------------------------------------------------------------------------
 
 #: Hard cap on a proposed instruction, in characters. A proposer is a language model, and a runaway
 #: completion would otherwise push the real task out of the model's attention.

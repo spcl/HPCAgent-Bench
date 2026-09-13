@@ -126,7 +126,7 @@ class SearchResponse:
     answer: str | None = None
 
 
-# --------------------------------------------------------------- JSON boundary --
+# JSON boundary
 #: What a JSON request body may hold. ``json.dumps`` accepts exactly this, so a value it would
 #: refuse cannot reach the wire.
 JsonValue: TypeAlias = "str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]"
@@ -168,7 +168,7 @@ def json_answer(block: JsonObject, key: str) -> str | None:
     return None if value is None else str(value)
 
 
-# ------------------------------------------------------------- env / selection --
+# env / selection
 def _env_key(provider: Provider) -> str | None:
     for name in _ENV_KEYS[provider]:
         value = os.environ.get(name)
@@ -227,7 +227,7 @@ def _credentials(provider: Provider, config: WebSearchConfig) -> tuple[str, str 
     return key, cse_id
 
 
-# ---------------------------------------------------------------- HTTP helpers --
+# HTTP helpers
 def _get_request(url: str, params: dict[str, QueryValue], headers: dict[str, str]) -> urllib.request.Request:
     return urllib.request.Request(f"{url}?{urllib.parse.urlencode(params)}", headers=headers, method="GET")
 
@@ -261,7 +261,7 @@ def _http_json(request: urllib.request.Request, timeout: float) -> JsonObject:
     return cast("JsonObject", payload)
 
 
-# ------------------------------------------------------- per-provider requests --
+# per-provider requests
 def _req_tavily(q: str, key: str, cse_id: str | None, cfg: WebSearchConfig) -> urllib.request.Request:
     return post_request(
         "https://api.tavily.com/search",
@@ -340,7 +340,7 @@ _REQUEST: dict[Provider, Callable[[str, str, str | None, WebSearchConfig], urlli
 }
 
 
-# --------------------------------------------------------- per-provider parsers --
+# per-provider parsers
 #: What every parser hands back: the normalized hits, plus the provider's answer when it has one.
 Parsed: TypeAlias = "tuple[list[SearchResult], str | None]"
 
@@ -434,7 +434,7 @@ _PARSE: dict[Provider, Callable[[JsonObject, WebSearchConfig], Parsed]] = {
 }
 
 
-# ----------------------------------------------------------------- public entry --
+# public entry
 def search(
     query: str,
     config: WebSearchConfig | None = None,

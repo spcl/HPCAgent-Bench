@@ -177,7 +177,7 @@ def test_a_missing_metric_is_never_confusable_with_zero() -> None:
     assert row["count"] is None and row["missing"] == "nope"
 
 
-# ------------------------------ groups: the ask ------------------------------ #
+# groups: the ask
 def test_every_group_names_metrics_that_exist() -> None:
     """A group is what a caller asks for, so a name in one that no metric answers would be a
     request the wrapper accepts and cannot serve."""
@@ -222,7 +222,7 @@ def test_the_client_default_group_is_a_real_group() -> None:
     assert default in papi.GROUPS
 
 
-# --------------------------- derived ratios: the reading --------------------------- #
+# derived ratios: the reading
 def counted_row(metric: str, count: int, *, expression: str = "PAPI_X", elapsed_ns: int = 1_000_000) -> dict:
     """One counting-worker payload, as :func:`papi.derive` consumes it."""
     return {"metric": metric, "count": count, "expression": expression, "elapsed_ns": elapsed_ns}
@@ -732,7 +732,7 @@ def test_open_counter_names_a_thread_it_cannot_attach_to() -> None:
     assert str(0x7FFFFFF0) in why
 
 
-# ------------------- per-thread CPI/IPC: the imbalance a sum averages away ------------------- #
+# per-thread CPI/IPC: the imbalance a sum averages away
 #: One physical core per pair of cpus, the layout of every 2-way SMT x86 box: cpu N and cpu N+8
 #: are the two hardware threads of one core. Frozen as data so the pinning and SMT rules are
 #: testable on a host with any topology at all, including none.
