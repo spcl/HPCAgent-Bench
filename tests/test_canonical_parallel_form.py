@@ -155,6 +155,22 @@ def test_the_route_serves_the_cached_form(
     assert answer["binding"] == "{}"
 
 
+def test_the_route_serves_the_form_for_the_registry_key_an_agent_sends(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, make_judge: Any
+) -> None:
+    """An agent names the kernel by its task's path-style key. Read as its first segment, every
+    request looked up the track's name and answered unavailable for a kernel the view serves."""
+    from hpcagent_bench import config
+    from hpcagent_bench.api import RunConfig
+
+    view = publish_view(tmp_path, "example_kernel", "// pre-rendered\n")
+    monkeypatch.setattr(config, "get", lambda key, default=None: str(view) if "canonical" in key else default)
+    _, url = make_judge(RunConfig())
+    answer = get_form(url, "loop_level_reasoning/example_kernel/example_kernel")
+    assert answer["verdict"] == "ok"
+    assert answer["source"] == "// pre-rendered\n"
+
+
 def test_a_route_miss_is_unavailable_and_names_what_is_missing(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, make_judge: Any
 ) -> None:
