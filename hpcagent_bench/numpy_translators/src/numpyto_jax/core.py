@@ -31,6 +31,8 @@ import ast
 import copy
 from typing import List, Optional, Set
 
+from numpyto_common.emit_io import hoist_future_imports
+
 
 class EmitError(Exception):
     """A numpy construct the prototype does not (yet) lower."""
@@ -1371,7 +1373,7 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
             static=(sorted(concrete.get(h.name, ())) if jit else None),
         ) + ["", ""]
     deco = _kernel_decorator(fn, kernel_static) if jit else None
-    return (
+    return hoist_future_imports(
         "\n".join(
             head
             + _emit_function(
