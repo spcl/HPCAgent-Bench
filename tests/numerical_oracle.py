@@ -287,9 +287,10 @@ def dace_build_root() -> pathlib.Path:
     return paths.scratch_root("hpcagent_bench") / "dace_numeric"
 
 
-def _all_backend_status(reason: str) -> Dict[str, str]:
-    """``{backend: reason}`` for every gated backend (native + PY_BACKENDS + jax); pluto is opt-in."""
-    return {b: reason for b in (*BACKENDS, *PY_BACKENDS, "jax")}
+def backend_statuses(reason: str, only_backends: Optional[set] = None) -> Dict[str, str]:
+    """``{backend: reason}`` for every gated backend (native + PY_BACKENDS + jax) and every backend
+    ``only_backends`` names, so a kernel-wide verdict also reaches an opt-in backend such as pluto."""
+    return {b: reason for b in (*BACKENDS, *PY_BACKENDS, "jax", *sorted(only_backends or ()))}
 
 
 #: Defaults for ``hpcagent_bench/config.yaml``'s ``oracle:`` block when a key is absent.
@@ -601,9 +602,9 @@ def run_kernel(
     if "sparse_layouts" in info:
         # Delegated to hpcagent_bench/numpy_translators/tests/test_sparse_oracle.py, which builds the
         # per-layout scipy buffer ABI this sweep cannot (run_kernel's arg list is the logical operand).
-        return _all_backend_status("skip:sparse")
+        return backend_statuses("skip:sparse", only_backends)
     if spec.init is None:
-        return _all_backend_status("skip:no-init")
+        return backend_statuses("skip:no-init", only_backends)
     # Grade at the precision the kernel actually computes in (a declared float32 survives the fp64
     # sweep untouched) -- see _grading_precision. Tolerance only, not what is built/run.
     rtol, atol = PRECISIONS[_grading_precision(spec, precision)][3:5]
@@ -676,11 +677,11 @@ def run_kernel(
                 )
             )
         else:
-            return _all_backend_status("skip:no-init")
+            return backend_statuses("skip:no-init", only_backends)
     except Exception as exc:  # noqa: BLE001
         # Materialising inputs failed: the gate's own premise broke, so this is a FAILURE for every
         # backend, not a silent skip.
-        return _all_backend_status(f"FAIL:init-error:{type(exc).__name__}")
+        return backend_statuses(f"FAIL:init-error:{type(exc).__name__}", only_backends)
 
     # A genuinely sparse operand (scipy sparse, e.g. the sp_* Krylov solvers' CSR A) has no single
     # arg list that fits both the logical reference call and the native kernel's unpacked buffers.
@@ -691,7 +692,7 @@ def run_kernel(
         from scipy.sparse import issparse
 
         if any(issparse(v) for v in by.values()):
-            return _all_backend_status("skip:sparse")
+            return backend_statuses("skip:sparse", only_backends)
     except ImportError:
         pass
 
@@ -776,7 +777,7 @@ def run_kernel(
         values = {**{nm: syms[nm] for nm in info["input_args"] if nm in syms}, **npd}
         unresolved = [nm for nm in info["input_args"] if nm not in values]
         if unresolved:
-            return {b: f"skip:unresolved-arg:{unresolved[0]}" for b in BACKENDS}
+            return backend_statuses(f"skip:unresolved-arg:{unresolved[0]}", only_backends)
         # Set precision globals before loading the reference: some references use np_complex as a
         # dtype at import time (mandelbrot), which is None until set_datatype runs.
         from hpcagent_bench.frameworks import framework
@@ -787,7 +788,7 @@ def run_kernel(
             ret = call_by_name(_numpy_fn(info), info["input_args"], values)
         except Exception as exc:  # noqa: BLE001
             # The numpy reference itself failed: ground truth is broken, so FAIL every backend.
-            return {b: f"FAIL:numpy-error:{type(exc).__name__}" for b in (*BACKENDS, *PY_BACKENDS)}
+            return backend_statuses(f"FAIL:numpy-error:{type(exc).__name__}", only_backends)
         ret_vals = list(ret) if isinstance(ret, tuple) else [ret] if ret is not None else []
 
         # A kernel's outputs are (a) array-valued returns -> extra_outputs (unfilled ptr args, e.g.
@@ -821,7 +822,7 @@ def run_kernel(
                 dt = _np_dtype_for_kind(a["kind"], np_float)
             by[nm] = np.zeros(shape, dtype=dt)
         if not compare:
-            return {b: "skip:no-output" for b in BACKENDS}
+            return backend_statuses("skip:no-output", only_backends)
 
         _ext = {"c": ".c", "cpp": ".cpp", "fortran": ".f90"}
         for backend in BACKENDS:
@@ -1013,6 +1014,21 @@ def _dep_available(dep: str) -> bool:
         except Exception:  # noqa: BLE001
             return False
     return True
+
+
+def backend_missing(backend: str) -> str:
+    """What this host lacks to run ``backend``, or ``""`` when nothing is missing.
+
+    Stricter than the per-leg ``skip:not-installed`` checks: pythran also needs its console script on
+    PATH, since the leg spawns ``pythran`` and a missing script FAILs every case instead."""
+    if backend in COMPILE:
+        return "" if shutil.which(COMPILE[backend][0]) else f"{COMPILE[backend][0]} is not on PATH"
+    if backend == PLUTO:
+        return "" if pluto_transform.polycc_exe() else "polycc is not on PATH"
+    if backend == "pythran" and shutil.which("pythran") is None:
+        return "the pythran console script is not on PATH"
+    dep = PY_BACKENDS[backend][3] if backend in PY_BACKENDS else backend
+    return "" if _dep_available(dep) else f"{dep} is not importable"
 
 
 def _run_py_backend(backend, short, info, by, syms, expected, compare, rtol, atol, emit_prec: str = "") -> str:
