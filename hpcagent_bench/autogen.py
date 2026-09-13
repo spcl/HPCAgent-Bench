@@ -20,8 +20,6 @@ C/C++/Fortran siblings (``cpp_backend/``, precision-specialised) are a separate
 path and are NOT generated here.
 """
 
-from __future__ import annotations
-
 import ast
 import json
 import pathlib

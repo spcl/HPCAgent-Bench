@@ -155,9 +155,7 @@ def test_header_is_fixed_for_the_life_of_the_csv_file(tmp_path) -> None:
 def monitor_report():
     spec = importlib.util.spec_from_file_location("monitor_report", REPORT)
     module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module  # dataclasses resolves its `from __future__` string
-    # annotations via sys.modules[cls.__module__]; skipping this registration crashes
-    # NodeStats's class body with an AttributeError on a None module.
+    sys.modules[spec.name] = module  # registered before exec, as a real import does
     spec.loader.exec_module(module)
     return module
 

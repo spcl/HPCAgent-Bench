@@ -33,7 +33,6 @@ official unprivileged install into a user prefix, exposed as the ``hpcagent-benc
 entry point.
 """
 
-from __future__ import annotations
 import os
 import pathlib
 import shutil

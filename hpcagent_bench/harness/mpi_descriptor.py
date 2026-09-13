@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """MPI data-distribution descriptors: how a global array is partitioned across a processor grid."""
 
-from __future__ import annotations
-
 import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple

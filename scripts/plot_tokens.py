@@ -15,8 +15,6 @@ Drawn on a log y axis because spend spans decades -- a linear axis puts every or
 the first tenth of the panel and gives the runaway the other nine.
 """
 
-from __future__ import annotations
-
 import argparse
 import pathlib
 

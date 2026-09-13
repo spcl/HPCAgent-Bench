@@ -3,7 +3,6 @@
 
 """Inputs for the RK45 Robertson ensemble: NSYS independent stiff systems, randomised ICs."""
 
-from __future__ import annotations
 import numpy as np
 
 

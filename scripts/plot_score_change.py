@@ -32,8 +32,6 @@ too small for the test to run at all reads ``underpowered`` and is never starred
 
 """
 
-from __future__ import annotations
-
 import argparse
 import math
 import pathlib

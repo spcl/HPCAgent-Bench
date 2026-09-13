@@ -14,7 +14,6 @@ registers them with numpy at import time so ``arr.astype(dtype)`` and
 ``np.allclose`` work uniformly.
 """
 
-from __future__ import annotations
 import enum
 from dataclasses import dataclass
 from typing import Dict, Tuple

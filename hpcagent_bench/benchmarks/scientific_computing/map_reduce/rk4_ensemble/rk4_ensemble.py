@@ -3,7 +3,6 @@
 
 """Inputs for the RK4 Brusselator ensemble: NSYS independent systems, randomised ICs."""
 
-from __future__ import annotations
 import numpy as np
 
 

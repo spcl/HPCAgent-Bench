@@ -38,7 +38,6 @@ do not have; the fix is shape-GENERIC helpers, extents passed per call site.
 Marked ``integration``: it lowers the whole registry, far too slow for the default suite.
 """
 
-from __future__ import annotations
 import dataclasses
 from typing import List, Optional, Tuple
 

@@ -24,8 +24,6 @@ on a large kernel, and a sweep must lose that kernel rather than the sweep -- th
 the child (``python -m hpcagent_bench.cpf_bridge``).
 """
 
-from __future__ import annotations
-
 import argparse
 import contextlib
 import functools
@@ -109,7 +107,7 @@ def program_name(path: pathlib.Path) -> str:
     return path.stem
 
 
-def resolve_program(module: ModuleType, path: pathlib.Path, entry: str = "") -> DaceProgram | None:
+def resolve_program(module: ModuleType, path: pathlib.Path, entry: str = "") -> "DaceProgram | None":
     """The ``DaceProgram`` in ``module`` that is the kernel's ENTRY POINT, or ``None``.
 
     ``entry`` is the manifest's ``func_name``, and it is asked first because it is the only name
@@ -132,7 +130,7 @@ def resolve_program(module: ModuleType, path: pathlib.Path, entry: str = "") -> 
     return programs[0][1] if len(programs) == 1 else None
 
 
-def binding_for(rendering: Rendering, kernel: str, symbol: str) -> Binding:
+def binding_for(rendering: "Rendering", kernel: str, symbol: str) -> Binding:
     """The CPF entry point's own binding, read off the PREPARED SDFG in the RENDERED order.
 
     ``rendering.sdfg`` rather than the SDFG handed to the renderer: preparation expands library
@@ -178,14 +176,14 @@ DACE_BANNER = "/* DaCe AUTO-GENERATED FILE. DO NOT MODIFY */"
 ABI_SYMBOL_LOCAL = "_abi_unused_"
 
 
-def dace_int64() -> dace_dtypes.typeclass:
+def dace_int64() -> "dace_dtypes.typeclass":
     """``dace.int64``, imported late -- this module is imported without dace on the parent side."""
     import dace
 
     return dace.int64
 
 
-def dace_uint8() -> dace_dtypes.typeclass:
+def dace_uint8() -> "dace_dtypes.typeclass":
     """``dace.uint8``, imported late for the same reason."""
     import dace
 
@@ -199,7 +197,7 @@ def dace_symbolic() -> ModuleType:
     return symbolic
 
 
-def add_workspace(sdfg: SDFG) -> None:
+def add_workspace(sdfg: "SDFG") -> None:
     """Give the SDFG the reserved scratch pair, so the rendered entry is callable through the ABI.
 
     ``workspace`` / ``workspace_size`` are not in ``binding.args``: the stub and the host glue
@@ -232,7 +230,7 @@ def add_workspace(sdfg: SDFG) -> None:
     assert isinstance(sdfg.arrays[WORKSPACE_NAME], dace_data.Array)
 
 
-def force_abi_symbols(sdfg: SDFG, wanted: Sequence[str]) -> tuple[str, ...]:
+def force_abi_symbols(sdfg: "SDFG", wanted: Sequence[str]) -> tuple[str, ...]:
     """Make ``wanted`` symbols part of the entry signature even where nothing uses them.
 
     A size parameter the ABI passes can be absent from the SDFG entirely: ``fuse_move_ifs`` takes
@@ -273,7 +271,7 @@ def force_abi_symbols(sdfg: SDFG, wanted: Sequence[str]) -> tuple[str, ...]:
     return tuple(forced)
 
 
-def copies_whole_argument(sdfg: SDFG, edge: MultiConnectorEdge[Memlet], target: Data, abi: set[str]) -> bool:
+def copies_whole_argument(sdfg: "SDFG", edge: "MultiConnectorEdge[Memlet]", target: "Data", abi: set[str]) -> bool:
     """Whether ``edge`` copies all of an ABI argument onto all of ``target``, element for element."""
     from dace import nodes as dace_nodes
     from dace import subsets as dace_subsets
@@ -291,7 +289,7 @@ def copies_whole_argument(sdfg: SDFG, edge: MultiConnectorEdge[Memlet], target: 
     )
 
 
-def drop_returned_arguments(sdfg: SDFG, abi: Sequence[str]) -> tuple[str, ...]:
+def drop_returned_arguments(sdfg: "SDFG", abi: Sequence[str]) -> tuple[str, ...]:
     """Remove every return container that only ever receives a whole copy of an ABI argument.
 
     The native ABI returns nothing: the emitters strip a kernel's trailing ``return f``
@@ -331,7 +329,7 @@ def drop_returned_arguments(sdfg: SDFG, abi: Sequence[str]) -> tuple[str, ...]:
     return tuple(dropped)
 
 
-def bind_pinned_config(sdfg: SDFG, pinned: Mapping[str, object]) -> tuple[str, ...]:
+def bind_pinned_config(sdfg: "SDFG", pinned: Mapping[str, object]) -> tuple[str, ...]:
     """Assign every entry argument a pinned ``config:`` knob names its manifest value inside the SDFG.
 
     The native ABI has no slot for a pinned knob: the emitters declare it ``constexpr`` and
@@ -374,7 +372,7 @@ def clean_form(code: str, forced: Sequence[str]) -> str:
     return code
 
 
-def parse_kernel(spec: BenchSpec, numpy_py: pathlib.Path, precision: str) -> SDFG | dict[str, str]:
+def parse_kernel(spec: BenchSpec, numpy_py: pathlib.Path, precision: str) -> "SDFG | dict[str, str]":
     """Steps 1-2: the kernel's parsed SDFG, or the verdict (``noemit`` / ``noprogram``) that stopped it."""
     import dace
 
@@ -403,7 +401,7 @@ def parse_kernel(spec: BenchSpec, numpy_py: pathlib.Path, precision: str) -> SDF
     return prog.to_sdfg(simplify=True)
 
 
-def canonicalize_for(sdfg: SDFG, target: str) -> None:
+def canonicalize_for(sdfg: "SDFG", target: str) -> None:
     """Step 3, in place.
 
     canonicalize leaves every choice PARALLEL but decides no OpenMP region -- skip the tail and the
@@ -439,7 +437,7 @@ class RenderedForm(NamedTuple):
 
 
 def render_canonical(
-    spec: BenchSpec, short: str, canonical: SDFG, language: str, precision: str, target: str, dropin: bool
+    spec: BenchSpec, short: str, canonical: "SDFG", language: str, precision: str, target: str, dropin: bool
 ) -> RenderedForm:
     """Step 4 on a canonical SDFG, which is copied first so one parse serves every language and mode.
 
@@ -576,7 +574,7 @@ def dace_root() -> pathlib.Path:
     return pathlib.Path(dace.__file__).resolve().parents[1]
 
 
-def sdfg_digest(sdfg: SDFG) -> str:
+def sdfg_digest(sdfg: "SDFG") -> str:
     """dace's own SDFG hash, over JSON with both tree roots blanked so the same kernel hits from any checkout."""
     text = json.dumps(sdfg.to_json())
     for root in (paths.ROOT, paths.ROOT.resolve(), dace_root()):

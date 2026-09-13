@@ -25,13 +25,9 @@ Scope: prototype covering elementwise / reduction / matmul / solver shapes;
 unsupported constructs raise ``EmitError`` so the driver can fall back.
 """
 
-from __future__ import annotations
-
 import ast
 import copy
 from typing import List, Optional, Set
-
-from numpyto_common.emit_io import hoist_future_imports
 
 
 class EmitError(Exception):
@@ -1373,7 +1369,7 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
             static=(sorted(concrete.get(h.name, ())) if jit else None),
         ) + ["", ""]
     deco = _kernel_decorator(fn, kernel_static) if jit else None
-    return hoist_future_imports(
+    return (
         "\n".join(
             head
             + _emit_function(

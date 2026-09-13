@@ -24,8 +24,6 @@ Every check takes what the figure ALREADY has -- its data table, its interval co
 values -- so obeying a rule and emitting the table a reader needs are the same act.
 """
 
-from __future__ import annotations
-
 from collections.abc import Sequence
 
 import numpy as np

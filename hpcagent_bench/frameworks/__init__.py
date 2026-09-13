@@ -17,7 +17,6 @@ defines; ``tests/test_harness_hot_paths`` fails if a name in the map does not re
 if a backend import creeps back into this module.
 """
 
-from __future__ import annotations
 import importlib
 from typing import Any
 

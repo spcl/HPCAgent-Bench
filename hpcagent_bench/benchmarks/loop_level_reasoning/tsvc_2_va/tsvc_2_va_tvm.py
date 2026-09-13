@@ -1,6 +1,5 @@
 """CPU TVM impl of TSVC ``va`` (``a[i] = b[i]``)."""
 
-from __future__ import annotations
 import tvm
 from tvm import te
 

@@ -8,7 +8,6 @@ radius. The final ``sc * in + b * in`` is kept unfactored so the rounding matche
 the reference.
 """
 
-from __future__ import annotations
 import numpy as np
 
 

@@ -22,7 +22,6 @@ scipy, bcoo/ell/jds/sell_c_sigma reuse the builders validated in
 ``test_sparse_matvec``.
 """
 
-from __future__ import annotations
 import ctypes
 import json
 import pathlib

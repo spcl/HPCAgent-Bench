@@ -3,8 +3,6 @@
 
 """TSVC tsvc_2 kernel ``s31111`` (numpy reference)."""
 
-from __future__ import annotations
-
 
 def s31111(a, b, NBLK):
     # array shapes (numpy->dace): a=(4 * NBLK,), b=(2,)

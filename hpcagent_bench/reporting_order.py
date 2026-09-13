@@ -28,7 +28,6 @@ unit-tested against a synthetic metadata table; :func:`row_meta_for` is the thin
 :class:`RowMeta`.
 """
 
-from __future__ import annotations
 import functools
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple

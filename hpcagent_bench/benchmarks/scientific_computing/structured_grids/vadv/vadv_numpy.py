@@ -20,7 +20,6 @@ level and then copying it in. The recurrence is updated in place instead, so the
 nothing.
 """
 
-from __future__ import annotations
 import numpy as np
 
 

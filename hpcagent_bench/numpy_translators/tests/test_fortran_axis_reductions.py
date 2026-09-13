@@ -19,7 +19,6 @@ nest is gone and there is nothing to fall back to. So the declines are pinned to
 tuple axis, ``keepdims``, an operand of unknown rank.
 """
 
-from __future__ import annotations
 import ast
 import json
 import pathlib

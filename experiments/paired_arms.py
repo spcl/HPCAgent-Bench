@@ -27,8 +27,6 @@ rather than a verdict -- a bootstrap flag at n = 2-4 is a coin toss.
         --family blind-vs-scored --out blind.csv
 """
 
-from __future__ import annotations
-
 import argparse
 import math
 import pathlib

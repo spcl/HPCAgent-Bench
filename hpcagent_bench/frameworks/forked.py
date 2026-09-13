@@ -3,7 +3,6 @@
 
 """Run a callable in a forked child and SURFACE its failure (signal/traceback/timeout) instead of eating it."""
 
-from __future__ import annotations
 import contextlib
 import contextvars
 import ctypes
@@ -220,7 +219,7 @@ def child_main(
     fn: Callable[..., ResultT],
     args: tuple[object, ...],
     kwargs: dict[str, object],
-    q: ChildQueue[ResultT],
+    q: "ChildQueue[ResultT]",
 ) -> None:
     die_with_parent()
     # First act, before any work: this is what arms the parent's deadline (see run_forked).
@@ -251,7 +250,7 @@ def child_main(
 _child = child_main
 
 
-def take_result(q: ChildQueue[ResultT], timeout: float) -> ResultMessage[ResultT] | None:
+def take_result(q: "ChildQueue[ResultT]", timeout: float) -> ResultMessage[ResultT] | None:
     """Next item from ``q`` that is a RESULT, or None within ``timeout``.
 
     ``started`` is a clock signal rather than an outcome, and a child that starts and finishes
@@ -267,7 +266,7 @@ def take_result(q: ChildQueue[ResultT], timeout: float) -> ResultMessage[ResultT
             return item
 
 
-def drain_progress(progress_q: ProgressQueue[ResultT], current: ResultT | None) -> ResultT | None:
+def drain_progress(progress_q: "ProgressQueue[ResultT]", current: ResultT | None) -> ResultT | None:
     """Return the last item pushed to ``progress_q`` (or ``current``), so a kill preserves the last progress."""
     try:
         while True:

@@ -21,8 +21,6 @@ an arm can be asked for, not whether the image is usable.
     python3 verify_image.py [--profile judge-agent-amd|vllm|sglang] [--verbose]
 """
 
-from __future__ import annotations
-
 import argparse
 import dataclasses
 import functools

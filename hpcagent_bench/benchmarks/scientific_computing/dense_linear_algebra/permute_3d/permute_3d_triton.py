@@ -8,7 +8,6 @@ loop-bound triton.jit when the framework already gives us the best
 case.
 """
 
-from __future__ import annotations
 import torch
 
 

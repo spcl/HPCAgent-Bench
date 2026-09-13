@@ -19,8 +19,6 @@ An ADOPTED view (:func:`adopt`) holds artefacts rendered before this cache exist
 under the :data:`ADOPTED` renderer, so an arm rerun can read exactly what finished arms were served.
 """
 
-from __future__ import annotations
-
 import argparse
 import concurrent.futures
 import hashlib

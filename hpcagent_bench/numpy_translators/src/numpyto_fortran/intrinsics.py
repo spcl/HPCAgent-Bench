@@ -17,7 +17,6 @@ numpy's, and a wrong ``dim`` is a silently wrong answer rather than a refusal. `
 are held back for the neighbouring reason -- ``MAXLOC`` is 1-based where numpy is 0-based.
 """
 
-from __future__ import annotations
 import ast
 from typing import Dict, List, Optional, Set, Tuple
 

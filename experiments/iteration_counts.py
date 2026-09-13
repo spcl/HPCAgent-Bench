@@ -32,8 +32,6 @@ the floor of the agent tool modules its columns come from; the repo venv's pytho
 interpreter.
 """
 
-from __future__ import annotations
-
 import argparse
 import csv
 import importlib.util

@@ -20,8 +20,6 @@ every INSERT names its columns. Any other schema change means rebuilding the DB 
 derived results cache, cheap to regenerate).
 """
 
-from __future__ import annotations
-
 import dataclasses
 import hashlib
 import json

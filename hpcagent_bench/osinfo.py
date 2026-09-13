@@ -10,7 +10,6 @@ helper (:func:`mp_context`) is the exception and reads the runtime config.
 WSL2 is a real Linux kernel, so it is ``IS_LINUX`` and needs no special casing.
 """
 
-from __future__ import annotations
 import platform
 import signal
 import sys

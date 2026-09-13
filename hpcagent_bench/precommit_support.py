@@ -7,8 +7,6 @@ standalone run, or ``--all-files``); that discovery and the autogen-marker check
 independent copies respectively before this.
 """
 
-from __future__ import annotations
-
 import pathlib
 import subprocess
 

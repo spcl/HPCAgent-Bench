@@ -6,7 +6,6 @@ comment from the IR's parameter table (shape + dtype per array, int type
 for symbols).
 """
 
-from __future__ import annotations
 import ast
 import copy
 from numpyto_common import dtypes

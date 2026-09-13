@@ -39,8 +39,6 @@ The count for one ``n`` is cached, so a table comparing many arm pairs at the sa
 DP once.
 """
 
-from __future__ import annotations
-
 import functools
 import math
 from collections.abc import Sequence

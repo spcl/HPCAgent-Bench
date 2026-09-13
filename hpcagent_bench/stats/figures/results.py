@@ -35,7 +35,6 @@ time); the DB is read through the stdlib ``sqlite3`` so reporting never pulls in
 stack.
 """
 
-from __future__ import annotations
 import collections
 import dataclasses
 import logging

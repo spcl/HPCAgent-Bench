@@ -25,8 +25,6 @@ run leaves either the old artifact or none -- never a truncated one. Pure
 SDFG helpers so importing this module stays cheap and dependency-free.
 """
 
-from __future__ import annotations
-
 import functools
 import hashlib
 import os
@@ -167,7 +165,7 @@ def sdfg_cache_path(cache_dir: pathlib.Path, module_name: str, device_tag: str) 
     return cache_dir / f"{module_name}_{device_tag}.sdfgz"
 
 
-def load_sdfg(cache_dir: pathlib.Path, module_name: str, device_tag: str, fingerprint: str) -> dace.SDFG | None:
+def load_sdfg(cache_dir: pathlib.Path, module_name: str, device_tag: str, fingerprint: str) -> "dace.SDFG | None":
     """Load the cached base SDFG for ``(module_name, device_tag)`` if it is fresh for ``fingerprint``.
 
     Returns the reconstructed SDFG on a HIT, or ``None`` on a MISS (absent / stale sidecar) OR on any
@@ -184,7 +182,7 @@ def load_sdfg(cache_dir: pathlib.Path, module_name: str, device_tag: str, finger
         return None
 
 
-def save_sdfg(cache_dir: pathlib.Path, module_name: str, device_tag: str, fingerprint: str, sdfg: dace.SDFG) -> None:
+def save_sdfg(cache_dir: pathlib.Path, module_name: str, device_tag: str, fingerprint: str, sdfg: "dace.SDFG") -> None:
     """Save ``sdfg`` as a compressed ``.sdfgz`` for ``(module_name, device_tag)`` and record ``fingerprint``.
 
     The sidecar is written only after a successful save, so an interrupted save (sdfgz without a

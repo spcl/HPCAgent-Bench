@@ -3,7 +3,6 @@
 
 """BLASST prefill attention using TensorRT-LLM's tiled skip-softmax rule."""
 
-from __future__ import annotations
 import numpy as np
 
 

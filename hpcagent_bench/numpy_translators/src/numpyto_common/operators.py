@@ -6,7 +6,6 @@ duplicated across the C and Fortran emitters (and, in Phase 4, so the shared
 unparses Python operators directly.
 """
 
-from __future__ import annotations
 import ast
 from typing import Dict, Type
 

@@ -4,7 +4,6 @@
 """Typed SQLModel schema for the framework-benchmark ``results`` table: the single Result model derives
 both the DDL (``create_all``) and row inserts, replacing the old hand-written CREATE TABLE/INSERT pair."""
 
-from __future__ import annotations
 from typing import ClassVar
 
 from sqlalchemy import Table

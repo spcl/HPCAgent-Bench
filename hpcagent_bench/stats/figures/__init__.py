@@ -16,8 +16,6 @@ The headless backend is selected HERE, in the package, so it is in force before 
 pyplot -- the one ordering matplotlib does not let a module fix for itself afterwards.
 """
 
-from __future__ import annotations
-
 import matplotlib
 
 matplotlib.use("Agg")

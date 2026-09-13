@@ -3,7 +3,6 @@
 
 """TSVC tsvc_2_5 kernel ``fuse_diamond`` (numpy reference)."""
 
-from __future__ import annotations
 import numpy as np
 
 

@@ -3,7 +3,6 @@
 
 """TSVC tsvc_2_5 kernel ``ecrad_clamped_reduction`` (numpy reference)."""
 
-from __future__ import annotations
 import numpy as np
 from math import sqrt
 

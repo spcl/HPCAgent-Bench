@@ -4,7 +4,6 @@
 """Generic Triton matrix-multiplication kernels: float32 is from the official tutorial, float64 is
 adapted from it (slower -- no tl.dot support). Neither kernel is specifically tuned."""
 
-from __future__ import annotations
 import itertools
 import operator
 from functools import reduce

@@ -3,8 +3,6 @@
 
 """TSVC tsvc_2 kernel ``vpv`` (numpy reference)."""
 
-from __future__ import annotations
-
 
 def vpv(a, b, LEN_1D):
     # array shapes (numpy->dace): a=(LEN_1D,), b=(LEN_1D,)

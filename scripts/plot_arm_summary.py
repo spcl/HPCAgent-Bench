@@ -22,8 +22,6 @@ ratio figure (``plot_score_change.py``) asks, and drawing the test in both invit
 finding as two.
 """
 
-from __future__ import annotations
-
 import argparse
 import pathlib
 

@@ -28,7 +28,6 @@ iterations over 3-element ranges, and a numpy call per iteration would cost more
 Python they replace.
 """
 
-from __future__ import annotations
 from functools import lru_cache
 
 import numpy as np

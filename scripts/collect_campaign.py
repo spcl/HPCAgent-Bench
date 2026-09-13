@@ -23,8 +23,6 @@ Usage::
     python scripts/collect_campaign.py ~/hpcagent-bench-runs/590351 --out results/llr4 --csv
 """
 
-from __future__ import annotations
-
 import argparse
 import collections
 import glob

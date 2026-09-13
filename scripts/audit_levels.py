@@ -28,8 +28,6 @@ Usage:
   python3 scripts/audit_levels.py --apply k1,k2,k3     # rewrite level + kind for these kernels
 """
 
-from __future__ import annotations
-
 import argparse
 import ast
 import collections

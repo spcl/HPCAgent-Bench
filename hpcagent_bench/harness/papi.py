@@ -177,7 +177,6 @@ context, so a second GPU or another thread's context contributes nothing -- whic
 indistinguishable, in the number alone, from a kernel that did no work.
 """
 
-from __future__ import annotations
 import ctypes
 import ctypes.util
 import functools

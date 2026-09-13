@@ -13,8 +13,6 @@ refreshes it but never clobbers an override. To turn a generated file into
 an override, delete the marker line (or replace the file).
 """
 
-from __future__ import annotations
-
 import pathlib
 from typing import Union
 
@@ -30,21 +28,6 @@ AUTO_MARKER = "hpcagent_bench-autogen"
 #: migration to the canonical name refreshes it instead of mistaking it for a
 #: hand override. (DaCe's ``dace_emit`` stamps its own docstring marker.)
 _LEGACY_MARKERS = ("auto-generated from the numpy reference",)
-
-
-def hoist_future_imports(source: str) -> str:
-    """Move any ``from __future__`` line to the top, where it is the only place it is legal.
-
-    An emitter that prepends its own header and imports to the reference source leaves a reference's
-    future import after them, which compiles nowhere: "from __future__ imports must occur at the
-    beginning of the file". ast.parse does NOT enforce that rule, so a parse-based check calls the
-    file clean and it raises on first import instead."""
-    lines = source.splitlines(keepends=True)
-    futures = [ln for ln in lines if ln.lstrip().startswith("from __future__ import")]
-    if not futures:
-        return source
-    rest = [ln for ln in lines if not ln.lstrip().startswith("from __future__ import")]
-    return "".join(futures + rest)
 
 
 def _first_line(path: pathlib.Path) -> str:

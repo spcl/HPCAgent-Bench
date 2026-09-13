@@ -1,4 +1,3 @@
-from __future__ import annotations
 import numpy as np
 
 _C0 = -205.0 / 72.0

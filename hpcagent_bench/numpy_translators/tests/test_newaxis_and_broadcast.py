@@ -11,7 +11,6 @@ Each test exercises one axis-shape combination so a regression
 points straight at the failing rule.
 """
 
-from __future__ import annotations
 import ast
 
 from numpyto_common.lib_nodes import _iter_extent_of, _scalarize_at_iters

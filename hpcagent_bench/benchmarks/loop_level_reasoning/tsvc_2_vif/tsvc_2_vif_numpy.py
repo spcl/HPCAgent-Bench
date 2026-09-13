@@ -3,8 +3,6 @@
 
 """TSVC tsvc_2 kernel ``vif`` (numpy reference)."""
 
-from __future__ import annotations
-
 
 def vif(a, b, LEN_1D):
     # array shapes (numpy->dace): a=(LEN_1D,), b=(LEN_1D,)

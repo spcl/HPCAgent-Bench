@@ -31,7 +31,6 @@ same reason the AXIS slot was never folded.
 Marked ``integration``: it parses the whole registry.
 """
 
-from __future__ import annotations
 import ast
 import contextlib
 from typing import Dict, List

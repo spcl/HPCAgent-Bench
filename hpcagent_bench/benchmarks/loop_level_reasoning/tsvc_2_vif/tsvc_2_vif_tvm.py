@@ -1,6 +1,5 @@
 """CPU TVM impl of TSVC ``vif`` (masked store ``if b[i] > 0: a[i] = b[i]``)."""
 
-from __future__ import annotations
 import tvm
 from tvm import te
 

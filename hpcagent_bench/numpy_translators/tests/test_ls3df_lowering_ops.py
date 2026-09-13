@@ -16,7 +16,6 @@ Each test isolates ONE capability so a regression points straight at the cause:
 These are pure AST transforms, so no compiler is needed.
 """
 
-from __future__ import annotations
 import ast
 
 from numpyto_common.frontend import _collect_inlined_scalar_defs

@@ -17,8 +17,6 @@ There is no ``plutocc``: this Pluto installs ``clan``, ``pet``, ``pluto`` and ``
 and ``polycc`` is the driver.
 """
 
-from __future__ import annotations
-
 import os
 import pathlib
 import re

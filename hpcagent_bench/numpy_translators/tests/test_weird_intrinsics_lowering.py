@@ -13,7 +13,6 @@ rather than silently failing CI; drop the skip once the mapping is fixed and the
 The non-edge cases carry NO skips, so they are real all-backend coverage.
 """
 
-from __future__ import annotations
 import numpy as np
 import sys
 import pytest

@@ -14,8 +14,6 @@ from ctypes (tvm ``ctypes.CDLL``-loads its runtime itself, outside the normal im
 not ImportError.
 """
 
-from __future__ import annotations
-
 import importlib
 
 import pytest
