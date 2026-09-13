@@ -165,7 +165,7 @@ ROCPROF_TOOLS = ("rocprofv3", "rocprof")
 
 #: What the AMD path traces, as the payload reports it. ``rocprofv3`` spells its domains as flags
 #: rather than as one comma list, so this string is the description, not the argument.
-ROCPROF_TRACE = "kernel,memory-copy"
+ROCPROF_TRACE = "kernel,memory-copy,marker"
 
 #: The AMD kernel driver's node. Present iff an AMD GPU is visible to THIS process -- a container
 #: started without ``--device /dev/kfd`` has none, which is the case that must be reported rather
@@ -190,7 +190,14 @@ KERNEL_STATS_CSV = "_kernel_stats.csv"
 MEMORY_STATS_CSV = "_memory_copy_stats.csv"
 KERNEL_TRACE_CSV = "_kernel_trace.csv"
 AGENT_INFO_CSV = "_agent_info.csv"
-ROCPROF_REPORTS = (KERNEL_STATS_CSV, MEMORY_STATS_CSV, KERNEL_TRACE_CSV, AGENT_INFO_CSV)
+#: ``--marker-trace``: one row per ROCTX range name, host push-to-pop time (measured, ROCm 7.2.3).
+MARKER_STATS_CSV = "_marker_api_stats.csv"
+ROCPROF_REPORTS = (KERNEL_STATS_CSV, MEMORY_STATS_CSV, KERNEL_TRACE_CSV, AGENT_INFO_CSV, MARKER_STATS_CSV)
+
+#: The ROCTX header and library a range build compiles against, relative to the ROCm root that
+#: holds the profiler (``rocprofiler-sdk-roctx``, the library ``--marker-trace`` reads).
+ROCTX_HEADER = pathlib.PurePath("rocprofiler-sdk-roctx") / "roctx.h"
+ROCTX_LIBRARY = "rocprofiler-sdk-roctx"
 
 #: Legacy ``rocprof`` v1's single output: kernel totals only -- no min/max, no geometry, no
 #: memory-copy report. Read into the same kernel rows, with the missing fields left absent.
@@ -367,6 +374,17 @@ class LaunchRow(TypedDict):
     launches: int
 
 
+class RangeStat(TypedDict):
+    """One ROCTX range name: how often it was pushed and its host push-to-pop durations."""
+
+    name: str
+    count: int
+    total_ns: int
+    mean_ns: float
+    min_ns: int | None
+    max_ns: int | None
+
+
 class GpuPayload(TypedDict):
     """The ``/profile`` answer for a device submission: the device/host split and the geometry."""
 
@@ -391,6 +409,7 @@ class GpuPayload(TypedDict):
     kernels_omitted: int
     memory: list[MemoryStat]
     launches: list[LaunchRow]
+    ranges: list[RangeStat]
     occupancy_note: str
     text: NotRequired[str]
 
@@ -409,6 +428,7 @@ class GpuRun:
     kernels: list[KernelStat]
     memory: list[MemoryStat]
     launches: list[LaunchRow]
+    ranges: list[RangeStat]
     device_ns: int
     launch_count: int
     kernels_omitted: int
@@ -663,6 +683,7 @@ def rocprof_command(tool: str, exe: str, argv: list[str], outdir: pathlib.Path) 
             exe,
             "--kernel-trace",
             "--memory-copy-trace",
+            "--marker-trace",
             "--stats",
             "--output-format",
             "csv",
@@ -674,6 +695,36 @@ def rocprof_command(tool: str, exe: str, argv: list[str], outdir: pathlib.Path) 
             *argv,
         ]
     return [exe, "--stats", "--timestamp", "on", "-o", str(outdir / (REPORT_STEM + ".csv")), *argv]
+
+
+def roctx_build_flags(profiler: tuple[str, str]) -> tuple[list[str], list[str]]:
+    """``(compile, link)`` tokens for a ``rocprofv3`` profile build: ROCTX from the ROCm root holding
+    ``exe`` (``<root>/bin/rocprofv3``). Empty for any other tool or a root without the header or
+    library, so a source that includes the header then fails to compile."""
+    tool, exe = profiler
+    root = pathlib.Path(exe).resolve().parent.parent
+    include, lib = root / "include", root / "lib"
+    if tool != "rocprofv3" or not (include / ROCTX_HEADER).is_file():
+        return [], []
+    if not (lib / f"lib{ROCTX_LIBRARY}.so").is_file():
+        return [], []
+    return [f"-I{include}"], [f"-L{lib}", f"-Wl,-rpath,{lib}", f"-l{ROCTX_LIBRARY}"]
+
+
+def range_stats(rows: Sequence[CsvRow]) -> list[RangeStat]:
+    """ROCTX marker summary rows -> one row per range name, largest ``total_ns`` first."""
+    stats: list[RangeStat] = [
+        {
+            "name": column(row, "Name"),
+            "count": int(number(column(row, "Calls", "Count"))),
+            "total_ns": int(number(column(row, "TotalDuration", "Total Time"))),
+            "mean_ns": round(number(column(row, "Average", "Avg")), 1),
+            "min_ns": optional_int(row, "Min"),
+            "max_ns": optional_int(row, "Max"),
+        }
+        for row in rows
+    ]
+    return sorted(stats, key=lambda r: (-r["total_ns"], r["name"]))
 
 
 def rocprof_record(
@@ -1143,6 +1194,7 @@ def profile_nvidia_once(
         kernels=kernels,
         memory=memory_stats(reports.get(MEM_TIME_REPORT, []), reports.get(MEM_SIZE_REPORT, [])),
         launches=launch_configs(reports.get(TRACE_REPORT, [])),
+        ranges=[],
         device_ns=sum(k["total_ns"] for k in kernels),
         launch_count=sum(k["instances"] for k in kernels),
         kernels_omitted=omitted,
@@ -1181,6 +1233,7 @@ def profile_amd_once(
         kernels=kernels,
         memory=memory_stats(reports[MEMORY_STATS_CSV], []),
         launches=rocprof_launch_configs(reports[KERNEL_TRACE_CSV], wavefront_size(reports[AGENT_INFO_CSV])),
+        ranges=range_stats(reports[MARKER_STATS_CSV]),
         device_ns=sum(k["total_ns"] for k in kernels),
         launch_count=sum(k["instances"] for k in kernels),
         kernels_omitted=omitted,
@@ -1259,6 +1312,12 @@ def render_report(payload: GpuPayload) -> str:
                 f"{shown(c['shared_memory'])} {c['shared_memory_unit'] or ''} smem  "
                 f"x{c['launches']}"
             )
+    if payload["ranges"]:
+        lines += ["", f"  {'ROCTX range (host push to pop)':<44}  {'count':>6}  {'mean (us)':>10}  {'total (ms)':>10}"]
+        for r in payload["ranges"]:
+            lines.append(
+                f"  {r['name'][:44]:<44}  {r['count']:6d}  {r['mean_ns'] / 1e3:10.2f}  {r['total_ns'] / 1e6:10.4f}"
+            )
     lines += ["", f"  {payload['occupancy_note']}"]
     return "\n".join(lines)
 
@@ -1299,8 +1358,9 @@ def profile_gpu_submission(
     rep_timeout = config.get_float("timeouts.kernel_s", 300)
 
     with Sandbox(binding) as sandbox:
-        # No debug=True: kernel names come from CUPTI, not DWARF, so the traced .so is the graded one.
-        built = sandbox.build(submission)
+        # No debug=True: kernel names come from CUPTI, not DWARF. rocprofv3 adds ROCTX, which no graded build has.
+        range_compile, range_link = roctx_build_flags(profiler)
+        built = sandbox.build(submission, judge_compile=range_compile, judge_link=range_link)
         if not built.ok:
             return profiling.build_failed(task, built)
         request = profiling.write_request(
@@ -1371,6 +1431,7 @@ def gpu_payload(
         "kernels_omitted": run.kernels_omitted,
         "memory": run.memory,
         "launches": run.launches,
+        "ranges": run.ranges,
         "occupancy_note": run.occupancy_note,
     }
     payload["text"] = render_report(payload)

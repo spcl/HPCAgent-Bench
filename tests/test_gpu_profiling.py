@@ -15,13 +15,15 @@ measured coming back as ``0`` instead of ``null``.
 
 import ast
 import json
+import os
 import pathlib
 import re
+import subprocess
 import urllib.error
 
 import pytest
 
-from hpcagent_bench.harness import gpu_profiling, profiling, tools
+from hpcagent_bench.harness import gpu_profiling, profiling, sandbox, tools
 from hpcagent_bench.harness.envelope import Submission
 from hpcagent_bench.harness.service import ServiceConfig
 from hpcagent_bench.harness.task import Task
@@ -401,6 +403,7 @@ def test_render_report_shows_the_device_host_split_and_the_geometry() -> None:
             parsed[gpu_profiling.MEM_TIME_REPORT], parsed[gpu_profiling.MEM_SIZE_REPORT]
         ),
         "launches": gpu_profiling.launch_configs(parsed[gpu_profiling.TRACE_REPORT]),
+        "ranges": [],
     }
     text = gpu_profiling.render_report(payload)
     assert "gemm (cuda, preset S)" in text and "nsys (cuda,nvtx)" in text
@@ -843,14 +846,151 @@ def test_render_report_marks_the_amd_fields_that_have_no_counterpart() -> None:
         "kernels_omitted": omitted,
         "memory": gpu_profiling.memory_stats(parsed[gpu_profiling.MEMORY_STATS_CSV], []),
         "launches": gpu_profiling.rocprof_launch_configs(parsed[gpu_profiling.KERNEL_TRACE_CSV], None),
+        "ranges": gpu_profiling.range_stats(gpu_profiling.parse_csv(MARKER_STATS)),
     }
     text = gpu_profiling.render_report(payload)
-    assert "traced by rocprofv3 (kernel,memory-copy)" in text
+    assert f"traced by rocprofv3 ({gpu_profiling.ROCPROF_TRACE})" in text and "marker" in gpu_profiling.ROCPROF_TRACE
+    assert re.search(r"^  alpha\s+1\s+549\.99\s+0\.5500$", text, re.MULTILINE), "a ROCTX range row is not rendered"
     assert "-- warps/block" in text, "an unknown wavefront width must render as absent, not as 32"
     assert "64 reg/thread" in text, "VGPR_Count IS in the trace and must not render as absent"
     assert "h2d MEMORY_COPY_HOST_TO_DEVICE" in text and "--" in text, "an unmeasured volume is not 0 MB"
     assert "rocprof-compute" in text and "ncu" not in text
     assert "1 kernel(s) below 1% omitted" in text
+
+
+#: The ROCTX summary `rocprofv3 --marker-trace --stats --output-format csv` wrote on mi300 (ROCm 7.2.3)
+#: for a C program pushing `alpha` once and `beta` three times.
+MARKER_STATS = (
+    '"Name","Calls","TotalDurationNs","AverageNs","Percentage","MinNs","MaxNs","StdDev"\n'
+    '"alpha",1,549993,549993.000000,86.66,549993,549993,0.00000000e+00\n'
+    '"beta",3,84641,28213.666667,13.34,27321,28890,806.560806\n'
+)
+
+#: A C program with two ROCTX ranges, the source the mi300 capture above came from.
+ROCTX_PROGRAM = """#include <rocprofiler-sdk-roctx/roctx.h>
+#include <stdio.h>
+int main(void) {
+  roctxRangePush("alpha");
+  for (volatile int i = 0; i < 1000000; i++) {}
+  roctxRangePop();
+  for (int k = 0; k < 3; k++) {
+    roctxRangePush("beta");
+    for (volatile int i = 0; i < 100000; i++) {}
+    roctxRangePop();
+  }
+  puts("ok");
+  return 0;
+}
+"""
+
+
+def test_range_stats_read_the_marker_summary_rocprofv3_writes() -> None:
+    """One row per range name with its push count and host durations, largest total first."""
+    ranges = gpu_profiling.range_stats(gpu_profiling.parse_csv(MARKER_STATS))
+    assert ranges == [
+        {"name": "alpha", "count": 1, "total_ns": 549993, "mean_ns": 549993.0, "min_ns": 549993, "max_ns": 549993},
+        {"name": "beta", "count": 3, "total_ns": 84641, "mean_ns": 28213.7, "min_ns": 27321, "max_ns": 28890},
+    ]
+
+
+def test_a_trace_without_ranges_reads_as_an_empty_ranges_table(tmp_path: pathlib.Path) -> None:
+    """rocprofv3 writes no marker summary when nothing was pushed; that is `ranges: []`, not a failure."""
+    write_rocprof(tmp_path, ROCPROF_CSVS)
+    reports = gpu_profiling.rocprof_reports(tmp_path, tool="rocprofv3", proc=_proc(0))
+    assert reports[gpu_profiling.MARKER_STATS_CSV] == []
+    assert gpu_profiling.range_stats(reports[gpu_profiling.MARKER_STATS_CSV]) == []
+
+
+def test_a_trace_with_ranges_reads_the_marker_summary_beside_the_kernels(tmp_path: pathlib.Path) -> None:
+    """The marker summary is found with the other reports, flat or nested."""
+    write_rocprof(tmp_path, {**ROCPROF_CSVS, gpu_profiling.MARKER_STATS_CSV: MARKER_STATS}, nested=True)
+    reports = gpu_profiling.rocprof_reports(tmp_path, tool="rocprofv3", proc=_proc(0))
+    assert [r["name"] for r in gpu_profiling.range_stats(reports[gpu_profiling.MARKER_STATS_CSV])] == ["alpha", "beta"]
+
+
+def test_only_rocprofv3_is_asked_to_record_roctx_ranges(tmp_path: pathlib.Path) -> None:
+    """v3 records markers with `--marker-trace`; legacy rocprof has no such flag and must not get it."""
+    v3 = gpu_profiling.rocprof_command("rocprofv3", "/opt/rocm/bin/rocprofv3", ["./app"], tmp_path)
+    legacy = gpu_profiling.rocprof_command("rocprof", "/opt/rocm/bin/rocprof", ["./app"], tmp_path)
+    assert "--marker-trace" in v3[: v3.index("--")]
+    assert "--marker-trace" not in legacy
+
+
+def fake_rocm(root: pathlib.Path, *, header: bool = True) -> str:
+    """A ROCm tree with rocprofv3 and, when asked, the ROCTX header; returns the profiler path."""
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "rocprofv3").write_text("")
+    (root / "lib").mkdir()
+    (root / "lib" / f"lib{gpu_profiling.ROCTX_LIBRARY}.so").write_text("")
+    if header:
+        (root / "include" / gpu_profiling.ROCTX_HEADER).parent.mkdir(parents=True)
+        (root / "include" / gpu_profiling.ROCTX_HEADER).write_text("")
+    return str(root / "bin" / "rocprofv3")
+
+
+def test_roctx_build_flags_come_from_the_rocm_root_holding_rocprofv3(tmp_path: pathlib.Path) -> None:
+    root = tmp_path.resolve() / "rocm"
+    exe = fake_rocm(root)
+    lib = root / "lib"
+    assert gpu_profiling.roctx_build_flags(("rocprofv3", exe)) == (
+        [f"-I{root / 'include'}"],
+        [f"-L{lib}", f"-Wl,-rpath,{lib}", f"-l{gpu_profiling.ROCTX_LIBRARY}"],
+    )
+
+
+@pytest.mark.parametrize("tool", ["rocprof", "nsys"])
+def test_no_other_device_tool_gets_roctx_build_flags(tmp_path: pathlib.Path, tool: str) -> None:
+    assert gpu_profiling.roctx_build_flags((tool, fake_rocm(tmp_path.resolve() / "rocm"))) == ([], [])
+
+
+def test_a_rocm_root_without_the_roctx_header_adds_no_flags(tmp_path: pathlib.Path) -> None:
+    """Without the header a range source must fail to compile, not link against a missing library."""
+    exe = fake_rocm(tmp_path.resolve() / "rocm", header=False)
+    assert gpu_profiling.roctx_build_flags(("rocprofv3", exe)) == ([], [])
+
+
+@pytest.mark.parametrize(("language", "tool"), [("hip", "rocprofv3"), ("cuda", "nsys")])
+def test_only_the_rocprofv3_profile_build_is_handed_roctx(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, language: str, tool: str
+) -> None:
+    """The device trace passes ROCTX tokens to its build on rocprofv3 and nothing on nsys."""
+    exe = fake_rocm(tmp_path.resolve() / "rocm")
+    handed: list[tuple[list[str], list[str]]] = []
+
+    def build(self: object, submission: Submission, **kwargs: list[str]) -> sandbox.BuildResult:
+        handed.append((list(kwargs.get("judge_compile", [])), list(kwargs.get("judge_link", []))))
+        return sandbox.BuildResult(False, None, "stubbed")
+
+    monkeypatch.setattr(gpu_profiling, "gpu_check", lambda _language: (tool, exe))
+    monkeypatch.setattr(gpu_profiling.Sandbox, "build", build)
+    answer = gpu_profiling.profile_gpu_submission(
+        gpu_submission(language), Task("gemm", "restricted", language), preset="S"
+    )
+    assert answer["build_ok"] is False
+    assert handed == [gpu_profiling.roctx_build_flags((tool, exe))]
+    assert bool(handed[0][0]) is (tool == "rocprofv3")
+
+
+@pytest.mark.amd
+def test_rocprofv3_records_two_roctx_ranges_on_a_real_amd_node(tmp_path: pathlib.Path) -> None:
+    """Needs /dev/kfd and rocprofv3: builds ROCTX_PROGRAM with the discovered flags and traces it."""
+    profiler = gpu_profiling.rocprof_check()
+    compile_flags, link_flags = gpu_profiling.roctx_build_flags(profiler)
+    assert compile_flags and link_flags, profiler
+    source = tmp_path / "ranges.c"
+    source.write_text(ROCTX_PROGRAM)
+    program = tmp_path / "ranges"
+    compiler = os.environ.get("CC", "cc")
+    subprocess.run([compiler, *compile_flags, str(source), *link_flags, "-o", str(program)], check=True)
+    proc = gpu_profiling.rocprof_record(
+        [str(program)], tmp_path / "out", cwd=tmp_path, timeout=300.0, tool=profiler[0], exe=profiler[1]
+    )
+    assert proc.returncode == 0, proc.stderr
+    marker = gpu_profiling.rocprof_csv(tmp_path / "out", gpu_profiling.MARKER_STATS_CSV)
+    assert marker is not None, proc.stderr
+    ranges = gpu_profiling.range_stats(gpu_profiling.parse_csv(marker.read_text()))
+    assert [(r["name"], r["count"]) for r in ranges] == [("alpha", 1), ("beta", 3)]
+    assert all(r["total_ns"] > 0 for r in ranges)
 
 
 def _proc(returncode: int, *, stdout: str = "", stderr: str = ""):
