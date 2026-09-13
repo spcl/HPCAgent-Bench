@@ -160,10 +160,39 @@ def test_the_unit_is_attached_to_the_event_because_the_vendors_disagree() -> Non
     """The GPU form of the instructions-are-not-operations trap: NVIDIA counts DRAM traffic in
     bytes and ROCProfiler in kilobytes, NVML reports milliwatts and ROCm-SMI microwatts. A metric
     whose unit lived on the METRIC would relabel one vendor by three orders of magnitude."""
-    units = {v: {c.unit for c in cs} for v, cs in papi.GPU_METRICS["dram_read_bytes"].candidates.items()}
-    assert units["nvidia"] == {"bytes"} and units["amd"] == {"KB"}
+    for metric in ("dram_read", "dram_write"):
+        units = {v: {c.unit for c in cs} for v, cs in papi.GPU_METRICS[metric].candidates.items()}
+        assert units["nvidia"] == {"bytes"} and units["amd"] == {"KB"}, f"{metric}: {units}"
     power = {v: {c.unit for c in cs} for v, cs in papi.GPU_METRICS["power"].candidates.items()}
     assert power["nvidia"] == {"mW"} and power["amd"] == {"uW"}
+
+
+def test_a_metric_the_vendors_answer_in_different_units_names_no_unit() -> None:
+    """The name is shared by both vendors' rows, so a unit in it mislabels one of them: AMD's DRAM
+    traffic is KB of unstated base, and 'dram_read_bytes' called it bytes."""
+    assert "dram_read" in papi.GPU_METRICS and "dram_write" in papi.GPU_METRICS
+    assert "dram_read_bytes" not in papi.GPU_METRICS and "dram_write_bytes" not in papi.GPU_METRICS
+    unit_words = {"bytes", "byte", "kb", "kib", "mw", "uw", "mhz", "degc", "millidegc", "pct", "percent"}
+    for name, metric in papi.GPU_METRICS.items():
+        units = {c.unit for cs in metric.candidates.values() for c in cs}
+        if len(units) > 1:
+            assert not set(name.lower().split("_")) & unit_words, f"{name} names a unit but answers in {units}"
+
+
+def test_each_vendor_resolves_dram_traffic_in_its_own_measured_unit() -> None:
+    """No conversion: NVIDIA's row says bytes, AMD's says KB, under the same metric name."""
+    rocm = {"rocm": ROCM_EVENTS}
+    cuda = {"cuda": CUDA_EVENTS}
+    expected = {
+        ("dram_read", "nvidia"): ("cuda:::dram__bytes_read", "bytes"),
+        ("dram_write", "nvidia"): ("cuda:::dram__bytes_write", "bytes"),
+        ("dram_read", "amd"): ("rocm:::FETCH_SIZE:device=0", "KB"),
+        ("dram_write", "amd"): ("rocm:::WRITE_SIZE:device=0", "KB"),
+    }
+    for (metric, vendor), (event, unit) in expected.items():
+        row, why = resolved(metric, vendor, cuda if vendor == "nvidia" else rocm)
+        assert why == "" and row is not None, f"{metric}/{vendor}: {why}"
+        assert row["metric"] == metric and row["event"] == event and row["unit"] == unit
 
 
 def test_gpu_metric_names_do_not_collide_with_cpu_metric_names() -> None:
@@ -294,7 +323,7 @@ def test_resolution_never_builds_a_name_from_a_template() -> None:
     that constructed the name would fail with PAPI's 'Invalid argument' -- which reads like a
     broken install rather than like a different CUPTI."""
     assert "cuda:::dram__bytes_read.sum" not in CUDA_EVENTS
-    row, _why = resolved("dram_read_bytes", "nvidia", {"cuda": CUDA_EVENTS})
+    row, _why = resolved("dram_read", "nvidia", {"cuda": CUDA_EVENTS})
     assert row["event"] == "cuda:::dram__bytes_read"
 
 
