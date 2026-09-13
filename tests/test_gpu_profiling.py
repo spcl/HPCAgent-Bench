@@ -793,8 +793,8 @@ def test_gpu_check_picks_the_profiler_by_language_and_reports_which(monkeypatch)
     """One probe, before anything is built, and the vendor is the only branch in it."""
     monkeypatch.setattr(gpu_profiling, "nsys_check", lambda _lang: "/usr/bin/nsys")
     monkeypatch.setattr(gpu_profiling, "rocprof_check", lambda: ("rocprofv3", "/opt/rocm/bin/rocprofv3"))
-    assert gpu_profiling.gpu_check("cuda") == "nsys"
-    assert gpu_profiling.gpu_check("hip") == "rocprofv3"
+    assert gpu_profiling.gpu_check("cuda") == ("nsys", "/usr/bin/nsys")
+    assert gpu_profiling.gpu_check("hip") == ("rocprofv3", "/opt/rocm/bin/rocprofv3")
 
 
 def test_render_report_marks_the_amd_fields_that_have_no_counterpart() -> None:

@@ -75,10 +75,11 @@ def test_a_wedged_gpu_profiler_is_a_timed_out_refusal_not_a_raw_timeout(tmp_path
     with no cause, which an agent cannot tell apart from a broken judge."""
     monkeypatch.setattr(gpu_profiling, "nsys_check", lambda language: "/fake/bin/nsys")
     monkeypatch.setattr(gpu_profiling, "rocprof_check", lambda: ("rocprofv3", "/fake/bin/rocprofv3"))
+    profiler = gpu_profiling.gpu_check(language)
     stage(monkeypatch)
     with pytest.raises(gpu_profiling.GpuProfilerUnavailable) as caught:
         gpu_profiling.profile_gpu_once(
-            tmp_path, tmp_path / "request.json", language=language, timeout=3.0, min_percent=1.0
+            tmp_path, tmp_path / "request.json", language=language, profiler=profiler, timeout=3.0, min_percent=1.0
         )
     assert caught.value.cause == "timed_out", caught.value.cause
     assert "3s" in str(caught.value), str(caught.value)
@@ -141,7 +142,9 @@ def test_a_rocprofv3_trace_is_read_into_the_same_run_shape_with_unmeasured_volum
         return subprocess.CompletedProcess(argv, 0, stdout=result_line(), stderr="")
 
     monkeypatch.setattr(gpu_profiling, "run_command", record)
-    run = gpu_profiling.profile_amd_once(tmp_path, tmp_path / "request.json", timeout=60.0, min_percent=0.0)
+    run = gpu_profiling.profile_amd_once(
+        tmp_path, tmp_path / "request.json", profiler=gpu_profiling.rocprof_check(), timeout=60.0, min_percent=0.0
+    )
     assert (run.tool, run.trace, run.elapsed_ns) == ("rocprofv3", gpu_profiling.ROCPROF_TRACE, 600_000), run
     assert [stem(k["name"]) for k in run.kernels] == ["gemm_fp64_kernel", "scale_kernel", "zero_kernel"]
     assert (run.device_ns, run.launch_count) == (12_020_352, 72), run
@@ -163,9 +166,13 @@ def test_the_language_alone_picks_the_vendor_arm(tmp_path, monkeypatch, language
         lambda root, request, *, language, timeout, min_percent: taken.append(("nvidia", language)),
     )
     monkeypatch.setattr(
-        gpu_profiling, "profile_amd_once", lambda root, request, *, timeout, min_percent: taken.append(("amd", None))
+        gpu_profiling,
+        "profile_amd_once",
+        lambda root, request, *, profiler, timeout, min_percent: taken.append(("amd", None)),
     )
-    gpu_profiling.profile_gpu_once(tmp_path, tmp_path / "request.json", language=language, timeout=1.0, min_percent=1.0)
+    gpu_profiling.profile_gpu_once(
+        tmp_path, tmp_path / "request.json", language=language, profiler=("tool", "exe"), timeout=1.0, min_percent=1.0
+    )
     assert taken == [(arm, language if arm == "nvidia" else None)], taken
 
 
@@ -236,11 +243,19 @@ def test_a_traced_submission_answers_with_the_payload_of_the_run_it_asked_for(tm
     """The traced child reads the request this route writes, so the preset, the reps and the library
     in that request are the run the payload describes."""
     lib = tmp_path / "libgemm.so"
-    monkeypatch.setattr(gpu_profiling, "gpu_check", lambda language: "nsys")
+    monkeypatch.setattr(gpu_profiling, "gpu_check", lambda language: ("nsys", "/fake/bin/nsys"))
     monkeypatch.setattr(gpu_profiling, "Sandbox", FakeSandbox(tmp_path, BuildResult(ok=True, lib=lib, log="")))
     traced: dict[str, object] = {}
 
-    def trace(root: pathlib.Path, request: pathlib.Path, *, language: str, timeout: float, min_percent: float):
+    def trace(
+        root: pathlib.Path,
+        request: pathlib.Path,
+        *,
+        language: str,
+        profiler: tuple[str, str],
+        timeout: float,
+        min_percent: float,
+    ):
         traced.update(request=json.loads(request.read_text()), language=language, min_percent=min_percent)
         return traced_run()
 
@@ -265,8 +280,60 @@ def test_a_submission_that_does_not_build_answers_with_the_compiler_log_and_trac
         raise AssertionError("a submission that did not build was traced")
 
     log = "kernel.hip:3: error: expected ';'"
-    monkeypatch.setattr(gpu_profiling, "gpu_check", lambda language: "rocprofv3")
+    monkeypatch.setattr(gpu_profiling, "gpu_check", lambda language: ("rocprofv3", "/fake/bin/rocprofv3"))
     monkeypatch.setattr(gpu_profiling, "Sandbox", FakeSandbox(tmp_path, BuildResult(ok=False, lib=None, log=log)))
     monkeypatch.setattr(gpu_profiling, "profile_gpu_once", trace)
     payload = gpu_profiling.profile_gpu_submission(gpu_submission("hip"), Task("gemm", "restricted", "hip"), preset="S")
     assert payload == {"build_ok": False, "kernel": "gemm", "language": "hip", "detail": log}, payload
+
+
+def rocm_host(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Linux host with a rocprofv3, a rocminfo and an openable /dev/kfd."""
+    kfd = tmp_path / "kfd"
+    kfd.write_text("")
+    monkeypatch.setattr(gpu_profiling.osinfo, "IS_LINUX", True)
+    monkeypatch.setattr(gpu_profiling.shutil, "which", lambda name: f"/fake/rocm/bin/{name}")
+    monkeypatch.setattr(gpu_profiling, "KFD_DEVICE", kfd)
+
+
+def test_a_hung_rocminfo_is_a_timed_out_refusal_not_a_raw_timeout(tmp_path, monkeypatch) -> None:
+    """The probe runs before the build, outside the trace's timeout mapping, so its deadline reached
+    the route as a raw exception and answered 500 with no cause."""
+    rocm_host(tmp_path, monkeypatch)
+    monkeypatch.setattr(gpu_profiling.subprocess, "run", wedge)
+    with pytest.raises(gpu_profiling.GpuProfilerUnavailable) as caught:
+        gpu_profiling.gpu_check("hip")
+    assert caught.value.cause == "timed_out", caught.value.cause
+    assert gpu_profiling.ROCM_INFO in str(caught.value), str(caught.value)
+
+
+def test_each_amd_profile_request_probes_the_device_once_and_the_next_request_probes_again(
+    tmp_path, monkeypatch
+) -> None:
+    """The rocminfo probe ran twice per request. Device access can change between requests, so the
+    next request must probe afresh rather than reuse a verdict."""
+    rocm_host(tmp_path, monkeypatch)
+    probes: list[str] = []
+
+    def rocminfo(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        probes.append(argv[0])
+        return subprocess.CompletedProcess(argv, 0, ROCMINFO_GPU, "")
+
+    def record(argv: list[str], *, cwd: str, timeout: float) -> subprocess.CompletedProcess[str]:
+        write_rocprof(pathlib.Path(argv[argv.index("--output-directory") + 1]), ROCPROF_CSVS, nested=True)
+        return subprocess.CompletedProcess(argv, 0, stdout=result_line(), stderr="")
+
+    monkeypatch.setattr(gpu_profiling.subprocess, "run", rocminfo)
+    monkeypatch.setattr(gpu_profiling, "run_command", record)
+    built = BuildResult(ok=True, lib=tmp_path / "libgemm.so", log="")
+    monkeypatch.setattr(gpu_profiling, "Sandbox", FakeSandbox(tmp_path, built))
+
+    def probes_in_one_request() -> int:
+        probes.clear()
+        payload = gpu_profiling.profile_gpu_submission(
+            gpu_submission("hip"), Task("gemm", "restricted", "hip"), preset="M", reps=3
+        )
+        assert payload["tool"] == "rocprofv3", payload
+        return len(probes)
+
+    assert [probes_in_one_request(), probes_in_one_request()] == [1, 1]

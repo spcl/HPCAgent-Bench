@@ -446,17 +446,17 @@ def nsys_check(language: str) -> str:
     return exe
 
 
-def gpu_check(language: str) -> str:
-    """The profiler ``language`` needs, probed BEFORE anything is built, or
-    :class:`GpuProfilerUnavailable`. Returns the tool's name, which is what the payload reports.
+def gpu_check(language: str) -> tuple[str, str]:
+    """``(tool, executable)`` for the profiler ``language`` needs, probed BEFORE anything is built,
+    or :class:`GpuProfilerUnavailable`. ``tool`` is what the payload reports.
 
     The one place the vendor is chosen. Everything past it -- the record call, the readers, the
-    payload -- takes the tool as data.
+    payload -- takes the tool as data. Probed once per request and passed to the trace, never
+    cached across requests: device access can change between them.
     """
     if language == "hip":
-        return rocprof_check()[0]
-    nsys_check(language)
-    return "nsys"
+        return rocprof_check()
+    return "nsys", nsys_check(language)
 
 
 def nsys_record(
@@ -600,7 +600,12 @@ def rocm_agents(timeout: float = ROCMINFO_TIMEOUT) -> list[str]:
             f"{ROCM_INFO} is not on PATH: the ROCm runtime is incomplete (the profiler "
             "binary alone does not bring it). Install rocminfo/rocm-smi and put /opt/rocm/bin on PATH",
         )
-    proc = subprocess.run([exe], capture_output=True, text=True, timeout=timeout)
+    try:
+        proc = subprocess.run([exe], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as wedged:
+        raise GpuProfilerUnavailable(
+            "timed_out", f"{ROCM_INFO} wedged past {timeout:g}s and was killed: {wedged.cmd}"
+        ) from wedged
     agents: list[str] = []
     for name in GFX_AGENT.findall(proc.stdout or ""):
         if name not in agents:  # ordered + deduped: rocminfo names an agent's ISA more than once
@@ -1061,14 +1066,21 @@ def empty_trace(tool: str) -> GpuProfilerUnavailable:
 
 
 def profile_gpu_once(
-    root: pathlib.Path, request_file: pathlib.Path, *, language: str, timeout: float, min_percent: float
+    root: pathlib.Path,
+    request_file: pathlib.Path,
+    *,
+    language: str,
+    profiler: tuple[str, str],
+    timeout: float,
+    min_percent: float,
 ) -> GpuRun:
     """Trace ONE run of the measurement and read the reports off it, with the VENDOR as the only
     branch. Both arms return the same :class:`GpuRun`; a profiler that outlives ``timeout`` is
-    ``timed_out``, never the raw exception."""
+    ``timed_out``, never the raw exception. ``profiler`` is this request's :func:`gpu_check`
+    answer; the AMD arm traces with it instead of re-running the rocminfo probe."""
     try:
         if language == "hip":
-            return profile_amd_once(root, request_file, timeout=timeout, min_percent=min_percent)
+            return profile_amd_once(root, request_file, profiler=profiler, timeout=timeout, min_percent=min_percent)
         return profile_nvidia_once(root, request_file, language=language, timeout=timeout, min_percent=min_percent)
     except subprocess.TimeoutExpired as wedged:
         tool = "rocprof" if language == "hip" else "nsys"
@@ -1108,8 +1120,11 @@ def profile_nvidia_once(
     )
 
 
-def profile_amd_once(root: pathlib.Path, request_file: pathlib.Path, *, timeout: float, min_percent: float) -> GpuRun:
+def profile_amd_once(
+    root: pathlib.Path, request_file: pathlib.Path, *, profiler: tuple[str, str], timeout: float, min_percent: float
+) -> GpuRun:
     """Trace ONE run under ``rocprofv3`` (or the deprecated ``rocprof``) and read its CSVs off it.
+    ``profiler`` is the ``(tool, executable)`` :func:`rocprof_check` returned for this request.
 
     Same order of judgement as the NVIDIA arm, for the same reason: the workload's own failure is
     reported first, because a crashed kernel that leaves no report is not a missing profiler.
@@ -1117,7 +1132,7 @@ def profile_amd_once(root: pathlib.Path, request_file: pathlib.Path, *, timeout:
     ``rocprofv3``'s memory-copy report has no size half, so :func:`memory_stats` is called with an
     empty one and the volume comes back ``null``.
     """
-    tool, exe = rocprof_check()
+    tool, exe = profiler
     outdir = root / ROCPROF_OUTDIR
     proc = rocprof_record(child_argv(request_file), outdir, cwd=root, timeout=timeout, tool=tool, exe=exe)
     result = profiling.child_result(proc.stdout)
@@ -1240,7 +1255,7 @@ def profile_gpu_submission(
             "PAPI counts host CPU events, which say nothing about a device kernel; "
             f"device counters belong to a separate tool: {tool}",
         )
-    gpu_check(task.language)
+    profiler = gpu_check(task.language)
     spec = BenchSpec.load(task.kernel)
     binding = binding_from_spec(spec)
     symbol = binding.symbols.get(task.language, binding.symbol)
@@ -1273,6 +1288,7 @@ def profile_gpu_submission(
             profiling.sandbox_root(sandbox),
             request,
             language=task.language,
+            profiler=profiler,
             timeout=outer,
             min_percent=min_percent,
         )
