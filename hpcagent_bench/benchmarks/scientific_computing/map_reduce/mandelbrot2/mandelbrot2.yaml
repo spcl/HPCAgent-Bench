@@ -80,6 +80,8 @@ mpi:
     N_out:
     - YN
     - XN
+# chaotic escape-time iteration, same as mandelbrot1.
+min_precision: fp64
 experiment_tags:
 - npbench
 - mpi-focus32
