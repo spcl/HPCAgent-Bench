@@ -2484,6 +2484,85 @@ jobs:
 
 
   # ===========================================================================================
+  # numerical-sweep -- every kernel's native backends at preset S against numpy (-m numerical_sweep).
+  #
+  # tests/test_numerical_correctness.py runs the loop_level_reasoning corpus through the numerical
+  # oracle (c/cpp/fortran + numba/pythran/jax per kernel); tests/test_s_preset_integration.py runs the
+  # whole registry through frameworks.Test on dace_cpu/cc/llvm/polly/pluto beside numpy. Both sat
+  # behind HPCAGENT_BENCH_RUN_INTEGRATION, which no job set, so neither ran anywhere.
+  #
+  # SIZING_PLACEHOLDER
+  # ===========================================================================================
+  numerical-sweep:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    name: numerical-sweep (native backends vs numpy @ S)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # ccache: compilers.yaml invokes bare gcc/g++/gfortran, so the shim dir first on PATH caches
+      # every native build. Namespaced by uarch -- see the same block in `unit`.
+      - name: Setup -- ccache
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ccache
+          echo "/usr/lib/ccache" >> "$GITHUB_PATH"
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+          CCACHE_DIR="$HOME/.ccache" ccache --set-config max_size=1G
+          cpu_key=$(awk -F': ' '/^(model name|flags)/ {print $2}' /proc/cpuinfo |
+            head -2 | sha256sum | cut -c1-12)
+          test -n "$cpu_key" || { echo "could not derive a CPU key" >&2; exit 1; }
+          echo "CPU_KEY=$cpu_key" >> "$GITHUB_ENV"
+      # RESTORE and SAVE split -- see the note on the same pair in `unit`.
+      - name: Setup -- restore the compile cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ github.job }}-${{ env.CPU_KEY }}-${{ github.run_id }}
+          restore-keys: ccache-${{ github.job }}-${{ env.CPU_KEY }}-
+      - name: Setup -- reset the ccache counters
+        run: ccache --zero-stats
+
+      - uses: ./.github/actions/setup
+
+      - name: Every kernel's native backends still compute what numpy computes @ S
+        if: ${{ !cancelled() }}
+        # STEP_PLACEHOLDER
+        timeout-minutes: 38
+        run: |
+          python -m pytest -p no:cacheprovider -rfEs -n WORKERS_PLACEHOLDER -v --maxfail=20 --durations=25 \
+            --timeout=1500 --timeout-method=thread -m numerical_sweep \
+            tests/test_numerical_correctness.py tests/test_s_preset_integration.py
+
+      - name: ccache statistics
+        if: always()
+        run: ccache --show-stats
+
+      - name: Save the compile cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ github.job }}-${{ env.CPU_KEY }}-${{ github.run_id }}
+
+      - name: Upload coverage data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-numerical-sweep
+          path: .coverage*
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+  # ===========================================================================================
   # ports-cegterg -- one port's oracle, on its own runner, because it is the only one of the
   # nineteen in tests/ports/ that costs hours rather than seconds.
   #
@@ -2679,7 +2758,7 @@ jobs:
     # integration_translators out of integration on 2026-09-02, so all three are listed.
     needs: [unit, e2e-numba-jax, integration, integration_translators, translators, frameworks-pluto, e2e-native,
             e2e-pythran, container-image, mpi, hf-export, dace-numeric, ports-cegterg, port-fidelity,
-            njit-oracle]
+            njit-oracle, numerical-sweep]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
