@@ -147,9 +147,9 @@ those; get the reason from the compiler rather than guessing it.
   The other two are a body the vectorizer refuses outright, and a shuffle it
   will not synthesize. Not a default either -- score the intrinsic version against the plain
   one and keep whichever wins.
-- Verify, never assume: add `-fopt-info-vec-missed` to your own compile (clang spells it
-  `-Rpass-missed=loop-vectorize`) and it names WHICH loop did not vectorize and why, so you act
-  on the reason rather than guessing. Or `objdump -d` and look for the target ISA's vector
+- Verify, never assume: add `-fopt-info-vec-missed` to your own compile (clang:
+  `-Rpass-missed=loop-vectorize -Rpass-analysis=loop-vectorize`, the reason is on the analysis line)
+  and it names WHICH loop did not vectorize and why, so you act on the reason rather than guessing. Or `objdump -d` and look for the target ISA's vector
   registers.
 
 ## Writing fast C

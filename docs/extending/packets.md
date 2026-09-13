@@ -14,18 +14,20 @@ Run every command below from the repo root, `PYTHONPATH=$PWD:$PWD/hpcagent_bench
 |---|---|
 | `hpcagent_bench/envs/registry.yaml` | one entry under `packets:`, **appended at the end** |
 
-Trimmed from the real `profiling` entry, which composes three other registered packets:
+The real `perf-playbook-cpu` entry: three pages, and the device whose tools they teach:
 
 ```yaml
-  profiling:
-    name: Profiling Tools
+  perf-playbook-cpu:
+    name: Perf Playbook (CPU)
+    device: cpu
     skills:
+      - divide-and-conquer
       - profiling
-    packets:
-      - rocprof
-      - nsys
       - opt-reports
 ```
+
+`perf-playbook-amd` adds the `rocprof` page and takes only `hip`; `perf-playbook-nvidia` adds `nsys`
+and takes only `cuda`; a `cpu` packet refuses both.
 
 ### B. Tool/env packet (turns on an env switch, maybe with a page)
 
@@ -68,24 +70,30 @@ with `name` (display name, required in the mapping form), `skills` (page directo
 expands to `lang-<language>` plus `openmp-<language>` when it exists, `*` means every shipped page),
 `packets` (other registered keys this one composes, resolved recursively), `env` (`KEY: value`
 switches, a value may hold `${VAR}`), `method` (a directory under `containers/agent/packets/`, at
-most one per resolved packet) and `color` (an explicit hex colour, overriding the hue rule).
+most one per resolved packet), `color` (an explicit hex colour, overriding the hue rule), `device`
+(`cpu`, `amd` or `nvidia`: resolving for a language that device does not run is refused) and `frozen`
+(why a recorded key takes no new submissions: it still resolves for its records, but `make_problems.py`
+and `packet_env.py` refuse any spec that reaches it -- `profiling`, and so `all-in`, are frozen).
 
-The real `all-in` entry, which composes four packets and takes no pages or env of its own:
+The real `all-in-cpu` entry, which composes three packets and takes no pages or env of its own:
 
 ```yaml
-  all-in:
-    name: All-in
+  all-in-cpu:
+    name: All-in (CPU)
     packets:
       - cpfsrc
-      - divide-and-conquer
-      - profiling
+      - perf-playbook-cpu
       - lang
 ```
 
 **Key order assigns colour.** The first `packets` key takes the first hue in `hues:`, and also picks
-the lead of a composition (`all-in`'s lead is `cpfsrc`, its first listed part). Do not insert a key
-in the middle or reorder existing keys: that repaints every packet after it in every figure already
-drawn. New entries go at the end, which is why `lang` and `all-in` sit last.
+the lead of a composition (`all-in-cpu`'s lead is `cpfsrc`, its first registered part). Do not insert
+a key in the middle or reorder existing keys: that repaints every packet after it in every figure
+already drawn. New entries go at the end.
+
+**Canonical keys compare what a spec stages.** `packets.canonical` names a registered composite only
+when the spec's pages and env/method switches equal the composite's. The token `profiling` is the
+whole frozen bundle, so `divide-and-conquer;profiling;opt-reports` is NOT `perf-playbook-cpu`.
 
 ## Using a packet
 

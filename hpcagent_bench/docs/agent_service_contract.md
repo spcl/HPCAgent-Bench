@@ -107,7 +107,7 @@ body (`kernel` and `rank` included) plus `tool`, which selects the instrument at
 | `tool` | attaches | `threads` | answers |
 |---|---|---|---|
 | `linuxperf` | `perf record` per thread count; `counters:true` appends PAPI counts | list | where the time goes (host default) |
-| `papi` | PAPI counts, no sampler | int | what the machine did, where sampling is forbidden |
+| `papi` | PAPI counts, no sampler | int | what the machine did, where the sampler is missing or fails |
 | `nsys` | Nsight Systems around the measured child | -- | the device timeline (`cuda` default) |
 | `rocprofv3` | `rocprofv3` around the measured child | -- | the device timeline (`hip` default) |
 | `none` | nothing -- the agent's own instrumented source, run once | int | a number no judge instrument can express |
@@ -223,9 +223,9 @@ fp-op counts are per-thread and unaffected.
 
 ### `tool: "papi"` -- the counts alone
 
-The same counted runs, asked for without a sampler. That is not a shortcut: `perf` needs
-`kernel.perf_event_paranoid <= 2` and PAPI does not, so on a host where sampling is forbidden this
-is the only measurement of what the machine did. `threads` is a single **int** here, not a sweep --
+The same counted runs, asked for without a sampler. That is not a shortcut: where `perf` is missing
+or its recording fails, this is the only measurement of what the machine did.
+`kernel.perf_event_paranoid` above 2 blocks both, since PAPI counts through `perf_event` too. `threads` is a single **int** here, not a sweep --
 with no scaling table to place them, counts describe the one configuration the request names.
 
 ```json

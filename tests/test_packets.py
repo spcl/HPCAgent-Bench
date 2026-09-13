@@ -3,8 +3,9 @@
 """PACKETS: resolving a spec into skills/env/method, the canonical identity, the label, the colour.
 
 Covers every predefined packet (cpf, cpfsrc, lang, lang-skills, profiling bundle, repo,
-no-score-tool, autokernel, all-in), an implicit single-skill packet, an ad-hoc ``;``-separated list,
-the error paths, and the identity/colour round trips that ``runs.packet`` already depends on.
+no-score-tool, autokernel, all-in, the perf-playbook and all-in device variants), an implicit
+single-skill packet, an ad-hoc ``;``-separated list, the device and frozen refusals, the error paths,
+and the identity/colour round trips that ``runs.packet`` already depends on.
 """
 
 import dataclasses
@@ -71,22 +72,64 @@ def test_resolve_profiling_is_the_bundle() -> None:
 
 
 @pytest.mark.parametrize(
-    "spec, device_page",
-    [("profiling-amd", "rocprof"), ("profiling-nvidia", "nsys")],
+    "spec, language, tracer",
+    [
+        ("perf-playbook-cpu", "c", ()),
+        ("perf-playbook-amd", "hip", ("rocprof",)),
+        ("perf-playbook-nvidia", "cuda", ("nsys",)),
+    ],
 )
-def test_a_vendor_profiling_packet_stages_only_its_own_device_tracer(spec: str, device_page: str) -> None:
+def test_a_perf_playbook_stages_the_cpu_pages_and_only_its_own_device_tracer(
+    spec: str, language: str, tracer: tuple[str, ...]
+) -> None:
     """The other vendor's tracer page can never run on the device, so it is rent with no payoff."""
-    resolved = packets.resolve(spec, "c")
-    assert resolved.skills == tuple(sorted(("opt-reports", "profiling", device_page)))
+    resolved = packets.resolve(spec, language)
+    assert resolved.pages == ("divide-and-conquer", "profiling", *tracer, "opt-reports")
     assert resolved.env == ()
 
 
 @pytest.mark.parametrize(
-    "spec, key",
-    [("opt-reports;profiling;rocprof", "profiling-amd"), ("nsys;opt-reports;profiling", "profiling-nvidia")],
+    "spec, language",
+    [
+        ("perf-playbook-amd", "c"),
+        ("perf-playbook-amd", "cuda"),
+        ("perf-playbook-nvidia", "hip"),
+        ("perf-playbook-cpu", "hip"),
+        ("perf-playbook-cpu", "cuda"),
+        ("all-in-amd", "c"),
+        ("all-in-nvidia", "fortran"),
+        ("all-in-cpu", "cuda"),
+    ],
 )
-def test_canonical_recognises_a_vendor_profiling_packet_from_its_parts(spec: str, key: str) -> None:
-    assert packets.canonical(spec) == key
+def test_a_device_packet_refuses_a_language_its_device_does_not_run(spec: str, language: str) -> None:
+    with pytest.raises(ValueError, match="packet 'perf-playbook-"):
+        packets.resolve(spec, language, environ={"CPF_VIEW": "/views/dropin"})
+
+
+@pytest.mark.parametrize("device, language", [("cpu", "c"), ("amd", "hip"), ("nvidia", "cuda")])
+def test_all_in_for_a_device_is_cpfsrc_its_perf_playbook_and_the_language_pages(device: str, language: str) -> None:
+    all_in = packets.resolve(f"all-in-{device}", language, environ={"CPF_VIEW": "/views/dropin"})
+    playbook = packets.resolve(f"perf-playbook-{device}", language)
+    assert set(all_in.skills) == set(playbook.skills) | set(packets.resolve("lang", language).skills)
+    assert all_in.env == (("CPF_DROPIN_DIR", "/views/dropin"),)
+    assert packets.canonical(f"lang;perf-playbook-{device};cpfsrc") == f"all-in-{device}"
+
+
+def test_canonical_names_a_composite_only_when_the_spec_stages_the_same_pages() -> None:
+    """``profiling`` as a token is the frozen bundle, rocprof and nsys included: spelling a playbook's
+    pages with it stages two tracer pages the playbook does not carry, so it is not that playbook."""
+    assert packets.canonical("divide-and-conquer;profiling;opt-reports") == "divide-and-conquer+opt-reports+profiling"
+
+
+@pytest.mark.parametrize("spec", ["profiling", "all-in", "divide-and-conquer;profiling", "lang;all-in"])
+def test_a_spec_reaching_a_frozen_packet_takes_no_new_submission(spec: str) -> None:
+    with pytest.raises(ValueError, match="takes no new submissions.*profiling"):
+        packets.refuse_frozen(spec)
+
+
+def test_a_frozen_packet_still_resolves_for_the_records_that_hold_it() -> None:
+    packets.refuse_frozen("perf-playbook-cpu;lang")
+    assert packets.resolve("all-in", "c", environ={}, fill=False).key == "all-in"
 
 
 def test_canonical_does_not_name_a_composite_whose_own_page_is_missing() -> None:
@@ -191,7 +234,7 @@ def test_canonical_of_control_is_empty() -> None:
 
 @pytest.mark.parametrize(
     "spec",
-    ["lang-skills", "no-score-tool", "cpf", "cpfsrc", "repo", "lang"],
+    ["lang-skills", "no-score-tool", "cpf", "cpfsrc", "repo", "lang", "perf-playbook-cpu", "all-in-amd"],
 )
 def test_canonical_of_a_registered_key_is_itself(spec: str) -> None:
     assert packets.canonical(spec) == spec

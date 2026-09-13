@@ -12,6 +12,9 @@ The packet input to :func:`resolve` and :func:`canonical` is either a registered
 packet's own ``packets`` field. ``lang`` expands to the caller's ``lang-<language>`` page plus
 ``openmp-<language>`` when that page exists; ``*`` means every shipped page.
 
+A packet with a ``device`` refuses a language that device does not run (:func:`device_fault`), and a
+``frozen`` key takes no new submissions (:func:`refuse_frozen`) while still resolving for its records.
+
 THE COLOUR RULE LIVES HERE now, not in :mod:`hpcagent_bench.stats.palette`: a packet's colour is
 the registry-order hue of its lead part, lightened one step per extra part, with a stable CRC32 hue
 for an unregistered part. ``palette.color`` computes the same values; it is expected to switch to
@@ -25,12 +28,21 @@ import pathlib
 import re
 import zlib
 from collections.abc import Mapping
+from types import MappingProxyType
 
 from hpcagent_bench import experiment_tags as tags
 
 SKILLS_DIR = pathlib.Path(__file__).resolve().parent / "skills"
 
 PLACEHOLDER_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+#: A GPU vendor -> the languages its device kernels are written in.
+DEVICE_LANGUAGES: Mapping[str, frozenset[str]] = MappingProxyType(
+    {"amd": frozenset({"hip"}), "nvidia": frozenset({"cuda"})}
+)
+
+#: Languages no CPU tool can see a kernel in: a ``cpu`` packet refuses them.
+DEVICE_ONLY_LANGUAGES: frozenset[str] = frozenset(lang for langs in DEVICE_LANGUAGES.values() for lang in langs)
 
 
 def spec_parts(spec: str) -> tuple[str, ...]:
@@ -112,6 +124,9 @@ def expand_token(
             skills[page] = None
         return
     seen.add(token)
+    fault = device_fault(token, definition.device, language) if definition.device else ""
+    if fault:
+        raise ValueError(fault)
     for skill_token in definition.skills:
         for page in expand_skill_token(skill_token, language):
             skills[page] = None
@@ -124,6 +139,52 @@ def expand_token(
         env[key] = value
     if definition.method:
         methods[token] = definition.method
+
+
+def device_fault(key: str, device: str, language: str) -> str:
+    """Why ``key``, whose pages teach ``device``'s tools, cannot serve a run in ``language``; "" when it can."""
+    if device == "cpu":
+        if language in DEVICE_ONLY_LANGUAGES:
+            return f"packet {key!r} teaches CPU tools, which never see a {language!r} kernel; use its device variant"
+        return ""
+    if device not in DEVICE_LANGUAGES:
+        return f"packet {key!r} names device {device!r}; expected cpu or one of {sorted(DEVICE_LANGUAGES)}"
+    if language not in DEVICE_LANGUAGES[device]:
+        return f"packet {key!r} is for {device} runs in {sorted(DEVICE_LANGUAGES[device])}, not {language!r}"
+    return ""
+
+
+def reached_keys(token: str, definitions: Mapping[str, tags.PacketDef]) -> tuple[str, ...]:
+    """``token`` and every registered key it composes, depth first; () for a bare skill page."""
+    definition = definitions.get(token)
+    if definition is None:
+        return ()
+    return (token, *(key for sub in definition.packets for key in reached_keys(sub, definitions)))
+
+
+def refuse_frozen(spec: str) -> None:
+    """Raise a ``ValueError`` when ``spec`` reaches a frozen key. Launchers call this before building an
+    arm; :func:`resolve` does not, so the records a frozen key already holds still resolve."""
+    definitions = tags.registry().packet_defs
+    frozen = {
+        key: definitions[key].frozen
+        for part in spec_parts(spec)
+        for key in reached_keys(part, definitions)
+        if definitions[key].frozen
+    }
+    if frozen:
+        reasons = "; ".join(f"{key}: {reason}" for key, reason in frozen.items())
+        raise ValueError(f"packet spec {spec!r} takes no new submissions ({reasons})")
+
+
+def leaves(token: str, definitions: Mapping[str, tags.PacketDef]) -> frozenset[str]:
+    """What ``token`` stages, in registry tokens: its page tokens, plus the key itself when it switches
+    env or a method on. Two specs stage the same packet exactly when their leaves agree."""
+    definition = definitions.get(token)
+    if definition is None:
+        return frozenset({token})
+    own = frozenset({token}) if definition.env or definition.method else frozenset[str]()
+    return own.union(definition.skills, *(leaves(sub, definitions) for sub in definition.packets))
 
 
 def resolve(spec: str, language: str, environ: Mapping[str, str] | None = None, *, fill: bool = True) -> Packet:
@@ -162,17 +223,21 @@ def resolve(spec: str, language: str, environ: Mapping[str, str] | None = None, 
 
 
 def canonical(spec: str) -> str:
-    """The recorded identity key for ``spec``: "" for the control, a registered key when ``spec``'s
-    parts are exactly one registered composite's parts, else the parts sorted and ``+``-joined --
-    the format ``runs.packet`` already uses."""
+    """The recorded identity key for ``spec``: "" for the control, a registered key when ``spec``
+    stages exactly what that composite stages (:func:`leaves`), else the parts sorted and
+    ``+``-joined -- the format ``runs.packet`` already uses.
+
+    Leaves, not top-level parts: the token ``profiling`` is the whole bundle, so a spec spelling a
+    playbook's pages with it stages two tracer pages the playbook does not carry."""
     parts = spec_parts(spec)
     if not parts:
         return ""
     if len(parts) == 1:
         return parts[0]
-    wanted = frozenset(parts)
-    for key, definition in tags.registry().packet_defs.items():
-        if definition.packets and frozenset(definition.skills) | frozenset(definition.packets) == wanted:
+    definitions = tags.registry().packet_defs
+    wanted = frozenset[str]().union(*(leaves(part, definitions) for part in parts))
+    for key, definition in definitions.items():
+        if (definition.skills or definition.packets) and leaves(key, definitions) == wanted:
             return key
     return "+".join(sorted(parts))
 

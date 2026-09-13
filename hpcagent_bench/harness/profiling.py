@@ -912,10 +912,10 @@ def count_submission(
     """Hardware counts with NO sampler attached: ``tool="papi"``.
 
     The same counted runs :func:`profile_submission` appends to its sweep, asked for on their own.
-    That is the point rather than a shortcut: ``perf`` needs ``perf_event_paranoid <= 2`` and PAPI
-    does not, so on the containers where sampling is forbidden this is the only measurement of what
-    the machine did -- and requiring a call graph first would refuse the request for a capability
-    the caller never asked for.
+    That is the point rather than a shortcut: where ``perf`` is missing or its recording fails this
+    is the only measurement of what the machine did (``perf_event_paranoid`` above 2 blocks PAPI
+    too), and requiring a call graph first would refuse the request for a capability the caller
+    never asked for.
 
     ONE thread count, not a sweep: with no scaling table to place them, counts describe the
     configuration the caller names.

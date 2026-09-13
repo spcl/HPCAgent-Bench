@@ -133,10 +133,12 @@ def packet_skills_text(spec: str, language: str) -> str:
     to pick ``lang-<language>``, and an empty one is refused with a clear message rather than
     resolving to a page named ``lang-`` that cannot exist.
 
-    :raises ValueError: an unknown packet/skill token, or a spec that names ``lang`` with no
-        ``language`` -- both are CLI usage errors, left for the caller to turn into ``exit(2)``.
+    :raises ValueError: an unknown packet/skill token, a spec that names ``lang`` with no
+        ``language``, a frozen key, or a device packet for a language its device does not run --
+        all CLI usage errors, left for the caller to turn into ``exit(2)``.
     """
     try:
+        packets.refuse_frozen(spec)
         packet = packets.resolve(spec, language, fill=False)
     except ValueError as exc:
         message = str(exc)

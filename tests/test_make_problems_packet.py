@@ -51,26 +51,13 @@ def test_packet_cpf_matches_the_single_skill_flag() -> None:
     )
 
 
-def test_packet_dc_profiling_is_byte_identical_to_the_dc_skill_flags() -> None:
-    """submit-scicomp-dc.sh's `dc` arm passes DC_SKILLS as repeated --skill in a fixed order. The
-    profiling bundle's definition order (profiling, then rocprof, nsys, opt-reports) reproduces it,
-    so migrating the arm to --packet changes no byte of its problems file."""
+def test_packet_perf_playbook_cpu_is_byte_identical_to_its_skill_flags() -> None:
+    """The playbook's definition order (divide-and-conquer, profiling, opt-reports) is the order its
+    pages render in, the same bytes as naming them one --skill at a time."""
     old = task_text(
-        "--language",
-        "c",
-        "--skill",
-        "divide-and-conquer",
-        "--skill",
-        "profiling",
-        "--skill",
-        "rocprof",
-        "--skill",
-        "nsys",
-        "--skill",
-        "opt-reports",
+        "--language", "c", "--skill", "divide-and-conquer", "--skill", "profiling", "--skill", "opt-reports"
     )
-    new = task_text("--language", "c", "--packet", "divide-and-conquer;profiling")
-    assert old == new
+    assert task_text("--language", "c", "--packet", "perf-playbook-cpu") == old
 
 
 def test_an_ad_hoc_semicolon_list_of_bare_skill_names_resolves() -> None:
@@ -117,10 +104,16 @@ def test_a_packet_with_no_pages_names_no_page() -> None:
     assert task_text("--language", "c", "--packet", "") == task_text("--language", "c")
 
 
-def test_packet_dc_cpf_is_byte_identical_to_the_dc_cpf_skill_flags() -> None:
-    """The `dc-cpf` arm appends the CPF page after DC_SKILLS; the spec's own order does the same."""
-    flags = ["--skill", "divide-and-conquer", "--skill", "profiling", "--skill", "rocprof"]
-    flags += ["--skill", "nsys", "--skill", "opt-reports", "--skill", "canonical-parallel-form"]
-    old = task_text("--language", "c", *flags)
-    new = task_text("--language", "c", "--packet", "divide-and-conquer;profiling;cpf")
-    assert old == new
+@pytest.mark.parametrize(
+    "packet, language, refusal",
+    [
+        ("profiling", "c", "takes no new submissions"),
+        ("all-in", "c", "takes no new submissions"),
+        ("perf-playbook-amd", "c", "is for amd runs"),
+        ("perf-playbook-cpu", "cuda", "teaches CPU tools"),
+    ],
+)
+def test_a_frozen_or_wrong_device_packet_builds_no_problem(packet: str, language: str, refusal: str) -> None:
+    result = run("--track", "loop_level_reasoning", "--language", language, "--kernel", KERNEL, "--packet", packet)
+    assert result.returncode == 2, result.stderr
+    assert refusal in result.stderr
