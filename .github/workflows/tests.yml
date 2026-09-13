@@ -1791,9 +1791,12 @@ jobs:
         # hpcagent_bench-cpu.sif containers/cpu.def`.
         #
         # Capped so a slow or wedged docker build fails THIS step rather than cancelling the job at
-        # its ceiling, which would skip the coverage upload and the phases below. 19m00s measured.
+        # its ceiling, which would skip the coverage upload and the phases below. 19m00s measured
+        # on 09-02, 22m09s-22m25s on 09-13 as the image grew -- 24 left under two minutes of margin,
+        # which run 34762831006 (docker save + apptainer OCI extract ~2x their usual time, no repo
+        # change) blew through. Recapped to the 09-13 baseline plus the original margin.
         if: ${{ !cancelled() }}
-        timeout-minutes: 24
+        timeout-minutes: 28
         run: |
           # Reclaim disk FIRST. The unified image (torch + dace + jax + the HPC stack) is multi-GB
           # and this step keeps THREE copies live at once -- the docker layers, the `docker save`
