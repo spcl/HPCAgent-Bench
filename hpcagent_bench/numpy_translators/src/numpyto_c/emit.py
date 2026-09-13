@@ -2094,8 +2094,6 @@ def _c_shape_token(tok: str) -> str:
     return out
 
 
-
-
 def _collect_implicit_locals(kir: KernelIR) -> List[Tuple[str, str]]:
     """Return (name, c_type) pairs for implicit scalar locals needing a C decl, type inferred in priority order."""
     declared: Set[str] = set()
