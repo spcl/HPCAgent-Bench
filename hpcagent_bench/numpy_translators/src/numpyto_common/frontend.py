@@ -2479,10 +2479,17 @@ class _SubstituteParamAliases(ast.NodeTransformer):
         self.subst: Dict[str, str] = {}
 
     def collect(self, fn: ast.FunctionDef) -> None:
+        # Census over the WHOLE function, not just its top-level statements. A name rebound inside a
+        # for / while / if is still rebound, and counting only ``fn.body`` made it look bound-once:
+        # cegterg-shaped kernels bind a local at the top level and rebind it inside a nested loop, so
+        # the local folds onto the aliased parameter -- a SHAPE SYMBOL for every array extent -- and
+        # the emitted loop ends up assigning to it, collapsing distinct quantities onto one name.
+        # A Store context covers every binding form at once: Assign (including a tuple target),
+        # AugAssign, a for-loop target and a walrus.
         bare_binds: Dict[str, int] = {}
-        for s in fn.body:
-            if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name):
-                bare_binds[s.targets[0].id] = bare_binds.get(s.targets[0].id, 0) + 1
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                bare_binds[node.id] = bare_binds.get(node.id, 0) + 1
         for s in fn.body:
             if (
                 isinstance(s, ast.Assign)
