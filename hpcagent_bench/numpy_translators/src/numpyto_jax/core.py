@@ -31,6 +31,8 @@ import ast
 import copy
 from typing import List, Optional, Set, Tuple
 
+from numpyto_common.statement_desugar import DesugarArrayIteration, SplitChainedAssign
+
 
 class EmitError(Exception):
     """A numpy construct the prototype does not (yet) lower."""
@@ -1839,36 +1841,13 @@ def _desugar_foreach(fn: ast.FunctionDef) -> None:
     ``for b in data``, contour_integral's ``for z in int_pts``). Only a plain
     Name iterable is handled."""
 
-    class _T(ast.NodeTransformer):
-        def visit_For(self, node: ast.For) -> ast.For:
-            self.generic_visit(node)
-            it = node.iter
-            if isinstance(it, ast.Call) and isinstance(it.func, ast.Name) and it.func.id == "range":
-                return node
-            # A constant-literal sequence (lulesh's ``faces``) is concrete in
-            # the emitted function -- leave the for literal so it unrolls.
-            if isinstance(it, ast.Name) and (it.id in _MODULE_CONSTS or it.id in _LOCAL_CONSTS):
-                return node
-            if not (isinstance(node.target, ast.Name) and isinstance(it, ast.Name)):
-                return node
-            idx = "_fe_" + node.target.id
-            bind = ast.Assign(
-                targets=[ast.Name(id=node.target.id, ctx=ast.Store())],
-                value=ast.Subscript(
-                    value=ast.Name(id=it.id, ctx=ast.Load()), slice=ast.Name(id=idx, ctx=ast.Load()), ctx=ast.Load()
-                ),
-            )
-            shape0 = ast.Subscript(
-                value=ast.Attribute(value=ast.Name(id=it.id, ctx=ast.Load()), attr="shape", ctx=ast.Load()),
-                slice=ast.Constant(value=0),
-                ctx=ast.Load(),
-            )
-            node.target = ast.Name(id=idx, ctx=ast.Store())
-            node.iter = ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[shape0], keywords=[])
-            node.body = [bind] + node.body
-            return ast.fix_missing_locations(node)
+    def leading_extent(array: str) -> Optional[ast.expr]:
+        # A constant-literal sequence (lulesh's ``faces``) is concrete in the emitted function: it unrolls.
+        if array in _MODULE_CONSTS or array in _LOCAL_CONSTS:
+            return None
+        return ast.parse(f"{array}.shape[0]", mode="eval").body
 
-    _T().visit(fn)
+    DesugarArrayIteration(leading_extent, lambda target, ordinal: "_fe_" + target).visit(fn)
     ast.fix_missing_locations(fn)
 
 
@@ -1907,22 +1886,12 @@ _CHAIN_CTR = [0]
 
 
 def _expand_chained_assigns(fn: ast.FunctionDef) -> None:
-    """``a = b = rhs`` -> ``__chain = rhs; a = __chain; b = __chain`` so each
-    target is a single assignment the later passes can rewrite (covariance /
-    correlation write the same row+column from one dot)."""
-
-    class _T(ast.NodeTransformer):
-        def visit_Assign(self, node: ast.Assign) -> ast.Assign | List[ast.stmt]:
-            self.generic_visit(node)
-            if len(node.targets) <= 1:
-                return node
-            _CHAIN_CTR[0] += 1
-            tmp = f"__chain{_CHAIN_CTR[0]}"
-            out = [ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=node.value)]
-            out += [ast.Assign(targets=[t], value=ast.Name(id=tmp, ctx=ast.Load())) for t in node.targets]
-            return [ast.copy_location(s, node) for s in out]
-
-    _T().visit(fn)
+    """``a = b = rhs`` -> one assignment per target, ``rhs`` evaluated once, so the later passes
+    rewrite each target alone (covariance / correlation write the same row+column from one dot).
+    An array ``rhs`` stays one name: a functional ``.at[].set`` rebinds only the name it writes."""
+    split = SplitChainedAssign(lambda ordinal: f"__chain{_CHAIN_CTR[0] + ordinal + 1}")
+    split.visit(fn)
+    _CHAIN_CTR[0] += split.temps
     ast.fix_missing_locations(fn)
 
 

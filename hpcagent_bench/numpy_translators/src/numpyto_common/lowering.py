@@ -43,6 +43,14 @@ from numpyto_common import dtypes
 from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR, SymbolDesc, stamp_symbol_assumptions
 from numpyto_common.ordered import OrderedSet
 from numpyto_common.numpy_desugar import _np_linalg_attr
+from numpyto_common.statement_desugar import (
+    DesugarArrayIteration,
+    SplitChainedAssign,
+    bind,
+    element_read,
+    indexed_loop,
+    pair_names,
+)
 from numpyto_common.lib_nodes import (
     ARRAY_METHOD_SHAPE_OPS,
     ArrayMethodRewriter,
@@ -1215,64 +1223,14 @@ class _ScalarTimesMatmulRewriter(ast.NodeTransformer):
         return node
 
 
-class _ArrayIterRewriter(ast.NodeTransformer):
-    """Rewrite ``for x in arr:`` into ``for __i in range(N): x = arr[__i]``.
-
-    Numpy / Python permits direct iteration over an array (each iteration
-    yields one element of the leading axis). C / Fortran have no
-    equivalent, so we desugar to a counted loop with a leading-axis
-    subscript. ``arr`` must be a bare Name whose shape is known --
-    otherwise the loop falls through unchanged for downstream emit to
-    flag.
-
-    Records each loop-var's source array name in :attr:`var_to_array`
-    so the emitter can inherit the element dtype (``for b in data:``
-    where ``data`` is ``uint8`` should declare ``b`` as ``uint8_t``).
-    """
-
-    def __init__(self, shape_table) -> None:
-        self.shape_table = shape_table
-        self._counter = [0]
-        #: Mapping from synthesised loop-var name to the source array.
-        self.var_to_array: Dict[str, str] = {}
-
-    def visit_For(self, node: ast.For) -> ast.AST:
-        self.generic_visit(node)
-        if isinstance(node.iter, ast.Name) and isinstance(node.target, ast.Name):
-            shape = self.shape_table.get(node.iter.id)
-            if shape:
-                self._counter[0] += 1
-                iv = f"__ai{self._counter[0]}"
-                self.var_to_array[node.target.id] = node.iter.id
-                # Build the per-iteration assignment ``x = arr[__i]``.
-                preamble = ast.Assign(
-                    targets=[ast.Name(id=node.target.id, ctx=ast.Store())],
-                    value=ast.Subscript(
-                        value=ast.Name(id=node.iter.id, ctx=ast.Load()),
-                        slice=ast.Name(id=iv, ctx=ast.Load()),
-                        ctx=ast.Load(),
-                    ),
-                )
-                bound = (
-                    ast.Constant(value=int(shape[0])) if shape[0].isdigit() else ast.Name(id=shape[0], ctx=ast.Load())
-                )
-                return ast.For(
-                    target=ast.Name(id=iv, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[bound], keywords=[]),
-                    body=[preamble] + node.body,
-                    orelse=node.orelse,
-                )
-        return node
-
-
 class _EnumerateZipRewriter(ast.NodeTransformer):
     """Desugar ``for x in enumerate(arr):`` and ``for x in zip(a, b):``
     to plain ``for __i in range(N):`` with the per-iteration assignments
     inlined as the first statement of the loop body.
     """
 
-    def __init__(self, shape_table) -> None:
-        self.shape_table = shape_table
+    def __init__(self, extent_of: Callable[[str], Optional[ast.expr]]) -> None:
+        self.extent_of = extent_of
 
     @staticmethod
     def _enumerate_start(call: ast.Call) -> ast.expr:
@@ -1314,71 +1272,30 @@ class _EnumerateZipRewriter(ast.NodeTransformer):
                     )
                     out.extend(copy.deepcopy(stmt) for stmt in node.body)
                 return out
-            if it.func.id == "enumerate" and it.args and isinstance(it.args[0], ast.Name):
-                arr = it.args[0]
-                shape = self.shape_table.get(arr.id)
-                if shape and isinstance(node.target, ast.Tuple) and len(node.target.elts) == 2:
-                    idx_name, val_name = node.target.elts[0], node.target.elts[1]
-                    start = self._enumerate_start(it)
-                    ei = "__ei"
+            pair = pair_names(node.target)
+            if pair is not None and it.func.id == "enumerate" and it.args and isinstance(it.args[0], ast.Name):
+                sequence = it.args[0].id
+                extent = self.extent_of(sequence)
+                if extent is not None:
                     # idx = start + __ei ; val = arr[__ei]
-                    idx_assign = ast.Assign(
-                        targets=[ast.Name(id=idx_name.id, ctx=ast.Store())],
-                        value=ast.BinOp(left=copy.deepcopy(start), op=ast.Add(), right=ast.Name(id=ei, ctx=ast.Load())),
+                    position = ast.BinOp(
+                        left=copy.deepcopy(self._enumerate_start(it)),
+                        op=ast.Add(),
+                        right=ast.Name(id="__ei", ctx=ast.Load()),
                     )
-                    val_assign = ast.Assign(
-                        targets=[ast.Name(id=val_name.id, ctx=ast.Store())],
-                        value=ast.Subscript(
-                            value=ast.Name(id=arr.id, ctx=ast.Load()),
-                            slice=ast.Name(id=ei, ctx=ast.Load()),
-                            ctx=ast.Load(),
-                        ),
-                    )
-                    new_for = ast.For(
-                        target=ast.Name(id=ei, ctx=ast.Store()),
-                        iter=ast.Call(
-                            func=ast.Name(id="range", ctx=ast.Load()),
-                            args=[ast.Name(id=shape[0], ctx=ast.Load())],
-                            keywords=[],
-                        ),
-                        body=[idx_assign, val_assign] + node.body,
-                        orelse=node.orelse,
-                    )
-                    return new_for
-            if it.func.id == "zip" and len(it.args) == 2 and all(isinstance(a, ast.Name) for a in it.args):
-                a, b = it.args
-                shape = self.shape_table.get(a.id)
-                if shape and isinstance(node.target, ast.Tuple) and len(node.target.elts) == 2:
-                    x_name, y_name = node.target.elts[0], node.target.elts[1]
-                    new_for = ast.For(
-                        target=ast.Name(id="__zi", ctx=ast.Store()),
-                        iter=ast.Call(
-                            func=ast.Name(id="range", ctx=ast.Load()),
-                            args=[ast.Name(id=shape[0], ctx=ast.Load())],
-                            keywords=[],
-                        ),
-                        body=[
-                            ast.Assign(
-                                targets=[ast.Name(id=x_name.id, ctx=ast.Store())],
-                                value=ast.Subscript(
-                                    value=ast.Name(id=a.id, ctx=ast.Load()),
-                                    slice=ast.Name(id="__zi", ctx=ast.Load()),
-                                    ctx=ast.Load(),
-                                ),
-                            ),
-                            ast.Assign(
-                                targets=[ast.Name(id=y_name.id, ctx=ast.Store())],
-                                value=ast.Subscript(
-                                    value=ast.Name(id=b.id, ctx=ast.Load()),
-                                    slice=ast.Name(id="__zi", ctx=ast.Load()),
-                                    ctx=ast.Load(),
-                                ),
-                            ),
-                        ]
-                        + node.body,
-                        orelse=node.orelse,
-                    )
-                    return new_for
+                    binds = [bind(pair[0], position), bind(pair[1], element_read(sequence, "__ei"))]
+                    return indexed_loop(node, "__ei", extent, binds)
+            if (
+                pair is not None
+                and it.func.id == "zip"
+                and len(it.args) == 2
+                and all(isinstance(a, ast.Name) for a in it.args)
+            ):
+                left, right = it.args[0].id, it.args[1].id
+                extent = self.extent_of(left)
+                if extent is not None:
+                    binds = [bind(pair[0], element_read(left, "__zi")), bind(pair[1], element_read(right, "__zi"))]
+                    return indexed_loop(node, "__zi", extent, binds)
         return node
 
 
@@ -8441,18 +8358,6 @@ class _SubscriptifyNames(ast.NodeTransformer):
         return node
 
 
-class _ChainedAssignRewriter(ast.NodeTransformer):
-    """Rewrite ``s0 = s1 = s2 = 0.0`` into three separate assignments."""
-
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
-        self.generic_visit(node)
-        if len(node.targets) <= 1:
-            return node
-        # ``a = b = c = X`` -> [a=X, b=X, c=X] in source order.
-        text = "\n".join(f"{ast.unparse(t)} = {ast.unparse(node.value)}" for t in node.targets)
-        return ast.parse(text).body
-
-
 def _target_base_name(node: ast.AST) -> Optional[str]:
     """Root name of an assignment target (``out[i][j]`` -> ``out``, a bare ``x``
     -> ``x``), or ``None`` when the target is not name-rooted."""
@@ -8876,7 +8781,7 @@ class LoweringContext:
         #: re-used by the slice-normalise phase (both resolve ``__inl`` tokens).
         self.resolve_inl_table: Optional[Callable[[Dict], None]] = None
         # Rewriter handles whose post-visit state a later phase consumes.
-        self.iter_rewriter: Optional[_ArrayIterRewriter] = None
+        self.iter_rewriter: Optional[DesugarArrayIteration] = None
         self.wa_rewriter: Optional[_WholeArrayAssignRewriter] = None
         self.lib_rewriter: object = None
         self.zeros: Optional[_ZerosRewriter] = None
@@ -8954,16 +8859,24 @@ def _lp_normalize_calls(ctx: LoweringContext) -> None:
     # to a fresh temp so the index is a bare Name the backends emit; the spilled
     # ``__ix = np.argmax(...)`` is expanded by the later LibNode reduction pass.
     _ComputedIndexCallHoister().visit(tree)
-    ctx.iter_rewriter = _ArrayIterRewriter(ash)
+
+    def leading_extent(array: str) -> Optional[ast.expr]:
+        shape = ash.get(array)
+        return _token_to_ast(shape[0]) if shape else None
+
+    ctx.iter_rewriter = DesugarArrayIteration(leading_extent, lambda target, ordinal: f"__ai{ordinal + 1}")
     ctx.iter_rewriter.visit(tree)
-    _EnumerateZipRewriter(ash).visit(tree)
+    _EnumerateZipRewriter(leading_extent).visit(tree)
     _BuiltinCastRewriter().visit(tree)
     # The LOCAL array shapes too, exactly as the two later _MathRewriter sites do. With only
     # the declared arrays, an inlined helper's temps look like scalars, and np.maximum on two
     # of them took the scalar rename: __npb_fmax(double *, double *).
     _MathRewriter(set(ash.keys()) | set(ctx.lib_shape_table.keys()), defer_array_capable=True).visit(tree)
     _DaceMapRewriter().visit(tree)
-    _ChainedAssignRewriter().visit(tree)
+    # ``a = b = v``: ``v`` once -- a temp for a scalar, one name for an array's one buffer.
+    chain_ranks = {name: len(shape) for name, shape in ash.items()}
+    chain_ranks.update((desc.name, 0) for desc in (*ctx.kir.scalars, *ctx.kir.symbols))
+    SplitChainedAssign(lambda ordinal: f"__chain{ordinal}", seed_ranks=chain_ranks).visit(tree)
     tuple_rewriter = _TupleAssignRewriter(ash)
     tuple_rewriter.visit(tree)
     # Stash the int-locals so the emitter can declare them.
