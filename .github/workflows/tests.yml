@@ -2321,8 +2321,9 @@ jobs:
   # so neither can take it: this is its own runner, and no compile means no ccache.
   #
   # Two shards, dealt by shard_of on port-fidelity's PARSE_COST weights. Those measured costs deal
-  # to 2479 s and 2520 s serial (emit + lower, densenet201 at its 1500 s cap). At -n 2 shard 0 is
-  # bounded by that cap, ~25 min, and shard 1 is ~21; + ~3 emit + ~3 setup -> ~31 min worst.
+  # to 2479 s and 2520 s serial (emit + lower, densenet201 at its 1500 s cap). densenet201 is now
+  # DESELECTED (test_dace_port_lowering.DESELECTED) until its frontend parse time is fixed, so
+  # shard 0 no longer waits on that cap; shard 1 is ~21 min at -n 2; + ~3 emit + ~3 setup -> ~27.
   # ===========================================================================================
   dace-lowering:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
@@ -2333,7 +2334,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0, 1]
-    # ~31 min projected worst shard (see above) + setup; the step caps at 38.
+    # ~27 min projected worst shard (see above) + setup; the step caps at 38.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
