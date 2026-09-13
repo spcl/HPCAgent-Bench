@@ -211,210 +211,328 @@ def _axis_count(args: List[ast.expr], keywords: List[ast.keyword]) -> Optional[i
 
 def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
     """Best-effort ndim of an expression given the current rank table."""
-    if isinstance(value, ast.Name):
-        return ranks.get(value.id)
-    if isinstance(value, ast.Constant):
-        return 0 if isinstance(value.value, (bool, int, float, complex)) else None
+    handler = RANK_HANDLERS.get(type(value))
+    return None if handler is None else handler(value, ranks)
+
+
+def name_rank(value: ast.Name, ranks: Dict[str, int]) -> Optional[int]:
+    return ranks.get(value.id)
+
+
+def constant_rank(value: ast.Constant, ranks: Dict[str, int]) -> Optional[int]:
+    return 0 if isinstance(value.value, (bool, int, float, complex)) else None
+
+
+def attribute_rank(value: ast.Attribute, ranks: Dict[str, int]) -> Optional[int]:
     # ``A.T`` reverses the axes, keeping the rank. Leaving it unknown silently mis-ranked every
     # ``x = x @ w.T + b``: the matmul went undecided, and the enclosing ``+ b`` then reported the
     # BIAS vector's rank 1 for a rank-2 result.
-    if isinstance(value, ast.Attribute) and value.attr == "T":
-        return expr_rank(value.value, ranks)
-    if isinstance(value, ast.BinOp):
-        if isinstance(value.op, ast.MatMult):
-            lr = expr_rank(value.left, ranks)
-            rr = expr_rank(value.right, ranks)
-            if lr is None or rr is None:
-                return None
-            # matmul: 1-D operands contract to a scalar; otherwise the result
-            # keeps the larger batch rank (numpy stacks/broadcasts leading axes).
-            if lr == 1 and rr == 1:
-                return 0
-            return max(lr, rr)
-        lr = expr_rank(value.left, ranks)
-        rr = expr_rank(value.right, ranks)
-        return max([r for r in (lr, rr) if r is not None], default=None)
-    if isinstance(value, ast.UnaryOp):
-        return expr_rank(value.operand, ranks)
-    if isinstance(value, ast.List):
-        # ``np.array([a, b])`` -- a list literal's rank is its nesting depth. Left unknown, the
-        # index vector fv3 builds this way was untracked, and every pass keyed on rank skipped it.
-        return 1 + max((expr_rank(e, ranks) or 0) for e in value.elts) if value.elts else 1
-    if isinstance(value, ast.Compare):
-        rs = [expr_rank(value.left, ranks)] + [expr_rank(c, ranks) for c in value.comparators]
-        return max([r for r in rs if r is not None], default=None)  # bool mask keeps operand rank
-    if isinstance(value, ast.BoolOp):
-        rs = [expr_rank(v, ranks) for v in value.values]
-        return max([r for r in rs if r is not None], default=None)
-    if isinstance(value, ast.Subscript):
-        base = expr_rank(value.value, ranks)
-        if base is None:
+    return expr_rank(value.value, ranks) if value.attr == "T" else None
+
+
+def binop_rank(value: ast.BinOp, ranks: Dict[str, int]) -> Optional[int]:
+    lr = expr_rank(value.left, ranks)
+    rr = expr_rank(value.right, ranks)
+    if isinstance(value.op, ast.MatMult):
+        if lr is None or rr is None:
             return None
-        sl = value.slice
-        if isinstance(sl, ast.Slice):
-            return base  # a full/partial slice keeps the rank
-        if is_newaxis(sl):
-            return base + 1  # a[None] / a[np.newaxis] -- a newaxis adds a dimension
-        if is_ellipsis(sl):
-            return base  # a[...] keeps every axis
-        if isinstance(sl, ast.Tuple):
-            # slices keep a dim, newaxis adds one, a SCALAR index removes one, and an ellipsis
-            # (``a[..., i]``) expands to full slices over all otherwise-unindexed axes -- it drops
-            # NOTHING. A 1-D fancy index amid slices is neither: it consumes the base axis and
-            # reinserts its own (``suffix[:, idx]`` with ``idx = np.arange(W)`` stays rank 2, one
-            # axis in, one out), so its net drop is ``1 - its own rank``, not the flat ``1`` a
-            # scalar loop index costs. Unknown-rank index defaults to the scalar reading, same as
-            # every kernel that reached this line before a fancy index needed distinguishing.
-            # Advanced indices BROADCAST against each other rather than each contributing their own
-            # axes: ``A[ia, ib]`` with both rank 2 is rank 2, not 4. Summing them per index made
-            # field_gather's ``ey_arr[:, :, 0, 0][ia_b, ib_b]`` rank 4, the product it feeds rank 4
-            # too, and the reduction over it emitted a nest reading ``.shape[5]`` off it. So the
-            # whole advanced block consumes one base axis per index and gives back ONE broadcast
-            # shape -- ``n_adv - max(rank)``. An integer index is the rank-0 case of the same
-            # formula, and an unknown rank keeps reading as one, exactly as before.
-            drop = 0
-            adv_ranks = []
-            for e in sl.elts:
-                if isinstance(e, ast.Slice) or is_ellipsis(e):
-                    continue
-                if is_newaxis(e):
-                    drop -= 1
-                    continue
-                idx_rank = expr_rank(e, ranks)
-                adv_ranks.append(0 if idx_rank is None else idx_rank)
-            if adv_ranks:
-                drop += len(adv_ranks) - max(adv_ranks)
-            return base - drop
-        if isinstance(sl, ast.Call) and isinstance(sl.func, ast.Name) and sl.func.id == "tuple":
-            # ``A[tuple(axes)]`` is the WHOLE index, one entry per axis -- not the single scalar
-            # index the fall-through below assumes. How many axes it drops depends on what the
-            # sequence holds, which is not visible here; reporting ``base - 1`` invented a rank.
-            return None
-        # A single Name index is USUALLY a scalar (a loop iterator), which drops one axis. But it may
-        # be an index ARRAY or a boolean MASK -- azimint's ``bin_id = bin_id[valid]`` -- and calling
-        # that rank 0 made the scatter desugar see no driver axis and leave ``np.add.at`` standing.
-        # Report a rank only where the array and mask readings AGREE; where they differ, say nothing
-        # rather than invent one (see _drop_rank_conflicts for what a wrong rank costs).
-        if isinstance(sl, ast.Name):
-            idx_rank = ranks.get(sl.id)
-            if idx_rank is not None and idx_rank >= 1:
-                as_gather = base - 1 + idx_rank  # integer index array
-                as_mask = base - idx_rank + 1  # boolean mask consumes idx_rank axes, yields one
-                return as_gather if as_gather == as_mask else None
-        return base - 1  # single integer/Name index
-    if isinstance(value, ast.Call):
-        if isinstance(value.func, ast.Name) and value.func.id == "abs" and value.args:
-            return expr_rank(value.args[0], ranks)  # builtin abs is elementwise
-        if np_submodule_attr(value, "fft") and value.args:
-            return expr_rank(value.args[0], ranks)  # fft/ifft/fftn... preserve rank
-        attr = _np_attr(value)
-        if attr in ("arange", "linspace"):
-            return 1  # always 1-D
-        if attr in REDUCE_FNS and value.args:
-            base = expr_rank(value.args[0], ranks)
-            if base is None:
-                return None
-            kw = {k.arg: k.value for k in value.keywords}
-            # keepdims=True keeps every reduced axis at extent 1, so the rank is unchanged. Ignoring
-            # it under-counted by one and made the following ``np.squeeze(y, axis=-1)`` resolve -1
-            # against the WRONG rank -- it squeezed a different axis.
-            keep = kw.get("keepdims")
-            if isinstance(keep, ast.Constant) and keep.value is True:
-                return base
-            ax = kw.get("axis") or (value.args[1] if len(value.args) > 1 else None)
-            if ax is None:
-                return 0  # full reduction -> scalar
-            if isinstance(ax, (ast.Tuple, ast.List)):
-                return base - len(ax.elts)
-            return base - 1  # single reduced axis
-        if attr in _SHAPE_CTORS and value.args:
-            n = _tuple_len(value.args[0])
-            if n is not None:
-                return n
-            a0 = value.args[0]
-            if isinstance(a0, ast.Attribute) and a0.attr == "shape":
-                return expr_rank(a0.value, ranks)  # np.zeros(C.shape, ...) keeps C's rank
-            if isinstance(a0, (ast.Name, ast.Constant)):
-                return 1  # 1-D length
-        if attr in _LIKE_CTORS and value.args:
-            return expr_rank(value.args[0], ranks)
-        if attr in ("reshape",) and len(value.args) >= 2:
-            n = _tuple_len(value.args[1])
-            if n is not None:
-                return n
-        if attr == "diag" and value.args:
-            # The one numpy call whose rank moves in BOTH directions: 2-D in extracts the diagonal
-            # (1-D out), 1-D in builds the matrix (2-D out). The elementwise fallback below reports
-            # the operand's rank, so raman_fitting's ``scale = np.diag(normal).copy()`` came back
-            # rank 2 and ``scale[scale <= 0] = 1.0`` was lowered as a two-deep nest reading
-            # ``scale.shape[1]`` off a vector.
-            base = expr_rank(value.args[0], ranks)
-            return {1: 2, 2: 1}.get(base)
-        if attr in ("copy", "ascontiguousarray", "asarray", "array") and value.args:
-            return expr_rank(value.args[0], ranks)
-        if attr == "take" and len(value.args) >= 2:
-            # ``np.take(a, idx, axis=k)`` replaces axis k by the INDEX's own rank, so a scalar
-            # index drops it. The elementwise fallback below reported a's rank, which made the
-            # enclosing ``np.expand_dims`` place its newaxis in a nest one dimension too deep.
-            base = expr_rank(value.args[0], ranks)
-            idx = expr_rank(value.args[1], ranks)
-            return None if base is None or idx is None else base - 1 + idx
-        if attr in ("expand_dims",) and value.args:
-            base = expr_rank(value.args[0], ranks)
-            return None if base is None else base + 1
-        if attr in ("squeeze",) and value.args:
-            base = expr_rank(value.args[0], ranks)
-            axes = _axis_count(value.args[1:], value.keywords)
-            return None if base is None or axes is None else base - axes
-        if attr == "matmul" and len(value.args) == 2:
-            return expr_rank(ast.BinOp(left=value.args[0], op=ast.MatMult(), right=value.args[1]), ranks)
-        if attr == "tensordot" and len(value.args) >= 2:
-            # A contraction, not a broadcast: the fallback below reported ``max(operand ranks)``,
-            # which read ls3df's ``tensordot(row, X)`` (2 and 4, one axis contracted) as rank 2 and
-            # built a 2-entry ``moveaxis`` permutation for a rank-4 result. Unknown stays unknown.
-            la, lb = expr_rank(value.args[0], ranks), expr_rank(value.args[1], ranks)
-            n = _tensordot_contracted(value)
-            return None if la is None or lb is None or n is None else la + lb - 2 * n
-        # rank-preserving methods ``x.astype(dt)`` / ``x.copy()`` (receiver's rank).
-        if isinstance(value.func, ast.Attribute) and value.func.attr in ("astype", "copy", "ravel"):
-            return expr_rank(value.func.value, ranks) if value.func.attr != "ravel" else 1
-        # Method forms only: ``np.conj(z)`` names ``np`` as its receiver and takes the fallback below.
-        if (
-            isinstance(value.func, ast.Attribute)
-            and attr is None
-            and value.func.attr in ("flatten", "conj", "conjugate")
-        ):
-            return 1 if value.func.attr == "flatten" else expr_rank(value.func.value, ranks)
-        # ``x.reshape((a, b))`` method form.
-        if isinstance(value.func, ast.Attribute) and value.func.attr == "reshape" and value.args:
-            # Multi-arg spelling: ONE positional argument per dimension, so the rank is the
-            # argument count whatever each dimension expression looks like -- ``X.reshape(-1,
-            # X.shape[-1])`` (ls3df_scf) is rank 2, and neither ``-1`` (a UnaryOp) nor
-            # ``X.shape[-1]`` (a Subscript) is a bare Name. Requiring Name/Constant there read
-            # every such reshape as "rank unknown", which then reached np.linalg.cholesky as
-            # ndim 0. The single-arg spelling stays restricted: a lone Name may hold the whole
-            # shape TUPLE, which is a rank this cannot count.
-            n = _tuple_len(value.args[0])
-            lengths = active_tuple_lengths or {}
-            if (
-                n is None
-                and len(value.args) == 1
-                and isinstance(value.args[0], ast.Name)
-                and value.args[0].id in lengths
-            ):
-                # A shape tuple whose length is not known yet has no rank to report: 1 would be a guess.
-                return lengths[value.args[0].id]
-            if n is None and (len(value.args) > 1 or isinstance(value.args[0], (ast.Name, ast.Constant))):
-                n = len(value.args)
-            if n is not None:
-                return n
-        # Fallback: remaining np.<fn>(...) are elementwise/broadcasting ufuncs
-        # (abs, sqrt, exp, less, minimum, where, conj, ...) -> max of arg ranks.
-        # Rank-changing ops (constructors, reductions, reshape, matmul) return above.
-        if attr is not None:
-            rs = [expr_rank(a, ranks) for a in value.args]
-            return max([r for r in rs if r is not None], default=None)
+        # matmul: 1-D operands contract to a scalar; otherwise the result
+        # keeps the larger batch rank (numpy stacks/broadcasts leading axes).
+        return 0 if lr == 1 and rr == 1 else max(lr, rr)
+    return max([r for r in (lr, rr) if r is not None], default=None)
+
+
+def unaryop_rank(value: ast.UnaryOp, ranks: Dict[str, int]) -> Optional[int]:
+    return expr_rank(value.operand, ranks)
+
+
+def list_rank(value: ast.List, ranks: Dict[str, int]) -> Optional[int]:
+    # ``np.array([a, b])`` -- a list literal's rank is its nesting depth. Left unknown, the
+    # index vector fv3 builds this way was untracked, and every pass keyed on rank skipped it.
+    return 1 + max((expr_rank(e, ranks) or 0) for e in value.elts) if value.elts else 1
+
+
+def compare_rank(value: ast.Compare, ranks: Dict[str, int]) -> Optional[int]:
+    # A boolean mask keeps its operands' rank.
+    rs = [expr_rank(value.left, ranks)] + [expr_rank(c, ranks) for c in value.comparators]
+    return max([r for r in rs if r is not None], default=None)
+
+
+def boolop_rank(value: ast.BoolOp, ranks: Dict[str, int]) -> Optional[int]:
+    rs = [expr_rank(v, ranks) for v in value.values]
+    return max([r for r in rs if r is not None], default=None)
+
+
+def tuple_index_drop(elts: List[ast.expr], ranks: Dict[str, int]) -> int:
+    """Axes a tuple index removes from its base.
+
+    Slices keep a dim, newaxis adds one, a SCALAR index removes one, and an ellipsis (``a[..., i]``)
+    expands to full slices over all otherwise-unindexed axes -- it drops NOTHING. A 1-D fancy index
+    amid slices is neither: it consumes the base axis and reinserts its own (``suffix[:, idx]`` with
+    ``idx = np.arange(W)`` stays rank 2, one axis in, one out), so its net drop is ``1 - its own
+    rank``, not the flat ``1`` a scalar loop index costs. Unknown-rank index defaults to the scalar
+    reading, same as every kernel that reached this line before a fancy index needed distinguishing.
+    Advanced indices BROADCAST against each other rather than each contributing their own axes:
+    ``A[ia, ib]`` with both rank 2 is rank 2, not 4. Summing them per index made field_gather's
+    ``ey_arr[:, :, 0, 0][ia_b, ib_b]`` rank 4, the product it feeds rank 4 too, and the reduction
+    over it emitted a nest reading ``.shape[5]`` off it. So the whole advanced block consumes one
+    base axis per index and gives back ONE broadcast shape -- ``n_adv - max(rank)``. An integer index
+    is the rank-0 case of the same formula, and an unknown rank keeps reading as one, exactly as before.
+    """
+    drop = 0
+    adv_ranks = []
+    for e in elts:
+        if isinstance(e, ast.Slice) or is_ellipsis(e):
+            continue
+        if is_newaxis(e):
+            drop -= 1
+            continue
+        idx_rank = expr_rank(e, ranks)
+        adv_ranks.append(0 if idx_rank is None else idx_rank)
+    if adv_ranks:
+        drop += len(adv_ranks) - max(adv_ranks)
+    return drop
+
+
+def is_tuple_call(node: ast.expr) -> bool:
+    """``tuple(...)``, the spelling of a whole index built from a sequence."""
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "tuple"
+
+
+def name_index_rank(base: int, index: ast.Name, ranks: Dict[str, int]) -> Optional[int]:
+    """Rank of ``a[name]``.
+
+    A single Name index is USUALLY a scalar (a loop iterator), which drops one axis. But it may be
+    an index ARRAY or a boolean MASK -- azimint's ``bin_id = bin_id[valid]`` -- and calling that rank
+    0 made the scatter desugar see no driver axis and leave ``np.add.at`` standing. A gather adds
+    ``rank - 1`` axes and a mask removes them, so the two readings AGREE only for a rank-1 index;
+    anywhere else say nothing rather than invent a rank (see _drop_rank_conflicts for what a wrong
+    rank costs).
+    """
+    idx_rank = ranks.get(index.id)
+    if idx_rank is None or idx_rank < 1:
+        return base - 1
+    return base if idx_rank == 1 else None
+
+
+def subscript_rank(value: ast.Subscript, ranks: Dict[str, int]) -> Optional[int]:
+    base = expr_rank(value.value, ranks)
+    if base is None:
+        return None
+    sl = value.slice
+    if isinstance(sl, ast.Slice) or is_ellipsis(sl):
+        return base  # a slice or ``a[...]`` keeps every axis
+    if is_newaxis(sl):
+        return base + 1  # a[None] / a[np.newaxis] -- a newaxis adds a dimension
+    if isinstance(sl, ast.Tuple):
+        return base - tuple_index_drop(sl.elts, ranks)
+    if is_tuple_call(sl):
+        # ``A[tuple(axes)]`` is the WHOLE index, one entry per axis -- not the single scalar
+        # index the fall-through below assumes. How many axes it drops depends on what the
+        # sequence holds, which is not visible here; reporting ``base - 1`` invented a rank.
+        return None
+    if isinstance(sl, ast.Name):
+        return name_index_rank(base, sl, ranks)
+    return base - 1  # single integer index
+
+
+def call_rank(value: ast.Call, ranks: Dict[str, int]) -> Optional[int]:
+    func = value.func
+    is_abs = isinstance(func, ast.Name) and func.id == "abs"
+    if value.args and (is_abs or np_submodule_attr(value, "fft")):
+        return expr_rank(value.args[0], ranks)  # builtin abs is elementwise; fft/ifft/fftn... preserve rank
+    attr = _np_attr(value)
+    if attr is None:
+        return method_call_rank(value, ranks)
+    handler = NP_CALL_RANKS.get(attr)
+    return np_fallthrough_rank(value, attr, ranks) if handler is None else handler(value, attr, ranks)
+
+
+def ufunc_rank(value: ast.Call, ranks: Dict[str, int]) -> Optional[int]:
+    # Remaining np.<fn>(...) are elementwise/broadcasting ufuncs (abs, sqrt, exp, less, minimum,
+    # where, conj, ...) -> max of arg ranks. Rank-changing ops have their own handler.
+    rs = [expr_rank(a, ranks) for a in value.args]
+    return max([r for r in rs if r is not None], default=None)
+
+
+def np_fallthrough_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optional[int]:
+    """A numpy call no dedicated rule decided: the method spellings its name matches, else a ufunc."""
+    if attr in ("astype", "copy"):
+        return expr_rank(value.func.value, ranks) if isinstance(value.func, ast.Attribute) else None
+    if attr == "ravel":
+        return 1
+    if attr == "reshape" and value.args:
+        return reshape_args_rank(value, lambda: ufunc_rank(value, ranks))
+    return ufunc_rank(value, ranks)
+
+
+def method_call_rank(value: ast.Call, ranks: Dict[str, int]) -> Optional[int]:
+    """``x.astype(dt)`` / ``x.copy()`` / ``x.conj()`` keep the receiver's rank; ``ravel``/``flatten``
+    are one axis. The conjugate forms are method-only: ``np.conj(z)`` names ``np`` as its receiver."""
+    func = value.func
+    if not isinstance(func, ast.Attribute):
+        return None
+    if func.attr in ("astype", "copy", "conj", "conjugate"):
+        return expr_rank(func.value, ranks)
+    if func.attr in ("ravel", "flatten"):
+        return 1
+    if func.attr == "reshape" and value.args:
+        return reshape_args_rank(value, lambda: None)
     return None
+
+
+def reshape_args_rank(value: ast.Call, undecided: Callable[[], Optional[int]]) -> Optional[int]:
+    """``x.reshape((a, b))`` method form; ``undecided`` answers a shape argument this cannot count.
+
+    Multi-arg spelling: ONE positional argument per dimension, so the rank is the argument count
+    whatever each dimension expression looks like -- ``X.reshape(-1, X.shape[-1])`` (ls3df_scf) is
+    rank 2, and neither ``-1`` (a UnaryOp) nor ``X.shape[-1]`` (a Subscript) is a bare Name.
+    Requiring Name/Constant there read every such reshape as "rank unknown", which then reached
+    np.linalg.cholesky as ndim 0. The single-arg spelling stays restricted: a lone Name may hold the
+    whole shape TUPLE, which is a rank this cannot count.
+    """
+    a0 = value.args[0]
+    n = _tuple_len(a0)
+    lengths = active_tuple_lengths or {}
+    if n is None and len(value.args) == 1 and isinstance(a0, ast.Name) and a0.id in lengths:
+        # A shape tuple whose length is not known yet has no rank to report: 1 would be a guess.
+        return lengths[a0.id]
+    if n is None and (len(value.args) > 1 or isinstance(a0, (ast.Name, ast.Constant))):
+        n = len(value.args)
+    return undecided() if n is None else n
+
+
+def one_axis_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optional[int]:
+    return 1  # np.arange / np.linspace are always 1-D
+
+
+def reduce_call_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optional[int]:
+    if not value.args:
+        return np_fallthrough_rank(value, attr, ranks)
+    base = expr_rank(value.args[0], ranks)
+    if base is None:
+        return None
+    kw = {k.arg: k.value for k in value.keywords}
+    # keepdims=True keeps every reduced axis at extent 1, so the rank is unchanged. Ignoring
+    # it under-counted by one and made the following ``np.squeeze(y, axis=-1)`` resolve -1
+    # against the WRONG rank -- it squeezed a different axis.
+    keep = kw.get("keepdims")
+    if isinstance(keep, ast.Constant) and keep.value is True:
+        return base
+    ax = kw.get("axis") or (value.args[1] if len(value.args) > 1 else None)
+    if ax is None:
+        return 0  # full reduction -> scalar
+    if isinstance(ax, (ast.Tuple, ast.List)):
+        return base - len(ax.elts)
+    return base - 1  # single reduced axis
+
+
+def shape_ctor_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optional[int]:
+    if value.args:
+        a0 = value.args[0]
+        n = _tuple_len(a0)
+        if n is not None:
+            return n
+        if isinstance(a0, ast.Attribute) and a0.attr == "shape":
+            return expr_rank(a0.value, ranks)  # np.zeros(C.shape, ...) keeps C's rank
+        if isinstance(a0, (ast.Name, ast.Constant)):
+            return 1  # 1-D length
+    return np_fallthrough_rank(value, attr, ranks)
+
+
+def first_arg_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optional[int]:
+    """``np.zeros_like(a)`` / ``np.copy(a)`` / ``np.asarray(a)`` keep their operand's rank."""
+    return expr_rank(value.args[0], ranks) if value.args else np_fallthrough_rank(value, attr, ranks)
+
+
+def np_reshape_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optional[int]:
+    n = _tuple_len(value.args[1]) if len(value.args) >= 2 else None
+    return np_fallthrough_rank(value, attr, ranks) if n is None else n
+
+
+def diag_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optional[int]:
+    # The one numpy call whose rank moves in BOTH directions: 2-D in extracts the diagonal
+    # (1-D out), 1-D in builds the matrix (2-D out). The elementwise fallback reports
+    # the operand's rank, so raman_fitting's ``scale = np.diag(normal).copy()`` came back
+    # rank 2 and ``scale[scale <= 0] = 1.0`` was lowered as a two-deep nest reading
+    # ``scale.shape[1]`` off a vector.
+    if not value.args:
+        return np_fallthrough_rank(value, attr, ranks)
+    return {1: 2, 2: 1}.get(expr_rank(value.args[0], ranks))
+
+
+def take_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optional[int]:
+    # ``np.take(a, idx, axis=k)`` replaces axis k by the INDEX's own rank, so a scalar
+    # index drops it. The elementwise fallback reported a's rank, which made the
+    # enclosing ``np.expand_dims`` place its newaxis in a nest one dimension too deep.
+    if len(value.args) < 2:
+        return np_fallthrough_rank(value, attr, ranks)
+    base = expr_rank(value.args[0], ranks)
+    idx = expr_rank(value.args[1], ranks)
+    return None if base is None or idx is None else base - 1 + idx
+
+
+def expand_dims_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optional[int]:
+    if not value.args:
+        return np_fallthrough_rank(value, attr, ranks)
+    base = expr_rank(value.args[0], ranks)
+    return None if base is None else base + 1
+
+
+def squeeze_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optional[int]:
+    if not value.args:
+        return np_fallthrough_rank(value, attr, ranks)
+    base = expr_rank(value.args[0], ranks)
+    axes = _axis_count(value.args[1:], value.keywords)
+    return None if base is None or axes is None else base - axes
+
+
+def matmul_call_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optional[int]:
+    if len(value.args) != 2:
+        return np_fallthrough_rank(value, attr, ranks)
+    return expr_rank(ast.BinOp(left=value.args[0], op=ast.MatMult(), right=value.args[1]), ranks)
+
+
+def tensordot_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optional[int]:
+    # A contraction, not a broadcast: the fallback reported ``max(operand ranks)``,
+    # which read ls3df's ``tensordot(row, X)`` (2 and 4, one axis contracted) as rank 2 and
+    # built a 2-entry ``moveaxis`` permutation for a rank-4 result. Unknown stays unknown.
+    if len(value.args) < 2:
+        return np_fallthrough_rank(value, attr, ranks)
+    la, lb = expr_rank(value.args[0], ranks), expr_rank(value.args[1], ranks)
+    n = _tensordot_contracted(value)
+    return None if la is None or lb is None or n is None else la + lb - 2 * n
+
+
+#: ``np.<attr>`` calls whose rank has its own rule; every other numpy call is elementwise.
+NP_CALL_RANKS: Dict[str, Callable[[ast.Call, str, Dict[str, int]], Optional[int]]] = {
+    "arange": one_axis_rank,
+    "linspace": one_axis_rank,
+    **dict.fromkeys(sorted(REDUCE_FNS), reduce_call_rank),
+    **dict.fromkeys(sorted(_SHAPE_CTORS), shape_ctor_rank),
+    **dict.fromkeys((*sorted(_LIKE_CTORS), "copy", "ascontiguousarray", "asarray", "array"), first_arg_rank),
+    "reshape": np_reshape_rank,
+    "diag": diag_rank,
+    "take": take_rank,
+    "expand_dims": expand_dims_rank,
+    "squeeze": squeeze_rank,
+    "matmul": matmul_call_rank,
+    "tensordot": tensordot_rank,
+}
+
+#: One rank rule per expression node type; a type absent here has no rank.
+RANK_HANDLERS: Dict[type, Callable[..., Optional[int]]] = {
+    ast.Name: name_rank,
+    ast.Constant: constant_rank,
+    ast.Attribute: attribute_rank,
+    ast.BinOp: binop_rank,
+    ast.UnaryOp: unaryop_rank,
+    ast.List: list_rank,
+    ast.Compare: compare_rank,
+    ast.BoolOp: boolop_rank,
+    ast.Subscript: subscript_rank,
+    ast.Call: call_rank,
+}
 
 
 def _tensordot_contracted(value: ast.Call) -> Optional[int]:
