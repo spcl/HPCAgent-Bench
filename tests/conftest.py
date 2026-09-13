@@ -3,14 +3,19 @@
 """Shared pytest fixtures for the agent-bench tests."""
 
 import os
+import pathlib
+import re
+import shutil
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from http.server import ThreadingHTTPServer
+from types import MappingProxyType
 
 import pytest
 
 from hpcagent_bench import config
 from hpcagent_bench.api import RunConfig
+from hpcagent_bench.harness import gpu_profiling
 from hpcagent_bench.harness.service import make_server
 from hpcagent_bench.harness.tools import DEFAULT_RANK
 
@@ -19,8 +24,63 @@ from hpcagent_bench.harness.tools import DEFAULT_RANK
 #: clear all four, or a rank leaked from the host running pytest silently shards it instead.
 RANK_ENV_VARS = ("HPCAGENT_BENCH_DB_SHARD", "SLURM_PROCID", "OMPI_COMM_WORLD_RANK", "PMI_RANK")
 
+#: Hardware groups: a marker for tests that need a real device and its vendor tools, mapped to that
+#: device node and those tools. Unmarked tests are the CPU group and run everywhere, CI included.
+HARDWARE_GROUPS: Mapping[str, tuple[pathlib.Path, tuple[str, ...]]] = MappingProxyType(
+    {
+        "amd": (gpu_profiling.KFD_DEVICE, ("rocminfo", "rocprofv3")),
+        "nvidia": (gpu_profiling.NVIDIA_DEVICE, ("nsys",)),
+    }
+)
+
+
+def named_groups(markexpr: str) -> frozenset[str]:
+    """The hardware groups a ``-m`` expression names, as whole words."""
+    return frozenset(group for group in HARDWARE_GROUPS if re.search(rf"\b{re.escape(group)}\b", markexpr))
+
+
+def hardware_missing(
+    group: str,
+    groups: Mapping[str, tuple[pathlib.Path, tuple[str, ...]]] = HARDWARE_GROUPS,
+    which: Callable[[str], str | None] = shutil.which,
+) -> str:
+    """What ``group``'s tests need and this host lacks, comma-joined; "" when nothing is missing."""
+    device, tools = groups[group]
+    missing = ([] if device.exists() else [str(device)]) + [tool for tool in tools if which(tool) is None]
+    return ", ".join(missing)
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Deselect every hardware test whose group the ``-m`` expression does not name."""
+    named = named_groups(str(config.getoption("markexpr") or ""))
+    dropped = [
+        item
+        for item in items
+        if any(item.get_closest_marker(group) is not None and group not in named for group in HARDWARE_GROUPS)
+    ]
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+        dropped_ids = {id(item) for item in dropped}
+        items[:] = [item for item in items if id(item) not in dropped_ids]
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """A selected hardware test on a host without its hardware fails here, never skips."""
+    for group in HARDWARE_GROUPS:
+        if item.get_closest_marker(group) is None:
+            continue
+        missing = hardware_missing(group, HARDWARE_GROUPS)
+        if missing:
+            pytest.fail(f"-m selected the {group} group, but this host lacks: {missing}", pytrace=False)
+
 
 def pytest_configure(config: pytest.Config) -> None:
+    for group, (device, tools) in HARDWARE_GROUPS.items():
+        config.addinivalue_line(
+            "markers",
+            f"{group}: needs {device} and {', '.join(tools)}; deselected unless -m names {group}, and a "
+            "selected test fails at setup on a host without them.",
+        )
     config.addinivalue_line(
         "markers",
         "real_fuzz: keep the full (GPU-scale) fuzz size range -- opt out of the "
