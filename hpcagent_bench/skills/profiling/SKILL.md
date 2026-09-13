@@ -346,4 +346,4 @@ form from it and then measure.
 | exact call counts and call paths | `valgrind --tool=callgrind`, `pprof` (gperftools) |
 | where are the allocations | `heaptrack` |
 | counters over a region you bracket yourself, bandwidth included | PAPI's own `PAPI_hl_region_begin`/`_end`, `likwid-perfctr` |
-| did it actually vectorize | the `opt-reports` skill, or `objdump -d` on the symbol (`%zmm`/`%ymm`) |
+| did it actually vectorize, and why not | `profile` with `tool: "opt-report"` (the `opt-reports` skill), or `objdump -d` on the symbol (`%zmm`/`%ymm`) |
