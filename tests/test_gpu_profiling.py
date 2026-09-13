@@ -868,3 +868,15 @@ def test_no_message_this_module_returns_hands_the_agent_a_command() -> None:
             f"an outward-facing message hands the agent {hit.group(0)!r}: {text[:120]!r}. Name the tool "
             "that owns the question and say /profile does not serve it; the measurement goes through the route"
         )
+
+
+def test_the_amd_occupancy_note_promises_no_agent_report_column_the_payload_does_not_return() -> None:
+    """The note rides in every AMD payload, so a column it says comes back is one an agent then
+    searches the rows for; it named three agent-report columns no payload field carries."""
+    header = ROCPROF_CSVS[gpu_profiling.AGENT_INFO_CSV].splitlines()[0]
+    columns = [name.strip('"') for name in header.split(",")]
+    returned = gpu_profiling.GpuPayload.__required_keys__ | gpu_profiling.GpuPayload.__optional_keys__
+    returned |= gpu_profiling.LaunchRow.__required_keys__
+    note = gpu_profiling.AMD_OCCUPANCY_NOTE
+    promised = [col for col in columns if re.search(rf"\b{re.escape(col)}\b", note) and col not in returned]
+    assert not promised, f"AMD_OCCUPANCY_NOTE names agent-report columns the payload never returns: {promised}"
