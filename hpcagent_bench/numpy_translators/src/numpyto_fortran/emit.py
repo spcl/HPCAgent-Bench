@@ -2540,13 +2540,16 @@ def _to_fortran_shape_token(tok: str) -> str:
         def kinded(node) -> str:
             """An operand for a kind-strict intrinsic (MIN/MAX/MODULO). A bare integer literal is
             DEFAULT kind and gfortran rejects mixing it with the c_int64_t extents under
-            ``-std=f2018``, so literals carry the kind explicitly."""
+            ``-std=f2018``, so literals carry the kind explicitly. Arithmetic over literals alone is
+            default kind too (a helper extent spelled from call-site literals), so it is cast."""
             value = node
             sign = ""
             if isinstance(value, ast.UnaryOp) and isinstance(value.op, ast.USub):
                 value, sign = value.operand, "-"
             if isinstance(value, ast.Constant) and isinstance(value.value, int) and not isinstance(value.value, bool):
                 return f"({sign}{value.value}_c_int64_t)"
+            if not any(isinstance(sub, ast.Name) for sub in ast.walk(node)):
+                return f"INT({emit(node)}, c_int64_t)"
             return emit(node)
 
         if isinstance(n, ast.BinOp):
