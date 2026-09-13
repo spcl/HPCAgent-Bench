@@ -2102,7 +2102,7 @@ def _exec_source(src, args) -> None:
 
 def _keepdims_src(call):
     """A kernel whose reduction operand has NO known rank: ``t`` is bound at two
-    different ranks, so ``_drop_rank_conflicts`` forgets it and ``_ReduceAxisInline``
+    different ranks, so ``_drop_rank_conflicts`` forgets it and ``ReduceAxisInline``
     (which needs the rank to build its loop nest) declines -- leaving the keepdims
     pass as the only thing between the kwarg and dace. Every ML port stages one ``x``
     through differently-shaped rebindings exactly like this."""
@@ -2177,7 +2177,7 @@ def test_keepdims_bails_when_the_axes_do_not_resolve(call) -> None:
 
 
 def test_keepdims_left_to_the_loop_lowering_when_the_rank_is_known() -> None:
-    """No churn: with the operand's rank in hand ``_ReduceAxisInline`` still lowers the
+    """No churn: with the operand's rank in hand ``ReduceAxisInline`` still lowers the
     same call to its explicit loop nest, and this pass never sees it."""
     src = "def kernel(x, out):\n    m = np.sum(x, axis=1, keepdims=True)\n    out[:] = x - m\n"
     out = _desugar(src, _D3, [], ["x", "out"], "dace")

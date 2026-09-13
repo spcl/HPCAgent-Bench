@@ -292,8 +292,8 @@ def bootstrap_interval(deltas: list[float], seed: int = BOOTSTRAP_SEED) -> tuple
         return (mean, mean)
     rng = random.Random(seed)
     studentized: list[float] = []
-    for _ in range(BOOTSTRAP_RESAMPLES):
-        draw = [deltas[rng.randrange(n)] for _ in range(n)]
+    for resample in range(BOOTSTRAP_RESAMPLES):
+        draw = [deltas[rng.randrange(n)] for position in range(n)]
         spread = standard_error(draw)
         gap = abs(math.fsum(draw) / n - mean)
         studentized.append(gap / spread if spread > 0.0 else (math.inf if gap > 0.0 else 0.0))

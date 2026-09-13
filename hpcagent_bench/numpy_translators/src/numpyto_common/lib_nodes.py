@@ -243,7 +243,7 @@ def _reads_complex(expr: ast.AST, local_dtypes: Dict[str, str]) -> bool:
     return any(_reads_complex(c, local_dtypes) for c in ast.iter_child_nodes(expr))
 
 
-def _slice_axes(node: ast.AST) -> List[ast.AST]:
+def slice_axes(node: ast.AST) -> List[ast.AST]:
     """Flat list of per-axis index nodes for any Subscript: ``A[i]`` -> ``[i]``,
     ``A[i, j]`` -> ``[i, j]``. A Slice axis is returned as the Slice node itself
     so callers can decide whether to scalarize."""
@@ -301,7 +301,7 @@ def _chained_base_shape(node: ast.expr, shape_table: Dict[str, Tuple[str, ...]])
     # ARRAY is a gather, which KEEPS the axis (broadcast to aj's shape) instead of dropping it.
     # Treating it as a scalar shortened the residual shape, and an outer subscript
     # (``x[aj][:, None, :, :]``) then ran off the end and gave up on the whole extent.
-    for axis in _slice_axes(node):
+    for axis in slice_axes(node):
         if not _is_scalar_axis(axis):
             return None
         if isinstance(axis, ast.Name) and shape_table.get(axis.id):
@@ -320,7 +320,7 @@ def _contraction_result_extent(
         if not (isinstance(expr.args[0], ast.Constant) and isinstance(expr.args[0].value, str)):
             return None
         try:
-            inputs, output = _parse_einsum_subscripts(expr.args[0].value)
+            inputs, output = parse_einsum_subscripts(expr.args[0].value)
         except NotImplementedError:
             return None
         operand_nodes = expr.args[1:]
@@ -667,12 +667,12 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
             method_form = isinstance(expr.func, ast.Attribute) and not (
                 isinstance(expr.func.value, ast.Name) and expr.func.value.id in ("np", "numpy")
             )
-            # ``_read_axis_keepdims`` reads the axis from positional slot 1, so the method's args are
+            # ``read_axis_keepdims`` reads the axis from positional slot 1, so the method's args are
             # shifted by one to put them in the vocabulary it expects.
             red_args = ([expr.func.value] + list(expr.args)) if method_form else list(expr.args)
             if not red_args:
                 return None
-            axes, keepdims = _read_axis_keepdims(red_args, expr.keywords)
+            axes, keepdims = read_axis_keepdims(red_args, expr.keywords)
             if axes is None:
                 return None
             base = _iter_extent_of(red_args[0], shape_table)
@@ -1014,7 +1014,7 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
                 # axes below index against.
                 base_ext = _iter_extent_of(expr.value, shape_table)
                 shape = tuple(ast.unparse(e) for e in base_ext) if base_ext is not None else None
-        axes = _slice_axes(expr)
+        axes = slice_axes(expr)
         ext: List[ast.expr] = []
         src_axis = 0  # source-axis pointer -- advances on Slice / scalar
         # axes, NOT on ``None`` (newaxis -- pure result-axis insertion).
@@ -1412,7 +1412,7 @@ def _advanced_index_rank(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]
     if isinstance(expr, ast.Subscript):
         name = _name_id(expr.value)
         if name and shape_table.get(name):
-            n = sum(1 for a in _slice_axes(expr) if isinstance(a, ast.Slice))
+            n = sum(1 for a in slice_axes(expr) if isinstance(a, ast.Slice))
             return n or None
         return None
     if isinstance(expr, ast.Name):
@@ -1522,7 +1522,7 @@ def _scalarize_at_iters(expr: ast.expr, iters: List[ast.expr], shape_table: Dict
     if isinstance(expr, ast.Subscript):
         name = _name_id(expr.value)
         shape = shape_table.get(name) if name else None
-        axes = _slice_axes(expr)
+        axes = slice_axes(expr)
         # A subscript on a COMPUTED base (``(reduce_shape != 0)[:, None]``) has no name to index --
         # the BASE is the array. When the subscript is a pure broadcast-reshape (only full slices
         # and newaxis), render it by scalarising the base at the iters its full-slice axes map to;
@@ -1695,7 +1695,7 @@ def _eval_axes(node: ast.expr) -> Optional[List[int]]:
     return None
 
 
-def _read_axis_keepdims(args: List[ast.expr], kwargs: Optional[List[ast.keyword]]) -> Tuple[Optional[List[int]], bool]:
+def read_axis_keepdims(args: List[ast.expr], kwargs: Optional[List[ast.keyword]]) -> Tuple[Optional[List[int]], bool]:
     """Return ``(axes, keepdims)`` from a call, keyword or positional. ``axes``:
     ``None`` for full reduction (``np.X(arr)``); ``[k]`` for single-axis
     (``np.X(arr, axis=k)``, negative ``axis=-1`` accepted); ``[k1, k2, ...]`` for
@@ -1806,7 +1806,7 @@ def _expand_axis_reduction(
                 f"axis {ast.unparse(args[1])!r} must be a compile-time integer or tuple "
                 f"of them (it selects the loop nest)"
             )
-    axes, keepdims = _read_axis_keepdims(args, kwargs)
+    axes, keepdims = read_axis_keepdims(args, kwargs)
     n_dim = len(shape)
 
     # ``initial=`` (sum/prod/max/min) seeds the reduction instead of the default
@@ -2053,7 +2053,7 @@ def _reject_zero_size_reduction(
     if not shape:
         return
     n_dim = len(shape)
-    axes, _ = _read_axis_keepdims(args, kwargs)
+    axes = read_axis_keepdims(args, kwargs)[0]
     red_axes = range(n_dim) if axes is None else [a + n_dim if a < 0 else a for a in axes]
     for ax in red_axes:
         if 0 <= ax < n_dim and str(shape[ax]) == "0":
@@ -2271,7 +2271,7 @@ def _expand_arg_reduction(
         raise NotImplementedError(f"np.{op} needs Name first arg")
     a = args[0]
     shape = _resolve_shape(a, shape_table)
-    axes, keepdims = _read_axis_keepdims(args, kwargs)
+    axes, keepdims = read_axis_keepdims(args, kwargs)
     n_dim = len(shape)
     cmp_op = ast.Gt() if op == "argmax" else ast.Lt()
     # Normalise axes -> set + ordered list (for flat-index mapping).
@@ -4105,7 +4105,7 @@ def _expand_var_or_std(
         raise NotImplementedError(f"np.{finish or 'var'} needs Name first arg")
     a = args[0]
     shape = _resolve_shape(a, shape_table)
-    axes, keepdims = _read_axis_keepdims(args, kwargs)
+    axes, keepdims = read_axis_keepdims(args, kwargs)
     n_dim = len(shape)
     if axes is None:
         axes_norm = list(range(n_dim))
@@ -4301,7 +4301,7 @@ def expand_dot_2d(target: ast.expr, args: List[ast.expr], shape_table: Dict[str,
 # Einsum / tensor-contraction family.
 
 
-def _parse_einsum_subscripts(spec: str) -> Tuple[List[str], str]:
+def parse_einsum_subscripts(spec: str) -> Tuple[List[str], str]:
     """Split ``"ij,jk->ik"`` into ``(["ij", "jk"], "ik")``. The explicit ``->``
     form is required; the implicit-output form (no ``->``) is synthesised as
     numpy does: every index appearing exactly once across all inputs, in
@@ -4456,7 +4456,7 @@ def expand_einsum(
                 raise NotImplementedError("einsum ellipsis needs bare-Name operands with known shape")
             ranks.append(len(shape_table[op.id]))
         spec = _expand_einsum_ellipsis(spec, ranks)
-    inputs, output = _parse_einsum_subscripts(spec)
+    inputs, output = parse_einsum_subscripts(spec)
     if len(inputs) != len(operands):
         raise NotImplementedError("einsum operand count mismatches subscripts")
     operand_names: List[str] = []
@@ -5072,7 +5072,7 @@ def _expand_cumulative(
     shape = shape_table.get(a.id)
     if shape is None:
         raise NotImplementedError("cumulative scan: operand shape unknown")
-    axes, _ = _read_axis_keepdims(args[1:], kwargs)
+    axes = read_axis_keepdims(args[1:], kwargs)[0]
     if axes is None:
         if len(shape) != 1:
             raise NotImplementedError("cumulative scan over >1-D needs an explicit axis")
@@ -5251,7 +5251,7 @@ def expand_median(
     # ONLY the full flattened median. An axis was silently ignored: the expander flattened every
     # element and returned one scalar, so ``np.median(A, axis=1)`` computed a whole-array median
     # and reported no error at all.
-    if _read_axis_keepdims(args, kwargs or [])[0] is not None:
+    if read_axis_keepdims(args, kwargs or [])[0] is not None:
         raise NotImplementedError("np.median(axis=...) is not implemented; only the flattened median is")
     a = args[0]
     shape = shape_table.get(a.id)
@@ -6065,7 +6065,7 @@ def expand_linalg_norm(
     # sees the reduction layout (operand, axis, keepdims).
     reduction_args = [a] + list(args[2:])
     reduction_kwargs = [kw for kw in kwargs if kw.arg != "ord"]
-    axes, keepdims = _read_axis_keepdims(reduction_args, reduction_kwargs)
+    axes, keepdims = read_axis_keepdims(reduction_args, reduction_kwargs)
 
     if kind == "l2":
         if axes is None:
@@ -9300,9 +9300,9 @@ class _CallHoister(ast.NodeTransformer):
             # hoisted as an array.
             norm_args = [node.args[0]] + list(node.args[2:]) if node.args else []
             norm_kwargs = [kw for kw in node.keywords if kw.arg != "ord"]
-            self._cur_axis, self._cur_keepdims = _read_axis_keepdims(norm_args, norm_kwargs)
+            self._cur_axis, self._cur_keepdims = read_axis_keepdims(norm_args, norm_kwargs)
         else:
-            self._cur_axis, self._cur_keepdims = _read_axis_keepdims(node.args, node.keywords)
+            self._cur_axis, self._cur_keepdims = read_axis_keepdims(node.args, node.keywords)
         self.counter[0] += 1
         temp = f"__cb{self.counter[0]}"
         # Classify: scalar return vs array return.
@@ -9677,7 +9677,7 @@ class _CallHoister(ast.NodeTransformer):
                     kw_axes, kw_keep = self._cur_axis, self._cur_keepdims
                     if kw_axes is None:
                         return None  # scalar -- not array-shape
-                    # ``_read_axis_keepdims`` returns a list or None; normalise
+                    # ``read_axis_keepdims`` returns a list or None; normalise
                     # to a set of resolved positive axes.
                     if isinstance(kw_axes, int):
                         kw_axes = [kw_axes]

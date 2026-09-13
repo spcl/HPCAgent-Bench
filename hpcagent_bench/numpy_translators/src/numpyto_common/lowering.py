@@ -2493,15 +2493,17 @@ def _harvest_local_shapes(
         # solve(A, b)`` like the SQUARE A rather than like b. A 1-D b then has
         # its reads padded to a phantom second dim (``x[i]`` -> ``x[i, :]``).
         # Register what the solve / inv / cholesky expanders actually write.
-        _lin_op = np_submodule_attr(rhs, "linalg")
-        if _lin_op in ("solve", "inv", "cholesky"):
+        linalg_op = np_submodule_attr(rhs, "linalg")
+        if linalg_op in ("solve", "inv", "cholesky"):
             # ``solve`` returns x with b's shape; ``inv`` / ``cholesky`` are
             # shape-preserving in their single operand.
-            _src_arg = rhs.args[1] if _lin_op == "solve" and len(rhs.args) >= 2 else (rhs.args[0] if rhs.args else None)
-            if isinstance(_src_arg, ast.Name):
-                _src_shape = shape_table.get(_src_arg.id)
-                if _src_shape:
-                    shape_table[target.id] = tuple(_src_shape)
+            source_arg = (
+                rhs.args[1] if linalg_op == "solve" and len(rhs.args) >= 2 else (rhs.args[0] if rhs.args else None)
+            )
+            if isinstance(source_arg, ast.Name):
+                linalg_source_shape = shape_table.get(source_arg.id)
+                if linalg_source_shape:
+                    shape_table[target.id] = tuple(linalg_source_shape)
             continue
         if not (
             isinstance(rhs, ast.Call)

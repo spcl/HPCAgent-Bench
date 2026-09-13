@@ -23,7 +23,7 @@ from collections.abc import Callable, Sequence
 from typing import Dict, FrozenSet, Iterator, List, Optional, Protocol, Set, Tuple, Union
 
 from numpyto_common import dtypes
-from numpyto_common.lib_nodes import _iter_extent_of, _parse_einsum_subscripts, extent_is_scalar
+from numpyto_common.lib_nodes import iter_extent_of, parse_einsum_subscripts, extent_is_scalar
 from numpyto_common.ordered import OrderedSet
 from numpyto_common.subscripts import is_ellipsis, is_full_slice, is_newaxis
 
@@ -483,7 +483,7 @@ def extent_tokens(
     # nature, so requiring it here would refuse every array-scalar expression in the corpus.
     if any(n.id in arrays and n.id not in table for n in ast.walk(value) if isinstance(n, ast.Name)):
         return None
-    ext = _iter_extent_of(value, table)
+    ext = iter_extent_of(value, table)
     if ext is None or extent_is_scalar(ext):
         return None
     toks = tuple(ast.unparse(e) for e in ext)
@@ -1101,7 +1101,7 @@ def _einsum_inline_stmts(subs: str, operands: List[str], ctr: int):
     when the form is unsupported (ellipsis / scalar output). numba and pythran
     compile this; neither supports ``np.einsum`` on these shapes."""
     try:
-        in_subs, out_sub = _parse_einsum_subscripts(subs)
+        in_subs, out_sub = parse_einsum_subscripts(subs)
     except Exception:  # noqa: BLE001 -- ellipsis / malformed -> caller bails
         return None, None
     if not out_sub or len(in_subs) != len(operands):
@@ -1210,7 +1210,7 @@ class ValueHoistInline(ast.NodeTransformer):
         return self.hoist(node)
 
 
-class _EinsumInline(ValueHoistInline):
+class EinsumInline(ValueHoistInline):
     """Hoist ``np.einsum`` out of any value-bearing statement into a preceding
     contraction loop nest. Handles einsum nested in arithmetic (seissol's
     ``Q[:] = Q + np.einsum(...)``)."""
@@ -1556,7 +1556,7 @@ class _FancyGatherHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
 
-class _FancyGatherInline(ValueHoistInline):
+class FancyGatherInline(ValueHoistInline):
     """Hoist multi-array fancy gathers out of any value-bearing statement into a
     preceding gather loop (handles ``chk[i] = np.sum(u2[q, r, s])``)."""
 
@@ -1791,7 +1791,7 @@ class _ReduceAxisHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
 
-class _ReduceAxisInline(ValueHoistInline):
+class ReduceAxisInline(ValueHoistInline):
     """Hoist axis reductions out of any value-bearing statement into preceding
     reduction loops (handles ``V = np.max(s, axis=0) + e`` and the bare
     ``mean = np.mean(data, axis=0)``)."""
@@ -1837,7 +1837,7 @@ class _KeepdimsToNewaxis(ast.NodeTransformer):
     refuses the whole program with ``_sum() got an unexpected keyword argument
     'keepdims'``. The newaxis subscript restores exactly what the kwarg asked for.
 
-    Second in line behind :class:`_ReduceAxisInline`, which lowers the same call to an
+    Second in line behind :class:`ReduceAxisInline`, which lowers the same call to an
     explicit loop nest whenever it knows the operand's rank; this takes only what that
     declined -- a reduction over a name the flow-insensitive rank table had to forget
     (every ML port rebinds one ``x`` through differently-shaped stages). Hence the
@@ -2020,7 +2020,7 @@ class _UfuncOuterHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=p, ctx=ast.Load()), node)
 
 
-class _UfuncOuterInline(ValueHoistInline):
+class UfuncOuterInline(ValueHoistInline):
     """Hoist ufunc.outer out of any value-bearing statement (floyd_warshall's
     ``np.minimum(path, np.add.outer(path[:,k], path[k,:]))``)."""
 
@@ -2237,7 +2237,7 @@ class _MaskedReduceHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
 
-class _MaskedReduceInline(ValueHoistInline):
+class MaskedReduceInline(ValueHoistInline):
     """Drop each lowerable ``v = a[mask]`` boolean-select and inline its reductions
     (``res[i] = v.mean()`` -> accumulate loop) -- azimint_naive's ``values =
     data[mask]; res[i] = values.mean()``. The masked select is a dynamic-length
@@ -2809,7 +2809,7 @@ class _UfuncOutInline(ast.NodeTransformer):
         return rw if rw is not None else node
 
 
-class _HistogramInline(ValueHoistInline):
+class HistogramInline(ValueHoistInline):
     """Hoist ``np.histogram(...)[0]`` out of any value-bearing statement into its
     preceding binning loop (azimint's ``histw = np.histogram(r, n, weights=d)[0]``)."""
 
@@ -2916,7 +2916,7 @@ class _IntMatmulHoister(ast.NodeTransformer):
         return node
 
 
-class _IntMatmulInline(ValueHoistInline):
+class IntMatmulInline(ValueHoistInline):
     """Hoist integer matmuls out of any value-bearing statement (bfs's
     ``reach = frontier @ graph``)."""
 
@@ -3032,7 +3032,7 @@ class _RepeatAxisHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=out, ctx=ast.Load()), node)
 
 
-class _RepeatAxisInline(ValueHoistInline):
+class RepeatAxisInline(ValueHoistInline):
     """Hoist ``np.repeat(..., axis=k)`` out of any value-bearing statement."""
 
     def __init__(self, ranks: Dict[str, int]) -> None:
@@ -4218,7 +4218,7 @@ class _LinalgHoister(ast.NodeTransformer):
         return {"cholesky": self._chol, "inv": self._inv}[op](node)
 
 
-class _LinalgInline(ValueHoistInline):
+class LinalgInline(ValueHoistInline):
     """Hoist ``np.linalg.cholesky/solve/inv`` out of any value-bearing statement
     into its preceding loop nest (cholesky2's ``A[:] = np.linalg.cholesky(A) +
     np.triu(A, k=1)`` -- the cholesky is computed into a fresh temp BEFORE ``A`` is
@@ -4390,7 +4390,7 @@ def _eigh_stmts(
     via the Cholesky factor of ``b`` (``b = L L^H``): ``C = L^-1 a L^-H`` is
     Hermitian with the same eigenvalues, and its eigenvectors back-transform
     as ``x = L^-H y``. ``cholesky``/``inv``/``@`` stay ``np.linalg``/matmul for
-    native backends (numba/dace) and are lowered by :class:`_LinalgInline` for
+    native backends (numba/dace) and are lowered by :class:`LinalgInline` for
     pythran. The standard eigh is the self-contained Jacobi above, unless
     ``native_std`` (backends whose ``np.linalg.eigh`` handles standard
     complex-Hermitian natively -- jax), which emits a single
@@ -4780,11 +4780,11 @@ class _EighInline(ast.NodeTransformer):
     :func:`_eigh_stmts`). Handles the tuple-target eigenpair form and the
     eigenvalues-only single-target form (``np.linalg.eigvalsh`` or
     ``eigh(..., eigvals_only=True)``); a non-``Name`` operand is materialised first.
-    Runs BEFORE :class:`_LinalgInline` so the cholesky/inv it emits are themselves
+    Runs BEFORE :class:`LinalgInline` so the cholesky/inv it emits are themselves
     lowered for pythran.
 
     ``dtypes`` is the per-function dtype-KIND table (:func:`_dtype_table`),
-    consulted the same way :class:`_LinalgInline` consults it for its ``hermitian``
+    consulted the same way :class:`LinalgInline` consults it for its ``hermitian``
     flag -- see :func:`_eigh_operand_is_real`."""
 
     def __init__(
@@ -6149,23 +6149,23 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             _IxWriteToLoop(ranks, dtypes),
             _FancySliceStoreToLoop(ranks, dtypes),
             _EighInline(ranks, eigh_aliases, dtypes, kir_array_dtypes),
-            _LinalgInline(ranks, dtypes, lower_linalg, lower_solve_rhs_ranks),
+            LinalgInline(ranks, dtypes, lower_linalg, lower_solve_rhs_ranks),
             _ReshapeMatmulInline(ranks),
             _BatchedMatmulToLoop(ranks),
             _PadInline(ranks, lower_symbolic_constant=backend == "dace"),
-            _EinsumInline(),
+            EinsumInline(),
             _FftInline(ranks, kir_array_dtypes),
             _MgridInline(),
-            _FancyGatherInline(ranks),
-            _ReduceAxisInline(ranks, dtypes),
+            FancyGatherInline(ranks),
+            ReduceAxisInline(ranks, dtypes),
             # Directly behind it: takes only the keepdims reductions the loop lowering
             # declined (an operand whose rank the table had to forget).
             _KeepdimsToNewaxis(),
-            _MaskedReduceInline(masked_gathers, ranks),
+            MaskedReduceInline(masked_gathers, ranks),
             _CallFixups(ranks),
             _IssubdtypeFold(dtypes),
             _DeadBranchElim(),
-            _UfuncOuterInline(ranks),
+            UfuncOuterInline(ranks),
             _MaskedAssignToLoop(ranks, dtypes),
             _AddAtInline(ranks),
             _SearchsortedMaterialize(),
@@ -6177,10 +6177,10 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             # LAST of the three: the repeat lowering above reads ``np.diff(p)`` structurally, so the
             # slice rewrite has to come after it.
             _DiffToSliceDifference(),
-            _HistogramInline(),
-            _RepeatAxisInline(ranks),
+            HistogramInline(),
+            RepeatAxisInline(ranks),
             _ReshapeContiguousInline(noncontig),
-            _IntMatmulInline(ranks, dtypes),
+            IntMatmulInline(ranks, dtypes),
             _ComplexAccessorToFunc(conjugate_only=True),
             _ElementalUfuncToPrimitive(),
             # numba only, and LAST of the rewrites: it peels an outer-product broadcast into a
