@@ -21,6 +21,7 @@ import tempfile
 from typing import Set
 
 from numpyto_common.frontend import parse_kernel
+from numpyto_common.ir import KernelIR
 
 #: ``m`` aliases the scalar parameter ``n`` and is then rebound INSIDE the loop. Folding it would
 #: emit ``n = n - 1`` and destroy the parameter.
@@ -52,7 +53,7 @@ TUPLE_REBOUND_SRC = (
 )
 
 
-def parsed(src: str, scalars: bool):
+def parsed(src: str, scalars: bool) -> KernelIR:
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "k_numpy.py").write_text(src)
     bench = {
