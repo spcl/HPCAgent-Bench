@@ -235,6 +235,58 @@ def test_stage_copies_the_dropin_under_the_task_basename(tmp_path: pathlib.Path)
     assert (dest / "k.c").read_text() == "// k dropin\n"
 
 
+def flat_render(root: pathlib.Path, kernel: str, tag: str) -> pathlib.Path:
+    """A pre-cache render directory: loose C and C++ sources and one binding per kernel."""
+    root.mkdir(parents=True, exist_ok=True)
+    for ext in ("c", "cpp"):
+        (root / f"{kernel}_fp64_cpf.{ext}").write_text(f"// {kernel} {tag} {ext}\n")
+    (root / f"{kernel}_fp64_cpf_binding.json").write_text(f'{{"tag": "{tag}"}}\n')
+    return root
+
+
+def test_an_adopted_flat_render_is_served_byte_for_byte_per_mode(tmp_path: pathlib.Path) -> None:
+    """A rerun must read the bytes finished arms were served: the form from one flat directory, the
+    drop-in from another, both through one view, and adopting again writes no new entry."""
+    forms, dropins = flat_render(tmp_path / "forms", "k", "form"), flat_render(tmp_path / "dropins", "k", "dropin")
+    cache, view = tmp_path / "cache", tmp_path / "view"
+    common = ["--cache", str(cache), "--view", str(view), "--kernels", "loop_level_reasoning/k/k"]
+    assert cpf_cache.main(["adopt", "--flat", str(forms), "--mode", "form", *common]) == 0
+    assert cpf_cache.main(["adopt", "--flat", str(dropins), "--mode", "dropin", *common]) == 0
+    for dialect, ext in (("c", "c"), ("c++", "cpp")):
+        for mode, flat in (("form", forms), ("dropin", dropins)):
+            source, binding = cpf_cache.resolve(view, "k", dialect, "fp64", mode)
+            assert source.read_bytes() == (flat / f"k_fp64_cpf.{ext}").read_bytes()
+            assert binding.read_bytes() == (flat / "k_fp64_cpf_binding.json").read_bytes()
+    entries = sorted(path.name for path in cache.glob("*/*"))
+    assert len(entries) == 4
+    assert cpf_cache.main(["adopt", "--flat", str(forms), "--mode", "form", *common]) == 0
+    assert sorted(path.name for path in cache.glob("*/*")) == entries
+
+
+def test_adopt_names_every_source_the_flat_directory_lacks(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A kernel with no loose source must fail the adoption by name, and what is there is still served."""
+    forms = flat_render(tmp_path / "forms", "k", "form")
+    (forms / "k_fp64_cpf.cpp").unlink()
+    view = tmp_path / "view"
+    args = ["adopt", "--flat", str(forms), "--cache", str(tmp_path / "cache"), "--view", str(view)]
+    assert cpf_cache.main([*args, "--mode", "form", "--kernels", "k,absent"]) == 1
+    out = capsys.readouterr().out
+    assert "k_fp64_cpf.cpp" in out
+    assert "absent_fp64_cpf.c " in out
+    source, _ = cpf_cache.resolve(view, "k", "c", "fp64", "form")
+    assert source.read_text() == "// k form c\n"
+
+
+def test_adopt_refuses_a_view_pinned_to_a_renderer(tmp_path: pathlib.Path) -> None:
+    """Adopted bytes must never join forms a dace tree rendered, so the view guard holds for adoption too."""
+    view = view_with(tmp_path, "k")
+    forms = flat_render(tmp_path / "forms", "k", "form")
+    with pytest.raises(ValueError, match="new view"):
+        cpf_cache.adopt(forms, tmp_path / "cache", view, ["k"], "form", "cpu", "fp64")
+
+
 def test_stage_refuses_a_kernel_the_view_cannot_serve(tmp_path: pathlib.Path) -> None:
     view = view_with(tmp_path, "k")
     dest = tmp_path / "tasks" / "absent"

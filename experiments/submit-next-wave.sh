@@ -18,8 +18,9 @@ RUNS=${RUNS:-${SCRATCH:?}/hpcagent-bench-runs}
 # nothing about the 28 an earlier one graded
 RUN_ROOTS=${RUN_ROOTS:-$(printf '%s ' "${RUNS}"/cpf-llr-focus40-* "${RUNS}"/gpu-llr-focus40-*)}
 WAVE_DIR=${WAVE_DIR:-${SCRATCH:?}/llr-focus40-owed}
-# held FIXED: forms were re-rendered mid-campaign and must match what completed arms were served
-CPF_FORMS_DIR=${CPF_FORMS_DIR:-${SCRATCH:?}/cpf-dropin-cpu-llr-focus40}
+# held FIXED to the renders completed arms were served: a view adopting (cpf_cache adopt) the read
+# forms of cpf-forms-cpu-llr-focus40 and the drop-ins of cpf-dropin-cpu-llr-focus40
+CPF_FORMS_DIR=${CPF_FORMS_DIR:-${SCRATCH:?}/cpf-views/llr-focus40-cpu-frozen}
 CPF_DROPIN_DIR=${CPF_DROPIN_DIR:-${CPF_FORMS_DIR}}
 export CPF_FORMS_DIR CPF_DROPIN_DIR
 
