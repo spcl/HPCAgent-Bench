@@ -224,6 +224,10 @@ NAME_LEN = 128
 #: into, so enumerating them from outside is the only handle there is.
 TASK_DIR = pathlib.Path("/proc/self/task")
 
+#: Where a process lists the files it has mapped. ``find_library`` answers with a soname, so this is
+#: how :func:`library_file` learns which directory the loaded libpapi came from.
+MAPS = pathlib.Path("/proc/self/maps")
+
 #: OpenMP placement forced on a counted run. ``cores`` makes each place one PHYSICAL core and
 #: ``close`` fills them in order, so with threads <= physical cores no two counted threads land on
 #: SMT siblings of the same core. That matters because siblings share L1/L2: unpinned, a cache-miss
@@ -628,6 +632,29 @@ def check() -> ctypes.CDLL:
             "'apt install libpapi-dev', or build it from https://github.com/icl-utk-edu/papi) and "
             "make sure the library is on the loader path",
         ) from exc
+
+
+def library_file() -> pathlib.Path:
+    """The libpapi file :func:`check` loaded, read back from :data:`MAPS`."""
+    check()
+    for line in MAPS.read_text().splitlines():
+        fields = line.split(maxsplit=5)
+        if len(fields) == 6 and pathlib.PurePath(fields[5]).name.startswith("libpapi.so"):
+            return pathlib.Path(fields[5])
+    raise PapiUnavailable("papi_missing", f"libpapi loaded but no libpapi.so* file is mapped in {MAPS}")
+
+
+def build_flags() -> tuple[list[str], list[str]]:
+    """``(compile, link)`` tokens that build C against the libpapi :func:`check` loads.
+
+    The include directory is the ``include`` beside the library's directory, left out when it has no
+    ``papi.h`` (an install whose header is on the default path). The rpath is there because a loader
+    path is not guaranteed to name PAPI's directory.
+    """
+    lib = library_file().parent
+    include = lib.parent / "include"
+    compile_tokens = [f"-I{include}"] if (include / "papi.h").is_file() else []
+    return compile_tokens, [f"-L{lib}", f"-Wl,-rpath,{lib}", "-lpapi"]
 
 
 @functools.lru_cache(maxsize=None, typed=True)

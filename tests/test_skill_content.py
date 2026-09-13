@@ -446,6 +446,43 @@ def test_the_profiling_skill_points_at_the_opt_report_tool() -> None:
     assert f'"{service.OPT_REPORT_TOOL}"' in body, "the profiling skill does not name the opt-report tool"
 
 
+RANGES_HEADING = "## Ranges: counters around part of ONE run"
+RANGE_CALLS = ("papi_ranges_init", "papi_range_begin", "papi_range_end")
+
+
+def test_the_profiling_skill_teaches_the_range_header_the_none_build_includes() -> None:
+    """The Ranges section against the header it teaches: its name, its calls, its output line, and the
+    traps that make a range lie. The output line is checked against the header's own printf format."""
+    sections = dict(skill_sections(SKILLS / PROFILING / "SKILL.md"))
+    assert RANGES_HEADING in sections, "the profiling skill has no Ranges section"
+    text = sections[RANGES_HEADING]
+    header = flags.PAPI_RANGES_H.read_text()
+    assert f"`{flags.PAPI_RANGES_H.name}`" in text and f"/shared/skills/{flags.PAPI_RANGES_H.name}" in text
+    assert 'tool:"none"' in text and "none" in service.PROFILE_TOOLS
+    assert 'tool:"linuxperf"' in text and 'tool:"papi"' in text, (
+        "the section does not send the reader to whole-kernel numbers first"
+    )
+    for call in RANGE_CALLS:
+        assert re.search(rf"^static inline \w+ {call}\(", header, re.MULTILINE), f"the header does not define {call}"
+        assert f"{call}(" in text, f"the Ranges section does not teach {call}"
+    formats = re.findall(r'printf\("(papi_range (?:init threads|name)=[^"\\]*)', header)
+    assert len(formats) == 2, formats
+    for fmt in formats:
+        pattern = re.escape(fmt).replace("%lld", r"\d+").replace("%d", r"\d+").replace("%s", r"\w+")
+        assert re.search(rf"^{pattern}", text, re.MULTILINE), f"no example line in the section matches {fmt!r}"
+    assert profiling.RESULT_PREFIX.strip() not in header, "the header prints the harness's own result marker"
+    for trap in (
+        "omp_get_max_threads",
+        "num_threads",
+        "perf_event_paranoid",
+        "`score`",
+        "`submit`",
+        "Overhead",
+        "flushed",
+    ):
+        assert trap in text, f"the Ranges section does not carry {trap!r}"
+
+
 def test_the_opt_report_skill_separates_a_legality_refusal_from_a_cost_model_one() -> None:
     """The distinction the skill exists for: the two refusals need OPPOSITE responses, and the
     quoted strings are the compiler's own -- a reader matches them against real stderr, so they are

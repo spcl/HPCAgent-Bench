@@ -10,6 +10,7 @@ bracket, the rep selection, the thread bookkeeping and the reports built from th
 
 import ctypes
 import os
+import pathlib
 import time
 from collections.abc import Callable, Sequence
 
@@ -19,6 +20,52 @@ from hpcagent_bench.harness import papi
 
 #: Thread ids of the fake process's workers. The calling thread is always ``os.getpid()``.
 WORKERS = (101, 102, 103)
+
+
+def fake_install(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, *, header: bool) -> pathlib.Path:
+    """A PAPI prefix whose library is mapped in a fake ``/proc/self/maps``; returns the library file."""
+    lib = tmp_path / "prefix" / "lib" / "libpapi.so.7.2.0.0"
+    lib.parent.mkdir(parents=True)
+    lib.touch()
+    if header:
+        (tmp_path / "prefix" / "include").mkdir()
+        (tmp_path / "prefix" / "include" / "papi.h").touch()
+    maps = tmp_path / "maps"
+    maps.write_text(
+        "7f0000-7f1000 r--p 00000000 00:2a 11 /usr/lib/libc.so.6\n"
+        f"7f2000-7f3000 r-xp 00000000 00:2a 12 {lib}\n"
+        "7f4000-7f5000 rw-p 00000000 00:00 0\n"
+    )
+    monkeypatch.setattr(papi, "check", lambda: None)
+    monkeypatch.setattr(papi, "MAPS", maps)
+    return lib
+
+
+def test_build_flags_name_the_directory_of_the_libpapi_this_process_loaded(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``find_library`` answers with a soname; the mapping is what names the directory the loader used."""
+    lib = fake_install(tmp_path, monkeypatch, header=True)
+    include = tmp_path / "prefix" / "include"
+    assert papi.build_flags() == ([f"-I{include}"], [f"-L{lib.parent}", f"-Wl,-rpath,{lib.parent}", "-lpapi"])
+
+
+def test_build_flags_add_no_include_directory_without_papi_h(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ``-I`` naming a directory with no ``papi.h`` would only hide where the header really is."""
+    fake_install(tmp_path, monkeypatch, header=False)
+    assert papi.build_flags()[0] == []
+
+
+def test_a_libpapi_that_is_not_mapped_is_papi_missing(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    maps = tmp_path / "maps"
+    maps.write_text("7f0000-7f1000 r-xp 00000000 00:2a 11 /usr/lib/libc.so.6\n")
+    monkeypatch.setattr(papi, "check", lambda: None)
+    monkeypatch.setattr(papi, "MAPS", maps)
+    with pytest.raises(papi.PapiUnavailable) as caught:
+        papi.build_flags()
+    assert caught.value.cause == "papi_missing", caught.value.cause
 
 
 class Strerror:
