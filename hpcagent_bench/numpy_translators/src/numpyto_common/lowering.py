@@ -3244,6 +3244,40 @@ def index_slot(entries: List[ast.expr]) -> ast.expr:
     return entries[0] if len(entries) == 1 else ast.Tuple(elts=entries, ctx=ast.Load())
 
 
+#: Field values that can hold no subscript, so a chain scan never descends into them.
+LEAF_TYPES = frozenset(
+    {type(None), str, int, float, complex, bool, bytes, type(Ellipsis), ast.Name, ast.Constant}
+    | {
+        leaf
+        for family in (ast.expr_context, ast.operator, ast.unaryop, ast.cmpop, ast.boolop)
+        for leaf in family.__subclasses__()
+    }
+)
+
+
+def outermost_chains(tree: ast.AST) -> List[Tuple[ast.AST, str, Optional[int], ast.Subscript]]:
+    """``(parent, field, position, chain)`` for every ``A[i][j]`` under ``tree`` that no other chain
+    contains; ``position`` is ``None`` for a single-node field."""
+    found: List[Tuple[ast.AST, str, Optional[int], ast.Subscript]] = []
+    stack: List[ast.AST] = [tree]
+    while stack:
+        node = stack.pop()
+        values = vars(node)
+        for field in node._fields:
+            value = values.get(field)
+            kind = type(value)
+            if kind in LEAF_TYPES:
+                continue
+            for pos, item in enumerate(value) if kind is list else ((None, value),):
+                if type(item) in LEAF_TYPES:
+                    continue
+                if type(item) is ast.Subscript and type(item.value) is ast.Subscript:
+                    found.append((node, field, pos, item))
+                elif isinstance(item, ast.AST):
+                    stack.append(item)
+    return found
+
+
 class ChainedSubscriptFlattener(ast.NodeTransformer):
     """Rewrite a chained subscript ``A[inner][outer]`` into one that selects the same elements in the
     same axis order.
@@ -3275,6 +3309,18 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
         self.shape_table = shape_table
         self.bool_names = bool_names
         self.explicit_trailing_axes = explicit_trailing_axes
+
+    def visit(self, node: ast.AST) -> ast.AST:
+        """Rewrite every chain under ``node``; only a chain's own subtree pays the transformer walk."""
+        if type(node) is ast.Subscript and type(node.value) is ast.Subscript:
+            return self.visit_Subscript(node)
+        for parent, field, pos, chain in outermost_chains(node):
+            rewritten = self.visit_Subscript(chain)
+            if pos is None:
+                vars(parent)[field] = rewritten
+            else:
+                vars(parent)[field][pos] = rewritten
+        return node
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         self.generic_visit(node)  # bottom-up: a longer chain arrives with its inner already rewritten
