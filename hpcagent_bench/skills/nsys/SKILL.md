@@ -1,144 +1,124 @@
 ---
 name: nsys
-description: Trace a CUDA submission with Nsight Systems -- which kernel, which copy, which gap -- and know when only ncu can answer.
-when: "you are profiling on an NVIDIA GPU and need the device trace rather than a host sample"
+description: What the NVIDIA device trace from profile returns for a cuda submission (tool nsys), what it cannot answer, and what each refusal means.
+when: "you are profiling a cuda submission (tool nsys, the NVIDIA device trace)"
 ---
 
-A GPU has no call stack to sample. The host thread launches asynchronously and then waits, so a
-`perf` profile of a CUDA kernel shows one synchronization call and nothing about the device. What
-the device did is RECORDED instead: CUPTI hands `nsys` one activity record per kernel launch and per
-memory operation, and the profile is those records, not samples.
-
-That changes what the tool can tell you. `nsys` answers **which kernel, how many times, and when**.
-It cannot answer **why that kernel is slow** -- read "nsys or ncu" below before you spend a run on
-the wrong instrument.
-
-This is the device half of `profiling`, on NVIDIA. The host instruments (`perf`, PAPI CPU counters)
-are that skill; a HIP submission is the `rocprof` skill's, because `nsys` traces CUDA and cannot see
-an AMD queue.
+`profile` (`POST /profile`) on a `cuda` submission wraps Nsight Systems (`nsys`) around the same
+measured child `score` times, on the same build. A GPU has no call stack to sample, so `nsys`
+RECORDS instead: CUPTI hands it one activity record per kernel launch and per memory operation.
+`nsys` answers **which kernel, how many times and when**; nothing on this route answers **why that
+kernel is slow**. Host instruments are the `profiling` skill; a `hip` submission is `rocprof`'s.
 
 ## How it runs
 
-`POST /profile` with `language: "cuda"` routes to the GPU path automatically -- the dispatch is the
-LANGUAGE, so you ask the one route the same way whatever you submitted. Knobs that apply:
-`reps`, `min_percent` (default 1.0), `residency` (`host` or `device`). `threads` does not apply, and
-`counters: true` is a 503 `counters_unsupported` naming Nsight Compute as the tool that owns the
-question and this route as not serving it -- PAPI counts HOST events, which say nothing about a
-device kernel.
+- Body: the `score` body plus e.g. `"tool":"nsys","reps":3,"min_percent":0`.
+- `tool` defaults to `nsys` for `cuda`. Any other `tool` except `tool:"opt-report"` is a 400 naming
+  `nsys`, with no `cause`. Only `cuda` reaches `nsys`: on any other language (OpenMP-offload, OpenACC and
+  Triton arms included) `tool:"nsys"` is a 400.
+- `reps` defaults to `measurement.repeat`; one warmup rep (`measurement.warmup`) runs first.
+- `min_percent` (0-100, else a 400; default 1): kernels below it are dropped and counted in
+  `kernels_omitted`, AND `device_ns`, `device_ns_per_rep`, `device_pct` and `launch_count` are summed
+  over the kept kernels only. Send `0` for complete totals.
+- `residency` does nothing: a `cuda` task is always `device` (`"host"` is coerced). `threads` is
+  ignored. `counters:true` is refused with `counters_unsupported`.
 
-The judge attaches the tracer around the SAME measured child it times, on the SAME build, and
-asks it for four reports. What it traces and what it deliberately does not are both decisions you
-have to know to read the result:
+What the harness does, and what is timed:
 
-- **`--trace=cuda,nvtx`** and nothing else. `osrt`, `cublas` and `cudnn` each add interception
-  overhead to the run you are measuring. NVTX is traced because it is free, but do NOT bracket your
-  kernel with `nvtxRangePush`/`nvtxRangePop` expecting to read the ranges back: no NVTX report is
-  requested and no payload field carries one, so the ranges reach the recording and never reach
-  you. What you would have added is instrumentation inside the code being graded, paid for and
-  unread. Name your phases as separate KERNELS instead -- those the trace does rank, one row each
-  (see `divide-and-conquer`).
-- **`--sample=none --cpuctxsw=none`**. CPU sampling answers the host path's question, and these two
-  are the parts of `nsys` that would drag `kernel.perf_event_paranoid` into a GPU profile -- IP
-  samples need it at 2 or below and system-wide context switches need 0 or root, so a device
-  measurement would fail for a host reason.
-- **No `-g`, no `-G`.** Kernel names come from CUPTI, which reads them out of the fatbinary, so
-  there is nothing for DWARF to add; and `-G` disables device optimization, which would profile a
-  program nobody runs. The traced `.so` is byte-identical to the one the judge times.
-- **A fresh export every time.** A recording summarised from a stale export is the one failure that
-  breaks the profile -> change -> profile loop, because it feeds you the PREVIOUS run's numbers at
-  exit 0 and a real speedup then reads as no change. The route re-exports; a hand-run does not by
-  default, which is one more reason the number that counts comes back through `profile`.
+- Before every rep, warmup included, it copies each pointer argument to the GPU; after every
+  measured rep it copies each output back. Both copies are OUTSIDE the timed region.
+- `elapsed_ns` is the FASTEST measured rep, timed with GPU events around your call plus a device
+  synchronize. It is not host wall time, and none of the harness's copies are in it.
+- The trace covers the whole child: setup, warmup and measured reps.
 
-Four reports the route does not ask for, so that you recognise the questions as out of reach rather
-than spend turns hunting them: the host-side API summary (time inside `cudaMemcpy`,
-`cudaLaunchKernel`, `cudaDeviceSynchronize` -- the gap's own accounting), the per-launch split into
-API, queue and kernel time, the kernel summary WITH grid and block dims, and the NVTX summary --
-which is why the paragraph above tells you not to bracket. What you have instead is `device_pct`
-plus the launch geometry, and between them they answer the version of the question that changes
-what you write.
+What `nsys` is told:
 
-## Pick the window before you divide
+- `--trace=cuda,nvtx` and nothing else (`osrt`, `cublas`, `cudnn` add interception overhead). NVTX
+  ranges are recorded but no report reads them, so do not bracket phases with `nvtxRangePush`;
+  split them into separate kernels instead (see `divide-and-conquer`).
+- `--sample=none --cpuctxsw=none`: no CPU sampling (which would need `perf_event_paranoid` <= 2)
+  and no context-switch trace.
+- No debug flags: kernel names come from CUPTI, so the traced build is the graded build.
+- The recording is re-exported on every request, so the reports are never a previous run's.
 
-A span that contains compilation, allocation or first-touch context creation is not a measurement
-window, and a busy percentage over it is a percentage of nothing. Any JIT framework (DaCe, Numba,
-Triton, `torch.compile`) compiles INSIDE the traced span, after device activity has started. Field
-test: a 17.55 s compile phase inside the device span put all-device-over-span at 0.04% against a
-steady-state 6.01% -- 150x out, and 0.04% does not look broken, it looks like the verdict "the
-device is idle, stop tuning kernels". Two checks, both before any division:
+## What comes back
 
-- **The untraced wall clock**, which the recording does not contain: the judge's `elapsed_ns` is
-  it. A 28.75 ms device span inside a 0.40 s run means 93% of the wall is host-side setup that no
-  kernel change reaches.
-- **`device_pct` against the rep count.** A compile or an allocation phase inside the span shows up
-  as device time that is a tiny fraction of the measured wall clock while the kernel table looks
-  healthy. The per-launch timestamps that would let you find the gap directly are not in the
-  payload -- `launches` carries DISTINCT geometries, not one row per launch.
+- `build_ok:false` plus `detail` (compiler log tail): nothing was traced.
+- Echoed: `build_ok`, `kernel`, `language`, `tool` (`nsys`), `trace` (`cuda,nvtx`), `reports` (the
+  four below), `reps`, `warmup`, `symbol`, `preset`, `datatype`, `min_percent`, `occupancy_note`,
+  and `text` (the same data rendered).
+- `kernels[]` from `cuda_gpu_kern_sum`, largest `total_ns` first: `name`, `instances`, `total_ns`,
+  `mean_ns`, `min_ns`, `max_ns`, `time_pct` (nsys columns `Name`, `Instances`, `Total Time (ns)`,
+  `Avg (ns)`, `Min (ns)`, `Max (ns)`, `Time (%)`).
+- `memory[]` from `cuda_gpu_mem_time_sum` joined per operation to `cuda_gpu_mem_size_sum`:
+  `operation`, `direction` (`h2d`/`d2h`/`d2d`/`h2h`/`memset`/`other`), `count`, `total_ns`,
+  `mean_ns`, `total` (3 decimals) and `unit` (from `Total (MB)`). `total` / `unit` are null when the
+  size report has no row for that operation.
+- `launches[]` from `cuda_gpu_trace`, one row per distinct geometry, most-launched first: `name`,
+  `grid` (in blocks), `block`, `threads_per_block`, `warps_per_block` = ceil(`threads_per_block` /
+  32), `blocks` (product of `grid`), `registers_per_thread` (`Reg/Trd`), `shared_memory` (`StcSMem`
+  + `DymSMem`), `shared_memory_unit`, `launches`. A column the trace lacks comes back null, never 0.
+- Totals: `elapsed_ns` (above); `device_ns` (sum of kept `total_ns`); `device_ns_per_rep` =
+  `device_ns` / (reps + warmup); `device_pct` = 100 x `device_ns_per_rep` / `elapsed_ns`;
+  `launch_count` (sum of kept `instances`).
 
-If a phase is inside the span, the span is not the denominator: re-sum from the first activity after
-it, or split the steady-state work into its own kernels and re-profile. The judge's `elapsed_ns`
-is the measured rep rather than the process, which is why `device_pct` does not have this problem --
-a division you do yourself does.
+## Pick the window
 
-## `cuda_gpu_kern_sum` -- which kernel, and what to do about it
+Every row covers the whole child; `elapsed_ns` covers one call. Only a per-rep figure goes next to
+`elapsed_ns`, and the payload has no per-launch timestamps to re-window with.
 
-Per kernel: `instances` (launches), `total_ns`, `mean_ns`, `min_ns`, `max_ns`, `time_pct`.
+- `device_ns_per_rep` is the mean kept-kernel time per traced rep, set against the fastest call. It
+  assumes every rep launches the same kernels. `device_pct` above ~100 means kernels ran outside the
+  timed calls (setup, extra work in the warmup rep) or the reps varied.
+- Runtime compilation your code does (NVRTC, first-call autotune) lands inside the trace. Done once,
+  it sits in the warmup rep: in `max_ns` and `mean_ns`, never in `elapsed_ns`.
+- Setup's weight in `device_ns_per_rep` falls as 1 / (reps + warmup): raise `reps` to shrink it.
 
-**Rank by `total_ns`, then read `mean_ns` to decide what to do about the top row.** A 5 us kernel
-launched 200,000 times owns more device time than a 50 ms kernel launched once, and `mean_ns` ranks
-those the other way round; the payload's kernel list is sorted by `total_ns` for that reason. What
-`mean_ns` tells you is HOW, not WHICH -- a big mean says the body, a small mean with a big
-`instances` says the launch -- and it is the number to hold a body change against, because
-`total_ns` moves with the rep count while the mean does not. Rank within one profile by the total;
-compare two profiles by the mean.
+## `cuda_gpu_kern_sum` -- which kernel
 
-`time_pct` is each kernel's share of the KERNELS LISTED, which is not device time: the copies sit
-outside that denominator and are routinely larger than the kernels. Kernels below `min_percent` of
-device time are dropped and COUNTED (`kernels_omitted`), so a short list is a short list, never a
-truncated one.
+**Rank by `total_ns`, act on `mean_ns`.** A 5 us kernel launched 200,000 times owns more device
+time than a 50 ms kernel launched once. A big `mean_ns` says the body; a small one with many
+`instances` says the launch. Compare two profiles by `mean_ns`: `total_ns` moves with `reps`.
 
-The summary answers "fewer launches, a bigger grid, or a different algorithm" and they are three
-different findings:
+`time_pct` is nsys's `Time (%)`: the kernel's share of ALL traced kernel time, taken before the cut
+(kept rows have `time_pct` >= `min_percent`). Copies are outside that denominator.
 
-| what the rows show | the finding | the change |
+| the rows show | the finding | the change |
 | --- | --- | --- |
-| one kernel at 80%+ of device time, `mean_ns` >= ~100 us | the kernel BODY is the cost | nothing here says why: `ncu` on that kernel |
-| many `instances`, `mean_ns` under ~10 us | launch-bound: more time being told what to do than doing it | fuse, do more per launch, or capture a CUDA graph |
-| `blocks` below the SM count (108 on A100, 132 on an H100 SXM5 but 114 on the PCIe card) | the grid does not fill the device | one element per thread, not one row; split the reduction |
-| `mean_ns` flat as the input grows | fixed overhead, not the kernel | read the copies and the gap instead |
-| `mean_ns` growing faster than the input | an algorithmic term | no geometry or launch change reaches it; change the algorithm |
-| two or three kernels at ~30% each | no single hotspot | fusing them beats tuning any one of them |
-| `max_ns` far above `mean_ns`, `min_ns` near it | one slow launch: JIT/module load, clock ramp, another tenant | check warmup covered it before believing the mean |
+| one kernel at 80%+, `mean_ns` >= ~100 us | the kernel BODY is the cost | nothing on this route says why; change the body, re-profile |
+| many `instances`, `mean_ns` under ~10 us | launch-bound | fuse, do more per launch, or capture a CUDA graph |
+| `mean_ns` flat as the input grows | fixed overhead | read the copies and the gap |
+| `mean_ns` growing faster than the input | an algorithmic term | change the algorithm; no geometry change reaches it |
+| two or three kernels at ~30% each | no single hotspot | fusing them beats tuning any one |
+| `max_ns` far above `mean_ns`, `min_ns` near it | one slow launch, often the warmup rep's | `elapsed_ns` leaves it out; judge the body by `min_ns` |
 
-`device_pct` frames all of it: traced KERNEL time per rep against the measured host time per rep --
-the copies are not inside it. Below ~50% the kernel is NOT what costs, and a faster kernel moves the
-total by less than the number says.
-
-**Quote the denominator with any ratio you compute yourself.** On one four-kernel trace, kernel time
-over the device span read 16.5% ("the device idles between kernels"), kernel plus copy time over the
-same span read 73.4% ("the device is saturated"), and kernel time over the untraced wall clock read
-1.2% ("the kernel is a rounding error"). All three are correct arithmetic answering different
-questions, 15x apart, straddling the threshold you were about to apply.
+`device_pct` frames all of it: mean kept-kernel time per traced rep over the fastest bracketed call.
+The harness's copies are in neither. Below ~50% the kernels are not what costs, and a faster kernel
+moves the total by less than its own speedup.
 
 ## The copies
 
-`cuda_gpu_mem_time_sum` (how long) and `cuda_gpu_mem_size_sum` (how much) are separate reports,
-joined here per operation into `memory[]`: `direction` (`h2d`, `d2h`, `d2d`, `memset`, `other`),
-`count`, `total_ns`, `mean_ns`, `total` + `unit`.
+**The harness's copies are never graded.** Per rep, warmup included, it makes one `h2d` per pointer
+argument; per measured rep, one `d2h` per output. So `h2d` `count` >= (reps + warmup) x pointer
+arguments and `d2h` `count` >= reps x outputs, and only the excess is your code's. Only copies your
+code makes INSIDE the call are in `elapsed_ns`.
 
-The volume keeps nsys's OWN unit rather than being converted to bytes: releases disagree on whether
-their `MB` is 10^6 or 2^20, and picking one invents a precision the recording does not have. Do the
-bandwidth division yourself, carry the unit with it, and settle the ambiguity against a copy whose
-size you know -- 2 MiB buffers reported as `2.097 MB` mean that build's `MB` is 10^6.
+**Never subtract `memory[]` from `elapsed_ns`.** The rows cover the whole child and are mostly the
+harness's.
 
-**`total_ns` in `memory[]` is summed over every rep the child ran -- warmup included.** Divide by
-`reps + warmup` before you put it next to `elapsed_ns`, which is one rep. Comparing the two raw is
-the commonest arithmetic error on this payload; `device_ns_per_rep` is already divided, the memory
-rows are not.
+`total` keeps nsys's own unit: releases disagree on whether `MB` is 10^6 or 2^20. Settle it against
+a copy whose size you know (2 MiB reported as `2.097 MB` means 10^6), and carry the unit into any
+bandwidth you compute.
 
-**A bandwidth needs the link WIDTH, not just the generation**, and the width you want is the
-board's maximum: an idle GPU downclocks its link, so a current-state reading says gen1 about a gen4
-card. Where the link is not something you can read from here, treat the table below as the ceiling
-you are checking a copy against rather than a measurement you have.
+For copies your code makes inside the call (you are handed device pointers; staging through host
+memory is what creates them):
+
+- **Transfer time near kernel time**: the transfer is the cost. Work on the device pointers.
+- **Bandwidth near the link rate** (table): the copy is as fast as the wire. Move less.
+- **Bandwidth far below the link, large copies**: pageable host memory. Pin the buffer you copy from
+  (`cudaHostAlloc`); near the ceiling pinning buys single-digit percent.
+- **High `count`, tiny `mean_ns`**: per-copy latency dominates. Pack into one transfer.
+- **`memset` rows** are device work; **`d2d` you did not write** is usually a library.
 
 | link | per direction | a good copy lands near |
 | --- | --- | --- |
@@ -147,231 +127,114 @@ you are checking a copy against rather than a measurement you have.
 | gen4 x16, gen5 x8 | 31.5 GB/s | 25 |
 | gen5 x16 | 63 GB/s | 50 |
 
-GH200's NVLink-C2C is hundreds of GB/s and none of those rows apply. Reading a measured 13.1 GB/s
-against an x16 row you assumed rather than queried turns 83% of wire into "42% of good" and earns a
-source change worth nothing: on the box that measured it, pinning host memory moved H2D from 12.95
-to 13.42 GB/s, about 4%.
+Use the board's maximum link width: an idle GPU downclocks its link. A measured 13.1 GB/s is 83% of
+a gen4 x8 wire and 42% of a gen4 x16 one, so check the row before calling a copy slow.
 
-What the numbers mean:
-
-- **Transfer time near or above kernel time** -- the transfer IS the problem. No kernel change can
-  reach it. Ask first whether the data changes between reps: if it does not, the copy is pure
-  overhead and belongs outside the timed region entirely (that is what `residency: "device"` times).
-- **Achieved bandwidth near the link's practical rate** (the table above) -- the copy is running as
-  fast as the wire allows. The only remaining lever is moving LESS: keep buffers resident, transfer
-  once and loop on the device, send fp32 where fp64 is not needed, or overlap with streams -- which
-  HIDES the transfer behind compute but does not remove it.
-- **Achieved bandwidth far below the link with large copies** -- pageable host memory, staged
-  through the driver's bounce buffer. `cudaHostAlloc`/`cudaMallocHost` typically doubles it. That is
-  the case pinning is for; near the ceiling it buys single-digit percent.
-- **High `count`, tiny `mean_ns`** -- per-copy latency (a few microseconds each) dominates the
-  volume. Batch them into one transfer of a packed buffer.
-- **`memset` rows are work too.** A `cudaMemset` per rep is device time and device bandwidth; fold
-  it into the kernel that was about to overwrite the buffer anyway.
-- **`d2d` traffic you did not write** is usually a library staging a layout change.
-
-## Gaps -- and idle is not the opposite of saturated
-
-The gap is what the arithmetic leaves over:
+## Gaps
 
 ```
-gap_per_rep = elapsed_ns - device_ns_per_rep - (sum of memory total_ns) / (reps + warmup)
+gap_per_rep = elapsed_ns - device_ns_per_rep
 ```
 
-Where it goes:
+The part of the fastest call no kept kernel accounts for:
 
-- **Launch overhead** -- a few microseconds per launch, host and device side. Against
-  `launch_count`, that is a bound you can check in one multiplication: 5000 launches at ~5 us is
-  25 ms of nothing, and it will not shrink by making the kernel faster.
-- **Synchronization stalls** -- a `cudaDeviceSynchronize` or a synchronous `cudaMemcpy` per rep
-  turns an asynchronous pipeline into a round trip.
-- **Host-side work between launches** -- index math, allocation, a Python frame. The device is idle
-  and no device-side change touches it.
-- **Context creation** -- the first CUDA call costs 100 ms or more. It belongs in warmup; if it
-  lands in a measured rep, the mean is fiction.
+- **Your in-call copies** are still inside the gap; `memory[]` cannot be subtracted (above).
+- **Launch overhead**, a few us per launch: `launch_count` / (reps + warmup) x ~5 us against
+  `device_ns_per_rep`. The same order means launch-bound, and a faster body will not help. The
+  host-side API summary that would measure it directly is not on this route.
+- **Host work between launches**: index math, allocation, a Python frame.
+- **Synchronizations your code adds**: the harness already synchronizes once per call; one of yours
+  per launch turns an asynchronous pipeline into round trips.
+- **Dropped kernels**: with `min_percent` above 0 they fall into the gap. Send `0`.
 
-**Do not settle launch-bound on the gap size.** The host runs far ahead of the device and the queue
-hides the launch cost from the device timeline: on a 3351-launch trace the median kernel-to-kernel
-gap was 640 ns while the mean `cudaLaunchKernel` was 2149 ns, so the gap points the other way from
-the truth. The host-side API totals that WOULD settle it are not on this route (see the reports
-above), so use the two numbers that are: `launch_count` times a few microseconds of per-launch
-overhead against `device_ns_per_rep`, and the kernel table's own signature -- many `instances` with
-`mean_ns` in the single-digit microseconds. Either one crossing into the same order as the device
-time is the finding. The fix is fewer, bigger launches, or a CUDA graph -- nothing about the bodies
-matters until the count drops.
+A negative gap is the `device_pct` above ~100 case. Context creation is not in the gap: it happens
+in the harness's setup, before any timed call. If you capture a CUDA graph, compare `launch_count`
+and `kernels[]` before and after: the route sets no graph-trace option.
 
-If you do capture a graph, `--cuda-graph-trace` defaults to `graph` on CUDA driver 11.7+: the graph
-traces as ONE activity and its kernels leave `cuda_gpu_kern_sum` entirely. `--cuda-graph-trace=node`
-shows them again, at the real per-node overhead.
+**Resident is not busy.** `nsys` records that a kernel was RESIDENT, not whether the device was
+SATURATED: a kernel filling the timeline on a few SMs gives the same rows and `device_pct` as one at
+peak. Saturation is unmeasured on this route. A low `device_pct` (with `min_percent` 0) IS
+conclusive: the device was idle for that share of the call.
 
-**The distinction that matters most: `nsys` cannot tell you whether the GPU was SATURATED.** It
-records that a kernel was RESIDENT. A kernel occupying 100% of the timeline while using 3% of the
-SMs looks exactly like a kernel at peak -- same rows, same `device_pct`, same "the GPU is busy"
-reading. Resident is not busy. The device-side utilization question is answered by counters
-(`occupancy`, `device_utilization` below) or by `ncu`, never by the timeline.
+## `cuda_gpu_trace` -- geometry bounds occupancy
 
-Conversely a low `device_pct` IS conclusive, once the window is clean: the device really was idle
-for that fraction, and the fix is on the host or in the copies.
+`launches[]` gives caps, not a measurement:
 
-## `cuda_gpu_trace` -- launch geometry bounds occupancy, it does not measure it
+- few `blocks`: most of the device gets no work, whatever the body does.
+- `threads_per_block` not a multiple of 32: every block's last warp has idle lanes (100 threads is
+  4 warps, 28 lanes idle).
+- `registers_per_thread` x `threads_per_block`, and `shared_memory` per block, against the part's
+  per-SM register and shared-memory budgets (not in the payload), bound how many blocks are
+  resident per SM at once.
 
-Distinct geometries, most-launched first: `grid` (blocks), `block`, `threads_per_block`,
-`warps_per_block` (threads / 32), `blocks`, `registers_per_thread`, `shared_memory` + its unit.
+Achieved occupancy is a per-SM counter: not here, not inferable from here, and `occupancy_note`
+says so. Report it as unmeasured rather than deriving a number that looks measured.
 
-Read it as a set of caps on how many blocks can be resident per SM:
+## What nsys cannot answer, and ncu is not here
 
-- `blocks` below the SM count -- most of the device never gets work, whatever the kernel does.
-- `registers_per_thread * threads_per_block` against the SM's 65536 registers -- 64 registers on a
-  256-thread block is 16384, so at most 4 such blocks are resident, i.e. 32 of the 64 warp slots.
-- `shared_memory` per block against the SM's shared-memory budget -- the same arithmetic, the other
-  resource.
-- `threads_per_block` not a multiple of 32 -- a 100-thread block is 4 warps with 28 lanes idle in
-  the last one, on every block, on every SM.
+`nsys` records activity, not counters: no achieved occupancy, no stall reason, no cache hit rate.
+The trace's per-copy `Throughput (MBps)` column is not in the payload; divide `total` by `total_ns`.
+Nsight Compute (`ncu`) owns the counter questions and is **not on this route**: `counters:true` is
+`counters_unsupported`, and PAPI's `cuda` and `nvml` components are not reachable through
+`/profile`. Name a counter question as unanswered rather than guessing.
 
-**Achieved occupancy is not here and is not inferable from here.** It is a per-SM counter, read by
-Nsight Compute and by nothing on this route. An occupancy number derived from geometry would be
-indistinguishable from a measured one, so the payload ships the note instead of the number, and the
-caps above are what you actually get to reason with.
+For device counter numbers met elsewhere:
 
-## nsys or ncu -- what each one cannot answer
+1. **Counter collection SERIALISES kernels and replays multi-pass metric sets**, so a counted run's
+   wall clock is not the plain run's. Never put its milliseconds next to a timed run's; `ncu`
+   timings are not speeds for the same reason.
+2. **CUPTI changed profiling APIs at Volta** (event groups before, PerfWorks after), so a metric
+   present on one box can be absent on the next.
+3. **One event set counts ONE device through ONE context**, and the counted kernel must be launched
+   by the thread that armed the set. Work elsewhere is not counted, which looks like a kernel that
+   did nothing.
 
-`nsys` answers **which kernel and when**: the ranked kernels, the launch count, the copies, the
-gaps, the timeline. It CANNOT tell you why any of them is slow -- it records activity, not
-counters, so there is no achieved occupancy, no stall reason, no memory throughput, no cache hit
-rate anywhere in it. One traced run, small overhead.
+A number nobody measured comes back null or as a refusal `cause`, never as 0.
 
-`ncu` answers **why this kernel is slow**: stalls by reason, achieved occupancy, DRAM and L1/L2
-throughput, divergence, register and spill pressure. It CANNOT tell you how often the kernel ran,
-what ran around it, where the host waited, what the copies cost, or whether two kernels overlapped.
-It REPLAYS each kernel many times and serialises them, so its wall clock is not your program's.
+## The permission gate
 
-**`ncu` is not on this route**, and that is the more useful half of the comparison: the counter
-questions -- stall reasons, achieved occupancy, cache hit rates -- are not available to you here, so
-decide from `mean_ns`, the launch geometry and the copies, and say a counter question is unanswered
-rather than guessing at it. If you ever do read an `ncu` number elsewhere, never quote its timing as
-a speed: replay makes its numbers per-kernel counts, not durations comparable to anything.
+NVIDIA's driver can restrict profiling to admin users; CUPTI tools then refuse with
+**`ERR_NVGPUCTRPERM`**. The gate is on counters, so plain activity tracing usually survives it.
 
-## Device counters are not on this route either
+`insufficient_permissions` is raised only when no recording was written AND the output tail matches
+a permission marker (`cap_sys_admin`, `permission`, `not permitted`, `nvgpuctrperm`,
+`administrator`). An empty kernel summary is `no_kernels`, not this.
 
-`/profile` with `counters: true` on a `cuda` submission is refused (`counters_unsupported`): PAPI
-counts HOST events, and host counts say nothing about a device kernel. PAPI does have device
-components -- `cuda` (CUPTI) for kernel counters and `nvml` for device state -- and neither is
-reachable through `/profile`, so neither is a measurement you can take here. Reaching around the
-endpoint into the library is the same mistake as reaching around it into a profiler: the number
-would describe a build and a driver process that nobody scored.
+Clearing the gate needs root, so it is the host's to check; report "not measured". It has two
+spellings: the module option `NVreg_RestrictProfilingToAdminUsers`, which older drivers echo back,
+and the internal `RmProfilingAdminOnly` the open kernel module publishes instead (driver 595.84
+shows `RmProfilingAdminOnly: 1` while CUPTI refuses). Matching only one reports "no gate" on a
+gated box.
 
-What that costs you, and what it does not. The kernel-counter half -- occupancy, DRAM traffic,
-stall reasons, cache hit rates -- is genuinely unavailable, so name it as unmeasured rather than
-inferring a figure from the geometry. The device-state half is a question about the MACHINE rather
-than about your kernel (was the clock the same, did a later rep run hot), and the route answers the
-version of it that matters: rerun and compare, because a result that does not reproduce is the
-finding, whatever the clock was doing.
+## Refusals: 503 with `cause`
 
-Three constraints are worth carrying anyway, because they invalidate device counts you read
-elsewhere as surely as ones you took:
+Each one is "not measured", never "fast".
 
-1. **Counter collection SERIALISES kernels and REPLAYS multi-pass metric sets.** A counted run's
-   wall clock is not the plain run's. Read the counts, never the time -- and never put a counted
-   run's milliseconds next to a timed run's. This is the same reason `ncu` timings are not speeds.
-2. **CUPTI changed profiling APIs at Volta.** Pre-Volta parts answer through the event-group names
-   (`achieved_occupancy`, `inst_executed`), Volta+ through PerfWorks (`sm__warps_active...`,
-   `dram__bytes_read`). Different namespaces, so the event is resolved against what this install
-   ENUMERATES rather than built from a template -- which is why a metric can be absent here and
-   present on the next box.
-3. **One event set counts ONE device through ONE context.** A second GPU needs a second event set,
-   and work on another device or in another context is simply not counted -- which looks exactly
-   like a kernel that did nothing.
-
-And the rule behind all three: a quantity nobody could express comes back as a REASON, never as a
-zero. On a GPU, a missing number and a zero counter are the two things a reader most reliably
-confuses, and only one of them is a finding.
-
-## The permission gate -- what an empty profile actually means
-
-NVIDIA's driver can be configured to serve profiling to root only. When it is, CUPTI-based tools
-refuse with **`ERR_NVGPUCTRPERM`** -- a message about administrators, from a library you never
-named -- and PAPI's `cuda` component answers `PAPI_EMISC` at `PAPI_start`. What you SEE is an empty
-profile, which is exactly what a fast kernel looks like.
-
-The gate is on COUNTERS, so it does not fail everything equally: plain CUDA activity tracing (this
-skill's four reports) usually survives it, while `ncu`, PAPI's `cuda` component and
-`nsys --gpu-metrics-devices` (`--gpu-metrics-device` on older builds) do not. A run that gives you
-kernel durations but refuses every counter is this gate, not a broken toolkit.
-
-The harness classifies this as `insufficient_permissions` rather than as a failed trace. Recognise
-it yourself by:
-
-- `ERR_NVGPUCTRPERM` anywhere in stderr;
-- `nsys`/`ncu` complaining about `CAP_SYS_ADMIN` or administrator privileges;
-- a recording that exists but whose kernel summary is empty on a submission you know launches.
-
-The gate is a driver module option and clearing it needs root, so it is the host's to fix and not
-yours -- report it as "not measured" rather than spending turns around it. What is worth knowing is
-how to recognise it, and that recognising it has a trap:
-
-**The gate has two spellings.** The module option is `NVreg_RestrictProfilingToAdminUsers` and older
-drivers echo it back, but the open kernel module publishes the INTERNAL name
-`RmProfilingAdminOnly` instead. Matching only the documented one reports "no gate" on a gated box --
-measured here on driver 595.84, which publishes `RmProfilingAdminOnly: 1` while every CUPTI tool on
-it refuses.
-
-## When the profiler says nothing
-
-A profiler that reports nothing must never read as a fast kernel. The harness refuses with a named
-cause instead of an empty profile, and each one has a different fix:
-
-| cause | what it is | fix |
+| cause | meaning | next |
 | --- | --- | --- |
-| `nsys_missing` | Nsight Systems not on PATH | `nsight-systems-cli` from NVIDIA's CUDA repo; `nvidia-cuda-toolkit` lacks it |
-| `no_gpu` | `/dev/nvidiactl` absent: no GPU here | `--gpus all` (docker), `--device nvidia.com/gpu=all` (podman), `--nv` |
-| `insufficient_permissions` | the gate above | `NVreg_RestrictProfilingToAdminUsers=0`, or `--cap-add=CAP_SYS_ADMIN` |
-| `nsys_failed` | no recording, another reason | read its stderr, which the error carries verbatim |
-| `nsys_report_missing` | a recording, four empty reports | nsys older than 2022.1: upgrade, or use the old spellings |
-| `no_kernels` | 0 GPU kernels traced | it ran on the host, the launch failed, or it forked: below |
-| `counters_unsupported` | `counters: true` on a GPU submission | nothing to fix: counters are off-route, see above |
-| `rocprof_unsupported` | a `hip` submission | nothing to fix: `nsys` cannot see an AMD queue, `rocprofv3` answers |
+| `counters_unsupported` | `counters:true` on a device submission | drop `counters` |
+| `not_linux`, `nsys_missing` | judge host is not Linux, or has no `nsys` on PATH | host fault, do not retry |
+| `no_gpu` | `/dev/nvidiactl` absent: no NVIDIA GPU visible | host fault, do not retry |
+| `insufficient_permissions` | no recording, and the output tail matched a permission marker | host fault, do not retry |
+| `nsys_failed` | no recording, any other reason; the error quotes the last 600 characters of output | read the quoted output |
+| `timed_out` | the traced run or the stats export ran past `timeouts.kernel_s` x (reps + warmup + 2) and was killed | fewer `reps`, or find the hang |
+| `nsys_report_missing` | the stats export returned none of the four report sections | not your code |
+| `kernel_share_missing` | the kernel report has no `Time (%)` column (tool renamed it) | not your code |
+| `no_kernels` | the kernel report has zero rows | your code ran on the host, a launch failed silently, or it forked: below |
+| `rocprof_unsupported` | raised only for `hip` inside the nsys path; the route answers that with a 400 first | -- |
 
-`no_kernels` has one cause that leaves no other trace: **`nsys` follows the whole process TREE but
-NOT a bare `fork()` child.** Fork without exec is undefined behaviour for an injection-based tool,
-so the child computes correctly and the timeline comes back EMPTY -- measured, same binary, same 20
-launches: inline it reports 20 instances, fork first and the summary step answers `SKIPPED:
-<name>.sqlite does not contain CUDA kernel data` while the child exits 0. There is a trace-the-fork
-option and nsys's own help says it may crash or deadlock the app, so fix the FORK instead. `spawn`
-and `exec` are both fine; for a Python workload in this repo,
-`HPCAGENT_BENCH_RUNTIME_MP_CONTEXT=spawn`.
+A 500 `traced run failed (exit N)` is your program dying under the tracer; `score` the same code to
+see whether it also dies without it. A wrong `tool` or a `min_percent` outside 0-100 is a 400.
 
-An empty kernel summary is a finding about how your submission starts its work, not about your
-kernel.
+`no_kernels` beside a correct result: **`nsys` follows the process tree but not a bare `fork()`
+child**, whose kernels never reach the trace. The harness already spawns its measured worker; do not
+`fork()` without `exec` inside the call.
 
 ## Traps
 
-- **The trace covers warmup reps too.** `device_ns_per_rep` divides by `reps + warmup` for exactly
-  that reason. Any number you divide yourself must use the same denominator.
-- **Kernel names arrive demangled and long.** A C++ template kernel comes back as its full
-  signature; the rendered text truncates at 44 characters, the JSON does not. Match on the JSON.
-- **Tracing is not free**, only cheap. Compare a traced run against a traced run; take speedups from
-  the graded measurement.
-- **`nsys` traces the whole child process tree** -- except a fork without exec, above. A submission
-  that spawns workers gets all of their device activity in one summary, which is what you want for
-  totals and not what you want when attributing a kernel to a rank.
-- **There is no `ncu` route, and no way to make one.** Everything past "which kernel" is
-  unanswered here, so say so rather than substituting a number derived from geometry. What you have
-  is the ranked kernels, the copies, the launch geometry and `device_pct`, and most kernels are
-  decided by those before a counter would have added anything.
-
-## Documentation
-
-- Nsight Systems user guide, including the full CLI --
-  https://docs.nvidia.com/nsight-systems/UserGuide/index.html
-- Post-collection analysis: from 2025.5 the report definitions, the analysis rules and the SQLite
-  schema live here rather than in the user guide --
-  https://docs.nvidia.com/nsight-systems/AnalysisGuide/index.html
-- The profiling permission gate --
-  https://developer.nvidia.com/nvidia-development-tools-solutions-err_nvgpuctrperm-permission-issue-performance-counters
-- Install, and the `perf_event_paranoid` levels --
-  https://docs.nvidia.com/nsight-systems/InstallationGuide/index.html
-- Release notes: why fork-without-exec is not traceable --
-  https://docs.nvidia.com/nsight-systems/ReleaseNotes/index.html
-- SM counts per part (H100 SXM5 132, PCIe 114) --
-  https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/
-- A report's own `--help-reports` output is the authority on that report's columns
+- **Tracing is not free**, only cheap: compare a traced run with a traced run; take speedups from
+  `score`.
+- **The whole child process tree is traced**: a submission that starts workers gets all their device
+  activity in one summary.
+- **Kernel names arrive demangled and long**: `text` cuts them at 44 characters, the JSON does not.
+  Match on the JSON.

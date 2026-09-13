@@ -83,14 +83,17 @@ NSYS = "nsys"
 #: cause fails this list loudly instead of being silently excused by a name that does not say
 #: "rocm".
 NSYS_CAUSES = (
+    "not_linux",
     "nsys_missing",
     "no_gpu",
     "insufficient_permissions",
     "nsys_failed",
     "nsys_report_missing",
+    "kernel_share_missing",
     "no_kernels",
     "counters_unsupported",
     "rocprof_unsupported",
+    "timed_out",
 )
 
 ROCPROF = "rocprof"

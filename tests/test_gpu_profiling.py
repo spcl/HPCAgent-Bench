@@ -245,6 +245,28 @@ def test_launch_configs_collapse_repeated_launches_of_one_geometry() -> None:
     assert (gemm["shared_memory"], gemm["shared_memory_unit"]) == (0.001, "MB")
 
 
+@pytest.mark.parametrize(
+    "header,cells,registers",
+    [
+        ("GrdX,GrdY,GrdZ,BlkX,BlkY,BlkZ,Name", "64,64,1,256,1,1", None),
+        ("GrdX,GrdY,GrdZ,BlkX,BlkY,BlkZ,Reg/Trd,StcSMem (MB),Name", "64,64,1,256,1,1,64,0.001", 64),
+    ],
+    ids=["no-register-or-smem-columns", "static-smem-without-dynamic"],
+)
+def test_launch_configs_report_a_column_the_trace_lacks_as_absent_not_zero(
+    header: str, cells: str, registers: int | None
+) -> None:
+    """A trace without Reg/Trd or a SMem column has not measured it. Read as 0, the row says the
+    kernel used no registers or no shared memory; the AMD reader already answers null there."""
+    trace = f'{header}\n{cells},"gemm_fp64_kernel(double *, double *, int)"\n'
+    (config,) = gpu_profiling.launch_configs(gpu_profiling.parse_csv(trace))
+    assert (config["blocks"], config["threads_per_block"], config["warps_per_block"]) == (4096, 256, 8)
+    assert config["registers_per_thread"] == registers
+    assert (config["shared_memory"], config["shared_memory_unit"]) == (None, None), (
+        "shared_memory is StcSMem + DymSMem; a missing half is unmeasured, not 0"
+    )
+
+
 def test_launch_configs_round_a_partial_warp_up() -> None:
     """100 threads occupy 4 warps, 28 lanes of which are idle -- rounding down would hide that."""
     scale = gpu_profiling.launch_configs(sections()[gpu_profiling.TRACE_REPORT])[1]
@@ -382,6 +404,7 @@ def test_render_report_shows_the_device_host_split_and_the_geometry() -> None:
     }
     text = gpu_profiling.render_report(payload)
     assert "gemm (cuda, preset S)" in text and "nsys (cuda,nvtx)" in text
+    assert "0.6000 ms/rep (fastest rep, GPU-event timed)" in text, "a cuda elapsed_ns is not host wall time"
     assert "0.5000 ms/rep in 48 launches (83.33% of the measured time)" in text
     assert "gemm_fp64_kernel" in text and "443.76" in text, "the per-launch mean is the optimizable number"
     assert "1 kernel(s) below 1% omitted" in text
