@@ -55,8 +55,9 @@ from typing import (
 from numpyto_common import dtypes
 
 from numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SparseArrayDesc, SymbolDesc, stamp_symbol_assumptions
-from numpyto_common.lib_nodes import _const_int, _is_full_slice_elt, _iter_extent_of, _read_axis_keepdims, _slice_axes
+from numpyto_common.lib_nodes import iter_extent_of, read_axis_keepdims, slice_axes
 from numpyto_common.ordered import OrderedSet
+from numpyto_common.subscripts import is_full_slice, is_newaxis
 from numpyto_common.numpy_desugar import (
     _ComplexAccessorToFunc,
     _DecomposeRollSlice,
@@ -64,7 +65,6 @@ from numpyto_common.numpy_desugar import (
     _EighCallHoister,
     _EighLoopRewriter,
     _ElementalUfuncToPrimitive,
-    _is_newaxis,
     _FillDiagonalInline,
     _SpliceErrstate,
     _UfuncOutInline,
@@ -587,7 +587,7 @@ class _AxisReshapeToIndexing(ast.NodeTransformer):
     @staticmethod
     def _drop_noop_keepdims(node: ast.Call) -> None:
         """Delete a literal ``keepdims=False`` from a reduction call -- it is numpy's OWN default, so
-        every reader here already reads its absence as False (:func:`_read_axis_keepdims`) and the
+        every reader here already reads its absence as False (:func:`read_axis_keepdims`) and the
         result rank is unchanged either way.
 
         Not cosmetic: dace's reductions declare no ``keepdims`` parameter at all
@@ -685,10 +685,10 @@ class _AxisReshapeToIndexing(ast.NodeTransformer):
         """
         if not isinstance(operand, ast.Subscript):
             return None
-        inner = _slice_axes(operand)
-        if not all(_is_full_slice_elt(e) or _is_newaxis(e) or _const_int(e) is not None for e in inner):
+        inner = slice_axes(operand)
+        if not all(is_full_slice(e) or is_newaxis(e) or _const_int(e) is not None for e in inner):
             return None
-        if sum(1 for e in inner if _const_int(e) is None) != sum(1 for e in entries if not _is_newaxis(e)):
+        if sum(1 for e in inner if _const_int(e) is None) != sum(1 for e in entries if not is_newaxis(e)):
             return None  # the inner leaves source axes unspelled, so the positions do not line up
         merged: List[ast.expr] = []
         pos = 0
@@ -696,14 +696,14 @@ class _AxisReshapeToIndexing(ast.NodeTransformer):
             if _const_int(axis) is not None:
                 merged.append(axis)
                 continue
-            while _is_newaxis(entries[pos]):
+            while is_newaxis(entries[pos]):
                 merged.append(entries[pos])
                 pos += 1
             outer = entries[pos]
             pos += 1
-            if _is_full_slice_elt(outer):
+            if is_full_slice(outer):
                 merged.append(axis)
-            elif not _is_newaxis(axis):
+            elif not is_newaxis(axis):
                 merged.append(outer)  # ``x[None][0]`` drops the inserted axis instead
         merged.extend(entries[pos:])
         return merged
@@ -867,32 +867,6 @@ def _declared_ranks(shapes_raw: Dict[str, str]) -> Dict[str, int]:
             continue
         ranks[name] = len(parsed.elts) if isinstance(parsed, (ast.Tuple, ast.List)) else 1
     return ranks
-
-
-def _is_scalar_leaf(node: ast.expr) -> bool:
-    """True when ``node`` is a scalar leaf :class:`_MaterializeArrayLiterals`
-    can lower to a single element store."""
-    if isinstance(node, ast.Constant):
-        return isinstance(node.value, (int, float)) and not isinstance(node.value, bool)
-    if isinstance(node, ast.UnaryOp):
-        return _is_scalar_leaf(node.operand)
-    if isinstance(node, ast.BinOp):
-        return _is_scalar_leaf(node.left) and _is_scalar_leaf(node.right)
-    # ``int(round(fr * size))`` / ``float(x)`` -- a scalar-returning builtin cast.
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _SCALAR_CASTS:
-        return all(_is_scalar_leaf(a) for a in node.args)
-    # A bare Name is assumed scalar (it could bind a whole row -- stacked 1-D
-    # arrays -- and mis-shape here, but such kernels already hard-failed before
-    # this pass existed, so a mis-shape now surfaces as a numpy-oracle FAIL,
-    # not silent corruption).
-    if isinstance(node, ast.Name):
-        return True
-    # ``pv[0]`` / ``a[i, j]`` -- an integer-indexed element is a scalar; a Slice is not.
-    if isinstance(node, ast.Subscript):
-        sl = node.slice
-        elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
-        return not any(isinstance(e, ast.Slice) for e in elts)
-    return False
 
 
 def _has_loop_control(body: List[ast.stmt]) -> bool:
@@ -2335,10 +2309,6 @@ def _parse_array_literal(call: ast.Call):
     return shape, dtype, flat
 
 
-#: Scalar-returning builtin casts accepted as a scalar leaf by :func:`_is_scalar_leaf`.
-_SCALAR_CASTS = ("int", "float", "round", "abs")
-
-
 def _materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args: List[str]) -> None:
     """Materialise module-level ``NAME = np.array(<nested numeric literal>, dtype=)``
     lookup tables referenced in the kernel as a fresh ``NAME = np.zeros(shape, dt)``
@@ -3584,13 +3554,13 @@ def fold_shape_expr(text: str) -> str:
 
 
 def _shape_from_iter_extent(node: ast.AST, known: Dict[str, str], route_calls: bool = False) -> Optional[str]:
-    """Fall back to ``_iter_extent_of`` to derive a shape for an
+    """Fall back to ``iter_extent_of`` to derive a shape for an
     array-valued BinOp / Subscript -- needed when a returned local is
     assigned via broadcasting (e.g. ``C = X + Y[:, None] * 1j``).
 
     With ``route_calls`` also resolves array-valued Calls (``np.maximum(x
     @ W + b, 0)``, ``np.reshape(x, (N, M))`` -- lenet's MLP tail):
-    ``_iter_extent_of`` resolves matmul rank / broadcast / reshape-to-
+    ``iter_extent_of`` resolves matmul rank / broadcast / reshape-to-
     newshape / elementwise and bails (``None``) on reductions / transpose
     / repeat. This is OFF by default because newly resolving a Call shape
     can newly-PROMOTE a return that previously fell back to bench_info
@@ -3601,14 +3571,14 @@ def _shape_from_iter_extent(node: ast.AST, known: Dict[str, str], route_calls: b
     )
     if not isinstance(node, accepted):
         return None
-    # Build a shape_table compatible with _iter_extent_of (Tuple of
+    # Build a shape_table compatible with iter_extent_of (Tuple of
     # tokens -- they get unparsed via _const_or_name).
     table: Dict[str, Tuple[str, ...]] = {}
     for name, sstr in known.items():
         toks = _parse_shape_expression(sstr)
         if toks:
             table[name] = toks
-    ext = _iter_extent_of(node, table)
+    ext = iter_extent_of(node, table)
     if ext is None:
         return None
     parts = [ast.unparse(e) for e in ext]
@@ -3652,7 +3622,7 @@ def _shape_from_reduction(node: ast.AST, known: Dict[str, str]) -> Optional[str]
         and node.args
     ):
         return None
-    axes, keepdims = _read_axis_keepdims(node.args, node.keywords)
+    axes, keepdims = read_axis_keepdims(node.args, node.keywords)
     if axes is None:
         return None  # full reduction -> scalar
     table: Dict[str, Tuple[str, ...]] = {}
@@ -3660,7 +3630,7 @@ def _shape_from_reduction(node: ast.AST, known: Dict[str, str]) -> Optional[str]
         toks = _parse_shape_expression(sstr)
         if toks:
             table[name] = toks
-    ext = _iter_extent_of(node.args[0], table)
+    ext = iter_extent_of(node.args[0], table)
     if ext is None:
         return None
     n = len(ext)
@@ -3694,8 +3664,8 @@ def _shape_from_transpose(node: ast.AST, known: Dict[str, str]) -> Optional[str]
     """``x.T`` / ``np.transpose(x[, axes])`` / ``x.transpose([axes])`` -> the base
     array's shape with its axes reversed (no axes) or permuted (explicit axes).
     A returned transposed VIEW must materialize into a fresh output buffer;
-    ``_iter_extent_of`` bails on transpose, so it needs its own deriver. The base's
-    shape comes from ``known`` (a Name) or ``_iter_extent_of`` (a compound base)."""
+    ``iter_extent_of`` bails on transpose, so it needs its own deriver. The base's
+    shape comes from ``known`` (a Name) or ``iter_extent_of`` (a compound base)."""
     axes_node: Optional[ast.AST] = None
     base: Optional[ast.AST] = None
     if isinstance(node, ast.Attribute) and node.attr == "T":
@@ -3714,7 +3684,7 @@ def _shape_from_transpose(node: ast.AST, known: Dict[str, str]) -> Optional[str]
     if base is None:
         return None
     # Resolve the base's dim tokens AS STRINGS (``_parse_shape_expression`` yields
-    # string tokens; ``_iter_extent_of`` yields AST nodes to unparse).
+    # string tokens; ``iter_extent_of`` yields AST nodes to unparse).
     if isinstance(base, ast.Name):
         sstr = known.get(base.id)
         toks = [str(t) for t in _parse_shape_expression(sstr)] if sstr else None
@@ -3724,7 +3694,7 @@ def _shape_from_transpose(node: ast.AST, known: Dict[str, str]) -> Optional[str]
             tk = _parse_shape_expression(sstr)
             if tk:
                 table[name] = tk
-        ext = _iter_extent_of(base, table)
+        ext = iter_extent_of(base, table)
         toks = [ast.unparse(e) for e in ext] if ext else None
     if not toks:
         return None
@@ -3811,7 +3781,7 @@ def _apply_subscript_axes(dims: List[str], sub_slice: ast.AST) -> List[str]:
     if ell:
         # Counted over the axes that CONSUME a source dimension: a newaxis consumes none, so
         # including one here makes the ellipsis stand for one axis too few.
-        consuming = sum(1 for ax in axes if not _is_newaxis(ax)) - 1
+        consuming = sum(1 for ax in axes if not is_newaxis(ax)) - 1
         axes = axes[: ell[0]] + [ast.Slice()] * max(0, len(dims) - consuming) + axes[ell[0] + 1 :]
     kept: List[str] = []
     source = 0
@@ -3820,7 +3790,7 @@ def _apply_subscript_axes(dims: List[str], sub_slice: ast.AST) -> List[str]:
         # Walked positionally against ``dims`` it consumed one instead, so ``x1[:, None, :]`` on
         # an (batch, features) array came back rank-1 ``(batch,)`` -- a helper parameter then
         # declared one axis for an argument carrying three.
-        if _is_newaxis(ax):
+        if is_newaxis(ax):
             kept.append("1")
             continue
         if source >= len(dims):
@@ -4651,7 +4621,7 @@ def _statements_in_order(body: List[ast.stmt], nested: bool = False) -> Iterator
 
 
 def _propagate_local_extents(hfn: ast.FunctionDef, table: Dict[str, Tuple[str, ...]]) -> None:
-    """Extend ``table`` with each local of ``hfn`` that :func:`_iter_extent_of` can size.
+    """Extend ``table`` with each local of ``hfn`` that :func:`iter_extent_of` can size.
 
     Statement order matters: a local is sized against the names bound before it, so one sweep
     forward resolves a chain (``cumulative`` from ``x``, then ``seg`` from ``cumulative``). A name
@@ -4683,7 +4653,7 @@ def _propagate_local_extents(hfn: ast.FunctionDef, table: Dict[str, Tuple[str, .
         name = target.id
         if nested and (bindings.get(name, 0) != 1 or name not in needed):
             continue
-        ext = _iter_extent_of(stmt.value, table)
+        ext = iter_extent_of(stmt.value, table)
         if ext is None:
             table.pop(name, None)
         else:
@@ -4815,7 +4785,7 @@ def helper_returns_rank0(
     _propagate_local_extents(hfn, table)
     if any(not _extent_operands_resolved(value, hfn, table, scalar_names) for value in returns):
         return False
-    return all(_iter_extent_of(value, table) is None for value in returns)
+    return all(iter_extent_of(value, table) is None for value in returns)
 
 
 def _helper_return_shape_from_body(
@@ -4835,7 +4805,7 @@ def _helper_return_shape_from_body(
     function typed ``double`` that returns a pointer.
 
     The helper's own parameters are enough to size it: their shapes come from the call site, and
-    :func:`_iter_extent_of` already resolves a return expression against them. Rank 0 means the
+    :func:`iter_extent_of` already resolves a return expression against them. Rank 0 means the
     return really is scalar, so ``(None, None)`` keeps the existing path.
     """
     returns = [n.value for n in ast.walk(hfn) if isinstance(n, ast.Return) and n.value is not None]
@@ -4851,12 +4821,12 @@ def _helper_return_shape_from_body(
     # those locals too -- propagated forward, since each is sized against the ones before it.
     _propagate_local_extents(hfn, table)
     if any(not _extent_operands_resolved(value, hfn, table, scalar_names) for value in returns):
-        # ``_iter_extent_of`` answers a BinOp with the operand it COULD size when the other comes
+        # ``iter_extent_of`` answers a BinOp with the operand it COULD size when the other comes
         # back None. That is a serviceable broadcast hint and a wrong allocation: mamba2's
         # ``seg + np.triu(...)`` reported the triangle's ``(span, span)`` for a 4-D result, which
         # sizes the out-param two ranks short of what the body writes into it.
         return None, None
-    extents = [_iter_extent_of(value, table) for value in returns]
+    extents = [iter_extent_of(value, table) for value in returns]
     resolved = [ext for ext in extents if ext is not None]
     if not extents or len(resolved) != len(extents):
         return None, None
@@ -4938,11 +4908,11 @@ def helper_call_local_arrays(
     A chain is not only helper calls. conv_transpose3d_scale_batch_norm_global_avg_pool writes
     ``h2 = h1 * scale_factor`` between two of them, and conv2d_gelu_global_avg_pool's whole chain
     becomes plain locals once its first two helpers are inlined. Those links are carried here too
-    -- same forward pass, extents through :func:`_iter_extent_of` against the table built so far --
+    -- same forward pass, extents through :func:`iter_extent_of` against the table built so far --
     because dropping one drops every helper downstream of it: the argument resolves to nothing, the
     parameter is typed by-value, and the helper indexes a double. This is a CLASSIFYING pass, not a
     guessing one: a statement is read only when every name it reads is already known to be an array
-    or a scalar, so the broadcast-hint answer ``_iter_extent_of`` gives for a half-resolved operand
+    or a scalar, so the broadcast-hint answer ``iter_extent_of`` gives for a half-resolved operand
     pair is never reached.
     """
     hdefs = {h.name: h for h in helper_defs}
@@ -5122,7 +5092,7 @@ def _plain_local_array(
     """The descriptor for ``name = <numpy expression>`` when the caller can be TOLD that shape.
 
     Declines unless every name the expression reads is already classified -- an array in ``known``
-    or a scalar -- because :func:`_iter_extent_of` answers a BinOp with whichever operand it could
+    or a scalar -- because :func:`iter_extent_of` answers a BinOp with whichever operand it could
     size when the other comes back ``None``, and that answer is a wrong allocation, not a hint.
     Declines too when no operand supplies a dtype: the width decides the buffer, and there is
     nothing to read it off.
@@ -5132,7 +5102,7 @@ def _plain_local_array(
     if not reads or not reads <= (set(known) | scalar_names):
         return None
     table = {n: tuple(str(s) for s in a.shape) for n, a in known.items()}
-    ext = _iter_extent_of(value, table)
+    ext = iter_extent_of(value, table)
     if not ext:
         return None
     tokens = [ast.unparse(dim) for dim in ext]
@@ -7003,7 +6973,7 @@ class _SpliceNoneGuardedCalls:
 #: that is not a compile-time integer has no emittable form.
 #:
 #: Every op here had a way to swallow an unreadable axis rather than refuse it: a reduction read it
-#: as "no axis" and reduced over ALL of them (``_read_axis_keepdims`` returns ``None`` for both),
+#: as "no axis" and reduced over ALL of them (``read_axis_keepdims`` returns ``None`` for both),
 #: and an index op whose axis never resolved fell through to the emitter's scalar no-op path, which
 #: dropped it outright -- ``np.flip(x, axis=dim)`` emitted a plain copy.
 AXIS_STRUCTURAL_FNS = frozenset(REDUCE_FNS) | {
@@ -7179,7 +7149,7 @@ def _axis_argument(call: ast.Call) -> Optional[ast.expr]:
 def _reject_symbolic_axis(fn: ast.FunctionDef) -> None:
     """Refuse a reduction / scan whose axis is present but not a literal.
 
-    Not pedantry: ``_read_axis_keepdims`` reports an unreadable axis as ``None``, which is the SAME
+    Not pedantry: ``read_axis_keepdims`` reports an unreadable axis as ``None``, which is the SAME
     value it reports for ``np.sum(x)`` -- so ``np.sum(x, axis=dim)`` used to lower as a FULL
     reduction over every axis and compile cleanly. A wrong answer is worse than no answer.
 

@@ -180,12 +180,21 @@ def test_the_interval_is_deterministic_for_the_same_input() -> None:
 
 
 def test_the_bootstrap_interval_brackets_the_mean_it_bounds() -> None:
-    """The bootstrap interval is FOR ``rho``, so it has to contain it. It decides nothing: its
-    measured coverage against a null is 0.70 at n = 4, which is not a 5% statement about anything."""
+    """The bootstrap interval is FOR ``rho``, so it has to contain it. It decides nothing: the
+    significance statement is the Hodges-Lehmann change, which is a different parameter."""
     b, a, bc, ac = arms([1.0, 1.0, 1.0, 1.0], [2.0, 0.5, 2.0, 0.5], [1.0] * 4, [1.0] * 4)
     r = eff.efficacy(b, a, bc, ac, resamples=2000)
     assert r.score.ci_low <= r.score.log_rho <= r.score.ci_high
     assert r.score.ci_low <= 0.0 <= r.score.ci_high
+
+
+def test_an_interval_end_past_what_exp_represents_reads_as_unbounded() -> None:
+    """Three near-tied tasks make most resamples nearly spread-free, so the studentized end lands far
+    past ``exp``'s range; the percentage has to read as unbounded rather than raise OverflowError."""
+    after = [1.0, math.exp(1e-9), math.exp(2e-9), math.exp(5.0)]
+    b, a, bc, ac = arms([1.0] * 4, after, [1.0] * 4, [1.0] * 4)
+    r = eff.efficacy(b, a, bc, ac)
+    assert r.score.ci_pct == (-100.0, math.inf), r.score.ci_pct
 
 
 def test_gains_and_losses_that_cancel_are_not_significant() -> None:

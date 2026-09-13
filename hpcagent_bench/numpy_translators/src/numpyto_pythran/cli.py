@@ -10,10 +10,9 @@ import pathlib
 import sys
 
 from numpyto_common.frontend import emit_with_inline_fallback, parse_kernel
-from numpyto_common.naming import short_for
 from numpyto_common.ir import apply_precision
 from numpyto_pythran.emit import emit_pythran
-from numpyto_common.emit_io import write_generated
+from numpyto_common.emit_io import write_python_sibling
 
 
 def emit_once(args: argparse.Namespace) -> int:
@@ -25,26 +24,7 @@ def emit_once(args: argparse.Namespace) -> int:
         kir = apply_precision(kir, args.precision)
     src = args.kernel.read_text()
     out_src = emit_pythran(src, kir)
-    short = short_for(args.kernel)
-    # A sparse config names a distinct sub-benchmark (spmv_csr vs spmv_csc); the
-    # buffer-style body is identical to dense (pythran compiles the CSR loops +
-    # gather), so tag the filename with the layout.
-    base = f"{short}_{args.config}" if args.config else short
-    args.out.mkdir(parents=True, exist_ok=True)
-    name = f"{base}_pythran.py"
-    status = write_generated(args.out / name, out_src, source=f"{short}_numpy.py")
-    print(f"numpyto_pythran: {status} {name}")
-    return 0
-
-
-def cmd_emit(args: argparse.Namespace) -> int:
-    """Emit, retrying once with helper inlining forced on.
-
-    A level-3 kernel is parsed with its helpers KEPT as their own functions; when that form has no
-    emittable shape the failure lands here, in an emitter, not in the parse the frontend can retry
-    for itself. See :func:`numpyto_common.frontend.emit_with_inline_fallback`.
-    """
-    return emit_with_inline_fallback(lambda: emit_once(args))
+    return write_python_sibling(args.kernel, args.out, args.config, "pythran", out_src, "numpyto_pythran")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="floating precision override (e.g. ``float32``) for the dtype-specific #pythran export signature.",
     )
-    e.set_defaults(func=cmd_emit)
+    e.set_defaults(func=lambda args: emit_with_inline_fallback(lambda: emit_once(args)))
     return p
 
 

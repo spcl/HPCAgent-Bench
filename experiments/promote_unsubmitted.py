@@ -29,11 +29,15 @@ import time
 import urllib.error
 import urllib.request
 
-#: One promotion is a full grade (build, both seeds, re-verify), so it gets a submission-sized
-#: budget, not a client default -- a CEILING per item, not a guarantee: :func:`main` hands each
-#: grade whatever remains of the pass budget. A fixed 900s cap lost tsvc_2_s2233 on all four v11w2
-#: fortran arms (cut with budget unspent) against a kernel the judge needs ~1600s for.
-SUBMIT_TIMEOUT_S = 1800.0
+#: One promotion is a full grade, so it waits as long as the ROUTER waits on the judge for one
+#: (judge_service.UPSTREAM_TIMEOUT_SECONDS, same variable). Stopping sooner saves the judge nothing: it
+#: keeps grading, and teardown kills the grade. 633871 stopped at a fixed 1800 s, 2 s before its steps
+#: were killed, with 28 min of allocation left; grades of 1616-2030 s are on record.
+SUBMIT_TIMEOUT_S = float(os.environ.get("JUDGE_UPSTREAM_TIMEOUT_SECONDS", "5400"))
+
+#: Allocation kept back for what runs after the agent step exits (the utilization, token and
+#: recoverable reports), so a promotion never waits into the job's own wall.
+TEARDOWN_MARGIN_S = 300.0
 
 #: Ceiling on the WHOLE promotion pass, mirroring ``record.harvest_budget_s``: runs at teardown
 #: inside the job's remaining wall clock, and outliving it kills every promotion, graded ones
@@ -320,6 +324,19 @@ def grade_detail(graded: dict) -> str:
     return "judge gave no detail"
 
 
+def submit_timeout() -> float:
+    """How long ONE promotion may wait for its grade: the router's own wait, cut to the job's end.
+
+    ``SLURM_JOB_END_TIME`` is the allocation's projected end. A grade still running then dies with the
+    job, so a wait past it buys nothing, and a wait short of it abandons a grade that could have landed.
+    Outside Slurm there is no wall, and the router's wait stands.
+    """
+    end = os.environ.get("SLURM_JOB_END_TIME", "").strip()
+    if not end.isdigit():
+        return SUBMIT_TIMEOUT_S
+    return min(SUBMIT_TIMEOUT_S, int(end) - time.time() - TEARDOWN_MARGIN_S)
+
+
 def promote(judge: str, item: dict[str, str], dry_run: bool, rank: int, timeout: float = SUBMIT_TIMEOUT_S) -> str:
     """POST one submission; return a short outcome word for the report line."""
     if dry_run:
@@ -339,15 +356,20 @@ def promote(judge: str, item: dict[str, str], dry_run: bool, rank: int, timeout:
         payload["device_source"] = item["device_source"]
     body = json.dumps(payload).encode()
     req = urllib.request.Request(f"{judge.rstrip('/')}/submit", data=body, headers={"Content-Type": "application/json"})
+    wait = min(timeout, SUBMIT_TIMEOUT_S)
     try:
-        with urllib.request.urlopen(req, timeout=min(timeout, SUBMIT_TIMEOUT_S)) as resp:
+        with urllib.request.urlopen(req, timeout=wait) as resp:
             graded = json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as exc:
         # An HTTPError IS the response, so reading its body without closing it leaks the socket and
         # raises a ResourceWarning at collection -- an error under this repo's warning policy.
         with exc:
             return f"refused {exc.code}: {refusal_reason(exc)}"
-    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+    except TimeoutError:
+        # A connect failure arrives as URLError; a bare timeout means the body went out and no answer
+        # came back. 633871 printed "unreachable" for a judge that was busy, not gone.
+        return f"no answer within {wait:.0f}s (the judge may still be grading it)"
+    except (urllib.error.URLError, ValueError) as exc:
         return f"unreachable ({exc})"
     if graded.get("correct") and graded.get("build_ok"):
         return f"SUBMITTED speedup={graded.get('speedup', 0):.2f}x"
@@ -356,15 +378,19 @@ def promote(judge: str, item: dict[str, str], dry_run: bool, rank: int, timeout:
 
 
 def promote_one_worker(
-    run_dir: pathlib.Path, judge: str, run_id: str, timeout: float = SUBMIT_TIMEOUT_S, kernel: str = ""
+    run_dir: pathlib.Path, judge: str, run_id: str, timeout: float | None = None, kernel: str = ""
 ) -> str:
     """Promote THIS worker's last correct score, at ITS teardown. Returns a short outcome word.
 
     The end-of-job pass was the wrong place for this: it runs after the agents are gone, inside
     whatever wall clock the allocation has left, and shares one budget across every candidate.
     627129 hit exactly that -- three candidates, the first two spent the budget, and the third
-    ("fv3_dycore") was never attempted. Here there is one candidate, the judge is up and idle
-    enough, and the job has hours left.
+    ("fv3_dycore") was never attempted. Here there is one candidate and the judge is up.
+
+    ``timeout`` defaults to :func:`submit_timeout`. This runs the moment the agent is killed, so the
+    grade can queue behind that agent's own last request, which the judge keeps running: in 633871 an
+    orphaned /profile held a one-slot judge. A promotion the job cannot wait for is not sent, because
+    its grade would take a judge slot from a worker whose promotion can still land.
 
     ``kernel`` is what the WORKSPACE fallback needs and the score-store path does not: with no
     scores there is no row to read a kernel name off, so the caller -- which is holding the problem
@@ -386,7 +412,10 @@ def promote_one_worker(
             items = [harvested] if harvested else []
         if not items:
             return ""
-        return promote(judge, items[0], dry_run=False, rank=judge_rank(judge), timeout=timeout)
+        wait = submit_timeout() if timeout is None else timeout
+        if wait <= 0:
+            return "not attempted: no wall clock left to wait for a grade"
+        return promote(judge, items[0], dry_run=False, rank=judge_rank(judge), timeout=wait)
     except (OSError, ValueError, sqlite3.Error, urllib.error.URLError) as exc:
         return f"promote failed: {type(exc).__name__}"
 

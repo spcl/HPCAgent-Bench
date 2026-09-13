@@ -185,8 +185,9 @@ compose_prompt "${repo}/containers/agent/offload-build.md" "${shared}/prompt-off
 compose_prompt "${repo}/containers/agent/triton-build.md" "${shared}/prompt-triton.md"
 # A harness without claude's file tools reads the base prompt with ONE paragraph swapped: the one
 # naming `Read` and `Edit`. Swapped, not spliced in, so no variant also states claude's tool set;
-# every other line still comes from prompt.md alone. mini-SWE has only a shell, so its tool bullets
-# also name the `optarena-tool` command each tool runs as. A prompt.md without that paragraph writes
+# every other line still comes from prompt.md alone. mini-SWE has only a shell, so its variant also
+# swaps the {{TOOLS}} slot for {{TOOLS_CLI}}, whose bullets the driver names as `optarena-tool`
+# commands. A prompt.md without that paragraph writes
 # no variant and says so: an arm naming one then fails at launch instead of reading claude's text.
 compose_tools_prompt() {  # compose_tools_prompt <fragment> <output> [cli]
     [[ -f "${shared}/prompt.md" && -f "$1" ]] || return 0
@@ -198,9 +199,7 @@ compose_tools_prompt() {  # compose_tools_prompt <fragment> <output> [cli]
             next
         }
         skipping { if ($0 != "") next; skipping = 0 }
-        cli != "" && !done && match($0, /^- `[a-z_]+` --/) {
-            $0 = "- `optarena-tool " substr($0, 4, RLENGTH - 7) " \047<json>\047` --" substr($0, RLENGTH + 1)
-        }
+        cli != "" && !done && $0 == "{{TOOLS}}" { $0 = "{{TOOLS_CLI}}" }
         { print }
         END { exit done ? 0 : 3 }' "${shared}/prompt.md" >"$2.tmp"; then
         mv -f "$2.tmp" "$2"
@@ -243,37 +242,20 @@ done
 # The skill PAGES this arm's packet actually names, as files the agent can Read.
 #
 # ONLY the named ones. Staging the whole library put all 23 pages in a directory every arm can
-# reach, and the agent tool set includes Bash -- so a no-skills CONTROL agent could `ls
-# /shared/skills/` and read the treatment, and a single-page ablation (canonical-parallel-form)
+# reach, and the agent tool set includes Bash -- so a no-skills CONTROL agent could list the skill
+# folder and read the treatment, and a single-page ablation (canonical-parallel-form)
 # would sit beside the language packet it is supposed to be isolated from. A control arm with
 # access to the treatment is not a control.
 #
-# The names come from the problems file, which is where the packet prints the paths it promises,
-# so the staged set and the advertised set cannot drift apart. No problems file, or no page named
-# in it, stages nothing: an arm that ships no packet gets no directory at all.
-if [[ -n "${problems}" && -f "${problems}" ]]; then
-    # `|| true` is load-bearing. A control arm names no pages, so grep matches nothing and exits
-    # 1 -- and under `set -euo pipefail` that took the whole script down BEFORE any kernel was
-    # staged, i.e. the no-skills arm got an empty /shared. The empty result is the answer here,
-    # not an error: no pages named means no pages staged.
-    wanted="$(grep -o '/shared/skills/[A-Za-z0-9._-]*\.md' "${problems}" | sed 's|.*/||; s|\.md$||' | sort -u || true)"
-    if [[ -n "${wanted}" ]]; then
-        mkdir -p "${shared}/skills"
-        staged=0
-        while read -r page; do
-            [[ -n "${page}" ]] || continue
-            src="${repo}/hpcagent_bench/skills/${page}/SKILL.md"
-            if [[ -f "${src}" ]]; then
-                cp -f "${src}" "${shared}/skills/${page}.md"
-                staged=$((staged + 1))
-            else
-                # Loud: the packet told the agent this path exists. A missing page is a turn the
-                # agent spends on a failed Read, and a treatment arm quietly missing half its
-                # treatment.
-                echo "materialize_shared: packet names ${page} but no such skill page" >&2
-            fi
-        done <<<"${wanted}"
-        printf 'materialize_shared: staged %s skill page(s) under %s/skills\n' "${staged}" "${shared}"
+# make_problems.py wrote the packet, so it stages it: the pages the problems file names, each from
+# the path its problem recorded (an --extra-skill-root page) or the shipped page. No page named
+# stages nothing, and a named page with no source is reported by name. A staging run that fails
+# outright stops the launch, as a failed copy did: the arm would run without its treatment.
+if [[ -n "${problems}" && -f "${problems}" ]] && grep -q '/shared/skills/' "${problems}"; then
+    if ! PYTHONPATH="${repo}:${repo}/hpcagent_bench/numpy_translators/src${PYTHONPATH:+:${PYTHONPATH}}" \
+         "${bench_python}" "${repo}/experiments/make_problems.py" --stage-skills "${problems}" "${shared}"; then
+        echo "materialize_shared: could not stage the skill pages ${problems} names" >&2
+        exit 3
     fi
 fi
 

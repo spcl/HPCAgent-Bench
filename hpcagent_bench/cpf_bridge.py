@@ -39,7 +39,7 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
@@ -331,6 +331,38 @@ def drop_returned_arguments(sdfg: SDFG, abi: Sequence[str]) -> tuple[str, ...]:
     return tuple(dropped)
 
 
+def bind_pinned_config(sdfg: SDFG, pinned: Mapping[str, object]) -> tuple[str, ...]:
+    """Assign every entry argument a pinned ``config:`` knob names its manifest value inside the SDFG.
+
+    The native ABI has no slot for a pinned knob: the emitters declare it ``constexpr`` and
+    ``binding_from_spec`` leaves it out. The dace program still takes a knob that sizes nothing as a
+    runtime scalar, and canonicalization promotes one that guards a branch to a symbol (minife's
+    ``tolerance``), so the drop-in would take an argument the judge never passes. CPF renders no
+    ``constants_prop``, so a new start state assigns the value: a scalar becomes a transient its
+    tasklet writes, a symbol is assigned on the state's outgoing edge. A knob the entry does not take
+    is skipped.
+
+    :returns: the knobs bound.
+    """
+    from dace import Memlet
+    from dace import data as dace_data
+
+    arglist = sdfg.arglist()
+    names = [
+        n for n in pinned if n in arglist and (n not in sdfg.arrays or isinstance(sdfg.arrays[n], dace_data.Scalar))
+    ]
+    if not names:
+        return ()
+    symbols = {n: repr(pinned[n]) for n in names if n not in sdfg.arrays}
+    state = sdfg.add_state_before(sdfg.start_block, "bind_pinned_config", is_start_block=True, assignments=symbols)
+    for name in (n for n in names if n in sdfg.arrays):
+        desc = sdfg.arrays[name]
+        desc.transient = True
+        tasklet = state.add_tasklet(f"bind_{name}", {}, {"value": desc.dtype}, f"value = {pinned[name]!r}")
+        state.add_edge(tasklet, "value", state.add_write(name), None, Memlet.from_array(name, desc))
+    return tuple(names)
+
+
 def clean_form(code: str, forced: Sequence[str]) -> str:
     """The rendered TU as a file an agent can be handed: no DaCe banner, no forcing artefacts."""
     code = code.replace(DACE_BANNER + "\n", "").replace(DACE_BANNER, "")
@@ -415,9 +447,9 @@ def render_canonical(
     canonical native symbol, so the judge can link it as ``<kernel>_fp64``, and is rendered in the ABI
     order: the kernel's args THEN the reserved scratch pair (a pointer behind the scalars), which
     differs from CPF's own ``arglist()`` order. The order is handed to the renderer rather than
-    applied after, and force_abi_symbols / add_workspace fill any gap and drop_returned_arguments
-    removes the return slot the ABI does not have, so a mismatch surfaces as a refusal and never as
-    shifted arguments.
+    applied after, and force_abi_symbols / add_workspace fill any gap while drop_returned_arguments
+    and bind_pinned_config remove the return slot and pinned knobs the ABI does not have, so a
+    mismatch surfaces as a refusal and never as shifted arguments.
     """
     import copy
 
@@ -431,6 +463,7 @@ def render_canonical(
     if dropin:
         native = binding_from_spec(spec)
         abi_args = [arg.name for arg in native.args] + [WORKSPACE_NAME, WORKSPACE_SIZE_NAME]
+        bind_pinned_config(sdfg, spec.pinned_config)
         add_workspace(sdfg)
         drop_returned_arguments(sdfg, abi_args)
         forced = force_abi_symbols(sdfg, [arg.name for arg in native.args])

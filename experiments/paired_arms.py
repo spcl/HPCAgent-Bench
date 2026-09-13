@@ -114,8 +114,7 @@ ARM_COLUMNS = (
 
 def load_observations(path: pathlib.Path) -> pd.DataFrame:
     """The extracted observations, restricted to the arms that recorded a campaign run id."""
-    frame = pd.read_csv(path, low_memory=False)
-    return frame[frame.arm.notna() & (frame.arm != "adhoc")]
+    return population.condition_rows(pd.read_csv(path, low_memory=False))
 
 
 def graded_rows(observations: pd.DataFrame, arms: list[str]) -> pd.DataFrame:

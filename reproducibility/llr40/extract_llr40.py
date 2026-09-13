@@ -81,6 +81,7 @@ OBSERVATION_FIELDS = (
     "run_id",
     "arm",
     "harness",
+    "packet",
     "skills",
     "node_index",
     "problem_index",
@@ -278,7 +279,9 @@ def agent_indices(run_id: str | None) -> tuple[str, str, str]:
 
 def uses_skills(arm: str) -> str:
     """Whether the arm shipped the skill packet. The ``-skills`` token is how every launcher names
-    the treated arm and is the only skills marker recorded anywhere."""
+    the treated arm; kept for the rows a source DB predates ``runs.packet`` on (see ``packet``,
+    the column a reader should prefer -- :mod:`hpcagent_bench.packets` resolves it, this script
+    does not, since it ships without that package as a dependency)."""
     return "1" if "skills" in arm.split("-") else "0"
 
 
@@ -340,6 +343,14 @@ def read_db(db: Database, focus: frozenset[str], arm_prefix: str, excluded: froz
         harnesses: dict[str, str] = {}
         if "runs" in tables and any(r["name"] == "harness" for r in conn.execute("PRAGMA table_info(runs)")):
             harnesses = {r["run_id"]: r["harness"] or "" for r in conn.execute("SELECT run_id, harness FROM runs")}
+        # runs.packet is the RECORDED identity (see hpcagent_bench.harness.recording); a DB with no
+        # runs table at all predates it and every one of its rows gets "", same as harness above.
+        # Written RAW, sorted-and-joined but not alias-resolved: this script ships without
+        # hpcagent_bench as a dependency, so a reader canonicalizes it through
+        # hpcagent_bench.packets.canonical, not this extractor.
+        packets: dict[str, str] = {}
+        if "runs" in tables:
+            packets = {r["run_id"]: r["packet"] or "" for r in conn.execute("SELECT run_id, packet FROM runs")}
         # A sources row is keyed by the same (run_id, benchmark, ts) triple as the graded row it
         # belongs to, so the submitted text attaches to its own grade rather than a guessed one.
         blobs: dict[tuple[str, str, int], sqlite3.Row] = {}
@@ -382,6 +393,7 @@ def read_db(db: Database, focus: frozenset[str], arm_prefix: str, excluded: froz
                         "run_id": run_id,
                         "arm": arm,
                         "harness": harnesses.get(run_id, ""),
+                        "packet": packets.get(run_id, ""),
                         "skills": uses_skills(arm),
                         "node_index": node,
                         "problem_index": problem,

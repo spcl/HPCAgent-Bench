@@ -45,10 +45,6 @@ RECORD_TABLES: tuple[str, ...] = ("calls", "submissions", "attempts")
 #: silently returns nothing on the next layout, which reads as "this campaign recorded nothing".
 DB_SKIP_NAMES: frozenset[str] = frozenset({"cache.db", "index.db"})
 
-#: An arm label that is not a condition. ``adhoc`` is a grade recorded with no run id -- a manual
-#: judge call -- and counting it as an arm puts a phantom column in every per-arm figure.
-PSEUDO_ARMS: frozenset[str] = frozenset({"", "adhoc"})
-
 
 class Database(NamedTuple):
     """One judge database and where it came from, so a row can name its own origin."""
@@ -149,10 +145,7 @@ def read_database(db: Database, want: dict[str, frozenset[str]]) -> Iterator[dic
                 continue
             # LEFT JOIN, not JOIN: a row whose run was never recorded is a fact about that run and
             # has to reach the caller as an unidentified row, not vanish from the count.
-            query = (
-                f"SELECT t.*, {selected} "  # noqa: S608 -- fixed names
-                f"FROM {table} t LEFT JOIN runs r USING (run_id) ORDER BY t.ts, t.id"
-            )
+            query = f"SELECT t.*, {selected} FROM {table} t LEFT JOIN runs r USING (run_id) ORDER BY t.ts, t.id"
             for row in conn.execute(query):
                 record = dict(row)
                 if not selects(record, want):

@@ -11,6 +11,7 @@ import ast
 import copy
 from numpyto_common import dtypes
 from numpyto_common.ir import ArrayDesc, KernelIR
+from numpyto_common.subscripts import is_ellipsis, is_newaxis
 from numpyto_common.numpy_desugar import expr_rank
 
 
@@ -265,26 +266,12 @@ class _EllipsisToSlice(ast.NodeTransformer):
     def __init__(self, ranks: dict[str, int]) -> None:
         self.ranks = ranks
 
-    @staticmethod
-    def _is_ellipsis(e: ast.AST) -> bool:
-        return isinstance(e, ast.Constant) and e.value is Ellipsis
-
-    @staticmethod
-    def _is_newaxis(e: ast.AST) -> bool:
-        """All three spellings: ``None``, ``np.newaxis``, bare ``newaxis``. The source keeps
-        whichever the author wrote, and ``np.newaxis`` is an Attribute, not a Constant."""
-        return (
-            (isinstance(e, ast.Constant) and e.value is None)
-            or (isinstance(e, ast.Attribute) and e.attr == "newaxis")
-            or (isinstance(e, ast.Name) and e.id == "newaxis")
-        )
-
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         self.generic_visit(node)
         sl = node.slice
-        if self._is_ellipsis(sl):
+        if is_ellipsis(sl):
             node.slice = ast.Slice()  # x[...] -> x[:]
-        elif isinstance(sl, ast.Tuple) and any(self._is_ellipsis(e) for e in sl.elts):
+        elif isinstance(sl, ast.Tuple) and any(is_ellipsis(e) for e in sl.elts):
             rank = self.ranks.get(node.value.id) if isinstance(node.value, ast.Name) else None
             if rank is not None:
                 # The ellipsis stands for the axes nothing else indexes, so only elements that
@@ -292,10 +279,10 @@ class _EllipsisToSlice(ast.NodeTransformer):
                 # none: counting it left ``p[..., np.newaxis]`` on a rank-2 ``p`` one slice short,
                 # so it became ``p[:, None]`` -- rank 2 where numpy gives rank 3, and the operand
                 # then broadcast against a different set of axes.
-                fill = rank - sum(1 for e in sl.elts if not self._is_ellipsis(e) and not self._is_newaxis(e))
+                fill = rank - sum(1 for e in sl.elts if not is_ellipsis(e) and not is_newaxis(e))
                 elts: list[ast.AST] = []
                 for e in sl.elts:
-                    if self._is_ellipsis(e):
+                    if is_ellipsis(e):
                         elts.extend(ast.Slice() for _ in range(max(fill, 0)))
                     else:
                         elts.append(e)

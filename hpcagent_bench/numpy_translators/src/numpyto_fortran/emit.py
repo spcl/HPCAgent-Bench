@@ -6,12 +6,18 @@ import copy
 import dataclasses
 import math
 import re
-from typing import Callable, Dict, List, Literal, NamedTuple, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from numpyto_fortran.intrinsics import literal_axis, reshape_dims
 from numpyto_common.ir import ArrayDesc, KernelIR, _is_alloc_marker
-from numpyto_common import dtypes, narrow_int, operators, parallelism
-from numpyto_common.emitter import BaseEmitter, index_rank_error
+from numpyto_common import dtypes, operators, parallelism
+from numpyto_common.emitter import (
+    BaseEmitter,
+    TupleTargetSplitter,
+    fp8_dtypes_used,
+    fp8_function_names,
+    index_rank_error,
+)
 from numpyto_common.frontend import _names_used_as_int
 from numpyto_common.lowering import (
     _MATH_INTRINSIC_NAMES,
@@ -43,47 +49,9 @@ def _fortran_type(dtype: str) -> str:
         return "real(c_double)"
 
 
-class _Fp8Fns(NamedTuple):
-    """The three contained procedures for one fp8 format."""
-
-    promote: str  # storage byte -> real(c_float)
-    demote: str  # real(c_float) -> storage byte
-    round: str  # real(c_float) -> real(c_float), rounded to the fp8 grid
-
-
 #: Contained-procedure names per fp8 format, keyed by the canonical registry dtype.
 #: No leading underscores (unlike C's __npb_*): a Fortran identifier may not start with one.
-_FP8_FNS = {
-    "float8_e4m3": _Fp8Fns("npb_e4m3_to_f32", "npb_f32_to_e4m3", "npb_rn_e4m3"),
-    "float8_e5m2": _Fp8Fns("npb_e5m2_to_f32", "npb_f32_to_e5m2", "npb_rn_e5m2"),
-}
-
-#: BinOp ops that are never fp8 arithmetic (bit/shift work is integer); the fp8 round-to-grid wrap skips them.
-_FP8_NON_ARITH_OPS = (ast.BitAnd, ast.BitOr, ast.BitXor, ast.LShift, ast.RShift)
-
-
-def _fp8_fns(dtype: str):
-    """:class:`_Fp8Fns` for a storage-only (fp8) dtype, else None (gated on the registry)."""
-    if not dtype or not dtypes.is_storage_only(dtype):
-        return None
-    return _FP8_FNS[dtypes.canonical(dtype)]
-
-
-def _fp8_dtypes_used(kir: KernelIR) -> List[str]:
-    """The canonical storage-only (fp8) dtypes this kernel mentions, deduped."""
-    seen: List[str] = []
-    for dt in (
-        *(a.dtype for a in kir.arrays),
-        *(s.dtype for s in kir.scalars),
-        *kir.local_dtypes.values(),
-        kir.float_precision or "",
-    ):
-        if dt and dtypes.is_storage_only(dt):
-            canon = dtypes.canonical(dt)
-            if canon not in seen:
-                seen.append(canon)
-    return seen
-
+FORTRAN_FP8_NAMES = fp8_function_names("npb_")
 
 #: Contained procedures implementing one fp8 format, keyed by canonical dtype (a value is
 #: 1-byte storage, promoted to real(c_float) to compute); verified bit-exact against ml_dtypes.
@@ -266,7 +234,7 @@ _FP8_HELPER_SRC = {
 
 def _fp8_contained(kir: KernelIR) -> str:
     """The fp8 conversion procedures this kernel needs, as contained procedures; empty for a non-fp8 kernel."""
-    return "".join(_FP8_HELPER_SRC[dt] for dt in _fp8_dtypes_used(kir))
+    return "".join(_FP8_HELPER_SRC[dt] for dt in fp8_dtypes_used(kir))
 
 
 def _round_even_helper(rk: str) -> str:
@@ -771,6 +739,7 @@ class _FortranBodyEmitter(BaseEmitter):
     _KW_BREAK = "exit"
     _COMMENT = ("!", "")
     _KW_CONTINUE = "cycle"
+    fp8_names = FORTRAN_FP8_NAMES
 
     def emit_stmt(self, node: ast.stmt, indent: str) -> str:
         # A bare helper-subroutine call statement (an out-param call, or a VOID helper that writes
@@ -891,9 +860,6 @@ class _FortranBodyEmitter(BaseEmitter):
         #: name -> (reversed shape, Fortran type) for a local whose allocate must land at its
         #: np.zeros marker site (in loop scope); populated by the caller.
         self.inline_alloc_locals: Dict[str, Tuple[List[str], str]] = {}
-        #: Lazy cache of the kernel's fp8 rounding procedures. False means "not yet computed" --
-        #: a real cached result may legitimately be None.
-        self._fp8_fns_cache: Optional[_Fp8Fns] | Literal[False] = False
         #: name -> int-kind tag ("int32"/"int64") for implicit-local bitwise propagation;
         #: populated by the caller.
         self._int_kinds: Dict[str, str] = {}
@@ -1209,7 +1175,7 @@ class _FortranBodyEmitter(BaseEmitter):
             else self._as_numeric_operand(node.value)
         )
         lhs = self.emit_expr(target)
-        fns = self._store_fns(target)
+        fns = self.store_fns(target)
         if fns is not None:  # fp8 target: demote the real(c_float) RHS to the byte
             rhs = f"{fns.demote}({rhs})"
         # Rebase a value entering an index array. Skipped when the RHS is itself an index read
@@ -1221,7 +1187,7 @@ class _FortranBodyEmitter(BaseEmitter):
     def _emit_augassign(self, node: ast.AugAssign, indent: str) -> str:
         lhs = self.emit_expr(node.target)
         rhs = self.emit_expr(node.value)
-        fp8 = self._store_fns(node.target)
+        fp8 = self.store_fns(node.target)
         if fp8 is not None:
             # y(i) += e on fp8 storage: the target is a 1-byte code, so the READ
             # must promote and the result demote -- the two lhs below are NOT interchangeable.
@@ -1254,19 +1220,7 @@ class _FortranBodyEmitter(BaseEmitter):
             raise NotImplementedError(f"augmented op {type(node.op).__name__}")
         return f"{indent}{lhs} = {lhs} {op} ({rhs})"
 
-    def emit_expr(self, node: ast.AST) -> str:
-        """Emit an expression, rounding a float BinOp result back to the fp8 grid when the kernel computes in fp8,
-        and re-wrapping a narrow-int +/-/* result back to its element width -- see :meth:`_wrap_narrow` for how a
-        SIGNED width and an UNSIGNED width each reproduce numpy's wrap."""
-        text = self._emit_expr_inner(node)
-        if isinstance(node, ast.BinOp):
-            text = self._fp8_round(node, text)
-        wrap = narrow_int.wrap_dtype(node, self._wrap_name_dtype)
-        if wrap is not None:
-            text = self._wrap_narrow(text, wrap)
-        return text
-
-    def _wrap_narrow(self, text: str, wrap: str) -> str:
+    def wrap_narrow(self, text: str, wrap: str) -> str:
         """Re-wrap a wide int64 expression back to its narrow element width, matching numpy's dtype wraparound.
 
         A SIGNED width (int8/16/32): ``INT(x, narrow_kind)`` two's-complement wraps (verified: INT(200,
@@ -1286,37 +1240,6 @@ class _FortranBodyEmitter(BaseEmitter):
             mask = (1 << (dtypes.itemsize(wrap) * 8)) - 1
             return f"IAND(INT(({text}), {sel}), {mask}_{sel})"
         return f"INT(INT(({text}), {self._int_kind_selector(self._int_tag(wrap))}), {sel})"
-
-    def _wrap_name_dtype(self, name: str) -> Optional[str]:
-        """Name -> numpy dtype for the narrow-int wrap oracle; a shape symbol is the wide int64."""
-        for s in self.kir.symbols:
-            if s.name == name:
-                return "int64"
-        return self._name_dtype(name)
-
-    def _fp8_round(self, node: ast.BinOp, text: str) -> str:
-        """Wrap a float BinOp result in the fp8 round-to-grid procedure (per-op rounding is load-bearing, not decorative)."""
-        if isinstance(node.op, _FP8_NON_ARITH_OPS):
-            return text
-        fns = self._kernel_fp8_fns()
-        if fns is None or not self._touches_fp8(node):
-            return text
-        return f"{fns.round}({text})"
-
-    def _kernel_fp8_fns(self):
-        """The kernel's single fp8 format's procedures, or None if it uses none (mixing both formats is refused)."""
-        cache = self._fp8_fns_cache
-        if cache is not False:
-            return cache
-        used = _fp8_dtypes_used(self.kir)
-        if len(used) > 1:
-            raise NotImplementedError(
-                f"kernel {self.kir.kernel_name!r} mixes fp8 formats {used}: the grid each "
-                f"intermediate rounds to is ambiguous"
-            )
-        fns = _fp8_fns(used[0]) if used else None
-        self._fp8_fns_cache = fns
-        return fns
 
     def _index_reads(self, node: ast.AST) -> List[ast.AST]:
         """Every read of an index array inside ``node``, outermost-first.
@@ -1412,7 +1335,7 @@ class _FortranBodyEmitter(BaseEmitter):
             return target.value.id in self.index_arrays
         return isinstance(target, ast.Name) and target.id in self.index_arrays
 
-    def _name_dtype(self, name: str) -> Optional[str]:
+    def name_dtype(self, name: str) -> Optional[str]:
         """dtype of a Name -- an array, a local, or a by-value scalar param (so an fp8 alpha is promoted on read)."""
         for a in self.kir.arrays:
             if a.name == name:
@@ -1425,36 +1348,7 @@ class _FortranBodyEmitter(BaseEmitter):
                 return sca.dtype
         return None
 
-    def _touches_fp8(self, node: ast.AST) -> bool:
-        """True when the subtree reads an fp8 array/scalar/local, so the enclosing op yields an fp8 real to re-round."""
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
-                name = sub.value.id
-            elif isinstance(sub, ast.Name):
-                name = sub.id
-            else:
-                continue
-            if _fp8_fns(self._name_dtype(name) or "") is not None:
-                return True
-        return False
-
-    def _promote_name_read(self, node: ast.Name, access: str) -> str:
-        """Promote a bare fp8 Name to real(c_float) on READ. Store ctx falls through to the store seam."""
-        if not isinstance(node.ctx, ast.Load):
-            return access
-        fns = _fp8_fns(self._name_dtype(node.id) or "")
-        return f"{fns.promote}({access})" if fns is not None else access
-
-    def _store_fns(self, target: ast.AST):
-        """:class:`_Fp8Fns` when an assignment target is an fp8 element/name, else None (the store half of promote/demote)."""
-        base = target
-        while isinstance(base, ast.Subscript):
-            base = base.value
-        if not isinstance(base, ast.Name):
-            return None
-        return _fp8_fns(self._name_dtype(base.id) or "")
-
-    def _emit_expr_inner(self, node: ast.AST) -> str:
+    def emit_expr_inner(self, node: ast.AST) -> str:
         if isinstance(node, ast.Constant):
             v = node.value
             if isinstance(v, bool):
@@ -1495,7 +1389,7 @@ class _FortranBodyEmitter(BaseEmitter):
             # A size-1 array read bare in a value expression is its sole element
             # x(1), not the whole rank-1 array -- so a(i+1) > x is a scalar comparison.
             access = f"{node.id}(1)" if node.id in self._size1_arrays else node.id
-            return self._promote_name_read(node, access)
+            return self.promote_name_read(node, access)
         if isinstance(node, ast.Tuple):
             # (a, b, c) as an axis tuple / array constructor -- emit the Fortran
             # array constructor syntax. Bare elements only.
@@ -1932,7 +1826,7 @@ class _FortranBodyEmitter(BaseEmitter):
             return access
         # An fp8 element is a 1-byte code with no arithmetic of its own -- promote
         # it to real(c_float) on every scalar READ (the store seam demotes back).
-        fns = _fp8_fns(self._name_dtype(base_name) or "")
+        fns = self.fp8_fns(self.name_dtype(base_name) or "")
         if fns is not None:
             return f"{fns.promote}({access})"
         # An UNSIGNED narrow int (uint8/16/32) reads back negative for a high value
@@ -1966,7 +1860,7 @@ class _FortranBodyEmitter(BaseEmitter):
 
     def _unsigned_read_mask(self, name: str) -> Optional[str]:
         """The 2**N - 1 mask that recovers a uintN element's unsigned value from Fortran's signed-integer storage."""
-        dt = self._name_dtype(name)
+        dt = self.name_dtype(name)
         bits = {"uint8": 8, "uint16": 16, "uint32": 32}.get(dt or "")
         return None if bits is None else str((1 << bits) - 1)
 
@@ -3029,80 +2923,16 @@ class _FortranRenameTemps(ast.NodeTransformer):
         return node
 
 
-def _require_parallelizable(kir: KernelIR) -> None:
-    """Refuse a kernel the parallel variant can't soundly emit: a colliding scatter, or no parallelizable loop."""
-    if parallelism.has_indirect_scatter(kir.tree):
-        raise parallelism.UnsupportedParallelError(
-            f"{kir.kernel_name}: data-dependent scatter write needs an atomic; no parallel variant"
-        )
-    if not parallelism.any_parallelizable_loop(kir.tree):
-        raise parallelism.UnsupportedParallelError(
-            f"{kir.kernel_name}: no iteration-independent or reduction loop to parallelize"
-        )
-
-
 def emit_fortran_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     """Fortran with OpenMP !$omp parallel do on each outermost independent/reduction loop; same symbol as emit_fortran."""
-    _require_parallelizable(kir)
+    parallelism.require_parallelizable(kir)
     return emit_fortran(kir, fn_name, parallel=True)
-
-
-def _tuple_element(node: ast.AST, i: int, n: int) -> Optional[ast.expr]:
-    """Element ``i`` of an ``n``-wide tuple-valued expression, or None when it is not one.
-
-    A conditional over tuples is projected by pushing the index through it, so the guards survive
-    and the tuples disappear.
-    """
-    if isinstance(node, ast.Tuple):
-        return copy.deepcopy(node.elts[i]) if len(node.elts) == n else None
-    if isinstance(node, ast.IfExp):
-        body = _tuple_element(node.body, i, n)
-        orelse = _tuple_element(node.orelse, i, n)
-        if body is None or orelse is None:
-            return None
-        return ast.IfExp(test=copy.deepcopy(node.test), body=body, orelse=orelse)
-    return None
-
-
-class _TupleTargetSplitter(ast.NodeTransformer):
-    """Rewrite ``a, b, c = <tuple-valued expr>`` into one scalar assignment per element.
-
-    Fortran has no tuple, and nothing downstream of here does: the rename pass, the assigned-name
-    scan and :func:`_collect_implicit_locals` all read ``Assign`` targets that are plain Names, so
-    a tuple target reaches the emitter undeclared as well as unemittable. The frontend splices a
-    tuple-returning helper into its call site as a SINGLE expression -- a conditional selecting
-    between tuple literals -- which the lowering splitter (matching a bare tuple RHS) leaves alone.
-
-    Declines when a target name is read by the RHS: python binds every target from the OLD values,
-    and a sequential split would read one already updated.
-    """
-
-    def visit_Assign(self, node: ast.Assign) -> object:
-        self.generic_visit(node)
-        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
-            return node
-        targets = node.targets[0].elts
-        if not all(isinstance(t, ast.Name) for t in targets):
-            return node
-        names = {t.id for t in targets}
-        if any(isinstance(sub, ast.Name) and sub.id in names for sub in ast.walk(node.value)):
-            return node
-        parts = [_tuple_element(node.value, i, len(targets)) for i in range(len(targets))]
-        if any(p is None for p in parts):
-            return node
-        out: List[ast.stmt] = []
-        for target, part in zip(targets, parts):
-            stmt = ast.Assign(targets=[copy.deepcopy(target)], value=part)
-            ast.copy_location(stmt, node)
-            ast.fix_missing_locations(stmt)
-            out.append(stmt)
-        return out
 
 
 def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = False) -> str:
     """Emit a self-contained Fortran subroutine with timing wrapper."""
     name = fn_name or f"{kir.kernel_name}_d_auto"
-    _TupleTargetSplitter().visit(kir.tree)
+    TupleTargetSplitter().visit(kir.tree)
     # ABI parameter order (what the binding JSON, and every caller, uses).
     # param_order() sorts alphabetically, so it must be captured on the
     # ORIGINAL names, before the Fortran identifier rename below can shift a

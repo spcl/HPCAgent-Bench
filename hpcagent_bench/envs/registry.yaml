@@ -282,3 +282,6 @@ aliases:
     # Recorded by the GPU C arms before offload was understood as a consequence of
     # device=gpu + language=c rather than a skill the agent was handed.
     openmp-offload: ""
+    # The arm-name and --treatment-flag spelling of `lang-skills`; scripts/migrate_db.py's PACKETS
+    # table maps the same arm-name token for un-migrated archives.
+    skills: lang-skills

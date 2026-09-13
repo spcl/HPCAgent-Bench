@@ -71,15 +71,10 @@ def arm_points(frame: pd.DataFrame) -> pd.DataFrame:
     return rules.require_interval(table, "tokens", "tokens_low", "tokens_high")
 
 
-#: Arm-name suffix -> the packet it means. The suffix is read only because the observations CSV
-#: does not yet carry the recorded `packet` column; the names on the right are the schema's, and the
-#: labels come from the display registry, so neither is spelled twice.
-CONDITIONS: tuple[tuple[str, str], ...] = (
-    ("", ""),
-    ("-skills", "lang-skills"),
-    ("-cpf", "cpf"),
-    ("-cpfsrc", "cpfsrc"),
-)
+#: Fixed display order for the known conditions: the control, then the treatments in the order the
+#: campaigns introduced them. A condition outside this set (an unregistered packet combination)
+#: still plots, just after every named one -- see :func:`condition_order`.
+CONDITION_ORDER: tuple[str, ...] = ("", "lang-skills", "cpf", "cpfsrc")
 
 #: Below this many conditions a control and its treatment are joined by a dashed connector, which
 #: draws the DIFFERENCE between them. Two is a treatment and its control, which is a segment; three
@@ -87,20 +82,11 @@ CONDITIONS: tuple[tuple[str, str], ...] = (
 CONNECTOR_MAX: int = 2
 
 
-def condition_of(arm: str) -> str:
-    """The arm's condition, from its suffix. Longest suffix first: `-cpfsrc` also ends in nothing
-    a shorter test would miss, but `-cpf` is a PREFIX of it and would claim it if tried first."""
-    name = str(arm)
-    for suffix, key in sorted(CONDITIONS, key=lambda row: -len(row[0])):
-        if suffix and name.endswith(suffix):
-            return key
-    return ""
-
-
 def condition_order(frame: pd.DataFrame) -> list[str]:
     """The conditions present, in the fixed vocabulary order -- never in the order pandas found."""
     present = set(frame.condition)
-    return [key for _, key in CONDITIONS if key in present]
+    named = [key for key in CONDITION_ORDER if key in present]
+    return named + sorted(present - set(named))
 
 
 def condition_label(key: str) -> str:
@@ -318,9 +304,14 @@ def load(path: pathlib.Path, prefix: str) -> pd.DataFrame:
     # speed-up from the graded submissions, the cost from the call rows that carry a token count --
     # and one predicate over both columns keeps only the rows that have both, which is the call rows
     # alone. That silently dropped every graded submission.
+    #
+    # ``condition`` is the row's RECORDED packet (see hpcagent_bench.harness.recording),
+    # canonicalized through packets.canonical (aliases included); blank for a row written before
+    # that column existed, which reads as the control -- the arm name is never parsed for this.
+    condition = frame["packet"].fillna("").astype(str).map(packets.canonical) if "packet" in frame else ""
     frame = frame.assign(
         model=frame["arm"].astype(str).map(experiment_tags.model_of),
-        condition=frame["arm"].astype(str).map(condition_of),
+        condition=condition,
     )
     return frame[frame.model != "other"]
 

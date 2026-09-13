@@ -16,7 +16,7 @@ import pytest
 from numpyto_common.lib_nodes import (
     NP_CALL_EXPANDERS,
     _matmul_result_shape,
-    _parse_einsum_subscripts,
+    parse_einsum_subscripts,
     dims_agree,
     expand_cumprod,
     expand_cumsum,
@@ -222,17 +222,17 @@ def test_matmul_result_shape_aliased_batch_dim_still_checks_rank() -> None:
 
 
 def test_parse_einsum_explicit() -> None:
-    assert _parse_einsum_subscripts("ij,jk->ik") == (["ij", "jk"], "ik")
+    assert parse_einsum_subscripts("ij,jk->ik") == (["ij", "jk"], "ik")
 
 
 def test_parse_einsum_implicit_output() -> None:
     # numpy implicit output = singly-occurring indices, alphabetical.
-    assert _parse_einsum_subscripts("ij,jk") == (["ij", "jk"], "ik")
+    assert parse_einsum_subscripts("ij,jk") == (["ij", "jk"], "ik")
 
 
 def test_parse_einsum_ellipsis_unsupported() -> None:
     with pytest.raises(NotImplementedError):
-        _parse_einsum_subscripts("...ij->...i")
+        parse_einsum_subscripts("...ij->...i")
 
 
 # --------------------------------------------------------------------------- #
