@@ -1588,9 +1588,14 @@ def mixed_view_names(fn: ast.FunctionDef, symbols: FrozenSet[str] = frozenset())
     return views & valued
 
 
-def version_rebound_views(fn: ast.FunctionDef) -> List[str]:
-    """Give each rebinding of a view name its own name. Returns the names it DECLINED."""
-    return version_rebound_names(fn, view_slice_binding)
+def version_rebound_views(fn: ast.FunctionDef, symbols: FrozenSet[str] = frozenset()) -> List[str]:
+    """Give each rebinding of a view name its own name. Returns the names it DECLINED.
+
+    Both View spellings count. ls3df_scf's inlined CheFSI binds ``X = <reshaped block>`` and swaps
+    ``X, Y = Y, Ynew`` in the loop: every binding of ``X`` is a bare alias, and dace refused the
+    loop's one (``Cannot reassign View``) because only a slice binding was considered here.
+    """
+    return version_rebound_names(fn, lambda stmt: view_binding(stmt, symbols))
 
 
 def version_reallocations(fn: ast.FunctionDef) -> None:
@@ -3753,7 +3758,7 @@ def render_program(kir: KernelIR, fn_name: str | None = None) -> RenderedProgram
     # descriptor also cannot hold two shapes, so a re-allocation gets its own name too.
     symbol_set = frozenset(symbol_names)
     copy_view_bindings(fn_ast, mixed_view_names(fn_ast, symbol_set), symbol_set)
-    copy_view_bindings(fn_ast, set(version_rebound_views(fn_ast)), symbol_set)
+    copy_view_bindings(fn_ast, set(version_rebound_views(fn_ast, symbol_set)), symbol_set)
     copy_view_bindings(fn_ast, views_of_written_bases(fn_ast), symbol_set)
     version_reallocations(fn_ast)
     # Widest last: a name bound to a computed value in two arms of a branch is one descriptor dace

@@ -1015,6 +1015,46 @@ def test_a_size_local_mutated_after_its_definition_is_neither_inlined_nor_promot
     assert "n" not in promoted, (rebinding, promoted)
 
 
+def test_a_bare_alias_rebound_inside_a_loop_is_copied_rather_than_left_a_view() -> None:
+    """ls3df_scf's inlined CheFSI binds ``X = <reshaped block>`` and swaps ``X, Y = Y, Ynew`` in the loop, so
+    every binding of ``X`` is a bare alias and the loop's one reassigns the View dace made for the first:
+    ``Cannot reassign View "__inl4_X"``. The live ranges overlap across the loop, so no rename separates
+    them; each binding copies instead, and the numbers must not move."""
+    src = (
+        "def k(a, out):\n"
+        "    b = a.reshape((6, 4))\n"
+        "    x = b\n"
+        "    y = x * 0.5\n"
+        "    for it in range(3):\n"
+        "        ynew = y * 2.0 - x\n"
+        "        x, y = y, ynew\n"
+        "    out[:] = x\n"
+    )
+    fn = SplitTupleAssign().visit(ast.parse(src).body[0])
+    ast.fix_missing_locations(fn)
+    copy_view_bindings(fn, mixed_view_names(fn))
+    copy_view_bindings(fn, version_rebound_views(fn))
+    version_rebound_names(fn, value_binding)
+    rewritten = ast.unparse(fn)
+    outputs = []
+    for text in (src, rewritten):
+        scope = {"np": np}
+        exec(text, scope)  # noqa: S102 -- the source is a literal in this test
+        out = np.zeros((6, 4))
+        scope["k"](np.arange(24, dtype=np.float64), out)
+        outputs.append(out)
+    assert np.array_equal(*outputs), rewritten
+    bindings = [line.strip() for line in rewritten.splitlines() if line.strip().startswith("x = ")]
+    assert len(bindings) == 2 and all(b.startswith("x = np.copy(") for b in bindings), rewritten
+
+
+def test_a_rebound_alias_of_a_symbol_is_not_copied() -> None:
+    """``m = n`` reads a scalar the caller bound as a dc.symbol; a copy would ask dace for an array of it."""
+    fn = ast.parse("def k(a, n):\n    m = n\n    for i in range(3):\n        m = i\n        a[m] = 1.0\n").body[0]
+    copy_view_bindings(fn, version_rebound_views(fn, frozenset({"n", "i"})), frozenset({"n", "i"}))
+    assert "np.copy" not in ast.unparse(fn), ast.unparse(fn)
+
+
 def test_swapaxes_becomes_the_transpose_dace_does_have() -> None:
     """netvlad: dace has no ``swapaxes`` and refuses the callback's return value. The rewrite needs
     the operand RANK, which only this flow-sensitive table has."""

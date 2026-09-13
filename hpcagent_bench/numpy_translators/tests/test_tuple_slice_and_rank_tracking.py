@@ -22,7 +22,10 @@ after the loop the name holds one or the other and nothing here knows which.
 from __future__ import annotations
 import ast
 
+import pytest
+
 from numpyto_common.tuple_desugar import TupleDesugar, Env, desugar_tuples
+from numpyto_common.numpy_desugar import rank_table
 
 
 def fold(
@@ -132,3 +135,47 @@ def test_desugar_tuples_entry_point_agrees() -> None:
     ).body[0]
     desugar_tuples(fn, int_scalars=frozenset({"g", "n", "c"}), arrays=frozenset({"x"}), ranks={"x": 4})
     assert "axis=(2, 3, 4)" in ast.unparse(fn)
+
+
+@pytest.mark.parametrize(
+    ("src", "name", "want"),
+    [
+        ("def k(p, f):\n    shp = p[f].shape\n    X = (p[f] * 2.0).reshape(shp)\n", "X", 3),
+        (
+            "def k(p, m):\n    Y = p * 1.0\n    for i in range(m):\n        shp = Y.shape\n"
+            "        Y = (Y * 2.0).reshape(shp)\n",
+            "Y",
+            4,
+        ),
+        ("def k(p, n):\n    X = p.reshape(n)\n", "X", 1),
+    ],
+    ids=["shape of a subscript", "loop-carried shape", "scalar length"],
+)
+def test_a_reshape_to_a_shape_local_takes_the_shapes_rank(src: str, name: str, want: int) -> None:
+    """ls3df_scf reshapes to ``shp = Y.shape`` while ``Y``'s rank still depends on that reshape.
+    Counting the tuple-valued name as one dimension closed the cycle at rank 1; a scalar length
+    really is one dimension."""
+    ranks = rank_table(ast.parse(src), {"p": 4})
+    assert ranks.get(name) == want, ranks
+
+
+def test_a_last_axis_read_after_a_reshape_to_a_subscripts_shape_is_the_last_axis() -> None:
+    """The extent the rank feeds: ls3df_scf's inlined ``X.reshape(-1, X.shape[-1])`` sits in the fragment
+    loop, where the tuple pass reads ``X``'s rank off the table; rank 1 spelled it ``X.shape[0]``, and the
+    flattened block had ``Lb`` columns instead of ``nstate``."""
+    fn = ast.parse(
+        "def k(p, m):\n"
+        "    for f in range(m):\n"
+        "        shp = p[f].shape\n"
+        "        X = (p[f] * 2.0).reshape(shp)\n"
+        "        flat = X.reshape(-1, X.shape[-1])\n"
+    ).body[0]
+    desugar_tuples(
+        fn,
+        int_scalars=frozenset({"m"}),
+        float_scalars=frozenset(),
+        arrays=frozenset({"p"}),
+        ranks=rank_table(fn, {"p": 4}),
+    )
+    got = ast.unparse(fn)
+    assert "X.shape[0]" not in got and ("X.shape[-1]" in got or "X.shape[2]" in got), got

@@ -12,9 +12,12 @@ to C + Fortran, run, and compared against numpy.
 """
 
 from __future__ import annotations
+import ast
+
 import numpy as np
 
 from _op_oracle import run_op
+from numpyto_common.numpy_desugar import _IxWriteToLoop, rank_table
 
 _BACKENDS = ("c", "fortran")
 
@@ -127,3 +130,50 @@ def test_ix_open_mesh_scatter_add() -> None:
         )
     )
     assert ok, res
+
+
+def lowered(src: str, ranks: dict[str, int]) -> str:
+    """Run the open-mesh write lowering over one function's statements, the way the pipeline drives it."""
+    fn = ast.parse(src).body[0]
+    assert isinstance(fn, ast.FunctionDef)
+    rewrite = _IxWriteToLoop(rank_table(fn, ranks), {}, fn)
+    body: list[ast.stmt] = []
+    for stmt in fn.body:
+        res = rewrite.visit(stmt)
+        body.extend(res if isinstance(res, list) else [res])
+    fn.body = body
+    return ast.unparse(ast.fix_missing_locations(fn))
+
+
+def test_a_store_through_unpacked_ix_grids_becomes_the_open_mesh_loop() -> None:
+    """ls3df_scf unpacks ``gx, gy, gz = np.ix_(xs, ys, zs)`` and scatters ``rho[gx, gy, gz] += patch``. dace
+    refuses a store through the rank-3 grids, so the store takes the loop nest the inline
+    ``rho[np.ix_(..)]`` spelling gets, and the numbers must not move."""
+    src = (
+        "def k(rho, patch, off, m):\n"
+        "    box = np.arange(2)\n"
+        "    for f in range(m):\n"
+        "        xs = (off[f] + box) % 5\n"
+        "        ys = (off[f] + 1 + box) % 5\n"
+        "        zs = (off[f] + 2 + box) % 5\n"
+        "        gx, gy, gz = np.ix_(xs, ys, zs)\n"
+        "        rho[gx, gy, gz] += patch[f] * (f + 1.0)\n"
+    )
+    rewritten = lowered(src, {"rho": 3, "patch": 4, "off": 1})
+    assert "rho[gx, gy, gz]" not in rewritten, rewritten
+    outputs = []
+    for text in (src, rewritten):
+        scope = {"np": np}
+        exec(text, scope)  # noqa: S102 -- the source is a literal in this test
+        rho = np.zeros((5, 5, 5))
+        scope["k"](rho, np.arange(24.0).reshape(3, 2, 2, 2), np.array([0, 3, 4]), 3)
+        outputs.append(rho)
+    assert np.array_equal(*outputs), rewritten
+
+
+def test_a_vector_rebound_between_the_unpack_and_the_store_leaves_the_store_alone() -> None:
+    """The grids hold the vectors as they were at the unpack; reading a rebound vector at the store would
+    scatter into other cells."""
+    src = "def k(rho, patch, xs, ys):\n    gx, gy = np.ix_(xs, ys)\n    xs = xs + 1\n    rho[gx, gy] += patch\n"
+    rewritten = lowered(src, {"rho": 2, "patch": 2, "xs": 1, "ys": 1})
+    assert "rho[gx, gy] += patch" in rewritten, rewritten
