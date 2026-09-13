@@ -22,7 +22,6 @@ WAVE_DIR=${WAVE_DIR:-${SCRATCH:?}/llr-focus40-owed}
 # forms of cpf-forms-cpu-llr-focus40 and the drop-ins of cpf-dropin-cpu-llr-focus40
 CPF_FORMS_DIR=${CPF_FORMS_DIR:-${SCRATCH:?}/cpf-views/llr-focus40-cpu-frozen}
 CPF_DROPIN_DIR=${CPF_DROPIN_DIR:-${CPF_FORMS_DIR}}
-export CPF_FORMS_DIR CPF_DROPIN_DIR
 
 roots=()
 for root in ${RUN_ROOTS}; do [[ -d "${root}" ]] && roots+=(--run-root "${root}"); done
@@ -58,6 +57,7 @@ for owed in "${WAVE_DIR}"/*.txt; do
         esac
         [[ "${skills}" == 1 ]] && kind=skills
         out=$(BEGIN=now MODELS="${model}" ARMS="${rest}:${kind}" KERNELS_FILE="${owed}" \
+            CPF_FORMS_DIR="${CPF_FORMS_DIR}" CPF_DROPIN_DIR="${CPF_DROPIN_DIR}" \
             EXPERIMENT="${campaign}" TAG="${TAG}" ./submit-cpf-llr40.sh)
     fi
     echo "${out}"
