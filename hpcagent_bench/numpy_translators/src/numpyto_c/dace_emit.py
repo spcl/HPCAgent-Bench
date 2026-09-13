@@ -17,6 +17,7 @@ from numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
 from numpyto_common.lowering import lower
 from numpyto_common.numpy_desugar import _AUG_OP_SRC, desugar_for_python_backend, expr_rank, rank_table
 from numpyto_common.ordered import OrderedSet
+from numpyto_common.statement_desugar import DesugarArrayIteration, SplitChainedAssign, is_scalar_literal
 
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 #: A decimal point or an exponent -- what makes a shape token a float rather than an extent.
@@ -994,32 +995,6 @@ def negative_step(step: ast.expr) -> bool:
     return isinstance(step.value, (int, float)) and step.value < 0 if isinstance(step, ast.Constant) else False
 
 
-class _DesugarArrayIteration(ast.NodeTransformer):
-    """Rewrite 'for x in array' to an indexed range form -- dace's frontend rejects element iteration over an array."""
-
-    def __init__(self, arr_shapes: Dict[str, List[str]]) -> None:
-        self.arr_shapes = arr_shapes
-        self.ctr = 0
-
-    def visit_For(self, node: ast.For):
-        self.generic_visit(node)
-        if not (
-            isinstance(node.iter, ast.Name) and isinstance(node.target, ast.Name) and self.arr_shapes.get(node.iter.id)
-        ):
-            return node
-        base = node.iter.id
-        extent = self.arr_shapes[base][0]
-        idx = f"__hpcagent_bench_idx{self.ctr}"
-        self.ctr += 1
-        bind = ast.parse(f"{node.target.id} = {base}[{idx}]").body[0]
-        node.iter = ast.parse(f"range({extent})", mode="eval").body
-        node.target = ast.Name(id=idx, ctx=ast.Store())
-        node.body.insert(0, bind)
-        ast.copy_location(node.iter, node)
-        ast.fix_missing_locations(node)
-        return node
-
-
 class _FlipReplacer(ast.NodeTransformer):
     """Replace a materialisable np.flip(base[lo:hi]) with a reversing-copy workspace slice, via the owner."""
 
@@ -1195,7 +1170,7 @@ def loop_target_ranks(fn_ast: ast.FunctionDef) -> Dict[str, int]:
     binds has no rank at all -- and a consumer that reads "unknown" as "array" indexes a scalar.
     Iterating a rank-1 value (a range, an index vector, a tuple of coefficients) yields rank-0
     elements; iteration over an array VALUE is already rewritten to an indexed range by
-    :class:`_DesugarArrayIteration` before this is read.
+    :class:`DesugarArrayIteration` before this is read.
     """
     ranks: Dict[str, int] = {}
     for node in ast.walk(fn_ast):
@@ -1326,35 +1301,9 @@ class _DropRedundantSliceStore(ast.NodeTransformer):
         return target
 
 
-class _DesugarChainedAssign(ast.NodeTransformer):
-    """Split a chained slice assignment (a = b = rhs) into a temp plus one assignment per target -- dace can't codegen it.
-
-    A LITERAL right-hand side is repeated at each target rather than routed through the temp: dace
-    issue 05 makes ``s0 = tmp`` alias ``tmp``'s container, so ``s0 = s1 = ... = 0.0`` -- how a
-    hand-unrolled reduction opens -- collapses every accumulator onto one cell and over-counts by
-    the unroll factor. Repeating the literal is what the reference already means.
-    """
-
-    def __init__(self) -> None:
-        self.ctr = 0
-
-    def visit_Assign(self, node: ast.Assign):
-        self.generic_visit(node)
-        if len(node.targets) <= 1:
-            return node
-        if is_scalar_literal(node.value):
-            stmts = [ast.Assign(targets=[tgt], value=copy.deepcopy(node.value)) for tgt in node.targets]
-            for s in stmts:
-                ast.copy_location(s, node)
-            return stmts
-        tmp = f"__hpcagent_bench_chain{self.ctr}"
-        self.ctr += 1
-        stmts: List[ast.stmt] = [ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=node.value)]
-        for tgt in node.targets:
-            stmts.append(ast.Assign(targets=[tgt], value=ast.Name(id=tmp, ctx=ast.Load())))
-        for s in stmts:
-            ast.copy_location(s, node)
-        return stmts
+def dace_chained_assign_split(seed_ranks: dict[str, int] | None = None) -> SplitChainedAssign:
+    """dace cannot codegen ``a = b = rhs``: split it, a literal repeated (dace issue 05), a temp ``__hpcagent_bench_chain<k>``."""
+    return SplitChainedAssign(lambda ordinal: f"__hpcagent_bench_chain{ordinal}", True, seed_ranks)
 
 
 class _SubstituteNames(ast.NodeTransformer):
@@ -2114,17 +2063,6 @@ class ResolveShapeReads(ast.NodeTransformer):
 
 
 _ALLOC_FUNCS = frozenset({"zeros", "empty", "ones", "full"})
-
-
-def is_scalar_literal(node: ast.AST) -> bool:
-    """True iff the expression is numeric literals only -- provably a scalar, and folded by dace's frontend."""
-    if isinstance(node, ast.Constant):
-        return isinstance(node.value, (bool, int, float, complex))
-    if isinstance(node, ast.UnaryOp):
-        return is_scalar_literal(node.operand)
-    if isinstance(node, ast.BinOp):
-        return is_scalar_literal(node.left) and is_scalar_literal(node.right)
-    return False
 
 
 class BroadcastScalarWhere(ResolveShapeReads):
@@ -3849,13 +3787,17 @@ def render_program(
     fn_ast = DesugarContractionFreeEinsum().visit(fn_ast)
     fn_ast = _DesugarReverseSlice().visit(fn_ast)
     # dace's frontend rejects element iteration over an array value: rewrite to an indexed range form.
-    fn_ast = _DesugarArrayIteration(arr_shapes).visit(fn_ast)
+    fn_ast = DesugarArrayIteration(
+        lambda array: ast.parse(arr_shapes[array][0], mode="eval").body if arr_shapes.get(array) else None,
+        lambda target, ordinal: f"__hpcagent_bench_idx{ordinal}",
+    ).visit(fn_ast)
     # dace rejects a reversed dynamic-length slice (a View edge); snapshot it into a fixed-extent workspace first.
     arr_dtypes = {a.name: _dace_dtype(a.dtype) for a in kir.arrays}
     fn_ast = _MaterializeDynamicFlip(arr_shapes, arr_dtypes, set(symbol_names)).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
-    # dace cannot codegen a chained slice assignment: evaluate rhs into a temp, then assign each target.
-    fn_ast = _DesugarChainedAssign().visit(fn_ast)
+    # dace cannot codegen a chained assignment: one binding per target, the value evaluated once.
+    chain_ranks = {**{a.name: len(a.shape) for a in kir.arrays}, **dict.fromkeys([*scalars, *symbol_names], 0)}
+    fn_ast = dace_chained_assign_split(chain_ranks).visit(fn_ast)
     fn_ast = _DropRedundantSliceStore().visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
     # A broadcasting in-place augassign builds an invalid SDFG; rewrite to an explicit write-back binop.

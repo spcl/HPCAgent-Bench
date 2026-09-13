@@ -40,7 +40,7 @@ from numpyto_c.dace_emit import (
     RewriteBuiltinDtype,
     _AnnotateEmptyDtype,
     _CopyScalarAlias,
-    _DesugarChainedAssign,
+    dace_chained_assign_split,
     _DesugarTernary,
     _DesugarUnreplacedCalls,
     _ResolveZeros,
@@ -1070,7 +1070,7 @@ def test_a_chained_literal_is_repeated_at_each_target_not_routed_through_a_temp(
     """``s0 = s1 = 0.0`` through a temp gives all eleven accumulators ONE container, so the
     reduction over-counts by the unroll factor. The literal is free to repeat."""
     fn = ast.parse("def k():\n    s0 = s1 = s2 = 0.0\n")
-    out = ast.unparse(ast.fix_missing_locations(_DesugarChainedAssign().visit(fn)))
+    out = ast.unparse(ast.fix_missing_locations(dace_chained_assign_split().visit(fn)))
     assert "__hpcagent_bench_chain" not in out
     assert out.splitlines()[1:] == ["    s0 = 0.0", "    s1 = 0.0", "    s2 = 0.0"]
 
@@ -1079,7 +1079,7 @@ def test_a_chained_non_literal_still_goes_through_the_temp() -> None:
     """Repeating a non-literal would repeat the WORK (and any side effect), so the temp stays --
     only the literal case is free."""
     fn = ast.parse("def k():\n    a[:] = b[:] = np.zeros(N)\n")
-    out = ast.unparse(ast.fix_missing_locations(_DesugarChainedAssign().visit(fn)))
+    out = ast.unparse(ast.fix_missing_locations(dace_chained_assign_split().visit(fn)))
     assert out.count("np.zeros(N)") == 1 and "__hpcagent_bench_chain0" in out
 
 
