@@ -10,35 +10,12 @@ import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
-from hpcagent_bench.languages import gpu_backend
+from hpcagent_bench.frameworks.framework import native_column_languages
 
-#: framework -> source language it compiles. Polly IS a flag preset on the same cpp source as
-#: ``llvm``; Pluto is NOT -- it compiles polycc's output, which is C (VLA parameters and the
-#: ``restrict`` keyword, neither of which is C++), so it is the one entry here that does not
-#: name the language the translator emitted for its sibling columns.
-FRAMEWORK_LANG: Dict[str, str] = {
-    "cc": "c",
-    "cc_autopar": "c",
-    "cc_llvm": "c",
-    "cc_llvm_autopar": "c",
-    "cc_oneapi": "c",
-    "cc_nvhpc": "c",
-    "cc_nvhpc_autopar": "c",
-    "llvm": "cpp",
-    "cpp": "cpp",
-    "fortran": "fortran",
-    "fortran_autopar": "fortran",
-    "flang": "fortran",
-    "polly": "cpp",
-    "pluto": "c",
-    # ppcg's CUDA is hipified before it is compiled on a ROCm host, so the language -- and through
-    # compilers.yaml the compiler -- follows the toolchain, not the tool (hpcagent_bench.ppcg_transform).
-    "ppcg": gpu_backend(),
-    # The vendor-pinned pair: unlike bare ``ppcg`` these say which GPU they build for rather than
-    # asking the host, and this entry is what turns that into nvcc/hipcc through compilers.yaml.
-    "ppcg_cuda": "cuda",
-    "ppcg_hip": "hip",
-}
+#: framework -> source language it compiles: each column's ``FRAMEWORK_META`` ``language``. Polly is a flag
+#: preset on the same cpp source as ``llvm``; Pluto compiles polycc's output, which is C (VLA parameters and
+#: ``restrict``, neither of which is C++); ``ppcg`` follows the local GPU toolchain (hpcagent_bench.ppcg_transform).
+FRAMEWORK_LANG: Dict[str, str] = {name: languages[1] for name, languages in native_column_languages().items()}
 
 #: The columns that compile PPCG's output. Their FRAMEWORK_LANG entry doubles as the vendor handed
 #: to :func:`hpcagent_bench.ppcg_transform.transformed_sources`, so the language a column builds and

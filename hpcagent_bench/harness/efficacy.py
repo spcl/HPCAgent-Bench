@@ -24,13 +24,11 @@ Pareto dominance (:func:`dominates`). ``Q`` exists as a single-number proxy for 
 replace that view.
 
 TWO PARAMETERS, AND ONLY ONE OF THEM IS TESTED. ``rho`` is a ratio of geometric means, that is,
-``exp`` of the MEAN of the per-task log deltas, and a percentile bootstrap of that mean is the only
-interval that describes it. The SIGNIFICANCE statement is a different parameter: the
-Hodges-Lehmann pseudo-median of the same deltas, with the distribution-free Walsh interval and the
-signed-rank p that inverts it, from :func:`hpcagent_bench.stats.summary.paired_change`. The
-bootstrap of a mean was measured against a zero-mean population with this repo's own paired-delta
-shape and misses it on 7.2% of samples at n = 39 and 26.7% at n = 4, so it cannot carry a flag;
-the rank interval holds 0.93-0.95 over n = 6..39 and withholds itself entirely below
+``exp`` of the MEAN of the per-task log deltas, and :func:`bootstrap_interval` bounds that mean and
+nothing else. The SIGNIFICANCE statement is a different parameter: the Hodges-Lehmann pseudo-median
+of the same deltas, with the distribution-free Walsh interval and the signed-rank p that inverts
+it, from :func:`hpcagent_bench.stats.summary.paired_change`. The rank interval holds 0.93-0.95 over
+n = 6..39 and withholds itself entirely below
 :data:`hpcagent_bench.stats.summary.MIN_PAIRS_FOR_INTERVAL`, where the verdict reads
 ``underpowered``.
 
@@ -110,6 +108,23 @@ def log_deltas(before: Sequence[float], after: Sequence[float], *, lower_is_bett
     return [math.log(a) - math.log(b) for b, a in pairs]
 
 
+def standard_error(values: Sequence[float]) -> float:
+    """Standard error of the mean of ``values``; exactly 0.0 for fewer than two or no spread."""
+    n = len(values)
+    if n < 2 or min(values) == max(values):
+        return 0.0
+    mean = math.fsum(values) / n
+    return math.sqrt(math.fsum((value - mean) ** 2 for value in values) / (n - 1) / n)
+
+
+def log_to_pct(value: float) -> float:
+    """A log ratio as a percentage change; an end past what ``exp`` can represent reads as unbounded."""
+    try:
+        return 100.0 * (math.exp(value) - 1.0)
+    except OverflowError:
+        return math.inf
+
+
 def bootstrap_interval(
     deltas: Sequence[float],
     *,
@@ -117,34 +132,39 @@ def bootstrap_interval(
     confidence: float = CONFIDENCE,
     seed: int = BOOTSTRAP_SEED,
 ) -> Tuple[float, float]:
-    """Percentile bootstrap interval for ``mean(deltas)``, in LOG space.
+    """Symmetric studentized bootstrap interval for ``mean(deltas)``, in LOG space.
 
-    Bounds the MEAN, and therefore ``rho``, and nothing else. It carries no verdict: measured
-    against a zero-mean population with this repo's paired-delta shape it covers 0.928 at n = 39
-    and 0.698 at n = 4, so "excludes zero" here is not a 5% statement. The significance statement
-    is :attr:`Ratio.change`, whose interval is distribution-free.
+    Bounds the MEAN, and therefore ``rho``, and carries no verdict; the significance statement is
+    :attr:`Ratio.change`. Each resample's mean is studentized by that resample's own standard error
+    and the interval is ``mean +- q * se``, with ``q`` the ``confidence`` quantile of ``|t*|``. On a
+    zero-mean null with the llr40 paired-delta shape a percentile bootstrap of the mean covers 0.73
+    at n = 4 and 0.85 at n = 10; this interval covers 0.94-0.99 over n = 4..40 on that shape and on
+    normal, t3 and log-normal (sigma 0.5) deltas, and 0.88-0.94 on log-normal (sigma 1) deltas, a
+    skew no mean interval in that comparison covers at 95%.
 
     Resampling the per-task ``d_i`` is what makes the interval paired: a task enters or leaves a
-    resample with its before and after together, so the correlation between the two arms on the same
-    kernel is carried rather than assumed away. Reported in log space because that is where the
-    statistic is symmetric -- a 2x gain and a 2x loss are +-ln 2. A single task has no spread to
-    resample and returns a degenerate interval at its own value, which is honest: one paired
-    observation cannot bound anything.
+    resample with its before and after together. A resample with no spread has an unbounded ``|t*|``,
+    so tied tasks widen the interval to infinity instead of narrowing it: at n = 4 on the llr40 shape
+    a fifth of the intervals are unbounded. No spread at all, a single task included, returns a
+    degenerate interval at the mean.
     """
     if not deltas:
         raise ValueError("an interval over no observations is undefined")
-    if len(deltas) == 1:
-        return (deltas[0], deltas[0])
-    rng = random.Random(seed)
     n = len(deltas)
-    means = []
+    mean = math.fsum(deltas) / n
+    scale = standard_error(deltas)
+    if scale == 0.0:
+        return (mean, mean)
+    rng = random.Random(seed)
+    studentized: list[float] = []
     for _ in range(resamples):
-        means.append(math.fsum(deltas[rng.randrange(n)] for _ in range(n)) / n)
-    means.sort()
-    tail = (1.0 - confidence) / 2.0
-    lo = means[max(0, min(len(means) - 1, int(math.floor(tail * len(means)))))]
-    hi = means[max(0, min(len(means) - 1, int(math.ceil((1.0 - tail) * len(means))) - 1))]
-    return (lo, hi)
+        draw = [deltas[rng.randrange(n)] for _ in range(n)]
+        spread = standard_error(draw)
+        gap = abs(math.fsum(draw) / n - mean)
+        studentized.append(gap / spread if spread > 0.0 else (math.inf if gap > 0.0 else 0.0))
+    studentized.sort()
+    q = studentized[min(len(studentized), math.ceil(confidence * len(studentized))) - 1]
+    return (mean - q * scale, mean + q * scale)
 
 
 @dataclass(frozen=True)
@@ -226,7 +246,7 @@ class Ratio:
     @property
     def ci_pct(self) -> Tuple[float, float]:
         """The bootstrap interval AROUND ``rho``, as a percentage change."""
-        return (100.0 * (math.exp(self.ci_low) - 1.0), 100.0 * (math.exp(self.ci_high) - 1.0))
+        return (log_to_pct(self.ci_low), log_to_pct(self.ci_high))
 
     @property
     def hl_pct_change(self) -> float:
@@ -258,10 +278,10 @@ class Efficacy:
     swapping the arms negates it (:func:`Efficacy.swapped` asserts nothing -- the antisymmetry is a
     property of the form, and ``test_swapping_the_arms_negates_q`` is what holds it).
 
-    ``tasks`` is what the pairing KEPT; ``unmatched`` is what it dropped because it was missing on
-    at least one side -- a name in only one arm's score mapping, only one arm's cost mapping, or
-    absent altogether. Reporting only ``tasks`` lets a four-kernel table quietly become a two-kernel
-    one with nothing in the record saying so.
+    ``tasks`` is what the pairing KEPT and ``unmatched`` is what it DROPPED: every task at least one
+    of the four mappings carries and another lacks -- a name in only one arm's score mapping, only
+    one arm's cost mapping, or absent altogether. The survivors are not a fair sample of the roster,
+    so a result that names only them lets a claim about forty tasks rest on two.
     """
 
     score: Ratio
@@ -270,7 +290,7 @@ class Efficacy:
     score_weight: float
     cost_weight: float
     tasks: Tuple[str, ...]
-    unmatched: Tuple[str, ...]
+    unmatched: tuple[str, ...] = ()
 
     @property
     def overall_effect(self) -> float:

@@ -55,8 +55,9 @@ from typing import (
 from numpyto_common import dtypes
 
 from numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SparseArrayDesc, SymbolDesc, stamp_symbol_assumptions
-from numpyto_common.lib_nodes import _const_int, _is_full_slice_elt, _iter_extent_of, _read_axis_keepdims, _slice_axes
+from numpyto_common.lib_nodes import _iter_extent_of, _read_axis_keepdims, _slice_axes
 from numpyto_common.ordered import OrderedSet
+from numpyto_common.subscripts import is_full_slice, is_newaxis
 from numpyto_common.numpy_desugar import (
     _ComplexAccessorToFunc,
     _DecomposeRollSlice,
@@ -64,7 +65,6 @@ from numpyto_common.numpy_desugar import (
     _EighCallHoister,
     _EighLoopRewriter,
     _ElementalUfuncToPrimitive,
-    _is_newaxis,
     _FillDiagonalInline,
     _SpliceErrstate,
     _UfuncOutInline,
@@ -685,9 +685,9 @@ class _AxisReshapeToIndexing(ast.NodeTransformer):
         if not isinstance(operand, ast.Subscript):
             return None
         inner = _slice_axes(operand)
-        if not all(_is_full_slice_elt(e) or _is_newaxis(e) or _const_int(e) is not None for e in inner):
+        if not all(is_full_slice(e) or is_newaxis(e) or _const_int(e) is not None for e in inner):
             return None
-        if sum(1 for e in inner if _const_int(e) is None) != sum(1 for e in entries if not _is_newaxis(e)):
+        if sum(1 for e in inner if _const_int(e) is None) != sum(1 for e in entries if not is_newaxis(e)):
             return None  # the inner leaves source axes unspelled, so the positions do not line up
         merged: List[ast.expr] = []
         pos = 0
@@ -695,14 +695,14 @@ class _AxisReshapeToIndexing(ast.NodeTransformer):
             if _const_int(axis) is not None:
                 merged.append(axis)
                 continue
-            while _is_newaxis(entries[pos]):
+            while is_newaxis(entries[pos]):
                 merged.append(entries[pos])
                 pos += 1
             outer = entries[pos]
             pos += 1
-            if _is_full_slice_elt(outer):
+            if is_full_slice(outer):
                 merged.append(axis)
-            elif not _is_newaxis(axis):
+            elif not is_newaxis(axis):
                 merged.append(outer)  # ``x[None][0]`` drops the inserted axis instead
         merged.extend(entries[pos:])
         return merged
@@ -866,32 +866,6 @@ def _declared_ranks(shapes_raw: Dict[str, str]) -> Dict[str, int]:
             continue
         ranks[name] = len(parsed.elts) if isinstance(parsed, (ast.Tuple, ast.List)) else 1
     return ranks
-
-
-def _is_scalar_leaf(node: ast.expr) -> bool:
-    """True when ``node`` is a scalar leaf :class:`_MaterializeArrayLiterals`
-    can lower to a single element store."""
-    if isinstance(node, ast.Constant):
-        return isinstance(node.value, (int, float)) and not isinstance(node.value, bool)
-    if isinstance(node, ast.UnaryOp):
-        return _is_scalar_leaf(node.operand)
-    if isinstance(node, ast.BinOp):
-        return _is_scalar_leaf(node.left) and _is_scalar_leaf(node.right)
-    # ``int(round(fr * size))`` / ``float(x)`` -- a scalar-returning builtin cast.
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _SCALAR_CASTS:
-        return all(_is_scalar_leaf(a) for a in node.args)
-    # A bare Name is assumed scalar (it could bind a whole row -- stacked 1-D
-    # arrays -- and mis-shape here, but such kernels already hard-failed before
-    # this pass existed, so a mis-shape now surfaces as a numpy-oracle FAIL,
-    # not silent corruption).
-    if isinstance(node, ast.Name):
-        return True
-    # ``pv[0]`` / ``a[i, j]`` -- an integer-indexed element is a scalar; a Slice is not.
-    if isinstance(node, ast.Subscript):
-        sl = node.slice
-        elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
-        return not any(isinstance(e, ast.Slice) for e in elts)
-    return False
 
 
 def _has_loop_control(body: List[ast.stmt]) -> bool:
@@ -2332,10 +2306,6 @@ def _parse_array_literal(call: ast.Call):
     if dtype is None:
         dtype = "int64" if all_int else "float64"
     return shape, dtype, flat
-
-
-#: Scalar-returning builtin casts accepted as a scalar leaf by :func:`_is_scalar_leaf`.
-_SCALAR_CASTS = ("int", "float", "round", "abs")
 
 
 def _materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args: List[str]) -> None:
@@ -3810,7 +3780,7 @@ def _apply_subscript_axes(dims: List[str], sub_slice: ast.AST) -> List[str]:
     if ell:
         # Counted over the axes that CONSUME a source dimension: a newaxis consumes none, so
         # including one here makes the ellipsis stand for one axis too few.
-        consuming = sum(1 for ax in axes if not _is_newaxis(ax)) - 1
+        consuming = sum(1 for ax in axes if not is_newaxis(ax)) - 1
         axes = axes[: ell[0]] + [ast.Slice()] * max(0, len(dims) - consuming) + axes[ell[0] + 1 :]
     kept: List[str] = []
     source = 0
@@ -3819,7 +3789,7 @@ def _apply_subscript_axes(dims: List[str], sub_slice: ast.AST) -> List[str]:
         # Walked positionally against ``dims`` it consumed one instead, so ``x1[:, None, :]`` on
         # an (batch, features) array came back rank-1 ``(batch,)`` -- a helper parameter then
         # declared one axis for an argument carrying three.
-        if _is_newaxis(ax):
+        if is_newaxis(ax):
             kept.append("1")
             continue
         if source >= len(dims):

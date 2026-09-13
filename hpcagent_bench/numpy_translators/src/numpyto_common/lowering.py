@@ -42,7 +42,8 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Set
 from numpyto_common import dtypes
 from numpyto_common.ir import _COMPLEX_FOR_FLOAT, KernelIR, SymbolDesc, stamp_symbol_assumptions
 from numpyto_common.ordered import OrderedSet
-from numpyto_common.numpy_desugar import _np_linalg_attr
+from numpyto_common.subscripts import has_slice_subscript, is_ellipsis, is_full_slice
+from numpyto_common.numpy_desugar import np_submodule_attr
 from numpyto_common.lib_nodes import (
     ARRAY_METHOD_SHAPE_OPS,
     ArrayMethodRewriter,
@@ -838,10 +839,6 @@ class _ScatterAtRewriter(ast.NodeTransformer):
             "np.<op>.at value must be an array name, its negation, a scalar constant, or a resolvable array expression"
         )
 
-    @staticmethod
-    def _is_full_slice(e: ast.expr) -> bool:
-        return isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
-
     def _validate_target(self, target: ast.expr, op: str) -> None:
         """A target is a bare Name, or a slice VIEW of one -- ``base[:, ii]``
         (vexx_k's ``deexx[:, ii]``), numpy's own scatter-through-a-view
@@ -855,8 +852,8 @@ class _ScatterAtRewriter(ast.NodeTransformer):
             return
         if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
             lead = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
-            if sum(1 for e in lead if self._is_full_slice(e)) == 1 and all(
-                self._is_full_slice(e) or not isinstance(e, ast.Slice) for e in lead
+            if sum(1 for e in lead if is_full_slice(e)) == 1 and all(
+                is_full_slice(e) or not isinstance(e, ast.Slice) for e in lead
             ):
                 return
         raise NotImplementedError(
@@ -872,7 +869,7 @@ class _ScatterAtRewriter(ast.NodeTransformer):
         if isinstance(target, ast.Name):
             return ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()), slice=copy.deepcopy(idx_expr), ctx=ctx)
         lead = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
-        new_lead = [copy.deepcopy(idx_expr) if self._is_full_slice(e) else copy.deepcopy(e) for e in lead]
+        new_lead = [copy.deepcopy(idx_expr) if is_full_slice(e) else copy.deepcopy(e) for e in lead]
         slot = new_lead[0] if len(new_lead) == 1 else ast.Tuple(elts=new_lead, ctx=ast.Load())
         return ast.Subscript(value=ast.Name(id=target.value.id, ctx=ast.Load()), slice=slot, ctx=ctx)
 
@@ -1452,6 +1449,21 @@ class _TransposeRewriter(ast.NodeTransformer):
             ),
             node,
         )
+
+
+def negative_literal_offset(node: ast.AST) -> int | None:
+    """``K`` for a negative integer literal ``-K`` -- a signed ``Constant`` or ``UnaryOp(USub, Constant)``, the
+    form numpy source parses to -- else None. Numpy counts such an index from the end of its axis."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) and node.value < 0:
+        return -node.value
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, ast.USub)
+        and isinstance(node.operand, ast.Constant)
+        and isinstance(node.operand.value, int)
+    ):
+        return node.operand.value
+    return None
 
 
 def _const_int_index(node: ast.AST) -> Optional[int]:
@@ -2481,7 +2493,7 @@ def _harvest_local_shapes(
         # solve(A, b)`` like the SQUARE A rather than like b. A 1-D b then has
         # its reads padded to a phantom second dim (``x[i]`` -> ``x[i, :]``).
         # Register what the solve / inv / cholesky expanders actually write.
-        _lin_op = _np_linalg_attr(rhs)
+        _lin_op = np_submodule_attr(rhs, "linalg")
         if _lin_op in ("solve", "inv", "cholesky"):
             # ``solve`` returns x with b's shape; ``inv`` / ``cholesky`` are
             # shape-preserving in their single operand.
@@ -3176,14 +3188,6 @@ def _shape_from_ast(node, shape_table=None) -> Tuple[str, ...]:
     return (ast.unparse(node),)
 
 
-#: When a slice's ``start`` or ``stop`` is omitted in numpy
-#: (``A[:K]`` / ``A[K:]`` / ``A[:]``), we substitute the array's
-#: declared length symbol. These are the per-axis defaults applied
-#: by :class:`SliceFusion` when it can resolve the array shape from
-#: the IR.
-_DEFAULT_SLICE_START = "0"
-
-
 def _slice_dims(node: ast.Subscript) -> List[ast.AST]:
     """Return per-axis slice entries (either ``Slice`` or non-slice index)."""
     sl = node.slice
@@ -3197,16 +3201,6 @@ def _has_any_slice(node: ast.AST) -> bool:
     if not isinstance(node, ast.Subscript):
         return False
     return any(isinstance(d, ast.Slice) for d in _slice_dims(node))
-
-
-def _is_ellipsis(node: ast.AST) -> bool:
-    """``...`` in a subscript, which parses as an ``Ellipsis`` constant."""
-    return isinstance(node, ast.Constant) and node.value is Ellipsis
-
-
-def _is_full_slice(node: ast.AST) -> bool:
-    """``True`` for a bare ``:`` slice (no lower / upper / step)."""
-    return isinstance(node, ast.Slice) and node.lower is None and node.upper is None and node.step is None
 
 
 def _advanced_runs(dims: List[ast.AST]) -> List[List[int]]:
@@ -3278,7 +3272,7 @@ class _CollapseChainedSubscripts(ast.NodeTransformer):
         new_idx: List[ast.AST] = []
         result_axes: List[int] = []
         for ix in inner_idx:
-            if _is_full_slice(ix):
+            if is_full_slice(ix):
                 result_axes.append(len(new_idx))
                 new_idx.append(ix)
             elif isinstance(ix, ast.Slice):
@@ -3432,14 +3426,14 @@ class _ChainedSubscriptFlattener(ast.NodeTransformer):
         does not compose this way.
         """
         outer_elts = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
-        if any(_is_newaxis(e) or _is_ellipsis(e) for e in inner_elts + outer_elts):
+        if any(_is_newaxis(e) or is_ellipsis(e) for e in inner_elts + outer_elts):
             return node  # a newaxis / Ellipsis shifts which source axis a position names
         combined = list(inner_elts)
         slice_positions = [i for i, e in enumerate(combined) if isinstance(e, ast.Slice)]
         if len(outer_elts) > len(slice_positions):
             return node
         for outer, position in zip(outer_elts, slice_positions):
-            if _is_full_slice(outer):
+            if is_full_slice(outer):
                 continue  # selects the whole result axis, so the inner slice stands unchanged
             inner_slice = combined[position]
             if any(isinstance(n, ast.Name) and self.shape_table.get(n.id) for n in ast.walk(outer)):
@@ -3599,9 +3593,6 @@ def _fold_subarray_aliases(tree: ast.AST, array_shapes: Dict[str, List[str]]) ->
     once, and EVERY use is a further subscript (a bare whole-array use would need the
     row materialised, so it is left alone)."""
 
-    def _is_full_slice(e):
-        return isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
-
     aliases: Dict[str, tuple] = {}
     for stmt in ast.walk(tree):
         if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
@@ -3613,7 +3604,7 @@ def _fold_subarray_aliases(tree: ast.AST, array_shapes: Dict[str, List[str]]) ->
         if not shape:
             continue
         elts = list(val.slice.elts) if isinstance(val.slice, ast.Tuple) else [val.slice]
-        while elts and _is_full_slice(elts[-1]):
+        while elts and is_full_slice(elts[-1]):
             elts.pop()  # trailing ``:`` axes are exactly what ``local[k]`` will fill
         # remaining index axes must be plain scalars (no slice / newaxis) and leave at
         # least one trailing source axis (a genuine sub-array, not a full element index).
@@ -4038,10 +4029,6 @@ class _FlattenChainedSubscripts(ast.NodeTransformer):
         self.shapes = shapes
 
     @staticmethod
-    def _is_full_slice(e) -> bool:
-        return isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
-
-    @staticmethod
     def _is_special(e) -> bool:  # np.newaxis (``None``) / Ellipsis -- rank-shifting
         return isinstance(e, ast.Constant) and (e.value is None or e.value is Ellipsis)
 
@@ -4058,7 +4045,7 @@ class _FlattenChainedSubscripts(ast.NodeTransformer):
         if len(inner_idx) > rank or any(self._is_special(e) for e in inner_idx):
             return node
         inner_idx = inner_idx + [ast.Slice() for _ in range(rank - len(inner_idx))]  # pad trailing ``:``
-        if any(isinstance(e, ast.Slice) and not self._is_full_slice(e) for e in inner_idx):
+        if any(isinstance(e, ast.Slice) and not is_full_slice(e) for e in inner_idx):
             return node
         outer_idx = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
         n_kept = sum(1 for e in inner_idx if isinstance(e, ast.Slice))
@@ -4294,15 +4281,9 @@ class SliceFusion(ast.NodeTransformer):
         """
         if bound is None:
             return default() if callable(default) else default
-        if isinstance(bound, ast.Constant) and isinstance(bound.value, int) and bound.value < 0:
-            return _binop(self._axis_length(array_name, axis), ast.Sub(), _const(-bound.value))
-        if (
-            isinstance(bound, ast.UnaryOp)
-            and isinstance(bound.op, ast.USub)
-            and isinstance(bound.operand, ast.Constant)
-            and isinstance(bound.operand.value, int)
-        ):
-            return _binop(self._axis_length(array_name, axis), ast.Sub(), _const(bound.operand.value))
+        k = negative_literal_offset(bound)
+        if k is not None:
+            return _binop(self._axis_length(array_name, axis), ast.Sub(), _const(k))
         return bound
 
     def _scalar_slice(self, lhs_dims, iter_vars, ranges, name) -> ast.AST:
@@ -4334,15 +4315,9 @@ class SliceFusion(ast.NodeTransformer):
         wrap-around, so leaving it literal indexes ``arr[... + (-1)]``
         out of bounds (the deriche heap corruption). Other indices pass
         through unchanged so ``N - 1`` etc. survive."""
-        if isinstance(idx, ast.Constant) and isinstance(idx.value, int) and idx.value < 0:
-            return _binop(self._axis_length(name, axis), ast.Sub(), _const(-idx.value))
-        if (
-            isinstance(idx, ast.UnaryOp)
-            and isinstance(idx.op, ast.USub)
-            and isinstance(idx.operand, ast.Constant)
-            and isinstance(idx.operand.value, int)
-        ):
-            return _binop(self._axis_length(name, axis), ast.Sub(), _const(idx.operand.value))
+        k = negative_literal_offset(idx)
+        if k is not None:
+            return _binop(self._axis_length(name, axis), ast.Sub(), _const(k))
         return idx
 
 
@@ -4597,7 +4572,7 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                             continue
                         src = src_axis_of[k]
                         axis_len = sh[src] if src < len(sh) else None
-                        if _is_full_slice(elts[k]) and str(axis_len).strip() == "1":
+                        if is_full_slice(elts[k]) and str(axis_len).strip() == "1":
                             elts[k] = _const(0)
                         else:
                             elts[k] = _shift_index(copy.deepcopy(g), offs[k])
@@ -5022,16 +4997,7 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         semantics. Mirrors :meth:`SliceFusion._resolve_scalar_index` but
         reads the operand shape from ``self.array_shapes`` (RHS side)."""
         shape = self.array_shapes.get(array_name) if array_name else None
-        val = None
-        if isinstance(idx, ast.Constant) and isinstance(idx.value, int) and idx.value < 0:
-            val = -idx.value
-        elif (
-            isinstance(idx, ast.UnaryOp)
-            and isinstance(idx.op, ast.USub)
-            and isinstance(idx.operand, ast.Constant)
-            and isinstance(idx.operand.value, int)
-        ):
-            val = idx.operand.value
+        val = negative_literal_offset(idx)
         if val is not None and shape and axis < len(shape):
             axis_len = (
                 _const(int(shape[axis]))
@@ -5055,22 +5021,10 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         if bound is None:
             return default
         shape = self.array_shapes.get(array_name) if array_name else None
-        if isinstance(bound, ast.Constant) and isinstance(bound.value, int) and bound.value < 0:
-            if shape and axis < len(shape):
-                axis_len = (
-                    _const(int(shape[axis])) if shape[axis].isdigit() else ast.Name(id=shape[axis], ctx=ast.Load())
-                )
-                return _binop(axis_len, ast.Sub(), _const(-bound.value))
-        if (
-            isinstance(bound, ast.UnaryOp)
-            and isinstance(bound.op, ast.USub)
-            and isinstance(bound.operand, ast.Constant)
-            and isinstance(bound.operand.value, int)
-            and shape
-            and axis < len(shape)
-        ):
+        k = negative_literal_offset(bound)
+        if k is not None and shape and axis < len(shape):
             axis_len = _const(int(shape[axis])) if shape[axis].isdigit() else ast.Name(id=shape[axis], ctx=ast.Load())
-            return _binop(axis_len, ast.Sub(), _const(bound.operand.value))
+            return _binop(axis_len, ast.Sub(), _const(k))
         return bound
 
 
@@ -5665,7 +5619,7 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
             return node
         if is_scalar_helper_call(node.value, self.scalar_helpers):
             return node
-        if not (self._has_slice_subscript(node.value) or self._is_array_binop(node.value)):
+        if not (has_slice_subscript(node.value) or self._is_array_binop(node.value)):
             return node
         ext = _iter_extent_of(node.value, self.shapes)
         if ext is None:
@@ -5732,17 +5686,6 @@ class _LiftFreshArrayFromSlices(ast.NodeTransformer):
         if isinstance(node, ast.Name):
             return node.id
         return ast.unparse(node)
-
-    @staticmethod
-    def _has_slice_subscript(expr):
-        for sub in ast.walk(expr):
-            if isinstance(sub, ast.Subscript):
-                sl = sub.slice
-                if isinstance(sl, ast.Slice):
-                    return True
-                if isinstance(sl, ast.Tuple) and any(isinstance(e, ast.Slice) for e in sl.elts):
-                    return True
-        return False
 
     def _is_array_binop(self, expr):
         """``True`` for a BinOp / UnaryOp whose tree contains at least
@@ -8156,17 +8099,14 @@ class _SubscriptifyNames(ast.NodeTransformer):
             sl0 = node.slice
             elts0 = list(sl0.elts) if isinstance(sl0, ast.Tuple) else [sl0]
 
-            def _is_full(e):
-                return isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
-
             if (
                 elts0
-                and all(_is_full(e) or _is_newaxis(e) for e in elts0)
-                and any(_is_full(e) for e in elts0)
+                and all(is_full_slice(e) or _is_newaxis(e) for e in elts0)
+                and any(is_full_slice(e) for e in elts0)
                 and len(elts0) <= len(self.iters)
             ):
                 offset = len(self.iters) - len(elts0)
-                sub_iters = [self.iters[offset + k] for k, e in enumerate(elts0) if _is_full(e)]
+                sub_iters = [self.iters[offset + k] for k, e in enumerate(elts0) if is_full_slice(e)]
                 return _SubscriptifyNames(self.shape_table, sub_iters).visit(copy.deepcopy(node.value))
         if isinstance(node.value, ast.Name) and isinstance(node.ctx, ast.Load):
             sl = node.slice

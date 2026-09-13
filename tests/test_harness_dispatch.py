@@ -438,7 +438,7 @@ def swapped_prompt(fragment: str, cli: bool) -> str:
     stop = base.index("\n\n", start) + 1
     head = base[:start]
     if cli:
-        head = re.sub(r"^- `([a-z_]+)` --", r"- `optarena-tool \1 '<json>'` --", head, flags=re.MULTILINE)
+        head = head.replace("{{TOOLS}}", "{{TOOLS_CLI}}")
     return head + (AGENT / fragment).read_text(encoding="utf-8") + base[stop:]
 
 
@@ -465,10 +465,15 @@ def test_a_harness_prompt_names_no_claude_file_tool(tmp_path, monkeypatch, varia
     assert not offenders, offenders
 
 
-def test_the_cli_prompt_names_every_tool_bullet_as_its_shell_command(tmp_path, monkeypatch) -> None:
+def test_the_cli_prompt_names_every_tool_bullet_as_its_shell_command(
+    driver: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     text = (materialize_prompts(tmp_path, monkeypatch) / "prompt-cli.md").read_text(encoding="utf-8")
+    assert "{{TOOLS_CLI}}" in text and "{{TOOLS}}" not in text
     assert not re.findall(r"^- `[a-z_]+` --", text, re.MULTILINE)
-    assert "- `optarena-tool score '<json>'` --" in text
+    bullets = driver.tool_registry().prompt_tool_list(cli=True)
+    assert not re.findall(r"^- `[a-z_]+` --", bullets, re.MULTILINE)
+    assert "- `optarena-tool score '<json>'` --" in bullets
 
 
 def test_a_prompt_without_the_file_tools_paragraph_writes_no_variant(tmp_path, monkeypatch) -> None:

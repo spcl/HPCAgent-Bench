@@ -35,6 +35,7 @@ def frame(rows):
         "native_ns": 0.0,
         "source_path": "x",
         "suspect": 0,
+        "packet": "",
     }
     out = pd.DataFrame(rows)
     for column, value in defaults.items():

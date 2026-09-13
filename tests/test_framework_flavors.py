@@ -7,9 +7,24 @@ the native backend split into its base languages, each language's autopar varian
 and polly, vs Pluto as its own toolchain, and APPy fully removed.
 """
 
+import subprocess
+import sys
+import types
+
+import pytest
+
+from hpcagent_bench import frameworks
 from hpcagent_bench.frameworks import NativeFramework, PlutoFramework
-from hpcagent_bench.languages import gpu_backend
-from hpcagent_bench.frameworks.framework import FRAMEWORK_META, framework_flavors, generate_framework
+from hpcagent_bench.frameworks import framework as framework_module
+from hpcagent_bench.frameworks.framework import (
+    FRAMEWORK_META,
+    Framework,
+    framework_bases,
+    framework_class,
+    framework_flavors,
+    generate_framework,
+)
+from hpcagent_bench.languages import LANG_TARGET, gpu_backend
 
 #: The C family, one flavor per (vendor, autopar) pair. Seven, not eight: icx has no
 #: auto-parallelizer (icc-classic's ``-parallel`` is accepted with warning #10430 and outlines
@@ -70,7 +85,7 @@ def test_native_flavors_carry_language_and_compiler() -> None:
         "fortran_autopar": ("fortran", "gfortran"),
         "flang": ("fortran", "flang"),
         "polly": ("cpp", "clang"),
-        "pluto": ("cpp", "clang"),
+        "pluto": ("c", "clang"),
     }
     for name, (lang, comp) in expect.items():
         assert FRAMEWORK_META[name]["language"] == lang
@@ -112,3 +127,92 @@ def test_appy_removed() -> None:
     import hpcagent_bench.frameworks as infra
 
     assert "APPyFramework" not in vars(infra)
+
+
+#: The adapter class every base resolves to, by name: ``framework_class`` finds it through the
+#: ``<base>_framework.py`` convention, and a lookup change must not hand a column another adapter.
+BASE_CLASS_NAMES = {
+    "numpy": "Framework",
+    "numba": "NumbaFramework",
+    "cupy": "CupyFramework",
+    "jax": "JaxFramework",
+    "pythran": "PythranFramework",
+    "dace": "DaceFramework",
+    "native": "NativeFramework",
+    "pluto": "PlutoFramework",
+    "triton": "TritonFramework",
+    "tvm": "TVMFramework",
+}
+
+
+def test_every_framework_resolves_to_its_adapter_class_and_package_export() -> None:
+    assert set(framework_bases()) == set(BASE_CLASS_NAMES)
+    for name, meta in FRAMEWORK_META.items():
+        cls = framework_class(name)
+        assert issubclass(cls, Framework) and cls.__name__ == BASE_CLASS_NAMES[meta["base"]], name
+        assert getattr(frameworks, cls.__name__) is cls
+        assert cls.__name__ in frameworks.__all__
+
+
+def test_a_misspelled_class_name_is_not_exported() -> None:
+    """The convention matches case-insensitively to FIND a class, never to invent a second public name."""
+    assert not hasattr(frameworks, "TvmFramework")
+
+
+def test_a_base_without_its_module_names_the_expected_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(FRAMEWORK_META, "probe_missing", {**FRAMEWORK_META["numba"], "base": "nosuchbase"})
+    with pytest.raises(ModuleNotFoundError, match="hpcagent_bench/frameworks/nosuchbase_framework.py"):
+        framework_class("probe_missing")
+
+
+def test_a_backend_missing_its_own_dependency_keeps_that_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the adapter module's own absence is reworded; a missing optional dependency inside it is not."""
+
+    def absent_dependency(name: str) -> types.ModuleType:
+        raise ModuleNotFoundError("No module named 'cupy'", name="cupy")
+
+    monkeypatch.setattr(framework_module.importlib, "import_module", absent_dependency)
+    with pytest.raises(ModuleNotFoundError) as excinfo:
+        framework_class("cupy")
+    assert excinfo.value.name == "cupy"
+
+
+def test_a_module_without_the_conventional_class_names_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    module_name = "hpcagent_bench.frameworks.probeonly_framework"
+    monkeypatch.setitem(sys.modules, module_name, types.ModuleType(module_name))
+    monkeypatch.setitem(FRAMEWORK_META, "probe_empty", {**FRAMEWORK_META["numba"], "base": "probeonly"})
+    with pytest.raises(ImportError, match="probeonly_framework.py defines no Framework subclass"):
+        framework_class("probe_empty")
+
+
+def test_the_native_tables_are_projections_of_the_registry() -> None:
+    from hpcagent_bench.autogen import NATIVE_FRAMEWORKS
+    from hpcagent_bench.benchmarks.cpp_runtime import FRAMEWORK_LANG
+
+    columns = [name for name, meta in FRAMEWORK_META.items() if meta["base"] in ("native", "pluto")]
+    assert list(NATIVE_FRAMEWORKS) == columns and list(FRAMEWORK_LANG) == columns
+    for name in columns:
+        meta = FRAMEWORK_META[name]
+        assert FRAMEWORK_LANG[name] == meta.get("language")
+        assert NATIVE_FRAMEWORKS[name] == meta.get("emit_language", meta.get("language"))
+
+
+def test_the_polyhedral_columns_emit_c_and_compile_what_their_tool_writes() -> None:
+    """polycc and ppcg both read the C target's ``_pluto_input.c``; polycc writes C and ppcg writes CUDA."""
+    from hpcagent_bench.autogen import NATIVE_FRAMEWORKS
+    from hpcagent_bench.benchmarks.cpp_runtime import FRAMEWORK_LANG
+
+    for name in ("pluto", "ppcg", "ppcg_cuda", "ppcg_hip"):
+        assert NATIVE_FRAMEWORKS[name] == "c" and LANG_TARGET[NATIVE_FRAMEWORKS[name]] == "c"
+    assert FRAMEWORK_LANG["pluto"] == "c"
+    assert (FRAMEWORK_LANG["ppcg_cuda"], FRAMEWORK_LANG["ppcg_hip"]) == ("cuda", "hip")
+
+
+@pytest.mark.parametrize(
+    "module", ["hpcagent_bench.benchmarks.cpp_runtime", "hpcagent_bench.autogen", "hpcagent_bench.frameworks"]
+)
+def test_each_native_table_module_imports_first_in_a_fresh_interpreter(module: str) -> None:
+    """A registry check that read ``cpp_runtime.FRAMEWORK_LANG`` while framework.py loaded made
+    ``import hpcagent_bench.benchmarks.cpp_runtime`` a circular ImportError when it came first."""
+    proc = subprocess.run([sys.executable, "-c", f"import {module}"], capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr[-2000:]

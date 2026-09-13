@@ -28,7 +28,6 @@ import pathlib
 import subprocess
 import tempfile
 import types
-
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -37,7 +36,7 @@ import pytest
 
 from hpcagent_bench import cpf_bridge, cpf_cache, languages, paths
 from hpcagent_bench.harness.native_call import _call_native
-from hpcagent_bench.spec import BenchSpec
+from hpcagent_bench.spec import BenchSpec, ConfigKnob
 from hpcagent_bench.support.bindings.contract import binding_from_spec
 
 if TYPE_CHECKING:
@@ -93,7 +92,7 @@ def build_dropin(source: pathlib.Path, work: pathlib.Path) -> str:
         "-o",
         str(library),
     ]
-    done = subprocess.run(cmd, cwd=work, capture_output=True, text=True)
+    done = subprocess.run(cmd, cwd=work, capture_output=True, text=True, check=False)
     assert done.returncode == 0, f"gcc rejected the drop-in {source.name}:\n{done.stderr}"
     assert not done.stderr.strip(), f"{source.name} built with warnings:\n{done.stderr}"
     return str(library)
@@ -112,7 +111,7 @@ def build(source: pathlib.Path, language: str) -> ctypes.CDLL:
             "-o",
             str(library),
         ]
-        done = subprocess.run(cmd, cwd=work, capture_output=True, text=True)
+        done = subprocess.run(cmd, cwd=work, capture_output=True, text=True, check=False)
         assert done.returncode == 0, f"{DRIVERS[language]} rejected {source.name}:\n{done.stderr}"
         assert not done.stderr.strip(), f"{source.name} built with warnings:\n{done.stderr}"
         return ctypes.CDLL(str(library))
@@ -398,15 +397,15 @@ def returning_spec() -> BenchSpec:
     )
 
 
-def canonical_program(entry: str, work: pathlib.Path) -> "SDFG":
-    """``entry`` from :data:`RETURNING_PROGRAM_SOURCE`, parsed and canonicalized for the cpu.
+def canonical_program(source: str, entry: str, work: pathlib.Path) -> "SDFG":
+    """``entry`` from ``source``, parsed and canonicalized for the cpu.
 
     Imported from a real file: the dace frontend reads a program's source back through ``inspect``,
     which an ``exec``-ed module cannot answer.
     """
-    path = work / "returning_dace.py"
-    path.write_text(RETURNING_PROGRAM_SOURCE)
-    loader = importlib.util.spec_from_file_location("returning_dace", path)
+    path = work / f"{entry}_dace.py"
+    path.write_text(source)
+    loader = importlib.util.spec_from_file_location(f"{entry}_dace", path)
     assert loader is not None and loader.loader is not None
     module = importlib.util.module_from_spec(loader)
     loader.loader.exec_module(module)
@@ -427,7 +426,13 @@ def test_a_dropin_of_a_kernel_that_returns_its_output_takes_the_abi_and_runs(tmp
     native = binding_from_spec(spec)
     abi = [a.name for a in native.args] + ["workspace", "workspace_size"]
     form = cpf_bridge.render_canonical(
-        spec, spec.short_name, canonical_program("returns_output", tmp_path), "c", "fp64", "cpu", True
+        spec,
+        spec.short_name,
+        canonical_program(RETURNING_PROGRAM_SOURCE, "returns_output", tmp_path),
+        "c",
+        "fp64",
+        "cpu",
+        True,
     )
     assert form.entry == native.symbol
     assert declared_parameters(form.code, form.entry) == abi
@@ -448,5 +453,108 @@ def test_a_dropin_refuses_a_returned_value_no_argument_holds(tmp_path: pathlib.P
     spec = returning_spec()
     with pytest.raises(ValueError, match="__return"):
         cpf_bridge.render_canonical(
-            spec, spec.short_name, canonical_program("returns_computed", tmp_path), "c", "fp64", "cpu", True
+            spec,
+            spec.short_name,
+            canonical_program(RETURNING_PROGRAM_SOURCE, "returns_computed", tmp_path),
+            "c",
+            "fp64",
+            "cpu",
+            True,
         )
+
+
+#: Impls that take a pinned config knob as a runtime scalar. Canonicalization keeps the first one's
+#: knob a scalar (warpx_boris_push's ``dt``) and promotes the second's, which guards a branch, to a
+#: symbol (minife's ``tolerance``).
+PINNED_PROGRAM_SOURCE = """
+import dace as dc
+import numpy as np
+
+N = dc.symbol("N", dtype=dc.int64, positive=True)
+
+
+@dc.program
+def scales_by_knob(a: dc.float64[N], b: dc.float64[N], knob: dc.float64):
+    b[:] = a * knob
+
+
+@dc.program
+def halves_until_knob(a: dc.float64[N], b: dc.float64[N], knob: dc.float64):
+    b[:] = a
+    for _ in range(64):
+        if np.max(b) <= knob:
+            break
+        b[:] = b * 0.5
+"""
+
+#: The manifest value of the pinned ``knob``.
+PINNED_KNOB = 0.25
+
+
+def scales_by_knob_numpy(a: np.ndarray, b: np.ndarray, knob: float) -> None:
+    """The numpy reference ``scales_by_knob`` was written from."""
+    b[:] = a * knob
+
+
+def halves_until_knob_numpy(a: np.ndarray, b: np.ndarray, knob: float) -> None:
+    """The numpy reference ``halves_until_knob`` was written from; a wrong knob changes the halving count."""
+    b[:] = a
+    for _ in range(64):
+        if np.max(b) <= knob:
+            break
+        b[:] = b * 0.5
+
+
+def pinned_spec(entry: str) -> BenchSpec:
+    """``(a, b)`` over ``N`` with ``knob`` pinned, plus a pinned ``seed`` the entry never names, as in minife."""
+    return BenchSpec(
+        short_name="pinned",
+        name="pinned",
+        relative_path="stub/pinned",
+        module_name="pinned",
+        func_name=entry,
+        parameters={"S": {"N": EXTENT}},
+        input_args=("N", "knob"),
+        array_args=("a", "b"),
+        output_args=("b",),
+        config={
+            "knob": ConfigKnob(value=PINNED_KNOB, selects="tolerance"),
+            "seed": ConfigKnob(value=0, selects="seed"),
+        },
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("entry", "reference", "canonical_kind"),
+    [
+        pytest.param("scales_by_knob", scales_by_knob_numpy, "scalar", id="scalar"),
+        pytest.param("halves_until_knob", halves_until_knob_numpy, "symbol", id="symbol"),
+    ],
+)
+def test_a_dropin_binds_a_pinned_config_knob_and_takes_the_abi(
+    entry: str,
+    reference: Callable[[np.ndarray, np.ndarray, float], None],
+    canonical_kind: str,
+    tmp_path: pathlib.Path,
+) -> None:
+    """A pinned knob is a compile-time constant of the native ABI, which has no slot for it, while the
+    dace program still takes it. Kept as an argument the drop-in cannot be rendered in the ABI order;
+    the rendered signature must be the ABI exactly and compute with the manifest value."""
+    spec = pinned_spec(entry)
+    native = binding_from_spec(spec)
+    abi = [a.name for a in native.args] + ["workspace", "workspace_size"]
+    canonical = canonical_program(PINNED_PROGRAM_SOURCE, entry, tmp_path)
+    assert ("scalar" if "knob" in canonical.arrays else "symbol") == canonical_kind, "the fixture lost its case"
+    form = cpf_bridge.render_canonical(spec, spec.short_name, canonical, "c", "fp64", "cpu", True)
+    assert declared_parameters(form.code, form.entry) == abi
+    assert [arg["name"] for arg in json.loads(form.binding)["args"]] == abi
+
+    source = tmp_path / form.name
+    source.write_text(form.code)
+    library = build_dropin(source, tmp_path)
+    a = np.random.default_rng(0).random(EXTENT)
+    expected = np.zeros(EXTENT)
+    reference(a, expected, PINNED_KNOB)
+    outs, _, _ = _call_native(library, native, {"a": a, "b": np.zeros(EXTENT), "N": EXTENT}, "c", workspace_bytes="8*N")
+    np.testing.assert_allclose(outs["b"], expected, rtol=1e-12, atol=0.0)

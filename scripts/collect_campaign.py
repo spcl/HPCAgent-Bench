@@ -34,6 +34,7 @@ import re
 import statistics
 import sys
 
+from hpcagent_bench import packets
 from hpcagent_bench.experiments import arm_of
 from hpcagent_bench.harness import recording
 from hpcagent_bench.stats import population, summary
@@ -97,7 +98,7 @@ def collect(run_dirs: list[str], out_dir: pathlib.Path) -> dict:
     # the qwen arms 1.88x against oss120b's 1.15x. ACROSS episodes the max is kept: how many agents
     # an arm runs on a kernel is a property of the arm.
     per_arm = collections.defaultdict(
-        lambda: {"runs": 0, "best_by_bench": {}, "benchmarks": set(), "suspect": 0, "subs": 0}
+        lambda: {"runs": 0, "best_by_bench": {}, "benchmarks": set(), "suspect": 0, "subs": 0, "packets": set()}
     )
     empty = []
 
@@ -113,7 +114,8 @@ def collect(run_dirs: list[str], out_dir: pathlib.Path) -> dict:
         conn = recording.connect(str(dest))
         try:
             rows = conn.execute(
-                "select run_id, benchmark, speedup, suspect, baseline from submissions order by ts, id"
+                "select s.run_id, s.benchmark, s.speedup, s.suspect, s.baseline, r.packet "
+                "from submissions s left join runs r using(run_id) order by s.ts, s.id"
             ).fetchall()
         finally:
             conn.close()
@@ -124,7 +126,7 @@ def collect(run_dirs: list[str], out_dir: pathlib.Path) -> dict:
         # id breaks a tie inside one millisecond in submission order.
         episodes: dict[tuple[str, str], tuple[float | None, str]] = {}
         seen_keys = set()
-        for run_id, benchmark, speedup, suspect, baseline in rows:
+        for run_id, benchmark, speedup, suspect, baseline, packet in rows:
             arm = arm_of(run_id)
             denominator = population.one_denominator([baseline], label=f"{job} {arm} {benchmark}")
             key = (arm, denominator)
@@ -133,6 +135,7 @@ def collect(run_dirs: list[str], out_dir: pathlib.Path) -> dict:
             entry["benchmarks"].add(benchmark)
             entry["suspect"] += int(suspect or 0)
             entry["subs"] += 1
+            entry["packets"].add(packet or "")
             # Counted above, but never the episode's answer: the same screen
             # population.final_answers applies, so this table and the figures reduce one population.
             if population.is_reportable(suspect):
@@ -165,10 +168,16 @@ def summary_rows(per_arm: dict) -> list[tuple]:
         entry = per_arm[(arm, baseline)]
         values = list(entry["best_by_bench"].values())
         usable = summary.usable_ratios(values, label="arm summary", warn=False)
-        # llr4-qwen30b-c / llr4-qwen30b-c-skills: the trailing token is the ablation, the one before
-        # it the language, and what is left the model.
+        # The RECORDED packet decides the ablation, canonicalized through packets.canonical
+        # (aliases included); a DB predating the runs table records none and reads as the control.
+        raw_packets = {p for p in entry["packets"] if p}
+        if len(raw_packets) > 1:
+            raise ValueError(f"arm {arm!r} baseline {baseline!r} recorded more than one packet: {sorted(raw_packets)}")
+        packet = packets.canonical(raw_packets.pop() if raw_packets else "")
+        skills = "on" if packets.has_part(packet, "skills") else "off"
+        # llr4-qwen30b-c / llr4-qwen30b-c-skills: with the ablation known, the token before it is
+        # the language and what is left is the model.
         parts = arm.split("-")
-        skills = "on" if parts[-1] == "skills" else "off"
         rest = parts[:-1] if skills == "on" else parts
         language = rest[-1] if len(rest) > 1 else "?"
         model = "-".join(rest[1:-1]) if len(rest) > 2 else "?"

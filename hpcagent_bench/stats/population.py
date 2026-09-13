@@ -67,6 +67,10 @@ NOT_DELIVERED: float = 1.0
 #: ``extract_llr40.py`` carries it into the observations CSV.
 SUSPECT_COLUMN: str = "suspect"
 
+#: Arm labels that name no condition: ``adhoc`` is a grade recorded with no run id (a manual judge
+#: call), and a blank arm names no launcher at all.
+PSEUDO_ARMS: frozenset[str] = frozenset({"", "adhoc"})
+
 
 class MixedPopulationError(ValueError):
     """Raised when an aggregate would be formed over two populations the claim is not about."""
@@ -92,6 +96,18 @@ def is_reportable(suspect: object) -> bool:
     except (TypeError, ValueError):
         return True
     return flag == 0
+
+
+def condition_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    """The rows of ``frame`` recorded under a real arm.
+
+    Every per-arm table and figure starts from these. A pseudo-arm (:data:`PSEUDO_ARMS`, or no arm at
+    all) is not a condition, and reading it as one puts a phantom column beside the real arms.
+    """
+    if "arm" not in frame.columns:
+        raise MixedPopulationError("cannot select the conditions of a frame without an arm column")
+    labels = frame["arm"].fillna("").astype(str).str.strip()
+    return frame[~labels.isin(PSEUDO_ARMS)]
 
 
 def is_named(value: object) -> bool:

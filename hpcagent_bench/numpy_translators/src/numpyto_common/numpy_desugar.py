@@ -20,11 +20,12 @@ import re
 import copy
 import math
 from collections.abc import Callable, Sequence
-from typing import Dict, FrozenSet, Iterator, List, Optional, Set, Tuple, Union
+from typing import Dict, FrozenSet, Iterator, List, Optional, Protocol, Set, Tuple, Union
 
 from numpyto_common import dtypes
-from numpyto_common.lib_nodes import _const_int, _iter_extent_of, _parse_einsum_subscripts, extent_is_scalar
+from numpyto_common.lib_nodes import _iter_extent_of, _parse_einsum_subscripts, extent_is_scalar
 from numpyto_common.ordered import OrderedSet
+from numpyto_common.subscripts import is_ellipsis, is_full_slice, is_newaxis
 
 #: Tuple-shape lengths currently known to :func:`expr_rank`. Set by
 # :func:`rank_table` while it is iterating so ``.reshape(name)`` can report the
@@ -118,16 +119,15 @@ def _np_attr(node: ast.AST) -> Optional[str]:
     return None
 
 
-def _np_fft_attr(node: ast.AST) -> Optional[str]:
-    """``np.fft.<attr>(...)`` / ``numpy.fft.<attr>(...)`` call -> ``attr`` (one
-    of ``fft``/``ifft``/``fft2``/``ifft2``/``fftn``/``ifftn``), else None. The
-    call func is a two-level Attribute (``np.fft.fft``), so the single-level
-    ``_np_attr`` misses it."""
+def np_submodule_attr(node: ast.AST, submodule: str) -> Optional[str]:
+    """``np.<submodule>.<attr>(...)`` / ``numpy.<submodule>.<attr>(...)`` call (``np.fft.fft``,
+    ``np.linalg.solve``) -> ``attr``, else None. The call func is a two-level Attribute, so the
+    single-level ``_np_attr`` misses it."""
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and isinstance(node.func.value, ast.Attribute)
-        and node.func.value.attr == "fft"
+        and node.func.value.attr == submodule
         and isinstance(node.func.value.value, ast.Name)
         and node.func.value.value.id in ("np", "numpy")
     ):
@@ -139,21 +139,6 @@ def _tuple_len(node: ast.AST) -> Optional[int]:
     if isinstance(node, (ast.Tuple, ast.List)):
         return len(node.elts)
     return None
-
-
-def _is_newaxis(e: ast.AST) -> bool:
-    """``None`` / ``np.newaxis`` / bare ``newaxis`` -- a subscript newaxis."""
-    return (
-        (isinstance(e, ast.Constant) and e.value is None)
-        or (isinstance(e, ast.Attribute) and e.attr == "newaxis")
-        or (isinstance(e, ast.Name) and e.id == "newaxis")
-    )
-
-
-def _is_ellipsis(e: ast.AST) -> bool:
-    """A ``...`` subscript entry (``ast.Constant(Ellipsis)``). It expands to
-    full slices over every otherwise-unindexed axis, so it drops NO axis."""
-    return isinstance(e, ast.Constant) and e.value is Ellipsis
 
 
 def _newaxis_singletons(value: ast.AST, rank: int) -> frozenset:
@@ -173,11 +158,11 @@ def _newaxis_singletons(value: ast.AST, rank: int) -> frozenset:
     if not isinstance(value, ast.Subscript):
         return frozenset()
     elts = list(value.slice.elts) if isinstance(value.slice, ast.Tuple) else [value.slice]
-    if any(_is_ellipsis(e) for e in elts):
+    if any(is_ellipsis(e) for e in elts):
         return frozenset()
     axes, out = [], 0
     for e in elts:
-        if _is_newaxis(e):
+        if is_newaxis(e):
             axes.append(out)
             out += 1
         elif isinstance(e, ast.Slice):
@@ -268,9 +253,9 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
         sl = value.slice
         if isinstance(sl, ast.Slice):
             return base  # a full/partial slice keeps the rank
-        if _is_newaxis(sl):
+        if is_newaxis(sl):
             return base + 1  # a[None] / a[np.newaxis] -- a newaxis adds a dimension
-        if _is_ellipsis(sl):
+        if is_ellipsis(sl):
             return base  # a[...] keeps every axis
         if isinstance(sl, ast.Tuple):
             # slices keep a dim, newaxis adds one, a SCALAR index removes one, and an ellipsis
@@ -290,9 +275,9 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
             drop = 0
             adv_ranks = []
             for e in sl.elts:
-                if isinstance(e, ast.Slice) or _is_ellipsis(e):
+                if isinstance(e, ast.Slice) or is_ellipsis(e):
                     continue
-                if _is_newaxis(e):
+                if is_newaxis(e):
                     drop -= 1
                     continue
                 idx_rank = expr_rank(e, ranks)
@@ -320,7 +305,7 @@ def expr_rank(value: ast.AST, ranks: Dict[str, int]) -> Optional[int]:
     if isinstance(value, ast.Call):
         if isinstance(value.func, ast.Name) and value.func.id == "abs" and value.args:
             return expr_rank(value.args[0], ranks)  # builtin abs is elementwise
-        if _np_fft_attr(value) and value.args:
+        if np_submodule_attr(value, "fft") and value.args:
             return expr_rank(value.args[0], ranks)  # fft/ifft/fftn... preserve rank
         attr = _np_attr(value)
         if attr in ("arange", "linspace"):
@@ -774,7 +759,7 @@ def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
     if isinstance(value, ast.Call):
         # ``np.linalg`` first: it is a TWO-level attribute, so the single-level ``_np_attr`` below
         # reads it as nothing and every value derived from a factorisation would go unknown.
-        linalg = _np_linalg_attr(value)
+        linalg = np_submodule_attr(value, "linalg")
         if linalg in ("cholesky", "inv") and value.args:
             return _dtype_kind(value.args[0], dtypes)  # a factor/inverse keeps the operand's kind
         if linalg == "solve" and len(value.args) >= 2:
@@ -1179,37 +1164,59 @@ class _EinsumHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
 
-class _EinsumInline(ast.NodeTransformer):
-    """Hoist ``np.einsum`` out of any value-bearing statement into a preceding
-    contraction loop nest. Handles einsum nested in arithmetic (seissol's
-    ``Q[:] = Q + np.einsum(...)``)."""
+class StatementHoister(Protocol):
+    """An expression rewriter that swaps a call for a fresh temp (numbered from ``ctr``) and queues
+    the statements computing that temp in ``pre``."""
+
+    ctr: int
+    pre: list[ast.stmt]
+
+    def visit(self, node: ast.AST) -> ast.AST: ...
+
+
+class ValueHoistInline(ast.NodeTransformer):
+    """Hoist a call out of any value-bearing statement (Assign / AugAssign / Return / Expr): the
+    hoister from :meth:`make_hoister` replaces it with a temp, and the statements computing that
+    temp are spliced in front. ``ctr`` carries across statements so every temp name is fresh."""
 
     def __init__(self) -> None:
         self.changed = False
-        self._ctr = 0
+        self.ctr = 0
 
-    def _hoist(self, node):
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        raise NotImplementedError
+
+    def hoist(self, node: ast.Assign | ast.AugAssign | ast.Return | ast.Expr) -> ast.stmt | list[ast.stmt]:
         if vars(node).get("value") is None:
             return node
-        h = _EinsumHoister(self._ctr)
+        h = self.make_hoister(self.ctr)
         node.value = h.visit(node.value)
-        self._ctr = h.ctr
+        self.ctr = h.ctr
         if h.pre:
             self.changed = True
             return h.pre + [node]
         return node
 
-    def visit_Assign(self, node):
-        return self._hoist(node)
+    def visit_Assign(self, node: ast.Assign) -> ast.stmt | list[ast.stmt]:
+        return self.hoist(node)
 
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.stmt | list[ast.stmt]:
+        return self.hoist(node)
 
-    def visit_Return(self, node):
-        return self._hoist(node)
+    def visit_Return(self, node: ast.Return) -> ast.stmt | list[ast.stmt]:
+        return self.hoist(node)
 
-    def visit_Expr(self, node):
-        return self._hoist(node)
+    def visit_Expr(self, node: ast.Expr) -> ast.stmt | list[ast.stmt]:
+        return self.hoist(node)
+
+
+class _EinsumInline(ValueHoistInline):
+    """Hoist ``np.einsum`` out of any value-bearing statement into a preceding
+    contraction loop nest. Handles einsum nested in arithmetic (seissol's
+    ``Q[:] = Q + np.einsum(...)``)."""
+
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _EinsumHoister(ctr)
 
 
 def _fft_axes(fattr: str, call: ast.Call, rank: int):
@@ -1336,7 +1343,7 @@ class _FftInline(ast.NodeTransformer):
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
-        fattr = _np_fft_attr(node.value)
+        fattr = np_submodule_attr(node.value, "fft")
         if fattr is None or not node.value.args:
             return self._hoist_operand_transform(node)
         tgt = node.targets[0]
@@ -1382,7 +1389,7 @@ class _FftInline(ast.NodeTransformer):
         found: List[Tuple[str, ast.Call]] = []
 
         def bind(call: ast.Call) -> Optional[ast.Name]:
-            if _np_fft_attr(call) is None or not call.args:
+            if np_submodule_attr(call, "fft") is None or not call.args:
                 return None
             rank = expr_rank(call.args[0], self.ranks)
             if rank is None or rank < 1:
@@ -1505,7 +1512,7 @@ class _FancyGatherHoister(ast.NodeTransformer):
         elts = node.slice.elts
         if not arank or len(elts) != arank:
             return node
-        if any(isinstance(e, ast.Slice) or _is_newaxis(e) or _is_ellipsis(e) for e in elts):
+        if any(isinstance(e, ast.Slice) or is_newaxis(e) or is_ellipsis(e) for e in elts):
             # Point-wise only. A ``:`` axis survives into the RESULT, so the rank-1 temp this
             # allocates could not hold it -- the loop would store a plane into a scalar slot.
             return node
@@ -1549,42 +1556,16 @@ class _FancyGatherHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
 
-class _FancyGatherInline(ast.NodeTransformer):
+class _FancyGatherInline(ValueHoistInline):
     """Hoist multi-array fancy gathers out of any value-bearing statement into a
     preceding gather loop (handles ``chk[i] = np.sum(u2[q, r, s])``)."""
 
     def __init__(self, ranks: Dict[str, int]) -> None:
+        super().__init__()
         self.ranks = ranks
-        self.changed = False
-        self._ctr = 0
 
-    def _hoist(self, node):
-        if vars(node).get("value") is None:
-            return node
-        h = _FancyGatherHoister(self.ranks, self._ctr)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
-
-    def visit_Assign(self, node):
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
-
-
-#: Reductions numba does NOT accept an ``axis=`` kwarg for (unlike ``sum`` /
-#: ``prod``, which it supports natively). ``mean`` additionally has no axis form.
-_REDUCE_AXIS_OPS = {"sum", "prod", "mean", "std", "var", "min", "max", "amin", "amax", "argmin", "argmax", "any", "all"}
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _FancyGatherHoister(self.ranks, ctr)
 
 
 def _const_int(node: ast.AST) -> Optional[int]:
@@ -1765,12 +1746,12 @@ class _ReduceAxisHoister(ast.NodeTransformer):
         self.generic_visit(node)
         kw = {k.arg: k.value for k in node.keywords}
         npop = _np_attr(node)
-        if npop in _REDUCE_AXIS_OPS and node.args:  # np.mean(x, axis=k)
+        if npop in REDUCE_FNS and node.args:  # np.mean(x, axis=k)
             op, arg = npop, node.args[0]
             ax = kw.get("axis") or (node.args[1] if len(node.args) > 1 else None)
         elif (
             isinstance(node.func, ast.Attribute)
-            and node.func.attr in _REDUCE_AXIS_OPS
+            and node.func.attr in REDUCE_FNS
             and not (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy"))
         ):
             op, arg = node.func.attr, node.func.value  # x.mean(axis=k) method form
@@ -1810,39 +1791,18 @@ class _ReduceAxisHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
 
-class _ReduceAxisInline(ast.NodeTransformer):
+class _ReduceAxisInline(ValueHoistInline):
     """Hoist axis reductions out of any value-bearing statement into preceding
     reduction loops (handles ``V = np.max(s, axis=0) + e`` and the bare
     ``mean = np.mean(data, axis=0)``)."""
 
     def __init__(self, ranks: Dict[str, int], dtypes: Optional[Dict[str, str]] = None) -> None:
+        super().__init__()
         self.ranks = ranks
         self.dtypes = dtypes or {}
-        self.changed = False
-        self._ctr = 0
 
-    def _hoist(self, node):
-        if vars(node).get("value") is None:
-            return node
-        h = _ReduceAxisHoister(self.ranks, self._ctr, self.dtypes)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
-
-    def visit_Assign(self, node):
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _ReduceAxisHoister(self.ranks, ctr, self.dtypes)
 
 
 def _keepdims_index(axes: list[int]) -> list[ast.expr] | None:
@@ -1894,7 +1854,7 @@ class _KeepdimsToNewaxis(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         kw = next((k for k in node.keywords if k.arg == "keepdims"), None)
-        if kw is None or not node.args or _np_attr(node) not in _REDUCE_AXIS_OPS:
+        if kw is None or not node.args or _np_attr(node) not in REDUCE_FNS:
             return node
         if not (isinstance(kw.value, ast.Constant) and kw.value.value is True):
             return node
@@ -2014,12 +1974,12 @@ class _CallFixups(ast.NodeTransformer):
 _OUTER_OPS = {"add": "+", "subtract": "-", "multiply": "*", "divide": "/", "true_divide": "/"}
 
 
-def _ufunc_outer_op(node: ast.AST) -> Optional[str]:
-    """``np.<op>.outer(...)`` -> ``<op>`` (add/subtract/multiply/...) else None."""
+def ufunc_method_op(node: ast.AST, method: str) -> Optional[str]:
+    """``np.<op>.<method>(...)`` (``np.add.outer`` / ``np.subtract.at``) -> ``<op>``, else None."""
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "outer"
+        and node.func.attr == method
         and isinstance(node.func.value, ast.Attribute)
         and isinstance(node.func.value.value, ast.Name)
         and node.func.value.value.id in ("np", "numpy")
@@ -2040,7 +2000,7 @@ class _UfuncOuterHoister(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
-        op = _ufunc_outer_op(node)
+        op = ufunc_method_op(node, "outer")
         if op not in _OUTER_OPS or len(node.args) != 2:
             return node
         a, b = node.args
@@ -2060,37 +2020,16 @@ class _UfuncOuterHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=p, ctx=ast.Load()), node)
 
 
-class _UfuncOuterInline(ast.NodeTransformer):
+class _UfuncOuterInline(ValueHoistInline):
     """Hoist ufunc.outer out of any value-bearing statement (floyd_warshall's
     ``np.minimum(path, np.add.outer(path[:,k], path[k,:]))``)."""
 
     def __init__(self, ranks: Dict[str, int]) -> None:
+        super().__init__()
         self.ranks = ranks
-        self.changed = False
-        self._ctr = 0
 
-    def _hoist(self, node):
-        if vars(node).get("value") is None:
-            return node
-        h = _UfuncOuterHoister(self.ranks, self._ctr)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
-
-    def visit_Assign(self, node):
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _UfuncOuterHoister(self.ranks, ctr)
 
 
 class _ScalarizeMask(ast.NodeTransformer):
@@ -2239,7 +2178,7 @@ def _is_bool_mask(mask: ast.AST, a: ast.AST, ranks: Dict[str, int], dtypes: Dict
     """True iff ``mask`` is a boolean array of ``a``'s rank -- a bool-kind Name or
     an inline Compare / BoolOp / logical_* combo -- i.e. ``a[mask]`` is a boolean
     select (not an integer fancy index or a scalar/slice index)."""
-    if isinstance(mask, (ast.Tuple, ast.Slice)) or _is_newaxis(mask):
+    if isinstance(mask, (ast.Tuple, ast.Slice)) or is_newaxis(mask):
         return False
     ar = expr_rank(a, ranks)
     if ar is None or expr_rank(mask, ranks) != ar:
@@ -2298,7 +2237,7 @@ class _MaskedReduceHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=temp, ctx=ast.Load()), node)
 
 
-class _MaskedReduceInline(ast.NodeTransformer):
+class _MaskedReduceInline(ValueHoistInline):
     """Drop each lowerable ``v = a[mask]`` boolean-select and inline its reductions
     (``res[i] = v.mean()`` -> accumulate loop) -- azimint_naive's ``values =
     data[mask]; res[i] = values.mean()``. The masked select is a dynamic-length
@@ -2307,23 +2246,14 @@ class _MaskedReduceInline(ast.NodeTransformer):
     of the name is a reduction, making the drop safe."""
 
     def __init__(self, gathers: Dict[str, tuple], ranks: Dict[str, int]) -> None:
+        super().__init__()
         self.gathers = gathers
         self.ranks = ranks
-        self.changed = False
-        self._ctr = 0
 
-    def _hoist(self, node):
-        if node.value is None:
-            return node
-        h = _MaskedReduceHoister(self.gathers, self.ranks, self._ctr)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _MaskedReduceHoister(self.gathers, self.ranks, ctr)
 
-    def visit_Assign(self, node: ast.Assign):
+    def visit_Assign(self, node: ast.Assign) -> ast.stmt | List[ast.stmt]:
         if (
             len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
@@ -2332,33 +2262,10 @@ class _MaskedReduceInline(ast.NodeTransformer):
         ):
             self.changed = True
             return []  # drop the masked select; each reduction inlines its own loop
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
+        return self.hoist(node)
 
 
 _AT_OPS = {"add": "+=", "subtract": "-=", "multiply": "*="}
-
-
-def _ufunc_at_op(node: ast.AST) -> Optional[str]:
-    """``np.add.at(...)`` / ``np.subtract.at`` / ``np.multiply.at`` -> the op."""
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "at"
-        and isinstance(node.func.value, ast.Attribute)
-        and isinstance(node.func.value.value, ast.Name)
-        and node.func.value.value.id in ("np", "numpy")
-    ):
-        return node.func.value.attr
-    return None
 
 
 class _DiffToSliceDifference(ast.NodeTransformer):
@@ -2544,7 +2451,7 @@ class _AddAtInline(ast.NodeTransformer):
     def visit_Expr(self, node: ast.Expr):
         self.generic_visit(node)
         call = node.value
-        op = _ufunc_at_op(call) if isinstance(call, ast.Call) else None
+        op = ufunc_method_op(call, "at") if isinstance(call, ast.Call) else None
         if op not in _AT_OPS or len(call.args) < 2 or not isinstance(call.args[0], ast.Name):
             return node
         A = call.args[0].id
@@ -2902,36 +2809,12 @@ class _UfuncOutInline(ast.NodeTransformer):
         return rw if rw is not None else node
 
 
-class _HistogramInline(ast.NodeTransformer):
+class _HistogramInline(ValueHoistInline):
     """Hoist ``np.histogram(...)[0]`` out of any value-bearing statement into its
     preceding binning loop (azimint's ``histw = np.histogram(r, n, weights=d)[0]``)."""
 
-    def __init__(self, ranks: Dict[str, int]) -> None:
-        self.changed = False
-        self._ctr = 0
-
-    def _hoist(self, node):
-        if vars(node).get("value") is None:
-            return node
-        h = _HistogramHoister(self._ctr)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
-
-    def visit_Assign(self, node):
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _HistogramHoister(ctr)
 
 
 def _int_matmul_acc_dtype(aid: str, bid: str, ka: str, kb: str) -> str:
@@ -3033,38 +2916,17 @@ class _IntMatmulHoister(ast.NodeTransformer):
         return node
 
 
-class _IntMatmulInline(ast.NodeTransformer):
+class _IntMatmulInline(ValueHoistInline):
     """Hoist integer matmuls out of any value-bearing statement (bfs's
     ``reach = frontier @ graph``)."""
 
     def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]) -> None:
+        super().__init__()
         self.ranks = ranks
         self.dtypes = dtypes
-        self.changed = False
-        self._ctr = 0
 
-    def _hoist(self, node):
-        if vars(node).get("value") is None:
-            return node
-        h = _IntMatmulHoister(self.ranks, self.dtypes, self._ctr)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
-
-    def visit_Assign(self, node):
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _IntMatmulHoister(self.ranks, self.dtypes, ctr)
 
 
 def _is_transpose_expr(v: ast.AST) -> bool:
@@ -3170,36 +3032,15 @@ class _RepeatAxisHoister(ast.NodeTransformer):
         return ast.copy_location(ast.Name(id=out, ctx=ast.Load()), node)
 
 
-class _RepeatAxisInline(ast.NodeTransformer):
+class _RepeatAxisInline(ValueHoistInline):
     """Hoist ``np.repeat(..., axis=k)`` out of any value-bearing statement."""
 
     def __init__(self, ranks: Dict[str, int]) -> None:
+        super().__init__()
         self.ranks = ranks
-        self.changed = False
-        self._ctr = 0
 
-    def _hoist(self, node):
-        if vars(node).get("value") is None:
-            return node
-        h = _RepeatAxisHoister(self.ranks, self._ctr)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
-
-    def visit_Assign(self, node):
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _RepeatAxisHoister(self.ranks, ctr)
 
 
 #: numpy ops whose RESULT keeps the operand's dimensionality, so a negative
@@ -3542,7 +3383,7 @@ def _list_display_elts(node: ast.AST) -> Optional[List[ast.expr]]:
     return list(node.elts)
 
 
-def _len_call_of(node: ast.AST, name: str) -> bool:
+def is_len_of(node: ast.AST, name: str) -> bool:
     """``len(<name>)`` -- the list's running length."""
     return (
         isinstance(node, ast.Call)
@@ -3568,7 +3409,7 @@ class _SubstLenWithIndex(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
-        if _len_call_of(node, self.name):
+        if is_len_of(node, self.name):
             return ast.copy_location(ast.Name(id=self.idx, ctx=ast.Load()), node)
         return node
 
@@ -3701,7 +3542,7 @@ def _plan_list_build(body: List[ast.stmt], start: int, name: str):
             and isinstance(stmt.test, ast.Compare)
             and len(stmt.test.ops) == 1
             and isinstance(stmt.test.ops[0], ast.Lt)
-            and _len_call_of(stmt.test.left, name)
+            and is_len_of(stmt.test.left, name)
             and len(stmt.body) == 1
         ):
             got = _appended_elts(stmt.body[0], name)
@@ -4194,22 +4035,6 @@ class _ReshapeMatmulInline(ast.NodeTransformer):
         return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body] + [node]
 
 
-def _np_linalg_attr(node: ast.AST) -> Optional[str]:
-    """``np.linalg.<attr>(...)`` / ``numpy.linalg.<attr>(...)`` call -> ``attr``
-    (``cholesky``/``solve``/``inv``), else None. Like :func:`_np_fft_attr` but for
-    the two-level ``np.linalg`` prefix the single-level ``_np_attr`` misses."""
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Attribute)
-        and node.func.value.attr == "linalg"
-        and isinstance(node.func.value.value, ast.Name)
-        and node.func.value.value.id in ("np", "numpy")
-    ):
-        return node.func.attr
-    return None
-
-
 def _cholesky_lines(temp: str, a: str, n: str, p: str, hermitian: bool = False) -> List[str]:
     """Source lines computing ``np.linalg.cholesky(a)`` into a freshly zeroed
     ``temp`` via the Cholesky-Banachiewicz triple loop (same O(n^3) form the
@@ -4383,7 +4208,7 @@ class _LinalgHoister(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)  # inner linalg calls first
-        op = _np_linalg_attr(node)
+        op = np_submodule_attr(node, "linalg")
         if not node.args:
             return node
         if op == "solve":
@@ -4393,7 +4218,7 @@ class _LinalgHoister(ast.NodeTransformer):
         return {"cholesky": self._chol, "inv": self._inv}[op](node)
 
 
-class _LinalgInline(ast.NodeTransformer):
+class _LinalgInline(ValueHoistInline):
     """Hoist ``np.linalg.cholesky/solve/inv`` out of any value-bearing statement
     into its preceding loop nest (cholesky2's ``A[:] = np.linalg.cholesky(A) +
     np.triu(A, k=1)`` -- the cholesky is computed into a fresh temp BEFORE ``A`` is
@@ -4410,35 +4235,14 @@ class _LinalgInline(ast.NodeTransformer):
         lower_ops: set,
         lower_solve_rhs_ranks: frozenset = frozenset(),
     ) -> None:
+        super().__init__()
         self.ranks = ranks
         self.dtypes = dtypes
         self.lower_ops = lower_ops
         self.lower_solve_rhs_ranks = lower_solve_rhs_ranks
-        self.changed = False
-        self._ctr = 0
 
-    def _hoist(self, node):
-        if node.value is None:
-            return node
-        h = _LinalgHoister(self.ranks, self.dtypes, self.lower_ops, self._ctr, self.lower_solve_rhs_ranks)
-        node.value = h.visit(node.value)
-        self._ctr = h.ctr
-        if h.pre:
-            self.changed = True
-            return h.pre + [node]
-        return node
-
-    def visit_Assign(self, node):
-        return self._hoist(node)
-
-    def visit_AugAssign(self, node):
-        return self._hoist(node)
-
-    def visit_Return(self, node):
-        return self._hoist(node)
-
-    def visit_Expr(self, node):
-        return self._hoist(node)
+    def make_hoister(self, ctr: int) -> StatementHoister:
+        return _LinalgHoister(self.ranks, self.dtypes, self.lower_ops, ctr, self.lower_solve_rhs_ranks)
 
 
 def _eigh_w_dtype(is_real: bool, names, array_dtypes: Dict[str, str]) -> Optional[str]:
@@ -4858,7 +4662,7 @@ def _eigh_call_kind(node: ast.AST, alias_names: set):
     if not isinstance(node, ast.Call) or not node.args:
         return None
     f = node.func
-    linalg_attr = _np_linalg_attr(node)
+    linalg_attr = np_submodule_attr(node, "linalg")
     scipy_attr = (
         f.attr
         if isinstance(f, ast.Attribute)
@@ -5106,7 +4910,7 @@ def _param_body_rank_evidence(fn: ast.FunctionDef) -> Dict[str, int]:
                 if k is not None and k >= 0:
                     bump(v.value.id, k + 1)  # p.shape[k] -> rank >= k+1
             elif isinstance(v, ast.Name) and isinstance(node.slice, ast.Tuple):
-                bump(v.id, sum(0 if _is_newaxis(e) else 1 for e in node.slice.elts))
+                bump(v.id, sum(0 if is_newaxis(e) else 1 for e in node.slice.elts))
     return ev
 
 
@@ -5952,11 +5756,6 @@ def _bcast_tokens(a: List[str], b: List[str]) -> List[str]:
     return [y if x == _ONE else x for x, y in zip(a, b)]
 
 
-def _is_full_slice(e: ast.AST) -> bool:
-    """A bare ``:`` entry -- it keeps its base axis whole."""
-    return isinstance(e, ast.Slice) and (e.lower, e.upper, e.step) == (None, None, None)
-
-
 def _slice_extent_token(e: ast.Slice, base: Optional[str]) -> Optional[str]:
     """A ``Slice`` entry's extent as a source token, or None when it cannot be read off the text."""
     if e.step is not None:
@@ -5986,18 +5785,18 @@ def _without_leading_newaxis(e: ast.expr) -> Optional[ast.expr]:
     the singleton back when the operand broadcasts, so the two spell one value."""
     if not isinstance(e, ast.Subscript):
         return None
-    if _is_newaxis(e.slice):
+    if is_newaxis(e.slice):
         return e.value
     if not isinstance(e.slice, ast.Tuple):
         return None
     entries = list(e.slice.elts)
     n = 0
-    while n < len(entries) and _is_newaxis(entries[n]):
+    while n < len(entries) and is_newaxis(entries[n]):
         n += 1
     if n == 0:
         return None
     rest = entries[n:]
-    while rest and _is_full_slice(rest[-1]):
+    while rest and is_full_slice(rest[-1]):
         rest.pop()
     if not rest:
         return e.value
@@ -6088,7 +5887,7 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
         entries = list(sub.slice.elts) if isinstance(sub.slice, ast.Tuple) else [sub.slice]
         axes, bi = [], 0
         for i, e in enumerate(entries):
-            if _is_newaxis(e):
+            if is_newaxis(e):
                 axes.append((i, "new", _ONE))
             elif isinstance(e, ast.Slice):
                 if bi >= len(base):
@@ -6188,7 +5987,7 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
         every TRAILING full slice (``a[i, :]`` IS ``a[i]``)."""
         kept: List[ast.expr] = []
         for i, e in enumerate(entries):
-            if _is_newaxis(e):
+            if is_newaxis(e):
                 continue
             if isinstance(e, ast.Slice):
                 lone = _one_slice_index(e)
@@ -6198,7 +5997,7 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
                 kept.append(lone)
                 continue
             kept.append(e)
-        while kept and _is_full_slice(kept[-1]):
+        while kept and is_full_slice(kept[-1]):
             kept.pop()
         if not kept:
             return base
@@ -6210,7 +6009,7 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
         if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
             return None
         entries = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
-        if not all(_is_full_slice(e) for e in entries) or len(entries) > rank:
+        if not all(is_full_slice(e) for e in entries) or len(entries) > rank:
             return None
         return target.value.id if self.ranks.get(target.value.id) == rank else None
 
@@ -6378,7 +6177,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             # LAST of the three: the repeat lowering above reads ``np.diff(p)`` structurally, so the
             # slice rewrite has to come after it.
             _DiffToSliceDifference(),
-            _HistogramInline(ranks),
+            _HistogramInline(),
             _RepeatAxisInline(ranks),
             _ReshapeContiguousInline(noncontig),
             _IntMatmulInline(ranks, dtypes),
