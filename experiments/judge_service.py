@@ -74,6 +74,28 @@ class SearchRequest(BaseModel):
     limit: int | None = Field(default=None, ge=1, le=20)
 
 
+#: The one upstream grade that outlives its client: a submission is the recorded answer an episode is
+#: scored on, so it is graded and logged whether or not anyone is left to read the reply.
+GRADED_WITHOUT_CLIENT = "/submit"
+
+#: The status answered to a client that closed its request; nobody reads it.
+CLIENT_CLOSED_REQUEST = 499
+
+
+async def send_upstream(method: str, url: str, body: bytes) -> httpx.Response:
+    """One request to the upstream judge. Cancelling it closes the connection, which the judge sees."""
+    async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT_SECONDS) as client:
+        if method == "GET":
+            return await client.get(url)
+        return await client.post(url, content=body, headers={"Content-Type": "application/json"})
+
+
+async def client_left(request: Request) -> None:
+    """Return once the client disconnects. Only called after the body is read, so no body is consumed."""
+    while (await request.receive())["type"] != "http.disconnect":
+        pass
+
+
 async def forward(request: Request, path: str) -> httpx.Response:
     """Relay this request to ``path`` on the upstream judge, unread and unchanged.
 
@@ -82,15 +104,26 @@ async def forward(request: Request, path: str) -> httpx.Response:
     ``path`` is a route literal plus the kernel key the client named, or on the catch-all GET the
     whole path it asked for -- an unknown one is the judge's own 404, decided where every other key is.
     The method follows the incoming request, so a GET route carries no body.
+
+    A client that disconnects first cancels the upstream request, except on
+    :data:`GRADED_WITHOUT_CLIENT`. An agent killed at its wall clock leaves its last ``/score`` or
+    ``/profile`` in flight, and the judge would otherwise grade it for nobody on the device slot its
+    arm's final promotions wait for.
     """
     query = request.url.query
     url = f"{UPSTREAM_URL}{path}?{query}" if query else f"{UPSTREAM_URL}{path}"
+    body = await request.body()
+    upstream = asyncio.ensure_future(send_upstream(request.method, url, body))
+    if path != GRADED_WITHOUT_CLIENT:
+        left = asyncio.ensure_future(client_left(request))
+        await asyncio.wait((upstream, left), return_when=asyncio.FIRST_COMPLETED)
+        left.cancel()
+        if not upstream.done():
+            upstream.cancel()
+            await asyncio.gather(upstream, return_exceptions=True)
+            raise HTTPException(status_code=CLIENT_CLOSED_REQUEST, detail="the client closed the request")
     try:
-        async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT_SECONDS) as client:
-            if request.method == "GET":
-                return await client.get(url)
-            body = await request.body()
-            return await client.post(url, content=body, headers={"Content-Type": "application/json"})
+        return await upstream
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"judge upstream {UPSTREAM_URL}{path} failed: {exc}") from exc
 
