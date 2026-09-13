@@ -52,6 +52,13 @@ Status legend: **landed** = merged + unit-tested; **in-progress** = agent buildi
 | **index normalization** -- chained / ellipsis / trailing subscript -> canonical Name-base full-`Tuple` (`A[f][...,0]` -> `A[f,...,0]`) | ls3df_scf, fragment_patch_density | normalize the index BEFORE libnode-expand so one code path handles every subscript form | `numpyto_common/lowering.py` `_lp_normalize_index_access` | landed |
 | `np.meshgrid(..., indexing=)` multi-output | ls3df_scf | `expand_meshgrid` + multi-output tuple-unpack hoist | lib_nodes + lowering | planned |
 | `np.ix_` open-mesh gather / scatter-add | fragment_patch_density, ls3df_scf | new advanced-index lowering to nested loops | lowering (+lib_nodes) | planned |
+| keyword-only config flags the harness never passes (`*, noncolin=False, deeq_nc=None`) | cegterg (numba: `expected 42, got 25`) | fold through the native frontend's own `_fold_default_args`, numba + pythran | `numpyto_common/numpy_desugar.py` `fold_kernel_defaults` | landed |
+| `np.fft.*` spelled inside a `return` | cegterg (`_fft_g2r`) | bind the value, lower the binding to the loop DFT, return the name | `numpyto_common/numpy_desugar.py` `_FftInline.visit_Return` | landed |
+| `x.reshape(..., order="F")` (numba: `assert not kws`) | cegterg | `np.ascontiguousarray(x.T).reshape(reversed).T` | `numpyto_common/numpy_desugar.py` `ReshapeFortranOrderInline` | landed |
+| `dtype=bool`; real `@` complex (numba dtype-strict typing) | cegterg (`conv`, `deeq @ ps`) | `np.bool_`; cast the real operand to the complex one's `.dtype`, kinds read from REACHABLE call sites | `numpyto_common/numpy_desugar.py` `NumbaDtypeFixups`, `infer_param_kinds` | landed |
+| helper flag every caller passes as one literal (numba types both arms) | cegterg (`lda_plus_u=False, wfcu=None`) | substitute the literal, then `_DeadBranchElim`; never where it would be subscripted/called | `numpyto_common/numpy_desugar.py` `fold_constant_helper_arguments` | landed |
+| rank of `X[b, :]` with `b = slice(lo, hi)`, of `x if x.ndim == 2 else ...`, of a helper's result (numba) | cegterg (`X_b`, `vrs2`, `r`) | `SliceObjectInline`; `NdimFold` over ranks every reachable call site agrees on; `helper_return_ranks` into the rank table | `numpyto_common/numpy_desugar.py` | landed |
+| `(n,1)` against `(n,m)` broadcast, into a partial slice or a name the value reads; `-x[None, :]` (numba parfor `Sizes ... do not match`) | cegterg (`g2[:, None] * X_b`, `r * vrs2[:, ip][:, None]`, `-ew[..][None, :] * ritz_s`) | `_OuterBroadcastPeel` fills a temp then stores it; `_drop_newaxes` sees through a unary op | `numpyto_common/numpy_desugar.py` | landed |
 
 ### 1b. Kernel-side faithful refactors (when the construct is genuinely un-static)
 
@@ -199,6 +206,26 @@ ls3df_scf) are `ok` on c / cpp / fortran (Sec. 1a/1b/1e). Their pluto pairs auto
 `lda_xc_potential::pluto` is `skip:unsupported:pluto-miscompile:exc:*` (emit-shape fix #3, Sec. 1c,
 would restore `ok`), `kleinman_bylander_nonlocal::pluto` is
 `skip:unsupported:pluto-miscompile:hpsi:*` (irreducible pluto bug, Sec. 2).
+
+### 3a. Documented per-kernel skips
+
+**cegterg / pythran -- `skip:unsupported:compile`.** The export declares 9 arrays of rank >= 2; pythran's
+automatic C/F layout variants make 2^9 = 512 overloads against `max_export_overloads = 128`
+(`pythran.cfg`): `Too many overloads for function 'cegterg'`. With `order(C)` forced by hand the next
+three follow. `np.linalg.inv(chol)` / `np.linalg.solve(chol_h, ys)` survive the desugar because
+`LinalgInline` cannot rank the Cholesky temp or a helper's return (`Attribute 'solve' unknown`). pythran
+rejects `reshape(..., order='F')`. With those two patched by hand as well, the compile was still running at
+727 s against the oracle's 75 s `compile_timeout_s`. Decision: documented skip, no pythran desugar work. The
+standalone generalized `eigh(a, b)` kernel stops at the same rank gap (`Unsupported attribute 'inv'`), so
+pythran carries no eigh test either.
+
+**cegterg / jax -- `skip:too-long`.** Run time, not tracing: emit 0.15 s, exec 0.01 s, then one eager call
+of `_matmul_ctA_B` at the S extents (k=1419, m=4) takes 8.0 s, because every scalar `.at[].set` dispatches
+its own primitive. The whole kernel had not returned after 900 s against `JAX_FORK_TIMEOUT_S = 180`. The
+remedy is the eager-path vectorization of Sec. 1d (H1), not a cegterg change.
+
+**cegterg / numba -- `ok`** under the `parallel=True` njit, through the Sec. 1a rows above
+(`tests/test_cegterg_numba.py`).
 
 ---
 
