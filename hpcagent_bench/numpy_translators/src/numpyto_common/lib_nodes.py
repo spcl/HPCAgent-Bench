@@ -1401,6 +1401,14 @@ def _name_id(node: ast.AST) -> Optional[str]:
     return node.id if isinstance(node, ast.Name) else None
 
 
+def sliced_index_rank(axes: List[ast.expr]) -> Optional[int]:
+    """Rank of an index array read through ``axes``: one per slice and one per newaxis, since ``mat[:, None]``
+    is rank 2. ``None`` when no slice keeps an axis of the array itself."""
+    slices = sum(1 for a in axes if isinstance(a, ast.Slice))
+    newaxes = sum(1 for a in axes if isinstance(a, ast.Constant) and a.value is None)
+    return slices + newaxes if slices else None
+
+
 def _advanced_index_rank(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> Optional[int]:
     """Broadcast rank of an advanced-index EXPRESSION used as one axis of an outer
     gather, or ``None`` if ``expr`` isn't one: a Subscript on a known array with
@@ -1411,8 +1419,7 @@ def _advanced_index_rank(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]
     if isinstance(expr, ast.Subscript):
         name = _name_id(expr.value)
         if name and shape_table.get(name):
-            n = sum(1 for a in slice_axes(expr) if isinstance(a, ast.Slice))
-            return n or None
+            return sliced_index_rank(slice_axes(expr))
         return None
     if isinstance(expr, ast.Name):
         # A bare index ARRAY is an advanced index of its own rank. Only the sliced spelling was

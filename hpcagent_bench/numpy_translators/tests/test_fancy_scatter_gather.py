@@ -202,17 +202,20 @@ def test_chained_gather_composes_the_outer_index_into_the_index_array() -> None:
     assert _ast.unparse(tree).strip() == "y = x[aj[:, None], :]"
 
 
-def test_a_newaxis_after_the_last_gathered_axis_keeps_the_chain() -> None:
-    """``A[idx][:, None]`` stays two-step. Flattened to ``A[idx, None]`` or ``A[idx[:, None]]``, the
-    scalarizers read the newaxis as one more gathered axis and indexed ``idx`` with the column iterator
-    (xsbench's ``num_nucs[mat][:, None]``)."""
+def test_a_newaxis_after_the_last_gathered_axis_flattens_at_base_level() -> None:
+    """``A[idx][:, None]`` is ``A[idx, None]``: one advanced run, so numpy keeps the gathered axis in front
+    of the newaxis (xsbench's ``num_nucs[mat][:, None]``). The scalarizers read that form per row; see
+    ``test_a_newaxis_beside_a_gathered_axis_reads_each_gathered_row``."""
     import ast
 
     from numpyto_common.lowering import ChainedSubscriptFlattener
 
-    tree = ast.parse("y = counts[mat][:, None]")
-    ChainedSubscriptFlattener({"counts": ("m",), "mat": ("p",)}).visit(tree)
-    assert ast.unparse(tree).strip() == "y = counts[mat][:, None]"
+    x = np.arange(24.0).reshape(3, 2, 4)
+    mat = np.array([2, 0, 1, 2])
+    assert np.array_equal(x[mat][:, None], x[mat, None])
+    tree = ast.parse("y = counts[mat][:, None]\nz = x[mat][:, None]")
+    ChainedSubscriptFlattener({"counts": ("m",), "mat": ("p",), "x": ("m", "a", "b")}).visit(tree)
+    assert ast.unparse(tree).strip() == "y = counts[mat, None]\nz = x[mat, None]"
 
 
 def test_chained_scalar_index_is_still_flattened() -> None:

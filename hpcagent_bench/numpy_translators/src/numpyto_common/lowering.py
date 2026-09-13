@@ -3147,6 +3147,33 @@ def _advanced_runs(dims: List[ast.AST]) -> List[List[int]]:
     return runs
 
 
+def slice_free_gather_layout(
+    dims: List[ast.AST], run_rank: int, source_rank: int
+) -> Tuple[List[ast.AST], int, int, int]:
+    """``(entries that read a source axis, first result axis of the broadcast block, result rank, implicit
+    trailing axes)`` of a gather with no slice. A newaxis inserts a unit result axis and reads nothing. The
+    block stays behind the newaxes before it, and moves to the FRONT once a newaxis separates advanced entries."""
+    kept = [d for d in dims if not _is_newaxis(d)]
+    trailing = max(0, source_rank - len(kept))
+    runs = _advanced_runs(dims)
+    before = 0 if len(runs) > 1 else len(dims[: runs[0][0]])
+    return kept, before, len(dims) - len(kept) + run_rank + trailing, trailing
+
+
+def basic_axis_count(dims: Sequence[ast.AST]) -> int:
+    """Result axes the slices and newaxes of a subscript add, one each."""
+    return sum(1 for d in dims if isinstance(d, ast.Slice) or _is_newaxis(d))
+
+
+#: Base name a chained view's own axes are scalarized under before they compose onto the real base.
+CHAINED_VIEW = "__chained_view__"
+
+
+def counts_from_end(bound: Optional[ast.expr]) -> bool:
+    """A negated symbol, which numpy counts from an axis END and no offset arithmetic resolves."""
+    return isinstance(bound, ast.UnaryOp) and isinstance(bound.op, ast.USub) and negative_literal_offset(bound) is None
+
+
 #: Where one result axis of a subscript comes from, so two spellings compare axis for axis:
 #: ``("axis", i)`` inner slice i, ``("trail", t)`` the t-th base axis after the inner's entries,
 #: ``("rest", 0)`` every base axis after those, ``("adv", k)`` / ``("outer", k)`` the k-th broadcast
@@ -3408,8 +3435,6 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
                 continue
             label = inner_axes[consumed]
             consumed += 1
-            if pending and newaxis_after_last_gather(label, inner_axes, consumed - 1, adv_rank):
-                return None
             self.attach_newaxes(pending, label, slot_newaxes, adv_newaxes, tail)
             pending.clear()
             model = entry_model(elt, elt_rank, label, outer_rank, "outer")
@@ -3437,15 +3462,7 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
                 folded = True
         if pending:
             label = inner_axes[consumed] if consumed < len(inner_axes) else ("rest", 0)
-            if newaxis_after_last_gather(label, inner_axes, consumed, adv_rank):
-                return None
-            self.attach_newaxes(
-                pending,
-                label,
-                slot_newaxes,
-                adv_newaxes,
-                tail,
-            )
+            self.attach_newaxes(pending, label, slot_newaxes, adv_newaxes, tail)
         outer_model.extend(("slice", (label,)) for label in inner_axes[consumed:])
         expected = result_axes(outer_model)
 
@@ -3536,14 +3553,6 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
             return array, layout
         indexed = ast.Subscript(value=array, slice=index_slot(entries), ctx=ast.Load())
         return (self.visit_Subscript(indexed) if isinstance(array, ast.Subscript) else indexed), layout
-
-
-def newaxis_after_last_gather(label: AxisLabel, inner_axes: List[AxisLabel], position: int, adv_rank: int) -> bool:
-    """Whether outer newaxes just before result axis ``inner_axes[position]`` sit right after the index
-    arrays' LAST broadcast axis (``A[idx][:, None]``). No flat form survives that: at base level
-    (``A[idx, None]``) and inside the array (``A[idx[:, None]]``) the scalarizers read the newaxis as one
-    more gathered axis, so the chain stays two-step."""
-    return label[0] != "adv" and position > 0 and inner_axes[position - 1] == ("adv", adv_rank - 1)
 
 
 def _name_of_subscript(node: ast.Subscript) -> Optional[str]:
@@ -4733,6 +4742,9 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                         [ast.Slice(lower=None, upper=None, step=None) for _ in sub_iters],
                     )
                     return sub.visit(copy.deepcopy(node.value))
+            merged = self.merge_view_gather(node)
+            if merged is not None:
+                return merged
         # Advanced indices SEPARATED by a real slice/newaxis (numpy moves their
         # broadcast result to the FRONT) must be pre-resolved BEFORE generic_visit
         # touches them: a compound advanced-index operand (``edge_blk[:, :, e]``)
@@ -4789,19 +4801,13 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
                 ]
                 lhs_iters = [iv for iv, _ in lhs_pairs]
                 lhs_starts = [st for _, st in lhs_pairs]
-                n_trailing = len(source_shape) - len(dims)
-                if len(_advanced_runs(dims)) > 1:
-                    raise NotImplementedError(
-                        f"advanced indices of {name!r} separated by a slice/newaxis "
-                        f"({ast.unparse(node)!r}) -- broadcast-to-front placement is not implemented"
-                    )
                 run_rank = max((self._advanced_rank(d) for d in dims), default=0)
-                result_rank = run_rank + max(0, n_trailing)
+                kept, group_pos, result_rank, n_trailing = slice_free_gather_layout(dims, run_rank, len(source_shape))
                 if result_rank <= len(lhs_iters):
-                    group_pos = len(lhs_iters) - result_rank
-                    pos = group_pos + run_rank
+                    group_pos += len(lhs_iters) - result_rank
+                    pos = len(lhs_iters) - n_trailing
                     new_elts: List[ast.AST] = []
-                    for axis, d in enumerate(dims):
+                    for axis, d in enumerate(kept):
                         r = self._advanced_rank(d)
                         if r >= 1:
                             own_shape = self._advanced_extent(d)
@@ -4879,14 +4885,10 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         # result axis) inside a 2-slice-axis LHS ``A[k+1:, k:]`` reads the COLUMN
         # iter ``si1``, not the row iter ``si0`` (gaussian's rank-1 update).
         # ``align`` shifts the per-axis consumption by the rank difference.
-        rhs_result_axes = sum(
-            (
-                self._advanced_rank(d)
-                or (1 if (isinstance(d, ast.Slice) or (isinstance(d, ast.Constant) and d.value is None)) else 0)
-            )
-            for d in dims
-        )
-        align = max(0, len(lhs_slice_iters) - rhs_result_axes)
+        # Adjacent index arrays broadcast into ONE block of result axes (separated ones were front-placed above).
+        run_rank = max((self._advanced_rank(d) for d in dims), default=0)
+        block: Optional[List[Tuple[ast.Name, ast.AST]]] = None
+        align = max(0, len(lhs_slice_iters) - run_rank - basic_axis_count(dims))
         idx_nodes: List[ast.AST] = []
         rhs_slice_idx = 0
         # ``axis`` below is the SOURCE axis a dim reads, not its position in ``dims``: a newaxis
@@ -4912,17 +4914,14 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
             # (``x1[:, _VOLU_PERM]`` -> ``x1[w0, _VOLU_PERM[w1, w2]]``).
             r = self._advanced_rank(d)
             if r >= 1:
-                if align + rhs_slice_idx + r <= len(lhs_slice_iters):
+                if block is None and align + rhs_slice_idx + run_rank <= len(lhs_slice_iters):
+                    block = lhs_slice_iters[align + rhs_slice_idx : align + rhs_slice_idx + run_rank]
+                    rhs_slice_idx += run_rank
+                if block is not None:
                     # Gather index reads at the LOCAL result position (iter - start),
                     # so a non-zero-start LHS slice indexes the length-matched index
-                    # array within bounds.
-                    giters = [
-                        self._iter_minus_start(
-                            lhs_slice_iters[align + rhs_slice_idx + k][0], lhs_slice_iters[align + rhs_slice_idx + k][1]
-                        )
-                        for k in range(r)
-                    ]
-                    rhs_slice_idx += r
+                    # array within bounds. Each array right-aligns its own rank in the block.
+                    giters = [self._iter_minus_start(iv, start) for iv, start in block[run_rank - r :]]
                     idx_nodes.append(self._bind_gather_operand(d, giters))
                     continue
             if not isinstance(d, ast.Slice):
@@ -5009,6 +5008,69 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         new_slice = idx_nodes[0] if len(idx_nodes) == 1 else ast.Tuple(elts=idx_nodes, ctx=ast.Load())
         return ast.Subscript(value=node.value, slice=new_slice, ctx=node.ctx)
 
+    def merge_view_gather(self, node: ast.Subscript) -> Optional[ast.Subscript]:
+        """``A[2, :3][:, idx]`` read as one element of ``A``, or ``None`` when ``node`` is not a gather on a
+        basic view of a sized array.
+
+        No flat subscript says this: ``A[2, :3, idx]`` counts the 2 as advanced and moves ``idx`` to the
+        front. The outer entries scalarize against the view's own axes first, which settles numpy's
+        placement, and each view index then lands on the base axis that kept it.
+        """
+        base = self.view_base(node)
+        if base is None:
+            return None
+        view_index = self.view_index(node)
+        if view_index is None:
+            return None
+        entries: List[ast.expr] = []
+        view_axes = iter(view_index)
+        for axis, d in enumerate(_slice_dims(node.value)):
+            if isinstance(d, ast.Slice):
+                start = self._resolve_bound(d.lower, base.id, axis, default=_const(0))
+                entries.append(_shift_index(next(view_axes), start))
+            else:
+                entries.append(self._resolve_scalar_index(d, base.id, axis))
+        entries.extend(view_axes)
+        return ast.Subscript(value=base, slice=index_slot(entries), ctx=node.ctx)
+
+    def view_base(self, node: ast.Subscript) -> Optional[ast.Name]:
+        """The sized base of the basic-indexed view ``node`` gathers from, or ``None``."""
+        inner = node.value
+        if not (isinstance(inner, ast.Subscript) and isinstance(inner.value, ast.Name)):
+            return None
+        inner_dims = _slice_dims(inner)
+        if len(inner_dims) > len(self.array_shapes.get(inner.value.id) or ()):
+            return None
+        basic = all(self.is_basic_view_entry(d) for d in inner_dims)
+        return inner.value if basic and any(self._advanced_rank(d) >= 1 for d in _slice_dims(node)) else None
+
+    def is_basic_view_entry(self, d: ast.expr) -> bool:
+        """An inner entry a scalar index composes onto: a forward, unstrided slice, or one position."""
+        if isinstance(d, ast.Slice):
+            return d.step is None and not counts_from_end(d.lower)
+        return _is_scalar_index(d) and not counts_from_end(d) and self._advanced_rank(d) == 0
+
+    def view_index(self, node: ast.Subscript) -> Optional[List[ast.expr]]:
+        """One scalar index per result axis of the view under ``node`` for its outer entries, read at this
+        statement's iterators, or ``None`` when they do not scalarize fully."""
+        extent = _iter_extent_of(node.value, self.array_shapes)
+        if not extent:
+            return None
+        shapes = {**self.array_shapes, CHAINED_VIEW: tuple(ast.unparse(axis) for axis in extent)}
+        rewriter = _SliceToScalarRewriter(shapes, self.iter_vars, self.lhs_ranges, self.lhs_name, self.lhs_dims)
+        view_name = ast.Name(id=CHAINED_VIEW, ctx=ast.Load())
+        read = rewriter.visit(ast.Subscript(value=view_name, slice=copy.deepcopy(node.slice), ctx=ast.Load()))
+        return self.scalar_view_read(read, len(extent))
+
+    def scalar_view_read(self, read: ast.AST, rank: int) -> Optional[List[ast.expr]]:
+        """The ``rank`` indices of ``read`` when it reads the chained view at one element; a slice, newaxis or
+        index array left over means the outer entries did not fully scalarize."""
+        if not (isinstance(read, ast.Subscript) and isinstance(read.value, ast.Name) and read.value.id == CHAINED_VIEW):
+            return None
+        index = _slice_dims(read)
+        unbound = any(isinstance(e, ast.Slice) or _is_newaxis(e) or self._advanced_rank(e) >= 1 for e in index)
+        return None if unbound or len(index) != rank else index
+
     def _front_placed_gather(self, node: ast.Subscript) -> Optional[ast.Subscript]:
         """Pre-resolve a subscript whose advanced indices are SEPARATED by a real
         slice (``z_kin_hor_e[edge_blk[:, :, e], :, edge_idx[:, :, e]]``): numpy
@@ -5048,7 +5110,7 @@ class _SliceToScalarRewriter(ast.NodeTransformer):
         lhs_iters = [iv for iv, _ in lhs_pairs]
         lhs_starts = [st for _, st in lhs_pairs]
         run_rank = max((r for r in ranks if r is not None and r >= 1), default=0)
-        n_other = sum(1 for d in dims if isinstance(d, ast.Slice) or _is_newaxis(d))
+        n_other = basic_axis_count(dims)
         if run_rank + n_other > len(lhs_iters):
             return None
         front_iters = lhs_iters[:run_rank]
