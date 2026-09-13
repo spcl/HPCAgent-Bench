@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Shared pytest fixtures for the agent-bench tests."""
 
+import dataclasses
 import os
 import pathlib
 import re
@@ -13,7 +14,7 @@ from types import MappingProxyType
 
 import pytest
 
-from hpcagent_bench import config
+from hpcagent_bench import config, osinfo, perf_reports
 from hpcagent_bench.api import RunConfig
 from hpcagent_bench.harness import gpu_profiling
 from hpcagent_bench.harness.service import make_server
@@ -24,12 +25,71 @@ from hpcagent_bench.harness.tools import DEFAULT_RANK
 #: clear all four, or a rank leaked from the host running pytest silently shards it instead.
 RANK_ENV_VARS = ("HPCAGENT_BENCH_DB_SHARD", "SLURM_PROCID", "OMPI_COMM_WORLD_RANK", "PMI_RANK")
 
-#: Hardware groups: a marker for tests that need a real device and its vendor tools, mapped to that
-#: device node and those tools. Unmarked tests are the CPU group and run everywhere, CI included.
-HARDWARE_GROUPS: Mapping[str, tuple[pathlib.Path, tuple[str, ...]]] = MappingProxyType(
+
+def device_and_tools_missing(
+    device: pathlib.Path, tools: tuple[str, ...], which: Callable[[str], str | None] = shutil.which
+) -> str:
+    """The device node and tools this host lacks, comma-joined; "" when it has all of them."""
+    missing = ([] if device.exists() else [str(device)]) + [tool for tool in tools if which(tool) is None]
+    return ", ".join(missing)
+
+
+def papi_missing() -> str:
+    """ "" when libpapi loads on this host, else what is missing."""
+    from tests import papi_probe
+
+    return (
+        ""
+        if osinfo.IS_LINUX and papi_probe.PAPI_LIBRARY
+        else "libpapi (ctypes.util.find_library('papi') found nothing)"
+    )
+
+
+def counters_missing() -> str:
+    """ "" when this host can arm a CPU hardware counter, else what stands in the way."""
+    from tests import papi_probe
+
+    if papi_probe.CAN_COUNT:
+        return ""
+    return "an armable CPU hardware counter (no libpapi, a closed perf_event gate, or no countable event)"
+
+
+def perf_missing() -> str:
+    """ "" when perf can sample on this host, else perf's own refusal."""
+    try:
+        perf_reports.perf_check()
+    except perf_reports.PerfUnavailable as refused:
+        return f"perf sampling ({refused})"
+    return ""
+
+
+def amd_missing() -> str:
+    return device_and_tools_missing(gpu_profiling.KFD_DEVICE, ("rocminfo", "rocprofv3"))
+
+
+def nvidia_missing() -> str:
+    return device_and_tools_missing(gpu_profiling.NVIDIA_DEVICE, ("nsys",))
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class HardwareGroup:
+    """A marker for tests that need real hardware: what they need, and a probe naming what is missing."""
+
+    needs: str
+    missing: Callable[[], str]
+
+
+#: Hardware groups. Unmarked tests are the CPU group: they run everywhere, CI included, and assert
+#: what a host WITHOUT the hardware answers. A marked test runs only when ``-m`` names its group.
+HARDWARE_GROUPS: Mapping[str, HardwareGroup] = MappingProxyType(
     {
-        "amd": (gpu_profiling.KFD_DEVICE, ("rocminfo", "rocprofv3")),
-        "nvidia": (gpu_profiling.NVIDIA_DEVICE, ("nsys",)),
+        "papi": HardwareGroup("libpapi loadable on Linux", papi_missing),
+        "hw_counters": HardwareGroup(
+            "an armable CPU hardware counter (a real PMU, an open perf_event gate)", counters_missing
+        ),
+        "perf": HardwareGroup("perf sampling (perf on PATH, perf_event_paranoid <= 2)", perf_missing),
+        "amd": HardwareGroup("an AMD GPU (/dev/kfd) with rocminfo and rocprofv3", amd_missing),
+        "nvidia": HardwareGroup("an NVIDIA GPU (/dev/nvidiactl) with nsys", nvidia_missing),
     }
 )
 
@@ -37,17 +97,6 @@ HARDWARE_GROUPS: Mapping[str, tuple[pathlib.Path, tuple[str, ...]]] = MappingPro
 def named_groups(markexpr: str) -> frozenset[str]:
     """The hardware groups a ``-m`` expression names, as whole words."""
     return frozenset(group for group in HARDWARE_GROUPS if re.search(rf"\b{re.escape(group)}\b", markexpr))
-
-
-def hardware_missing(
-    group: str,
-    groups: Mapping[str, tuple[pathlib.Path, tuple[str, ...]]] = HARDWARE_GROUPS,
-    which: Callable[[str], str | None] = shutil.which,
-) -> str:
-    """What ``group``'s tests need and this host lacks, comma-joined; "" when nothing is missing."""
-    device, tools = groups[group]
-    missing = ([] if device.exists() else [str(device)]) + [tool for tool in tools if which(tool) is None]
-    return ", ".join(missing)
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -66,20 +115,20 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
     """A selected hardware test on a host without its hardware fails here, never skips."""
-    for group in HARDWARE_GROUPS:
+    for group, hardware in HARDWARE_GROUPS.items():
         if item.get_closest_marker(group) is None:
             continue
-        missing = hardware_missing(group, HARDWARE_GROUPS)
+        missing = hardware.missing()
         if missing:
             pytest.fail(f"-m selected the {group} group, but this host lacks: {missing}", pytrace=False)
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    for group, (device, tools) in HARDWARE_GROUPS.items():
+    for group, hardware in HARDWARE_GROUPS.items():
         config.addinivalue_line(
             "markers",
-            f"{group}: needs {device} and {', '.join(tools)}; deselected unless -m names {group}, and a "
-            "selected test fails at setup on a host without them.",
+            f"{group}: needs {hardware.needs}; deselected unless -m names {group}, and a selected test "
+            "fails at setup on a host without it.",
         )
     config.addinivalue_line(
         "markers",

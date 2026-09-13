@@ -244,7 +244,8 @@ def post_profile(url: str, fields: dict[str, object]) -> tuple[int, dict[str, ob
         with urllib.request.urlopen(request, timeout=120) as response:
             return response.status, json.loads(response.read())
     except urllib.error.HTTPError as refused:
-        return refused.code, json.loads(refused.read())
+        with refused:
+            return refused.code, json.loads(refused.read())
 
 
 #: The two routes that count: PAPI alone, and a perf profile with counters appended.

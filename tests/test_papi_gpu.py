@@ -29,11 +29,8 @@ from hpcagent_bench.harness import papi
 #: The environment predicate the hardware-gated tests key on -- a name, not a swallowed exception.
 PAPI_LIBRARY = ctypes.util.find_library("papi")
 
-requires_papi = pytest.mark.skipif(
-    not (osinfo.IS_LINUX and PAPI_LIBRARY),
-    reason="no libpapi on this host (ctypes.util.find_library('papi') found nothing), so PAPI's "
-    "component table cannot be read; install PAPI to exercise these",
-)
+#: Needs libpapi: the ``papi`` hardware group (tests/conftest.py), deselected unless -m names it.
+requires_papi = pytest.mark.papi
 
 
 def component(name: str, *, index: int = 0, enabled: bool = True, reason: str = "", short: str = "") -> dict:
@@ -680,23 +677,20 @@ def test_every_gpu_component_gets_a_verdict_on_a_real_install() -> None:
             assert row["reason"].strip(), f"{name}: disabled with no reason"
 
 
-@requires_papi
-def test_a_built_gpu_component_resolves_at_least_one_metric_of_its_vendor() -> None:
-    """The end-to-end resolution check, on whatever this box actually has. A component that
-    enumerates thousands of events and answers no metric means the candidate ladder has drifted
-    away from the names PAPI publishes."""
-    live = [name for name, row in papi.component_report().items() if row["enabled"] and row["events"]]
-    if not live:
-        pytest.skip(f"this PAPI has no enabled GPU component with events: {sorted(papi.GPU_COMPONENTS)}")
-    for vendor, names in papi.VENDOR_COMPONENTS.items():
-        if not set(names) & set(live):
-            continue
-        features = papi.gpu_feature_set(vendor=vendor)
-        assert features["supported"], (
-            f"{vendor}: components {sorted(set(names) & set(live))} are up and enumerate "
-            f"events, yet no metric resolved: {features['unsupported']}"
-        )
-        for metric, row in features["supported"].items():
-            assert row["event"] in papi.native_events(row["component"]), (
-                f"{metric}: resolved to a name PAPI never listed"
-            )
+@pytest.mark.parametrize(
+    "vendor", [pytest.param("amd", marks=pytest.mark.amd), pytest.param("nvidia", marks=pytest.mark.nvidia)]
+)
+def test_a_built_gpu_component_resolves_at_least_one_metric_of_its_vendor(vendor: str) -> None:
+    """The end-to-end resolution check on a real GPU host. A component that enumerates thousands of
+    events and answers no metric means the candidate ladder has drifted away from the names PAPI
+    publishes."""
+    names = set(papi.VENDOR_COMPONENTS[vendor])
+    live = {name for name, row in papi.component_report().items() if row["enabled"] and row["events"]}
+    assert names & live, f"{vendor} host: none of {sorted(names)} is enabled with events; live: {sorted(live)}"
+    features = papi.gpu_feature_set(vendor=vendor)
+    assert features["supported"], (
+        f"{vendor}: components {sorted(names & live)} are up and enumerate events, yet no metric resolved: "
+        f"{features['unsupported']}"
+    )
+    for metric, row in features["supported"].items():
+        assert row["event"] in papi.native_events(row["component"]), f"{metric}: resolved to a name PAPI never listed"

@@ -486,8 +486,11 @@ jobs:
           # whatever the sweep is doing when the cap lands is the last line in the log. This is the
           # same argument the -q ban above already makes -- it just has to survive a kill, not a
           # clean finish, and that needs the name printed BEFORE the test rather than after.
+          # -m "papi or not papi": this job installs libpapi, so it selects the papi hardware group
+          # (tests/conftest.py deselects every hardware group -m does not name). hw_counters, perf, amd
+          # and nvidia stay deselected: a hosted runner has no PMU and no GPU to give them.
           python -m pytest -p no:cacheprovider -rfEs -n auto --dist loadgroup --durations=25 -v \
-            --timeout=600 --timeout-method=thread $files
+            -m "papi or not papi" --timeout=600 --timeout-method=thread $files
 
       # Hit rate is the whole point of the cache -- surface it so a regression to 0% is visible.
       - name: ccache statistics

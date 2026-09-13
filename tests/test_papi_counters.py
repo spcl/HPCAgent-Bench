@@ -32,28 +32,11 @@ from hpcagent_bench.flags import Mode
 from hpcagent_bench.harness import papi, profiling
 from tests.papi_probe import CAN_COUNT, PAPI_LIBRARY, armable
 
-#: CI sets this the moment it apt-installs libpapi-dev (.github/workflows/tests.yml, unit job), so
-#: test_the_papi_provisioning_step_actually_worked below can tell "this job never had PAPI" (fine,
-#: not what the flag claims) from "this job installed PAPI and it still did not load" (a broken
-#: provisioning step, which must fail loud rather than silently widen every skip above it).
-CI_EXPECTS_PAPI = os.environ.get("HPCAGENT_BENCH_CI_PAPI_INSTALLED")
+#: Needs libpapi: the ``papi`` hardware group (tests/conftest.py), deselected unless -m names it.
+requires_papi = pytest.mark.papi
 
-requires_papi = pytest.mark.skipif(
-    not (osinfo.IS_LINUX and PAPI_LIBRARY),
-    reason="no PAPI on this host (ctypes.util.find_library('papi') found nothing, or this is not "
-    "Linux), so there is no library to ask anything of. A host that HAS PAPI and no countable "
-    "event does not skip -- it asserts the refusal instead.",
-)
-
-requires_counters = pytest.mark.skipif(
-    not CAN_COUNT,
-    reason="this host arms no hardware counter: either no PAPI, or papi.perf_event_reason() names "
-    "a blocked gate (paranoid sysctl, no perf_event subsystem, or no countable event at all -- "
-    "common on hosted CI runners, whose hypervisor commonly does not pass the PMU through to the "
-    "guest regardless of the sysctl). What such a host DOES report is asserted by the measuring "
-    "tests below; these few are claims ABOUT a CPU that has counters and have nothing to check "
-    "here. Install PAPI and/or lower kernel.perf_event_paranoid to exercise them.",
-)
+#: Needs an armable CPU counter: the ``hw_counters`` group, which hosted CI runners (no PMU) never select.
+requires_counters = pytest.mark.hw_counters
 
 
 def unarmable_events(metric: str) -> set:
@@ -62,23 +45,11 @@ def unarmable_events(metric: str) -> set:
     return wanted.difference(papi.available_events() if CAN_COUNT else ())
 
 
-def test_the_papi_provisioning_step_actually_worked() -> None:
-    """CI_EXPECTS_PAPI turns a silent, permanently-skipped ``requires_papi`` set back into a red
-    job the moment the *provisioning* breaks (apt drift, a renamed package, a loader path change)
-    -- the failure mode this whole file was quietly in before the unit job installed libpapi-dev.
-
-    Deliberately checks only ``PAPI_LIBRARY``, not ``papi.perf_event_reason()``: a hosted runner's
-    hypervisor commonly does not expose hardware counters to the guest at all, which is an honest
-    environment limit and not a broken install -- asserting that too would fail this canary on
-    every such runner for a reason nobody can fix from this repo.
-    """
-    if not CI_EXPECTS_PAPI:
-        pytest.skip("HPCAGENT_BENCH_CI_PAPI_INSTALLED is unset; not a job that provisions PAPI")
-    assert PAPI_LIBRARY, (
-        "HPCAGENT_BENCH_CI_PAPI_INSTALLED is set but "
-        "ctypes.util.find_library('papi') found nothing -- the CI install step "
-        "silently stopped installing PAPI"
-    )
+@requires_papi
+def test_libpapi_loads_where_the_papi_group_is_selected() -> None:
+    """The job that installs PAPI selects this group, so a provisioning step that silently stopped
+    installing it turns red here instead of quietly running nothing that needs PAPI."""
+    assert PAPI_LIBRARY, "the papi group was selected but ctypes.util.find_library('papi') found nothing"
 
 
 #: The event set of the machine this was developed on -- an AMD Zen4 with 5 counters, where
@@ -680,9 +651,8 @@ def test_a_threaded_kernel_is_counted_on_every_thread_and_degrades_out_loud(monk
     from hpcagent_bench.spec import BenchSpec
     from hpcagent_bench.support.bindings.contract import binding_from_spec
 
-    threads = min(4, flags.ncores())
-    if threads < 2:
-        pytest.skip(f"only {flags.ncores()} physical core(s) available; nothing to parallelise over")
+    # fp_ops is thread-count invariant, so two threads oversubscribed on one core still check it.
+    threads = max(2, min(4, flags.ncores()))
     for key, value in {**flags.cpu_env(Mode.MULTI_CORE, threads=threads), **papi.PINNED_ENV}.items():
         monkeypatch.setenv(key, value)  # set BEFORE the .so loads, which is when OpenMP reads them
 
