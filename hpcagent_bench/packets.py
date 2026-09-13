@@ -172,7 +172,7 @@ def canonical(spec: str) -> str:
         return parts[0]
     wanted = frozenset(parts)
     for key, definition in tags.registry().packet_defs.items():
-        if definition.packets and frozenset(definition.packets) == wanted:
+        if definition.packets and frozenset(definition.skills) | frozenset(definition.packets) == wanted:
             return key
     return "+".join(sorted(parts))
 

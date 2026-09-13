@@ -70,6 +70,32 @@ def test_resolve_profiling_is_the_bundle() -> None:
     assert resolved.env == ()
 
 
+@pytest.mark.parametrize(
+    "spec, device_page",
+    [("profiling-amd", "rocprof"), ("profiling-nvidia", "nsys")],
+)
+def test_a_vendor_profiling_packet_stages_only_its_own_device_tracer(spec: str, device_page: str) -> None:
+    """The other vendor's tracer page can never run on the device, so it is rent with no payoff."""
+    resolved = packets.resolve(spec, "c")
+    assert resolved.skills == tuple(sorted(("opt-reports", "profiling", device_page)))
+    assert resolved.env == ()
+
+
+@pytest.mark.parametrize(
+    "spec, key",
+    [("opt-reports;profiling;rocprof", "profiling-amd"), ("nsys;opt-reports;profiling", "profiling-nvidia")],
+)
+def test_canonical_recognises_a_vendor_profiling_packet_from_its_parts(spec: str, key: str) -> None:
+    assert packets.canonical(spec) == key
+
+
+def test_canonical_does_not_name_a_composite_whose_own_page_is_missing() -> None:
+    """A composite is its skills AND its sub-packets: without the profiling page the tracers alone
+    are not the profiling bundle, and recording them under its key would claim a page never staged."""
+    assert packets.canonical("opt-reports;rocprof") == "opt-reports+rocprof"
+    assert packets.canonical("nsys;opt-reports;rocprof") == "nsys+opt-reports+rocprof"
+
+
 def test_resolve_repo_sets_the_layout_env() -> None:
     resolved = packets.resolve("repo", "c", environ={"REPO_LAYOUT_PYTHON": "/venv/bin/python"})
     assert resolved.key == "repo"
