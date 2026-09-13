@@ -232,6 +232,12 @@ def attribute_rank(value: ast.Attribute, ranks: Dict[str, int]) -> Optional[int]
     # BIAS vector's rank 1 for a rank-2 result.
     if value.attr in ("ndim", "size"):
         return 0  # an array's axis count and element count are integers
+    if (
+        isinstance(value.value, ast.Name)
+        and value.value.id in ("np", "numpy", "math")
+        and value.attr in SCALAR_CONSTANTS
+    ):
+        return 0  # ``np.pi``, ``math.inf``
     return expr_rank(value.value, ranks) if value.attr == "T" else None
 
 
@@ -367,6 +373,8 @@ def single_index_rank(base: int, index: ast.expr, ranks: Dict[str, int]) -> Opti
 
 #: Builtins that always return a Python scalar, whatever they are given.
 SCALAR_BUILTINS = frozenset({"len", "int", "float"})
+#: ``np.<name>`` / ``math.<name>`` constants that are scalars.
+SCALAR_CONSTANTS = frozenset({"pi", "e", "inf", "nan", "tau", "euler_gamma"})
 
 
 def call_rank(value: ast.Call, ranks: Dict[str, int]) -> Optional[int]:
@@ -5230,7 +5238,7 @@ def _return_rank(
 
 
 def _infer_param_ranks(
-    funcs: List[ast.FunctionDef], kernel_name: str, kir_seed: Dict[str, int]
+    funcs: List[ast.FunctionDef], kernel_name: str, kir_seed: Dict[str, int], const_seed: Dict[str, int]
 ) -> Tuple[Dict[str, Dict[str, int]], Dict[str, int]]:
     """Per-function ``{param: ndim}`` seeds, and each function's return rank where known.
 
@@ -5250,7 +5258,7 @@ def _infer_param_ranks(
     for _ in range(6):
         changed = False
         for fn in funcs:
-            base = dict(seeds[fn.name])
+            base = {**const_seed, **seeds[fn.name]}
             if fn.name == kernel_name:
                 base.update(kir_seed)
             ranks = rank_table(fn, base, call_returns=ret_rank)
@@ -6487,12 +6495,14 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
     # Manifest scalars and size symbols are rank 0 beside the arrays. ``vars()`` because the rank-only
     # callers pass arrays alone.
     kir_rank_seed = {**scalar_rank_seed(vars(kir).get("scalars", ()), vars(kir).get("symbols", ())), **kir_seed}
-    param_ranks, return_ranks = _infer_param_ranks(all_funcs, kir.kernel_name, kir_rank_seed)
+    # The module-level numeric constants the frontend folded (``HEAD_DIM = 64``) are rank 0 in every function.
+    const_seed = dict.fromkeys(sorted(vars(kir).get("inlined_consts", ())), 0)
+    param_ranks, return_ranks = _infer_param_ranks(all_funcs, kir.kernel_name, kir_rank_seed, const_seed)
     eigh_aliases = _eigh_alias_names(tree)
     changed = False
     for fn in all_funcs or [tree]:
         is_kernel = vars(fn).get("name") == kir.kernel_name
-        seed = dict(param_ranks.get(vars(fn).get("name"), {}))
+        seed = {**const_seed, **param_ranks.get(vars(fn).get("name"), {})}
         if is_kernel:
             seed.update(kir_rank_seed)
         # A local bound to a helper call takes the helper's return rank.
