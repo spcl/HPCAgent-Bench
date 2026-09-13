@@ -122,8 +122,7 @@ def test_gmres_dace_early_convergence_matches_reference() -> None:
     from numpyto_c.dace_emit import emit_dace
 
     gmres = next((k for k in _KERNELS if k.short == "gmres"), None)
-    if gmres is None:
-        pytest.skip("gmres not registered in this checkout")
+    assert gmres is not None, "gmres is a committed sparse kernel and must be registered"
     # A spectrum with 4 clusters -> the Krylov space is exhausted in ~4 steps, so gmres
     # breaks early and reduces m well below the allocation size min(max_iter, N) = 30.
     N = 30
