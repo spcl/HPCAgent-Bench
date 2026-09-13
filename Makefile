@@ -35,8 +35,8 @@ format-check:    ## check formatting of changed files (CI parity, no writes)
 lint:            ## run every pre-commit hook over the whole tree
 	pre-commit run --all-files
 
-test:           ## fast test suite (excludes the integration build/run tests)
-	$(PYTEST) -n$(N) -m "not integration" tests/
+test:           ## fast test suite (excludes the integration build/run tests and the numerical sweep)
+	$(PYTEST) -n$(N) -m "not integration and not numerical_sweep" tests/
 
 test-all:        ## whole test suite, integration tests included (slow, native compiles)
 	$(PYTEST) -n$(N) tests/

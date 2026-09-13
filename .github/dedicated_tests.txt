@@ -67,6 +67,10 @@ tests/test_kernelbench_translation.py
 # with both. Excluded from the unit sweep because the sweep's runner has neither Pluto nor the
 # headroom -- it would skip there, and a skip that looks like a pass is what this file prevents.
 tests/test_opt_reports_e2e.py
+# The numerical-sweep job (-m numerical_sweep): every kernel's native backends emitted, compiled and
+# run at preset S against numpy. Hours of compile serially; the unit sweep cannot hold it.
+tests/test_numerical_correctness.py
+tests/test_s_preset_integration.py
 
 # --- containers: needs a rootless runtime on the runner -----------------------------------------
 tests/test_container_launch.py
