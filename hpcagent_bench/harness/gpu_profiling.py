@@ -1102,15 +1102,13 @@ def profile_gpu_once(
     branch. Both arms return the same :class:`GpuRun`; a profiler that outlives ``timeout`` is
     ``timed_out``, never the raw exception. ``profiler`` is this request's :func:`gpu_check`
     answer; the AMD arm traces with it instead of re-running the rocminfo probe."""
-    amd = traces_amd(language)
     try:
-        if amd:
+        if traces_amd(language):
             return profile_amd_once(root, request_file, profiler=profiler, timeout=timeout, min_percent=min_percent)
         return profile_nvidia_once(root, request_file, language=language, timeout=timeout, min_percent=min_percent)
     except subprocess.TimeoutExpired as wedged:
-        tool = "rocprof" if amd else "nsys"
         raise GpuProfilerUnavailable(
-            "timed_out", f"{tool} wedged past {timeout:g}s and was killed: {wedged.cmd}"
+            "timed_out", f"{profiler[0]} wedged past {timeout:g}s and was killed: {wedged.cmd}"
         ) from wedged
 
 

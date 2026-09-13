@@ -98,6 +98,7 @@ def test_a_wedged_gpu_profiler_is_a_timed_out_refusal_not_a_raw_timeout(tmp_path
         )
     assert caught.value.cause == "timed_out", caught.value.cause
     assert "3s" in str(caught.value), str(caught.value)
+    assert f"{profiler[0]} wedged" in str(caught.value), "the message must name the tracer that ran"
 
 
 def stem(name: str) -> str:
