@@ -113,8 +113,8 @@ PROFILE_PROPERTIES: dict[str, Any] = {
     "residency": {
         "type": "string",
         "enum": ["host", "device"],
-        "description": "Device tracers only: 'device' times the device-resident kernel with GPU events; "
-        "the default 'host' times the whole host call.",
+        "description": "Device tracers only: a GPU submission is always timed device-resident with GPU events, "
+        "so 'host' is read as 'device'.",
     },
 }
 
