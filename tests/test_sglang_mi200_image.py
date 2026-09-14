@@ -1,11 +1,11 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The mi200 (MI250X, gfx90a) SGLang image, its pipeline entries and its private serving smoke.
+"""The mi200 (MI250X, gfx90a) SGLang image, its pipeline entries and the serving gate's key file.
 
 MI250X needs its own image: sgl_kernel and cupy carry device code for one gfx arch, the base's
 common_ops is gfx942-only, and aiter has no gfx90a kernels. These pin the recipe to gfx90a, pin every
-pipeline map to one profile name, run the recipe's setup_rocm.py edit on a stand-in file, and run the
-smoke launcher's refusal and dry-run paths against stub srun/sbatch/curl.
+pipeline map to one profile name, run the recipe's setup_rocm.py edit on a stand-in file, and check
+that verify-tools-reasoning.py sends the key it reads. The launcher is tests/test_serve_private.py.
 """
 
 import importlib.util
@@ -24,7 +24,6 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CE = ROOT / "containers" / "cluster" / "ce-images"
 MI200 = CE / "sglang-mi200"
-SMOKE = CE / "inference" / "serve-mi200-smoke.sbatch"
 PROFILE = "sglang-mi200"
 CANDIDATE = "optarena-sglang-mi200-candidate.sqsh"
 LIVE = "optarena-sglang-mi200.sqsh"
@@ -255,90 +254,6 @@ def test_a_missing_mi200_image_does_not_fail_install_edfs_for_the_other_roles(tm
     done, edf_dir = install_edfs(tmp_path, images_env()[3:])
     assert done.returncode == 0, done.stderr
     assert not (edf_dir / "sglang-mi200-latest.toml").exists()
-
-
-def smoke(tmp_path: pathlib.Path, key_mode: int = 0o600, **extra: str) -> subprocess.CompletedProcess[str]:
-    """Run the launcher outside Slurm, with no inherited environment and stubs that record any call."""
-    stub = tmp_path / "bin"
-    stub.mkdir(exist_ok=True)
-    for name in ("srun", "sbatch", "curl"):
-        (stub / name).write_text(f'#!/bin/sh\necho {name} >> "{tmp_path}/stub-calls"\n', encoding="utf-8")
-        (stub / name).chmod(0o755)
-    key = tmp_path / "endpoint.key"
-    key.write_text(KEY + "\n", encoding="utf-8")
-    key.chmod(key_mode)
-    (tmp_path / "hf" / "hub" / "models--Qwen--Qwen3.8-27B").mkdir(parents=True, exist_ok=True)
-    env = {
-        "PATH": f"{stub}:/usr/bin:/bin",
-        "HOME": str(tmp_path),
-        "USER": "mi200-smoke-test-user",
-        "SCRATCH": str(tmp_path),
-        "REPO": str(ROOT),
-        "KEY_FILE": str(key),
-        "HF_HOME": str(tmp_path / "hf"),
-        "RUN_ROOT": str(tmp_path / "runs"),
-        "DRY_RUN": "1",
-        **extra,
-    }
-    return subprocess.run(["bash", str(SMOKE)], capture_output=True, text=True, check=False, env=env, cwd=tmp_path)
-
-
-@pytest.mark.parametrize("mode", [0o644, 0o640, 0o400])
-def test_the_smoke_refuses_a_key_file_that_is_not_mode_600_before_touching_anything(
-    tmp_path: pathlib.Path, mode: int
-) -> None:
-    done = smoke(tmp_path, key_mode=mode)
-    assert done.returncode == 2
-    assert f"is mode {mode:o}, not 600" in done.stderr
-    assert not (tmp_path / "stub-calls").exists()
-    assert not (tmp_path / "runs").exists()
-    assert KEY not in done.stdout + done.stderr
-
-
-def argv_lines(stdout: str) -> list[str]:
-    return [line.removeprefix("argv: ") for line in stdout.splitlines() if line.startswith("argv: ")]
-
-
-def test_the_smoke_passes_the_key_only_through_a_config_file_in_a_mode_700_run_dir(tmp_path: pathlib.Path) -> None:
-    done = smoke(tmp_path)
-    assert done.returncode == 0, done.stderr
-    (run_dir,) = (tmp_path / "runs").iterdir()
-    assert run_dir.stat().st_mode & 0o777 == 0o700
-    assert f"config:   {run_dir}/sglang-auth.yaml (mode 600)" in done.stdout
-    argvs = argv_lines(done.stdout)
-    assert len(argvs) == 3
-    for argv in argvs:
-        assert f"--config {run_dir}/sglang-auth.yaml" in argv
-        assert "--api-key" not in argv
-    assert KEY not in done.stdout + done.stderr
-    secrets = {"sglang-auth.yaml", "api.key", "auth.header"}
-    assert [path.name for path in run_dir.iterdir() if path.name in secrets] == []
-    assert not (tmp_path / "stub-calls").exists()
-
-
-def test_every_smoke_leg_binds_loopback_last_on_the_command_line(tmp_path: pathlib.Path) -> None:
-    done = smoke(tmp_path, LEGS="tp4:0.80 tp8:0.85", EXTRA_ARGS="--log-level debug")
-    assert done.returncode == 0, done.stderr
-    argvs = argv_lines(done.stdout)
-    assert [argv.split()[-4:] for argv in argvs] == [
-        ["--host", "127.0.0.1", "--port", "30000"],
-        ["--host", "127.0.0.1", "--port", "30001"],
-    ]
-    assert "--tp-size 8 --mem-fraction-static 0.85" in argvs[1]
-    assert "0.0.0.0" not in SMOKE.read_text(encoding="utf-8")
-
-
-@pytest.mark.parametrize("extra", ["--host 0.0.0.0", "--port=8000", "--api-key secret", "--config /tmp/c.yaml"])
-def test_the_smoke_refuses_extra_args_that_name_the_host_port_key_or_config(tmp_path: pathlib.Path, extra: str) -> None:
-    done = smoke(tmp_path, EXTRA_ARGS=extra)
-    assert done.returncode == 2
-    assert "EXTRA_ARGS may not set" in done.stderr
-
-
-def test_the_smoke_refuses_a_malformed_leg(tmp_path: pathlib.Path) -> None:
-    done = smoke(tmp_path, LEGS="tp4:0.80 tp3:0.80")
-    assert done.returncode == 2
-    assert "leg 'tp3:0.80'" in done.stderr
 
 
 GATE = load_module(CE / "inference" / "verify-tools-reasoning.py", "verify_tools_reasoning")

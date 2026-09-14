@@ -166,4 +166,4 @@ PY
 WORKDIR /workspace
 
 # LIMITATION: the build proves compile targets and imports, not a launch. verify_image.sbatch runs
-# inference/sglang_kernel_launch_check.py on an mi200 GPU; serving is inference/serve-mi200-smoke.sbatch.
+# inference/sglang_kernel_launch_check.py on an mi200 GPU; serving is inference/serve-private.sbatch.

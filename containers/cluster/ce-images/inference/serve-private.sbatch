@@ -1,56 +1,84 @@
 #!/usr/bin/env bash
-# Private SGLang serving smoke on one mi200 node (8x MI250X, gfx90a): Qwen3.8-27B BF16, one fresh
-# server per leg in LEGS, each "tp<N>:<mem-fraction-static>".
+# Private SGLang serving of Qwen3.8-27B on one beverin node. PRESET picks the hardware:
 #
-# PRIVATE BY CONSTRUCTION:
+#   PRESET  partition  GPUs       EDF                  weights               attention  default LEGS
+#   mi300   mi300      4x MI300A  sglang-latest        Qwen3.8-27B-FP8       aiter      tp4:0.306
+#   mi200   mi200      8x MI250X  sglang-mi200-latest  Qwen3.8-27B (BF16)    triton     tp4:0.80 tp4:0.88 tp8:0.80
+#
+# MODE=smoke (default): one fresh server per LEGS spec "tp<N>:<mem-fraction-static>". Per leg: wait on
+#   /health (auth-exempt), record the KV/Mamba allocator lines, assert 401 without the key and 200 with
+#   it, run verify-tools-reasoning.py and a concurrent load probe with the key, stop.
+# MODE=serve: the first LEGS spec only. Wait, record, assert 401/200, print the laptop tunnel and
+#   key-fetch lines, then hold the server until the job ends or is cancelled.
+#
+# PRIVATE BY CONSTRUCTION, both presets:
 #   * --host 127.0.0.1 on every leg, last on the command line; nothing off this node can connect.
-#   * The API key comes from KEY_FILE (default ~/.config/optarena/mi200-endpoint.key), refused unless
+#   * The API key comes from KEY_FILE (default ~/.config/optarena/<preset>-endpoint.key), refused unless
 #     mode 600 and owned by you. It reaches sglang only through --config <yaml>, never argv.
 #   * The run dir is mode 700 with scratch's default ACLs stripped. It holds the yaml, the curl header
 #     file, the in-container key file and sglang's server log, which prints server_args incl. api_key.
 #   * The key is never printed; the three secret files are deleted when the script exits.
 #
-#   umask 077; mkdir -p ~/.config/optarena; openssl rand -hex 32 > ~/.config/optarena/mi200-endpoint.key
+#   umask 077; mkdir -p ~/.config/optarena; openssl rand -hex 32 > ~/.config/optarena/mi300-endpoint.key
 #   cd <optarena checkout or worktree>
-#   sbatch containers/cluster/ce-images/inference/serve-mi200-smoke.sbatch
-#   LEGS="tp4:0.80" EDF=<candidate.toml> sbatch containers/cluster/ce-images/inference/serve-mi200-smoke.sbatch
-#   DRY_RUN=1 bash containers/cluster/ce-images/inference/serve-mi200-smoke.sbatch    # checks, argv, no launch
+#   PRESET=mi300 sbatch --partition=mi300 --gpus-per-node=4 containers/cluster/ce-images/inference/serve-private.sbatch
+#   PRESET=mi200 sbatch --partition=mi200 --gpus-per-node=8 containers/cluster/ce-images/inference/serve-private.sbatch
+#   PRESET=mi300 MODE=serve sbatch --partition=mi300 --gpus-per-node=4 --time=08:00:00 <same path>
+#   PRESET=mi300 MODE=serve DRY_RUN=1 bash containers/cluster/ce-images/inference/serve-private.sbatch
 #
-# Per leg: wait on /health (auth-exempt), record the KV/Mamba allocator lines, assert 401 without the
-# key and 200 with it, run verify-tools-reasoning.py and a concurrent load probe with the key, stop.
-# Lives beside smoke-kimi-*.sbatch: a standalone smoke that owns its launch line, not a campaign role.
-#SBATCH --job-name=serve-mi200-smoke
-#SBATCH --partition=mi200
+# The header names no partition or GPU count; pass both, the preset refuses a wrong partition.
+# Laptop access: docs/serving/private-endpoint.md.
+#SBATCH --job-name=serve-private
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gpus-per-node=8
 #SBATCH --exclusive
 #SBATCH --mem=0
 #SBATCH --time=04:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/serve-mi200-smoke-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/serve-mi200-smoke-%j.out
+#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/serve-private-%j.out
+#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/serve-private-%j.out
 
 set -Eeuo pipefail
 ulimit -c 0
 
 refuse() {
-    printf 'serve-mi200-smoke: refusing: %s\n' "$*" >&2
+    printf 'serve-private: refusing: %s\n' "$*" >&2
     exit 2
 }
 
+use_preset() {  # sets the PRESET_* values; key file, triton cache and run root derive from the name
+    case "${PRESET:-}" in
+        mi300)  # the qwen38 campaign line (experiments/.env.llrbase-qwen38-c); 0.306 is node-wide on the APU
+            PRESET_PARTITION=mi300 PRESET_GPUS=4 PRESET_EDF=sglang-latest PRESET_MODEL=Qwen/Qwen3.8-27B-FP8
+            PRESET_LEGS="tp4:0.306" PRESET_AITER=1
+            PRESET_FLAGS=(--attention-backend aiter)
+            ;;
+        mi200)  # MI250X: no aiter gfx90a kernels, no FP8
+            PRESET_PARTITION=mi200 PRESET_GPUS=8 PRESET_EDF=sglang-mi200-latest PRESET_MODEL=Qwen/Qwen3.8-27B
+            PRESET_LEGS="tp4:0.80 tp4:0.88 tp8:0.80" PRESET_AITER=0
+            PRESET_FLAGS=(--attention-backend triton --disable-custom-all-reduce)
+            ;;
+        *) refuse "PRESET must be mi300 or mi200, got '${PRESET:-}'" ;;
+    esac
+}
+
+MODE="${MODE:-smoke}"
 DRY_RUN="${DRY_RUN:-0}"
-[[ -n "${SLURM_JOB_ID:-}" || "${DRY_RUN}" == 1 ]] || refuse "submit with sbatch, or DRY_RUN=1 to check without launching"
-[[ -z "${SLURM_JOB_ID:-}" || "${SLURM_JOB_PARTITION:-}" == mi200 ]] || refuse "partition '${SLURM_JOB_PARTITION:-}' is not mi200"
+use_preset
+[[ "${MODE}" == smoke || "${MODE}" == serve ]] || refuse "MODE must be smoke or serve, got '${MODE}'"
+[[ -n "${SLURM_JOB_ID:-}" || "${DRY_RUN}" == 1 ]] \
+    || refuse "submit with sbatch, or DRY_RUN=1 to check without launching"
+[[ -z "${SLURM_JOB_ID:-}" || "${SLURM_JOB_PARTITION:-}" == "${PRESET_PARTITION}" ]] \
+    || refuse "PRESET=${PRESET} runs on partition ${PRESET_PARTITION}, not '${SLURM_JOB_PARTITION:-}'"
 
 # Under sbatch BASH_SOURCE is the spooled copy; the checkout is where the job was submitted from.
 REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2>/dev/null || true)}"
 GATE="${REPO}/containers/cluster/ce-images/inference/verify-tools-reasoning.py"
 [[ -n "${REPO}" && -f "${GATE}" ]] || refuse "no checkout: set REPO or submit from inside one"
 
-KEY_FILE="${KEY_FILE:-${HOME}/.config/optarena/mi200-endpoint.key}"
-EDF="${EDF:-sglang-mi200-latest}"
-LEGS="${LEGS:-tp4:0.80 tp4:0.88 tp8:0.80}"
-MODEL_REPO="${MODEL_REPO:-Qwen/Qwen3.8-27B}"
+KEY_FILE="${KEY_FILE:-${HOME}/.config/optarena/${PRESET}-endpoint.key}"
+EDF="${EDF:-${PRESET_EDF}}"
+LEGS="${LEGS:-${PRESET_LEGS}}"
+MODEL_REPO="${MODEL_REPO:-${PRESET_MODEL}}"
 SERVED_MODEL="${SERVED_MODEL:-optarena-vllm}"
 API_PORT="${API_PORT:-30000}"
 READY_TIMEOUT="${READY_TIMEOUT:-3600}"
@@ -61,9 +89,9 @@ EXTRA_ARGS="${EXTRA_ARGS:-}"
 FAST_SCRATCH="/iopsstor/scratch/cscs/${USER:-$(id -un)}"
 [[ -d "${FAST_SCRATCH}" ]] || FAST_SCRATCH="${SCRATCH:?set SCRATCH}"
 HF_HOME="${HF_HOME:-${FAST_SCRATCH}/hf}"
-RUN_ROOT="${RUN_ROOT:-${SCRATCH:?set SCRATCH}/inference-server/mi200-smoke}"
+RUN_ROOT="${RUN_ROOT:-${SCRATCH:?set SCRATCH}/inference-server/${PRESET}-private}"
 RUN_DIR="${RUN_ROOT}/${SLURM_JOB_ID:-dry-$$}"
-SERVE_CPUS="${SLURM_CPUS_ON_NODE:-128}"
+SERVE_CPUS="${SLURM_CPUS_ON_NODE:-$(nproc)}"
 SERVER_PID=""
 MONITOR_PID=""
 
@@ -92,6 +120,7 @@ parse_leg() {  # sets LEG_TP and LEG_FRAC
     [[ "$1" =~ ^tp(1|2|4|8):(0\.[0-9]+)$ ]] || refuse "leg '$1' is not tp<1|2|4|8>:<0.fraction>"
     LEG_TP="${BASH_REMATCH[1]}"
     LEG_FRAC="${BASH_REMATCH[2]}"
+    ((LEG_TP <= PRESET_GPUS)) || refuse "leg '$1' needs ${LEG_TP} GPUs; ${PRESET} nodes have ${PRESET_GPUS}"
 }
 
 make_private_dir() {
@@ -118,8 +147,7 @@ server_argv() {  # server_argv <tp> <fraction> <port>: sets SERVER_ARGV
     SERVER_ARGV=(/opt/venv/bin/python3 -m sglang.launch_server
         --config "${RUN_DIR}/sglang-auth.yaml"
         --model-path "${MODEL_REPO}" --served-model-name "${SERVED_MODEL}"
-        --tp-size "$1" --mem-fraction-static "$2"
-        --attention-backend triton --disable-custom-all-reduce
+        --tp-size "$1" --mem-fraction-static "$2" "${PRESET_FLAGS[@]}"
         --chat-template "${REPO}/experiments/chat-template-qwen38.jinja" --trust-remote-code --language-only
         --watchdog-timeout 1800 --context-length 262144 --mamba-full-memory-ratio 0.5 --max-running-requests 128
         --enable-metrics --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-cache-report
@@ -215,32 +243,70 @@ stop_server() {
     SERVER_PID=""
 }
 
-run_leg() {  # run_leg <index> <spec>
-    local port dir failed=0
+start_leg() {  # start_leg <index> <spec>: sets LEG_PORT and LEG_DIR, prints argv, launches unless DRY_RUN
     parse_leg "$2"
-    port=$((API_PORT + $1))
-    dir="${RUN_DIR}/leg$1-${2/:/-}"
-    mkdir -p -- "${dir}"
-    server_argv "${LEG_TP}" "${LEG_FRAC}" "${port}"
-    printf '\n===== leg %s: %s tp=%s mem-fraction-static=%s port=%s =====\n' "$1" "$2" "${LEG_TP}" "${LEG_FRAC}" "${port}"
+    LEG_PORT=$((API_PORT + $1))
+    LEG_DIR="${RUN_DIR}/leg$1-${2/:/-}"
+    mkdir -p -- "${LEG_DIR}"
+    server_argv "${LEG_TP}" "${LEG_FRAC}" "${LEG_PORT}"
+    printf '\n===== leg %s: %s tp=%s mem-fraction-static=%s port=%s =====\n' \
+        "$1" "$2" "${LEG_TP}" "${LEG_FRAC}" "${LEG_PORT}"
     printf 'argv: %s\n' "${SERVER_ARGV[*]}"
     [[ "${DRY_RUN}" != 1 ]] || return 0
     srun --ntasks=1 --cpus-per-task="${SERVE_CPUS}" --export=ALL --environment="${EDF}" \
-        --output="${dir}/server.log" --error="${dir}/server.log" \
-        env SGLANG_USE_AITER=0 SGLANG_SET_CPU_AFFINITY=0 HF_HUB_OFFLINE=1 "HF_HOME=${HF_HOME}" \
-        "TRITON_CACHE_DIR=${FAST_SCRATCH}/triton-cache-sglang-mi200" "${SERVER_ARGV[@]}" &
+        --output="${LEG_DIR}/server.log" --error="${LEG_DIR}/server.log" \
+        env "SGLANG_USE_AITER=${PRESET_AITER}" SGLANG_SET_CPU_AFFINITY=0 HF_HUB_OFFLINE=1 "HF_HOME=${HF_HOME}" \
+        "TRITON_CACHE_DIR=${FAST_SCRATCH}/triton-cache-sglang-${PRESET}" "${SERVER_ARGV[@]}" &
     SERVER_PID=$!
-    wait_ready "${port}" "${dir}" || failed=1
-    record_memory "${dir}"
+}
+
+run_leg() {  # run_leg <index> <spec>: one smoke leg, server stopped at the end
+    local failed=0
+    start_leg "$1" "$2"
+    [[ "${DRY_RUN}" != 1 ]] || return 0
+    wait_ready "${LEG_PORT}" "${LEG_DIR}" || failed=1
+    record_memory "${LEG_DIR}"
     if ((failed == 0)); then
-        auth_checks "${port}" "${dir}" || failed=1
-        tools_gate "${port}" "${dir}" || failed=1
-        load_probe "${port}" "${dir}" || failed=1
+        auth_checks "${LEG_PORT}" "${LEG_DIR}" || failed=1
+        tools_gate "${LEG_PORT}" "${LEG_DIR}" || failed=1
+        load_probe "${LEG_PORT}" "${LEG_DIR}" || failed=1
     fi
     stop_server
     # Released GPU memory before the next leg allocates.
     sleep 30
     return "${failed}"
+}
+
+connect_help() {  # connect_help <port>: laptop lines naming the key file, never its content
+    local node="${SLURMD_NODENAME:-${HOSTNAME%%.*}}" key_name="${KEY_FILE##*/}"
+    local laptop_key="~/.config/optarena/${key_name}" header_name="${key_name%.key}.header"
+    cat <<EOF
+
+===== private endpoint is live: 127.0.0.1:$1 on ${node}, job ${SLURM_JOB_ID:-dry run} =====
+On your laptop, while this job runs (docs/serving/private-endpoint.md):
+  umask 077; mkdir -p ~/.config/optarena
+  scp beverin:${KEY_FILE} ~/.config/optarena/
+  printf 'Authorization: Bearer %s\n' "\$(cat ${laptop_key})" \\
+    > ~/.config/optarena/${header_name}
+  ssh -N -J ela,beverin -L 127.0.0.1:$1:127.0.0.1:$1 ${USER:-$(id -un)}@${node}
+  curl -s http://127.0.0.1:$1/v1/chat/completions -H 'Content-Type: application/json' \\
+    -H "@\$HOME/.config/optarena/${header_name}" \\
+    -d '{"model": "${SERVED_MODEL}", "max_tokens": 128, "messages": [{"role": "user", "content": "Say hi."}]}'
+Stop: Ctrl-C the tunnel, then scancel ${SLURM_JOB_ID:-<jobid>}.
+Do not share the key, the header file or this endpoint with anyone, project members included.
+EOF
+}
+
+serve_leg() {  # serve_leg <spec>: one server, auth-checked, held until the job ends or is cancelled
+    start_leg 0 "$1"
+    if [[ "${DRY_RUN}" != 1 ]]; then
+        wait_ready "${LEG_PORT}" "${LEG_DIR}" || return 1
+        record_memory "${LEG_DIR}"
+        auth_checks "${LEG_PORT}" "${LEG_DIR}" || return 1
+    fi
+    connect_help "${LEG_PORT}"
+    [[ "${DRY_RUN}" != 1 ]] || return 0
+    wait "${SERVER_PID}"
 }
 
 cleanup() {
@@ -251,11 +317,16 @@ cleanup() {
 
 read_key_file
 validate_extra_args
-for spec in ${LEGS}; do parse_leg "${spec}"; done
+read -r -a LEG_SPECS <<< "${LEGS}"
+((${#LEG_SPECS[@]} > 0)) || refuse "LEGS is empty"
+for spec in "${LEG_SPECS[@]}"; do parse_leg "${spec}"; done
+[[ "${MODE}" == smoke ]] || LEG_SPECS=("${LEG_SPECS[0]}")
 [[ -d "${HF_HOME}/hub/models--${MODEL_REPO//\//--}" ]] || refuse "no ${MODEL_REPO} under ${HF_HOME}/hub"
 
 make_private_dir "${RUN_DIR}"
 trap cleanup EXIT
+# scancel sends TERM: leave through the EXIT trap so the secret files go.
+trap 'exit 143' TERM INT
 write_secret "${RUN_DIR}/sglang-auth.yaml" "api-key: \"${API_KEY}\""
 write_secret "${RUN_DIR}/api.key" "${API_KEY}"
 write_secret "${RUN_DIR}/auth.header" "Authorization: Bearer ${API_KEY}"
@@ -267,9 +338,11 @@ printf '{"model": "%s", "messages": [{"role": "user", "content": "%s Explain loo
 
 cat <<EOF
 job:      ${SLURM_JOB_ID:-dry run}
+preset:   ${PRESET} (partition ${PRESET_PARTITION}), mode ${MODE}
 model:    ${MODEL_REPO} as "${SERVED_MODEL}" (HF_HOME=${HF_HOME})
 image:    ${EDF}
-legs:     ${LEGS}
+env:      SGLANG_USE_AITER=${PRESET_AITER} SGLANG_SET_CPU_AFFINITY=0
+legs:     ${LEG_SPECS[*]}
 run dir:  ${RUN_DIR} (mode $(stat -c %a -- "${RUN_DIR}"))
 config:   ${RUN_DIR}/sglang-auth.yaml (mode $(stat -c %a -- "${RUN_DIR}/sglang-auth.yaml"))
 EOF
@@ -279,9 +352,17 @@ if [[ "${DRY_RUN}" != 1 ]]; then
     MONITOR_PID=$!
 fi
 
+if [[ "${MODE}" == serve ]]; then
+    if ! serve_leg "${LEG_SPECS[0]}"; then
+        printf '\nSERVE FAILED leg: %s\nlogs: %s\n' "${LEG_SPECS[0]}" "${RUN_DIR}" >&2
+        exit 1
+    fi
+    exit 0
+fi
+
 FAILURES=()
 index=0
-for spec in ${LEGS}; do
+for spec in "${LEG_SPECS[@]}"; do
     run_leg "${index}" "${spec}" || FAILURES+=("${spec}")
     index=$((index + 1))
 done

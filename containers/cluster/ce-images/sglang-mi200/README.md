@@ -44,9 +44,11 @@ Verify alone:
 ## Serve smoke (private endpoint)
 
     umask 077; mkdir -p ~/.config/optarena; openssl rand -hex 32 > ~/.config/optarena/mi200-endpoint.key
-    EDF=<candidate edf.toml> sbatch containers/cluster/ce-images/inference/serve-mi200-smoke.sbatch
+    PRESET=mi200 EDF=<candidate edf.toml> sbatch --partition=mi200 --gpus-per-node=8 \
+      containers/cluster/ce-images/inference/serve-private.sbatch
 
 127.0.0.1 only, key via `--config` yaml in a mode-700 run dir. Legs default `tp4:0.80 tp4:0.88 tp8:0.80`.
+Laptop access (`MODE=serve`, ssh tunnel): `docs/serving/private-endpoint.md`.
 
 ## Promote
 

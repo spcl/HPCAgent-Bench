@@ -48,4 +48,4 @@ fi
 ls -lh "${OUTPUT_SQSH}"
 sha256sum "${OUTPUT_SQSH}" | tee "${OUTPUT_SQSH}.sha256"
 echo "SGLANG MI200 IMAGE READY: ${OUTPUT_SQSH}"
-echo "NOT VERIFIED: run build_and_verify.sbatch (kernel launch check) and inference/serve-mi200-smoke.sbatch."
+echo "NOT VERIFIED: run build_and_verify.sbatch (kernel launch check) and PRESET=mi200 inference/serve-private.sbatch."
