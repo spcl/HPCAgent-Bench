@@ -93,23 +93,6 @@ def test_every_input_moves_the_key(sdfg: str, dace: str, change: dict[str, objec
     assert cpf_cache.cache_key(sdfg, dace, {**OPTIONS, **change}) != PINNED_KEY
 
 
-def test_the_source_digest_follows_content_not_location(tmp_path: pathlib.Path) -> None:
-    """A snapshot and a checkout of the same dace hit the same entries; an edit misses them."""
-    for tree in ("one", "two"):
-        package = tmp_path / tree / "dace"
-        (package / "codegen").mkdir(parents=True)
-        (package / "codegen" / "cpf.py").write_text("RENDER = 1\n")
-        (package / "config_schema.yml").write_text("a: 1\n")
-        (package / "external" / "cub").mkdir(parents=True)
-        (package / "__pycache__").mkdir()
-    (tmp_path / "two" / "dace" / "external" / "cub" / "vendored.py").write_text("x = 1\n")
-    (tmp_path / "two" / "dace" / "__pycache__" / "cpf.py").write_text("stale\n")
-    one = cpf_cache.source_digest(tmp_path / "one" / "dace")
-    assert cpf_cache.source_digest(tmp_path / "two" / "dace") == one
-    (tmp_path / "two" / "dace" / "codegen" / "cpf.py").write_text("RENDER = 2\n")
-    assert cpf_cache.source_digest(tmp_path / "two" / "dace") != one
-
-
 def test_a_published_key_is_a_hit_and_publishing_it_again_writes_nothing(tmp_path: pathlib.Path) -> None:
     cache = tmp_path / "cache"
     assert not cpf_cache.is_hit(cache, PINNED_KEY)
@@ -146,6 +129,41 @@ def test_a_modified_artefact_is_a_miss_naming_the_key(tmp_path: pathlib.Path) ->
     source.write_text("// edited by hand\n")
     with pytest.raises(cpf_cache.CacheMiss, match=source.parent.name):
         cpf_cache.resolve(view, "k", "c", "fp64", "form")
+
+
+def test_a_canonical_entry_serves_its_sdfg_until_the_file_is_modified(tmp_path: pathlib.Path) -> None:
+    """A damaged stored SDFG must be produced again, never loaded and rendered."""
+    cache, sdfg = tmp_path / "cache", tmp_path / "canonical.sdfgz"
+    sdfg.write_bytes(b"sdfg")
+    key = cpf_cache.canonical_key("program", "commit", {"target": "cpu"})
+    cpf_cache.publish_canonical(cache, key, {"verdict": "ok"}, sdfg)
+    entry = cpf_cache.canonical_entry(cache, key)
+    assert entry is not None and entry[1] is not None and entry[1].read_bytes() == b"sdfg", entry
+    entry[1].write_bytes(b"edited")
+    assert cpf_cache.canonical_entry(cache, key) is None
+
+
+def test_a_cached_canonicalize_failure_is_served_without_a_file(tmp_path: pathlib.Path) -> None:
+    cache = tmp_path / "cache"
+    key = cpf_cache.canonical_key("program", "commit", {"target": "cpu"})
+    cpf_cache.publish_canonical(cache, key, {"verdict": "fail", "error": "ValueError: cannot lift"}, None)
+    manifest = {"verdict": "fail", "error": "ValueError: cannot lift", "key": key, "layout": cpf_cache.LAYOUT}
+    assert cpf_cache.canonical_entry(cache, key) == (manifest, None)
+
+
+@pytest.mark.parametrize(
+    ("program", "commit", "options"),
+    [
+        ("other", "commit", {"target": "cpu"}),
+        ("program", "moved", {"target": "cpu"}),
+        ("program", "commit", {"target": "gpu"}),
+    ],
+)
+def test_every_input_moves_the_canonical_key(program: str, commit: str, options: dict[str, object]) -> None:
+    """A regenerated program or a moved dace extended must canonicalize again, not hit the old SDFG."""
+    assert cpf_cache.canonical_key(program, commit, options) != cpf_cache.canonical_key(
+        "program", "commit", {"target": "cpu"}
+    )
 
 
 def test_a_pointer_to_a_missing_entry_names_the_key(tmp_path: pathlib.Path) -> None:

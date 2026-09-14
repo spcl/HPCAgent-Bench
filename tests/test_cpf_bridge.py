@@ -26,6 +26,7 @@ import importlib
 import importlib.util
 import json
 import pathlib
+import shutil
 import subprocess
 import tempfile
 import types
@@ -35,7 +36,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 
-from hpcagent_bench import cpf_bridge, cpf_cache, languages, paths
+from hpcagent_bench import cpf_bridge, cpf_cache, cpf_canonical, languages, paths
 from hpcagent_bench.harness.native_call import _call_native
 from hpcagent_bench.spec import BenchSpec, ConfigKnob
 from hpcagent_bench.support.bindings.contract import binding_from_spec
@@ -206,7 +207,7 @@ def declared_parameters(code: str, symbol: str) -> list[str]:
 @pytest.mark.integration
 def test_a_prerender_caches_both_modes_and_a_rerun_renders_nothing(spec: BenchSpec, tmp_path: pathlib.Path) -> None:
     """One prerender publishes the read form and the drop-in under keys a second interpreter derives
-    again: the rerun is all hits, so the SDFG digest is stable across processes. The drop-in served
+    again: the rerun is all hits, so the keys are stable across processes and nothing is parsed. The drop-in served
     from the cache must declare exactly the ABI order its manifest records, its binding must list the
     same order, and both must name the canonical symbol the judge links -- not CPF's own."""
     found = importlib.util.find_spec("dace")
@@ -217,20 +218,23 @@ def test_a_prerender_caches_both_modes_and_a_rerun_renders_nothing(spec: BenchSp
         "precision": "",
         "target": "cpu",
         "dace_package_root": pathlib.Path(found.origin).resolve().parents[1],
-        "dace_source": "test-source",
+        "dace_commit": "test-commit",
     }
-    first = cpf_bridge.prerender_kernel(spec, cache, **kwargs)["results"]["c"]
+    first_record = cpf_bridge.prerender_kernel(spec, cache, **kwargs)
+    first = first_record["results"]["c"]
     assert {mode: outcome["verdict"] for mode, outcome in first.items()} == {"form": "ok", "dropin": "ok"}, first
     assert not any(outcome["cached"] for outcome in first.values())
     assert first["form"]["key"] != first["dropin"]["key"]
 
-    second = cpf_bridge.prerender_kernel(spec, cache, **kwargs)["results"]["c"]
+    second_record = cpf_bridge.prerender_kernel(spec, cache, **kwargs)
+    assert second_record["canonical"] == {"key": first_record["canonical"]["key"]}, second_record
+    second = second_record["results"]["c"]
     assert {mode: (o["key"], o["cached"]) for mode, o in second.items()} == {
         mode: (o["key"], True) for mode, o in first.items()
     }
 
     view = tmp_path / "view"
-    cpf_cache.open_view(view, cache, "cpu", "test-source")
+    cpf_cache.open_view(view, cache, "cpu", "test-commit")
     cpf_cache.record(view, spec.short_name, "c", "fp64", second)
     source, binding_path = cpf_cache.resolve(view, spec.short_name, "c", "fp64", "dropin")
     manifest = json.loads((source.parent / cpf_cache.MANIFEST_NAME).read_text())
@@ -244,6 +248,48 @@ def test_a_prerender_caches_both_modes_and_a_rerun_renders_nothing(spec: BenchSp
 
     form, _ = cpf_cache.resolve(view, spec.short_name, "c", "fp64", "form")
     assert "workspace_size" not in form.read_text(), "the read form must not carry the drop-in's scratch pair"
+
+
+def prerender_kwargs() -> dict[str, object]:
+    """Arguments for :func:`cpf_bridge.prerender_kernel` against the dace this test imports."""
+    found = importlib.util.find_spec("dace")
+    assert found is not None and found.origin is not None
+    return {
+        "precision": "",
+        "target": "cpu",
+        "dace_package_root": pathlib.Path(found.origin).resolve().parents[1],
+        "dace_commit": "test-commit",
+    }
+
+
+@pytest.mark.integration
+def test_a_second_language_renders_from_the_cached_canonical_sdfg(spec: BenchSpec, tmp_path: pathlib.Path) -> None:
+    """A form keys on its canonical SDFG's entry, so a new language, mode or render-code change renders
+    from the stored SDFG instead of paying the parse and canonicalize again (lulesh's is over 30 minutes)."""
+    cache = tmp_path / "cache"
+    first = cpf_bridge.prerender_kernel(spec, cache, languages=["c"], **prerender_kwargs())
+    assert first["canonical"]["cached"] is False, first
+    second = cpf_bridge.prerender_kernel(spec, cache, languages=["c++"], **prerender_kwargs())
+    assert second["canonical"] == {"key": first["canonical"]["key"], "cached": True}, second
+    assert {mode: o["verdict"] for mode, o in second["results"]["c++"].items()} == {"form": "ok", "dropin": "ok"}
+
+
+@pytest.mark.integration
+def test_a_form_rendered_again_from_the_stored_sdfg_is_the_first_render_byte_for_byte(
+    spec: BenchSpec, tmp_path: pathlib.Path
+) -> None:
+    """Every render reads the canonical SDFG back from its file, so a dropped form rendered again from the
+    cached SDFG must reproduce the published bytes under the same key."""
+    cache = tmp_path / "cache"
+    first = cpf_bridge.prerender_kernel(spec, cache, languages=["c"], **prerender_kwargs())["results"]["c"]["form"]
+    entry = cpf_cache.entry_path(cache, str(first["key"]))
+    manifest = json.loads((entry / cpf_cache.MANIFEST_NAME).read_text())
+    text = (entry / manifest["artefacts"]["source"]["name"]).read_text()
+    shutil.rmtree(entry)
+    again = cpf_bridge.prerender_kernel(spec, cache, languages=["c"], **prerender_kwargs())
+    assert again["canonical"]["cached"] is True, again
+    assert again["results"]["c"]["form"]["key"] == first["key"]
+    assert (entry / manifest["artefacts"]["source"]["name"]).read_text() == text
 
 
 def test_the_target_reaches_the_child_and_the_device_is_not_hidden(
@@ -323,20 +369,20 @@ def vexx_all_paths(a: dc.float64[N], b: dc.float64[N]):
 
 
 def module_of(source: str) -> types.ModuleType:
-    """A module holding ``source``'s programs, which is all :func:`resolve_program` reads."""
+    """A module holding ``source``'s programs, which is all :func:`cpf_canonical.resolve_program` reads."""
     module = types.ModuleType("generated_impl")
     exec(compile(source, "generated_impl.py", "exec"), vars(module))  # noqa: S102 -- the source is this file's
     return module
 
 
 def entry_name(module: types.ModuleType, stem: str, entry: str = "") -> str | None:
-    """The FUNCTION name :func:`resolve_program` picked, or ``None`` if it picked nothing.
+    """The FUNCTION name :func:`cpf_canonical.resolve_program` picked, or ``None`` if it picked nothing.
 
     ``DaceProgram.name`` is qualified with the defining module, so it answers
     ``generated_impl_channel_flow`` here and the full dotted path of a real generated impl; the
     function's own name is the part under test.
     """
-    prog = cpf_bridge.resolve_program(module, pathlib.Path(f"{stem}_dace.py"), entry)
+    prog = cpf_canonical.resolve_program(module, pathlib.Path(f"{stem}_dace.py"), entry)
     return None if prog is None else prog.f.__name__
 
 
@@ -410,7 +456,7 @@ def parsed_program(source: str, entry: str, work: pathlib.Path) -> "SDFG":
     assert loader is not None and loader.loader is not None
     module = importlib.util.module_from_spec(loader)
     loader.loader.exec_module(module)
-    prog = cpf_bridge.resolve_program(module, path, entry)
+    prog = cpf_canonical.resolve_program(module, path, entry)
     assert prog is not None
     return prog.to_sdfg(simplify=True)
 
@@ -418,7 +464,7 @@ def parsed_program(source: str, entry: str, work: pathlib.Path) -> "SDFG":
 def canonical_program(source: str, entry: str, work: pathlib.Path) -> "SDFG":
     """``entry`` from ``source``, parsed and canonicalized for the cpu."""
     sdfg = parsed_program(source, entry, work)
-    cpf_bridge.canonicalize_for(sdfg, "cpu")
+    cpf_canonical.canonicalize_for(sdfg, "cpu")
     return sdfg
 
 

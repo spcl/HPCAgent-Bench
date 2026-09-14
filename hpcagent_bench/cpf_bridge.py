@@ -29,7 +29,6 @@ import ast
 import contextlib
 import functools
 import hashlib
-import importlib
 import json
 import os
 import pathlib
@@ -44,8 +43,14 @@ from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from numpyto_common.naming import fptype_tag, short_for
 
-from hpcagent_bench import config, paths
+from hpcagent_bench import config, cpf_canonical, paths
 from hpcagent_bench.cpf_cache import LANGUAGE_EXT
+from hpcagent_bench.cpf_canonical import (
+    canonicalize_for,
+    entry_program_name,
+    failure,
+    parse_kernel,
+)
 from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.support.bindings.contract import (
     WORKSPACE_NAME,
@@ -60,17 +65,12 @@ if TYPE_CHECKING:
     from dace import dtypes as dace_dtypes
     from dace.codegen.cpf import Rendering
     from dace.data import Data
-    from dace.frontend.python.parser import DaceProgram
     from dace.sdfg.graph import MultiConnectorEdge
 
 #: The dialect a device render takes, regardless of ``--language``: a GPU SDFG carries device
 #: storages/schedules the host dialects refuse outright, so the target decides this and
 #: ``--language`` only picks between the two HOST spellings.
 DEVICE_LANGUAGE = "hip"
-
-#: Postfixes a generated impl's stem carries over its ``@dace.program`` name, longest first:
-#: sorting the other way would let the bare ``_dace`` suffix shadow a future ``_dace_x``.
-IMPL_POSTFIXES = ("_dace_gpu", "_dace_cpu", "_dace")
 
 #: Config key for one kernel's render wall clock (see :func:`render_timeout_s`).
 RENDER_TIMEOUT_KEY = "timeouts.cpf_render_s"
@@ -98,42 +98,6 @@ def render_timeout_s() -> float:
 #: ``abi`` tag on a CPF binding, deliberately not the native ``ABI_TAG``: the argument list is the
 #: SDFG's own, so a consumer must not assume the native contract (ordering, workspace pair, 1-based rebasing).
 CPF_ABI = "cpf/1"
-
-
-def program_name(path: pathlib.Path) -> str:
-    """The ``@dace.program`` name a generated impl file is expected to define."""
-    for postfix in IMPL_POSTFIXES:
-        if path.stem.endswith(postfix):
-            return path.stem[: -len(postfix)]
-    return path.stem
-
-
-def resolve_program(module: ModuleType, path: pathlib.Path, entry: str = "") -> "DaceProgram | None":
-    """The ``DaceProgram`` in ``module`` that is the kernel's ENTRY POINT, or ``None``.
-
-    ``entry`` is the manifest's ``func_name``, and it is asked first because it is the only name
-    that is DECLARED. The file stem answers next, for a caller that holds no spec. Both can miss: a
-    kernel whose function is named for the algorithm rather than the file matches neither.
-
-    A module holding several programs is the normal case, not the ambiguous one -- the emitter
-    keeps each inlined helper as its own ``@dc.program`` -- so the last two readings work down from
-    that: the helpers it generates are ``_``-prefixed, which leaves one public program, and a
-    module with a single program of any name is that program.
-    """
-    programs = {name: value for name, value in vars(module).items() if type(value).__name__ == "DaceProgram"}
-    chosen = entry_program_name(list(programs), path, entry)
-    return None if chosen is None else programs[chosen]
-
-
-def entry_program_name(names: Sequence[str], path: pathlib.Path, entry: str = "") -> str | None:
-    """Which of a generated impl's program ``names`` is the entry, by :func:`resolve_program`'s rule."""
-    for name in (entry, program_name(path)):
-        if name in names:
-            return name
-    public = [name for name in names if not name.startswith("_")]
-    if len(public) == 1:
-        return public[0]
-    return names[0] if len(names) == 1 else None
 
 
 def returned_slots(path: pathlib.Path, entry: str) -> tuple[str | None, ...]:
@@ -416,51 +380,6 @@ def clean_form(code: str, forced: Sequence[str]) -> str:
     return code
 
 
-def parse_kernel(spec: BenchSpec, numpy_py: pathlib.Path, precision: str) -> "SDFG | dict[str, str]":
-    """Steps 1-2: the kernel's parsed SDFG, or the verdict (``noemit`` / ``noprogram``) that stopped it."""
-    import dace
-
-    from hpcagent_bench import autogen
-    from hpcagent_bench.frameworks import dace_framework
-    from hpcagent_bench.precision import Precision, precision_from_datatype
-
-    # Every generated impl annotates these module-level names, None until a framework binds a
-    # precision -- unbound, the whole corpus fails at import ("NoneType is not subscriptable").
-    prec = precision_from_datatype(precision or None)
-    dace_framework.dc_float = {
-        Precision.FP64: dace.float64,
-        Precision.FP32: dace.float32,
-        Precision.FP16: dace.float16,
-    }.get(prec, dace.float32)
-    dace_framework.dc_complex_float = dace.complex128 if prec is Precision.FP64 else dace.complex64
-
-    status = autogen.emit_targets(spec, ["dace"]).get("dace", "")
-    if status.startswith("fail"):
-        return {"verdict": "noemit", "error": status}
-    impl = numpy_py.parent / f"{spec.module_name}_dace.py"
-    module = importlib.import_module(".".join(impl.relative_to(paths.ROOT).with_suffix("").parts))
-    prog = resolve_program(module, impl, spec.func_name)
-    if prog is None:
-        return {"verdict": "noprogram"}
-    return prog.to_sdfg(simplify=True)
-
-
-def canonicalize_for(sdfg: "SDFG", target: str) -> None:
-    """Step 3, in place.
-
-    canonicalize leaves every choice PARALLEL but decides no OpenMP region -- skip the tail and the
-    unit renders correct but entirely SEQUENTIAL. GPU adds offload_to_gpu between the two calls;
-    finalize REJECTS a graph never offloaded, so a wiring bug fails loudly, not silently.
-    """
-    from dace.transformation.passes.canonicalize.finalize import finalize_for_target, offload_to_gpu
-    from dace.transformation.passes.canonicalize.pipeline import canonicalize
-
-    canonicalize(sdfg, validate=True, validate_all=False, target=target)
-    if target == "gpu":
-        offload_to_gpu(sdfg)
-    finalize_for_target(sdfg, target, validate=True)
-
-
 class RenderedForm(NamedTuple):
     """Step 4's output for one (language, mode), not yet written anywhere."""
 
@@ -578,10 +497,6 @@ def render_sdfg(
     return rec
 
 
-#: DACE_* variables that name a tree or a scratch folder rather than change what dace renders.
-DACE_PATH_VARIABLES = frozenset({"DACE_TREE", "DACE_default_build_folder", "DACE_BUILD_CACHE_DIR"})
-
-
 @functools.lru_cache(maxsize=1, typed=True)
 def bridge_digest() -> str:
     """Hash of the optarena code between the SDFG and the text: this module and the ABI contract."""
@@ -601,9 +516,7 @@ def render_options(spec: BenchSpec, language: str, precision: str, target: str, 
         "target": target,
         "mode": mode,
         "bridge": bridge_digest(),
-        "dace_env": {
-            k: v for k, v in sorted(os.environ.items()) if k.startswith("DACE_") and k not in DACE_PATH_VARIABLES
-        },
+        "dace_env": cpf_canonical.dace_environment(),
     }
     if mode == "dropin":
         native = binding_from_spec(spec)
@@ -619,30 +532,6 @@ def dace_root() -> pathlib.Path:
     return pathlib.Path(dace.__file__).resolve().parents[1]
 
 
-def sdfg_digest(sdfg: "SDFG") -> str:
-    """dace's own SDFG hash, over JSON with both tree roots blanked so the same kernel hits from any checkout."""
-    text = json.dumps(sdfg.to_json())
-    for root in (paths.ROOT, paths.ROOT.resolve(), dace_root()):
-        text = text.replace(str(root), "<tree>")
-    return sdfg.hash_sdfg(json.loads(text))
-
-
-def dace_commit() -> str | None:
-    """The dace checkout's HEAD, for the manifest only; a snapshot that is no checkout has none."""
-    root = dace_root()
-    if not (root / ".git").exists():
-        return None
-    done = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
-    return done.stdout.strip() if done.returncode == 0 else None
-
-
-def failure(exc: BaseException) -> dict[str, object]:
-    """A render that did not produce text, as a verdict: CPF refuses by NotImplementedError and names the construct."""
-    if isinstance(exc, NotImplementedError):
-        return {"verdict": "refused", "error": str(exc)[:400]}
-    return {"verdict": "fail", "error": f"{type(exc).__name__}: {exc}"[:400]}
-
-
 def prerender_sdfg(
     spec: BenchSpec,
     numpy_py: pathlib.Path,
@@ -650,29 +539,32 @@ def prerender_sdfg(
     languages: Sequence[str],
     precision: str,
     target: str,
-    dace_source: str,
+    dace_commit: str,
     expected_root: pathlib.Path,
 ) -> dict[str, Any]:
     """Render every (language, mode) of one kernel whose key is not already a hit, into the cache.
 
-    Parsed once, canonicalized only when something misses. The keys are printed before any render
-    so a parent that has to kill this child still names what it was rendering.
+    Every key is known before any parse: a form keys on its canonical SDFG's entry, which keys on the
+    generated program and the dace commit. A kernel whose forms all hit is neither parsed nor
+    canonicalized, and a miss renders from the stored canonical SDFG. The keys are printed before any
+    render so a parent that has to kill this child still names what it was rendering.
     """
     from hpcagent_bench import cpf_cache
 
     if dace_root() != expected_root.resolve():
-        raise RuntimeError(f"dace imports from {dace_root()}, but its source digest was taken over {expected_root}")
-    parsed = parse_kernel(spec, numpy_py, precision)
+        raise RuntimeError(f"dace imports from {dace_root()}, but its commit was read in {expected_root}")
     rec: dict[str, Any] = {"kernel": spec.short_name, "precision": fptype_tag(precision), "target": target}
-    if isinstance(parsed, dict):
-        rec.update(parsed)
+    impl = cpf_canonical.emit_program(spec)
+    if isinstance(impl, dict):
+        rec.update(impl)
         return rec
-    sdfg_hash = sdfg_digest(parsed)
+    canonical = cpf_canonical.canonical_key(impl, dace_commit, precision, target)
+    rec["canonical"] = {"key": canonical}
     plan: dict[tuple[str, str], tuple[str, dict[str, object]]] = {}
     for language in languages:
         for mode in cpf_cache.MODES:
             options = render_options(spec, language, precision, target, mode)
-            plan[(language, mode)] = (cpf_cache.cache_key(sdfg_hash, dace_source, options), options)
+            plan[(language, mode)] = (cpf_cache.cache_key(canonical, dace_commit, options), options)
     print(json.dumps({"plan": {f"{lang}/{mode}": key for (lang, mode), (key, _) in plan.items()}}), flush=True)
 
     results: dict[str, dict[str, dict[str, object]]] = {language: {} for language in languages}
@@ -683,23 +575,21 @@ def prerender_sdfg(
         else:
             todo.append((language, mode))
     if todo:
-        try:
-            canonicalize_for(parsed, target)
-        except Exception as exc:  # noqa: BLE001 -- every failure is a verdict per artefact
+        sdfg, cached = cpf_canonical.canonical_sdfg(spec, impl, canonical, cache_root, precision, target)
+        rec["canonical"]["cached"] = cached
+        if isinstance(sdfg, dict):
             for language, mode in todo:
-                results[language][mode] = {"key": plan[(language, mode)][0], **failure(exc)}
+                results[language][mode] = {"key": plan[(language, mode)][0], **sdfg}
             todo = []
-    commit = dace_commit() if todo else None
     for language, mode in todo:
         key, options = plan[(language, mode)]
         try:
-            form = render_canonical(spec, short_for(numpy_py), parsed, language, precision, target, mode == "dropin")
+            form = render_canonical(spec, short_for(numpy_py), sdfg, language, precision, target, mode == "dropin")
         except Exception as exc:  # noqa: BLE001 -- a refusal of one mode must not lose the others
             results[language][mode] = {"key": key, **failure(exc)}
             continue
         manifest = {
-            "inputs": {"sdfg": sdfg_hash, "dace_source": dace_source, "options": options},
-            "dace_commit": commit,
+            "inputs": {"canonical": canonical, "dace_commit": dace_commit, "options": options},
             "kernel": spec.short_name,
             "entry": form.entry,
             "abi_order": list(form.abi_order) if form.abi_order is not None else None,
@@ -707,7 +597,6 @@ def prerender_sdfg(
         }
         cpf_cache.publish(cache_root, key, manifest, (form.name, form.code), (form.binding_name, form.binding))
         results[language][mode] = {"key": key, "verdict": "ok", "cached": False}
-    rec["sdfg"] = sdfg_hash
     rec["results"] = results
     return rec
 
@@ -823,7 +712,7 @@ def prerender_kernel(
     precision: str,
     target: str,
     dace_package_root: pathlib.Path,
-    dace_source: str,
+    dace_commit: str,
     timeout: float | None = None,
 ) -> dict[str, Any]:
     """Pre-render one kernel into the cache in a child; returns ``results[language][mode]``.
@@ -834,7 +723,7 @@ def prerender_kernel(
     from hpcagent_bench import cpf_cache
 
     cmd = [sys.executable, "-m", __spec__.name, "--kernel", spec.short_name, "--cache", str(cache_root)]
-    cmd += ["--dace-source", dace_source, "--dace-root", str(dace_package_root), "--target", target]
+    cmd += ["--dace-commit", dace_commit, "--dace-root", str(dace_package_root), "--target", target]
     for language in languages:
         cmd += ["--language", language]
     if precision:
@@ -928,8 +817,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--kernel", required=True, help="registry key / manifest stem")
     p.add_argument("--out", default=None, help="directory to write the TU and its binding into")
     p.add_argument("--cache", default=None, help="content-addressed cache root to pre-render into instead")
-    p.add_argument("--dace-source", default="", help="with --cache: the dace source digest the parent took")
-    p.add_argument("--dace-root", default="", help="with --cache: the tree that digest was taken over")
+    p.add_argument("--dace-commit", default="", help="with --cache: the dace commit the parent read")
+    p.add_argument("--dace-root", default="", help="with --cache: the tree that commit was read in")
     p.add_argument("--language", action="append", choices=sorted(LANGUAGE_EXT), help="repeatable with --cache")
     p.add_argument("--precision", default="", help="fp64 (default) / fp32 / fp16")
     p.add_argument("--target", default="cpu", choices=("cpu", "gpu"), help="which specialization to render")
@@ -941,8 +830,8 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     if (args.out is None) == (args.cache is None):
         p.error("give exactly one of --out and --cache")
-    if args.cache is not None and not (args.dace_source and args.dace_root):
-        p.error("--cache needs --dace-source and --dace-root")
+    if args.cache is not None and not (args.dace_commit and args.dace_root):
+        p.error("--cache needs --dace-commit and --dace-root")
     languages: list[str] = args.language or ["c++"]
 
     spec = BenchSpec.load(args.kernel)
@@ -961,7 +850,7 @@ def main(argv: list[str] | None = None) -> int:
                     languages,
                     args.precision,
                     args.target,
-                    args.dace_source,
+                    args.dace_commit,
                     pathlib.Path(args.dace_root),
                 )
             else:

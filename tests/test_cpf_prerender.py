@@ -15,7 +15,7 @@ import re
 
 import pytest
 
-from hpcagent_bench import cpf_bridge, cpf_cache, cpf_prerender
+from hpcagent_bench import cpf_bridge, cpf_cache, cpf_canonical, cpf_prerender
 
 SBATCH = pathlib.Path(__file__).resolve().parent.parent / "experiments" / "prerender_cpf.sbatch"
 
@@ -41,7 +41,7 @@ def test_a_shard_with_a_load_failure_and_a_render_failure_still_exits_zero(
     package.mkdir()
     view, cache = tmp_path / "view", tmp_path / "cache"
     cpf_cache.open_view(view, cache, "cpu", before)
-    monkeypatch.setattr(cpf_cache, "source_digest", lambda pkg: before)
+    monkeypatch.setattr(cpf_canonical, "dace_commit", lambda root: before)
 
     def fake_load(short_name: str) -> FakeSpec:
         if short_name == "missing_kernel":
@@ -71,15 +71,15 @@ def test_a_shard_with_a_load_failure_and_a_render_failure_still_exits_zero(
     assert cpf_cache.missing(view, ["broken_render"], "c", "fp64", "form", "cpu") != []
 
 
-def test_dace_edited_mid_run_still_withdraws_and_fails_the_rank(
+def test_a_dace_commit_that_moves_mid_run_withdraws_and_fails_the_rank(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A changed dace source is a real internal error, unlike a per-kernel render failure: it stays nonzero."""
+    """A moved dace commit is a real internal error, unlike a per-kernel render failure: it stays nonzero."""
     package, before = tmp_path / "dace", "before"
     package.mkdir()
     view, cache = tmp_path / "view", tmp_path / "cache"
     cpf_cache.open_view(view, cache, "cpu", before)
-    monkeypatch.setattr(cpf_cache, "source_digest", lambda pkg: "after")
+    monkeypatch.setattr(cpf_canonical, "dace_commit", lambda root: "after")
     monkeypatch.setattr(cpf_prerender.BenchSpec, "load", classmethod(lambda cls, short_name: FakeSpec(short_name)))
 
     def fake_prerender_kernel(spec: FakeSpec, cache_root: pathlib.Path, **kwargs: object) -> dict[str, object]:
@@ -106,7 +106,7 @@ def test_a_gpu_prerender_records_hip_entries_the_launch_gates_accept(
     package.mkdir()
     view, cache = tmp_path / "view", tmp_path / "cache"
     cpf_cache.open_view(view, cache, "gpu", before)
-    monkeypatch.setattr(cpf_cache, "source_digest", lambda pkg: before)
+    monkeypatch.setattr(cpf_canonical, "dace_commit", lambda root: before)
     monkeypatch.setattr(cpf_prerender.BenchSpec, "load", classmethod(lambda cls, short_name: FakeSpec(short_name)))
 
     def fake_prerender_kernel(

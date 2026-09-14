@@ -3,12 +3,12 @@
 """Pre-render a roster's canonical parallel forms into the content-addressed cache and pin a view.
 
 The one place a campaign's forms are rendered. Per kernel it forks
-:func:`hpcagent_bench.cpf_bridge.prerender_kernel`, which parses once and renders the read form and
-the drop-in for every language whose key is not already a hit; this process then points the view at
-the keys. A rerun over unchanged inputs renders nothing.
+:func:`hpcagent_bench.cpf_bridge.prerender_kernel`, which renders the read form and the drop-in for
+every language whose key is not already a hit, from the cached canonical SDFG; this process then
+points the view at the keys. A rerun over unchanged inputs renders nothing.
 
-The dace source is hashed before and after the shard: a tree edited mid-run would file text from one
-dace under another's key, so a changed digest withdraws every entry this run published. Children
+The dace commit is read before and after the shard: a HEAD that moves mid-run would file text from
+one dace under another's key, so a moved commit withdraws every entry this run published. Children
 write their temporaries under the cache root, never /tmp, and the directory goes when the run does.
 
     python3 -m hpcagent_bench.cpf_prerender --cache C --view V --kernels a,b --target cpu
@@ -25,7 +25,7 @@ from collections.abc import Sequence
 
 from numpyto_common.naming import fptype_tag
 
-from hpcagent_bench import cpf_bridge, cpf_cache
+from hpcagent_bench import cpf_bridge, cpf_cache, cpf_canonical
 from hpcagent_bench.spec import BenchSpec
 
 
@@ -70,7 +70,7 @@ def prerender(args: argparse.Namespace, package: pathlib.Path, before: str) -> i
     languages = (cpf_bridge.DEVICE_LANGUAGE,) if args.target == "gpu" else ("c", "c++")
     fptype = fptype_tag(args.precision)
     kernels = shard([k.strip() for k in args.kernels.split(",") if k.strip()], args.rank, args.ranks)
-    print(f"rank {args.rank}/{args.ranks}: {len(kernels)} kernels, dace {package} source {before[:12]}", flush=True)
+    print(f"rank {args.rank}/{args.ranks}: {len(kernels)} kernels, dace {package} commit {before[:12]}", flush=True)
     rendered: list[str] = []
     failed = 0
     for kernel in kernels:
@@ -91,7 +91,7 @@ def prerender(args: argparse.Namespace, package: pathlib.Path, before: str) -> i
             precision=args.precision,
             target=args.target,
             dace_package_root=package.parent,
-            dace_source=before,
+            dace_commit=before,
             timeout=args.timeout,
         )
         for language, modes in rec["results"].items():
@@ -105,11 +105,12 @@ def prerender(args: argparse.Namespace, package: pathlib.Path, before: str) -> i
                     rendered.append(str(outcome["key"]))
                 failed += 0 if ok else 1
         sys.stdout.flush()
-    if cpf_cache.source_digest(package) != before:
+    if cpf_canonical.dace_commit(package.parent) != before:
         for key in rendered:
             shutil.rmtree(cpf_cache.entry_path(args.cache, key), ignore_errors=True)
         print(
-            f"rank {args.rank}: dace under {package} changed mid-run; withdrew {len(rendered)} entries", file=sys.stderr
+            f"rank {args.rank}: dace under {package} moved off {before[:12]} mid-run; withdrew {len(rendered)} entries",
+            file=sys.stderr,
         )
         return 3
     print(f"rank {args.rank}: {len(rendered)} rendered, {failed} not rendered", flush=True)
@@ -134,7 +135,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     require_toolchain()
     package = dace_package()
     require_submodules(package)
-    before = cpf_cache.source_digest(package)
+    before = cpf_canonical.dace_commit(package.parent)
     cpf_cache.open_view(args.view, args.cache, args.target, before)
     scratch = args.cache / ".scratch" / f"{os.environ.get('SLURM_JOB_ID', 'local')}-{os.getpid()}"
     (scratch / "tmp").mkdir(parents=True)

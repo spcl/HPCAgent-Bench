@@ -19,8 +19,8 @@
 #   VIEW=<dir> KERNELS_FILE=kernels-scicomp40.txt sbatch prerender_cpf.sbatch
 #   VIEW=<dir> TAG=llr-focus40 TARGET=gpu sbatch prerender_cpf.sbatch
 #
-# DACE_TREE and OPT may name frozen snapshots. The key hashes the dace source, and a dace edit during
-# the run withdraws what the run rendered.
+# DACE_TREE must be a dace git checkout: every key holds its HEAD commit, and a commit that moves
+# during the run withdraws what the run rendered. OPT may name a frozen snapshot.
 set -euo pipefail
 ulimit -c 0
 SCRATCH_ROOT=/capstor/scratch/cscs/${USER}/x86_64
