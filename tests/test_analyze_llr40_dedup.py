@@ -11,6 +11,8 @@ arm, so the fixtures here carry the scope the judge writes rather than a conveni
 a frame without it tests a reduction that cannot tell one agent from two.
 """
 
+from types import ModuleType
+
 import pandas as pd
 import pytest
 
@@ -183,7 +185,7 @@ def test_an_arm_with_no_counterpart_is_not_paired(analyze) -> None:
     assert set(table.intervention) == expected
 
 
-def test_two_campaigns_of_one_model_and_language_stay_two_pairs(analyze) -> None:
+def test_two_campaigns_of_one_model_and_language_stay_two_pairs(analyze: ModuleType) -> None:
     """A pair is keyed on its campaign, so its name must carry it too. Named by denominator, model
     and language alone, a later campaign's pair overwrote an earlier one's in the family and in the
     pool, and a whole campaign's comparison left the table without a trace."""
@@ -202,7 +204,7 @@ def test_no_token_column_yields_no_efficacy_rather_than_a_guess(analyze) -> None
     assert analyze.skills_efficacy(best, calls.drop(columns=["tokens"]), arms, served).empty
 
 
-def test_a_language_side_is_one_arm_not_the_best_of_that_languages_arms(analyze) -> None:
+def test_a_language_side_is_one_arm_not_the_best_of_that_languages_arms(analyze: ModuleType) -> None:
     """C verified every kernel under two packets and Fortran under one. Under the packet both
     languages ran, Fortran is twice as fast. A side taken as the max over its language's arms pits
     C's best-of-two against Fortran's best-of-one and reports C twice as fast instead."""

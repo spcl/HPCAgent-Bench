@@ -20,7 +20,7 @@ import pathlib
 import re
 import sys
 import textwrap
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pytest
@@ -79,6 +79,9 @@ from numpyto_common.frontend import (
 )
 from numpyto_common.ir import ArrayDesc, KernelIR, SymbolDesc, stamp_symbol_assumptions  # noqa: E402
 from numpyto_common.numpy_desugar import expr_rank, rank_table
+
+if TYPE_CHECKING:
+    from dace import SDFG
 
 _KERNELS = foundation_kernels()
 
@@ -2606,7 +2609,7 @@ def augmented_arrays() -> dict[str, np.ndarray]:
     }
 
 
-def parsed_augmented_program(tmp: pathlib.Path, body: str) -> Any:
+def parsed_augmented_program(tmp: pathlib.Path, body: str) -> "SDFG":
     """The SDFG dace's frontend builds, read off disk as dace requires, at fp64."""
     generate_framework("dace_cpu").set_datatype("float64")
     path = tmp / "aug_dace.py"
