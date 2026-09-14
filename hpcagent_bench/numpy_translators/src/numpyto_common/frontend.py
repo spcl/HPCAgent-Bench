@@ -932,7 +932,11 @@ class _NonFiniteNormalizer(ast.NodeTransformer):
 
 
 def parse_kernel(
-    numpy_py: pathlib.Path, bench_info: pathlib.Path, config: Optional[str] = None, precision: Optional[str] = None
+    numpy_py: pathlib.Path,
+    bench_info: pathlib.Path,
+    config: Optional[str] = None,
+    precision: Optional[str] = None,
+    open_mesh_grids: bool = True,
 ) -> KernelIR:
     """Build a :class:`KernelIR` from ``numpy_py`` + ``bench_info``.
 
@@ -949,14 +953,14 @@ def parse_kernel(
     """
     if not HELPERS_KEPT_DISABLED:
         try:
-            return build_kernel_ir(numpy_py, bench_info, config, precision, keep_helpers=True)
+            return build_kernel_ir(numpy_py, bench_info, config, precision, True, open_mesh_grids)
         except NotImplementedError:
             # ONLY a declared refusal falls back. Catching everything is what hid a guaranteed
             # NameError in _build_helper_kirs' shape-symbol branch: every kernel reaching it
             # reported success while quietly emitting the inlined form. Anything other than a
             # refusal is a bug in this path and has to be seen.
             pass
-    return build_kernel_ir(numpy_py, bench_info, config, precision, keep_helpers=False)
+    return build_kernel_ir(numpy_py, bench_info, config, precision, False, open_mesh_grids)
 
 
 #: Set while a driver is retrying with the helpers inlined; :func:`parse_kernel` reads it.
@@ -1129,6 +1133,7 @@ def build_kernel_ir(
     config: Optional[str] = None,
     precision: Optional[str] = None,
     keep_helpers: bool = False,
+    open_mesh_grids: bool = True,
 ) -> KernelIR:
     """Build a :class:`KernelIR` from ``numpy_py`` + ``bench_info``.
 
@@ -1145,6 +1150,8 @@ def build_kernel_ir(
     :param keep_helpers: leave ordinary helper calls in place instead of inlining them, so each
         helper is emitted as its own static function (see :func:`parse_kernel`). The forms with
         no standalone ABI are still spliced.
+    :param open_mesh_grids: rewrite ``gx, gy = np.ix_(..)`` into one grid name for the native
+        emitters. dace takes the unpacked names and refuses the packed one, so its path passes False.
     :raises ValueError: when the JSON is missing required fields, or no
         function in the Python file matches ``bench_info.func_name``.
     """
@@ -1173,7 +1180,8 @@ def build_kernel_ir(
 
     src = numpy_py.read_text()
     tree = ast.parse(src, filename=str(numpy_py))
-    UnpackedOpenMeshToGrid().visit(tree)
+    if open_mesh_grids:
+        UnpackedOpenMeshToGrid().visit(tree)
     ast.fix_missing_locations(tree)
     # Rewrite ``w, v = eigh(a[, b], ...)`` (np.linalg / scipy.linalg / the
     # ``_sci_eigh`` alias) to a self-contained complex-Hermitian eigh loop nest
