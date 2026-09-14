@@ -1,7 +1,7 @@
 """Derive GLM-5.3 arm envs from the kimi sglang arms they are the counterfactual of.
 
-Only the serving block differs: same nodes, same agents, same problems, same packet. Anything else
-that changed would make an arm comparison a comparison of two things at once.
+Only the serving block and the agents per node differ: same nodes, same problems, same packet. Anything
+else that changed would make an arm comparison a comparison of two things at once.
 
 Every deviation from the kimi line is load-bearing:
   SGLANG_ATTENTION_BACKEND=    ASSIGNED EMPTY, not absent. run_cluster.sh reads it as
@@ -14,6 +14,7 @@ Every deviation from the kimi line is load-bearing:
   --enable-hierarchical-cache  offloads KV to host memory, which on MI300A is the SAME pool the
                                weights live in, so it allocates a second KV cache instead.
   AITER_USE_FLYDSL_MOE_SORTING kimi's weights are pack-quantized int4; these are fp8.
+  AGENTS_PER_NODE              kimi's 20 ran GLM-5.3's PP stages out of host memory; see AGENTS_PER_NODE.
 """
 
 import pathlib
@@ -24,6 +25,11 @@ import sys
 GLM_CONTEXT = 262144
 COMPLETION_RESERVE = 32000
 TURN_HEADROOM = 30000
+
+#: Concurrent agents per agent node. kimi's 20 held host memory for a 45 min frontier leg, but the
+#: 636501 complement ran 4.5 h at 20 and every PP stage climbed to 94-99% host memory until one was
+#: OOM-killed; fewer agents keeps the host-side request state below that.
+AGENTS_PER_NODE = 12
 
 #: Slowest pipeline stage (1521 s to over 5400 s measured) plus KV allocation plus graph capture.
 #: The inherited 7200 expires while the server is still loading and the arm abandons it.
@@ -92,6 +98,9 @@ def derive(src: pathlib.Path, dst: pathlib.Path) -> None:
             out.extend(CE_ENV.strip("\n").splitlines())
             replaced.add("ce_env")
             continue
+        elif line.startswith("AGENTS_PER_NODE="):
+            line = f"AGENTS_PER_NODE={AGENTS_PER_NODE}"
+            replaced.add("agents")
         elif line.startswith("CLAUDE_AUTOCOMPACT="):
             # GLM and kimi now serve the same window, so this recomputes to the kimi value; kept
             # as its own branch since GLM_CONTEXT can still move independently of the kimi source.
@@ -115,6 +124,7 @@ def derive(src: pathlib.Path, dst: pathlib.Path) -> None:
         "dead_ready",
         "engine_ready",
         "agent_ready",
+        "agents",
     } - replaced
     if missing:
         raise SystemExit(f"{src.name}: never matched {sorted(missing)}")
