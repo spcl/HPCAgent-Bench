@@ -16,10 +16,8 @@ current `submit-<family>.sh` scripts and `run_campaign.sh`, which this page assu
 
 Hard ceiling: **36 nodes in flight**, agreed with the team sharing the machine.
 
-| model | nodes per arm | why |
-|---|---|---|
-| qwen38 | 6 | 1 inference + 1 agent + 4 judge |
-| oss120b | 8 | 1 inference + 1 agent + 6 judge |
+Node counts are per arm, not per model: read `INFERENCE_NODES`, `AGENT_NODES` and `JUDGE_NODES`
+from the arm's own `.env.<arm>` file rather than assuming a fixed split.
 
 `JUDGE_NODES` is sized from the measured grading rate, not picked, and the unit is nodes, not
 judges: a node runs `JUDGES_PER_NODE` judges, one per socket.
