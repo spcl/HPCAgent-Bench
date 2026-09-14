@@ -47,25 +47,24 @@ def test_a_job_outside_every_campaign_has_no_campaign(board: types.ModuleType) -
 
 
 @pytest.mark.parametrize(
-    ("done", "roster", "states", "void", "expected"),
+    ("done", "roster", "states", "expected"),
     [
-        (40, 40, ["COMPLETED", "PENDING"], False, "running"),
-        (0, 40, ["COMPLETED", "RUNNING"], True, "running"),
-        (40, 40, ["FAILED", "COMPLETED"], False, "complete"),
-        (39, 40, ["COMPLETED"], False, "incomplete"),
-        (40, 40, ["COMPLETED"], True, "void"),
-        (0, 0, ["COMPLETED"], False, "incomplete"),
+        (40, 40, ["COMPLETED", "PENDING"], "running"),
+        (0, 40, ["COMPLETED", "RUNNING"], "running"),
+        (40, 40, ["FAILED", "COMPLETED"], "complete"),
+        (39, 40, ["COMPLETED"], "incomplete"),
+        (0, 0, ["COMPLETED"], "incomplete"),
     ],
 )
-def test_an_arm_is_running_before_void_before_its_coverage_decides(
-    board: types.ModuleType, done: int, roster: int, states: list[str], void: bool, expected: str
+def test_an_arm_is_running_before_its_coverage_decides(
+    board: types.ModuleType, done: int, roster: int, states: list[str], expected: str
 ) -> None:
-    assert board.arm_status(done, roster, states, void) == expected
+    assert board.arm_status(done, roster, states) == expected
 
 
 def test_the_embedded_data_survives_a_value_that_closes_a_script_element(board: types.ModuleType) -> None:
-    """A note carrying ``</script>`` would end the data block early and the page would parse nothing."""
-    data = {"generated": "now", "cluster": "beverin", "arms": [{"arm": "a", "void": "</script><b>x</b>"}]}
+    """A value carrying ``</script>`` would end the data block early and the page would parse nothing."""
+    data = {"generated": "now", "cluster": "beverin", "arms": [{"arm": "</script><b>x</b>"}]}
     page = board.render(data)
     body = page.split('<script type="application/json" id="data">', 1)[1].split("</script>", 1)[0]
     assert json.loads(body) == data
@@ -105,24 +104,17 @@ def job_dir_with_rows(root: pathlib.Path, job_id: str, benchmarks: list[str]) ->
 @pytest.mark.parametrize(
     ("rows", "done", "status"),
     [
-        ({"100": ["a", "b", "c"]}, 0, "void"),
-        ({"100": ["a", "b", "c"], "200": ["a", "b"]}, 2, "incomplete"),
-        ({"100": ["a"], "200": ["a", "b", "c"]}, 3, "complete"),
+        ({"100": ["a", "b"]}, 2, "incomplete"),
+        ({"100": ["a"], "200": ["b", "c"]}, 3, "complete"),
+        ({"100": ["a", "b"], "200": ["b"]}, 2, "incomplete"),
     ],
 )
-def test_a_void_jobs_rows_never_count_and_void_the_arm_only_while_nothing_else_covers_it(
-    board: types.ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: pathlib.Path,
-    rows: dict[str, list[str]],
-    done: int,
-    status: str,
+def test_an_arms_coverage_is_the_union_of_every_jobs_rows(
+    board: types.ModuleType, tmp_path: pathlib.Path, rows: dict[str, list[str]], done: int, status: str
 ) -> None:
-    """A rerun after a broken treatment is the arm's real coverage, so only the broken job's rows may drop."""
-    monkeypatch.setattr(board, "VOID_JOBS", {"100": "broken treatment"})
-    arm = "cpf-llr-focus40-oss120b-c-cpf"
+    """A complement wave grades only what the first wave left, so reading one job reports finished kernels owed."""
+    arm = "cpf-llr-focus40-oss120b-c-cpfsrc"
     dirs = {job_id: job_dir_with_rows(tmp_path, job_id, names) for job_id, names in rows.items()}
     jobs = [board.Job(job_id, arm, "COMPLETED", 3, "", "") for job_id in rows]
     row = board.arm_row(arm, jobs, dirs, ["a", "b", "c"], MODELS)
     assert (row["done"], row["status"]) == (done, status), row
-    assert "100" in row["void"], row["void"]
