@@ -6,6 +6,7 @@ reports these, and a wrong one shows a finished experiment as owed or an owed on
 import importlib.util
 import json
 import pathlib
+import sqlite3
 import sys
 import types
 
@@ -87,3 +88,41 @@ def test_a_cpf_arm_is_its_own_experiment_on_the_board(
 ) -> None:
     """CPF-LLR and CPF-SciComp are reported apart from the campaigns their arms ran in."""
     assert board.board_campaign(campaign, variant).experiment == experiment
+
+
+def job_dir_with_rows(root: pathlib.Path, job_id: str, benchmarks: list[str]) -> pathlib.Path:
+    """A run directory whose one judge shard holds a submissions row per name in ``benchmarks``."""
+    shard = root / job_id / "judge" / "rank-0"
+    shard.mkdir(parents=True)
+    conn = sqlite3.connect(shard / "hpcagent_bench.db")
+    with conn:
+        conn.execute("create table submissions (benchmark text)")
+        conn.executemany("insert into submissions values (?)", [(name,) for name in benchmarks])
+    conn.close()
+    return root / job_id
+
+
+@pytest.mark.parametrize(
+    ("rows", "done", "status"),
+    [
+        ({"100": ["a", "b", "c"]}, 0, "void"),
+        ({"100": ["a", "b", "c"], "200": ["a", "b"]}, 2, "incomplete"),
+        ({"100": ["a"], "200": ["a", "b", "c"]}, 3, "complete"),
+    ],
+)
+def test_a_void_jobs_rows_never_count_and_void_the_arm_only_while_nothing_else_covers_it(
+    board: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    rows: dict[str, list[str]],
+    done: int,
+    status: str,
+) -> None:
+    """A rerun after a broken treatment is the arm's real coverage, so only the broken job's rows may drop."""
+    monkeypatch.setattr(board, "VOID_JOBS", {"100": "broken treatment"})
+    arm = "cpf-llr-focus40-oss120b-c-cpf"
+    dirs = {job_id: job_dir_with_rows(tmp_path, job_id, names) for job_id, names in rows.items()}
+    jobs = [board.Job(job_id, arm, "COMPLETED", 3, "", "") for job_id in rows]
+    row = board.arm_row(arm, jobs, dirs, ["a", "b", "c"], MODELS)
+    assert (row["done"], row["status"]) == (done, status), row
+    assert "100" in row["void"], row["void"]

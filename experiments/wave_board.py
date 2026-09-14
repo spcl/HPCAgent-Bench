@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The wave board: one static HTML page with every campaign arm's kernel coverage and slurm jobs.
 
-Coverage is remaining_kernels.py's rule: the union of judge rows over every job that ran the arm. An
-arm is ``running`` while any of its jobs is queued or running, ``void`` when its rows measured a
-broken treatment, ``complete`` when every roster kernel has a row, and ``incomplete`` otherwise.
+Coverage is remaining_kernels.py's rule: the union of judge rows over every job that ran the arm, minus
+the VOID_JOBS whose rows measured a broken treatment. An arm is ``running`` while any of its jobs is
+queued or running, ``void`` when it has void jobs and no other row covers its roster, ``complete`` when
+every roster kernel has a row, and ``incomplete`` otherwise.
 The page does not update itself: rebuild and republish it whenever a campaign job leaves the queue.
 
     python experiments/wave_board.py --out wave-board.html
@@ -83,11 +84,29 @@ CPF_EXPERIMENTS = {
     ),
 }
 
-#: Arm -> why its rows do not count. The whole roster is owed again.
-VOID = {
-    f"cpf-llr-focus40-{model}-c-cpf": "the CPF tool answered 404, then read only the first key segment; full rerun owed"
-    for model in ("kimi27sglang", "oss120b", "qwen38")
-}
+#: Job id -> why its rows do not count. The arm's other jobs still count.
+VOID_JOBS: dict[str, str] = dict.fromkeys(
+    (
+        # cpf-llr-focus40 c-cpf: kimi27sglang, oss120b, qwen38
+        "630716",
+        "630942",
+        "631214",
+        "631232",
+        "631253",
+        "630708",
+        "630753",
+        "630933",
+        "631221",
+        "631237",
+        "631251",
+        "630711",
+        "630940",
+        "631225",
+        "631241",
+        "631252",
+    ),
+    "the CPF tool answered 404, then read only the first key segment",
+)
 
 
 def campaign_of(arm: str) -> str:
@@ -155,11 +174,16 @@ def queued_ids() -> list[str]:
 def arm_row(arm: str, jobs: list[Job], dirs: dict[str, pathlib.Path], full: list[str], models: tuple[str, ...]) -> dict:
     campaign, model, variant = split_arm(arm, models)
     spec = board_campaign(campaign, variant)
+    ordered = sorted(jobs, key=lambda job: (len(job.id), job.id))
     seen: set[str] = set()
-    for job in jobs:
-        if job.id in dirs:
+    for job in ordered:
+        if job.id in dirs and job.id not in VOID_JOBS:
             seen |= remaining_kernels.touched(str(dirs[job.id]))
-    done = 0 if arm in VOID else sum(1 for kernel in full if kernel in seen)
+    done = sum(1 for kernel in full if kernel in seen)
+    voided = [job.id for job in ordered if job.id in VOID_JOBS]
+    note = ""
+    if voided:
+        note = "jobs " + ", ".join(voided) + " void: " + "; ".join(sorted({VOID_JOBS[job_id] for job_id in voided}))
     return {
         "arm": arm,
         "campaign": campaign,
@@ -170,9 +194,9 @@ def arm_row(arm: str, jobs: list[Job], dirs: dict[str, pathlib.Path], full: list
         "variant": variant,
         "done": done,
         "roster": len(full),
-        "status": arm_status(done, len(full), [job.state for job in jobs], arm in VOID),
-        "void": VOID.get(arm, ""),
-        "jobs": [dataclasses.asdict(job) for job in sorted(jobs, key=lambda job: (len(job.id), job.id))],
+        "status": arm_status(done, len(full), [job.state for job in jobs], bool(voided) and done == 0),
+        "void": note,
+        "jobs": [dataclasses.asdict(job) for job in ordered],
     }
 
 
