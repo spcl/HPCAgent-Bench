@@ -240,8 +240,24 @@ def resolve(
     return where / artefacts["source"]["name"], where / artefacts["binding"]["name"]
 
 
-def missing(view: pathlib.Path, kernels: Sequence[str], language: str, fptype: str, mode: str) -> list[str]:
+def wrong_target(view: pathlib.Path, target: str) -> str:
+    """Why ``view`` cannot serve an arm on ``target``, or "" when it can or is no view at all.
+
+    A cpu view answers a hip arm with C++, and a gpu view stages a .hip file into a C task.
+    """
+    try:
+        held = read_view(view).get("target")
+    except CacheMiss:
+        return ""
+    return "" if held == target else f"view {view} holds {held} forms, not the {target} forms this arm runs on"
+
+
+def missing(
+    view: pathlib.Path, kernels: Sequence[str], language: str, fptype: str, mode: str, target: str
+) -> list[str]:
     """One line per kernel the view cannot serve, each naming why; empty when it serves them all."""
+    if reason := wrong_target(view, target):
+        return [reason]
     misses: list[str] = []
     for kernel in kernels:
         try:
@@ -302,8 +318,10 @@ def adopt(
     return misses
 
 
-def stage(view: pathlib.Path, kernel: str, language: str, fptype: str, dest: pathlib.Path) -> pathlib.Path:
+def stage(view: pathlib.Path, kernel: str, language: str, fptype: str, dest: pathlib.Path, target: str) -> pathlib.Path:
     """Copy the drop-in for ``kernel`` to ``dest/<kernel>.<ext>``, the basename the submit route enforces."""
+    if reason := wrong_target(view, target):
+        raise CacheMiss(reason)
     source, _ = resolve(view, kernel, language, fptype, "dropin")
     target = dest / f"{short_name(kernel)}{source.suffix}"
     dest.mkdir(parents=True, exist_ok=True)
@@ -323,6 +341,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for command in (check, put):
         command.add_argument("--view", required=True, type=pathlib.Path)
         command.add_argument("--language", required=True, choices=sorted(DIALECT))
+        command.add_argument("--target", required=True, choices=("cpu", "gpu"), help="the device the arm runs on")
         command.add_argument("--precision", default="fp64", help="fptype tag: fp64 / fp32 / fp16")
     take = sub.add_parser("adopt", help="publish a flat render directory into the cache and pin a view")
     take.add_argument("--flat", required=True, type=pathlib.Path)
@@ -341,12 +360,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1 if misses else 0
     if args.command == "check":
         kernels = [k for k in args.kernels.split(",") if k.strip()]
-        misses = missing(args.view, kernels, args.language, args.precision, args.mode)
+        misses = missing(args.view, kernels, args.language, args.precision, args.mode, args.target)
         for line in misses:
             print(line)
         return 1 if misses else 0
     try:
-        print(stage(args.view, args.kernel, args.language, args.precision, args.dest))
+        print(stage(args.view, args.kernel, args.language, args.precision, args.dest, args.target))
     except CacheMiss as exc:
         print(f"cpf_cache: {exc}", file=sys.stderr)
         return 1

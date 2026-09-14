@@ -68,9 +68,9 @@ def test_a_shard_with_a_load_failure_and_a_render_failure_still_exits_zero(
     args = args_for(cache, view, "missing_kernel,broken_render,ok_kernel")
     assert cpf_prerender.prerender(args, package, before) == 0
 
-    assert cpf_cache.missing(view, ["ok_kernel"], "c", "fp64", "form") == []
-    assert cpf_cache.missing(view, ["missing_kernel"], "c", "fp64", "form") != []
-    assert cpf_cache.missing(view, ["broken_render"], "c", "fp64", "form") != []
+    assert cpf_cache.missing(view, ["ok_kernel"], "c", "fp64", "form", "cpu") == []
+    assert cpf_cache.missing(view, ["missing_kernel"], "c", "fp64", "form", "cpu") != []
+    assert cpf_cache.missing(view, ["broken_render"], "c", "fp64", "form", "cpu") != []
 
 
 def test_dace_edited_mid_run_still_withdraws_and_fails_the_rank(
