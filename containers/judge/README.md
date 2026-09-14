@@ -1,13 +1,14 @@
 # Judge Tools
 
-The AMD judge-agent image copies this directory to `/opt/optarena-judge`. It holds one tool,
-`web_search`: `experiments/judge_service.py` reads it from `/opt/optarena-judge/tools`, and
-`experiments/run_cluster.sh` puts `containers/judge/tools` on the judge's `PYTHONPATH`.
+No image carries this directory; the image installs only its dependencies (`requirements.txt`). It
+holds one tool, `web_search`: the judge mounts the submitting checkout, `experiments/judge_service.py`
+imports it from `containers/judge/tools`, and `experiments/run_cluster.sh` puts that directory on the
+judge's `PYTHONPATH`.
 
 `web_search` is process-oriented and runs once per query:
 
 ```bash
-python3 /opt/optarena-judge/tools/web_search.py --query "best rocBLAS batched GEMM API"
+python3 containers/judge/tools/web_search.py --query "best rocBLAS batched GEMM API"
 ```
 
 It reads configuration from `.env` or environment variables, calls SerpAPI for
@@ -28,7 +29,7 @@ The network-free test is `tests/test_judge_web_search.py` at the repository root
 ## Configuration
 
 ```bash
-cp /opt/optarena-judge/.env.example .env
+cp containers/judge/.env.example .env
 ```
 
 Required:

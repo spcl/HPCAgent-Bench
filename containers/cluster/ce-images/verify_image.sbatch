@@ -26,6 +26,8 @@ ulimit -c 0
 S="${SCRATCH:?set SCRATCH}"
 IMAGE="${IMAGE:?set IMAGE to the .sqsh to verify}"
 PROFILE="${PROFILE:-judge-agent-amd}"
+# The checkout whose checks and tools are verified; build_and_verify.sbatch passes its own.
+REPO="${REPO:-${S}/optarena}"
 test -f "${IMAGE}"
 
 EDF="${S}/.tmp/verify-${SLURM_JOB_ID}.toml"
@@ -54,6 +56,12 @@ case "${PROFILE}" in
     sglang|vllm) ce_fi_provider='FI_PROVIDER = "cxi"' ;;
     *)           ce_fi_provider='' ;;
 esac
+# The image carries no tool scripts: judge-agent roles get the checkout's agent tree bound where
+# run_cluster.sh binds it.
+case "${PROFILE}" in
+    judge|judge-agent-*) printf -v ce_agent_mount ', "%s"' "${REPO}/containers/agent:/opt/optarena-agent" ;;
+    *)                   ce_agent_mount='' ;;
+esac
 
 # The five hook annotations are NOT optional here. The images ship no libfabric, libcxi or RCCL
 # net plugin at all -- they are deleted, and a build gate fails if any survives -- so libmpi.so's
@@ -62,7 +70,7 @@ esac
 # image for its own missing configuration.
 cat > "${EDF}" <<TOML
 image = "${IMAGE}"
-mounts = ["/capstor/:/capstor/", "/iopsstor/:/iopsstor/"]
+mounts = ["/capstor/:/capstor/", "/iopsstor/:/iopsstor/"${ce_agent_mount}]
 workdir = "/"
 
 [annotations]
@@ -81,7 +89,7 @@ ${ce_fi_provider}
 TOML
 
 echo "=== verifying ${IMAGE} as profile=${PROFILE} ==="
-srun --environment="${EDF}" python3 "${S}/optarena/containers/cluster/ce-images/verify_image.py" \
+srun --environment="${EDF}" python3 "${REPO}/containers/cluster/ce-images/verify_image.py" \
      --profile "${PROFILE}" --verbose
 rc=$?
 
@@ -97,7 +105,7 @@ case "${PROFILE}" in
     *)       sc_modules="" ;;   # judge-agent-amd: the checker's own default list
 esac
 srun --environment="${EDF}" python3 \
-     "${S}/optarena/containers/cluster/ce-images/selfcontained_check.py" \
+     "${REPO}/containers/cluster/ce-images/selfcontained_check.py" \
      ${sc_modules:+--modules "${sc_modules}"}
 sc=$?
 
@@ -112,16 +120,27 @@ case "${PROFILE}" in
     judge|judge-agent-*|optarena-ce-*)
         echo "=== MPI: multi-rank, GPU-aware, RCCL plugin, PETSc GPU ==="
         srun --environment="${EDF}" \
-             "${S}/optarena/containers/cluster/ce-images/mpi_gpu_check.sh" || mpi_rc=$?
+             "${REPO}/containers/cluster/ce-images/mpi_gpu_check.sh" || mpi_rc=$?
         ;;
     *) echo "=== MPI check skipped for profile=${PROFILE} (no compilers in image) ==="; ;;
 esac
 
+# Tools are loaded at launch, so the image must import the bound checkout's tools with its own deps.
+tools_rc=0
+case "${PROFILE}" in
+    judge|judge-agent-*)
+        echo "=== tools: the checkout's agent and judge tools load in this image ==="
+        srun --environment="${EDF}" python3 "${REPO}/containers/cluster/ce-images/tools_launch_check.py" \
+             --agent-dir /opt/optarena-agent --judge-tools "${REPO}/containers/judge/tools" || tools_rc=$?
+        ;;
+    *) echo "=== tools check skipped for profile=${PROFILE} (no agent tools in image role) ==="; ;;
+esac
+
 rm -f "${EDF}"
-echo "=== required-failure count: ${rc}; resolving outside the image: ${sc}; mpi: ${mpi_rc} ==="
+echo "=== required-failure count: ${rc}; resolving outside the image: ${sc}; mpi: ${mpi_rc}; tools: ${tools_rc} ==="
 if [ "${mpi_rc}" -ne 0 ]; then
     echo "MPI/GPU capability check FAILED -- image is not acceptable" >&2
     exit 1
 fi
-# Either is disqualifying, and the status says which dominated.
-exit $(( rc + sc ))
+# Any is disqualifying, and the status says which dominated.
+exit $(( rc + sc + tools_rc ))

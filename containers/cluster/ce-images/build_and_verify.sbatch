@@ -91,7 +91,7 @@ for prof in ${targets}; do
     # name. Removed FIRST, so a re-verification that fails cannot leave a stale pass behind and
     # let a broken image be promoted on the strength of an earlier run.
     rm -f "${img}.verified"
-    if IMAGE="${img}" PROFILE="${prof}" \
+    if IMAGE="${img}" PROFILE="${prof}" REPO="${REPO}" \
         bash "${REPO}/containers/cluster/ce-images/verify_image.sbatch"; then
         printf 'verified profile=%s job=%s digest=%s\n' "${prof}" "${SLURM_JOB_ID}" \
             "$(cat "${img}.digest" 2>/dev/null || echo unknown)" > "${img}.verified"
