@@ -5,6 +5,7 @@ import copy
 import dataclasses
 import functools
 import itertools
+import logging
 import re
 from typing import Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Tuple, cast
 
@@ -14,7 +15,16 @@ from numpyto_common.frontend import PinnedValue, field_nodes, fold_shape_expr
 from numpyto_common.ir import ArrayDesc, KernelIR, shape_dimension_symbols
 from numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
 from numpyto_common.lowering import lower
-from numpyto_common.numpy_desugar import _AUG_OP_SRC, desugar_for_python_backend, expr_rank, rank_table
+from numpyto_common.numpy_desugar import (
+    _AUG_OP_SRC,
+    _dtype_kind,
+    _dtype_table,
+    _kind_of_dtype_str,
+    _promote_kind,
+    desugar_for_python_backend,
+    expr_rank,
+    rank_table,
+)
 from numpyto_common.ordered import OrderedSet
 from numpyto_common.statement_desugar import (
     DesugarArrayIteration,
@@ -461,21 +471,54 @@ class _TernaryValueHoister(ast.NodeTransformer):
         self.generic_visit(node)  # hoist any nested ternary first
         tmp = f"__hpcagent_bench_ternary{self.owner.ctr}"
         self.owner.ctr += 1
+        body, orelse = self.owner.joined(node.body, node.orelse)
         self.prelude.append(
             ast.If(
                 test=node.test,
-                body=[ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=node.body)],
-                orelse=[ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=node.orelse)],
+                body=[ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=body)],
+                orelse=[ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=orelse)],
             )
         )
         return ast.copy_location(ast.Name(id=tmp, ctx=ast.Load()), node)
 
 
+#: A dtype kind -> the dace dtype an array of that kind is declared with.
+KIND_DACE_DTYPE = {"bool": "np.bool_", "int": "np.int64", "float": "dc_float", "complex": "dc_complex_float"}
+
+
 class _DesugarTernary(ast.NodeTransformer):
     """Lower a ternary (assignment RHS or nested value) to the if/else statement dace's frontend accepts."""
 
-    def __init__(self) -> None:
+    def __init__(self, dtypes: Optional[Dict[str, str]] = None, ranks: Optional[Dict[str, int]] = None) -> None:
         self.ctr = 0
+        self.dtypes = dtypes or {}
+        self.ranks = ranks or {}
+
+    def joined(self, body: ast.expr, orelse: ast.expr) -> Tuple[ast.expr, ast.expr]:
+        """Both branch values at numpy's join dtype, when they are arrays of different known kinds.
+
+        The if/else binds one name on both branches, and dace refuses to rebind an array to another
+        dtype, while numpy lets each branch keep its own. vexx_k's ``d.real if gamma_only else d``
+        is float on one side and complex on the other; the join holds every value either produces.
+        The cast names the wider branch's own ``.dtype`` when that branch is a bare name, so an fp32
+        leg joins to the width it declared.
+        """
+        kinds = (_dtype_kind(body, self.dtypes), _dtype_kind(orelse, self.dtypes))
+        join = _promote_kind(kinds[0], kinds[1])
+        ranks = (expr_rank(body, self.ranks), expr_rank(orelse, self.ranks))
+        if join is None or kinds[0] == kinds[1] or 0 in ranks or not any(ranks):
+            return body, orelse
+        wide = body if kinds[0] == join else orelse
+        dtype = f"{wide.id}.dtype" if isinstance(wide, ast.Name) else KIND_DACE_DTYPE[join]
+        cast = [
+            value
+            if kind == join
+            else ast.Call(
+                func=ast.Attribute(value=value, attr="astype", ctx=ast.Load()), args=[parse_expr(dtype)], keywords=[]
+            )
+            for value, kind in zip((body, orelse), kinds)
+        ]
+        return cast[0], cast[1]
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
         node.body = self._process_body(node.body)
@@ -504,10 +547,11 @@ class _DesugarTernary(ast.NodeTransformer):
                 continue
             if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.IfExp) and len(stmt.targets) == 1:
                 tgt = stmt.targets[0]
+                body, orelse = self.joined(stmt.value.body, stmt.value.orelse)
                 new_if = ast.If(
                     test=stmt.value.test,
-                    body=self._process_body([ast.Assign(targets=[copy.deepcopy(tgt)], value=stmt.value.body)]),
-                    orelse=self._process_body([ast.Assign(targets=[copy.deepcopy(tgt)], value=stmt.value.orelse)]),
+                    body=self._process_body([ast.Assign(targets=[copy.deepcopy(tgt)], value=body)]),
+                    orelse=self._process_body([ast.Assign(targets=[copy.deepcopy(tgt)], value=orelse)]),
                 )
                 out.append(ast.copy_location(new_if, stmt))
                 continue
@@ -719,6 +763,8 @@ class NormalizeReshape(ast.NodeTransformer):
 
     A lone ``-1`` cannot become a tuple: dace takes the shape literally and allocates a negative
     extent. It is numpy's flatten-to-1-D, which is exactly ``ravel``, and dace does register that.
+    The ``order=`` keyword goes with it: a plain ``ravel()`` reads C order, so an F-order flatten
+    would come back permuted.
     """
 
     def visit_Call(self, node: ast.Call):
@@ -731,13 +777,109 @@ class NormalizeReshape(ast.NodeTransformer):
         dims = args[0].elts if len(args) == 1 and isinstance(args[0], (ast.Tuple, ast.List)) else list(args)
         if len(dims) == 1 and _is_negative_one(dims[0]):
             receiver = node.args[0] if numpy_form else node.func.value
-            ravel = ast.Call(func=ast.Attribute(value=receiver, attr="ravel", ctx=ast.Load()), args=[], keywords=[])
+            order = [keyword for keyword in node.keywords if keyword.arg == "order"]
+            ravel = ast.Call(func=ast.Attribute(value=receiver, attr="ravel", ctx=ast.Load()), args=[], keywords=order)
             return ast.fix_missing_locations(ast.copy_location(ravel, node))
         if len(args) == 1 and isinstance(args[0], (ast.Tuple, ast.List)):
             return node
         shape = ast.Tuple(elts=list(args), ctx=ast.Load())
         node.args = [node.args[0], shape] if numpy_form else [shape]
         return ast.fix_missing_locations(node)
+
+
+#: numpy calls that return a new array no other name refers to.
+FRESH_ARRAY_CALLS = frozenset(
+    {"zeros", "empty", "ones", "full", "zeros_like", "empty_like", "ones_like", "full_like", "copy"}
+)
+
+
+def ordered_reshape_source(value: ast.expr) -> Optional[str]:
+    """The source name of ``src.reshape(...)`` or ``np.reshape(src, ...)`` with a non-C ``order=``, else None."""
+    if not (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute) and value.func.attr == "reshape"):
+        return None
+    order = next((keyword.value for keyword in value.keywords if keyword.arg == "order"), None)
+    if not (isinstance(order, ast.Constant) and order.value != "C"):
+        return None
+    numpy_form = isinstance(value.func.value, ast.Name) and value.func.value.id in ("np", "numpy")
+    source = (value.args[0] if value.args else None) if numpy_form else value.func.value
+    return source.id if isinstance(source, ast.Name) else None
+
+
+def stored_through(root: ast.AST, name: str) -> bool:
+    """Whether some statement under ``root`` writes into ``name``'s elements, as numpy does in place."""
+    for node in ast.walk(root):
+        if isinstance(node, ast.AugAssign):
+            targets: List[ast.expr] = [node.target]
+        elif isinstance(node, ast.Assign):
+            targets = [target for target in node.targets if isinstance(target, ast.Subscript)]
+        else:
+            continue
+        for target in targets:
+            while isinstance(target, ast.Subscript):
+                target = target.value
+            if isinstance(target, ast.Name) and target.id == name:
+                return True
+    return False
+
+
+def name_uses(nodes: Iterable[ast.AST], name: str) -> List[ast.Name]:
+    """Every occurrence of ``name`` under ``nodes``, read or bound."""
+    return [found for node in nodes for found in ast.walk(node) if isinstance(found, ast.Name) and found.id == name]
+
+
+def fresh_binding_index(block: List[ast.stmt], at: int, name: str) -> Optional[int]:
+    """The index of the last statement before ``at`` binding ``name``, when it binds a new array."""
+    for index in range(at - 1, -1, -1):
+        stmt = block[index]
+        if not name_uses([stmt], name) or not isinstance(stmt, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == name for target in stmt.targets):
+            continue
+        fresh = isinstance(stmt.value, ast.Call) and np_call_name(stmt.value) in FRESH_ARRAY_CALLS
+        return index if fresh and len(stmt.targets) == 1 else None
+    return None
+
+
+def statement_blocks(root: ast.AST) -> Iterable[List[ast.stmt]]:
+    """Every statement list under ``root``: bodies, else branches and finally blocks."""
+    for node in ast.walk(root):
+        for field in ("body", "orelse", "finalbody"):
+            block = vars(node).get(field)
+            if isinstance(block, list) and block and isinstance(block[0], ast.stmt):
+                yield block
+
+
+class MaterializeWrittenReshape(ast.NodeTransformer):
+    """Copy a non-C-order reshape that is later written through, when its source is private to it.
+
+    numpy returns a fresh array for such a reshape. dace materializes it as well, then refuses a store
+    through the result because the write would not reach the source (vexx_k's ``rhocg[nl0] += ...``
+    on what ``fwfft`` returned). An explicit ``np.copy`` is the same program without that view.
+
+    Copied only when the source is bound to a new array in the same block, above the reshape, and is
+    neither rebound in between nor named anywhere else in the function. Then nothing can observe
+    whether the write reached the source, whatever layout numpy gave it.
+    """
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        for block in statement_blocks(node):
+            for at, stmt in enumerate(block):
+                self.materialize(node, block, at, stmt)
+        return node
+
+    def materialize(self, fn: ast.FunctionDef, block: List[ast.stmt], at: int, stmt: ast.stmt) -> None:
+        if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+            return
+        source = ordered_reshape_source(stmt.value)
+        if source is None or not stored_through(fn, stmt.targets[0].id):
+            return
+        start = fresh_binding_index(block, at, source)
+        if start is None:
+            return
+        rebound = any(isinstance(use.ctx, ast.Store) for use in name_uses(block[start + 1 : at + 1], source))
+        if rebound or len(name_uses(block[start : at + 1], source)) != len(name_uses([fn], source)):
+            return
+        stmt.value = ast.copy_location(ast.Call(func=parse_expr("np.copy"), args=[stmt.value], keywords=[]), stmt.value)
 
 
 class _DesugarUnreplacedCalls(ast.NodeTransformer):
@@ -2846,6 +2988,10 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
         A statement, never an expression: ``add.at`` returns nothing and exists precisely because
         ``a[idx] += v`` drops every repeat. The indices DO repeat here -- lulesh scatters element
         forces onto shared nodes -- so the loop stays sequential and accumulates each one.
+
+        numpy evaluates the index and the value once, before the first write. A non-Name operand
+        (vexx_k's ``ikb.ravel()``) is bound to a local above the loop, so it is neither re-run per
+        element nor parsed as ``expr[k]`` with the subscript binding tighter than the expression.
         """
         if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)):
             return None
@@ -2856,22 +3002,29 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
         base = func.value
         if not (isinstance(base.value, ast.Name) and base.value.id in ("np", "numpy") and base.attr == "add"):
             return None
-        if len(call.args) != 3 or not isinstance(call.args[1], ast.Name):
+        if len(call.args) != 3:
             return None
         target, index, value = call.args
-        if not isinstance(index, ast.Name):
-            return None
-        rank = self.ranks.get(index.id)
+        rank = expr_rank(index, self.ranks)
         if rank is None or rank < 1:
             return None
         stem = self.temp("scatter")
+        index_name = self.operand_name(f"{stem}_idx", index)
+        value_name = self.operand_name(f"{stem}_val", value)
         iters = [f"{stem}_{k}" for k in range(rank)]
         at = ", ".join(iters)
-        body = f"{ast.unparse(target)}[{ast.unparse(index)}[{at}]] += {ast.unparse(value)}[{at}]"
+        body = f"{ast.unparse(target)}[{index_name}[{at}]] += {value_name}[{at}]"
         for depth in reversed(range(rank)):
-            body = f"for {iters[depth]} in range({ast.unparse(index)}.shape[{depth}]):\n" + indent_block(body)
+            body = f"for {iters[depth]} in range({index_name}.shape[{depth}]):\n" + indent_block(body)
         self.changed = True
         return [ast.copy_location(new, stmt) for new in ast.parse(body).body]
+
+    def operand_name(self, name: str, value: ast.expr) -> str:
+        """``value``'s own name when it is a bare Name, else ``name`` bound to it once in the prelude."""
+        if isinstance(value, ast.Name):
+            return value.id
+        self.prelude.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=value))
+        return name
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -3769,7 +3922,14 @@ def render_program(
     try:
         desugared = desugar_for_python_backend(ast.unparse(fn_ast), kir, backend="dace")
         fn_ast = next(n for n in ast.parse(desugared).body if isinstance(n, ast.FunctionDef))
-    except Exception:  # noqa: BLE001 -- keep the verbatim body if desugar fails
+    except Exception as error:  # noqa: BLE001 -- keep the verbatim body if desugar fails
+        logging.getLogger(__name__).warning(
+            "dace desugar fell back to the verbatim body for %s (%s): %s: %s",
+            kir.kernel_name,
+            kir.source_path,
+            type(error).__name__,
+            error,
+        )
         fn_ast = kir.tree
     # Rewrite leaked np_float/np_complex tokens to the dace precision global the module binds.
     framework_dtype = _RewriteFrameworkDtype()
@@ -3777,7 +3937,10 @@ def render_program(
     # ``np.asarray`` has no dace replacement; on an array it is numpy's own identity, so it goes.
     fn_ast = DropIdentityAsarray(rank_table(fn_ast, {a.name: len(a.shape) for a in kir.arrays})).visit(fn_ast)
     # dace's frontend has no conditional expression (RHS or nested value): lower both to if/else.
-    fn_ast = _DesugarTernary().visit(fn_ast)
+    # Array branches of different dtype kinds bind one name, so both take numpy's join first.
+    declared_kinds = {a.name: kind for a in kir.arrays if (kind := _kind_of_dtype_str(a.dtype)) is not None}
+    ternary_ranks = rank_table(fn_ast, {a.name: len(a.shape) for a in kir.arrays})
+    fn_ast = _DesugarTernary(_dtype_table(fn_ast, declared_kinds), ternary_ranks).visit(fn_ast)
     # dace's frontend takes one comparator per Compare: split a chained range test into its links.
     fn_ast = DesugarChainedCompare().visit(fn_ast)
     # dace names a method call by its receiver chain: a call/subscript receiver is refused outright.
@@ -3790,6 +3953,8 @@ def render_program(
     fn_ast = ResolveInferredReshape(arr_shapes).visit(fn_ast)
     # dace unwraps a reshape's varargs then iterates them; a lone -1 is numpy's ravel.
     fn_ast = NormalizeReshape().visit(fn_ast)
+    # dace refuses a store through a reshape it had to materialize; spell the copy numpy makes.
+    fn_ast = MaterializeWrittenReshape().visit(fn_ast)
     # dace has no np.outer and rejects negative-stride subscripts; rewrite both to forms dace accepts.
     fn_ast = _DesugarUnreplacedCalls().visit(fn_ast)
     # An einsum that contracts nothing is a broadcast product; dace's GEMM path mints a K=1 MatMul

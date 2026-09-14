@@ -46,6 +46,13 @@ _LIKE_CTORS = {"empty_like", "zeros_like", "ones_like"}
 
 # dtype "kind" ordered by promotion rank (numpy-style: bool < int < float < complex).
 _KIND_RANK = {"bool": 0, "int": 1, "float": 2, "complex": 3}
+#: ``np.fft.<name>`` -> the dtype kind it returns; a name absent here has no known kind.
+FFT_RESULT_KINDS = {
+    **dict.fromkeys(("fft", "ifft", "fft2", "ifft2", "fftn", "ifftn", "rfft", "rfft2", "rfftn", "ihfft"), "complex"),
+    **dict.fromkeys(("irfft", "irfft2", "irfftn", "hfft", "fftfreq", "rfftfreq"), "float"),
+}
+#: Array methods whose result keeps the receiver's dtype kind.
+KIND_KEEPING_METHODS = frozenset({"reshape", "ravel", "flatten", "copy", "conj", "conjugate", "squeeze", "transpose"})
 #: ``np.<name>`` dtype spellings -> kind.
 _DTYPE_NAME_KIND = {
     "bool": "bool",
@@ -397,7 +404,8 @@ def reshape_args_rank(value: ast.Call, undecided: Callable[[], Optional[int]]) -
     if n is None and len(value.args) == 1 and isinstance(a0, ast.Name) and a0.id in lengths:
         # A shape tuple whose length is not known yet has no rank to report: 1 would be a guess.
         return lengths[a0.id]
-    if n is None and (len(value.args) > 1 or isinstance(a0, (ast.Name, ast.Constant))):
+    # A lone integer literal, ``-1`` included, is one axis; ``-1`` parses as a UnaryOp, not a Constant.
+    if n is None and (len(value.args) > 1 or isinstance(a0, (ast.Name, ast.Constant)) or _const_int(a0) is not None):
         n = len(value.args)
     return undecided() if n is None else n
 
@@ -447,6 +455,8 @@ def first_arg_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optiona
 
 def np_reshape_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optional[int]:
     n = _tuple_len(value.args[1]) if len(value.args) >= 2 else None
+    if n is None and len(value.args) >= 2 and _const_int(value.args[1]) is not None:
+        n = 1  # ``np.reshape(a, -1)``: one integer extent is one axis
     return np_fallthrough_rank(value, attr, ranks) if n is None else n
 
 
@@ -504,8 +514,22 @@ def tensordot_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optiona
     return None if la is None or lb is None or n is None else la + lb - 2 * n
 
 
+def einsum_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Optional[int]:
+    """``np.einsum('gai,ai->ga', ...)`` has its OUTPUT subscripts' rank, not its largest operand's.
+
+    The elementwise fallback read vexx_k's ``'gai,ai->ga'`` as rank 3, and the axis-1 sum over its
+    product with a matrix then read ``.shape[2]`` off a matrix. A spec that is not a literal string,
+    or that holds an ellipsis, does not show how many axes it keeps, so it stays unranked.
+    """
+    spec = value.args[0] if value.args else None
+    if not (isinstance(spec, ast.Constant) and isinstance(spec.value, str)) or "..." in spec.value:
+        return None
+    return len(parse_einsum_subscripts(spec.value)[1])
+
+
 #: ``np.<attr>`` calls whose rank has its own rule; every other numpy call is elementwise.
 NP_CALL_RANKS: Dict[str, Callable[[ast.Call, str, Dict[str, int]], Optional[int]]] = {
+    "einsum": einsum_rank,
     "arange": one_axis_rank,
     "linspace": one_axis_rank,
     **dict.fromkeys(sorted(REDUCE_FNS), reduce_call_rank),
@@ -931,6 +955,11 @@ def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
     if isinstance(value, ast.Call):
         # ``np.linalg`` first: it is a TWO-level attribute, so the single-level ``_np_attr`` below
         # reads it as nothing and every value derived from a factorisation would go unknown.
+        # An ``np.fft`` transform is complex whatever it reads; the frequency ladders and inverse
+        # real transforms are real (vexx_k's ``vcr`` is an ``ifftn`` of the grid).
+        fft = np_submodule_attr(value, "fft")
+        if fft is not None:
+            return FFT_RESULT_KINDS.get(fft)
         linalg = np_submodule_attr(value, "linalg")
         if linalg in ("cholesky", "inv") and value.args:
             return _dtype_kind(value.args[0], dtypes)  # a factor/inverse keeps the operand's kind
@@ -940,6 +969,10 @@ def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
         if isinstance(f, ast.Attribute) and f.attr == "astype" and value.args:
             return _dtype_arg_kind(value.args[0])
         attr = _np_attr(value)
+        # A method reshape / flatten / copy / conjugate keeps its receiver's kind (vexx_k's
+        # ``vcr = out.reshape((nrxxs,), order='F')`` stays complex).
+        if attr is None and isinstance(f, ast.Attribute) and f.attr in KIND_KEEPING_METHODS:
+            return _dtype_kind(f.value, dtypes)
         if attr in _BOOL_UFUNCS:
             return "bool"  # logical_and / less / isnan ... always produce a bool array
         if attr in _DTYPE_NAME_KIND:
@@ -1266,12 +1299,13 @@ class _PadInline(ast.NodeTransformer):
         return stmts
 
 
-def _einsum_inline_stmts(subs: str, operands: List[str], ctr: int):
+def _einsum_inline_stmts(subs: str, operands: List[str], ctr: int, dtype_of: str):
     """Source statements computing ``np.einsum(subs, *operands)`` into a fresh
     temp via an explicit contraction loop nest (output indices outer, contracted
     indices inner-accumulate). Returns ``(stmts, temp_name)`` or ``(None, None)``
     when the form is unsupported (ellipsis / scalar output). numba and pythran
-    compile this; neither supports ``np.einsum`` on these shapes."""
+    compile this; neither supports ``np.einsum`` on these shapes. The temp takes
+    ``dtype_of``'s dtype: the operand holding numpy's result type of them all."""
     try:
         in_subs, out_sub = parse_einsum_subscripts(subs)
     except Exception:  # noqa: BLE001 -- ellipsis / malformed -> caller bails
@@ -1294,7 +1328,7 @@ def _einsum_inline_stmts(subs: str, operands: List[str], ctr: int):
     out_chars = list(out_sub)
     contracted = [c for c in char_src if c not in out_sub]
     outshape = ", ".join(extent(c) for c in out_chars)
-    src = [f"{p} = np.empty(({outshape},), {operands[0]}.dtype)"]
+    src = [f"{p} = np.empty(({outshape},), {dtype_of}.dtype)"]
     indent = ""
     for c in out_chars:
         src.append(f"{indent}for {p}_{c} in range({extent(c)}):")
@@ -1482,7 +1516,12 @@ def hoist_einsum(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
     names = [o.id for o in operands if isinstance(o, ast.Name)]
     if not operands or len(names) != len(operands):
         return None  # only bare-array operands -> else leave verbatim
-    stmts, temp = _einsum_inline_stmts(subs.value, names, hoist.ctr)
+    # numpy's result type is the widest operand kind. An unknown kind may be the widest one, so it
+    # yields to the first operand unless a known operand is already complex, the widest there is.
+    kinds = [_dtype_kind(operand, hoist.tables.dtypes) for operand in operands]
+    widest = max(range(len(kinds)), key=lambda at: _KIND_RANK.get(kinds[at] or "", -1))
+    dtype_of = names[widest] if None not in kinds or kinds[widest] == "complex" else names[0]
+    stmts, temp = _einsum_inline_stmts(subs.value, names, hoist.ctr, dtype_of)
     if stmts is None:
         return None
     hoist.ctr += 1
