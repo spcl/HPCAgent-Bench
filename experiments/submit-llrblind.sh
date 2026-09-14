@@ -101,7 +101,9 @@ submit_arm() {
     local problems="problems-${EXPERIMENT}-${lang}${suffix}.jsonl"
     [[ -s "${problems}" ]] || { rm -f "${staged}"; echo "missing ${problems}; run the generation block first" >&2; return 1; }
     if [[ -n "${KERNELS_FILE}" ]]; then
-        local owed="problems-${EXPERIMENT}-${lang}${suffix}-owed.jsonl"
+        # per ARM: prepare_job.sh reads PROBLEMS_FILE when the job STARTS, so a model-less name let a
+        # later complement for another model overwrite a queued arm's kernel list
+        local owed="problems-${arm}-owed.jsonl"
         owed_problems "${problems}" "${owed}" || { rm -f "${staged}"; exit 2; }
         problems="${owed}"
     fi

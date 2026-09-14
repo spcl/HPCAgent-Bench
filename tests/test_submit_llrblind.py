@@ -136,7 +136,7 @@ def test_the_default_run_is_unchanged_full_roster_no_score_tool(tmp_path: pathli
     assert env["HPCAGENT_BENCH_RECORD_PACKET"] == "no-score-tool"
     assert env["AGENT_SCORE_TOOL"] == "0"
     assert env["HPCAGENT_BENCH_SERVICE_SCORE_ENABLED"] == "0"
-    assert not (root / "experiments" / "problems-llrblind-c-owed.jsonl").exists()
+    assert not (root / "experiments" / "problems-llrblind-qwen38-c-owed.jsonl").exists()
     assert not (root / "sbatch-called").exists()
 
 
@@ -148,17 +148,35 @@ def test_kernels_file_stages_only_the_owed_kernels_and_resizes_nodes(tmp_path: p
     (root / "experiments" / "owed.txt").write_text("k1\nk3  # rerun\n")
     result = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain", KERNELS_FILE="owed.txt")
     assert result.returncode == 0, result.stderr
-    owed = root / "experiments" / "problems-llrblind-c-owed.jsonl"
+    owed = root / "experiments" / "problems-llrblind-qwen38-c-owed.jsonl"
     rows = [json.loads(line) for line in owed.read_text().splitlines()]
     assert sorted(row["kernel"] for row in rows) == ["loop_level_reasoning/k1/k1", "loop_level_reasoning/k3/k3"]
     assert sorted(row["id"] for row in rows) == [1, 3]
     assert (root / "experiments" / "problems-llrblind-c.jsonl").read_text() == problems_text(PROBLEM_KERNELS)
     env = env_dict(root / "experiments" / ".env.llrblind-qwen38-c")
-    assert env["PROBLEMS_FILE"] == "problems-llrblind-c-owed.jsonl"
+    assert env["PROBLEMS_FILE"] == "problems-llrblind-qwen38-c-owed.jsonl"
     assert env["AGENT_NODES"] == "1"
     assert env["CAMPAIGN_ARM"] == "llrblind-qwen38-c"
     assert env["HPCAGENT_BENCH_RECORD_EXPERIMENT"] == "llr-focus40"
     assert not (root / "sbatch-called").exists()
+
+
+def test_a_second_models_complement_leaves_a_queued_arms_owed_kernels_untouched(tmp_path: pathlib.Path) -> None:
+    """prepare_job.sh reads PROBLEMS_FILE when the job STARTS. A model-less owed name let the next
+    complement, for another model with its own KERNELS_FILE, rewrite the kernel list of an arm still
+    waiting in the queue, so it would run someone else's kernels."""
+    root = submit_tree(tmp_path)
+    experiments = root / "experiments"
+    (experiments / ".env.llrbase-oss120b-c").write_text((experiments / ".env.llrbase-qwen38-c").read_text())
+    (experiments / "owed-qwen38.txt").write_text("k1\nk3\n")
+    (experiments / "owed-oss120b.txt").write_text("k2\n")
+    first = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain", KERNELS_FILE="owed-qwen38.txt")
+    second = run_submit(root, MODELS="oss120b", LANGS="c", SKILLS="plain", KERNELS_FILE="owed-oss120b.txt")
+    assert (first.returncode, second.returncode) == (0, 0), first.stderr + second.stderr
+    for model, kernels in (("qwen38", ["k1", "k3"]), ("oss120b", ["k2"])):
+        env = env_dict(experiments / f".env.llrblind-{model}-c")
+        rows = [json.loads(line) for line in (experiments / env["PROBLEMS_FILE"]).read_text().splitlines()]
+        assert sorted(row["kernel"].rsplit("/", 1)[-1] for row in rows) == kernels, (model, env["PROBLEMS_FILE"])
 
 
 def test_a_kernels_file_naming_a_kernel_outside_the_problems_file_is_refused(tmp_path: pathlib.Path) -> None:
@@ -169,6 +187,6 @@ def test_a_kernels_file_naming_a_kernel_outside_the_problems_file_is_refused(tmp
     result = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain", KERNELS_FILE="owed.txt")
     assert result.returncode == 2
     assert "nosuchkernel" in result.stderr
-    assert not (root / "experiments" / "problems-llrblind-c-owed.jsonl").exists()
+    assert not (root / "experiments" / "problems-llrblind-qwen38-c-owed.jsonl").exists()
     assert not list((root / "experiments").glob(".env.llrblind-qwen38-c*"))
     assert not (root / "sbatch-called").exists()
