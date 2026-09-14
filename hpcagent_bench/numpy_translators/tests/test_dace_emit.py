@@ -1529,6 +1529,30 @@ def test_bindings_in_sibling_branch_arms_are_still_versioned() -> None:
     assert carried.count("np.copy") == 2 and "__v2" not in carried
 
 
+def test_a_binding_nested_in_a_loop_that_alone_reaches_its_reads_gets_its_own_name() -> None:
+    """cegterg binds ``psi_k = psi[:kdim, :nbase]`` before its loop and again in branch arms inside it,
+    after ``nbase`` grows. Declined, every binding became a copy sized by a different version of the
+    reassigned symbol, and dace refused the second: ``Cannot reassign value to variable "psi_k"``."""
+    src = agrees_with_numpy(
+        "def k(a, out):\n"
+        "    n = 2\n"
+        "    col = a[:, :n]\n"
+        "    out[0, :n] = col[0, :]\n"
+        "    for it in range(2):\n"
+        "        n = n + 1\n"
+        "        if it == 0:\n"
+        "            col = a[:, :n]\n"
+        "            out[1, :n] = col[1, :]\n"
+        "        else:\n"
+        "            col = a[:, :n]\n"
+        "            out[1, :n] = out[1, :n] + col[2, :]\n"
+    )
+    assert "np.copy" not in src, src
+    assert "out[0, :n] = col[0, :]" in src, src
+    assert "col__v2 = a[:, :n]" in src and "out[1, :n] = col__v2[1, :]" in src, src
+    assert "col__v3 = a[:, :n]" in src and "out[1, :n] = out[1, :n] + col__v3[2, :]" in src, src
+
+
 def test_a_second_allocation_of_one_name_gets_its_own_name() -> None:
     """One dace descriptor cannot hold two shapes: ``Cannot reassign value to variable "padded"``
     (max_filter pads on the column axis, then on the row axis). Two names are two descriptors."""

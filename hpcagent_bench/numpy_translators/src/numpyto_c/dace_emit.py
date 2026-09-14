@@ -1721,6 +1721,127 @@ def binds_a_view(node: ast.stmt) -> bool:
     )
 
 
+#: The binding a read sees when no binding of the name precedes it: a parameter, a global, or nothing.
+UNBOUND = 0
+
+
+def statements_touching(fn: ast.FunctionDef, name: str) -> Set[int]:
+    """``id()`` of every statement whose subtree names ``name`` or leaves its block early.
+
+    Every other statement neither binds, reads nor redirects the name, so a dataflow walk may skip it.
+    """
+    touching: Set[int] = set()
+
+    def visit(node: ast.AST) -> bool:
+        hit = (isinstance(node, ast.Name) and node.id == name) or isinstance(
+            node, (ast.Break, ast.Continue, ast.Return, ast.Raise)
+        )
+        for child in ast.iter_child_nodes(node):
+            hit = visit(child) or hit
+        if hit and isinstance(node, ast.stmt):
+            touching.add(id(node))
+        return hit
+
+    visit(fn)
+    return touching
+
+
+class ReachingBindings:
+    """Which bindings of one name reach each ``Name`` node of it, over a structured function body.
+
+    Reaching definitions on the ast: an ``if`` joins its arms, a loop iterates to a fixed point and
+    joins its ``break`` states, ``return`` and ``raise`` reach nothing. A statement it does not model
+    (``try``, ``with``, ``match``, a nested def) that touches the name clears ``sound``.
+    """
+
+    __slots__ = ("name", "bindings", "touching", "reached", "breaks", "continues", "sound")
+
+    def __init__(self, fn: ast.FunctionDef, name: str, bindings: Set[int]) -> None:
+        self.name = name
+        self.bindings = bindings
+        self.touching = statements_touching(fn, name)
+        self.reached: Dict[int, FrozenSet[int]] = {}
+        self.breaks: List[FrozenSet[int]] = []
+        self.continues: List[FrozenSet[int]] = []
+        self.sound = True
+        self.block(fn.body, frozenset({UNBOUND}))
+
+    def record(self, node: ast.AST, state: FrozenSet[int]) -> None:
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name) and sub.id == self.name:
+                self.reached[id(sub)] = self.reached.get(id(sub), frozenset()) | state
+
+    def block(self, stmts: List[ast.stmt], state: FrozenSet[int]) -> FrozenSet[int]:
+        for stmt in stmts:
+            if id(stmt) in self.touching:
+                state = self.statement(stmt, state)
+        return state
+
+    def statement(self, stmt: ast.stmt, state: FrozenSet[int]) -> FrozenSet[int]:
+        if isinstance(stmt, ast.Assign) and id(stmt) in self.bindings:
+            self.record(stmt.value, state)
+            return frozenset({id(stmt)})
+        if isinstance(stmt, ast.If):
+            self.record(stmt.test, state)
+            return self.block(stmt.body, state) | self.block(stmt.orelse, state)
+        if isinstance(stmt, (ast.For, ast.While)):
+            return self.loop(stmt, state)
+        if isinstance(stmt, (ast.Break, ast.Continue)):
+            (self.breaks if isinstance(stmt, ast.Break) else self.continues).append(state)
+            return frozenset()
+        if "body" in vars(stmt) or isinstance(stmt, ast.Match):
+            self.sound = False
+            return state
+        self.record(stmt, state)
+        return frozenset() if isinstance(stmt, (ast.Return, ast.Raise)) else state
+
+    def loop(self, stmt: ast.For | ast.While, state: FrozenSet[int]) -> FrozenSet[int]:
+        if isinstance(stmt, ast.For):
+            self.record(stmt.iter, state)
+        outer = (self.breaks, self.continues)
+        head = state
+        while True:
+            self.breaks, self.continues = [], []
+            if isinstance(stmt, ast.While):
+                self.record(stmt.test, head)
+            widened = head.union(self.block(stmt.body, head), *self.continues)
+            if widened == head:
+                break
+            head = widened
+        breaks = self.breaks
+        self.breaks, self.continues = outer
+        return self.block(stmt.orelse, head).union(*breaks)
+
+
+def sole_reaching_bindings(
+    fn: ast.FunctionDef, name: str, bindings: Set[int], touches: List[ast.Name]
+) -> Optional[Dict[int, int]]:
+    """``id(touch) -> id(binding)`` when exactly one binding of ``name`` reaches every touch, else ``None``.
+
+    A touch two bindings reach needs a phi; one no binding reaches reads a value from outside them.
+    """
+    reaching = ReachingBindings(fn, name, bindings)
+    if not reaching.sound:
+        return None
+    owners: Dict[int, int] = {}
+    for touch in touches:
+        sources = reaching.reached.get(id(touch), frozenset())
+        if len(sources) != 1 or UNBOUND in sources:
+            return None
+        owners[id(touch)] = next(iter(sources))
+    return owners
+
+
+def fresh_version(name: str, version: int, taken: Set[str]) -> str:
+    """``<name>__v<version>``, counting past every spelling in ``taken``; the result is reserved."""
+    renamed = f"{name}__v{version}"
+    while renamed in taken:
+        version += 1
+        renamed = f"{name}__v{version}"
+    taken.add(renamed)
+    return renamed
+
+
 def version_rebound_names(
     fn: ast.FunctionDef,
     binding_of: Callable[[ast.stmt], Optional[str]],
@@ -1745,6 +1866,10 @@ def version_rebound_names(
     gmres' ``m_iter``, seeded at top level and advanced by ``m_iter = k + 1`` two blocks down,
     stopped advancing. Bindings in SIBLING blocks are unaffected, which is the common case this
     function exists for: esirkepov binds ``cum_x`` in three arms of one branch, none inside another.
+    A nested name is still versioned when reaching definitions show exactly one binding reaches each
+    touch (:func:`sole_reaching_bindings`). cegterg binds ``psi_k = psi[:kdim, :nbase]`` before its
+    loop and in three branch arms inside it, each read right after; the copies that declining made
+    were sized by different versions of the reassigned ``nbase`` symbol, which dace refuses to rebind.
 
     ``acc += tap`` UPDATES the binding in scope rather than making a new one, so it is read like a
     read and renamed like one -- the accumulate belongs to whichever region reaches it. Counting it
@@ -1782,6 +1907,7 @@ def version_rebound_names(
         nested = {
             id(binding) for binding, owned_statements in regions if any(id(binding) in nodes for nodes in reached)
         }
+        touches = [node for node in loads.get(name, []) + stores.get(name, []) if id(node) not in bound_here]
         if nested:
             # A nested value binding belongs to the one outer region enclosing it and renames with it.
             # Only done to separate a View from the values bound after it: dace rebinds a value name.
@@ -1792,20 +1918,27 @@ def version_rebound_names(
                 or any(view_binding(binding) for binding, owned_statements in regions if id(binding) in nested)
                 or any(sum(key in reached[index] for index in outer) != 1 for key in nested)
             ):
-                declined.append(name)
-                continue  # a binding NESTED in another's extent: the reads after it belong to both
+                owners = sole_reaching_bindings(fn, name, {id(binding) for binding, _ in regions}, touches)
+                if owners is None:
+                    declined.append(name)
+                    continue  # a binding NESTED in another's extent: the reads after it belong to both
+                # Every touch sees one binding, so each binding names its own touches wherever they sit.
+                spelled = {id(regions[0][0]): name}
+                for version, (binding, owned) in enumerate(regions[1:], start=2):
+                    spelled[id(binding)] = fresh_version(name, version, taken)
+                    bound = binding.targets[0]
+                    if isinstance(bound, ast.Name):
+                        bound.id = spelled[id(binding)]
+                for touch in touches:
+                    touch.id = spelled[owners[id(touch)]]
+                continue
             regions = [regions[index] for index in outer]
             reached = [reached[index] for index in outer]
-        touches = [node for node in loads.get(name, []) + stores.get(name, []) if id(node) not in bound_here]
         if any(sum(id(touch) in nodes for nodes in reached) != 1 for touch in touches):
             declined.append(name)
             continue  # a read or update no region owns, or one two regions reach: neither is a rename
         for version, (binding, owned) in enumerate(regions[1:], start=2):
-            renamed = f"{name}__v{version}"
-            while renamed in taken:
-                version += 1
-                renamed = f"{name}__v{version}"
-            taken.add(renamed)
+            renamed = fresh_version(name, version, taken)
             bound = binding.targets[0]
             if isinstance(bound, ast.Name):
                 bound.id = renamed
