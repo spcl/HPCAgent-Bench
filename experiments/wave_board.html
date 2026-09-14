@@ -13,11 +13,9 @@
   --complete: #2c7a4b;
   --running: #2b5fc4;
   --incomplete: #a86200;
-  --void: #b0281f;
   --complete-soft: #e3f1e8;
   --running-soft: #e5ecfa;
   --incomplete-soft: #f7ecdc;
-  --void-soft: #f8e3e1;
   --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
   --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
@@ -26,15 +24,15 @@
   :root:not([data-theme="light"]) {
     --ground: #101513; --surface: #171e1b; --ink: #e4ebe7; --muted: #95a39c; --rule: #2a3430;
     --cell-empty: #26302c; --accent: #4db3ab; --complete: #5cc488; --running: #7ea6ff;
-    --incomplete: #e3a347; --void: #f07b70; --complete-soft: #1c3226; --running-soft: #1d2a45;
-    --incomplete-soft: #3a2c16; --void-soft: #3d1f1c;
+    --incomplete: #e3a347; --complete-soft: #1c3226; --running-soft: #1d2a45;
+    --incomplete-soft: #3a2c16;
   }
 }
 :root[data-theme="dark"] {
   --ground: #101513; --surface: #171e1b; --ink: #e4ebe7; --muted: #95a39c; --rule: #2a3430;
   --cell-empty: #26302c; --accent: #4db3ab; --complete: #5cc488; --running: #7ea6ff;
-  --incomplete: #e3a347; --void: #f07b70; --complete-soft: #1c3226; --running-soft: #1d2a45;
-  --incomplete-soft: #3a2c16; --void-soft: #3d1f1c;
+  --incomplete: #e3a347; --complete-soft: #1c3226; --running-soft: #1d2a45;
+  --incomplete-soft: #3a2c16;
 }
 * { box-sizing: border-box; }
 body { background: var(--ground); color: var(--ink); font: 14px/1.5 var(--body); }
@@ -50,7 +48,7 @@ h1 { font: 600 30px/1.1 var(--display); letter-spacing: 0.01em; margin: 0; text-
 .tile .l { font: 500 12px var(--display); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
 .tile .d { font-size: 12px; color: var(--muted); }
 .tile.complete .n { color: var(--complete); } .tile.running .n { color: var(--running); }
-.tile.incomplete .n { color: var(--incomplete); } .tile.void .n { color: var(--void); }
+.tile.incomplete .n { color: var(--incomplete); }
 .filters { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
 .filters fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .filters legend { float: left; font: 500 12px var(--display); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-right: 4px; }
@@ -66,7 +64,6 @@ section.exp { display: grid; gap: 10px; }
 .pill.complete { color: var(--complete); background: var(--complete-soft); }
 .pill.running { color: var(--running); background: var(--running-soft); }
 .pill.incomplete { color: var(--incomplete); background: var(--incomplete-soft); }
-.pill.void { color: var(--void); background: var(--void-soft); }
 .table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
 table { border-collapse: collapse; width: 100%; min-width: 860px; }
 th { font: 500 11px var(--display); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
@@ -79,8 +76,6 @@ td.num .owed { color: var(--incomplete); }
 .strip { display: grid; grid-auto-flow: column; grid-auto-columns: 7px; gap: 2px; height: 14px; }
 .strip i { display: block; border-radius: 1px; background: var(--cell-empty); }
 .strip i.on { background: var(--complete); }
-tr.void .strip i { background: var(--void-soft); }
-.note { font-size: 12px; color: var(--void); margin-top: 3px; }
 .jobs { display: flex; flex-wrap: wrap; gap: 4px; }
 .jobs a { font: 11px var(--mono); padding: 1px 6px; border-radius: 3px; border: 1px solid var(--rule); color: var(--muted); text-decoration: none; white-space: nowrap; }
 .jobs a.s-COMPLETED { color: var(--complete); border-color: color-mix(in srgb, var(--complete) 40%, var(--rule)); }
@@ -115,7 +110,7 @@ tr.void .strip i { background: var(--void-soft); }
   <div class="legend">
     <div><span class="pill complete">complete</span> every roster kernel has a row in <code>submissions</code> or <code>attempts</code>, over the union of all waves.</div>
     <div><span class="pill running">running</span> a job for the arm is running or queued. <span class="pill incomplete">incomplete</span> kernels are owed and nothing is queued: the next wave runs exactly that complement.</div>
-    <div><span class="pill void">void</span> the recorded rows measured a broken treatment and the whole roster is owed again.</div>
+    <div>Rows that measured a broken treatment are deleted with their run directories, so an arm rerun from scratch starts at 0.</div>
     <div>Job chips: green COMPLETED, amber FAILED or TIMEOUT, struck-through CANCELLED. A kimi arm labelled FAILED with every agent finished is the rc 123-125 teardown, not a crash. Smoke arms have no roster.</div>
   </div>
 </div>
@@ -123,7 +118,7 @@ tr.void .strip i { background: var(--void-soft); }
 <script type="application/json" id="data">__STATUS_JSON__</script>
 <script>
 const DATA = JSON.parse(document.getElementById("data").textContent);
-const STATUSES = ["complete", "running", "incomplete", "void"];
+const STATUSES = ["complete", "running", "incomplete"];
 const MODEL_NAMES = { kimi27sglang: "Kimi-K2.7-Code", oss120b: "GPT-OSS-120B", qwen38: "Qwen3.8-27B", glm53: "GLM-5.3", "": "none" };
 const filters = { status: new Set(), model: new Set(), device: new Set() };
 
@@ -141,7 +136,6 @@ function owed(arm) { return arm.roster ? arm.roster - arm.done : 0; }
 function experimentStatus(arms) {
   if (arms.some(a => a.status === "running")) return "running";
   if (arms.every(a => a.status === "complete")) return "complete";
-  if (arms.some(a => a.status === "void")) return "void";
   return "incomplete";
 }
 
@@ -153,7 +147,7 @@ function groups(arms) {
     byKey.get(key).push(arm);
   }
   const order = [...byKey.entries()].map(([key, list]) => ({ key, list, status: experimentStatus(list) }));
-  const rank = { running: 0, incomplete: 1, void: 1, complete: 2 };
+  const rank = { running: 0, incomplete: 1, complete: 2 };
   return order.sort((x, y) => rank[x.status] - rank[y.status] || x.key.localeCompare(y.key));
 }
 
@@ -236,7 +230,6 @@ function renderBoard() {
     for (const arm of arms.sort((x, y) => x.model.localeCompare(y.model) || x.variant.localeCompare(y.variant))) {
       const armCell = el("td", { class: "arm" },
         el("span", { class: "variant" }, arm.variant || "base"), " ", el("span", { class: "model" }, MODEL_NAMES[arm.model] || arm.model));
-      if (arm.void) armCell.append(el("div", { class: "note" }, arm.void));
       const counts = el("td", { class: "num" }, arm.roster ? `${arm.done}/${arm.roster}` : "n/a");
       if (owed(arm)) counts.append(" ", el("span", { class: "owed" }, `(${owed(arm)} owed)`));
       tbody.append(el("tr", { class: arm.status },

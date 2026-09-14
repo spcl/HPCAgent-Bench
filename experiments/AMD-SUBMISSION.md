@@ -13,7 +13,7 @@ ceiling is 36 nodes in flight.**
 ## The stack
 
 ```
-submit-llr8.sh          picks arms, sizes nodes, chains dependencies
+submit-<family>.sh      picks arms, sizes nodes, chains dependencies
   -> beverin.sbatch     one allocation; splits it into inference / agent / judge roles
     -> run_cluster.sh   re-entered INSIDE each role's container; builds the serve command
 ```
@@ -27,8 +27,8 @@ JUDGE_NODES` exactly. `arm_nodes.sh` reads those three from the same file the la
 the submitter and the launcher cannot disagree; always size with it rather than a literal.
 
 One judge NODE is four ranks, one per socket (`GRADE_CPUS` = cores-per-socket, from
-`run_cluster.sh:88`). One judge node covers 40 agents with headroom, so `JUDGE_NODES=1` is right
-for every arm here.
+`run_cluster.sh:88`). `JUDGE_NODES` is set per arm from the grading-rate formula in
+[`SUBMITTING.md`](../SUBMITTING.md); current arms use 1, 2 or 3 depending on their agent count.
 
 ## Submitting one arm
 

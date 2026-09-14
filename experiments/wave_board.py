@@ -3,8 +3,8 @@
 """The wave board: one static HTML page with every campaign arm's kernel coverage and slurm jobs.
 
 Coverage is remaining_kernels.py's rule: the union of judge rows over every job that ran the arm. An
-arm is ``running`` while any of its jobs is queued or running, ``void`` when its rows measured a
-broken treatment, ``complete`` when every roster kernel has a row, and ``incomplete`` otherwise.
+arm is ``running`` while any of its jobs is queued or running, ``complete`` when every roster kernel
+has a row, and ``incomplete`` otherwise. Rows that measured a broken treatment are deleted, not hidden.
 The page does not update itself: rebuild and republish it whenever a campaign job leaves the queue.
 
     python experiments/wave_board.py --out wave-board.html
@@ -83,12 +83,6 @@ CPF_EXPERIMENTS = {
     ),
 }
 
-#: Arm -> why its rows do not count. The whole roster is owed again.
-VOID = {
-    f"cpf-llr-focus40-{model}-c-cpf": "the CPF tool answered 404, then read only the first key segment; full rerun owed"
-    for model in ("kimi27sglang", "oss120b", "qwen38")
-}
-
 
 def campaign_of(arm: str) -> str:
     """The longest campaign prefix ``arm`` starts with, or "" when no campaign owns it."""
@@ -110,12 +104,10 @@ def board_campaign(campaign: str, variant: str) -> Campaign:
     return CPF_EXPERIMENTS.get(campaign, CAMPAIGNS[campaign]) if cpf else CAMPAIGNS[campaign]
 
 
-def arm_status(done: int, roster: int, states: list[str], void: bool) -> str:
+def arm_status(done: int, roster: int, states: list[str]) -> str:
     """A queued rerun is ``running`` even over full coverage; a smoke with no roster is never complete."""
     if any(state in ACTIVE_STATES for state in states):
         return "running"
-    if void:
-        return "void"
     if roster and done >= roster:
         return "complete"
     return "incomplete"
@@ -159,7 +151,7 @@ def arm_row(arm: str, jobs: list[Job], dirs: dict[str, pathlib.Path], full: list
     for job in jobs:
         if job.id in dirs:
             seen |= remaining_kernels.touched(str(dirs[job.id]))
-    done = 0 if arm in VOID else sum(1 for kernel in full if kernel in seen)
+    done = sum(1 for kernel in full if kernel in seen)
     return {
         "arm": arm,
         "campaign": campaign,
@@ -170,8 +162,7 @@ def arm_row(arm: str, jobs: list[Job], dirs: dict[str, pathlib.Path], full: list
         "variant": variant,
         "done": done,
         "roster": len(full),
-        "status": arm_status(done, len(full), [job.state for job in jobs], arm in VOID),
-        "void": VOID.get(arm, ""),
+        "status": arm_status(done, len(full), [job.state for job in jobs]),
         "jobs": [dataclasses.asdict(job) for job in sorted(jobs, key=lambda job: (len(job.id), job.id))],
     }
 

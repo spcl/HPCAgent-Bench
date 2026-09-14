@@ -29,9 +29,9 @@ any image and an edited kernel misses rather than serving stale code.
 
 Pre-rendered canonical parallel forms. They are an experiment INPUT, not something rebuilt on
 demand: an arm served a different form measures a different treatment, and the rule above -- delete
-the directory, lose only time -- does not hold for them. They live under the campaign that renders
-them, `$SCRATCH/campaigns/<tag>/<target>/{forms,dropin}`; `experiments/campaign_dirs.sh` names the
-layout.
+the directory, lose only time -- does not hold for them. They live in the content-addressed cache
+`$SCRATCH/cpf-cache`, and an arm reads one through a view under `$SCRATCH/cpf-views/<name>`, filled
+by `experiments/prerender_cpf.sbatch` (see `hpcagent_bench/cpf_cache.py`).
 
 ## Filling it
 
