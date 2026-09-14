@@ -18,7 +18,7 @@ Exit status is the number of REQUIRED checks that failed, so a build gate can us
 Entries marked optional report but never fail: they mark a capability whose absence changes what
 an arm can be asked for, not whether the image is usable.
 
-    python3 verify_image.py [--profile judge-agent-amd|vllm|sglang] [--verbose]
+    python3 verify_image.py [--profile judge-agent-amd|vllm|sglang|sglang-mi200] [--verbose]
 """
 
 import argparse
@@ -182,6 +182,25 @@ def compile_probe(spec: str, run_it: bool) -> tuple[bool, str]:
         return (code == 0), ("ran" if code == 0 else f"ran rc={code}")
 
 
+#: Inference profile -> the engine package it serves with.
+INFERENCE_ENGINE = {"vllm": "vllm", "sglang": "sglang", "sglang-mi200": "sglang"}
+
+
+def serving_checks(profile: str) -> list[Check]:
+    """The serving stack of one inference profile; version-agnostic, so the profiles share it."""
+    engine = INFERENCE_ENGINE[profile]
+    serve = Check("serving", engine, "py", engine)
+    triton = Check("serving", "triton", "py", "triton")
+    fabric = [Check("fabric", "libfabric", "lib", "libfabric.so"), Check("fabric", "libcxi", "lib", "libcxi.so")]
+    if profile == "sglang-mi200":
+        # aiter has no gfx90a kernels, so the image serves with SGLANG_USE_AITER=0 and pins no flydsl;
+        # sgl_kernel is what it rebuilt instead.
+        return [serve, triton, Check("serving", "sgl_kernel", "py", "sgl_kernel"), *fabric]
+    aiter = Check("serving", "aiter", "py", "aiter")
+    flydsl = Check("serving", "flydsl", "py", "flydsl", required=(profile == "sglang"))
+    return [serve, aiter, triton, *fabric, flydsl]
+
+
 def checks(profile: str) -> list[Check]:
     """The image's contract. Serving images carry the inference stack, not the HPC toolchain."""
     common = [
@@ -194,18 +213,8 @@ def checks(profile: str) -> list[Check]:
         Check("rocm", "rocminfo", "exe", "rocminfo"),
         Check("rocm", "hipcc", "exe", "hipcc"),
     ]
-    # the inference profiles share one surface; the checks are
-    # version-agnostic, so it shares them rather than duplicating the list to drift from it.
-    if profile in ("vllm", "sglang"):
-        engine = "sglang" if profile == "sglang" else "vllm"
-        return common + [
-            Check("serving", engine, "py", engine),
-            Check("serving", "aiter", "py", "aiter"),
-            Check("serving", "triton", "py", "triton"),
-            Check("fabric", "libfabric", "lib", "libfabric.so"),
-            Check("fabric", "libcxi", "lib", "libcxi.so"),
-            Check("serving", "flydsl", "py", "flydsl", required=(profile == "sglang")),
-        ]
+    if profile in INFERENCE_ENGINE:
+        return common + serving_checks(profile)
     return common + [
         # Compilers, and whether they can do the thing they were built for.
         Check("compiler", "gcc", "exe", "gcc"),
@@ -338,7 +347,7 @@ def main() -> int:
     parser.add_argument(
         "--profile",
         default=os.environ.get("IMAGE_PROFILE", "judge-agent-amd"),
-        choices=("judge-agent-amd", "judge", "vllm", "sglang"),
+        choices=("judge-agent-amd", "judge", "vllm", "sglang", "sglang-mi200"),
     )
     parser.add_argument("--verbose", action="store_true", help="print the evidence for a pass too")
     args = parser.parse_args()

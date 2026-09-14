@@ -27,6 +27,7 @@ role_candidate() {
         judge-agent-amd) printf 'optarena-ce-amd-mi300-candidate.sqsh' ;;
         judge)           printf 'optarena-ce-judge-amd-mi300-candidate.sqsh' ;;
         sglang)          printf 'optarena-sglang-candidate.sqsh' ;;
+        sglang-mi200)    printf 'optarena-sglang-mi200-candidate.sqsh' ;;
         vllm)            printf 'optarena-vllm-candidate.sqsh' ;;
         *) return 2 ;;
     esac
@@ -36,12 +37,13 @@ role_live() {
         judge-agent-amd) printf '%s' "${JUDGE_AGENT_AMD_SQSH}" ;;
         judge)           printf '%s' "${JUDGE_AMD_SQSH}" ;;
         sglang)          printf '%s' "${INFERENCE_SGLANG_SQSH}" ;;
+        sglang-mi200)    printf '%s' "${INFERENCE_SGLANG_MI200_SQSH}" ;;
         vllm)            printf '%s' "${INFERENCE_VLLM_SQSH}" ;;
         *) return 2 ;;
     esac
 }
 
-ALL_ROLES="judge-agent-amd judge sglang vllm"
+ALL_ROLES="judge-agent-amd judge sglang sglang-mi200 vllm"
 case "${1:-}" in
     --all) roles="${ALL_ROLES}" ;;
     "")    echo "usage: $0 <role>... | --all   (roles: ${ALL_ROLES})" >&2; exit 2 ;;

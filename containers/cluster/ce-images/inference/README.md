@@ -30,6 +30,8 @@ backends, same torch and triton.
 | `agentlike-probe.py` | Serving throughput under a campaign-shaped load. Node-to-node spread is ~30%, so pin an A/B to one node. |
 | `accuracy-gate.py` | Correctness gate a serving change must pass before it is believed. |
 | `smoke-kimi-sglang.sbatch` | SGLang serving smoke. |
+| `serve-mi200-smoke.sbatch` | Private (127.0.0.1, key via `--config`) Qwen3.8-27B BF16 smoke on one mi200 node, one leg per tp/mem-fraction. |
+| `sglang_kernel_launch_check.py` | Launches sgl_kernel silu_and_mul and triton causal_conv1d against torch; verify_image.sbatch runs it for sglang-mi200. |
 | `smoke-kimi-replicas.sbatch` | Multi-replica serving smoke. |
 | `smoke-kimi-eager-pg.sbatch` | Serving smoke with the eager process-group patch loaded. |
 | `prebuild-aiter-jit.sbatch` | Warms the aiter JIT cache. `@compile_ops` is lazy: importing an op never builds it, so this has to CALL each one. Gate on what was built, never on a module name -- the names differ across engine versions. |

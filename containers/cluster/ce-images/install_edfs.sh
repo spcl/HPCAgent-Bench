@@ -73,6 +73,11 @@ fi
 # version-named EDFs are left exactly as they are, so a run that must not move does not.
 try_render "${INFERENCE_SGLANG_EDF_LATEST}" "${INFERENCE_SGLANG_TEMPLATE}" "${INFERENCE_SGLANG_SQSH}"
 try_render "${INFERENCE_VLLM_EDF_LATEST}"   "${INFERENCE_VLLM_TEMPLATE}"   "${INFERENCE_VLLM_SQSH}"
+# mi200 once its image exists: before its first promotion a missing image is expected, and counting it
+# would fail the install_edfs.sh run of every other role's promotion.
+if [[ -f "${CE_IMAGES}/${INFERENCE_SGLANG_MI200_SQSH}" ]]; then
+    try_render "${INFERENCE_SGLANG_MI200_EDF_LATEST}" "${INFERENCE_SGLANG_MI200_TEMPLATE}" "${INFERENCE_SGLANG_MI200_SQSH}"
+fi
 
 echo
 if [[ ${failed} -gt 0 ]]; then
