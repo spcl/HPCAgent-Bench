@@ -3,14 +3,16 @@
 """The mi200 (MI250X, gfx90a) SGLang image, its pipeline entries and the serving gate's key file.
 
 MI250X needs its own image: sgl_kernel and cupy carry device code for one gfx arch, the base's
-common_ops is gfx942-only, and aiter has no gfx90a kernels. These pin the recipe to gfx90a, pin every
-pipeline map to one profile name, run the recipe's setup_rocm.py edit on a stand-in file, and check
-that verify-tools-reasoning.py sends the key it reads. The launcher is tests/test_serve_private.py.
+common_ops is gfx942-only, and aiter has no gfx90a kernels. These pin the recipe to the ROCM_ARCH build
+arg the mi200 row of gpu_arch.env sets, pin every pipeline map to one profile name, run the recipe's
+setup_rocm.py edit on a stand-in file, and check that verify-tools-reasoning.py sends the key it reads.
+The launcher is tests/test_serve_private.py; the table and the device gate are tests/test_gpu_arch_table.py.
 """
 
 import importlib.util
 import io
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -66,6 +68,14 @@ def code_lines(path: pathlib.Path) -> str:
     return "\n".join(line for line in lines if not line.lstrip().startswith("#"))
 
 
+def mi200_arch() -> str:
+    """The arch gpu_arch.env names for partition mi200."""
+    rows = (CE / "gpu_arch.env").read_text(encoding="ascii").splitlines()
+    found = [row.removeprefix("GPU_ARCH_mi200=") for row in rows if row.startswith("GPU_ARCH_mi200=")]
+    assert len(found) == 1, found
+    return found[0]
+
+
 def dockerfile_base(path: pathlib.Path) -> str:
     match = re.search(r"^ARG BASE_IMAGE=(\S+)\\\n(@sha256:[0-9a-f]{64})$", path.read_text(encoding="utf-8"), re.M)
     assert match, path
@@ -90,23 +100,35 @@ def test_the_mi200_recipe_pins_the_same_base_digest_as_sglang() -> None:
     assert len(bases) == 1, bases
 
 
-def test_the_mi200_recipe_builds_every_device_artifact_for_gfx90a_and_never_gfx942() -> None:
+def test_the_mi200_recipe_builds_every_device_artifact_for_the_rocm_arch_build_arg_only() -> None:
     code = code_lines(MI200 / "Dockerfile")
-    assert "ARG ROCM_ARCH=gfx90a" in code
+    assert re.findall(r"^ARG ROCM_ARCH\b.*$", code, re.M) == ["ARG ROCM_ARCH"]
     assert 'AMDGPU_TARGET="${ROCM_ARCH}"' in code
     assert 'HCC_AMDGPU_TARGET="${ROCM_ARCH}"' in code
-    assert re.findall(r'(?:ROCM_ARCH|AMDGPU_TARGET|GPU_ARCHS)="?gfx942', code) == []
+    assert re.findall(r'(?:ROCM_ARCH|AMDGPU_TARGET|GPU_ARCHS)="?gfx', code) == []
 
 
-def test_the_mi200_build_fails_unless_common_ops_carries_gfx90a_and_no_gfx942() -> None:
+def test_the_mi200_build_runs_on_mi200_and_passes_the_table_arch_as_the_build_arg() -> None:
+    sbatch = (MI200 / "build.sbatch").read_text(encoding="utf-8")
+    assert re.findall(r"^#SBATCH --partition=(\S+)$", sbatch, re.M) == ["mi200"]
+    assert '"${SLURM_JOB_PARTITION:-}" != mi200' in sbatch
+    build = code_lines(MI200 / "build.sh")
+    assert re.search(r"^ce_gpu_arch$", build, re.M)
+    assert '--build-arg "ROCM_ARCH=${ROCM_ARCH}"' in build
+
+
+def test_the_mi200_build_fails_unless_cupy_and_common_ops_carry_device_code_for_exactly_the_build_arch() -> None:
     code = code_lines(MI200 / "Dockerfile")
-    assert "grep -c gfx90a" in code and 'test "${n90a}" -gt 0' in code
-    assert "grep -c gfx942" in code and 'test "${n942}" -eq 0' in code
+    gated = re.findall(r'/usr/local/bin/device_arch_gate\.sh --exact "\$\{ROCM_ARCH\}" "\$\{(\w+)\}"', code)
+    assert gated == ["d", "so"], gated
+    assert "COPY containers/cluster/ce-images/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh" in code
 
 
 def test_the_mi200_image_ships_no_aiter_prebuild_and_serves_with_aiter_off() -> None:
     code = code_lines(MI200 / "Dockerfile")
-    assert "import aiter" not in code and "AITER_JIT_DIR" not in code and "GPU_ARCHS" not in code
+    assert "import aiter" not in code and "AITER_JIT_DIR" not in code
+    # GPU_ARCHS appears only as the override of the base's gfx942 ENV, never as an aiter arch setting.
+    assert re.findall(r"GPU_ARCHS=\S+", code) == ["GPU_ARCHS=${ROCM_ARCH}"]
     assert "SGLANG_USE_AITER=0" in code
     env = tomllib.loads((MI200 / "edf.toml.example").read_text(encoding="utf-8"))["env"]
     assert env["SGLANG_USE_AITER"] == "0"
@@ -125,15 +147,18 @@ def run_setup_edit(tmp_path: pathlib.Path, setup_text: str) -> tuple[subprocess.
     setup.write_text(setup_text, encoding="utf-8")
     script = tmp_path / "edit.py"
     script.write_text(setup_edit_block().replace(SETUP_PATH, str(setup)), encoding="utf-8")
-    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=False)
+    env = {**os.environ, "ROCM_ARCH": mi200_arch()}
+    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=False, env=env)
     return done, setup.read_text(encoding="utf-8")
 
 
-def test_the_setup_rocm_edit_admits_gfx90a_lets_amdgpu_target_win_and_drops_enable_fp8(tmp_path: pathlib.Path) -> None:
+def test_the_setup_rocm_edit_admits_the_mi200_arch_lets_amdgpu_target_win_and_drops_enable_fp8(
+    tmp_path: pathlib.Path,
+) -> None:
     done, edited = run_setup_edit(tmp_path, SETUP_ROCM)
     assert done.returncode == 0, done.stderr
     assert 'if "AMDGPU_TARGET" not in os.environ and torch.cuda.is_available():' in edited
-    assert '["gfx942", "gfx950", "gfx1250", "gfx90a"]' in edited
+    assert f'["gfx942", "gfx950", "gfx1250", "{mi200_arch()}"]' in edited
     assert "-DENABLE_FP8" not in edited
     assert "fp8_macro," in edited and "-DENABLE_BF16" in edited
 

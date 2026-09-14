@@ -22,6 +22,17 @@ CE_IMAGES="${CE_IMAGES:-${SCRATCH}/ce-images}"
 EDF_DIR="${EDF_DIR:-${HOME}/.edf}"
 mkdir -p "${EDF_DIR}"
 
+# shellcheck source=build_common.sh
+source "${SCRIPT_DIR}/build_common.sh"
+
+# The GPU arch a template's image is built for: its directory's build.sbatch names the partition,
+# gpu_arch.env the arch. Rendered into ${GPU_ARCH}.
+template_arch() {
+    local partition
+    partition="$(sed -n 's/^#SBATCH --partition=//p' "${SCRIPT_DIR}/$(dirname -- "$1")/build.sbatch")"
+    ce_partition_arch "${partition}"
+}
+
 # Repointing changes which image every job gets, including one that is queued now and starts in
 # an hour. With one version per role there is no pinned run to fall back on, so it is opt-in.
 render() {
@@ -48,7 +59,10 @@ render() {
         fi
     fi
 
+    local arch
+    arch="$(template_arch "${template}")" || return 1
     sed -e "s|\${SCRATCH}|${SCRATCH}|g" \
+        -e "s|\${GPU_ARCH}|${arch}|g" \
         -e "s|^image = .*|image = \"${image}\"|" \
         "${SCRIPT_DIR}/${template}" > "${target}"
     printf '  %-32s -> %s\n' "${name}" "${image}"

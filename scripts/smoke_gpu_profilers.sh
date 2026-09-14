@@ -14,11 +14,12 @@
 #   sbatch scripts/submit_gpu_profiler_smoke.sbatch
 #
 # Exits non-zero naming the first instrument that could not answer. WORK defaults to a scratch
-# directory; ARCH defaults to gfx942.
+# directory; ARCH defaults to the first GPU agent rocminfo reports.
 set -uo pipefail
 
 WORK="${WORK:-${SCRATCH:-/tmp}/gpu-profiler-smoke}"
-ARCH="${ARCH:-gfx942}"
+ARCH="${ARCH:-$(rocminfo 2>/dev/null | sed -nE 's/^[[:space:]]*Name:[[:space:]]+(gfx[0-9a-f]+)[[:space:]]*$/\1/p' | sed -n 1p)}"
+[[ -n "${ARCH}" ]] || { echo "rocminfo lists no GPU agent; set ARCH" >&2; exit 2; }
 REPS=20
 BLOCK=256
 LOG2N=22

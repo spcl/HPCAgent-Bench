@@ -322,6 +322,8 @@ read -r -a LEG_SPECS <<< "${LEGS}"
 for spec in "${LEG_SPECS[@]}"; do parse_leg "${spec}"; done
 [[ "${MODE}" == smoke ]] || LEG_SPECS=("${LEG_SPECS[0]}")
 [[ -d "${HF_HOME}/hub/models--${MODEL_REPO//\//--}" ]] || refuse "no ${MODEL_REPO} under ${HF_HOME}/hub"
+# Partition table, image stamp and rocminfo agree before any secret is written or weights load.
+[[ "${DRY_RUN}" == 1 ]] || bash "${REPO}/containers/cluster/ce-images/gpu_arch_check.sh" "${EDF}"
 
 make_private_dir "${RUN_DIR}"
 trap cleanup EXIT

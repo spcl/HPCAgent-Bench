@@ -18,18 +18,29 @@ USER root
 # the registry reference, not the dir: path a base-cache hit rewrites BASE_IMAGE to.
 ARG BASE_IMAGE
 ARG BASE_IMAGE_REF="${BASE_IMAGE}"
+# The one GPU arch every AOT device build below targets. Named, never detected: setup_rocm.py and
+# cupy otherwise take the GPU visible at build time, and on an mi300 node that is gfx942. build.sh
+# passes it from ../gpu_arch.env for the build job's partition; there is no default.
+ARG ROCM_ARCH
 LABEL org.opencontainers.image.title="optarena-sglang-mi200" \
-      org.opencontainers.image.description="SGLang inference for MI250X (gfx90a): ROCm 7.2.4, sgl_kernel rebuilt for gfx90a, aiter off" \
+      org.opencontainers.image.description="SGLang inference for MI250X (${ROCM_ARCH}): ROCm 7.2.4, sgl_kernel rebuilt for ${ROCM_ARCH}, aiter off" \
       org.opencontainers.image.version="0.5.19" \
       org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
       org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
 
-# The one GPU arch every AOT device build below targets. Named, never detected: setup_rocm.py and
-# cupy otherwise take the GPU visible at build time, and on an mi300 node that is gfx942.
-ARG ROCM_ARCH=gfx90a
+# /opt/gpu-arch is the arch as a FILE: the CE does not reliably keep image ENV. The ENV overrides the
+# base's GPU_ARCH_LIST and PYTORCH_ROCM_ARCH, which name gfx942.
+RUN set -eu; \
+    test -n "${ROCM_ARCH:-}" || { echo "ROCM_ARCH is unset: build with build.sh, which reads gpu_arch.env" >&2; exit 2; }; \
+    printf '%s\n' "${ROCM_ARCH}" > /opt/gpu-arch
+ENV HCC_AMDGPU_TARGET=${ROCM_ARCH} \
+    PYTORCH_ROCM_ARCH=${ROCM_ARCH} \
+    GPU_ARCHS=${ROCM_ARCH} \
+    GPU_ARCH_LIST=${ROCM_ARCH}
+COPY containers/cluster/ce-images/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
 
-# cupy from source, the ../sglang recipe for gfx90a. numpy is constrained to the installed version
+# cupy from source, the ../sglang recipe for ROCM_ARCH. numpy is constrained to the installed version
 # and the build fails if it moved.
 ARG CUPY_VERSION=14.2.0
 RUN set -eux; \
@@ -43,14 +54,10 @@ RUN set -eux; \
       || { echo "cupy moved numpy off ${numpy_before}" >&2; exit 2; }; \
     /opt/venv/bin/python3 -c "import cupy; print('cupy', cupy.__version__)"
 
-# Gate: no cupy extension carries gfx942 device code (a build that autodetected an MI300A GPU).
+# Gate: cupy's device code targets ROCM_ARCH and nothing else (a build that autodetected another GPU).
 RUN set -eux; \
-    command -v strings; \
     d="$(/opt/venv/bin/python3 -P -c 'import importlib.util as u; print(u.find_spec("cupy").submodule_search_locations[0])')"; \
-    n90a="$(find "${d}" -name '*.so' -exec strings {} + | grep -c gfx90a || true)"; \
-    n942="$(find "${d}" -name '*.so' -exec strings {} + | grep -c gfx942 || true)"; \
-    echo "cupy device-code strings: gfx90a=${n90a} gfx942=${n942}"; \
-    test "${n942}" -eq 0 || { echo "cupy carries gfx942 device code" >&2; exit 1; }
+    /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" "${d}"
 
 # No fabric library in a prefix this image controls: RPATH would bind to it and shadow the CSCS
 # netstack artifact the EDF hooks install (../sglang/Dockerfile carries the job history).
@@ -63,13 +70,13 @@ RUN set -eux; \
       || { echo "this image ships a fabric library in a prefix it controls:" >&2; \
            echo "${found}" >&2; exit 1; }
 
-# sgl_kernel common_ops, REBUILT for gfx90a. The base's copy is gfx942-only (its build.ninja says
+# sgl_kernel common_ops, REBUILT for ROCM_ARCH. The base's copy is gfx942-only (its build.ninja says
 # --amdgpu-target=gfx942; 28 strings name gfx942, none gfx90a) and it is on the serve path:
 # SiluAndMul on HIP imports sgl_kernel.silu_and_mul.
 #
 # Three asserted edits to setup_rocm.py; a pattern that is not there exactly once fails the build.
 #   * AMDGPU_TARGET wins over the visible GPU (stock :70-72 overwrite it with gcnArchName).
-#   * gfx90a joins the allow-list (stock :78-82 sys.exit(1) for anything but gfx942/gfx950/gfx1250).
+#   * ROCM_ARCH joins the allow-list (stock :78-82 sys.exit(1) for anything but gfx942/gfx950/gfx1250).
 #   * -DENABLE_FP8 goes: no file under kernels/aot reads it, and MI250X has no FP8 types.
 # The FP8 TYPE macro stays: setup picks -DHIP_FP8_TYPE_E4M3 for non-gfx942 (:84-86), and
 # include/utils.h:381-388 #errors without one in every TU that includes it. It only names a host-side
@@ -78,26 +85,27 @@ RUN set -eux; \
 # (amd_hip_fp8.h:33-51), so the native-OCP branch (:132) is skipped. Dropping that source instead
 # would leave its three m.impl registrations in common_extension_rocm.cc:56-67 unresolved.
 RUN /opt/venv/bin/python3 <<'PY'
+import os
 import pathlib
 import sys
 
 SETUP = pathlib.Path("/sgl-workspace/sglang/python/sglang/kernels/aot/setup_rocm.py")
+ARCH = os.environ["ROCM_ARCH"]
+# Upstream's allow-list line, verbatim from the pinned base.
+ALLOW = 'if amdgpu_target not in ["gfx942", "gfx950", "gfx1250"]:\n'
 EDITS = (
     ("if torch.cuda.is_available():\n", 'if "AMDGPU_TARGET" not in os.environ and torch.cuda.is_available():\n'),
-    (
-        'if amdgpu_target not in ["gfx942", "gfx950", "gfx1250"]:\n',
-        'if amdgpu_target not in ["gfx942", "gfx950", "gfx1250", "gfx90a"]:\n',
-    ),
+    (ALLOW, ALLOW.replace("]:", f', "{ARCH}"]:')),
     ('    "-DENABLE_FP8",\n', ""),
 )
 text = SETUP.read_text()
 for old, new in EDITS:
     count = text.count(old)
     if count != 1:
-        sys.exit(f"{SETUP}: expected one {old!r}, found {count}; upstream changed, re-derive the gfx90a edit")
+        sys.exit(f"{SETUP}: expected one {old!r}, found {count}; upstream changed, re-derive the {ARCH} edit")
     text = text.replace(old, new)
 SETUP.write_text(text)
-print("setup_rocm.py edited for gfx90a", flush=True)
+print(f"setup_rocm.py edited for {ARCH}", flush=True)
 PY
 
 RUN set -eux; \
@@ -115,16 +123,12 @@ RUN set -eux; \
     cp -f "${built}" "${installed}"; \
     cmp "${built}" "${installed}"
 
-# Gate: the INSTALLED common_ops carries gfx90a device code and nothing built for gfx942.
+# Gate: the INSTALLED common_ops carries device code for ROCM_ARCH and nothing else.
 RUN set -eux; \
     pkg="$(/opt/venv/bin/python3 -P -c 'import importlib.util as u; print(u.find_spec("sgl_kernel").submodule_search_locations[0])')"; \
     so="$(find "${pkg}" -maxdepth 1 -name 'common_ops.*.so')"; \
     test -f "${so}"; \
-    n90a="$(strings "${so}" | grep -c gfx90a || true)"; \
-    n942="$(strings "${so}" | grep -c gfx942 || true)"; \
-    echo "common_ops device-code strings: gfx90a=${n90a} gfx942=${n942}"; \
-    test "${n90a}" -gt 0 || { echo "common_ops carries no gfx90a device code" >&2; exit 1; }; \
-    test "${n942}" -eq 0 || { echo "common_ops still carries gfx942 device code" >&2; exit 1; }
+    /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" "${so}"
 
 # The EDF restates these (the CE does not reliably keep image ENV); here they are under the digest.
 # SGLANG_USE_AITER=0: aiter ships no gfx90a kernels, and this image carries no aiter JIT prebuild.

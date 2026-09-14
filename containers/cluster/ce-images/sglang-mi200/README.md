@@ -22,9 +22,9 @@ Serves `Qwen/Qwen3.8-27B` BF16. `../sglang` (MI300A, gfx942) stays untouched.
 
 setup_rocm.py and cupy take the GPU visible at build time. A build on mi300 silently yields gfx942.
 Guards:
-- Dockerfile names `ROCM_ARCH=gfx90a`; setup_rocm.py edited so `AMDGPU_TARGET` wins (asserted edit).
-- Gate: installed common_ops needs `strings | grep -c gfx90a` > 0 and `grep -c gfx942` == 0.
-- Gate: no cupy .so carries gfx942.
+- `ROCM_ARCH` comes from `../gpu_arch.env` for the build job's partition (no Dockerfile default); setup_rocm.py edited so `AMDGPU_TARGET` wins (asserted edit).
+- Gate: `device_arch_gate.sh --exact` on installed common_ops and on cupy: device targets (`amdgcn-*-gfx*`) must be exactly `ROCM_ARCH`. rocprim's bare arch-name table does not count.
+- `/opt/gpu-arch` stamps the arch; `gpu_arch_check.sh` compares it with the partition table and rocminfo at launch.
 - build.sbatch and verify_image.sbatch refuse any partition but mi200.
 
 ## Build + verify (one job, mi200)

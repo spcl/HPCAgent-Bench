@@ -60,7 +60,9 @@ MPIFLAGS="$(mpicc -show | cut -d" " -f2-)"
 # -x hip compiles as C++, which drags in the MPI C++ BINDINGS -- and Open MPI 4.1 op_inln.h
 # has function-pointer casts that clang rejects under -Werror. Those headers are deprecated and
 # nothing here uses them, so skip them rather than lowering the warning level on our own code.
-hipcc -x hip -O2 -Wall -Wextra -Werror --offload-arch=gfx942 \
+GFX="$(rocminfo | sed -nE "s/^[[:space:]]*Name:[[:space:]]+(gfx[0-9a-f]+)[[:space:]]*\$/\1/p" | sed -n 1p)"
+test -n "${GFX}" || { echo "rocminfo lists no GPU agent: no arch to build for" >&2; exit 2; }
+hipcc -x hip -O2 -Wall -Wextra -Werror --offload-arch="${GFX}" \
     -DOMPI_SKIP_MPICXX=1 -DMPICH_SKIP_MPICXX=1 -DMPI_NO_CPPBIND=1 \
     "${REPO}/reproducibility/mpi/gpu_aware_mpi_probe.c" ${MPIFLAGS} -o probe
 echo "built"

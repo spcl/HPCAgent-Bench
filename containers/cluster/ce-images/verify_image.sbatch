@@ -36,12 +36,6 @@ PROFILE="${PROFILE:-judge-agent-amd}"
 REPO="${REPO:-${S}/optarena}"
 test -f "${IMAGE}"
 
-# sglang-mi200 device code is gfx90a; its kernel launch check cannot run on another GPU.
-if [ "${PROFILE}" = sglang-mi200 ] && [ "${SLURM_JOB_PARTITION:-}" != mi200 ]; then
-    echo "profile sglang-mi200 verifies on partition mi200, not '${SLURM_JOB_PARTITION:-none}'" >&2
-    exit 2
-fi
-
 EDF="${S}/.tmp/verify-${SLURM_JOB_ID}.toml"
 mkdir -p "$(dirname "${EDF}")"
 # PATH is declared, not inherited, for the same reason the real EDF declares it: the CE does not
@@ -105,6 +99,10 @@ FI_MR_CACHE_MONITOR = "disabled"
 ${ce_fi_provider}
 ${ce_aiter}
 TOML
+
+# Partition table, image stamp and rocminfo agree before anything runs: device code built for another
+# arch imports, then fails at its first launch.
+bash "${REPO}/containers/cluster/ce-images/gpu_arch_check.sh" "${EDF}" || { rm -f "${EDF}"; exit 2; }
 
 echo "=== verifying ${IMAGE} as profile=${PROFILE} ==="
 srun --environment="${EDF}" python3 "${REPO}/containers/cluster/ce-images/verify_image.py" \

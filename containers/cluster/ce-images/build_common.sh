@@ -71,6 +71,40 @@ ce_gpu_args() {
     fi
 }
 
+# Prints the AMD GPU arch gpu_arch.env names for partition $1: the one table image builds, EDF renders
+# and runtime checks read. A partition it does not name is refused, never guessed.
+ce_partition_arch() {
+    local arch
+    arch="$(sed -n "s/^GPU_ARCH_${1:-}=//p" "${CE_IMAGES_DIR}/gpu_arch.env")"
+    if [[ ! "${arch}" =~ ^gfx[0-9a-f]+$ ]]; then
+        echo "gpu_arch.env names no GPU arch for partition '${1:-}'" >&2
+        return 2
+    fi
+    printf '%s\n' "${arch}"
+}
+
+# Exports ROCM_ARCH for this job's partition, for an image build to pass as --build-arg. Device code
+# built for another arch imports and links, then fails at its first launch. ROCM_PARTITION names the
+# partition for a dry run outside Slurm.
+ce_gpu_arch() {
+    local partition="${SLURM_JOB_PARTITION:-${ROCM_PARTITION:-}}" arch
+    if [[ -z "${partition}" ]]; then
+        echo "ce_gpu_arch: no SLURM_JOB_PARTITION; set ROCM_PARTITION for a dry run outside Slurm" >&2
+        return 2
+    fi
+    if [[ -n "${ROCM_PARTITION:-}" && "${ROCM_PARTITION}" != "${partition}" ]]; then
+        echo "ce_gpu_arch: ROCM_PARTITION=${ROCM_PARTITION} but this job runs on ${partition}" >&2
+        return 2
+    fi
+    arch="$(ce_partition_arch "${partition}")" || return 2
+    if [[ -n "${ROCM_ARCH:-}" && "${ROCM_ARCH}" != "${arch}" ]]; then
+        echo "ce_gpu_arch: ROCM_ARCH=${ROCM_ARCH} disagrees with gpu_arch.env: ${partition} is ${arch}" >&2
+        return 2
+    fi
+    export ROCM_ARCH="${arch}"
+    printf 'gpu arch %s for partition %s\n' "${ROCM_ARCH}" "${partition}"
+}
+
 # Base image cache on scratch; rewrites the global BASE_IMAGE to a local `dir:` on a hit.
 #
 # The podman LAYER store cannot live on scratch: capstor, iopsstor and the NFS home all reject
