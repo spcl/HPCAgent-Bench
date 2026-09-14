@@ -32,7 +32,7 @@ def board() -> types.ModuleType:
         ("gpu-llr-focus40-kimi27sglang-c-openmp-skills", ("gpu-llr-focus40", "kimi27sglang", "c-openmp-skills")),
         ("harness-focus20-smoke-qwen38-claude-autokernel", ("harness-focus20-smoke", "qwen38", "claude-autokernel")),
         ("llrblind-kimi27sglang-fortran-skills", ("llrblind", "kimi27sglang", "fortran-skills")),
-        ("gpusmoke5-hip-cpf", ("gpusmoke5", "", "hip-cpf")),
+        ("scicomp-dc-qwen38-cpfsrc", ("scicomp-dc", "qwen38", "cpfsrc")),
     ],
 )
 def test_an_arm_name_splits_into_its_campaign_model_and_variant(
@@ -79,7 +79,7 @@ def test_the_embedded_data_survives_a_value_that_closes_a_script_element(board: 
         ("scicomp-dc", "cpf", "cpf-scicomp"),
         ("scicomp-dc", "dc-cpfsrc", "cpf-scicomp"),
         ("scicomp-dc", "plain", "scicomp-focus40"),
-        ("gpusmoke5", "hip-cpf", "gpusmoke5"),
+        ("llrblind", "c-cpf", "llr-focus40-blind"),
     ],
 )
 def test_a_cpf_arm_is_its_own_experiment_on_the_board(
@@ -87,6 +87,11 @@ def test_a_cpf_arm_is_its_own_experiment_on_the_board(
 ) -> None:
     """CPF-LLR and CPF-SciComp are reported apart from the campaigns their arms ran in."""
     assert board.board_campaign(campaign, variant).experiment == experiment
+
+
+def test_the_dropped_gpu_smoke_is_not_on_the_board(board: types.ModuleType) -> None:
+    """GPU Smoke@5 was dropped from reporting; its arms must not come back as an experiment window."""
+    assert board.campaign_of("gpusmoke5-hip-cpf") == ""
 
 
 def job_dir_with_rows(root: pathlib.Path, job_id: str, benchmarks: list[str]) -> pathlib.Path:
