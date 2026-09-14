@@ -1119,7 +1119,10 @@ COPY containers/judge/requirements.txt /opt/optarena-judge/requirements.txt
 RUN set -eux; \
     PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-cache-dir \
       -r /opt/optarena-judge/requirements.txt \
-      "litellm[proxy]==1.94.0" fastapi uvicorn httpx pydantic orjson tenacity rich typer; \
+      "litellm[proxy]==1.94.0" fastapi uvicorn httpx "httpx2==2.12.0" pydantic orjson tenacity rich typer; \
+    # starlette's TestClient imports httpx2 and only falls back to httpx with a deprecation warning, \
+    # which the suite's -W error turns into a failure. The suite has no network to fetch it later. \
+    python3 -W error -c "import starlette.testclient"; \
     playwright install --with-deps chromium; \
     chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
 

@@ -657,7 +657,9 @@ RUN set -eux; \
     test "${torch_before}" = "${torch_after}" \
       || { echo "requirements moved torch ${torch_before} -> ${torch_after}; the ML baseline changed" >&2; exit 2; }; \
     python3 -m pip install --no-cache-dir \
-      "litellm[proxy]==1.94.0" fastapi uvicorn httpx pydantic orjson tenacity rich typer
+      "litellm[proxy]==1.94.0" fastapi uvicorn httpx "httpx2==2.12.0" pydantic orjson tenacity rich typer; \
+    # starlette's TestClient needs httpx2; the httpx fallback warns, and the suite runs -W error offline. \
+    python3 -W error -c "import starlette.testclient"
 
 # cupy is the WHEEL here. NVIDIA is the platform cupy ships binaries for; the AMD image needs a HIP
 # source build instead, and that difference is one of the reasons the two images cannot be one

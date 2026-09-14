@@ -111,6 +111,7 @@ def main() -> int:
         )
     finally:
         server.shutdown()
+        server.server_close()
 
     if proc.returncode != 0:
         print(proc.stdout)
