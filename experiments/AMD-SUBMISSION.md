@@ -13,7 +13,7 @@ ceiling is 36 nodes in flight.**
 ## The stack
 
 ```
-submit-llr8.sh          picks arms, sizes nodes, chains dependencies
+submit-<family>.sh      picks arms, sizes nodes, chains dependencies
   -> beverin.sbatch     one allocation; splits it into inference / agent / judge roles
     -> run_cluster.sh   re-entered INSIDE each role's container; builds the serve command
 ```
