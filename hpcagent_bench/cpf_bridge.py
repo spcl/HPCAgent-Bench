@@ -25,6 +25,7 @@ the child (``python -m hpcagent_bench.cpf_bridge``).
 """
 
 import argparse
+import ast
 import contextlib
 import functools
 import hashlib
@@ -119,15 +120,44 @@ def resolve_program(module: ModuleType, path: pathlib.Path, entry: str = "") -> 
     that: the helpers it generates are ``_``-prefixed, which leaves one public program, and a
     module with a single program of any name is that program.
     """
-    programs = [(name, value) for name, value in vars(module).items() if type(value).__name__ == "DaceProgram"]
-    by_name = dict(programs)
+    programs = {name: value for name, value in vars(module).items() if type(value).__name__ == "DaceProgram"}
+    chosen = entry_program_name(list(programs), path, entry)
+    return None if chosen is None else programs[chosen]
+
+
+def entry_program_name(names: Sequence[str], path: pathlib.Path, entry: str = "") -> str | None:
+    """Which of a generated impl's program ``names`` is the entry, by :func:`resolve_program`'s rule."""
     for name in (entry, program_name(path)):
-        if name in by_name:
-            return by_name[name]
-    public = [value for name, value in programs if not name.startswith("_")]
+        if name in names:
+            return name
+    public = [name for name in names if not name.startswith("_")]
     if len(public) == 1:
         return public[0]
-    return programs[0][1] if len(programs) == 1 else None
+    return names[0] if len(names) == 1 else None
+
+
+def returned_slots(path: pathlib.Path, entry: str) -> tuple[str | None, ...]:
+    """What the impl's entry program returns, slot by slot: the returned name, or ``None`` for an expression.
+
+    Slot ``i`` is dace's ``__return_i`` (``__return`` for a lone value). Empty when there is no impl,
+    or the entry returns nothing or returns from more than one place, so no slot is named on a guess.
+    """
+    if not path.is_file():
+        return ()
+    tree = ast.parse(path.read_text())
+    programs = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and any("program" in ast.unparse(d) for d in node.decorator_list)
+    }
+    chosen = entry_program_name(list(programs), path, entry)
+    if chosen is None:
+        return ()
+    returns = [node.value for node in ast.walk(programs[chosen]) if isinstance(node, ast.Return) and node.value]
+    if len(returns) != 1:
+        return ()
+    values = returns[0].elts if isinstance(returns[0], ast.Tuple) else [returns[0]]
+    return tuple(value.id if isinstance(value, ast.Name) else None for value in values)
 
 
 def binding_for(rendering: "Rendering", kernel: str, symbol: str) -> Binding:
@@ -289,24 +319,31 @@ def copies_whole_argument(sdfg: "SDFG", edge: "MultiConnectorEdge[Memlet]", targ
     )
 
 
-def drop_returned_arguments(sdfg: "SDFG", abi: Sequence[str]) -> tuple[str, ...]:
-    """Remove every return container that only ever receives a whole copy of an ABI argument.
+def drop_returned_arguments(
+    sdfg: "SDFG", abi: Sequence[str], graded: Sequence[str] = (), returned: Sequence[str | None] = ()
+) -> tuple[str, ...]:
+    """Remove every return container the native ABI has no slot for and no graded result lives in.
 
     The native ABI returns nothing: the emitters strip a kernel's trailing ``return f``
     (``numpyto_common.frontend``) because ``f`` is already a parameter the caller holds. DaCe gives
-    the returned value its own non-transient ``__return``, filled by a copy of ``f``, so the entry
-    takes a pointer the judge never passes. A container written any other way (a computed value, a
-    partial copy, a nested SDFG's output) or read by anything is kept, and the ordered render
-    refuses it instead of discarding a result the caller cannot recover.
+    the returned value its own non-transient ``__return``, so the entry takes a pointer the judge
+    never passes. Dropped: a container only ever filled by a whole copy of an ABI argument, and one
+    whose slot in ``returned`` names a value outside ``graded`` (cegterg's iteration counts). Any
+    other container (an unnamed or graded computed value, a partial copy) or one read by anything
+    is kept, and the ordered render refuses it instead of discarding a result the caller needs.
 
     :returns: the containers removed.
     """
-    from dace.codegen.cpf import is_return_name
+    from dace.codegen.cpf import RETURN_PREFIX, is_return_name
+    from dace.sdfg import nodes as dace_nodes
 
     wanted = set(abi)
     dropped: list[str] = []
     for name in [n for n in sdfg.arrays if is_return_name(n)]:
         target = sdfg.arrays[name]
+        suffix = name[len(RETURN_PREFIX) + 1 :]
+        slot = 0 if name == RETURN_PREFIX else int(suffix) if suffix.isdigit() else len(returned)
+        ungraded = slot < len(returned) and returned[slot] is not None and returned[slot] not in graded
         found = [
             (state, node)
             for state in sdfg.all_states()
@@ -316,14 +353,21 @@ def drop_returned_arguments(sdfg: "SDFG", abi: Sequence[str]) -> tuple[str, ...]
         ]
         if not found or any(
             state.out_degree(node)
-            or not all(copies_whole_argument(sdfg, edge, target, wanted) for edge in state.in_edges(node))
+            or not (ungraded or all(copies_whole_argument(sdfg, edge, target, wanted) for edge in state.in_edges(node)))
             for state, node in found
         ):
             continue
         for state, node in found:
-            sources = [e.src for e in state.in_edges(node)]
+            frontier = [e.src for e in state.in_edges(node)]
             state.remove_node(node)
-            state.remove_nodes_from([src for src in sources if src in state.nodes() and state.degree(src) == 0])
+            while frontier:  # code left computing only the dropped value goes with it
+                src = frontier.pop()
+                if src not in state.nodes() or state.out_degree(src):
+                    continue
+                if state.in_degree(src) and not isinstance(src, dace_nodes.CodeNode):
+                    continue
+                frontier.extend(e.src for e in state.in_edges(src))
+                state.remove_node(src)
         sdfg.remove_data(name, validate=False)
         dropped.append(name)
     return tuple(dropped)
@@ -463,7 +507,8 @@ def render_canonical(
         abi_args = [arg.name for arg in native.args] + [WORKSPACE_NAME, WORKSPACE_SIZE_NAME]
         bind_pinned_config(sdfg, spec.pinned_config)
         add_workspace(sdfg)
-        drop_returned_arguments(sdfg, abi_args)
+        impl = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_dace.py"
+        drop_returned_arguments(sdfg, abi_args, spec.output_args, returned_slots(impl, spec.func_name))
         forced = force_abi_symbols(sdfg, [arg.name for arg in native.args])
         sdfg.name = native.symbol
     # The device form is one unit holding host code and kernels -- its own dialect; --language only

@@ -597,26 +597,25 @@ def test_split_reassigned_size_routes_allocations_through_the_runtime_count_too(
 
 
 def test_gmres_emits_promoted_symbols_ternary_and_split() -> None:
-    """End-to-end: the lowered gmres emit declares m as a dc.symbol, records its
-    binding recipe, seeds the m_iter runtime count, sizes the workspace by that count,
-    and carries no residual conditional-expression RHS. ``n`` is a pure
-    alias of ``N`` (``n = N``), so it is INLINED to ``N`` rather than promoted to its
-    own symbol -- only the genuinely-derived ``m = min(max_iter, N)`` is promoted.
+    """End-to-end: the lowered gmres emit seeds the m_iter runtime count from m's recipe,
+    sizes the workspace by that count, and carries no residual conditional-expression RHS.
+    ``n`` is a pure alias of ``N`` (``n = N``), so it is INLINED to ``N`` rather than promoted.
+
+    ``m`` itself is reassigned, so every use reads ``m_iter`` and the seed is its only reader.
+    Seeded from the symbol, ``m`` stayed a free symbol of the SDFG and so an entry argument the
+    native ABI does not have; cegterg's drop-in refused exactly that for ``nbase`` and ``notcnv``.
+    Seeded from the recipe, no ``m`` symbol and no recipe to bind remain.
 
     ``max_iter`` is a PINNED CONFIG knob (``config: max_iter: {value: 100}``), so it is a constant
-    like the C leg's ``constexpr int64_t max_iter = 100`` -- not a symbol. Lowering promotes it
-    because it sizes the workspace, and leaving that promotion standing put a symbol in the tuple
-    that nothing can bind: ``bind_free_symbols`` recovers a symbol from an array's shape or from a
-    recipe, and a config knob is neither, so the compiled SDFG died on "Missing program argument".
-    The recipe check below is the load-bearing one -- the caller evaluates it in ITS namespace, so
-    a name that exists only inside the emitted module has to be substituted away, not just
-    defined."""
+    like the C leg's ``constexpr int64_t max_iter = 100`` -- not a symbol. Nothing can bind such a
+    symbol, so the compiled SDFG died on "Missing program argument"; the seed reads the constant."""
     src = emit_with_inline_fallback(lambda: emit_dace(kir_for("gmres", config="csr", do_lower=True)))
-    for sym in ("nnz", "N", "m"):  # m promoted; n inlined to N
+    for sym in ("nnz", "N"):  # n inlined to N
         assert re.search(rf"^{sym} = dc\.symbol\('{sym}'", src, re.M), f"{sym} not declared: {src}"
     assert "dc.symbol('max_iter'" not in src  # a pinned knob must not drift back into the symbols
-    assert "__hpcagent_bench_symbol_defs__ = [('m', 'min(100, N)')]" in src  # pinned value substituted
-    assert "m_iter = m" in src  # runtime count seeded
+    assert re.search(r"^max_iter = 100$", src, re.MULTILINE), src  # ... it is the constant the seed reads
+    assert "dc.symbol('m'" not in src and "__hpcagent_bench_symbol_defs__" not in src  # retired
+    assert "m_iter = min(max_iter, N)" in src  # runtime count seeded from the recipe
     assert "np.zeros((N, m_iter + 1), dtype=dc_float)" in src  # workspace sized by the runtime count
     assert "for k in range(m_iter):" in src  # iteration uses the runtime count
     ast.parse(src)  # emitted module is valid Python

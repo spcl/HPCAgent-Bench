@@ -4358,7 +4358,9 @@ def render_program(
     if reassigned:
         fn_ast = _SplitReassignedSize(reassigned).visit(fn_ast)
         ast.fix_missing_locations(fn_ast)
-        fn_ast.body[0:0] = [ast.parse(f"{nm}_iter = {nm}").body[0] for nm in reassigned]
+        # Seeded from the recipe, not the symbol: a symbol read only here is an ABI slot the caller must fill.
+        recipes = dict(symbol_defs)
+        fn_ast.body[0:0] = [ast.parse(f"{nm}_iter = {recipes[nm]}").body[0] for nm in reassigned]
     fn_ast = _DropSymbolAssign(symbol_names).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
     # Last, after promotion: a name that became a dc.symbol is no longer a container, and neither
@@ -4428,14 +4430,22 @@ def render_program(
                 )
             rebuilt = _array_annotation(dataclasses.replace(arrays[hret], shape=tuple(allocated)))
             params = [f"{hret}: {rebuilt}" if p.split(":", 1)[0].strip() == hret else p for p in params]
-    if kir.return_kind:
+    if kir.return_kind or reassigned:
         # A HELPER's symbol the settled program never names -- retired by the redeclaration above,
         # or cancelled out of an extent by extent_without_dead_symbols -- is not a symbol dace can
-        # solve OR accept: passing a keyword the callee does not take is a DaceSyntaxError.
+        # solve OR accept: passing a keyword the callee does not take is a DaceSyntaxError. A
+        # reassigned size seeded from its recipe retires its own symbol the same way.
+        prunable = set(symbol_names) if kir.return_kind else set(reassigned)
         used = {i for param in params for i in _IDENT_RE.findall(param.split(":", 1)[1])}
         used |= {n.id for n in ast.walk(ast.Module(body=body, type_ignores=[])) if isinstance(n, ast.Name)}
-        symbol_names = [s for s in symbol_names if s in used]
-        symbol_defs = [(n, e) for n, e in symbol_defs if n in used]
+        while True:  # a kept recipe reads its operands, so they stay bound
+            kept = {n for n, _ in symbol_defs if n in used or n not in prunable}
+            reached = {i for n, e in symbol_defs if n in kept for i in _IDENT_RE.findall(e)} - used
+            if not reached:
+                break
+            used |= reached
+        symbol_names = [s for s in symbol_names if s in used or s not in prunable]
+        symbol_defs = [(n, e) for n, e in symbol_defs if n in used or n not in prunable]
 
     # A bound name that collides with a sympy callable is not a variable to dace (see
     # sympy_reserved). Rename every one of them and record the map: the emitted program is the only

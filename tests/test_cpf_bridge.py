@@ -21,6 +21,7 @@ buffer written through a map.
 """
 
 import ctypes
+import dataclasses
 import importlib
 import importlib.util
 import json
@@ -397,8 +398,8 @@ def returning_spec() -> BenchSpec:
     )
 
 
-def canonical_program(source: str, entry: str, work: pathlib.Path) -> "SDFG":
-    """``entry`` from ``source``, parsed and canonicalized for the cpu.
+def parsed_program(source: str, entry: str, work: pathlib.Path) -> "SDFG":
+    """``entry`` from ``source``, parsed.
 
     Imported from a real file: the dace frontend reads a program's source back through ``inspect``,
     which an ``exec``-ed module cannot answer.
@@ -411,7 +412,12 @@ def canonical_program(source: str, entry: str, work: pathlib.Path) -> "SDFG":
     loader.loader.exec_module(module)
     prog = cpf_bridge.resolve_program(module, path, entry)
     assert prog is not None
-    sdfg = prog.to_sdfg(simplify=True)
+    return prog.to_sdfg(simplify=True)
+
+
+def canonical_program(source: str, entry: str, work: pathlib.Path) -> "SDFG":
+    """``entry`` from ``source``, parsed and canonicalized for the cpu."""
+    sdfg = parsed_program(source, entry, work)
     cpf_bridge.canonicalize_for(sdfg, "cpu")
     return sdfg
 
@@ -461,6 +467,89 @@ def test_a_dropin_refuses_a_returned_value_no_argument_holds(tmp_path: pathlib.P
             "cpu",
             True,
         )
+
+
+#: An entry that returns a count beside its output, the shape ``cegterg`` has (``notcnv``,
+#: ``dav_iter``, ``nhpsi``): the manifest grades ``b`` alone, so no ABI slot carries the count.
+COUNTING_PROGRAM_SOURCE = """
+import dace as dc
+
+N = dc.symbol("N", dtype=dc.int64, positive=True)
+
+
+@dc.program
+def returns_count(a: dc.float64[N], b: dc.float64[N]):
+    b[:] = a * 2.0
+    count = a[0] + 1.0
+    return b, count
+"""
+
+
+@pytest.mark.parametrize(
+    ("source", "entry", "slots"),
+    [
+        (COUNTING_PROGRAM_SOURCE, "returns_count", ("b", "count")),
+        (RETURNING_PROGRAM_SOURCE, "returns_output", ("b",)),
+        (RETURNING_PROGRAM_SOURCE, "returns_computed", (None,)),
+        (MULTI_PROGRAM_SOURCE, "channel_flow", ()),
+    ],
+)
+def test_the_returned_slots_name_what_the_entry_program_returns(
+    source: str, entry: str, slots: tuple[str | None, ...], tmp_path: pathlib.Path
+) -> None:
+    """A drop-in drops a return slot by the name it holds, so an expression must name nothing and a
+    sibling program's return must never be read as the entry's."""
+    impl = tmp_path / "kernel_dace.py"
+    impl.write_text(source)
+    assert cpf_bridge.returned_slots(impl, entry) == slots
+
+
+def test_an_impl_that_does_not_exist_names_no_return_slot(tmp_path: pathlib.Path) -> None:
+    """A spec whose SDFG came from elsewhere has no impl to read, and a guessed name could drop a result."""
+    assert cpf_bridge.returned_slots(tmp_path / "missing_dace.py", "returns_count") == ()
+
+
+@pytest.mark.parametrize(("graded", "kept"), [(("b",), set()), (("b", "count"), {"__return_1"})])
+def test_a_returned_value_is_dropped_only_when_the_manifest_does_not_grade_it(
+    graded: tuple[str, ...], kept: set[str], tmp_path: pathlib.Path
+) -> None:
+    """An ungraded count has no ABI slot and nothing to lose, but a graded value that only ``__return``
+    carries must stay for the ordered render to refuse."""
+    sdfg = parsed_program(COUNTING_PROGRAM_SOURCE, "returns_count", tmp_path)
+    cpf_bridge.drop_returned_arguments(sdfg, ["a", "b", "N"], graded, ("b", "count"))
+    assert {name for name in sdfg.arrays if name.startswith("__return")} == kept
+    sdfg.validate()
+
+
+@pytest.mark.integration
+def test_a_dropin_of_a_kernel_that_returns_an_ungraded_count_takes_the_abi_and_runs(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cegterg returns its iteration counts beside the graded eigenvalues, and every one of them was a
+    ``__return`` slot the ABI does not have, so the kernel had no drop-in at all."""
+    monkeypatch.setattr(paths, "BENCHMARKS", tmp_path)
+    spec = dataclasses.replace(
+        returning_spec(), func_name="returns_count", relative_path=".", module_name="returns_count"
+    )
+    native = binding_from_spec(spec)
+    abi = [a.name for a in native.args] + ["workspace", "workspace_size"]
+    form = cpf_bridge.render_canonical(
+        spec,
+        spec.short_name,
+        canonical_program(COUNTING_PROGRAM_SOURCE, "returns_count", tmp_path),
+        "c",
+        "fp64",
+        "cpu",
+        True,
+    )
+    assert declared_parameters(form.code, form.entry) == abi
+
+    source = tmp_path / form.name
+    source.write_text(form.code)
+    library = build_dropin(source, tmp_path)
+    a = np.random.default_rng(0).random(EXTENT)
+    outs, _, _ = _call_native(library, native, {"a": a, "b": np.zeros(EXTENT), "N": EXTENT}, "c", workspace_bytes="8*N")
+    np.testing.assert_allclose(outs["b"], 2.0 * a, rtol=1e-12, atol=0.0)
 
 
 #: Impls that take a pinned config knob as a runtime scalar. Canonicalization keeps the first one's
