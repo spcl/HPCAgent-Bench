@@ -3342,12 +3342,14 @@ def _plan_size_promotion(
 
 
 class _SplitReassignedSize(ast.NodeTransformer):
-    """Split a size symbol the body also reassigns: keep the symbol for allocation, route other uses through <name>_iter."""
+    """Split a size symbol the body also reassigns: every use, allocation shapes included, reads <name>_iter.
+
+    numpy sizes an allocation by the CURRENT value, and dace promotes a scalar extent per version.
+    """
 
     def __init__(self, names: Iterable[str]) -> None:
         self.names = set(names)
         self._defined: Set[str] = set()  # first assignment per name = the (dropped) def
-        self._in_alloc_shape = False
         self._droppable: Set[int] = set()
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
@@ -3385,19 +3387,8 @@ class _SplitReassignedSize(ast.NodeTransformer):
         self.generic_visit(node)  # a reassignment: target + rhs uses rename to <name>_iter
         return node
 
-    def visit_Call(self, node: ast.Call):
-        if isinstance(node.func, ast.Attribute) and node.func.attr in _ALLOC_FUNCS and node.args:
-            prev, self._in_alloc_shape = self._in_alloc_shape, True
-            node.args[0] = self.visit(node.args[0])  # shape arg: leave the symbol in place
-            self._in_alloc_shape = prev
-            node.args[1:] = [self.visit(a) for a in node.args[1:]]
-            node.keywords = [self.visit(k) for k in node.keywords]
-            return node
-        self.generic_visit(node)
-        return node
-
     def visit_Name(self, node: ast.Name):
-        if node.id in self.names and not self._in_alloc_shape:
+        if node.id in self.names:
             node.id = f"{node.id}_iter"
         return node
 

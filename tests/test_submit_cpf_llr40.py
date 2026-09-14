@@ -14,6 +14,7 @@ CPF_FORMS_DIR and CPF_DROPIN_DIR name one view for every arm of an invocation.
 import dataclasses
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -21,7 +22,7 @@ from collections.abc import Callable
 
 import pytest
 
-from hpcagent_bench import cpf_cache
+from hpcagent_bench import cpf_cache, packets
 from tests.test_submit_scicomp_dc_cpfsrc import env_dict, stub
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -76,7 +77,7 @@ KNOBS = frozenset(
 TARGET_DIALECTS = {"cpu": ("c", "c++"), "gpu": ("hip",)}
 
 #: Every arm of the wave, split by the target whose view it is gated against.
-TARGET_ARMS = {"cpu": "c:plain c:cpf c:cpfsrc", "gpu": "hip:plain hip:cpf"}
+TARGET_ARMS = {"cpu": "c:plain c:cpf c:cpfsrc c:perf-playbook-cpu", "gpu": "hip:plain hip:cpf"}
 
 
 @dataclasses.dataclass(slots=True, frozen=True)
@@ -159,7 +160,9 @@ def arm_env(experiments: pathlib.Path, arm: str) -> pathlib.Path:
     return experiments / f".env.cpf-llr-focus40-qwen38-{arm}"
 
 
-@pytest.mark.parametrize(("target", "arms"), [("cpu", ("c", "c-cpf", "c-cpfsrc")), ("gpu", ("hip", "hip-cpf"))])
+@pytest.mark.parametrize(
+    ("target", "arms"), [("cpu", ("c", "c-cpf", "c-cpfsrc", "c-perf-playbook-cpu")), ("gpu", ("hip", "hip-cpf"))]
+)
 def test_every_arm_of_a_target_builds_without_reaching_the_queue(
     wave: Callable[[str], Launch], target: str, arms: tuple[str, ...]
 ) -> None:
@@ -176,6 +179,7 @@ def test_every_arm_of_a_target_builds_without_reaching_the_queue(
         ("cpu", "c", ()),
         ("cpu", "c-cpf", (FORM_KEY,)),
         ("cpu", "c-cpfsrc", (DROPIN_KEY,)),
+        ("cpu", "c-perf-playbook-cpu", ()),
         ("gpu", "hip", ()),
         ("gpu", "hip-cpf", (FORM_KEY,)),
     ],
@@ -197,6 +201,7 @@ def test_an_arm_carries_only_the_cpf_key_of_its_kind(
         ("cpu", "c", "prompt.md"),
         ("cpu", "c-cpf", "prompt.md"),
         ("cpu", "c-cpfsrc", "prompt.md"),
+        ("cpu", "c-perf-playbook-cpu", "prompt.md"),
         ("gpu", "hip", "prompt-gpu.md"),
         ("gpu", "hip-cpf", "prompt-gpu.md"),
     ],
@@ -227,3 +232,15 @@ def test_a_view_missing_a_kernel_refuses_the_arm_by_name_and_leaves_no_env(
     assert not arm_env(built.experiments, arm).exists()
     assert not arm_env(built.experiments, f"{arm}.staging").exists()
     assert not (tmp_path / "sbatch-called").exists()
+
+
+def test_the_perf_arm_stages_exactly_its_packet_pages_and_records_its_packet(wave: Callable[[str], Launch]) -> None:
+    """perf-playbook-cpu is three skill pages and no CPF material. An extra page, or a page missing,
+    would make base vs perf-playbook measure a different treatment than the one the row records."""
+    built = wave("cpu")
+    assert built.result.returncode == 0, built.result.stderr
+    problems = built.experiments / "problems-cpf-llr-focus40-qwen38-c-perf-playbook-cpu.jsonl"
+    staged = set(re.findall(r"/shared/skills/([A-Za-z0-9._-]+)\.md", problems.read_text()))
+    assert staged == set(packets.resolve("perf-playbook-cpu", "c").skills)
+    recorded = env_dict(arm_env(built.experiments, "c-perf-playbook-cpu"))["HPCAGENT_BENCH_RECORD_PACKET"]
+    assert recorded == "perf-playbook-cpu"

@@ -108,8 +108,8 @@ def test_non_positive_speedups_are_excluded_before_the_reduction(analyze) -> Non
     assert analyze.best_per_arm_kernel(frame(rows)).best_speedup.tolist() == [5.0]
 
 
-def efficacy_frames():
-    """Two models x two languages, each ran with and without the skill packet.
+def efficacy_frames(campaigns: tuple[str, ...] = ("v11",)):
+    """Per campaign, two models x two languages, each ran with and without the skill packet.
 
     The skilled arm is twice as fast for half the tokens on every kernel, so both ratios must come
     out at exactly 2 -- a fixture whose right answer is known by construction rather than read off
@@ -117,15 +117,15 @@ def efficacy_frames():
     judge writes them on; a submission row carries none.
     """
     best, calls, arms = [], [], []
-    for model in ("m1", "m2"):
+    for campaign, model in [(campaign, model) for campaign in campaigns for model in ("m1", "m2")]:
         for language in ("c", "fortran"):
             for skills in (0, 1):
-                arm = f"v11-{model}-{language}" + ("-skills" if skills else "")
+                arm = f"{campaign}-{model}-{language}" + ("-skills" if skills else "")
                 arms.append(
                     {
                         "arm": arm,
                         "baseline": "c",
-                        "campaign": "v11",
+                        "campaign": campaign,
                         "model": model,
                         "language": language,
                         "skills": skills,
@@ -179,7 +179,20 @@ def test_an_arm_with_no_counterpart_is_not_paired(analyze) -> None:
     best, calls, arms, served = efficacy_frames()
     arms = arms.drop(index=("v11-m1-c", "c"))
     table = analyze.skills_efficacy(best, calls, arms, served)
-    assert set(table.intervention) == {"skills:c:m1:fortran", "skills:c:m2:c", "skills:c:m2:fortran", "skills:all"}
+    expected = {"skills:c:v11:m1:fortran", "skills:c:v11:m2:c", "skills:c:v11:m2:fortran", "skills:all"}
+    assert set(table.intervention) == expected
+
+
+def test_two_campaigns_of_one_model_and_language_stay_two_pairs(analyze) -> None:
+    """A pair is keyed on its campaign, so its name must carry it too. Named by denominator, model
+    and language alone, a later campaign's pair overwrote an earlier one's in the family and in the
+    pool, and a whole campaign's comparison left the table without a trace."""
+    best, calls, arms, served = efficacy_frames(("v10", "v11"))
+    table = analyze.skills_efficacy(best, calls, arms, served)
+    pairs = table[table.intervention != "skills:all"]
+    expected = {f"{c}-{m}-{lang}" for c in ("v10", "v11") for m in ("m1", "m2") for lang in ("c", "fortran")}
+    assert set(pairs.before) == expected, f"pairs lost to a name collision: {sorted(expected - set(pairs.before))}"
+    assert table[table.intervention == "skills:all"].iloc[0].tasks == 32, "the pool must keep both campaigns"
 
 
 def test_no_token_column_yields_no_efficacy_rather_than_a_guess(analyze) -> None:
@@ -187,6 +200,23 @@ def test_no_token_column_yields_no_efficacy_rather_than_a_guess(analyze) -> None
     that reads as if the intervention were free."""
     best, calls, arms, served = efficacy_frames()
     assert analyze.skills_efficacy(best, calls.drop(columns=["tokens"]), arms, served).empty
+
+
+def test_a_language_side_is_one_arm_not_the_best_of_that_languages_arms(analyze) -> None:
+    """C verified every kernel under two packets and Fortran under one. Under the packet both
+    languages ran, Fortran is twice as fast. A side taken as the max over its language's arms pits
+    C's best-of-two against Fortran's best-of-one and reports C twice as fast instead."""
+    arms_run = [("v9-m-c", "c", "", 2.0), ("v9-m-c-skills", "c", "skills", 8.0), ("v9-m-fortran", "fortran", "", 4.0)]
+    best = pd.DataFrame(
+        [
+            {"arm": arm, "baseline": "c", "language": lang, "packet": packet, "benchmark": f"k{i}", "best_speedup": su}
+            for i in range(8)
+            for arm, lang, packet, su in arms_run
+        ]
+    )
+    row = analyze.per_language_summary(best).loc[("c", "c")]
+    assert row.hl_c_over_fortran == pytest.approx(0.5), "C/Fortran must pair the arms of one packet"
+    assert row.paired_n == 8, "each kernel enters the paired test once"
 
 
 def call_rows(rows):

@@ -97,7 +97,7 @@ def _emit(short: str) -> tuple[KernelIR, str]:
     # the forms it cannot express, and the PARSE has to sit inside the retry either way.
     def render() -> tuple[KernelIR, str]:
         with bench_info_for(short) as (_, numpy_py, bi):
-            kir = parse_kernel(numpy_py, bi)
+            kir = parse_kernel(numpy_py, bi, open_mesh_grids=False)
         return kir, emit_dace(kir)
 
     return emit_with_inline_fallback(render)
@@ -475,7 +475,7 @@ def test_gmres_workspace_allocation_carries_an_explicit_dtype_end_to_end() -> No
     is pinned here: the workspace is allocated at the symbolic shape, with a dtype."""
     _, src = _emit("gmres")
     line = next(ln for ln in src.splitlines() if ln.strip().startswith("Q = np."))
-    assert "(N, m + 1)" in line and "dtype=" in line, f"allocation lost its shape or dtype: {line.strip()}"
+    assert "(N, m_iter + 1)" in line and "dtype=" in line, f"allocation lost its shape or dtype: {line.strip()}"
 
 
 # Data-dependent workspace shapes: gmres carries body-computed dimensions       #
@@ -574,16 +574,16 @@ def test_plan_size_promotion_refuses_non_symbolic_def() -> None:
     assert _plan_size_promotion(ast.parse(src).body[0], {"N"}) == ([], [], set())
 
 
-def test_split_reassigned_size_keeps_symbol_in_alloc_scalar_elsewhere() -> None:
-    """The promoted symbol stays in ALLOCATION shapes (dace needs a symbol) while loop
-    bounds, indices and the reassignment route through the runtime ``<name>_iter``; the
-    defining assignment is dropped (the caller binds the symbol)."""
+def test_split_reassigned_size_routes_allocations_through_the_runtime_count_too() -> None:
+    """numpy sizes an allocation by the size's CURRENT value. cegterg kept the caller-bound upper
+    bound in ``H = np.zeros((.., notcnv))`` and dace then refused ``H[a:b, :] = X_b`` over
+    ``notcnv_iter`` columns. The defining assignment is still dropped (the caller binds it)."""
     src = (
         "def k():\n    m = min(max_iter, n)\n    Q = np.zeros((n, m + 1))\n"
         "    for k in range(m):\n        if x:\n            m = k + 1\n    y = Q[m - 1]\n"
     )
     out = _transform(_SplitReassignedSize({"m"}), src)
-    assert "np.zeros((n, m + 1))" in out  # allocation keeps the symbol
+    assert "np.zeros((n, m_iter + 1))" in out  # allocation -> runtime count
     assert "range(m_iter)" in out  # loop bound -> runtime count
     assert "m_iter = k + 1" in out  # reassignment -> runtime count
     assert "Q[m_iter - 1]" in out  # index -> runtime count
@@ -592,8 +592,8 @@ def test_split_reassigned_size_keeps_symbol_in_alloc_scalar_elsewhere() -> None:
 
 def test_gmres_emits_promoted_symbols_ternary_and_split() -> None:
     """End-to-end: the lowered gmres emit declares m as a dc.symbol, records its
-    binding recipe, seeds the m_iter runtime count, keeps the symbol in the workspace
-    allocation, and carries no residual conditional-expression RHS. ``n`` is a pure
+    binding recipe, seeds the m_iter runtime count, sizes the workspace by that count,
+    and carries no residual conditional-expression RHS. ``n`` is a pure
     alias of ``N`` (``n = N``), so it is INLINED to ``N`` rather than promoted to its
     own symbol -- only the genuinely-derived ``m = min(max_iter, N)`` is promoted.
 
@@ -611,11 +611,19 @@ def test_gmres_emits_promoted_symbols_ternary_and_split() -> None:
     assert "dc.symbol('max_iter'" not in src  # a pinned knob must not drift back into the symbols
     assert "__hpcagent_bench_symbol_defs__ = [('m', 'min(100, N)')]" in src  # pinned value substituted
     assert "m_iter = m" in src  # runtime count seeded
-    assert "np.zeros((N, m + 1), dtype=dc_float)" in src  # workspace keeps the symbol
+    assert "np.zeros((N, m_iter + 1), dtype=dc_float)" in src  # workspace sized by the runtime count
     assert "for k in range(m_iter):" in src  # iteration uses the runtime count
     ast.parse(src)  # emitted module is valid Python
     prog = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
     assert not any(isinstance(node, ast.IfExp) for node in ast.walk(prog))  # ternaries desugared
+
+
+def test_the_dace_emit_does_not_pack_np_ix_grids_into_one_name() -> None:
+    """dace gathers through ``gx, gy, gz = np.ix_(..)`` but refuses one name holding the tuple: ls3df_scf
+    died on "Function returns 3 values but 1 provided" once the frontend packed the grids for the
+    native emitters."""
+    _, src = _emit("ls3df_scf")
+    assert "gx_gy_gz" not in src, src
 
 
 # Corpus lowering-gap fixes (HANDOFF #05): four kernels emitted @dc.programs    #
