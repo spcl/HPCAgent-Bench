@@ -77,6 +77,7 @@ def test_judge_server_bounds_concurrent_grades_to_device_slots(monkeypatch) -> N
             t.join()
     finally:
         server.shutdown()
+        server.server_close()
 
     assert probe.peak >= 1  # grades actually ran
     assert probe.peak <= 2  # never more than the 2 device slots at once

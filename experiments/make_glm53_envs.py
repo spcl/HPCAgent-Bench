@@ -1,7 +1,7 @@
 """Derive GLM-5.3 arm envs from the kimi sglang arms they are the counterfactual of.
 
-Only the serving block differs: same nodes, same agents, same problems, same packet. Anything else
-that changed would make an arm comparison a comparison of two things at once.
+Only the serving block and the agents per node differ: same nodes, same problems, same packet. Anything
+else that changed would make an arm comparison a comparison of two things at once.
 
 Every deviation from the kimi line is load-bearing:
   SGLANG_ATTENTION_BACKEND=    ASSIGNED EMPTY, not absent. run_cluster.sh reads it as
@@ -14,6 +14,7 @@ Every deviation from the kimi line is load-bearing:
   --enable-hierarchical-cache  offloads KV to host memory, which on MI300A is the SAME pool the
                                weights live in, so it allocates a second KV cache instead.
   AITER_USE_FLYDSL_MOE_SORTING kimi's weights are pack-quantized int4; these are fp8.
+  AGENTS_PER_NODE              kimi's 20 ran GLM-5.3's PP stages out of host memory; see AGENTS_PER_NODE.
 """
 
 import pathlib
@@ -25,19 +26,25 @@ GLM_CONTEXT = 262144
 COMPLETION_RESERVE = 32000
 TURN_HEADROOM = 30000
 
+#: Concurrent agents per agent node. kimi's 20 held host memory for a 45 min frontier leg, but the
+#: 636501 complement ran 4.5 h at 20 and every PP stage climbed to 94-99% host memory until one was
+#: OOM-killed; fewer agents keeps the host-side request state below that.
+AGENTS_PER_NODE = 12
+
 #: Slowest pipeline stage (1521 s to over 5400 s measured) plus KV allocation plus graph capture.
 #: The inherited 7200 expires while the server is still loading and the arm abandons it.
 READY_TIMEOUT = 10800
 
 GLM_ARGS = (
     '"--trust-remote-code --watchdog-timeout 1800 --kv-cache-dtype fp8_e4m3 --page-size 64 '
-    "--context-length 262144 --mem-fraction-static 0.55 --cuda-graph-max-bs-decode 64 "
+    "--context-length 262144 --mem-fraction-static 0.57 --max-total-tokens 2800000 --chunked-prefill-size 4096 "
+    "--max-running-requests 48 --cuda-graph-max-bs-decode 64 "
     "--enable-metrics --pre-warm-nccl --reasoning-parser glm45 --tool-call-parser glm47 "
     '--dsa-prefill-backend tilelang --dsa-decode-backend tilelang --enable-cache-report"'
 )
 
-# The memory law and the pool the fraction has to reach are in HEADER, which ships with the env
-# the server is launched from. Keep the two in step: 0.55 is the only tuned number here.
+# The memory law and the serving pin are in HEADER, which ships with the env the server is launched
+# from. Keep the two in step: the four memory flags are one tuned point (frontier 633828, leg G2).
 CE_ENV = """
 # sglang-candidate is the only sglang EDF that can load GLM-5.3: the others reach the same
 # format_ue8m0 patch via a /capstor PYTHONPATH that role_mounts drops for the inference role
@@ -51,7 +58,10 @@ BACKEND_ENV = "SGLANG_ATTENTION_BACKEND="
 HEADER = """
 # --- GLM-5.3 deviations from the kimi arm this env was derived from ---
 # mem-fraction-static is a CEILING on weights+KV: pool(f) = 39.0M * (f - 0.4838) tokens at tp4 x
-# pp4; floor 0.486, OOMs above 0.62 on the heaviest (uneven) stage at 206.1 GB. 0.55 gives 2.58M.
+# pp4. The pool is PINNED at 2.8M by --max-total-tokens under f0.57, with --chunked-prefill-size 4096
+# and --max-running-requests 48 bounding the prefill ratchet and req_to_token: host memory, not the
+# pool, is what kills a PP stage. Frontier 633828 leg G2 served conc 40 with no error, peak 485 GiB of
+# the 501 GiB step cgroup; plain f0.55 was OOM-killed on a PP node at conc 20 in 635349.
 # SGLANG_ATTENTION_BACKEND is EMPTY so no flag reaches the server and GlmMoeDsaForCausalLM picks
 # dsa; an explicit aiter would suppress that and also scale mem-fraction-static by 0.85.
 # No --language-only: it selects the VLM receiver role, off this architecture's allowlist.
@@ -88,6 +98,9 @@ def derive(src: pathlib.Path, dst: pathlib.Path) -> None:
             out.extend(CE_ENV.strip("\n").splitlines())
             replaced.add("ce_env")
             continue
+        elif line.startswith("AGENTS_PER_NODE="):
+            line = f"AGENTS_PER_NODE={AGENTS_PER_NODE}"
+            replaced.add("agents")
         elif line.startswith("CLAUDE_AUTOCOMPACT="):
             # GLM and kimi now serve the same window, so this recomputes to the kimi value; kept
             # as its own branch since GLM_CONTEXT can still move independently of the kimi source.
@@ -111,6 +124,7 @@ def derive(src: pathlib.Path, dst: pathlib.Path) -> None:
         "dead_ready",
         "engine_ready",
         "agent_ready",
+        "agents",
     } - replaced
     if missing:
         raise SystemExit(f"{src.name}: never matched {sorted(missing)}")

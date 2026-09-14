@@ -21,6 +21,9 @@ import pathlib
 import select
 import shutil
 import subprocess
+import sys
+import warnings
+from collections.abc import Callable
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -28,7 +31,15 @@ import pytest
 
 from hpcagent_bench import languages
 from hpcagent_bench.frameworks.forked import forked_failure_reason, run_forked
-from hpcagent_bench.isolation import OMP_PAUSE_MODES, OMP_PAUSE_SOFT, OMP_RUNTIME_SONAMES, pause_openmp_pools
+from hpcagent_bench.isolation import (
+    KMP_PAUSE_SYMBOL,
+    OMP_PAUSE_MODES,
+    OMP_PAUSE_SOFT,
+    OMP_RUNTIME_SONAMES,
+    pause_openmp_pools,
+)
+
+REPO = pathlib.Path(__file__).resolve().parents[1]
 
 OMP_SRC = """#include <omp.h>
 void kern(double *a, int n) {
@@ -269,3 +280,76 @@ def test_a_mapped_runtime_without_the_pause_symbol_is_warned_not_silent(monkeypa
     monkeypatch.setattr(ctypes, "CDLL", fake_cdll)
     with pytest.warns(UserWarning, match="omp_pause_resource_all"):
         pause_openmp_pools()
+
+
+@pytest.mark.integration
+def test_a_second_pause_of_an_idle_libomp_is_not_reported_as_a_live_pool(tmp_path: pathlib.Path) -> None:
+    """libomp refuses a pause with no parallel region since the last one. run_forked pauses before
+    EVERY fork, so reading that refusal as a live pool warned on each fork after the first."""
+    so = build(tmp_path, "omp")
+    call_kernel(so)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        pause_openmp_pools()
+        pause_openmp_pools()
+
+
+@pytest.mark.integration
+def test_a_mapped_but_never_started_libomp_is_not_reported_as_a_live_pool(tmp_path: pathlib.Path) -> None:
+    """A fresh interpreter, so no earlier test has started libomp: mapped without a parallel region
+    it holds no pool, and it refuses the pause for exactly that reason."""
+    so = build(tmp_path, "omp")
+    script = (
+        "import ctypes, pathlib, sys, warnings\n"
+        "from hpcagent_bench.isolation import pause_openmp_pools\n"
+        "ctypes.CDLL(sys.argv[1])\n"
+        "warnings.simplefilter('error')\n"
+        "pause_openmp_pools()\n"
+        "print('libomp.so' in pathlib.Path('/proc/self/maps').read_text())\n"
+    )
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (str(REPO), os.environ.get("PYTHONPATH"))))}
+    proc = subprocess.run([sys.executable, "-c", script, str(so)], capture_output=True, text=True, env=env, check=False)
+    assert proc.returncode == 0, proc.stderr[-800:]
+    assert proc.stdout.strip() == "True", f"libomp was never mapped, so its refusal went untested: {proc.stdout!r}"
+
+
+def refusing_pause(rc: int) -> Callable[[int], int]:
+    def pause(mode: int) -> int:
+        return rc
+
+    return pause
+
+
+class RefusingRuntime:
+    """A mapped runtime whose omp_pause_resource_all refuses; ``kmp`` marks the LLVM family."""
+
+    __slots__ = ("kmp", "omp_pause_resource_all")
+
+    def __init__(self, kmp: bool, rc: int) -> None:
+        self.kmp = kmp
+        self.omp_pause_resource_all = refusing_pause(rc)
+
+    def __getitem__(self, symbol: str) -> Callable[[int], int]:
+        if self.kmp and symbol == KMP_PAUSE_SYMBOL:
+            return self.omp_pause_resource_all
+        raise AttributeError(symbol)
+
+
+@pytest.mark.parametrize("kmp, rc, warns", [(False, -1, True), (True, 1, False)], ids=["gomp-family", "llvm-family"])
+def test_only_a_refusal_from_a_runtime_without_libomps_recovery_is_warned(
+    monkeypatch: pytest.MonkeyPatch, kmp: bool, rc: int, warns: bool
+) -> None:
+    """libgomp refuses a pause only inside a parallel region, where its pool is live and a forked
+    child hangs. The LLVM family refuses when there is no live pool, which is nothing to report."""
+    runtime = RefusingRuntime(kmp, rc)
+
+    def fake_cdll(name: str, mode: int = 0) -> RefusingRuntime:
+        if name == OMP_RUNTIME_SONAMES[0]:
+            return runtime
+        raise OSError("not loaded in this process")
+
+    monkeypatch.setattr(ctypes, "CDLL", fake_cdll)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        pause_openmp_pools()
+    assert bool(caught) == warns, [str(w.message) for w in caught]

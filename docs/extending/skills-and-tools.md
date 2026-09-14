@@ -122,9 +122,10 @@ miniswe runner, Claude Code's `--allowedTools` in `agent_driver.py`, the `{{TOOL
 4. Tests: add a `run()` test next to the others in `tests/test_container_agent_tools.py`. The
    existing tests hold the tool list, the allowed list, the prompt bullets and the router routes to
    `REGISTRY`.
-5. Rebuild the agent image. Its Dockerfiles copy `containers/agent` to `/opt/optarena-agent`, and the
-   driver loads the registry from that copy when it exists, which is the copy `mcp.json` starts. On
-   an image built before the registry existed, the driver stops before it launches an agent and asks for a rebuild.
+5. No rebuild for a tool script. `run_cluster.sh` binds the submitting checkout's `containers/agent`
+   read-only at `/opt/optarena-agent` when each agent step starts and exports `OPTARENA_AGENT_DIR`; the
+   driver loads the registry from there, the copy `mcp.json` starts. A new dependency of a tool (a
+   library, a binary, a python package) goes into the image and its build gate.
 
 The container sets `PYTHONSAFEPATH=1`. `mcp_server.py` and `optarena_tool.py` put their own
 directory on `sys.path` and work under it. A single module's `--json` CLI does not: it fails with

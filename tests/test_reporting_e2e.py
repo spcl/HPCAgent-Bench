@@ -14,6 +14,7 @@ skipped tests). Which path ran is logged.
 Rendered with ``usetex=False`` so the figures build without a LaTeX install (mathtext still renders
 the CI superscripts)."""
 
+import contextlib
 import os
 import pathlib
 import shutil
@@ -188,6 +189,13 @@ def _build_synthetic(db: pathlib.Path) -> None:
         session.commit()
 
 
+def planted_outlier_dropped(ran_native: bool) -> contextlib.AbstractContextManager[object]:
+    """The synthetic DB plants one slow sample per numpy cell, so its drop must be announced."""
+    if ran_native:
+        return contextlib.nullcontext()
+    return pytest.warns(UserWarning, match=r"dropped \d+ slow outlier")
+
+
 @pytest.mark.integration
 def test_reporting_pipeline_end_to_end(tmp_path, capsys) -> None:
     work = tmp_path
@@ -213,15 +221,16 @@ def test_reporting_pipeline_end_to_end(tmp_path, capsys) -> None:
     # Each call returns ONE path per machine in the DB, and the paths are what is asserted on --
     # the figures are named after the hardware, so a hardcoded `heatmap.pdf` would only pass by
     # accident. How many machines that is (and what they are called) is derived below, not assumed.
-    written = plot_heatmap(
-        benchmark="all", preset="S", datatype="float64", db=str(db), output=str(heatmap), usetex=False
-    )
-    written += plot_distribution_grid(
-        benchmark="all", preset="S", datatype="float64", kind="violin", db=str(db), output=str(violin), usetex=False
-    )
-    written += plot_distribution_grid(
-        benchmark="all", preset="S", datatype="float64", kind="box", db=str(db), output=str(box), usetex=False
-    )
+    with planted_outlier_dropped(ran_native):
+        written = plot_heatmap(
+            benchmark="all", preset="S", datatype="float64", db=str(db), output=str(heatmap), usetex=False
+        )
+        written += plot_distribution_grid(
+            benchmark="all", preset="S", datatype="float64", kind="violin", db=str(db), output=str(violin), usetex=False
+        )
+        written += plot_distribution_grid(
+            benchmark="all", preset="S", datatype="float64", kind="box", db=str(db), output=str(box), usetex=False
+        )
 
     # Machine set straight from the reporting layer's own grouping key (plotting.machine_groups
     # partitions on (cpu, gpu); no CPU name or machine count baked in here -- a DB with a real
@@ -244,7 +253,8 @@ def test_reporting_pipeline_end_to_end(tmp_path, capsys) -> None:
     # the stats path: cleaned median + finite bootstrap CI
     assert not data.empty and "numpy" in set(data["framework"])
 
-    summary = cell_summary(data)
+    with planted_outlier_dropped(ran_native):
+        summary = cell_summary(data)
     assert len(summary) >= 2
     assert np.isfinite(summary["time"].to_numpy()).all()
     assert np.isfinite(summary["ci_perc"].to_numpy()).all()

@@ -186,10 +186,9 @@ hf = [
     "huggingface_hub",
 ]
 # The example cluster judge router (experiments/judge_service.py) is a
-# FastAPI app; tests/test_judge_router_proxy.py names both packages itself
-# (import_or_skip("fastapi"), import_or_skip("httpx")) because fastapi.testclient.TestClient is
-# built on httpx, not a plain fastapi transitive dependency.
-judge-proxy = ["fastapi", "httpx"]
+# FastAPI app that forwards with httpx. fastapi.testclient.TestClient is starlette's, which imports
+# httpx2 and falls back to httpx only with a deprecation warning (an error under -W error).
+judge-proxy = ["fastapi", "httpx", "httpx2==2.12.0"]
 # Agent backends. One per provider, so a run only installs the one it drives.
 agent-anthropic = ["anthropic"]
 agent-local = ["transformers", "huggingface-hub", "accelerate"]

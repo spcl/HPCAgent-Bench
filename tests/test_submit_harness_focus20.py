@@ -465,6 +465,10 @@ def test_colocate_runs_three_overlapping_steps_on_one_node_with_disjoint_cpus(tm
         found = re.search(r"--cpu-bind=mask_cpu:(0x[0-9a-f]+)", line)
         assert found, line
         masks[role] = mask_bits(found.group(1))
+    # Only the agent step runs from its launch directory, never from experiments/.
+    assert lines["--agent-node"].split()[-2].endswith("/.agent-launch/1/run_cluster.sh"), lines["--agent-node"]
+    assert "CLUSTER_ENV_FILE=" in lines["--agent-node"], lines["--agent-node"]
+    assert not [role for role in ("--judge-node", "--vllm-node") if ".agent-launch" in lines[role]]
     assert masks["--judge-node"] == set(range(72, 96))
     assert masks["--agent-node"] == set(range(48, 56)) | set(range(144, 152))
     assert masks["--vllm-node"] == set(range(192)) - set(range(72, 96)) - set(range(168, 192)) - masks["--agent-node"]
