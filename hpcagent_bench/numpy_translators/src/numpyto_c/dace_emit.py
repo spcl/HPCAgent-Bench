@@ -1758,6 +1758,9 @@ def views_of_written_bases(fn: ast.FunctionDef) -> Set[str]:
     """
     names: Set[str] = set()
     for block in statement_lists(fn):
+        # Per statement, once per block: rescanning the tail for every binding was quadratic.
+        stores: List[Set[str]] = []
+        reads: List[Set[str]] = []
         for index, stmt in enumerate(block):
             name = view_slice_binding(stmt)
             # A view slice binding is ``<name> = <array>[<slice>]``, so both bases are named.
@@ -1765,12 +1768,15 @@ def views_of_written_bases(fn: ast.FunctionDef) -> Set[str]:
                 continue
             if not isinstance(stmt.value.value, ast.Name):
                 continue
-            rest = block[index + 1 :]
+            if not stores:
+                stores = [written_through(later) for later in block]
+                reads = [loaded_names(later) for later in block]
             base = stmt.value.value.id
-            store = next((i for i, later in enumerate(rest) if base in written_through(later)), None)
+            tail = range(index + 1, len(block))
+            store = next((i for i in tail if base in stores[i]), None)
             if store is None:
                 continue
-            read = max((i for i, later in enumerate(rest) if name in loaded_names(later)), default=-1)
+            read = max((i for i in tail if name in reads[i]), default=-1)
             if read < store:
                 names.add(name)
     return names
@@ -2034,6 +2040,14 @@ def version_rebound_names(
             (stores if isinstance(node.ctx, ast.Store) else loads).setdefault(node.id, []).append(node)
     updates = inplace_update_targets(fn)
     taken = set(loads) | set(stores) | {arg.arg for arg in fn.args.args}
+    # Node ids under each statement, walked once per call: renaming rewrites Name.id, never the tree.
+    subtree: Dict[int, Set[int]] = {}
+
+    def node_ids(stmt: ast.AST) -> Set[int]:
+        found = subtree.get(id(stmt))
+        if found is None:
+            found = subtree[id(stmt)] = {id(node) for node in ast.walk(stmt)}
+        return found
 
     for name in sorted({n for block in blocks for stmt in block if (n := binding_of(stmt))}):
         if candidates is not None and name not in candidates:
@@ -2045,7 +2059,7 @@ def version_rebound_names(
         if any(id(store) not in bound_here | updates for store in stores.get(name, [])):
             declined.append(name)
             continue  # something else writes the name; its value is no longer just these bindings
-        reached = [{id(node) for stmt in owned for node in ast.walk(stmt)} for _, owned in regions]
+        reached = [set().union(*map(node_ids, owned)) for _, owned in regions]
         nested = {
             id(binding) for binding, owned_statements in regions if any(id(binding) in nodes for nodes in reached)
         }
