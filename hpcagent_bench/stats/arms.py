@@ -319,22 +319,22 @@ def tokens_per_arm_kernel(observations: pd.DataFrame) -> pd.DataFrame:
     return totals.reset_index()
 
 
-def intervention_pairs(arms: pd.DataFrame) -> list[tuple[str, str, str, str, str]]:
-    """``(baseline, model, language, before, after)`` for the arms the skill packet is the one
-    difference between.
+def intervention_pairs(arms: pd.DataFrame) -> list[tuple[str, str, str, str, str, str]]:
+    """``(baseline, campaign, model, language, before, after)`` for the arms the skill packet is the
+    one difference between.
 
     Keyed on the CAMPAIGN as well as the model, language and denominator. Two campaigns of one model
     were served different rosters and ran for different lengths, so pairing across them would put
     the packet and the roster in the same column.
     """
     frame = arms.reset_index()
-    pairs: list[tuple[str, str, str, str, str]] = []
+    pairs: list[tuple[str, str, str, str, str, str]] = []
     keys = ["baseline", "campaign", "model", "language"]
-    for (baseline, _campaign, model, language), group in frame.groupby(keys, sort=True):
+    for (baseline, campaign, model, language), group in frame.groupby(keys, sort=True):
         before = group[group.skills == 0].arm.tolist()
         after = group[group.skills == 1].arm.tolist()
         if len(before) == 1 and len(after) == 1:
-            pairs.append((str(baseline), str(model), str(language), before[0], after[0]))
+            pairs.append((str(baseline), str(campaign), str(model), str(language), before[0], after[0]))
     return pairs
 
 
@@ -370,7 +370,7 @@ def skills_efficacy(
     members: dict[str, efficacy_metric.Efficacy] = {}
     context: dict[str, dict[str, object]] = {}
     pooled: tuple[dict[str, float], ...] = ({}, {}, {}, {})
-    for baseline, model, language, before_arm, after_arm in intervention_pairs(arms):
+    for baseline, campaign, model, language, before_arm, after_arm in intervention_pairs(arms):
         before_s = {k[2]: v for k, v in score_of.items() if k[0] == before_arm and k[1] == baseline}
         after_s = {k[2]: v for k, v in score_of.items() if k[0] == after_arm and k[1] == baseline}
         before_c = {k[1]: v for k, v in cost_of.items() if k[0] == before_arm and v > 0}
@@ -378,13 +378,14 @@ def skills_efficacy(
         shared = set(before_s) & set(after_s) & set(before_c) & set(after_c)
         if not shared:
             continue
-        name = f"skills:{baseline}:{model}:{language}"
+        name = f"skills:{baseline}:{campaign}:{model}:{language}"
         members[name] = efficacy_metric.efficacy(before_s, after_s, before_c, after_c)
         only_before = sorted(set(before_s) - set(after_s))
         only_after = sorted(set(after_s) - set(before_s))
         served_both = served.get((before_arm, baseline), frozenset()) | served.get((after_arm, baseline), frozenset())
         context[name] = {
             "baseline": baseline,
+            "campaign": campaign,
             "model": model,
             "language": language,
             "before": before_arm,
@@ -399,12 +400,13 @@ def skills_efficacy(
             "before_geomean_all": summary.geomean(list(before_s.values())),
         }
         for target, source in zip(pooled, (before_s, after_s, before_c, after_c), strict=True):
-            target.update({f"{baseline}/{model}/{language}/{k}": v for k, v in source.items()})
+            target.update({f"{baseline}/{campaign}/{model}/{language}/{k}": v for k, v in source.items()})
 
     if not members:
         return pd.DataFrame()
     context["skills:all"] = {
         "baseline": "all",
+        "campaign": "all",
         "model": "all",
         "language": "all",
         "before": "no-skills",
@@ -414,7 +416,7 @@ def skills_efficacy(
     rows = efficacy_metric.family_rows(members, family="skills", dependent=dependent)
     for row in rows:
         row.update(context[str(row["intervention"])])
-    head = ["intervention", "baseline", "model", "language", "before", "after", "tasks"]
+    head = ["intervention", "baseline", "campaign", "model", "language", "before", "after", "tasks"]
     columns = head + [c for c in rows[0] if c not in head]
     return pd.DataFrame(rows).reindex(columns=columns).round(4)
 
@@ -471,26 +473,46 @@ def per_language_kernel(best: pd.DataFrame, roster: list[str]) -> pd.DataFrame:
     )
 
 
+def language_log_ratios(slice_: pd.DataFrame, arm_packet: dict[str, str]) -> np.ndarray:
+    """``log(C / Fortran)`` per ``(campaign, model, kernel)`` over one denominator's best answers.
+
+    Each side of a pair is ONE arm: the C and the Fortran arm of one packet give one log ratio, and a
+    kernel both languages verified under several packets carries the mean of those ratios, so it
+    enters the test once. A max over a language's arms is a best-of-k whose k is how many of them
+    verified the kernel, and that count differs between the two sides often enough to set the sign.
+    """
+    parts = [arm_parts(str(arm), arm_packet.get(str(arm), "")) for arm in slice_.arm]
+    marked = slice_.assign(campaign=[p[0] for p in parts], model=[p[1] for p in parts], skills=[p[3] for p in parts])
+    marked = marked[marked.language.isin(PAIRED_LANGUAGES)]
+    if marked.empty:
+        return np.empty(0)
+    legs = marked.groupby(["campaign", "model", "skills", "language", "benchmark"]).best_speedup
+    if int(legs.size().max()) > 1:
+        raise population.MixedPopulationError("two arms share one (campaign, model, packet, language) kernel cell")
+    wide = legs.first().unstack("language")
+    if not set(PAIRED_LANGUAGES) <= set(wide.columns):
+        return np.empty(0)
+    both = wide.dropna(subset=list(PAIRED_LANGUAGES))
+    ratios = np.log(both["c"] / both["fortran"])
+    return ratios.groupby(level=["campaign", "model", "benchmark"]).mean().to_numpy(dtype=float)
+
+
 def per_language_summary(best: pd.DataFrame) -> pd.DataFrame:
     """Per ``(baseline, language)``, the geomean plus the PAIRED C-against-Fortran test.
 
     A sorted pair of geomeans is a comparative claim, and two unpaired geomeans over two arm
     populations cannot support one: the per-kernel spread here is far larger than any language
-    effect. The Hodges-Lehmann estimate is paired by ``(campaign, model, kernel)`` so the two sides
-    are two answers to the same question by the same model, and it comes with the interval and the p
-    the signed-rank test inverts. ``hl_c_over_fortran`` is the comparative number; the two geomean
-    columns are descriptive only.
+    effect. The Hodges-Lehmann estimate is over :func:`language_log_ratios`, one per
+    ``(campaign, model, kernel)``, so the two sides are two answers to the same question by the same
+    model under the same packet, and it comes with the interval and the p the signed-rank test
+    inverts. ``hl_c_over_fortran`` is the comparative number; the two geomean columns are descriptive
+    only.
     """
     arm_packet = arm_packet_map(best)
     rows = []
     for baseline, slice_ in best.groupby("baseline"):
-        keys = slice_.arm.map(lambda arm: arm_parts(arm, arm_packet.get(arm, ""))[:2])
-        marked = slice_.assign(campaign=[k[0] for k in keys], model=[k[1] for k in keys])
-        pivot = marked.groupby(["campaign", "model", "language", "benchmark"]).best_speedup.max().unstack("language")
-        paired = pivot.dropna(subset=list(PAIRED_LANGUAGES)) if set(PAIRED_LANGUAGES) <= set(pivot.columns) else None
-        change = None
-        if paired is not None and len(paired):
-            change = summary.paired_change(np.log(paired.c.to_numpy() / paired.fortran.to_numpy()))
+        ratios = language_log_ratios(slice_, arm_packet)
+        change = summary.paired_change(ratios) if ratios.size else None
         for language in sorted(slice_.language.unique()):
             per_kernel = slice_[slice_.language == language].groupby("benchmark").best_speedup.max()
             row = {

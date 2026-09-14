@@ -290,6 +290,14 @@ def right_label(ax: Axes, row: int, text: str, color: str = MUTED) -> None:
     )
 
 
+#: Per suffix, the metadata that keeps a written figure a function of the figure alone: PDF and SVG
+#: otherwise stamp the time of the write, so two renders of one table differ in every file.
+UNDATED: dict[str, dict[str, None]] = {"pdf": {"CreationDate": None}, "svg": {"Date": None}}
+
+#: SVG element ids are hashed with a random salt unless one is fixed.
+SVG_HASH_SALT: str = "hpcagent-bench"
+
+
 def save(fig: Figure, stem: pathlib.Path, formats: Sequence[str] = ("pdf", "png"), fixed: bool = False) -> pathlib.Path:
     """Write ``fig`` under ``stem`` once per suffix in ``formats``, and close it. Returns ``stem``.
 
@@ -297,11 +305,14 @@ def save(fig: Figure, stem: pathlib.Path, formats: Sequence[str] = ("pdf", "png"
     canvas at its figsize instead of cropping to the ink, which is what keeps two paired figures
     the same size: a tight box is sized by each figure's own legend. Closing matters in a loop --
     matplotlib keeps every open figure alive, and a sweep that renders one per directory otherwise
-    ends up holding all of them.
+    ends up holding all of them. Every file is written :data:`UNDATED`, so a rerun is byte-identical.
     """
     stem.parent.mkdir(parents=True, exist_ok=True)
     box = fig.bbox_inches if fixed else "tight"
-    for suffix in formats:
-        fig.savefig(stem.with_suffix(f".{suffix}"), dpi=200, bbox_inches=box)  # pyright: ignore[reportUnknownMemberType]
+    with plt.rc_context({"svg.hashsalt": SVG_HASH_SALT}):
+        for suffix in formats:
+            fig.savefig(  # pyright: ignore[reportUnknownMemberType]
+                stem.with_suffix(f".{suffix}"), dpi=200, bbox_inches=box, metadata=UNDATED.get(suffix)
+            )
     plt.close(fig)
     return stem
