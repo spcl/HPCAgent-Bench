@@ -31,13 +31,14 @@ READY_TIMEOUT = 10800
 
 GLM_ARGS = (
     '"--trust-remote-code --watchdog-timeout 1800 --kv-cache-dtype fp8_e4m3 --page-size 64 '
-    "--context-length 262144 --mem-fraction-static 0.55 --cuda-graph-max-bs-decode 64 "
+    "--context-length 262144 --mem-fraction-static 0.57 --max-total-tokens 2800000 --chunked-prefill-size 4096 "
+    "--max-running-requests 48 --cuda-graph-max-bs-decode 64 "
     "--enable-metrics --pre-warm-nccl --reasoning-parser glm45 --tool-call-parser glm47 "
     '--dsa-prefill-backend tilelang --dsa-decode-backend tilelang --enable-cache-report"'
 )
 
-# The memory law and the pool the fraction has to reach are in HEADER, which ships with the env
-# the server is launched from. Keep the two in step: 0.55 is the only tuned number here.
+# The memory law and the serving pin are in HEADER, which ships with the env the server is launched
+# from. Keep the two in step: the four memory flags are one tuned point (frontier 633828, leg G2).
 CE_ENV = """
 # sglang-candidate is the only sglang EDF that can load GLM-5.3: the others reach the same
 # format_ue8m0 patch via a /capstor PYTHONPATH that role_mounts drops for the inference role
@@ -51,7 +52,10 @@ BACKEND_ENV = "SGLANG_ATTENTION_BACKEND="
 HEADER = """
 # --- GLM-5.3 deviations from the kimi arm this env was derived from ---
 # mem-fraction-static is a CEILING on weights+KV: pool(f) = 39.0M * (f - 0.4838) tokens at tp4 x
-# pp4; floor 0.486, OOMs above 0.62 on the heaviest (uneven) stage at 206.1 GB. 0.55 gives 2.58M.
+# pp4. The pool is PINNED at 2.8M by --max-total-tokens under f0.57, with --chunked-prefill-size 4096
+# and --max-running-requests 48 bounding the prefill ratchet and req_to_token: host memory, not the
+# pool, is what kills a PP stage. Frontier 633828 leg G2 served conc 40 with no error, peak 485 GiB of
+# the 501 GiB step cgroup; plain f0.55 was OOM-killed on a PP node at conc 20 in 635349.
 # SGLANG_ATTENTION_BACKEND is EMPTY so no flag reaches the server and GlmMoeDsaForCausalLM picks
 # dsa; an explicit aiter would suppress that and also scale mem-fraction-static by 0.85.
 # No --language-only: it selects the VLM receiver role, off this architecture's allowlist.
