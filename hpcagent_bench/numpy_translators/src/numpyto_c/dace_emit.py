@@ -23,6 +23,7 @@ from numpyto_common.numpy_desugar import (
     _promote_kind,
     desugar_for_python_backend,
     expr_rank,
+    name_binding_index,
     rank_table,
 )
 from numpyto_common.ordered import OrderedSet
@@ -1366,24 +1367,109 @@ class PointwiseScatterToLoop(ast.NodeTransformer):
         return node if op is None else self.lower(node, node.target, op)
 
 
-class _DesugarBroadcastAugAssign(ast.NodeTransformer):
-    """Rewrite 'A <op>= b' to 'A[:] = A <op> b' -- dace builds an invalid SDFG for a broadcasting in-place augassign."""
+class DesugarAugAssign(ast.NodeTransformer):
+    """``t op= v`` -> ``t = t op v``: dace turns every augmented store into a WCR edge.
 
-    def __init__(self, array_names: Set[str]) -> None:
-        self.array_names = set(array_names)
+    Canonicalization privatizes those edges into copies CPF refuses, and a broadcasting one on a
+    name is an invalid SDFG outright. The read-modify-write is also numpy's meaning: a fancy index
+    with repeats updates each element once, where a WCR accumulates the repeats. An array name is
+    written back through ``[:]``, in place and in its own dtype; a rank-0 name rebinds, like a numpy
+    scalar.
 
-    def visit_AugAssign(self, node: ast.AugAssign):
-        self.generic_visit(node)
-        if not (isinstance(node.target, ast.Name) and node.target.id in self.array_names):
+    Index parts that call anything are bound to a temp above the store, so they run once. A target
+    that cannot be spelled twice -- a call in its base, a name of unknown rank -- is left alone.
+    """
+
+    def __init__(self, ranks: dict[str, int]) -> None:
+        self.ranks = ranks
+        self.counter = 0
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.stmt | list[ast.stmt]:
+        prelude: list[ast.stmt] = []
+        store = self.store(node.target, prelude)
+        if store is None:
             return node
-        load = ast.Name(id=node.target.id, ctx=ast.Load())
-        binop = ast.BinOp(left=load, op=node.op, right=node.value)
-        store = ast.Subscript(
-            value=ast.Name(id=node.target.id, ctx=ast.Load()),
-            slice=ast.Slice(lower=None, upper=None, step=None),
-            ctx=ast.Store(),
+        load = (
+            ast.Name(id=node.target.id, ctx=ast.Load()) if isinstance(node.target, ast.Name) else copy.deepcopy(store)
         )
-        return ast.copy_location(ast.Assign(targets=[store], value=binop), node)
+        load.ctx = ast.Load()
+        assign = ast.Assign(targets=[store], value=ast.BinOp(left=load, op=node.op, right=node.value))
+        return [*prelude, ast.copy_location(assign, node)]
+
+    def store(self, target: ast.expr, prelude: list[ast.stmt]) -> ast.Name | ast.Subscript | None:
+        if isinstance(target, ast.Name):
+            rank = self.ranks.get(target.id)
+            if rank is None:
+                return None
+            if rank == 0:
+                return ast.Name(id=target.id, ctx=ast.Store())
+            return ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()), slice=ast.Slice(), ctx=ast.Store())
+        if not isinstance(target, ast.Subscript):
+            return None
+        base = self.base(target.value, prelude)
+        return (
+            None if base is None else ast.Subscript(value=base, slice=self.once(target.slice, prelude), ctx=ast.Store())
+        )
+
+    def base(self, expr: ast.expr, prelude: list[ast.stmt]) -> ast.expr | None:
+        """The array a store lands on, its own indices bound once; None if reaching it calls anything."""
+        if isinstance(expr, ast.Name):
+            return ast.Name(id=expr.id, ctx=ast.Load())
+        if isinstance(expr, ast.Attribute):
+            inner = self.base(expr.value, prelude)
+            return None if inner is None else ast.Attribute(value=inner, attr=expr.attr, ctx=ast.Load())
+        if isinstance(expr, ast.Subscript):
+            inner = self.base(expr.value, prelude)
+            return (
+                None
+                if inner is None
+                else ast.Subscript(value=inner, slice=self.once(expr.slice, prelude), ctx=ast.Load())
+            )
+        return None
+
+    def once(self, expr: ast.expr, prelude: list[ast.stmt]) -> ast.expr:
+        """``expr`` safe to spell twice: each tuple element or slice bound that calls anything becomes a temp."""
+        if isinstance(expr, ast.Tuple):
+            return ast.Tuple(elts=[self.once(element, prelude) for element in expr.elts], ctx=ast.Load())
+        if isinstance(expr, ast.Slice):
+            lower, upper, step = (
+                None if part is None else self.once(part, prelude) for part in (expr.lower, expr.upper, expr.step)
+            )
+            return ast.Slice(lower=lower, upper=upper, step=step)
+        if not any(isinstance(sub, ast.Call) for sub in ast.walk(expr)):
+            return copy.deepcopy(expr)
+        name = f"__hpcagent_bench_aug{self.counter}"
+        self.counter += 1
+        prelude.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=expr))
+        return ast.Name(id=name, ctx=ast.Load())
+
+
+#: Builtins that return a Python scalar whatever they read.
+SCALAR_BUILTINS = frozenset({"bool", "complex", "float", "int"})
+
+
+def binding_rank(value: ast.expr, ranks: dict[str, int]) -> int | None:
+    """:func:`expr_rank`, plus the scalar builtins it leaves unranked: cp2k's ``span0 = int(..)``."""
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id in SCALAR_BUILTINS:
+        return 0
+    return expr_rank(value, ranks)
+
+
+def settled_ranks(fn: ast.AST, ranks: dict[str, int]) -> dict[str, int]:
+    """``ranks`` plus each unranked name whose bindings all agree on scalar-or-array.
+
+    ``conv = np.zeros(<5-d>)`` then ``conv = conv.reshape(<4-d>)`` has no one rank, but it is an
+    array at every point, and that is all :class:`DesugarAugAssign` asks of a name.
+    """
+    seen: dict[str, set[int | None]] = {}
+    for name, value in name_binding_index(fn)[0]:
+        seen.setdefault(name, set()).add(binding_rank(value, ranks))
+    settled = dict(ranks)
+    for name, bound in seen.items():
+        known = {rank for rank in bound if rank is not None}
+        if name not in settled and known == bound and (min(known) >= 1 or max(known) == 0):
+            settled[name] = min(known)
+    return settled
 
 
 def is_full_slice(node: ast.AST) -> bool:
@@ -4108,9 +4194,6 @@ def render_program(
     fn_ast = dace_chained_assign_split(chain_ranks).visit(fn_ast)
     fn_ast = _DropRedundantSliceStore().visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
-    # A broadcasting in-place augassign builds an invalid SDFG; rewrite to an explicit write-back binop.
-    fn_ast = _DesugarBroadcastAugAssign(set(arrays)).visit(fn_ast)
-    ast.fix_missing_locations(fn_ast)
     # dace does not lower a point-wise fancy-index WRITE; it answers garbage rather than refusing.
     scatter_ranks = rank_table(fn_ast, {a.name: len(a.shape) for a in kir.arrays})
     scatter_ranks.update(loop_target_ranks(fn_ast))
@@ -4214,6 +4297,11 @@ def render_program(
     floats = _float_names(fn_ast, declared_floats)
     fn_ast = _CopyScalarAlias(value_shapes, floats, set(symbol_names) | set(scalars)).visit(fn_ast)
     _widen_int_seeds(fn_ast, floats, set(symbol_names))
+    ast.fix_missing_locations(fn_ast)
+    # After every pass that emits ``t op= v`` and the size planners that read it as a mutation;
+    # before the view passes, which must see the store it is.
+    aug_seed = {**chain_ranks, **dict.fromkeys(symbol_names, 0), **loop_target_ranks(fn_ast)}
+    fn_ast = DesugarAugAssign(settled_ranks(fn_ast, rank_table(fn_ast, aug_seed))).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
     # Last, over the settled body: dace makes a View node per binding and refuses to reassign one.
     # A rebound view name gets a fresh name per binding where the live ranges are disjoint, and a
