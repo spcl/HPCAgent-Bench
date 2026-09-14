@@ -42,6 +42,14 @@ def source_of(interp: TupleDesugar) -> str:
     return ast.unparse(interp.folded)
 
 
+def test_an_allocation_sized_by_a_scalar_expression_is_one_dimensional() -> None:
+    """cp2k_density_matrix_trs4 sizes its index arrays ``np.zeros(n_block_rows * block_size)``; an unranked
+    index array kept the desugar from spelling ``x[rows, cols, cols] -= s`` as a loop dace accepts."""
+    fn = ast.parse("def f(n, b):\n    d = np.zeros(n * b, dtype=np.int64)\n    e = np.zeros(n, dtype=np.int64)\n")
+    ranks = rank_table(fn.body[0], {"n": 0, "b": 0})
+    assert (ranks.get("d"), ranks.get("e")) == (1, 1), ranks
+
+
 def test_a_slice_of_the_shape_tuple_is_still_compile_time() -> None:
     """``x.shape[2:]`` -- the "trailing axes" idiom. The elements stay symbolic; only the LENGTH
     has to be compile-time, which is what the concat and the following ``ndim`` need."""

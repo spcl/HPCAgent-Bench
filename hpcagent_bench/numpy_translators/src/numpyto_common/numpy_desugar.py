@@ -443,8 +443,8 @@ def shape_ctor_rank(value: ast.Call, attr: str, ranks: Dict[str, int]) -> Option
             return n
         if isinstance(a0, ast.Attribute) and a0.attr == "shape":
             return expr_rank(a0.value, ranks)  # np.zeros(C.shape, ...) keeps C's rank
-        if isinstance(a0, (ast.Name, ast.Constant)):
-            return 1  # 1-D length
+        if isinstance(a0, (ast.Name, ast.Constant)) or expr_rank(a0, ranks) == 0:
+            return 1  # 1-D length, including a scalar expression such as cp2k's n_block_rows * block_size
     return np_fallthrough_rank(value, attr, ranks)
 
 
