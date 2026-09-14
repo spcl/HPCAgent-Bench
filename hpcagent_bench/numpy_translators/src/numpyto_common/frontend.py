@@ -63,6 +63,7 @@ from numpyto_common.numpy_desugar import (
     _DropValidationGuards,
     _EighCallHoister,
     _EighLoopRewriter,
+    module_kind_tables,
     _ElementalUfuncToPrimitive,
     _FillDiagonalInline,
     _SpliceErrstate,
@@ -1193,12 +1194,18 @@ def build_kernel_ir(
     # direct-assign loop rewriter below can lower it.
     _EighCallHoister(_eigh_aliases).visit(tree)
     ast.fix_missing_locations(tree)
-    # dtype KIND (not the raw tag) for the loop rewriter's real/complex Jacobi choice --
-    # bench_info is the only dtype SOURCE in scope this early (no per-function rank/dtype
-    # table exists until KIR helpers build one), but the rewriter propagates it across each
-    # function's own assignments, so an operand built as a local is still resolvable.
-    _eigh_dtypes = {name: _kind_of_dtype_str(dt) for name, dt in dtypes_raw.items()}
-    _EighLoopRewriter(_eigh_aliases, _eigh_dtypes, func_name, dtypes_raw).visit(tree)
+    # dtype KIND (not the raw tag) for the loop rewriter's real/complex Jacobi choice: the declared
+    # arrays plus the preset scalars, split the way the signature below types them. Carried across
+    # helper calls by module_kind_tables, so an operand built in a helper is still resolvable.
+    scalar_kinds = {
+        **dict.fromkeys(preset_symbols, "int"),
+        **dict.fromkeys(_float_preset_names, "float"),
+        **dict.fromkeys(_bool_preset_names, "bool"),
+    }
+    array_kinds = {name: kind for name, dt in dtypes_raw.items() if (kind := _kind_of_dtype_str(dt)) is not None}
+    declared_kinds = {**scalar_kinds, **array_kinds}
+    kind_tables = module_kind_tables(tree, func_name, declared_kinds)
+    _EighLoopRewriter(_eigh_aliases, declared_kinds, kind_tables, dtypes_raw).visit(tree)
     # Canonicalise inf/nan spellings module-wide (see _NonFiniteNormalizer) so
     # both kernel and helpers are covered.
     _NonFiniteNormalizer().visit(tree)

@@ -19,8 +19,8 @@ import re
 import copy
 import math
 from dataclasses import dataclass
-from collections.abc import Callable, Sequence
-from typing import Dict, FrozenSet, Iterator, List, Optional, Set, Tuple, Union
+from collections.abc import Callable, Mapping, Sequence
+from typing import Dict, FrozenSet, Iterator, List, NamedTuple, Optional, Set, Tuple, Union
 
 from numpyto_common import dtypes
 from numpyto_common.lib_nodes import iter_extent_of, parse_einsum_subscripts, extent_is_scalar
@@ -914,10 +914,61 @@ def tuple_valued(value: ast.AST, assigns: Dict[str, ast.expr], visited: FrozenSe
     return False
 
 
-def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
+class CallKinds(NamedTuple):
+    """Kinds calls to module-level helpers evaluate to (:func:`module_kind_tables`): ``values`` for a helper
+    returning one value, ``tuples`` per element for one returning a tuple (``None`` = element unproven)."""
+
+    values: Mapping[str, str]
+    tuples: Mapping[str, Tuple[Optional[str], ...]]
+
+
+NO_CALLS = CallKinds({}, {})
+
+
+def dtype_position_kind(dt: ast.AST, dtypes: Dict[str, str], calls: CallKinds = NO_CALLS) -> Optional[str]:
+    """Kind a DTYPE argument names: a spelling (``np.int64``, ``"f8"``), ``x.dtype``, or a name holding one.
+
+    ls3df's ``stencil_matrix(length, dtype)`` builds ``np.zeros(..., dtype=dtype)`` from its caller's ``X.dtype``."""
+    if isinstance(dt, ast.Attribute) and dt.attr == "dtype":
+        return _dtype_kind(dt.value, dtypes, calls)
+    spelled = _dtype_arg_kind(dt)
+    if spelled is None and isinstance(dt, ast.Name):
+        return dtypes.get(dt.id)
+    return spelled
+
+
+def call_kind(value: ast.Call, dtypes: Dict[str, str], calls: CallKinds = NO_CALLS) -> Optional[str]:
+    """Kind of a call the numpy-attribute rules of :func:`_dtype_kind` do not cover.
+
+    A module helper returns its proven kind. Builtin ``max``/``min`` return one operand UNPROMOTED, so only
+    operands of one kind give a kind. ``np.linalg.norm``/``eigvalsh`` are real for any input,
+    ``np.tensordot`` promotes its operands, ``np.eye`` defaults to float."""
+    f = value.func
+    if isinstance(f, ast.Name):
+        if f.id in calls.values:
+            return calls.values[f.id]
+        if f.id in ("float", "int"):
+            return f.id
+        if f.id in ("max", "min") and value.args and not value.keywords:
+            kinds = {_dtype_kind(arg, dtypes, calls) for arg in value.args}
+            return kinds.pop() if len(kinds) == 1 else None
+        return None
+    if np_submodule_attr(value, "linalg") in ("norm", "eigvalsh"):
+        return "float"
+    attr = _np_attr(value)
+    if attr == "tensordot" and len(value.args) >= 2:
+        return _promote_kind(_dtype_kind(value.args[0], dtypes, calls), _dtype_kind(value.args[1], dtypes, calls))
+    if attr == "eye":
+        dt = next((k.value for k in value.keywords if k.arg == "dtype"), value.args[3] if len(value.args) > 3 else None)
+        return "float" if dt is None else dtype_position_kind(dt, dtypes, calls)
+    return None
+
+
+def _dtype_kind(value: ast.AST, dtypes: Dict[str, str], calls: CallKinds = NO_CALLS) -> Optional[str]:
     """Best-effort dtype KIND (``bool``/``int``/``float``/``complex``) of an
-    expression given the current name->kind table. ``None`` = unknown; callers
-    must treat unknown conservatively (e.g. not desugar a matmul as integer)."""
+    expression given the current name->kind table and the helpers' return kinds.
+    ``None`` = unknown; callers must treat unknown conservatively (e.g. not
+    desugar a matmul as integer)."""
     if isinstance(value, ast.Name):
         return dtypes.get(value.id)
     if isinstance(value, ast.Constant):
@@ -936,9 +987,9 @@ def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
     if isinstance(value, (ast.Compare, ast.BoolOp)):
         return "bool"
     if isinstance(value, ast.UnaryOp):
-        return "bool" if isinstance(value.op, ast.Not) else _dtype_kind(value.operand, dtypes)
+        return "bool" if isinstance(value.op, ast.Not) else _dtype_kind(value.operand, dtypes, calls)
     if isinstance(value, ast.BinOp):
-        lk, rk = _dtype_kind(value.left, dtypes), _dtype_kind(value.right, dtypes)
+        lk, rk = _dtype_kind(value.left, dtypes, calls), _dtype_kind(value.right, dtypes, calls)
         if isinstance(value.op, (ast.BitAnd, ast.BitOr, ast.BitXor)):
             return "bool" if (lk == "bool" or rk == "bool") else _promote_kind(lk, rk)
         if isinstance(value.op, (ast.Div, ast.MatMult)):
@@ -946,11 +997,12 @@ def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
             return "float" if p in ("int", "bool") else p  # true division promotes to float
         return _promote_kind(lk, rk)
     if isinstance(value, ast.Subscript):
-        return _dtype_kind(value.value, dtypes)  # indexing preserves dtype
-    if isinstance(value, ast.Attribute) and value.attr == "T":
-        return _dtype_kind(value.value, dtypes)  # a transpose is a permuted view, same dtype
+        return _dtype_kind(value.value, dtypes, calls)  # indexing preserves dtype
+    if isinstance(value, ast.Attribute) and value.attr in ("T", "dtype"):
+        # A transpose is a permuted view; ``x.dtype`` names x's own kind (read as a dtype argument).
+        return _dtype_kind(value.value, dtypes, calls)
     if isinstance(value, ast.Attribute) and value.attr in ("real", "imag"):
-        inner = _dtype_kind(value.value, dtypes)  # the ATTRIBUTE spelling of the same measurement
+        inner = _dtype_kind(value.value, dtypes, calls)  # the ATTRIBUTE spelling of the same measurement
         return "float" if inner == "complex" else inner
     if isinstance(value, ast.Call):
         # ``np.linalg`` first: it is a TWO-level attribute, so the single-level ``_np_attr`` below
@@ -962,9 +1014,9 @@ def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
             return FFT_RESULT_KINDS.get(fft)
         linalg = np_submodule_attr(value, "linalg")
         if linalg in ("cholesky", "inv") and value.args:
-            return _dtype_kind(value.args[0], dtypes)  # a factor/inverse keeps the operand's kind
+            return _dtype_kind(value.args[0], dtypes, calls)  # a factor/inverse keeps the operand's kind
         if linalg == "solve" and len(value.args) >= 2:
-            return _promote_kind(_dtype_kind(value.args[0], dtypes), _dtype_kind(value.args[1], dtypes))
+            return _promote_kind(_dtype_kind(value.args[0], dtypes, calls), _dtype_kind(value.args[1], dtypes, calls))
         f = value.func
         if isinstance(f, ast.Attribute) and f.attr == "astype" and value.args:
             return _dtype_arg_kind(value.args[0])
@@ -972,7 +1024,7 @@ def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
         # A method reshape / flatten / copy / conjugate keeps its receiver's kind (vexx_k's
         # ``vcr = out.reshape((nrxxs,), order='F')`` stays complex).
         if attr is None and isinstance(f, ast.Attribute) and f.attr in KIND_KEEPING_METHODS:
-            return _dtype_kind(f.value, dtypes)
+            return _dtype_kind(f.value, dtypes, calls)
         if attr in _BOOL_UFUNCS:
             return "bool"  # logical_and / less / isnan ... always produce a bool array
         if attr in _DTYPE_NAME_KIND:
@@ -984,21 +1036,19 @@ def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
             # writes a temp that must match its operand. Read through it rather than giving up:
             # unknown here defaults the temp to float64, which SILENTLY drops the imaginary part
             # of a complex operand it was meant to mirror.
-            if isinstance(dt, ast.Attribute) and dt.attr == "dtype":
-                return _dtype_kind(dt.value, dtypes)
-            return _dtype_arg_kind(dt) if dt is not None else "float"  # default float64
+            return dtype_position_kind(dt, dtypes, calls) if dt is not None else "float"  # default float64
         if attr in _LIKE_CTORS and value.args:
-            return _dtype_kind(value.args[0], dtypes)
+            return _dtype_kind(value.args[0], dtypes, calls)
         if attr in ("astype", "copy", "ascontiguousarray", "asarray", "array", "reshape") and value.args:
-            return _dtype_kind(value.args[0], dtypes)
+            return _dtype_kind(value.args[0], dtypes, calls)
         if attr in ("where", "minimum", "maximum", "clip") and len(value.args) >= 2:
-            return _promote_kind(_dtype_kind(value.args[-2], dtypes), _dtype_kind(value.args[-1], dtypes))
+            return _promote_kind(_dtype_kind(value.args[-2], dtypes, calls), _dtype_kind(value.args[-1], dtypes, calls))
         # These MEASURE a complex value; they do not carry it. ``np.real(z)`` is a real number
         # whatever ``z`` was, and typing it complex is how a magnitude ends up in a complex buffer
         # that the backend then compares with ``>`` (gfortran: "COMPLEX quantities cannot be
         # compared"). A real operand passes its own kind through unchanged.
         if attr in ("real", "imag", "abs", "absolute", "angle") and value.args:
-            inner = _dtype_kind(value.args[0], dtypes)
+            inner = _dtype_kind(value.args[0], dtypes, calls)
             return "float" if inner == "complex" else inner
         # ``conjugate`` and ``transpose`` are the spelled-out forms of ``conj`` and ``.T``, both of
         # which are already here. Missing them left every value reached through a
@@ -1006,8 +1056,23 @@ def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
         # optimisation here: ``np.linalg.cholesky`` picks its real or its Hermitian factorisation
         # from this answer, so a complex operand it could not type got the real one and lost the
         # imaginary part.
-        if attr in ("sqrt", "exp", "sin", "cos", "conj", "conjugate", "sum", "prod", "transpose") and value.args:
-            return _dtype_kind(value.args[0], dtypes)
+        # ``sign`` (``z/|z|`` for a complex ``z``), ``moveaxis`` and ``diag`` keep the kind too.
+        keeping = (
+            "sqrt",
+            "exp",
+            "sin",
+            "cos",
+            "conj",
+            "conjugate",
+            "sum",
+            "prod",
+            "transpose",
+            "sign",
+            "moveaxis",
+            "diag",
+        )
+        if attr in keeping and value.args:
+            return _dtype_kind(value.args[0], dtypes, calls)
         # ``mean``/``std``/``var`` always land on a float (numpy upcasts an integer input to
         # float64 and keeps a float input's own width); only ``mean`` carries a complex through,
         # ``std``/``var`` measure a REAL spread. Missing them typed everything downstream of a
@@ -1015,27 +1080,258 @@ def _dtype_kind(value: ast.AST, dtypes: Dict[str, str]) -> Optional[str]:
         # hardcoded ``np.float64`` accumulator -- an fp32 kernel then grows a float64 half that
         # the library nodes downstream refuse outright.
         if attr in ("mean", "std", "var") and value.args:
-            inner = _dtype_kind(value.args[0], dtypes)
+            inner = _dtype_kind(value.args[0], dtypes, calls)
             if inner is None:
                 return None
             return "complex" if (attr == "mean" and inner == "complex") else "float"
+        return call_kind(value, dtypes, calls)
     return None
 
 
-def _dtype_table(tree: ast.AST, seed: Dict[str, str]) -> Dict[str, str]:
-    """Propagate dtype kinds across straight-line assignments to a fixpoint."""
+def _dtype_table(tree: ast.AST, seed: Dict[str, str], calls: CallKinds = NO_CALLS) -> Dict[str, str]:
+    """Propagate dtype kinds across straight-line assignments to a fixpoint (:func:`assigned_kinds`)."""
     dtypes = dict(seed)
     for _ in range(8):
         changed = False
         for node in ast.walk(tree):
-            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-                k = _dtype_kind(node.value, dtypes)
-                if k is not None and dtypes.get(node.targets[0].id) != k:
-                    dtypes[node.targets[0].id] = k
+            if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+                continue
+            for name, k in assigned_kinds(node.targets[0], node.value, dtypes, calls):
+                if k is not None and dtypes.get(name) != k:
+                    dtypes[name] = k
                     changed = True
         if not changed:
             break
     return dtypes
+
+
+def assigned_kinds(
+    target: ast.expr, value: ast.expr, dtypes: Dict[str, str], calls: CallKinds
+) -> List[Tuple[str, Optional[str]]]:
+    """``(name, kind)`` for each name ``target = value`` binds; a tuple target reads :func:`tuple_element_kinds`."""
+    if isinstance(target, ast.Name):
+        return [(target.id, _dtype_kind(value, dtypes, calls))]
+    if not isinstance(target, (ast.Tuple, ast.List)):
+        return []
+    kinds = tuple_element_kinds(value, dtypes, calls)
+    if kinds is None or len(kinds) != len(target.elts):
+        return []
+    return [(elt.id, kind) for elt, kind in zip(target.elts, kinds) if isinstance(elt, ast.Name)]
+
+
+def tuple_element_kinds(value: ast.expr, dtypes: Dict[str, str], calls: CallKinds) -> Optional[List[Optional[str]]]:
+    """Per-element kinds of a value unpacked into a tuple target; ``None`` for a value of no known arity.
+
+    A tuple literal gives each element's kind, a helper its proven element kinds, and ``eigh`` real
+    eigenvalues with eigenvectors of its operands' kind promoted to at least float."""
+    if isinstance(value, (ast.Tuple, ast.List)):
+        if any(isinstance(elt, ast.Starred) for elt in value.elts):
+            return None
+        return [_dtype_kind(elt, dtypes, calls) for elt in value.elts]
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id in calls.tuples:
+        return list(calls.tuples[value.func.id])
+    hit = _eigh_call_kind(value, set())
+    if hit is None or hit[0] != "eigh":
+        return None
+    _, a_node, b_node, kw = hit
+    only = kw.get("eigvals_only")
+    if only is not None and not (isinstance(only, ast.Constant) and only.value is False):
+        return None
+    vectors = _promote_kind(_dtype_kind(a_node, dtypes, calls), "float")
+    if b_node is not None:
+        vectors = _promote_kind(vectors, _dtype_kind(b_node, dtypes, calls))
+    return ["float", vectors]
+
+
+#: A helper parameter ``(function, name)`` or what it returns ``(function, index)``: -1 the whole value, 0.. one
+#: element of a returned tuple.
+KindSlot = Tuple[str, Union[str, int]]
+NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+
+
+def scope_nodes(fn: ast.FunctionDef) -> List[ast.AST]:
+    """Every node of ``fn``'s body outside nested functions, lambdas and classes."""
+    out: List[ast.AST] = []
+    stack: List[ast.AST] = [stmt for stmt in fn.body if not isinstance(stmt, NESTED_SCOPES)]
+    while stack:
+        node = stack.pop()
+        out.append(node)
+        stack.extend(child for child in ast.iter_child_nodes(node) if not isinstance(child, NESTED_SCOPES))
+    return out
+
+
+def returned_values(fn: ast.FunctionDef) -> List[ast.expr]:
+    """The value of every ``return`` in ``fn``; empty when ``fn`` is a generator or may return ``None`` (a bare
+    ``return``, or a body that does not end in ``return``/``raise``)."""
+    if not fn.body or not isinstance(fn.body[-1], (ast.Return, ast.Raise)):
+        return []
+    values: List[ast.expr] = []
+    for node in scope_nodes(fn):
+        if isinstance(node, (ast.Yield, ast.YieldFrom)):
+            return []
+        if isinstance(node, ast.Return):
+            if node.value is None:
+                return []
+            values.append(node.value)
+    return values
+
+
+def return_arity(values: List[ast.expr]) -> Optional[int]:
+    """-1 when no returned value is a tuple literal, n when every one is an n-tuple, ``None`` otherwise."""
+    tuples = [value for value in values if isinstance(value, ast.Tuple)]
+    if not values or any(isinstance(elt, ast.Starred) for tup in tuples for elt in tup.elts):
+        return None
+    if not tuples:
+        return -1
+    arities = {len(tup.elts) for tup in tuples}
+    return arities.pop() if len(tuples) == len(values) and len(arities) == 1 else None
+
+
+class HelperSites(NamedTuple):
+    """Every call of a module-level function by name with the function it sits in, and the functions whose
+    name is read any other way (a value, a rebinding, a call from module scope): their sites are not all known."""
+
+    calls: Dict[str, List[Tuple[str, ast.Call]]]
+    escaped: Set[str]
+
+
+def helper_sites(tree: ast.Module, funcs: Dict[str, ast.FunctionDef]) -> HelperSites:
+    """The :class:`HelperSites` of ``funcs`` in ``tree``."""
+    calls: Dict[str, List[Tuple[str, ast.Call]]] = {name: [] for name in funcs}
+    callee_nodes: Set[int] = set()
+    for owner, fn in funcs.items():
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in funcs:
+                calls[node.func.id].append((owner, node))
+                callee_nodes.add(id(node.func))
+    names = (node for node in ast.walk(tree) if isinstance(node, ast.Name))
+    return HelperSites(calls, {node.id for node in names if node.id in funcs and id(node) not in callee_nodes})
+
+
+def parameter_names(fn: ast.FunctionDef) -> List[str]:
+    """``fn``'s named parameters: positional-only, positional, keyword-only."""
+    return [p.arg for p in fn.args.posonlyargs + fn.args.args + fn.args.kwonlyargs]
+
+
+def argument_kinds(
+    call: ast.Call, fn: ast.FunctionDef, dtypes: Dict[str, str], calls: CallKinds
+) -> Dict[str, Optional[str]]:
+    """Kind each parameter of ``fn`` binds at ``call`` (positional, keyword or default); all unknown when a
+    starred or ``**`` argument hides which parameter gets what."""
+    names = parameter_names(fn)
+    if any(isinstance(arg, ast.Starred) for arg in call.args) or any(k.arg is None for k in call.keywords):
+        return {name: None for name in names}
+    positional = [p.arg for p in fn.args.posonlyargs + fn.args.args]
+    defaults = list(zip(positional[len(positional) - len(fn.args.defaults) :], fn.args.defaults))
+    defaults += [(p.arg, d) for p, d in zip(fn.args.kwonlyargs, fn.args.kw_defaults) if d is not None]
+    kinds: Dict[str, Optional[str]] = {name: _dtype_kind(default, {}) for name, default in defaults}
+    kinds.update((name, _dtype_kind(arg, dtypes, calls)) for name, arg in zip(positional, call.args))
+    kinds.update((k.arg, _dtype_kind(k.value, dtypes, calls)) for k in call.keywords if k.arg is not None)
+    return {name: kinds.get(name) for name in names}
+
+
+class KindModule(NamedTuple):
+    """What :func:`module_kind_tables` reads once: the top-level functions, the kernel and its declared kinds,
+    every call site, and each function's :func:`return_arity`."""
+
+    funcs: Dict[str, ast.FunctionDef]
+    kernel_name: str
+    kernel_kinds: Dict[str, str]
+    sites: HelperSites
+    arities: Dict[str, int]
+
+
+def assumed_call_kinds(module: KindModule, assumed: Dict[KindSlot, str]) -> CallKinds:
+    """The helper return kinds ``assumed`` holds, in the form :func:`_dtype_kind` reads."""
+    values = {name: assumed[(name, -1)] for name in module.arities if (name, -1) in assumed}
+    tuples = {
+        name: tuple(assumed.get((name, i)) for i in range(arity))
+        for name, arity in module.arities.items()
+        if arity >= 0
+    }
+    return CallKinds(values, tuples)
+
+
+def parameter_seed(module: KindModule, name: str, assumed: Dict[KindSlot, str]) -> Dict[str, str]:
+    """The kernel's declared kinds, or a helper's ``assumed`` parameter kinds."""
+    if name == module.kernel_name:
+        return dict(module.kernel_kinds)
+    return {p: assumed[(name, p)] for p in parameter_names(module.funcs[name]) if (name, p) in assumed}
+
+
+def slot_observations(
+    module: KindModule, assumed: Dict[KindSlot, str]
+) -> Tuple[Dict[str, Dict[str, str]], Dict[KindSlot, Set[Optional[str]]]]:
+    """Every function's kind table under ``assumed``, and each slot's kinds under those tables: one per
+    ``return`` and per call site, ``None`` at a site that cannot be read."""
+    calls = assumed_call_kinds(module, assumed)
+    tables = {name: _dtype_table(fn, parameter_seed(module, name, assumed), calls) for name, fn in module.funcs.items()}
+    seen: Dict[KindSlot, Set[Optional[str]]] = {}
+    for name, fn in module.funcs.items():
+        arity = module.arities.get(name)
+        if arity is None:
+            continue
+        for value in returned_values(fn):
+            elements = value.elts if arity >= 0 and isinstance(value, ast.Tuple) else [value]
+            for index, elt in enumerate(elements):
+                seen.setdefault((name, index if arity >= 0 else -1), set()).add(_dtype_kind(elt, tables[name], calls))
+    for callee, at in module.sites.calls.items():
+        for owner, call in at if callee != module.kernel_name else []:
+            for param, kind in argument_kinds(call, module.funcs[callee], tables[owner], calls).items():
+                seen.setdefault((callee, param), set()).add(kind)
+    for callee in module.sites.escaped - {module.kernel_name}:
+        for param in parameter_names(module.funcs[callee]):
+            seen.setdefault((callee, param), set()).add(None)
+    return tables, seen
+
+
+def grow_assumptions(
+    seen: Dict[KindSlot, Set[Optional[str]]], assumed: Dict[KindSlot, str], refuted: Set[KindSlot]
+) -> bool:
+    """Assume each slot's one KNOWN kind, unknown sites ignored; a slot seen with two known kinds is refuted
+    for good. True when anything changed; each slot is assumed and refuted at most once, so this ends."""
+    changed = False
+    for slot, kinds in seen.items():
+        known = {kind for kind in kinds if kind is not None}
+        if slot in refuted or not known:
+            continue
+        if len(known) > 1 or (slot in assumed and known != {assumed[slot]}):
+            refuted.add(slot)
+            assumed.pop(slot, None)
+            changed = True
+        elif slot not in assumed:
+            assumed[slot] = known.pop()
+            changed = True
+    return changed
+
+
+def retract_assumptions(seen: Dict[KindSlot, Set[Optional[str]]], assumed: Dict[KindSlot, str]) -> bool:
+    """Drop every assumption some return or call site did not reproduce exactly. True when any was dropped."""
+    refuted = [slot for slot, kind in assumed.items() if seen.get(slot) != {kind}]
+    for slot in refuted:
+        del assumed[slot]
+    return bool(refuted)
+
+
+def module_kind_tables(tree: ast.Module, kernel_name: str, kernel_kinds: Dict[str, str]) -> Dict[str, Dict[str, str]]:
+    """Dtype-KIND tables of the kernel and every top-level helper, kinds carried across calls.
+
+    A helper parameter takes the kind its argument has at EVERY call site; a helper's return (per element of
+    a returned tuple) the kind of every ``return``. Cycles resolve optimistically: ls3df's rayleigh_ritz reads
+    the block its own result was filtered into, so its ``Y`` is first assumed from the one known site, then
+    every assumption a round does not reproduce exactly is retracted until none is. What survives reproduces
+    itself from the kernel's declared kinds; everything else stays unknown, which keeps the complex path."""
+    funcs = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    arities = {name: arity for name, fn in funcs.items() if (arity := return_arity(returned_values(fn))) is not None}
+    module = KindModule(funcs, kernel_name, kernel_kinds, helper_sites(tree, funcs), arities)
+    assumed: Dict[KindSlot, str] = {}
+    refuted: Set[KindSlot] = set()
+    tables, seen = slot_observations(module, assumed)
+    while grow_assumptions(seen, assumed, refuted):
+        tables, seen = slot_observations(module, assumed)
+    while retract_assumptions(seen, assumed):
+        tables, seen = slot_observations(module, assumed)
+    return tables
 
 
 def _matmul_pairs(node: ast.AST) -> List[ast.AST]:
@@ -4594,6 +4890,7 @@ def _eigh_jacobi_lines(
     app_re = app_ap if is_real else f"{app_ap}.real"
     aqq_re = aqq_ap if is_real else f"{aqq_ap}.real"
     diag_re = diag_ap if is_real else f"{diag_ap}.real"
+    ephi_h = f"{p}_ephi" if is_real else f"np.conj({p}_ephi)"  # a real phase is +-1, its own conjugate
     return [
         # eigenvector accumulator V = I, as zeros + a diagonal loop (``np.eye``'s
         # C/Fortran expansion does not carry the complex dtype the way ``np.zeros``
@@ -4625,17 +4922,17 @@ def _eigh_jacobi_lines(
         f"            for {p}_k in range({n}):",  # A @ J : columns pp, qq
         f"                {p}_akp = {a}[{p}_k, {p}_pp]",
         f"                {p}_akq = {a}[{p}_k, {p}_qq]",
-        f"                {a}[{p}_k, {p}_pp] = {p}_c * {p}_akp - {p}_s * np.conj({p}_ephi) * {p}_akq",
+        f"                {a}[{p}_k, {p}_pp] = {p}_c * {p}_akp - {p}_s * {ephi_h} * {p}_akq",
         f"                {a}[{p}_k, {p}_qq] = {p}_s * {p}_ephi * {p}_akp + {p}_c * {p}_akq",
         f"            for {p}_k in range({n}):",  # J^H @ A : rows pp, qq
         f"                {p}_apk = {a}[{p}_pp, {p}_k]",
         f"                {p}_aqk = {a}[{p}_qq, {p}_k]",
         f"                {a}[{p}_pp, {p}_k] = {p}_c * {p}_apk - {p}_s * {p}_ephi * {p}_aqk",
-        f"                {a}[{p}_qq, {p}_k] = {p}_s * np.conj({p}_ephi) * {p}_apk + {p}_c * {p}_aqk",
+        f"                {a}[{p}_qq, {p}_k] = {p}_s * {ephi_h} * {p}_apk + {p}_c * {p}_aqk",
         f"            for {p}_k in range({n}):",  # V @ J : columns pp, qq
         f"                {p}_vkp = {v}[{p}_k, {p}_pp]",
         f"                {p}_vkq = {v}[{p}_k, {p}_qq]",
-        f"                {v}[{p}_k, {p}_pp] = {p}_c * {p}_vkp - {p}_s * np.conj({p}_ephi) * {p}_vkq",
+        f"                {v}[{p}_k, {p}_pp] = {p}_c * {p}_vkp - {p}_s * {ephi_h} * {p}_vkq",
         f"                {v}[{p}_k, {p}_qq] = {p}_s * {p}_ephi * {p}_vkp + {p}_c * {p}_vkq",
         # Eigenvalues carry the REAL half of the input dtype (numpy: eigh(complex64) -> float32,
         # eigh(float32) -> float32). A real input spells that as its own .dtype; a complex one
@@ -4840,22 +5137,22 @@ class _EighLoopRewriter(ast.NodeTransformer):
     the ``_sci_eigh`` alias import is still in scope. A non-Name operand is
     materialised first.
 
-    ``dtypes`` is the declared-dtype KIND table (bench_info's ``init.arrays``/
-    ``init.dtypes``, the same source :func:`_dtype_table`'s seed uses) -- this
-    runs before helper inlining assigns local ranks/dtypes, so only names the
-    manifest itself declares are known; everything else stays the safe unknown."""
+    ``dtypes`` is the declared KIND table (manifest arrays and preset scalars). This runs before
+    helper inlining, so a helper's names are known only through ``kind_tables``
+    (:func:`module_kind_tables`); everything else stays the safe unknown."""
 
     def __init__(
         self,
         alias_names: set,
         dtypes: Dict[str, str],
-        kernel_name: Optional[str] = None,
+        kind_tables: Optional[Mapping[str, Dict[str, str]]] = None,
         array_dtypes: Optional[Dict[str, str]] = None,
     ) -> None:
         self.alias_names = alias_names
         self.declared = dtypes
         self.dtypes = dtypes
-        self.kernel_name = kernel_name
+        #: Per-function kinds (:func:`module_kind_tables`); ``None`` applies ``dtypes`` to every function.
+        self.kind_tables = kind_tables
         #: Declared RAW array dtypes (widths, not kinds), for the eigenvalue dtype a complex
         #: operand cannot spell in emitted source (:func:`_eigh_w_dtype`).
         self.array_dtypes = array_dtypes or {}
@@ -4870,14 +5167,17 @@ class _EighLoopRewriter(ast.NodeTransformer):
         declared names reads every such operand as unknown, so the real branch was unreachable for
         exactly the kernels that need it.
 
-        Seeded ONLY for the kernel when a ``kernel_name`` is known: a helper parameter sharing a
-        kernel array's name is a different value, and being wrong in the "real" direction DROPS an
-        imaginary part rather than merely missing an optimisation. With no ``kernel_name`` the
-        caller has not said which function is the kernel, so the declared table applies everywhere
-        -- what it did before this method existed; narrowing it would make that caller worse off."""
+        With ``kind_tables`` a helper sees only what :func:`module_kind_tables` proved across its call
+        sites: a helper parameter sharing a kernel array's name is a different value, and being wrong
+        in the "real" direction DROPS an imaginary part. A function the tables miss starts from nothing.
+        Without them the caller named no kernel, so the declared table applies everywhere."""
         outer = self.dtypes
-        seed = self.declared if (self.kernel_name is None or node.name == self.kernel_name) else {}
-        self.dtypes = _dtype_table(node, seed)
+        if self.kind_tables is None:
+            self.dtypes = _dtype_table(node, self.declared)
+        elif node.name in self.kind_tables:
+            self.dtypes = self.kind_tables[node.name]
+        else:
+            self.dtypes = _dtype_table(node, {})
         self.generic_visit(node)
         self.dtypes = outer
         return node
