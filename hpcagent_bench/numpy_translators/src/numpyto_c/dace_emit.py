@@ -1393,8 +1393,64 @@ class DesugarAugAssign(ast.NodeTransformer):
             ast.Name(id=node.target.id, ctx=ast.Load()) if isinstance(node.target, ast.Name) else copy.deepcopy(store)
         )
         load.ctx = ast.Load()
+        if isinstance(store, ast.Subscript) and self.index_arrays(store.slice) >= 2:
+            loop = self.element_loop(store, node, prelude)
+            if loop is None:
+                return node
+            return [*prelude, ast.fix_missing_locations(ast.copy_location(loop, node))]
         assign = ast.Assign(targets=[store], value=ast.BinOp(left=load, op=node.op, right=node.value))
         return [*prelude, ast.copy_location(assign, node)]
+
+    def index_arrays(self, index: ast.expr) -> int:
+        """How many parts of a store's index are arrays."""
+        parts = index.elts if isinstance(index, ast.Tuple) else [index]
+        return sum(1 for part in parts if not isinstance(part, ast.Slice) and (expr_rank(part, self.ranks) or 0) >= 1)
+
+    def element_loop(self, store: ast.Subscript, node: ast.AugAssign, prelude: list[ast.stmt]) -> ast.For | None:
+        """``t[r, c] op= v`` as a loop of element read-modify-writes, index arrays paired by position.
+
+        dace refuses a plain store of an array through more than one index array (cp2k_density_matrix_trs4's
+        ``x_blocks[rows, cols, cols] -= s``). A repeated index tuple is updated once per repeat, where numpy's
+        buffered store updates it once; an accumulation is spelled ``np.add.at``. Only 1-D index arrays beside
+        scalars and a scalar or 1-D value: a slice or a multi-dimensional index array moves axes, so such a
+        store keeps its ``op=``.
+        """
+        parts = store.slice.elts if isinstance(store.slice, ast.Tuple) else [store.slice]
+        ranks = [None if isinstance(part, ast.Slice) else expr_rank(part, self.ranks) for part in parts]
+        value_rank = expr_rank(node.value, self.ranks)
+        if any(rank is None or rank > 1 for rank in ranks) or value_rank is None or value_rank > 1:
+            return None
+        at = f"__hpcagent_bench_aug{self.counter}"
+        self.counter += 1
+        arrays = [self.bound(part, prelude) if rank == 1 else part for part, rank in zip(parts, ranks)]
+        element = [
+            ast.Subscript(value=part, slice=ast.Name(id=at, ctx=ast.Load()), ctx=ast.Load()) if rank == 1 else part
+            for part, rank in zip(arrays, ranks)
+        ]
+        write = ast.Subscript(
+            value=copy.deepcopy(store.value), slice=ast.Tuple(elts=element, ctx=ast.Load()), ctx=ast.Store()
+        )
+        read = copy.deepcopy(write)
+        read.ctx = ast.Load()
+        value = self.bound(node.value, prelude) if value_rank == 1 else self.once(node.value, prelude)
+        if value_rank == 1:
+            value = ast.Subscript(value=value, slice=ast.Name(id=at, ctx=ast.Load()), ctx=ast.Load())
+        first = next(part for part, rank in zip(arrays, ranks) if rank == 1)
+        return ast.For(
+            target=ast.Name(id=at, ctx=ast.Store()),
+            iter=parse_expr(f"range({ast.unparse(first)}.shape[0])"),
+            body=[ast.Assign(targets=[write], value=ast.BinOp(left=read, op=node.op, right=value))],
+            orelse=[],
+        )
+
+    def bound(self, expr: ast.expr, prelude: list[ast.stmt]) -> ast.Name:
+        """``expr`` as a name: a bare name as is, anything else bound to a temp above the loop, evaluated once."""
+        if isinstance(expr, ast.Name):
+            return ast.Name(id=expr.id, ctx=ast.Load())
+        name = f"__hpcagent_bench_aug{self.counter}"
+        self.counter += 1
+        prelude.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=copy.deepcopy(expr)))
+        return ast.Name(id=name, ctx=ast.Load())
 
     def store(self, target: ast.expr, prelude: list[ast.stmt]) -> ast.Name | ast.Subscript | None:
         if isinstance(target, ast.Name):
