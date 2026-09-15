@@ -121,6 +121,7 @@ PUBLISHED_PACKET_COLORS = {
     "divide-and-conquer": "#cc79a7",
     "profiling": "#d55e00",
     "repo": "#56b4e9",
+    "kernel": "#e69f00",
     "no-score-tool": "#0072b2",
     "cpfsrc+lang-skills": "#009cf4",
     "divide-and-conquer+profiling": "#dea9c7",
