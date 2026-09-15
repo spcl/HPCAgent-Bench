@@ -117,6 +117,33 @@ def test_billed_comes_from_accumulate_total_tokens_not_a_reimplementation(token_
     assert totals.tokens_billed == want
 
 
+def test_skipping_lines_that_cannot_carry_usage_changes_no_total(token_cost, tmp_path: pathlib.Path) -> None:
+    """The fold decodes only lines that can hold usage, to avoid parsing megabytes of tool output. A
+    line that merely mentions "assistant" is decoded and rejected, stderr and a half-written tail are
+    skipped, and every real turn, thinking delta and result is still read -- so the totals are the
+    cost model's own numbers, computed here by hand."""
+    lines = [
+        assistant_line("m1", 1000, 0),
+        json.dumps({"type": "user", "note": "assistant", "message": {"content": "result usage 999999"}}),
+        json.dumps({"type": "system", "subtype": "thinking_tokens", "estimated_tokens_delta": 40}),
+        assistant_line("m1", 1000, 0),
+        assistant_line("m2", 1500, 0),
+        "stderr: warning, not json",
+        result_line(70),
+        '{"type": "assistant", "message": {"id": "m3"',
+    ]
+    log = tmp_path / "claude.log"
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    cost = token_cost.episode_cost(log)
+    fresh, cached, generated = 1000 + (1500 - 1000), 1000, 70 + 40
+    assert (cost["fresh_input"], cost["cached_input"], cost["output"], cost["thinking"]) == (fresh, cached, 70, 40)
+    assert cost["effective"] == fresh + token_cost.CACHE_DISCOUNT * cached + generated
+    assert token_cost.accumulate_total_tokens(lines, {}) == 1000 + 1500
+    totals = token_cost.task_totals(tmp_path)
+    assert (totals.tokens_effective, totals.tokens_billed) == (int(cost["effective"]), 1000 + 1500)
+
+
 def test_a_worker_dir_without_a_transcript_has_no_token_total(token_cost, tmp_path: pathlib.Path) -> None:
     """A worker directory the driver never entered is not a task that cost 0 tokens -- it has no
     measurement at all, same as R7 treats a missing kernel token total."""

@@ -150,32 +150,54 @@ def usage_total(usage: dict[str, object]) -> int | None:
     return total if seen else None
 
 
-def accumulate_total_tokens(lines: list[str], total_by_message: dict[str, int]) -> int:
-    """Fold stream-json transcript lines into {message id: billed tokens}; return the running total.
+#: Substrings every event a token fold reads must contain: an ``assistant`` turn, the ``result``
+#: record, a ``thinking_tokens`` delta. A line with none of them -- a tool result or a user turn, most
+#: of a transcript's bytes -- is skipped without being decoded; a line that only mentions one is
+#: decoded and then rejected by its type, so the filter saves work and changes no total.
+USAGE_EVENT_MARKERS: tuple[str, ...] = ('"assistant"', '"result"', "thinking_tokens")
+
+
+def usage_event(line: str) -> dict[str, object] | None:
+    """``line`` as a parsed stream-json event when it can carry token usage, else ``None``.
+
+    Partial or non-JSON lines (the merged stderr, a half-written tail) are ``None``.
+    """
+    if not any(marker in line for marker in USAGE_EVENT_MARKERS):
+        return None
+    line = line.strip()
+    if not line.startswith("{"):
+        return None
+    try:
+        return as_block(json.loads(line))
+    except ValueError:
+        return None
+
+
+def fold_billed_event(event: dict[str, object], total_by_message: dict[str, int]) -> None:
+    """Record one event's billed tokens under its ``message.id``; a later event of the id replaces it.
 
     One assistant TURN arrives as several ``assistant`` events sharing one ``message.id``, one per
     content block, and every one of them repeats the whole turn's ``message.usage`` -- summing the
     events would multiply a turn's cost by its block count. Keeping the LAST usage seen per id is
-    what makes the total the turn count's worth of tokens (8.1, ``billed``). Partial or non-JSON
-    lines (the merged stderr, a half-written tail) are skipped.
+    what makes the total the turn count's worth of tokens (8.1, ``billed``).
     """
+    if event.get("type") != "assistant":
+        return
+    message = as_block(event.get("message"))
+    message_id = message.get("id")
+    if not isinstance(message_id, str):
+        return
+    total = usage_total(as_block(message.get("usage")))
+    if total is not None:
+        total_by_message[message_id] = total
+
+
+def accumulate_total_tokens(lines: list[str], total_by_message: dict[str, int]) -> int:
+    """Fold stream-json transcript lines into {message id: billed tokens}; return the running total."""
     for line in lines:
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            event = as_block(json.loads(line))
-        except ValueError:
-            continue
-        if event.get("type") != "assistant":
-            continue
-        message = as_block(event.get("message"))
-        message_id = message.get("id")
-        if not isinstance(message_id, str):
-            continue
-        total = usage_total(as_block(message.get("usage")))
-        if total is not None:
-            total_by_message[message_id] = total
+        event = usage_event(line)
+        if event is not None:
+            fold_billed_event(event, total_by_message)
     return sum(total_by_message.values())
 
 
@@ -229,25 +251,28 @@ def is_usage_transcript(path: pathlib.Path) -> bool:
     return path.name == USAGE_NAME or ATTEMPT_MARKER.sub(".", path.name) == USAGE_NAME
 
 
+def claude_events(log: pathlib.Path) -> list[dict[str, object]]:
+    """Every event of a claude stream-json transcript that can carry token usage (:func:`usage_event`),
+    in file order: one read of the file serves both the effective and the billed fold."""
+    with log.open(errors="replace") as handle:
+        return [event for event in map(usage_event, handle) if event is not None]
+
+
 def episode_cost(log: pathlib.Path) -> dict[str, float]:
     """One episode's fresh, cached, output and thinking tokens, plus the effective total."""
     if is_usage_transcript(log):
         return usage_episode_cost(log)
+    return events_cost(claude_events(log))
+
+
+def events_cost(events: list[dict[str, object]]) -> dict[str, float]:
+    """:func:`episode_cost` over a transcript's already-parsed :func:`claude_events`."""
     per_turn: dict[str, dict] = {}
     order: list[str] = []
     thinking = 0
     output_total = 0
     wall_ms = api_ms = 0
-    with log.open(errors="replace") as handle:
-        lines = list(handle)
-    for line in lines:
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue  # the tail can be half-written while the client is mid-append
+    for event in events:
         if event.get("subtype") == "thinking_tokens":
             thinking += int(event.get("estimated_tokens_delta") or 0)
             continue
@@ -342,17 +367,19 @@ class TaskTotals(NamedTuple):
     tokens_billed: int | None
 
 
-def attempt_billed(log: pathlib.Path) -> int:
-    """One attempt's billed tokens (8.1): last usage per message id for a claude transcript, one
-    call per line for a runner's usage.jsonl -- each fold starts fresh, since the driver truncates
-    a transcript at the start of every attempt (no message id repeats across attempts)."""
+def attempt_totals(log: pathlib.Path) -> tuple[int, int]:
+    """One attempt's ``(effective, billed)`` tokens (8.1) from ONE read of its transcript: the
+    effective cost model of :func:`events_cost` and the last-usage-per-message-id fold of
+    :func:`fold_billed_event` over the same parsed events. Each attempt folds fresh, since the driver
+    starts every attempt with a new transcript (no message id repeats across attempts)."""
     if is_usage_transcript(log):
-        return int(usage_episode_cost(log)["naive_total"])
-    try:
-        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return 0
-    return accumulate_total_tokens(lines, {})
+        cost = usage_episode_cost(log)
+        return int(cost["effective"]), int(cost["naive_total"])
+    events = claude_events(log)
+    billed: dict[str, int] = {}
+    for event in events:
+        fold_billed_event(event, billed)
+    return int(events_cost(events)["effective"]), sum(billed.values())
 
 
 def task_totals(worker_dir: pathlib.Path) -> TaskTotals:
@@ -366,9 +393,12 @@ def task_totals(worker_dir: pathlib.Path) -> TaskTotals:
     logs = attempt_transcripts(worker_dir)
     if not logs:
         return TaskTotals(attempts=0, tokens_effective=None, tokens_billed=None)
-    tokens_effective = sum(int(episode_cost(log)["effective"]) for log in logs)
-    tokens_billed = sum(attempt_billed(log) for log in logs)
-    return TaskTotals(attempts=len(logs), tokens_effective=tokens_effective, tokens_billed=tokens_billed)
+    per_attempt = [attempt_totals(log) for log in logs]
+    return TaskTotals(
+        attempts=len(logs),
+        tokens_effective=sum(effective for effective, _billed in per_attempt),
+        tokens_billed=sum(billed for _effective, billed in per_attempt),
+    )
 
 
 def main() -> int:
