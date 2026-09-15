@@ -460,7 +460,12 @@ def drop_superseded_arm_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
         arms = sorted(set(frame.loc[dropped, "arm"].astype(str)))
         message = f"dropped {count} row(s) of {len(arms)} arm(s) superseded by a clean re-run (spec X9)"
         warnings.warn(message, stacklevel=2)
-    return frame[~dropped]
+    kept = frame[~dropped]
+    # The suffix names a WAVE, not a condition, so it comes off once the wave it replaces is gone.
+    # Left on, it renames the arm for everything downstream: a pair list, an --arms regex and a
+    # figure's arm pattern all ask for the condition by name and would find nothing.
+    renamed = kept["arm"].astype(str).str.removesuffix(CLEAN_SUFFIX)
+    return kept.assign(arm=renamed.where(renamed.notna(), kept["arm"]))
 
 
 def main(argv: list[str] | None = None) -> int:
