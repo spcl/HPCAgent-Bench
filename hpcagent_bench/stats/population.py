@@ -106,6 +106,37 @@ def condition_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     return frame[~labels.isin(PSEUDO_ARMS)]
 
 
+def complete_arms(frame: "pd.DataFrame", roster: Sequence[str]) -> tuple[list[str], dict[str, int]]:
+    """Arms whose recorded rows name EVERY kernel of ``roster``, and what the rest covered.
+
+    Coverage counts ANY row (call, submission or attempt) naming the kernel -- a served fact, not a
+    verified one. An arm below full roster coverage cannot be scored over ``roster`` under either
+    :data:`KernelPolicy` without inventing a value for a kernel it was never even served, so a table
+    drawn over the roster keeps only the complete arms and reports the rest, rather than entering a
+    missing kernel at :data:`NOT_DELIVERED` or silently shrinking the roster to whatever survived.
+
+    Kept arms come back in the order they first appear in ``frame`` -- the order a caller's own arm
+    selection listed them, not a sorted one. ``dropped`` maps each excluded arm to how many roster
+    kernels it has at least one row for, so a caller can print "kept N/40" beside the drop.
+    """
+    missing = [name for name in ("arm", "benchmark") if name not in frame.columns]
+    if missing:
+        raise MixedPopulationError(f"cannot check roster coverage without {missing}")
+    needed = set(roster)
+    arms = frame["arm"].fillna("").astype(str)
+    order = [arm for arm in dict.fromkeys(arms) if arm not in PSEUDO_ARMS]
+    served = frame.assign(arm=arms).groupby("arm")["benchmark"].agg(lambda column: set(column.astype(str)))
+    kept: list[str] = []
+    dropped: dict[str, int] = {}
+    for arm in order:
+        have = served.get(arm, set())
+        if needed <= have:
+            kept.append(arm)
+        else:
+            dropped[arm] = len(needed & have)
+    return kept, dropped
+
+
 def is_named(value: object) -> bool:
     """Whether a cell records a denominator at all: not ``None``, not NaN, not blank."""
     if value is None or (isinstance(value, float) and math.isnan(value)):
