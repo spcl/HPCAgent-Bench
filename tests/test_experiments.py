@@ -55,13 +55,36 @@ def test_a_language_never_recorded_on_any_row_falls_back_to_the_arm_name() -> No
     assert filled.language.tolist() == ["c", "c"]
 
 
-def test_a_packet_never_recorded_on_any_row_still_has_no_fallback() -> None:
-    """The arm-name fallback is for ``language`` only: ``packet`` cannot be read out of an arm's
-    name in general (the no-packet control has no suffix to distinguish it from a truncated name),
-    so it stays blank exactly as it did before this fix."""
-    frame = pd.DataFrame({"arm": ["cpf-llr-focus40-oss120b-c-cpf"] * 2, "packet": ["", None]})
+@pytest.mark.parametrize(
+    ("arm", "packet"),
+    [
+        ("cpf-llr-focus40-oss120b-c-cpf", "cpf"),
+        ("cpf-llr-focus40-qwen38-c-cpfsrc", "cpfsrc"),
+        ("cpf-llr-focus40-kimi27sglang-c-skills", "lang-skills"),
+        ("gpu-llr-focus40-kimi27sglang-c-openmp-skills", "lang-skills"),
+        ("cpf-llr-focus40-qwen38-c-perf-playbook-cpu", "perf-playbook-cpu"),
+    ],
+)
+def test_a_packet_token_after_the_model_is_the_arms_packet(arm: str, packet: str) -> None:
+    """Most ``-skills`` arms never recorded their packet; without the name the skills contrast found one pair of
+    fifteen. Replaces the earlier rule that packet had no name fallback, which is what lost those pairs."""
+    frame = pd.DataFrame({"arm": [arm] * 2, "packet": ["", None]})
+    assert experiments.fill_arm_identity(frame).packet.tolist() == [packet, packet]
+
+
+@pytest.mark.parametrize("arm", ["cpf-llr-focus40-qwen38-c", "cpf-llr-focus40-oss120b-fortran"])
+def test_the_experiment_prefix_never_reads_as_a_packet(arm: str) -> None:
+    """``cpf-llr-focus40`` spells ``cpf`` before the model; the control arm must stay the control."""
+    frame = pd.DataFrame({"arm": [arm], "packet": [""]})
+    assert experiments.is_blank(experiments.fill_arm_identity(frame).packet.iloc[0])
+
+
+def test_the_arm_name_wins_over_a_rows_claimed_language_and_the_claim_is_kept() -> None:
+    """A HIP arm's agent can submit C; the arm still ran HIP, and the row's claim stays inspectable."""
+    frame = pd.DataFrame({"arm": ["gpu-llr-focus40-qwen38-hip"] * 3, "language": ["hip", "c", ""]})
     filled = experiments.fill_arm_identity(frame)
-    assert filled.packet.map(experiments.is_blank).all()
+    assert filled.language.tolist() == ["hip", "hip", "hip"]
+    assert filled.recorded_language.tolist() == ["hip", "c", ""]
 
 
 def test_two_arms_are_filled_independently() -> None:

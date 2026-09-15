@@ -25,7 +25,7 @@ import math
 import pathlib
 import sqlite3
 import sys
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from hpcagent_bench import experiment_tags
@@ -211,27 +211,44 @@ def is_blank(value: object) -> bool:
     return not str(value).strip()
 
 
+#: How each identity column is read out of an arm name; the name wins over what a row recorded.
+NAME_READERS: Mapping[str, Callable[[str], str]] = {
+    "language": experiment_tags.language_of,
+    "packet": experiment_tags.packet_of,
+}
+
+
+#: Columns whose recorded value the agent controls (the request body names its language), so the arm name wins.
+NAME_FIRST: frozenset[str] = frozenset({"language"})
+
+
+def arm_value(arm: str, column: str, recorded: Iterable[object]) -> str:
+    """The identity every row of ``arm`` takes in ``column``.
+
+    ``language``: the arm name's token first -- a row's language is what the request body claimed, and the agent
+    controls it (a HIP arm's agent can submit C). ``packet``: the launcher recorded it, so the arm's one recorded
+    value first and the name's packet token only when no row recorded one (whole campaigns predate the stamp).
+    Two different recorded values where the recorded value decides raise: then two conditions share one label.
+    """
+    named = NAME_READERS[column](arm)
+    if named and column in NAME_FIRST:
+        return named
+    values = sorted({str(v).strip() for v in recorded if not is_blank(v)})
+    if len(values) > 1:
+        raise ValueError(f"arm {arm!r} carries more than one {column}: {values}")
+    return values[0] if values else named
+
+
 def fill_arm_identity(frame: "pd.DataFrame", columns: Sequence[str] = FILLABLE_IDENTITY) -> "pd.DataFrame":
-    """``frame`` with a blank cell in ``columns`` filled from its own ARM's one recorded value.
+    """``frame`` with each arm's ``columns`` set to one identity per arm (:func:`arm_value`), the values rows
+    recorded kept as ``recorded_<column>``.
 
-    A campaign's launcher writes one language and one packet per arm (see :data:`IDENTITY`), but
-    the judge's per-record tables do not always carry them onto every row -- an attempt or call row
-    can predate the stamp that a submission row gets. Grouping the raw column then reads one arm as
-    several identity slices and undercounts its own kernel coverage, which is what fragmented
-    ``git-scicomp``'s arm-summary figure.
+    The judge's per-record tables stamp language and packet unevenly: an attempt or call row can predate the
+    stamp, whole arms (``cpf-llr-focus40-*-c-cpf``) never recorded a language, most ``-skills`` arms never recorded
+    their packet, and a HIP or Triton arm's rows can claim ``c``. Grouping the raw columns splits one arm into
+    several slices -- it fragmented ``git-scicomp``'s arm summary and left one skills pair out of fifteen.
 
-    Filling from the arm's single non-blank value fixes the gap WITHOUT hiding a real conflict: two
-    different non-blank values recorded under one arm label raise, by name, because that is
-    contamination between two conditions sharing a label, not a recording gap.
-
-    An arm whose ``language`` is blank on EVERY row (the whole arm predates the stamp -- the
-    ``cpf-llr-focus40-*-c-cpf`` arms never once recorded it) has nothing to fill FROM, and falls
-    back to :func:`hpcagent_bench.experiment_tags.language_of`, the arm name itself: this is what
-    let ``scripts/plot_score_change.py`` pair those arms against their control at all -- with
-    ``language`` staying blank they shared no (model, language) key with anything.
-
-    A blank arm label (no arm, or a pseudo-arm such as ``adhoc``) names no condition, so its rows
-    are left exactly as recorded rather than pooled into one identity that does not exist.
+    A blank arm label (no arm, or an ad-hoc grade) names no condition, so its rows keep what they recorded.
     """
     if "arm" not in frame.columns:
         return frame
@@ -239,16 +256,13 @@ def fill_arm_identity(frame: "pd.DataFrame", columns: Sequence[str] = FILLABLE_I
     for column in columns:
         if column not in filled.columns:
             continue
+        filled[f"recorded_{column}"] = frame[column]
         for arm, group in filled.groupby("arm", sort=False):
             if is_blank(arm):
                 continue
-            named = sorted({str(v).strip() for v in group[column] if not is_blank(v)})
-            if len(named) > 1:
-                raise ValueError(f"arm {arm!r} carries more than one {column}: {named}")
-            fill_value = named[0] if named else (experiment_tags.language_of(str(arm)) if column == "language" else "")
-            if fill_value:
-                blank_rows = group[column].map(is_blank)
-                filled.loc[group.index[blank_rows], column] = fill_value
+            value = arm_value(str(arm), column, group[column])
+            if value:
+                filled.loc[group.index, column] = value
     return filled
 
 

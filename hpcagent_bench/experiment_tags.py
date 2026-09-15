@@ -310,6 +310,38 @@ def language_of(arm: str, unknown: str = "") -> str:
     return unknown
 
 
+def arm_suffix(arm: str) -> str:
+    """The dash-padded part of an arm name after its model token (``-c-cpf-`` of ``cpf-llr-focus40-qwen38-c-cpf``);
+    "" when the name names no registered model. The experiment prefix before the model can spell a packet
+    (``cpf-llr-focus40``), so a packet is only ever read from this suffix."""
+    padded = f"-{arm}-"
+    ends = [padded.find(s) + len(s) - 1 for _, spellings in model_spellings() for s in spellings if s in padded]
+    return padded[min(ends) :] if ends else ""
+
+
+@functools.lru_cache(maxsize=1, typed=True)
+def packet_spellings() -> tuple[tuple[str, str], ...]:
+    """``(packet, dash-bounded spelling)`` for every registered packet and packet alias naming one, longest spelling
+    first -- the table :func:`packet_of` scans, so ``perf-playbook-cpu`` is found before a shorter token inside it."""
+    aliases = registry().aliases.get("packets", {})
+    rows = [(alias, target) for alias, target in aliases.items() if target]
+    rows += [(packet, packet) for packet in order("packets") if packet]
+    return tuple((target, f"-{spelling}-") for spelling, target in sorted(rows, key=lambda row: -len(row[0])))
+
+
+def packet_of(arm: str, unknown: str = "") -> str:
+    """The packet an arm ran, read from a packet token after its model token; ``unknown`` when there is none.
+
+    A name without a packet token is the control or an arm named before packets were suffixed, so the caller decides
+    what no token means (:func:`hpcagent_bench.experiments.fill_arm_identity` falls back to the recorded value).
+    """
+    suffix = arm_suffix(arm)
+    for packet, spelling in packet_spellings():
+        if spelling in suffix:
+            return packet
+    return unknown
+
+
 def language_name(language: str) -> str:
     """The display spelling of a language. Unknown ones pass through unchanged."""
     key = canonical("languages", str(language).lower())
