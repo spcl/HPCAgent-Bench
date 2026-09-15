@@ -264,13 +264,16 @@ def test_tokens_json_keeps_its_old_keys_and_gains_the_task_totals(driver, tmp_pa
         "cached_input",
         "output",
         "thinking_estimate",
-        "output_reported",
+        "output_source",
+        "output_delta_shape",
+        "output_suspect",
         "effective",
         "wall_ms",
         "api_ms",
     }
     assert old_keys <= record.keys()
-    assert "thinking" not in record and "generated" not in record, "fold 1's names are not left beside fold 2's"
+    for gone in ("thinking", "generated", "output_reported"):
+        assert gone not in record, "an earlier fold's names are not left beside fold 2's"
     # unchanged: the surviving attempt's own numbers, exactly as before this task-total addition
     assert record["tokens"] == 2000
     assert record["effective"] == 2200.0

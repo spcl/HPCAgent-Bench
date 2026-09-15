@@ -27,6 +27,7 @@ from collections.abc import Iterator
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "experiments"))
 
 import agent_driver
+import retokenize
 
 #: What the fold that produced a record is called in it. Absent = fold 1, the double-counted one.
 FOLD_KEY = "token_fold"
@@ -41,15 +42,17 @@ BEFORE_KEY = "before_migration"
 #: The record's own name inside a worker directory.
 RECORD_NAME = "tokens.json"
 
-#: Every field a token fold OWNS, across generations. Fold 1 wrote ``thinking`` and ``generated``;
-#: fold 2 replaces them with ``thinking_estimate`` and ``output_reported``, so both generations are
-#: named here -- a key this misses would survive the rewrite as a fold-1 leftover, and a key that
+#: Every field a token fold OWNS, across generations. Fold 1 wrote ``thinking`` and ``generated``,
+#: and an interim fold wrote ``output_reported``; fold 2 replaces all three with
+#: ``thinking_estimate``, ``output_source``, ``output_delta_shape`` and ``output_suspect``, so every
+#: generation is named here -- a key this misses would survive the rewrite as a fold-1 leftover, and a key that
 #: does not belong here (``tokens``, ``turns``, the problem's identity) is never re-derived because
 #: the transcript is not where it came from.
 FOLD_FIELDS: tuple[str, ...] = (
     *agent_driver.COST_KEYS,
     "thinking",
     "generated",
+    "output_reported",
     "attempts",
     "tokens_effective_all_attempts",
     "tokens_billed_all_attempts",
@@ -81,7 +84,7 @@ def changed_fields(old: dict[str, object], new: dict[str, float | int | None]) -
     return {key: old[key] for key in FOLD_FIELDS if key in old and new.get(key) != old[key]}
 
 
-def migrated(record: dict[str, object], worker_dir: pathlib.Path) -> dict[str, object] | None:
+def migrated(record: dict[str, object], worker_dir: pathlib.Path, counter: object | None) -> dict[str, object] | None:
     """``record`` re-folded, or ``None`` when nothing in it moved.
 
     The transcript is the one the driver folded: this task's final ``claude.log`` (or usage.jsonl),
@@ -90,7 +93,7 @@ def migrated(record: dict[str, object], worker_dir: pathlib.Path) -> dict[str, o
     transcript = agent_driver.token_cost_module().attempt_transcripts(worker_dir)
     if not transcript:
         return None
-    fields = agent_driver.cost_record_fields(transcript[-1], worker_dir)
+    fields = agent_driver.cost_record_fields(transcript[-1], worker_dir, counter)
     if not fields:
         return None
     before = changed_fields(record, fields)
@@ -132,8 +135,13 @@ class Totals:
         self.unreadable = 0
 
 
-def migrate_root(root: pathlib.Path, apply: bool, running: frozenset[str], totals: Totals) -> None:
-    """Re-fold every record under one run root, writing only when ``apply``."""
+def migrate_root(root: pathlib.Path, apply: bool, running: frozenset[str], totals: Totals, model: str) -> None:
+    """Re-fold every record under one run root, writing only when ``apply``.
+
+    ``model`` overrides the tokenizer choice for runs whose launch ``.env`` was not kept beside them
+    (every campaign before .agent-launch existed), which are exactly the runs holding the killed
+    attempts the retokenized tier is for.
+    """
     for worker_dir in worker_dirs(root):
         run_dir = run_dir_of(worker_dir)
         if run_dir.name in running:
@@ -145,7 +153,8 @@ def migrate_root(root: pathlib.Path, apply: bool, running: frozenset[str], total
         if record is None:
             totals.unreadable += 1
             continue
-        fresh = migrated(record, worker_dir)
+        counter = retokenize.output_counter(model) if model else retokenize.counter_for(worker_dir)
+        fresh = migrated(record, worker_dir, counter)
         if fresh is None:
             continue
         totals.changed += 1
@@ -162,6 +171,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True, help="print, write nothing")
     parser.add_argument("--apply", action="store_true", help="write the records (same as --no-dry-run)")
     parser.add_argument(
+        "--model",
+        default="",
+        help="tokenizer for the retokenized tier (arm tag or repo id); default: each run's launch .env",
+    )
+    parser.add_argument(
         "--skip-running",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -176,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         if not root.is_dir():
             print(f"no such run root: {root}", file=sys.stderr)
             continue
-        migrate_root(root, apply, running, totals)
+        migrate_root(root, apply, running, totals, args.model)
     verb = "rewritten" if apply else "would change"
     print(f"files {totals.files}, {verb} {totals.changed}, skipped-running {totals.skipped_running}")
     if totals.unreadable:

@@ -728,9 +728,9 @@ def report_aggregate_throughput(samples: list[dict[str, float]], missed: int) ->
         print(f"aggregate throughput: could not write {out}: {exc}", flush=True)
 
 
-@functools.lru_cache(maxsize=1, typed=True)
-def claude_supports_autocompact(binary: str) -> bool:
-    """Whether THIS image's ``claude`` accepts ``--autocompact``.
+@functools.lru_cache(maxsize=8, typed=True)
+def claude_supports_flag(binary: str, flag: str) -> bool:
+    """Whether THIS image's ``claude`` accepts ``flag``.
 
     The agent images install the CLI with an unpinned ``npm install -g @anthropic-ai/claude-code``
     (``containers/cluster/ce-images/judge-agent-amd/Dockerfile``), so two images built two weeks
@@ -738,7 +738,8 @@ def claude_supports_autocompact(binary: str) -> bool:
     exits 1 on an unknown option BEFORE it connects anything -- which the driver then reports as
     "MCP did not connect", three times, then "agent crashed (rc=1)". Four GPU arms
     (625302-625305, 160 agents) died that way in five minutes with the real message,
-    ``error: unknown option '--autocompact'``, visible only in claude.attempt1.log.
+    ``error: unknown option '--autocompact'``, visible only in claude.attempt1.log. Every optional
+    flag goes through here for that reason.
 
     Probed rather than mapped to an image name: the name is not the version, and the next image
     rebuild moves the CLI again without renaming anything.
@@ -746,11 +747,11 @@ def claude_supports_autocompact(binary: str) -> bool:
     try:
         help_text = subprocess.run([binary, "--help"], capture_output=True, text=True, timeout=60, check=False).stdout
     except (OSError, subprocess.SubprocessError) as exc:
-        # Cannot tell -- assume unsupported. A dropped compaction wall costs context; passing a
-        # flag the binary rejects costs the whole agent.
-        print(f"agent_driver: could not probe {binary} --help ({exc}); omitting --autocompact", flush=True)
+        # Cannot tell -- assume unsupported. A dropped flag costs what that flag bought; passing one
+        # the binary rejects costs the whole agent.
+        print(f"agent_driver: could not probe {binary} --help ({exc}); omitting {flag}", flush=True)
         return False
-    return "--autocompact" in help_text
+    return flag in help_text
 
 
 def problem_text(problem: Problem) -> str:
@@ -1216,20 +1217,23 @@ def transcript_total_tokens(
 
 #: The token components a cost record carries, in ``token_cost``'s names. ``output`` is EVERY
 #: generated token, reasoning included, on both engines; ``thinking_estimate`` rides along and is
-#: never summed into anything (token_cost's module docstring, 3).
+#: never summed into anything; ``output_source`` says which tier counted the output (8.2), and is a
+#: string, which is why the record's values are not all numbers.
 COST_KEYS: tuple[str, ...] = (
     "fresh_input",
     "cached_input",
     "output",
     "thinking_estimate",
-    "output_reported",
+    "output_source",
+    "output_delta_shape",
+    "output_suspect",
     "effective",
     "wall_ms",
     "api_ms",
 )
 
 
-def cost_breakdown(log: pathlib.Path) -> dict[str, float]:
+def cost_breakdown(log: pathlib.Path, output_counter: object | None = None) -> dict[str, float | str]:
     """The token components for one episode, or {} when they cannot be read.
 
     Delegates to token_cost.py so the harness and the analysis cannot drift: one implementation of
@@ -1237,13 +1241,15 @@ def cost_breakdown(log: pathlib.Path) -> dict[str, float]:
     bookkeeping and must not turn a finished run into a failed one.
     """
     try:
-        row = token_cost_module().episode_cost(log)
+        row = token_cost_module().episode_cost(log, output_counter)
     except Exception:  # noqa: BLE001 -- see the docstring: bookkeeping never fails a run
         return {}
     return {key: row[key] for key in COST_KEYS if key in row}
 
 
-def task_token_totals(workdir: pathlib.Path) -> tuple[int, int | None, int | None]:
+def task_token_totals(
+    workdir: pathlib.Path, output_counter: object | None = None
+) -> tuple[int, int | None, int | None]:
     """``(attempts, tokens_effective, tokens_billed)`` over every attempt of this task (T2).
 
     Delegates to ``token_cost.task_totals`` so the driver and the extractor cannot drift: one
@@ -1252,13 +1258,15 @@ def task_token_totals(workdir: pathlib.Path) -> tuple[int, int | None, int | Non
     bookkeeping and must not turn a finished run into a failed one.
     """
     try:
-        totals = token_cost_module().task_totals(workdir)
+        totals = token_cost_module().task_totals(workdir, output_counter)
     except Exception:  # noqa: BLE001 -- see the docstring
         return 0, None, None
     return totals.attempts, totals.tokens_effective, totals.tokens_billed
 
 
-def cost_record_fields(transcript: pathlib.Path, worker_dir: pathlib.Path) -> dict[str, float | int | None]:
+def cost_record_fields(
+    transcript: pathlib.Path, worker_dir: pathlib.Path, output_counter: object | None = None
+) -> dict[str, float | int | str | None]:
     """Every TOKEN field a cost record carries, for one finished task. Never raises.
 
     The breakdown, alongside the billed `tokens` rather than instead of it: `tokens` charges a
@@ -1271,8 +1279,8 @@ def cost_record_fields(transcript: pathlib.Path, worker_dir: pathlib.Path) -> di
     Shared with ``scripts/migrate_tokens.py`` so a re-folded record and a freshly written one cannot
     come out of two implementations of the same arithmetic.
     """
-    fields: dict[str, float | int | None] = dict(cost_breakdown(transcript))
-    attempts, tokens_effective, tokens_billed = task_token_totals(worker_dir)
+    fields: dict[str, float | int | str | None] = dict(cost_breakdown(transcript, output_counter))
+    attempts, tokens_effective, tokens_billed = task_token_totals(worker_dir, output_counter)
     fields["attempts"] = attempts
     fields["tokens_effective_all_attempts"] = tokens_effective
     fields["tokens_billed_all_attempts"] = tokens_billed
@@ -1735,7 +1743,7 @@ def claude_command(context: "Context") -> list[str]:
     # is declared. Unset leaves the command byte-identical: older agent images have no such flag.
     autocompact = os.environ.get("CLAUDE_AUTOCOMPACT", "").strip()
     claude_bin = os.environ.get("CLAUDE_BIN", "claude")
-    if autocompact and not claude_supports_autocompact(claude_bin):
+    if autocompact and not claude_supports_flag(claude_bin, "--autocompact"):
         # Loud, and once per driver process: the arm now runs WITHOUT the compaction wall its .env
         # asked for, which is a real difference from an arm whose image accepts the flag.
         print(
@@ -1758,6 +1766,13 @@ def claude_command(context: "Context") -> list[str]:
         "--max-turns",
         turn_cap,
         *(["--autocompact", autocompact] if autocompact else []),
+        # Per-REQUEST token usage, which is the only exact output count a killed episode leaves:
+        # the endpoints report output_tokens: 0 on every assistant event and fill the real number
+        # in once, on a result record an agent killed at its wall never reaches (T5-T7). With this
+        # flag the stream also carries message_delta events whose usage the fold sums per request.
+        # Cheap: the text is already streamed as thinking_tokens deltas, so what this adds is one
+        # small event per request, not a copy of the transcript.
+        *(["--include-partial-messages"] if claude_supports_flag(claude_bin, "--include-partial-messages") else []),
         # Non-interactive: a permission prompt has no one to answer it, and a --print agent that
         # pauses to ask simply ends its run unsubmitted (5 of 10 agents, 585108).
         "--permission-mode",

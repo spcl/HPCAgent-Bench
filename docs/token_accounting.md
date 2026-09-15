@@ -40,8 +40,18 @@ by its content-block count.
 Three fields matter, and two of them are not where you would expect:
 
 - **input** is on each turn's `message.usage`.
-- **output** is only on the final `result` record. The per-turn events report `output_tokens: 0` on
-  these OpenAI-compatible endpoints; summing them says the episode generated nothing.
+- **output** comes from the best tier that has it (8.2 of the design spec), and `output_source` in
+  the record says which: the per-REQUEST `message_delta` usage that `--include-partial-messages`
+  streams, else the final `result` record, else the model's own tokenizer over what the transcript
+  says was generated, else nothing. The per-turn assistant events report `output_tokens: 0` on these
+  OpenAI-compatible endpoints; summing them says the episode generated nothing. The result record
+  needs the episode to have ENDED, which the expensive attempts -- the ones killed at their wall --
+  never do; that is what the other two tiers are for.
+
+  The retokenized tier runs 2-4% low (it counts the model's text, not the server's role and
+  tool-call markers) and carries no correction constant, so rows counted that way are marked and can
+  be excluded. On qwen38 some result records are themselves short of their transcript's content,
+  unexplained (F9); those rows are flagged `output_suspect` and left as they are.
 - **thinking** is ALREADY IN `output`. Both engines' `/v1/messages` fills `output_tokens` with every
   generated token -- reasoning, answer text and tool arguments alike -- which is also how every
   provider bills it, at the OUTPUT rate ([codeant.ai][reasoning-cost]). The separate
