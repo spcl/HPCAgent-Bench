@@ -279,7 +279,7 @@ def widen_gap_until_labels_clear(
 
 
 def build_figure(
-    table: pd.DataFrame, label: str, double_column: bool, row_label_mode: str = "identity"
+    table: pd.DataFrame, label: str, double_column: bool, row_label_mode: str = "identity", ratio: str = "a / b"
 ) -> matplotlib.figure.Figure:
     """One figure: a shared row per pair, speed-up on the left, tokens on the right, colour and
     marker by the model either arm names.
@@ -306,12 +306,12 @@ def build_figure(
 
     draw_forest(ax_speed, speed_rows, colors, shapes)
     style_ratio_axis(ax_speed, speed_rows)
-    ax_speed.set_xlabel("Speedup Ratio (a / b)", fontsize=plotstyle.LABEL_PT * 0.8)
+    ax_speed.set_xlabel(f"Speedup Ratio ({ratio})", fontsize=plotstyle.LABEL_PT * 0.8)
     plotstyle.row_axis(ax_speed, [labels[pair] for pair in pairs])
 
     draw_forest(ax_tokens, token_rows, colors, shapes)
     style_ratio_axis(ax_tokens, token_rows)
-    ax_tokens.set_xlabel("Token Ratio (a / b)", fontsize=plotstyle.LABEL_PT * 0.8)
+    ax_tokens.set_xlabel(f"Token Ratio ({ratio})", fontsize=plotstyle.LABEL_PT * 0.8)
     plotstyle.despine(ax_tokens)
     ax_tokens.tick_params(axis="y", length=0, labelleft=False)
 
@@ -342,10 +342,13 @@ def main(argv: list[str] | None = None) -> int:
         default="identity",
         help="row label: model/language/shared-packet display names (default), or raw arm_a/arm_b names",
     )
+    parser.add_argument(
+        "--ratio-label", default="a / b", help="what the ratio axes divide, arm_a over arm_b (e.g. 'Scored / Blind')"
+    )
     args = parser.parse_args(argv)
 
     table = pd.read_csv(args.table)
-    fig = build_figure(table, args.label or args.table.stem, args.double_column, args.row_labels)
+    fig = build_figure(table, args.label or args.table.stem, args.double_column, args.row_labels, args.ratio_label)
     written = plotstyle.save(fig, args.out.with_suffix(""))
     print(f"{len(pair_order(table))} pairs -> {written} (+ .png)")
     return 0

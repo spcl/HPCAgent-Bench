@@ -320,6 +320,16 @@ def test_the_script_draws_one_pdf_and_one_png_over_a_synthetic_csv(tmp_path: pat
     assert out.with_suffix(".png").exists()
 
 
+def test_the_ratio_axes_name_which_arm_is_the_numerator() -> None:
+    """A row label names only what both arms share, so the axis is the one place a reader learns
+    which side of the contrast is on top of the ratio."""
+    fig = plot.build_figure(table(), "Blind vs Scored", False, ratio="Scored / Blind")
+    speed, tokens = fig.axes[:2]
+    assert speed.get_xlabel() == "Speedup Ratio (Scored / Blind)", speed.get_xlabel()
+    assert tokens.get_xlabel() == "Token Ratio (Scored / Blind)", tokens.get_xlabel()
+    plt.close(fig)
+
+
 def test_build_figure_raises_on_an_empty_table() -> None:
     with pytest.raises(SystemExit, match="no rows"):
         plot.build_figure(pd.DataFrame(columns=list(PAIR_ROWS[0])), "empty", False)
