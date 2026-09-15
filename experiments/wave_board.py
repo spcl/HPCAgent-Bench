@@ -167,9 +167,9 @@ def coverage(jobs: list[Job], dirs: dict[str, pathlib.Path], full: list[str]) ->
 
 
 def arm_row(arm: str, jobs: list[Job], dirs: dict[str, pathlib.Path], full: list[str], models: tuple[str, ...]) -> dict:
-    """One board row. A clean re-run and the arm it supersedes share this row: it is named for the
-    arm the analysis pairs on, and its coverage and status are the CLEAN jobs' alone -- the older
-    tasks are dropped at read (spec X9), so counting them would report coverage no table will use."""
+    """One board row per ARM NAME. A clean re-run keeps its own row beside the arm it supersedes
+    (user, 2026-09-15): the old row keeps showing the data that is still on disk, the clean row
+    shows only its own jobs, and the analysis (spec X9) is what decides which of the two counts."""
     campaign, model, variant, clean = split_arm(arm, models)
     spec = board_campaign(campaign, variant)
     counted = [job for job in jobs if job.name.endswith(CLEAN_SUFFIX)] if clean else jobs
@@ -195,15 +195,13 @@ def arm_rows(runs: pathlib.Path, opt: str, models: tuple[str, ...]) -> list[dict
     by_arm: dict[str, list[Job]] = {}
     for job in slurm_jobs(sorted(set(dirs) | set(queued_ids()))):
         if campaign_of(job.name):
-            # A clean re-run is folded onto the arm it supersedes, so the board shows ONE row per
-            # condition with both waves' jobs on it.
-            by_arm.setdefault(base_arm(job.name), []).append(job)
+            # One row per arm name: a clean re-run stands beside the arm it supersedes.
+            by_arm.setdefault(job.name, []).append(job)
     rosters = {spec.tag: remaining_kernels.roster(spec.tag, opt) for spec in CAMPAIGNS.values() if spec.tag}
     rows = []
     for arm, jobs in sorted(by_arm.items()):
-        clean = any(job.name.endswith(CLEAN_SUFFIX) for job in jobs)
         roster = rosters.get(CAMPAIGNS[campaign_of(arm)].tag, [])
-        rows.append(arm_row(arm + CLEAN_SUFFIX if clean else arm, jobs, dirs, roster, models))
+        rows.append(arm_row(arm, jobs, dirs, roster, models))
     return rows
 
 

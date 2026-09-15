@@ -239,11 +239,12 @@ def test_canon_rows_join_the_arms_list_as_their_own_experiment_group(
     assert all(row["experiment"] == "canon40-scicomp40" for row in rows)
 
 
-def test_a_clean_rerun_shares_the_row_of_the_arm_it_supersedes(
+def test_a_clean_rerun_gets_its_own_row_beside_the_arm_it_supersedes(
     board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """One condition is one row. Two rows would put the same pair on the board twice and read as two
-    conditions, which is exactly what the suffix is defined not to be."""
+    """PROPERTY CHANGED on purpose (user, 2026-09-15): the old arm keeps a row showing the data still
+    on disk and the clean re-run gets its own row counting only its jobs; folding them hid a complete
+    old arm behind a clean arm that had barely started."""
     arm = "cpf-llr-focus40-oss120b-c-cpfsrc"
     runs = tmp_path / "runs" / "cpf-llr-focus40-20260915"
     for job_id, names in (("100", ["a", "b"]), ("200", ["a"])):
@@ -255,4 +256,6 @@ def test_a_clean_rerun_shares_the_row_of_the_arm_it_supersedes(
 
     rows = board.arm_rows(tmp_path / "runs", "/opt", MODELS)
 
-    assert [(row["arm"], row["clean"], row["done"]) for row in rows] == [(arm + "-clean", True, 1)], rows
+    assert [(row["arm"], row["clean"], row["done"]) for row in rows] == [(arm, False, 2), (arm + "-clean", True, 1)], (
+        rows
+    )
