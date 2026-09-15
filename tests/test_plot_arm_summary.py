@@ -18,6 +18,10 @@ import sys
 import pandas as pd
 import pytest
 
+from hpcagent_bench import experiment_tags
+from hpcagent_bench.stats import palette
+from hpcagent_bench.stats import style as plotstyle
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
@@ -114,3 +118,90 @@ def test_an_arm_short_of_the_roster_is_not_drawn() -> None:
     rows = pd.concat([complete, short], ignore_index=True)
     assert set(plot.eligible_rows(rows).arm) == {"demo-arm"}
     assert set(plot.eligible_rows(rows, include_incomplete=True).arm) == {"demo-arm", "short-arm"}
+
+
+# ---------------------------------------------------------------------------
+# The drawing conventions, pinned: colour is the packet, shape is the model, the measured value is
+# on Y, the legend belongs to the FIGURE, and the grid is major only.
+
+
+def two_condition_points() -> pd.DataFrame:
+    """One (model, language) with the packet off and on -- ``draw_metric``'s two-condition shape."""
+    return pd.DataFrame(
+        [
+            {"model": "qwen38", "language": "c", "condition": condition, **point}
+            for condition, point in (
+                ("", {"log2_speedup": 1.0, "log2_speedup_low": 0.8, "log2_speedup_high": 1.2}),
+                ("cpf", {"log2_speedup": 1.6, "log2_speedup_low": 1.4, "log2_speedup_high": 1.8}),
+            )
+        ]
+    )
+
+
+def test_the_measured_value_is_on_the_y_axis_and_the_language_is_the_x_category() -> None:
+    """A speed-up is a measured quantity and never sits on X; the x slots are LANGUAGES, which are
+    names, so they carry no scale and no grid of their own."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    try:
+        plot.draw_metric(ax, two_condition_points(), "log2_speedup", "Speedup", log=False)
+        assert ax.get_ylabel() == "Speedup"
+        assert [tick.get_text() for tick in ax.get_xticklabels()] == [experiment_tags.language_name("c")]
+        assert not [tick for tick in ax.xaxis.get_major_ticks() if tick.gridline.get_visible()]
+    finally:
+        plt.close(fig)
+
+
+def test_the_treated_mark_wears_the_packet_colour_and_the_control_mark_the_control_colour() -> None:
+    """The one colour rule: a packet's hue comes from ``palette.color`` and the control from
+    ``palette.control_color``, so both mean the same thing in every figure in the repo."""
+    import matplotlib.colors
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import PathCollection
+
+    fig, ax = plt.subplots()
+    try:
+        plot.draw_metric(ax, two_condition_points(), "log2_speedup", "Speedup", log=False)
+        faces, edges = set(), set()
+        for collection in (c for c in ax.collections if isinstance(c, PathCollection)):
+            faces.update(matplotlib.colors.to_hex(rgba) for rgba in collection.get_facecolor())
+            edges.update(matplotlib.colors.to_hex(rgba) for rgba in collection.get_edgecolor())
+    finally:
+        plt.close(fig)
+    assert palette.color("cpf") in faces
+    assert palette.control_color() in edges
+    assert palette.model_color("qwen38") not in faces
+
+
+def test_the_value_axis_carries_a_major_grid_and_no_minor_one() -> None:
+    """Major grid only. A minor line is a second grid at a second weight, and once the figure is
+    reduced for print the two stop separating."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    try:
+        plot.draw_metric(ax, two_condition_points(), "log2_speedup", "Speedup", log=False)
+        assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
+        assert not [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
+    finally:
+        plt.close(fig)
+
+
+def test_the_pair_figure_draws_one_legend_on_the_figure_and_none_on_its_axes() -> None:
+    """Two panels, ONE key: both draw the same models in the same colours, and a legend per axes
+    invites reading them as two different sets of series."""
+    import matplotlib.pyplot as plt
+
+    frame = two_condition_points().assign(
+        tokens=[1000.0, 900.0], tokens_low=[900.0, 800.0], tokens_high=[1100.0, 1000.0]
+    )
+    fig, axes = plt.subplots(1, 2)
+    try:
+        for ax, (column, label, log) in zip(axes, (plot.SPEEDUP, plot.TOKENS), strict=True):
+            plot.draw_metric(ax, frame, column, label, log)
+        plotstyle.legend_below(fig, plot.handles_for(frame), y=0.005)
+        assert len(fig.legends) == 1
+        assert all(ax.get_legend() is None for ax in fig.axes)
+    finally:
+        plt.close(fig)

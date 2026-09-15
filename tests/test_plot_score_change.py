@@ -13,12 +13,16 @@ that the mark is gated on the corrected verdict, and that the figure says so whe
 import importlib.util
 import pathlib
 import sys
+import tempfile
 
+import matplotlib.colors
+import matplotlib.markers
 import pandas as pd
 import pytest
 
 from hpcagent_bench import experiment_tags
 from hpcagent_bench.harness import efficacy
+from hpcagent_bench.stats import palette, summary
 from hpcagent_bench.stats import style as plotstyle
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -227,6 +231,7 @@ def thin(log2_speedup: float, tokens: float) -> dict[str, float]:
         "tokens": tokens,
         "tokens_low": nan,
         "tokens_high": nan,
+        "kernels": float(KERNELS),
     }
 
 
@@ -264,10 +269,10 @@ def test_the_figure_stars_a_point_only_on_a_corrected_verdict(
             }
         ]
     )
-    fig, ax = plt.subplots()
+    fig, axes = plt.subplots(1, len(plot.PANELS))
     try:
-        plot.draw_absolute(ax, frame, stats, "skills")
-        labels = [text.get_text() for text in ax.texts]
+        plot.draw_absolute(list(axes), frame, stats, "skills")
+        labels = [text.get_text() for ax in axes for text in ax.texts]
     finally:
         plt.close(fig)
     assert ("C *" in labels) == starred, labels
@@ -297,9 +302,10 @@ def test_a_language_label_lands_on_no_mark_and_no_other_label() -> None:
     )
     verdict = {"score_verdict": efficacy.NOT_SIGNIFICANT, "cost_verdict": efficacy.NOT_SIGNIFICANT, "family_size": 12}
     stats = pd.DataFrame([{"model": model, "language": language, **verdict} for model, language in legs])
-    fig, ax = plt.subplots(figsize=plot.PANEL_SIZE)
+    fig, axes = plt.subplots(1, len(plot.PANELS), figsize=plot.PANEL_SIZE)
+    ax = axes[0]
     try:
-        plot.draw_absolute(ax, frame, stats, "skills")
+        plot.draw_absolute(list(axes), frame, stats, "skills")
         fig.subplots_adjust(**plot.PANEL_MARGINS)
         plot.untangle_labels(ax)
         renderer = fig.canvas.get_renderer()
@@ -349,16 +355,17 @@ def treatment_panel(treatment: str) -> tuple[str, pd.DataFrame, pd.DataFrame]:
 
 
 @pytest.mark.parametrize("n", [1, 2, 3])
-def test_n_treatments_draw_n_square_panels(n: int) -> None:
-    """One axes per treatment, and every one SQUARE -- the point of joining them side by side is
-    that a reader compares panel shape as well as content."""
+def test_n_treatments_draw_one_row_of_two_square_panels_each(n: int) -> None:
+    """A comparison is TWO panels -- speed-up and tokens -- and each one is square: both carry a
+    measured value on Y, and a reader compares them by panel shape as well as by content."""
     panels = [treatment_panel(f"treatment{i}") for i in range(n)]
     fig = plot.build_treatments_figure(panels, "label")
     try:
-        assert len(fig.axes) == n
-        width, height = fig.get_size_inches()
-        assert width == pytest.approx(n * plot.SQUARE_PANEL_SIDE + plot.SQUARE_PANEL_GAP * (n - 1))
-        assert height == pytest.approx(plot.SQUARE_PANEL_SIDE)
+        assert len(fig.axes) == n * len(plot.PANELS)
+        assert all(ax.get_box_aspect() == pytest.approx(1.0) for ax in fig.axes)
+        width, _height = fig.get_size_inches()
+        expected = len(plot.PANELS) * plot.SQUARE_PANEL_SIDE + plot.INNER_GAP_IN + plot.LEFT_IN + plot.RIGHT_IN
+        assert width == pytest.approx(expected)
     finally:
         import matplotlib.pyplot as plt
 
@@ -366,8 +373,9 @@ def test_n_treatments_draw_n_square_panels(n: int) -> None:
 
 
 def test_double_column_caps_a_joined_figures_row_width() -> None:
-    """``--double-column`` is the figure's budget on a paper page: N panels must fit inside
-    ``style.DOUBLE_COLUMN_WIDTH`` inches total, not N times a fixed natural panel size."""
+    """``--double-column`` is the figure's budget on a paper page: a comparison's two panels plus
+    their chrome must fit inside ``style.DOUBLE_COLUMN_WIDTH`` inches, not take a fixed natural
+    panel size each."""
     panels = [treatment_panel(f"treatment{i}") for i in range(3)]
     fig = plot.build_treatments_figure(panels, "label", double_column=True)
     try:
@@ -418,9 +426,9 @@ def test_the_figure_names_the_correction_and_the_size_of_the_family() -> None:
             }
         ]
     )
-    fig, ax = plt.subplots()
+    fig, axes = plt.subplots(1, len(plot.PANELS))
     try:
-        labels = [handle.get_label() for handle in plot.draw_absolute(ax, frame, stats, "skills")]
+        labels = [handle.get_label() for handle in plot.draw_absolute(list(axes), frame, stats, "skills")]
     finally:
         plt.close(fig)
     assert "BH q < 0.05 of 12" in labels, labels
@@ -544,9 +552,9 @@ def test_the_hollow_and_filled_legend_marks_name_the_treatment(treatment: str, h
             }
         ]
     )
-    fig, ax = plt.subplots()
+    fig, axes = plt.subplots(1, len(plot.PANELS))
     try:
-        labels = [handle.get_label() for handle in plot.draw_absolute(ax, frame, stats, treatment)]
+        labels = [handle.get_label() for handle in plot.draw_absolute(list(axes), frame, stats, treatment)]
     finally:
         plt.close(fig)
     assert hollow in labels, labels
@@ -581,9 +589,9 @@ def test_the_model_legend_lists_only_a_model_with_a_drawn_point() -> None:
             }
         ]
     )
-    fig, ax = plt.subplots()
+    fig, axes = plt.subplots(1, len(plot.PANELS))
     try:
-        labels = [handle.get_label() for handle in plot.draw_absolute(ax, frame, stats, "cpf")]
+        labels = [handle.get_label() for handle in plot.draw_absolute(list(axes), frame, stats, "cpf")]
     finally:
         plt.close(fig)
     assert experiment_tags.model_name("qwen38") in labels, labels
@@ -599,3 +607,184 @@ def test_include_incomplete_keeps_a_short_arm_and_prints_nothing(capsys: pytest.
 
     assert kept == {"ctrl", "short-cpf"}
     assert capsys.readouterr().err == ""
+
+
+# ---------------------------------------------------------------------------
+# The drawing conventions, pinned. Colour is the PACKET, shape is the MODEL, the measured value is
+# on Y, the legend belongs to the FIGURE, and the grid is major only.
+
+
+def one_arm_figure(treatment: str) -> tuple[object, list[object], pd.DataFrame]:
+    """A one-arm figure in the layout the script draws: two panels, one (model, language) pair."""
+    import matplotlib.pyplot as plt
+
+    frame = pd.DataFrame(
+        [
+            {"model": "qwen38", "language": "c", "skills": False, **thin(1.0, 1000.0)},
+            {"model": "qwen38", "language": "c", "skills": True, **thin(1.4, 900.0)},
+        ]
+    )
+    stats = pd.DataFrame(
+        [
+            {
+                "model": "qwen38",
+                "language": "c",
+                "score_verdict": efficacy.NOT_SIGNIFICANT,
+                "cost_verdict": efficacy.NOT_SIGNIFICANT,
+                "family_size": 2,
+            }
+        ]
+    )
+    fig, axes = plt.subplots(1, len(plot.PANELS))
+    plot.draw_absolute(list(axes), frame, stats, treatment)
+    return fig, list(axes), stats
+
+
+def test_the_measured_value_is_on_the_y_axis_of_both_panels() -> None:
+    """Rule one: a speed-up and a token count are measured quantities and never sit on X. X carries
+    the two CONDITIONS, which are categories, so it is the axis that must stay linear and unscaled."""
+    import matplotlib.pyplot as plt
+
+    fig, axes, _stats = one_arm_figure("cpfsrc")
+    try:
+        assert [ax.get_yscale() for ax in axes] == ["log", "log"]
+        assert [ax.get_xscale() for ax in axes] == ["linear", "linear"]
+        assert [ax.get_ylabel() for ax in axes] == [panel.label for panel in plot.PANELS]
+        assert [tick.get_text() for tick in axes[0].get_xticklabels()] == list(plot.CONDITION_LABELS)
+    finally:
+        plt.close(fig)
+
+
+def test_the_filled_mark_wears_the_packet_colour_and_the_hollow_one_the_control_colour() -> None:
+    """The one colour rule: a packet's hue is the entity's, from ``palette.color``, so it is the
+    same hue in every figure -- and the control is ``palette.control_color``, never one more packet
+    hue. Colouring by MODEL (the bug this pins shut) spent the packet's channel on the shape's
+    entity, so one arm read as a different treatment in each figure it appeared in."""
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import PathCollection
+
+    # `cpf`, not `cpfsrc`: each ramp starts at the same hue, so the FIRST packet and the FIRST
+    # model draw the same colour and a model-coloured mark would pass unnoticed.
+    treatment = "cpf"
+    assert palette.color(treatment) != palette.model_color("qwen38")
+    fig, axes, _stats = one_arm_figure(treatment)
+    try:
+        edges = set()
+        faces = set()
+        for collection in (c for c in axes[0].collections if isinstance(c, PathCollection)):
+            for rgba in collection.get_edgecolor():
+                edges.add(matplotlib.colors.to_hex(rgba))
+            for rgba in collection.get_facecolor():
+                faces.add(matplotlib.colors.to_hex(rgba))
+        assert palette.color(treatment) in faces
+        assert palette.control_color() in edges
+        assert palette.model_color("qwen38") not in faces | edges
+    finally:
+        plt.close(fig)
+
+
+def test_the_marker_shape_is_the_model_and_nothing_else() -> None:
+    """Shape is always the model (``palette.marker``), so identity survives greyscale and a
+    column-width shrink, where colour alone does not."""
+    import matplotlib.pyplot as plt
+
+    fig, axes, _stats = one_arm_figure("cpfsrc")
+    try:
+        drawn = {collection.get_paths()[0] for collection in axes[0].collections if collection.get_paths()}
+        expected = (
+            matplotlib.markers.MarkerStyle(palette.marker("qwen38"))
+            .get_path()
+            .transformed(matplotlib.markers.MarkerStyle(palette.marker("qwen38")).get_transform())
+        )
+        assert any(path.vertices.shape == expected.vertices.shape for path in drawn)
+    finally:
+        plt.close(fig)
+
+
+def test_neither_panel_enables_a_minor_grid() -> None:
+    """Major grid only. A minor line is a second grid at a second weight, and once the figure is
+    reduced for print the panel reads as a texture instead of a reference."""
+    import matplotlib.pyplot as plt
+
+    fig, axes, _stats = one_arm_figure("cpfsrc")
+    try:
+        for ax in axes:
+            assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
+            assert not [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
+            assert not [tick for tick in ax.xaxis.get_minor_ticks() if tick.gridline.get_visible()]
+    finally:
+        plt.close(fig)
+
+
+def test_the_legend_is_drawn_once_on_the_figure_and_never_on_an_axes() -> None:
+    """One key for the whole figure (``style.legend_below``): both panels draw the same models in
+    the same colours, and a key on each axes invites reading them as two different sets of series."""
+    import matplotlib.pyplot as plt
+
+    frame = pd.DataFrame(
+        [
+            {"model": "qwen38", "language": "c", "skills": False, **thin(1.0, 1000.0)},
+            {"model": "qwen38", "language": "c", "skills": True, **thin(1.4, 900.0)},
+        ]
+    )
+    stats = pd.DataFrame(
+        [
+            {
+                "model": "qwen38",
+                "language": "c",
+                "score_verdict": efficacy.NOT_SIGNIFICANT,
+                "cost_verdict": efficacy.NOT_SIGNIFICANT,
+                "family_size": 2,
+            }
+        ]
+    )
+    out = pathlib.Path(tempfile.mkdtemp()) / "fig.pdf"
+    plot.figure_absolute(frame, stats, "cpfsrc", "label", out)
+    assert out.exists()
+
+    fig = plot.build_treatments_figure([treatment_panel("cpf"), treatment_panel("cpfsrc")], "label")
+    try:
+        assert len(fig.legends) == 1
+        assert all(ax.get_legend() is None for ax in fig.axes)
+    finally:
+        plt.close(fig)
+
+
+def test_the_joined_figure_names_its_one_control_once_over_every_treatment() -> None:
+    """One control, one entry. Named per panel instead, a joined figure grew one hollow-mark entry
+    per row ("No Packet" beside "No Skill Packet") for the one set of control arms."""
+    import matplotlib.pyplot as plt
+
+    fig = plot.build_treatments_figure([treatment_panel("cpf"), treatment_panel("lang-skills")], "label")
+    try:
+        labels = [text.get_text() for text in fig.legends[0].get_texts()]
+    finally:
+        plt.close(fig)
+    assert labels.count("No Packet") + labels.count("No Skill Packet") == 1
+
+
+def test_the_legend_names_the_interval_method_and_the_kernels_it_is_over() -> None:
+    """A log-t interval and a bootstrap interval are drawn the same way, so the figure has to say
+    which it is showing and over how many kernels (SC15 Rule 5)."""
+    import matplotlib.pyplot as plt
+
+    fig, axes, _stats = one_arm_figure("cpfsrc")
+    try:
+        labels = [
+            handle.get_label() for handle in plot.legend_handles("cpfsrc", ["qwen38"], _stats, "note", ["cpfsrc"])
+        ]
+    finally:
+        plt.close(fig)
+    assert "Pair Link" in labels, labels
+    assert "note" in labels, labels
+
+
+def test_the_interval_note_names_the_method_the_kernel_count_selects() -> None:
+    """``summary.geomean_interval`` picks log-t at or above ``LOG_T_MIN_SAMPLES`` kernels and a
+    log-space bootstrap below it; the note a reader sees must track that choice, not a constant."""
+    wide = pd.DataFrame([{"kernels": float(summary.LOG_T_MIN_SAMPLES)}])
+    narrow = pd.DataFrame([{"kernels": float(summary.LOG_T_MIN_SAMPLES - 1)}])
+
+    assert "log-t" in plot.interval_note(wide)
+    assert "bootstrap" in plot.interval_note(narrow)
+    assert f"n={summary.LOG_T_MIN_SAMPLES}" in plot.interval_note(wide)

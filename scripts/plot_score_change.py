@@ -7,16 +7,17 @@ campaign. That is the comparison the campaign was designed to make, and it is pa
 kernels, same models, same judge, same week -- where a before/after across two campaigns also
 carries every other thing that changed between them.
 
-Two ratios, BEFORE against AFTER, so each axis is a change rather than a level and the two
-experiments' absolute scales stop mattering:
+TWO SQUARE PANELS PER COMPARISON, and the MEASURED VALUE IS ON Y IN BOTH: geomean speed-up over the
+baseline on the left, median tokens per task on the right. X carries the two CONDITIONS, control
+then packet, so each arm is a hollow mark, a filled mark and the pair link between them, and the
+panel reads as the change it is about rather than as a position a reader has to decode from two
+coordinates at once. Speed-up and spend are different measurements (SC15 Rule 4), so they never
+share a scale.
 
-    score  rho_S = speed-up(skills) / speed-up(no skills)   -- right is faster
-    cost   rho_C = tokens(no skills) / tokens(skills)       -- UP is cheaper
+The paired ratio behind the stars is still the table the figure is corrected over:
 
-``rho_C`` is inverted on purpose: written the other way round, "up" would mean "spent more" and the
-top-right corner -- where a reader's eye goes -- would be the worst outcome rather than the best.
-With this orientation the quadrants read directly: up-and-right is better in both, down-and-right
-is faster but it costs.
+    score  rho_S = speed-up(skills) / speed-up(no skills)
+    cost   rho_C = tokens(no skills) / tokens(skills)
 
 Both are ratios, so both are aggregated in LOG space as a GEOMETRIC MEAN over kernels, with the
 t interval and paired t test on that mean log. The sampling unit is the KERNEL and the two sides are
@@ -33,6 +34,7 @@ too small for the test to run at all reads ``underpowered`` and is never starred
 """
 
 import argparse
+import dataclasses
 import math
 import pathlib
 import sys
@@ -50,6 +52,7 @@ plotstyle.apply()
 import matplotlib.pyplot as plt  # pyplot must follow plotstyle.apply()
 from matplotlib.collections import PathCollection
 from matplotlib.text import Annotation
+from matplotlib.ticker import FuncFormatter
 
 #: A ratio this far from 1.0 is inside the "no change" band for labelling purposes only; the star
 #: is decided by the interval, never by this.
@@ -72,27 +75,12 @@ POINT_COLUMNS: tuple[str, ...] = (
     "cost_p",
 )
 
-#: Ticks in RATIO units on a log2 axis. Labelled as ratios, not as exponents: a reader wants to see
-#: "2x", not "1".
-RATIO_TICKS: tuple[float, ...] = (0.25, 0.35, 0.5, 0.7, 1.0, 1.4, 2.0, 2.8, 4.0, 5.6, 8.0)
-
-#: Unlabelled minor ratios between the majors above -- powers of 2**(1/16). A log2 axis spanning
-#: less than one octave gets no minor lines at all from a LogLocator (its subdivisions are powers
-#: of two, and there is at most one inside the window), which left this plot with a four-line grid
-#: to interpolate against.
-RATIO_MINORS: tuple[float, ...] = tuple(2.0 ** (n / 16.0) for n in range(-32, 33))
-
 
 def tick_label(value: float) -> str:
     """``1.0`` is the no-change line and says so; everything else is a plain ratio."""
     if value == NEUTRAL:
         return "1x"
     return f"{value:g}x"
-
-
-#: Powers of sqrt(2), so a narrow window still gets several labelled ticks. A ratio plot whose
-#: data spans 0.7x to 1.2x showed exactly two ticks on the decade spacing, and a reader cannot
-#: interpolate a value from two ticks.
 
 
 def ratio_with_ci(before: pd.Series, after: pd.Series, invert: bool) -> tuple[float, float, float, float]:
@@ -202,183 +190,186 @@ def points(before: pd.DataFrame, after: pd.DataFrame, repeats: population.Repeat
     )
 
 
-def draw_interval(ax: plt.Axes, row: pd.Series, colour: str) -> None:
-    """One mark's two intervals, as thin crossed whiskers: speed-up across, spend up. A mark too thin
-    for an interval on an axis draws none there."""
-    x, y = float(row.log2_speedup), float(row.tokens)
-    x_low, x_high, y_low, y_high = (
-        float(row[c]) for c in ("log2_speedup_low", "log2_speedup_high", "tokens_low", "tokens_high")
+def draw_whisker(ax: plt.Axes, x: float, low: float, high: float, colour: str) -> None:
+    """One condition's interval, a vertical whisker at its own X (SC15 Rule 5). A point over too few
+    kernels for an interval carries NaN bounds and draws none."""
+    if np.isfinite(low) and np.isfinite(high):
+        ax.vlines(x, low, high, color=colour, linewidth=1.3, alpha=0.6, zorder=1)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Panel:
+    """One panel's measured quantity: where its value and its interval live in an
+    :func:`absolute_points` row, the axis label it wears, the log base its Y axis is read in, and
+    the ``stats`` verdict column that decides its star.
+
+    ``log2`` marks a column stored as a log2 exponent (``log2_speedup``). The panel draws the RATIO
+    itself on a base-2 log axis: a 2x speed-up and a 2x slow-down then sit the same distance from
+    the 1x line, and the tick reads back as the ratio a reader quotes.
+    """
+
+    column: str
+    label: str
+    log_base: float
+    log2: bool
+    verdict: str
+
+
+#: The two quantities of ONE comparison, left panel then right. They are different measurements
+#: (SC15 Rule 4), so they never share a scale -- and each one is a VALUE, so each one is on a Y.
+SPEEDUP_PANEL: Panel = Panel("log2_speedup", "Geomean Speedup over Baseline", 2.0, True, "score_verdict")
+TOKENS_PANEL: Panel = Panel("tokens", "Median Tokens per Task", 10.0, False, "cost_verdict")
+PANELS: tuple[Panel, ...] = (SPEEDUP_PANEL, TOKENS_PANEL)
+
+#: The two X positions of one comparison, and what the axis calls them. The positions are the two
+#: CONDITIONS, so the x axis carries no grid; which packet the treated position holds is named by
+#: the figure's own legend and by its panel label, never by a tick wide enough to overlap its
+#: neighbour ("Canonical Parallel Form as Source" under a 3.6in panel).
+CONTROL_X: float = 0.0
+TREATED_X: float = 1.0
+CONDITION_LABELS: tuple[str, str] = ("Control", "Treated")
+
+
+def panel_value(row: pd.Series, panel: Panel, suffix: str = "") -> float:
+    """``row``'s value for ``panel`` on the axis it is DRAWN on: a log2 column comes back as the
+    ratio itself, since the axis carries ratios."""
+    raw = float(row[f"{panel.column}{suffix}"])
+    return float(2.0**raw) if panel.log2 else raw
+
+
+def draw_arm(ax: plt.Axes, panel: Panel, off: pd.Series, on: pd.Series, treated: str, shape: str) -> float:
+    """One arm's two conditions on one panel, joined. Returns the treated Y, where the label goes.
+
+    The segment is a PAIR LINK, not a trend (SC15 Rule 12): the two marks are one arm, and the
+    segment's length is the size of the treatment effect on this panel's quantity and its direction
+    the sign. Nothing is claimed about the space between the two positions, and the legend names the
+    line so a reader is not left to guess.
+
+    The hollow control mark and the segment wear :func:`palette.control_color`; the filled treated
+    mark wears the packet's own colour. The filled mark goes on LAST -- the two land on top of each
+    other whenever the packet changed little, and the treated position is the one a reader is
+    looking for.
+    """
+    control = palette.control_color()
+    y_off, y_on = panel_value(off, panel), panel_value(on, panel)
+    draw_whisker(ax, CONTROL_X, panel_value(off, panel, "_low"), panel_value(off, panel, "_high"), control)
+    draw_whisker(ax, TREATED_X, panel_value(on, panel, "_low"), panel_value(on, panel, "_high"), treated)
+    ax.plot(
+        [CONTROL_X, TREATED_X],
+        [y_off, y_on],
+        linestyle=(0, (3, 3)),
+        linewidth=1.0,
+        color=control,
+        alpha=0.8,
+        zorder=plotstyle.CONNECTOR_Z,
     )
-    if np.isfinite(x_low) and np.isfinite(x_high):
-        ax.hlines(y, x_low, x_high, color=colour, linewidth=1.1, alpha=0.55, zorder=1)
-    if np.isfinite(y_low) and np.isfinite(y_high):
-        ax.vlines(x, y_low, y_high, color=colour, linewidth=1.1, alpha=0.55, zorder=1)
+    plotstyle.point_mark(ax, CONTROL_X, y_off, control, shape, False)
+    plotstyle.point_mark(ax, TREATED_X, y_on, treated, shape, True)
+    return y_on
 
 
-def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame, treatment: str, compact: bool = False) -> list:
-    """Geomean speed-up against median spend, with each arm's TWO CONDITIONS joined.
+def ratio_tick(value: float, position: int = 0) -> str:
+    """A base-2 major read back as the ratio it is: ``1x``, ``2x``, ``0.5x``."""
+    return tick_label(value)
 
-    ``treatment`` names the packet on the filled side: the hollow mark's legend text is
-    :func:`hpcagent_bench.packets.control_label` for it ("No Skill Packet" only when ``treatment``
-    is itself a skill packet, "No Packet" otherwise) and the filled mark's is its own registry
+
+def style_panel(ax: plt.Axes, panel: Panel, compact: bool) -> None:
+    """One SQUARE panel: the measured quantity on Y in log space, the two conditions on X, a MAJOR
+    grid on the value axis only, and an equal box aspect so both panels of a pair are one shape."""
+    ax.set_yscale("log", base=panel.log_base)
+    plotstyle.value_axis(ax, "y", log_base=panel.log_base)
+    if panel.log2:
+        ax.yaxis.set_major_formatter(FuncFormatter(ratio_tick))
+    ax.set_xticks([CONTROL_X, TREATED_X])
+    ax.set_xticklabels(list(CONDITION_LABELS), fontsize=plotstyle.TICK_PT * (0.6 if compact else 1.0))
+    ax.set_xlim(CONTROL_X - 0.45, TREATED_X + 0.45)
+    ax.set_ylabel(panel.label, fontsize=plotstyle.LABEL_PT * (0.68 if compact else 1.0))
+    if compact:
+        ax.tick_params(axis="y", labelsize=plotstyle.TICK_PT * 0.6)
+    # Room above and below the extreme marks. Autoscale on a log axis clips a marker in half at the
+    # edge of the panel, which reads as a point that ran off the chart.
+    ax.margins(y=0.22)
+    ax.set_box_aspect(1.0)
+    plotstyle.despine(ax)
+
+
+def verdict_flags(stats: pd.DataFrame) -> dict[tuple[str, str], dict[str, bool]]:
+    """Per (model, language), whether EACH panel's own corrected verdict is significant.
+
+    Gated on the ADJUSTED verdict, never the raw p: the two quantities are declared as one family
+    in :func:`points` and corrected together, and a threshold read off a single row is the
+    multiplicity error that table exists to avoid. Each panel stars its OWN quantity, so a star on
+    the token panel always means the token test fired.
+    """
+    flags: dict[tuple[str, str], dict[str, bool]] = {}
+    for _, row in stats.iterrows():
+        key = (str(row["model"]), str(row["language"]))
+        flags[key] = {panel.verdict: str(row.get(panel.verdict, "")) == efficacy.SIGNIFICANT for panel in PANELS}
+    return flags
+
+
+def interval_note(frame: pd.DataFrame) -> str:
+    """The speed-up panel's interval, named with the population it is over -- log-t or bootstrap is
+    a choice :func:`hpcagent_bench.stats.summary.geomean_interval` makes from n, and two intervals
+    drawn the same way and labelled the same way are two claims a reader cannot separate."""
+    kernels = sorted({int(n) for n in frame.get("kernels", pd.Series(dtype=float)).dropna().tolist()})
+    method = summary.interval_method(kernels[0]) if kernels else "log-t"
+    span = f"{kernels[0]}" if len(kernels) == 1 else f"{kernels[0]}-{kernels[-1]}" if kernels else "?"
+    return f"Geomean, 95% {method} Interval, n={span}"
+
+
+def legend_handles(
+    treatment: str, models: Sequence[str], stats: pd.DataFrame, note: str, control_over: Sequence[str]
+) -> list[plt.Line2D]:
+    """The figure's one key: a MODEL is a shape in neutral ink, a CONDITION is a colour.
+
+    ``treatment`` names the packet on the filled side. The hollow mark's legend text is
+    :func:`hpcagent_bench.packets.control_label` over ``control_over``, every treatment the FIGURE
+    draws against this one control ("No Skill Packet" only when they are all skill packets, "No
+    Packet" otherwise) -- taken per panel instead, a joined figure grew one control entry per row
+    naming one set of arms two different ways and the filled mark's is its own registry
     display name (:func:`hpcagent_bench.experiment_tags.packet_name`) -- never a generic "Skills"
     that misnames a CPF or perf-playbook panel as if it were a skill.
 
-    ABSOLUTE, not a ratio, and that is what makes the connector mean something: a ratio plot has
-    one point per arm and nothing to join, so a line drawn on it could only connect two arms --
-    which is what it did, joining an arm's C point to its Fortran point and inviting the reading
-    that a language change is the treatment. Here each (model, language) has a hollow mark without
-    the packet and a filled one with it, and the segment between them IS the treatment effect for
-    that arm: its length is the size, its direction the sign, on both axes at once.
-
-    The filled mark is drawn LAST so it sits above the connector and above its own hollow partner
-    -- the two land on top of each other whenever the packet changed little, and the "with skills"
-    position is the one a reader is looking for.
-
-    ``compact`` is for a SQUARE panel a fraction of :data:`PANEL_SIZE` (:func:`figure_treatments`,
-    joining several treatments side by side): the four quadrant captions are fixed-size text sized
-    for the full panel and are dropped rather than shrunk into an unreadable smear, and the
-    per-point language label shrinks so it does not swallow its neighbour's point.
+    A model handle is neutral ink, never its own hue: colour is the packet's channel here, and a
+    coloured model entry would claim a channel the panels spend on something else.
     """
-    hues = palette.model_colors(sorted(frame.model.unique()))
-    shapes = palette.model_markers(sorted(frame.model.unique()))
-    # Gated on the ADJUSTED verdict, on either axis. An arm the packet moved on tokens alone is a
-    # real finding, so the mark fires on either -- which is exactly why both axes are one family.
-    significant = {
-        (row.model, row.language): efficacy.SIGNIFICANT in (row.score_verdict, row.cost_verdict)
-        for row in stats.itertuples(index=False)
-    }
-    # Only a model that actually lands BOTH marks earns a legend entry: ``hues``/``shapes`` are
-    # keyed off every model the control side ran, and a model this treatment never touched (the
-    # CPF page figure's control carries Kimi from the campaign's OTHER treatments) fell through the
-    # `continue` below with a colour already reserved in ``hues`` -- so the legend named a model the
-    # panel never draws a point for.
-    drawn_models: set[str] = set()
-    for (model, language), pair in frame.groupby(["model", "language"]):
-        colour, shape = hues[model], shapes[model]
-        off, on = pair[~pair.skills], pair[pair.skills]
-        if len(off) != 1 or len(on) != 1:
-            continue
-        drawn_models.add(model)
-        # An ELBOW, not a diagonal. The straight segment between two measured points runs through
-        # coordinates that were never measured, and on a plot whose whole subject is where an arm
-        # LANDED a reader takes the path for data -- as if the packet moved the arm along it. The
-        # right angle is visibly a connector: it says these two marks are one arm and claims
-        # nothing about the space between them. Horizontal first, so the corner sits under the
-        # "with skills" mark and the vertical leg reads as the change in spend.
-        x_off, x_on = float(off.log2_speedup.iloc[0]), float(on.log2_speedup.iloc[0])
-        y_off, y_on = float(off.tokens.iloc[0]), float(on.tokens.iloc[0])
-        for side in (off, on):
-            draw_interval(ax, side.iloc[0], colour)
-        ax.plot(
-            [x_off, x_on, x_on],
-            [y_off, y_off, y_on],
-            linestyle=(0, (3, 3)),
-            linewidth=0.9,
-            color=colour,
-            alpha=0.8,
-            zorder=2,
-        )
-        ax.scatter(
-            off.log2_speedup,
-            off.tokens,
-            s=130,
-            marker=shape,
-            facecolor="none",
-            edgecolor=colour,
-            linewidth=1.8,
-            zorder=3,
-        )
-        ax.scatter(
-            on.log2_speedup,
-            on.tokens,
-            s=130,
-            marker=shape,
-            color=colour,
-            edgecolor="white",
-            linewidth=0.8,
-            zorder=5,
-        )
-        star = " *" if significant.get((model, language)) else ""
-        ax.annotate(
-            f"{experiment_tags.language_name(language)}{star}",
-            (float(on.log2_speedup.iloc[0]), float(on.tokens.iloc[0])),
-            textcoords="offset points",
-            xytext=(13, 0),
-            fontsize=plotstyle.ANNOTATION_PT * (0.62 if compact else 1.0),
-            color=plotstyle.MUTED,
-            va="center",
-            zorder=6,
-        )
-
-    ax.set_yscale("log")
-    label_pt = plotstyle.LABEL_PT * (0.68 if compact else 1.0)
-    ax.set_xlabel(r"Geomean $\log_2$ Speedup", fontsize=label_pt)
-    ax.set_ylabel("Median Tokens per Task", fontsize=label_pt)
-    if compact:
-        ax.tick_params(axis="both", labelsize=plotstyle.TICK_PT * 0.6)
-    plotstyle.value_axis(ax, "x")
-    plotstyle.value_axis(ax, "y", log_base=10.0)
-    # Breathing room so an annotation at the right-hand point is not cut by the canvas edge.
-    ax.margins(x=0.26, y=0.24)
-    plotstyle.despine(ax)
-    ax.margins(x=0.20, y=0.22)
-
-    # All FOUR corners named, in the same grammar, so the quadrants compare at a glance. Note the
-    # vertical sense is the OPPOSITE of the ratio figure's: there the y axis was tokens-saved, so
-    # up was cheaper; here it is tokens spent, so up is more expensive.
-    #
-    # DROPPED in compact mode: this text is fixed-size (ANNOTATION_PT), sized for the full
-    # PANEL_SIZE canvas, and a square panel a third that size cannot fit four captions without
-    # them running into the axis labels and each other -- the quadrant reading survives without
-    # them (up-right is the title's own "faster, cheaper" axes).
-    if not compact:
-        corners = (
-            (0.015, 0.985, "top", "left", "Slower, More Expensive"),
-            (0.985, 0.985, "top", "right", "Faster, More Expensive"),
-            (0.015, 0.015, "bottom", "left", "Slower, Cheaper"),
-            (0.985, 0.015, "bottom", "right", "Faster, Cheaper"),
-        )
-        for x, y, va, ha, caption in corners:
-            ax.text(
-                x,
-                y,
-                caption,
-                transform=ax.transAxes,
-                fontsize=plotstyle.ANNOTATION_PT - 2.0,
-                color=plotstyle.FAINT,
-                va=va,
-                ha=ha,
-                zorder=1,
-            )
-
-    handles = [
+    shapes = palette.model_markers(models)
+    marks: list[plt.Line2D] = [
         plt.Line2D(
-            [], [], marker=shapes[n], linestyle="none", color=h, markersize=9, label=experiment_tags.model_name(n)
-        )
-        for n, h in hues.items()
-        if n in drawn_models
+            [],
+            [],
+            marker=shapes[name],
+            linestyle="none",
+            color=plotstyle.MUTED,
+            markersize=9,
+            label=experiment_tags.model_name(name),
+        )  # fmt: skip
+        for name in palette.in_order(models)
     ]
-    handles += [
+    return marks + [
         plt.Line2D(
             [],
             [],
             marker="o",
             linestyle="none",
             markerfacecolor="none",
-            markeredgecolor=plotstyle.MUTED,
+            markeredgecolor=palette.control_color(),
+            markeredgewidth=1.8,
             markersize=9,
-            label=packets.control_label([treatment]),
-        ),
+            label=packets.control_label(list(control_over)),
+        ),  # fmt: skip
         plt.Line2D(
             [],
             [],
             marker="o",
             linestyle="none",
-            color=plotstyle.MUTED,
+            color=palette.color(treatment),
             markersize=9,
             label=experiment_tags.packet_name(treatment),
-        ),
+        ),  # fmt: skip
+        plt.Line2D([], [], linestyle=(0, (3, 3)), linewidth=1.0, color=palette.control_color(), label="Pair Link"),
+        plt.Line2D([], [], linestyle="-", linewidth=1.3, color=plotstyle.MUTED, label=note),
         plt.Line2D(
             [],
             [],
@@ -390,12 +381,69 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame, treatment: str, 
             # star from an uncorrected one by looking at it, and this is the only place the two
             # differ visibly.
             label=f"BH q < 0.05 of {family_size(stats)}",
-        ),
+        ),  # fmt: skip
     ]
-    for which, width, style in (("major", 0.7, "-"), ("minor", 0.45, (0, (2, 3)))):
-        ax.grid(axis="both", which=which, color=plotstyle.RULE, linewidth=width, linestyle=style, zorder=0)
-    ax.set_axisbelow(True)
-    return handles
+
+
+def draw_absolute(
+    axes: Sequence[plt.Axes],
+    frame: pd.DataFrame,
+    stats: pd.DataFrame,
+    treatment: str,
+    compact: bool = False,
+    control_over: Sequence[str] = (),
+) -> list[plt.Line2D]:
+    """One comparison as TWO SQUARE PANELS: geomean speed-up left, tokens per task right.
+
+    THE MEASURED VALUE IS ON Y IN BOTH. X carries the two CONDITIONS -- control at
+    :data:`CONTROL_X`, the packet at :data:`TREATED_X` -- so each arm is a hollow mark, a filled
+    mark and the segment joining them, and the panel reads as the change it is about. Drawn on one
+    2D scatter instead, the two quantities shared a mark and a reader had to recover each of them
+    from a coordinate.
+
+    COLOUR IS THE PACKET, SHAPE IS THE MODEL. The filled mark wears ``palette.color(treatment)``,
+    the one colour that packet wears in every figure in this repo, and the hollow control mark and
+    its segment wear ``palette.control_color()``. Colouring by MODEL instead spent the packet's
+    channel on the entity the shape already carries, so one arm read as a different treatment in
+    each figure it appeared in.
+
+    ``compact`` is for a panel a fraction of :data:`PANEL_SIDE` (:func:`figure_treatments`, joining
+    several comparisons into one figure): the fixed-size decorative text shrinks so a label does not
+    swallow its neighbour's point. ``control_over`` is every treatment that figure reads against the
+    SAME control, which is what the hollow mark's legend entry is named for.
+    """
+    treated_colour = palette.color(treatment)
+    shapes = palette.model_markers(sorted(frame.model.unique()))
+    flags = verdict_flags(stats)
+    # Only a model that actually lands BOTH marks earns a legend entry: ``shapes`` is keyed off
+    # every model the control side ran, and a model this treatment never touched (the CPF page
+    # figure's control carries Kimi from the campaign's OTHER treatments) falls through the
+    # ``continue`` below -- so the legend named a model the panel never draws a point for.
+    drawn_models: set[str] = set()
+    for (model, language), pair in frame.groupby(["model", "language"]):
+        off, on = pair[~pair.skills], pair[pair.skills]
+        if len(off) != 1 or len(on) != 1:
+            continue
+        drawn_models.add(str(model))
+        starred = flags.get((str(model), str(language)), {})
+        for ax, panel in zip(axes, PANELS, strict=True):
+            y = draw_arm(ax, panel, off.iloc[0], on.iloc[0], treated_colour, shapes[model])
+            star = " *" if starred.get(panel.verdict, False) else ""
+            ax.annotate(
+                f"{experiment_tags.language_name(language)}{star}",
+                (TREATED_X, y),
+                textcoords="offset points",
+                xytext=(13, 0),
+                fontsize=plotstyle.ANNOTATION_PT * (0.62 if compact else 1.0),
+                color=plotstyle.MUTED,
+                va="center",
+                zorder=plotstyle.MARK_Z + 2.0,
+            )
+    for ax, panel in zip(axes, PANELS, strict=True):
+        style_panel(ax, panel, compact)
+    return legend_handles(
+        treatment, sorted(drawn_models), stats, interval_note(frame), list(control_over) or [treatment]
+    )
 
 
 def family_size(stats: pd.DataFrame) -> int:
@@ -405,12 +453,16 @@ def family_size(stats: pd.DataFrame) -> int:
     return int(stats.family_size.iloc[0])
 
 
-PANEL_SIZE: tuple[float, float] = (8.4, 5.2)
+#: One SQUARE panel's side, inches, on a single comparison's figure.
+PANEL_SIDE: float = 3.9
+
+#: The canvas the two panels, the title and the shared legend sit on.
+PANEL_SIZE: tuple[float, float] = (2.0 * PANEL_SIDE + 1.7, PANEL_SIDE + 2.1)
 
 #: Fixed margins, not ``tight_layout``. This figure is meant to be loaded beside the arm-summary
 #: panels, and tight_layout sizes each figure from its own content -- one longer tick label and the
-#: pair stops matching. Kept in step with ``plot_arm_summary.PANEL_MARGINS``.
-PANEL_MARGINS: dict[str, float] = {"left": 0.175, "right": 0.975, "top": 0.855, "bottom": 0.40}
+#: pair stops matching.
+PANEL_MARGINS: dict[str, float] = {"left": 0.115, "right": 0.98, "top": 0.855, "bottom": 0.30, "wspace": 0.30}
 
 
 def write(fig, out: pathlib.Path) -> pathlib.Path:
@@ -501,84 +553,127 @@ def untangle_labels(ax: plt.Axes) -> None:
 def figure_absolute(
     frame: pd.DataFrame, stats: pd.DataFrame, treatment: str, label: str, out: pathlib.Path
 ) -> pathlib.Path:
-    fig, ax = plt.subplots(figsize=PANEL_SIZE)
-    handles = draw_absolute(ax, frame, stats, treatment)
+    """One comparison: its two square panels under one title and ONE shared legend."""
+    fig, axes = plt.subplots(1, len(PANELS), figsize=PANEL_SIZE)
+    handles = draw_absolute(list(axes), frame, stats, treatment)
     fig.subplots_adjust(**PANEL_MARGINS)
     # Two per row, and the keys kept SHORT. The canvas is fixed, so anything wider than it falls
     # off the edge rather than widening the figure -- and the model names alone ("Kimi-K2.7-Code")
-    # are long enough that three columns no longer fit. The test behind the star is named in the
-    # caption; what the reader needs AT the mark is that the threshold was corrected and over what.
-    plotstyle.legend_below(fig, handles, ncol=2, y=0.015)
+    # are long enough that three columns no longer fit. ONE legend for the whole figure, never one
+    # per axes: the two panels draw the same models in the same colours, and a key on each would
+    # invite reading them as two different sets of series.
+    plotstyle.legend_below(fig, handles, ncol=3, y=0.015, fontsize=plotstyle.LABEL_PT * 0.7)
     plotstyle.title(fig, label)
-    untangle_labels(ax)
+    for ax in axes:
+        untangle_labels(ax)
     return write(fig, out)
 
 
-#: A single treatment's SQUARE panel side, inches, when several are joined without ``--double-column``.
+#: One SQUARE panel's side, inches, when several comparisons are joined without ``--double-column``.
 SQUARE_PANEL_SIDE: float = 3.6
 
-#: Gap between joined square panels, inches.
+#: Gap between the joined comparison ROWS, inches.
 SQUARE_PANEL_GAP: float = 0.25
 
+#: Gap between the two panels of ONE comparison, inches. Wider than the row gap: the right panel
+#: carries its own metric label, and at the row gap that label lands on top of the left panel.
+INNER_GAP_IN: float = 0.80
 
-def panel_side(n: int, double_column: bool) -> float:
-    """One square panel's side for ``n`` panels joined in a row.
+#: The fixed chrome around a joined figure, in INCHES, not in figure fractions: a band costs the
+#: same inches whether it sits on a one-comparison figure or a four-comparison one, and a constant
+#: fraction gives a tall figure whitespace it does not need and a short one less than it does.
+#: ``TITLE_IN`` is :func:`hpcagent_bench.stats.style.title`'s own 0.64in block; ``PAIR_LABEL_IN`` is
+#: the row's own name above it; the other two are the condition ticks and the shared legend.
+TITLE_IN: float = 0.64
+PAIR_LABEL_IN: float = 0.34
+XLABEL_IN: float = 0.50
+LEGEND_IN: float = 1.25
 
-    ``--double-column`` caps the WHOLE row at :data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH`
-    inches, the figure's own budget on a paper page; otherwise every panel keeps its natural
-    :data:`SQUARE_PANEL_SIDE` and the row grows with ``n``.
-    """
+#: Inches reserved left of the panels for the metric label and its ticks, and right of them for the
+#: per-arm language labels, which sit outside the treated mark.
+LEFT_IN: float = 0.80
+RIGHT_IN: float = 0.60
+
+
+def panel_side(double_column: bool) -> float:
+    """One square panel's side. A comparison is always TWO panels wide, so ``--double-column`` --
+    the figure's budget on a paper page -- divides
+    :data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH` between two of them plus the chrome,
+    and everything else keeps the natural :data:`SQUARE_PANEL_SIDE`."""
     if not double_column:
         return SQUARE_PANEL_SIDE
-    side = (plotstyle.DOUBLE_COLUMN_WIDTH - SQUARE_PANEL_GAP * (n - 1)) / n
-    return max(1.6, side)
+    side = (plotstyle.DOUBLE_COLUMN_WIDTH - INNER_GAP_IN - LEFT_IN - RIGHT_IN) / len(PANELS)
+    return max(1.4, side)
 
 
 def build_treatments_figure(
     panels: Sequence[tuple[str, pd.DataFrame, pd.DataFrame]], label: str, double_column: bool = False
 ) -> plt.Figure:
-    """N SQUARE efficacy panels side by side, one per (treatment, its stats, its absolute points),
-    every one against the SAME control -- see :func:`control_rows` and :func:`treatment_frame`.
+    """N comparisons as N ROWS of two square panels, every one against the SAME control -- see
+    :func:`control_rows` and :func:`treatment_frame`.
 
-    Square, so a reader compares treatments by panel shape as well as by content; joined rather
-    than stacked, because the treatments are alternatives against one control, not a sequence.
-    Split from :func:`figure_treatments` so a caller (a test, another figure) can inspect the
-    figure -- its axes, its size -- before it is saved and closed.
+    A row per comparison, not a single row of 2N panels: the treatments are alternatives against one
+    control, so a reader compares them DOWN one column at a fixed panel width, and the two panels of
+    a row stay the pair the comparison is. Split from :func:`figure_treatments` so a caller (a test,
+    another figure) can inspect the figure -- its axes, its size -- before it is saved and closed.
+
+    ONE legend for the whole figure: every row draws the same models in the same shapes, and only
+    the packet colour changes, so the key belongs to the figure rather than to any axes in it.
     """
-    n = len(panels)
-    side = panel_side(n, double_column)
-    # Every decorative font in draw_absolute is scaled for compactness at THIS panel size, not
-    # the ANNOTATION_PT fixed size a full PANEL_SIZE panel uses -- see draw_absolute(compact=True).
-    fig, axes = plt.subplots(1, n, figsize=(side * n + SQUARE_PANEL_GAP * (n - 1), side), squeeze=False)
-    handles_by_label: dict[str, object] = {}
-    for ax, (treatment, stats, absolute) in zip(axes[0], panels, strict=True):
-        for handle in draw_absolute(ax, absolute, stats, treatment, compact=True):
+    rows = len(panels)
+    treatments = [treatment for treatment, _stats, _absolute in panels]
+    side = panel_side(double_column)
+    width = len(PANELS) * side + INNER_GAP_IN + LEFT_IN + RIGHT_IN
+    height = rows * side + (rows - 1) * (SQUARE_PANEL_GAP + PAIR_LABEL_IN) + TITLE_IN + PAIR_LABEL_IN
+    height += XLABEL_IN + LEGEND_IN
+    # Every decorative font in draw_absolute is scaled for compactness at THIS panel size, not the
+    # ANNOTATION_PT fixed size a full PANEL_SIDE panel uses -- see draw_absolute(compact=True).
+    fig, axes = plt.subplots(rows, len(PANELS), figsize=(width, height), squeeze=False)
+    handles_by_label: dict[str, plt.Line2D] = {}
+    for row, (treatment, stats, absolute) in zip(axes, panels, strict=True):
+        for handle in draw_absolute(list(row), absolute, stats, treatment, True, treatments):
             handles_by_label.setdefault(handle.get_label(), handle)
-        # An IN-AXES label, not ax.set_title(): a real title draws ABOVE the axes bounding box, in
-        # the same band subplots_adjust(top=...) reserves for the figure's own suptitle -- on a
-        # short joined panel that band is thin enough that the two collide. Anchored inside the
-        # axes (axes-fraction y=0.98) this cannot run into the suptitle no matter how short the
-        # panel is.
-        ax.text(
-            0.5, 0.98, packets.label(treatment), transform=ax.transAxes,
-            ha="center", va="top", fontsize=plotstyle.SUBTITLE_PT * 0.72, color=plotstyle.INK, zorder=7,
-        )  # fmt: skip
-    for ax in axes[0][1:]:
-        ax.set_ylabel("")
-    # title()'s return value IS the axes ceiling a figure this short needs: its own margin math is
-    # in INCHES, not a guessed fraction, and a fraction picked for the tall PANEL_SIZE figure
-    # (0.80-0.86) sits ABOVE a short figure's title text instead of below it.
-    top = plotstyle.title(fig, label)
+    # The metric names go on the TOP row and the condition ticks on the BOTTOM one. Every row
+    # repeats the same two quantities at the same two positions, so a label per row says the same
+    # words N times over.
+    for row in axes[1:]:
+        for ax in row:
+            ax.set_ylabel("")
+    for row in axes[:-1]:
+        for ax in row:
+            ax.set_xticklabels([])
+    plotstyle.title(fig, label)
     plotstyle.legend_below(
         fig,
         list(handles_by_label.values()),
         ncol=min(len(handles_by_label), 3),
         y=0.005,
-        fontsize=plotstyle.LABEL_PT * 0.55,
+        fontsize=plotstyle.LABEL_PT * 0.52,
     )
-    fig.subplots_adjust(left=0.14, right=0.99, top=top, bottom=0.46, wspace=0.45)
-    for ax in axes[0]:
-        untangle_labels(ax)
+    fig.subplots_adjust(
+        left=LEFT_IN / width,
+        right=1.0 - RIGHT_IN / width,
+        top=1.0 - (TITLE_IN + PAIR_LABEL_IN) / height,
+        bottom=(XLABEL_IN + LEGEND_IN) / height,
+        wspace=INNER_GAP_IN / side,
+        hspace=(SQUARE_PANEL_GAP + PAIR_LABEL_IN) / side,
+    )
+    # Each comparison's name, centred over its OWN pair. Placed after subplots_adjust, since a
+    # panel's figure-fraction position is only settled then.
+    for index, (treatment, _stats, _absolute) in enumerate(panels):
+        left, right = axes[index][0].get_position(), axes[index][-1].get_position()
+        fig.text(
+            (left.x0 + right.x1) / 2.0,
+            left.y1 + 0.2 * PAIR_LABEL_IN / height,
+            packets.label(treatment),
+            ha="center",
+            va="bottom",
+            fontsize=plotstyle.SUBTITLE_PT * 0.8,
+            color=plotstyle.INK,
+        )
+    for row in axes:
+        for ax in row:
+            untangle_labels(ax)
     return fig
 
 
