@@ -22,7 +22,7 @@ from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.axis import Axis
 from matplotlib.figure import Figure
-from matplotlib.ticker import AutoMinorLocator, FuncFormatter, LogLocator, MaxNLocator, NullFormatter
+from matplotlib.ticker import FuncFormatter, LogLocator, MaxNLocator, NullFormatter, NullLocator
 
 # matplotlib's drawing calls end in an untyped ``**kwargs``, so every call below suppresses the
 # unknown-member report that fact produces; the arguments themselves are checked.
@@ -45,10 +45,6 @@ REFERENCE: str = "#3a3a3e"
 #:
 #: Written down rather than enforced by a function because these strings carry mathtext
 #: (``$\log_2$``) and identifiers, and a naive title-caser mangles both.
-
-#: Minor-tick positions within a decade on a base-10 log axis, given majors at 1, 2 and 5. Each
-#: major interval is subdivided: 1-2, 2-5 and 5-10 all get lines, at roughly even log spacing.
-LOG10_MINOR_SUBS: tuple[float, ...] = (1.25, 1.5, 1.75, 2.5, 3.0, 4.0, 6.0, 7.0, 8.0, 9.0)
 
 #: Type scale, in points, sized for PRINT rather than for a screen.
 #:
@@ -171,68 +167,48 @@ def decade_label(value: float, position: int = 0) -> str:
     return f"{value:g}"
 
 
-def value_axis(
-    ax: Axes, axis: Literal["x", "y"] = "y", minor: bool = True, log_base: float = 10.0, major: bool = True
-) -> None:
-    """Ticks and grid for the axis carrying the MEASURED quantity.
+def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, major: bool = True) -> None:
+    """Ticks and a MAJOR grid for the axis carrying the MEASURED quantity.
 
-    Majors get a labelled line, minors an unlabelled fainter one: reading a value off a chart is
-    interpolation between ticks, and with only a handful of majors the reader is interpolating
-    across a gap wide enough to be a guess. Applied to the value axis only -- the other axis
-    carries kernel names, where a grid line per category is noise.
+    MAJOR ONLY. A minor line is a second grid at a second weight, and once a figure is reduced for
+    print the two stop separating: the panel reads as a texture the marks sit on rather than as a
+    reference they sit against. Applied to the value axis only -- the other axis carries names,
+    where a guide line per category measures nothing.
 
     ``log_base`` is passed rather than sniffed off the axis: matplotlib keeps it on the scale
-    object under a private name, and a wrong guess puts the minor lines at the wrong ratios --
-    which looks like a grid and reads as a lie.
+    object under a private name, and a wrong guess puts the lines at the wrong ratios -- which
+    looks like a grid and reads as a lie.
     """
     target: Axis = ax.yaxis if axis == "y" else ax.xaxis
     scale: str = ax.get_yscale() if axis == "y" else ax.get_xscale()
     if scale == "log":
-        # A log axis needs log-spaced minors, and AutoMinorLocator refuses one outright ("does not
-        # work on logarithmic scales").
-        #
         # Majors go at 1, 2 and 5 per decade rather than at the decades alone. A panel spanning
         # less than two decades -- which most token axes here do -- gets exactly ONE labelled tick
         # under the default locator, and a single number on an axis is nothing to read a value
-        # against. ``log_base`` other than 10 keeps the plain decade majors, because a caller on a
-        # base-2 axis has usually pinned landmarks of its own that these would overwrite.
+        # against. ``log_base`` other than 10 keeps the locator matplotlib gives a base-2 axis,
+        # because a caller on one has usually pinned landmarks of its own that these would
+        # overwrite.
+        if major:
+            # A decade gets 1, 2, 5; an octave gets 1 and 1.5. Either way more than one labelled
+            # tick lands in the window, and a panel spanning under two decades is exactly where the
+            # default locator leaves a single number on the axis with nothing to read against.
+            subs = (1.0, 2.0, 5.0) if log_base == 10.0 else (1.0, 1.5)
+            target.set_major_locator(LogLocator(base=log_base, subs=subs, numticks=20))
         if log_base == 10.0 and major:
-            target.set_major_locator(LogLocator(base=10.0, subs=(1.0, 2.0, 5.0), numticks=20))
             # NOT LogFormatterSciNotation: even with labelOnlyBase=False it returns the empty
             # string for a 5x10^n tick, so the axis got a line and a gap where its label should be
             # -- which looks like a stray rule rather than a tick. This labels every major it is
             # given, which is the only contract a caller pinning majors can rely on.
             target.set_major_formatter(FuncFormatter(decade_label))
-        if minor:
-            # Every intermediate multiple in the decade (2x, 3x .. 9x), which is what a reader
-            # interpolates a log value against. subs="all" sounds like more and gives FEWER: on a
-            # base-10 axis it returns just the decades again, so the panel came out with almost no
-            # minor grid at all while its linear neighbour was dense with it.
-            # Subdivide each MAJOR interval, not each integer. The majors sit at 1, 2 and 5, and
-            # the whole-number subs 3,4,6..9 leave the 1-to-2 interval with no minor line at all
-            # while 2-to-5 and 5-to-10 get several -- a grid that is finer in some bands than
-            # others, which is worse than a coarse one because the spacing stops meaning anything.
-            # These fill all three intervals at roughly even spacing in LOG space, which is the
-            # space the reader is interpolating in.
-            subs: tuple[float, ...] = LOG10_MINOR_SUBS
-            if log_base != 10.0:
-                subs = tuple(float(n) for n in range(2, int(log_base))) or (2.0,)
-            target.set_minor_locator(LogLocator(base=log_base, subs=subs, numticks=100))
-            target.set_minor_formatter(NullFormatter())
+        # No minor ticks and no minor labels. Matplotlib's own log minor formatter labels a 3x10^n
+        # tick whenever few majors are visible, which puts a scientific-notation number on an axis
+        # whose majors are plain ones.
+        target.set_minor_locator(NullLocator())
+        target.set_minor_formatter(NullFormatter())
     else:
-        # Eight majors and ONE minor between them. Twelve majors subdivided four ways put a line
-        # every 2 percent of the axis: at that spacing the grid stops being a reference and becomes
-        # a texture, and the marks sit on top of it rather than against it.
         target.set_major_locator(MaxNLocator(nbins=8, steps=[1, 2, 2.5, 5, 10]))
-        if minor:
-            target.set_minor_locator(AutoMinorLocator(2))
     ax.grid(axis=axis, which="major", color=RULE, linewidth=0.7, zorder=0)  # pyright: ignore[reportUnknownMemberType]
-    if minor:
-        # Dashed, so a minor line is never mistaken for a major one at a glance -- weight alone
-        # does not separate them once a figure is reduced for print.
-        ax.grid(  # pyright: ignore[reportUnknownMemberType]
-            axis=axis, which="minor", color=RULE, linewidth=0.45, linestyle=(0, (2, 3)), alpha=0.9, zorder=0
-        )
+    ax.grid(False, which="minor")  # pyright: ignore[reportUnknownMemberType]
     ax.set_axisbelow(True)
 
 
@@ -246,12 +222,35 @@ CONNECTOR_Z: float = 4.0
 MARK_Z: float = 5.0
 
 
-def point_mark(ax: Axes, x: float, y: float, color: str, marker: str, filled: bool, size: float = 110.0) -> None:
+#: How much of a mark's area the NOT-DELIVERED cross covers. Small enough that the model shape is
+#: still read first, large enough to survive a column-width reduction.
+CROSS_SCALE: float = 0.45
+
+#: What the cross means, wherever a figure draws one. The legend says this and nothing else: the
+#: mark is a placeholder at 1x, not a measurement.
+NOT_DELIVERED_LABEL: str = "No Verified Answer (Scored 1x)"
+
+
+def point_mark(
+    ax: Axes,
+    x: float,
+    y: float,
+    color: str,
+    marker: str,
+    filled: bool,
+    size: float = 110.0,
+    delivered: bool = True,
+) -> None:
     """One point of a two-condition pair, drawn as a white disc plus the mark itself.
 
     The white disc is drawn under a FILLED mark too. It masks the grid and every connector that
     does not end here, so the only line a reader sees inside a mark is that mark's own -- with a
     transparent centre, three models' connectors crossing one point read as a mesh.
+
+    ``delivered`` False overlays a small cross on the model's own shape: the point is the 1x
+    placeholder an episode that never verified an answer leaves behind, not a measured 1x. The
+    SHAPE still names the model and the colour still names the intervention -- replacing the shape
+    outright would cost the figure the one channel that survives greyscale.
     """
     ax.scatter(  # pyright: ignore[reportUnknownMemberType]
         x, y, s=size, marker=marker, color="white", edgecolor="none", zorder=FILL_Z
@@ -266,6 +265,10 @@ def point_mark(ax: Axes, x: float, y: float, color: str, marker: str, filled: bo
         linewidth=1.8,
         zorder=MARK_Z,
     )
+    if not delivered:
+        ax.scatter(  # pyright: ignore[reportUnknownMemberType]
+            x, y, s=size * CROSS_SCALE, marker="x", color=color, linewidth=1.6, zorder=MARK_Z + 1.0
+        )
 
 
 def row_axis(ax: Axes, labels: Sequence[str]) -> None:

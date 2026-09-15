@@ -22,7 +22,7 @@ LANGUAGES: tuple[str, ...] = ("c", "fortran", "cpp")
 
 def finish(fig: plt.Figure, ax: plt.Axes, handles: list, stem: pathlib.Path) -> None:
     """Grid on the measured axis, a light frame and the legend below, then the PDF and the PNG."""
-    style.value_axis(ax, "x", minor=False, major=False)
+    style.value_axis(ax, "x", major=False)
     style.despine(ax)
     style.legend_below(fig, handles)
     fig.tight_layout(rect=(0.0, 0.018, 1.0, 1.0))
