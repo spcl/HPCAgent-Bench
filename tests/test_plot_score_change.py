@@ -273,6 +273,59 @@ def test_the_figure_stars_a_point_only_on_a_corrected_verdict(
     assert ("C *" in labels) == starred, labels
 
 
+def test_a_language_label_lands_on_no_mark_and_no_other_label() -> None:
+    """Two legs of one model landing close put a fixed right-hand label on the neighbour's mark --
+    Kimi's "C" sat on its own Fortran point in the CPU skills figure -- so the label must move."""
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import PathCollection
+    from matplotlib.text import Annotation
+
+    legs = {  # (model, language): (log2 speed-up, tokens) without, then with the packet -- that figure's values
+        ("qwen38", "c"): ((2.75, 350e3), (2.82, 310e3)),
+        ("qwen38", "fortran"): ((2.27, 245e3), (2.56, 255e3)),
+        ("oss120b", "c"): ((2.13, 50e3), (2.24, 50e3)),
+        ("oss120b", "fortran"): ((2.38, 72e3), (2.29, 65e3)),
+        ("kimi27sglang", "c"): ((2.75, 178e3), (2.60, 165e3)),
+        ("kimi27sglang", "fortran"): ((2.83, 165e3), (2.67, 150e3)),
+    }
+    frame = pd.DataFrame(
+        [
+            {"model": model, "language": language, "skills": on, **thin(*point)}
+            for (model, language), sides in legs.items()
+            for on, point in zip((False, True), sides, strict=True)
+        ]
+    )
+    verdict = {"score_verdict": efficacy.NOT_SIGNIFICANT, "cost_verdict": efficacy.NOT_SIGNIFICANT, "family_size": 12}
+    stats = pd.DataFrame([{"model": model, "language": language, **verdict} for model, language in legs])
+    fig, ax = plt.subplots(figsize=plot.PANEL_SIZE)
+    try:
+        plot.draw_absolute(ax, frame, stats, "skills")
+        fig.subplots_adjust(**plot.PANEL_MARGINS)
+        plot.untangle_labels(ax)
+        renderer = fig.canvas.get_renderer()
+        notes = [text for text in ax.texts if isinstance(text, Annotation)]
+        labels = [tuple(note.get_window_extent(renderer).extents) for note in notes]
+        # a scatter mark's window extent is empty (+-inf) on this backend, so each mark is its drawn
+        # centre plus half its side: ``s`` is the marker area in points squared
+        marks = []
+        for collection in (c for c in ax.collections if isinstance(c, PathCollection)):
+            half = collection.get_sizes()[0] ** 0.5 / 2.0 * fig.dpi / 72.0
+            for x, y in collection.get_offset_transform().transform(collection.get_offsets()):
+                marks.append((x - half, y - half, x + half, y + half))
+        moved = [note.get_text() for note in notes if tuple(note.xyann) != plot.LABEL_PLACES[0][:2]]
+    finally:
+        plt.close(fig)
+
+    def touch(a: tuple[float, ...], b: tuple[float, ...]) -> bool:
+        return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+    assert len(labels) == len(legs)
+    assert moved, "the fixture no longer collides at the default place, so it tests nothing"
+    for index, label in enumerate(labels):
+        assert not any(touch(label, mark) for mark in marks), notes[index].get_text()
+        assert not any(touch(label, other) for other in labels[index + 1 :]), notes[index].get_text()
+
+
 def treatment_panel(treatment: str) -> tuple[str, pd.DataFrame, pd.DataFrame]:
     """One synthetic (treatment, stats, absolute) triple, the shape :func:`plot.figure_treatments` takes."""
     stats = pd.DataFrame(

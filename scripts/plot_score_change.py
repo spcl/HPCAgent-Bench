@@ -48,6 +48,8 @@ from hpcagent_bench.stats import style as plotstyle
 
 plotstyle.apply()
 import matplotlib.pyplot as plt  # pyplot must follow plotstyle.apply()
+from matplotlib.collections import PathCollection
+from matplotlib.text import Annotation
 
 #: A ratio this far from 1.0 is inside the "no change" band for labelling purposes only; the star
 #: is decided by the interval, never by this.
@@ -451,6 +453,51 @@ def absolute_points(frame: pd.DataFrame, repeats: population.RepeatPolicy = "lat
     return rules.require_interval(table, "tokens", "tokens_low", "tokens_high")
 
 
+#: A point label's candidate places around its mark, tried in order: (dx, dy) in points, then the
+#: horizontal and vertical alignment. Right of the mark first, where the label has always sat.
+LABEL_PLACES: tuple[tuple[float, float, str, str], ...] = (
+    (13.0, 0.0, "left", "center"),
+    (-13.0, 0.0, "right", "center"),
+    (0.0, 11.0, "center", "bottom"),
+    (0.0, -11.0, "center", "top"),
+    (13.0, 11.0, "left", "bottom"),
+    (-13.0, 11.0, "right", "bottom"),
+    (13.0, -11.0, "left", "top"),
+    (-13.0, -11.0, "right", "top"),
+)
+
+
+def boxes_touch(a: tuple[float, ...], b: tuple[float, ...]) -> bool:
+    """Two ``(x0, y0, x1, y1)`` display boxes share area."""
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def untangle_labels(ax: plt.Axes) -> None:
+    """Move each point label (an :class:`Annotation`) to the first of :data:`LABEL_PLACES` where its
+    RENDERED text touches no mark and no label settled before it; a label with every place taken
+    keeps the first. Call once the layout is final: marks move with the axes while a label's offset
+    is in points, so a place clear before ``subplots_adjust`` need not be clear after it."""
+    fig = ax.figure
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    taken: list[tuple[float, ...]] = []
+    for collection in ax.collections:
+        if isinstance(collection, PathCollection) and len(collection.get_offsets()):
+            half = math.sqrt(float(np.max(collection.get_sizes()))) / 2.0 * fig.dpi / 72.0
+            for px, py in collection.get_offset_transform().transform(collection.get_offsets()):
+                taken.append((px - half, py - half, px + half, py + half))
+    for note in [text for text in ax.texts if isinstance(text, Annotation)]:
+        box: tuple[float, ...] = ()
+        for dx, dy, ha, va in (*LABEL_PLACES, LABEL_PLACES[0]):
+            note.xyann = (dx, dy)
+            note.set_horizontalalignment(ha)
+            note.set_verticalalignment(va)
+            box = tuple(note.get_window_extent(renderer).extents)
+            if not any(boxes_touch(box, other) for other in taken):
+                break
+        taken.append(box)
+
+
 def figure_absolute(
     frame: pd.DataFrame, stats: pd.DataFrame, treatment: str, label: str, out: pathlib.Path
 ) -> pathlib.Path:
@@ -463,6 +510,7 @@ def figure_absolute(
     # caption; what the reader needs AT the mark is that the threshold was corrected and over what.
     plotstyle.legend_below(fig, handles, ncol=2, y=0.015)
     plotstyle.title(fig, label)
+    untangle_labels(ax)
     return write(fig, out)
 
 
@@ -529,6 +577,8 @@ def build_treatments_figure(
         fontsize=plotstyle.LABEL_PT * 0.55,
     )
     fig.subplots_adjust(left=0.14, right=0.99, top=top, bottom=0.46, wspace=0.45)
+    for ax in axes[0]:
+        untangle_labels(ax)
     return fig
 
 
