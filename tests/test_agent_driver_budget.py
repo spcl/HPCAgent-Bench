@@ -220,6 +220,70 @@ def test_non_assistant_and_malformed_lines_are_skipped(driver) -> None:
     assert seen == {"msg_1": 1042}
 
 
+# tokens.json: the task's totals over every attempt (T1-T2)
+
+
+def claude_log_content(input_tokens: int, output_tokens: int) -> str:
+    """One turn plus its result event -- the shape ``cost_breakdown`` and ``task_totals`` both read,
+    output on the result event only, matching what this endpoint actually reports (token_cost.py)."""
+    lines = [
+        assistant_line("m1", usage(input_tokens=input_tokens)),
+        json.dumps({"type": "result", "usage": {"output_tokens": output_tokens}}),
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def test_tokens_json_keeps_its_old_keys_and_gains_the_task_totals(driver, tmp_path: pathlib.Path) -> None:
+    """T1-T2: tokens.json still carries the surviving attempt's own numbers under their old names
+    unchanged, and gains the task total over EVERY attempt (attempts, tokens_effective_all_attempts,
+    tokens_billed_all_attempts) so a relaunched task's earlier crash is not silently dropped from
+    what the run cost."""
+    (tmp_path / "claude.attempt1.log").write_text(claude_log_content(1000, 100), encoding="utf-8")
+    (tmp_path / "claude.log").write_text(claude_log_content(2000, 200), encoding="utf-8")
+
+    driver.write_cost_record(
+        tmp_path / "tokens.json", {"id": 7, "kernel": "k"}, 2, 0, 2000, 3, "success", tmp_path / "claude.log"
+    )
+
+    record = json.loads((tmp_path / "tokens.json").read_text(encoding="utf-8"))
+    old_keys = {
+        "problem",
+        "kernel",
+        "worker",
+        "returncode",
+        "tokens",
+        "turns",
+        "result",
+        "fresh_input",
+        "cached_input",
+        "output",
+        "thinking",
+        "generated",
+        "effective",
+        "wall_ms",
+        "api_ms",
+    }
+    assert old_keys <= record.keys()
+    # unchanged: the surviving attempt's own numbers, exactly as before this task-total addition
+    assert record["tokens"] == 2000
+    assert record["effective"] == 2200.0
+    # new: the task total over BOTH attempts, not just the surviving one
+    assert record["attempts"] == 2
+    assert record["tokens_effective_all_attempts"] == 1100 + 2200
+    assert record["tokens_billed_all_attempts"] == 1000 + 2000
+
+
+def test_tokens_json_reports_one_attempt_when_the_task_never_relaunched(driver, tmp_path: pathlib.Path) -> None:
+    (tmp_path / "claude.log").write_text(claude_log_content(500, 50), encoding="utf-8")
+
+    driver.write_cost_record(tmp_path / "tokens.json", {"id": 1, "kernel": "k"}, 0, 0, 500, 1, "success")
+
+    record = json.loads((tmp_path / "tokens.json").read_text(encoding="utf-8"))
+    assert record["attempts"] == 1
+    assert record["tokens_effective_all_attempts"] == 550
+    assert record["tokens_billed_all_attempts"] == 500
+
+
 def test_read_new_lines_leaves_a_partial_tail_for_the_next_poll(driver, tmp_path) -> None:
     log = tmp_path / "claude.log"
     assert driver.read_new_lines(log, 0) == (0, [])  # the agent has written nothing yet

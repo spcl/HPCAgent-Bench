@@ -79,8 +79,10 @@ import collections
 import csv
 import json
 import pathlib
+import re
 import sys
 from collections.abc import Iterator
+from typing import NamedTuple, cast
 
 #: What a cache read is charged, as a fraction of a fresh token. ZERO, and the reason is not
 #: generosity -- it is that the alternative charges for a quantity that never existed.
@@ -108,9 +110,73 @@ INPUT_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input
 #: JSON line per model call, ``{"input", "cached_input", "output", "reasoning"}`` (experiments/harnesses.py).
 USAGE_NAME = "usage.jsonl"
 
+#: Every ``message.usage`` field one claude TURN is billed for (8.1): the three input fields plus
+#: output. Cache reads and thinking are billed too, but thinking never appears here -- these
+#: endpoints report it as a separate ``thinking_tokens`` event, not a usage field.
+USAGE_FIELDS = (*INPUT_FIELDS, "output_tokens")
+
+#: A crashed attempt's transcript, moved aside by the driver's relaunch loop before the next
+#: attempt starts fresh (``agent_driver.py``): ``<stem>.attemptN.<suffix>``.
+ATTEMPT_MARKER = re.compile(r"\.attempt(\d+)\.")
+
 
 def transcripts(run_dir: pathlib.Path) -> Iterator[pathlib.Path]:
     yield from sorted([*run_dir.glob("agents/*/*/claude.log"), *run_dir.glob(f"agents/*/*/{USAGE_NAME}")])
+
+
+def as_block(raw: object) -> dict[str, object]:
+    """One parsed JSON object, or an empty one when it is not a mapping.
+
+    DELIBERATE DUPLICATION of ``agent_driver.as_block``: this module stays standard-library-only
+    and importable on its own (the CLI at the bottom of this file, and a compute node running the
+    agent image with no ``hpcagent_bench`` on its path), so it does not import the driver.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): value for key, value in cast("dict[object, object]", raw).items()}
+
+
+def usage_total(usage: dict[str, object]) -> int | None:
+    """One claude turn's BILLED tokens: every field of :data:`USAGE_FIELDS`, ``None`` when the
+    block carries none of them -- that is a line to ignore, not a turn costing zero."""
+    total = 0
+    seen = False
+    for field in USAGE_FIELDS:
+        value = usage.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        total += int(value)
+        seen = True
+    return total if seen else None
+
+
+def accumulate_total_tokens(lines: list[str], total_by_message: dict[str, int]) -> int:
+    """Fold stream-json transcript lines into {message id: billed tokens}; return the running total.
+
+    One assistant TURN arrives as several ``assistant`` events sharing one ``message.id``, one per
+    content block, and every one of them repeats the whole turn's ``message.usage`` -- summing the
+    events would multiply a turn's cost by its block count. Keeping the LAST usage seen per id is
+    what makes the total the turn count's worth of tokens (8.1, ``billed``). Partial or non-JSON
+    lines (the merged stderr, a half-written tail) are skipped.
+    """
+    for line in lines:
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = as_block(json.loads(line))
+        except ValueError:
+            continue
+        if event.get("type") != "assistant":
+            continue
+        message = as_block(event.get("message"))
+        message_id = message.get("id")
+        if not isinstance(message_id, str):
+            continue
+        total = usage_total(as_block(message.get("usage")))
+        if total is not None:
+            total_by_message[message_id] = total
+    return sum(total_by_message.values())
 
 
 def usage_episode_cost(path: pathlib.Path) -> dict[str, float]:
@@ -156,9 +222,16 @@ def usage_episode_cost(path: pathlib.Path) -> dict[str, float]:
     }
 
 
+def is_usage_transcript(path: pathlib.Path) -> bool:
+    """Whether ``path`` is a runner's ``usage.jsonl``, or one of its renamed crashed-attempt copies
+    (``usage.attempt1.jsonl``, ...) -- the move-aside rule keeps the base name, only inserting the
+    marker before the suffix, so the stem before ``.attemptN`` is still ``usage``."""
+    return path.name == USAGE_NAME or ATTEMPT_MARKER.sub(".", path.name) == USAGE_NAME
+
+
 def episode_cost(log: pathlib.Path) -> dict[str, float]:
     """One episode's fresh, cached, output and thinking tokens, plus the effective total."""
-    if log.name == USAGE_NAME:
+    if is_usage_transcript(log):
         return usage_episode_cost(log)
     per_turn: dict[str, dict] = {}
     order: list[str] = []
@@ -229,6 +302,73 @@ def episode_cost(log: pathlib.Path) -> dict[str, float]:
         "wall_ms": wall_ms,
         "api_ms": api_ms,
     }
+
+
+def numbered_attempts(paths: Iterator[pathlib.Path]) -> list[pathlib.Path]:
+    """``paths`` carrying an ``.attemptN.`` marker, ascending by N."""
+    found: list[tuple[int, pathlib.Path]] = []
+    for path in paths:
+        match = ATTEMPT_MARKER.search(path.name)
+        if match:
+            found.append((int(match.group(1)), path))
+    found.sort(key=lambda pair: pair[0])
+    return [pair[1] for pair in found]
+
+
+def attempt_transcripts(worker_dir: pathlib.Path) -> list[pathlib.Path]:
+    """Every attempt's transcript for one task, in relaunch order (T2): ``claude.attempt1.log``,
+    ``claude.attempt2.log``, ..., then ``claude.log``; a runner harness the same way over
+    ``usage.jsonl``. Empty when the worker directory holds no transcript at all -- a task that was
+    never entered, not one that cost 0.
+    """
+    claude = numbered_attempts(worker_dir.glob("claude.attempt*.log"))
+    final_claude = worker_dir / "claude.log"
+    if claude or final_claude.is_file():
+        return [*claude, final_claude] if final_claude.is_file() else claude
+
+    usage = numbered_attempts(worker_dir.glob("usage.attempt*.jsonl"))
+    final_usage = worker_dir / USAGE_NAME
+    if usage or final_usage.is_file():
+        return [*usage, final_usage] if final_usage.is_file() else usage
+
+    return []
+
+
+class TaskTotals(NamedTuple):
+    """T2: one task's totals over every attempt in its worker directory."""
+
+    attempts: int
+    tokens_effective: int | None
+    tokens_billed: int | None
+
+
+def attempt_billed(log: pathlib.Path) -> int:
+    """One attempt's billed tokens (8.1): last usage per message id for a claude transcript, one
+    call per line for a runner's usage.jsonl -- each fold starts fresh, since the driver truncates
+    a transcript at the start of every attempt (no message id repeats across attempts)."""
+    if is_usage_transcript(log):
+        return int(usage_episode_cost(log)["naive_total"])
+    try:
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return 0
+    return accumulate_total_tokens(lines, {})
+
+
+def task_totals(worker_dir: pathlib.Path) -> TaskTotals:
+    """The TASK TOKEN TOTAL (T2): effective and billed tokens summed over every attempt of one task.
+
+    A relaunched task's attempts are separate transcripts (the driver moves each crash aside before
+    the next attempt starts from an empty context), so the total is their SUM, not the last one's.
+    A worker directory with no transcript at all was never entered -- not a zero-token task -- so it
+    reports ``attempts=0`` and ``None`` totals rather than 0.
+    """
+    logs = attempt_transcripts(worker_dir)
+    if not logs:
+        return TaskTotals(attempts=0, tokens_effective=None, tokens_billed=None)
+    tokens_effective = sum(int(episode_cost(log)["effective"]) for log in logs)
+    tokens_billed = sum(attempt_billed(log) for log in logs)
+    return TaskTotals(attempts=len(logs), tokens_effective=tokens_effective, tokens_billed=tokens_billed)
 
 
 def main() -> int:
