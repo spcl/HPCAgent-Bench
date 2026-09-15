@@ -74,8 +74,8 @@ def arm_frame(speedups: tuple[float, ...]) -> pd.DataFrame:
         rows.append(
             {
                 **common,
-                "record": "call",
-                "speedup": value,
+                "record": "task",
+                "speedup": None,
                 "ts_ms": 2,
                 "tokens": 100.0,
                 "baseline_ns": 0.0,
@@ -104,3 +104,13 @@ def test_an_arm_points_tokens_stay_the_median_over_kernels() -> None:
     table = plot.arm_points(frame)
     row = table.iloc[0]
     assert row.tokens == pytest.approx(100.0)
+
+
+def test_an_arm_short_of_the_roster_is_not_drawn() -> None:
+    """An arm missing a roster kernel would be scored over a smaller kernel set than its neighbours on
+    the same axes, so it is dropped unless the caller explicitly includes incomplete arms."""
+    complete = arm_frame(ASYMMETRIC_SPEEDUPS)
+    short = arm_frame(ASYMMETRIC_SPEEDUPS[:-1]).assign(arm="short-arm")
+    rows = pd.concat([complete, short], ignore_index=True)
+    assert set(plot.eligible_rows(rows).arm) == {"demo-arm"}
+    assert set(plot.eligible_rows(rows, include_incomplete=True).arm) == {"demo-arm", "short-arm"}

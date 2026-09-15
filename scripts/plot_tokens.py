@@ -129,15 +129,12 @@ def main() -> None:
     frame = pd.read_csv(args.observations, low_memory=False)
     if args.experiment:
         frame = frame[frame["arm"].astype(str).str.startswith(args.experiment)]
-    frame = frame[frame["tokens"].notna() & (frame["tokens"] > 0)]
-    frame["model"] = frame["arm"].astype(str).map(experiment_tags.model_of)
+    frame = frame.assign(model=frame["arm"].astype(str).map(experiment_tags.model_of))
     frame = frame[frame["model"] != "other"]
+    # one row per task: its effective total over every attempt (spec T2-T4), never calls.tokens
+    frame = population.episode_tokens(frame, by=("model", "benchmark"))
     if frame.empty:
-        raise SystemExit(f"no token rows for experiment {args.experiment!r}")
-    # A row per judge call would weight a chatty agent twice, and ``calls.tokens`` is cumulative, so
-    # an episode's spend is its own maximum. The episode key is the whole key: ``run_id`` is derived
-    # from the rank layout and repeats across jobs, which merges two agents into one.
-    frame = population.per_episode_max(frame, "tokens", keep=("model",))
+        raise SystemExit(f"no task token rows for experiment {args.experiment!r}")
 
     cell_frame = cells(frame)
     args.table.parent.mkdir(parents=True, exist_ok=True)

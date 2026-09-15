@@ -281,10 +281,11 @@ def repeat_policy(repeats: str) -> RepeatPolicy:
 def latest_runs(frame: "pd.DataFrame", by: Sequence[str] = ("arm", "benchmark")) -> "pd.DataFrame":
     """Every row, of any record type, of each ``by`` group's LATEST run.
 
-    A run is one :data:`EPISODE_KEY`; the latest is the one that STARTED last, by the earliest
-    ``ts_ms`` over all of its rows. Call rows count, so a rerun that spent tokens and never had a
-    submission persisted still supersedes the earlier run: the kernel then has no answer, which is
-    what its latest run delivered. A run with no timestamp sorts first and never supersedes a dated one.
+    A run is one :data:`EPISODE_KEY`; its start is the earliest ``ts_ms`` over ALL of its rows, and
+    the latest is the greatest ``(start, job, run_root, run_id)``, the last three compared as text so
+    a tie has one answer. Call and task rows count, so a rerun that never had a submission persisted
+    still supersedes the earlier run: the kernel then has no answer, which is what its latest run
+    delivered. A run with no timestamp sorts first and never supersedes a dated one.
     """
     import pandas as pd
 
@@ -296,7 +297,13 @@ def latest_runs(frame: "pd.DataFrame", by: Sequence[str] = ("arm", "benchmark"))
         return frame
     starts = frame[keys].assign(start=pd.to_numeric(frame["ts_ms"], errors="coerce"))
     starts = starts.groupby(keys, as_index=False, dropna=False).start.min()
-    latest = starts.sort_values("start", kind="stable", na_position="first").drop_duplicates(list(by), keep="last")
+    tie_break = {f"{name}_text": starts[name].astype(str) for name in ("job", "run_root", "run_id")}
+    order = ["start", *tie_break]
+    latest = (
+        starts.assign(**tie_break)
+        .sort_values(order, kind="stable", na_position="first")
+        .drop_duplicates(list(by), keep="last")
+    )
     chosen = pd.MultiIndex.from_frame(latest[keys])
     return frame[pd.MultiIndex.from_frame(frame[keys]).isin(chosen)]
 
@@ -423,14 +430,19 @@ def kernel_answers(
     return best.set_index("benchmark")[[c for c in ANSWER_COLUMNS if c in best.columns]].sort_index()
 
 
-def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("benchmark",)) -> "pd.DataFrame":
-    """One row per EPISODE: its OWN token total, read off its ``call`` rows, plus ``by``.
+#: The record a task's token total travels on (spec T3): one row per task, ``tokens`` = the effective
+#: tokens summed over every attempt of the task.
+TASK_RECORD: str = "task"
 
-    The population a per-episode spend distribution (a box, a min-max whisker) is taken over,
-    BEFORE the sum :func:`kernel_tokens` reduces it to -- an experiment running several episodes
-    per kernel (git-scicomp: 3) needs the episodes themselves, not only their total. ``calls.tokens``
-    is CUMULATIVE through a call, so an episode's spend is its own maximum (:func:`per_episode_max`).
-    Empty (zero-or-fewer) spends are dropped, same as :func:`kernel_tokens`.
+
+def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("benchmark",)) -> "pd.DataFrame":
+    """One row per TASK: its token total, read off its ``task`` row, plus ``by``.
+
+    A task's cost is the effective tokens of ALL its attempts (spec T1-T2), which only the task row
+    carries. ``calls.tokens`` is a running count of the CURRENT attempt at a judge call -- it misses
+    every earlier attempt of a relaunched task and everything after the last judge call -- so a frame
+    that has call rows and no task rows is refused rather than costed off them (spec T4). A total of
+    zero or less is no measurement (R7).
     """
     import pandas as pd
 
@@ -439,14 +451,22 @@ def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("benchmark",)) ->
     # returns a DataFrame, not a Series, from `frame["benchmark"]` -- which breaks every groupby
     # a caller runs on the (correctly) empty result. dict.fromkeys dedupes, keeping first order.
     empty_columns = list(dict.fromkeys((*EPISODE_KEY, *by, "tokens")))
-    if "tokens" not in frame.columns:
+    if "tokens" not in frame.columns or frame.empty:
         return pd.DataFrame(columns=empty_columns)
-    calls = frame[frame.record == "call"]
-    tokens = pd.to_numeric(calls.tokens, errors="coerce")
-    calls = calls.assign(tokens=tokens).dropna(subset=["tokens", *by])
-    if calls.empty:
+    tasks = frame[frame.record == TASK_RECORD]
+    if tasks.empty:
+        if (frame.record == "call").any():
+            raise MixedPopulationError(
+                "no task records: a task's token cost is its effective total over all attempts (record = "
+                "task); calls.tokens is not a cost -- re-extract with task rows"
+            )
         return pd.DataFrame(columns=empty_columns)
-    episodes = per_episode_max(calls, "tokens", keep=tuple(c for c in by if c not in EPISODE_KEY))
+    tokens = pd.to_numeric(tasks.tokens, errors="coerce")
+    tasks = tasks.assign(tokens=tokens).dropna(subset=["tokens", *by])
+    if tasks.empty:
+        return pd.DataFrame(columns=empty_columns)
+    # one task row per task; the maximum only guards a task extracted twice
+    episodes = per_episode_max(tasks, "tokens", keep=tuple(c for c in by if c not in EPISODE_KEY))
     return episodes[episodes.tokens > 0]
 
 

@@ -82,7 +82,7 @@ def episode(arm: str, model: str, language: str, kernel: int, run: str, speedup:
     }
     return [
         {**common, "record": "submission", "speedup": speedup, "tokens": None, "suspect": 0},
-        {**common, "record": "call", "speedup": speedup, "tokens": tokens, "suspect": None},
+        {**common, "record": "task", "speedup": None, "tokens": tokens, "suspect": None},
     ]
 
 
@@ -423,6 +423,7 @@ def test_a_treatment_arm_that_never_recorded_its_language_still_pairs_against_co
                 }
             )
             rows.append({**base, "record": "call", "speedup": speedup, "tokens": 1000.0})
+            rows.append({**base, "record": "task", "speedup": None, "tokens": 1000.0})
     pd.DataFrame(rows).to_csv(path, index=False)
 
     frame_all = plot.load(path, prefix="")

@@ -559,19 +559,21 @@ def test_a_ratio_over_rows_from_two_nodes_is_refused() -> None:
         population.one_node(["nid001", "nid002", None], label="gemm")
 
 
-def test_the_score_change_figure_scores_graded_rows_and_costs_call_rows() -> None:
+def test_the_score_change_figure_scores_graded_rows_and_costs_task_rows() -> None:
     """Its loader filtered on ``speedup > 0 and tokens > 0``, and only a ``call`` row has both, so
     every graded submission was dropped and the figure scored intermediate rounds. The two axes come
-    off different record types and neither may be read from the other's rows."""
+    off different record types -- the answer off submissions, the cost off the task record -- and
+    neither may be read from a call row."""
     rows = submissions(
         [
             {"record": "submission", "run_id": "w0", "speedup": 7.0, "ts_ms": 2, "tokens": None},
             {"record": "call", "run_id": "w0", "speedup": 2.0, "ts_ms": 1, "tokens": 500.0},
             {"record": "call", "run_id": "w0", "speedup": 3.0, "ts_ms": 3, "tokens": 900.0},
+            {"record": "task", "run_id": "w0", "speedup": None, "ts_ms": 0, "tokens": 1200.0},
         ]
     )
     assert population.kernel_answers(rows).speedup.tolist() == [7.0]
-    assert population.kernel_tokens(rows).tolist() == [900.0]
+    assert population.kernel_tokens(rows).tolist() == [1200.0]
 
 
 # The two shipped reductions must not disagree.
@@ -743,10 +745,10 @@ def kernel_slice(kernels: int) -> pd.DataFrame:
         )
         rows.append(
             {
-                "record": "call",
+                "record": "task",
                 "benchmark": kernel,
                 "run_id": f"w{index}",
-                "speedup": 1.0,
+                "speedup": None,
                 "ts_ms": 2,
                 "tokens": 100.0 * (index + 1),
                 "baseline_ns": 0.0,
@@ -776,7 +778,7 @@ def test_an_arm_point_reports_the_geometric_mean_speed_up_not_the_median() -> No
             {"record": "submission", "benchmark": f"k{i}", "run_id": f"w{i}", "speedup": v, "ts_ms": 1}
             for i, v in enumerate((1.0, 1.0, 1.0, 1000.0))
         ]
-        + [{"record": "call", "benchmark": f"k{i}", "run_id": f"w{i}", "tokens": 100.0, "ts_ms": 2} for i in range(4)]
+        + [{"record": "task", "benchmark": f"k{i}", "run_id": f"w{i}", "tokens": 100.0, "ts_ms": 2} for i in range(4)]
     )
     point = population.kernel_medians(rows)
     assert point is not None
@@ -797,13 +799,45 @@ def test_a_rerun_kernels_token_spend_is_its_latest_runs_total_not_the_sum() -> N
     llr-focus40 an arm run in two waves read about twice the tokens of an arm run once."""
     rows = submissions(
         [
-            {"record": "call", "run_root": "1", "job": "1", "run_id": "w0", "tokens": 100.0, "ts_ms": 10},
+            {"record": "task", "run_root": "1", "job": "1", "run_id": "w0", "tokens": 400.0, "ts_ms": 10},
             {"record": "call", "run_root": "1", "job": "1", "run_id": "w0", "tokens": 300.0, "ts_ms": 20},
-            {"record": "call", "run_root": "2", "job": "2", "run_id": "w0", "tokens": 200.0, "ts_ms": 30},
+            {"record": "task", "run_root": "2", "job": "2", "run_id": "w0", "tokens": 200.0, "ts_ms": 30},
         ]
     )
     assert population.kernel_tokens(rows).to_dict() == {"k": 200.0}
     assert population.kernel_tokens(rows, ("arm", "benchmark")).to_dict() == {("a", "k"): 200.0}
+
+
+def test_a_tasks_cost_is_its_task_record_never_its_call_rows() -> None:
+    """A call row carries the CURRENT attempt's running count at that call: a relaunched task's call
+    rows miss every earlier attempt, so the cost is the task record even when a call row reads more."""
+    rows = submissions(
+        [
+            {"record": "call", "run_id": "w0", "tokens": 900.0, "ts_ms": 5},
+            {"record": "task", "run_id": "w0", "tokens": 2500.0, "ts_ms": 1},
+        ]
+    )
+    assert population.kernel_tokens(rows).to_dict() == {"k": 2500.0}
+
+
+def test_a_frame_with_call_rows_and_no_task_records_is_refused_for_cost() -> None:
+    """Costing a frame extracted before task records existed off its call rows would report the last
+    attempt's running count as the task's spend, so it is refused and names the re-extraction."""
+    rows = submissions([{"record": "call", "run_id": "w0", "tokens": 900.0, "ts_ms": 5}])
+    with pytest.raises(population.MixedPopulationError, match="no task records"):
+        population.kernel_tokens(rows)
+
+
+def test_a_start_time_tie_picks_the_same_latest_task_whatever_the_row_order() -> None:
+    """Two tasks of one kernel that started in the same millisecond must resolve to one answer, not to
+    whichever the extractor happened to write last: the greater (job, run_root, run_id) wins."""
+    rows = [
+        {"record": "submission", "run_root": "r", "job": "2", "run_id": "w0", "speedup": 3.0, "ts_ms": 10},
+        {"record": "submission", "run_root": "r", "job": "1", "run_id": "w0", "speedup": 9.0, "ts_ms": 10},
+    ]
+    forward = population.kernel_answers(submissions(rows)).speedup.tolist()
+    backward = population.kernel_answers(submissions(rows[::-1])).speedup.tolist()
+    assert forward == backward == [3.0]
 
 
 def test_designed_repeats_charge_a_kernel_its_median_run() -> None:
@@ -811,29 +845,29 @@ def test_designed_repeats_charge_a_kernel_its_median_run() -> None:
     run -- not their total, and not whichever of them happened to start last."""
     rows = submissions(
         [
-            {"record": "call", "run_id": "w0", "tokens": 100.0, "ts_ms": 10},
-            {"record": "call", "run_id": "w1", "tokens": 400.0, "ts_ms": 11},
-            {"record": "call", "run_id": "w2", "tokens": 250.0, "ts_ms": 12},
+            {"record": "task", "run_id": "w0", "tokens": 100.0, "ts_ms": 10},
+            {"record": "task", "run_id": "w1", "tokens": 400.0, "ts_ms": 11},
+            {"record": "task", "run_id": "w2", "tokens": 250.0, "ts_ms": 12},
         ]
     )
     assert population.kernel_tokens(rows, repeats="median").to_dict() == {"k": 250.0}
 
 
 def test_an_unknown_repeat_policy_is_refused() -> None:
-    rows = submissions([{"record": "call", "run_id": "w0", "tokens": 1.0, "ts_ms": 1}])
+    rows = submissions([{"record": "task", "run_id": "w0", "tokens": 1.0, "ts_ms": 1}])
     with pytest.raises(population.MixedPopulationError, match="repeats"):
         population.kernel_tokens(rows, repeats="max")  # pyright: ignore[reportArgumentType]
 
 
-def test_episode_tokens_keeps_every_episodes_own_total_before_the_kernel_sum() -> None:
-    """``kernel_tokens`` sums ``episode_tokens``'s rows; a per-episode figure (a box, a min-max
-    whisker of spend on a kernel with several episodes) needs the episodes themselves, which the
-    sum has already collapsed away."""
+def test_episode_tokens_keeps_every_tasks_own_total_before_the_kernel_reduction() -> None:
+    """``kernel_tokens`` reduces ``episode_tokens``'s rows to one value per kernel; a per-task figure
+    (a box, the min-max whisker of designed repeats) needs the tasks themselves, which that reduction
+    has already collapsed away."""
     rows = submissions(
         [
-            {"record": "call", "run_id": "w0", "tokens": 100.0},
-            {"record": "call", "run_id": "w0", "tokens": 300.0},
-            {"record": "call", "run_id": "w1", "tokens": 200.0},
+            {"record": "task", "run_id": "w0", "tokens": 300.0, "ts_ms": 1},
+            {"record": "call", "run_id": "w0", "tokens": 100.0, "ts_ms": 2},
+            {"record": "task", "run_id": "w1", "tokens": 200.0, "ts_ms": 1},
         ]
     )
     episodes = population.episode_tokens(rows)

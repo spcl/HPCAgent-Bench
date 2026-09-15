@@ -3,8 +3,8 @@
 """paired_arms.py: arm-against-arm comparisons over a declared family.
 
 THE FIXTURE IS THE PRODUCTION SHAPE. Every episode here emits a graded ``submission`` row carrying a
-speed-up and NO token count, plus a ``call`` row carrying a token count and NO speed-up, because that
-is what the judge and the trajectory writer actually record. Three earlier tests put both columns on
+speed-up and NO token count, a ``call`` row, and a ``task`` row carrying the task's token total, because
+that is what extraction writes (docs/DESIGN_data_collection_and_scoring.md, T3). Three earlier tests put both columns on
 one row, which is why a filter that AND-ed them -- and so kept only call rows and dropped every
 graded submission -- passed its tests and reached a published table.
 
@@ -108,9 +108,33 @@ def observations(rows: list[dict[str, object]], tmp_path: pathlib.Path) -> pathl
     return path
 
 
+def task(arm: str, kernel: str, tokens: float, job: str = "j1", ts: int = 900) -> dict[str, object]:
+    """One task record: the task's token total over all its attempts, stamped with its start."""
+    return {
+        "optimizer": "",
+        "run_root": "stamp",
+        "job": job,
+        "record": "task",
+        "run_id": f"{arm}.n0.p0.w0",
+        "arm": arm,
+        "benchmark": kernel,
+        "speedup": "",
+        "tokens": tokens,
+        "suspect": "",
+        "baseline": "",
+        "ts_ms": ts,
+        "attempt_index": "",
+    }
+
+
 def episode(arm: str, kernel: str, speedup: float, tokens: float, job: str = "j1") -> list[dict[str, object]]:
-    """One agent on one kernel, in the two rows the harness writes for it."""
-    return [graded(arm, kernel, speedup, job=job), call(arm, kernel, tokens, job=job)]
+    """One agent on one kernel, in the rows extraction writes for it: its accepted submission, the
+    submit call, and the task record carrying its token total."""
+    return [
+        graded(arm, kernel, speedup, job=job),
+        call(arm, kernel, tokens, job=job),
+        task(arm, kernel, tokens, job=job),
+    ]
 
 
 def test_within_an_episode_the_last_submission_wins_not_the_best(paired_arms: ModuleType) -> None:
@@ -173,19 +197,47 @@ def test_the_score_leg_keeps_a_kernel_that_has_no_call_row(paired_arms: ModuleTy
     assert paired_arms.cost_leg("a", "b", tokens)[1] == len(KERNELS)
 
 
-def test_the_cost_leg_reads_a_run_as_its_counter_maximum_and_a_rerun_as_its_latest_run(
-    paired_arms: ModuleType,
-) -> None:
-    """``calls.tokens`` is cumulative through a call, so a run's spend is its maximum (250, not the 350
-    a row sum gives). Job j2 reruns the kernel, so the arm's cost is that run's 400 -- not the 650 a
-    sum over reruns would bill."""
+def test_the_cost_leg_reads_the_task_record_and_a_rerun_as_its_latest_task(paired_arms: ModuleType) -> None:
+    """A task's cost is its task record (900, the total over its attempts), not the 250 its last call
+    row read. Job j2 reruns the kernel, so the arm's cost is that task's 400 -- not the 1300 a sum over
+    reruns would bill."""
     rows = [
         call("a", "k1", 100.0, job="j1", ts=1000, index=1),
         call("a", "k1", 250.0, job="j1", ts=2000, index=2),
+        task("a", "k1", 900.0, job="j1", ts=900),
         call("a", "k1", 400.0, job="j2", ts=3000, index=1),
+        task("a", "k1", 400.0, job="j2", ts=2900),
     ]
-    assert paired_arms.tokens_by_arm_kernel(frame(rows[:2]))[("a", "k1")] == 250.0
+    assert paired_arms.tokens_by_arm_kernel(frame(rows[:3]))[("a", "k1")] == 900.0
     assert paired_arms.tokens_by_arm_kernel(frame(rows))[("a", "k1")] == 400.0
+
+
+def test_usage_counts_every_call_of_the_selected_tasks_per_task(paired_arms: ModuleType) -> None:
+    """Score and submit calls of ANY status count, accepted submissions are submission rows, and the
+    mean is over the tasks the repeat policy selects: the rerun in j2 replaces j1's task entirely."""
+    rows = [
+        call("a", "k1", 100.0, job="j1", ts=1000) | {"route": "score"},
+        call("a", "k1", 200.0, job="j1", ts=1100) | {"route": "submit"},
+        call("a", "k2", 100.0, job="j1", ts=1000) | {"route": "score"},
+        call("a", "k2", 150.0, job="j1", ts=1200) | {"route": "score"},
+        call("a", "k2", 180.0, job="j1", ts=1300) | {"route": "submit"},
+        graded("a", "k2", 2.0, job="j1", ts=1300),
+        call("a", "k1", 50.0, job="j2", ts=5000) | {"route": "submit"},
+    ]
+    usage = paired_arms.task_usage(frame(rows), "latest").loc["a"]
+    assert usage.tasks == 2
+    assert usage.score_calls_per_task == pytest.approx(1.0)
+    assert usage.submit_calls_per_task == pytest.approx(1.0)
+    assert usage.accepted_submissions_per_task == pytest.approx(0.5)
+
+
+def test_a_pair_across_two_models_is_refused(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
+    """A pair answers what one change did to one model on one language; across models it is two
+    questions at once and no estimate separates them."""
+    rows = episode("x-qwen38-c", "k1", 2.0, 100.0) + episode("x-oss120b-c", "k1", 2.0, 100.0)
+    path = observations(rows, tmp_path)
+    with pytest.raises(SystemExit, match="share model and language"):
+        paired_arms.main(["--observations", str(path), "--pair", "x-qwen38-c,x-oss120b-c", "--family", "f"])
 
 
 def test_two_denominators_are_refused_rather_than_pooled(paired_arms: ModuleType) -> None:
@@ -327,7 +379,8 @@ def test_a_teardown_harvest_does_not_make_the_agent_a_non_submitter(
     best = paired_arms.best_by_arm_kernel(graded_frame)
     served = paired_arms.served_by_arm(obs)
     table = paired_arms.arm_aggregates(best, served, "numba")
-    row = paired_arms.arm_rows(best, graded_frame, table, served, paired_arms.tokens_by_arm_kernel(obs))[0]
+    tokens = paired_arms.tokens_by_arm_kernel(obs)
+    row = paired_arms.arm_rows(best, graded_frame, table, served, tokens, paired_arms.task_usage(obs, "latest"))[0]
 
     assert row["n_solved"] == 3
     assert row["n_final_harvest"] == 2
@@ -338,7 +391,11 @@ def test_a_promoted_row_is_not_a_submission_either(paired_arms: ModuleType, tmp_
     """A promotion is an answer the agent scored and never submitted, so an episode carrying only
     one recorded no submission act -- and it is not a workspace harvest, so it is not counted as
     one."""
-    rows = [graded("a", "k1", 3.0, optimizer=paired_arms.PROMOTED_TAG), call("a", "k1", 100.0)]
+    rows = [
+        graded("a", "k1", 3.0, optimizer=paired_arms.PROMOTED_TAG),
+        call("a", "k1", 100.0),
+        task("a", "k1", 100.0),
+    ]
 
     path = observations(rows, tmp_path)
     obs = paired_arms.load_observations([path])
@@ -346,7 +403,8 @@ def test_a_promoted_row_is_not_a_submission_either(paired_arms: ModuleType, tmp_
     best = paired_arms.best_by_arm_kernel(graded_frame)
     served = paired_arms.served_by_arm(obs)
     table = paired_arms.arm_aggregates(best, served, "numba")
-    row = paired_arms.arm_rows(best, graded_frame, table, served, paired_arms.tokens_by_arm_kernel(obs))[0]
+    tokens = paired_arms.tokens_by_arm_kernel(obs)
+    row = paired_arms.arm_rows(best, graded_frame, table, served, tokens, paired_arms.task_usage(obs, "latest"))[0]
 
     assert (row["n_final_harvest"], row["n_never_submitted"]) == (0, 1)
 
@@ -380,25 +438,26 @@ def test_excluded_pairs_drops_a_pair_when_either_arm_is_short(paired_arms: Modul
 def test_a_pair_with_an_incomplete_arm_is_dropped_by_default(
     paired_arms: ModuleType, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """b never got a row for k3. Pairing a,c stays (both complete); a,b is dropped and named on
-    stderr rather than silently pairing a's full roster against b's partial one."""
+    """b never got a row for k3. Pairing a,d stays (both complete); a,b is dropped and named on
+    stderr rather than silently pairing a's full roster against b's partial one. (No arm is named
+    ``c``: that token reads as the C language in an arm name.)"""
     rows: list[dict[str, object]] = []
     for kernel in ("k1", "k2", "k3"):
         rows += episode("a", kernel, 2.0, 100.0)
-        rows += episode("c", kernel, 2.0, 100.0)
+        rows += episode("d", kernel, 2.0, 100.0)
     for kernel in ("k1", "k2"):
         rows += episode("b", kernel, 2.0, 100.0)
 
     path = observations(rows, tmp_path)
     out = tmp_path / "pairs.csv"
     rc = paired_arms.main(
-        ["--observations", str(path), "--pair", "a,b", "--pair", "a,c", "--family", "f", "--out", str(out)]
+        ["--observations", str(path), "--pair", "a,b", "--pair", "a,d", "--family", "f", "--out", str(out)]
     )
 
     assert rc == 0
     assert "excluding pair a,b -- incomplete roster coverage: b 2/3" in capsys.readouterr().err
     table = pd.read_csv(out)
-    assert set(zip(table.arm_a, table.arm_b, strict=True)) == {("a", "c")}
+    assert set(zip(table.arm_a, table.arm_b, strict=True)) == {("a", "d")}
 
 
 def test_include_incomplete_keeps_a_pair_missing_roster_coverage(

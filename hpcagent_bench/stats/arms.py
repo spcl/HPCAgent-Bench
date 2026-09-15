@@ -310,13 +310,11 @@ def denominator_split(subs: pd.DataFrame) -> pd.DataFrame:
 
 
 def tokens_per_arm_kernel(observations: pd.DataFrame) -> pd.DataFrame:
-    """Total tokens each arm spent on each kernel -- the COST half of the efficacy pair.
+    """The token total each arm spent on each kernel -- the COST half of the efficacy pair.
 
-    Read from the ``call`` rows, which are the only ones that carry a token count: a submission row
-    has none, so summing over submissions yields an empty cost table and no efficacy at all.
-    ``calls.tokens`` is CUMULATIVE through a call, so an EPISODE's spend is its own maximum and a
-    kernel's is the sum over its episodes; summing the rows would count every earlier call again,
-    once per later one, and inflate a long repair loop quadratically.
+    Read from the ``task`` rows (spec T2-T4): a task's effective total over all its attempts, the
+    kernel's LATEST task for a rerun (:func:`population.kernel_tokens`). A submission row carries no
+    cost, and ``calls.tokens`` misses earlier attempts, so neither is read.
     """
     totals = population.kernel_tokens(observations, ("arm", "benchmark"))
     if totals.empty:
