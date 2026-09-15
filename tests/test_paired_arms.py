@@ -147,7 +147,7 @@ def test_the_score_leg_keeps_a_kernel_that_has_no_call_row(paired_arms: ModuleTy
     rows.append(graded("b", "k9", 2.0))
 
     path = observations(rows, tmp_path)
-    obs = paired_arms.load_observations(path)
+    obs = paired_arms.load_observations([path])
     graded_rows = paired_arms.graded_rows(obs, ["a", "b"])
     best = paired_arms.best_by_arm_kernel(graded_rows)
     table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
@@ -192,7 +192,7 @@ def test_a_pair_reports_what_the_intersection_dropped(paired_arms: ModuleType, t
         rows.append(call("a", kernel, 100.0))
 
     path = observations(rows, tmp_path)
-    obs = paired_arms.load_observations(path)
+    obs = paired_arms.load_observations([path])
     graded_rows = paired_arms.graded_rows(obs, ["a", "b"])
     best = paired_arms.best_by_arm_kernel(graded_rows)
     table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
@@ -214,7 +214,7 @@ def test_a_leg_below_the_interval_floor_reports_underpowered(paired_arms: Module
         rows += episode("b", kernel, 2.0, 100.0)
 
     path = observations(rows, tmp_path)
-    obs = paired_arms.load_observations(path)
+    obs = paired_arms.load_observations([path])
     best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a", "b"]))
     table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
     reported = paired_arms.pair_rows([("a", "b")], table, paired_arms.tokens_by_arm_kernel(obs), list(KERNELS), "f")
@@ -235,7 +235,7 @@ def test_the_correction_runs_over_every_leg_of_every_pair(paired_arms: ModuleTyp
         rows += episode("c", kernel, 1.5 + index * 0.1, 300.0 + index)
 
     path = observations(rows, tmp_path)
-    obs = paired_arms.load_observations(path)
+    obs = paired_arms.load_observations([path])
     best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a", "b", "c"]))
     table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
     tokens = paired_arms.tokens_by_arm_kernel(obs)
@@ -256,7 +256,7 @@ def test_the_estimate_is_the_hodges_lehmann_of_the_paired_logs(paired_arms: Modu
         rows += episode("b", kernel, 2.0, 100.0)
 
     path = observations(rows, tmp_path)
-    obs = paired_arms.load_observations(path)
+    obs = paired_arms.load_observations([path])
     best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a", "b"]))
     table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
     change, _ = paired_arms.score_leg(table["a"], table["b"])
@@ -272,7 +272,7 @@ def test_a_grade_with_no_arm_never_becomes_a_pair_table_arm(
 ) -> None:
     """The pair tables read the same condition filter as the arm tables, not a local copy of it."""
     rows = episode("a", "k1", 2.0, 100.0) + episode(pseudo, "k1", 3.0, 100.0)
-    obs = paired_arms.load_observations(observations(rows, tmp_path))
+    obs = paired_arms.load_observations([observations(rows, tmp_path)])
     assert set(paired_arms.served_by_arm(obs)) == {"a"}
 
 
@@ -307,7 +307,7 @@ def test_a_teardown_harvest_does_not_make_the_agent_a_non_submitter(
     ]
 
     path = observations(rows, tmp_path)
-    obs = paired_arms.load_observations(path)
+    obs = paired_arms.load_observations([path])
     graded_frame = paired_arms.graded_rows(obs, ["a"])
     best = paired_arms.best_by_arm_kernel(graded_frame)
     served = paired_arms.served_by_arm(obs)
@@ -326,7 +326,7 @@ def test_a_promoted_row_is_not_a_submission_either(paired_arms: ModuleType, tmp_
     rows = [graded("a", "k1", 3.0, optimizer=paired_arms.PROMOTED_TAG), call("a", "k1", 100.0)]
 
     path = observations(rows, tmp_path)
-    obs = paired_arms.load_observations(path)
+    obs = paired_arms.load_observations([path])
     graded_frame = paired_arms.graded_rows(obs, ["a"])
     best = paired_arms.best_by_arm_kernel(graded_frame)
     served = paired_arms.served_by_arm(obs)
@@ -334,3 +334,100 @@ def test_a_promoted_row_is_not_a_submission_either(paired_arms: ModuleType, tmp_
     row = paired_arms.arm_rows(best, graded_frame, table, served, paired_arms.tokens_by_arm_kernel(obs))[0]
 
     assert (row["n_final_harvest"], row["n_never_submitted"]) == (0, 1)
+
+
+def test_load_observations_concatenates_two_paths(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
+    """A scored campaign and its blind control live in two separate extracted databases; pairing
+    across them must not require copying one into the other's directory first."""
+    left_dir, right_dir = tmp_path / "left", tmp_path / "right"
+    left_dir.mkdir()
+    right_dir.mkdir()
+    left = observations(episode("a", "k1", 2.0, 100.0), left_dir)
+    right = observations(episode("b", "k1", 3.0, 100.0), right_dir)
+
+    obs = paired_arms.load_observations([left, right])
+
+    assert set(obs.arm) == {"a", "b"}
+    assert paired_arms.served_by_arm(obs) == {"a": frozenset({"k1"}), "b": frozenset({"k1"})}
+
+
+def test_excluded_pairs_drops_a_pair_when_either_arm_is_short(paired_arms: ModuleType) -> None:
+    """A leg pairing one arm's partial roster against the other's full one is not the comparison a
+    reader asked for, so the whole pair drops rather than one leg silently narrowing to whatever the
+    short arm covered."""
+    survivors, notes = paired_arms.excluded_pairs(
+        [("a", "b"), ("c", "d")], kept=["a", "b", "c"], dropped={"d": 5}, roster_size=8
+    )
+    assert survivors == [("a", "b")]
+    assert notes == ["excluding pair c,d -- incomplete roster coverage: d 5/8"]
+
+
+def test_a_pair_with_an_incomplete_arm_is_dropped_by_default(
+    paired_arms: ModuleType, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """b never got a row for k3. Pairing a,c stays (both complete); a,b is dropped and named on
+    stderr rather than silently pairing a's full roster against b's partial one."""
+    rows: list[dict[str, object]] = []
+    for kernel in ("k1", "k2", "k3"):
+        rows += episode("a", kernel, 2.0, 100.0)
+        rows += episode("c", kernel, 2.0, 100.0)
+    for kernel in ("k1", "k2"):
+        rows += episode("b", kernel, 2.0, 100.0)
+
+    path = observations(rows, tmp_path)
+    out = tmp_path / "pairs.csv"
+    rc = paired_arms.main(
+        ["--observations", str(path), "--pair", "a,b", "--pair", "a,c", "--family", "f", "--out", str(out)]
+    )
+
+    assert rc == 0
+    assert "excluding pair a,b -- incomplete roster coverage: b 2/3" in capsys.readouterr().err
+    table = pd.read_csv(out)
+    assert set(zip(table.arm_a, table.arm_b, strict=True)) == {("a", "c")}
+
+
+def test_include_incomplete_keeps_a_pair_missing_roster_coverage(
+    paired_arms: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """The flag is the escape hatch: the same short arm, and the pair survives."""
+    rows: list[dict[str, object]] = []
+    for kernel in ("k1", "k2", "k3"):
+        rows += episode("a", kernel, 2.0, 100.0)
+    for kernel in ("k1", "k2"):
+        rows += episode("b", kernel, 2.0, 100.0)
+
+    path = observations(rows, tmp_path)
+    out = tmp_path / "pairs.csv"
+    rc = paired_arms.main(
+        [
+            "--observations",
+            str(path),
+            "--pair",
+            "a,b",
+            "--family",
+            "f",
+            "--out",
+            str(out),
+            "--include-incomplete",
+        ]
+    )
+
+    assert rc == 0
+    table = pd.read_csv(out)
+    assert set(zip(table.arm_a, table.arm_b, strict=True)) == {("a", "b")}
+
+
+def test_every_pair_excluded_raises_rather_than_writing_an_empty_table(
+    paired_arms: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """Silently writing an empty CSV reads as "nothing to report"; a family with nothing left in it
+    must say so instead."""
+    rows: list[dict[str, object]] = []
+    for kernel in ("k1", "k2", "k3"):
+        rows += episode("a", kernel, 2.0, 100.0)
+    for kernel in ("k1", "k2"):
+        rows += episode("b", kernel, 2.0, 100.0)
+
+    path = observations(rows, tmp_path)
+    with pytest.raises(SystemExit, match="excluded"):
+        paired_arms.main(["--observations", str(path), "--pair", "a,b", "--family", "f"])

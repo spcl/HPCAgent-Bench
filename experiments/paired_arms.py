@@ -22,9 +22,12 @@ The family is every test in the output: both legs of every pair. Benjamini-Hochb
 once, and a leg with fewer than ``summary.MIN_PAIRS_FOR_INTERVAL`` pairs reports ``underpowered``
 rather than a verdict -- a bootstrap flag at n = 2-4 is a coin toss.
 
-    python3 paired_arms.py --observations artifact/data/llr40_observations.csv \\
+    python3 paired_arms.py --observations scored.db --observations blind.db \\
         --pair cpf-llr-focus40-oss120b-c,llrblind-oss120b-c \\
         --family blind-vs-scored --out blind.csv
+
+``--observations`` is repeatable: the scored campaign and its blind control usually live in two
+extracted databases, one per experiment folder, and a run never copies one into the other's.
 """
 
 import argparse
@@ -111,9 +114,15 @@ ARM_COLUMNS = (
 )
 
 
-def load_observations(path: pathlib.Path) -> pd.DataFrame:
-    """The extracted observations, restricted to the arms that recorded a campaign run id."""
-    return population.condition_rows(experiments.read_observations(path))
+def load_observations(paths: list[pathlib.Path]) -> pd.DataFrame:
+    """The extracted observations, restricted to the arms that recorded a campaign run id.
+
+    ``paths`` concatenates: a scored campaign and its blind control are two extracted databases,
+    and pairing across them must not require copying one into the other's directory first.
+    """
+    frames = [experiments.read_observations(path) for path in paths]
+    combined = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+    return population.condition_rows(combined)
 
 
 def graded_rows(observations: pd.DataFrame, arms: list[str]) -> pd.DataFrame:
@@ -331,6 +340,30 @@ def arm_rows(
     return rows
 
 
+def excluded_pairs(
+    pairs: list[tuple[str, str]], kept: list[str], dropped: dict[str, int], roster_size: int
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """``pairs`` restricted to arms :func:`~hpcagent_bench.stats.population.complete_arms` kept, and
+    one note per pair it drops.
+
+    A pair drops when EITHER arm is short of the roster: a leg pairing one arm's partial roster
+    against the other's full one is not the comparison a reader asked for, and completing it with
+    ``align`` would silently narrow the roster to whatever the short arm happened to cover instead
+    of saying so.
+    """
+    keep = set(kept)
+    survivors: list[tuple[str, str]] = []
+    notes: list[str] = []
+    for arm_a, arm_b in pairs:
+        short = [(arm, dropped[arm]) for arm in (arm_a, arm_b) if arm not in keep]
+        if short:
+            detail = ", ".join(f"{arm} {n}/{roster_size}" for arm, n in short)
+            notes.append(f"excluding pair {arm_a},{arm_b} -- incomplete roster coverage: {detail}")
+        else:
+            survivors.append((arm_a, arm_b))
+    return survivors, notes
+
+
 def parse_pair(spec: str) -> tuple[str, str]:
     """``ARM_A,ARM_B`` -> ``(ARM_A, ARM_B)``; every reported estimate is ``a / b``."""
     arm_a, sep, arm_b = spec.partition(",")
@@ -341,11 +374,22 @@ def parse_pair(spec: str) -> tuple[str, str]:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--observations", required=True, type=pathlib.Path, help="llr40_observations.csv to read")
+    ap.add_argument(
+        "--observations",
+        required=True,
+        action="append",
+        type=pathlib.Path,
+        help="an extracted observations .db or CSV; repeatable, to pair arms across two campaigns",
+    )
     ap.add_argument("--pair", action="append", required=True, metavar="ARM_A,ARM_B", help="repeatable")
     ap.add_argument("--family", required=True, help="the family name the correction is declared over")
     ap.add_argument("--out", type=pathlib.Path, default=None, help="write the pairs CSV here")
     ap.add_argument("--arms-out", type=pathlib.Path, default=None, help="write the per-arm CSV here")
+    ap.add_argument(
+        "--include-incomplete",
+        action="store_true",
+        help="keep a pair even when either arm lacks an observation row for some roster kernel",
+    )
     return ap.parse_args(argv)
 
 
@@ -358,12 +402,22 @@ def main(argv: list[str]) -> int:
     missing = [arm for arm in arms if arm not in set(observations.arm)]
     if missing:
         raise SystemExit(f"no observations for {missing}")
+
+    roster = sorted(observations.benchmark.dropna().astype(str).unique())
+    if not args.include_incomplete:
+        kept, dropped = population.complete_arms(observations[observations.arm.isin(arms)], roster)
+        pairs, notes = excluded_pairs(pairs, kept, dropped, len(roster))
+        for note in notes:
+            print(f"note: {note}", file=sys.stderr)
+        if not pairs:
+            raise SystemExit("every pair was excluded for incomplete roster coverage; rerun with --include-incomplete")
+        arms = sorted({arm for pair in pairs for arm in pair})
+
     graded = graded_rows(observations, arms)
     baseline = population.one_denominator(graded.baseline.tolist(), label="family")
     best = best_by_arm_kernel(graded)
     served = served_by_arm(observations[observations.arm.isin(arms)])
     table = arm_aggregates(best, served, baseline)
-    roster = sorted(observations.benchmark.dropna().astype(str).unique())
 
     tokens = tokens_by_arm_kernel(observations)
     arm_frame = pd.DataFrame(arm_rows(best, graded, table, served, tokens)).reindex(columns=list(ARM_COLUMNS))
