@@ -1020,6 +1020,34 @@ def test_a_size_local_mutated_after_its_definition_is_neither_inlined_nor_promot
     assert "n" not in promoted, (rebinding, promoted)
 
 
+def test_an_alias_of_a_size_rebound_after_it_keeps_its_own_name() -> None:
+    """cegterg saves ``nb1 = nbase`` before ``nbase = nend`` and mirrors the fresh columns from ``nb1``; spliced
+    as ``nbase`` the alias read the updated size, the mirror loop ``range(nbase, nbase)`` ran zero times and
+    the reduced Hamiltonian stayed non-Hermitian."""
+    src = (
+        "def k(a, n0, m):\n    nbase = n0 + 0\n    for it in range(3):\n        nb1 = nbase\n"
+        "        nbase = nbase + m\n        for j in range(nb1, nbase):\n            a[j] = a[j] + 1\n"
+    )
+    fn = ast.parse(src).body[0]
+    out = ast.unparse(_inline_symbol_aliases(fn, {"n0", "m", "nbase"}, {"a", "n0", "m"}))
+    assert "nb1 = nbase" in out and "range(nb1, nbase)" in out, out
+
+
+def test_a_use_of_a_size_alias_before_its_source_is_rebound_still_gets_spliced() -> None:
+    """cegterg reads ``nb1`` in ``hc[nb1:nend, :nend] = ...`` before ``nbase = nend`` runs, in the same
+    Davidson-loop iteration as its ``nb1 = nbase`` binding: that read sees the value ``nbase`` still
+    holds, so it is spliced same as any other alias, while the mirror loop after the rebind keeps ``nb1``."""
+    src = (
+        "def k(a, n0, m):\n    nbase = n0 + 0\n    for it in range(3):\n        nb1 = nbase\n"
+        "        a[nb1:m] = a[nb1:m] + 1\n        nbase = nbase + m\n"
+        "        for j in range(nb1, nbase):\n            a[j] = a[j] + 1\n"
+    )
+    fn = ast.parse(src).body[0]
+    out = ast.unparse(_inline_symbol_aliases(fn, {"n0", "m", "nbase"}, {"a", "n0", "m"}))
+    assert "a[nbase:m]" in out, out
+    assert "nb1 = nbase" in out and "range(nb1, nbase)" in out, out
+
+
 def test_a_bare_alias_rebound_inside_a_loop_is_copied_rather_than_left_a_view() -> None:
     """ls3df_scf's inlined CheFSI binds ``X = <reshaped block>`` and swaps ``X, Y = Y, Ynew`` in the loop, so
     every binding of ``X`` is a bare alias and the loop's one reassigns the View dace made for the first:
