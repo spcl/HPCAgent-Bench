@@ -269,10 +269,15 @@ def widen_gap_until_labels_clear(
     while True:
         fig.canvas.draw()
         renderer = fig.canvas.get_renderer()
-        left_box = ax_left.get_xticklabels()[-1].get_window_extent(renderer)
-        right_box = ax_right.get_xticklabels()[0].get_window_extent(renderer)
+        left_tick = ax_left.get_xticklabels()[-1].get_window_extent(renderer)
+        right_tick = ax_right.get_xticklabels()[0].get_window_extent(renderer)
+        # each axis label is centred under its own panel, so a long ratio label ("Repository / Kernel")
+        # runs under the neighbour's label long before the tick labels touch
+        left_title = ax_left.xaxis.label.get_window_extent(renderer)
+        right_title = ax_right.xaxis.label.get_window_extent(renderer)
+        gap_px = min(right_tick.x0 - left_tick.x1, right_title.x0 - left_title.x1)
         min_gap_px = MIN_LABEL_GAP_PT * fig.dpi / 72.0
-        if right_box.x0 - left_box.x1 >= min_gap_px or wspace >= MAX_WSPACE:
+        if gap_px >= min_gap_px or wspace >= MAX_WSPACE:
             return
         wspace = min(wspace + WSPACE_STEP, MAX_WSPACE)
         fig.subplots_adjust(wspace=wspace)

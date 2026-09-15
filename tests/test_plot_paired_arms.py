@@ -304,6 +304,20 @@ def test_a_wide_ratio_range_still_clears_the_gap_after_it_widens() -> None:
         plt.close(fig)
 
 
+def test_a_long_ratio_label_widens_the_gap_until_the_axis_labels_clear() -> None:
+    """Each axis label is centred under its own panel, so a long contrast runs under the
+    neighbouring panel's label unless the gap grows for the labels too, not only the ticks."""
+    fig = plot.build_figure(table(), "gap check", False, ratio="Repository / Kernel")
+    try:
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        left = fig.axes[0].xaxis.label.get_window_extent(renderer)
+        right = fig.axes[1].xaxis.label.get_window_extent(renderer)
+        assert left.x1 <= right.x0, (left.x1, right.x0)
+    finally:
+        plt.close(fig)
+
+
 # ---------------------------------------------------------------------------
 # End to end: a tiny synthetic CSV, exactly the shape paired_arms.py --out writes.
 
