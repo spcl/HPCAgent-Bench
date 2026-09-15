@@ -309,8 +309,9 @@ def test_two_denominators_are_refused_rather_than_pooled(paired_arms: ModuleType
 
 
 def test_a_pair_reports_what_the_intersection_dropped(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
-    """Arm b solves two kernels arm a never did. The row must carry them as ``n_only_b`` and test
-    the discordance, not quietly compare the six that survived."""
+    """Arm b solves two kernels arm a never did. Both arms were SERVED all eight, so both enter the
+    leg with the two failures at 1.0, and the row still carries the discordance as ``n_only_b``: the
+    counts say who delivered, the population says who was asked."""
     rows: list[dict[str, object]] = []
     for kernel in KERNELS[:6]:
         rows += episode("a", kernel, 2.0, 100.0)
@@ -327,8 +328,10 @@ def test_a_pair_reports_what_the_intersection_dropped(paired_arms: ModuleType, t
     reported = paired_arms.pair_rows([("a", "b")], table, paired_arms.tokens_by_arm_kernel(obs), list(KERNELS), "f")
 
     speed = next(row for row in reported if row["leg"] == "speedup")
-    assert (speed["n_a"], speed["n_b"], speed["n_both"]) == (6, 8, 6)
-    assert (speed["n_only_a"], speed["n_only_b"]) == (0, 2)
+    # population: both arms were served all eight, so the leg is paired over eight
+    assert (speed["n_a"], speed["n_b"], speed["n_pairs"]) == (8, 8, 8)
+    # delivery: b answered two that a did not, and the coverage columns still say so
+    assert (speed["n_both"], speed["n_only_a"], speed["n_only_b"]) == (6, 0, 2)
     assert speed["coverage_p"] == pytest.approx(population.mcnemar_exact(0, 2))
 
 
@@ -672,3 +675,23 @@ def test_one_baseline_keeps_the_named_reference_and_every_row_without_one(paired
     kept = paired_arms.one_baseline(rows, "c-autopar")
     assert list(kept.record) == ["submission", "task", "task"]
     assert sorted(kept[kept.record == "task"].benchmark) == ["k1", "k2"]
+
+
+def test_a_kernel_the_arm_never_delivered_scores_one_and_still_costs_its_tokens(
+    paired_arms: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """A failed episode is not absent from the roster and it is not free: the agent was served the
+    kernel and spent its budget, and the baseline is what it left standing."""
+    rows: list[dict[str, object]] = []
+    for kernel in KERNELS[:4]:
+        rows += episode("a", kernel, 4.0, 100.0)
+    # served, never delivered: a call and a task row, no graded submission
+    rows.append(call("a", "k5", 100.0))
+    rows.append(task("a", "k5", 100.0))
+    obs = paired_arms.load_observations([observations(rows, tmp_path)])
+    best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a"]))
+    aggregate = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")["a"]
+    assert aggregate.policy == "served"
+    assert (aggregate.n, aggregate.n_solved) == (5, 4)
+    assert aggregate.geomean() == pytest.approx(4.0 ** (4.0 / 5.0))
+    assert paired_arms.tokens_by_arm_kernel(obs)[("a", "k5")] == pytest.approx(100.0)

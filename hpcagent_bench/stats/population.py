@@ -551,6 +551,11 @@ class ArmAggregate:
     kernels: tuple[str, ...]
     values: tuple[float, ...]
     n_solved: int
+    #: The kernels the arm actually DELIVERED a verified answer for. Under ``served`` the population
+    #: is the whole roster and a failure enters at :data:`NOT_DELIVERED`, so this is the only place
+    #: that still says who delivered -- which is what :func:`coverage` tests. Empty means the
+    #: aggregate predates the field and the population stands in for it.
+    delivered: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.baseline:
@@ -563,11 +568,17 @@ class ArmAggregate:
             raise MixedPopulationError(f"{self.arm}: a kernel may enter an aggregate only once")
         if any(not math.isfinite(value) or value <= 0.0 for value in self.values):
             raise MixedPopulationError(f"{self.arm}: every value must be a finite positive ratio")
+        if self.delivered and not set(self.delivered) <= set(self.kernels):
+            raise MixedPopulationError(f"{self.arm}: delivered a kernel that is not in its population")
 
     @property
     def n(self) -> int:
         """Kernels behind the number."""
         return len(self.kernels)
+
+    def delivered_kernels(self) -> frozenset[str]:
+        """The kernels this arm verified, which is what a coverage comparison is about."""
+        return frozenset(self.delivered) if self.delivered else frozenset(self.kernels)
 
     def geomean(self) -> float:
         """Geometric mean over :attr:`kernels`; NaN when the population is empty."""
@@ -588,8 +599,11 @@ class ArmAggregate:
         if absent:
             raise MixedPopulationError(f"{self.arm}: cannot restrict to kernels it has no value for: {absent[:4]}")
         keep = tuple(kernels)
-        solved = min(self.n_solved, len(keep))
-        return ArmAggregate(self.arm, self.baseline, self.policy, keep, tuple(index[k] for k in keep), solved)
+        kept_delivered = tuple(k for k in keep if k in self.delivered_kernels())
+        solved = len(kept_delivered)
+        return ArmAggregate(
+            self.arm, self.baseline, self.policy, keep, tuple(index[k] for k in keep), solved, kept_delivered
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -624,7 +638,7 @@ def aggregate_arm(
         raise MixedPopulationError(f"{arm}: verified kernels that were never served: {unserved[:4]}")
     kernels = tuple(sorted(solved)) if policy == "solved" else tuple(sorted(served))
     values = tuple(float(solved.get(kernel, NOT_DELIVERED)) for kernel in kernels)
-    return ArmAggregate(arm, baseline, policy, kernels, values, len(solved))
+    return ArmAggregate(arm, baseline, policy, kernels, values, len(solved), tuple(sorted(solved)))
 
 
 def common_kernels(aggregates: Sequence[ArmAggregate]) -> tuple[str, ...]:
@@ -658,8 +672,13 @@ def coverage(left: ArmAggregate, right: ArmAggregate, roster: Collection[str] = 
 
     ``roster`` is the set both arms were asked for, which is what makes ``n_neither`` -- the kernels
     neither reached -- a number rather than an assumption. Without it that count is 0.
+
+    Over the kernels each arm DELIVERED, not over its population. Under ``served`` the two
+    populations are both the whole roster and comparing them would report perfect agreement on every
+    pair, erasing exactly the difference this tests: which kernels one arm answered and the other
+    did not.
     """
-    lhs, rhs = set(left.kernels), set(right.kernels)
+    lhs, rhs = set(left.delivered_kernels()), set(right.delivered_kernels())
     return Coverage(
         n_both=len(lhs & rhs),
         n_only_left=len(lhs - rhs),
