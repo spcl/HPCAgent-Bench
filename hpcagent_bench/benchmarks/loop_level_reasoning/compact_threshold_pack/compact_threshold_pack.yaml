@@ -43,3 +43,4 @@ loop_level_reasoning:
     affine guess at the cursor is wrong on every input.
 experiment_tags:
 - llr-focus40
+- harness-focus20

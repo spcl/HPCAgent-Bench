@@ -36,3 +36,4 @@ loop_level_reasoning:
     single specialised schedule cannot win them all.
 experiment_tags:
 - llr-focus40
+- harness-focus20

@@ -7,6 +7,7 @@
 #   ./submit-harness-focus20.sh                                  # problems + arm envs + fairness check
 #   SUBMIT=1 ./submit-harness-focus20.sh                         # ...then submit the wave
 #   SMOKE=1 HARNESSES=claude SUBMIT=1 ./submit-harness-focus20.sh # 1 kernel on 1 node (COLOCATE=1)
+#   CLEAN=1 SUBMIT=1 ./submit-harness-focus20.sh                  # resubmission, arm/job name get -clean
 #   KERNELS=tsvc_2_s235,kmp EXPERIMENT=x RECORD_EXPERIMENT=x ./submit-harness-focus20.sh
 #   EXTRA_ENV_KV="AMD_CE_ENV=optarena-amd-mi300-candidate" ./submit-harness-focus20.sh
 # KERNELS takes make_problems.py --select tokens; KERNELS_FILE is relative to experiments/.
@@ -23,8 +24,13 @@ HARNESSES=${HARNESSES:-"claude miniswe openhands optimas claude+autokernel"}
 MODEL=${MODEL:-qwen38}
 LANGUAGE=${LANGUAGE:-c}
 TAG=${TAG:-harness-focus20}
+# CLEAN=1: a resubmission on a sealed/fresh-relaunch worker. Suffixes the arm and job name only --
+# CAMPAIGN_ARM and HPCAGENT_BENCH_RECORD_ARM follow the arm, but experiment/model/packet/harness
+# stay as recorded, so a clean arm's rows still group with the identity they replace.
+CLEAN=${CLEAN:-0}
 if [[ "${SMOKE:-0}" == 1 ]]; then
-    KERNELS=${KERNELS:-tsvc_2_s2233}
+    # tsvc_2_s235: level 2, in the roster; the old default tsvc_2_s2233 is level 1 and left it
+    KERNELS=${KERNELS:-tsvc_2_s235}
     REPEAT=${REPEAT:-1}
     AGENTS_PER_NODE=${AGENTS_PER_NODE:-1}
     # one edit/build/judge cycle plus promotion on qwen38 does not fit 25-40 minutes
@@ -138,6 +144,7 @@ for spec in ${HARNESSES}; do
     packet=${spec#"${h}"}
     packet=${packet#+}
     arm="${EXPERIMENT}-${MODEL}-${spec/+/-}"
+    [[ "${CLEAN}" == 1 ]] && arm="${arm}-clean"
     env=".env.${arm}"
     # built under a staging name: a gate that bails midway must not leave a complete-looking env
     staged="${env}.staging"
