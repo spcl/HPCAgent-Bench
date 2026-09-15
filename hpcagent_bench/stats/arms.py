@@ -213,7 +213,7 @@ def per_arm_summary(
     frame = pd.DataFrame(rows).set_index(["arm", "baseline"])
     frame = rules.require_costs(frame, "geomean_solved", ["median_baseline_ns", "median_native_ns"])
     frame = rules.require_interval(frame, "geomean_solved", "geomean_solved_low", "geomean_solved_high")
-    return frame.sort_values("geomean_served", ascending=False).round(3)
+    return frame.sort_values("geomean_served", ascending=False)
 
 
 def arm_pair_table(
@@ -261,7 +261,7 @@ def arm_pair_table(
     frame = pd.DataFrame(rows)
     flips = (frame.unmatched_ratio - 1.0) * (frame.matched_ratio - 1.0) < 0
     frame["direction_flips"] = flips
-    return frame.sort_values(["policy", "baseline", "arm_a", "arm_b"]).round(4)
+    return frame.sort_values(["policy", "baseline", "arm_a", "arm_b"])
 
 
 def arm_ranking(best: pd.DataFrame, served: dict[tuple[str, str], frozenset[str]], roster: list[str]) -> pd.DataFrame:
@@ -298,7 +298,7 @@ def arm_ranking(best: pd.DataFrame, served: dict[tuple[str, str], frozenset[str]
                         "kernels": " ".join(shared),
                     }
                 )
-    return pd.DataFrame(rows).round(4)
+    return pd.DataFrame(rows)
 
 
 def denominator_split(subs: pd.DataFrame) -> pd.DataFrame:
@@ -421,7 +421,7 @@ def skills_efficacy(
         row.update(context[str(row["intervention"])])
     head = ["intervention", "baseline", "campaign", "model", "language", "before", "after", "tasks"]
     columns = head + [c for c in rows[0] if c not in head]
-    return pd.DataFrame(rows).reindex(columns=columns).round(4)
+    return pd.DataFrame(rows).reindex(columns=columns)
 
 
 def per_kernel_summary(best: pd.DataFrame, roster: list[str]) -> pd.DataFrame:
@@ -446,7 +446,7 @@ def per_kernel_summary(best: pd.DataFrame, roster: list[str]) -> pd.DataFrame:
     full = grouped.reindex(pd.MultiIndex.from_product([sorted(best.baseline.unique()), roster]))
     full.index.names = ["baseline", "benchmark"]
     full[["arms", "submissions"]] = full[["arms", "submissions"]].fillna(0).astype(int)
-    return full.sort_values(["baseline", "geomean_su"], ascending=[True, False], na_position="last").round(3)
+    return full.sort_values(["baseline", "geomean_su"], ascending=[True, False], na_position="last")
 
 
 def per_language_kernel(best: pd.DataFrame, roster: list[str]) -> pd.DataFrame:
@@ -471,9 +471,7 @@ def per_language_kernel(best: pd.DataFrame, roster: list[str]) -> pd.DataFrame:
             out[f"{language}_submissions"] = out[f"{language}_submissions"].fillna(0).astype(int)
         out["c_over_fortran"] = out.c_best_su / out.fortran_best_su
         frames.append(out.reset_index().set_index(["baseline", "benchmark"]))
-    return (
-        pd.concat(frames).sort_values(["baseline", "c_best_su"], ascending=[True, False], na_position="last").round(3)
-    )
+    return pd.concat(frames).sort_values(["baseline", "c_best_su"], ascending=[True, False], na_position="last")
 
 
 def language_log_ratios(slice_: pd.DataFrame, arm_packet: dict[str, str]) -> np.ndarray:
@@ -544,4 +542,4 @@ def per_language_summary(best: pd.DataFrame) -> pd.DataFrame:
                     }
                 )
             rows.append(row)
-    return pd.DataFrame(rows).set_index(["baseline", "language"]).round(4)
+    return pd.DataFrame(rows).set_index(["baseline", "language"])

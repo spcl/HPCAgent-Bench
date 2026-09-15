@@ -285,6 +285,21 @@ def test_the_impact_table_carries_usage_and_the_arm_aggregates(paired_arms: Modu
     assert treated.median_tokens_ci_low == pytest.approx(50.0) == treated.median_tokens_ci_high
 
 
+def test_counts_are_written_as_integers_and_ratios_at_full_precision(
+    paired_arms: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """Spec N3/N4: a count reads 8, never 8.0, and stays blank where it does not apply; a ratio is
+    written with every digit float64 holds, not rounded to four decimals."""
+    impact_table(paired_arms, tmp_path)
+    header, treated, control = (tmp_path / "impact.csv").read_text().splitlines()[:3]
+    columns = header.split(",")
+    treated_cells = dict(zip(columns, treated.split(","), strict=True))
+    control_cells = dict(zip(columns, control.split(","), strict=True))
+    assert (treated_cells["tasks"], treated_cells["speedup_n"]) == ("8", "8")
+    assert control_cells["speedup_n"] == ""
+    assert float(treated_cells["speedup_ratio"]) == pytest.approx(1.5, abs=1e-12)
+
+
 def test_two_denominators_are_refused_rather_than_pooled(paired_arms: ModuleType) -> None:
     """The judge stamps the reference it divided by; two of them are not one quantity."""
     rows = [graded("a", "k1", 2.0), graded("b", "k1", 2.0)]

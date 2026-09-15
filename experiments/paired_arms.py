@@ -183,6 +183,39 @@ IMPACT_LEG_COLUMNS = {
     "verdict": "verdict",
 }
 
+#: Counts, written as integers and blank when missing (spec N3); every other number is float64 (N2).
+COUNT_COLUMNS = frozenset(
+    {
+        "n_a",
+        "n_b",
+        "n_both",
+        "n_only_a",
+        "n_only_b",
+        "n_pairs",
+        "n_tested",
+        "wins_a",
+        "wins_b",
+        "ties",
+        "n_served",
+        "n_solved",
+        "n_faster",
+        "n_final_harvest",
+        "n_never_submitted",
+        "submissions",
+        "episodes",
+        "jobs",
+        "tasks",
+        "n_token_kernels",
+        "speedup_n",
+        "token_n",
+    }
+)
+
+
+def with_integer_counts(frame: pd.DataFrame) -> pd.DataFrame:
+    """``frame`` with every count column as a nullable integer, so a blank stays blank and 8 is not 8.0."""
+    return frame.astype({column: "Int64" for column in frame.columns if column in COUNT_COLUMNS})
+
 
 def impact_rows(pairs: list[tuple[str, str]], arm_frame: pd.DataFrame, pair_frame: pd.DataFrame) -> pd.DataFrame:
     """Spec section 10: one row per arm, each control once, in the order ``pairs`` first names them. A
@@ -598,18 +631,16 @@ def main(argv: list[str]) -> int:
     usage = task_usage(observations[observations.arm.isin(arms)], args.repeats)
     arm_frame = pd.DataFrame(arm_rows(best, graded, table, served, tokens, usage)).reindex(columns=list(ARM_COLUMNS))
     pair_frame = pd.DataFrame(pair_rows(pairs, table, tokens, roster, args.family)).reindex(columns=list(PAIR_COLUMNS))
-    arm_frame = arm_frame.round(4)
-    pair_frame = pair_frame.round(4)
-
-    print(arm_frame.to_string(index=False))
+    # spec N1: the tables keep full float64; only the printed copy is rounded
+    print(arm_frame.round(4).to_string(index=False))
     print()
-    print(pair_frame.to_string(index=False))
+    print(pair_frame.round(4).to_string(index=False))
     if args.arms_out is not None:
-        arm_frame.to_csv(args.arms_out, index=False)
+        with_integer_counts(arm_frame).to_csv(args.arms_out, index=False)
     if args.out is not None:
-        pair_frame.to_csv(args.out, index=False)
+        with_integer_counts(pair_frame).to_csv(args.out, index=False)
     if args.impact_out is not None:
-        impact_rows(pairs, arm_frame, pair_frame).to_csv(args.impact_out, index=False)
+        with_integer_counts(impact_rows(pairs, arm_frame, pair_frame)).to_csv(args.impact_out, index=False)
     return 0
 
 
