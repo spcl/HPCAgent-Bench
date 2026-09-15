@@ -21,10 +21,11 @@ import argparse
 import contextlib
 import glob
 import logging
+import math
 import pathlib
 import sqlite3
 import sys
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
@@ -192,6 +193,56 @@ def observations(run_globs: Iterable[str], **identity: str | Iterable[str]) -> "
     return pd.DataFrame(rows)
 
 
+#: Identity columns worth filling per arm when a campaign recorded them on only part of an arm's
+#: rows. Not the whole of :data:`IDENTITY`: "experiment", "model", "device", "rep", "arm" and
+#: "harness" have never shown this gap, and filling them silently would hide a real difference
+#: between two runs a caller assumed were one arm.
+FILLABLE_IDENTITY: tuple[str, ...] = ("language", "packet")
+
+
+def is_blank(value: object) -> bool:
+    """Whether a cell records no identity at all: ``None``, NaN, or an empty/whitespace string."""
+    if value is None:
+        return True
+    if isinstance(value, float) and math.isnan(value):
+        return True
+    return not str(value).strip()
+
+
+def fill_arm_identity(frame: "pd.DataFrame", columns: Sequence[str] = FILLABLE_IDENTITY) -> "pd.DataFrame":
+    """``frame`` with a blank cell in ``columns`` filled from its own ARM's one recorded value.
+
+    A campaign's launcher writes one language and one packet per arm (see :data:`IDENTITY`), but
+    the judge's per-record tables do not always carry them onto every row -- an attempt or call row
+    can predate the stamp that a submission row gets. Grouping the raw column then reads one arm as
+    several identity slices and undercounts its own kernel coverage, which is what fragmented
+    ``git-scicomp``'s arm-summary figure.
+
+    Filling from the arm's single non-blank value fixes the gap WITHOUT hiding a real conflict: two
+    different non-blank values recorded under one arm label raise, by name, because that is
+    contamination between two conditions sharing a label, not a recording gap.
+
+    A blank arm label (no arm, or a pseudo-arm such as ``adhoc``) names no condition, so its rows
+    are left exactly as recorded rather than pooled into one identity that does not exist.
+    """
+    if "arm" not in frame.columns:
+        return frame
+    filled = frame.copy()
+    for column in columns:
+        if column not in filled.columns:
+            continue
+        for arm, group in filled.groupby("arm", sort=False):
+            if is_blank(arm):
+                continue
+            named = sorted({str(v).strip() for v in group[column] if not is_blank(v)})
+            if len(named) > 1:
+                raise ValueError(f"arm {arm!r} carries more than one {column}: {named}")
+            if len(named) == 1:
+                blank_rows = group[column].map(is_blank)
+                filled.loc[group.index[blank_rows], column] = named[0]
+    return filled
+
+
 #: The table an extracted experiment database keeps its observations in, one row per CSV row.
 OBSERVATIONS_TABLE: str = "observations"
 
@@ -213,12 +264,17 @@ def read_observations(path: pathlib.Path) -> "pd.DataFrame":
 
     Every figure and table reads through here, so a plot is a function of the committed file alone
     and the reproducibility artifact can ship one database per experiment instead of a CSV.
+
+    :func:`fill_arm_identity` runs on the result, not on the way in: a CSV and a ``.db`` share this
+    one place their rows become a frame, so a caller of either never has to know the gap exists.
     """
     import pandas as pd
 
     if path.suffix != ".db":
-        return pd.read_csv(path, low_memory=False)
-    return read_table(path, OBSERVATIONS_TABLE)
+        frame = pd.read_csv(path, low_memory=False)
+    else:
+        frame = read_table(path, OBSERVATIONS_TABLE)
+    return fill_arm_identity(frame)
 
 
 def main(argv: list[str] | None = None) -> int:
