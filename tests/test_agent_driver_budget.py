@@ -234,10 +234,16 @@ def claude_log_content(input_tokens: int, output_tokens: int) -> str:
 
 
 def test_tokens_json_keeps_its_old_keys_and_gains_the_task_totals(driver, tmp_path: pathlib.Path) -> None:
-    """T1-T2: tokens.json still carries the surviving attempt's own numbers under their old names
-    unchanged, and gains the task total over EVERY attempt (attempts, tokens_effective_all_attempts,
+    """T1-T2: tokens.json still carries the surviving attempt's own numbers under their old names,
+    and gains the task total over EVERY attempt (attempts, tokens_effective_all_attempts,
     tokens_billed_all_attempts) so a relaunched task's earlier crash is not silently dropped from
-    what the run cost."""
+    what the run cost.
+
+    Two of those names CHANGED with token fold 2 (T5-T7, F8): ``thinking`` is now
+    ``thinking_estimate`` because it is added to nothing, and ``generated`` is gone because it had
+    become a second copy of ``output``. Records written under fold 1 are migrated by
+    ``scripts/migrate_tokens.py``, which is what keeps the rename from losing them.
+    """
     (tmp_path / "claude.attempt1.log").write_text(claude_log_content(1000, 100), encoding="utf-8")
     (tmp_path / "claude.log").write_text(claude_log_content(2000, 200), encoding="utf-8")
 
@@ -257,13 +263,14 @@ def test_tokens_json_keeps_its_old_keys_and_gains_the_task_totals(driver, tmp_pa
         "fresh_input",
         "cached_input",
         "output",
-        "thinking",
-        "generated",
+        "thinking_estimate",
+        "output_reported",
         "effective",
         "wall_ms",
         "api_ms",
     }
     assert old_keys <= record.keys()
+    assert "thinking" not in record and "generated" not in record, "fold 1's names are not left beside fold 2's"
     # unchanged: the surviving attempt's own numbers, exactly as before this task-total addition
     assert record["tokens"] == 2000
     assert record["effective"] == 2200.0

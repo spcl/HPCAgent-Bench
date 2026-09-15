@@ -326,16 +326,44 @@ def report_throughput(samples: list[dict[str, float]]) -> None:
         print(f"throughput probe: could not write {out}: {exc}", flush=True)
 
 
-#: The vLLM Prometheus series the aggregate probe reads. The two counters are what the tok/s figures
-#: are computed from; the two gauges are what makes those figures mean anything, because an aggregate
-#: rate sampled while two agents happened to be in flight is a fact about two agents and not about
-#: the server. All four carry a ``model_name`` label, so a series is matched on its name alone and
-#: every label set of that name is summed -- see parse_prometheus.
-METRIC_GENERATION = "vllm:generation_tokens_total"
-METRIC_PROMPT = "vllm:prompt_tokens_total"
-METRIC_RUNNING = "vllm:num_requests_running"
-METRIC_WAITING = "vllm:num_requests_waiting"
+#: What the aggregate probe needs from a server, under names of its own. The two counters are what
+#: the tok/s figures are computed from; the two gauges are what makes those figures mean anything,
+#: because an aggregate rate sampled while two agents happened to be in flight is a fact about two
+#: agents and not about the server. Every sample row and every artifact is keyed by these, so a
+#: campaign's throughput series reads the same whichever engine served it.
+METRIC_GENERATION = "generation_tokens_total"
+METRIC_PROMPT = "prompt_tokens_total"
+METRIC_RUNNING = "num_requests_running"
+METRIC_WAITING = "num_requests_waiting"
 AGGREGATE_METRICS = (METRIC_GENERATION, METRIC_PROMPT, METRIC_RUNNING, METRIC_WAITING)
+
+#: The Prometheus series each engine publishes for those four. Both engines serve the campaign, and
+#: only the two token counters happen to be spelled alike: SGLang calls the gauges
+#: ``num_running_reqs`` / ``num_queue_reqs`` where vLLM calls them ``num_requests_running`` /
+#: ``num_requests_waiting``, so a probe that knew vLLM only found none of its four on an SGLang arm
+#: and wrote no throughput artifact at all (job 630712 has none; job 630751 does).
+#:
+#: Verified against the served builds: vLLM's names from the expositions the vLLM arms wrote out,
+#: SGLang's from ``sglang/srt/observability/metrics_collector.py`` in ce-images/optarena-sglang.sqsh
+#: (sglang 0.5.19.dev20260908+g554f817948), lines 279-290 and 1558-1567.
+#:
+#: Every one of them carries labels -- ``model_name`` on both engines, plus ``is_streaming`` on
+#: SGLang's two counters -- so a series is matched on its NAME alone and every label set of that
+#: name is summed; see :func:`parse_prometheus`.
+ENGINE_SERIES: dict[str, dict[str, str]] = {
+    "vllm": {
+        METRIC_GENERATION: "vllm:generation_tokens_total",
+        METRIC_PROMPT: "vllm:prompt_tokens_total",
+        METRIC_RUNNING: "vllm:num_requests_running",
+        METRIC_WAITING: "vllm:num_requests_waiting",
+    },
+    "sglang": {
+        METRIC_GENERATION: "sglang:generation_tokens_total",
+        METRIC_PROMPT: "sglang:prompt_tokens_total",
+        METRIC_RUNNING: "sglang:num_running_reqs",
+        METRIC_WAITING: "sglang:num_queue_reqs",
+    },
+}
 
 #: Seconds between ``/metrics`` scrapes while the agents run. Far enough apart that the scrape is
 #: not part of what it measures, close enough that the ramp-up and the drain stay distinguishable
@@ -478,9 +506,23 @@ def scrape_metrics(url: str, headers: dict[str, str]) -> dict[str, float] | None
             text = response.read().decode("utf-8", errors="replace")
     except (OSError, ValueError, urllib.error.URLError):
         return None
-    totals = parse_prometheus(text, AGGREGATE_METRICS)
-    # All four or none: a row missing one series cannot be differenced against a row that has it.
-    return totals if len(totals) == len(AGGREGATE_METRICS) else None
+    return engine_totals(text)
+
+
+def engine_totals(text: str) -> dict[str, float] | None:
+    """One exposition's four numbers under :data:`AGGREGATE_METRICS`' names, whichever engine wrote
+    it, or ``None`` when neither engine's four are all there.
+
+    ENGINE-AWARE, and fails closed: the prefix that is PRESENT wins, an exposition carrying neither
+    engine's series is no reading at all, and a partial one is dropped for the reason a truncated
+    vLLM exposition always was -- a row missing one series cannot be differenced against a row that
+    has it.
+    """
+    for series in ENGINE_SERIES.values():
+        totals = parse_prometheus(text, tuple(series.values()))
+        if len(totals) == len(series):
+            return {key: totals[name] for key, name in series.items()}
+    return None
 
 
 def scrape_aggregate(endpoints: list[str], headers: dict[str, str]) -> dict[str, float] | None:
@@ -1172,6 +1214,21 @@ def transcript_total_tokens(
     return fold(lines, {})
 
 
+#: The token components a cost record carries, in ``token_cost``'s names. ``output`` is EVERY
+#: generated token, reasoning included, on both engines; ``thinking_estimate`` rides along and is
+#: never summed into anything (token_cost's module docstring, 3).
+COST_KEYS: tuple[str, ...] = (
+    "fresh_input",
+    "cached_input",
+    "output",
+    "thinking_estimate",
+    "output_reported",
+    "effective",
+    "wall_ms",
+    "api_ms",
+)
+
+
 def cost_breakdown(log: pathlib.Path) -> dict[str, float]:
     """The token components for one episode, or {} when they cannot be read.
 
@@ -1183,11 +1240,7 @@ def cost_breakdown(log: pathlib.Path) -> dict[str, float]:
         row = token_cost_module().episode_cost(log)
     except Exception:  # noqa: BLE001 -- see the docstring: bookkeeping never fails a run
         return {}
-    return {
-        key: row[key]
-        for key in ("fresh_input", "cached_input", "output", "thinking", "generated", "effective", "wall_ms", "api_ms")
-        if key in row
-    }
+    return {key: row[key] for key in COST_KEYS if key in row}
 
 
 def task_token_totals(workdir: pathlib.Path) -> tuple[int, int | None, int | None]:
@@ -1203,6 +1256,27 @@ def task_token_totals(workdir: pathlib.Path) -> tuple[int, int | None, int | Non
     except Exception:  # noqa: BLE001 -- see the docstring
         return 0, None, None
     return totals.attempts, totals.tokens_effective, totals.tokens_billed
+
+
+def cost_record_fields(transcript: pathlib.Path, worker_dir: pathlib.Path) -> dict[str, float | int | None]:
+    """Every TOKEN field a cost record carries, for one finished task. Never raises.
+
+    The breakdown, alongside the billed `tokens` rather than instead of it: `tokens` charges a
+    173-turn episode for its prompt 173 times, while these separate what was re-sent from what was
+    computed and recover the output these endpoints report as zero on every per-turn event
+    (docs/token_accounting.md). The task totals then cover every attempt a crash relaunched --
+    `tokens` and the breakdown see only the surviving final attempt, missing whatever an earlier
+    crash already spent (T1-T2).
+
+    Shared with ``scripts/migrate_tokens.py`` so a re-folded record and a freshly written one cannot
+    come out of two implementations of the same arithmetic.
+    """
+    fields: dict[str, float | int | None] = dict(cost_breakdown(transcript))
+    attempts, tokens_effective, tokens_billed = task_token_totals(worker_dir)
+    fields["attempts"] = attempts
+    fields["tokens_effective_all_attempts"] = tokens_effective
+    fields["tokens_billed_all_attempts"] = tokens_billed
+    return fields
 
 
 def write_cost_record(
@@ -1234,16 +1308,7 @@ def write_cost_record(
         "turns": turns,
         "result": subtype,
     }
-    # The breakdown, alongside rather than instead. `tokens` charges a 173-turn episode for its
-    # prompt 173 times; these separate what was re-sent from what was computed, and recover the
-    # thinking these endpoints report as zero. See docs/token_accounting.md.
-    record.update(cost_breakdown(transcript or path.parent / "claude.log"))
-    # The TASK total (T1-T2), over every attempt a crash relaunched -- `tokens` and the breakdown
-    # above cover only the surviving final attempt, missing whatever an earlier crash already spent.
-    attempts, tokens_effective, tokens_billed = task_token_totals(path.parent)
-    record["attempts"] = attempts
-    record["tokens_effective_all_attempts"] = tokens_effective
-    record["tokens_billed_all_attempts"] = tokens_billed
+    record.update(cost_record_fields(transcript or path.parent / "claude.log", path.parent))
     try:
         path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
     except OSError:

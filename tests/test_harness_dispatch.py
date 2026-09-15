@@ -340,12 +340,15 @@ def test_a_runner_is_charged_its_usage_file_and_not_what_its_log_resembles(drive
     record = tokens_record(workdir)
     assert record["tokens"] == 280
     # The breakdown under token_cost's perfect-prefix model on each call's whole prompt (100, then
-    # 50 + 100): fresh 100 + 50, cached 100, output 6 + 15, reasoning 4 + 5.
-    assert {key: record[key] for key in ("fresh_input", "cached_input", "output", "thinking", "effective")} == {
+    # 50 + 100): fresh 100 + 50, cached 100. OUTPUT is every generated token, so it is the runner's
+    # disjoint output and reasoning put back together -- (6 + 15) + (4 + 5) -- and the reasoning is
+    # reported beside it without being added a second time (8.1, F8).
+    keys = ("fresh_input", "cached_input", "output", "thinking_estimate", "effective")
+    assert {key: record[key] for key in keys} == {
         "fresh_input": 150,
         "cached_input": 100,
-        "output": 21,
-        "thinking": 9,
+        "output": 30,
+        "thinking_estimate": 9,
         "effective": 180.0,
     }
 
