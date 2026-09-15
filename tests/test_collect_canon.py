@@ -131,6 +131,48 @@ def test_rows_are_ordered_by_column_then_kernel_regardless_of_shard_write_order(
     ]
 
 
+def test_a_native_only_sweep_is_collected_fully_and_in_documented_order(tmp_path: pathlib.Path) -> None:
+    """A compiler-baseline sweep writes columns collect_canon.COLUMNS never named (cc, cpp,
+    fortran, cc_llvm, llvm, flang). None of these were collected before this collector read the
+    run-dir instead of a fixed tuple; the documented order is: COLUMNS members first (only cc
+    here), sorted by name, then every other present column, also sorted by name."""
+    run_dir = tmp_path / "sweep"
+    run_dir.mkdir()
+    for column in ("cc", "cpp", "fortran", "cc_llvm", "llvm", "flang"):
+        write_shard(run_dir, column, 0, [{**CC_WF_TRIANGULAR, "column": column}])
+    db_path = tmp_path / "canon.db"
+
+    rc = collect_canon.main(["--run-dir", str(run_dir), "--db", str(db_path)])
+
+    assert rc == 0
+    rows = read_db(db_path)
+    assert [row["column"] for row in rows] == ["cc", "cc_llvm", "cpp", "flang", "fortran", "llvm"]
+
+
+def test_a_sweep_with_the_old_columns_still_yields_the_old_order(tmp_path: pathlib.Path) -> None:
+    """The canon-llr40 sweep's own 7 columns, collected through the generic run-dir scan, must
+    land in the exact column order the fixed-tuple collector always produced for them."""
+    run_dir = tmp_path / "sweep"
+    run_dir.mkdir()
+    for column in collect_canon.COLUMNS:
+        write_shard(run_dir, column, 0, [{**CC_WF_TRIANGULAR, "column": column}])
+    db_path = tmp_path / "canon.db"
+
+    rc = collect_canon.main(["--run-dir", str(run_dir), "--db", str(db_path)])
+
+    assert rc == 0
+    rows = read_db(db_path)
+    assert [row["column"] for row in rows] == [
+        "cc",
+        "cc_autopar",
+        "dace_cpu",
+        "dace_cpu_canonicalize",
+        "dace_gpu",
+        "dace_gpu_canonicalize",
+        "numba",
+    ]
+
+
 def test_a_stale_table_from_an_earlier_differently_shaped_sweep_does_not_survive(tmp_path: pathlib.Path) -> None:
     """``--db`` pointed at an existing file must not silently append to, or fail against, a
     ``canon`` table a previous run with a different schema left behind."""

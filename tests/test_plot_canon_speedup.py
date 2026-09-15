@@ -110,6 +110,31 @@ def test_a_rerun_of_the_plot_writes_byte_identical_png_pdf_and_table(
         assert first == second, f"{name} depends on when it was rendered"
 
 
+def test_baseline_cc_works_on_a_native_only_db_with_no_numba_or_dace(tmp_path: pathlib.Path) -> None:
+    """A compiler-baseline sweep's db has no numba and no dace_* column at all. --baseline cc must
+    still draw a figure (the cc bar, at minimum) rather than crash on the absent columns."""
+    db_path = tmp_path / "canon.db"
+    make_db(db_path, [row("cc", "k1", 200.0), row("cc", "k2", 25.0), row("cpp", "k1", 150.0), row("cpp", "k2", 20.0)])
+
+    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "cc", False)
+
+    assert rc == 0
+    table = (tmp_path / "out" / "canon_speedup.csv").read_text()
+    assert "cc" in table
+
+
+def test_the_default_baseline_missing_fails_clearly_instead_of_crashing(tmp_path: pathlib.Path) -> None:
+    """A native-only db has no numba column, the default --baseline. Without --baseline cc this
+    must exit non-zero with a message naming the missing column, not raise."""
+    db_path = tmp_path / "canon.db"
+    make_db(db_path, [row("cc", "k1", 200.0), row("cpp", "k1", 150.0)])
+
+    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "numba", False)
+
+    assert rc == 1
+    assert not (tmp_path / "out").exists()
+
+
 def test_the_written_table_names_the_baseline_row_as_the_baseline(tmp_path: pathlib.Path) -> None:
     """The CSV written beside the figure is the printed table verbatim -- a reader of the CSV must
     see the same "(baseline)" marker the printed rows and the figure's y-axis labels carry."""

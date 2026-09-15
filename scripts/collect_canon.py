@@ -22,9 +22,11 @@ import pathlib
 import sqlite3
 import sys
 
-#: Column order on every figure. cc is the baseline the others are divided by with --baseline cc,
-#: and it stays in the table (as a constant 1.0 there) so a reader can see it was measured rather
-#: than assumed.
+#: The canon-llr40 sweep's columns, in their historical figure order. cc is the baseline the
+#: others are divided by with --baseline cc, and it stays in the table (as a constant 1.0 there)
+#: so a reader can see it was measured rather than assumed. Only membership in this set matters
+#: to :func:`discover_columns` now -- see its docstring for why the ORDER below is not the
+#: output order.
 COLUMNS: tuple[str, ...] = (
     "cc",
     "cc_autopar",
@@ -51,9 +53,25 @@ SCHEMA: tuple[tuple[str, str], ...] = (
 )
 
 
+def discover_columns(run_dir: pathlib.Path) -> list[str]:
+    """Every column with at least one ``<column>.rank<N>.csv`` shard in ``run_dir``, in the order
+    the table is written: the columns in :data:`COLUMNS` (the canon-llr40 sweep) first, sorted by
+    name, then any other column a different sweep wrote, also sorted by name.
+
+    A plain global sort over ALL present columns would collapse to the same order whenever they
+    happen to compare consistently either way, which is every sweep this repo has run so far --
+    two sorted groups is the general rule, and it reduces to that special case rather than the
+    other way around.
+    """
+    present = {shard.name.split(".rank", 1)[0] for shard in run_dir.glob("*.rank*.csv")}
+    known = sorted(name for name in present if name in COLUMNS)
+    other = sorted(name for name in present if name not in COLUMNS)
+    return known + other
+
+
 def rows_for(run_dir: pathlib.Path, column: str, run: str) -> list[dict[str, str]]:
-    """Every rank shard of ``column``, as tidy rows. A missing shard is not an error: a column
-    that was not part of a sweep simply contributes nothing."""
+    """Every rank shard of ``column``, as tidy rows sorted by kernel. A missing shard is not an
+    error: a column that was not part of a sweep simply contributes nothing."""
     out: list[dict[str, str]] = []
     for shard in sorted(run_dir.glob(f"{column}.rank*.csv")):
         with shard.open() as fh:
@@ -69,6 +87,7 @@ def rows_for(run_dir: pathlib.Path, column: str, run: str) -> list[dict[str, str
                         "validated": row.get("validated", ""),
                     }
                 )
+    out.sort(key=lambda row: row["kernel"])
     return out
 
 
@@ -103,14 +122,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no such run directory: {args.run_dir}", file=sys.stderr)
         return 2
     label = args.label or args.run_dir.name
-    rows = [row for column in COLUMNS for row in rows_for(args.run_dir, column, label)]
+    columns = discover_columns(args.run_dir)
+    rows = [row for column in columns for row in rows_for(args.run_dir, column, label)]
     if not rows:
         print(f"{args.run_dir} holds no <column>.rank*.csv shards", file=sys.stderr)
         return 1
 
-    rows.sort(key=lambda row: (row["column"], row["kernel"]))
     write_db(rows, args.db)
-    per = {c: sum(1 for row in rows if row["column"] == c) for c in COLUMNS}
+    per = {c: sum(1 for row in rows if row["column"] == c) for c in columns}
     print(f"{args.db}: {len(rows)} rows  " + "  ".join(f"{c}={n}" for c, n in per.items() if n))
     return 0
 
