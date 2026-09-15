@@ -4,14 +4,31 @@
 """Typed SQLModel schema for the framework-benchmark ``results`` table: the single Result model derives
 both the DDL (``create_all``) and row inserts, replacing the old hand-written CREATE TABLE/INSERT pair."""
 
+import re
 from typing import ClassVar
 
 from sqlalchemy import Table
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Field, SQLModel, create_engine
 
 #: The table name; SQLModel's default would be the class name lowercased, which is not it.
 RESULTS_TABLE = "results"
+
+#: SQLite's wording for "another connection finished this exact DDL first" -- ``create_all``'s
+#: CREATE TABLE and :func:`add_missing_columns`'s ALTER TABLE are both check-then-act (SQLAlchemy
+#: reads ``sqlite_master``/``PRAGMA table_info`` in Python, then issues DDL that is not itself
+#: ``IF NOT EXISTS``), so two ranks racing the first write to one shard both pass the check and one
+#: loses the DDL. Recognized by MESSAGE, not exception subclass: SQLite reports both as a plain
+#: ``OperationalError``, indistinguishable from a real schema problem by type alone.
+CONCURRENT_SCHEMA_RACE = re.compile(r"table \S+ already exists|duplicate column name")
+
+
+def is_concurrent_schema_race(exc: OperationalError) -> bool:
+    """True when ``exc`` is the loser of a same-DDL race against another writer to this shard file,
+    not a genuine schema problem -- the table/column it wanted now exists either way."""
+    message = str(exc.orig) if exc.orig is not None else str(exc)
+    return CONCURRENT_SCHEMA_RACE.search(message) is not None
 
 
 class Result(SQLModel, table=True):
@@ -103,7 +120,11 @@ def add_missing_columns(engine: Engine) -> None:
 
     ADD COLUMN only: additive, no table rewrite, cannot lose a row, and a legacy row reads back with
     NULL for the new column -- which is exactly what "this run predates the axis" means. A missing
-    NOT NULL column is NOT invented: there is no honest value to backfill, so it is raised."""
+    NOT NULL column is NOT invented: there is no honest value to backfill, so it is raised.
+
+    Each ADD COLUMN commits on its own: two ranks reconciling the SAME shard at once can both pass
+    the ``present`` check and both issue the ALTER for the same column, and the loser must not roll
+    back a sibling column the SAME call already added -- see :data:`CONCURRENT_SCHEMA_RACE`."""
     # The metadata, not ``Result.__table__``: the same Table object, and the one spelling typed.
     table: Table = SQLModel.metadata.tables[RESULTS_TABLE]
     with engine.connect() as conn:
@@ -119,15 +140,31 @@ def add_missing_columns(engine: Engine) -> None:
                     f"backfilled for existing rows; migrate {engine.url.database} by hand"
                 )
             sql_type = column.type.compile(engine.dialect)
-            conn.exec_driver_sql(f"ALTER TABLE {table.name} ADD COLUMN {name} {sql_type}")
-        conn.commit()
+            try:
+                conn.exec_driver_sql(f"ALTER TABLE {table.name} ADD COLUMN {name} {sql_type}")
+            except OperationalError as exc:
+                if not is_concurrent_schema_race(exc):
+                    raise
+                conn.rollback()  # another rank's ALTER for this column won the race; keep going
+                continue
+            conn.commit()
 
 
 def results_engine(db_path: str) -> Engine:
     """A SQLModel engine for the results DB at ``db_path``, with the schema ensured: the table is
     created from :class:`Result` when absent, and reconciled to it when present
-    (:func:`add_missing_columns`)."""
+    (:func:`add_missing_columns`).
+
+    ``create_all`` checks ``sqlite_master`` and then issues CREATE TABLE -- check-then-act, not
+    atomic -- so two ranks racing the first write to a not-yet-existing shard can both pass the
+    check and one loses the CREATE with "table results already exists". The loser's table is the
+    winner's table, which is the schema this call wanted anyway, so that race is swallowed rather
+    than surfaced as a run-ending exception (see :data:`CONCURRENT_SCHEMA_RACE`)."""
     engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
-    SQLModel.metadata.create_all(engine)
+    try:
+        SQLModel.metadata.create_all(engine)
+    except OperationalError as exc:
+        if not is_concurrent_schema_race(exc):
+            raise
     add_missing_columns(engine)
     return engine

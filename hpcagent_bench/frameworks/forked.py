@@ -11,6 +11,7 @@ import multiprocessing.context
 import multiprocessing.queues
 import os
 import queue
+import re
 import signal
 import subprocess
 import sys
@@ -169,9 +170,39 @@ class RunResult(Generic[ResultT]):
     result: ResultT | None = None
 
 
+#: An un-indented ``ExceptionType: message`` line inside a :func:`traceback.format_exc` text. Python
+#: never indents this line, so it is what tells it apart from an indented frame ("  File ...", "
+#: code") AND from an unindented CONTINUATION of a multi-line exception message -- e.g. SQLAlchemy
+#: appends an unindented ``[SQL: ...]`` dump and a doc-link URL after its own header, neither of
+#: which starts with an identifier followed by ``:``.
+EXCEPTION_HEADER = re.compile(r"^[A-Za-z_][\w.]*:\s")
+
+
+def exception_header(traceback_text: str) -> str:
+    """The raised exception's ``Type: message`` line out of a :func:`traceback.format_exc` text, or
+    "" if none matches. Not necessarily the LAST line: a chained exception ("... the direct cause of
+    the following exception") prints an earlier header too, so this takes the LAST MATCH, which is
+    the header of the exception that actually propagated."""
+    header = ""
+    for line in traceback_text.splitlines():
+        if EXCEPTION_HEADER.match(line):
+            header = line
+    return header
+
+
 def forked_failure_reason(r: RunResult[object]) -> str:
-    """One-line cause for a failed :class:`RunResult`: signal name, else last traceback line, else "unknown"."""
-    return r.signal or (r.error.strip().splitlines()[-1] if r.error else "unknown")
+    """One-line cause for a failed :class:`RunResult`: signal name, else the raised exception's type
+    and message (:func:`exception_header`), else the raw text's last line (a non-traceback message,
+    e.g. a timeout or an abandoned-child notice), else "unknown".
+
+    Cutting the LAST line of the traceback text used to stand in for the exception header, which is
+    wrong whenever the exception's own message spans multiple lines -- a SQLAlchemy error whose
+    message ends with a documentation link left THAT as the one-line cause, useless for triage."""
+    if r.signal:
+        return r.signal
+    if not r.error:
+        return "unknown"
+    return exception_header(r.error) or r.error.strip().splitlines()[-1]
 
 
 #: ``prctl`` option number for PR_SET_PDEATHSIG (asm-generic, stable across Linux architectures).
