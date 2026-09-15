@@ -39,6 +39,9 @@ import sys
 from collections.abc import Sequence
 from typing import Any, NamedTuple
 
+from hpcagent_bench import config, osinfo
+from hpcagent_bench.frameworks.schema import KernelMetric
+
 #: The taxonomy, in report order. Every loop-level construct lands in exactly one.
 BUCKETS = ("map", "reduce", "scan", "parallel_under_contract", "timestep", "inmap", "residual")
 #: Buckets that count as PARALLELIZED in every rate definition below.
@@ -94,6 +97,11 @@ DEFAULT_RATE = "libnode_parallel"
 METRIC_PREFIX = "parallelism."
 
 
+def enabled() -> bool:
+    """Whether ``metrics.parallelism`` is on (default: NO)."""
+    return config.get_bool("metrics.parallelism", False)
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class LoopDetail:
     """What the SDFG can say about one residual loop, for the triage list."""
@@ -122,6 +130,45 @@ class ParallelismRecord:
         rows.append((f"{METRIC_PREFIX}libnode", self.libnode))
         rows.append((f"{METRIC_PREFIX}total", self.total))
         return rows
+
+
+def rows(
+    record: ParallelismRecord,
+    *,
+    timestamp: int,
+    benchmark: str,
+    framework: str,
+    flavor: str | None,
+    impl: str,
+    datatype: str,
+) -> list[KernelMetric]:
+    """One ``kernel_metrics`` row per bucket plus ``libnode``/``total``, stamped like the ``results``
+    rows of the same run (:func:`autovec.rows` is the sibling this mirrors).
+
+    ``detail`` names the pipeline (the ``framework`` column, plus ``flavor`` when there is one) so
+    rows measured under two different SDFG pipelines are never pooled by a query that groups on
+    ``metric`` alone -- ``framework``/``flavor`` are separate columns already, but a raw SQL group-by
+    on ``metric`` only would otherwise average across pipelines silently.
+    """
+    build = config.get_str("record.build", "") or None
+    detail = f"framework={framework}" if flavor is None else f"framework={framework} flavor={flavor}"
+    return [
+        KernelMetric(
+            timestamp=timestamp,
+            benchmark=benchmark,
+            framework=framework,
+            flavor=flavor,
+            impl=impl,
+            datatype=datatype,
+            metric=name,
+            value=float(value),
+            detail=detail,
+            build=build,
+            cpu=osinfo.cpu_model(),
+            node=osinfo.node_name(),
+        )
+        for name, value in record.metric_rows()
+    ]
 
 
 def import_dace_tests_corpus() -> Any:
@@ -294,3 +341,83 @@ def rate(agg: dict[str, int], definition: RateDefinition) -> dict[str, Any]:
 def rates(agg: dict[str, int]) -> dict[str, dict[str, Any]]:
     """Every named definition applied to the same raw counts, in table order."""
     return {name: rate(agg, defn) for name, defn in RATE_DEFINITIONS.items()}
+
+
+def record_term(record: ParallelismRecord, term: str) -> int:
+    """One raw count off ``record`` by its rate-definition name (a bucket, or ``libnode``/``total``)."""
+    if term == "libnode":
+        return record.libnode
+    if term == "total":
+        return record.total
+    return record.buckets.get(term, 0)
+
+
+class BenchmarkClass(NamedTuple):
+    """One kernel's PER-BENCHMARK reading under one rate definition, read straight off its raw
+    record -- never off a stored, pre-combined rate."""
+
+    parallelized: bool
+    fully_parallelized: bool
+
+
+def classify_benchmark(record: ParallelismRecord, definition: RateDefinition) -> BenchmarkClass:
+    """``parallelized`` = the kernel has at least one construct in ``definition``'s numerator.
+    ``fully_parallelized`` = that, AND no residual loop is left over (``residual == 0``)."""
+    numerator = sum(record_term(record, term) for term in definition.numerator)
+    parallelized = numerator > 0
+    fully_parallelized = parallelized and record.buckets["residual"] == 0
+    return BenchmarkClass(parallelized=parallelized, fully_parallelized=fully_parallelized)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class BenchmarkCounts:
+    """How many kernels of a corpus read as parallelized, fully parallelized, or neither, under one
+    rate definition -- a count of :class:`BenchmarkClass` values, not a rate."""
+
+    parallelized: int
+    fully_parallelized: int
+    neither: int
+    total: int
+
+
+def benchmark_counts(records: Sequence[ParallelismRecord], definition: RateDefinition) -> BenchmarkCounts:
+    """:func:`classify_benchmark` applied to every record, tallied. Recomputed from the raw records
+    every call -- nothing pre-combined is stored between a rate reading and this one."""
+    classified = [classify_benchmark(rec, definition) for rec in records]
+    parallelized = sum(1 for c in classified if c.parallelized)
+    fully_parallelized = sum(1 for c in classified if c.fully_parallelized)
+    return BenchmarkCounts(
+        parallelized=parallelized,
+        fully_parallelized=fully_parallelized,
+        neither=len(classified) - parallelized,
+        total=len(classified),
+    )
+
+
+def report_lines(records: Sequence[ParallelismRecord]) -> list[str]:
+    """Every named rate definition applied to the SAME raw ``records``, each line spelling out its own
+    numerator/denominator terms plus the per-kernel parallelized/fully_parallelized counts under that
+    same definition -- the report reading :data:`RATE_DEFINITIONS` was built to support: a rate and
+    the kernel counts behind it are never allowed to silently use different definitions."""
+    agg = totals(records)
+    lines: list[str] = []
+    for name, definition in RATE_DEFINITIONS.items():
+        computed = rate(agg, definition)
+        counts = benchmark_counts(records, definition)
+        tag = " (default)" if name == DEFAULT_RATE else ""
+        value = "n/a" if computed["value"] is None else f"{computed['value']:.3f}"
+        lines.append(f"{name}{tag}: ({computed['numerator_terms']}) / ({computed['denominator_terms']}) = {value}")
+        lines.append(
+            f"  parallelized [kernel has >=1 of: {computed['numerator_terms']}]: "
+            f"{counts.parallelized}/{counts.total} kernels"
+        )
+        lines.append(
+            f"  fully_parallelized [parallelized AND residual == 0]: {counts.fully_parallelized}/{counts.total} kernels"
+        )
+    return lines
+
+
+def print_report(records: Sequence[ParallelismRecord]) -> None:
+    """:func:`report_lines`, printed one line at a time."""
+    for line in report_lines(records):
+        print(line)

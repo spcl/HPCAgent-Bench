@@ -9,6 +9,7 @@ percentage. None of these touch the hpcagent_bench corpus or the DaCe python fro
 """
 
 import ast
+import sqlite3
 
 import dace
 import pytest
@@ -17,19 +18,32 @@ from dace.libraries.standard.nodes.scan import Scan
 from dace.properties import CodeBlock
 from dace.sdfg.state import ConditionalBlock, ControlFlowRegion, LoopRegion
 from numpyto_common.parallelism import TIMESTEP_SYMBOLS, is_timestep_loop
+from sqlmodel import Session
 
+from hpcagent_bench import config
+from hpcagent_bench.frameworks.schema import KERNEL_METRICS_TABLE, results_engine
+from hpcagent_bench.harness import recording
 from hpcagent_bench.metrics.parallelism import (
     BUCKETS,
     DEFAULT_RATE,
     NEUTRAL_ALWAYS,
     PARALLEL_BUCKETS,
     RATE_DEFINITIONS,
+    BenchmarkCounts,
+    ParallelismRecord,
+    benchmark_counts,
     classify,
+    classify_benchmark,
+    enabled,
     is_timestep_loop_region,
     loop_bound_symbols,
     rate,
     rates,
+    report_lines,
+    rows,
 )
+
+KNOB = "HPCAGENT_BENCH_METRICS_PARALLELISM"
 
 
 def fill_loop(loop: LoopRegion, array: str, index: str) -> None:
@@ -306,8 +320,151 @@ def test_metric_rows_has_one_row_per_bucket_plus_libnode_and_total() -> None:
     """The shape a ``kernel_metrics`` sink reads: one row per bucket named ``parallelism.<bucket>``,
     plus ``parallelism.libnode`` and ``parallelism.total`` -- no rate baked in."""
     record = classify(guarded_sdfg())
-    rows = dict(record.metric_rows())
-    assert set(rows) == {f"parallelism.{b}" for b in BUCKETS} | {"parallelism.libnode", "parallelism.total"}
-    assert rows["parallelism.parallel_under_contract"] == 1
-    assert rows["parallelism.total"] == record.total
-    assert rows["parallelism.libnode"] == record.libnode
+    metric_rows = dict(record.metric_rows())
+    assert set(metric_rows) == {f"parallelism.{b}" for b in BUCKETS} | {"parallelism.libnode", "parallelism.total"}
+    assert metric_rows["parallelism.parallel_under_contract"] == 1
+    assert metric_rows["parallelism.total"] == record.total
+    assert metric_rows["parallelism.libnode"] == record.libnode
+
+
+def test_the_metric_is_off_unless_switched_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(KNOB, raising=False)
+    assert not enabled()
+    monkeypatch.setenv(KNOB, "1")
+    assert enabled()
+
+
+def test_every_bucket_plus_libnode_and_total_is_one_row_that_round_trips_through_the_results_db(
+    tmp_path,
+) -> None:
+    record = classify(guarded_sdfg())
+    made = rows(
+        record,
+        timestamp=7,
+        benchmark="gemm",
+        framework="dace_cpu",
+        flavor="canonicalize",
+        impl="default",
+        datatype="float64",
+    )
+    db = tmp_path / "results.db"
+    with Session(results_engine(str(db))) as session:
+        session.add_all(made)
+        session.commit()
+    with sqlite3.connect(db) as conn:
+        stored = conn.execute(f"SELECT metric, value, detail FROM {KERNEL_METRICS_TABLE} ORDER BY id").fetchall()
+    expected_detail = "framework=dace_cpu flavor=canonicalize"
+    assert stored == [(name, float(value), expected_detail) for name, value in record.metric_rows()], stored
+
+
+def test_the_detail_names_the_pipeline_so_two_frameworks_are_never_pooled() -> None:
+    record = classify(map_sdfg())
+    canon = rows(
+        record, timestamp=1, benchmark="k", framework="dace_cpu", flavor="canonicalize", impl="d", datatype="float64"
+    )
+    parallel = rows(
+        record, timestamp=1, benchmark="k", framework="dace_cpu", flavor="parallel", impl="d", datatype="float64"
+    )
+    assert {r.detail for r in canon} == {"framework=dace_cpu flavor=canonicalize"}
+    assert {r.detail for r in parallel} == {"framework=dace_cpu flavor=parallel"}
+    no_flavor = rows(
+        record, timestamp=1, benchmark="k", framework="dace_cpu", flavor=None, impl="d", datatype="float64"
+    )
+    assert {r.detail for r in no_flavor} == {"framework=dace_cpu"}
+
+
+def record_of(**buckets: int) -> ParallelismRecord:
+    """A raw ``ParallelismRecord`` from bucket keyword counts (``libnode`` handled separately);
+    everything else defaults to zero."""
+    filled = dict.fromkeys(BUCKETS, 0)
+    filled.update({k: v for k, v in buckets.items() if k != "libnode"})
+    return ParallelismRecord(
+        buckets=filled, total=sum(filled.values()), libnode=buckets.get("libnode", 0), residual_loops=()
+    )
+
+
+#: One hand-built record per shape: a fully parallel kernel (no residual, has a Map), a partially
+#: parallel kernel (a Map AND a leftover residual loop), and an unparallelized kernel (only residual).
+#: Expected values under the default definition (libnode_parallel: map/reduce/... + libnode in the
+#: numerator, + residual/timestep in the denominator) are worked by hand.
+FULLY_PARALLEL = record_of(map=1)
+PARTIALLY_PARALLEL = record_of(map=1, residual=1)
+UNPARALLELIZED = record_of(residual=1)
+ONLY_TIMESTEP = record_of(timestep=1)
+ONLY_LIBNODE = record_of(libnode=1)
+
+
+@pytest.mark.parametrize(
+    ("record", "parallelized", "fully_parallelized"),
+    [
+        (FULLY_PARALLEL, True, True),
+        (PARTIALLY_PARALLEL, True, False),
+        (UNPARALLELIZED, False, False),
+        (ONLY_TIMESTEP, False, False),
+        (ONLY_LIBNODE, True, True),
+    ],
+)
+def test_classify_benchmark_under_the_default_definition(
+    record: ParallelismRecord, parallelized: bool, fully_parallelized: bool
+) -> None:
+    got = classify_benchmark(record, RATE_DEFINITIONS[DEFAULT_RATE])
+    assert (got.parallelized, got.fully_parallelized) == (parallelized, fully_parallelized), got
+
+
+def test_classify_benchmark_under_libnode_neutral_a_libnode_only_kernel_is_not_parallelized() -> None:
+    """The same raw record reads differently under a different definition -- libnode is neutral here,
+    so a kernel with nothing but a recognized library call is neither parallelized nor residual-free."""
+    got = classify_benchmark(ONLY_LIBNODE, RATE_DEFINITIONS["libnode_neutral"])
+    assert got == (False, False)
+
+
+def test_benchmark_counts_tallies_parallelized_fully_parallelized_and_neither() -> None:
+    records = [FULLY_PARALLEL, PARTIALLY_PARALLEL, UNPARALLELIZED, ONLY_TIMESTEP, ONLY_LIBNODE]
+    got = benchmark_counts(records, RATE_DEFINITIONS[DEFAULT_RATE])
+    # parallelized: FULLY_PARALLEL, PARTIALLY_PARALLEL, ONLY_LIBNODE = 3; fully: FULLY_PARALLEL, ONLY_LIBNODE = 2
+    assert got == BenchmarkCounts(parallelized=3, fully_parallelized=2, neither=2, total=5)
+
+
+def test_benchmark_counts_on_an_empty_corpus_is_all_zero() -> None:
+    got = benchmark_counts([], RATE_DEFINITIONS[DEFAULT_RATE])
+    assert got == BenchmarkCounts(parallelized=0, fully_parallelized=0, neither=0, total=0)
+
+
+def test_report_lines_prints_every_definition_with_its_own_terms_and_kernel_counts() -> None:
+    lines = report_lines([FULLY_PARALLEL, UNPARALLELIZED])
+    joined = "\n".join(lines)
+    for name in RATE_DEFINITIONS:
+        assert name in joined
+    assert f"{DEFAULT_RATE} (default)" in joined
+    assert "parallelized [kernel has >=1 of:" in joined
+    assert "fully_parallelized [parallelized AND residual == 0]:" in joined
+    assert "1/2 kernels" in joined  # exactly FULLY_PARALLEL is parallelized+fully under the default def
+
+
+def test_a_sweep_with_the_metric_on_stores_it_beside_its_results_under_the_same_timestamp(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sweep is where per-kernel parallelism counts come from; a row that cannot be joined to its
+    run's results is lost. Uses the FRAMEWORK's own measured SDFG (dace_cpu_canonicalize builds it),
+    not a separate measure_parallelization.cpu_params() re-measurement."""
+    from hpcagent_bench.frameworks import Benchmark, Test, generate_framework
+
+    monkeypatch.setenv(KNOB, "1")
+    db = str(tmp_path / "hpcagent_bench.db")
+    config.set_override("record.db_path", db)
+    config.set_override("record.allow_memory_db", True)
+    try:
+        test = Test(Benchmark("tsvc_2_s212"), generate_framework("dace_cpu_canonicalize"), generate_framework("numpy"))
+        test.run("S", validate=True, repeat=1, ignore_errors=True, datatype="float64")
+    finally:
+        config.clear_override("record.db_path")
+        config.clear_override("record.allow_memory_db")
+    with sqlite3.connect(recording.ensure_aggregated(db)) as conn:
+        results = set(conn.execute("SELECT timestamp, framework FROM results").fetchall())
+        metrics = conn.execute(f"SELECT timestamp, framework, metric, detail FROM {KERNEL_METRICS_TABLE}").fetchall()
+    assert results, "the dace_cpu_canonicalize run wrote no results, so there is nothing to store counts beside"
+    got_metrics = {metric for _, _, metric, _ in metrics}
+    want_metrics = {f"parallelism.{b}" for b in BUCKETS} | {"parallelism.libnode", "parallelism.total"}
+    assert got_metrics == want_metrics, metrics
+    assert {(stamp, framework) for stamp, framework, _, _ in metrics} == results, (metrics, results)
+    assert all(detail.startswith("framework=dace_cpu") for _, _, _, detail in metrics), metrics

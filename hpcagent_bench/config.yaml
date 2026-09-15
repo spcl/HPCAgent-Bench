@@ -385,6 +385,8 @@ metrics:
   autovec: false           # per-kernel auto-vectorization counts (loops, vectorized, missed, unreported,
                            # nests, SLP) read off the opt report into the results DB's kernel_metrics
                            # table. Set perf_reports.vect_cost_model too to count what CAN vectorize.
+  parallelism: false       # per-kernel SDFG parallelism taxonomy (map/reduce/scan/... buckets) of the
+                           # framework's own measured SDFG, into the same kernel_metrics table.
 
 flags:
   # Reassociation licence for the compile matrix (hpcagent_bench/flags.py, _FP_ASSOC). OFF by
