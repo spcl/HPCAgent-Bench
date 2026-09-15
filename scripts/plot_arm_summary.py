@@ -31,7 +31,7 @@ import matplotlib.patches
 import numpy as np
 import pandas as pd
 
-from hpcagent_bench import experiment_tags, packets
+from hpcagent_bench import experiment_tags, experiments, packets
 from hpcagent_bench.stats import palette, population, rules
 from hpcagent_bench.stats import style as plotstyle
 
@@ -257,9 +257,7 @@ def write(fig: matplotlib.figure.Figure, out: pathlib.Path) -> pathlib.Path:
     # savefig.bbox to "tight"; "standard" is not a value matplotlib still accepts. Passing the
     # figure's own bbox is the only spelling that reliably means "do not crop to content", which
     # is what two figures of matching size require.
-    fig.savefig(out, bbox_inches=fig.bbox_inches)
-    fig.savefig(out.with_suffix(".png"), dpi=200, bbox_inches=fig.bbox_inches)
-    plt.close(fig)
+    plotstyle.save(fig, out.with_suffix(""), fixed=True)
     return out
 
 
@@ -295,7 +293,7 @@ def figure_pair(frame: pd.DataFrame, title: str, out: pathlib.Path) -> pathlib.P
 
 
 def load(path: pathlib.Path, prefix: str) -> pd.DataFrame:
-    frame = pd.read_csv(path, low_memory=False)
+    frame = experiments.read_observations(path)
     if prefix:
         frame = frame[frame["arm"].astype(str).str.startswith(prefix)]
     # NO filter on speedup or tokens here. The two metrics come off DIFFERENT record types -- the

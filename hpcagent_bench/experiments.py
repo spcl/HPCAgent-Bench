@@ -192,6 +192,24 @@ def observations(run_globs: Iterable[str], **identity: str | Iterable[str]) -> "
     return pd.DataFrame(rows)
 
 
+#: The table an extracted experiment database keeps its observations in, one row per CSV row.
+OBSERVATIONS_TABLE: str = "observations"
+
+
+def read_observations(path: pathlib.Path) -> "pd.DataFrame":
+    """An observations table from its CSV, or from an extracted experiment ``.db``.
+
+    Every figure and table reads through here, so a plot is a function of the committed file alone
+    and the reproducibility artifact can ship one database per experiment instead of a CSV.
+    """
+    import pandas as pd
+
+    if path.suffix != ".db":
+        return pd.read_csv(path, low_memory=False)
+    with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
+        return pd.read_sql_query(f"SELECT * FROM {OBSERVATIONS_TABLE} ORDER BY rowid", conn)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runs", action="append", required=True, help="run-root glob; repeatable")

@@ -202,6 +202,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--focus-tag", default=FOCUS_TAG, help=f"manifest tag naming the focus set (default {FOCUS_TAG})")
     ap.add_argument("--threads", type=int, default=32, help="parallel database readers (default 32)")
     ap.add_argument("--no-sources", action="store_true", help="write the CSVs only")
+    ap.add_argument(
+        "--db",
+        type=pathlib.Path,
+        default=None,
+        help="also write the observations as table `observations` of this SQLite file (rebuilt from scratch)",
+    )
     return ap.parse_args(argv)
 
 
@@ -594,6 +600,24 @@ def write_csv(path: pathlib.Path, fields: Iterable[str], rows: Iterable[dict[str
     return written
 
 
+def sql_value(value: Any) -> Any:
+    """A cell SQLite stores as itself; anything else as its text, the way the CSV writer spells it."""
+    return value if value is None or isinstance(value, (int, float, str, bytes)) else str(value)
+
+
+def write_db(path: pathlib.Path, fields: Iterable[str], rows: Iterable[dict[str, Any]]) -> int:
+    """The rows as table ``observations`` of a fresh SQLite file, in the same order the CSV holds them."""
+    names = list(fields)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+    values = [[sql_value(row.get(name)) for name in names] for row in rows]
+    with contextlib.closing(sqlite3.connect(path)) as conn:
+        conn.execute(f"CREATE TABLE observations ({', '.join(names)})")
+        conn.executemany(f"INSERT INTO observations VALUES ({', '.join('?' * len(names))})", values)
+        conn.commit()
+    return len(values)
+
+
 def annotate_provenance(
     observations: list[dict[str, Any]], assets: dict[tuple[str, str], JobAssets], corpus: dict[str, pathlib.Path]
 ) -> None:
@@ -660,6 +684,9 @@ def main(argv: list[str]) -> int:
     )
     n_obs = write_csv(args.out / "llr40_observations.csv", OBSERVATION_FIELDS, observations)
     print(f"observations: {n_obs} rows -> {args.out / 'llr40_observations.csv'}", file=sys.stderr)
+    if args.db is not None:
+        write_db(args.db, OBSERVATION_FIELDS, observations)
+        print(f"observations: {n_obs} rows -> {args.db}", file=sys.stderr)
 
     if args.canon is not None:
         rows = canon_rows(args.canon, focus)
