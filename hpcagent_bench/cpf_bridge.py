@@ -27,6 +27,7 @@ the child (``python -m hpcagent_bench.cpf_bridge``).
 import argparse
 import ast
 import contextlib
+import dataclasses
 import functools
 import hashlib
 import json
@@ -98,6 +99,25 @@ def render_timeout_s() -> float:
 #: ``abi`` tag on a CPF binding, deliberately not the native ``ABI_TAG``: the argument list is the
 #: SDFG's own, so a consumer must not assume the native contract (ordering, workspace pair, 1-based rebasing).
 CPF_ABI = "cpf/1"
+
+
+def generated_renames(path: pathlib.Path) -> dict[str, str]:
+    """``{manifest name: emitted name}`` the dace emitter recorded for arguments it had to respell.
+
+    A kernel argument spelled like a sympy callable (``field``, ``poly``, ``symbols``) cannot be a dace
+    variable, so the generated program takes it as ``__field``; the ABI still names it ``field``.
+    """
+    if not path.is_file():
+        return {}
+    for node in ast.parse(path.read_text()).body:
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "__hpcagent_bench_renames__"
+        ):
+            return ast.literal_eval(node.value)
+    return {}
 
 
 def returned_slots(path: pathlib.Path, entry: str) -> tuple[str | None, ...]:
@@ -246,21 +266,30 @@ def force_abi_symbols(sdfg: "SDFG", wanted: Sequence[str]) -> tuple[str, ...]:
     missing = [name for name in wanted if name not in have]
     if not missing:
         return ()
-    host = None
-    for state in sdfg.states():
-        for node in state.nodes():
-            if isinstance(node, dace_nodes.Tasklet) and node.out_connectors:
-                host = node
-                break
-        if host is not None:
-            break
+    # A canonical kernel can keep every live tasklet inside a nested SDFG (indirect_gather_3nbr's loop body), so the
+    # host is searched for recursively and the symbol is mapped down through each nested SDFG to it.
+    host = next(
+        (
+            (node, state.sdfg)
+            for node, state in sdfg.all_nodes_recursive()
+            if isinstance(node, dace_nodes.Tasklet) and node.out_connectors
+        ),
+        None,
+    )
     if host is None:
         raise ValueError("no tasklet to carry the ABI symbols; cannot force them into the signature")
+    tasklet, owner = host
     forced = []
     for name in missing:
+        level = owner
+        while level is not sdfg:
+            if name not in level.symbols:
+                level.add_symbol(name, dace_int64())
+            level.parent_nsdfg_node.symbol_mapping[name] = name
+            level = level.parent_sdfg
         if name not in sdfg.symbols:
             sdfg.add_symbol(name, dace_int64())
-        host.code.as_string = f"{ABI_SYMBOL_LOCAL}{name} = {name}\n" + host.code.as_string
+        tasklet.code.as_string = f"{ABI_SYMBOL_LOCAL}{name} = {name}\n" + tasklet.code.as_string
         forced.append(name)
     return tuple(forced)
 
@@ -421,14 +450,19 @@ def render_canonical(
     sdfg.name = base
     forced: tuple[str, ...] = ()
     abi_args: list[str] | None = None
+    renames: dict[str, str] = {}
     if dropin:
         native = binding_from_spec(spec)
-        abi_args = [arg.name for arg in native.args] + [WORKSPACE_NAME, WORKSPACE_SIZE_NAME]
+        impl = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_dace.py"
+        # The SDFG speaks the emitted spelling; the ABI order and the published binding speak the manifest's.
+        renames = generated_renames(impl)
+        emitted = [renames.get(arg.name, arg.name) for arg in native.args]
+        abi_args = emitted + [WORKSPACE_NAME, WORKSPACE_SIZE_NAME]
         bind_pinned_config(sdfg, spec.pinned_config)
         add_workspace(sdfg)
-        impl = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_dace.py"
-        drop_returned_arguments(sdfg, abi_args, spec.output_args, returned_slots(impl, spec.func_name))
-        forced = force_abi_symbols(sdfg, [arg.name for arg in native.args])
+        outputs = [renames.get(name, name) for name in spec.output_args]
+        drop_returned_arguments(sdfg, abi_args, outputs, returned_slots(impl, spec.func_name))
+        forced = force_abi_symbols(sdfg, emitted)
         sdfg.name = native.symbol
     # The device form is one unit holding host code and kernels -- its own dialect; --language only
     # picks between the two HOST spellings.
@@ -443,6 +477,11 @@ def render_canonical(
             f"and would call it with its arguments shifted."
         ) from exc
     binding = binding_for(rendering, spec.short_name, sdfg.name)
+    if renames:
+        manifest = {emitted_name: name for name, emitted_name in renames.items()}
+        args = tuple(dataclasses.replace(arg, name=manifest.get(arg.name, arg.name)) for arg in binding.args)
+        binding = dataclasses.replace(binding, args=args)
+        abi_args = [manifest.get(name, name) for name in abi_args]
     return RenderedForm(
         name=f"{base}.{LANGUAGE_EXT[emitted]}",
         code=clean_form(rendering.code, forced),

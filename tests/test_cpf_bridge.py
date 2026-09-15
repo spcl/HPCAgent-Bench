@@ -693,3 +693,49 @@ def test_a_dropin_binds_a_pinned_config_knob_and_takes_the_abi(
     reference(a, expected, PINNED_KNOB)
     outs = _call_native(library, native, {"a": a, "b": np.zeros(EXTENT), "N": EXTENT}, "c", workspace_bytes="8*N")[0]
     np.testing.assert_allclose(outs["b"], expected, rtol=1e-12, atol=0.0)
+
+
+def test_an_abi_symbol_is_forced_through_a_nested_sdfg_when_no_top_level_tasklet_can_carry_it() -> None:
+    """A canonical kernel can keep every live tasklet inside its loop body's nested SDFG, which left the
+    drop-in of indirect_gather_3nbr with no host for an unused ABI size and no render at all."""
+    import dace
+
+    inner = dace.SDFG("loop_body")
+    inner.add_array("x", [4], dace.float64)
+    inner_state = inner.add_state()
+    tasklet = inner_state.add_tasklet("fill", {}, {"o"}, "o = 1.0")
+    inner_state.add_edge(tasklet, "o", inner_state.add_write("x"), None, dace.Memlet("x[0]"))
+
+    outer = dace.SDFG("kernel")
+    outer.add_array("out", [4], dace.float64)
+    outer_state = outer.add_state()
+    nested = outer_state.add_nested_sdfg(inner, {}, {"x"})
+    outer_state.add_edge(nested, "x", outer_state.add_write("out"), None, dace.Memlet("out[0:4]"))
+    outer.validate()
+    assert "K" not in outer.arglist()
+
+    assert cpf_bridge.force_abi_symbols(outer, ["K"]) == ("K",)
+
+    outer.validate()
+    assert "K" in outer.arglist(), list(outer.arglist())
+    assert str(nested.symbol_mapping["K"]) == "K", dict(nested.symbol_mapping)
+
+
+def test_a_dropin_of_a_renamed_argument_publishes_the_manifest_name_in_abi_order() -> None:
+    """The emitter respells ``field`` as ``__field`` (a sympy callable cannot be a dace variable), and the drop-in
+    compared that spelling against the ABI's: indirect_gather_3nbr never rendered one."""
+    spec = BenchSpec.load("indirect_gather_3nbr")
+    impl = cpf_canonical.emit_program(spec)
+    assert cpf_bridge.generated_renames(impl) == {"field": "__field"}
+    sdfg = cpf_canonical.parse_program(spec, impl, "")
+    cpf_canonical.canonicalize_for(sdfg, "cpu")
+
+    form = cpf_bridge.render_canonical(spec, spec.short_name, sdfg, "c", "", "cpu", True)
+
+    want = [arg.name for arg in binding_from_spec(spec).args] + [
+        cpf_bridge.WORKSPACE_NAME,
+        cpf_bridge.WORKSPACE_SIZE_NAME,
+    ]
+    published = [arg["name"] for arg in json.loads(form.binding)["args"]]
+    assert published == want, published
+    assert list(form.abi_order) == want, form.abi_order
