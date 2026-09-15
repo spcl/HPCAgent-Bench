@@ -235,7 +235,9 @@ function renderBoard() {
       if (arm.clean) armCell.append(" ", el("span", { class: "pill clean" }, "clean"));
       const counts = el("td", { class: "num" }, arm.roster ? `${arm.done}/${arm.roster}` : "n/a");
       if (owed(arm)) counts.append(" ", el("span", { class: "owed" }, `(${owed(arm)} owed)`));
-      tbody.append(el("tr", { class: arm.status },
+      const rowAttrs = { class: arm.status };
+      if (arm.failed && arm.failed.length) rowAttrs.title = "failed: " + arm.failed.join(", ");
+      tbody.append(el("tr", rowAttrs,
         armCell, el("td", {}, arm.roster ? strip(arm) : el("span", { class: "empty" }, "no roster")),
         counts, el("td", {}, el("span", { class: "pill " + arm.status }, arm.status)), el("td", {}, jobChips(arm))));
     }

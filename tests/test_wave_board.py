@@ -5,6 +5,7 @@ reports these, and a wrong one shows a finished experiment as owed or an owed on
 
 import importlib.util
 import json
+import os
 import pathlib
 import sqlite3
 import sys
@@ -149,6 +150,93 @@ def test_a_clean_reruns_row_counts_only_its_own_jobs(board: types.ModuleType, tm
     row = board.arm_row(arm + "-clean", jobs, dirs, ["a", "b", "c"], MODELS)
     assert (row["clean"], row["done"], row["status"]) == (True, 1, "incomplete"), row
     assert [job["id"] for job in row["jobs"]] == ["100", "200"], row
+
+
+def canon_csv(path: pathlib.Path, col: str, rank: int, rows: list[tuple[str, str]]) -> None:
+    """A ``<col>.rank<N>.csv`` shard with a header and one ``kernel,status`` row per entry in ``rows``."""
+    path.mkdir(parents=True, exist_ok=True)
+    lines = ["framework,preset,datatype,kernel,impl,status,validated,median_ms,failure,error"]
+    for kernel, status in rows:
+        lines.append(f"{col},fuzzed,float64,{kernel},default,{status},True,1.0,,")
+    (path / f"{col}.rank{rank}.csv").write_text("\n".join(lines) + "\n")
+
+
+@pytest.mark.parametrize(("col", "device"), [("cc", "CPU"), ("dace_cpu", "CPU"), ("dace_gpu", "GPU")])
+def test_a_canon_column_is_cpu_unless_its_name_says_gpu(board: types.ModuleType, col: str, device: str) -> None:
+    assert board.canon_device(col) == device
+
+
+@pytest.mark.parametrize(
+    ("name", "col", "expected"),
+    [
+        ("canon40-cc", "cc", True),
+        ("canon40-cc_autopar", "cc", False),
+        ("canon40-cc-b", "cc", True),
+        ("canon40-dace_cpu", "dace_cpu", True),
+        ("canon40-dace_cpu_canonicalize", "dace_cpu", False),
+        ("canon40-dace_cpu_canonicalize-b", "dace_cpu_canonicalize", True),
+    ],
+)
+def test_a_canon_job_name_does_not_fold_into_a_column_that_prefixes_its_own(
+    board: types.ModuleType, name: str, col: str, expected: bool
+) -> None:
+    """``cc`` prefixes ``cc_autopar`` and ``dace_cpu`` prefixes ``dace_cpu_canonicalize``: a bare
+    startswith would count one column's job as the other's."""
+    assert board.canon_job_name_matches(name, col) == expected
+
+
+def test_a_canon_columns_done_and_failed_kernels_read_the_latest_dir(
+    board: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """A later canon directory (a fresh stamp, or a ``-b`` re-run) supersedes an earlier one's status
+    for the same kernel -- the row must read the latest one, not the union of every wave's rows."""
+    base = tmp_path / "canon-llr-focus40-20260915"
+    rerun = tmp_path / "canon-llr-focus40-20260915-b"
+    canon_csv(base, "cc", 0, [("a", "ok"), ("b", "crash"), ("c", "crash")])
+    canon_csv(rerun, "cc", 0, [("b", "ok")])  # the re-run fixed b; c is still owed and still failed
+    dirs = [base, rerun]
+
+    row = board.canon_column_row("llr-focus40", "cc", dirs, ["a", "b", "c"], [])
+
+    assert (row["done"], row["failed"], row["roster"]) == (2, ["c"], 3), row
+    assert row["device"] == "CPU"
+    assert row["experiment_name"] == "Compiler baselines: Loop Level Reasoning Focus@40"
+
+
+def test_canon_dirs_finds_only_this_tags_directories_oldest_first(
+    board: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    older = tmp_path / "canon-llr-focus40-20260915"
+    newer = tmp_path / "canon-llr-focus40-20260915-b"
+    unrelated = tmp_path / "canon-scicomp40-20260915"
+    for path in (older, unrelated):
+        path.mkdir()
+    os.utime(older, (1000, 1000))
+    newer.mkdir()
+    os.utime(newer, (2000, 2000))
+
+    assert board.canon_dirs(tmp_path, "llr-focus40") == [older, newer]
+
+
+def test_canon_rows_join_the_arms_list_as_their_own_experiment_group(
+    board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The board shows compiler baselines the same way it shows every other experiment: strip, rows,
+    jobs, grouped by ``experiment`` -- so a canon row must carry that same shape."""
+    root = tmp_path / "canon-scicomp40-20260915"
+    canon_csv(root, "numba", 0, [("a", "ok")])
+    canon_csv(root, "dace_gpu", 0, [("a", "crash")])
+    monkeypatch.setattr(board.remaining_kernels, "roster", lambda tag, opt: ["a"])
+    monkeypatch.setattr(board, "canon_jobs", lambda since: [])
+    one_tag = {"scicomp-dc": board.Campaign("scicomp-focus40", "SciComp", "CPU", "scicomp40")}
+    monkeypatch.setattr(board, "CAMPAIGNS", one_tag)
+
+    rows = board.canon_rows(tmp_path, "/opt")
+
+    by_col = {row["variant"]: row for row in rows}
+    assert by_col["numba"]["done"] == 1 and by_col["numba"]["device"] == "CPU"
+    assert by_col["dace_gpu"]["done"] == 0 and by_col["dace_gpu"]["device"] == "GPU"
+    assert all(row["experiment"] == "canon40-scicomp40" for row in rows)
 
 
 def test_a_clean_rerun_shares_the_row_of_the_arm_it_supersedes(
