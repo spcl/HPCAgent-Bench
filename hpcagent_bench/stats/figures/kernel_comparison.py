@@ -94,13 +94,14 @@ ROW_LABEL_PT: float = 8.5
 
 #: Where a "no verified answer" mark sits on the SPEED-UP panel -- the 1x reference line, since that
 #: is what a served but unsolved kernel leaves standing under every scoring policy this repo has
-#: (:data:`~hpcagent_bench.stats.population.NOT_DELIVERED`). HOLLOW, never filled: a real 1.0x
-#: speed-up and "nothing to plot here" must not draw as one mark.
+#: (:data:`~hpcagent_bench.stats.population.NOT_DELIVERED`). Hollow AND crossed
+#: (:func:`~hpcagent_bench.stats.style.point_mark` with ``delivered=False``): a real 1.0x speed-up
+#: and a kernel nobody answered must not draw as one mark.
 MISSING_MARKER_X: float = 1.0
 
 #: The shared legend entry for a missing-answer mark, neutral ink since it names a STATUS, not one
 #: series' identity -- a coloured entry would read as one more condition or model.
-MISSING_LABEL: str = "No Verified Answer"
+MISSING_LABEL: str = plotstyle.NOT_DELIVERED_LABEL
 
 #: Rows of air between the last kernel row and the dashed separator, and between the separator and
 #: the summary row -- the row-axis analogue of
@@ -149,11 +150,13 @@ def candidate_arms(frame: pd.DataFrame, pattern: re.Pattern[str] = ARM_PATTERN) 
 def arm_speedups(frame: pd.DataFrame, arm: str, repeats: population.RepeatPolicy = "latest") -> dict[str, float]:
     """``arm``'s verified final answer per kernel under ``repeats`` (:func:`population.kernel_answers`).
 
-    A kernel with no verified answer is absent, never entered at any stand-in value: that is the
-    framework's own "solved" population, applied here rather than reinvented.
+    A kernel with no verified answer is absent from this dict, and the panel enters it itself at
+    :data:`~hpcagent_bench.stats.population.NOT_DELIVERED` with the undelivered mark, so one place
+    decides how a non-delivery is drawn. ``policy="solved"`` is therefore explicit: the served
+    policy would hand back the same placeholder a second time and the two would compete.
     """
     subset = frame[frame["arm"].astype(str) == arm]
-    answers = population.kernel_answers(subset, repeats=repeats)
+    answers = population.kernel_answers(subset, repeats=repeats, policy="solved")
     if "speedup" not in answers.columns:
         return {}
     return {str(kernel): float(value) for kernel, value in answers["speedup"].items() if value > 0}
@@ -443,7 +446,9 @@ def draw_panel(
             value = values.get(kernel)
             if value is None or not math.isfinite(value) or value <= 0.0:
                 if mark_missing:
-                    plotstyle.point_mark(ax, missing_x, y, series.color, series.marker, filled=False, size=26.0)
+                    plotstyle.point_mark(
+                        ax, missing_x, y, series.color, series.marker, filled=False, size=26.0, delivered=False
+                    )
                 continue
             low, high = low_of.get(kernel), high_of.get(kernel)
             if low is not None and high is not None and math.isfinite(low) and math.isfinite(high) and low < high:

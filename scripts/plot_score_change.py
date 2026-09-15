@@ -506,16 +506,16 @@ def absolute_points(frame: pd.DataFrame, repeats: population.RepeatPolicy = "lat
 
 
 #: A point label's candidate places around its mark, tried in order: (dx, dy) in points, then the
-#: horizontal and vertical alignment. Right of the mark first, where the label has always sat.
-LABEL_PLACES: tuple[tuple[float, float, str, str], ...] = (
-    (13.0, 0.0, "left", "center"),
-    (-13.0, 0.0, "right", "center"),
-    (0.0, 11.0, "center", "bottom"),
-    (0.0, -11.0, "center", "top"),
-    (13.0, 11.0, "left", "bottom"),
-    (-13.0, 11.0, "right", "bottom"),
-    (13.0, -11.0, "left", "top"),
-    (-13.0, -11.0, "right", "top"),
+#: horizontal and vertical alignment. Right of the mark first, where the label has always sat, then
+#: the same ring at two further heights. SIX ARMS SHARE ONE SQUARE PANEL and several land within a
+#: few points of each other, so a ring of eight places runs out and every label after that keeps the
+#: first place and prints on top of its neighbour.
+LABEL_PLACES: tuple[tuple[float, float, str, str], ...] = tuple(
+    (dx, dy, ha, va)
+    for dy_base, va in ((0.0, "center"), (11.0, "bottom"), (-11.0, "top"), (22.0, "bottom"), (-22.0, "top"))
+    for dx, ha in ((13.0, "left"), (-13.0, "right"), (0.0, "center"))
+    for dy in (dy_base,)
+    if not (dx == 0.0 and va == "center")
 )
 
 

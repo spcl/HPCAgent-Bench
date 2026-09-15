@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 
 from hpcagent_bench.stats import palette, population
+from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import kernel_comparison
 
 ROSTER: tuple[str, ...] = ("k1", "k2", "k3")
@@ -742,3 +743,11 @@ def test_the_value_axis_carries_a_major_grid_and_the_kernel_axis_carries_none() 
         assert not [tick for tick in ax.yaxis.get_major_ticks() if tick.gridline.get_visible()]
     finally:
         plt.close(fig)
+
+
+def test_a_kernel_with_no_verified_answer_is_drawn_as_a_crossed_mark_at_one() -> None:
+    """A real 1.0x speed-up and a kernel nobody answered land on the same coordinate, so the two may
+    not draw as one mark: the placeholder carries the cross and the shared legend text says so."""
+    assert kernel_comparison.MISSING_MARKER_X == population.NOT_DELIVERED
+    assert kernel_comparison.MISSING_LABEL == plotstyle.NOT_DELIVERED_LABEL
+    assert "1x" in kernel_comparison.MISSING_LABEL
