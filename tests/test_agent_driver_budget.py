@@ -233,16 +233,20 @@ def claude_log_content(input_tokens: int, output_tokens: int) -> str:
     return "\n".join(lines) + "\n"
 
 
-def test_tokens_json_keeps_its_old_keys_and_gains_the_task_totals(driver, tmp_path: pathlib.Path) -> None:
-    """T1-T2: tokens.json still carries the surviving attempt's own numbers under their old names
-    unchanged, and gains the task total over EVERY attempt (attempts, tokens_effective_all_attempts,
-    tokens_billed_all_attempts) so a relaunched task's earlier crash is not silently dropped from
-    what the run cost."""
+def test_tokens_json_keeps_its_old_keys_and_gains_the_relaunch_record(driver, tmp_path: pathlib.Path) -> None:
+    """T1-T2/T5: tokens.json still carries the final attempt's own numbers under their old names
+    unchanged -- they ARE the task's cost now -- and gains what the relaunch did to the task:
+    attempts, the policy, when the final attempt started, and what the crashed ones spent.
+
+    PROPERTY CHANGED on purpose: this asserted tokens_effective_all_attempts /
+    tokens_billed_all_attempts, the sum over every attempt. A fresh relaunch throws the earlier
+    attempts' work away, so that sum prices work no answer was built from.
+    """
     (tmp_path / "claude.attempt1.log").write_text(claude_log_content(1000, 100), encoding="utf-8")
     (tmp_path / "claude.log").write_text(claude_log_content(2000, 200), encoding="utf-8")
 
     driver.write_cost_record(
-        tmp_path / "tokens.json", {"id": 7, "kernel": "k"}, 2, 0, 2000, 3, "success", tmp_path / "claude.log"
+        tmp_path / "tokens.json", {"id": 7, "kernel": "k"}, 2, 0, 2000, 3, "success", tmp_path / "claude.log", 1_700
     )
 
     record = json.loads((tmp_path / "tokens.json").read_text(encoding="utf-8"))
@@ -267,10 +271,14 @@ def test_tokens_json_keeps_its_old_keys_and_gains_the_task_totals(driver, tmp_pa
     # unchanged: the surviving attempt's own numbers, exactly as before this task-total addition
     assert record["tokens"] == 2000
     assert record["effective"] == 2200.0
-    # new: the task total over BOTH attempts, not just the surviving one
+    # new: what the relaunch cost and where the task's final attempt begins
     assert record["attempts"] == 2
-    assert record["tokens_effective_all_attempts"] == 1100 + 2200
-    assert record["tokens_billed_all_attempts"] == 1000 + 2000
+    assert record["relaunch"] == "fresh"
+    assert record["final_attempt_start_ms"] == 1_700
+    assert record["tokens_effective_crashed"] == 1100
+    assert record["tokens_billed_crashed"] == 1000
+    # gone with the all-attempts sum: nothing adds a wiped attempt to the task's cost
+    assert "tokens_effective_all_attempts" not in record
 
 
 def test_tokens_json_reports_one_attempt_when_the_task_never_relaunched(driver, tmp_path: pathlib.Path) -> None:
@@ -280,8 +288,9 @@ def test_tokens_json_reports_one_attempt_when_the_task_never_relaunched(driver, 
 
     record = json.loads((tmp_path / "tokens.json").read_text(encoding="utf-8"))
     assert record["attempts"] == 1
-    assert record["tokens_effective_all_attempts"] == 550
-    assert record["tokens_billed_all_attempts"] == 500
+    assert record["tokens_effective_crashed"] == 0
+    assert record["tokens_billed_crashed"] == 0
+    assert record["final_attempt_start_ms"] == 0
 
 
 def test_read_new_lines_leaves_a_partial_tail_for_the_next_poll(driver, tmp_path) -> None:

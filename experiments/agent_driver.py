@@ -8,6 +8,8 @@ import math
 import os
 import pathlib
 import re
+import shutil
+import signal
 import statistics
 import subprocess
 import sys
@@ -1190,19 +1192,166 @@ def cost_breakdown(log: pathlib.Path) -> dict[str, float]:
     }
 
 
-def task_token_totals(workdir: pathlib.Path) -> tuple[int, int | None, int | None]:
-    """``(attempts, tokens_effective, tokens_billed)`` over every attempt of this task (T2).
+def task_token_totals(workdir: pathlib.Path) -> tuple[int, int | None, int | None, int, int]:
+    """This task's ``(attempts, effective, billed, effective_crashed, billed_crashed)`` tokens (T2).
 
     Delegates to ``token_cost.task_totals`` so the driver and the extractor cannot drift: one
-    implementation of the task token total, folded from every ``claude.attemptN.log`` this task's
-    crash relaunches left behind plus the surviving ``claude.log``. Never raises -- a cost record is
+    implementation of the task token total. Under fresh relaunch (T5) the first pair is the FINAL
+    attempt's, since every earlier attempt's work was wiped before the next one started, and the
+    ``_crashed`` pair is what those earlier attempts spent. Never raises -- a cost record is
     bookkeeping and must not turn a finished run into a failed one.
     """
     try:
         totals = token_cost_module().task_totals(workdir)
     except Exception:  # noqa: BLE001 -- see the docstring
-        return 0, None, None
-    return totals.attempts, totals.tokens_effective, totals.tokens_billed
+        return 0, None, None, 0, 0
+    return (
+        totals.attempts,
+        totals.tokens_effective,
+        totals.tokens_billed,
+        totals.tokens_effective_crashed,
+        totals.tokens_billed_crashed,
+    )
+
+
+#: What this driver does to a crashed agent's state before relaunching it (T5), recorded in
+#: tokens.json so a reading of the run does not have to date the driver.
+RELAUNCH_POLICY = "fresh"
+
+#: Written in the worker directory when the JOB took the agent down (T6). Extraction reads it and
+#: the analysis drops every row of such a task (X8): the agent was interrupted, so what it left is
+#: a partial task, not a cheap one.
+CANCELLED_MARKER = "cancelled"
+
+#: Allocation kept back for teardown, matching promote_unsubmitted.TEARDOWN_MARGIN_S: inside it the
+#: job is already ending, so an agent still running is being taken down rather than finishing.
+JOB_END_MARGIN_S = 300.0
+
+#: Set by :func:`note_job_cancellation` when Slurm signals the step (scancel, or the job's own time
+#: limit). An Event because the signal lands on the main thread and every agent thread reads it.
+JOB_CANCELLED = threading.Event()
+
+#: The driver's own kills. Each is an allowance the agent SPENT, so none of them is a cancellation
+#: however close to the job's end it lands.
+DRIVER_KILLS = (RC_TIMEOUT, RC_TOKEN_BUDGET, RC_CONTEXT, RC_SUBMITTED, RC_API_TIMEOUT)
+
+
+def note_job_cancellation(signum: int, frame: object) -> None:
+    """Record that the job is going down; the agents are being signalled at the same moment.
+
+    Deliberately does NOT exit. Slurm signals every process of the step, so each agent dies on its
+    own and its ``wait`` returns here -- which is where the run is marked cancelled and its
+    promotion skipped. Exiting instead would take the marker down with it.
+    """
+    JOB_CANCELLED.set()
+
+
+def watch_for_job_cancellation() -> None:
+    """Install :func:`note_job_cancellation` for the signal Slurm ends a step with.
+
+    SIGTERM only. SIGINT is left at its default so Ctrl-C still stops a driver run by hand; scancel
+    and the step's time limit both arrive as SIGTERM, and SIGKILL cannot be caught by anyone.
+    """
+    signal.signal(signal.SIGTERM, note_job_cancellation)
+
+
+def job_is_ending() -> bool:
+    """Whether the ALLOCATION is over, or within the teardown margin of being over."""
+    end = os.environ.get("SLURM_JOB_END_TIME", "").strip()
+    return end.isdigit() and time.time() >= int(end) - JOB_END_MARGIN_S
+
+
+def cancelled_by_the_job(returncode: int, recorded: bool) -> bool:
+    """Whether the JOB took this attempt down rather than the agent or the driver ending it (T6).
+
+    An agent that wrote its own closing event finished, and one of the driver's caps is an allowance
+    the agent spent -- the task wall included, which is why AGENT_TIMEOUT_SECONDS keeps its harvest.
+    What is left is an agent still working when the step was signalled or the allocation ran out:
+    its answer is mid-flight, and promoting it would report an interrupted task as a cheap one.
+    """
+    if recorded or returncode in DRIVER_KILLS:
+        return False
+    return JOB_CANCELLED.is_set() or job_is_ending()
+
+
+def mark_cancelled(workdir: pathlib.Path, returncode: int) -> None:
+    """Write the cancellation marker. Never raises: the job is already going down."""
+    try:
+        (workdir / CANCELLED_MARKER).write_text(f"rc={returncode} at {int(time.time())}\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+#: The attempt ledger, one JSON line per attempt in the worker directory. It outlives the wipe
+#: below, so it is the only place that says how many attempts a task took and when each one ran.
+ATTEMPTS_NAME = "attempts.jsonl"
+
+#: What a fresh relaunch KEEPS in the worker directory: the task's inputs, the ledger, and (added at
+#: the call site) the submission marker plus every transcript already moved aside.
+RELAUNCH_KEEPS: frozenset[str] = frozenset({"prompt.txt", "mcp.json", ATTEMPTS_NAME})
+
+
+def append_attempt(
+    path: pathlib.Path, attempt: int, start_ms: int, returncode: int, crashed_attempt: bool, cleared: bool
+) -> None:
+    """Append one attempt's ledger line. Never raises: bookkeeping cannot fail a run."""
+    line = {
+        "attempt": attempt,
+        "start_ms": start_ms,
+        "end_ms": int(time.time() * 1000),
+        "returncode": returncode,
+        "crashed": crashed_attempt,
+        "cleared": cleared,
+    }
+    try:
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(line, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def remove_entries(folder: pathlib.Path, keep: frozenset[str]) -> None:
+    """Empty ``folder`` of everything but ``keep``; the folder itself stays.
+
+    A symlink is unlinked, never followed, so a link an agent left pointing at the shared mount
+    cannot take the mount with it. Never raises: an entry that will not go is one stale file, and a
+    failed cleanup must not turn a finished task into a failed one.
+    """
+    if not folder.is_dir():
+        return
+    for entry in sorted(folder.iterdir()):
+        if entry.name in keep:
+            continue
+        try:
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def clear_for_relaunch(workdir: pathlib.Path, agent_dir: pathlib.Path) -> None:
+    """Throw away everything the crashed attempt built, so the next one starts EMPTY (T5).
+
+    A relaunched agent used to inherit the dead one's write folder and worker directory: half-built
+    candidates, a stale build tree, whatever the crash left mid-write. It cannot be told which of
+    those it wrote, so it works over evidence it did not produce, and the task is no longer one
+    agent solving one kernel once. The kept names are the ones the DRIVER owns -- the prompt, the
+    MCP config, the ledger, the spent-submission marker -- plus the transcripts already renamed
+    aside, which are the only record of what the crashed attempts cost.
+    """
+    if not workdir.is_dir():
+        return
+    kept = frozenset(
+        {
+            *RELAUNCH_KEEPS,
+            SUBMISSION_MARKER,
+            *(entry.name for entry in workdir.iterdir() if token_cost_module().ATTEMPT_MARKER.search(entry.name)),
+        }
+    )
+    remove_entries(workdir, kept)
+    remove_entries(agent_dir, frozenset())
 
 
 def write_cost_record(
@@ -1214,6 +1363,7 @@ def write_cost_record(
     turns: int,
     subtype: str,
     transcript: pathlib.Path | None = None,
+    final_attempt_start_ms: int = 0,
 ) -> None:
     """Write this worker's cost record beside its transcript. Never raises.
 
@@ -1238,12 +1388,17 @@ def write_cost_record(
     # prompt 173 times; these separate what was re-sent from what was computed, and recover the
     # thinking these endpoints report as zero. See docs/token_accounting.md.
     record.update(cost_breakdown(transcript or path.parent / "claude.log"))
-    # The TASK total (T1-T2), over every attempt a crash relaunched -- `tokens` and the breakdown
-    # above cover only the surviving final attempt, missing whatever an earlier crash already spent.
-    attempts, tokens_effective, tokens_billed = task_token_totals(path.parent)
+    # The TASK total (T1-T2, T5). A relaunch wipes the agent's state, so the task IS its final
+    # attempt: `tokens` and the breakdown above are the reported cost, and what the crashed attempts
+    # spent is reported beside them rather than added to them.
+    attempts, _effective, _billed, effective_crashed, billed_crashed = task_token_totals(path.parent)
     record["attempts"] = attempts
-    record["tokens_effective_all_attempts"] = tokens_effective
-    record["tokens_billed_all_attempts"] = tokens_billed
+    record["relaunch"] = RELAUNCH_POLICY
+    # The cut every analysis of this task applies (X7): a judge row stamped before it belongs to
+    # state that was thrown away. Epoch ms, the judge's own `ts` unit.
+    record["final_attempt_start_ms"] = final_attempt_start_ms
+    record["tokens_effective_crashed"] = effective_crashed
+    record["tokens_billed_crashed"] = billed_crashed
     try:
         path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
     except OSError:
@@ -1602,7 +1757,7 @@ def watch_token_budget(
             return
 
 
-def promote_at_agent_exit(run_id: str, judge_url: str, kernel: str = "") -> str:
+def promote_at_agent_exit(run_id: str, judge_url: str, kernel: str = "", since_ms: int = 0) -> str:
     """Hand this worker's last correct score to the judge as its submission. Never raises.
 
     Bookkeeping: a failure here must not change what the agent's exit is recorded as, so every
@@ -1613,6 +1768,10 @@ def promote_at_agent_exit(run_id: str, judge_url: str, kernel: str = "") -> str:
     ``kernel`` feeds the WORKSPACE fallback, which an arm with no score route needs: there the
     judge's source store is empty by construction, so the only record of the agent's answer is the
     file it wrote. Off unless the arm sets ``AGENT_HARVEST_WORKSPACE``.
+
+    ``since_ms`` is when this agent's FINAL attempt started (T5). A grade from a crashed attempt
+    scored a source the relaunch then deleted, so promoting it would submit an answer the agent that
+    finished the task never held.
     """
     run_dir = os.environ.get("RUN_DIR", "").strip()
     if not run_dir or not judge_url:
@@ -1621,7 +1780,9 @@ def promote_at_agent_exit(run_id: str, judge_url: str, kernel: str = "") -> str:
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
         import promote_unsubmitted
 
-        return promote_unsubmitted.promote_one_worker(pathlib.Path(run_dir), judge_url, run_id, kernel=kernel)
+        return promote_unsubmitted.promote_one_worker(
+            pathlib.Path(run_dir), judge_url, run_id, kernel=kernel, since_ms=since_ms
+        )
     except Exception as exc:  # noqa: BLE001 -- see the docstring: never fail an agent's teardown
         return f"error:{type(exc).__name__}"
 
@@ -1912,7 +2073,12 @@ def run_agent(
         marker=marker.absolute(),
     )
     environment = harness.env(context, environment)
+    attempts_path = workdir / ATTEMPTS_NAME
+    attempt_start_ms = 0
     while True:
+        # Epoch ms, the unit the judge stamps its rows with, so a row can be told to belong to this
+        # attempt or to the wiped state of an earlier one (X7).
+        attempt_start_ms = int(time.time() * 1000)
         state = {"tokens": 0, "exceeded": False, "submitted": False}
         command = harness.command(context)
         # A runner APPENDS to its usage and end files, so what an earlier run left there would be
@@ -1965,23 +2131,29 @@ def run_agent(
                 returncode = RC_TOKEN_BUDGET
             spent = deadline and time.monotonic() >= deadline
             attempt_crashed = closing_crashed(returncode, harness.closing(workdir))
-            if not attempt_crashed or crash_attempts >= AGENT_CRASH_ATTEMPTS or spent:
+            relaunching = bool(attempt_crashed and crash_attempts < AGENT_CRASH_ATTEMPTS and not spent)
+            if not relaunching:
                 if spent and attempt_crashed:
                     log.write("\nagent_driver: crashed with no wall clock left to relaunch in\n")
-                break
-            crash_attempts += 1
-            log.write(
-                f"\nagent_driver: agent crashed (rc={returncode}); "
-                f"relaunching (attempt {crash_attempts} of {AGENT_CRASH_ATTEMPTS})\n"
-            )
-        # Reached only when the loop did NOT break, i.e. this attempt crashed and another follows.
-        # Without this the next iteration's "w" deleted the transcript of the crash -- and the note
-        # just written saying it happened -- leaving crash_attempts= on the summary line as the only
-        # trace that anything went wrong, with nothing anywhere saying why.
+            else:
+                log.write(
+                    f"\nagent_driver: agent crashed (rc={returncode}); "
+                    f"relaunching (attempt {crash_attempts + 1} of {AGENT_CRASH_ATTEMPTS}) from an empty workspace\n"
+                )
+        # The ledger line goes down with the log closed, so what it reports about this attempt is
+        # what the next reader of the directory finds -- including when the wipe below runs.
+        append_attempt(attempts_path, crash_attempts, attempt_start_ms, returncode, attempt_crashed, relaunching)
+        if not relaunching:
+            break
+        # Move the crash aside first. Without this the next iteration's "w" deleted the transcript of
+        # the crash -- and the note just written saying it happened -- leaving crash_attempts= on the
+        # summary line as the only trace that anything went wrong, with nothing saying why.
         for record in harness.records:
             kept = workdir / record
             if kept.exists():
-                kept.replace(kept.with_name(f"{kept.stem}.attempt{crash_attempts - 1}{kept.suffix}"))
+                kept.replace(kept.with_name(f"{kept.stem}.attempt{crash_attempts}{kept.suffix}"))
+        clear_for_relaunch(workdir, agent_dir)
+        crash_attempts += 1
     closing = harness.closing(workdir)
     is_claude = harness.name == harnesses.CLAUDE
     # Only over a 0: a run the driver killed has the cap it hit already recorded, and the transcript
@@ -2004,6 +2176,12 @@ def run_agent(
         reason = " died=context"
     elif returncode == RC_API_TIMEOUT:
         reason = " died=api_timeout"
+    # The JOB, not the agent, ended this attempt: no harvest, and the task is marked so the analysis
+    # can drop it whole (T6/X8). Checked on the same closing the rc above was resolved from.
+    cancelled = cancelled_by_the_job(returncode, closing.recorded)
+    if cancelled:
+        mark_cancelled(workdir, returncode)
+        reason += " cancelled=job"
     # The log line states the ACT, from the marker: rc says why the agent ended, not what it did.
     spent_submission = spent_its_submission(workdir)
     if spent_submission:
@@ -2017,7 +2195,15 @@ def run_agent(
     # leave no cost trace at all, and those are exactly the expensive failures worth pricing.
     tokens_total = transcript_total_tokens(tokens_path, harness.fold_tokens)
     write_cost_record(
-        workdir / "tokens.json", problem, worker_index, returncode, tokens_total, turns, subtype, tokens_path
+        workdir / "tokens.json",
+        problem,
+        worker_index,
+        returncode,
+        tokens_total,
+        turns,
+        subtype,
+        tokens_path,
+        attempt_start_ms,
     )
     if turns:
         reason += f" turns={turns}"
@@ -2035,11 +2221,12 @@ def run_agent(
     # deliberate answer, and promoting over it would replace that with one it did not choose.
     # promote_unsubmitted refuses on the judge's own rows too, so this gate decides only whether the
     # attempt is made; the two agreed on every harvest row of the blind campaign, 93 of them.
-    if not spent_submission:
+    if not spent_submission and not cancelled:
         promoted = promote_at_agent_exit(
             identity_env(problem_index, worker_index)["OPTARENA_RUN_ID"],
             judge_url,
             kernel=str(problem.get("kernel", "")),
+            since_ms=attempt_start_ms,
         )
         if promoted:
             reason += f" promoted={promoted}"
@@ -2100,6 +2287,9 @@ def main() -> int:
     workers = max(1, int(os.environ.get("AGENTS_PER_NODE", "4")))
     node_dir = pathlib.Path(os.environ["RUN_DIR"]) / "agents" / f"node-{node}"
     node_dir.mkdir(parents=True, exist_ok=True)
+    # Armed before the first agent starts: a step signalled mid-run must be recorded as a
+    # cancellation by every agent thread, not read as 40 agents that crashed (T6).
+    watch_for_job_cancellation()
 
     print(
         f"node {node}/{node_count} received {len(local_problems)} problems; "

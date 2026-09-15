@@ -119,6 +119,10 @@ USAGE_FIELDS = (*INPUT_FIELDS, "output_tokens")
 #: attempt starts fresh (``agent_driver.py``): ``<stem>.attemptN.<suffix>``.
 ATTEMPT_MARKER = re.compile(r"\.attempt(\d+)\.")
 
+#: The driver's attempt ledger in a worker directory, one JSON line per attempt (T5): when each
+#: attempt ran, how it ended, and whether the driver wiped the agent's state after it.
+ATTEMPTS_NAME = "attempts.jsonl"
+
 
 def transcripts(run_dir: pathlib.Path) -> Iterator[pathlib.Path]:
     yield from sorted([*run_dir.glob("agents/*/*/claude.log"), *run_dir.glob(f"agents/*/*/{USAGE_NAME}")])
@@ -360,11 +364,19 @@ def attempt_transcripts(worker_dir: pathlib.Path) -> list[pathlib.Path]:
 
 
 class TaskTotals(NamedTuple):
-    """T2: one task's totals over every attempt in its worker directory."""
+    """T2: one task's token totals, read off the attempts in its worker directory.
+
+    ``tokens_effective``/``tokens_billed`` are the FINAL attempt's, which is what the task cost
+    under T2; the two ``_crashed`` fields hold what the attempts before it spent, and
+    ``final_attempt_start_ms`` is when it began (:func:`final_attempt_start`).
+    """
 
     attempts: int
     tokens_effective: int | None
     tokens_billed: int | None
+    tokens_effective_crashed: int
+    tokens_billed_crashed: int
+    final_attempt_start_ms: int
 
 
 def attempt_totals(log: pathlib.Path) -> tuple[int, int]:
@@ -382,22 +394,65 @@ def attempt_totals(log: pathlib.Path) -> tuple[int, int]:
     return int(events_cost(events)["effective"]), sum(billed.values())
 
 
-def task_totals(worker_dir: pathlib.Path) -> TaskTotals:
-    """The TASK TOKEN TOTAL (T2): effective and billed tokens summed over every attempt of one task.
+def attempt_ledger(worker_dir: pathlib.Path) -> list[dict[str, object]]:
+    """The driver's ``attempts.jsonl`` records, in file order; empty when there is no readable one."""
+    path = worker_dir / ATTEMPTS_NAME
+    if not path.is_file():
+        return []
+    records: list[dict[str, object]] = []
+    with path.open(errors="replace") as handle:
+        for line in handle:
+            if not line.startswith("{"):
+                continue
+            try:
+                block = as_block(json.loads(line))
+            except ValueError:
+                continue  # a half-written tail is one lost attempt line, not an unreadable task
+            if block:
+                records.append(block)
+    return records
 
-    A relaunched task's attempts are separate transcripts (the driver moves each crash aside before
-    the next attempt starts from an empty context), so the total is their SUM, not the last one's.
+
+def final_attempt_start(worker_dir: pathlib.Path, logs: list[pathlib.Path]) -> int:
+    """Epoch ms the task's FINAL attempt began, 0 when the task never relaunched.
+
+    The driver's ledger states it (``attempts.jsonl``, T5). A directory written before the ledger
+    existed states it within one attempt boundary: the newest MOVED-ASIDE transcript was renamed
+    while the crash was being handled, so its modification time is where one attempt ended and the
+    next began. Either way the number is in the judge's own ``ts`` unit, so a grade can be told to
+    belong to the final attempt or to a wiped one (X7).
+    """
+    for block in reversed(attempt_ledger(worker_dir)):
+        start = block.get("start_ms")
+        if isinstance(start, int) and start > 0:
+            return start
+    renamed = [log for log in logs if ATTEMPT_MARKER.search(log.name)]
+    return int(renamed[-1].stat().st_mtime * 1000) if renamed else 0
+
+
+def task_totals(worker_dir: pathlib.Path) -> TaskTotals:
+    """The TASK TOKEN TOTAL (T2) of one task: its FINAL attempt, and what the earlier ones spent.
+
+    One rule for every directory, old and new: the last agent ran the task from nothing to its end.
+    A relaunch hands the next attempt an empty model context, and this driver hands it an empty
+    workspace too (T5), so an earlier attempt contributed no part of the answer that was graded --
+    it is spend, reported as ``_crashed`` beside the total and never added to it.
+
     A worker directory with no transcript at all was never entered -- not a zero-token task -- so it
     reports ``attempts=0`` and ``None`` totals rather than 0.
     """
     logs = attempt_transcripts(worker_dir)
     if not logs:
-        return TaskTotals(attempts=0, tokens_effective=None, tokens_billed=None)
+        return TaskTotals(0, None, None, 0, 0, 0)
     per_attempt = [attempt_totals(log) for log in logs]
+    effective, billed = per_attempt[-1]
     return TaskTotals(
         attempts=len(logs),
-        tokens_effective=sum(effective for effective, _billed in per_attempt),
-        tokens_billed=sum(billed for _effective, billed in per_attempt),
+        tokens_effective=effective,
+        tokens_billed=billed,
+        tokens_effective_crashed=sum(pair[0] for pair in per_attempt[:-1]),
+        tokens_billed_crashed=sum(pair[1] for pair in per_attempt[:-1]),
+        final_attempt_start_ms=final_attempt_start(worker_dir, logs),
     )
 
 

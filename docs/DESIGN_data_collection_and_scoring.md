@@ -33,12 +33,33 @@ LEGACY: no current artifact or paper number may come from it.
 | unit | definition |
 |---|---|
 | task | one agent optimizing one kernel once. Key: `(run_root, job, run_id, benchmark)` (`EPISODE_KEY`). `run_id` = `<arm>.n<node>.p<problem>.w<worker>` and repeats across jobs, so `job` is part of the key. |
-| attempt | one agent process inside a task. The driver starts a new attempt when the previous one crashed (up to `AGENT_CRASH_ATTEMPTS=3`). Every attempt starts from an empty model context. |
+| attempt | one agent process inside a task. The driver starts a new attempt when the previous one crashed (up to `AGENT_CRASH_ATTEMPTS=3`). Every attempt starts from an empty model context AND an empty workspace (T5). |
 | arm | one system: model x language x packet x harness (e.g. `cpf-llr-focus40-qwen38-c-cpfsrc`). |
 | roster | the kernels an experiment serves every arm (40 for llr-focus40 and scicomp-focus40, 10 for git-scicomp, 20 for harness-focus20). |
 | wave | one Slurm job of an arm. A later wave serves only the roster kernels the arm has no judge row for yet (`experiments/remaining_kernels.py`). |
 | rerun | a task for a kernel the same arm already ran in an earlier task, in any wave. |
 | repeat | several tasks per kernel by design (`REPEAT=3`); only git-scicomp, see 1.4. |
+
+T5. FRESH RELAUNCH (the driver's default; no flag). Before relaunching a crashed attempt the driver
+deletes every entry of the agent's shared write folder `$HPCAGENT_BENCH_SHARED_DIR/agent-<problem>`
+and of its worker directory, keeping only `prompt.txt`, `mcp.json`, `attempts.jsonl`, the
+submission-spent marker and the transcripts already renamed `*.attemptN.*`. A `home/` directory in
+the worker directory is agent state and is wiped with the rest. So the next attempt starts from
+nothing: an empty context and an empty workspace. What does NOT reset: the task DEADLINE, which is
+the problem's remaining wall clock, so three crashes cannot cost three times the wall the arm was
+sized against. What does not accumulate either: the TOKEN cap is per attempt, each attempt getting
+the full `AGENT_MAX_TOKENS`, since the cap is a backstop on one wedged process rather than a budget
+for the task. The driver appends one line per attempt to `attempts.jsonl`:
+`{"attempt", "start_ms", "end_ms", "returncode", "crashed", "cleared"}`, epoch ms, `cleared` true
+when the wipe ran after it. That file is what says when the final attempt began (X7) and what an
+earlier one spent (8.1).
+
+T6. CANCELLED TASK. When the JOB ends under a working agent -- Slurm signals the step (scancel) or
+the allocation runs out -- the driver writes a `cancelled` marker in the worker directory and
+harvests nothing (no promotion of an unsubmitted score). The agent's own caps are not cancellation:
+`AGENT_TIMEOUT_SECONDS` (rc 124), the token cap, the context wall and a spent single submission are
+allowances the agent used, and an agent that wrote its own closing event finished. Extraction puts
+the flag on the task row and X8 drops the task.
 
 ### 1.2 Judge routes and records
 
@@ -109,6 +130,16 @@ allowed under single submission; more than one ACCEPTED submission is not.
   when the observations are read (`experiments.read_observations`, with a warning giving the count),
   so it enters no answer, no latest-task choice (R4), no coverage (E1) and no usage count (section 9).
   Runs without a task row are kept unchanged. The database is not modified (N1).
+- X7. A judge row stamped before its task's final attempt started is dropped when the observations
+  are read (`experiments.drop_pre_relaunch_rows`, with a warning giving the count). The cut is the
+  task row's `final_attempt_start_ms`, in the epoch ms the judge stamps `ts` with; a task without one
+  (never relaunched, or extracted before the stamp) keeps every row. A fresh relaunch deleted what
+  such a row was graded on (T5), so it is no answer of the task that finished. R3 reads `ts_ms` off
+  the frame `read_observations` returns, so a task's start is the start of its KEPT rows.
+- X8. Every row of a task whose task row carries `cancelled = 1` is dropped at read
+  (`experiments.drop_cancelled_task_rows`, with a warning giving the count), the task row included:
+  the job ended the agent mid-task (T6), so the rows report part of an episode and the token total
+  prices part of one.
 
 ## 3. Per-task answer
 
@@ -190,18 +221,23 @@ allowed under single submission; more than one ACCEPTED submission is not.
 |---|---|---|
 | billed tokens of an attempt | sum over its model turns (last usage per `message.id`) of `input + cache_creation_input + cache_read_input + output` tokens | `http_json.transcript_tokens`, `agent_driver.accumulate_total_tokens` |
 | effective tokens of an attempt | `fresh_input + output + thinking`: each input token counted once, when it first entered the context | `experiments/token_cost.py`, `episode_cost` |
-| TASK TOKEN TOTAL | sum of the effective tokens of ALL attempts of that task. Distinct rerun tasks are separate tasks (R4). | T2 |
+| TASK TOKEN TOTAL | the effective tokens of the task's FINAL attempt. A relaunch wipes the workspace (T5), so an earlier attempt built no part of what was graded; what it spent is reported beside the total as `tokens_crashed`, never added to it. One rule for every run, old and new: the last agent ran the task from nothing to its end. Distinct rerun tasks are separate tasks (R4). | T2 |
 
 - T1. The reported token cost is the task token total (effective). Billed tokens are recorded beside
   it and never reported as cost.
-- T2. The task token total is computed from the transcripts of every attempt of the task:
-  `claude.attempt<N>.log` for N = 1, 2, ... plus `claude.log` (or the per-attempt usage files of a
-  non-Claude harness), in the task's worker directory `agents/node-<n>/problem-<id>-worker-<w>/`.
+- T2. The attempt transcripts of a task are `claude.attempt<N>.log` for N = 1, 2, ... plus
+  `claude.log` (or the per-attempt usage files of a non-Claude harness), in the task's worker
+  directory `agents/node-<n>/problem-<id>-worker-<w>/`. The task token total is the LAST of them;
+  the earlier ones are summed into `tokens_crashed`.
 - T3. Extraction writes one `record = task` row per worker directory: `run_id` from its `mcp.json`
   (`OPTARENA_RUN_ID`), `benchmark` from its `prompt.txt`, `tokens` = task token total (effective),
-  `tokens_billed`, `attempts` (number of attempt transcripts), and `ts_ms` = the modification time of
-  `prompt.txt` in ms (written when the task starts). The driver writes the same totals into
-  `tokens.json` at task end.
+  `tokens_billed`, `attempts` (number of attempt transcripts), `tokens_crashed`,
+  `final_attempt_start_ms`, `cancelled`, and `ts_ms` = the modification time of `prompt.txt` in ms
+  (written when the task starts). `final_attempt_start_ms` is the last `attempts.jsonl` line's
+  `start_ms`; a run predating that file falls back to the modification time of its newest
+  `*.attemptN.*` transcript, which is when the crash was moved aside, and reports 0 when the task
+  never relaunched. The driver writes the same numbers into `tokens.json` at task end, plus
+  `relaunch = fresh`.
 - T4. Source of truth for cost: `task` rows only. `calls.tokens` is a running billed count of the
   CURRENT attempt at the moment of a judge call; it misses earlier attempts and everything after the
   last judge call, and is never used as cost. A frame without `task` rows is refused for cost.
@@ -257,6 +293,8 @@ family; the table states the pairs it kept.
 | rule | code | test |
 |---|---|---|
 | X6 | `experiments.drop_foreign_kernel_rows`, called by `experiments.read_observations` | `test_experiments.py`: foreign-kernel rows dropped with a warning, runs without a task row kept |
+| X7 | `experiments.drop_pre_relaunch_rows`, called by `experiments.read_observations` | `test_experiments.py`: pre-final judge rows dropped with a warning, a task with no stamp untouched, task start over the kept rows |
+| X8 | `experiments.drop_cancelled_task_rows`, called by `experiments.read_observations` | `test_experiments.py`: every row of a cancelled task dropped with a warning, a frame without the column untouched |
 | R1, R2 | `population.graded_episode_rows`, `last_per_episode` | `test_aggregation_population.py`: last submission, non-positive, suspect |
 | R3, R4 | `population.latest_runs`, `arm_kernel_answers`, `kernel_tokens` | rerun supersedes; rerun without answer; undated; start-time tie order |
 | R5 | `population.arm_kernel_answers`, `kernel_tokens(repeats="median")` | median run and carrier; token median |
@@ -265,6 +303,8 @@ family; the table states the pairs it kept.
 | P1-P5 | `summary.paired_geomean`, `paired_arms.score_leg`/`cost_leg`, `plot_score_change.ratio_with_ci` | `test_summary.py`, `test_paired_arms.py` |
 | M1 | `harness.efficacy.correct_family` | `test_plot_score_change.py`, `test_paired_arms.py` |
 | T1-T4 | `agent_driver` (tokens.json), `token_cost` (attempt totals), `extract_llr40.py` (task rows), `population.episode_tokens` | driver, token_cost and extractor tests; call rows never costed |
+| T5 | `agent_driver.clear_for_relaunch`, `append_attempt` (run_agent's loop), `token_cost.task_totals`, `final_attempt_start` | `test_agent_driver_fresh_relaunch.py`: both folders emptied, inputs and ledger kept, two ledger lines, the cut in tokens.json; `test_token_cost.py`: final attempt only, crashed spend beside it |
+| T6 | `agent_driver.cancelled_by_the_job`, `mark_cancelled`, `watch_for_job_cancellation`; `extract_llr40` (`cancelled` column) | `test_agent_driver_cancellation.py`: signal and allocation end cancel, own caps and a finished episode do not; `test_extract_llr40_task_rows.py`: the flag reaches the row |
 | section 9 | `paired_arms.task_usage`, `arm_rows` | `test_paired_arms.py`: usage over selected tasks |
 | section 10 | `paired_arms.impact_rows`, `--impact-out` | `test_paired_arms.py`: impact table rows and orientation |
 | N1-N4 | no write path to the databases in `stats/`, `paired_arms.py` or the plot scripts; `summary` casts to float64; `paired_arms.with_integer_counts`; no rounding before a table write (`paired_arms.py`, `stats/arms.py`) | `test_paired_arms.py`: counts as integers, ratios at full precision |
@@ -288,6 +328,8 @@ max/sum reduction this produced "CPF page: 2.5x fewer tokens" (paired token rati
 F2. Relaunches. Population: the 363 tasks of llr-focus40 CPU jobs 630709, 630941, 636540, 636542
 (qwen38), 630751, 630936, 636535, 636539 (oss120b), 630712, 631250 (kimi27sglang) whose worker
 directory was found. Reference total: billed tokens summed over all attempt transcripts of the task.
+That reference is no longer the reported cost: under T5 the task is its final attempt and the earlier
+attempts are reported as `tokens_crashed`, so the ratios below compare against a sum nothing reports.
 The maximum `calls.tokens` of a task was a median 0.95x of that reference for the 263 tasks without a
 relaunch and 0.39x for the 100 tasks with one. Share of tasks with a relaunch: qwen38 29/38, 31/36,
 21/37, 19/39 by job; oss120b and kimi27sglang 0 in every listed job. Across all llr-focus40 CPU, GPU
@@ -351,3 +393,4 @@ the name judge rows carry; llr-focus40 and llrblind (3-segment keys) are unchang
 | 2026-09-15 | spec rev 4: numeric precision N1-N4 (databases untouched, float64 ratios, integer counts, no rounding before a table write); legacy scope of `analyze_llr40.py` | `78fb58223`; everything above on `main` from `a71ecb472` |
 | 2026-09-15 | spec rev 5: X6 foreign-kernel judge rows dropped at read (F6); A7 per-kernel figure rule written out | `57a7e0479` |
 | 2026-09-15 | task rows named by the key's last segment (F7); git-scicomp re-extracted | this commit |
+| 2026-09-15 | fresh relaunch (T5): crashed attempt's workspace wiped, `attempts.jsonl`, task token total = final attempt, X7; cancelled tasks (T6, X8) | this commit |

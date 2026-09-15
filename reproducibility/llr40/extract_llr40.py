@@ -68,6 +68,9 @@ C_REFERENCE_FIX_MS = 1787702400000
 #: llr8 campaign, so widening this would be untested rather than safer.
 C_LANGUAGE = "c"
 
+#: The driver's marker for a task the JOB took down (``agent_driver.CANCELLED_MARKER``, T6).
+CANCELLED_MARKER = "cancelled"
+
 #: Prefix marking each canonicalization result line in a canon log.
 CANON_MARKER = "LLRROW "
 
@@ -124,6 +127,11 @@ OBSERVATION_FIELDS = (
     # stable across a table extracted before these existed.
     "tokens_billed",
     "attempts",
+    # T5/T6: what the task's crashed attempts spent, when its final attempt began (the cut X7
+    # applies), and whether the job cancelled the task (X8 drops it whole).
+    "tokens_crashed",
+    "final_attempt_start_ms",
+    "cancelled",
 )
 
 SOURCE_FIELDS = (
@@ -455,6 +463,9 @@ def task_rows_for_job(
             tokens=task.tokens_effective if task.tokens_effective is not None else "",
             tokens_billed=task.tokens_billed if task.tokens_billed is not None else "",
             attempts=task.attempts,
+            tokens_crashed=task.tokens_effective_crashed,
+            final_attempt_start_ms=task.final_attempt_start_ms,
+            cancelled="1" if (worker_dir / CANCELLED_MARKER).exists() else "0",
         )
         rows.append(row)
     return rows

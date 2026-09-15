@@ -127,32 +127,45 @@ def submitted_pairs(run_dir: pathlib.Path, only_run_id: str = "") -> set[tuple[s
     return pairs
 
 
-def candidates(run_dir: pathlib.Path, only_run_id: str = "") -> list[dict[str, str]]:
-    """One entry per WORKER that scored correct-and-faster and never submitted, best first.
+def best_speedups(run_dir: pathlib.Path, only_run_id: str = "", since_ms: int = 0) -> dict[tuple[str, str], float]:
+    """The best correct-and-faster speed-up per ``(run_id, kernel)`` in this run's judge shards.
 
     Keyed by (run_id, kernel), not by kernel. Scoring is last-submission-per-episode and max
     across agents, so two workers handed the same kernel are two episodes and two data points --
     deduping by kernel meant one worker's submission suppressed another's promotion entirely. On
     627129 that hid 12 promotable workers behind 3 kernel-level candidates.
 
-    ``only_run_id`` narrows it to one worker, which is what the agent-exit call passes.
+    ``since_ms`` drops grades older than the worker's FINAL attempt (T5): a fresh relaunch deleted
+    the source that grade was given, so the answer behind it does not exist any more.
     """
-    submitted = submitted_pairs(run_dir, only_run_id)
+    where = ["correct = 1", "speedup > 1.0"]
+    args: list[object] = []
+    if only_run_id:
+        where.append("run_id = ?")
+        args.append(only_run_id)
+    if since_ms > 0:
+        where.append("ts >= ?")
+        args.append(since_ms)
+    sql = f"select benchmark, run_id, speedup from calls where {' and '.join(where)}"
     best: dict[tuple[str, str], float] = {}
-    args: tuple = (only_run_id,) if only_run_id else ()
     for db in db_files(run_dir):
-        for bench, run_id, speedup in shard_rows(
-            db,
-            f"select benchmark, run_id, speedup from calls where correct = 1 and speedup > 1.0"
-            f"{' and run_id = ?' if only_run_id else ''}",
-            args,
-        ):
+        for bench, run_id, speedup in shard_rows(db, sql, tuple(args)):
             if not bench or not run_id:
                 continue
             key = (run_id, short_name(bench))
             if key not in best or speedup > best[key]:
                 best[key] = float(speedup)
+    return best
 
+
+def promotable(
+    run_dir: pathlib.Path, best: dict[tuple[str, str], float], submitted: set[tuple[str, str]], cuts: dict[str, int]
+) -> list[dict[str, str]]:
+    """The submittable item behind each ranked ``(run_id, kernel)``, best speed-up first.
+
+    ``cuts`` holds a worker's final-attempt stamp where there is one, so the source read back for it
+    is one that attempt produced (T5).
+    """
     out: list[dict[str, str]] = []
     store = run_dir / "judge"
     # Biggest speedup FIRST: a budget can cut this list short, and 76.6x vs 1.0x are not
@@ -160,7 +173,8 @@ def candidates(run_dir: pathlib.Path, only_run_id: str = "") -> list[dict[str, s
     for (run_id, bench), best_speedup in sorted(best.items(), key=lambda kv: (-kv[1], kv[0])):
         if (run_id, bench) in submitted:
             continue
-        row = last_source(run_dir, bench, run_id)
+        since = cuts.get(run_id, 0)
+        row = last_source(run_dir, bench, run_id, since_ms=since)
         if not row:
             continue
         path, language = row
@@ -171,13 +185,83 @@ def candidates(run_dir: pathlib.Path, only_run_id: str = "") -> list[dict[str, s
         # A hip/cuda submission is TWO translation units; sending only `source` builds fine on a
         # host-only arm but fails a GPU one for a reason that looks like the agent's fault. The
         # device half is its own row tagged `<language>:device`.
-        device = last_source(run_dir, bench, run_id, language=f"{language}{DEVICE_SUFFIX}")
+        device = last_source(run_dir, bench, run_id, language=f"{language}{DEVICE_SUFFIX}", since_ms=since)
         if device:
             device_blob = find_blob(store, device[0])
             if device_blob:
                 item["device_source"] = device_blob.read_text(errors="ignore")
         out.append(item)
     return out
+
+
+def candidates(run_dir: pathlib.Path, only_run_id: str = "", since_ms: int = 0) -> list[dict[str, str]]:
+    """One entry per WORKER that scored correct-and-faster and never submitted, best first.
+
+    ``only_run_id`` narrows it to one worker, which is what the agent-exit call passes, and
+    ``since_ms`` cuts that worker's grades at its final attempt (T5).
+    """
+    cuts = {only_run_id: since_ms} if only_run_id and since_ms > 0 else {}
+    best = best_speedups(run_dir, only_run_id, since_ms)
+    return promotable(run_dir, best, submitted_pairs(run_dir, only_run_id), cuts)
+
+
+def read_json(path: pathlib.Path) -> dict[str, object]:
+    """One JSON object off disk, or an empty one: a worker directory the driver never finished
+    writing must cut nothing rather than fail the sweep over every other worker."""
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(key): value for key, value in parsed.items()} if isinstance(parsed, dict) else {}
+
+
+def declared_run_id(mcp_config: pathlib.Path) -> str:
+    """The run id the driver declared for this worker's MCP server (``OPTARENA_RUN_ID``).
+
+    The worker directory names the node and the worker but not the PROBLEM index, which the run id
+    carries, so the config the driver wrote is where the two are tied together.
+    """
+    servers = read_json(mcp_config).get("mcpServers")
+    if not isinstance(servers, dict):
+        return ""
+    for server in servers.values():
+        environment = server.get("env") if isinstance(server, dict) else None
+        run_id = environment.get("OPTARENA_RUN_ID") if isinstance(environment, dict) else None
+        if isinstance(run_id, str) and run_id:
+            return run_id
+    return ""
+
+
+def worker_cuts(run_dir: pathlib.Path) -> dict[str, int]:
+    """``run_id`` -> the epoch ms its final attempt started, over every worker directory of the run.
+
+    Read off the two files the driver leaves in each worker directory: ``tokens.json`` carries the
+    stamp, ``mcp.json`` the run id it belongs to. A worker that never relaunched carries the stamp
+    too and applying it costs nothing -- its first attempt is its final one.
+    """
+    cuts: dict[str, int] = {}
+    for tokens_path in sorted(run_dir.glob("agents/*/*/tokens.json")):
+        start = read_json(tokens_path).get("final_attempt_start_ms")
+        run_id = declared_run_id(tokens_path.parent / "mcp.json")
+        if isinstance(start, int) and start > 0 and run_id:
+            cuts[run_id] = start
+    return cuts
+
+
+def swept_candidates(run_dir: pathlib.Path) -> list[dict[str, str]]:
+    """:func:`candidates` over the whole run, each worker cut at its OWN final attempt (T5).
+
+    The teardown sweep sees every worker at once and the cut is per worker, so one query cannot
+    express it: a worker with a recorded stamp is re-ranked under that stamp, and the ranking is
+    sorted once afterwards so the budget still truncates the smallest speed-ups.
+    """
+    cuts = worker_cuts(run_dir)
+    best = best_speedups(run_dir)
+    for run_id, cut in cuts.items():
+        for key in [key for key in best if key[0] == run_id]:
+            del best[key]
+        best.update(best_speedups(run_dir, run_id, cut))
+    return promotable(run_dir, best, submitted_pairs(run_dir), cuts)
 
 
 #: What ``submissions.optimizer`` says about an unsubmitted row: PROMOTED_TAG is a SCORED
@@ -262,20 +346,28 @@ def short_name(benchmark: str) -> str:
     return benchmark.rsplit("/", 1)[-1] if benchmark else benchmark
 
 
-def last_source(run_dir: pathlib.Path, bench: str, run_id: str, language: str = "") -> tuple[str, str] | None:
+def last_source(
+    run_dir: pathlib.Path, bench: str, run_id: str, language: str = "", since_ms: int = 0
+) -> tuple[str, str] | None:
     """``(relative blob path, language)`` of the most recent stored source for this kernel.
 
     ``language`` selects ONE delivered half: passing ``"hip:device"`` returns the device unit,
     passing nothing returns the host one. Without the filter the two halves of a GPU submission
     sort together and the newest row wins, so a device blob could be submitted as the host source.
+
+    ``since_ms`` keeps only sources stored from the worker's FINAL attempt on (T5); an earlier one
+    was deleted by the relaunch, so submitting it would send an answer no agent of this task held.
     """
     best: tuple[int, str, str] | None = None
+    sql = "select benchmark, ts, path, language from sources where run_id = ?"
+    args: list[object] = [run_id]
+    if since_ms > 0:
+        sql += " and ts >= ?"
+        args.append(since_ms)
     for db in db_files(run_dir):
         # Matched on the short name, not the stored string: the two tables spell a kernel
         # differently on some tracks (see short_name).
-        for stored_bench, ts, path, stored in shard_rows(
-            db, "select benchmark, ts, path, language from sources where run_id = ? order by ts", (run_id,)
-        ):
+        for stored_bench, ts, path, stored in shard_rows(db, f"{sql} order by ts", tuple(args)):
             if short_name(stored_bench) != short_name(bench):
                 continue
             stored = stored or "c"
@@ -384,7 +476,12 @@ def promote(judge: str, item: dict[str, str], dry_run: bool, rank: int, timeout:
 
 
 def promote_one_worker(
-    run_dir: pathlib.Path, judge: str, run_id: str, timeout: float | None = None, kernel: str = ""
+    run_dir: pathlib.Path,
+    judge: str,
+    run_id: str,
+    timeout: float | None = None,
+    kernel: str = "",
+    since_ms: int = 0,
 ) -> str:
     """Promote THIS worker's last correct score, at ITS teardown. Returns a short outcome word.
 
@@ -403,6 +500,9 @@ def promote_one_worker(
     -- has to say which kernel this worker was given. Only consulted when the store yielded nothing
     and ``AGENT_HARVEST_WORKSPACE`` is set.
 
+    ``since_ms`` is when this worker's FINAL attempt started (T5). A grade older than that scored a
+    source the relaunch deleted, so it names an answer the agent that finished the task never held.
+
     BOTH paths skip an episode that already submitted, through the one :func:`submitted_pairs` set.
     The fallback needs its own check because it runs precisely when :func:`candidates` returned
     nothing, which on an arm with no score route is every worker, submitted or not.
@@ -410,7 +510,7 @@ def promote_one_worker(
     Never raises: a promotion is bookkeeping and must not change the agent's recorded outcome.
     """
     try:
-        items = candidates(run_dir, only_run_id=run_id)
+        items = candidates(run_dir, only_run_id=run_id, since_ms=since_ms)
         if not items and kernel and harvest_enabled():
             if (run_id, short_name(kernel)) in submitted_pairs(run_dir, only_run_id=run_id):
                 return ""
@@ -445,7 +545,7 @@ def main() -> int:
         print("--judge is required unless --dry-run", file=sys.stderr)
         return 2
 
-    items = candidates(args.run_dir)
+    items = swept_candidates(args.run_dir)
     if not items:
         print("nothing to promote: every verified kernel already has a submission")
         return 0
