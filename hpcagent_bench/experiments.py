@@ -196,6 +196,18 @@ def observations(run_globs: Iterable[str], **identity: str | Iterable[str]) -> "
 OBSERVATIONS_TABLE: str = "observations"
 
 
+def read_table(path: pathlib.Path, table: str) -> "pd.DataFrame":
+    """One named table of an extracted ``.db``, in the order it was written (``rowid`` order).
+
+    The one place a script opens an extracted experiment database, so every reader agrees on
+    read-only access and on row order regardless of which table it names.
+    """
+    import pandas as pd
+
+    with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
+        return pd.read_sql_query(f"SELECT * FROM {table} ORDER BY rowid", conn)
+
+
 def read_observations(path: pathlib.Path) -> "pd.DataFrame":
     """An observations table from its CSV, or from an extracted experiment ``.db``.
 
@@ -206,8 +218,7 @@ def read_observations(path: pathlib.Path) -> "pd.DataFrame":
 
     if path.suffix != ".db":
         return pd.read_csv(path, low_memory=False)
-    with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
-        return pd.read_sql_query(f"SELECT * FROM {OBSERVATIONS_TABLE} ORDER BY rowid", conn)
+    return read_table(path, OBSERVATIONS_TABLE)
 
 
 def main(argv: list[str] | None = None) -> int:
