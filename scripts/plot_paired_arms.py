@@ -43,8 +43,8 @@ from hpcagent_bench.stats.figures import per_kernel
 plotstyle.apply()
 import matplotlib.pyplot as plt  # pyplot must follow plotstyle.apply()
 
-#: One row's vertical budget, inches. A row label is two lines (both arm names), so this is taller
-#: than per_kernel.py's single-line kernel columns.
+#: One row's vertical budget, inches. Sized for ``--row-labels raw``'s two-line label (both arm
+#: names); the default identity label is one line and fits inside it with room spare.
 ROW_HEIGHT_IN: float = 0.55
 
 #: A floor under the plotted rows' own height, so a one- or two-pair family still gets a panel
@@ -127,8 +127,50 @@ def rows_for(table: pd.DataFrame, leg: str, order: Sequence[Pair]) -> list[Row]:
 
 
 def pair_label(pair: Pair) -> str:
-    """A pair's row label: its own two arm names, exactly as the table names them."""
+    """A pair's row label: its own two arm names, exactly as the table names them. ``--row-labels
+    raw`` keeps this; the default is :func:`identity_label`."""
     return f"{pair[0]}\nvs {pair[1]}"
+
+
+def identity_label(pair: Pair) -> str:
+    """One pair's row label from the two arms' IDENTITY -- model, language and packet, read off the
+    arm names themselves through the same last-resort parsers ``experiments.fill_arm_identity``
+    falls back to, since the family CSV carries no identity columns of its own.
+
+    Only a part BOTH arms share is named: a model or a language always is (a pair crosses two
+    arms of the SAME model and language in every family this script has drawn). A packet is named
+    only when it too is shared -- when it differs, the packet IS the comparison the pair exists to
+    make (git-scicomp's repo/kernel scope is the same kind of thing, just not a registered packet on
+    one side), and the figure's title plus its "(a / b)" axis already say which side is which; naming
+    it again on every row repeats what the figure states once. Falls back to :func:`pair_label` when
+    nothing resolves at all.
+    """
+    model_a, model_b = experiment_tags.model_of(pair[0], unknown=""), experiment_tags.model_of(pair[1], unknown="")
+    language_a, language_b = experiment_tags.language_of(pair[0]), experiment_tags.language_of(pair[1])
+    packet_a, packet_b = experiment_tags.packet_of(pair[0]), experiment_tags.packet_of(pair[1])
+    parts = []
+    if model_a and model_a == model_b:
+        parts.append(experiment_tags.model_name(model_a))
+    if language_a and language_a == language_b:
+        parts.append(experiment_tags.language_name(language_a))
+    if packet_a and packet_a == packet_b:
+        parts.append(experiment_tags.packet_name(packet_a))
+    return ", ".join(parts) if parts else pair_label(pair)
+
+
+def row_labels(pairs: Sequence[Pair], mode: str) -> dict[Pair, str]:
+    """One label per pair in ``mode`` ("identity" or "raw"), each made UNIQUE: two pairs that
+    resolve to the same identity label (their raw arm names differ, but not in model, language or a
+    shared packet) get a minimal ``" (2)"``, ``" (3)"``, ... suffix in first-seen order, rather than
+    two rows a reader cannot tell apart."""
+    build = {"identity": identity_label, "raw": pair_label}[mode]
+    seen: dict[str, int] = {}
+    labelled: dict[Pair, str] = {}
+    for pair in pairs:
+        label = build(pair)
+        seen[label] = seen.get(label, 0) + 1
+        labelled[pair] = label if seen[label] == 1 else f"{label} ({seen[label]})"
+    return labelled
 
 
 def named_model(pair: Pair, models: Sequence[str]) -> str:
@@ -236,7 +278,9 @@ def widen_gap_until_labels_clear(
         fig.subplots_adjust(wspace=wspace)
 
 
-def build_figure(table: pd.DataFrame, label: str, double_column: bool) -> matplotlib.figure.Figure:
+def build_figure(
+    table: pd.DataFrame, label: str, double_column: bool, row_label_mode: str = "identity"
+) -> matplotlib.figure.Figure:
     """One figure: a shared row per pair, speed-up on the left, tokens on the right, colour and
     marker by the model either arm names.
 
@@ -252,6 +296,7 @@ def build_figure(table: pd.DataFrame, label: str, double_column: bool) -> matplo
     token_rows = rows_for(table, "tokens", pairs)
     colors, shapes = pair_style(pairs, experiment_tags.order("models"))
     handles = model_legend(pairs, colors, shapes)
+    labels = row_labels(pairs, row_label_mode)
 
     axes_in = max(len(pairs) * ROW_HEIGHT_IN, MIN_AXES_IN)
     bottom_in = XLABEL_BLOCK_IN + (LEGEND_BLOCK_IN if handles else 0.0)
@@ -262,7 +307,7 @@ def build_figure(table: pd.DataFrame, label: str, double_column: bool) -> matplo
     draw_forest(ax_speed, speed_rows, colors, shapes)
     style_ratio_axis(ax_speed, speed_rows)
     ax_speed.set_xlabel("Speedup Ratio (a / b)", fontsize=plotstyle.LABEL_PT * 0.8)
-    plotstyle.row_axis(ax_speed, [pair_label(pair) for pair in pairs])
+    plotstyle.row_axis(ax_speed, [labels[pair] for pair in pairs])
 
     draw_forest(ax_tokens, token_rows, colors, shapes)
     style_ratio_axis(ax_tokens, token_rows)
@@ -291,10 +336,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--double-column", action="store_true", default=False, help="cap the figure width at style.DOUBLE_COLUMN_WIDTH"
     )
+    parser.add_argument(
+        "--row-labels",
+        choices=("identity", "raw"),
+        default="identity",
+        help="row label: model/language/shared-packet display names (default), or raw arm_a/arm_b names",
+    )
     args = parser.parse_args(argv)
 
     table = pd.read_csv(args.table)
-    fig = build_figure(table, args.label or args.table.stem, args.double_column)
+    fig = build_figure(table, args.label or args.table.stem, args.double_column, args.row_labels)
     written = plotstyle.save(fig, args.out.with_suffix(""))
     print(f"{len(pair_order(table))} pairs -> {written} (+ .png)")
     return 0
