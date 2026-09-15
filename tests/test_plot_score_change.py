@@ -20,7 +20,7 @@ import matplotlib.markers
 import pandas as pd
 import pytest
 
-from hpcagent_bench import experiment_tags
+from hpcagent_bench import experiment_tags, packets
 from hpcagent_bench.harness import efficacy
 from hpcagent_bench.stats import palette, summary
 from hpcagent_bench.stats import style as plotstyle
@@ -382,12 +382,13 @@ def test_spread_pushes_labels_apart_and_keeps_them_inside_the_column() -> None:
     assert min(floored) >= 0.0 and max(floored) <= 6.0
 
 
-def treatment_panel(treatment: str) -> tuple[str, pd.DataFrame, pd.DataFrame]:
-    """One synthetic (treatment, stats, absolute) triple, the shape :func:`plot.figure_treatments` takes."""
+def treatment_panel(treatment: str, model: str = "qwen38") -> "plot.PanelRow":
+    """One synthetic row, the shape :func:`plot.figure_treatments` takes: a row titled by its own
+    treatment, which is what a figure joining several treatments against one control draws."""
     stats = pd.DataFrame(
         [
             {
-                "model": "qwen38",
+                "model": model,
                 "language": "c",
                 "score_verdict": efficacy.NOT_SIGNIFICANT,
                 "cost_verdict": efficacy.NOT_SIGNIFICANT,
@@ -397,11 +398,11 @@ def treatment_panel(treatment: str) -> tuple[str, pd.DataFrame, pd.DataFrame]:
     )
     absolute = pd.DataFrame(
         [
-            {"model": "qwen38", "language": "c", "skills": False, **thin(1.0, 1000.0)},
-            {"model": "qwen38", "language": "c", "skills": True, **thin(1.4, 900.0)},
+            {"model": model, "language": "c", "skills": False, **thin(1.0, 1000.0)},
+            {"model": model, "language": "c", "skills": True, **thin(1.4, 900.0)},
         ]
     )
-    return treatment, stats, absolute
+    return plot.PanelRow(packets.label(treatment), treatment, stats, absolute)
 
 
 @pytest.mark.parametrize("n", [1, 2, 3])
@@ -992,3 +993,70 @@ def test_pair_points_reduces_each_arm_by_name_and_tags_which_side_of_the_pair_it
     assert by_side.loc[True].log2_speedup == pytest.approx(1.0)
     assert by_side.loc[False].log2_speedup == pytest.approx(2.0)
     assert by_side.loc[True].tokens == pytest.approx(150e3)
+
+
+def model_split_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """One comparison over three models, the shape :func:`plot.model_rows` splits."""
+    stats = pd.DataFrame(
+        [
+            {
+                "model": model,
+                "language": "c",
+                "score_verdict": efficacy.NOT_SIGNIFICANT,
+                "cost_verdict": efficacy.NOT_SIGNIFICANT,
+                "family_size": 6,
+            }
+            for model in ("qwen38", "oss120b", "kimi27sglang")
+        ]
+    )
+    absolute = pd.DataFrame(
+        [
+            {"model": model, "language": "c", "skills": skills, **thin(1.0 + index, 1000.0)}
+            for index, model in enumerate(("qwen38", "oss120b", "kimi27sglang"))
+            for skills in (False, True)
+        ]
+    )
+    return stats, absolute
+
+
+def test_one_comparison_splits_into_one_row_per_model_in_registry_order() -> None:
+    """A single label column holding every arm of a twelve-arm comparison is unreadable; a row per
+    model gives each its own column, and the shape still says which model a mark is."""
+    stats, absolute = model_split_frames()
+    rows = plot.model_rows(absolute, stats, "no-score")
+    assert [row.title for row in rows] == [
+        experiment_tags.model_name(m) for m in palette.in_order(["qwen38", "oss120b", "kimi27sglang"])
+    ]
+    assert all(row.treatment == "no-score" for row in rows)
+    assert all(len(row.absolute) == 2 and len(row.stats) == 1 for row in rows)
+
+
+def test_a_model_row_figure_draws_two_square_panels_per_model_under_one_legend() -> None:
+    """Every row is the same two panels, and the legend belongs to the figure: the rows draw the
+    same intervention in the same colour and differ only in which model's shapes they carry."""
+    import matplotlib.pyplot as plt
+
+    stats, absolute = model_split_frames()
+    fig = plot.build_treatments_figure(plot.model_rows(absolute, stats, "no-score"), "No Score Tool")
+    try:
+        assert len(fig.axes) == 3 * len(plot.PANELS)
+        assert all(ax.get_box_aspect() == pytest.approx(1.0) for ax in fig.axes)
+        assert all(ax.get_legend() is None for ax in fig.axes)
+        assert len(fig.legends) == 1
+    finally:
+        plt.close(fig)
+
+
+def test_a_model_row_is_titled_by_its_model_and_not_by_the_intervention() -> None:
+    """The intervention is one for the whole figure and the title says it once; each row has to say
+    which model it is, or three identical rows carry no way to tell them apart."""
+    import matplotlib.pyplot as plt
+
+    stats, absolute = model_split_frames()
+    fig = plot.build_treatments_figure(plot.model_rows(absolute, stats, "no-score"), "No Score Tool")
+    try:
+        texts = {text.get_text() for text in fig.texts}
+        assert {experiment_tags.model_name("qwen38"), experiment_tags.model_name("oss120b")} <= texts
+        assert packets.label("no-score") not in texts - {"No Score Tool"}
+    finally:
+        plt.close(fig)

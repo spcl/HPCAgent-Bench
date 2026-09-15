@@ -39,6 +39,7 @@ import math
 import pathlib
 import sys
 from collections.abc import Sequence
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -767,8 +768,23 @@ def panel_side(double_column: bool) -> float:
     return max(1.4, side)
 
 
+class PanelRow(NamedTuple):
+    """One ROW of a joined figure: its title, the packet its filled marks wear, and its two frames.
+
+    ``title`` is what the row is, which is not always the packet: a figure joining several
+    treatments against one control names each row for its treatment, and a figure splitting ONE
+    treatment over its models names each row for the model. ``treatment`` stays the packet either
+    way, because the colour is the packet in both.
+    """
+
+    title: str
+    treatment: str
+    stats: pd.DataFrame
+    absolute: pd.DataFrame
+
+
 def build_treatments_figure(
-    panels: Sequence[tuple[str, pd.DataFrame, pd.DataFrame]], label: str, double_column: bool = False
+    panels: Sequence[PanelRow], label: str, double_column: bool = False, control_name: str = ""
 ) -> plt.Figure:
     """N comparisons as N ROWS of two square panels, every one against the SAME control -- see
     :func:`control_rows` and :func:`treatment_frame`.
@@ -782,7 +798,7 @@ def build_treatments_figure(
     the packet colour changes, so the key belongs to the figure rather than to any axes in it.
     """
     rows = len(panels)
-    treatments = [treatment for treatment, _stats, _absolute in panels]
+    treatments = list(dict.fromkeys(row.treatment for row in panels))
     side = panel_side(double_column)
     width = len(PANELS) * side + INNER_GAP_IN + LEFT_IN + RIGHT_IN
     height = rows * side + (rows - 1) * (SQUARE_PANEL_GAP + PAIR_LABEL_IN) + TITLE_IN + PAIR_LABEL_IN
@@ -791,8 +807,9 @@ def build_treatments_figure(
     # ANNOTATION_PT fixed size a full PANEL_SIDE panel uses -- see draw_absolute(compact=True).
     fig, axes = plt.subplots(rows, len(PANELS), figsize=(width, height), squeeze=False)
     handles_by_label: dict[str, plt.Line2D] = {}
-    for row, (treatment, stats, absolute) in zip(axes, panels, strict=True):
-        for handle in draw_absolute(list(row), absolute, stats, treatment, True, treatments):
+    for row, panel in zip(axes, panels, strict=True):
+        drawn = draw_absolute(list(row), panel.absolute, panel.stats, panel.treatment, True, treatments, control_name)
+        for handle in drawn:
             handles_by_label.setdefault(handle.get_label(), handle)
     # The metric names go on the TOP row and the condition ticks on the BOTTOM one. Every row
     # repeats the same two quantities at the same two positions, so a label per row says the same
@@ -821,12 +838,12 @@ def build_treatments_figure(
     )
     # Each comparison's name, centred over its OWN pair. Placed after subplots_adjust, since a
     # panel's figure-fraction position is only settled then.
-    for index, (treatment, _stats, _absolute) in enumerate(panels):
+    for index, panel in enumerate(panels):
         left, right = axes[index][0].get_position(), axes[index][-1].get_position()
         fig.text(
             (left.x0 + right.x1) / 2.0,
             left.y1 + 0.2 * PAIR_LABEL_IN / height,
-            packets.label(treatment),
+            panel.title,
             ha="center",
             va="bottom",
             fontsize=plotstyle.SUBTITLE_PT * 0.8,
@@ -839,9 +856,37 @@ def build_treatments_figure(
 
 
 def figure_treatments(
-    panels: Sequence[tuple[str, pd.DataFrame, pd.DataFrame]], label: str, out: pathlib.Path, double_column: bool = False
+    panels: Sequence[PanelRow], label: str, out: pathlib.Path, double_column: bool = False
 ) -> pathlib.Path:
     return write(build_treatments_figure(panels, label, double_column), out)
+
+
+def model_rows(frame: pd.DataFrame, stats: pd.DataFrame, treatment: str) -> list[PanelRow]:
+    """ONE comparison split into one row per MODEL, in registry order.
+
+    A single row holds every arm of the comparison in one label column, and past about eight arms
+    that column is unreadable: the labels pile up against the panel ceiling and their leader lines
+    cross. Splitting by model puts each model's arms in their own panel with their own label column,
+    and the shape still says which model a mark is, so nothing is lost by the split.
+    """
+    rows: list[PanelRow] = []
+    for model in palette.in_order(frame.model.astype(str).unique()):
+        part = frame[frame.model.astype(str) == model]
+        rows.append(PanelRow(experiment_tags.model_name(model), treatment, stats[stats.model == model], part))
+    return rows
+
+
+def figure_model_rows(
+    frame: pd.DataFrame,
+    stats: pd.DataFrame,
+    treatment: str,
+    label: str,
+    out: pathlib.Path,
+    control_name: str = "",
+) -> pathlib.Path:
+    """One comparison as one ROW PER MODEL of the same two square panels, under one shared legend."""
+    figure = build_treatments_figure(model_rows(frame, stats, treatment), label, control_name=control_name)
+    return write(figure, out)
 
 
 #: What ``experiments/paired_arms.py`` calls each leg of a pair in the family CSV it writes.
@@ -1079,7 +1124,8 @@ def figure_from_pairs(args: argparse.Namespace) -> None:
     stats.to_csv(args.table, index=False)
     absolute.to_csv(args.table.with_name(f"{args.table.stem}-absolute{args.table.suffix}"), index=False)
     label = args.label or experiment_tags.packet_name(args.intervention)
-    written = figure_absolute(absolute, stats, args.intervention, label, args.out, args.control_label)
+    draw = figure_model_rows if args.rows_by_model else figure_absolute
+    written = draw(absolute, stats, args.intervention, label, args.out, args.control_label)
     hits = int((stats.score_verdict == efficacy.SIGNIFICANT).sum())
     cost_hits = int((stats.cost_verdict == efficacy.SIGNIFICANT).sum())
     print(f"{len(pairs)} pairs; BH over {family_size(stats)} tests: {hits} score-significant, {cost_hits} cost")
@@ -1132,6 +1178,12 @@ def main() -> None:
         default=False,
         help="draw an arm even without a row for every roster kernel (default: dropped, named on stderr)",
     )
+    parser.add_argument(
+        "--rows-by-model",
+        action="store_true",
+        help="with --pairs-csv: one ROW of two panels per model instead of one row holding every "
+        "arm, for a comparison whose single label column has grown unreadable",
+    )
     parser.add_argument("--label", default="", help="figure title; defaults to the campaign's display name")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/score_change.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/score_change.csv"))
@@ -1157,7 +1209,7 @@ def main() -> None:
     roster = sorted(frame_all["benchmark"].dropna().astype(str).unique())
 
     args.table.parent.mkdir(parents=True, exist_ok=True)
-    panels: list[tuple[str, pd.DataFrame, pd.DataFrame]] = []
+    panels: list[PanelRow] = []
     for treatment in treatments:
         built = one_treatment_panel(frame_all, control, treatment, roster, args.include_incomplete, args.repeats)
         if built is None:
@@ -1169,18 +1221,18 @@ def main() -> None:
         suffix = "" if len(treatments) == 1 else f"-{treatment}"
         stats.to_csv(args.table.with_name(f"{args.table.stem}{suffix}{args.table.suffix}"), index=False)
         absolute.to_csv(args.table.with_name(f"{args.table.stem}{suffix}-absolute{args.table.suffix}"), index=False)
-        panels.append((treatment, stats, absolute))
+        panels.append(PanelRow(packets.label(treatment), treatment, stats, absolute))
     if not panels:
         raise SystemExit(f"no treatment of {treatments} produced a comparison for experiment {args.experiment!r}")
 
     label = args.label or experiment_tags.display_name(args.experiment)
     if len(panels) == 1:
-        treatment, stats, absolute = panels[0]
-        written = figure_absolute(absolute, stats, treatment, label, args.out)
+        row = panels[0]
+        written = figure_absolute(row.absolute, row.stats, row.treatment, label, args.out)
     else:
         written = figure_treatments(panels, label, args.out, double_column=args.double_column)
 
-    for treatment, stats, _ in panels:
+    for treatment, stats in ((row.treatment, row.stats) for row in panels):
         score_hits = int((stats.score_verdict == efficacy.SIGNIFICANT).sum())
         cost_hits = int((stats.cost_verdict == efficacy.SIGNIFICANT).sum())
         withheld = int((stats.score_verdict == efficacy.UNDERPOWERED).sum())

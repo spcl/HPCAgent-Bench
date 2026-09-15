@@ -109,6 +109,11 @@ fig.savefig("out.pdf", bbox_inches=fig.bbox_inches)
 These six are not preferences. A figure that breaks one is wrong, and the tests named beside each
 one fail when it does.
 
+A comparison whose single label column has grown unreadable is split by MODEL, one row of the same
+two panels per model, titled by the model (`plot_score_change.py --rows-by-model`). Past about eight
+arms the labels pile up against the panel ceiling and their leader lines cross; the shape still says
+which model a mark is, so nothing is lost by the split. One row is the default.
+
 **1. The measured value is on Y. No exceptions.** A speed-up, a token count, a ratio -- always the
 Y axis. X carries the CATEGORIES: the two conditions of a comparison, the language, the kernel. A
 long category label is rotated 90 degrees on x; it is not a reason to turn the figure on its side.
