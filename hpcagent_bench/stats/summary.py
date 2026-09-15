@@ -376,6 +376,45 @@ def geomean_ci(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA) -> Inte
     )
 
 
+#: At or above this many samples the log-t interval is the one a ratio figure draws; below it the
+#: t quantile is being asked to stand in for a shape the sample does not pin down, and the log-space
+#: bootstrap is drawn instead. Both are reported through :attr:`Interval.method`, so a figure can
+#: always say which one it is showing.
+LOG_T_MIN_SAMPLES: int = 20
+
+
+def geomean_interval(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA, seed: int = 0) -> Interval:
+    """The geometric mean and the interval a RATIO FIGURE draws for it (SC15 Rules 4 and 5).
+
+    :func:`geomean_ci`'s log-t interval from :data:`LOG_T_MIN_SAMPLES` samples up; a percentile
+    bootstrap of the mean IN LOG SPACE below it, mapped back to ratios. Both come back naming
+    themselves in ``method`` ("log-t" or "bootstrap-percentile"), which is what the figure prints:
+    two differently derived intervals drawn the same way and labelled the same way are two claims a
+    reader cannot separate.
+    """
+    x: FloatArray = np.asarray(values, dtype=np.float64)
+    if x.size >= LOG_T_MIN_SAMPLES or x.size < 2:
+        return geomean_ci(x, confidence=confidence)
+    logs = bootstrap_ci(
+        np.log(x), statistic=np.mean, name="geomean", confidence=confidence, method="percentile", seed=seed
+    )
+    return Interval(
+        "geomean",
+        geomean(x),
+        math.exp(logs.low),
+        math.exp(logs.high),
+        confidence,
+        logs.method,
+        int(x.size),
+    )
+
+
+def interval_method(n: int) -> str:
+    """Which interval :func:`geomean_interval` draws at ``n`` samples, so a figure can name it in
+    its own key without holding the :class:`Interval` the number came out of."""
+    return "log-t" if n >= LOG_T_MIN_SAMPLES else "bootstrap-percentile"
+
+
 def signed_change(ratio: float) -> float:
     """Speed-up ratio -> signed relative change. ``2x -> +1``, ``1x -> 0``, ``0.5x -> -1``.
 
