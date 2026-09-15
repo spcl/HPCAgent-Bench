@@ -240,6 +240,51 @@ def test_a_pair_across_two_models_is_refused(paired_arms: ModuleType, tmp_path: 
         paired_arms.main(["--observations", str(path), "--pair", "x-qwen38-c,x-oss120b-c", "--family", "f"])
 
 
+def impact_table(paired_arms: ModuleType, tmp_path: pathlib.Path) -> pd.DataFrame:
+    """The CPF-page impact table over 8 kernels: the treatment is 1.5x faster for half the tokens and
+    took two attempts per task, the control one."""
+    rows: list[dict[str, object]] = []
+    for kernel in KERNELS:
+        control, treated = episode("x-qwen38-c", kernel, 2.0, 100.0), episode("x-qwen38-c-cpf", kernel, 3.0, 50.0)
+        control[2] |= {"attempts": 1}
+        treated[2] |= {"attempts": 2}
+        rows += control + treated
+    path = observations(rows, tmp_path)
+    out = tmp_path / "impact.csv"
+    rc = paired_arms.main(
+        ["--observations", str(path), "--pair", "x-qwen38-c-cpf,x-qwen38-c", "--family", "f", "--impact-out", str(out)]
+    )
+    assert rc == 0
+    return pd.read_csv(out)
+
+
+def test_the_impact_table_has_one_row_per_arm_with_the_ratio_on_the_treatment_row(
+    paired_arms: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """Spec section 10: every arm once, the control carrying no ratio, the treatment carrying
+    treatment/control on both legs -- a token ratio of 0.5 reads as half the spend."""
+    table = impact_table(paired_arms, tmp_path).set_index("arm")
+    assert list(table.index) == ["x-qwen38-c-cpf", "x-qwen38-c"]
+    assert list(table.columns) == [c for c in paired_arms.IMPACT_COLUMNS if c != "arm"]
+    treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
+    assert treated.control == "x-qwen38-c" and pd.isna(control.control)
+    assert treated.speedup_ratio == pytest.approx(1.5) and treated.token_ratio == pytest.approx(0.5)
+    assert pd.isna(control.speedup_ratio) and pd.isna(control.token_ratio)
+    assert (treated.model, treated.language, treated.packet) == ("qwen38", "c", "cpf")
+
+
+def test_the_impact_table_carries_usage_and_the_arm_aggregates(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
+    """Attempts come off the task rows, speed-up is the geomean (A1), cost the median task total with
+    its interval (A2), each over the 8 selected tasks."""
+    table = impact_table(paired_arms, tmp_path).set_index("arm")
+    treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
+    assert (treated.tasks, treated.n_solved, treated.n_token_kernels) == (8, 8, 8)
+    assert (treated.attempts_per_task, control.attempts_per_task) == (2.0, 1.0)
+    assert treated.accepted_submissions_per_task == pytest.approx(1.0)
+    assert treated.geomean_speedup == pytest.approx(3.0) and control.median_tokens == pytest.approx(100.0)
+    assert treated.median_tokens_ci_low == pytest.approx(50.0) == treated.median_tokens_ci_high
+
+
 def test_two_denominators_are_refused_rather_than_pooled(paired_arms: ModuleType) -> None:
     """The judge stamps the reference it divided by; two of them are not one quantity."""
     rows = [graded("a", "k1", 2.0), graded("b", "k1", 2.0)]
