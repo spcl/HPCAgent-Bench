@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """llr-focus40: the DaCe canon CPU column against every COMPLETE agent arm, per kernel.
 
-One small-multiple panel per model (:mod:`hpcagent_bench.stats.figures.kernel_comparison`),
-sharing the 40-kernel row axis; every panel repeats the deterministic reference column beside that
-model's own complete arms. An arm without a recorded row for every roster kernel is dropped and
-printed to stderr with its coverage; ``--include-incomplete`` draws it anyway.
+Two small-multiple panels per model, speed-up over tokens (:mod:`hpcagent_bench.stats.figures.kernel_comparison`),
+sharing the 40-kernel row axis; the speed-up panel repeats the deterministic reference column beside
+that model's own complete arms, the token panel is agents only. An arm without a recorded row for
+every roster kernel is dropped and printed to stderr with its coverage; ``--include-incomplete``
+draws it anyway.
 
 Usage:  python3 scripts/plot_kernel_comparison.py --observations obs.db --canon-db canon.db \
             --out figures/kernel_comparison.pdf --table tables/kernel_comparison.csv

@@ -2,13 +2,27 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """llr-focus40: the DaCe canonicalize CPU column against every COMPLETE agent arm, per kernel.
 
-One small-multiple panel per model, sharing the 40-kernel row axis (:func:`hpcagent_bench.stats.style.row_axis`):
-each row is a kernel, each panel's x axis is the log2 speed-up over Numba
-(:func:`hpcagent_bench.stats.figures.per_kernel.speedup_tick_label`, the same ticks and 1x reference
-line the per-kernel figure draws), and every panel repeats the DaCe canon CPU column (the framework
-colour, :func:`hpcagent_bench.stats.palette.framework_color`) beside that model's own arms (the
-condition colour, :func:`hpcagent_bench.stats.palette.color`: grey control, orange CPF page, blue
-CPF as source -- the same packet palette :mod:`scripts.plot_arm_summary` draws with).
+TWO PANELS PER MODEL, sharing the 40-kernel row axis (:func:`hpcagent_bench.stats.style.row_axis`):
+a speed-up panel (log2 ratio over Numba, the DaCe canon CPU column plus that model's own arms) over
+a token panel (log10 spend, agents only -- the canon column has no tokens, since it runs no agent).
+Every panel repeats the DaCe canon CPU column (the framework colour,
+:func:`hpcagent_bench.stats.palette.framework_color`) beside that model's own arms (the condition
+colour, :func:`hpcagent_bench.stats.palette.color`: grey control, orange CPF page, blue CPF as
+source -- the same packet palette :mod:`scripts.plot_arm_summary` draws with).
+
+Each panel carries a SUMMARY ROW below the kernel rows, past a dashed separator
+(:data:`SUMMARY_ROW_GAP`): the row-axis analogue of
+:func:`hpcagent_bench.stats.figures.per_kernel.draw_summary_column`, rotated onto rows because
+kernels are ROWS here and COLUMNS there. Speed-up's summary is the GEOMETRIC MEAN
+(:func:`summary_speedup`) -- the project-wide rule for an overall speed-up, never a median; tokens'
+summary is the MEDIAN (:func:`summary_tokens`), since tokens are not a ratio. Both are named by an
+annotation past the panel's right edge, never a y-axis tick label: every panel here shares its y
+axis (``sharey=True``), and a per-panel tick label would silently lose whichever panel drew first --
+the same trap :func:`per_kernel.draw_summary_column` documents for a shared X axis.
+
+NO EFFICACY, PARETO OR COST-VS-SPEED FRAMING HERE. This figure reports what each arm cost and what
+it bought, side by side, and leaves any tradeoff reading to the caption -- never a quadrant, a
+frontier or the word "efficacy" in the axes themselves.
 
 CONDITION COMES FROM THE ARM NAME, not the ``language``/``packet`` columns: the pre-regrade
 extraction records them inconsistently for the SAME arm (some rows ``language=c, packet=''``,
@@ -22,16 +36,17 @@ are ALL incomplete draws no panel at all, rather than an empty one.
 PER-KERNEL VALUES ARE WHATEVER THE FRAMEWORK'S OWN POLICY ASSIGNS -- never invented here.
 :func:`hpcagent_bench.stats.population.kernel_answers` is an arm's best verified FINAL answer per
 kernel (within an episode the last submission, across episodes the maximum); a kernel with no
-verified answer simply has no row and draws no mark. The canon column is
-:func:`hpcagent_bench.stats.canon.kernel_speedups` over the deterministic sweep: no episodes, no
-policy to pick.
+verified answer simply has no row and draws no mark. Tokens are the SUM over the arm's episodes for
+that kernel (:func:`hpcagent_bench.stats.population.kernel_tokens`), never a median -- costs add.
+The canon column is :func:`hpcagent_bench.stats.canon.kernel_speedups` over the deterministic
+sweep: no episodes, no policy to pick, and no tokens spent.
 """
 
 import dataclasses
 import math
 import pathlib
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 import matplotlib.artist
 import matplotlib.axes
@@ -43,7 +58,7 @@ import numpy as np
 import pandas as pd
 
 from hpcagent_bench import experiment_tags, packets
-from hpcagent_bench.stats import canon, palette, population
+from hpcagent_bench.stats import canon, palette, population, summary
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures.per_kernel import speedup_tick_label
 
@@ -68,25 +83,32 @@ CANON_MARKER: str = "D"
 #: LABEL_PT (16pt), which 40 rows in a compact panel has no room for.
 PANEL_WIDTH_IN: float = 1.85
 ROW_HEIGHT_IN: float = 0.27
-CHROME_IN: float = 1.9
+CHROME_IN: float = 3.2
 
 #: The kernel row labels' own font size -- smaller than :data:`hpcagent_bench.stats.style.LABEL_PT`,
 #: which :func:`row_axis` applies but which a 40-row axis has no vertical room for.
 ROW_LABEL_PT: float = 8.5
 
-#: Where a "no verified answer" mark sits -- the 1x reference line, since that is what a served but
-#: unsolved kernel leaves standing under every scoring policy this repo has (:data:`~hpcagent_bench.stats.population.NOT_DELIVERED`).
-#: HOLLOW, never filled: a real 1.0x speed-up and "nothing to plot here" must not draw as one mark.
+#: Where a "no verified answer" mark sits on the SPEED-UP panel -- the 1x reference line, since that
+#: is what a served but unsolved kernel leaves standing under every scoring policy this repo has
+#: (:data:`~hpcagent_bench.stats.population.NOT_DELIVERED`). HOLLOW, never filled: a real 1.0x
+#: speed-up and "nothing to plot here" must not draw as one mark.
 MISSING_MARKER_X: float = 1.0
 
 #: The shared legend entry for a missing-answer mark, neutral ink since it names a STATUS, not one
 #: series' identity -- a coloured entry would read as one more condition or model.
 MISSING_LABEL: str = "No Verified Answer"
 
+#: Rows of air between the last kernel row and the dashed separator, and between the separator and
+#: the summary row -- the row-axis analogue of
+#: :data:`~hpcagent_bench.stats.figures.per_kernel.SUMMARY_GAP`.
+SUMMARY_ROW_GAP: float = 0.9
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Series:
-    """One drawn series: a per-kernel speed-up, already keyed to the kernels it has a value for."""
+    """One drawn series: a per-kernel speed-up and per-kernel token spend, already keyed to the
+    kernels each has a value for. The canon series has an empty ``tokens`` -- it runs no agent."""
 
     key: str
     label: str
@@ -95,6 +117,7 @@ class Series:
     model: str
     condition: str
     values: dict[str, float]
+    tokens: dict[str, float]
 
 
 def parse_arm(arm: str, pattern: re.Pattern[str] = ARM_PATTERN) -> tuple[str, str] | None:
@@ -126,6 +149,16 @@ def arm_speedups(frame: pd.DataFrame, arm: str) -> dict[str, float]:
     if "speedup" not in answers.columns:
         return {}
     return {str(kernel): float(value) for kernel, value in answers["speedup"].items() if value > 0}
+
+
+def arm_tokens(frame: pd.DataFrame, arm: str) -> dict[str, float]:
+    """``arm``'s SUMMED tokens per kernel (:func:`population.kernel_tokens`): every episode's own
+    cumulative call total, added across the kernel's episodes -- costs add, so the per-kernel figure
+    and :mod:`scripts.plot_tokens` read the same population rather than each summarising it their
+    own way."""
+    subset = frame[frame["arm"].astype(str) == arm]
+    totals = population.kernel_tokens(subset)
+    return {str(kernel): float(value) for kernel, value in totals.items() if value > 0}
 
 
 def canon_speedups(
@@ -197,6 +230,7 @@ def build_panels(
             "",
             "",
             canon_speedups(canon_frame, canon_baseline, canon_column),
+            {},
         )
         if canon_frame is not None
         else None
@@ -208,7 +242,14 @@ def build_panels(
         if not values:
             continue
         series = Series(
-            arm, condition_label(condition), palette.color(condition), palette.marker(model), model, condition, values
+            arm,
+            condition_label(condition),
+            palette.color(condition),
+            palette.marker(model),
+            model,
+            condition,
+            values,
+            arm_tokens(frame, arm),
         )
         by_model.setdefault(model, []).append(series)
     for model, series_list in by_model.items():
@@ -219,13 +260,38 @@ def build_panels(
 
 
 def value_ticks(values: Iterable[float]) -> list[float]:
-    """Powers of two spanning every plotted value, always at least ``1/4x .. 4x`` -- an X-axis twin
-    of :func:`hpcagent_bench.stats.figures.per_kernel.speedup_yticks`."""
+    """Powers of two spanning every plotted speed-up, always at least ``1/4x .. 4x`` -- an X-axis
+    twin of :func:`hpcagent_bench.stats.figures.per_kernel.speedup_yticks`."""
     finite = [v for v in values if math.isfinite(v) and v > 0]
     low, high = (min(finite), max(finite)) if finite else (1.0, 1.0)
     low_exp = min(-2, math.floor(math.log2(low)))
     high_exp = max(2, math.ceil(math.log2(high)))
     return [2.0**exp for exp in range(low_exp, high_exp + 1)]
+
+
+def token_axis_limits(values: Iterable[float]) -> tuple[float, float]:
+    """Decade-rounded ``(low, high)`` spanning every plotted token value -- the log10 twin of
+    :func:`value_ticks`, computed ONCE for the whole figure and shared by every token panel so a
+    position means the same spend everywhere (see :func:`style_speedup_x_axis`)."""
+    finite = [v for v in values if math.isfinite(v) and v > 0]
+    if not finite:
+        return 1.0, 10.0
+    low, high = min(finite), max(finite)
+    return 10.0 ** math.floor(math.log10(low)), 10.0 ** math.ceil(math.log10(high))
+
+
+def summary_speedup(values: Iterable[float]) -> float:
+    """The geometric mean over ``values`` -- speed-up's overall value is ALWAYS the geometric mean
+    (the project-wide reporting rule; :func:`hpcagent_bench.stats.summary.geomean`), never a median,
+    which equals the geomean only when the values happen to be symmetric in log space."""
+    return summary.geomean(list(values), unusable="drop")
+
+
+def summary_tokens(values: Iterable[float]) -> float:
+    """The median over ``values`` -- tokens are not a ratio, so the summary stays the median, same
+    as every per-kernel token figure in this repo."""
+    finite = [v for v in values if math.isfinite(v) and v > 0.0]
+    return float(np.median(finite)) if finite else math.nan
 
 
 def style_speedup_x_axis(ax: matplotlib.axes.Axes, ticks: Sequence[float]) -> None:
@@ -245,23 +311,76 @@ def style_speedup_x_axis(ax: matplotlib.axes.Axes, ticks: Sequence[float]) -> No
     ax.axvline(1.0, color=plotstyle.REFERENCE, linewidth=0.9, zorder=1)
 
 
+def style_token_x_axis(ax: matplotlib.axes.Axes, limits: tuple[float, float]) -> None:
+    """The log10 token axis, shared ``limits`` across every panel -- same discipline as
+    :func:`style_speedup_x_axis`, base 10 since a token count is a magnitude, not a power-of-two
+    ratio."""
+    ax.set_xscale("log")
+    ax.set_xlim(*limits)
+    plotstyle.value_axis(ax, "x", log_base=10.0)
+
+
+def summary_row_position(n_kernels: int) -> tuple[float, float]:
+    """``(separator_y, summary_y)`` below the last kernel row -- the same two additions
+    :func:`hpcagent_bench.stats.figures.per_kernel.draw_summary_column` makes on its column axis,
+    rotated onto rows."""
+    separator_y = n_kernels - 0.5 + SUMMARY_ROW_GAP
+    return separator_y, separator_y + SUMMARY_ROW_GAP
+
+
+def draw_summary_row(
+    ax: matplotlib.axes.Axes,
+    separator_y: float,
+    summary_y: float,
+    series_list: Sequence[Series],
+    value_of: Callable[[Series], dict[str, float]],
+    reducer: Callable[[Iterable[float]], float],
+    label: str,
+) -> None:
+    """The dashed separator and one dodged mark per series at ``summary_y``, plus a small annotation
+    past the panel's right edge naming the statistic (see the module docstring for why this is an
+    annotation and never a y-axis tick label)."""
+    ax.axhline(separator_y, color=plotstyle.RULE, linestyle=(0, (3, 3)), linewidth=1.0, zorder=1)
+    n = len(series_list)
+    offsets = np.linspace(-0.3, 0.3, n) if n > 1 else np.array([0.0])
+    for offset, series in zip(offsets, series_list, strict=True):
+        point = reducer(value_of(series).values())
+        if math.isfinite(point):
+            plotstyle.point_mark(ax, point, summary_y + offset, series.color, series.marker, filled=True, size=30.0)
+    ax.annotate(
+        label,
+        xy=(1.01, summary_y),
+        xycoords=("axes fraction", "data"),
+        xytext=(2, 0),
+        textcoords="offset points",
+        ha="left",
+        va="center",
+        fontsize=plotstyle.TICK_PT * 0.5,
+        color=plotstyle.MUTED,
+        annotation_clip=False,
+    )
+
+
 def draw_panel(
     ax: matplotlib.axes.Axes,
     kernels: Sequence[str],
-    canon_mark: Series | None,
-    arms: Sequence[Series],
-    ticks: Sequence[float],
+    series_list: Sequence[Series],
+    value_of: Callable[[Series], dict[str, float]],
+    missing_x: float,
+    reducer: Callable[[Iterable[float]], float],
+    summary_label: str,
     label_rows: bool,
 ) -> None:
-    """One model's panel: the optional reference mark plus its arms, dodged apart within each row.
+    """One panel, for ONE metric (:func:`value_of` reads it off each series): the kernel rows,
+    dodged apart within each row, plus the summary row below them (:func:`draw_summary_row`).
 
     A kernel a series has no value for still draws: a HOLLOW mark in that series' own colour and
-    shape, at the 1x line (:data:`MISSING_MARKER_X`) -- present and legible rather than a gap a
-    reader has to notice on their own, and hollow so it is never mistaken for a genuine 1.0x answer.
+    shape, at ``missing_x`` -- present and legible rather than a gap a reader has to notice on their
+    own, and hollow so it is never mistaken for a genuine value.
     """
-    series_list = (*((canon_mark,) if canon_mark is not None else ()), *arms)
-    style_speedup_x_axis(ax, ticks)
+    separator_y, summary_y = summary_row_position(len(kernels))
     plotstyle.row_axis(ax, kernels)
+    ax.set_ylim(summary_y + 0.6, -0.5)
     if label_rows:
         ax.tick_params(axis="y", labelsize=ROW_LABEL_PT)
     else:
@@ -270,13 +389,15 @@ def draw_panel(
     offsets = np.linspace(-0.3, 0.3, n) if n > 1 else np.array([0.0])
     y_of = {kernel: i for i, kernel in enumerate(kernels)}
     for offset, series in zip(offsets, series_list, strict=True):
+        values = value_of(series)
         for kernel in kernels:
             y = y_of[kernel] + offset
-            value = series.values.get(kernel)
+            value = values.get(kernel)
             if value is None or not math.isfinite(value) or value <= 0.0:
-                plotstyle.point_mark(ax, MISSING_MARKER_X, y, series.color, series.marker, filled=False, size=26.0)
+                plotstyle.point_mark(ax, missing_x, y, series.color, series.marker, filled=False, size=26.0)
             else:
                 plotstyle.point_mark(ax, value, y, series.color, series.marker, filled=True, size=26.0)
+    draw_summary_row(ax, separator_y, summary_y, series_list, value_of, reducer, summary_label)
 
 
 def legend_handles(
@@ -334,8 +455,11 @@ def legend_handles(
 
 
 def figure_size(n_panels: int, n_rows: int, double_column: bool) -> tuple[float, float]:
-    """A compact double-column insert (fixed width) or a standalone report (one width slot per panel)."""
-    height = n_rows * ROW_HEIGHT_IN + CHROME_IN
+    """A compact double-column insert (fixed width) or a standalone report (one width slot per
+    panel). Height stacks TWO panel rows (speed-up over tokens), each tall enough for the kernel
+    rows plus the summary row's own air (:data:`SUMMARY_ROW_GAP`, twice)."""
+    panel_h = (n_rows + 2.0 * SUMMARY_ROW_GAP + 1.0) * ROW_HEIGHT_IN
+    height = 2.0 * panel_h + CHROME_IN
     if double_column:
         return plotstyle.DOUBLE_COLUMN_WIDTH, height
     return max(plotstyle.DOUBLE_COLUMN_WIDTH, PANEL_WIDTH_IN * n_panels + 1.2), height
@@ -349,59 +473,93 @@ def figure(
     title: str,
     condition_order: Sequence[str] = CONDITION_ORDER,
 ) -> matplotlib.figure.Figure:
-    """The whole small-multiples figure: one panel per model, sharing the kernel row axis."""
+    """The whole small-multiples figure: for each model, a speed-up panel (with the canon column)
+    ABOVE a token panel (agents only), sharing the kernel row axis.
+
+    Two panel ROWS rather than laying every model's two panels out side by side: at
+    :data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH` three models times two panels each made
+    every panel too narrow for its rotated tick labels to stay legible.
+    """
     if not panels:
         raise ValueError("no model has a panel to draw (every candidate arm was incomplete)")
     plotstyle.apply()
     n_panels = len(panels)
-    # ONE tick set for every panel (see style_speedup_x_axis): the union of every drawn value,
-    # canon included, across every panel -- never one panel's own values, or a position would not
-    # mean the same ratio next door.
+    # ONE tick set (speed-up) / ONE limit pair (tokens) for every panel of that kind (see
+    # style_speedup_x_axis): the union of every drawn value, canon included, across every panel --
+    # never one panel's own values, or a position would not mean the same ratio/spend next door.
     all_series = (*((canon_mark,) if canon_mark is not None else ()), *(s for arms in panels.values() for s in arms))
-    ticks = value_ticks(v for series in all_series for v in series.values.values())
+    speedup_ticks = value_ticks(v for series in all_series for v in series.values.values())
+    token_limits = token_axis_limits(v for series in all_series for v in series.tokens.values())
+
     fig, axes = plt.subplots(
-        1, n_panels, sharey=True, figsize=figure_size(n_panels, len(kernels), double_column), squeeze=False
+        2, n_panels, sharey=True, figsize=figure_size(n_panels, len(kernels), double_column), squeeze=False
     )
     for index, (model, arms) in enumerate(panels.items()):
-        ax = axes[0][index]
-        draw_panel(ax, kernels, canon_mark, arms, ticks, label_rows=index == 0)
-        ax.set_title(experiment_tags.model_name(model), fontsize=plotstyle.LABEL_PT * 0.85, color=plotstyle.INK)
-    # Top/bottom margins in INCHES, not a fixed fraction: the rotated x ticks and the legend below
-    # need roughly the same number of inches at any row count, and a fixed fraction of a figure
-    # that grows with the roster (:data:`ROW_HEIGHT_IN` per kernel) leaves a growing dead strip.
+        speedup_series = (*((canon_mark,) if canon_mark is not None else ()), *arms)
+        speedup_ax, token_ax = axes[0][index], axes[1][index]
+        style_speedup_x_axis(speedup_ax, speedup_ticks)
+        draw_panel(
+            speedup_ax,
+            kernels,
+            speedup_series,
+            lambda s: s.values,
+            MISSING_MARKER_X,
+            summary_speedup,
+            "Geomean",
+            index == 0,
+        )
+        speedup_ax.set_title(experiment_tags.model_name(model), fontsize=plotstyle.LABEL_PT * 0.85, color=plotstyle.INK)
+        style_token_x_axis(token_ax, token_limits)
+        draw_panel(token_ax, kernels, arms, lambda s: s.tokens, token_limits[0], summary_tokens, "Median", index == 0)
+
     height = figure_size(n_panels, len(kernels), double_column)[1]
     fig.subplots_adjust(
-        left=0.22 / max(n_panels, 1) + 0.02, right=0.99, top=1.0 - 1.0 / height, bottom=1.1 / height, wspace=0.08
+        left=0.22 / max(n_panels, 1) + 0.02,
+        right=0.90,
+        top=1.0 - 1.1 / height,
+        bottom=1.1 / height,
+        hspace=0.55,
+        wspace=0.10,
     )
     plotstyle.legend_below(
-        fig, legend_handles(canon_mark, panels, condition_order), y=0.01, fontsize=plotstyle.TICK_PT * 0.75
+        fig, legend_handles(canon_mark, panels, condition_order), y=0.005, fontsize=plotstyle.TICK_PT * 0.75
     )
     plotstyle.title(fig, title)
     return fig
 
 
-#: ``table_rows``' ``status`` column: whether a row carries a real speed-up or names a kernel the
-#: series covers (roster-complete) but never verified.
+#: ``table_rows``' ``status`` column: whether a KERNEL row carries a real speed-up or names a
+#: kernel the series covers (roster-complete) but never verified. Blank on a ``summary`` row.
 STATUS_VERIFIED: str = "verified"
 STATUS_MISSING: str = "no_verified_answer"
+
+#: ``table_rows``' ``row`` column: a per-kernel value, or the series' own overall summary.
+ROW_KERNEL: str = "kernel"
+ROW_SUMMARY: str = "summary"
 
 #: Documents the per-kernel value rule directly on the written table, since the table is read apart
 #: from this module's docstring.
 TABLE_NOTE: str = (
     "# speedup: the canon row (if any) is a deterministic column's median_ms ratio; every arm row is "
-    "population.kernel_answers' best verified final answer. status=no_verified_answer: the series "
-    "covers this roster kernel but never verified an answer for it; speedup is blank."
+    "population.kernel_answers' best verified final answer. tokens: the arm's SUMMED per-kernel "
+    "spend (population.kernel_tokens); canon has none. status=no_verified_answer: the series covers "
+    "this roster kernel but never verified an answer for it; speedup is blank. row=kernel rows carry "
+    "one roster kernel each; row=summary rows (kernel blank) carry one series' OVERALL statistic: "
+    "statistic=geomean for speedup (the project rule for an overall speed-up), statistic=median for "
+    "tokens; value is that statistic over the n_kernels roster kernels the series had a value for."
 )
 
 
 def series_rows(kind: str, model: str, series: Series, kernels: Sequence[str]) -> list[dict[str, object]]:
-    """One ``series``' rows over ``kernels``: a real speed-up where it has one, a blank
-    ``no_verified_answer`` row otherwise -- so a missing kernel is a readable fact in the table, not
-    a silently absent one."""
+    """One ``series``' per-kernel rows over ``kernels``: a real speed-up and token spend where it
+    has them, blank otherwise -- so a missing kernel is a readable fact in the table, not a silently
+    absent one."""
     rows: list[dict[str, object]] = []
     for kernel in kernels:
         value = series.values.get(kernel)
         verified = value is not None and math.isfinite(value) and value > 0.0
+        tokens = series.tokens.get(kernel)
+        has_tokens = tokens is not None and math.isfinite(tokens) and tokens > 0.0
         rows.append(
             {
                 "kernel": kernel,
@@ -410,21 +568,91 @@ def series_rows(kind: str, model: str, series: Series, kernels: Sequence[str]) -
                 "model": model,
                 "condition": series.condition,
                 "speedup": value if verified else "",
+                "tokens": tokens if has_tokens else "",
                 "status": STATUS_VERIFIED if verified else STATUS_MISSING,
+                "row": ROW_KERNEL,
+                "statistic": "",
+                "value": "",
+                "n_kernels": "",
             }
         )
     return rows
 
 
+def series_summary_rows(kind: str, model: str, series: Series, kernels: Sequence[str]) -> list[dict[str, object]]:
+    """``series``' own overall rows, over the SAME roster ``kernels`` the per-kernel rows list:
+    geomean speed-up, and median tokens when the series has any (canon does not)."""
+    speed_values = [series.values[k] for k in kernels if k in series.values]
+    rows: list[dict[str, object]] = []
+    speed_point = summary_speedup(speed_values)
+    if math.isfinite(speed_point):
+        rows.append(
+            {
+                "kernel": "",
+                "series": series.key,
+                "kind": kind,
+                "model": model,
+                "condition": series.condition,
+                "speedup": "",
+                "tokens": "",
+                "status": "",
+                "row": ROW_SUMMARY,
+                "statistic": "geomean",
+                "value": speed_point,
+                "n_kernels": len(speed_values),
+            }
+        )
+    if series.tokens:
+        token_values = [series.tokens[k] for k in kernels if k in series.tokens]
+        token_point = summary_tokens(token_values)
+        if math.isfinite(token_point):
+            rows.append(
+                {
+                    "kernel": "",
+                    "series": series.key,
+                    "kind": kind,
+                    "model": model,
+                    "condition": series.condition,
+                    "speedup": "",
+                    "tokens": "",
+                    "status": "",
+                    "row": ROW_SUMMARY,
+                    "statistic": "median",
+                    "value": token_point,
+                    "n_kernels": len(token_values),
+                }
+            )
+    return rows
+
+
+TABLE_COLUMNS: tuple[str, ...] = (
+    "kernel",
+    "series",
+    "kind",
+    "model",
+    "condition",
+    "speedup",
+    "tokens",
+    "status",
+    "row",
+    "statistic",
+    "value",
+    "n_kernels",
+)
+
+
 def table_rows(panels: dict[str, list[Series]], canon_mark: Series | None, kernels: Sequence[str]) -> pd.DataFrame:
-    """One row per (series, roster kernel): a real speed-up, or a ``no_verified_answer`` row."""
+    """One row per (series, roster kernel), plus one or two summary rows per series (see
+    :func:`series_summary_rows`)."""
     rows: list[dict[str, object]] = []
     if canon_mark is not None:
         rows += series_rows("canon", "", canon_mark, kernels)
+        rows += series_summary_rows("canon", "", canon_mark, kernels)
     for model, arms in panels.items():
         for series in arms:
             rows += series_rows("arm", model, series, kernels)
-    return pd.DataFrame(rows, columns=["kernel", "series", "kind", "model", "condition", "speedup", "status"])
+            rows += series_summary_rows("arm", model, series, kernels)
+    return pd.DataFrame(rows, columns=list(TABLE_COLUMNS))
 
 
 def save(fig: matplotlib.figure.Figure, out: pathlib.Path) -> pathlib.Path:

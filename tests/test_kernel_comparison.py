@@ -43,6 +43,27 @@ def submission_rows(arm: str, benchmark_speedups: dict[str, float]) -> list[dict
     return rows
 
 
+def call_rows(arm: str, benchmark_tokens: dict[str, float]) -> list[dict[str, object]]:
+    """One ``call`` row per (arm, kernel): the columns ``population.kernel_tokens`` needs."""
+    rows = []
+    for benchmark, tokens in benchmark_tokens.items():
+        run = f"{arm}-{benchmark}"
+        rows.append(
+            {
+                "run_root": "j1",
+                "job": "j1",
+                "run_id": run,
+                "arm": arm,
+                "record": "call",
+                "benchmark": benchmark,
+                "tokens": tokens,
+                "ts_ms": 1,
+                "attempt_index": 1,
+            }
+        )
+    return rows
+
+
 def observations(rows: list[dict[str, object]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
@@ -186,7 +207,8 @@ def test_a_kernel_with_no_verified_answer_is_absent_from_a_series_own_values() -
 def test_table_rows_carries_one_row_per_series_per_roster_kernel_not_only_the_verified_ones() -> None:
     """Every roster kernel gets a row for every series, verified or not: a missing answer is a
     readable fact in the table (``status=no_verified_answer``, blank ``speedup``), never a silently
-    absent row."""
+    absent row. Schema note: the table now also carries a ``tokens`` column and, past the per-kernel
+    rows, one ``row=summary`` row per series (deliberately widened from the pre-tokens schema)."""
     frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0})])
     canon = canon_frame([("numba", "k1", 100.0, "True"), ("dace_cpu_canonicalize", "k1", 50.0, "True")])
     panels, canon_mark, _dropped = kernel_comparison.build_panels(
@@ -194,21 +216,96 @@ def test_table_rows_carries_one_row_per_series_per_roster_kernel_not_only_the_ve
     )
     table = kernel_comparison.table_rows(panels, canon_mark, ROSTER)
 
-    assert set(table.columns) == {"kernel", "series", "kind", "model", "condition", "speedup", "status"}
-    assert (table.kind == "canon").sum() == len(ROSTER)  # every roster kernel, canon solved 1 of 3
-    assert (table.kind == "arm").sum() == len(ROSTER)  # every roster kernel, the arm solved 2 of 3
+    assert set(table.columns) == {
+        "kernel",
+        "series",
+        "kind",
+        "model",
+        "condition",
+        "speedup",
+        "tokens",
+        "status",
+        "row",
+        "statistic",
+        "value",
+        "n_kernels",
+    }
+    kernel_rows = table[table.row == kernel_comparison.ROW_KERNEL]
+    assert (kernel_rows.kind == "canon").sum() == len(ROSTER)  # every roster kernel, canon solved 1 of 3
+    assert (kernel_rows.kind == "arm").sum() == len(ROSTER)  # every roster kernel, the arm solved 2 of 3
 
-    canon_k3 = table[(table.kind == "canon") & (table.kernel == "k3")].iloc[0]
+    canon_k3 = kernel_rows[(kernel_rows.kind == "canon") & (kernel_rows.kernel == "k3")].iloc[0]
     assert canon_k3.status == kernel_comparison.STATUS_MISSING
     assert canon_k3.speedup == ""
 
-    arm_k3 = table[(table.kind == "arm") & (table.kernel == "k3")].iloc[0]
+    arm_k3 = kernel_rows[(kernel_rows.kind == "arm") & (kernel_rows.kernel == "k3")].iloc[0]
     assert arm_k3.status == kernel_comparison.STATUS_MISSING
     assert arm_k3.speedup == ""
 
-    arm_k1 = table[(table.kind == "arm") & (table.kernel == "k1")].iloc[0]
+    arm_k1 = kernel_rows[(kernel_rows.kind == "arm") & (kernel_rows.kernel == "k1")].iloc[0]
     assert arm_k1.status == kernel_comparison.STATUS_VERIFIED
     assert arm_k1.speedup == 2.0
+
+
+def test_summary_row_carries_the_geomean_of_the_plotted_per_kernel_speedups() -> None:
+    """The ``row=summary`` ``statistic=geomean`` row's ``value`` equals the geometric mean of that
+    series' own per-kernel speed-ups over the roster -- the same values the speed-up panel draws."""
+    import math
+
+    frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 8.0, "k3": 2.0})])
+    panels, _canon, _dropped = kernel_comparison.build_panels(frame, ROSTER)
+    table = kernel_comparison.table_rows(panels, None, ROSTER)
+    summary_row = table[(table.row == kernel_comparison.ROW_SUMMARY) & (table.statistic == "geomean")].iloc[0]
+    assert math.isclose(float(summary_row.value), (2.0 * 8.0 * 2.0) ** (1.0 / 3.0))
+    assert summary_row.n_kernels == 3
+
+
+def test_summary_row_carries_the_median_of_the_plotted_per_kernel_tokens() -> None:
+    """The ``row=summary`` ``statistic=median`` row's ``value`` is the median of that series' own
+    per-kernel token totals -- never the geomean, tokens are not a ratio."""
+    frame = observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
+            *call_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0, "k2": 300.0, "k3": 200.0}),
+        ]
+    )
+    panels, _canon, _dropped = kernel_comparison.build_panels(frame, ROSTER)
+    table = kernel_comparison.table_rows(panels, None, ROSTER)
+    summary_row = table[(table.row == kernel_comparison.ROW_SUMMARY) & (table.statistic == "median")].iloc[0]
+    assert summary_row.value == 200.0
+    assert summary_row.n_kernels == 3
+
+
+def test_the_canon_series_carries_no_summary_token_row() -> None:
+    """Canon has no tokens, so its series gets only the geomean speed-up summary row, never a median
+    tokens one."""
+    frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0})])
+    canon = canon_frame(
+        [
+            ("numba", "k1", 100.0, "True"),
+            ("numba", "k2", 100.0, "True"),
+            ("numba", "k3", 100.0, "True"),
+            ("dace_cpu_canonicalize", "k1", 50.0, "True"),
+            ("dace_cpu_canonicalize", "k2", 50.0, "True"),
+            ("dace_cpu_canonicalize", "k3", 50.0, "True"),
+        ]
+    )
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER, canon_frame=canon)
+    table = kernel_comparison.table_rows(panels, canon_mark, ROSTER)
+    canon_summary = table[(table.row == kernel_comparison.ROW_SUMMARY) & (table.series == "canon")]
+    assert list(canon_summary.statistic) == ["geomean"]
+
+
+def test_arm_tokens_sums_episodes_per_kernel_never_a_median() -> None:
+    """``arm_tokens`` is the SUM over an arm's episodes for a kernel -- costs add -- never a
+    per-episode median (that is :mod:`scripts.plot_tokens`'s different question)."""
+    frame = observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0}),
+            *call_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0}),
+        ]
+    )
+    assert kernel_comparison.arm_tokens(frame, "cpf-llr-focus40-qwen38-c") == {"k1": 100.0}
 
 
 def test_the_control_condition_reads_no_packet_not_the_registry_skill_wording() -> None:
@@ -232,9 +329,11 @@ def test_missing_answer_legend_entry_is_present() -> None:
     assert kernel_comparison.MISSING_LABEL in labels
 
 
-def test_every_panel_shares_the_same_x_axis_ticks() -> None:
-    """One model reaching 128x must not stretch its own panel's ticks past its neighbours': a
-    position has to mean the same ratio in every panel, or the panels are not comparable by eye."""
+def test_speedup_panels_share_one_x_axis_and_token_panels_share_another() -> None:
+    """One model reaching 128x speed-up (or 900K tokens) must not stretch its own panel's ticks past
+    its neighbours': a position has to mean the same ratio/spend across every panel of that metric,
+    or the panels are not comparable by eye. The two metrics need not share a scale with each other
+    -- log2 ratio vs log10 count are different quantities."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -242,21 +341,75 @@ def test_every_panel_shares_the_same_x_axis_ticks() -> None:
         [
             *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
             *submission_rows("cpf-llr-focus40-oss120b-c", {"k1": 120.0, "k2": 120.0, "k3": 120.0}),
+            *call_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0, "k2": 100.0, "k3": 100.0}),
+            *call_rows("cpf-llr-focus40-oss120b-c", {"k1": 900000.0, "k2": 900000.0, "k3": 900000.0}),
         ]
     )
     panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER)
     fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
     try:
+        n_panels = len(panels)
         axes = fig.axes
-        assert len(axes) >= 2
-        first_ticks, first_lim = list(axes[0].get_xticks()), axes[0].get_xlim()
-        for ax in axes[1:]:
-            assert list(ax.get_xticks()) == first_ticks
-            assert ax.get_xlim() == first_lim
+        assert len(axes) == 2 * n_panels
+        speedup_row, token_row = axes[:n_panels], axes[n_panels:]
+        for row in (speedup_row, token_row):
+            first_ticks, first_lim = list(row[0].get_xticks()), row[0].get_xlim()
+            for ax in row[1:]:
+                assert list(ax.get_xticks()) == first_ticks
+                assert ax.get_xlim() == first_lim
+        assert speedup_row[0].get_xlim() != token_row[0].get_xlim()
     finally:
         import matplotlib.pyplot as plt
 
         plt.close(fig)
+
+
+def test_token_panel_draws_no_canon_series() -> None:
+    """The canon column runs no agent and spends no tokens, so the token panel must draw only the
+    model's own arms -- never a canon mark, even a hollow "missing" one."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0})])
+    canon = canon_frame(
+        [
+            ("numba", "k1", 100.0, "True"),
+            ("numba", "k2", 100.0, "True"),
+            ("numba", "k3", 100.0, "True"),
+            ("dace_cpu_canonicalize", "k1", 50.0, "True"),
+            ("dace_cpu_canonicalize", "k2", 50.0, "True"),
+            ("dace_cpu_canonicalize", "k3", 50.0, "True"),
+        ]
+    )
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER, canon_frame=canon)
+    fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
+    try:
+        n_panels = len(panels)
+        speedup_ax, token_ax = fig.axes[0], fig.axes[n_panels]
+        # canon's marker (a diamond) is drawn once per kernel row on the speed-up panel and never on
+        # the token panel: one PathCollection per drawn mark (plotstyle.point_mark), two per point
+        # (white disc + coloured mark), so the token panel has strictly fewer than the speed-up one.
+        assert len(token_ax.collections) < len(speedup_ax.collections)
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+
+
+def test_an_incomplete_arm_appears_in_neither_the_speedup_nor_the_token_panel() -> None:
+    """An arm dropped for incomplete roster coverage must not leak into the token panel either --
+    completeness is decided once, before either metric is read."""
+    frame = observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
+            *submission_rows("cpf-llr-focus40-qwen38-c-cpf", {"k1": 2.0}),
+            *call_rows("cpf-llr-focus40-qwen38-c-cpf", {"k1": 100.0}),
+        ]
+    )
+    panels, _canon, dropped = kernel_comparison.build_panels(frame, ROSTER)
+    kept_keys = {series.key for series_list in panels.values() for series in series_list}
+    assert "cpf-llr-focus40-qwen38-c-cpf" not in kept_keys
+    assert dropped == {"cpf-llr-focus40-qwen38-c-cpf": 1}
 
 
 def test_roster_of_reads_every_kernel_the_canon_frame_names() -> None:
