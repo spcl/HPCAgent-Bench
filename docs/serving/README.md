@@ -192,8 +192,9 @@ scontrol show hostnames "$(squeue -j <jobid> -h -o '%N')" | head -1
 There is **no API key**. Any OpenAI-compatible client works against `http://<node>:8000/v1`; pass a
 dummy key if your client insists on one.
 
-That makes this endpoint reachable by every beverin user. For a server only you can use, from your
-laptop, follow [`private-endpoint.md`](private-endpoint.md) instead.
+That makes this endpoint reachable by every Alps user, on any cluster: they share the network. For a
+server only you can use, from your laptop or from your own Daint jobs, follow
+[`private-endpoint.md`](private-endpoint.md) instead.
 
 ```bash
 BASE=http://nid002968:8000

@@ -1,12 +1,18 @@
 # Private Qwen3.8 endpoint on beverin
 
-Your own OpenAI-compatible Qwen3.8 server on one beverin compute node. Only you reach it, from your
-laptop, through an ssh tunnel. One launcher, two presets:
+Your own OpenAI-compatible Qwen3.8 server on one beverin compute node. Only you reach it, two ways:
+
+- `ACCESS=tunnel` (default): from your laptop, through an ssh tunnel via ela (section 5).
+- `ACCESS=alps`: from your own jobs on Daint or another Alps cluster, with the key (section 5b).
+
+There is no third way. Without a working CSCS ssh key nothing outside Alps reaches it (section 8).
+
+One launcher, two presets:
 
 | `PRESET` | Partition | GPUs | EDF | Weights | Attention | State |
 |---|---|---|---|---|---|---|
 | `mi300` | `mi300` | 4x MI300A (APU, gfx942) | `sglang-latest` | `Qwen/Qwen3.8-27B-FP8` | aiter | qwen38 campaign config |
-| `mi200` | `mi200` | 8x MI250X (64 GiB, gfx90a) | `sglang-mi200-latest` | `Qwen/Qwen3.8-27B` (BF16) | triton | new image, smoke results pending |
+| `mi200` | `mi200` | 8x MI250X (64 GiB, gfx90a) | `sglang-mi200-latest` | `Qwen/Qwen3.8-27B` (BF16) | triton | smoke 637198 passed; serve `tp8:0.80` |
 
 Launcher: `containers/cluster/ce-images/inference/serve-private.sbatch`.
 
@@ -21,14 +27,18 @@ can call it (see [`README.md`](README.md)).
 
 ## 1. Why it is private
 
-- Server binds `127.0.0.1` on the compute node. Nothing off that node connects.
-- API key required on `/v1/*`. SGLang leaves `/health` and `/metrics` open; the loopback bind is what
-  keeps those private.
+- `ACCESS=tunnel`: server binds `127.0.0.1` on the compute node. Nothing off that node connects.
+- `ACCESS=alps`: server binds the node's `hsn0` address, never `0.0.0.0`. Any Alps node can open a
+  connection (all clusters share that network), so the key is what keeps it yours.
+- SGLang checks the key on every path except `/health*` and `/metrics*` (`sglang/srt/utils/auth.py`),
+  and only with one tokenizer worker. `ACCESS=alps` drops `--enable-metrics`; `/health` and
+  `/health_generate` stay open and return a status, never model output. `EXTRA_ARGS` naming
+  `--tokenizer-worker-num` or `--enable-metrics` is refused.
 - SGLang has no environment variable for the key, only `--api-key` or `--config <yaml>`. The launcher
   uses the yaml, so the key never reaches argv (`ps` shows argv to every user on the node).
 - SGLang logs `server_args`, `api_key` included. Run dir is mode 700, scratch default ACLs stripped.
 - Key file refused unless mode 600, owned by you, >= 32 characters.
-- `--host 127.0.0.1 --port N` is last on argv; `EXTRA_ARGS` naming host, port, key or config is refused.
+- `--host <address> --port N` is last on argv; `EXTRA_ARGS` naming host, port, key or config is refused.
 - Key never printed; yaml, header and in-container key files deleted when the job exits.
 - Laptop reaches the port with `ssh -L` through ela and the beverin login node, the CSCS-documented
   path (section 8).
@@ -111,11 +121,18 @@ Expect:
 
 - Image `sglang-mi200` is new: MI250X needs sgl_kernel rebuilt for gfx90a, aiter has no gfx90a
   kernels, MI250X has no FP8, hence BF16 weights and triton attention.
-- Build, verify and promote it first: `containers/cluster/ce-images/sglang-mi200/README.md`. Until
-  promoted there is no `sglang-mi200-latest`; pass `EDF=<candidate edf.toml>`.
-- **Smoke results pending.** No readiness time, KV pool or throughput measured yet. Default
-  `LEGS=tp4:0.80 tp4:0.88 tp8:0.80` are smoke candidates, not a proven config. Fractions here are per
-  device VRAM, not node-wide like mi300: do not carry numbers across.
+- Build, verify and promote: `containers/cluster/ce-images/sglang-mi200/README.md`. Build 637177 was
+  promoted; `sglang-mi200-latest` is installed.
+- Smoke 637198, one node, every leg PASS (401/200, tool-call + reasoning gate, 16/16 load):
+
+  | Leg | KV pool (tokens) | Max running requests | Load probe |
+  |---|---|---|---|
+  | `tp4:0.80` | 1.64M | 69 | cold Triton JIT, ignore |
+  | `tp4:0.88` | 1.86M | 78 | 315 tok/s |
+  | `tp8:0.80` | 1.91M | 128 | 322 tok/s |
+
+  Serve `tp8:0.80`. Fractions here are per device VRAM, not node-wide like mi300: do not carry
+  numbers across.
 - Flags: as mi300 minus aiter, plus `--attention-backend triton --disable-custom-all-reduce`;
   env `SGLANG_USE_AITER=0 SGLANG_SET_CPU_AFFINITY=0`.
 - Weights: `$HF_HOME/hub/models--Qwen--Qwen3.8-27B`.
@@ -127,7 +144,7 @@ Smoke (run this before serving):
 
 Serve (first leg unless `LEGS` given):
 
-    PRESET=mi200 MODE=serve LEGS=tp4:0.80 sbatch --partition=mi200 --gpus-per-node=8 --time=08:00:00 \
+    PRESET=mi200 MODE=serve LEGS=tp8:0.80 sbatch --partition=mi200 --gpus-per-node=8 --time=08:00:00 \
       containers/cluster/ce-images/inference/serve-private.sbatch
 
 ## 5. Connect
@@ -183,6 +200,47 @@ refuses a job on the other partition.
    Served model name is `optarena-vllm` (`SERVED_MODEL=`). Port is `API_PORT` (default 30000). Tool
    calls and reasoning work: both parsers are on.
 
+## 5b. Connect from your Daint jobs: `ACCESS=alps`
+
+For your own agent jobs on Daint or another Alps cluster. No ssh from the job, no watcher, no shared
+request folder: you submit the server on beverin, your Daint job reads one file and checks the endpoint.
+
+1. Beverin:
+
+        cd <optarena checkout>
+        PRESET=mi200 ACCESS=alps MODE=serve LEGS=tp8:0.80 sbatch --partition=mi200 --gpus-per-node=8 \
+          --time=08:00:00 containers/cluster/ce-images/inference/serve-private.sbatch
+
+   Once `401` / `200` pass, the job output prints:
+
+        ===== alps endpoint is live: http://172.28.9.16:30000/v1 on nid002536, job 123456 =====
+        endpoint.json: {"url": "http://172.28.9.16:30000/v1", "served_model": "optarena-vllm", ...}
+        In your job on Daint (or another Alps cluster), while this job runs (docs/serving/private-endpoint.md):
+          source <checkout>/containers/cluster/ce-images/inference/alps-endpoint.sh <run dir>/endpoint.json
+
+   - The URL is the node's `hsn0` address, the one its Slurm node name resolves to.
+   - `endpoint.json` sits in the mode-700 run dir. It names the key file, never the key, and is
+     deleted when the job ends.
+
+2. Daint, in your job script, before the agent starts, copy the `source` line from step 1:
+
+        source <checkout>/containers/cluster/ce-images/inference/alps-endpoint.sh <run dir>/endpoint.json || exit 1
+
+   - Checks the key file is yours and mode 600, `GET /v1/models` lists the served model, one chat
+     answers.
+   - Then exports `VLLM_BASE_URL`, `VLLM_API_KEY`, `VLLM_MODEL`. Key goes to curl on stdin, never argv.
+   - Any failed check exports nothing and returns non-zero.
+
+3. Stop: `scancel <jobid>` on beverin. `endpoint.json` goes first; the Daint job's next request fails.
+
+- **Not verified yet**, run step 2 once in a short Daint job before a campaign:
+  - a Daint compute node opening a connection to a beverin compute node on port 30000 (both on
+    172.28.0.0/16; beverin's login node reaches Daint's);
+  - Daint reading the key file and run dir at their beverin paths (`/users`, `/capstor` are shared
+    Alps file systems).
+- Someone else's job, a student's included, is not yours: they run this launcher themselves, with
+  their own key.
+
 ## 6. Stop
 
 - Ctrl-C the tunnel.
@@ -203,6 +261,10 @@ refuses a job on the other partition.
 | `bind [127.0.0.1]:30000: Address already in use` | laptop port taken | `-L 127.0.0.1:31000:127.0.0.1:30000`, then use 31000 in the URL |
 | job output `serve-private: refusing: ...` | a check failed before launch; message names it | fix that (key mode, partition, missing weights, bad `LEGS`) |
 | `SERVE FAILED` | server died or auth check failed | `server.log` in the leg dir; common causes in [`README.md`](README.md) section 6 |
+| `alps-endpoint: cannot read '...'` | serving job ended (file deleted), or wrong path | `squeue` on beverin; copy the `source` line from the job output |
+| `alps-endpoint: GET .../models answered 000` | server not ready, job ended, or Daint cannot reach beverin | wait for the `live` block; if it persists while the job runs, report it (section 5b, not verified) |
+| `alps-endpoint: ... answered 401` | key file changed after the job started | restart the serving job |
+| `alps-endpoint: key file ... mode 600` | key file mode or owner wrong | `chmod 600` it on beverin |
 
 ## 8. CSCS rules
 
@@ -219,9 +281,12 @@ Do not:
 
 - share the key, the header file, the endpoint or your tunnel with anyone, project members included.
   Someone else wants Qwen3.8: they run their own job with their own key from this page.
-- bind `0.0.0.0` or an `hsn` address, on the node or on the laptop (no `ssh -g`, no
-  `-L 0.0.0.0:...`).
-- open reverse tunnels or relays to outside hosts: no `ssh -R`, ngrok, cloudflared, frp.
+- bind `0.0.0.0` on the node, or an `hsn` address other than through `ACCESS=alps` (key, no metrics);
+  on the laptop no `ssh -g`, no `-L 0.0.0.0:...`.
+- open reverse tunnels or relays to outside hosts: no `ssh -R`, ngrok, cloudflared, frp. Without a
+  working CSCS ssh key there is no path from outside Alps; sign a key first.
+- serve other people's jobs from yours. `ACCESS=alps` is for your own jobs; a request folder that
+  others write to is access for another person.
 - run the server on a login node.
 - put the key on a command line, in chat, email, a ticket, a repo or a shared directory.
 - scan ports on compute nodes to find a server; take the node from `squeue`.

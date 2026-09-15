@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The private serving launcher, inference/serve-private.sbatch, for both presets.
 
-Runs the launcher's refusal and dry-run paths outside Slurm against stub srun/sbatch/curl: the key
-reaches sglang only through --config, every server binds 127.0.0.1 last, each preset refuses the
-other partition and serves its own flags, and MODE=serve prints a loopback tunnel but never the key.
+Runs the launcher's refusal and dry-run paths outside Slurm against stub srun/sbatch/curl/ip: the key
+reaches sglang only through --config, every server binds 127.0.0.1 last (ACCESS=alps: the node's hsn0
+address, metrics off), each preset refuses the other partition and serves its own flags, and
+MODE=serve prints a loopback tunnel or an endpoint.json but never the key.
 """
 
+import json
 import pathlib
 import re
 import subprocess
@@ -23,6 +25,9 @@ OTHER_PARTITION = {"mi300": "mi200", "mi200": "mi300"}
 #: How many servers each preset's default LEGS start in smoke mode.
 DEFAULT_LEG_COUNT = {"mi300": 1, "mi200": 3}
 SECRETS = {"sglang-auth.yaml", "api.key", "auth.header"}
+HSN0_ADDRESS = "172.28.9.16"
+#: `ip -4 -o addr show dev hsn0` on a beverin node, verbatim.
+HSN0_LINE = f"3: hsn0    inet {HSN0_ADDRESS}/16 scope global hsn0\\       valid_lft forever preferred_lft forever"
 
 
 def launch(
@@ -34,6 +39,8 @@ def launch(
     for name in ("srun", "sbatch", "curl"):
         (stub / name).write_text(f'#!/bin/sh\necho {name} >> "{tmp_path}/stub-calls"\n', encoding="utf-8")
         (stub / name).chmod(0o755)
+    (stub / "ip").write_text('#!/bin/sh\nprintf "%s\\n" "$HSN0_LINE"\n', encoding="utf-8")
+    (stub / "ip").chmod(0o755)
     key = tmp_path / "endpoint.key"
     key.write_text(KEY + "\n", encoding="utf-8")
     key.chmod(key_mode)
@@ -49,6 +56,7 @@ def launch(
         "HF_HOME": str(tmp_path / "hf"),
         "RUN_ROOT": str(tmp_path / "runs"),
         "DRY_RUN": "1",
+        "HSN0_LINE": HSN0_LINE,
         **({} if preset is None else {"PRESET": preset}),
         **extra,
     }
@@ -74,7 +82,7 @@ def flags(words: list[str]) -> dict[str, str]:
 
 def campaign_sglang_flags() -> dict[str, str]:
     """SGLANG_EXTRA_ARGS of the qwen38 campaign, with ${SCRIPT_DIR} expanded as sourcing does."""
-    found = re.findall(r'^SGLANG_EXTRA_ARGS="([^"]*)"$', CAMPAIGN_ENV.read_text(encoding="utf-8"), re.M)
+    found = re.findall(r'^SGLANG_EXTRA_ARGS="([^"]*)"$', CAMPAIGN_ENV.read_text(encoding="utf-8"), re.MULTILINE)
     assert len(found) == 1, CAMPAIGN_ENV
     return flags(found[0].replace("${SCRIPT_DIR}", str(ROOT / "experiments")).split())
 
@@ -153,10 +161,21 @@ def test_every_leg_of_each_preset_binds_loopback_last_on_the_command_line(tmp_pa
     assert "0.0.0.0" not in LAUNCHER.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("extra", ["--host 0.0.0.0", "--port=8000", "--api-key secret", "--config /tmp/c.yaml"])
-def test_the_launcher_refuses_extra_args_that_name_the_host_port_key_or_config(
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "--host 0.0.0.0",
+        "--port=8000",
+        "--api-key secret",
+        "--config /tmp/c.yaml",
+        "--tokenizer-worker-num 2",
+        "--enable-metrics",
+    ],
+)
+def test_the_launcher_refuses_extra_args_that_name_the_host_port_key_config_tokenizer_workers_or_metrics(
     tmp_path: pathlib.Path, extra: str
 ) -> None:
+    """sglang enforces the key only with one tokenizer worker and never on /metrics."""
     done = launch(tmp_path, "mi200", EXTRA_ARGS=extra)
     assert done.returncode == 2
     assert "EXTRA_ARGS may not set" in done.stderr
@@ -225,3 +244,77 @@ def test_serve_mode_starts_one_server_and_prints_a_loopback_tunnel_but_never_the
     (run_dir,) = (tmp_path / "runs").iterdir()
     assert [path.name for path in run_dir.iterdir() if path.name in SECRETS] == []
     assert not (tmp_path / "stub-calls").exists()
+
+
+def test_the_launcher_refuses_an_unknown_access(tmp_path: pathlib.Path) -> None:
+    done = launch(tmp_path, "mi200", ACCESS="public")
+    assert done.returncode == 2
+    assert "ACCESS must be tunnel or alps, got 'public'" in done.stderr
+    assert_untouched(tmp_path, done)
+
+
+@pytest.mark.parametrize("preset", PRESETS)
+def test_alps_access_binds_every_leg_to_this_nodes_hsn0_address_last(tmp_path: pathlib.Path, preset: str) -> None:
+    done = launch(tmp_path, preset, ACCESS="alps", LEGS="tp4:0.80 tp2:0.85")
+    assert done.returncode == 0, done.stderr
+    assert [argv.split()[-4:] for argv in argv_lines(done.stdout)] == [
+        ["--host", HSN0_ADDRESS, "--port", "30000"],
+        ["--host", HSN0_ADDRESS, "--port", "30001"],
+    ]
+    assert f"access:   alps, --host {HSN0_ADDRESS}\n" in done.stdout
+
+
+@pytest.mark.parametrize("preset", PRESETS)
+def test_alps_access_serves_no_metrics(tmp_path: pathlib.Path, preset: str) -> None:
+    """sglang answers /metrics without the key, and every Alps node can reach an hsn0 bind."""
+    done = launch(tmp_path, preset, ACCESS="alps", LEGS="tp4:0.80 tp2:0.85")
+    assert done.returncode == 0, done.stderr
+    argvs = argv_lines(done.stdout)
+    assert len(argvs) == 2
+    assert [argv for argv in argvs if "--enable-metrics" in argv.split()] == []
+
+
+def test_alps_access_refuses_a_node_without_an_hsn0_address_before_touching_anything(tmp_path: pathlib.Path) -> None:
+    done = launch(tmp_path, "mi200", ACCESS="alps", HSN0_LINE="", SLURMD_NODENAME="nid002536")
+    assert done.returncode == 2
+    assert "ACCESS=alps: nid002536 has no hsn0 IPv4 address" in done.stderr
+    assert_untouched(tmp_path, done)
+
+
+@pytest.mark.parametrize("preset", PRESETS)
+def test_alps_serve_mode_publishes_the_url_model_and_key_path_but_never_the_key(
+    tmp_path: pathlib.Path, preset: str
+) -> None:
+    done = launch(tmp_path, preset, ACCESS="alps", MODE="serve", API_PORT="30123", SLURMD_NODENAME="nid002536")
+    assert done.returncode == 0, done.stderr
+    published = [line.removeprefix("endpoint.json: ") for line in done.stdout.splitlines() if "endpoint.json: " in line]
+    assert len(published) == 1, done.stdout
+    assert json.loads(published[0]) == {
+        "url": f"http://{HSN0_ADDRESS}:30123/v1",
+        "served_model": "optarena-vllm",
+        "key_file": f"{tmp_path}/endpoint.key",
+        "node": "nid002536",
+        "job_id": "dry-run",
+    }
+    (run_dir,) = (tmp_path / "runs").iterdir()
+    assert (
+        f"source {ROOT}/containers/cluster/ce-images/inference/alps-endpoint.sh {run_dir}/endpoint.json" in done.stdout
+    )
+    assert "ssh -N -J" not in done.stdout
+    assert KEY not in done.stdout + done.stderr
+
+
+def test_alps_serve_mode_deletes_endpoint_json_with_the_secrets_when_the_job_exits(tmp_path: pathlib.Path) -> None:
+    """A Daint job that finds endpoint.json must be able to trust the server behind it is still there."""
+    done = launch(tmp_path, "mi200", ACCESS="alps", MODE="serve")
+    assert done.returncode == 0, done.stderr
+    assert "endpoint.json: {" in done.stdout
+    (run_dir,) = (tmp_path / "runs").iterdir()
+    assert [path.name for path in run_dir.iterdir() if path.name in SECRETS | {"endpoint.json"}] == []
+
+
+def test_alps_serve_mode_refuses_a_served_model_that_would_break_endpoint_json(tmp_path: pathlib.Path) -> None:
+    done = launch(tmp_path, "mi200", ACCESS="alps", MODE="serve", SERVED_MODEL='qwen"38')
+    assert done.returncode == 2
+    assert "may not contain a quote or a backslash" in done.stderr
+    assert_untouched(tmp_path, done)

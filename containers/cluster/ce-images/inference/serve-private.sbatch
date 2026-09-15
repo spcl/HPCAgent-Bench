@@ -8,11 +8,18 @@
 # MODE=smoke (default): one fresh server per LEGS spec "tp<N>:<mem-fraction-static>". Per leg: wait on
 #   /health (auth-exempt), record the KV/Mamba allocator lines, assert 401 without the key and 200 with
 #   it, run verify-tools-reasoning.py and a concurrent load probe with the key, stop.
-# MODE=serve: the first LEGS spec only. Wait, record, assert 401/200, print the laptop tunnel and
-#   key-fetch lines, then hold the server until the job ends or is cancelled.
+# MODE=serve: the first LEGS spec only. Wait, record, assert 401/200, print how to connect, then hold
+#   the server until the job ends or is cancelled.
 #
-# PRIVATE BY CONSTRUCTION, both presets:
-#   * --host 127.0.0.1 on every leg, last on the command line; nothing off this node can connect.
+# ACCESS picks the bind address; the key is required either way:
+#   tunnel (default): --host 127.0.0.1. Only an ssh -L through ela reaches it: your laptop.
+#   alps: --host <this node's hsn0 address>, no --enable-metrics. Your own jobs on other Alps clusters
+#     (Daint) connect with the key; MODE=serve writes endpoint.json for alps-endpoint.sh.
+#
+# PRIVATE BY CONSTRUCTION, both presets, both ACCESS values:
+#   * Never the wildcard address. --host is last on the command line.
+#   * sglang checks the key on every path except /health* and /metrics*, and only with one tokenizer
+#     worker: EXTRA_ARGS may not set --tokenizer-worker-num or --enable-metrics.
 #   * The API key comes from KEY_FILE (default ~/.config/optarena/<preset>-endpoint.key), refused unless
 #     mode 600 and owned by you. It reaches sglang only through --config <yaml>, never argv.
 #   * The run dir is mode 700 with scratch's default ACLs stripped. It holds the yaml, the curl header
@@ -24,10 +31,11 @@
 #   PRESET=mi300 sbatch --partition=mi300 --gpus-per-node=4 containers/cluster/ce-images/inference/serve-private.sbatch
 #   PRESET=mi200 sbatch --partition=mi200 --gpus-per-node=8 containers/cluster/ce-images/inference/serve-private.sbatch
 #   PRESET=mi300 MODE=serve sbatch --partition=mi300 --gpus-per-node=4 --time=08:00:00 <same path>
+#   PRESET=mi200 ACCESS=alps MODE=serve sbatch --partition=mi200 --gpus-per-node=8 --time=08:00:00 <same path>
 #   PRESET=mi300 MODE=serve DRY_RUN=1 bash containers/cluster/ce-images/inference/serve-private.sbatch
 #
 # The header names no partition or GPU count; pass both, the preset refuses a wrong partition.
-# Laptop access: docs/serving/private-endpoint.md.
+# Connecting from the laptop or from Daint: docs/serving/private-endpoint.md.
 #SBATCH --job-name=serve-private
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -65,6 +73,8 @@ MODE="${MODE:-smoke}"
 DRY_RUN="${DRY_RUN:-0}"
 use_preset
 [[ "${MODE}" == smoke || "${MODE}" == serve ]] || refuse "MODE must be smoke or serve, got '${MODE}'"
+ACCESS="${ACCESS:-tunnel}"
+[[ "${ACCESS}" == tunnel || "${ACCESS}" == alps ]] || refuse "ACCESS must be tunnel or alps, got '${ACCESS}'"
 [[ -n "${SLURM_JOB_ID:-}" || "${DRY_RUN}" == 1 ]] \
     || refuse "submit with sbatch, or DRY_RUN=1 to check without launching"
 [[ -z "${SLURM_JOB_ID:-}" || "${SLURM_JOB_PARTITION:-}" == "${PRESET_PARTITION}" ]] \
@@ -92,6 +102,7 @@ HF_HOME="${HF_HOME:-${FAST_SCRATCH}/hf}"
 RUN_ROOT="${RUN_ROOT:-${SCRATCH:?set SCRATCH}/inference-server/${PRESET}-private}"
 RUN_DIR="${RUN_ROOT}/${SLURM_JOB_ID:-dry-$$}"
 SERVE_CPUS="${SLURM_CPUS_ON_NODE:-$(nproc)}"
+NODE="${SLURMD_NODENAME:-${HOSTNAME%%.*}}"
 SERVER_PID=""
 MONITOR_PID=""
 
@@ -111,7 +122,8 @@ validate_extra_args() {
     local word
     for word in ${EXTRA_ARGS}; do
         case "${word}" in
-            --host*|--port*|--api*|--admin*|--config*) refuse "EXTRA_ARGS may not set ${word%%=*}" ;;
+            --host*|--port*|--api*|--admin*|--config*|--tokenizer-worker*|--enable-metrics*)
+                refuse "EXTRA_ARGS may not set ${word%%=*}" ;;
         esac
     done
 }
@@ -121,6 +133,20 @@ parse_leg() {  # sets LEG_TP and LEG_FRAC
     LEG_TP="${BASH_REMATCH[1]}"
     LEG_FRAC="${BASH_REMATCH[2]}"
     ((LEG_TP <= PRESET_GPUS)) || refuse "leg '$1' needs ${LEG_TP} GPUs; ${PRESET} nodes have ${PRESET_GPUS}"
+}
+
+use_access() {  # sets BIND_HOST and METRICS_FLAGS
+    if [[ "${ACCESS}" == tunnel ]]; then
+        BIND_HOST=127.0.0.1
+        METRICS_FLAGS=(--enable-metrics)
+        return 0
+    fi
+    # sglang serves /metrics without the key, so off the loopback metrics stay off.
+    METRICS_FLAGS=()
+    [[ "${SERVED_MODEL}${KEY_FILE}${NODE}" != *[\"\\]* ]] \
+        || refuse "ACCESS=alps: SERVED_MODEL, KEY_FILE and the node name may not contain a quote or a backslash"
+    BIND_HOST="$(ip -4 -o addr show dev hsn0 2>/dev/null | awk '{ split($4, a, "/"); print a[1]; exit }')"
+    [[ "${BIND_HOST}" =~ ^[0-9]+(\.[0-9]+){3}$ ]] || refuse "ACCESS=alps: ${NODE} has no hsn0 IPv4 address"
 }
 
 make_private_dir() {
@@ -150,9 +176,9 @@ server_argv() {  # server_argv <tp> <fraction> <port>: sets SERVER_ARGV
         --tp-size "$1" --mem-fraction-static "$2" "${PRESET_FLAGS[@]}"
         --chat-template "${REPO}/experiments/chat-template-qwen38.jinja" --trust-remote-code --language-only
         --watchdog-timeout 1800 --context-length 262144 --mamba-full-memory-ratio 0.5 --max-running-requests 128
-        --enable-metrics --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-cache-report
+        "${METRICS_FLAGS[@]}" --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-cache-report
         ${EXTRA_ARGS}
-        --host 127.0.0.1 --port "$3")
+        --host "${BIND_HOST}" --port "$3")
 }
 
 without_key() {  # filter stdin: drop any line carrying the key (sglang logs server_args)
@@ -163,7 +189,7 @@ wait_ready() {  # wait_ready <port> <dir>
     local deadline code
     deadline=$(($(date +%s) + READY_TIMEOUT))
     while :; do
-        code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$1/health" || true)"
+        code="$(curl -s -o /dev/null -w '%{http_code}' "http://${BIND_HOST}:$1/health" || true)"
         [[ "${code}" == 200 ]] && return 0
         if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
             echo "server step exited before /health answered" >&2
@@ -188,7 +214,7 @@ http_status() {  # http_status <port> <body> [header-file]
     local auth=()
     [[ $# -lt 3 ]] || auth=(-H "@$3")
     curl -s -o /dev/null -w '%{http_code}' --max-time 600 -H 'Content-Type: application/json' "${auth[@]}" \
-        --data-binary "@$2" "http://127.0.0.1:$1/v1/chat/completions" || true
+        --data-binary "@$2" "http://${BIND_HOST}:$1/v1/chat/completions" || true
 }
 
 auth_checks() {  # auth_checks <port> <dir>
@@ -203,7 +229,7 @@ auth_checks() {  # auth_checks <port> <dir>
 tools_gate() {  # tools_gate <port> <dir>
     local rc=0
     srun --overlap --ntasks=1 --cpus-per-task=4 --export=ALL --environment="${EDF}" \
-        /opt/venv/bin/python3 "${GATE}" --base "http://127.0.0.1:$1" --model "${SERVED_MODEL}" \
+        /opt/venv/bin/python3 "${GATE}" --base "http://${BIND_HOST}:$1" --model "${SERVED_MODEL}" \
         --api-key-file "${RUN_DIR}/api.key" --reasoning-effort "${REASONING_EFFORT}" \
         > "$2/tools-reasoning.out" 2>&1 || rc=$?
     cat "$2/tools-reasoning.out"
@@ -216,7 +242,7 @@ load_probe() {  # load_probe <port> <dir>: LOAD_CONCURRENCY authenticated chats,
     for ((i = 0; i < LOAD_CONCURRENCY; i++)); do
         curl -s -o "$2/load-${i}.json" -w '%{http_code}\n' --max-time 1800 -H 'Content-Type: application/json' \
             -H "@${RUN_DIR}/auth.header" --data-binary "@${RUN_DIR}/load.json" \
-            "http://127.0.0.1:$1/v1/chat/completions" > "$2/load-${i}.status" 2>/dev/null &
+            "http://${BIND_HOST}:$1/v1/chat/completions" > "$2/load-${i}.status" 2>/dev/null &
         pids+=("$!")
     done
     wait "${pids[@]}" || true
@@ -277,8 +303,8 @@ run_leg() {  # run_leg <index> <spec>: one smoke leg, server stopped at the end
     return "${failed}"
 }
 
-connect_help() {  # connect_help <port>: laptop lines naming the key file, never its content
-    local node="${SLURMD_NODENAME:-${HOSTNAME%%.*}}" key_name="${KEY_FILE##*/}"
+tunnel_help() {  # tunnel_help <port>: laptop lines naming the key file, never its content
+    local node="${NODE}" key_name="${KEY_FILE##*/}"
     local laptop_key="~/.config/optarena/${key_name}" header_name="${key_name%.key}.header"
     cat <<EOF
 
@@ -297,6 +323,24 @@ Do not share the key, the header file or this endpoint with anyone, project memb
 EOF
 }
 
+write_endpoint_file() {  # write_endpoint_file <port>: what alps-endpoint.sh reads; the key path, never the key
+    local url="http://${BIND_HOST}:$1/v1"
+    (umask 077 && printf '{"url": "%s", "served_model": "%s", "key_file": "%s", "node": "%s", "job_id": "%s"}\n' \
+        "${url}" "${SERVED_MODEL}" "${KEY_FILE}" "${NODE}" "${SLURM_JOB_ID:-dry-run}" > "${RUN_DIR}/endpoint.json")
+}
+
+alps_help() {  # alps_help <port>: how your own jobs elsewhere on Alps connect; never the key
+    cat <<EOF
+
+===== alps endpoint is live: http://${BIND_HOST}:$1/v1 on ${NODE}, job ${SLURM_JOB_ID:-dry run} =====
+endpoint.json: $(cat "${RUN_DIR}/endpoint.json")
+In your job on Daint (or another Alps cluster), while this job runs (docs/serving/private-endpoint.md):
+  source ${REPO}/containers/cluster/ce-images/inference/alps-endpoint.sh ${RUN_DIR}/endpoint.json
+Stop: scancel ${SLURM_JOB_ID:-<jobid>}. endpoint.json is deleted when this job ends.
+Only your own jobs: do not share the key, endpoint.json or this URL with anyone, project members included.
+EOF
+}
+
 serve_leg() {  # serve_leg <spec>: one server, auth-checked, held until the job ends or is cancelled
     start_leg 0 "$1"
     if [[ "${DRY_RUN}" != 1 ]]; then
@@ -304,12 +348,19 @@ serve_leg() {  # serve_leg <spec>: one server, auth-checked, held until the job 
         record_memory "${LEG_DIR}"
         auth_checks "${LEG_PORT}" "${LEG_DIR}" || return 1
     fi
-    connect_help "${LEG_PORT}"
+    if [[ "${ACCESS}" == alps ]]; then
+        write_endpoint_file "${LEG_PORT}"
+        alps_help "${LEG_PORT}"
+    else
+        tunnel_help "${LEG_PORT}"
+    fi
     [[ "${DRY_RUN}" != 1 ]] || return 0
     wait "${SERVER_PID}"
 }
 
 cleanup() {
+    # First, so a Daint job stops finding an endpoint that is going away.
+    rm -f -- "${RUN_DIR}/endpoint.json"
     stop_server
     [[ -z "${MONITOR_PID}" ]] || kill -TERM "${MONITOR_PID}" 2>/dev/null || true
     rm -f -- "${RUN_DIR}/sglang-auth.yaml" "${RUN_DIR}/api.key" "${RUN_DIR}/auth.header"
@@ -317,6 +368,7 @@ cleanup() {
 
 read_key_file
 validate_extra_args
+use_access
 read -r -a LEG_SPECS <<< "${LEGS}"
 ((${#LEG_SPECS[@]} > 0)) || refuse "LEGS is empty"
 for spec in "${LEG_SPECS[@]}"; do parse_leg "${spec}"; done
@@ -344,6 +396,7 @@ preset:   ${PRESET} (partition ${PRESET_PARTITION}), mode ${MODE}
 model:    ${MODEL_REPO} as "${SERVED_MODEL}" (HF_HOME=${HF_HOME})
 image:    ${EDF}
 env:      SGLANG_USE_AITER=${PRESET_AITER} SGLANG_SET_CPU_AFFINITY=0
+access:   ${ACCESS}, --host ${BIND_HOST}
 legs:     ${LEG_SPECS[*]}
 run dir:  ${RUN_DIR} (mode $(stat -c %a -- "${RUN_DIR}"))
 config:   ${RUN_DIR}/sglang-auth.yaml (mode $(stat -c %a -- "${RUN_DIR}/sglang-auth.yaml"))
