@@ -50,7 +50,6 @@ from hpcagent_bench.stats import style as plotstyle
 
 plotstyle.apply()
 import matplotlib.pyplot as plt  # pyplot must follow plotstyle.apply()
-from matplotlib.collections import PathCollection
 from matplotlib.text import Annotation
 from matplotlib.ticker import FuncFormatter
 
@@ -281,11 +280,11 @@ def style_panel(ax: plt.Axes, panel: Panel, compact: bool) -> None:
     if panel.log2:
         ax.yaxis.set_major_formatter(FuncFormatter(ratio_tick))
     ax.set_xticks([CONTROL_X, TREATED_X])
-    ax.set_xticklabels(list(CONDITION_LABELS), fontsize=plotstyle.TICK_PT * (0.6 if compact else 1.0))
+    ax.set_xticklabels(list(CONDITION_LABELS), fontsize=plotstyle.TICK_PT * (COMPACT_LABEL_SCALE if compact else 1.0))
     ax.set_xlim(CONTROL_X - 0.45, TREATED_X + 0.45)
-    ax.set_ylabel(panel.label, fontsize=plotstyle.LABEL_PT * (0.68 if compact else 1.0))
+    ax.set_ylabel(panel.label, fontsize=plotstyle.LABEL_PT * (COMPACT_LABEL_SCALE if compact else 1.0))
     if compact:
-        ax.tick_params(axis="y", labelsize=plotstyle.TICK_PT * 0.6)
+        ax.tick_params(axis="y", labelsize=plotstyle.TICK_PT * COMPACT_LABEL_SCALE)
     # Room above and below the extreme marks. Autoscale on a log axis clips a marker in half at the
     # edge of the panel, which reads as a point that ran off the chart.
     ax.margins(y=0.22)
@@ -434,7 +433,7 @@ def draw_absolute(
                 (TREATED_X, y),
                 textcoords="offset points",
                 xytext=(13, 0),
-                fontsize=plotstyle.ANNOTATION_PT * (0.62 if compact else 1.0),
+                fontsize=plotstyle.ANNOTATION_PT * (COMPACT_LABEL_SCALE if compact else 1.0),
                 color=plotstyle.MUTED,
                 va="center",
                 zorder=plotstyle.MARK_Z + 2.0,
@@ -457,12 +456,47 @@ def family_size(stats: pd.DataFrame) -> int:
 PANEL_SIDE: float = 3.9
 
 #: The canvas the two panels, the title and the shared legend sit on.
-PANEL_SIZE: tuple[float, float] = (2.0 * PANEL_SIDE + 1.7, PANEL_SIDE + 2.1)
+#: What :func:`draw_absolute` scales its decorative text by on a COMPACT panel, and so what
+#: :func:`margins_in` reserves there. One number, so the text and the room for it cannot drift.
+COMPACT_LABEL_SCALE: float = 0.7
+
+#: Inches a LABEL COLUMN needs beside a panel at full label size: :func:`stack_labels` puts every
+#: per-arm label at one x right of the treated mark, and a panel that does not reserve the room
+#: writes them off the canvas -- which is what a fixed-size save does with anything past the edge.
+LABEL_COLUMN_IN: float = 0.80
+
+#: Inches a panel's own metric label and its tick labels need on its left.
+METRIC_LABEL_IN: float = 0.85
+
+
+def margins_in(label_scale: float) -> tuple[float, float, float]:
+    """``(left, inner gap, right)`` inches around a row of two panels, at ``label_scale`` text.
+
+    The INNER gap holds two things a row gap does not: the left panel's label column and the right
+    panel's own metric label. Sized in inches rather than as a figure fraction, since both cost the
+    same inches whether the panels beside them are 2in or 4in wide.
+    """
+    column = LABEL_COLUMN_IN * label_scale
+    return METRIC_LABEL_IN * label_scale, column + METRIC_LABEL_IN * label_scale, column + 0.25
+
+
+#: The canvas a single comparison is drawn on: two square panels, their margins, and the fixed
+#: bands the title and the shared legend cost.
+PANEL_SIZE: tuple[float, float] = (
+    2.0 * PANEL_SIDE + sum(margins_in(1.0)),
+    PANEL_SIDE + 2.1,
+)
 
 #: Fixed margins, not ``tight_layout``. This figure is meant to be loaded beside the arm-summary
 #: panels, and tight_layout sizes each figure from its own content -- one longer tick label and the
 #: pair stops matching.
-PANEL_MARGINS: dict[str, float] = {"left": 0.115, "right": 0.98, "top": 0.855, "bottom": 0.30, "wspace": 0.30}
+PANEL_MARGINS: dict[str, float] = {
+    "left": margins_in(1.0)[0] / PANEL_SIZE[0],
+    "right": 1.0 - margins_in(1.0)[2] / PANEL_SIZE[0],
+    "top": 0.855,
+    "bottom": 0.30,
+    "wspace": margins_in(1.0)[1] / PANEL_SIDE,
+}
 
 
 def write(fig, out: pathlib.Path) -> pathlib.Path:
@@ -505,49 +539,89 @@ def absolute_points(frame: pd.DataFrame, repeats: population.RepeatPolicy = "lat
     return rules.require_interval(table, "tokens", "tokens_low", "tokens_high")
 
 
-#: A point label's candidate places around its mark, tried in order: (dx, dy) in points, then the
-#: horizontal and vertical alignment. Right of the mark first, where the label has always sat, then
-#: the same ring at two further heights. SIX ARMS SHARE ONE SQUARE PANEL and several land within a
-#: few points of each other, so a ring of eight places runs out and every label after that keeps the
-#: first place and prints on top of its neighbour.
-LABEL_PLACES: tuple[tuple[float, float, str, str], ...] = tuple(
-    (dx, dy, ha, va)
-    for dy_base, va in ((0.0, "center"), (11.0, "bottom"), (-11.0, "top"), (22.0, "bottom"), (-22.0, "top"))
-    for dx, ha in ((13.0, "left"), (-13.0, "right"), (0.0, "center"))
-    for dy in (dy_base,)
-    if not (dx == 0.0 and va == "center")
-)
+#: The label COLUMN, in points: how far right of the treated mark a label's left edge sits, where
+#: its leader line starts (clear of the mark itself), and the least clearance between two labels.
+LABEL_GAP_PT: float = 13.0
+LEADER_START_PT: float = 7.0
+LABEL_CLEARANCE_PT: float = 2.0
+
+#: A label pushed further than this off its own mark's height gets a leader line. Below it the
+#: label still reads as belonging to the mark beside it, and a leader would be a line for nothing.
+LEADER_SHIFT_PT: float = 3.0
 
 
-def boxes_touch(a: tuple[float, ...], b: tuple[float, ...]) -> bool:
-    """Two ``(x0, y0, x1, y1)`` display boxes share area."""
-    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+def spread(preferred: Sequence[float], step: float, low: float, high: float) -> list[float]:
+    """``preferred``, in ascending order, pushed apart to ``step`` and kept inside ``low``..``high``.
+
+    The standard two-pass sweep: forward settles every collision upward, and the backward pass pulls
+    the stack back under the ceiling when the forward pass ran it past there. A column too short for
+    its labels comes out evenly packed rather than short of one -- a missing label reads as a
+    missing arm, which is worse than a tight one.
+    """
+    settled = [float(value) for value in preferred]
+    for index in range(1, len(settled)):
+        settled[index] = max(settled[index], settled[index - 1] + step)
+    overflow = settled[-1] - high
+    if overflow > 0.0:
+        settled = [value - overflow for value in settled]
+    for index in range(len(settled) - 2, -1, -1):
+        settled[index] = min(settled[index], settled[index + 1] - step)
+    return [max(value, low) for value in settled]
 
 
-def untangle_labels(ax: plt.Axes) -> None:
-    """Move each point label (an :class:`Annotation`) to the first of :data:`LABEL_PLACES` where its
-    RENDERED text touches no mark and no label settled before it; a label with every place taken
-    keeps the first. Call once the layout is final: marks move with the axes while a label's offset
-    is in points, so a place clear before ``subplots_adjust`` need not be clear after it."""
+def draw_leader(ax: plt.Axes, anchor: tuple[float, float], target: float, scale: float) -> None:
+    """The line from a mark to the label the column pushed off its height, in the mark's own ink."""
+    inverse = ax.transData.inverted()
+    start = inverse.transform((anchor[0] + LEADER_START_PT * scale, anchor[1]))
+    end = inverse.transform((anchor[0] + (LABEL_GAP_PT - 2.0) * scale, target))
+    ax.plot(
+        [float(start[0]), float(end[0])],
+        [float(start[1]), float(end[1])],
+        color=plotstyle.RULE,
+        linewidth=0.8,
+        zorder=plotstyle.FILL_Z - 1.0,
+        clip_on=False,
+    )
+
+
+def stack_labels(ax: plt.Axes) -> None:
+    """Put every per-arm label in ONE right-hand column, pushed apart until no two boxes touch.
+
+    A slope panel is narrow and its arms land close together, so there is no free place AROUND a
+    mark to put a label in: a ring of candidate offsets runs out, and the labels it cannot place
+    fall back onto their neighbours -- which is "Fortran" printing over "C" three times in one
+    panel. A column has room by construction, since every label sits at one x and the only thing
+    left to solve is the vertical order, and a leader line says which mark a label that had to move
+    belongs to.
+
+    Call once the layout is final: a mark moves with the axes while a label's offset is in points,
+    so a column measured before ``subplots_adjust`` is not the column after it. The axis limits are
+    restored at the end, because the leader lines are drawn in data space and would otherwise pull
+    the panel's own autoscale out to meet them.
+    """
     fig = ax.figure
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
-    taken: list[tuple[float, ...]] = []
-    for collection in ax.collections:
-        if isinstance(collection, PathCollection) and len(collection.get_offsets()):
-            half = math.sqrt(float(np.max(collection.get_sizes()))) / 2.0 * fig.dpi / 72.0
-            for px, py in collection.get_offset_transform().transform(collection.get_offsets()):
-                taken.append((px - half, py - half, px + half, py + half))
-    for note in [text for text in ax.texts if isinstance(text, Annotation)]:
-        box: tuple[float, ...] = ()
-        for dx, dy, ha, va in (*LABEL_PLACES, LABEL_PLACES[0]):
-            note.xyann = (dx, dy)
-            note.set_horizontalalignment(ha)
-            note.set_verticalalignment(va)
-            box = tuple(note.get_window_extent(renderer).extents)
-            if not any(boxes_touch(box, other) for other in taken):
-                break
-        taken.append(box)
+    notes = [text for text in ax.texts if isinstance(text, Annotation)]
+    if not notes:
+        return
+    limits = (ax.get_xlim(), ax.get_ylim())
+    scale = float(fig.dpi) / 72.0
+    anchors = [tuple(float(v) for v in ax.transData.transform(note.xy)) for note in notes]
+    step = max(note.get_window_extent(renderer).height for note in notes) + LABEL_CLEARANCE_PT * scale
+    frame = ax.get_window_extent(renderer)
+    order = sorted(range(len(notes)), key=lambda index: anchors[index][1])
+    settled = spread([anchors[index][1] for index in order], step, frame.y0 + step / 2.0, frame.y1 - step / 2.0)
+    for target, index in zip(settled, order, strict=True):
+        note = notes[index]
+        shift = target - anchors[index][1]
+        note.xyann = (LABEL_GAP_PT, shift / scale)
+        note.set_horizontalalignment("left")
+        note.set_verticalalignment("center")
+        if abs(shift) > LEADER_SHIFT_PT * scale:
+            draw_leader(ax, (anchors[index][0], anchors[index][1]), target, scale)
+    ax.set_xlim(*limits[0])
+    ax.set_ylim(*limits[1])
 
 
 def figure_absolute(
@@ -565,7 +639,7 @@ def figure_absolute(
     plotstyle.legend_below(fig, handles, ncol=3, y=0.015, fontsize=plotstyle.LABEL_PT * 0.7)
     plotstyle.title(fig, label)
     for ax in axes:
-        untangle_labels(ax)
+        stack_labels(ax)
     return write(fig, out)
 
 
@@ -575,9 +649,6 @@ SQUARE_PANEL_SIDE: float = 3.6
 #: Gap between the joined comparison ROWS, inches.
 SQUARE_PANEL_GAP: float = 0.25
 
-#: Gap between the two panels of ONE comparison, inches. Wider than the row gap: the right panel
-#: carries its own metric label, and at the row gap that label lands on top of the left panel.
-INNER_GAP_IN: float = 0.80
 
 #: The fixed chrome around a joined figure, in INCHES, not in figure fractions: a band costs the
 #: same inches whether it sits on a one-comparison figure or a four-comparison one, and a constant
@@ -589,10 +660,8 @@ PAIR_LABEL_IN: float = 0.34
 XLABEL_IN: float = 0.50
 LEGEND_IN: float = 1.25
 
-#: Inches reserved left of the panels for the metric label and its ticks, and right of them for the
-#: per-arm language labels, which sit outside the treated mark.
-LEFT_IN: float = 0.80
-RIGHT_IN: float = 0.60
+#: ``(left, inner gap, right)`` inches around one joined comparison's pair of panels.
+LEFT_IN, INNER_GAP_IN, RIGHT_IN = margins_in(COMPACT_LABEL_SCALE)
 
 
 def panel_side(double_column: bool) -> float:
@@ -673,7 +742,7 @@ def build_treatments_figure(
         )
     for row in axes:
         for ax in row:
-            untangle_labels(ax)
+            stack_labels(ax)
     return fig
 
 

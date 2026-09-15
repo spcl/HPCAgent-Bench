@@ -278,21 +278,24 @@ def test_the_figure_stars_a_point_only_on_a_corrected_verdict(
     assert ("C *" in labels) == starred, labels
 
 
-def test_a_language_label_lands_on_no_mark_and_no_other_label() -> None:
-    """Two legs of one model landing close put a fixed right-hand label on the neighbour's mark --
-    Kimi's "C" sat on its own Fortran point in the CPU skills figure -- so the label must move."""
-    import matplotlib.pyplot as plt
-    from matplotlib.collections import PathCollection
-    from matplotlib.text import Annotation
-
-    legs = {  # (model, language): (log2 speed-up, tokens) without, then with the packet -- that figure's values
+def crowded_legs() -> dict[tuple[str, str], tuple[tuple[float, float], tuple[float, float]]]:
+    """Six arms of one CPU skills figure, three of them landing within a few percent of each
+    other -- the fixture the old ring of candidate label places could not solve."""
+    return {
         ("qwen38", "c"): ((2.75, 350e3), (2.82, 310e3)),
-        ("qwen38", "fortran"): ((2.27, 245e3), (2.56, 255e3)),
-        ("oss120b", "c"): ((2.13, 50e3), (2.24, 50e3)),
+        ("qwen38", "fortran"): ((2.77, 245e3), (2.80, 255e3)),
+        ("oss120b", "c"): ((2.13, 50e3), (2.24, 52e3)),
         ("oss120b", "fortran"): ((2.38, 72e3), (2.29, 65e3)),
-        ("kimi27sglang", "c"): ((2.75, 178e3), (2.60, 165e3)),
-        ("kimi27sglang", "fortran"): ((2.83, 165e3), (2.67, 150e3)),
+        ("kimi27sglang", "c"): ((2.75, 178e3), (2.79, 165e3)),
+        ("kimi27sglang", "fortran"): ((2.83, 165e3), (2.81, 160e3)),
     }
+
+
+def crowded_figure() -> tuple[object, list[object]]:
+    """The crowded fixture drawn at the script's own size, with the layout already settled."""
+    import matplotlib.pyplot as plt
+
+    legs = crowded_legs()
     frame = pd.DataFrame(
         [
             {"model": model, "language": language, "skills": on, **thin(*point)}
@@ -303,33 +306,80 @@ def test_a_language_label_lands_on_no_mark_and_no_other_label() -> None:
     verdict = {"score_verdict": efficacy.NOT_SIGNIFICANT, "cost_verdict": efficacy.NOT_SIGNIFICANT, "family_size": 12}
     stats = pd.DataFrame([{"model": model, "language": language, **verdict} for model, language in legs])
     fig, axes = plt.subplots(1, len(plot.PANELS), figsize=plot.PANEL_SIZE)
-    ax = axes[0]
+    plot.draw_absolute(list(axes), frame, stats, "skills")
+    fig.subplots_adjust(**plot.PANEL_MARGINS)
+    for ax in axes:
+        plot.stack_labels(ax)
+    return fig, list(axes)
+
+
+def test_no_two_arm_labels_overprint_each_other_however_close_the_arms_land() -> None:
+    """The bug this guards: six arms share one square panel and three land within a few percent, so
+    there is no free place AROUND a mark and every label after the first printed on top of its
+    neighbour -- "Fortran" over "C", three times in one panel. A column solves the vertical order
+    instead of searching for a hole."""
+    import matplotlib.pyplot as plt
+    from matplotlib.text import Annotation
+
+    fig, axes = crowded_figure()
     try:
-        plot.draw_absolute(list(axes), frame, stats, "skills")
-        fig.subplots_adjust(**plot.PANEL_MARGINS)
-        plot.untangle_labels(ax)
         renderer = fig.canvas.get_renderer()
-        notes = [text for text in ax.texts if isinstance(text, Annotation)]
-        labels = [tuple(note.get_window_extent(renderer).extents) for note in notes]
-        # a scatter mark's window extent is empty (+-inf) on this backend, so each mark is its drawn
-        # centre plus half its side: ``s`` is the marker area in points squared
-        marks = []
-        for collection in (c for c in ax.collections if isinstance(c, PathCollection)):
-            half = collection.get_sizes()[0] ** 0.5 / 2.0 * fig.dpi / 72.0
-            for x, y in collection.get_offset_transform().transform(collection.get_offsets()):
-                marks.append((x - half, y - half, x + half, y + half))
-        moved = [note.get_text() for note in notes if tuple(note.xyann) != plot.LABEL_PLACES[0][:2]]
+        for ax in axes:
+            notes = [text for text in ax.texts if isinstance(text, Annotation)]
+            boxes = [tuple(note.get_window_extent(renderer).extents) for note in notes]
+            assert len(boxes) == len(crowded_legs())
+            for index, box in enumerate(boxes):
+                for other in boxes[index + 1 :]:
+                    assert not (box[0] < other[2] and other[0] < box[2] and box[1] < other[3] and other[1] < box[3]), (
+                        notes[index].get_text()
+                    )
     finally:
         plt.close(fig)
 
-    def touch(a: tuple[float, ...], b: tuple[float, ...]) -> bool:
-        return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
-    assert len(labels) == len(legs)
-    assert moved, "the fixture no longer collides at the default place, so it tests nothing"
-    for index, label in enumerate(labels):
-        assert not any(touch(label, mark) for mark in marks), notes[index].get_text()
-        assert not any(touch(label, other) for other in labels[index + 1 :]), notes[index].get_text()
+def test_every_arm_label_sits_at_one_x_in_a_single_right_hand_column() -> None:
+    """A column, not a ring: every label shares one x just right of the treated marks, so the only
+    thing left to settle is the vertical order and a reader scans one list rather than hunting."""
+    import matplotlib.pyplot as plt
+    from matplotlib.text import Annotation
+
+    fig, axes = crowded_figure()
+    try:
+        renderer = fig.canvas.get_renderer()
+        for ax in axes:
+            notes = [text for text in ax.texts if isinstance(text, Annotation)]
+            lefts = {round(note.get_window_extent(renderer).x0, 3) for note in notes}
+            assert len(lefts) == 1, lefts
+            assert all(tuple(note.xyann)[0] == plot.LABEL_GAP_PT for note in notes)
+    finally:
+        plt.close(fig)
+
+
+def test_a_label_the_column_moved_off_its_mark_gets_a_leader_line() -> None:
+    """A label pushed away from its own height needs to say which mark it belongs to; one that
+    barely moved does not, and a leader there would be a line for nothing."""
+    import matplotlib.pyplot as plt
+
+    fig, axes = crowded_figure()
+    try:
+        leaders = len(axes[0].lines) - len(crowded_legs())  # one pair link per arm is drawn first
+    finally:
+        plt.close(fig)
+    assert leaders > 0
+
+
+def test_spread_pushes_labels_apart_and_keeps_them_inside_the_column() -> None:
+    """The sweep itself: ascending input, a minimum step between neighbours, nothing past either
+    end. A column too short comes out evenly packed rather than short of a label, since a missing
+    label reads as a missing arm."""
+    assert plot.spread([10.0, 10.5, 11.0], 5.0, 0.0, 100.0) == [10.0, 15.0, 20.0]
+
+    settled = plot.spread([90.0, 95.0, 99.0], 5.0, 0.0, 100.0)
+    assert settled[-1] <= 100.0
+    assert all(b - a >= 5.0 - 1e-9 for a, b in zip(settled, settled[1:], strict=False))
+
+    floored = plot.spread([1.0, 1.0, 1.0], 5.0, 0.0, 6.0)
+    assert min(floored) >= 0.0 and max(floored) <= 6.0
 
 
 def treatment_panel(treatment: str) -> tuple[str, pd.DataFrame, pd.DataFrame]:

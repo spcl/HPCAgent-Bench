@@ -751,3 +751,16 @@ def test_a_kernel_with_no_verified_answer_is_drawn_as_a_crossed_mark_at_one() ->
     assert kernel_comparison.MISSING_MARKER_X == population.NOT_DELIVERED
     assert kernel_comparison.MISSING_LABEL == plotstyle.NOT_DELIVERED_LABEL
     assert "1x" in kernel_comparison.MISSING_LABEL
+
+
+def test_the_key_for_a_never_delivered_kernel_shows_the_cross_and_names_it() -> None:
+    """A kernel the arm was served and never answered enters at 1x and keeps its tokens, so its
+    mark is a placeholder. The CROSS is what separates it from a measured 1.0x -- hollow alone is
+    this repo's spelling for the control, so a key showing only that names the wrong thing."""
+    handles = kernel_comparison.legend_handles(None, {}, ())
+    missing = [handle for handle in handles if handle.get_label() == kernel_comparison.MISSING_LABEL]
+
+    assert len(missing) == 1
+    assert missing[0].get_marker() == "x"
+    assert kernel_comparison.MISSING_LABEL == plotstyle.NOT_DELIVERED_LABEL
+    assert "1x" in kernel_comparison.MISSING_LABEL

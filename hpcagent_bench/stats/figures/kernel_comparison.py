@@ -496,17 +496,20 @@ def legend_handles(
                 label=experiment_tags.model_name(model),
             )
         )
+    # The CROSS, not the hollow circle the mark also carries: hollow is this repo's spelling for
+    # the control, so an entry that showed only that would name the wrong thing. The cross is the
+    # one feature that separates a placeholder from a measurement, so it is what the key shows.
     handles.append(
         matplotlib.lines.Line2D(
             [],
             [],
-            marker="o",
+            marker="x",
             linestyle="none",
-            markerfacecolor="none",
-            markeredgecolor=plotstyle.MUTED,
-            markersize=8,
+            color=plotstyle.MUTED,
+            markeredgewidth=1.6,
+            markersize=7,
             label=MISSING_LABEL,
-        )
+        )  # fmt: skip
     )
     return handles
 
