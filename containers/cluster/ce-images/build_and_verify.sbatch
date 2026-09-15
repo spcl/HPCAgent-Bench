@@ -4,6 +4,10 @@
 #   IMAGE_DIR=containers/cluster/ce-images/judge-agent-amd \
 #     sbatch containers/cluster/ce-images/build_and_verify.sbatch
 #
+# sglang-mi200 builds and verifies on mi200 (64 physical cores); override the directives below:
+#   REPO=$PWD IMAGE_DIR=containers/cluster/ce-images/sglang-mi200 \
+#     sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 containers/cluster/ce-images/build_and_verify.sbatch
+#
 # WHY ONE JOB. build.sbatch produced an artifact and told the operator, in prose, to go and verify
 # it separately. Nothing enforced that, so an image could be built, named and promoted without the
 # verifier ever running -- which is how a v6 with no agent tools reached a campaign and emptied it.
@@ -60,12 +64,14 @@ IMAGE_DIR="${IMAGE_DIR}" bash "${IMAGE_DIR}/build.sbatch" 2>&1 | tee "${build_ou
 declare -A BUILD_TARGETS_OF=(
     [judge-agent-amd]="judge-agent-amd judge"
     [sglang]="sglang"
+    [sglang-mi200]="sglang-mi200"
     [vllm]="vllm"
 )
 declare -A TARGET_SQSH=(
     [judge-agent-amd]="${SCRATCH}/ce-images/optarena-ce-amd-mi300-candidate.sqsh"
     [judge]="${SCRATCH}/ce-images/optarena-ce-judge-amd-mi300-candidate.sqsh"
     [sglang]="${SCRATCH}/ce-images/optarena-sglang-candidate.sqsh"
+    [sglang-mi200]="${SCRATCH}/ce-images/optarena-sglang-mi200-candidate.sqsh"
     [vllm]="${SCRATCH}/ce-images/optarena-vllm-candidate.sqsh"
 )
 targets="${BUILD_TARGETS_OF[${PROFILE}]:-}"

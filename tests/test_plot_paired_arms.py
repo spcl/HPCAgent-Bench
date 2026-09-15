@@ -166,6 +166,60 @@ def test_pair_label_names_both_arms_from_the_table_not_a_parsed_convention() -> 
 
 
 # ---------------------------------------------------------------------------
+# identity_label: model/language/shared-packet, read from the arm names -- real names of both
+# experiments this script draws (llrblind-vs-scored, git-scicomp).
+
+
+def test_identity_label_names_model_language_and_a_packet_both_arms_share() -> None:
+    """llrblind-vs-scored's skilled pair: the scored campaign against its blind control, same
+    model, language and packet on both sides -- exactly the identity a reader wants, not the two
+    campaign-prefixed arm names."""
+    pair = ("cpf-llr-focus40-qwen38-c-skills", "llrblind-qwen38-c-skills")
+    assert plot.identity_label(pair) == "Qwen3.8-27B, C, All Skill Pages"
+
+
+def test_identity_label_omits_a_packet_neither_arm_carries() -> None:
+    """The unskilled llrblind-vs-scored pair: no packet on either side, so nothing is said about
+    one -- ``packets.label("")`` reads "No Skill Packet", which would misname a pair that never ran
+    a skill packet in the first place."""
+    pair = ("cpf-llr-focus40-oss120b-fortran", "llrblind-oss120b-fortran")
+    assert plot.identity_label(pair) == "GPT-OSS-120B, Fortran"
+
+
+def test_identity_label_drops_a_packet_that_differs_between_the_two_arms() -> None:
+    """git-scicomp's repo-vs-kernel pair: the two arms name the SAME model, no language token, and
+    a packet-like condition (``repo``/``kernel``) that differs -- exactly the comparison the pair
+    exists to make. The title ("Repository vs Kernel...") and the axis's own "(a / b)" already say
+    which side is which, so the row names only what both arms share: the model."""
+    pair = ("git-scicomp-qwen38-repo", "git-scicomp-qwen38-kernel")
+    assert plot.identity_label(pair) == "Qwen3.8-27B"
+
+
+def test_identity_label_falls_back_to_raw_when_nothing_resolves() -> None:
+    pair = ("control-arm", "treated-arm")
+    assert plot.identity_label(pair) == plot.pair_label(pair)
+
+
+def test_row_labels_disambiguates_two_pairs_that_resolve_to_one_identity() -> None:
+    """Two DIFFERENT pairs (different raw arm names) that happen to share every part
+    ``identity_label`` names collapse to one string on their own; ``row_labels`` must still hand
+    the figure two distinct row labels, not one repeated twice."""
+    pairs = [
+        ("cpf-llr-focus40-qwen38-c-skills", "llrblind-qwen38-c-skills"),
+        ("cpf-llr-focus40-qwen38-c-skills-v2", "llrblind-qwen38-c-skills-v2"),
+    ]
+    labels = plot.row_labels(pairs, "identity")
+    assert labels[pairs[0]] == "Qwen3.8-27B, C, All Skill Pages"
+    assert labels[pairs[1]] == "Qwen3.8-27B, C, All Skill Pages (2)"
+    assert len(set(labels.values())) == 2
+
+
+def test_row_labels_raw_mode_is_the_old_two_line_arm_name_label() -> None:
+    pairs = [("cpf-llr-focus40-oss120b-c", "llrblind-oss120b-c")]
+    assert plot.row_labels(pairs, "raw")[pairs[0]] == plot.pair_label(pairs[0])
+
+
+# ---------------------------------------------------------------------------
 # Colour and marker: the model registry, never a hardcoded prefix.
 
 
@@ -250,6 +304,20 @@ def test_a_wide_ratio_range_still_clears_the_gap_after_it_widens() -> None:
         plt.close(fig)
 
 
+def test_a_long_ratio_label_widens_the_gap_until_the_axis_labels_clear() -> None:
+    """Each axis label is centred under its own panel, so a long contrast runs under the
+    neighbouring panel's label unless the gap grows for the labels too, not only the ticks."""
+    fig = plot.build_figure(table(), "gap check", False, ratio="Repository / Kernel")
+    try:
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        left = fig.axes[0].xaxis.label.get_window_extent(renderer)
+        right = fig.axes[1].xaxis.label.get_window_extent(renderer)
+        assert left.x1 <= right.x0, (left.x1, right.x0)
+    finally:
+        plt.close(fig)
+
+
 # ---------------------------------------------------------------------------
 # End to end: a tiny synthetic CSV, exactly the shape paired_arms.py --out writes.
 
@@ -264,6 +332,16 @@ def test_the_script_draws_one_pdf_and_one_png_over_a_synthetic_csv(tmp_path: pat
     assert result == 0
     assert out.with_suffix(".pdf").exists()
     assert out.with_suffix(".png").exists()
+
+
+def test_the_ratio_axes_name_which_arm_is_the_numerator() -> None:
+    """A row label names only what both arms share, so the axis is the one place a reader learns
+    which side of the contrast is on top of the ratio."""
+    fig = plot.build_figure(table(), "Blind vs Scored", False, ratio="Scored / Blind")
+    speed, tokens = fig.axes[:2]
+    assert speed.get_xlabel() == "Speedup Ratio (Scored / Blind)", speed.get_xlabel()
+    assert tokens.get_xlabel() == "Token Ratio (Scored / Blind)", tokens.get_xlabel()
+    plt.close(fig)
 
 
 def test_build_figure_raises_on_an_empty_table() -> None:

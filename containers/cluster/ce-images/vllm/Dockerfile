@@ -78,10 +78,19 @@ LABEL org.opencontainers.image.title="optarena-vllm" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
       org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
 
+# build.sh passes ROCM_ARCH from ../gpu_arch.env for the build job's partition; there is no default.
+# /opt/gpu-arch records it as a FILE, because the CE does not reliably keep image ENV.
+ARG ROCM_ARCH
+RUN set -eu; \
+    test -n "${ROCM_ARCH:-}" || { echo "ROCM_ARCH is unset: build with build.sh, which reads gpu_arch.env" >&2; exit 2; }; \
+    printf '%s\n' "${ROCM_ARCH}" > /opt/gpu-arch
+COPY containers/cluster/ce-images/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
 ENV VIRTUAL_ENV=/opt/pytorch211 \
     ROCM_PATH=/opt/rocm \
-    PYTORCH_ROCM_ARCH=gfx942 \
-    GPU_ARCHS=gfx942 \
+    HCC_AMDGPU_TARGET=${ROCM_ARCH} \
+    PYTORCH_ROCM_ARCH=${ROCM_ARCH} \
+    GPU_ARCHS=${ROCM_ARCH} \
+    GPU_ARCH_LIST=${ROCM_ARCH} \
     VLLM_TARGET_DEVICE=rocm \
     HSA_ENABLE_IPC_MODE_LEGACY=1 \
     SAFETENSORS_FAST_GPU=1 \
@@ -423,12 +432,14 @@ print("aiter op modules prebuilt:", sorted(_ops), flush=True)
 PY
 # The prebuild step above already fails the build if it produced no op module. What is left for
 # the shell is the AITER_ROOT_DIR pin: aiter's template ops default to $HOME/.aiter, so if the pin
-# does not hold, HOME grows a .aiter and the artefacts are outside the image.
+# does not hold, HOME grows a .aiter and the artefacts are outside the image. aiter takes its arch
+# from rocminfo, not GPU_ARCHS, so the prebuilt modules are gated on ROCM_ARCH as well.
 RUN set -eux; \
     find /opt/aiter-jit -name '*.so' | wc -l | xargs printf 'aiter prebuilt modules: %s\n'; \
     find /opt/aiter-root -mindepth 1 -maxdepth 2 | head -20; \
     test ! -e /tmp/aiter-home/.aiter; \
-    rm -rf /tmp/aiter-home
+    rm -rf /tmp/aiter-home; \
+    /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" /opt/aiter-jit
 
 # Tuned fused_moe Triton configs, keyed by (experts, N, device, dtype). Losing these once cost a
 # whole set of throughput numbers: without them kimi served on vLLM's default MoE config at ~90

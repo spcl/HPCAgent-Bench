@@ -9,11 +9,15 @@ failure has to be asserted rather than eyeballed.
 Reasoning is the same shape: an engine that drops reasoning_effort still answers, just without the
 thinking budget the arm was configured for, and nothing in a tok/s number shows it.
 
+--api-key-file names a file holding the endpoint's key, sent as ``Authorization: Bearer``; the key
+never appears in argv. Without it no Authorization header is sent.
+
 Exit code is 0 only when every requested check passed.
 """
 
 import argparse
 import json
+import pathlib
 import sys
 import urllib.error
 import urllib.request
@@ -32,17 +36,35 @@ WEATHER_TOOL = {
 }
 
 
-def post_chat(base: str, body: dict, timeout: int) -> dict:
+def read_api_key(path: str | None) -> str | None:
+    """The key in ``path`` with surrounding whitespace stripped; None when no file is named."""
+    if path is None:
+        return None
+    key = pathlib.Path(path).read_text(encoding="utf-8").strip()
+    if not key:
+        raise SystemExit(f"API key file {path} is empty")
+    return key
+
+
+def request_headers(api_key: str | None) -> dict[str, str]:
+    """JSON content type, plus the bearer token when a key is given."""
+    headers = {"Content-Type": "application/json"}
+    if api_key is not None:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def post_chat(base: str, body: dict, timeout: int, api_key: str | None = None) -> dict:
     req = urllib.request.Request(
         base.rstrip("/") + "/v1/chat/completions",
         data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"},
+        headers=request_headers(api_key),
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.load(resp)
 
 
-def check_tool_call(base: str, model: str, timeout: int) -> tuple[bool, str]:
+def check_tool_call(base: str, model: str, timeout: int, api_key: str | None = None) -> tuple[bool, str]:
     """A named tool must come back as a structured tool_calls entry, not as prose about it."""
     body = {
         "model": model,
@@ -53,7 +75,7 @@ def check_tool_call(base: str, model: str, timeout: int) -> tuple[bool, str]:
         "max_tokens": 512,
     }
     try:
-        data = post_chat(base, body, timeout)
+        data = post_chat(base, body, timeout, api_key)
     except (urllib.error.URLError, TimeoutError) as exc:
         return False, f"request failed: {exc}"
 
@@ -75,7 +97,7 @@ def check_tool_call(base: str, model: str, timeout: int) -> tuple[bool, str]:
     return True, f"tool_calls[0]={fn['name']}({args})"
 
 
-def check_reasoning(base: str, model: str, effort: str, timeout: int) -> tuple[bool, str]:
+def check_reasoning(base: str, model: str, effort: str, timeout: int, api_key: str | None = None) -> tuple[bool, str]:
     """Reasoning must surface as reasoning_content, and the requested effort must be accepted."""
     body = {
         "model": model,
@@ -91,7 +113,7 @@ def check_reasoning(base: str, model: str, effort: str, timeout: int) -> tuple[b
     if effort:
         body["reasoning_effort"] = effort
     try:
-        data = post_chat(base, body, timeout)
+        data = post_chat(base, body, timeout, api_key)
     except (urllib.error.URLError, TimeoutError) as exc:
         return False, f"request failed (effort={effort!r}): {exc}"
 
@@ -113,14 +135,16 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--skip-tools", action="store_true")
     ap.add_argument("--skip-reasoning", action="store_true")
+    ap.add_argument("--api-key-file", default=None, help="file holding the bearer key; default sends none")
     args = ap.parse_args()
+    api_key = read_api_key(args.api_key_file)
 
     results: list[tuple[str, bool, str]] = []
     if not args.skip_tools:
-        ok, detail = check_tool_call(args.base, args.model, args.timeout)
+        ok, detail = check_tool_call(args.base, args.model, args.timeout, api_key)
         results.append(("tool-call", ok, detail))
     if not args.skip_reasoning:
-        ok, detail = check_reasoning(args.base, args.model, args.reasoning_effort, args.timeout)
+        ok, detail = check_reasoning(args.base, args.model, args.reasoning_effort, args.timeout, api_key)
         results.append(("reasoning", ok, detail))
 
     for name, ok, detail in results:

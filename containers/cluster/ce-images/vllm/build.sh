@@ -27,6 +27,9 @@ BASE_IMAGE="${BASE_IMAGE:-${BASE_REPO}@${BASE_DIGEST}}"
 
 mkdir -p "$(dirname "${OUTPUT_SQSH}")"
 
+# ROCM_ARCH from gpu_arch.env for this job's partition; an unknown partition stops before any pull.
+ce_gpu_arch
+
 ce_podman_env
 
 cd "${REPO_ROOT}"
@@ -46,6 +49,7 @@ for kv in ${EXTRA_BUILD_ARGS:-}; do EXTRA_ARGS+=(--build-arg "${kv}"); done
 podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" "${GPU_ARGS[@]}" \
   --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
   --build-arg "BASE_IMAGE_REF=${BASE_IMAGE_REF:-${BASE_IMAGE}}" \
+  --build-arg "ROCM_ARCH=${ROCM_ARCH}" \
   ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
   -f "${SCRIPT_DIR}/Dockerfile" \
   -t "${IMAGE_TAG}" \

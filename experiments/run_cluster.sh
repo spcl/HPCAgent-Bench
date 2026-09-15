@@ -1153,6 +1153,17 @@ if [[ "${COLOCATE:-0}" != 1 || "${DRY_RUN:-0}" != 1 ]]; then
     stage_agent_launch "${ENV_FILE}" "${problems_file}"
 fi
 
+# Partition table, image stamp and rocminfo agree for every EDF a GPU step runs under: inference, and
+# the judge unless COLOCATE hands the GPUs to inference. Agent steps use no GPU. An image without
+# /opt/gpu-arch (built before the stamp) only WARNS, so campaigns on live images keep launching.
+check_gpu_arch() {
+    [[ "${CONTAINER_RUNTIME}" == ce && "${DRY_RUN:-0}" != 1 ]] || return 0
+    local checker="${HPCAGENT_BENCH_REPO}/containers/cluster/ce-images/gpu_arch_check.sh"
+    bash "${checker}" "${INFERENCE_CE_ENV}"
+    [[ "${COLOCATE:-0}" == 1 ]] || bash "${checker}" "${JUDGE_CE_ENV}"
+}
+check_gpu_arch
+
 role_srun "${INFERENCE_NODES}" "${INFERENCE_NODELIST}" "${INFERENCE_CE_ENV}" \
     "${INFERENCE_IMAGE}" --vllm-node
 step_pids+=("${ROLE_PID}")

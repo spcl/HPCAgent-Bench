@@ -969,13 +969,6 @@ TOKEN_POLL_SECONDS = 3.0
 #: last line and a transcript runs to megabytes, so re-reading the whole file to get it is waste.
 RESULT_TAIL_BYTES = 262144
 
-#: Every field of ``message.usage`` that is a token the run CONSUMED. Output alone never binds --
-#: a sweep-1 agent produced ~50-80k output tokens while consuming ~1-2M in total, because each turn
-#: re-sends the whole transcript -- so a budget expressed in output tokens would simply never trip.
-#: Cache reads are charged at a discount upstream but are still tokens moved, and counting them
-#: keeps the metric one the transcript states outright rather than one this driver models.
-USAGE_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
-
 
 def budget_seconds() -> float:
     """Wall-clock budget for one agent process, seconds. 0/unset/garbage = no budget."""
@@ -1100,22 +1093,29 @@ def budget_note(seconds: float, tokens: int, task_text: str = "") -> str:
     return " ".join(sentences)
 
 
+def token_cost_module() -> ModuleType:
+    """``token_cost.py`` from beside this file, imported on first use. Same reason ``harness_module``
+    is not a top-level import: tests load this file by path with nothing on ``sys.path``, and the
+    agent image runs it as a script from the checkout."""
+    here = str(pathlib.Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import token_cost
+
+    return token_cost
+
+
 def usage_total(usage: dict[str, object]) -> int | None:
     """One turn's TOTAL consumed tokens: input + both cache fields + output.
 
     A field that is absent or not a number counts 0, so a usage block from an older CLI (or one
     served without prompt caching) is read for what it does carry. ``None`` means no field parsed
     at all -- that is not a turn costing zero, it is a line the watcher should ignore entirely.
+
+    Delegates to ``token_cost.usage_total``, the one implementation (8.1, ``billed``), so the
+    budget watcher here and the task token total there cannot drift apart.
     """
-    total = 0
-    seen = False
-    for field in USAGE_FIELDS:
-        value = usage.get(field)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            continue
-        total += int(value)
-        seen = True
-    return total if seen else None
+    return token_cost_module().usage_total(usage)
 
 
 def accumulate_total_tokens(lines: list[str], total_by_message: dict[str, int]) -> int:
@@ -1124,30 +1124,17 @@ def accumulate_total_tokens(lines: list[str], total_by_message: dict[str, int]) 
     One assistant TURN arrives as several ``assistant`` events sharing one ``message.id``, one per
     content block, and every one of them repeats the whole turn's ``message.usage`` -- summing the
     events would multiply a turn's cost by its block count. Keeping the LAST usage seen per id is
-    what makes the total the turn count's worth of tokens. The metric is every field of that usage
-    (see ``USAGE_FIELDS``), not output alone: an agent's consumption is dominated by the transcript
-    it re-sends each turn, which is exactly what a per-agent budget is meant to bound. Partial or
-    non-JSON lines (the merged stderr, a half-written tail) are skipped: the watcher must never die
-    on the transcript it is reading.
+    what makes the total the turn count's worth of tokens. The metric is every field of that usage,
+    not output alone: an agent's consumption is dominated by the transcript it re-sends each turn,
+    which is exactly what a per-agent budget is meant to bound. Partial or non-JSON lines (the
+    merged stderr, a half-written tail) are skipped: the watcher must never die on the transcript
+    it is reading.
+
+    Delegates to ``token_cost.accumulate_total_tokens``, the one implementation, reused for the
+    task token total (T2) so a relaunched task's attempts are folded the same way this watcher
+    folds one.
     """
-    for line in lines:
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            event = as_block(json.loads(line))
-        except ValueError:
-            continue
-        if event.get("type") != "assistant":
-            continue
-        message = as_block(event.get("message"))
-        message_id = message.get("id")
-        if not isinstance(message_id, str):
-            continue
-        total = usage_total(as_block(message.get("usage")))
-        if total is not None:
-            total_by_message[message_id] = total
-    return sum(total_by_message.values())
+    return token_cost_module().accumulate_total_tokens(lines, total_by_message)
 
 
 def read_new_lines(path: pathlib.Path, offset: int) -> tuple[int, list[str]]:
@@ -1193,10 +1180,7 @@ def cost_breakdown(log: pathlib.Path) -> dict[str, float]:
     bookkeeping and must not turn a finished run into a failed one.
     """
     try:
-        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-        import token_cost
-
-        row = token_cost.episode_cost(log)
+        row = token_cost_module().episode_cost(log)
     except Exception:  # noqa: BLE001 -- see the docstring: bookkeeping never fails a run
         return {}
     return {
@@ -1204,6 +1188,21 @@ def cost_breakdown(log: pathlib.Path) -> dict[str, float]:
         for key in ("fresh_input", "cached_input", "output", "thinking", "generated", "effective", "wall_ms", "api_ms")
         if key in row
     }
+
+
+def task_token_totals(workdir: pathlib.Path) -> tuple[int, int | None, int | None]:
+    """``(attempts, tokens_effective, tokens_billed)`` over every attempt of this task (T2).
+
+    Delegates to ``token_cost.task_totals`` so the driver and the extractor cannot drift: one
+    implementation of the task token total, folded from every ``claude.attemptN.log`` this task's
+    crash relaunches left behind plus the surviving ``claude.log``. Never raises -- a cost record is
+    bookkeeping and must not turn a finished run into a failed one.
+    """
+    try:
+        totals = token_cost_module().task_totals(workdir)
+    except Exception:  # noqa: BLE001 -- see the docstring
+        return 0, None, None
+    return totals.attempts, totals.tokens_effective, totals.tokens_billed
 
 
 def write_cost_record(
@@ -1239,6 +1238,12 @@ def write_cost_record(
     # prompt 173 times; these separate what was re-sent from what was computed, and recover the
     # thinking these endpoints report as zero. See docs/token_accounting.md.
     record.update(cost_breakdown(transcript or path.parent / "claude.log"))
+    # The TASK total (T1-T2), over every attempt a crash relaunched -- `tokens` and the breakdown
+    # above cover only the surviving final attempt, missing whatever an earlier crash already spent.
+    attempts, tokens_effective, tokens_billed = task_token_totals(path.parent)
+    record["attempts"] = attempts
+    record["tokens_effective_all_attempts"] = tokens_effective
+    record["tokens_billed_all_attempts"] = tokens_billed
     try:
         path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
     except OSError:

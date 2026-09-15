@@ -360,8 +360,9 @@ def local_gpu_arch(rocm_root: pathlib.Path) -> str:
     DaCe's CMake detects this by compiling and RUNNING a probe with hipcc, and on a node whose
     visible devices are masked -- which is every rank here, since each takes one GPU -- that probe
     comes back empty and CMake fails outright with "HIP_ARCHITECTURES is empty". Asked instead of
-    hardcoded: ``amdgpu-arch`` is the ROCm tool that answers it, and the two environment variables
-    below are what a ROCm image already declares, so no gfx number is written down in this repo.
+    hardcoded: ``amdgpu-arch`` is the ROCm tool that answers it; next the image's build-time stamp
+    (:data:`hpcagent_bench.flags.IMAGE_GPU_ARCH`); last the two environment variables a ROCm image
+    declares, so no gfx number is written down in this repo.
     """
     probe = rocm_root / "llvm" / "bin" / "amdgpu-arch"
     if probe.is_file():
@@ -372,6 +373,9 @@ def local_gpu_arch(rocm_root: pathlib.Path) -> str:
         found = sorted({line.strip() for line in out.splitlines() if line.strip()})
         if found:
             return ",".join(found)
+    stamped = bench_flags.image_gpu_arch()
+    if stamped:
+        return stamped
     declared = os.environ.get("HCC_AMDGPU_TARGET") or os.environ.get("PYTORCH_ROCM_ARCH") or ""
     return ",".join(part for part in (p.strip() for p in declared.replace(";", ",").split(",")) if part)
 

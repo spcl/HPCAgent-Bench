@@ -38,6 +38,7 @@ def frame(rows):
         "source_path": "x",
         "suspect": 0,
         "packet": "",
+        "timing_reduction": "mwd-v2",
     }
     out = pd.DataFrame(rows)
     for column, value in defaults.items():
@@ -115,8 +116,8 @@ def efficacy_frames(campaigns: tuple[str, ...] = ("v11",)):
 
     The skilled arm is twice as fast for half the tokens on every kernel, so both ratios must come
     out at exactly 2 -- a fixture whose right answer is known by construction rather than read off
-    the implementation being tested. Tokens sit on ``call`` rows because that is the only record the
-    judge writes them on; a submission row carries none.
+    the implementation being tested. Tokens sit on ``task`` rows because that is the only record a
+    task's cost travels on; a submission row carries none.
     """
     best, calls, arms = [], [], []
     for campaign, model in [(campaign, model) for campaign in campaigns for model in ("m1", "m2")]:
@@ -146,13 +147,14 @@ def efficacy_frames(campaigns: tuple[str, ...] = ("v11",)):
                     )
                     calls.append(
                         {
-                            "record": "call",
+                            "record": "task",
                             "run_root": "1",
                             "job": "1",
                             "run_id": f"{arm}.n0.p{i}.w{i}",
                             "arm": arm,
                             "benchmark": f"k{i}",
                             "tokens": 500.0 if skills else 1000.0,
+                            "ts_ms": 1,
                         }
                     )
     served = {(row["arm"], "c"): frozenset(f"k{i}" for i in range(4)) for row in arms}
@@ -221,33 +223,31 @@ def test_a_language_side_is_one_arm_not_the_best_of_that_languages_arms(analyze:
     assert row.paired_n == 8, "each kernel enters the paired test once"
 
 
-def call_rows(rows):
+def task_rows(rows):
     out = pd.DataFrame(rows)
-    for column, value in (("record", "call"), ("run_root", "1"), ("job", "1"), ("benchmark", "k")):
+    for column, value in (("record", "task"), ("run_root", "1"), ("job", "1"), ("benchmark", "k"), ("ts_ms", 1)):
         if column not in out:
             out[column] = value
     return out
 
 
-def test_an_episode_token_total_is_its_maximum_and_a_kernels_is_the_sum_of_its_episodes(analyze) -> None:
-    """``calls.tokens`` is CUMULATIVE through a call, so summing the rows counts every earlier call
-    again once per later one and inflates a long repair loop quadratically. Two agents on one kernel
-    each spend their own budget, so those add."""
-    rows = call_rows(
+def test_an_arms_kernel_cost_is_its_latest_tasks_total_and_arms_stay_apart(analyze) -> None:
+    """A task's cost is its task record; a kernel an arm reran costs only the latest task, never the
+    sum over reruns; and two arms on one kernel are two costs."""
+    rows = task_rows(
         [
-            {"arm": "a", "run_id": "w0", "tokens": 100.0},
-            {"arm": "a", "run_id": "w0", "tokens": 250.0},
-            {"arm": "a", "run_id": "w1", "tokens": 400.0},
-            {"arm": "b", "run_id": "w0", "tokens": 100.0},
+            {"arm": "a", "run_id": "w0", "job": "1", "run_root": "1", "tokens": 250.0, "ts_ms": 10},
+            {"arm": "a", "run_id": "w0", "job": "2", "run_root": "2", "tokens": 400.0, "ts_ms": 20},
+            {"arm": "b", "run_id": "w0", "job": "1", "run_root": "1", "tokens": 100.0, "ts_ms": 1},
         ]
     )
     totals = analyze.tokens_per_arm_kernel(rows).set_index("arm").tokens
-    assert totals["a"] == pytest.approx(650.0)
+    assert totals["a"] == pytest.approx(400.0)
     assert totals["b"] == pytest.approx(100.0)
 
 
 def test_a_submission_row_is_not_a_source_of_token_cost(analyze) -> None:
-    """Only ``call`` rows carry tokens. Reading the cost off submissions yields an empty table and
+    """Only ``task`` rows carry a task's cost. Reading it off submissions yields an empty table and
     no efficacy at all, which is how the documented intervention CSV was never produced."""
-    rows = call_rows([{"arm": "a", "run_id": "w0", "tokens": 100.0, "record": "submission"}])
+    rows = task_rows([{"arm": "a", "run_id": "w0", "tokens": 100.0, "record": "submission"}])
     assert analyze.tokens_per_arm_kernel(rows).empty

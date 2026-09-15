@@ -13,6 +13,11 @@ from a sick one. Then:
   about one model, that is the only other file you need.
 - [`knobs.md`](knobs.md) -- what is genuinely cross-model: the APU memory model, the KV pool
   threshold, the aiter derate, HiCache, the multi-node fabric and the Slurm shape.
+- [`private-endpoint.md`](private-endpoint.md) -- a Qwen3.8 server only you can use, behind an API
+  key: from your laptop through an ssh tunnel, or from your own Daint jobs. `mi300` (FP8, the campaign
+  configuration) and `mi200` (BF16).
+- [`extending-private-inference.md`](extending-private-inference.md) -- for contributors: the security
+  contract the private launcher keeps, and how to add a preset, an access path or an engine.
 
 A serving number ages as the engine, the ROCm build and the image move. Re-measure before you build
 a decision on a number you cannot reproduce today.
@@ -188,6 +193,10 @@ scontrol show hostnames "$(squeue -j <jobid> -h -o '%N')" | head -1
 
 There is **no API key**. Any OpenAI-compatible client works against `http://<node>:8000/v1`; pass a
 dummy key if your client insists on one.
+
+That makes this endpoint reachable by every Alps user, on any cluster: they share the network. For a
+server only you can use, from your laptop or from your own Daint jobs, follow
+[`private-endpoint.md`](private-endpoint.md) instead.
 
 ```bash
 BASE=http://nid002968:8000

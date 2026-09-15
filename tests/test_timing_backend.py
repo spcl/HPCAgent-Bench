@@ -171,3 +171,21 @@ def test_a_suspect_threshold_below_the_old_grid_ceiling_is_accepted_under_every_
             config.overridden("record.speedup_suspect_above", 1000.0),
         ):
             assert scoring.suspect_threshold() == 1000.0
+
+
+# mwd-v2 numbers-already-produced regression lock: a fixed sample set must keep reducing to the
+# SAME credit, so nothing in a routing/plumbing change (e.g. threading samples from a new caller
+# such as the MPI path) can silently perturb the arithmetic every already-graded mwd-v2 row rests on.
+_LOCKED_CANDIDATE: tuple[float, ...] = (9.8, 10.1, 9.9, 10.2, 10.0, 9.7, 10.3, 9.95, 10.05, 10.0)
+_LOCKED_BASELINE: tuple[float, ...] = (19.6, 20.2, 19.8, 20.4, 20.0, 19.4, 20.6, 19.9, 20.1, 20.0)
+
+
+def test_mannwhitney_delta_locks_its_credit_on_a_fixed_sample_set() -> None:
+    """Golden values pinned once: a regrade of a row timed under THIS exact sample pair before this
+    change must still land on the same speedup, medians and significance after it."""
+    r = timing.reduce_mannwhitney_delta(list(_LOCKED_CANDIDATE), list(_LOCKED_BASELINE), p=0.1)
+    assert r.significant is True
+    assert r.native_ns == statistics.median(_LOCKED_CANDIDATE) == 10.0
+    assert r.baseline_ns == statistics.median(_LOCKED_BASELINE) == 20.0
+    assert r.speedup == pytest.approx(2.0, rel=1e-12)
+    assert r.reduction == "mwd-v2"

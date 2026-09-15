@@ -196,10 +196,10 @@ class Interval:
 class PairedChange:
     """The paired per-kernel change: one estimate, one interval and one p value that agree.
 
-    The Hodges-Lehmann estimator is the location the signed-rank test inverts, so the point, the
-    interval and the p value all describe the same quantity. A bootstrap mean beside a rank test
-    does not: the two can disagree about which arm is ahead, and a reader cannot tell which to
-    believe.
+    Each producer keeps the three on one quantity: :func:`paired_change` the Hodges-Lehmann location
+    its signed-rank test inverts, :func:`paired_geomean` the mean log its t test is on. A bootstrap
+    mean beside a rank test does not: the two can disagree about which arm is ahead, and a reader
+    cannot tell which to believe.
     """
 
     estimate: float
@@ -479,3 +479,37 @@ def paired_change(differences: Samples, alpha: float = DEFAULT_ALPHA) -> PairedC
     cutoff = min(max(math.floor(mean - z * sd), 0), walsh.size // 2 - 1)
     low, high = float(walsh[cutoff]), float(walsh[walsh.size - 1 - cutoff])
     return PairedChange(point, low, high, pvalue, n, wins, losses, ties, method)
+
+
+def paired_geomean(log_ratios: Samples, alpha: float = DEFAULT_ALPHA) -> PairedChange:
+    """The GEOMETRIC MEAN of paired per-kernel ratios, given as their logs: the mean log, its Student-t
+    interval and the paired t-test p, all three on that one mean.
+
+    ``exp(estimate)`` is the geomean ratio, the statistic an overall ratio is reported as everywhere
+    in this repo, so an arm comparison reads "a is X times b on the geomean over the shared kernels".
+    The interval and the test are on the same mean, so the interval excludes 0 exactly when
+    ``p < alpha``. A zero log (no change on a kernel) stays in: dropping the kernels that did not
+    change would overstate the change of the rest.
+
+    Below :data:`MIN_PAIRS_FOR_INTERVAL` the interval and p are withheld (``underpowered``); a set with
+    no spread has no t statistic and reads ``degenerate`` with no p, so neither enters a correction.
+    """
+    x: FloatArray = np.asarray(log_ratios, dtype=np.float64)
+    x = x[np.isfinite(x)]
+    wins, losses = int(np.count_nonzero(x > 0.0)), int(np.count_nonzero(x < 0.0))
+    ties = int(np.count_nonzero(x == 0.0))
+    n = int(x.size)
+    if n == 0:
+        return PairedChange(0.0, math.nan, math.nan, math.nan, 0, wins, losses, ties, "degenerate")
+    point = math.fsum(x.tolist()) / n
+    if n < MIN_PAIRS_FOR_INTERVAL:
+        return PairedChange(point, math.nan, math.nan, math.nan, n, wins, losses, ties, "underpowered")
+    spread = float(np.std(x, ddof=1))
+    if spread == 0.0:
+        return PairedChange(point, point, point, math.nan, n, wins, losses, ties, "degenerate")
+    from scipy.stats import t  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
+
+    error = spread / math.sqrt(n)
+    pvalue = float(2.0 * t.sf(abs(point / error), n - 1))
+    half = float(t.ppf(1.0 - alpha / 2.0, n - 1)) * error
+    return PairedChange(point, point - half, point + half, pvalue, n, wins, losses, ties, "paired-t")

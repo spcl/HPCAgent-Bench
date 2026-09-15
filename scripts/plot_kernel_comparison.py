@@ -19,6 +19,7 @@ import sys
 from typing import TYPE_CHECKING
 
 from hpcagent_bench.experiments import read_observations, read_table
+from hpcagent_bench.stats import population
 from hpcagent_bench.stats.figures import kernel_comparison
 
 if TYPE_CHECKING:
@@ -49,6 +50,7 @@ def run(
     out: pathlib.Path,
     table: pathlib.Path,
     condition_order: tuple[str, ...] = kernel_comparison.CONDITION_ORDER,
+    repeats: population.RepeatPolicy = "latest",
 ) -> int:
     observations = read_observations(observations_path)
     canon_frame = read_table(canon_db, "canon") if canon_db is not None else None
@@ -68,6 +70,7 @@ def run(
         canon_baseline,
         include_incomplete,
         condition_order,
+        repeats,
     )
     for arm in sorted(dropped):
         print(f"dropped {arm}: {dropped[arm]}/{len(roster)} roster kernels", file=sys.stderr)
@@ -116,6 +119,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--label", default="", help="figure title; defaults to a fixed llr-focus40 title")
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/kernel_comparison.pdf"))
     ap.add_argument("--table", type=pathlib.Path, default=pathlib.Path("tables/kernel_comparison.csv"))
+    ap.add_argument(
+        "--repeats",
+        choices=population.REPEAT_POLICIES,
+        default="latest",
+        help="a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
+    )
     args = ap.parse_args(argv)
     return run(
         args.observations,
@@ -130,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         args.out,
         args.table,
         tuple(args.condition_order.split(",")),
+        args.repeats,
     )
 
 

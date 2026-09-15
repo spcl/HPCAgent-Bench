@@ -185,6 +185,44 @@ def test_the_estimator_does_not_change_with_n() -> None:
     assert summary.paired_change(few).estimate != pytest.approx(float(np.median(few)))
 
 
+def test_paired_geomean_is_the_geometric_mean_of_the_paired_ratios() -> None:
+    """An arm comparison is reported as the geomean of its per-kernel ratios, so one kernel at 40x
+    moves the estimate exactly as it moves that geomean."""
+    ratios = [1.05, 1.1, 0.95, 1.2, 0.9, 1.15, 1.02, 40.0]
+    change = summary.paired_geomean([math.log(ratio) for ratio in ratios])
+    assert math.exp(change.estimate) == pytest.approx(summary.geomean(ratios))
+
+
+@pytest.mark.parametrize("shift", [0.0, 0.1, 0.2, 0.35, 0.6])
+def test_paired_geomean_interval_excludes_no_change_exactly_when_its_test_rejects(shift: float) -> None:
+    """The interval and the p value are on the same mean log, so a reader cannot get a starred point
+    whose interval crosses 1x, or an interval clear of 1x without a star."""
+    change = summary.paired_geomean(np.random.default_rng(11).normal(shift, 0.5, 25))
+    clear_of_zero = change.low > 0.0 or change.high < 0.0
+    assert clear_of_zero == (change.pvalue < summary.DEFAULT_ALPHA), (change.low, change.high, change.pvalue)
+
+
+def test_paired_geomean_keeps_the_kernels_that_did_not_change() -> None:
+    """Dropping the zero logs would report the change of the kernels that moved as the arm's change."""
+    change = summary.paired_geomean([0.0, 0.0, 0.0, 0.0, 1.0, 1.0])
+    assert (change.n, change.ties) == (6, 4)
+    assert change.estimate == pytest.approx(1.0 / 3.0)
+
+
+def test_paired_geomean_withholds_interval_and_p_below_the_floor() -> None:
+    change = summary.paired_geomean([0.1] * (summary.MIN_PAIRS_FOR_INTERVAL - 2) + [0.3])
+    assert change.method == "underpowered"
+    assert math.isnan(change.low) and math.isnan(change.pvalue)
+
+
+def test_paired_geomean_without_spread_reports_no_test() -> None:
+    """Every kernel changing by exactly the same ratio has no t statistic; a p of 0 or 1 there would
+    enter a correction as a test that never ran."""
+    change = summary.paired_geomean([0.2] * 8)
+    assert change.method == "degenerate"
+    assert change.estimate == pytest.approx(0.2) and math.isnan(change.pvalue)
+
+
 def test_a_timing_comparison_and_a_paired_change_report_one_signed_rank_p() -> None:
     """Two call sites into scipy chose exact-or-approximate independently and disagreed on tied data;
     both now read the one test, so the same differences give the same p wherever they are tested."""

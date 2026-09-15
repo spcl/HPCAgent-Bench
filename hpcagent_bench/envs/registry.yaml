@@ -233,6 +233,13 @@ packets:
       - cpfsrc
       - perf-playbook-nvidia
       - lang
+  # git-scicomp's OTHER condition, beside `repo` above: the agent gets the kernel alone, no
+  # surrounding repository. Not a treatment an arm stages -- it names no skills or env -- but the
+  # display-name lookup `hpcagent_bench.stats.figures.kernel_comparison.condition_label` reads off
+  # this same table for `repo`, and a condition it does not find here fell through to the bare
+  # arm-name token ("kernel") instead of a proper name.
+  kernel:
+    name: Bare Kernel
 
 # Where the kernel was TIMED. `cpu` is the default a launcher stamps when it says nothing.
 devices:

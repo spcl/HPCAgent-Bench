@@ -65,6 +65,19 @@ LABEL org.opencontainers.image.title="optarena-sglang" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
       org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
 
+# The GPU arch every AOT device build below targets. build.sh passes it from ../gpu_arch.env for the
+# build job's partition; there is no default. /opt/gpu-arch records it as a FILE, because the CE does
+# not reliably keep image ENV. The ENV overrides the base's GPU_ARCH_LIST and PYTORCH_ROCM_ARCH.
+ARG ROCM_ARCH
+RUN set -eu; \
+    test -n "${ROCM_ARCH:-}" || { echo "ROCM_ARCH is unset: build with build.sh, which reads gpu_arch.env" >&2; exit 2; }; \
+    printf '%s\n' "${ROCM_ARCH}" > /opt/gpu-arch
+ENV HCC_AMDGPU_TARGET=${ROCM_ARCH} \
+    PYTORCH_ROCM_ARCH=${ROCM_ARCH} \
+    GPU_ARCHS=${ROCM_ARCH} \
+    GPU_ARCH_LIST=${ROCM_ARCH}
+COPY containers/cluster/ce-images/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
+
 # flydsl, PINNED and INSIDE the image.
 #
 # The base already carries 0.3.1; what the arms actually load is 0.3.2, installed by
@@ -99,7 +112,6 @@ RUN set -eux; \
 # numpy is CONSTRAINED to what is installed and the build fails if it moved: the sdist would
 # otherwise pull its own, and numpy is what served results are compared against.
 ARG CUPY_VERSION=14.2.0
-ARG ROCM_ARCH=gfx942
 RUN set -eux; \
     numpy_before="$(/opt/venv/bin/python3 -c 'import numpy; print(numpy.__version__)')"; \
     printf 'numpy==%s\n' "${numpy_before}" > /tmp/constraint.txt; \
@@ -110,6 +122,11 @@ RUN set -eux; \
     test "$(/opt/venv/bin/python3 -c 'import numpy; print(numpy.__version__)')" = "${numpy_before}" \
       || { echo "cupy moved numpy off ${numpy_before}" >&2; exit 2; }; \
     /opt/venv/bin/python3 -c "import cupy; print('cupy', cupy.__version__)"
+
+# Gate: cupy's device code targets ROCM_ARCH and nothing else (a build that autodetected another GPU).
+RUN set -eux; \
+    d="$(/opt/venv/bin/python3 -P -c 'import importlib.util as u; print(u.find_spec("cupy").submodule_search_locations[0])')"; \
+    /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" "${d}"
 
 # Gate: both must resolve INSIDE the image. This is what lets the PYTHONPATH be deleted from the
 # campaign .env files rather than quietly remaining load-bearing.
@@ -189,8 +206,7 @@ RUN set -eux; \
 # behaviour rather than failing. run_cluster.sh reads it as ${AITER_JIT_DIR:-...}, so this value
 # wins over its scratch default without a launcher change.
 ENV AITER_JIT_DIR=/opt/aiter-jit \
-    AITER_ROOT_DIR=/opt/aiter-root \
-    GPU_ARCHS=gfx942
+    AITER_ROOT_DIR=/opt/aiter-root
 RUN mkdir -p /opt/aiter-jit /opt/aiter-root /tmp/aiter-home
 RUN HOME=/tmp/aiter-home /opt/venv/bin/python3 <<'PY'
 import aiter
@@ -335,12 +351,14 @@ print("aiter op modules prebuilt:", sorted(_ops), flush=True)
 PY
 # The prebuild step above already fails the build if it produced no op module. What is left for
 # the shell is the AITER_ROOT_DIR pin: aiter's template ops default to $HOME/.aiter, so if the pin
-# does not hold, HOME grows a .aiter and the artefacts are outside the image.
+# does not hold, HOME grows a .aiter and the artefacts are outside the image. aiter takes its arch
+# from rocminfo, not GPU_ARCHS, so the prebuilt modules are gated on ROCM_ARCH as well.
 RUN set -eux; \
     find /opt/aiter-jit -name '*.so' | wc -l | xargs printf 'aiter prebuilt modules: %s\n'; \
     find /opt/aiter-root -mindepth 1 -maxdepth 2 | head -20; \
     test ! -e /tmp/aiter-home/.aiter; \
-    rm -rf /tmp/aiter-home
+    rm -rf /tmp/aiter-home; \
+    /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" /opt/aiter-jit
 
 # GLM-5.3 and every other GlmMoeDsa/DeepSeek fp8 checkpoint, fixed IN THE PACKAGE.
 #

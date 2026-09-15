@@ -18,12 +18,12 @@ top-right corner -- where a reader's eye goes -- would be the worst outcome rath
 With this orientation the quadrants read directly: up-and-right is better in both, down-and-right
 is faster but it costs.
 
-Both are ratios, so both are aggregated in LOG space, by the Hodges-Lehmann estimator with a
-distribution-free interval from the Wilcoxon signed-rank test. The sampling unit is the KERNEL and
-the two sides are paired on it.
+Both are ratios, so both are aggregated in LOG space as a GEOMETRIC MEAN over kernels, with the
+t interval and paired t test on that mean log. The sampling unit is the KERNEL and the two sides are
+paired on it; a kernel an arm ran more than once is reduced by ``--repeats`` first.
 
 THE MARKS ARE CORRECTED. One figure is not one test: three models x two languages x two axes is
-twelve signed-rank tests, and twelve uncorrected 5% thresholds paint at least one star on 46% of
+twelve paired tests, and twelve uncorrected 5% thresholds paint at least one star on 46% of
 figures where nothing happened. The family is therefore declared once (:func:`points` tests every
 (model, language) on both axes), the p values are Benjamini-Hochberg adjusted across it, and the
 star is gated on the ADJUSTED value -- an uncorrected star and a corrected star look identical to a
@@ -94,13 +94,12 @@ def tick_label(value: float) -> str:
 
 
 def ratio_with_ci(before: pd.Series, after: pd.Series, invert: bool) -> tuple[float, float, float, float]:
-    """Hodges-Lehmann ratio over the kernels BOTH sides cover, with a distribution-free CI and p.
+    """Geomean ratio over the kernels BOTH sides cover, with its t interval and paired t-test p.
 
-    RANK-BASED, not a bootstrap of the mean, and the reason is the shape of this data: a per-kernel
-    speed-up ratio is heavy-tailed (one kernel at 40x against a median near 2x), and a mean in log
-    space still lets that kernel carry the estimate. The estimator, its interval and its p value
-    come from :func:`hpcagent_bench.stats.summary.paired_change`, so all three describe one
-    quantity -- which a bootstrap mean beside a separate test does not.
+    The GEOMETRIC MEAN of the per-kernel ratios, the statistic every overall ratio in this repo is
+    reported as. The estimator, its interval and its p value come from
+    :func:`hpcagent_bench.stats.summary.paired_geomean`, so all three describe the one mean log --
+    which a bootstrap mean beside a separate rank test does not.
 
     PAIRED, by kernel: both sides ran the same 40 kernels, and the pairing is most of the
     precision here. Mann-Whitney is the unpaired sibling and would throw that away -- with n=40
@@ -119,7 +118,7 @@ def ratio_with_ci(before: pd.Series, after: pd.Series, invert: bool) -> tuple[fl
     b, a = b[keep], a[keep]
     if b.size == 0:
         return (float("nan"),) * 4
-    change = summary.paired_change(np.log(b / a) if invert else np.log(a / b))
+    change = summary.paired_geomean(np.log(b / a) if invert else np.log(a / b))
     return (
         float(np.exp(change.estimate)),
         float(np.exp(change.low)),
@@ -128,7 +127,7 @@ def ratio_with_ci(before: pd.Series, after: pd.Series, invert: bool) -> tuple[fl
     )
 
 
-def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
+def points(before: pd.DataFrame, after: pd.DataFrame, repeats: population.RepeatPolicy = "latest") -> pd.DataFrame:
     """One row per (model, language) present in both experiments, with the flags corrected.
 
     THE FAMILY IS THIS TABLE: every (model, language) the two sides share, on both axes. It is
@@ -157,9 +156,14 @@ def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
         graded = pd.concat([b, a])
         graded = graded[graded.record == "submission"]
         population.one_denominator(graded.baseline.tolist(), label=f"{model}/{language}")
-        before_score, after_score = population.kernel_answers(b).speedup, population.kernel_answers(a).speedup
+        before_score = population.kernel_answers(b, repeats=repeats).speedup
+        after_score = population.kernel_answers(a, repeats=repeats).speedup
         score, s_low, s_high, s_p = ratio_with_ci(before_score, after_score, False)
-        cost, c_low, c_high, c_p = ratio_with_ci(population.kernel_tokens(b), population.kernel_tokens(a), True)
+        before_cost, after_cost = (
+            population.kernel_tokens(b, repeats=repeats),
+            population.kernel_tokens(a, repeats=repeats),
+        )
+        cost, c_low, c_high, c_p = ratio_with_ci(before_cost, after_cost, True)
         rows.append(
             {
                 "model": model,
@@ -209,8 +213,14 @@ def draw_interval(ax: plt.Axes, row: pd.Series, colour: str) -> None:
         ax.vlines(x, y_low, y_high, color=colour, linewidth=1.1, alpha=0.55, zorder=1)
 
 
-def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame, compact: bool = False) -> list:
+def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame, treatment: str, compact: bool = False) -> list:
     """Geomean speed-up against median spend, with each arm's TWO CONDITIONS joined.
+
+    ``treatment`` names the packet on the filled side: the hollow mark's legend text is
+    :func:`hpcagent_bench.packets.control_label` for it ("No Skill Packet" only when ``treatment``
+    is itself a skill packet, "No Packet" otherwise) and the filled mark's is its own registry
+    display name (:func:`hpcagent_bench.experiment_tags.packet_name`) -- never a generic "Skills"
+    that misnames a CPF or perf-playbook panel as if it were a skill.
 
     ABSOLUTE, not a ratio, and that is what makes the connector mean something: a ratio plot has
     one point per arm and nothing to join, so a line drawn on it could only connect two arms --
@@ -236,11 +246,18 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame, compact: bool = 
         (row.model, row.language): efficacy.SIGNIFICANT in (row.score_verdict, row.cost_verdict)
         for row in stats.itertuples(index=False)
     }
+    # Only a model that actually lands BOTH marks earns a legend entry: ``hues``/``shapes`` are
+    # keyed off every model the control side ran, and a model this treatment never touched (the
+    # CPF page figure's control carries Kimi from the campaign's OTHER treatments) fell through the
+    # `continue` below with a colour already reserved in ``hues`` -- so the legend named a model the
+    # panel never draws a point for.
+    drawn_models: set[str] = set()
     for (model, language), pair in frame.groupby(["model", "language"]):
         colour, shape = hues[model], shapes[model]
         off, on = pair[~pair.skills], pair[pair.skills]
         if len(off) != 1 or len(on) != 1:
             continue
+        drawn_models.add(model)
         # An ELBOW, not a diagonal. The straight segment between two measured points runs through
         # coordinates that were never measured, and on a plot whose whole subject is where an arm
         # LANDED a reader takes the path for data -- as if the packet moved the arm along it. The
@@ -338,6 +355,7 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame, compact: bool = 
             [], [], marker=shapes[n], linestyle="none", color=h, markersize=9, label=experiment_tags.model_name(n)
         )
         for n, h in hues.items()
+        if n in drawn_models
     ]
     handles += [
         plt.Line2D(
@@ -348,9 +366,17 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame, compact: bool = 
             markerfacecolor="none",
             markeredgecolor=plotstyle.MUTED,
             markersize=9,
-            label="No Skills",
+            label=packets.control_label([treatment]),
         ),
-        plt.Line2D([], [], marker="o", linestyle="none", color=plotstyle.MUTED, markersize=9, label="Skills"),
+        plt.Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="none",
+            color=plotstyle.MUTED,
+            markersize=9,
+            label=experiment_tags.packet_name(treatment),
+        ),
         plt.Line2D(
             [],
             [],
@@ -404,17 +430,17 @@ def write(fig, out: pathlib.Path) -> pathlib.Path:
     return out
 
 
-def absolute_points(frame: pd.DataFrame) -> pd.DataFrame:
+def absolute_points(frame: pd.DataFrame, repeats: population.RepeatPolicy = "latest") -> pd.DataFrame:
     """One row per (model, language, condition): geomean log2 speed-up and median tokens per task.
 
-    The same one-value-per-kernel reduction the paired table uses (:func:`population.kernel_medians`),
-    so the two panels of this figure describe one population. The speed-up is the GEOMEAN over
-    kernels of the best final answer (a ratio's overall value, never a median); the cost is the
-    MEDIAN over kernels of the episode total (tokens are not a ratio).
+    The same one-value-per-kernel reduction the paired table uses (:func:`population.kernel_medians`
+    under ``repeats``), so the two panels of this figure describe one population. The speed-up is the
+    GEOMEAN over kernels of the final answer (a ratio's overall value, never a median); the cost is
+    the MEDIAN over kernels of the task total (tokens are not a ratio).
     """
     rows = []
     for (model, language, skills), part in frame.groupby(["model", "language", "skills"]):
-        point = population.kernel_medians(part)
+        point = population.kernel_medians(part, repeats=repeats)
         if point is not None:
             rows.append({"model": model, "language": language, "skills": bool(skills), **point})
     table = pd.DataFrame(rows)
@@ -425,9 +451,11 @@ def absolute_points(frame: pd.DataFrame) -> pd.DataFrame:
     return rules.require_interval(table, "tokens", "tokens_low", "tokens_high")
 
 
-def figure_absolute(frame: pd.DataFrame, stats: pd.DataFrame, label: str, out: pathlib.Path) -> pathlib.Path:
+def figure_absolute(
+    frame: pd.DataFrame, stats: pd.DataFrame, treatment: str, label: str, out: pathlib.Path
+) -> pathlib.Path:
     fig, ax = plt.subplots(figsize=PANEL_SIZE)
-    handles = draw_absolute(ax, frame, stats)
+    handles = draw_absolute(ax, frame, stats, treatment)
     fig.subplots_adjust(**PANEL_MARGINS)
     # Two per row, and the keys kept SHORT. The canvas is fixed, so anything wider than it falls
     # off the edge rather than widening the figure -- and the model names alone ("Kimi-K2.7-Code")
@@ -476,7 +504,7 @@ def build_treatments_figure(
     fig, axes = plt.subplots(1, n, figsize=(side * n + SQUARE_PANEL_GAP * (n - 1), side), squeeze=False)
     handles_by_label: dict[str, object] = {}
     for ax, (treatment, stats, absolute) in zip(axes[0], panels, strict=True):
-        for handle in draw_absolute(ax, absolute, stats, compact=True):
+        for handle in draw_absolute(ax, absolute, stats, treatment, compact=True):
             handles_by_label.setdefault(handle.get_label(), handle)
         # An IN-AXES label, not ax.set_title(): a real title draws ABOVE the axes bounding box, in
         # the same band subplots_adjust(top=...) reserves for the figure's own suptitle -- on a
@@ -583,6 +611,7 @@ def one_treatment_panel(
     treatment: str,
     roster: Sequence[str],
     include_incomplete: bool = False,
+    repeats: population.RepeatPolicy = "latest",
 ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
     """``(stats, absolute)`` for ONE treatment against ``control``; ``None`` when either side is
     empty (before or after the roster-completeness gate) or the two share no (model, language)."""
@@ -598,11 +627,11 @@ def one_treatment_panel(
     treated = treated[treated["arm"].astype(str).isin(keep)]
     if control.empty or treated.empty:
         return None
-    stats = points(control, treated)
+    stats = points(control, treated, repeats)
     if stats.empty:
         return None
     absolute_source = treatment_frame(frame_all, treatment)
-    absolute = absolute_points(absolute_source[absolute_source["arm"].astype(str).isin(keep)])
+    absolute = absolute_points(absolute_source[absolute_source["arm"].astype(str).isin(keep)], repeats)
     return stats, absolute
 
 
@@ -634,6 +663,12 @@ def main() -> None:
     parser.add_argument("--label", default="", help="figure title; defaults to the campaign's display name")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/score_change.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/score_change.csv"))
+    parser.add_argument(
+        "--repeats",
+        choices=population.REPEAT_POLICIES,
+        default="latest",
+        help="a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
+    )
     args = parser.parse_args()
 
     treatments = args.treatment or ["skills"]
@@ -648,7 +683,7 @@ def main() -> None:
     args.table.parent.mkdir(parents=True, exist_ok=True)
     panels: list[tuple[str, pd.DataFrame, pd.DataFrame]] = []
     for treatment in treatments:
-        built = one_treatment_panel(frame_all, control, treatment, roster, args.include_incomplete)
+        built = one_treatment_panel(frame_all, control, treatment, roster, args.include_incomplete, args.repeats)
         if built is None:
             print(f"skipping {treatment!r}: empty side, or no (model, language) shared with control")
             continue
@@ -664,8 +699,8 @@ def main() -> None:
 
     label = args.label or experiment_tags.display_name(args.experiment)
     if len(panels) == 1:
-        _, stats, absolute = panels[0]
-        written = figure_absolute(absolute, stats, label, args.out)
+        treatment, stats, absolute = panels[0]
+        written = figure_absolute(absolute, stats, treatment, label, args.out)
     else:
         written = figure_treatments(panels, label, args.out, double_column=args.double_column)
 
