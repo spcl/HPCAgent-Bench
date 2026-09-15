@@ -838,3 +838,157 @@ def test_the_interval_note_names_the_method_the_kernel_count_selects() -> None:
     assert "log-t" in plot.interval_note(wide)
     assert "bootstrap" in plot.interval_note(narrow)
     assert f"n={summary.LOG_T_MIN_SAMPLES}" in plot.interval_note(wide)
+
+
+# ---------------------------------------------------------------------------
+# The EXPLICIT-PAIR entry point: a comparison whose two sides are two campaigns, or whose condition
+# is not a packet suffix at all, drawn as the same two square panels.
+
+BLIND_PAIR: tuple[str, str] = ("llrblind-qwen38-c-skills", "cpf-llr-focus40-qwen38-c-skills")
+SCICOMP_PAIR: tuple[str, str] = ("git-scicomp-qwen38-c-repo", "git-scicomp-qwen38-c-kernel")
+
+
+def family_csv(pairs: list[tuple[str, str]], score_verdict: str, cost_verdict: str, n: int = 40) -> pd.DataFrame:
+    """A family table in the shape ``experiments/paired_arms.py`` writes, one row per pair per leg."""
+    return pd.DataFrame(
+        [
+            {
+                "family": "demo",
+                "arm_a": treated,
+                "arm_b": control,
+                "leg": leg,
+                "n_pairs": n,
+                "n_tested": n,
+                "estimate_a_over_b": 0.8,
+                "ci_low": 0.7,
+                "ci_high": 0.9,
+                "p_adjusted": 0.01,
+                "verdict": score_verdict if leg == plot.SPEEDUP_LEG else cost_verdict,
+            }
+            for treated, control in pairs
+            for leg in (plot.SPEEDUP_LEG, plot.TOKENS_LEG)
+        ]
+    )
+
+
+def test_a_pairs_leg_names_the_language_and_every_packet_both_arms_carried() -> None:
+    """llrblind runs C and C with the skill pages against their own scored arms, so a leg label of
+    the language alone would draw two different arms as one. The INTERVENTION is never named: the
+    title and the legend already say which side is which, and repeating it on every label states
+    once more what the figure states once."""
+    assert plot.pair_leg_label(BLIND_PAIR, "no-score") == "C +skills"
+    plain = ("llrblind-qwen38-fortran", "cpf-llr-focus40-qwen38-fortran")
+    assert plot.pair_leg_label(plain, "no-score") == "Fortran"
+
+
+def test_a_pairs_leg_never_names_the_intervention_the_two_sides_differ_in() -> None:
+    """git-scicomp's two arms differ in `repo` against `kernel`; naming either on the label would
+    say on every row what the figure's own title says once."""
+    label = plot.pair_leg_label(SCICOMP_PAIR, "repo")
+    assert label == "C"
+    assert "repo" not in label and "kernel" not in label
+
+
+def test_the_stars_come_off_the_family_csv_and_are_never_recomputed_here() -> None:
+    """``experiments/paired_arms.py`` already ran the paired test and the Benjamini-Hochberg
+    correction over exactly this family, and the paper's table is printed from the same CSV. A
+    figure that re-derived the statistic could star a pair the table calls not significant, and a
+    reader would have no way to tell which of the two is the finding."""
+    table = family_csv([BLIND_PAIR], efficacy.SIGNIFICANT, efficacy.NOT_SIGNIFICANT)
+    stats = plot.family_stats(table, "no-score")
+
+    assert list(stats.leg) == ["C +skills"]
+    assert list(stats.model) == ["qwen38"]
+    assert list(stats.score_verdict) == [efficacy.SIGNIFICANT]
+    assert list(stats.cost_verdict) == [efficacy.NOT_SIGNIFICANT]
+    assert list(stats.kernels) == [40]
+    assert plot.family_size(stats) == 2
+
+
+def test_the_family_csv_declares_the_pairs_in_the_order_it_wrote_them() -> None:
+    """The family's own declared order, not a re-sort: a caller's model/language loop is the order
+    a reader of the table already has in front of them."""
+    table = family_csv([BLIND_PAIR, SCICOMP_PAIR], efficacy.NOT_SIGNIFICANT, efficacy.NOT_SIGNIFICANT)
+    assert plot.family_pairs(table) == [BLIND_PAIR, SCICOMP_PAIR]
+
+
+def test_the_label_column_widens_for_a_longer_leg_so_no_label_is_written_off_the_canvas() -> None:
+    """A fixed-size save writes anything past the edge into nothing, and "Fortran +skills" is half
+    as wide again as "Fortran"."""
+    short = pd.DataFrame([{"leg": "C"}])
+    long = pd.DataFrame([{"leg": "Fortran +skills"}])
+    assert plot.label_column_in(long) > plot.label_column_in(short)
+    assert plot.label_column_in(short) >= plot.LABEL_COLUMN_IN
+
+
+def test_a_pair_figure_wears_the_intervention_hue_and_names_a_control_that_is_not_a_missing_packet(
+    tmp_path: pathlib.Path,
+) -> None:
+    """git-scicomp's control is the BARE KERNEL and llrblind's kept its score tool; "No Packet"
+    names neither, so the hollow mark's text is the caller's. The treated side still takes its hue
+    and its display name from the registry, like every other intervention."""
+    import matplotlib.pyplot as plt
+
+    absolute = pd.DataFrame(
+        [
+            {"model": "qwen38", "language": "c", "leg": "C", "skills": False, **thin(0.6, 900e3)},
+            {"model": "qwen38", "language": "c", "leg": "C", "skills": True, **thin(1.1, 1.4e6)},
+        ]
+    )
+    stats = plot.family_stats(family_csv([SCICOMP_PAIR], efficacy.SIGNIFICANT, ""), "repo")
+    fig, axes = plt.subplots(1, len(plot.PANELS))
+    try:
+        labels = [
+            handle.get_label()
+            for handle in plot.draw_absolute(list(axes), absolute, stats, "repo", control_name="Bare Kernel")
+        ]
+    finally:
+        plt.close(fig)
+    assert "Bare Kernel" in labels, labels
+    assert "No Packet" not in labels
+    assert experiment_tags.packet_name("repo") in labels, labels
+
+
+def observation_rows(arm: str, speedup: float, tokens: float, kernels: int = KERNELS) -> list[dict[str, object]]:
+    """One arm's rows in the shape an extraction writes: a graded submission and a task total per
+    kernel, which is what ``population.kernel_medians`` reduces."""
+    rows: list[dict[str, object]] = []
+    for kernel in range(kernels):
+        common = {
+            "arm": arm,
+            "benchmark": f"k{kernel}",
+            "suspect": 0,
+            "baseline": "numba",
+            "run_root": "j1",
+            "job": "j1",
+            "run_id": f"{arm}-{kernel}",
+            "attempt_index": 1,
+            "ts_ms": kernel,
+            "timing_reduction": "mwd-v2",
+        }
+        rows.append(
+            {
+                **common,
+                "record": "submission",
+                "speedup": speedup,
+                "baseline_ns": 1000.0,
+                "native_ns": 1000.0 / speedup,
+            }
+        )
+        rows.append({**common, "record": "task", "speedup": None, "tokens": tokens})
+    return rows
+
+
+def test_pair_points_reduces_each_arm_by_name_and_tags_which_side_of_the_pair_it_is() -> None:
+    """The two sides live in two campaigns with different arm prefixes, so there is no packet
+    suffix to split on -- the pair names the arms, and the reduction is the one every other panel
+    runs (``population.kernel_medians``). TREATMENT first, matching ``--pair TREATMENT,CONTROL``."""
+    frame = pd.DataFrame(observation_rows(BLIND_PAIR[0], 2.0, 150e3) + observation_rows(BLIND_PAIR[1], 4.0, 200e3))
+    points = plot.pair_points(frame, [BLIND_PAIR], "no-score")
+
+    by_side = points.set_index("skills")
+    assert set(points.leg) == {"C +skills"}
+    assert set(points.model) == {"qwen38"}
+    assert by_side.loc[True].log2_speedup == pytest.approx(1.0)
+    assert by_side.loc[False].log2_speedup == pytest.approx(2.0)
+    assert by_side.loc[True].tokens == pytest.approx(150e3)
