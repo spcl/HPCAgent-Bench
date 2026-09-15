@@ -209,8 +209,14 @@ def draw_interval(ax: plt.Axes, row: pd.Series, colour: str) -> None:
         ax.vlines(x, y_low, y_high, color=colour, linewidth=1.1, alpha=0.55, zorder=1)
 
 
-def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame, compact: bool = False) -> list:
+def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame, treatment: str, compact: bool = False) -> list:
     """Geomean speed-up against median spend, with each arm's TWO CONDITIONS joined.
+
+    ``treatment`` names the packet on the filled side: the hollow mark's legend text is
+    :func:`hpcagent_bench.packets.control_label` for it ("No Skill Packet" only when ``treatment``
+    is itself a skill packet, "No Packet" otherwise) and the filled mark's is its own registry
+    display name (:func:`hpcagent_bench.experiment_tags.packet_name`) -- never a generic "Skills"
+    that misnames a CPF or perf-playbook panel as if it were a skill.
 
     ABSOLUTE, not a ratio, and that is what makes the connector mean something: a ratio plot has
     one point per arm and nothing to join, so a line drawn on it could only connect two arms --
@@ -236,11 +242,18 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame, compact: bool = 
         (row.model, row.language): efficacy.SIGNIFICANT in (row.score_verdict, row.cost_verdict)
         for row in stats.itertuples(index=False)
     }
+    # Only a model that actually lands BOTH marks earns a legend entry: ``hues``/``shapes`` are
+    # keyed off every model the control side ran, and a model this treatment never touched (the
+    # CPF page figure's control carries Kimi from the campaign's OTHER treatments) fell through the
+    # `continue` below with a colour already reserved in ``hues`` -- so the legend named a model the
+    # panel never draws a point for.
+    drawn_models: set[str] = set()
     for (model, language), pair in frame.groupby(["model", "language"]):
         colour, shape = hues[model], shapes[model]
         off, on = pair[~pair.skills], pair[pair.skills]
         if len(off) != 1 or len(on) != 1:
             continue
+        drawn_models.add(model)
         # An ELBOW, not a diagonal. The straight segment between two measured points runs through
         # coordinates that were never measured, and on a plot whose whole subject is where an arm
         # LANDED a reader takes the path for data -- as if the packet moved the arm along it. The
@@ -338,6 +351,7 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame, compact: bool = 
             [], [], marker=shapes[n], linestyle="none", color=h, markersize=9, label=experiment_tags.model_name(n)
         )
         for n, h in hues.items()
+        if n in drawn_models
     ]
     handles += [
         plt.Line2D(
@@ -348,9 +362,17 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame, compact: bool = 
             markerfacecolor="none",
             markeredgecolor=plotstyle.MUTED,
             markersize=9,
-            label="No Skills",
+            label=packets.control_label([treatment]),
         ),
-        plt.Line2D([], [], marker="o", linestyle="none", color=plotstyle.MUTED, markersize=9, label="Skills"),
+        plt.Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="none",
+            color=plotstyle.MUTED,
+            markersize=9,
+            label=experiment_tags.packet_name(treatment),
+        ),
         plt.Line2D(
             [],
             [],
@@ -425,9 +447,11 @@ def absolute_points(frame: pd.DataFrame) -> pd.DataFrame:
     return rules.require_interval(table, "tokens", "tokens_low", "tokens_high")
 
 
-def figure_absolute(frame: pd.DataFrame, stats: pd.DataFrame, label: str, out: pathlib.Path) -> pathlib.Path:
+def figure_absolute(
+    frame: pd.DataFrame, stats: pd.DataFrame, treatment: str, label: str, out: pathlib.Path
+) -> pathlib.Path:
     fig, ax = plt.subplots(figsize=PANEL_SIZE)
-    handles = draw_absolute(ax, frame, stats)
+    handles = draw_absolute(ax, frame, stats, treatment)
     fig.subplots_adjust(**PANEL_MARGINS)
     # Two per row, and the keys kept SHORT. The canvas is fixed, so anything wider than it falls
     # off the edge rather than widening the figure -- and the model names alone ("Kimi-K2.7-Code")
@@ -476,7 +500,7 @@ def build_treatments_figure(
     fig, axes = plt.subplots(1, n, figsize=(side * n + SQUARE_PANEL_GAP * (n - 1), side), squeeze=False)
     handles_by_label: dict[str, object] = {}
     for ax, (treatment, stats, absolute) in zip(axes[0], panels, strict=True):
-        for handle in draw_absolute(ax, absolute, stats, compact=True):
+        for handle in draw_absolute(ax, absolute, stats, treatment, compact=True):
             handles_by_label.setdefault(handle.get_label(), handle)
         # An IN-AXES label, not ax.set_title(): a real title draws ABOVE the axes bounding box, in
         # the same band subplots_adjust(top=...) reserves for the figure's own suptitle -- on a
@@ -664,8 +688,8 @@ def main() -> None:
 
     label = args.label or experiment_tags.display_name(args.experiment)
     if len(panels) == 1:
-        _, stats, absolute = panels[0]
-        written = figure_absolute(absolute, stats, label, args.out)
+        treatment, stats, absolute = panels[0]
+        written = figure_absolute(absolute, stats, treatment, label, args.out)
     else:
         written = figure_treatments(panels, label, args.out, double_column=args.double_column)
 
