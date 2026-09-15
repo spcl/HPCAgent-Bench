@@ -121,11 +121,12 @@ def test_within_an_episode_the_last_submission_wins_not_the_best(paired_arms: Mo
     assert best.speedup.tolist() == [2.0]
 
 
-def test_replicate_jobs_are_separate_episodes_and_the_maximum_stands(paired_arms: ModuleType) -> None:
-    """Two jobs of one arm reuse the run_id, so keying on it alone would drop a whole replicate.
+def test_a_rerun_job_is_a_separate_run_and_the_latest_run_stands(paired_arms: ModuleType) -> None:
+    """Two jobs of one arm reuse the run_id, so keying on it alone would merge a rerun into the run it
+    replaces.
 
-    Replicate 1 ends at 5.0 and replicate 2 at 3.0. They are two episodes: the arm's value is the
-    maximum over them (5.0), not the later replicate's 3.0 and not a pooled max over rows.
+    Job j1 ends at 5.0; job j2 reruns the kernel and ends at 3.0. They are two runs, and the arm's
+    value is the latest run's final answer (3.0) -- not the earlier 5.0, and not a max over rows (9.0).
     """
     rows = [
         graded("a", "k1", 5.0, job="j1", ts=1000),
@@ -134,7 +135,18 @@ def test_replicate_jobs_are_separate_episodes_and_the_maximum_stands(paired_arms
     ]
     episodes = population.last_per_episode(frame(rows), paired_arms.SUBMISSION_ORDER)
     assert len(episodes) == 2
-    assert paired_arms.best_by_arm_kernel(frame(rows)).speedup.tolist() == [5.0]
+    assert paired_arms.best_by_arm_kernel(frame(rows)).speedup.tolist() == [3.0]
+
+
+def test_designed_repeats_score_the_median_run(paired_arms: ModuleType) -> None:
+    """git-scicomp gives each kernel three agents by design, so all three are the arm's result and the
+    kernel scores their median, whatever order they finished in."""
+    rows = [
+        graded("a", "k1", 5.0, job="j1", ts=1000),
+        graded("a", "k1", 3.0, job="j1", ts=2000) | {"run_id": "a.n0.p0.w1"},
+        graded("a", "k1", 9.0, job="j1", ts=3000) | {"run_id": "a.n0.p0.w2"},
+    ]
+    assert paired_arms.best_by_arm_kernel(frame(rows), "median").speedup.tolist() == [5.0]
 
 
 def test_the_score_leg_keeps_a_kernel_that_has_no_call_row(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
@@ -161,16 +173,19 @@ def test_the_score_leg_keeps_a_kernel_that_has_no_call_row(paired_arms: ModuleTy
     assert paired_arms.cost_leg("a", "b", tokens)[1] == len(KERNELS)
 
 
-def test_the_cost_leg_reads_a_cumulative_counter_as_its_episode_maximum(paired_arms: ModuleType) -> None:
-    """``calls.tokens`` is cumulative through a call, so an episode's spend is its maximum and a
-    kernel's is the sum over its episodes -- summing the rows counts every earlier call again."""
+def test_the_cost_leg_reads_a_run_as_its_counter_maximum_and_a_rerun_as_its_latest_run(
+    paired_arms: ModuleType,
+) -> None:
+    """``calls.tokens`` is cumulative through a call, so a run's spend is its maximum (250, not the 350
+    a row sum gives). Job j2 reruns the kernel, so the arm's cost is that run's 400 -- not the 650 a
+    sum over reruns would bill."""
     rows = [
         call("a", "k1", 100.0, job="j1", ts=1000, index=1),
         call("a", "k1", 250.0, job="j1", ts=2000, index=2),
         call("a", "k1", 400.0, job="j2", ts=3000, index=1),
     ]
-    tokens = paired_arms.tokens_by_arm_kernel(frame(rows))
-    assert tokens[("a", "k1")] == 650.0
+    assert paired_arms.tokens_by_arm_kernel(frame(rows[:2]))[("a", "k1")] == 250.0
+    assert paired_arms.tokens_by_arm_kernel(frame(rows))[("a", "k1")] == 400.0
 
 
 def test_two_denominators_are_refused_rather_than_pooled(paired_arms: ModuleType) -> None:
@@ -247,9 +262,9 @@ def test_the_correction_runs_over_every_leg_of_every_pair(paired_arms: ModuleTyp
     assert {row["leg"] for row in reported} == {"speedup", "tokens"}
 
 
-def test_the_estimate_is_the_hodges_lehmann_of_the_paired_logs(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
-    """The point, the interval and the p must describe ONE parameter. A ratio of geometric means --
-    exp of the MEAN of the same logs -- is a different one, and on a skewed set the two disagree."""
+def test_the_estimate_is_the_geomean_of_the_paired_ratios(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
+    """An arm comparison is the geometric mean of its per-kernel ratios, so a skewed kernel (40x) moves
+    the estimate exactly as it moves that geomean; the interval and p are on the same mean log."""
     values = (1.05, 1.1, 0.95, 1.2, 0.9, 1.15, 1.02, 40.0)
     rows: list[dict[str, object]] = []
     for kernel, ratio in zip(KERNELS, values, strict=True):
@@ -262,9 +277,8 @@ def test_the_estimate_is_the_hodges_lehmann_of_the_paired_logs(paired_arms: Modu
     table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
     change, _ = paired_arms.score_leg(table["a"], table["b"])
 
-    expected = summary.paired_change([math.log(value) for value in values])
-    assert math.exp(change.estimate) == pytest.approx(math.exp(expected.estimate))
-    assert math.exp(change.estimate) < summary.geomean(values)
+    assert math.exp(change.estimate) == pytest.approx(summary.geomean(values))
+    assert change.method == "paired-t"
 
 
 @pytest.mark.parametrize("pseudo", ["adhoc", ""], ids=["adhoc", "blank"])

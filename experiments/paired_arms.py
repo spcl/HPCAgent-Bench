@@ -9,8 +9,9 @@ scored arm of the same model, language and roster) has nowhere to be formed. Thi
 an ARGUMENT and runs them through the same reduction and the same guards:
 :func:`~hpcagent_bench.stats.population.final_answers` for the one value per kernel,
 :func:`~hpcagent_bench.stats.population.align` and :func:`~hpcagent_bench.stats.population.coverage`
-for the kernel set, :func:`~hpcagent_bench.stats.summary.paired_change` for the estimate, its
-interval and its p, and :func:`~hpcagent_bench.harness.efficacy.correct_family` for the family.
+for the kernel set, :func:`~hpcagent_bench.stats.summary.paired_geomean` for the geomean ratio, its
+interval and its p, and :func:`~hpcagent_bench.harness.efficacy.correct_family` for the family. A kernel
+run more than once is reduced by ``--repeats``: the latest run for reruns, the median for designed repeats.
 
 THE TWO LEGS ARE PAIRED OVER DIFFERENT POPULATIONS AND ARE NEVER INTERSECTED. A graded ``submission``
 row carries the timings and no token count; a ``call`` row carries the token count and no timings.
@@ -136,16 +137,15 @@ def graded_rows(observations: pd.DataFrame, arms: list[str]) -> pd.DataFrame:
     return rows
 
 
-def best_by_arm_kernel(graded: pd.DataFrame) -> pd.DataFrame:
-    """One row per ``(arm, kernel)``: the arm's best FINAL answer on that kernel.
+def best_by_arm_kernel(observations: pd.DataFrame, repeats: population.RepeatPolicy = "latest") -> pd.DataFrame:
+    """One row per ``(arm, kernel)``: the arm's FINAL answer on that kernel.
 
-    WITHIN an episode the LAST verified submission counts and ACROSS episodes the maximum is kept.
-    Replicate jobs of one arm are separate episodes under
-    :data:`~hpcagent_bench.stats.population.EPISODE_KEY`, so they pool as replicates rather than
-    overwriting each other -- ``run_id`` alone cannot see that, because a launcher derives it from
-    the rank layout and every replicate reuses it.
+    WITHIN a run the LAST verified submission counts; a kernel run more than once is reduced by
+    ``repeats`` (:func:`~hpcagent_bench.stats.population.arm_kernel_answers`). Runs of different jobs
+    are separate under :data:`~hpcagent_bench.stats.population.EPISODE_KEY` even though a launcher
+    reuses the ``run_id``, so a rerun is seen as a rerun rather than merged into the run it replaces.
     """
-    return population.final_answers(graded, SUBMISSION_ORDER, ("arm", "benchmark"))
+    return population.arm_kernel_answers(observations, SUBMISSION_ORDER, repeats=repeats)
 
 
 def served_by_arm(observations: pd.DataFrame) -> dict[str, frozenset[str]]:
@@ -154,15 +154,16 @@ def served_by_arm(observations: pd.DataFrame) -> dict[str, frozenset[str]]:
     return {str(arm): frozenset(group.benchmark.astype(str)) for arm, group in rows.groupby("arm")}
 
 
-def tokens_by_arm_kernel(observations: pd.DataFrame) -> dict[tuple[str, str], float]:
+def tokens_by_arm_kernel(
+    observations: pd.DataFrame, repeats: population.RepeatPolicy = "latest"
+) -> dict[tuple[str, str], float]:
     """``(arm, kernel) -> tokens spent``, read from the ``call`` rows, which are the only ones with a
     token count.
 
-    ``calls.tokens`` is cumulative through a call, so an episode's spend is its own MAXIMUM and a
-    kernel's is the SUM over its episodes; summing the rows would count every earlier call once per
-    later one.
+    ``calls.tokens`` is cumulative through a call, so a run's spend is its own MAXIMUM; a kernel run
+    more than once is reduced by ``repeats`` (:func:`~hpcagent_bench.stats.population.kernel_tokens`).
     """
-    totals = population.kernel_tokens(observations, ("arm", "benchmark"))
+    totals = population.kernel_tokens(observations, ("arm", "benchmark"), repeats=repeats)
     return {(str(arm), str(kernel)): float(spend) for (arm, kernel), spend in totals.items()}
 
 
@@ -179,14 +180,14 @@ def arm_aggregates(
 
 
 def score_leg(left: population.ArmAggregate, right: population.ArmAggregate) -> tuple[summary.PairedChange, int]:
-    """The paired speed-up change over the kernels BOTH arms solved, and how many that was."""
+    """The geomean speed-up ratio over the kernels BOTH arms solved, and how many that was."""
     aligned = population.align([left, right])
     differences = population.log_differences(aligned[0], aligned[1])
-    return summary.paired_change(differences), aligned[0].n
+    return summary.paired_geomean(differences), aligned[0].n
 
 
 def cost_leg(left: str, right: str, tokens: dict[tuple[str, str], float]) -> tuple[summary.PairedChange, int] | None:
-    """The paired token change over the kernels both arms have a token count for.
+    """The geomean token ratio over the kernels both arms have a token count for.
 
     Oriented like the score leg -- ``a / b`` -- so a number above 1 means arm ``a`` spent MORE. It is
     not inverted into a "gain": the two legs sit in one table and an axis that silently flips sign is
@@ -195,14 +196,14 @@ def cost_leg(left: str, right: str, tokens: dict[tuple[str, str], float]) -> tup
     shared = sorted({k[1] for k in tokens if k[0] == left} & {k[1] for k in tokens if k[0] == right})
     if not shared:
         return None
-    return summary.paired_change([math.log(tokens[(left, k)] / tokens[(right, k)]) for k in shared]), len(shared)
+    return summary.paired_geomean([math.log(tokens[(left, k)] / tokens[(right, k)]) for k in shared]), len(shared)
 
 
 def tested_p(change: summary.PairedChange) -> float:
     """The leg's p, or NaN when no test was performed on it.
 
-    ``paired_change`` drops zero differences, so a leg whose arms agreed on every kernel comes back
-    ``degenerate`` with p = 1.0 and one below the interval floor comes back with no p at all. Neither
+    ``paired_geomean`` withholds p from a leg whose ratios have no spread (``degenerate``) and from one
+    below the interval floor (``underpowered``). Neither
     is a test: entering them into the correction would raise ``m`` for members that cannot reach any
     alpha and weaken every real one. ``correct_family`` skips a non-finite p and labels it
     ``underpowered``, which is what both of these are.
@@ -390,6 +391,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="keep a pair even when either arm lacks an observation row for some roster kernel",
     )
+    ap.add_argument(
+        "--repeats",
+        choices=population.REPEAT_POLICIES,
+        default="latest",
+        help="a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
+    )
     return ap.parse_args(argv)
 
 
@@ -415,11 +422,11 @@ def main(argv: list[str]) -> int:
 
     graded = graded_rows(observations, arms)
     baseline = population.one_denominator(graded.baseline.tolist(), label="family")
-    best = best_by_arm_kernel(graded)
+    best = best_by_arm_kernel(observations[observations.arm.isin(arms)], args.repeats)
     served = served_by_arm(observations[observations.arm.isin(arms)])
     table = arm_aggregates(best, served, baseline)
 
-    tokens = tokens_by_arm_kernel(observations)
+    tokens = tokens_by_arm_kernel(observations, args.repeats)
     arm_frame = pd.DataFrame(arm_rows(best, graded, table, served, tokens)).reindex(columns=list(ARM_COLUMNS))
     pair_frame = pd.DataFrame(pair_rows(pairs, table, tokens, roster, args.family)).reindex(columns=list(PAIR_COLUMNS))
     arm_frame = arm_frame.round(4)

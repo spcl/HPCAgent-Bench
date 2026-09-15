@@ -3,7 +3,7 @@
 """``scripts/plot_score_change.py`` -- the score-vs-cost figure and the stars on it.
 
 The load-bearing assertions are about MULTIPLICITY. One figure carries three models x two
-languages x two axes, so twelve signed-rank tests decide its marks, and twelve uncorrected 5%
+languages x two axes, so twelve paired tests decide its marks, and twelve uncorrected 5%
 thresholds paint at least one star on 46% of figures where nothing happened. What is asserted here
 is therefore that a raw threshold which would have starred a point does not survive the correction,
 that the mark is gated on the corrected verdict, and that the figure says so where a reader looks
@@ -47,9 +47,9 @@ def load_script():
 plot = load_script()
 
 
-#: Per-kernel factors whose two smallest magnitudes go the wrong way, so the exact signed-rank
-#: statistic is W- = 3 at n = 8 and the raw two-sided p is 0.0391 -- just inside a per-row 5%
-#: threshold, which is the case the correction has to catch.
+#: Per-kernel factors whose two smallest magnitudes go the wrong way, so the paired t test on their
+#: logs gives a raw two-sided p of 0.0197 at n = 8 -- inside a per-row 5% threshold, which is the case
+#: the correction has to catch.
 MARGINAL: tuple[float, ...] = (1.02, 1.04, 1.0 / 1.005, 1.0 / 1.01, 1.08, 1.10, 1.12, 1.14)
 
 #: Every kernel moved the same way and a long way: a real effect, which the correction must NOT eat.
@@ -106,13 +106,13 @@ def observations(gains: tuple[float, ...], winner: tuple[str, str] | None) -> tu
 
 
 def test_a_raw_threshold_that_would_have_starred_a_point_does_not_survive_the_correction() -> None:
-    """One cell reaching p = 0.039 on its own is what a per-row ``p < 0.05`` reads as a finding. It
-    is one of twelve tests on the figure, and corrected across them the value is 0.23 -- so the star
+    """One cell reaching p = 0.020 on its own is what a per-row ``p < 0.05`` reads as a finding. It
+    is one of twelve tests on the figure, and corrected across them the value is 0.12 -- so the star
     it would have drawn is not supported by the figure it would have been drawn on."""
     before, after = observations(MARGINAL, winner=("qwen38", "c"))
     frame = plot.points(before, after)
     winner = frame[(frame.model == "qwen38") & (frame.language == "c")].iloc[0]
-    assert winner.score_p == pytest.approx(0.0390625), "the fixture has to cross a raw 5% threshold"
+    assert winner.score_p == pytest.approx(0.019747, abs=1e-5), "the fixture has to cross a raw 5% threshold"
     assert winner.score_p_adjusted > 0.05
     assert winner.score_verdict == efficacy.NOT_SIGNIFICANT
     assert not (frame.score_verdict == efficacy.SIGNIFICANT).any()

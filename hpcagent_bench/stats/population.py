@@ -248,8 +248,8 @@ def per_episode_max(frame: "pd.DataFrame", column: str, keep: Sequence[str] = ()
     For a cumulative counter this is the episode's own total. ``calls.tokens`` is cumulative through
     a call, so summing its rows counts every earlier call once per later one and inflates a long
     repair loop quadratically; taking the maximum reads the total the episode actually reached.
-    A kernel's spend is the SUM over its episodes (:func:`kernel_tokens`); a statistic over
-    episodes, such as their median, is a different quantity and travels under its own name.
+    How a kernel run more than once becomes one spend is the :data:`RepeatPolicy` of
+    :func:`kernel_tokens`.
 
     ``keep`` names columns that are constant within an episode -- the arm, the model, the condition
     -- so a caller can group on them afterwards without a second join.
@@ -258,6 +258,47 @@ def per_episode_max(frame: "pd.DataFrame", column: str, keep: Sequence[str] = ()
     if missing:
         raise MixedPopulationError(f"cannot reduce episodes without {missing}")
     return frame.groupby([*EPISODE_KEY, *keep], as_index=False)[column].max()
+
+
+#: How a kernel that one arm ran MORE THAN ONCE becomes one value. ``latest``: a rerun -- a later wave
+#: resubmitting a kernel whose earlier run did not complete or submitted a broken answer -- supersedes
+#: the earlier run, so only the latest run counts; a max or a sum over reruns would pay an arm for how
+#: often it was resubmitted. ``median``: runs that repeat BY DESIGN (git-scicomp gives each kernel
+#: three agents) are all the arm's result, so the kernel's value is their median.
+RepeatPolicy = Literal["latest", "median"]
+
+REPEAT_POLICIES: tuple[RepeatPolicy, ...] = ("latest", "median")
+
+
+def repeat_policy(repeats: str) -> RepeatPolicy:
+    """``repeats`` as a :data:`RepeatPolicy`, or raise naming the ones there are."""
+    for policy in REPEAT_POLICIES:
+        if repeats == policy:
+            return policy
+    raise MixedPopulationError(f"repeats must be one of {REPEAT_POLICIES}, got {repeats!r}")
+
+
+def latest_runs(frame: "pd.DataFrame", by: Sequence[str] = ("arm", "benchmark")) -> "pd.DataFrame":
+    """Every row, of any record type, of each ``by`` group's LATEST run.
+
+    A run is one :data:`EPISODE_KEY`; the latest is the one that STARTED last, by the earliest
+    ``ts_ms`` over all of its rows. Call rows count, so a rerun that spent tokens and never had a
+    submission persisted still supersedes the earlier run: the kernel then has no answer, which is
+    what its latest run delivered. A run with no timestamp sorts first and never supersedes a dated one.
+    """
+    import pandas as pd
+
+    keys = list(dict.fromkeys((*by, *EPISODE_KEY)))
+    missing = [name for name in (*keys, "ts_ms") if name not in frame.columns]
+    if missing:
+        raise MixedPopulationError(f"cannot pick the latest run without {missing}")
+    if frame.empty:
+        return frame
+    starts = frame[keys].assign(start=pd.to_numeric(frame["ts_ms"], errors="coerce"))
+    starts = starts.groupby(keys, as_index=False, dropna=False).start.min()
+    latest = starts.sort_values("start", kind="stable", na_position="first").drop_duplicates(list(by), keep="last")
+    chosen = pd.MultiIndex.from_frame(latest[keys])
+    return frame[pd.MultiIndex.from_frame(frame[keys]).isin(chosen)]
 
 
 def graded_episode_rows(
@@ -291,7 +332,8 @@ def graded_episode_rows(
             f"an episode's answer must be screened for implausible timings; the frame carries no "
             f"{SUSPECT_COLUMN!r} column (extract the rows with the column, or re-extract them)"
         )
-    believable = frame[frame[SUSPECT_COLUMN].map(is_reportable)]
+    # astype(bool): an EMPTY object-dtype mask indexes COLUMNS, not rows, and drops every column
+    believable = frame[frame[SUSPECT_COLUMN].map(is_reportable).astype(bool)]
     timed = believable[believable.speedup > 0]
     if REDUCTION_COLUMN in timed.columns:
         one_reduction(timed[REDUCTION_COLUMN].tolist(), label="graded episodes", allow_unstamped=allow_unstamped)
@@ -328,20 +370,55 @@ SUBMISSION_ORDER: tuple[str, str] = ("ts_ms", "attempt_index")
 ANSWER_COLUMNS: tuple[str, str, str] = ("speedup", "baseline_ns", "native_ns")
 
 
-def kernel_answers(
-    frame: "pd.DataFrame", order: Sequence[str] = SUBMISSION_ORDER, *, allow_unstamped: bool = False
+def arm_kernel_answers(
+    frame: "pd.DataFrame",
+    order: Sequence[str] = SUBMISSION_ORDER,
+    *,
+    repeats: RepeatPolicy = "latest",
+    allow_unstamped: bool = False,
 ) -> "pd.DataFrame":
-    """One row per kernel of ``frame``: the best FINAL answer, with the costs behind its speed-up.
+    """One whole row per ``(arm, benchmark)``: the arm's FINAL answer on that kernel under ``repeats``.
 
-    Read off the GRADED rows and reduced by :func:`final_answers` per ``(arm, benchmark)``, then the
-    best arm per kernel, so a slice holding several arms of one condition keeps its best answer. A
+    ``frame`` should hold every record type, so ``latest`` sees a rerun that never had a submission
+    persisted (:func:`latest_runs`); a frame without ``record`` is read as graded rows only. WITHIN a
+    run the last verified submission counts (:func:`graded_episode_rows`). ACROSS runs ``latest``
+    keeps the latest run's answer -- none, when that run verified nothing -- and ``median`` keeps the
+    median run's row (the lower middle one for an even count) carrying the median speed-up over all
+    of them, so its timings are that run's own.
+    """
+    policy = repeat_policy(repeats)
+    runs = latest_runs(frame) if policy == "latest" else frame
+    graded = runs[runs["record"] == "submission"] if "record" in runs.columns else runs
+    episodes = graded_episode_rows(graded, order, allow_unstamped=allow_unstamped)
+    if policy == "latest" or episodes.empty:
+        return episodes
+    group = ["arm", "benchmark"]
+    ordered = episodes.sort_values([*group, "speedup"], kind="stable")
+    position = ordered.groupby(group).cumcount()
+    size = ordered.groupby(group).speedup.transform("size")
+    carriers = ordered[position == (size - 1) // 2].drop(columns=["speedup"])
+    medians = ordered.groupby(group, as_index=False).speedup.median()
+    return carriers.merge(medians, on=group)
+
+
+def kernel_answers(
+    frame: "pd.DataFrame",
+    order: Sequence[str] = SUBMISSION_ORDER,
+    *,
+    repeats: RepeatPolicy = "latest",
+    allow_unstamped: bool = False,
+) -> "pd.DataFrame":
+    """One row per kernel of ``frame``: the FINAL answer, with the costs behind its speed-up.
+
+    Each ``(arm, benchmark)`` reduced by :func:`arm_kernel_answers` under ``repeats``, then the best
+    arm per kernel, so a slice holding several arms of one condition keeps its best answer. A
     ``call`` row carries a speed-up for a round the judge never persisted, and a median over those
     rows weights a kernel by how many rounds the agent spent on it. Indexed by ``benchmark``, sorted.
     """
     graded = frame[frame.record == "submission"]
     if graded.empty:
         return graded.set_index("benchmark")[[c for c in ANSWER_COLUMNS if c in graded.columns]]
-    best = final_answers(graded, order, ("arm", "benchmark"), allow_unstamped=allow_unstamped)
+    best = arm_kernel_answers(frame, order, repeats=repeats, allow_unstamped=allow_unstamped)
     best = best.sort_values("speedup", ascending=False).drop_duplicates("benchmark", keep="first")
     return best.set_index("benchmark")[[c for c in ANSWER_COLUMNS if c in best.columns]].sort_index()
 
@@ -373,22 +450,31 @@ def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("benchmark",)) ->
     return episodes[episodes.tokens > 0]
 
 
-def kernel_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("benchmark",)) -> "pd.Series":
-    """The tokens spent on each kernel of ``frame``: the SUM over every episode (:func:`episode_tokens`).
+def kernel_tokens(
+    frame: "pd.DataFrame", by: Sequence[str] = ("benchmark",), *, repeats: RepeatPolicy = "latest"
+) -> "pd.Series":
+    """The tokens spent on each kernel of ``frame``: one task's total (:func:`episode_tokens`).
 
-    Costs add, so what was spent on a kernel is the total over all of its episodes and the attempts
-    inside them, and that total is the cost behind the kernel's answer. ``by`` groups the totals,
-    ``("arm", "benchmark")`` for a table over arms.
+    A task is one agent optimizing one kernel, and its cost is everything that run spent. A kernel
+    one arm ran more than once is reduced by ``repeats``: ``latest`` charges the latest run's total
+    (:func:`latest_runs`), never the sum over reruns, which would bill an arm for being resubmitted;
+    ``median`` charges the median over runs that repeat by design. ``by`` groups the result,
+    ``("arm", "benchmark")`` for a table over arms; a slice grouped by kernel alone that holds several
+    arms of one condition adds their latest runs.
     """
     import pandas as pd
 
+    policy = repeat_policy(repeats)
+    if policy == "latest":
+        frame = latest_runs(frame, tuple(name for name in ("arm", "benchmark") if name in frame.columns))
     episodes = episode_tokens(frame, by)
     if episodes.empty:
         return pd.Series(dtype=float, name="tokens")
-    return episodes.groupby(list(by)).tokens.sum()
+    grouped = episodes.groupby(list(by)).tokens
+    return grouped.median() if policy == "median" else grouped.sum()
 
 
-def kernel_medians(frame: "pd.DataFrame") -> dict[str, float] | None:
+def kernel_medians(frame: "pd.DataFrame", *, repeats: RepeatPolicy = "latest") -> dict[str, float] | None:
     """One slice's point over its KERNELS: the GEOMETRIC MEAN speed-up and the median token spend,
     each with its own interval (SC15 Rules 5 and 7), and the two median times every speed-up is the
     quotient of (Rule 4). ``None`` when the slice has no answer or no spend.
@@ -407,9 +493,9 @@ def kernel_medians(frame: "pd.DataFrame") -> dict[str, float] | None:
     axes -- the geomean's own t-interval is otherwise defined from 2 kernels on, which is thinner
     than what the tokens bootstrap already refuses to report.
     """
-    answers = kernel_answers(frame)
+    answers = kernel_answers(frame, repeats=repeats)
     answers = answers[answers.speedup > 0]
-    tokens = kernel_tokens(frame)
+    tokens = kernel_tokens(frame, repeats=repeats)
     if answers.empty or tokens.empty:
         return None
     floor = summary.MIN_INTERVAL_SAMPLES

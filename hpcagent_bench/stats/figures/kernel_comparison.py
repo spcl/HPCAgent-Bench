@@ -115,14 +115,14 @@ def candidate_arms(frame: pd.DataFrame, pattern: re.Pattern[str] = ARM_PATTERN) 
     return out
 
 
-def arm_speedups(frame: pd.DataFrame, arm: str) -> dict[str, float]:
-    """``arm``'s best verified final answer per kernel (:func:`population.kernel_answers`).
+def arm_speedups(frame: pd.DataFrame, arm: str, repeats: population.RepeatPolicy = "latest") -> dict[str, float]:
+    """``arm``'s verified final answer per kernel under ``repeats`` (:func:`population.kernel_answers`).
 
     A kernel with no verified answer is absent, never entered at any stand-in value: that is the
     framework's own "solved" population, applied here rather than reinvented.
     """
     subset = frame[frame["arm"].astype(str) == arm]
-    answers = population.kernel_answers(subset)
+    answers = population.kernel_answers(subset, repeats=repeats)
     if "speedup" not in answers.columns:
         return {}
     return {str(kernel): float(value) for kernel, value in answers["speedup"].items() if value > 0}
@@ -174,6 +174,7 @@ def build_panels(
     canon_baseline: str = CANON_BASELINE,
     include_incomplete: bool = False,
     condition_order: Sequence[str] = CONDITION_ORDER,
+    repeats: population.RepeatPolicy = "latest",
 ) -> tuple[dict[str, list[Series]], Series | None, dict[str, int]]:
     """model -> its arm series (condition order), the deterministic reference series shared by
     every panel (``None`` when the caller has no such column -- llr-focus40-cpf's DaCe canon,
@@ -204,7 +205,7 @@ def build_panels(
     by_model: dict[str, list[Series]] = {}
     for arm in kept:
         model, condition = candidates[arm]
-        values = arm_speedups(frame, arm)
+        values = arm_speedups(frame, arm, repeats)
         if not values:
             continue
         series = Series(
