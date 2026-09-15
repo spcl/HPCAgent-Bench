@@ -62,6 +62,26 @@ def one_run(db_path: pathlib.Path, run_id: str, harness: str, packet: str) -> No
     conn.close()
 
 
+def test_folding_worker_dirs_in_processes_gives_the_serial_totals(tmp_path: pathlib.Path) -> None:
+    """Transcript decoding runs in a process pool for speed; each directory is folded on its own, so
+    the totals and the rows built from them must be exactly what a serial fold gives."""
+    job_dir = tmp_path / "636540"
+    for index in range(5):
+        write_worker(
+            job_dir / "agents" / "node-0" / f"problem-{index}-worker-{index}", f"llr-qwen38-c.n0.p{index}.w{index}"
+        )
+    identity = extract_llr40.JobIdentity({}, {})
+
+    serial = extract_llr40.task_totals_by_dir([job_dir], workers=1)
+    pooled = extract_llr40.task_totals_by_dir([job_dir], workers=3)
+
+    assert len(serial) == 5
+    assert {path: tuple(value) for path, value in pooled.items()} == {path: tuple(v) for path, v in serial.items()}
+    with_totals = extract_llr40.task_rows_for_job(job_dir, "r", "636540", "llr", frozenset(), identity, pooled)
+    folded_here = extract_llr40.task_rows_for_job(job_dir, "r", "636540", "llr", frozenset(), identity)
+    assert with_totals == folded_here
+
+
 def test_task_rows_for_job_has_one_row_per_worker_directory(tmp_path: pathlib.Path) -> None:
     run_id_a = "arm-a.n0.p0.w0"
     run_id_b = "arm-a.n0.p1.w1"

@@ -223,6 +223,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     ap.add_argument("--focus-tag", default=FOCUS_TAG, help=f"manifest tag naming the focus set (default {FOCUS_TAG})")
     ap.add_argument("--threads", type=int, default=32, help="parallel database readers (default 32)")
+    ap.add_argument(
+        "--task-workers",
+        type=int,
+        default=16,
+        help="processes folding agent transcripts into task token totals (default 16; 1 folds serially)",
+    )
     ap.add_argument("--no-sources", action="store_true", help="write the CSVs only")
     ap.add_argument(
         "--db",
@@ -380,8 +386,36 @@ def token_cost_module() -> ModuleType:
     return token_cost
 
 
+def worker_dirs(job_dir: pathlib.Path) -> list[pathlib.Path]:
+    """The job's worker directories that name a run and a task: ``agents/*/*`` with ``mcp.json`` and
+    ``prompt.txt``, sorted."""
+    return [
+        path
+        for path in sorted(job_dir.glob("agents/*/*"))
+        if path.is_dir() and (path / "prompt.txt").is_file() and (path / "mcp.json").is_file()
+    ]
+
+
+def task_totals_by_dir(job_dirs: list[pathlib.Path], workers: int) -> dict[pathlib.Path, Any]:
+    """``token_cost.task_totals`` of every worker directory of ``job_dirs``, folded by ``workers``
+    processes. Transcript decoding is CPU-bound and holds the GIL, so threads would not help; the
+    totals are the same whatever ``workers`` is, since each directory is folded on its own."""
+    dirs = [path for job_dir in job_dirs for path in worker_dirs(job_dir)]
+    fold = token_cost_module().task_totals
+    if workers <= 1 or len(dirs) <= 1:
+        return {path: fold(path) for path in dirs}
+    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as pool:
+        return dict(zip(dirs, pool.map(fold, dirs, chunksize=4), strict=True))
+
+
 def task_rows_for_job(
-    job_dir: pathlib.Path, run_root: str, job: str, arm_prefix: str, excluded: frozenset[str], identity: JobIdentity
+    job_dir: pathlib.Path,
+    run_root: str,
+    job: str,
+    arm_prefix: str,
+    excluded: frozenset[str],
+    identity: JobIdentity,
+    totals: dict[pathlib.Path, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """One ``record = "task"`` row per worker directory of this job (T3).
 
@@ -390,22 +424,20 @@ def task_rows_for_job(
     are not. ``harness`` and ``packet`` are filled from the SAME ``runs`` table lookup a judge row
     of the same ``run_id`` would carry; every other column stays blank -- a task row measures token
     cost, not a grade, and must carry no speed-up (R1-R2 only look at ``submission`` rows).
+    ``totals`` holds precomputed :func:`task_totals_by_dir` results; without it each directory is
+    folded here.
     """
     rows: list[dict[str, Any]] = []
-    for worker_dir in sorted(job_dir.glob("agents/*/*")):
-        if not worker_dir.is_dir():
-            continue
+    for worker_dir in worker_dirs(job_dir):
         prompt_file = worker_dir / "prompt.txt"
         mcp_config = worker_dir / "mcp.json"
-        if not prompt_file.is_file() or not mcp_config.is_file():
-            continue
         run_id = mcp_run_id(mcp_config)
         arm = arm_of(run_id)
         if not arm.startswith(arm_prefix) or not excluded.isdisjoint(arm.split("-")):
             continue
         text = prompt_file.read_text(encoding="utf-8", errors="replace")
         node, problem, worker = agent_indices(run_id)
-        totals = token_cost_module().task_totals(worker_dir)
+        task = totals[worker_dir] if totals is not None else token_cost_module().task_totals(worker_dir)
         row: dict[str, Any] = dict.fromkeys(OBSERVATION_FIELDS, "")
         row.update(
             run_root=run_root,
@@ -422,9 +454,9 @@ def task_rows_for_job(
             benchmark=prompt_benchmark(text),
             language=prompt_language(text),
             ts_ms=int(prompt_file.stat().st_mtime * 1000),
-            tokens=totals.tokens_effective if totals.tokens_effective is not None else "",
-            tokens_billed=totals.tokens_billed if totals.tokens_billed is not None else "",
-            attempts=totals.attempts,
+            tokens=task.tokens_effective if task.tokens_effective is not None else "",
+            tokens_billed=task.tokens_billed if task.tokens_billed is not None else "",
+            attempts=task.attempts,
         )
         rows.append(row)
     return rows
@@ -915,9 +947,10 @@ def main(argv: list[str]) -> int:
     annotate_provenance(observations, assets, corpus)
 
     task_rows: list[dict[str, Any]] = []
+    totals = task_totals_by_dir(sorted(set(job_dirs.values())), args.task_workers)
     for (run_root, job), job_dir in sorted(job_dirs.items()):
         identity = identity_by_job.get((run_root, job), JobIdentity({}, {}))
-        task_rows.extend(task_rows_for_job(job_dir, run_root, job, args.arm_prefix, excluded, identity))
+        task_rows.extend(task_rows_for_job(job_dir, run_root, job, args.arm_prefix, excluded, identity, totals))
     print(f"task rows: {len(task_rows)} across {len(job_dirs)} jobs", file=sys.stderr)
     observations.extend(task_rows)
 
