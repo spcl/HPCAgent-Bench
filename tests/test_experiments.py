@@ -334,3 +334,21 @@ def test_a_surviving_clean_arm_is_reported_under_the_condition_it_re_ran() -> No
     with pytest.warns(UserWarning, match="superseded by a clean re-run"):
         kept = experiments.drop_superseded_arm_rows(pd.DataFrame(rows))
     assert sorted(kept.arm) == ["x-oss120b-c", "x-qwen38-c"]
+
+
+def test_a_column_no_row_in_the_table_ever_recorded_still_fills_from_the_arm_name() -> None:
+    """The bug this guards: a column NOTHING recorded reads back from CSV as all-NaN float64, and
+    writing an arm's recovered language into that raised ``Invalid value 'c' for dtype 'float64'``
+    -- a crash where the caller asked for a fill. It is exactly the shape a campaign whose judge
+    never stamped a language produces, and it is the shape a paired figure reads."""
+    frame = pd.DataFrame(
+        {
+            "arm": ["cpf-llr-focus40-qwen38-c", "cpf-llr-focus40-qwen38-c"],
+            "language": [math.nan, math.nan],
+        }
+    )
+
+    filled = experiments.fill_arm_identity(frame)
+
+    assert filled.language.tolist() == ["c", "c"]
+    assert [value != value for value in filled.recorded_language.tolist()] == [True, True]

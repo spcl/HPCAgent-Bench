@@ -257,6 +257,11 @@ def fill_arm_identity(frame: "pd.DataFrame", columns: Sequence[str] = FILLABLE_I
         if column not in filled.columns:
             continue
         filled[f"recorded_{column}"] = frame[column]
+        # These columns hold TEXT. One that no row of the whole table ever recorded reads back from
+        # CSV as all-NaN float64, and writing an arm's recovered value into that raises rather than
+        # filling it, so the dtype is settled here instead of being discovered by a crash on the one
+        # campaign whose language nothing stamped.
+        filled[column] = filled[column].astype("str")
         for arm, group in filled.groupby("arm", sort=False):
             if is_blank(arm):
                 continue
