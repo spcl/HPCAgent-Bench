@@ -328,16 +328,44 @@ def report_throughput(samples: list[dict[str, float]]) -> None:
         print(f"throughput probe: could not write {out}: {exc}", flush=True)
 
 
-#: The vLLM Prometheus series the aggregate probe reads. The two counters are what the tok/s figures
-#: are computed from; the two gauges are what makes those figures mean anything, because an aggregate
-#: rate sampled while two agents happened to be in flight is a fact about two agents and not about
-#: the server. All four carry a ``model_name`` label, so a series is matched on its name alone and
-#: every label set of that name is summed -- see parse_prometheus.
-METRIC_GENERATION = "vllm:generation_tokens_total"
-METRIC_PROMPT = "vllm:prompt_tokens_total"
-METRIC_RUNNING = "vllm:num_requests_running"
-METRIC_WAITING = "vllm:num_requests_waiting"
+#: What the aggregate probe needs from a server, under names of its own. The two counters are what
+#: the tok/s figures are computed from; the two gauges are what makes those figures mean anything,
+#: because an aggregate rate sampled while two agents happened to be in flight is a fact about two
+#: agents and not about the server. Every sample row and every artifact is keyed by these, so a
+#: campaign's throughput series reads the same whichever engine served it.
+METRIC_GENERATION = "generation_tokens_total"
+METRIC_PROMPT = "prompt_tokens_total"
+METRIC_RUNNING = "num_requests_running"
+METRIC_WAITING = "num_requests_waiting"
 AGGREGATE_METRICS = (METRIC_GENERATION, METRIC_PROMPT, METRIC_RUNNING, METRIC_WAITING)
+
+#: The Prometheus series each engine publishes for those four. Both engines serve the campaign, and
+#: only the two token counters happen to be spelled alike: SGLang calls the gauges
+#: ``num_running_reqs`` / ``num_queue_reqs`` where vLLM calls them ``num_requests_running`` /
+#: ``num_requests_waiting``, so a probe that knew vLLM only found none of its four on an SGLang arm
+#: and wrote no throughput artifact at all (job 630712 has none; job 630751 does).
+#:
+#: Verified against the served builds: vLLM's names from the expositions the vLLM arms wrote out,
+#: SGLang's from ``sglang/srt/observability/metrics_collector.py`` in ce-images/optarena-sglang.sqsh
+#: (sglang 0.5.19.dev20260908+g554f817948), lines 279-290 and 1558-1567.
+#:
+#: Every one of them carries labels -- ``model_name`` on both engines, plus ``is_streaming`` on
+#: SGLang's two counters -- so a series is matched on its NAME alone and every label set of that
+#: name is summed; see :func:`parse_prometheus`.
+ENGINE_SERIES: dict[str, dict[str, str]] = {
+    "vllm": {
+        METRIC_GENERATION: "vllm:generation_tokens_total",
+        METRIC_PROMPT: "vllm:prompt_tokens_total",
+        METRIC_RUNNING: "vllm:num_requests_running",
+        METRIC_WAITING: "vllm:num_requests_waiting",
+    },
+    "sglang": {
+        METRIC_GENERATION: "sglang:generation_tokens_total",
+        METRIC_PROMPT: "sglang:prompt_tokens_total",
+        METRIC_RUNNING: "sglang:num_running_reqs",
+        METRIC_WAITING: "sglang:num_queue_reqs",
+    },
+}
 
 #: Seconds between ``/metrics`` scrapes while the agents run. Far enough apart that the scrape is
 #: not part of what it measures, close enough that the ramp-up and the drain stay distinguishable
@@ -480,9 +508,23 @@ def scrape_metrics(url: str, headers: dict[str, str]) -> dict[str, float] | None
             text = response.read().decode("utf-8", errors="replace")
     except (OSError, ValueError, urllib.error.URLError):
         return None
-    totals = parse_prometheus(text, AGGREGATE_METRICS)
-    # All four or none: a row missing one series cannot be differenced against a row that has it.
-    return totals if len(totals) == len(AGGREGATE_METRICS) else None
+    return engine_totals(text)
+
+
+def engine_totals(text: str) -> dict[str, float] | None:
+    """One exposition's four numbers under :data:`AGGREGATE_METRICS`' names, whichever engine wrote
+    it, or ``None`` when neither engine's four are all there.
+
+    ENGINE-AWARE, and fails closed: the prefix that is PRESENT wins, an exposition carrying neither
+    engine's series is no reading at all, and a partial one is dropped for the reason a truncated
+    vLLM exposition always was -- a row missing one series cannot be differenced against a row that
+    has it.
+    """
+    for series in ENGINE_SERIES.values():
+        totals = parse_prometheus(text, tuple(series.values()))
+        if len(totals) == len(series):
+            return {key: totals[name] for key, name in series.items()}
+    return None
 
 
 def scrape_aggregate(endpoints: list[str], headers: dict[str, str]) -> dict[str, float] | None:
@@ -688,9 +730,9 @@ def report_aggregate_throughput(samples: list[dict[str, float]], missed: int) ->
         print(f"aggregate throughput: could not write {out}: {exc}", flush=True)
 
 
-@functools.lru_cache(maxsize=1, typed=True)
-def claude_supports_autocompact(binary: str) -> bool:
-    """Whether THIS image's ``claude`` accepts ``--autocompact``.
+@functools.lru_cache(maxsize=8, typed=True)
+def claude_supports_flag(binary: str, flag: str) -> bool:
+    """Whether THIS image's ``claude`` accepts ``flag``.
 
     The agent images install the CLI with an unpinned ``npm install -g @anthropic-ai/claude-code``
     (``containers/cluster/ce-images/judge-agent-amd/Dockerfile``), so two images built two weeks
@@ -698,7 +740,8 @@ def claude_supports_autocompact(binary: str) -> bool:
     exits 1 on an unknown option BEFORE it connects anything -- which the driver then reports as
     "MCP did not connect", three times, then "agent crashed (rc=1)". Four GPU arms
     (625302-625305, 160 agents) died that way in five minutes with the real message,
-    ``error: unknown option '--autocompact'``, visible only in claude.attempt1.log.
+    ``error: unknown option '--autocompact'``, visible only in claude.attempt1.log. Every optional
+    flag goes through here for that reason.
 
     Probed rather than mapped to an image name: the name is not the version, and the next image
     rebuild moves the CLI again without renaming anything.
@@ -706,11 +749,11 @@ def claude_supports_autocompact(binary: str) -> bool:
     try:
         help_text = subprocess.run([binary, "--help"], capture_output=True, text=True, timeout=60, check=False).stdout
     except (OSError, subprocess.SubprocessError) as exc:
-        # Cannot tell -- assume unsupported. A dropped compaction wall costs context; passing a
-        # flag the binary rejects costs the whole agent.
-        print(f"agent_driver: could not probe {binary} --help ({exc}); omitting --autocompact", flush=True)
+        # Cannot tell -- assume unsupported. A dropped flag costs what that flag bought; passing one
+        # the binary rejects costs the whole agent.
+        print(f"agent_driver: could not probe {binary} --help ({exc}); omitting {flag}", flush=True)
         return False
-    return "--autocompact" in help_text
+    return flag in help_text
 
 
 def problem_text(problem: Problem) -> str:
@@ -1189,7 +1232,25 @@ def transcript_total_tokens(
     return fold(lines, {})
 
 
-def cost_breakdown(log: pathlib.Path) -> dict[str, float]:
+#: The token components a cost record carries, in ``token_cost``'s names. ``output`` is EVERY
+#: generated token, reasoning included, on both engines; ``thinking_estimate`` rides along and is
+#: never summed into anything; ``output_source`` says which tier counted the output (8.2), and is a
+#: string, which is why the record's values are not all numbers.
+COST_KEYS: tuple[str, ...] = (
+    "fresh_input",
+    "cached_input",
+    "output",
+    "thinking_estimate",
+    "output_source",
+    "output_delta_shape",
+    "output_suspect",
+    "effective",
+    "wall_ms",
+    "api_ms",
+)
+
+
+def cost_breakdown(log: pathlib.Path, output_counter: object | None = None) -> dict[str, float | str]:
     """The token components for one episode, or {} when they cannot be read.
 
     Delegates to token_cost.py so the harness and the analysis cannot drift: one implementation of
@@ -1197,17 +1258,15 @@ def cost_breakdown(log: pathlib.Path) -> dict[str, float]:
     bookkeeping and must not turn a finished run into a failed one.
     """
     try:
-        row = token_cost_module().episode_cost(log)
+        row = token_cost_module().episode_cost(log, output_counter)
     except Exception:  # noqa: BLE001 -- see the docstring: bookkeeping never fails a run
         return {}
-    return {
-        key: row[key]
-        for key in ("fresh_input", "cached_input", "output", "thinking", "generated", "effective", "wall_ms", "api_ms")
-        if key in row
-    }
+    return {key: row[key] for key in COST_KEYS if key in row}
 
 
-def task_token_totals(workdir: pathlib.Path) -> tuple[int, int | None, int | None, int, int]:
+def task_token_totals(
+    workdir: pathlib.Path, output_counter: object | None = None
+) -> tuple[int, int | None, int | None, int, int]:
     """This task's ``(attempts, effective, billed, effective_crashed, billed_crashed)`` tokens (T2).
 
     Delegates to ``token_cost.task_totals`` so the driver and the extractor cannot drift: one
@@ -1217,7 +1276,7 @@ def task_token_totals(workdir: pathlib.Path) -> tuple[int, int | None, int | Non
     bookkeeping and must not turn a finished run into a failed one.
     """
     try:
-        totals = token_cost_module().task_totals(workdir)
+        totals = token_cost_module().task_totals(workdir, output_counter)
     except Exception:  # noqa: BLE001 -- see the docstring
         return 0, None, None, 0, 0
     return (
@@ -1369,6 +1428,42 @@ def clear_for_relaunch(workdir: pathlib.Path, agent_dir: pathlib.Path) -> None:
     remove_entries(agent_dir, frozenset())
 
 
+def final_attempt_start_of(workdir: pathlib.Path) -> int:
+    """Epoch ms the task's FINAL attempt began per ``token_cost.final_attempt_start`` (T5), 0 when unknown.
+    Never raises: a cost record is bookkeeping."""
+    try:
+        module = token_cost_module()
+        return int(module.final_attempt_start(workdir, module.attempt_transcripts(workdir)))
+    except Exception:  # noqa: BLE001 -- see the docstring
+        return 0
+
+
+def cost_record_fields(
+    transcript: pathlib.Path, worker_dir: pathlib.Path, output_counter: object | None = None
+) -> dict[str, float | int | str | None]:
+    """Every TOKEN field a cost record carries, for one finished task. Never raises.
+
+    The breakdown, alongside the billed `tokens` rather than instead of it: `tokens` charges a
+    173-turn episode for its prompt 173 times, while these separate what was re-sent from what was
+    computed and recover the output these endpoints report as zero on every per-turn event
+    (docs/token_accounting.md). Under fresh relaunch (T5) the task IS its final attempt, which is
+    what `tokens` and the breakdown measure; what the crashed attempts spent is reported beside them
+    as the `_crashed` pair and added to nothing (T1-T2).
+
+    Shared with ``scripts/migrate_tokens.py`` so a re-folded record and a freshly written one cannot
+    come out of two implementations of the same arithmetic.
+    """
+    fields: dict[str, float | int | str | None] = dict(cost_breakdown(transcript, output_counter))
+    attempts, _effective, _billed, effective_crashed, billed_crashed = task_token_totals(worker_dir, output_counter)
+    fields["attempts"] = attempts
+    fields["tokens_effective"] = _effective
+    fields["tokens_billed"] = _billed
+    fields["tokens_effective_crashed"] = effective_crashed
+    fields["tokens_billed_crashed"] = billed_crashed
+    fields["final_attempt_start_ms"] = final_attempt_start_of(worker_dir)
+    return fields
+
+
 def write_cost_record(
     path: pathlib.Path,
     problem: Problem,
@@ -1400,20 +1495,16 @@ def write_cost_record(
         "result": subtype,
     }
     # The breakdown, alongside rather than instead. `tokens` charges a 173-turn episode for its
-    # prompt 173 times; these separate what was re-sent from what was computed, and recover the
-    # thinking these endpoints report as zero. See docs/token_accounting.md.
-    record.update(cost_breakdown(transcript or path.parent / "claude.log"))
+    # prompt 173 times; these separate what was re-sent from what was computed and take the output
+    # from the tier the precedence rule reached (T7-T12). See docs/token_accounting.md.
+    record.update(cost_record_fields(transcript or path.parent / "claude.log", path.parent))
     # The TASK total (T1-T2, T5). A relaunch wipes the agent's state, so the task IS its final
     # attempt: `tokens` and the breakdown above are the reported cost, and what the crashed attempts
     # spent is reported beside them rather than added to them.
-    attempts, _effective, _billed, effective_crashed, billed_crashed = task_token_totals(path.parent)
-    record["attempts"] = attempts
     record["relaunch"] = RELAUNCH_POLICY
     # The cut every analysis of this task applies (X7): a judge row stamped before it belongs to
     # state that was thrown away. Epoch ms, the judge's own `ts` unit.
     record["final_attempt_start_ms"] = final_attempt_start_ms
-    record["tokens_effective_crashed"] = effective_crashed
-    record["tokens_billed_crashed"] = billed_crashed
     try:
         path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
     except OSError:
@@ -1925,7 +2016,7 @@ def claude_command(context: "Context") -> list[str]:
     # is declared. Unset leaves the command byte-identical: older agent images have no such flag.
     autocompact = os.environ.get("CLAUDE_AUTOCOMPACT", "").strip()
     claude_bin = os.environ.get("CLAUDE_BIN", "claude")
-    if autocompact and not claude_supports_autocompact(claude_bin):
+    if autocompact and not claude_supports_flag(claude_bin, "--autocompact"):
         # Loud, and once per driver process: the arm now runs WITHOUT the compaction wall its .env
         # asked for, which is a real difference from an arm whose image accepts the flag.
         print(
@@ -1948,6 +2039,13 @@ def claude_command(context: "Context") -> list[str]:
         "--max-turns",
         turn_cap,
         *(["--autocompact", autocompact] if autocompact else []),
+        # Per-REQUEST token usage, which is the only exact output count a killed episode leaves:
+        # the endpoints report output_tokens: 0 on every assistant event and fill the real number
+        # in once, on a result record an agent killed at its wall never reaches (T7-T9). With this
+        # flag the stream also carries message_delta events whose usage the fold sums per request.
+        # Cheap: the text is already streamed as thinking_tokens deltas, so what this adds is one
+        # small event per request, not a copy of the transcript.
+        *(["--include-partial-messages"] if claude_supports_flag(claude_bin, "--include-partial-messages") else []),
         # Non-interactive: a permission prompt has no one to answer it, and a --print agent that
         # pauses to ask simply ends its run unsubmitted (5 of 10 agents, 585108).
         "--permission-mode",

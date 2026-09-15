@@ -132,6 +132,10 @@ OBSERVATION_FIELDS = (
     "tokens_crashed",
     "final_attempt_start_ms",
     "cancelled",
+    # T9/T12: which tier counted the task's output, and whether its result record is believable.
+    # Blank on a judge row, which measures a grade and not a token cost.
+    "output_source",
+    "output_suspect",
 )
 
 SOURCE_FIELDS = (
@@ -414,6 +418,46 @@ def task_totals_by_dir(job_dirs: list[pathlib.Path], workers: int) -> dict[pathl
         return dict(zip(dirs, pool.map(fold, dirs, chunksize=4), strict=True))
 
 
+#: The fold that wrote a ``tokens.json``. From 2 on the record carries the output precedence (T9)
+#: and is the ONE place the task's numbers were computed, by the driver at task end or by
+#: ``scripts/migrate_tokens.py`` afterwards. Below it -- or absent -- the record predates the
+#: precedence and is ignored in favour of folding the transcripts here.
+MIN_RECORD_FOLD = 2
+
+#: What a fold-2 record is read for, as ``(row column, record key)``. ``tokens`` is the FINAL
+#: attempt's total (T2, T5); the crashed attempts' spend and the final attempt's start ride beside it.
+RECORD_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("tokens", "tokens_effective"),
+    ("tokens_billed", "tokens_billed"),
+    ("attempts", "attempts"),
+    ("tokens_crashed", "tokens_effective_crashed"),
+    ("final_attempt_start_ms", "final_attempt_start_ms"),
+    ("output_source", "output_source"),
+    ("output_suspect", "output_suspect"),
+)
+
+
+def cost_record(worker_dir: pathlib.Path) -> dict[str, Any] | None:
+    """This worker's ``tokens.json`` when it was written by fold 2 or later, else None.
+
+    PREFERRED OVER RE-FOLDING, and not as an optimisation. The record is what the driver computed
+    with the transcript in front of it, or what the migration computed with a tokenizer available;
+    re-folding here reaches the server tiers only, so a task whose output was retokenized would come
+    back out as ``none`` and lose the count (T9). An older record is not read at all -- its numbers
+    were made by the fold that double-counted reasoning (F8).
+    """
+    try:
+        parsed = json.loads((worker_dir / "tokens.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    fold = parsed.get("token_fold")
+    if not isinstance(fold, int) or isinstance(fold, bool) or fold < MIN_RECORD_FOLD:
+        return None
+    return parsed
+
+
 def task_rows_for_job(
     job_dir: pathlib.Path,
     run_root: str,
@@ -443,7 +487,18 @@ def task_rows_for_job(
             continue
         text = prompt_file.read_text(encoding="utf-8", errors="replace")
         node, problem, worker = agent_indices(run_id)
-        task = totals[worker_dir] if totals is not None else token_cost_module().task_totals(worker_dir)
+        record = cost_record(worker_dir)
+        if record is None:
+            task = totals[worker_dir] if totals is not None else token_cost_module().task_totals(worker_dir)
+            counts: dict[str, Any] = {
+                "tokens": task.tokens_effective if task.tokens_effective is not None else "",
+                "tokens_billed": task.tokens_billed if task.tokens_billed is not None else "",
+                "attempts": task.attempts,
+                "tokens_crashed": task.tokens_effective_crashed,
+                "final_attempt_start_ms": task.final_attempt_start_ms,
+            }
+        else:
+            counts = {column: record.get(key, "") for column, key in RECORD_COLUMNS}
         row: dict[str, Any] = dict.fromkeys(OBSERVATION_FIELDS, "")
         row.update(
             run_root=run_root,
@@ -460,11 +515,7 @@ def task_rows_for_job(
             benchmark=prompt_benchmark(text),
             language=prompt_language(text),
             ts_ms=int(prompt_file.stat().st_mtime * 1000),
-            tokens=task.tokens_effective if task.tokens_effective is not None else "",
-            tokens_billed=task.tokens_billed if task.tokens_billed is not None else "",
-            attempts=task.attempts,
-            tokens_crashed=task.tokens_effective_crashed,
-            final_attempt_start_ms=task.final_attempt_start_ms,
+            **counts,
             cancelled="1" if (worker_dir / CANCELLED_MARKER).exists() else "0",
         )
         rows.append(row)

@@ -187,7 +187,8 @@ def no_cpus(worker_index: int, agents: int) -> list[int]:
     return []
 
 
-def accepts_autocompact(binary: str) -> bool:
+def accepts_flag(binary: str, flag: str) -> bool:
+    """Every optional CLI flag is taken as supported, so the goldens record the full invocation."""
     return True
 
 
@@ -218,7 +219,7 @@ def run_claude(
             run=subprocess.run,
         )
         driver.agent_cpus = no_cpus
-        driver.claude_supports_autocompact = accepts_autocompact
+        driver.claude_supports_flag = accepts_flag
         driver.TOKEN_POLL_SECONDS = 0.01
         problem = {"id": 7, "kernel": KERNEL, "language": "c", "task": TASK}
         with contextlib.redirect_stdout(summary):

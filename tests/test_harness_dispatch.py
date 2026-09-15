@@ -116,6 +116,10 @@ def launcher(monkeypatch, driver, *attempts):
             self.returncode = -9
 
     monkeypatch.setattr(driver.subprocess, "Popen", FakeHarness)
+    # The CLI feature probe shells out to `claude --help`, which would land in FakeHarness through
+    # subprocess.run. Answered directly instead, as the golden capture does: these tests are about
+    # what the driver launches, not about which image it launched it from.
+    monkeypatch.setattr(driver, "claude_supports_flag", lambda binary, flag: True)
     return launches
 
 
@@ -178,6 +182,7 @@ def test_the_claude_arm_launches_the_command_every_recorded_campaign_ran(driver,
         "qwen38",
         "--max-turns",
         "400",
+        "--include-partial-messages",
         "--permission-mode",
         "bypassPermissions",
         "--verbose",
@@ -381,6 +386,22 @@ def test_the_token_cap_folds_a_runners_usage_file_and_ends_it_with_rc_125(driver
     assert tokens_record(workdir)["tokens"] == 280
 
 
+def test_an_image_whose_cli_lacks_a_flag_launches_without_it_rather_than_dying(driver, monkeypatch, tmp_path) -> None:
+    """The agent images install the CLI unpinned, so two images carry two CLIs, and an unknown
+    option makes claude exit 1 before it connects anything -- 160 agents died that way on
+    --autocompact (625302-625305). Every optional flag is probed, so an older image simply runs
+    without --include-partial-messages and falls back to the result record for its output."""
+    monkeypatch.setenv("HARNESS", "")
+    launches = launcher(monkeypatch, driver, claude_run)
+    monkeypatch.setattr(driver, "claude_supports_flag", lambda binary, flag: flag != "--include-partial-messages")
+
+    rc, _workdir = run(driver, tmp_path)
+
+    assert rc == 0
+    assert "--include-partial-messages" not in launches[0]["argv"]
+    assert "--output-format" in launches[0]["argv"], "the rest of the command is untouched"
+
+
 def test_a_runner_is_charged_its_usage_file_and_not_what_its_log_resembles(driver, monkeypatch, tmp_path) -> None:
     """A runner's log is free text; a line in it shaped like a claude usage event must not bill it."""
     monkeypatch.setenv("HARNESS", "miniswe")
@@ -392,12 +413,15 @@ def test_a_runner_is_charged_its_usage_file_and_not_what_its_log_resembles(drive
     record = tokens_record(workdir)
     assert record["tokens"] == 280
     # The breakdown under token_cost's perfect-prefix model on each call's whole prompt (100, then
-    # 50 + 100): fresh 100 + 50, cached 100, output 6 + 15, reasoning 4 + 5.
-    assert {key: record[key] for key in ("fresh_input", "cached_input", "output", "thinking", "effective")} == {
+    # 50 + 100): fresh 100 + 50, cached 100. OUTPUT is every generated token, so it is the runner's
+    # disjoint output and reasoning put back together -- (6 + 15) + (4 + 5) -- and the reasoning is
+    # reported beside it without being added a second time (8.1, F8).
+    keys = ("fresh_input", "cached_input", "output", "thinking_estimate", "effective")
+    assert {key: record[key] for key in keys} == {
         "fresh_input": 150,
         "cached_input": 100,
-        "output": 21,
-        "thinking": 9,
+        "output": 30,
+        "thinking_estimate": 9,
         "effective": 180.0,
     }
 
