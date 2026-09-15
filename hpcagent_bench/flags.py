@@ -511,6 +511,15 @@ CLANG_OPT_REPORT = (
     "-Rpass=loop-vectorize|slp-vectorizer -Rpass-missed=loop-vectorize|slp-vectorizer -Rpass-analysis=loop-vectorize"
 )
 
+#: The vectorizer cost model switched off, added to the report compile when ``perf_reports.vect_cost_model`` is
+#: ``unlimited``: the report then says what CAN vectorize, not what the compiler judged profitable. GCC has a
+#: switch for both loop and simd vectorization. LLVM has none: a unit cost for every instruction makes every legal
+#: vectorization factor profitable while the factor itself still follows the target ISA (4 doubles on AVX2, 8 on
+#: AVX-512), and a negative SLP threshold accepts every legal SLP tree. A forced vector width would pin the factor
+#: and, like a vectorize pragma, also license FP reassociation, which is ``flags.fp_associative``'s decision.
+GCC_VECT_UNLIMITED = "-fvect-cost-model=unlimited -fsimd-cost-model=unlimited"
+CLANG_VECT_UNLIMITED = "-mllvm -force-target-instruction-cost=1 -mllvm -slp-threshold=-10000"
+
 #: Intel oneAPI (icx / icpx / ifx) vectorization + parallelization report. Both phases are named:
 #: ``vec`` is the counterpart of the two above, and ``par`` says what the OpenMP layer did, which
 #: is the only route to threads this vendor has (see the note on the absent ``ICX_AUTOPAR``).

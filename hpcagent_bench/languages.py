@@ -1501,8 +1501,25 @@ def block_family(block: dict[str, Any]) -> str:
     return DEVICE_DRIVER_FAMILY.get(block.get("cc", ""), "")
 
 
+#: Report family -> the flags that switch its vectorizer cost model off (``perf_reports.vect_cost_model``).
+VECT_UNLIMITED_REFS: Mapping[str, str] = types.MappingProxyType(
+    {"gcc": "GCC_VECT_UNLIMITED", "llvm": "CLANG_VECT_UNLIMITED"}
+)
+
+#: The values ``perf_reports.vect_cost_model`` accepts.
+VECT_COST_MODELS: tuple[str, ...] = ("default", "unlimited")
+
+
+def vect_cost_model() -> str:
+    """``perf_reports.vect_cost_model``, read on every call; an unknown value raises by name."""
+    value = config.get_str("perf_reports.vect_cost_model", "default")
+    if value not in VECT_COST_MODELS:
+        raise ValueError(f"perf_reports.vect_cost_model={value!r}; expected one of {VECT_COST_MODELS}")
+    return value
+
+
 @functools.lru_cache(maxsize=None, typed=True)
-def family_report_flags(family: str) -> str:
+def base_report_flags(family: str) -> str:
     """:data:`REPORT_REFS` resolved to flags; ``""`` for a family with no report channel."""
     ref = REPORT_REFS.get(family)
     if ref is None:
@@ -1511,6 +1528,15 @@ def family_report_flags(family: str) -> str:
     if ref not in flag_vars:
         raise KeyError(f"REPORT_REFS[{family!r}] = {ref!r} is not a constant in hpcagent_bench.flags")
     return flag_vars[ref]
+
+
+def family_report_flags(family: str) -> str:
+    """The family's report flags, plus its cost-model switch when ``perf_reports.vect_cost_model`` is ``unlimited``.
+
+    Not cached: the knob is config and may change per run, while :func:`base_report_flags` cannot."""
+    report = base_report_flags(family)
+    unlimited = VECT_UNLIMITED_REFS.get(family) if report and vect_cost_model() == "unlimited" else None
+    return f"{report} {vars(flags)[unlimited]}" if unlimited else report
 
 
 def report_flags(lang: str, *, compiler: Optional[str] = None) -> str:
