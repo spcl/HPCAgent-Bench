@@ -72,6 +72,48 @@ plotstyle.title(fig, experiment_tags.display_name("llr40v11"))
 fig.savefig("out.pdf", bbox_inches=fig.bbox_inches)
 ```
 
+## The drawing conventions
+
+These six are not preferences. A figure that breaks one is wrong, and the tests named beside each
+one fail when it does.
+
+**1. The measured value is on Y.** A speed-up, a token count, a ratio -- always the Y axis, never X.
+X carries the CATEGORIES: the two conditions of a comparison, the language, the kernel. A figure
+whose rows are names (a forest plot, `plot_paired_arms.py`, `kernel_comparison.py`) is the one shape
+that reads the other way, and its row axis is `style.row_axis`, which carries no grid.
+
+**2. Colour is the INTERVENTION, shape is the MODEL.** `palette.color(packet)` for the treated side
+and `palette.control_color()` for the no-packet side; `palette.marker(model)` for the shape. An
+intervention is anything an arm was given or denied, not only a skill packet: `kernel` (the bare
+kernel), `repo` (the whole repository) and `no-score` (the blind condition) are registered packet
+keys and wear their own global hues, and the blind comparison is drawn by the same paired figure as
+every other packet rather than by a figure of its own. Colouring by MODEL wherever a packet also
+varies is the bug: it spends the intervention's channel on the entity the shape already carries, so
+one arm reads as a different treatment in every figure it appears in. Where only ONE entity varies
+the colour is that entity: `palette.framework_color` for the canon compiler figure (no agent in it),
+`palette.harness_color` for the harness comparison (claude / miniswe / openhands / optimas), and
+`palette.model_color` for a figure whose only axis is which LLM ran.
+
+**3. Two square panels per comparison.** A speed-up and a token count are different measurements
+(SC15 Rule 4), so they never share a scale: `plot_score_change.py` draws them as two panels of equal
+box aspect side by side, with the two CONDITIONS on X and one hollow mark, one filled mark and the
+pair link between them per arm.
+
+**4. Major grid only.** `style.value_axis` draws it, on the value axis alone, and switches every
+minor line and minor label off. A minor line is a second grid at a second weight, and once a figure
+is reduced for print the panel reads as a texture the marks sit on rather than a reference they sit
+against.
+
+**5. One legend, on the FIGURE.** `style.legend_below(fig, handles, ...)`, once per figure, never
+`ax.legend`. A key on each panel of a multi-panel figure invites reading the panels as different
+sets of series when they draw the same ones.
+
+**6. A point the arm never delivered carries a cross.** It enters every aggregate at 1x and its
+tokens still count, so it is a placeholder and not a measurement. `style.point_mark(...,
+delivered=False)` keeps the intervention colour and the model shape and overlays a small x; the
+legend says `No Verified Answer (Scored 1x)`. A paired figure keeps the pair, with the failed leg at
+1x.
+
 ## Rules
 
 **Identity is the entity's, not the figure's.** `palette.color(name)` / `palette.colors(names)`
@@ -99,10 +141,10 @@ into `[0, 1)` and `0.5x` reads as smaller than `1.5x`.
 reads the column the judge stamped; `DEFAULT_BASELINE` (`numba`) is only the fallback. v9/v10 graded
 against C, v11 against numba -- a figure that picks its own denominator plots a ratio nobody scored.
 
-**Connectors are elbows, never diagonals.** The straight segment passes through coordinates that
-were never measured, and on a plot about where something landed a reader takes the path for data.
-`plot_score_change.py` draws the horizontal leg first, so the corner sits under the "with skills"
-mark and the vertical leg reads as the change in spend.
+**A connector is a PAIR LINK, never a trend** (SC15 Rule 12). The segment from an arm's control
+mark to its treated mark says the two marks are one arm; its length is the size of the effect and
+its direction the sign. It claims nothing about the space between the two conditions, and the legend
+names it `Pair Link` so a reader is not left to guess.
 
 **Draw no interval you cannot support.** `plot_tokens.py`'s cells hold a handful of episodes drawn
 from several different arms, not repeats of one condition -- on llr40v11 every one of its 120 token
@@ -119,9 +161,15 @@ speed-up. Whether a difference is real stays `plot_score_change.py`'s paired tes
 as `plot_tokens.py`'s `median_episode_tokens`, is a per-episode quantity and says so in its name.
 
 **Rank statistics on these samples.** Per-kernel speed-ups are heavy-tailed and a mean in log space
-still lets one 40x kernel carry the estimate. `plot_score_change.py` uses Hodges-Lehmann with a
-distribution-free signed-rank interval, paired by kernel -- Mann-Whitney is the unpaired sibling
-and throws away most of the precision.
+still lets one 40x kernel carry the estimate. `plot_score_change.py` pairs by kernel -- Mann-Whitney
+is the unpaired sibling and throws away most of the precision.
+
+**Every ratio figure shows the geomean AND its interval,** and says which interval it is showing.
+`summary.geomean_interval` picks the log-t interval at or above `summary.LOG_T_MIN_SAMPLES` (20)
+samples and a log-space bootstrap below it; tokens are the median with its bootstrap interval. The
+method and the n go in the legend text the script emits, because two differently derived intervals
+drawn the same way are two claims a reader cannot separate. See
+[measurement_statistics.md](measurement_statistics.md).
 
 **Paired figures must be the same size.** Fixed figsize, fixed `subplots_adjust` (not
 `tight_layout`), legend inside the canvas, and `bbox_inches=fig.bbox_inches`. `bbox_inches=None`
@@ -142,7 +190,7 @@ minor lines at wrong ratios.
 | script | figure |
 |---|---|
 | `plot_arm_summary.py` | per-arm median speed-up and spend; one x slot per LANGUAGE, models dodged inside |
-| `plot_score_change.py` | speed-up against spend, two marks per arm joined by an elbow, quadrants named |
+| `plot_score_change.py` | one comparison as two square panels: speed-up on Y, tokens on Y, conditions on X |
 | `plot_tokens.py` | median tokens per episode, per kernel, per model |
 | `plot_speedup.py` | per-kernel signed speed-up in magnitude bands, per machine (see [measurement_statistics.md](measurement_statistics.md)) |
 
