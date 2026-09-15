@@ -134,14 +134,16 @@ def test_the_family_the_marks_are_corrected_over_is_every_test_the_figure_could_
     assert plot.family_size(frame) == 12
 
 
-def test_load_reads_skills_off_the_recorded_packet_not_the_arm_name(tmp_path: pathlib.Path) -> None:
-    """An arm renamed away from the ``-skills`` suffix, but recording the ``lang-skills`` packet,
-    must still load as skilled -- and one still literally suffixed ``-skills`` that recorded no
-    packet must not."""
+def test_load_reads_skills_off_the_recorded_packet_before_the_arm_name(tmp_path: pathlib.Path) -> None:
+    """An arm renamed away from the ``-skills`` suffix but recording ``lang-skills`` loads as skilled, and a recorded
+    packet beats a ``-skills`` name. An arm that recorded NO packet takes the name's token: the llr-focus40 kimi
+    ``-skills`` arms never stamped one, and reading them as the control dropped five of six skills pairs (this case
+    used to assert the opposite)."""
     path = tmp_path / "observations.csv"
     pd.DataFrame(
         [
             {"arm": "renamed-qwen38-c", "packet": "skills"},
+            {"arm": "qwen38-fortran-skills", "packet": "cpf"},
             {"arm": "qwen38-c-skills", "packet": ""},
         ]
     ).to_csv(path, index=False)
@@ -150,7 +152,8 @@ def test_load_reads_skills_off_the_recorded_packet_not_the_arm_name(tmp_path: pa
 
     by_arm = frame.set_index("arm").skills
     assert bool(by_arm["renamed-qwen38-c"]) is True
-    assert bool(by_arm["qwen38-c-skills"]) is False
+    assert bool(by_arm["qwen38-fortran-skills"]) is False
+    assert bool(by_arm["qwen38-c-skills"]) is True
 
 
 def test_load_counts_a_composite_packet_as_skilled(tmp_path: pathlib.Path) -> None:
