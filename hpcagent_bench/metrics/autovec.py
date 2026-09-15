@@ -28,6 +28,7 @@ import tempfile
 import time
 import types
 from collections.abc import Sequence
+from typing import Protocol
 
 from sqlmodel import Session
 
@@ -119,6 +120,29 @@ def of_precision(source: pathlib.Path, datatype: str) -> bool:
     return tag is None or tag.group(1) == PRECISION.get(datatype, datatype)
 
 
+class VectorDetailView(Protocol):
+    """The part of ``loop_report.VectorDetail`` a count reads: ``parsed`` is set only by a LOOP vectorization."""
+
+    @property
+    def parsed(self) -> bool: ...
+
+
+class VerdictView(Protocol):
+    """The part of ``loop_report.Verdict`` a count reads."""
+
+    @property
+    def vectorized(self) -> Sequence[VectorDetailView]: ...
+
+    @property
+    def missed(self) -> Sequence[str]: ...
+
+
+def loop_vectorized(verdict: VerdictView | None) -> bool:
+    """Whether a loop's remarks include a loop vectorization. A statement group SLP packed inside the body (gcc's
+    "basic block part vectorized", clang's "SLP vectorized") is SLP, not the loop vectorizing."""
+    return verdict is not None and any(detail.parsed for detail in verdict.vectorized)
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class Measured:
     """The counts of one report, and what they were taken under (compiler family, cost model, FP reassociation)."""
@@ -130,11 +154,11 @@ class Measured:
 def count(report: str, datatype: str) -> Measured:
     """The auto-vectorization counts of every compile in ``report`` whose sources are for ``datatype``.
 
-    A loop is a for/while/do header in a compiled source (``loop_report.scan_nests``): vectorized when a remark
-    on it says so, missed when its remarks only refuse, unreported when they do neither. A remark in a header the
-    source includes is not the kernel's loop and is not counted; a vectorized remark in a source outside every
-    loop is SLP. Raises when no compiled source of that precision is readable, which would otherwise count as a
-    kernel without loops.
+    A loop is a for/while/do header in a compiled source (``loop_report.scan_nests``), with any pragma directing
+    it: vectorized when a loop-vectorization remark lands on it, missed when its remarks refuse and none does,
+    unreported when they do neither. Every other vectorized remark in a source is SLP, inside a loop body or not.
+    A remark in a header the source includes is not the kernel's and is not counted. Raises when no compiled
+    source of that precision is readable, which would otherwise count as a kernel without loops.
     """
     lr = loop_report()
     parsed = []
@@ -159,16 +183,18 @@ def count(report: str, datatype: str) -> Measured:
     nests = [(name, nest) for name, found in grouped.nests.items() for nest in found]
     verdicts = [[grouped.by_loop.get((name, nest.start, loop.line)) for loop in nest.loops] for name, nest in nests]
     flat = [verdict for nest in verdicts for verdict in nest]
-    vectorized = sum(1 for verdict in flat if verdict is not None and verdict.vectorized)
-    missed = sum(1 for verdict in flat if verdict is not None and not verdict.vectorized and verdict.missed)
+    vectorized = sum(1 for verdict in flat if loop_vectorized(verdict))
+    missed = sum(1 for verdict in flat if verdict is not None and not loop_vectorized(verdict) and verdict.missed)
+    in_sources = [verdict for verdict in flat if verdict is not None]
+    in_sources += [verdict for name, verdict in grouped.outside.items() if name in sources]
     counts = {
         "loops": len(flat),
         "loops_vectorized": vectorized,
         "loops_missed": missed,
         "loops_unreported": len(flat) - vectorized - missed,
         "nests": len(nests),
-        "nests_vectorized": sum(1 for nest in verdicts if any(v is not None and v.vectorized for v in nest)),
-        "slp_vectorized": sum(len(v.vectorized) for name, v in grouped.outside.items() if name in sources),
+        "nests_vectorized": sum(1 for nest in verdicts if any(loop_vectorized(v) for v in nest)),
+        "slp_vectorized": sum(1 for verdict in in_sources for detail in verdict.vectorized if not detail.parsed),
         "unparsed": merged.unparsed,
     }
     fp_associative = int(config.get_bool("flags.fp_associative", False))

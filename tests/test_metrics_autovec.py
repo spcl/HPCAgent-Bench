@@ -128,6 +128,69 @@ def test_a_nest_counts_once_and_a_vectorized_statement_group_outside_loops_is_sl
     assert (counts["nests"], counts["nests_vectorized"], counts["slp_vectorized"]) == (3, 2, 1), counts
 
 
+#: The shapes CPF and DaCe emit: a parallel loop, a simd loop, and a guarded parallel loop with its plain fallback.
+OPENMP_SOURCE = """#include <stddef.h>
+void par(double *restrict a, const double *restrict b, size_t n) {
+    #pragma omp parallel for
+    for (size_t i = 0; i < n; i++) {
+        a[i] = 2.0 * b[i];
+    }
+}
+void simd(double *restrict a, const double *restrict b, size_t n) {
+    #pragma omp simd
+    for (size_t i = 0; i < n; i++) {
+        a[i] = b[i] + 1.0;
+    }
+}
+void guarded(double *restrict a, const double *restrict b, size_t n) {
+    if (n > 64) {
+        #pragma omp parallel for simd \\
+            schedule(static)
+        for (size_t i = 0; i < n; i++) {
+            a[i] = b[i] * b[i];
+        }
+    } else {
+        for (size_t i = 0; i < n; i++) {
+            a[i] = b[i] * b[i];
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("compiler", ["gcc", "clang"])
+def test_an_openmp_loop_is_counted_whichever_line_its_compiler_reports_it_on(
+    tmp_path: pathlib.Path, compiler: str
+) -> None:
+    """clang reports an OpenMP loop on its pragma and gcc inside its body; both are the loop, or every CPF
+    loop under clang reads as unreported and the CPF rate is a compiler artifact."""
+    counts = autovec.count(report_of(tmp_path, compiler, ("k_fp64.c", OPENMP_SOURCE)), "float64").counts
+    assert (counts["loops"], counts["loops_vectorized"], counts["loops_unreported"]) == (4, 4, 0), counts
+
+
+def test_a_statement_group_packed_inside_a_loop_is_slp_and_not_the_loop_vectorizing(tmp_path: pathlib.Path) -> None:
+    """gcc's report on a CPF argmax form: the loop is refused, and only the reduction combiner outlined at the
+    pragma is SLP packed. Counting that as the loop would credit CPF with a loop no compiler vectorized."""
+    source = tmp_path / "argmax_fp64_cpf.c"
+    source.write_text(
+        "void k(const double *a, long n) {\n"
+        "    double best = a[0];\n"
+        "    #pragma omp parallel for reduction(max : best)\n"
+        "    for (long i = 1; i < n; ++i) {\n"
+        "        if (a[i] > best) { best = a[i]; }\n"
+        "    }\n"
+        "}\n"
+    )
+    report = (
+        f"$ gcc -O3 -fopt-info-vec-optimized -fopt-info-vec-missed -c {source} -o k.o\n"
+        f"{source}:4:39: missed: couldn't vectorize loop\n"
+        f"{source}:5:20: missed: not vectorized: unsupported use in stmt.\n"
+        f"{source}:3:21: optimized: basic block part vectorized using 16 byte vectors\n"
+    )
+    counts = autovec.count(report, "float64").counts
+    assert (counts["loops_vectorized"], counts["loops_missed"], counts["slp_vectorized"]) == (0, 1, 1), counts
+
+
 def test_the_other_precisions_source_in_the_same_report_is_not_counted(tmp_path: pathlib.Path) -> None:
     """A native column compiles its fp64 and fp32 sources in one report; counting both doubles every loop."""
     report = report_of(tmp_path, "gcc", ("k_fp64.c", SOURCE), ("k_fp32.c", ONE_LOOP))

@@ -250,6 +250,34 @@ def test_a_remark_is_charged_to_the_innermost_loop_containing_its_line() -> None
     assert lr.owning_loop(nests, 2) is None, "a function signature belongs to no loop"
 
 
+OMP_SOURCE = (
+    "void k(double *a, int n, int m) {\n"
+    "    #pragma omp parallel for \\\n"
+    "        schedule(static)\n"
+    "    for (int i = 0; i < n; i++) {\n"
+    "        #pragma omp simd\n"
+    "        for (int j = 0; j < m; j++) {\n"
+    "            a[i * m + j] = 0.0;\n"
+    "        }\n"
+    "    }\n"
+    "    #pragma omp declare reduction(r : int : omp_out += omp_in)\n"
+    "    int total = 0;\n"
+    "}\n"
+)
+
+
+@pytest.mark.parametrize(("remark_line", "loop_line"), [(2, 4), (3, 4), (5, 6)])
+def test_a_remark_on_the_pragma_directing_a_loop_is_charged_to_that_loop(remark_line: int, loop_line: int) -> None:
+    """clang places an OpenMP loop's remarks on its pragma, above the header: charged to no loop, every CPF loop
+    reads as one the compiler said nothing about. A continuation line belongs to the pragma it continues, and an
+    inner loop's pragma to the inner loop rather than the outer body."""
+    assert lr.owning_loop(lr.scan_nests(OMP_SOURCE), remark_line)[1].line == loop_line
+
+
+def test_a_pragma_that_directs_no_loop_charges_no_loop() -> None:
+    assert lr.owning_loop(lr.scan_nests(OMP_SOURCE), 10) is None
+
+
 def test_a_loop_word_in_a_comment_does_not_create_a_nest() -> None:
     assert lr.scan_nests("int f(int n) {\n  // for (i = 0; i < n; i++) old\n  return n;\n}\n") == ()
 
