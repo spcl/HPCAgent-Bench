@@ -44,6 +44,38 @@ python scripts/plot_tokens.py       data/llr40_observations.csv --experiment llr
 Each writes a PDF, a PNG, and the TABLE behind the figure -- a figure nobody can check is a claim.
 `--experiment` also sets the title, through `experiment_tags.display_name`.
 
+## A comparison whose pairs are not a packet suffix
+
+`--treatment` splits ONE campaign on a recorded packet, which is all it can do. Two comparisons do
+not fit that and still get the same two panels:
+
+* **llrblind against the scored arms**: the two sides are two CAMPAIGNS with different arm prefixes.
+* **git-scicomp**: the condition is a `kernel`/`repo` scope, not a packet the arm staged.
+
+Both go through `--pairs-csv`, which reads the family CSV `experiments/paired_arms.py` already
+writes. Its `arm_a,arm_b` rows ARE the pairs and its corrected verdicts ARE the stars; the figure
+computes only the two per-arm points, through the same `population.kernel_medians` every other
+panel uses. The statistic therefore keeps ONE definition: a figure that re-derived it could star a
+pair the paper's table calls not significant, and a reader would have no way to tell which of the
+two is the finding.
+
+```bash
+python scripts/plot_score_change.py scored.csv blind.csv \
+    --pairs-csv blind_vs_scored.csv --intervention no-score --label "No Score Tool" \
+    --out figures/blind.pdf --table data/blind.csv
+
+python scripts/plot_score_change.py git_scicomp.csv \
+    --pairs-csv git_scicomp_pairs.csv --intervention repo --label "Whole Repository" \
+    --control-label "Bare Kernel" --out figures/scicomp.pdf --table data/scicomp.csv
+```
+
+`--intervention` is the registered packet key the TREATED side wears, so the hue and the display
+name come from `registry.yaml` like any other intervention. `--control-label` names a control that
+is not the absence of a packet: git-scicomp's is the bare kernel and llrblind's kept its score tool,
+and "No Packet" names neither. The per-arm label is the language plus every packet BOTH arms carried
+(`C`, `Fortran`, `C +skills`, `Fortran +skills`) -- never the intervention, which the title and the
+legend already say once.
+
 ## A new figure
 
 ```python
@@ -77,22 +109,11 @@ fig.savefig("out.pdf", bbox_inches=fig.bbox_inches)
 These six are not preferences. A figure that breaks one is wrong, and the tests named beside each
 one fail when it does.
 
-**1. The measured value is on the VALUE axis, and that axis is Y.** A speed-up, a token count, a
-ratio -- always Y. The other axis carries the CATEGORIES: the two conditions of a comparison, the
-language, the kernel.
-
-Three figures read the other way round, on purpose, and they are the only ones allowed to:
-`kernel_comparison.py`, `signed.py` and `plot_paired_arms.py` put their categories on Y through
-`style.row_axis` and their value on X. What decides this is what the CATEGORICAL axis has to carry.
-Forty kernel names or `Qwen3.8-27B, C, Canonical Parallel Form as Source` are horizontal text; as x
-ticks in a column-width panel they are rotated 90 degrees and unreadable, and as row labels they
-are a list a reader scans. `per_kernel.py` is the counter-example that proves it is the labels and
-not the data: its kernel axis fits across the page, so it keeps the kernel on x and the value on y.
-
-So the rule is about WHICH AXIS CARRIES THE MEASUREMENT, not about the orientation of the page: the
-value axis gets the log scale, the major grid and `style.value_axis`, and the categorical axis gets
-neither. Anything with a free choice -- every comparison figure, every small multiple whose
-categories are short -- puts the value on Y.
+**1. The measured value is on Y. No exceptions.** A speed-up, a token count, a ratio -- always the
+Y axis. X carries the CATEGORIES: the two conditions of a comparison, the language, the kernel. A
+long category label is rotated 90 degrees on x; it is not a reason to turn the figure on its side.
+The value axis gets the log scale, the major grid and `style.value_axis`; the categorical axis gets
+none of the three.
 
 **2. Colour is the INTERVENTION, shape is the MODEL.** `palette.color(packet)` for the treated side
 and `palette.control_color()` for the no-packet side; `palette.marker(model)` for the shape. An
@@ -109,7 +130,8 @@ the colour is that entity: `palette.framework_color` for the canon compiler figu
 **3. Two square panels per comparison.** A speed-up and a token count are different measurements
 (SC15 Rule 4), so they never share a scale: `plot_score_change.py` draws them as two panels of equal
 box aspect side by side, with the two CONDITIONS on X and one hollow mark, one filled mark and the
-pair link between them per arm.
+pair link between them per arm. EVERY intervention gets these two panels, whichever way its pairs
+were formed -- see "A comparison whose pairs are not a packet suffix" below.
 
 **4. Major grid only.** `style.value_axis` draws it, on the value axis alone, and switches every
 minor line and minor label off. A minor line is a second grid at a second weight, and once a figure
