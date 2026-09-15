@@ -44,6 +44,26 @@ def test_an_arm_with_no_value_anywhere_stays_blank() -> None:
     assert filled.packet.map(experiments.is_blank).all()
 
 
+def test_a_language_never_recorded_on_any_row_falls_back_to_the_arm_name() -> None:
+    """``cpf-llr-focus40-*-c-cpf`` never once stamped ``language`` (every row predates it), so there
+    is no recorded value to fill from -- unlike ``packet``, the arm name is the last resort here,
+    same rule :func:`hpcagent_bench.experiment_tags.model_of` already uses. Without this, the arm's
+    language stayed blank and it shared no (model, language) key with its control at all, which is
+    what crashed ``scripts/plot_score_change.py`` rather than skipping the pair."""
+    frame = pd.DataFrame({"arm": ["cpf-llr-focus40-oss120b-c-cpf"] * 2, "language": ["", None]})
+    filled = experiments.fill_arm_identity(frame)
+    assert filled.language.tolist() == ["c", "c"]
+
+
+def test_a_packet_never_recorded_on_any_row_still_has_no_fallback() -> None:
+    """The arm-name fallback is for ``language`` only: ``packet`` cannot be read out of an arm's
+    name in general (the no-packet control has no suffix to distinguish it from a truncated name),
+    so it stays blank exactly as it did before this fix."""
+    frame = pd.DataFrame({"arm": ["cpf-llr-focus40-oss120b-c-cpf"] * 2, "packet": ["", None]})
+    filled = experiments.fill_arm_identity(frame)
+    assert filled.packet.map(experiments.is_blank).all()
+
+
 def test_two_arms_are_filled_independently() -> None:
     """One arm's recorded value never leaks into a different arm's blank cells."""
     frame = pd.DataFrame({"arm": ["a", "a", "b", "b"], "packet": ["repo", "", "", ""]})

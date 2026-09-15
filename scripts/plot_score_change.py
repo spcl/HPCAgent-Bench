@@ -35,6 +35,7 @@ too small for the test to run at all reads ``underpowered`` and is never starred
 import argparse
 import math
 import pathlib
+import sys
 from collections.abc import Sequence
 
 import numpy as np
@@ -51,6 +52,23 @@ import matplotlib.pyplot as plt  # pyplot must follow plotstyle.apply()
 #: A ratio this far from 1.0 is inside the "no change" band for labelling purposes only; the star
 #: is decided by the interval, never by this.
 NEUTRAL: float = 1.0
+
+#: :func:`points`' row shape, so an empty family is an empty DataFrame carrying these columns
+#: rather than one with none at all -- ``pd.DataFrame([])`` has no columns, and ``.dropna(subset=...)``
+#: on THAT raises a bare ``KeyError`` instead of reading as "no (model, language) pair to draw".
+POINT_COLUMNS: tuple[str, ...] = (
+    "model",
+    "language",
+    "score",
+    "score_low",
+    "score_high",
+    "cost",
+    "cost_low",
+    "cost_high",
+    "kernels",
+    "score_p",
+    "cost_p",
+)
 
 #: Ticks in RATIO units on a log2 axis. Labelled as ratios, not as exponents: a reader wants to see
 #: "2x", not "1".
@@ -160,7 +178,10 @@ def points(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
                 "cost_p": c_p,
             }
         )
-    frame = pd.DataFrame(rows).dropna(subset=["score", "cost"])
+    # ``columns=POINT_COLUMNS`` is the fix: ``rows`` empty (no shared (model, language) at all) must
+    # still produce a frame that HAS a "score"/"cost" column to drop NaN out of, or dropna raises a
+    # bare KeyError that reads as a crash rather than as "this treatment paired with nothing".
+    frame = pd.DataFrame(rows, columns=list(POINT_COLUMNS)).dropna(subset=["score", "cost"])
     if frame.empty:
         return frame
     # Interleaved score, cost, score, cost ... so each row's pair of verdicts comes back adjacent.
@@ -538,11 +559,33 @@ def treatment_frame(frame_all: pd.DataFrame, treatment: str) -> pd.DataFrame:
     return pd.concat([control.assign(skills=False), treated.assign(skills=True)], ignore_index=True)
 
 
+def complete_side_arms(
+    control: pd.DataFrame, treated: pd.DataFrame, roster: Sequence[str], treatment: str, include_incomplete: bool
+) -> set[str]:
+    """The arms of ``control`` and ``treated`` that cover every kernel of ``roster`` -- the SAME
+    gate :func:`hpcagent_bench.stats.figures.kernel_comparison` applies, so the two figures never
+    disagree about which arms exist. An arm short of the roster is dropped and named on stderr with
+    its coverage, never silently: it is the reason ``cpf-llr-focus40-qwen38-c-cpf`` (37/40) used to
+    leave its treatment with no shared (model, language) at all, which crashed rather than skipped.
+    """
+    combined = pd.concat([control, treated], ignore_index=True)
+    if include_incomplete:
+        return set(combined["arm"].dropna().astype(str).unique())
+    kept, dropped = population.complete_arms(combined, roster)
+    for arm in sorted(dropped):
+        print(f"{treatment}: dropping {arm} ({dropped[arm]}/{len(roster)} roster kernels)", file=sys.stderr)
+    return set(kept)
+
+
 def one_treatment_panel(
-    frame_all: pd.DataFrame, control: pd.DataFrame, treatment: str
+    frame_all: pd.DataFrame,
+    control: pd.DataFrame,
+    treatment: str,
+    roster: Sequence[str],
+    include_incomplete: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
     """``(stats, absolute)`` for ONE treatment against ``control``; ``None`` when either side is
-    empty or the two share no (model, language)."""
+    empty (before or after the roster-completeness gate) or the two share no (model, language)."""
     # The two SIDES are the treatment, not two campaigns: an arm CARRYING the recorded packet
     # against one that does not -- never the arm name, which is provenance only. has_part matches a
     # composite too (an arm recording ``lang-skills+no-score-tool`` is still the skills side of
@@ -550,10 +593,16 @@ def one_treatment_panel(
     treated = frame_all[frame_all.packet.map(lambda p: packets.has_part(p, treatment))]
     if control.empty or treated.empty:
         return None
+    keep = complete_side_arms(control, treated, roster, treatment, include_incomplete)
+    control = control[control["arm"].astype(str).isin(keep)]
+    treated = treated[treated["arm"].astype(str).isin(keep)]
+    if control.empty or treated.empty:
+        return None
     stats = points(control, treated)
     if stats.empty:
         return None
-    absolute = absolute_points(treatment_frame(frame_all, treatment))
+    absolute_source = treatment_frame(frame_all, treatment)
+    absolute = absolute_points(absolute_source[absolute_source["arm"].astype(str).isin(keep)])
     return stats, absolute
 
 
@@ -576,6 +625,12 @@ def main() -> None:
         default=False,
         help="cap a joined (2+ treatment) figure's row width at style.DOUBLE_COLUMN_WIDTH",
     )
+    parser.add_argument(
+        "--include-incomplete",
+        action="store_true",
+        default=False,
+        help="draw an arm even without a row for every roster kernel (default: dropped, named on stderr)",
+    )
     parser.add_argument("--label", default="", help="figure title; defaults to the campaign's display name")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/score_change.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/score_change.csv"))
@@ -586,11 +641,14 @@ def main() -> None:
     control = control_rows(frame_all)
     if control.empty:
         raise SystemExit(f"no no-packet control rows for experiment {args.experiment!r}")
+    # Every kernel ANY arm of this campaign touched -- the roster :func:`complete_side_arms` gates
+    # coverage against, same population :mod:`scripts.plot_kernel_comparison` reads its own from.
+    roster = sorted(frame_all["benchmark"].dropna().astype(str).unique())
 
     args.table.parent.mkdir(parents=True, exist_ok=True)
     panels: list[tuple[str, pd.DataFrame, pd.DataFrame]] = []
     for treatment in treatments:
-        built = one_treatment_panel(frame_all, control, treatment)
+        built = one_treatment_panel(frame_all, control, treatment, roster, args.include_incomplete)
         if built is None:
             print(f"skipping {treatment!r}: empty side, or no (model, language) shared with control")
             continue

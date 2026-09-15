@@ -366,3 +366,98 @@ def test_the_figure_names_the_correction_and_the_size_of_the_family() -> None:
     finally:
         plt.close(fig)
     assert "BH q < 0.05 of 12" in labels, labels
+
+
+def test_points_never_raises_a_bare_keyerror_when_the_two_sides_share_no_model_language() -> None:
+    """The bug this guards: ``pd.DataFrame([])`` (an empty ``rows`` list) has NO columns at all, so
+    ``.dropna(subset=["score", "cost"])`` on it raised a bare ``KeyError(['score', 'cost'])`` where
+    the caller expected "these two sides pair on nothing" -- exactly what an arm whose ``language``
+    was never recorded produced against its control (disjoint (model, language) sets)."""
+    before = pd.DataFrame([{"model": "oss120b", "language": "c", "record": "submission"}])
+    after = pd.DataFrame([{"model": "oss120b", "language": "", "record": "submission"}])
+
+    frame = plot.points(before, after)
+
+    assert frame.empty
+    assert list(frame.columns) == list(plot.POINT_COLUMNS)
+
+
+def test_a_treatment_arm_that_never_recorded_its_language_still_pairs_against_control(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The real bug, end to end: ``cpf-llr-focus40-oss120b-c-cpf`` recorded ``packet=cpf`` on every
+    row but ``language`` on none of them. ``load`` (through ``experiments.fill_arm_identity``) must
+    recover ``c`` from the arm's own name, and ``one_treatment_panel`` must then find the (model,
+    language) key it shares with its control instead of finding nothing."""
+    path = tmp_path / "observations.csv"
+    rows = []
+    for kernel in range(KERNELS):
+        common = {
+            "benchmark": f"k{kernel}",
+            "suspect": 0,
+            "baseline": "numba",
+            "run_root": "j1",
+            "job": "j1",
+            "attempt_index": 1,
+            "ts_ms": kernel,
+        }
+        for arm, packet, language, speedup in (
+            ("cpf-llr-focus40-oss120b-c", "", "c", 2.0),
+            ("cpf-llr-focus40-oss120b-c-cpf", "cpf", "", 2.4),
+        ):
+            run = f"{arm}-{kernel}"
+            base = {**common, "arm": arm, "packet": packet, "language": language, "run_id": run}
+            rows.append(
+                {
+                    **base,
+                    "record": "submission",
+                    "speedup": speedup,
+                    "baseline_ns": 1000.0,
+                    "native_ns": 1000.0 / speedup,
+                }
+            )
+            rows.append({**base, "record": "call", "speedup": speedup, "tokens": 1000.0})
+    pd.DataFrame(rows).to_csv(path, index=False)
+
+    frame_all = plot.load(path, prefix="")
+    treated = frame_all[frame_all.arm == "cpf-llr-focus40-oss120b-c-cpf"]
+    assert set(treated.language) == {"c"}, "the arm name is the last resort when no row ever recorded it"
+
+    control = plot.control_rows(frame_all)
+    roster = sorted(frame_all.benchmark.dropna().unique())
+    built = plot.one_treatment_panel(frame_all, control, "cpf", roster)
+
+    assert built is not None
+    stats, _absolute = built
+    assert len(stats) == 1
+    assert (stats.iloc[0].model, stats.iloc[0].language) == ("oss120b", "c")
+
+
+def test_complete_side_arms_drops_an_arm_short_of_the_roster_and_names_it_on_stderr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Same completeness rule as ``scripts/plot_kernel_comparison.py`` (``population.complete_arms``),
+    so the two figures never disagree about which arms exist: an arm missing a roster kernel is
+    dropped, not entered at any stand-in value, and named so the drop is auditable."""
+    roster = ["k0", "k1", "k2"]
+    control = pd.DataFrame({"arm": ["ctrl"] * 3, "benchmark": roster})
+    treated = pd.DataFrame(
+        {"arm": ["good-cpf", "good-cpf", "good-cpf", "short-cpf"], "benchmark": ["k0", "k1", "k2", "k0"]}
+    )
+
+    kept = plot.complete_side_arms(control, treated, roster, "cpf", include_incomplete=False)
+
+    assert kept == {"ctrl", "good-cpf"}
+    err = capsys.readouterr().err
+    assert "cpf: dropping short-cpf (1/3 roster kernels)" in err
+
+
+def test_include_incomplete_keeps_a_short_arm_and_prints_nothing(capsys: pytest.CaptureFixture[str]) -> None:
+    roster = ["k0", "k1", "k2"]
+    control = pd.DataFrame({"arm": ["ctrl"] * 3, "benchmark": roster})
+    treated = pd.DataFrame({"arm": ["short-cpf"], "benchmark": ["k0"]})
+
+    kept = plot.complete_side_arms(control, treated, roster, "cpf", include_incomplete=True)
+
+    assert kept == {"ctrl", "short-cpf"}
+    assert capsys.readouterr().err == ""

@@ -28,6 +28,8 @@ import sys
 from collections.abc import Iterable, Iterator, Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from hpcagent_bench import experiment_tags
+
 if TYPE_CHECKING:
     import pandas as pd
 
@@ -222,6 +224,12 @@ def fill_arm_identity(frame: "pd.DataFrame", columns: Sequence[str] = FILLABLE_I
     different non-blank values recorded under one arm label raise, by name, because that is
     contamination between two conditions sharing a label, not a recording gap.
 
+    An arm whose ``language`` is blank on EVERY row (the whole arm predates the stamp -- the
+    ``cpf-llr-focus40-*-c-cpf`` arms never once recorded it) has nothing to fill FROM, and falls
+    back to :func:`hpcagent_bench.experiment_tags.language_of`, the arm name itself: this is what
+    let ``scripts/plot_score_change.py`` pair those arms against their control at all -- with
+    ``language`` staying blank they shared no (model, language) key with anything.
+
     A blank arm label (no arm, or a pseudo-arm such as ``adhoc``) names no condition, so its rows
     are left exactly as recorded rather than pooled into one identity that does not exist.
     """
@@ -237,9 +245,10 @@ def fill_arm_identity(frame: "pd.DataFrame", columns: Sequence[str] = FILLABLE_I
             named = sorted({str(v).strip() for v in group[column] if not is_blank(v)})
             if len(named) > 1:
                 raise ValueError(f"arm {arm!r} carries more than one {column}: {named}")
-            if len(named) == 1:
+            fill_value = named[0] if named else (experiment_tags.language_of(str(arm)) if column == "language" else "")
+            if fill_value:
                 blank_rows = group[column].map(is_blank)
-                filled.loc[group.index[blank_rows], column] = named[0]
+                filled.loc[group.index[blank_rows], column] = fill_value
     return filled
 
 
