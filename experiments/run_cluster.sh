@@ -659,6 +659,14 @@ EOF
     # to the mini-SWE, OpenHands and Optimas clients, so one arm cannot answer at a longer length
     # than another because of which harness ran it.
     export CLAUDE_CODE_MAX_OUTPUT_TOKENS="${CLAUDE_CODE_MAX_OUTPUT_TOKENS:-32768}"
+    # THE effort rung, resolved in ONE place from the model's own ladder (EFFORT_LADDER, declared in
+    # its .env because every server accepts a different one) and the campaign-wide policy: xhigh
+    # where the ladder has it, else its top rung, else no field. Authoritative over whatever the
+    # submitting shell exported -- an interactive session's level reached all 40 agents of 610130
+    # that way. An arm env staged before ladders existed declares none and keeps its own value.
+    if [[ -n "${EFFORT_LADDER:-}" ]]; then
+        export AGENT_EFFORT="$(python3 "${SCRIPT_DIR}/effort.py")"
+    fi
     export OPTARENA_AGENT_API_URL="${JUDGE_BASE_URL}"
     export AGENT_NODE_RANK="${agent_rank}"
     # agent_driver.py reads its tools, packets and prompts from the payload bound at launch.
@@ -863,14 +871,15 @@ role_mounts() {
 JOB_ENV_FILE="${RUN_DIR}/job.env"
 case "${CONTAINER_RUNTIME}" in
     podman|docker)
-        env | grep -E '^(AGENT|API_TIMEOUT_MS=|CAMPAIGN_ARM=|CLAUDE|CONTEXT_LENGTH=|GPUS_|HARNESS=|HPCAGENT|INFERENCE|JUDGE|KERNELS=|LANGUAGE=|LITELLM|OPTARENA|PROBLEMS|RUN_DIR=|RUN_ROOT=|SCRIPT_DIR=|SERPAPI|SLURM_|VLLM|WEBSEARCH)' \
+        env | grep -E '^(AGENT|API_TIMEOUT_MS=|CAMPAIGN_ARM=|CLAUDE|CONTEXT_LENGTH=|EFFORT_LADDER=|GPUS_|HARNESS=|HPCAGENT|INFERENCE|JUDGE|KERNELS=|LANGUAGE=|LITELLM|OPTARENA|PROBLEMS|RUN_DIR=|RUN_ROOT=|SCRIPT_DIR=|SERPAPI|SLURM_|VLLM|WEBSEARCH)' \
             >"${JOB_ENV_FILE}"
         ;;
 esac
 
 #: What an agent step executes from experiments/: its entry script, the sampler, the driver and the
 #: sibling modules the driver imports.
-AGENT_LAUNCH_FILES=(run_cluster.sh node_monitor.sh agent_driver.py harnesses.py token_cost.py promote_unsubmitted.py)
+AGENT_LAUNCH_FILES=(run_cluster.sh node_monitor.sh agent_driver.py harnesses.py effort.py token_cost.py
+    promote_unsubmitted.py)
 
 # agent_ro_binds <role>: the read-only binds an agent step runs from, as src:dst -- the checkout's
 # tools at AGENT_PAYLOAD_MOUNT and the job's launch directory at its own path. Nothing for other roles.

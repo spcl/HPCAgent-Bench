@@ -9,8 +9,11 @@ so these tests state which place each one belongs in and that the per-model valu
 server arguments they describe.
 """
 
+import importlib.util
 import pathlib
 import re
+import sys
+import types
 
 import pytest
 
@@ -30,11 +33,35 @@ LAUNCHER_DEFAULTS = {
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32768",
 }
 
-#: The effort rung each model runs at. GPT-OSS's ladder stops at high; Kimi and GLM have no ladder at
-#: all and must be sent no field, which an EMPTY value is what says.
-EFFORT = {"qwen38": "xhigh", "oss120b": "high", "kimi27sglang": "", "glm53": ""}
+#: The rungs each model's SERVER accepts, lowest first. Qwen's chat template raises on anything
+#: outside low/medium/xhigh -- it has no `high` -- and GPT-OSS's stops at high; Kimi and GLM have no
+#: ladder at all. The launcher resolves AGENT_EFFORT from these, so a .env that also spelled a rung
+#: would be a second source of truth for the one thing a ladder exists to decide.
+LADDERS = {
+    "qwen38": "low medium xhigh",
+    "oss120b": "low medium high",
+    "kimi27sglang": "",
+    "glm53": "",
+}
+
+#: What the policy resolves each ladder to: xhigh where the ladder has it, else its top rung, else
+#: no field at all.
+RESOLVED = {"qwen38": "xhigh", "oss120b": "high", "kimi27sglang": "", "glm53": ""}
 
 BASE_ENVS = sorted(EXPERIMENTS.glob(".env.base-*"))
+
+
+def load_effort() -> types.ModuleType:
+    """``experiments/effort.py``, loaded by path: it ships in the agent image, not the package."""
+    spec = importlib.util.spec_from_file_location("effort", EXPERIMENTS / "effort.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+effort = load_effort()
 
 
 def env_values(path: pathlib.Path) -> dict[str, str]:
@@ -51,7 +78,7 @@ def env_values(path: pathlib.Path) -> dict[str, str]:
 
 def test_the_launcher_carries_every_base_env() -> None:
     """A model whose .env is not in this parametrisation is a model these rules never checked."""
-    assert {path.name.removeprefix(".env.base-") for path in BASE_ENVS} == set(EFFORT)
+    assert {path.name.removeprefix(".env.base-") for path in BASE_ENVS} == set(LADDERS)
 
 
 @pytest.mark.parametrize("path", BASE_ENVS, ids=lambda path: path.name)
@@ -79,8 +106,18 @@ def test_a_base_env_names_the_context_window_its_server_is_started_with(path: pa
 
 
 @pytest.mark.parametrize("path", BASE_ENVS, ids=lambda path: path.name)
-def test_a_base_env_names_the_effort_rung_its_model_has(path: pathlib.Path) -> None:
-    """xhigh is the rung SGLang's Qwen template names; an unset value defaults to xhigh elsewhere,
-    which is why a model without a ladder states an empty one rather than leaving the key out."""
+def test_a_base_env_declares_the_ladder_its_server_accepts_and_no_rung(path: pathlib.Path) -> None:
+    """The .env states what the SERVER accepts; the launcher states which rung of it to take. A .env
+    that also spelled the rung is how oss120b and qwen38 came to be compared at rungs nobody had
+    written down together. A model with no ladder declares an empty one rather than omitting the key,
+    because a MISSING AGENT_EFFORT still defaults to xhigh in agent_driver.py."""
+    values = env_values(path)
+    assert "AGENT_EFFORT" not in values, f"{path.name} spells a rung the launcher resolves"
+    assert values.get("EFFORT_LADDER") == LADDERS[path.name.removeprefix(".env.base-")]
+
+
+@pytest.mark.parametrize("path", BASE_ENVS, ids=lambda path: path.name)
+def test_the_policy_resolves_each_declared_ladder_to_the_rung_that_model_runs_at(path: pathlib.Path) -> None:
+    """The ladders are only right if the rung they resolve to is the one the campaign meant to run."""
     model = path.name.removeprefix(".env.base-")
-    assert env_values(path).get("AGENT_EFFORT") == EFFORT[model]
+    assert effort.resolve(env_values(path)["EFFORT_LADDER"]) == RESOLVED[model]

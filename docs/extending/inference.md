@@ -29,7 +29,7 @@ INFERENCE_NODES=1
 GPUS_PER_NODE=4
 INFERENCE_MODE=replicas
 INFERENCE_CE_ENV=sglang-latest
-AGENT_EFFORT=xhigh
+EFFORT_LADDER="low medium xhigh"
 VLLM_MODEL=Qwen/Qwen3.8-27B-FP8
 VLLM_SERVED_MODEL=optarena-vllm
 OPTARENA_OPTIMIZER=Qwen/Qwen3.8-27B-FP8
@@ -47,7 +47,7 @@ SGLANG_EXTRA_ARGS="--chat-template ${SCRIPT_DIR}/chat-template-qwen38.jinja --tr
 | `SGLANG_EXTRA_ARGS`, `VLLM_EXTRA_ARGS` | `run_vllm_node` (`read -r -a`) | split on whitespace, no quoting inside; name both parsers |
 | `SGLANG_ATTENTION_BACKEND` | `run_vllm_node` | absent appends `--attention-backend aiter`; assigned empty omits it |
 | `OPTARENA_OPTIMIZER` | `tests/test_display_names.py` | the checkpoint id; must equal the registry `serves:` |
-| `AGENT_EFFORT` | `agent_driver.py` | empty sends no effort level; absent means `xhigh` |
+| `EFFORT_LADDER` | `effort.py`, from `run_cluster.sh` and `harnesses.py` | the rungs THIS server accepts, lowest first; empty for a model with no ladder. The launcher resolves `AGENT_EFFORT` from it (`AGENT_EFFORT_POLICY=max`: xhigh where the ladder has it, else its top rung, else no field) and a client that types fewer rungs gets the top one it can spell |
 | `CLAUDE_AUTOCOMPACT` | `arm_nodes.sh` `check_context_budget` | at most context - 32000 - 30000 |
 
 Model files such as a chat template sit in `experiments/`, named through `${SCRIPT_DIR}`, which
