@@ -17,6 +17,7 @@ import sys
 import pandas as pd
 import pytest
 
+from hpcagent_bench import experiment_tags
 from hpcagent_bench.harness import efficacy
 from hpcagent_bench.stats import style as plotstyle
 
@@ -265,7 +266,7 @@ def test_the_figure_stars_a_point_only_on_a_corrected_verdict(
     )
     fig, ax = plt.subplots()
     try:
-        plot.draw_absolute(ax, frame, stats)
+        plot.draw_absolute(ax, frame, stats, "skills")
         labels = [text.get_text() for text in ax.texts]
     finally:
         plt.close(fig)
@@ -366,7 +367,7 @@ def test_the_figure_names_the_correction_and_the_size_of_the_family() -> None:
     )
     fig, ax = plt.subplots()
     try:
-        labels = [handle.get_label() for handle in plot.draw_absolute(ax, frame, stats)]
+        labels = [handle.get_label() for handle in plot.draw_absolute(ax, frame, stats, "skills")]
     finally:
         plt.close(fig)
     assert "BH q < 0.05 of 12" in labels, labels
@@ -455,6 +456,84 @@ def test_complete_side_arms_drops_an_arm_short_of_the_roster_and_names_it_on_std
     assert kept == {"ctrl", "good-cpf"}
     err = capsys.readouterr().err
     assert "cpf: dropping short-cpf (1/3 roster kernels)" in err
+
+
+@pytest.mark.parametrize(
+    "treatment, hollow, filled",
+    [
+        pytest.param("skills", "No Skill Packet", "All Skill Pages", id="skills"),
+        pytest.param("cpf", "No Packet", "Canonical Parallel Form Page", id="cpf"),
+        pytest.param("cpfsrc", "No Packet", "Canonical Parallel Form as Source", id="cpfsrc"),
+    ],
+)
+def test_the_hollow_and_filled_legend_marks_name_the_treatment(treatment: str, hollow: str, filled: str) -> None:
+    """The hollow/filled pair used to say "No Skills"/"Skills" on every treatment, which misnamed a
+    CPF panel as if the treatment under test were a skill. The hollow mark reads
+    ``packets.control_label``, the filled mark the treatment's own registry name -- a CPF page
+    panel says "No Packet" / "Canonical Parallel Form Page", never "No Skills" / "Skills"."""
+    import matplotlib.pyplot as plt
+
+    frame = pd.DataFrame(
+        [
+            {"model": "qwen38", "language": "c", "skills": False, **thin(1.0, 1000.0)},
+            {"model": "qwen38", "language": "c", "skills": True, **thin(1.4, 900.0)},
+        ]
+    )
+    stats = pd.DataFrame(
+        [
+            {
+                "model": "qwen38",
+                "language": "c",
+                "score_verdict": efficacy.NOT_SIGNIFICANT,
+                "cost_verdict": efficacy.NOT_SIGNIFICANT,
+                "family_size": 2,
+            }
+        ]
+    )
+    fig, ax = plt.subplots()
+    try:
+        labels = [handle.get_label() for handle in plot.draw_absolute(ax, frame, stats, treatment)]
+    finally:
+        plt.close(fig)
+    assert hollow in labels, labels
+    assert filled in labels, labels
+    assert "No Skills" not in labels
+    assert "Skills" not in labels
+
+
+def test_the_model_legend_lists_only_a_model_with_a_drawn_point() -> None:
+    """A model the control side ran under SOME OTHER treatment (Kimi, on the CPF-page campaign's
+    ``cpfsrc`` arm but never its ``cpf`` one) still shows up in ``frame`` as a control-only row --
+    ``hues``/``shapes`` reserved it a colour, and the old legend built straight off those kept
+    naming a model this panel never draws a point for."""
+    import matplotlib.pyplot as plt
+
+    frame = pd.DataFrame(
+        [
+            {"model": "qwen38", "language": "c", "skills": False, **thin(1.0, 1000.0)},
+            {"model": "qwen38", "language": "c", "skills": True, **thin(1.4, 900.0)},
+            # kimi27sglang: control side only -- no treated row, so no point is ever drawn for it.
+            {"model": "kimi27sglang", "language": "c", "skills": False, **thin(1.0, 1000.0)},
+        ]
+    )
+    stats = pd.DataFrame(
+        [
+            {
+                "model": "qwen38",
+                "language": "c",
+                "score_verdict": efficacy.NOT_SIGNIFICANT,
+                "cost_verdict": efficacy.NOT_SIGNIFICANT,
+                "family_size": 2,
+            }
+        ]
+    )
+    fig, ax = plt.subplots()
+    try:
+        labels = [handle.get_label() for handle in plot.draw_absolute(ax, frame, stats, "cpf")]
+    finally:
+        plt.close(fig)
+    assert experiment_tags.model_name("qwen38") in labels, labels
+    assert experiment_tags.model_name("kimi27sglang") not in labels, labels
 
 
 def test_include_incomplete_keeps_a_short_arm_and_prints_nothing(capsys: pytest.CaptureFixture[str]) -> None:
