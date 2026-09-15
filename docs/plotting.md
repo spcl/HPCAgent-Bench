@@ -77,10 +77,22 @@ fig.savefig("out.pdf", bbox_inches=fig.bbox_inches)
 These six are not preferences. A figure that breaks one is wrong, and the tests named beside each
 one fail when it does.
 
-**1. The measured value is on Y.** A speed-up, a token count, a ratio -- always the Y axis, never X.
-X carries the CATEGORIES: the two conditions of a comparison, the language, the kernel. A figure
-whose rows are names (a forest plot, `plot_paired_arms.py`, `kernel_comparison.py`) is the one shape
-that reads the other way, and its row axis is `style.row_axis`, which carries no grid.
+**1. The measured value is on the VALUE axis, and that axis is Y.** A speed-up, a token count, a
+ratio -- always Y. The other axis carries the CATEGORIES: the two conditions of a comparison, the
+language, the kernel.
+
+Three figures read the other way round, on purpose, and they are the only ones allowed to:
+`kernel_comparison.py`, `signed.py` and `plot_paired_arms.py` put their categories on Y through
+`style.row_axis` and their value on X. What decides this is what the CATEGORICAL axis has to carry.
+Forty kernel names or `Qwen3.8-27B, C, Canonical Parallel Form as Source` are horizontal text; as x
+ticks in a column-width panel they are rotated 90 degrees and unreadable, and as row labels they
+are a list a reader scans. `per_kernel.py` is the counter-example that proves it is the labels and
+not the data: its kernel axis fits across the page, so it keeps the kernel on x and the value on y.
+
+So the rule is about WHICH AXIS CARRIES THE MEASUREMENT, not about the orientation of the page: the
+value axis gets the log scale, the major grid and `style.value_axis`, and the categorical axis gets
+neither. Anything with a free choice -- every comparison figure, every small multiple whose
+categories are short -- puts the value on Y.
 
 **2. Colour is the INTERVENTION, shape is the MODEL.** `palette.color(packet)` for the treated side
 and `palette.control_color()` for the no-packet side; `palette.marker(model)` for the shape. An
@@ -110,9 +122,16 @@ sets of series when they draw the same ones.
 
 **6. A point the arm never delivered carries a cross.** It enters every aggregate at 1x and its
 tokens still count, so it is a placeholder and not a measurement. `style.point_mark(...,
-delivered=False)` keeps the intervention colour and the model shape and overlays a small x; the
-legend says `No Verified Answer (Scored 1x)`. A paired figure keeps the pair, with the failed leg at
-1x.
+delivered=False)` keeps the intervention colour and the model shape and overlays a small x; the key
+shows THE CROSS and reads `style.NOT_DELIVERED_LABEL` (`No Verified Answer (Scored 1x)`). Hollow
+alone will not do -- hollow is this repo's spelling for the control. A paired figure keeps the pair,
+with the failed leg at 1x.
+
+**7. A per-arm label goes in a COLUMN, not in a hole beside its mark.** `stack_labels` puts every
+label at one x right of the treated marks, takes its preferred y from its own point, pushes them
+apart until no two boxes touch, and draws a leader line for any label that had to move. Searching a
+ring of candidate offsets around each mark instead runs out on a narrow panel -- six arms landing
+within a few percent had nowhere to go and printed on top of each other.
 
 ## Rules
 
