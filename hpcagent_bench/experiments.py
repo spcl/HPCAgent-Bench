@@ -413,24 +413,43 @@ CLEAN_SUFFIX: str = "-clean"
 CLEAN_GROUP: tuple[str, ...] = ("experiment", "model", "language", "device", "packet", "harness")
 
 
+def clean_identity(frame: "pd.DataFrame") -> "pd.Series":
+    """One identity label per row for :func:`drop_superseded_arm_rows`.
+
+    THE RECORDED COLUMNS ARE NOT ENOUGH ON THEIR OWN. An extracted observations table carries
+    ``language``, ``packet`` and ``harness`` and no ``experiment``, ``model`` or ``device``, so a
+    group built from :data:`CLEAN_GROUP` alone puts every model's C control in one identity, and one
+    model's clean re-run then drops every other model's arm. That is what it did: six finished
+    GPT-OSS-120B arms took 18 arms with them, Qwen3.8-27B's and Kimi-K2.7-Code's included.
+
+    The arm NAME carries what the columns do not, so the label is the recorded columns plus the arm
+    with its ``-clean`` suffix removed. Two arms are then one identity exactly when they are the same
+    name re-run, which is what the suffix means. A name that differs by more than the suffix
+    supersedes nothing, and the failure direction is to keep both waves rather than to delete one.
+    """
+    columns = [column for column in CLEAN_GROUP if column in frame.columns]
+    # A missing cell reads as the empty string: a row with no arm or no recorded packet still needs
+    # one label, and pandas keeps NA through astype(str) and through the string accessors.
+    condition = frame["arm"].astype(str).fillna("").str.removesuffix(CLEAN_SUFFIX).fillna("")
+    labelled = frame.assign(clean_condition=condition)
+    return labelled[[*columns, "clean_condition"]].astype(str).fillna("").agg("\x1f".join, axis=1)
+
+
 def drop_superseded_arm_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     """``frame`` without the rows of arms a ``-clean`` re-run superseded (spec X9).
 
     A clean arm re-runs one condition from an empty workspace after something about the earlier wave
     was found wrong -- a leaked view, a broken relaunch, a job that requeued onto its own rows. It
     carries the SAME identity, so without this rule the two waves pool and the defect the re-run
-    exists to escape is averaged back in. Within one identity group (:data:`CLEAN_GROUP`), a task row
-    whose arm carries the suffix therefore drops every row of every arm in that group without it. The
-    frame changes, never the database (N1), and the count is warned about.
+    exists to escape is averaged back in. Within one identity group (:func:`clean_identity`), a task
+    row whose arm carries the suffix therefore drops every row of every arm in that group without it.
+    The frame changes, never the database (N1), and the count is warned about.
     """
     import warnings
 
     if frame.empty or "arm" not in frame.columns or "record" not in frame.columns:
         return frame
-    columns = [column for column in CLEAN_GROUP if column in frame.columns]
-    if not columns:
-        return frame
-    groups = frame[columns].astype(str).agg("\x1f".join, axis=1)
+    groups = clean_identity(frame)
     clean = frame["arm"].astype(str).str.endswith(CLEAN_SUFFIX)
     superseding = set(groups[clean & (frame["record"] == "task")])
     if not superseding:

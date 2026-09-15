@@ -283,3 +283,40 @@ def test_read_observations_fills_arm_identity_from_a_csv(tmp_path) -> None:
 def test_nan_is_blank_but_zero_is_not() -> None:
     assert experiments.is_blank(math.nan)
     assert not experiments.is_blank("0")
+
+
+def test_a_clean_rerun_of_one_model_does_not_supersede_another_model(tmp_path: pathlib.Path) -> None:
+    """Spec X9 groups by identity, and an extracted table records language, packet and harness but
+    not the model. Grouping on those alone put every model's C control in one identity, so six
+    finished GPT-OSS-120B re-runs deleted Qwen3.8-27B's and Kimi-K2.7-Code's arms as well."""
+    rows = [
+        {
+            "arm": "cpf-llr-focus40-oss120b-c-clean",
+            "record": "task",
+            "language": "c",
+            "packet": "",
+            "harness": "claude",
+        },
+        {"arm": "cpf-llr-focus40-oss120b-c", "record": "task", "language": "c", "packet": "", "harness": "claude"},
+        {"arm": "cpf-llr-focus40-qwen38-c", "record": "task", "language": "c", "packet": "", "harness": "claude"},
+        {"arm": "cpf-llr-focus40-kimi27sglang-c", "record": "task", "language": "c", "packet": "", "harness": "claude"},
+    ]
+    with pytest.warns(UserWarning, match="superseded by a clean re-run"):
+        kept = experiments.drop_superseded_arm_rows(pd.DataFrame(rows))
+    assert sorted(kept.arm) == [
+        "cpf-llr-focus40-kimi27sglang-c",
+        "cpf-llr-focus40-oss120b-c-clean",
+        "cpf-llr-focus40-qwen38-c",
+    ]
+
+
+def test_a_clean_rerun_supersedes_the_arm_of_its_own_name(tmp_path: pathlib.Path) -> None:
+    """The suffix names no condition, so the clean wave replaces the wave it re-ran and nothing else."""
+    rows = [
+        {"arm": "x-qwen38-c-skills-clean", "record": "task", "language": "c", "packet": "lang-skills", "harness": "h"},
+        {"arm": "x-qwen38-c-skills", "record": "task", "language": "c", "packet": "lang-skills", "harness": "h"},
+        {"arm": "x-qwen38-c", "record": "task", "language": "c", "packet": "", "harness": "h"},
+    ]
+    with pytest.warns(UserWarning, match="superseded by a clean re-run"):
+        kept = experiments.drop_superseded_arm_rows(pd.DataFrame(rows))
+    assert sorted(kept.arm) == ["x-qwen38-c", "x-qwen38-c-skills-clean"]
