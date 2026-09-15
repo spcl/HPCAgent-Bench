@@ -6,6 +6,10 @@ Condition comes from the ARM NAME (:data:`kernel_comparison.ARM_PATTERN`), never
 ``language``/``packet`` columns, because the pre-regrade extraction records those inconsistently
 for the same arm. Completeness is roster coverage (:func:`population.complete_arms`), applied
 before any per-kernel value is read, and a model whose every arm is incomplete gets no panel.
+
+ORIENTATION: the MEASURED quantity is on Y (speed-up on the top panel, tokens on the bottom) and the
+kernel NAMES are on X, rotated, on one axis both panels share; the geomean/median summary is a group
+past the last kernel at the RIGHT END of that axis, behind a dashed vertical separator.
 """
 
 import pathlib
@@ -462,11 +466,11 @@ def test_missing_answer_legend_entry_is_present() -> None:
     assert kernel_comparison.MISSING_LABEL in labels
 
 
-def test_speedup_panels_share_one_x_axis_and_token_panels_share_another() -> None:
-    """One model reaching 128x speed-up (or 900K tokens) must not stretch its own panel's ticks past
-    its neighbours': a position has to mean the same ratio/spend across every panel of that metric,
-    or the panels are not comparable by eye. The two metrics need not share a scale with each other
-    -- log2 ratio vs log10 count are different quantities."""
+def test_the_two_panels_share_one_kernel_x_axis_and_keep_their_own_value_y_scales() -> None:
+    """Every model draws into the SAME two panels, so one model reaching 120x (or 900K tokens) must
+    not stretch a scale the others are read against: the speed-up axis spans every series' values,
+    not the first one's. The two panels share the kernel axis -- a kernel is at the same x in both --
+    while their value axes stay separate, log2 ratio vs log10 count being different quantities."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -481,16 +485,81 @@ def test_speedup_panels_share_one_x_axis_and_token_panels_share_another() -> Non
     panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER)
     fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
     try:
-        n_panels = len(panels)
-        axes = fig.axes
-        assert len(axes) == 2 * n_panels
-        speedup_row, token_row = axes[:n_panels], axes[n_panels:]
-        for row in (speedup_row, token_row):
-            first_ticks, first_lim = list(row[0].get_xticks()), row[0].get_xlim()
-            for ax in row[1:]:
-                assert list(ax.get_xticks()) == first_ticks
-                assert ax.get_xlim() == first_lim
-        assert speedup_row[0].get_xlim() != token_row[0].get_xlim()
+        assert len(fig.axes) == 2
+        speedup_ax, token_ax = fig.axes
+        assert list(speedup_ax.get_xticks()) == list(token_ax.get_xticks())
+        assert speedup_ax.get_xlim() == token_ax.get_xlim()
+        assert speedup_ax.get_ylim() != token_ax.get_ylim()
+        # both models' extremes fit the ONE speed-up axis, and both spends the ONE token axis
+        assert speedup_ax.get_ylim()[1] >= 120.0 and speedup_ax.get_ylim()[0] <= 2.0
+        assert token_ax.get_ylim()[1] >= 900000.0 and token_ax.get_ylim()[0] <= 100.0
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+
+
+def test_the_kernel_names_are_the_rotated_x_tick_labels_of_the_bottom_panel_only() -> None:
+    """The kernel axis carries NAMES and runs along X, rotated so 40 of them fit; the two panels
+    share it, so it is labelled once, at the foot of the figure. The top panel's own labels would
+    repeat them into the gap between the panels."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0})])
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER)
+    fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
+    try:
+        speedup_ax, token_ax = fig.axes
+        labels = token_ax.get_xticklabels()
+        assert [label.get_text() for label in labels] == list(ROSTER)
+        assert all(label.get_rotation() == 90.0 for label in labels)
+        assert not [label for label in speedup_ax.get_xticklabels() if label.get_text() in ROSTER]
+        # and never on a VALUE axis: that one carries the measured quantity, in both panels
+        for ax in fig.axes:
+            assert not {label.get_text() for label in ax.get_yticklabels()} & set(ROSTER)
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+
+
+def test_the_summary_group_sits_past_the_last_kernel_behind_a_dashed_vertical_separator() -> None:
+    """The geomean/median summary is a GROUP at the right end of the kernel axis, marked off by a
+    dashed vertical rule: it is one statistic per series, not a 41st kernel, so it must not sit
+    inside the kernel slots -- and the axis has to reach past it, or the group is clipped."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib.collections import PathCollection
+
+    frame = observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
+            *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0, "k2": 200.0, "k3": 300.0}),
+        ]
+    )
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER)
+    fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
+    try:
+        separator_x, summary_x = kernel_comparison.summary_column_position(len(ROSTER))
+        assert separator_x > len(ROSTER) - 1 and summary_x > separator_x
+        for ax in fig.axes:
+            assert ax.get_xlim()[1] > summary_x
+            dashed = [
+                line
+                for line in ax.get_lines()
+                if line.get_xdata()[0] == line.get_xdata()[1] and line.get_linestyle() != "-"
+            ]
+            assert [line.get_xdata()[0] for line in dashed] == [separator_x]
+            marks = {
+                round(float(x), 6)
+                for collection in ax.collections
+                if isinstance(collection, PathCollection)
+                for x, _y in collection.get_offsets()
+            }
+            assert [x for x in marks if x > separator_x], marks
+            assert max(x for x in marks if x < separator_x) < len(ROSTER)
     finally:
         import matplotlib.pyplot as plt
 
@@ -517,9 +586,8 @@ def test_token_panel_draws_no_canon_series() -> None:
     panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER, canon_frame=canon)
     fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
     try:
-        n_panels = len(panels)
-        speedup_ax, token_ax = fig.axes[0], fig.axes[n_panels]
-        # canon's marker (a diamond) is drawn once per kernel row on the speed-up panel and never on
+        speedup_ax, token_ax = fig.axes
+        # canon's marker (a diamond) is drawn once per kernel slot on the speed-up panel and never on
         # the token panel: one PathCollection per drawn mark (plotstyle.point_mark), two per point
         # (white disc + coloured mark), so the token panel has strictly fewer than the speed-up one.
         assert len(token_ax.collections) < len(speedup_ax.collections)
@@ -546,15 +614,17 @@ def test_a_kernel_with_no_token_total_draws_no_mark_on_the_token_panel() -> None
     panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER)
     fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
     try:
-        token_ax = fig.axes[len(panels)]
-        rows = {
-            round(float(y), 6)
+        token_ax = fig.axes[1]
+        separator_x, _summary_x = kernel_comparison.summary_column_position(len(ROSTER))
+        slots = {
+            round(float(x), 6)
             for collection in token_ax.collections
             if isinstance(collection, PathCollection)
-            for _x, y in collection.get_offsets()
+            for x, _y in collection.get_offsets()
+            if x < separator_x
         }
-        assert rows.isdisjoint({1.0, 2.0}), rows
-        assert 0.0 in rows, rows
+        assert slots.isdisjoint({1.0, 2.0}), slots
+        assert 0.0 in slots, slots
     finally:
         import matplotlib.pyplot as plt
 
@@ -731,26 +801,58 @@ def test_a_series_shape_is_the_model_and_its_colour_is_the_condition() -> None:
 
 
 def test_the_value_axis_carries_a_major_grid_and_the_kernel_axis_carries_none() -> None:
-    """Major grid only, on the measured axis. The row axis carries kernel NAMES, where a guide line
-    per category measures nothing."""
+    """Major grid only, on the measured axis -- which is Y here. The kernel axis carries NAMES, where
+    a guide line per category measures nothing."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
     try:
-        kernel_comparison.style_speedup_x_axis(ax, [0.25, 1.0, 4.0])
-        assert any(line.get_visible() for line in ax.xaxis.get_gridlines())
-        assert not [tick for tick in ax.xaxis.get_minor_ticks() if tick.gridline.get_visible()]
-        assert not [tick for tick in ax.yaxis.get_major_ticks() if tick.gridline.get_visible()]
+        kernel_comparison.style_speedup_y_axis(ax, [0.25, 1.0, 4.0])
+        kernel_comparison.kernel_axis(ax, ["k1", "k2"], True)
+        assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
+        assert not [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
+        assert not [tick for tick in ax.xaxis.get_major_ticks() if tick.gridline.get_visible()]
     finally:
         plt.close(fig)
 
 
 def test_a_kernel_with_no_verified_answer_is_drawn_as_a_crossed_mark_at_one() -> None:
-    """A real 1.0x speed-up and a kernel nobody answered land on the same coordinate, so the two may
-    not draw as one mark: the placeholder carries the cross and the shared legend text says so."""
-    assert kernel_comparison.MISSING_MARKER_X == population.NOT_DELIVERED
+    """A real 1.0x speed-up and a kernel nobody answered land on the same coordinate -- 1x on the
+    speed-up panel's value axis, which is Y -- so the two may not draw as one mark: the placeholder
+    carries the cross and the shared legend text says so."""
+    assert kernel_comparison.MISSING_MARKER_Y == population.NOT_DELIVERED
     assert kernel_comparison.MISSING_LABEL == plotstyle.NOT_DELIVERED_LABEL
     assert "1x" in kernel_comparison.MISSING_LABEL
+
+
+def test_a_never_answered_kernel_draws_a_hollow_crossed_mark_at_one_on_the_speedup_panel() -> None:
+    """The placeholder is DRAWN, not just configured: an unfilled mark plus a cross, at 1x on the
+    value axis and at the kernel's own slot on the kernel axis."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib.collections import PathCollection
+
+    rows = submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0})
+    frame = observations(rows)
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER, include_incomplete=True)
+    fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
+    try:
+        speedup_ax = fig.axes[0]
+        crosses = [
+            collection
+            for collection in speedup_ax.collections
+            if isinstance(collection, PathCollection)
+            for x, y in collection.get_offsets()
+            if x == 2.0 and y == kernel_comparison.MISSING_MARKER_Y
+        ]
+        # the white halo, the hollow mark and the cross plotstyle.point_mark lays over it
+        assert len(crosses) == 3
+        assert any(len(collection.get_facecolors()) == 0 for collection in crosses)
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
 
 
 def test_the_key_for_a_never_delivered_kernel_shows_the_cross_and_names_it() -> None:

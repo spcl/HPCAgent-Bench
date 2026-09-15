@@ -2,23 +2,30 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """llr-focus40: the DaCe canonicalize CPU column against every COMPLETE agent arm, per kernel.
 
-TWO PANELS PER MODEL, sharing the 40-kernel row axis (:func:`hpcagent_bench.stats.style.row_axis`):
-a speed-up panel (log2 ratio over Numba, the DaCe canon CPU column plus that model's own arms) over
-a token panel (log10 spend, agents only -- the canon column has no tokens, since it runs no agent).
-Every panel repeats the DaCe canon CPU column (the framework colour,
-:func:`hpcagent_bench.stats.palette.framework_color`) beside that model's own arms (the condition
-colour, :func:`hpcagent_bench.stats.palette.color`: grey control, orange CPF page, blue CPF as
-source -- the same packet palette :mod:`scripts.plot_arm_summary` draws with).
+TWO PANELS SHARING ONE 40-KERNEL X AXIS (:func:`kernel_axis`): a speed-up panel (log2 ratio over
+Numba on Y, the DaCe canon CPU column plus every model's arms) over a token panel (log10 spend on Y,
+agents only -- the canon column has no tokens, since it runs no agent). The MEASURED quantity is on
+Y in both, the kernel NAMES on X, rotated 90 degrees and drawn once at the foot of the figure.
 
-Each panel carries a SUMMARY ROW below the kernel rows, past a dashed separator
-(:data:`SUMMARY_ROW_GAP`): the row-axis analogue of
-:func:`hpcagent_bench.stats.figures.per_kernel.draw_summary_column`, rotated onto rows because
-kernels are ROWS here and COLUMNS there. Speed-up's summary is the GEOMETRIC MEAN
-(:func:`summary_speedup`) -- the project-wide rule for an overall speed-up, never a median; tokens'
-summary is the MEDIAN (:func:`summary_tokens`), since tokens are not a ratio. Both are named by an
-annotation inside the panel's own right edge, never a y-axis tick label: every panel here shares its
-y axis (``sharey=True``), and a per-panel tick label would silently lose whichever panel drew first --
-the same trap :func:`per_kernel.draw_summary_column` documents for a shared X axis.
+ALL MODELS IN ONE PANEL, never a panel column per model. A 40-name kernel axis is this figure's
+binding constraint, and a column per model divides the room each name gets by the number of models --
+below what a legible label needs at any width a page can print. Colour names the intervention
+(:func:`hpcagent_bench.stats.palette.color`: grey control, orange CPF page, blue CPF as source -- the
+same packet palette :mod:`scripts.plot_arm_summary` draws with) and SHAPE names the model
+(:func:`hpcagent_bench.stats.palette.marker`), so the two channels already separate what a per-model
+column would have separated by position. The DaCe canon CPU column keeps the framework colour
+(:func:`hpcagent_bench.stats.palette.framework_color`) and its own fixed shape (:data:`CANON_MARKER`).
+
+Each panel carries a SUMMARY GROUP past the last kernel, at the RIGHT END of the kernel axis, behind
+a dashed vertical separator (:data:`SUMMARY_GAP`): one dodged mark per series at
+:func:`summary_column_position`, the same role
+:func:`hpcagent_bench.stats.figures.per_kernel.draw_summary_column` plays on its own kernel axis.
+Speed-up's summary is the GEOMETRIC MEAN (:func:`summary_speedup`) -- the project-wide rule for an
+overall speed-up, never a median; tokens' summary is the MEDIAN (:func:`summary_tokens`), since
+tokens are not a ratio. Both are named by an annotation above the panel, never an x-axis tick label:
+the two panels share one x axis (``sharex=True``), matplotlib hands both the same tick label text,
+and a per-panel tick label would silently lose whichever panel drew first -- the same trap
+:func:`per_kernel.draw_summary_column` documents.
 
 NO EFFICACY, PARETO OR COST-VS-SPEED FRAMING HERE. This figure reports what each arm cost and what
 it bought, side by side, and leaves any tradeoff reading to the caption -- never a quadrant, a
@@ -31,7 +38,7 @@ arm agrees on. :data:`ARM_PATTERN` is both the arm selector and the (model, cond
 
 COMPLETENESS is roster coverage, not scoring: :func:`hpcagent_bench.stats.population.complete_arms`
 keeps only arms with a recorded row for every kernel :data:`ARM_PATTERN` -- and a model whose arms
-are ALL incomplete draws no panel at all, rather than an empty one.
+are ALL incomplete draws nothing at all, rather than an empty slot.
 
 PER-KERNEL VALUES ARE WHATEVER THE FRAMEWORK'S OWN POLICY ASSIGNS UNDER ``--repeats`` -- never
 invented here (spec R3-R7). :func:`hpcagent_bench.stats.population.kernel_answers` is an arm's
@@ -71,7 +78,7 @@ from hpcagent_bench.stats.figures.per_kernel import speedup_tick_label
 #: CPF spelling (mpr-artifacts/experiments/llr-focus40-cpf/README.md).
 ARM_PATTERN: re.Pattern[str] = re.compile(r"^cpf-llr-focus40-(?P<model>[a-z0-9]+)-c(?:-(?P<condition>cpf|cpfsrc))?$")
 
-#: Panel order within one model, control first.
+#: Draw order within one model's own slot, control first.
 CONDITION_ORDER: tuple[str, ...] = ("", "cpf", "cpfsrc")
 
 #: The canon column this figure draws by default, and what it is measured against.
@@ -81,32 +88,53 @@ CANON_BASELINE: str = "numba"
 #: The canon series' fixed marker -- it has no model, so it never borrows one of theirs.
 CANON_MARKER: str = "D"
 
-#: A single small-multiple panel's inches (width, height contribution per kernel row). 0.27in/row
-#: is what a 40-name kernel axis needs at :data:`ROW_LABEL_PT` to stop consecutive labels
-#: overlapping -- :func:`hpcagent_bench.stats.style.row_axis` sizes them at the figure-wide
-#: LABEL_PT (16pt), which 40 rows in a compact panel has no room for.
-PANEL_WIDTH_IN: float = 1.85
-ROW_HEIGHT_IN: float = 0.27
+#: One panel's VALUE-axis extent, in inches: the drawn height of one metric's panel. Two of these
+#: stack (speed-up over tokens), so the figure's height is fixed while its WIDTH follows the kernel
+#: axis.
+PANEL_HEIGHT_IN: float = 2.4
 
-#: The kernel row labels' own font size -- smaller than :data:`hpcagent_bench.stats.style.LABEL_PT`,
-#: which :func:`row_axis` applies but which a 40-row axis has no vertical room for.
-ROW_LABEL_PT: float = 8.5
+#: Inches of kernel axis per kernel, floor and ceiling. The floor is what a 40-name axis needs at
+#: :data:`KERNEL_LABEL_PT` to stop consecutive rotated labels touching; the ceiling stops a figure
+#: with many series growing past a width a page can still print at readable scale.
+KERNEL_WIDTH_IN: float = 0.22
+MAX_KERNEL_WIDTH_IN: float = 0.34
+
+#: Inches between two dodged marks of one kernel, and the fraction of a kernel's own slot the dodged
+#: marks may occupy. Together they set the kernel pitch a given number of series wants
+#: (:func:`kernel_pitch`): marks in one slot keep their spacing and the axis widens, rather than the
+#: slot staying put and the marks merging.
+SERIES_PITCH_IN: float = 0.05
+DODGE_SPAN: float = 0.66
+
+#: A mark's diameter in points at the roomy pitch, the smallest it may shrink to when a crowded slot
+#: cannot give it that much, and how much of its neighbour's gap it may cover (:func:`mark_size`).
+#: Marks OVERLAP slightly by design -- each carries a white halo
+#: (:func:`~hpcagent_bench.stats.style.point_mark`), so a mark drawn over its neighbour still shows
+#: its own edge, and shrinking every mark to the gap instead costs the hollow "never delivered"
+#: mark the cross that is the only thing separating it from a measured 1x.
+MARK_PT: float = 5.1
+MIN_MARK_PT: float = 2.6
+MARK_GAP_RATIO: float = 1.7
+
+#: The kernel labels' own font size -- smaller than :data:`hpcagent_bench.stats.style.LABEL_PT`,
+#: which a 40-name axis has no horizontal room for even rotated.
+KERNEL_LABEL_PT: float = 8.5
 
 #: Where a "no verified answer" mark sits on the SPEED-UP panel -- the 1x reference line, since that
 #: is what a served but unsolved kernel leaves standing under every scoring policy this repo has
 #: (:data:`~hpcagent_bench.stats.population.NOT_DELIVERED`). Hollow AND crossed
 #: (:func:`~hpcagent_bench.stats.style.point_mark` with ``delivered=False``): a real 1.0x speed-up
 #: and a kernel nobody answered must not draw as one mark.
-MISSING_MARKER_X: float = 1.0
+MISSING_MARKER_Y: float = 1.0
 
 #: The shared legend entry for a missing-answer mark, neutral ink since it names a STATUS, not one
 #: series' identity -- a coloured entry would read as one more condition or model.
 MISSING_LABEL: str = plotstyle.NOT_DELIVERED_LABEL
 
-#: Rows of air between the last kernel row and the dashed separator, and between the separator and
-#: the summary row -- the row-axis analogue of
-#: :data:`~hpcagent_bench.stats.figures.per_kernel.SUMMARY_GAP`.
-SUMMARY_ROW_GAP: float = 0.9
+#: Kernel slots of air between the last kernel and the dashed separator, and between the separator
+#: and the summary group -- the same two additions
+#: :data:`~hpcagent_bench.stats.figures.per_kernel.SUMMARY_GAP` makes on its own kernel axis.
+SUMMARY_GAP: float = 0.9
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -237,7 +265,7 @@ def build_panels(
     git-scicomp's has none), and the dropped arms with how many roster kernels each covered.
 
     A model every one of whose candidate arms was dropped for incomplete coverage gets no key at
-    all -- :func:`figure` therefore draws it no panel, per the figure's own contract.
+    all -- :func:`figure` therefore draws it nothing, per the figure's own contract.
     """
     candidates = candidate_arms(observations, pattern)
     frame = observations[observations["arm"].astype(str).isin(candidates)]
@@ -289,8 +317,8 @@ def build_panels(
 
 
 def value_ticks(values: Iterable[float]) -> list[float]:
-    """Powers of two spanning every plotted speed-up, always at least ``1/4x .. 4x`` -- an X-axis
-    twin of :func:`hpcagent_bench.stats.figures.per_kernel.speedup_yticks`."""
+    """Powers of two spanning every plotted speed-up, always at least ``1/4x .. 4x`` -- the same
+    landmarks :func:`hpcagent_bench.stats.figures.per_kernel.speedup_yticks` pins on its value axis."""
     finite = [v for v in values if math.isfinite(v) and v > 0]
     low, high = (min(finite), max(finite)) if finite else (1.0, 1.0)
     low_exp = min(-2, math.floor(math.log2(low)))
@@ -300,8 +328,8 @@ def value_ticks(values: Iterable[float]) -> list[float]:
 
 def token_axis_limits(values: Iterable[float]) -> tuple[float, float]:
     """Decade-rounded ``(low, high)`` spanning every plotted token value -- the log10 twin of
-    :func:`value_ticks`, computed ONCE for the whole figure and shared by every token panel so a
-    position means the same spend everywhere (see :func:`style_speedup_x_axis`)."""
+    :func:`value_ticks`, computed ONCE for the whole figure so a
+    position means the same spend everywhere (see :func:`style_speedup_y_axis`)."""
     finite = [v for v in values if math.isfinite(v) and v > 0]
     if not finite:
         return 1.0, 10.0
@@ -325,74 +353,104 @@ def summary_tokens(values: Iterable[float]) -> float:
     return float(np.median(finite)) if finite else math.nan
 
 
-def style_speedup_x_axis(ax: matplotlib.axes.Axes, ticks: Sequence[float]) -> None:
-    """The log2 ratio axis and 1x reference line, same reading as :mod:`hpcagent_bench.stats.figures.per_kernel`,
-    rotated onto X because the row axis here carries the kernel, not the value.
+def style_speedup_y_axis(ax: matplotlib.axes.Axes, ticks: Sequence[float]) -> None:
+    """The log2 ratio axis and 1x reference line on Y, the axis carrying the MEASURED quantity --
+    the kernel axis here carries names, not values.
 
-    ``ticks`` is computed ONCE for the whole figure (:func:`figure`) and passed to every panel,
-    with the SAME explicit ``xlim`` set from it: a position then means the same ratio in every
-    panel, where each panel picking its own from its own data let one model's wider spread (Kimi
-    reaching 128x) autoscale past where the others stopped, so 8x sat at a different x in every
-    panel of one figure.
+    ``ticks`` is computed ONCE for the whole figure (:func:`figure`) and passed to both panels, with
+    the SAME explicit ``ylim`` set from it: a position then means the same ratio wherever it is
+    read, where letting the axis autoscale off its own data let one model's wider spread (Kimi
+    reaching 128x) push 8x to a different height than the neighbouring figure drew it at.
     """
-    ax.set_xscale("log", base=2)
-    ax.set_xticks(ticks)
-    ax.set_xticklabels([speedup_tick_label(tick) for tick in ticks], fontsize=plotstyle.TICK_PT * 0.55, rotation=90)
-    ax.set_xlim(ticks[0] / 1.3, ticks[-1] * 1.3)
-    ax.axvline(1.0, color=plotstyle.REFERENCE, linewidth=0.9, zorder=1)
-    ax.grid(axis="x", which="major", color=plotstyle.RULE, linewidth=0.7, zorder=0)
+    ax.set_yscale("log", base=2)
+    ax.set_yticks(ticks)
+    ax.set_yticklabels([speedup_tick_label(tick) for tick in ticks], fontsize=plotstyle.TICK_PT * 0.6)
+    ax.set_ylim(ticks[0] / 1.3, ticks[-1] * 1.3)
+    ax.axhline(1.0, color=plotstyle.REFERENCE, linewidth=0.9, zorder=1)
+    ax.grid(axis="y", which="major", color=plotstyle.RULE, linewidth=0.7, zorder=0)
     ax.set_axisbelow(True)
 
 
-def style_token_x_axis(ax: matplotlib.axes.Axes, limits: tuple[float, float]) -> None:
-    """The log10 token axis, shared ``limits`` across every panel -- same discipline as
-    :func:`style_speedup_x_axis`, base 10 since a token count is a magnitude, not a power-of-two
-    ratio. Rotated majors at the same size as the speed-up panel's: a token axis spanning several
-    decades gets a major every 1/2/5 within each (:func:`plotstyle.value_axis`), too many to stay
-    horizontal at this panel's width without overlapping."""
-    ax.set_xscale("log")
-    ax.set_xlim(*limits)
-    plotstyle.value_axis(ax, "x", log_base=10.0)
-    ax.tick_params(axis="x", labelsize=plotstyle.TICK_PT * 0.55, rotation=90)
+def style_token_y_axis(ax: matplotlib.axes.Axes, limits: tuple[float, float]) -> None:
+    """The log10 token axis on Y -- same discipline as :func:`style_speedup_y_axis`, base 10 since a
+    token count is a magnitude, not a power-of-two ratio. Majors land every 1/2/5 within each decade
+    (:func:`plotstyle.value_axis`), which a vertical axis has the room to label horizontally."""
+    ax.set_yscale("log")
+    ax.set_ylim(*limits)
+    plotstyle.value_axis(ax, "y", log_base=10.0)
+    ax.tick_params(axis="y", labelsize=plotstyle.TICK_PT * 0.6)
 
 
-def summary_row_position(n_kernels: int) -> tuple[float, float]:
-    """``(separator_y, summary_y)`` below the last kernel row -- the same two additions
-    :func:`hpcagent_bench.stats.figures.per_kernel.draw_summary_column` makes on its column axis,
-    rotated onto rows."""
-    separator_y = n_kernels - 0.5 + SUMMARY_ROW_GAP
-    return separator_y, separator_y + SUMMARY_ROW_GAP
+def kernel_axis(ax: matplotlib.axes.Axes, kernels: Sequence[str], label_kernels: bool) -> None:
+    """A categorical x axis with one named, 90-degree-rotated slot per kernel, left to right.
+
+    The slots are NAMES, so this axis gets no grid and no minor ticks: a guide line per category
+    measures nothing (the value axis carries the grid, :func:`plotstyle.value_axis`). Only the
+    bottom panel of a shared-x pair labels its ticks -- the top panel's would repeat them into the
+    gap between the two.
+    """
+    ax.set_xticks(range(len(kernels)))
+    if label_kernels:
+        ax.set_xticklabels(list(kernels), rotation=90, fontsize=KERNEL_LABEL_PT, color=plotstyle.INK)
+    else:
+        ax.set_xticklabels([])
+    ax.tick_params(axis="x", length=0)
+    plotstyle.despine(ax)
 
 
-def draw_summary_row(
+def summary_column_position(n_kernels: int) -> tuple[float, float]:
+    """``(separator_x, summary_x)`` past the last kernel -- the same two additions
+    :func:`hpcagent_bench.stats.figures.per_kernel.draw_summary_column` makes on its own kernel
+    axis."""
+    separator_x = n_kernels - 0.5 + SUMMARY_GAP
+    return separator_x, separator_x + SUMMARY_GAP
+
+
+def dodge_offsets(n: int) -> np.ndarray:
+    """One x offset per series within a kernel slot, spread over :data:`DODGE_SPAN` of it."""
+    if n <= 1:
+        return np.array([0.0])
+    return np.linspace(-DODGE_SPAN / 2.0, DODGE_SPAN / 2.0, n)
+
+
+def mark_size(pitch_in: float, n_series: int) -> float:
+    """A mark's area in points squared: :data:`MARK_PT` across where the dodged marks have room for
+    it, shrinking with the gap between neighbours down to :data:`MIN_MARK_PT` where they do not.
+
+    A fixed size would merge a crowded slot into one blob and leave the reader no colour edges to
+    count series by, which is the one thing the dodge is for.
+    """
+    gap_pt = 72.0 * pitch_in * DODGE_SPAN / max(n_series - 1, 1)
+    return max(MIN_MARK_PT, min(MARK_PT, MARK_GAP_RATIO * gap_pt)) ** 2
+
+
+def draw_summary_column(
     ax: matplotlib.axes.Axes,
-    separator_y: float,
-    summary_y: float,
+    separator_x: float,
+    summary_x: float,
     series_list: Sequence[Series],
     value_of: Callable[[Series], dict[str, float]],
     reducer: Callable[[Iterable[float]], float],
     label: str,
+    size: float,
 ) -> None:
-    """The dashed separator and one dodged mark per series at ``summary_y``, plus a small annotation
-    naming the statistic -- INSIDE the panel's own right edge, never past it: with several model
-    panels side by side and only a narrow gap between them, an annotation that crossed the edge fell
-    under the next panel's opaque background (see the module docstring for why this is an
-    annotation and never a y-axis tick label)."""
-    ax.axhline(separator_y, color=plotstyle.RULE, linestyle=(0, (3, 3)), linewidth=1.0, zorder=1)
-    n = len(series_list)
-    offsets = np.linspace(-0.3, 0.3, n) if n > 1 else np.array([0.0])
-    for offset, series in zip(offsets, series_list, strict=True):
+    """The dashed separator and one dodged mark per series at ``summary_x``, plus a small annotation
+    naming the statistic ABOVE the panel -- never an x-axis tick label, which the panels' shared x
+    axis would hand to both (see the module docstring). Each series keeps the offset it has inside a
+    kernel slot, so its summary mark sits under the same colour and shape it drew all along."""
+    ax.axvline(separator_x, color=plotstyle.RULE, linestyle=(0, (3, 3)), linewidth=1.0, zorder=1)
+    for offset, series in zip(dodge_offsets(len(series_list)), series_list, strict=True):
         point = reducer(value_of(series).values())
         if math.isfinite(point):
-            plotstyle.point_mark(ax, point, summary_y + offset, series.color, series.marker, filled=True, size=30.0)
+            plotstyle.point_mark(ax, summary_x + offset, point, series.color, series.marker, filled=True, size=size)
     ax.annotate(
         label,
-        xy=(0.985, summary_y),
-        xycoords=("axes fraction", "data"),
-        xytext=(0, 0),
+        xy=(summary_x, 1.0),
+        xycoords=("data", "axes fraction"),
+        xytext=(0, 3),
         textcoords="offset points",
-        ha="right",
-        va="center",
+        ha="center",
+        va="bottom",
         fontsize=plotstyle.TICK_PT * 0.5,
         color=plotstyle.MUTED,
         annotation_clip=False,
@@ -409,18 +467,20 @@ def draw_panel(
     kernels: Sequence[str],
     series_list: Sequence[Series],
     value_of: Callable[[Series], dict[str, float]],
-    missing_x: float,
+    missing_y: float,
     reducer: Callable[[Iterable[float]], float],
     summary_label: str,
-    label_rows: bool,
+    label_kernels: bool,
+    size: float,
     range_of: Callable[[Series], tuple[dict[str, float], dict[str, float]]] | None = None,
     mark_missing: bool = True,
 ) -> None:
-    """One panel, for ONE metric (:func:`value_of` reads it off each series): the kernel rows,
-    dodged apart within each row, plus the summary row below them (:func:`draw_summary_row`).
+    """One panel, for ONE metric (:func:`value_of` reads it off each series): the kernel slots,
+    dodged apart within each slot, plus the summary group past their right end
+    (:func:`draw_summary_column`).
 
     With ``mark_missing``, a kernel a series has no value for still draws: a HOLLOW mark in that
-    series' own colour and shape, at ``missing_x`` -- for a speed-up, where "no verified answer" is an
+    series' own colour and shape, at ``missing_y`` -- for a speed-up, where "no verified answer" is an
     outcome with a natural place (1x). Without it the kernel draws nothing: a missing token total is
     no measurement (spec R7), and a mark at the axis edge would read as a small spend.
 
@@ -428,33 +488,27 @@ def draw_panel(
     token spread (R5) and draws it as a thin whisker behind the mark -- absent under ``--repeats
     latest``, where a kernel has one task and nothing to bracket.
     """
-    separator_y, summary_y = summary_row_position(len(kernels))
-    plotstyle.row_axis(ax, kernels)
-    ax.set_ylim(summary_y + 0.6, -0.5)
-    if label_rows:
-        ax.tick_params(axis="y", labelsize=ROW_LABEL_PT)
-    else:
-        ax.tick_params(axis="y", labelleft=False)
-    n = len(series_list)
-    offsets = np.linspace(-0.3, 0.3, n) if n > 1 else np.array([0.0])
-    y_of = {kernel: i for i, kernel in enumerate(kernels)}
-    for offset, series in zip(offsets, series_list, strict=True):
+    separator_x, summary_x = summary_column_position(len(kernels))
+    kernel_axis(ax, kernels, label_kernels)
+    ax.set_xlim(-0.5 - SUMMARY_GAP / 2.0, summary_x + 0.6)
+    x_of = {kernel: i for i, kernel in enumerate(kernels)}
+    for offset, series in zip(dodge_offsets(len(series_list)), series_list, strict=True):
         values = value_of(series)
         low_of, high_of = range_of(series) if range_of is not None else ({}, {})
         for kernel in kernels:
-            y = y_of[kernel] + offset
+            x = x_of[kernel] + offset
             value = values.get(kernel)
             if value is None or not math.isfinite(value) or value <= 0.0:
                 if mark_missing:
                     plotstyle.point_mark(
-                        ax, missing_x, y, series.color, series.marker, filled=False, size=26.0, delivered=False
+                        ax, x, missing_y, series.color, series.marker, filled=False, size=size, delivered=False
                     )
                 continue
             low, high = low_of.get(kernel), high_of.get(kernel)
             if low is not None and high is not None and math.isfinite(low) and math.isfinite(high) and low < high:
-                ax.hlines(y, low, high, color=series.color, linewidth=1.1, alpha=0.55, zorder=TOKEN_RANGE_Z)
-            plotstyle.point_mark(ax, value, y, series.color, series.marker, filled=True, size=26.0)
-    draw_summary_row(ax, separator_y, summary_y, series_list, value_of, reducer, summary_label)
+                ax.vlines(x, low, high, color=series.color, linewidth=1.1, alpha=0.55, zorder=TOKEN_RANGE_Z)
+            plotstyle.point_mark(ax, x, value, series.color, series.marker, filled=True, size=size)
+    draw_summary_column(ax, separator_x, summary_x, series_list, value_of, reducer, summary_label, size)
 
 
 def legend_handles(
@@ -514,32 +568,47 @@ def legend_handles(
     return handles
 
 
-#: One panel's data span, in kernel rows: the roster plus the summary row's own air
-#: (:data:`SUMMARY_ROW_GAP`, twice) and the half-row margin :func:`~hpcagent_bench.stats.style.row_axis`
-#: leaves top and bottom.
-def panel_rows(n_rows: int) -> float:
-    return n_rows + 2.0 * SUMMARY_ROW_GAP + 0.6
+#: One panel's data span, in kernel slots: the roster plus the summary group's own air
+#: (:data:`SUMMARY_GAP`, twice) and the half-slot margin the axis leaves at each end.
+def panel_slots(n_kernels: int) -> float:
+    return n_kernels + 2.0 * SUMMARY_GAP + 0.6
 
 
-#: Inches of air between the two panel rows -- room for the speed-up panel's own rotated X tick
-#: labels, which sit between it and the token panel below (:func:`figure` turns this into a
-#: `hspace` FRACTION of one panel's height, since that is what `subplots_adjust` takes).
-ROW_GAP_IN: float = 0.85
+#: Inches of air between the two panel rows. Small: the value axes read horizontally and only the
+#: bottom panel labels the kernel axis, so nothing but the summary group's own annotation sits
+#: between them (:func:`figure` turns this into an `hspace` FRACTION of one panel's height, since
+#: that is what `subplots_adjust` takes).
+PANEL_GAP_IN: float = 0.3
 
-#: Inches reserved above the top panel row (the figure title, clear of the model-name titles) and
-#: below the bottom one (its own rotated X tick labels, plus the legend).
-TOP_MARGIN_IN: float = 1.15
-BOTTOM_MARGIN_IN: float = 1.6
+#: Inches reserved above the top panel (the figure title and the summary group's annotation), below
+#: the bottom one (the rotated kernel labels, plus the legend), and left of both (the value tick
+#: labels and their axis label).
+TOP_MARGIN_IN: float = 0.95
+BOTTOM_MARGIN_IN: float = 2.0
+LEFT_MARGIN_IN: float = 0.95
+RIGHT_MARGIN_IN: float = 0.15
 
 
-def figure_size(n_panels: int, n_rows: int, double_column: bool) -> tuple[float, float]:
-    """A compact double-column insert (fixed width) or a standalone report (one width slot per
-    panel). Height stacks TWO panel rows (speed-up over tokens) plus the gap between them."""
-    panel_h = panel_rows(n_rows) * ROW_HEIGHT_IN
-    height = 2.0 * panel_h + ROW_GAP_IN + TOP_MARGIN_IN + BOTTOM_MARGIN_IN
+def kernel_pitch(n_series: int, n_kernels: int, double_column: bool) -> float:
+    """Inches of kernel axis per kernel. A compact insert divides
+    :data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH` over the slots it has to fit; a
+    standalone figure asks for the pitch its dodged marks want (:data:`SERIES_PITCH_IN` between
+    neighbours over :data:`DODGE_SPAN` of a slot), clamped to the label floor and the printable
+    ceiling."""
     if double_column:
-        return plotstyle.DOUBLE_COLUMN_WIDTH, height
-    return max(plotstyle.DOUBLE_COLUMN_WIDTH, PANEL_WIDTH_IN * n_panels + 1.2), height
+        span = plotstyle.DOUBLE_COLUMN_WIDTH - LEFT_MARGIN_IN - RIGHT_MARGIN_IN
+        return span / panel_slots(n_kernels)
+    wanted = (n_series - 1) * SERIES_PITCH_IN / DODGE_SPAN
+    return min(MAX_KERNEL_WIDTH_IN, max(KERNEL_WIDTH_IN, wanted))
+
+
+def figure_size(n_series: int, n_kernels: int, double_column: bool) -> tuple[float, float]:
+    """Width follows the KERNEL axis (a compact insert is
+    :data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH` wide, a standalone one as wide as its
+    marks need); height is fixed, since the figure always stacks the same TWO value panels."""
+    width = panel_slots(n_kernels) * kernel_pitch(n_series, n_kernels, double_column)
+    height = 2.0 * PANEL_HEIGHT_IN + PANEL_GAP_IN + TOP_MARGIN_IN + BOTTOM_MARGIN_IN
+    return width + LEFT_MARGIN_IN + RIGHT_MARGIN_IN, height
 
 
 def figure(
@@ -550,78 +619,74 @@ def figure(
     title: str,
     condition_order: Sequence[str] = CONDITION_ORDER,
 ) -> matplotlib.figure.Figure:
-    """The whole small-multiples figure: for each model, a speed-up panel (with the canon column)
-    ABOVE a token panel (agents only), sharing the kernel row axis.
+    """The whole figure: a speed-up panel (every model's arms plus the canon column) ABOVE a token
+    panel (agents only), both on ONE shared kernel axis.
 
-    Two panel ROWS rather than laying every model's two panels out side by side: at
-    :data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH` three models times two panels each made
-    every panel too narrow for its rotated tick labels to stay legible.
+    Every model in ONE panel rather than a panel column each: 40 rotated kernel names are what the
+    width has to buy, and a column per model would divide the room each name gets by the number of
+    models (see the module docstring). ``panels`` keeps its per-model shape -- it decides the draw
+    ORDER, so a model's arms stay together inside a kernel slot, and it is what the table and the
+    legend are built from.
     """
     if not panels:
         raise ValueError("no model has a panel to draw (every candidate arm was incomplete)")
     plotstyle.apply()
-    n_panels = len(panels)
-    # ONE tick set (speed-up) / ONE limit pair (tokens) for every panel of that kind (see
-    # style_speedup_x_axis): the union of every drawn value, canon included, across every panel --
-    # never one panel's own values, or a position would not mean the same ratio/spend next door.
-    all_series = (*((canon_mark,) if canon_mark is not None else ()), *(s for arms in panels.values() for s in arms))
-    speedup_ticks = value_ticks(v for series in all_series for v in series.values.values())
+    arms = [series for model_arms in panels.values() for series in model_arms]
+    # ONE tick set (speed-up) / ONE limit pair (tokens): the union of every drawn value, canon
+    # included -- never one metric's own autoscale, or a position would not mean the same
+    # ratio/spend as the figure next to it (see style_speedup_y_axis).
+    speedup_series = [*((canon_mark,) if canon_mark is not None else ()), *arms]
+    speedup_ticks = value_ticks(v for series in speedup_series for v in series.values.values())
     token_limits = token_axis_limits(
         v
-        for series in all_series
+        for series in arms
         for values in (series.tokens, series.tokens_min, series.tokens_max)
         for v in values.values()
     )
+    size = mark_size(kernel_pitch(len(speedup_series), len(kernels), double_column), len(speedup_series))
 
     fig, axes = plt.subplots(
-        2, n_panels, sharey=True, figsize=figure_size(n_panels, len(kernels), double_column), squeeze=False
+        2, 1, sharex=True, figsize=figure_size(len(speedup_series), len(kernels), double_column), squeeze=False
     )
-    for index, (model, arms) in enumerate(panels.items()):
-        speedup_series = (*((canon_mark,) if canon_mark is not None else ()), *arms)
-        speedup_ax, token_ax = axes[0][index], axes[1][index]
-        style_speedup_x_axis(speedup_ax, speedup_ticks)
-        draw_panel(
-            speedup_ax,
-            kernels,
-            speedup_series,
-            lambda s: s.values,
-            MISSING_MARKER_X,
-            summary_speedup,
-            "Geomean",
-            index == 0,
-        )
-        speedup_ax.set_title(experiment_tags.model_name(model), fontsize=plotstyle.LABEL_PT * 0.85, color=plotstyle.INK)
-        style_token_x_axis(token_ax, token_limits)
-        draw_panel(
-            token_ax,
-            kernels,
-            arms,
-            lambda s: s.tokens,
-            token_limits[0],
-            summary_tokens,
-            "Median",
-            index == 0,
-            range_of=lambda s: (s.tokens_min, s.tokens_max),
-            mark_missing=False,
-        )
-        if index == 0:
-            # ONE label per panel ROW, on the leftmost column only: an axes ylabel per model column
-            # would repeat it, and the figure title only names the whole figure -- neither says
-            # which row is which metric.
-            speedup_ax.set_ylabel(
-                "Speed-Up vs Numba", fontsize=plotstyle.LABEL_PT * 0.7, color=plotstyle.MUTED, labelpad=26
-            )
-            token_ax.set_ylabel("Tokens Spent", fontsize=plotstyle.LABEL_PT * 0.7, color=plotstyle.MUTED, labelpad=26)
+    speedup_ax, token_ax = axes[0][0], axes[1][0]
+    style_speedup_y_axis(speedup_ax, speedup_ticks)
+    draw_panel(
+        speedup_ax,
+        kernels,
+        speedup_series,
+        lambda s: s.values,
+        MISSING_MARKER_Y,
+        summary_speedup,
+        "Geomean",
+        False,
+        size,
+    )
+    style_token_y_axis(token_ax, token_limits)
+    draw_panel(
+        token_ax,
+        kernels,
+        arms,
+        lambda s: s.tokens,
+        token_limits[0],
+        summary_tokens,
+        "Median",
+        True,
+        size,
+        range_of=lambda s: (s.tokens_min, s.tokens_max),
+        mark_missing=False,
+    )
+    # One label per panel: the figure title only names the whole figure, and neither panel's value
+    # axis says on its own which metric it carries.
+    speedup_ax.set_ylabel("Speed-Up vs Numba", fontsize=plotstyle.LABEL_PT * 0.7, color=plotstyle.MUTED)
+    token_ax.set_ylabel("Tokens Spent", fontsize=plotstyle.LABEL_PT * 0.7, color=plotstyle.MUTED)
 
-    height = figure_size(n_panels, len(kernels), double_column)[1]
-    panel_h = panel_rows(len(kernels)) * ROW_HEIGHT_IN
+    width, height = figure_size(len(speedup_series), len(kernels), double_column)
     fig.subplots_adjust(
-        left=0.30 / max(n_panels, 1) + 0.03,
-        right=0.98,
+        left=LEFT_MARGIN_IN / width,
+        right=1.0 - RIGHT_MARGIN_IN / width,
         top=1.0 - TOP_MARGIN_IN / height,
         bottom=BOTTOM_MARGIN_IN / height,
-        hspace=ROW_GAP_IN / panel_h,
-        wspace=0.10,
+        hspace=PANEL_GAP_IN / PANEL_HEIGHT_IN,
     )
     plotstyle.legend_below(
         fig, legend_handles(canon_mark, panels, condition_order), y=0.005, fontsize=plotstyle.TICK_PT * 0.75
