@@ -345,7 +345,9 @@ def test_the_shipped_llr40_arm_table_reproduces_from_the_shipped_observations(
     denominator: a geomean over an arm's ``c`` and ``numba`` rows together is a ratio of nothing."""
     module = arms
     observations = module.load_observations(OBSERVATIONS)
-    best = module.best_per_arm_kernel(module.submissions_with_sources(OBSERVATIONS, observations))
+    # The shipped llr40 fixture predates the timing_reduction stamp entirely; reproducing its
+    # published (pre-mwd-v2) numbers is exactly the deliberate legacy-only analysis the opt-out is for.
+    best = module.best_per_arm_kernel(module.submissions_with_sources(OBSERVATIONS, observations), allow_unstamped=True)
     cell = best[(best.arm == arm) & (best.baseline == baseline)]
     recomputed = summary.geomean(cell.best_speedup, unusable="drop")
     assert recomputed == pytest.approx(published_geomean, rel=1e-3), (

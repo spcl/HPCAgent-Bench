@@ -193,7 +193,12 @@ REDUCTION_COLUMN: str = "timing_reduction"
 UNSTAMPED: str = "unstamped"
 
 
-def one_reduction(values: Iterable[object], label: str = "") -> str:
+#: The command that turns an UNSTAMPED row into a mwd-v2 one -- named in every refusal below, so
+#: the error tells a caller what to run rather than just what is wrong.
+MIGRATION_COMMAND: str = "hpcagent-bench regrade (or reproducibility/llr40/extract_llr40.py --regrades)"
+
+
+def one_reduction(values: Iterable[object], label: str = "", *, allow_unstamped: bool = False) -> str:
     """The single timing reduction a slice's speed-ups were credited under, or raise.
 
     Two reductions are two estimators: a ratio of minima, a ratio of medians and the pessimistic
@@ -201,15 +206,28 @@ def one_reduction(values: Iterable[object], label: str = "") -> str:
     rows from two of them is a number no reduction produced. A blank cell is a row recorded before
     the stamp and reads as :data:`UNSTAMPED`, so a campaign that gained stamped rows halfway is
     refused rather than pooled.
+
+    An ALL-unstamped slice is refused too unless ``allow_unstamped=True``: mwd-v2 is the default
+    rule everywhere now, so old rows must be migrated (:data:`MIGRATION_COMMAND`) before they are
+    pooled, not pooled as a silent third reduction. Pass ``allow_unstamped=True`` only for a
+    deliberate legacy-only analysis -- never as a script's default.
     """
     found = sorted({str(value).strip() if is_named(value) else UNSTAMPED for value in values})
     prefix = f"{label}: " if label else ""
+    if not found:
+        return UNSTAMPED
     if len(found) > 1:
         raise MixedPopulationError(
             f"{prefix}this slice mixes timing reductions {found}; split it by {REDUCTION_COLUMN} or "
             "re-reduce it rather than pooling it"
         )
-    return found[0] if found else UNSTAMPED
+    result = found[0]
+    if result == UNSTAMPED and not allow_unstamped:
+        raise MixedPopulationError(
+            f"{prefix}every row is unstamped (pre-mwd-v2); migrate first with {MIGRATION_COMMAND}, "
+            "or pass allow_unstamped=True for a deliberate legacy-only analysis"
+        )
+    return result
 
 
 def last_per_episode(frame: "pd.DataFrame", order: Sequence[str]) -> "pd.DataFrame":
@@ -242,7 +260,9 @@ def per_episode_max(frame: "pd.DataFrame", column: str, keep: Sequence[str] = ()
     return frame.groupby([*EPISODE_KEY, *keep], as_index=False)[column].max()
 
 
-def graded_episode_rows(frame: "pd.DataFrame", order: Sequence[str] = ()) -> "pd.DataFrame":
+def graded_episode_rows(
+    frame: "pd.DataFrame", order: Sequence[str] = (), *, allow_unstamped: bool = False
+) -> "pd.DataFrame":
     """One row per EPISODE: its own last reportable, positive-speedup graded submission.
 
     The population every per-episode speed-up statistic is taken over, before any across-episode
@@ -259,8 +279,10 @@ def graded_episode_rows(frame: "pd.DataFrame", order: Sequence[str] = ()) -> "pd
     the point: a frame that cannot say which rows were screened must not be reduced, because the
     alternative is reporting an unscreened population that looks screened.
 
-    ONE TIMING REDUCTION (:func:`one_reduction`) over the rows that carry a speed-up. A frame with no
-    :data:`REDUCTION_COLUMN` predates the stamp and is one unstamped reduction by construction.
+    ONE TIMING REDUCTION (:func:`one_reduction`) over the rows that carry a speed-up, refusing an
+    all-unstamped slice (mwd-v2 is the default rule) unless ``allow_unstamped=True``. A frame with
+    no :data:`REDUCTION_COLUMN` at all is refused the same way -- it cannot prove its rows are
+    mwd-v2 either -- rather than silently treated as pre-stamp data.
     """
     if "speedup" not in frame.columns:
         raise MixedPopulationError("an episode's answer is decided by speedup; the frame carries none")
@@ -272,11 +294,19 @@ def graded_episode_rows(frame: "pd.DataFrame", order: Sequence[str] = ()) -> "pd
     believable = frame[frame[SUSPECT_COLUMN].map(is_reportable)]
     timed = believable[believable.speedup > 0]
     if REDUCTION_COLUMN in timed.columns:
-        one_reduction(timed[REDUCTION_COLUMN].tolist(), label="graded episodes")
+        one_reduction(timed[REDUCTION_COLUMN].tolist(), label="graded episodes", allow_unstamped=allow_unstamped)
+    elif not timed.empty and not allow_unstamped:
+        raise MixedPopulationError(
+            f"graded episodes: no {REDUCTION_COLUMN!r} column, so the rows cannot prove they are "
+            f"mwd-v2; migrate first with {MIGRATION_COMMAND}, or pass allow_unstamped=True for a "
+            "deliberate legacy-only analysis"
+        )
     return last_per_episode(timed, order or SUBMISSION_ORDER)
 
 
-def final_answers(frame: "pd.DataFrame", order: Sequence[str], by: Sequence[str]) -> "pd.DataFrame":
+def final_answers(
+    frame: "pd.DataFrame", order: Sequence[str], by: Sequence[str], *, allow_unstamped: bool = False
+) -> "pd.DataFrame":
     """The rows that are each ``by`` group's best FINAL answer, as whole rows.
 
     The scoring policy in two steps, in one place. WITHIN an episode the LAST verified submission
@@ -286,7 +316,7 @@ def final_answers(frame: "pd.DataFrame", order: Sequence[str], by: Sequence[str]
     arm. Whole rows come back so a caller can take the timings, the source path or the denominator
     of the row that won.
     """
-    episodes = graded_episode_rows(frame, order)
+    episodes = graded_episode_rows(frame, order, allow_unstamped=allow_unstamped)
     return episodes.sort_values("speedup", ascending=False).drop_duplicates(list(by), keep="first")
 
 
@@ -298,7 +328,9 @@ SUBMISSION_ORDER: tuple[str, str] = ("ts_ms", "attempt_index")
 ANSWER_COLUMNS: tuple[str, str, str] = ("speedup", "baseline_ns", "native_ns")
 
 
-def kernel_answers(frame: "pd.DataFrame", order: Sequence[str] = SUBMISSION_ORDER) -> "pd.DataFrame":
+def kernel_answers(
+    frame: "pd.DataFrame", order: Sequence[str] = SUBMISSION_ORDER, *, allow_unstamped: bool = False
+) -> "pd.DataFrame":
     """One row per kernel of ``frame``: the best FINAL answer, with the costs behind its speed-up.
 
     Read off the GRADED rows and reduced by :func:`final_answers` per ``(arm, benchmark)``, then the
@@ -309,7 +341,7 @@ def kernel_answers(frame: "pd.DataFrame", order: Sequence[str] = SUBMISSION_ORDE
     graded = frame[frame.record == "submission"]
     if graded.empty:
         return graded.set_index("benchmark")[[c for c in ANSWER_COLUMNS if c in graded.columns]]
-    best = final_answers(graded, order, ("arm", "benchmark"))
+    best = final_answers(graded, order, ("arm", "benchmark"), allow_unstamped=allow_unstamped)
     best = best.sort_values("speedup", ascending=False).drop_duplicates("benchmark", keep="first")
     return best.set_index("benchmark")[[c for c in ANSWER_COLUMNS if c in best.columns]].sort_index()
 
