@@ -329,6 +329,26 @@ def test_a_runner_gets_the_claude_environment_minus_claudes_own_plus_the_runner_
     assert (workdir / "mcp.json").read_bytes() == claude_mcp
 
 
+def test_only_the_optimas_launch_puts_the_mounted_checkout_on_pythonpath(driver, monkeypatch, tmp_path) -> None:
+    """run_cluster.sh binds the submitting checkout for HARNESS=optimas alone (agent_ro_binds), and
+    exports its path as OPTARENA_SRC_DIR so `python -m hpcagent_bench.harness.episode` imports
+    today's episode.py instead of whatever hpcagent_bench the judge image baked in. Claude never
+    reads OPTARENA_SRC_DIR at all, so setting it must not change claude's launch environment."""
+    mounted_src = str(tmp_path / "opt" / "optarena-src")
+    monkeypatch.setenv("OPTARENA_SRC_DIR", mounted_src)
+    launches = launcher(monkeypatch, driver, claude_run)
+    run(driver, tmp_path)
+    claude_env = launches[0]["env"]
+    assert mounted_src not in claude_env.get("PYTHONPATH", "").split(":")
+
+    monkeypatch.setenv("HARNESS", "optimas")
+    launches = launcher(monkeypatch, driver, runner_run(end=FINISHED))
+    run(driver, tmp_path)
+    optimas_env = launches[0]["env"]
+    pythonpath = optimas_env["PYTHONPATH"]
+    assert pythonpath.split(":")[0] == mounted_src
+
+
 @pytest.mark.parametrize("harness", RUNNERS)
 def test_a_runner_is_told_the_launchers_reply_cap(driver, monkeypatch, tmp_path, harness) -> None:
     """One reply cap for every harness: a harness comparison that also compared reply lengths would
