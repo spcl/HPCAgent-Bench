@@ -565,3 +565,110 @@ def test_every_pair_excluded_raises_rather_than_writing_an_empty_table(
     path = observations(rows, tmp_path)
     with pytest.raises(SystemExit, match="excluded"):
         paired_arms.main(["--observations", str(path), "--pair", "a,b", "--family", "f"])
+
+
+def test_usage_reports_how_many_tasks_were_relaunched_and_what_the_crashes_spent(
+    paired_arms: ModuleType,
+) -> None:
+    """A token cost is the FINAL attempt's (T2), so a reader needs the relaunch rate beside it to
+    see where that rule bit. The crashed attempts' spend is carried separately and never added in."""
+    rows = [
+        *episode("a", "k1", 2.0, 100.0, job="j1"),
+        *episode("a", "k2", 2.0, 100.0, job="j1"),
+        *episode("a", "k3", 2.0, 100.0, job="j1"),
+        *episode("a", "k4", 2.0, 100.0, job="j1"),
+    ]
+    for task_row, attempts, crashed in zip(rows[2::3], (1, 2, 3, 1), (0, 40, 90, 0), strict=True):
+        task_row |= {"attempts": attempts, "tokens_crashed": crashed}
+    usage = paired_arms.task_usage(frame(rows), "latest").loc["a"]
+    assert usage.tasks == 4
+    assert usage.attempts_per_task == pytest.approx(1.75)
+    assert usage.relaunched_tasks == 2
+    assert usage.share_relaunched == pytest.approx(0.5)
+    assert usage.tokens_crashed == pytest.approx(130.0)
+
+
+def test_the_impact_table_carries_the_relaunch_rate_beside_every_token_ratio(
+    paired_arms: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """The fixture relaunches every treated task once and never relaunches a control one."""
+    table = impact_table(paired_arms, tmp_path).set_index("arm")
+    treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
+    assert (treated.relaunched_tasks, control.relaunched_tasks) == (8, 0)
+    assert treated.share_relaunched == pytest.approx(1.0) and control.share_relaunched == pytest.approx(0.0)
+
+
+def test_the_token_leg_carries_the_total_ratio_and_the_speedup_leg_does_not(
+    paired_arms: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """The budget over the whole roster is a token question; a total speed-up over kernels with no
+    common unit is not a quantity, so that cell stays blank."""
+    rows: list[dict[str, object]] = []
+    for index, kernel in enumerate(KERNELS):
+        spend = 100.0 * (index + 1)
+        rows += episode("x-qwen38-c", kernel, 2.0, spend) + episode("x-qwen38-c-cpf", kernel, 3.0, 2.0 * spend)
+    path = observations(rows, tmp_path)
+    out = tmp_path / "pairs.csv"
+    assert (
+        paired_arms.main(
+            ["--observations", str(path), "--pair", "x-qwen38-c-cpf,x-qwen38-c", "--family", "f", "--out", str(out)]
+        )
+        == 0
+    )
+    pairs = pd.read_csv(out).set_index("leg")
+    assert pairs.at["tokens", "total_ratio"] == pytest.approx(2.0)
+    assert pairs.at["tokens", "total_ci_low"] == pytest.approx(2.0)
+    assert pairs.at["tokens", "total_ci_high"] == pytest.approx(2.0)
+    assert pd.isna(pairs.at["speedup", "total_ratio"])
+
+
+def test_a_declared_roster_is_read_from_the_file_and_not_from_the_rows(
+    paired_arms: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """Spec E1. A roster taken from the rows moves with the data: an experiment that lost a kernel
+    everywhere would report full coverage over the survivors."""
+    path = tmp_path / "roster.txt"
+    path.write_text("k1  # a comment\n\n# a whole comment line\nk2\nk9\n", encoding="utf-8")
+    rows = frame([graded("a", "k1", 2.0), graded("a", "k2", 2.0)])
+    assert paired_arms.declared_roster(path, rows) == ["k1", "k2", "k9"]
+    assert paired_arms.declared_roster(None, rows) == ["k1", "k2"]
+
+
+def test_an_arm_short_of_the_declared_roster_leaves_the_family(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
+    """Both arms cover every kernel they were given, and the roster says one more was expected, so
+    the pair is dropped rather than compared over a roster that quietly shrank to fit."""
+    rows: list[dict[str, object]] = []
+    for kernel in KERNELS:
+        rows += episode("x-qwen38-c", kernel, 2.0, 100.0) + episode("x-qwen38-c-cpf", kernel, 3.0, 50.0)
+    path = observations(rows, tmp_path)
+    roster = tmp_path / "roster.txt"
+    roster.write_text("\n".join([*KERNELS, "never_served"]) + "\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="incomplete roster coverage"):
+        paired_arms.main(
+            [
+                "--observations",
+                str(path),
+                "--pair",
+                "x-qwen38-c-cpf,x-qwen38-c",
+                "--family",
+                "f",
+                "--roster-file",
+                str(roster),
+            ]
+        )
+
+
+def test_one_baseline_keeps_the_named_reference_and_every_row_without_one(paired_arms: ModuleType) -> None:
+    """Spec P1: a speed-up divided by two references is not one quantity, so the caller splits by
+    reference. A task row carries the token total and no denominator, and must survive the split."""
+    rows = frame(
+        [
+            graded("a", "k1", 2.0) | {"baseline": "c-autopar"},
+            graded("a", "k2", 3.0) | {"baseline": "numpy"},
+            task("a", "k1", 100.0),
+            task("a", "k2", 200.0),
+        ]
+    )
+    kept = paired_arms.one_baseline(rows, "c-autopar")
+    assert list(kept.record) == ["submission", "task", "task"]
+    assert sorted(kept[kept.record == "task"].benchmark) == ["k1", "k2"]

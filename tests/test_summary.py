@@ -261,3 +261,50 @@ def test_a_bootstrap_over_log_ratios_keeps_the_negative_values() -> None:
 
 def test_a_rank_sum_over_two_identical_samples_finds_no_difference() -> None:
     assert summary.rank_sum_test([3.0, 3.0, 3.0], [3.0, 3.0, 3.0])[1] == pytest.approx(1.0)
+
+
+def test_the_total_ratio_is_the_quotient_of_the_two_sums() -> None:
+    """Not the mean of the per-kernel ratios: one expensive kernel is most of a budget, and the
+    total is the number that says so."""
+    interval = summary.paired_total_ratio([100.0, 10.0, 10.0], [10.0, 10.0, 10.0])
+    assert interval.point == pytest.approx(120.0 / 30.0)
+
+
+def test_the_total_ratio_differs_from_the_geomean_of_the_same_pairs() -> None:
+    """The two answer different questions, so a table that carries both must not get one twice."""
+    a, b = [100.0, 10.0, 10.0, 10.0, 10.0, 10.0], [10.0] * 6
+    total = summary.paired_total_ratio(a, b).point
+    geomean = math.exp(summary.paired_geomean([math.log(x / y) for x, y in zip(a, b, strict=True)]).estimate)
+    assert total == pytest.approx(150.0 / 60.0)
+    assert geomean == pytest.approx(10.0 ** (1.0 / 6.0))
+    assert total != pytest.approx(geomean)
+
+
+def test_the_total_ratio_interval_brackets_its_point() -> None:
+    values_a = [120.0, 90.0, 140.0, 80.0, 110.0, 95.0, 130.0, 105.0]
+    values_b = [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+    interval = summary.paired_total_ratio(values_a, values_b)
+    assert interval.low < interval.point < interval.high
+    assert interval.n == 8
+    assert "bootstrap-percentile" in interval.method
+
+
+def test_the_total_ratio_is_the_same_number_on_a_second_run() -> None:
+    """A published end point may not move because a resample was drawn again."""
+    a = [3.0, 9.0, 2.0, 11.0, 7.0, 5.0, 13.0]
+    b = [2.0, 8.0, 3.0, 9.0, 6.0, 6.0, 10.0]
+    first, second = summary.paired_total_ratio(a, b), summary.paired_total_ratio(a, b)
+    assert (first.low, first.point, first.high) == (second.low, second.point, second.high)
+
+
+def test_the_total_ratio_resamples_kernels_and_not_the_two_sides_apart() -> None:
+    """Identical sides are the same kernel drawn twice, so every resample is exactly 1 and the
+    interval has no width. Resampling the sums independently would give it one."""
+    values = [5.0, 50.0, 500.0, 2.0, 80.0, 7.0, 900.0]
+    interval = summary.paired_total_ratio(values, values)
+    assert (interval.low, interval.point, interval.high) == pytest.approx((1.0, 1.0, 1.0))
+
+
+def test_the_total_ratio_refuses_sides_of_different_length() -> None:
+    with pytest.raises(ValueError, match="one denominator per numerator"):
+        summary.paired_total_ratio([1.0, 2.0], [1.0])
