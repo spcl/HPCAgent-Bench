@@ -10,9 +10,10 @@ dropping a series must not repaint the survivors.
 there will be many packets, and colour separates more values than shape does, so the model takes
 the shape and keeps it everywhere.
 
-Three things get coloured, and a figure varies exactly one of them, so they never compete for the
-ramp: a SKILL PACKET (an agent figure), a FRAMEWORK (a compiler/library comparison, which has no
-agent in it), or a MODEL (a figure whose only axis is which LLM ran).
+Four things get coloured, and a figure varies exactly one of them, so they never compete for the
+ramp: an INTERVENTION (a skill packet, or a scope such as `kernel`/`repo`/`no-score`), a HARNESS (an
+agent-harness comparison), a FRAMEWORK (a compiler/library comparison, which has no agent in it), or
+a MODEL (a figure whose only axis is which LLM ran).
 
 A packet's colour is :func:`hpcagent_bench.packets.packet_color`, the one packet colour rule: its LEAD
 packet's hue and one lightness step per additional packet, so ``cpfsrc`` and ``cpfsrc+lang-skills``
@@ -158,6 +159,17 @@ def model_color(name: str) -> str:
 def model_colors(names: Iterable[str]) -> dict[str, str]:
     """``{model: colour}`` for one figure."""
     return warn_on_collision({n: model_color(n) for n in dict.fromkeys(names)}, "model")
+
+
+def harness_color(name: str) -> str:
+    """The one colour an agent HARNESS wears. A harness figure varies the harness and the model,
+    so the harness takes the colour channel a packet figure spends on the packet."""
+    return ordered_color("harnesses", name)
+
+
+def harness_colors(names: Iterable[str]) -> dict[str, str]:
+    """``{harness: colour}`` for one figure."""
+    return warn_on_collision({n: harness_color(n) for n in dict.fromkeys(names)}, "harness")
 
 
 def language_colors(names: Iterable[str]) -> dict[str, str]:

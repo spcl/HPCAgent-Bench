@@ -188,3 +188,33 @@ def test_an_unregistered_language_draws_but_warns(caplog: pytest.LogCaptureFixtu
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
         palette.language_colors(["a-language-nobody-registered"])
     assert "a-language-nobody-registered" in caplog.text
+
+
+def test_every_intervention_git_scicomp_and_llrblind_name_has_a_registered_hue(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A scope is an intervention: `kernel` (the bare kernel), `repo` (the whole repository) and
+    `no-score` (the blind condition) are compared exactly like a skill packet, so each has to come
+    out of the same table with its own global hue instead of falling through to a hash colour."""
+    with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
+        chosen = {name: palette.color(name) for name in ("kernel", "repo", "no-score")}
+    assert "registry.yaml" not in caplog.text
+    assert palette.control_color() not in chosen.values()
+    assert len(set(chosen.values())) == len(chosen), chosen
+
+
+def test_no_score_is_an_alias_of_the_registered_key_and_takes_no_hue_slot_of_its_own() -> None:
+    """One intervention, one colour. A SECOND key would hand the blind condition two hues and shift
+    every packet registered after it, repainting figures already drawn."""
+    assert palette.color("no-score") == palette.color("no-score-tool")
+    assert "no-score" not in palette.hue_order("packets")
+
+
+def test_a_harness_wears_a_registered_colour_of_its_own(caplog: pytest.LogCaptureFixture) -> None:
+    """The harness comparison varies the harness and the model, so the harness takes the colour
+    channel a packet figure spends on the packet, out of the same registry."""
+    with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
+        chosen = palette.harness_colors(["claude", "miniswe", "openhands", "optimas"])
+    assert "registry.yaml" not in caplog.text
+    assert len(set(chosen.values())) == 4, chosen
+    assert chosen["claude"] == palette.harness_color("claude")

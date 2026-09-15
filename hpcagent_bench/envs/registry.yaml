@@ -336,6 +336,10 @@ aliases:
     # Recorded by the GPU C arms before offload was understood as a consequence of
     # device=gpu + language=c rather than a skill the agent was handed.
     openmp-offload: ""
+    # The short spelling of the blind intervention. An ALIAS, not a second key: `no-score-tool` is
+    # already the registered intervention and owns its hue, and a duplicate key would hand one
+    # intervention two colours and shift every hue appended after it.
+    no-score: no-score-tool
     # The arm-name and --treatment-flag spelling of `lang-skills`; scripts/migrate_db.py's PACKETS
     # table maps the same arm-name token for un-migrated archives.
     skills: lang-skills
