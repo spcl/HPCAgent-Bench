@@ -12,6 +12,7 @@ import ast
 import sqlite3
 
 import dace
+import pandas as pd
 import pytest
 from dace.libraries.standard.nodes import Reduce
 from dace.libraries.standard.nodes.scan import Scan
@@ -34,11 +35,15 @@ from hpcagent_bench.metrics.parallelism import (
     benchmark_counts,
     classify,
     classify_benchmark,
+    column_name,
     enabled,
     is_timestep_loop_region,
     loop_bound_symbols,
+    normalize_flavor,
     rate,
     rates,
+    read_records,
+    record_from_counts,
     report_lines,
     rows,
 )
@@ -468,3 +473,91 @@ def test_a_sweep_with_the_metric_on_stores_it_beside_its_results_under_the_same_
     assert got_metrics == want_metrics, metrics
     assert {(stamp, framework) for stamp, framework, _, _ in metrics} == results, (metrics, results)
     assert all(detail.startswith("framework=dace_cpu") for _, _, _, detail in metrics), metrics
+
+
+def test_column_name_appends_the_flavor_when_there_is_one() -> None:
+    assert column_name("dace_cpu", None) == "dace_cpu"
+    assert column_name("dace_cpu", "canonicalize") == "dace_cpu_canonicalize"
+
+
+def test_normalize_flavor_collapses_none_and_nan_to_none_but_keeps_a_real_flavor() -> None:
+    """pandas hands a SQL NULL flavor back as float('nan'), not None; two NaN values are never
+    equal, so a column keyed on the raw value would split "no flavor" into many groups."""
+    assert normalize_flavor(None) is None
+    assert normalize_flavor(float("nan")) is None
+    assert normalize_flavor("canonicalize") == "canonicalize"
+
+
+def test_record_from_counts_rebuilds_the_exact_taxonomy_metric_rows_wrote() -> None:
+    """The inverse of ParallelismRecord.metric_rows: a kernel_metrics row group must reproduce the
+    record it was written from, field for field (minus the triage detail kernel_metrics never held)."""
+    record = classify(guarded_sdfg())
+    counts = dict(record.metric_rows())
+
+    rebuilt = record_from_counts(counts)
+
+    assert rebuilt.buckets == record.buckets
+    assert rebuilt.total == record.total
+    assert rebuilt.libnode == record.libnode
+    assert rebuilt.residual_loops == ()
+
+
+def rows_frame(made: list) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "timestamp": r.timestamp,
+                "benchmark": r.benchmark,
+                "framework": r.framework,
+                "flavor": r.flavor,
+                "impl": r.impl,
+                "datatype": r.datatype,
+                "metric": r.metric,
+                "value": r.value,
+                "detail": r.detail,
+            }
+            for r in made
+        ]
+    )
+
+
+def test_read_records_groups_by_framework_flavor_benchmark_and_drops_other_metric_families() -> None:
+    """A frame mixing parallelism.* rows for two columns (canonicalize vs no flavor) with an
+    autovec.* row (a different metric family, must be ignored) reads back as exactly the two
+    columns' own per-kernel records."""
+    record = classify(guarded_sdfg())
+    canon_rows = rows(
+        record,
+        timestamp=1,
+        benchmark="k1",
+        framework="dace_cpu",
+        flavor="canonicalize",
+        impl="dace",
+        datatype="float64",
+    )
+    plain_rows = rows(
+        record, timestamp=1, benchmark="k1", framework="dace_cpu", flavor=None, impl="dace", datatype="float64"
+    )
+    frame = rows_frame(canon_rows + plain_rows)
+    frame.loc[len(frame)] = {
+        "timestamp": 1,
+        "benchmark": "k1",
+        "framework": "dace_cpu",
+        "flavor": "canonicalize",
+        "impl": "dace",
+        "datatype": "float64",
+        "metric": "autovec.loops_vectorized",
+        "value": 3.0,
+        "detail": "",
+    }
+
+    by_column = read_records(frame)
+
+    assert set(by_column) == {"dace_cpu_canonicalize", "dace_cpu"}
+    assert by_column["dace_cpu_canonicalize"]["k1"].buckets == record.buckets
+    assert by_column["dace_cpu"]["k1"].buckets == record.buckets
+    assert by_column["dace_cpu_canonicalize"]["k1"].total == record.total
+
+
+def test_read_records_on_an_empty_frame_is_an_empty_mapping() -> None:
+    assert read_records(rows_frame([])) == {}

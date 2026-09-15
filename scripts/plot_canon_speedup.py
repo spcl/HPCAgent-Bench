@@ -24,11 +24,12 @@ import csv
 import pathlib
 import statistics
 import sys
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from hpcagent_bench.experiments import read_table
 from hpcagent_bench.stats import style, summary
-from hpcagent_bench.stats.canon import read_times, speedups
+from hpcagent_bench.stats.canon import read_status, read_times, speedups
 
 if TYPE_CHECKING:
     import matplotlib.axes
@@ -55,6 +56,12 @@ DRAW: tuple[tuple[str, str], ...] = (
     ("dace_gpu_canonicalize", "DaCe canon GPU"),
 )
 
+#: Labels for columns a caller may ask for with --columns but that DRAW does not draw by default
+#: (dace_cpu: DaCe's own parallelizer, without canonicalization -- drawn on request by a sweep that
+#: wants it, e.g. llr-full-speedup's "what does canon buy over DaCe's own parallel output").
+EXTRA_LABELS: dict[str, str] = {"dace_cpu": "DaCe parallel CPU"}
+COLUMN_LABELS: dict[str, str] = dict(DRAW) | EXTRA_LABELS
+
 #: STATISTIC colours (median vs. geomean), not entity colours -- palette.py reserves colour for a
 #: packet, a framework or a model, and neither mark here is one of those.
 MEDIAN_HUE: str = "#3b6fd4"
@@ -77,12 +84,13 @@ class Row:
         self.n = n
 
 
-def rows_for(times: dict[str, dict[str, float]], baseline: str) -> list[Row]:
+def rows_for(times: dict[str, dict[str, float]], baseline: str, columns: Sequence[str]) -> list[Row]:
     rows: list[Row] = []
-    for column, label in DRAW:
+    for column in columns:
         sp = speedups(times, baseline, column)
         if not sp:
             continue
+        label = COLUMN_LABELS.get(column, column)
         if column == baseline:
             label = f"{label} (baseline)"
         rows.append(Row(column, label, statistics.median(sp), summary.geomean(sp, unusable="drop"), len(sp)))
@@ -96,8 +104,14 @@ def figure_size(n_rows: int, double_column: bool) -> tuple[float, float]:
     return 7.2, 0.62 * n_rows + 1.9
 
 
+#: draw()'s title when --title is not given -- the canon-llr40 sweep's own headline, kept as the
+#: default so a caller that never passes --title (every existing reproduce.sh) draws the exact
+#: figure it always has.
+DEFAULT_TITLE: str = "Canonicalization against the compilers, llr-focus40"
+
+
 def draw(
-    rows: list[Row], baseline: str, double_column: bool
+    rows: list[Row], baseline: str, double_column: bool, title: str = DEFAULT_TITLE
 ) -> "tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]":
     import matplotlib.lines
     import matplotlib.patches
@@ -168,7 +182,7 @@ def draw(
     )
     if not double_column:
         ax.set_title(
-            "Canonicalization against the compilers, llr-focus40",
+            title,
             loc="left",
             fontsize=label_size + 1.5,
             fontweight="bold",
@@ -178,37 +192,140 @@ def draw(
     return fig, ax
 
 
-def write_table(rows: list[Row], path: pathlib.Path) -> None:
+def draw_distribution(
+    times: dict[str, dict[str, float]], baseline: str, columns: Sequence[str], double_column: bool
+) -> "tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]":
+    """Sorted per-kernel speed-up curves, one line per column: readable at any kernel count, where
+    a per-kernel bar chart (one row per kernel) stops being readable past a few dozen. Framework
+    colour (:mod:`hpcagent_bench.stats.palette`) identifies a DaCe column; a compiler baseline
+    column (cc, cc_autopar, ...) drawn alongside them gets a neutral grey instead -- the palette's
+    6-hue ramp wraps past its own 30 registered frameworks, and cc happens to land on the same slot
+    as dace_cpu_canonicalize, which would draw the two as one indistinguishable line. The geomean is
+    a dashed horizontal in the same colour as its line, matching what the bar figure marks with a tick.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker
+
+    from hpcagent_bench.stats import palette
+
+    style.apply()
+    fig, ax = plt.subplots(figsize=(style.DOUBLE_COLUMN_WIDTH, 2.6) if double_column else (7.2, 4.2))
+    ax.set_yscale("log", base=2)
+    for column in columns:
+        sp = sorted(speedups(times, baseline, column))
+        if not sp:
+            continue
+        color = palette.framework_color(column) if column.startswith("dace_") else style.MUTED
+        xs = [i / (len(sp) - 1) for i in range(len(sp))] if len(sp) > 1 else [0.0]
+        gm = summary.geomean(sp, unusable="drop")
+        label = f"{COLUMN_LABELS.get(column, column)}  (n={len(sp)}, geomean {gm:.2f}x)"
+        ax.plot(xs, sp, color=color, linewidth=1.6, label=label, zorder=3)
+        ax.axhline(gm, color=color, linewidth=1.0, linestyle="--", alpha=0.6, zorder=2)
+    ax.axhline(1.0, color=style.RULE, linewidth=1.0, zorder=0)
+    ax.set_xlabel("kernels, sorted by speed-up (fraction of the sweep)", color=style.MUTED, fontsize=9.0)
+    ax.set_ylabel(f"speed-up over {LABEL.get(baseline, baseline)} (log2)", color=style.MUTED, fontsize=9.0)
+    ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _pos: f"{v:g}x"))
+    ax.grid(axis="y", which="major", color=style.RULE, linewidth=0.6, alpha=0.7, zorder=0)
+    ax.set_axisbelow(True)
+    style.despine(ax, keep=("bottom", "left"))
+    ax.tick_params(colors=style.MUTED, labelsize=8.0)
+    ax.legend(loc="upper left", frameon=False, fontsize=8.0)
+    return fig, ax
+
+
+def write_table(rows: list[Row], path: pathlib.Path, status: dict[str, dict[str, bool]] | None = None) -> None:
+    """The per-column table. ``status`` (:func:`hpcagent_bench.stats.canon.read_status`) appends
+    ``validated_n``/``failed_n`` over every kernel the column was ATTEMPTED on -- a wider count than
+    ``n`` (kernels usable in the ratio, i.e. also validated by the baseline). Omitted by default so
+    a caller that never passes it keeps the exact table this script has always written.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fields = list(TABLE_FIELDS) + (["validated_n", "failed_n"] if status is not None else [])
+    with path.open("w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(fields)
+        for row in rows:
+            values: list[object] = [row.column, row.label, f"{row.median:.6f}", f"{row.geomean:.6f}", row.n]
+            if status is not None:
+                col_status = status.get(row.column, {})
+                values += [sum(col_status.values()), sum(1 for v in col_status.values() if not v)]
+            writer.writerow(values)
+
+
+def write_per_kernel_table(
+    status: dict[str, dict[str, bool]],
+    times: dict[str, dict[str, float]],
+    baseline: str,
+    columns: Sequence[str],
+    path: pathlib.Path,
+) -> None:
+    """One row per kernel any drawn column attempted, one value per column: a numeric speed-up over
+    ``baseline``, ``failed`` (this column did not validate the kernel), or ``no-baseline`` (the
+    kernel has no validated baseline time to divide by, whatever this column did). Nothing is
+    dropped silently -- every attempted kernel gets a row and every column a value.
+    """
+    kernels = sorted({kernel for column in columns for kernel in status.get(column, {})})
+    base_times = times.get(baseline, {})
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as fh:
         writer = csv.writer(fh)
-        writer.writerow(TABLE_FIELDS)
-        for row in rows:
-            writer.writerow([row.column, row.label, f"{row.median:.6f}", f"{row.geomean:.6f}", row.n])
+        writer.writerow(["kernel", *columns])
+        for kernel in kernels:
+            values: list[str] = [kernel]
+            for column in columns:
+                if not status.get(column, {}).get(kernel, False):
+                    values.append("failed")
+                elif kernel not in base_times:
+                    values.append("no-baseline")
+                else:
+                    values.append(f"{base_times[kernel] / times[column][kernel]:.6f}")
+            writer.writerow(values)
 
 
-def run(db: pathlib.Path, out_dir: pathlib.Path, baseline: str, double_column: bool) -> int:
+def run(
+    db: pathlib.Path,
+    out_dir: pathlib.Path,
+    baseline: str,
+    double_column: bool,
+    columns: Sequence[str] | None = None,
+    stem: str = "canon_speedup",
+    distribution: bool = False,
+    per_kernel_csv: bool = False,
+    title: str = DEFAULT_TITLE,
+) -> int:
     frame = read_table(db, TABLE)
     times = read_times(frame)
     if baseline not in times:
         print(f"{db} has no {baseline!r} column to divide by", file=sys.stderr)
         return 1
 
-    rows = rows_for(times, baseline)
+    draw_columns = list(columns) if columns is not None else [column for column, _label in DRAW]
+    rows = rows_for(times, baseline, draw_columns)
     if not rows:
         print(f"{db} holds none of the drawn columns", file=sys.stderr)
         return 1
 
-    fig, _ax = draw(rows, baseline, double_column)
+    fig, _ax = draw(rows, baseline, double_column, title)
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem = style.save(fig, out_dir / "canon_speedup")
-    table_path = stem.with_suffix(".csv")
-    write_table(rows, table_path)
+    out_stem = style.save(fig, out_dir / stem)
+    status = read_status(frame) if per_kernel_csv else None
+    table_path = out_stem.with_suffix(".csv")
+    write_table(rows, table_path, status)
 
-    print(f"{stem}.pdf / .png")
+    print(f"{out_stem}.pdf / .png")
     print(f"{table_path}")
     for row in rows:
         print(f"  {row.label:<28} median {row.median:>7.2f}x   geomean {row.geomean:>7.2f}x   n={row.n}")
+
+    if status is not None:
+        per_kernel_path = out_dir / f"{stem}_per_kernel.csv"
+        write_per_kernel_table(status, times, baseline, draw_columns, per_kernel_path)
+        print(f"{per_kernel_path}")
+
+    if distribution:
+        dist_fig, _dist_ax = draw_distribution(times, baseline, draw_columns, double_column)
+        dist_stem = style.save(dist_fig, out_dir / f"{stem}_distribution")
+        print(f"{dist_stem}.pdf / .png")
     return 0
 
 
@@ -218,8 +335,26 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures"))
     ap.add_argument("--baseline", choices=BASELINES, default="numba")
     ap.add_argument("--double-column", action="store_true", help="compact ~7.0x2.0in A4 insert, no title")
+    ap.add_argument("--columns", default=None, help="comma-separated column names, overriding the default DRAW set")
+    ap.add_argument("--stem", default="canon_speedup", help="output filename stem (default: canon_speedup)")
+    ap.add_argument("--distribution", action="store_true", help="also draw <stem>_distribution.{pdf,png}")
+    ap.add_argument(
+        "--per-kernel-csv", action="store_true", help="also write <stem>_per_kernel.csv and validated/failed counts"
+    )
+    ap.add_argument("--title", default=DEFAULT_TITLE, help="figure title (ignored under --double-column)")
     args = ap.parse_args(argv)
-    return run(args.db, args.out, args.baseline, args.double_column)
+    columns = args.columns.split(",") if args.columns else None
+    return run(
+        args.db,
+        args.out,
+        args.baseline,
+        args.double_column,
+        columns,
+        args.stem,
+        args.distribution,
+        args.per_kernel_csv,
+        args.title,
+    )
 
 
 if __name__ == "__main__":

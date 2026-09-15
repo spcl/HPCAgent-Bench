@@ -38,6 +38,7 @@ def frame(rows):
         "source_path": "x",
         "suspect": 0,
         "packet": "",
+        "timing_reduction": "mwd-v2",
     }
     out = pd.DataFrame(rows)
     for column, value in defaults.items():

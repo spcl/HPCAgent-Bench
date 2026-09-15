@@ -244,8 +244,12 @@ def reduce(candidate_ns: Sequence[float], baseline_ns: Sequence[float], *, backe
 
 
 def active_backend(backend: str | None = None) -> str:
-    """The configured timing backend (``measurement.timing_backend``), or ``backend``."""
-    return backend if backend is not None else config.get_str("measurement.timing_backend", "min_of_k")
+    """The configured timing backend (``measurement.timing_backend``), or ``backend``.
+
+    The CODE default is ``mannwhitney_delta`` (mwd-v2), matching the shipped ``config.yaml``
+    value, so a deleted or missing config key cannot silently regress grading to the old
+    ``min_of_k`` rule -- ``tests/test_config_resolvers.py`` pins both."""
+    return backend if backend is not None else config.get_str("measurement.timing_backend", "mannwhitney_delta")
 
 
 def required_repeat(backend: str | None = None) -> int:
