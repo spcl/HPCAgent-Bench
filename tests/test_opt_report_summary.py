@@ -278,6 +278,26 @@ def test_a_pragma_that_directs_no_loop_charges_no_loop() -> None:
     assert lr.owning_loop(lr.scan_nests(OMP_SOURCE), 10) is None
 
 
+def test_a_deeper_loop_after_the_body_of_a_shallower_one_starts_its_own_nest() -> None:
+    """The translator's prelude ends with a helper loop at indent 4 and the kernel's loop follows at indent 8;
+    indentation alone nests the kernel loop inside the helper's, and a count that drops the helper drops it too."""
+    text = (
+        "static inline long p(long e) {\n"
+        "    while (e > 0) {\n"
+        "        e -= 1;\n"
+        "    }\n"
+        "    return e;\n"
+        "}\n"
+        "void k(double *b, long n) {\n"
+        "        for (long i = 0; i < n; ++i) {\n"
+        "          b[i] = 0.0;\n"
+        "        }\n"
+        "}\n"
+    )
+    nests = lr.scan_nests(text)
+    assert [(n.start, [loop.depth for loop in n.loops]) for n in nests] == [(2, [1]), (8, [1])], nests
+
+
 def test_a_loop_word_in_a_comment_does_not_create_a_nest() -> None:
     assert lr.scan_nests("int f(int n) {\n  // for (i = 0; i < n; i++) old\n  return n;\n}\n") == ()
 

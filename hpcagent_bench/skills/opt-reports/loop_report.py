@@ -357,17 +357,18 @@ def scan_nests(text: str) -> Tuple[Nest, ...]:
 
     nests: List[Nest] = []
     current: List[Loop] = []
-    stack: List[Tuple[int, int]] = []
+    stack: List[Tuple[int, Loop]] = []
     for line, indent in headers:
-        while stack and indent <= stack[-1][1]:
+        # A header past the body of the loop above it is not inside it, however deep it is indented: a
+        # shallow loop in one function is followed by a deeper one in the next.
+        while stack and (indent <= stack[-1][0] or line > stack[-1][1].end):
             stack.pop()
         if not stack and current:
             nests.append(Nest(start=current[0].line, loops=tuple(current)))
             current = []
-        current.append(
-            Loop(line=line, depth=len(stack) + 1, end=body_end(lines, line, indent), start=pragma_start(lines, line))
-        )
-        stack.append((line, indent))
+        loop = Loop(line=line, depth=len(stack) + 1, end=body_end(lines, line, indent), start=pragma_start(lines, line))
+        current.append(loop)
+        stack.append((indent, loop))
     if current:
         nests.append(Nest(start=current[0].line, loops=tuple(current)))
     return tuple(nests)

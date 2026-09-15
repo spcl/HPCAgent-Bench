@@ -241,6 +241,30 @@ def test_a_loop_in_dead_code_is_not_counted(tmp_path: pathlib.Path) -> None:
     assert (counts["loops"], counts["nests"]) == (1, 1), counts
 
 
+#: The translated baseline's exact layout: the dead prelude helper's loop at indent 4, the kernel's at indent 8.
+PRELUDE_LAYOUT = """#include <stdint.h>
+static inline int64_t unused_pow(int64_t base, int64_t exp) {
+    int64_t result = 1;
+    while (exp > 0) {
+        result *= base;
+        exp -= 1;
+    }
+    return result;
+}
+
+void kernel_fp64(double *restrict b, const int64_t n) {
+        for (int64_t i = 0; i < n; ++i) {
+          b[i] = 2.0;
+        }
+}
+"""
+
+
+def test_the_kernel_loop_after_a_dead_prelude_helper_is_still_counted(tmp_path: pathlib.Path) -> None:
+    counts = autovec.count(report_of(tmp_path, "gcc", ("k_fp64.c", PRELUDE_LAYOUT)), "float64").counts
+    assert (counts["loops"], counts["inner_loops"]) == (1, 1), counts
+
+
 def test_the_other_precisions_source_in_the_same_report_is_not_counted(tmp_path: pathlib.Path) -> None:
     """A native column compiles its fp64 and fp32 sources in one report; counting both doubles every loop."""
     report = report_of(tmp_path, "gcc", ("k_fp64.c", SOURCE), ("k_fp32.c", ONE_LOOP))
