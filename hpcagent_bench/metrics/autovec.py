@@ -27,7 +27,7 @@ import sys
 import tempfile
 import time
 import types
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from sqlmodel import Session
@@ -52,6 +52,8 @@ COUNTS = (
     "loops_vectorized",
     "loops_missed",
     "loops_unreported",
+    "inner_loops",
+    "inner_loops_vectorized",
     "nests",
     "nests_vectorized",
     "slp_vectorized",
@@ -143,6 +145,114 @@ def loop_vectorized(verdict: VerdictView | None) -> bool:
     return verdict is not None and any(detail.parsed for detail in verdict.vectorized)
 
 
+class LoopView(Protocol):
+    """The part of ``loop_report.Loop`` a count reads."""
+
+    @property
+    def line(self) -> int: ...
+
+    @property
+    def depth(self) -> int: ...
+
+    @property
+    def end(self) -> int: ...
+
+
+class NestView(Protocol):
+    """The part of ``loop_report.Nest`` a count reads."""
+
+    @property
+    def start(self) -> int: ...
+
+    @property
+    def loops(self) -> Sequence[LoopView]: ...
+
+
+class GroupedView(Protocol):
+    """The part of ``loop_report.Grouped`` a count reads."""
+
+    @property
+    def nests(self) -> Mapping[str, Sequence[NestView]]: ...
+
+    @property
+    def by_loop(self) -> Mapping[tuple[str, int, int], VerdictView]: ...
+
+    @property
+    def outside(self) -> Mapping[str, VerdictView]: ...
+
+
+#: A ``static`` function definition's first line, naming the function.
+STATIC_FUNCTION = re.compile(r"^static\b[^;=(]*?\b(?P<name>\w+)\s*\(")
+
+
+def function_end(lines: Sequence[str], start: int) -> int | None:
+    """Last line of the function defined from line ``start``, by brace depth; ``None`` for a prototype."""
+    depth = 0
+    opened = False
+    for number in range(start, len(lines) + 1):
+        for char in lines[number - 1]:
+            if char == ";" and not opened:
+                return None
+            if char in "{}":
+                depth += 1 if char == "{" else -1
+                opened = True
+        if opened and depth == 0:
+            return number
+    return None
+
+
+def dead_ranges(text: str) -> tuple[tuple[int, int], ...]:
+    """Line ranges of the ``static`` functions no other line names. The compiler drops them before it vectorizes
+    anything, so their loops are not the kernel's: the translator's C prelude carries one in every baseline."""
+    lines = text.splitlines()
+    ranges: list[tuple[int, int]] = []
+    for number, raw in enumerate(lines, start=1):
+        match = STATIC_FUNCTION.match(raw)
+        if match is None or len(re.findall(rf"\b{re.escape(match.group('name'))}\b", text)) > 1:
+            continue
+        end = function_end(lines, number)
+        if end is not None:
+            ranges.append((number, end))
+    return tuple(ranges)
+
+
+def innermost(loop: LoopView, nest: NestView) -> bool:
+    """Whether ``loop`` holds no other loop of ``nest``: the only kind LLVM's loop vectorizer analyses, and so the
+    kind a rate compares across compiler families (gcc also refuses outer loops out loud, clang stays silent)."""
+    return not any(other.depth > loop.depth and loop.line < other.line <= loop.end for other in nest.loops)
+
+
+def loop_counts(grouped: GroupedView, sources: Mapping[str, str]) -> dict[str, int]:
+    """The loop, nest and SLP counts of :func:`count`, over the loops of live code (see :func:`dead_ranges`)."""
+    dead = {name: dead_ranges(text) for name, text in sources.items()}
+    nests = [
+        (name, nest)
+        for name, found in grouped.nests.items()
+        for nest in found
+        if not any(first <= nest.start <= last for first, last in dead.get(name, ()))
+    ]
+    verdicts = [grouped.by_loop.get((name, nest.start, loop.line)) for name, nest in nests for loop in nest.loops]
+    inner = [innermost(loop, nest) for name, nest in nests for loop in nest.loops]
+    vectorized = [loop_vectorized(verdict) for verdict in verdicts]
+    missed = [verdict is not None and not hit and bool(verdict.missed) for verdict, hit in zip(verdicts, vectorized)]
+    in_sources = [verdict for verdict in verdicts if verdict is not None]
+    in_sources += [verdict for name, verdict in grouped.outside.items() if name in sources]
+    return {
+        "loops": len(verdicts),
+        "loops_vectorized": sum(vectorized),
+        "loops_missed": sum(missed),
+        "loops_unreported": len(verdicts) - sum(vectorized) - sum(missed),
+        "inner_loops": sum(inner),
+        "inner_loops_vectorized": sum(hit and inside for hit, inside in zip(vectorized, inner)),
+        "nests": len(nests),
+        "nests_vectorized": sum(
+            any(loop_vectorized(grouped.by_loop.get((name, nest.start, loop.line))) for loop in nest.loops)
+            for name, nest in nests
+        ),
+        "slp_vectorized": sum(1 for verdict in in_sources for detail in verdict.vectorized if not detail.parsed),
+    }
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class Measured:
     """The counts of one report, and what they were taken under (compiler family, cost model, FP reassociation)."""
@@ -156,9 +266,10 @@ def count(report: str, datatype: str) -> Measured:
 
     A loop is a for/while/do header in a compiled source (``loop_report.scan_nests``), with any pragma directing
     it: vectorized when a loop-vectorization remark lands on it, missed when its remarks refuse and none does,
-    unreported when they do neither. Every other vectorized remark in a source is SLP, inside a loop body or not.
-    A remark in a header the source includes is not the kernel's and is not counted. Raises when no compiled
-    source of that precision is readable, which would otherwise count as a kernel without loops.
+    unreported when they do neither; ``inner_loops`` are the ones holding no other loop. A loop in a ``static``
+    function nothing calls is dead code and not counted. Every other vectorized remark in a source is SLP, inside a
+    loop body or not. A remark in a header the source includes is not the kernel's and is not counted. Raises when
+    no compiled source of that precision is readable, which would otherwise count as a kernel without loops.
     """
     lr = loop_report()
     parsed = []
@@ -179,24 +290,7 @@ def count(report: str, datatype: str) -> Measured:
     if not parsed:
         raise ValueError(f"the report compiles no {datatype} source")
     merged = lr.merge(parsed)
-    grouped = lr.group(merged, sources)
-    nests = [(name, nest) for name, found in grouped.nests.items() for nest in found]
-    verdicts = [[grouped.by_loop.get((name, nest.start, loop.line)) for loop in nest.loops] for name, nest in nests]
-    flat = [verdict for nest in verdicts for verdict in nest]
-    vectorized = sum(1 for verdict in flat if loop_vectorized(verdict))
-    missed = sum(1 for verdict in flat if verdict is not None and not loop_vectorized(verdict) and verdict.missed)
-    in_sources = [verdict for verdict in flat if verdict is not None]
-    in_sources += [verdict for name, verdict in grouped.outside.items() if name in sources]
-    counts = {
-        "loops": len(flat),
-        "loops_vectorized": vectorized,
-        "loops_missed": missed,
-        "loops_unreported": len(flat) - vectorized - missed,
-        "nests": len(nests),
-        "nests_vectorized": sum(1 for nest in verdicts if any(loop_vectorized(v) for v in nest)),
-        "slp_vectorized": sum(1 for verdict in in_sources for detail in verdict.vectorized if not detail.parsed),
-        "unparsed": merged.unparsed,
-    }
+    counts = {**loop_counts(lr.group(merged, sources), sources), "unparsed": merged.unparsed}
     fp_associative = int(config.get_bool("flags.fp_associative", False))
     detail = (
         f"family={'+'.join(sorted(families))} cost_model={languages.vect_cost_model()} fp_associative={fp_associative}"

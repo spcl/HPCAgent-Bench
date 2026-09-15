@@ -104,12 +104,26 @@ def test_a_tagged_source_counts_for_its_own_precision_only(name: str, datatype: 
         # gcc refuses the nest's outer loop out loud ("complicated access pattern") ...
         (
             "gcc",
-            {"loops": 4, "loops_vectorized": 2, "loops_missed": 2, "loops_unreported": 0},
+            {
+                "loops": 4,
+                "loops_vectorized": 2,
+                "loops_missed": 2,
+                "loops_unreported": 0,
+                "inner_loops": 3,
+                "inner_loops_vectorized": 2,
+            },
         ),
         # ... clang says nothing about it, so the same loop is unreported rather than missed.
         (
             "clang",
-            {"loops": 4, "loops_vectorized": 2, "loops_missed": 1, "loops_unreported": 1},
+            {
+                "loops": 4,
+                "loops_vectorized": 2,
+                "loops_missed": 1,
+                "loops_unreported": 1,
+                "inner_loops": 3,
+                "inner_loops_vectorized": 2,
+            },
         ),
     ],
 )
@@ -189,6 +203,42 @@ def test_a_statement_group_packed_inside_a_loop_is_slp_and_not_the_loop_vectoriz
     )
     counts = autovec.count(report, "float64").counts
     assert (counts["loops_vectorized"], counts["loops_missed"], counts["slp_vectorized"]) == (0, 1, 1), counts
+
+
+#: A dead multi-line helper with a loop (lines 2-9), a live one-liner, a dead one-liner (11), and a static function
+#: declared before it is defined and called by the kernel: the shapes of the translator's C prelude.
+HELPERS = """#include <stddef.h>
+static inline long dead_pow(long base, long exp) {
+    long result = 1;
+    while (exp > 0) {
+        result *= base;
+        exp -= 1;
+    }
+    return result;
+}
+static inline double twice(double x) { return 2.0 * x; }
+static inline double unused(double x) { return x; }
+static void fill(double *a, size_t n);
+static void fill(double *a, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        a[i] = twice(1.0);
+    }
+}
+void kernel(double *a, size_t n) {
+    fill(a, n);
+}
+"""
+
+
+def test_only_a_static_function_no_other_line_names_is_dead_code() -> None:
+    assert autovec.dead_ranges(HELPERS) == ((2, 9), (11, 11))
+
+
+def test_a_loop_in_dead_code_is_not_counted(tmp_path: pathlib.Path) -> None:
+    """Every translated baseline carries an uncalled integer-power helper with a loop; counting it adds a loop
+    the compiler never sees to all 248 kernels."""
+    counts = autovec.count(report_of(tmp_path, "gcc", ("k_fp64.c", HELPERS)), "float64").counts
+    assert (counts["loops"], counts["nests"]) == (1, 1), counts
 
 
 def test_the_other_precisions_source_in_the_same_report_is_not_counted(tmp_path: pathlib.Path) -> None:
