@@ -62,10 +62,17 @@ CANON_BASELINE: str = "numba"
 #: The canon series' fixed marker -- it has no model, so it never borrows one of theirs.
 CANON_MARKER: str = "D"
 
-#: A single small-multiple panel's inches (width, height contribution per kernel row).
+#: A single small-multiple panel's inches (width, height contribution per kernel row). 0.27in/row
+#: is what a 40-name kernel axis needs at :data:`ROW_LABEL_PT` to stop consecutive labels
+#: overlapping -- :func:`hpcagent_bench.stats.style.row_axis` sizes them at the figure-wide
+#: LABEL_PT (16pt), which 40 rows in a compact panel has no room for.
 PANEL_WIDTH_IN: float = 1.85
-ROW_HEIGHT_IN: float = 0.16
+ROW_HEIGHT_IN: float = 0.27
 CHROME_IN: float = 1.9
+
+#: The kernel row labels' own font size -- smaller than :data:`hpcagent_bench.stats.style.LABEL_PT`,
+#: which :func:`row_axis` applies but which a 40-row axis has no vertical room for.
+ROW_LABEL_PT: float = 8.5
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -214,7 +221,9 @@ def draw_panel(
     all_values = [v for series in series_list for v in series.values.values()]
     style_speedup_x_axis(ax, all_values)
     plotstyle.row_axis(ax, kernels)
-    if not label_rows:
+    if label_rows:
+        ax.tick_params(axis="y", labelsize=ROW_LABEL_PT)
+    else:
         ax.tick_params(axis="y", labelleft=False)
     n = len(series_list)
     offsets = np.linspace(-0.3, 0.3, n) if n > 1 else np.array([0.0])
@@ -292,7 +301,13 @@ def figure(
         ax = axes[0][index]
         draw_panel(ax, kernels, canon_mark, arms, label_rows=index == 0)
         ax.set_title(experiment_tags.model_name(model), fontsize=plotstyle.LABEL_PT * 0.85, color=plotstyle.INK)
-    fig.subplots_adjust(left=0.22 / max(n_panels, 1) + 0.02, right=0.99, top=0.90, bottom=0.20, wspace=0.08)
+    # Top/bottom margins in INCHES, not a fixed fraction: the rotated x ticks and the legend below
+    # need roughly the same number of inches at any row count, and a fixed fraction of a figure
+    # that grows with the roster (:data:`ROW_HEIGHT_IN` per kernel) leaves a growing dead strip.
+    height = figure_size(n_panels, len(kernels), double_column)[1]
+    fig.subplots_adjust(
+        left=0.22 / max(n_panels, 1) + 0.02, right=0.99, top=1.0 - 1.0 / height, bottom=1.1 / height, wspace=0.08
+    )
     plotstyle.legend_below(fig, legend_handles(canon_mark, panels), y=0.01, fontsize=plotstyle.TICK_PT * 0.75)
     plotstyle.title(fig, title)
     return fig
