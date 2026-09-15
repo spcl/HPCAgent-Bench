@@ -9,12 +9,16 @@ reconciling the table breaks the next INSERT on every one of them, with a messag
 ("table results has no column named X") that names the symptom and not the cause.
 """
 
+import multiprocessing
+import multiprocessing.queues
+import multiprocessing.synchronize
 import pathlib
 import sqlite3
 
 import pytest
 from sqlmodel import Session, select
 
+from hpcagent_bench import osinfo
 from hpcagent_bench.frameworks.schema import Result, results_engine
 
 #: The table as it stood before ``flavor`` / ``build``: enough columns to insert a legacy row.
@@ -83,6 +87,47 @@ def test_reconciling_twice_is_a_no_op(legacy_db) -> None:
         names = [row[1] for row in conn.execute("PRAGMA table_info(results)")]
     assert names.count("flavor") == 1
     assert names.count("build") == 1
+
+
+def create_schema_race_worker(
+    path: str,
+    start: multiprocessing.synchronize.Barrier,
+    outcome: multiprocessing.queues.Queue[str],
+) -> None:
+    """One rank's ``results_engine(path)`` call, synchronized to start with its siblings so the
+    CREATE TABLE race is real OS-level file contention, not a simulated ordering."""
+    start.wait()
+    try:
+        results_engine(path)
+        outcome.put("ok")
+    except Exception as exc:  # noqa: BLE001 -- ANY exception here is the race under test
+        outcome.put(f"{type(exc).__name__}: {exc}")
+
+
+@pytest.mark.skipif(not osinfo.IS_LINUX, reason="fork start method is Linux-only")
+def test_four_ranks_racing_the_first_write_to_one_shard_do_not_crash(tmp_path) -> None:
+    """2026-09-15: cholesky crashed the compiler-baseline sweep on EVERY column. Every column's
+    ranks write results through ONE shard file each (recording.db_path, sharded by SLURM_PROCID);
+    ``results_engine``'s ``create_all`` reads ``sqlite_master`` and then issues CREATE TABLE --
+    check-then-act, not atomic -- and cholesky, always the first kernel a fresh rank writes, was
+    always the one caught racing that first CREATE against a sibling rank's own first write. The
+    loser raised ``sqlalchemy.exc.OperationalError: ... table results already exists``, and cholesky
+    itself (cholesky_numpy.py has no DB code at all) was never the cause. Reproduced here with real
+    forked processes racing ONE not-yet-existing file, matching the production shape exactly."""
+    path = str(tmp_path / "hpcagent_bench0.db")
+    ctx = multiprocessing.get_context("fork")
+    barrier = ctx.Barrier(4)
+    outcome: multiprocessing.queues.Queue[str] = ctx.Queue()
+    workers = [ctx.Process(target=create_schema_race_worker, args=(path, barrier, outcome)) for rank in range(4)]
+    for worker in workers:
+        worker.start()
+    outcomes = [outcome.get(timeout=30) for worker in workers]
+    for worker in workers:
+        worker.join(timeout=30)
+    assert outcomes == ["ok"] * 4, outcomes
+    with sqlite3.connect(path) as conn:
+        names = {row[1] for row in conn.execute("PRAGMA table_info(results)")}
+    assert names == set(Result.__table__.columns.keys())
 
 
 def test_a_fresh_db_gets_the_whole_model(tmp_path) -> None:

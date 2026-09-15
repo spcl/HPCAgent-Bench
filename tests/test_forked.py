@@ -30,6 +30,17 @@ def _boom() -> None:
     raise ValueError("kaboom")
 
 
+def boom_multiline() -> None:
+    # Mirrors a real SQLAlchemy OperationalError: the header carries the type and cause, then
+    # unindented continuation lines (a statement dump, a doc-link URL) that are NOT the header.
+    raise ValueError(
+        "table results already exists\n"
+        "[SQL: CREATE TABLE results (...)"
+        "]\n"
+        "(Background on this error at: https://sqlalche.me/e/20/e3q8)"
+    )
+
+
 def _segfault() -> None:
     # Deliberate: this child is proving the harness survives a fatal signal. pytest enables
     # faulthandler by default and the fork inherits it, so without this the child dumps a
@@ -72,6 +83,37 @@ def test_exception_is_surfaced_not_eaten() -> None:
     assert not r.ok
     assert r.signal is None
     assert "ValueError" in r.error and "kaboom" in r.error
+
+
+def test_failure_reason_keeps_the_exception_type_and_message_not_the_last_line() -> None:
+    # 2026-09-15: cholesky crashed the compiler-baseline sweep on every column with a
+    # SQLAlchemy OperationalError whose STR spans a header, a statement dump, and a doc-link URL.
+    # Cutting the last line of the traceback text left "(Background on this error at:
+    # https://sqlalche.me/e/20/e3q8)" as the one-line cause -- useless for triage.
+    r = run_forked(boom_multiline, label="race")
+    assert not r.ok
+    reason = forked_failure_reason(r)
+    assert reason == "ValueError: table results already exists"
+    assert "sqlalche.me" not in reason
+
+
+def test_exception_header_takes_the_last_match_of_a_chained_traceback() -> None:
+    # A chained exception ("raise ... from e") prints TWO headers; the one that actually
+    # propagated is the LAST one, not the first (the original cause).
+    text = (
+        "Traceback (most recent call last):\n"
+        '  File "a.py", line 1, in <module>\n'
+        "    raise KeyError('missing')\n"
+        "KeyError: 'missing'\n"
+        "\n"
+        "The above exception was the direct cause of the following exception:\n"
+        "\n"
+        "Traceback (most recent call last):\n"
+        '  File "b.py", line 2, in <module>\n'
+        "    raise RuntimeError('wrapped') from exc\n"
+        "RuntimeError: wrapped\n"
+    )
+    assert forked.exception_header(text) == "RuntimeError: wrapped"
 
 
 def test_segfault_decoded_to_signal() -> None:
