@@ -181,8 +181,9 @@ class GroupedView(Protocol):
     def outside(self) -> Mapping[str, VerdictView]: ...
 
 
-#: A ``static`` function definition's first line, naming the function.
-STATIC_FUNCTION = re.compile(r"^static\b[^;=(]*?\b(?P<name>\w+)\s*\(")
+#: The first line of a function the compiler may drop when nothing calls it -- ``static`` in C, also ``inline`` or
+#: ``constexpr`` in C++ -- naming the function.
+DROPPABLE_FUNCTION = re.compile(r"^(?:(?:static|inline|constexpr)\s+)+[^;=(]*?\b(?P<name>\w+)\s*\(")
 
 
 def function_end(lines: Sequence[str], start: int) -> int | None:
@@ -202,12 +203,12 @@ def function_end(lines: Sequence[str], start: int) -> int | None:
 
 
 def dead_ranges(text: str) -> tuple[tuple[int, int], ...]:
-    """Line ranges of the ``static`` functions no other line names. The compiler drops them before it vectorizes
-    anything, so their loops are not the kernel's: the translator's C prelude carries one in every baseline."""
+    """Line ranges of the droppable functions (:data:`DROPPABLE_FUNCTION`) no other line names. The compiler emits
+    none of them, so their loops are not the kernel's: the translator's C and C++ preludes carry one per baseline."""
     lines = text.splitlines()
     ranges: list[tuple[int, int]] = []
     for number, raw in enumerate(lines, start=1):
-        match = STATIC_FUNCTION.match(raw)
+        match = DROPPABLE_FUNCTION.match(raw)
         if match is None or len(re.findall(rf"\b{re.escape(match.group('name'))}\b", text)) > 1:
             continue
         end = function_end(lines, number)
@@ -266,8 +267,8 @@ def count(report: str, datatype: str) -> Measured:
 
     A loop is a for/while/do header in a compiled source (``loop_report.scan_nests``), with any pragma directing
     it: vectorized when a loop-vectorization remark lands on it, missed when its remarks refuse and none does,
-    unreported when they do neither; ``inner_loops`` are the ones holding no other loop. A loop in a ``static``
-    function nothing calls is dead code and not counted. Every other vectorized remark in a source is SLP, inside a
+    unreported when they do neither; ``inner_loops`` are the ones holding no other loop. A loop in a ``static``,
+    ``inline`` or ``constexpr`` function nothing calls is dead code and not counted. Every other vectorized remark in a source is SLP, inside a
     loop body or not. A remark in a header the source includes is not the kernel's and is not counted. Raises when
     no compiled source of that precision is readable, which would otherwise count as a kernel without loops.
     """

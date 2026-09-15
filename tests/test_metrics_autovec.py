@@ -230,6 +230,23 @@ void kernel(double *a, size_t n) {
 """
 
 
+def test_an_uncalled_inline_or_constexpr_helper_is_dead_code_too() -> None:
+    """The C++ prelude spells its integer-power helper ``constexpr``, not ``static``; counting its loop added one
+    loop the compiler never emits to every C++ baseline."""
+    text = (
+        "constexpr long unused_pow(long base, long exp) {\n"
+        "    long result = 1;\n"
+        "    while (exp > 0) { result *= base; exp -= 1; }\n"
+        "    return result;\n"
+        "}\n"
+        "inline double unused_twice(double x) { return 2.0 * x; }\n"
+        "void kernel(double *a, long n) {\n"
+        "    for (long i = 0; i < n; ++i) { a[i] = 0.0; }\n"
+        "}\n"
+    )
+    assert autovec.dead_ranges(text) == ((1, 5), (6, 6))
+
+
 def test_only_a_static_function_no_other_line_names_is_dead_code() -> None:
     assert autovec.dead_ranges(HELPERS) == ((2, 9), (11, 11))
 
