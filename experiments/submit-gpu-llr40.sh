@@ -7,6 +7,7 @@
 # OFFLOAD is DECLARED not inherited; memory model is fixed at explicit maps (unified needs
 # xnack+/HSA_XNACK=1 and different codegen).
 #   ./submit-gpu-llr40.sh   LANGUAGES="hip" MODELS="qwen38" ./submit-gpu-llr40.sh   SUBMIT=0 ...
+#   CLEAN=1 DEADLINE=2026-09-16T06:00:00 ./submit-gpu-llr40.sh   -- re-run every arm as "<arm>-clean"
 set -euo pipefail
 ulimit -c 0
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
@@ -39,6 +40,38 @@ fi
 # named explicitly: a GPU arm needs an image carrying cupy, which arch=gpu stages its arrays through
 AMD_CE_ENV_GPU=${AMD_CE_ENV_GPU:-optarena-amd-mi300-latest}
 
+# CLEAN=1 re-runs the wave as "<arm>-clean". The IDENTITY (experiment, model, language, device,
+# packet) is untouched -- the analysis pairs on those columns and prefers the clean arm (rule X9),
+# so the suffix says "these tasks supersede the ones before them" without inventing a condition.
+CLEAN=${CLEAN:-0}
+CLEAN_SUFFIX=$(clean_suffix "${CLEAN}")
+
+# DEADLINE=<any time date(1) parses> shrinks the wave so it ENDS before that moment instead of being
+# killed mid-episode: the job's --time becomes deadline - now - DEADLINE_MARGIN_SECONDS, and each
+# agent gets the SMALLER of its arm's own AGENT_TIMEOUT_SECONDS and what is left of that after the
+# staging allowance (STAGING_HOURS: image pull, engine start, readiness probe). Never the larger.
+# Under an hour of agent time measures nothing, so it refuses instead.
+DEADLINE=${DEADLINE:-}
+DEADLINE_MARGIN_SECONDS=${DEADLINE_MARGIN_SECONDS:-300}
+MIN_AGENT_SECONDS=${MIN_AGENT_SECONDS:-3600}
+deadline_setup "${DEADLINE}" "${DEADLINE_MARGIN_SECONDS}" || exit 2
+
+# A wave held for a quiet slot cannot also be racing a deadline, so a DEADLINE wave starts NOW unless
+# the caller named a time itself.
+BEGIN=${BEGIN:-${DEADLINE:+now}}
+[[ "${BEGIN}" == now ]] && BEGIN=""
+
+# agent_seconds <base-env> -- the wall clock ONE agent gets on this arm. A deadline only ever
+# SHORTENS it: an arm given a longer episode than the arms it is compared with measures a different
+# condition, so a clean re-run and the same re-run submitted an hour later both stay at the model's
+# own configured budget. Refuses when what is left is too little to measure anything.
+agent_seconds() {
+    local base="$1" configured
+    configured="$(grep -oP '^AGENT_TIMEOUT_SECONDS=\K[0-9]+' "${base}" || true)"
+    [[ -n "${configured}" ]] || { echo "agent_seconds: ${base} sets no AGENT_TIMEOUT_SECONDS" >&2; return 2; }
+    deadline_shrink_seconds "${configured}" "${base}"
+}
+
 submit_arm() {  # submit_arm <model> <language> <skills:0|1> <deps or empty>
     local model="$1" lang="$2" skills="$3" deps="${4:-}"
     if [[ -n "${PACKET}" && "${skills}" == 1 ]]; then
@@ -47,8 +80,8 @@ submit_arm() {  # submit_arm <model> <language> <skills:0|1> <deps or empty>
     fi
     local sfx="" ; [[ "${skills}" == 1 ]] && sfx="-skills"
     [[ -n "${PACKET}" ]] && sfx="-${PACKET}"
-    local arm="${EXPERIMENT}-${model}-${lang}${OFFLOAD:+-${OFFLOAD}}${sfx}"
-    local env=".env.${arm}" problems="${PROBLEMS_PREFIX}-${model}-${lang}${sfx}.jsonl"
+    local arm="${EXPERIMENT}-${model}-${lang}${OFFLOAD:+-${OFFLOAD}}${sfx}${CLEAN_SUFFIX}"
+    local env=".env.${arm}" problems="${PROBLEMS_PREFIX}-${model}-${lang}${sfx}${CLEAN_SUFFIX}.jsonl"
     # an arm env is written key by key, so a gate that bails midway leaves a file that looks
     # complete and silently lacks a key: build under a staging name, rename once gates pass
     local staged="${env}.staging"
@@ -77,11 +110,15 @@ submit_arm() {  # submit_arm <model> <language> <skills:0|1> <deps or empty>
         >"${problems}.tmp"
     mv -f "${problems}.tmp" "${problems}"
 
+    # the wall clock one agent gets: the base env's own budget, shortened when a deadline cannot
+    # cover it
+    local agent; agent=$(agent_seconds ".env.base-${model}") || exit 2
     stage_base_env ".env.base-${model}" "${arm}" "${EXPERIMENT}" "${STAMP}" "${staged}" \
         -e "s|^PROBLEMS_FILE=.*|PROBLEMS_FILE=${problems}|" \
         -e "s|^LANGUAGE=.*|LANGUAGE=${lang}|" \
         -e "s|^AGENT_PROMPT_FILE=.*|AGENT_PROMPT_FILE=${prompt}|" \
-        -e "s|^AMD_CE_ENV=.*|AMD_CE_ENV=${AMD_CE_ENV_GPU}|"
+        -e "s|^AMD_CE_ENV=.*|AMD_CE_ENV=${AMD_CE_ENV_GPU}|" \
+        -e "s|^AGENT_TIMEOUT_SECONDS=.*|AGENT_TIMEOUT_SECONDS=${agent}|"
     [[ -n "${input_mode}" ]] && sed -i -e "s|^JUDGE_INPUT_MODE=.*|JUDGE_INPUT_MODE=${input_mode}|" "${staged}"
     # an offload arm's LANGUAGE is `c`; device=gpu is what says it was compiled for the device
     # A packet names a SKILL the agent was handed. The directive model is NOT one: device=gpu with
@@ -95,8 +132,9 @@ submit_arm() {  # submit_arm <model> <language> <skills:0|1> <deps or empty>
     fi
 
     finalize_staged_env "${staged}" "${env}" || exit 2
-    submit_arm_job "${env}" "${arm}" "${TIME_LIMIT:-$(arm_walltime "${env}" "$(problem_kernel_count "${problems}")")}" \
-        "${deps}" "${BEGIN:-}"
+    local walltime="${DEADLINE_WALLTIME}"
+    [[ -n "${walltime}" ]] || walltime="${TIME_LIMIT:-$(arm_walltime "${env}" "$(problem_kernel_count "${problems}")")}"
+    submit_arm_job "${env}" "${arm}" "${walltime}" "${deps}" "${BEGIN:-}" ", ${walltime}, agents ${agent}s"
 }
 
 # "0 1" is the full campaign; a single leg is a next wave (the two legs owe different kernels)
