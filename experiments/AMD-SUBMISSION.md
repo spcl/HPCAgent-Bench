@@ -185,16 +185,26 @@ whichever submit script or `sbatch` invocation you are using.
 A limit can be LOWERED with `scontrol` after the fact and never raised, so an arm submitted short
 has to be resubmitted -- cheap in the first minutes, an entire wall clock later.
 
-## Effort levels -- per model, not a shared dial
+## Effort levels -- one policy over a per-model ladder
 
-| model | value | why |
-|---|---|---|
-| oss120b | `high` | ladder is low/medium/high, and the template renders `Reasoning: <v>` VERBATIM with no guard -- a wrong value is pasted into the system prompt rather than refused |
-| qwen3.8 | `xhigh` | needs the patched template below -- the ladder is low/medium/xhigh, and `xhigh` only reaches it under the name `max` |
-| Kimi K2.7 | *(empty)* | no ladder at all -- `reasoning_effort` is a K3-only field |
+A rung is not a shared dial and not a per-model preference either. Each `.env.base-*` declares the
+ladder its SERVER accepts, and `experiments/effort.py` applies one campaign-wide policy to it
+(`AGENT_EFFORT_POLICY=max`): xhigh where the ladder has it, else the ladder's top rung, else no
+`reasoning_effort` field at all. The launcher exports the result as `AGENT_EFFORT`.
+
+| model | `EFFORT_LADDER` | resolves to | why that ladder |
+|---|---|---|---|
+| oss120b | `low medium high` | `high` | the template renders `Reasoning: <v>` VERBATIM with no guard -- a wrong value is pasted into the system prompt rather than refused |
+| qwen3.8 | `low medium xhigh` | `xhigh` | needs the patched template below; there is no `high` rung, and `xhigh` also reaches it under the name `max` |
+| Kimi K2.7 | *(empty)* | *(no field)* | no ladder at all -- `reasoning_effort` is a K3-only field |
+| GLM-5.3 | *(empty)* | *(no field)* | no ladder |
 
 Never delete the line. `agent_driver.py` defaults a MISSING `AGENT_EFFORT` to `xhigh`, which is
-not what an arm that wants the empty value gets.
+not what an arm that wants the empty value gets, and an empty ladder is what says so.
+
+A harness whose client TYPES fewer rungs than the server accepts is sent the top rung it can spell
+(`openhands.sdk.LLM.reasoning_effort` is a Literal without `xhigh`, so qwen3.8 under OpenHands is
+sent `medium`), and the rung actually sent is recorded in `harness-end.json`.
 
 **Every request carries an effort, whatever you do.** Setting `AGENT_EFFORT` empty does not send
 nothing: `agent_driver.py` pops `CLAUDE_CODE_EFFORT_LEVEL` and claude falls back to its own built-in

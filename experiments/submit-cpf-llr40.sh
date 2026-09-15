@@ -36,9 +36,6 @@ else
 fi
 # named explicitly, not inherited: an image where MCP tools fail to import exits 0 with none loaded
 CPF_CE_ENV=${CPF_CE_ENV:-optarena-amd-mi300-latest}
-BEGIN=${BEGIN:-2026-09-05T08:00:00}
-[[ "${BEGIN}" == now ]] && BEGIN=""
-
 # CLEAN=1 re-runs the wave as "<arm>-clean". The IDENTITY (experiment, model, language, device,
 # packet) is untouched -- the analysis pairs on those columns and prefers the clean arm (rule X9),
 # so the suffix says "these tasks supersede the ones before them" without inventing a condition.
@@ -47,30 +44,51 @@ CLEAN_SUFFIX=""
 [[ "${CLEAN}" == 1 ]] && CLEAN_SUFFIX="-clean"
 
 # DEADLINE=<any time date(1) parses> shrinks the wave so it ENDS before that moment instead of being
-# killed mid-episode: the job gets deadline - now - DEADLINE_MARGIN_SECONDS, and the agents get that
-# less the staging allowance arm_walltime already budgets (STAGING_HOURS: image pull, engine start,
-# the readiness probe). Under an hour of agent time measures nothing, so it refuses instead.
+# killed mid-episode: the job's --time becomes deadline - now - DEADLINE_MARGIN_SECONDS, and each
+# agent gets the SMALLER of its arm's own AGENT_TIMEOUT_SECONDS and what is left of that after the
+# staging allowance (STAGING_HOURS: image pull, engine start, readiness probe). Never the larger --
+# see agent_seconds. Under an hour of agent time measures nothing, so it refuses instead.
 DEADLINE=${DEADLINE:-}
 DEADLINE_MARGIN_SECONDS=${DEADLINE_MARGIN_SECONDS:-300}
 MIN_AGENT_SECONDS=${MIN_AGENT_SECONDS:-3600}
 DEADLINE_WALLTIME=""
-DEADLINE_AGENT_SECONDS=0
+DEADLINE_LIMIT_SECONDS=0
 
 hms() { printf '%02d:%02d:%02d\n' "$(( $1 / 3600 ))" "$(( $1 % 3600 / 60 ))" "$(( $1 % 60 ))"; }
 
 if [[ -n "${DEADLINE}" ]]; then
     deadline_epoch=$(date -d "${DEADLINE}" +%s) \
         || { echo "DEADLINE=${DEADLINE} is not a time date(1) understands" >&2; exit 2; }
-    limit_seconds=$(( deadline_epoch - $(date +%s) - DEADLINE_MARGIN_SECONDS ))
-    DEADLINE_AGENT_SECONDS=$(( limit_seconds - STAGING_HOURS * 3600 ))
-    if (( DEADLINE_AGENT_SECONDS < MIN_AGENT_SECONDS )); then
-        echo "DEADLINE ${DEADLINE} leaves ${DEADLINE_AGENT_SECONDS}s for the agents," >&2
-        echo "  under the ${MIN_AGENT_SECONDS}s floor (limit ${limit_seconds}s, staging ${STAGING_HOURS}h)" >&2
-        exit 2
-    fi
-    DEADLINE_WALLTIME=$(hms "${limit_seconds}")
-    echo "deadline ${DEADLINE}: --time ${DEADLINE_WALLTIME}, AGENT_TIMEOUT_SECONDS ${DEADLINE_AGENT_SECONDS}"
+    DEADLINE_LIMIT_SECONDS=$(( deadline_epoch - $(date +%s) - DEADLINE_MARGIN_SECONDS ))
+    DEADLINE_WALLTIME=$(hms "${DEADLINE_LIMIT_SECONDS}")
+    echo "deadline ${DEADLINE}: --time ${DEADLINE_WALLTIME}"
 fi
+
+# A wave held for a quiet slot cannot also be racing a deadline, so a DEADLINE wave starts NOW unless
+# the caller named a time itself; the campaign default is a date in the past for every other wave.
+BEGIN=${BEGIN:-${DEADLINE:+now}}
+BEGIN=${BEGIN:-2026-09-05T08:00:00}
+[[ "${BEGIN}" == now ]] && BEGIN=""
+
+# agent_seconds <base-env> -- the wall clock ONE agent gets on this arm. A deadline only ever
+# SHORTENS it: an arm given a longer episode than the arms it is compared with measures a different
+# condition, so a clean re-run and a clean re-run submitted an hour later must both stay at the
+# campaign's own budget. Refuses when what is left is too little to measure anything.
+agent_seconds() {
+    local base="$1" configured left
+    configured="$(grep -oP '^AGENT_TIMEOUT_SECONDS=\K[0-9]+' "${base}" || true)"
+    [[ -n "${configured}" ]] || { echo "agent_seconds: ${base} sets no AGENT_TIMEOUT_SECONDS" >&2; return 2; }
+    if (( DEADLINE_LIMIT_SECONDS > 0 )); then
+        left=$(( DEADLINE_LIMIT_SECONDS - STAGING_HOURS * 3600 ))
+        (( left < configured )) && configured="${left}"
+    fi
+    if (( configured < MIN_AGENT_SECONDS )); then
+        echo "DEADLINE ${DEADLINE} leaves ${configured}s for the agents of ${base}," >&2
+        echo "  under the ${MIN_AGENT_SECONDS}s floor (--time ${DEADLINE_WALLTIME}, staging ${STAGING_HOURS}h)" >&2
+        return 2
+    fi
+    printf '%s\n' "${configured}"
+}
 
 DEVICE_LANGS=${DEVICE_LANGS:-"hip cuda"}
 
@@ -129,10 +147,9 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc|pe
         --language "${lang}" --image "${image}" --packet "${packet}" "${subset[@]}" >"${problems}.tmp"
     mv -f "${problems}.tmp" "${problems}"
 
-    # a deadline overrides the base env's own agent wall clock; without one the base value stands
-    local deadline_sed=()
-    (( DEADLINE_AGENT_SECONDS > 0 )) \
-        && deadline_sed=(-e "s|^AGENT_TIMEOUT_SECONDS=.*|AGENT_TIMEOUT_SECONDS=${DEADLINE_AGENT_SECONDS}|")
+    # the wall clock one agent gets: the base env's, shortened when a deadline cannot cover it
+    local agent; agent=$(agent_seconds ".env.base-${model}") || exit 2
+    local deadline_sed=(-e "s|^AGENT_TIMEOUT_SECONDS=.*|AGENT_TIMEOUT_SECONDS=${agent}|")
     # base env inherited whole: this arm differs from the model's CPU baseline in the packet only
     stage_base_env ".env.base-${model}" "${arm}" "${EXPERIMENT}" "${STAMP}" "${staged}" \
         -e "s|^PROBLEMS_FILE=.*|PROBLEMS_FILE=${problems}|" \
@@ -185,7 +202,7 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc|pe
     # node budget queues in order instead of being submitted by hand one gate at a time
     local walltime="${DEADLINE_WALLTIME}"
     [[ -n "${walltime}" ]] || walltime=$(arm_walltime "${env}" "$(problem_kernel_count "${problems}")")
-    submit_arm_job "${env}" "${arm}" "${walltime}" "${DEPEND_ON:-}" "${BEGIN}" ", ${walltime}"
+    submit_arm_job "${env}" "${arm}" "${walltime}" "${DEPEND_ON:-}" "${BEGIN}" ", ${walltime}, agents ${agent}s"
 }
 
 ARMS=${ARMS:-"c:plain c:skills c:cpf"}

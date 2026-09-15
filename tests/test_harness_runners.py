@@ -280,15 +280,22 @@ def openhands_llm_fields(harness, tmp_path: pathlib.Path, effort: str, context: 
     return harness.openhands.build_agent(args, {"OPENAI_API_KEY": "k"}).fields["llm"].fields
 
 
-@pytest.mark.parametrize("effort", ["", "xhigh"])
-def test_an_effort_rung_the_openhands_llm_is_not_typed_for_is_not_sent(
-    harness, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, effort: str
+def test_an_openhands_llm_told_no_rung_sends_no_field(
+    harness, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
-    """``LLM.reasoning_effort`` is a Literal, so an unknown rung fails validation and the episode never
-    starts. Qwen's xhigh is dropped rather than sent -- its chat template already resolves a request
-    with no field to xhigh, so the level the model runs at does not move."""
+    """A model with no ladder must be sent no ``reasoning_effort`` at all; an empty string is still a
+    value, and the server answers a rung it has no ladder for with a 400 on every request."""
     fake_openhands(monkeypatch)
-    assert "reasoning_effort" not in openhands_llm_fields(harness, tmp_path, effort, 262144)
+    assert "reasoning_effort" not in openhands_llm_fields(harness, tmp_path, "", 262144)
+
+
+def test_an_openhands_llm_sends_the_rung_the_driver_resolved_for_it(
+    harness, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """The clamp onto the SDK's Literal happens in the driver, over the part of the model's ladder the
+    SDK can spell (experiments/effort.py), so what arrives here is already spellable and is sent."""
+    fake_openhands(monkeypatch)
+    assert openhands_llm_fields(harness, tmp_path, "high", 262144)["reasoning_effort"] == "high"
 
 
 def test_an_openhands_llm_told_no_context_keeps_the_sdks_own_window(
@@ -371,8 +378,9 @@ def test_the_usage_log_appends_one_complete_line_per_call(harness, tmp_path: pat
 def test_the_end_record_is_written_and_only_a_finish_exits_zero(
     harness, tmp_path: pathlib.Path, reason: str, status: int
 ) -> None:
-    assert harness.common.write_end(tmp_path, reason, 7, "why") == status
+    assert harness.common.write_end(tmp_path, reason, 7, "why", "high") == status
     assert json.loads((tmp_path / "harness-end.json").read_text(encoding="utf-8")) == {
+        "effort": "high",
         "reason": reason,
         "turns": 7,
         "detail": "why",

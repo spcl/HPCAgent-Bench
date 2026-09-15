@@ -15,15 +15,25 @@ Runner contract (miniswe, openhands, optimas), relative to the workdir:
   "reasoning"}``, four DISJOINT counts: the uncached prompt, the cached prompt, the completion
   without its reasoning, and the reasoning. One call consumes their sum.
 * ``harness-end.json`` -- ``{"reason": "finished" | "context_overflow" | "api_timeout" | "error",
-  "turns": int, "detail": str}``, written on exit. A nonzero exit without it is a crash.
+  "turns": int, "detail": str, "effort": str}``, written on exit. A nonzero exit without it is a
+  crash. ``effort`` is the reasoning rung this client was actually sent, "" for no field at all: a
+  client that types fewer rungs than the server accepts is sent a lower one (:mod:`effort`), and a
+  difference between arms has to be visible in the data.
 """
 
 import json
 import os
 import pathlib
+import sys
 import time
 from collections.abc import Callable
 from typing import NamedTuple, cast
+
+# The driver loads this file by path, so its own directory is not on sys.path yet.
+if str(pathlib.Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+import effort
 
 CLAUDE = "claude"
 HARNESSES = (CLAUDE, "miniswe", "openhands", "optimas")
@@ -188,12 +198,33 @@ def context_length() -> int | None:
 
 
 def reasoning_effort() -> str:
-    """``$AGENT_EFFORT``. EMPTY means this model has no effort ladder and must be sent no field."""
+    """``$AGENT_EFFORT``, the rung the launcher resolved. EMPTY means this model has no effort ladder
+    and must be sent no field."""
     return os.environ.get("AGENT_EFFORT", "").strip()
 
 
-def openai_args(context: Context) -> list[str]:
-    """The endpoint, model, usage and reply-cap flags every runner takes."""
+#: The rungs ``openhands.sdk.LLM.reasoning_effort`` is TYPED for: it is a Literal, so a value outside
+#: them fails validation and the episode never starts.
+#: openhands-sdk 1.47.0, openhands/sdk/llm/llm.py: reasoning_effort is
+#: Literal["low", "medium", "high", "xhigh", "none"] (read from the agent image, 2026-09-15).
+OPENHANDS_RUNGS = frozenset({"low", "medium", "high", "xhigh", "none"})
+
+
+def client_effort(accepted: frozenset[str]) -> str:
+    """The rung a client that can only spell ``accepted`` is sent -- the same policy over the part of
+    this model's ladder the client can spell (:func:`effort.for_client`).
+
+    An arm staged before ladders existed declares none; then the resolved rung is sent when the client
+    can spell it and nothing is sent when it cannot, which is how it behaved before."""
+    declared = os.environ.get("EFFORT_LADDER", "")
+    if declared:
+        return effort.for_client(declared, accepted, os.environ.get("AGENT_EFFORT_POLICY", ""))
+    resolved = reasoning_effort()
+    return resolved if resolved in accepted else ""
+
+
+def openai_args(context: Context, rung: str) -> list[str]:
+    """The endpoint, model, usage and reply-cap flags every runner takes, at ``rung``."""
     args = [
         "--base-url",
         f"{context.replica_root}/v1",
@@ -204,9 +235,8 @@ def openai_args(context: Context) -> list[str]:
         "--max-output-tokens",
         str(max_output_tokens()),
     ]
-    effort = reasoning_effort()
-    if effort:
-        args += ["--reasoning-effort", effort]
+    if rung:
+        args += ["--reasoning-effort", rung]
     return args
 
 
@@ -226,7 +256,7 @@ def miniswe_command(context: Context) -> list[str]:
         str(context.workdir),
         "--prompt",
         str(context.prompt_file),
-        *openai_args(context),
+        *openai_args(context, reasoning_effort()),
     ]
 
 
@@ -238,7 +268,7 @@ def openhands_command(context: Context) -> list[str]:
         str(context.workdir),
         "--prompt",
         str(context.prompt_file),
-        *openai_args(context),
+        *openai_args(context, client_effort(OPENHANDS_RUNGS)),
         *context_args(),
         "--mcp-config",
         str(context.mcp_config),
@@ -265,7 +295,7 @@ def optimas_command(context: Context) -> list[str]:
         context.language,
         "--workdir",
         str(context.workdir),
-        *openai_args(context),
+        *openai_args(context, reasoning_effort()),
         *context_args(),
         "--timeout-seconds",
         str(remaining_seconds(context.deadline)),
