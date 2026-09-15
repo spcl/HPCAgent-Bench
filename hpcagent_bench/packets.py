@@ -23,6 +23,7 @@ calling :func:`packet_color` directly once this module lands.
 
 import colorsys
 import dataclasses
+import functools
 import os
 import pathlib
 import re
@@ -67,19 +68,36 @@ class Packet:
     pages: tuple[str, ...] = ()
 
 
+@functools.lru_cache(maxsize=1, typed=True)
+def tool_pages() -> frozenset[str]:
+    """Pages that are a PACKET TOOL's manual: the ``skills`` of every registered packet that
+    declares ``tools``.
+
+    ``*`` does not expand to them. ``containers/agent/tools/mcp_server.py`` serves such a tool only
+    in that packet's arms (its ``PACKET_TOOL_SWITCH``), so any other arm staging the page read the
+    manual for a tool it was never given: every one of the 6 canonical_parallel_form calls the
+    2026-09-15 skills arms made (639219, 630752) came back ``unavailable``. Naming the page outright
+    (``--skill canonical-parallel-form``) still stages it; only ``*`` stops picking it up."""
+    return frozenset(
+        page for definition in tags.registry().packet_defs.values() if definition.tools for page in definition.skills
+    )
+
+
 def expand_skill_token(token: str, language: str) -> tuple[str, ...]:
     """One skill list entry to the concrete, existing skill page directory names it names.
 
     ``lang`` is the caller's language page plus its OpenMP page when one is shipped; ``*`` is every
-    shipped page; anything else must already be a page. Raises when an expanded page does not
-    exist, so a bad language fails at resolve time rather than staging nothing."""
+    shipped page that is not a packet tool's manual (:func:`tool_pages`); anything else must already
+    be a page. Raises when an expanded page does not exist, so a bad language fails at resolve time
+    rather than staging nothing."""
     if token == "lang":
         pages = [f"lang-{language}"]
         openmp_page = f"openmp-{language}"
         if (SKILLS_DIR / openmp_page).is_dir():
             pages.append(openmp_page)
     elif token == "*":
-        pages = sorted(entry.name for entry in SKILLS_DIR.iterdir() if entry.is_dir())
+        gated = tool_pages()
+        pages = sorted(entry.name for entry in SKILLS_DIR.iterdir() if entry.is_dir() and entry.name not in gated)
     else:
         pages = [token]
     for page in pages:

@@ -111,6 +111,10 @@ models:
 #            environment at resolve time
 #   method:  a directory name under containers/agent/packets/ (AGENT_PACKET), at most one per
 #            resolved packet
+#   tools:   MCP tools this packet CARRIES. containers/agent/tools/mcp_server.py serves them in
+#            this packet's arms and nowhere else (its PACKET_TOOL_SWITCH, held to this list by
+#            tests/test_packet_wiring.py), and the pages in `skills` are then that tool's manual,
+#            which `*` does not pick up
 #   color:   an explicit hex colour, overriding the registry-order hue rule
 #   device:  cpu, amd or nvidia -- whose tools the pages teach. Resolving it for a language that
 #            device does not run is refused (amd: hip, nvidia: cuda, cpu: anything but hip/cuda)
@@ -130,9 +134,15 @@ packets:
     name: Canonical Parallel Form Page
     skills:
       - canonical-parallel-form
+    tools:
+      - canonical_parallel_form
     env:
       HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR: "${CPF_VIEW}"
   lang-skills:
+    # `*` = every shipped page EXCEPT a packet tool's manual (hpcagent_bench.packets.tool_pages).
+    # Through the 2026-09-15 clean wave it staged canonical-parallel-form.md too, a page about a
+    # tool only the cpf packet's arms are served; from 2026-09-16 this packet stages the language,
+    # OpenMP and method pages only. One arm, one packet.
     name: All Skill Pages
     skills:
       - "*"

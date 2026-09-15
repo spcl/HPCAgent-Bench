@@ -205,7 +205,8 @@ def packet_note(spec: str, language: str) -> str:
 
 
 def auto_pages(language: str = "any", image: str = "cpu") -> tuple[str, ...]:
-    """Every shipped page, alphabetically. ``--skills`` is language-AGNOSTIC now.
+    """Every shipped page a packet tool does not own, alphabetically. ``--skills`` is
+    language-AGNOSTIC now.
 
     It used to select `lang-<language>` plus the parallelism-model pages that language can spell,
     because each selected page had its BODY inlined and a packet that guessed wrong spent hundreds
@@ -216,9 +217,9 @@ def auto_pages(language: str = "any", image: str = "cpu") -> tuple[str, ...]:
     what comes back.
 
     An experiment that wants a narrower packet names it with ``--skill``, which is what every
-    ablation arm already does.
+    ablation arm already does -- including a packet tool's page, which only ``--skill`` reaches.
     """
-    return tuple(sorted(skill.file for skill in load_skills(())))
+    return tuple(sorted(skill.file for skill in load_skills(()) if skill.file not in packets.tool_pages()))
 
 
 def skills_section(

@@ -55,12 +55,15 @@ def test_resolve_lang_has_no_openmp_page_for_cuda() -> None:
     assert resolved.skills == ("lang-cuda",)
 
 
-def test_resolve_lang_skills_stages_every_shipped_page() -> None:
+def test_resolve_lang_skills_stages_every_shipped_page_but_a_packet_tools_own() -> None:
+    """``*`` is every page except the manual for a tool only one packet's arms are served: staging
+    that page here would hand the skills arm instructions for a tool it does not have."""
     resolved = packets.resolve("lang-skills", "c")
     assert resolved.key == "lang-skills"
     assert resolved.label == "All Skill Pages"
     shipped = sorted(p.name for p in packets.SKILLS_DIR.iterdir() if p.is_dir())
-    assert list(resolved.skills) == shipped
+    assert list(resolved.skills) == [page for page in shipped if page not in packets.tool_pages()]
+    assert set(shipped) - set(resolved.skills) == packets.tool_pages()
     assert resolved.env == (("AGENT_HINTS_FILE", "hints-and-triggers.md"),)
 
 
