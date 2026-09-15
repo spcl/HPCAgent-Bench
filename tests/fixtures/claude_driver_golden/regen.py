@@ -26,7 +26,7 @@ LOGS = HERE / "logs"
 GOLDEN = HERE / "golden"
 DEFAULT_REF = "9e9bbf97c^"
 #: The driver and the sibling modules it imports lazily, all read from the same ref.
-SOURCES = ("agent_driver.py", "token_cost.py", "promote_unsubmitted.py")
+SOURCES = ("agent_driver.py", "token_cost.py", "promote_unsubmitted.py", "harnesses.py", "effort.py", "seal_worker.py")
 RUNTIME_MARK = "<AGENT_RUNTIME>"
 #: Stands in for a wall-clock field of tokens.json, which cannot be a golden value.
 EPOCH_MARK = "<epoch-ms>"
@@ -386,6 +386,14 @@ def main() -> int:
                 ["git", "-C", str(REPO), "show", f"{args.ref}:experiments/{name}"], check=True, capture_output=True
             ).stdout
             (experiments / name).write_bytes(source)
+        # The driver reads its tool registry from <tree>/containers/agent (agent_runtime), so the
+        # payload is exported beside the sources at the same ref.
+        archive = subprocess.run(
+            ["git", "-C", str(REPO), "archive", "--format=tar", args.ref, "containers/agent"],
+            check=True,
+            capture_output=True,
+        ).stdout
+        subprocess.run(["tar", "-x", "-C", str(experiments.parent)], input=archive, check=True)
         goldens = capture(experiments / "agent_driver.py", pathlib.Path(scratch))
     GOLDEN.mkdir(exist_ok=True)
     for name, value in goldens.items():
