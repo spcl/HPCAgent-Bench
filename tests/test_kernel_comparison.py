@@ -13,6 +13,7 @@ import pathlib
 import pandas as pd
 import pytest
 
+from hpcagent_bench.stats import population
 from hpcagent_bench.stats.figures import kernel_comparison
 
 ROSTER: tuple[str, ...] = ("k1", "k2", "k3")
@@ -45,7 +46,8 @@ def submission_rows(arm: str, benchmark_speedups: dict[str, float]) -> list[dict
 
 
 def call_rows(arm: str, benchmark_tokens: dict[str, float]) -> list[dict[str, object]]:
-    """One ``call`` row per (arm, kernel): the columns ``population.kernel_tokens`` needs."""
+    """One ``call`` row per (arm, kernel): a running count mid-task, NEVER a token cost (T4) --
+    used only to test that a frame with call rows and no task rows is refused for tokens."""
     rows = []
     for benchmark, tokens in benchmark_tokens.items():
         run = f"{arm}-{benchmark}"
@@ -60,6 +62,30 @@ def call_rows(arm: str, benchmark_tokens: dict[str, float]) -> list[dict[str, ob
                 "tokens": tokens,
                 "ts_ms": 1,
                 "attempt_index": 1,
+            }
+        )
+    return rows
+
+
+def task_rows(
+    arm: str, benchmark_tokens: dict[str, float], ts_ms: int = 1, run_suffix: str = ""
+) -> list[dict[str, object]]:
+    """One ``record=task`` row per (arm, kernel): the columns ``population.kernel_tokens`` needs
+    (T2-T4) -- one row per worker directory, ``tokens`` the task's own effective total.
+    ``run_suffix`` distinguishes several tasks of the same kernel (a rerun or a designed repeat)."""
+    rows = []
+    for benchmark, tokens in benchmark_tokens.items():
+        run = f"{arm}-{benchmark}{run_suffix}"
+        rows.append(
+            {
+                "run_root": f"j1{run_suffix}",
+                "job": f"j1{run_suffix}",
+                "run_id": run,
+                "arm": arm,
+                "record": "task",
+                "benchmark": benchmark,
+                "tokens": tokens,
+                "ts_ms": ts_ms,
             }
         )
     return rows
@@ -225,6 +251,8 @@ def test_table_rows_carries_one_row_per_series_per_roster_kernel_not_only_the_ve
         "condition",
         "speedup",
         "tokens",
+        "tokens_min",
+        "tokens_max",
         "status",
         "row",
         "statistic",
@@ -267,7 +295,7 @@ def test_summary_row_carries_the_median_of_the_plotted_per_kernel_tokens() -> No
     frame = observations(
         [
             *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
-            *call_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0, "k2": 300.0, "k3": 200.0}),
+            *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0, "k2": 300.0, "k3": 200.0}),
         ]
     )
     panels, _canon, _dropped = kernel_comparison.build_panels(frame, ROSTER)
@@ -297,16 +325,110 @@ def test_the_canon_series_carries_no_summary_token_row() -> None:
     assert list(canon_summary.statistic) == ["geomean"]
 
 
-def test_arm_tokens_sums_episodes_per_kernel_never_a_median() -> None:
-    """``arm_tokens`` is the SUM over an arm's episodes for a kernel -- costs add -- never a
-    per-episode median (that is :mod:`scripts.plot_tokens`'s different question)."""
+def test_arm_tokens_reads_one_tasks_total_never_a_sum() -> None:
+    """``arm_tokens`` reads a kernel's token total off its task record (T1-T4), never sums call
+    rows -- a kernel with one task simply reports that task's own total."""
     frame = observations(
         [
             *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0}),
-            *call_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0}),
+            *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0}),
         ]
     )
-    assert kernel_comparison.arm_tokens(frame, "cpf-llr-focus40-qwen38-c") == {"k1": 100.0}
+    values, low, high = kernel_comparison.arm_tokens(frame, "cpf-llr-focus40-qwen38-c")
+    assert values == {"k1": 100.0}
+    assert low == {} and high == {}
+
+
+def test_arm_tokens_reads_a_rerun_kernels_latest_task_total_not_the_sum_of_both() -> None:
+    """A rerun kernel's token cell is the LATEST task's own total (R4): summing both tasks would
+    bill an arm twice for being resubmitted, which the pre-2026-09-15 reduction did (spec F1)."""
+    arm = "cpf-llr-focus40-qwen38-c"
+    frame = observations(
+        [
+            *submission_rows(arm, {"k1": 2.0}),
+            *task_rows(arm, {"k1": 400.0}, ts_ms=10, run_suffix="-w0"),
+            *task_rows(arm, {"k1": 250.0}, ts_ms=30, run_suffix="-w1"),
+        ]
+    )
+    values, low, high = kernel_comparison.arm_tokens(frame, arm)
+    assert values == {"k1": 250.0}
+    assert low == {} and high == {}
+
+
+def test_arm_tokens_refuses_a_frame_with_call_rows_and_no_task_records() -> None:
+    """``calls.tokens`` is a running count of the CURRENT attempt at a judge call (T4): a frame
+    extracted before task records existed cannot cost an arm off it, and must say so rather than
+    silently reading a partial total."""
+    frame = observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0}),
+            *call_rows("cpf-llr-focus40-qwen38-c", {"k1": 900.0}),
+        ]
+    )
+    with pytest.raises(population.MixedPopulationError, match="no task records"):
+        kernel_comparison.arm_tokens(frame, "cpf-llr-focus40-qwen38-c")
+
+
+def test_repeats_median_series_and_table_carry_tokens_min_and_max() -> None:
+    """Designed repeats (R5): the kernel's token cell is the median over its tasks, bracketed by
+    the minimum and maximum over those SAME tasks -- both on the ``Series`` and in the written
+    table, where they draw as a whisker on the token panel."""
+    arm = "cpf-llr-focus40-qwen38-c"
+    rows = submission_rows(arm, {"k1": 2.0, "k2": 2.0, "k3": 2.0})
+    for suffix, tokens, ts_ms in (("-w0", 100.0, 10), ("-w1", 400.0, 11), ("-w2", 250.0, 12)):
+        rows += task_rows(arm, {"k1": tokens}, ts_ms=ts_ms, run_suffix=suffix)
+    frame = observations(rows)
+
+    panels, _canon, _dropped = kernel_comparison.build_panels(frame, ROSTER, repeats="median")
+    series = panels["qwen38"][0]
+    assert series.tokens == {"k1": 250.0}
+    assert series.tokens_min == {"k1": 100.0}
+    assert series.tokens_max == {"k1": 400.0}
+
+    table = kernel_comparison.table_rows(panels, None, ROSTER)
+    row = table[(table.row == kernel_comparison.ROW_KERNEL) & (table.kernel == "k1")].iloc[0]
+    assert row.tokens == 250.0
+    assert row.tokens_min == 100
+    assert row.tokens_max == 400
+
+
+def test_repeats_latest_series_and_table_carry_no_tokens_min_or_max() -> None:
+    """Under the default ``--repeats latest`` one task IS the kernel's value, so there is nothing
+    to bracket: the range columns stay blank."""
+    frame = observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
+            *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0}),
+        ]
+    )
+    panels, _canon, _dropped = kernel_comparison.build_panels(frame, ROSTER)
+    series = panels["qwen38"][0]
+    assert series.tokens_min == {} and series.tokens_max == {}
+
+    table = kernel_comparison.table_rows(panels, None, ROSTER)
+    row = table[(table.row == kernel_comparison.ROW_KERNEL) & (table.kernel == "k1")].iloc[0]
+    assert row.tokens_min == "" and row.tokens_max == ""
+
+
+def test_table_rows_writes_whole_token_totals_and_kernel_counts_as_integers() -> None:
+    """N3: a raw task token total and a kernel count must be written as python ints, never floats
+    with a trailing ``.0`` -- a table reader must not have to guess whether ``5.0`` means 5 exactly
+    or a rounded statistic."""
+    arm = "cpf-llr-focus40-qwen38-c"
+    frame = observations(
+        [
+            *submission_rows(arm, {"k1": 2.0, "k2": 8.0, "k3": 2.0}),
+            *task_rows(arm, {"k1": 100.0, "k2": 300.0, "k3": 200.0}),
+        ]
+    )
+    panels, _canon, _dropped = kernel_comparison.build_panels(frame, ROSTER)
+    table = kernel_comparison.table_rows(panels, None, ROSTER)
+
+    kernel_row = table[(table.row == kernel_comparison.ROW_KERNEL) & (table.kernel == "k1")].iloc[0]
+    assert isinstance(kernel_row.tokens, int)
+
+    summary_row = table[(table.row == kernel_comparison.ROW_SUMMARY) & (table.statistic == "geomean")].iloc[0]
+    assert isinstance(summary_row.n_kernels, int)
 
 
 def test_the_control_condition_reads_no_packet_not_the_registry_skill_wording() -> None:
@@ -351,8 +473,8 @@ def test_speedup_panels_share_one_x_axis_and_token_panels_share_another() -> Non
         [
             *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
             *submission_rows("cpf-llr-focus40-oss120b-c", {"k1": 120.0, "k2": 120.0, "k3": 120.0}),
-            *call_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0, "k2": 100.0, "k3": 100.0}),
-            *call_rows("cpf-llr-focus40-oss120b-c", {"k1": 900000.0, "k2": 900000.0, "k3": 900000.0}),
+            *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0, "k2": 100.0, "k3": 100.0}),
+            *task_rows("cpf-llr-focus40-oss120b-c", {"k1": 900000.0, "k2": 900000.0, "k3": 900000.0}),
         ]
     )
     panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER)
@@ -413,7 +535,7 @@ def test_an_incomplete_arm_appears_in_neither_the_speedup_nor_the_token_panel() 
         [
             *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
             *submission_rows("cpf-llr-focus40-qwen38-c-cpf", {"k1": 2.0}),
-            *call_rows("cpf-llr-focus40-qwen38-c-cpf", {"k1": 100.0}),
+            *task_rows("cpf-llr-focus40-qwen38-c-cpf", {"k1": 100.0}),
         ]
     )
     panels, _canon, dropped = kernel_comparison.build_panels(frame, ROSTER)

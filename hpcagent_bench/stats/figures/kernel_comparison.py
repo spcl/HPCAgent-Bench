@@ -33,11 +33,15 @@ COMPLETENESS is roster coverage, not scoring: :func:`hpcagent_bench.stats.popula
 keeps only arms with a recorded row for every kernel :data:`ARM_PATTERN` -- and a model whose arms
 are ALL incomplete draws no panel at all, rather than an empty one.
 
-PER-KERNEL VALUES ARE WHATEVER THE FRAMEWORK'S OWN POLICY ASSIGNS -- never invented here.
-:func:`hpcagent_bench.stats.population.kernel_answers` is an arm's best verified FINAL answer per
-kernel (within an episode the last submission, across episodes the maximum); a kernel with no
-verified answer simply has no row and draws no mark. Tokens are the SUM over the arm's episodes for
-that kernel (:func:`hpcagent_bench.stats.population.kernel_tokens`), never a median -- costs add.
+PER-KERNEL VALUES ARE WHATEVER THE FRAMEWORK'S OWN POLICY ASSIGNS UNDER ``--repeats`` -- never
+invented here (spec R3-R7). :func:`hpcagent_bench.stats.population.kernel_answers` is an arm's
+verified answer per kernel: the LATEST run's answer for a rerun kernel (default, none when that run
+verified nothing -- an earlier run's answer never stands in), the MEDIAN answer over runs that
+repeat by design. A kernel with no verified answer simply has no row and draws no mark. Tokens are
+:func:`hpcagent_bench.stats.population.kernel_tokens` under the SAME ``--repeats``: the latest
+run's own TASK TOKEN TOTAL, or the median of the runs' task totals, bracketed by that median's own
+minimum and maximum over the tasks (``Series.tokens_min``/``Series.tokens_max``, drawn as a
+whisker). Tokens are NEVER summed over tasks (R6), and come only from ``record = task`` rows (T4).
 The canon column is :func:`hpcagent_bench.stats.canon.kernel_speedups` over the deterministic
 sweep: no episodes, no policy to pick, and no tokens spent.
 """
@@ -107,7 +111,10 @@ SUMMARY_ROW_GAP: float = 0.9
 @dataclasses.dataclass(frozen=True, slots=True)
 class Series:
     """One drawn series: a per-kernel speed-up and per-kernel token spend, already keyed to the
-    kernels each has a value for. The canon series has an empty ``tokens`` -- it runs no agent."""
+    kernels each has a value for. The canon series has an empty ``tokens`` -- it runs no agent.
+    ``tokens_min``/``tokens_max`` bracket a ``--repeats median`` kernel's token value with the
+    minimum and maximum over its tasks (R5); empty under ``--repeats latest``, where one task IS
+    the value and there is nothing to bracket."""
 
     key: str
     label: str
@@ -117,6 +124,8 @@ class Series:
     condition: str
     values: dict[str, float]
     tokens: dict[str, float]
+    tokens_min: dict[str, float]
+    tokens_max: dict[str, float]
 
 
 def parse_arm(arm: str, pattern: re.Pattern[str] = ARM_PATTERN) -> tuple[str, str] | None:
@@ -150,14 +159,26 @@ def arm_speedups(frame: pd.DataFrame, arm: str, repeats: population.RepeatPolicy
     return {str(kernel): float(value) for kernel, value in answers["speedup"].items() if value > 0}
 
 
-def arm_tokens(frame: pd.DataFrame, arm: str) -> dict[str, float]:
-    """``arm``'s SUMMED tokens per kernel (:func:`population.kernel_tokens`): every episode's own
-    cumulative call total, added across the kernel's episodes -- costs add, so the per-kernel figure
-    and :mod:`scripts.plot_tokens` read the same population rather than each summarising it their
-    own way."""
+def arm_tokens(
+    frame: pd.DataFrame, arm: str, repeats: population.RepeatPolicy = "latest"
+) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    """``arm``'s per-kernel token total under ``repeats`` (:func:`population.kernel_tokens`), plus
+    the minimum and maximum over the tasks when ``repeats="median"`` (R5).
+
+    Tokens come only from ``record = task`` rows (T4); a kernel with no task total is absent, never
+    entered at any stand-in value, matching :func:`arm_speedups`. Under ``latest`` one task IS the
+    kernel's value, so the range dicts come back empty -- there is nothing to bracket.
+    """
     subset = frame[frame["arm"].astype(str) == arm]
-    totals = population.kernel_tokens(subset)
-    return {str(kernel): float(value) for kernel, value in totals.items() if value > 0}
+    totals = population.kernel_tokens(subset, ("arm", "benchmark"), repeats=repeats)
+    values = {str(kernel): float(value) for (_, kernel), value in totals.items() if value > 0}
+    if repeats != "median" or not values:
+        return values, {}, {}
+    episodes = population.episode_tokens(subset, ("arm", "benchmark"))
+    grouped = episodes.groupby("benchmark").tokens
+    low = {str(kernel): float(value) for kernel, value in grouped.min().items() if str(kernel) in values}
+    high = {str(kernel): float(value) for kernel, value in grouped.max().items() if str(kernel) in values}
+    return values, low, high
 
 
 def canon_speedups(
@@ -231,6 +252,8 @@ def build_panels(
             "",
             canon_speedups(canon_frame, canon_baseline, canon_column),
             {},
+            {},
+            {},
         )
         if canon_frame is not None
         else None
@@ -241,6 +264,7 @@ def build_panels(
         values = arm_speedups(frame, arm, repeats)
         if not values:
             continue
+        tokens, tokens_min, tokens_max = arm_tokens(frame, arm, repeats)
         series = Series(
             arm,
             condition_label(condition),
@@ -249,7 +273,9 @@ def build_panels(
             model,
             condition,
             values,
-            arm_tokens(frame, arm),
+            tokens,
+            tokens_min,
+            tokens_max,
         )
         by_model.setdefault(model, []).append(series)
     for model, series_list in by_model.items():
@@ -366,6 +392,11 @@ def draw_summary_row(
     )
 
 
+#: Drawn under the mark's white halo (:data:`~hpcagent_bench.stats.style.FILL_Z`), never over it --
+#: the same "connector under fill" order :func:`~hpcagent_bench.stats.style.point_mark` documents.
+TOKEN_RANGE_Z: float = 2.0
+
+
 def draw_panel(
     ax: matplotlib.axes.Axes,
     kernels: Sequence[str],
@@ -375,6 +406,7 @@ def draw_panel(
     reducer: Callable[[Iterable[float]], float],
     summary_label: str,
     label_rows: bool,
+    range_of: Callable[[Series], tuple[dict[str, float], dict[str, float]]] | None = None,
 ) -> None:
     """One panel, for ONE metric (:func:`value_of` reads it off each series): the kernel rows,
     dodged apart within each row, plus the summary row below them (:func:`draw_summary_row`).
@@ -382,6 +414,10 @@ def draw_panel(
     A kernel a series has no value for still draws: a HOLLOW mark in that series' own colour and
     shape, at ``missing_x`` -- present and legible rather than a gap a reader has to notice on their
     own, and hollow so it is never mistaken for a genuine value.
+
+    ``range_of``, when given, reads a (minimum, maximum) pair per series off ``--repeats median``'s
+    token spread (R5) and draws it as a thin whisker behind the mark -- absent under ``--repeats
+    latest``, where a kernel has one task and nothing to bracket.
     """
     separator_y, summary_y = summary_row_position(len(kernels))
     plotstyle.row_axis(ax, kernels)
@@ -395,13 +431,17 @@ def draw_panel(
     y_of = {kernel: i for i, kernel in enumerate(kernels)}
     for offset, series in zip(offsets, series_list, strict=True):
         values = value_of(series)
+        low_of, high_of = range_of(series) if range_of is not None else ({}, {})
         for kernel in kernels:
             y = y_of[kernel] + offset
             value = values.get(kernel)
             if value is None or not math.isfinite(value) or value <= 0.0:
                 plotstyle.point_mark(ax, missing_x, y, series.color, series.marker, filled=False, size=26.0)
-            else:
-                plotstyle.point_mark(ax, value, y, series.color, series.marker, filled=True, size=26.0)
+                continue
+            low, high = low_of.get(kernel), high_of.get(kernel)
+            if low is not None and high is not None and math.isfinite(low) and math.isfinite(high) and low < high:
+                ax.hlines(y, low, high, color=series.color, linewidth=1.1, alpha=0.55, zorder=TOKEN_RANGE_Z)
+            plotstyle.point_mark(ax, value, y, series.color, series.marker, filled=True, size=26.0)
     draw_summary_row(ax, separator_y, summary_y, series_list, value_of, reducer, summary_label)
 
 
@@ -511,7 +551,12 @@ def figure(
     # never one panel's own values, or a position would not mean the same ratio/spend next door.
     all_series = (*((canon_mark,) if canon_mark is not None else ()), *(s for arms in panels.values() for s in arms))
     speedup_ticks = value_ticks(v for series in all_series for v in series.values.values())
-    token_limits = token_axis_limits(v for series in all_series for v in series.tokens.values())
+    token_limits = token_axis_limits(
+        v
+        for series in all_series
+        for values in (series.tokens, series.tokens_min, series.tokens_max)
+        for v in values.values()
+    )
 
     fig, axes = plt.subplots(
         2, n_panels, sharey=True, figsize=figure_size(n_panels, len(kernels), double_column), squeeze=False
@@ -532,7 +577,17 @@ def figure(
         )
         speedup_ax.set_title(experiment_tags.model_name(model), fontsize=plotstyle.LABEL_PT * 0.85, color=plotstyle.INK)
         style_token_x_axis(token_ax, token_limits)
-        draw_panel(token_ax, kernels, arms, lambda s: s.tokens, token_limits[0], summary_tokens, "Median", index == 0)
+        draw_panel(
+            token_ax,
+            kernels,
+            arms,
+            lambda s: s.tokens,
+            token_limits[0],
+            summary_tokens,
+            "Median",
+            index == 0,
+            range_of=lambda s: (s.tokens_min, s.tokens_max),
+        )
         if index == 0:
             # ONE label per panel ROW, on the leftmost column only: an axes ylabel per model column
             # would repeat it, and the figure title only names the whole figure -- neither says
@@ -572,8 +627,11 @@ ROW_SUMMARY: str = "summary"
 #: from this module's docstring.
 TABLE_NOTE: str = (
     "# speedup: the canon row (if any) is a deterministic column's median_ms ratio; every arm row is "
-    "population.kernel_answers' best verified final answer. tokens: the arm's SUMMED per-kernel "
-    "spend (population.kernel_tokens); canon has none. status=no_verified_answer: the series covers "
+    "population.kernel_answers' verified answer under --repeats. tokens: population.kernel_tokens "
+    "under the same --repeats -- the latest task's own total under reruns (default), the median of "
+    "the tasks' totals under designed repeats; tokens_min/tokens_max bracket that median with the "
+    "tasks' own minimum and maximum (blank under --repeats latest, where one task IS the value); "
+    "canon has none, tokens never summed over tasks. status=no_verified_answer: the series covers "
     "this roster kernel but never verified an answer for it; speedup is blank. row=kernel rows carry "
     "one roster kernel each; row=summary rows (kernel blank) carry one series' OVERALL statistic: "
     "statistic=geomean for speedup (the project rule for an overall speed-up), statistic=median for "
@@ -581,16 +639,31 @@ TABLE_NOTE: str = (
 )
 
 
+def as_count(value: float) -> int | float:
+    """``value`` as a python ``int`` when it is exactly integral, else the float itself at full
+    precision (N4).
+
+    A token total read straight off one task (the latest-run value, or ``tokens_min``/``tokens_max``,
+    always a raw task total) is a count and always integral; a ``--repeats median`` kernel's median
+    over an even number of tasks need not be (N2's median, not N3's count), so it is left alone
+    rather than rounded to fit.
+    """
+    return int(value) if float(value).is_integer() else value
+
+
 def series_rows(kind: str, model: str, series: Series, kernels: Sequence[str]) -> list[dict[str, object]]:
     """One ``series``' per-kernel rows over ``kernels``: a real speed-up and token spend where it
     has them, blank otherwise -- so a missing kernel is a readable fact in the table, not a silently
-    absent one."""
+    absent one. ``tokens_min``/``tokens_max`` are blank except under ``--repeats median``."""
     rows: list[dict[str, object]] = []
     for kernel in kernels:
         value = series.values.get(kernel)
         verified = value is not None and math.isfinite(value) and value > 0.0
         tokens = series.tokens.get(kernel)
         has_tokens = tokens is not None and math.isfinite(tokens) and tokens > 0.0
+        low = series.tokens_min.get(kernel)
+        high = series.tokens_max.get(kernel)
+        has_range = has_tokens and low is not None and high is not None and math.isfinite(low) and math.isfinite(high)
         rows.append(
             {
                 "kernel": kernel,
@@ -599,7 +672,9 @@ def series_rows(kind: str, model: str, series: Series, kernels: Sequence[str]) -
                 "model": model,
                 "condition": series.condition,
                 "speedup": value if verified else "",
-                "tokens": tokens if has_tokens else "",
+                "tokens": as_count(tokens) if has_tokens else "",
+                "tokens_min": as_count(low) if has_range else "",
+                "tokens_max": as_count(high) if has_range else "",
                 "status": STATUS_VERIFIED if verified else STATUS_MISSING,
                 "row": ROW_KERNEL,
                 "statistic": "",
@@ -626,6 +701,8 @@ def series_summary_rows(kind: str, model: str, series: Series, kernels: Sequence
                 "condition": series.condition,
                 "speedup": "",
                 "tokens": "",
+                "tokens_min": "",
+                "tokens_max": "",
                 "status": "",
                 "row": ROW_SUMMARY,
                 "statistic": "geomean",
@@ -646,6 +723,8 @@ def series_summary_rows(kind: str, model: str, series: Series, kernels: Sequence
                     "condition": series.condition,
                     "speedup": "",
                     "tokens": "",
+                    "tokens_min": "",
+                    "tokens_max": "",
                     "status": "",
                     "row": ROW_SUMMARY,
                     "statistic": "median",
@@ -664,6 +743,8 @@ TABLE_COLUMNS: tuple[str, ...] = (
     "condition",
     "speedup",
     "tokens",
+    "tokens_min",
+    "tokens_max",
     "status",
     "row",
     "statistic",
