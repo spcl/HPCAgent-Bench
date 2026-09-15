@@ -18,10 +18,12 @@ rather than failing.
 
 Rows are one per PAIR, not one per (pair, leg): the family CSV interleaves a pair's speed-up and
 tokens rows one after the other, and ``rows_for`` re-groups them by ``(arm_a, arm_b)`` so both
-panels share one categorical y axis (``hpcagent_bench/stats/style.py``'s ``row_axis``). Colour and
-marker are the model either arm names, read off the shared model registry
-(``hpcagent_bench/experiment_tags.py``) rather than off a hyphen convention -- palette's own rule
-is that shape is always the model -- and fall back to a neutral grey circle for a pair naming none.
+panels share one categorical y axis (``hpcagent_bench/stats/style.py``'s ``row_axis``). COLOUR IS
+THE INTERVENTION the pair tests (``pair_intervention``, through ``palette.color``) and SHAPE IS THE
+MODEL either arm names (``palette.marker``), both read off the shared registry
+(``hpcagent_bench/envs/registry.yaml``) rather than off a hyphen convention. A pair naming no
+registered model keeps a neutral circle, and one whose two arms differ in no packet keeps the
+control colour.
 """
 
 import argparse
@@ -181,14 +183,31 @@ def named_model(pair: Pair, models: Sequence[str]) -> str:
     return next((model for model in models if model in tokens), "")
 
 
+def pair_intervention(pair: Pair) -> str:
+    """The INTERVENTION a pair tests: the packet arm A names, when the two arms differ in it.
+
+    Two arms that name the SAME packet are not a packet comparison at all -- their variable is
+    something else the family declared, an episode count or a repeat policy -- so the pair takes
+    the control colour rather than borrowing the hue of a packet both sides carried. `kernel`,
+    `repo` and `no-score` are registered packet keys for exactly this reason: git-scicomp's scope
+    and llrblind's blind condition are interventions, and each wears its own global hue.
+    """
+    left, right = experiment_tags.packet_of(pair[0]), experiment_tags.packet_of(pair[1])
+    return left if left != right else ""
+
+
 def pair_style(pairs: Sequence[Pair], models: Sequence[str]) -> tuple[dict[Pair, str], dict[Pair, str]]:
-    """Colour and marker per pair: the model either arm names (palette's rule -- shape is always the
-    model), or a neutral grey circle for a pair naming none of the registered models."""
+    """Colour is the INTERVENTION, shape is the MODEL -- palette's one rule.
+
+    Colour was the model too, which spent the intervention's channel on the entity the shape
+    already carried: a family comparing three packets drew all three in one hue per model, so the
+    same colour meant a different treatment in every row. A pair naming no registered model keeps a
+    neutral circle.
+    """
     detected = {pair: named_model(pair, models) for pair in pairs}
     known = sorted({model for model in detected.values() if model})
-    hues = palette.model_colors(known) if known else {}
     shapes = palette.model_markers(known) if known else {}
-    colors = {pair: hues.get(model, plotstyle.MUTED) for pair, model in detected.items()}
+    colors = {pair: palette.color(pair_intervention(pair)) for pair in pairs}
     markers = {pair: shapes.get(model, "o") for pair, model in detected.items()}
     return colors, markers
 
@@ -212,6 +231,8 @@ def style_ratio_axis(ax: matplotlib.axes.Axes, rows: Sequence[Row]) -> None:
     ax.set_xticks(ticks)
     ax.set_xticklabels([per_kernel.speedup_tick_label(tick) for tick in ticks], fontsize=plotstyle.TICK_PT * 0.75)
     ax.axvline(1.0, color=plotstyle.REFERENCE, linewidth=0.9, zorder=1)
+    ax.grid(axis="x", which="major", color=plotstyle.RULE, linewidth=0.7, zorder=0)
+    ax.set_axisbelow(True)
 
 
 def draw_forest(
@@ -240,15 +261,40 @@ def draw_forest(
 
 
 def model_legend(pairs: Sequence[Pair], colors: dict[Pair, str], shapes: dict[Pair, str]) -> list[plt.Line2D]:
-    """One legend handle per registered model the family names, in registry order."""
+    """The figure's one key: a MODEL is a shape in neutral ink, an INTERVENTION is a colour.
+
+    A model handle never wears its own hue -- colour is the intervention's channel, and a coloured
+    model entry would claim a channel the rows spend on something else. A family whose pairs differ
+    in no packet gets the model handles alone, since it has no intervention to name.
+    """
     models = experiment_tags.order("models")
-    by_model = {named_model(pair, models): (colors[pair], shapes[pair]) for pair in pairs}
-    return [
+    by_model = {named_model(pair, models): shapes[pair] for pair in pairs}
+    handles = [
         plt.Line2D(
-            [], [], marker=shape, linestyle="none", color=color, markersize=8, label=experiment_tags.model_name(model)
-        )
-        for model, (color, shape) in by_model.items()
+            [],
+            [],
+            marker=shape,
+            linestyle="none",
+            color=plotstyle.MUTED,
+            markersize=8,
+            label=experiment_tags.model_name(model),
+        )  # fmt: skip
+        for model, shape in by_model.items()
         if model
+    ]
+    by_packet = {pair_intervention(pair): colors[pair] for pair in pairs}
+    return handles + [
+        plt.Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="none",
+            color=color,
+            markersize=8,
+            label=experiment_tags.packet_name(packet),
+        )  # fmt: skip
+        for packet, color in by_packet.items()
+        if packet
     ]
 
 

@@ -337,6 +337,8 @@ def style_speedup_x_axis(ax: matplotlib.axes.Axes, ticks: Sequence[float]) -> No
     ax.set_xticklabels([speedup_tick_label(tick) for tick in ticks], fontsize=plotstyle.TICK_PT * 0.55, rotation=90)
     ax.set_xlim(ticks[0] / 1.3, ticks[-1] * 1.3)
     ax.axvline(1.0, color=plotstyle.REFERENCE, linewidth=0.9, zorder=1)
+    ax.grid(axis="x", which="major", color=plotstyle.RULE, linewidth=0.7, zorder=0)
+    ax.set_axisbelow(True)
 
 
 def style_token_x_axis(ax: matplotlib.axes.Axes, limits: tuple[float, float]) -> None:

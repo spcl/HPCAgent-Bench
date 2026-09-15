@@ -19,7 +19,9 @@ import matplotlib.transforms
 import pandas as pd
 import pytest
 
+from hpcagent_bench import experiment_tags
 from hpcagent_bench.harness import efficacy
+from hpcagent_bench.stats import palette
 from hpcagent_bench.stats import style as plotstyle
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -234,10 +236,67 @@ def test_named_model_is_blank_for_a_pair_naming_no_registered_model() -> None:
 
 
 def test_pair_style_falls_back_to_a_neutral_mark_for_an_unregistered_pair() -> None:
+    """No registered model is a neutral circle; no packet difference is the CONTROL colour, which
+    is the palette's own word for "the thing a treatment is read against", not an ink constant."""
     pairs = [("control-arm", "treated-arm")]
     colors, shapes = plot.pair_style(pairs, ["oss120b", "qwen38"])
-    assert colors[pairs[0]] == plotstyle.MUTED
+    assert colors[pairs[0]] == palette.control_color()
     assert shapes[pairs[0]] == "o"
+
+
+def test_a_pairs_colour_is_the_intervention_it_tests_and_its_shape_is_the_model() -> None:
+    """Colour is the INTERVENTION, shape is the MODEL. Colouring by model spent the intervention's
+    channel on the entity the shape already carries, so a family comparing three packets drew all
+    three in one hue per model and the same colour meant a different treatment in every row."""
+    pair = ("cpf-llr-focus40-oss120b-c-cpfsrc", "cpf-llr-focus40-oss120b-c")
+    colors, shapes = plot.pair_style([pair], ["oss120b", "qwen38"])
+
+    assert colors[pair] == palette.color("cpfsrc")
+    assert colors[pair] != palette.model_color("oss120b")
+    assert shapes[pair] == palette.marker("oss120b")
+
+
+def test_two_arms_naming_one_packet_are_not_a_packet_comparison_and_keep_the_control_colour() -> None:
+    """A family whose variable is something else -- an episode count, a repeat policy -- must not
+    borrow the hue of a packet BOTH of its arms carried, which would claim a treatment it is not
+    testing."""
+    pair = ("git-scicomp-oss120b-c-repo", "git-scicomp-qwen38-c-repo")
+    colors, _shapes = plot.pair_style([pair], ["oss120b", "qwen38"])
+    assert colors[pair] == palette.control_color()
+
+
+def test_the_legend_names_every_model_by_shape_and_every_intervention_by_colour() -> None:
+    """One channel per entity, each drawn the way the rows draw it: a model handle in its own hue
+    would claim a channel the rows spend on the intervention."""
+    pairs = [
+        ("cpf-llr-focus40-oss120b-c-cpfsrc", "cpf-llr-focus40-oss120b-c"),
+        ("cpf-llr-focus40-qwen38-c-cpf", "cpf-llr-focus40-qwen38-c"),
+    ]
+    colors, shapes = plot.pair_style(pairs, list(experiment_tags.order("models")))
+    handles = plot.model_legend(pairs, colors, shapes)
+    labels = [handle.get_label() for handle in handles]
+
+    assert experiment_tags.model_name("oss120b") in labels
+    assert experiment_tags.packet_name("cpfsrc") in labels
+    assert experiment_tags.packet_name("cpf") in labels
+    for handle in handles:
+        if handle.get_label() in {experiment_tags.model_name(m) for m in ("oss120b", "qwen38")}:
+            assert handle.get_color() == plotstyle.MUTED
+
+
+def test_the_ratio_axis_carries_a_major_grid_and_no_minor_one() -> None:
+    """Major grid only, on the measured axis. The row axis carries names, where a guide line per
+    category measures nothing."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    try:
+        plot.style_ratio_axis(ax, [plot.Row(("a", "b"), 1.1, 1.0, 1.2, False, 5)])
+        assert any(line.get_visible() for line in ax.xaxis.get_gridlines())
+        assert not [tick for tick in ax.xaxis.get_minor_ticks() if tick.gridline.get_visible()]
+        assert not [tick for tick in ax.yaxis.get_major_ticks() if tick.gridline.get_visible()]
+    finally:
+        plt.close(fig)
 
 
 # ---------------------------------------------------------------------------

@@ -69,7 +69,7 @@ from hpcagent_bench.harness import recording  # noqa: E402
 from hpcagent_bench.paths import PLOTS_DIR  # noqa: E402
 from hpcagent_bench.reporting_order import BY_DWARF, GroupSpan, order_rows, row_meta_for  # noqa: E402
 from hpcagent_bench.spec import select_short_names  # noqa: E402
-from hpcagent_bench.stats import palette  # noqa: E402
+from hpcagent_bench.stats import palette, style  # noqa: E402
 
 LOG = logging.getLogger(__name__)
 
@@ -786,6 +786,7 @@ def plot_sample_diagnostics(
     if n_dropped != 0:
         head = f"{head} ({n_dropped} outlier(s) dropped)"
 
+    fitted_handle: Line2D | None = None
     if verdict.normal:
         bins = max(10, min(40, int(math.sqrt(x.size))))
         ax_left.hist(x, bins=bins, density=True, color="#2a78d6", alpha=0.55, edgecolor="white", linewidth=0.4)
@@ -793,8 +794,7 @@ def plot_sample_diagnostics(
         mu, sigma = float(np.mean(x)), float(np.std(x, ddof=1))
         if sigma > 0:  # a fitted curve is drawn ONLY on this branch
             density = cast("FloatArray", norm.pdf(grid, mu, sigma))
-            ax_left.plot(grid, density, color="#d64550", linewidth=1.4, label="fitted normal")
-            ax_left.legend(fontsize=6, frameon=False)
+            (fitted_handle,) = ax_left.plot(grid, density, color="#d64550", linewidth=1.4, label="fitted normal")
         draw_interval_band(ax_left, interval)
         ax_left.set_xlabel(f"time ({units})", fontsize=7)
         ax_left.set_ylabel("density", fontsize=7)
@@ -840,6 +840,8 @@ def plot_sample_diagnostics(
     for ax in (ax_left, ax_right):
         ax.tick_params(axis="both", labelsize=6)
     fig.suptitle(f"{head} -- n={verdict.n}, {verdict.reason}", fontsize=7)
+    if fitted_handle is not None:
+        style.legend_below(fig, [fitted_handle], fontsize=6, y=0.02)
     plt.tight_layout()
     return save_figure(output, fig)
 

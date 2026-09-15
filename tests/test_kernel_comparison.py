@@ -13,7 +13,7 @@ import pathlib
 import pandas as pd
 import pytest
 
-from hpcagent_bench.stats import population
+from hpcagent_bench.stats import palette, population
 from hpcagent_bench.stats.figures import kernel_comparison
 
 ROSTER: tuple[str, ...] = ("k1", "k2", "k3")
@@ -707,3 +707,38 @@ def test_a_partial_arm_is_printed_as_dropped_with_its_coverage(
     assert rc == 0
     err = capsys.readouterr().err
     assert "dropped cpf-llr-focus40-qwen38-c-cpf: 1/3" in err
+
+
+def test_a_series_shape_is_the_model_and_its_colour_is_the_condition() -> None:
+    """One channel per entity, from the shared registry: the MODEL takes the shape (which survives
+    greyscale) and the CONDITION takes the colour, so a packet means the same thing here as in
+    every other figure in the repo."""
+    frame = observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c-cpf", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
+            *submission_rows("cpf-llr-focus40-oss120b-c-cpf", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
+        ]
+    )
+    panels, _canon, _dropped = kernel_comparison.build_panels(frame, ROSTER)
+
+    for model, series_list in panels.items():
+        for series in series_list:
+            assert series.marker == palette.marker(model)
+            assert series.color == palette.color(series.condition)
+    assert panels["qwen38"][0].marker != panels["oss120b"][0].marker
+    assert panels["qwen38"][0].color == panels["oss120b"][0].color
+
+
+def test_the_value_axis_carries_a_major_grid_and_the_kernel_axis_carries_none() -> None:
+    """Major grid only, on the measured axis. The row axis carries kernel NAMES, where a guide line
+    per category measures nothing."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    try:
+        kernel_comparison.style_speedup_x_axis(ax, [0.25, 1.0, 4.0])
+        assert any(line.get_visible() for line in ax.xaxis.get_gridlines())
+        assert not [tick for tick in ax.xaxis.get_minor_ticks() if tick.gridline.get_visible()]
+        assert not [tick for tick in ax.yaxis.get_major_ticks() if tick.gridline.get_visible()]
+    finally:
+        plt.close(fig)

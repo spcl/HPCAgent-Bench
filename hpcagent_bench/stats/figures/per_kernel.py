@@ -196,11 +196,16 @@ def speedup_tick_label(value: float) -> str:
 
 
 def style_speedup_axis(ax: matplotlib.axes.Axes, cells: Sequence[KernelCell]) -> None:
+    """Powers of two, read back as ratios, with a MAJOR grid on the value axis and nothing on the
+    kernel axis -- the ticks are pinned here, so the grid is drawn beside them rather than through
+    ``plotstyle.value_axis``, which would relocate them."""
     ax.set_yscale("log", base=2)
     ticks = speedup_yticks(cells)
     ax.set_yticks(ticks)
     ax.set_yticklabels([speedup_tick_label(tick) for tick in ticks], fontsize=plotstyle.TICK_PT * 0.55)
     ax.axhline(1.0, color=plotstyle.REFERENCE, linewidth=0.9, zorder=1)
+    ax.grid(axis="y", which="major", color=plotstyle.RULE, linewidth=0.7, zorder=0)
+    ax.set_axisbelow(True)
 
 
 def style_token_axis(ax: matplotlib.axes.Axes) -> None:
