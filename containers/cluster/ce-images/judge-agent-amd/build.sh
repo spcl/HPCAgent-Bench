@@ -44,7 +44,8 @@ OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/op
 BASE_REPO="docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1"
 BASE_DIGEST="sha256:a3b65813621095e3389269417e963725b59310184588c9d2490d44e6e83fa01c"
 BASE_IMAGE="${BASE_IMAGE:-${BASE_REPO}@${BASE_DIGEST}}"
-ROCM_ARCH="${ROCM_ARCH:-gfx942}"
+# ROCM_ARCH from gpu_arch.env for this job's partition; an unknown partition stops before any pull.
+ce_gpu_arch
 
 # The version the LABEL records. Taken from the output name -- ...-v7.sqsh is v7 --
 # so the label and the artifact cannot disagree.

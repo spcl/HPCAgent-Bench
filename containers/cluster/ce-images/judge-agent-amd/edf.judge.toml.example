@@ -47,8 +47,9 @@ LC_ALL = "C"
 PYTHONSAFEPATH = "1"
 ROCM_PATH = "/opt/rocm"
 HIP_PATH = "/opt/rocm"
-PYTORCH_ROCM_ARCH = "gfx942"
-HCC_AMDGPU_TARGET = "gfx942"
+# install_edfs.sh renders ${GPU_ARCH} from gpu_arch.env for the partition build.sbatch names.
+PYTORCH_ROCM_ARCH = "${GPU_ARCH}"
+HCC_AMDGPU_TARGET = "${GPU_ARCH}"
 # Absolute, never inherited: host SLES/spack binaries leak in through ${PATH} otherwise (a host
 # curl needing libldap_r-2.4 broke the v5 image; compilers would be next). Order matches the
 # Dockerfile's own ENV PATH -- toolchain, then the spack view, then PAPI, then ROCm, then the

@@ -175,8 +175,9 @@ LABEL org.opencontainers.image.title="optarena-judge-agent-amd" \
       org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
 
 ARG DEBIAN_FRONTEND=noninteractive
-# MI300A is gfx942. One arch, named once, reused by every GPU-aware spec below.
-ARG ROCM_ARCH=gfx942
+# The GPU arch every GPU-aware spec below targets. build.sh passes it from ../gpu_arch.env for the
+# build job's partition; there is no default.
+ARG ROCM_ARCH
 ARG ROCM_VERSION=7.2.0
 ARG ROCM_APT_CHANNEL=7.2
 ARG PYTHON_REQUIREMENTS=requirements/amd.txt
@@ -203,10 +204,18 @@ ENV LC_ALL=C \
     HIP_PATH=/opt/rocm \
     PYTORCH_ROCM_ARCH=${ROCM_ARCH} \
     HCC_AMDGPU_TARGET=${ROCM_ARCH} \
+    GPU_ARCHS=${ROCM_ARCH} \
+    GPU_ARCH_LIST=${ROCM_ARCH} \
     SPACK_ROOT=/opt/spack \
     SPACK_ENV_DIR=/opt/spack-env \
     SPACK_DISABLE_LOCAL_CONFIG=true \
     SPACK_USER_CACHE_PATH=/opt/spack-cache
+
+# /opt/gpu-arch records ROCM_ARCH as a FILE, because the CE does not reliably keep image ENV.
+RUN set -eu; \
+    test -n "${ROCM_ARCH:-}" || { echo "ROCM_ARCH is unset: build with build.sh, which reads gpu_arch.env" >&2; exit 2; }; \
+    printf '%s\n' "${ROCM_ARCH}" > /opt/gpu-arch
+COPY containers/cluster/ce-images/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
 
 # Every network git call goes through this, and where a mirror is mounted none of them
 # reaches GitHub at all. The `insteadOf` rewrite is what covers the callers the wrapper
@@ -1068,6 +1077,11 @@ RUN set -eux; \
     test "$(python3 -c 'import numpy; print(numpy.__version__)')" = "${numpy_before}" \
       || { echo "cupy moved numpy off ${numpy_before}; the CPU reference oracle would change" >&2; exit 2; }; \
     python3 -c "import cupy; print('cupy', cupy.__version__)"
+
+# Gate: cupy's device code targets ROCM_ARCH and nothing else.
+RUN set -eux; \
+    d="$(python3 -P -c 'import importlib.util as u; print(u.find_spec("cupy").submodule_search_locations[0])')"; \
+    /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" "${d}"
 
 # rocprof-compute needs its OWN interpreter. ROCm installs the tool and not its python deps, and
 # installing its requirements.txt into the image environment is WORSE than the breakage: it pins

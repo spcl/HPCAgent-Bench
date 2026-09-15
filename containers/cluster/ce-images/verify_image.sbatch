@@ -12,6 +12,12 @@
 #   IMAGE=$SCRATCH/ce-images/optarena-judge-agent-amd.sqsh PROFILE=judge-agent-amd sbatch \
 #          containers/cluster/ce-images/verify_image.sbatch
 #
+# The partition above applies only to a standalone submission. build_and_verify.sbatch runs this body
+# inside its own allocation, on the build job's partition. An mi200 image verifies on mi200:
+#
+#   REPO=$PWD IMAGE=$SCRATCH/ce-images/optarena-sglang-mi200-candidate.sqsh PROFILE=sglang-mi200 \
+#     sbatch --partition=mi200 --gpus-per-node=8 containers/cluster/ce-images/verify_image.sbatch
+#
 # The EDF is generated here rather than kept in ~/.edf: this runs against a CANDIDATE image that no
 # campaign mounts yet, and a checked-in EDF pointing at a candidate is how a candidate becomes live
 # by accident.
@@ -44,17 +50,22 @@ mkdir -p "$(dirname "${EDF}")"
 # so a PATH with /opt/venv/bin first probes the BASE venv and reports vllm and aiter missing from
 # an image that has them (job 627183). Each image has exactly one interpreter that matters.
 case "${PROFILE}" in
-    sglang)          ce_path="/opt/venv/bin" ;;
-    vllm)            ce_path="/opt/pytorch211/bin" ;;
-    *)               ce_path="/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/venv/bin" ;;
+    sglang|sglang-mi200) ce_path="/opt/venv/bin" ;;
+    vllm)                ce_path="/opt/pytorch211/bin" ;;
+    *)                   ce_path="/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/venv/bin" ;;
 esac
 # FI_PROVIDER on the INFERENCE profiles only. Setting it globally on an image that also runs MPI
 # aborted MPI_Init with "OFI call getinfo failed" (629966), so the judge-agent EDFs leave it unset
 # and let MPICH negotiate -- and this generated EDF must match production or it is not verifying
 # the configuration anything actually runs under.
 case "${PROFILE}" in
-    sglang|vllm) ce_fi_provider='FI_PROVIDER = "cxi"' ;;
-    *)           ce_fi_provider='' ;;
+    sglang|sglang-mi200|vllm) ce_fi_provider='FI_PROVIDER = "cxi"' ;;
+    *)                        ce_fi_provider='' ;;
+esac
+# sglang-mi200 serves with aiter off, as its EDF template does.
+case "${PROFILE}" in
+    sglang-mi200) ce_aiter='SGLANG_USE_AITER = "0"' ;;
+    *)            ce_aiter='' ;;
 esac
 # The image carries no tool scripts: judge-agent roles get the checkout's agent tree bound where
 # run_cluster.sh binds it.
@@ -86,7 +97,12 @@ HWLOC_COMPONENTS = "-opencl,-levelzero,-gl"
 FI_CXI_RX_MATCH_MODE = "software"
 FI_MR_CACHE_MONITOR = "disabled"
 ${ce_fi_provider}
+${ce_aiter}
 TOML
+
+# Partition table, image stamp and rocminfo agree before anything runs: device code built for another
+# arch imports, then fails at its first launch.
+bash "${REPO}/containers/cluster/ce-images/gpu_arch_check.sh" "${EDF}" || { rm -f "${EDF}"; exit 2; }
 
 echo "=== verifying ${IMAGE} as profile=${PROFILE} ==="
 srun --environment="${EDF}" python3 "${REPO}/containers/cluster/ce-images/verify_image.py" \
@@ -100,9 +116,10 @@ rc=$?
 # digest, until both were baked in. Run with the SAME EDF, so it sees what a real job sees.
 echo "=== self-containment: nothing may resolve outside the image ==="
 case "${PROFILE}" in
-    sglang)  sc_modules="numpy,torch,sglang,flydsl,triton,cupy" ;;
-    vllm)    sc_modules="numpy,torch,vllm,triton" ;;
-    *)       sc_modules="" ;;   # judge-agent-amd: the checker's own default list
+    sglang)        sc_modules="numpy,torch,sglang,flydsl,triton,cupy" ;;
+    sglang-mi200)  sc_modules="numpy,torch,sglang,sgl_kernel,triton,cupy" ;;
+    vllm)          sc_modules="numpy,torch,vllm,triton" ;;
+    *)             sc_modules="" ;;   # judge-agent-amd: the checker's own default list
 esac
 srun --environment="${EDF}" python3 \
      "${REPO}/containers/cluster/ce-images/selfcontained_check.py" \
@@ -136,10 +153,30 @@ case "${PROFILE}" in
     *) echo "=== tools check skipped for profile=${PROFILE} (no agent tools in image role) ==="; ;;
 esac
 
+# An import loads device code without launching it. Launch sgl_kernel and the GDN triton conv against
+# torch on the visible GPU. Counted for sglang-mi200; reported only for sglang.
+launch_rc=0
+case "${PROFILE}" in
+    sglang|sglang-mi200)
+        echo "=== kernel launch: sgl_kernel and triton ops against torch on the visible GPU ==="
+        srun --environment="${EDF}" python3 \
+             "${REPO}/containers/cluster/ce-images/inference/sglang_kernel_launch_check.py" || launch_rc=$?
+        if [ "${PROFILE}" = sglang ]; then
+            echo "=== sglang: launch check rc=${launch_rc} reported, not counted ==="
+            launch_rc=0
+        fi
+        ;;
+    *) echo "=== kernel launch check skipped for profile=${PROFILE} ==="; ;;
+esac
+
 rm -f "${EDF}"
-echo "=== required-failure count: ${rc}; resolving outside the image: ${sc}; mpi: ${mpi_rc}; tools: ${tools_rc} ==="
+echo "=== required-failure count: ${rc}; resolving outside the image: ${sc}; mpi: ${mpi_rc}; tools: ${tools_rc}; launch: ${launch_rc} ==="
 if [ "${mpi_rc}" -ne 0 ]; then
     echo "MPI/GPU capability check FAILED -- image is not acceptable" >&2
+    exit 1
+fi
+if [ "${launch_rc}" -ne 0 ]; then
+    echo "kernel launch check FAILED -- device code does not run on this GPU" >&2
     exit 1
 fi
 # Any is disqualifying, and the status says which dominated.
