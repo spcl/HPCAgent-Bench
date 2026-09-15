@@ -62,6 +62,12 @@ LABEL_PT: float = 16.0
 TICK_PT: float = 14.0
 ANNOTATION_PT: float = 13.0
 
+#: The full text width of a double-column A4 paper, in inches. A figure meant to sit in a paper
+#: rather than stand alone (the per-kernel and efficacy figures) is sized to this so it never
+#: covers more of the page than its own content needs; a script exposes it as ``--double-column``
+#: rather than each guessing its own width.
+DOUBLE_COLUMN_WIDTH: float = 7.0
+
 
 def apply() -> None:
     """Set the process-wide rcParams. Idempotent; call it before creating a figure."""
@@ -117,7 +123,7 @@ def title(fig: Figure, text: str, subtitle: str = "") -> float:
     return max(0.5, top - 0.30 / height)
 
 
-def legend_below(fig: Figure, handles: Sequence[Artist], ncol: int = 0, y: float = 0.0) -> None:
+def legend_below(fig: Figure, handles: Sequence[Artist], ncol: int = 0, y: float = 0.0, fontsize: float = 0.0) -> None:
     """One legend, under the whole figure, centred. Never inside the axes.
 
     An in-axes legend has to be placed, and every placement is a bet that one corner stays empty.
@@ -125,6 +131,10 @@ def legend_below(fig: Figure, handles: Sequence[Artist], ncol: int = 0, y: float
     two points later occupied, and the per-kernel figures have data in every row by construction.
     Below the figure there is no corner to lose, and the legend is in the same place in every
     figure, which is the point of a shared style.
+
+    ``fontsize`` overrides :data:`LABEL_PT` for a figure whose height cannot afford it -- several
+    SQUARE panels joined into one short row still budget the same fixed pixels for the legend as a
+    full-height figure, and LABEL_PT alone would not fit.
     """
     fig.legend(  # pyright: ignore[reportUnknownMemberType]
         handles=handles,
@@ -132,7 +142,7 @@ def legend_below(fig: Figure, handles: Sequence[Artist], ncol: int = 0, y: float
         bbox_to_anchor=(0.5, y),
         ncol=ncol if ncol != 0 else min(len(handles), 5),
         frameon=False,
-        fontsize=LABEL_PT,
+        fontsize=fontsize if fontsize > 0.0 else LABEL_PT,
         markerscale=1.4,
         handletextpad=0.5,
         columnspacing=1.6,

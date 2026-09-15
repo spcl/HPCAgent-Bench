@@ -18,6 +18,7 @@ import pandas as pd
 import pytest
 
 from hpcagent_bench.harness import efficacy
+from hpcagent_bench.stats import style as plotstyle
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -171,26 +172,44 @@ def test_load_counts_a_composite_packet_as_skilled(tmp_path: pathlib.Path) -> No
     assert bool(by_arm["llrsingle-qwen38-c"]) is False
 
 
-def test_main_splits_a_composite_control_from_a_composite_treatment(tmp_path: pathlib.Path) -> None:
-    """The control side is the arm carrying NONE of the known treatments, not the arm recording no
-    packet at all: ``llrsingle``'s control still carries ``no-score-tool``, and its treated arm
-    carries it ALONGSIDE ``lang-skills`` -- an equality check against a bare packet put both sides
-    outside the split entirely."""
+def test_control_rows_is_exactly_the_no_packet_arm(tmp_path: pathlib.Path) -> None:
+    """A hard-coded ``(skills, cpf, cpfsrc)`` "known treatments" triple let a FOURTH treatment
+    (``perf-playbook-cpu`` on cpf-llr-focus40) read as part of the control, scoring the campaign's
+    real control against a mixture. ``control_rows`` needs no treatment list at all: the control is
+    exactly the canonical empty packet, whatever treatments a campaign happens to run."""
     path = tmp_path / "observations.csv"
     pd.DataFrame(
         [
-            {"arm": "llrsingle-qwen38-c-skills", "packet": "lang-skills+no-score-tool"},
-            {"arm": "llrsingle-qwen38-c", "packet": "no-score-tool"},
+            {"arm": "cpf-llr-focus40-qwen38-c-perf-playbook-cpu", "packet": "perf-playbook-cpu"},
+            {"arm": "cpf-llr-focus40-qwen38-c-cpfsrc", "packet": "cpfsrc"},
+            {"arm": "cpf-llr-focus40-qwen38-c-skills", "packet": "skills"},
+            {"arm": "cpf-llr-focus40-qwen38-c", "packet": ""},
         ]
     ).to_csv(path, index=False)
 
     frame_all = plot.load(path, prefix="")
-    treated = frame_all[frame_all.packet.map(lambda p: plot.packets.has_part(p, "skills"))]
-    control = frame_all[
-        frame_all.packet.map(lambda p: not any(plot.packets.has_part(p, t) for t in ("skills", "cpf", "cpfsrc")))
-    ]
-    assert set(treated.arm) == {"llrsingle-qwen38-c-skills"}
-    assert set(control.arm) == {"llrsingle-qwen38-c"}
+    control = plot.control_rows(frame_all)
+
+    assert set(control.arm) == {"cpf-llr-focus40-qwen38-c"}
+
+
+def test_a_perf_playbook_arm_never_enters_the_control_side(tmp_path: pathlib.Path) -> None:
+    """The bug this guards: an arm recording a treatment ``control_rows`` does not name by string
+    (here ``perf-playbook-cpu``, absent from the old hard-coded triple) must never be silently
+    counted as part of the no-packet control."""
+    path = tmp_path / "observations.csv"
+    pd.DataFrame(
+        [
+            {"arm": "cpf-llr-focus40-qwen38-c-perf-playbook-cpu", "packet": "perf-playbook-cpu"},
+            {"arm": "cpf-llr-focus40-qwen38-c", "packet": ""},
+        ]
+    ).to_csv(path, index=False)
+
+    frame_all = plot.load(path, prefix="")
+    control = plot.control_rows(frame_all)
+
+    assert "cpf-llr-focus40-qwen38-c-perf-playbook-cpu" not in set(control.arm)
+    assert set(control.arm) == {"cpf-llr-focus40-qwen38-c"}
 
 
 def thin(log2_speedup: float, tokens: float) -> dict[str, float]:
@@ -247,6 +266,76 @@ def test_the_figure_stars_a_point_only_on_a_corrected_verdict(
     finally:
         plt.close(fig)
     assert ("C *" in labels) == starred, labels
+
+
+def treatment_panel(treatment: str) -> tuple[str, pd.DataFrame, pd.DataFrame]:
+    """One synthetic (treatment, stats, absolute) triple, the shape :func:`plot.figure_treatments` takes."""
+    stats = pd.DataFrame(
+        [
+            {
+                "model": "qwen38",
+                "language": "c",
+                "score_verdict": efficacy.NOT_SIGNIFICANT,
+                "cost_verdict": efficacy.NOT_SIGNIFICANT,
+                "family_size": 2,
+            }
+        ]
+    )
+    absolute = pd.DataFrame(
+        [
+            {"model": "qwen38", "language": "c", "skills": False, **thin(1.0, 1000.0)},
+            {"model": "qwen38", "language": "c", "skills": True, **thin(1.4, 900.0)},
+        ]
+    )
+    return treatment, stats, absolute
+
+
+@pytest.mark.parametrize("n", [1, 2, 3])
+def test_n_treatments_draw_n_square_panels(n: int) -> None:
+    """One axes per treatment, and every one SQUARE -- the point of joining them side by side is
+    that a reader compares panel shape as well as content."""
+    panels = [treatment_panel(f"treatment{i}") for i in range(n)]
+    fig = plot.build_treatments_figure(panels, "label")
+    try:
+        assert len(fig.axes) == n
+        width, height = fig.get_size_inches()
+        assert width == pytest.approx(n * plot.SQUARE_PANEL_SIDE + plot.SQUARE_PANEL_GAP * (n - 1))
+        assert height == pytest.approx(plot.SQUARE_PANEL_SIDE)
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+
+
+def test_double_column_caps_a_joined_figures_row_width() -> None:
+    """``--double-column`` is the figure's budget on a paper page: N panels must fit inside
+    ``style.DOUBLE_COLUMN_WIDTH`` inches total, not N times a fixed natural panel size."""
+    panels = [treatment_panel(f"treatment{i}") for i in range(3)]
+    fig = plot.build_treatments_figure(panels, "label", double_column=True)
+    try:
+        width, _ = fig.get_size_inches()
+        assert width <= plotstyle.DOUBLE_COLUMN_WIDTH + 1e-6
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+
+
+def test_treatment_frame_tags_the_control_false_and_the_treatment_true() -> None:
+    """``absolute_points``/``draw_absolute`` read an on/off ``skills`` flag; ``treatment_frame``
+    builds it from the packet split rather than the historical column name."""
+    frame_all = pd.DataFrame(
+        [
+            {"arm": "a-control", "packet": "", "model": "qwen38", "language": "c"},
+            {"arm": "a-cpfsrc", "packet": "cpfsrc", "model": "qwen38", "language": "c"},
+            {"arm": "a-skills", "packet": "skills", "model": "qwen38", "language": "c"},
+        ]
+    )
+    tagged = plot.treatment_frame(frame_all, "cpfsrc")
+    by_arm = tagged.set_index("arm").skills
+    assert bool(by_arm["a-control"]) is False
+    assert bool(by_arm["a-cpfsrc"]) is True
+    assert "a-skills" not in by_arm.index
 
 
 def test_the_figure_names_the_correction_and_the_size_of_the_family() -> None:

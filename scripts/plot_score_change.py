@@ -35,6 +35,7 @@ too small for the test to run at all reads ``underpowered`` and is never starred
 import argparse
 import math
 import pathlib
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
@@ -187,8 +188,8 @@ def draw_interval(ax: plt.Axes, row: pd.Series, colour: str) -> None:
         ax.vlines(x, y_low, y_high, color=colour, linewidth=1.1, alpha=0.55, zorder=1)
 
 
-def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame) -> list:
-    """Median speed-up against median spend, with each arm's TWO CONDITIONS joined.
+def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame, compact: bool = False) -> list:
+    """Geomean speed-up against median spend, with each arm's TWO CONDITIONS joined.
 
     ABSOLUTE, not a ratio, and that is what makes the connector mean something: a ratio plot has
     one point per arm and nothing to join, so a line drawn on it could only connect two arms --
@@ -200,6 +201,11 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame) -> list:
     The filled mark is drawn LAST so it sits above the connector and above its own hollow partner
     -- the two land on top of each other whenever the packet changed little, and the "with skills"
     position is the one a reader is looking for.
+
+    ``compact`` is for a SQUARE panel a fraction of :data:`PANEL_SIZE` (:func:`figure_treatments`,
+    joining several treatments side by side): the four quadrant captions are fixed-size text sized
+    for the full panel and are dropped rather than shrunk into an unreadable smear, and the
+    per-point language label shrinks so it does not swallow its neighbour's point.
     """
     hues = palette.model_colors(sorted(frame.model.unique()))
     shapes = palette.model_markers(sorted(frame.model.unique()))
@@ -259,15 +265,18 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame) -> list:
             (float(on.log2_speedup.iloc[0]), float(on.tokens.iloc[0])),
             textcoords="offset points",
             xytext=(13, 0),
-            fontsize=plotstyle.ANNOTATION_PT,
+            fontsize=plotstyle.ANNOTATION_PT * (0.62 if compact else 1.0),
             color=plotstyle.MUTED,
             va="center",
             zorder=6,
         )
 
     ax.set_yscale("log")
-    ax.set_xlabel(r"Median $\log_2$ Speedup")
-    ax.set_ylabel("Median Tokens per Task")
+    label_pt = plotstyle.LABEL_PT * (0.68 if compact else 1.0)
+    ax.set_xlabel(r"Geomean $\log_2$ Speedup", fontsize=label_pt)
+    ax.set_ylabel("Median Tokens per Task", fontsize=label_pt)
+    if compact:
+        ax.tick_params(axis="both", labelsize=plotstyle.TICK_PT * 0.6)
     plotstyle.value_axis(ax, "x")
     plotstyle.value_axis(ax, "y", log_base=10.0)
     # Breathing room so an annotation at the right-hand point is not cut by the canvas edge.
@@ -278,24 +287,30 @@ def draw_absolute(ax, frame: pd.DataFrame, stats: pd.DataFrame) -> list:
     # All FOUR corners named, in the same grammar, so the quadrants compare at a glance. Note the
     # vertical sense is the OPPOSITE of the ratio figure's: there the y axis was tokens-saved, so
     # up was cheaper; here it is tokens spent, so up is more expensive.
-    corners = (
-        (0.015, 0.985, "top", "left", "Slower, More Expensive"),
-        (0.985, 0.985, "top", "right", "Faster, More Expensive"),
-        (0.015, 0.015, "bottom", "left", "Slower, Cheaper"),
-        (0.985, 0.015, "bottom", "right", "Faster, Cheaper"),
-    )
-    for x, y, va, ha, caption in corners:
-        ax.text(
-            x,
-            y,
-            caption,
-            transform=ax.transAxes,
-            fontsize=plotstyle.ANNOTATION_PT - 2.0,
-            color=plotstyle.FAINT,
-            va=va,
-            ha=ha,
-            zorder=1,
+    #
+    # DROPPED in compact mode: this text is fixed-size (ANNOTATION_PT), sized for the full
+    # PANEL_SIZE canvas, and a square panel a third that size cannot fit four captions without
+    # them running into the axis labels and each other -- the quadrant reading survives without
+    # them (up-right is the title's own "faster, cheaper" axes).
+    if not compact:
+        corners = (
+            (0.015, 0.985, "top", "left", "Slower, More Expensive"),
+            (0.985, 0.985, "top", "right", "Faster, More Expensive"),
+            (0.015, 0.015, "bottom", "left", "Slower, Cheaper"),
+            (0.985, 0.015, "bottom", "right", "Faster, Cheaper"),
         )
+        for x, y, va, ha, caption in corners:
+            ax.text(
+                x,
+                y,
+                caption,
+                transform=ax.transAxes,
+                fontsize=plotstyle.ANNOTATION_PT - 2.0,
+                color=plotstyle.FAINT,
+                va=va,
+                ha=ha,
+                zorder=1,
+            )
 
     handles = [
         plt.Line2D(
@@ -369,11 +384,12 @@ def write(fig, out: pathlib.Path) -> pathlib.Path:
 
 
 def absolute_points(frame: pd.DataFrame) -> pd.DataFrame:
-    """One row per (model, language, condition): median log2 speed-up and median tokens per task.
+    """One row per (model, language, condition): geomean log2 speed-up and median tokens per task.
 
-    Medians over KERNELS, over the same one-value-per-kernel reduction the paired table uses, so
-    the two panels of this figure describe one population. The speed-up is the best final answer
-    and the cost is the kernel's episode total.
+    The same one-value-per-kernel reduction the paired table uses (:func:`population.kernel_medians`),
+    so the two panels of this figure describe one population. The speed-up is the GEOMEAN over
+    kernels of the best final answer (a ratio's overall value, never a median); the cost is the
+    MEDIAN over kernels of the episode total (tokens are not a ratio).
     """
     rows = []
     for (model, language, skills), part in frame.groupby(["model", "language", "skills"]):
@@ -401,6 +417,78 @@ def figure_absolute(frame: pd.DataFrame, stats: pd.DataFrame, label: str, out: p
     return write(fig, out)
 
 
+#: A single treatment's SQUARE panel side, inches, when several are joined without ``--double-column``.
+SQUARE_PANEL_SIDE: float = 3.6
+
+#: Gap between joined square panels, inches.
+SQUARE_PANEL_GAP: float = 0.25
+
+
+def panel_side(n: int, double_column: bool) -> float:
+    """One square panel's side for ``n`` panels joined in a row.
+
+    ``--double-column`` caps the WHOLE row at :data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH`
+    inches, the figure's own budget on a paper page; otherwise every panel keeps its natural
+    :data:`SQUARE_PANEL_SIDE` and the row grows with ``n``.
+    """
+    if not double_column:
+        return SQUARE_PANEL_SIDE
+    side = (plotstyle.DOUBLE_COLUMN_WIDTH - SQUARE_PANEL_GAP * (n - 1)) / n
+    return max(1.6, side)
+
+
+def build_treatments_figure(
+    panels: Sequence[tuple[str, pd.DataFrame, pd.DataFrame]], label: str, double_column: bool = False
+) -> plt.Figure:
+    """N SQUARE efficacy panels side by side, one per (treatment, its stats, its absolute points),
+    every one against the SAME control -- see :func:`control_rows` and :func:`treatment_frame`.
+
+    Square, so a reader compares treatments by panel shape as well as by content; joined rather
+    than stacked, because the treatments are alternatives against one control, not a sequence.
+    Split from :func:`figure_treatments` so a caller (a test, another figure) can inspect the
+    figure -- its axes, its size -- before it is saved and closed.
+    """
+    n = len(panels)
+    side = panel_side(n, double_column)
+    # Every decorative font in draw_absolute is scaled for compactness at THIS panel size, not
+    # the ANNOTATION_PT fixed size a full PANEL_SIZE panel uses -- see draw_absolute(compact=True).
+    fig, axes = plt.subplots(1, n, figsize=(side * n + SQUARE_PANEL_GAP * (n - 1), side), squeeze=False)
+    handles_by_label: dict[str, object] = {}
+    for ax, (treatment, stats, absolute) in zip(axes[0], panels, strict=True):
+        for handle in draw_absolute(ax, absolute, stats, compact=True):
+            handles_by_label.setdefault(handle.get_label(), handle)
+        # An IN-AXES label, not ax.set_title(): a real title draws ABOVE the axes bounding box, in
+        # the same band subplots_adjust(top=...) reserves for the figure's own suptitle -- on a
+        # short joined panel that band is thin enough that the two collide. Anchored inside the
+        # axes (axes-fraction y=0.98) this cannot run into the suptitle no matter how short the
+        # panel is.
+        ax.text(
+            0.5, 0.98, packets.label(treatment), transform=ax.transAxes,
+            ha="center", va="top", fontsize=plotstyle.SUBTITLE_PT * 0.72, color=plotstyle.INK, zorder=7,
+        )  # fmt: skip
+    for ax in axes[0][1:]:
+        ax.set_ylabel("")
+    # title()'s return value IS the axes ceiling a figure this short needs: its own margin math is
+    # in INCHES, not a guessed fraction, and a fraction picked for the tall PANEL_SIZE figure
+    # (0.80-0.86) sits ABOVE a short figure's title text instead of below it.
+    top = plotstyle.title(fig, label)
+    plotstyle.legend_below(
+        fig,
+        list(handles_by_label.values()),
+        ncol=min(len(handles_by_label), 3),
+        y=0.005,
+        fontsize=plotstyle.LABEL_PT * 0.55,
+    )
+    fig.subplots_adjust(left=0.14, right=0.99, top=top, bottom=0.46, wspace=0.45)
+    return fig
+
+
+def figure_treatments(
+    panels: Sequence[tuple[str, pd.DataFrame, pd.DataFrame]], label: str, out: pathlib.Path, double_column: bool = False
+) -> pathlib.Path:
+    return write(build_treatments_figure(panels, label, double_column), out)
+
+
 def load(path: pathlib.Path, prefix: str) -> pd.DataFrame:
     frame = experiments.read_observations(path)
     if prefix:
@@ -426,54 +514,111 @@ def load(path: pathlib.Path, prefix: str) -> pd.DataFrame:
     return frame[frame.model != "other"]
 
 
+def control_rows(frame_all: pd.DataFrame) -> pd.DataFrame:
+    """The control side: the arm recording NO packet at all -- canonical packet ``""``.
+
+    NEVER "every arm not carrying a KNOWN treatment": a campaign running several treatments beside
+    each other (``cpfsrc``, ``lang-skills``, ``perf-playbook-cpu`` on cpf-llr-focus40) has arms
+    whose one treatment is not in whatever list this hard-codes, and a hard-coded triple
+    (``skills``, ``cpf``, ``cpfsrc``) let a fourth one -- ``perf-playbook-cpu`` -- read as part of
+    the control, scoring the campaign's real control against a mixture instead of the no-packet
+    arm. ``packet`` is already :func:`hpcagent_bench.packets.canonical`, which resolves "" for the
+    control from the registry itself, so this needs no list of treatment names at all.
+    """
+    return frame_all[frame_all.packet == ""]
+
+
+def treatment_frame(frame_all: pd.DataFrame, treatment: str) -> pd.DataFrame:
+    """``frame_all``'s control and ``treatment`` rows, tagged ``skills`` True/False for
+    :func:`absolute_points` and :func:`draw_absolute` -- which only need an on/off flag, not the
+    packet's name.
+    """
+    control = control_rows(frame_all)
+    treated = frame_all[frame_all.packet.map(lambda p: packets.has_part(p, treatment))]
+    return pd.concat([control.assign(skills=False), treated.assign(skills=True)], ignore_index=True)
+
+
+def one_treatment_panel(
+    frame_all: pd.DataFrame, control: pd.DataFrame, treatment: str
+) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+    """``(stats, absolute)`` for ONE treatment against ``control``; ``None`` when either side is
+    empty or the two share no (model, language)."""
+    # The two SIDES are the treatment, not two campaigns: an arm CARRYING the recorded packet
+    # against one that does not -- never the arm name, which is provenance only. has_part matches a
+    # composite too (an arm recording ``lang-skills+no-score-tool`` is still the skills side of
+    # this split), which comparing the whole packet for equality would miss.
+    treated = frame_all[frame_all.packet.map(lambda p: packets.has_part(p, treatment))]
+    if control.empty or treated.empty:
+        return None
+    stats = points(control, treated)
+    if stats.empty:
+        return None
+    absolute = absolute_points(treatment_frame(frame_all, treatment))
+    return stats, absolute
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("observations", type=pathlib.Path)
     parser.add_argument("--experiment", required=True, help="arm prefix naming ONE campaign")
     parser.add_argument(
         "--treatment",
-        default="skills",
-        help="packet naming the TREATED side (skills, cpf, cpfsrc); the control is the arm "
-        "carrying none of the three, so a campaign carrying several treatments is read one at a "
-        "time against the same control rather than against each other",
+        action="append",
+        default=[],
+        help="packet naming a TREATED side (skills, cpf, cpfsrc, perf-playbook-cpu, ...); "
+        "repeatable -- each is read against the SAME no-packet control (control_rows), one at a "
+        "time rather than against each other. Default: skills. Two or more join as SQUARE panels "
+        "side by side in one figure",
+    )
+    parser.add_argument(
+        "--double-column",
+        action="store_true",
+        default=False,
+        help="cap a joined (2+ treatment) figure's row width at style.DOUBLE_COLUMN_WIDTH",
     )
     parser.add_argument("--label", default="", help="figure title; defaults to the campaign's display name")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/score_change.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/score_change.csv"))
     args = parser.parse_args()
 
+    treatments = args.treatment or ["skills"]
     frame_all = load(args.observations, args.experiment)
-    # The two SIDES are the treatment, not two campaigns: an arm CARRYING the recorded packet
-    # against one that does not -- never the arm name, which is provenance only. has_part matches a
-    # composite too (an arm recording ``lang-skills+no-score-tool`` is still the skills side of
-    # this split), which comparing the whole packet for equality would miss.
-    treatment_packet = args.treatment
-    # The CONTROL is the arm carrying none of the known treatments, never "everything that is not
-    # THIS treatment": a campaign carrying skills, cpf and cpfsrc would otherwise put two other
-    # treatments into the control side and report a contrast against a mixture. An incidental part
-    # every arm of the campaign shares (like ``no-score-tool``) does not disqualify a control.
-    known_treatments = ("skills", "cpf", "cpfsrc")
-    treated = frame_all[frame_all.packet.map(lambda p: packets.has_part(p, treatment_packet))]
-    control = frame_all[frame_all.packet.map(lambda p: not any(packets.has_part(p, t) for t in known_treatments))]
-    before, after = control, treated
-    if before.empty or after.empty:
-        raise SystemExit(f"empty side: control={len(before)} {args.treatment}={len(after)}")
-    frame = points(before, after)
-    if frame.empty:
-        raise SystemExit("no (model, language) appears in both experiments")
+    control = control_rows(frame_all)
+    if control.empty:
+        raise SystemExit(f"no no-packet control rows for experiment {args.experiment!r}")
+
     args.table.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(args.table, index=False)
+    panels: list[tuple[str, pd.DataFrame, pd.DataFrame]] = []
+    for treatment in treatments:
+        built = one_treatment_panel(frame_all, control, treatment)
+        if built is None:
+            print(f"skipping {treatment!r}: empty side, or no (model, language) shared with control")
+            continue
+        stats, absolute = built
+        # Single treatment keeps the ORIGINAL file names (back-compatible); two or more are
+        # suffixed by treatment so nothing overwrites its sibling.
+        suffix = "" if len(treatments) == 1 else f"-{treatment}"
+        stats.to_csv(args.table.with_name(f"{args.table.stem}{suffix}{args.table.suffix}"), index=False)
+        absolute.to_csv(args.table.with_name(f"{args.table.stem}{suffix}-absolute{args.table.suffix}"), index=False)
+        panels.append((treatment, stats, absolute))
+    if not panels:
+        raise SystemExit(f"no treatment of {treatments} produced a comparison for experiment {args.experiment!r}")
+
     label = args.label or experiment_tags.display_name(args.experiment)
-    absolute = absolute_points(frame_all)
-    absolute.to_csv(args.table.with_name(args.table.stem + "-absolute" + args.table.suffix), index=False)
-    written = figure_absolute(absolute, frame, label, args.out)
-    score_hits = int((frame.score_verdict == efficacy.SIGNIFICANT).sum())
-    cost_hits = int((frame.cost_verdict == efficacy.SIGNIFICANT).sum())
-    withheld = int((frame.score_verdict == efficacy.UNDERPOWERED).sum())
-    print(
-        f"{len(frame)} points; BH over {family_size(frame)} tests: {score_hits} score-significant, "
-        f"{cost_hits} cost-significant, {withheld} score pairings too small to test"
-    )
+    if len(panels) == 1:
+        _, stats, absolute = panels[0]
+        written = figure_absolute(absolute, stats, label, args.out)
+    else:
+        written = figure_treatments(panels, label, args.out, double_column=args.double_column)
+
+    for treatment, stats, _ in panels:
+        score_hits = int((stats.score_verdict == efficacy.SIGNIFICANT).sum())
+        cost_hits = int((stats.cost_verdict == efficacy.SIGNIFICANT).sum())
+        withheld = int((stats.score_verdict == efficacy.UNDERPOWERED).sum())
+        print(
+            f"{treatment}: {len(stats)} points; BH over {family_size(stats)} tests: "
+            f"{score_hits} score-significant, {cost_hits} cost-significant, {withheld} underpowered"
+        )
     print(f"table  -> {args.table}")
     print(f"figure -> {written} (+ .png)")
 
