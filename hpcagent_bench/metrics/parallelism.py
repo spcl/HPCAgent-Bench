@@ -1,0 +1,296 @@
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""How much of a canonicalized SDFG is proven parallel -- the per-bucket taxonomy, on the SDFG.
+
+A PORT of the taxonomy ``mpr-artifacts/experiments/parallelism/llr_parallelism.py`` built for the
+CPF/MPR paper, onto hpcagent_bench as the framework's own metric. The structural PREDICATES
+(``count``, ``in_parallel_scope``, ``guarded_fallback_loop_set``, ``cpu_params``) are imported from
+``dace/tests/corpus/measure_parallelization.py``, never restated -- two copies of "what counts as a
+guarded fallback" drift. The bucket NAMES and the rate-definition table are the same taxonomy,
+re-declared here (they are literal tuples of strings, not logic, so there is nothing to drift).
+
+Every loop-level construct of a canonicalized SDFG lands in exactly one bucket, and the buckets
+sum to ``maps + reduces + scans + loops`` (:func:`classify` asserts the partition):
+
+  map                      -- lifted to a parallel Map.
+  reduce                   -- lifted to a Reduce library node.
+  scan                     -- lifted to a Scan library node. A recognized SEQUENTIAL operator:
+                              neither parallelized nor residual, reported on its own.
+  parallel_under_contract  -- the sequential fallback of ``if cond: <Map> else: <seq loop>``.
+                              PARALLELIZED: the kernel was parallelized under a runtime predicate.
+  timestep                 -- a loop whose bound names a time-stepping symbol. Deliberately left
+                              sequential: parallelizing it would change the program's semantics.
+  inmap                    -- a loop that is the body of a Map (a tile / wavefront body):
+                              parallel work, not residual.
+  residual                 -- a sequential loop not accounted for by any of the above.
+
+``libnode`` (a MatMul, a BLAS call -- neither Reduce nor Scan) is counted alongside the buckets,
+not inside the taxonomy: which side of a rate it lands on is the rate DEFINITION's choice.
+
+Records hold RAW counts only, nothing pre-combined. The rate is read off them at report time
+through a named :class:`RateDefinition`, so a decision about what counts as parallelized costs a
+re-read of records already on disk, not a re-measurement of the corpus.
+"""
+
+import dataclasses
+import functools
+import pathlib
+import sys
+from collections.abc import Sequence
+from typing import Any, NamedTuple
+
+#: The taxonomy, in report order. Every loop-level construct lands in exactly one.
+BUCKETS = ("map", "reduce", "scan", "parallel_under_contract", "timestep", "inmap", "residual")
+#: Buckets that count as PARALLELIZED in every rate definition below.
+PARALLEL_BUCKETS = ("map", "reduce", "parallel_under_contract", "inmap")
+#: Buckets that count as UNPARALLELIZED. ``timestep`` is deliberate, ``residual`` is not.
+SEQUENTIAL_BUCKETS = ("timestep", "residual")
+#: Never on either side of any rate definition: a recognized SEQUENTIAL operator is neither a
+#: parallelization nor a miss.
+NEUTRAL_ALWAYS = ("scan",)
+
+
+class RateDefinition(NamedTuple):
+    """One named way of turning raw bucket counts into a rate.
+
+    ``numerator``/``denominator`` name raw count keys (the seven buckets plus ``libnode``); the
+    denominator is spelled out in full rather than derived from the numerator, so a definition
+    cannot quietly drop a term.
+    """
+
+    numerator: tuple[str, ...]
+    denominator: tuple[str, ...]
+    note: str
+
+
+_P = PARALLEL_BUCKETS
+#: ``libnode`` is a loop the pipeline recognized as a BLAS operator. Two readings are defensible:
+#: recognition is the strongest form of parallelization (default), or it is an abstention. Crossed
+#: with whether ``timestep`` sits in the denominator -- deliberately unparallelized work is still
+#: unparallelized work.
+RATE_DEFINITIONS: dict[str, RateDefinition] = {
+    "libnode_parallel": RateDefinition(
+        _P + ("libnode",),
+        _P + ("libnode", "residual", "timestep"),
+        "libnode counts as parallelized; timestep is in the denominator",
+    ),
+    "libnode_parallel_no_timestep": RateDefinition(
+        _P + ("libnode",),
+        _P + ("libnode", "residual"),
+        "libnode counts as parallelized; timestep is dropped from the denominator",
+    ),
+    "libnode_neutral": RateDefinition(
+        _P, _P + ("residual", "timestep"), "libnode is on neither side; timestep is in the denominator"
+    ),
+    "libnode_neutral_no_timestep": RateDefinition(
+        _P, _P + ("residual",), "libnode is on neither side; timestep is dropped from the denominator"
+    ),
+}
+
+#: The headline: a loop recognized as a BLAS operator IS parallelized, and a loop we decline to
+#: parallelize still belongs in the denominator.
+DEFAULT_RATE = "libnode_parallel"
+
+METRIC_PREFIX = "parallelism."
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class LoopDetail:
+    """What the SDFG can say about one residual loop, for the triage list."""
+
+    label: str
+    sdfg: str
+    loop_variable: str
+    condition: str
+    bound_symbols: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ParallelismRecord:
+    """One kernel's RAW taxonomy: bucket counts and nothing pre-combined."""
+
+    buckets: dict[str, int]
+    total: int
+    libnode: int
+    residual_loops: tuple[LoopDetail, ...]
+
+    def metric_rows(self) -> list[tuple[str, int]]:
+        """``(metric_name, value)`` pairs: one per bucket, plus libnode and total -- what a
+        ``kernel_metrics`` row's ``metric``/``value`` columns are filled from, one row each.
+        """
+        rows = [(f"{METRIC_PREFIX}{bucket}", self.buckets[bucket]) for bucket in BUCKETS]
+        rows.append((f"{METRIC_PREFIX}libnode", self.libnode))
+        rows.append((f"{METRIC_PREFIX}total", self.total))
+        return rows
+
+
+def import_dace_tests_corpus() -> Any:
+    """dace's ``tests.corpus.measure_parallelization``, importable despite the name collision.
+
+    hpcagent_bench has its OWN top-level ``tests`` package (this repo's test suite), and whatever
+    imported it first already bound ``sys.modules['tests']`` to it -- pytest's rootdir import,
+    typically. dace's corpus module does ``from tests.corpus import corpus_suite`` internally,
+    which cannot be renamed (it is dace's own file), so the only way to reach dace's ``tests`` tree
+    under its real name is to swap the ``tests`` entry out of ``sys.modules`` for the span of this
+    one import and put hpcagent_bench's own back immediately after -- the two never coexist under
+    one name, so they never coexist at all, only in sequence. Not thread-safe against a concurrent
+    unrelated ``import tests``; :func:`load_predicates` calls this at most once per process.
+    """
+    saved_path = list(sys.path)
+    saved_modules = {name: mod for name, mod in sys.modules.items() if name == "tests" or name.startswith("tests.")}
+    try:
+        sys.path.insert(0, str(pathlib.Path(dace_root_for_tests())))
+        for name in list(saved_modules):
+            del sys.modules[name]
+        from tests.corpus import measure_parallelization as measure
+
+        return measure
+    finally:
+        for name in list(sys.modules):
+            if name == "tests" or name.startswith("tests."):
+                del sys.modules[name]
+        sys.modules.update(saved_modules)
+        sys.path[:] = saved_path
+
+
+def dace_root_for_tests() -> pathlib.Path:
+    """Checkout root of the imported ``dace``: not on an editable install's path, so
+    ``tests.corpus`` is located relative to the package actually loaded rather than a hardcoded
+    checkout path.
+    """
+    import dace
+
+    return pathlib.Path(dace.__file__).resolve().parents[1]
+
+
+@functools.lru_cache(maxsize=1)
+def load_predicates() -> Any:
+    """dace's ``tests.corpus.measure_parallelization`` module, imported once.
+
+    Lazy and cached: importing dace costs seconds, and most callers of this module (the rate
+    arithmetic, the CSV/report helpers) never need it.
+    """
+    # canonicalize FIRST: the clean entry that loads passes.vectorization + interstate in the
+    # right order: dace.transformation.interstate ahead of it trips a circular import.
+    from dace.transformation.passes.canonicalize import canonicalize  # noqa: F401
+
+    return import_dace_tests_corpus()
+
+
+def all_loop_regions(sdfg: Any) -> list[Any]:
+    """Every ``LoopRegion`` at the scope :func:`load_predicates`'s ``count`` counts loops in --
+    across nested SDFGs as well as nested regions, so a loop inside a nested SDFG cannot vanish
+    from the taxonomy while its Maps still count.
+    """
+    from dace.sdfg.state import LoopRegion
+
+    return [
+        cfr for sd in sdfg.all_sdfgs_recursive() for cfr in sd.all_control_flow_regions() if isinstance(cfr, LoopRegion)
+    ]
+
+
+def loop_bound_symbols(loop: Any) -> list[str]:
+    """Symbol names in a loop's init/condition/update, minus the loop variable itself."""
+    names: set[str] = set()
+    for code in loop.get_meta_codeblocks():
+        names |= set(code.get_free_symbols())
+    names.discard(loop.loop_variable)
+    return sorted(names)
+
+
+def is_timestep_loop_region(loop: Any, timestep_symbols: Sequence[str] | None = None) -> bool:
+    """True when the loop's bound names a time-stepping symbol -- a loop deliberately left
+    sequential. Matched case-insensitively as a SUBSTRING, the same rule
+    ``numpyto_common.parallelism.is_timestep_loop`` applies to a python ``for t in range(TSTEPS)``,
+    so the two predicates answer the same question about the same bound symbol on two different IRs.
+    """
+    from numpyto_common.parallelism import TIMESTEP_SYMBOLS
+
+    syms = tuple(s.lower() for s in (timestep_symbols or TIMESTEP_SYMBOLS))
+    return any(s in name.lower() for name in loop_bound_symbols(loop) for s in syms)
+
+
+def describe_loop(loop: Any) -> LoopDetail:
+    return LoopDetail(
+        label=loop.label,
+        sdfg=loop.sdfg.name if loop.sdfg is not None else "",
+        loop_variable=loop.loop_variable,
+        condition=loop.loop_condition.as_string if loop.loop_condition is not None else "",
+        bound_symbols=tuple(loop_bound_symbols(loop)),
+    )
+
+
+def classify(sdfg: Any) -> ParallelismRecord:
+    """Bucket every loop-level construct of ``sdfg``.
+
+    Loop precedence is ``inmap`` > ``parallel_under_contract`` > ``timestep`` > ``residual``: a
+    loop that ended up as parallel work, or as the fallback of a guard that WAS parallelized, is
+    reported as such whatever its bound is named.
+    """
+    measure = load_predicates()
+    counts = measure.count(sdfg)
+    columns = dict(zip(measure.COUNTERS, counts, strict=True))
+    guarded = {id(lp) for lp in measure.guarded_fallback_loop_set(sdfg)}
+    buckets = dict.fromkeys(BUCKETS, 0)
+    buckets["map"] = columns["maps"]
+    buckets["reduce"] = columns["reduce"]
+    buckets["scan"] = columns["scan"]
+    residual: list[LoopDetail] = []
+    for loop in all_loop_regions(sdfg):
+        bucket = bucket_for_loop(loop, guarded, measure)
+        if bucket == "residual":
+            residual.append(describe_loop(loop))
+        buckets[bucket] += 1
+    total = columns["loops"] + columns["maps"] + columns["reduce"] + columns["scan"]
+    if sum(buckets.values()) != total:
+        raise AssertionError(f"taxonomy does not partition: {buckets} sums to {sum(buckets.values())}, not {total}")
+    if len(guarded) != measure.guarded_fallback_loops(sdfg):
+        raise AssertionError("the guarded set and the guarded count disagree; the predicate drifted")
+    return ParallelismRecord(buckets=buckets, total=total, libnode=columns["libnode"], residual_loops=tuple(residual))
+
+
+def bucket_for_loop(loop: Any, guarded_ids: set[int], measure: Any) -> str:
+    """One loop's bucket, applying the stated precedence."""
+    if measure.in_parallel_scope(loop):
+        return "inmap"
+    if id(loop) in guarded_ids:
+        return "parallel_under_contract"
+    if is_timestep_loop_region(loop):
+        return "timestep"
+    return "residual"
+
+
+def totals(records: Sequence[ParallelismRecord]) -> dict[str, int]:
+    """Sum RAW per-kernel counts. Nothing combined beyond addition -- which counts land on which
+    side of a rate is :data:`RATE_DEFINITIONS`' business, applied afterward by :func:`rate`.
+    """
+    agg = dict.fromkeys(BUCKETS, 0)
+    agg["total"] = 0
+    agg["libnode"] = 0
+    for rec in records:
+        for bucket, value in rec.buckets.items():
+            agg[bucket] += value
+        agg["total"] += rec.total
+        agg["libnode"] += rec.libnode
+    return agg
+
+
+def rate(agg: dict[str, int], definition: RateDefinition) -> dict[str, Any]:
+    """Apply one definition to raw counts. Carries its numerator/denominator terms with it, so a
+    percentage is never quoted without them.
+    """
+    numerator = sum(agg.get(k, 0) for k in definition.numerator)
+    denominator = sum(agg.get(k, 0) for k in definition.denominator)
+    return {
+        "numerator": numerator,
+        "denominator": denominator,
+        "numerator_terms": " + ".join(definition.numerator),
+        "denominator_terms": " + ".join(definition.denominator),
+        "value": (numerator / denominator) if denominator else None,
+        "note": definition.note,
+    }
+
+
+def rates(agg: dict[str, int]) -> dict[str, dict[str, Any]]:
+    """Every named definition applied to the same raw counts, in table order."""
+    return {name: rate(agg, defn) for name, defn in RATE_DEFINITIONS.items()}
