@@ -62,6 +62,35 @@ class Result(SQLModel, table=True):
     node: str | None = None
 
 
+#: The per-kernel static metrics table; one row per (kernel, column, implementation, metric).
+KERNEL_METRICS_TABLE = "kernel_metrics"
+
+
+class KernelMetric(SQLModel, table=True):
+    """One named count about a column's compiled kernel (``autovec.loops_vectorized``,
+    ``parallelism.map``, ...). Long rather than wide: a new metric is a new ``metric`` value, not a
+    column, so a metric family added later lands in every existing DB without a migration. Counts
+    only; a rate is a reading of counts and belongs to the report."""
+
+    __tablename__: ClassVar[str] = KERNEL_METRICS_TABLE
+
+    id: int | None = Field(default=None, primary_key=True)
+    timestamp: int  # epoch seconds; groups the rows of one run
+    benchmark: str  # kernel short_name
+    framework: str  # the column WITHOUT its flavor suffix, as in results
+    flavor: str | None = None
+    impl: str  # the implementation name the report hooks key on
+    datatype: str | None = None
+    metric: str  # <family>.<count>
+    value: float
+    # What the count was taken under, as "key=value" pairs (compiler family, cost model): two rows
+    # with different details are two measurements, never one averaged number.
+    detail: str | None = None
+    build: str | None = None
+    cpu: str
+    node: str | None = None
+
+
 def add_missing_columns(engine: Engine) -> None:
     """Add to an EXISTING ``results`` table any nullable column :class:`Result` has grown since.
 
