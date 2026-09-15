@@ -13,6 +13,9 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+import matplotlib.figure
+import matplotlib.pyplot as plt
+import matplotlib.transforms
 import pandas as pd
 import pytest
 
@@ -203,6 +206,48 @@ def test_ratio_ticks_skips_a_blank_row() -> None:
     """A pair with no leg (:func:`rows_for`'s NaN row) must not push the axis to NaN."""
     rows = [plot.Row(("a", "b"), math.nan, math.nan, math.nan, False, 0)]
     assert plot.ratio_ticks(rows) == plot.ratio_ticks([])
+
+
+# ---------------------------------------------------------------------------
+# The gap between the two panels: wide enough that the boundary tick labels never touch.
+
+
+def boundary_label_boxes(
+    fig: matplotlib.figure.Figure,
+) -> tuple[matplotlib.transforms.Bbox, matplotlib.transforms.Bbox]:
+    """The left panel's rightmost tick label and the right panel's leftmost one, as rendered."""
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    ax_speed, ax_tokens = fig.axes[0], fig.axes[1]
+    left = ax_speed.get_xticklabels()[-1].get_window_extent(renderer)
+    right = ax_tokens.get_xticklabels()[0].get_window_extent(renderer)
+    return left, right
+
+
+def test_the_two_panels_boundary_tick_labels_do_not_overlap_after_a_draw() -> None:
+    fig = plot.build_figure(table(), "gap check", False)
+    try:
+        left, right = boundary_label_boxes(fig)
+        assert left.x1 <= right.x0
+    finally:
+        plt.close(fig)
+
+
+def test_a_wide_ratio_range_still_clears_the_gap_after_it_widens() -> None:
+    """A family whose estimates span more decades gets WIDER edge labels ("1/16x", "16x") than the
+    default gap was sized for; the gap must grow to clear those too, not just the narrow case."""
+    wide = pd.DataFrame(
+        [
+            {**PAIR_ROWS[0], "estimate_a_over_b": 18.0, "ci_low": 12.0, "ci_high": 22.0},
+            {**PAIR_ROWS[1], "estimate_a_over_b": 0.07, "ci_low": 0.05, "ci_high": 0.09},
+        ]
+    )
+    fig = plot.build_figure(wide, "wide range", False)
+    try:
+        left, right = boundary_label_boxes(fig)
+        assert left.x1 <= right.x0
+    finally:
+        plt.close(fig)
 
 
 # ---------------------------------------------------------------------------

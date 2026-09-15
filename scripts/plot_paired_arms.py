@@ -68,6 +68,16 @@ LEGEND_BLOCK_IN: float = 0.55
 #: force the panels themselves down to a sliver.
 STANDALONE_WIDTH_IN: float = 9.0
 
+#: The panel gap (``subplots_adjust(wspace=...)``) starts here and grows until the boundary tick
+#: labels clear; a family whose ratios never get wide edge labels ("4x") keeps this narrow gap.
+INITIAL_WSPACE: float = 0.08
+WSPACE_STEP: float = 0.02
+MAX_WSPACE: float = 0.6
+
+#: Minimum clear space between the two panels' boundary tick labels, in points -- enough that the
+#: glyphs read as two separate numbers rather than touching.
+MIN_LABEL_GAP_PT: float = 4.0
+
 Pair = tuple[str, str]
 
 
@@ -200,6 +210,32 @@ def model_legend(pairs: Sequence[Pair], colors: dict[Pair, str], shapes: dict[Pa
     ]
 
 
+def widen_gap_until_labels_clear(
+    fig: matplotlib.figure.Figure, ax_left: matplotlib.axes.Axes, ax_right: matplotlib.axes.Axes
+) -> None:
+    """Grow the panel gap (``wspace``) until the left panel's rightmost tick label and the right
+    panel's leftmost one stop touching, measured from the RENDERED glyphs rather than guessed from
+    a font size.
+
+    The labels that collide are whichever ratio happens to need the widest text -- "1/16x" is
+    wider than "4x" -- so a fixed gap sized for one family's numbers collides on another's. Each
+    step redraws and re-measures with ``get_window_extent``, which is what the renderer actually
+    placed, in device pixels, so the check is correct at any DPI or font substitution rather than
+    an estimate of one.
+    """
+    wspace = INITIAL_WSPACE
+    while True:
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        left_box = ax_left.get_xticklabels()[-1].get_window_extent(renderer)
+        right_box = ax_right.get_xticklabels()[0].get_window_extent(renderer)
+        min_gap_px = MIN_LABEL_GAP_PT * fig.dpi / 72.0
+        if right_box.x0 - left_box.x1 >= min_gap_px or wspace >= MAX_WSPACE:
+            return
+        wspace = min(wspace + WSPACE_STEP, MAX_WSPACE)
+        fig.subplots_adjust(wspace=wspace)
+
+
 def build_figure(table: pd.DataFrame, label: str, double_column: bool) -> matplotlib.figure.Figure:
     """One figure: a shared row per pair, speed-up on the left, tokens on the right, colour and
     marker by the model either arm names.
@@ -234,10 +270,16 @@ def build_figure(table: pd.DataFrame, label: str, double_column: bool) -> matplo
     plotstyle.despine(ax_tokens)
     ax_tokens.tick_params(axis="y", length=0, labelleft=False)
 
+    # left/right/wspace first, and TOP/BOTTOM ONLY on the call below: subplots_adjust leaves every
+    # parameter it is not given at its current value, so widening the gap here survives the later
+    # call that sets top and bottom for the title and the legend.
+    fig.subplots_adjust(left=0.36, right=0.98, wspace=INITIAL_WSPACE)
+    widen_gap_until_labels_clear(fig, ax_speed, ax_tokens)
+
     if handles:
         plotstyle.legend_below(fig, handles, y=0.02)
     top = plotstyle.title(fig, label)
-    fig.subplots_adjust(left=0.36, right=0.98, top=top, bottom=bottom_in / height, wspace=0.08)
+    fig.subplots_adjust(top=top, bottom=bottom_in / height)
     return fig
 
 
