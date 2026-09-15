@@ -366,6 +366,37 @@ def drop_returned_arguments(
     return tuple(dropped)
 
 
+def privatize_rebound_arguments(sdfg: "SDFG", by_value: Sequence[str]) -> tuple[str, ...]:
+    """Give every by-value ABI scalar the kernel writes a local copy, so the entry still takes it by value.
+
+    Rebinding a parameter is local to the kernel and the native ABI passes the scalar by value, but CPF
+    promotes every WRITTEN non-transient scalar to a length-1 out-pointer: cegterg's ``nvecx = int(nvecx)``
+    rendered a pointer the caller filled with the value itself. The body keeps its writes on a transient
+    that the entry initializes from the argument.
+
+    :returns: the arguments given a local copy.
+    """
+    from dace import Memlet
+    from dace import data as dace_data
+    from dace.transformation.passes.length_one_array_scalar_conversion import descriptor_is_written
+
+    privatized: list[str] = []
+    for name in by_value:
+        desc = sdfg.arrays.get(name)
+        if not isinstance(desc, dace_data.Scalar) or desc.transient or not descriptor_is_written(sdfg, name):
+            continue
+        local = dace_data.find_new_name(f"{name}_local", set(sdfg.arrays) | set(sdfg.symbols))
+        sdfg.replace(name, local)
+        sdfg.arrays[local].transient = True
+        sdfg.add_scalar(name, desc.dtype)
+        entry = sdfg.add_state_before(sdfg.start_block, f"copy_{name}_to_local", is_start_block=True)
+        copy = entry.add_tasklet(f"copy_{name}", {"inp"}, {"out"}, "out = inp")
+        entry.add_edge(entry.add_read(name), None, copy, "inp", Memlet(name))
+        entry.add_edge(copy, "out", entry.add_write(local), None, Memlet(local))
+        privatized.append(name)
+    return tuple(privatized)
+
+
 def bind_pinned_config(sdfg: "SDFG", pinned: Mapping[str, object]) -> tuple[str, ...]:
     """Assign every entry argument a pinned ``config:`` knob names its manifest value inside the SDFG.
 
@@ -462,6 +493,8 @@ def render_canonical(
         add_workspace(sdfg)
         outputs = [renames.get(name, name) for name in spec.output_args]
         drop_returned_arguments(sdfg, abi_args, outputs, returned_slots(impl, spec.func_name))
+        by_value = [renames.get(arg.name, arg.name) for arg in native.args if arg.kind == "scalar"]
+        privatize_rebound_arguments(sdfg, [name for name in by_value if name not in outputs])
         forced = force_abi_symbols(sdfg, emitted)
         sdfg.name = native.symbol
     # The device form is one unit holding host code and kernels -- its own dialect; --language only
