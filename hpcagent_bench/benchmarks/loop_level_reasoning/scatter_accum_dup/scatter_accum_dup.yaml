@@ -35,3 +35,4 @@ loop_level_reasoning:
     privatised accumulation, while a permutation admits a plain parallel loop.
 experiment_tags:
 - llr-focus40
+- harness-focus20
