@@ -13,9 +13,9 @@ from a sick one. Then:
   about one model, that is the only other file you need.
 - [`knobs.md`](knobs.md) -- what is genuinely cross-model: the APU memory model, the KV pool
   threshold, the aiter derate, HiCache, the multi-node fabric and the Slurm shape.
-- [`private-endpoint.md`](private-endpoint.md) -- a Qwen3.8 server only you can reach: bound to
-  127.0.0.1, behind an API key, used from your laptop through an ssh tunnel. `mi300` (FP8, the
-  campaign configuration) and `mi200` (BF16, new image, smoke results pending).
+- [`private-endpoint.md`](private-endpoint.md) -- a Qwen3.8 server only you can use, behind an API
+  key: from your laptop through an ssh tunnel, or from your own Daint jobs. `mi300` (FP8, the campaign
+  configuration) and `mi200` (BF16).
 
 A serving number ages as the engine, the ROCm build and the image move. Re-measure before you build
 a decision on a number you cannot reproduce today.
