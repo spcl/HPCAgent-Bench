@@ -16,6 +16,8 @@ from a sick one. Then:
 - [`private-endpoint.md`](private-endpoint.md) -- a Qwen3.8 server only you can use, behind an API
   key: from your laptop through an ssh tunnel, or from your own Daint jobs. `mi300` (FP8, the campaign
   configuration) and `mi200` (BF16).
+- [`extending-private-inference.md`](extending-private-inference.md) -- for contributors: the security
+  contract the private launcher keeps, and how to add a preset, an access path or an engine.
 
 A serving number ages as the engine, the ROCm build and the image move. Re-measure before you build
 a decision on a number you cannot reproduce today.

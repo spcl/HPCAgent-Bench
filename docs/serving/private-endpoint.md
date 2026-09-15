@@ -16,6 +16,7 @@ needs a CSCS-signed ssh key (section 8).
 | `containers/cluster/ce-images/inference/serve-private.sbatch` | Slurm launcher, submitted on beverin |
 | `containers/cluster/ce-images/inference/alps-endpoint.sh` | client check, sourced in your Daint job |
 | `tests/test_serve_private.py`, `tests/test_alps_endpoint.py` | tests for the properties in section 1 |
+| [`extending-private-inference.md`](extending-private-inference.md) | contributor guide: contract, new presets, access paths, engines |
 
 `experiments/serve-only.sbatch` serves on every interface without a key, so any Alps user can call it
 ([`README.md`](README.md)).

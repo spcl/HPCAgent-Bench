@@ -30,7 +30,8 @@ backends, same torch and triton.
 | `agentlike-probe.py` | Serving throughput under a campaign-shaped load. Node-to-node spread is ~30%, so pin an A/B to one node. |
 | `accuracy-gate.py` | Correctness gate a serving change must pass before it is believed. |
 | `smoke-kimi-sglang.sbatch` | SGLang serving smoke. |
-| `serve-private.sbatch` | Private (127.0.0.1, key via `--config`) Qwen3.8-27B on one node: `PRESET=mi300` (FP8, campaign flags) or `mi200` (BF16). `MODE=smoke` runs one leg per tp/mem-fraction; `MODE=serve` holds one server for an ssh tunnel. Guide: `docs/serving/private-endpoint.md`. |
+| `serve-private.sbatch` | Private Qwen3.8-27B on one node, key via `--config`: `PRESET=mi300` (FP8, campaign flags) or `mi200` (BF16). `ACCESS=tunnel` binds 127.0.0.1 for an ssh tunnel; `ACCESS=alps` binds hsn0 for your own jobs on other Alps clusters. `MODE=smoke` runs one leg per tp/mem-fraction; `MODE=serve` holds one server. Guide: `docs/serving/private-endpoint.md`; extending: `docs/serving/extending-private-inference.md`. |
+| `alps-endpoint.sh` | Sourced in your Daint job: checks an `ACCESS=alps` endpoint (key file, `/v1/models`, one chat) and exports `VLLM_BASE_URL`, `VLLM_API_KEY`, `VLLM_MODEL`. |
 | `sglang_kernel_launch_check.py` | Launches sgl_kernel silu_and_mul and triton causal_conv1d against torch; verify_image.sbatch runs it for sglang-mi200. |
 | `smoke-kimi-replicas.sbatch` | Multi-replica serving smoke. |
 | `smoke-kimi-eager-pg.sbatch` | Serving smoke with the eager process-group patch loaded. |
