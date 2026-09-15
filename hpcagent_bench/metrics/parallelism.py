@@ -32,15 +32,20 @@ through a named :class:`RateDefinition`, so a decision about what counts as para
 re-read of records already on disk, not a re-measurement of the corpus.
 """
 
+import collections
 import dataclasses
 import functools
+import math
 import pathlib
 import sys
 from collections.abc import Sequence
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from hpcagent_bench import config, osinfo
 from hpcagent_bench.frameworks.schema import KernelMetric
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 #: The taxonomy, in report order. Every loop-level construct lands in exactly one.
 BUCKETS = ("map", "reduce", "scan", "parallel_under_contract", "timestep", "inmap", "residual")
@@ -169,6 +174,54 @@ def rows(
         )
         for name, value in record.metric_rows()
     ]
+
+
+def column_name(framework: str, flavor: str | None) -> str:
+    """The toolchain-column name a ``kernel_metrics`` row's ``framework``/``flavor`` pair reads as
+    elsewhere in the repo (``canon`` table columns, ``envs/registry.yaml`` frameworks): the flavor
+    appended with an underscore, or the framework alone when there is none.
+    """
+    return framework if flavor is None else f"{framework}_{flavor}"
+
+
+def record_from_counts(counts: dict[str, float]) -> ParallelismRecord:
+    """The inverse of :meth:`ParallelismRecord.metric_rows`: one kernel's raw taxonomy rebuilt from
+    its ``metric -> value`` rows. ``residual_loops`` is not stored in ``kernel_metrics`` (only the
+    count is), so a record rebuilt this way always carries an empty triage list.
+    """
+    buckets = {bucket: int(counts.get(f"{METRIC_PREFIX}{bucket}", 0.0)) for bucket in BUCKETS}
+    libnode = int(counts.get(f"{METRIC_PREFIX}libnode", 0.0))
+    total = int(counts.get(f"{METRIC_PREFIX}total", 0.0))
+    return ParallelismRecord(buckets=buckets, total=total, libnode=libnode, residual_loops=())
+
+
+def normalize_flavor(flavor: Any) -> str | None:
+    """A SQL NULL flavor comes back from pandas as ``float('nan')``, not ``None`` -- and two NaN
+    values are never equal, so using one straight as a dict key would split one "no flavor" group
+    into as many groups as it had rows. Collapse both spellings of "absent" to ``None``.
+    """
+    if flavor is None or (isinstance(flavor, float) and math.isnan(flavor)):
+        return None
+    return str(flavor)
+
+
+def read_records(frame: "pd.DataFrame") -> dict[str, dict[str, ParallelismRecord]]:
+    """``column -> {benchmark: ParallelismRecord}``, rebuilt from long-format ``kernel_metrics``
+    rows (a pruned copy such as ``scripts/collect_parallelism.py`` writes, or the full table --
+    every row not starting with :data:`METRIC_PREFIX` is ignored either way). One record per
+    (framework, flavor, benchmark) triple; :func:`column_name` turns the pair into the column name.
+    """
+    grouped: dict[tuple[str, str | None, str], dict[str, float]] = collections.defaultdict(dict)
+    for row in frame.itertuples(index=False):
+        metric = str(row.metric)
+        if not metric.startswith(METRIC_PREFIX):
+            continue
+        key = (str(row.framework), normalize_flavor(row.flavor), str(row.benchmark))
+        grouped[key][metric] = float(row.value)
+    out: dict[str, dict[str, ParallelismRecord]] = collections.defaultdict(dict)
+    for (framework, flavor, benchmark), counts in grouped.items():
+        out[column_name(framework, flavor)][benchmark] = record_from_counts(counts)
+    return out
 
 
 def import_dace_tests_corpus() -> Any:
