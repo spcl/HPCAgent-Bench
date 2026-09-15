@@ -158,6 +158,57 @@ def test_a_frame_without_a_cancelled_column_is_left_alone() -> None:
     assert len(experiments.drop_cancelled_task_rows(frame)) == len(frame)
 
 
+def clean_frame() -> pd.DataFrame:
+    """The c-cpf condition of qwen38 ran twice: once as ``...-c-cpf``, then again from scratch as
+    ``...-c-cpf-clean``. The c-cpfsrc condition ran once and was never re-run."""
+    common = {"run_root": "r", "job": "639060", "experiment": "llr-focus40", "model": "qwen38"}
+    common |= {"language": "c", "device": "cpu", "harness": "claude", "benchmark": "gemm"}
+    cpf = {**common, "packet": "cpf"}
+    src = {**common, "packet": "cpfsrc"}
+    return pd.DataFrame(
+        [
+            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf", "run_id": "a.p1.w1", "record": "task"},
+            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf", "run_id": "a.p1.w1", "record": "submission"},
+            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf-clean", "run_id": "b.p1.w1", "record": "task"},
+            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf-clean", "run_id": "b.p1.w1", "record": "submission"},
+            {**src, "arm": "cpf-llr-focus40-qwen38-c-cpfsrc", "run_id": "c.p1.w1", "record": "task"},
+            {**src, "arm": "cpf-llr-focus40-qwen38-c-cpfsrc", "run_id": "c.p1.w1", "record": "submission"},
+        ]
+    )
+
+
+def test_an_arm_superseded_by_a_clean_rerun_is_dropped_with_a_warning() -> None:
+    """Spec X9: the clean arm re-ran the condition from scratch because the earlier wave was wrong,
+    and the two carry one identity -- pooled, the defect the re-run exists to escape is averaged
+    back in."""
+    with pytest.warns(UserWarning, match="dropped 2 row"):
+        kept = experiments.drop_superseded_arm_rows(clean_frame())
+    assert set(kept.arm) == {"cpf-llr-focus40-qwen38-c-cpf-clean", "cpf-llr-focus40-qwen38-c-cpfsrc"}
+
+
+def test_a_clean_rerun_supersedes_only_its_own_identity_group() -> None:
+    """The suffix says which TASKS are live for one condition, not that every other arm of the
+    campaign was re-run; a cpfsrc arm with no clean wave keeps every row."""
+    with pytest.warns(UserWarning, match="spec X9"):
+        kept = experiments.drop_superseded_arm_rows(clean_frame())
+    assert (kept.packet == "cpfsrc").sum() == 2
+
+
+def test_a_campaign_with_no_clean_arm_is_left_alone() -> None:
+    """Every wave so far ran without the suffix, and X9 must be invisible to them."""
+    frame = clean_frame()
+    frame = frame[~frame.arm.str.endswith("-clean")]
+    assert len(experiments.drop_superseded_arm_rows(frame)) == len(frame)
+
+
+def test_a_clean_arm_with_no_task_row_supersedes_nothing() -> None:
+    """A judge row alone does not say a re-run happened: the task row is what records that an agent
+    was launched under the clean arm, the same evidence X6-X8 read."""
+    frame = clean_frame()
+    frame = frame[(frame.record != "task") | (~frame.arm.str.endswith("-clean"))]
+    assert len(experiments.drop_superseded_arm_rows(frame)) == len(frame)
+
+
 @pytest.mark.parametrize(
     ("arm", "packet"),
     [

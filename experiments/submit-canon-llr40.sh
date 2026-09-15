@@ -36,7 +36,7 @@ for col in ${COLUMNS}; do
         continue
     fi
     dep=(); [[ -n "${DEPEND_ON:-}" ]] && dep=(--dependency="afterany:${DEPEND_ON}")
-    jid=$(sbatch --parsable --partition=mi300 --nodes=1 --exclusive --mem=0 \
+    jid=$(sbatch --parsable --no-requeue --partition=mi300 --nodes=1 --exclusive --mem=0 \
         "${gres[@]}" --time="${TIME_LIMIT}" --job-name="canon40-${JOB_TAG:-${col%%,*}}" \
         "${dep[@]}" ${BEGIN:+--begin="${BEGIN}"} \
         --output="${OUT_ROOT}/%x-%j.out" --error="${OUT_ROOT}/%x-%j.err" \

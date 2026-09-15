@@ -297,7 +297,10 @@ def read_observations(path: pathlib.Path) -> "pd.DataFrame":
         frame = pd.read_csv(path, low_memory=False)
     else:
         frame = read_table(path, OBSERVATIONS_TABLE)
-    return drop_cancelled_task_rows(drop_pre_relaunch_rows(drop_foreign_kernel_rows(fill_arm_identity(frame))))
+    frame = fill_arm_identity(frame)
+    for rule in (drop_foreign_kernel_rows, drop_pre_relaunch_rows, drop_cancelled_task_rows, drop_superseded_arm_rows):
+        frame = rule(frame)
+    return frame
 
 
 #: The columns naming the task a judge row was made by (spec 1.1): ``run_id`` repeats across jobs.
@@ -397,6 +400,47 @@ def drop_cancelled_task_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
         return frame
     dropped = task_labels(frame).isin(cancelled)
     warnings.warn(f"dropped {int(dropped.sum())} row(s) of {len(cancelled)} cancelled task(s) (spec X8)", stacklevel=2)
+    return frame[~dropped]
+
+
+#: What a launcher appends to re-run an arm from scratch (``CLEAN=1``). It names no condition: the
+#: identity columns are unchanged, and the clean tasks SUPERSEDE the ones before them.
+CLEAN_SUFFIX: str = "-clean"
+
+#: The identity a clean re-run supersedes within. Not ``arm`` -- the whole point is that the clean arm
+#: and the arm it replaces are two names for one condition -- and not ``rep``, since a designed repeat
+#: is a task of the same condition and is re-run with it.
+CLEAN_GROUP: tuple[str, ...] = ("experiment", "model", "language", "device", "packet", "harness")
+
+
+def drop_superseded_arm_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
+    """``frame`` without the rows of arms a ``-clean`` re-run superseded (spec X9).
+
+    A clean arm re-runs one condition from an empty workspace after something about the earlier wave
+    was found wrong -- a leaked view, a broken relaunch, a job that requeued onto its own rows. It
+    carries the SAME identity, so without this rule the two waves pool and the defect the re-run
+    exists to escape is averaged back in. Within one identity group (:data:`CLEAN_GROUP`), a task row
+    whose arm carries the suffix therefore drops every row of every arm in that group without it. The
+    frame changes, never the database (N1), and the count is warned about.
+    """
+    import warnings
+
+    if frame.empty or "arm" not in frame.columns or "record" not in frame.columns:
+        return frame
+    columns = [column for column in CLEAN_GROUP if column in frame.columns]
+    if not columns:
+        return frame
+    groups = frame[columns].astype(str).agg("\x1f".join, axis=1)
+    clean = frame["arm"].astype(str).str.endswith(CLEAN_SUFFIX)
+    superseding = set(groups[clean & (frame["record"] == "task")])
+    if not superseding:
+        return frame
+    dropped = groups.isin(superseding) & ~clean
+    count = int(dropped.sum())
+    if count:
+        arms = sorted(set(frame.loc[dropped, "arm"].astype(str)))
+        message = f"dropped {count} row(s) of {len(arms)} arm(s) superseded by a clean re-run (spec X9)"
+        warnings.warn(message, stacklevel=2)
     return frame[~dropped]
 
 

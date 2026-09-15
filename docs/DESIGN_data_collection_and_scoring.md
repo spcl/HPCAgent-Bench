@@ -140,6 +140,13 @@ allowed under single submission; more than one ACCEPTED submission is not.
   (`experiments.drop_cancelled_task_rows`, with a warning giving the count), the task row included:
   the job ended the agent mid-task (T6), so the rows report part of an episode and the token total
   prices part of one.
+- X9. An arm whose name ends in `-clean` is a re-run of one condition from scratch, launched after
+  something about the earlier wave was found wrong. It carries the SAME identity, so within an
+  identity group (`experiment`, `model`, `language`, `device`, `packet`, `harness`) a `task` row
+  whose arm carries the suffix drops every row of every arm in that group WITHOUT it, at read
+  (`experiments.drop_superseded_arm_rows`, with a warning giving the count and the number of arms).
+  The clean tasks supersede the earlier ones rather than pooling with them; the suffix names no
+  condition, and `arm` and `rep` are deliberately not in the group. The database is not modified (N1).
 
 ## 3. Per-task answer
 
@@ -295,6 +302,7 @@ family; the table states the pairs it kept.
 | X6 | `experiments.drop_foreign_kernel_rows`, called by `experiments.read_observations` | `test_experiments.py`: foreign-kernel rows dropped with a warning, runs without a task row kept |
 | X7 | `experiments.drop_pre_relaunch_rows`, called by `experiments.read_observations` | `test_experiments.py`: pre-final judge rows dropped with a warning, a task with no stamp untouched, task start over the kept rows |
 | X8 | `experiments.drop_cancelled_task_rows`, called by `experiments.read_observations` | `test_experiments.py`: every row of a cancelled task dropped with a warning, a frame without the column untouched |
+| X9 | `experiments.drop_superseded_arm_rows`, called by `experiments.read_observations`; the `-clean` suffix is written by `CLEAN=1` in `experiments/submit-cpf-llr40.sh` | `test_experiments.py`: superseded arms dropped with a warning, another identity group untouched, a frame with no clean arm untouched |
 | R1, R2 | `population.graded_episode_rows`, `last_per_episode` | `test_aggregation_population.py`: last submission, non-positive, suspect |
 | R3, R4 | `population.latest_runs`, `arm_kernel_answers`, `kernel_tokens` | rerun supersedes; rerun without answer; undated; start-time tie order |
 | R5 | `population.arm_kernel_answers`, `kernel_tokens(repeats="median")` | median run and carrier; token median |
@@ -393,4 +401,5 @@ the name judge rows carry; llr-focus40 and llrblind (3-segment keys) are unchang
 | 2026-09-15 | spec rev 4: numeric precision N1-N4 (databases untouched, float64 ratios, integer counts, no rounding before a table write); legacy scope of `analyze_llr40.py` | `78fb58223`; everything above on `main` from `a71ecb472` |
 | 2026-09-15 | spec rev 5: X6 foreign-kernel judge rows dropped at read (F6); A7 per-kernel figure rule written out | `57a7e0479` |
 | 2026-09-15 | task rows named by the key's last segment (F7); git-scicomp re-extracted | this commit |
-| 2026-09-15 | fresh relaunch (T5): crashed attempt's workspace wiped, `attempts.jsonl`, task token total = final attempt, X7; cancelled tasks (T6, X8) | this commit |
+| 2026-09-15 | fresh relaunch (T5): crashed attempt's workspace wiped, `attempts.jsonl`, task token total = final attempt, X7; cancelled tasks (T6, X8) | `665699df3` |
+| 2026-09-15 | X9: a `-clean` re-run supersedes the arms of its identity group; `CLEAN=1` and `DEADLINE=` in the CPF launcher | this commit |

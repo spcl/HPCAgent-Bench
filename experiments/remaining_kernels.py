@@ -17,6 +17,12 @@ wave runs only the COMPLEMENT: its job touches 12 kernels and says nothing about
 wave already graded. Reading one root, or the newest job alone, reports those 28 as owed and asks
 for a third wave that re-runs finished work -- which is the very thing this script exists to avoid.
 
+An arm re-run from scratch carries a ``-clean`` suffix (``CLEAN=1`` in the launchers), and that is a
+DIFFERENT arm here: coverage is keyed by the slurm job name, so a clean arm owes every roster kernel
+its own clean jobs have no row for, and the superseded arm's rows count for nothing. That is the same
+reading the analysis takes (spec X9), so the owed list and the tables cannot disagree about which
+tasks are live.
+
 A job whose TREATMENT was superseded is not coverage and must be named with ``--exclude-job``: an
 arm re-run after its forms were re-rendered has earlier jobs measuring something else, and counting
 them would leave those kernels permanently unmeasured under the current treatment. Superseding is a

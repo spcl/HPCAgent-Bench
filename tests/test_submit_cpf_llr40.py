@@ -18,7 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 import pytest
 
@@ -62,6 +62,11 @@ KNOBS = frozenset(
         "DEVICE_LANGS",
         "EXTRA_ENV_KV",
         "DEPEND_ON",
+        "CLEAN",
+        "DEADLINE",
+        "DEADLINE_MARGIN_SECONDS",
+        "MIN_AGENT_SECONDS",
+        "STAGING_HOURS",
         "CPF_FORMS_DIR",
         "CPF_VIEW",
         DROPIN_KEY,
@@ -105,8 +110,16 @@ def build_view(root: pathlib.Path, kernels: tuple[str, ...], target: str) -> pat
     return view
 
 
-def launch(root: pathlib.Path, arms: str, kernels: tuple[str, ...], target: str) -> Launch:
-    """Build ``arms`` against a ``target`` view serving ``kernels``, with SUBMIT=0."""
+def launch(
+    root: pathlib.Path,
+    arms: str,
+    kernels: tuple[str, ...],
+    target: str,
+    extra: Mapping[str, str] | None = None,
+) -> Launch:
+    """Build ``arms`` against a ``target`` view serving ``kernels``, with SUBMIT=0.
+
+    ``extra`` adds launcher knobs (``CLEAN``, ``DEADLINE``) on top of the fixed ones."""
     experiments = root / "experiments"
     experiments.mkdir(parents=True)
     for name in SUBMIT_INPUTS:
@@ -130,6 +143,7 @@ def launch(root: pathlib.Path, arms: str, kernels: tuple[str, ...], target: str)
         CPF_FORMS_DIR=str(view),
         CPF_DROPIN_DIR=str(view),
     )
+    env.update(extra or {})
     result = subprocess.run(
         ["bash", str(experiments / "submit-cpf-llr40.sh")],
         env=env,

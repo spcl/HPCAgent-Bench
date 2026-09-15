@@ -63,9 +63,6 @@ CAMPAIGNS = {
     "scicomp-perf-playbook": Campaign(
         "scicomp-focus40", "Scientific Computing Focus@40, Perf Playbook", "CPU", "scicomp40"
     ),
-    "harness-focus20-smoke": Campaign(
-        "harness-focus20", "Agent Harness Comparison@20, Smoke", "CPU", "harness-focus20"
-    ),
 }
 
 #: Campaign -> the experiment its CPF arms are reported under. CPF is its own experiment on the board,
@@ -88,13 +85,27 @@ def campaign_of(arm: str) -> str:
     return max((prefix for prefix in CAMPAIGNS if arm.startswith(prefix + "-")), key=len, default="")
 
 
-def split_arm(arm: str, models: tuple[str, ...]) -> tuple[str, str, str]:
-    """``arm`` as (campaign, model, variant); the model is "" for an arm that names none."""
+#: What a launcher appends to re-run an arm from scratch (``CLEAN=1``). It is not a condition: the
+#: identity columns are unchanged and the clean tasks SUPERSEDE the ones before them.
+CLEAN_SUFFIX = "-clean"
+
+
+def split_arm(arm: str, models: tuple[str, ...]) -> tuple[str, str, str, bool]:
+    """``arm`` as (campaign, model, variant, clean); the model is "" for an arm that names none.
+
+    The ``-clean`` suffix comes off the variant and becomes the flag, so a clean arm reads as the same
+    variant as the arm it re-runs and the two share one row."""
     campaign = campaign_of(arm)
-    rest = arm[len(campaign) + 1 :]
+    clean = arm.endswith(CLEAN_SUFFIX)
+    rest = arm[len(campaign) + 1 : len(arm) - len(CLEAN_SUFFIX) if clean else len(arm)]
     model = next((name for name in models if rest == name or rest.startswith(name + "-")), "")
     variant = rest[len(model) + 1 :] if model else rest
-    return campaign, model, variant
+    return campaign, model, variant, clean
+
+
+def base_arm(arm: str) -> str:
+    """The arm a clean re-run supersedes -- itself for an arm that is not one."""
+    return arm[: -len(CLEAN_SUFFIX)] if arm.endswith(CLEAN_SUFFIX) else arm
 
 
 def board_campaign(campaign: str, variant: str) -> Campaign:
@@ -143,14 +154,24 @@ def queued_ids() -> list[str]:
     return out.stdout.split()
 
 
-def arm_row(arm: str, jobs: list[Job], dirs: dict[str, pathlib.Path], full: list[str], models: tuple[str, ...]) -> dict:
-    campaign, model, variant = split_arm(arm, models)
-    spec = board_campaign(campaign, variant)
+def coverage(jobs: list[Job], dirs: dict[str, pathlib.Path], full: list[str]) -> int:
+    """Roster kernels a judge wrote a row for over ``jobs`` -- the union, since a complement wave
+    grades only what the one before it left."""
     seen: set[str] = set()
     for job in jobs:
         if job.id in dirs:
             seen |= remaining_kernels.touched(str(dirs[job.id]))
-    done = sum(1 for kernel in full if kernel in seen)
+    return sum(1 for kernel in full if kernel in seen)
+
+
+def arm_row(arm: str, jobs: list[Job], dirs: dict[str, pathlib.Path], full: list[str], models: tuple[str, ...]) -> dict:
+    """One board row. A clean re-run and the arm it supersedes share this row: it is named for the
+    arm the analysis pairs on, and its coverage and status are the CLEAN jobs' alone -- the older
+    tasks are dropped at read (spec X9), so counting them would report coverage no table will use."""
+    campaign, model, variant, clean = split_arm(arm, models)
+    spec = board_campaign(campaign, variant)
+    counted = [job for job in jobs if job.name.endswith(CLEAN_SUFFIX)] if clean else jobs
+    done = coverage(counted, dirs, full)
     return {
         "arm": arm,
         "campaign": campaign,
@@ -159,9 +180,10 @@ def arm_row(arm: str, jobs: list[Job], dirs: dict[str, pathlib.Path], full: list
         "device": spec.device,
         "model": model,
         "variant": variant,
+        "clean": clean,
         "done": done,
         "roster": len(full),
-        "status": arm_status(done, len(full), [job.state for job in jobs]),
+        "status": arm_status(done, len(full), [job.state for job in counted]),
         "jobs": [dataclasses.asdict(job) for job in sorted(jobs, key=lambda job: (len(job.id), job.id))],
     }
 
@@ -171,12 +193,16 @@ def arm_rows(runs: pathlib.Path, opt: str, models: tuple[str, ...]) -> list[dict
     by_arm: dict[str, list[Job]] = {}
     for job in slurm_jobs(sorted(set(dirs) | set(queued_ids()))):
         if campaign_of(job.name):
-            by_arm.setdefault(job.name, []).append(job)
+            # A clean re-run is folded onto the arm it supersedes, so the board shows ONE row per
+            # condition with both waves' jobs on it.
+            by_arm.setdefault(base_arm(job.name), []).append(job)
     rosters = {spec.tag: remaining_kernels.roster(spec.tag, opt) for spec in CAMPAIGNS.values() if spec.tag}
-    return [
-        arm_row(arm, by_arm[arm], dirs, rosters.get(CAMPAIGNS[campaign_of(arm)].tag, []), models)
-        for arm in sorted(by_arm)
-    ]
+    rows = []
+    for arm, jobs in sorted(by_arm.items()):
+        clean = any(job.name.endswith(CLEAN_SUFFIX) for job in jobs)
+        roster = rosters.get(CAMPAIGNS[campaign_of(arm)].tag, [])
+        rows.append(arm_row(arm + CLEAN_SUFFIX if clean else arm, jobs, dirs, roster, models))
+    return rows
 
 
 def render(data: dict) -> str:

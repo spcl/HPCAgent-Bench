@@ -30,7 +30,16 @@ RUNNERS = ("miniswe", "openhands", "optimas")
 
 #: Shell variables that would change what the driver launches if the test process inherited them.
 LEAKY_PREFIXES = ("AGENT_", "ANTHROPIC_", "CLAUDE", "HARNESS", "JUDGE_", "MCP_", "MINISWE_", "OPENHANDS_", "OPTARENA_")
-LEAKY_NAMES = ("VLLM_API_KEY", "VLLM_BASE_URL", "RUN_DIR", "CAMPAIGN_ARM", "PROBLEMS_FILE", "LANGUAGE", "KERNELS")
+LEAKY_NAMES = (
+    "VLLM_API_KEY",
+    "VLLM_BASE_URL",
+    "RUN_DIR",
+    "CAMPAIGN_ARM",
+    "PROBLEMS_FILE",
+    "LANGUAGE",
+    "KERNELS",
+    "CONTEXT_LENGTH",
+)
 
 #: Two call records as a runner writes them, four DISJOINT counts each: 110 consumed, then 170.
 CALLS = (
@@ -208,12 +217,22 @@ def test_the_claude_arm_environment_and_files_carry_nothing_of_the_runners(drive
         ("CLAUDE_LOG_PATH", str(workdir / "claude.log")),
     ]
     assert not {"OPENAI_API_KEY", "OPTARENA_USAGE_PATH", "OPTARENA_HARNESS", "AGENT_SUBMISSION_MARKER"} & set(env)
-    assert sorted(path.name for path in workdir.iterdir()) == ["claude.log", "mcp.json", "prompt.txt", "tokens.json"]
+    # attempts.jsonl is the DRIVER's ledger (T5), written for every harness including claude.
+    assert sorted(path.name for path in workdir.iterdir()) == [
+        "attempts.jsonl",
+        "claude.log",
+        "mcp.json",
+        "prompt.txt",
+        "tokens.json",
+    ]
 
 
 def expected_runner_argv(harness: str, workdir: pathlib.Path) -> list[str]:
     """The contract argv; for optimas without its trailing ``--timeout-seconds`` value."""
     endpoint = ["--base-url", "http://n1:8000/v1", "--model", "qwen38", "--usage", str(workdir / "usage.jsonl")]
+    # The launcher's common reply cap, sent by every harness; the fixture sets no AGENT_EFFORT or
+    # CONTEXT_LENGTH, so neither flag is on the contract argv.
+    endpoint += ["--max-output-tokens", "32768"]
     if harness == "miniswe":
         return [
             "/opt/harness/miniswe/bin/python",
@@ -300,6 +319,37 @@ def test_a_runner_gets_the_claude_environment_minus_claudes_own_plus_the_runner_
     assert runner_env["JUDGE_RANK"] == "1" and runner_env["OPTARENA_RUN_ID"] == "harness-arm.n1.p7.w2"
     assert (workdir / "prompt.txt").read_bytes() == claude_prompt
     assert (workdir / "mcp.json").read_bytes() == claude_mcp
+
+
+@pytest.mark.parametrize("harness", RUNNERS)
+def test_a_runner_is_told_the_launchers_reply_cap_and_its_arms_effort(driver, monkeypatch, tmp_path, harness) -> None:
+    """One reply cap and one effort rung for every harness: a harness comparison that also compared
+    reply lengths would credit the difference to the harness."""
+    monkeypatch.setenv("HARNESS", harness)
+    monkeypatch.setenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "16384")
+    monkeypatch.setenv("AGENT_EFFORT", "xhigh")
+    launches = launcher(monkeypatch, driver, runner_run(end=FINISHED))
+    run(driver, tmp_path)
+    argv = launches[0]["argv"]
+    assert argv[argv.index("--max-output-tokens") + 1] == "16384"
+    assert argv[argv.index("--reasoning-effort") + 1] == "xhigh"
+
+
+@pytest.mark.parametrize(("harness", "expected"), [("miniswe", False), ("openhands", True), ("optimas", True)])
+def test_only_a_runner_whose_client_has_an_input_window_is_told_the_served_context(
+    driver, monkeypatch, tmp_path, harness: str, expected: bool
+) -> None:
+    """CONTEXT_LENGTH is the window the engine was STARTED with. mini-SWE 2.4.6 has no knob for it --
+    it neither counts the prompt nor condenses history -- so it is handed none rather than a flag it
+    would ignore."""
+    monkeypatch.setenv("HARNESS", harness)
+    monkeypatch.setenv("CONTEXT_LENGTH", "262144")
+    launches = launcher(monkeypatch, driver, runner_run(end=FINISHED))
+    run(driver, tmp_path)
+    argv = launches[0]["argv"]
+    assert ("--context-length" in argv) is expected, argv
+    if expected:
+        assert argv[argv.index("--context-length") + 1] == "262144"
 
 
 def test_a_runner_without_a_replica_key_sends_empty(driver, monkeypatch, tmp_path) -> None:

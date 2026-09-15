@@ -88,8 +88,10 @@ submit_arm_job() {
     local dep=(); [[ -n "${dep_ids}" ]] && dep=(--dependency="afterany:${dep_ids}")
     # --export=ALL would hand a CPF view exported by the caller to every arm; the env file pins it for
     # the arms whose packet asks, and materialize_shared.sh stages drop-ins wherever it is set.
+    # --no-requeue: a NODE_FAIL requeue restarts the job in the SAME run directory under the same id,
+    # so the second run's agents grade on top of the first's rows and the arm reports both as one.
     SUBMITTED_JID=$(env -u CPF_DROPIN_DIR -u CPF_FORMS_DIR -u HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR \
-        sbatch --parsable --nodes="${nodes}" --time="${walltime}" --job-name="${arm}" \
+        sbatch --parsable --no-requeue --nodes="${nodes}" --time="${walltime}" --job-name="${arm}" \
         "${dep[@]}" ${begin:+--begin="${begin}"} \
         --export=ALL,CLUSTER_ENV_FILE="${PWD}/${env}" beverin.sbatch)
     echo "submitted ${arm} -> ${SUBMITTED_JID} (${nodes} nodes${detail})"

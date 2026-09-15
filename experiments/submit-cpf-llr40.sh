@@ -6,6 +6,7 @@
 # comparability. Each treated arm carries exactly one registered packet, so the language packet
 # cannot leak into a CPF or perf-playbook comparison.
 #   ./submit-cpf-llr40.sh   BEGIN=now ./submit-cpf-llr40.sh   SUBMIT=0 ./submit-cpf-llr40.sh
+#   CLEAN=1 DEADLINE=2026-09-16T06:00:00 ./submit-cpf-llr40.sh   -- re-run every arm as "<arm>-clean"
 set -euo pipefail
 ulimit -c 0
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
@@ -38,6 +39,38 @@ CPF_CE_ENV=${CPF_CE_ENV:-optarena-amd-mi300-latest}
 BEGIN=${BEGIN:-2026-09-05T08:00:00}
 [[ "${BEGIN}" == now ]] && BEGIN=""
 
+# CLEAN=1 re-runs the wave as "<arm>-clean". The IDENTITY (experiment, model, language, device,
+# packet) is untouched -- the analysis pairs on those columns and prefers the clean arm (rule X9),
+# so the suffix says "these tasks supersede the ones before them" without inventing a condition.
+CLEAN=${CLEAN:-0}
+CLEAN_SUFFIX=""
+[[ "${CLEAN}" == 1 ]] && CLEAN_SUFFIX="-clean"
+
+# DEADLINE=<any time date(1) parses> shrinks the wave so it ENDS before that moment instead of being
+# killed mid-episode: the job gets deadline - now - DEADLINE_MARGIN_SECONDS, and the agents get that
+# less the staging allowance arm_walltime already budgets (STAGING_HOURS: image pull, engine start,
+# the readiness probe). Under an hour of agent time measures nothing, so it refuses instead.
+DEADLINE=${DEADLINE:-}
+DEADLINE_MARGIN_SECONDS=${DEADLINE_MARGIN_SECONDS:-300}
+MIN_AGENT_SECONDS=${MIN_AGENT_SECONDS:-3600}
+DEADLINE_WALLTIME=""
+DEADLINE_AGENT_SECONDS=0
+
+hms() { printf '%02d:%02d:%02d\n' "$(( $1 / 3600 ))" "$(( $1 % 3600 / 60 ))" "$(( $1 % 60 ))"; }
+
+if [[ -n "${DEADLINE}" ]]; then
+    deadline_epoch=$(date -d "${DEADLINE}" +%s) \
+        || { echo "DEADLINE=${DEADLINE} is not a time date(1) understands" >&2; exit 2; }
+    limit_seconds=$(( deadline_epoch - $(date +%s) - DEADLINE_MARGIN_SECONDS ))
+    DEADLINE_AGENT_SECONDS=$(( limit_seconds - STAGING_HOURS * 3600 ))
+    if (( DEADLINE_AGENT_SECONDS < MIN_AGENT_SECONDS )); then
+        echo "DEADLINE ${DEADLINE} leaves ${DEADLINE_AGENT_SECONDS}s for the agents," >&2
+        echo "  under the ${MIN_AGENT_SECONDS}s floor (limit ${limit_seconds}s, staging ${STAGING_HOURS}h)" >&2
+        exit 2
+    fi
+    DEADLINE_WALLTIME=$(hms "${limit_seconds}")
+    echo "deadline ${DEADLINE}: --time ${DEADLINE_WALLTIME}, AGENT_TIMEOUT_SECONDS ${DEADLINE_AGENT_SECONDS}"
+fi
 
 DEVICE_LANGS=${DEVICE_LANGS:-"hip cuda"}
 
@@ -74,9 +107,9 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc|pe
         perf-playbook-cpu) sfx="-perf-playbook-cpu" ;;
         *) echo "unknown arm kind ${kind}" >&2; return 2 ;;
     esac
-    local arm="${EXPERIMENT}-${model}-${lang}${sfx}"
+    local arm="${EXPERIMENT}-${model}-${lang}${sfx}${CLEAN_SUFFIX}"
     # keyed by MODEL too: same-language arms can owe different kernel subsets in the same wave
-    local env=".env.${arm}" problems="problems-${EXPERIMENT}-${model}-${lang}${sfx}.jsonl"
+    local env=".env.${arm}" problems="problems-${arm}.jsonl"
     # an arm env is written key by key, so a gate that bails midway leaves a file that looks
     # complete and silently lacks a key: build under a staging name, rename once gates pass
     local staged="${env}.staging"
@@ -96,11 +129,16 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc|pe
         --language "${lang}" --image "${image}" --packet "${packet}" "${subset[@]}" >"${problems}.tmp"
     mv -f "${problems}.tmp" "${problems}"
 
+    # a deadline overrides the base env's own agent wall clock; without one the base value stands
+    local deadline_sed=()
+    (( DEADLINE_AGENT_SECONDS > 0 )) \
+        && deadline_sed=(-e "s|^AGENT_TIMEOUT_SECONDS=.*|AGENT_TIMEOUT_SECONDS=${DEADLINE_AGENT_SECONDS}|")
     # base env inherited whole: this arm differs from the model's CPU baseline in the packet only
     stage_base_env ".env.base-${model}" "${arm}" "${EXPERIMENT}" "${STAMP}" "${staged}" \
         -e "s|^PROBLEMS_FILE=.*|PROBLEMS_FILE=${problems}|" \
         -e "s|^LANGUAGE=.*|LANGUAGE=${lang}|" \
-        -e "s|^AMD_CE_ENV=.*|AMD_CE_ENV=${CPF_CE_ENV}|"
+        -e "s|^AMD_CE_ENV=.*|AMD_CE_ENV=${CPF_CE_ENV}|" \
+        "${deadline_sed[@]}"
     record_identity "${staged}" "${RECORD_EXPERIMENT}" "${model}" "${lang}" "${target}" "${packet}" "${arm}"
     # sourced under `set -a`: reaches every role including the inference server, not just the agent
     local kv
@@ -145,8 +183,9 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc|pe
     finalize_staged_env "${staged}" "${env}" || exit 2
     # a colon-joined job id list holds this arm back until those finish, so a wave larger than the
     # node budget queues in order instead of being submitted by hand one gate at a time
-    submit_arm_job "${env}" "${arm}" "$(arm_walltime "${env}" "$(problem_kernel_count "${problems}")")" \
-        "${DEPEND_ON:-}" "${BEGIN}"
+    local walltime="${DEADLINE_WALLTIME}"
+    [[ -n "${walltime}" ]] || walltime=$(arm_walltime "${env}" "$(problem_kernel_count "${problems}")")
+    submit_arm_job "${env}" "${arm}" "${walltime}" "${DEPEND_ON:-}" "${BEGIN}" ", ${walltime}"
 }
 
 ARMS=${ARMS:-"c:plain c:skills c:cpf"}

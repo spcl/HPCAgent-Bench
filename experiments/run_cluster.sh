@@ -641,23 +641,24 @@ EOF
         export ANTHROPIC_AUTH_TOKEN="${VLLM_API_KEY:-EMPTY}"
     fi
     export ANTHROPIC_API_KEY="${ANTHROPIC_AUTH_TOKEN}"
-    # The client gives up on a stream that sends NO BYTES for this long. Its default against a
-    # first-party base URL is 180 s, and that is the single largest source of lost agents on this
-    # cluster: in 621385 all 27 `api_error` agents died at 180.0-189.0 s of silence, and every
-    # SGLang arm of llr40v10 lost 90-100% of its agents the same way while the vLLM arms lost none.
-    # The silence is not a hang -- it is PREFILL. A 115k-token prompt behind ~19 concurrent decodes
-    # emits nothing until its first token, which routinely exceeds three minutes, and SGLang sends
-    # no keepalive in the gap where vLLM's stream opens immediately. Raised to 15 min, which is
-    # bounded by AGENT_TIMEOUT_SECONDS anyway, so a genuinely dead stream still ends the agent.
-    export CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS="${CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS:-900000}"
-    # And the WHOLE-REQUEST cap, which the line above only uncovers. With the byte-stream wall
-    # raised, 621727/621728 stopped dying at 180 s of silence and started dying on "API Error: The
-    # operation timed out" instead -- 45 agents, all of them 244-297 s after their last stream
-    # event, which is what a fixed 600 s total looks like measured from a partly-elapsed request.
-    # Turns per agent went 3 -> 19 in the process, so the first raise was real and this is the next
-    # ceiling, not a re-run of the same one. 30 min, with silence still capped at 15 by the line
-    # above, so a stalled stream cannot sit here for the full half hour.
-    export API_TIMEOUT_MS="${API_TIMEOUT_MS:-1800000}"
+    # THE COMMON CLIENT SETTINGS. Every model and every harness gets the same three, so a model's
+    # .env carries only what is really per-model (its served context, its effort rung). The two
+    # that were duplicated per model had drifted: kimi and glm53 set these values, qwen38 and
+    # oss120b set neither and ran on the CLI's defaults.
+    #
+    # The client gives up on a stream that sends NO BYTES for this long. Its default is 15 min, and
+    # that is what killed the Qwen agents: a 115k-token prompt behind ~19 concurrent decodes emits
+    # nothing until its first token, the server was answering the whole time, and the silence alone
+    # ended the agent. In Claude Code 2.1.197 this watchdog REPLACES the total-request timeout as
+    # the wall that fires first, so it is raised to 30 min, the CLI's ceiling for it.
+    export CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS="${CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS:-1800000}"
+    # The whole-request cap above it: one hour, so a request that keeps producing bytes is never
+    # cut off by the outer timer. AGENT_TIMEOUT_SECONDS still bounds the episode either way.
+    export API_TIMEOUT_MS="${API_TIMEOUT_MS:-3600000}"
+    # The reply cap, common for the same reason: harnesses.py sends this exact number as max_tokens
+    # to the mini-SWE, OpenHands and Optimas clients, so one arm cannot answer at a longer length
+    # than another because of which harness ran it.
+    export CLAUDE_CODE_MAX_OUTPUT_TOKENS="${CLAUDE_CODE_MAX_OUTPUT_TOKENS:-32768}"
     export OPTARENA_AGENT_API_URL="${JUDGE_BASE_URL}"
     export AGENT_NODE_RANK="${agent_rank}"
     # agent_driver.py reads its tools, packets and prompts from the payload bound at launch.
@@ -862,7 +863,7 @@ role_mounts() {
 JOB_ENV_FILE="${RUN_DIR}/job.env"
 case "${CONTAINER_RUNTIME}" in
     podman|docker)
-        env | grep -E '^(AGENT|CAMPAIGN_ARM=|CLAUDE|GPUS_|HARNESS=|HPCAGENT|INFERENCE|JUDGE|KERNELS=|LANGUAGE=|LITELLM|OPTARENA|PROBLEMS|RUN_DIR=|RUN_ROOT=|SCRIPT_DIR=|SERPAPI|SLURM_|VLLM|WEBSEARCH)' \
+        env | grep -E '^(AGENT|API_TIMEOUT_MS=|CAMPAIGN_ARM=|CLAUDE|CONTEXT_LENGTH=|GPUS_|HARNESS=|HPCAGENT|INFERENCE|JUDGE|KERNELS=|LANGUAGE=|LITELLM|OPTARENA|PROBLEMS|RUN_DIR=|RUN_ROOT=|SCRIPT_DIR=|SERPAPI|SLURM_|VLLM|WEBSEARCH)' \
             >"${JOB_ENV_FILE}"
         ;;
 esac

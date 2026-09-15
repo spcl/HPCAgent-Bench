@@ -159,16 +159,63 @@ def served_model() -> str:
     return os.environ.get("VLLM_SERVED_MODEL", "").strip() or "optarena-vllm"
 
 
+#: The reply cap the launcher sets for every model and harness (run_cluster.sh). Read here and
+#: PASSED to each runner, so the claude CLI and the three runners send one number as max_tokens and
+#: a harness comparison is not also a comparison of reply lengths.
+DEFAULT_MAX_OUTPUT_TOKENS = 32768
+
+
+def positive_int(raw: str) -> int | None:
+    """``raw`` as a positive int, ``None`` when it is empty or not one."""
+    stripped = raw.strip()
+    if not stripped.lstrip("-").isdigit():
+        return None
+    value = int(stripped)
+    return value if value > 0 else None
+
+
+def max_output_tokens() -> int:
+    """``$CLAUDE_CODE_MAX_OUTPUT_TOKENS``, the launcher's common reply cap."""
+    return positive_int(os.environ.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "")) or DEFAULT_MAX_OUTPUT_TOKENS
+
+
+def context_length() -> int | None:
+    """``$CONTEXT_LENGTH``, the window this model is SERVED with; ``None`` when the arm names none.
+
+    Per model, not common: the engine is started with it (``--context-length`` / ``--max-model-len``)
+    and the .env files carry it next to CLAUDE_AUTOCOMPACT."""
+    return positive_int(os.environ.get("CONTEXT_LENGTH", ""))
+
+
+def reasoning_effort() -> str:
+    """``$AGENT_EFFORT``. EMPTY means this model has no effort ladder and must be sent no field."""
+    return os.environ.get("AGENT_EFFORT", "").strip()
+
+
 def openai_args(context: Context) -> list[str]:
-    """The endpoint, model and usage flags every runner takes."""
-    return [
+    """The endpoint, model, usage and reply-cap flags every runner takes."""
+    args = [
         "--base-url",
         f"{context.replica_root}/v1",
         "--model",
         served_model(),
         "--usage",
         str(context.workdir / USAGE_FILE),
+        "--max-output-tokens",
+        str(max_output_tokens()),
     ]
+    effort = reasoning_effort()
+    if effort:
+        args += ["--reasoning-effort", effort]
+    return args
+
+
+def context_args() -> list[str]:
+    """``--context-length`` for the runners whose client HAS an input-window knob (OpenHands,
+    Optimas). mini-SWE has none: 2.4.6 neither counts the prompt nor condenses it, so its window is
+    whatever the server enforces."""
+    served = context_length()
+    return ["--context-length", str(served)] if served is not None else []
 
 
 def miniswe_command(context: Context) -> list[str]:
@@ -192,6 +239,7 @@ def openhands_command(context: Context) -> list[str]:
         "--prompt",
         str(context.prompt_file),
         *openai_args(context),
+        *context_args(),
         "--mcp-config",
         str(context.mcp_config),
     ]
@@ -218,6 +266,7 @@ def optimas_command(context: Context) -> list[str]:
         "--workdir",
         str(context.workdir),
         *openai_args(context),
+        *context_args(),
         "--timeout-seconds",
         str(remaining_seconds(context.deadline)),
     ]

@@ -195,7 +195,7 @@ for arm in "${arms[@]}"; do
         echo "prepared ${arm} (${nodes} nodes, ${limit}) -- not submitted, SUBMIT=1 submits"
         continue
     fi
-    jid=$(sbatch --parsable --partition=mi300 --mem=0 --nodes="${nodes}" --time="${limit}" \
+    jid=$(sbatch --parsable --no-requeue --partition=mi300 --mem=0 --nodes="${nodes}" --time="${limit}" \
         --job-name="${arm}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${env}" beverin.sbatch)
     echo "submitted ${arm} -> ${jid} (${nodes} nodes, ${limit})"
 done
