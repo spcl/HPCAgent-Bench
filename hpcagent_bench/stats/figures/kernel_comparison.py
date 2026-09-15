@@ -42,7 +42,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from hpcagent_bench import experiment_tags
+from hpcagent_bench import experiment_tags, packets
 from hpcagent_bench.stats import canon, palette, population
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures.per_kernel import speedup_tick_label
@@ -73,6 +73,15 @@ CHROME_IN: float = 1.9
 #: The kernel row labels' own font size -- smaller than :data:`hpcagent_bench.stats.style.LABEL_PT`,
 #: which :func:`row_axis` applies but which a 40-row axis has no vertical room for.
 ROW_LABEL_PT: float = 8.5
+
+#: Where a "no verified answer" mark sits -- the 1x reference line, since that is what a served but
+#: unsolved kernel leaves standing under every scoring policy this repo has (:data:`~hpcagent_bench.stats.population.NOT_DELIVERED`).
+#: HOLLOW, never filled: a real 1.0x speed-up and "nothing to plot here" must not draw as one mark.
+MISSING_MARKER_X: float = 1.0
+
+#: The shared legend entry for a missing-answer mark, neutral ink since it names a STATUS, not one
+#: series' identity -- a coloured entry would read as one more condition or model.
+MISSING_LABEL: str = "No Verified Answer"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -133,8 +142,16 @@ def roster_of(canon_frame: pd.DataFrame) -> list[str]:
 
 
 def condition_label(condition: str) -> str:
-    """Registry display text for a condition tag (``""`` control, ``cpf``, ``cpfsrc``)."""
-    return experiment_tags.names("packets").get(condition, condition or "No Skill Packet")
+    """This figure's display text for a condition tag (``""`` control, ``cpf``, ``cpfsrc``).
+
+    The control reads "No Packet", never the registry's "No Skill Packet": this figure's treatments
+    (CPF page, CPF as source) are not skills, and borrowing the skills experiments' wording for the
+    control names the wrong thing (:func:`hpcagent_bench.packets.control_label`, gated on the
+    treatment set rather than hardcoded here or in the registry).
+    """
+    if condition == "":
+        return packets.control_label(CONDITION_ORDER[1:])
+    return experiment_tags.names("packets").get(condition, condition)
 
 
 def build_panels(
@@ -199,13 +216,20 @@ def value_ticks(values: Iterable[float]) -> list[float]:
     return [2.0**exp for exp in range(low_exp, high_exp + 1)]
 
 
-def style_speedup_x_axis(ax: matplotlib.axes.Axes, values: Iterable[float]) -> None:
+def style_speedup_x_axis(ax: matplotlib.axes.Axes, ticks: Sequence[float]) -> None:
     """The log2 ratio axis and 1x reference line, same reading as :mod:`hpcagent_bench.stats.figures.per_kernel`,
-    rotated onto X because the row axis here carries the kernel, not the value."""
+    rotated onto X because the row axis here carries the kernel, not the value.
+
+    ``ticks`` is computed ONCE for the whole figure (:func:`figure`) and passed to every panel,
+    with the SAME explicit ``xlim`` set from it: a position then means the same ratio in every
+    panel, where each panel picking its own from its own data let one model's wider spread (Kimi
+    reaching 128x) autoscale past where the others stopped, so 8x sat at a different x in every
+    panel of one figure.
+    """
     ax.set_xscale("log", base=2)
-    ticks = value_ticks(values)
     ax.set_xticks(ticks)
     ax.set_xticklabels([speedup_tick_label(tick) for tick in ticks], fontsize=plotstyle.TICK_PT * 0.55, rotation=90)
+    ax.set_xlim(ticks[0] / 1.3, ticks[-1] * 1.3)
     ax.axvline(1.0, color=plotstyle.REFERENCE, linewidth=0.9, zorder=1)
 
 
@@ -214,12 +238,17 @@ def draw_panel(
     kernels: Sequence[str],
     canon_mark: Series | None,
     arms: Sequence[Series],
+    ticks: Sequence[float],
     label_rows: bool,
 ) -> None:
-    """One model's panel: the optional reference mark plus its arms, dodged apart within each row."""
+    """One model's panel: the optional reference mark plus its arms, dodged apart within each row.
+
+    A kernel a series has no value for still draws: a HOLLOW mark in that series' own colour and
+    shape, at the 1x line (:data:`MISSING_MARKER_X`) -- present and legible rather than a gap a
+    reader has to notice on their own, and hollow so it is never mistaken for a genuine 1.0x answer.
+    """
     series_list = (*((canon_mark,) if canon_mark is not None else ()), *arms)
-    all_values = [v for series in series_list for v in series.values.values()]
-    style_speedup_x_axis(ax, all_values)
+    style_speedup_x_axis(ax, ticks)
     plotstyle.row_axis(ax, kernels)
     if label_rows:
         ax.tick_params(axis="y", labelsize=ROW_LABEL_PT)
@@ -229,10 +258,13 @@ def draw_panel(
     offsets = np.linspace(-0.3, 0.3, n) if n > 1 else np.array([0.0])
     y_of = {kernel: i for i, kernel in enumerate(kernels)}
     for offset, series in zip(offsets, series_list, strict=True):
-        for kernel, value in series.values.items():
-            if kernel not in y_of or not math.isfinite(value) or value <= 0.0:
-                continue
-            plotstyle.point_mark(ax, value, y_of[kernel] + offset, series.color, series.marker, filled=True, size=26.0)
+        for kernel in kernels:
+            y = y_of[kernel] + offset
+            value = series.values.get(kernel)
+            if value is None or not math.isfinite(value) or value <= 0.0:
+                plotstyle.point_mark(ax, MISSING_MARKER_X, y, series.color, series.marker, filled=False, size=26.0)
+            else:
+                plotstyle.point_mark(ax, value, y, series.color, series.marker, filled=True, size=26.0)
 
 
 def legend_handles(canon_mark: Series | None, panels: dict[str, list[Series]]) -> list[matplotlib.artist.Artist]:
@@ -271,6 +303,18 @@ def legend_handles(canon_mark: Series | None, panels: dict[str, list[Series]]) -
                 label=experiment_tags.model_name(model),
             )
         )
+    handles.append(
+        matplotlib.lines.Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="none",
+            markerfacecolor="none",
+            markeredgecolor=plotstyle.MUTED,
+            markersize=8,
+            label=MISSING_LABEL,
+        )
+    )
     return handles
 
 
@@ -294,12 +338,17 @@ def figure(
         raise ValueError("no model has a panel to draw (every candidate arm was incomplete)")
     plotstyle.apply()
     n_panels = len(panels)
+    # ONE tick set for every panel (see style_speedup_x_axis): the union of every drawn value,
+    # canon included, across every panel -- never one panel's own values, or a position would not
+    # mean the same ratio next door.
+    all_series = (*((canon_mark,) if canon_mark is not None else ()), *(s for arms in panels.values() for s in arms))
+    ticks = value_ticks(v for series in all_series for v in series.values.values())
     fig, axes = plt.subplots(
         1, n_panels, sharey=True, figsize=figure_size(n_panels, len(kernels), double_column), squeeze=False
     )
     for index, (model, arms) in enumerate(panels.items()):
         ax = axes[0][index]
-        draw_panel(ax, kernels, canon_mark, arms, label_rows=index == 0)
+        draw_panel(ax, kernels, canon_mark, arms, ticks, label_rows=index == 0)
         ax.set_title(experiment_tags.model_name(model), fontsize=plotstyle.LABEL_PT * 0.85, color=plotstyle.INK)
     # Top/bottom margins in INCHES, not a fixed fraction: the rotated x ticks and the legend below
     # need roughly the same number of inches at any row count, and a fixed fraction of a figure
@@ -313,43 +362,51 @@ def figure(
     return fig
 
 
+#: ``table_rows``' ``status`` column: whether a row carries a real speed-up or names a kernel the
+#: series covers (roster-complete) but never verified.
+STATUS_VERIFIED: str = "verified"
+STATUS_MISSING: str = "no_verified_answer"
+
 #: Documents the per-kernel value rule directly on the written table, since the table is read apart
 #: from this module's docstring.
 TABLE_NOTE: str = (
     "# speedup: the canon row (if any) is a deterministic column's median_ms ratio; every arm row is "
-    "population.kernel_answers' best verified final answer. A kernel with no verified answer has no row."
+    "population.kernel_answers' best verified final answer. status=no_verified_answer: the series "
+    "covers this roster kernel but never verified an answer for it; speedup is blank."
 )
 
 
-def table_rows(panels: dict[str, list[Series]], canon_mark: Series | None) -> pd.DataFrame:
-    """One row per (series, kernel) the series has a value for -- the data behind every mark."""
+def series_rows(kind: str, model: str, series: Series, kernels: Sequence[str]) -> list[dict[str, object]]:
+    """One ``series``' rows over ``kernels``: a real speed-up where it has one, a blank
+    ``no_verified_answer`` row otherwise -- so a missing kernel is a readable fact in the table, not
+    a silently absent one."""
+    rows: list[dict[str, object]] = []
+    for kernel in kernels:
+        value = series.values.get(kernel)
+        verified = value is not None and math.isfinite(value) and value > 0.0
+        rows.append(
+            {
+                "kernel": kernel,
+                "series": series.key,
+                "kind": kind,
+                "model": model,
+                "condition": series.condition,
+                "speedup": value if verified else "",
+                "status": STATUS_VERIFIED if verified else STATUS_MISSING,
+            }
+        )
+    return rows
+
+
+def table_rows(panels: dict[str, list[Series]], canon_mark: Series | None, kernels: Sequence[str]) -> pd.DataFrame:
+    """One row per (series, roster kernel): a real speed-up, or a ``no_verified_answer`` row."""
     rows: list[dict[str, object]] = []
     if canon_mark is not None:
-        for kernel, value in canon_mark.values.items():
-            rows.append(
-                {
-                    "kernel": kernel,
-                    "series": canon_mark.key,
-                    "kind": "canon",
-                    "model": "",
-                    "condition": "",
-                    "speedup": value,
-                }
-            )
+        rows += series_rows("canon", "", canon_mark, kernels)
     for model, arms in panels.items():
         for series in arms:
-            for kernel, value in series.values.items():
-                rows.append(
-                    {
-                        "kernel": kernel,
-                        "series": series.key,
-                        "kind": "arm",
-                        "model": model,
-                        "condition": series.condition,
-                        "speedup": value,
-                    }
-                )
-    return pd.DataFrame(rows, columns=["kernel", "series", "kind", "model", "condition", "speedup"])
+            rows += series_rows("arm", model, series, kernels)
+    return pd.DataFrame(rows, columns=["kernel", "series", "kind", "model", "condition", "speedup", "status"])
 
 
 def save(fig: matplotlib.figure.Figure, out: pathlib.Path) -> pathlib.Path:

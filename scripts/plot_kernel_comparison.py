@@ -76,7 +76,7 @@ def run(
     fig = kernel_comparison.figure(panels, canon_mark, kernels, double_column, label or DEFAULT_TITLE)
     stem = kernel_comparison.save(fig, out)
 
-    frame = kernel_comparison.table_rows(panels, canon_mark)
+    frame = kernel_comparison.table_rows(panels, canon_mark, kernels)
     table.parent.mkdir(parents=True, exist_ok=True)
     with table.open("w", newline="") as handle:
         handle.write(kernel_comparison.TABLE_NOTE + "\n")

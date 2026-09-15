@@ -123,7 +123,7 @@ models:
 packets:
   "": No Skill Packet
   cpfsrc:
-    name: Canonical Parallel Form
+    name: Canonical Parallel Form as Source
     env:
       CPF_DROPIN_DIR: "${CPF_VIEW}"
   cpf:

@@ -153,10 +153,11 @@ def test_an_arms_condition_series_carries_the_packet_colour_the_arm_summary_figu
     assert colours[""] == "#4d4d4d"
 
 
-def test_a_kernel_with_no_verified_answer_has_no_row_rather_than_a_stand_in_value() -> None:
-    """The figure follows the framework's own scoring policy, never inventing a served-but-unsolved
-    value: an arm complete on the roster (a row exists) but with a negative/unusable speed-up on one
-    kernel simply has no mark there."""
+def test_a_kernel_with_no_verified_answer_is_absent_from_a_series_own_values() -> None:
+    """``Series.values`` (what a mark is drawn from) follows the framework's own scoring policy,
+    never inventing a served-but-unsolved value: an arm complete on the roster (a row exists) but
+    with a negative/unusable speed-up on one kernel simply has no value there. The kernel still
+    reaches the table and the figure as a missing mark -- see the ``table_rows`` tests below."""
     rows = submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0})
     rows.append(
         {
@@ -182,14 +183,80 @@ def test_a_kernel_with_no_verified_answer_has_no_row_rather_than_a_stand_in_valu
     assert dropped == {}
 
 
-def test_table_rows_carries_one_row_per_series_and_kernel_with_a_value() -> None:
-    frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0})])
+def test_table_rows_carries_one_row_per_series_per_roster_kernel_not_only_the_verified_ones() -> None:
+    """Every roster kernel gets a row for every series, verified or not: a missing answer is a
+    readable fact in the table (``status=no_verified_answer``, blank ``speedup``), never a silently
+    absent row."""
+    frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0})])
     canon = canon_frame([("numba", "k1", 100.0, "True"), ("dace_cpu_canonicalize", "k1", 50.0, "True")])
-    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER, canon_frame=canon)
-    table = kernel_comparison.table_rows(panels, canon_mark)
-    assert set(table.columns) == {"kernel", "series", "kind", "model", "condition", "speedup"}
-    assert (table.kind == "canon").sum() == 1
-    assert (table.kind == "arm").sum() == 3
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(
+        frame, ROSTER, canon_frame=canon, include_incomplete=True
+    )
+    table = kernel_comparison.table_rows(panels, canon_mark, ROSTER)
+
+    assert set(table.columns) == {"kernel", "series", "kind", "model", "condition", "speedup", "status"}
+    assert (table.kind == "canon").sum() == len(ROSTER)  # every roster kernel, canon solved 1 of 3
+    assert (table.kind == "arm").sum() == len(ROSTER)  # every roster kernel, the arm solved 2 of 3
+
+    canon_k3 = table[(table.kind == "canon") & (table.kernel == "k3")].iloc[0]
+    assert canon_k3.status == kernel_comparison.STATUS_MISSING
+    assert canon_k3.speedup == ""
+
+    arm_k3 = table[(table.kind == "arm") & (table.kernel == "k3")].iloc[0]
+    assert arm_k3.status == kernel_comparison.STATUS_MISSING
+    assert arm_k3.speedup == ""
+
+    arm_k1 = table[(table.kind == "arm") & (table.kernel == "k1")].iloc[0]
+    assert arm_k1.status == kernel_comparison.STATUS_VERIFIED
+    assert arm_k1.speedup == 2.0
+
+
+def test_the_control_condition_reads_no_packet_not_the_registry_skill_wording() -> None:
+    """This figure's treatments (CPF page, CPF as source) are not skills, so its control must not
+    borrow the skills experiments' "No Skill Packet" wording -- see
+    ``hpcagent_bench.packets.control_label``."""
+    assert kernel_comparison.condition_label("") == "No Packet"
+
+
+def test_cpfsrc_reads_as_source_and_cpf_reads_as_the_page() -> None:
+    """The two treatments the paper contrasts must read as two different THINGS, not two
+    abbreviations of the same phrase."""
+    assert kernel_comparison.condition_label("cpfsrc") == "Canonical Parallel Form as Source"
+    assert kernel_comparison.condition_label("cpf") == "Canonical Parallel Form Page"
+
+
+def test_missing_answer_legend_entry_is_present() -> None:
+    frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0})])
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER)
+    labels = [handle.get_label() for handle in kernel_comparison.legend_handles(canon_mark, panels)]
+    assert kernel_comparison.MISSING_LABEL in labels
+
+
+def test_every_panel_shares_the_same_x_axis_ticks() -> None:
+    """One model reaching 128x must not stretch its own panel's ticks past its neighbours': a
+    position has to mean the same ratio in every panel, or the panels are not comparable by eye."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    frame = observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
+            *submission_rows("cpf-llr-focus40-oss120b-c", {"k1": 120.0, "k2": 120.0, "k3": 120.0}),
+        ]
+    )
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER)
+    fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
+    try:
+        axes = fig.axes
+        assert len(axes) >= 2
+        first_ticks, first_lim = list(axes[0].get_xticks()), axes[0].get_xlim()
+        for ax in axes[1:]:
+            assert list(ax.get_xticks()) == first_ticks
+            assert ax.get_xlim() == first_lim
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
 
 
 def test_roster_of_reads_every_kernel_the_canon_frame_names() -> None:

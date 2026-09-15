@@ -27,7 +27,7 @@ import os
 import pathlib
 import re
 import zlib
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 
 from hpcagent_bench import experiment_tags as tags
@@ -253,6 +253,29 @@ def has_part(spec: str, part: str) -> bool:
 def label(spec: str) -> str:
     """Display text for ``spec``: a registered key's name, or its parts' names joined `` + ``."""
     return tags.packet_name("+".join(spec_parts(spec)))
+
+
+#: Treatment packets that ARE skill pages. A comparison whose every treatment falls in here reads
+#: its control under the registry's own "" wording ("No Skill Packet"); everything else -- CPF, a
+#: profiling packet, a perf playbook -- is not a skill, and that wording would name what the
+#: treatment is NOT. ``"skills"`` (not a registered key) is the bare word
+#: ``scripts/plot_score_change.py``'s own ``--treatment`` default uses for ``lang-skills``.
+SKILL_TREATMENTS: frozenset[str] = frozenset({"skills", "lang-skills"})
+
+
+def control_label(treatments: Iterable[str]) -> str:
+    """The control's display text for a comparison over ``treatments`` (each a packet spec): the
+    registry's "No Skill Packet" wording ONLY when every treatment is itself a skill packet, "No
+    Packet" otherwise.
+
+    Hardcoding "No Skill Packet" as the control's word in a figure comparing CPF page against CPF
+    as source named the control as if the treatment under test were a skill, which it is not --
+    this is the one place that decision is made, so a figure never invents its own wording for it.
+    """
+    resolved = [spec_parts(t) for t in treatments]
+    if resolved and all(parts and set(parts) <= SKILL_TREATMENTS for parts in resolved):
+        return label("")
+    return "No Packet"
 
 
 def lighten(hex_color: str, steps: int) -> str:
