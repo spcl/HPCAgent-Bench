@@ -528,6 +528,38 @@ def test_token_panel_draws_no_canon_series() -> None:
         plt.close(fig)
 
 
+def test_a_kernel_with_no_token_total_draws_no_mark_on_the_token_panel() -> None:
+    """A missing token total is no measurement (R7); a hollow mark at the axis edge would read as the
+    smallest spend on the panel. The speed-up panel still marks a kernel with no answer."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib.collections import PathCollection
+
+    frame = observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
+            *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0}),
+        ]
+    )
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER)
+    fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
+    try:
+        token_ax = fig.axes[len(panels)]
+        rows = {
+            round(float(y), 6)
+            for collection in token_ax.collections
+            if isinstance(collection, PathCollection)
+            for _x, y in collection.get_offsets()
+        }
+        assert rows.isdisjoint({1.0, 2.0}), rows
+        assert 0.0 in rows, rows
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+
+
 def test_an_incomplete_arm_appears_in_neither_the_speedup_nor_the_token_panel() -> None:
     """An arm dropped for incomplete roster coverage must not leak into the token panel either --
     completeness is decided once, before either metric is read."""

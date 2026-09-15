@@ -302,8 +302,10 @@ def token_axis_limits(values: Iterable[float]) -> tuple[float, float]:
     finite = [v for v in values if math.isfinite(v) and v > 0]
     if not finite:
         return 1.0, 10.0
-    low, high = min(finite), max(finite)
-    return 10.0 ** math.floor(math.log10(low)), 10.0 ** math.ceil(math.log10(high))
+    low = 10.0 ** math.floor(math.log10(min(finite)))
+    high = 10.0 ** math.ceil(math.log10(max(finite)))
+    # every value an exact power of ten: floor == ceil would give a zero-width axis
+    return low, high if high > low else low * 10.0
 
 
 def summary_speedup(values: Iterable[float]) -> float:
@@ -407,13 +409,15 @@ def draw_panel(
     summary_label: str,
     label_rows: bool,
     range_of: Callable[[Series], tuple[dict[str, float], dict[str, float]]] | None = None,
+    mark_missing: bool = True,
 ) -> None:
     """One panel, for ONE metric (:func:`value_of` reads it off each series): the kernel rows,
     dodged apart within each row, plus the summary row below them (:func:`draw_summary_row`).
 
-    A kernel a series has no value for still draws: a HOLLOW mark in that series' own colour and
-    shape, at ``missing_x`` -- present and legible rather than a gap a reader has to notice on their
-    own, and hollow so it is never mistaken for a genuine value.
+    With ``mark_missing``, a kernel a series has no value for still draws: a HOLLOW mark in that
+    series' own colour and shape, at ``missing_x`` -- for a speed-up, where "no verified answer" is an
+    outcome with a natural place (1x). Without it the kernel draws nothing: a missing token total is
+    no measurement (spec R7), and a mark at the axis edge would read as a small spend.
 
     ``range_of``, when given, reads a (minimum, maximum) pair per series off ``--repeats median``'s
     token spread (R5) and draws it as a thin whisker behind the mark -- absent under ``--repeats
@@ -436,7 +440,8 @@ def draw_panel(
             y = y_of[kernel] + offset
             value = values.get(kernel)
             if value is None or not math.isfinite(value) or value <= 0.0:
-                plotstyle.point_mark(ax, missing_x, y, series.color, series.marker, filled=False, size=26.0)
+                if mark_missing:
+                    plotstyle.point_mark(ax, missing_x, y, series.color, series.marker, filled=False, size=26.0)
                 continue
             low, high = low_of.get(kernel), high_of.get(kernel)
             if low is not None and high is not None and math.isfinite(low) and math.isfinite(high) and low < high:
@@ -587,6 +592,7 @@ def figure(
             "Median",
             index == 0,
             range_of=lambda s: (s.tokens_min, s.tokens_max),
+            mark_missing=False,
         )
         if index == 0:
             # ONE label per panel ROW, on the leftmost column only: an axes ylabel per model column
