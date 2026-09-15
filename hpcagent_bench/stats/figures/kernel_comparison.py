@@ -16,8 +16,8 @@ Each panel carries a SUMMARY ROW below the kernel rows, past a dashed separator
 kernels are ROWS here and COLUMNS there. Speed-up's summary is the GEOMETRIC MEAN
 (:func:`summary_speedup`) -- the project-wide rule for an overall speed-up, never a median; tokens'
 summary is the MEDIAN (:func:`summary_tokens`), since tokens are not a ratio. Both are named by an
-annotation past the panel's right edge, never a y-axis tick label: every panel here shares its y
-axis (``sharey=True``), and a per-panel tick label would silently lose whichever panel drew first --
+annotation inside the panel's own right edge, never a y-axis tick label: every panel here shares its
+y axis (``sharey=True``), and a per-panel tick label would silently lose whichever panel drew first --
 the same trap :func:`per_kernel.draw_summary_column` documents for a shared X axis.
 
 NO EFFICACY, PARETO OR COST-VS-SPEED FRAMING HERE. This figure reports what each arm cost and what
@@ -83,7 +83,6 @@ CANON_MARKER: str = "D"
 #: LABEL_PT (16pt), which 40 rows in a compact panel has no room for.
 PANEL_WIDTH_IN: float = 1.85
 ROW_HEIGHT_IN: float = 0.27
-CHROME_IN: float = 3.2
 
 #: The kernel row labels' own font size -- smaller than :data:`hpcagent_bench.stats.style.LABEL_PT`,
 #: which :func:`row_axis` applies but which a 40-row axis has no vertical room for.
@@ -314,10 +313,13 @@ def style_speedup_x_axis(ax: matplotlib.axes.Axes, ticks: Sequence[float]) -> No
 def style_token_x_axis(ax: matplotlib.axes.Axes, limits: tuple[float, float]) -> None:
     """The log10 token axis, shared ``limits`` across every panel -- same discipline as
     :func:`style_speedup_x_axis`, base 10 since a token count is a magnitude, not a power-of-two
-    ratio."""
+    ratio. Rotated majors at the same size as the speed-up panel's: a token axis spanning several
+    decades gets a major every 1/2/5 within each (:func:`plotstyle.value_axis`), too many to stay
+    horizontal at this panel's width without overlapping."""
     ax.set_xscale("log")
     ax.set_xlim(*limits)
     plotstyle.value_axis(ax, "x", log_base=10.0)
+    ax.tick_params(axis="x", labelsize=plotstyle.TICK_PT * 0.55, rotation=90)
 
 
 def summary_row_position(n_kernels: int) -> tuple[float, float]:
@@ -338,7 +340,9 @@ def draw_summary_row(
     label: str,
 ) -> None:
     """The dashed separator and one dodged mark per series at ``summary_y``, plus a small annotation
-    past the panel's right edge naming the statistic (see the module docstring for why this is an
+    naming the statistic -- INSIDE the panel's own right edge, never past it: with several model
+    panels side by side and only a narrow gap between them, an annotation that crossed the edge fell
+    under the next panel's opaque background (see the module docstring for why this is an
     annotation and never a y-axis tick label)."""
     ax.axhline(separator_y, color=plotstyle.RULE, linestyle=(0, (3, 3)), linewidth=1.0, zorder=1)
     n = len(series_list)
@@ -349,11 +353,11 @@ def draw_summary_row(
             plotstyle.point_mark(ax, point, summary_y + offset, series.color, series.marker, filled=True, size=30.0)
     ax.annotate(
         label,
-        xy=(1.01, summary_y),
+        xy=(0.985, summary_y),
         xycoords=("axes fraction", "data"),
-        xytext=(2, 0),
+        xytext=(0, 0),
         textcoords="offset points",
-        ha="left",
+        ha="right",
         va="center",
         fontsize=plotstyle.TICK_PT * 0.5,
         color=plotstyle.MUTED,
@@ -454,12 +458,29 @@ def legend_handles(
     return handles
 
 
+#: One panel's data span, in kernel rows: the roster plus the summary row's own air
+#: (:data:`SUMMARY_ROW_GAP`, twice) and the half-row margin :func:`~hpcagent_bench.stats.style.row_axis`
+#: leaves top and bottom.
+def panel_rows(n_rows: int) -> float:
+    return n_rows + 2.0 * SUMMARY_ROW_GAP + 0.6
+
+
+#: Inches of air between the two panel rows -- room for the speed-up panel's own rotated X tick
+#: labels, which sit between it and the token panel below (:func:`figure` turns this into a
+#: `hspace` FRACTION of one panel's height, since that is what `subplots_adjust` takes).
+ROW_GAP_IN: float = 0.85
+
+#: Inches reserved above the top panel row (the figure title, clear of the model-name titles) and
+#: below the bottom one (its own rotated X tick labels, plus the legend).
+TOP_MARGIN_IN: float = 1.15
+BOTTOM_MARGIN_IN: float = 1.6
+
+
 def figure_size(n_panels: int, n_rows: int, double_column: bool) -> tuple[float, float]:
     """A compact double-column insert (fixed width) or a standalone report (one width slot per
-    panel). Height stacks TWO panel rows (speed-up over tokens), each tall enough for the kernel
-    rows plus the summary row's own air (:data:`SUMMARY_ROW_GAP`, twice)."""
-    panel_h = (n_rows + 2.0 * SUMMARY_ROW_GAP + 1.0) * ROW_HEIGHT_IN
-    height = 2.0 * panel_h + CHROME_IN
+    panel). Height stacks TWO panel rows (speed-up over tokens) plus the gap between them."""
+    panel_h = panel_rows(n_rows) * ROW_HEIGHT_IN
+    height = 2.0 * panel_h + ROW_GAP_IN + TOP_MARGIN_IN + BOTTOM_MARGIN_IN
     if double_column:
         return plotstyle.DOUBLE_COLUMN_WIDTH, height
     return max(plotstyle.DOUBLE_COLUMN_WIDTH, PANEL_WIDTH_IN * n_panels + 1.2), height
@@ -511,14 +532,23 @@ def figure(
         speedup_ax.set_title(experiment_tags.model_name(model), fontsize=plotstyle.LABEL_PT * 0.85, color=plotstyle.INK)
         style_token_x_axis(token_ax, token_limits)
         draw_panel(token_ax, kernels, arms, lambda s: s.tokens, token_limits[0], summary_tokens, "Median", index == 0)
+        if index == 0:
+            # ONE label per panel ROW, on the leftmost column only: an axes ylabel per model column
+            # would repeat it, and the figure title only names the whole figure -- neither says
+            # which row is which metric.
+            speedup_ax.set_ylabel(
+                "Speed-Up vs Numba", fontsize=plotstyle.LABEL_PT * 0.7, color=plotstyle.MUTED, labelpad=26
+            )
+            token_ax.set_ylabel("Tokens Spent", fontsize=plotstyle.LABEL_PT * 0.7, color=plotstyle.MUTED, labelpad=26)
 
     height = figure_size(n_panels, len(kernels), double_column)[1]
+    panel_h = panel_rows(len(kernels)) * ROW_HEIGHT_IN
     fig.subplots_adjust(
-        left=0.22 / max(n_panels, 1) + 0.02,
-        right=0.90,
-        top=1.0 - 1.1 / height,
-        bottom=1.1 / height,
-        hspace=0.55,
+        left=0.30 / max(n_panels, 1) + 0.03,
+        right=0.98,
+        top=1.0 - TOP_MARGIN_IN / height,
+        bottom=BOTTOM_MARGIN_IN / height,
+        hspace=ROW_GAP_IN / panel_h,
         wspace=0.10,
     )
     plotstyle.legend_below(
