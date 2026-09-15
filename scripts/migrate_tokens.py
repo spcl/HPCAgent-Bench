@@ -33,7 +33,7 @@ import retokenize
 FOLD_KEY = "token_fold"
 
 #: The fold this script writes.
-FOLD = 2
+TOKEN_FOLD = agent_driver.TOKEN_FOLD
 
 #: Where a record keeps what it said before this ran. Only the fields whose value actually MOVED go
 #: in, so an untouched record gains nothing and a re-run of an already-migrated tree is a no-op.
@@ -102,13 +102,13 @@ def migrated(record: dict[str, object], worker_dir: pathlib.Path, counter: objec
     if not fields:
         return None
     before = changed_fields(record, fields)
-    if not before and record.get(FOLD_KEY) == FOLD:
+    if not before and record.get(FOLD_KEY) == TOKEN_FOLD:
         return None
     fresh: dict[str, object] = {
         key: value for key, value in record.items() if key != BEFORE_KEY and key not in FOLD_FIELDS
     }
     fresh.update(fields)
-    fresh[FOLD_KEY] = FOLD
+    fresh[FOLD_KEY] = TOKEN_FOLD
     # Only the fields that MOVED, and only the previous migration's if this one changes nothing --
     # a record that is rewritten twice must still name the fold-1 numbers it started from.
     kept = record.get(BEFORE_KEY) if isinstance(record.get(BEFORE_KEY), dict) else None
