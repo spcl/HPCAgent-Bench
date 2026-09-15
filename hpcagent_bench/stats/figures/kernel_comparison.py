@@ -154,6 +154,17 @@ def condition_label(condition: str) -> str:
     return experiment_tags.names("packets").get(condition, condition)
 
 
+def rank_condition(condition: str, order: Sequence[str] = CONDITION_ORDER) -> tuple[int, str]:
+    """``order``'s conditions first, in their declared order, then anything else alphabetically.
+
+    A condition axis need not be a skill packet: git-scicomp's arm names carry ``kernel``/``repo``,
+    neither of which is in :data:`CONDITION_ORDER`. ``CONDITION_ORDER.index`` would raise on those;
+    this is the same "known order first, unregistered last" tiebreak :func:`palette.in_order` and
+    :mod:`scripts.plot_arm_summary`'s ``condition_order`` already use for model and packet axes.
+    """
+    return (order.index(condition), "") if condition in order else (len(order), condition)
+
+
 def build_panels(
     observations: pd.DataFrame,
     roster: Sequence[str],
@@ -162,6 +173,7 @@ def build_panels(
     canon_column: str = CANON_COLUMN,
     canon_baseline: str = CANON_BASELINE,
     include_incomplete: bool = False,
+    condition_order: Sequence[str] = CONDITION_ORDER,
 ) -> tuple[dict[str, list[Series]], Series | None, dict[str, int]]:
     """model -> its arm series (condition order), the deterministic reference series shared by
     every panel (``None`` when the caller has no such column -- llr-focus40-cpf's DaCe canon,
@@ -200,7 +212,7 @@ def build_panels(
         )
         by_model.setdefault(model, []).append(series)
     for model, series_list in by_model.items():
-        series_list.sort(key=lambda series: CONDITION_ORDER.index(series.condition))
+        series_list.sort(key=lambda series: rank_condition(series.condition, condition_order))
     ordered = [model for model in palette.in_order(by_model.keys(), "models") if model in by_model]
     panels = {model: by_model[model] for model in ordered}
     return panels, canon_mark, dropped
@@ -267,12 +279,15 @@ def draw_panel(
                 plotstyle.point_mark(ax, value, y, series.color, series.marker, filled=True, size=26.0)
 
 
-def legend_handles(canon_mark: Series | None, panels: dict[str, list[Series]]) -> list[matplotlib.artist.Artist]:
+def legend_handles(
+    canon_mark: Series | None, panels: dict[str, list[Series]], condition_order: Sequence[str] = CONDITION_ORDER
+) -> list[matplotlib.artist.Artist]:
     """One legend for the whole figure: the optional reference mark, each condition present
     (colour), each model present (shape) -- the same two channels :mod:`scripts.plot_arm_summary`
     draws with."""
     conditions = sorted(
-        {series.condition for series_list in panels.values() for series in series_list}, key=CONDITION_ORDER.index
+        {series.condition for series_list in panels.values() for series in series_list},
+        key=lambda condition: rank_condition(condition, condition_order),
     )
     models = list(panels.keys())
     handles: list[matplotlib.artist.Artist] = []
@@ -332,6 +347,7 @@ def figure(
     kernels: Sequence[str],
     double_column: bool,
     title: str,
+    condition_order: Sequence[str] = CONDITION_ORDER,
 ) -> matplotlib.figure.Figure:
     """The whole small-multiples figure: one panel per model, sharing the kernel row axis."""
     if not panels:
@@ -357,7 +373,9 @@ def figure(
     fig.subplots_adjust(
         left=0.22 / max(n_panels, 1) + 0.02, right=0.99, top=1.0 - 1.0 / height, bottom=1.1 / height, wspace=0.08
     )
-    plotstyle.legend_below(fig, legend_handles(canon_mark, panels), y=0.01, fontsize=plotstyle.TICK_PT * 0.75)
+    plotstyle.legend_below(
+        fig, legend_handles(canon_mark, panels, condition_order), y=0.01, fontsize=plotstyle.TICK_PT * 0.75
+    )
     plotstyle.title(fig, title)
     return fig
 

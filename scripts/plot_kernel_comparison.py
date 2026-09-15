@@ -47,6 +47,7 @@ def run(
     label: str,
     out: pathlib.Path,
     table: pathlib.Path,
+    condition_order: tuple[str, ...] = kernel_comparison.CONDITION_ORDER,
 ) -> int:
     observations = read_observations(observations_path)
     canon_frame = read_table(canon_db, "canon") if canon_db is not None else None
@@ -65,6 +66,7 @@ def run(
         canon_column,
         canon_baseline,
         include_incomplete,
+        condition_order,
     )
     for arm in sorted(dropped):
         print(f"dropped {arm}: {dropped[arm]}/{len(roster)} roster kernels", file=sys.stderr)
@@ -73,7 +75,7 @@ def run(
         return 1
 
     kernels = sorted(roster)
-    fig = kernel_comparison.figure(panels, canon_mark, kernels, double_column, label or DEFAULT_TITLE)
+    fig = kernel_comparison.figure(panels, canon_mark, kernels, double_column, label or DEFAULT_TITLE, condition_order)
     stem = kernel_comparison.save(fig, out)
 
     frame = kernel_comparison.table_rows(panels, canon_mark, kernels)
@@ -102,6 +104,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--arm-pattern", default=kernel_comparison.ARM_PATTERN.pattern, help="regex with named groups model, condition"
     )
+    ap.add_argument(
+        "--condition-order",
+        default=",".join(kernel_comparison.CONDITION_ORDER),
+        help="comma-separated condition tags, control first; a condition --arm-pattern names but this "
+        "omits sorts after them, alphabetically",
+    )
     ap.add_argument("--include-incomplete", action="store_true", help="draw an arm even without full roster coverage")
     ap.add_argument("--double-column", action="store_true", help="compact insert sized from DOUBLE_COLUMN_WIDTH")
     ap.add_argument("--label", default="", help="figure title; defaults to a fixed llr-focus40 title")
@@ -120,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         args.label,
         args.out,
         args.table,
+        tuple(args.condition_order.split(",")),
     )
 
 

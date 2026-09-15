@@ -264,6 +264,40 @@ def test_roster_of_reads_every_kernel_the_canon_frame_names() -> None:
     assert kernel_comparison.roster_of(canon) == ["k1", "k2"]
 
 
+def test_rank_condition_keeps_the_declared_order_for_known_conditions() -> None:
+    order = ("", "cpf", "cpfsrc")
+    ranked = sorted(("cpfsrc", "", "cpf"), key=lambda condition: kernel_comparison.rank_condition(condition, order))
+    assert ranked == ["", "cpf", "cpfsrc"]
+
+
+def test_rank_condition_sorts_an_axis_outside_the_declared_order_alphabetically() -> None:
+    """git-scicomp's arm names carry ``kernel``/``repo``, neither a skill packet; the default
+    CONDITION_ORDER must not raise on them, and unknowns sort after every known condition."""
+    order = ("", "cpf", "cpfsrc")
+    ranked = sorted(("repo", "kernel"), key=lambda condition: kernel_comparison.rank_condition(condition, order))
+    assert ranked == ["kernel", "repo"]
+
+
+def test_build_panels_draws_a_non_packet_condition_axis_from_a_custom_arm_pattern() -> None:
+    """git-scicomp's own use: condition is the arm's kernel/repo suffix, no canon column, and the
+    condition order is passed explicitly rather than left to the packet default."""
+    import re
+
+    pattern = re.compile(r"^git-scicomp-(?P<model>[a-z0-9]+)-(?P<condition>kernel|repo)$")
+    frame = observations(
+        [
+            *submission_rows("git-scicomp-qwen38-kernel", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
+            *submission_rows("git-scicomp-qwen38-repo", {"k1": 3.0, "k2": 3.0, "k3": 3.0}),
+        ]
+    )
+    panels, canon_mark, dropped = kernel_comparison.build_panels(
+        frame, ROSTER, pattern=pattern, condition_order=("kernel", "repo")
+    )
+    assert canon_mark is None
+    assert dropped == {}
+    assert [series.condition for series in panels["qwen38"]] == ["kernel", "repo"]
+
+
 def test_a_rerun_of_the_script_writes_byte_identical_files(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
