@@ -282,7 +282,7 @@ def test_main_refuses_unstamped_submissions_without_regrades_or_allow_unstamped(
         extract,
         "read_db",
         lambda db, focus, arm_prefix, excluded, c_fix_ms: extract.DbResult(
-            observations=[obs(1, 3.0, "")], sources=[], undated_c=0
+            observations=[obs(1, 3.0, "")], sources=[], undated_c=0, harnesses={}, packets={}
         ),
     )
     rc = extract.main(["--runs", "unused", "--benchmarks", str(tmp_path), "--out", str(tmp_path / "out")])
@@ -299,7 +299,11 @@ def test_main_proceeds_past_the_refusal_with_allow_unstamped(tmp_path: pathlib.P
         extract,
         "read_db",
         lambda db, focus, arm_prefix, excluded, c_fix_ms: extract.DbResult(
-            observations=[{**obs(1, 3.0, ""), "run_root": "root", "job": "j1"}], sources=[], undated_c=0
+            observations=[{**obs(1, 3.0, ""), "run_root": "root", "job": "j1"}],
+            sources=[],
+            undated_c=0,
+            harnesses={},
+            packets={},
         ),
     )
     rc = extract.main(
