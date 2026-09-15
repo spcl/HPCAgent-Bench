@@ -695,6 +695,50 @@ def test_a_dropin_binds_a_pinned_config_knob_and_takes_the_abi(
     np.testing.assert_allclose(outs["b"], expected, rtol=1e-12, atol=0.0)
 
 
+#: An impl that rebinds its scalar parameter, the shape of cegterg's emitted ``nvecx = __hpcagent_bench_tuple2 + 0``.
+REBINDING_PROGRAM_SOURCE = """
+import dace as dc
+
+N = dc.symbol("N", dtype=dc.int64, positive=True)
+
+
+@dc.program
+def doubles_its_factor(a: dc.float64[N], b: dc.float64[N], k: dc.float64):
+    k = k * 2.0
+    b[:] = a * k
+"""
+
+
+@pytest.mark.integration
+def test_a_dropin_takes_a_rebound_scalar_parameter_by_value(tmp_path: pathlib.Path) -> None:
+    """Rebinding a parameter is local to the kernel and the native ABI passes the scalar by value, but CPF
+    made every written scalar an out-pointer, so cegterg's drop-in dereferenced the value its caller passed."""
+    spec = BenchSpec(
+        short_name="rebinds",
+        name="rebinds",
+        relative_path="stub/rebinds",
+        module_name="rebinds",
+        func_name="doubles_its_factor",
+        parameters={"S": {"N": EXTENT}},
+        input_args=("N", "k"),
+        array_args=("a", "b"),
+        output_args=("b",),
+    )
+    native = binding_from_spec(spec)
+    canonical = canonical_program(REBINDING_PROGRAM_SOURCE, "doubles_its_factor", tmp_path)
+    assert "k" in canonical.arrays, "the fixture lost its written scalar"
+    form = cpf_bridge.render_canonical(spec, spec.short_name, canonical, "c", "fp64", "cpu", True)
+    assert {arg["name"]: arg["kind"] for arg in json.loads(form.binding)["args"]}["k"] == "scalar"
+
+    source = tmp_path / form.name
+    source.write_text(form.code)
+    library = build_dropin(source, tmp_path)
+    a = np.random.default_rng(0).random(EXTENT)
+    inputs = {"a": a, "b": np.zeros(EXTENT), "N": EXTENT, "k": 1.5}
+    outs = _call_native(library, native, inputs, "c", workspace_bytes="8*N")[0]
+    np.testing.assert_allclose(outs["b"], 3.0 * a, rtol=1e-12, atol=0.0)
+
+
 def test_an_abi_symbol_is_forced_through_a_nested_sdfg_when_no_top_level_tasklet_can_carry_it() -> None:
     """A canonical kernel can keep every live tasklet inside its loop body's nested SDFG, which left the
     drop-in of indirect_gather_3nbr with no host for an unused ABI size and no render at all."""

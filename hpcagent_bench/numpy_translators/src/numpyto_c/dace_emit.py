@@ -3522,9 +3522,70 @@ def spell_aranges_with_named_lengths(fn_ast: ast.FunctionDef, known: Set[str]) -
     ast.fix_missing_locations(fn_ast)
 
 
+def names_rebound(fn_ast: ast.FunctionDef) -> set[str]:
+    """Names stored more than once in the function (an augmented target is a store too): their value depends
+    on the path taken, so an alias reading one is only good up to that store, not past it."""
+    counts: dict[str, int] = {}
+    for node in ast.walk(fn_ast):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            counts[node.id] = counts.get(node.id, 0) + 1
+    return {name for name, count in counts.items() if count > 1}
+
+
+def bind_site(fn_ast: ast.FunctionDef, nm: str, rhs: ast.expr) -> tuple[list[ast.stmt], int] | None:
+    """The statement list holding ``nm``'s one ``nm = rhs`` binding, and its index there."""
+    for block in statement_lists(fn_ast):
+        for idx, stmt in enumerate(block):
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+                and stmt.targets[0].id == nm
+                and stmt.value is rhs
+            ):
+                return block, idx
+    return None
+
+
+def rebind_boundary(block: list[ast.stmt], start: int, sources: set[str]) -> int:
+    """Index of the first statement at ``start`` or later whose subtree stores a name in ``sources``,
+    else ``len(block)``: a nested store counts, same as a store at this list's own level."""
+    for idx in range(start, len(block)):
+        if any(
+            isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id in sources
+            for node in ast.walk(block[idx])
+        ):
+            return idx
+    return len(block)
+
+
+def splice_before_rebind(block: list[ast.stmt], start: int, nm: str, rhs: ast.expr, sources: set[str]) -> None:
+    """Splice ``rhs`` into ``nm``'s uses from ``start`` up to the first later store of a name it
+    reads: those uses run before that store, so they still read the value ``nm`` was bound to. A
+    use before ``start``, at the boundary statement, or past it keeps reading ``nm`` itself -- inside
+    a loop that use is either this iteration's own post-store read or a wrap-around from the one
+    before, and either way the store has already run."""
+    boundary = rebind_boundary(block, start, sources)
+    for idx in range(start, boundary):
+        block[idx] = _SubstituteNames({nm: rhs}).visit(block[idx])
+        ast.fix_missing_locations(block[idx])
+
+
+def name_loaded(fn_ast: ast.AST, nm: str) -> bool:
+    """True iff some read of ``nm`` is still standing in the tree."""
+    return any(
+        isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == nm for node in ast.walk(fn_ast)
+    )
+
+
 def _inline_symbol_aliases(fn_ast: ast.FunctionDef, symbols: Set[str], known: Set[str]) -> ast.FunctionDef:
     """Inline a scalar that is a pure symbolic expression over existing dc.symbols rather than
-    promoting it: a minted second name for one quantity is one dace cannot prove equal."""
+    promoting it: a minted second name for one quantity is one dace cannot prove equal.
+
+    An alias whose expression reads a name rebound later (cegterg's ``nb1 = nbase`` ahead of
+    ``nbase = nend``) is spliced flow-sensitively: only the uses that run before that later store
+    get the expression, and ``nm``'s own binding survives for the uses that run after it.
+    """
     shape_idents = (
         _shape_ident_candidates(fn_ast, known)
         | mintable_int_locals(fn_ast, symbols, known)
@@ -3533,19 +3594,34 @@ def _inline_symbol_aliases(fn_ast: ast.FunctionDef, symbols: Set[str], known: Se
     if not shape_idents:
         return fn_ast
     first_rhs, order, reassigned = _scan_size_assigns(fn_ast, shape_idents)
+    rebound = names_rebound(fn_ast)
     alias: Dict[str, ast.AST] = {}
+    flow_spliced: list[str] = []
     for nm in order:
         if nm in reassigned or names_a_clamp(first_rhs[nm]):
             continue
-        if _is_symbol_expr(first_rhs[nm], symbols | set(alias)):
-            # Folded at every splice, or a deep net nests one layer's extent inside the next until
-            # the expression is hundreds of terms and dace's sympy stops finishing the parse.
-            alias[nm] = fold_expr(_SubstituteNames(alias).visit(copy.deepcopy(first_rhs[nm])))
-    if not alias:
-        return fn_ast
-    fn_ast = _SubstituteNames(alias).visit(fn_ast)
-    fn_ast = _DropAliasAssign(alias).visit(fn_ast)
-    ast.fix_missing_locations(fn_ast)
+        if not _is_symbol_expr(first_rhs[nm], symbols | set(alias)):
+            continue
+        # Folded at every splice, or a deep net nests one layer's extent inside the next until the
+        # expression is hundreds of terms and dace's sympy stops finishing the parse.
+        rhs = fold_expr(_SubstituteNames(alias).visit(copy.deepcopy(first_rhs[nm])))
+        sources = {sub.id for sub in ast.walk(first_rhs[nm]) if isinstance(sub, ast.Name) and sub.id in rebound}
+        if not sources:
+            alias[nm] = rhs
+            continue
+        site = bind_site(fn_ast, nm, first_rhs[nm])
+        if site is not None:
+            block, idx = site
+            splice_before_rebind(block, idx + 1, nm, rhs, sources)
+            flow_spliced.append(nm)
+    if alias:
+        fn_ast = _SubstituteNames(alias).visit(fn_ast)
+        fn_ast = _DropAliasAssign(alias).visit(fn_ast)
+    fully_spliced = {nm for nm in flow_spliced if not name_loaded(fn_ast, nm)}
+    if fully_spliced:
+        fn_ast = _DropAliasAssign(fully_spliced).visit(fn_ast)
+    if alias or fully_spliced:
+        ast.fix_missing_locations(fn_ast)
     return fn_ast
 
 
