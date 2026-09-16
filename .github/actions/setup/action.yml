@@ -11,7 +11,8 @@ description: >
 inputs:
   extras:
     description: >
-      Space-separated pyproject extras this job needs ON TOP of cpu + dace, e.g. "tvm gt4py".
+      Space-separated pyproject extras this job needs ON TOP of cpu (dace is installed from a
+      checkout by this action, not through an extra), e.g. "tvm gt4py".
       A job names what it grades and pays for nothing else. Passing them here rather than adding a
       second install step is not cosmetic: a later `install` cannot revise a version the first one
       already chose, so a job that tops up its own extras can end up with a resolution no single
@@ -175,6 +176,31 @@ runs:
           || { echo "::error::clang++ cannot compile a <cstdint> TU -- its selected GCC install has no libstdc++ headers"; \
                clang++ -v -x c++ -E /dev/null 2>&1 | grep -i 'selected gcc installation' >&2; exit 1; }
 
+    - name: DaCe checkout (tracks the extended branch tip; a CHECKOUT, not a wheel)
+      shell: bash
+      run: |
+        # This used to be pulled in below through the `dace` extra -- a git+https direct
+        # reference that pip resolves into a WHEEL. A wheel ships only what dace's own packaging
+        # declares as package data, and tests/ is not in it, so
+        # hpcagent_bench/metrics/parallelism.py (which imports dace's OWN
+        # tests/corpus/measure_parallelization.py, via dace_root_for_tests() +
+        # import_dace_tests_corpus(), so "what counts as parallel" is never restated here) found no
+        # tests/corpus next to the installed dace, and every tests/test_metrics_parallelism.py case
+        # died on ModuleNotFoundError. A checkout ships tests/ because it IS the source tree.
+        #
+        # DaCe still TRACKS THE extended BRANCH TIP -- only the install mechanism changes, matching
+        # containers/cpu.def and containers/hpcagent_bench.Dockerfile's own git-clone-then-editable
+        # recipe (kept in step with those two; see their comments for the fuller rationale).
+        #
+        # --recurse-submodules is REQUIRED: dace vendors its runtime headers as git submodules
+        # (external/moodycamel/blockingconcurrentqueue.h, included by
+        # dace/runtime/include/dace/stream.h); without them a generated SDFG fails to build with
+        # "blockingconcurrentqueue.h: No such file or directory".
+        set -euo pipefail
+        git clone --depth 1 --recurse-submodules --shallow-submodules --branch extended \
+          https://github.com/spcl/dace "${RUNNER_TEMP}/dace"
+        pip install -e "${RUNNER_TEMP}/dace"
+
     - name: Base Python deps (translators + the frameworks every phase shares)
       shell: bash
       run: |
@@ -205,12 +231,12 @@ runs:
         # requirements/torch-cpu.txt said the same thing by hand, on one job.
         pip_retry --index-url https://download.pytorch.org/whl/cpu torch
 
-        # DaCe TRACKS THE extended BRANCH TIP. The `dace` extra is a direct git reference to the
-        # branch, so every run of this step re-resolves it; nothing here freezes it and nothing
-        # should. The suite grades kernels through dace and the emitters target what extended
-        # supports TODAY (np.where and np.broadcast_to reach the Merge/Broadcast library nodes
-        # there, so the emitter does not desugar them); a frozen dace made the emitter work around
-        # gaps the branch had already closed.
+        # DaCe TRACKS THE extended BRANCH TIP. The step above installed it from a checkout of that
+        # branch, so every run of this job still re-resolves it; nothing here freezes it and
+        # nothing should. The suite grades kernels through dace and the emitters target what
+        # extended supports TODAY (np.where and np.broadcast_to reach the Merge/Broadcast library
+        # nodes there, so the emitter does not desugar them); a frozen dace made the emitter work
+        # around gaps the branch had already closed.
         #
         # The cost is real: tests/test_dace_numeric_agreement.py ratchets NUMERIC_BAD in BOTH
         # directions, so a dace commit landing between two runs is attributed to whichever optarena
@@ -223,7 +249,15 @@ runs:
         # how run 32571640992 came to grade the corpus against a dace a week old and report four
         # symbol-propagation failures that the tip had already fixed -- a whole triage spent on
         # dead bugs. Bisect by installing a dace commit locally, not by teaching CI to freeze.
-        extras="cpu,dace"
+        #
+        # `dace` is deliberately ABSENT from extras here. pyproject's `dace` extra is a direct
+        # git+https reference; asking THIS resolution for it would hand pip a URL that does not
+        # match the checkout's own file:// direct_url, and pip resolves that mismatch by rebuilding
+        # dace from the URL into a WHEEL -- undoing the checkout above and losing tests/corpus
+        # again. Leaving it out is how this step finds dace already satisfied without asking pip
+        # to re-source it, the same way it finds `torch` already satisfied above: by never handing
+        # the resolver a spelling of the requirement that disagrees with what is already installed.
+        extras="cpu"
         for extra in ${{ inputs.extras }}; do
           extras="${extras},${extra}"
         done
@@ -231,13 +265,10 @@ runs:
         pip_retry --group testing -e ".[${extras}]" ${{ inputs.pip-args }}
 
         # Echo the RESOLVED dace commit: a job that grades against dace must say which dace, or a
-        # triage reader has to guess from the run date. A git install records it in direct_url.json.
-        dace_rev=$(python - <<'PYEOF'
-        import importlib.metadata, json
-        info = json.loads(importlib.metadata.distribution("dace").read_text("direct_url.json"))
-        print(info["vcs_info"]["commit_id"])
-        PYEOF
-        )
+        # triage reader has to guess from the run date. An editable install of a local checkout
+        # writes no vcs_info into direct_url.json (that field is only for a git+https install), so
+        # read it from the checkout's own git history instead.
+        dace_rev=$(git -C "${RUNNER_TEMP}/dace" rev-parse HEAD)
         echo "dace @ ${dace_rev}" >> "$GITHUB_STEP_SUMMARY"
 
         # DELIBERATELY no `DACE_compiler_build_mode=native` here. It used to be exported for speed
