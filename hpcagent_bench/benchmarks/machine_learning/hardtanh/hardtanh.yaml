@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: hardtanh
+name: HardTanh Activation
 func_name: hardtanh
 level: 1
 parameters:

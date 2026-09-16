@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: cumprod
+name: Cumulative Product
 func_name: cumprod
 level: 1
 parameters:

@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: relu_self_attention
+name: ReLU Self-Attention
 func_name: relu_self_attention
 level: 3
 parameters:

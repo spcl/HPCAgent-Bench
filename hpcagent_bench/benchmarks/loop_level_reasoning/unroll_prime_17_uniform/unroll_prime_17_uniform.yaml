@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: Adversarial unroll_prime_17_uniform
+name: Uniform Unroll by 17
 level: 1
 parameters:
   S:

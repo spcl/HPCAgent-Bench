@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: gemm_group_norm_hardtanh
+name: GEMM + GroupNorm + HardTanh
 func_name: gemm_group_norm_hardtanh
 level: 2
 parameters:

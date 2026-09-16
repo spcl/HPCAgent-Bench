@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: TSVC move_if_data_dep_nest
+name: Hoist If in Data-Dep Nest
 level: 1
 parameters:
   S:

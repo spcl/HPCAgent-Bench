@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: conv_pointwise_2d
+name: Pointwise Conv2D
 func_name: conv_pointwise_2d
 level: 1
 parameters:

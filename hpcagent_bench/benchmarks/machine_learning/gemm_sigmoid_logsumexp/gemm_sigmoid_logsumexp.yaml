@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: gemm_sigmoid_logsumexp
+name: GEMM + Sigmoid + LogSumExp
 func_name: gemm_sigmoid_logsumexp
 level: 2
 parameters:

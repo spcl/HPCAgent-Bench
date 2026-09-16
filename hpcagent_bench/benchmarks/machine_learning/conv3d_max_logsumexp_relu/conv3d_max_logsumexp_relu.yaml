@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: conv3d_max_logsumexp_relu
+name: Conv3D + Max + LSE + ReLU
 func_name: conv3d_max_logsumexp_relu
 level: 2
 parameters:

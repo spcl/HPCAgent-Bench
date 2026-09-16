@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: conv3d_group_norm_mean
+name: Conv3D + GroupNorm + Mean
 func_name: conv3d_group_norm_mean
 level: 2
 parameters:

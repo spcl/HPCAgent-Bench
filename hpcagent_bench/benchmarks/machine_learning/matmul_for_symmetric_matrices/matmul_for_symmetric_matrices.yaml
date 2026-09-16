@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: matmul_for_symmetric_matrices
+name: Symmetric MatMul
 func_name: matmul_for_symmetric_matrices
 level: 1
 parameters:

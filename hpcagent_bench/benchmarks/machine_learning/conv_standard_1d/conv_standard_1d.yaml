@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: conv_standard_1d
+name: Conv1D
 func_name: conv_standard_1d
 level: 1
 parameters:

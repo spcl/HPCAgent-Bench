@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: matmul_sigmoid_sum
+name: MatMul + Sigmoid + Sum
 func_name: matmul_sigmoid_sum
 level: 2
 parameters:

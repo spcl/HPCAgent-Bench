@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: conv2d_activation_batch_norm
+name: Conv2D + Act + BN
 func_name: conv2d_activation_batch_norm
 level: 2
 parameters:

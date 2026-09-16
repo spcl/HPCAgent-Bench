@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: swish
+name: Swish Activation
 func_name: swish
 level: 1
 parameters:

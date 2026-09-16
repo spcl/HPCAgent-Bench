@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: min_gpt_causal_attention
+name: minGPT Causal Attention
 func_name: min_gpt_causal_attention
 level: 3
 parameters:

@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: cumsum
+name: Cumulative Sum
 func_name: cumsum
 level: 1
 parameters:

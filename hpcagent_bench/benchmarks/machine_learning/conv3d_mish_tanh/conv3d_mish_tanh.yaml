@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: conv3d_mish_tanh
+name: Conv3D + Mish + Tanh
 func_name: conv3d_mish_tanh
 level: 2
 parameters:

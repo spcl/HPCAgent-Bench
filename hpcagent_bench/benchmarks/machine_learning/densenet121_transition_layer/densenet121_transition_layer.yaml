@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: densenet121_transition_layer
+name: DenseNet-121 Transition
 func_name: densenet121_transition_layer
 level: 3
 parameters:

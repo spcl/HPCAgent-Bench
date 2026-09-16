@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: max_pooling_2d
+name: Max Pooling 2D
 func_name: max_pooling_2d
 level: 1
 parameters:

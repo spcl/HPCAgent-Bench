@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: squeezenet_fire_module
+name: SqueezeNet Fire Module
 func_name: squeezenet_fire_module
 level: 3
 parameters:

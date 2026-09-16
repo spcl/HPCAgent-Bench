@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: matmul_swish_scaling
+name: MatMul + Swish + Scaling
 func_name: matmul_swish_scaling
 level: 2
 parameters:

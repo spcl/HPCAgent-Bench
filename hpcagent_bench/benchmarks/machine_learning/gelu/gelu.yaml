@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: gelu
+name: GELU Activation
 func_name: gelu
 level: 1
 parameters:

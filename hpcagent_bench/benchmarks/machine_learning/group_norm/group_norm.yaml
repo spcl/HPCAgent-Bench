@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: group_norm
+name: Group Normalization
 func_name: group_norm
 level: 1
 parameters:

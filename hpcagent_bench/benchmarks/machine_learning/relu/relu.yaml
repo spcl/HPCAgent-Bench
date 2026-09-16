@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: relu
+name: ReLU Activation
 func_name: relu
 level: 1
 parameters:

@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: sigmoid
+name: Sigmoid Activation
 func_name: sigmoid
 level: 1
 parameters:

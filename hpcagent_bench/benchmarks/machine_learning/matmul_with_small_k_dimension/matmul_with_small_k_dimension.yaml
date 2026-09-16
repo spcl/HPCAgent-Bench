@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: matmul_with_small_k_dimension
+name: MatMul, Small K
 func_name: matmul_with_small_k_dimension
 level: 1
 parameters:

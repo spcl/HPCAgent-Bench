@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: conv2d_batch_norm_scaling
+name: Conv2D + BatchNorm + Scaling
 func_name: conv2d_batch_norm_scaling
 level: 2
 parameters:

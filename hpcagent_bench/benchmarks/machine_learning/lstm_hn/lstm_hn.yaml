@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: lstm_hn
+name: LSTM (Hidden State)
 func_name: lstm_hn
 level: 3
 parameters:

@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: min_gpt_new_gelu
+name: minGPT New GELU
 func_name: min_gpt_new_gelu
 level: 1
 parameters:

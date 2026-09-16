@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: tanh
+name: Tanh Activation
 func_name: tanh
 level: 1
 parameters:

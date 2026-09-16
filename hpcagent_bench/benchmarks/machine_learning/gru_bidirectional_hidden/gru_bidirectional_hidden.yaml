@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: gru_bidirectional_hidden
+name: Bidirectional GRU (Hidden)
 func_name: gru_bidirectional_hidden
 level: 3
 parameters:

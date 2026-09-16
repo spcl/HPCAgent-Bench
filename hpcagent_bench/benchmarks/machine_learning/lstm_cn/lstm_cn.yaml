@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: lstm_cn
+name: LSTM (Cell State)
 func_name: lstm_cn
 level: 3
 parameters:

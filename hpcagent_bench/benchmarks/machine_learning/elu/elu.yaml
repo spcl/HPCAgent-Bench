@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: elu
+name: ELU Activation
 func_name: elu
 level: 1
 parameters:

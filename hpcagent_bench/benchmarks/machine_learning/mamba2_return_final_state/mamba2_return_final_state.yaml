@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: mamba2_return_final_state
+name: Mamba-2 (Final State)
 func_name: mamba2_return_final_state
 level: 3
 parameters:

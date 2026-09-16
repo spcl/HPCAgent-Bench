@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: matmul_mish_mish
+name: MatMul + Mish + Mish
 func_name: matmul_mish_mish
 level: 2
 parameters:

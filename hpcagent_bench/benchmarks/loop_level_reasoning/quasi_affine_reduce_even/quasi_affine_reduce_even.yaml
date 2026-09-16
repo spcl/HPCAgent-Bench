@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: TSVC quasi_affine_reduce_even
+name: Quasi-Affine Even Reduction
 level: 1
 parameters:
   S:

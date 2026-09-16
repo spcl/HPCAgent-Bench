@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: alexnet
+name: AlexNet
 func_name: alexnet
 level: 3
 parameters:

@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: frobenius_norm
+name: Frobenius Norm
 func_name: frobenius_norm
 level: 1
 parameters:

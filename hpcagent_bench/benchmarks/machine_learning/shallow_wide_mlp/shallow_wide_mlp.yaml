@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: shallow_wide_mlp
+name: Shallow Wide MLP
 func_name: shallow_wide_mlp
 level: 3
 parameters:

@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: leaky_relu
+name: Leaky ReLU Activation
 func_name: leaky_relu
 level: 1
 parameters:

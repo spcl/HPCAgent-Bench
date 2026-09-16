@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: conv2d_divide_leaky_relu
+name: Conv2D + Divide + LeakyReLU
 func_name: conv2d_divide_leaky_relu
 level: 2
 parameters:

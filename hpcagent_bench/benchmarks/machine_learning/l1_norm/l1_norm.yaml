@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: l1_norm
+name: L1 Normalization
 func_name: l1_norm
 level: 1
 parameters:

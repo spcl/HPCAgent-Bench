@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: hinge_loss
+name: Hinge Loss
 func_name: hinge_loss
 level: 1
 parameters:

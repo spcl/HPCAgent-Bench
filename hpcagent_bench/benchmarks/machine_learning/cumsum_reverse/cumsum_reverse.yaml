@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: cumsum_reverse
+name: Reverse Cumulative Sum
 func_name: cumsum_reverse
 level: 1
 parameters:

@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: gemm_multiply_leaky_relu
+name: GEMM + Multiply + LeakyReLU
 func_name: gemm_multiply_leaky_relu
 level: 2
 parameters:

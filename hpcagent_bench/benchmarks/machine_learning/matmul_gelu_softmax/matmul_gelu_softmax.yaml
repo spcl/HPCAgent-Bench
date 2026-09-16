@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: matmul_gelu_softmax
+name: MatMul + GELU + Softmax
 func_name: matmul_gelu_softmax
 level: 2
 parameters:

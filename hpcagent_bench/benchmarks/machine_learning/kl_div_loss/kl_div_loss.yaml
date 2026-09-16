@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: kl_div_loss
+name: KL Divergence Loss
 func_name: kl_div_loss
 level: 1
 parameters:

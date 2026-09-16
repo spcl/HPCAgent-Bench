@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: GoFast
+name: Diagonal Tanh Trace Add
 level: 2
 parameters:
   S:

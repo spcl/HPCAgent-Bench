@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: conv2d_hardswish_relu
+name: Conv2D + HardSwish + ReLU
 func_name: conv2d_hardswish_relu
 level: 2
 parameters:

@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: triplet_margin_loss
+name: Triplet Margin Loss
 func_name: triplet_margin_loss
 level: 1
 parameters:

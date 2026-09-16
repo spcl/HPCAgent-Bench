@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: softmax_kernelbench
+name: Softmax (KernelBench)
 func_name: softmax_kernelbench
 level: 1
 parameters:

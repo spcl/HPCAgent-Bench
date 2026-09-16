@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: masked_cumsum
+name: Masked Cumulative Sum
 func_name: masked_cumsum
 level: 1
 parameters:

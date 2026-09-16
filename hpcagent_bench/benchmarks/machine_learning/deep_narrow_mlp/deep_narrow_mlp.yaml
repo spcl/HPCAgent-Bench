@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: deep_narrow_mlp
+name: Deep Narrow MLP
 func_name: deep_narrow_mlp
 level: 3
 parameters:

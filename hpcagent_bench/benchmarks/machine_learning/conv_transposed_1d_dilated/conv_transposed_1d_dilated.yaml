@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: conv_transposed_1d_dilated
+name: ConvT1D, Dil
 func_name: conv_transposed_1d_dilated
 level: 1
 parameters:

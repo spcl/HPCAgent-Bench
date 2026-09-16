@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: gemm_add_relu
+name: GEMM + Add + ReLU
 func_name: gemm_add_relu
 level: 2
 parameters:

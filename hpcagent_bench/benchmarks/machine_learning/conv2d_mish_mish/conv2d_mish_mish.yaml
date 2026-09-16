@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: conv2d_mish_mish
+name: Conv2D + Mish + Mish
 func_name: conv2d_mish_mish
 level: 2
 parameters:

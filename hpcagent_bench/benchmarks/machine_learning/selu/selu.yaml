@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: selu
+name: SELU Activation
 func_name: selu
 level: 1
 parameters:

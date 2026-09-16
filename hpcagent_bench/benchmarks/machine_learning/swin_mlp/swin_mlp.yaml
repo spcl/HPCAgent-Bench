@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: swin_mlp
+name: Swin MLP
 func_name: swin_mlp
 level: 3
 parameters:

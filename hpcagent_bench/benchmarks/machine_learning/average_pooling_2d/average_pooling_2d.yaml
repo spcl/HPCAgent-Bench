@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: average_pooling_2d
+name: Average Pooling 2D
 func_name: average_pooling_2d
 level: 1
 parameters:

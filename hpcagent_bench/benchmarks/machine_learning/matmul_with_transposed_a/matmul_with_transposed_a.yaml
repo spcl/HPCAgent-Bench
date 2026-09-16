@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: matmul_with_transposed_a
+name: MatMul, A Transposed
 func_name: matmul_with_transposed_a
 level: 1
 parameters:

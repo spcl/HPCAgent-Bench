@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: mini_gpt_block
+name: miniGPT Block
 func_name: mini_gpt_block
 level: 3
 parameters:

@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: vgg16
+name: VGG-16
 func_name: vgg16
 level: 3
 parameters:

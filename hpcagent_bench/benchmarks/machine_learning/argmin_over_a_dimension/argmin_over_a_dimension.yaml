@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: argmin_over_a_dimension
+name: Argmin Over a Dimension
 func_name: argmin_over_a_dimension
 level: 1
 parameters:

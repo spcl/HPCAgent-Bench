@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: softplus
+name: Softplus Activation
 func_name: softplus
 level: 1
 parameters:

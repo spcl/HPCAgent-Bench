@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: mamba2_return_y
+name: Mamba-2 (Output)
 func_name: mamba2_return_y
 level: 3
 parameters:

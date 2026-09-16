@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: vision_attention
+name: Vision Attention
 func_name: vision_attention
 level: 3
 parameters:

@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: TSVC fuse_move_ifs
+name: Fusion with Hoisted Ifs
 level: 2
 parameters:
   S:

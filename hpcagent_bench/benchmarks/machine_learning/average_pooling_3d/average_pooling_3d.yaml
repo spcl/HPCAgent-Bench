@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: average_pooling_3d
+name: Average Pooling 3D
 func_name: average_pooling_3d
 level: 1
 parameters:

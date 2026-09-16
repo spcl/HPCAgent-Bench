@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: conv2d_avg_pool_sigmoid_sum
+name: Conv2D + AvgP + Sig + Sum
 func_name: conv2d_avg_pool_sigmoid_sum
 level: 2
 parameters:

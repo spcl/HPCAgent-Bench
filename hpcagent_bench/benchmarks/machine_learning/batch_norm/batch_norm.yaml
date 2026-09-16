@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: batch_norm
+name: Batch Normalization
 func_name: batch_norm
 level: 1
 parameters:

@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: TSVC scan_multi_5carry
+name: Scan, Five Carries
 level: 1
 parameters:
   S:

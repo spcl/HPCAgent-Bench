@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: vanilla_rnn_hidden
+name: Vanilla RNN (Hidden State)
 func_name: vanilla_rnn_hidden
 level: 3
 parameters:

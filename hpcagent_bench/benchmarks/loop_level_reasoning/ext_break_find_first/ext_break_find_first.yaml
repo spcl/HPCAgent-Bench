@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: TSVC ext_break_find_first
+name: Find First Match
 level: 2
 parameters:
   S:

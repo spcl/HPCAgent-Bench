@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: resnet101
+name: ResNet-101
 func_name: resnet101
 level: 3
 parameters:

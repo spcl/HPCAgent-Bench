@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: softsign
+name: Softsign Activation
 func_name: softsign
 level: 1
 parameters:

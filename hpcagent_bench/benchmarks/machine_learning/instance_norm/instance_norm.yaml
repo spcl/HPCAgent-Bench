@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: instance_norm
+name: Instance Normalization
 func_name: instance_norm
 level: 1
 parameters:

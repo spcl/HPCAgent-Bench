@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: cross_entropy_loss
+name: Cross-Entropy Loss
 func_name: cross_entropy_loss
 level: 1
 parameters:

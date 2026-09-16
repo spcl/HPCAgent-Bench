@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: matmul_divide_gelu
+name: MatMul + Divide + GELU
 func_name: matmul_divide_gelu
 level: 2
 parameters:

@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: hardsigmoid
+name: HardSigmoid Activation
 func_name: hardsigmoid
 level: 1
 parameters:

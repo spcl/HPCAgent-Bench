@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: LU Decomposition
+name: LU Decomposition and Solve
 level: 2
 parameters:
   S:

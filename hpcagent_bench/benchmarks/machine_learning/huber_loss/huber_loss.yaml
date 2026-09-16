@@ -1,5 +1,5 @@
 # OptArena benchmark manifest (KernelBench port).
-name: huber_loss
+name: Huber Loss
 func_name: huber_loss
 level: 1
 parameters:
