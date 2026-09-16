@@ -40,7 +40,7 @@ from hpcagent_bench.stats import palette, population, rules
 from hpcagent_bench.stats import style as plotstyle
 
 plotstyle.apply()
-import matplotlib.pyplot as plt  # pyplot must follow plotstyle.apply()
+import matplotlib.pyplot as plt  # noqa: E402 -- pyplot must follow plotstyle.apply()
 
 #: The canvas every panel here and in ``plot_score_change.py`` is drawn on. Shared so the figures
 #: can be loaded side by side without one being rescaled to match the other.

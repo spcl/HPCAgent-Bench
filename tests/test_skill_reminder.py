@@ -14,7 +14,6 @@ when the packet is.
 
 import importlib.util
 import json
-import pathlib
 import subprocess
 import sys
 from types import ModuleType

@@ -45,7 +45,7 @@ from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import kernel_comparison
 
 plotstyle.apply()
-import matplotlib.pyplot as plt  # pyplot must follow plotstyle.apply()
+import matplotlib.pyplot as plt  # noqa: E402 -- pyplot must follow plotstyle.apply()
 
 import matplotlib.figure  # noqa: E402
 import matplotlib.lines  # noqa: E402
