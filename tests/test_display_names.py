@@ -156,3 +156,37 @@ def test_an_arm_that_records_an_experiment_records_the_whole_tuple() -> None:
         if missing:
             partial.append(f"{env.name}: stamps {sorted(identity)} but not {missing}")
     assert not partial, "half-stamped arm envs:\n  " + "\n  ".join(partial)
+
+
+def test_a_kernel_axis_ticks_carry_the_manifest_name_and_fall_back_to_the_identifier() -> None:
+    """The kernel axis draws the manifest's ``name``, never the folder stem: "heat_3d" is what a
+    results row joins on and "Heat-3D" is what a reader can expand. An identifier no manifest
+    claims still gets a tick -- a campaign that adds a kernel must not break a figure."""
+    import matplotlib.pyplot as plt
+
+    from hpcagent_bench.stats.figures import kernel_comparison
+
+    fig, ax = plt.subplots()
+    try:
+        kernel_comparison.kernel_axis(ax, ["heat_3d", "addusxx_g", "kernel_nobody_declared"], True)
+        drawn = [label.get_text() for label in ax.get_xticklabels()]
+    finally:
+        plt.close(fig)
+    assert drawn == [
+        experiment_tags.kernel_names()["heat_3d"],
+        experiment_tags.kernel_names()["addusxx_g"],
+        "kernel_nobody_declared",
+    ]
+    assert drawn[0] != "heat_3d" and drawn[1] != "addusxx_g"
+
+
+def test_no_two_benchmarks_share_a_display_name() -> None:
+    """Two kernels under one tick is a figure that reads as one kernel measured twice. The names
+    are free-form prose in 679 separate files, so nothing but this check keeps them apart."""
+    by_name: dict[str, list[str]] = {}
+    for kernel, name in experiment_tags.kernel_names().items():
+        by_name.setdefault(name, []).append(kernel)
+    shared = {name: sorted(kernels) for name, kernels in by_name.items() if len(kernels) > 1}
+    assert not shared, "display names claimed by more than one manifest:\n  " + "\n  ".join(
+        f"{name!r}: {kernels}" for name, kernels in sorted(shared.items())
+    )

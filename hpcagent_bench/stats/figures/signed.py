@@ -583,8 +583,11 @@ LLR40_LEGEND_HEIGHT_IN: float = 0.7
 def llr40_bottom_margin_in(kernels: Sequence[str]) -> float:
     """The rotated kernel labels' own height, from the ACTUAL longest name in ``kernels``, plus
     room for the legend below them -- a margin sized for the short names runs the long ones
-    (``use_stencil_through_transient``) into the legend."""
-    longest = max((len(k) for k in kernels), default=0)
+    (``Fuse Stencil via Transient``) into the legend.
+
+    Measured over the DISPLAYED names, which is what the axis draws
+    (:func:`~hpcagent_bench.experiment_tags.kernel_display_name`), not over the identifiers."""
+    longest = max((len(experiment_tags.kernel_display_name(k)) for k in kernels), default=0)
     return longest * LLR40_LABEL_CHAR_IN + LLR40_LEGEND_HEIGHT_IN
 
 

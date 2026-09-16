@@ -389,10 +389,15 @@ def kernel_axis(ax: matplotlib.axes.Axes, kernels: Sequence[str], label_kernels:
     measures nothing (the value axis carries the grid, :func:`plotstyle.value_axis`). Only the
     bottom panel of a shared-x pair labels its ticks -- the top panel's would repeat them into the
     gap between the two.
+
+    ``kernels`` are the identifiers the results table joins on; the TICKS are their manifest names
+    (:func:`~hpcagent_bench.experiment_tags.kernel_display_name`), because "heat_3d" is a folder,
+    not a title a reader can expand.
     """
     ax.set_xticks(range(len(kernels)))
     if label_kernels:
-        ax.set_xticklabels(list(kernels), rotation=90, fontsize=KERNEL_LABEL_PT, color=plotstyle.INK)
+        labels = [experiment_tags.kernel_display_name(kernel) for kernel in kernels]
+        ax.set_xticklabels(labels, rotation=90, fontsize=KERNEL_LABEL_PT, color=plotstyle.INK)
     else:
         ax.set_xticklabels([])
     ax.tick_params(axis="x", length=0)
