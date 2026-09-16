@@ -244,15 +244,8 @@ def test_a_point_no_arm_delivered_carries_a_cross_at_its_own_ratio() -> None:
         placeholder = marks_at(fig.axes[0], 2.0, 1.0)
         measured = marks_at(fig.axes[0], 0.0, 2.0)
         cross = matplotlib.markers.MarkerStyle("x").get_path()
-        drawn = [
-            collection.get_paths()[0].vertices.shape
-            for collection in placeholder
-        ]
-        hues = {
-            matplotlib.colors.to_hex(rgba)
-            for collection in placeholder
-            for rgba in collection.get_facecolor()
-        }
+        drawn = [collection.get_paths()[0].vertices.shape for collection in placeholder]
+        hues = {matplotlib.colors.to_hex(rgba) for collection in placeholder for rgba in collection.get_facecolor()}
     finally:
         plt_local.close(fig)
     # the white halo, the mark itself and the cross style.point_mark lays over it
