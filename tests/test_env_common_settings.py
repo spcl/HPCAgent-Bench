@@ -33,20 +33,32 @@ LAUNCHER_DEFAULTS = {
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32768",
 }
 
-#: The rungs each model's SERVER accepts, lowest first. Qwen's chat template raises on anything
-#: outside low/medium/xhigh -- it has no `high` -- and GPT-OSS's stops at high; Kimi and GLM have no
-#: ladder at all. The launcher resolves AGENT_EFFORT from these, so a .env that also spelled a rung
-#: would be a second source of truth for the one thing a ladder exists to decide.
+#: The rungs each model's server accepts, lowest first, whether that server is a local SGLang/vLLM
+#: job or a hosted provider API. Qwen's chat template raises on anything outside low/medium/xhigh --
+#: it has no `high` -- and GPT-OSS's stops at high; Kimi and GLM have no ladder at all. The launcher
+#: resolves AGENT_EFFORT from these, so a .env that also spelled a rung would be a second source of
+#: truth for the one thing a ladder exists to decide.
 LADDERS = {
     "qwen38": "low medium xhigh",
     "oss120b": "low medium high",
     "kimi27sglang": "",
     "glm53": "",
+    "fable51": "low medium high xhigh max",
+    "gpt6astra": "low medium high xhigh max",
+    "musespark": "low medium high xhigh max",
 }
 
 #: What the policy resolves each ladder to: xhigh where the ladder has it, else its top rung, else
 #: no field at all.
-RESOLVED = {"qwen38": "xhigh", "oss120b": "high", "kimi27sglang": "", "glm53": ""}
+RESOLVED = {
+    "qwen38": "xhigh",
+    "oss120b": "high",
+    "kimi27sglang": "",
+    "glm53": "",
+    "fable51": "xhigh",
+    "gpt6astra": "xhigh",
+    "musespark": "xhigh",
+}
 
 BASE_ENVS = sorted(EXPERIMENTS.glob(".env.base-*"))
 
@@ -76,6 +88,17 @@ def env_values(path: pathlib.Path) -> dict[str, str]:
     return values
 
 
+def is_inference_service_env(path: pathlib.Path) -> bool:
+    """True for a base env that runs its model behind a hosted provider API (INFERENCE_SOURCE=service)
+    rather than an SGLang/vLLM job the launcher starts on a node."""
+    return env_values(path).get("INFERENCE_SOURCE", "node") == "service"
+
+
+#: Base envs whose model is served by an engine the launcher starts on a node. A hosted service env
+#: has no such engine to name a context window for.
+ENGINE_BASE_ENVS = [path for path in BASE_ENVS if not is_inference_service_env(path)]
+
+
 def test_the_launcher_carries_every_base_env() -> None:
     """A model whose .env is not in this parametrisation is a model these rules never checked."""
     assert {path.name.removeprefix(".env.base-") for path in BASE_ENVS} == set(LADDERS)
@@ -94,10 +117,12 @@ def test_the_launcher_exports_each_common_setting_with_its_default(name: str) ->
     assert f'export {name}="${{{name}:-{default}}}"' in LAUNCHER.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("path", BASE_ENVS, ids=lambda path: path.name)
+@pytest.mark.parametrize("path", ENGINE_BASE_ENVS, ids=lambda path: path.name)
 def test_a_base_env_names_the_context_window_its_server_is_started_with(path: pathlib.Path) -> None:
     """The harnesses size their prompt budget off CONTEXT_LENGTH; an engine started with a different
-    window makes every one of them wrong in the same invisible way."""
+    window makes every one of them wrong in the same invisible way. Scoped to envs that start an
+    engine: a hosted-service env (INFERENCE_SOURCE=service) serves through a provider API and starts
+    no engine to name a window for."""
     values = env_values(path)
     served = re.findall(r"(?:--context-length|--max-model-len)[= ](\d+)", path.read_text(encoding="utf-8"))
     assert served, f"{path.name} starts no engine with a context window"
