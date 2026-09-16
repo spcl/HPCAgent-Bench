@@ -822,12 +822,13 @@ def test_the_legend_names_the_interval_method_and_the_kernels_it_is_over() -> No
     fig, axes, _stats = one_arm_figure("cpfsrc")
     try:
         labels = [
-            handle.get_label() for handle in plot.legend_handles("cpfsrc", ["qwen38"], _stats, "note", ["cpfsrc"])
+            handle.get_label()
+            for handle in plot.legend_handles("cpfsrc", ["qwen38"], _stats, ["note-a", "note-b"], ["cpfsrc"])
         ]
     finally:
         plt.close(fig)
     assert "Pair Link" in labels, labels
-    assert "note" in labels, labels
+    assert "note-a" in labels and "note-b" in labels, labels
 
 
 def test_the_interval_note_names_the_method_the_kernel_count_selects() -> None:
@@ -836,9 +837,53 @@ def test_the_interval_note_names_the_method_the_kernel_count_selects() -> None:
     wide = pd.DataFrame([{"kernels": float(summary.LOG_T_MIN_SAMPLES)}])
     narrow = pd.DataFrame([{"kernels": float(summary.LOG_T_MIN_SAMPLES - 1)}])
 
-    assert "log-t" in plot.interval_note(wide)
-    assert "bootstrap" in plot.interval_note(narrow)
-    assert f"n={summary.LOG_T_MIN_SAMPLES}" in plot.interval_note(wide)
+    assert "log-t" in plot.interval_note(wide, plot.SPEEDUP_PANEL)
+    assert "bootstrap" in plot.interval_note(narrow, plot.SPEEDUP_PANEL)
+    assert f"n={summary.LOG_T_MIN_SAMPLES}" in plot.interval_note(wide, plot.SPEEDUP_PANEL)
+
+
+def test_each_panel_names_the_estimator_its_own_whiskers_draw() -> None:
+    """The two panels do not draw the same interval. The speed-up whisker is
+    ``summary.geomean_interval``; the token whisker is ``summary.median_ci``, a percentile bootstrap
+    of the MEDIAN (``population.kernel_medians``). One note naming only the geomean's interval
+    labelled every token whisker as a claim it does not make."""
+    frame = pd.DataFrame([{"kernels": float(summary.LOG_T_MIN_SAMPLES)}])
+
+    speedup = plot.interval_note(frame, plot.SPEEDUP_PANEL)
+    tokens = plot.interval_note(frame, plot.TOKENS_PANEL)
+
+    assert speedup.startswith("Geomean") and "log-t" in speedup
+    assert tokens.startswith("Median") and plot.MEDIAN_INTERVAL_METHOD in tokens
+    assert "Geomean" not in tokens
+    assert f"n={summary.LOG_T_MIN_SAMPLES}" in speedup and f"n={summary.LOG_T_MIN_SAMPLES}" in tokens
+
+
+def test_a_note_over_legs_of_different_n_names_every_method_those_legs_use() -> None:
+    """``geomean_interval`` chooses per LEG, so a figure whose legs straddle ``LOG_T_MIN_SAMPLES``
+    draws two different intervals the same way. Naming the method of the SMALLEST leg called every
+    wider leg's whisker something it is not."""
+    small, large = summary.MIN_INTERVAL_SAMPLES, summary.LOG_T_MIN_SAMPLES + 5
+    mixed = pd.DataFrame([{"kernels": float(small)}, {"kernels": float(large)}])
+
+    note = plot.interval_note(mixed, plot.SPEEDUP_PANEL)
+
+    assert summary.interval_method(small) in note, note
+    assert summary.interval_method(large) in note, note
+    assert f"n={small}" in note and f"n={large}" in note, note
+
+
+def test_the_figure_key_carries_one_interval_note_per_panel() -> None:
+    """Both notes reach the reader, and they reach it in the figure's ONE key."""
+    import matplotlib.pyplot as plt
+
+    fig = plot.build_treatments_figure([treatment_panel("cpfsrc")], "label")
+    try:
+        assert len(fig.legends) == 1
+        labels = [text.get_text() for text in fig.legends[0].get_texts()]
+    finally:
+        plt.close(fig)
+    assert sum(1 for label in labels if label.startswith("Geomean, 95%")) == 1, labels
+    assert sum(1 for label in labels if label.startswith("Median, 95%")) == 1, labels
 
 
 # ---------------------------------------------------------------------------

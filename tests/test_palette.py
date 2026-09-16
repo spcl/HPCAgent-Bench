@@ -98,9 +98,13 @@ def test_an_unregistered_model_is_stable_and_warns(caplog):
 
 
 def test_two_packets_sharing_a_colour_in_one_figure_warn(caplog):
-    """Wrapping is only safe while the wrapped pair never share a figure; this is the guard."""
+    """Wrapping is only safe while the wrapped pair never share a figure; this is the guard.
+
+    ``all-in`` is ramp position 13 and wraps onto ``cpfsrc``'s blue. The pair was once
+    ``cpfsrc``/``no-score-tool``, until the blind comparison became a paper figure and
+    ``no-score-tool`` took an explicit hue (see PAPER_FIGURE_PACKETS)."""
     with caplog.at_level("WARNING"):
-        palette.colors(["cpfsrc", "no-score-tool"])
+        palette.colors(["cpfsrc", "all-in"])
     assert "both draw" in caplog.text
 
 
@@ -121,8 +125,11 @@ PUBLISHED_PACKET_COLORS = {
     "divide-and-conquer": "#cc79a7",
     "profiling": "#d55e00",
     "repo": "#56b4e9",
-    "kernel": "#e69f00",
-    "no-score-tool": "#0072b2",
+    # Repainted deliberately: the six-hue ramp wrapped these three onto a packet the paper draws
+    # beside them, so registry.yaml gives each an explicit colourblind-safe hue.
+    "kernel": "#882255",
+    "no-score-tool": "#332288",
+    "perf-playbook-cpu": "#999933",
     "cpfsrc+lang-skills": "#009cf4",
     "divide-and-conquer+profiling": "#dea9c7",
 }
@@ -188,6 +195,44 @@ def test_an_unregistered_language_draws_but_warns(caplog: pytest.LogCaptureFixtu
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
         palette.language_colors(["a-language-nobody-registered"])
     assert "a-language-nobody-registered" in caplog.text
+
+
+#: The interventions the PAPER's figures draw, each named with the figure it appears in. A reader
+#: carries a colour from one figure to the next, so these must be pairwise distinct GLOBALLY -- the
+#: six-hue ramp wraps at seven packets and `warn_on_collision` only ever sees one figure at a time.
+PAPER_FIGURE_PACKETS: tuple[str, ...] = (
+    "",  # the no-packet control, on every paired figure
+    "cpf",  # llr40_paired_cpf
+    "cpfsrc",  # llr40_paired_cpfsrc
+    "lang-skills",  # llr40_paired_skills, gpu_paired_skills
+    "divide-and-conquer",  # scicomp perf-playbook panels
+    "profiling",  # scicomp perf-playbook panels
+    "perf-playbook-cpu",  # playbook_forest
+    "repo",  # git_scicomp
+    "kernel",  # git_scicomp's control scope
+    "no-score-tool",  # llr40_blind_vs_scored
+)
+
+
+def test_the_packets_the_paper_draws_have_pairwise_distinct_hues() -> None:
+    """Colour is the entity's, and a reader carries it ACROSS figures: two interventions the paper
+    draws in the same colour read as one treatment however far apart their pages are. The committed
+    PDFs had `cpfsrc` and `no-score-tool` both #0072b2 and `cpf`, `perf-playbook-cpu` and `kernel`
+    all #e69f00, because the ramp wraps after six. Fixed in registry.yaml, held here."""
+    chosen = {name: palette.color(name) for name in PAPER_FIGURE_PACKETS}
+    clashes = {
+        hue: sorted(name for name, own in chosen.items() if own == hue)
+        for hue in set(chosen.values())
+        if sum(1 for own in chosen.values() if own == hue) > 1
+    }
+    assert not clashes, clashes
+
+
+def test_the_paper_packets_never_take_the_control_colour() -> None:
+    """The control is the reference every treatment is read against, so no treatment may wear it."""
+    treatments = [name for name in PAPER_FIGURE_PACKETS if name]
+    assert palette.control_color() not in {palette.color(name) for name in treatments}
+    assert palette.color("") == palette.control_color()
 
 
 def test_every_intervention_git_scicomp_and_llrblind_name_has_a_registered_hue(
