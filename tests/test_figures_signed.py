@@ -15,11 +15,13 @@ holding still draws a plausible-looking figure, so it is asserted here rather th
 import csv
 import pathlib
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from hpcagent_bench.stats import rules
-from hpcagent_bench.stats.figures import signed
+from hpcagent_bench.stats import palette, rules
+from hpcagent_bench.stats.figures import kernel_comparison, signed
+from hpcagent_bench.stats.summary import geomean_ci
 
 #: The sweep's column order; the fixture writes the real schema, not a convenient subset.
 FIELDS = ("framework", "preset", "datatype", "kernel", "impl", "status", "validated", "median_ms", "failure", "error")
@@ -239,3 +241,197 @@ def test_a_sweep_with_no_overlap_draws_nothing_rather_than_failing_a_rule(tmp_pa
     assert (signed.summary_table(rows)["n"] == 0).all()
     out = signed.arms_figure(tmp_path, tmp_path / "empty")
     assert out.with_suffix(".pdf").is_file()
+
+
+# --------------------------------------------------------------------------------------------
+# llr-focus40 compiler figure: DaCe's own canon-sweep columns beside every model's CPF arm, all
+# against numba, on a SIGNED axis (never kernel_comparison's log2 ratio one). The row-building
+# helpers below stand in for canon.read_times/population.kernel_answers/graded_episode_rows
+# without a real sweep or a real campaign DB.
+# --------------------------------------------------------------------------------------------
+
+ROSTER40: tuple[str, ...] = ("k1", "k2", "k3")
+
+
+def canon_table(rows: list[tuple[str, str, float]]) -> pd.DataFrame:
+    """A ``canon`` table frame: (column, kernel, median_ms), always validated."""
+    return pd.DataFrame(
+        [{"run": "r1", "column": column, "kernel": kernel, "median_ms": ms, "validated": "True"}
+         for column, kernel, ms in rows]
+    )  # fmt: skip
+
+
+def episode_row(arm: str, benchmark: str, speedup: float, run_suffix: str = "1") -> dict[str, object]:
+    """One ``record=submission`` episode row: what ``population.kernel_answers`` and
+    ``population.graded_episode_rows`` both need."""
+    return {
+        "run_root": f"j{run_suffix}",
+        "job": f"j{run_suffix}",
+        "run_id": f"{arm}-{benchmark}-{run_suffix}",
+        "arm": arm,
+        "record": "submission",
+        "benchmark": benchmark,
+        "speedup": speedup,
+        "baseline_ns": 1.0e6,  # 1 ms, in nanoseconds -- ANSWER_COLUMNS' own unit
+        "native_ns": 1.0e6 / speedup,
+        "baseline": "numba",
+        "suspect": 0,
+        "ts_ms": int(run_suffix),
+        "attempt_index": 1,
+        "timing_reduction": "mwd-v2",
+    }
+
+
+def token_row(arm: str, benchmark: str, tokens: float, run_suffix: str = "1") -> dict[str, object]:
+    """One ``record=task`` row: what ``population.kernel_tokens`` reads a spend off (spec T4)."""
+    return {
+        "run_root": f"j{run_suffix}", "job": f"j{run_suffix}", "run_id": f"{arm}-{benchmark}-{run_suffix}",
+        "arm": arm, "record": "task", "benchmark": benchmark, "tokens": tokens, "ts_ms": int(run_suffix),
+    }  # fmt: skip
+
+
+@pytest.fixture(name="llr40_canon")
+def llr40_canon_fixture() -> pd.DataFrame:
+    """dace_cpu and dace_cpu_canonicalize against numba: k1 and k2 validated on every column, k3
+    validated on numba alone (a compiler that never timed it) -- ROSTER40 names all three."""
+    return canon_table(
+        [
+            ("numba", "k1", 100.0), ("numba", "k2", 200.0), ("numba", "k3", 100.0),
+            ("dace_cpu", "k1", 50.0), ("dace_cpu", "k2", 100.0),
+            ("dace_cpu_canonicalize", "k1", 10.0), ("dace_cpu_canonicalize", "k2", 20.0),
+        ]
+    )  # fmt: skip
+
+
+@pytest.fixture(name="llr40_observations")
+def llr40_observations_fixture() -> pd.DataFrame:
+    """Two models, each with a ``cpf`` and a ``cpfsrc`` arm, complete over ROSTER40; qwen38's
+    cpfsrc arm runs k1 twice (a repeat, for the per-kernel interval), everything else once."""
+    rows: list[dict[str, object]] = []
+    for model in ("qwen38", "oss120b"):
+        for condition, suffix, speedups in (
+            ("cpf", "c-cpf", {"k1": 2.0, "k2": 3.0, "k3": 1.5}),
+            ("cpfsrc", "c-cpfsrc", {"k1": 2.5, "k2": 3.5, "k3": 1.8}),
+        ):
+            arm = f"cpf-llr-focus40-{model}-{suffix}"
+            for benchmark, speedup in speedups.items():
+                rows.append(episode_row(arm, benchmark, speedup))
+                rows.append(token_row(arm, benchmark, 1000.0))
+            if model == "qwen38" and condition == "cpfsrc":
+                # A second, slightly different episode of k1: the per-kernel interval this row's
+                # ratios_low/ratios_high bound is over THESE repeats, not over the kernel axis.
+                # Its own task row, or "latest" would supersede k1's only token measurement with a
+                # run that spent none (population.latest_runs: a rerun with no persisted task still
+                # supersedes the earlier one).
+                rows.append(episode_row(arm, "k1", 2.7, run_suffix="2"))
+                rows.append(token_row(arm, "k1", 1200.0, run_suffix="2"))
+    return pd.DataFrame(rows)
+
+
+def test_canon_row_matches_the_ratio_and_scopes_to_the_roster(llr40_canon: pd.DataFrame) -> None:
+    row = signed.canon_kernel_row(llr40_canon, "dace_cpu_canonicalize", ROSTER40)
+    assert row.ratios == {"k1": pytest.approx(10.0), "k2": pytest.approx(10.0)}
+    assert row.numerator_ms == {"k1": pytest.approx(100.0), "k2": pytest.approx(200.0)}
+    assert row.denominator_ms == {"k1": pytest.approx(10.0), "k2": pytest.approx(20.0)}
+    # k3 is missing (not zero): numba timed it, dace_cpu_canonicalize never did.
+    assert "k3" not in row.ratios
+    assert row.color == palette.framework_color("dace_cpu_canonicalize")
+    assert row.marker == kernel_comparison.CANON_MARKER
+    # No repetition and no agent: nothing to bound, nothing spent.
+    assert row.ratios_low == {} and row.ratios_high == {} and row.tokens == {}
+
+
+def test_canon_row_ignores_kernels_outside_the_roster(llr40_canon: pd.DataFrame) -> None:
+    """Regression: a canon sweep commonly spans more kernels than one figure's roster. A row that
+    is not scoped to the roster would let the summary geomean a population the panel never drew."""
+    row = signed.canon_kernel_row(llr40_canon, "dace_cpu", ("k1",))
+    assert set(row.ratios) == {"k1"}
+
+
+def test_two_arms_of_one_model_share_shape_and_differ_in_hue(llr40_observations: pd.DataFrame) -> None:
+    """Channel rule: SHAPE is the LLM, COLOUR is the packet/condition."""
+    cpf = signed.agent_kernel_row(llr40_observations, "cpf-llr-focus40-qwen38-c-cpf", "qwen38", "cpf", ROSTER40)
+    cpfsrc = signed.agent_kernel_row(
+        llr40_observations, "cpf-llr-focus40-qwen38-c-cpfsrc", "qwen38", "cpfsrc", ROSTER40
+    )
+    assert cpf.marker == cpfsrc.marker == palette.marker("qwen38")
+    assert cpf.color != cpfsrc.color
+    assert cpf.color == palette.color("cpf") and cpfsrc.color == palette.color("cpfsrc")
+
+
+def test_two_models_same_condition_share_hue_and_differ_in_shape(llr40_observations: pd.DataFrame) -> None:
+    qwen = signed.agent_kernel_row(llr40_observations, "cpf-llr-focus40-qwen38-c-cpfsrc", "qwen38", "cpfsrc", ROSTER40)
+    oss = signed.agent_kernel_row(llr40_observations, "cpf-llr-focus40-oss120b-c-cpfsrc", "oss120b", "cpfsrc", ROSTER40)
+    assert qwen.color == oss.color == palette.color("cpfsrc")
+    assert qwen.marker != oss.marker
+    assert qwen.marker == palette.marker("qwen38") and oss.marker == palette.marker("oss120b")
+
+
+def test_agent_row_carries_rule4_costs_and_a_repeat_interval(llr40_observations: pd.DataFrame) -> None:
+    row = signed.agent_kernel_row(llr40_observations, "cpf-llr-focus40-qwen38-c-cpfsrc", "qwen38", "cpfsrc", ROSTER40)
+    assert row.ratios["k1"] > 0.0 and row.numerator_ms["k1"] == pytest.approx(1.0)
+    # k1 ran twice (2.5x and 2.7x): its interval is a real band, not a degenerate point.
+    assert row.ratios_low["k1"] < row.ratios_high["k1"]
+    # k2 ran once: one sample has no spread to estimate, so its interval collapses onto the point
+    # (geomean_ci's own contract) rather than being omitted or fabricated.
+    assert row.ratios_low["k2"] == pytest.approx(row.ratios_high["k2"])
+    assert row.tokens["k1"] == pytest.approx(1200.0)  # "latest" run's own task total, not k1's first
+
+
+def test_geomean_reducer_excludes_a_missing_kernel_from_the_summary() -> None:
+    """The cross rule: a kernel absent from ``ratios`` never reaches the reducer, so it cannot
+    move the geomean it is excluded from."""
+    with_missing = signed.geomean_reducer([2.0, 8.0])
+    dropped_zero = signed.geomean_reducer([2.0, 8.0, 0.0])  # a 0.0 is a placeholder, never a value
+    assert with_missing == pytest.approx(4.0)
+    assert dropped_zero == pytest.approx(with_missing)
+
+
+def test_geomean_reducer_is_geomean_ci_never_a_median() -> None:
+    values = [2.0, 4.0, 16.0]
+    assert signed.geomean_reducer(values) == pytest.approx(geomean_ci(values).point)
+    assert signed.geomean_reducer(values) != pytest.approx(float(np.median(values)))
+
+
+def test_rows_without_observations_draws_canon_only(llr40_canon: pd.DataFrame) -> None:
+    rows = signed.llr40_rows(llr40_canon, None, ROSTER40)
+    assert [row.framework for row in rows] == list(signed.LLR40_CANON_COLUMNS)
+
+
+def test_rows_keep_only_roster_complete_conditions(llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame) -> None:
+    rows = signed.llr40_rows(llr40_canon, llr40_observations, ROSTER40)
+    arms = {row.framework for row in rows}
+    assert arms == {
+        "dace_cpu", "dace_cpu_canonicalize",
+        "cpf-llr-focus40-qwen38-c-cpf", "cpf-llr-focus40-qwen38-c-cpfsrc",
+        "cpf-llr-focus40-oss120b-c-cpf", "cpf-llr-focus40-oss120b-c-cpfsrc",
+    }  # fmt: skip
+
+
+def test_llr40_figure_renders_with_missing_marks_and_rule_checked_tables(
+    llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame, tmp_path: pathlib.Path
+) -> None:
+    out = tmp_path / "llr40"
+    stem = signed.llr40_two_row_figure(llr40_canon, llr40_observations, ROSTER40, out, dpi=72.0)
+    assert stem.with_suffix(".pdf").is_file() and stem.with_suffix(".png").is_file()
+    kernels = pd.read_csv(tmp_path / "llr40-kernels.csv")
+    # dace_cpu never timed k3 (test_canon_row_matches_the_ratio_and_scopes_to_the_roster): the
+    # emitted table names it MISSING rather than silently dropping the row.
+    dace_k3 = kernels[(kernels.framework == "dace_cpu") & (kernels.kernel == "k3")]
+    assert dace_k3.empty  # canon_kernel_row never enters a kernel it has no ratio for
+    summary = pd.read_csv(tmp_path / "llr40-summary.csv")
+    assert (summary["n"] > 0).all()
+    assert (summary["geomean_low"] <= summary["geomean"]).all()
+    assert (summary["geomean"] <= summary["geomean_high"]).all()
+    token_summary = pd.read_csv(tmp_path / "llr40-tokens-summary.csv")
+    # The two canon columns spend no tokens and must be ABSENT, never a zero row.
+    assert set(token_summary["framework"]).isdisjoint(signed.LLR40_CANON_COLUMNS)
+
+
+def test_token_summary_table_excludes_rows_with_no_tokens(
+    llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame
+) -> None:
+    rows = signed.llr40_rows(llr40_canon, llr40_observations, ROSTER40)
+    frame = signed.token_summary_table(rows)
+    assert set(frame.columns) == set(signed.TOKEN_SUMMARY_COLUMNS)
+    assert set(frame["framework"]).isdisjoint(signed.LLR40_CANON_COLUMNS)
