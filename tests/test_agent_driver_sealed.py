@@ -36,8 +36,8 @@ HOST_HOME = "/users/someone"
 MOUNTINFO = """\
 25 30 0:24 / /proc rw,nosuid,nodev,noexec,relatime shared:5 - proc proc rw
 31 30 0:25 / /tmp rw,nosuid,nodev,noatime - tmpfs tmpfs rw
-42 30 0:33 /runs/638025 /capstor/runs/638025 ro,nosuid,nodev,noexec,relatime - lustre capstor ro
-43 30 0:33 /shared /shared rw,nosuid,nodev,relatime master:2 - lustre capstor rw
+42 30 0:33 /runs/638025 /ritom/runs/638025 ro,nosuid,nodev,noexec,relatime - nfs ritom ro
+43 30 0:33 /shared /shared rw,nosuid,nodev,relatime master:2 - nfs ritom rw
 44 30 0:44 / /a\\040b rw,nodiratime - tmpfs tmpfs rw
 45 30 0:45 / /shared rw,nosuid,noexec,noatime - tmpfs tmpfs rw
 """
@@ -376,7 +376,7 @@ def test_a_read_only_remount_carries_the_flags_the_mount_has_locked(tmp_path: pa
     fake = seal.Syscalls(
         mount=lambda source, target, fstype, flags: calls.append((source, target, fstype, flags)),
         umount=lambda target: None,
-        locked=lambda target: seal.locked_flags(MOUNTINFO, "/capstor/runs/638025"),
+        locked=lambda target: seal.locked_flags(MOUNTINFO, "/ritom/runs/638025"),
     )
     seal.apply_plan([op for op in seal.seal_plan(layout, ()) if op.kind == "ro"], fake)
     expected = seal.MS_REMOUNT | seal.MS_BIND | seal.MS_RDONLY | seal.MS_NOSUID | seal.MS_NODEV
@@ -388,7 +388,7 @@ def test_a_read_only_remount_carries_the_flags_the_mount_has_locked(tmp_path: pa
     [
         ("/proc", ("nosuid", "nodev", "noexec", "relatime")),
         ("/tmp", ("nosuid", "nodev", "noatime")),
-        ("/capstor/runs/638025", ("ro", "nosuid", "nodev", "noexec", "relatime")),
+        ("/ritom/runs/638025", ("ro", "nosuid", "nodev", "noexec", "relatime")),
         ("/a b", ("nodiratime",)),
     ],
 )
