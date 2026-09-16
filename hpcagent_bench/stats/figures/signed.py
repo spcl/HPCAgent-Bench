@@ -704,14 +704,24 @@ def llr40_figure(rows: Sequence[Row], roster: Sequence[str], title: str) -> matp
             interval_of=geomean_interval_of(token_row_by_key, lambda r: r.tokens),
         )  # fmt: skip
         token_ax.set_ylabel("Tokens Spent", fontsize=style.LABEL_PT * 0.7, color=style.MUTED)
-    fig.subplots_adjust(
-        left=kernel_comparison.LEFT_MARGIN_IN / width,
-        right=1.0 - kernel_comparison.RIGHT_MARGIN_IN / width,
-        top=1.0 - kernel_comparison.TOP_MARGIN_IN / height,
-        bottom=bottom_margin / height,
-        hspace=kernel_comparison.PANEL_GAP_IN / kernel_comparison.PANEL_HEIGHT_IN,
-    )
-    style.legend_below(fig, legend_handles(rows, kernels), y=0.005, fontsize=style.TICK_PT * 0.75)
+
+    def lay_out(total_height: float, margin: float) -> None:
+        fig.subplots_adjust(
+            left=kernel_comparison.LEFT_MARGIN_IN / width,
+            right=1.0 - kernel_comparison.RIGHT_MARGIN_IN / width,
+            top=1.0 - kernel_comparison.TOP_MARGIN_IN / total_height,
+            bottom=margin / total_height,
+            hspace=kernel_comparison.PANEL_GAP_IN / kernel_comparison.PANEL_HEIGHT_IN,
+        )
+
+    lay_out(height, bottom_margin)
+    legend_in = style.legend_below(fig, legend_handles(rows, kernels), y=0.005, fontsize=style.TICK_PT * 0.75)
+    overflow = max(0.0, legend_in - LLR40_LEGEND_HEIGHT_IN)
+    if overflow > 0.0:
+        # A wrapped legend takes more rows than the fixed budget; grow the canvas so the panels
+        # keep their inches instead of letting the key climb into the kernel labels.
+        fig.set_size_inches(width, height + overflow)
+        lay_out(height + overflow, bottom_margin + overflow)
     style.title(fig, title)
     return fig
 
@@ -767,7 +777,7 @@ def llr40_two_row_figure(
     if not tokens.empty:
         tokens.to_csv(out.with_name(f"{out.name}-tokens-summary.csv"), index=False)
     fig = llr40_figure(rows, roster, title)
-    return style.save(fig, out, formats=("pdf", "png"), dpi=dpi)
+    return style.save(fig, out, formats=("pdf", "png"), fixed=True, dpi=dpi)
 
 
 def arms_figure(root: pathlib.Path, out: pathlib.Path) -> pathlib.Path:
