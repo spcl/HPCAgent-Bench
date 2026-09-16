@@ -30,20 +30,25 @@ import argparse
 import collections
 import csv
 import dataclasses
+import math
 import pathlib
 import random
+import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
+import matplotlib.figure
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd  # pyright: ignore[reportMissingTypeStubs] -- pandas ships none
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 
-from hpcagent_bench import flags
-from hpcagent_bench.stats import palette, rules, style
-from hpcagent_bench.stats.summary import DEFAULT_CONFIDENCE, geomean_ci, signed_change, usable_ratios
+from hpcagent_bench import experiment_tags, flags
+from hpcagent_bench.stats import canon, palette, population, rules, style
+from hpcagent_bench.stats.figures import kernel_comparison
+from hpcagent_bench.stats.figures.per_kernel import speedup_tick_label
+from hpcagent_bench.stats.summary import DEFAULT_CONFIDENCE, geomean_ci, log2_change, signed_change, usable_ratios
 
 #: Framework -> the name a reader knows it by. Insertion order is the order on the axis.
 ARMS: dict[str, str] = {
@@ -86,7 +91,16 @@ class Arm:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Row:
-    """One drawn row: its ratios per kernel, the costs behind them, and what it excluded."""
+    """One drawn row: its ratios per kernel, the costs behind them, and what it excluded.
+
+    ``color``/``marker`` and the trailing three fields are used only by the llr-focus40 compiler
+    figure (:func:`llr40_rows`, :func:`llr40_figure`): the TSVC rows :func:`arm_rows` and
+    :func:`paired_rows` build never set them, so ``draw()`` keeps colouring by
+    :func:`~hpcagent_bench.stats.palette.framework_colors` and every mark keeps the plain circle it
+    always drew. ``ratios_low``/``ratios_high`` are a per-kernel confidence bound on ``ratios`` OVER
+    THE KERNEL'S OWN REPETITIONS (SC15 rules 5/7) -- empty for a deterministic column, which has
+    none to bound. ``tokens`` is the per-kernel spend a canon column has none of.
+    """
 
     framework: str
     label: str
@@ -94,6 +108,11 @@ class Row:
     numerator_ms: dict[str, float]
     denominator_ms: dict[str, float]
     excluded: str
+    color: str | None = None
+    marker: str = "o"
+    ratios_low: dict[str, float] = dataclasses.field(default_factory=dict)
+    ratios_high: dict[str, float] = dataclasses.field(default_factory=dict)
+    tokens: dict[str, float] = dataclasses.field(default_factory=dict)
 
 
 def shard_paths(root: pathlib.Path, framework: str) -> list[pathlib.Path]:
@@ -369,6 +388,396 @@ def paired_rows(
             )
         )
     return rows
+
+
+#: The baseline every llr-focus40 compiler row is measured against
+#: (:data:`kernel_comparison.CANON_BASELINE`).
+LLR40_BASELINE: str = kernel_comparison.CANON_BASELINE
+
+#: The two canon-sweep columns this figure draws as their OWN rows, in draw order: DaCe's
+#: parallel-CPU backend, then its canonicalizing pass over the same backend.
+LLR40_CANON_COLUMNS: tuple[str, ...] = ("dace_cpu", "dace_cpu_canonicalize")
+
+#: The two CPF conditions this figure draws, per model -- never the no-packet control, which
+#: answers a different question and which :mod:`hpcagent_bench.stats.figures.kernel_comparison`
+#: already draws on its own axis.
+LLR40_CONDITIONS: tuple[str, ...] = ("cpf", "cpfsrc")
+
+#: Column order of the emitted token summary table.
+TOKEN_SUMMARY_COLUMNS: tuple[str, ...] = (
+    "row", "framework", "n", "geomean_tokens", "geomean_tokens_low", "geomean_tokens_high",
+)  # fmt: skip
+
+
+def canon_kernel_row(
+    canon_frame: pd.DataFrame, column: str, roster: Sequence[str], baseline: str = LLR40_BASELINE
+) -> Row:
+    """One canon-sweep column's row against ``baseline``, restricted to ``roster``: a single
+    deterministic ``median_ms`` per kernel (:func:`hpcagent_bench.stats.canon.read_times`), so
+    ``ratios_low``/``ratios_high`` and ``tokens`` stay empty -- a canon sweep has no repetition to
+    bound and runs no agent to cost. A canon sweep commonly spans MORE kernels than one figure's
+    roster (:data:`kernel_comparison.CANON_COLUMN` sweeps 40); without this restriction the
+    summary column would geomean a population the panel never drew."""
+    times = canon.read_times(canon_frame)
+    base, cur = times.get(baseline, {}), times.get(column, {})
+    kernels = set(roster)
+    ratios = {k: base[k] / ms for k, ms in sorted(cur.items()) if k in base and k in kernels}
+    label = experiment_tags.names("frameworks").get(column, column)
+    return Row(
+        column, label, ratios, {k: base[k] for k in ratios}, {k: cur[k] for k in ratios}, "none",
+        palette.framework_color(column), kernel_comparison.CANON_MARKER,
+    )  # fmt: skip
+
+
+def agent_kernel_row(
+    frame: pd.DataFrame,
+    arm: str,
+    model: str,
+    condition: str,
+    roster: Sequence[str],
+    repeats: population.RepeatPolicy = "latest",
+) -> Row:
+    """One CPF arm's row, restricted to ``roster``: its final answer per kernel (Rule 4's costs
+    behind the ratio), plus each kernel's OWN confidence interval over every graded episode that
+    kernel ran (rules 5/7) -- the geomean of that kernel's repetitions, degenerate to a point below
+    two samples (:func:`~hpcagent_bench.stats.summary.geomean_ci`)."""
+    subset = frame[frame["arm"].astype(str) == arm]
+    answers = population.kernel_answers(subset, repeats=repeats, policy="solved")
+    kernels = set(roster)
+    ratios: dict[str, float] = {}
+    numerator_ms: dict[str, float] = {}
+    denominator_ms: dict[str, float] = {}
+    if "speedup" in answers.columns:
+        for kernel, row in answers.iterrows():
+            kernel = str(kernel)
+            if kernel not in kernels:
+                continue
+            speedup = float(row["speedup"])
+            if not math.isfinite(speedup) or speedup <= 0.0:
+                continue
+            ratios[kernel] = speedup
+            numerator_ms[kernel] = float(row["baseline_ns"]) / 1.0e6
+            denominator_ms[kernel] = float(row["native_ns"]) / 1.0e6
+    ratios_low: dict[str, float] = {}
+    ratios_high: dict[str, float] = {}
+    graded = subset[subset["record"] == "submission"] if "record" in subset.columns else subset
+    episodes = population.graded_episode_rows(graded, population.SUBMISSION_ORDER)
+    if not episodes.empty:
+        for kernel, group in episodes.groupby("benchmark"):
+            kernel = str(kernel)
+            if kernel not in ratios:
+                continue
+            values = usable_ratios(group["speedup"].tolist(), label=f"{arm}@{kernel}")
+            if values.size == 0:
+                continue
+            interval = geomean_ci(values)
+            ratios_low[kernel] = interval.low
+            ratios_high[kernel] = interval.high
+    raw_tokens, tokens_low, tokens_high = kernel_comparison.arm_tokens(subset, arm, repeats)
+    del tokens_low, tokens_high  # under "latest" both are empty; a repeat's own range is not this figure's concern
+    tokens = {k: v for k, v in raw_tokens.items() if k in kernels}
+    label = f"{experiment_tags.model_name(model)} - {kernel_comparison.condition_label(condition)}"
+    return Row(
+        arm, label, ratios, numerator_ms, denominator_ms, "none",
+        palette.color(condition), palette.marker(model), ratios_low, ratios_high, tokens,
+    )  # fmt: skip
+
+
+def llr40_rows(
+    canon_frame: pd.DataFrame,
+    observations: pd.DataFrame | None,
+    roster: Sequence[str],
+    baseline: str = LLR40_BASELINE,
+    canon_columns: Sequence[str] = LLR40_CANON_COLUMNS,
+    conditions: Sequence[str] = LLR40_CONDITIONS,
+    pattern: re.Pattern[str] = kernel_comparison.ARM_PATTERN,
+    repeats: population.RepeatPolicy = "latest",
+) -> list[Row]:
+    """DaCe's own canon-sweep rows, then every model's ROSTER-COMPLETE CPF arm rows
+    (:func:`~hpcagent_bench.stats.population.complete_arms`), all against ``baseline`` -- the
+    llr-focus40 compiler figure's row source. ``observations=None`` draws the canon rows alone: the
+    campaign DB is not always reachable, and a figure with only the deterministic columns is still
+    a real, if partial, answer -- never a raised error."""
+    rows = [canon_kernel_row(canon_frame, column, roster, baseline) for column in canon_columns]
+    if observations is None:
+        return rows
+    candidates = kernel_comparison.candidate_arms(observations, pattern)
+    frame = observations[observations["arm"].astype(str).isin(candidates)]
+    kept, dropped = population.complete_arms(frame, roster)
+    del dropped  # a caller wanting the drop reasons reads population.complete_arms itself
+    by_model: dict[str, list[str]] = {}
+    for arm in kept:
+        model, condition = candidates[arm]
+        if condition in conditions:
+            by_model.setdefault(model, []).append(arm)
+    for model in palette.in_order(by_model.keys(), "models"):
+        for arm in sorted(by_model[model], key=lambda a: kernel_comparison.rank_condition(candidates[a][1])):
+            model_tag, condition = candidates[arm]
+            rows.append(agent_kernel_row(frame, arm, model_tag, condition, roster, repeats))
+    return rows
+
+
+def geomean_reducer(values: "Sequence[float]") -> float:
+    """The RIGHTMOST summary column's statistic for EVERY llr-focus40 row, on both panels: the
+    geomean over the kernels the row has a value for (SC15 Rule 4's "use the geometric mean for
+    summarizing ratios" applied identically to a speed-up ratio and to a token count -- neither
+    is summed, and a median would not carry the log-space interval Rule 5/7 asks for)."""
+    usable = usable_ratios(list(values), warn=False)
+    return float(geomean_ci(usable).point) if usable.size else math.nan
+
+
+def geomean_interval_of(
+    row_by_key: Mapping[str, Row], select: Callable[[Row], dict[str, float]]
+) -> Callable[["kernel_comparison.Series"], tuple[float, float]]:
+    """A :func:`kernel_comparison.draw_summary_column` ``interval_of`` reading the SAME geomean's
+    95% log-space t-interval that :func:`geomean_reducer` places the point from -- point and
+    interval are ONE statistic, never two independently computed numbers that could disagree."""
+
+    def interval(series: "kernel_comparison.Series") -> tuple[float, float]:
+        usable = usable_ratios(list(select(row_by_key[series.key]).values()), warn=False)
+        if usable.size == 0:
+            return math.nan, math.nan
+        ci = geomean_ci(usable)
+        return ci.low, ci.high
+
+    return interval
+
+
+def style_log2_speedup_y_axis(ax: Axes, ratios: Sequence[float]) -> None:
+    """The speed-up panel's Y axis: LOG2 GEOMETRY (every doubling the same distance apart,
+    :func:`~hpcagent_bench.stats.summary.log2_change`), ticks and labels read back in RATIOS
+    (:func:`~hpcagent_bench.stats.figures.per_kernel.speedup_tick_label`) so the axis still READS
+    as a speed-up while only its geometry is log2. A LINEAR signed change (:func:`~hpcagent_bench.stats.summary.signed_change`)
+    stretches every multiple of the baseline the same amount, so one 75x outlier would sit 74 units
+    from zero and swamp every other kernel's mark onto a sliver near it; log2 puts that same 75x
+    at +6.2, the same distance a 2x-to-4x doubling gets."""
+    ticks = kernel_comparison.value_ticks(ratios)
+    positions = [log2_change(tick) for tick in ticks]
+    ax.set_yticks(positions)
+    ax.set_yticklabels([speedup_tick_label(tick) for tick in ticks], fontsize=style.TICK_PT * 0.6)
+    ax.set_ylim(positions[0] - 0.3, positions[-1] + 0.3)
+    ax.axhline(0.0, color=style.REFERENCE, linewidth=0.9, zorder=1)
+    ax.grid(axis="y", which="major", color=style.RULE, linewidth=0.7, zorder=0)
+    ax.set_axisbelow(True)
+
+
+def per_kernel_repeats_note(rows: Sequence[Row]) -> str:
+    """The legend's own words for why some (or every) per-kernel mark draws no whisker: SC15 rules
+    5/7 ask a deterministic measurement to be REPORTED as such, not left to read as a dropped
+    feature. ``ratios_low``/``ratios_high`` bound a kernel only where it has a repetition to bound
+    (:func:`agent_kernel_row`); a canon-sweep column never populates either at all."""
+    widths = [row.ratios_high[kernel] - row.ratios_low[kernel] for row in rows for kernel in row.ratios_low]
+    return "n>1 for some kernels" if widths and max(widths) > 1.0e-9 else "n=1 per kernel"
+
+
+#: Inches ONE rotated kernel-label character needs at :data:`kernel_comparison.KERNEL_LABEL_PT` --
+#: llr-focus40 names run from 6 to 30 characters, and the fixed margin
+#: :data:`kernel_comparison.BOTTOM_MARGIN_IN` sizes for a double-column insert's own names, not
+#: this figure's longest ones nor the legend sitting below them.
+LLR40_LABEL_CHAR_IN: float = 0.075
+
+#: Inches reserved for the legend row below the rotated kernel labels.
+LLR40_LEGEND_HEIGHT_IN: float = 0.7
+
+
+def llr40_bottom_margin_in(kernels: Sequence[str]) -> float:
+    """The rotated kernel labels' own height, from the ACTUAL longest name in ``kernels``, plus
+    room for the legend below them -- a margin sized for the short names runs the long ones
+    (``use_stencil_through_transient``) into the legend."""
+    longest = max((len(k) for k in kernels), default=0)
+    return longest * LLR40_LABEL_CHAR_IN + LLR40_LEGEND_HEIGHT_IN
+
+
+def legend_handles(rows: Sequence[Row], kernels: Sequence[str]) -> list[Line2D]:
+    """One legend entry per row -- its own colour and shape, and the registry display name
+    :func:`llr40_rows` already built into ``row.label`` -- plus the keys every panel draws the same
+    way: the per-kernel whisker (method and n, :func:`per_kernel_repeats_note`), the geomean-and-
+    interval mark (method and its own n), and the undelivered cross
+    (:data:`~hpcagent_bench.stats.style.NOT_DELIVERED_LABEL`)."""
+    handles: list[Line2D] = [
+        Line2D(
+            [], [], marker=row.marker, linestyle="none", color=row.color or style.MUTED, markersize=7, label=row.label
+        )
+        for row in rows
+    ]
+    handles.append(
+        Line2D(
+            [],
+            [],
+            marker="|",
+            linestyle="none",
+            color=style.MUTED,
+            markeredgewidth=1.6,
+            markersize=10,
+            label=f"Per-Kernel {DEFAULT_CONFIDENCE:.0%} t-Interval ({per_kernel_repeats_note(rows)})",
+        )  # fmt: skip
+    )
+    handles.append(
+        Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="none",
+            color=style.MUTED,
+            markersize=5.5,
+            label=f"Geomean, {DEFAULT_CONFIDENCE:.0%} t-Interval (n<={len(kernels)})",
+        )  # fmt: skip
+    )
+    handles.append(
+        Line2D(
+            [],
+            [],
+            marker="x",
+            linestyle="none",
+            color=style.MUTED,
+            markeredgewidth=1.6,
+            markersize=7,
+            label=style.NOT_DELIVERED_LABEL,
+        )  # fmt: skip
+    )
+    return handles
+
+
+def llr40_figure(rows: Sequence[Row], roster: Sequence[str], title: str) -> matplotlib.figure.Figure:
+    """The llr-focus40 compiler figure: DaCe's own canon-sweep columns and every model's CPF arm,
+    ONE KERNEL AXIS shared by a speed-up panel (LOG2 geometry, ratio-labelled ticks) and, only when
+    at least one row spends tokens, a tokens-spent panel below it -- each with a geomean-and-95%-
+    interval summary column past a dashed separator
+    (:func:`kernel_comparison.draw_panel`/:func:`kernel_comparison.draw_summary_column`, reused
+    here through their ``transform``/``interval_of`` hooks so the log2 axis and the geomean
+    statistic are this module's own while the kernel-axis/dodge/summary-column geometry stays the
+    one place that draws it). A compiler-only render (no agent arm attached) spends no tokens at
+    all, and a panel with nothing to draw is a blank frame, not information -- it is omitted, and
+    the figure stays the SAME WIDTH, one panel tall instead of two."""
+    if not rows:
+        raise ValueError("no row to draw")
+    style.apply()
+    kernels = sorted(roster)
+    row_by_key = {row.framework: row for row in rows}
+    speedup_series = [
+        kernel_comparison.Series(
+            row.framework, row.label, row.color or palette.framework_color(row.framework), row.marker, "", "",
+            row.ratios, {}, {}, {},
+        )
+        for row in rows
+    ]  # fmt: skip
+    token_rows = [row for row in rows if row.tokens]
+    has_tokens = bool(token_rows)
+    token_series = [
+        kernel_comparison.Series(
+            row.framework, row.label, row.color or palette.framework_color(row.framework), row.marker, "", "",
+            row.tokens, {}, {}, {},
+        )
+        for row in token_rows
+    ]  # fmt: skip
+    size = kernel_comparison.mark_size(
+        kernel_comparison.kernel_pitch(len(speedup_series), len(kernels), True), len(speedup_series)
+    )
+    n_panels = 2 if has_tokens else 1
+    width = kernel_comparison.figure_size(len(speedup_series), len(kernels), True)[0]
+    bottom_margin = llr40_bottom_margin_in(kernels)
+    height = (
+        n_panels * kernel_comparison.PANEL_HEIGHT_IN
+        + (kernel_comparison.PANEL_GAP_IN if has_tokens else 0.0)
+        + kernel_comparison.TOP_MARGIN_IN
+        + bottom_margin
+    )
+    fig, axes = plt.subplots(n_panels, 1, sharex=True, figsize=(width, height), squeeze=False)
+    speedup_ax = axes[0][0]
+    token_ax = axes[1][0] if has_tokens else None
+    style_log2_speedup_y_axis(speedup_ax, [v for row in rows for v in row.ratios.values()])
+    kernel_comparison.draw_panel(
+        speedup_ax, kernels, speedup_series, lambda s: s.values, 1.0, geomean_reducer, "Geomean",
+        not has_tokens, size,
+        range_of=lambda s: (row_by_key[s.key].ratios_low, row_by_key[s.key].ratios_high),
+        interval_of=geomean_interval_of(row_by_key, lambda r: r.ratios),
+        transform=log2_change,
+    )  # fmt: skip
+    speedup_ax.set_ylabel(f"Speed-Up vs {LLR40_BASELINE}", fontsize=style.LABEL_PT * 0.7, color=style.MUTED)
+    if has_tokens and token_ax is not None:
+        token_limits = kernel_comparison.token_axis_limits(v for row in token_rows for v in row.tokens.values())
+        kernel_comparison.style_token_y_axis(token_ax, token_limits)
+        token_row_by_key = {row.framework: row for row in token_rows}
+        kernel_comparison.draw_panel(
+            token_ax, kernels, token_series, lambda s: s.values, token_limits[0], geomean_reducer, "Geomean",
+            True, size, mark_missing=False,
+            interval_of=geomean_interval_of(token_row_by_key, lambda r: r.tokens),
+        )  # fmt: skip
+        token_ax.set_ylabel("Tokens Spent", fontsize=style.LABEL_PT * 0.7, color=style.MUTED)
+
+    def lay_out(total_height: float, margin: float) -> None:
+        fig.subplots_adjust(
+            left=kernel_comparison.LEFT_MARGIN_IN / width,
+            right=1.0 - kernel_comparison.RIGHT_MARGIN_IN / width,
+            top=1.0 - kernel_comparison.TOP_MARGIN_IN / total_height,
+            bottom=margin / total_height,
+            hspace=kernel_comparison.PANEL_GAP_IN / kernel_comparison.PANEL_HEIGHT_IN,
+        )
+
+    lay_out(height, bottom_margin)
+    legend_in = style.legend_below(fig, legend_handles(rows, kernels), y=0.005, fontsize=style.TICK_PT * 0.75)
+    overflow = max(0.0, legend_in - LLR40_LEGEND_HEIGHT_IN)
+    if overflow > 0.0:
+        # A wrapped legend takes more rows than the fixed budget; grow the canvas so the panels
+        # keep their inches instead of letting the key climb into the kernel labels.
+        fig.set_size_inches(width, height + overflow)
+        lay_out(height + overflow, bottom_margin + overflow)
+    style.title(fig, title)
+    return fig
+
+
+def token_summary_table(rows: Sequence[Row]) -> pd.DataFrame:
+    """Each token-spending row's geomean spend and its 95% interval -- Rule 4's construction
+    applied to a COST directly, never a ratio, since tokens are not one. A row that spends no
+    tokens (a canon column) is ABSENT, never entered at zero."""
+    records: list[dict[str, object]] = []
+    for row in rows:
+        if not row.tokens:
+            continue
+        values = usable_ratios(list(row.tokens.values()), label=row.label)
+        if values.size == 0:
+            continue
+        interval = geomean_ci(values)
+        records.append(
+            {
+                "row": row.label,
+                "framework": row.framework,
+                "n": interval.n,
+                "geomean_tokens": interval.point,
+                "geomean_tokens_low": interval.low,
+                "geomean_tokens_high": interval.high,
+            }
+        )
+    frame = pd.DataFrame.from_records(records, columns=TOKEN_SUMMARY_COLUMNS)
+    return rules.require_interval(frame, "geomean_tokens", "geomean_tokens_low", "geomean_tokens_high")
+
+
+def llr40_two_row_figure(
+    canon_frame: pd.DataFrame,
+    observations: pd.DataFrame | None,
+    roster: Sequence[str],
+    out: pathlib.Path,
+    baseline: str = LLR40_BASELINE,
+    canon_columns: Sequence[str] = LLR40_CANON_COLUMNS,
+    conditions: Sequence[str] = LLR40_CONDITIONS,
+    pattern: re.Pattern[str] = kernel_comparison.ARM_PATTERN,
+    repeats: population.RepeatPolicy = "latest",
+    title: str = "llr-focus40: DaCe Canon-Sweep Columns and CPF Arms vs Numba",
+    dpi: float = 150.0,
+) -> pathlib.Path:
+    """Build the llr-focus40 compiler rows, write their tables (Rule 4's costs, rules 5/7's
+    intervals -- :func:`write_tables`, :func:`token_summary_table`) and render the two-panel
+    figure. The ONE function a script calls; ``scripts/plot_llr40_compilers.py`` only parses args.
+    ``dpi`` defaults to 150 -- this figure's own review/paper convention, not
+    :func:`~hpcagent_bench.stats.style.save`'s general-purpose 200.
+    """
+    rows = llr40_rows(canon_frame, observations, roster, baseline, canon_columns, conditions, pattern, repeats)
+    write_tables(rows, out)
+    tokens = token_summary_table(rows)
+    if not tokens.empty:
+        tokens.to_csv(out.with_name(f"{out.name}-tokens-summary.csv"), index=False)
+    fig = llr40_figure(rows, roster, title)
+    return style.save(fig, out, formats=("pdf", "png"), fixed=True, dpi=dpi)
 
 
 def arms_figure(root: pathlib.Path, out: pathlib.Path) -> pathlib.Path:

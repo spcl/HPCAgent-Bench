@@ -408,7 +408,14 @@ def summary_column_position(n_kernels: int) -> tuple[float, float]:
 
 
 def dodge_offsets(n: int) -> np.ndarray:
-    """One x offset per series within a kernel slot, spread over :data:`DODGE_SPAN` of it."""
+    """One x offset per series within a kernel slot, spread over :data:`DODGE_SPAN` of it.
+
+    ``n == 0`` returns EMPTY, not a stray single offset: a panel a caller draws with no series at
+    all (a metric none of its rows carries, e.g. tokens when every row is a deterministic column)
+    zips this against an equally empty ``series_list``, which ``strict=True`` would otherwise
+    refuse as a length mismatch."""
+    if n == 0:
+        return np.array([])
     if n <= 1:
         return np.array([0.0])
     return np.linspace(-DODGE_SPAN / 2.0, DODGE_SPAN / 2.0, n)
@@ -434,16 +441,38 @@ def draw_summary_column(
     reducer: Callable[[Iterable[float]], float],
     label: str,
     size: float,
+    interval_of: Callable[[Series], tuple[float, float]] | None = None,
+    transform: Callable[[float], float] = lambda v: v,
 ) -> None:
     """The dashed separator and one dodged mark per series at ``summary_x``, plus a small annotation
     naming the statistic ABOVE the panel -- never an x-axis tick label, which the panels' shared x
     axis would hand to both (see the module docstring). Each series keeps the offset it has inside a
-    kernel slot, so its summary mark sits under the same colour and shape it drew all along."""
+    kernel slot, so its summary mark sits under the same colour and shape it drew all along.
+
+    ``interval_of``, when given, reads a (low, high) confidence bound off ``reducer``'s OWN
+    statistic (in the same units ``value_of`` returns) and draws it as a thin whisker behind the
+    mark, the same "connector under fill" order the token range whisker already uses -- absent by
+    default, which keeps every existing caller's summary a bare point.
+
+    ``transform`` maps a value into DISPLAY units right before it is plotted (identity by default):
+    ``value_of``/``reducer``/``interval_of`` stay in the statistic's NATURAL units (a ratio, for a
+    geometric mean), and only the plotted position is ever transformed, so a caller on a signed
+    axis reads exactly the same ratio-domain statistic a caller on a log-ratio axis does.
+    """
     ax.axvline(separator_x, color=plotstyle.RULE, linestyle=(0, (3, 3)), linewidth=1.0, zorder=1)
     for offset, series in zip(dodge_offsets(len(series_list)), series_list, strict=True):
         point = reducer(value_of(series).values())
         if math.isfinite(point):
-            plotstyle.point_mark(ax, summary_x + offset, point, series.color, series.marker, filled=True, size=size)
+            if interval_of is not None:
+                low, high = interval_of(series)
+                if math.isfinite(low) and math.isfinite(high):
+                    ax.vlines(
+                        summary_x + offset, transform(low), transform(high),
+                        color=series.color, linewidth=1.3, alpha=0.7, zorder=TOKEN_RANGE_Z,
+                    )  # fmt: skip
+            plotstyle.point_mark(
+                ax, summary_x + offset, transform(point), series.color, series.marker, filled=True, size=size
+            )
     ax.annotate(
         label,
         xy=(summary_x, 1.0),
@@ -476,6 +505,8 @@ def draw_panel(
     range_of: Callable[[Series], tuple[dict[str, float], dict[str, float]]] | None = None,
     mark_missing: bool = True,
     delivered_of: Callable[[Series], dict[str, bool]] | None = None,
+    interval_of: Callable[[Series], tuple[float, float]] | None = None,
+    transform: Callable[[float], float] = lambda v: v,
 ) -> None:
     """One panel, for ONE metric (:func:`value_of` reads it off each series): the kernel slots,
     dodged apart within each slot, plus the summary group past their right end
@@ -494,6 +525,11 @@ def draw_panel(
     of RATIOS carries the 1x placeholder inside the value itself (a non-delivery divided by a real
     answer is not 1.0), so the cross has to go on a drawn mark rather than on an absent one. Without
     it every present value is a measurement, which is what an absolute panel wants.
+
+    ``interval_of`` and ``transform`` pass straight through to :func:`draw_summary_column`; ``value_of``,
+    ``range_of`` and ``missing_y`` stay in the SAME natural units regardless of ``transform`` -- only the
+    plotted position changes, so a signed-axis caller reads its missing-value placeholder, its whisker
+    ends and its summary interval off the identical ratio-domain data a log-ratio caller does.
     """
     separator_x, summary_x = summary_column_position(len(kernels))
     kernel_axis(ax, kernels, label_kernels)
@@ -509,17 +545,24 @@ def draw_panel(
             if value is None or not math.isfinite(value) or value <= 0.0:
                 if mark_missing:
                     plotstyle.point_mark(
-                        ax, x, missing_y, series.color, series.marker, filled=False, size=size, delivered=False
-                    )
+                        ax, x, transform(missing_y), series.color, series.marker,
+                        filled=False, size=size, delivered=False,
+                    )  # fmt: skip
                 continue
             low, high = low_of.get(kernel), high_of.get(kernel)
             if low is not None and high is not None and math.isfinite(low) and math.isfinite(high) and low < high:
-                ax.vlines(x, low, high, color=series.color, linewidth=1.1, alpha=0.55, zorder=TOKEN_RANGE_Z)
+                ax.vlines(
+                    x, transform(low), transform(high), color=series.color, linewidth=1.1, alpha=0.55,
+                    zorder=TOKEN_RANGE_Z,
+                )  # fmt: skip
             plotstyle.point_mark(
-                ax, x, value, series.color, series.marker, filled=True, size=size,
+                ax, x, transform(value), series.color, series.marker, filled=True, size=size,
                 delivered=delivered.get(kernel, True),
             )  # fmt: skip
-    draw_summary_column(ax, separator_x, summary_x, series_list, value_of, reducer, summary_label, size)
+    draw_summary_column(
+        ax, separator_x, summary_x, series_list, value_of, reducer, summary_label, size,
+        interval_of=interval_of, transform=transform,
+    )  # fmt: skip
 
 
 def legend_handles(

@@ -53,6 +53,8 @@ REFERENCE: str = "#3a3a3e"
 #: comfortably read. These are set so the SMALLEST text survives that reduction: 13pt ticks reach
 #: the page around 6.5pt, and the axis labels and title scale with them.
 TITLE_PT: float = 20.0
+#: Floor for the shrink in :func:`title`: below this the title is smaller than the tick labels.
+MIN_TITLE_PT: float = 8.0
 SUBTITLE_PT: float = 13.0
 LABEL_PT: float = 16.0
 TICK_PT: float = 14.0
@@ -63,6 +65,17 @@ ANNOTATION_PT: float = 13.0
 #: covers more of the page than its own content needs; a script exposes it as ``--double-column``
 #: rather than each guessing its own width.
 DOUBLE_COLUMN_WIDTH: float = 7.0
+
+#: Per-paper page budgets, in inches, so a figure drops in at scale 1.0 instead of being shrunk by
+#: ``\includegraphics`` -- shrinking a figure shrinks its type below what this module sets.
+#: ``ICLR_TEXT_WIDTH_IN``: ``agentbench-paper/iclr2027_conference.sty`` line 49,
+#: ``\textwidth 5.5 true in`` (single column, so this is the whole row's budget).
+#: ``ACM_COLUMN_WIDTH_IN``/``ACM_TEXT_WIDTH_IN``: the mpr paper's ``acmart.cls`` (``sigconf``,
+#: two columns) documented defaults -- confirm against that class file before a real figure there
+#: is sized to it.
+ICLR_TEXT_WIDTH_IN: float = 5.5
+ACM_COLUMN_WIDTH_IN: float = 3.33
+ACM_TEXT_WIDTH_IN: float = 7.0
 
 
 def apply() -> None:
@@ -111,16 +124,26 @@ def title(fig: Figure, text: str, subtitle: str = "") -> float:
     so the callers do not all have to change at once, and so a caller passing one is not silently
     dropping information it thought was displayed.
     """
-    height = float(fig.get_size_inches()[1])
+    width, height = (float(value) for value in fig.get_size_inches())
     # Work in inches, then convert: a fraction of a 4-inch figure is a different gap than the same
     # fraction of a 12-inch one, which is what made the fixed offsets collide.
     top = 1.0 - (0.34 / height)
-    fig.text(0.5, top, text, fontsize=TITLE_PT, color=INK, ha="center", va="top")  # pyright: ignore[reportUnknownMemberType]
+    artist = fig.text(0.5, top, text, fontsize=TITLE_PT, color=INK, ha="center", va="top")  # pyright: ignore[reportUnknownMemberType]
+    # A title longer than the canvas is centred and clipped at both ends, so the figure loses the
+    # first and last words of its own name. Shrink it to the width the template gives it.
+    size = TITLE_PT
+    while size > MIN_TITLE_PT:
+        box = artist.get_window_extent(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
+        if box.width <= width:
+            break
+        size -= 0.5
+        artist.set_fontsize(size)
     return max(0.5, top - 0.30 / height)
 
 
-def legend_below(fig: Figure, handles: Sequence[Artist], ncol: int = 0, y: float = 0.0, fontsize: float = 0.0) -> None:
-    """One legend, under the whole figure, centred. Never inside the axes.
+def legend_below(fig: Figure, handles: Sequence[Artist], ncol: int = 0, y: float = 0.0, fontsize: float = 0.0) -> float:
+    """One legend, under the whole figure, centred, wrapped to the figure width. Never inside the
+    axes. Returns the legend's height in inches, which the caller adds to its bottom margin.
 
     An in-axes legend has to be placed, and every placement is a bet that one corner stays empty.
     That bet loses whenever the data changes: the score-vs-cost figure put its key in the corner
@@ -128,22 +151,35 @@ def legend_below(fig: Figure, handles: Sequence[Artist], ncol: int = 0, y: float
     Below the figure there is no corner to lose, and the legend is in the same place in every
     figure, which is the point of a shared style.
 
+    The requested column count is a ceiling, not a promise: a row of long labels that does not fit
+    the canvas is wrapped onto more rows until it does. A legend wider than the figure survives a
+    ``bbox_inches="tight"`` save by widening the saved page, which is how the llr-focus40 PDF came
+    out 13.7 inches wide and was then shrunk to the column by the includegraphics width, halving its
+    type while the paper template's own width was the number the figure was built for.
+
     ``fontsize`` overrides :data:`LABEL_PT` for a figure whose height cannot afford it -- several
     SQUARE panels joined into one short row still budget the same fixed pixels for the legend as a
     full-height figure, and LABEL_PT alone would not fit.
     """
-    fig.legend(  # pyright: ignore[reportUnknownMemberType]
-        handles=handles,
-        loc="lower center" if y != 0.0 else "upper center",
-        bbox_to_anchor=(0.5, y),
-        ncol=ncol if ncol != 0 else min(len(handles), 5),
-        frameon=False,
-        fontsize=fontsize if fontsize > 0.0 else LABEL_PT,
-        markerscale=1.4,
-        handletextpad=0.5,
-        columnspacing=1.6,
-        borderaxespad=0.0,
-    )
+    columns = ncol if ncol != 0 else min(len(handles), 5)
+    while True:
+        legend = fig.legend(  # pyright: ignore[reportUnknownMemberType]
+            handles=handles,
+            loc="lower center" if y != 0.0 else "upper center",
+            bbox_to_anchor=(0.5, y),
+            ncol=columns,
+            frameon=False,
+            fontsize=fontsize if fontsize > 0.0 else LABEL_PT,
+            markerscale=1.4,
+            handletextpad=0.5,
+            columnspacing=1.6,
+            borderaxespad=0.0,
+        )
+        box = legend.get_window_extent(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
+        if columns <= 1 or box.width <= float(fig.get_size_inches()[0]):
+            return float(box.height)
+        legend.remove()
+        columns -= 1
 
 
 def decade_label(value: float, position: int = 0) -> str:
@@ -311,21 +347,24 @@ UNDATED: dict[str, dict[str, None]] = {"pdf": {"CreationDate": None}, "svg": {"D
 SVG_HASH_SALT: str = "hpcagent-bench"
 
 
-def save(fig: Figure, stem: pathlib.Path, formats: Sequence[str] = ("pdf", "png"), fixed: bool = False) -> pathlib.Path:
+def save(
+    fig: Figure, stem: pathlib.Path, formats: Sequence[str] = ("pdf", "png"), fixed: bool = False, dpi: float = 200.0
+) -> pathlib.Path:
     """Write ``fig`` under ``stem`` once per suffix in ``formats``, and close it. Returns ``stem``.
 
-    A paper takes the PDF; a web page takes the PNG (at 200 dpi) or the SVG. ``fixed`` keeps the
-    canvas at its figsize instead of cropping to the ink, which is what keeps two paired figures
-    the same size: a tight box is sized by each figure's own legend. Closing matters in a loop --
-    matplotlib keeps every open figure alive, and a sweep that renders one per directory otherwise
-    ends up holding all of them. Every file is written :data:`UNDATED`, so a rerun is byte-identical.
+    A paper takes the PDF; a web page takes the PNG (at ``dpi``, 200 by default) or the SVG.
+    ``fixed`` keeps the canvas at its figsize instead of cropping to the ink, which is what keeps
+    two paired figures the same size: a tight box is sized by each figure's own legend. Closing
+    matters in a loop -- matplotlib keeps every open figure alive, and a sweep that renders one per
+    directory otherwise ends up holding all of them. Every file is written :data:`UNDATED`, so a
+    rerun is byte-identical.
     """
     stem.parent.mkdir(parents=True, exist_ok=True)
     box = fig.bbox_inches if fixed else "tight"
     with plt.rc_context({"svg.hashsalt": SVG_HASH_SALT}):
         for suffix in formats:
             fig.savefig(  # pyright: ignore[reportUnknownMemberType]
-                stem.with_suffix(f".{suffix}"), dpi=200, bbox_inches=box, metadata=UNDATED.get(suffix)
+                stem.with_suffix(f".{suffix}"), dpi=dpi, bbox_inches=box, metadata=UNDATED.get(suffix)
             )
     plt.close(fig)
     return stem
