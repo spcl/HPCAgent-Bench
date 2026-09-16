@@ -54,10 +54,10 @@ not fit that and still get the same two panels:
 
 Both go through `--pairs-csv`, which reads the family CSV `experiments/paired_arms.py` already
 writes. Its `arm_a,arm_b` rows ARE the pairs and its corrected verdicts ARE the stars; the figure
-computes only the two per-arm points, through the same `population.kernel_medians` every other
-panel uses. The statistic therefore keeps ONE definition: a figure that re-derived it could star a
-pair the paper's table calls not significant, and a reader would have no way to tell which of the
-two is the finding.
+computes only the drawn point, through
+`hpcagent_bench.stats.figures.efficacy.reduce_pair` every other panel uses. The statistic therefore
+keeps ONE definition: a figure that re-derived it could star a pair the paper's table calls not
+significant, and a reader would have no way to tell which of the two is the finding.
 
 ```bash
 python scripts/plot_score_change.py scored.csv blind.csv \
@@ -75,6 +75,14 @@ is not the absence of a packet: git-scicomp's is the bare kernel and llrblind's 
 and "No Packet" names neither. The per-arm label is the language plus every packet BOTH arms carried
 (`C`, `Fortran`, `C +skills`, `Fortran +skills`) -- never the intervention, which the title and the
 legend already say once.
+
+`--comparison` joins several such comparisons -- a packet-suffix split and an explicit pair list
+alike -- into ONE row in ONE call: `'title=...;intervention=...;treatment=...'` or
+`'title=...;intervention=...;pairs=<csv>[;control-label=...][;observations=a.csv,b.csv]'`, repeated
+once per panel. `--row-width {natural,iclr,acm-column,acm-text}` sizes the joined row to a panel's
+own natural width or to a paper's page budget
+(`hpcagent_bench.stats.style.ICLR_TEXT_WIDTH_IN`/`ACM_COLUMN_WIDTH_IN`/`ACM_TEXT_WIDTH_IN`) so the
+PDF drops into the page at scale 1.0 instead of being shrunk by `\includegraphics`.
 
 ## A new figure
 
@@ -109,63 +117,70 @@ fig.savefig("out.pdf", bbox_inches=fig.bbox_inches)
 These seven are not preferences. A figure that breaks one is wrong, and the test named beside each
 one fails when it does.
 
-A comparison whose single label column has grown unreadable is split by MODEL, one row of the same
-two panels per model, titled by the model (`plot_score_change.py --rows-by-model`). Past about eight
-arms the labels pile up against the panel ceiling and their leader lines cross; the shape still says
-which model a mark is, so nothing is lost by the split. One row is the default.
-
-**1. The measured value is on Y. No exceptions.** A speed-up, a token count, a ratio -- always the
-Y axis. X carries the CATEGORIES: the two conditions of a comparison, the language, the kernel. A
-long category label is rotated 90 degrees on x; it is not a reason to turn the figure on its side.
-The value axis gets the log scale, the major grid and `style.value_axis`; the categorical axis gets
-none of the three. Pinned by `tests/test_plot_score_change.py`'s
-`test_the_measured_value_is_on_the_y_axis_of_both_panels`.
+**1. The efficacy figure is 2D: log2 speed-up on X, paired token cost on Y.** X is the paired
+speed-up geomean as `log2(ratio)` (`summary.log2_change` of `summary.geomean_ci`): 0 is no change,
++1 is 2x faster, -1 is 2x slower, +2 is 4x -- a LINEAR scale in the exponent, so a 74x kernel does
+not drag a modest win halfway across the panel, with the ticks read back in ratios
+(`hpcagent_bench.stats.figures.per_kernel.speedup_tick_label`) exactly like every other speed-up
+axis here -- never a bare ratio axis ticked in raw ratios. Y is the paired token-cost geomean,
+treated over control, ALSO a `geomean_ci` interval, on its own log scale (SC15 Rule 4: a speed-up
+and a spend are different measurements and never share one). ONE mark per arm, crossed with its 95%
+interval on both axes, scattered over its own per-kernel cloud; nothing joined by a line (SC15 Rule
+12). A bar or a slope figure elsewhere in this repo keeps its measured VALUE on Y and its categories
+on X -- that older rule still holds for `plot_arm_summary.py` and the per-kernel figures, which are
+not paired ratios. Pinned by `tests/test_plot_score_change.py`'s
+`test_x_is_log2_of_the_speed_up_and_zero_is_the_no_change_line` and
+`test_y_is_the_paired_token_cost_ratio_with_one_at_the_control`.
 
 **2. Colour is the INTERVENTION, shape is the MODEL.** `palette.color(packet)` for the treated side
-and `palette.control_color()` for the no-packet side; `palette.marker(model)` for the shape. An
-intervention is anything an arm was given or denied, not only a skill packet: `kernel` (the bare
-kernel), `repo` (the whole repository) and `no-score` (the blind condition) are registered packet
-keys and wear their own global hues, and the blind comparison is drawn by the same paired figure as
-every other packet rather than by a figure of its own. Colouring by MODEL wherever a packet also
-varies is the bug: it spends the intervention's channel on the entity the shape already carries, so
-one arm reads as a different treatment in every figure it appears in. Where only ONE entity varies
-the colour is that entity: `palette.framework_color` for the canon compiler figure (no agent in it),
-`palette.harness_color` for the harness comparison (claude / miniswe / openhands / optimas), and
-`palette.model_color` for a figure whose only axis is which LLM ran. Pinned by
-`tests/test_plot_score_change.py`'s `test_the_filled_mark_wears_the_packet_colour_and_the_hollow_one_the_control_colour`
+and `palette.control_color()` for the hollow control reference; `palette.marker(model)` for the
+shape. An intervention is anything an arm was given or denied, not only a skill packet: `kernel`
+(the bare kernel), `repo` (the whole repository) and `no-score` (the blind condition) are registered
+packet keys and wear their own global hues, and the blind comparison is drawn by the same paired
+figure as every other packet rather than by a figure of its own. Colouring by MODEL wherever a
+packet also varies is the bug: it spends the intervention's channel on the entity the shape already
+carries, so one arm reads as a different treatment in every figure it appears in. Where only ONE
+entity varies the colour is that entity: `palette.framework_color` for the canon compiler figure (no
+agent in it), `palette.harness_color` for the harness comparison (claude / miniswe / openhands /
+optimas), and `palette.model_color` for a figure whose only axis is which LLM ran. Pinned by
+`tests/test_plot_score_change.py`'s
+`test_the_filled_mark_wears_the_packet_colour_and_the_hollow_control_wears_the_control_colour`
 and `test_the_marker_shape_is_the_model_and_nothing_else`.
 
-**3. Two square panels per comparison.** A speed-up and a token count are different measurements
-(SC15 Rule 4), so they never share a scale: `plot_score_change.py` draws them as two panels of equal
-box aspect side by side, with the two CONDITIONS on X and one hollow mark, one filled mark and the
-pair link between them per arm. EVERY intervention gets these two panels, whichever way its pairs
-were formed -- see "A comparison whose pairs are not a packet suffix" below. Pinned by
-`tests/test_plot_score_change.py`'s `test_n_treatments_draw_one_row_of_two_square_panels_each`.
+**3. Several comparisons join as ONE ROW of square panels.** `hpcagent_bench.stats.figures.
+efficacy.figure_row`/`panel_side`: every comparison is a square panel against its own control, and a
+row is the alternatives-not-a-sequence shape (up to three fit a paper's single column at scale 1.0;
+`--row-width` scales a wider row to a paper's own text width). EVERY intervention draws through the
+same panel, whichever way its pairs were formed -- see "A comparison whose pairs are not a packet
+suffix" below. Pinned by `tests/test_plot_score_change.py`'s
+`test_n_comparisons_draw_one_row_of_n_square_panels`.
 
-**4. Major grid only.** `style.value_axis` draws it, on the value axis alone, and switches every
-minor line and minor label off. A minor line is a second grid at a second weight, and once a figure
-is reduced for print the panel reads as a texture the marks sit on rather than a reference they sit
-against. Pinned by `tests/test_plot_score_change.py`'s `test_neither_panel_enables_a_minor_grid`.
+**4. Major grid only.** `style.value_axis` draws it, on both axes here (each carries a measured
+ratio), and switches every minor line and minor label off. A minor line is a second grid at a second
+weight, and once a figure is reduced for print the panel reads as a texture the marks sit on rather
+than a reference they sit against. Pinned by `tests/test_plot_score_change.py`'s
+`test_neither_axis_enables_a_minor_grid`.
 
 **5. One legend, on the FIGURE.** `style.legend_below(fig, handles, ...)`, once per figure, never
 `ax.legend`. A key on each panel of a multi-panel figure invites reading the panels as different
 sets of series when they draw the same ones. Pinned by `tests/test_plot_score_change.py`'s
 `test_the_legend_is_drawn_once_on_the_figure_and_never_on_an_axes`.
 
-**6. A point the arm never delivered carries a cross.** It enters every aggregate at 1x and its
-tokens still count, so it is a placeholder and not a measurement. `style.point_mark(...,
-delivered=False)` keeps the intervention colour and the model shape and overlays a small x; the key
-shows THE CROSS and reads `style.NOT_DELIVERED_LABEL` (`No Verified Answer (Scored 1x)`). Hollow
-alone will not do -- hollow is this repo's spelling for the control. A paired figure keeps the pair,
-with the failed leg at 1x. Pinned by `tests/test_style_save.py`'s
-`test_a_point_mark_that_never_delivered_an_answer_carries_a_cross_on_the_model_shape`.
+**6. A kernel the arm never delivered carries a cross.** It enters the paired ratio at
+`population.NOT_DELIVERED` and its tokens still count, so it is a placeholder and not a measurement.
+The per-kernel cloud draws it as a small cross in the arm's own colour instead of a dot, and the key
+names it `style.NOT_DELIVERED_LABEL` (`No Verified Answer (Scored 1x)`). Hollow alone will not do --
+hollow is this repo's spelling for the control. Pinned by `tests/test_plot_score_change.py`'s
+`test_an_undelivered_kernel_draws_a_cross_and_the_legend_names_it`, and by `tests/test_style_save.py`'s
+`test_a_point_mark_that_never_delivered_an_answer_carries_a_cross_on_the_model_shape` for the shared
+mark itself.
 
-**7. A per-arm label goes in a COLUMN, not in a hole beside its mark.** `stack_labels` puts every
-label at one x right of the treated marks, takes its preferred y from its own point, pushes them
-apart until no two boxes touch, and draws a leader line for any label that had to move. Searching a
-ring of candidate offsets around each mark instead runs out on a narrow panel -- six arms landing
-within a few percent had nowhere to go and printed on top of each other. Pinned by
-`tests/test_plot_score_change.py`'s `test_no_two_arm_labels_overprint_each_other_however_close_the_arms_land`.
+**7. A per-arm label moves to the first clear place around its mark, never on top of another.**
+`efficacy.untangle_labels` tries a ring of candidate offsets (right of the mark first) and keeps the
+first whose rendered box touches no mark and no label settled before it. Call it once the layout is
+final: a label's offset is in points, so a place clear before `subplots_adjust` need not be clear
+after it. Pinned by `tests/test_plot_score_change.py`'s
+`test_no_two_arm_labels_overprint_each_other_however_close_the_arms_land`.
 
 ## Rules
 
@@ -222,10 +237,13 @@ is the unpaired sibling and throws away most of the precision.
 
 **Every ratio figure shows the geomean AND its interval,** and says which interval it is showing.
 `summary.geomean_interval` picks the log-t interval at or above `summary.LOG_T_MIN_SAMPLES` (20)
-samples and a log-space bootstrap below it; tokens are the median with its bootstrap interval. The
-method and the n go in the legend text the script emits, because two differently derived intervals
-drawn the same way are two claims a reader cannot separate. See
-[measurement_statistics.md](measurement_statistics.md).
+samples and a log-space bootstrap below it, for the per-arm figures (`plot_arm_summary.py`,
+`plot_kernel_comparison.py`) that reduce ONE arm's own kernels. The efficacy figure
+(`plot_score_change.py`) is a PAIRED comparison instead, and both of its axes draw
+`summary.geomean_ci` -- always the log-space t interval, at any n, the same estimator
+`hpcagent_bench.stats.figures.signed` draws its own rows with. The method and the n go in the legend
+text either way, because two differently derived intervals drawn the same way are two claims a
+reader cannot separate. See [measurement_statistics.md](measurement_statistics.md).
 
 **Paired figures must be the same size.** Fixed figsize, fixed `subplots_adjust` (not
 `tight_layout`), legend inside the canvas, and `bbox_inches=fig.bbox_inches`. `bbox_inches=None`
@@ -246,7 +264,7 @@ minor lines at wrong ratios.
 | script | figure |
 |---|---|
 | `plot_arm_summary.py` | per-arm median speed-up and spend; one x slot per LANGUAGE, models dodged inside |
-| `plot_score_change.py` | one comparison as two square panels: speed-up on Y, tokens on Y, conditions on X |
+| `plot_score_change.py` | one comparison as one square panel: log2 speed-up on X, paired token cost on Y, one mark per arm |
 | `plot_tokens.py` | tokens per kernel, per model |
 | `plot_repo_vs_kernel.py` | one pair's per-kernel RATIO, speed-up over tokens, on one kernel axis |
 | `plot_speedup.py` | per-kernel signed speed-up in magnitude bands, per machine (see [measurement_statistics.md](measurement_statistics.md)) |

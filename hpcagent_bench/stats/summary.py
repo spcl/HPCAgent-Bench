@@ -442,6 +442,31 @@ def signed_changes(ratios: Samples) -> FloatArray:
     return out
 
 
+def log2_change(ratio: float) -> float:
+    """Speed-up ratio -> its base-2 log. ``2x -> +1``, ``1x -> 0``, ``0.5x -> -1``, ``4x -> +2``.
+
+    The axis a figure whose ticks are read back AS RATIOS draws (:func:`~hpcagent_bench.stats.
+    figures.per_kernel.speedup_tick_label` maps a tick the same way in reverse): a linear scale in
+    the EXPONENT still separates a 2x win from a 2x loss by one unit each, and a 74x kernel does not
+    drag a modest win halfway across the panel the way :func:`signed_change` (``ratio - 1``) would.
+
+    Anything that is not a finite POSITIVE ratio returns NaN, never 0.0: 0 is the exact value of
+    "measured, and nothing changed", and an absent measurement must not be able to claim it.
+    """
+    if not math.isfinite(ratio) or ratio <= 0.0:
+        return math.nan
+    return math.log2(ratio)
+
+
+def log2_changes(ratios: Samples) -> FloatArray:
+    """:func:`log2_change` over an array, NaN where a ratio is not plottable."""
+    x: FloatArray = np.asarray(ratios, dtype=np.float64)
+    out: FloatArray = np.full(x.shape, np.nan, dtype=np.float64)
+    good: npt.NDArray[np.bool_] = np.isfinite(x) & (x > 0.0)
+    out[good] = np.log2(x[good])
+    return out
+
+
 def median_per_kernel(
     frame: "pd.DataFrame", value: str, kernel: str = "benchmark", within: Sequence[str] = ()
 ) -> "pd.Series":

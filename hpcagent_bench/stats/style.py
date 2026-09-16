@@ -64,6 +64,17 @@ ANNOTATION_PT: float = 13.0
 #: rather than each guessing its own width.
 DOUBLE_COLUMN_WIDTH: float = 7.0
 
+#: Per-paper page budgets, in inches, so a figure drops in at scale 1.0 instead of being shrunk by
+#: ``\includegraphics`` -- shrinking a figure shrinks its type below what this module sets.
+#: ``ICLR_TEXT_WIDTH_IN``: ``agentbench-paper/iclr2027_conference.sty`` line 49,
+#: ``\textwidth 5.5 true in`` (single column, so this is the whole row's budget).
+#: ``ACM_COLUMN_WIDTH_IN``/``ACM_TEXT_WIDTH_IN``: the mpr paper's ``acmart.cls`` (``sigconf``,
+#: two columns) documented defaults -- confirm against that class file before a real figure there
+#: is sized to it.
+ICLR_TEXT_WIDTH_IN: float = 5.5
+ACM_COLUMN_WIDTH_IN: float = 3.33
+ACM_TEXT_WIDTH_IN: float = 7.0
+
 
 def apply() -> None:
     """Set the process-wide rcParams. Idempotent; call it before creating a figure."""
