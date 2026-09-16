@@ -186,7 +186,8 @@ place, which is why build.sbatch refuses to when an EDF mounts it.
 ### Weights: iopsstor and striping (already done -- verify, do not redo)
 
 `run_cluster.sh` puts `HF_HOME` and `VLLM_CACHE_ROOT` on iopsstor (9.45 GB/s at 16 readers vs
-capstor's 0.83) and sets a PFL default on the hub dir: narrow below 64 MiB, 16 OSTs at 4 MiB
+0.83 on the general scratch, measured on the retired Lustre mount) and sets a PFL default on the
+hub dir: narrow below 64 MiB, 16 OSTs at 4 MiB
 above. Every large blob of the served models is striped 16. Re-check with:
 
 ```bash

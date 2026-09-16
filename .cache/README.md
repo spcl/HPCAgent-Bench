@@ -12,8 +12,10 @@ and never correctness.
 
 ## Why the repo and not scratch
 
-Same filesystem either way -- the checkout and `$SCRATCH` are both on capstor -- so this is about
-finding it, not speed. It also outlives more: iopsstor purges at 14 days against capstor's 30.
+Same filesystem either way -- the checkout and `$SCRATCH` are on the same scratch mount -- so this
+is about finding it, not speed. It also outlives more: iopsstor purges at 14 days against the
+general scratch's 30 (that retention number was measured on the retired Lustre scratch mount; unconfirmed
+on the current `$SCRATCH` at `/ritom`).
 
 ## The one rule that is not cosmetic
 

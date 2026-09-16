@@ -98,7 +98,7 @@ their short name, the manifest basename.
 | qwen3.8 on SGLang, same attention config | serves with full accuracy up to 51,200-token cases, zero request errors |
 | `JUDGE_NODES=1` (4 ranks) for a 40-agent arm | holds hundreds of scoring calls without a judge backlog |
 | Text-only serving (`--language-only`) | campaign is always text-only; a vision stack only costs KV |
-| Weights on `iopsstor` rather than `capstor` | many times the concurrent-read throughput; see [`docs/serving/knobs.md`](../docs/serving/knobs.md) |
+| Weights on `iopsstor` rather than the general scratch | many times the concurrent-read throughput; see [`docs/serving/knobs.md`](../docs/serving/knobs.md) |
 
 SGLang needs **both** `--reasoning-parser` and `--tool-call-parser` named. With one missing, turn-1
 tool calls are swallowed and the run is logged as a success that submitted nothing.
@@ -227,7 +227,7 @@ silently. Lists are gitignored generated artifacts; the as-run copies for record
 in `ICLR26Reproducibility/paper_artifacts/problems/`.
 
 ```bash
-V=/capstor/scratch/cscs/ybudanaz/x86_64/venv-optarena-314/bin/python3
+V="${SCRATCH:?set SCRATCH}/venv-optarena-314/bin/python3"
 cd <repo root>
 PYTHONPATH=$PWD $V experiments/make_problems.py \
     --track loop_level_reasoning --language c --tag llr-focus40 \
@@ -249,13 +249,13 @@ mixing waves. Scores are in `<RUN_ROOT>/<jobid>/judge/rank-*/hpcagent_bench*.db`
 
 ```bash
 squeue -u $USER -o "%.10i %.28j %.2t %.10M %.6D %R"
-tail -f results/beverin-services-<jobid>.out
+tail -f "${SCRATCH}/hpcagent-bench-runs/slurm/beverin-services-<jobid>.out"
 scontrol release <jobid>          # for launch failed requeued held
 ```
 
 ## Python
 
-`/capstor/scratch/cscs/ybudanaz/x86_64/venv-optarena-314` (3.14.7, pyenv global). The repo is
+`$SCRATCH/venv-optarena-314` (3.14.7, pyenv global). The repo is
 MOUNTED, never pip-installed, so put it on `PYTHONPATH`. Rebuild with
 `tools/rebuild_venv.sh`. Keep caches off HOME -- that quota is INODES, not bytes.
 Note that `pre-commit`'s format hook needs the venv on `PATH` or it reports `missing formatter(s):

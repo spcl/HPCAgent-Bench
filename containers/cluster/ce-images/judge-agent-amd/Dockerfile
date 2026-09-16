@@ -1371,7 +1371,7 @@ WORKDIR /work
 # is where the CSCS hook BIND-MOUNTS the artifact's libfabric at run time, verified by mounting the
 # image with no annotations: the file that appears there is dated Aug 18 15:39 nobody:nogroup, the
 # artifact's own stamp, and lsof/mountinfo show it as a lustre bind from
-# /capstor/store/cscs/.../netstack. Refusing it forbade the hook its own mount point.
+# a CSCS-managed artifact store (exact path unconfirmed since the scratch migration off the retired mount). Refusing it forbade the hook its own mount point.
 #
 # What must NOT ship is a fabric library in a prefix WE control, because those are what RPATH can
 # bind to and RPATH is searched before everything else -- the 629966 failure, where MPICH held a

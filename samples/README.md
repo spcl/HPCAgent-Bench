@@ -195,9 +195,10 @@ parses with its own frontend; a miss is just a rebuild.
 Carried over from `submit_loop_level_reasoning_alps.sbatch`, which says the same of itself: **none of this has
 been checked against the site's own submission scripts.** The partition name, the account and the
 scratch layout are the three things most likely to need a local edit — no `--partition` line is set
-for that reason. `$SCRATCH` on Alps is still the parallel FS; `/iopsstor` (flash) suits thousands of
-small compiler writes better than `/capstor`, so point `DACE_BUILD_ROOT` there if both are mounted,
-but only the mount *names* are known here (from `scripts/cscs/env.toml.example`). There is no Slurm
+for that reason. `$SCRATCH` on Alps is the NFS scratch (`/ritom`, since the general-scratch
+retirement); `/iopsstor` (flash) may suit thousands of small compiler writes better, so point
+`DACE_BUILD_ROOT` there if both are mounted, but only the mount *names* are known here (from
+`scripts/cscs/env.toml.example`). There is no Slurm
 on the development box, so both scripts are verified only by `bash -n`, by the column names and CLI
 flags being checked against the code, and by their helpers being unit-exercised on a fake tree.
 

@@ -102,7 +102,7 @@ RUN set -eux; \
 #
 # It was reaching the sglang arms through PYTHONPATH=${SCRATCH}/pyprefix/sglang-rocm-mi30x, a host
 # directory supplying cupy and flydsl 0.3.2. Measured: with that prefix injected both resolve
-# under /capstor, so what an arm actually ran was invisible to the image digest -- the attribution
+# under the mounted host prefix, so what an arm actually ran was invisible to the image digest -- the attribution
 # hole this image exists to close. It survived because the base ships flydsl 0.3.1 and no cupy at
 # all, so the prefix was genuinely load-bearing. With both baked it has nothing left to add.
 #
@@ -146,7 +146,7 @@ RUN /opt/venv/bin/python3 -c "import cupy, flydsl; \
 # is where the CSCS hook BIND-MOUNTS the artifact's libfabric at run time, verified by mounting the
 # image with no annotations: the file that appears there is dated Aug 18 15:39 nobody:nogroup, the
 # artifact's own stamp, and lsof/mountinfo show it as a lustre bind from
-# /capstor/store/cscs/.../netstack. Refusing it forbade the hook its own mount point.
+# a CSCS-managed artifact store (exact path unconfirmed since the scratch migration off the retired mount). Refusing it forbade the hook its own mount point.
 #
 # What must NOT ship is a fabric library in a prefix WE control, because those are what RPATH can
 # bind to and RPATH is searched before everything else -- the 629966 failure, where MPICH held a

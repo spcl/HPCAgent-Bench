@@ -87,7 +87,8 @@ the slowest stage above, so no override is needed to start this model with `serv
   `torch.Tensor.format_ue8m0` false plus
   `HIPCC_COMPILE_FLAGS_APPEND=-U__HIP_NO_HALF_CONVERSIONS__ -U__HIP_NO_HALF_OPERATORS__`, and
   `sglang-candidate` bakes both into the image. An EDF that reaches the guard through a
-  `PYTHONPATH` under `/capstor` fails: the per-role mount block drops `/capstor` for inference.
+  `PYTHONPATH` under `$SCRATCH` fails: the per-role mount block drops the general scratch tree for
+  inference.
 - **Assign `SGLANG_ATTENTION_BACKEND=` empty.** `run_cluster.sh` reads
   `${SGLANG_ATTENTION_BACKEND-aiter}`, so an ABSENT key appends `--attention-backend aiter` and only
   an assigned empty value omits it. With no flag `GlmMoeDsaForCausalLM` selects `dsa`.

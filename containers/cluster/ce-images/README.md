@@ -85,7 +85,8 @@ Restriping is safe only while nothing is serving that model.
 
 **Do not skip step 2 because the weights are already on disk.** A checkpoint downloaded into a
 stripe-1 layout loads at ONE OST's bandwidth: measured, kimi's 554 GiB took 55 minutes, against
-9.45 GB/s at 16 readers on a wide-striped iopsstor (0.83 GB/s on capstor). `run_cluster.sh` sets a
+9.45 GB/s at 16 readers on a wide-striped iopsstor (0.83 GB/s on the retired Lustre scratch mount).
+`run_cluster.sh` sets a
 PFL default on the hub dir, and inheritance USUALLY works: the five models fetched in 2026-08 got
 it, and a control download of Qwen2.5-Coder-7B into a fresh hub dir (job 630445) came down with
 all 4 of its >1G blobs already at stripe_count 16, restriping nothing. But GLM-5.3, downloaded
@@ -416,7 +417,7 @@ written into the repo.** Do not push without explicit instruction.
 
 ## What is on scratch
 
-`/capstor/scratch/cscs/$USER/x86_64/ce-images/` -- roughly 45-60 GB per image. Delete an old image
+`$SCRATCH/ce-images/` -- roughly 45-60 GB per image. Delete an old image
 only after confirming no running job mounts it:
 
 ```bash

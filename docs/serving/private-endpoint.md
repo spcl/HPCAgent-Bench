@@ -84,15 +84,15 @@ On beverin:
 
 ```bash
 umask 077
-mkdir -p ~/.config/optarena /capstor/scratch/cscs/$USER/x86_64/ce-images/logs
+mkdir -p ~/.config/optarena
 openssl rand -hex 32 > ~/.config/optarena/mi200-endpoint.key     # for mi300: mi300-endpoint.key
 ```
 
 - `KEY_FILE` defaults to `~/.config/optarena/<preset>-endpoint.key`. The launcher rejects a key file
   that is not mode 600, is not owned by you, is shorter than 32 characters, or contains characters
   outside `[A-Za-z0-9._~+/=-]`.
-- Slurm writes the job output to the `logs` directory created above. Slurm does not create it, and a job
-  whose output directory is missing fails without any output.
+- Slurm writes the job output to `serve-private-<jobid>.out` in the directory you `sbatch` from
+  (`#SBATCH --output=%x-%j.out`; `#SBATCH` directives cannot expand `$SCRATCH`).
 - The weights must already be in `$HF_HOME/hub` (default `HF_HOME=/iopsstor/scratch/cscs/$USER/hf`). The
   server runs with `HF_HUB_OFFLINE=1`, and the launcher refuses to start if the model directory is
   missing.
@@ -167,7 +167,7 @@ PRESET=mi200 MODE=serve DRY_RUN=1 bash "$L"
 | `LOAD_CONCURRENCY` | `16` | concurrent requests in the smoke load probe |
 | `--time` | `04:00:00` | Slurm walltime from the script header; override it on the `sbatch` line |
 
-- Job output: `/capstor/scratch/cscs/$USER/x86_64/ce-images/logs/serve-private-<jobid>.out`.
+- Job output: `serve-private-<jobid>.out`, in the directory you `sbatch` from.
 - Node name: `squeue -u "$USER" -n serve-private -o '%i %T %N'`.
 - In `serve` mode the job prints its connection block after the lines `unauthenticated POST: 401` and
   `authenticated POST: 200`. Copy the block from your job output. It contains the key file's path, not
@@ -246,7 +246,7 @@ print(reply.choices[0].message.content)
 - a TCP connection to a beverin compute node's `hsn0` address on the server port. Beverin compute nodes
   and Daint login nodes are both on 172.28.0.0/16, and beverin's login node reaches Daint's login nodes
   on port 22; Daint compute nodes were not checked.
-- reading the key file and `endpoint.json` at their beverin paths under `/users` and `/capstor`.
+- reading the key file and `endpoint.json` at their beverin paths under `/users` and `$SCRATCH`.
 
 Before a campaign, run step 2 once in a short Daint job. Exit status 0 confirms both.
 

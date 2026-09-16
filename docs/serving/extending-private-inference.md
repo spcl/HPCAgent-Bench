@@ -128,8 +128,8 @@ tools/run_tests.sh -q -W error tests/test_serve_private.py tests/test_alps_endpo
 
 ## 8. Known limits
 
-- `#SBATCH --output` points to `/capstor/scratch/cscs/%u/x86_64/ce-images/logs`, which each user creates
-  once.
+- `#SBATCH --output`/`--error` are both `%x-%j.out`, relative to the submission directory
+  (`#SBATCH` directives cannot expand `$SCRATCH`).
 - MI250X (gfx90a) has no FP8 kernels in hipBLASLt and no aiter kernels, so mi200 serves BF16 with triton
   attention.
 - `beverin.alps.cscs.ch` in the laptop ssh configuration has not been tested.

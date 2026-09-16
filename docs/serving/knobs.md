@@ -210,7 +210,7 @@ These apply only to a server split across nodes.
 | `SGLANG_SET_CPU_AFFINITY` | `0` | SGLang's own pinning is rejected by the Slurm cgroup here and the process dies on a `psutil` error. |
 | `AITER_JIT_DIR`, `AITER_ROOT_DIR` | a persistent path, or the image's baked one | aiter ships no prebuilt objects and JIT-builds on first **use**, not on import, behind a lock. Cold, that build can outrun the engine's watchdog and the server never serves a token. Warm, it costs nothing. Some aiter code paths ignore `AITER_JIT_DIR` and use `$HOME` instead, so point `HOME` somewhere persistent too. |
 | `TRITON_CACHE_DIR` | a persistent path | Unset, it defaults under `$HOME` and every job re-JITs every kernel -- *during inference*, not at startup. Generation then arrives in bursts between total stalls. |
-| `HF_HOME` | on `iopsstor`, not `capstor` | Checkpoint loading is many concurrent large reads: 9.45 GB/s against 0.83 at 16 readers. Also set a wide Lustre stripe on the hub directory, or a download lands on one storage target and reads back at that one target's bandwidth. |
+| `HF_HOME` | on `iopsstor`, not the general scratch (`$SCRATCH`) | Checkpoint loading is many concurrent large reads: 9.45 GB/s against 0.83 at 16 readers, measured on the retired Lustre scratch mount. Also set a wide Lustre stripe on the hub directory, or a download lands on one storage target and reads back at that one target's bandwidth. |
 | `NCCL_NET_GDR_LEVEL` | `0` | Multi-node only; see above. |
 | `TOKENIZERS_PARALLELISM` | `false` | Silences a fork warning; no measured effect. |
 

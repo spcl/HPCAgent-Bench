@@ -59,7 +59,7 @@ model name: optarena-vllm
 replicas:   http://nid002968:8000/v1
 health:     curl -s http://nid002968:8000/v1/models
 metrics:    curl -s http://nid002968:8000/metrics
-server log: /capstor/scratch/cscs/<you>/x86_64/inference-server/<jobid>/server-0.log
+server log: $SCRATCH/inference-server/<jobid>/server-0.log
 
 curl -s http://nid002968:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
@@ -118,7 +118,7 @@ people:
 `sglang-candidate` is the pre-promotion staging EDF for the sglang role, and it is currently the
 only sglang EDF whose image can load GLM-5.3: the DeepSeek weight loader's `format_ue8m0` guard and
 `HIPCC_COMPILE_FLAGS_APPEND` are baked into that image. The other sglang EDFs reach the same patch
-only through a `PYTHONPATH` under `/capstor`, which the inference role's mount policy drops, so
+only through a `PYTHONPATH` under `$SCRATCH`, which the inference role's mount policy drops, so
 they fail to load GLM-5.3 -- see [`glm53.md`](glm53.md).
 
 If `~/.edf` is empty, `containers/cluster/ce-images/install_edfs.sh` registers the repo's copies
@@ -369,7 +369,7 @@ server needs, because other roles in that job must not see the graded material. 
 job has no other roles, so `serve-only.sbatch` uses the registered EDF as-is, with its wider mounts.
 
 The difference is usually invisible and once was not: a model whose loader patch arrives through a
-path under `/capstor` loads fine under the wide mounts and dies under the narrow ones. If a model
+path under `$SCRATCH` loads fine under the wide mounts and dies under the narrow ones. If a model
 serves for you here and fails inside a benchmark run, suspect the mounts before the model.
 
 ## 8. Where the real numbers live
