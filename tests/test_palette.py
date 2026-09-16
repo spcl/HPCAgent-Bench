@@ -69,13 +69,16 @@ def test_the_ramp_is_tab20_dark_first_and_every_slot_is_distinct():
     """One global palette, matplotlib's tab20, taken dark half first: reading tab20 straight
     through spends the second colour of a figure on a pale wash of its first."""
     ramp = palette.hues()
-    assert len(set(ramp)) == len(ramp) == 20
+    assert len(set(ramp)) == len(ramp) == 40
     assert ramp[:3] == (palette.tab20_slot(0), palette.tab20_slot(2), palette.tab20_slot(4))
     assert sorted(palette.TAB20_ORDER) == list(range(20))
+    # slot 21 onward is tab20b, darkest shade of each of its five hues first
+    assert ramp[20:22] == (palette.colormap_slot(palette.TAB20B, 0), palette.colormap_slot(palette.TAB20B, 4))
+    assert sorted(palette.TAB20B_ORDER) == list(range(20))
 
 
 def test_no_registered_packet_shares_a_slot_with_another():
-    """Twenty packets and twenty slots, so nothing wraps and no packet needs an override. This is
+    """Forty slots (tab20, then tab20b) for every packet, so nothing wraps and no packet needs an override. This is
     what the three hand-picked hex `color:` keys in registry.yaml used to buy one packet at a time."""
     leads = palette.hue_order("packets")
     assert len({palette.color(p) for p in leads}) == len(leads)
@@ -103,7 +106,7 @@ def test_an_unregistered_model_is_stable_and_warns(caplog):
 
 
 def test_two_entities_sharing_a_colour_in_one_figure_warn(caplog):
-    """The ramp still wraps for a kind with more entities than tab20 has slots (31 frameworks), and
+    """The ramp still wraps for a kind with more entities than its forty slots, and
     wrapping is only safe while the wrapped pair never share a figure. Driven through the guard
     itself rather than through a pair that happens to wrap today, so the guard keeps being tested
     on the day the registry grows."""
@@ -136,9 +139,12 @@ PUBLISHED_PACKET_COLORS = {
     "kernel": "#9edae5",
     "cpfsrc+lang-skills": "#389add",
     "divide-and-conquer+profiling": "#e25e5e",
+    "caveman": "#393b79",
 }
 
-PUBLISHED_MODEL_MARKERS = {"qwen38": "o", "oss120b": "s", "kimi27sglang": "^", "glm53": "D"}
+PUBLISHED_MODEL_MARKERS = {
+    "qwen38": "o", "oss120b": "s", "kimi27sglang": "^", "glm53": "D", "dace": "v", "cpf": "P",
+}  # fmt: skip
 
 PUBLISHED_FRAMEWORK_COLORS = {
     "numpy": "#1f77b4",

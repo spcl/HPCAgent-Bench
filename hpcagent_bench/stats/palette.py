@@ -15,8 +15,9 @@ ramp: an INTERVENTION (a skill packet, or a scope such as `kernel`/`repo`/`no-sc
 agent-harness comparison), a FRAMEWORK (a compiler/library comparison, which has no agent in it), or
 a MODEL (a figure whose only axis is which LLM ran).
 
-ONE GLOBAL PALETTE: matplotlib's ``tab20``, and nothing else. Every entity a figure colours --
-packet, framework, model, harness, language -- takes a tab20 SLOT decided by its position in
+ONE GLOBAL PALETTE: matplotlib's ``tab20``, extended by ``tab20b`` once its twenty slots are spent,
+and nothing else. Every entity a figure colours -- packet, framework, model, harness, language --
+takes a SLOT decided by its position in
 ``envs/registry.yaml``, so a colour is looked up in exactly one table and no figure, script or
 registry entry carries a hex literal of its own. The ramp it used to carry was hand-picked
 Okabe-Ito with per-packet hex overrides bolted on wherever six hues wrapped, which is two palettes
@@ -52,19 +53,34 @@ TAB20: str = "tab20"
 #: laid out as light/dark PAIRS, so reading it straight through would spend the second colour of a
 #: figure on a pale wash of its first; taken this way the entities plotted most take the ten
 #: colours that stay apart at 4pt, and the light twin of a hue only comes back once the dark ones
-#: are spent. Twenty slots for twenty packets, so nothing wraps and no entity needs an override.
+#: are spent.
 TAB20_ORDER: tuple[int, ...] = (0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19)
 
+#: Slots 21-40 (user, 2026-09-16: the 21st packet extends the palette rather than wrapping or sharing).
+#: tab20b is five hues of four shades each; taken darkest shade of every hue first, then the next
+#: shade, so its first entries stay as far apart as tab20's dark half.
+TAB20B: str = "tab20b"
+TAB20B_ORDER: tuple[int, ...] = (0, 4, 8, 12, 16, 2, 6, 10, 14, 18, 1, 5, 9, 13, 17, 3, 7, 11, 15, 19)
 
-def tab20_slot(slot: int) -> str:
-    """tab20 entry ``slot`` as ``#rrggbb``. The ONE place a colour value enters this repo."""
-    colormap = matplotlib.colormaps[TAB20]
+
+def colormap_slot(name: str, slot: int) -> str:
+    """Entry ``slot`` of the colormap ``name`` as ``#rrggbb``. The ONE place a colour value enters
+    this repo."""
+    colormap = matplotlib.colormaps[name]
     return matplotlib.colors.to_hex(colormap(slot % colormap.N))
 
 
+def tab20_slot(slot: int) -> str:
+    """tab20 entry ``slot`` as ``#rrggbb``."""
+    return colormap_slot(TAB20, slot)
+
+
 def hues() -> tuple[str, ...]:
-    """The categorical ramp: tab20 in :data:`TAB20_ORDER`."""
-    return tuple(tab20_slot(slot) for slot in TAB20_ORDER)
+    """The categorical ramp: tab20 in :data:`TAB20_ORDER`, then tab20b in :data:`TAB20B_ORDER`."""
+    return (
+        *(tab20_slot(slot) for slot in TAB20_ORDER),
+        *(colormap_slot(TAB20B, slot) for slot in TAB20B_ORDER),
+    )
 
 
 def markers() -> tuple[str, ...]:
