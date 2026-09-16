@@ -70,13 +70,20 @@ def captured_build(monkeypatch: pytest.MonkeyPatch, *, report: bool) -> list[lis
     return seen
 
 
+def holds_contiguous(argv: list[str], tokens: list[str]) -> bool:
+    """Whether ``tokens`` occur, in order and unbroken, somewhere in ``argv``."""
+    return any(argv[i : i + len(tokens)] == tokens for i in range(len(argv) - len(tokens) + 1))
+
+
 def test_a_report_build_appends_the_report_flags_to_every_compile_and_no_link(monkeypatch: pytest.MonkeyPatch) -> None:
     tokens = flags.GCC_OPT_REPORT.split()
     cmds = captured_build(monkeypatch, report=True)
     compiles = [argv for argv in cmds if "-c" in argv]
     links = [argv for argv in cmds if "-c" not in argv]
     assert compiles and links, cmds
-    assert all(argv[-len(tokens) :] == tokens for argv in compiles), compiles
+    # Not necessarily the LAST tokens: gemm always links BLAS, and build_shared_lib_commands puts
+    # its -I after whatever extra_compile (here, the report flags) the caller already asked for.
+    assert all(holds_contiguous(argv, tokens) for argv in compiles), compiles
     assert not any(set(tokens) & set(argv) for argv in links), links
 
 

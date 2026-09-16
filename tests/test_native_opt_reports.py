@@ -110,12 +110,16 @@ def test_the_report_is_written_by_the_columns_own_compiler_with_its_familys_repo
     commands = compile_lines(column)
     assert commands, f"{column}: the opt report records no compile"
     executable = COLUMNS[column][0]
+    # The DRIVER the build really ran, resolved the same way :func:`languages.build_shared_lib_commands`
+    # resolved it (a bare name may only exist as a versioned sibling, e.g. flang -> flang-22).
+    resolved = pathlib.Path(languages.resolve_compiler(executable) or executable).name
     flags = languages.report_flags(
         cpp_runtime.FRAMEWORK_LANG[column], compiler=cpp_runtime.FRAMEWORK_COMPILER.get(column)
     ).split()
     assert flags, f"{column}: its compiler family has no report flags"
     for argv in commands:
-        assert pathlib.Path(argv[0]).name == executable, (column, argv[0])
+        compiler_argv = languages.strip_launcher(argv)
+        assert pathlib.Path(compiler_argv[0]).name == resolved, (column, argv)
         assert all(flag in argv for flag in flags), (column, flags, argv)
 
 
