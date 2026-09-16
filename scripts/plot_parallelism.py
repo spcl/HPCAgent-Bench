@@ -86,67 +86,64 @@ def draw(
     import matplotlib.ticker
 
     style.apply()
-    height = (0.85 if double_column else 1.25) * len(columns) + 1.5
-    fig, ax = plt.subplots(figsize=(style.DOUBLE_COLUMN_WIDTH if double_column else 7.2, height))
-    ypos = list(range(len(columns)))[::-1]
-    bar_height = 0.5
+    # Rotated column names are the only thing below the axis (rule one puts the value on Y), so
+    # the bottom margin has to grow with the longest one, not with a fixed guess -- and the axes
+    # need enough of their OWN height for the equally rotated y label, or it prints truncated.
+    longest = max((len(c) for c in columns), default=8)
+    left_in, top_in, axes_min_in = 0.85, 0.25, 4.4
+    bottom_in = longest * style.TICK_PT * 0.6 / 72.0 + 0.9
+    width = style.DOUBLE_COLUMN_WIDTH if double_column else max(4.4, 2.2 * len(columns) + 1.8)
+    height = axes_min_in + bottom_in + top_in
+    fig, ax = plt.subplots(figsize=(width, height))
+    fig.subplots_adjust(left=left_in / width, right=0.97, top=1.0 - top_in / height, bottom=bottom_in / height)
+    xs = list(range(len(columns)))
+    bar_width = 0.5
 
-    for y, column in zip(ypos, columns, strict=True):
+    for x, column in zip(xs, columns, strict=True):
         records = list(by_column[column].values())
         agg = parallelism.totals(records)
         seg = segment_counts(agg)
         total = sum(seg.values())
-        left = 0.0
+        bottom = 0.0
         for name, color in SEGMENTS:
             share = seg[name] / total if total else 0.0
-            ax.barh(y, share, left=left, height=bar_height, color=color, zorder=2)
+            ax.bar(x, share, bottom=bottom, width=bar_width, color=color, zorder=2)
             if seg[name]:
                 ax.text(
-                    left + share / 2.0,
-                    y,
+                    x,
+                    bottom + share / 2.0,
                     str(seg[name]),
                     ha="center",
                     va="center",
-                    fontsize=7.5,
+                    fontsize=style.ANNOTATION_PT,
                     color="white",
                     zorder=3,
                 )
-            left += share
+            bottom += share
         counts = parallelism.benchmark_counts(records, parallelism.RATE_DEFINITIONS[parallelism.DEFAULT_RATE])
-        ax.text(
-            1.03,
-            y,
-            f"+{agg.get('libnode', 0)} libnode",
-            va="center",
-            ha="left",
-            fontsize=7.5,
-            color=style.MUTED,
+        caption = (
+            f"+{agg.get('libnode', 0)} libnode\n"
+            f"Parallelized {counts.parallelized}/{counts.total}\n"
+            f"Fully Parallelized {counts.fully_parallelized}/{counts.total}"
         )
-        ax.text(
-            0.0,
-            y - bar_height * 0.85,
-            f"parallelized {counts.parallelized}/{counts.total}   fully parallelized {counts.fully_parallelized}/{counts.total}",
-            va="top",
-            ha="left",
-            fontsize=7.0,
-            color=style.MUTED,
-        )
+        # Above the bar, never below: the column NAME is the only thing below the axis, so its
+        # rotated tick label never collides with this three-line caption.
+        ax.text(x, 1.04, caption, va="bottom", ha="center", fontsize=style.ANNOTATION_PT, color=style.MUTED)
 
-    ax.set_yticks(ypos)
-    ax.set_yticklabels(columns, fontsize=9.0)
-    for tick, column in zip(ax.get_yticklabels(), columns, strict=True):
+    ax.set_xticks(xs)
+    ax.set_xticklabels(columns, fontsize=style.TICK_PT, rotation=90)
+    for tick, column in zip(ax.get_xticklabels(), columns, strict=True):
         tick.set_color(palette.framework_color(column))
-    ax.set_ylim(-1.0, len(columns) - 0.3)
-    ax.set_xlim(0.0, 1.34)
-    ax.xaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(xmax=1.0))
-    ax.set_xlabel("share of loop-level constructs (map/reduce/scan/loop)", color=style.MUTED, fontsize=9.0)
-    style.despine(ax, keep=("bottom",))
-    ax.tick_params(axis="both", length=0, colors=style.MUTED)
-    ax.grid(axis="x", which="major", color=style.RULE, linewidth=0.6, alpha=0.7, zorder=0)
-    ax.set_axisbelow(True)
+    ax.set_xlim(-0.7, len(columns) - 0.3)
+    ax.set_ylim(0.0, 1.62)
+    style.value_axis(ax, "y", major=True)
+    ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(xmax=1.0))
+    ax.set_ylabel("Share of Loop-Level Constructs", color=style.MUTED, fontsize=style.ANNOTATION_PT)
+    style.despine(ax, keep=("left",))
+    ax.tick_params(axis="x", length=0, colors=style.MUTED)
 
     handles = [matplotlib.patches.Patch(facecolor=color, label=name) for name, color in SEGMENTS]
-    ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.18), ncols=4, frameon=False, fontsize=8.0)
+    style.legend_below(fig, handles, ncol=4, y=0.02)
     return fig, ax
 
 

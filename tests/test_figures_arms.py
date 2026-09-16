@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from hpcagent_bench.stats import palette
+from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import arms
 
 
@@ -61,3 +62,80 @@ def test_both_arm_figures_render_in_registered_language_colours(
         "per_kernel_c_vs_fortran_numba.pdf",
         "per_kernel_c_vs_fortran_numba.png",
     ]
+
+
+def drawn_figures(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> list:
+    """Both per-arm figures, captured just before ``style.save`` would close them."""
+    import matplotlib.pyplot as plt
+
+    captured: list[plt.Figure] = []
+
+    def fake_save(
+        fig: plt.Figure, stem: pathlib.Path, formats: tuple = ("pdf", "png"), fixed: bool = False
+    ) -> pathlib.Path:
+        del formats, fixed
+        captured.append(fig)
+        return stem
+
+    monkeypatch.setattr(arms.style, "save", fake_save)
+    arms.figure_arms(arm_table(), "numba", tmp_path)
+    arms.figure_paired(paired_table(), "numba", tmp_path)
+    return captured
+
+
+def test_the_measured_speedup_is_on_the_y_axis_of_both_figures(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """Rule one: a speed-up is a measured quantity and stays on Y, log-scaled. X carries the
+    CATEGORY (the arm or the kernel), which is why it is linear and ticked with names."""
+    import matplotlib.pyplot as plt
+
+    figures = drawn_figures(monkeypatch, tmp_path)
+    try:
+        assert len(figures) == 2
+        for fig in figures:
+            ax = fig.axes[0]
+            assert ax.get_yscale() == "log"
+            assert ax.get_xscale() == "linear"
+            labels = [tick.get_text() for tick in ax.get_xticklabels()]
+            assert labels and all(not label.replace(".", "").isdigit() for label in labels)
+    finally:
+        for fig in figures:
+            plt.close(fig)
+
+
+def test_neither_figure_enables_a_minor_grid_or_an_axes_legend(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """Major grid only (rule four), and one legend on the FIGURE, never ``ax.legend`` (rule five)."""
+    import matplotlib.pyplot as plt
+
+    figures = drawn_figures(monkeypatch, tmp_path)
+    try:
+        for fig in figures:
+            ax = fig.axes[0]
+            assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
+            assert not [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
+            assert ax.get_legend() is None
+            assert len(fig.legends) == 1
+    finally:
+        for fig in figures:
+            plt.close(fig)
+
+
+def test_tick_and_label_type_comes_from_the_shared_style_scale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """No fontsize literal: every text size drawn traces back to a ``style`` constant."""
+    import matplotlib.pyplot as plt
+
+    known = {plotstyle.TITLE_PT, plotstyle.SUBTITLE_PT, plotstyle.LABEL_PT, plotstyle.TICK_PT, plotstyle.ANNOTATION_PT}
+    figures = drawn_figures(monkeypatch, tmp_path)
+    try:
+        for fig in figures:
+            ax = fig.axes[0]
+            for tick in ax.get_xticklabels():
+                assert tick.get_fontsize() in known
+    finally:
+        for fig in figures:
+            plt.close(fig)

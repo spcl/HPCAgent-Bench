@@ -43,15 +43,16 @@ from hpcagent_bench.stats import style as plotstyle
 plotstyle.apply()
 import matplotlib.pyplot as plt  # noqa: E402 -- pyplot must follow plotstyle.apply()
 
-#: Wider than tall and sized per row below: this is a category axis, and the panel has to grow with
-#: the number of arms rather than squeezing them.
-PANEL_WIDTH: float = 10.4
-ROW_HEIGHT: float = 0.62
+#: Taller than wide per column, and the panel has to grow with the number of arms rather than
+#: squeezing them: each arm is a CATEGORY on x, and its label runs vertically below its bar.
+PANEL_HEIGHT: float = 6.4
+COLUMN_WIDTH: float = 0.85
 
-#: Inches, not fractions: the panel grows a row at a time and a fixed fraction would give a
+#: Inches, not fractions: the panel grows a column at a time and a fixed fraction would give a
 #: six-arm figure a different gap than a two-arm one.
-LABEL_INCHES: float = 3.3
-FOOTER_INCHES: float = 1.6
+LEFT_INCHES: float = 1.05
+RIGHT_INCHES: float = 0.5
+BOTTOM_INCHES: float = 4.0
 
 #: The ways a kernel drops out of the funnel. Purple for a correct answer that was not faster, red
 #: for a wrong one, grey for a grade that never ran; each carries a hatch as well, so the segments
@@ -145,48 +146,47 @@ def segments_for(row: Any, hue: str, gate: str) -> tuple[tuple[float, str, str],
 def draw(ax: plt.Axes, table: pd.DataFrame, roster: int, gate: str) -> None:
     hues = palette.model_colors(sorted(table.model.unique()))
     column = GATES[gate][0]
-    ys = range(len(table))
-    for y, row in zip(ys, table.itertuples(), strict=True):
+    xs = range(len(table))
+    for x, row in zip(xs, table.itertuples(), strict=True):
         # The roster the arm was given, drawn first as a pale track. What the fills leave uncovered
         # is the kernels the arm never reached -- a real part of the comparison, so it gets a
         # surface of its own rather than being the white of the page.
-        ax.barh(y, roster, height=0.62, facecolor=TRACK, edgecolor="none", zorder=2)
-        left = 0.0
-        for width, colour, hatch in segments_for(row, hues[row.model], gate):
-            if width <= 0:
+        ax.bar(x, roster, width=0.62, facecolor=TRACK, edgecolor="none", zorder=2)
+        bottom = 0.0
+        for height, colour, hatch in segments_for(row, hues[row.model], gate):
+            if height <= 0:
                 continue
-            ax.barh(
-                y,
-                width - GAP,
-                left=left + GAP / 2,
-                height=0.62,
+            ax.bar(
+                x,
+                height - GAP,
+                bottom=bottom + GAP / 2,
+                width=0.62,
                 color=colour,
                 hatch=hatch,
                 edgecolor="white",
                 linewidth=0.0,
                 zorder=3,
             )
-            left += width
+            bottom += height
         value = getattr(row, column)
         if value == value:  # not NaN
             ax.text(
-                roster + 0.6,
-                y,
+                x,
+                roster * 1.02,
                 f"{value:.0%}",
-                va="center",
-                ha="left",
+                va="bottom",
+                ha="center",
                 fontsize=plotstyle.ANNOTATION_PT,
                 color=plotstyle.INK,
             )
 
-    ax.set_yticks(list(ys))
-    ax.set_yticklabels([arm_label(row) for _, row in table.iterrows()], fontsize=plotstyle.TICK_PT)
-    ax.invert_yaxis()
-    ax.set_xlabel(f"Kernels of the {roster}-Kernel Roster")
-    ax.set_xlim(0, roster)
-    plotstyle.value_axis(ax, "x")
-    plotstyle.despine(ax, keep=("bottom",))
-    ax.tick_params(axis="y", length=0)
+    ax.set_xticks(list(xs))
+    ax.set_xticklabels([arm_label(row) for index, row in table.iterrows()], fontsize=plotstyle.TICK_PT, rotation=90)
+    ax.set_ylabel(f"Kernels of the {roster}-Kernel Roster")
+    ax.set_ylim(0, roster)
+    plotstyle.value_axis(ax, "y")
+    plotstyle.despine(ax, keep=("left",))
+    ax.tick_params(axis="x", length=0)
 
 
 def handles_for(table: pd.DataFrame, gate: str) -> list[plt.Rectangle]:
@@ -215,6 +215,20 @@ def order(table: pd.DataFrame) -> pd.DataFrame:
     return keys.sort_values(["slot", "language", "skills"]).drop(columns="slot").reset_index(drop=True)
 
 
+def build_figure(table: pd.DataFrame, roster: int, gate: str, label: str) -> plt.Figure:
+    """The whole figure: the funnel panel, its title and its one figure-level legend."""
+    width = LEFT_INCHES + RIGHT_INCHES + COLUMN_WIDTH * len(table)
+    fig, ax = plt.subplots(figsize=(width, PANEL_HEIGHT))
+    draw(ax, table, roster, gate)
+    title = label or f"Blind Single-Shot {'Score' if gate == 'speedup' else 'Correctness'}"
+    top = plotstyle.title(fig, title)
+    fig.subplots_adjust(
+        left=LEFT_INCHES / width, right=1.0 - RIGHT_INCHES / width, top=top - 0.02, bottom=BOTTOM_INCHES / PANEL_HEIGHT
+    )
+    plotstyle.legend_below(fig, handles_for(table, gate), ncol=3, y=0.01)
+    return fig
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("observations", type=pathlib.Path)
@@ -237,13 +251,7 @@ def main() -> None:
     if table.empty:
         raise SystemExit(f"no arms in {args.observations}")
 
-    height = FOOTER_INCHES + 1.0 + ROW_HEIGHT * len(table)
-    fig, ax = plt.subplots(figsize=(PANEL_WIDTH, height))
-    draw(ax, table, roster, args.gate)
-    title = args.label or f"Blind Single-Shot {'Score' if args.gate == 'speedup' else 'Correctness'}"
-    top = plotstyle.title(fig, title)
-    fig.subplots_adjust(left=LABEL_INCHES / PANEL_WIDTH, right=0.91, top=top - 0.04, bottom=FOOTER_INCHES / height)
-    plotstyle.legend_below(fig, handles_for(table, args.gate), ncol=3, y=0.005)
+    fig = build_figure(table, roster, args.gate, args.label)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.table.parent.mkdir(parents=True, exist_ok=True)

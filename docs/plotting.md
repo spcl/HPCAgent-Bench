@@ -106,8 +106,8 @@ fig.savefig("out.pdf", bbox_inches=fig.bbox_inches)
 
 ## The drawing conventions
 
-These six are not preferences. A figure that breaks one is wrong, and the tests named beside each
-one fail when it does.
+These seven are not preferences. A figure that breaks one is wrong, and the test named beside each
+one fails when it does.
 
 A comparison whose single label column has grown unreadable is split by MODEL, one row of the same
 two panels per model, titled by the model (`plot_score_change.py --rows-by-model`). Past about eight
@@ -118,7 +118,8 @@ which model a mark is, so nothing is lost by the split. One row is the default.
 Y axis. X carries the CATEGORIES: the two conditions of a comparison, the language, the kernel. A
 long category label is rotated 90 degrees on x; it is not a reason to turn the figure on its side.
 The value axis gets the log scale, the major grid and `style.value_axis`; the categorical axis gets
-none of the three.
+none of the three. Pinned by `tests/test_plot_score_change.py`'s
+`test_the_measured_value_is_on_the_y_axis_of_both_panels`.
 
 **2. Colour is the INTERVENTION, shape is the MODEL.** `palette.color(packet)` for the treated side
 and `palette.control_color()` for the no-packet side; `palette.marker(model)` for the shape. An
@@ -130,35 +131,41 @@ varies is the bug: it spends the intervention's channel on the entity the shape 
 one arm reads as a different treatment in every figure it appears in. Where only ONE entity varies
 the colour is that entity: `palette.framework_color` for the canon compiler figure (no agent in it),
 `palette.harness_color` for the harness comparison (claude / miniswe / openhands / optimas), and
-`palette.model_color` for a figure whose only axis is which LLM ran.
+`palette.model_color` for a figure whose only axis is which LLM ran. Pinned by
+`tests/test_plot_score_change.py`'s `test_the_filled_mark_wears_the_packet_colour_and_the_hollow_one_the_control_colour`
+and `test_the_marker_shape_is_the_model_and_nothing_else`.
 
 **3. Two square panels per comparison.** A speed-up and a token count are different measurements
 (SC15 Rule 4), so they never share a scale: `plot_score_change.py` draws them as two panels of equal
 box aspect side by side, with the two CONDITIONS on X and one hollow mark, one filled mark and the
 pair link between them per arm. EVERY intervention gets these two panels, whichever way its pairs
-were formed -- see "A comparison whose pairs are not a packet suffix" below.
+were formed -- see "A comparison whose pairs are not a packet suffix" below. Pinned by
+`tests/test_plot_score_change.py`'s `test_n_treatments_draw_one_row_of_two_square_panels_each`.
 
 **4. Major grid only.** `style.value_axis` draws it, on the value axis alone, and switches every
 minor line and minor label off. A minor line is a second grid at a second weight, and once a figure
 is reduced for print the panel reads as a texture the marks sit on rather than a reference they sit
-against.
+against. Pinned by `tests/test_plot_score_change.py`'s `test_neither_panel_enables_a_minor_grid`.
 
 **5. One legend, on the FIGURE.** `style.legend_below(fig, handles, ...)`, once per figure, never
 `ax.legend`. A key on each panel of a multi-panel figure invites reading the panels as different
-sets of series when they draw the same ones.
+sets of series when they draw the same ones. Pinned by `tests/test_plot_score_change.py`'s
+`test_the_legend_is_drawn_once_on_the_figure_and_never_on_an_axes`.
 
 **6. A point the arm never delivered carries a cross.** It enters every aggregate at 1x and its
 tokens still count, so it is a placeholder and not a measurement. `style.point_mark(...,
 delivered=False)` keeps the intervention colour and the model shape and overlays a small x; the key
 shows THE CROSS and reads `style.NOT_DELIVERED_LABEL` (`No Verified Answer (Scored 1x)`). Hollow
 alone will not do -- hollow is this repo's spelling for the control. A paired figure keeps the pair,
-with the failed leg at 1x.
+with the failed leg at 1x. Pinned by `tests/test_style_save.py`'s
+`test_a_point_mark_that_never_delivered_an_answer_carries_a_cross_on_the_model_shape`.
 
 **7. A per-arm label goes in a COLUMN, not in a hole beside its mark.** `stack_labels` puts every
 label at one x right of the treated marks, takes its preferred y from its own point, pushes them
 apart until no two boxes touch, and draws a leader line for any label that had to move. Searching a
 ring of candidate offsets around each mark instead runs out on a narrow panel -- six arms landing
-within a few percent had nowhere to go and printed on top of each other.
+within a few percent had nowhere to go and printed on top of each other. Pinned by
+`tests/test_plot_score_change.py`'s `test_no_two_arm_labels_overprint_each_other_however_close_the_arms_land`.
 
 ## Rules
 
@@ -239,6 +246,7 @@ minor lines at wrong ratios.
 | `plot_score_change.py` | one comparison as two square panels: speed-up on Y, tokens on Y, conditions on X |
 | `plot_tokens.py` | median tokens per episode, per kernel, per model |
 | `plot_speedup.py` | per-kernel signed speed-up in magnitude bands, per machine (see [measurement_statistics.md](measurement_statistics.md)) |
+| `plot_kernel_comparison.py` | llr-focus40: DaCe canon CPU against every complete agent arm, two small-multiple panels (speed-up, tokens) per model over the shared kernel row axis |
 
 The first three read the CSV this page's extraction step produces. The speed-up in each comes from
 the `submission` rows and the cost from the `call` rows, both reduced by

@@ -59,7 +59,7 @@ DRAW: tuple[tuple[str, str], ...] = (
 #: Labels for columns a caller may ask for with --columns but that DRAW does not draw by default
 #: (dace_cpu: DaCe's own parallelizer, without canonicalization -- drawn on request by a sweep that
 #: wants it, e.g. llr-full-speedup's "what does canon buy over DaCe's own parallel output").
-EXTRA_LABELS: dict[str, str] = {"dace_cpu": "DaCe parallel CPU"}
+EXTRA_LABELS: dict[str, str] = {"dace_cpu": "DaCe parallel CPU", "dace_gpu": "DaCe parallel GPU"}
 COLUMN_LABELS: dict[str, str] = dict(DRAW) | EXTRA_LABELS
 
 #: STATISTIC colours (median vs. geomean), not entity colours -- palette.py reserves colour for a
@@ -97,11 +97,25 @@ def rows_for(times: dict[str, dict[str, float]], baseline: str, columns: Sequenc
     return rows
 
 
-def figure_size(n_rows: int, double_column: bool) -> tuple[float, float]:
-    """The figure's inches: a compact A4 double-column insert, or the taller standalone report."""
-    if double_column:
-        return 7.0, 2.0
-    return 7.2, 0.62 * n_rows + 1.9
+#: Compact A4-insert mode shrinks every label by this fraction of its normal :mod:`style` size --
+#: the same device ``plot_score_change.py``'s ``COMPACT_LABEL_SCALE`` uses for its own panels.
+DOUBLE_COLUMN_SCALE: float = 0.82
+
+
+def figure_size(rows: list[Row], double_column: bool) -> tuple[float, float, float, float]:
+    """Figure inches plus the left/bottom margins the axes need: a compact A4 insert, or the
+    taller standalone report. The bottom margin grows with the longest row label -- rotated on x,
+    it is the only thing below the axis (rule one puts the value on Y) -- so a caller with long
+    framework names never collides its own tick labels with the legend under them."""
+    scale = DOUBLE_COLUMN_SCALE if double_column else 1.0
+    longest = max((len(f"{row.label}  (n={row.n})") for row in rows), default=8)
+    bottom_in = longest * style.TICK_PT * scale * 0.6 / 72.0 + 0.85
+    left_in = 0.75
+    width = style.DOUBLE_COLUMN_WIDTH if double_column else max(4.2, 0.85 * len(rows) + 2.2)
+    # The y label is rotated too, and a tight bbox does not rescue one longer than the axes are
+    # tall -- 4.6in comfortably fits "Speed-up over <name> (Log2 Scale)" at ANNOTATION_PT.
+    height = 4.6 + bottom_in
+    return width, height, left_in, bottom_in
 
 
 #: draw()'s title when --title is not given -- the canon-llr40 sweep's own headline, kept as the
@@ -120,75 +134,63 @@ def draw(
     import matplotlib.patheffects
 
     style.apply()
-    fig, ax = plt.subplots(figsize=figure_size(len(rows), double_column))
-    bar_height = 0.34 if double_column else 0.5
-    annotation_size = 6.5 if double_column else 8.0
-    label_size = 7.0 if double_column else 9.0
+    scale = DOUBLE_COLUMN_SCALE if double_column else 1.0
+    width, height, left_in, bottom_in = figure_size(rows, double_column)
+    fig, ax = plt.subplots(figsize=(width, height))
+    top_in = 0.55 if double_column else 0.85
+    fig.subplots_adjust(left=left_in / width, right=0.97, top=1.0 - top_in / height, bottom=bottom_in / height)
+    bar_width = 0.34 if double_column else 0.5
 
-    ax.set_xscale("log", base=2)
-    ax.set_ylim(-0.7, len(rows) - 0.3)
+    ax.set_yscale("log", base=2)
+    xs = list(range(len(rows)))
+    ax.set_xlim(-0.7, len(rows) - 0.3)
     span = max(max(r.median, r.geomean) for r in rows)
-    ax.set_xlim(0.8, span * 2.6)
-    left = ax.get_xlim()[0]
+    ax.set_ylim(0.8, span * 2.6)
+    bottom = ax.get_ylim()[0]
 
-    ypos = list(range(len(rows)))[::-1]
-    for y, row in zip(ypos, rows, strict=True):
-        ax.barh(y, row.median - left, left=left, height=bar_height, color=MEDIAN_HUE, zorder=2)
-        # A tick spanning the bar's height rather than a dot on it -- the geomean can fall either
+    for x, row in zip(xs, rows, strict=True):
+        ax.bar(x, row.median - bottom, bottom=bottom, width=bar_width, color=MEDIAN_HUE, zorder=2)
+        # A tick spanning the bar's width rather than a dot on it -- the geomean can fall either
         # side of the median, and a dot landing just inside the bar sits on top of its value label.
-        ax.vlines(row.geomean, y - bar_height * 0.62, y + bar_height * 0.62, color=GEOMEAN_HUE, linewidth=2.0, zorder=6)
+        ax.hlines(row.geomean, x - bar_width * 0.62, x + bar_width * 0.62, color=GEOMEAN_HUE, linewidth=2.0, zorder=6)
         ax.text(
+            x,
             row.median * 1.09,
-            y,
             f"{row.median:.2f}x",
-            va="center",
-            ha="left",
+            va="bottom",
+            ha="center",
             zorder=7,
-            fontsize=annotation_size,
+            fontsize=style.ANNOTATION_PT * scale,
             color=style.INK,
             family="monospace",
             path_effects=[matplotlib.patheffects.withStroke(linewidth=2.6, foreground="white")],
         )
 
-    ax.set_yticks(ypos)
-    ax.set_yticklabels([f"{row.label}  (n={row.n})" for row in rows], fontsize=label_size, color=style.INK)
-    ax.set_xlabel(
-        f"speed-up over {LABEL.get(baseline, baseline)}  (log2 scale, higher is better)",
-        fontsize=annotation_size + 0.5,
+    ax.set_xticks(xs)
+    ax.set_xticklabels(
+        [f"{row.label}  (n={row.n})" for row in rows], fontsize=style.TICK_PT * scale, color=style.INK, rotation=90
+    )
+    ax.set_ylabel(
+        f"Speed-up over {LABEL.get(baseline, baseline)} (Log2 Scale)",
+        fontsize=style.ANNOTATION_PT * scale,
         color=style.MUTED,
     )
-    ax.axvline(1.0, color=style.RULE, linewidth=1.0, zorder=0)
-    ax.xaxis.set_major_locator(matplotlib.ticker.LogLocator(base=2.0, subs=(1.0,), numticks=12))
-    ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _pos: f"{v:g}x"))
-    ax.grid(axis="x", which="major", color=style.RULE, linewidth=0.6, alpha=0.7, zorder=0)
+    ax.axhline(1.0, color=style.RULE, linewidth=1.0, zorder=0)
+    ax.yaxis.set_major_locator(matplotlib.ticker.LogLocator(base=2.0, subs=(1.0,), numticks=12))
+    ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, position: f"{v:g}x"))
+    ax.grid(axis="y", which="major", color=style.RULE, linewidth=0.6, alpha=0.7, zorder=0)
     ax.set_axisbelow(True)
-    style.despine(ax, keep=("bottom",))
-    ax.tick_params(axis="both", length=0, colors=style.MUTED, labelsize=annotation_size)
+    style.despine(ax, keep=("left",))
+    ax.tick_params(axis="x", length=0, colors=style.MUTED)
+    ax.tick_params(axis="y", length=0, colors=style.MUTED, labelsize=style.TICK_PT * scale)
 
-    # Anchored to the AXES, not the figure: an axes-relative anchor lands below the x label at any
-    # figure height, where a figure-level legend would need its y fraction retuned per height.
-    geomean_key = matplotlib.lines.Line2D([], [], color=GEOMEAN_HUE, linewidth=2.0, marker="none")
-    median_key = matplotlib.patches.Patch(facecolor=MEDIAN_HUE, linewidth=0.0)
-    ax.legend(
-        handles=[median_key, geomean_key],
-        labels=["median speed-up", "geometric mean"],
-        loc="upper right",
-        bbox_to_anchor=(1.0, -0.16),
-        ncols=2,
-        frameon=False,
-        fontsize=annotation_size,
-        handletextpad=0.6,
-        columnspacing=1.6,
+    geomean_key = matplotlib.lines.Line2D(
+        [], [], color=GEOMEAN_HUE, linewidth=2.0, marker="none", label="Geometric Mean"
     )
+    median_key = matplotlib.patches.Patch(facecolor=MEDIAN_HUE, linewidth=0.0, label="Median Speed-up")
+    style.legend_below(fig, [median_key, geomean_key], ncol=2, y=0.02, fontsize=style.ANNOTATION_PT * scale)
     if not double_column:
-        ax.set_title(
-            title,
-            loc="left",
-            fontsize=label_size + 1.5,
-            fontweight="bold",
-            color=style.INK,
-            pad=9.0,
-        )
+        ax.set_title(title, loc="left", fontsize=style.SUBTITLE_PT, fontweight="bold", color=style.INK, pad=9.0)
     return fig, ax
 
 
@@ -209,7 +211,13 @@ def draw_distribution(
     from hpcagent_bench.stats import palette
 
     style.apply()
-    fig, ax = plt.subplots(figsize=(style.DOUBLE_COLUMN_WIDTH, 2.6) if double_column else (7.2, 4.2))
+    # One legend ROW per column (long "label (n=.., geomean ..x)" strings do not fit two abreast),
+    # so the bottom margin has to grow with the column count, not with a fixed guess.
+    bottom_in = 0.30 * len(columns) + 0.55
+    width = style.DOUBLE_COLUMN_WIDTH if double_column else 7.2
+    height = 3.8 + bottom_in
+    fig, ax = plt.subplots(figsize=(width, height))
+    fig.subplots_adjust(left=0.8 / width, right=0.97, top=1.0 - 0.3 / height, bottom=bottom_in / height)
     ax.set_yscale("log", base=2)
     for column in columns:
         sp = sorted(speedups(times, baseline, column))
@@ -222,14 +230,15 @@ def draw_distribution(
         ax.plot(xs, sp, color=color, linewidth=1.6, label=label, zorder=3)
         ax.axhline(gm, color=color, linewidth=1.0, linestyle="--", alpha=0.6, zorder=2)
     ax.axhline(1.0, color=style.RULE, linewidth=1.0, zorder=0)
-    ax.set_xlabel("kernels, sorted by speed-up (fraction of the sweep)", color=style.MUTED, fontsize=9.0)
-    ax.set_ylabel(f"speed-up over {LABEL.get(baseline, baseline)} (log2)", color=style.MUTED, fontsize=9.0)
+    ax.set_xlabel("Kernels, Sorted by Speed-up (Fraction of the Sweep)", color=style.MUTED, fontsize=style.LABEL_PT)
+    ax.set_ylabel(f"Speed-up over {LABEL.get(baseline, baseline)} (Log2)", color=style.MUTED, fontsize=style.LABEL_PT)
     ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _pos: f"{v:g}x"))
     ax.grid(axis="y", which="major", color=style.RULE, linewidth=0.6, alpha=0.7, zorder=0)
     ax.set_axisbelow(True)
     style.despine(ax, keep=("bottom", "left"))
-    ax.tick_params(colors=style.MUTED, labelsize=8.0)
-    ax.legend(loc="upper left", frameon=False, fontsize=8.0)
+    ax.tick_params(colors=style.MUTED, labelsize=style.TICK_PT)
+    handles = ax.get_legend_handles_labels()[0]
+    style.legend_below(fig, handles, ncol=1, y=-0.02, fontsize=style.ANNOTATION_PT)
     return fig, ax
 
 

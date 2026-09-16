@@ -55,11 +55,21 @@ import pandas as pd
 from hpcagent_bench.stats import palette
 from hpcagent_bench.stats.summary import drop_outliers, signed_change
 from hpcagent_bench.stats import rules
+from hpcagent_bench.stats import style
 from hpcagent_bench.paths import PLOTS_DIR
 from hpcagent_bench.reporting_order import BY_DWARF, ORDER_MODES, order_rows, row_meta_for
 from hpcagent_bench.stats.figures import results as plotting  # also selects the headless Agg backend on import
 
 import matplotlib.pyplot as plt  # noqa: E402 -- must follow plotting's backend setup
+
+#: This figure is dense (many kernels, three stacked panels), where print-scale type would crowd
+#: it -- its annotations and ticks trace to the same :mod:`style` constants at this named fraction,
+#: rather than each being its own bare literal.
+DENSE_SCALE: float = 0.5
+
+#: The bare/mini/square embed variants are read at a fraction of their natural size, so they keep a
+#: larger share of the shared scale than the dense multi-panel figure above does.
+EMBED_SCALE: float = 0.85
 
 #: Band edges as speed-up MAGNITUDES (``max(r, 1/r)``, always >= 1). The signed-change edges are
 #: these minus one, since ``|signed_change(r)| == max(r, 1/r) - 1``.
@@ -384,7 +394,7 @@ def draw_band(
     limits = band_limits(band, [point.change for point in points] + spread)
     ax.set_ylim(*limits)
     if limits[0] < 0.0 < limits[1]:
-        ax.axhline(0.0, color="0.35", linewidth=0.8)  # only where 0 is in view -- it is not, in a one-sided band
+        ax.axhline(0.0, color=style.REFERENCE, linewidth=0.8)  # only where 0 is in view -- not, in a one-sided band
     # On the zero line, in the framework's own colour, and ONLY in the band that contains zero:
     # a one-sided band does not show 0, so an X drawn there would sit at a y it does not mean.
     # The X is a different glyph from every measured marker, so it cannot be read as 1.0x.
@@ -401,11 +411,11 @@ def draw_band(
                 clip_on=False,
                 color=colors[framework],
             )
-    ax.set_title(band, fontsize=7, loc="left")
-    ax.tick_params(axis="y", labelsize=6)
+    ax.set_title(band, fontsize=style.ANNOTATION_PT * DENSE_SCALE, loc="left")
+    ax.tick_params(axis="y", labelsize=style.TICK_PT * DENSE_SCALE)
     # x grid too: a point sits three panels above its kernel's label, and the vertical rule is what
     # carries the eye down to it.
-    ax.grid(color="0.85", linewidth=0.5)
+    ax.grid(color=style.RULE, linewidth=0.5)
 
 
 def figure_legend(fig, colors: Dict[str, str], boxes: bool = False) -> None:
@@ -427,7 +437,7 @@ def figure_legend(fig, colors: Dict[str, str], boxes: bool = False) -> None:
         loc="upper center",
         ncol=min(len(colors), 6),
         bbox_to_anchor=(0.5, 1.02),
-        fontsize=7,
+        fontsize=style.ANNOTATION_PT * DENSE_SCALE,
         frameon=False,
     )
 
@@ -435,7 +445,7 @@ def figure_legend(fig, colors: Dict[str, str], boxes: bool = False) -> None:
 def label_kernels(ax, kernels: Sequence[str]) -> None:
     """The shared x axis: one tick per kernel, on the bottom panel only."""
     ax.set_xticks(range(len(kernels)))
-    ax.set_xticklabels(kernels, rotation=90, fontsize=5)
+    ax.set_xticklabels(kernels, rotation=90, fontsize=style.TICK_PT * DENSE_SCALE)
     ax.set_xlim(-0.6, len(kernels) - 0.4)
 
 
@@ -473,6 +483,7 @@ def banded_figure(
     present = [band for band in BANDS if any(point.band == band for point in points)]
     width = min(20.0, max(6.8, 0.16 * len(kernels)))
     per_panel = 1.15 if compact else 1.9
+    style.apply()
     fig, axes = plt.subplots(
         len(present),
         1,
@@ -484,7 +495,7 @@ def banded_figure(
     for row, band in zip(axes, present):
         draw_band(row[0], band, [point for point in points if point.band == band], x_of, colors, boxes=boxes)
     label_kernels(axes[-1][0], kernels)
-    fig.supylabel("signed relative change (+1 = 2x faster, -1 = 2x slower)", fontsize=7)
+    fig.supylabel("Signed Relative Change (+1 = 2x Faster, -1 = 2x Slower)", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
     figure_legend(fig, colors, boxes)
     plt.tight_layout()
     return plotting.save_figure(output, fig)
@@ -522,6 +533,7 @@ def simple_figure(
     hidden = len(points) - len(shown)
     columns = [kernel for kernel in kernels if any(point.kernel == kernel for point in shown)]
     colors = framework_colors(points)
+    style.apply()
     fig, ax = plt.subplots(figsize=(min(20.0, max(6.8, 0.16 * len(columns))), 2.2 if bare else 2.6))
     draw_band(ax, band, shown, {kernel: i for i, kernel in enumerate(columns)}, colors, boxes=boxes)
     if bare:
@@ -531,19 +543,26 @@ def simple_figure(
         ax.set_xticks([])
         ax.set_xlim(-0.6, len(columns) - 0.4)
         ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=3))
-        ax.tick_params(axis="y", labelsize=11, length=2, pad=1.5)
+        ax.tick_params(axis="y", labelsize=style.TICK_PT * EMBED_SCALE, length=2, pad=1.5)
         # draw_band turned BOTH grids on -- the x rules exist to carry the eye down to a kernel
         # name, and there are no names here. Off first, because grid(axis="y") leaves them.
         ax.grid(False)
-        ax.grid(axis="y", color="0.85", linewidth=0.9)
+        ax.grid(axis="y", color=style.RULE, linewidth=0.9)
         for side in ("top", "right", "bottom"):
             ax.spines[side].set_visible(False)
-        plt.tight_layout()
+        # Nothing but the boxes, the zero line and the y numbers survives bare -- no title, no
+        # legend, no x ticks -- so a fixed margin (rule: fixed subplots_adjust, not tight_layout)
+        # needs only a sliver on each side.
+        fig.subplots_adjust(left=0.055, right=0.995, top=0.98, bottom=0.03)
         return plotting.save_figure(output, fig)
     label_kernels(ax, columns)
-    ax.set_ylabel("signed relative change", fontsize=7)
+    ax.set_ylabel("Signed Relative Change", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
     if hidden:
-        ax.set_title(f"{band} -- {hidden} point(s) outside this band not shown", fontsize=7, loc="left")
+        ax.set_title(
+            f"{band} -- {hidden} point(s) outside this band not shown",
+            fontsize=style.ANNOTATION_PT * DENSE_SCALE,
+            loc="left",
+        )
     figure_legend(fig, colors, boxes)
     plt.tight_layout()
     return plotting.save_figure(output, fig)
@@ -563,11 +582,12 @@ def mini_figure(points: Sequence[Point], kernels: Sequence[str], output: str, bo
     x_of = {kernel: i for i, kernel in enumerate(kernels)}
     colors = framework_colors(points)
     present = [band for band in BANDS if any(point.band == band for point in points)]
+    style.apply()
     fig, axes = plt.subplots(len(present), 1, sharex=True, figsize=(3.4, max(1.3, 0.95 * len(present))), squeeze=False)
     for row, band in zip(axes, present):
         ax = row[0]
         draw_band(ax, band, [point for point in points if point.band == band], x_of, colors, boxes=boxes)
-        ax.title.set_fontsize(6)
+        ax.title.set_fontsize(style.ANNOTATION_PT * DENSE_SCALE)
         ax.set_yticks([])  # takes the numbers, their marks and their gridlines with it
         # band_limits closes ON the extreme point. Here a marker is 3pt on a panel ~40pt tall, so
         # that point straddles the spine and reads as a clipped half-disc; pad the panel off it.
@@ -576,9 +596,9 @@ def mini_figure(points: Sequence[Point], kernels: Sequence[str], output: str, bo
         ax.set_ylim(low - pad, high + pad)
     bottom = axes[-1][0]
     bottom.set_xticks(range(len(kernels)))
-    bottom.set_xticklabels([f"K{i + 1}" for i in range(len(kernels))], fontsize=5)
+    bottom.set_xticklabels([f"K{i + 1}" for i in range(len(kernels))], fontsize=style.TICK_PT * DENSE_SCALE)
     bottom.set_xlim(-0.6, len(kernels) - 0.4)
-    fig.supylabel("Speedup", fontsize=7)
+    fig.supylabel("Speedup", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
     plt.tight_layout()
     return plotting.save_figure(output, fig)
 
@@ -694,6 +714,7 @@ def square_figure(points: Sequence[Point], output: str, cells: int = SQUARE_CELL
     offsets = dict(zip(frameworks, dodge_offsets(len(frameworks), slot=0.78)))
     width = 0.78 / len(frameworks)
     x_of = {kernel: i for i, kernel in enumerate(kernels)}
+    style.apply()
     fig, ax = plt.subplots(figsize=(SQUARE_SIDE, SQUARE_SIDE))
     for framework in frameworks:
         mine = [p for p in points if p.framework == framework and p.kernel in x_of]
@@ -705,29 +726,31 @@ def square_figure(points: Sequence[Point], output: str, cells: int = SQUARE_CELL
             patch_artist=True,
             manage_ticks=False,
             showfliers=False,
-            medianprops=dict(color="0.1", linewidth=1.8),
+            medianprops=dict(color=style.INK, linewidth=1.8),
         )
         for box in artists["boxes"]:
             box.set(facecolor=color, edgecolor=color, alpha=0.7, linewidth=1.5)
         for part in ("whiskers", "caps"):
             for line in artists[part]:
                 line.set(color=color, linewidth=1.5)
-    ax.axhline(0.0, color="0.35", linewidth=1.6)
+    ax.axhline(0.0, color=style.REFERENCE, linewidth=1.6)
     ax.set_xticks(range(len(kernels)))
-    ax.set_xticklabels(kernels, fontsize=14)
+    ax.set_xticklabels(kernels, fontsize=style.TICK_PT)
     ax.set_xlim(-0.55, len(kernels) - 0.45)
-    ax.set_ylabel("speedup", fontsize=18, labelpad=-1.0)
+    ax.set_ylabel("Speedup", fontsize=style.LABEL_PT, labelpad=-1.0)
     ax.set_yticks(square_ticks(*ax.get_ylim()))
-    ax.tick_params(axis="y", labelsize=14, length=3, width=1.6, pad=1.0)
+    ax.tick_params(axis="y", labelsize=style.TICK_PT, length=3, width=1.6, pad=1.0)
     ax.tick_params(axis="x", length=0, pad=2.0)
-    ax.grid(axis="y", color="0.85", linewidth=0.9)
+    ax.grid(axis="y", color=style.RULE, linewidth=0.9)
     # All four spines kept, matching the violin panel this figure sits beside in the overview
     # diagram -- the two are read together, so a frame on one and none on the other reads as two
     # unrelated charts. Heavy, because at embed size a hairline frame disappears before the boxes do.
     for spine in ax.spines.values():
         spine.set_linewidth(SQUARE_BORDER)
-    handles = [plt.Rectangle((0, 0), 1, 1, facecolor=colors[f], edgecolor=colors[f], alpha=0.7) for f in frameworks]
-    ax.legend(handles, frameworks, fontsize=13, frameon=False, loc="best", handlelength=1.2, handleheight=0.9)
+    handles = [
+        plt.Rectangle((0, 0), 1, 1, facecolor=colors[f], edgecolor=colors[f], alpha=0.7, label=f) for f in frameworks
+    ]
+    style.legend_below(fig, handles, ncol=len(frameworks), y=-0.02, fontsize=style.ANNOTATION_PT)
     return plotting.save_figure(output, fig)
 
 

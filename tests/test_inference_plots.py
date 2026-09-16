@@ -13,6 +13,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import pytest
+from matplotlib.figure import Figure
 
 from hpcagent_bench.stats import inference
 from hpcagent_bench.stats.figures import results as plotting
@@ -102,8 +103,8 @@ def test_no_normal_curve_is_drawn_over_a_non_normal_sample(
     normal_labels = [
         label for _title, labels in rendered_labels(monkeypatch, normal, tmp_path)["axes"] for label in labels
     ]
-    assert "fitted normal" not in skewed_labels
-    assert "fitted normal" in normal_labels  # and it IS drawn where it is honest to draw it
+    assert "Fitted Normal" not in skewed_labels
+    assert "Fitted Normal" in normal_labels  # and it IS drawn where it is honest to draw it
 
 
 def test_figure_labels_the_interval_type(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
@@ -121,6 +122,37 @@ def test_figure_reports_the_verdict_reason(monkeypatch: pytest.MonkeyPatch, tmp_
     skewed = 100.0 * np.random.default_rng(0).lognormal(0.0, 0.5, 200)
     suptitle = rendered_labels(monkeypatch, skewed, tmp_path)["suptitle"]
     assert "n=200" in str(suptitle) and "shapiro" in str(suptitle)
+
+
+def test_diagnostics_axis_labels_are_title_case(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    """Every label a figure shows is Title Case; identifiers (``ECDF``) keep their own spelling."""
+    normal = np.random.default_rng(0).normal(100.0, 5.0, 200)
+    captured: List[List[str]] = []
+    original = plotting.save_figure
+
+    def spy(output: str, fig: Figure) -> str:
+        captured.append([ax.get_xlabel() for ax in fig.axes] + [ax.get_ylabel() for ax in fig.axes])
+        return original(output, fig)
+
+    monkeypatch.setattr(plotting, "save_figure", spy)
+    plotting.plot_sample_diagnostics(normal, title="cell", output=str(tmp_path / "f.pdf"), drop=False, usetex=False)
+
+    labels = [label for label in captured[0] if label]
+    assert labels, "the diagnostic panels must label their axes"
+    for label in labels:
+        first_word = label.split(" ")[0].split("(")[0]
+        assert first_word[:1].isupper(), f"{label!r} does not open Title Case"
+
+
+def test_diagnostics_colours_trace_to_named_statistic_constants() -> None:
+    """No literal hue: :func:`draw_interval_band` and the diagnostic panels draw with the module's
+    own named STATISTIC colours, never a bare hex string re-typed at each call site."""
+    import inspect
+
+    source = inspect.getsource(plotting)
+    for literal in ('color="#2a78d6"', 'color="#d64550"', 'color="#1baf7a"', 'color="#8a8a86"'):
+        assert literal not in source, f"{literal} should be a named SAMPLE_HUE/FITTED_HUE constant"
+    assert plotting.SAMPLE_HUE and plotting.FITTED_HUE and plotting.RAW_POINT_HUE and plotting.QQ_REFERENCE_HUE
 
 
 def test_diagnostics_refuses_an_empty_sample(tmp_path: pathlib.Path) -> None:
