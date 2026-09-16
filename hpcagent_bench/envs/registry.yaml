@@ -24,31 +24,13 @@
 # The channels. Shape is ALWAYS the model; colour is whatever the figure VARIES.
 # ---------------------------------------------------------------------------------------------
 
-# Okabe-Ito, minus black (reserved for ink) and yellow (illegible on white). Designed for
-# deuteranopia, protanopia and tritanopia, and categorical -- viridis is sequential and would
-# imply an order these entities do not have.
-hues:
-  - "#0072b2"  # blue
-  - "#e69f00"  # orange
-  - "#009e73"  # bluish green
-  - "#cc79a7"  # reddish purple
-  - "#d55e00"  # vermillion
-  - "#56b4e9"  # sky blue
+# THE COLOUR RAMP IS NOT DATA HERE ANY MORE. Every figure draws matplotlib's `tab20`, and
+# `hpcagent_bench.stats.palette` is the one place that looks a slot up. This file keeps the
+# VOCABULARY and its ORDER, which is what decides which slot an entity takes.
 
-# The no-packet control. Neutral on purpose and not drawn from `hues`: it is the reference every
+# The no-packet control. Neutral on purpose and not a tab20 slot: it is the reference every
 # treatment is read against, not one more colour among them.
 control_color: "#4d4d4d"
-
-# THE RAMP WRAPS, AND A PAPER FIGURE MAY NOT WRAP ONTO ANOTHER PAPER FIGURE. There are 20 packets
-# and six hues, so `ordered_color` hands the seventh packet the first packet's colour again -- and
-# a reader carries a colour ACROSS figures, so `cpfsrc` and `no-score-tool` reading as one blue in
-# two different figures is the same defect as two series sharing a hue inside one. `warn_on_collision`
-# only sees one figure at a time and cannot catch it. Appending hues does not fix it either: the
-# paper's packets sit at ramp positions 0-6, 13 and 19, which stay pairwise distinct only at a ramp
-# of twenty, and twenty hues nobody with deuteranopia can separate is not a palette. So each packet
-# that a paper figure draws and that the ramp would wrap carries an explicit `color` below, taken
-# from Paul Tol's muted set (colourblind-safe, and none of them is an Okabe-Ito hue or the control
-# grey). tests/test_palette.py holds the paper's packets pairwise distinct.
 
 # A filled circle, square, triangle and diamond stay apart at 4pt where a pentagon and a hexagon do
 # not, so identity survives a column-width figure and a greyscale print.
@@ -126,7 +108,6 @@ models:
 #            this packet's arms and nowhere else (its PACKET_TOOL_SWITCH, held to this list by
 #            tests/test_packet_wiring.py), and the pages in `skills` are then that tool's manual,
 #            which `*` does not pick up
-#   color:   an explicit hex colour, overriding the registry-order hue rule
 #   device:  cpu, amd or nvidia -- whose tools the pages teach. Resolving it for a language that
 #            device does not run is refused (amd: hip, nvidia: cuda, cpu: anything but hip/cuda)
 #   frozen:  why a recorded key takes no new submissions. It still resolves for the records that
@@ -181,8 +162,6 @@ packets:
       AGENT_PROMPT_FILE: prompt-repo.md
   no-score-tool:
     name: No Score Tool
-    # Ramp position 6 wraps onto cpfsrc's blue, and the blind comparison is a paper figure.
-    color: "#332288"
     env:
       AGENT_SCORE_TOOL: "0"
       HPCAGENT_BENCH_SERVICE_SCORE_ENABLED: "0"
@@ -217,8 +196,6 @@ packets:
       - lang
   perf-playbook-cpu:
     name: Perf Playbook (CPU)
-    # Ramp position 13 wraps onto cpf's orange, and both are drawn in the paper.
-    color: "#999933"
     device: cpu
     skills:
       - divide-and-conquer
@@ -265,8 +242,6 @@ packets:
   # arm-name token ("kernel") instead of a proper name.
   kernel:
     name: Bare Kernel
-    # Ramp position 19 wraps onto cpf's orange too; git-scicomp's bare-kernel scope is a paper figure.
-    color: "#882255"
 
 # Where the kernel was TIMED. `cpu` is the default a launcher stamps when it says nothing.
 devices:

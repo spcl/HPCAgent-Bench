@@ -15,9 +15,16 @@ ramp: an INTERVENTION (a skill packet, or a scope such as `kernel`/`repo`/`no-sc
 agent-harness comparison), a FRAMEWORK (a compiler/library comparison, which has no agent in it), or
 a MODEL (a figure whose only axis is which LLM ran).
 
-A packet's colour is :func:`hpcagent_bench.packets.packet_color`, the one packet colour rule: its LEAD
-packet's hue and one lightness step per additional packet, so ``cpfsrc`` and ``cpfsrc+lang-skills``
-read as the same treatment family at two strengths, and neutral grey for the no-packet control.
+ONE GLOBAL PALETTE: matplotlib's ``tab20``, and nothing else. Every entity a figure colours --
+packet, framework, model, harness, language -- takes a tab20 SLOT decided by its position in
+``envs/registry.yaml``, so a colour is looked up in exactly one table and no figure, script or
+registry entry carries a hex literal of its own. The ramp it used to carry was hand-picked
+Okabe-Ito with per-packet hex overrides bolted on wherever six hues wrapped, which is two palettes
+pretending to be one.
+
+A packet's colour is :func:`color`: its LEAD packet's slot and one lightness step per additional
+packet, so ``cpfsrc`` and ``cpfsrc+lang-skills`` read as the same treatment family at two
+strengths, and neutral grey for the no-packet control.
 
 THE VOCABULARY AND THE ORDER ARE DATA, in ``envs/registry.yaml``, beside the display names. They
 were tuples here and names there, which is two registries for one vocabulary -- and the failure
@@ -25,19 +32,39 @@ mode is silent, because a packet missing from one of them still draws, in a hash
 raw-string label.
 """
 
+import colorsys
 import logging
 import zlib
 from collections.abc import Iterable
+
+import matplotlib
+import matplotlib.colors
 
 from hpcagent_bench import packets
 from hpcagent_bench.experiment_tags import canonical, order, registry
 
 LOG = logging.getLogger(__name__)
 
+#: The colormap every figure in this repo draws from. The user's global palette decision.
+TAB20: str = "tab20"
+
+#: tab20 slots in DARK-FIRST order: its ten saturated slots, then their ten light twins. tab20 is
+#: laid out as light/dark PAIRS, so reading it straight through would spend the second colour of a
+#: figure on a pale wash of its first; taken this way the entities plotted most take the ten
+#: colours that stay apart at 4pt, and the light twin of a hue only comes back once the dark ones
+#: are spent. Twenty slots for twenty packets, so nothing wraps and no entity needs an override.
+TAB20_ORDER: tuple[int, ...] = (0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19)
+
+
+def tab20_slot(slot: int) -> str:
+    """tab20 entry ``slot`` as ``#rrggbb``. The ONE place a colour value enters this repo."""
+    colormap = matplotlib.colormaps[TAB20]
+    return matplotlib.colors.to_hex(colormap(slot % colormap.N))
+
 
 def hues() -> tuple[str, ...]:
-    """The categorical ramp. Registry order; see the file for why these hues."""
-    return registry().hues
+    """The categorical ramp: tab20 in :data:`TAB20_ORDER`."""
+    return tuple(tab20_slot(slot) for slot in TAB20_ORDER)
 
 
 def markers() -> tuple[str, ...]:
@@ -58,8 +85,10 @@ def hue_order(kind: str) -> tuple[str, ...]:
     return tuple(tag for tag in order(kind) if tag)
 
 
-def ordered_color(kind: str, name: str) -> str:
-    """``name``'s hue within one entity ``kind``. An unregistered name gets a stable CRC hue.
+def slot_color(kind: str, name: str) -> str:
+    """``name``'s tab20 slot within one entity ``kind``, silently -- an unregistered name gets a
+    stable CRC slot. :func:`ordered_color` is this plus the warning; a caller that has already
+    warned for ``name`` (:func:`color`) uses this one so one unknown entity logs once.
 
     CRC, never ``hash()``: ``hash`` is salted by PYTHONHASHSEED and would hand the same entity a
     different colour in two runs of the same script."""
@@ -67,8 +96,14 @@ def ordered_color(kind: str, name: str) -> str:
     resolved = canonical(kind, name)
     if resolved in known:
         return ramp[known.index(resolved) % len(ramp)]
-    LOG.warning("palette: %s %r is not in registry.yaml; using a hash colour", kind, name)
     return ramp[zlib.crc32(str(name).encode()) % len(ramp)]
+
+
+def ordered_color(kind: str, name: str) -> str:
+    """``name``'s tab20 slot within one entity ``kind``, warning when the registry does not name it."""
+    if canonical(kind, name) not in hue_order(kind):
+        LOG.warning("palette: %s %r is not in registry.yaml; using a hash colour", kind, name)
+    return slot_color(kind, name)
 
 
 def warn_on_collision(chosen: dict[str, str], kind: str) -> dict[str, str]:
@@ -86,14 +121,32 @@ def warn_on_collision(chosen: dict[str, str], kind: str) -> dict[str, str]:
     return chosen
 
 
+def lighten(hex_color: str, steps: int) -> str:
+    """``hex_color`` moved ``steps`` toward white in HLS, capped short of white so it stays visible.
+
+    What makes a combination read as its lead packet's family rather than as a fourth treatment."""
+    if steps <= 0:
+        return hex_color
+    r, g, b = (int(hex_color[i : i + 2], 16) / 255 for i in (1, 3, 5))
+    hue, lightness, saturation = colorsys.rgb_to_hls(r, g, b)
+    lightness = min(0.88, lightness + steps * registry().lightness_step)
+    r, g, b = colorsys.hls_to_rgb(hue, lightness, saturation)
+    return matplotlib.colors.to_hex((r, g, b))
+
+
 def color(packet: str) -> str:
-    """The one colour ``packet`` wears, in every figure and every process: the resolver's rule, with a
-    warning for each part registry.yaml does not name, since the resolver draws that part in a hash hue."""
+    """The one colour ``packet`` wears, in every figure and every process: the control grey for the
+    control, otherwise the lead part's tab20 slot lightened one step per extra part.
+
+    Warns for each part registry.yaml does not name, since an unregistered part draws in a hash slot."""
     known = set(hue_order("packets"))
     for part in packets.spec_parts(packet):
         if part not in known:
             LOG.warning("palette: packets %r is not in registry.yaml; using a hash colour", part)
-    return packets.packet_color(packet)
+    parts = packets.spec_parts(packet)
+    if not parts:
+        return control_color()
+    return lighten(slot_color("packets", packets.lead(parts)), len(parts) - 1)
 
 
 def colors(names: Iterable[str]) -> dict[str, str]:

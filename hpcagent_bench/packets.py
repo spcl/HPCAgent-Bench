@@ -15,19 +15,17 @@ packet's own ``packets`` field. ``lang`` expands to the caller's ``lang-<languag
 A packet with a ``device`` refuses a language that device does not run (:func:`device_fault`), and a
 ``frozen`` key takes no new submissions (:func:`refuse_frozen`) while still resolving for its records.
 
-THE COLOUR RULE LIVES HERE now, not in :mod:`hpcagent_bench.stats.palette`: a packet's colour is
-the registry-order hue of its lead part, lightened one step per extra part, with a stable CRC32 hue
-for an unregistered part. ``palette.color`` computes the same values; it is expected to switch to
-calling :func:`packet_color` directly once this module lands.
+THE COLOUR RULE LIVES IN :mod:`hpcagent_bench.stats.palette`, which is where the tab20 table is
+read. This module owns the IDENTITY half of that rule -- :func:`hue_order` and :func:`lead`, which
+say which registered part a combination is named and coloured for -- and nothing that needs a
+colour table, so the harness can resolve a packet without a plotting stack behind it.
 """
 
-import colorsys
 import dataclasses
 import functools
 import os
 import pathlib
 import re
-import zlib
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 
@@ -296,20 +294,6 @@ def control_label(treatments: Iterable[str]) -> str:
     return "No Packet"
 
 
-def lighten(hex_color: str, steps: int) -> str:
-    """``hex_color`` moved ``steps`` toward white in HLS, capped short of white so it stays visible.
-
-    Mirrors :func:`hpcagent_bench.stats.palette.lighten`; kept local so this module needs nothing
-    beyond the registry loader."""
-    if steps <= 0:
-        return hex_color
-    r, g, b = (int(hex_color[i : i + 2], 16) / 255 for i in (1, 3, 5))
-    hue, lightness, saturation = colorsys.rgb_to_hls(r, g, b)
-    lightness = min(0.88, lightness + steps * tags.registry().lightness_step)
-    r, g, b = colorsys.hls_to_rgb(hue, lightness, saturation)
-    return f"#{round(r * 255):02x}{round(g * 255):02x}{round(b * 255):02x}"
-
-
 def hue_order() -> tuple[str, ...]:
     """Registered packet keys in hue-assignment order, control dropped."""
     return tuple(tag for tag in tags.order("packets") if tag)
@@ -324,25 +308,3 @@ def lead(parts: tuple[str, ...]) -> str:
         return (known.index(name), "") if name in known else (len(known), name)
 
     return min(parts, key=rank)
-
-
-def ordered_color(name: str) -> str:
-    """``name``'s hue among registered packets; a stable CRC32 hue when it is not one."""
-    known, ramp = hue_order(), tags.registry().hues
-    resolved = tags.canonical("packets", name)
-    if resolved in known:
-        return ramp[known.index(resolved) % len(ramp)]
-    return ramp[zlib.crc32(str(name).encode()) % len(ramp)]
-
-
-def packet_color(spec: str) -> str:
-    """The one colour ``spec`` wears: the control colour, an explicit registered colour, or the
-    lead part's hue lightened one step per extra part."""
-    parts = spec_parts(spec)
-    if not parts:
-        return tags.registry().control_color
-    if len(parts) == 1:
-        definition = tags.registry().packet_defs.get(parts[0])
-        if definition is not None and definition.color:
-            return definition.color
-    return lighten(ordered_color(lead(parts)), len(parts) - 1)

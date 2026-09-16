@@ -62,17 +62,22 @@ def test_each_extra_packet_is_one_step_lighter():
     one = palette.color("cpfsrc+lang-skills")
     two = palette.color("cpfsrc+lang-skills+profiling")
     assert base != one != two
-    assert packets.lighten(base, 1) == one and packets.lighten(base, 2) == two
+    assert palette.lighten(base, 1) == one and palette.lighten(base, 2) == two
 
 
-def test_the_six_hues_are_distinct():
-    assert len(set(palette.hues())) == len(palette.hues())
+def test_the_ramp_is_tab20_dark_first_and_every_slot_is_distinct():
+    """One global palette, matplotlib's tab20, taken dark half first: reading tab20 straight
+    through spends the second colour of a figure on a pale wash of its first."""
+    ramp = palette.hues()
+    assert len(set(ramp)) == len(ramp) == 20
+    assert ramp[:3] == (palette.tab20_slot(0), palette.tab20_slot(2), palette.tab20_slot(4))
+    assert sorted(palette.TAB20_ORDER) == list(range(20))
 
 
-def test_the_first_six_packets_do_not_share_a_hue():
-    """Past the sixth the ramp wraps, which the order comments justify per packet; up to it a
-    collision would be an accident."""
-    leads = palette.hue_order("packets")[: len(palette.hues())]
+def test_no_registered_packet_shares_a_slot_with_another():
+    """Twenty packets and twenty slots, so nothing wraps and no packet needs an override. This is
+    what the three hand-picked hex `color:` keys in registry.yaml used to buy one packet at a time."""
+    leads = palette.hue_order("packets")
     assert len({palette.color(p) for p in leads}) == len(leads)
 
 
@@ -97,14 +102,13 @@ def test_an_unregistered_model_is_stable_and_warns(caplog):
     assert "not in registry.yaml" in caplog.text
 
 
-def test_two_packets_sharing_a_colour_in_one_figure_warn(caplog):
-    """Wrapping is only safe while the wrapped pair never share a figure; this is the guard.
-
-    ``all-in`` is ramp position 13 and wraps onto ``cpfsrc``'s blue. The pair was once
-    ``cpfsrc``/``no-score-tool``, until the blind comparison became a paper figure and
-    ``no-score-tool`` took an explicit hue (see PAPER_FIGURE_PACKETS)."""
+def test_two_entities_sharing_a_colour_in_one_figure_warn(caplog):
+    """The ramp still wraps for a kind with more entities than tab20 has slots (31 frameworks), and
+    wrapping is only safe while the wrapped pair never share a figure. Driven through the guard
+    itself rather than through a pair that happens to wrap today, so the guard keeps being tested
+    on the day the registry grows."""
     with caplog.at_level("WARNING"):
-        palette.colors(["cpfsrc", "all-in"])
+        palette.warn_on_collision({"cpfsrc": palette.color("cpfsrc"), "twin": palette.color("cpfsrc")}, "packet")
     assert "both draw" in caplog.text
 
 
@@ -117,32 +121,32 @@ def test_two_packets_sharing_a_colour_in_one_figure_warn(caplog):
 #:
 #: A NEW entity is added here in the same commit that registers it. A CHANGED value is a decision
 #: to repaint, so it is made deliberately, with the figures regenerated.
+#:
+#: Repainted wholesale once: one global palette, matplotlib's tab20, is the user's decision.
 PUBLISHED_PACKET_COLORS = {
     "": "#4d4d4d",
-    "cpfsrc": "#0072b2",
-    "cpf": "#e69f00",
-    "lang-skills": "#009e73",
-    "divide-and-conquer": "#cc79a7",
-    "profiling": "#d55e00",
-    "repo": "#56b4e9",
-    # Repainted deliberately: the six-hue ramp wrapped these three onto a packet the paper draws
-    # beside them, so registry.yaml gives each an explicit colourblind-safe hue.
-    "kernel": "#882255",
-    "no-score-tool": "#332288",
-    "perf-playbook-cpu": "#999933",
-    "cpfsrc+lang-skills": "#009cf4",
-    "divide-and-conquer+profiling": "#dea9c7",
+    "cpfsrc": "#1f77b4",
+    "cpf": "#ff7f0e",
+    "lang-skills": "#2ca02c",
+    "divide-and-conquer": "#d62728",
+    "profiling": "#9467bd",
+    "repo": "#8c564b",
+    "no-score-tool": "#e377c2",
+    "perf-playbook-cpu": "#ff9896",
+    "kernel": "#9edae5",
+    "cpfsrc+lang-skills": "#389add",
+    "divide-and-conquer+profiling": "#e25e5e",
 }
 
 PUBLISHED_MODEL_MARKERS = {"qwen38": "o", "oss120b": "s", "kimi27sglang": "^", "glm53": "D"}
 
 PUBLISHED_FRAMEWORK_COLORS = {
-    "numpy": "#0072b2",
-    "numba": "#e69f00",
-    "cc": "#009e73",
-    "dace_cpu": "#cc79a7",
-    "fortran": "#d55e00",
-    "cpp": "#56b4e9",
+    "numpy": "#1f77b4",
+    "numba": "#ff7f0e",
+    "cc": "#2ca02c",
+    "dace_cpu": "#d62728",
+    "fortran": "#9467bd",
+    "cpp": "#8c564b",
 }
 
 
@@ -217,8 +221,8 @@ PAPER_FIGURE_PACKETS: tuple[str, ...] = (
 def test_the_packets_the_paper_draws_have_pairwise_distinct_hues() -> None:
     """Colour is the entity's, and a reader carries it ACROSS figures: two interventions the paper
     draws in the same colour read as one treatment however far apart their pages are. The committed
-    PDFs had `cpfsrc` and `no-score-tool` both #0072b2 and `cpf`, `perf-playbook-cpu` and `kernel`
-    all #e69f00, because the ramp wraps after six. Fixed in registry.yaml, held here."""
+    PDFs once had `cpfsrc` and `no-score-tool` in one blue and `cpf`, `perf-playbook-cpu` and
+    `kernel` in one orange, because the six-hue ramp wrapped. tab20 has a slot for every packet."""
     chosen = {name: palette.color(name) for name in PAPER_FIGURE_PACKETS}
     clashes = {
         hue: sorted(name for name, own in chosen.items() if own == hue)

@@ -47,7 +47,6 @@ def test_the_registry_parses_and_every_section_a_figure_reads_is_populated() -> 
         "models": registry.models,
         "languages": registry.languages,
         "packets": registry.packets,
-        "hues": registry.hues,
         "markers": registry.markers,
     }
     assert [name for name, block in populated.items() if not block] == []

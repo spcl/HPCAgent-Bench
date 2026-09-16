@@ -223,8 +223,8 @@ def test_resolve_a_missing_placeholder_raises_naming_the_var() -> None:
 def test_resolve_conflicting_env_between_two_packets_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     real = tags.registry()
     conflicting = dict(real.packet_defs)
-    conflicting["fake-a"] = tags.PacketDef(name="Fake A", skills=(), packets=(), env=(("X", "1"),), method="", color="")
-    conflicting["fake-b"] = tags.PacketDef(name="Fake B", skills=(), packets=(), env=(("X", "2"),), method="", color="")
+    conflicting["fake-a"] = tags.PacketDef(name="Fake A", skills=(), packets=(), env=(("X", "1"),), method="")
+    conflicting["fake-b"] = tags.PacketDef(name="Fake B", skills=(), packets=(), env=(("X", "2"),), method="")
     fake_registry = dataclasses.replace(real, packet_defs=conflicting)
     monkeypatch.setattr(tags, "registry", lambda: fake_registry)
     with pytest.raises(ValueError, match="X"):
@@ -303,20 +303,23 @@ def test_label_of_an_ad_hoc_combination_joins_the_parts() -> None:
 
 
 @pytest.mark.parametrize("key", tags.order("packets"))
-def test_packet_color_matches_palette_for_every_registered_key(key: str) -> None:
-    assert packets.packet_color(key) == palette.color(key)
+def test_every_registered_key_is_coloured_by_the_part_this_module_leads_it_with(key: str) -> None:
+    """This module owns the IDENTITY half of the colour rule -- which part a spec is led by -- and
+    the palette owns the table. The two halves have to agree on every registered key."""
+    parts = packets.spec_parts(key)
+    expected = palette.control_color() if not parts else palette.color(packets.lead(parts))
+    assert palette.color(key) == expected
 
 
 @pytest.mark.parametrize("spec,expected", sorted(PUBLISHED_PACKET_COLORS.items()))
-def test_packet_color_matches_the_published_colours(spec: str, expected: str) -> None:
-    assert packets.packet_color(spec) == expected
-    assert packets.packet_color(spec) == palette.color(spec)
+def test_a_packet_colour_matches_the_published_colours(spec: str, expected: str) -> None:
+    assert palette.color(spec) == expected
 
 
-def test_packet_color_of_an_ad_hoc_combination_is_deterministic() -> None:
-    first = packets.packet_color("mystery-tool;another-mystery")
-    second = packets.packet_color("another-mystery;mystery-tool")
-    assert first == second == palette.color("mystery-tool;another-mystery")
+def test_the_colour_of_an_ad_hoc_combination_is_deterministic() -> None:
+    first = palette.color("mystery-tool;another-mystery")
+    second = palette.color("another-mystery;mystery-tool")
+    assert first == second
 
 
 def test_an_unfilled_resolve_keeps_the_placeholder_templates_the_db_records() -> None:
