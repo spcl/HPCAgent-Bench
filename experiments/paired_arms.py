@@ -43,7 +43,7 @@ import pandas as pd
 
 from hpcagent_bench import experiment_tags, experiments
 from hpcagent_bench.harness import efficacy
-from hpcagent_bench.stats import population, summary
+from hpcagent_bench.stats import cost, population, summary
 
 #: Order every episode's graded rows are read in; ``attempt_index`` breaks a same-millisecond tie in
 #: the order the agent made the submissions.
@@ -77,6 +77,9 @@ POLICY: population.KernelPolicy = "served"
 
 PAIR_COLUMNS = (
     "family",
+    # the cost card the tokens leg was priced with (hpcagent_bench.stats.cost); a figure drawn from
+    # this table refuses a different card, so a star and its axis cannot come from two cost models
+    "cost_model",
     "arm_a",
     "arm_b",
     "baseline",
@@ -284,15 +287,16 @@ def impact_rows(pairs: list[tuple[str, str]], arm_frame: pd.DataFrame, pair_fram
     return pd.DataFrame(rows).reindex(columns=list(IMPACT_COLUMNS))
 
 
-def load_observations(paths: list[pathlib.Path]) -> pd.DataFrame:
-    """The extracted observations, restricted to the arms that recorded a campaign run id.
+def load_observations(paths: list[pathlib.Path], card: cost.CostModel = cost.resolve()) -> pd.DataFrame:
+    """The extracted observations, restricted to the arms that recorded a campaign run id, with every
+    task's ``tokens`` priced by ``card``.
 
     ``paths`` concatenates: a scored campaign and its blind control are two extracted databases,
     and pairing across them must not require copying one into the other's directory first.
     """
     frames = [experiments.read_observations(path) for path in paths]
     combined = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
-    return population.condition_rows(combined)
+    return population.condition_rows(cost.priced(combined, card))
 
 
 def one_baseline(observations: pd.DataFrame, baseline: str) -> pd.DataFrame:
@@ -711,6 +715,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
     )
     ap.add_argument(
+        "--cost-model",
+        default=cost.DEFAULT_COST_MODEL,
+        help="the cost card the tokens leg is priced with: a name in envs/cost_models.yaml or --cost-models, "
+        "or inline weights fresh_input=1,cached_input=0.1,output=5",
+    )
+    ap.add_argument("--cost-models", type=pathlib.Path, default=None, help="a YAML file of extra cost cards")
+    ap.add_argument(
         "--impact-out",
         type=pathlib.Path,
         default=None,
@@ -733,7 +744,8 @@ def main(argv: list[str]) -> int:
         raise SystemExit(f"a pair must share model and language: {unlike}")
     arms = sorted({arm for pair in pairs for arm in pair})
 
-    observations = load_observations(args.observations)
+    card = cost.resolve(args.cost_model, args.cost_models)
+    observations = load_observations(args.observations, card)
     if args.baseline:
         observations = one_baseline(observations, args.baseline)
     missing = [arm for arm in arms if arm not in set(observations.arm)]
@@ -759,7 +771,11 @@ def main(argv: list[str]) -> int:
     tokens = tokens_by_arm_kernel(observations, args.repeats)
     usage = task_usage(observations[observations.arm.isin(arms)], args.repeats)
     arm_frame = pd.DataFrame(arm_rows(best, graded, table, served, tokens, usage)).reindex(columns=list(ARM_COLUMNS))
-    pair_frame = pd.DataFrame(pair_rows(pairs, table, tokens, roster, args.family)).reindex(columns=list(PAIR_COLUMNS))
+    pair_frame = (
+        pd.DataFrame(pair_rows(pairs, table, tokens, roster, args.family))
+        .assign(cost_model=card.key)
+        .reindex(columns=list(PAIR_COLUMNS))
+    )
     # spec N1: the tables keep full float64; only the printed copy is rounded
     print(arm_frame.round(4).to_string(index=False))
     print()

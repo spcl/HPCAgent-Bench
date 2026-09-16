@@ -219,6 +219,10 @@ def test_skipping_lines_that_cannot_carry_usage_changes_no_total(
     totals = token_cost.task_totals(tmp_path)
     assert (totals.tokens_effective, totals.tokens_billed) == (int(cost["effective"]), 1000 + 1500)
     assert totals.tokens_provider == 1670
+    # The components a cost card weights ride on the task, and they are NOT recoverable from billed:
+    # billed (2500) carries no output here, so billed - effective is not the cached count.
+    assert (totals.tokens_fresh_input, totals.tokens_cached_input, totals.tokens_output) == (fresh, cached, 70)
+    assert totals.tokens_billed - totals.tokens_effective != cached
 
 
 def test_the_streamed_thinking_estimate_is_reported_but_never_added_to_the_effective_total(
