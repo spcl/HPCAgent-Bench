@@ -237,7 +237,7 @@ def significant_flags(stats: pd.DataFrame) -> dict[tuple[str, str], bool]:
     since the mark now carries both intervals at once."""
     flags: dict[tuple[str, str], bool] = {}
     legs = leg_labels(stats)
-    for (_, row), leg in zip(stats.iterrows(), legs, strict=True):
+    for (row_index, row), leg in zip(stats.iterrows(), legs, strict=True):
         verdicts = (str(row.get("score_verdict", "")), str(row.get("cost_verdict", "")))
         flags[(str(row["model"]), str(leg))] = efficacy.SIGNIFICANT in verdicts
     return flags
@@ -536,7 +536,7 @@ def figure_row(
     width = side * n + ROW_PANEL_GAP * (n - 1)
     height = side + ROW_TITLE_IN + ROW_XLABEL_IN + ROW_LEGEND_IN
     fig, axes = plt.subplots(1, n, figsize=(width, height), squeeze=False)
-    treatments_here = [treatment for _, treatment, _, _ in panels]
+    treatments_here = [treatment for panel_title, treatment, treated_arm, control_arm in panels]
     handles_by_label: dict[str, Line2D] = {}
     for ax, (title, treatment, stats, frame) in zip(axes[0], panels, strict=True):
         for handle in draw_panel(ax, frame, stats, treatment, True, treatments_here, repeats=repeats):
