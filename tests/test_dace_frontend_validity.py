@@ -13,7 +13,7 @@ kernel that starts parsing must be REMOVED from the list -- an entry that no lon
 same silent drift a hand-written list always accumulates.
 
 Parse only (``to_sdfg(simplify=False)``): no C++ compiler runs, so the whole corpus is affordable.
-Each kernel is parsed in its own process because a frontend that hangs (``cloudsc``) or dies would
+Each kernel is parsed in its own process because a frontend that hangs (``googlenet_inception_v1``) or dies would
 otherwise take the session with it, and because DaCe's parse state is process-global. Those
 processes are FORKED from a warm :mod:`tests.dace_parse_probe` server rather than started from
 scratch, which is the same isolation without ``import dace`` 661 times over.
@@ -107,7 +107,7 @@ TIMEOUT_REASONS = frozenset({"hang"})
 #: hand-editing a ``*_dace.py``, which is regenerated from the numpy reference on the next miss.
 #: Keyed on the kernel directory's PATH under ``benchmarks/`` -- see :func:`kernel_of`.
 #:
-#: The causes on the list below, one process per kernel (51 of 652):
+#: The causes on the list below, one process per kernel (50 of 652):
 #:   broadcast      42 -- two extents that ARE one quantity reach a write spelled differently, and
 #:                        the frontend re-promotes each to a fresh symbol it cannot prove equal.
 #:                        Down from 108 by two repairs -- a tap loop's strided span spelled
@@ -139,8 +139,10 @@ TIMEOUT_REASONS = frozenset({"hang"})
 #:                        ``np.where(cond, scalar_param, scalar_param)`` left unfilled --
 #:                        ``BroadcastScalarWhere`` only recognized a LITERAL scalar branch, not one
 #:                        known scalar by shape inference alone
-#:   hang            3 -- the frontend does not finish parsing inside the budget; the deep vision
-#:                        nets spend it in sympy over per-layer extent expressions
+#:   hang            2 -- the frontend does not finish parsing inside the budget; the deep vision
+#:                        nets spend it in sympy over per-layer extent expressions. Down from 3:
+#:                        cloudsc parses in ~25 s at the tip this ratchet installs (measured
+#:                        2026-09-16), so its hang was a stale wall-clock verdict, not a live one.
 #:   reassign        1 -- a second assignment to an array/View name the frontend treats as
 #:                        single-assignment. Down from 2: lulesh parses, on the same stale-entry
 #:                        finding as the broadcast eight
@@ -202,7 +204,6 @@ REFUSED: Dict[str, str] = {
     "machine_learning/squeezenet": "misc",
     "machine_learning/unet_softmax": "broadcast",
     "machine_learning/vision_transformer": "broadcast",
-    "scientific_computing/structured_grids/cloudsc": "hang",
     # DaCe folds a scalar expression whose symbols CANCEL (hotspot's Rx = grid_width /
     # (0.1 * grid_height), both grid spacings being chip_extent / N) into a sympy.Float
     # with no free symbols, which issymbolic calls not-symbolic and dtype_to_typeclass has
@@ -276,7 +277,6 @@ def ensure_dace_program(key: str) -> pathlib.Path:
 PARSE_COST: Dict[str, float] = {
     "machine_learning/densenet201": 551.0,
     "machine_learning/googlenet_inception_v1": 474.0,
-    "scientific_computing/structured_grids/cloudsc": 471.0,
     "machine_learning/densenet121": 297.0,
     "scientific_computing/n_body_methods/field_gather": 111.0,
     "machine_learning/efficientnet_b0": 55.0,
@@ -285,6 +285,9 @@ PARSE_COST: Dict[str, float] = {
     "machine_learning/shufflenet": 50.0,
     "scientific_computing/structured_grids/sw4_rhs4sg": 46.0,
     "machine_learning/resnet101": 41.0,
+    # No longer a hang (see REFUSED): re-measured 2026-09-16 at 13.5 s emit + 23.9 s parse,
+    # cost = emit + parse / PARSE_WORKERS = 13.5 + 23.9 / 2 = 25.4.
+    "scientific_computing/structured_grids/cloudsc": 25.4,
 }
 
 
