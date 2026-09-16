@@ -78,7 +78,9 @@ def test_the_driver_argv_parses_into_absolute_paths_and_a_bare_base_url(harness,
     )
 
 
-def test_a_runner_told_no_effort_or_context_sends_neither(harness, tmp_path: pathlib.Path) -> None:
+def test_a_runner_told_no_effort_or_context_sends_neither(
+    harness: types.SimpleNamespace, tmp_path: pathlib.Path
+) -> None:
     """An EMPTY AGENT_EFFORT means the model has no ladder and the request must carry no field, and a
     runner whose client has no input-window knob is handed no window at all."""
     argv = ["--workdir", str(tmp_path), "--prompt", "p", "--base-url", "u/v1", "--model", "m", "--usage", "u.jsonl"]
@@ -264,7 +266,9 @@ def test_the_openhands_agent_carries_the_default_presets_condenser_on_a_copy_of_
     }
 
 
-def openhands_llm_fields(harness, tmp_path: pathlib.Path, effort: str, context: int | None) -> dict:
+def openhands_llm_fields(
+    harness: types.SimpleNamespace, tmp_path: pathlib.Path, effort: str, context: int | None
+) -> dict:
     """The LLM fields ``build_agent`` sends for one effort rung and one served window."""
     config = write_mcp_json(tmp_path / "mcp.json", {"optarena": {"command": "python3", "args": ["s.py"]}})
     args = harness.common.RunnerArgs(
@@ -281,7 +285,7 @@ def openhands_llm_fields(harness, tmp_path: pathlib.Path, effort: str, context: 
 
 
 def test_an_openhands_llm_told_no_rung_sends_no_field(
-    harness, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    harness: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """A model with no ladder must be sent no ``reasoning_effort`` at all; an empty string is still a
     value, and the server answers a rung it has no ladder for with a 400 on every request."""
@@ -290,7 +294,7 @@ def test_an_openhands_llm_told_no_rung_sends_no_field(
 
 
 def test_an_openhands_llm_sends_the_rung_the_driver_resolved_for_it(
-    harness, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    harness: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """The clamp onto the SDK's Literal happens in the driver, over the part of the model's ladder the
     SDK can spell (experiments/effort.py), so what arrives here is already spellable and is sent."""
@@ -299,7 +303,7 @@ def test_an_openhands_llm_sends_the_rung_the_driver_resolved_for_it(
 
 
 def test_an_openhands_llm_told_no_context_keeps_the_sdks_own_window(
-    harness, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    harness: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """An arm with no CONTEXT_LENGTH says nothing about the served window, and a guess is not a
     record: the field is left off rather than set to a number no engine was started with."""

@@ -40,7 +40,7 @@ def assistant(message_id: str, block: dict[str, object], model: str = "optarena-
     return {"type": "assistant", "message": {"id": message_id, "model": model, "content": [block]}}
 
 
-def test_what_the_model_generated_is_its_thinking_its_text_and_its_tool_arguments(retokenize) -> None:
+def test_what_the_model_generated_is_its_thinking_its_text_and_its_tool_arguments(retokenize: ModuleType) -> None:
     """One assistant event carries ONE content block, so the blocks are taken as they come. A tool
     call's arguments are generated tokens like any other -- the model wrote that JSON."""
     events = [
@@ -52,7 +52,7 @@ def test_what_the_model_generated_is_its_thinking_its_text_and_its_tool_argument
     assert retokenize.generated_text(events) == ["weigh it up", json.dumps({"command": "ls"}), "done"]
 
 
-def test_the_clis_synthetic_placeholder_is_not_the_models_work(retokenize) -> None:
+def test_the_clis_synthetic_placeholder_is_not_the_models_work(retokenize: ModuleType) -> None:
     """``API Error: The operation timed out.`` is the CLI writing in the model's place. Counting it
     would bill the agent for the endpoint's failure."""
     events = [
@@ -63,20 +63,22 @@ def test_the_clis_synthetic_placeholder_is_not_the_models_work(retokenize) -> No
     assert retokenize.generated_text(events) == ["real"]
 
 
-def test_a_model_without_a_local_tokenizer_counts_nothing_rather_than_zero(retokenize) -> None:
+def test_a_model_without_a_local_tokenizer_counts_nothing_rather_than_zero(retokenize: ModuleType) -> None:
     """None and 0 are different answers: 0 says the attempt generated nothing, None says nobody
     could count it, and only the second leaves ``output_source`` at "none"."""
     assert retokenize.counter("no-such-org/no-such-model") is None
     assert retokenize.output_counter("no-such-org/no-such-model")([]) is None
 
 
-def test_an_arms_short_tag_and_a_repo_id_both_name_a_model(retokenize) -> None:
+def test_an_arms_short_tag_and_a_repo_id_both_name_a_model(retokenize: ModuleType) -> None:
     """Runs record either: ``VLLM_MODEL`` is the repo id, ``HPCAGENT_BENCH_RECORD_MODEL`` the tag."""
     assert retokenize.repo_of("qwen38") == "Qwen/Qwen3.8-27B-FP8"
     assert retokenize.repo_of("moonshotai/Kimi-K2.7-Code") == "moonshotai/Kimi-K2.7-Code"
 
 
-def test_the_model_is_read_from_the_env_the_job_was_launched_with(retokenize, tmp_path: pathlib.Path) -> None:
+def test_the_model_is_read_from_the_env_the_job_was_launched_with(
+    retokenize: ModuleType, tmp_path: pathlib.Path
+) -> None:
     """``<campaign>/.agent-launch/<job>/.env`` sits beside the run directories, and ``VLLM_MODEL`` in
     it is the only unambiguous answer to whose tokenizer: the served model name is an alias
     (``optarena-vllm``) and the transcript records that alias, not the weights."""
@@ -93,7 +95,9 @@ def test_the_model_is_read_from_the_env_the_job_was_launched_with(retokenize, tm
     assert retokenize.model_for_run(run_dir) == "Qwen/Qwen3.8-27B-FP8"
 
 
-def test_the_short_tag_answers_when_the_launch_env_names_no_repo(retokenize, tmp_path: pathlib.Path) -> None:
+def test_the_short_tag_answers_when_the_launch_env_names_no_repo(
+    retokenize: ModuleType, tmp_path: pathlib.Path
+) -> None:
     run_dir = tmp_path / "campaign" / "700001"
     (run_dir / "agents" / "node-0" / "problem-0-worker-0").mkdir(parents=True)
     launch = tmp_path / "campaign" / ".agent-launch" / "700001"
@@ -103,7 +107,7 @@ def test_the_short_tag_answers_when_the_launch_env_names_no_repo(retokenize, tmp
     assert retokenize.model_for_run(run_dir) == "oss120b"
 
 
-def test_a_run_whose_launch_env_was_not_kept_names_no_model(retokenize, tmp_path: pathlib.Path) -> None:
+def test_a_run_whose_launch_env_was_not_kept_names_no_model(retokenize: ModuleType, tmp_path: pathlib.Path) -> None:
     """Every campaign before .agent-launch existed, which is most of the recorded corpus. Those runs
     need --model on the command line; guessing one would retokenize with the wrong vocabulary."""
     run_dir = tmp_path / "campaign" / "636540"

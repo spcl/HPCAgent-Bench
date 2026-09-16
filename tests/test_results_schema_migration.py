@@ -105,7 +105,7 @@ def create_schema_race_worker(
 
 
 @pytest.mark.skipif(not osinfo.IS_LINUX, reason="fork start method is Linux-only")
-def test_four_ranks_racing_the_first_write_to_one_shard_do_not_crash(tmp_path) -> None:
+def test_four_ranks_racing_the_first_write_to_one_shard_do_not_crash(tmp_path: pathlib.Path) -> None:
     """2026-09-15: cholesky crashed the compiler-baseline sweep on EVERY column. Every column's
     ranks write results through ONE shard file each (recording.db_path, sharded by SLURM_PROCID);
     ``results_engine``'s ``create_all`` reads ``sqlite_master`` and then issues CREATE TABLE --

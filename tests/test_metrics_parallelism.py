@@ -144,7 +144,7 @@ def libnode_sdfg() -> dace.SDFG:
     return sdfg
 
 
-def only(record, bucket: str) -> None:
+def only(record: ParallelismRecord, bucket: str) -> None:
     """Assert exactly one construct landed in ``bucket`` and nothing landed anywhere else."""
     assert record.buckets[bucket] == 1, record.buckets
     assert sum(record.buckets.values()) == 1, record.buckets
@@ -342,7 +342,7 @@ def test_the_metric_is_off_unless_switched_on(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_every_bucket_plus_libnode_and_total_is_one_row_that_round_trips_through_the_results_db(
-    tmp_path,
+    tmp_path: pathlib.Path,
 ) -> None:
     record = classify(guarded_sdfg())
     made = rows(
@@ -449,7 +449,7 @@ def test_report_lines_prints_every_definition_with_its_own_terms_and_kernel_coun
 
 
 def test_a_sweep_with_the_metric_on_stores_it_beside_its_results_under_the_same_timestamp(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A sweep is where per-kernel parallelism counts come from; a row that cannot be joined to its
     run's results is lost. Uses the FRAMEWORK's own measured SDFG (dace_cpu_canonicalize builds it),

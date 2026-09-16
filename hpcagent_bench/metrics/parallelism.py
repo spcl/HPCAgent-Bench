@@ -38,6 +38,7 @@ import functools
 import math
 import pathlib
 import sys
+import types
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -46,6 +47,8 @@ from hpcagent_bench.frameworks.schema import KernelMetric
 
 if TYPE_CHECKING:
     import pandas as pd
+    from dace import SDFG
+    from dace.sdfg.state import LoopRegion
 
 #: The taxonomy, in report order. Every loop-level construct lands in exactly one.
 BUCKETS = ("map", "reduce", "scan", "parallel_under_contract", "timestep", "inmap", "residual")
@@ -195,7 +198,7 @@ def record_from_counts(counts: dict[str, float]) -> ParallelismRecord:
     return ParallelismRecord(buckets=buckets, total=total, libnode=libnode, residual_loops=())
 
 
-def normalize_flavor(flavor: Any) -> str | None:
+def normalize_flavor(flavor: object) -> str | None:
     """A SQL NULL flavor comes back from pandas as ``float('nan')``, not ``None`` -- and two NaN
     values are never equal, so using one straight as a dict key would split one "no flavor" group
     into as many groups as it had rows. Collapse both spellings of "absent" to ``None``.
@@ -224,7 +227,7 @@ def read_records(frame: "pd.DataFrame") -> dict[str, dict[str, ParallelismRecord
     return out
 
 
-def import_dace_tests_corpus() -> Any:
+def import_dace_tests_corpus() -> types.ModuleType:
     """dace's ``tests.corpus.measure_parallelization``, importable despite the name collision.
 
     hpcagent_bench has its OWN top-level ``tests`` package (this repo's test suite), and whatever
@@ -283,7 +286,7 @@ def dace_root_for_tests(root: pathlib.Path | None = None) -> pathlib.Path:
 
 
 @functools.lru_cache(maxsize=1)
-def load_predicates() -> Any:
+def load_predicates() -> types.ModuleType:
     """dace's ``tests.corpus.measure_parallelization`` module, imported once.
 
     Lazy and cached: importing dace costs seconds, and most callers of this module (the rate
@@ -296,7 +299,7 @@ def load_predicates() -> Any:
     return import_dace_tests_corpus()
 
 
-def all_loop_regions(sdfg: Any) -> list[Any]:
+def all_loop_regions(sdfg: "SDFG") -> "list[LoopRegion]":
     """Every ``LoopRegion`` at the scope :func:`load_predicates`'s ``count`` counts loops in --
     across nested SDFGs as well as nested regions, so a loop inside a nested SDFG cannot vanish
     from the taxonomy while its Maps still count.
@@ -308,7 +311,7 @@ def all_loop_regions(sdfg: Any) -> list[Any]:
     ]
 
 
-def loop_bound_symbols(loop: Any) -> list[str]:
+def loop_bound_symbols(loop: "LoopRegion") -> list[str]:
     """Symbol names in a loop's init/condition/update, minus the loop variable itself."""
     names: set[str] = set()
     for code in loop.get_meta_codeblocks():
@@ -317,7 +320,7 @@ def loop_bound_symbols(loop: Any) -> list[str]:
     return sorted(names)
 
 
-def is_timestep_loop_region(loop: Any, timestep_symbols: Sequence[str] | None = None) -> bool:
+def is_timestep_loop_region(loop: "LoopRegion", timestep_symbols: Sequence[str] | None = None) -> bool:
     """True when the loop's bound names a time-stepping symbol -- a loop deliberately left
     sequential. Matched case-insensitively as a SUBSTRING, the same rule
     ``numpyto_common.parallelism.is_timestep_loop`` applies to a python ``for t in range(TSTEPS)``,
@@ -329,7 +332,7 @@ def is_timestep_loop_region(loop: Any, timestep_symbols: Sequence[str] | None = 
     return any(s in name.lower() for name in loop_bound_symbols(loop) for s in syms)
 
 
-def describe_loop(loop: Any) -> LoopDetail:
+def describe_loop(loop: "LoopRegion") -> LoopDetail:
     return LoopDetail(
         label=loop.label,
         sdfg=loop.sdfg.name if loop.sdfg is not None else "",
@@ -339,7 +342,7 @@ def describe_loop(loop: Any) -> LoopDetail:
     )
 
 
-def classify(sdfg: Any) -> ParallelismRecord:
+def classify(sdfg: "SDFG") -> ParallelismRecord:
     """Bucket every loop-level construct of ``sdfg``.
 
     Loop precedence is ``inmap`` > ``parallel_under_contract`` > ``timestep`` > ``residual``: a
@@ -368,7 +371,7 @@ def classify(sdfg: Any) -> ParallelismRecord:
     return ParallelismRecord(buckets=buckets, total=total, libnode=columns["libnode"], residual_loops=tuple(residual))
 
 
-def bucket_for_loop(loop: Any, guarded_ids: set[int], measure: Any) -> str:
+def bucket_for_loop(loop: "LoopRegion", guarded_ids: set[int], measure: types.ModuleType) -> str:
     """One loop's bucket, applying the stated precedence."""
     if measure.in_parallel_scope(loop):
         return "inmap"
