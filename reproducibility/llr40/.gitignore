@@ -1,9 +1,3 @@
 # Every directory below is REGENERATED output, not source. The commands are in README.md.
 data/
-kernels/
-lowerings/
-asm_reports/
-analysis/
-timings/
-data-llr8-superseded/
 __pycache__/
