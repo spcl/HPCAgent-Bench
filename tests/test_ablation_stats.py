@@ -772,3 +772,49 @@ def test_the_rank_interval_matches_the_library_definition(ablation_stats) -> Non
     assert float(row["hl_ci_low_log"]) == pytest.approx(reference.low)
     assert float(row["hl_ci_high_log"]) == pytest.approx(reference.high)
     assert float(row["p_value"]) == pytest.approx(reference.pvalue, abs=5e-3)
+
+
+def seed_observations(path: pathlib.Path, rows: list[tuple[str, str, str, int, int]]) -> None:
+    """An extracted observations DB of task rows only: (arm, benchmark, run_id, tokens, ts_ms)."""
+    import sys
+
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "reproducibility" / "llr40"))
+    import extract_llr40
+
+    records = []
+    for arm, benchmark, run_id, tokens, ts_ms in rows:
+        record = dict.fromkeys(extract_llr40.OBSERVATION_FIELDS, "")
+        record.update(
+            record="task", arm=arm, benchmark=benchmark, run_root="rr", job=1, run_id=run_id, tokens=tokens, ts_ms=ts_ms
+        )
+        records.append(record)
+    extract_llr40.write_db(path, extract_llr40.OBSERVATION_FIELDS, records)
+
+
+def test_with_observations_the_cost_half_is_the_task_rows_effective_total(
+    ablation_stats: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """USER 2026-09-16: every published token number is EFFECTIVE (the task row, final attempt), so the
+    cost ratio here must be too, and it must come from the one shared reduction rather than from the
+    results DB's cumulative billed calls.tokens. Arm ``b`` spent 3x arm ``a`` on the one kernel both
+    solved, and its rerun of that kernel is reduced to the LATEST run, not summed."""
+    db_a, db_b = tmp_path / "a.db", tmp_path / "b.db"
+    seed_db(db_a, [("k1", 1, 2.0)])
+    seed_db(db_b, [("k1", 1, 4.0)])
+    seed_calls(db_a, (("k1", "r1", 1, 999),))
+    seed_calls(db_b, (("k1", "r1", 1, 999),))
+    observations = tmp_path / "observations.db"
+    seed_observations(
+        observations,
+        [("a", "k1", "r1", 100, 1_000), ("b", "k1", "r2", 900, 1_000), ("b", "k1", "r3", 300, 2_000)],
+    )
+    prefix = tmp_path / "eff"
+
+    code = ablation_stats.main(
+        [f"--arm=a={db_a}", f"--arm=b={db_b}", f"--observations={observations}", "--problems=1", f"--out={prefix}"]
+    )
+
+    assert code == 0
+    rows = list(csv.DictReader(open(f"{prefix}{ablation_stats.PAIRS_SUFFIX}", newline="")))
+    pair = next(row for row in rows if row["test"] == "wilcoxon_logspeedup")
+    assert float(pair["rho_cost"]) == pytest.approx(3.0), pair
