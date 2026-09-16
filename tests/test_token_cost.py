@@ -621,3 +621,27 @@ def test_the_container_tool_and_the_analysis_agree_on_the_overlap_rule(
         offline = token_cost.usage_prompt_tokens(record, token_cost.overlapping_usage_line(path))
         container = http_json.usage_jsonl_tokens(str(path)) - record["output"] - record["reasoning"]
         assert offline == container, record
+
+
+def test_a_compaction_charges_the_rebuilt_prompt_as_fresh_and_is_counted(
+    token_cost: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """USER 2026-09-16: the claude arms compact under a CLAUDE_AUTOCOMPACT wall. After a compaction the
+    prompt is SHORTER than the previous one and shares no prefix with it -- a full cache miss -- so the
+    whole rebuilt prompt is fresh. The old fold charged it at zero (max(0, 400 - 1500))."""
+    lines = [
+        assistant_line("m1", 1000, 0),
+        assistant_line("m2", 1500, 0),
+        assistant_line("m3", 400, 0),
+        result_line(70),
+    ]
+    log = tmp_path / "claude.log"
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    cost = token_cost.episode_cost(log)
+
+    assert (cost["fresh_input"], cost["cached_input"], cost["compactions"]) == (1000 + 500 + 400, 1000, 1)
+    assert cost["naive_total"] == 1000 + 1500 + 400 + 70
+    assert cost["effective"] == 1900 + 70
+    assert token_cost.fold_prompt(400, 1500) == (400, 0, 1)
+    assert token_cost.fold_prompt(1500, 1000) == (500, 1000, 0)

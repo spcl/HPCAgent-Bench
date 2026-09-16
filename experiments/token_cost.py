@@ -29,7 +29,7 @@ THE MODEL, and its three assumptions:
    than a convenient fiction -- but it IS an upper bound, and an episode whose context was evicted
    is charged less here than it truly cost.
 2. A CACHE READ COSTS NOTHING (``CACHE_DISCOUNT`` = 0), so every token is counted ONCE, in the
-   turn it first appeared. This began at 50 percent, OpenAI's published cache-read rate, which was
+   turn it first appeared. This began at 50 percent, an older published cache-read rate (vendors now bill 0.1x), which was
    wrong for a reason worth stating: ``cached`` is a sum over TURNS, and the thing it sums existed
    only once. One episode here summed 10,329,254 cached tokens against a context that reached
    98,723 -- the KV cache held one copy and the rest is that copy re-counted per turn. Any nonzero
@@ -52,7 +52,7 @@ convention is the OPPOSITE of the model above, and not by mistake:
 
 * ``billed`` (the per-turn sum) is what the literature reports. An API bills per REQUEST, so a
   40-turn episode really is charged for its prompt 40 times, and agent benchmarks price open-weight
-  models "using token usage and pricing from an appropriate provider" precisely so their numbers
+  models at a hosting provider's list price (HAL, arXiv:2510.11977, prices DeepSeek-R1 from Together.ai) so their numbers
   compare with API-based work. It is why published agentic-coding input:output ratios exceed 150:1
   -- ours is 10,427,977:68,757, or 152:1, right on it. Quote this when comparing against other
   papers.
@@ -337,6 +337,21 @@ def usage_prompt_tokens(record: dict[str, object], overlapping: bool) -> int:
     return fresh if overlapping else fresh + cached
 
 
+def fold_prompt(prompt: int, previous: int) -> tuple[int, int, int]:
+    """One call's ``(fresh, cached, compacted)`` under the perfect-prefix model.
+
+    A transcript only grows, so the fresh part of call N is what exceeds call N-1 and the rest was
+    served from cache. A prompt SHORTER than the previous one is a context compaction (the claude
+    arms run with a ``CLAUDE_AUTOCOMPACT`` wall): the transcript was replaced by a summary, so the
+    rebuilt prompt shares no prefix with the last one and is a full cache miss -- the whole prompt is
+    fresh, nothing is cached, and the event is counted so a task can say how often it compacted.
+    Without this rule a compaction charged the rebuilt prompt at zero (fresh = max(0, negative)).
+    """
+    if prompt < previous:
+        return prompt, 0, 1
+    return prompt - previous, previous, 0
+
+
 def usage_episode_cost(path: pathlib.Path) -> CostRow:
     """:func:`episode_cost` for a runner's usage.jsonl, under the SAME three assumptions.
 
@@ -352,7 +367,7 @@ def usage_episode_cost(path: pathlib.Path) -> CostRow:
     else -- is their sum, which is the call's ``completion_tokens``. Reasoning is never a third
     addend. There is no duration in the file, so the row carries no wall_ms/api_ms.
     """
-    fresh = cached = previous_input = output = thinking = calls = 0
+    fresh = cached = previous_input = output = thinking = calls = compactions = 0
     overlapping = overlapping_usage_line(path)
     with path.open(errors="replace") as handle:
         lines = list(handle)
@@ -367,8 +382,10 @@ def usage_episode_cost(path: pathlib.Path) -> CostRow:
         if not isinstance(record, dict):
             continue
         call_input = usage_prompt_tokens(record, overlapping)
-        fresh += max(0, call_input - previous_input)
-        cached += min(call_input, previous_input)
+        fresh_now, cached_now, compacted = fold_prompt(call_input, previous_input)
+        fresh += fresh_now
+        cached += cached_now
+        compactions += compacted
         previous_input = call_input
         reasoning = int(record.get("reasoning") or 0)
         output += int(record.get("output") or 0) + reasoning
@@ -380,6 +397,7 @@ def usage_episode_cost(path: pathlib.Path) -> CostRow:
         "cached_input": cached,
         "output": output,
         "thinking_estimate": thinking,
+        "compactions": compactions,
         "output_source": USAGE_JSONL_SOURCE if calls else "none",
         "output_delta_shape": "",
         "output_suspect": 0.0,
@@ -482,13 +500,15 @@ def events_cost(events: list[dict[str, object]], output_counter: OutputCounter |
             order.append(key)
         per_turn[key] = usage
 
-    fresh = cached = 0
+    fresh = cached = compactions = 0
     previous_input = 0
     for key in order:
         usage = per_turn[key]
         turn_input = sum(int(usage.get(f) or 0) for f in INPUT_FIELDS)
-        fresh += max(0, turn_input - previous_input)
-        cached += min(turn_input, previous_input)
+        fresh_now, cached_now, compacted = fold_prompt(turn_input, previous_input)
+        fresh += fresh_now
+        cached += cached_now
+        compactions += compacted
         previous_input = turn_input
     output, source, shape, suspect = resolve_output(deltas, output_total if reported else None, events, output_counter)
     return {
@@ -499,6 +519,8 @@ def events_cost(events: list[dict[str, object]], output_counter: OutputCounter |
         # The client's streamed character estimate. INFORMATIONAL and never summed: output above
         # already counts the same tokens.
         "thinking_estimate": thinking,
+        # Prompts that shrank against their predecessor: context compactions, each a full cache miss.
+        "compactions": compactions,
         # WHICH tier counted the output (8.2). "none" is not a zero: it means nobody counted, and a
         # reader that averages it in with measurements reports the arm low.
         "output_source": source,
@@ -724,6 +746,7 @@ def main() -> int:
             "cached_input",
             "output",
             "thinking_estimate",
+            "compactions",
             "naive_total",
             "effective",
             "effective_provider",
@@ -756,6 +779,7 @@ def main() -> int:
             "cached_input",
             "output",
             "thinking_estimate",
+            "compactions",
             "output_source",
             "output_delta_shape",
             "output_suspect",
