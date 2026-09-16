@@ -71,9 +71,12 @@ class Agent(ABC):
         """Cumulative token usage across every solve() call on this agent. Zero for non-LLM agents."""
         return self._usage or TokenUsage()
 
-    def record_usage(self, input_tokens: int = 0, output_tokens: int = 0, cached_tokens: int = 0) -> None:
-        """Accumulate one LLM call's token counts."""
-        self._usage = self.usage + TokenUsage(input_tokens, output_tokens, cached_tokens)
+    def record_usage(
+        self, input_tokens: int = 0, output_tokens: int = 0, cached_tokens: int = 0, cache_creation_tokens: int = 0
+    ) -> None:
+        """Accumulate one LLM call's token counts, in :class:`TokenUsage`'s shape: ``input_tokens``
+        is the whole prompt, the other two name parts of it."""
+        self._usage = self.usage + TokenUsage(input_tokens, output_tokens, cached_tokens, cache_creation_tokens)
 
 
 def budget_tokens(budget: object, default: int) -> int:
@@ -301,14 +304,27 @@ def json_count(block: JsonObject, key: str) -> int:
 
 
 def anthropic_usage(usage: object) -> TokenUsage:
-    """TokenUsage from an Anthropic message.usage, tolerant of missing fields."""
+    """TokenUsage from an Anthropic message.usage, tolerant of missing fields.
+
+    ``/v1/messages`` reports the prompt as THREE DISJOINT counts -- ``input_tokens`` is the uncached
+    remainder alone, with ``cache_read_input_tokens`` and ``cache_creation_input_tokens`` beside it
+    -- while :class:`~hpcagent_bench.harness.usage.TokenUsage` and the OpenAI-shaped parsers below
+    carry the WHOLE prompt with its cached parts named inside it. So the three are summed here.
+    Reading the field straight across instead lost the cache-creation tokens entirely, understated
+    ``total`` by every token the cache served, and made ``cost_usd`` subtract the cache read from a
+    number it was never part of.
+    """
     # The SDK response object carries the counters as instance attributes and ships no types the
     # harness can name, so its __dict__ is the boundary a field read converts from.
     fields = json_object(vars(usage))
+    uncached = json_count(fields, "input_tokens")
+    cached = json_count(fields, "cache_read_input_tokens")
+    created = json_count(fields, "cache_creation_input_tokens")
     return TokenUsage(
-        input_tokens=json_count(fields, "input_tokens"),
+        input_tokens=uncached + cached + created,
         output_tokens=json_count(fields, "output_tokens"),
-        cached_tokens=json_count(fields, "cache_read_input_tokens"),
+        cached_tokens=cached,
+        cache_creation_tokens=created,
     )
 
 
@@ -492,7 +508,7 @@ class ClaudeAgent(Agent):
             **self.sampling.anthropic_options(accepts_sampling=self.accepts_sampling),
         )
         u = anthropic_usage(message.usage)
-        self.record_usage(u.input_tokens, u.output_tokens, u.cached_tokens)
+        self.record_usage(u.input_tokens, u.output_tokens, u.cached_tokens, u.cache_creation_tokens)
         return "".join(block.text for block in message.content if block.type == "text")
 
 

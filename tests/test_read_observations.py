@@ -7,15 +7,25 @@ The reproducibility artifact ships one database per experiment and every figure 
 between the two files would change a published figure without anyone touching the data.
 """
 
-import csv
+import importlib.util
 import pathlib
-import sqlite3
+import sys
 
 import pandas as pd
 
 from hpcagent_bench import experiments
 
-FIELDS = ("run_root", "job", "record", "arm", "benchmark", "speedup", "tokens", "packet")
+REPO = pathlib.Path(__file__).resolve().parents[1]
+#: The pair is written by the extractor that writes every shipped artifact, not by a hand-rolled
+#: CREATE TABLE here: the two files have to agree on the COLUMN TYPES as well as on the rows, and a
+#: writer invented in the test body agrees with nothing.
+SPEC = importlib.util.spec_from_file_location("extract_llr40", REPO / "reproducibility" / "llr40" / "extract_llr40.py")
+assert SPEC is not None and SPEC.loader is not None
+extract_llr40 = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = extract_llr40
+SPEC.loader.exec_module(extract_llr40)
+
+FIELDS = ("run_root", "job", "record", "arm", "benchmark", "speedup", "tokens", "tokens_billed", "packet")
 ROWS = [
     {
         "run_root": "r1",
@@ -24,17 +34,19 @@ ROWS = [
         "arm": "a-c",
         "benchmark": "k2",
         "speedup": 3.5,
-        "tokens": None,
+        "tokens": "",
+        "tokens_billed": "",
         "packet": "",
     },
     {
         "run_root": "r1",
         "job": 636541,
-        "record": "calls",
+        "record": "task",
         "arm": "a-c",
         "benchmark": "k1",
-        "speedup": None,
+        "speedup": "",
         "tokens": 1200,
+        "tokens_billed": 48_000,
         "packet": "cpf",
     },
 ]
@@ -42,16 +54,8 @@ ROWS = [
 
 def write_pair(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     csv_path, db_path = tmp_path / "obs.csv", tmp_path / "obs.db"
-    with csv_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=FIELDS)
-        writer.writeheader()
-        writer.writerows(ROWS)
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(f"CREATE TABLE {experiments.OBSERVATIONS_TABLE} ({', '.join(FIELDS)})")
-        conn.executemany(
-            f"INSERT INTO {experiments.OBSERVATIONS_TABLE} VALUES ({', '.join('?' * len(FIELDS))})",
-            [tuple(row[f] for f in FIELDS) for row in ROWS],
-        )
+    extract_llr40.write_csv(csv_path, FIELDS, ROWS)
+    extract_llr40.write_db(db_path, FIELDS, ROWS)
     return csv_path, db_path
 
 
@@ -67,6 +71,22 @@ def test_a_db_and_its_csv_give_the_same_rows_in_the_same_order(tmp_path: pathlib
     assert from_db["benchmark"].tolist() == from_csv["benchmark"].tolist() == ["k2", "k1"]
     pd.testing.assert_series_equal(from_db["speedup"], from_csv["speedup"], check_dtype=False)
     pd.testing.assert_series_equal(from_db["tokens"], from_csv["tokens"], check_dtype=False)
+
+
+def test_the_token_columns_have_the_same_dtype_from_either_file(tmp_path: pathlib.Path) -> None:
+    """Same rows AND the same dtype. An untyped CREATE TABLE gave the columns no affinity, so the
+    "" the CSV writer spells a missing cell as was stored as TEXT and made the whole column object
+    dtype on the DB path while the CSV path read float64 -- one table, two dtypes, and arithmetic
+    that raised on exactly one of them."""
+    csv_path, db_path = write_pair(tmp_path)
+    from_csv = experiments.read_observations(csv_path)
+    from_db = experiments.read_observations(db_path)
+    for column in ("tokens", "tokens_billed", "speedup"):
+        assert from_db[column].dtype == from_csv[column].dtype, column
+        pd.testing.assert_series_equal(from_db[column], from_csv[column])
+        # The arithmetic every cost table starts from, on BOTH paths.
+        assert from_db[column].sum() == from_csv[column].sum()
+    assert from_db["tokens"].sum() == 1200.0
 
 
 def test_a_db_is_opened_read_only(tmp_path: pathlib.Path) -> None:

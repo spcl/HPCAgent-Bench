@@ -342,11 +342,12 @@ def served_by_arm(observations: pd.DataFrame) -> dict[str, frozenset[str]]:
 def tokens_by_arm_kernel(
     observations: pd.DataFrame, repeats: population.RepeatPolicy = "latest"
 ) -> dict[tuple[str, str], float]:
-    """``(arm, kernel) -> tokens spent``, read from the ``call`` rows, which are the only ones with a
-    token count.
+    """``(arm, kernel) -> tokens spent``, read from the ``task`` rows through
+    :func:`~hpcagent_bench.stats.population.kernel_tokens`.
 
-    ``calls.tokens`` is cumulative through a call, so a run's spend is its own MAXIMUM; a kernel run
-    more than once is reduced by ``repeats`` (:func:`~hpcagent_bench.stats.population.kernel_tokens`).
+    A task row carries the EFFECTIVE tokens of the task's final attempt, which is the task total
+    (docs/token_accounting.md); ``calls.tokens`` is a cumulative BILLED count at a judge call and is
+    never a cost here. A kernel run more than once is reduced by ``repeats``.
     """
     totals = population.kernel_tokens(observations, ("arm", "benchmark"), repeats=repeats)
     return {(str(arm), str(kernel)): float(spend) for (arm, kernel), spend in totals.items()}

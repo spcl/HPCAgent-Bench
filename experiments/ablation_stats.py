@@ -229,13 +229,21 @@ def load_arm(name: str, path: str, dedup: str) -> tuple[dict[str, float], set[st
 
 
 def load_arm_costs(name: str, path: str) -> dict[str, float]:
-    """One arm's ``benchmark -> total tokens``, the COST half of the efficacy pair.
+    """One arm's ``benchmark -> total tokens`` in BILLED tokens, the COST half of the efficacy pair.
 
     ``calls.tokens`` is CUMULATIVE through a call, so an episode's spend is its own maximum and a
     kernel's is the sum of its episodes' -- summing the rows would count every earlier call again,
     once per later one, and inflate a long repair loop quadratically. A DB written before the calls
     table, or one whose agent never reported tokens, yields an empty mapping and the pair simply
     reports no cost half rather than a fabricated one.
+
+    BILLED, not effective, and the two differ by ~40x with a 2.7x spread that tracks turn count
+    (docs/token_accounting.md). The effective total lives on the extraction's ``task`` rows, which
+    this script never sees: a merged RESULTS database holds ``submissions``/``attempts``/``calls``
+    and nothing else, and reading the observations table instead is a change to what ``--arm`` means.
+    ``experiments/paired_arms.py`` is the comparison that costs a kernel in effective tokens
+    (``population.kernel_tokens``); prefer it wherever both arms have been extracted, and read the
+    ``rho_cost`` column here as a billed-token ratio.
     """
     conn = sqlite3.connect(f"file:{pathlib.Path(path).resolve()}?mode=ro", uri=True)
     try:

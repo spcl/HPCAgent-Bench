@@ -213,6 +213,35 @@ USAGE_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input
 #: rule as USAGE_FIELDS: ``experiments/harnesses.py`` is not on this path.
 USAGE_JSONL_FIELDS = ("input", "cached_input", "output", "reasoning")
 
+#: :data:`USAGE_JSONL_FIELDS` minus the one an OVERLAPPING line already counts inside ``input``.
+OVERLAPPING_USAGE_FIELDS = tuple(name for name in USAGE_JSONL_FIELDS if name != "cached_input")
+
+
+def usage_jsonl_field(record: dict[str, object], field: str) -> int:
+    """``record[field]`` as a token count; 0 for anything that is not a plain number."""
+    value = record.get(field)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    return int(value)
+
+
+def overlapping_usage_line(record: dict[str, object]) -> bool:
+    """Whether this line is an OLD optimas one, whose ``input`` is the WHOLE prompt with
+    ``cached_input`` repeating a part of it instead of naming the rest of it.
+
+    ``hpcagent_bench.harness.episode.append_usage`` used to write the whole prompt into ``input`` and
+    the cached part beside it, against the disjoint contract every other writer keeps, so summing the
+    four fields billed the cached prefix twice. Two conditions place such a line: the harness is
+    optimas (``$OPTARENA_HARNESS``, set by ``experiments/harnesses.runner_env``) -- the mini-SWE and
+    OpenHands runners never wrote the overlap -- and ``input >= cached_input``, which the fixed
+    writer produces only when ``cached_input`` is 0 and the two readings agree anyway. Same
+    DELIBERATE DUPLICATION rule as USAGE_FIELDS: ``experiments/token_cost.usage_prompt_tokens`` is
+    the same rule for the offline reader, and is not on this container's path.
+    """
+    if os.environ.get("OPTARENA_HARNESS", "").strip() != "optimas":
+        return False
+    return usage_jsonl_field(record, "input") >= usage_jsonl_field(record, "cached_input")
+
 
 def usage_jsonl_tokens(path: str) -> int:
     """A runner's CUMULATIVE consumed tokens: every call in its usage.jsonl, summed. Never raises."""
@@ -232,11 +261,11 @@ def usage_jsonl_tokens(path: str) -> int:
             continue  # the tail can be half-written while the runner is mid-append
         if not isinstance(record, dict):
             continue
-        for field in USAGE_JSONL_FIELDS:
-            value = record.get(field)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                continue
-            total += int(value)
+        # An overlapping line already counts its cached prefix inside "input"; adding the field
+        # beside it would charge that prefix a second time.
+        fields = OVERLAPPING_USAGE_FIELDS if overlapping_usage_line(record) else USAGE_JSONL_FIELDS
+        for field in fields:
+            total += usage_jsonl_field(record, field)
     return total
 
 

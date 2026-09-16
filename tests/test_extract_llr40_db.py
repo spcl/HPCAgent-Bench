@@ -9,6 +9,7 @@ rows the CSV holds.
 
 import importlib.util
 import pathlib
+import sqlite3
 import sys
 
 import pandas as pd
@@ -68,3 +69,21 @@ def test_a_rewrite_replaces_the_table_instead_of_appending(tmp_path: pathlib.Pat
     extract_llr40.write_db(db, fields, ROWS)
     extract_llr40.write_db(db, fields, ROWS[:1])
     assert len(experiments.read_observations(db)) == 1
+
+
+def test_every_typed_column_is_a_column_the_table_has() -> None:
+    """A typo in NUMERIC_COLUMNS is silent: the name simply never matches, the column falls back to
+    TEXT, and its missing cells go back to being "" -- the dtype split this typing exists to close,
+    re-opened without a single error."""
+    unknown = set(extract_llr40.NUMERIC_COLUMNS) - set(extract_llr40.OBSERVATION_FIELDS)
+    assert not unknown, unknown
+
+
+def test_a_missing_numeric_cell_is_null_and_a_missing_text_cell_stays_empty(tmp_path: pathlib.Path) -> None:
+    """``packet`` is "" for the CONTROL arm -- a value, which fill_arm_identity reads as one -- so
+    the empty-to-NULL rule is confined to the numeric columns."""
+    db = tmp_path / "obs.db"
+    extract_llr40.write_db(db, extract_llr40.OBSERVATION_FIELDS, ROWS)
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute("SELECT tokens, speedup, packet FROM observations ORDER BY benchmark").fetchall()
+    assert rows == [(900, None, ""), (None, 2.5, "cpf")]

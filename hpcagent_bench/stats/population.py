@@ -458,18 +458,20 @@ def kernel_answers(
 
 
 #: The record a task's token total travels on (spec T3): one row per task, ``tokens`` = the effective
-#: tokens summed over every attempt of the task.
+#: tokens of its FINAL attempt. What the attempts before it spent rides on the separate
+#: ``tokens_crashed`` column and is never added in (docs/token_accounting.md).
 TASK_RECORD: str = "task"
 
 
 def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("benchmark",)) -> "pd.DataFrame":
     """One row per TASK: its token total, read off its ``task`` row, plus ``by``.
 
-    A task's cost is the effective tokens of ALL its attempts (spec T1-T2), which only the task row
-    carries. ``calls.tokens`` is a running count of the CURRENT attempt at a judge call -- it misses
-    every earlier attempt of a relaunched task and everything after the last judge call -- so a frame
-    that has call rows and no task rows is refused rather than costed off them (spec T4). A total of
-    zero or less is no measurement (R7).
+    A task's cost is the effective tokens of its FINAL attempt (spec T1-T2), which only the task row
+    carries: a relaunch hands the next attempt an empty model context and an empty workspace, so no
+    earlier attempt contributed any part of the answer that was graded. ``calls.tokens`` is a running
+    count of the CURRENT attempt at a judge call -- it misses everything after the last judge call --
+    so a frame that has call rows and no task rows is refused rather than costed off them (spec T4).
+    A total of zero or less is no measurement (R7).
     """
     import pandas as pd
 
@@ -484,7 +486,7 @@ def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("benchmark",)) ->
     if tasks.empty:
         if (frame.record == "call").any():
             raise MixedPopulationError(
-                "no task records: a task's token cost is its effective total over all attempts (record = "
+                "no task records: a task's token cost is its final attempt's effective total (record = "
                 "task); calls.tokens is not a cost -- re-extract with task rows"
             )
         return pd.DataFrame(columns=empty_columns)

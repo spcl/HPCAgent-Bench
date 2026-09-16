@@ -187,6 +187,11 @@ OUTPUT_SOURCES: tuple[str, ...] = ("message_delta", "result", "retokenized", "no
 #: rather than borrowed from a stream event that never occurs there.
 USAGE_JSONL_SOURCE = "usage_jsonl"
 
+#: The optimas runner's own log, which it leaves beside its ``usage.jsonl``; how a worker directory
+#: read offline says which harness wrote the usage file (``experiments/harnesses.py`` names a runner's
+#: log after the runner).
+OPTIMAS_LOG_NAME = "optimas.log"
+
 #: Above this ratio of retokenized to the server's result total, the result record is not believable
 #: as an episode total and the row is flagged ``output_suspect`` (F9: measured up to 4.73x on
 #: Qwen/SGLang, on complete episodes with every tool call answered).
@@ -295,13 +300,41 @@ def accumulate_total_tokens(lines: list[str], total_by_message: dict[str, int]) 
     return sum(total_by_message.values())
 
 
+def overlapping_usage_line(path: pathlib.Path) -> bool:
+    """Whether ``path``'s lines may carry the OLD optimas overlap, in which ``input`` is the whole
+    prompt and ``cached_input`` repeats a part of it rather than naming the rest of it.
+
+    ``hpcagent_bench.harness.episode.append_usage`` wrote the whole prompt into ``input`` and the
+    cached part beside it, against the disjoint contract every other writer keeps
+    (``runner_common.usage_line``), so adding the two fields billed the cached prefix twice. Only
+    optimas ever did it, and only optimas leaves an ``optimas.log`` in the worker directory, which
+    is how a file read offline is placed. See :func:`usage_prompt_tokens` for the per-line rule.
+    """
+    return (path.parent / OPTIMAS_LOG_NAME).is_file()
+
+
+def usage_prompt_tokens(record: dict[str, object], overlapping: bool) -> int:
+    """One usage.jsonl call's WHOLE prompt, with the cached prefix counted exactly once.
+
+    Under the contract the two fields are disjoint and the prompt is their sum. An old optimas line
+    (``overlapping``) already holds the whole prompt in ``input``, and is told apart from a fixed one
+    by ``input >= cached_input``: the fixed writer leaves only the UNCACHED remainder there, which
+    past the first turn is a small fraction of the prefix the server served from cache, and on the
+    first turn ``cached_input`` is 0 and the two readings agree anyway.
+    """
+    fresh = int(record.get("input") or 0)
+    cached = int(record.get("cached_input") or 0)
+    return fresh if overlapping and fresh >= cached else fresh + cached
+
+
 def usage_episode_cost(path: pathlib.Path) -> CostRow:
     """:func:`episode_cost` for a runner's usage.jsonl, under the SAME three assumptions.
 
     The file states what the claude transcript hides -- the server's cached count and the reasoning
     tokens -- but the cached count does not set fresh/cached here: pricing one harness off the
     server's cache and another off the perfect-prefix model would compare two cost models, not two
-    harnesses, so a call's prompt is its uncached plus cached input.
+    harnesses, so a call's prompt is its uncached plus cached input (:func:`usage_prompt_tokens`,
+    which also re-derives it for an old optimas line that wrote the two overlapping).
 
     SAME OUTPUT RULE AS THE CLAUDE FOLD, spelled differently by the file: the runner splits the
     completion, writing ``output`` WITHOUT its reasoning and ``reasoning`` beside it
@@ -310,6 +343,7 @@ def usage_episode_cost(path: pathlib.Path) -> CostRow:
     addend. There is no duration in the file, so the row carries no wall_ms/api_ms.
     """
     fresh = cached = previous_input = output = thinking = calls = 0
+    overlapping = overlapping_usage_line(path)
     with path.open(errors="replace") as handle:
         lines = list(handle)
     for line in lines:
@@ -322,7 +356,7 @@ def usage_episode_cost(path: pathlib.Path) -> CostRow:
             continue  # the tail can be half-written while the runner is mid-append
         if not isinstance(record, dict):
             continue
-        call_input = int(record.get("input") or 0) + int(record.get("cached_input") or 0)
+        call_input = usage_prompt_tokens(record, overlapping)
         fresh += max(0, call_input - previous_input)
         cached += min(call_input, previous_input)
         previous_input = call_input

@@ -196,15 +196,18 @@ names it `Pair Link` so a reader is not left to guess.
 from several different arms, not repeats of one condition -- on llr40v11 every one of its 120 token
 cells mixed the skills and no-skills arms. A bootstrap interval or a scatter of those episodes would
 say nothing about sampling uncertainty there, since the spread is mostly the treatment, so it draws
-the median alone. `plot_arm_summary.py` and `plot_score_change.py` plot one value per KERNEL, so
+one mark per cell and nothing else. `plot_arm_summary.py` and `plot_score_change.py` plot one value per KERNEL, so
 each median there carries its percentile bootstrap interval over kernels
 (`population.kernel_medians`) as a whisker beside the mark, withheld below
 `summary.MIN_INTERVAL_SAMPLES` kernels, and the table carries the two median times behind the
 speed-up. Whether a difference is real stays `plot_score_change.py`'s paired test.
 
-**Costs add.** A kernel's token spend is the sum over every episode and attempt the arm ran on it
-(`population.kernel_tokens`), the cost behind that kernel's answer. A statistic over episodes, such
-as `plot_tokens.py`'s `median_episode_tokens`, is a per-episode quantity and says so in its name.
+**Costs add.** A kernel's token spend is the sum over the tasks the arm ran on it
+(`population.kernel_tokens`), the cost behind that kernel's answer, and every figure and table here
+costs a kernel at that one number -- `plot_tokens.py` included, whose cells are `kernel_tokens`.
+A median is then taken over KERNELS, never over the episodes inside a cell: those are a different
+quantity with a different unit, and one figure using them made a kernel read 400 on this page and
+800 on every other.
 
 **Rank statistics on these samples.** Per-kernel speed-ups are heavy-tailed and a mean in log space
 still lets one 40x kernel carry the estimate. `plot_score_change.py` pairs by kernel -- Mann-Whitney
@@ -237,14 +240,16 @@ minor lines at wrong ratios.
 |---|---|
 | `plot_arm_summary.py` | per-arm median speed-up and spend; one x slot per LANGUAGE, models dodged inside |
 | `plot_score_change.py` | one comparison as two square panels: speed-up on Y, tokens on Y, conditions on X |
-| `plot_tokens.py` | median tokens per episode, per kernel, per model |
+| `plot_tokens.py` | tokens per kernel, per model |
 | `plot_speedup.py` | per-kernel signed speed-up in magnitude bands, per machine (see [measurement_statistics.md](measurement_statistics.md)) |
 
 The first three read the CSV this page's extraction step produces. The speed-up in each comes from
-the `submission` rows and the cost from the `call` rows, both reduced by
+the `submission` rows and the cost from the `task` rows, both reduced by
 `hpcagent_bench.stats.population`: the last verified submission per episode then the max across
-episodes for score, and the per-episode maximum of the cumulative token counter for cost. One
-predicate over both columns keeps only the rows that carry both, which is the call rows alone.
+episodes for score, and the task's own effective total for cost (`population.kernel_tokens`; see
+[token_accounting.md](token_accounting.md) for why that total is the final attempt's). The two come
+off DIFFERENT record types, so one predicate over both columns keeps only the rows that carry both,
+which is neither of them.
 
 The framework/kernel corpus figures (the speedup heatmap and the per-kernel distribution grid) read
 the results DB instead of this CSV; they are documented in
