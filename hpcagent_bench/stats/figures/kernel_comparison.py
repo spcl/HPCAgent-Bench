@@ -137,6 +137,11 @@ MISSING_LABEL: str = plotstyle.NOT_DELIVERED_LABEL
 #: :data:`~hpcagent_bench.stats.figures.per_kernel.SUMMARY_GAP` makes on its own kernel axis.
 SUMMARY_GAP: float = 0.9
 
+#: The dashed rule between the kernels and the summary group: long dashes, drawn heavier than the
+#: grid, so the summary column reads as a different kind of value at a glance.
+SEPARATOR_DASH: tuple[float, tuple[float, float]] = (0.0, (6.0, 3.0))
+SEPARATOR_WIDTH: float = 1.4
+
 #: Kernel slots right of the summary group that its value labels take (:func:`draw_summary_column`).
 SUMMARY_VALUE_SLOTS: float = 1.6
 
@@ -425,8 +430,8 @@ def summary_column_position(n_kernels: int) -> tuple[float, float]:
     return separator_x, separator_x + SUMMARY_GAP
 
 
-def dodge_offsets(n: int) -> np.ndarray:
-    """One x offset per series within a kernel slot, spread over :data:`DODGE_SPAN` of it.
+def dodge_offsets(n: int, span: float = DODGE_SPAN) -> np.ndarray:
+    """One x offset per series within a kernel slot, spread over ``span`` of it (0 stacks them).
 
     ``n == 0`` returns EMPTY, not a stray single offset: a panel a caller draws with no series at
     all (a metric none of its rows carries, e.g. tokens when every row is a deterministic column)
@@ -436,7 +441,7 @@ def dodge_offsets(n: int) -> np.ndarray:
         return np.array([])
     if n <= 1:
         return np.array([0.0])
-    return np.linspace(-DODGE_SPAN / 2.0, DODGE_SPAN / 2.0, n)
+    return np.linspace(-span / 2.0, span / 2.0, n)
 
 
 def mark_size(pitch_in: float, n_series: int) -> float:
@@ -462,6 +467,7 @@ def draw_summary_column(
     interval_of: Callable[[Series], tuple[float, float]] | None = None,
     transform: Callable[[float], float] = lambda v: v,
     value_text: Callable[[float], str] = summary_value_text,
+    span: float = DODGE_SPAN,
 ) -> None:
     """The dashed separator and one dodged mark per series at ``summary_x``, plus a small annotation
     naming the statistic ABOVE the panel -- never an x-axis tick label, which the panels' shared x
@@ -482,8 +488,8 @@ def draw_summary_column(
     ``value_text`` (natural units): a reader quotes the geomean, and reading it off a log axis
     between two gridlines is a guess.
     """
-    ax.axvline(separator_x, color=plotstyle.RULE, linestyle=(0, (3, 3)), linewidth=1.0, zorder=1)
-    for offset, series in zip(dodge_offsets(len(series_list)), series_list, strict=True):
+    ax.axvline(separator_x, color=plotstyle.MUTED, linestyle=SEPARATOR_DASH, linewidth=SEPARATOR_WIDTH, zorder=1)
+    for offset, series in zip(dodge_offsets(len(series_list), span), series_list, strict=True):
         point = reducer(value_of(series).values())
         if math.isfinite(point):
             if interval_of is not None:
@@ -497,23 +503,24 @@ def draw_summary_column(
                 ax, summary_x + offset, transform(point), series.color, series.marker, filled=True, size=size
             )
             ax.annotate(
-                value_text(point), xy=(summary_x + DODGE_SPAN / 2.0, transform(point)), xytext=(5, 0),
+                value_text(point), xy=(summary_x + span / 2.0, transform(point)), xytext=(5, 0),
                 textcoords="offset points", ha="left", va="center", fontsize=plotstyle.TICK_PT * 0.5,
                 color=series.color, annotation_clip=False,
                 bbox={"boxstyle": "square,pad=0.1", "facecolor": "white", "edgecolor": "none"},
             )  # fmt: skip
-    ax.annotate(
-        label,
-        xy=(summary_x, 1.0),
-        xycoords=("data", "axes fraction"),
-        xytext=(0, 3),
-        textcoords="offset points",
-        ha="center",
-        va="bottom",
-        fontsize=plotstyle.TICK_PT * 0.5,
-        color=plotstyle.MUTED,
-        annotation_clip=False,
-    )
+    if label:
+        ax.annotate(
+            label,
+            xy=(summary_x, 1.0),
+            xycoords=("data", "axes fraction"),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=plotstyle.TICK_PT * 0.5,
+            color=plotstyle.MUTED,
+            annotation_clip=False,
+        )
 
 
 #: Drawn under the mark's white halo (:data:`~hpcagent_bench.stats.style.FILL_Z`), never over it --
@@ -537,6 +544,7 @@ def draw_panel(
     interval_of: Callable[[Series], tuple[float, float]] | None = None,
     transform: Callable[[float], float] = lambda v: v,
     value_text: Callable[[float], str] = summary_value_text,
+    span: float = DODGE_SPAN,
 ) -> None:
     """One panel, for ONE metric (:func:`value_of` reads it off each series): the kernel slots,
     dodged apart within each slot, plus the summary group past their right end
@@ -556,7 +564,7 @@ def draw_panel(
     answer is not 1.0), so the cross has to go on a drawn mark rather than on an absent one. Without
     it every present value is a measurement, which is what an absolute panel wants.
 
-    ``interval_of``, ``transform`` and ``value_text`` pass straight through to :func:`draw_summary_column`; ``value_of``,
+    ``interval_of``, ``transform``, ``value_text`` and ``span`` pass straight through to :func:`draw_summary_column`; ``value_of``,
     ``range_of`` and ``missing_y`` stay in the SAME natural units regardless of ``transform`` -- only the
     plotted position changes, so a signed-axis caller reads its missing-value placeholder, its whisker
     ends and its summary interval off the identical ratio-domain data a log-ratio caller does.
@@ -565,7 +573,7 @@ def draw_panel(
     kernel_axis(ax, kernels, label_kernels)
     ax.set_xlim(-0.5 - SUMMARY_GAP / 2.0, summary_x + 0.6 + SUMMARY_VALUE_SLOTS)
     x_of = {kernel: i for i, kernel in enumerate(kernels)}
-    for offset, series in zip(dodge_offsets(len(series_list)), series_list, strict=True):
+    for offset, series in zip(dodge_offsets(len(series_list), span), series_list, strict=True):
         values = value_of(series)
         low_of, high_of = range_of(series) if range_of is not None else ({}, {})
         delivered = delivered_of(series) if delivered_of is not None else {}
@@ -591,7 +599,7 @@ def draw_panel(
             )  # fmt: skip
     draw_summary_column(
         ax, separator_x, summary_x, series_list, value_of, reducer, summary_label, size,
-        interval_of=interval_of, transform=transform, value_text=value_text,
+        interval_of=interval_of, transform=transform, value_text=value_text, span=span,
     )  # fmt: skip
 
 

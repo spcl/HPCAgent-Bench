@@ -339,7 +339,8 @@ def test_canon_row_matches_the_ratio_and_scopes_to_the_roster(llr40_canon: pd.Da
     # k3 is missing (not zero): numba timed it, dace_cpu_canonicalize never did.
     assert "k3" not in row.ratios
     assert row.color == palette.framework_color("dace_cpu_canonicalize")
-    assert row.marker == kernel_comparison.CANON_MARKER
+    assert row.marker == palette.marker("cpf")
+    assert row.label == "Canonical Parallel Form"
     # No repetition and no agent: nothing to bound, nothing spent.
     assert row.ratios_low == {} and row.ratios_high == {} and row.tokens == {}
 
@@ -499,40 +500,43 @@ def test_figure_keeps_the_tokens_panel_when_a_row_spends_tokens(
         plt.close(fig)
 
 
-def test_legend_states_the_interval_method_and_n(llr40_canon: pd.DataFrame) -> None:
+def test_legend_names_each_optimizer_and_the_cross_only_when_one_is_drawn(llr40_canon: pd.DataFrame) -> None:
+    """The legend keys what a reader cannot read off the axes: which shape is which optimizer, and
+    the cross when a kernel carries one. The interval method is the caption's."""
     rows = signed.llr40_rows(llr40_canon, None, ROSTER40)
-    handles = signed.legend_handles(rows, ROSTER40)
-    labels = [handle.get_label() for handle in handles]
-    assert any("Per-Kernel" in label and "t-Interval" in label and "n=" in label for label in labels)
-    assert any("Geomean" in label and "t-Interval" in label and "n<=" in label for label in labels)
+    labels = [handle.get_label() for handle in signed.legend_handles(rows, ROSTER40)]
+    assert labels == ["DaCe", "Canonical Parallel Form", style.NOT_DELIVERED_LABEL]
+    complete = signed.llr40_rows(llr40_canon, None, ("k1",))
+    assert [handle.get_label() for handle in signed.legend_handles(complete, ("k1",))] == [
+        "DaCe",
+        "Canonical Parallel Form",
+    ]
 
 
-def test_per_kernel_repeats_note_names_the_real_n(llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame) -> None:
-    # The canon rows alone: every canon kernel is a single deterministic timing.
-    canon_only = signed.llr40_rows(llr40_canon, None, ROSTER40)
-    assert signed.per_kernel_repeats_note(canon_only) == "n=1 per kernel"
-    # qwen38's cpfsrc arm ran k1 twice in the fixture: the note must say so rather than stay silent.
-    with_repeats = signed.llr40_rows(llr40_canon, llr40_observations, ROSTER40)
-    assert signed.per_kernel_repeats_note(with_repeats) == "n>1 for some kernels"
+def test_standalone_optimizers_wear_their_own_shapes(llr40_canon: pd.DataFrame) -> None:
+    rows = signed.llr40_rows(llr40_canon, None, ROSTER40)
+    assert [row.marker for row in rows] == [palette.marker("dace"), palette.marker("cpf")]
+    assert rows[0].marker != rows[1].marker
 
 
-def test_figure_prints_at_text_width_and_names_the_baseline_on_the_reference_tick(
-    llr40_canon: pd.DataFrame,
-) -> None:
+def test_figure_prints_at_text_width_with_a_geomean_tick(llr40_canon: pd.DataFrame) -> None:
     """Drawn at the size the page prints it: a figure* is text width, and a single speed-up panel
-    is a short strip, not a page. The 1x line is the baseline, so its tick says which one."""
+    is a short strip, not a page. The axis label names the baseline and the 1x tick stays a ratio;
+    the summary slot is labeled on the kernel axis, and every slot has a visible tick."""
     rows = signed.llr40_rows(llr40_canon, None, ROSTER40)
     fig = signed.llr40_figure(rows, ROSTER40)
     try:
         width, height = (float(v) for v in fig.get_size_inches())
         labels = [label.get_text() for label in fig.axes[0].get_yticklabels()]
-        texts = [text.get_text() for text in fig.axes[0].texts]
+        kernel_ticks = [label.get_text() for label in fig.axes[0].get_xticklabels()]
+        tick_length = fig.axes[0].xaxis.get_major_ticks()[0].tick1line.get_markersize()
     finally:
         plt.close(fig)
     assert width == pytest.approx(style.DOUBLE_COLUMN_WIDTH)
-    assert height < 3.0
-    assert "Numba" in labels and "1x" not in labels
-    assert "Geomean (95% CI)" in texts
+    assert height < 2.6
+    assert "1x" in labels and fig.axes[0].get_ylabel() == "Speed-up over Numba"
+    assert kernel_ticks[-1] == signed.GEOMEAN_TICK and len(kernel_ticks) == len(ROSTER40) + 1
+    assert tick_length > 0.0
     assert fig.texts == []  # no title unless one is asked for
 
 

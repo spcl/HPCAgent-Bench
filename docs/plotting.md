@@ -14,7 +14,8 @@ a figure that does not is wrong, and the drawing agent returns a self-check tabl
    by a line (rule 12); the emitted table carries the raw milliseconds and token counts (rule 4).
 4. Channels: colour = the skill / tool / harness / packet (the intervention, registry hue via `palette.color`;
    compiler columns `palette.framework_color`; control = hollow mark in `palette.control_color`);
-   shape = the LLM (`palette.marker` per model).
+   shape = the OPTIMIZER (`palette.marker`): an LLM, or a standalone optimizer such as DaCe or CPF
+   (registry `optimizers`, shapes after the models). CPF given to an agent (`cpf`, `cpfsrc`) is a packet, a colour.
 5. Efficacy figure = 2D: X = log2 speed-up geomean with its interval, Y = token-cost geomean with its interval,
    one mark per arm; n comparisons = one row of n square panels (up to 3). The agentbench paper's row is
    kernel formulation | language skill packet | three languages.
@@ -163,7 +164,8 @@ not paired ratios. Pinned by `tests/test_plot_score_change.py`'s
 `test_x_is_log2_of_the_speed_up_and_zero_is_the_no_change_line` and
 `test_y_is_the_paired_token_cost_ratio_with_one_at_the_control`.
 
-**2. Colour is the INTERVENTION, shape is the MODEL.** `palette.color(packet)` for the treated side
+**2. Colour is the INTERVENTION, shape is the OPTIMIZER** (an LLM, or a standalone optimizer from the
+registry's `optimizers` block, e.g. DaCe and CPF on the MPR compiler figure). `palette.color(packet)` for the treated side
 and `palette.control_color()` for the hollow control reference; `palette.marker(model)` for the
 shape. An intervention is anything an arm was given or denied, not only a skill packet: `kernel`
 (the bare kernel), `repo` (the whole repository) and `no-score` (the blind condition) are registered

@@ -170,12 +170,19 @@ def in_order(names: Iterable[str], kind: str = "models") -> list[str]:
 
 
 def marker(model: str) -> str:
-    """The one SHAPE ``model`` wears. Pairs with :func:`color` so identity is never colour alone."""
-    known, shapes = order("models"), markers()
+    """The one SHAPE an optimizer wears: an LLM (``models``) or a standalone optimizer
+    (``optimizers``, e.g. DaCe or CPF), which take the shapes after the models. Pairs with
+    :func:`color` so identity is never colour alone."""
+    shapes = markers()
+    models = order("models")
     resolved = canonical("models", model)
-    if resolved in known:
-        return shapes[known.index(resolved) % len(shapes)]
-    LOG.warning("palette: model %r is not in registry.yaml; using a hash marker", model)
+    if resolved in models:
+        return shapes[models.index(resolved) % len(shapes)]
+    standalone = order("optimizers")
+    resolved = canonical("optimizers", model)
+    if resolved in standalone:
+        return shapes[(len(models) + standalone.index(resolved)) % len(shapes)]
+    LOG.warning("palette: optimizer %r is not in registry.yaml; using a hash marker", model)
     return shapes[zlib.crc32(str(model).encode()) % len(shapes)]
 
 

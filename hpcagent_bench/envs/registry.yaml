@@ -84,6 +84,15 @@ models:
     name: GLM-5.3
     serves: zai-org/GLM-5.3
 
+# Standalone optimizers: a compiler or a pipeline that stands where an LLM stands on a figure. An
+# LLM is one kind of optimizer, so the two blocks share ONE shape sequence: `markers` go to the
+# models first, then to these in key order. A skill packet an agent is given (cpf, cpfsrc) is still
+# a packet and a colour, never an optimizer. The colour of a standalone optimizer's row stays its
+# framework's; device variants are aliases, since the optimizer is the same one on either device.
+optimizers:
+  dace: DaCe
+  cpf: Canonical Parallel Form
+
 # Skill packets, keyed by the canonical `packet` column value. KEY ORDER IS HUE ORDER, and it also
 # picks the LEAD of a combination: the lead of `cpfsrc+lang-skills` is cpfsrc, so a CPF figure's
 # arms stay one family.
@@ -309,6 +318,11 @@ frameworks:
 # Alternate spellings that resolve to a registered entity. Kept OUT of the ordered blocks above so
 # an alias can never take a colour slot; it inherits the colour of what it aliases.
 aliases:
+  optimizers:
+    dace_cpu: dace
+    dace_gpu: dace
+    dace_cpu_canonicalize: cpf
+    dace_gpu_canonicalize: cpf
   models:
     gpt-oss-120b: oss120b
     qwen3.8: qwen38

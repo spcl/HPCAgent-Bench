@@ -42,6 +42,7 @@ def run(
     dpi: float,
     out: pathlib.Path,
     series_labels: dict[str, str],
+    offset: float,
 ) -> int:
     canon_frame = read_table(canon_db, "canon")
     roster = load_roster(roster_file, canon_frame)
@@ -63,6 +64,7 @@ def run(
         title=label,
         dpi=dpi,
         labels=series_labels,
+        offset=offset,
     )
     print(f"{stem}.pdf / .png")
     print(f"{stem}-kernels.csv / {stem}-summary.csv")
@@ -96,6 +98,9 @@ def main(argv: list[str] | None = None) -> int:
         metavar="KEY=LABEL",
         help="rename a row by framework or arm key, e.g. dace_cpu_canonicalize=CPF; repeatable",
     )
+    ap.add_argument(
+        "--offset", type=float, default=0.0, help="spread a kernel's rows over this fraction of its slot; 0 stacks them"
+    )
     ap.add_argument("--dpi", type=float, default=150.0)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/llr40_compilers"))
     args = ap.parse_args(argv)
@@ -112,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         args.dpi,
         args.out,
         dict(item.split("=", 1) for item in args.series_label),
+        args.offset,
     )
 
 

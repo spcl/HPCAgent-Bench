@@ -12,6 +12,7 @@ Neutrals carry a slight cool bias rather than being a pure grey, so they sit und
 blues without looking like a different rendering of the page.
 """
 
+import math
 import pathlib
 from collections.abc import Sequence
 from typing import Literal
@@ -267,6 +268,12 @@ CROSS_SCALE: float = 0.45
 NOT_DELIVERED_LABEL: str = "No Verified Answer (Scored 1x)"
 
 
+def edge_width(size: float, widest: float) -> float:
+    """A mark's line width in points: ``widest`` on a full-size mark, thinner on a small one, where a
+    fixed edge fills a hollow mark and swallows its cross."""
+    return min(widest, 0.2 * math.sqrt(size))
+
+
 def point_mark(
     ax: Axes,
     x: float,
@@ -298,12 +305,12 @@ def point_mark(
         marker=marker,
         color=color if filled else "none",
         edgecolor=color,
-        linewidth=1.8,
+        linewidth=edge_width(size, 1.8),
         zorder=MARK_Z,
     )
     if not delivered:
         ax.scatter(  # pyright: ignore[reportUnknownMemberType]
-            x, y, s=size * CROSS_SCALE, marker="x", color=color, linewidth=1.6, zorder=MARK_Z + 1.0
+            x, y, s=size * CROSS_SCALE, marker="x", color=color, linewidth=edge_width(size, 1.6), zorder=MARK_Z + 1.0
         )
 
 

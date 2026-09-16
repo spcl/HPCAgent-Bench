@@ -422,10 +422,14 @@ def canon_kernel_row(
     base, cur = times.get(baseline, {}), times.get(column, {})
     kernels = set(roster)
     ratios = {k: base[k] / ms for k, ms in sorted(cur.items()) if k in base and k in kernels}
-    label = experiment_tags.names("frameworks").get(column, column)
+    optimizer = experiment_tags.canonical("optimizers", column)
+    standalone = experiment_tags.names("optimizers")
+    label = (
+        standalone[optimizer] if optimizer in standalone else experiment_tags.names("frameworks").get(column, column)
+    )
     return Row(
         column, label, ratios, {k: base[k] for k in ratios}, {k: cur[k] for k in ratios}, "none",
-        palette.framework_color(column), kernel_comparison.CANON_MARKER,
+        palette.framework_color(column), palette.marker(column),
     )  # fmt: skip
 
 
@@ -561,30 +565,28 @@ def style_log2_speedup_y_axis(ax: Axes, ratios: Sequence[float]) -> None:
     ax.set_axisbelow(True)
 
 
-def per_kernel_repeats_note(rows: Sequence[Row]) -> str:
-    """The legend's own words for why some (or every) per-kernel mark draws no whisker: SC15 rules
-    5/7 ask a deterministic measurement to be REPORTED as such, not left to read as a dropped
-    feature. ``ratios_low``/``ratios_high`` bound a kernel only where it has a repetition to bound
-    (:func:`agent_kernel_row`); a canon-sweep column never populates either at all."""
-    widths = [row.ratios_high[kernel] - row.ratios_low[kernel] for row in rows for kernel in row.ratios_low]
-    return "n>1 for some kernels" if widths and max(widths) > 1.0e-9 else "n=1 per kernel"
-
-
 #: The llr-focus40 figure is drawn at the size it prints: one text-width row
 #: (:data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH`), every font in real points, so the page
 #: never rescales it. The panel height is what 40 kernels need to read, not what the canvas can spare.
-LLR40_PANEL_HEIGHT_IN: float = 1.45
-LLR40_TEXT_PT: float = 7.0
-LLR40_LEGEND_PT: float = 7.0
+LLR40_PANEL_HEIGHT_IN: float = 1.2
+LLR40_TEXT_PT: float = 6.5
+LLR40_LEGEND_PT: float = 6.5
+
+#: A drawn mark's diameter in points: small enough that two optimizers on one kernel at nearby
+#: speed-ups still show both shapes.
+LLR40_MARK_PT: float = 3.4
+
+#: Length of an x tick in points: every kernel slot and the summary slot get one.
+LLR40_TICK_LEN_PT: float = 2.5
 
 #: A legend mark's size in points at :data:`LLR40_LEGEND_PT`, before the legend's own markerscale.
-LLR40_LEGEND_MARK_PT: float = 3.6
+LLR40_LEGEND_MARK_PT: float = 3.4
 
 #: Inches left of the value axis (tick labels, axis label), right of the summary values, above the
-#: top panel (the summary header), and between two panels.
+#: top panel, and between two panels.
 LLR40_LEFT_IN: float = 0.62
 LLR40_RIGHT_IN: float = 0.3
-LLR40_TOP_IN: float = 0.2
+LLR40_TOP_IN: float = 0.08
 LLR40_GAP_IN: float = 0.12
 
 #: Inches between the rotated kernel labels and the legend under them.
@@ -594,77 +596,54 @@ LLR40_LEGEND_GAP_IN: float = 0.06
 #: labels on a 1.45-inch axis touch.
 LLR40_MAX_TICKS: int = 8
 
+#: The summary slot's own x tick label.
+GEOMEAN_TICK: str = "Geomean"
+
 
 def llr40_baseline_label(baseline: str) -> str:
     """The speed-up axis label, naming the baseline by its registry display name."""
     return f"Speed-up over {experiment_tags.names('frameworks').get(baseline, baseline)}"
 
 
-def thin_speedup_ticks(ax: Axes, baseline: str) -> None:
+def thin_speedup_ticks(ax: Axes) -> None:
     """Every other power of two once the axis holds more than :data:`LLR40_MAX_TICKS`, always
-    keeping 1x, and the 1x tick names the baseline: the reference line IS the baseline, and the
-    reader should not have to find that in the axis label."""
+    keeping 1x, the reference line the axis label names."""
     positions = [float(tick) for tick in ax.get_yticks()]
     if len(positions) > LLR40_MAX_TICKS:
         positions = [position for position in positions if round(position) % 2 == 0]
     ax.set_yticks(positions)
-    name = experiment_tags.names("frameworks").get(baseline, baseline)
-    labels = [name if position == 0.0 else speedup_tick_label(2.0**position) for position in positions]
-    ax.set_yticklabels(labels, fontsize=LLR40_TEXT_PT)
+    ax.set_yticklabels([speedup_tick_label(2.0**position) for position in positions], fontsize=LLR40_TEXT_PT)
 
 
 def legend_handles(rows: Sequence[Row], kernels: Sequence[str]) -> list[Line2D]:
-    """One legend entry per row -- its own colour and shape, and the registry display name
-    :func:`llr40_rows` already built into ``row.label`` -- plus the keys every panel draws the same
-    way: the per-kernel whisker (method and n, :func:`per_kernel_repeats_note`), the geomean-and-
-    interval mark (method and its own n), and the undelivered cross
-    (:data:`~hpcagent_bench.stats.style.NOT_DELIVERED_LABEL`)."""
+    """One legend entry per row -- its own colour and shape, and the display name :func:`llr40_rows`
+    built into ``row.label`` -- plus the undelivered cross
+    (:data:`~hpcagent_bench.stats.style.NOT_DELIVERED_LABEL`) only when some kernel draws one. The
+    interval method and its n belong to the caption: every whisker on this figure is a 95% interval."""
     handles: list[Line2D] = [
         Line2D(
             [], [], marker=row.marker, linestyle="none", color=row.color or style.MUTED, markersize=7, label=row.label
         )
         for row in rows
     ]
-    handles.append(
-        Line2D(
-            [],
-            [],
-            marker="|",
-            linestyle="none",
-            color=style.MUTED,
-            markeredgewidth=1.6,
-            markersize=10,
-            label=f"Per-Kernel {DEFAULT_CONFIDENCE:.0%} t-Interval ({per_kernel_repeats_note(rows)})",
-        )  # fmt: skip
-    )
-    handles.append(
-        Line2D(
-            [],
-            [],
-            marker="o",
-            linestyle="none",
-            color=style.MUTED,
-            markersize=5.5,
-            label=f"Geomean, {DEFAULT_CONFIDENCE:.0%} t-Interval (n<={len(kernels)})",
-        )  # fmt: skip
-    )
-    handles.append(
-        Line2D(
-            [],
-            [],
-            marker="x",
-            linestyle="none",
-            color=style.MUTED,
-            markeredgewidth=1.6,
-            markersize=7,
-            label=style.NOT_DELIVERED_LABEL,
-        )  # fmt: skip
-    )
+    if any(kernel not in row.ratios for row in rows for kernel in kernels):
+        handles.append(
+            Line2D(
+                [],
+                [],
+                marker="x",
+                linestyle="none",
+                color=style.MUTED,
+                markeredgewidth=1.2,
+                markersize=7,
+                label=style.NOT_DELIVERED_LABEL,
+            )  # fmt: skip
+        )
     return handles
 
 
 def llr40_figure(
-    rows: Sequence[Row], roster: Sequence[str], title: str = "", baseline: str = LLR40_BASELINE
+    rows: Sequence[Row], roster: Sequence[str], title: str = "", baseline: str = LLR40_BASELINE, offset: float = 0.0
 ) -> matplotlib.figure.Figure:
     """The llr-focus40 compiler figure: DaCe's own canon-sweep columns and every model's CPF arm,
     ONE KERNEL AXIS shared by a speed-up panel (LOG2 geometry, ratio-labelled ticks) and, only when
@@ -679,7 +658,10 @@ def llr40_figure(
     Printed at text width with the kernels' ``short-name``
     (:func:`~hpcagent_bench.experiment_tags.kernel_short_display_name`) and the legend below; the
     height follows the longest drawn label and the wrapped legend, measured, never estimated. No
-    title unless ``title`` names one: a paper's caption already does."""
+    title unless ``title`` names one: a paper's caption already does.
+
+    Every row of a kernel sits at the SAME x (the optimizers differ by shape), unless ``offset``
+    spreads them over that fraction of a kernel slot. The summary slot carries a "Geomean" tick."""
     if not rows:
         raise ValueError("no row to draw")
     style.apply()
@@ -703,21 +685,21 @@ def llr40_figure(
     ]  # fmt: skip
     width = style.DOUBLE_COLUMN_WIDTH
     pitch = (width - LLR40_LEFT_IN - LLR40_RIGHT_IN) / kernel_comparison.panel_slots(len(kernels))
-    size = kernel_comparison.mark_size(pitch, len(speedup_series))
+    del pitch  # the mark is sized in points, not by the slot: rows share one x by default
+    size = LLR40_MARK_PT**2
     n_panels = 2 if has_tokens else 1
     fig, axes = plt.subplots(n_panels, 1, sharex=True, figsize=(width, 3.0), squeeze=False)
     speedup_ax = axes[0][0]
     token_ax = axes[1][0] if has_tokens else None
     style_log2_speedup_y_axis(speedup_ax, [v for row in rows for v in row.ratios.values()])
-    header = f"Geomean ({DEFAULT_CONFIDENCE:.0%} CI)"
     kernel_comparison.draw_panel(
-        speedup_ax, kernels, speedup_series, lambda s: s.values, 1.0, geomean_reducer, header,
+        speedup_ax, kernels, speedup_series, lambda s: s.values, 1.0, geomean_reducer, "",
         not has_tokens, size,
         range_of=lambda s: (row_by_key[s.key].ratios_low, row_by_key[s.key].ratios_high),
         interval_of=geomean_interval_of(row_by_key, lambda r: r.ratios),
-        transform=log2_change, value_text=kernel_comparison.speedup_value_text,
+        transform=log2_change, value_text=kernel_comparison.speedup_value_text, span=offset,
     )  # fmt: skip
-    thin_speedup_ticks(speedup_ax, baseline)
+    thin_speedup_ticks(speedup_ax)
     speedup_ax.set_ylabel(llr40_baseline_label(baseline), fontsize=LLR40_TEXT_PT, color=style.MUTED)
     if has_tokens and token_ax is not None:
         token_limits = kernel_comparison.token_axis_limits(v for row in token_rows for v in row.tokens.values())
@@ -725,15 +707,19 @@ def llr40_figure(
         token_ax.tick_params(axis="y", labelsize=LLR40_TEXT_PT)
         token_row_by_key = {row.framework: row for row in token_rows}
         kernel_comparison.draw_panel(
-            token_ax, kernels, token_series, lambda s: s.values, token_limits[0], geomean_reducer, header,
+            token_ax, kernels, token_series, lambda s: s.values, token_limits[0], geomean_reducer, "",
             True, size, mark_missing=False,
             interval_of=geomean_interval_of(token_row_by_key, lambda r: r.tokens),
-            value_text=style.decade_label,
+            value_text=style.decade_label, span=offset,
         )  # fmt: skip
         token_ax.set_ylabel("Tokens spent", fontsize=LLR40_TEXT_PT, color=style.MUTED)
+    summary_x = kernel_comparison.summary_column_position(len(kernels))[1]
+    for ax_row in axes:
+        ax_row[0].set_xticks([*range(len(kernels)), summary_x])
+        ax_row[0].tick_params(axis="x", length=LLR40_TICK_LEN_PT, width=0.6, color=style.MUTED)
     bottom_ax = axes[-1][0]
     bottom_ax.set_xticklabels(
-        [experiment_tags.kernel_short_display_name(kernel) for kernel in kernels],
+        [*(experiment_tags.kernel_short_display_name(kernel) for kernel in kernels), GEOMEAN_TICK],
         rotation=90, fontsize=LLR40_TEXT_PT, color=style.INK,
     )  # fmt: skip
     for text in fig.texts + [child for ax in fig.axes for child in ax.texts]:
@@ -808,6 +794,7 @@ def llr40_two_row_figure(
     title: str = "",
     dpi: float = 150.0,
     labels: Mapping[str, str] | None = None,
+    offset: float = 0.0,
 ) -> pathlib.Path:
     """Build the llr-focus40 compiler rows, write their tables (Rule 4's costs, rules 5/7's
     intervals -- :func:`write_tables`, :func:`token_summary_table`) and render the two-panel
@@ -823,7 +810,7 @@ def llr40_two_row_figure(
     tokens = token_summary_table(rows)
     if not tokens.empty:
         tokens.to_csv(out.with_name(f"{out.name}-tokens-summary.csv"), index=False)
-    fig = llr40_figure(rows, roster, title, baseline)
+    fig = llr40_figure(rows, roster, title, baseline, offset)
     return style.save(fig, out, formats=("pdf", "png"), fixed=True, dpi=dpi)
 
 

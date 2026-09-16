@@ -222,3 +222,14 @@ def test_every_llr_focus40_kernel_has_a_short_label() -> None:
         if len(experiment_tags.kernel_short_display_name(kernel)) > experiment_tags.SHORT_NAME_MAX
     ]
     assert not long, f"llr-focus40 kernels with no short label: {long}"
+
+
+def test_llms_and_standalone_optimizers_never_share_a_shape() -> None:
+    """An LLM and a standalone optimizer (DaCe, CPF) are both optimizers on a figure, told apart by
+    shape alone, so the shared sequence must not wrap onto a shape already taken."""
+    tags = [*experiment_tags.order("models"), *experiment_tags.order("optimizers")]
+    shapes = [palette.marker(tag) for tag in tags]
+    assert len(set(shapes)) == len(shapes), dict(zip(tags, shapes, strict=True))
+    assert palette.marker("dace_gpu_canonicalize") == palette.marker("cpf")
+    assert experiment_tags.optimizer_name("dace_cpu_canonicalize") == "Canonical Parallel Form"
+    assert experiment_tags.optimizer_name("qwen38") == experiment_tags.model_name("qwen38")

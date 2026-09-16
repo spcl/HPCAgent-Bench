@@ -78,6 +78,8 @@ class Registry:
     lightness_step: float
     experiments: Names
     models: dict[str, ModelEntry]
+    #: Standalone optimizers (DaCe, CPF): shapes after the models, see :func:`optimizer_name`.
+    optimizers: Names
     packets: Names
     packet_defs: dict[str, PacketDef]
     devices: Names
@@ -163,6 +165,7 @@ def registry() -> Registry:
         lightness_step=float(step) if isinstance(step, (int, float)) else 0.13,
         experiments=names_of(doc.get("experiments"), "experiments"),
         models=models_of(doc.get("models")),
+        optimizers=names_of(doc.get("optimizers"), "optimizers"),
         packets=names_of(doc.get("packets"), "packets"),
         packet_defs=packet_defs_of(doc.get("packets")),
         devices=names_of(doc.get("devices"), "devices"),
@@ -187,6 +190,7 @@ def names(kind: str) -> Names:
     blocks: dict[str, Names] = {
         "experiments": reg.experiments,
         "models": {tag: entry.name for tag, entry in reg.models.items()},
+        "optimizers": reg.optimizers,
         "packets": reg.packets,
         "devices": reg.devices,
         "languages": reg.languages,
@@ -218,6 +222,14 @@ def model_name(model: str) -> str:
     """The display spelling of a model. Unknown ones pass through unchanged."""
     entry = registry().models.get(canonical("models", str(model).lower()))
     return entry.name if entry is not None else str(model)
+
+
+def optimizer_name(optimizer: str) -> str:
+    """The display spelling of an optimizer: an LLM (a ``models`` tag) or a standalone optimizer
+    (an ``optimizers`` tag or one of its aliases, e.g. ``dace_cpu_canonicalize``). Unknown ones pass
+    through unchanged."""
+    standalone = names("optimizers").get(canonical("optimizers", str(optimizer)))
+    return standalone if standalone is not None else model_name(optimizer)
 
 
 def model_checkpoint(model: str) -> str:
