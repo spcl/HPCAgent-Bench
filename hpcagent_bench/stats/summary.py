@@ -457,6 +457,15 @@ def log2_change(ratio: float) -> float:
     return math.log2(ratio)
 
 
+def log2_changes(ratios: Samples) -> FloatArray:
+    """:func:`log2_change` over an array, NaN where a ratio is not plottable."""
+    x: FloatArray = np.asarray(ratios, dtype=np.float64)
+    out: FloatArray = np.full(x.shape, np.nan, dtype=np.float64)
+    good: npt.NDArray[np.bool_] = np.isfinite(x) & (x > 0.0)
+    out[good] = np.log2(x[good])
+    return out
+
+
 def median_per_kernel(
     frame: "pd.DataFrame", value: str, kernel: str = "benchmark", within: Sequence[str] = ()
 ) -> "pd.Series":
