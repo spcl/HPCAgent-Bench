@@ -211,9 +211,14 @@ def test_skipping_lines_that_cannot_carry_usage_changes_no_total(
     # output tokens already count it (module docstring, 3).
     assert cost["thinking_estimate"] == 40
     assert cost["effective"] == fresh + token_cost.CACHE_DISCOUNT * cached + 70
+    # The three readings of ONE fold (USER 2026-09-16): free (cache reads at 0), provider (cache reads
+    # at a tenth, what a hosted service meters) and billed (every prompt in full). 1500 + 0.1 * 1000 + 70.
+    assert cost["effective_provider"] == fresh + 0.1 * cached + 70 == 1670
+    assert cost["effective"] < cost["effective_provider"] < cost["naive_total"]
     assert token_cost.accumulate_total_tokens(lines, {}) == 1000 + 1500
     totals = token_cost.task_totals(tmp_path)
     assert (totals.tokens_effective, totals.tokens_billed) == (int(cost["effective"]), 1000 + 1500)
+    assert totals.tokens_provider == 1670
 
 
 def test_the_streamed_thinking_estimate_is_reported_but_never_added_to_the_effective_total(
