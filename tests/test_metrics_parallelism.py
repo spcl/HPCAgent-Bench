@@ -9,6 +9,7 @@ percentage. None of these touch the hpcagent_bench corpus or the DaCe python fro
 """
 
 import ast
+import pathlib
 import sqlite3
 
 import dace
@@ -36,6 +37,7 @@ from hpcagent_bench.metrics.parallelism import (
     classify,
     classify_benchmark,
     column_name,
+    dace_root_for_tests,
     enabled,
     is_timestep_loop_region,
     loop_bound_symbols,
@@ -561,3 +563,21 @@ def test_read_records_groups_by_framework_flavor_benchmark_and_drops_other_metri
 
 def test_read_records_on_an_empty_frame_is_an_empty_mapping() -> None:
     assert read_records(rows_frame([])) == {}
+
+
+def test_dace_root_for_tests_names_the_missing_corpus_path_not_a_bare_module_error(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A dace install with no ``tests/`` (a wheel, or the pyproject ``dace`` extra resolved into
+    one) must fail here, naming the path CI is supposed to provide, rather than three frames later
+    as a bare ``ModuleNotFoundError: No module named 'tests.corpus'``.
+
+    Passes an explicit ``root`` rather than patching anything: :func:`dace_root_for_tests` takes
+    one precisely so a test can point it at a directory with no ``tests/corpus`` without touching
+    ``sys.modules`` or the real dace install.
+    """
+    with pytest.raises(ModuleNotFoundError) as excinfo:
+        dace_root_for_tests(tmp_path)
+    message = str(excinfo.value)
+    assert str(tmp_path / "tests" / "corpus") in message
+    assert "action.yml" in message

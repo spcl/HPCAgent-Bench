@@ -253,14 +253,33 @@ def import_dace_tests_corpus() -> Any:
         sys.path[:] = saved_path
 
 
-def dace_root_for_tests() -> pathlib.Path:
-    """Checkout root of the imported ``dace``: not on an editable install's path, so
-    ``tests.corpus`` is located relative to the package actually loaded rather than a hardcoded
-    checkout path.
-    """
-    import dace
+def dace_root_for_tests(root: pathlib.Path | None = None) -> pathlib.Path:
+    """Checkout root of the imported ``dace`` (or ``root``, for a test that wants a controlled
+    path without patching): not an editable install's own path, so ``tests.corpus`` is located
+    relative to the package actually loaded rather than a hardcoded checkout path.
 
-    return pathlib.Path(dace.__file__).resolve().parents[1]
+    Raises :class:`ModuleNotFoundError` naming the missing directory when ``tests/corpus`` is not
+    there, instead of leaving the caller to hit a bare ``ModuleNotFoundError`` for ``tests.corpus``
+    three frames down with no path in it. A WHEEL install of dace (the PyPI release, or pip
+    resolving the ``dace`` extra's git+https reference into a build) never ships ``tests/``; only a
+    checkout does, which is what ``.github/actions/setup/action.yml``'s "DaCe checkout" step
+    installs on CI (``git clone`` + ``pip install -e``).
+    """
+    if root is None:
+        import dace
+
+        root = pathlib.Path(dace.__file__).resolve().parents[1]
+    corpus = root / "tests" / "corpus"
+    if not corpus.is_dir():
+        raise ModuleNotFoundError(
+            f"{corpus} is missing: the dace installed from {root} ships no tests/ directory. "
+            "hpcagent_bench.metrics.parallelism imports dace's own "
+            "tests/corpus/measure_parallelization.py predicates rather than restating them, so it "
+            "needs a git CHECKOUT of dace, not a wheel. CI installs one via "
+            ".github/actions/setup/action.yml's 'DaCe checkout' step; locally, "
+            "`pip install -e /path/to/a/dace/checkout`."
+        )
+    return root
 
 
 @functools.lru_cache(maxsize=1)
