@@ -308,6 +308,31 @@ def test_a_fold_2_record_is_read_instead_of_refolding_the_transcript(tmp_path: p
     assert (row["output_source"], row["output_suspect"]) == ("retokenized", 1.0)
 
 
+def test_a_fold_2_record_carries_its_components_and_prices_the_provider_total_from_them(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The driver's record never wrote ``tokens_provider``, so it extracted blank; the components the
+    record does carry price it, and they ride along for the cost cards."""
+    worker_dir = tmp_path / "agents" / "node-0" / "problem-0-worker-0"
+    write_worker(worker_dir, "arm-a.n0.p0.w0")
+    write_record(
+        worker_dir,
+        2,
+        tokens_effective=1_300,
+        tokens_billed=99,
+        attempts=1,
+        fresh_input=1_000,
+        cached_input=20_000,
+        output=300,
+    )
+    identity = extract_llr40.JobIdentity({}, {})
+
+    row = extract_llr40.task_rows_for_job(tmp_path, "r", "j", "", frozenset(), identity)[0]
+
+    assert (row["tokens_fresh_input"], row["tokens_cached_input"], row["tokens_output"]) == (1_000, 20_000, 300)
+    assert row["tokens_provider"] == 1_000 + 2_000 + 300
+
+
 def test_a_worker_without_a_record_is_still_folded_from_its_transcript(tmp_path: pathlib.Path) -> None:
     """Every campaign before the record existed, and any task the driver could not write one for."""
     worker_dir = tmp_path / "agents" / "node-0" / "problem-0-worker-0"

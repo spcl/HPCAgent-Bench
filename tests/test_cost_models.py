@@ -29,7 +29,7 @@ def test_the_paper_cards_weight_cache_reads_and_output_as_stated() -> None:
     assert (cards["effective"].fresh_input, cards["effective"].cached_input, cards["effective"].output) == (1, 0, 1)
     assert (cards["billed"].fresh_input, cards["billed"].cached_input, cards["billed"].output) == (1, 0.1, 1)
     assert (cards["api-priced"].cached_input, cards["api-priced"].output) == (0.1, 5)
-    assert (cards["per-turn"].cached_input, cards["per-turn"].output) == (1, 1)
+    assert (cards["total"].cached_input, cards["total"].output) == (1, 1)
 
 
 def test_billed_card_charges_a_tenth_of_every_re_sent_prefix() -> None:
@@ -43,7 +43,7 @@ def test_api_priced_card_weights_output_five_times() -> None:
 
 
 def test_a_judge_row_keeps_its_own_tokens() -> None:
-    priced = cost.priced(task_rows(fresh=1.0, cached=1.0, output=1.0), cost.resolve("per-turn"))
+    priced = cost.priced(task_rows(fresh=1.0, cached=1.0, output=1.0), cost.resolve("total"))
     assert priced["tokens"].iloc[1] == pytest.approx(5.0)
 
 
@@ -80,3 +80,35 @@ def test_a_missing_component_prices_the_task_as_no_measurement() -> None:
     frame.loc[0, "tokens_output"] = math.nan
     priced = cost.priced(frame, cost.resolve("billed"))
     assert priced["tokens"].iloc[0] == pytest.approx(2.0)  # unstated components keep the extracted total
+
+
+def test_the_three_proxies_price_one_episode_as_the_paper_defines_them() -> None:
+    """fresh 1000, re-sent 20000, output 300: effective 1300, billed 3300, total 21300."""
+    assert cost.effective_tokens(1000, 20000, 300) == pytest.approx(1300)
+    assert cost.billed_tokens(1000, 20000, 300) == pytest.approx(3300)
+    assert cost.total_tokens(1000, 20000, 300) == pytest.approx(21300)
+    assert list(cost.PROXIES) == list(cost.PROXY_CARDS)
+
+
+def test_the_fold_and_the_cards_agree_on_every_proxy(tmp_path: pathlib.Path) -> None:
+    """``experiments/token_cost.py`` ships stdlib-only inside the agent image and so spells its three
+    readings inline; this pins them to the cards, so the two definitions cannot drift apart."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "token_cost_for_cards", pathlib.Path(__file__).resolve().parents[1] / "experiments" / "token_cost.py"
+    )
+    assert spec is not None and spec.loader is not None
+    token_cost = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(token_cost)
+    usage = tmp_path / "usage.jsonl"
+    usage.write_text(
+        '{"input": 900, "cached_input": 0, "output": 40, "reasoning": 10}\n'
+        '{"input": 300, "cached_input": 900, "output": 60, "reasoning": 0}\n',
+        encoding="utf-8",
+    )
+    row = token_cost.usage_episode_cost(usage)
+    parts = (float(row["fresh_input"]), float(row["cached_input"]), float(row["output"]))
+    assert row["effective"] == pytest.approx(cost.effective_tokens(*parts))
+    assert row["effective_provider"] == pytest.approx(cost.billed_tokens(*parts))
+    assert row["naive_total"] == pytest.approx(cost.total_tokens(*parts))

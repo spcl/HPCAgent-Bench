@@ -11,14 +11,16 @@ and the measurements behind each choice. The implementation is
 | `effective` card | every token counted **once**, in the turn it first appeared: fresh input + output | comparing **arms within this work** (paper headline) |
 | `billed` card | fresh input + cache reads at **0.1** + output | the paper's second number: what a hosted service meters, output unweighted |
 | `api-priced` card | fresh input + cache reads at 0.1 + output at **5x** | a bill-shaped number (list-price ratios, [below](#cost-cards)) |
-| `per-turn` card (column `tokens_billed`) | every usage field summed over every turn | comparing against **other papers** ([how](#reading-it)) |
+| `total` card | every prompt in full on every turn, plus output | comparing against **other papers** ([how](#reading-it)) |
 | `api_ms` | wall time this episode occupied the shared inference node | asking what an arm **cost us** |
 
 No token number is "the" number. They answer different questions and differ by up to 40x. A figure
 or pairing picks one with `--cost-model` ([cost cards](#cost-cards)).
 
-**Naming.** The column `tokens_billed` predates the cards and holds the PER-TURN sum (cache reads at
-1). The paper's "billed" is the `billed` card (cache reads at 0.1). Read a number by its card name.
+**Naming.** The column `tokens_billed` predates the cards: it is the raw usage-field sum over turns,
+which on claude transcripts holds NO output (per-turn events report 0), so it is not the `total` card.
+The paper's "billed" is the `billed` card (cache reads at 0.1). Read a number by its card name; the
+three proxies are `cost.effective_tokens`, `cost.billed_tokens` and `cost.total_tokens`.
 
 ## Where the raw counts come from
 
@@ -235,8 +237,8 @@ definition the paper states (see the cost survey); the other two are reported be
 ## Cost cards
 
 Decided 2026-09-16 (user): the paper reports THREE cost numbers side by side, all with output at 1x:
-`effective` (the efficacy axis), `billed` (cache reads at 0.1, the API-equivalent proxy) and `per-turn`
-(total tokens: every prompt in full on every turn plus output, the number other papers print).
+`effective` (the efficacy axis), `billed` (cache reads at 0.1, the API-equivalent proxy) and `total`
+(every prompt in full on every turn plus output, the number other papers print).
 Anyone else picks or writes their own card.
 
 A card is a linear weight on the three components the fold records per task, in units of one fresh
@@ -247,12 +249,17 @@ input token (`hpcagent_bench/envs/cost_models.yaml`, `hpcagent_bench/stats/cost.
 | `effective` | 1 | 0 | 1 |
 | `billed` | 1 | 0.1 | 1 |
 | `api-priced` | 1 | 0.1 | 5 |
-| `per-turn` | 1 | 1 | 1 |
+| `total` | 1 | 1 | 1 |
 
     python experiments/paired_arms.py ... --cost-model billed
     python scripts/plot_score_change.py ... --cost-model api-priced
     python scripts/plot_score_change.py ... --cost-model fresh_input=1,cached_input=0.25,output=4
     python scripts/plot_score_change.py ... --cost-models my_cards.yaml --cost-model kimi-list
+
+The three paper proxies are also plain functions of one task's components, for a caller with no
+frame: `cost.effective_tokens`, `cost.billed_tokens`, `cost.total_tokens` (`cost.PROXIES`).
+`experiments/token_cost.py` ships stdlib-only in the agent image and spells the same three inline
+(`effective`, `effective_provider`, `naive_total`); `tests/test_cost_models.py` pins the two together.
 
 `paired_arms.py` writes the card into the family CSV (`cost_model`), and `plot_score_change.py`
 refuses a CSV priced with another card: a star and its Y axis come from one cost model.

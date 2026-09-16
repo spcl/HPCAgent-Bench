@@ -12,6 +12,7 @@ import dataclasses
 import functools
 import math
 import pathlib
+from collections.abc import Callable
 
 import pandas as pd  # pyright: ignore[reportMissingTypeStubs] -- pandas ships none
 import yaml
@@ -21,6 +22,9 @@ COST_MODELS = pathlib.Path(__file__).resolve().parents[1] / "envs" / "cost_model
 
 #: The card a figure prices with when none is named: the paper's headline reading.
 DEFAULT_COST_MODEL: str = "effective"
+
+#: The three cost proxies the paper reports, in report order (user, 2026-09-16).
+PROXY_CARDS: tuple[str, ...] = ("effective", "billed", "total")
 
 #: The weight names a card declares, in the order an inline spec may give them.
 WEIGHTS: tuple[str, ...] = ("fresh_input", "cached_input", "output")
@@ -97,6 +101,36 @@ def resolve(spec: str = DEFAULT_COST_MODEL, extra: pathlib.Path | None = None) -
     return cards[spec]
 
 
+def price(model: CostModel, fresh_input: float, cached_input: float, output: float) -> float:
+    """One task's cost under ``model``, from its three components."""
+    return model.fresh_input * fresh_input + model.cached_input * cached_input + model.output * output
+
+
+def effective_tokens(fresh_input: float, cached_input: float, output: float) -> float:
+    """COST PROXY 1, the efficacy axis: every context token once, when it first entered, plus output.
+    A re-read prefix is charged nothing: it costs the model no forward pass."""
+    return price(shipped_cards()["effective"], fresh_input, cached_input, output)
+
+
+def billed_tokens(fresh_input: float, cached_input: float, output: float) -> float:
+    """COST PROXY 2, API-equivalent: :func:`effective_tokens` plus every re-read prefix at a tenth,
+    the cache-read rate hosted providers bill. Grows with turn count, as a bill does."""
+    return price(shipped_cards()["billed"], fresh_input, cached_input, output)
+
+
+def total_tokens(fresh_input: float, cached_input: float, output: float) -> float:
+    """COST PROXY 3, the literature's meter: every prompt in full on every turn, plus output."""
+    return price(shipped_cards()["total"], fresh_input, cached_input, output)
+
+
+#: The proxies by card name, for a caller that loops over all three.
+PROXIES: dict[str, Callable[[float, float, float], float]] = {
+    "effective": effective_tokens,
+    "billed": billed_tokens,
+    "total": total_tokens,
+}
+
+
 def components(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
     """``(fresh_input, cached_input, output)`` per row, read off :data:`COMPONENT_COLUMNS`."""
     fresh, cached, output = (
@@ -119,7 +153,7 @@ def priced(frame: pd.DataFrame, model: CostModel) -> pd.DataFrame:
     if needed:
         raise ValueError(f"cost model {model.key!r} needs column(s) {needed}; re-extract the observations")
     fresh, cached, output = components(frame)
-    cost = model.fresh_input * fresh + model.cached_input * cached + model.output * output
+    cost = model.fresh_input * fresh + model.cached_input * cached + model.output * output  # price(), per row
     # only a row that states its components is repriced; a judge row keeps its own tokens field
     stated = fresh.notna() & cached.notna() & output.notna()
     return frame.assign(tokens=cost.where(stated, frame["tokens"]))

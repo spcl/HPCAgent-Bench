@@ -228,10 +228,12 @@ allowed under single submission; more than one ACCEPTED submission is not.
 |---|---|---|
 | billed tokens of an attempt | sum over its model turns (last usage per `message.id`) of `input + cache_creation_input + cache_read_input + output` tokens | `http_json.transcript_tokens`, `agent_driver.accumulate_total_tokens` |
 | effective tokens of an attempt | `fresh_input + output`: each input token counted once, when it first entered the context, plus every token generated | `experiments/token_cost.py`, `episode_cost` |
+| cost proxies of a task | three linear prices of the FINAL attempt's recorded components `fresh_input`, `cached_input`, `output`: **effective** `fresh + output`; **billed** `fresh + 0.1 cached + output`; **total** `fresh + cached + output` | `stats.cost.effective_tokens` / `billed_tokens` / `total_tokens`, cards in `envs/cost_models.yaml` |
 | TASK TOKEN TOTAL | the effective tokens of the task's FINAL attempt. A relaunch wipes the workspace (T5), so an earlier attempt built no part of what was graded; what it spent is reported beside the total as `tokens_crashed`, never added to it. One rule for every run, old and new: the last agent ran the task from nothing to its end. Distinct rerun tasks are separate tasks (R4). | T2 |
 
-- T1. The reported token cost is the task token total (effective). Billed tokens are recorded beside
-  it and never reported as cost.
+- T1. The paired-comparison token cost is the task token total (effective). The billed and total
+  proxies are reported beside it (T13); the raw `tokens_billed` column is recorded and never reported
+  as cost.
 - T2. The attempt transcripts of a task are `claude.attempt<N>.log` for N = 1, 2, ... plus
   `claude.log` (or the per-attempt usage files of a non-Claude harness), in the task's worker
   directory `agents/node-<n>/problem-<id>-worker-<w>/`. The task token total is the LAST of them;
@@ -245,6 +247,17 @@ allowed under single submission; more than one ACCEPTED submission is not.
   `*.attemptN.*` transcript, which is when the crash was moved aside, and reports 0 when the task
   never relaunched. The driver writes the same numbers into `tokens.json` at task end, plus
   `relaunch = fresh`.
+- T13. The paper reports all three cost proxies side by side, output at 1x in each (user,
+  2026-09-16); `effective` is the axis of every paired comparison. A figure or pairing may price with
+  any card (`--cost-model`: a shipped name, a `--cost-models` file, or inline weights); the family
+  CSV records the card and a figure refuses a CSV priced with another. Every component comes from the
+  transcript under the perfect-prefix fold, never from engine-reported cache hits, so no card depends
+  on KV pool size, eviction, engine or routing. Engine hit rate and configuration are diagnostics.
+- T14. Extraction writes the final attempt's components as `tokens_fresh_input`,
+  `tokens_cached_input`, `tokens_output` (from `tokens.json` or the fold). A non-effective card on an
+  extraction without them raises. Components are never recovered by subtraction: `tokens_billed` is
+  the raw usage-field sum, which on claude transcripts carries no output. A fold-2 record states no
+  `tokens_provider`; extraction prices it from the record's own components.
 - T4. Source of truth for cost: `task` rows only. `calls.tokens` is a running billed count of the
   CURRENT attempt at the moment of a judge call; it misses earlier attempts and everything after the
   last judge call, and is never used as cost. A frame without `task` rows is refused for cost.
@@ -381,6 +394,7 @@ family; the table states the pairs it kept.
 | P1-P5 | `summary.paired_geomean`, `paired_arms.score_leg`/`cost_leg`, `plot_score_change.ratio_with_ci` | `test_summary.py`, `test_paired_arms.py` |
 | M1 | `harness.efficacy.correct_family` | `test_plot_score_change.py`, `test_paired_arms.py` |
 | T1-T4 | `agent_driver` (tokens.json), `token_cost` (attempt totals), `extract_llr40.py` (task rows), `population.episode_tokens` | driver, token_cost and extractor tests; call rows never costed |
+| T13, T14 | `stats.cost` (cards, `priced`, the three proxies), `envs/cost_models.yaml`, `--cost-model` in `paired_arms.py` and `plot_score_change.py`, `extract_llr40.record_provider_tokens` | `test_cost_models.py`: card weights, proxies, fold-card agreement, refusal without components; `test_token_cost.py`: components on task totals; `test_extract_llr40_task_rows.py`: components and provider from a record |
 | T5 | `agent_driver.clear_for_relaunch`, `append_attempt` (run_agent's loop), `token_cost.task_totals`, `final_attempt_start` | `test_agent_driver_fresh_relaunch.py`: both folders emptied, inputs and ledger kept, two ledger lines, the cut in tokens.json; `test_token_cost.py`: final attempt only, crashed spend beside it |
 | T6 | `agent_driver.cancelled_by_the_job`, `mark_cancelled`, `watch_for_job_cancellation`; `extract_llr40` (`cancelled` column) | `test_agent_driver_cancellation.py`: signal and allocation end cancel, own caps and a finished episode do not; `test_extract_llr40_task_rows.py`: the flag reaches the row |
 | section 9 | `paired_arms.task_usage`, `arm_rows` | `test_paired_arms.py`: usage over selected tasks |
@@ -508,3 +522,4 @@ question moot for runs from 2026-09-15 on, since those count each request as it 
 | 2026-09-15 | X9: a `-clean` re-run supersedes the arms of its identity group; `CLEAN=1` and `DEADLINE=` in the CPF launcher | this commit |
 | 2026-09-15 | token fold 2: output is every generated token and thinking is never added on top (T7-T9, F8); engine-aware `/metrics` series for SGLang and vLLM (8.3); `scripts/migrate_tokens.py` (8.4) | `24c9a209e` |
 | 2026-09-15 | output precedence T9-T12: `--include-partial-messages` and per-request `message_delta` usage, the retokenized fallback, `output_source` / `output_delta_shape` / `output_suspect`; F9 | this commit |
+| 2026-09-16 | T13-T14: three cost proxies (effective, billed at cache 0.1, total) as cost cards; components recorded per task; `--cost-model`; provider total priced for fold-2 records | this commit |

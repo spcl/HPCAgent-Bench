@@ -447,6 +447,21 @@ RECORD_COLUMNS: tuple[tuple[str, str], ...] = (
 )
 
 
+def record_provider_tokens(record: dict[str, Any], stated: object) -> object:
+    """A record's provider-priced total: the one it states, else priced from its own components.
+
+    The driver's ``tokens.json`` has never written ``tokens_provider``, so every fold-2 record
+    extracted a blank; its ``fresh_input``/``cached_input``/``output`` are the final attempt's, and the
+    fold's own ``PROVIDER_CACHE_DISCOUNT`` prices them exactly as ``task_totals`` would."""
+    if stated not in ("", None):
+        return stated
+    parts = [record.get(key) for key in ("fresh_input", "cached_input", "output")]
+    if not all(isinstance(part, (int, float)) and not isinstance(part, bool) for part in parts):
+        return ""
+    fresh, cached, output = (float(part) for part in parts)
+    return int(fresh + token_cost_module().PROVIDER_CACHE_DISCOUNT * cached + output)
+
+
 def cost_record(worker_dir: pathlib.Path) -> dict[str, Any] | None:
     """This worker's ``tokens.json`` when it was written by fold 2 or later, else None.
 
@@ -513,6 +528,7 @@ def task_rows_for_job(
             }
         else:
             counts = {column: record.get(key, "") for column, key in RECORD_COLUMNS}
+            counts["tokens_provider"] = record_provider_tokens(record, counts["tokens_provider"])
         row: dict[str, Any] = dict.fromkeys(OBSERVATION_FIELDS, "")
         row.update(
             run_root=run_root,
