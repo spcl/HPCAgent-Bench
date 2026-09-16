@@ -4788,6 +4788,27 @@ def helper_call_bindings(owner: ast.FunctionDef, hkir: KernelIR, pinned: Dict[st
     return HelperBinding()
 
 
+def transitive_rename(mapping: Dict[str, str]) -> Dict[str, str]:
+    """``mapping`` with every value chased through the map to its FINAL name.
+
+    Two independent facts about the same call site can each rename the same extent, one onto
+    the other's result: resnet101's third ``_conv2d`` bottleneck conv has its scalar ``h``
+    collapse onto the caller's own ``__inl3_oh2`` (a scalar bound to another symbol), while
+    ``__inl3_oh2`` itself collapses onto ``sh1`` (its own recipe folding to a single name). A
+    one-hop rename then leaves ``__inl3_oh2`` stranded in the body -- the very name the second
+    fact just retired -- as a free variable no ``dc.symbol`` declares.
+    """
+    resolved: Dict[str, str] = {}
+    for name in mapping:
+        target = mapping[name]
+        seen = {name}
+        while target in mapping and target not in seen:
+            seen.add(target)
+            target = mapping[target]
+        resolved[name] = target
+    return resolved
+
+
 def with_helper_vocabulary(hkir: KernelIR, binding: HelperBinding) -> KernelIR:
     """``hkir`` with every aliased caller symbol respelled as the helper's own and then retired, and
     every call-pinned symbol recorded as one of the helper's own constants.
@@ -4799,7 +4820,8 @@ def with_helper_vocabulary(hkir: KernelIR, binding: HelperBinding) -> KernelIR:
     """
     if not (binding.aliases or binding.constants or binding.collapse or binding.expressions):
         return hkir
-    respelling = {**binding.aliases, **binding.collapse}
+    respelling = transitive_rename({**binding.aliases, **binding.collapse})
+    collapse = {name: respelling[name] for name in binding.collapse}
 
     def respell(token: str) -> str:
         # Whole-dimension first: a match on the caller's recipe replaces the extent outright, and
@@ -4816,7 +4838,7 @@ def with_helper_vocabulary(hkir: KernelIR, binding: HelperBinding) -> KernelIR:
     tree = hkir.tree
     if binding.collapse:
         tree = copy.deepcopy(hkir.tree)
-        tree.body = [RenameNames(binding.collapse).visit(stmt) for stmt in tree.body]
+        tree.body = [RenameNames(collapse).visit(stmt) for stmt in tree.body]
     retired = {*binding.aliases, *binding.collapse}
     arrays = [dataclasses.replace(a, shape=tuple(respell(dim) for dim in a.shape)) for a in hkir.arrays]
     return dataclasses.replace(
