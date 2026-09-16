@@ -257,6 +257,54 @@ def test_distribution_gives_a_compiler_baseline_a_different_color_than_a_dace_co
     assert len(set(lines_by_label.values())) == len(lines_by_label), lines_by_label
 
 
+def test_columns_option_draws_dace_gpu_with_its_own_label(tmp_path: pathlib.Path) -> None:
+    """``--columns dace_gpu`` must both draw and label the column -- EXTRA_LABELS silently falling
+    back to the raw column name would print ``dace_gpu`` instead of a readable framework name."""
+    db_path = tmp_path / "canon.db"
+    make_db(db_path, [row("numba", "k1", 100.0), row("dace_gpu", "k1", 10.0)])
+
+    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "numba", False, columns=["dace_gpu"])
+
+    assert rc == 0
+    assert plot_canon_speedup.COLUMN_LABELS["dace_gpu"] == "DaCe parallel GPU"
+    table = (tmp_path / "out" / "canon_speedup.csv").read_text()
+    assert "DaCe parallel GPU" in table
+
+
+def test_the_measured_speedup_is_on_the_y_axis_not_the_x_axis() -> None:
+    """Rule one: a speed-up is a measured quantity and stays on Y, log-scaled. X carries the
+    CATEGORY (the compiler/framework column), which is why it is linear and ticked with names."""
+    rows = plot_canon_speedup.rows_for({"numba": {"k1": 1.0, "k2": 1.0}, "cc": {"k1": 2.0, "k2": 0.5}}, "numba", ["cc"])
+
+    fig, ax = plot_canon_speedup.draw(rows, "numba", False)
+
+    try:
+        assert ax.get_yscale() == "log"
+        assert ax.get_xscale() == "linear"
+        labels = [tick.get_text() for tick in ax.get_xticklabels()]
+        assert labels == ["sequential C, one thread  (n=2)"]
+    finally:
+        plt.close(fig)
+
+
+def test_neither_figure_draws_an_axes_legend_or_a_minor_grid() -> None:
+    """One legend on the FIGURE, never ``ax.legend`` (rule five); major grid only (rule four)."""
+    rows = plot_canon_speedup.rows_for({"numba": {"k1": 1.0}, "cc": {"k1": 2.0}}, "numba", ["cc"])
+    times = {"numba": {"k1": 1.0, "k2": 1.0}, "cc": {"k1": 2.0, "k2": 0.5}}
+
+    bar_fig, bar_ax = plot_canon_speedup.draw(rows, "numba", False)
+    dist_fig, dist_ax = plot_canon_speedup.draw_distribution(times, "numba", ["cc"], False)
+    try:
+        for fig, ax in ((bar_fig, bar_ax), (dist_fig, dist_ax)):
+            assert ax.get_legend() is None
+            assert len(fig.legends) == 1
+            assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
+            assert not [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
+    finally:
+        plt.close(bar_fig)
+        plt.close(dist_fig)
+
+
 def test_distribution_option_draws_a_second_figure(tmp_path: pathlib.Path) -> None:
     db_path = tmp_path / "canon.db"
     make_db(

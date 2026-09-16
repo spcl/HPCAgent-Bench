@@ -84,6 +84,22 @@ class NoBaselineRows(ValueError):
 #: Seed for every per-cell bootstrap so the same DB yields the same published figure.
 CI_SEED: int = 0
 
+#: STATISTIC colours for the per-sample diagnostic panels (the sample's own histogram/ECDF/violin,
+#: a fitted curve, the raw jittered points, the QQ reference line) -- not entity colours:
+#: palette.py reserves colour for a packet, a framework or a model, and none of these marks is one
+#: of those, the same precedent ``scripts/plot_canon_speedup.py``'s MEDIAN_HUE/GEOMEAN_HUE sets.
+SAMPLE_HUE: str = "#2a78d6"
+FITTED_HUE: str = "#d64550"
+RAW_POINT_HUE: str = "#1baf7a"
+QQ_REFERENCE_HUE: str = "#8a8a86"
+
+#: These dense, many-cell figures (a per-kernel grid, a two-panel diagnostic) would crowd under
+#: print-scale type -- their titles/labels/legend text trace to the shared :mod:`style` constants
+#: at these named fractions instead of each being its own bare literal.
+DENSE_SCALE: float = 0.5
+CELL_SCALE: float = 0.6
+TICK_SCALE: float = 0.43
+
 #: The speed-up denominator. Named here because it is not just another series: every ratio in the
 #: heatmap divides by it, so it has to survive :func:`load_results` under its own name.
 #:
@@ -401,7 +417,14 @@ def draw_group_labels(ax: Axes, spans: Sequence[GroupSpan], x_right: float) -> N
             ax.axhline(span.start - 0.5, color="0.15", linewidth=1.1)
         mid = (span.start + span.end - 1) / 2.0
         ax.text(  # pyright: ignore[reportUnknownMemberType] -- matplotlib takes untyped **kwargs
-            x_right, mid, span.label, ha="left", va="center", rotation=90, fontsize=7, clip_on=False
+            x_right,
+            mid,
+            span.label,
+            ha="left",
+            va="center",
+            rotation=90,
+            fontsize=style.ANNOTATION_PT * DENSE_SCALE,
+            clip_on=False,
         )
 
 
@@ -541,9 +564,25 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
     for j in range(len(overall_wide.columns)):
         if j < len(overall_wide.columns) - 1:
             ratio = totals[0, j]
-            ax2.text(j, 0, abbreviate_speedup(ratio), ha="center", va="center", color=ink_for(ratio), fontsize=8)
+            ax2.text(
+                j,
+                0,
+                abbreviate_speedup(ratio),
+                ha="center",
+                va="center",
+                color=ink_for(ratio),
+                fontsize=style.ANNOTATION_PT * CELL_SCALE,
+            )
         else:
-            ax2.text(j, 0, abbreviate_runtime(total_baseline[0]), ha="center", va="center", color="white", fontsize=8)
+            ax2.text(
+                j,
+                0,
+                abbreviate_runtime(total_baseline[0]),
+                ha="center",
+                va="center",
+                color="white",
+                fontsize=style.ANNOTATION_PT * CELL_SCALE,
+            )
 
     hm_data: pd.DataFrame = best_wide.drop(["benchmark", "domain"], axis=1)
     ratios = cast("FloatArray", hm_data.to_numpy())
@@ -561,13 +600,29 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
     for i in range(len(names)):
         for j in range(len(columns)):
             if j == len(columns) - 1:
-                ax1.text(j, i, abbreviate_runtime(base_times[i]), ha="center", va="center", color="black", fontsize=8)
+                ax1.text(
+                    j,
+                    i,
+                    abbreviate_runtime(base_times[i]),
+                    ha="center",
+                    va="center",
+                    color="black",
+                    fontsize=style.ANNOTATION_PT * CELL_SCALE,
+                )
                 continue
             ratio = ratios[i, j]
             if math.isnan(ratio):
                 continue  # NaN cell renders blank
             ci = ci_superscript(summary, names[i], columns[j])
-            ax1.text(j, i, abbreviate_speedup(ratio) + ci, ha="center", va="center", color=ink_for(ratio), fontsize=8)
+            ax1.text(
+                j,
+                i,
+                abbreviate_speedup(ratio) + ci,
+                ha="center",
+                va="center",
+                color=ink_for(ratio),
+                fontsize=style.ANNOTATION_PT * CELL_SCALE,
+            )
 
     # Group separators + right-side y-axis group text (structured grids / tsvc2 / machine_learning / ...).
     draw_group_labels(ax1, spans, x_right=len(columns) - 0.35)
@@ -701,10 +756,10 @@ def distribution_figure(
         ax.set_xlim(-0.6, nslots - 0.4)  # CONSTANT across panels
         ax.set_xticks(range(nslots))
         ax.set_xticklabels([])  # framework identity lives in the shared legend, not per panel
-        ax.set_title(kernel, fontsize=7)
-        ax.tick_params(axis="y", labelsize=6)
+        ax.set_title(kernel, fontsize=style.ANNOTATION_PT * DENSE_SCALE)
+        ax.tick_params(axis="y", labelsize=style.TICK_PT * TICK_SCALE)
         if idx % ncols == 0:
-            ax.set_ylabel("time (ms)", fontsize=7)
+            ax.set_ylabel("Time (ms)", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
 
     # Blank any unused cells in the last row.
     for idx in range(len(ordered), nrows * ncols):
@@ -713,7 +768,13 @@ def distribution_figure(
     # One shared framework legend (colour -> framework), above the grid.
     handles = [Rectangle((0, 0), 1, 1, color=colors[fw]) for fw in slots]
     fig.legend(  # pyright: ignore[reportUnknownMemberType] -- matplotlib takes untyped **kwargs
-        handles, slots, loc="upper center", ncol=min(nslots, 6), bbox_to_anchor=(0.5, 1.02), fontsize=7, frameon=False
+        handles,
+        slots,
+        loc="upper center",
+        ncol=min(nslots, 6),
+        bbox_to_anchor=(0.5, 1.02),
+        fontsize=style.ANNOTATION_PT * DENSE_SCALE,
+        frameon=False,
     )
 
     plt.tight_layout()
@@ -724,7 +785,7 @@ def draw_interval_band(
     ax: Axes,
     interval: inference.Interval,
     orientation: Literal["horizontal", "vertical"] = "horizontal",
-    color: str = "#d64550",
+    color: str = FITTED_HUE,
 ) -> None:
     """Shade an :class:`~hpcagent_bench.stats.inference.Interval` on ``ax`` and mark its point estimate.
 
@@ -789,59 +850,61 @@ def plot_sample_diagnostics(
     fitted_handle: Line2D | None = None
     if verdict.normal:
         bins = max(10, min(40, int(math.sqrt(x.size))))
-        ax_left.hist(x, bins=bins, density=True, color="#2a78d6", alpha=0.55, edgecolor="white", linewidth=0.4)
+        ax_left.hist(x, bins=bins, density=True, color=SAMPLE_HUE, alpha=0.55, edgecolor="white", linewidth=0.4)
         grid: FloatArray = np.linspace(float(x.min()), float(x.max()), 256)
         mu, sigma = float(np.mean(x)), float(np.std(x, ddof=1))
         if sigma > 0:  # a fitted curve is drawn ONLY on this branch
             density = cast("FloatArray", norm.pdf(grid, mu, sigma))
-            (fitted_handle,) = ax_left.plot(grid, density, color="#d64550", linewidth=1.4, label="fitted normal")
+            (fitted_handle,) = ax_left.plot(grid, density, color=FITTED_HUE, linewidth=1.4, label="Fitted Normal")
         draw_interval_band(ax_left, interval)
-        ax_left.set_xlabel(f"time ({units})", fontsize=7)
-        ax_left.set_ylabel("density", fontsize=7)
+        ax_left.set_xlabel(f"Time ({units})", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
+        ax_left.set_ylabel("Density", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
 
         # QQ panel: the tails the histogram hides.
         ordered = np.sort(x)
         offset = 0.375 if ordered.size <= 10 else 0.5
         probs = (np.arange(1, ordered.size + 1) - offset) / (ordered.size + 1 - 2 * offset)
         theoretical = cast("FloatArray", norm.ppf(probs)) * sigma + mu
-        ax_right.plot(theoretical, ordered, marker="o", linestyle="none", markersize=2.4, color="#2a78d6")
+        ax_right.plot(theoretical, ordered, marker="o", linestyle="none", markersize=2.4, color=SAMPLE_HUE)
         lims = [float(min(theoretical.min(), ordered.min())), float(max(theoretical.max(), ordered.max()))]
-        ax_right.plot(lims, lims, color="#8a8a86", linewidth=0.9, linestyle="--")
-        ax_right.set_xlabel(f"theoretical quantile ({units})", fontsize=7)
-        ax_right.set_ylabel(f"sample quantile ({units})", fontsize=7)
-        ax_right.set_title(f"QQ vs normal (1-$r^2$ = {verdict.qq_departure:.2g})", fontsize=7)
+        ax_right.plot(lims, lims, color=QQ_REFERENCE_HUE, linewidth=0.9, linestyle="--")
+        ax_right.set_xlabel(f"Theoretical Quantile ({units})", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
+        ax_right.set_ylabel(f"Sample Quantile ({units})", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
+        ax_right.set_title(
+            f"QQ vs Normal (1-$r^2$ = {verdict.qq_departure:.2g})", fontsize=style.ANNOTATION_PT * DENSE_SCALE
+        )
     else:
         # ECDF: every sample visible, no binning choice, no implied smooth density.
         ordered_samples = np.sort(x)
         ecdf: FloatArray = np.arange(1, ordered_samples.size + 1) / ordered_samples.size
-        ax_left.step(ordered_samples, ecdf, where="post", color="#2a78d6", linewidth=1.2)
+        ax_left.step(ordered_samples, ecdf, where="post", color=SAMPLE_HUE, linewidth=1.2)
         draw_interval_band(ax_left, interval)
-        ax_left.set_xlabel(f"time ({units})", fontsize=7)
-        ax_left.set_ylabel("ECDF", fontsize=7)
+        ax_left.set_xlabel(f"Time ({units})", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
+        ax_left.set_ylabel("ECDF", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
         ax_left.set_ylim(0.0, 1.0)
 
         parts = ax_right.violinplot([x], positions=[0], widths=0.8, showmedians=True, showextrema=False)
         for body in parts["bodies"]:
-            body.set_facecolor("#2a78d6")
-            body.set_edgecolor("#2a78d6")
+            body.set_facecolor(SAMPLE_HUE)
+            body.set_edgecolor(SAMPLE_HUE)
             body.set_alpha(0.45)
         if "cmedians" in parts:
             parts["cmedians"].set_color("black")
             parts["cmedians"].set_linewidth(0.8)
         jitter: FloatArray = np.random.default_rng(CI_SEED).uniform(-0.16, 0.16, x.size)  # raw points, never hidden
-        ax_right.plot(jitter, x, marker="o", linestyle="none", markersize=2.0, color="#1baf7a", alpha=0.7)
+        ax_right.plot(jitter, x, marker="o", linestyle="none", markersize=2.0, color=RAW_POINT_HUE, alpha=0.7)
         draw_interval_band(ax_right, interval, orientation="vertical")
         ax_right.set_xticks([])
         ax_right.set_xlim(-0.6, 0.6)
-        ax_right.set_ylabel(f"time ({units})", fontsize=7)
-        ax_right.set_title("raw samples", fontsize=7)
+        ax_right.set_ylabel(f"Time ({units})", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
+        ax_right.set_title("Raw Samples", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
 
-    ax_left.set_title(interval.label(), fontsize=7)  # parametric vs bootstrap, stated outright
+    ax_left.set_title(interval.label(), fontsize=style.ANNOTATION_PT * DENSE_SCALE)  # parametric vs bootstrap
     for ax in (ax_left, ax_right):
-        ax.tick_params(axis="both", labelsize=6)
-    fig.suptitle(f"{head} -- n={verdict.n}, {verdict.reason}", fontsize=7)
+        ax.tick_params(axis="both", labelsize=style.TICK_PT * TICK_SCALE)
+    fig.suptitle(f"{head} -- n={verdict.n}, {verdict.reason}", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
     if fitted_handle is not None:
-        style.legend_below(fig, [fitted_handle], fontsize=6, y=0.02)
+        style.legend_below(fig, [fitted_handle], fontsize=style.TICK_PT * TICK_SCALE, y=0.02)
     plt.tight_layout()
     return save_figure(output, fig)
 

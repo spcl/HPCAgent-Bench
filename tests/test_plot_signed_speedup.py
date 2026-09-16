@@ -528,7 +528,7 @@ def test_the_square_figure_groups_both_agents_on_one_axis(tmp_path: pathlib.Path
         assert band not in body, f"band title {band!r} leaked into a single-band panel"
     for framework in speedup.DEMO_FRAMEWORKS:
         assert framework in body, f"the legend must name {framework!r}"
-    assert "speedup" in body, "the y axis must say what it measures"
+    assert "Speedup" in body, "the y axis must say what it measures"
 
 
 def test_the_square_figure_is_square() -> None:
@@ -550,7 +550,7 @@ def test_the_bare_simple_figure_clears_the_LEFT_title_not_just_the_centre(tmp_pa
         assert band not in body, f"band title {band!r} survived --bare"
     for framework in speedup.DEMO_FRAMEWORKS:
         assert framework not in body, f"legend text {framework!r} survived --bare"
-    assert "signed relative change" not in body, "the y label survived --bare"
+    assert "Signed Relative Change" not in body, "the y label survived --bare"
     for kernel, _low, _high, _sign in speedup.DEMO_CELLS:
         assert f">{kernel}<" not in body, f"kernel name {kernel!r} survived --bare"
 
@@ -587,3 +587,46 @@ def test_the_square_figure_shows_a_slow_down_when_its_band_has_one() -> None:
     changes = [points[(k, f)].change for k in kernels for f in speedup.DEMO_FRAMEWORKS]
     assert any(change < 0.0 for change in changes), "no regression is shown"
     assert any(change > 0.0 for change in changes), "no speed-up is shown"
+
+
+def test_neither_the_square_nor_the_banded_figure_draws_an_axes_legend(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """One legend on the FIGURE, never ``ax.legend`` (rule five): both figures share a framework
+    key, and a key drawn per axes invites reading two panels as two different sets of series."""
+    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+
+    captured: List[Figure] = []
+
+    def spy(path: str, fig: Figure) -> str:
+        captured.append(fig)
+        return path
+
+    monkeypatch.setattr(plotting, "save_figure", spy)
+    points = speedup.demo_points()
+    kernels = speedup.plotted_kernels(points)
+    speedup.square_figure(points, str(tmp_path / "square.svg"))
+    speedup.banded_figure(points, kernels, str(tmp_path / "banded.svg"))
+
+    try:
+        assert len(captured) == 2
+        for fig in captured:
+            assert all(ax.get_legend() is None for ax in fig.axes)
+            assert len(fig.legends) == 1
+    finally:
+        for fig in captured:
+            plt.close(fig)
+
+
+def test_grid_and_reference_lines_come_from_the_shared_style_module() -> None:
+    """No literal grey: the panel grid and the zero-reference line both trace to
+    :mod:`hpcagent_bench.stats.style`, the one place ink that is never data is decided."""
+    import inspect
+
+    from hpcagent_bench.stats import style as plotstyle
+
+    source = inspect.getsource(speedup)
+    assert 'color="0.85"' not in source, "grid colour must come from style.RULE"
+    assert 'color="0.35"' not in source, "zero-reference colour must come from style.REFERENCE"
+    assert plotstyle.RULE and plotstyle.REFERENCE  # the constants this module now draws with

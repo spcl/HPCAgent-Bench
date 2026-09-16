@@ -13,9 +13,11 @@ import matplotlib
 import pytest
 
 matplotlib.use("Agg")  # before any pyplot import -- a headless test must never touch a display
+import matplotlib.pyplot as plt  # noqa: E402
+import pandas as pd  # noqa: E402
 
-from hpcagent_bench import paths
-from hpcagent_bench.metrics import parallelism
+from hpcagent_bench import paths  # noqa: E402
+from hpcagent_bench.metrics import parallelism  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location("plot_parallelism", paths.ROOT / "scripts" / "plot_parallelism.py")
 plot_parallelism = importlib.util.module_from_spec(SPEC)
@@ -127,6 +129,34 @@ def test_a_rerun_writes_byte_identical_outputs(tmp_path: pathlib.Path, monkeypat
 
     for name in ("parallelism.pdf", "parallelism.png", "parallelism.csv"):
         assert (tmp_path / "first" / name).read_bytes() == (tmp_path / "second" / name).read_bytes(), name
+
+
+def test_the_construct_share_is_on_the_y_axis_and_the_column_is_on_x() -> None:
+    """Rule one: the share is the measured quantity and belongs on Y. X carries the CATEGORY --
+    one DaCe column per bar, its name rotated rather than the figure turned on its side."""
+    by_column = parallelism.read_records(pd.DataFrame(list(SAMPLE_ROWS), columns=FIELDS))
+    fig, ax = plot_parallelism.draw(list(plot_parallelism.DEFAULT_COLUMNS), by_column, False)
+    try:
+        assert ax.get_yscale() == "linear"
+        assert ax.get_xscale() == "linear"
+        labels = [tick.get_text() for tick in ax.get_xticklabels()]
+        assert labels == list(plot_parallelism.DEFAULT_COLUMNS)
+    finally:
+        plt.close(fig)
+
+
+def test_neither_a_minor_grid_nor_an_axes_legend_is_drawn() -> None:
+    """Major grid only (rule four) on the value axis, and one legend on the FIGURE, never
+    ``ax.legend`` on the panel (rule five)."""
+    by_column = parallelism.read_records(pd.DataFrame(list(SAMPLE_ROWS), columns=FIELDS))
+    fig, ax = plot_parallelism.draw(list(plot_parallelism.DEFAULT_COLUMNS), by_column, False)
+    try:
+        assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
+        assert not [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
+        assert ax.get_legend() is None
+        assert len(fig.legends) == 1
+    finally:
+        plt.close(fig)
 
 
 def test_segment_counts_sum_to_the_aggregate_total() -> None:
