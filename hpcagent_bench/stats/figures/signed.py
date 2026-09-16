@@ -547,7 +547,7 @@ def geomean_interval_of(
     return interval
 
 
-def style_log2_speedup_y_axis(ax: Axes, ratios: Sequence[float]) -> None:
+def style_log2_speedup_y_axis(ax: Axes, ratios: Sequence[float], reference_color: str = style.REFERENCE) -> None:
     """The speed-up panel's Y axis: LOG2 GEOMETRY (every doubling the same distance apart,
     :func:`~hpcagent_bench.stats.summary.log2_change`), ticks and labels read back in RATIOS
     (:func:`~hpcagent_bench.stats.figures.per_kernel.speedup_tick_label`) so the axis still READS
@@ -560,7 +560,7 @@ def style_log2_speedup_y_axis(ax: Axes, ratios: Sequence[float]) -> None:
     ax.set_yticks(positions)
     ax.set_yticklabels([speedup_tick_label(tick) for tick in ticks], fontsize=style.TICK_PT * 0.6)
     ax.set_ylim(positions[0] - 0.3, positions[-1] + 0.3)
-    ax.axhline(0.0, color=style.REFERENCE, linewidth=0.9, zorder=1)
+    ax.axhline(0.0, color=reference_color, linewidth=0.9, zorder=1)
     ax.grid(axis="y", which="major", color=style.RULE, linewidth=0.7, zorder=0)
     ax.set_axisbelow(True)
 
@@ -568,19 +568,19 @@ def style_log2_speedup_y_axis(ax: Axes, ratios: Sequence[float]) -> None:
 #: The llr-focus40 figure is drawn at the size it prints: one text-width row
 #: (:data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH`), every font in real points, so the page
 #: never rescales it. The panel height is what 40 kernels need to read, not what the canvas can spare.
-LLR40_PANEL_HEIGHT_IN: float = 1.2
+LLR40_PANEL_HEIGHT_IN: float = 1.5
 LLR40_TEXT_PT: float = 6.5
 LLR40_LEGEND_PT: float = 6.5
 
 #: A drawn mark's diameter in points: small enough that two optimizers on one kernel at nearby
 #: speed-ups still show both shapes.
-LLR40_MARK_PT: float = 3.4
+LLR40_MARK_PT: float = 4.0
 
 #: Length of an x tick in points: every kernel slot and the summary slot get one.
 LLR40_TICK_LEN_PT: float = 2.5
 
 #: A legend mark's size in points at :data:`LLR40_LEGEND_PT`, before the legend's own markerscale.
-LLR40_LEGEND_MARK_PT: float = 3.4
+LLR40_LEGEND_MARK_PT: float = 4.0
 
 #: Inches left of the value axis (tick labels, axis label), right of the summary values, above the
 #: top panel, and between two panels.
@@ -691,7 +691,10 @@ def llr40_figure(
     fig, axes = plt.subplots(n_panels, 1, sharex=True, figsize=(width, 3.0), squeeze=False)
     speedup_ax = axes[0][0]
     token_ax = axes[1][0] if has_tokens else None
-    style_log2_speedup_y_axis(speedup_ax, [v for row in rows for v in row.ratios.values()])
+    # the 1x line IS the baseline, so it wears the baseline framework's own colour
+    style_log2_speedup_y_axis(
+        speedup_ax, [v for row in rows for v in row.ratios.values()], palette.framework_color(baseline)
+    )
     kernel_comparison.draw_panel(
         speedup_ax, kernels, speedup_series, lambda s: s.values, 1.0, geomean_reducer, "",
         not has_tokens, size,
