@@ -14,6 +14,7 @@ import importlib.util
 import math
 import pathlib
 import sys
+import types
 
 import pandas as pd
 import pytest
@@ -25,7 +26,7 @@ from hpcagent_bench.stats import style as plotstyle
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
-def load_script():
+def load_script() -> types.ModuleType:
     """Import ``scripts/plot_arm_summary.py`` as a module (scripts/ is not a package)."""
     spec = importlib.util.spec_from_file_location("plot_arm_summary", REPO / "scripts" / "plot_arm_summary.py")
     assert spec is not None and spec.loader is not None

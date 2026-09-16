@@ -319,13 +319,18 @@ def test_the_plan_reads_as_the_steps_that_build_the_view(tmp_path: pathlib.Path,
     (shared / "prompt.md").write_text("prompt\n", encoding="utf-8")
     workdir = tmp_path / "run" / "agents" / "node-0" / "problem-3-worker-0"
     workdir.mkdir(parents=True)
+    # apply_plan's tmpfs step makes the mount point for real (make_target is not part of the
+    # Syscalls seam), so the hidden path must be one this test is allowed to create -- a literal
+    # "/users" would have apply_plan mkdir the real filesystem root, which is a real production
+    # path (host_home_root() in agent_driver.py) but not one a test may touch.
+    host_home = tmp_path / "users"
     layout = seal.Layout(
         workdir=str(workdir),
         agent_dir=str(shared / "agent-3"),
         task_dir=str(shared / "tasks" / "argmax_value"),
         shared=str(shared),
         run_dir=str(tmp_path / "run"),
-        hide=("/users",),
+        hide=(str(host_home),),
     )
     plan = seal.seal_plan(layout, seal.shared_root_entries(shared))
     calls: list[tuple[str | None, str, str | None, int]] = []
@@ -338,7 +343,7 @@ def test_the_plan_reads_as_the_steps_that_build_the_view(tmp_path: pathlib.Path,
     targets = [call[1] for call in calls]
     assert targets[0] == "/tmp"
     assert targets.index(seal.STASH_DIR) < targets.index(str(tmp_path / "run"))
-    assert targets[-1] == "/users"
+    assert targets[-1] == str(host_home)
     binds = {call[1]: call for call in calls if call[3] == seal.MS_BIND | seal.MS_REC}
     assert binds[f"{seal.VIEW_DIR}/agent-3"][0] == str(shared / "agent-3")
     assert binds[str(shared)][0] == seal.VIEW_DIR, "the finished view becomes the shared mount"

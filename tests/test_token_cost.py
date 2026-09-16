@@ -90,7 +90,7 @@ def load_http_json() -> ModuleType:
 
 
 def test_a_legacy_dir_without_attempts_jsonl_also_counts_only_its_final_attempt(
-    token_cost, tmp_path: pathlib.Path
+    token_cost: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """PROPERTY CHANGED on purpose: this asserted the sum over attempts. One rule holds for every
     directory now, old runs included -- the last agent ran the task from nothing to its end, so the
@@ -110,7 +110,9 @@ def test_a_legacy_dir_without_attempts_jsonl_also_counts_only_its_final_attempt(
     assert totals.tokens_billed_crashed == 1000
 
 
-def test_a_legacy_dirs_final_attempt_starts_when_the_crash_was_moved_aside(token_cost, tmp_path: pathlib.Path) -> None:
+def test_a_legacy_dirs_final_attempt_starts_when_the_crash_was_moved_aside(
+    token_cost: ModuleType, tmp_path: pathlib.Path
+) -> None:
     """Old runs carry no ledger, so the cut X7 applies comes from the rename: the moved-aside
     transcript was renamed while the crash was handled, which is where the final attempt began."""
     crashed = tmp_path / "claude.attempt1.log"
@@ -122,7 +124,7 @@ def test_a_legacy_dirs_final_attempt_starts_when_the_crash_was_moved_aside(token
 
 
 def test_a_fresh_relaunched_task_counts_only_its_final_attempt_and_reports_the_rest_as_crashed(
-    token_cost, tmp_path: pathlib.Path
+    token_cost: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """T5: the relaunch wiped the workspace, so attempt 1 built no part of what attempt 2 was graded
     on. Its spend is real and is reported as crashed; the ledger states when attempt 2 began."""
@@ -138,7 +140,7 @@ def test_a_fresh_relaunched_task_counts_only_its_final_attempt_and_reports_the_r
     assert totals.final_attempt_start_ms == 2_000
 
 
-def test_a_single_attempt_tasks_total_is_that_attempts_own(token_cost, tmp_path: pathlib.Path) -> None:
+def test_a_single_attempt_tasks_total_is_that_attempts_own(token_cost: ModuleType, tmp_path: pathlib.Path) -> None:
     write_claude_log(tmp_path / "claude.log", input_tokens=500, output_tokens=50)
 
     totals = token_cost.task_totals(tmp_path)
@@ -148,7 +150,9 @@ def test_a_single_attempt_tasks_total_is_that_attempts_own(token_cost, tmp_path:
     assert totals.tokens_billed == 500
 
 
-def test_effective_comes_from_episode_cost_not_a_reimplementation(token_cost, tmp_path: pathlib.Path) -> None:
+def test_effective_comes_from_episode_cost_not_a_reimplementation(
+    token_cost: ModuleType, tmp_path: pathlib.Path
+) -> None:
     """The per-attempt effective figure must be exactly ``episode_cost(log)["effective"]`` summed,
     the one implementation of the cost model -- not a second copy that can drift from it."""
     write_claude_log(tmp_path / "claude.attempt1.log", input_tokens=900, output_tokens=10)
@@ -163,7 +167,9 @@ def test_effective_comes_from_episode_cost_not_a_reimplementation(token_cost, tm
     assert totals.tokens_effective_crashed == effective("claude.attempt1.log")
 
 
-def test_billed_comes_from_accumulate_total_tokens_not_a_reimplementation(token_cost, tmp_path: pathlib.Path) -> None:
+def test_billed_comes_from_accumulate_total_tokens_not_a_reimplementation(
+    token_cost: ModuleType, tmp_path: pathlib.Path
+) -> None:
     """The per-attempt billed figure must be exactly ``accumulate_total_tokens``'s fold, folded
     fresh per attempt -- the same fold the driver's token-budget watcher uses."""
     write_claude_log(tmp_path / "claude.attempt1.log", input_tokens=900, output_tokens=10)
@@ -178,7 +184,9 @@ def test_billed_comes_from_accumulate_total_tokens_not_a_reimplementation(token_
     assert totals.tokens_billed_crashed == folded("claude.attempt1.log")
 
 
-def test_skipping_lines_that_cannot_carry_usage_changes_no_total(token_cost, tmp_path: pathlib.Path) -> None:
+def test_skipping_lines_that_cannot_carry_usage_changes_no_total(
+    token_cost: ModuleType, tmp_path: pathlib.Path
+) -> None:
     """The fold decodes only lines that can hold usage, to avoid parsing megabytes of tool output. A
     line that merely mentions "assistant" is decoded and rejected, stderr and a half-written tail are
     skipped, and every real turn, thinking delta and result is still read -- so the totals are the
@@ -209,7 +217,7 @@ def test_skipping_lines_that_cannot_carry_usage_changes_no_total(token_cost, tmp
 
 
 def test_the_streamed_thinking_estimate_is_reported_but_never_added_to_the_effective_total(
-    token_cost, tmp_path: pathlib.Path
+    token_cost: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """Both engines' ``/v1/messages`` fills ``output_tokens`` with EVERY generated token -- reasoning,
     answer text and tool arguments alike -- so adding the client's ``estimated_tokens_delta`` on top
@@ -239,7 +247,7 @@ def test_the_streamed_thinking_estimate_is_reported_but_never_added_to_the_effec
 
 
 def test_an_episode_whose_server_never_reported_output_says_so_instead_of_claiming_zero(
-    token_cost, tmp_path: pathlib.Path
+    token_cost: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """A timed-out episode has no ``result`` record, and the per-turn events carry output_tokens: 0
     on these endpoints -- so its output is unknown, not measured as nothing. ``output_source`` says
@@ -285,7 +293,7 @@ def message_delta(output_tokens: int) -> str:
     )
 
 
-def test_per_request_usage_outranks_the_episodes_result_record(token_cost, tmp_path: pathlib.Path) -> None:
+def test_per_request_usage_outranks_the_episodes_result_record(token_cost: ModuleType, tmp_path: pathlib.Path) -> None:
     """PRECEDENCE (8.2). ``--include-partial-messages`` makes the server report each REQUEST's
     output as it finishes, which is the only exact count an episode killed at its wall leaves
     behind. Where both exist the per-request sum wins: it is the same server counting the same
@@ -314,7 +322,7 @@ def test_per_request_usage_outranks_the_episodes_result_record(token_cost, tmp_p
     assert cost["effective"] == 1500 + 200
 
 
-def test_a_killed_episode_still_has_its_per_request_counts(token_cost, tmp_path: pathlib.Path) -> None:
+def test_a_killed_episode_still_has_its_per_request_counts(token_cost: ModuleType, tmp_path: pathlib.Path) -> None:
     """The reason for the flag: no result record, and the output is still the server's own number."""
     log = tmp_path / "claude.log"
     log.write_text(
@@ -327,7 +335,9 @@ def test_a_killed_episode_still_has_its_per_request_counts(token_cost, tmp_path:
     assert (cost["output"], cost["output_source"]) == (140, "message_delta")
 
 
-def test_per_chunk_increments_are_summed_and_a_running_total_is_not(token_cost, tmp_path: pathlib.Path) -> None:
+def test_per_chunk_increments_are_summed_and_a_running_total_is_not(
+    token_cost: ModuleType, tmp_path: pathlib.Path
+) -> None:
     """A message_delta's usage is the running total for its message, so several readings of one
     request are one number and not several. A CLI that streamed per-chunk increments instead would
     be counted correctly by summing -- which is what a non-monotone series gets. The shape that was
@@ -351,7 +361,7 @@ def test_per_chunk_increments_are_summed_and_a_running_total_is_not(token_cost, 
 
 
 def test_the_retokenized_tier_is_reached_only_when_the_server_counted_nothing(
-    token_cost, tmp_path: pathlib.Path
+    token_cost: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """The model's own tokenizer is the LAST tier: it counts what the transcript says was generated,
     which is the model's work but not the server's arithmetic (2-4 percent low, measured). So it is
@@ -367,7 +377,9 @@ def test_the_retokenized_tier_is_reached_only_when_the_server_counted_nothing(
     assert (kept["output"], kept["output_source"]) == (50, "result")
 
 
-def test_a_counter_that_cannot_count_leaves_the_output_unmeasured(token_cost, tmp_path: pathlib.Path) -> None:
+def test_a_counter_that_cannot_count_leaves_the_output_unmeasured(
+    token_cost: ModuleType, tmp_path: pathlib.Path
+) -> None:
     """A model whose tokenizer is not in the offline cache gives None, not 0: an attempt nobody
     could count must keep saying so rather than join the measurements at zero."""
     killed = tmp_path / "claude.log"
@@ -379,7 +391,7 @@ def test_a_counter_that_cannot_count_leaves_the_output_unmeasured(token_cost, tm
 
 
 def test_a_result_record_the_transcripts_own_content_overflows_is_flagged_not_replaced(
-    token_cost, tmp_path: pathlib.Path
+    token_cost: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """F9: on Qwen/SGLang some complete episodes report a result total far below what the transcript
     demonstrably contains -- 6,918 against 32,720 retokenized in the worst measured case, with every
@@ -395,7 +407,7 @@ def test_a_result_record_the_transcripts_own_content_overflows_is_flagged_not_re
     assert fine["output_suspect"] == 0.0
 
 
-def test_the_clis_synthetic_placeholder_turn_is_not_a_turn(token_cost, tmp_path: pathlib.Path) -> None:
+def test_the_clis_synthetic_placeholder_turn_is_not_a_turn(token_cost: ModuleType, tmp_path: pathlib.Path) -> None:
     """When the endpoint answers nothing the CLI appends its own assistant message, model
     ``<synthetic>``, carrying a usage block of zeros. Folded as a turn it says the context shrank to
     nothing, so the next real turn's whole prompt is charged as fresh a second time -- and it ends
@@ -428,7 +440,7 @@ def test_the_clis_synthetic_placeholder_turn_is_not_a_turn(token_cost, tmp_path:
     assert cost["effective"] == 1500 + 70
 
 
-def test_a_runner_harnesss_output_counts_its_reasoning_once(token_cost, tmp_path: pathlib.Path) -> None:
+def test_a_runner_harnesss_output_counts_its_reasoning_once(token_cost: ModuleType, tmp_path: pathlib.Path) -> None:
     """The runner splits what the chat-completions API reports as one number: ``completion_tokens``
     counts every generated token in both engines, and ``runner_common.usage_line`` writes it out as
     ``output`` (without reasoning) plus ``reasoning``. So the episode's output is their SUM -- the
@@ -444,7 +456,7 @@ def test_a_runner_harnesss_output_counts_its_reasoning_once(token_cost, tmp_path
 
 
 def test_the_budget_fold_reads_a_partial_message_transcript_as_it_read_the_old_one(
-    token_cost, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    token_cost: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``--include-partial-messages`` adds stream_event lines to every new transcript, and the token
     cap the agent is killed on folds that same file inside the container (``http_json``). The new
@@ -467,14 +479,14 @@ def test_the_budget_fold_reads_a_partial_message_transcript_as_it_read_the_old_o
     assert load_http_json().transcript_tokens() == 1000 + 1500
 
 
-def test_the_container_tool_and_the_analysis_bill_a_turn_for_the_same_usage_fields(token_cost) -> None:
+def test_the_container_tool_and_the_analysis_bill_a_turn_for_the_same_usage_fields(token_cost: ModuleType) -> None:
     """``containers/agent/tools/http_json.py`` ships standalone in the agent image and repeats this
     list rather than importing it (its own comment says so). A copy that drifts makes the token cap
     the agent is killed on and the cost the analysis reports two different quantities, silently."""
     assert load_http_json().USAGE_FIELDS == token_cost.USAGE_FIELDS
 
 
-def test_a_worker_dir_without_a_transcript_has_no_token_total(token_cost, tmp_path: pathlib.Path) -> None:
+def test_a_worker_dir_without_a_transcript_has_no_token_total(token_cost: ModuleType, tmp_path: pathlib.Path) -> None:
     """A worker directory the driver never entered is not a task that cost 0 tokens -- it has no
     measurement at all, same as R7 treats a missing kernel token total."""
     totals = token_cost.task_totals(tmp_path)
@@ -484,7 +496,9 @@ def test_a_worker_dir_without_a_transcript_has_no_token_total(token_cost, tmp_pa
     assert totals.tokens_billed is None
 
 
-def test_a_runner_harnesss_totals_come_from_its_final_attempts_usage_file(token_cost, tmp_path: pathlib.Path) -> None:
+def test_a_runner_harnesss_totals_come_from_its_final_attempts_usage_file(
+    token_cost: ModuleType, tmp_path: pathlib.Path
+) -> None:
     """A non-Claude harness (mini-SWE, OpenHands, Optimas) leaves ``usage.jsonl`` per attempt, moved
     aside on a crash the same way ``claude.log`` is (harnesses.py's ``records``), and is read under
     the same rule: the final attempt is the task, the earlier ones are crashed spend."""
@@ -502,5 +516,7 @@ def test_a_runner_harnesss_totals_come_from_its_final_attempts_usage_file(token_
     ("name", "expected"),
     [("usage.jsonl", True), ("usage.attempt1.log", False), ("claude.log", False), ("usage.attempt3.jsonl", True)],
 )
-def test_is_usage_transcript_recognizes_a_renamed_crashed_attempt(token_cost, name: str, expected: bool) -> None:
+def test_is_usage_transcript_recognizes_a_renamed_crashed_attempt(
+    token_cost: ModuleType, name: str, expected: bool
+) -> None:
     assert token_cost.is_usage_transcript(pathlib.Path(name)) is expected

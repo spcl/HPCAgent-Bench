@@ -88,7 +88,9 @@ def run_root_fixture(tmp_path: pathlib.Path) -> pathlib.Path:
     return root
 
 
-def test_a_dry_run_reports_what_would_change_and_writes_nothing(migrate, run_root, capsys) -> None:
+def test_a_dry_run_reports_what_would_change_and_writes_nothing(
+    migrate: ModuleType, run_root: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """The default. A run root is somebody's measured data and a migration that rewrote it before
     anyone read the diff would be the only copy of the mistake."""
     before = {path: (path / "tokens.json").read_text(encoding="utf-8") for path in run_root.glob("agents/*/*")}
@@ -102,7 +104,9 @@ def test_a_dry_run_reports_what_would_change_and_writes_nothing(migrate, run_roo
         assert (path / "tokens.json").read_text(encoding="utf-8") == text
 
 
-def test_applying_rewrites_the_double_counted_effective_and_keeps_what_it_replaced(migrate, run_root) -> None:
+def test_applying_rewrites_the_double_counted_effective_and_keeps_what_it_replaced(
+    migrate: ModuleType, run_root: pathlib.Path
+) -> None:
     """Fold 2 drops the thinking estimate out of every total and keeps it beside them under its own
     name. The fold-1 numbers stay in the file: a record must not be the only copy of what it said."""
     assert migrate.main([str(run_root), "--apply", "--no-skip-running"]) == 0
@@ -121,7 +125,9 @@ def test_applying_rewrites_the_double_counted_effective_and_keeps_what_it_replac
     assert "thinking" not in done and "generated" not in done
 
 
-def test_an_episode_whose_server_reported_no_output_is_marked_rather_than_credited(migrate, run_root) -> None:
+def test_an_episode_whose_server_reported_no_output_is_marked_rather_than_credited(
+    migrate: ModuleType, run_root: pathlib.Path
+) -> None:
     """The timed-out task has no result record, so without a tokenizer fold 2 has no output for it at
     all. Its effective total becomes its context alone, and ``output_source: "none"`` says that is a
     silence and not a measurement -- this is the case where the migration moves a number the
@@ -134,7 +140,9 @@ def test_an_episode_whose_server_reported_no_output_is_marked_rather_than_credit
     assert killed["before_migration"]["effective"] == 250_283.0
 
 
-def test_migrating_an_already_migrated_tree_changes_nothing(migrate, run_root, capsys) -> None:
+def test_migrating_an_already_migrated_tree_changes_nothing(
+    migrate: ModuleType, run_root: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Idempotent, and it has to be: a migration that is not safe to re-run cannot be re-run after
     an interrupted one, which is the only time anybody wants to."""
     migrate.main([str(run_root), "--apply", "--no-skip-running"])
@@ -147,7 +155,9 @@ def test_migrating_an_already_migrated_tree_changes_nothing(migrate, run_root, c
     assert {path: record_of(path) for path in run_root.glob("agents/*/*")} == first
 
 
-def test_a_run_whose_job_is_still_queued_is_left_to_its_driver(migrate, run_root, monkeypatch, capsys) -> None:
+def test_a_run_whose_job_is_still_queued_is_left_to_its_driver(
+    migrate: ModuleType, run_root: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """The driver rewrites tokens.json as each task ends, so migrating a live run races the process
     that owns the file. The job id is the run directory's name."""
     monkeypatch.setattr(migrate, "running_job_ids", lambda: frozenset({run_root.name}))
@@ -158,7 +168,7 @@ def test_a_run_whose_job_is_still_queued_is_left_to_its_driver(migrate, run_root
     assert record_of(run_root / "agents" / "node-0" / "problem-0-worker-0")["effective"] == 104_913.0
 
 
-def test_the_migration_refolds_through_the_drivers_own_function(migrate, run_root) -> None:
+def test_the_migration_refolds_through_the_drivers_own_function(migrate: ModuleType, run_root: pathlib.Path) -> None:
     """The point of the migration is that a re-folded record and one the driver writes fresh are the
     same record. A second implementation of the arithmetic here would drift from the driver the
     first time either changed."""
@@ -171,7 +181,7 @@ def test_the_migration_refolds_through_the_drivers_own_function(migrate, run_roo
 
 
 def test_a_killed_attempt_is_refolded_from_the_models_own_tokenizer_when_one_is_named(
-    migrate, run_root, monkeypatch
+    migrate: ModuleType, run_root: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``--model`` is how a run whose launch env was not kept reaches the retokenized tier (8.2).
     The counter is stubbed, because a real one would tie this to one cluster's offline cache; what
@@ -191,7 +201,9 @@ def test_a_killed_attempt_is_refolded_from_the_models_own_tokenizer_when_one_is_
     assert done["output_suspect"] == 0.0
 
 
-def test_an_unreadable_record_is_counted_and_does_not_stop_the_walk(migrate, run_root, capsys) -> None:
+def test_an_unreadable_record_is_counted_and_does_not_stop_the_walk(
+    migrate: ModuleType, run_root: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Half a JSON object is what an interrupted write leaves. It is one file's problem, not the
     migration's."""
     broken = run_root / "agents" / "node-0" / "problem-1-worker-1" / "tokens.json"

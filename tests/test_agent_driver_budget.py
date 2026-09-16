@@ -233,7 +233,9 @@ def claude_log_content(input_tokens: int, output_tokens: int) -> str:
     return "\n".join(lines) + "\n"
 
 
-def test_tokens_json_keeps_its_old_keys_and_gains_the_relaunch_record(driver, tmp_path: pathlib.Path) -> None:
+def test_tokens_json_keeps_its_old_keys_and_gains_the_relaunch_record(
+    driver: ModuleType, tmp_path: pathlib.Path
+) -> None:
     """T1-T2/T5: tokens.json still carries the final attempt's own numbers under their old names
     unchanged -- they ARE the task's cost now -- and gains what the relaunch did to the task:
     attempts, the policy, when the final attempt started, and what the crashed ones spent.
@@ -293,7 +295,9 @@ def test_tokens_json_keeps_its_old_keys_and_gains_the_relaunch_record(driver, tm
     assert "tokens_effective_all_attempts" not in record
 
 
-def test_tokens_json_reports_one_attempt_when_the_task_never_relaunched(driver, tmp_path: pathlib.Path) -> None:
+def test_tokens_json_reports_one_attempt_when_the_task_never_relaunched(
+    driver: ModuleType, tmp_path: pathlib.Path
+) -> None:
     (tmp_path / "claude.log").write_text(claude_log_content(500, 50), encoding="utf-8")
 
     driver.write_cost_record(tmp_path / "tokens.json", {"id": 1, "kernel": "k"}, 0, 0, 500, 1, "success")

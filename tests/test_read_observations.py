@@ -59,7 +59,11 @@ def test_a_db_and_its_csv_give_the_same_rows_in_the_same_order(tmp_path: pathlib
     csv_path, db_path = write_pair(tmp_path)
     from_csv = experiments.read_observations(csv_path)
     from_db = experiments.read_observations(db_path)
-    assert list(from_db.columns) == list(FIELDS)
+    # fill_arm_identity (run by read_observations on both paths) appends recorded_packet, the raw
+    # value kept beside the filled "packet" column -- both paths must gain it identically.
+    expected_columns = [*FIELDS, "recorded_packet"]
+    assert list(from_db.columns) == expected_columns
+    assert list(from_csv.columns) == expected_columns
     assert from_db["benchmark"].tolist() == from_csv["benchmark"].tolist() == ["k2", "k1"]
     pd.testing.assert_series_equal(from_db["speedup"], from_csv["speedup"], check_dtype=False)
     pd.testing.assert_series_equal(from_db["tokens"], from_csv["tokens"], check_dtype=False)

@@ -493,7 +493,7 @@ def make_relaunched_run_dir(tmp_path: pathlib.Path, run_id: str = "arm.n0.p1.w1"
     return tmp_path
 
 
-def test_a_grade_from_before_the_final_attempt_is_not_promoted(promoter, tmp_path) -> None:
+def test_a_grade_from_before_the_final_attempt_is_not_promoted(promoter: ModuleType, tmp_path: pathlib.Path) -> None:
     """T5/X7: the crashed attempt's 9.0x was scored on a source the relaunch deleted. Promoting it
     would submit an answer the agent that finished the task never held -- and its 9.0x outranks the
     real one, so without the cut it is the one that gets sent."""
@@ -503,7 +503,7 @@ def test_a_grade_from_before_the_final_attempt_is_not_promoted(promoter, tmp_pat
     assert item["source"] == "/* the answer */"
 
 
-def test_without_a_cut_the_wiped_attempts_grade_still_wins(promoter, tmp_path) -> None:
+def test_without_a_cut_the_wiped_attempts_grade_still_wins(promoter: ModuleType, tmp_path: pathlib.Path) -> None:
     """The same shard read with no stamp: this is what every legacy caller keeps doing, and it is
     why the cut has to be passed rather than inferred."""
     run_dir = make_relaunched_run_dir(tmp_path)
@@ -513,14 +513,16 @@ def test_without_a_cut_the_wiped_attempts_grade_still_wins(promoter, tmp_path) -
     assert promoter.best_speedups(run_dir)[("arm.n0.p1.w1", "gemm")] == 9.0
 
 
-def test_last_source_ignores_a_source_stored_before_the_cut(promoter, tmp_path) -> None:
+def test_last_source_ignores_a_source_stored_before_the_cut(promoter: ModuleType, tmp_path: pathlib.Path) -> None:
     run_dir = make_relaunched_run_dir(tmp_path)
 
     assert promoter.last_source(run_dir, "gemm", "arm.n0.p1.w1", since_ms=2000) == ("final.c", "c")
     assert promoter.last_source(run_dir, "gemm", "arm.n0.p1.w1", since_ms=4000) is None
 
 
-def test_the_teardown_sweep_reads_each_workers_cut_off_its_own_worker_directory(promoter, tmp_path) -> None:
+def test_the_teardown_sweep_reads_each_workers_cut_off_its_own_worker_directory(
+    promoter: ModuleType, tmp_path: pathlib.Path
+) -> None:
     """The sweep sees every worker at once and the cut is per worker, so it comes from the files the
     driver left: the run id from mcp.json, the stamp from tokens.json."""
     run_dir = make_relaunched_run_dir(tmp_path)

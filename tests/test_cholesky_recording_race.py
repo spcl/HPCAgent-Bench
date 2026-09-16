@@ -23,6 +23,7 @@ import multiprocessing
 import multiprocessing.queues
 import multiprocessing.synchronize
 import os
+import pathlib
 
 import numpy as np
 import pytest
@@ -71,7 +72,7 @@ def run_framework_worker(
 
 
 @pytest.mark.skipif(not osinfo.IS_LINUX, reason="fork start method is Linux-only")
-def test_cholesky_survives_four_ranks_recording_through_run_framework_sweep(tmp_path) -> None:
+def test_cholesky_survives_four_ranks_recording_through_run_framework_sweep(tmp_path: pathlib.Path) -> None:
     """The literal 2026-09-15 shape: four ranks each running ``run-framework -b cholesky -f numba``
     (what canon_column.sh's inner loop invokes) against ONE shared, not-yet-existing results shard.
     Before the schema.py fix this failed nondeterministically with the exact reported symptom;

@@ -10,6 +10,7 @@ fixes it without hiding a real conflict.
 """
 
 import math
+import pathlib
 
 import pandas as pd
 import pytest
@@ -273,7 +274,7 @@ def test_is_blank_rejects_a_real_value(value: object) -> None:
     assert not experiments.is_blank(value)
 
 
-def test_read_observations_fills_arm_identity_from_a_csv(tmp_path) -> None:
+def test_read_observations_fills_arm_identity_from_a_csv(tmp_path: pathlib.Path) -> None:
     """The public entry point applies the fill, not just the helper underneath it."""
     path = tmp_path / "observations.csv"
     pd.DataFrame({"arm": ["a", "a"], "packet": ["repo", ""]}).to_csv(path, index=False)
