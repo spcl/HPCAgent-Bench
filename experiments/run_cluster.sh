@@ -603,6 +603,10 @@ run_agent_node() {
     # the agents keep asking for one model. A single replica writes the single-entry config verbatim.
     IFS=, read -r -a replicas <<<"${VLLM_REPLICA_URLS:-${VLLM_BASE_URL}}"
 
+    # A real key never lands in the file: LiteLLM reads it from the proxy's environment. The
+    # fleet-wide no-auth sentinel stays literal so a keyless vLLM keeps its documented reading.
+    local litellm_key="os.environ/VLLM_API_KEY"
+    [[ "${VLLM_API_KEY:-EMPTY}" == "EMPTY" ]] && litellm_key="EMPTY"
     printf 'model_list:\n' >"${config}"
     for replica in "${replicas[@]}"; do
         cat >>"${config}" <<EOF
@@ -610,7 +614,7 @@ run_agent_node() {
     litellm_params:
       model: hosted_vllm/${VLLM_SERVED_MODEL:-optarena-vllm}
       api_base: ${replica}
-      api_key: ${VLLM_API_KEY:-EMPTY}
+      api_key: ${litellm_key}
 EOF
     done
     cat >>"${config}" <<EOF
@@ -902,7 +906,13 @@ role_mounts() {
 }
 
 # podman/docker do not inherit the job environment; hand them the relevant slice.
-JOB_ENV_FILE="${RUN_DIR}/job.env"
+# The slice carries the inference key, so it lives on tmpfs with owner-only permissions and is
+# removed with the job, never inside the run tree that outlives it.
+job_env_dir="${XDG_RUNTIME_DIR:-}"
+[[ -d "${job_env_dir}" ]] || job_env_dir=/dev/shm
+JOB_ENV_FILE="$(mktemp -p "${job_env_dir}" job.env.XXXXXX)"
+chmod 600 "${JOB_ENV_FILE}"
+trap 'rm -f "${JOB_ENV_FILE}"' EXIT
 case "${CONTAINER_RUNTIME}" in
     podman|docker)
         env | grep -E '^(AGENT|API_TIMEOUT_MS=|CAMPAIGN_ARM=|CLAUDE|CONTEXT_LENGTH=|EFFORT_LADDER=|GPUS_|HARNESS=|HPCAGENT|INFERENCE|JUDGE|KERNELS=|LANGUAGE=|LITELLM|OPTARENA|PROBLEMS|RUN_DIR=|RUN_ROOT=|SCRIPT_DIR=|SERPAPI|SLURM_|VLLM|WEBSEARCH)' \
