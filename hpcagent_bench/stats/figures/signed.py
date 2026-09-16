@@ -47,7 +47,8 @@ from matplotlib.lines import Line2D
 from hpcagent_bench import experiment_tags, flags
 from hpcagent_bench.stats import canon, palette, population, rules, style
 from hpcagent_bench.stats.figures import kernel_comparison
-from hpcagent_bench.stats.summary import DEFAULT_CONFIDENCE, geomean_ci, signed_change, usable_ratios
+from hpcagent_bench.stats.figures.per_kernel import speedup_tick_label
+from hpcagent_bench.stats.summary import DEFAULT_CONFIDENCE, geomean_ci, log2_change, signed_change, usable_ratios
 
 #: Framework -> the name a reader knows it by. Insertion order is the order on the axis.
 ARMS: dict[str, str] = {
@@ -542,21 +543,56 @@ def geomean_interval_of(
     return interval
 
 
-def style_signed_y_axis(ax: Axes, values: Sequence[float]) -> None:
-    """The SIGNED axis on Y: linear and zero-centred
-    (:func:`~hpcagent_bench.stats.summary.signed_change`) -- never the log2 ratio ticks
-    :mod:`kernel_comparison` draws its OWN speed-up panel with."""
-    finite = [v for v in values if math.isfinite(v)]
-    limit = max((abs(v) for v in finite), default=1.0) * 1.15
-    ax.set_ylim(-limit, limit)
+def style_log2_speedup_y_axis(ax: Axes, ratios: Sequence[float]) -> None:
+    """The speed-up panel's Y axis: LOG2 GEOMETRY (every doubling the same distance apart,
+    :func:`~hpcagent_bench.stats.summary.log2_change`), ticks and labels read back in RATIOS
+    (:func:`~hpcagent_bench.stats.figures.per_kernel.speedup_tick_label`) so the axis still READS
+    as a speed-up while only its geometry is log2. A LINEAR signed change (:func:`~hpcagent_bench.stats.summary.signed_change`)
+    stretches every multiple of the baseline the same amount, so one 75x outlier would sit 74 units
+    from zero and swamp every other kernel's mark onto a sliver near it; log2 puts that same 75x
+    at +6.2, the same distance a 2x-to-4x doubling gets."""
+    ticks = kernel_comparison.value_ticks(ratios)
+    positions = [log2_change(tick) for tick in ticks]
+    ax.set_yticks(positions)
+    ax.set_yticklabels([speedup_tick_label(tick) for tick in ticks], fontsize=style.TICK_PT * 0.6)
+    ax.set_ylim(positions[0] - 0.3, positions[-1] + 0.3)
     ax.axhline(0.0, color=style.REFERENCE, linewidth=0.9, zorder=1)
-    style.value_axis(ax, axis="y")
+    ax.grid(axis="y", which="major", color=style.RULE, linewidth=0.7, zorder=0)
+    ax.set_axisbelow(True)
 
 
-def legend_handles(rows: Sequence[Row]) -> list[Line2D]:
+def per_kernel_repeats_note(rows: Sequence[Row]) -> str:
+    """The legend's own words for why some (or every) per-kernel mark draws no whisker: SC15 rules
+    5/7 ask a deterministic measurement to be REPORTED as such, not left to read as a dropped
+    feature. ``ratios_low``/``ratios_high`` bound a kernel only where it has a repetition to bound
+    (:func:`agent_kernel_row`); a canon-sweep column never populates either at all."""
+    widths = [row.ratios_high[kernel] - row.ratios_low[kernel] for row in rows for kernel in row.ratios_low]
+    return "n>1 for some kernels" if widths and max(widths) > 1.0e-9 else "n=1 per kernel"
+
+
+#: Inches ONE rotated kernel-label character needs at :data:`kernel_comparison.KERNEL_LABEL_PT` --
+#: llr-focus40 names run from 6 to 30 characters, and the fixed margin
+#: :data:`kernel_comparison.BOTTOM_MARGIN_IN` sizes for a double-column insert's own names, not
+#: this figure's longest ones nor the legend sitting below them.
+LLR40_LABEL_CHAR_IN: float = 0.075
+
+#: Inches reserved for the legend row below the rotated kernel labels.
+LLR40_LEGEND_HEIGHT_IN: float = 0.7
+
+
+def llr40_bottom_margin_in(kernels: Sequence[str]) -> float:
+    """The rotated kernel labels' own height, from the ACTUAL longest name in ``kernels``, plus
+    room for the legend below them -- a margin sized for the short names runs the long ones
+    (``use_stencil_through_transient``) into the legend."""
+    longest = max((len(k) for k in kernels), default=0)
+    return longest * LLR40_LABEL_CHAR_IN + LLR40_LEGEND_HEIGHT_IN
+
+
+def legend_handles(rows: Sequence[Row], kernels: Sequence[str]) -> list[Line2D]:
     """One legend entry per row -- its own colour and shape, and the registry display name
-    :func:`llr40_rows` already built into ``row.label`` -- plus the two keys every panel draws the
-    same way: the geomean-and-interval mark, and the undelivered cross
+    :func:`llr40_rows` already built into ``row.label`` -- plus the keys every panel draws the same
+    way: the per-kernel whisker (method and n, :func:`per_kernel_repeats_note`), the geomean-and-
+    interval mark (method and its own n), and the undelivered cross
     (:data:`~hpcagent_bench.stats.style.NOT_DELIVERED_LABEL`)."""
     handles: list[Line2D] = [
         Line2D(
@@ -568,11 +604,23 @@ def legend_handles(rows: Sequence[Row]) -> list[Line2D]:
         Line2D(
             [],
             [],
+            marker="|",
+            linestyle="none",
+            color=style.MUTED,
+            markeredgewidth=1.6,
+            markersize=10,
+            label=f"Per-Kernel {DEFAULT_CONFIDENCE:.0%} t-Interval ({per_kernel_repeats_note(rows)})",
+        )  # fmt: skip
+    )
+    handles.append(
+        Line2D(
+            [],
+            [],
             marker="o",
             linestyle="none",
             color=style.MUTED,
             markersize=5.5,
-            label=f"Geomean, {DEFAULT_CONFIDENCE:.0%} t-Interval",
+            label=f"Geomean, {DEFAULT_CONFIDENCE:.0%} t-Interval (n<={len(kernels)})",
         )  # fmt: skip
     )
     handles.append(
@@ -592,12 +640,15 @@ def legend_handles(rows: Sequence[Row]) -> list[Line2D]:
 
 def llr40_figure(rows: Sequence[Row], roster: Sequence[str], title: str) -> matplotlib.figure.Figure:
     """The llr-focus40 compiler figure: DaCe's own canon-sweep columns and every model's CPF arm,
-    TWO PANELS SHARING ONE KERNEL AXIS -- speed-up (SIGNED change vs numba) over tokens spent, each
-    with a geomean-and-95%-interval summary column past a dashed separator
+    ONE KERNEL AXIS shared by a speed-up panel (LOG2 geometry, ratio-labelled ticks) and, only when
+    at least one row spends tokens, a tokens-spent panel below it -- each with a geomean-and-95%-
+    interval summary column past a dashed separator
     (:func:`kernel_comparison.draw_panel`/:func:`kernel_comparison.draw_summary_column`, reused
-    here through their ``transform``/``interval_of`` hooks so the SIGNED axis and the geomean
+    here through their ``transform``/``interval_of`` hooks so the log2 axis and the geomean
     statistic are this module's own while the kernel-axis/dodge/summary-column geometry stays the
-    one place that draws it)."""
+    one place that draws it). A compiler-only render (no agent arm attached) spends no tokens at
+    all, and a panel with nothing to draw is a blank frame, not information -- it is omitted, and
+    the figure stays the SAME WIDTH, one panel tall instead of two."""
     if not rows:
         raise ValueError("no row to draw")
     style.apply()
@@ -611,6 +662,7 @@ def llr40_figure(rows: Sequence[Row], roster: Sequence[str], title: str) -> matp
         for row in rows
     ]  # fmt: skip
     token_rows = [row for row in rows if row.tokens]
+    has_tokens = bool(token_rows)
     token_series = [
         kernel_comparison.Series(
             row.framework, row.label, row.color or palette.framework_color(row.framework), row.marker, "", "",
@@ -621,37 +673,45 @@ def llr40_figure(rows: Sequence[Row], roster: Sequence[str], title: str) -> matp
     size = kernel_comparison.mark_size(
         kernel_comparison.kernel_pitch(len(speedup_series), len(kernels), True), len(speedup_series)
     )
-    fig, axes = plt.subplots(
-        2, 1, sharex=True, figsize=kernel_comparison.figure_size(len(speedup_series), len(kernels), True),
-        squeeze=False,
-    )  # fmt: skip
-    speedup_ax, token_ax = axes[0][0], axes[1][0]
-    style_signed_y_axis(speedup_ax, [signed_change(v) for row in rows for v in row.ratios.values()])
+    n_panels = 2 if has_tokens else 1
+    width = kernel_comparison.figure_size(len(speedup_series), len(kernels), True)[0]
+    bottom_margin = llr40_bottom_margin_in(kernels)
+    height = (
+        n_panels * kernel_comparison.PANEL_HEIGHT_IN
+        + (kernel_comparison.PANEL_GAP_IN if has_tokens else 0.0)
+        + kernel_comparison.TOP_MARGIN_IN
+        + bottom_margin
+    )
+    fig, axes = plt.subplots(n_panels, 1, sharex=True, figsize=(width, height), squeeze=False)
+    speedup_ax = axes[0][0]
+    token_ax = axes[1][0] if has_tokens else None
+    style_log2_speedup_y_axis(speedup_ax, [v for row in rows for v in row.ratios.values()])
     kernel_comparison.draw_panel(
-        speedup_ax, kernels, speedup_series, lambda s: s.values, 1.0, geomean_reducer, "Geomean", False, size,
+        speedup_ax, kernels, speedup_series, lambda s: s.values, 1.0, geomean_reducer, "Geomean",
+        not has_tokens, size,
         range_of=lambda s: (row_by_key[s.key].ratios_low, row_by_key[s.key].ratios_high),
         interval_of=geomean_interval_of(row_by_key, lambda r: r.ratios),
-        transform=signed_change,
+        transform=log2_change,
     )  # fmt: skip
-    token_limits = kernel_comparison.token_axis_limits(v for row in token_rows for v in row.tokens.values())
-    kernel_comparison.style_token_y_axis(token_ax, token_limits)
-    token_row_by_key = {row.framework: row for row in token_rows}
-    kernel_comparison.draw_panel(
-        token_ax, kernels, token_series, lambda s: s.values, token_limits[0], geomean_reducer, "Geomean", True, size,
-        mark_missing=False,
-        interval_of=geomean_interval_of(token_row_by_key, lambda r: r.tokens),
-    )  # fmt: skip
-    speedup_ax.set_ylabel(f"Signed Speed-Up vs {LLR40_BASELINE}", fontsize=style.LABEL_PT * 0.7, color=style.MUTED)
-    token_ax.set_ylabel("Tokens Spent", fontsize=style.LABEL_PT * 0.7, color=style.MUTED)
-    width, height = kernel_comparison.figure_size(len(speedup_series), len(kernels), True)
+    speedup_ax.set_ylabel(f"Speed-Up vs {LLR40_BASELINE}", fontsize=style.LABEL_PT * 0.7, color=style.MUTED)
+    if has_tokens and token_ax is not None:
+        token_limits = kernel_comparison.token_axis_limits(v for row in token_rows for v in row.tokens.values())
+        kernel_comparison.style_token_y_axis(token_ax, token_limits)
+        token_row_by_key = {row.framework: row for row in token_rows}
+        kernel_comparison.draw_panel(
+            token_ax, kernels, token_series, lambda s: s.values, token_limits[0], geomean_reducer, "Geomean",
+            True, size, mark_missing=False,
+            interval_of=geomean_interval_of(token_row_by_key, lambda r: r.tokens),
+        )  # fmt: skip
+        token_ax.set_ylabel("Tokens Spent", fontsize=style.LABEL_PT * 0.7, color=style.MUTED)
     fig.subplots_adjust(
         left=kernel_comparison.LEFT_MARGIN_IN / width,
         right=1.0 - kernel_comparison.RIGHT_MARGIN_IN / width,
         top=1.0 - kernel_comparison.TOP_MARGIN_IN / height,
-        bottom=kernel_comparison.BOTTOM_MARGIN_IN / height,
+        bottom=bottom_margin / height,
         hspace=kernel_comparison.PANEL_GAP_IN / kernel_comparison.PANEL_HEIGHT_IN,
     )
-    style.legend_below(fig, legend_handles(rows), y=0.005, fontsize=style.TICK_PT * 0.75)
+    style.legend_below(fig, legend_handles(rows, kernels), y=0.005, fontsize=style.TICK_PT * 0.75)
     style.title(fig, title)
     return fig
 

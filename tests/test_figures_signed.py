@@ -13,11 +13,14 @@ holding still draws a plausible-looking figure, so it is asserted here rather th
 """
 
 import csv
+import math
 import pathlib
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
+from PIL import Image
 
 from hpcagent_bench.stats import palette, rules
 from hpcagent_bench.stats.figures import kernel_comparison, signed
@@ -435,3 +438,94 @@ def test_token_summary_table_excludes_rows_with_no_tokens(
     frame = signed.token_summary_table(rows)
     assert set(frame.columns) == set(signed.TOKEN_SUMMARY_COLUMNS)
     assert set(frame["framework"]).isdisjoint(signed.LLR40_CANON_COLUMNS)
+
+
+# --------------------------------------------------------------------------------------------
+# The user's four corrections to the rendered figure: log2 geometry read back as ratios, a
+# visible summary whisker, an omitted tokens panel with nothing to draw, and a legend that
+# clears the rotated kernel labels and says what it is showing.
+# --------------------------------------------------------------------------------------------
+
+
+def test_log2_change_matches_signed_change_sign_and_zero() -> None:
+    from hpcagent_bench.stats.summary import log2_change
+
+    assert log2_change(1.0) == pytest.approx(0.0)
+    assert log2_change(2.0) == pytest.approx(1.0)
+    assert log2_change(0.5) == pytest.approx(-1.0)
+    # A 75x outlier sits at a SMALL log2 distance, not at 74 the way signed_change would place it.
+    assert log2_change(75.0) < 7.0
+
+
+def test_log2_change_is_nan_off_a_placeholder() -> None:
+    from hpcagent_bench.stats.summary import log2_change
+
+    assert math.isnan(log2_change(0.0))
+    assert math.isnan(log2_change(-1.0))
+
+
+def test_speedup_axis_ticks_are_log2_positions_with_ratio_labels() -> None:
+    fig, ax = plt.subplots()
+    try:
+        signed.style_log2_speedup_y_axis(ax, [1.0, 2.0, 4.0])
+        labels = [tick.get_text() for tick in ax.get_yticklabels()]
+        positions = list(ax.get_yticks())
+        assert "1x" in labels and "2x" in labels and "4x" in labels
+        # The tick at "2x" sits at y=1 (log2(2)), never at y=2 (the ratio itself, a linear axis).
+        assert positions[labels.index("2x")] == pytest.approx(1.0)
+    finally:
+        plt.close(fig)
+
+
+def test_figure_omits_the_tokens_panel_when_no_row_spends_tokens(llr40_canon: pd.DataFrame) -> None:
+    rows = signed.llr40_rows(llr40_canon, None, ROSTER40)
+    fig = signed.llr40_figure(rows, ROSTER40, "title")
+    try:
+        assert len(fig.axes) == 1
+        assert fig.axes[0].get_ylabel() == f"Speed-Up vs {signed.LLR40_BASELINE}"
+    finally:
+        plt.close(fig)
+
+
+def test_figure_keeps_the_tokens_panel_when_a_row_spends_tokens(
+    llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame
+) -> None:
+    rows = signed.llr40_rows(llr40_canon, llr40_observations, ROSTER40)
+    fig = signed.llr40_figure(rows, ROSTER40, "title")
+    try:
+        assert len(fig.axes) == 2
+        assert fig.axes[1].get_ylabel() == "Tokens Spent"
+    finally:
+        plt.close(fig)
+
+
+def test_legend_states_the_interval_method_and_n(llr40_canon: pd.DataFrame) -> None:
+    rows = signed.llr40_rows(llr40_canon, None, ROSTER40)
+    handles = signed.legend_handles(rows, ROSTER40)
+    labels = [handle.get_label() for handle in handles]
+    assert any("Per-Kernel" in label and "t-Interval" in label and "n=" in label for label in labels)
+    assert any("Geomean" in label and "t-Interval" in label and "n<=" in label for label in labels)
+
+
+def test_per_kernel_repeats_note_names_the_real_n(llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame) -> None:
+    # The canon rows alone: every canon kernel is a single deterministic timing.
+    canon_only = signed.llr40_rows(llr40_canon, None, ROSTER40)
+    assert signed.per_kernel_repeats_note(canon_only) == "n=1 per kernel"
+    # qwen38's cpfsrc arm ran k1 twice in the fixture: the note must say so rather than stay silent.
+    with_repeats = signed.llr40_rows(llr40_canon, llr40_observations, ROSTER40)
+    assert signed.per_kernel_repeats_note(with_repeats) == "n>1 for some kernels"
+
+
+def test_bottom_margin_grows_with_the_longest_kernel_name() -> None:
+    short = signed.llr40_bottom_margin_in(("k1", "k2"))
+    long = signed.llr40_bottom_margin_in(("use_stencil_through_transient",))
+    assert long > short + 1.0  # a 30-character name needs real room, not a fraction of an inch
+
+
+def test_render_at_150dpi_matches_the_requested_dpi(
+    llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame, tmp_path: pathlib.Path
+) -> None:
+    out = tmp_path / "llr40_dpi"
+    signed.llr40_two_row_figure(llr40_canon, llr40_observations, ROSTER40, out, dpi=150.0)
+    with Image.open(out.with_suffix(".png")) as image:
+        assert image.info["dpi"][0] == pytest.approx(150.0, abs=1.0)
