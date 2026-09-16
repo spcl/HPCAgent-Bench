@@ -1,5 +1,6 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
 name: Affine Scan, Variable Coeff
+short-name: Affine Scan
 level: 2
 parameters:
   S:

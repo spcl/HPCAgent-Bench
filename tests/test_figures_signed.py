@@ -22,7 +22,7 @@ import pandas as pd
 import pytest
 from PIL import Image
 
-from hpcagent_bench.stats import palette, rules
+from hpcagent_bench.stats import palette, rules, style
 from hpcagent_bench.stats.figures import kernel_comparison, signed
 from hpcagent_bench.stats.summary import geomean_ci
 
@@ -482,7 +482,7 @@ def test_figure_omits_the_tokens_panel_when_no_row_spends_tokens(llr40_canon: pd
     fig = signed.llr40_figure(rows, ROSTER40, "title")
     try:
         assert len(fig.axes) == 1
-        assert fig.axes[0].get_ylabel() == f"Speed-Up vs {signed.LLR40_BASELINE}"
+        assert fig.axes[0].get_ylabel() == "Speed-up over Numba"
     finally:
         plt.close(fig)
 
@@ -494,7 +494,7 @@ def test_figure_keeps_the_tokens_panel_when_a_row_spends_tokens(
     fig = signed.llr40_figure(rows, ROSTER40, "title")
     try:
         assert len(fig.axes) == 2
-        assert fig.axes[1].get_ylabel() == "Tokens Spent"
+        assert fig.axes[1].get_ylabel() == "Tokens spent"
     finally:
         plt.close(fig)
 
@@ -516,10 +516,35 @@ def test_per_kernel_repeats_note_names_the_real_n(llr40_canon: pd.DataFrame, llr
     assert signed.per_kernel_repeats_note(with_repeats) == "n>1 for some kernels"
 
 
-def test_bottom_margin_grows_with_the_longest_kernel_name() -> None:
-    short = signed.llr40_bottom_margin_in(("k1", "k2"))
-    long = signed.llr40_bottom_margin_in(("use_stencil_through_transient",))
-    assert long > short + 1.0  # a 30-character name needs real room, not a fraction of an inch
+def test_figure_prints_at_text_width_and_names_the_baseline_on_the_reference_tick(
+    llr40_canon: pd.DataFrame,
+) -> None:
+    """Drawn at the size the page prints it: a figure* is text width, and a single speed-up panel
+    is a short strip, not a page. The 1x line is the baseline, so its tick says which one."""
+    rows = signed.llr40_rows(llr40_canon, None, ROSTER40)
+    fig = signed.llr40_figure(rows, ROSTER40)
+    try:
+        width, height = (float(v) for v in fig.get_size_inches())
+        labels = [label.get_text() for label in fig.axes[0].get_yticklabels()]
+        texts = [text.get_text() for text in fig.axes[0].texts]
+    finally:
+        plt.close(fig)
+    assert width == pytest.approx(style.DOUBLE_COLUMN_WIDTH)
+    assert height < 3.0
+    assert "Numba" in labels and "1x" not in labels
+    assert "Geomean (95% CI)" in texts
+    assert fig.texts == []  # no title unless one is asked for
+
+
+def test_summary_column_prints_each_geomean_value(llr40_canon: pd.DataFrame) -> None:
+    rows = signed.llr40_rows(llr40_canon, None, ROSTER40)
+    fig = signed.llr40_figure(rows, ROSTER40)
+    try:
+        texts = [text.get_text() for text in fig.axes[0].texts]
+    finally:
+        plt.close(fig)
+    expected = [f"{signed.geomean_reducer(row.ratios.values()):.3g}x" for row in rows]
+    assert all(value in texts for value in expected), (expected, texts)
 
 
 def test_render_at_150dpi_matches_the_requested_dpi(

@@ -1,5 +1,6 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
 name: Fusion with Hoisted Ifs
+short-name: Fuse Hoist Ifs
 level: 2
 parameters:
   S:

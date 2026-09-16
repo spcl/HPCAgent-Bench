@@ -971,6 +971,7 @@ def _validate_packed_shapes(
 KNOWN_MANIFEST_KEYS = frozenset(
     {
         "name",
+        "short-name",
         "relative_path",
         "experiment_tags",
         "module_name",

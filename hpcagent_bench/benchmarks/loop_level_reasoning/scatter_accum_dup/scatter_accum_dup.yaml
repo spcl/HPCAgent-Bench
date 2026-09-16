@@ -1,5 +1,6 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
 name: Indirect Accum, Dup Indices
+short-name: Dup Scatter
 level: 2
 parameters:
   S:

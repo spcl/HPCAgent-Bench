@@ -21,8 +21,6 @@ from hpcagent_bench.experiments import read_observations, read_table
 from hpcagent_bench.stats import population
 from hpcagent_bench.stats.figures import kernel_comparison, signed
 
-DEFAULT_TITLE: str = "llr-focus40: DaCe Canon-Sweep Columns and CPF Arms vs Numba"
-
 
 def load_roster(roster_file: pathlib.Path | None, canon_frame: "object") -> list[str]:
     """The roster kernel names: ``--roster-file`` (one per line) or every kernel the canon db names."""
@@ -43,6 +41,7 @@ def run(
     label: str,
     dpi: float,
     out: pathlib.Path,
+    series_labels: dict[str, str],
 ) -> int:
     canon_frame = read_table(canon_db, "canon")
     roster = load_roster(roster_file, canon_frame)
@@ -61,8 +60,9 @@ def run(
         conditions=conditions,
         pattern=pattern,
         repeats=repeats,
-        title=label or DEFAULT_TITLE,
+        title=label,
         dpi=dpi,
+        labels=series_labels,
     )
     print(f"{stem}.pdf / .png")
     print(f"{stem}-kernels.csv / {stem}-summary.csv")
@@ -88,7 +88,14 @@ def main(argv: list[str] | None = None) -> int:
         default="latest",
         help="a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
     )
-    ap.add_argument("--label", default="", help="figure title; defaults to a fixed llr-focus40 title")
+    ap.add_argument("--label", default="", help="figure title; default none, the caption names the figure")
+    ap.add_argument(
+        "--series-label",
+        action="append",
+        default=[],
+        metavar="KEY=LABEL",
+        help="rename a row by framework or arm key, e.g. dace_cpu_canonicalize=CPF; repeatable",
+    )
     ap.add_argument("--dpi", type=float, default=150.0)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/llr40_compilers"))
     args = ap.parse_args(argv)
@@ -104,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
         args.label,
         args.dpi,
         args.out,
+        dict(item.split("=", 1) for item in args.series_label),
     )
 
 

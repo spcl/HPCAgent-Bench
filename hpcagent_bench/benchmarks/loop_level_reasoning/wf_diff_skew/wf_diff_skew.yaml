@@ -1,5 +1,6 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
 name: Wavefront Difference Skew
+short-name: Wavefront Skew
 level: 1
 parameters:
   S:

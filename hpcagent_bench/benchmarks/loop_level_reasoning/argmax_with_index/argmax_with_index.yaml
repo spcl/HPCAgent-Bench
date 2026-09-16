@@ -1,5 +1,6 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
 name: Argmax with Index
+short-name: Argmax Index
 level: 2
 parameters:
   S:

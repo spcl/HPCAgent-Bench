@@ -1,5 +1,6 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
 name: Quasi-Affine Odd Reduction
+short-name: Quasi-Affine
 level: 1
 parameters:
   S:

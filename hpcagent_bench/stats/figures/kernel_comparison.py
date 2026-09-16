@@ -137,6 +137,19 @@ MISSING_LABEL: str = plotstyle.NOT_DELIVERED_LABEL
 #: :data:`~hpcagent_bench.stats.figures.per_kernel.SUMMARY_GAP` makes on its own kernel axis.
 SUMMARY_GAP: float = 0.9
 
+#: Kernel slots right of the summary group that its value labels take (:func:`draw_summary_column`).
+SUMMARY_VALUE_SLOTS: float = 1.6
+
+
+def summary_value_text(value: float) -> str:
+    """A summary mark's printed value, three significant digits: ``6.27``, ``1.2e+06``."""
+    return f"{value:.3g}"
+
+
+def speedup_value_text(value: float) -> str:
+    """A speed-up summary's printed value: ``6.27x``, ``0.914x``."""
+    return f"{value:.3g}x"
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Series:
@@ -448,6 +461,7 @@ def draw_summary_column(
     size: float,
     interval_of: Callable[[Series], tuple[float, float]] | None = None,
     transform: Callable[[float], float] = lambda v: v,
+    value_text: Callable[[float], str] = summary_value_text,
 ) -> None:
     """The dashed separator and one dodged mark per series at ``summary_x``, plus a small annotation
     naming the statistic ABOVE the panel -- never an x-axis tick label, which the panels' shared x
@@ -463,6 +477,10 @@ def draw_summary_column(
     ``value_of``/``reducer``/``interval_of`` stay in the statistic's NATURAL units (a ratio, for a
     geometric mean), and only the plotted position is ever transformed, so a caller on a signed
     axis reads exactly the same ratio-domain statistic a caller on a log-ratio axis does.
+
+    Every summary mark prints its value beside the group, in the series' colour, through
+    ``value_text`` (natural units): a reader quotes the geomean, and reading it off a log axis
+    between two gridlines is a guess.
     """
     ax.axvline(separator_x, color=plotstyle.RULE, linestyle=(0, (3, 3)), linewidth=1.0, zorder=1)
     for offset, series in zip(dodge_offsets(len(series_list)), series_list, strict=True):
@@ -478,6 +496,12 @@ def draw_summary_column(
             plotstyle.point_mark(
                 ax, summary_x + offset, transform(point), series.color, series.marker, filled=True, size=size
             )
+            ax.annotate(
+                value_text(point), xy=(summary_x + DODGE_SPAN / 2.0, transform(point)), xytext=(5, 0),
+                textcoords="offset points", ha="left", va="center", fontsize=plotstyle.TICK_PT * 0.5,
+                color=series.color, annotation_clip=False,
+                bbox={"boxstyle": "square,pad=0.1", "facecolor": "white", "edgecolor": "none"},
+            )  # fmt: skip
     ax.annotate(
         label,
         xy=(summary_x, 1.0),
@@ -512,6 +536,7 @@ def draw_panel(
     delivered_of: Callable[[Series], dict[str, bool]] | None = None,
     interval_of: Callable[[Series], tuple[float, float]] | None = None,
     transform: Callable[[float], float] = lambda v: v,
+    value_text: Callable[[float], str] = summary_value_text,
 ) -> None:
     """One panel, for ONE metric (:func:`value_of` reads it off each series): the kernel slots,
     dodged apart within each slot, plus the summary group past their right end
@@ -531,14 +556,14 @@ def draw_panel(
     answer is not 1.0), so the cross has to go on a drawn mark rather than on an absent one. Without
     it every present value is a measurement, which is what an absolute panel wants.
 
-    ``interval_of`` and ``transform`` pass straight through to :func:`draw_summary_column`; ``value_of``,
+    ``interval_of``, ``transform`` and ``value_text`` pass straight through to :func:`draw_summary_column`; ``value_of``,
     ``range_of`` and ``missing_y`` stay in the SAME natural units regardless of ``transform`` -- only the
     plotted position changes, so a signed-axis caller reads its missing-value placeholder, its whisker
     ends and its summary interval off the identical ratio-domain data a log-ratio caller does.
     """
     separator_x, summary_x = summary_column_position(len(kernels))
     kernel_axis(ax, kernels, label_kernels)
-    ax.set_xlim(-0.5 - SUMMARY_GAP / 2.0, summary_x + 0.6)
+    ax.set_xlim(-0.5 - SUMMARY_GAP / 2.0, summary_x + 0.6 + SUMMARY_VALUE_SLOTS)
     x_of = {kernel: i for i, kernel in enumerate(kernels)}
     for offset, series in zip(dodge_offsets(len(series_list)), series_list, strict=True):
         values = value_of(series)
@@ -566,7 +591,7 @@ def draw_panel(
             )  # fmt: skip
     draw_summary_column(
         ax, separator_x, summary_x, series_list, value_of, reducer, summary_label, size,
-        interval_of=interval_of, transform=transform,
+        interval_of=interval_of, transform=transform, value_text=value_text,
     )  # fmt: skip
 
 
@@ -628,9 +653,10 @@ def legend_handles(
 
 
 #: One panel's data span, in kernel slots: the roster plus the summary group's own air
-#: (:data:`SUMMARY_GAP`, twice) and the half-slot margin the axis leaves at each end.
+#: (:data:`SUMMARY_GAP`, twice), its value labels (:data:`SUMMARY_VALUE_SLOTS`) and the half-slot
+#: margin the axis leaves at each end.
 def panel_slots(n_kernels: int) -> float:
-    return n_kernels + 2.0 * SUMMARY_GAP + 0.6
+    return n_kernels + 2.0 * SUMMARY_GAP + 0.6 + SUMMARY_VALUE_SLOTS
 
 
 #: Inches of air between the two panel rows. Small: the value axes read horizontally and only the
@@ -732,6 +758,7 @@ def figure(
         "Geomean",
         False,
         size,
+        value_text=speedup_value_text,
     )
     style_token_y_axis(token_ax, token_limits)
     draw_panel(
@@ -746,6 +773,7 @@ def figure(
         size,
         range_of=lambda s: (s.tokens_min, s.tokens_max),
         mark_missing=False,
+        value_text=plotstyle.decade_label,
     )
     # One label per panel: the figure title only names the whole figure, and neither panel's value
     # axis says on its own which metric it carries.

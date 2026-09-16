@@ -95,6 +95,10 @@ and no reader expands `heat_3d` or `addusxx_g`, so the two are not the same stri
   for a routine with no descriptive meaning of its own.
 - **30 characters at most**, which is what a rotated tick fits on a double-column axis. Clip the
   operation rather than the origin: `QE EXX ultrasoft potential projection` is `QE Potential Proj`.
+- **`short-name:` when `name` runs past 14 characters** and the kernel sits on a text-width axis
+  (every `llr-focus40` kernel does): 14 characters at most, distinct, read by
+  `experiment_tags.kernel_short_display_name()`. `Triangular Wavefront` is `Tri Wavefront`. Not the
+  identifier `short_name`, which is the folder stem and never written in the manifest.
 - **Distinct from every other manifest's name** -- two kernels under one tick read as one kernel
   measured twice (`tests/test_display_names.py`).
 

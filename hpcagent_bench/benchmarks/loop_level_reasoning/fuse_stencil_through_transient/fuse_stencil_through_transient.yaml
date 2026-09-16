@@ -1,5 +1,6 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
 name: Fuse Stencil via Transient
+short-name: Fuse Stencil
 level: 2
 parameters:
   S:

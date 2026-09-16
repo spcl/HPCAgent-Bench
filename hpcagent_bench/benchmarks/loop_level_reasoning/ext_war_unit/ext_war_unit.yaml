@@ -1,5 +1,6 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
 name: Write-After-Read, Unit
+short-name: Write-After-Rd
 level: 1
 parameters:
   S:

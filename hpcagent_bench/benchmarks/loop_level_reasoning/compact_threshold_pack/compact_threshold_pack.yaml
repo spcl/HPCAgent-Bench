@@ -1,5 +1,6 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
 name: Stream Compaction with Count
+short-name: Compaction
 level: 2
 parameters:
   S:
