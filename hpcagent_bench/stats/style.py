@@ -311,21 +311,24 @@ UNDATED: dict[str, dict[str, None]] = {"pdf": {"CreationDate": None}, "svg": {"D
 SVG_HASH_SALT: str = "hpcagent-bench"
 
 
-def save(fig: Figure, stem: pathlib.Path, formats: Sequence[str] = ("pdf", "png"), fixed: bool = False) -> pathlib.Path:
+def save(
+    fig: Figure, stem: pathlib.Path, formats: Sequence[str] = ("pdf", "png"), fixed: bool = False, dpi: float = 200.0
+) -> pathlib.Path:
     """Write ``fig`` under ``stem`` once per suffix in ``formats``, and close it. Returns ``stem``.
 
-    A paper takes the PDF; a web page takes the PNG (at 200 dpi) or the SVG. ``fixed`` keeps the
-    canvas at its figsize instead of cropping to the ink, which is what keeps two paired figures
-    the same size: a tight box is sized by each figure's own legend. Closing matters in a loop --
-    matplotlib keeps every open figure alive, and a sweep that renders one per directory otherwise
-    ends up holding all of them. Every file is written :data:`UNDATED`, so a rerun is byte-identical.
+    A paper takes the PDF; a web page takes the PNG (at ``dpi``, 200 by default) or the SVG.
+    ``fixed`` keeps the canvas at its figsize instead of cropping to the ink, which is what keeps
+    two paired figures the same size: a tight box is sized by each figure's own legend. Closing
+    matters in a loop -- matplotlib keeps every open figure alive, and a sweep that renders one per
+    directory otherwise ends up holding all of them. Every file is written :data:`UNDATED`, so a
+    rerun is byte-identical.
     """
     stem.parent.mkdir(parents=True, exist_ok=True)
     box = fig.bbox_inches if fixed else "tight"
     with plt.rc_context({"svg.hashsalt": SVG_HASH_SALT}):
         for suffix in formats:
             fig.savefig(  # pyright: ignore[reportUnknownMemberType]
-                stem.with_suffix(f".{suffix}"), dpi=200, bbox_inches=box, metadata=UNDATED.get(suffix)
+                stem.with_suffix(f".{suffix}"), dpi=dpi, bbox_inches=box, metadata=UNDATED.get(suffix)
             )
     plt.close(fig)
     return stem
