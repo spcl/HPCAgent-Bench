@@ -263,6 +263,133 @@ distributed backend: rank zero serves HTTP, and the remaining ranks use
 quoted arguments containing spaces; use only simple operator-controlled option
 lists or edit the command array for more complex values.
 
+### Inference from a hosted service
+
+An arm selects where its tokens come from with one key, the same way it selects a model.
+`INFERENCE_SOURCE=node` is the default and what every arm written before this mode says by saying
+nothing: the job allocates GPU nodes and starts vLLM or SGLang on them. `INFERENCE_SOURCE=service`
+takes the tokens from a hosted endpoint over the network instead -- no inference node, no engine,
+no readiness wait, and `INFERENCE_NODES=0`, so `run_campaign.sh` sizes the allocation for the agent
+and judge nodes alone.
+
+`experiments/inference_service.py` is the one place that reads the block. It resolves it into the
+same endpoint variables a server arm composes (`VLLM_BASE_URL`, `VLLM_REPLICA_URLS`,
+`VLLM_SERVED_MODEL`, `VLLM_API_KEY`), so the agent driver's striping, the runners' `--base-url` and
+`--model`, and the claude CLI's `ANTHROPIC_BASE_URL` all keep working with no second code path.
+
+| Variable | Meaning |
+| --- | --- |
+| `INFERENCE_SOURCE` | `node` (default) or `service`. |
+| `INFERENCE_SERVICE_PROVIDER` | Who serves it (`meta`, `anthropic`, `openai`). Recorded as provenance. |
+| `INFERENCE_SERVICE_BASE_URL` | The base URL **including** its `/v1` path. The claude CLI is given the root above it; a runner is given the path itself. |
+| `INFERENCE_SERVICE_MODEL` | The provider's model id, sent verbatim as the request's `model`. |
+| `INFERENCE_SERVICE_TIER` | `standard`, `contributor`, ... Recorded as provenance; see the warning below. |
+| `INFERENCE_SERVICE_API` | `openai` (chat completions) or `anthropic` (messages). Decides which harnesses may run. |
+| `INFERENCE_SERVICE_AUTH` | `bearer` or `x-api-key`. Decides which header the key is sent in. |
+| `INFERENCE_SERVICE_KEY_ENV` | The **name** of the environment variable holding the key. Never the key. |
+
+The wire format is a gate, not a hint. The three runner harnesses (mini-SWE, OpenHands, optimas)
+speak `/v1/chat/completions`; the claude CLI speaks `/v1/messages`. Pairing one with a service that
+serves the other 404s every request, and the arm discovers that by spending its whole wall clock,
+so the launcher refuses the pairing before any agent starts -- along with an unset key variable, an
+incomplete block, and a service arm that still claims an inference node.
+
+#### The three examples
+
+| Arm env | Service | Model id | Harness | Notes |
+| --- | --- | --- | --- | --- |
+| `.env.base-musespark` | Meta Model API, `https://api.meta.ai/v1` | `muse-spark-1.3-contributor` | claude | Messages surface, bearer auth, 1,048,576-token window. |
+| `.env.base-fable51` | Anthropic, `https://api.anthropic.com/v1` | `claude-fable-5-1` | claude | Messages surface, `x-api-key` auth. |
+| `.env.base-gpt6astra` | OpenAI, `https://api.openai.com/v1` | `gpt-6-astra` | openhands | Chat completions, bearer auth. |
+
+Each block lives in `experiments/models.py` beside the served models, and a test asserts the `.env`
+files still match it -- a block edited in one place and not the other is the drift that table
+exists to prevent.
+
+**The contributor tier trains on your traffic.** Meta's contributor tier buys its discount (about
+92% off input and 95% off output) with permission to train future Meta models on the prompts and
+completions an arm sends. Every kernel, every reference and every agent transcript in a contributor
+run is training data. Use `muse-spark-1.3` on the standard tier for anything that must not be.
+
+Rate limits are per ACCOUNT, not per node, so `AGENTS_PER_NODE` is what keeps an arm under its
+requests-per-minute ceiling; the examples ship 8 rather than the 40 an owned server node carries.
+
+#### How the key reaches the worker
+
+The key is **named** in the arm env and **valued** in the launching shell. Nothing commits it,
+nothing writes it into the run tree, and rotating it is an export rather than an edit. This is the
+same shape `containers/cluster/ce-images/inference/alps-endpoint.sh` already uses for an endpoint
+the job did not start: it exports `VLLM_API_KEY` into the submitting shell and the job inherits it.
+
+1. **The launching shell.** `export META_MODEL_API_KEY=...` (or `ANTHROPIC_API_KEY`,
+   `OPENAI_API_KEY` -- whichever the arm's `INFERENCE_SERVICE_KEY_ENV` names) before submitting.
+   A `chmod 600` file you `source` works the same way; what matters is that the variable is set in
+   the shell that runs `run_campaign.sh`.
+2. **`run_campaign.sh` -> `sbatch`.** `sbatch` propagates the submitting environment to the job by
+   default, so the variable reaches `beverin.sbatch` without being named on any command line.
+3. **`run_cluster.sh`.** It reads the arm's `INFERENCE_SERVICE_KEY_ENV`, copies the value by shell
+   indirection (`VLLM_API_KEY="${!INFERENCE_KEY_ENV}"`), and picks which variable the claude CLI's
+   key belongs in. `inference_service.py` prints the block it evals, and that block carries the
+   variable's name -- the key itself never passes through python or this script's stdout.
+4. **The role steps.** `role_srun` runs every step with `--export=ALL`, so the agent step inherits
+   the variable and `VLLM_API_KEY` with it.
+5. **The harness.** `run_agent_node` exports `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` for the
+   claude CLI (a first-party Anthropic endpoint takes `x-api-key` alone and answers a bearer
+   pairing with 401; Meta's Messages surface wants exactly that bearer), and
+   `experiments/harnesses.py::runner_env` sets `OPENAI_API_KEY` from `VLLM_API_KEY` for a runner.
+6. **The sealed worker.** `experiments/seal_worker.py` execs the worker with the whole environment
+   it was given -- it rewrites `HOME` and drops `IS_SANDBOX`, nothing else -- so the sealed view
+   still carries the key.
+
+Where it never goes: the arm `.env` (which names the variable), the staged copy of it under
+`AGENT_LAUNCH_DIR`, the run's `inference.json` provenance (which records the variable's name), the
+`usage.jsonl` token records, and the job log. `tests/test_inference_service.py` asserts each of
+those with a canary key value.
+
+To rotate: issue a new key at the provider, change the export in the launching shell, and submit
+again. There is no file to edit and nothing to revoke in the checkout.
+
+#### Sandbox and test modes, per provider
+
+Checked once, on 2026-09-16, because a free correctness run against the real service is worth more
+than a fake. None of the three offers a mock endpoint that answers with canned tokens, so
+`tests/test_inference_service.py`'s in-repo fake stays the proof CI runs.
+
+| Service | Sandbox / mock / test model | Checked |
+| --- | --- | --- |
+| Meta Model API | None documented. A new account gets $20 of credits and the public preview is US-only, so the cheapest real check is one contributor-tier call, at $0.10/$0.20 per million tokens. | [authentication](https://dev.meta.ai/docs/authentication), [getting started](https://dev.meta.ai/docs/getting-started/overview/), [pricing and rate limits](https://dev.meta.ai/docs/pricing-rate-limits) |
+| Anthropic | No mock inference endpoint. `POST /v1/messages/count_tokens` is free and separately rate limited, so it exercises the auth header and the request shape at zero cost -- but it returns a token count, not a `usage` block, so it cannot prove the usage fold. (The Environments API "sandbox" is a Managed Agents workspace, not a mock model.) | [API overview](https://platform.claude.com/docs/en/api/overview) |
+| OpenAI | None documented. The free allowance is an opt-in program that shares your traffic for training, which is the same trade the Meta contributor tier makes and not a mock. | [models](https://developers.openai.com/api/docs/models), [API reference](https://developers.openai.com/api/reference/overview) |
+
+To point an arm at a cheaper variant of its service, change `INFERENCE_SERVICE_MODEL` and, where the
+tier differs, `INFERENCE_SERVICE_TIER`; nothing else in the block moves. A one-kernel smoke is the
+practical zero-risk check:
+
+```bash
+export META_MODEL_API_KEY=...
+cd experiments && ./run_campaign.sh smoke-llr4-cpp --account=<a> --partition=mi300
+```
+
+with `CAMPAIGN_ARM`, `PROBLEMS_FILE` and the service block copied from `.env.base-musespark`.
+
+#### Provenance and token accounting
+
+Every run now writes `<RUN_DIR>/inference.json`. A server arm records its engine, its EDF and the
+checkpoint; a service arm records the provider, the model id, the wire format, the base URL, the
+key's variable name and the **tier** -- the one property of a finished hosted run that cannot be
+recovered afterwards, since contributor and standard traffic are identical on the wire.
+
+Token accounting is unchanged, because all three services report usage in a shape the repo already
+parses. Meta and OpenAI return the OpenAI `usage` block (`prompt_tokens`, `completion_tokens`,
+`prompt_tokens_details.cached_tokens`, `completion_tokens_details.reasoning_tokens`), which
+`containers/agent/harness/runner_common.py::openai_usage` folds into the four disjoint counts
+`usage.jsonl` carries. The Messages surfaces report the prompt as three disjoint counts
+(`input_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`), which
+`hpcagent_bench/harness/agent.py::anthropic_usage` already sums. A service whose usage block
+matches neither needs its own parser beside those two, with a reproducer -- reading it with the
+wrong one reports zero for every call rather than failing, which is why the wire format is a gate.
+See [`docs/token_accounting.md`](../docs/token_accounting.md) for what the counts mean.
+
 ### Judge and web-search settings
 
 | Variable | Default | Meaning |

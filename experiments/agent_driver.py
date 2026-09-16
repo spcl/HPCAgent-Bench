@@ -2483,7 +2483,14 @@ def main() -> int:
     vllm_timeout = float(
         os.environ.get("AGENT_READY_TIMEOUT_SECONDS", os.environ.get("VLLM_READY_TIMEOUT_SECONDS", "900"))
     )
-    ready_replicas = wait_for_ready_replicas(replicas, vllm_timeout, vllm_headers)
+    # A hosted service needs no readiness wait: it was up before this job was, and the probe would
+    # have to speak the service's own auth to learn anything -- GET /v1/models takes x-api-key on
+    # an Anthropic-format endpoint, which the bearer header above is not. Waiting anyway turns a
+    # working arm into an aborted one on the strength of a probe that never had a chance.
+    if os.environ.get("INFERENCE_SOURCE", "").strip() == "service":
+        ready_replicas = replicas
+    else:
+        ready_replicas = wait_for_ready_replicas(replicas, vllm_timeout, vllm_headers)
     if len(ready_replicas) < len(replicas):
         print(f"proceeding with {len(ready_replicas)}/{len(replicas)} vLLM replicas", flush=True)
     # Throughput, measured BEFORE the agents start: once 40 workers are in flight the endpoint is

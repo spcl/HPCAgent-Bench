@@ -13,12 +13,16 @@ import re
 HERE = pathlib.Path(__file__).resolve().parent
 
 #: The served window per model. oss120b's native max_position_embeddings is 131072 (yarn 32 x
-#: 4096); vLLM refuses a longer window. The rest of the fleet serves 262144.
+#: 4096); vLLM refuses a longer window. The rest of the fleet serves 262144. A hosted service is
+#: not served by us at all, so its entry is the window the PROVIDER publishes.
 SERVED_CONTEXT = {
     "oss120b": 131072,
     "qwen38": 262144,
     "kimi27sglang": 262144,
     "glm53": 262144,
+    "musespark": 1048576,
+    "fable51": 1000000,
+    "gpt6astra": 1050000,
 }
 
 
@@ -63,5 +67,63 @@ MODELS = {
         ),
         "OPTARENA_OPTIMIZER": "openai/gpt-oss-120b",
         "CLAUDE_AUTOCOMPACT": str(claude_autocompact(SERVED_CONTEXT["oss120b"])),
+    },
+    # The hosted services. Same table, different keys: nothing here starts an engine, so the block
+    # is the endpoint, the model id and the TIER instead of a serving argument list. The key is
+    # named, never written -- see experiments/inference_service.py.
+    #
+    # Meta's Muse Spark, contributor tier: 92% off input and 95% off output in exchange for Meta
+    # training future models on the prompts and completions an arm sends. Read that before pointing
+    # a campaign at it; muse-spark-1.3 is the same model on the standard tier and the same block
+    # with the -contributor suffix dropped. Meta serves BOTH wire formats, so the api key below is
+    # a choice: anthropic here, because the claude harness is what the rest of the fleet runs.
+    "musespark": {
+        "INFERENCE_SOURCE": "service",
+        "INFERENCE_NODES": "0",
+        "INFERENCE_SERVICE_PROVIDER": "meta",
+        "INFERENCE_SERVICE_BASE_URL": "https://api.meta.ai/v1",
+        "INFERENCE_SERVICE_MODEL": "muse-spark-1.3-contributor",
+        "INFERENCE_SERVICE_TIER": "contributor",
+        "INFERENCE_SERVICE_API": "anthropic",
+        "INFERENCE_SERVICE_AUTH": "bearer",
+        "INFERENCE_SERVICE_KEY_ENV": "META_MODEL_API_KEY",
+        "EFFORT_LADDER": '"low medium high xhigh max"',
+        "CONTEXT_LENGTH": str(SERVED_CONTEXT["musespark"]),
+        "OPTARENA_OPTIMIZER": "meta/muse-spark-1.3-contributor",
+        "CLAUDE_AUTOCOMPACT": str(claude_autocompact(SERVED_CONTEXT["musespark"])),
+    },
+    # Anthropic's own API. x-api-key, not bearer: the claude CLI sends Authorization: Bearer
+    # whenever ANTHROPIC_AUTH_TOKEN is set, and that pairing is a 401 here.
+    "fable51": {
+        "INFERENCE_SOURCE": "service",
+        "INFERENCE_NODES": "0",
+        "INFERENCE_SERVICE_PROVIDER": "anthropic",
+        "INFERENCE_SERVICE_BASE_URL": "https://api.anthropic.com/v1",
+        "INFERENCE_SERVICE_MODEL": "claude-fable-5-1",
+        "INFERENCE_SERVICE_TIER": "standard",
+        "INFERENCE_SERVICE_API": "anthropic",
+        "INFERENCE_SERVICE_AUTH": "x-api-key",
+        "INFERENCE_SERVICE_KEY_ENV": "ANTHROPIC_API_KEY",
+        "EFFORT_LADDER": '"low medium high xhigh max"',
+        "CONTEXT_LENGTH": str(SERVED_CONTEXT["fable51"]),
+        "OPTARENA_OPTIMIZER": "anthropic/claude-fable-5-1",
+        "CLAUDE_AUTOCOMPACT": str(claude_autocompact(SERVED_CONTEXT["fable51"])),
+    },
+    # OpenAI's own API, which serves chat completions and no Messages endpoint -- so this arm runs
+    # a RUNNER harness (mini-SWE, OpenHands, optimas), never the claude CLI.
+    "gpt6astra": {
+        "INFERENCE_SOURCE": "service",
+        "INFERENCE_NODES": "0",
+        "INFERENCE_SERVICE_PROVIDER": "openai",
+        "INFERENCE_SERVICE_BASE_URL": "https://api.openai.com/v1",
+        "INFERENCE_SERVICE_MODEL": "gpt-6-astra",
+        "INFERENCE_SERVICE_TIER": "standard",
+        "INFERENCE_SERVICE_API": "openai",
+        "INFERENCE_SERVICE_AUTH": "bearer",
+        "INFERENCE_SERVICE_KEY_ENV": "OPENAI_API_KEY",
+        "EFFORT_LADDER": '"low medium high xhigh max"',
+        "CONTEXT_LENGTH": str(SERVED_CONTEXT["gpt6astra"]),
+        "OPTARENA_OPTIMIZER": "openai/gpt-6-astra",
+        "CLAUDE_AUTOCOMPACT": str(claude_autocompact(SERVED_CONTEXT["gpt6astra"])),
     },
 }
