@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: Sparse General Minimal Residual
+name: Sparse GMRES
 module_name: gmres
 level: 3
 parameters:

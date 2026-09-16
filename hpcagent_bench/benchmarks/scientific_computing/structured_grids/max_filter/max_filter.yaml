@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: Max Filter (Sliding-Window Maximum)
+name: Sliding-Window Max Filter
 level: 2
 parameters:
   S:

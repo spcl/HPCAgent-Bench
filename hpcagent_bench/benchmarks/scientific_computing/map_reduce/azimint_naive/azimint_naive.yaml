@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: Azimuthal Integration - Naive
+name: Azimuthal Integration, Naive
 level: 3
 parameters:
   S:

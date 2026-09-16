@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: Matrix Vector Product and Transpose
+name: Matrix-Vector and Transpose
 level: 2
 parameters:
   S:

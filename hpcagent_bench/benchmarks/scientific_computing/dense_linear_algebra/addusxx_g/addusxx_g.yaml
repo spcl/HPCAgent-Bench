@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: Augmentation Charge (QE EXX)
+name: QE EXX Aug Charge
 func_name: addusxx_g
 level: 2
 parameters:

@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: CFD (Euler flux)
+name: CFD Euler Flux
 level: 3
 parameters:
   S:

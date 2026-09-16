@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: Generalized Minimum Residual (GMRES) Method
+name: GMRES Method
 level: 3
 parameters:
   S:

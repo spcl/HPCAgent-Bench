@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: Cholesky Decomposition - version 2
+name: Cholesky Decomposition V2
 level: 2
 parameters:
   S:

@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: Covariance - version 2
+name: Covariance V2
 level: 2
 parameters:
   S:

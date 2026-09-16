@@ -1,5 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
-name: Lennard-Jones Force (molecular dynamics)
+name: Lennard-Jones Force
 level: 3
 parameters:
   S:
