@@ -241,6 +241,7 @@ minor lines at wrong ratios.
 | `plot_arm_summary.py` | per-arm median speed-up and spend; one x slot per LANGUAGE, models dodged inside |
 | `plot_score_change.py` | one comparison as two square panels: speed-up on Y, tokens on Y, conditions on X |
 | `plot_tokens.py` | tokens per kernel, per model |
+| `plot_repo_vs_kernel.py` | one pair's per-kernel RATIO, speed-up over tokens, on one kernel axis |
 | `plot_speedup.py` | per-kernel signed speed-up in magnitude bands, per machine (see [measurement_statistics.md](measurement_statistics.md)) |
 
 The first three read the CSV this page's extraction step produces. The speed-up in each comes from

@@ -72,6 +72,7 @@ from hpcagent_bench import experiment_tags, packets
 from hpcagent_bench.stats import canon, palette, population, summary
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures.per_kernel import speedup_tick_label
+from hpcagent_bench.stats.figures.results import DEFAULT_BASELINE, baseline_of
 
 #: An arm this figure may draw, and its (model, condition) in one match: ``-c`` is the control
 #: (condition ``""``), ``-c-cpf`` the CPF page, ``-c-cpfsrc`` CPF as source. C only -- Fortran has no
@@ -474,6 +475,7 @@ def draw_panel(
     size: float,
     range_of: Callable[[Series], tuple[dict[str, float], dict[str, float]]] | None = None,
     mark_missing: bool = True,
+    delivered_of: Callable[[Series], dict[str, bool]] | None = None,
 ) -> None:
     """One panel, for ONE metric (:func:`value_of` reads it off each series): the kernel slots,
     dodged apart within each slot, plus the summary group past their right end
@@ -487,6 +489,11 @@ def draw_panel(
     ``range_of``, when given, reads a (minimum, maximum) pair per series off ``--repeats median``'s
     token spread (R5) and draws it as a thin whisker behind the mark -- absent under ``--repeats
     latest``, where a kernel has one task and nothing to bracket.
+
+    ``delivered_of``, when given, says which of a series' PRESENT values are measurements: a panel
+    of RATIOS carries the 1x placeholder inside the value itself (a non-delivery divided by a real
+    answer is not 1.0), so the cross has to go on a drawn mark rather than on an absent one. Without
+    it every present value is a measurement, which is what an absolute panel wants.
     """
     separator_x, summary_x = summary_column_position(len(kernels))
     kernel_axis(ax, kernels, label_kernels)
@@ -495,6 +502,7 @@ def draw_panel(
     for offset, series in zip(dodge_offsets(len(series_list)), series_list, strict=True):
         values = value_of(series)
         low_of, high_of = range_of(series) if range_of is not None else ({}, {})
+        delivered = delivered_of(series) if delivered_of is not None else {}
         for kernel in kernels:
             x = x_of[kernel] + offset
             value = values.get(kernel)
@@ -507,7 +515,10 @@ def draw_panel(
             low, high = low_of.get(kernel), high_of.get(kernel)
             if low is not None and high is not None and math.isfinite(low) and math.isfinite(high) and low < high:
                 ax.vlines(x, low, high, color=series.color, linewidth=1.1, alpha=0.55, zorder=TOKEN_RANGE_Z)
-            plotstyle.point_mark(ax, x, value, series.color, series.marker, filled=True, size=size)
+            plotstyle.point_mark(
+                ax, x, value, series.color, series.marker, filled=True, size=size,
+                delivered=delivered.get(kernel, True),
+            )  # fmt: skip
     draw_summary_column(ax, separator_x, summary_x, series_list, value_of, reducer, summary_label, size)
 
 
@@ -611,6 +622,18 @@ def figure_size(n_series: int, n_kernels: int, double_column: bool) -> tuple[flo
     return width + LEFT_MARGIN_IN + RIGHT_MARGIN_IN, height
 
 
+def speedup_label(baseline: str) -> str:
+    """The speed-up panel's axis label, naming the denominator the JUDGE recorded.
+
+    The baseline is a property of the data (:func:`hpcagent_bench.stats.figures.results.baseline_of`
+    reads the column the judge stamped), never of the figure: llr-focus40 is graded against numba
+    and scientific_computing against c-autopar, so a fixed "vs Numba" here labels a
+    scientific_computing panel with a denominator no score in it ever saw. The canon series already
+    names its own denominator the same way (:func:`build_panels`).
+    """
+    return f"Speed-Up vs {baseline}"
+
+
 def figure(
     panels: dict[str, list[Series]],
     canon_mark: Series | None,
@@ -618,6 +641,7 @@ def figure(
     double_column: bool,
     title: str,
     condition_order: Sequence[str] = CONDITION_ORDER,
+    baseline: str = DEFAULT_BASELINE,
 ) -> matplotlib.figure.Figure:
     """The whole figure: a speed-up panel (every model's arms plus the canon column) ABOVE a token
     panel (agents only), both on ONE shared kernel axis.
@@ -677,7 +701,7 @@ def figure(
     )
     # One label per panel: the figure title only names the whole figure, and neither panel's value
     # axis says on its own which metric it carries.
-    speedup_ax.set_ylabel("Speed-Up vs Numba", fontsize=plotstyle.LABEL_PT * 0.7, color=plotstyle.MUTED)
+    speedup_ax.set_ylabel(speedup_label(baseline), fontsize=plotstyle.LABEL_PT * 0.7, color=plotstyle.MUTED)
     token_ax.set_ylabel("Tokens Spent", fontsize=plotstyle.LABEL_PT * 0.7, color=plotstyle.MUTED)
 
     width, height = figure_size(len(speedup_series), len(kernels), double_column)

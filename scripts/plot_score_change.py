@@ -247,12 +247,27 @@ class Panel:
     log_base: float
     log2: bool
     verdict: str
+    #: What the whisker beside this panel's marks estimates, for the note in the key.
+    statistic: str
+    #: The estimator's name when it is FIXED for this panel; "" when it is chosen from the leg's own
+    #: n (:func:`hpcagent_bench.stats.summary.interval_method`).
+    fixed_method: str
 
+
+#: What :func:`hpcagent_bench.stats.summary.median_ci` draws, spelled the way
+#: :func:`~hpcagent_bench.stats.summary.geomean_interval` spells its own bootstrap leg, so the two
+#: notes a reader compares are in one vocabulary.
+MEDIAN_INTERVAL_METHOD: str = f"bootstrap-{summary.DEFAULT_CI_METHOD}"
 
 #: The two quantities of ONE comparison, left panel then right. They are different measurements
 #: (SC15 Rule 4), so they never share a scale -- and each one is a VALUE, so each one is on a Y.
-SPEEDUP_PANEL: Panel = Panel("log2_speedup", "Geomean Speedup over Baseline", 2.0, True, "score_verdict")
-TOKENS_PANEL: Panel = Panel("tokens", "Median Tokens per Task", 10.0, False, "cost_verdict")
+#: They also draw different ESTIMATORS: the speed-up whisker is ``summary.geomean_interval``, which
+#: picks log-t or a log-space bootstrap from the leg's own n, and the token whisker is
+#: ``summary.median_ci``, a percentile bootstrap of the median (``population.kernel_medians``).
+SPEEDUP_PANEL: Panel = Panel("log2_speedup", "Geomean Speedup over Baseline", 2.0, True, "score_verdict", "Geomean", "")
+TOKENS_PANEL: Panel = Panel(
+    "tokens", "Median Tokens per Task", 10.0, False, "cost_verdict", "Median", MEDIAN_INTERVAL_METHOD
+)
 PANELS: tuple[Panel, ...] = (SPEEDUP_PANEL, TOKENS_PANEL)
 
 #: The two X positions of one comparison, and what the axis calls them. The positions are the two
@@ -358,21 +373,51 @@ def verdict_flags(stats: pd.DataFrame) -> dict[tuple[str, str], dict[str, bool]]
     return flags
 
 
-def interval_note(frame: pd.DataFrame) -> str:
-    """The speed-up panel's interval, named with the population it is over -- log-t or bootstrap is
-    a choice :func:`hpcagent_bench.stats.summary.geomean_interval` makes from n, and two intervals
-    drawn the same way and labelled the same way are two claims a reader cannot separate."""
-    kernels = sorted({int(n) for n in frame.get("kernels", pd.Series(dtype=float)).dropna().tolist()})
-    method = summary.interval_method(kernels[0]) if kernels else "log-t"
-    span = f"{kernels[0]}" if len(kernels) == 1 else f"{kernels[0]}-{kernels[-1]}" if kernels else "?"
-    return f"Geomean, 95% {method} Interval, n={span}"
+def kernel_counts(frame: pd.DataFrame) -> list[int]:
+    """The distinct kernel counts the figure's legs are drawn over, ascending."""
+    return sorted({int(n) for n in frame.get("kernels", pd.Series(dtype=float)).dropna().tolist()})
+
+
+def span(counts: Sequence[int]) -> str:
+    """``counts`` as an n for a legend: one number, a range, or ``?`` when the frame carries none."""
+    if not counts:
+        return "?"
+    return str(counts[0]) if len(counts) == 1 else f"{counts[0]}-{counts[-1]}"
+
+
+def interval_note(frame: pd.DataFrame, panel: Panel) -> str:
+    """ONE panel's own interval, named with the population it is over.
+
+    PER PANEL, because the two panels draw DIFFERENT estimators: the speed-up whisker is
+    :func:`hpcagent_bench.stats.summary.geomean_interval` and the token whisker is
+    :func:`~hpcagent_bench.stats.summary.median_ci`, a percentile bootstrap of the median
+    (:func:`hpcagent_bench.stats.population.kernel_medians`). One note naming only the geomean's
+    interval labelled every token whisker as a claim it does not make.
+
+    PER LEG, because :func:`~hpcagent_bench.stats.summary.geomean_interval` picks its estimator from
+    each leg's own n: reading the method off the smallest leg called every wider leg's whisker
+    something it is not. Legs that disagree are all named, each with its own n.
+    """
+    counts = kernel_counts(frame)
+    if panel.fixed_method:
+        return f"{panel.statistic}, 95% {panel.fixed_method} Interval, n={span(counts)}"
+    by_method: dict[str, list[int]] = {}
+    for count in counts:
+        by_method.setdefault(summary.interval_method(count), []).append(count)
+    if len(by_method) == 1:
+        method, legs = next(iter(by_method.items()))
+        return f"{panel.statistic}, 95% {method} Interval, n={span(legs)}"
+    if not by_method:
+        return f"{panel.statistic}, 95% {summary.interval_method(summary.LOG_T_MIN_SAMPLES)} Interval, n=?"
+    named = ", ".join(f"{method} n={span(legs)}" for method, legs in by_method.items())
+    return f"{panel.statistic}, 95% Interval: {named}"
 
 
 def legend_handles(
     treatment: str,
     models: Sequence[str],
     stats: pd.DataFrame,
-    note: str,
+    notes: Sequence[str],
     control_over: Sequence[str],
     control_name: str = "",
 ) -> list[plt.Line2D]:
@@ -428,7 +473,8 @@ def legend_handles(
             label=experiment_tags.packet_name(treatment),
         ),  # fmt: skip
         plt.Line2D([], [], linestyle=(0, (3, 3)), linewidth=1.0, color=palette.control_color(), label="Pair Link"),
-        plt.Line2D([], [], linestyle="-", linewidth=1.3, color=plotstyle.MUTED, label=note),
+        # ONE entry per PANEL: its own estimator over its own n. Still one key on the figure.
+        *[plt.Line2D([], [], linestyle="-", linewidth=1.3, color=plotstyle.MUTED, label=text) for text in notes],
         plt.Line2D(
             [],
             [],
@@ -501,8 +547,9 @@ def draw_absolute(
             )
     for ax, panel in zip(axes, PANELS, strict=True):
         style_panel(ax, panel, compact)
+    notes = [interval_note(frame, panel) for panel in PANELS]
     return legend_handles(
-        treatment, sorted(drawn_models), stats, interval_note(frame), list(control_over) or [treatment], control_name
+        treatment, sorted(drawn_models), stats, notes, list(control_over) or [treatment], control_name
     )
 
 

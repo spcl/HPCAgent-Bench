@@ -24,8 +24,11 @@ from hpcagent_bench.stats.figures import kernel_comparison
 ROSTER: tuple[str, ...] = ("k1", "k2", "k3")
 
 
-def submission_rows(arm: str, benchmark_speedups: dict[str, float]) -> list[dict[str, object]]:
-    """One graded episode per (arm, kernel): the columns ``population.kernel_answers`` needs."""
+def submission_rows(arm: str, benchmark_speedups: dict[str, float], baseline: str = "numba") -> list[dict[str, object]]:
+    """One graded episode per (arm, kernel): the columns ``population.kernel_answers`` needs.
+
+    ``baseline`` is the denominator the judge stamped on the row -- ``numba`` for loop_level_reasoning
+    and ``c-autopar`` for scientific_computing (``harness.grading.TRACK_DEFAULT_BASELINE``)."""
     rows = []
     for benchmark, speedup in benchmark_speedups.items():
         run = f"{arm}-{benchmark}"
@@ -40,7 +43,7 @@ def submission_rows(arm: str, benchmark_speedups: dict[str, float]) -> list[dict
                 "speedup": speedup,
                 "baseline_ns": 1000.0,
                 "native_ns": 1000.0 / speedup,
-                "baseline": "numba",
+                "baseline": baseline,
                 "suspect": 0,
                 "ts_ms": 1,
                 "attempt_index": 1,
@@ -866,3 +869,84 @@ def test_the_key_for_a_never_delivered_kernel_shows_the_cross_and_names_it() -> 
     assert missing[0].get_marker() == "x"
     assert kernel_comparison.MISSING_LABEL == plotstyle.NOT_DELIVERED_LABEL
     assert "1x" in kernel_comparison.MISSING_LABEL
+
+
+def test_the_speedup_axis_names_the_denominator_the_judge_recorded() -> None:
+    """The baseline is a property of the DATA, not of the figure. scientific_computing grades
+    against ``c-autopar`` (``harness.grading.TRACK_DEFAULT_BASELINE``), so a panel drawn over its
+    rows must say so; a fixed "vs Numba" labels those scores with a denominator none of them saw.
+    The canon series already names its own denominator this way."""
+    frame = observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0}, baseline="c-autopar"),
+            *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 10.0, "k2": 10.0, "k3": 10.0}),
+        ]
+    )
+    panels, canon_mark, dropped = kernel_comparison.build_panels(frame, ROSTER)
+    fig = kernel_comparison.figure(
+        panels,
+        canon_mark,
+        list(ROSTER),
+        False,
+        "title",
+        kernel_comparison.CONDITION_ORDER,
+        kernel_comparison.baseline_of(frame),
+    )
+    try:
+        assert fig.axes[0].get_ylabel() == "Speed-Up vs c-autopar"
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+
+
+def test_the_script_hands_the_figure_the_baseline_its_observations_carry(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wiring, not just the label: the script reads the denominator off the rows it loaded."""
+    import importlib.util
+    import sys
+
+    repo = pathlib.Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "plot_kernel_comparison", repo / "scripts" / "plot_kernel_comparison.py"
+    )
+    assert spec is not None and spec.loader is not None
+    script = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = script
+    spec.loader.exec_module(script)
+
+    obs_csv = tmp_path / "obs.csv"
+    observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0}, baseline="c-autopar"),
+            *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 10.0, "k2": 10.0, "k3": 10.0}),
+        ]
+    ).to_csv(obs_csv, index=False)
+    roster_file = tmp_path / "roster.txt"
+    roster_file.write_text("\n".join(ROSTER))
+
+    seen: list[str] = []
+    real = kernel_comparison.figure
+
+    def record(*args: object, **kwargs: object) -> object:
+        seen.append(str(args[6]) if len(args) > 6 else str(kwargs["baseline"]))
+        return real(*args, **kwargs)  # pyright: ignore[reportArgumentType, reportCallIssue]
+
+    monkeypatch.setattr(script.kernel_comparison, "figure", record)
+    rc = script.run(
+        obs_csv,
+        None,
+        kernel_comparison.CANON_COLUMN,
+        kernel_comparison.CANON_BASELINE,
+        roster_file,
+        kernel_comparison.ARM_PATTERN.pattern,
+        False,
+        False,
+        "",
+        tmp_path / "out" / "kernel_comparison.pdf",
+        tmp_path / "out" / "kernel_comparison.csv",
+    )
+
+    assert rc == 0
+    assert seen == ["c-autopar"]
