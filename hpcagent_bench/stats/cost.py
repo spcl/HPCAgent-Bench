@@ -99,7 +99,10 @@ def resolve(spec: str = DEFAULT_COST_MODEL, extra: pathlib.Path | None = None) -
 
 def components(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
     """``(fresh_input, cached_input, output)`` per row, read off :data:`COMPONENT_COLUMNS`."""
-    fresh, cached, output = (pd.to_numeric(frame[column], errors="coerce") for column in COMPONENT_COLUMNS)
+    fresh, cached, output = (
+        pd.Series(pd.to_numeric(frame[column], errors="coerce"), index=frame.index, dtype=float)
+        for column in COMPONENT_COLUMNS
+    )
     return fresh, cached, output
 
 
