@@ -22,7 +22,7 @@
 # is what keeps them true at RUN time.
 image = "${SCRATCH}/ce-images/optarena-ce-amd-mi300.sqsh"
 mounts = [
-    "/capstor/:/capstor/",
+    "/ritom/:/ritom/",
     "/iopsstor/:/iopsstor/",
     "${SCRATCH}:${SCRATCH}",
 ]

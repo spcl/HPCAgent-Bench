@@ -11,7 +11,7 @@
 image = "${SCRATCH}/ce-images/PLACEHOLDER.sqsh"
 
 mounts = [
-  "/capstor:/capstor",
+  "/ritom:/ritom",
   "/iopsstor:/iopsstor"
 ]
 
