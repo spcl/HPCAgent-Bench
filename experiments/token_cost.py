@@ -115,6 +115,13 @@ OutputCounter = Callable[[list[dict[str, object]]], int | None]
 #: second-order next to a 106x double count.
 CACHE_DISCOUNT: float = 0.0
 
+#: The PROVIDER's reading of the same fold: a cache read is billed at about a tenth of a fresh input
+#: token (Anthropic, OpenAI and Meta all price it near 10 percent), so ``effective_provider`` charges
+#: every re-read prefix at that rate. It is the number a hosted-service arm pays in dollars, and it
+#: grows with turn count the way the bill does; ``effective`` (the free reading) does not. Both are
+#: recorded per task, beside ``billed``; the USER (2026-09-16) asked for all three side by side.
+PROVIDER_CACHE_DISCOUNT: float = 0.1
+
 #: Usage fields that make up one turn's INPUT. Cache fields are summed in because a turn served
 #: from cache still reports its prompt somewhere, and which field varies by endpoint.
 INPUT_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
@@ -378,6 +385,7 @@ def usage_episode_cost(path: pathlib.Path) -> CostRow:
         "output_suspect": 0.0,
         "naive_total": fresh + cached + output,
         "effective": fresh + CACHE_DISCOUNT * cached + output,
+        "effective_provider": fresh + PROVIDER_CACHE_DISCOUNT * cached + output,
     }
 
 
@@ -503,6 +511,8 @@ def events_cost(events: list[dict[str, object]], output_counter: OutputCounter |
         "naive_total": fresh + cached + output,
         # Every token once: the context that was ever built, plus everything generated.
         "effective": fresh + CACHE_DISCOUNT * cached + output,
+        # The same fold priced the way a hosted provider meters it: re-read prefixes at a tenth.
+        "effective_provider": fresh + PROVIDER_CACHE_DISCOUNT * cached + output,
         # The SELF-HOSTED unit. Tokens are a borrowed currency here -- nobody bills us per token,
         # we pay for nodes by the second -- and api_ms is the share of the shared inference node
         # this episode actually occupied. An episode's node-seconds is the job's
@@ -598,22 +608,29 @@ class TaskTotals(NamedTuple):
     tokens_effective_crashed: int
     tokens_billed_crashed: int
     final_attempt_start_ms: int
+    #: The provider-priced reading (PROVIDER_CACHE_DISCOUNT) of the same attempts, final and crashed.
+    tokens_provider: int | None = None
+    tokens_provider_crashed: int = 0
 
 
-def attempt_totals(log: pathlib.Path, output_counter: OutputCounter | None = None) -> tuple[int, int]:
-    """One attempt's ``(effective, billed)`` tokens (8.1) from ONE read of its transcript: the
+def attempt_totals(log: pathlib.Path, output_counter: OutputCounter | None = None) -> tuple[int, int, int]:
+    """One attempt's ``(effective, effective_provider, billed)`` tokens (8.1) from ONE read of its transcript: the
     effective cost model of :func:`events_cost` and the last-usage-per-message-id fold of
     :func:`fold_billed_event` over the same parsed events. Each attempt folds fresh, since the driver
     starts every attempt with a new transcript (no message id repeats across attempts)."""
     if is_usage_transcript(log):
         cost = usage_episode_cost(log)
-        return int(cast("float", cost["effective"])), int(cast("float", cost["naive_total"]))
+        return (
+            int(cast("float", cost["effective"])),
+            int(cast("float", cost["effective_provider"])),
+            int(cast("float", cost["naive_total"])),
+        )
     events = claude_events(log)
     billed: dict[str, int] = {}
     for event in events:
         fold_billed_event(event, billed)
-    effective = cast("float", events_cost(events, output_counter)["effective"])
-    return int(effective), sum(billed.values())
+    cost = events_cost(events, output_counter)
+    return int(cast("float", cost["effective"])), int(cast("float", cost["effective_provider"])), sum(billed.values())
 
 
 def attempt_ledger(worker_dir: pathlib.Path) -> list[dict[str, object]]:
@@ -667,14 +684,16 @@ def task_totals(worker_dir: pathlib.Path, output_counter: OutputCounter | None =
     if not logs:
         return TaskTotals(0, None, None, 0, 0, 0)
     per_attempt = [attempt_totals(log, output_counter) for log in logs]
-    effective, billed = per_attempt[-1]
+    effective, provider, billed = per_attempt[-1]
     return TaskTotals(
         attempts=len(logs),
         tokens_effective=effective,
         tokens_billed=billed,
-        tokens_effective_crashed=sum(pair[0] for pair in per_attempt[:-1]),
-        tokens_billed_crashed=sum(pair[1] for pair in per_attempt[:-1]),
+        tokens_effective_crashed=sum(triple[0] for triple in per_attempt[:-1]),
+        tokens_billed_crashed=sum(triple[2] for triple in per_attempt[:-1]),
         final_attempt_start_ms=final_attempt_start(worker_dir, logs),
+        tokens_provider=provider,
+        tokens_provider_crashed=sum(triple[1] for triple in per_attempt[:-1]),
     )
 
 
@@ -707,6 +726,7 @@ def main() -> int:
             "thinking_estimate",
             "naive_total",
             "effective",
+            "effective_provider",
             "wall_ms",
             "api_ms",
         ):
@@ -721,6 +741,9 @@ def main() -> int:
     print(f"  billed total  {total['naive_total']:>16,}   per-turn sum; what an API charges and papers report")
     print(
         f"  effective     {int(total['effective']):>16,}   {total['effective'] / max(total['naive_total'], 1):.3f}x billed; every token counted once"
+    )
+    print(
+        f"  eff. provider {int(total['effective_provider']):>16,}   cache reads at {PROVIDER_CACHE_DISCOUNT:.0%}; what a hosted service meters"
     )
     print(f"  api seconds   {total['api_ms'] / 1000:>16,.0f}   the SELF-HOSTED unit -- see the docstring")
     print(f"  wall seconds  {total['wall_ms'] / 1000:>16,.0f}")
@@ -738,6 +761,7 @@ def main() -> int:
             "output_suspect",
             "naive_total",
             "effective",
+            "effective_provider",
             "wall_ms",
             "api_ms",
         ]
