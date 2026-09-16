@@ -167,7 +167,6 @@
  "tests/test_agent_mcp_retry.py": 70,
  "tests/test_agent_service.py": 30,
  "tests/test_aggregation_population.py": 12,
- "tests/test_analyze_llr40_dedup.py": 20,
  "tests/test_api.py": 3,
  "tests/test_attempt_budget.py": 11,
  "tests/test_autopar_probe.py": 5,
