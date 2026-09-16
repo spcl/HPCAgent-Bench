@@ -19,14 +19,14 @@
 #SBATCH --hint=nomultithread
 #SBATCH --mem=0
 #SBATCH --time=01:30:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/push-preflight-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/push-preflight-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 
 set -Eeuo pipefail
 ulimit -c 0
 IMAGE_DIR="${IMAGE_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
 test -x "${IMAGE_DIR}/push_image.sh"
-CE="${CE_IMAGES:-/capstor/scratch/cscs/${USER}/x86_64/ce-images}"
+CE="${CE_IMAGES:-${SCRATCH:?set SCRATCH}/ce-images}"
 
 rc=0
 for archive in "${CE}"/*.oci.tar; do

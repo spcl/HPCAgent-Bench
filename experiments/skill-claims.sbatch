@@ -18,8 +18,8 @@
 #SBATCH --cpus-per-task=24
 #SBATCH --mem=0
 #SBATCH --time=01:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/tmp-offload-claims/claims-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/tmp-offload-claims/claims-%j.out
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.out
 set -euo pipefail
 ulimit -c 0
 REPO="${REPO:-$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}/.." && pwd)}"

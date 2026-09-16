@@ -28,15 +28,13 @@
 #SBATCH --cpus-per-task=192
 #SBATCH --mem=0
 #SBATCH --time=04:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/pull-images-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/pull-images-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 
 set -Eeuo pipefail
 ulimit -c 0
 
-# /x86_64: the real SCRATCH has it and this file's own log paths assume it, so a fallback
-# without it silently points at a tree that does not exist.
-SCRATCH="${SCRATCH:-/capstor/scratch/cscs/${USER}/x86_64}"
+SCRATCH="${SCRATCH:?set SCRATCH}"
 SCRIPT_DIR="${SCRIPT_DIR:-${SCRATCH}/optarena/containers/cluster/ce-images}"
 mkdir -p "${SCRATCH}/ce-images/logs"
 

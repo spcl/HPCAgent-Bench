@@ -24,13 +24,13 @@
 #SBATCH --hint=nomultithread
 #SBATCH --mem=0
 #SBATCH --time=08:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/push-images-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/push-images-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 
 set -Eeuo pipefail
 ulimit -c 0
 
-SCRATCH="${SCRATCH:-/capstor/scratch/cscs/${USER}/x86_64}"
+SCRATCH="${SCRATCH:?set SCRATCH}"
 SCRIPT_DIR="${SCRIPT_DIR:-${SCRATCH}/optarena/containers/cluster/ce-images}"
 # shellcheck source=images.env
 source "${SCRIPT_DIR}/images.env"

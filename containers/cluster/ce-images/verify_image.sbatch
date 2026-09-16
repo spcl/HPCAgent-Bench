@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=24
 #SBATCH --mem=0
 #SBATCH --time=00:40:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/verify-%x-%j.out
+#SBATCH --output=%x-%j.out
 # Run verify_image.py INSIDE a built image and fail the job when a required library is missing.
 #
 #   IMAGE=$SCRATCH/ce-images/optarena-judge-agent-amd.sqsh PROFILE=judge-agent-amd sbatch \
@@ -81,7 +81,7 @@ esac
 # image for its own missing configuration.
 cat > "${EDF}" <<TOML
 image = "${IMAGE}"
-mounts = ["/capstor/:/capstor/", "/iopsstor/:/iopsstor/"${ce_agent_mount}]
+mounts = ["/ritom/:/ritom/", "/iopsstor/:/iopsstor/"${ce_agent_mount}]
 workdir = "/"
 
 [annotations]

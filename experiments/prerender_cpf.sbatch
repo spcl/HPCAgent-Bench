@@ -7,8 +7,8 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
 #SBATCH --time=11:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/cpf-prerender-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/cpf-prerender-%j.out
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.out
 #
 # THE preparation job for canonical parallel forms. Renders a roster's read forms and drop-ins into
 # the content-addressed cache (hpcagent_bench/cpf_cache.py) and pins a VIEW, the one directory an arm
@@ -23,7 +23,7 @@
 # during the run withdraws what the run rendered. OPT may name a frozen snapshot.
 set -euo pipefail
 ulimit -c 0
-SCRATCH_ROOT=/capstor/scratch/cscs/${USER}/x86_64
+SCRATCH_ROOT="${SCRATCH:?set SCRATCH}"
 OPT=${OPT:-${SCRATCH_ROOT}/optarena}
 export DACE_TREE=${DACE_TREE:-${SCRATCH_ROOT}/dace}
 CPF_CACHE=${CPF_CACHE:-${SCRATCH_ROOT}/cpf-cache}

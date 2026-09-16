@@ -107,7 +107,7 @@ ce_gpu_arch() {
 
 # Base image cache on scratch; rewrites the global BASE_IMAGE to a local `dir:` on a hit.
 #
-# The podman LAYER store cannot live on scratch: capstor, iopsstor and the NFS home all reject
+# The podman LAYER store cannot live on scratch: the general scratch, iopsstor and the NFS home all reject
 # user xattrs, so `overlay` and `fuse-overlayfs` fail on lsetxattr and `vfs` fails creating its
 # pivot dir under a subuid (all three measured). The base image can, because a `dir:` tree is
 # plain files -- and it is the part worth caching, a 30-52 GB pull per job on a store that is

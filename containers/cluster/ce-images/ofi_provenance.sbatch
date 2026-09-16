@@ -17,11 +17,11 @@
 #SBATCH --hint=nomultithread
 #SBATCH --mem=0
 #SBATCH --time=00:15:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/ofi-prov-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/ofi-prov-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 
 set -Eeuo pipefail
-SCRATCH="${SCRATCH:-/capstor/scratch/cscs/${USER}/x86_64}"
+SCRATCH="${SCRATCH:?set SCRATCH}"
 REPO="${REPO:-${SCRATCH}/optarena}"
 IMAGE="${IMAGE:-${SCRATCH}/ce-images/optarena-ce-amd-mi300.sqsh}"
 HOOKS="${HOOKS:-artifact}"     # artifact (production) | none (control)

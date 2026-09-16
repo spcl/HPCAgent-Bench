@@ -13,8 +13,8 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
 #SBATCH --time=04:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/inference-server/slurm/serve-only-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/inference-server/slurm/serve-only-%j.out
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.out
 
 set -euo pipefail
 

@@ -4,7 +4,7 @@
 # WHY THIS EXISTS. The two halves cannot be done in one place: `hf download` runs inside the CE
 # container (that is where huggingface_hub lives), and `lfs` exists only on the HOST. So a plain
 # download leaves the layout unfixed and nothing notices -- iopsstor delivers 9.45 GB/s at 16
-# readers against capstor's 0.83, but only if the blobs are actually striped.
+# readers against the general scratch's 0.83 (measured on the retired Lustre mount), but only if the blobs are actually striped.
 #
 # The PFL default on the hub dir is NOT sufficient, which is the part that surprises people:
 # run_cluster.sh sets `lfs setstripe -E 64M -c 1 -E -1 -c 16 -S 4M` on ${HF_HOME}/hub, and the
@@ -24,13 +24,13 @@
 #SBATCH --hint=nomultithread
 #SBATCH --mem=0
 #SBATCH --time=08:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/fetch-weights-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/fetch-weights-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 
 set -Eeuo pipefail
 ulimit -c 0
 
-SCRATCH="${SCRATCH:-/capstor/scratch/cscs/${USER}/x86_64}"
+SCRATCH="${SCRATCH:?set SCRATCH}"
 FAST_SCRATCH="${FAST_SCRATCH:-/iopsstor/scratch/cscs/${USER}}"
 [ -d "${FAST_SCRATCH}" ] || FAST_SCRATCH="${SCRATCH}"
 export HF_HOME="${HF_HOME:-${FAST_SCRATCH}/hf}"

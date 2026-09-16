@@ -14,13 +14,13 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
 #SBATCH --time=02:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/smoke-kimi-replicas-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/smoke-kimi-replicas-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 
 set -Eeuo pipefail
 ulimit -c 0
 
-SCRATCH="${SCRATCH:-/capstor/scratch/cscs/ybudanaz/x86_64}"
+SCRATCH="${SCRATCH:?set SCRATCH}"
 export RUN_DIR="${SCRATCH}/kimi-smoke/${SLURM_JOB_ID}"
 FAST_SCRATCH="/iopsstor/scratch/cscs/${USER}"
 [[ -d "${FAST_SCRATCH}" ]] || FAST_SCRATCH="${SCRATCH}"

@@ -21,15 +21,13 @@
 #SBATCH --hint=nomultithread
 #SBATCH --mem=0
 #SBATCH --time=00:20:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/mpi-check-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/mpi-check-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 
 set -Eeuo pipefail
 ulimit -c 0
 
-# /x86_64: the real SCRATCH has it and the #SBATCH log paths above hardcode it, so a
-# fallback without it silently points at a tree that does not exist.
-SCRATCH="${SCRATCH:-/capstor/scratch/cscs/${USER}/x86_64}"
+SCRATCH="${SCRATCH:?set SCRATCH}"
 REPO="${REPO:-${SCRATCH}/optarena}"
 IMAGE="${IMAGE:-${SCRATCH}/ce-images/optarena-ce-amd-mi300.sqsh}"
 [ -f "${IMAGE}" ] || { echo "no image at ${IMAGE}" >&2; exit 2; }

@@ -42,8 +42,8 @@
 #SBATCH --exclusive
 #SBATCH --mem=0
 #SBATCH --time=04:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/serve-private-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/serve-private-%j.out
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.out
 
 set -Eeuo pipefail
 ulimit -c 0

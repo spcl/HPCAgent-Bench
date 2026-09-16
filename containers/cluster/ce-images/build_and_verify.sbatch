@@ -33,15 +33,13 @@
 #SBATCH --hint=nomultithread
 #SBATCH --mem=0
 #SBATCH --time=24:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/build-verify-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/build-verify-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 
 set -Eeuo pipefail
 ulimit -c 0
 
-# /x86_64: the real SCRATCH has it and this file's own log paths assume it, so a fallback
-# without it silently points at a tree that does not exist.
-SCRATCH="${SCRATCH:-/capstor/scratch/cscs/${USER}/x86_64}"
+SCRATCH="${SCRATCH:?set SCRATCH}"
 REPO="${REPO:-${SCRATCH}/optarena}"
 IMAGE_DIR="${IMAGE_DIR:?set IMAGE_DIR, e.g. containers/cluster/ce-images/judge-agent-amd}"
 case "${IMAGE_DIR}" in /*) ;; *) IMAGE_DIR="${REPO}/${IMAGE_DIR}";; esac

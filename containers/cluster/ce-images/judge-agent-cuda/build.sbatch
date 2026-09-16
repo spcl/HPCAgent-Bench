@@ -27,8 +27,8 @@
 #SBATCH --cpus-per-task=72
 #SBATCH --mem=0
 #SBATCH --time=12:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/logs/build-judge-agent-cuda-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/logs/build-judge-agent-cuda-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 
 set -Eeuxo pipefail
 

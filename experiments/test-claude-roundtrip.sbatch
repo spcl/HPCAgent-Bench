@@ -5,15 +5,15 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
 #SBATCH --time=00:45:00
-#SBATCH --output=/capstor/scratch/cscs/ybudanaz/x86_64/claude-roundtrip/logs/roundtrip-%j.out
-#SBATCH --error=/capstor/scratch/cscs/ybudanaz/x86_64/claude-roundtrip/logs/roundtrip-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 #
 # End-to-end sanity job for the agent path: claude CLI -> LiteLLM -> vLLM gpt-oss-120b, tool calls
 # included. Nothing here is a benchmark; every stage either PASSes or the job exits nonzero.
 #
-#   mkdir -p /capstor/scratch/cscs/ybudanaz/x86_64/claude-roundtrip/logs
+#   mkdir -p "$SCRATCH/claude-roundtrip/logs"
 #   sbatch --account=<account> \
-#       /capstor/scratch/cscs/ybudanaz/x86_64/optarena/experiments/test-claude-roundtrip.sbatch
+#       "$SCRATCH/optarena/experiments/test-claude-roundtrip.sbatch"
 #
 # No account is hardcoded; pass it on the command line. Slurm spools this file to its own
 # directory, so nothing may be resolved relative to the script path: SCRATCH anchors everything.
@@ -37,11 +37,11 @@ set -euo pipefail
 # truncates the dump after the kernel has created the file). Slurm propagates CORE to steps.
 ulimit -c 0
 
-SCRATCH="${SCRATCH:-/capstor/scratch/cscs/ybudanaz/x86_64}"
+SCRATCH="${SCRATCH:?set SCRATCH}"
 REPO="${HPCAGENT_BENCH_REPO:-${SCRATCH}/optarena}"
 
 export RUN_DIR="${SCRATCH}/claude-roundtrip/logs/${SLURM_JOB_ID}"
-# iopsstor reads ~11x faster than capstor (job 593523); capstor keeps the durable copy.
+# iopsstor reads ~11x faster than the general scratch (job 593523, measured on the retired Lustre mount); $SCRATCH keeps the durable copy.
 FAST_SCRATCH="/iopsstor/scratch/cscs/${USER}"
 [[ -d "${FAST_SCRATCH}" ]] || FAST_SCRATCH="${SCRATCH}"
 export HF_HOME="${HF_HOME:-${FAST_SCRATCH}/hf}"

@@ -14,8 +14,8 @@
 #SBATCH --hint=nomultithread
 #SBATCH --mem=0
 #SBATCH --time=00:20:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/rccl-hook-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/rccl-hook-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 
 set -Eeuo pipefail
 
@@ -23,7 +23,7 @@ set -Eeuo pipefail
 # process's CWD, littering the checkout with core_nid<node>_<pid> files on a filesystem whose
 # quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
-SCRATCH="${SCRATCH:-/capstor/scratch/cscs/${USER}/x86_64}"
+SCRATCH="${SCRATCH:?set SCRATCH}"
 # ANY image, not just the judge-agent one. This replaced sglang_cxi_check.sbatch and
 # experiments/test-rccl-ofi-2node.sbatch, both of which ran a variant of this test but were written
 # for the abandoned design -- one expecting the image's own /opt/ofi/lib to win over the hook, the

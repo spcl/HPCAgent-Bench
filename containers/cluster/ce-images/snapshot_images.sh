@@ -81,7 +81,7 @@ human()   { [[ -e "$1" ]] && du -h --apparent-size "$1" 2>/dev/null | cut -f1 ||
         if (( DEEP )); then
             edf="${CE_IMAGES}/.tmp-snapshot-$$.toml"
             mkdir -p "$(dirname "${edf}")"
-            printf 'image = "%s"\nmounts = ["/capstor/:/capstor/"]\nworkdir = "/"\n' "${sqsh}" > "${edf}"
+            printf 'image = "%s"\nmounts = ["/ritom/:/ritom/"]\nworkdir = "/"\n' "${sqsh}" > "${edf}"
             prov="$(srun --partition=mi300 --nodes=1 --ntasks=1 --cpus-per-task=8 --mem=0 \
                         --time=00:05:00 --environment="${edf}" \
                         cat /usr/local/share/image-provenance 2>/dev/null || true)"

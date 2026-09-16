@@ -21,13 +21,13 @@
 #SBATCH --hint=nomultithread
 #SBATCH --mem=0
 #SBATCH --time=00:40:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/aiter-mla-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/aiter-mla-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 
 set -Eeuo pipefail
 ulimit -c 0
 
-SCRATCH="${SCRATCH:-/capstor/scratch/cscs/${USER}/x86_64}"
+SCRATCH="${SCRATCH:?set SCRATCH}"
 REPO="${REPO:-${SCRATCH}/optarena}"
 IMAGE="${IMAGE:-${SCRATCH}/ce-images/optarena-sglang.sqsh}"
 [ -f "${IMAGE}" ] || { echo "no image at ${IMAGE}" >&2; exit 2; }

@@ -20,8 +20,8 @@
 #SBATCH --cpus-per-task=24
 #SBATCH --mem=0
 #SBATCH --time=02:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/verify-llr40-baselines-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/verify-llr40-baselines-%j.out
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.out
 set -euo pipefail
 
 # Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing

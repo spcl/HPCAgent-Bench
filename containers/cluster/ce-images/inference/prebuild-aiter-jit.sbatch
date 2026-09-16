@@ -16,13 +16,13 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
 #SBATCH --time=01:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/prebuild-aiter-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/prebuild-aiter-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 
 set -Eeuo pipefail
 ulimit -c 0
 
-SCRATCH="${SCRATCH:-/capstor/scratch/cscs/ybudanaz/x86_64}"
+SCRATCH="${SCRATCH:?set SCRATCH}"
 FAST_SCRATCH="/iopsstor/scratch/cscs/${USER}"
 [[ -d "${FAST_SCRATCH}" ]] || FAST_SCRATCH="${SCRATCH}"
 export HF_HOME="${HF_HOME:-${FAST_SCRATCH}/hf}"
@@ -32,7 +32,7 @@ INFERENCE_EDF="${INFERENCE_EDF:-vllm-latest}"
 # no torch. Pointing this script at an sglang EDF without setting this fails on line 2 of the
 # heredoc with ModuleNotFoundError (630775).
 PREBUILD_PYTHON="${PREBUILD_PYTHON:-python3}"
-# Same root and the same image key run_cluster.sh uses: capstor for build artefacts, and one
+# Same root and the same image key run_cluster.sh uses: the general scratch ($SCRATCH) for build artefacts, and one
 # subtree per image because these .so files are built against one aiter/ROCm build and a rank
 # that loads a mismatched one fails late or silently. HOME goes with it -- aiter falls back to
 # expanduser("~")/.aiter for template ops whatever AITER_JIT_DIR says.

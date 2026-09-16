@@ -108,10 +108,10 @@ esac
 
 BASE_PYTHONPATH="${PYTHONPATH:-}"
 # DaCe writes one .so per SDFG variant per kernel. Off /tmp, which is tmpfs on these nodes (the
-# build would compete with the run for RAM). $SCRATCH on Alps is still the parallel FS -- the flash
-# tier (/iopsstor) handles thousands of small compiler writes better than /capstor, so point
-# DACE_BUILD_ROOT there if both are mounted. UNVERIFIED: only the mount names are known here, from
-# scripts/cscs/env.toml.example.
+# build would compete with the run for RAM). $SCRATCH on Alps is the NFS scratch (/ritom, since the
+# general-scratch retirement) -- the flash tier (/iopsstor) may handle thousands of small compiler
+# writes better, so point DACE_BUILD_ROOT there if both are mounted. UNVERIFIED: only the mount
+# names are known here, from scripts/cscs/env.toml.example.
 BUILD_ROOT="${DACE_BUILD_ROOT:-${SCRATCH:-${REPO}}}"
 failed=()
 

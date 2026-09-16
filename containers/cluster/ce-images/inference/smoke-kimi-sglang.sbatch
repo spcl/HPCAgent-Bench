@@ -23,7 +23,7 @@
 set -Eeuo pipefail
 ulimit -c 0
 
-SCRATCH="${SCRATCH:-/capstor/scratch/cscs/ybudanaz/x86_64}"
+SCRATCH="${SCRATCH:?set SCRATCH}"
 export RUN_DIR="${SCRATCH}/kimi-smoke/${SLURM_JOB_ID}"
 mkdir -p "${RUN_DIR}"
 FAST_SCRATCH="/iopsstor/scratch/cscs/${USER}"

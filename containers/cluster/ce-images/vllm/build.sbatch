@@ -25,8 +25,8 @@
 #SBATCH --hint=nomultithread
 #SBATCH --mem=0
 #SBATCH --time=08:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/build-vllm-image-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/build-vllm-image-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 
 set -Eeuxo pipefail
 

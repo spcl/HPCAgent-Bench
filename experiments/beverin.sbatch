@@ -6,8 +6,8 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
 #SBATCH --time=04:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/hpcagent-bench-runs/slurm/beverin-services-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/hpcagent-bench-runs/slurm/beverin-services-%j.err
+#SBATCH --output=beverin-services-%j.out
+#SBATCH --error=beverin-services-%j.err
 
 set -euo pipefail
 

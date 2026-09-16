@@ -19,8 +19,8 @@
 #SBATCH --hint=nomultithread
 #SBATCH --mem=0
 #SBATCH --time=00:30:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/%x-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/%x-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 set -euo pipefail
 
 # Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing

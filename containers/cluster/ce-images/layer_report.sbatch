@@ -11,11 +11,11 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=0
 #SBATCH --time=01:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/layer-report-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/layer-report-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 set -Eeuo pipefail
 ulimit -c 0
-CE="/capstor/scratch/cscs/${USER}/x86_64/ce-images"
+CE="${SCRATCH:?set SCRATCH}/ce-images"
 export TMPDIR="/dev/shm/${USER}/tmp"; export XDG_RUNTIME_DIR="/dev/shm/${USER}/xdg"
 mkdir -p "$TMPDIR"; mkdir -p -m 0700 "$XDG_RUNTIME_DIR"; unset DBUS_SESSION_BUS_ADDRESS
 

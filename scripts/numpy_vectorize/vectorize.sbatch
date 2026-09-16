@@ -6,8 +6,8 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
 #SBATCH --time=12:00:00
-#SBATCH --output=/capstor/scratch/cscs/ybudanaz/x86_64/numpy-vectorize/logs/vectorize-%j.out
-#SBATCH --error=/capstor/scratch/cscs/ybudanaz/x86_64/numpy-vectorize/logs/vectorize-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 
 # Vectorize the scientific_computing NumPy references with 10 Kimi K2.7-Code agents.
 #
@@ -15,7 +15,7 @@
 # verify with scripts/numpy_vectorize/check.py, which reuses the benchmark's own scorer to
 # compare each <kernel>_better_numpy.py against the shipped <kernel>_numpy.py.
 #
-#   mkdir -p /capstor/scratch/cscs/ybudanaz/x86_64/numpy-vectorize/logs
+#   mkdir -p "$SCRATCH/numpy-vectorize/logs"
 #   sbatch --account=a-g200 scripts/numpy_vectorize/vectorize.sbatch          # REPLICAS=2, 9 nodes
 #   REPLICAS=1 sbatch --nodes=5 --account=a-g200 scripts/numpy_vectorize/vectorize.sbatch
 #
@@ -36,9 +36,9 @@ set -Eeuo pipefail
 # process's CWD, littering the repo with 0-byte stubs. Slurm propagates CORE to steps.
 ulimit -c 0
 
-SCRATCH="${SCRATCH:-/capstor/scratch/cscs/ybudanaz/x86_64}"
+SCRATCH="${SCRATCH:?set SCRATCH}"
 export RUN_DIR="${SCRATCH}/numpy-vectorize/logs/${SLURM_JOB_ID}"
-# iopsstor reads ~11x faster than capstor (job 593523); capstor keeps the durable copy.
+# iopsstor reads ~11x faster than the general scratch (job 593523, measured on the retired Lustre mount); $SCRATCH keeps the durable copy.
 export FAST_SCRATCH="/iopsstor/scratch/cscs/${USER}"
 [[ -d "${FAST_SCRATCH}" ]] || FAST_SCRATCH="${SCRATCH}"
 export HF_HOME="${HF_HOME:-${FAST_SCRATCH}/hf}"

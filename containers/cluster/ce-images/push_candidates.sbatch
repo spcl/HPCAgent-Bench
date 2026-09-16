@@ -17,8 +17,8 @@
 #SBATCH --hint=nomultithread
 #SBATCH --mem=0
 #SBATCH --time=04:00:00
-#SBATCH --output=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/push-%j.out
-#SBATCH --error=/capstor/scratch/cscs/%u/x86_64/ce-images/logs/push-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 set -Eeuo pipefail
 
 # Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
@@ -29,8 +29,9 @@ ulimit -c 0
 : "${REGISTRY_TOKEN:?export REGISTRY_TOKEN before submitting}"
 NS="${NS:-docker.io/${REGISTRY_USER}}"
 TAG="${TAG:-$(date +%Y%m%d)}"
-IMG=/capstor/scratch/cscs/${USER}/x86_64/ce-images
-cd /capstor/scratch/cscs/${USER}/x86_64/optarena/containers/cluster/ce-images
+SCRATCH="${SCRATCH:?set SCRATCH}"
+IMG="${SCRATCH}/ce-images"
+cd "${SCRATCH}/optarena/containers/cluster/ce-images"
 
 # archive basename -> published repo name
 declare -A REPO=(

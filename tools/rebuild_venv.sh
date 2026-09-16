@@ -6,11 +6,11 @@
 # format gates. That is why the heavy scientific stack is installed best-effort rather than
 # as a hard requirement -- a missing torch wheel must not block generating a problem list.
 #
-# Everything lands on capstor: HOME is quota'd by INODES, and a pip tree is tens of thousands
+# Everything lands on $SCRATCH: HOME is quota'd by INODES, and a pip tree is tens of thousands
 # of files.
 set -Eeuo pipefail
 
-SCRATCH="${SCRATCH:-/capstor/scratch/cscs/ybudanaz/x86_64}"
+SCRATCH="${SCRATCH:?set SCRATCH}"
 REPO="${REPO:-${SCRATCH}/optarena}"
 VENV="${VENV:-${SCRATCH}/venv-optarena-314}"
 export PIP_CACHE_DIR="${SCRATCH}/.cache/pip"
