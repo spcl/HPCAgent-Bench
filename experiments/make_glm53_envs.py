@@ -47,7 +47,7 @@ GLM_ARGS = (
 # from. Keep the two in step: the four memory flags are one tuned point (frontier 633828, leg G2).
 CE_ENV = """
 # sglang-candidate is the only sglang EDF that can load GLM-5.3: the others reach the same
-# format_ue8m0 patch via a /capstor PYTHONPATH that role_mounts drops for the inference role
+# format_ue8m0 patch via a $SCRATCH PYTHONPATH that role_mounts drops for the inference role
 INFERENCE_CE_ENV=sglang-candidate
 """
 

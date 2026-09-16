@@ -22,7 +22,7 @@ from pathlib import Path
 
 TARGET = "E=384,N=512,device_name=AMD_Instinct_MI300A,dtype=int4_w4a16.json"
 REPO_DIR = Path(__file__).resolve().parent / "moe-configs"
-SCRATCH = os.environ.get("SCRATCH", "/capstor/scratch/cscs/ybudanaz/x86_64")
+SCRATCH = os.environ["SCRATCH"]
 RUNS_GLOB = f"{SCRATCH}/kimi-smoke/*/{TARGET}"
 
 
