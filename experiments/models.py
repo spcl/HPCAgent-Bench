@@ -50,7 +50,10 @@ def claude_autocompact(served_context: int) -> int:
 MODELS = {
     "oss120b": {
         "INFERENCE_CE_ENV": "vllm-latest",
-        "AGENT_EFFORT": "high",
+        # The rung ITSELF is resolved at launch (experiments/effort.py) from the ladder a model's
+        # .env declares; oss120b's top rung is "high" (qwen38's is "xhigh"), so the two ladders
+        # cannot share one value here.
+        "EFFORT_LADDER": '"low medium high"',
         "VLLM_MODEL": "openai/gpt-oss-120b",
         "VLLM_EXTRA_ARGS": (
             '"--dtype bfloat16 --load-format safetensors --safetensors-load-strategy prefetch '

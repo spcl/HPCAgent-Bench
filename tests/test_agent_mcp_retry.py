@@ -216,14 +216,35 @@ def crashing_popen_class(exit_codes):
     class FakePopen:
         spawned = 0
 
-        def __init__(self, command, cwd=None, env=None, stdout=None, stderr=None) -> None:
+        def __init__(
+            self, command, cwd=None, env=None, stdout=None, stderr=None, text: bool | None = None, **kwargs: object
+        ) -> None:
+            self.args = command
+            # Recorded so a test can assert on exactly what production passed to Popen.
+            self.kwargs = {"cwd": cwd, "env": env, "stdout": stdout, "stderr": stderr, "text": text, **kwargs}
+            self.returncode = None
+            self.captured = ""
+            if isinstance(stdout, int) or stdout is None:
+                # claude_supports_flag's --help probe goes through subprocess.run(capture_output=True,
+                # text=True), which pipes stdout instead of handing a real log file. It is not one of
+                # the agent spawns this fake numbers, so it must not shift the ATTEMPT count.
+                self.attempt = None
+                return
             cls = type(self)
             cls.spawned += 1
             self.attempt = cls.spawned
-            self.returncode = None
             stdout.write(init_line("connected"))
             stdout.write(f"ATTEMPT {self.attempt}\n")
             stdout.flush()
+
+        def communicate(self, input: str | None = None, timeout: float | None = None) -> tuple[str, str]:
+            return self.captured, ""
+
+        def __enter__(self) -> "FakePopen":
+            return self
+
+        def __exit__(self, *exc_info: object) -> bool:
+            return False
 
         def poll(self):
             return self.returncode

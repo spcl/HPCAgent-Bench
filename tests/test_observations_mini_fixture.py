@@ -51,14 +51,23 @@ def test_a_perf_playbook_arm_from_the_real_shaped_fixture_never_enters_the_contr
 def test_three_treatments_against_the_fixtures_control_all_produce_a_panel() -> None:
     """cpf-llr-focus40's real treatments -- skills, cpfsrc, perf-playbook-cpu -- each read against
     the SAME no-packet control and each yield a comparison, which is what lets them join as square
-    panels side by side."""
+    panels side by side. ``roster`` is every kernel ANY arm of the campaign touched, built the same
+    way :func:`plot_score_change.main` builds it, since :func:`one_treatment_panel` gates arm
+    coverage against exactly this list (:func:`hpcagent_bench.stats.population.complete_arms`)."""
     frame_all = score_change.load(FIXTURE, prefix="")
     control = score_change.control_rows(frame_all)
+    roster = sorted(frame_all["benchmark"].dropna().astype(str).unique())
     built = {
-        treatment: score_change.one_treatment_panel(frame_all, control, treatment)
+        treatment: score_change.one_treatment_panel(frame_all, control, treatment, roster)
         for treatment in ("skills", "cpfsrc", "perf-playbook-cpu")
     }
     assert all(panel is not None for panel in built.values())
+    # The roster argument must actually gate coverage, not merely be accepted: a roster kernel no
+    # arm ran drops every arm from the coverage check, so the same call now yields nothing.
+    unreachable_roster = [*roster, "kernel-no-arm-ever-ran"]
+    assert score_change.one_treatment_panel(frame_all, control, "skills", unreachable_roster) is None, (
+        "a roster kernel with zero coverage must fail complete_side_arms for every arm"
+    )
 
 
 def test_per_kernel_cells_read_off_the_fixture_cover_every_kernel_an_arm_ran() -> None:
