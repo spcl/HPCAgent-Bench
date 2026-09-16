@@ -741,6 +741,26 @@ def compiler_launcher() -> Tuple[str, ...]:
     return (exe,)
 
 
+def strip_launcher(argv: Sequence[str]) -> Tuple[str, ...]:
+    """``argv`` with a leading :func:`compiler_launcher` prefix removed, else ``argv`` unchanged.
+
+    The inverse of :func:`compiler_launcher`, for a caller that reads a RECORDED compile line
+    (an opt report's ``$ <argv>`` banner, a compile database) and needs the compiler that ran
+    rather than the cache in front of it. The recorded token may be the launcher's resolved path
+    or a bare name found on PATH, so both are checked, against the launcher's own resolved path
+    and its basename.
+    """
+    argv = tuple(argv)
+    launcher = compiler_launcher()
+    if not argv or not launcher:
+        return argv
+    exe = launcher[0]
+    head = argv[0]
+    same_path = head == exe or os.path.realpath(head) == os.path.realpath(exe)
+    same_name = pathlib.Path(head).name == pathlib.Path(exe).name
+    return argv[1:] if same_path or same_name else argv
+
+
 def _render_argv(tokens: List[str], subst: Dict[str, str], *, cacheable_lang: Optional[str] = None) -> List[str]:
     """Substitute a compile/link template into an argv. ``{baseline}`` and ``{objs}`` each
     expand to a space-joined string that must become several argv items (shell-split, keeping

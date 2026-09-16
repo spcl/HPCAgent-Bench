@@ -77,7 +77,11 @@ def test_an_offload_arm_is_shown_its_legs_driver_and_offload_flags(
     body = build_route(make_judge, "c")
     built = sandbox_commands(monkeypatch, Submission(language="c", source="void k(void) {}"))
     assert (body["driver"], body["family"]) == (LEG_DRIVER, "llvm"), body
-    assert [argv[0] for argv in body["commands"]] == [argv[0] for argv in built] == [LEG_DRIVER] * len(built)
+    # A launcher (ccache, when on PATH) may still sit ahead of the driver on the compile argv;
+    # the route and the real build must agree on the driver BEHIND it.
+    route_drivers = [languages.strip_launcher(argv)[0] for argv in body["commands"]]
+    built_drivers = [languages.strip_launcher(argv)[0] for argv in built]
+    assert route_drivers == built_drivers == [LEG_DRIVER] * len(built)
     missing = [argv for argv in body["commands"] if not set(LEG_FLAGS) <= set(argv)]
     assert not missing, f"argvs without the offload flags: {missing}"
 

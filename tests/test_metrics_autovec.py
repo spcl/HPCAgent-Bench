@@ -182,6 +182,19 @@ def test_an_openmp_loop_is_counted_whichever_line_its_compiler_reports_it_on(
     assert (counts["loops"], counts["loops_vectorized"], counts["loops_unreported"]) == (4, 4, 0), counts
 
 
+def test_a_compile_line_behind_a_launcher_is_still_classified_by_the_compiler_it_launches(
+    tmp_path: pathlib.Path,
+) -> None:
+    """ccache is real and on PATH here and on CI, so every C/C++ compile's ``$`` banner names
+    ccache in argv[0], not the compiler that ran. Reading argv[0] as the compiler misreads a
+    clang report as gcc's, and clang's ``-Rpass`` remarks match no gcc pattern: every loop of
+    every clang compile would land unreported instead of vectorized."""
+    languages.compiler_launcher.cache_clear()
+    assert languages.compiler_launcher(), "this test needs a real ccache on PATH to pin the defect"
+    counts = autovec.count(report_of(tmp_path, "clang", ("k_fp64.c", OPENMP_SOURCE)), "float64").counts
+    assert (counts["loops"], counts["loops_vectorized"], counts["loops_unreported"]) == (4, 4, 0), counts
+
+
 def test_a_statement_group_packed_inside_a_loop_is_slp_and_not_the_loop_vectorizing(tmp_path: pathlib.Path) -> None:
     """gcc's report on a CPF argmax form: the loop is refused, and only the reduction combiner outlined at the
     pragma is SLP packed. Counting that as the loop would credit CPF with a loop no compiler vectorized."""
