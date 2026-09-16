@@ -316,15 +316,18 @@ def overlapping_usage_line(path: pathlib.Path) -> bool:
 def usage_prompt_tokens(record: dict[str, object], overlapping: bool) -> int:
     """One usage.jsonl call's WHOLE prompt, with the cached prefix counted exactly once.
 
-    Under the contract the two fields are disjoint and the prompt is their sum. An old optimas line
-    (``overlapping``) already holds the whole prompt in ``input``, and is told apart from a fixed one
-    by ``input >= cached_input``: the fixed writer leaves only the UNCACHED remainder there, which
-    past the first turn is a small fraction of the prefix the server served from cache, and on the
-    first turn ``cached_input`` is 0 and the two readings agree anyway.
+    A line the fixed optimas writer wrote repeats the whole prompt as ``prompt`` and is read from that
+    field. A line without it is an older one: under the contract ``input`` and ``cached_input`` are
+    disjoint and the prompt is their sum, except an OLD optimas line (``overlapping``), whose ``input``
+    already is the whole prompt. Magnitudes never decide: a fixed line whose uncached remainder
+    exceeds its cached prefix (every early turn) is a legal disjoint line.
     """
+    prompt = record.get("prompt")
+    if isinstance(prompt, (int, float)) and not isinstance(prompt, bool):
+        return int(prompt)
     fresh = int(record.get("input") or 0)
     cached = int(record.get("cached_input") or 0)
-    return fresh if overlapping and fresh >= cached else fresh + cached
+    return fresh if overlapping else fresh + cached
 
 
 def usage_episode_cost(path: pathlib.Path) -> CostRow:

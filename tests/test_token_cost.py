@@ -526,7 +526,10 @@ def test_is_usage_transcript_recognizes_a_renamed_crashed_attempt(
 #: repeating a part of it) and as the fixed one does (``input`` = the prompt MINUS its cached part).
 #: Same call either way: a 1000-token prompt of which 900 came from the prefix cache, 50 generated.
 OPTIMAS_OVERLAPPING = {"input": 1000, "cached_input": 900, "output": 50, "reasoning": 0}
-OPTIMAS_DISJOINT = {"input": 100, "cached_input": 900, "output": 50, "reasoning": 0}
+OPTIMAS_DISJOINT = {"input": 100, "cached_input": 900, "output": 50, "reasoning": 0, "prompt": 1000}
+#: The same call on an EARLY turn: the uncached remainder exceeds the cached prefix, which is what an
+#: old overlapping line looks like by magnitude alone. Only the ``prompt`` field tells them apart.
+OPTIMAS_DISJOINT_EARLY = {"input": 900, "cached_input": 100, "output": 50, "reasoning": 0, "prompt": 1000}
 
 
 def write_optimas_usage(worker_dir: pathlib.Path, records: list[dict[str, int]]) -> pathlib.Path:
@@ -548,7 +551,9 @@ def test_the_offline_fold_reads_an_old_optimas_line_and_a_new_one_as_the_same_ca
     old = token_cost.usage_episode_cost(write_optimas_usage(tmp_path / "old", [OPTIMAS_OVERLAPPING]))
     new = token_cost.usage_episode_cost(write_optimas_usage(tmp_path / "new", [OPTIMAS_DISJOINT]))
 
-    assert old == new, "the same call written two ways must cost the same"
+    early = token_cost.usage_episode_cost(write_optimas_usage(tmp_path / "early", [OPTIMAS_DISJOINT_EARLY]))
+
+    assert old == new == early, "the same call written three ways must cost the same"
     assert old["naive_total"] == 1000 + 50, old
     assert old["effective"] == 1000 + 50, old
 
@@ -577,10 +582,12 @@ def test_the_judge_column_reads_an_old_optimas_line_and_a_new_one_as_the_same_ca
     http_json = load_http_json()
     old = write_optimas_usage(tmp_path / "old", [OPTIMAS_OVERLAPPING])
     new = write_optimas_usage(tmp_path / "new", [OPTIMAS_DISJOINT])
+    early = write_optimas_usage(tmp_path / "early", [OPTIMAS_DISJOINT_EARLY])
 
     monkeypatch.setenv("OPTARENA_HARNESS", "optimas")
     assert http_json.usage_jsonl_tokens(str(old)) == 1000 + 50
     assert http_json.usage_jsonl_tokens(str(new)) == 1000 + 50
+    assert http_json.usage_jsonl_tokens(str(early)) == 1000 + 50, "a fixed early-turn line is not an old one"
 
     # Another runner never wrote the overlap, so its lines keep the contract reading.
     monkeypatch.setenv("OPTARENA_HARNESS", "miniswe")
@@ -598,7 +605,12 @@ def test_the_container_tool_and_the_analysis_agree_on_the_overlap_rule(
     """
     http_json = load_http_json()
     monkeypatch.setenv("OPTARENA_HARNESS", "optimas")
-    cases = (OPTIMAS_OVERLAPPING, OPTIMAS_DISJOINT, {"input": 0, "cached_input": 0, "output": 1, "reasoning": 0})
+    cases = (
+        OPTIMAS_OVERLAPPING,
+        OPTIMAS_DISJOINT,
+        OPTIMAS_DISJOINT_EARLY,
+        {"input": 0, "cached_input": 0, "output": 1, "reasoning": 0},
+    )
     for index, record in enumerate(cases):
         path = write_optimas_usage(tmp_path / f"case{index}", [record])
         offline = token_cost.usage_prompt_tokens(record, token_cost.overlapping_usage_line(path))

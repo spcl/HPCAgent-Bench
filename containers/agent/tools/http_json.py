@@ -215,6 +215,8 @@ USAGE_JSONL_FIELDS = ("input", "cached_input", "output", "reasoning")
 
 #: :data:`USAGE_JSONL_FIELDS` minus the one an OVERLAPPING line already counts inside ``input``.
 OVERLAPPING_USAGE_FIELDS = tuple(name for name in USAGE_JSONL_FIELDS if name != "cached_input")
+#: The fields of a line the fixed optimas writer wrote: it repeats the whole prompt as ``prompt``.
+PROMPT_USAGE_FIELDS = ("prompt", "output", "reasoning")
 
 
 def usage_jsonl_field(record: dict[str, object], field: str) -> int:
@@ -231,16 +233,23 @@ def overlapping_usage_line(record: dict[str, object]) -> bool:
 
     ``hpcagent_bench.harness.episode.append_usage`` used to write the whole prompt into ``input`` and
     the cached part beside it, against the disjoint contract every other writer keeps, so summing the
-    four fields billed the cached prefix twice. Two conditions place such a line: the harness is
-    optimas (``$OPTARENA_HARNESS``, set by ``experiments/harnesses.runner_env``) -- the mini-SWE and
-    OpenHands runners never wrote the overlap -- and ``input >= cached_input``, which the fixed
-    writer produces only when ``cached_input`` is 0 and the two readings agree anyway. Same
-    DELIBERATE DUPLICATION rule as USAGE_FIELDS: ``experiments/token_cost.usage_prompt_tokens`` is
-    the same rule for the offline reader, and is not on this container's path.
+    four fields billed the cached prefix twice. The fixed writer repeats the whole prompt as
+    ``prompt``, so a line WITHOUT that field from the optimas harness (``$OPTARENA_HARNESS``, set by
+    ``experiments/harnesses.runner_env``; the mini-SWE and OpenHands runners never wrote the overlap)
+    is an old one. Never decided by magnitudes: an early turn's uncached remainder legitimately
+    exceeds its cached part. Same DELIBERATE DUPLICATION rule as USAGE_FIELDS:
+    ``experiments/token_cost.usage_prompt_tokens`` is the same rule for the offline reader.
     """
-    if os.environ.get("OPTARENA_HARNESS", "").strip() != "optimas":
+    if "prompt" in record:
         return False
-    return usage_jsonl_field(record, "input") >= usage_jsonl_field(record, "cached_input")
+    return os.environ.get("OPTARENA_HARNESS", "").strip() == "optimas"
+
+
+def usage_jsonl_fields(record: dict[str, object]) -> tuple[str, ...]:
+    """The fields that sum to this line's call, counted once each."""
+    if "prompt" in record:
+        return PROMPT_USAGE_FIELDS
+    return OVERLAPPING_USAGE_FIELDS if overlapping_usage_line(record) else USAGE_JSONL_FIELDS
 
 
 def usage_jsonl_tokens(path: str) -> int:
@@ -263,8 +272,7 @@ def usage_jsonl_tokens(path: str) -> int:
             continue
         # An overlapping line already counts its cached prefix inside "input"; adding the field
         # beside it would charge that prefix a second time.
-        fields = OVERLAPPING_USAGE_FIELDS if overlapping_usage_line(record) else USAGE_JSONL_FIELDS
-        for field in fields:
+        for field in usage_jsonl_fields(record):
             total += usage_jsonl_field(record, field)
     return total
 
