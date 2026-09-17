@@ -14,7 +14,9 @@ the comments of `experiments/.env.base-<tag>` and in `docs/serving/<tag>.md`. Co
 | `docs/serving/<tag>.md` | the measurements behind the recipe |
 
 **1. Fetch the weights.** `<tag>` is the model token in arm names (`llr-focus40-<tag>-c`). The job
-downloads inside the `hpcagent-bench-sglang-mi300-latest` EDF into `${HF_HOME}` (default `/iopsstor/scratch/cscs/$USER/hf`),
+downloads inside the `hpcagent-bench-sglang-mi300-latest` EDF into `${HF_HOME}` (default
+`${FAST_SCRATCH}/.hpcagentbench-cache/hf`; `FAST_SCRATCH` defaults to the iopsstor scratch, see
+`scripts/cache_env.sh`),
 then restripes every blob over 1 GiB on the host; `AUDIT_ONLY=1` only checks the layout.
 ```bash
 MODELS="org/Name" sbatch containers/cluster/ce-images/inference/fetch_weights.sbatch

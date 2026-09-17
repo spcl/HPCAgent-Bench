@@ -34,9 +34,9 @@ this layer; it is seeded once from the image's own prebuild and still writes the
 ## Why the repo and not scratch (`generated/`, `packs/`)
 
 Same filesystem either way -- the checkout and `$SCRATCH` are on the same scratch mount -- so this
-is about finding it, not speed. It also outlives more: iopsstor purges at 14 days against the
-general scratch's 30 (that retention number was measured on the retired Lustre scratch mount; unconfirmed
-on the current `$SCRATCH` at `/ritom`).
+is about finding it, not speed. It also outlives more: `FAST_SCRATCH` (iopsstor) purges at 14 days
+against `SCRATCH`'s 30 (that retention number was measured on the retired Lustre scratch mount;
+unconfirmed on the current `$SCRATCH` -- see `scripts/cache_env.sh`).
 
 ## The one rule that is not cosmetic
 
