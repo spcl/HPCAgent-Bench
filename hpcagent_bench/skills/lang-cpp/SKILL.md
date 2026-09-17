@@ -180,9 +180,11 @@ Bandwidth usually decides: fewer passes beat cleverer arithmetic per pass.
 
 ## Vectorization
 
-The compiler vectorizes only what it PROVES safe: unit stride, no aliasing, no calls or branches
-in the body, one induction variable not mutated in it, trip count known on entry, one exit. That
-list is the checklist for a loop that refuses to vectorize.
+The vectorizer needs a countable loop: one induction variable, trip count known on entry. It
+handles the rest itself under this build -- it if-converts branches, versions the loop on runtime
+alias checks, and vectorizes non-unit stride and early-exit loops. Both halves of a `.hip` or `.cu`
+go through the same mid-end as a `.c`, so a refusal is rarely any of those; get the reason from the
+compiler rather than guessing it.
 
 - **`__restrict__` on every non-aliasing pointer**, which is usually what unblocks the
   vectorizer; helpers and local copies lose it unless re-spelled. Run the inner loop over a raw
@@ -199,10 +201,10 @@ list is the checklist for a loop that refuses to vectorize.
   The other two are a body the vectorizer refuses outright, and a shuffle it
   will not synthesize. Not a default either -- score the intrinsic version against the plain
   one and keep whichever wins.
-- Verify, never assume: add `-fopt-info-vec-missed` to your own compile (clang spells it
-  `-Rpass-missed=loop-vectorize`) and it names WHICH loop did not vectorize and why, so you act
-  on the reason rather than guessing. Or `objdump -d` and look for the target ISA's vector
-  registers.
+- Verify, never assume: add `-fopt-info-vec-missed` to your own compile (clang:
+  `-Rpass-missed=loop-vectorize -Rpass-analysis=loop-vectorize`, the reason is on the analysis
+  line) and it names WHICH loop did not vectorize and why, so you act on the reason rather than
+  guessing. Or `objdump -d` and look for the target ISA's vector registers.
 
 ## Writing fast C++
 

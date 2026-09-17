@@ -53,9 +53,12 @@ def test_resolve_lang_expands_language_and_openmp_pages_for_c() -> None:
     assert resolved.skills == ("lang-c", "openmp-c")
 
 
-def test_resolve_lang_has_no_openmp_page_for_cuda() -> None:
+def test_resolve_lang_has_no_openmp_page_for_cuda_and_carries_its_host_page() -> None:
+    """CUDA ships no ``openmp-cuda``, so the pair rule has nothing to add. ``lang-cpp`` is not an
+    extra: it governs the host half of the same file, and the CUDA page tells the reader to open
+    it -- a pointer at a page the arm was never staged is a turn spent on a failed read."""
     resolved = packets.resolve("lang", "cuda")
-    assert resolved.skills == ("lang-cuda",)
+    assert resolved.skills == ("lang-cpp", "lang-cuda")
 
 
 def test_resolve_lang_skills_stages_every_shipped_page_but_a_packet_tools_own_or_an_explicit_one() -> None:
@@ -120,9 +123,7 @@ def test_a_device_packet_refuses_a_language_its_device_does_not_run(spec: str, l
 def test_all_in_for_a_device_is_cpfsrc_its_perf_playbook_and_the_language_pages(device: str, language: str) -> None:
     all_in = packets.resolve(f"all-in-{device}", language, environ={"CPF_VIEW": "/views/dropin"})
     playbook = packets.resolve(f"perf-playbook-{device}", language)
-    assert set(all_in.skills) == (
-        set(playbook.skills) | set(packets.resolve("lang", language).skills) | {"cpfsrc"}
-    )
+    assert set(all_in.skills) == (set(playbook.skills) | set(packets.resolve("lang", language).skills) | {"cpfsrc"})
     assert all_in.env == (("CPF_DROPIN_DIR", "/views/dropin"),)
     assert packets.canonical(f"lang;perf-playbook-{device};cpfsrc") == f"all-in-{device}"
 

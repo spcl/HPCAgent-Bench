@@ -173,7 +173,7 @@ reader and misses per instruction to the next, and those differ by two orders of
 | `data_cache_misses_per_1k_instructions` | 1000 * data_cache_misses / instructions | < 10 cache-friendly; > 50 memory-bound |
 | `l2_misses_per_1k_instructions` | 1000 * l2_cache_misses / instructions | what tiling has to move first |
 | `l3_misses_per_1k_instructions` | 1000 * l3_cache_misses / instructions | the only miss rate a bandwidth-bound kernel is limited by |
-| `branch_misprediction_rate` | branch_mispredictions / branch_instructions | > 0.02 hurts; consider a branchless inner loop |
+| `branch_misprediction_rate` | branch_mispredictions / branch_instructions | > 0.02 hurts; make the inner loop branchless |
 | `data_tlb_misses_per_1k_instructions` | 1000 * data_tlb_misses / instructions | > 1 means page walks are real work: huge pages, or block the traversal |
 | `flops_per_cycle` | fp_ops / cycles | against the machine's peak: 1/8th of peak is not compute-bound |
 | `dram_bytes_per_cycle` | l3_cache_misses * line_bytes / cycles | the traffic side of the roofline, in the same unit as flops per cycle |
