@@ -31,7 +31,7 @@ import pathlib
 import shutil
 import sys
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 #: CPF dialect -> the source extension its text is written with.
 LANGUAGE_EXT = {"c++": "cpp", "c": "c", "hip": "hip"}
@@ -100,6 +100,34 @@ def canonical_entry(cache_root: pathlib.Path, key: str) -> tuple[dict[str, objec
     return (manifest, stored) if actual == manifest.get("sha256") else None
 
 
+def install(staging: pathlib.Path, final: pathlib.Path, valid: Callable[[], bool]) -> None:
+    """Rename a fully written ``staging`` directory to ``final``, which several writers may race for.
+
+    Keys are content addresses, so an entry already at ``final`` that ``valid`` accepts is another
+    writer's equally good result and stays; ``staging`` is discarded. Only an entry that fails
+    ``valid`` is replaced, and it is first RENAMED aside under a unique name, never deleted in place:
+    deleting ``final`` and then renaming onto it is two syscalls, and a sibling writer's rename landing
+    between them made the delete walk a directory that changed under it (FileNotFoundError,
+    "Directory not empty") -- a raw crash out of a normal race. A reader sees a whole entry or a miss.
+    """
+    for _ in range(8):
+        try:
+            staging.rename(final)
+            return
+        except OSError:
+            if not final.exists():
+                continue  # the entry in the way was just moved aside by a sibling; try again
+        if valid():
+            break
+        aside = final.with_name(f".{final.name}.stale.{os.getpid()}.{os.urandom(4).hex()}")
+        try:
+            final.rename(aside)
+        except OSError:
+            continue  # a sibling moved it first
+        shutil.rmtree(aside, ignore_errors=True)
+    shutil.rmtree(staging, ignore_errors=True)
+
+
 def publish_canonical(
     cache_root: pathlib.Path, key: str, manifest: Mapping[str, object], sdfg_file: pathlib.Path | None
 ) -> None:
@@ -114,12 +142,7 @@ def publish_canonical(
         shutil.move(sdfg_file, stored)
         full["sha256"] = hashlib.sha256(stored.read_bytes()).hexdigest()
     (staging / MANIFEST_NAME).write_text(json.dumps(full, indent=2, sort_keys=True) + "\n")
-    if final.exists():
-        shutil.rmtree(final)
-    try:
-        staging.rename(final)
-    except OSError:
-        shutil.rmtree(staging)
+    install(staging, final, lambda: canonical_entry(cache_root, key) is not None)
 
 
 def entry_path(cache_root: pathlib.Path, key: str) -> pathlib.Path:
@@ -183,12 +206,7 @@ def publish(
         artefacts[role] = {"name": name, "sha256": hashlib.sha256(payload).hexdigest()}
     full = {**manifest, "key": key, "layout": LAYOUT, "artefacts": artefacts}
     (staging / MANIFEST_NAME).write_text(json.dumps(full, indent=2, sort_keys=True) + "\n")
-    if final.exists():
-        shutil.rmtree(final)
-    try:
-        staging.rename(final)
-    except OSError:
-        shutil.rmtree(staging)
+    install(staging, final, lambda: is_hit(cache_root, key))
     return True
 
 

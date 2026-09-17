@@ -14,6 +14,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import threading
 from collections.abc import Callable
 from http.server import ThreadingHTTPServer
 from urllib.request import urlopen
@@ -108,6 +109,87 @@ def test_a_published_key_is_a_hit_and_publishing_it_again_writes_nothing(tmp_pat
     assert {path.name: path.stat().st_mtime_ns for path in entry.iterdir()} == before
     assert (entry / "k_fp64_cpf.c").read_text() == "one\n"
     assert not [path for path in entry.parent.iterdir() if path.name.startswith(".")], "staging left behind"
+
+
+def test_concurrent_publishes_to_one_key_never_let_a_reader_see_a_mismatched_entry(tmp_path: pathlib.Path) -> None:
+    """publish() assembles an entry in a SIBLING staging directory and renames it into place, "so a
+    reader sees a whole entry or none" (its own docstring). Several rendering ranks can legitimately
+    race to publish the same key (prerender_cpf.sbatch shards by kernel, not by (kernel, language,
+    mode); two prerender jobs with overlapping rosters race the same way), so a reader hammering the
+    cache throughout that race must only ever see CacheMiss or a fully self-consistent, hash-verified
+    entry -- never a manifest paired with another writer's bytes -- and a writer must never crash on
+    a directory a sibling publish() call is mid-rewrite of."""
+    cache = tmp_path / "cache"
+    stop = threading.Event()
+    bad: list[str] = []
+
+    def writer(index: int) -> None:
+        for attempt in range(40):
+            try:
+                cpf_cache.publish(
+                    cache,
+                    PINNED_KEY,
+                    {"kernel": "k"},
+                    ("k_fp64_cpf.c", f"// writer {index} attempt {attempt}\n"),
+                    ("k_fp64_cpf_binding.json", f'{{"writer": {index}}}'),
+                )
+            except Exception as exc:  # noqa: BLE001 -- publish() must never raise out of a normal race
+                bad.append(f"writer {index}: {type(exc).__name__}: {exc}")
+
+    def reader() -> None:
+        while not stop.is_set():
+            try:
+                if cpf_cache.is_hit(cache, PINNED_KEY):
+                    cpf_cache.verified_manifest(cache, PINNED_KEY)
+            except cpf_cache.CacheMiss:
+                pass  # expected: the entry was mid-replacement when this read landed
+            except Exception as exc:  # noqa: BLE001 -- anything else is the corruption this test guards against
+                bad.append(f"reader: {type(exc).__name__}: {exc}")
+
+    reader_thread = threading.Thread(target=reader)
+    reader_thread.start()
+    writers = [threading.Thread(target=writer, args=(i,)) for i in range(6)]
+    for t in writers:
+        t.start()
+    for t in writers:
+        t.join()
+    stop.set()
+    reader_thread.join()
+
+    assert bad == [], bad
+    # The race must settle: after every writer is done, the cache holds one complete, verifiable entry.
+    assert cpf_cache.is_hit(cache, PINNED_KEY)
+    cpf_cache.verified_manifest(cache, PINNED_KEY)
+    entry_dir = cpf_cache.entry_path(cache, PINNED_KEY)
+    assert not [p for p in entry_dir.parent.iterdir() if p.name.startswith(".")], "staging left behind"
+
+
+def test_an_entry_that_fails_verification_is_replaced_by_the_next_publish(tmp_path: pathlib.Path) -> None:
+    """Moving a damaged entry aside instead of deleting it in place must still replace it, or a
+    corrupted render would be a permanent miss that no rerun repairs."""
+    cache = tmp_path / "cache"
+    cpf_cache.publish(cache, PINNED_KEY, {"kernel": "k"}, ("k_fp64_cpf.c", "one\n"), ("k_fp64_cpf_binding.json", "{}"))
+    entry = cpf_cache.entry_path(cache, PINNED_KEY)
+    (entry / "k_fp64_cpf.c").write_text("damaged\n")
+    assert cpf_cache.publish(cache, PINNED_KEY, {"kernel": "k"}, ("k_fp64_cpf.c", "two\n"), ("k_fp64_cpf_binding.json", "{}"))
+    assert (entry / "k_fp64_cpf.c").read_text() == "two\n"
+    assert cpf_cache.is_hit(cache, PINNED_KEY)
+    assert not [p for p in entry.parent.iterdir() if p.name.startswith(".")], "moved-aside entry left behind"
+
+
+def test_a_valid_canonical_entry_is_kept_when_a_sibling_publishes_the_same_key(tmp_path: pathlib.Path) -> None:
+    """Keys are content addresses: the entry already in place is another rank's equal result, and
+    rewriting it under a concurrent reader is the race that crashed publish."""
+    cache, first, second = tmp_path / "cache", tmp_path / "first.sdfgz", tmp_path / "second.sdfgz"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    key = cpf_cache.canonical_key("program", "commit", {"target": "cpu"})
+    cpf_cache.publish_canonical(cache, key, {"verdict": "ok"}, first)
+    cpf_cache.publish_canonical(cache, key, {"verdict": "ok"}, second)
+    entry = cpf_cache.canonical_entry(cache, key)
+    assert entry is not None and entry[1] is not None and entry[1].read_bytes() == b"first", entry
+    parent = cpf_cache.canonical_path(cache, key).parent
+    assert not [p for p in parent.iterdir() if p.name.startswith(".")], "staging left behind"
 
 
 def test_the_manifest_carries_the_key_and_no_timestamp(tmp_path: pathlib.Path) -> None:
