@@ -114,7 +114,7 @@ def test_each_preset_refuses_a_job_on_the_other_partition(tmp_path: pathlib.Path
 def test_each_preset_reads_its_own_key_file_by_default(tmp_path: pathlib.Path, preset: str) -> None:
     done = launch(tmp_path, preset, KEY_FILE="")
     assert done.returncode == 2
-    assert f"no key file {tmp_path}/.config/optarena/{preset}-endpoint.key" in done.stderr
+    assert f"no key file {tmp_path}/.config/hpcagent-bench/{preset}-endpoint.key" in done.stderr
     assert_untouched(tmp_path, done)
 
 
@@ -204,7 +204,7 @@ def test_the_mi300_preset_serves_the_qwen38_campaign_flags_on_fp8_weights_with_a
     assert (served["--attention-backend"], served["--mem-fraction-static"]) == ("aiter", "0.306")
     assert (served["--model-path"], served["--tp-size"]) == ("Qwen/Qwen3.8-27B-FP8", "4")
     assert "--disable-custom-all-reduce" not in served
-    assert "image:    sglang-latest\n" in done.stdout
+    assert "image:    hpcagent-bench-sglang-mi300-latest\n" in done.stdout
     assert "env:      SGLANG_USE_AITER=1 SGLANG_SET_CPU_AFFINITY=0\n" in done.stdout
 
 
@@ -224,7 +224,7 @@ def test_the_mi200_preset_serves_bf16_weights_with_triton_attention_aiter_off_an
     shared = {name: value for name, value in campaign_sglang_flags().items() if name != "--mem-fraction-static"}
     shared.pop("--attention-backend")
     assert {name: served.get(name) for name in shared} == shared
-    assert "image:    sglang-mi200-latest\n" in done.stdout
+    assert "image:    hpcagent-bench-sglang-mi200-latest\n" in done.stdout
     assert "env:      SGLANG_USE_AITER=0 SGLANG_SET_CPU_AFFINITY=0\n" in done.stdout
 
 
@@ -291,7 +291,7 @@ def test_alps_serve_mode_publishes_the_url_model_and_key_path_but_never_the_key(
     assert len(published) == 1, done.stdout
     assert json.loads(published[0]) == {
         "url": f"http://{HSN0_ADDRESS}:30123/v1",
-        "served_model": "optarena-vllm",
+        "served_model": "hpcagent-bench-vllm",
         "key_file": f"{tmp_path}/endpoint.key",
         "node": "nid002536",
         "job_id": "dry-run",

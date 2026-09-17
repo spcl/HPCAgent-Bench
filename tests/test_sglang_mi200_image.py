@@ -27,8 +27,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 CE = ROOT / "containers" / "cluster" / "ce-images"
 MI200 = CE / "sglang-mi200"
 PROFILE = "sglang-mi200"
-CANDIDATE = "optarena-sglang-mi200-candidate.sqsh"
-LIVE = "optarena-sglang-mi200.sqsh"
+CANDIDATE = "hpcagent-bench-sglang-mi200-candidate.sqsh"
+LIVE = "hpcagent-bench-sglang-mi200.sqsh"
 KEY = "0123456789abcdef" * 4
 SETUP_PATH = "/sgl-workspace/sglang/python/sglang/kernels/aot/setup_rocm.py"
 #: The setup_rocm.py lines the recipe edits, verbatim from the pinned base image.
@@ -189,7 +189,7 @@ def images_env() -> list[str]:
 
 def test_images_env_names_the_mi200_live_image_edf_and_template() -> None:
     sqsh, edf, template = images_env()[:3]
-    assert (sqsh, edf, template) == (LIVE, "sglang-mi200-latest", "sglang-mi200/edf.toml.example")
+    assert (sqsh, edf, template) == (LIVE, "hpcagent-bench-sglang-mi200-latest", "sglang-mi200/edf.toml.example")
     assert (CE / template).is_file()
 
 
@@ -262,7 +262,7 @@ def install_edfs(tmp_path: pathlib.Path, images: list[str]) -> tuple[subprocess.
 
 def test_install_edfs_renders_sglang_mi200_latest_onto_the_mi200_image(tmp_path: pathlib.Path) -> None:
     _, edf_dir = install_edfs(tmp_path, [LIVE])
-    edf = tomllib.loads((edf_dir / "sglang-mi200-latest.toml").read_text(encoding="utf-8"))
+    edf = tomllib.loads((edf_dir / "hpcagent-bench-sglang-mi200-latest.toml").read_text(encoding="utf-8"))
     assert edf["image"] == str(tmp_path / "ce" / LIVE)
     assert edf["workdir"] == str(tmp_path)
     assert edf["env"]["SGLANG_USE_AITER"] == "0"
@@ -278,7 +278,7 @@ def test_install_edfs_renders_sglang_mi200_latest_onto_the_mi200_image(tmp_path:
 def test_a_missing_mi200_image_does_not_fail_install_edfs_for_the_other_roles(tmp_path: pathlib.Path) -> None:
     done, edf_dir = install_edfs(tmp_path, images_env()[3:])
     assert done.returncode == 0, done.stderr
-    assert not (edf_dir / "sglang-mi200-latest.toml").exists()
+    assert not (edf_dir / "hpcagent-bench-sglang-mi200-latest.toml").exists()
 
 
 GATE = load_module(CE / "inference" / "verify-tools-reasoning.py", "verify_tools_reasoning")

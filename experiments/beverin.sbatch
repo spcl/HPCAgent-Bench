@@ -28,6 +28,24 @@ if [[ ! -f "${ENV_FILE}" ]]; then
     exit 2
 fi
 
+# FABRIC GATE. Fails the allocation now rather than producing a slow, valid-looking result.
+#
+# The three CSCS network hooks default to netstack.source="artifact", whose tree lived under the
+# decommissioned /capstor. When it is missing the hooks do not error: they bind-mount files that
+# are not there and RCCL silently drops from CXI to TCP sockets. The arm still completes, the
+# numbers are still produced, and nothing in the log says the fabric was never used -- which is
+# why this is checked up front instead of being left to look like a slow model afterwards.
+#
+# It also asserts the libfabric the host symlink resolves to, because that symlink is root-owned
+# and CSCS can repoint it between two arms of one campaign.
+_preflight="${HPCAGENT_BENCH_REPO:-${SCRIPT_DIR}/..}/scripts/cscs/netstack_preflight.sh"
+if [[ -x "${_preflight}" ]]; then
+    "${_preflight}" || { echo "netstack preflight failed; refusing to spend the allocation" >&2; exit 2; }
+else
+    echo "WARNING: ${_preflight} not found -- fabric is UNVERIFIED for this run" >&2
+fi
+unset _preflight
+
 set -a
 # shellcheck disable=SC1090
 . "${ENV_FILE}"
@@ -47,5 +65,12 @@ fi
 
 export CLUSTER_ENV_FILE="${ENV_FILE}"
 export HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
+
+# How containers start on THIS system, probed rather than set: `ce` (srun --environment) while pyxis
+# works, `enroot` while the site enroot.conf still names the decommissioned /capstor. An explicit
+# CONTAINER_RUNTIME (submit environment or the arm's .env, sourced above) wins.
+CONTAINER_RUNTIME="$("${HPCAGENT_BENCH_REPO}/scripts/cscs/container_runtime.sh")" || exit 2
+export CONTAINER_RUNTIME
+echo "container runtime: ${CONTAINER_RUNTIME}"
 
 exec bash "${SCRIPT_DIR}/run_cluster.sh"

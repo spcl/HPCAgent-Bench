@@ -66,14 +66,27 @@ case "${PROBLEMS}" in
 esac
 [[ -s "${PROBLEMS}" ]] || { echo "FATAL: no problems file at ${PROBLEMS}" >&2; exit 2; }
 
-# The EDF is named by ABSOLUTE PATH. pyxis resolves a bare name against $HOME/.edf, and HOME is
-# /users/$USER inside a step while the EDFs live under /users/$USER/x86_64/.edf -- a bare name
-# resolves on the login node and then fails inside a job, which is the confusing half.
-CE_EDF="${CE_EDF:-/users/${USER}/x86_64/.edf/optarena-amd-mi300-latest.toml}"
+# The EDF is named by ABSOLUTE PATH, resolved HERE. pyxis resolves a bare name against the STEP's
+# $HOME/.edf, and a step's HOME (/users/$USER) is not the submitting shell's when that shell sets an
+# arch-specific HOME -- a bare name resolves on the login node and then fails inside a job, which
+# is the confusing half. This orchestrator runs with the submitter's environment, so the directory
+# is taken from the same EDF_PATH / $HOME/.edf that run_cluster.sh's derived_edf searches.
+_edf_dir="${EDF_PATH:-}"
+CE_EDF="${CE_EDF:-${_edf_dir%%:*}}"
+CE_EDF="${CE_EDF:-${HOME}/.edf}"
+[[ "${CE_EDF}" == *.toml ]] || CE_EDF="${CE_EDF}/hpcagent-bench-agent-mi300-latest.toml"
+[[ -f "${CE_EDF}" ]] || { echo "FATAL: prepare_job.sh: no EDF at ${CE_EDF}" >&2; exit 2; }
 # One spelling of "run this in the CE", used by every step below that needs the image.
+# CONTAINER_RUNTIME=enroot starts the same EDF through scripts/cscs/enroot_srun.sh while pyxis is
+# broken; FORWARD=all because these steps were written against pyxis passing the whole environment.
 ce_run() {
-    srun --partition=mi300 --nodes=1 --ntasks=1 --time=00:30:00 --mem=0 \
-        --cpus-per-task=32 --hint=nomultithread --environment="${CE_EDF}" "$@"
+    local -a step=(--nodes=1 --ntasks=1 --time=00:30:00 --mem=0 --cpus-per-task=32 --hint=nomultithread)
+    if [[ "${CONTAINER_RUNTIME:-ce}" == enroot ]]; then
+        HPCAGENT_BENCH_ENROOT_FORWARD=all HPCAGENT_BENCH_COMM_HOOKS=off \
+            "${REPO}/scripts/cscs/enroot_srun.sh" "${CE_EDF}" "${step[@]}" -- "$@"
+        return
+    fi
+    srun --partition=mi300 "${step[@]}" --environment="${CE_EDF}" "$@"
 }
 
 # Keyed by INPUTS, not by job. CPF rendering is minutes per kernel and is identical across every
@@ -142,9 +155,7 @@ mkdir -p "${GEN_CACHE}"
 # login node or in a batch script and sruns each piece that needs a container, rather than being
 # wrapped in one srun that then cannot launch another.
 #
-# The EDF is named by ABSOLUTE PATH. pyxis resolves a bare name against $HOME/.edf, and HOME is
-# /users/$USER inside a step while the EDFs live under /users/$USER/x86_64/.edf -- a bare name
-# resolves on the login node and then fails inside a job, which is the confusing half.
+# The EDF is CE_EDF, the absolute path resolved at the top of this file (see ce_run).
 if [[ "${CHECK_ONLY:-0}" != 1 ]]; then
     ce_run env HPCAGENT_BENCH_GENERATED_CACHE="${GEN_CACHE}" \
             PYTHONPATH="${REPO}:${REPO}/hpcagent_bench/numpy_translators/src" \
@@ -159,7 +170,9 @@ for k in kernels:
     try:
         # A hit costs a stat and a read; only a miss pays the emit. Nothing here forces a rebuild.
         before = agent.generated_cache_root()
-        agent.emit_reference_source.cache_clear()
+        # The memo is _reference_source's; emit_reference_source is not lru_cached, and calling
+        # .cache_clear() on it raised AttributeError for EVERY kernel, so this step filled nothing.
+        agent._reference_source.cache_clear()
         key = None
         root = agent.generated_cache_root()
         if root is not None:
@@ -175,7 +188,7 @@ for k in kernels:
         # A kernel with no lowering for this language is not fatal: the arm simply has no repo
         # task for it, exactly as materialize_shared reports.
         fail += 1
-        print(f"  no {language} lowering for {k}: {type(exc).__name__}", file=sys.stderr)
+        print(f"  no {language} lowering for {k}: {type(exc).__name__}: {exc}", file=sys.stderr)
 print(f"  {hit} cached, {miss} emitted, {fail} unavailable")
 PY
 fi

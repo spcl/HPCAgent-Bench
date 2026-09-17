@@ -10,7 +10,7 @@ Every tracked ``.py`` file in scope must begin with the copyright + SPDX header:
 
 (An optional ``#!`` shebang and/or a PEP 263 ``coding`` line may precede it; the
 header is then required immediately after.) A file that already carries this block
-block under a different copyright year -- or the pre-rename ``OptArena authors``
+block under a different copyright year -- or the pre-rename ``HPCAgent-Bench authors``
 wording -- is accepted as-is and never rewritten, so ``--fix`` never stacks a
 second notice on top of an existing one. ``--fix`` inserts the canonical 2021
 header only into files that have no such block at all.
@@ -45,7 +45,7 @@ HEADER = (
 )
 # A header is PRESENT when an ETH-Zurich copyright line is immediately followed by the
 # SPDX line. The year and the authors-org phrase are matched loosely so a pre-existing
-# notice -- any year, and the pre-rename ``OptArena authors`` wording -- counts as headered
+# notice -- any year, and the pre-rename ``HPCAgent-Bench authors`` wording -- counts as headered
 # and is left untouched rather than restamped or stacked under a second copy.
 COPYRIGHT_RE = re.compile(r"^# Copyright \d{4} ETH Zurich and the [\w.-]+ authors\.$")
 
