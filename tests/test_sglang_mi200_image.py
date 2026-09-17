@@ -267,9 +267,11 @@ def test_install_edfs_renders_sglang_mi200_latest_onto_the_mi200_image(tmp_path:
     assert edf["workdir"] == str(tmp_path)
     assert edf["env"]["SGLANG_USE_AITER"] == "0"
     # Unquoted dotted TOML keys nest: com.hooks.aws_ofi_nccl.enabled is com -> hooks -> aws_ofi_nccl.
+    # netstack.source is "host": the /capstor artifact bundle is decommissioned (a89567493), and the
+    # hooks fail silently to TCP rather than erroring when it is missing, so "artifact" is now wrong.
     hooks = edf["annotations"]["com"]["hooks"]
     assert (hooks["netstack"]["source"], hooks["cxi"]["enabled"], hooks["aws_ofi_nccl"]["enabled"]) == (
-        "artifact",
+        "host",
         "true",
         "true",
     )
