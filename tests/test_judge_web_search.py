@@ -10,6 +10,7 @@ import pathlib
 import subprocess
 import sys
 import threading
+import types
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -19,7 +20,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 TOOL = ROOT / "containers" / "judge" / "tools" / "web_search.py"
 
 
-def load_web_search():
+def load_web_search() -> types.ModuleType:
     """``web_search.py`` by path, exactly as ``experiments/judge_service.py`` loads it (TOOLS_DIR on
     ``sys.path``), so ``isinstance(exc, web_search.NotProvisionedError)`` checks the same class the
     router would catch."""
@@ -55,7 +56,7 @@ class FakeHandler(BaseHTTPRequestHandler):
         ]
     }
 
-    def log_message(self, fmt: str, *args: Any) -> None:
+    def log_message(self, fmt: str, *args: object) -> None:
         return
 
     def do_GET(self) -> None:
@@ -154,7 +155,9 @@ def test_web_search_tool_answers_via_fake_serpapi_crawl_and_llm() -> None:
 UNPROVISIONED_ENV = {"SERPAPI_API_KEY": "", "WEBSEARCH_LLM_BASE_URL": "", "WEBSEARCH_LLM_MODEL": ""}
 
 
-def test_missing_serpapi_key_raises_not_provisioned_not_a_bare_runtime_error(monkeypatch) -> None:
+def test_missing_serpapi_key_raises_not_provisioned_not_a_bare_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``experiments/judge_service.py`` tells a 'never configured' 503 apart from a 'this call
     failed' 502 by ``isinstance(exc, NotProvisionedError)`` -- so a config gap must raise THAT
     class, not a plain :class:`RuntimeError` a real SerpAPI/crawl/LLM failure also raises."""
@@ -170,7 +173,7 @@ def test_missing_serpapi_key_raises_not_provisioned_not_a_bare_runtime_error(mon
 
 
 @pytest.mark.parametrize("missing", ["WEBSEARCH_LLM_BASE_URL", "WEBSEARCH_LLM_MODEL"])
-def test_missing_llm_config_raises_not_provisioned(monkeypatch, missing) -> None:
+def test_missing_llm_config_raises_not_provisioned(monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
     """The LLM synthesis leg is provisioning too: an arm with a SerpAPI key but no configured
     judge-local LLM is just as unprovisioned as one with neither."""
     web_search = load_web_search()
@@ -181,7 +184,7 @@ def test_missing_llm_config_raises_not_provisioned(monkeypatch, missing) -> None
         web_search.call_llm("query", [], 5.0)
 
 
-def test_a_real_search_failure_is_still_a_plain_runtime_error(monkeypatch) -> None:
+def test_a_real_search_failure_is_still_a_plain_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """The distinction only means something if a genuine failure of a PROVISIONED search does NOT
     also raise ``NotProvisionedError`` -- else every 502 would misreport as a 503. A key and an LLM
     endpoint are both configured here; what fails is SerpAPI itself answering no usable results,
@@ -206,7 +209,7 @@ def test_a_real_search_failure_is_still_a_plain_runtime_error(monkeypatch) -> No
         server.server_close()
 
 
-def test_cli_marks_a_not_provisioned_refusal_with_a_cause(monkeypatch) -> None:
+def test_cli_marks_a_not_provisioned_refusal_with_a_cause(monkeypatch: pytest.MonkeyPatch) -> None:
     """The CLI (a hand-run debugging path, same contract as the service) must carry the same
     distinction into its JSON error body, not just the exit code."""
     env = os.environ.copy()

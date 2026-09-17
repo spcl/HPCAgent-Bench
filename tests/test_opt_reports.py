@@ -71,7 +71,9 @@ def bench_stub(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> types
     return types.SimpleNamespace(info={"module_name": "probe", "relative_path": "."})
 
 
-def test_reports_land_under_reports_root_slash_kernel(backend: pathlib.Path, bench_stub, tmp_path: pathlib.Path) -> None:
+def test_reports_land_under_reports_root_slash_kernel(
+    backend: pathlib.Path, bench_stub: types.SimpleNamespace, tmp_path: pathlib.Path
+) -> None:
     """The documented output layout (``${out_root}/reports/<column>/<kernel>/``) is exactly
     ``reports_root / bench.info["module_name"] /`` -- broken path-joining here is invisible to
     every OTHER assertion (they read files by walking the manifest), so it gets its own check."""
@@ -93,7 +95,7 @@ def test_reports_land_under_reports_root_slash_kernel(backend: pathlib.Path, ben
 
 
 def test_the_report_compile_uses_the_columns_own_compiler_and_flags(
-    backend: pathlib.Path, bench_stub, tmp_path: pathlib.Path
+    backend: pathlib.Path, bench_stub: types.SimpleNamespace, tmp_path: pathlib.Path
 ) -> None:
     """The argv this module actually ran (recorded in ``opt_report.txt``'s ``$ <argv>`` banner) must
     be the SAME compiler + baseline + extra flags :func:`languages.build_kernel_lib_commands` -- the
@@ -127,7 +129,7 @@ def test_the_report_compile_uses_the_columns_own_compiler_and_flags(
 
 
 def test_the_timed_build_is_unchanged_when_opt_reports_is_on(
-    backend: pathlib.Path, bench_stub, tmp_path: pathlib.Path
+    backend: pathlib.Path, bench_stub: types.SimpleNamespace, tmp_path: pathlib.Path
 ) -> None:
     """THE invariant this whole feature exists to keep: turning the switch on must not perturb the
     graded ``.so`` -- verified by hash AND mtime, and by there being no second ``.so`` anywhere
@@ -143,7 +145,7 @@ def test_the_timed_build_is_unchanged_when_opt_reports_is_on(
 
 
 def test_a_compiler_with_no_report_channel_records_a_reason(
-    backend: pathlib.Path, bench_stub, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    backend: pathlib.Path, bench_stub: types.SimpleNamespace, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A family :data:`languages.REPORT_REFS` wires no flags for (``nvcc``, the MPI wrappers) must
     not read as "the harness forgot to check" -- an explicit reason, not an empty directory. Forced
@@ -164,7 +166,7 @@ def test_a_compiler_with_no_report_channel_records_a_reason(
 
 
 def test_a_non_native_framework_is_declined_with_a_reason_not_silently_skipped(
-    bench_stub, tmp_path: pathlib.Path
+    bench_stub: types.SimpleNamespace, tmp_path: pathlib.Path
 ) -> None:
     """``--opt-reports`` is documented as C/C++/Fortran only; a framework outside
     ``cpp_runtime.FRAMEWORK_LANG`` (dace, numba, ...) must still get a manifest that SAYS so,
@@ -177,7 +179,9 @@ def test_a_non_native_framework_is_declined_with_a_reason_not_silently_skipped(
     assert (tmp_path / "reports" / "probe" / "manifest.json").is_file()
 
 
-def test_a_kernel_with_no_generated_sources_is_declined_with_a_reason(bench_stub, tmp_path: pathlib.Path) -> None:
+def test_a_kernel_with_no_generated_sources_is_declined_with_a_reason(
+    bench_stub: types.SimpleNamespace, tmp_path: pathlib.Path
+) -> None:
     """A framework that never built this kernel (no ``run-framework`` measured it yet) has no build
     to describe; reporting on it anyway would either crash or -- worse -- silently describe a
     different kernel's leftover sources."""

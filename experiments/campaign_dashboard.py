@@ -11,8 +11,6 @@ shows its newest job; the older ones are listed as superseded, so a cancelled-an
 does not read as a failure.
 """
 
-from __future__ import annotations
-
 import argparse
 import datetime as dt
 import html
@@ -30,7 +28,9 @@ def sacct(since: str) -> list[dict[str, str]]:
     fields = ["JobID", "JobName", "State", "Elapsed", "Start", "NNodes", "Timelimit", "Submit"]
     out = subprocess.run(
         ["sacct", "-X", "-P", "-n", "-S", since, "-o", ",".join(fields)],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout
     rows = []
     for line in out.splitlines():
@@ -55,8 +55,14 @@ def env_file(arm: str) -> dict[str, str]:
 def state_class(state: str) -> str:
     s = state.split()[0].upper()
     return {
-        "RUNNING": "run", "PENDING": "pend", "COMPLETED": "done", "COMPLETING": "run",
-        "FAILED": "fail", "TIMEOUT": "fail", "NODE_FAIL": "fail", "OUT_OF_MEMORY": "fail",
+        "RUNNING": "run",
+        "PENDING": "pend",
+        "COMPLETED": "done",
+        "COMPLETING": "run",
+        "FAILED": "fail",
+        "TIMEOUT": "fail",
+        "NODE_FAIL": "fail",
+        "OUT_OF_MEMORY": "fail",
         "CANCELLED": "cancel",
     }.get(s, "cancel")
 
@@ -87,7 +93,9 @@ def esc(value: object) -> str:
     return html.escape(str(value), quote=True)
 
 
-def build(rows, status_by_job):
+def build(
+    rows: list[dict[str, str]], status_by_job: dict[str, dict]
+) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict]]:
     latest: dict[str, dict] = {}
     history: list[dict] = []
     for row in sorted(rows, key=lambda r: int(r["JobID"].split("_")[0])):
@@ -141,7 +149,7 @@ def progress(status: dict) -> str:
     return out
 
 
-def arm_cell(entry) -> str:
+def arm_cell(entry: dict) -> str:
     row, env = entry, entry["env"]
     single = env.get("AGENT_SINGLE_SUBMISSION") == "1"
     blind = env.get("AGENT_SCORE_TOOL") == "0"
@@ -155,12 +163,12 @@ def arm_cell(entry) -> str:
         f'<div class="cell {state_class(row["State"])}">'
         f'<div class="top">{chip(row["State"])}<code>{esc(row["JobID"])}</code>'
         f'<span class="meta">{esc(row["NNodes"])} nodes</span>{tag_html}</div>'
-        f'{progress(entry["status"]) if state_class(row["State"]) != "pend" else ""}'
+        f"{progress(entry['status']) if state_class(row['State']) != 'pend' else ''}"
         f'<div class="armname">{esc(row["JobName"])}</div></div>'
     )
 
 
-def experiments_html(arms) -> str:
+def experiments_html(arms: list[dict]) -> str:
     by_exp: dict[str, list] = defaultdict(list)
     for entry in arms:
         exp = entry["env"].get("HPCAGENT_BENCH_RECORD_EXPERIMENT") or entry["JobName"].split("-")[0]
@@ -176,7 +184,9 @@ def experiments_html(arms) -> str:
                 env.get("HPCAGENT_BENCH_RECORD_DEVICE", "?"),
                 condition_label(env),
                 packet_label(env),
-                "blind" if env.get("AGENT_SCORE_TOOL") == "0" else ("single" if env.get("AGENT_SINGLE_SUBMISSION") == "1" else "multi"),
+                "blind"
+                if env.get("AGENT_SCORE_TOOL") == "0"
+                else ("single" if env.get("AGENT_SINGLE_SUBMISSION") == "1" else "multi"),
             )
             rows[key].setdefault(env.get("HPCAGENT_BENCH_RECORD_MODEL", "?"), []).append(e)
         n_run = sum(state_class(e["State"]) == "run" for e in entries)
@@ -200,7 +210,7 @@ def experiments_html(arms) -> str:
             f'<p class="counts"><span class="run">{n_run} running</span><span class="pend">{n_pend} pending</span>'
             + (f'<span class="fail">{n_bad} failed</span>' if n_bad else "")
             + f'</p></header><div class="scroll"><table><thead><tr><th>condition</th>{head}</tr></thead>'
-            f'<tbody>{"".join(body)}</tbody></table></div></section>'
+            f"<tbody>{''.join(body)}</tbody></table></div></section>"
         )
     return "".join(out)
 
@@ -208,16 +218,23 @@ def experiments_html(arms) -> str:
 def roster_size(tag: str) -> int | None:
     """Kernels in a roster tag, from roster.sh -- the same list canon_column.sh was handed."""
     try:
-        out = subprocess.run(
-            ["bash", "-c", '. ./roster.sh; roster_for "$1"', "_", tag],
-            cwd=HERE, check=True, capture_output=True, text=True,
-        ).stdout.strip().splitlines()
+        out = (
+            subprocess.run(
+                ["bash", "-c", '. ./roster.sh; roster_for "$1"', "_", tag],
+                cwd=HERE,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            .stdout.strip()
+            .splitlines()
+        )
         return len([k for k in out[-1].split(",") if k]) if out else None
     except (subprocess.CalledProcessError, OSError):
         return None
 
 
-def tiles(entries, title: str, strip: str, total: int | None) -> str:
+def tiles(entries: list[dict], title: str, strip: str, total: int | None) -> str:
     if not entries:
         return ""
     items = []
@@ -236,16 +253,16 @@ def tiles(entries, title: str, strip: str, total: int | None) -> str:
             )
         items.append(
             f'<div class="tile {state_class(e["State"])}"><div class="top">{chip(e["State"])}'
-            f'<code>{esc(e["JobID"])}</code></div><b>{esc(e["JobName"].removeprefix(strip))}</b>{body}</div>'
+            f"<code>{esc(e['JobID'])}</code></div><b>{esc(e['JobName'].removeprefix(strip))}</b>{body}</div>"
         )
     return f'<section class="grid-sec"><h2>{esc(title)}</h2><div class="tiles">{"".join(items)}</div></section>'
 
 
-def history_html(history) -> str:
+def history_html(history: list[dict]) -> str:
     if not history:
         return ""
     lis = "".join(
-        f'<li><code>{esc(h["JobID"])}</code> {esc(h["JobName"])} {chip(h["State"])}'
+        f"<li><code>{esc(h['JobID'])}</code> {esc(h['JobName'])} {chip(h['State'])}"
         f'<span class="meta">{esc(h["NNodes"])} nodes</span></li>'
         for h in sorted(history, key=lambda r: r["JobID"])
     )
@@ -338,11 +355,11 @@ def render(since: str, status_path: pathlib.Path | None) -> str:
 <main>
 <header>
 <h1>HPCAgent-Bench campaign board</h1>
-<p class="lede">Every arm on beverin since {esc(since.replace('T', ' '))}, by experiment. Rows are conditions (device, language, skill packet, submission policy); columns are models. An arm resubmitted after a fix shows its newest job; the replaced ones sit under Superseded.</p>
+<p class="lede">Every arm on beverin since {esc(since.replace("T", " "))}, by experiment. Rows are conditions (device, language, skill packet, submission policy); columns are models. An arm resubmitted after a fix shows its newest job; the replaced ones sit under Superseded.</p>
 <div class="stats">
-<div><b>{len([a for a in arms if state_class(a['State'])=='run'])}</b><span>arms running</span></div>
-<div><b>{len([a for a in arms if state_class(a['State'])=='pend'])}</b><span>arms queued</span></div>
-<div><b>{len([f for f in frameworks if state_class(f['State']) in ('run','pend')])}</b><span>optimizer columns live</span></div>
+<div><b>{len([a for a in arms if state_class(a["State"]) == "run"])}</b><span>arms running</span></div>
+<div><b>{len([a for a in arms if state_class(a["State"]) == "pend"])}</b><span>arms queued</span></div>
+<div><b>{len([f for f in frameworks if state_class(f["State"]) in ("run", "pend")])}</b><span>optimizer columns live</span></div>
 <div><b>{nodes}</b><span>nodes in use</span></div>
 <div><b>{len(failed)}</b><span>failed</span></div>
 </div>
@@ -351,7 +368,7 @@ def render(since: str, status_path: pathlib.Path | None) -> str:
 {tiles(frameworks, "Deterministic optimizers · full LLR", "canon-llr-", roster_size("llr"))}
 {tiles(prerender, "CPF prerender", "cpf-pre-", None)}
 {history_html(history)}
-<footer>Generated {esc(now)} from sacct and the arm env files{(' · progress snapshot ' + esc(generated)) if generated else ''}. Kernels completed = agents that finished their kernel; health = agent or judge activity in the last 15 minutes.</footer>
+<footer>Generated {esc(now)} from sacct and the arm env files{(" · progress snapshot " + esc(generated)) if generated else ""}. Kernels completed = agents that finished their kernel; health = agent or judge activity in the last 15 minutes.</footer>
 </main>"""
 
 

@@ -25,7 +25,9 @@ import subprocess
 import sys
 import time
 import types
+from collections.abc import Callable
 from types import ModuleType
+from typing import TextIO
 
 import pytest
 
@@ -59,9 +61,7 @@ def usage(input_tokens: int = 0, cache_creation: int = 0, cache_read: int = 0, o
 
 
 def assistant_line(message_id: str, usage_block: dict) -> str:
-    return json.dumps(
-        {"type": "assistant", "message": {"id": message_id, "role": "assistant", "usage": usage_block}}
-    )
+    return json.dumps({"type": "assistant", "message": {"id": message_id, "role": "assistant", "usage": usage_block}})
 
 
 #: The MCP init event every attempt's transcript needs, or ``start_agent`` reads the missing status
@@ -128,13 +128,15 @@ SUCCESS_LOG = "\n".join(
 )
 
 
-def timing_spawner(processes: list[TimingProcess], clock: list[float], advance_at_attempt: dict[int, float]):
+def timing_spawner(
+    processes: list[TimingProcess], clock: list[float], advance_at_attempt: dict[int, float]
+) -> Callable[[list[str], pathlib.Path, dict[str, str], TextIO, int], TimingProcess]:
     """A spawner whose SECOND (or later) launch ratchets the fake clock forward by a fixed amount,
     modelling wall time the previous, now-finished attempt actually spent -- not a value picked to
     make the assertion true, but the same amount ``time.monotonic`` reports to every caller from
     that point on, including the ``remaining`` computation this test reads."""
 
-    def spawn(command, cwd, env, stdout, stderr):
+    def spawn(command: list[str], cwd: pathlib.Path, env: dict[str, str], stdout: TextIO, stderr: int) -> TimingProcess:
         index = len(processes)
         if index in advance_at_attempt:
             clock[0] += advance_at_attempt[index]
@@ -148,7 +150,9 @@ def timing_spawner(processes: list[TimingProcess], clock: list[float], advance_a
     return spawn
 
 
-def test_a_relaunch_waits_only_the_remaining_wall_clock_not_a_fresh_one(monkeypatch, tmp_path: pathlib.Path) -> None:
+def test_a_relaunch_waits_only_the_remaining_wall_clock_not_a_fresh_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
     """docs/token_accounting.md: ``AGENT_TIMEOUT_SECONDS`` is ONE deadline shared by every attempt of
     a problem. If a relaunch instead started its own fresh clock, three relaunches would hold a
     worker for three times the wall the arm was sized against -- the exact regression this pins.
@@ -242,8 +246,8 @@ SLOW_SUCCESS_LOG = "\n".join(
 TOKEN_RESET_CAP = 5000
 
 
-def slow_spawner(launches: list[int]):
-    def spawn(command, cwd, env, stdout, stderr):
+def slow_spawner(launches: list[int]) -> Callable[[list[str], pathlib.Path, dict[str, str], TextIO, int], SlowProcess]:
+    def spawn(command: list[str], cwd: pathlib.Path, env: dict[str, str], stdout: TextIO, stderr: int) -> SlowProcess:
         index = len(launches)
         launches.append(index)
         log = SLOW_CRASH_LOG if index == 0 else SLOW_SUCCESS_LOG

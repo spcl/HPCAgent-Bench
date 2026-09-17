@@ -40,8 +40,9 @@ SH = shutil.which("dash") or shutil.which("sh")
 def _run_rc(env: dict[str, str], command: str) -> subprocess.CompletedProcess:
     """Source the conf in POSIX sh and call rc(), as enroot does, with a clean environment."""
     script = f'. "{CONF}"; rc /usr/bin/env'
-    return subprocess.run([SH, "-c", script], env={"PATH": "/usr/bin:/bin", **env},
-                          capture_output=True, text=True, check=False)
+    return subprocess.run(
+        [SH, "-c", script], env={"PATH": "/usr/bin:/bin", **env}, capture_output=True, text=True, check=False
+    )
 
 
 def test_the_entrypoint_parses_as_posix_sh() -> None:
@@ -74,7 +75,7 @@ def test_a_hostile_value_is_restored_verbatim_and_never_executed(tmp_path: pathl
     """The restore uses eval. Only NAMES may reach it; a value containing command substitution,
     quotes or spaces must arrive unchanged, and must not run."""
     marker = tmp_path / "executed"
-    hostile = f'a "b" \'c\' $(touch {marker}) `touch {marker}`; touch {marker}'
+    hostile = f"a \"b\" 'c' $(touch {marker}) `touch {marker}`; touch {marker}"
     result = _run_rc({"HBFWD_NCCL_SOCKET_IFNAME": hostile}, "env")
     got = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
     assert not marker.exists(), "a forwarded VALUE was executed as shell code"
@@ -93,19 +94,52 @@ FORWARD_LIB = CSCS / "enroot_forward.sh"
 
 def _forwardable(mode: str, *names: str) -> dict[str, bool]:
     """Ask the real hb_forwardable, in bash, as the launcher's per-task body does."""
-    script = f'. "{FORWARD_LIB}"; for n in "$@"; do if hb_forwardable "$n"; then echo "$n yes"; else echo "$n no"; fi; done'
-    out = subprocess.run(["bash", "-c", script, "_", *names], env={"PATH": "/usr/bin:/bin",
-                         "HPCAGENT_BENCH_ENROOT_FORWARD": mode}, capture_output=True, text=True, check=True).stdout
+    script = (
+        f'. "{FORWARD_LIB}"; for n in "$@"; do if hb_forwardable "$n"; then echo "$n yes"; else echo "$n no"; fi; done'
+    )
+    out = subprocess.run(
+        ["bash", "-c", script, "_", *names],
+        env={"PATH": "/usr/bin:/bin", "HPCAGENT_BENCH_ENROOT_FORWARD": mode},
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
     return {n: v == "yes" for n, v in (line.split() for line in out.splitlines())}
 
 
-RANK_NEEDS = ["SLURM_PROCID", "SLURM_NTASKS", "SLURM_LOCALID", "PMIX_RANK", "ROCR_VISIBLE_DEVICES",
-              "MASTER_ADDR", "NCCL_SOCKET_IFNAME", "HPCAGENT_BENCH_CACHE", "SCRATCH", "HF_HOME",
-              "CANON_OPT_REPORTS"]
-HOST_TOOLCHAIN = ["PATH", "LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONPATH", "PYTHONHOME", "MODULEPATH",
-                  "LMOD_CMD", "CPATH", "PKG_CONFIG_PATH", "VIRTUAL_ENV", "SHLVL"]
-NEVER = ["HBFWD_SLURM_PROCID", "HB_IMAGE", "ENROOT_CACHE_PATH", "OCI_ANNOTATION_com__hooks__cxi__enabled",
-         "BASH_FUNC_module%%"]
+RANK_NEEDS = [
+    "SLURM_PROCID",
+    "SLURM_NTASKS",
+    "SLURM_LOCALID",
+    "PMIX_RANK",
+    "ROCR_VISIBLE_DEVICES",
+    "MASTER_ADDR",
+    "NCCL_SOCKET_IFNAME",
+    "HPCAGENT_BENCH_CACHE",
+    "SCRATCH",
+    "HF_HOME",
+    "CANON_OPT_REPORTS",
+]
+HOST_TOOLCHAIN = [
+    "PATH",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "MODULEPATH",
+    "LMOD_CMD",
+    "CPATH",
+    "PKG_CONFIG_PATH",
+    "VIRTUAL_ENV",
+    "SHLVL",
+]
+NEVER = [
+    "HBFWD_SLURM_PROCID",
+    "HB_IMAGE",
+    "ENROOT_CACHE_PATH",
+    "OCI_ANNOTATION_com__hooks__cxi__enabled",
+    "BASH_FUNC_module%%",
+]
 
 
 @pytest.mark.parametrize("mode", ["rank", "all"])
@@ -125,8 +159,18 @@ def test_the_hosts_toolchain_is_never_forwarded(mode: str) -> None:
 def test_all_mode_carries_what_a_run_cluster_role_step_reads() -> None:
     """A role step re-enters run_cluster.sh and reads what the batch step computed. Under pyxis all
     of it arrived; under the rank allowlist none of it does, and the judge starts with no RUN_DIR."""
-    step_vars = ["RUN_DIR", "RUN_ROOT", "JUDGE_BASE_URL", "JUDGE_NODELIST", "AGENT_MAX_TOKENS",
-                 "INFERENCE_NODES", "CLUSTER_ENV_FILE", "LITELLM_MASTER_KEY", "HOME", "USER"]
+    step_vars = [
+        "RUN_DIR",
+        "RUN_ROOT",
+        "JUDGE_BASE_URL",
+        "JUDGE_NODELIST",
+        "AGENT_MAX_TOKENS",
+        "INFERENCE_NODES",
+        "CLUSTER_ENV_FILE",
+        "LITELLM_MASTER_KEY",
+        "HOME",
+        "USER",
+    ]
     assert all(_forwardable("all", *step_vars).values())
     assert not any(_forwardable("rank", "RUN_DIR", "JUDGE_BASE_URL", "LITELLM_MASTER_KEY").values())
 
@@ -155,18 +199,35 @@ def _launch(
     image.write_text("")
     edf = tmp_path / "role.judge-node.toml"
     mounts = ", ".join(f'"{m}"' for m in (f"{tmp_path}:{tmp_path}", extra_mount) if m)
-    edf.write_text(f'image = "{image}"\nmounts = [{mounts}]\nworkdir = "{tmp_path}"\n'
-                   '[env]\nNCCL_SOCKET_IFNAME = "from-edf"\nNCCL_NET = "AWS Libfabric"\nNCCL_NET_PLUGIN = "ofi"\n'
-                   '[annotations]\ncom.hooks.cxi.enabled = "true"\n')
+    edf.write_text(
+        f'image = "{image}"\nmounts = [{mounts}]\nworkdir = "{tmp_path}"\n'
+        '[env]\nNCCL_SOCKET_IFNAME = "from-edf"\nNCCL_NET = "AWS Libfabric"\nNCCL_NET_PLUGIN = "ofi"\n'
+        '[annotations]\ncom.hooks.cxi.enabled = "true"\n'
+    )
     scratch = tmp_path / "scratch"
     scratch.mkdir()
-    env = {"PATH": f"{bindir}:/usr/bin:/bin", "HOME": str(tmp_path), "USER": "tester",
-           "SCRATCH": str(scratch), "HB_TEST_OUT": str(tmp_path), "SLURM_JOB_ID": "1",
-           "HPCAGENT_BENCH_ENROOT_FORWARD": mode, "HPCAGENT_BENCH_COMM_HOOKS": hooks,
-           "RUN_DIR": "/run/dir", "LITELLM_MASTER_KEY": "sk-SECRET value $(touch pwned)",
-           "NCCL_SOCKET_IFNAME": "from-host", "LD_LIBRARY_PATH": "/host/lib", **(extra_env or {})}
-    result = subprocess.run(["bash", str(LAUNCHER), str(edf), "--ntasks=4", "--", "echo", "hi"],
-                            env=env, capture_output=True, text=True, timeout=60)
+    env = {
+        "PATH": f"{bindir}:/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "USER": "tester",
+        "SCRATCH": str(scratch),
+        "HB_TEST_OUT": str(tmp_path),
+        "SLURM_JOB_ID": "1",
+        "HPCAGENT_BENCH_ENROOT_FORWARD": mode,
+        "HPCAGENT_BENCH_COMM_HOOKS": hooks,
+        "RUN_DIR": "/run/dir",
+        "LITELLM_MASTER_KEY": "sk-SECRET value $(touch pwned)",
+        "NCCL_SOCKET_IFNAME": "from-host",
+        "LD_LIBRARY_PATH": "/host/lib",
+        **(extra_env or {}),
+    }
+    result = subprocess.run(
+        ["bash", str(LAUNCHER), str(edf), "--ntasks=4", "--", "echo", "hi"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
     assert result.returncode == 0, result.stderr
     argv = (tmp_path / "argv").read_text().splitlines()
     got = dict(l.split("=", 1) for l in (tmp_path / "env").read_text().splitlines() if "=" in l)
@@ -210,7 +271,9 @@ def test_the_edf_wins_over_the_host_and_host_paths_stay_out(tmp_path: pathlib.Pa
 
 def test_an_edf_given_by_path_is_used_and_its_mounts_and_image_arrive(tmp_path: pathlib.Path) -> None:
     argv, _ = _launch(tmp_path, "rank")
-    assert f"{tmp_path}:{tmp_path}" in argv, "a read-write mount must stay the two-field form enroot binds submounts with"
+    assert f"{tmp_path}:{tmp_path}" in argv, (
+        "a read-write mount must stay the two-field form enroot binds submounts with"
+    )
     assert str(tmp_path / "image.sqsh") in argv
 
 
@@ -239,7 +302,7 @@ def _exported_annotations(edf: pathlib.Path) -> dict[str, str]:
     found = {}
     for line in out.splitlines():
         if line.startswith("export OCI_ANNOTATION_"):
-            key, _, value = line[len("export "):].partition("=")
+            key, _, value = line[len("export ") :].partition("=")
             found[key] = value.strip("'")
     return found
 
@@ -258,7 +321,7 @@ RENDERED = sorted(pathlib.Path.home().joinpath(".edf").glob("hpcagent-bench-*-mi
         ("OCI_ANNOTATION_com__hooks__aws_ofi_nccl__variant", "rocm6"),
     ],
 )
-def test_every_hook_annotation_in_the_edf_reaches_the_hooks(edf, variable: str, expected: str) -> None:
+def test_every_hook_annotation_in_the_edf_reaches_the_hooks(edf: pathlib.Path, variable: str, expected: str) -> None:
     """Dotted TOML keys parse as NESTED tables. Iterating the top level exported one variable named
     after "com" and none of these, so the aws_ofi_nccl hook -- which requires exactly "true" --
     exited silently and RCCL ran every multi-node collective over TCP."""

@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """experiments/judge_nodes.py: judges are sized by concurrent agents, one rank per five."""
 
-from __future__ import annotations
-
 import pathlib
 import subprocess
 import sys
@@ -26,16 +24,16 @@ import judge_nodes  # noqa: E402
         (120, 6),
     ],
 )
-def test_one_judge_rank_serves_five_agents_at_four_ranks_a_node(agents, nodes):
+def test_one_judge_rank_serves_five_agents_at_four_ranks_a_node(agents: int, nodes: int) -> None:
     assert judge_nodes.judge_nodes(agents) == nodes
 
 
-def test_a_wave_without_agents_is_refused_rather_than_sized_to_zero():
+def test_a_wave_without_agents_is_refused_rather_than_sized_to_zero() -> None:
     with pytest.raises(SystemExit):
         judge_nodes.judge_nodes(0)
 
 
-def test_the_cli_counts_roster_names_times_repeat_and_ignores_notes(tmp_path):
+def test_the_cli_counts_roster_names_times_repeat_and_ignores_notes(tmp_path: pathlib.Path) -> None:
     roster = tmp_path / "kernels.txt"
     roster.write_text("# header\n" + "".join(f"k{i}  # note\n" for i in range(15)) + "\n")
     out = subprocess.run(

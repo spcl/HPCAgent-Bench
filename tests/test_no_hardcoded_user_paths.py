@@ -28,6 +28,7 @@ justification in this list.
 import ast
 import pathlib
 import re
+from collections.abc import Iterator
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -59,21 +60,17 @@ def _is_env_or_makefile(name: str) -> bool:
 # name -> (compiled pattern, human explanation used in the failure message)
 _PATTERNS = {
     "literal /users/<name> path": (
-        re.compile(
-            r"/users/(?!\$\{USER\}|\$USER\b|\$\(id -un\)|someone\b)[A-Za-z][A-Za-z0-9_.-]{1,31}"
-        ),
+        re.compile(r"/users/(?!\$\{USER\}|\$USER\b|\$\(id -un\)|someone\b)[A-Za-z][A-Za-z0-9_.-]{1,31}"),
         "use ${HOME} (or EDF_PATH) instead of a literal /users/<name> path -- see EDF_PATH / "
         "${HOME}/.edf in experiments/run_cluster.sh and experiments/preflight_gpu.sh",
     ),
     "literal /iopsstor/scratch/cscs/<name> path": (
         re.compile(r"/iopsstor/scratch/cscs/(?!\$\{USER\}|\$USER\b|\$\(id -un\))[A-Za-z]"),
-        "use ${USER} (FAST_SCRATCH in scripts/cache_env.sh already does) instead of a literal user "
-        "segment",
+        "use ${USER} (FAST_SCRATCH in scripts/cache_env.sh already does) instead of a literal user segment",
     ),
     "literal /ritom/scratch/cscs/<name> path": (
         re.compile(r"/ritom/scratch/cscs/(?!\$\{USER\}|\$USER\b|\$\(id -un\))[A-Za-z]"),
-        "use ${USER} (SCRATCH is /ritom/scratch/cscs/$USER/$(uname -m)) instead of a literal user "
-        "segment",
+        "use ${USER} (SCRATCH is /ritom/scratch/cscs/$USER/$(uname -m)) instead of a literal user segment",
     ),
     "legacy project-name leftover": (
         re.compile(_LEGACY_NAME, re.IGNORECASE),
@@ -96,7 +93,7 @@ _ALLOW = {
 }
 
 
-def _candidate_files():
+def _candidate_files() -> Iterator[tuple[pathlib.Path, str]]:
     for p in REPO.rglob("*"):
         if not p.is_file():
             continue
@@ -119,7 +116,7 @@ def _candidate_files():
 _DOCSTRING_OWNERS = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 
 
-def _docstring_constant_ids(tree):
+def _docstring_constant_ids(tree: ast.AST) -> set[int]:
     ids = set()
     for node in ast.walk(tree):
         if isinstance(node, _DOCSTRING_OWNERS):
@@ -219,9 +216,7 @@ def test_lint_catches_a_reintroduced_hit(tmp_path: pathlib.Path) -> None:
         'REPO_DEFAULT = "/users/ybudanaz/x86_64/hpcagent-bench"\n'
         'ACCOUNT = "a-g200"\n'
     )
-    (tmp_path / "bad.md").write_text(
-        f"# Notes\n\nDo not reintroduce {_LEGACY_NAME} anywhere in the docs.\n"
-    )
+    (tmp_path / "bad.md").write_text(f"# Notes\n\nDo not reintroduce {_LEGACY_NAME} anywhere in the docs.\n")
     (tmp_path / "good.sh").write_text(
         "#!/usr/bin/env bash\n"
         '. "${HPCAGENT_BENCH_REPO}/scripts/cscs/account_env.sh"\n'
