@@ -187,8 +187,9 @@ def in_order(names: Iterable[str], kind: str = "models") -> list[str]:
 
 def marker(model: str) -> str:
     """The one SHAPE an optimizer wears: an LLM (``models``) or a standalone optimizer
-    (``optimizers``, e.g. DaCe or CPF), which take the shapes after the models. Pairs with
-    :func:`color` so identity is never colour alone."""
+    (``optimizers``, e.g. DaCe or CPF). Models take shapes from the FRONT of the sequence and
+    standalone optimizers from the BACK, so registering another model never repaints a figure that
+    already carries DaCe or CPF. Pairs with :func:`color` so identity is never colour alone."""
     shapes = markers()
     models = order("models")
     resolved = canonical("models", model)
@@ -197,7 +198,7 @@ def marker(model: str) -> str:
     standalone = order("optimizers")
     resolved = canonical("optimizers", model)
     if resolved in standalone:
-        return shapes[(len(models) + standalone.index(resolved)) % len(shapes)]
+        return shapes[-1 - (standalone.index(resolved) % len(shapes))]
     LOG.warning("palette: optimizer %r is not in registry.yaml; using a hash marker", model)
     return shapes[zlib.crc32(str(model).encode()) % len(shapes)]
 

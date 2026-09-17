@@ -142,8 +142,11 @@ PUBLISHED_PACKET_COLORS = {
     "caveman": "#393b79",
 }
 
+#: Models are assigned from the front of `markers`, standalone optimizers from the back, so a new
+#: model shifts neither. dace and cpf moved off "v"/"P" once, when that rule replaced one shared
+#: front-to-back sequence; figures drawn before that carry the old two shapes.
 PUBLISHED_MODEL_MARKERS = {
-    "qwen38": "o", "oss120b": "s", "kimi27sglang": "^", "glm53": "D", "dace": "v", "cpf": "P",
+    "qwen38": "o", "oss120b": "s", "kimi27sglang": "^", "glm53": "D", "dace": "*", "cpf": "X",
 }  # fmt: skip
 
 PUBLISHED_FRAMEWORK_COLORS = {
