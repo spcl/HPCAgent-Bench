@@ -102,7 +102,7 @@ _ALLOW = {
 #: Storage-root rule: committed code must not spell out the MOUNT itself, not just a user segment
 #: under it -- ``/capstor/store`` (CSCS vendor artefacts, not our storage) is a different root and
 #: is deliberately absent from this pattern, so it is never flagged.
-_STORAGE_ROOT_PATTERNS = {
+STORAGE_ROOT_PATTERNS = {
     "literal storage filesystem path": (
         re.compile(r"(?<![\w$])/(?:ritom|iopsstor)(?:/|\b)|/capstor/scratch(?:/|\b)"),
         "route through ${SCRATCH} / ${FAST_SCRATCH} (scripts/cache_env.sh derives HF_HOME, "
@@ -111,42 +111,42 @@ _STORAGE_ROOT_PATTERNS = {
 }
 
 #: Extensions matched by name for the storage-root rule; Dockerfile and experiments/.env.* have no
-#: useful extension, so those two are matched separately in _is_storage_root_candidate.
-_STORAGE_ROOT_EXTS = (".sh", ".sbatch", ".py", ".toml", ".toml.example")
+#: useful extension, so those two are matched separately in is_storage_root_candidate.
+STORAGE_ROOT_EXTS = (".sh", ".sbatch", ".py", ".toml", ".toml.example")
 
-_STORAGE_ROOT_ALLOW = {
+STORAGE_ROOT_ALLOW = {
     "scripts/cache_env.sh",  # the one place FAST_SCRATCH's /iopsstor default is allowed to live
 }
 
 
-def _is_storage_root_candidate(rel: str) -> bool:
+def is_storage_root_candidate(rel: str) -> bool:
     """File set for the storage-root rule: executable/config code, never prose (*.md) or the test
     suite (tests/), which fixtures these strings on purpose -- see the two self-tests below."""
-    if rel.startswith("tests/") or rel in _STORAGE_ROOT_ALLOW:
+    if rel.startswith("tests/") or rel in STORAGE_ROOT_ALLOW:
         return False
     name = rel.rsplit("/", 1)[-1]
-    return name == "Dockerfile" or rel.startswith("experiments/.env") or name.endswith(_STORAGE_ROOT_EXTS)
+    return name == "Dockerfile" or rel.startswith("experiments/.env") or name.endswith(STORAGE_ROOT_EXTS)
 
 
-def _storage_root_candidate_files() -> Iterator[tuple[pathlib.Path, str]]:
+def storage_root_candidate_files() -> Iterator[tuple[pathlib.Path, str]]:
     for p in REPO.rglob("*"):
         if not p.is_file():
             continue
         rel = p.relative_to(REPO).as_posix()
         if any(part in _SKIP_DIRS for part in rel.split("/")):
             continue
-        if _is_storage_root_candidate(rel):
+        if is_storage_root_candidate(rel):
             yield p, rel
 
 
-def _storage_root_offenders() -> list[str]:
+def storage_root_offenders() -> list[str]:
     offenders = []
-    for p, rel in _storage_root_candidate_files():
+    for p, rel in storage_root_candidate_files():
         text = p.read_text(errors="ignore")
         if rel.endswith(_PY_EXT):
-            offenders += _py_offenders(text, rel, _STORAGE_ROOT_PATTERNS)
+            offenders += _py_offenders(text, rel, STORAGE_ROOT_PATTERNS)
         else:
-            offenders += _raw_offenders(text, rel, _STORAGE_ROOT_PATTERNS)
+            offenders += _raw_offenders(text, rel, STORAGE_ROOT_PATTERNS)
     return offenders
 
 
@@ -251,7 +251,7 @@ def test_no_hardcoded_user_paths_or_accounts() -> None:
     for p, rel in _candidate_files():
         text = p.read_text(errors="ignore")
         offenders += _py_offenders(text, rel) if p.suffix == _PY_EXT else _raw_offenders(text, rel)
-    offenders += _storage_root_offenders()
+    offenders += storage_root_offenders()
     assert not offenders, (
         "Hardcoded user-specific paths or Slurm settings found -- route them through the central "
         "resolvers (scripts/cache_env.sh, scripts/cscs/account_env.sh, experiments/env.sh) or "
@@ -305,7 +305,7 @@ def test_storage_root_pattern_matches_only_real_mounts() -> None:
     lookalikes: the CSCS vendor tree under /capstor/store, a differently-named directory that
     merely starts with "iopsstor"/"scratch", and a nested "ritom" segment that is not the root
     mount."""
-    pattern = _STORAGE_ROOT_PATTERNS["literal storage filesystem path"][0]
+    pattern = STORAGE_ROOT_PATTERNS["literal storage filesystem path"][0]
 
     positive = [
         'SCRATCH="/ritom/scratch/cscs/ybudanaz/$(uname -m)"',

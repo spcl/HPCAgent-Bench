@@ -38,15 +38,10 @@ if [[ -f "${ENV_FILE}" ]]; then
     set +a
 fi
 
-# The canonical cache roots (FAST_SCRATCH, JIT_CACHE_ROOT, HF_HOME, ...). Submission already
-# sourced this once (env.sh) and exported its results with --export=ALL, so on the normal path
-# every default below is a no-op; sourcing it again here is what lets run_cluster.sh work when
-# launched outside that chain (COLOCATE debug runs, direct srun) without guessing its own path.
-# Guarded: test harnesses copy only run_cluster.sh into a synthetic experiments/, with no sibling
-# scripts/ tree, and already inject the knobs this would derive.
-_cache_env="${SCRIPT_DIR}/../scripts/cache_env.sh"
-[[ -f "${_cache_env}" ]] && . "${_cache_env}"
-unset _cache_env
+# The canonical cache roots (FAST_SCRATCH, JIT_CACHE_ROOT, HF_HOME, ...). Submission already sourced
+# this (env.sh) and exported it, so on that path every default here is a no-op; a direct or COLOCATE
+# launch gets the same roots instead of guessing its own.
+. "${SCRIPT_DIR}/../scripts/cache_env.sh"
 
 INFERENCE_NODES="${INFERENCE_NODES:-2}"
 # How INFERENCE_NODES are used. `pp` splits ONE model across them with pipeline parallelism -- the
