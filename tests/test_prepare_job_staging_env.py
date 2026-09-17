@@ -33,6 +33,11 @@ def test_the_material_step_runs_in_the_arms_language_and_target(
     problems.write_text('{"kernel": "k", "task": "t"}\n')
     env_file = tmp_path / ".env.arm"
     env_file.write_text(f"CAMPAIGN_ARM=arm\nPROBLEMS_FILE={problems}\nLANGUAGE={language}\n")
+    # prepare_job.sh now refuses to start a step before its EDF exists on disk (6348a57ff), so the
+    # staging container needs one at the default $HOME/.edf path it resolves to.
+    edf_dir = tmp_path / ".edf"
+    edf_dir.mkdir()
+    (edf_dir / "hpcagent-bench-agent-mi300-latest.toml").write_text("")
     env = {
         "PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
         "HOME": str(tmp_path),

@@ -63,9 +63,17 @@ def test_the_clis_synthetic_placeholder_is_not_the_models_work(retokenize: Modul
     assert retokenize.generated_text(events) == ["real"]
 
 
-def test_a_model_without_a_local_tokenizer_counts_nothing_rather_than_zero(retokenize: ModuleType) -> None:
+def test_a_model_without_a_local_tokenizer_counts_nothing_rather_than_zero(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """None and 0 are different answers: 0 says the attempt generated nothing, None says nobody
-    could count it, and only the second leaves ``output_source`` at "none"."""
+    could count it, and only the second leaves ``output_source`` at "none". The hub cache itself
+    must exist here (a populated-but-missing-this-model cache), or ``snapshot`` raises instead --
+    a runner with no HuggingFace cache at all would otherwise exercise the wrong code path."""
+    (tmp_path / "hub").mkdir()
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    retokenize = load_retokenize()
+
     assert retokenize.counter("no-such-org/no-such-model") is None
     assert retokenize.output_counter("no-such-org/no-such-model")([]) is None
 
