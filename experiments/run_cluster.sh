@@ -39,9 +39,15 @@ if [[ -f "${ENV_FILE}" ]]; then
 fi
 
 # The canonical cache roots (FAST_SCRATCH, JIT_CACHE_ROOT, HF_HOME, ...). Submission already sourced
-# this (env.sh) and exported it, so on that path every default here is a no-op; a direct or COLOCATE
-# launch gets the same roots instead of guessing its own.
-. "${SCRIPT_DIR}/../scripts/cache_env.sh"
+# this (env.sh) and exported it with --export=ALL, so on that path every default here is a no-op; a
+# direct or COLOCATE launch gets the same roots instead of guessing its own.
+# Looked up, not assumed: prepare_job.sh runs this file from a COPY in the run dir's .agent-launch/
+# (no sibling scripts/), and a job whose roots the submitter already exported must not die there --
+# job 640533 and the whole 2026-09-17 22:15 wave did exactly that.
+for cache_env in "${HPCAGENT_BENCH_REPO:-}/scripts/cache_env.sh" "${SCRIPT_DIR}/../scripts/cache_env.sh"; do
+    [[ -f "${cache_env}" ]] && { . "${cache_env}"; break; }
+done
+unset cache_env
 
 INFERENCE_NODES="${INFERENCE_NODES:-2}"
 # How INFERENCE_NODES are used. `pp` splits ONE model across them with pipeline parallelism -- the
