@@ -183,3 +183,4 @@ mpi:
     - np_particles
 experiment_tags:
 - warpx
+- scicomp-focus40

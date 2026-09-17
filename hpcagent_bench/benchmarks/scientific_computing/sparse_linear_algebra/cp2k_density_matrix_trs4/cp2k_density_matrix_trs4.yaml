@@ -123,3 +123,4 @@ precisions:
 - fp64
 experiment_tags:
 - cp2k_density_matrix_trs4
+- scicomp-focus40

@@ -121,3 +121,4 @@ precisions:
 - fp64
 experiment_tags:
 - srad
+- scicomp-focus40
