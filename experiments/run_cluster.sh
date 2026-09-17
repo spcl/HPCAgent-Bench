@@ -951,10 +951,10 @@ EOF
 # carry different data policies. Never the key: the record holds the key's VARIABLE NAME.
 python3 "${SCRIPT_DIR}/inference_service.py" --record "${RUN_DIR}"
 
-# One OCI image per role, five launch idioms. `ce` (the default) is the CSCS Container
-# Engine and keeps the --environment flag; `enroot` starts the SAME per-role EDF through
-# scripts/cscs/enroot_srun.sh, for while pyxis cannot start containers (the site enroot.conf
-# names a filesystem that does not exist here); the other runtimes wrap the payload in their
+# One OCI image per role, five launch idioms. `ce` (this file's fallback when nothing set
+# CONTAINER_RUNTIME) is the CSCS Container Engine and keeps the --environment flag; `enroot` (what
+# beverin.sbatch picks via scripts/cscs/container_runtime.sh) starts the SAME per-role EDF through
+# scripts/cscs/enroot_srun.sh and enables comm hooks only for multi-node inference; the other runtimes wrap the payload in their
 # own exec/run command. Every runtime keeps HOST networking: the roles talk over node
 # hostnames and ports. Note the CE EDFs carry an [env] block (interconnect settings);
 # other runtimes take environment only from the job and the image, so site settings the
