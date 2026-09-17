@@ -12,6 +12,8 @@ WHAT "PRESENT" MEANS HERE, because a file that exists is not a library that link
   header   the include is reachable from the compiler's own search path
   exe      the program is on PATH and answers a version query
   py       the module imports, and reports a version where it has one
+  harness  the agent runtime at its ABSOLUTE path exists and imports its harness, which is the
+           question an exec of it asks -- not whether some interpreter of that name is on PATH
   compile  a real source file is compiled and, where the check is about codegen, RUN
 
 Exit status is the number of REQUIRED checks that failed, so a build gate can use it directly.
@@ -182,6 +184,33 @@ def compile_probe(spec: str, run_it: bool) -> tuple[bool, str]:
         return (code == 0), ("ran" if code == 0 else f"ran rc={code}")
 
 
+#: Agent runtime -> the absolute interpreter the driver EXECs and one import that proves the venv is
+#: whole. experiments/harnesses.py names the same two paths and the Dockerfile installs them; the
+#: gate here is what catches an image that was PULLED rather than built from this recipe, which is
+#: the one path the Dockerfile's own build gate cannot see. On 2026-09-17 a pulled image predating
+#: the venvs was promoted and every miniswe and openhands agent of jobs 640566/640567/640571/640572
+#: died on "unshare: failed to execute /opt/harness/miniswe/bin/python" -- four arms, no data, and
+#: nothing between the pull and the campaign asked the question.
+HARNESS_RUNTIMES = {
+    "miniswe": ("/opt/harness/miniswe/bin/python", "minisweagent.agents.default"),
+    "openhands": ("/opt/harness/openhands/bin/python", "openhands.tools.preset.default"),
+}
+
+
+def have_harness_runtime(name: str) -> tuple[bool, str]:
+    """The runner's venv interpreter exists at its absolute path AND imports its harness.
+
+    Asked of the path, never of PATH: the driver spells this interpreter absolutely, so a python3
+    that resolves elsewhere says nothing about whether the exec will succeed."""
+    executable, module = HARNESS_RUNTIMES[name]
+    if not os.path.isfile(executable):
+        return False, f"no interpreter at {executable}"
+    code, out = run([executable, "-I", "-c", f"import {module}"], timeout=300.0, cwd="/")
+    if code == 0:
+        return True, f"{executable} imports {module}"
+    return False, (out.splitlines()[-1][:70] if out else f"{module} does not import")
+
+
 #: Inference profile -> the engine package it serves with.
 INFERENCE_ENGINE = {"vllm": "vllm", "sglang": "sglang", "sglang-mi200": "sglang"}
 
@@ -291,6 +320,10 @@ def checks(profile: str) -> list[Check]:
         Check("canonicalize", "isl gate (WavefrontSkew)", "dace-gate", "isl"),
         Check("canonicalize", "z3 gate (LoopToMap proof)", "dace-gate", "z3"),
         Check("python", "mpi4py", "py", "mpi4py"),
+        # The agent side. A library the image lacks costs one kernel; an agent runtime it lacks
+        # costs the whole arm, because every agent dies on the same exec before its first token.
+        Check("agent", "claude CLI", "exe", "claude"),
+        *(Check("agent", f"{name} interpreter", "harness", name) for name in sorted(HARNESS_RUNTIMES)),
     ]
 
 
@@ -336,6 +369,7 @@ DISPATCH = {
     "exe": have_exe,
     "py": have_module,
     "papi-rocm": papi_has_component,
+    "harness": have_harness_runtime,
     "dace-gate": dace_solver_gate,
     "compile": lambda t: compile_probe(COMPILE_PROBES[t], run_it=False),
     "compile-run": lambda t: compile_probe(COMPILE_PROBES[t], run_it=True),
