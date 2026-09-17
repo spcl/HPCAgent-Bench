@@ -22,6 +22,16 @@
 # between two submissions of the same campaign -- pick-by-fairshare in particular re-decides every
 # time usage shifts. Half a campaign billed to one account and half to another is unrecoverable
 # after the fact, so this refuses to guess and asks once.
+#
+# WHY ZERO CANDIDATES IS NOT ALSO A HARD ERROR HERE. A real user missing a project account still
+# needs the message below, but a dry run (SUBMIT=0, never reaches sbatch) and every submitter test
+# run this same file with no Slurm reachable at all, or a CI service account that genuinely has
+# none -- and neither is trying to bill a campaign to anything. Failing THIS file for them blocked
+# submit_common.sh before it ever got to the SUBMIT=0 short circuit (2026-09-17). So zero candidates
+# is reported (return 2) but not fatal: the account vars stay unset, and a real submission to
+# beverin still gets refused, just by sbatch's own accountless-job error instead of pre-empting it
+# here. Ambiguity and an explicit-but-wrong HPCAGENT_BENCH_ACCOUNT stay hard errors (return 1):
+# both are misconfiguration, not "nothing to resolve".
 set -uo pipefail
 
 hpcagent_bench_accounts() {
@@ -45,7 +55,8 @@ hpcagent_bench_resolve_account() {
     case "${n}" in
         0) echo "no usable Slurm association for ${USER:-$(id -un)} (only 'root', which beverin" >&2
            echo "  no longer accepts). Ask CSCS to add you to a project account." >&2
-           return 1 ;;
+           echo "  a real sbatch submission will be refused for lacking one; a dry run is unaffected." >&2
+           return 2 ;;
         1) printf '%s' "${candidates}"; return 0 ;;
         *) echo "several project accounts available and none chosen. Pick ONE for the whole" >&2
            echo "  campaign -- splitting it across two is not repairable afterwards:" >&2
@@ -58,17 +69,24 @@ hpcagent_bench_resolve_account() {
     esac
 }
 
+# An `if`, not `_acct=...; status=$?; if [ "$status" ...]`: a caller sourcing this under `set -e`
+# (run_hook.sh does) aborts on the FIRST simple command that fails, before a separate status check
+# ever runs -- only the tested command of an if/elif is exempt from that.
 if _acct="$(hpcagent_bench_resolve_account)"; then
     export HPCAGENT_BENCH_ACCOUNT="${_acct}"
     export SBATCH_ACCOUNT="${_acct}" SLURM_ACCOUNT="${_acct}" SALLOC_ACCOUNT="${_acct}"
-    unset _acct
-else
+elif [ "$?" -ne 2 ]; then
+    # ambiguous, or an explicit HPCAGENT_BENCH_ACCOUNT that is not one of the associations: both
+    # are misconfiguration, not "nothing to resolve" -- hard fail.
     unset _acct
     [ "${BASH_SOURCE[0]}" = "${0}" ] && exit 1
     return 1 2>/dev/null || exit 1
 fi
+# status 2 (no usable account) falls through here: reported above but not fatal -- see WHY ZERO
+# CANDIDATES above.
+unset _acct
 # An `if`, not `[ ... ] && echo`: as the LAST command of a sourced file, a false test is the file's
 # exit status, so every `. account_env.sh || exit` refused a resolved account.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    echo "account: ${HPCAGENT_BENCH_ACCOUNT}"
+    echo "account: ${HPCAGENT_BENCH_ACCOUNT:-<none resolved>}"
 fi

@@ -37,7 +37,11 @@ export FAST_SCRATCH HPCAGENT_BENCH_CACHE
 export HF_HOME="${HF_HOME:-${HPCAGENT_BENCH_CACHE}/hf}"
 
 # JIT build artefacts. run_cluster.sh appends /${INFERENCE_CE_ENV} and derives the seven knobs.
-export JIT_CACHE_ROOT="${JIT_CACHE_ROOT:-${SCRATCH:?set SCRATCH}/.hpcagentbench-cache}"
+# ${SCRATCH} when the caller set it (the real submit path), else the same guessed CSCS scratch
+# FAST_SCRATCH already falls back to above -- a hard ${SCRATCH:?} here used to abort sourcing this
+# file (and therefore env.sh, and the pre-commit header hook that only wants PYTHONPATH from it) on
+# any shell without SCRATCH exported, which includes every dev box and CI runner.
+export JIT_CACHE_ROOT="${JIT_CACHE_ROOT:-${SCRATCH:-${FAST_SCRATCH}}/.hpcagentbench-cache}"
 
 # Prerendered Canonical Parallel Form. Not a JIT artefact: it is device-independent text, reused
 # across arms and engines, so it is neither keyed by EDF nor purged with the JIT tree.
