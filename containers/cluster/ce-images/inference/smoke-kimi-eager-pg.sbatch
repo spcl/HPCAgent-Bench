@@ -44,9 +44,7 @@ export RUN_DIR="${SCRATCH}/kimi-smoke/${SLURM_JOB_ID}"
 REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2>/dev/null || true)}"
 [[ -n "${REPO}" && -f "${REPO}/scripts/cache_env.sh" ]] || { echo "FAIL: no checkout: set REPO or submit from inside one" >&2; exit 1; }
 # iopsstor reads ~11x faster than the general scratch (job 593523, measured on the retired Lustre mount); $SCRATCH keeps the durable copy.
-CALLER_HF_HOME="${HF_HOME:-}"
 . "${REPO}/scripts/cache_env.sh"
-export HF_HOME="${CALLER_HF_HOME:-${FAST_SCRATCH}/hf}"
 # Unset, this defaults under ~/.cache, which is unmounted here, so every smoke re-ran Inductor
 # codegen from scratch before the API could bind.
 export VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT:-${FAST_SCRATCH}/vllm-cache}"

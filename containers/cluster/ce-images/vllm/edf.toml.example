@@ -5,11 +5,9 @@
 image = "${SCRATCH}/ce-images/PLACEHOLDER.sqsh"
 
 mounts = [
-  # Fill these two in by hand: run `. scripts/cache_env.sh; hpcagent_bench_edf_mounts` in the
-  # repo and paste its output here -- one "<fs>:<fs>" entry per filesystem under $SCRATCH and
-  # $FAST_SCRATCH, e.g. "/capstor:/capstor", "/iopsstor:/iopsstor".
-  "<fs-root-of-$SCRATCH>:<fs-root-of-$SCRATCH>",
-  "<fs-root-of-$FAST_SCRATCH>:<fs-root-of-$FAST_SCRATCH>"
+  # install_edfs.sh replaces this item with hpcagent_bench_edf_mounts (scripts/cache_env.sh):
+  # the filesystems of $SCRATCH and $FAST_SCRATCH.
+  "<hpcagent_bench_edf_mounts>"
 ]
 
 workdir = "${SCRATCH}"
