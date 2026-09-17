@@ -30,7 +30,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.languages import LANG_EXT, gpu_backend
@@ -49,14 +49,85 @@ PPCG_ARGS: Tuple[str, ...] = ("--target=cuda", "--tile", "--tile-size=32")
 HIPIFY = "hipify-perl"
 
 
+#: Direct override: a specific ``ppcg`` prefix (the directory holding ``bin/ppcg``), for a host
+#: that built it somewhere :func:`ppcg_exe` would not otherwise look.
+PPCG_HOME_ENV = "HPCAGENT_BENCH_PPCG_HOME"
+
+#: Where a build script installs tools this image does not ship (see ``scripts/cache_env.sh``).
+#: ``ppcg`` is not in the agent/judge image yet -- it needs building from source -- so this is the
+#: env-var indirection the module docstring's "honour a prefix rather than a hardcoded path" means:
+#: a cache path lives in ONE place (a shell resolver, keyed by ``$SCRATCH``, never a literal in this
+#: file, which the no-hardcoded-user-paths lint would refuse anyway) and this file only reads it.
+TOOLS_DIR_ENV = "HPCAGENT_BENCH_TOOLS_DIR"
+
+
+def _exe_under_prefix(prefix: Optional[str], name: str) -> Optional[str]:
+    """``<prefix>/bin/<name>`` if that file exists and is executable, else ``None``."""
+    if not prefix:
+        return None
+    candidate = pathlib.Path(prefix) / "bin" / name
+    return str(candidate) if os.access(candidate, os.X_OK) else None
+
+
 def ppcg_exe() -> Optional[str]:
-    """``ppcg`` on PATH, or ``None`` when PPCG is not installed."""
+    """``ppcg``, resolved in order: :data:`PPCG_HOME_ENV`, ``<tools dir>/ppcg/bin/ppcg``, PATH.
+
+    The first two never fire on a host that has not built ppcg -- both env vars are then either
+    unset or point at a directory :func:`_exe_under_prefix` finds nothing executable under -- so a
+    host that installs ``ppcg`` onto PATH the ordinary way keeps working exactly as before. What
+    changes is that a ppcg built into ``$HPCAGENT_BENCH_TOOLS_DIR/ppcg-<version>`` (a ``<tool>``
+    symlink pointed at the current build; see ``scripts/cache_env.sh``) is found WITHOUT the image's
+    EDF ``PATH`` -- which is re-declared absolutely at run time and does not include it -- ever
+    having to name that cache directory.
+    """
+    direct = _exe_under_prefix(os.environ.get(PPCG_HOME_ENV), "ppcg")
+    if direct is not None:
+        return direct
+    tools_dir = os.environ.get(TOOLS_DIR_ENV)
+    from_tools = _exe_under_prefix(f"{tools_dir}/ppcg" if tools_dir else None, "ppcg")
+    if from_tools is not None:
+        return from_tools
     return shutil.which("ppcg")
 
 
 def hipify_exe() -> Optional[str]:
-    """``hipify-perl`` on PATH, or ``None`` when this host has no ROCm. Mirrors :func:`ppcg_exe`."""
-    return shutil.which(HIPIFY)
+    """``hipify-perl`` on PATH, or under ``$ROCM_PATH/bin`` when PATH omits it, or ``None`` when
+    this host has neither. The image already ships ``hipify-perl`` under ``$ROCM_PATH/bin`` and
+    puts that directory on PATH, so the fallback exists for a host or launch mode where PATH does
+    not carry the image's own declaration -- never a hardcoded ROCm path, since ``ROCM_PATH`` is
+    the same env var the rest of this image's tooling (``compilers.yaml``'s hipcc block) reads."""
+    exe = shutil.which(HIPIFY)
+    if exe is not None:
+        return exe
+    return _exe_under_prefix(os.environ.get("ROCM_PATH"), HIPIFY)
+
+
+def _ppcg_run_env(exe: str) -> Optional[Dict[str, str]]:
+    """The environment ``ppcg`` must run under: its OWN ``lib`` dir prepended to
+    ``LD_LIBRARY_PATH``, or ``None`` when that directory does not exist (an ordinary system
+    install, where the default environment is already correct and this would be a no-op anyway).
+
+    ppcg links pet and isl by an absolute RPATH into its own install prefix -- correct, and
+    verified with ``readelf -d`` on the binaries this built -- but RPATH/RUNPATH is the THIRD
+    place the dynamic linker looks, after ``LD_LIBRARY_PATH``. This image's own EDF sets
+    ``LD_LIBRARY_PATH`` to include ``/usr/lib/x86_64-linux-gnu`` (needed for the CXI hook's
+    libcurl -- see the EDF's own comment), which is exactly where Ubuntu packages ``libisl23`` as
+    a build dependency of gcc's Graphite pass. That copy shares ppcg's isl's SONAME
+    (``libisl.so.23``) but predates ``isl_id_set_alloc``, so with LD_LIBRARY_PATH left alone the
+    loader finds the OLDER system isl first and ppcg dies at startup: ``ppcg: symbol lookup
+    error: .../libpet.so.10: undefined symbol: isl_id_set_alloc`` (measured, job 640113). The
+    same clash exists whether ppcg lives in the shared tools cache or is baked into the image
+    (containers/cluster/ce-images/judge-agent-amd/Dockerfile's PPCG stage) -- it is a property of
+    the SEARCH ORDER, not of where ppcg was installed -- so this runs unconditionally rather than
+    only for a cache build.
+    """
+    lib = pathlib.Path(exe).resolve().parent.parent / "lib"
+    if not lib.is_dir():
+        return None
+    env = dict(os.environ)
+    existing = env.get("LD_LIBRARY_PATH", "")
+    env["LD_LIBRARY_PATH"] = f"{lib}:{existing}" if existing else str(lib)
+    return env
 
 
 def resolve_backend(backend: Optional[str]) -> str:
@@ -189,7 +260,12 @@ def run_ppcg(
         readable = pathlib.Path(scratch) / scop.name
         readable.write_text(drop_const_params(scop.read_text(), entry))
         proc = subprocess.run(
-            [str(exe), *args, str(readable)], cwd=scratch, capture_output=True, text=True, timeout=timeout
+            [str(exe), *args, str(readable)],
+            cwd=scratch,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=_ppcg_run_env(str(exe)),
         )
         if proc.returncode == 0:
             host_cu = pathlib.Path(scratch) / f"{scop.stem}_host.cu"

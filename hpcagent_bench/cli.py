@@ -488,8 +488,8 @@ def cmd_agent(args) -> int:
         # does -- otherwise every distributed row is `adhoc` however --run-id was set. An already
         # exported value wins, so an outer launcher's identity is never overwritten here.
         if args.run_id != "adhoc":
-            os.environ.setdefault("OPTARENA_RUN_ID", args.run_id)
-        os.environ.setdefault("OPTARENA_OPTIMIZER", agent.name)  # the SAME label the serial path records
+            os.environ.setdefault("HPCAGENT_BENCH_RUN_ID", args.run_id)
+        os.environ.setdefault("HPCAGENT_BENCH_OPTIMIZER", agent.name)  # the SAME label the serial path records
         rows = run_static_and_write(
             make_agent_builder(registry, args.agent),
             tasks,
@@ -943,6 +943,7 @@ def cmd_run_framework(args) -> int:
         skip_existing=args.skip_existing_benchmarks,
         shard=parse_shard(args.shard),
         csv_path=args.csv,
+        opt_reports_dir=args.opt_reports,
     )
     # The failed list was computed, printed, and thrown away: a sweep in which EVERY kernel died
     # exited 0, so any wrapper reading the status saw a successful run that recorded nothing. That
@@ -1577,6 +1578,15 @@ def build_parser() -> argparse.ArgumentParser:
         "starting at i (default 0/1, the whole selection)",
     )
     rf.add_argument("--csv", default=None, help="append one row per (kernel, framework, impl) to this CSV")
+    rf.add_argument(
+        "--opt-reports",
+        default=None,
+        metavar="DIR",
+        help="deterministic compiler columns (C/C++/Fortran) only: write the vectorization report "
+        "and the assembly of the EXACT measured build for each kernel under DIR/<kernel>/, with a "
+        "manifest (compiler, flags, source sha256, reason when a compiler has no report channel). "
+        "OFF by default; a separate compile-only run, never the timed one (hpcagent_bench.opt_reports)",
+    )
     rf.add_argument(
         "--summarize",
         nargs="+",

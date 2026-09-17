@@ -201,7 +201,7 @@ def report_flags_for(compiler: str) -> str:
 #: A family rather than a driver, because the family is what selects the ``compilers.yaml`` block,
 #: and the BLOCK is what carries the flags -- so "dace built with llvm" and the native ``cc_llvm``
 #: column really do mean the same compiler and the same flag string.
-DACE_FAMILY_ENV = "OPTARENA_DACE_COMPILER_FAMILY"
+DACE_FAMILY_ENV = "HPCAGENT_BENCH_DACE_COMPILER_FAMILY"
 
 #: Flags dace supplies itself, stripped from the baseline before it reaches ``compiler.cpu.args``.
 #: Its config schema documents both exclusions: the optimization level is the sole property of
@@ -642,6 +642,63 @@ def pipeline_canonicalize(sdfg: dace.SDFG, ctx: PipelineContext) -> None:
     finalize_for_target(sdfg, target=target)
 
 
+#: Rounds of (FuseMaps, StateFusionExtended) the loop2map pipeline runs after the lift. Two, for the
+#: same reason as :data:`PARALLEL_FUSION_ROUNDS`: a fusion frees a state boundary the fused maps were
+#: pinning, StateFusionExtended then collapses it, and the freshly-merged state exposes maps the
+#: first round's FuseMaps had not seen adjacent yet.
+LOOP2MAP_FUSION_ROUNDS = 2
+
+
+def pipeline_loop2map(sdfg: dace.SDFG, ctx: PipelineContext) -> None:
+    """The ``dace_*_parallel`` recipe -- short-loop unroll, simplify, fuse states, lift every
+    remaining loop straight to a Map, then two rounds of (map fusion, state fusion). A DIFFERENT,
+    SHORTER optimizer than ``dace_cpu``/``dace_gpu``'s own :func:`pipeline_parallel`, not a weaker
+    setting of it (exactly as :func:`pipeline_canonicalize` is its own optimizer rather than a
+    stronger :func:`pipeline_auto_opt`):
+
+    ``ShortLoopUnroll -> simplify -> StateFusionExtended -> LoopToMap ->
+    (FuseMaps, StateFusionExtended) x LOOP2MAP_FUSION_ROUNDS``.
+
+    Modelled on ``ParallelizePipeline`` in ``dace/transformation/passes/parallelize.py`` (the
+    CloudSC-CI recipe: unroll -> SymbolSSA -> UniqueLoopIterators -> PrivatizeScalars -> simplify ->
+    ParallelizeLoops -> 2x(FuseStates+FuseMaps+FuseLoops+FuseConditions), see
+    ``tests/corpus/cloudsc/pipelines.py`` lines 4-7 and ``ParallelizePipeline._stages`` in that
+    module) but trimmed to exactly the stages named for this column: no ``SymbolSSA``/
+    ``UniqueLoopIterators`` re-uniquification (nothing here unrolls an already-unrolled outer loop),
+    no ``PrivatizeScalars`` (the scalar-privatization cloudsc's Fortran ABI proxies need, which a
+    plain Python-frontend SDFG does not have -- see :func:`pipeline_parallel`'s own docstring on the
+    same point), and ``LoopToMap`` applied directly rather than through ``ParallelizeLoops``'s
+    outermost-first sweep. The closing fusion round pairs ``FuseMaps`` with ``StateFusionExtended``
+    (not ``MapCollapse``, which is what :func:`pipeline_parallel` pairs it with) -- state fusion is
+    what reopens the boundaries a round of map fusion just freed, so the SECOND round's ``FuseMaps``
+    sees maps the first round's did not yet consider adjacent.
+
+    On GPU the offload runs LAST, after every CPU-side optimization, via the same
+    ``offload_to_gpu`` :func:`pipeline_parallel` uses -- the maps are formed, fused and collapsed on
+    the host graph first, and only the finished map structure is moved to the device.
+
+    Every pass here (``ShortLoopUnroll``, ``StateFusionExtended``, ``LoopToMap``, ``FuseMaps``) ships
+    on upstream DaCe -- unlike :func:`pipeline_canonicalize`, this one needs no ``spcl/dace@extended``
+    pin, so a stock PyPI DaCe runs it unchanged too.
+    """
+    from dace.transformation.interstate.loop_to_map import LoopToMap
+    from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
+    from dace.transformation.passes.fuse_maps import FuseMaps
+    from dace.transformation.passes.parallelization_prep import ShortLoopUnroll
+
+    ShortLoopUnroll().apply_pass(sdfg, {})
+    sdfg.simplify()
+    sdfg.apply_transformations_repeated(StateFusionExtended)
+    sdfg.apply_transformations_repeated(LoopToMap)
+    for _ in range(LOOP2MAP_FUSION_ROUNDS):
+        FuseMaps().apply_pass(sdfg, {})
+        sdfg.apply_transformations_repeated(StateFusionExtended)
+    if ctx.device is dace_dtypes.DeviceType.GPU:
+        from dace.transformation.passes.canonicalize.finalize import offload_to_gpu
+
+        offload_to_gpu(sdfg)
+
+
 #: Storage classes that put the bytes in device memory, which is what a cupy argument IS. Everything
 #: else -- ``Default``, ``CPU_Heap``, ``CPU_Pinned``, ``Register`` -- is a host address, and pinned
 #: host memory is a host address too however cheaply the device can reach it.
@@ -702,7 +759,7 @@ def enforce_gpu_residency(sdfg: dace.SDFG) -> None:
         )
 
 
-#: THREE optimizers x TWO targets, and nothing else. All three are device-aware and all three
+#: FOUR optimizers x TWO targets, and nothing else. All four are device-aware and all four
 #: offload LAST, after every CPU-side optimization, so a GPU column is its CPU column's map
 #: structure moved to the device rather than a differently-optimized graph.
 #:
@@ -711,14 +768,18 @@ def enforce_gpu_residency(sdfg: dace.SDFG) -> None:
 #: DaCe" and not "how fast is THIS optimizer". Each pipeline is now named and scored on every
 #: kernel, including the ones where it loses. ``autoopt`` stays because it is upstream DaCe's own
 #: optimizer and runs on a stock install, so it is the only column that separates a better optimizer
-#: in the fork from a different DaCe in the fork.
+#: in the fork from a different DaCe in the fork. ``loop2map`` (the ``dace_*_parallel`` flavors, see
+#: :func:`pipeline_loop2map`) is a second, SHORTER upstream-only recipe next to ``parallel`` --
+#: named separately rather than folded into it for the same reason ``canonicalize`` is not folded
+#: into ``autoopt``: it is a different optimizer, not a different setting of the same one.
 #:
 #: Every entry is ``finalized``: each ends in a graph ready for codegen, with no later rung to
 #: inherit a finalization from.
-#: ``parallel`` and ``autoopt`` are scored on the CLASSIC generators with tree reductions and the
-#: explicit-copy lift both off -- the configuration DaCe documents as byte-identical to upstream,
-#: which is what makes those two columns comparable against a stock install. ``canon`` is scored on
-#: the experimental generators, which tree-reduce and lift their own copies regardless of the flags.
+#: ``parallel``, ``loop2map`` and ``autoopt`` are scored on the CLASSIC generators with tree
+#: reductions and the explicit-copy lift both off -- the configuration DaCe documents as
+#: byte-identical to upstream, which is what makes those columns comparable against a stock install.
+#: ``canon`` is scored on the experimental generators, which tree-reduce and lift their own copies
+#: regardless of the flags.
 #:
 #: The two tuples set the SAME KEYS, always, and that is the point. ``apply_pipeline_config`` writes
 #: them into the process-global ``dace.Config``, so a key one flavor sets and the other omits is a
@@ -776,6 +837,8 @@ DACE_PIPELINES: tuple[SdfgPipeline, ...] = (
     SdfgPipeline("canon_gpu", None, pipeline_canonicalize, finalized=True, config=READABLE_CODEGEN),
     SdfgPipeline("autoopt_cpu", None, pipeline_auto_opt, finalized=True, config=CLASSIC_CODEGEN),
     SdfgPipeline("autoopt_gpu", None, pipeline_auto_opt, finalized=True, config=CLASSIC_CODEGEN),
+    SdfgPipeline("loop2map_cpu", None, pipeline_loop2map, finalized=True, config=CLASSIC_CODEGEN),
+    SdfgPipeline("loop2map_gpu", None, pipeline_loop2map, finalized=True, config=CLASSIC_CODEGEN),
 )
 
 PIPELINES_BY_NAME: dict[str, SdfgPipeline] = {p.name: p for p in DACE_PIPELINES}

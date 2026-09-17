@@ -137,20 +137,30 @@ def test_a_gpu_prerender_records_hip_entries_the_launch_gates_accept(
     assert cpf_cache.main(check) == 0, capsys.readouterr().out
 
 
-def test_srun_cannot_kill_a_sibling_shard_on_a_bad_exit() -> None:
-    """A rank exiting nonzero (an internal error) must never take the other shards down with it."""
+def test_every_launch_path_carries_kill_on_bad_exit_0() -> None:
+    """A rank exiting nonzero (an internal error) must never take the other shards down with it,
+    whichever container launcher (enroot directly, or `srun --environment=` once pyxis is fixed)
+    scripts/cscs/container_runtime.sh picked for this job."""
     text = SBATCH.read_text()
-    assert re.search(r"^srun\b.*--kill-on-bad-exit=0", text, re.MULTILINE)
+    enroot_at = text.index('"${OPT}/scripts/cscs/enroot_srun.sh"')
+    ce_at = text.index('srun --environment="${CPF_CE_ENV}"')
+    assert ce_at > enroot_at, "the enroot branch is tried first, the ce branch is the else"
+    fi_at = text.index("\nfi\n", ce_at)
+    assert "--kill-on-bad-exit=0" in text[enroot_at - 200 : ce_at], "enroot branch"
+    assert "--kill-on-bad-exit=0" in text[ce_at:fi_at], "ce branch"
 
 
-def test_the_roster_check_runs_once_after_srun_returns() -> None:
-    """The 40-kernel view check belongs to the batch script, after every shard, never inside a rank."""
+def test_the_roster_check_runs_once_after_the_render_launch_not_inside_a_rank() -> None:
+    """The 40-kernel view check belongs to the OUTER batch script, after every shard's render has
+    been launched, never inside `inner` -- the per-rank body that actually runs in the container."""
     text = SBATCH.read_text()
-    srun_at = text.index("\nsrun ")
+    inner_at = text.index('"${1:-}" == inner')
+    outer_at = text.index("# --- outer:")
+    launch_at = text.index("status=0")
     check_at = text.index("cpf_cache check")
-    assert check_at > srun_at
+    assert inner_at < outer_at < launch_at < check_at
     assert text.count("cpf_cache check") == 1
-    assert "cpf_prerender" in text[:check_at]
+    assert "cpf_prerender" in text[inner_at:check_at]
 
 
 def test_the_job_exit_status_follows_the_roster_check_not_the_raw_srun_status() -> None:
@@ -158,3 +168,49 @@ def test_the_job_exit_status_follows_the_roster_check_not_the_raw_srun_status() 
     text = SBATCH.read_text()
     tail = text[text.index("cpf_cache check") :]
     assert re.search(r"exit\s+\$\(\(.*checks_status", tail)
+
+
+def _fake_compiler(tmp_path: pathlib.Path, name: str = "cc") -> str:
+    """An absolute, executable path that does NOT contain ``/spack/`` -- what the agent image's own
+    ``CXX=/opt/gcc/bin/g++`` looks like to :func:`cpf_prerender.require_toolchain`."""
+    compiler = tmp_path / "opt-toolchain" / name
+    compiler.parent.mkdir(parents=True, exist_ok=True)
+    compiler.write_text("#!/bin/sh\n")
+    compiler.chmod(0o755)
+    return str(compiler)
+
+
+def test_require_toolchain_accepts_the_agent_images_own_toolchain(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The render now always runs inside the agent image, whose EDF sets CXX under /opt/gcc and
+    OPENBLAS_ROOT (not OPENBLAS_DIR) for its baked-in spack view -- prerender_cpf.sbatch's `inner`
+    step maps OPENBLAS_ROOT across, and neither name involves the host's old /spack/ toolchain."""
+    monkeypatch.setenv("CXX", _fake_compiler(tmp_path))
+    monkeypatch.setenv("OPENBLAS_DIR", str(tmp_path))
+    cpf_prerender.require_toolchain()  # must not raise
+
+
+def test_require_toolchain_rejects_a_relative_or_unresolved_compiler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bare name (PATH fallthrough) is exactly the silent-system-compiler failure mode this gate
+    exists to catch -- a shell whose setup never really ran still has to be refused."""
+    monkeypatch.setenv("CXX", "g++")
+    monkeypatch.setenv("OPENBLAS_DIR", "/anything")
+    with pytest.raises(SystemExit):
+        cpf_prerender.require_toolchain()
+
+
+def test_require_toolchain_rejects_an_unset_compiler(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CXX", raising=False)
+    monkeypatch.setenv("OPENBLAS_DIR", "/anything")
+    with pytest.raises(SystemExit):
+        cpf_prerender.require_toolchain()
+
+
+def test_require_toolchain_rejects_a_missing_blas_root(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """OPENBLAS_DIR must be set even when a real compiler is: the image's OPENBLAS_ROOT still has to
+    be mapped across by the caller, and a missed mapping must not read as a passing toolchain."""
+    monkeypatch.setenv("CXX", _fake_compiler(tmp_path))
+    monkeypatch.delenv("OPENBLAS_DIR", raising=False)
+    with pytest.raises(SystemExit):
+        cpf_prerender.require_toolchain()

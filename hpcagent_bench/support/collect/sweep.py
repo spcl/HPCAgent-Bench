@@ -305,6 +305,7 @@ def run_framework_sweep(
     shard: Tuple[int, int] = (0, 1),
     csv_path: Optional[str] = None,
     distributed: bool = False,
+    opt_reports_dir: Optional[str] = None,
 ) -> List[str]:
     """Run the ``benchmark`` selection under ``framework``, forking EACH kernel; returns the list of
     kernels whose child failed. ``skip_existing`` drops kernels already fully recorded in the DB.
@@ -322,6 +323,13 @@ def run_framework_sweep(
     rung it is actually about to run. ``csv_path``, when given, appends one row per (kernel,
     framework, impl) -- see :func:`write_csv_rows` -- so the batch job's per-rank CSVs can be
     merged by :func:`summarize_csv`.
+
+    ``opt_reports_dir``, when given, asks :mod:`hpcagent_bench.opt_reports` for the vectorization
+    report + assembly of each kernel's measured build, under ``<opt_reports_dir>/<kernel>/`` (one
+    subdirectory per framework name first when ``framework`` names more than one, so two columns
+    run in the same invocation cannot collide on one kernel's directory). Read AFTER the forked
+    child returns successfully -- the generated sources + timed ``.so`` it built are then on disk --
+    and OUTSIDE the fork, so a report failure can never be mistaken for the kernel's own crash.
     """
     benchnames = shard_names(KERNELS.select(benchmark or "all"), shard, preset)
 
@@ -361,6 +369,22 @@ def run_framework_sweep(
         # than the kernel it died on. write_csv_rows appends and writes the header only when new.
         if csv_path:
             write_csv_rows(sweep_rows(benchname, framework_names, preset, datatype or "float64", r), csv_path)
+        # Reports describe a build that was actually timed, so they are only asked for AFTER a
+        # successful child -- a failed/crashed kernel left no generated sources worth reporting on,
+        # and hpcagent_bench.opt_reports already records a reason rather than nothing when a
+        # column declined or never built. Read in THIS (unforked) process: the sources + .so the
+        # child built are on the shared filesystem, so nothing here needs to run inside the fork.
+        if opt_reports_dir and r.ok:
+            from hpcagent_bench import opt_reports as opt_reports_mod
+
+            root = pathlib.Path(opt_reports_dir)
+            bench_obj = Benchmark(benchname)
+            for name in framework_names:
+                dest = root / name if len(framework_names) > 1 else root
+                try:
+                    opt_reports_mod.emit_kernel_reports(bench_obj, name, dest)
+                except Exception as e:  # noqa: BLE001 -- a diagnostic must not sink a measured run
+                    print(f"WARNING: opt-reports for {name}/{benchname} failed: {e}")
 
     if failed:
         print(f"Failed: {len(failed)} out of {len(benchnames)}")
