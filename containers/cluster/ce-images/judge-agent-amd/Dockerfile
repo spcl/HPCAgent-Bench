@@ -1020,26 +1020,42 @@ RUN set -eux; \
 # $ROCM_PATH/bin/hipify-perl, which is on PATH here (see the EDF template's PATH line); confirmed
 # by probing the then-current image on a compute node.
 #
+# INSTALLED TO ITS OWN PREFIX (/opt/ppcg-install), NOT bare `make install` into /usr/local like
+# Pluto above. ppcg clones its OWN isl+pet submodules and a bare install would overwrite Pluto's
+# already-installed /usr/local/lib/libisl.so.23 with a different isl commit under the same
+# SONAME -- silently changing what polycc links against too. A private prefix plus one symlink
+# on PATH (below) keeps the two builds from ever touching the same file.
+#
+# THE ISL CLASH THAT MATTERS EVEN SO: ppcg's own binaries carry a correct RPATH into
+# /opt/ppcg-install/lib (verified with `readelf -d`), but RPATH/RUNPATH is the THIRD place the
+# dynamic linker looks, after LD_LIBRARY_PATH -- and the agent EDF's LD_LIBRARY_PATH includes
+# /usr/lib/x86_64-linux-gnu, where Ubuntu packages `libisl23` as a build dependency of gcc's
+# Graphite pass. That copy shares ppcg's isl's SONAME (libisl.so.23) but predates
+# `isl_id_set_alloc`, so at RUN time (under the EDF, not here at build time) ppcg would die with
+# "symbol lookup error: .../libpet.so.10: undefined symbol: isl_id_set_alloc" (measured, job
+# 640113) unless something puts /opt/ppcg-install/lib ahead of LD_LIBRARY_PATH. That "something"
+# is hpcagent_bench.ppcg_transform._ppcg_run_env, which every ppcg invocation goes through --
+# the smoke test below exercises the SAME fix, not a build-time-only workaround, so a green
+# image build is actually evidence the run-time path works too.
+#
 # PIN THE COMMIT once a build has been verified end-to-end -- ppcg has no tagged releases, so
 # `master` is a moving target and an unpinned clone here would make two builds of "the same" image
-# silently measure two different transforms. PPCG_COMMIT is intentionally empty (== clone HEAD at
-# build time) until that verification records the resolved SHA; see the live-build note in
-# hpcagent_bench/ppcg_transform.py's module docstring / the launch report for the SHA verified on
-# 2026-09-17's live build into $HPCAGENT_BENCH_TOOLS_DIR (scripts/cache_env.sh) -- put that SHA
-# here the next time this image is rebuilt.
-ARG PPCG_COMMIT=
+# silently measure two different transforms. Verified working on 2026-09-17's live build into
+# $HPCAGENT_BENCH_TOOLS_DIR (scripts/cache_env.sh): isl 6c2b19a0405759f4d31bf48b73492be4a2b1d813,
+# pet e841cf3f94c302c17e58af95b0d39ffb993b13e4.
+ARG PPCG_COMMIT=7cbf785210cdc1bd68fd277d2ecf7dd824da874a
 RUN set -eux; \
     gitretry clone --recursive https://repo.or.cz/ppcg.git /opt/ppcg; \
     if [ -n "${PPCG_COMMIT}" ]; then git -C /opt/ppcg checkout "${PPCG_COMMIT}"; \
       gitretry -C /opt/ppcg submodule update --init --recursive; fi; \
     cd /opt/ppcg; \
     ./autogen.sh; \
-    ./configure --with-clang-prefix="/usr/lib/llvm-${PLUTO_CLANG_MAJOR}" \
+    ./configure --prefix=/opt/ppcg-install --with-clang-prefix="/usr/lib/llvm-${PLUTO_CLANG_MAJOR}" \
       CC="clang-${PLUTO_CLANG_MAJOR}" CXX="clang++-${PLUTO_CLANG_MAJOR}" \
       CXXFLAGS='-std=c++17 -include cstdint'; \
     make -j"$(nproc)"; \
     make install; \
-    ldconfig; \
+    ln -sf /opt/ppcg-install/bin/ppcg /usr/local/bin/ppcg; \
     printf '%s\n' \
       '#include <stdint.h>' \
       'void mm(const int64_t N, double A[restrict N][N], double B[restrict N][N], double C[restrict N][N]) {' \
@@ -1048,7 +1064,8 @@ RUN set -eux; \
       '#pragma endscop' \
       '}' > /tmp/smoke.c; \
     cd /tmp; \
-    ppcg --target=cuda --tile --tile-size=32 smoke.c; \
+    LD_LIBRARY_PATH="/opt/ppcg-install/lib:${LD_LIBRARY_PATH:-}" \
+      ppcg --target=cuda --tile --tile-size=32 smoke.c; \
     test -s smoke_host.cu; \
     test -s smoke_kernel.cu; \
     grep -q __global__ smoke_kernel.cu; \

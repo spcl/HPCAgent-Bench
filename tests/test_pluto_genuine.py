@@ -1038,3 +1038,67 @@ def test_hipify_exe_prefers_path_over_rocm_path(monkeypatch: pytest.MonkeyPatch)
     )
     monkeypatch.setenv("ROCM_PATH", "/somewhere/else")
     assert ppcg_transform.hipify_exe() == "/opt/rocm/bin/hipify-perl"
+
+
+def test_ppcg_run_env_puts_its_own_lib_dir_ahead_of_ld_library_path(tmp_path, monkeypatch) -> None:
+    """ppcg's binaries carry a correct RPATH into their own install prefix, but RPATH/RUNPATH is
+    consulted AFTER ``LD_LIBRARY_PATH`` -- and this image's own EDF sets ``LD_LIBRARY_PATH`` to
+    include ``/usr/lib/x86_64-linux-gnu``, where Ubuntu packages an OLDER ``libisl23`` (a gcc
+    build dependency) under the SAME soname as the isl ppcg was built against. Left alone, that
+    shadows the correct isl and ppcg dies at startup with ``undefined symbol: isl_id_set_alloc``
+    (job 640113) -- so ``_ppcg_run_env`` has to WIN the race by prepending ppcg's own lib dir,
+    not merely appending it or leaving RPATH to sort it out."""
+    from hpcagent_bench import ppcg_transform
+
+    prefix = tmp_path / "ppcg-install"
+    (prefix / "bin").mkdir(parents=True)
+    (prefix / "lib").mkdir()
+    exe = prefix / "bin" / "ppcg"
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/usr/lib/x86_64-linux-gnu")
+    env = ppcg_transform._ppcg_run_env(str(exe))
+    assert env is not None
+    assert env["LD_LIBRARY_PATH"].split(":")[0] == str(prefix / "lib")
+    assert "/usr/lib/x86_64-linux-gnu" in env["LD_LIBRARY_PATH"].split(":")
+
+
+def test_ppcg_run_env_works_through_a_path_symlink(tmp_path, monkeypatch) -> None:
+    """``ppcg_exe()`` may return a PATH entry that is a symlink into the real install (the
+    Dockerfile's own ``/usr/local/bin/ppcg -> /opt/ppcg-install/bin/ppcg``) -- the lib dir has to
+    be resolved from the REAL prefix, not from the symlink's own directory (``/usr/local/lib``,
+    which is where Pluto's isl lives and is exactly the collision this design avoids)."""
+    from hpcagent_bench import ppcg_transform
+
+    real_prefix = tmp_path / "opt" / "ppcg-install"
+    (real_prefix / "bin").mkdir(parents=True)
+    (real_prefix / "lib").mkdir()
+    real_exe = real_prefix / "bin" / "ppcg"
+    real_exe.write_text("#!/bin/sh\n")
+    real_exe.chmod(0o755)
+
+    local_bin = tmp_path / "usr" / "local" / "bin"
+    local_bin.mkdir(parents=True)
+    symlinked = local_bin / "ppcg"
+    symlinked.symlink_to(real_exe)
+
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+    env = ppcg_transform._ppcg_run_env(str(symlinked))
+    assert env is not None
+    assert env["LD_LIBRARY_PATH"] == str(real_prefix / "lib")
+
+
+def test_ppcg_run_env_is_a_noop_with_no_lib_dir_beside_the_exe(tmp_path, monkeypatch) -> None:
+    """An ordinary system ppcg (``/usr/bin/ppcg``, say) has no sibling ``lib`` this module
+    installed -- there is nothing to prepend, and returning ``None`` tells :func:`run_ppcg` to
+    pass ``subprocess.run`` no ``env`` override at all, inheriting the caller's environment
+    exactly as it did before this lookup existed."""
+    from hpcagent_bench import ppcg_transform
+
+    lone = tmp_path / "bin" / "ppcg"
+    lone.parent.mkdir(parents=True)
+    lone.write_text("#!/bin/sh\n")
+    lone.chmod(0o755)
+
+    assert ppcg_transform._ppcg_run_env(str(lone)) is None
