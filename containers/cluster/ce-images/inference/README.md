@@ -3,7 +3,7 @@
 The images this directory used to build are gone. vLLM and SGLang are now each
 built from a single Dockerfile -- `../vllm/Dockerfile` and `../sglang/Dockerfile`
 -- and promoted under one unversioned name per role, which `../images.env`
-records and `../install_edfs.sh` registers as `vllm-latest` and `sglang-latest`.
+records and `../install_edfs.sh` registers as `hpcagent-bench-vllm-mi300-latest` and `hpcagent-bench-sglang-mi300-latest`.
 Build and promotion are documented in `../../../../SUBMITTING.md`.
 
 What was here until 2026-09-08 was the earlier path: a multi-phase chain

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build optarena-judge-agent-amd and export it as a squashfs enroot can mount.
+# Build hpcagent-bench-judge-agent-amd and export it as a squashfs enroot can mount.
 #
 # The tag carries NO version suffix. Version identity comes from git plus the image digest this
 # script records, not from a name -- a "-v5" in the tag is what made two different images look
@@ -30,14 +30,14 @@ CE_DIR="${CE_DIR:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images}"
 # keeps resolving; the judge is a NEW name and nothing points at it until install_edfs.sh does.
 target_sqsh() {
     case "$1" in
-        agent) printf '%s/optarena-ce-amd-mi300-candidate.sqsh' "${CE_DIR}" ;;
-        judge) printf '%s/optarena-ce-judge-amd-mi300-candidate.sqsh' "${CE_DIR}" ;;
+        agent) printf '%s/hpcagent-bench-ce-amd-mi300-candidate.sqsh' "${CE_DIR}" ;;
+        judge) printf '%s/hpcagent-bench-ce-judge-amd-mi300-candidate.sqsh' "${CE_DIR}" ;;
         *)     echo "unknown build target $1" >&2; return 2 ;;
     esac
 }
 
-IMAGE_TAG="${IMAGE_TAG:-optarena-judge-agent-amd:latest}"
-OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/optarena-judge-agent-amd.sqsh}"
+IMAGE_TAG="${IMAGE_TAG:-hpcagent-bench-judge-agent-amd:latest}"
+OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/hpcagent-bench-judge-agent-amd.sqsh}"
 # Pinned by DIGEST, matching the Dockerfile's ARG default. Passing the bare tag here would
 # OVERRIDE that default and quietly unpin the build, and the base.name label would then
 # record a mutable reference. Same shape as the three inference builders.
@@ -81,8 +81,11 @@ printf 'dace @ %s\n' "${DACE_COMMIT}"
 # taking different source.
 #
 # This is a COMPILE-TIME link target for spack's MPICH and nothing else -- it is deleted from the
-# shipped image so MPI resolves to the CSCS netstack artifact's libfabric 2.6.0 at run time. No
-# RCCL net plugin is built here either; the artifact carries one, matched to the host driver.
+# shipped image so MPI resolves at run time to the host's libfabric instead: as of 2026-09-16 every
+# EDF sets com.hooks.netstack.source=host, which binds /opt/cray/libfabric/host/lib64/libfabric.so.1
+# (currently -> 2.3.1), not the decommissioned netstack artifact's 2.6.0. No RCCL net plugin is
+# built here either; the host supplies one via com.hooks.aws_ofi_nccl.variant=rocm6 (required in
+# host mode), matched to the host driver.
 LIBFABRIC_REF="${LIBFABRIC_REF:-v2.6.0}"
 resolve_tag() {
     # ^{} dereferences an annotated tag to the commit it points at; without it a tag object's own
@@ -114,7 +117,7 @@ printf 'spack buildcache %s\n' "${SPACK_BUILDCACHE}"
 # Order matters: `agent` first so the judge build finds those layers already built. Each target
 # is exported before the next is built, so a judge failure still leaves a usable agent image.
 for target in ${BUILD_TARGETS}; do
-    tag="optarena-ce-${target}-amd:latest"
+    tag="hpcagent-bench-ce-${target}-amd:latest"
     # Honour an explicit OUTPUT_SQSH, but ONLY for a single-target build -- with two targets one
     # name cannot mean both, and silently writing the judge over the agent's path is exactly the
     # kind of thing that gets discovered a campaign later. build.sbatch sets OUTPUT_SQSH, so this

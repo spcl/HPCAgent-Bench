@@ -33,17 +33,17 @@ Guards:
       sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 \
       <checkout>/containers/cluster/ce-images/build_and_verify.sbatch
 
-Writes `optarena-sglang-mi200-candidate.sqsh` + `.verified`. Verify includes
+Writes `hpcagent-bench-sglang-mi200-candidate.sqsh` + `.verified`. Verify includes
 `inference/sglang_kernel_launch_check.py`: sgl_kernel silu_and_mul and triton causal_conv1d vs torch.
 
 Verify alone:
 
-    REPO=<checkout> IMAGE=$SCRATCH/ce-images/optarena-sglang-mi200-candidate.sqsh PROFILE=sglang-mi200 \
+    REPO=<checkout> IMAGE=$SCRATCH/ce-images/hpcagent-bench-sglang-mi200-candidate.sqsh PROFILE=sglang-mi200 \
       sbatch --partition=mi200 --gpus-per-node=8 <checkout>/containers/cluster/ce-images/verify_image.sbatch
 
 ## Serve smoke (private endpoint)
 
-    umask 077; mkdir -p ~/.config/optarena; openssl rand -hex 32 > ~/.config/optarena/mi200-endpoint.key
+    umask 077; mkdir -p ~/.config/hpcagent-bench; openssl rand -hex 32 > ~/.config/hpcagent-bench/mi200-endpoint.key
     PRESET=mi200 EDF=<candidate edf.toml> sbatch --partition=mi200 --gpus-per-node=8 \
       containers/cluster/ce-images/inference/serve-private.sbatch
 
@@ -55,4 +55,4 @@ Legs default `tp4:0.80 tp4:0.88 tp8:0.80`; serve `tp8:0.80`. Laptop and Daint ac
 
     ./promote_image.sh sglang-mi200        # DRY_RUN=1 first
 
-Renames to `optarena-sglang-mi200.sqsh`, renders `sglang-mi200-latest` via install_edfs.sh.
+Renames to `hpcagent-bench-sglang-mi200.sqsh`, renders `hpcagent-bench-sglang-mi200-latest` via install_edfs.sh.

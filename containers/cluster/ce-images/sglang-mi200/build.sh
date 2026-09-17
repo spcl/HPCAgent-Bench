@@ -9,8 +9,8 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../../.." && pwd)"
 # shellcheck source=../build_common.sh
 source "${SCRIPT_DIR}/../build_common.sh"
 
-IMAGE_TAG="${IMAGE_TAG:-optarena-sglang-mi200:latest}"
-OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/optarena-sglang-mi200.sqsh}"
+IMAGE_TAG="${IMAGE_TAG:-hpcagent-bench-sglang-mi200:latest}"
+OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/hpcagent-bench-sglang-mi200.sqsh}"
 # Pinned by DIGEST, and it MUST track the Dockerfile's ARG BASE_IMAGE: passing it overrides that default.
 BASE_REPO="docker.io/lmsysorg/sglang-rocm:v0.5.19-rocm724-mi30x-20260908"
 BASE_DIGEST="sha256:0405baaf36945fa8164c57d4f1b6b178bae5804fae606ff2db3816a6cab6dafc"

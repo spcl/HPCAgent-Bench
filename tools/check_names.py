@@ -22,7 +22,7 @@ to REF when given; the module-name rule then applies only to newly added
 files, so pre-existing ``_private`` code never blocks a commit. ``--all``
 audits whole files regardless of git history.
 
-Kept byte-identical between optarena's tools/check_names.py and dace's
+Kept byte-identical between hpcagent-bench's tools/check_names.py and dace's
 tools/check_names.py; edit one, then copy it verbatim over the other.
 
 Output: ``path:line:col: NAMEnnn message``, one per violation, sorted by

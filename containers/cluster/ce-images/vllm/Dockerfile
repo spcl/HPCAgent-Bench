@@ -6,7 +6,7 @@
 #
 # Build context is the REPOSITORY ROOT, because this file bakes in two things that live in the
 # repo today and are reached from outside the image at run time:
-#   podman build -f containers/cluster/ce-images/vllm/Dockerfile -t optarena-vllm .
+#   podman build -f containers/cluster/ce-images/vllm/Dockerfile -t hpcagent-bench-vllm .
 # build.sh does that with the right podman flags; build.sbatch runs build.sh on a compute node.
 #
 # NOT YET BUILT. It collapses into one file the six-job Slurm chain that produced the deployed
@@ -71,7 +71,7 @@ ARG BASE_IMAGE
 # The registry reference, not whatever FROM resolved to: a cache hit rewrites BASE_IMAGE to a
 # local dir: path, and that must not become the published base.name.
 ARG BASE_IMAGE_REF="${BASE_IMAGE}"
-LABEL org.opencontainers.image.title="optarena-vllm" \
+LABEL org.opencontainers.image.title="hpcagent-bench-vllm" \
       org.opencontainers.image.description="vLLM ${VLLM_VERSION} inference for MI300A: ROCm 7.2, CSCS netstack fabric, aiter ${AITER_REF}" \
       org.opencontainers.image.version="${VLLM_VERSION}" \
       org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
@@ -116,7 +116,7 @@ ENV FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
 # It is an ARG so a candidate image can DECLARE the opposite without forking this file. The
 # GLM-5.3 candidate needs 1: the vLLM MI300X recipe for GlmMoeDsaForCausalLM serves with
 # VLLM_ROCM_USE_AITER=1 and --linear-backend aiter --moe-backend aiter, so an image that hard-
-# codes 0 cannot run it. Default stays 0, so optarena-vllm.sqsh rebuilds byte-identical.
+# codes 0 cannot run it. Default stays 0, so hpcagent-bench-vllm.sqsh rebuilds byte-identical.
 ARG VLLM_ROCM_AITER_SWITCH=0
 ENV VLLM_ROCM_USE_AITER=${VLLM_ROCM_AITER_SWITCH}
 
@@ -562,7 +562,13 @@ RUN set -eux; \
 # is where the CSCS hook BIND-MOUNTS the artifact's libfabric at run time, verified by mounting the
 # image with no annotations: the file that appears there is dated Aug 18 15:39 nobody:nogroup, the
 # artifact's own stamp, and lsof/mountinfo show it as a lustre bind from
-# a CSCS-managed artifact store (exact path unconfirmed since the scratch migration off the retired mount). Refusing it forbade the hook its own mount point.
+# a CSCS-managed artifact store. CONFIRMED 2026-09-16 by reading the hooks: the prefix was
+# /capstor/store/cscs/cscs/public/containers/netstack/$(uname -m)/<ver>/<name>, hardcoded in
+# 10-netstack.sh, 89-libfabric-cxi.sh and 90-aws-ofi-nccl.sh alike. /capstor is now
+# decommissioned, so that store is GONE and the EDFs select netstack.source="host" instead,
+# which binds /opt/cray/libfabric/host/lib64/libfabric.so.1 and
+# /opt/cscs/aws-ofi-ccl-plugin/rocm6/librccl-net.so from the node. Refusing it forbade the
+# hook its own mount point.
 #
 # What must NOT ship is a fabric library in a prefix WE control, because those are what RPATH can
 # bind to and RPATH is searched before everything else -- the 629966 failure, where MPICH held a

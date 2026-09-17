@@ -19,7 +19,7 @@ CE_IMAGES: pathlib.Path = ROOT / "containers" / "cluster" / "ce-images"
 JUDGE_AGENT_DOCKERFILES: tuple[str, ...] = ("judge-agent-amd/Dockerfile", "judge-agent-cuda/Dockerfile")
 LAUNCH_CHECK: pathlib.Path = CE_IMAGES / "tools_launch_check.py"
 #: Image paths the tool scripts are bound at; no recipe may create or read them.
-TOOL_MOUNTS: tuple[str, ...] = ("/opt/optarena-agent", "/opt/optarena-judge")
+TOOL_MOUNTS: tuple[str, ...] = ("/opt/hpcagent-bench-agent", "/opt/hpcagent-bench-judge")
 HARNESS_BUILD_INPUT: re.Pattern[str] = re.compile(
     r"containers/agent/harness/(?:pins\.env|install_tools\.sh|requirements-[a-z]+\.txt|node/package(?:-lock)?\.json)"
 )
@@ -65,7 +65,7 @@ def test_a_judge_agent_image_copies_only_harness_build_inputs_from_containers_ag
 @pytest.mark.parametrize(
     ("text", "flagged"),
     [
-        ("COPY containers/agent /opt/optarena-agent\n", ["containers/agent"]),
+        ("COPY containers/agent /opt/hpcagent-bench-agent\n", ["containers/agent"]),
         ("COPY --chown=1:1 containers/agent/tools/mcp_server.py /x/\n", ["containers/agent/tools/mcp_server.py"]),
         (
             "COPY containers/agent/harness/pins.env \\\n     containers/agent/harness/run_miniswe.py /h/\n",
@@ -80,11 +80,11 @@ def test_the_copy_scan_flags_each_agent_tree_copy_that_is_not_a_build_input(text
 
 def test_verify_image_binds_the_checkout_agent_tree_and_runs_its_checks_from_repo() -> None:
     text = (CE_IMAGES / "verify_image.sbatch").read_text(encoding="utf-8")
-    assert 'REPO="${REPO:-${S}/optarena}"' in text
-    assert '"${REPO}/containers/agent:/opt/optarena-agent"' in text
+    assert 'REPO="${REPO:-${S}/hpcagent-bench}"' in text
+    assert '"${REPO}/containers/agent:/opt/hpcagent-bench-agent"' in text
     assert 'python3 "${REPO}/containers/cluster/ce-images/tools_launch_check.py"' in text
     assert "exit $(( rc + sc + tools_rc ))" in text
-    hardcoded = [line for line in text.splitlines() if "${S}/optarena" in line and not line.startswith("REPO=")]
+    hardcoded = [line for line in text.splitlines() if "${S}/hpcagent-bench" in line and not line.startswith("REPO=")]
     assert hardcoded == []
 
 

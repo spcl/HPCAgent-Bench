@@ -42,9 +42,9 @@ test -f "${PG_PATCH_DIR:-}/sitecustomize.py" 2>/dev/null || {
 MOE_DIR="${PG_PATCH_DIR%/external-eager-pg-patch}/moe-configs"
 [[ -d "${MOE_DIR}" ]] && export VLLM_TUNED_CONFIG_FOLDER="${VLLM_TUNED_CONFIG_FOLDER:-${MOE_DIR}}"
 
-INFERENCE_EDF="${INFERENCE_EDF:-vllm-latest}"
+INFERENCE_EDF="${INFERENCE_EDF:-hpcagent-bench-vllm-mi300-latest}"
 export MODEL_REPO="${MODEL_REPO:-moonshotai/Kimi-K2.7-Code}"
-export SERVED_MODEL="${SERVED_MODEL:-optarena-vllm}"
+export SERVED_MODEL="${SERVED_MODEL:-hpcagent-bench-vllm}"
 export API_PORT="${API_PORT:-8000}"
 export MASTER_PORT_BASE="${MASTER_PORT_BASE:-$((20000 + SLURM_JOB_ID % 20000))}"
 READY_TIMEOUT="${READY_TIMEOUT:-5400}"

@@ -239,10 +239,10 @@ runs:
         # around gaps the branch had already closed.
         #
         # The cost is real: tests/test_dace_numeric_agreement.py ratchets NUMERIC_BAD in BOTH
-        # directions, so a dace commit landing between two runs is attributed to whichever optarena
+        # directions, so a dace commit landing between two runs is attributed to whichever hpcagent-bench
         # commit was in flight, and a "healed" kernel forces a deletion the next dace commit may
         # undo. A shared dace moving mid-run has faked ~40 failures here before. When a red is not
-        # explained by the optarena diff, compare the sha echoed below across the two runs BEFORE
+        # explained by the hpcagent-bench diff, compare the sha echoed below across the two runs BEFORE
         # touching a ratchet list.
         #
         # There is NO override. A DACE_SHA escape hatch used to sit here "for a bisect", and it is

@@ -3,7 +3,7 @@
 #
 # Two jobs, and the second is why this is a script rather than a paragraph in the README:
 #
-#   1. A default name. `optarena-amd-mi300-latest` resolves to the one image images.env names for
+#   1. A default name. `hpcagent-bench-agent-mi300-latest` resolves to the one image images.env names for
 #      that role, so a campaign never spells a version and a promotion is a rename plus this.
 #   2. A fresh clone. ~/.edf is not in the repo, so a checkout on another account has no way to
 #      reach any image. Copying a teammate's EDF carries their absolute scratch path into your

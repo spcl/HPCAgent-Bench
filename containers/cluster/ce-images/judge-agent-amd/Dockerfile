@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# optarena-judge-agent-amd -- ONE image serving BOTH the judge and the agent role on MI300A.
+# hpcagent-bench-judge-agent-amd -- ONE image serving BOTH the judge and the agent role on MI300A.
 # run_cluster.sh:814,817 already hand the same AMD_CE_ENV to both role_srun calls, so there is
 # one image here, not two. Build context is the repository root:
 #
@@ -118,12 +118,16 @@ RUN apt-get update \
 #
 # Compile-only on purpose. Building our own PROVIDER would pin a userspace against a kernel
 # driver CSCS upgrades without us; a stub keeps the link correct at build time and leaves the
-# implementation correct at run time. LIBFABRIC_REF is v2.6.0, matching the netstack artifact
-# (gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0) whose libfabric is what actually loads. It was
-# v2.3.1 until 2026-09-09, when a probe showed HEADER 2.3 against RUNTIME 2.6. That mismatch
-# was NOT the cause of the multi-node MPI assert -- libfabric reports a valid PCI BDF at API
-# 2.3, 2.6 and 1.20 alike -- but building against headers older than the library you load is
-# not a thing to leave standing.
+# implementation correct at run time. LIBFABRIC_REF is v2.6.0. Until 2026-09-16 that matched the
+# netstack artifact (gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0) whose libfabric is what actually
+# loaded. CSCS decommissioned /capstor that day, the artifact is gone, and every EDF now sets
+# com.hooks.netstack.source=host, so what actually loads is the node's own
+# /opt/cray/libfabric/host/lib64/libfabric.so.1 -- a root-owned symlink, currently -> 2.3.1.
+# LIBFABRIC_REF stays v2.6.0 as the compile-time header/link target; it no longer matches the
+# runtime library. It was v2.3.1 until 2026-09-09, when a probe showed HEADER 2.3 against RUNTIME
+# 2.6 (superseded 2026-09-16 by the move to host mode). That mismatch was NOT the cause of the
+# multi-node MPI assert -- libfabric reports a valid PCI BDF at API 2.3, 2.6 and 1.20 alike -- but
+# building against headers older than the library you load is not a thing to leave standing.
 # libfabric, compile-only. --disable-verbs and friends keep it to the sockets/tcp core: the plugin
 # needs the headers and the .so to link against, never a provider, because at run time the host
 # hook's libfabric (with cxi) is what gets loaded.
@@ -151,7 +155,7 @@ RUN { \
       echo "libfabric_ref=${LIBFABRIC_REF}"; \
       printf 'libfabric_commit='; cat /tmp/libfabric.commit; \
       printf 'libfabric_soname='; basename "$(cat /tmp/libfabric.soname)"; \
-      echo 'runtime_libfabric=CSCS netstack artifact, via com.hooks.netstack/cxi/aws_ofi_nccl'; \
+      echo 'runtime_libfabric=host (com.hooks.netstack.source=host), /opt/cray/libfabric/host/lib64/libfabric.so.1 -> 2.3.1 as of 2026-09-16'; \
     } > /opt/ofi-sdk/BUILD-MANIFEST.txt
 
 FROM ${BASE_IMAGE} AS agent
@@ -167,8 +171,8 @@ ARG BASE_IMAGE_REF="${BASE_IMAGE}"
 # Without this the label is INHERITED from the base and reads "24.04" -- the Ubuntu release,
 # not this image. A published artifact then names a version nobody can map to a build.
 ARG IMAGE_VERSION=dev
-LABEL org.opencontainers.image.title="optarena-judge-agent-amd" \
-      org.opencontainers.image.description="OptArena judge+agent for MI300A: gcc 16, llvm 22, GPU-aware MPICH, PETSc/MAGMA, ROCm profilers" \
+LABEL org.opencontainers.image.title="hpcagent-bench-judge-agent-amd" \
+      org.opencontainers.image.description="HPCAgent-Bench judge+agent for MI300A: gcc 16, llvm 22, GPU-aware MPICH, PETSc/MAGMA, ROCm profilers" \
       org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
       org.opencontainers.image.version="${IMAGE_VERSION}" \
@@ -1005,6 +1009,55 @@ RUN set -eux; \
 # pluto binary, inscop, and getversion's .git -- that `make install` does not relocate.
 
 # ---------------------------------------------------------------------------------------------
+# 10b. PPCG -- the `ppcg` binary the ppcg/ppcg_cuda/ppcg_hip columns shell out to
+# (hpcagent_bench/ppcg_transform.py). Same polyhedral pair as Pluto above (pet + isl, the
+# ``#pragma scop`` front end), CUDA out instead of tiled OpenMP C, so it is built with the exact
+# same recipe and the exact same distro clang already installed for step 10 -- no new apt package.
+#
+# Before this stage the image had NO ppcg at all: ppcg_exe() returned None and every ppcg/
+# ppcg_cuda/ppcg_hip run declined with "ppcg is not installed on this host" (smoke, 2026-09-17).
+# hipify-perl was NEVER the gap -- ROCm's own apt channel (step 2) already installs it at
+# $ROCM_PATH/bin/hipify-perl, which is on PATH here (see the EDF template's PATH line); confirmed
+# by probing the then-current image on a compute node.
+#
+# PIN THE COMMIT once a build has been verified end-to-end -- ppcg has no tagged releases, so
+# `master` is a moving target and an unpinned clone here would make two builds of "the same" image
+# silently measure two different transforms. PPCG_COMMIT is intentionally empty (== clone HEAD at
+# build time) until that verification records the resolved SHA; see the live-build note in
+# hpcagent_bench/ppcg_transform.py's module docstring / the launch report for the SHA verified on
+# 2026-09-17's live build into $HPCAGENT_BENCH_TOOLS_DIR (scripts/cache_env.sh) -- put that SHA
+# here the next time this image is rebuilt.
+ARG PPCG_COMMIT=
+RUN set -eux; \
+    gitretry clone --recursive https://repo.or.cz/ppcg.git /opt/ppcg; \
+    if [ -n "${PPCG_COMMIT}" ]; then git -C /opt/ppcg checkout "${PPCG_COMMIT}"; \
+      gitretry -C /opt/ppcg submodule update --init --recursive; fi; \
+    cd /opt/ppcg; \
+    ./autogen.sh; \
+    ./configure --with-clang-prefix="/usr/lib/llvm-${PLUTO_CLANG_MAJOR}" \
+      CC="clang-${PLUTO_CLANG_MAJOR}" CXX="clang++-${PLUTO_CLANG_MAJOR}" \
+      CXXFLAGS='-std=c++17 -include cstdint'; \
+    make -j"$(nproc)"; \
+    make install; \
+    ldconfig; \
+    printf '%s\n' \
+      '#include <stdint.h>' \
+      'void mm(const int64_t N, double A[restrict N][N], double B[restrict N][N], double C[restrict N][N]) {' \
+      '#pragma scop' \
+      '  for (int64_t i=0;i<N;i++) for (int64_t j=0;j<N;j++) for (int64_t k=0;k<N;k++) C[i][j]+=A[i][k]*B[k][j];' \
+      '#pragma endscop' \
+      '}' > /tmp/smoke.c; \
+    cd /tmp; \
+    ppcg --target=cuda --tile --tile-size=32 smoke.c; \
+    test -s smoke_host.cu; \
+    test -s smoke_kernel.cu; \
+    grep -q __global__ smoke_kernel.cu; \
+    hipify-perl smoke_kernel.cu | grep -q __global__; \
+    rm -f /tmp/smoke.c /tmp/smoke_host.cu /tmp/smoke_kernel.cu /tmp/smoke_kernel.hu
+# The /opt/ppcg build tree is KEPT for the same reason /opt/pluto is (see above): its build-tree
+# paths are not relocated by `make install`.
+
+# ---------------------------------------------------------------------------------------------
 # 11. The python framework stack.
 #
 # Every framework the harness can dispatch to must import or an arm silently cannot run, and
@@ -1359,7 +1412,8 @@ WORKDIR /work
 # RPATH is searched BEFORE LD_LIBRARY_PATH and the default paths. Leave it and MPI binds to a
 # libfabric with no providers: job 629966 set FI_PROVIDER=cxi and MPI_Init aborted with "OFI call
 # getinfo failed", because spack's build carries only psm3/sockets/verbs. Delete it and the RPATH
-# points at nothing, so the loader falls through to the CSCS netstack artifact's libfabric 2.6.0.
+# points at nothing, so the loader falls through to the host's libfabric: as of 2026-09-16,
+# com.hooks.netstack.source=host binds /opt/cray/libfabric/host/lib64/libfabric.so.1 -> 2.3.1.
 #
 # No RCCL plugin is shipped either. CSCS provides one through com.hooks.aws_ofi_nccl.enabled, and
 # job 629967 measured it working on an unmodified image: /opt/cscs/netstack/librccl-net.so,
@@ -1371,7 +1425,13 @@ WORKDIR /work
 # is where the CSCS hook BIND-MOUNTS the artifact's libfabric at run time, verified by mounting the
 # image with no annotations: the file that appears there is dated Aug 18 15:39 nobody:nogroup, the
 # artifact's own stamp, and lsof/mountinfo show it as a lustre bind from
-# a CSCS-managed artifact store (exact path unconfirmed since the scratch migration off the retired mount). Refusing it forbade the hook its own mount point.
+# a CSCS-managed artifact store. CONFIRMED 2026-09-16 by reading the hooks: the prefix was
+# /capstor/store/cscs/cscs/public/containers/netstack/$(uname -m)/<ver>/<name>, hardcoded in
+# 10-netstack.sh, 89-libfabric-cxi.sh and 90-aws-ofi-nccl.sh alike. /capstor is now
+# decommissioned, so that store is GONE and the EDFs select netstack.source="host" instead,
+# which binds /opt/cray/libfabric/host/lib64/libfabric.so.1 and
+# /opt/cscs/aws-ofi-ccl-plugin/rocm6/librccl-net.so from the node. Refusing it forbade the
+# hook its own mount point.
 #
 # What must NOT ship is a fabric library in a prefix WE control, because those are what RPATH can
 # bind to and RPATH is searched before everything else -- the 629966 failure, where MPICH held a
@@ -1384,7 +1444,7 @@ RUN set -eux; \
     [ -z "${found}" ] \
       || { echo "this image ships a fabric library in a prefix it controls:" >&2; \
            echo "${found}" >&2; \
-           echo "RPATH would bind to it and shadow the CSCS netstack artifact" >&2; exit 1; }; \
+           echo "RPATH would bind to it and shadow the host's libfabric (com.hooks.netstack.source=host)" >&2; exit 1; }; \
     echo "no fabric library in /opt/ofi-sdk, /opt/ofi or /opt/aws-ofi-nccl -- the artifact supplies them"
 
 # LD_PRELOAD last, after every RUN: set earlier it would preload mimalloc into the apt, pip and

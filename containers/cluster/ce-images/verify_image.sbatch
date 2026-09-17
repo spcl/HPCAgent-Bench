@@ -9,13 +9,13 @@
 #SBATCH --output=%x-%j.out
 # Run verify_image.py INSIDE a built image and fail the job when a required library is missing.
 #
-#   IMAGE=$SCRATCH/ce-images/optarena-judge-agent-amd.sqsh PROFILE=judge-agent-amd sbatch \
+#   IMAGE=$SCRATCH/ce-images/hpcagent-bench-judge-agent-amd.sqsh PROFILE=judge-agent-amd sbatch \
 #          containers/cluster/ce-images/verify_image.sbatch
 #
 # The partition above applies only to a standalone submission. build_and_verify.sbatch runs this body
 # inside its own allocation, on the build job's partition. An mi200 image verifies on mi200:
 #
-#   REPO=$PWD IMAGE=$SCRATCH/ce-images/optarena-sglang-mi200-candidate.sqsh PROFILE=sglang-mi200 \
+#   REPO=$PWD IMAGE=$SCRATCH/ce-images/hpcagent-bench-sglang-mi200-candidate.sqsh PROFILE=sglang-mi200 \
 #     sbatch --partition=mi200 --gpus-per-node=8 containers/cluster/ce-images/verify_image.sbatch
 #
 # The EDF is generated here rather than kept in ~/.edf: this runs against a CANDIDATE image that no
@@ -33,7 +33,7 @@ S="${SCRATCH:?set SCRATCH}"
 IMAGE="${IMAGE:?set IMAGE to the .sqsh to verify}"
 PROFILE="${PROFILE:-judge-agent-amd}"
 # The checkout whose checks and tools are verified; build_and_verify.sbatch passes its own.
-REPO="${REPO:-${S}/optarena}"
+REPO="${REPO:-${S}/hpcagent-bench}"
 test -f "${IMAGE}"
 
 EDF="${S}/.tmp/verify-${SLURM_JOB_ID}.toml"
@@ -70,7 +70,7 @@ esac
 # The image carries no tool scripts: judge-agent roles get the checkout's agent tree bound where
 # run_cluster.sh binds it.
 case "${PROFILE}" in
-    judge|judge-agent-*) printf -v ce_agent_mount ', "%s"' "${REPO}/containers/agent:/opt/optarena-agent" ;;
+    judge|judge-agent-*) printf -v ce_agent_mount ', "%s"' "${REPO}/containers/agent:/opt/hpcagent-bench-agent" ;;
     *)                   ce_agent_mount='' ;;
 esac
 
@@ -85,11 +85,37 @@ mounts = ["/ritom/:/ritom/", "/iopsstor/:/iopsstor/"${ce_agent_mount}]
 workdir = "/"
 
 [annotations]
-com.hooks.netstack.source = "artifact"
-com.hooks.netstack.version = "26.08.1"
-com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
+com.hooks.netstack.source = "host"
+# The artifact bundle lived under /capstor/store, which CSCS decommissioned in Sep 2026;
+# the path is hardcoded in the hooks, so no version or name can resolve there any more.
+# The hooks do NOT fail on a missing artifact -- they point libfabric and the RCCL plugin
+# at files that are not there, the bind-mounts quietly do nothing, and RCCL drops from
+# CXI to TCP sockets. The job still finishes; it is just far slower, and it reads as a
+# slow model rather than a dead fabric.
+#
+# "host" was previously the documented OPT-OUT because it grafts 29 host libraries into
+# the image and job 629822 died that way: a host libcurl needing glibc 2.38 met an image
+# with 2.35. THAT NO LONGER APPLIES -- the base moved to Ubuntu 24.04 and the shipped
+# libc.so.6 is "Ubuntu GLIBC 2.39-0ubuntu8.8", verified by extracting it from the pulled
+# squashfs. glibc is backward compatible, so 2.39 satisfies every GLIBC_2.38 the grafted
+# libraries ask for. Re-check this if the base image is ever moved backwards.
+#
+# Fabric speed is unaffected. fi_pingpong over cxi, 1 MB, beverin 2026-09-16:
+#   host -> 2.3.1  19329 MB/s | 1.22.0  20011 MB/s | 2.3.1 explicit  19878 MB/s
+# -- within noise of each other, at 4 CXI NICs per node.
+#
+# version/name are NOT set: they only index into the dead artifact tree. The host path is
+# /opt/cray/libfabric/host, a root-owned symlink (-> 2.3.1). It cannot be pinned by
+# annotation, so scripts/cscs/netstack_preflight.sh ASSERTS what it resolves to and aborts
+# on a repoint, rather than letting one campaign straddle two fabric stacks.
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
+com.hooks.aws_ofi_nccl.variant = "rocm6"
+# REQUIRED in host mode and ignored in artifact mode: the hook selects the plugin by a
+# case on this value and calls common::err on an unrecognised one, so leaving it unset
+# makes the hook a hard error rather than a silent fallback. rocm6 is the only variant
+# installed on beverin (/opt/cscs/aws-ofi-ccl-plugin/). VERIFY on mi200 before using an
+# mi200 image -- gfx90a may carry a different one.
 
 [env]
 PATH = "${ce_path}:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -134,7 +160,7 @@ sc=$?
 # PETSc's HIP support. judge-agent profiles only: the inference images ship no compilers.
 mpi_rc=0
 case "${PROFILE}" in
-    judge|judge-agent-*|optarena-ce-*)
+    judge|judge-agent-*|hpcagent-bench-ce-*)
         echo "=== MPI: multi-rank, GPU-aware, RCCL plugin, PETSc GPU ==="
         srun --environment="${EDF}" \
              "${REPO}/containers/cluster/ce-images/mpi_gpu_check.sh" || mpi_rc=$?
@@ -148,7 +174,7 @@ case "${PROFILE}" in
     judge|judge-agent-*)
         echo "=== tools: the checkout's agent and judge tools load in this image ==="
         srun --environment="${EDF}" python3 "${REPO}/containers/cluster/ce-images/tools_launch_check.py" \
-             --agent-dir /opt/optarena-agent --judge-tools "${REPO}/containers/judge/tools" || tools_rc=$?
+             --agent-dir /opt/hpcagent-bench-agent --judge-tools "${REPO}/containers/judge/tools" || tools_rc=$?
         ;;
     *) echo "=== tools check skipped for profile=${PROFILE} (no agent tools in image role) ==="; ;;
 esac

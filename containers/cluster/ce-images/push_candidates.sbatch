@@ -31,18 +31,18 @@ NS="${NS:-docker.io/${REGISTRY_USER}}"
 TAG="${TAG:-$(date +%Y%m%d)}"
 SCRATCH="${SCRATCH:?set SCRATCH}"
 IMG="${SCRATCH}/ce-images"
-cd "${SCRATCH}/optarena/containers/cluster/ce-images"
+cd "${SCRATCH}/hpcagent-bench/containers/cluster/ce-images"
 
 # archive basename -> published repo name
 declare -A REPO=(
-  [optarena-ce-amd-mi300-candidate]="optarena-ce-amd-mi300"
+  [hpcagent-bench-ce-amd-mi300-candidate]="hpcagent-bench-ce-amd-mi300"
   # A rebuild that could not use the -candidate name (an EDF was mounting it) lands here.
   # PUSHING is independent of PROMOTION: the push reads the .oci.tar and touches nothing a
   # running job mounts, so it does not have to wait for a campaign to drain.
-  [optarena-ce-amd-mi300-cxx20]="optarena-ce-amd-mi300"
-  [optarena-ce-judge-amd-mi300-candidate]="optarena-ce-judge-amd-mi300"
-  [optarena-sglang-candidate]="optarena-sglang"
-  [optarena-vllm-candidate]="optarena-vllm"
+  [hpcagent-bench-ce-amd-mi300-cxx20]="hpcagent-bench-ce-amd-mi300"
+  [hpcagent-bench-ce-judge-amd-mi300-candidate]="hpcagent-bench-ce-judge-amd-mi300"
+  [hpcagent-bench-sglang-candidate]="hpcagent-bench-sglang"
+  [hpcagent-bench-vllm-candidate]="hpcagent-bench-vllm"
 )
 # EVERY image goes to ONE repo, distinguished by a role prefix on the tag:
 #   hpcagent-bench:{agent,judge,sglang,vllm}-<date>  and  ...-latest
@@ -58,18 +58,18 @@ declare -A REPO=(
 # recognised -- so an image that had just earned the live name was the one image that could not be
 # pushed. The role, not the stage, is what decides the tag.
 declare -A ROLE=(
-  [optarena-ce-amd-mi300-candidate]="agent"
-  [optarena-ce-amd-mi300-cxx20]="agent"
-  [optarena-ce-amd-mi300]="agent"
-  [optarena-ce-judge-amd-mi300-candidate]="judge"
-  [optarena-ce-judge-amd-mi300]="judge"
-  [optarena-sglang-candidate]="sglang"
-  [optarena-sglang]="sglang"
-  [optarena-vllm-candidate]="vllm"
-  [optarena-vllm]="vllm"
+  [hpcagent-bench-ce-amd-mi300-candidate]="agent"
+  [hpcagent-bench-ce-amd-mi300-cxx20]="agent"
+  [hpcagent-bench-ce-amd-mi300]="agent"
+  [hpcagent-bench-ce-judge-amd-mi300-candidate]="judge"
+  [hpcagent-bench-ce-judge-amd-mi300]="judge"
+  [hpcagent-bench-sglang-candidate]="sglang"
+  [hpcagent-bench-sglang]="sglang"
+  [hpcagent-bench-vllm-candidate]="vllm"
+  [hpcagent-bench-vllm]="vllm"
 )
 SINGLE_REPO="${SINGLE_REPO-docker.io/spcleth/hpcagent-bench}"
-IMAGES="${IMAGES:-optarena-ce-amd-mi300-candidate optarena-ce-judge-amd-mi300-candidate optarena-sglang-candidate optarena-vllm-candidate}"
+IMAGES="${IMAGES:-hpcagent-bench-ce-amd-mi300-candidate hpcagent-bench-ce-judge-amd-mi300-candidate hpcagent-bench-sglang-candidate hpcagent-bench-vllm-candidate}"
 
 rc=0
 for a in ${IMAGES}; do

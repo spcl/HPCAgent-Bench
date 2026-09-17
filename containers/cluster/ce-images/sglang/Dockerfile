@@ -5,7 +5,7 @@
 #
 # Build context is the REPOSITORY ROOT, because the tuned fused_moe configs are baked in from
 # there:
-#   podman build -f containers/cluster/ce-images/sglang/Dockerfile -t optarena-sglang .
+#   podman build -f containers/cluster/ce-images/sglang/Dockerfile -t hpcagent-bench-sglang .
 # build.sh does that with the right podman flags; build.sbatch runs build.sh on a compute node.
 #
 # NOT YET BUILT. The deployed artifact was a straight PULL and never had a Dockerfile:
@@ -58,7 +58,7 @@ ARG BASE_IMAGE
 # The registry reference, not whatever FROM resolved to: a cache hit rewrites BASE_IMAGE to a
 # local dir: path, and that must not become the published base.name.
 ARG BASE_IMAGE_REF="${BASE_IMAGE}"
-LABEL org.opencontainers.image.title="optarena-sglang" \
+LABEL org.opencontainers.image.title="hpcagent-bench-sglang" \
       org.opencontainers.image.description="SGLang inference for MI300A: ROCm 7.2.4, CSCS netstack fabric, pinned flydsl" \
       org.opencontainers.image.version="0.5.19" \
       org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
@@ -146,7 +146,13 @@ RUN /opt/venv/bin/python3 -c "import cupy, flydsl; \
 # is where the CSCS hook BIND-MOUNTS the artifact's libfabric at run time, verified by mounting the
 # image with no annotations: the file that appears there is dated Aug 18 15:39 nobody:nogroup, the
 # artifact's own stamp, and lsof/mountinfo show it as a lustre bind from
-# a CSCS-managed artifact store (exact path unconfirmed since the scratch migration off the retired mount). Refusing it forbade the hook its own mount point.
+# a CSCS-managed artifact store. CONFIRMED 2026-09-16 by reading the hooks: the prefix was
+# /capstor/store/cscs/cscs/public/containers/netstack/$(uname -m)/<ver>/<name>, hardcoded in
+# 10-netstack.sh, 89-libfabric-cxi.sh and 90-aws-ofi-nccl.sh alike. /capstor is now
+# decommissioned, so that store is GONE and the EDFs select netstack.source="host" instead,
+# which binds /opt/cray/libfabric/host/lib64/libfabric.so.1 and
+# /opt/cscs/aws-ofi-ccl-plugin/rocm6/librccl-net.so from the node. Refusing it forbade the
+# hook its own mount point.
 #
 # What must NOT ship is a fabric library in a prefix WE control, because those are what RPATH can
 # bind to and RPATH is searched before everything else -- the 629966 failure, where MPICH held a

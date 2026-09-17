@@ -24,11 +24,11 @@ DRY_RUN="${DRY_RUN:-0}"
 # The candidate each role builds to, matching build.sbatch's OUTPUT_SQSH defaults.
 role_candidate() {
     case "$1" in
-        judge-agent-amd) printf 'optarena-ce-amd-mi300-candidate.sqsh' ;;
-        judge)           printf 'optarena-ce-judge-amd-mi300-candidate.sqsh' ;;
-        sglang)          printf 'optarena-sglang-candidate.sqsh' ;;
-        sglang-mi200)    printf 'optarena-sglang-mi200-candidate.sqsh' ;;
-        vllm)            printf 'optarena-vllm-candidate.sqsh' ;;
+        judge-agent-amd) printf 'hpcagent-bench-ce-amd-mi300-candidate.sqsh' ;;
+        judge)           printf 'hpcagent-bench-ce-judge-amd-mi300-candidate.sqsh' ;;
+        sglang)          printf 'hpcagent-bench-sglang-candidate.sqsh' ;;
+        sglang-mi200)    printf 'hpcagent-bench-sglang-mi200-candidate.sqsh' ;;
+        vllm)            printf 'hpcagent-bench-vllm-candidate.sqsh' ;;
         *) return 2 ;;
     esac
 }

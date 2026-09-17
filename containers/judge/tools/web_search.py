@@ -45,6 +45,17 @@ class CrawledPage:
     error: str = ""
 
 
+class NotProvisionedError(RuntimeError):
+    """This run has no working search: a required credential or endpoint was never configured.
+
+    Distinct from every other :class:`RuntimeError` this module raises (a bad SerpAPI response, a
+    crawl that returned nothing, a malformed LLM answer): those are FAILURES of a search that was
+    set up to run, retry-worthy or at least worth a second query. This one means the arm simply
+    was not given search -- callers (``experiments/judge_service.py``) must answer it with a
+    distinct wire status so the agent can tell "not offered to you" from "broke this time".
+    """
+
+
 DEBUG = False
 
 
@@ -154,7 +165,7 @@ def call_serpapi(query: str, max_results: int, timeout: float) -> List[SearchRes
     api_key = os.environ.get("SERPAPI_API_KEY", "").strip()
     serpapi_url = os.environ.get("SERPAPI_URL", "https://serpapi.com/search.json").strip()
     if not api_key and "localhost" not in serpapi_url and "127.0.0.1" not in serpapi_url:
-        raise RuntimeError("SERPAPI_API_KEY must be set")
+        raise NotProvisionedError("SERPAPI_API_KEY must be set")
 
     debug(f"calling SerpAPI url={serpapi_url} max_results={max_results}")
     payload = get_json(
@@ -349,9 +360,9 @@ def call_llm(query: str, pages: List[CrawledPage], timeout: float) -> str:
     base = os.environ.get("WEBSEARCH_LLM_BASE_URL", "").strip().rstrip("/")
     model = os.environ.get("WEBSEARCH_LLM_MODEL", "").strip()
     if not base:
-        raise RuntimeError("WEBSEARCH_LLM_BASE_URL must be set")
+        raise NotProvisionedError("WEBSEARCH_LLM_BASE_URL must be set")
     if not model:
-        raise RuntimeError("WEBSEARCH_LLM_MODEL must be set")
+        raise NotProvisionedError("WEBSEARCH_LLM_MODEL must be set")
 
     headers: Dict[str, str] = {}
     api_key = os.environ.get("WEBSEARCH_LLM_API_KEY", "").strip()
@@ -456,7 +467,10 @@ def main() -> int:
     try:
         output = run_web_search(args.query, args.max_results, args.max_pages, args.max_chars_per_page, args.timeout)
     except (RuntimeError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
-        print(json.dumps({"ok": False, "error": str(exc), "query": args.query}, indent=2), file=sys.stderr)
+        body: Dict[str, Any] = {"ok": False, "error": str(exc), "query": args.query}
+        if isinstance(exc, NotProvisionedError):
+            body["cause"] = "not_provisioned"
+        print(json.dumps(body, indent=2), file=sys.stderr)
         return 2
 
     if args.text:

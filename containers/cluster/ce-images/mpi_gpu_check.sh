@@ -19,9 +19,11 @@
 #                      once reported as "MPI is on Slingshot": a correct allreduce proves
 #                      CORRECTNESS, never TRANSPORT. The same sum comes back over tcp, slower.
 #
-# All of libfabric, libcxi and librccl-net come from the pinned CSCS netstack artifact, installed
-# by the enroot hooks the EDF enables. The image ships NONE of them -- a build gate fails if any
-# survives -- so a missing annotation shows up here as an unresolvable libmpi.so, not as silence.
+# All of libfabric, libcxi and librccl-net come from the HOST as of 2026-09-16 (com.hooks.netstack.
+# source=host, com.hooks.aws_ofi_nccl.variant=rocm6; the pinned CSCS netstack artifact under
+# /capstor is decommissioned), installed by the enroot hooks the EDF enables. The image ships NONE
+# of them -- a build gate fails if any survives -- so a missing annotation shows up here as an
+# unresolvable libmpi.so, not as silence.
 #
 # Exits non-zero on the first hard failure. GPU checks degrade to SKIP with no visible device,
 # so this is runnable on a build node without GPUs; it reports what it could not test. Inside a

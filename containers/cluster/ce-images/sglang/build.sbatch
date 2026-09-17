@@ -13,7 +13,7 @@
 # roughly 1-2 h the expectation, most of it network.
 #
 #   sbatch --chdir=containers/cluster/ce-images/sglang build.sbatch
-#   OUTPUT_SQSH=$SCRATCH/ce-images/optarena-sglang-candidate.sqsh sbatch ... build.sbatch
+#   OUTPUT_SQSH=$SCRATCH/ce-images/hpcagent-bench-sglang-candidate.sqsh sbatch ... build.sbatch
 #
 #SBATCH --job-name=build-sglang-image
 #SBATCH --partition=mi300
@@ -44,7 +44,7 @@ ulimit -c 0
 IMAGE_DIR="${IMAGE_DIR:-${SGLANG_DIR:-$PWD}}"
 test -x "${IMAGE_DIR}/build.sh" || { echo "no build.sh under IMAGE_DIR=${IMAGE_DIR}" >&2; exit 2; }
 
-export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/optarena-sglang-candidate.sqsh}"
+export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/hpcagent-bench-sglang-candidate.sqsh}"
 
 # Refuse to write over an image some EDF points a running job at: overwriting a mounted squashfs is
 # how a live arm starts reading a half-written inode table. This matters more here than anywhere --

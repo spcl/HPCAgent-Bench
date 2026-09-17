@@ -63,7 +63,10 @@ if grep -hoE '^[[:space:]]*image[[:space:]]*=[[:space:]]*"[^"]+"' "${HOME}/.edf"
 fi
 
 export ENROOT_TEMP_PATH="${ENROOT_TEMP_PATH:-/dev/shm/${USER}/enroot-tmp}"
-mkdir -p "${ENROOT_TEMP_PATH}"
+# /etc/enroot/enroot.conf still names /capstor here, which no longer exists; without an
+# override every enroot call dies trying to mkdir it.
+export ENROOT_CACHE_PATH="${ENROOT_CACHE_PATH:-${SCRATCH}/.enroot}"
+mkdir -p "${ENROOT_TEMP_PATH}" "${ENROOT_CACHE_PATH}"
 
 echo "pulling ${repo}:${TAG}"
 echo "     -> ${OUT}"

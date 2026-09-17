@@ -4,7 +4,7 @@
 # Sibling of ../sglang (MI300A, gfx942) on the SAME pinned base; README.md says what differs and why.
 #
 # Build context is the REPOSITORY ROOT:
-#   podman build -f containers/cluster/ce-images/sglang-mi200/Dockerfile -t optarena-sglang-mi200 .
+#   podman build -f containers/cluster/ce-images/sglang-mi200/Dockerfile -t hpcagent-bench-sglang-mi200 .
 # build.sh does that with the right podman flags; build.sbatch runs build.sh on an mi200 node.
 
 # Same digest as ../sglang/Dockerfile and both build.sh files; tests/test_sglang_mi200_image.py pins it.
@@ -22,7 +22,7 @@ ARG BASE_IMAGE_REF="${BASE_IMAGE}"
 # cupy otherwise take the GPU visible at build time, and on an mi300 node that is gfx942. build.sh
 # passes it from ../gpu_arch.env for the build job's partition; there is no default.
 ARG ROCM_ARCH
-LABEL org.opencontainers.image.title="optarena-sglang-mi200" \
+LABEL org.opencontainers.image.title="hpcagent-bench-sglang-mi200" \
       org.opencontainers.image.description="SGLang inference for MI250X (${ROCM_ARCH}): ROCm 7.2.4, sgl_kernel rebuilt for ${ROCM_ARCH}, aiter off" \
       org.opencontainers.image.version="0.5.19" \
       org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \

@@ -73,9 +73,9 @@ done
 # to 0.3%) with identical dtype, quantization, MoE and attention backends and identical torch and
 # triton. 0.27.1 is parked on the parked/vllm-0271 branch with the aiter v3-varlen and MLA
 # prefill work that motivated it.
-INFERENCE_EDF="${INFERENCE_EDF:-vllm-latest}"
+INFERENCE_EDF="${INFERENCE_EDF:-hpcagent-bench-vllm-mi300-latest}"
 export MODEL_REPO="${MODEL_REPO:-moonshotai/Kimi-K2.7-Code}"
-export SERVED_MODEL="${SERVED_MODEL:-optarena-vllm}"
+export SERVED_MODEL="${SERVED_MODEL:-hpcagent-bench-vllm}"
 export API_PORT="${API_PORT:-8000}"
 export MASTER_PORT="${MASTER_PORT:-$((20000 + SLURM_JOB_ID % 20000))}"
 READY_TIMEOUT="${READY_TIMEOUT:-5400}"

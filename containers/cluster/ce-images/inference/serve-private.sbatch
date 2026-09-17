@@ -2,8 +2,8 @@
 # Private SGLang serving of Qwen3.8-27B on one beverin node. PRESET picks the hardware:
 #
 #   PRESET  partition  GPUs       EDF                  weights               attention  default LEGS
-#   mi300   mi300      4x MI300A  sglang-latest        Qwen3.8-27B-FP8       aiter      tp4:0.306
-#   mi200   mi200      8x MI250X  sglang-mi200-latest  Qwen3.8-27B (BF16)    triton     tp4:0.80 tp4:0.88 tp8:0.80
+#   mi300   mi300      4x MI300A  hpcagent-bench-sglang-mi300-latest        Qwen3.8-27B-FP8       aiter      tp4:0.306
+#   mi200   mi200      8x MI250X  hpcagent-bench-sglang-mi200-latest  Qwen3.8-27B (BF16)    triton     tp4:0.80 tp4:0.88 tp8:0.80
 #
 # MODE=smoke (default): one fresh server per LEGS spec "tp<N>:<mem-fraction-static>". Per leg: wait on
 #   /health (auth-exempt), record the KV/Mamba allocator lines, assert 401 without the key and 200 with
@@ -20,14 +20,14 @@
 #   * Never the wildcard address. --host is last on the command line.
 #   * sglang checks the key on every path except /health* and /metrics*, and only with one tokenizer
 #     worker: EXTRA_ARGS may not set --tokenizer-worker-num or --enable-metrics.
-#   * The API key comes from KEY_FILE (default ~/.config/optarena/<preset>-endpoint.key), refused unless
+#   * The API key comes from KEY_FILE (default ~/.config/hpcagent-bench/<preset>-endpoint.key), refused unless
 #     mode 600 and owned by you. It reaches sglang only through --config <yaml>, never argv.
 #   * The run dir is mode 700 with scratch's default ACLs stripped. It holds the yaml, the curl header
 #     file, the in-container key file and sglang's server log, which prints server_args incl. api_key.
 #   * The key is never printed; the three secret files are deleted when the script exits.
 #
-#   umask 077; mkdir -p ~/.config/optarena; openssl rand -hex 32 > ~/.config/optarena/mi300-endpoint.key
-#   cd <optarena checkout or worktree>
+#   umask 077; mkdir -p ~/.config/hpcagent-bench; openssl rand -hex 32 > ~/.config/hpcagent-bench/mi300-endpoint.key
+#   cd <hpcagent-bench checkout or worktree>
 #   PRESET=mi300 sbatch --partition=mi300 --gpus-per-node=4 containers/cluster/ce-images/inference/serve-private.sbatch
 #   PRESET=mi200 sbatch --partition=mi200 --gpus-per-node=8 containers/cluster/ce-images/inference/serve-private.sbatch
 #   PRESET=mi300 MODE=serve sbatch --partition=mi300 --gpus-per-node=4 --time=08:00:00 <same path>
@@ -56,12 +56,12 @@ refuse() {
 use_preset() {  # sets the PRESET_* values; key file, triton cache and run root derive from the name
     case "${PRESET:-}" in
         mi300)  # the qwen38 campaign line (experiments/.env.llrbase-qwen38-c); 0.306 is node-wide on the APU
-            PRESET_PARTITION=mi300 PRESET_GPUS=4 PRESET_EDF=sglang-latest PRESET_MODEL=Qwen/Qwen3.8-27B-FP8
+            PRESET_PARTITION=mi300 PRESET_GPUS=4 PRESET_EDF=hpcagent-bench-sglang-mi300-latest PRESET_MODEL=Qwen/Qwen3.8-27B-FP8
             PRESET_LEGS="tp4:0.306" PRESET_AITER=1
             PRESET_FLAGS=(--attention-backend aiter)
             ;;
         mi200)  # MI250X: no aiter gfx90a kernels, no FP8
-            PRESET_PARTITION=mi200 PRESET_GPUS=8 PRESET_EDF=sglang-mi200-latest PRESET_MODEL=Qwen/Qwen3.8-27B
+            PRESET_PARTITION=mi200 PRESET_GPUS=8 PRESET_EDF=hpcagent-bench-sglang-mi200-latest PRESET_MODEL=Qwen/Qwen3.8-27B
             PRESET_LEGS="tp4:0.80 tp4:0.88 tp8:0.80" PRESET_AITER=0
             PRESET_FLAGS=(--attention-backend triton --disable-custom-all-reduce)
             ;;
@@ -85,11 +85,11 @@ REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2
 GATE="${REPO}/containers/cluster/ce-images/inference/verify-tools-reasoning.py"
 [[ -n "${REPO}" && -f "${GATE}" ]] || refuse "no checkout: set REPO or submit from inside one"
 
-KEY_FILE="${KEY_FILE:-${HOME}/.config/optarena/${PRESET}-endpoint.key}"
+KEY_FILE="${KEY_FILE:-${HOME}/.config/hpcagent-bench/${PRESET}-endpoint.key}"
 EDF="${EDF:-${PRESET_EDF}}"
 LEGS="${LEGS:-${PRESET_LEGS}}"
 MODEL_REPO="${MODEL_REPO:-${PRESET_MODEL}}"
-SERVED_MODEL="${SERVED_MODEL:-optarena-vllm}"
+SERVED_MODEL="${SERVED_MODEL:-hpcagent-bench-vllm}"
 API_PORT="${API_PORT:-30000}"
 READY_TIMEOUT="${READY_TIMEOUT:-3600}"
 LOAD_CONCURRENCY="${LOAD_CONCURRENCY:-16}"
@@ -305,18 +305,18 @@ run_leg() {  # run_leg <index> <spec>: one smoke leg, server stopped at the end
 
 tunnel_help() {  # tunnel_help <port>: laptop lines naming the key file, never its content
     local node="${NODE}" key_name="${KEY_FILE##*/}"
-    local laptop_key="~/.config/optarena/${key_name}" header_name="${key_name%.key}.header"
+    local laptop_key="~/.config/hpcagent-bench/${key_name}" header_name="${key_name%.key}.header"
     cat <<EOF
 
 ===== private endpoint is live: 127.0.0.1:$1 on ${node}, job ${SLURM_JOB_ID:-dry run} =====
 On your laptop, while this job runs (docs/serving/private-endpoint.md):
-  umask 077; mkdir -p ~/.config/optarena
-  scp beverin:${KEY_FILE} ~/.config/optarena/
+  umask 077; mkdir -p ~/.config/hpcagent-bench
+  scp beverin:${KEY_FILE} ~/.config/hpcagent-bench/
   printf 'Authorization: Bearer %s\n' "\$(cat ${laptop_key})" \\
-    > ~/.config/optarena/${header_name}
+    > ~/.config/hpcagent-bench/${header_name}
   ssh -N -J ela,beverin -L 127.0.0.1:$1:127.0.0.1:$1 ${USER:-$(id -un)}@${node}
   curl -s http://127.0.0.1:$1/v1/chat/completions -H 'Content-Type: application/json' \\
-    -H "@\$HOME/.config/optarena/${header_name}" \\
+    -H "@\$HOME/.config/hpcagent-bench/${header_name}" \\
     -d '{"model": "${SERVED_MODEL}", "max_tokens": 128, "messages": [{"role": "user", "content": "Say hi."}]}'
 Stop: Ctrl-C the tunnel, then scancel ${SLURM_JOB_ID:-<jobid>}.
 Do not share the key, the header file or this endpoint with anyone, project members included.

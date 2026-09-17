@@ -629,7 +629,7 @@ jobs:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
       # tests/test_dace_openblas_link.py builds a pinned OpenBLAS with USE_OPENMP=1 (~10 min at
       # -j4) and skips the build when the install is already there -- cached below, not rebuilt.
-      OPTARENA_BLAS_CACHE: ${{ github.workspace }}/.openblas-cache
+      HPCAGENT_BENCH_BLAS_CACHE: ${{ github.workspace }}/.openblas-cache
     steps:
       - uses: actions/checkout@v4
         with:

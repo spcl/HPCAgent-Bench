@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run mpi_gpu_check.sh against an image, on a GPU node, in a batch context.
 #
-#   IMAGE=$SCRATCH/ce-images/optarena-ce-amd-mi300.sqsh \
+#   IMAGE=$SCRATCH/ce-images/hpcagent-bench-ce-amd-mi300.sqsh \
 #     sbatch containers/cluster/ce-images/mpi_check.sbatch
 #
 # A BATCH context, not a login shell: the multi-rank leg runs `mpiexec -n 4`, and the GPU legs
@@ -28,8 +28,8 @@ set -Eeuo pipefail
 ulimit -c 0
 
 SCRATCH="${SCRATCH:?set SCRATCH}"
-REPO="${REPO:-${SCRATCH}/optarena}"
-IMAGE="${IMAGE:-${SCRATCH}/ce-images/optarena-ce-amd-mi300.sqsh}"
+REPO="${REPO:-${SCRATCH}/hpcagent-bench}"
+IMAGE="${IMAGE:-${SCRATCH}/ce-images/hpcagent-bench-ce-amd-mi300.sqsh}"
 [ -f "${IMAGE}" ] || { echo "no image at ${IMAGE}" >&2; exit 2; }
 
 # Generated, not taken from ~/.edf: this may point at a CANDIDATE no EDF names yet, and a
@@ -55,11 +55,37 @@ mounts = ["${REPO}:${REPO}", "${SCRATCH}/ce-images/logs:${SCRATCH}/ce-images/log
 workdir = "${REPO}"
 
 [annotations]
-com.hooks.netstack.source = "artifact"
-com.hooks.netstack.version = "26.08.1"
-com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
+com.hooks.netstack.source = "host"
+# The artifact bundle lived under /capstor/store, which CSCS decommissioned in Sep 2026;
+# the path is hardcoded in the hooks, so no version or name can resolve there any more.
+# The hooks do NOT fail on a missing artifact -- they point libfabric and the RCCL plugin
+# at files that are not there, the bind-mounts quietly do nothing, and RCCL drops from
+# CXI to TCP sockets. The job still finishes; it is just far slower, and it reads as a
+# slow model rather than a dead fabric.
+#
+# "host" was previously the documented OPT-OUT because it grafts 29 host libraries into
+# the image and job 629822 died that way: a host libcurl needing glibc 2.38 met an image
+# with 2.35. THAT NO LONGER APPLIES -- the base moved to Ubuntu 24.04 and the shipped
+# libc.so.6 is "Ubuntu GLIBC 2.39-0ubuntu8.8", verified by extracting it from the pulled
+# squashfs. glibc is backward compatible, so 2.39 satisfies every GLIBC_2.38 the grafted
+# libraries ask for. Re-check this if the base image is ever moved backwards.
+#
+# Fabric speed is unaffected. fi_pingpong over cxi, 1 MB, beverin 2026-09-16:
+#   host -> 2.3.1  19329 MB/s | 1.22.0  20011 MB/s | 2.3.1 explicit  19878 MB/s
+# -- within noise of each other, at 4 CXI NICs per node.
+#
+# version/name are NOT set: they only index into the dead artifact tree. The host path is
+# /opt/cray/libfabric/host, a root-owned symlink (-> 2.3.1). It cannot be pinned by
+# annotation, so scripts/cscs/netstack_preflight.sh ASSERTS what it resolves to and aborts
+# on a repoint, rather than letting one campaign straddle two fabric stacks.
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
+com.hooks.aws_ofi_nccl.variant = "rocm6"
+# REQUIRED in host mode and ignored in artifact mode: the hook selects the plugin by a
+# case on this value and calls common::err on an unrecognised one, so leaving it unset
+# makes the hook a hard error rather than a silent fallback. rocm6 is the only variant
+# installed on beverin (/opt/cscs/aws-ofi-ccl-plugin/). VERIFY on mi200 before using an
+# mi200 image -- gfx90a may carry a different one.
 
 [env]
 PATH = "/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/rocm/bin:/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

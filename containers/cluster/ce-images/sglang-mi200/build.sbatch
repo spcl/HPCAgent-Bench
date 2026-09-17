@@ -31,7 +31,7 @@ fi
 IMAGE_DIR="${IMAGE_DIR:-$PWD}"
 test -x "${IMAGE_DIR}/build.sh" || { echo "no build.sh under IMAGE_DIR=${IMAGE_DIR}" >&2; exit 2; }
 
-export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/optarena-sglang-mi200-candidate.sqsh}"
+export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/hpcagent-bench-sglang-mi200-candidate.sqsh}"
 
 # Refuse to overwrite an image an EDF mounts: a running job would read a half-written squashfs.
 edf_images() {

@@ -6,9 +6,9 @@ promote and extend** one.
 
 | directory | promoted name | role |
 |---|---|---|
-| `judge-agent-amd/` | `optarena-ce-amd-mi300.sqsh` (agent), `optarena-ce-judge-amd-mi300.sqsh` (judge) | **TWO targets, one Dockerfile.** `agent` is the whole toolchain and carries NO hpcagent_bench, so an agent cannot reach the references it is graded against. `judge` is `FROM agent` plus the library -- one extra layer. |
-| `sglang/` | `optarena-sglang.sqsh` | SGLang inference -- the dominant serving engine (qwen38, kimi, GLM-5.3) |
-| `vllm/` | `optarena-vllm.sqsh` | vLLM 0.23.0 inference, kept for oss120b's mxfp4 path |
+| `judge-agent-amd/` | `hpcagent-bench-ce-amd-mi300.sqsh` (agent), `hpcagent-bench-ce-judge-amd-mi300.sqsh` (judge) | **TWO targets, one Dockerfile.** `agent` is the whole toolchain and carries NO hpcagent_bench, so an agent cannot reach the references it is graded against. `judge` is `FROM agent` plus the library -- one extra layer. |
+| `sglang/` | `hpcagent-bench-sglang.sqsh` | SGLang inference -- the dominant serving engine (qwen38, kimi, GLM-5.3) |
+| `vllm/` | `hpcagent-bench-vllm.sqsh` | vLLM 0.23.0 inference, kept for oss120b's mxfp4 path |
 | `judge-agent-cuda/` | not built here | CUDA counterpart of `judge-agent-amd`; parse-checked only, no NVIDIA partition on this cluster |
 
 vLLM 0.27.1 was retired 2026-09-08 (25% slower than 0.23.0 on oss120b, entirely in decode) and
@@ -106,9 +106,9 @@ Restriping is safe only while nothing is serving that model.
 file, and `install_edfs.sh` renders the EDFs from it. Consumers name `-latest` and nothing else.
 
 ```
-optarena-amd-mi300-latest -> optarena-ce-amd-mi300.sqsh
-sglang-latest             -> optarena-sglang.sqsh
-vllm-latest               -> optarena-vllm.sqsh
+hpcagent-bench-agent-mi300-latest -> hpcagent-bench-ce-amd-mi300.sqsh
+hpcagent-bench-sglang-mi300-latest             -> hpcagent-bench-sglang.sqsh
+hpcagent-bench-vllm-mi300-latest               -> hpcagent-bench-vllm.sqsh
 ```
 
 There is deliberately **no version to pin to**. A run that spells a version silently opts out of
@@ -147,7 +147,7 @@ Roles: `judge-agent-amd` (the agent image), `judge`, `sglang`, `vllm`.
 # IMAGE_DIR is the directory holding that image's build.sh -- NOT the output directory. It
 # defaults to the SUBMIT dir, so submitting from ce-images/ without it fails in 2 s on
 # `test -x <ce-images>/build.sh`. Output location is OUTPUT_SQSH, which already defaults to
-# $SCRATCH/ce-images/optarena-<role>-candidate.sqsh.
+# $SCRATCH/ce-images/hpcagent-bench-<role>-candidate.sqsh.
 # judge-agent-amd builds BOTH targets in ONE job (BUILD_TARGETS="agent judge", the default).
 # That is not a convenience: build_common.sh wipes the /dev/shm graphroot on entry because the
 # nodes are diskless, so there is no layer cache BETWEEN jobs. Two separate jobs would be two
@@ -165,7 +165,7 @@ IMAGE_DIR=$PWD/vllm sbatch build_and_verify.sbatch   # ~4h
 
 # 2. verify a candidate on its own (build_and_verify already did this; this is the re-run path).
 # IMAGE and PROFILE are ENV, not positional arguments.
-IMAGE=$SCRATCH/ce-images/optarena-sglang-candidate.sqsh PROFILE=sglang \
+IMAGE=$SCRATCH/ce-images/hpcagent-bench-sglang-candidate.sqsh PROFILE=sglang \
   sbatch verify_image.sbatch
 
 # 3. promote. One command per role, or --all.
@@ -279,7 +279,7 @@ names differ across aiter versions (`module_rmsnorm` vs `module_rmsnorm_quant`).
 ### Adding a served model
 Usually no image change at all -- check first:
 ```bash
-srun --environment=sglang-latest python3 -c \
+srun --environment=hpcagent-bench-sglang-mi300-latest python3 -c \
   "from sglang.srt.models import <mod>; print('present')"
 ```
 GLM-5.3 needed **no rebuild**: `GlmMoeDsaForCausalLM` was already in the shipped image. The serving
@@ -340,10 +340,13 @@ never transport** -- the same sum comes back over the `tcp` provider, several ti
 every other assertion still green. That mistake was made here once and reported as "MPI is already
 reaching Slingshot".
 
-All of libfabric, libcxi and `librccl-net.so` come from the pinned CSCS **netstack artifact**, so
-the EDF must carry all five hook annotations. The images ship none of the three and a build gate
-refuses any that survives; with a partial hook set `libmpi.so` does not resolve at all, which is a
-loud failure rather than a silent fallback. Run it standalone against any image:
+All of libfabric, libcxi and `librccl-net.so` come from the **host** as of 2026-09-16: CSCS
+decommissioned `/capstor`, where the old netstack artifact bundle lived, so every EDF now sets
+`com.hooks.netstack.source = "host"` plus `com.hooks.aws_ofi_nccl.variant = "rocm6"` (the variant
+is required in host mode -- the hook calls `common::err` without it), and the EDF must still carry
+all five hook annotations. The images ship none of the three and a build gate refuses any that
+survives; with a partial hook set `libmpi.so` does not resolve at all, which is a loud failure
+rather than a silent fallback. Run it standalone against any image:
 
 ```bash
 sbatch containers/cluster/ce-images/mpi_check.sbatch   # single node, generates its own EDF
@@ -368,13 +371,13 @@ ja=$(IMAGE_DIR=$PWD/judge-agent-amd sbatch --parsable build_and_verify.sbatch)
 sg=$(IMAGE_DIR=$PWD/sglang sbatch --parsable build_and_verify.sbatch)
 
 # The judge-agent image is the only one that runs MPI, so it is the only one with MPI checks.
-IMAGE=$CE/optarena-ce-amd-mi300-candidate.sqsh sbatch --dependency=afterok:$ja mpi_check.sbatch
-IMAGE=$CE/optarena-ce-amd-mi300-candidate.sqsh sbatch --dependency=afterok:$ja mpi_multinode_check.sbatch
-IMAGE=$CE/optarena-ce-amd-mi300-candidate.sqsh sbatch --dependency=afterok:$ja rccl_hook_check.sbatch
+IMAGE=$CE/hpcagent-bench-ce-amd-mi300-candidate.sqsh sbatch --dependency=afterok:$ja mpi_check.sbatch
+IMAGE=$CE/hpcagent-bench-ce-amd-mi300-candidate.sqsh sbatch --dependency=afterok:$ja mpi_multinode_check.sbatch
+IMAGE=$CE/hpcagent-bench-ce-amd-mi300-candidate.sqsh sbatch --dependency=afterok:$ja rccl_hook_check.sbatch
 
 # Inference images reach the fabric through RCCL only.
-IMAGE=$CE/optarena-sglang-candidate.sqsh sbatch --dependency=afterok:$sg rccl_hook_check.sbatch
-IMAGE=$CE/optarena-sglang-candidate.sqsh sbatch --dependency=afterok:$sg inference/aiter_mla_check.sbatch
+IMAGE=$CE/hpcagent-bench-sglang-candidate.sqsh sbatch --dependency=afterok:$sg rccl_hook_check.sbatch
+IMAGE=$CE/hpcagent-bench-sglang-candidate.sqsh sbatch --dependency=afterok:$sg inference/aiter_mla_check.sbatch
 ```
 
 Name the **candidate** explicitly. The live names still point at the previous images and will until
@@ -411,7 +414,7 @@ measuring one: a kernel that is correct can still lose to triton end to end.
 ## Registry
 
 One repository for every image: `docker.io/spcleth/hpcagent-bench`. The tag is the `.sqsh` basename
-minus the `optarena-` prefix, so a tag names the ROLE and cannot drift from the file it was built
+minus the `hpcagent-bench-` prefix, so a tag names the ROLE and cannot drift from the file it was built
 from. **Credentials come from the environment (`REGISTRY_USER`, `REGISTRY_TOKEN`) and are never
 written into the repo.** Do not push without explicit instruction.
 

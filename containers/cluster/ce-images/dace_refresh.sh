@@ -11,7 +11,7 @@
 # the other. Writes here land in the container's ephemeral upper layer, so this is per-job and
 # leaves the image unchanged.
 #
-#   srun --environment=optarena-amd-mi300-latest containers/cluster/ce-images/dace_refresh.sh
+#   srun --environment=hpcagent-bench-agent-mi300-latest containers/cluster/ce-images/dace_refresh.sh
 #
 # A NETWORK FAILURE IS NOT FATAL. The baked commit is a working dace, so refusing to start on a
 # GitHub hiccup would trade a slightly stale run for no run at all. It reports which commit is

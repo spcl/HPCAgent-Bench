@@ -14,8 +14,8 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../../.." && pwd)"
 # shellcheck source=../build_common.sh
 source "${SCRIPT_DIR}/../build_common.sh"
 
-IMAGE_TAG="${IMAGE_TAG:-optarena-vllm:latest}"
-OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/optarena-vllm.sqsh}"
+IMAGE_TAG="${IMAGE_TAG:-hpcagent-bench-vllm:latest}"
+OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/hpcagent-bench-vllm.sqsh}"
 # Pinned by DIGEST, not by tag. rocm/pytorch has no 7.2.0-suffixed tag at all -- the 7.2.0 release
 # is published unsuffixed as rocm7.2_* -- and an unsuffixed tag is exactly the mutable name the
 # consolidation exists to stop trusting.
@@ -41,7 +41,7 @@ ce_gpu_args
 ce_cache_base_image
 
 # Pass-through for the ARGs a CANDIDATE image varies: VLLM_VERSION, AITER_REF and
-# VLLM_ROCM_AITER_SWITCH. Empty by default, so the live optarena-vllm.sqsh build is unchanged.
+# VLLM_ROCM_AITER_SWITCH. Empty by default, so the live hpcagent-bench-vllm.sqsh build is unchanged.
 #   EXTRA_BUILD_ARGS="VLLM_VERSION=0.28.0 VLLM_ROCM_AITER_SWITCH=1" ./build.sh
 EXTRA_ARGS=()
 for kv in ${EXTRA_BUILD_ARGS:-}; do EXTRA_ARGS+=(--build-arg "${kv}"); done
