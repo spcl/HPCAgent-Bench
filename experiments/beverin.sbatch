@@ -30,8 +30,8 @@ fi
 
 # FABRIC GATE. Fails the allocation now rather than producing a slow, valid-looking result.
 #
-# The three CSCS network hooks default to netstack.source="artifact", whose tree lived under the
-# decommissioned /capstor. When it is missing the hooks do not error: they bind-mount files that
+# The three CSCS network hooks default to netstack.source="artifact", whose tree is under
+# /capstor, which does not exist here. When it is missing the hooks do not error: they bind-mount files that
 # are not there and RCCL silently drops from CXI to TCP sockets. The arm still completes, the
 # numbers are still produced, and nothing in the log says the fabric was never used -- which is
 # why this is checked up front instead of being left to look like a slow model afterwards.
@@ -67,7 +67,7 @@ export CLUSTER_ENV_FILE="${ENV_FILE}"
 export HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 
 # How containers start on THIS system, probed rather than set: `ce` (srun --environment) while pyxis
-# works, `enroot` while the site enroot.conf still names the decommissioned /capstor. An explicit
+# works, `enroot` while the site enroot.conf names /capstor, which does not exist here. An explicit
 # CONTAINER_RUNTIME (submit environment or the arm's .env, sourced above) wins.
 CONTAINER_RUNTIME="$("${HPCAGENT_BENCH_REPO}/scripts/cscs/container_runtime.sh")" || exit 2
 export CONTAINER_RUNTIME

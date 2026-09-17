@@ -35,7 +35,7 @@ resolve_packet_kv() {
 # CURRENT value of ${<root-var-name>} (e.g. HPCAGENT_BENCH_CPF_PRERENDER_DIR, SCRATCH) rewritten
 # back to a literal, unexpanded "${<root-var-name>}" prefix, when that is in fact where the path
 # lives. tests/test_no_hardcoded_user_paths.py refuses a committed .env with a literal
-# /ritom/scratch/cscs/<user> segment -- resolve_packet_kv necessarily returns one, since
+# scratch path segment -- resolve_packet_kv necessarily returns one, since
 # packet_env.py fills every ${VAR} placeholder before printing (a launcher needs the real path to
 # gate coverage against it) -- so a caller that is about to WRITE that value into an arm's .env
 # calls this first. The rewritten record still resolves to the identical directory: every consumer
@@ -43,7 +43,7 @@ resolve_packet_kv() {
 # itself, and the agent-node re-entry all `set -a; . "${ENV_FILE}"; set +a`, or read the shell
 # variable it left behind), and cache_env.sh has already exported <root-var-name> into that same
 # process's environment by the time any of them runs -- RUN_ROOT's own
-# "${SCRATCH:-/iopsstor/scratch/cscs/$USER}" is the same contract. A path the root-var does not
+# "${SCRATCH:?}" is the same contract. A path the root-var does not
 # actually prefix (an explicit CPF_FORMS_DIR/CPF_DROPIN_DIR override elsewhere, e.g. the submitter
 # tests' own tmp-path views) is returned unchanged -- rewriting it would silently point a consumer
 # at the wrong directory.
@@ -124,7 +124,7 @@ stage_base_env() {
     shift 5
     [[ -f "${base}" ]] || { echo "stage_base_env: no such base env ${base}" >&2; return 2; }
     sed -e "s|^CAMPAIGN_ARM=.*|CAMPAIGN_ARM=${arm}|" \
-        -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:-/iopsstor/scratch/cscs/\$USER}/hpcagent-bench-runs/${experiment}-${stamp}|" \
+        -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:?}/hpcagent-bench-runs/${experiment}-${stamp}|" \
         "$@" "${base}" | grep -vE '^[[:space:]]*(#|$)' >"${out}"
 }
 

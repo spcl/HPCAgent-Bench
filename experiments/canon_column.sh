@@ -107,8 +107,8 @@ if [[ "${mode}" == outer ]]; then
     for one in ${col//,/ }; do
         echo "=== column ${one} ==="
         # Not exec: the next column has to run after this one in the same allocation.
-        #: CANON_LAUNCH=enroot routes around pyxis while the site enroot.conf still points at the
-        #: decommissioned /capstor and every `srun --environment=` dies at task_init(). It reads
+        #: CANON_LAUNCH=enroot routes around pyxis while the site enroot.conf points at /capstor,
+        #: which does not exist here, and every `srun --environment=` dies at task_init(). It reads
         #: the SAME EDF, so the two launchers cannot describe different runs. `enroot start` MOUNTS
         #: the squashfs (8 s, no tmpfs), and a framework column needs no comm hooks.
         #: Unset, scripts/cscs/container_runtime.sh decides, so this returns to pyxis by itself.

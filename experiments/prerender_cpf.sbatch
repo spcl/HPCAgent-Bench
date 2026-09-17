@@ -24,7 +24,7 @@
 #
 # CONTAINER, NOT HOST. This job used to source ${SCRATCH}/dace-env.sh for a host spack toolchain
 # (a pinned CXX, OPENBLAS_DIR) before rendering directly on the batch node. Both the toolchain and
-# dace-env.sh itself were lost when /capstor was decommissioned (Sep 2026), and this repo's rule is
+# dace-env.sh itself are gone with /capstor, which does not exist here, and this repo's rule is
 # that nothing runs outside a container any more. The render step therefore runs INSIDE the agent
 # image, which already carries a toolchain (/opt/gcc, /opt/view, its own spack install) -- this
 # script stays the ORCHESTRATOR on the batch host (roster, sharding, the launcher choice, the

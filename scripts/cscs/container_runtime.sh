@@ -4,9 +4,9 @@
 #
 #   CONTAINER_RUNTIME="$(scripts/cscs/container_runtime.sh)"
 #
-# WHY A PROBE AND NOT A SETTING. Since the Sep 2026 scratch migration the site's
-# /etc/enroot/enroot.conf names ENROOT_CACHE_PATH under /capstor, which no longer exists, and pyxis
-# dies at task_init() for every `srun --environment=`. Nothing user-side reaches pyxis's environment.
+# WHY A PROBE AND NOT A SETTING. The site's /etc/enroot/enroot.conf names ENROOT_CACHE_PATH under
+# /capstor, which does not exist here, and pyxis dies at task_init() for every `srun --environment=`.
+# Nothing user-side reaches pyxis's environment.
 # Hardcoding `enroot` into 149 arm files would outlive the fix; probing the one fact that broke
 # means the stack returns to pyxis by itself the day CSCS corrects the file.
 #
