@@ -66,9 +66,14 @@ def violations() -> collections.Counter:
     )
     if proc.returncode not in (0, 1):  # 0 = clean, 1 = findings; anything else is ruff failing
         raise RuntimeError(f"ruff could not run (rc={proc.returncode}):\n{proc.stderr[-2000:]}")
+    if not proc.stdout.strip():
+        # A real run always prints a JSON array, "[]" at minimum. Empty stdout means ruff never
+        # ran at all (e.g. "No module named ruff" also exits 1) -- treating that as "[]" reads a
+        # missing tool as zero violations for every file instead of failing loudly.
+        raise RuntimeError(f"ruff produced no output (rc={proc.returncode}):\n{proc.stderr[-2000:]}")
     found = collections.Counter()
     known = tracked()
-    for item in json.loads(proc.stdout or "[]"):
+    for item in json.loads(proc.stdout):
         path = str(pathlib.Path(item["filename"]).resolve().relative_to(REPO))
         if path in known:
             found[path] += 1
