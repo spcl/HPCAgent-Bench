@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: Vanilla RNN (Hidden State)
 func_name: vanilla_rnn_hidden
 level: 3

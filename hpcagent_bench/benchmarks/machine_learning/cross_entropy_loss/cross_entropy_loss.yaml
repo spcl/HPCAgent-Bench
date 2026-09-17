@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: Cross-Entropy Loss
 func_name: cross_entropy_loss
 level: 1

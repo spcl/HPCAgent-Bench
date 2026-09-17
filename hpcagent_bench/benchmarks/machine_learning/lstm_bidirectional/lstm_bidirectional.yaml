@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: Bidirectional LSTM
 func_name: lstm_bidirectional
 level: 3

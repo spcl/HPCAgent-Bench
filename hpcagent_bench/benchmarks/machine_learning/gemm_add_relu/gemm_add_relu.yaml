@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: GEMM + Add + ReLU
 func_name: gemm_add_relu
 level: 2

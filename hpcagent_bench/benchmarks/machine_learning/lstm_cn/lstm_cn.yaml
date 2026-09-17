@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: LSTM (Cell State)
 func_name: lstm_cn
 level: 3

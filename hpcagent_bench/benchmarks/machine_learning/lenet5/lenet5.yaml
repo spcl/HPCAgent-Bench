@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: LeNet-5 (KernelBench)
 func_name: lenet5
 level: 3

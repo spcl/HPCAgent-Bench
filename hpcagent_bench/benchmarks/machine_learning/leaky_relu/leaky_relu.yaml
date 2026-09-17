@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: Leaky ReLU Activation
 func_name: leaky_relu
 level: 1

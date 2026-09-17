@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: ReLU Self-Attention
 func_name: relu_self_attention
 level: 3

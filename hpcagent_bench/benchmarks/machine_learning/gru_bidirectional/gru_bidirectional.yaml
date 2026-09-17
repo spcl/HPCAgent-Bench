@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: Bidirectional GRU
 func_name: gru_bidirectional
 level: 3

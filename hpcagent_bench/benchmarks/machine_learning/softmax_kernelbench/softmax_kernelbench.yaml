@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: Softmax (KernelBench)
 func_name: softmax_kernelbench
 level: 1

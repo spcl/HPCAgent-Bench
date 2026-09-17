@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: MatMul + Swish + Scaling
 func_name: matmul_swish_scaling
 level: 2

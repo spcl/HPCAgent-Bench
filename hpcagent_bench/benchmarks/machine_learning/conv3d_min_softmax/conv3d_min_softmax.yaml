@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: Conv3D + Min + Softmax
 func_name: conv3d_min_softmax
 level: 2

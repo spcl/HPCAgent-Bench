@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: MatMul, Small K
 func_name: matmul_with_small_k_dimension
 level: 1

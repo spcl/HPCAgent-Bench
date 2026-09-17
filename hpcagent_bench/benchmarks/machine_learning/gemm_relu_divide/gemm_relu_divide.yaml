@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: GEMM + ReLU + Divide
 func_name: gemm_relu_divide
 level: 2

@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: Mamba-2 (Output)
 func_name: mamba2_return_y
 level: 3

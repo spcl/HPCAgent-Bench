@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: Exclusive Cumulative Sum
 func_name: cumsum_exclusive
 level: 1

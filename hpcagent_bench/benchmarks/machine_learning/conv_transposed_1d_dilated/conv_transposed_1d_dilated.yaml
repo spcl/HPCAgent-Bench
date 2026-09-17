@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: ConvT1D, Dil
 func_name: conv_transposed_1d_dilated
 level: 1

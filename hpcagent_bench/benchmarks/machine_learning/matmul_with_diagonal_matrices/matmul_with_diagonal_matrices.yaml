@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: Diagonal MatMul
 func_name: matmul_with_diagonal_matrices
 level: 1

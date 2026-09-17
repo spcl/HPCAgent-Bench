@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: ResNet Basic Block
 func_name: resnet_basic_block
 level: 3

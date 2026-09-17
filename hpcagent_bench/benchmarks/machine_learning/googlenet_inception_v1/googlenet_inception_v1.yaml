@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: GoogLeNet Inception V1
 func_name: googlenet_inception_v1
 level: 3

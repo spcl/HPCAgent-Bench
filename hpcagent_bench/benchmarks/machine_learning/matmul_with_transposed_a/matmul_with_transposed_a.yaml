@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: MatMul, A Transposed
 func_name: matmul_with_transposed_a
 level: 1

@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: Conv2D + ReLU + Bias Add
 func_name: conv2d_relu_bias_add
 level: 2

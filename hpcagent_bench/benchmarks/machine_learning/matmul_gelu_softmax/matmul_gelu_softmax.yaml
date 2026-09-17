@@ -1,4 +1,4 @@
-# OptArena benchmark manifest (KernelBench port).
+# HPCAgent-Bench benchmark manifest (KernelBench port).
 name: MatMul + GELU + Softmax
 func_name: matmul_gelu_softmax
 level: 2
