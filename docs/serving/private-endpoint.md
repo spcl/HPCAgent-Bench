@@ -93,7 +93,8 @@ openssl rand -hex 32 > ~/.config/hpcagent-bench/mi200-endpoint.key     # for mi3
   outside `[A-Za-z0-9._~+/=-]`.
 - Slurm writes the job output to `serve-private-<jobid>.out` in the directory you `sbatch` from
   (`#SBATCH --output=%x-%j.out`; `#SBATCH` directives cannot expand `$SCRATCH`).
-- The weights must already be in `$HF_HOME/hub` (default `HF_HOME=/iopsstor/scratch/cscs/$USER/hf`). The
+- The weights must already be in `$HF_HOME/hub` (default `HF_HOME=${FAST_SCRATCH}/.hpcagentbench-cache/hf`;
+  see `scripts/cache_env.sh`). The
   server runs with `HF_HUB_OFFLINE=1`, and the launcher refuses to start if the model directory is
   missing.
 - To rotate the key, overwrite the file and restart the job. A running server keeps the key it read at

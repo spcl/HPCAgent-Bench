@@ -40,11 +40,11 @@ ulimit -c 0
 SCRATCH="${SCRATCH:?set SCRATCH}"
 REPO="${HPCAGENT_BENCH_REPO:-${SCRATCH}/hpcagent-bench}"
 
+# The canonical cache roots (FAST_SCRATCH, HF_HOME, ...): iopsstor reads ~11x faster than the
+# general scratch (job 593523, measured on the retired Lustre mount) for the checkpoint-load shape.
+. "${REPO}/scripts/cache_env.sh"
+
 export RUN_DIR="${SCRATCH}/claude-roundtrip/logs/${SLURM_JOB_ID}"
-# iopsstor reads ~11x faster than the general scratch (job 593523, measured on the retired Lustre mount); $SCRATCH keeps the durable copy.
-FAST_SCRATCH="/iopsstor/scratch/cscs/${USER}"
-[[ -d "${FAST_SCRATCH}" ]] || FAST_SCRATCH="${SCRATCH}"
-export HF_HOME="${HF_HOME:-${FAST_SCRATCH}/hf}"
 
 INFERENCE_EDF="${INFERENCE_EDF:-hpcagent-bench-vllm-mi300-latest}"
 AGENT_EDF="${AGENT_EDF:-hpcagent-bench-agent-mi300-latest}"

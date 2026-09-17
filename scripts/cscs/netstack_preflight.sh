@@ -11,7 +11,7 @@
 #     netstack_src=${OCI_ANNOTATION_com__hooks__netstack__source:-artifact}
 # and the DEFAULT, artifact, resolves under
 #     /capstor/store/cscs/cscs/public/containers/netstack/$(uname -m)/<ver>/<name>
-# CSCS decommissioned /capstor in Sep 2026, so with site defaults that path cannot exist. The
+# /capstor does not exist here, so with site defaults that path never resolves. The
 # hooks do not fail when it is missing: they set libfabric_host_path and plugin_host_path to
 # files that are not there, the bind-mounts quietly do nothing, and RCCL falls back from
 # Slingshot/CXI to TCP. The job still completes. It is merely far slower, and it looks like a
@@ -41,8 +41,8 @@ netstack_preflight() {
 
     if [ "${HPCAGENT_BENCH_NETSTACK_SOURCE}" != "host" ]; then
         echo "netstack: source=${HPCAGENT_BENCH_NETSTACK_SOURCE} (not 'host')" >&2
-        echo "  The artifact tree lives under /capstor, which is decommissioned. Unless CSCS has" >&2
-        echo "  restored it, this WILL fall back to TCP. Set com.hooks.netstack.source=\"host\"." >&2
+        echo "  The artifact tree lives under /capstor, which does not exist here. This WILL" >&2
+        echo "  fall back to TCP. Set com.hooks.netstack.source=\"host\"." >&2
         return 1
     fi
 

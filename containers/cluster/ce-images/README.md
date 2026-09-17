@@ -54,7 +54,7 @@ MODELS="zai-org/GLM-5.3" sbatch fetch_weights.sbatch
 AUDIT_ONLY=1 sbatch --time=00:20:00 fetch_weights.sbatch
 
 # somewhere else entirely, e.g. to test without touching the real tree
-HF_HOME=$SCRATCH/hf-test MODELS="Qwen/Qwen2.5-Coder-7B-Instruct" \
+HF_HOME=${FAST_SCRATCH}/hf-test MODELS="Qwen/Qwen2.5-Coder-7B-Instruct" \
     sbatch fetch_weights.sbatch
 ```
 
@@ -62,7 +62,7 @@ HF_HOME=$SCRATCH/hf-test MODELS="Qwen/Qwen2.5-Coder-7B-Instruct" \
 |---|---|---|
 | `MODELS` | the four campaign models | space-separated HF repo ids |
 | `AUDIT_ONLY` | `0` | `1` checks layout and changes nothing |
-| `HF_HOME` | `$FAST_SCRATCH/hf` | where the hub lives; iopsstor when it exists |
+| `HF_HOME` | `${FAST_SCRATCH}/.hpcagentbench-cache/hf` | where the hub lives (`FAST_SCRATCH` defaults to the iopsstor scratch, see `scripts/cache_env.sh`) |
 | `STRIPE_COUNT` / `STRIPE_SIZE` | `16` / `4M` | the target Lustre layout |
 | `MIN_BLOB_BYTES` | 1 GiB | only blobs above this are striped or audited |
 | `HF_TOKEN` | unset | set it for a large fetch: unauthenticated pulls are rate-limited |
@@ -340,8 +340,7 @@ never transport** -- the same sum comes back over the `tcp` provider, several ti
 every other assertion still green. That mistake was made here once and reported as "MPI is already
 reaching Slingshot".
 
-All of libfabric, libcxi and `librccl-net.so` come from the **host** as of 2026-09-16: the old
-netstack artifact bundle under `/capstor/store` is gone, so every EDF now sets
+All of libfabric, libcxi and `librccl-net.so` come from the **host**: every EDF sets
 `com.hooks.netstack.source = "host"` plus `com.hooks.aws_ofi_nccl.variant = "rocm6"` (the variant
 is required in host mode -- the hook calls `common::err` without it), and the EDF must still carry
 all five hook annotations. The images ship none of the three and a build gate refuses any that
