@@ -61,3 +61,46 @@ under `${HPCAGENT_BENCH_CPF_PRERENDER_DIR}/cache`, and an arm reads one through 
 
 `experiments/prepare_job.sh` writes `generated/` and `packs/` here, and `jit/<image>/` under
 `${JIT_CACHE_ROOT}`; `run_cluster.sh` calls it first inside each arm. Nothing else should write here.
+
+## Job work dirs (deterministic-framework submitters)
+
+`${HPCAGENT_BENCH_RUNS_ROOT}` (default `${JIT_CACHE_ROOT}/runs`, `scripts/cache_env.sh`) is the root
+a deterministic-framework submitter -- `experiments/submit-canon-llr40.sh` today, any canon/smoke/
+opt-report submitter going forward -- derives its OWN job work dir under, as
+`${HPCAGENT_BENCH_RUNS_ROOT}/<job-kind>/<name>-<stamp>` (canon: `<job-kind>` is `canon`, `<name>` is
+the roster tag, `<stamp>` is the submit date). Same shape as `jit/` -- small-ish, many, WRITTEN by
+the job -- so it lives beside it under `${JIT_CACHE_ROOT}`, never spelled out as a bare
+`${SCRATCH}/<name>` path: before this, `submit-canon-llr40.sh` defaulted `OUT_ROOT` straight to
+`${SCRATCH}/canon-llr40-<stamp>`, a directory nothing ever swept, and a compiler-baseline sweep
+leaves one DaCe build tree (`dacecache-<column>[_rank<N>]`) per column in it -- routinely the bulk
+of the directory's size.
+
+A submitter that sources `scripts/cache_env.sh` and derives its `OUT_ROOT` this way gets, for free,
+`experiments/canon_column.sh`'s own two-part cleanup:
+
+* **the per-rank `run-framework` shard DB moves INTO the job dir.** `record.db_path`
+  (`hpcagent_bench/config.yaml`) is repo-relative by default, so an unmanaged out_root's shard DBs
+  (`hpcagent_bench<rank>.db`) land beside the checkout itself -- four ranks x seven columns of one
+  campaign is `hpcagent_bench{0..3}.db` sitting in the repo root. A managed out_root instead gets
+  `HPCAGENT_BENCH_RECORD_DB_PATH` pointed at `<out_root>/db/<column>/hpcagent_bench.db` (one
+  directory PER COLUMN, since several columns of one campaign share an out_root and must not race
+  the same shard file).
+* **the work dir is cleaned up at the END OF EACH COLUMN'S JOB, but only after a VERIFIED merge.**
+  Once a column's srun step returns, `canon_column.sh` folds its CSV rows into the persistent,
+  cross-run `${HPCAGENT_BENCH_RESULTS_DIR}/canon.db` (`scripts/merge_canon_results.py` -- append-
+  only, unlike the whole-sweep-rebuild `scripts/collect_canon.py` the reproducibility repos call,
+  because sibling columns are often still writing beside this one), checks the merged row count
+  against an INDEPENDENT count of the same CSVs, and deletes that column's `dacecache-<column>*`
+  build tree and `db/<column>/` shard DB only when the two counts agree. A mismatch (or any other
+  merge failure) keeps every one of the column's files and prints why to the job's own `--output`
+  log, which sits in `out_root` itself and is deliberately never deleted by this cleanup. The CSV
+  (`<column>.rank<N>.csv`) is likewise never deleted: it is the documented hand-off the
+  reproducibility repos' own `collect_canon.py` pass reads (`experiments/README.md`'s canon
+  section, `reproducibility/canon/artifacts/README.md`), and only the persistent-DB copy is a bonus
+  for this repo's own queries, not a replacement for it.
+
+`${HPCAGENT_BENCH_RESULTS_DIR}` (default `${JIT_CACHE_ROOT}/results`) is the persistent destination
+above: a job dir is reusable scratch a submitter may name however it likes, but the RESULTS a job
+produced must survive its own job dir being cleared, so they are merged out to a fixed root instead.
+A second deterministic-framework family adds its own file here (`<family>.db`) rather than renaming
+`canon.db`.

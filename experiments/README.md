@@ -756,6 +756,51 @@ Judge and vLLM standard output is captured by the Slurm output/error files.
 Use a shared `RUN_ROOT`; node-local storage would make the aggregate results
 hard to inspect and may be removed when the allocation ends.
 
+## Canon compiler-baseline sweeps
+
+`submit-canon-llr40.sh` runs the no-agent compiler-baseline half of a campaign (numba, cc,
+cc_autopar, dace_cpu[_canonicalize], dace_gpu[_canonicalize] by default; `COLUMNS=` overrides) --
+one Slurm job per column (or every column packed into one job with `ONE_JOB=1`), each running
+`canon_column.sh` over the roster:
+
+```sh
+./submit-canon-llr40.sh   # BEGIN=saturday|DEPEND_ON=<jid:jid>|SUBMIT=0 as env overrides
+```
+
+### Where a sweep's files live
+
+`OUT_ROOT` defaults to `${HPCAGENT_BENCH_RUNS_ROOT}/canon/${TAG:-llr-focus40}-${STAMP}`
+(`scripts/cache_env.sh`; `HPCAGENT_BENCH_RUNS_ROOT` defaults to `${JIT_CACHE_ROOT}/runs`) -- never a
+bare `${SCRATCH}/<name>` path. A one-off manual invocation of `canon_column.sh` (a smoke run outside
+`submit-canon-llr40.sh`) should derive its own `out_root` the same way; an `out_root` outside
+`${HPCAGENT_BENCH_RUNS_ROOT}` gets none of the cleanup below and simply accumulates like any other
+bare-scratch directory, which is the exact problem this convention exists to stop.
+
+Inside a column's job, `canon_column.sh`:
+
+1. writes the timed shard `<column>.rank<N>.csv` and, with `OPT_REPORTS=1` (the default), the
+   compile-only vectorization report under `reports/<column>/` -- both are the sweep's documented
+   output and are never deleted;
+2. redirects that rank's `run-framework` shard DB to `<out_root>/db/<column>/hpcagent_bench<N>.db`
+   instead of `run-framework`'s own repo-relative default;
+3. once the column's step returns, merges the CSV rows into the persistent, cross-run
+   `${HPCAGENT_BENCH_RESULTS_DIR}/canon.db` (`scripts/merge_canon_results.py`), and -- ONLY once
+   that merge is verified against an independent count of the same CSVs -- deletes
+   `dacecache-<column>[_rank<N>]` (the DaCe build tree, routinely the bulk of a sweep's disk use)
+   and the now-redundant `db/<column>/` shard DB. A verify failure keeps everything and prints why
+   to the job's own Slurm `--output`/`--error` log, which sits in `out_root` itself and this cleanup
+   never touches.
+
+### Turning a sweep into a table
+
+The CSVs under `out_root` are the hand-off `reproducibility/canon/artifacts` and the external
+reproducibility repos read: `scripts/collect_canon.py --run-dir <out_root> --db <out.db>` rebuilds a
+fresh table from a WHOLE sweep's directory once every column has finished -- see
+`reproducibility/canon/artifacts/README.md`. `${HPCAGENT_BENCH_RESULTS_DIR}/canon.db` (built
+incrementally, per column, by the in-job step above) is a convenience for this repo's own queries
+across many sweeps; it is not a substitute for that rebuild and does not need `out_root` to still
+exist.
+
 ## Troubleshooting
 
 ### Allocation size mismatch

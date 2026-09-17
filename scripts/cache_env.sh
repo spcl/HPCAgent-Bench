@@ -52,7 +52,29 @@ export HPCAGENT_BENCH_CPF_PRERENDER_DIR="${HPCAGENT_BENCH_CPF_PRERENDER_DIR:-${J
 # host with the tool somewhere else entirely) never needs a code change.
 export HPCAGENT_BENCH_TOOLS_DIR="${HPCAGENT_BENCH_TOOLS_DIR:-${JIT_CACHE_ROOT}/tools}"
 
+# Deterministic-framework job work dirs (canon compiler-baseline columns and siblings: smoke sweeps,
+# opt-report passes). Same shape as jit/ -- small-ish, many, WRITTEN by the job, one tree per job --
+# so it sits beside jit/ under JIT_CACHE_ROOT rather than under HPCAGENT_BENCH_CACHE (the iopsstor
+# weights root a job only READS from). Before this existed, submit-canon-llr40.sh defaulted
+# out_root to ${SCRATCH}/canon-<tag>-<stamp> directly: a bare-scratch directory nothing ever swept,
+# accumulating one DaCe build tree (dacecache-<column>[_rank<N>]) per column forever. A submitter
+# derives its own job dir under this root as ${HPCAGENT_BENCH_RUNS_ROOT}/<job-kind>/<name>-<stamp>
+# (mirroring JIT_CACHE_ROOT's own "root exported, suffix appended by the caller" pattern) and MUST
+# NOT invent a path under ${SCRATCH} instead -- see .cache/README.md's "Job work dirs" section.
+export HPCAGENT_BENCH_RUNS_ROOT="${HPCAGENT_BENCH_RUNS_ROOT:-${JIT_CACHE_ROOT}/runs}"
+
+# The PERSISTENT, cross-job results store a job work dir's final per-kernel outcome is merged into
+# before the work dir (build trees, per-rank shard DBs) is deleted -- never the destination a job
+# writes its OWN per-rank shards to directly (those still need one file per rank per job; see the
+# job-work-dir note above), or two jobs' rank 0 would race the same file. Consumers derive their own
+# table/filename under this root (canon_column.sh's finalize step uses
+# ${HPCAGENT_BENCH_RESULTS_DIR}/canon.db via scripts/merge_canon_results.py) rather than a single
+# hardcoded name, so a second deterministic-framework family can add its own file here without
+# renaming this one.
+export HPCAGENT_BENCH_RESULTS_DIR="${HPCAGENT_BENCH_RESULTS_DIR:-${JIT_CACHE_ROOT}/results}"
+
 hpcagent_bench_cache_mkdirs() {
     mkdir -p "${HF_HOME}" "${JIT_CACHE_ROOT}" "${HPCAGENT_BENCH_CPF_PRERENDER_DIR}" "${HPCAGENT_BENCH_TOOLS_DIR}" \
+        "${HPCAGENT_BENCH_RUNS_ROOT}" "${HPCAGENT_BENCH_RESULTS_DIR}" \
         2>/dev/null || true
 }

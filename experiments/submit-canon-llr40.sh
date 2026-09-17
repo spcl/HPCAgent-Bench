@@ -14,8 +14,13 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 OPT=${OPT:-$(dirname "${PWD}")}
 . "$(dirname -- "${BASH_SOURCE[0]}")/roster.sh"
+# HPCAGENT_BENCH_RUNS_ROOT, so a canon campaign's work dir (CSVs, opt reports, and -- inside
+# canon_column.sh -- the DaCe build tree + per-rank shard DB it clears on a verified merge) lives
+# under the cache, not loose in $SCRATCH where nothing ever swept it (canon-llr40-20260917 and
+# friends: one DaCe build tree per column, kept forever). See .cache/README.md's "Job work dirs".
+. "${OPT}/scripts/cache_env.sh"
 STAMP=${STAMP:-$(date +%Y%m%d)}
-OUT_ROOT=${OUT_ROOT:-${SCRATCH:?}/canon-llr40-${STAMP}}
+OUT_ROOT=${OUT_ROOT:-${HPCAGENT_BENCH_RUNS_ROOT}/canon/${TAG:-llr-focus40}-${STAMP}}
 PRESET=${PRESET:-fuzzed}
 TIME_LIMIT=${TIME_LIMIT:-12:00:00}
 KERNELS=${KERNELS:-$(roster_for "${TAG:-llr-focus40}")}
