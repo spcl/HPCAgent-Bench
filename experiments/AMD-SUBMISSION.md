@@ -5,7 +5,8 @@ How the campaign submission stack fits together (`beverin.sbatch`, `run_cluster.
 campaign models actually complete versus fail.
 
 Node facts: 192 cores, 4 GPU dies, about 513 GB per node, partition `mi300`. The Slurm flags that
-matter for a role inside this stack (`--mem=0`, `--cpus-per-task`, never `--account`) are covered
+matter for a role inside this stack (`--mem=0`, `--cpus-per-task`, account supplied centrally by
+`scripts/cscs/account_env.sh` rather than hardcoded) are covered
 in [`docs/serving/README.md`](../docs/serving/README.md#3-submitting-the-slurm-flags-and-why-each-one)
 and [`docs/serving/knobs.md`](../docs/serving/knobs.md); this page does not repeat them. **House
 ceiling is 36 nodes in flight.**
@@ -120,7 +121,7 @@ every later server on that cache root then blocks on a baton nobody holds; a 0-b
 nobody at all. Before any run that enables aiter, sweep them:
 
 ```bash
-find "${SCRATCH}/.jit-cache" -name 'lock' -o -name 'lock_*'   # inspect, then delete if no job is running
+find "${JIT_CACHE_ROOT:-${SCRATCH}/.hpcagentbench-cache}/.aiter" -name 'lock' -o -name 'lock_*'   # inspect, then delete if no job is running
 ```
 
 On SGLang aiter is fine and stays on -- it imports a prebuilt `module_aiter_core` and serves. It is
@@ -227,7 +228,7 @@ silently. Lists are gitignored generated artifacts; the as-run copies for record
 in `ICLR26Reproducibility/paper_artifacts/problems/`.
 
 ```bash
-V="${SCRATCH:?set SCRATCH}/venv-optarena-314/bin/python3"
+V="${SCRATCH:?set SCRATCH}/venv-hpcagent-bench-314/bin/python3"
 cd <repo root>
 PYTHONPATH=$PWD $V experiments/make_problems.py \
     --track loop_level_reasoning --language c --tag llr-focus40 \
@@ -239,8 +240,12 @@ head -20 problems-llr-focus40-c.jsonl > problems-llr-focus40-kimi-c-a.jsonl
 tail -20 problems-llr-focus40-c.jsonl > problems-llr-focus40-kimi-c-b.jsonl
 ```
 
-`hints-and-triggers.md` is NOT checked in -- `materialize_shared.sh` builds it at launch from
-`containers/agent/hints.md` plus `skill-triggers.md`, so it always tracks the repo.
+`hints-and-triggers.md` is legacy: `materialize_shared.sh` still builds it (from
+`containers/agent/hints.md` plus `skill-triggers.md`) for the old llr5/llr6 arms that point
+`AGENT_HINTS_FILE` straight at it, but no packet in `hpcagent_bench/envs/registry.yaml` sets that
+variable any more -- from 2026-09-17 a skill reaches the agent as its trigger line and file on
+disk only, never as text stuffed into the main prompt. Every current `.env.*` leaves
+`AGENT_HINTS_FILE` empty. Do not point a new arm at it.
 
 ## Results and watching
 
@@ -255,7 +260,7 @@ scontrol release <jobid>          # for launch failed requeued held
 
 ## Python
 
-`$SCRATCH/venv-optarena-314` (3.14.7, pyenv global). The repo is
+`$SCRATCH/venv-hpcagent-bench-314` (3.14.7, pyenv global). The repo is
 MOUNTED, never pip-installed, so put it on `PYTHONPATH`. Rebuild with
 `tools/rebuild_venv.sh`. Keep caches off HOME -- that quota is INODES, not bytes.
 Note that `pre-commit`'s format hook needs the venv on `PATH` or it reports `missing formatter(s):

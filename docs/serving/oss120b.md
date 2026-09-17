@@ -3,7 +3,7 @@
 `openai/gpt-oss-120b`. One node, four GPUs. The only model here served by **vLLM** rather than
 SGLang.
 
-Authoritative source: `experiments/.env.base-oss120b` plus the `vllm-latest` EDF, which owns
+Authoritative source: `experiments/.env.base-oss120b` plus the `hpcagent-bench-vllm-mi300-latest` EDF, which owns
 `VLLM_PLUGINS`. If this page and those disagree, they are right. Cross-model background is in
 [`knobs.md`](knobs.md).
 
@@ -12,9 +12,9 @@ Authoritative source: `experiments/.env.base-oss120b` plus the `vllm-latest` EDF
 | | |
 |---|---|
 | Engine | **vLLM 0.23.0** |
-| EDF | `vllm-latest` |
+| EDF | `hpcagent-bench-vllm-mi300-latest` |
 | Nodes | **1**, `tp=4`, no pipeline stage |
-| Port | 8000, served name `optarena-vllm` |
+| Port | 8000, served name `hpcagent-bench-vllm` |
 
 ```
 --tensor-parallel-size 4 --host 0.0.0.0 --port 8000
@@ -61,7 +61,7 @@ the right side of the threshold.
 - **Use vLLM 0.23.0, not 0.27.1.** On one pinned node, the same probe and the same parsers:
   **3013 tok/s against 2405** -- 0.27.1 is about **25% slower**, entirely in decode (steady state
   3187 against 2540; prefill matched to 0.3%). Same dtype, quantization, MoE and attention backends,
-  same torch and triton. The `vllm-latest` EDF points at the 0.23.0 image; no 0.27.1 image or EDF
+  same torch and triton. The `hpcagent-bench-vllm-mi300-latest` EDF points at the 0.23.0 image; no 0.27.1 image or EDF
   is built or registered, and that tree lives on the `parked/vllm-0271` branch.
 - **Set `VLLM_PLUGINS` to an allowlist.** Unset means **load everything**, and one auto-loaded
   plugin kills the server at startup -- see the DON'T list for the failure. The value in use is

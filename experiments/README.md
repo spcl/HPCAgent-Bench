@@ -137,7 +137,7 @@ made the judge's timer return `0.0` and voided a campaign's GPU numbers.
 
 | role | mounts | why |
 | --- | --- | --- |
-| agent | `/shared`, `RUN_DIR`, and read-only: `containers/agent` at `/opt/optarena-agent`, the job's launch directory | Its material is staged into `/shared`. It runs `run_cluster.sh`, `node_monitor.sh`, `agent_driver.py` and the driver's standard-library siblings from a per-job copy (`stage_agent_launch`). **No repository and no `experiments/`**, so it cannot read the references it is graded against or another arm's `.env` and problems file. |
+| agent | `/shared`, `RUN_DIR`, and read-only: `containers/agent` at `/opt/hpcagent-bench-agent`, the job's launch directory | Its material is staged into `/shared`. It runs `run_cluster.sh`, `node_monitor.sh`, `agent_driver.py` and the driver's standard-library siblings from a per-job copy (`stage_agent_launch`). **No repository and no `experiments/`**, so it cannot read the references it is graded against or another arm's `.env` and problems file. |
 | judge | `/shared`, `/opt/generated`, `HPCAGENT_BENCH_REPO`, `RUN_ROOT` | Needs the tree: `hidden_tests` is deliberately absent from the judge image (it would be published with it) and `containers/judge/tools` is on its `PYTHONPATH`. The library itself now comes from the image. |
 | inference | `/shared`, `HF_HOME`, `JIT_CACHE_ROOT`, `RUN_ROOT`, `SCRIPT_DIR` | Reads weights, writes JIT artefacts. It never touches the graded tree. |
 
@@ -174,13 +174,23 @@ preparation actually ran. `prepare_job.sh` locates itself by the **exported `SCR
 back to `dirname $0` only when run standalone: a copy that used `$0` would resolve
 `./materialize_shared.sh`, `..` and the bare `PROBLEMS_FILE` name against `RUN_DIR`.
 
-Preparation is **cached** under `.cache/` in the repository root, so a re-run does not regenerate
-what already exists: `generated/` (emitted C/C++/Fortran sources, content-keyed), `packs/` and
-`jit/<image>/`. Pre-rendered canonical parallel forms are not cached here: they are an experiment
-input, and live in the content-addressed cache `$SCRATCH/cpf-cache`, read through a view under
-`$SCRATCH/cpf-views/<name>` that `experiments/prerender_cpf.sbatch` fills. `jit/` must stay image-keyed; `generated/` deliberately is not,
+Preparation is **cached**, so a re-run does not regenerate what already exists: `generated/`
+(emitted C/C++/Fortran sources, content-keyed) and `packs/` (one manifest per prepared job) live
+under `.cache/` in the repository root; `jit/<image>/` (aiter/triton/inductor/torch-extension/vLLM
+JIT artefacts) lives under `${JIT_CACHE_ROOT}` instead (default `${SCRATCH}/.hpcagentbench-cache`,
+`scripts/cache_env.sh`) -- moved out of the checkout because it grows tens of GB of build output
+that a git working tree should not carry. Pre-rendered canonical parallel forms are not cached here: they are an experiment
+input, and live in the content-addressed cache under `${HPCAGENT_BENCH_CPF_PRERENDER_DIR}/cache`
+(`scripts/cache_env.sh`; override with `CPF_CACHE`), read through a view under
+`${HPCAGENT_BENCH_CPF_PRERENDER_DIR}/views/<name>` that `experiments/prerender_cpf.sbatch` fills
+(runs its render step inside the agent container image; the host has no toolchain of its own since
+the Sep 2026 `/capstor` decommission). `jit/` must stay image-keyed; `generated/` deliberately is not,
 because the emit is a function of the numpy source alone. Measured: 20 sources emitted in 11.4 s
 cold, 20 served from cache in 2.0 s warm.
+
+`run_vllm_node` layers a node-local write cache over the triton/inductor/vLLM slice of `jit/` at
+run time, because `${SCRATCH}` is NFS and concurrent engines compiling into it raced into stale
+file handles -- see [`.cache/README.md`](../.cache/README.md#node-local-jit-write-layer).
 
 ## Prerequisites
 
@@ -230,8 +240,8 @@ selected at submission time with `CLUSTER_ENV_FILE=/shared/path/run.env`.
 | `AGENT_NODES` | `1` | Nodes assigned to agent workers. |
 | `JUDGE_NODES` | `1` | Nodes assigned to judge replicas. |
 | `GPUS_PER_NODE` | `4` | GPUs used by vLLM on each inference node. This must agree with the Slurm request. |
-| `INFERENCE_CE_ENV` | `vllm-latest` | Registered Container Engine environment for the inference engine (`vllm-latest` or `sglang-latest`). Use the EDF environment name, not the `.toml` path. |
-| `AMD_CE_ENV` | `optarena-amd-mi300-latest` | Registered AMD Container Engine environment for agent and judge nodes. |
+| `INFERENCE_CE_ENV` | `hpcagent-bench-vllm-mi300-latest` | Registered Container Engine environment for the inference engine (`hpcagent-bench-vllm-mi300-latest` or `hpcagent-bench-sglang-mi300-latest`). Use the EDF environment name, not the `.toml` path. |
+| `AMD_CE_ENV` | `hpcagent-bench-agent-mi300-latest` | Registered AMD Container Engine environment for agent and judge nodes. |
 
 ### Shared paths and problem source
 
@@ -248,7 +258,7 @@ selected at submission time with `CLUSTER_ENV_FILE=/shared/path/run.env`.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `VLLM_MODEL` | none, must be set | Model identifier or shared model path passed to `vllm serve`. |
-| `VLLM_SERVED_MODEL` | `optarena-vllm` | Model name exposed by the OpenAI-compatible API. |
+| `VLLM_SERVED_MODEL` | `hpcagent-bench-vllm` | Model name exposed by the OpenAI-compatible API. |
 | `VLLM_PORT` | `8000` | vLLM HTTP port on the inference master. |
 | `VLLM_MASTER_PORT` | `29500` | Distributed worker coordination port. |
 | `VLLM_READY_TIMEOUT_SECONDS` | `900` | Default agent wait for the vLLM models endpoint. |
@@ -367,7 +377,7 @@ practical zero-risk check:
 
 ```bash
 export META_MODEL_API_KEY=...
-cd experiments && ./run_campaign.sh smoke-llr4-cpp --account=<a> --partition=mi300
+cd experiments && ./run_campaign.sh smoke-llr4-cpp --partition=mi300
 ```
 
 with `CAMPAIGN_ARM`, `PROBLEMS_FILE` and the service block copied from `.env.base-musespark`.
@@ -414,7 +424,7 @@ See [`docs/token_accounting.md`](../docs/token_accounting.md) for what the count
 | `AGENTS_PER_NODE` | `4` | Maximum number of concurrent problem workers on each agent node. |
 | `CLAUDE_BIN` | `claude` | Claude Code executable in the AMD image. |
 | `AGENT_LLM_MODE` | `direct` | `direct`: claude talks to vLLM directly, striped over `VLLM_REPLICA_URLS` by global problem index. `litellm`: route through the per-node LiteLLM gateway instead. |
-| `CLAUDE_MODEL` | `optarena-llm` | Model given to Claude Code. `direct` mode (default) overrides this to `VLLM_SERVED_MODEL`; only `litellm` mode uses the configured value, matched against LiteLLM's mapping. |
+| `CLAUDE_MODEL` | `hpcagent-bench-llm` | Model given to Claude Code. `direct` mode (default) overrides this to `VLLM_SERVED_MODEL`; only `litellm` mode uses the configured value, matched against LiteLLM's mapping. |
 | `CLAUDE_MAX_TURNS` | `40` | Maximum turns per problem. |
 | `LITELLM_PORT` | `4000` | Loopback LiteLLM port on every agent node. Only used under `AGENT_LLM_MODE=litellm`. |
 | `LITELLM_MASTER_KEY` | `EMPTY` | Non-secret placeholder token supplied to Claude Code for the local LiteLLM gateway. Only used under `AGENT_LLM_MODE=litellm`. |
@@ -428,16 +438,68 @@ place those instructions live.
 
 `sbatch` -> `beverin.sbatch` -> `run_cluster.sh` is the primary way to run this example. Inside
 `run_cluster.sh`, `role_srun()` picks how each role's `srun`
-step launches its image, controlled by `CONTAINER_RUNTIME` (default `ce`): `ce`, `apptainer`,
-`podman`, or `docker`. All four keep host networking; roles talk over node hostnames and ports.
+step launches its image, controlled by `CONTAINER_RUNTIME`: `ce`, `enroot`, `apptainer`,
+`podman`, or `docker`. All five keep host networking; roles talk over node hostnames and ports.
+`beverin.sbatch` sets `CONTAINER_RUNTIME` for you by probing the site (see below); `run_cluster.sh`
+on its own falls back to `ce` when nothing set it. An explicit `CONTAINER_RUNTIME` in the submit
+environment or the arm's `.env` always wins over the probe.
 
-### CSCS Container Engine (default)
+`serve-only.sbatch` and `regrade.sbatch` do not go through this probe -- both call
+`srun --environment=` directly and have no enroot fallback, so both are unusable for as long as
+pyxis stays broken (see the next section).
 
-Nothing extra to set. `role_srun()` adds `srun --environment=<edf>`: `INFERENCE_CE_ENV`
-(default `vllm-latest`) for the inference node, `AMD_CE_ENV` (default
-`optarena-amd-mi300-latest`) for judge and agent nodes. Both EDFs must already be registered under
+### CSCS Container Engine (pyxis) -- currently unusable on Beverin
+
+`role_srun()` adds `srun --environment=<edf>`: `INFERENCE_CE_ENV`
+(default `hpcagent-bench-vllm-mi300-latest`) for the inference node, `AMD_CE_ENV` (default
+`hpcagent-bench-agent-mi300-latest`) for judge and agent nodes. Both EDFs must already be registered under
 `${HOME}/.edf` (or another `EDF_PATH` dir) and point their `image` line at a built `.sqsh`. See
 [Prerequisites](#prerequisites).
+
+Since the Sep 2026 scratch migration, pyxis dies at `task_init()` for every `srun --environment=`
+on Beverin (the site `enroot.conf` still names a decommissioned `/capstor` cache path). Nothing
+below chooses `ce` for you until CSCS fixes that file: `scripts/cscs/container_runtime.sh` probes
+the site and picks `enroot` instead, and `beverin.sbatch` exports its answer. See
+[`scripts/cscs/container_runtime.sh`](../scripts/cscs/container_runtime.sh) for the probe.
+
+### Enroot (pyxis fallback, current default on Beverin)
+
+Nothing extra to set -- `beverin.sbatch` selects this automatically while pyxis is broken.
+`role_srun()` runs the same per-role EDF `ce` would have used, but through
+[`scripts/cscs/enroot_srun.sh`](../scripts/cscs/enroot_srun.sh) (`enroot start` directly, bypassing
+pyxis) instead of `srun --environment=`. It forwards the task's identity and everything a role step
+needs (`HPCAGENT_BENCH_ENROOT_FORWARD=all`) and enables the CXI/`aws_ofi_nccl` comm hooks only for
+a multi-node inference step, since those are the only steps that run a GPU collective across nodes.
+Delete this runtime, and the `container_runtime.sh` probe, once CSCS fixes `enroot.conf` and pyxis
+works again.
+
+#### Known enroot gotchas
+
+Bypassing pyxis means [`scripts/cscs/enroot_srun.sh`](../scripts/cscs/enroot_srun.sh) has to redo,
+by hand, several things pyxis used to give for free. Each has already cost a job:
+
+- **Mount syntax differs by direction.** `enroot --mount` turns every colon into a space and hands
+  the result to `enroot-mount` as an fstab line. A read-write mount stays the EDF's plain
+  `src:dst` (two fields) -- spelling it out as a full fstab entry fails with `EINVAL` on a bind
+  target that has submounts (`/ritom/`). A read-only mount needs the full entry instead:
+  `src:dst:none:x-create=dir|file,bind,ro,nosuid,nodev,private`.
+- **The host environment is not inherited, and `SLURM_*` is stripped even via `--env`.** Each
+  forwarded variable is exported as `HBFWD_<name>` and named to enroot with `--env HBFWD_<name>`
+  (never its value, so nothing sensitive sits on the command line); a POSIX `sh` (dash, no
+  bashisms) `--conf` entrypoint restores the real names inside. `HPCAGENT_BENCH_ENROOT_FORWARD=rank`
+  (default, an allowlist) or `=all` (a denylist covering `PATH`, `LD_LIBRARY_PATH`, `PYTHONPATH`,
+  ...) in [`scripts/cscs/enroot_forward.sh`](../scripts/cscs/enroot_forward.sh) decides which.
+- **Comm hooks are on only for a cross-node GPU collective** (`INFERENCE_NODES>1`, and only on the
+  `--vllm-node` role -- judge and agent steps never get them). With hooks off, the EDF's own forced
+  `NCCL_NET`/`NCCL_NET_PLUGIN` are stripped too; left in place, RCCL refuses to initialise even a
+  single-node collective, looking for a plugin that only the hook provides.
+  `com.hooks.netstack.source=host` is forced in both modes -- under the default `artifact` source
+  the netstack hook looks under the decommissioned `/capstor` and aborts container start outright.
+- **`enroot start` mounts the squashfs; `enroot create` unpacks it.** Never call `create` here --
+  it means ~53 GB into tmpfs and roughly two minutes, against 8 s for `start`.
+- **RCCL's network plugin needs `/opt/rocm/lib` on `LD_LIBRARY_PATH`.** The EDF's `[env]` block
+  already carries it; a launcher that drops the `[env]` section loses it silently and RCCL falls
+  back to TCP with no error.
 
 ### Apptainer
 
@@ -466,7 +528,7 @@ Load or pull the OCI image on every allocated node first. `role_srun()` runs `<r
 --rm --network host --env-file <job.env> ${CONTAINER_GPU_FLAGS} <volumes> <image>`. Podman and
 Docker do not inherit the job environment, so `run_cluster.sh` writes a fixed prefix list
 (`AGENT`, `CLAUDE`, `GPUS_`, `HPCAGENT`, `INFERENCE`, `JUDGE`, `KERNELS`, `LANGUAGE`, `LITELLM`,
-`OPTARENA`, `PROBLEMS`, `RUN_DIR`, `RUN_ROOT`, `SCRIPT_DIR`, `SERPAPI`, `SLURM_`, `VLLM`,
+`HPCAGENT_BENCH_REPO`, `PROBLEMS`, `RUN_DIR`, `RUN_ROOT`, `SCRIPT_DIR`, `SERPAPI`, `SLURM_`, `VLLM`,
 `WEBSEARCH`) of the job env to `${RUN_DIR}/job.env` and passes it via `--env-file`. Volumes come
 from the same `CONTAINER_MOUNTS` list, one `--volume <mount>:<mount>` per entry.
 
@@ -652,8 +714,9 @@ curl --fail-with-body \
   "http://<judge-master>:8800/search"
 ```
 
-A search dependency or synthesis failure is returned as HTTP 502, as is an
-unreachable upstream judge.
+`/search` tells two failures apart: `503 {"cause": "not_provisioned"}` when `SERPAPI_API_KEY` or
+the synthesis endpoint is not configured, and `502` when a configured search's SerpAPI/crawl/LLM
+call itself fails. An unreachable upstream judge is also a 502.
 
 ## Readiness checks
 
@@ -727,10 +790,13 @@ inspect the node's `litellm.log` too, confirm the image contains `litellm`,
 and confirm `CLAUDE_MODEL` matches the LiteLLM mapping generated by the
 script.
 
-### Web search returns 502
+### Web search returns 503 or 502
 
-Check `SERPAPI_API_KEY`, outbound network availability, the web-search limits,
-and judge-to-vLLM connectivity. The response detail contains the immediate
+`search` is opt-in (`AGENT_SEARCH_TOOL=1`; no shipped `.env.*` sets it) and, by policy, no
+benchmark run otherwise has internet access. A `503 {"cause": "not_provisioned"}` means
+`SERPAPI_API_KEY` or the synthesis endpoint is not configured -- stop retrying, it will not
+succeed. A `502` means a configured call failed: check outbound network availability, the
+web-search limits, and judge-to-vLLM connectivity. The response detail contains the immediate
 underlying error.
 
 ### Grading returns 502

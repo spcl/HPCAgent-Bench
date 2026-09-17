@@ -26,7 +26,7 @@ REPO="${REPO:-$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}/.." && pwd)}"
 SCRIPTS="${REPO}/experiments"
 WORK="${WORK:-${SCRATCH:?}/tmp-offload-claims}"
 mkdir -p "${WORK}"
-srun --ntasks=1 --cpus-per-task=24 --environment=optarena-amd-mi300-latest bash -c '
+srun --ntasks=1 --cpus-per-task=24 --environment=hpcagent-bench-agent-mi300-latest bash -c '
 set -uo pipefail
 ulimit -c 0
 WORK='"${WORK}"'; SCRIPTS='"${SCRIPTS}"'

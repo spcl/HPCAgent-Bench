@@ -13,7 +13,7 @@
 #
 #   mkdir -p "$SCRATCH/claude-roundtrip/logs"
 #   sbatch --account=<account> \
-#       "$SCRATCH/optarena/experiments/test-claude-roundtrip.sbatch"
+#       "$SCRATCH/hpcagent-bench/experiments/test-claude-roundtrip.sbatch"
 #
 # No account is hardcoded; pass it on the command line. Slurm spools this file to its own
 # directory, so nothing may be resolved relative to the script path: SCRATCH anchors everything.
@@ -38,7 +38,7 @@ set -euo pipefail
 ulimit -c 0
 
 SCRATCH="${SCRATCH:?set SCRATCH}"
-REPO="${HPCAGENT_BENCH_REPO:-${SCRATCH}/optarena}"
+REPO="${HPCAGENT_BENCH_REPO:-${SCRATCH}/hpcagent-bench}"
 
 export RUN_DIR="${SCRATCH}/claude-roundtrip/logs/${SLURM_JOB_ID}"
 # iopsstor reads ~11x faster than the general scratch (job 593523, measured on the retired Lustre mount); $SCRATCH keeps the durable copy.
@@ -46,8 +46,8 @@ FAST_SCRATCH="/iopsstor/scratch/cscs/${USER}"
 [[ -d "${FAST_SCRATCH}" ]] || FAST_SCRATCH="${SCRATCH}"
 export HF_HOME="${HF_HOME:-${FAST_SCRATCH}/hf}"
 
-INFERENCE_EDF="${INFERENCE_EDF:-vllm-latest}"
-AGENT_EDF="${AGENT_EDF:-optarena-amd-mi300-latest}"
+INFERENCE_EDF="${INFERENCE_EDF:-hpcagent-bench-vllm-mi300-latest}"
+AGENT_EDF="${AGENT_EDF:-hpcagent-bench-agent-mi300-latest}"
 
 export MODEL_REPO="${MODEL_REPO:-openai/gpt-oss-120b}"
 export SERVED_MODEL="${SERVED_MODEL:-stress-model}"
@@ -59,7 +59,7 @@ export API_PORT="${API_PORT:-8000}"
 # Per-job ports so a second copy of this job on the same node does not collide.
 export MASTER_PORT="${MASTER_PORT:-$((20000 + SLURM_JOB_ID % 20000))}"
 export LITELLM_PORT="${LITELLM_PORT:-$((4000 + SLURM_JOB_ID % 1000))}"
-export CLAUDE_MODEL="${CLAUDE_MODEL:-optarena-llm}"
+export CLAUDE_MODEL="${CLAUDE_MODEL:-hpcagent-bench-llm}"
 # Unguessable enough that the model cannot name it without actually running ls.
 export MARKER="roundtrip-marker-${SLURM_JOB_ID}.txt"
 

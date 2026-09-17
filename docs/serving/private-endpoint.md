@@ -49,12 +49,12 @@ needs a CSCS-signed ssh key (section 8).
 
 | `PRESET` | GPUs per node | Image (EDF) | Weights | Attention | Default `LEGS` | Leg to serve |
 |---|---|---|---|---|---|---|
-| `mi300` | 4x MI300A (APU) | `sglang-latest` | `Qwen/Qwen3.8-27B-FP8` | aiter | `tp4:0.306` | `tp4:0.306` |
-| `mi200` | 8x MI250X (64 GiB each) | `sglang-mi200-latest` | `Qwen/Qwen3.8-27B` (BF16) | triton | `tp4:0.80 tp4:0.88 tp8:0.80` | `tp8:0.80` |
+| `mi300` | 4x MI300A (APU) | `hpcagent-bench-sglang-mi300-latest` | `Qwen/Qwen3.8-27B-FP8` | aiter | `tp4:0.306` | `tp4:0.306` |
+| `mi200` | 8x MI250X (64 GiB each) | `hpcagent-bench-sglang-mi200-latest` | `Qwen/Qwen3.8-27B` (BF16) | triton | `tp4:0.80 tp4:0.88 tp8:0.80` | `tp8:0.80` |
 
 - Both presets pass `--context-length 262144 --max-running-requests 128 --mamba-full-memory-ratio 0.5
   --reasoning-parser qwen3 --tool-call-parser qwen3_coder` with the chat template
-  `experiments/chat-template-qwen38.jinja`, and serve the model as `optarena-vllm`.
+  `experiments/chat-template-qwen38.jinja`, and serve the model as `hpcagent-bench-vllm`.
 - `mi300` uses the qwen38 campaign flags from `SGLANG_EXTRA_ARGS` in `experiments/.env.llrbase-qwen38-c`;
   `tests/test_serve_private.py` fails if the two diverge. `--mem-fraction-static 0.306` is a fraction of
   the whole APU node's memory, and the aiter backend multiplies it by 0.85, which gives 0.26. Change it
@@ -84,11 +84,11 @@ On beverin:
 
 ```bash
 umask 077
-mkdir -p ~/.config/optarena
-openssl rand -hex 32 > ~/.config/optarena/mi200-endpoint.key     # for mi300: mi300-endpoint.key
+mkdir -p ~/.config/hpcagent-bench
+openssl rand -hex 32 > ~/.config/hpcagent-bench/mi200-endpoint.key     # for mi300: mi300-endpoint.key
 ```
 
-- `KEY_FILE` defaults to `~/.config/optarena/<preset>-endpoint.key`. The launcher rejects a key file
+- `KEY_FILE` defaults to `~/.config/hpcagent-bench/<preset>-endpoint.key`. The launcher rejects a key file
   that is not mode 600, is not owned by you, is shorter than 32 characters, or contains characters
   outside `[A-Za-z0-9._~+/=-]`.
 - Slurm writes the job output to `serve-private-<jobid>.out` in the directory you `sbatch` from
@@ -133,7 +133,7 @@ Pass `--partition` and `--gpus-per-node` on every submission. The script sets ne
 partition on beverin is `mi200`, and each preset refuses to run on the other partition.
 
 ```bash
-cd <optarena checkout>
+cd <hpcagent-bench checkout>
 L=containers/cluster/ce-images/inference/serve-private.sbatch
 
 # Smoke test: every LEGS entry is started, checked and stopped.
@@ -159,8 +159,8 @@ PRESET=mi200 MODE=serve DRY_RUN=1 bash "$L"
 | `ACCESS` | `tunnel` | `tunnel` or `alps` |
 | `LEGS` | per preset | space-separated `tp<N>:<mem-fraction-static>` entries, N = 1, 2, 4 or 8; entry i listens on `API_PORT + i` |
 | `API_PORT` | `30000` | port of the first entry |
-| `KEY_FILE` | `~/.config/optarena/<preset>-endpoint.key` | API key file |
-| `SERVED_MODEL` | `optarena-vllm` | model name that clients send |
+| `KEY_FILE` | `~/.config/hpcagent-bench/<preset>-endpoint.key` | API key file |
+| `SERVED_MODEL` | `hpcagent-bench-vllm` | model name that clients send |
 | `EDF`, `MODEL_REPO`, `HF_HOME` | per preset | image, weights repository, weights cache |
 | `EXTRA_ARGS` | empty | additional SGLang flags, placed before `--host` |
 | `READY_TIMEOUT` | `3600` | seconds to wait for `/health` to return 200 |
@@ -178,12 +178,12 @@ PRESET=mi200 MODE=serve DRY_RUN=1 bash "$L"
 The job prints these commands with the node, port and key path filled in. For `mi200`:
 
 ```bash
-umask 077; mkdir -p ~/.config/optarena
-scp beverin:<KEY_FILE> ~/.config/optarena/                                   # once per key
-printf 'Authorization: Bearer %s\n' "$(cat ~/.config/optarena/mi200-endpoint.key)" \
-  > ~/.config/optarena/mi200-endpoint.header
+umask 077; mkdir -p ~/.config/hpcagent-bench
+scp beverin:<KEY_FILE> ~/.config/hpcagent-bench/                                   # once per key
+printf 'Authorization: Bearer %s\n' "$(cat ~/.config/hpcagent-bench/mi200-endpoint.key)" \
+  > ~/.config/hpcagent-bench/mi200-endpoint.header
 ssh -N -J ela,beverin -L 127.0.0.1:30000:127.0.0.1:30000 <you>@<node>        # leave it running
-curl -s http://127.0.0.1:30000/v1/models -H "@$HOME/.config/optarena/mi200-endpoint.header"
+curl -s http://127.0.0.1:30000/v1/models -H "@$HOME/.config/hpcagent-bench/mi200-endpoint.header"
 ```
 
 - Copy the key with `scp` only. `printf` is a shell builtin and `curl -H @file` reads the header from a
@@ -199,10 +199,10 @@ import pathlib
 
 from openai import OpenAI
 
-key = (pathlib.Path.home() / ".config/optarena/mi200-endpoint.key").read_text().strip()
+key = (pathlib.Path.home() / ".config/hpcagent-bench/mi200-endpoint.key").read_text().strip()
 client = OpenAI(base_url="http://127.0.0.1:30000/v1", api_key=key)
 reply = client.chat.completions.create(
-    model="optarena-vllm", max_tokens=128, messages=[{"role": "user", "content": "Say hi."}]
+    model="hpcagent-bench-vllm", max_tokens=128, messages=[{"role": "user", "content": "Say hi."}]
 )
 print(reply.choices[0].message.content)
 ```
@@ -213,7 +213,7 @@ print(reply.choices[0].message.content)
 
    ```text
    ===== alps endpoint is live: http://172.28.9.16:30000/v1 on nid002536, job 123456 =====
-   endpoint.json: {"url": "http://172.28.9.16:30000/v1", "served_model": "optarena-vllm", "key_file": "...", ...}
+   endpoint.json: {"url": "http://172.28.9.16:30000/v1", "served_model": "hpcagent-bench-vllm", "key_file": "...", ...}
    In your job on Daint (or another Alps cluster), while this job runs (docs/serving/private-endpoint.md):
      source <checkout>/containers/cluster/ce-images/inference/alps-endpoint.sh <run dir>/endpoint.json
    ```

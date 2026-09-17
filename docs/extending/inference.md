@@ -14,7 +14,7 @@ the comments of `experiments/.env.base-<tag>` and in `docs/serving/<tag>.md`. Co
 | `docs/serving/<tag>.md` | the measurements behind the recipe |
 
 **1. Fetch the weights.** `<tag>` is the model token in arm names (`llr-focus40-<tag>-c`). The job
-downloads inside the `sglang-latest` EDF into `${HF_HOME}` (default `/iopsstor/scratch/cscs/$USER/hf`),
+downloads inside the `hpcagent-bench-sglang-mi300-latest` EDF into `${HF_HOME}` (default `/iopsstor/scratch/cscs/$USER/hf`),
 then restripes every blob over 1 GiB on the host; `AUDIT_ONLY=1` only checks the layout.
 ```bash
 MODELS="org/Name" sbatch containers/cluster/ce-images/inference/fetch_weights.sbatch
@@ -28,11 +28,11 @@ Trimmed from `.env.base-qwen38`:
 INFERENCE_NODES=1
 GPUS_PER_NODE=4
 INFERENCE_MODE=replicas
-INFERENCE_CE_ENV=sglang-latest
+INFERENCE_CE_ENV=hpcagent-bench-sglang-mi300-latest
 EFFORT_LADDER="low medium xhigh"
 VLLM_MODEL=Qwen/Qwen3.8-27B-FP8
-VLLM_SERVED_MODEL=optarena-vllm
-OPTARENA_OPTIMIZER=Qwen/Qwen3.8-27B-FP8
+VLLM_SERVED_MODEL=hpcagent-bench-vllm
+HPCAGENT_BENCH_OPTIMIZER=Qwen/Qwen3.8-27B-FP8
 CLAUDE_AUTOCOMPACT=200144
 INFERENCE_ENGINE=sglang
 SGLANG_EXTRA_ARGS="--chat-template ${SCRIPT_DIR}/chat-template-qwen38.jinja --trust-remote-code --context-length 262144 --mem-fraction-static <measured> --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-metrics"
@@ -46,7 +46,7 @@ SGLANG_EXTRA_ARGS="--chat-template ${SCRIPT_DIR}/chat-template-qwen38.jinja --tr
 | `GPUS_PER_NODE`, `INFERENCE_NODES`, `INFERENCE_MODE` | `run_vllm_node` | TP size; `pp` splits one model over the nodes, `replicas` runs one server per node |
 | `SGLANG_EXTRA_ARGS`, `VLLM_EXTRA_ARGS` | `run_vllm_node` (`read -r -a`) | split on whitespace, no quoting inside; name both parsers |
 | `SGLANG_ATTENTION_BACKEND` | `run_vllm_node` | absent appends `--attention-backend aiter`; assigned empty omits it |
-| `OPTARENA_OPTIMIZER` | `tests/test_display_names.py` | the checkpoint id; must equal the registry `serves:` |
+| `HPCAGENT_BENCH_OPTIMIZER` | `tests/test_display_names.py` | the checkpoint id; must equal the registry `serves:` |
 | `EFFORT_LADDER` | `effort.py`, from `run_cluster.sh` and `harnesses.py` | the rungs THIS server accepts, lowest first; empty for a model with no ladder. The launcher resolves `AGENT_EFFORT` from it (`AGENT_EFFORT_POLICY=max`: xhigh where the ladder has it, else its top rung, else no field) and a client that types fewer rungs gets the top one it can spell |
 | `CLAUDE_AUTOCOMPACT` | `arm_nodes.sh` `check_context_budget` | at most context - 32000 - 30000 |
 
@@ -93,7 +93,7 @@ subclass beside `ClaudeAgent` and `OllamaAgent` in `harness/agent.py`, added to 
 
 Checklist A:
 - [ ] `fetch_weights.sbatch` prints `WEIGHTS READY`; `INFERENCE_CE_ENV` carries `INFERENCE_ENGINE`
-- [ ] both parsers named; `OPTARENA_OPTIMIZER` = `VLLM_MODEL` = registry `serves:`
+- [ ] both parsers named; `HPCAGENT_BENCH_OPTIMIZER` = `VLLM_MODEL` = registry `serves:`
 - [ ] `serve-only.sbatch` reaches `endpoint is live`; the smoke ends without `SMOKE FAILED`
 - [ ] `pytest tests/test_display_names.py tests/test_palette.py tests/test_model_of.py --maxfail=10`
 

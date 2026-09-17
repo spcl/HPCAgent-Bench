@@ -28,8 +28,8 @@ not even carry to MI300X.
 
 ## 1. The shortest path
 
-**Prerequisite, once per account:** `ls ~/.edf` should list `sglang-latest`, `sglang-candidate` and
-`vllm-latest`. If it does not:
+**Prerequisite, once per account:** `ls ~/.edf` should list `hpcagent-bench-sglang-mi300-latest`, `sglang-candidate` and
+`hpcagent-bench-vllm-mi300-latest`. If it does not:
 
 ```bash
 containers/cluster/ce-images/install_edfs.sh
@@ -55,7 +55,7 @@ endpoint URL and a ready-to-paste `curl`. Watch the job's output file for that b
 ```
 ===== endpoint is live =====
 base URL:   http://nid002968:8000/v1
-model name: optarena-vllm
+model name: hpcagent-bench-vllm
 replicas:   http://nid002968:8000/v1
 health:     curl -s http://nid002968:8000/v1/models
 metrics:    curl -s http://nid002968:8000/metrics
@@ -63,7 +63,7 @@ server log: $SCRATCH/inference-server/<jobid>/server-0.log
 
 curl -s http://nid002968:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"optarena-vllm","max_tokens":128,"messages":[{"role":"user","content":"Say hi."}]}'
+  -d '{"model":"hpcagent-bench-vllm","max_tokens":128,"messages":[{"role":"user","content":"Say hi."}]}'
 
 The endpoint takes no API key. It stays up until this job ends; scancel <jobid> to stop it.
 ```
@@ -94,8 +94,7 @@ container image.
 
 The `<name>` is an **EDF** -- an Environment Definition File, a small TOML file in `~/.edf/`. It
 names the image (a SquashFS file on scratch), the host directories to bind-mount, and a block of
-environment variables the image needs but cannot set for itself. Two things about EDFs surprise
-people:
+environment variables the image needs but cannot set for itself. Three things surprise people:
 
 - **The CE does not reliably preserve the image's own `ENV`.** That is why the EDFs here re-declare
   `PATH`, `LD_LIBRARY_PATH` and cache directories absolutely. Do not assume a variable baked into
@@ -106,14 +105,21 @@ people:
   plugin missing, RCCL silently falls back to TCP: numerically correct, several times slower, no
   error message. The EDFs in this repo pin the hook version so a site-side upgrade cannot change
   the fabric under a running job.
+- **This currently does not start on Beverin.** Since the Sep 2026 scratch migration the site's
+  `/etc/enroot/enroot.conf` names a cache path under the decommissioned `/capstor`, and every
+  `srun --environment=` dies at `task_init()`. `serve-only.sbatch` and `regrade.sbatch` have no
+  fallback for this and are unusable until CSCS fixes it. The benchmark campaign
+  (`beverin.sbatch`/`run_cluster.sh`) works around it by launching through `enroot start` directly
+  instead of the CE -- see [`experiments/README.md`](../../experiments/README.md#container-runtimes)
+  for that path and its gotchas.
 
 `ls ~/.edf` shows what is registered for you. The ones that matter:
 
 | EDF | Engine | Use it for |
 |---|---|---|
-| `sglang-latest` | SGLang | Qwen3.8, Kimi K2.7 |
+| `hpcagent-bench-sglang-mi300-latest` | SGLang | Qwen3.8, Kimi K2.7 |
 | `sglang-candidate` | SGLang | GLM-5.3 only |
-| `vllm-latest` | vLLM | gpt-oss-120b |
+| `hpcagent-bench-vllm-mi300-latest` | vLLM | gpt-oss-120b |
 
 `sglang-candidate` is the pre-promotion staging EDF for the sglang role, and it is currently the
 only sglang EDF whose image can load GLM-5.3: the DeepSeek weight loader's `format_ue8m0` guard and
@@ -135,8 +141,12 @@ against the images named in `containers/cluster/ce-images/images.env`.
 
 - **`--partition=mi300` always.** The default partition is `mi200`. That is different hardware and
   the configurations here are not valid on it.
-- **Do not pass `--account`.** The default association works; naming an account is how identical
-  jobs end up split across two project accounts depending on which command line was typed.
+- **Do not pass `--account` yourself.** Beverin now rejects any job without one
+  (`ERROR: you must specify a project account (-A <account>)`); `scripts/cscs/account_env.sh`
+  resolves it once, from your own Slurm associations, and exports `SBATCH_ACCOUNT` (and
+  `SLURM_ACCOUNT` / `SALLOC_ACCOUNT`), so every directive here already has one. Naming `-A`
+  yourself is still how identical jobs end up split across two project accounts depending on
+  which command line was typed.
 - **`--mem=0`.** A step's memory cgroup is sized from its share of the node's CPUs. Without
   `--mem=0` the server is capped far below the node's memory and dies during weight load with no
   useful message.
@@ -205,12 +215,12 @@ curl -s "$BASE/v1/models"
 
 curl -s "$BASE/v1/chat/completions" \
   -H 'Content-Type: application/json' \
-  -d '{"model":"optarena-vllm","max_tokens":128,
+  -d '{"model":"hpcagent-bench-vllm","max_tokens":128,
        "messages":[{"role":"user","content":"Say hi."}]}'
 ```
 
 The model name in the request body is the **served name**, not the HuggingFace repo id. Every
-recipe here serves under `optarena-vllm`; `/v1/models` tells you for certain. Change it with
+recipe here serves under `hpcagent-bench-vllm`; `/v1/models` tells you for certain. Change it with
 `VLLM_SERVED_MODEL` if a client hard-codes something else.
 
 Prometheus metrics are at `$BASE/metrics` (both engines, because every recipe passes

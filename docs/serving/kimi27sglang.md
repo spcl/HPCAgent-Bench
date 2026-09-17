@@ -11,9 +11,9 @@ file is right. Cross-model background is in [`knobs.md`](knobs.md).
 | | |
 |---|---|
 | Engine | SGLang |
-| EDF | `sglang-latest` |
+| EDF | `hpcagent-bench-sglang-mi300-latest` |
 | Nodes | **4**, `tp=4` inside each node, `pp=4` across them |
-| Port | 8000 on **rank 0 only**, served name `optarena-vllm` |
+| Port | 8000 on **rank 0 only**, served name `hpcagent-bench-vllm` |
 | Weight load | 30-40 minutes before the API answers |
 
 ```

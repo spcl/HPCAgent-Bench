@@ -85,7 +85,7 @@ IP address for that reason.
 
 ## 5. Adding an engine: vLLM
 
-Facts from `optarena-vllm.sqsh` (vLLM 0.23.0):
+Facts from `hpcagent-bench-vllm.sqsh` (vLLM 0.23.0):
 
 - The key comes from `--api-key` or the environment variable `VLLM_API_KEY`
   (`vllm/entrypoints/openai/api_server.py`). Set the variable inside the server step, for example

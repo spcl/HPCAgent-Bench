@@ -11,9 +11,9 @@ is right. Cross-model background is in [`knobs.md`](knobs.md).
 | | |
 |---|---|
 | Engine | SGLang |
-| EDF | `sglang-latest` |
+| EDF | `hpcagent-bench-sglang-mi300-latest` |
 | Nodes | **1**, `tp=4`, no pipeline stage |
-| Port | 8000, served name `optarena-vllm` |
+| Port | 8000, served name `hpcagent-bench-vllm` |
 | KV pool | **3,318,498 tokens** |
 | Mamba slots | **704** |
 | Host memory left free | about 77 GB of 513 GB |

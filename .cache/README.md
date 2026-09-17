@@ -6,11 +6,32 @@ every file is reproducible from the repo plus an image, so deleting the whole di
 and never correctness.
 
     .cache/
-      jit/<image>/     aiter, triton, inductor, torch-extension and vLLM JIT artefacts
       generated/       emitted reference lowerings (numpyto_* output)
       packs/           one manifest per prepared job
 
-## Why the repo and not scratch
+`jit/<image>/` (aiter, triton, inductor, torch-extension and vLLM JIT artefacts) is NOT here: it
+lives under `${JIT_CACHE_ROOT}` (default `${SCRATCH}/.hpcagentbench-cache`, `scripts/cache_env.sh`),
+moved out of the checkout because it grows tens of GB of build output that a git working tree
+should not carry -- see the "why the repo and not scratch" note below for `generated/`/`packs/`,
+which is a different, smaller kind of artefact.
+
+## Node-local JIT write layer
+
+`${JIT_CACHE_ROOT}` is on `${SCRATCH}`, which is NFS on Beverin. Several engines compiling into the
+same content-addressed files there at once turned "a file another client just replaced" into
+`OSError: [Errno 116] Stale file handle` for whichever engine read mid-rewrite -- jobs 640074,
+640075 and 640090 (three `oss120b` arms started within a minute of each other), each with one TP
+worker dead and the engine hung. `run_vllm_node` in `experiments/run_cluster.sh` (both the vLLM and
+SGLang paths) no longer lets an engine write the shared tree directly for the triton/inductor/vLLM
+slice of `jit/`: `experiments/jit_cache_layer.sh` seeds a node-local copy at
+`${TMPDIR:-/tmp}/hpcagent-bench-jit-<job>-<rank>` from the shared tree, the engine compiles into
+that copy, and it is published back to the shared tree -- add-only, one entry staged and renamed
+into place at a time, so a reader never sees a partial one -- once `/health` answers, then again
+every `HPCAGENT_BENCH_JIT_PUBLISH_INTERVAL_SECONDS` (default 1800). `HPCAGENT_BENCH_JIT_LOCAL=0`
+disables the layer and writes the shared tree directly, as before. `AITER_JIT_DIR` is not part of
+this layer; it is seeded once from the image's own prebuild and still writes the shared tree.
+
+## Why the repo and not scratch (`generated/`, `packs/`)
 
 Same filesystem either way -- the checkout and `$SCRATCH` are on the same scratch mount -- so this
 is about finding it, not speed. It also outlives more: iopsstor purges at 14 days against the
@@ -32,10 +53,11 @@ any image and an edited kernel misses rather than serving stale code.
 Pre-rendered canonical parallel forms. They are an experiment INPUT, not something rebuilt on
 demand: an arm served a different form measures a different treatment, and the rule above -- delete
 the directory, lose only time -- does not hold for them. They live in the content-addressed cache
-`$SCRATCH/cpf-cache`, and an arm reads one through a view under `$SCRATCH/cpf-views/<name>`, filled
-by `experiments/prerender_cpf.sbatch` (see `hpcagent_bench/cpf_cache.py`).
+under `${HPCAGENT_BENCH_CPF_PRERENDER_DIR}/cache`, and an arm reads one through a view under
+`${HPCAGENT_BENCH_CPF_PRERENDER_DIR}/views/<name>` (default `${SCRATCH}/.hpcagentbench-cache/.cpf-prerender`,
+`scripts/cache_env.sh`), filled by `experiments/prerender_cpf.sbatch` (see `hpcagent_bench/cpf_cache.py`).
 
 ## Filling it
 
-`experiments/prepare_job.sh` writes all three, and `run_cluster.sh` calls that first inside each
-arm. Nothing else should write here.
+`experiments/prepare_job.sh` writes `generated/` and `packs/` here, and `jit/<image>/` under
+`${JIT_CACHE_ROOT}`; `run_cluster.sh` calls it first inside each arm. Nothing else should write here.

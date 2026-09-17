@@ -31,9 +31,12 @@ judges: a node runs `JUDGES_PER_NODE` judges, one per socket.
 `beverin.sbatch` exits 2 before the run starts if the allocation disagrees with
 `INFERENCE_NODES + AGENT_NODES + JUDGE_NODES`.
 
-**No `--account` on beverin.** Every association carries the same QOS, so naming one costs nothing
-in scheduling and only risks jobs silently splitting across two project accounts depending on
-which command line was typed.
+**No `--account` on beverin.** Slurm now refuses to queue an accountless job at all
+(`ERROR: you must specify a project account (-A <account>)`); `scripts/cscs/account_env.sh`
+resolves the account once, from your own Slurm associations, and exports `SBATCH_ACCOUNT` /
+`SLURM_ACCOUNT` / `SALLOC_ACCOUNT` so every job already has one. A submitter naming `-A`
+themselves is still what lets jobs split across two project accounts depending on which command
+line was typed.
 
 ## Submitting
 
@@ -123,6 +126,24 @@ arm still carries partial results.
 
 ## Known traps
 
+- **GLM-5.3 arms cannot be submitted (open, 2026-09-16).** All 11 of them -- the `base-glm53`,
+  `llrbase-glm53-*`, `llrblind-glm53-*` and `cpf-llr-focus40-glm53-*` families -- set
+  `INFERENCE_CE_ENV=sglang-candidate`, and **there is no such image**. It is the one sglang build
+  whose image can load GLM-5.3: the DeepSeek weight loader's `format_ue8m0` reads are patched into
+  the package at BUILD time, while every other sglang EDF reaches the same patch through a
+  `PYTHONPATH` under `${SCRATCH}` that `role_mounts` drops for the inference role, so the loader
+  dies before the model is up.
+
+  It was never installer-managed, so `install_edfs.sh` has never repointed it, and the rendered
+  copy in `~/.edf` named a `/capstor` image that the Sep 2026 migration removed. That copy was
+  taken out of `~/.edf` on 2026-09-16 rather than left resolving to nothing; it is preserved at
+  `${SCRATCH}/.edf-stale-20260916/sglang-candidate.toml` so the container settings are not lost.
+
+  **Fixing it needs a REBUILD, not a re-render** -- re-rendering would point at bytes that do not
+  exist. Build the sglang role, promote it, then render the EDF, then re-check these 11 arms. No
+  other model is affected: qwen38, oss120b and kimi27sglang all run on
+  `hpcagent-bench-sglang-mi300-latest` or the vllm EDF.
+
 - **A walltime can be lowered but never raised.** `scontrol update jobid=<id> TimeLimit=<t>`
   answers *"Access/permission denied"* when `<t>` is longer than the current limit, so an arm
   submitted too tight has to be cancelled and resubmitted, losing its warmup. Submit with slack.
@@ -174,7 +195,7 @@ Promotion is verify, then rename. There is ONE version per role, so the rename i
 the EDFs:
 
 ```bash
-sbatch --export=ALL,IMAGE=$SCRATCH/ce-images/optarena-ce-amd-mi300-candidate.sqsh,\
+sbatch --export=ALL,IMAGE=$SCRATCH/ce-images/hpcagent-bench-ce-amd-mi300-candidate.sqsh,\
 PROFILE=judge-agent-amd verify_image.sbatch     # 0 failures, nothing resolving outside
 ./promote_image.sh judge-agent-amd              # or --all for every role with a candidate
 ```

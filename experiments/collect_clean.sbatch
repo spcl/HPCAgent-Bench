@@ -11,7 +11,7 @@
 #SBATCH --error=%x-%j.out
 #
 # The tail of an LLR-Clean wave: owed lists, the llr-focus40-cpu extraction and figures, and a commit
-# of the artifact repo. One node, no container -- everything runs in the optarena venv on the host.
+# of the artifact repo. One node, no container -- everything runs in the hpcagent-bench venv on the host.
 # Chain it behind the arms so it starts whatever they end as (a timed-out arm still leaves rows):
 #
 #   cd experiments && sbatch --dependency=afterany:639060:639061:639062 \
