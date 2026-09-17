@@ -18,8 +18,8 @@ declare -A SMOKE=(
   [vllm]="${SMOKES}/smoke-kimi-eager-pg.sbatch"
 )
 declare -A SQSH=(
-  [sglang]="${IMAGES}/optarena-sglang-candidate.sqsh"
-  [vllm]="${IMAGES}/optarena-vllm-candidate.sqsh"
+  [sglang]="${IMAGES}/hpcagent-bench-sglang-candidate.sqsh"
+  [vllm]="${IMAGES}/hpcagent-bench-vllm-candidate.sqsh"
 )
 # sglang is 4 nodes not 2: pp=2 halves the per-stage weights, and sglang refuses the campaign's
 # mem-fraction outright at that ratio

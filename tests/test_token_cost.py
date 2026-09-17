@@ -481,7 +481,7 @@ def test_the_budget_fold_reads_a_partial_message_transcript_as_it_read_the_old_o
     log = tmp_path / "claude.log"
     log.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    monkeypatch.delenv("OPTARENA_USAGE_PATH", raising=False)
+    monkeypatch.delenv("HPCAGENT_BENCH_USAGE_PATH", raising=False)
     monkeypatch.setenv("CLAUDE_LOG_PATH", str(log))
 
     assert token_cost.accumulate_total_tokens(lines, {}) == 1000 + 1500
@@ -585,7 +585,7 @@ def test_the_judge_column_reads_an_old_optimas_line_and_a_new_one_as_the_same_ca
     token_cost: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The container-side reader carries the SAME rule as the offline one (it ships standalone and
-    cannot import it), keyed on ``$OPTARENA_HARNESS`` since it has no worker directory to look at.
+    cannot import it), keyed on ``$HPCAGENT_BENCH_HARNESS`` since it has no worker directory to look at.
     Both spellings must give one number, or an optimas run's ``tokens`` column jumps the day the
     writer was fixed."""
     http_json = load_http_json()
@@ -593,13 +593,13 @@ def test_the_judge_column_reads_an_old_optimas_line_and_a_new_one_as_the_same_ca
     new = write_optimas_usage(tmp_path / "new", [OPTIMAS_DISJOINT])
     early = write_optimas_usage(tmp_path / "early", [OPTIMAS_DISJOINT_EARLY])
 
-    monkeypatch.setenv("OPTARENA_HARNESS", "optimas")
+    monkeypatch.setenv("HPCAGENT_BENCH_HARNESS", "optimas")
     assert http_json.usage_jsonl_tokens(str(old)) == 1000 + 50
     assert http_json.usage_jsonl_tokens(str(new)) == 1000 + 50
     assert http_json.usage_jsonl_tokens(str(early)) == 1000 + 50, "a fixed early-turn line is not an old one"
 
     # Another runner never wrote the overlap, so its lines keep the contract reading.
-    monkeypatch.setenv("OPTARENA_HARNESS", "miniswe")
+    monkeypatch.setenv("HPCAGENT_BENCH_HARNESS", "miniswe")
     assert http_json.usage_jsonl_tokens(str(old)) == 1000 + 900 + 50
 
 
@@ -613,7 +613,7 @@ def test_the_container_tool_and_the_analysis_agree_on_the_overlap_rule(
     Compared on the quantity both derive: the call's whole prompt, counted once.
     """
     http_json = load_http_json()
-    monkeypatch.setenv("OPTARENA_HARNESS", "optimas")
+    monkeypatch.setenv("HPCAGENT_BENCH_HARNESS", "optimas")
     cases = (
         OPTIMAS_OVERLAPPING,
         OPTIMAS_DISJOINT,

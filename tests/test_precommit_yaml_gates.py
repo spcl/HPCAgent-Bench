@@ -160,9 +160,9 @@ def test_manifest_hook_bootstraps_its_own_path(tmp_path: Path) -> None:
     """
     manifest = load_check_manifest_structure().tracked_manifests()[0]
     driver = tmp_path / "no_install.py"
-    # The REPO is dropped by path, not by substring. `"optarena" not in p` also deleted the
+    # The REPO is dropped by path, not by substring. `"hpcagent-bench" not in p` also deleted the
     # interpreter's own site-packages whenever the venv is named after the project
-    # (venv-optarena-314), so the hook failed on a missing `yaml` -- a dependency the ambient
+    # (venv-hpcagent-bench-314), so the hook failed on a missing `yaml` -- a dependency the ambient
     # interpreter genuinely had -- and the test reported a bootstrap bug that was its own.
     driver.write_text(
         textwrap.dedent(f"""

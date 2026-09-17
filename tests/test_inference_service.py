@@ -247,12 +247,12 @@ def test_a_server_arm_records_its_engine_instead(service: types.ModuleType, tmp_
     """One file answers "what produced these tokens" for both modes, or a reader has to know which
     mode a run used before knowing where to look."""
     service.record(
-        tmp_path, {"INFERENCE_ENGINE": "sglang", "INFERENCE_CE_ENV": "sglang-latest", "VLLM_MODEL": "Qwen/Q"}
+        tmp_path, {"INFERENCE_ENGINE": "sglang", "INFERENCE_CE_ENV": "hpcagent-bench-sglang-mi300-latest", "VLLM_MODEL": "Qwen/Q"}
     )
     written = json.loads((tmp_path / service.RECORD_NAME).read_text(encoding="utf-8"))
     assert written["source"] == "node"
     assert written["engine"] == "sglang"
-    assert written["ce_env"] == "sglang-latest"
+    assert written["ce_env"] == "hpcagent-bench-sglang-mi300-latest"
     assert written["model"] == "Qwen/Q"
 
 

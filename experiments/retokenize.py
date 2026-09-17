@@ -34,7 +34,38 @@ from collections.abc import Callable, Iterable
 
 #: Offline HuggingFace cache the tokenizers are read from. No download is ever attempted: a missing
 #: tokenizer is a counter that returns None, not a network call on a compute node.
-HF_HUB = pathlib.Path("/iopsstor/scratch/cscs/ybudanaz/hf/hub")
+#:
+#: ONE name for the weights, and it is HuggingFace's own ``HF_HOME``, whose hub cache is always
+#: ``$HF_HOME/hub``. That is the library's contract rather than our convention, so a separate
+#: "weights directory" variable would only be a second spelling of the same path -- free to drift
+#: from the one the serving jobs actually load from.
+#:
+#: This was an absolute path naming one user's scratch. For anyone else the glob below simply came
+#: up empty, and because an absent tokenizer is reported as "no counter" rather than an error, the
+#: visible effect was token counts going None -- a misconfiguration wearing the costume of a model
+#: this repo happens not to have cached.
+def _hf_hub_dir() -> pathlib.Path:
+    """The hub cache directory, resolved in this order:
+
+    1. ``HF_HOME`` -- what every sbatch and EDF in this repo exports.
+    2. ``HPCAGENT_BENCH_CACHE`` -- the single cache root; ``HF_HOME`` defaults underneath it.
+    3. ``huggingface_hub``'s own default, so a workstation with neither set still works.
+    """
+    import os
+
+    if hf_home := os.environ.get("HF_HOME"):
+        return pathlib.Path(hf_home) / "hub"
+    if cache := os.environ.get("HPCAGENT_BENCH_CACHE"):
+        return pathlib.Path(cache) / "hf" / "hub"
+    try:
+        from huggingface_hub.constants import HF_HUB_CACHE
+
+        return pathlib.Path(HF_HUB_CACHE)
+    except ImportError:
+        return pathlib.Path.home() / ".cache" / "huggingface" / "hub"
+
+
+HF_HUB = _hf_hub_dir()
 
 #: Arm model tag (``HPCAGENT_BENCH_RECORD_MODEL``) -> the repo id its ``VLLM_MODEL`` names. The env
 #: is the truth when a run has it; this covers the runs whose launch env was not kept beside them.
@@ -67,7 +98,20 @@ SYNTHETIC_MODEL = "<synthetic>"
 
 
 def snapshot(repo: str) -> pathlib.Path | None:
-    """The newest local snapshot directory of ``repo``, or None when the cache has no copy."""
+    """The newest local snapshot directory of ``repo``, or None when the cache has no copy.
+
+    A cache that does not exist AT ALL raises instead of returning None. The two are different
+    faults wearing the same face: one model absent from a populated cache is expected and degrades
+    to "no counter", whereas a hub directory that is not there means HF_HOME points somewhere
+    wrong, and every model will be "missing". Silently reporting that as None is how a whole
+    campaign's token counts come back empty with nothing in the log to say why.
+    """
+    if not HF_HUB.is_dir():
+        raise FileNotFoundError(
+            f"HuggingFace hub cache {HF_HUB} does not exist, so no tokenizer can be found and "
+            f"every token count would silently be None. Set HF_HOME (hub is $HF_HOME/hub) or "
+            f"HPCAGENT_BENCH_CACHE (hub is $HPCAGENT_BENCH_CACHE/hf/hub)."
+        )
     found = sorted(glob.glob(str(HF_HUB / f"models--{repo.replace('/', '--')}" / "snapshots" / "*")))
     return pathlib.Path(found[-1]) if found else None
 

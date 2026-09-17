@@ -9,7 +9,7 @@ ceilings) has already been argued for in the source arm and must survive verbati
 below describe the model. Hand-editing got this wrong once already, so the split is stated here
 rather than re-derived per arm.
 
-oss120b serves on vllm-latest, which is vLLM 0.23. 0.27.1 was retired on 2026-09-08 -- it routes
+oss120b serves on hpcagent-bench-vllm-mi300-latest, which is vLLM 0.23. 0.27.1 was retired on 2026-09-08 -- it routes
 gpt-oss through its mxfp4 path regardless of --dtype and imports triton_kernels.matmul_ogs, which
 AMD's ROCm build does not carry (601854-601857 all died there in ~7 minutes), and where it did run
 it served 25% slower. Name the EDF, never the image build: a version-named EDF freezes the arm on

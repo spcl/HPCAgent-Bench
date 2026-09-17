@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # The one-script pipeline: generate the problem list, install the variant configuration, size the
 # allocation from it, and submit. Everything after the variant name is passed to sbatch verbatim
-# (account, partition, a --time override).
+# (partition, a --time override). The account is NOT one of those: scripts/cscs/account_env.sh,
+# sourced below, resolves it from your own Slurm associations and exports it, so no submitter
+# names one -- that is what stops a campaign silently splitting across two billing lines.
 #
-#   ./run_campaign.sh smoke-llr4-cpp --account=<a> --partition=mi300
-#   ./run_campaign.sh llr-cpp        --account=<a> --partition=mi300
-#   ./run_campaign.sh llr-fortran  --account=<a> --partition=mi300
+#   ./run_campaign.sh smoke-llr4-cpp --partition=mi300
+#   ./run_campaign.sh llr-cpp        --partition=mi300
+#   ./run_campaign.sh llr-fortran  --partition=mi300
 #   ./run_campaign.sh llr8w4-qwen38-c --partition=mi300   # completion run, gap list
 #
 # After the job: merge the per-rank judge DBs and read the balance report --
@@ -17,6 +19,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# The Slurm account for every sbatch below (scripts/cscs/account_env.sh).
+. "${SCRIPT_DIR}/../scripts/cscs/account_env.sh" || { echo "no Slurm account resolved; see scripts/cscs/account_env.sh" >&2; exit 2; }
 PYTHON="${PYTHON:-python3}"
 
 VARIANT="${1:?usage: run_campaign.sh <smoke-llr4-cpp|llr-c|llr-cpp|llr-fortran|llr-any> [sbatch args...]}"

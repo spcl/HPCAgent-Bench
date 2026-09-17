@@ -75,8 +75,8 @@ def derive(src: pathlib.Path, dst: pathlib.Path) -> None:
         if line.startswith("VLLM_MODEL="):
             line = "VLLM_MODEL=zai-org/GLM-5.3"
             replaced.add("model")
-        elif line.startswith("OPTARENA_OPTIMIZER="):
-            line = "OPTARENA_OPTIMIZER=zai-org/GLM-5.3"
+        elif line.startswith("HPCAGENT_BENCH_OPTIMIZER="):
+            line = "HPCAGENT_BENCH_OPTIMIZER=zai-org/GLM-5.3"
             replaced.add("optimizer")
         elif line.startswith(("AITER_USE_FLYDSL_MOE_SORTING=", "SGLANG_ATTENTION_BACKEND=")):
             # Re-emitted with the args, so there is exactly one assignment in the result.

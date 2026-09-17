@@ -6,6 +6,14 @@
 # arm_nodes.sh (arm_nodes/check_context_budget/arm_walltime) and pin_env_kv.sh: this file assumes
 # both are already in scope.
 
+# The Slurm account, resolved ONCE from the user's own associations. beverin refuses a job without
+# one, and no submitter may spell one (tests/test_materialize_shared.py), so a submitter that never
+# sources the resolver cannot submit at all -- every family script that stages arms sources THIS
+# file, which makes this the one place that has to.
+# The checkout is OPT / HPCAGENT_BENCH_REPO when the caller names one (the submitter tests run a
+# temp copy of experiments/ with no scripts/ beside it), else this file's own parent.
+. "${OPT:-${HPCAGENT_BENCH_REPO:-$(dirname -- "${BASH_SOURCE[0]}")/..}}/scripts/cscs/account_env.sh" || { echo "no Slurm account resolved; see scripts/cscs/account_env.sh" >&2; exit 2; }
+
 # resolve_packet_kv <packet> <language> <assoc-array-name> -- runs packet_env.py once and fills the
 # named associative array from its KEY=VALUE lines (PY must already be set). Placeholders such as
 # ${CPF_VIEW} and ${REPO_LAYOUT_PYTHON} are read from THIS shell's exported env by packet_env.py

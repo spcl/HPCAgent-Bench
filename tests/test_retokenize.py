@@ -36,7 +36,7 @@ def retokenize_fixture() -> ModuleType:
     return load_retokenize()
 
 
-def assistant(message_id: str, block: dict[str, object], model: str = "optarena-llm") -> dict[str, object]:
+def assistant(message_id: str, block: dict[str, object], model: str = "hpcagent-bench-llm") -> dict[str, object]:
     return {"type": "assistant", "message": {"id": message_id, "model": model, "content": [block]}}
 
 
@@ -81,14 +81,14 @@ def test_the_model_is_read_from_the_env_the_job_was_launched_with(
 ) -> None:
     """``<campaign>/.agent-launch/<job>/.env`` sits beside the run directories, and ``VLLM_MODEL`` in
     it is the only unambiguous answer to whose tokenizer: the served model name is an alias
-    (``optarena-vllm``) and the transcript records that alias, not the weights."""
+    (``hpcagent-bench-vllm``) and the transcript records that alias, not the weights."""
     run_dir = tmp_path / "cpf-llr-focus40-20260914" / "636540"
     worker = run_dir / "agents" / "node-0" / "problem-0-worker-0"
     worker.mkdir(parents=True)
     launch = tmp_path / "cpf-llr-focus40-20260914" / ".agent-launch" / "636540"
     launch.mkdir(parents=True)
     (launch / ".env").write_text(
-        'CAMPAIGN_ARM=cpf-llr-focus40-qwen38-c\nVLLM_MODEL="Qwen/Qwen3.8-27B-FP8"\nCLAUDE_MODEL=optarena-llm\n',
+        'CAMPAIGN_ARM=cpf-llr-focus40-qwen38-c\nVLLM_MODEL="Qwen/Qwen3.8-27B-FP8"\nCLAUDE_MODEL=hpcagent-bench-llm\n',
         encoding="utf-8",
     )
 

@@ -86,7 +86,7 @@ def main() -> int:
         help="job id whose rows measured a SUPERSEDED treatment; repeat as needed",
     )
     ap.add_argument("--tag", required=True, help="experiment tag naming the roster")
-    ap.add_argument("--opt", default=os.environ.get("OPT", ""), help="optarena checkout (default $OPT)")
+    ap.add_argument("--opt", default=os.environ.get("OPT", ""), help="hpcagent-bench checkout (default $OPT)")
     ap.add_argument("--out-dir", default="", help="write <arm>.txt kernels files here (default: print only)")
     args = ap.parse_args()
 

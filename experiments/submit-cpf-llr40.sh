@@ -15,9 +15,14 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 . ./record_identity.sh
 . ./submit_common.sh
 
-PY=${SCRATCH:?}/venv-optarena-314/bin/python
+PY=${SCRATCH:?}/venv-hpcagent-bench-314/bin/python
 OPT=${OPT:-$(dirname "${PWD}")}
 export PYTHONPATH="${OPT}:${OPT}/hpcagent_bench/numpy_translators/src${PYTHONPATH:+:${PYTHONPATH}}"
+# HPCAGENT_BENCH_CPF_PRERENDER_DIR: the one place the CPF views/cache root is named, so this
+# script's default view path and prerender_cpf.sbatch's default cache path can never drift apart.
+# By ${OPT}, not a relative path: this file also runs from a temp copy in its own test
+# (tests/test_submit_cpf_llr40.py), which has no sibling scripts/ next to its experiments/.
+. "${OPT}/scripts/cache_env.sh"
 # EXPERIMENT names the wave (run root, arm names, problems files); RECORD_EXPERIMENT is what the
 # rows carry, and the CPU and GPU halves of llr-focus40 are ONE experiment told apart by `device`
 EXPERIMENT=${EXPERIMENT:-cpf-llr-focus40}
@@ -35,7 +40,7 @@ else
     KERNELS=${KERNELS:-$(roster_for "${TAG}")}
 fi
 # named explicitly, not inherited: an image where MCP tools fail to import exits 0 with none loaded
-CPF_CE_ENV=${CPF_CE_ENV:-optarena-amd-mi300-latest}
+CPF_CE_ENV=${CPF_CE_ENV:-hpcagent-bench-agent-mi300-latest}
 # CLEAN=1 re-runs the wave as "<arm>-clean". The IDENTITY (experiment, model, language, device,
 # packet) is untouched -- the analysis pairs on those columns and prefers the clean arm (rule X9),
 # so the suffix says "these tasks supersede the ones before them" without inventing a condition.
@@ -142,7 +147,7 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc|pe
     local kv
     for kv in ${EXTRA_ENV_KV:-}; do echo "${kv}" >>"${staged}"; done
     if [[ "${kind}" == cpfsrc ]]; then
-        local forms="${CPF_DROPIN_DIR:-${SCRATCH:?}/cpf-views/${TAG}-${target}}"
+        local forms="${CPF_DROPIN_DIR:-${HPCAGENT_BENCH_CPF_PRERENDER_DIR:?}/views/${TAG}-${target}}"
         local absent
         absent=$(forms_missing "${forms}" "${lang}" dropin "${target}")
         if [[ -n "${absent}" ]]; then
@@ -163,7 +168,7 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc|pe
     # only the TREATED arm points at a cache view (unset reads as 200 "unavailable", silently
     # measuring nothing). One view per TARGET+ROSTER serves both c/c++ and both modes.
     if [[ "${cpf}" == 1 ]]; then
-        local forms="${CPF_FORMS_DIR:-${SCRATCH:?}/cpf-views/${TAG}-${target}}"
+        local forms="${CPF_FORMS_DIR:-${HPCAGENT_BENCH_CPF_PRERENDER_DIR:?}/views/${TAG}-${target}}"
         local absent
         absent=$(forms_missing "${forms}" "$(tool_dialect "${lang}")" form "${target}")
         if [[ -n "${absent}" ]]; then
@@ -178,12 +183,6 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc|pe
         echo "HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR=${packet_kv[HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR]}" >>"${staged}"
     fi
 
-    # caveman changes only the hints slot, which the control arm leaves empty
-    if [[ "${kind}" == caveman ]]; then
-        local -A packet_kv
-        resolve_packet_kv "${packet}" "${lang}" packet_kv
-        sed -i -e "s|^AGENT_HINTS_FILE=.*|AGENT_HINTS_FILE=${packet_kv[AGENT_HINTS_FILE]}|" "${staged}"
-    fi
     finalize_staged_env "${staged}" "${env}" || exit 2
     # a colon-joined job id list holds this arm back until those finish, so a wave larger than the
     # node budget queues in order instead of being submitted by hand one gate at a time
