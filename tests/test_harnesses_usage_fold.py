@@ -38,7 +38,7 @@ def harnesses_fixture() -> ModuleType:
 # call_tokens: one usage.jsonl line's own count
 
 
-def test_call_tokens_sums_all_four_disjoint_fields(harnesses) -> None:
+def test_call_tokens_sums_all_four_disjoint_fields(harnesses: ModuleType) -> None:
     """The four fields (uncached prompt, cached prompt, completion, reasoning) are declared disjoint
     (harnesses.py's module docstring); a call that carries all four is charged their sum, not just
     the ones a caller might expect to matter (output alone, say)."""
@@ -57,7 +57,9 @@ def test_call_tokens_sums_all_four_disjoint_fields(harnesses) -> None:
         ({"model": "qwen38"}, None),
     ],
 )
-def test_call_tokens_treats_missing_and_junk_fields_as_absent_not_zero(harnesses, record, expected) -> None:
+def test_call_tokens_treats_missing_and_junk_fields_as_absent_not_zero(
+    harnesses: ModuleType, record: dict, expected: int | None
+) -> None:
     """A record with none of the four fields is ``None`` -- a line worth skipping, not a call that
     cost nothing -- exactly the distinction ``agent_driver.usage_total`` draws for the claude side
     (``tests/test_agent_driver_budget.py::test_usage_total_treats_missing_and_junk_fields_as_zero``).
@@ -66,7 +68,7 @@ def test_call_tokens_treats_missing_and_junk_fields_as_absent_not_zero(harnesses
     assert harnesses.call_tokens(record) == expected
 
 
-def test_call_tokens_ignores_fields_outside_the_declared_four(harnesses) -> None:
+def test_call_tokens_ignores_fields_outside_the_declared_four(harnesses: ModuleType) -> None:
     """A field this contract does not name (e.g. a future ``retries`` or ``latency_ms``) must not be
     swept into the count just because it happens to be numeric -- only CONSUMED_FIELDS are tokens."""
     record = {"input": 100, "output": 50, "latency_ms": 900, "retries": 3}
@@ -80,13 +82,13 @@ def line(record: dict) -> str:
     return json.dumps(record)
 
 
-def test_accumulate_usage_tokens_sums_every_call_line(harnesses) -> None:
+def test_accumulate_usage_tokens_sums_every_call_line(harnesses: ModuleType) -> None:
     total_by_call: dict[str, int] = {}
     lines = [line({"input": 100, "output": 20}), line({"input": 200, "cached_input": 50, "output": 30})]
     assert harnesses.accumulate_usage_tokens(lines, total_by_call) == 120 + 280
 
 
-def test_accumulate_usage_tokens_keys_calls_by_position_not_by_content(harnesses) -> None:
+def test_accumulate_usage_tokens_keys_calls_by_position_not_by_content(harnesses: ModuleType) -> None:
     """A claude transcript's turns share a ``message.id`` and the driver dedupes on it
     (``agent_driver.accumulate_total_tokens``); usage.jsonl has no such id -- ONE LINE IS ONE CALL --
     so two identical lines are two calls, each counted, never folded into one by their being equal.
@@ -99,7 +101,7 @@ def test_accumulate_usage_tokens_keys_calls_by_position_not_by_content(harnesses
     assert len(total_by_call) == 2, "two lines are two calls, keyed by position, not deduplicated"
 
 
-def test_accumulate_usage_tokens_running_total_survives_across_polls(harnesses) -> None:
+def test_accumulate_usage_tokens_running_total_survives_across_polls(harnesses: ModuleType) -> None:
     """The watcher polls ``usage.jsonl`` repeatedly as it grows (agent_driver.watch_token_budget),
     handing this fold only the NEW lines each time but the SAME ``total_by_call`` dict, so the
     running total must accumulate across calls rather than resetting to just the latest batch."""
@@ -112,7 +114,7 @@ def test_accumulate_usage_tokens_running_total_survives_across_polls(harnesses) 
     assert second_total == 1100 + 2800
 
 
-def test_accumulate_usage_tokens_skips_non_object_and_malformed_lines(harnesses) -> None:
+def test_accumulate_usage_tokens_skips_non_object_and_malformed_lines(harnesses: ModuleType) -> None:
     """A half-written tail while the runner is mid-append, and a stray non-JSON line, cost nothing
     and do not raise -- the same tolerance ``agent_driver.accumulate_total_tokens`` has for a
     partially flushed claude transcript."""
@@ -128,7 +130,7 @@ def test_accumulate_usage_tokens_skips_non_object_and_malformed_lines(harnesses)
     assert len(total_by_call) == 1, "only the one well-formed call line counted"
 
 
-def test_a_line_with_none_of_the_four_fields_is_not_recorded_as_a_zero_cost_call(harnesses) -> None:
+def test_a_line_with_none_of_the_four_fields_is_not_recorded_as_a_zero_cost_call(harnesses: ModuleType) -> None:
     """``call_tokens`` returning ``None`` for a field-less line must not enter ``total_by_call`` at
     all: a recorded 0 there is indistinguishable from a call that legitimately cost nothing, and
     ``len(total_by_call)`` is what other tests here use to check how many calls were actually seen."""

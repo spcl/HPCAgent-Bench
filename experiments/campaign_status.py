@@ -19,8 +19,6 @@ With no ``--out`` the document is printed to stdout. Read-only: this never touch
 or any run directory.
 """
 
-from __future__ import annotations
-
 import argparse
 import csv
 import json
@@ -401,11 +399,18 @@ def health_verdict(
     last_change_age = min(ages) if ages else None
     if last_change_age is None:
         return "starting", "no claude.log or judge DB written yet"
-    if elapsed_seconds is not None and elapsed_seconds > STALL_WINDOW_SECONDS and last_change_age >= STALL_WINDOW_SECONDS:
+    if (
+        elapsed_seconds is not None
+        and elapsed_seconds > STALL_WINDOW_SECONDS
+        and last_change_age >= STALL_WINDOW_SECONDS
+    ):
         return "stalled", f"no claude.log or DB write for {int(last_change_age)}s (running {elapsed_seconds}s)"
     if last_change_age <= OK_WINDOW_SECONDS:
         return "ok", f"last claude.log/DB write {int(last_change_age)}s ago"
-    return "ok", f"last claude.log/DB write {int(last_change_age)}s ago (below the {STALL_WINDOW_SECONDS}s stall window)"
+    return (
+        "ok",
+        f"last claude.log/DB write {int(last_change_age)}s ago (below the {STALL_WINDOW_SECONDS}s stall window)",
+    )
 
 
 # --------------------------------------------------------------------------------------------

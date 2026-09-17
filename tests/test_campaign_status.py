@@ -45,9 +45,7 @@ SPEC.loader.exec_module(campaign_status)
             "RUNNING", 300, 1300.0, 1400.0, True, None, "ok", id="stale-writes-under-20min-runtime-is-not-yet-stalled"
         ),
         pytest.param("RUNNING", 30, None, None, False, None, "starting", id="no-ready-line-yet-is-starting"),
-        pytest.param(
-            "RUNNING", 30, 5.0, 5.0, False, None, "starting", id="unready-engine-outranks-a-fresh-write"
-        ),
+        pytest.param("RUNNING", 30, 5.0, 5.0, False, None, "starting", id="unready-engine-outranks-a-fresh-write"),
         pytest.param(
             "RUNNING",
             5000,
@@ -60,7 +58,15 @@ SPEC.loader.exec_module(campaign_status)
         ),
     ],
 )
-def test_health_verdict_classification(state, elapsed_seconds, claude_log_age, db_age, has_ready, dead_reason, want):
+def test_health_verdict_classification(
+    state: str,
+    elapsed_seconds: int | None,
+    claude_log_age: float | None,
+    db_age: float | None,
+    has_ready: bool,
+    dead_reason: str | None,
+    want: str,
+) -> None:
     """The four verdicts (docstring, "Liveness") must come out in the order that matters: a dead
     engine or an unready one is reported as such even while a file happens to be fresh."""
     verdict, _reason = campaign_status.health_verdict(
@@ -74,7 +80,7 @@ def test_health_verdict_classification(state, elapsed_seconds, claude_log_age, d
     assert verdict == want, verdict
 
 
-def test_a_finished_job_reports_no_health_verdict_not_a_frozen_one():
+def test_a_finished_job_reports_no_health_verdict_not_a_frozen_one() -> None:
     """A COMPLETED/FAILED/CANCELLED arm is not "frozen" -- it is finished, and grading it against
     the running-only stall window would call every completed arm stalled."""
     verdict, reason = campaign_status.health_verdict(
@@ -89,7 +95,7 @@ def test_a_finished_job_reports_no_health_verdict_not_a_frozen_one():
     assert "COMPLETED" in reason
 
 
-def test_dead_engine_reason_finds_an_enginecore_crash_traceback():
+def test_dead_engine_reason_finds_an_enginecore_crash_traceback() -> None:
     """job 640090's actual failure shape: an EngineCore worker traceback ending in a fatal
     exception, tagged by the process that died rather than by a request handler."""
     text = (
@@ -101,7 +107,7 @@ def test_dead_engine_reason_finds_an_enginecore_crash_traceback():
     assert campaign_status.dead_engine_reason(text, None) is not None
 
 
-def test_dead_engine_reason_ignores_an_ordinary_apiserver_request_traceback():
+def test_dead_engine_reason_ignores_an_ordinary_apiserver_request_traceback() -> None:
     """job 640083 logs an APIServer-side "Traceback (most recent call last)" from serving.py while
     healthy and still generating tokens; only an EngineCore-tagged crash counts as dead-engine, or
     every busy arm with one failed request would be flagged dead."""
@@ -109,11 +115,11 @@ def test_dead_engine_reason_ignores_an_ordinary_apiserver_request_traceback():
     assert campaign_status.dead_engine_reason(text, None) is None
 
 
-def test_dead_engine_reason_finds_a_bare_stale_file_handle():
+def test_dead_engine_reason_finds_a_bare_stale_file_handle() -> None:
     assert campaign_status.dead_engine_reason("OSError: [Errno 116] Stale file handle\n", None) is not None
 
 
-def test_dead_engine_reason_finds_runtime_error_cancelled_in_the_err_file():
+def test_dead_engine_reason_finds_runtime_error_cancelled_in_the_err_file() -> None:
     assert campaign_status.dead_engine_reason(None, "RuntimeError: cancelled\n") is not None
 
 
@@ -138,7 +144,7 @@ def make_judge_db(path: pathlib.Path, calls: list[tuple[str, str, int, float]], 
     con.close()
 
 
-def test_repeated_score_calls_on_one_kernel_count_it_once():
+def test_repeated_score_calls_on_one_kernel_count_it_once() -> None:
     """Three score calls against the same benchmark (retries within one episode) must not inflate
     kernels_scored to 3 -- the dashboard counts kernels covered, not calls made."""
     calls = [
@@ -150,7 +156,7 @@ def test_repeated_score_calls_on_one_kernel_count_it_once():
     assert metrics["kernels_scored"] == 1, metrics
 
 
-def test_repeated_correct_calls_on_one_kernel_contribute_one_value_to_the_speedup_median():
+def test_repeated_correct_calls_on_one_kernel_contribute_one_value_to_the_speedup_median() -> None:
     """best_speedup_median is a median OVER KERNELS: a kernel scored correct five times at
     different speedups contributes its single BEST value once, not five points to the sample."""
     calls = [
@@ -164,7 +170,7 @@ def test_repeated_correct_calls_on_one_kernel_contribute_one_value_to_the_speedu
     assert metrics["best_speedup_median"] == 7.5, metrics
 
 
-def test_kernels_correct_counts_distinct_benchmarks_not_calls():
+def test_kernels_correct_counts_distinct_benchmarks_not_calls() -> None:
     calls = [
         ("k1", "score", 1, 1.0),
         ("k1", "submit", 1, 1.0),
@@ -174,7 +180,7 @@ def test_kernels_correct_counts_distinct_benchmarks_not_calls():
     assert metrics["kernels_correct"] == 1, metrics
 
 
-def test_kernels_submitted_unions_the_submit_route_with_the_submissions_table():
+def test_kernels_submitted_unions_the_submit_route_with_the_submissions_table() -> None:
     """A kernel can reach 'submitted' through a submit-route call OR a submissions-table row (the
     task's own wording); a kernel present in only one of the two must still count once, not zero
     and not twice."""
@@ -183,7 +189,7 @@ def test_kernels_submitted_unions_the_submit_route_with_the_submissions_table():
     assert metrics["kernels_submitted"] == 2, metrics
 
 
-def test_a_score_only_kernel_that_never_reached_correct_has_no_speedup_contribution():
+def test_a_score_only_kernel_that_never_reached_correct_has_no_speedup_contribution() -> None:
     """An incorrect kernel must not leak a speedup value into the median just because it was
     scored -- only benchmarks with a correct call belong in kernels_correct's speedup sample."""
     calls = [("wrong_kernel", "score", 0, 99.0)]
@@ -191,7 +197,7 @@ def test_a_score_only_kernel_that_never_reached_correct_has_no_speedup_contribut
     assert metrics["best_speedup_median"] is None, metrics
 
 
-def test_read_calls_and_submissions_reads_the_real_schema_from_a_fixture_db(tmp_path):
+def test_read_calls_and_submissions_reads_the_real_schema_from_a_fixture_db(tmp_path: pathlib.Path) -> None:
     """End-to-end through sqlite: the DB reader must produce the same distinct-kernel counts as
     the pure kernel_metrics unit above, off an actual .db file shaped like judge/rank-0/*.db."""
     run_dir = tmp_path / "run"
@@ -221,15 +227,15 @@ def test_read_calls_and_submissions_reads_the_real_schema_from_a_fixture_db(tmp_
 # --------------------------------------------------------------------------------------------
 
 
-def test_count_problems_on_a_missing_file_is_none_not_an_exception(tmp_path):
+def test_count_problems_on_a_missing_file_is_none_not_an_exception(tmp_path: pathlib.Path) -> None:
     assert campaign_status.count_problems(tmp_path / "does-not-exist.jsonl") is None
 
 
-def test_read_env_on_a_missing_file_is_an_empty_mapping_not_an_exception(tmp_path):
+def test_read_env_on_a_missing_file_is_an_empty_mapping_not_an_exception(tmp_path: pathlib.Path) -> None:
     assert campaign_status.read_env(tmp_path / ".env.nope") == {}
 
 
-def test_read_calls_and_submissions_on_a_missing_db_reports_an_error_and_returns_empty(tmp_path):
+def test_read_calls_and_submissions_on_a_missing_db_reports_an_error_and_returns_empty(tmp_path: pathlib.Path) -> None:
     errors: list[str] = []
     calls, submitted = campaign_status.read_calls_and_submissions([tmp_path / "no.db"], errors)
     assert calls == []
@@ -237,7 +243,7 @@ def test_read_calls_and_submissions_on_a_missing_db_reports_an_error_and_returns
     assert errors, "a missing DB must be recorded, not silently dropped"
 
 
-def test_read_calls_and_submissions_on_a_corrupt_db_file_does_not_raise(tmp_path):
+def test_read_calls_and_submissions_on_a_corrupt_db_file_does_not_raise(tmp_path: pathlib.Path) -> None:
     """A judge DB a rank is still writing to can be picked up mid-write; garbage bytes must read
     as zero calls plus a logged error, never propagate a sqlite3 exception up to the caller."""
     bad_db = tmp_path / "corrupt.db"
@@ -249,14 +255,14 @@ def test_read_calls_and_submissions_on_a_corrupt_db_file_does_not_raise(tmp_path
     assert errors
 
 
-def test_token_totals_on_a_missing_claude_log_does_not_raise(tmp_path):
+def test_token_totals_on_a_missing_claude_log_does_not_raise(tmp_path: pathlib.Path) -> None:
     errors: list[str] = []
     total = campaign_status.token_totals([tmp_path / "claude.log"], errors)
     assert total is None
     assert errors
 
 
-def test_token_totals_with_no_worker_dirs_at_all_is_zero_not_none():
+def test_token_totals_with_no_worker_dirs_at_all_is_zero_not_none() -> None:
     """No claude.log anywhere (an arm whose agents have not started yet) is a real zero, distinct
     from every log being unreadable -- the dashboard should not equate "not started" with "error"."""
     errors: list[str] = []
@@ -264,7 +270,9 @@ def test_token_totals_with_no_worker_dirs_at_all_is_zero_not_none():
     assert errors == []
 
 
-def test_build_arm_never_raises_when_the_run_dir_is_entirely_absent(tmp_path, monkeypatch):
+def test_build_arm_never_raises_when_the_run_dir_is_entirely_absent(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """An inference-arm row whose .env file, .out file and run dir are all missing (a job that
     barely started) must still produce a dict with an errors list, not crash the whole report."""
     monkeypatch.chdir(tmp_path)
@@ -286,12 +294,12 @@ def test_build_arm_never_raises_when_the_run_dir_is_entirely_absent(tmp_path, mo
     assert result["identity"]["jobid"] == "999999"
 
 
-def test_engine_liveness_on_a_missing_out_file_is_all_none():
+def test_engine_liveness_on_a_missing_out_file_is_all_none() -> None:
     result = campaign_status.engine_liveness(None)
     assert result == {"engine": None, "last_line_seconds_ago": None, "gen_throughput_tokens_s": None}
 
 
-def test_framework_column_summary_with_no_matching_out_file_is_all_none(tmp_path):
+def test_framework_column_summary_with_no_matching_out_file_is_all_none(tmp_path: pathlib.Path) -> None:
     errors: list[str] = []
     summary = campaign_status.framework_column_summary("canon-llr-numba", "12345", tmp_path, errors)
     assert summary == {"csv_files": [], "ok": None, "unsupported": None, "crash": None}
@@ -302,25 +310,25 @@ def test_framework_column_summary_with_no_matching_out_file_is_all_none(tmp_path
 # --------------------------------------------------------------------------------------------
 
 
-def test_an_arm_whose_name_starts_with_smoke_but_has_its_own_env_file_is_an_inference_arm():
+def test_an_arm_whose_name_starts_with_smoke_but_has_its_own_env_file_is_an_inference_arm() -> None:
     """smoke-enroot-qwen38-c is a real arm (job 640066), not the "smoke-*" helper-job pattern --
     the .env.<name> test must win over the prefix heuristic."""
     assert campaign_status.classify("smoke-enroot-qwen38-c", env_exists=True) == "inference-arm"
 
 
-def test_a_smoke_helper_job_with_no_env_file_is_other_not_inference_arm():
+def test_a_smoke_helper_job_with_no_env_file_is_other_not_inference_arm() -> None:
     assert campaign_status.classify("smoke-parallel", env_exists=False) == "other"
 
 
-def test_a_cpf_pre_job_is_prerender():
+def test_a_cpf_pre_job_is_prerender() -> None:
     assert campaign_status.classify("cpf-pre-scicomp-focus40-gpu", env_exists=False) == "prerender"
 
 
-def test_a_canon_job_is_framework_column():
+def test_a_canon_job_is_framework_column() -> None:
     assert campaign_status.classify("canon-llr-numba", env_exists=False) == "framework-column"
 
 
-def test_a_probe_job_is_other():
+def test_a_probe_job_is_other() -> None:
     assert campaign_status.classify("probe-ppcg", env_exists=False) == "other"
 
 
@@ -329,7 +337,7 @@ def test_a_probe_job_is_other():
 # --------------------------------------------------------------------------------------------
 
 
-def test_framework_column_summary_matches_canon_column_shs_own_ok_rule(tmp_path):
+def test_framework_column_summary_matches_canon_column_shs_own_ok_rule(tmp_path: pathlib.Path) -> None:
     """canon_column.sh's awk counts ok only when status=='ok' AND failure is empty -- a crash row
     has an empty failure field too, so status alone would double count it as ok."""
     out_root = tmp_path / "canon-llr-numba-42"

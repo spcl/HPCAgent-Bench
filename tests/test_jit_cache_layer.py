@@ -6,8 +6,6 @@ The shared cache is NFS; engines writing it concurrently turned each other's rew
 (640074/640075/640090). These tests pin the contract that makes the layer safe to share.
 """
 
-from __future__ import annotations
-
 import pathlib
 import subprocess
 
@@ -31,7 +29,7 @@ def tree(root: pathlib.Path) -> dict[str, str]:
     return {str(p.relative_to(root)): p.read_text() for p in sorted(root.rglob("*")) if p.is_file()}
 
 
-def test_a_kernel_directory_the_shared_cache_lacks_is_published_whole(tmp_path):
+def test_a_kernel_directory_the_shared_cache_lacks_is_published_whole(tmp_path: pathlib.Path) -> None:
     local, shared = tmp_path / "local", tmp_path / "shared"
     write(local / "abc123" / "kernel.so", "binary")
     write(local / "abc123" / "__grp__kernel.json", "group")
@@ -40,7 +38,7 @@ def test_a_kernel_directory_the_shared_cache_lacks_is_published_whole(tmp_path):
     assert tree(shared) == {"abc123/kernel.so": "binary", "abc123/__grp__kernel.json": "group"}, tree(shared)
 
 
-def test_publish_never_overwrites_an_entry_the_shared_cache_already_has(tmp_path):
+def test_publish_never_overwrites_an_entry_the_shared_cache_already_has(tmp_path: pathlib.Path) -> None:
     """Entries are content-addressed: an existing one is another engine's valid result, and
     rewriting it under a concurrent reader is exactly what produced ESTALE."""
     local, shared = tmp_path / "local", tmp_path / "shared"
@@ -50,7 +48,7 @@ def test_publish_never_overwrites_an_entry_the_shared_cache_already_has(tmp_path
     assert (shared / "abc123" / "kernel.so").read_text() == "theirs"
 
 
-def test_files_missing_inside_a_directory_both_sides_have_are_added(tmp_path):
+def test_files_missing_inside_a_directory_both_sides_have_are_added(tmp_path: pathlib.Path) -> None:
     local, shared = tmp_path / "local", tmp_path / "shared"
     write(local / "fxgraph" / "ab" / "new-graph", "new")
     write(shared / "fxgraph" / "ab" / "old-graph", "old")
@@ -58,7 +56,7 @@ def test_files_missing_inside_a_directory_both_sides_have_are_added(tmp_path):
     assert tree(shared) == {"fxgraph/ab/new-graph": "new", "fxgraph/ab/old-graph": "old"}, tree(shared)
 
 
-def test_publish_leaves_no_staging_entry_behind(tmp_path):
+def test_publish_leaves_no_staging_entry_behind(tmp_path: pathlib.Path) -> None:
     local, shared = tmp_path / "local", tmp_path / "shared"
     write(local / "d1" / "f", "x")
     write(local / "top-file", "y")
@@ -68,7 +66,7 @@ def test_publish_leaves_no_staging_entry_behind(tmp_path):
     assert leftovers == [], leftovers
 
 
-def test_seed_copies_the_shared_cache_but_not_a_killed_publishers_staging_entry(tmp_path):
+def test_seed_copies_the_shared_cache_but_not_a_killed_publishers_staging_entry(tmp_path: pathlib.Path) -> None:
     shared, local = tmp_path / "shared", tmp_path / "local"
     write(shared / "abc123" / "kernel.so", "binary")
     write(shared / f"{STAGE_PREFIX}.nid1.42.def456" / "kernel.so", "half")
@@ -76,7 +74,7 @@ def test_seed_copies_the_shared_cache_but_not_a_killed_publishers_staging_entry(
     assert tree(local) == {"abc123/kernel.so": "binary"}, tree(local)
 
 
-def test_seed_never_replaces_an_entry_already_in_the_local_layer(tmp_path):
+def test_seed_never_replaces_an_entry_already_in_the_local_layer(tmp_path: pathlib.Path) -> None:
     shared, local = tmp_path / "shared", tmp_path / "local"
     write(shared / "abc123" / "kernel.so", "shared")
     write(local / "abc123" / "kernel.so", "local")
@@ -84,14 +82,14 @@ def test_seed_never_replaces_an_entry_already_in_the_local_layer(tmp_path):
     assert (local / "abc123" / "kernel.so").read_text() == "local"
 
 
-def test_seed_of_a_cache_that_does_not_exist_yet_creates_an_empty_layer(tmp_path):
+def test_seed_of_a_cache_that_does_not_exist_yet_creates_an_empty_layer(tmp_path: pathlib.Path) -> None:
     local = tmp_path / "local"
     run("seed", str(tmp_path / "never-created"), str(local))
     assert local.is_dir() and not any(local.iterdir())
 
 
 @pytest.mark.parametrize("variable", ["TRITON_CACHE_DIR", "TORCHINDUCTOR_CACHE_DIR", "VLLM_CACHE_ROOT"])
-def test_the_engine_is_pointed_at_the_local_layer_before_it_starts(variable):
+def test_the_engine_is_pointed_at_the_local_layer_before_it_starts(variable: str) -> None:
     """Static: the redirect has to happen in run_vllm_node before its exec, or the engine writes
     NFS directly again."""
     text = (REPO / "experiments" / "run_cluster.sh").read_text()
