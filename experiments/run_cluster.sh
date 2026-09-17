@@ -908,9 +908,16 @@ if [[ "${INFERENCE_SOURCE}" == "service" ]]; then
     # SAME endpoint names a server arm composes below, so the agent driver, the runners and the
     # claude CLI all keep reading one set of variables. The key is copied by INDIRECTION from the
     # variable the arm names: it never passes through python, this script's stdout, or any file.
+    # A free-only arm (INFERENCE_SERVICE_FREE_ONLY=1) stops HERE, before any node is used, unless the
+    # provider's own price list still shows its model free -- a stealth id can gain a price overnight.
+    python3 "${SCRIPT_DIR}/inference_service.py" --check-free || exit 1
     eval "$(python3 "${SCRIPT_DIR}/inference_service.py" --export)"
     VLLM_API_KEY="${!INFERENCE_KEY_ENV}"
     export INFERENCE_KEY_ENV INFERENCE_CLAUDE_KEY_VARIABLE VLLM_API_KEY
+    # Every model the claude CLI would otherwise choose by itself, pinned to the arm's model by the
+    # --export block (inference_service.CLAUDE_MODEL_PINS). Exported, or the agents never see them.
+    export ANTHROPIC_MODEL ANTHROPIC_SMALL_FAST_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL \
+        ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL CLAUDE_CODE_SUBAGENT_MODEL
 else
     VLLM_MASTER_HOST="${inference_nodes[0]}"
     VLLM_BASE_URL="http://${VLLM_MASTER_HOST}:${VLLM_PORT}/v1"

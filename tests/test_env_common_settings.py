@@ -46,6 +46,7 @@ LADDERS = {
     "fable51": "low medium high xhigh max",
     "gpt6astra": "low medium high xhigh max",
     "musespark": "low medium high xhigh max",
+    "unionalpha": "",
 }
 
 #: What the policy resolves each ladder to: xhigh where the ladder has it, else its top rung, else
@@ -58,6 +59,7 @@ RESOLVED = {
     "fable51": "xhigh",
     "gpt6astra": "xhigh",
     "musespark": "xhigh",
+    "unionalpha": "",
 }
 
 BASE_ENVS = sorted(EXPERIMENTS.glob(".env.base-*"))

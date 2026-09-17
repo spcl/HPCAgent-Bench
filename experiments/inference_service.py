@@ -71,7 +71,26 @@ ANTHROPIC_VERSION = "2023-06-01"
 RECORD_NAME = "inference.json"
 
 #: The example service arms that ship with the repo, as ``.env.base-<name>`` and a models.py block.
-EXAMPLE_ARMS = ("musespark", "fable51", "gpt6astra")
+EXAMPLE_ARMS = ("musespark", "fable51", "gpt6astra", "unionalpha")
+
+#: Every variable through which the claude CLI picks a model on its own: the small/fast model for
+#: its side requests (titles, summaries), the model each tier alias resolves to, and the subagent
+#: model. Unset, the CLI asks the endpoint for a Claude model by its own name. A self-served engine
+#: 404s that, but a router serving many models ANSWERS it -- with a model the arm never declared,
+#: and on OpenRouter one that is billed. A service arm therefore pins every one to its own model.
+CLAUDE_MODEL_PINS = (
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_SMALL_FAST_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+)
+
+#: ``INFERENCE_SERVICE_FREE_ONLY=1``: the arm may only run while the provider prices its model at
+#: zero. Checked against the provider's own listing at launch, not trusted from the arm env, because
+#: a free (e.g. stealth) model can gain a price or be replaced behind the same id at any time.
+FREE_ONLY_KEY = "INFERENCE_SERVICE_FREE_ONLY"
 
 #: The block's keys, all required. Spelled once so a missing one is named rather than read as "".
 REQUIRED = (
@@ -163,7 +182,9 @@ def launcher_env(service: Service) -> dict[str, str]:
     replica list exists to replace. VLLM_MASTER_HOST is emptied rather than left behind: no node
     serves this arm, and a stale hostname is one a probe would still try to reach.
     """
+    pins = {name: service.model for name in CLAUDE_MODEL_PINS} if service.api == API_ANTHROPIC else {}
     return {
+        **pins,
         "VLLM_MASTER_HOST": "",
         "VLLM_BASE_URL": service.base_url,
         "VLLM_REPLICA_URLS": service.base_url,
@@ -171,6 +192,55 @@ def launcher_env(service: Service) -> dict[str, str]:
         "INFERENCE_KEY_ENV": service.key_env,
         "INFERENCE_CLAUDE_KEY_VARIABLE": claude_key_variable(service),
     }
+
+
+def pricing_url(service: Service) -> str:
+    """The OpenRouter-style listing of the providers serving ``service.model`` and their prices."""
+    return f"{service.base_url.rstrip('/')}/models/{service.model}/endpoints"
+
+
+def not_free(listing: Mapping[str, object], model: str) -> str | None:
+    """Why ``listing`` (the body of :func:`pricing_url`) does not show ``model`` as free, or None.
+
+    Free means every endpoint that could serve a request prices EVERY metered unit at zero: a router
+    picks the provider per request, so one paid endpoint is enough to bill the arm. A listing with no
+    endpoints, or one naming a different model, proves nothing and is refused.
+    """
+    data = listing.get("data")
+    if not isinstance(data, dict) or data.get("id") != model:
+        return f"the provider's listing does not describe {model}"
+    endpoints = data.get("endpoints")
+    if not isinstance(endpoints, list) or not endpoints:
+        return f"the provider lists no endpoint serving {model}"
+    for endpoint in endpoints:
+        pricing = endpoint.get("pricing") if isinstance(endpoint, dict) else None
+        if not isinstance(pricing, dict) or not pricing:
+            return f"an endpoint for {model} publishes no pricing"
+        for unit, price in pricing.items():
+            if unit == "discount":
+                continue
+            try:
+                charged = float(price)
+            except (TypeError, ValueError):
+                return f"{model} prices {unit} as {price!r}, which is not a number"
+            if charged != 0.0:
+                name = endpoint.get("provider_name", "?")
+                return f"{model} is not free: {name} charges {price} per {unit}"
+    return None
+
+
+def check_free(service: Service, timeout: float = 30.0) -> None:
+    """Refuse the launch unless the provider currently lists ``service.model`` as free."""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(pricing_url(service), timeout=timeout) as response:
+            listing = json.load(response)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"cannot confirm {service.model} is free ({pricing_url(service)}): {exc}") from exc
+    reason = not_free(listing, service.model)
+    if reason is not None:
+        raise SystemExit(f"{FREE_ONLY_KEY}=1 and {reason}; refusing to launch")
 
 
 def shell_block(exported: Mapping[str, str]) -> str:
@@ -218,8 +288,13 @@ def record(run_dir: pathlib.Path, environ: Mapping[str, str]) -> dict[str, str]:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Resolve an arm's inference source.")
     parser.add_argument("--export", action="store_true", help="print the endpoint block for the launcher to eval")
+    parser.add_argument(
+        "--check-free", action="store_true", help=f"when the arm sets {FREE_ONLY_KEY}=1, fail unless its model is free"
+    )
     parser.add_argument("--record", type=pathlib.Path, help="write the run's inference provenance into this directory")
     args = parser.parse_args(argv)
+    if args.check_free and os.environ.get(FREE_ONLY_KEY, "").strip() == "1":
+        check_free(from_environ(os.environ))
     if args.record is not None:
         record(args.record, os.environ)
     if args.export:

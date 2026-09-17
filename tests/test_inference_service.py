@@ -463,7 +463,7 @@ def test_the_example_arms_match_the_model_table(service: types.ModuleType) -> No
             assert f"{key}={value}" in text, f"{key} in models.py no longer matches .env.base-{name}"
 
 
-@pytest.mark.parametrize("name", ["musespark", "fable51", "gpt6astra"])
+@pytest.mark.parametrize("name", ["musespark", "fable51", "gpt6astra", "unionalpha"])
 def test_every_example_arm_resolves_when_its_key_is_set(service: types.ModuleType, name: str) -> None:
     """Each shipped example must be a WORKING arm, not a template: reading its env plus the one
     variable it names has to produce a resolved service."""
@@ -502,3 +502,63 @@ def test_the_launcher_never_writes_the_key_value_into_the_run_tree() -> None:
     assert "os.environ/VLLM_API_KEY" in script
     assert 'JOB_ENV_FILE="${RUN_DIR}' not in script, "the env slice would persist in the run tree"
     assert "chmod 600" in script and 'rm -f "${JOB_ENV_FILE}"' in script
+
+
+def listing(model: str, *pricings: dict[str, str]) -> dict[str, object]:
+    """An OpenRouter ``/models/<id>/endpoints`` body, one endpoint per pricing."""
+    return {"data": {"id": model, "endpoints": [{"provider_name": f"p{i}", "pricing": dict(p)} for i, p in enumerate(pricings)]}}
+
+
+def test_a_model_priced_zero_on_every_endpoint_is_free(service: types.ModuleType) -> None:
+    body = listing("stealth/union-alpha", {"prompt": "0", "completion": "0", "discount": 0})
+    assert service.not_free(body, "stealth/union-alpha") is None
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        (listing("m", {"prompt": "0", "completion": "0"}, {"prompt": "0.000001", "completion": "0"}), "p1 charges"),
+        (listing("m", {"prompt": "0", "completion": "0", "request": "0.02"}), "per request"),
+        (listing("m"), "no endpoint"),
+        (listing("other", {"prompt": "0", "completion": "0"}), "does not describe m"),
+        (listing("m", {}), "no pricing"),
+        (listing("m", {"prompt": "free"}), "not a number"),
+    ],
+)
+def test_a_free_only_arm_refuses_any_listing_that_does_not_prove_the_model_free(
+    service: types.ModuleType, body: dict[str, object], reason: str
+) -> None:
+    """A router picks the provider per request, so ONE paid endpoint, one metered unit, or a listing
+    that proves nothing is enough to bill a key the user allowed only for a free model."""
+    got = service.not_free(body, "m")
+    assert got is not None and reason in got, got
+
+
+def test_every_model_the_claude_cli_picks_itself_is_pinned_to_the_arm_model(service: types.ModuleType) -> None:
+    """Unpinned, the CLI's side requests name a Claude model; a router answers that with a model the
+    arm never declared, which on OpenRouter is billed."""
+    text = (EXPERIMENTS / ".env.base-unionalpha").read_text(encoding="utf-8")
+    arm = dict(line.split("=", 1) for line in text.splitlines() if line and not line.startswith("#") and "=" in line)
+    arm = {key: value.strip('"') for key, value in arm.items()}
+    arm["OPENROUTER_API_KEY"] = SECRET
+    exported = service.launcher_env(service.from_environ(arm))
+    assert {name: exported.get(name) for name in service.CLAUDE_MODEL_PINS} == {
+        name: "stealth/union-alpha" for name in service.CLAUDE_MODEL_PINS
+    }
+
+
+def test_the_launcher_exports_every_pinned_model_variable_after_the_free_check(service: types.ModuleType) -> None:
+    """Static: an assigned-but-unexported pin never reaches the agents, and a check placed after the
+    export block would launch a paid model before refusing it."""
+    script = (EXPERIMENTS / "run_cluster.sh").read_text(encoding="utf-8")
+    branch = script[script.index('if [[ "${INFERENCE_SOURCE}" == "service" ]]; then') :]
+    branch = branch[: branch.index("else")]
+    assert branch.index("--check-free") < branch.index("--export)")
+    exports = " ".join(line for line in branch.replace("\\\n", " ").splitlines() if "export" in line)
+    for name in service.CLAUDE_MODEL_PINS:
+        assert name in exports, name
+
+
+def test_the_free_only_example_arm_declares_the_check(service: types.ModuleType) -> None:
+    text = (EXPERIMENTS / ".env.base-unionalpha").read_text(encoding="utf-8")
+    assert f"{service.FREE_ONLY_KEY}=1" in text.splitlines()

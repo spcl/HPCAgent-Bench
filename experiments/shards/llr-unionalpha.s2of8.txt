@@ -1,0 +1,5 @@
+fuse_move_ifs
+fuse_stencil_through_transient
+quasi_affine_reduce_odd
+scan_affine_decay
+scatter_accum_dup
