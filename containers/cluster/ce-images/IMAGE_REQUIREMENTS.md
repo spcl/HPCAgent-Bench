@@ -208,10 +208,10 @@ com.hooks.aws_ofi_nccl.enabled = "true"    # exits(0) unless this is exactly "tr
 com.hooks.aws_ofi_nccl.variant = "rocm6"   # REQUIRED in host mode; hard error if unset
 ```
 
-**The artifact bundle no longer exists (changed 2026-09-16).** It lived under
-`/capstor/store/cscs/cscs/public/containers/netstack/`, and CSCS decommissioned `/capstor` in the
-Sep 2026 migration. That prefix is a *hardcoded literal* in all three hooks, so no `version` or
-`name` can resolve there -- which is why both are now omitted rather than pinned.
+**The artifact bundle no longer exists.** It lived under
+`/capstor/store/cscs/cscs/public/containers/netstack/`, a *hardcoded literal* in all three hooks,
+so no `version` or `name` can resolve there -- which is why both are now omitted rather than
+pinned.
 
 A missing artifact does not fail the job. The hooks set `libfabric_host_path` and
 `plugin_host_path` to files that are not there, the bind-mounts silently do nothing, and RCCL
@@ -252,9 +252,9 @@ This replaced a self-built `aws-ofi-nccl` plugin in all three images. Two measur
 * **629822** -- `netstack.source = "host"` grafts host paths in, which is how a host `libcurl`
   needing glibc 2.38 reached an image with 2.35 and killed its whole OFI stack. The artifact is
   internally consistent (its own libc, libcurl, libcxi, libfabric); a graft is not.
-  **Superseded 2026-09-16**: the artifact is gone with `/capstor`, and the base image is now
-  glibc 2.39, so the graft this measured no longer skews. Kept because it records the exact
-  failure mode to watch for if the base image ever moves backwards.
+  **Superseded 2026-09-16**: the artifact is gone, and the base image is now glibc 2.39, so the
+  graft this measured no longer skews. Kept because it records the exact failure mode to watch
+  for if the base image ever moves backwards.
 
 Why the omission was invisible for so long: `com.hooks.aws_ofi_nccl.enabled` was **never set**, so
 that hook `exit(0)`d, RCCL found no plugin and fell back to its **TCP sockets** transport. A

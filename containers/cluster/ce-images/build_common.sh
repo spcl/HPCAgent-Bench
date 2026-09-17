@@ -111,14 +111,12 @@ ce_gpu_arch() {
 # user xattrs, so `overlay` and `fuse-overlayfs` fail on lsetxattr and `vfs` fails creating its
 # pivot dir under a subuid (all three measured).
 #
-# RE-VERIFIED 2026-09-16, after the /capstor -> /ritom migration, because the original measurement
-# was taken on the old Lustre scratch and the filesystem underneath has changed. setxattr of a
-# user.* attribute still returns ENOTSUP on all three, so the conclusion stands -- but the reason
-# for the scratch line is now different, and a reader checking "is this still true?" should know
-# the type changed:
-#     scratch   nfs      rejects (ENOTSUP)     <- was Lustre, is now VAST/NFS
-#     iopsstor  lustre   rejects (ENOTSUP)
-#     home      nfs      rejects (ENOTSUP) The base image can, because a `dir:` tree is
+# RE-VERIFIED 2026-09-16: setxattr of a user.* attribute still returns ENOTSUP on all three,
+# whatever filesystem $SCRATCH currently points at (see scripts/cache_env.sh), so the
+# conclusion stands:
+#     scratch   rejects (ENOTSUP)
+#     iopsstor  rejects (ENOTSUP)
+#     home      rejects (ENOTSUP) The base image can, because a `dir:` tree is
 # plain files -- and it is the part worth caching, a 30-52 GB pull per job on a store that is
 # wiped every time because the nodes are diskless and it lives in RAM.
 #

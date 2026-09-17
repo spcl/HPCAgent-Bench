@@ -120,7 +120,7 @@ RUN apt-get update \
 # driver CSCS upgrades without us; a stub keeps the link correct at build time and leaves the
 # implementation correct at run time. LIBFABRIC_REF is v2.6.0. Until 2026-09-16 that matched the
 # netstack artifact (gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0) whose libfabric is what actually
-# loaded. CSCS decommissioned /capstor that day, the artifact is gone, and every EDF now sets
+# loaded. The netstack artifact under /capstor/store is gone, and every EDF now sets
 # com.hooks.netstack.source=host, so what actually loads is the node's own
 # /opt/cray/libfabric/host/lib64/libfabric.so.1 -- a root-owned symlink, currently -> 2.3.1.
 # LIBFABRIC_REF stays v2.6.0 as the compile-time header/link target; it no longer matches the
@@ -1444,8 +1444,8 @@ WORKDIR /work
 # artifact's own stamp, and lsof/mountinfo show it as a lustre bind from
 # a CSCS-managed artifact store. CONFIRMED 2026-09-16 by reading the hooks: the prefix was
 # /capstor/store/cscs/cscs/public/containers/netstack/$(uname -m)/<ver>/<name>, hardcoded in
-# 10-netstack.sh, 89-libfabric-cxi.sh and 90-aws-ofi-nccl.sh alike. /capstor is now
-# decommissioned, so that store is GONE and the EDFs select netstack.source="host" instead,
+# 10-netstack.sh, 89-libfabric-cxi.sh and 90-aws-ofi-nccl.sh alike. That store no longer exists,
+# so the EDFs select netstack.source="host" instead,
 # which binds /opt/cray/libfabric/host/lib64/libfabric.so.1 and
 # /opt/cscs/aws-ofi-ccl-plugin/rocm6/librccl-net.so from the node. Refusing it forbade the
 # hook its own mount point.

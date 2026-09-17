@@ -564,8 +564,8 @@ RUN set -eux; \
 # artifact's own stamp, and lsof/mountinfo show it as a lustre bind from
 # a CSCS-managed artifact store. CONFIRMED 2026-09-16 by reading the hooks: the prefix was
 # /capstor/store/cscs/cscs/public/containers/netstack/$(uname -m)/<ver>/<name>, hardcoded in
-# 10-netstack.sh, 89-libfabric-cxi.sh and 90-aws-ofi-nccl.sh alike. /capstor is now
-# decommissioned, so that store is GONE and the EDFs select netstack.source="host" instead,
+# 10-netstack.sh, 89-libfabric-cxi.sh and 90-aws-ofi-nccl.sh alike. That store no longer exists,
+# so the EDFs select netstack.source="host" instead,
 # which binds /opt/cray/libfabric/host/lib64/libfabric.so.1 and
 # /opt/cscs/aws-ofi-ccl-plugin/rocm6/librccl-net.so from the node. Refusing it forbade the
 # hook its own mount point.

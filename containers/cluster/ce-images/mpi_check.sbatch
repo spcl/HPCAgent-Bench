@@ -56,8 +56,8 @@ workdir = "${REPO}"
 
 [annotations]
 com.hooks.netstack.source = "host"
-# The artifact bundle lived under /capstor/store, which CSCS decommissioned in Sep 2026;
-# the path is hardcoded in the hooks, so no version or name can resolve there any more.
+# The hooks hardcode the artifact path at /capstor/store; that tree does not exist,
+# so no version or name resolves there.
 # The hooks do NOT fail on a missing artifact -- they point libfabric and the RCCL plugin
 # at files that are not there, the bind-mounts quietly do nothing, and RCCL drops from
 # CXI to TCP sockets. The job still finishes; it is just far slower, and it reads as a

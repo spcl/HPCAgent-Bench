@@ -36,19 +36,17 @@ ulimit -c 0
 
 SCRATCH="${SCRATCH:?set SCRATCH}"
 # sbatch exports the SUBMITTING shell's environment (--export=ALL), so a stale $SCRATCH -- one
-# captured before the /capstor -> /ritom migration, e.g. by a long-lived tmux or VS Code session --
-# rides into the job and every path derives from a filesystem that is no longer mounted. The
-# failure was "mkdir: cannot create directory '/capstor/scratch/cscs': Permission denied", which
-# names the symptom and not the cause. Check it here, once, and say what is actually wrong.
+# captured by a long-lived tmux or VS Code session before scratch moved -- rides into the job
+# and every path derives from a filesystem that is no longer mounted. Check it here, once, and
+# say what is actually wrong rather than leave a bare mkdir failure as the only clue.
 if [ ! -d "${SCRATCH}" ] || [ ! -w "${SCRATCH}" ]; then
     echo "SCRATCH=${SCRATCH} is not an existing writable directory." >&2
-    echo "  If it names /capstor, your shell predates the migration: re-login, or submit with" >&2
-    echo "     SCRATCH=/ritom/scratch/cscs/\${USER}/\$(uname -m) sbatch ..." >&2
+    echo "  Re-login for a fresh shell, or export the current SCRATCH yourself before submitting." >&2
     exit 2
 fi
-# The site enroot.conf still points ENROOT_CACHE_PATH at the decommissioned /capstor, so
-# enroot cannot even print its version without this. Set here rather than relying on a
-# login dotfile: a batch script must not depend on the submitter's shell.
+# The site enroot.conf default for ENROOT_CACHE_PATH does not work here, so enroot cannot even
+# print its version without this. Set here rather than relying on a login dotfile: a batch
+# script must not depend on the submitter's shell.
 export ENROOT_CACHE_PATH="${ENROOT_CACHE_PATH:-${SCRATCH}/.enroot}"
 mkdir -p "${ENROOT_CACHE_PATH}"
 # WHERE THIS SCRIPT'S SIBLINGS LIVE. Not derivable from $0 or $BASH_SOURCE: sbatch COPIES the

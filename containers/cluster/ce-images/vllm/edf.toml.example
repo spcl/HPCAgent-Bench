@@ -5,8 +5,11 @@
 image = "${SCRATCH}/ce-images/PLACEHOLDER.sqsh"
 
 mounts = [
-  "/ritom:/ritom",
-  "/iopsstor:/iopsstor"
+  # Fill these two in by hand: run `. scripts/cache_env.sh; hpcagent_bench_edf_mounts` in the
+  # repo and paste its output here -- one "<fs>:<fs>" entry per filesystem under $SCRATCH and
+  # $FAST_SCRATCH, e.g. "/capstor:/capstor", "/iopsstor:/iopsstor".
+  "<fs-root-of-$SCRATCH>:<fs-root-of-$SCRATCH>",
+  "<fs-root-of-$FAST_SCRATCH>:<fs-root-of-$FAST_SCRATCH>"
 ]
 
 workdir = "${SCRATCH}"
@@ -31,8 +34,8 @@ writable = true
 # Version and name are PINNED rather than left to the hook defaults, so a CSCS-side bump cannot
 # change the fabric under a running campaign.
 com.hooks.netstack.source = "host"
-# The artifact bundle lived under /capstor/store, which CSCS decommissioned in Sep 2026;
-# the path is hardcoded in the hooks, so no version or name can resolve there any more.
+# The hooks hardcode the artifact path at /capstor/store; that tree does not exist,
+# so no version or name resolves there.
 # The hooks do NOT fail on a missing artifact -- they point libfabric and the RCCL plugin
 # at files that are not there, the bind-mounts quietly do nothing, and RCCL drops from
 # CXI to TCP sockets. The job still finishes; it is just far slower, and it reads as a

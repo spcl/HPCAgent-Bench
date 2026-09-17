@@ -22,10 +22,13 @@ ulimit -c 0
 
 SCRATCH="${SCRATCH:?set SCRATCH}"
 export RUN_DIR="${SCRATCH}/kimi-smoke/${SLURM_JOB_ID}"
-FAST_SCRATCH="/iopsstor/scratch/cscs/${USER}"
-[[ -d "${FAST_SCRATCH}" ]] || FAST_SCRATCH="${SCRATCH}"
-export HF_HOME="${HF_HOME:-${FAST_SCRATCH}/hf}"
 SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
+# Under sbatch BASH_SOURCE is the spooled copy; the checkout is where the job was submitted from.
+REPO="${REPO:-$(git -C "${SUBMIT_DIR}" rev-parse --show-toplevel 2>/dev/null || true)}"
+[[ -n "${REPO}" && -f "${REPO}/scripts/cache_env.sh" ]] || { echo "FAIL: no checkout: set REPO or submit from inside one" >&2; exit 1; }
+CALLER_HF_HOME="${HF_HOME:-}"
+. "${REPO}/scripts/cache_env.sh"
+export HF_HOME="${CALLER_HF_HOME:-${FAST_SCRATCH}/hf}"
 PG_PATCH_REL="containers/cluster/ce-images/inference/external-eager-pg-patch"
 for cand in "${PG_PATCH_DIR:-}" "${SUBMIT_DIR}/external-eager-pg-patch" "${SUBMIT_DIR}/${PG_PATCH_REL}"; do
     if [[ -n "${cand}" && -f "${cand}/sitecustomize.py" ]]; then

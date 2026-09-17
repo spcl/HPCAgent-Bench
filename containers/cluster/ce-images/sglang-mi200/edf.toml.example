@@ -4,8 +4,11 @@
 image = "${SCRATCH}/ce-images/hpcagent-bench-sglang-mi200.sqsh"
 
 mounts = [
-  "/ritom:/ritom",
-  "/iopsstor:/iopsstor"
+  # Fill these two in by hand: run `. scripts/cache_env.sh; hpcagent_bench_edf_mounts` in the
+  # repo and paste its output here -- one "<fs>:<fs>" entry per filesystem under $SCRATCH and
+  # $FAST_SCRATCH, e.g. "/capstor:/capstor", "/iopsstor:/iopsstor".
+  "<fs-root-of-$SCRATCH>:<fs-root-of-$SCRATCH>",
+  "<fs-root-of-$FAST_SCRATCH>:<fs-root-of-$FAST_SCRATCH>"
 ]
 
 workdir = "${SCRATCH}"
@@ -45,8 +48,8 @@ NCCL_DEBUG_SUBSYS = "INIT,NET"
 # netstack: the CSCS artifact (libfabric, libcxi, RCCL plugin); cxi: provider and /dev/cxi*;
 # aws_ofi_nccl: the RCCL net plugin. Version and name pinned so a CSCS bump cannot move the fabric.
 com.hooks.netstack.source = "host"
-# The artifact bundle lived under /capstor/store, which CSCS decommissioned in Sep 2026;
-# the path is hardcoded in the hooks, so no version or name can resolve there any more.
+# The hooks hardcode the artifact path at /capstor/store; that tree does not exist,
+# so no version or name resolves there.
 # The hooks do NOT fail on a missing artifact -- they point libfabric and the RCCL plugin
 # at files that are not there, the bind-mounts quietly do nothing, and RCCL drops from
 # CXI to TCP sockets. The job still finishes; it is just far slower, and it reads as a

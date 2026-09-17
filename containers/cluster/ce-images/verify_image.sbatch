@@ -36,6 +36,9 @@ PROFILE="${PROFILE:-judge-agent-amd}"
 REPO="${REPO:-${S}/hpcagent-bench}"
 test -f "${IMAGE}"
 
+# hpcagent_bench_edf_mounts below: the bind mounts, derived from SCRATCH/FAST_SCRATCH.
+. "${REPO}/scripts/cache_env.sh"
+
 EDF="${S}/.tmp/verify-${SLURM_JOB_ID}.toml"
 mkdir -p "$(dirname "${EDF}")"
 # PATH is declared, not inherited, for the same reason the real EDF declares it: the CE does not
@@ -81,13 +84,13 @@ esac
 # image for its own missing configuration.
 cat > "${EDF}" <<TOML
 image = "${IMAGE}"
-mounts = ["/ritom/:/ritom/", "/iopsstor/:/iopsstor/"${ce_agent_mount}]
+mounts = [$(hpcagent_bench_edf_mounts)${ce_agent_mount}]
 workdir = "/"
 
 [annotations]
 com.hooks.netstack.source = "host"
-# The artifact bundle lived under /capstor/store, which CSCS decommissioned in Sep 2026;
-# the path is hardcoded in the hooks, so no version or name can resolve there any more.
+# The hooks hardcode the artifact path at /capstor/store; that tree does not exist,
+# so no version or name resolves there.
 # The hooks do NOT fail on a missing artifact -- they point libfabric and the RCCL plugin
 # at files that are not there, the bind-mounts quietly do nothing, and RCCL drops from
 # CXI to TCP sockets. The job still finishes; it is just far slower, and it reads as a

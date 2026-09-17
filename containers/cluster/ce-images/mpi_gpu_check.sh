@@ -21,7 +21,7 @@
 #
 # All of libfabric, libcxi and librccl-net come from the HOST as of 2026-09-16 (com.hooks.netstack.
 # source=host, com.hooks.aws_ofi_nccl.variant=rocm6; the pinned CSCS netstack artifact under
-# /capstor is decommissioned), installed by the enroot hooks the EDF enables. The image ships NONE
+# /capstor/store is gone), installed by the enroot hooks the EDF enables. The image ships NONE
 # of them -- a build gate fails if any survives -- so a missing annotation shows up here as an
 # unresolvable libmpi.so, not as silence.
 #

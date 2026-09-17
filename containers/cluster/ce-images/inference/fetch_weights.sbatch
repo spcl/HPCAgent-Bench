@@ -31,9 +31,11 @@ set -Eeuo pipefail
 ulimit -c 0
 
 SCRATCH="${SCRATCH:?set SCRATCH}"
-FAST_SCRATCH="${FAST_SCRATCH:-/iopsstor/scratch/cscs/${USER}}"
-[ -d "${FAST_SCRATCH}" ] || FAST_SCRATCH="${SCRATCH}"
-export HF_HOME="${HF_HOME:-${FAST_SCRATCH}/hf}"
+REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2>/dev/null || true)}"
+[[ -n "${REPO}" && -f "${REPO}/scripts/cache_env.sh" ]] || { echo "FAIL: no checkout: set REPO or submit from inside one" >&2; exit 1; }
+CALLER_HF_HOME="${HF_HOME:-}"
+. "${REPO}/scripts/cache_env.sh"
+[[ -n "${CALLER_HF_HOME}" ]] || export HF_HOME="${FAST_SCRATCH}/hf"
 EDF="${EDF:-${HOME}/.edf/hpcagent-bench-sglang-mi300-latest.toml}"
 AUDIT_ONLY="${AUDIT_ONLY:-0}"
 

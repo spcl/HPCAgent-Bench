@@ -54,7 +54,7 @@ MODELS="zai-org/GLM-5.3" sbatch fetch_weights.sbatch
 AUDIT_ONLY=1 sbatch --time=00:20:00 fetch_weights.sbatch
 
 # somewhere else entirely, e.g. to test without touching the real tree
-HF_HOME=/iopsstor/scratch/cscs/$USER/hf-test MODELS="Qwen/Qwen2.5-Coder-7B-Instruct" \
+HF_HOME=$SCRATCH/hf-test MODELS="Qwen/Qwen2.5-Coder-7B-Instruct" \
     sbatch fetch_weights.sbatch
 ```
 
@@ -73,7 +73,7 @@ A healthy run ends with a per-model line and a verdict:
 === zai-org/GLM-5.3
   blobs>1G=141  narrow=0  restriped=0  STILL NARROW=0
   OK: every blob >1G is stripe_count >= 16
-WEIGHTS READY: downloaded and wide-striped under /iopsstor/scratch/cscs/<user>/hf
+WEIGHTS READY: downloaded and wide-striped under $HF_HOME
 ```
 
 `STILL NARROW` above zero, or `no blobs over 1G found`, fails the job -- the second catches a
@@ -340,8 +340,8 @@ never transport** -- the same sum comes back over the `tcp` provider, several ti
 every other assertion still green. That mistake was made here once and reported as "MPI is already
 reaching Slingshot".
 
-All of libfabric, libcxi and `librccl-net.so` come from the **host** as of 2026-09-16: CSCS
-decommissioned `/capstor`, where the old netstack artifact bundle lived, so every EDF now sets
+All of libfabric, libcxi and `librccl-net.so` come from the **host** as of 2026-09-16: the old
+netstack artifact bundle under `/capstor/store` is gone, so every EDF now sets
 `com.hooks.netstack.source = "host"` plus `com.hooks.aws_ofi_nccl.variant = "rocm6"` (the variant
 is required in host mode -- the hook calls `common::err` without it), and the EDF must still carry
 all five hook annotations. The images ship none of the three and a build gate refuses any that
