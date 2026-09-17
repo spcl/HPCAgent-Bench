@@ -58,6 +58,9 @@ SUBMIT_INPUTS = (
     "record_identity.sh",
     ".env.llrbase-qwen38-c",
     f"kernels-{TAG}.txt",
+    # the packet gate asks harnesses.py which harness is handed a prompt; effort.py is its import
+    "harnesses.py",
+    "effort.py",
 )
 
 #: Knobs a developer shell may export. Cleared, so each run sees only what its test sets.
@@ -261,6 +264,36 @@ def test_an_unknown_packet_is_refused_before_any_file_is_written(tmp_path: pathl
     assert not list((root / "experiments").glob(f".env.{TAG}-*"))
 
 
+def test_every_harness_of_the_wave_declares_a_packet_delivery_channel(tmp_path: pathlib.Path) -> None:
+    """A harness nothing delivers a packet to would record the treatment and run the control's words.
+
+    claude, miniswe and openhands read the driver's prompt.txt, which carries the method text and a
+    path per staged page; optimas renders its own prompt and is handed the packet inlined instead.
+    The launcher refuses a packet on a harness with neither, so this is the fact that gate rests on.
+    """
+    sys.path.insert(0, str(EXPERIMENTS))
+    try:
+        import harnesses
+    finally:
+        sys.path.remove(str(EXPERIMENTS))
+    for harness in HARNESSES:
+        assert harnesses.packet_delivery(harness), f"{harness} has no packet delivery channel"
+    assert harnesses.packet_delivery("optimas") == harnesses.PACKET_FILE_DELIVERY
+    assert harnesses.packet_delivery("nosuchharness") == ""
+
+
+@pytest.mark.parametrize("harness", HARNESSES)
+def test_a_packet_arm_is_built_for_every_harness_of_the_wave(tmp_path: pathlib.Path, harness: str) -> None:
+    """Each harness has a delivery channel, so each can carry a method packet. The gate exists for a
+    harness that has none, not to refuse packets in general."""
+    root = submit_tree(tmp_path)
+    result = run_submit(
+        root, HARNESSES=f"{harness}+autokernel", KERNELS="tsvc_2_s235", EXPERIMENT="gate", RECORD_EXPERIMENT="gate"
+    )
+    assert result.returncode == 0, result.stderr
+    assert env_dict(root / "experiments" / f".env.gate-qwen38-{harness}-autokernel")["AGENT_PACKET"] == "autokernel"
+
+
 def test_every_arm_carries_the_shared_budget_and_sizing(full: pathlib.Path) -> None:
     """Multi submission with its policy text, a 4 h episode, the base token cap, 2x30 agents and
     judges sized by judge_nodes.py (one rank per 5 agents), on the tag's problems file and record experiment."""
@@ -272,7 +305,10 @@ def test_every_arm_carries_the_shared_budget_and_sizing(full: pathlib.Path) -> N
     assert env["AGENT_MAX_TOKENS"] == base["AGENT_MAX_TOKENS"]
     assert (env["AGENTS_PER_NODE"], env["AGENT_NODES"]) == ("30", "2")
     agents = len((full / "experiments" / env["PROBLEMS_FILE"]).read_text().splitlines())
-    assert int(env["JUDGE_NODES"]) == math.ceil(agents / 20), (env["JUDGE_NODES"], agents)  # one judge rank per 5 agents, 4 a node
+    assert int(env["JUDGE_NODES"]) == math.ceil(agents / 20), (
+        env["JUDGE_NODES"],
+        agents,
+    )  # one judge rank per 5 agents, 4 a node
     assert env["PROBLEMS_FILE"] == f"problems-{TAG}.jsonl"
     assert env["HPCAGENT_BENCH_RECORD_EXPERIMENT"] == TAG
     assert "COLOCATE" not in env
@@ -405,7 +441,11 @@ def cluster_tree(root: pathlib.Path, nodes: dict[str, str]) -> pathlib.Path:
     stub(root / "bin", "lfs", "exit 1")
     stub(root / "bin", "lscpu", LSCPU)
     (root / "edf").mkdir()
-    for name in ("hpcagent-bench-sglang-mi300-latest", "hpcagent-bench-agent-mi300-latest", "hpcagent-bench-judge-mi300-latest"):
+    for name in (
+        "hpcagent-bench-sglang-mi300-latest",
+        "hpcagent-bench-agent-mi300-latest",
+        "hpcagent-bench-judge-mi300-latest",
+    ):
         (root / "edf" / f"{name}.toml").write_text(
             'image = "stub"\nmounts = [\n    "/stub:/stub",\n]\nworkdir = "/stub"\n'
         )

@@ -63,6 +63,43 @@ page a packet names, and `pyproject.toml` ships `skills/*/SKILL.md` and `skills/
 python -m pytest -q --maxfail=10 tests/test_skill_content.py tests/test_prompt_skills.py tests/test_make_problems.py
 ```
 
+### Authoring checklist
+
+Anthropic's own skill format is what a page here is written in (`skills/<name>/SKILL.md`, YAML
+frontmatter plus a markdown body), so its authoring guidance applies -- with three differences that
+come from how a page is DELIVERED in this repo. Keep those three in mind and the rest follows.
+
+**What is different here.**
+
+1. *No `available_skills` list, so `description` is not the trigger.* Claude Code picks a skill by
+   reading descriptions and deciding. Nothing here does: the packet decides the page set before the
+   run starts, and the agent is handed one trigger line per page. That is what the separate `when:`
+   field is for. Write the CONDITION in `when` ("you write ANY C for this task") and the CONTENTS in
+   `description`; a page with a `when` that reads like a summary gets a bullet nobody acts on.
+2. *A page is staged as ONE flat file.* `--stage-skills` copies `skills/<name>/SKILL.md` to
+   `<shared>/skills/<name>.md` and nothing else, so `references/`, `scripts/` and `assets/` beside
+   the page do NOT reach the agent -- progressive disclosure through bundled resources is not
+   available. A file the reader must open belongs in `PAGE_COMPANIONS` (`make_problems.py`), and a
+   script beside the page is repo-side tooling the page may describe but never tells the agent to
+   run (`opt-reports/loop_report.py`; `tests/test_skill_packet_leaks.py` holds that line).
+3. *The body is the only budget.* With no second level to defer to, the page IS the whole
+   disclosure. Anthropic's "keep SKILL.md under 500 lines" is a ceiling here, not a guideline: at
+   the top of the range (`profiling`, 442 lines) the page costs more than most kernels are worth.
+   Split by subject into a second page with its own trigger rather than growing one.
+
+**What is the same, and still worth checking.**
+
+- Imperative voice, and say WHY. A rule the reader understands survives a case the page did not
+  foresee; a bare MUST does not. The strongest pages here are the ones that name the failure
+  (`lang-c`: "Claiming alignment on an ABI pointer ... is UB and SIGSEGVs at vector width").
+- Lead with the expensive mistakes, not with background. The reader arrives mid-task.
+- One page, one subject. `lang-<x>` is the loop and the language surface; `openmp-<x>` is the
+  directive spellings. A page that answers both is a page the index cannot point at precisely.
+- Quote a constant from code only with a cross-check in `tests/test_skill_content.py`. A page that
+  repeats a build flag is a second source for it, and the flag moves.
+- ASCII only, no trailing whitespace, `description` under 200 characters, directory name equal to
+  the frontmatter `name`. All four are enforced by `tests/test_skill_content.py`.
+
 ## B. Agent tool
 
 | File | Change |
