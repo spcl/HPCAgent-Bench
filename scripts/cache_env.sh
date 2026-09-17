@@ -37,8 +37,13 @@ export FAST_SCRATCH HPCAGENT_BENCH_CACHE
 export HF_HOME="${HF_HOME:-${HPCAGENT_BENCH_CACHE}/hf}"
 
 # JIT build artefacts. run_cluster.sh appends /${INFERENCE_CE_ENV} and derives the seven knobs.
-# Falls back to FAST_SCRATCH's guess so env.sh and the header hook source cleanly without SCRATCH.
-export JIT_CACHE_ROOT="${JIT_CACHE_ROOT:-${SCRATCH:-${FAST_SCRATCH}}/.hpcagentbench-cache}"
+# No fallback: an unset SCRATCH aborts here instead of landing caches somewhere no later job looks.
+# A caller with no scratch (the pre-commit hooks, via scripts/run_hook.sh) passes JIT_CACHE_ROOT.
+if [[ -z "${JIT_CACHE_ROOT:-}" ]]; then
+    : "${SCRATCH:?set SCRATCH (the general scratch root) or pass JIT_CACHE_ROOT explicitly}"
+    JIT_CACHE_ROOT="${SCRATCH}/.hpcagentbench-cache"
+fi
+export JIT_CACHE_ROOT
 
 # Prerendered Canonical Parallel Form. Not a JIT artefact: it is device-independent text, reused
 # across arms and engines, so it is neither keyed by EDF nor purged with the JIT tree.
@@ -72,6 +77,29 @@ export HPCAGENT_BENCH_RUNS_ROOT="${HPCAGENT_BENCH_RUNS_ROOT:-${JIT_CACHE_ROOT}/r
 # hardcoded name, so a second deterministic-framework family can add its own file here without
 # renaming this one.
 export HPCAGENT_BENCH_RESULTS_DIR="${HPCAGENT_BENCH_RESULTS_DIR:-${JIT_CACHE_ROOT}/results}"
+
+# Container bind mounts, DERIVED from the roots above: the top-level filesystem of SCRATCH and of
+# FAST_SCRATCH, deduplicated. An EDF writer mounts these instead of naming a filesystem, so moving
+# scratch (/ritom <-> /capstor) changes $SCRATCH and nothing else.
+hpcagent_bench_fs_root() {  # hpcagent_bench_fs_root <absolute path> -> /<first component>
+    local rest=${1#/}
+    printf '/%s\n' "${rest%%/*}"
+}
+HPCAGENT_BENCH_DATA_ROOTS=""
+for root in "${SCRATCH:-}" "${FAST_SCRATCH}"; do
+    [[ -n "${root}" ]] || continue
+    fs=$(hpcagent_bench_fs_root "${root}")
+    [[ " ${HPCAGENT_BENCH_DATA_ROOTS} " == *" ${fs} "* ]] || HPCAGENT_BENCH_DATA_ROOTS="${HPCAGENT_BENCH_DATA_ROOTS:+${HPCAGENT_BENCH_DATA_ROOTS} }${fs}"
+done
+unset root fs
+export HPCAGENT_BENCH_DATA_ROOTS
+hpcagent_bench_edf_mounts() {  # TOML array items for HPCAGENT_BENCH_DATA_ROOTS: "/a/:/a/", "/b/:/b/"
+    local out="" fs
+    for fs in ${HPCAGENT_BENCH_DATA_ROOTS}; do
+        out="${out:+${out}, }\"${fs}/:${fs}/\""
+    done
+    printf '%s\n' "${out}"
+}
 
 hpcagent_bench_cache_mkdirs() {
     mkdir -p "${HF_HOME}" "${JIT_CACHE_ROOT}" "${HPCAGENT_BENCH_CPF_PRERENDER_DIR}" "${HPCAGENT_BENCH_TOOLS_DIR}" \
