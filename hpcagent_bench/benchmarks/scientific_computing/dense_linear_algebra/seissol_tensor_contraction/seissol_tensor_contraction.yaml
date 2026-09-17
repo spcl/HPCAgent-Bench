@@ -73,3 +73,4 @@ output_args:
 - Q
 experiment_tags:
 - seissol
+- scicomp-focus40

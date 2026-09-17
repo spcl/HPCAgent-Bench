@@ -39,9 +39,9 @@
 # whole environment (PYTHONPATH, PYTHONHASHSEED, OPENBLAS_DIR) itself rather than trusting anything
 # to have crossed the container boundary on its own.
 #
-# CONTAINER_RUNTIME is picked by scripts/cscs/container_runtime.sh: `srun --environment=` (pyxis)
-# when the site's enroot.conf is sane, scripts/cscs/enroot_srun.sh's direct `enroot start` while
-# pyxis stays broken here. CPF_LAUNCH overrides either way, for tests and for a forced fallback.
+# CONTAINER_RUNTIME is picked by scripts/cscs/container_runtime.sh: scripts/cscs/enroot_srun.sh's
+# direct `enroot start` unless CONTAINER_RUNTIME=ce asks for `srun --environment=` (pyxis).
+# CPF_LAUNCH overrides either way, for tests and for a forced fallback.
 set -euo pipefail
 ulimit -c 0
 

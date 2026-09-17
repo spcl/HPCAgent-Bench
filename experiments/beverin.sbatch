@@ -66,9 +66,9 @@ fi
 export CLUSTER_ENV_FILE="${ENV_FILE}"
 export HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 
-# How containers start on THIS system, probed rather than set: `ce` (srun --environment) while pyxis
-# works, `enroot` while the site enroot.conf names /capstor, which does not exist here. An explicit
-# CONTAINER_RUNTIME (submit environment or the arm's .env, sourced above) wins.
+# Container launcher: `enroot` unless CONTAINER_RUNTIME is set (submit environment or the arm's .env,
+# sourced above). Under `ce` the EDF comm hooks break single-node inference; see
+# scripts/cscs/container_runtime.sh and experiments/README.md "Container runtimes".
 CONTAINER_RUNTIME="$("${HPCAGENT_BENCH_REPO}/scripts/cscs/container_runtime.sh")" || exit 2
 export CONTAINER_RUNTIME
 echo "container runtime: ${CONTAINER_RUNTIME}"

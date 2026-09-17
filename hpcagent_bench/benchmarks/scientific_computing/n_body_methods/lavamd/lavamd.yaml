@@ -60,3 +60,4 @@ precisions:
 - fp64
 experiment_tags:
 - lavamd
+- scicomp-focus40

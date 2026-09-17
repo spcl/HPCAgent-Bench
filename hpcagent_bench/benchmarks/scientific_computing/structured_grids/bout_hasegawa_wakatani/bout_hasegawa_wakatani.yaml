@@ -62,3 +62,5 @@ init:
 output_args:
 - ddt_n
 - ddt_vort
+experiment_tags:
+- scicomp-focus40

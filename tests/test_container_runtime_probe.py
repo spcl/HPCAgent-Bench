@@ -1,14 +1,12 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""scripts/cscs/container_runtime.sh: pyxis (`ce`) or the enroot fallback, decided by whether pyxis
-could create its cache directory.
+"""scripts/cscs/container_runtime.sh: `enroot` unless the caller names a runtime.
 
-The first version asked whether the cache path's filesystem ROOT exists. On compute nodes /capstor
-survives as an empty root-owned mount point, so the probe answered `ce` and job 640052 died in pyxis
-with "mkdir: cannot create directory '/capstor/scratch/cscs'" before any role started.
+`ce` applies the EDF comm hooks to every step, and single-node inference then dies at RCCL init
+("Failed to initialize any NET plugin", jobs 640160-640181). The chooser must therefore default to
+`enroot` whatever the site's pyxis state is, and an explicit CONTAINER_RUNTIME must still win.
 """
 
-import os
 import pathlib
 import subprocess
 
@@ -16,35 +14,26 @@ import pytest
 
 from hpcagent_bench import paths
 
-PROBE = paths.ROOT / "scripts" / "cscs" / "container_runtime.sh"
+CHOOSER = paths.ROOT / "scripts" / "cscs" / "container_runtime.sh"
 
 
-def _probe(tmp_path: pathlib.Path, cache_line: str, **env: str) -> str:
+def choose(tmp_path: pathlib.Path, **env: str) -> str:
+    """Run the chooser in a minimal environment with a writable site enroot cache (pyxis usable)."""
     conf = tmp_path / "enroot.conf"
-    conf.write_text(f"ENROOT_RUNTIME_PATH         /dev/shm/$(id -nu)/enrootrun\n{cache_line}\n")
+    conf.write_text(f"ENROOT_CACHE_PATH {tmp_path}/scratch/$(id -nu)/.enroot\n")
     base = {"PATH": "/usr/bin:/bin", "SITE_ENROOT_CONF": str(conf)}
-    result = subprocess.run(["bash", str(PROBE)], env={**base, **env}, capture_output=True, text=True, check=True)
+    result = subprocess.run(["bash", str(CHOOSER)], env={**base, **env}, capture_output=True, text=True, check=True)
     return result.stdout.strip()
 
 
-def test_a_cache_under_a_non_writable_mount_point_means_enroot(tmp_path: pathlib.Path) -> None:
-    mount = tmp_path / "capstor" / "scratch"
-    mount.mkdir(parents=True)
-    mount.chmod(0o555)
-    try:
-        assert _probe(tmp_path, f"ENROOT_CACHE_PATH {mount}/cscs/$(id -nu)/.enroot") == "enroot"
-    finally:
-        mount.chmod(0o755)
+def test_the_default_is_enroot_even_when_pyxis_could_start_containers(tmp_path: pathlib.Path) -> None:
+    assert choose(tmp_path) == "enroot"
 
 
-def test_a_cache_on_a_filesystem_that_is_gone_means_enroot(tmp_path: pathlib.Path) -> None:
-    assert _probe(tmp_path, "ENROOT_CACHE_PATH /no-such-filesystem-here/scratch/$(id -nu)/.enroot") == "enroot"
+@pytest.mark.parametrize("runtime", ["ce", "enroot", "apptainer"])
+def test_an_explicit_runtime_always_wins(tmp_path: pathlib.Path, runtime: str) -> None:
+    assert choose(tmp_path, CONTAINER_RUNTIME=runtime) == runtime
 
 
-def test_a_cache_the_user_can_create_means_pyxis(tmp_path: pathlib.Path) -> None:
-    """The username is expanded from the site's literal `$(id -nu)`, space and all."""
-    assert _probe(tmp_path, f"ENROOT_CACHE_PATH   {tmp_path}/scratch/$(id -nu)/.enroot") == "ce"
-
-
-def test_an_explicit_runtime_always_wins(tmp_path: pathlib.Path) -> None:
-    assert _probe(tmp_path, "ENROOT_CACHE_PATH /no-such-filesystem-here/x", CONTAINER_RUNTIME="ce") == "ce"
+def test_an_empty_runtime_counts_as_unset(tmp_path: pathlib.Path) -> None:
+    assert choose(tmp_path, CONTAINER_RUNTIME="") == "enroot"

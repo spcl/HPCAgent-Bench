@@ -77,8 +77,8 @@ CE_EDF="${CE_EDF:-${HOME}/.edf}"
 [[ "${CE_EDF}" == *.toml ]] || CE_EDF="${CE_EDF}/hpcagent-bench-agent-mi300-latest.toml"
 [[ -f "${CE_EDF}" ]] || { echo "FATAL: prepare_job.sh: no EDF at ${CE_EDF}" >&2; exit 2; }
 # One spelling of "run this in the CE", used by every step below that needs the image.
-# CONTAINER_RUNTIME=enroot starts the same EDF through scripts/cscs/enroot_srun.sh while pyxis is
-# broken; FORWARD=all because these steps were written against pyxis passing the whole environment.
+# CONTAINER_RUNTIME=enroot (the Beverin default, scripts/cscs/container_runtime.sh) starts the same EDF
+# through scripts/cscs/enroot_srun.sh; FORWARD=all because these steps expect the whole environment.
 ce_run() {
     local -a step=(--nodes=1 --ntasks=1 --time=00:30:00 --mem=0 --cpus-per-task=32 --hint=nomultithread)
     if [[ "${CONTAINER_RUNTIME:-ce}" == enroot ]]; then

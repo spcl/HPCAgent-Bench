@@ -437,40 +437,59 @@ place those instructions live.
 ## Container runtimes
 
 `sbatch` -> `beverin.sbatch` -> `run_cluster.sh` is the primary way to run this example. Inside
-`run_cluster.sh`, `role_srun()` picks how each role's `srun`
-step launches its image, controlled by `CONTAINER_RUNTIME`: `ce`, `enroot`, `apptainer`,
-`podman`, or `docker`. All five keep host networking; roles talk over node hostnames and ports.
-`beverin.sbatch` sets `CONTAINER_RUNTIME` for you by probing the site (see below); `run_cluster.sh`
-on its own falls back to `ce` when nothing set it. An explicit `CONTAINER_RUNTIME` in the submit
-environment or the arm's `.env` always wins over the probe.
+`run_cluster.sh`, `role_srun()` picks how each role's `srun` step launches its image, controlled by
+`CONTAINER_RUNTIME`: `ce`, `enroot`, `apptainer`, `podman`, or `docker`. All five keep host
+networking; roles talk over node hostnames and ports.
 
-`serve-only.sbatch` and `regrade.sbatch` do not go through this probe -- both call
-`srun --environment=` directly and have no enroot fallback, so both are unusable for as long as
-pyxis stays broken (see the next section).
+### Which runtime a Beverin job uses: `enroot`
 
-### CSCS Container Engine (pyxis) -- currently unusable on Beverin
+| Launcher | How `CONTAINER_RUNTIME` is set |
+|---|---|
+| `beverin.sbatch` (every arm) | [`scripts/cscs/container_runtime.sh`](../scripts/cscs/container_runtime.sh): `enroot` unless exported |
+| `prerender_cpf.sbatch`, canon columns | the same chooser |
+| `run_cluster.sh` started directly | its own fallback, `ce`: export `CONTAINER_RUNTIME=enroot` first |
+| `serve-only.sbatch`, `regrade.sbatch` | always `srun --environment=` (`ce`); see the caveat below |
+
+An explicit `CONTAINER_RUNTIME` in the submit environment or the arm's `.env` always wins. Check a
+job with `grep 'container runtime:' beverin-services-<jobid>.out` and, for enroot, the
+`enroot_srun: comm hooks off|on` lines.
+
+**Why not `ce`.** Under `ce` pyxis applies the EDF's comm-hook annotations
+(`com.hooks.netstack`, `com.hooks.aws_ofi_nccl`) and its forced `NCCL_NET`/`NCCL_NET_PLUGIN` to
+EVERY step. A single-node inference step (`INFERENCE_NODES=1`: every oss120b and qwen38 arm) then
+fails while sglang/vLLM builds its tensor-parallel group:
+
+```
+RuntimeError: NCCL error: invalid usage ... Failed to initialize any NET plugin
+FATAL: a service step exited (status 137) while the agents were still running.
+```
+
+and the whole job ends after about 5 minutes. Measured: the 2026-09-17 17:00 wave (jobs
+640160-640181, 22 arms) ran under `ce` and all failed this way; the same arms under `enroot`
+(640076-640083) completed. `enroot` turns the hooks on only where a GPU collective crosses nodes (see
+below), so it is correct for single- and multi-node inference alike.
+
+Use `CONTAINER_RUNTIME=ce` only for a run whose every GPU collective crosses nodes, or after the EDFs
+gate the hooks per step. `serve-only.sbatch` and `regrade.sbatch` always use `ce`, so a single-node
+inference server started through them hits the same RCCL failure.
+
+### CSCS Container Engine (`ce`, pyxis)
 
 `role_srun()` adds `srun --environment=<edf>`: `INFERENCE_CE_ENV`
 (default `hpcagent-bench-vllm-mi300-latest`) for the inference node, `AMD_CE_ENV` (default
 `hpcagent-bench-agent-mi300-latest`) for judge and agent nodes. Both EDFs must already be registered under
 `${HOME}/.edf` (or another `EDF_PATH` dir) and point their `image` line at a built `.sqsh`. See
-[Prerequisites](#prerequisites).
+[Prerequisites](#prerequisites). pyxis also needs the site `ENROOT_CACHE_PATH` from
+`/etc/enroot/enroot.conf` to be creatable by the user, or every step dies at `task_init()`.
 
-On Beverin, pyxis dies at `task_init()` for every `srun --environment=`. Nothing below chooses `ce`
-for you until CSCS fixes the site `enroot.conf`: `scripts/cscs/container_runtime.sh` probes
-the site and picks `enroot` instead, and `beverin.sbatch` exports its answer. See
-[`scripts/cscs/container_runtime.sh`](../scripts/cscs/container_runtime.sh) for the probe.
+### Enroot (default on Beverin)
 
-### Enroot (pyxis fallback, current default on Beverin)
-
-Nothing extra to set -- `beverin.sbatch` selects this automatically while pyxis is broken.
 `role_srun()` runs the same per-role EDF `ce` would have used, but through
 [`scripts/cscs/enroot_srun.sh`](../scripts/cscs/enroot_srun.sh) (`enroot start` directly, bypassing
 pyxis) instead of `srun --environment=`. It forwards the task's identity and everything a role step
 needs (`HPCAGENT_BENCH_ENROOT_FORWARD=all`) and enables the CXI/`aws_ofi_nccl` comm hooks only for
-a multi-node inference step, since those are the only steps that run a GPU collective across nodes.
-Delete this runtime, and the `container_runtime.sh` probe, once CSCS fixes `enroot.conf` and pyxis
-works again.
+a multi-node inference step (`INFERENCE_NODES>1`), since those are the only steps that run a GPU
+collective across nodes. `HPCAGENT_BENCH_COMM_HOOKS=on|off` overrides that per step.
 
 #### Known enroot gotchas
 
