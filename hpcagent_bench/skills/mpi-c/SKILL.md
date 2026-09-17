@@ -2,7 +2,8 @@
 name: mpi-c
 description: "MPI in C: the caller owns the decomposition and the communicator, you own the halo. What
 is timed, what deadlocks, and which call to reach for."
-when: "the task runs across several nodes and you are writing the MPI code"
+when: "the task spans several nodes: ALWAYS read this page before you write or change MPI code, and before you decide how work is split across ranks"
+applies: {multinode: true}
 ---
 
 # mpi-c

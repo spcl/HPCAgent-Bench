@@ -1194,3 +1194,28 @@ def test_the_divide_and_conquer_skill_is_triggered_from_the_packet_that_carries_
     assert f"`/shared/skills/{DIVIDE}.md`" in packet, f"nothing in the packet preamble points at the {DIVIDE!r} page"
     trigger = packet.split(f"`/shared/skills/{DIVIDE}.md`")[0].rsplit("- When", 1)[-1]
     assert trigger.strip(), f"the {DIVIDE!r} line names the file but states no trigger for opening it"
+
+
+def test_every_when_trigger_is_a_quoted_yaml_scalar() -> None:
+    """An unquoted ``when:`` parses today and breaks on the next edit.
+
+    The trigger is prose: it accumulates colons, quotes and brackets as it is reworded. Unquoted,
+    a single ``": "`` makes PyYAML read the line as a nested mapping and the page's trigger either
+    changes meaning or the whole frontmatter raises -- and the trigger is a page's ONLY appearance
+    in the prompt, so a page whose trigger is wrong is a page nobody opens. ``solver`` was the one
+    unquoted page; nothing had noticed because its text happened to contain no colon.
+    """
+    import yaml
+
+    unquoted = []
+    for directory in sorted((paths.ROOT / "hpcagent_bench" / "skills").iterdir()):
+        page = directory / "SKILL.md"
+        if not page.is_file():
+            continue
+        frontmatter = page.read_text().split("---", 2)[1]
+        meta = yaml.safe_load(frontmatter) or {}
+        if not meta.get("when"):
+            continue
+        if not any(line.startswith(('when: "', "when: '")) for line in frontmatter.splitlines()):
+            unquoted.append(directory.name)
+    assert not unquoted, f"when: must be a quoted scalar in {', '.join(unquoted)}"

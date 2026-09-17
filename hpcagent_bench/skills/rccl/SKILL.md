@@ -2,7 +2,8 @@
 name: rccl
 description: "RCCL/NCCL collectives from a GPU kernel's host side: when it beats MPI, the group and
 stream rules, and the mismatches that hang instead of failing."
-when: "a multi-node AMD GPU task needs a collective -- allreduce, broadcast, all-to-all"
+when: "work spans more than one AMD GPU or node and data must move between them: ALWAYS read this page before you write a collective -- allreduce, broadcast, all-to-all -- or decide one is needed"
+applies: {images: [amd], multinode: true}
 ---
 
 # rccl

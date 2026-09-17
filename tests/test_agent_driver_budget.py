@@ -205,7 +205,7 @@ def test_non_assistant_and_malformed_lines_are_skipped(driver) -> None:
     """The merged stderr, a half-written tail and the CLI's own non-assistant events."""
     seen: dict[str, int] = {}
     lines = [
-        "warning: MCP server optarena took 3.2s to become ready",
+        "warning: MCP server hpcagent-bench took 3.2s to become ready",
         "",
         '{"type": "system", "subtype": "init", "session_id": "s1"}',
         '{"type": "assistant", "message": {"id": "msg_x"}}',

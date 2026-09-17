@@ -2,7 +2,8 @@
 name: gpuaware-mpi-c
 description: "GPU-aware MPI in C: passing device pointers to MPI, the synchronization MPI cannot see,
 and the check to run before trusting any of it."
-when: "a multi-node task has to move data between GPUs without staging it through the host"
+when: "a multi-node task moves data between GPUs: ALWAYS read this page before you stage anything through the host, since it may not need to be staged at all"
+applies: {images: [amd, nvidia], multinode: true}
 ---
 
 # gpuaware-mpi-c

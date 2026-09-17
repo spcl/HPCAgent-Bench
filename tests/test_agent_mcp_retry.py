@@ -31,7 +31,7 @@ def load_driver(monkeypatch, **env):
 
 
 def init_line(status):
-    return json.dumps({"subtype": "init", "mcp_servers": [{"name": "optarena", "status": status}]}) + "\n"
+    return json.dumps({"subtype": "init", "mcp_servers": [{"name": "hpcagent-bench", "status": status}]}) + "\n"
 
 
 def fake_popen_class(statuses, seen=None):

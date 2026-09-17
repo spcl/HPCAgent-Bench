@@ -71,14 +71,14 @@ def test_the_probe_counts_the_servers_tokens_not_its_own_request(driver, monkeyp
 
     monkeypatch.setattr(driver.urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(driver.time, "monotonic", lambda: next(clock))
-    monkeypatch.setenv("VLLM_SERVED_MODEL", "optarena-vllm")
+    monkeypatch.setenv("VLLM_SERVED_MODEL", "hpcagent-bench-vllm")
 
     samples = driver.throughput_probe("http://vllm:8000/v1", {}, 1)
 
     assert len(samples) == 1
     assert samples[0]["decode_tok_s"] == pytest.approx(50.0)  # 100 tokens / 2 s, not PROBE_MAX_TOKENS
     body = seen[0]
-    assert body["model"] == "optarena-vllm"  # vLLM answers its served name and nothing else
+    assert body["model"] == "hpcagent-bench-vllm"  # vLLM answers its served name and nothing else
     assert body["stream"] is False, "a streamed reply has no usage block to count from"
     assert body["temperature"] == 0.0
     assert body["max_tokens"] == driver.PROBE_MAX_TOKENS

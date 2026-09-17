@@ -65,7 +65,9 @@ CPFSRC_NOTE = (
 DROPIN_DEFAULT_LANGUAGE = "c"
 
 
-def assert_language_pages_paired(names: Sequence[str], by_name: dict) -> None:
+def assert_language_pages_paired(
+    names: Sequence[str], by_name: dict, language: str = "any", image: str | None = None
+) -> None:
     """Refuse a packet that takes ``lang-<X>`` without ``openmp-<X>``, or the reverse.
 
     The two are one treatment, not two: ``lang-<X>`` teaches how to write the language and
@@ -73,8 +75,10 @@ def assert_language_pages_paired(names: Sequence[str], by_name: dict) -> None:
     always meant both. Shipping one alone is a packet nothing has ever measured, and it reads in the
     results table under the same name as the pair -- so it is refused rather than rendered.
 
-    Only pairs that EXIST are required: hip and cuda have a language page and no openmp partner, so
-    naming ``lang-hip`` alone is complete rather than half a packet.
+    Only pairs that EXIST and APPLY to the arm are required: hip and cuda have a language page and no
+    openmp partner, so naming ``lang-hip`` alone is complete rather than half a packet -- and a HIP
+    arm that leans on ``lang-cpp`` for the host half of its file is not handed ``openmp-cpp``, a
+    host-threading page whose own ``applies:`` says it is for C++ tasks.
 
     :param names: the pages this packet was asked for.
     :param by_name: every shipped page, used to tell a missing partner from one that never existed.
@@ -85,7 +89,7 @@ def assert_language_pages_paired(names: Sequence[str], by_name: dict) -> None:
             if not name.startswith(prefix):
                 continue
             partner = partner_prefix + name[len(prefix) :]
-            if partner in by_name and partner not in names:
+            if partner in by_name and partner not in names and packets.applies_to(partner, language, image, False):
                 raise SystemExit(
                     f"{name} and {partner} are one treatment and ship together; this packet names "
                     f"{name} alone. Add --skill {partner}, or name neither"
@@ -146,7 +150,7 @@ def packet_pages(names: Sequence[str], extra_root: str) -> list[Skill]:
     return [by_name[n] for n in names]
 
 
-def packet_skills_text(spec: str, language: str) -> str:
+def packet_skills_text(spec: str, language: str, image: str | None = None, multinode: bool = False) -> str:
     """The skill section for ``--packet spec``: the same renderer ``--skill`` uses, over the pages
     ``hpcagent_bench.packets.resolve`` names for ``spec``.
 
@@ -161,7 +165,7 @@ def packet_skills_text(spec: str, language: str) -> str:
     """
     try:
         packets.refuse_frozen(spec)
-        packet = packets.resolve(spec, language, fill=False)
+        packet = packets.resolve(spec, language, fill=False, image=image, multinode=multinode)
     except ValueError as exc:
         message = str(exc)
         if not language and "'lang-'" in message:
@@ -175,7 +179,7 @@ def packet_skills_text(spec: str, language: str) -> str:
     missing = [n for n in names if n not in by_name]
     if missing:
         raise SystemExit(f"missing shipped skill: {', '.join(missing)}")
-    assert_language_pages_paired(names, by_name)
+    assert_language_pages_paired(names, by_name, language, image)
     return skill_index([by_name[n] for n in names])
 
 
@@ -204,33 +208,36 @@ def packet_note(spec: str, language: str) -> str:
     return CPFSRC_NOTE.format(ext=cpf_cache.LANGUAGE_EXT[dialect])
 
 
-def auto_pages(language: str = "any", image: str = "cpu") -> tuple[str, ...]:
-    """Every shipped page a packet tool does not own, alphabetically. ``--skills`` is
-    language-AGNOSTIC now.
+def auto_pages(language: str = "any", image: str | None = None, multinode: bool = False) -> tuple[str, ...]:
+    """Every shipped page a packet tool does not own that APPLIES to the arm, in reading order.
 
-    It used to select `lang-<language>` plus the parallelism-model pages that language can spell,
-    because each selected page had its BODY inlined and a packet that guessed wrong spent hundreds
-    of lines on a language the task could not be answered in. Nothing is inlined any more: a page
-    costs one trigger line, and the trigger states the language ("you are writing C -- ALWAYS read
-    this page before writing any C"), so the reader does the selecting and the packet does not have
-    to. ``language`` and ``image`` are kept as parameters so callers need no edit; neither changes
-    what comes back.
+    Each page states in its own ``applies:`` frontmatter which languages, images and topologies it
+    can be of use to (:func:`hpcagent_bench.packets.applies_to`), and the arm's own language and
+    directive pages come first (:func:`hpcagent_bench.packets.arm_order`). The selection used to be
+    every page on every arm -- 21 triggers on a single-node C CPU task, 16 of them for situations
+    that cannot occur in it, with the two it needed third and thirteenth. ``--skills`` and
+    ``--packet lang-skills`` both come through here, so the two spellings stay byte-identical.
 
     An experiment that wants a narrower packet names it with ``--skill``, which is what every
     ablation arm already does -- including a packet tool's page, which only ``--skill`` reaches.
     """
-    return tuple(sorted(skill.file for skill in load_skills(()) if skill.file not in packets.tool_pages()))
+    return packets.expand_skill_token("*", language, image, multinode)
 
 
 def skills_section(
     language: str, extra_root: str = "", image: str = "cpu", also: Sequence[str] = (), language_packet: bool = True
 ) -> str:
     """The packet's skill index: one trigger line per page :func:`packet_skills` selects."""
-    return skill_index(packet_skills(language, extra_root, also, language_packet))
+    return skill_index(packet_skills(language, extra_root, also, language_packet, image=image))
 
 
 def packet_skills(
-    language: str, extra_root: str = "", also: Sequence[str] = (), language_packet: bool = True
+    language: str,
+    extra_root: str = "",
+    also: Sequence[str] = (),
+    language_packet: bool = True,
+    image: str | None = None,
+    multinode: bool = False,
 ) -> list[Skill]:
     """The packet's pages: every shipped page, or exactly the pages ``also`` names.
 
@@ -254,7 +261,7 @@ def packet_skills(
         if not also:
             raise SystemExit("a packet with no language pages needs --skill: it would otherwise be empty")
         return packet_pages(list(also), extra_root)
-    wanted = list(auto_pages())
+    wanted = list(auto_pages(language, image, multinode))
     other_skills = load_skills(())
     by_name = {skill.file: skill for skill in other_skills}
     wanted += [name for name in also if name not in wanted]
@@ -398,6 +405,12 @@ def main() -> int:
         help="hardware image the run targets; drops the pages that only teach device offload",
     )
     parser.add_argument(
+        "--multinode",
+        action="store_true",
+        help="the task spans nodes: stage the pages that only matter across a node boundary (MPI, "
+        "RCCL, GPU-aware MPI). Off, they are not indexed -- no campaign prompt asks for MPI today",
+    )
+    parser.add_argument(
         "--skill",
         action="append",
         default=[],
@@ -433,7 +446,7 @@ def main() -> int:
         parser.error("--track is required unless --select or --kernels-file is given")
 
     if args.list_skills:
-        print("\n".join(auto_pages(args.language or "any", args.image)))
+        print("\n".join(auto_pages(args.language or "any", args.image, args.multinode)))
         return 0
 
     if args.packet and (args.skills or args.skill):
@@ -448,12 +461,13 @@ def main() -> int:
     extra_pages: dict[str, str] = {}
     if args.packet:
         try:
-            skills_text = packet_skills_text(args.packet, args.language)
+            skills_text = packet_skills_text(args.packet, args.language, args.image, args.multinode)
             note_text = packet_note(args.packet, args.language)
         except ValueError as exc:
             parser.error(str(exc))
     elif args.skills or args.skill:
-        pages = packet_skills(args.language or "any", args.extra_skill_root, args.skill, language_packet=args.skills)
+        pages = packet_skills(args.language or "any", args.extra_skill_root, args.skill, language_packet=args.skills,
+                              image=args.image, multinode=args.multinode)
         skills_text = skill_index(pages)
         shipped = {skill.file for skill in load_skills(())}
         extra_pages = {skill.file: skill.path for skill in pages if skill.file not in shipped}

@@ -37,10 +37,13 @@ def test_resolve_cpf_stages_the_page_and_the_dir_env() -> None:
     assert resolved.method == ""
 
 
-def test_resolve_cpfsrc_sets_the_dropin_env_with_no_page() -> None:
+def test_resolve_cpfsrc_stages_its_own_page_and_sets_the_dropin_env() -> None:
+    """cpfsrc stages exactly the ``cpfsrc`` page -- the drop-in's own comment reference -- alongside
+    the drop-in directory env; the drop-in file itself is staged by materialize_shared.sh, not by a
+    skill page, so the packet's only page is the one explaining what is now sitting in that file."""
     resolved = packets.resolve("cpfsrc", "c", environ={"CPF_VIEW": "/views/dropin"})
     assert resolved.key == "cpfsrc"
-    assert resolved.skills == ()
+    assert resolved.skills == ("cpfsrc",)
     assert resolved.env == (("CPF_DROPIN_DIR", "/views/dropin"),)
 
 
@@ -55,16 +58,20 @@ def test_resolve_lang_has_no_openmp_page_for_cuda() -> None:
     assert resolved.skills == ("lang-cuda",)
 
 
-def test_resolve_lang_skills_stages_every_shipped_page_but_a_packet_tools_own() -> None:
-    """``*`` is every page except the manual for a tool only one packet's arms are served: staging
-    that page here would hand the skills arm instructions for a tool it does not have."""
-    resolved = packets.resolve("lang-skills", "c")
+def test_resolve_lang_skills_stages_every_shipped_page_but_a_packet_tools_own_or_an_explicit_one() -> None:
+    """``*`` is every page except the manual for a tool only one packet's arms are served (staging
+    that page here would hand the skills arm instructions for a tool it does not have) and except a
+    page marked ``explicit: true`` (caveman, cpfsrc): those are treatments of their own, reachable
+    only by naming them, never picked up as part of the whole-library packet. With no language,
+    image or topology named, nothing else narrows it (packets.applies_to)."""
+    resolved = packets.resolve("lang-skills", "", multinode=True)
     assert resolved.key == "lang-skills"
     assert resolved.label == "All Skill Pages"
     shipped = sorted(p.name for p in packets.SKILLS_DIR.iterdir() if p.is_dir())
-    assert list(resolved.skills) == [page for page in shipped if page not in packets.tool_pages()]
-    assert set(shipped) - set(resolved.skills) == packets.tool_pages()
-    assert resolved.env == (("AGENT_HINTS_FILE", "hints-and-triggers.md"),)
+    applicable = [page for page in shipped if packets.applies_to(page, "", None, True)]
+    assert list(resolved.skills) == [page for page in applicable if page not in packets.tool_pages()]
+    assert set(shipped) - set(resolved.skills) == packets.tool_pages() | {"caveman", "cpfsrc"}
+    assert resolved.env == (), "no skill content may ride in the main prompt: the packet sets no hints file"
 
 
 def test_resolve_profiling_is_the_bundle() -> None:
@@ -113,7 +120,9 @@ def test_a_device_packet_refuses_a_language_its_device_does_not_run(spec: str, l
 def test_all_in_for_a_device_is_cpfsrc_its_perf_playbook_and_the_language_pages(device: str, language: str) -> None:
     all_in = packets.resolve(f"all-in-{device}", language, environ={"CPF_VIEW": "/views/dropin"})
     playbook = packets.resolve(f"perf-playbook-{device}", language)
-    assert set(all_in.skills) == set(playbook.skills) | set(packets.resolve("lang", language).skills)
+    assert set(all_in.skills) == (
+        set(playbook.skills) | set(packets.resolve("lang", language).skills) | {"cpfsrc"}
+    )
     assert all_in.env == (("CPF_DROPIN_DIR", "/views/dropin"),)
     assert packets.canonical(f"lang;perf-playbook-{device};cpfsrc") == f"all-in-{device}"
 
@@ -176,6 +185,7 @@ def test_resolve_all_in_composes_cpfsrc_dc_profiling_and_lang() -> None:
     assert resolved.key == "all-in"
     assert resolved.label == "All-in"
     assert resolved.skills == (
+        "cpfsrc",
         "divide-and-conquer",
         "lang-c",
         "nsys",
