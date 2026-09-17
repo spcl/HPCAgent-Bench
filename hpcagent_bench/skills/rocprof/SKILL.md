@@ -2,7 +2,7 @@
 name: rocprof
 description: What the AMD device trace from profile returns for a hip or OpenMP-offload submission, which fields come back null, and what each refusal means.
 when: "you profile ANYTHING on an AMD GPU -- a HIP or OpenMP-offload submission: ALWAYS read this page before you tune a kernel, and whenever a profile came back with a cause or null fields"
-applies: {images: [amd]}
+applies: {images: [amd], languages: [c, cpp, fortran, hip]}
 ---
 
 `profile` (`POST /profile`) on a `hip` submission, or with `"tool":"rocprofv3"` on an OpenMP-offload

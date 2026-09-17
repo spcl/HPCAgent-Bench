@@ -42,15 +42,25 @@ Do NOT reach for it when:
   one instance doing everything while the rest of the device idles;
 - the arrays are small. Launch plus transfers is a fixed cost; under it nothing inside is visible.
 
-## Three wrong ways
+## From the loop nest to the grid
+
+1. **One program per TILE, never per element.** Launch `cdiv(n, BLOCK)` programs and give each a
+   `BLOCK`-wide vector of work. `BLOCK` is a `tl.constexpr` power of two; mask the tail.
+2. **The fastest-varying array axis is the one you vectorize over.** Build the offset for that axis
+   with `tl.arange(0, BLOCK)` so neighbouring lanes read neighbouring addresses; an outer axis
+   becomes `tl.program_id(0)` (and `program_id(1)` for the next one out).
+3. **Interchange on the NumPy form first.** The axis order you tile is the one you are stuck with,
+   so settle it before writing the kernel.
+4. **A loop carried across iterations stays a `for` inside one program**, accumulating in a
+   register tile. Splitting it across programs needs an atomic or a second pass.
+
+## Two wrong ways
 
 1. **A kernel that is not a fusion.** Rewriting one elementwise pass as one Triton kernel moves the
    same bytes as often -- a turn spent to tie. Name the pass you deleted, or keep looking.
 2. **Autotune instead of thinking.** A long `@triton.autotune` list is not free: every config is a
    full compile plus a benchmark on the first call that hits a new key, on the clock. Keep two or
    three you can justify, or write the constants in directly.
-3. **A grid over elements.** `grid = (n,)`, one element per program, is a scalar loop wearing a
-   launch. Launch `cdiv(n, BLOCK)` programs and give each a `BLOCK`-wide vector.
 
 ## The first call compiles, and it is timed
 
@@ -76,7 +86,8 @@ and spending that inside a timed rep reads as pathologically slow, or as a timeo
   spell `num_stages=2` yourself. A workgroup gets 64 KB of local memory and a CUDA
   config's 3-4 stages overflows it. Measured: a 128x128x128 fp16 matmul tile at `num_stages=4` is refused
   with `OutOfResources: out of resource: shared memory, Required: 196608, Hardware limit: 65536. Reducing
-  block sizes or \`num_stages\` may help.` 1 belongs to a fused two-matmul kernel, not to general use.
+  block sizes or \`num_stages\` may help.` Set `num_stages=2` in every config; `num_stages=1` belongs to a fused
+  two-matmul kernel, not to general use.
 - **A small `tl.dot` does not fail here, it silently leaves the matrix cores.** This backend takes
   any dot shape and falls back to FMA where the matrix instruction does not fit, so a K=8 dot that
   is a hard error on NVIDIA merely runs slow. Keep every dot dimension at 16 or more.

@@ -70,6 +70,8 @@ many times as the outer loop runs.
 - Keep per-thread partials a cache line apart, or the threads fight over one line (false sharing);
   combine them after the loop.
 - `declare simd` on a helper called from the hot loop, else the call is a vectorization barrier.
+- `#pragma omp unroll partial(4)` on the INNER loop of a nest you already thread -- never `full`:
+  it deletes the loop the worksharing directive above needs.
 - Split a combined construct when the shape demands it: `parallel for` on the outer loop, `simd`
   alone on the unit-stride inner one.
 
