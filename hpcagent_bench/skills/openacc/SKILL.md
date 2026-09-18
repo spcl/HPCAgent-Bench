@@ -1,6 +1,6 @@
 ---
 name: openacc
-description: "OpenACC offload to an NVIDIA GPU, in C, C++ and Fortran: NVHPC is forced, -Minfo=accel tells you what actually ran on the device, and the flat ABI gives every data clause explicit bounds."
+description: "OpenACC GPU offload on NVIDIA. Use whenever you write `#pragma acc parallel loop`, `acc kernels`, `copyin`/`copyout`, or check `-Minfo=accel`, on an NVHPC build for an NVIDIA GPU."
 when: "you consider moving ANY work to the GPU with OpenACC directives (NVIDIA GPUs, NVHPC compilers only): ALWAYS read this page before you write the first directive, including while deciding whether to offload at all"
 applies: {languages: [c, cpp, fortran], images: [nvidia]}
 ---

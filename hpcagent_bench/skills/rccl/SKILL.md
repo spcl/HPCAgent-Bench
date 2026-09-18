@@ -1,7 +1,6 @@
 ---
 name: rccl
-description: "RCCL/NCCL collectives from a GPU kernel's host side: when it beats MPI, the group and
-stream rules, and the mismatches that hang instead of failing."
+description: "RCCL/NCCL collectives on AMD GPUs. Use whenever you call `ncclAllReduce`, `ncclCommInitRank`, link `-lrccl`, or a multi-GPU/multi-node collective hangs instead of failing."
 when: "work spans more than one AMD GPU or node and data must move between them: ALWAYS read this page before you write a collective -- allreduce, broadcast, all-to-all -- or decide one is needed"
 applies: {images: [amd], multinode: true}
 ---
@@ -9,7 +8,7 @@ applies: {images: [amd], multinode: true}
 # rccl
 
 RCCL is ROCm's build of NCCL, and the two have the same API -- `nccl*` names, `rccl.h` header. It
-does collectives only. Include `rccl.h` from the ROCm include tree and link with `-lrccl`.
+does collectives only. `#include <rccl/rccl.h>` and link with `-lrccl` (`librccl.so`).
 
 It is **not** GPU-initiated. You call it from the host and pass a stream; the transfer runs as GPU
 kernels on that stream. Nothing is callable from inside your own kernel.

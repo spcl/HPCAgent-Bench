@@ -1,7 +1,6 @@
 ---
 name: mpi-c
-description: "MPI in C: the caller owns the decomposition and the communicator, you own the halo. What
-is timed, what deadlocks, and which call to reach for."
+description: "MPI in C across nodes. Use whenever you write `MPI_Allreduce`, `MPI_Isend`/`MPI_Irecv`, `MPI_Cart_shift`, or hit a hang, deadlock, or wrong-halo answer on a multi-node submission."
 when: "the task spans several nodes: ALWAYS read this page before you write or change MPI code, and before you decide how work is split across ranks"
 applies: {multinode: true}
 ---
