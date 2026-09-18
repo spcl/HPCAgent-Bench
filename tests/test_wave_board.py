@@ -268,12 +268,11 @@ def test_canon_rows_join_the_arms_list_as_their_own_experiment_group(
     assert len(rows) == len(board.CANON_COLUMNS)  # only llr-focus40 has a directory here
 
 
-def test_a_clean_rerun_gets_its_own_row_beside_the_arm_it_supersedes(
+def test_a_clean_rerun_replaces_the_arm_it_supersedes(
     board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PROPERTY CHANGED on purpose (user, 2026-09-15): the old arm keeps a row showing the data still
-    on disk and the clean re-run gets its own row counting only its jobs; folding them hid a complete
-    old arm behind a clean arm that had barely started."""
+    """PROPERTY CHANGED on purpose (user, 2026-09-18): where an arm has a clean re-run, only the clean
+    arm is on the board and the analysis continues on it; the 2026-09-15 rule showed both rows."""
     arm = "cpf-llr-focus40-oss120b-c-cpfsrc"
     runs = tmp_path / "runs" / "cpf-llr-focus40-20260915"
     for job_id, names in (("100", ["a", "b"]), ("200", ["a"])):
@@ -285,6 +284,33 @@ def test_a_clean_rerun_gets_its_own_row_beside_the_arm_it_supersedes(
 
     rows = board.arm_rows(tmp_path / "runs", "/opt", MODELS)
 
-    assert [(row["arm"], row["clean"], row["done"]) for row in rows] == [(arm, False, 2), (arm + "-clean", True, 1)], (
-        rows
-    )
+    assert [(row["arm"], row["clean"], row["done"]) for row in rows] == [(arm + "-clean", True, 1)], rows
+
+
+@pytest.mark.parametrize(
+    "arm",
+    [
+        "cpf-llr-focus40-s1of8-unionalpha-c",
+        "scicomp-dc-cpp-qwen38-plain",
+        "scicomp-dc-gpu-oss120b-c-openmp-plain",
+        "cpf-llr-focus40-qwen38-fortran",
+        "cpf-llr-focus40-oss120b-fortran-skills",
+    ],
+)
+def test_an_arm_the_user_dropped_is_not_on_the_board(
+    board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, arm: str
+) -> None:
+    """User 2026-09-18: union-alpha, scicomp C++, scicomp GPU c-openmp and LLR CPU Fortran arms are out
+    of the experiments; a kept sibling (scicomp Fortran, GPU hip) must stay."""
+    runs = tmp_path / "runs" / "x-20260918"
+    job_dir_with_rows(runs, "100", ["a"])
+    job_dir_with_rows(runs, "101", ["a"])
+    kept = "scicomp-dc-fortran-qwen38-plain"
+    jobs = [board.Job("100", arm, "COMPLETED", 3, "", ""), board.Job("101", kept, "COMPLETED", 3, "", "")]
+    monkeypatch.setattr(board, "slurm_jobs", lambda ids: jobs)
+    monkeypatch.setattr(board, "queued_ids", list)
+    monkeypatch.setattr(board.remaining_kernels, "roster", lambda tag, opt: ["a"])
+
+    rows = board.arm_rows(tmp_path / "runs", "/opt", MODELS)
+
+    assert [row["arm"] for row in rows] == [kept], rows
