@@ -19,6 +19,11 @@ import crash_audit  # noqa: E402  -- path insert above must run first
 
 ROSTER = ["a", "b", "c"]
 
+#: A row's ``ts``, arbitrary-but-after-any-real-commit: these tests use fake kernel names ("a", "b",
+#: "c") that resolve no real manifest, so comparable_since_ms always returns 0 for them and this
+#: value never actually gets compared -- it exists only because the real schema requires the column.
+FAR_FUTURE_TS_MS = 10**13
+
 
 def make_shard(root: pathlib.Path, job_id: str, rank: int = 0) -> sqlite3.Connection:
     """An empty judge shard for ``job_id``, with the three tables the audit reads."""
@@ -27,14 +32,14 @@ def make_shard(root: pathlib.Path, job_id: str, rank: int = 0) -> sqlite3.Connec
     conn = sqlite3.connect(shard / f"hpcagent_bench{rank}.db")
     with conn:
         conn.execute("create table runs (run_id text, arm text)")
-        conn.execute("create table submissions (run_id text, benchmark text, optimizer text)")
+        conn.execute("create table submissions (run_id text, benchmark text, optimizer text, ts integer)")
         conn.execute("create table attempts (run_id text, benchmark text, reason text)")
     return conn
 
 
 def add_submission(conn: sqlite3.Connection, run_id: str, benchmark: str) -> None:
     with conn:
-        conn.execute("insert into submissions values (?, ?, ?)", (run_id, benchmark, "qwen38"))
+        conn.execute("insert into submissions values (?, ?, ?, ?)", (run_id, benchmark, "qwen38", FAR_FUTURE_TS_MS))
 
 
 def add_attempt(conn: sqlite3.Connection, run_id: str, benchmark: str) -> None:
@@ -83,7 +88,7 @@ def one_job_setup(
 def test_a_clean_exit_with_a_submission_is_kept(tmp_path: pathlib.Path) -> None:
     """The ordinary case: one episode, it finished on its own, the submission is real evidence."""
     root, log_dir = one_job_setup(tmp_path, "100", "a", submit=True, attempt=False, log_lines=[exit_line(0, 0)])
-    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir)
+    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir, str(tmp_path))
     assert audit.keep == ["a"]
     assert audit.drop == []
 
@@ -99,7 +104,7 @@ def test_a_crashed_exit_with_crash_attempts_is_dropped_even_with_a_submission(tm
         attempt=False,
         log_lines=[exit_line(0, 127, " died=api_timeout crash_attempts=3")],
     )
-    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir)
+    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir, str(tmp_path))
     assert audit.keep == []
     assert audit.drop == ["a"]
     assert "rc=127" in audit.drop_evidence["a"][0]
@@ -108,7 +113,7 @@ def test_a_crashed_exit_with_crash_attempts_is_dropped_even_with_a_submission(tm
 def test_any_nonzero_rc_is_dropped_even_with_no_crash_attempts_field(tmp_path: pathlib.Path) -> None:
     """The user rule is "any nonzero rc", not just the named 127/crash_attempts case."""
     root, log_dir = one_job_setup(tmp_path, "100", "b", submit=True, attempt=False, log_lines=[exit_line(0, 1)])
-    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir)
+    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir, str(tmp_path))
     assert audit.drop == ["b"]
 
 
@@ -123,7 +128,7 @@ def test_a_promoted_self_exit_with_rc_zero_is_kept(tmp_path: pathlib.Path) -> No
         attempt=False,
         log_lines=[exit_line(0, 0, " promoted=SUBMITTED speedup=3.75x")],
     )
-    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir)
+    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir, str(tmp_path))
     assert audit.keep == ["c"]
 
 
@@ -133,7 +138,7 @@ def test_the_cancelled_by_job_marker_drops_the_kernel_even_at_rc_zero(tmp_path: 
     root, log_dir = one_job_setup(
         tmp_path, "100", "a", submit=True, attempt=False, log_lines=[exit_line(0, 0, " cancelled=job")]
     )
-    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir)
+    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir, str(tmp_path))
     assert audit.drop == ["a"]
 
 
@@ -144,7 +149,7 @@ def test_a_kernel_with_two_episodes_one_crashed_is_dropped(tmp_path: pathlib.Pat
     conn = make_shard(root, "100")
     with conn:
         conn.execute("insert into runs values (?, ?)", ("arm.n0.p0.w0", "arm"))
-        conn.execute("insert into submissions values (?, ?, ?)", ("arm.n0.p0.w0", "a", "qwen38"))
+        conn.execute("insert into submissions values (?, ?, ?, ?)", ("arm.n0.p0.w0", "a", "qwen38", FAR_FUTURE_TS_MS))
     conn.close()
     write_problems(root, "100", [(0, "a")])
     write_log(log_dir, "100", [exit_line(0, 0)])
@@ -157,7 +162,7 @@ def test_a_kernel_with_two_episodes_one_crashed_is_dropped(tmp_path: pathlib.Pat
     write_log(log_dir, "101", [exit_line(0, 127, " crash_attempts=2")])
 
     jobs = [("100", str(root / "100")), ("101", str(root / "101"))]
-    audit = crash_audit.audit_arm("arm", jobs, ROSTER, log_dir)
+    audit = crash_audit.audit_arm("arm", jobs, ROSTER, log_dir, str(tmp_path))
     assert audit.keep == []
     assert audit.drop == ["a"]
 
@@ -169,12 +174,12 @@ def test_an_episode_that_cannot_be_mapped_is_reported_not_silently_kept(tmp_path
     conn = make_shard(root, "100")
     with conn:
         conn.execute("insert into runs values (?, ?)", ("arm.n0.p0.w0", "arm"))
-        conn.execute("insert into submissions values (?, ?, ?)", ("arm.n0.p0.w0", "a", "qwen38"))
+        conn.execute("insert into submissions values (?, ?, ?, ?)", ("arm.n0.p0.w0", "a", "qwen38", FAR_FUTURE_TS_MS))
     conn.close()
     write_problems(root, "100", [(0, "a")])  # only problem 0 is on this job's roster
     write_log(log_dir, "100", [exit_line(0, 0), exit_line(5, 0)])  # problem 5 is not
 
-    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir)
+    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir, str(tmp_path))
     assert audit.keep == ["a"]
     assert len(audit.unmapped) == 1
     assert "problem=5" in audit.unmapped[0]
@@ -190,14 +195,14 @@ def test_a_job_with_no_problems_file_leaves_every_one_of_its_episodes_unmapped(t
     conn.close()
     write_log(log_dir, "100", [exit_line(0, 127, " crash_attempts=3")])  # no problems file written
 
-    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir)
+    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir, str(tmp_path))
     assert audit.unmapped == ["job=100 problem=0 rc=127 crash_attempts=3"]
 
 
 def test_a_job_with_a_missing_stdout_log_is_reported_and_not_treated_as_clean(tmp_path: pathlib.Path) -> None:
     """No log at all means no proof of a clean exit; a submission alone must not default to keep."""
     root, log_dir = one_job_setup(tmp_path, "100", "b", submit=True, attempt=False, log_lines=None)
-    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir)
+    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir, str(tmp_path))
     assert audit.keep == []
     assert audit.drop == ["b"]
     assert audit.missing_logs == ["100"]
@@ -208,7 +213,7 @@ def test_a_kernel_with_no_judge_row_at_all_is_never_ran(tmp_path: pathlib.Path) 
     """A roster kernel no job ever touched -- no submission, no attempt -- is NEVER RAN: rerun it,
     but there is nothing of its to delete."""
     root, log_dir = one_job_setup(tmp_path, "100", "a", submit=True, attempt=False, log_lines=[exit_line(0, 0)])
-    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir)
+    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir, str(tmp_path))
     assert audit.never_ran == ["b", "c"]
 
 
@@ -216,7 +221,7 @@ def test_an_attempts_only_kernel_with_no_crash_is_dropped_not_kept(tmp_path: pat
     """An agent that ran clean but never got a correct/fast-enough answer leaves attempts with no
     submission: it was never done, so it belongs in drop-and-rerun, not in never-ran or keep."""
     root, log_dir = one_job_setup(tmp_path, "100", "a", submit=False, attempt=True, log_lines=[exit_line(0, 0)])
-    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir)
+    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir, str(tmp_path))
     assert audit.keep == []
     assert audit.drop == ["a"]
     assert audit.never_ran == ["b", "c"]
@@ -229,13 +234,13 @@ def test_keep_drop_never_ran_partition_the_roster_with_no_overlap(tmp_path: path
     with conn:
         conn.execute("insert into runs values (?, ?)", ("arm.n0.p0.w0", "arm"))
         conn.execute("insert into runs values (?, ?)", ("arm.n0.p1.w1", "arm"))
-        conn.execute("insert into submissions values (?, ?, ?)", ("arm.n0.p0.w0", "a", "qwen38"))
-        conn.execute("insert into submissions values (?, ?, ?)", ("arm.n0.p1.w1", "b", "qwen38"))
+        conn.execute("insert into submissions values (?, ?, ?, ?)", ("arm.n0.p0.w0", "a", "qwen38", FAR_FUTURE_TS_MS))
+        conn.execute("insert into submissions values (?, ?, ?, ?)", ("arm.n0.p1.w1", "b", "qwen38", FAR_FUTURE_TS_MS))
     conn.close()
     write_problems(root, "100", [(0, "a"), (1, "b")])
     write_log(log_dir, "100", [exit_line(0, 0), exit_line(1, 127, " crash_attempts=2")])
 
-    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir)
+    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir, str(tmp_path))
     partition = sorted(audit.keep + audit.drop + audit.never_ran)
     assert partition == ROSTER
     assert audit.keep == ["a"]
@@ -251,17 +256,17 @@ def test_delete_rows_names_only_the_dropped_kernels_rows(tmp_path: pathlib.Path)
     with conn:
         conn.execute("insert into runs values (?, ?)", ("arm.n0.p0.w0", "arm"))
         conn.execute("insert into runs values (?, ?)", ("arm.n0.p1.w1", "arm"))
-        conn.execute("insert into submissions values (?, ?, ?)", ("arm.n0.p0.w0", "a", "qwen38"))
-        conn.execute("insert into submissions values (?, ?, ?)", ("arm.n0.p1.w1", "b", "qwen38"))
+        conn.execute("insert into submissions values (?, ?, ?, ?)", ("arm.n0.p0.w0", "a", "qwen38", FAR_FUTURE_TS_MS))
+        conn.execute("insert into submissions values (?, ?, ?, ?)", ("arm.n0.p1.w1", "b", "qwen38", FAR_FUTURE_TS_MS))
         conn.execute("insert into attempts values (?, ?, ?)", ("arm.n0.p1.w1", "b", "score_error"))
         # A row under an unrelated run_id that happens to name the same benchmark: not this arm's
         # coverage, and must never be swept into the delete report just because the name matches.
-        conn.execute("insert into submissions values (?, ?, ?)", ("adhoc", "b", "human"))
+        conn.execute("insert into submissions values (?, ?, ?, ?)", ("adhoc", "b", "human", FAR_FUTURE_TS_MS))
     conn.close()
     write_problems(root, "100", [(0, "a"), (1, "b")])
     write_log(log_dir, "100", [exit_line(0, 0), exit_line(1, 1)])
 
-    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir)
+    audit = crash_audit.audit_arm("arm", [("100", str(root / "100"))], ROSTER, log_dir, str(tmp_path))
     assert audit.drop == ["b"]
     tables = {(table, benchmark) for _, table, _, benchmark, _ in audit.delete_rows}
     assert tables == {("submissions", "b"), ("attempts", "b")}

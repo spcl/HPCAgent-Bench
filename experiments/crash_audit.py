@@ -180,7 +180,7 @@ def delete_rows_for(jobs: list, arm: str, drop: set) -> list:
     return rows
 
 
-def audit_arm(arm: str, jobs: list, full_roster: list, log_dir: pathlib.Path) -> ArmAudit:
+def audit_arm(arm: str, jobs: list, full_roster: list, log_dir: pathlib.Path, opt: str) -> ArmAudit:
     """The keep/drop/never-ran partition of ``full_roster`` for one arm's jobs."""
     roster_set = set(full_roster)
     touched_set: set = set()
@@ -191,7 +191,7 @@ def audit_arm(arm: str, jobs: list, full_roster: list, log_dir: pathlib.Path) ->
     missing_logs: list = []
 
     for job, job_dir in jobs:
-        touched_set |= rk.touched(job_dir)
+        touched_set |= rk.touched(job_dir, opt)
         judge_rows |= judge_row_benchmarks(job_dir)
         log_path = log_dir / f"beverin-services-{job}.out"
         if not log_path.exists():
@@ -278,7 +278,7 @@ def main() -> int:
         tag = roster_tag(arm)
         if tag not in rosters:
             rosters[tag] = rk.roster(tag, opt)
-        audit = audit_arm(arm, arms[arm], rosters[tag], log_dir)
+        audit = audit_arm(arm, arms[arm], rosters[tag], log_dir, opt)
         report_arm(arm, audit, args.list_evidence)
         report[arm] = arm_json(audit)
 

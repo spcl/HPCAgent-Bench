@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import sqlite3
+import subprocess
 import sys
 import types
 
@@ -15,6 +16,12 @@ import pytest
 
 SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "experiments" / "wave_board.py"
 MODELS = ("kimi27sglang", "oss120b", "qwen38", "glm53")
+
+#: A row's ``ts``, arbitrary-but-after-any-real-commit: these tests use fake kernel names ("a", "b",
+#: "c", "d", "retired_kernel") that resolve no real manifest, so remaining_kernels.comparable_since_ms
+#: always returns 0 for them regardless of the ``opt`` these tests pass -- it exists only because the
+#: real schema requires the column (2026-09-18 manifest-epoch fix).
+FAR_FUTURE_TS_MS = 10**13
 
 
 @pytest.fixture(scope="module")
@@ -140,8 +147,8 @@ def job_dir_with_rows(root: pathlib.Path, job_id: str, benchmarks: list[str]) ->
     shard.mkdir(parents=True)
     conn = sqlite3.connect(shard / "hpcagent_bench.db")
     with conn:
-        conn.execute("create table submissions (benchmark text)")
-        conn.executemany("insert into submissions values (?)", [(name,) for name in benchmarks])
+        conn.execute("create table submissions (benchmark text, ts integer)")
+        conn.executemany("insert into submissions values (?, ?)", [(name, FAR_FUTURE_TS_MS) for name in benchmarks])
     conn.close()
     return root / job_id
 
@@ -178,7 +185,7 @@ def test_an_arms_coverage_is_the_union_of_every_jobs_rows(
     arm = "cpf-llr-focus40-oss120b-c-cpfsrc"
     dirs = {job_id: job_dir_with_rows(tmp_path, job_id, names) for job_id, names in rows.items()}
     jobs = [board.Job(job_id, arm, "COMPLETED", 3, "", "") for job_id in rows]
-    row = board.arm_row(arm, jobs, dirs, ["a", "b", "c"], MODELS)
+    row = board.arm_row(arm, jobs, dirs, ["a", "b", "c"], MODELS, str(tmp_path))
     assert (row["done"], row["status"]) == (done, status), row
 
 
@@ -192,7 +199,7 @@ def test_a_touched_kernel_outside_the_roster_does_not_inflate_done(
     arm = "cpf-llr-focus40-oss120b-c-cpfsrc"
     dirs = {"100": job_dir_with_rows(tmp_path, "100", ["a", "b", "retired_kernel"])}
     jobs = [board.Job("100", arm, "COMPLETED", 3, "", "")]
-    row = board.arm_row(arm, jobs, dirs, ["a", "b"], MODELS)
+    row = board.arm_row(arm, jobs, dirs, ["a", "b"], MODELS, str(tmp_path))
     assert (row["done"], row["roster"], row["status"]) == (2, 2, "complete"), row
 
 
@@ -205,7 +212,7 @@ def test_a_clean_reruns_row_folds_into_the_arm_it_supersedes(board: types.Module
         "200": job_dir_with_rows(tmp_path, "200", ["c"]),
     }
     jobs = [board.Job("100", arm, "COMPLETED", 3, "", ""), board.Job("200", arm + "-clean", "COMPLETED", 3, "", "")]
-    row = board.arm_row(arm, jobs, dirs, ["a", "b", "c"], MODELS)
+    row = board.arm_row(arm, jobs, dirs, ["a", "b", "c"], MODELS, str(tmp_path))
     assert (row["clean"], row["done"], row["status"]) == (True, 3, "complete"), row
     assert [job["id"] for job in row["jobs"]] == ["100", "200"], row
 
@@ -222,9 +229,54 @@ def test_owed_kernels_split_into_done_by_rule_budget_and_infra(board: types.Modu
 
     dirs = {"100": job_dir}
     jobs = [board.Job("100", arm, "COMPLETED", 3, "", "")]
-    row = board.arm_row(arm, jobs, dirs, ["a", "b", "c", "d"], MODELS)
+    row = board.arm_row(arm, jobs, dirs, ["a", "b", "c", "d"], MODELS, str(tmp_path))
 
     assert (row["done"], row["owed_budget"], row["owed_infra"], row["status"]) == (2, 1, 1, "incomplete"), row
+
+
+def make_git_repo_with_manifest(tmp_path: pathlib.Path, kernel: str = "probe_kernel") -> tuple:
+    """A real git checkout: ``kernel``'s manifest committed once, then resized at a LATER commit --
+    mirrors test_remaining_kernels.py's fixture of the same name. Returns ``(repo dir, kernel name,
+    the resize commit's ts in epoch ms)``."""
+    repo = tmp_path / "opt"
+    manifest_dir = repo / "hpcagent_bench" / "benchmarks" / "track" / kernel
+    manifest_dir.mkdir(parents=True)
+    manifest = manifest_dir / f"{kernel}.yaml"
+    manifest.write_text("preset: {XL: {n: 100}}\n", encoding="utf-8")
+    git = ["git", "-C", str(repo)]
+    subprocess.run(git + ["init", "-q"], check=True)
+    subprocess.run(git + ["config", "user.email", "t@t"], check=True)
+    subprocess.run(git + ["config", "user.name", "t"], check=True)
+    subprocess.run(git + ["add", "."], check=True)
+    subprocess.run(git + ["commit", "-q", "-m", "add manifest"], check=True)
+    manifest.write_text("preset: {XL: {n: 200}}\n", encoding="utf-8")  # sizing changed
+    subprocess.run(git + ["add", "."], check=True)
+    subprocess.run(git + ["commit", "-q", "-m", "resize XL"], check=True)
+    out = subprocess.run(git + ["log", "-1", "--format=%ct"], capture_output=True, text=True, check=True)
+    return repo, kernel, int(out.stdout.strip()) * 1000
+
+
+def test_arm_row_forwards_opt_so_a_stale_pre_resize_row_stays_owed(
+    board: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """arm_row's ``opt`` argument must actually reach remaining_kernels.touched, not get dropped on
+    the way down through kernel_status -- a submissions row graded before the kernel's own manifest
+    last changed (2026-09-18 manifest-epoch fix, job 641739) must leave the board reporting it owed,
+    not done, exactly like remaining_kernels.py's own report would."""
+    repo, kernel, changed_ts_ms = make_git_repo_with_manifest(tmp_path)
+    arm = "cpf-llr-focus40-oss120b-c-cpfsrc"
+    shard = tmp_path / "runs" / "100" / "judge" / "rank-0"
+    shard.mkdir(parents=True)
+    conn = sqlite3.connect(shard / "hpcagent_bench.db")
+    with conn:
+        conn.execute("create table submissions (benchmark text, ts integer)")
+        conn.execute("insert into submissions values (?, ?)", (kernel, changed_ts_ms - 1000))  # stale
+    conn.close()
+
+    dirs = {"100": tmp_path / "runs" / "100"}
+    jobs = [board.Job("100", arm, "COMPLETED", 3, "", "")]
+    row = board.arm_row(arm, jobs, dirs, [kernel], MODELS, str(repo))
+    assert row["done"] == 0, row
 
 
 def canon_csv(path: pathlib.Path, col: str, rank: int, rows: list[tuple[str, str]]) -> None:

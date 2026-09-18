@@ -171,12 +171,13 @@ def queued_ids() -> list[str]:
 
 
 def kernel_status(
-    jobs: list[Job], dirs: dict[str, pathlib.Path], full: list[str]
+    jobs: list[Job], dirs: dict[str, pathlib.Path], full: list[str], opt: str
 ) -> tuple[set[str], list[str], list[str]]:
     """(done kernels, owed at 2x budget, owed as-is) over ``jobs``' union coverage.
 
-    DONE is a judge ``submissions`` row (remaining_kernels.touched) UNION a kernel whose latest
-    episode ended on its own without one -- context overflow, or a clean self-exit
+    DONE is a judge ``submissions`` row (remaining_kernels.touched, which drops a row graded before
+    its kernel's own manifest/sizing last changed -- 2026-09-18 manifest-epoch fix) UNION a kernel
+    whose latest episode ended on its own without one -- context overflow, or a clean self-exit
     (remaining_kernels.ExitClass.DONE, 2026-09-18 decision): scored at whatever it reached, tokens
     counted, never rerun, so the board must not keep counting it against the arm as owed. What is
     left splits into BUDGET (the harness's own timeout/token cap fired: rerun at double budget) and
@@ -185,7 +186,7 @@ def kernel_status(
     touched_kernels: set[str] = set()
     for job in jobs:
         if job.id in dirs:
-            touched_kernels |= remaining_kernels.touched(str(dirs[job.id]))
+            touched_kernels |= remaining_kernels.touched(str(dirs[job.id]), opt)
     # bounded to `full`: a touched kernel outside the roster (a retired tag, a renamed kernel) must
     # not inflate `done` past `roster` -- the same bound remaining_kernels.py's own report_arm keeps
     # by summing over `full` rather than counting `seen` directly.
@@ -201,7 +202,9 @@ def kernel_status(
     return done | done_by_rule, budget, infra
 
 
-def arm_row(arm: str, jobs: list[Job], dirs: dict[str, pathlib.Path], full: list[str], models: tuple[str, ...]) -> dict:
+def arm_row(
+    arm: str, jobs: list[Job], dirs: dict[str, pathlib.Path], full: list[str], models: tuple[str, ...], opt: str
+) -> dict:
     """One board row per arm IDENTITY (``arm`` never carries ``-clean``: :func:`arm_rows` folds a
     clean re-run into the arm it supersedes before this is called, 2026-09-18). Coverage is the union
     over every job of the identity, plain and clean alike; ``clean`` is just a badge for "at least one
@@ -209,7 +212,7 @@ def arm_row(arm: str, jobs: list[Job], dirs: dict[str, pathlib.Path], full: list
     campaign, model, variant = split_arm(arm, models)
     spec = board_campaign(campaign, variant)
     clean = any(job.name.endswith(remaining_kernels.CLEAN_SUFFIX) for job in jobs)
-    done_kernels, budget, infra = kernel_status(jobs, dirs, full)
+    done_kernels, budget, infra = kernel_status(jobs, dirs, full, opt)
     done = len(done_kernels)
     return {
         "arm": arm,
@@ -253,7 +256,7 @@ def arm_rows(runs: pathlib.Path, opt: str, models: tuple[str, ...]) -> list[dict
     rows = []
     for arm, jobs in sorted(by_arm.items()):
         roster = rosters.get(CAMPAIGNS[campaign_of(arm)].tag, [])
-        rows.append(arm_row(arm, jobs, dirs, roster, models))
+        rows.append(arm_row(arm, jobs, dirs, roster, models, opt))
     return rows
 
 
