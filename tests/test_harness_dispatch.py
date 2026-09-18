@@ -371,7 +371,9 @@ def test_only_the_optimas_launch_puts_the_mounted_checkout_on_pythonpath(
     run(driver, tmp_path)
     optimas_env = launches[0]["env"]
     pythonpath = optimas_env["PYTHONPATH"]
-    assert pythonpath.split(":")[0] == mounted_src
+    # The vendored openai-agents SDK leads (imported before hpcagent_bench needs it), the mounted
+    # checkout itself follows -- both under mounted_src, neither is the image's own baked copy.
+    assert pythonpath.split(":")[:2] == [f"{mounted_src}/vendor/agent-optimas", mounted_src]
 
 
 @pytest.mark.parametrize("harness", RUNNERS)

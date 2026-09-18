@@ -285,3 +285,7 @@ experiments/*.jsonl.tmp
 !tests/data/llr40/data/*.csv
 # Slurm job logs written beside the submitters (%x-%j.out): run output, not source
 experiments/*-[0-9]*.out
+
+# Vendored openai-agents SDK for the optimas harness (hpcagent_bench.harness.optimas_tools):
+# pip-installed --target here at launch time, never committed (see experiments/harnesses.py).
+/vendor/
