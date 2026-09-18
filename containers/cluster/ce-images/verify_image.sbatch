@@ -65,6 +65,23 @@ case "${PROFILE}" in
     sglang|sglang-mi200|vllm) ce_fi_provider='FI_PROVIDER = "cxi"' ;;
     *)                        ce_fi_provider='' ;;
 esac
+# CC/CXX/FC and LD_LIBRARY_PATH, carried over from judge-agent-amd/edf.toml.example -- the
+# PRODUCTION template every live campaign renders through install_edfs.sh, measured working there
+# (629800/629802/629967). This generated EDF had neither: mpicc's own `-show` line bakes an
+# absolute -I/-L/-rpath into MPICH's own lib dir, so it does not explain a link failure, but a
+# GENERATED file drifting from the file it exists to stand in for is a bug on its own -- the two
+# are supposed to describe the same running image. LD_PRELOAD (mimalloc) and PMIX_MCA_psec are
+# left out: neither affects compiling or linking, which is what mpi_gpu_check.sh's multirank and
+# gpu-aware legs exercise.
+case "${PROFILE}" in
+    judge-agent-amd|judge)
+        ce_toolchain_env='CC = "/opt/gcc/bin/gcc"
+CXX = "/opt/gcc/bin/g++"
+FC = "/opt/gcc/bin/gfortran"
+LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/x86_64-linux-gnu"'
+        ;;
+    *) ce_toolchain_env='' ;;
+esac
 # sglang-mi200 serves with aiter off, as its EDF template does.
 case "${PROFILE}" in
     sglang-mi200) ce_aiter='SGLANG_USE_AITER = "0"' ;;
@@ -127,6 +144,7 @@ FI_CXI_RX_MATCH_MODE = "software"
 FI_MR_CACHE_MONITOR = "disabled"
 ${ce_fi_provider}
 ${ce_aiter}
+${ce_toolchain_env}
 TOML
 
 # Partition table, image stamp and rocminfo agree before anything runs: device code built for another
