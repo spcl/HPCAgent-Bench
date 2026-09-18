@@ -22,6 +22,14 @@ def emit_once(args: argparse.Namespace) -> int:
     # Gated on the REQUESTED precision, not the IR: ``apply_precision`` runs after lowering, so the
     # hoister cannot see that a float64 kernel is about to become float16 -- and real BLAS has only
     # single and double gemm, so any other precision has to keep the loop nest.
+    # fft_library (FFTW3 for a whole-array 1-D np.fft.*) is NOT enabled here yet: the shared
+    # call-hoister's malloc'd temp (LibNodeRewriter's __cb<n>, lib_nodes.py ~9315/9436) declares
+    # ONLY from array_temps' shape, not local_dtypes -- a hoisted np.fft.fft(x) result mallocs as
+    # plain ``double *`` (N reals) instead of ``double _Complex *`` (N complex), so a marker-based
+    # whole-array call landing on a hoisted temp under-allocates by 2x. Reproduced identically for
+    # both C and Fortran (numpyto_fortran hits the same hoister); numba's fix (objmode, a separate
+    # non-hoisted mechanism -- see numpyto_numba/emit.py) is unaffected and IS enabled. Needs a
+    # hoister fix (thread local_dtypes into the malloc'd temp's declared type) before this flips on.
     kir = lower(kir, blas=args.precision in BLAS_PRECISIONS)
     out = args.out
     out.mkdir(parents=True, exist_ok=True)

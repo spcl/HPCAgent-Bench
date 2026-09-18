@@ -21,7 +21,7 @@ from numpyto_common.emitter import (
     index_rank_error,
 )
 from numpyto_common.frontend import _names_used_as_int
-from numpyto_common.lib_nodes import BLAS_GEMM_MARKER
+from numpyto_common.lib_nodes import BLAS_GEMM_MARKER, FFT_LIBRARY_MARKER
 from numpyto_common.lowering import _walk_complex, helper_returns_int, integer_valued_locals
 from numpyto_common.statement_desugar import binding_names
 
@@ -529,6 +529,20 @@ class _CBodyEmitter(BaseEmitter):
         if "[" in cond or _PLUTO_FLOAT_LITERAL_RE.search(cond):
             return True
         return any(self.scalar_ctypes.get(n, "").startswith(("double", "float")) for n in _IDENT_RE.findall(cond))
+
+    def emit_stmt(self, node: ast.stmt, indent: str) -> str:
+        """Base dispatch, plus one override: FFT_LIBRARY_MARKER needs several C statements (plan,
+        execute, destroy, an optional normalize loop -- see :meth:`_emit_fft_library`), which the
+        base ``ast.Expr`` case (one expression, one ``;``) cannot hold. Every other statement kind
+        is unchanged."""
+        if (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == FFT_LIBRARY_MARKER
+        ):
+            return self._emit_fft_library(node.value, indent)
+        return super().emit_stmt(node, indent)
 
     def _emit_for(self, node: ast.For, indent: str) -> str:
         target = node.target
@@ -1659,6 +1673,53 @@ class _CBodyEmitter(BaseEmitter):
             f"{gemm}(CblasRowMajor, CblasNoTrans, CblasNoTrans, {dims}, "
             f"{one}, {a}, (blasint)({k}), {b}, (blasint)({n}), {zero}, {out}, (blasint)({n}))"
         )
+
+    def _emit_fft_library(self, node: ast.Call, indent: str) -> str:
+        """Render the 1-D FFT marker as an FFTW3 plan/execute/destroy sequence -- O(N log N),
+        replacing the naive O(N^2) loop the 2026-09-18 canon incident hit (fft_1d: 2-3.5h/column
+        at a fuzzed N ~43M-87M; FFTW execute alone measured 6.8s at that N).
+
+        Args (see FFT_LIBRARY_MARKER): ``(out, src, n, inverse_flag, norm_kind)``. ``out``/``src``
+        are bare Names (array params/locals; the marker is only ever built that way, see
+        _expand_dft_1d_library), so their C spelling is just the identifier -- same as
+        :meth:`_emit_blas_gemm`. Both are ``double _Complex*``/``float _Complex*`` already, which
+        C99 defines layout-compatible with ``fftw_complex``/``fftwf_complex`` (FFTW's own manual:
+        "you should find that fftw_complex is the same as ... double complex"), so no repacking.
+
+        Normalization is NOT delegated to FFTW's planner (it has none): FFTW_FORWARD is numpy's
+        unnormalized forward (matches norm='backward'/'forward' forward exactly); FFTW_BACKWARD is
+        numpy's UNNORMALIZED inverse (numpy's own default divides by N) -- both verified against
+        this venv's libfftw3.so.3 via ctypes at N in {16, 17, 97, 1024, 4200, 4201} (prime, pow2,
+        non-pow2), rtol/atol 1e-9. So an explicit scale loop below applies exactly the divisor
+        numpy's own ``norm=`` would (see :func:`_read_fft_norm`), covering ortho too.
+        """
+        out, src = (arg.id for arg in node.args[:2])
+        n = self.emit_expr(node.args[2])
+        inverse = bool(node.args[3].value)
+        norm_kind = node.args[4].value  # 0 backward / 1 forward / 2 ortho -- _NORM_KIND's encoding
+        f32 = self._is_float32_kernel()
+        prefix = "fftwf" if f32 else "fftw"
+        ctype = "float _Complex" if f32 else "double _Complex"
+        num = "float" if f32 else "double"
+        sign = "FFTW_BACKWARD" if inverse else "FFTW_FORWARD"
+        divides = norm_kind == 2 or (norm_kind == 0) == inverse
+        lines = [
+            f"{indent}{{",
+            f"{indent}  int64_t __fft_n = (int64_t)({n});",
+            f"{indent}  {prefix}_plan __fft_plan = {prefix}_plan_dft_1d((int)__fft_n, "
+            f"({prefix}_complex *)({src}), ({prefix}_complex *)({out}), {sign}, FFTW_ESTIMATE);",
+            f"{indent}  {prefix}_execute(__fft_plan);",
+            f"{indent}  {prefix}_destroy_plan(__fft_plan);",
+        ]
+        if divides:
+            divisor = f"{self._math_name('sqrt')}(({num})__fft_n)" if norm_kind == 2 else f"(({num})__fft_n)"
+            lines += [
+                f"{indent}  for (int64_t __fft_i = 0; __fft_i < __fft_n; ++__fft_i) {{",
+                f"{indent}    {out}[__fft_i] /= {divisor};",
+                f"{indent}  }}",
+            ]
+        lines.append(f"{indent}}}")
+        return "\n".join(lines)
 
     def _emit_true_divide(self, node: ast.BinOp) -> str:
         """numpy ``/`` mixing a float and a Python int yields the FLOAT's own precision -- NEP 50
@@ -2851,6 +2912,15 @@ def _blas_include(body: str) -> str:
     return "#include <cblas.h>\n" if "cblas_" in body else ""
 
 
+def _fftw_include(body: str) -> str:
+    """``#include <fftw3.h>`` when this body calls fftw(f)_plan_dft_1d, else nothing.
+
+    FFTW3's header carries its own ``extern "C"`` guard (same convention as cblas.h), so C++
+    needs no wrapper either.
+    """
+    return "#include <fftw3.h>\n" if "_plan_dft_1d(" in body else ""
+
+
 _CPP_HEADER = _CPP_ARITH + '\nextern "C" {\n'
 _CPP_FOOTER = '} // extern "C"\n'
 
@@ -3318,7 +3388,7 @@ def emit_c(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     signature = _emit_signature(kir, name)
     body = _emit_body(kir, indent="        ")
     return (
-        f"{_C_HEADER}{_blas_include(body)}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n"
+        f"{_C_HEADER}{_blas_include(body)}{_fftw_include(body)}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n"
         f"{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
     )
 
@@ -3332,7 +3402,7 @@ def emit_cpp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     signature = signature.replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ")
     return (
-        f"{_CPP_HEADER}{_blas_include(body)}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n"
+        f"{_CPP_HEADER}{_blas_include(body)}{_fftw_include(body)}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n"
         f"{_CPP_PRELUDE}{body}\n{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}"
     )
 
@@ -3377,7 +3447,7 @@ def emit_cpp_isopar(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     signature = _emit_signature(kir, name).replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ", isopar=True)
     return (
-        f"{_CPP_ISOPAR_HEADER}{_blas_include(body)}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
+        f"{_CPP_ISOPAR_HEADER}{_blas_include(body)}{_fftw_include(body)}{_fp8_prelude(kir)}\n{pinned_const_block(kir)}{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
         f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}"
     )
 
@@ -3390,7 +3460,7 @@ def emit_c_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     helpers = emit_c_helpers(kir)
     signature = _emit_signature(kir, name)
     body = _emit_body(kir, indent="        ", parallel=True)
-    return f"{_C_HEADER}{_blas_include(body)}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
+    return f"{_C_HEADER}{_blas_include(body)}{_fftw_include(body)}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_C_PRELUDE}{body}\n{_C_EPILOGUE}}}\n"
 
 
 def emit_cpp_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
@@ -3402,7 +3472,7 @@ def emit_cpp_omp(kir: KernelIR, fn_name: Optional[str] = None) -> str:
     signature = _emit_signature(kir, name).replace("*restrict ", "*__restrict__ ")
     body = _emit_body(kir, indent="        ", parallel=True)
     return (
-        f"{_CPP_HEADER}{_blas_include(body)}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
+        f"{_CPP_HEADER}{_blas_include(body)}{_fftw_include(body)}{_fp8_prelude(kir)}\n{helpers}{signature} {{\n{_CPP_PRELUDE}{body}\n"
         f"{_CPP_EPILOGUE}}}\n{_CPP_FOOTER}"
     )
 
