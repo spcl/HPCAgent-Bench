@@ -173,6 +173,50 @@ def test_a_finished_episode_writes_its_end_record_and_exits_zero(episode_run) ->
     assert end == {"reason": "finished", "turns": len(chats), "detail": "status=ok", "effort": ""}, end
 
 
+def test_an_agent_error_rounds_traceback_reaches_harness_end_json_and_stdout(tmp_path, monkeypatch, capsys) -> None:
+    """A round that raises (agent_error) used to leave harness-end.json/optimas.log with nothing
+    past the bare word "agent_error" -- row.detail (runner._solve_rounds' repr(exc) + traceback)
+    was computed and then dropped. Smoke 641665 hit exactly this: real agent_error rows, no way to
+    tell what actually raised from any artifact the run left behind."""
+    workdir = tmp_path / "work"
+    judge_log = tmp_path / "judge.jsonl"
+
+    def fake_chat_no_envelope(url, payload, headers, timeout, unreachable_msg):
+        # No JSON object anywhere in the reply: Submission.from_response raises inside
+        # _solve_rounds, exactly the "the model never gave anything gradable" failure mode.
+        return {"usage": USAGE, "choices": [{"message": {"content": "I am not going to answer in JSON."}}]}
+
+    monkeypatch.setattr(agent, "http_chat_json", fake_chat_no_envelope)
+    monkeypatch.setattr(FakeJudgeClient, "log", judge_log, raising=False)
+    monkeypatch.setattr(episode, "JudgeClient", FakeJudgeClient)
+    monkeypatch.setattr(pipeline, "JudgeClient", FakeJudgeClient)
+    monkeypatch.setattr(runner, "score", local_grade_forbidden)
+    monkeypatch.setenv("JUDGE_URL", JUDGE_URL)
+    monkeypatch.setenv("JUDGE_RANK", str(JUDGE_RANK))
+    monkeypatch.setenv("OPENAI_API_KEY", "EMPTY")
+    code = episode.main(
+        [
+            "--baseline=optimas",
+            "--kernel=gemm",
+            "--language=c",
+            f"--workdir={workdir}",
+            "--base-url=http://replica:30000/v1",
+            "--model=qwen38",
+            f"--usage={workdir / 'usage.jsonl'}",
+            "--timeout-seconds=400",
+        ]
+    )
+    assert code == 0  # an agent_error ROW is not a raise: the episode still finishes
+    end = json.loads((workdir / "harness-end.json").read_text())
+    assert end["reason"] == "finished"
+    assert end["detail"].startswith("status=agent_error: "), end["detail"]
+    assert "Traceback (most recent call last)" in end["detail"], end["detail"]
+    assert "ValueError" in end["detail"] and "no JSON object" in end["detail"], end["detail"]
+    summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert summary["status"] == "agent_error"
+    assert summary["detail"] == end["detail"].removeprefix("status=agent_error: ")
+
+
 def test_an_episode_without_a_judge_url_ends_in_error_and_exits_nonzero(tmp_path, monkeypatch) -> None:
     """An unset JUDGE_URL must not fall back to a localhost judge that grades nothing this campaign records."""
     monkeypatch.delenv("JUDGE_URL", raising=False)
