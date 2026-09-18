@@ -10,6 +10,8 @@ import json
 import pathlib
 import sys
 
+import pytest
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 
 import canon_sdfg_prerender as csp  # noqa: E402
@@ -66,6 +68,6 @@ def test_format_coverage_table_reports_a_total_per_tag() -> None:
     assert "gpu: 3 kernel(s) -- fresh=3" in text
 
 
-def test_default_opt_derives_from_scratch_env_var_not_a_hardcoded_path(monkeypatch) -> None:
+def test_default_opt_derives_from_scratch_env_var_not_a_hardcoded_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SCRATCH", "/some/scratch/root")
     assert csp.default_opt() == "/some/scratch/root/hpcagent-bench"
