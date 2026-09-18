@@ -38,6 +38,14 @@ def board() -> types.ModuleType:
         ("scicomp-dc-qwen38-cpfsrc", ("scicomp-dc", "qwen38", "cpfsrc", False)),
         ("cpf-llr-focus40-qwen38-c-cpf-clean", ("cpf-llr-focus40", "qwen38", "c-cpf", True)),
         ("cpf-llr-focus40-oss120b-c-clean", ("cpf-llr-focus40", "oss120b", "c", True)),
+        (
+            "scicomp-perf-playbook-gpu-oss120b-hip-perf-playbook-amd",
+            ("scicomp-perf-playbook-gpu", "oss120b", "hip-perf-playbook-amd", False),
+        ),
+        (
+            "scicomp-perf-playbook-qwen38-perf-playbook-cpu",
+            ("scicomp-perf-playbook", "qwen38", "perf-playbook-cpu", False),
+        ),
     ],
 )
 def test_an_arm_name_splits_into_its_campaign_model_variant_and_clean_flag(
@@ -57,6 +65,22 @@ def test_the_harness_smoke_is_back_on_the_board(board: types.ModuleType) -> None
         "harness-focus20-smoke",
         "oss120b",
         "optimas",
+        False,
+    )
+
+
+def test_scicomp_perf_playbook_gpu_wins_over_its_cpu_prefix(board: types.ModuleType) -> None:
+    """campaign_of takes the LONGEST matching prefix: "scicomp-perf-playbook-gpu" must win over
+    "scicomp-perf-playbook", or a GPU arm's rest-of-name would start "gpu-<model>-..." and the model
+    would never match (submit-scicomp-perf-playbook.sh's DEVICE=gpu knob, mirroring submit-scicomp-dc.sh)."""
+    assert board.campaign_of("scicomp-perf-playbook-gpu-oss120b-hip-perf-playbook-amd") == "scicomp-perf-playbook-gpu"
+    row_campaign, model, variant, clean = board.split_arm(
+        "scicomp-perf-playbook-gpu-qwen38-hip-perf-playbook-amd", MODELS
+    )
+    assert (row_campaign, model, variant, clean) == (
+        "scicomp-perf-playbook-gpu",
+        "qwen38",
+        "hip-perf-playbook-amd",
         False,
     )
 
