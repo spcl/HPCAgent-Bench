@@ -368,6 +368,11 @@ _INT_EXTRACTING_CALLS = frozenset({"len", "int", "range"})
 #: The __hpcagent_bench_zeros__ marker, plus its leading-underscore-stripped alias.
 _ZEROS_MARKER_NAMES = frozenset({"__hpcagent_bench_zeros__", "x_hpcagent_bench_zeros__"})
 
+#: FFT_LIBRARY_MARKER, plus its leading-underscore-stripped alias: _FortranRenameTemps
+#: (visit_Name) strips a marker call's OWN func name like any other identifier before
+#: emit_stmt's marker check runs, so the raw spelling never survives to be matched.
+_FFT_MARKER_NAMES = frozenset({FFT_LIBRARY_MARKER, "x_" + FFT_LIBRARY_MARKER.lstrip("_")})
+
 #: numpy min/max family that needs int-literal-vs-real promotion before renaming to MAX/MIN.
 #: Fortran caps an identifier at 63 characters (F2003 onward, and what -std=f2018 enforces).
 _FORTRAN_NAME_LIMIT = 63
@@ -752,7 +757,7 @@ class _FortranBodyEmitter(BaseEmitter):
             isinstance(node, ast.Expr)
             and isinstance(node.value, ast.Call)
             and isinstance(node.value.func, ast.Name)
-            and node.value.func.id == FFT_LIBRARY_MARKER
+            and node.value.func.id in _FFT_MARKER_NAMES
         ):
             return self._emit_fftw(node.value, indent)
         if (

@@ -22,15 +22,15 @@ def emit_once(args: argparse.Namespace) -> int:
     # Gated on the REQUESTED precision, not the IR: ``apply_precision`` runs after lowering, so the
     # hoister cannot see that a float64 kernel is about to become float16 -- and real BLAS has only
     # single and double gemm, so any other precision has to keep the loop nest.
-    # fft_library (FFTW3 for a whole-array 1-D np.fft.*) is NOT enabled here yet: the shared
-    # call-hoister's malloc'd temp (LibNodeRewriter's __cb<n>, lib_nodes.py ~9315/9436) declares
-    # ONLY from array_temps' shape, not local_dtypes -- a hoisted np.fft.fft(x) result mallocs as
-    # plain ``double *`` (N reals) instead of ``double _Complex *`` (N complex), so a marker-based
-    # whole-array call landing on a hoisted temp under-allocates by 2x. Reproduced identically for
-    # both C and Fortran (numpyto_fortran hits the same hoister); numba's fix (objmode, a separate
-    # non-hoisted mechanism -- see numpyto_numba/emit.py) is unaffected and IS enabled. Needs a
-    # hoister fix (thread local_dtypes into the malloc'd temp's declared type) before this flips on.
-    kir = lower(kir, blas=args.precision in BLAS_PRECISIONS)
+    # fft_library (FFTW3 for a whole-array 1-D np.fft.*): a hoisted np.fft.fft(x) result temp used
+    # to malloc as plain ``double *`` (N reals) instead of ``double _Complex *`` (N complex) --
+    # lowering.py's real-narrowing pass (_fix_real_scalar_dtypes) saw only the temp's zeros-marker
+    # init as a "write" (the FFT_LIBRARY_MARKER call that actually fills it is a bare Expr, not an
+    # Assign) and downgraded the hoister's complex128 tag back to real. Fixed by excluding a
+    # FFT_LIBRARY_MARKER output name from that pass's narrowing candidates. Reproduced identically
+    # for both C and Fortran (numpyto_fortran hits the same hoister); numba's fix (objmode, a
+    # separate non-hoisted mechanism -- see numpyto_numba/emit.py) was unaffected and already on.
+    kir = lower(kir, blas=args.precision in BLAS_PRECISIONS, fft_library=True)
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
     # Kernel name from the input stem, independent of bench_info's short_name.

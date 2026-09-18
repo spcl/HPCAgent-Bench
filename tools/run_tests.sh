@@ -40,6 +40,20 @@ if ! pkg-config --exists openblas 2>/dev/null; then
     done
 fi
 
+# Same reason, same shape, for FFTW: the C/C++/Fortran translator lowers a whole-array 1-D
+# np.fft.fft/ifft to FFT_LIBRARY_MARKER, an fftw_plan_dft_1d/fftwf_... call (languages.py's
+# FFT_LINKED_LANGS), so every native-build test needs <fftw3.h> on CPATH and libfftw3 on the
+# link line without PKG_CONFIG_PATH pointing at it.
+if ! pkg-config --exists fftw3 2>/dev/null; then
+    for prefix in "${SCRATCH}"/spack/opt/spack/*/fftw-*; do
+        [[ -d "${prefix}/lib/pkgconfig" ]] || continue
+        export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:+${PKG_CONFIG_PATH}:}${prefix}/lib/pkgconfig"
+        export CPATH="${CPATH:+${CPATH}:}${prefix}/include"
+        export LIBRARY_PATH="${LIBRARY_PATH:+${LIBRARY_PATH}:}${prefix}/lib"
+        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}${prefix}/lib"
+    done
+fi
+
 # mpi4py imports at collection time in the MPI tests; these are the same values every dace command
 # in this repo runs under, and without them the run hangs instead of skipping.
 #
@@ -52,6 +66,7 @@ export UCX_VFS_ENABLE=n HWLOC_COMPONENTS=-gl MPI4PY_RC_INITIALIZE=0
 
 command -v pythran >/dev/null || echo "WARNING: no pythran on PATH -- every pythran e2e case will FAIL, not skip" >&2
 pkg-config --exists openblas || echo "WARNING: no openblas found -- every native build case will FAIL on cblas.h" >&2
+pkg-config --exists fftw3 || echo "WARNING: no fftw3 found -- every FFT-library-lowering case will FAIL on fftw3.h" >&2
 
 cd -- "${REPO}"
 [[ $# -gt 0 ]] || set -- -q --maxfail=20 tests/

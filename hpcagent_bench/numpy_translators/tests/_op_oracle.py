@@ -73,7 +73,14 @@ def _bench_info(
     }
 
 
-def _emit_native(npy: pathlib.Path, bi: pathlib.Path, out: pathlib.Path, base: str, isopar: bool = False) -> bool:
+def _emit_native(
+    npy: pathlib.Path,
+    bi: pathlib.Path,
+    out: pathlib.Path,
+    base: str,
+    isopar: bool = False,
+    fft_library: bool = False,
+) -> bool:
     from numpyto_common.frontend import parse_kernel
     from numpyto_common.lowering import lower
     from numpyto_c.emit import emit_c, emit_cpp, emit_cpp_isopar
@@ -82,13 +89,13 @@ def _emit_native(npy: pathlib.Path, bi: pathlib.Path, out: pathlib.Path, base: s
     from numpyto_fortran.intrinsics import renders_natively as fortran_renders_natively
 
     out.mkdir(parents=True, exist_ok=True)
-    kir = lower(parse_kernel(npy, bi))
+    kir = lower(parse_kernel(npy, bi), fft_library=fft_library)
     (out / f"{base}.c").write_text(emit_c(kir, fn_name=base))
     (out / f"{base}.cpp").write_text(emit_cpp(kir, fn_name=base))
     emit_binding(kir, out / f"{base}_binding.json", base_name=base)
     if isopar:
         (out / f"{base}_isopar.cpp").write_text(emit_cpp_isopar(kir, fn_name=base))
-    fkir = lower(parse_kernel(npy, bi), native_call=fortran_renders_natively)
+    fkir = lower(parse_kernel(npy, bi), native_call=fortran_renders_natively, fft_library=fft_library)
     (out / f"{base}.f90").write_text(emit_fortran(fkir, fn_name=base))
     return True
 
@@ -105,8 +112,14 @@ def run_op(
     backends=("c", "cpp", "fortran", "numba", "pythran", "jax"),
     skip_backends: Dict[str, str] = None,
     dtypes: Dict[str, str] = None,
+    fft_library: bool = False,
 ) -> Dict[str, str]:
     """Emit ``src``'s ``func`` for each backend, run it, compare to numpy.
+
+    :param fft_library: forwarded to :func:`numpyto_common.lowering.lower` for the c/cpp/fortran
+        legs only (numba/pythran/jax each build their own ``kir`` below, untouched): a whole-array
+        1-D ``np.fft.fft``/``ifft`` renders as FFT_LIBRARY_MARKER (an fftw_plan_dft_1d call)
+        instead of the naive O(N^2) loop.
 
     :param inputs: name -> concrete numpy array / scalar (kernel call order is
         ``list(inputs) + list(outputs)``).
@@ -190,7 +203,7 @@ def run_op(
         bi.write_text(json.dumps(bi_dict))
         base = func
         try:
-            _emit_native(npy, bi, tdp, base, isopar=_no.ISOPAR in backends)
+            _emit_native(npy, bi, tdp, base, isopar=_no.ISOPAR in backends, fft_library=fft_library)
         except Exception as exc:  # noqa: BLE001
             return {b: f"FAIL:emit:{type(exc).__name__}:{exc}" for b in backends}
         binding = json.loads((tdp / f"{base}_binding.json").read_text())

@@ -16,11 +16,13 @@ from numpyto_common.naming import entry_symbol, native_base, short_for
 def emit_once(args: argparse.Namespace) -> int:
     kir = parse_kernel(args.kernel, args.bench_info, precision=args.precision)
     # Fortran keeps the whole-array reductions as intrinsics; everything else lowers to loops.
-    # fft_library (FFTW3) is NOT enabled here yet -- same shared call-hoister bug numpyto_c/cli.py
-    # documents (a hoisted np.fft.fft(x) result temp mallocs real, not complex); the interface-
-    # block + block-construct rendering in emit.py (_emit_fftw, __used_fftw) is in place and
-    # ready, just not wired live until that hoister fix lands.
-    kir = lower(kir, native_call=renders_natively)
+    # fft_library (FFTW3): a whole-array 1-D np.fft.fft/ifft renders as FFT_LIBRARY_MARKER, an
+    # fftw_plan_dft_1d call via an explicit bind(C) interface (see emit.py's _emit_fftw). The
+    # shared call-hoister bug (a hoisted np.fft.fft(x) result temp malloc'd real instead of
+    # complex, and the marker's own func name losing its identity under _FortranRenameTemps) is
+    # fixed -- see numpyto_common/lowering.py's _fix_real_scalar_dtypes and this file's
+    # _FFT_MARKER_NAMES.
+    kir = lower(kir, native_call=renders_natively, fft_library=True)
     # Precision applied on the IR: float/complex remapped, ints unchanged.
     if args.precision:
         kir = apply_precision(kir, args.precision)

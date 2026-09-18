@@ -58,6 +58,7 @@ from numpyto_common.lib_nodes import (
     ARRAY_METHOD_SHAPE_OPS,
     ArrayMethodRewriter,
     DIM_IDENT_RE,
+    FFT_LIBRARY_MARKER,
     SHAPE_READ_RE,
     LibNodeRewriter,
     MESHGRID_AXIS_KW,
@@ -9368,6 +9369,23 @@ def _fix_real_scalar_dtypes(ctx: LoweringContext) -> None:
     # to its element dtype). Kernel input/output arrays are excluded: narrowing
     # their declaration would break the marshalled ABI.
     candidates = {n for n, dt in ld.items() if dt in _REAL_FOR_COMPLEX and n not in array_dtypes}
+    # A name FFT_LIBRARY_MARKER writes is excluded too: the marker call is a bare
+    # ``Expr`` (``__fft_1d_library(out, src, n, inverse, norm)``), invisible to the
+    # ``writes`` walk below (it only looks at Assign/AugAssign targets). Its output
+    # temp's OWN init marker (``__cb1 = __hpcagent_bench_zeros__()``) then looks like
+    # its only, real-valued write and gets narrowed back to real -- undoing the
+    # unconditional complex128 tag the hoister gave it (lib_nodes._CallHoister,
+    # every np.fft.* transform returns complex regardless of operand). Every 1-D FFT
+    # library call's output is complex by construction, never a narrowing candidate.
+    candidates -= {
+        call.args[0].id
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == FFT_LIBRARY_MARKER
+        and call.args
+        and isinstance(call.args[0], ast.Name)
+    }
     # Every value WRITTEN to a candidate -- a whole-name ``x = e`` / ``x += e`` or
     # a per-element ``x[i] = e`` / ``x[i] += e`` (an array is written elementwise).
     # A candidate is real only if EVERY write is real.
