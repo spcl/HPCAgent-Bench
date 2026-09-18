@@ -41,6 +41,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.collections import PathCollection
+from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.text import Annotation
 from matplotlib.ticker import FuncFormatter, MultipleLocator
@@ -335,6 +336,24 @@ def widen_x_axis(ax: Axes) -> None:
         ax.set_xlim(centre - MIN_X_SPAN / 2.0, centre + MIN_X_SPAN / 2.0)
 
 
+#: The most labelled ticks the X axis draws before its whole-ratio spacing widens. A few outlier
+#: kernels (one crashed to 1/512x, another ran away to 256x) autoscale the window past twenty
+#: octaves, and :data:`MultipleLocator(1.0)` -- a tick at EVERY power of 2 -- smears that many labels
+#: into one panel's width until they overlap into a solid bar.
+MAX_X_TICKS: int = 9
+
+
+def x_tick_step(span: float) -> int:
+    """The whole-ratio spacing (in log2 units: 1 is every power of 2, 2 every power of 4, ...) that
+    keeps the X axis under :data:`MAX_X_TICKS` labelled ticks for a window ``span`` wide. Doubled
+    rather than picked from an arbitrary "nice number" table, so a tick always lands on an INTEGER
+    log2 value -- the only kind :func:`log2_tick` spells as a clean ratio."""
+    step = 1
+    while span / step > MAX_X_TICKS - 1:
+        step *= 2
+    return step
+
+
 def style_panel(ax: Axes, compact: bool) -> None:
     """One SQUARE panel: the speed-up geomean on X as ``log2(ratio)`` (0 = no change, +1 = 2x, -1 =
     0.5x), ticks read back in ratios like every other speed-up axis in this repo
@@ -356,7 +375,8 @@ def style_panel(ax: Axes, compact: bool) -> None:
     style.value_axis(ax, "y", log_base=2.0)
     ax.margins(x=0.22, y=0.22)
     widen_x_axis(ax)
-    ax.xaxis.set_major_locator(MultipleLocator(1.0))
+    low, high = ax.get_xlim()
+    ax.xaxis.set_major_locator(MultipleLocator(x_tick_step(high - low)))
     ax.xaxis.set_major_formatter(FuncFormatter(log2_tick))
     ax.yaxis.set_major_formatter(FuncFormatter(ratio_tick))
     ax.set_box_aspect(1.0)
@@ -474,7 +494,30 @@ ROW_PANEL_GAP: float = 0.25
 #: whitespace it does not need and a narrow one less than it does.
 ROW_TITLE_IN: float = 0.60
 ROW_XLABEL_IN: float = 0.55
+
+#: :func:`figure_row`'s worst-case GUESS at the legend's height, for the PROBE pass only -- big
+#: enough that the probe legend never wraps onto more rows than the real one will. The real bottom
+#: margin is the legend's MEASURED height (:func:`~hpcagent_bench.stats.style.legend_below` already
+#: returns it), not this constant: a two-model, one-treatment legend rendered here at under half of
+#: it, and the unused rest sat as dead space between the panels and the key.
 ROW_LEGEND_IN: float = 1.55
+
+#: Clearance added past a measurement, inches -- the same margin :func:`~hpcagent_bench.stats.style.
+#: title` and :func:`~hpcagent_bench.stats.style.legend_below` leave past their own measured boxes.
+MEASURE_PAD_IN: float = 0.08
+
+
+def required_left_margin(fig: Figure, ax: Axes) -> float:
+    """How far left of ``ax``'s own box its Y ticks and axis label protrude, in inches, plus
+    :data:`MEASURE_PAD_IN` -- what :func:`figure_row` must reserve so a long Y label, or a
+    wide-ranging axis's longest tick (``0.0078125x``, wider than the fixed fraction this used to
+    reserve), never renders past the canvas's own left edge."""
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    axes_left = ax.get_window_extent(renderer).x0
+    label_left = ax.yaxis.get_tightbbox(renderer).x0
+    protrusion_in = max(0.0, axes_left - label_left) / fig.dpi
+    return protrusion_in + MEASURE_PAD_IN
 
 
 def panel_side(n: int, row_width_in: float | None = None) -> float:
@@ -505,6 +548,7 @@ def figure_one(
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=PANEL_SIZE)
+    fig.set_dpi(style.SAVE_DPI)  # measure title/legend fit at the dpi save() actually writes
     handles = draw_panel(ax, frame, stats, treatment, control_name=control_name, repeats=repeats)
     fig.subplots_adjust(**PANEL_MARGINS)
     style.legend_below(fig, handles, ncol=2, y=0.01, fontsize=style.LABEL_PT * 0.8)
@@ -533,30 +577,54 @@ def figure_row(
 
     n = len(panels)
     side = panel_side(n, row_width_in)
-    width = side * n + ROW_PANEL_GAP * (n - 1)
-    height = side + ROW_TITLE_IN + ROW_XLABEL_IN + ROW_LEGEND_IN
-    fig, axes = plt.subplots(1, n, figsize=(width, height), squeeze=False)
+    data_width = side * n + ROW_PANEL_GAP * (n - 1)
     treatments_here = [treatment for panel_title, treatment, treated_arm, control_arm in panels]
-    handles_by_label: dict[str, Line2D] = {}
-    for ax, (title, treatment, stats, frame) in zip(axes[0], panels, strict=True):
-        for handle in draw_panel(ax, frame, stats, treatment, True, treatments_here, repeats=repeats):
-            handles_by_label.setdefault(handle.get_label(), handle)
-        ax.text(
-            0.5, 0.98, title, transform=ax.transAxes, ha="center", va="top",
-            fontsize=style.SUBTITLE_PT * 0.72, color=style.INK, zorder=7,
+
+    def build(width: float, height: float) -> tuple[Figure, list[Axes], list[Line2D]]:
+        fig, axes = plt.subplots(1, n, figsize=(width, height), squeeze=False)
+        fig.set_dpi(style.SAVE_DPI)  # measure title/legend/margins at the dpi save() writes
+        handles_by_label: dict[str, Line2D] = {}
+        for ax, (title, treatment, stats, frame) in zip(axes[0], panels, strict=True):
+            for handle in draw_panel(ax, frame, stats, treatment, True, treatments_here, repeats=repeats):
+                handles_by_label.setdefault(handle.get_label(), handle)
+            ax.text(
+                0.5, 0.98, title, transform=ax.transAxes, ha="center", va="top",
+                fontsize=style.SUBTITLE_PT * 0.72, color=style.INK, zorder=7,
+            )  # fmt: skip
+        for ax in axes[0][1:]:
+            ax.set_ylabel("")
+        return fig, list(axes[0]), list(handles_by_label.values())
+
+    def dress(fig: Figure, handles: list[Line2D]) -> float:
+        """Title and legend, drawn once per pass; returns the legend's own measured height (in)."""
+        style.title(fig, label)
+        return style.legend_below(
+            fig, handles, ncol=min(len(handles), 3), y=0.005, fontsize=style.LABEL_PT * 0.55
         )  # fmt: skip
-    for ax in axes[0][1:]:
-        ax.set_ylabel("")
-    style.title(fig, label)
-    style.legend_below(
-        fig, list(handles_by_label.values()), ncol=min(len(handles_by_label), 3), y=0.005,
-        fontsize=style.LABEL_PT * 0.55,
-    )  # fmt: skip
+
+    # Pass 1 (a throwaway figure): :data:`ROW_LEGEND_IN` is a worst-case guess at how tall the
+    # legend's row wrap will come out and :data:`PANEL_MARGINS`-style left fraction is a guess at
+    # how far a Y label and its ticks protrude -- both measured for real here, so pass 2 reserves
+    # exactly what this row's own content needs instead of a constant sized for a wider one.
+    probe_height = side + ROW_TITLE_IN + ROW_XLABEL_IN + ROW_LEGEND_IN
+    probe_fig, probe_axes, probe_handles = build(data_width, probe_height)
+    legend_h = dress(probe_fig, probe_handles)
+    left_in = required_left_margin(probe_fig, probe_axes[0])
+    plt.close(probe_fig)
+
+    bottom_in = ROW_XLABEL_IN + legend_h + MEASURE_PAD_IN
+    height = side + ROW_TITLE_IN + bottom_in
+    # A page-budgeted row (``row_width_in`` given) keeps its CONTRACTED width and shrinks the data
+    # area to fit the Y label inside it -- the promise that width exists to keep. A natural row
+    # makes none, so the label gets its OWN canvas instead of eating into the square panel's side.
+    width = data_width if row_width_in is not None else data_width + left_in
+    fig, axes, handles = build(width, height)
+    dress(fig, handles)
     fig.subplots_adjust(
-        left=0.13, right=0.99, top=1.0 - ROW_TITLE_IN / height, bottom=(ROW_XLABEL_IN + ROW_LEGEND_IN) / height,
+        left=min(0.4, left_in / width), right=0.99, top=1.0 - ROW_TITLE_IN / height, bottom=bottom_in / height,
         wspace=0.5,
     )  # fmt: skip
-    for ax in axes[0]:
+    for ax in axes:
         untangle_labels(ax)
     return style.save(fig, out.with_suffix(""), fixed=True)
 

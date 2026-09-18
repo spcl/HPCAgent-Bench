@@ -61,6 +61,15 @@ LABEL_PT: float = 16.0
 TICK_PT: float = 14.0
 ANNOTATION_PT: float = 13.0
 
+#: The dpi every figure is finally written at (:func:`save`'s own default). FreeType hints a glyph
+#: run tighter at a LOW dpi than the same point size renders at a higher one, so a fit measured via
+#: ``get_window_extent`` against a figure still at matplotlib's default dpi (100) UNDERSTATES the
+#: text's width at :data:`SAVE_DPI` -- a title :func:`title` shrank to "fit" at 100 dpi came out
+#: overflowing both edges of the canvas :func:`save` actually wrote. A caller that measures anything
+#: against a figure (title, legend, an axis label's own protrusion) sets the figure to this dpi
+#: first, so what it measures is what gets saved.
+SAVE_DPI: float = 200.0
+
 #: The full text width of a double-column A4 paper, in inches. A figure meant to sit in a paper
 #: rather than stand alone (the per-kernel and efficacy figures) is sized to this so it never
 #: covers more of the page than its own content needs; a script exposes it as ``--double-column``
@@ -355,7 +364,7 @@ SVG_HASH_SALT: str = "hpcagent-bench"
 
 
 def save(
-    fig: Figure, stem: pathlib.Path, formats: Sequence[str] = ("pdf", "png"), fixed: bool = False, dpi: float = 200.0
+    fig: Figure, stem: pathlib.Path, formats: Sequence[str] = ("pdf", "png"), fixed: bool = False, dpi: float = SAVE_DPI
 ) -> pathlib.Path:
     """Write ``fig`` under ``stem`` once per suffix in ``formats``, and close it. Returns ``stem``.
 
