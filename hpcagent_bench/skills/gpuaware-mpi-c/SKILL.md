@@ -1,7 +1,6 @@
 ---
 name: gpuaware-mpi-c
-description: "GPU-aware MPI in C: passing device pointers to MPI, the synchronization MPI cannot see,
-and the check to run before trusting any of it."
+description: "GPU-aware MPI in C. Use whenever you pass a device pointer to `MPI_Isend`/`MPI_Allreduce` across nodes, check `MPIX_GPU_query_support`, or hit a hang or segfault with no diagnostic."
 when: "a multi-node task moves data between GPUs: ALWAYS read this page before you stage anything through the host, since it may not need to be staged at all"
 applies: {images: [amd, nvidia], multinode: true}
 ---
@@ -39,9 +38,12 @@ The check depends on which MPI you have:
 
 | MPI | how to ask |
 |---|---|
-| MPICH 4.1+ | `MPIX_GPU_query_support(MPIX_GPU_SUPPORT_HIP, &ok)` |
+| MPICH 4.1+ | `MPIX_GPU_query_support(MPIX_GPU_SUPPORT_HIP, &ok)` (CUDA: `MPIX_GPU_SUPPORT_CUDA`) -- declared directly in `mpi.h`, no `mpi-ext.h` needed |
 | Open MPI | `MPIX_Query_rocm_support()` (ROCm), `MPIX_Query_cuda_support()` (CUDA) |
-| Cray MPICH | **no query API exists.** It requires `MPICH_GPU_SUPPORT_ENABLED=1` in the environment and the GTL library linked; without the variable, device pointers segfault silently |
+
+**This image's MPI is the MPICH build in `/opt/view/bin/mpicc`.** Use the MPICH spelling above --
+the Open MPI spelling reports a false NO on this stack, so a negative from it does not mean the
+build lacks ROCm support.
 
 If the answer is no, or if there is no way to ask, stage through the host. Do not "try it and see":
 the failure is a hang, and it consumes everything you had left.
