@@ -10,6 +10,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 from numpyto_fortran.intrinsics import literal_axis, reshape_dims
 from numpyto_common.ir import ArrayDesc, KernelIR, _is_alloc_marker
 from numpyto_common import dtypes, operators, parallelism
+from numpyto_common.lib_nodes import FFT_LIBRARY_MARKER
 from numpyto_common.emitter import (
     BaseEmitter,
     TupleTargetSplitter,
@@ -751,6 +752,13 @@ class _FortranBodyEmitter(BaseEmitter):
             isinstance(node, ast.Expr)
             and isinstance(node.value, ast.Call)
             and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == FFT_LIBRARY_MARKER
+        ):
+            return self._emit_fftw(node.value, indent)
+        if (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
             and _fortran_safe(node.value.func.id) in self._helper_out
         ):
             name = _fortran_safe(node.value.func.id)
@@ -770,6 +778,47 @@ class _FortranBodyEmitter(BaseEmitter):
         if mode is not None and node.value is not None:
             return f"{indent}{mode} = {self.emit_expr(node.value)}\n{indent}return"
         return f"{indent}return"
+
+    def _emit_fftw(self, node: ast.Call, indent: str) -> str:
+        """Render the 1-D FFT marker as an FFTW3 plan/execute/destroy sequence, in a self-contained
+        ``block`` (F2008): O(N log N), replacing the naive O(N^2) loop -- see numpyto_c/emit.py's
+        ``_emit_fft_library`` (mirrors it exactly; same marker, same FFTW3 C API, called here via
+        an explicit bind(C) interface -- see the caller that collects ``self._used_fftw`` into an
+        ``interface`` block, since Fortran has no ``#include`` for fftw3.h).
+
+        Args (see FFT_LIBRARY_MARKER): ``(out, src, n, inverse_flag, norm_kind)``.
+        """
+        out, src = (a.id for a in node.args[:2])
+        n = self.emit_expr(node.args[2])
+        inverse = bool(node.args[3].value)
+        norm_kind = node.args[4].value  # 0 backward / 1 forward / 2 ortho
+        rk = self._rk  # "c_double" or "c_float", already resolved for this kernel's precision
+        self._used_fftw.add(rk)
+        prefix = "fftw" if rk == "c_double" else "fftwf"
+        sign = "FFTW_BACKWARD" if inverse else "FFTW_FORWARD"
+        divides = norm_kind == 2 or (norm_kind == 0) == inverse
+        lines = [
+            f"{indent}block",
+            f"{indent}    integer(c_int), parameter :: FFTW_FORWARD = -1, FFTW_BACKWARD = 1, FFTW_ESTIMATE = 64",
+            f"{indent}    integer(c_int) :: fft_n",
+            f"{indent}    type(c_ptr) :: fft_plan",
+            f"{indent}    fft_n = int({n}, c_int)",
+            f"{indent}    fft_plan = {prefix}_plan_dft_1d(fft_n, {src}, {out}, {sign}, FFTW_ESTIMATE)",
+            f"{indent}    call {prefix}_execute(fft_plan)",
+            f"{indent}    call {prefix}_destroy_plan(fft_plan)",
+        ]
+        if divides:
+            divisor = f"sqrt(real(fft_n, {rk}))" if norm_kind == 2 else f"real(fft_n, {rk})"
+            lines += [
+                f"{indent}    block",
+                f"{indent}        integer(c_int64_t) :: fft_i",
+                f"{indent}        do fft_i = 1, int(fft_n, c_int64_t)",
+                f"{indent}            {out}(fft_i) = {out}(fft_i) / {divisor}",
+                f"{indent}        end do",
+                f"{indent}    end block",
+            ]
+        lines.append(f"{indent}end block")
+        return "\n".join(lines)
 
     def __init__(self, kir: KernelIR) -> None:
         self.kir = kir
@@ -827,6 +876,9 @@ class _FortranBodyEmitter(BaseEmitter):
         # libm functions Fortran lacks an intrinsic for, called through a bind(C)
         # interface so the result is bit-identical to the C backend/numpy.
         self._used_libm: Set[Tuple[str, str]] = set()
+        # FFTW C-interop kind(s) FFT_LIBRARY_MARKER used ("c_double"/"c_float"; see
+        # :meth:`_emit_fftw`), so the caller emits ONLY the bind(C) interfaces this body needs.
+        self._used_fftw: Set[str] = set()
         # Whether the body calls np.round/np.rint -- lowered to a contained
         # npb_round_even helper (not inline) so a round of a big sub-expression
         # doesn't repeat the argument six times and blow the -O2 compile budget.
@@ -3290,6 +3342,39 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
         lines.append("    end interface")
         libm_iface = "\n".join(lines)
 
+    # bind(C) interface block for FFTW3, one FFT_LIBRARY_MARKER call site (see _emit_fftw) needs
+    # it: Fortran has no ``#include``, so the 3 C functions it calls (plan/execute/destroy) are
+    # declared here explicitly, one interface trio per precision this body actually used.
+    fftw_iface = ""
+    if body_emitter._used_fftw:
+        ck = {"c_double": "c_double_complex", "c_float": "c_float_complex"}
+        lines = ["    interface"]
+        for rk in sorted(body_emitter._used_fftw):
+            prefix = "fftw" if rk == "c_double" else "fftwf"
+            cplx = ck[rk]
+            lines += [
+                f"        function {prefix}_plan_dft_1d(n, in, out, sign, flags) "
+                f'bind(C, name="{prefix}_plan_dft_1d") result(plan)',
+                f"            import :: c_int, c_ptr, {cplx}",
+                "            integer(c_int), value :: n",
+                f"            complex({cplx}), dimension(*) :: in",
+                f"            complex({cplx}), dimension(*) :: out",
+                "            integer(c_int), value :: sign",
+                "            integer(c_int), value :: flags",
+                "            type(c_ptr) :: plan",
+                f"        end function {prefix}_plan_dft_1d",
+                f'        subroutine {prefix}_execute(plan) bind(C, name="{prefix}_execute")',
+                "            import :: c_ptr",
+                "            type(c_ptr), value :: plan",
+                f"        end subroutine {prefix}_execute",
+                f'        subroutine {prefix}_destroy_plan(plan) bind(C, name="{prefix}_destroy_plan")',
+                "            import :: c_ptr",
+                "            type(c_ptr), value :: plan",
+                f"        end subroutine {prefix}_destroy_plan",
+            ]
+        lines.append("    end interface")
+        fftw_iface = "\n".join(lines)
+
     contained = _fp8_contained(kir) + helpers_src
     # numpy round/rint are half-to-even; Fortran ANINT is half-away. Emit the
     # correction ONCE as a contained pure function (see _used_round_even).
@@ -3303,6 +3388,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
         contained += _floordiv_int_helper(ik)
     if body_emitter._used_floordiv_real:
         contained += _floordiv_real_helper(_double_kind())
+    combined_iface = "\n".join(t for t in (libm_iface, fftw_iface) if t)
     return _format_subroutine(
         name=name,
         params=param_names,
@@ -3310,7 +3396,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
         iter_decls=iter_decls,
         locals_block=locals_block,
         body=body,
-        interface_block=libm_iface,
+        interface_block=combined_iface,
         use_ieee=body_emitter._used_ieee,
         contained=contained,
     )
@@ -3925,6 +4011,7 @@ def _emit_fortran_helper(
         # host association -- so what this emitter recorded has to reach the host's gates. _used_ieee
         # is deliberately absent: the helper imports ieee_arithmetic into its own spec part below.
         parent._used_libm |= be._used_libm
+        parent._used_fftw |= be._used_fftw
         parent._used_nan_minmax |= be._used_nan_minmax
         parent._used_floordiv_int |= be._used_floordiv_int
         parent._used_round_even |= be._used_round_even

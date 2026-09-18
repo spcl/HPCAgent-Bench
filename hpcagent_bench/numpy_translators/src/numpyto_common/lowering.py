@@ -8854,6 +8854,8 @@ class LoweringContext:
         ] = None
         #: Target renders a dense 2-D float GEMM as a BLAS call; see :func:`lower`.
         self.blas: bool = False
+        #: Target renders a whole-array 1-D np.fft.* as an FFT_LIBRARY_MARKER call; see :func:`lower`.
+        self.fft_library: bool = False
         #: By-value scalar helpers this IR can call but does not itself list -- a HELPER body's
         #: own IR carries no helper list, so its siblings are handed down by :func:`lower`.
         self.sibling_scalar_helpers: Set[str] = set()
@@ -9305,6 +9307,7 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
         native_call=ctx.native_call,
         native_dtypes={**{arr.name: arr.dtype for arr in ctx.kir.arrays}, **ctx.local_dtypes},
         blas=ctx.blas,
+        fft_library=ctx.fft_library,
     )
     ctx.lib_rewriter.visit(tree)
     # Second math rename: an intrinsic whose argument only becomes a SCALAR once the library
@@ -9947,6 +9950,7 @@ def lower(
         Callable[[Tuple[str, str], ast.Call, Dict[str, Tuple[str, ...]], Dict[str, str]], bool]
     ] = None,
     blas: bool = False,
+    fft_library: bool = False,
     scalar_helpers: Optional[Set[str]] = None,
 ) -> KernelIR:
     """Return a lowered copy of ``kir`` ready for backend emission.
@@ -9972,6 +9976,13 @@ def lower(
     sparse, non-float -- keeps the loop nest on every target. The Fortran ``MATMUL`` intrinsic is
     reserved for the rare unresolved-shape case the loop hoister cannot lower (Fortran emitter).
 
+    ``fft_library`` is the same "render a real library call instead of a loop nest" signal, for a
+    whole-array 1-D ``np.fft.fft``/``ifft``/``fftn``/``ifftn`` (rank == 1 only -- a batched/N-D
+    transform keeps the naive loop on every target, library or not): it becomes a
+    :data:`lib_nodes.FFT_LIBRARY_MARKER` call, which C/C++/Fortran render as an FFTW3 call and
+    numba renders as an ``objmode`` call into ``numpy.fft``. SEPARATE from ``blas`` -- a target
+    with no BLAS_GEMM_MARKER renderer (Fortran, numba) can still opt into this one.
+
     Set :data:`_INVARIANT_ENV` in the environment to run
     :func:`_assert_lowering_invariants` after every phase.
     """
@@ -9982,6 +9993,7 @@ def lower(
     ctx = LoweringContext(kir, copy.deepcopy(kir))
     ctx.native_call = native_call
     ctx.blas = blas
+    ctx.fft_library = fft_library
     ctx.sibling_scalar_helpers = set(scalar_helpers or ())
     for _name, _phase in _LOWER_PHASES:
         _phase(ctx)

@@ -36,6 +36,16 @@ BLAS_GEMM_MARKER = "__blas_gemm"
 #: Element dtypes a real BLAS gemm cannot take, so they keep the loop nest.
 BLAS_INELIGIBLE_DTYPES = ("complex", "int", "uint", "bool")
 
+#: Pseudo-call a library-capable target's emitter renders as a whole-array 1-D DFT: FFTW3
+#: (fftw_plan_dft_1d/fftwf_plan_dft_1d) for C/C++/Fortran, a numba ``objmode`` call into
+#: numpy.fft for numba. Emitted ONLY when the caller asked for ``library``; DaCe's driver never
+#: does, so it never sees this name and keeps the naive loop. Args are
+#: ``(out, src, n, inverse_flag, norm_kind)`` -- ``norm_kind`` is 0/1/2 for backward/forward/ortho
+#: (see :func:`_read_fft_norm`), needed by numba's objmode path (``np.fft.fft(..., norm=...)``);
+#: the C/C++/Fortran path applies norm itself via the SAME division loop the naive path uses
+#: (:func:`_expand_dft_1d_library`), so it ignores the arg.
+FFT_LIBRARY_MARKER = "__fft_1d_library"
+
 
 def _name(n: str) -> ast.Name:
     return ast.Name(id=n, ctx=ast.Load())
@@ -2546,6 +2556,33 @@ def _read_fft_axes(args: List[ast.expr], kwargs: Optional[List[ast.keyword]], ra
     return [rank - 1]  # default: last axis
 
 
+#: ``norm=`` encoded as a small int for :data:`FFT_LIBRARY_MARKER`'s last arg -- an emitter
+#: renders C code from an AST, so the norm STRING itself (not spellable as a bare identifier
+#: without quoting machinery every target would need its own copy of) never needs to cross that
+#: boundary; the int does.
+_NORM_KIND = {"backward": 0, "forward": 1, "ortho": 2}
+
+
+def _expand_dft_1d_library(target: ast.expr, src: ast.expr, n: str, inverse: bool, norm: str) -> List[ast.stmt]:
+    """Whole-array 1-D DFT via :data:`FFT_LIBRARY_MARKER` -- O(N log N), replacing the naive
+    O(N^2) loop for exactly the case the 2026-09-18 canon incident hit (fft_1d: every native
+    backend ran 2-3.5h/column at a fuzzed N ~43M-87M). One call does the WHOLE transform
+    (norm included -- each backend's marker renderer applies it, see FFT_LIBRARY_MARKER's own
+    docstring), so this returns a single statement, never wrapped in a per-element loop."""
+    call = ast.Call(
+        func=_name(FFT_LIBRARY_MARKER),
+        args=[
+            _name(target.id),
+            _name(src.id),
+            _const_or_name(n),
+            _const(1 if inverse else 0),
+            _const(_NORM_KIND[norm]),
+        ],
+        keywords=[],
+    )
+    return [ast.Expr(value=call)]
+
+
 def _expand_dftn(
     target: ast.expr,
     args: List[ast.expr],
@@ -2553,11 +2590,24 @@ def _expand_dftn(
     inverse: bool,
     is_n: bool = True,
     kwargs: Optional[List[ast.keyword]] = None,
+    library: bool = False,
 ) -> List[ast.stmt]:
-    """``out = np.fft.fft/ifft/fft2/ifft2/fftn/ifftn(x)`` -> a naive DFT.
-    Correctness-only (O(prod(N_t)^2) over the transform axes), kept tiny via the
-    benchmark's small preset. Over transform-axis set ``T`` (remaining axes
-    batched untouched), the forward transform is
+    """``out = np.fft.fft/ifft/fft2/ifft2/fftn/ifftn(x)`` -> a DFT.
+
+    ``library`` (a single, whole-array 1-D transform -- ``rank == 1``) emits
+    :data:`FFT_LIBRARY_MARKER` instead of the naive loop below: each C/C++/Fortran emitter
+    renders it as an FFTW3 call (O(N log N)); numba's emitter renders it as an ``objmode`` call
+    into ``numpy.fft`` (numba's nopython mode cannot type ``np.fft.*`` at all -- see
+    ``frameworks/test.py``'s ``njit_reference`` compile-stage fallback). DaCe is untouched: its
+    driver never sets ``library``, so it keeps receiving this function's naive body exactly as
+    before (see numpyto_c/dace_emit.py). A batched / N-D transform (``rank > 1``: fft_3d,
+    ls3df_scf, vloc_psi_k_acc, bout_hasegawa_wakatani, cegterg, vexx_k) keeps the naive loop on
+    every target -- batching a library plan over non-transform axes is unimplemented, out of
+    scope for this fix (canon incident 2026-09-18 is 1-D fft_1d only).
+
+    The naive path is O(prod(N_t)^2) over the transform axes -- correctness-only, kept tiny via
+    the benchmark's small preset. Over transform-axis set ``T`` (remaining axes batched
+    untouched), the forward transform is
 
         out[o] = sum_{n_t, t in T} x[src] * exp(-2j*pi * sum_{t in T} o_t n_t / N_t)
 
@@ -2573,6 +2623,8 @@ def _expand_dftn(
         raise NotImplementedError("np.fft.*: source shape unknown")
     rank = len(shape)
     taxes = _read_fft_axes(args, kwargs, rank, is_n)
+    if library and rank == 1:
+        return _expand_dft_1d_library(target, src, shape[0], inverse, _read_fft_norm(args, kwargs))
     # Output index iterators (one per axis); summation iterators only for the
     # transform axes. The source index uses the summation iterator on transform
     # axes and the (fixed) output iterator on batch axes.
@@ -2631,8 +2683,9 @@ def expand_fftn(
     args: List[ast.expr],
     shape_table: Dict[str, Tuple[str, ...]],
     kwargs: Optional[List[ast.keyword]] = None,
+    library: bool = False,
 ) -> List[ast.stmt]:
-    return _expand_dftn(target, args, shape_table, inverse=False, is_n=True, kwargs=kwargs)
+    return _expand_dftn(target, args, shape_table, inverse=False, is_n=True, kwargs=kwargs, library=library)
 
 
 def expand_ifftn(
@@ -2640,8 +2693,9 @@ def expand_ifftn(
     args: List[ast.expr],
     shape_table: Dict[str, Tuple[str, ...]],
     kwargs: Optional[List[ast.keyword]] = None,
+    library: bool = False,
 ) -> List[ast.stmt]:
-    return _expand_dftn(target, args, shape_table, inverse=True, is_n=True, kwargs=kwargs)
+    return _expand_dftn(target, args, shape_table, inverse=True, is_n=True, kwargs=kwargs, library=library)
 
 
 def expand_fft(
@@ -2649,9 +2703,10 @@ def expand_fft(
     args: List[ast.expr],
     shape_table: Dict[str, Tuple[str, ...]],
     kwargs: Optional[List[ast.keyword]] = None,
+    library: bool = False,
 ) -> List[ast.stmt]:
     # 1-D DFT along a single ``axis`` (default last); for a 1-D input == fftn.
-    return _expand_dftn(target, args, shape_table, inverse=False, is_n=False, kwargs=kwargs)
+    return _expand_dftn(target, args, shape_table, inverse=False, is_n=False, kwargs=kwargs, library=library)
 
 
 def expand_ifft(
@@ -2659,8 +2714,9 @@ def expand_ifft(
     args: List[ast.expr],
     shape_table: Dict[str, Tuple[str, ...]],
     kwargs: Optional[List[ast.keyword]] = None,
+    library: bool = False,
 ) -> List[ast.stmt]:
-    return _expand_dftn(target, args, shape_table, inverse=True, is_n=False, kwargs=kwargs)
+    return _expand_dftn(target, args, shape_table, inverse=True, is_n=False, kwargs=kwargs, library=library)
 
 
 def expand_fftfreq(
@@ -9763,11 +9819,15 @@ def _call_expander(
     local_dtypes: Optional[Dict[str, str]] = None,
     fresh_local_allocs: Optional[Dict[str, Tuple[str, ...]]] = None,
     dim_aliases: Optional[Dict[str, str]] = None,
+    library: bool = False,
 ) -> List[ast.stmt]:
-    """Adapter: pass ``keywords``/``local_dtypes``/``fresh_local_allocs`` to
+    """Adapter: pass ``keywords``/``local_dtypes``/``fresh_local_allocs``/``library`` to
     expanders that accept them, else call with the legacy signature. The two
     extra tables let an expander register internal working buffers (shape +
-    dtype) so the emit declares them correctly.
+    dtype) so the emit declares them correctly. ``library`` is the same "prefer a real library
+    over a loop nest" signal :data:`BLAS_GEMM_MARKER` uses for matmul (``expand_fft``/
+    ``expand_ifft``/``expand_fftn``/``expand_ifftn`` are its other consumer, see
+    FFT_LIBRARY_MARKER).
     """
     sig = inspect.signature(expander)
     params = sig.parameters
@@ -9780,6 +9840,8 @@ def _call_expander(
         extras["fresh_local_allocs"] = fresh_local_allocs
     if "dim_aliases" in params and dim_aliases is not None:
         extras["dim_aliases"] = dim_aliases
+    if "library" in params:
+        extras["library"] = library
     return expander(target, args, shape_table, **extras)
 
 
@@ -10118,6 +10180,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         native_call: Optional[Callable[[Tuple[str, str], ast.Call, Dict, Dict], bool]] = None,
         native_dtypes: Optional[Dict[str, str]] = None,
         blas: bool = False,
+        fft_library: bool = False,
         scalar_helpers: Optional[Set[str]] = None,
     ) -> None:
         self.shape_table = shape_table
@@ -10128,6 +10191,12 @@ class LibNodeRewriter(ast.NodeTransformer):
         #: Target renders a dense 2-D float GEMM as a BLAS call. Threaded to the matmul hoister;
         #: every other matmul shape (batched, transposed, matvec, sparse, non-float) keeps its loops.
         self.blas = blas
+        #: Target renders a whole-array 1-D np.fft.fft/ifft/fftn/ifftn as FFT_LIBRARY_MARKER
+        #: instead of the naive O(N^2) loop. SEPARATE from ``blas`` (not reused): a target that
+        #: cannot render BLAS_GEMM_MARKER (numpyto_fortran/numpyto_numba's emitters have no
+        #: ``_emit_blas_gemm`` equivalent) must still be able to opt into FFT library lowering
+        #: without also being handed an unrenderable BLAS marker on its next matmul.
+        self.fft_library = fft_library
         #: Target's "I render this numpy call myself" predicate. A call it claims is left
         #: UNEXPANDED so the emitter can use its own intrinsic -- Fortran's SUM/MAXVAL/NORM2 --
         #: instead of the loop nest every target would otherwise get. Default: claims nothing.
@@ -10372,6 +10441,7 @@ class LibNodeRewriter(ast.NodeTransformer):
                             local_dtypes=self.local_dtypes,
                             fresh_local_allocs=self.fresh_local_allocs,
                             dim_aliases=self.dim_aliases,
+                            library=self.fft_library,
                         )
                         # Linspace/arange/similar element-write expanders
                         # consume the original Assign, leaving the target
@@ -10433,6 +10503,7 @@ class LibNodeRewriter(ast.NodeTransformer):
                         self.shape_table,
                         local_dtypes=self.local_dtypes,
                         fresh_local_allocs=self.fresh_local_allocs,
+                        library=self.fft_library,
                     )
                     return prelude + expanded
                 except NotImplementedError:
@@ -10485,6 +10556,7 @@ class LibNodeRewriter(ast.NodeTransformer):
                             local_dtypes=self.local_dtypes,
                             fresh_local_allocs=self.fresh_local_allocs,
                             dim_aliases=self.dim_aliases,
+                            library=self.fft_library,
                         )
                         # Same note as the direct path: the hoister split ``out = f(np.sum(a))`` into
                         # a temp assign, and it is THIS statement that becomes the loop nest.
