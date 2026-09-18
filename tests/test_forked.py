@@ -284,6 +284,64 @@ def test_the_child_entry_point_keeps_the_name_a_running_judge_pickles() -> None:
     assert list(inspect.signature(forked.child_main).parameters) == ["fn", "args", "kwargs", "q"]
 
 
+@pytest.mark.parametrize(
+    "parent_at_entry,parent_now,expected",
+    [
+        (5000, 5000, False),  # ordinary live parent: unchanged
+        (1, 1, False),  # sealed worker (PID 1 of its own namespace): its children start at 1 too
+        (5000, 1, True),  # the real parent died in the prctl-arming gap and we were reparented
+        (1, 4242, True),  # a namespace init's child reparented elsewhere: still a real change
+    ],
+)
+def test_reparented_is_a_change_from_entry_not_a_literal_pid(
+    parent_at_entry: int, parent_now: int, expected: bool
+) -> None:
+    """The sealed worker is PID 1 of its own PID namespace, so ``getppid() == 1`` is what every one
+    of its direct children reads from the START, not a sign of reparenting. Comparing against the
+    pid recorded at entry (not the literal constant 1) is what tells the two apart."""
+    assert forked.reparented(parent_at_entry, parent_now) is expected
+
+
+def test_die_with_parent_survives_a_pid_namespace_init_as_the_real_parent(monkeypatch) -> None:
+    """A child of the sealed worker reads getppid() == 1 before AND after prctl arms -- no death."""
+    monkeypatch.setattr(forked.osinfo, "IS_LINUX", True)
+    monkeypatch.setattr(forked.os, "getppid", lambda: 1)
+    monkeypatch.setattr(
+        forked.ctypes, "CDLL", lambda *a, **k: type("Libc", (), {"prctl": staticmethod(lambda *a: 0)})()
+    )
+    exited = []
+    monkeypatch.setattr(forked.os, "_exit", lambda code: exited.append(code))
+    forked.die_with_parent()
+    assert exited == [], "a live PID-1 parent (the sealed worker) must not be mistaken for a dead one"
+
+
+def test_die_with_parent_survives_a_normal_live_parent(monkeypatch) -> None:
+    """A child of an ordinary (non-namespaced) parent reads the same real pid before and after."""
+    monkeypatch.setattr(forked.osinfo, "IS_LINUX", True)
+    monkeypatch.setattr(forked.os, "getppid", lambda: 4242)
+    monkeypatch.setattr(
+        forked.ctypes, "CDLL", lambda *a, **k: type("Libc", (), {"prctl": staticmethod(lambda *a: 0)})()
+    )
+    exited = []
+    monkeypatch.setattr(forked.os, "_exit", lambda code: exited.append(code))
+    forked.die_with_parent()
+    assert exited == []
+
+
+def test_die_with_parent_exits_when_the_parent_died_in_the_arming_gap(monkeypatch) -> None:
+    """The parent that forked us is gone by the time prctl armed -- getppid() changed underneath us."""
+    monkeypatch.setattr(forked.osinfo, "IS_LINUX", True)
+    ppid_reads = iter([5000, 1])  # entry (real parent) -> after prctl (reparented, signal never comes)
+    monkeypatch.setattr(forked.os, "getppid", lambda: next(ppid_reads))
+    monkeypatch.setattr(
+        forked.ctypes, "CDLL", lambda *a, **k: type("Libc", (), {"prctl": staticmethod(lambda *a: 0)})()
+    )
+    exited = []
+    monkeypatch.setattr(forked.os, "_exit", lambda code: exited.append(code))
+    forked.die_with_parent()
+    assert exited == [0]
+
+
 def process_gone(pid: int, within: float) -> bool:
     """True once ``pid`` no longer exists or is a zombie waiting to be reaped."""
     deadline = time.monotonic() + within

@@ -209,6 +209,19 @@ def forked_failure_reason(r: RunResult[object]) -> str:
 PR_SET_PDEATHSIG = 1
 
 
+def reparented(parent_at_entry: int, parent_now: int) -> bool:
+    """True when the pid that had us at entry is no longer our parent.
+
+    NOT ``parent_now == 1``: a sealed worker (:mod:`experiments.seal_worker`) is PID 1 of its own
+    PID namespace, so every child it forks legitimately reads ``getppid() == 1`` from the moment it
+    starts -- that used to be misread as "reparented to init" and every evaluator child born under
+    the sealed worker self-killed on its first breath. Comparing against the pid recorded AT ENTRY
+    (rather than the literal constant) is correct in both the namespaced and the plain case: it
+    only fires when the parent identity actually CHANGED underneath us.
+    """
+    return parent_at_entry != parent_now
+
+
 def die_with_parent() -> None:
     """Ask the kernel to SIGKILL this child when its parent dies. Linux only; best effort.
 
@@ -222,18 +235,21 @@ def die_with_parent() -> None:
     and reported in 13.53 s.
 
     A kernel child outliving the judge that forked it is the same bug wearing production clothes,
-    so this is not a test-only guard. The getppid check closes the race where the parent already
-    died before prctl ran, which the kernel would otherwise never signal us for.
+    so this is not a test-only guard. The pre/post-prctl getppid comparison (:func:`reparented`)
+    closes the race where the parent already died before prctl ran, which the kernel would
+    otherwise never signal us for -- without assuming what a live parent's pid looks like, which a
+    PID-namespace init (pid 1) is a legitimate value for.
     """
     if not osinfo.IS_LINUX:
         return
+    parent_at_entry = os.getppid()
     try:
         libc = ctypes.CDLL(None, use_errno=True)
         if libc.prctl(PR_SET_PDEATHSIG, ctypes.c_ulong(signal.SIGKILL), 0, 0, 0) != 0:
             return
     except (OSError, AttributeError, ValueError):
         return  # no prctl (musl, a sandbox, a non-Linux kernel claiming linux): keep the old behaviour
-    if os.getppid() == 1:  # reparented already, so the signal we just armed will never arrive
+    if reparented(parent_at_entry, os.getppid()):  # died in the gap above; the signal just armed never arrives
         os._exit(0)
 
 
