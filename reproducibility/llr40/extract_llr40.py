@@ -373,8 +373,17 @@ def prompt_language(text: str) -> str:
     return match.group(1) if match is not None else ""
 
 
+#: The env key a worker's ``mcp.json`` carries its run id under, newest first. Every job through
+#: 2026-09-16 wrote ``OPTARENA_RUN_ID`` (the tool's pre-rename name); reading only the new key left
+#: every such worker's task row un-attributable (``arm_of("") == ""``), which drops its whole token
+#: decomposition -- not a missing number but a wrong one, since the run's OTHER rows (judge-sourced,
+#: keyed off ``runs.arm`` instead) still carry the real arm and look complete on their own.
+RUN_ID_ENV_KEYS: tuple[str, ...] = ("HPCAGENT_BENCH_RUN_ID", "OPTARENA_RUN_ID")
+
+
 def mcp_run_id(mcp_config: pathlib.Path) -> str:
-    """``HPCAGENT_BENCH_RUN_ID`` out of a worker's ``mcp.json``; "" when unreadable or absent."""
+    """The run id out of a worker's ``mcp.json`` (:data:`RUN_ID_ENV_KEYS`, newest first); "" when
+    unreadable or absent."""
     try:
         data = json.loads(mcp_config.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -386,9 +395,12 @@ def mcp_run_id(mcp_config: pathlib.Path) -> str:
         if not isinstance(server, dict):
             continue
         env = server.get("env")
-        run_id = env.get("HPCAGENT_BENCH_RUN_ID") if isinstance(env, dict) else None
-        if isinstance(run_id, str):
-            return run_id
+        if not isinstance(env, dict):
+            continue
+        for key in RUN_ID_ENV_KEYS:
+            run_id = env.get(key)
+            if isinstance(run_id, str):
+                return run_id
     return ""
 
 
