@@ -111,12 +111,22 @@ def unresolvable_libraries(build: Sequence[str]) -> list[str]:
 
 @lru_cache(maxsize=256, typed=True)
 def _linker_finds(name: str) -> bool:
-    """Whether the system linker resolves ``-l<name>`` on its own search path."""
+    """Whether the system linker resolves ``-l<name>`` on its own search path.
+
+    A bare ``ld --verbose -l<name>`` probe (no ``-o``, no real link target) ALWAYS emits
+    ``cannot find entry symbol _start; not setting start address`` once it gets past library
+    resolution -- present whether or not ``name`` was found, and it contains the substring
+    "cannot find" too. Matching on that substring alone therefore matched every probe and made
+    this function return False unconditionally: -lm, -lpthread, anything. GNU ld's actual
+    missing-library diagnostic is the more specific ``cannot find -l<name>``, which is what a
+    resolvable probe never emits (ld exits before reaching the entry-symbol check when the
+    library truly is not found) -- that is the one to match.
+    """
     try:
         proc = subprocess.run(["ld", "--verbose", f"-l{name}"], capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return True  # no usable `ld` here: do not manufacture a diagnostic from a missing tool
-    return "cannot find" not in proc.stderr
+    return f"cannot find -l{name}" not in proc.stderr
 
 
 @dataclass(frozen=True)
