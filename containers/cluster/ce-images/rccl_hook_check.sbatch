@@ -45,37 +45,23 @@ mounts = ["${WORK}:${WORK}"]
 workdir = "${WORK}"
 
 [annotations]
-com.hooks.netstack.source = "host"
-# The hooks hardcode the artifact path at /capstor/store; that tree does not exist,
-# so no version or name resolves there.
-# The hooks do NOT fail on a missing artifact -- they point libfabric and the RCCL plugin
-# at files that are not there, the bind-mounts quietly do nothing, and RCCL drops from
-# CXI to TCP sockets. The job still finishes; it is just far slower, and it reads as a
-# slow model rather than a dead fabric.
-#
-# "host" was previously the documented OPT-OUT because it grafts 29 host libraries into
-# the image and job 629822 died that way: a host libcurl needing glibc 2.38 met an image
-# with 2.35. THAT NO LONGER APPLIES -- the base moved to Ubuntu 24.04 and the shipped
-# libc.so.6 is "Ubuntu GLIBC 2.39-0ubuntu8.8", verified by extracting it from the pulled
-# squashfs. glibc is backward compatible, so 2.39 satisfies every GLIBC_2.38 the grafted
-# libraries ask for. Re-check this if the base image is ever moved backwards.
-#
-# Fabric speed is unaffected. fi_pingpong over cxi, 1 MB, beverin 2026-09-16:
-#   host -> 2.3.1  19329 MB/s | 1.22.0  20011 MB/s | 2.3.1 explicit  19878 MB/s
-# -- within noise of each other, at 4 CXI NICs per node.
-#
-# version/name are NOT set: they only index into the dead artifact tree. The host path is
-# /opt/cray/libfabric/host, a root-owned symlink (-> 2.3.1). It cannot be pinned by
-# annotation, so scripts/cscs/netstack_preflight.sh ASSERTS what it resolves to and aborts
-# on a repoint, rather than letting one campaign straddle two fabric stacks.
+# "host" (variant=rocm6) is ABI-dead on this image: /opt/cscs/aws-ofi-ccl-plugin/rocm6/
+# librccl-net.so needs libamdhip64.so.6 (`ldd`, confirmed 2026-09-18), and the image ships ROCm
+# 7.2 (libamdhip64.so.7 only). Every job that reached RCCL init under host+rocm6 logged the same
+# two lines regardless of launcher (CE 640910, enroot 640950/641057/641172):
+#   NET/Plugin: libamdhip64.so.6: cannot open shared object file: No such file or directory
+#   NET/Plugin: Could not find: ofi.
+# /capstor/store is reachable again (confirmed 2026-09-18), so back to "artifact": its bundle
+# carries its own libamdhip64.so.7 (RUNPATH points at /opt/cscs/netstack, where 10-netstack.sh
+# mounts the whole bundle), matching this image. This is also the config job 629967 actually
+# proved ("/opt/cscs/netstack/librccl-net.so", NET/OFI, correct result) -- "host" was a
+# migration-era substitute for when /capstor/store was unreachable, and 629967's citation was
+# kept without re-running it against the substitute.
+com.hooks.netstack.source = "artifact"
+com.hooks.netstack.version = "26.08.1"
+com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
-com.hooks.aws_ofi_nccl.variant = "rocm6"
-# REQUIRED in host mode and ignored in artifact mode: the hook selects the plugin by a
-# case on this value and calls common::err on an unrecognised one, so leaving it unset
-# makes the hook a hard error rather than a silent fallback. rocm6 is the only variant
-# installed on beverin (/opt/cscs/aws-ofi-ccl-plugin/). VERIFY on mi200 before using an
-# mi200 image -- gfx90a may carry a different one.
 
 [env]
 PATH = "/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/rocm/bin:/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

@@ -53,8 +53,12 @@
 #   on:  the EDF's own annotations (cxi + aws_ofi_nccl, variant rocm6). Needed for MULTI-NODE
 #        collectives; without it RCCL falls back to TCP. Grafts ~29 host libraries built against
 #        glibc 2.38, which the images satisfy (glibc 2.39, measured).
-#   netstack.source is forced to "host" in BOTH modes: under the default "artifact",
-#   10-netstack.sh looks under /capstor and exits 1, aborting container start outright.
+#   netstack.source: the EDF's OWN value wins (parsed from its [annotations] table above); this
+#   script only supplies a default of "host" for an EDF that sets none. Until 2026-09-17,
+#   /capstor/store did not exist and every EDF's own value was "host" anyway; this used to force
+#   it regardless, which meant no EDF here could ever ask for "artifact". /capstor/store is
+#   reachable again (confirmed 2026-09-18), and "artifact" is the mode actually proven working
+#   (job 629967) -- forcing "host" now silently overrides an EDF asking for the mode that works.
 #
 # Delete this file once CSCS fixes enroot.conf and `srun --environment=` works again.
 set -uo pipefail
@@ -112,7 +116,8 @@ PY
 )" || { echo "enroot_srun: could not parse ${EDF}" >&2; exit 2; }
 [ -f "${HB_IMAGE}" ] || { echo "enroot_srun: image does not exist: ${HB_IMAGE}" >&2; exit 2; }
 
-export OCI_ANNOTATION_com__hooks__netstack__source=host
+: "${OCI_ANNOTATION_com__hooks__netstack__source:=host}"
+export OCI_ANNOTATION_com__hooks__netstack__source
 if [[ -z "${HPCAGENT_BENCH_COMM_HOOKS:-}" ]]; then
     if [[ "${INFERENCE_NODES:-1}" =~ ^[0-9]+$ ]] && (( ${INFERENCE_NODES:-1} > 1 )); then
         HPCAGENT_BENCH_COMM_HOOKS=on

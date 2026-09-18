@@ -27,41 +27,36 @@ writable = true
 #                     over hsn* (629800/629802).
 #
 # With all three, job 629967 measured on an UNMODIFIED image: /opt/cscs/netstack/librccl-net.so,
-# "Using network AWS Libfabric", GPU Direct RDMA on cxi0-2, 8 ranks over 2 nodes, correct result.
+# "Using network AWS Libfabric", GPU Direct RDMA on cxi0-2, 8 ranks over 2 nodes, correct result --
+# that mount path is ARTIFACT mode's (container_netstack_path=/opt/cscs/netstack), not host mode's
+# (/opt/cscs/aws-ofi-ccl-plugin/<variant>/lib*-net.so). "host" below was substituted for the
+# 2026-09-17 /ritom migration, when /capstor/store did not exist, and 629967's proof line was kept
+# without anyone re-running it against the substitute -- so host+rocm6 was never actually proven.
 #
-# Version and name are PINNED rather than left to the hook defaults, so a CSCS-side bump cannot
-# change the fabric under a running campaign.
-com.hooks.netstack.source = "host"
-# The hooks hardcode the artifact path at /capstor/store; that tree does not exist,
-# so no version or name resolves there.
-# The hooks do NOT fail on a missing artifact -- they point libfabric and the RCCL plugin
-# at files that are not there, the bind-mounts quietly do nothing, and RCCL drops from
-# CXI to TCP sockets. The job still finishes; it is just far slower, and it reads as a
-# slow model rather than a dead fabric.
+# It also cannot work on this image: variant=rocm6's plugin (/opt/cscs/aws-ofi-ccl-plugin/rocm6/
+# librccl-net.so) needs libamdhip64.so.6 (`ldd`, confirmed 2026-09-18), and this image ships ROCm
+# 7.2 (libamdhip64.so.7 only, no compat symlink -- major ROCm versions are not ABI-compatible).
+# Every job that reached RCCL init under host+rocm6 logged the same two lines regardless of
+# launcher (CE 640910, enroot 640950/641057/641172):
+#   NET/Plugin: libamdhip64.so.6: cannot open shared object file: No such file or directory
+#   NET/Plugin: Could not find: ofi.
+# and fell back to Socket, or (with NCCL_NET forced below) hard-failed with "NCCL error: invalid
+# usage ... Failed to initialize any NET plugin".
 #
-# "host" was previously the documented OPT-OUT because it grafts 29 host libraries into
-# the image and job 629822 died that way: a host libcurl needing glibc 2.38 met an image
-# with 2.35. THAT NO LONGER APPLIES -- the base moved to Ubuntu 24.04 and the shipped
-# libc.so.6 is "Ubuntu GLIBC 2.39-0ubuntu8.8", verified by extracting it from the pulled
-# squashfs. glibc is backward compatible, so 2.39 satisfies every GLIBC_2.38 the grafted
-# libraries ask for. Re-check this if the base image is ever moved backwards.
-#
-# Fabric speed is unaffected. fi_pingpong over cxi, 1 MB, beverin 2026-09-16:
-#   host -> 2.3.1  19329 MB/s | 1.22.0  20011 MB/s | 2.3.1 explicit  19878 MB/s
-# -- within noise of each other, at 4 CXI NICs per node.
-#
-# version/name are NOT set: they only index into the dead artifact tree. The host path is
-# /opt/cray/libfabric/host, a root-owned symlink (-> 2.3.1). It cannot be pinned by
-# annotation, so scripts/cscs/netstack_preflight.sh ASSERTS what it resolves to and aborts
-# on a repoint, rather than letting one campaign straddle two fabric stacks.
+# /capstor/store/cscs/cscs/public/containers/netstack/x86_64/26.08.1/ is reachable again as of
+# 2026-09-17 (confirmed 2026-09-18: contains the exact name below). Its plugin's RUNPATH is
+# /opt/cscs/netstack -- the directory 10-netstack.sh mounts the whole bundle to in artifact mode --
+# and the bundle carries its OWN libamdhip64.so.7 alongside librccl-net.so, so it needs nothing
+# from the image's /opt/rocm at all. version/name are PINNED so a CSCS-side bump is a loud failure
+# (scripts/cscs/netstack_preflight.sh), not a campaign that silently straddles two fabric stacks.
+com.hooks.netstack.source = "artifact"
+com.hooks.netstack.version = "26.08.1"
+com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
+# Ignored in artifact mode (only the host-mode case in 90-aws-ofi-nccl.sh reads it), kept so this
+# EDF still says what it would need if source ever moves back to "host".
 com.hooks.aws_ofi_nccl.variant = "rocm6"
-# REQUIRED in host mode and ignored in artifact mode: the hook selects the plugin by a
-# case on this value and calls common::err on an unrecognised one, so leaving it unset
-# makes the hook a hard error rather than a silent fallback. rocm6 is the only variant
-# installed on beverin (/opt/cscs/aws-ofi-ccl-plugin/). VERIFY on mi200 before using an
-# mi200 image -- gfx90a may carry a different one.
 [env]
 # quark_online_quant is registered as a vllm general plugin, and load_general_plugins() runs it
 # from `python -m vllm.model_executor.models.registry` -- a subprocess where vllm/__init__ is
