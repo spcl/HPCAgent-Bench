@@ -76,6 +76,7 @@ KNOBS = frozenset(
         "PY",
         "SCRATCH",
         "PYTHONPATH",
+        "BUDGET_SCALE",
     }
 )
 
@@ -228,6 +229,16 @@ def test_an_arm_reads_the_prompt_of_its_target(
     built = wave(target)
     assert built.result.returncode == 0, built.result.stderr
     assert env_dict(arm_env(built.experiments, arm))["AGENT_PROMPT_FILE"] == prompt
+
+
+def test_budget_scale_doubles_the_agent_timeout_and_tokens(tmp_path: pathlib.Path) -> None:
+    """BUDGET_SCALE=2 (2026-09-18 owed-classification decision: a "budget"-class rerun) must double
+    BOTH .env.base-qwen38's AGENT_TIMEOUT_SECONDS (14400) and AGENT_MAX_TOKENS (12000000), not just
+    one of them -- a kernel that hit either cap needs headroom on both."""
+    built = launch(tmp_path, "c:plain", ROSTER_KERNELS, "cpu", extra={"BUDGET_SCALE": "2"})
+    assert built.result.returncode == 0, built.result.stderr
+    env = env_dict(arm_env(built.experiments, "c"))
+    assert (env["AGENT_TIMEOUT_SECONDS"], env["AGENT_MAX_TOKENS"]) == ("28800", "24000000")
 
 
 @pytest.mark.parametrize(

@@ -32,27 +32,27 @@ def board() -> types.ModuleType:
     [
         (
             "gpu-llr-focus40-kimi27sglang-c-openmp-skills",
-            ("gpu-llr-focus40", "kimi27sglang", "c-openmp-skills", False),
+            ("gpu-llr-focus40", "kimi27sglang", "c-openmp-skills"),
         ),
-        ("llrblind-kimi27sglang-fortran-skills", ("llrblind", "kimi27sglang", "fortran-skills", False)),
-        ("scicomp-dc-qwen38-cpfsrc", ("scicomp-dc", "qwen38", "cpfsrc", False)),
-        ("cpf-llr-focus40-qwen38-c-cpf-clean", ("cpf-llr-focus40", "qwen38", "c-cpf", True)),
-        ("cpf-llr-focus40-oss120b-c-clean", ("cpf-llr-focus40", "oss120b", "c", True)),
+        ("llrblind-kimi27sglang-fortran-skills", ("llrblind", "kimi27sglang", "fortran-skills")),
+        ("scicomp-dc-qwen38-cpfsrc", ("scicomp-dc", "qwen38", "cpfsrc")),
+        ("cpf-llr-focus40-qwen38-c-cpf", ("cpf-llr-focus40", "qwen38", "c-cpf")),
+        ("cpf-llr-focus40-oss120b-c", ("cpf-llr-focus40", "oss120b", "c")),
         (
             "scicomp-perf-playbook-gpu-oss120b-hip-perf-playbook-amd",
-            ("scicomp-perf-playbook-gpu", "oss120b", "hip-perf-playbook-amd", False),
+            ("scicomp-perf-playbook-gpu", "oss120b", "hip-perf-playbook-amd"),
         ),
         (
             "scicomp-perf-playbook-qwen38-perf-playbook-cpu",
-            ("scicomp-perf-playbook", "qwen38", "perf-playbook-cpu", False),
+            ("scicomp-perf-playbook", "qwen38", "perf-playbook-cpu"),
         ),
     ],
 )
-def test_an_arm_name_splits_into_its_campaign_model_variant_and_clean_flag(
-    board: types.ModuleType, arm: str, expected: tuple[str, str, str, bool]
+def test_an_arm_name_splits_into_its_campaign_model_and_variant(
+    board: types.ModuleType, arm: str, expected: tuple[str, str, str]
 ) -> None:
-    """A clean re-run reads as the SAME variant as the arm it re-ran: the suffix is a flag, not a
-    condition, and a variant that carried it would split one condition into two board rows."""
+    """split_arm never sees a ``-clean`` suffix: arm_rows folds a clean re-run into the identity it
+    re-runs (2026-09-18, remaining_kernels.base_arm) before split_arm is ever called on it."""
     assert board.split_arm(arm, MODELS) == expected
 
 
@@ -65,7 +65,6 @@ def test_the_harness_smoke_is_back_on_the_board(board: types.ModuleType) -> None
         "harness-focus20-smoke",
         "oss120b",
         "optimas",
-        False,
     )
 
 
@@ -74,14 +73,11 @@ def test_scicomp_perf_playbook_gpu_wins_over_its_cpu_prefix(board: types.ModuleT
     "scicomp-perf-playbook", or a GPU arm's rest-of-name would start "gpu-<model>-..." and the model
     would never match (submit-scicomp-perf-playbook.sh's DEVICE=gpu knob, mirroring submit-scicomp-dc.sh)."""
     assert board.campaign_of("scicomp-perf-playbook-gpu-oss120b-hip-perf-playbook-amd") == "scicomp-perf-playbook-gpu"
-    row_campaign, model, variant, clean = board.split_arm(
-        "scicomp-perf-playbook-gpu-qwen38-hip-perf-playbook-amd", MODELS
-    )
-    assert (row_campaign, model, variant, clean) == (
+    row_campaign, model, variant = board.split_arm("scicomp-perf-playbook-gpu-qwen38-hip-perf-playbook-amd", MODELS)
+    assert (row_campaign, model, variant) == (
         "scicomp-perf-playbook-gpu",
         "qwen38",
         "hip-perf-playbook-amd",
-        False,
     )
 
 
@@ -150,6 +146,23 @@ def job_dir_with_rows(root: pathlib.Path, job_id: str, benchmarks: list[str]) ->
     return root / job_id
 
 
+def write_episode(
+    job_dir: pathlib.Path, index: int, kernel: str, returncode: int, *, cancelled: bool = False, start_ms: int = 1000
+) -> None:
+    """One worker's ``tokens.json`` (agent_driver.write_cost_record's shape) plus, if ``cancelled``,
+    its sibling ``agent_driver.CANCELLED_MARKER`` file -- the two files owed_exit_classes reads."""
+    workdir = job_dir / "agents" / "node-0" / f"problem-{index}-worker-{index}"
+    workdir.mkdir(parents=True, exist_ok=True)
+    tokens = {
+        "kernel": f"loop_level_reasoning/{kernel}/{kernel}",
+        "returncode": returncode,
+        "final_attempt_start_ms": start_ms,
+    }
+    (workdir / "tokens.json").write_text(json.dumps(tokens), encoding="utf-8")
+    if cancelled:
+        (workdir / "cancelled").write_text("rc\n", encoding="utf-8")
+
+
 @pytest.mark.parametrize(
     ("rows", "done", "status"),
     [
@@ -169,18 +182,35 @@ def test_an_arms_coverage_is_the_union_of_every_jobs_rows(
     assert (row["done"], row["status"]) == (done, status), row
 
 
-def test_a_clean_reruns_row_counts_only_its_own_jobs(board: types.ModuleType, tmp_path: pathlib.Path) -> None:
-    """The superseded arm's tasks are dropped at read (spec X9), so counting them here would report a
-    coverage no table will ever use -- and an arm that owes half its roster would read as complete."""
+def test_a_clean_reruns_row_folds_into_the_arm_it_supersedes(board: types.ModuleType, tmp_path: pathlib.Path) -> None:
+    """The clean job's coverage ADDS to the plain arm's (2026-09-18 fold), so an arm the clean re-run
+    only partly repeated still reads its plain jobs' rows too, not just the clean one's."""
     arm = "cpf-llr-focus40-oss120b-c-cpfsrc"
     dirs = {
-        "100": job_dir_with_rows(tmp_path, "100", ["a", "b", "c"]),
-        "200": job_dir_with_rows(tmp_path, "200", ["a"]),
+        "100": job_dir_with_rows(tmp_path, "100", ["a", "b"]),
+        "200": job_dir_with_rows(tmp_path, "200", ["c"]),
     }
     jobs = [board.Job("100", arm, "COMPLETED", 3, "", ""), board.Job("200", arm + "-clean", "COMPLETED", 3, "", "")]
-    row = board.arm_row(arm + "-clean", jobs, dirs, ["a", "b", "c"], MODELS)
-    assert (row["clean"], row["done"], row["status"]) == (True, 1, "incomplete"), row
+    row = board.arm_row(arm, jobs, dirs, ["a", "b", "c"], MODELS)
+    assert (row["clean"], row["done"], row["status"]) == (True, 3, "complete"), row
     assert [job["id"] for job in row["jobs"]] == ["100", "200"], row
+
+
+def test_owed_kernels_split_into_done_by_rule_budget_and_infra(board: types.ModuleType, tmp_path: pathlib.Path) -> None:
+    """A kernel with no ``submissions`` row is still DONE when its latest episode ended on its own
+    (context overflow, rc 126); one that hit its own timeout (rc 124) is owed at BUDGET; one the job
+    cancelled mid-episode is owed as INFRA. All three must be told apart in one arm's row."""
+    arm = "cpf-llr-focus40-oss120b-c-cpfsrc"
+    job_dir = job_dir_with_rows(tmp_path, "100", ["a"])  # a: a real submissions row
+    write_episode(job_dir, 1, "b", 126)  # b: context overflow -> done by rule
+    write_episode(job_dir, 2, "c", 124)  # c: hit AGENT_TIMEOUT_SECONDS -> owed, budget
+    write_episode(job_dir, 3, "d", 124, cancelled=True)  # d: the job took it down -> owed, infra
+
+    dirs = {"100": job_dir}
+    jobs = [board.Job("100", arm, "COMPLETED", 3, "", "")]
+    row = board.arm_row(arm, jobs, dirs, ["a", "b", "c", "d"], MODELS)
+
+    assert (row["done"], row["owed_budget"], row["owed_infra"], row["status"]) == (2, 1, 1, "incomplete"), row
 
 
 def canon_csv(path: pathlib.Path, col: str, rank: int, rows: list[tuple[str, str]]) -> None:
@@ -292,14 +322,15 @@ def test_canon_rows_join_the_arms_list_as_their_own_experiment_group(
     assert len(rows) == len(board.CANON_COLUMNS)  # only llr-focus40 has a directory here
 
 
-def test_a_clean_rerun_replaces_the_arm_it_supersedes(
+def test_a_clean_rerun_folds_into_one_board_row(
     board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PROPERTY CHANGED on purpose (user, 2026-09-18): where an arm has a clean re-run, only the clean
-    arm is on the board and the analysis continues on it; the 2026-09-15 rule showed both rows."""
+    """PROPERTY CHANGED on purpose (user, 2026-09-18): an arm and its clean re-run are ONE identity,
+    ONE board row, union coverage over both -- not two rows and not the clean one replacing the
+    other (the 2026-09-15 rule showed both; a 2026-09-18 rule before this one showed only the clean)."""
     arm = "cpf-llr-focus40-oss120b-c-cpfsrc"
     runs = tmp_path / "runs" / "cpf-llr-focus40-20260915"
-    for job_id, names in (("100", ["a", "b"]), ("200", ["a"])):
+    for job_id, names in (("100", ["a"]), ("200", ["b"])):
         job_dir_with_rows(runs, job_id, names)
     jobs = [board.Job("100", arm, "COMPLETED", 3, "", ""), board.Job("200", arm + "-clean", "COMPLETED", 3, "", "")]
     monkeypatch.setattr(board, "slurm_jobs", lambda ids: jobs)
@@ -308,7 +339,33 @@ def test_a_clean_rerun_replaces_the_arm_it_supersedes(
 
     rows = board.arm_rows(tmp_path / "runs", "/opt", MODELS)
 
-    assert [(row["arm"], row["clean"], row["done"]) for row in rows] == [(arm + "-clean", True, 1)], rows
+    assert [(row["arm"], row["clean"], row["done"], row["status"]) for row in rows] == [(arm, True, 2, "complete")]
+    assert [job["id"] for job in rows[0]["jobs"]] == ["100", "200"], rows
+
+
+def test_a_smoke_job_that_reused_a_real_arms_name_is_excluded(
+    board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Job 641175 (2026-09-18): a smoke sanity check submitted under a REAL arm's name, with nothing
+    in ``runs.arm`` or the job name telling it apart. Its rows must not count as that arm's coverage,
+    or an arm the smoke run never really covered reads as further along than its real jobs show."""
+    arm = "harness20-qwen38-claude"
+    runs = tmp_path / "runs" / "harness20-20260918"
+    job_dir_with_rows(runs, "100", ["a"])
+    smoke_job_id = next(iter(board.remaining_kernels.SMOKE_JOBS))
+    job_dir_with_rows(runs, smoke_job_id, ["a", "b"])  # the smoke job's own kernel row must not count
+    jobs = [
+        board.Job("100", arm, "COMPLETED", 3, "", ""),
+        board.Job(smoke_job_id, arm, "COMPLETED", 1, "", ""),
+    ]
+    monkeypatch.setattr(board, "slurm_jobs", lambda ids: jobs)
+    monkeypatch.setattr(board, "queued_ids", list)
+    monkeypatch.setattr(board.remaining_kernels, "roster", lambda tag, opt: ["a", "b"])
+
+    rows = board.arm_rows(tmp_path / "runs", "/opt", MODELS)
+
+    assert [(row["arm"], row["done"]) for row in rows] == [(arm, 1)], rows
+    assert [job["id"] for job in rows[0]["jobs"]] == ["100"], rows
 
 
 @pytest.mark.parametrize(

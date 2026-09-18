@@ -52,7 +52,9 @@ esac
 # explicitly (either BASE) or when BASE=llrbase (its longstanding default); a campaign-base arm left
 # at its own default inherits AGENT_TIMEOUT_SECONDS from .env.base-<model> untouched.
 AGENT_TIMEOUT_SECONDS_EXPLICIT=${AGENT_TIMEOUT_SECONDS+1}
-AGENT_TIMEOUT_SECONDS=${AGENT_TIMEOUT_SECONDS:-18000}
+# the default scales with BUDGET_SCALE (a 2x-budget rerun, submit_common.sh); a caller-typed value
+# is left exactly as typed, same convention submit-cpf-llr40.sh's agent_seconds applies to its base.
+AGENT_TIMEOUT_SECONDS=${AGENT_TIMEOUT_SECONDS:-$(scale_budget 18000)}
 # Must stop an agent that never converges on a submission, without capping a converging one. The
 # cap counts the transcript re-sent every turn, so it buys TURNS, and a turn costs what the model
 # reasons: oss120b about 14k, qwen38 and kimi about 45k. A cap picked for the verbose models is
@@ -123,7 +125,7 @@ submit_arm() {
     fi
     [[ -f "${base}" ]] || { echo "no base env ${base}; skipped" >&2; return 0; }
     local arm="${EXPERIMENT}-${model}-${lang}${suffix}"
-    local max_tokens="${AGENT_MAX_TOKENS:-${MAX_TOKENS_BY_MODEL[${model}]:-12000000}}"
+    local max_tokens="${AGENT_MAX_TOKENS:-$(scale_budget "${MAX_TOKENS_BY_MODEL[${model}]:-12000000}")}"
     local env=".env.${arm}"
     # an arm env is written key by key, so a gate that bails midway leaves a file that looks
     # complete and silently lacks a key: build under a staging name, rename once gates pass

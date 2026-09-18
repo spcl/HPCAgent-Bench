@@ -71,6 +71,8 @@ KNOBS = frozenset(
         "STAGING_HOURS",
         "BEGIN",
         "AGENT_TIMEOUT_SECONDS",
+        "AGENT_MAX_TOKENS",
+        "BUDGET_SCALE",
         "SCRATCH",
         "DEVICE",
         "OFFLOAD",
@@ -215,6 +217,26 @@ def test_the_divide_and_conquer_kinds_are_gone(tmp_path: pathlib.Path, kind: str
     assert result.returncode != 0
     assert f"unknown arm kind {kind}" in result.stderr
     assert not (root / "sbatch-called").exists()
+
+
+def test_budget_scale_doubles_tokens_only(tmp_path: pathlib.Path) -> None:
+    """BUDGET_SCALE=2 (2026-09-18 owed-classification decision) doubles AGENT_MAX_TOKENS (60000000
+    -> 120000000, the decision's own scicomp target) but leaves AGENT_TIMEOUT_SECONDS at 72000: the
+    partition tops out at 24h and a re-batch already costs another AGENT_TIMEOUT_SECONDS, so there is
+    no room to double the wall clock too."""
+    root = submit_tree(tmp_path)
+    result = run_submit(
+        root,
+        MODELS="qwen38",
+        ARMS="plain",
+        KERNELS_FILE="kernels.txt",
+        REPEAT="1",
+        JUDGE_NODES="1",
+        BUDGET_SCALE="2",
+    )
+    assert result.returncode == 0, result.stderr
+    env = env_dict(root / "experiments" / ".env.scicomp-dc-qwen38-plain")
+    assert (env["AGENT_TIMEOUT_SECONDS"], env["AGENT_MAX_TOKENS"]) == ("72000", "120000000")
 
 
 def test_a_plain_run_needs_no_cpf_view(tmp_path: pathlib.Path) -> None:

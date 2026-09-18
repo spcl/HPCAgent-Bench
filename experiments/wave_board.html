@@ -231,10 +231,15 @@ function renderBoard() {
     for (const arm of arms.sort((x, y) => x.model.localeCompare(y.model) || x.variant.localeCompare(y.variant))) {
       const armCell = el("td", { class: "arm" },
         el("span", { class: "variant" }, arm.variant || "base"), " ", el("span", { class: "model" }, MODEL_NAMES[arm.model] || arm.model));
-      // A clean re-run shares its predecessor's row; the badge says the counts are the re-run's alone.
+      // A clean re-run folds into this same row (2026-09-18); the badge just says a clean job contributed.
       if (arm.clean) armCell.append(" ", el("span", { class: "pill clean" }, "clean"));
       const counts = el("td", { class: "num" }, arm.roster ? `${arm.done}/${arm.roster}` : "n/a");
-      if (owed(arm)) counts.append(" ", el("span", { class: "owed" }, `(${owed(arm)} owed)`));
+      if (owed(arm)) {
+        const bits = [`${owed(arm)} owed`];
+        if (arm.owed_budget) bits.push(`${arm.owed_budget} budget`);
+        if (arm.owed_infra) bits.push(`${arm.owed_infra} infra`);
+        counts.append(" ", el("span", { class: "owed" }, `(${bits.join(", ")})`));
+      }
       const rowAttrs = { class: arm.status };
       if (arm.failed && arm.failed.length) rowAttrs.title = "failed: " + arm.failed.join(", ");
       tbody.append(el("tr", rowAttrs,
