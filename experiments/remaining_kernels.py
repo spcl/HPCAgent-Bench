@@ -154,7 +154,12 @@ def context_overflow_in_tail(log_path: pathlib.Path) -> bool:
     return CONTEXT_OVERFLOW_EVIDENCE in tail
 
 
-def classify_exit(returncode: int, cancelled: bool, context_overflow: bool = False) -> ExitClass:
+def classify_exit(
+    returncode: int,
+    cancelled: bool,
+    context_overflow: bool = False,
+    ungraded_submission: bool = False,
+) -> ExitClass:
     """The owed class of one FINISHED episode, from EVIDENCE, not the rc alone.
 
     ``cancelled`` is agent_driver.CANCELLED_MARKER's presence beside the episode's ``tokens.json``:
@@ -162,6 +167,18 @@ def classify_exit(returncode: int, cancelled: bool, context_overflow: bool = Fal
     agent or its own caps ending it, so it is INFRA and owed a plain rerun -- agent_driver itself
     never marks an attempt cancelled when its own timeout/token/context caps already explain the rc
     (agent_driver.cancelled_by_the_job), so this check is checked first and wins outright.
+
+    ``ungraded_submission`` catches the pre-77524cae HIP TOOLSCHEMA bug: ``tools/submit.py`` used to
+    write ``.submission-spent`` even for a REFUSED 4xx body (e.g. "a 'hip' submission needs
+    'device_source'"), so ``watch_submission`` saw the marker and set RC_SUBMITTED (123) on an
+    episode the judge never graded -- see agent_driver.submission_graded, whose GRADE_FIELD
+    ("correct") a refused body's marker never carries. RC_SUBMITTED alone is not proof of a real
+    grade any more than the driver's "ended after its single submission was graded" log line is
+    (that string fires unconditionally); this flag, read from the marker itself, is. It is checked
+    before the RC_SUBMITTED clean-exit branch below and wins: an ungraded single submission never
+    got scored, so it is owed like any other INFRA gap, not silently marked DONE. (Fixed forward in
+    submit.py: a refused 4xx no longer writes the marker at all, so this can only be true for
+    episodes recorded before that fix.)
 
     A timeout or token-budget kill (RC_TIMEOUT, RC_TOKEN_BUDGET) is the harness's own cap firing on
     real agent work: owed, but at double the budget, not a plain rerun (BUDGET). A clean self-exit
@@ -179,6 +196,8 @@ def classify_exit(returncode: int, cancelled: bool, context_overflow: bool = Fal
     marked done or silently skipped.
     """
     if cancelled:
+        return ExitClass.INFRA
+    if returncode == agent_driver.RC_SUBMITTED and ungraded_submission:
         return ExitClass.INFRA
     if returncode in (agent_driver.RC_TIMEOUT, agent_driver.RC_TOKEN_BUDGET):
         return ExitClass.BUDGET
@@ -315,10 +334,11 @@ def episode_records(job_dirs: list) -> list:
     ``claude.log`` path (read for context-overflow evidence only for the episode that turns out to
     be a kernel's LATEST -- see :func:`owed_exit_classes` -- not eagerly here).
 
-    Read from ``tokens.json`` (agent_driver.write_cost_record) and the sibling
-    ``agent_driver.CANCELLED_MARKER`` file it writes beside a cancelled attempt's workdir -- the
-    same source :func:`classify_exit` is built to read, so an owed kernel's class always traces back
-    to one real episode's own accounting rather than a judge-row guess.
+    Read from ``tokens.json`` (agent_driver.write_cost_record), the sibling
+    ``agent_driver.CANCELLED_MARKER`` file it writes beside a cancelled attempt's workdir, and the
+    sibling ``agent_driver.SUBMISSION_MARKER`` file -- the same sources :func:`classify_exit` is
+    built to read, so an owed kernel's class always traces back to one real episode's own accounting
+    rather than a judge-row guess.
     """
     records = []
     for job_dir in job_dirs:
@@ -342,6 +362,7 @@ def episode_records(job_dirs: list) -> list:
                     "returncode": data.get("returncode"),
                     "cancelled": cancelled,
                     "log": path.parent / "claude.log",
+                    "marker": path.parent / agent_driver.SUBMISSION_MARKER,
                 }
             )
     return records
@@ -377,7 +398,12 @@ def owed_exit_classes(job_dirs: list, owed: list) -> dict:
         overflow = False
         if not record["cancelled"] and rc_int not in CONCLUSIVE_RETURNCODES:
             overflow = context_overflow_in_tail(record["log"])
-        classes[kernel] = classify_exit(rc_int, record["cancelled"], overflow)
+        ungraded_submission = (
+            rc_int == agent_driver.RC_SUBMITTED
+            and record["marker"].exists()
+            and not agent_driver.submission_graded(record["marker"])
+        )
+        classes[kernel] = classify_exit(rc_int, record["cancelled"], overflow, ungraded_submission)
     return classes
 
 
