@@ -26,6 +26,26 @@ set -uo pipefail
 
 STAGE_PREFIX=".jit-layer-staging"
 
+# vLLM's compile cache records the ABSOLUTE path of every inductor artifact inside
+# vllm_compile_cache.py. An entry another job compiled under a node-local root that no longer
+# exists is therefore not a cache MISS but a cache TRAP: the engine reads the manifest, opens the
+# recorded path and dies at startup with FileNotFoundError on artifact_compile_range_*, taking the
+# whole arm with it (640572 poisoned 640611, 640613 and 640638-640640). Such an entry is dropped
+# after seeding so the engine simply recompiles it.
+scrub_dead_entries() {
+    local root="$1" manifest dir path
+    [[ -d "${root}" ]] || return 0
+    while IFS= read -r -d '' manifest; do
+        dir="$(dirname -- "${manifest}")"
+        while IFS= read -r path; do
+            [[ -e "${path}" ]] && continue
+            rm -rf -- "${dir}"
+            break
+        done < <(grep -o "'/[^']*'" "${manifest}" 2>/dev/null | tr -d "'")
+    done < <(find "${root}" -name vllm_compile_cache.py -print0 2>/dev/null)
+    return 0
+}
+
 seed() {
     local shared="$1" local_dir="$2"
     mkdir -p "${local_dir}" || return 1
@@ -35,6 +55,7 @@ seed() {
         while IFS= read -r -d '' entry; do
             cp -an -- "${shared}/${entry#./}" "${local_dir}/" 2>/dev/null || true
         done
+    scrub_dead_entries "${local_dir}"
     return 0
 }
 

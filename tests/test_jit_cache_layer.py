@@ -97,3 +97,46 @@ def test_the_engine_is_pointed_at_the_local_layer_before_it_starts(variable: str
     body = body[: body.index('exec "${command[@]}"')]
     redirect = body.index('export TRITON_CACHE_DIR="${local_dirs[0]}"')
     assert f"{variable}=" in body[redirect : redirect + 200], body[redirect : redirect + 200]
+
+
+def compile_cache(artifacts: list[pathlib.Path]) -> str:
+    """The shape vLLM writes: a dict whose values name each artifact by ABSOLUTE path."""
+    entries = ", ".join(f"({i}, 0): {{'artifact': '{p}'}}" for i, p in enumerate(artifacts))
+    return "{" + entries + "}\n"
+
+
+def test_seeding_drops_an_entry_whose_recorded_artifact_path_is_gone(tmp_path: pathlib.Path) -> None:
+    """A vLLM entry compiled under another job's node-local root is a TRAP, not a miss: the engine
+    opens the recorded path and dies with FileNotFoundError (640572 -> 640611/640613/640638-640640).
+    """
+    local, shared = tmp_path / "local", tmp_path / "shared"
+    entry = shared / "95ea305896" / "rank_0_0" / "backbone"
+    write(entry / "artifact_compile_range_1_8192_subgraph_0", "code")
+    write(entry / "vllm_compile_cache.py",
+          compile_cache([tmp_path / "gone" / "vllm" / "artifact_compile_range_1_8192_subgraph_0"]))
+    run("seed", str(shared), str(local))
+    assert not (local / "95ea305896" / "rank_0_0" / "backbone").exists(), tree(local)
+
+
+def test_seeding_keeps_an_entry_whose_recorded_artifacts_all_resolve(tmp_path: pathlib.Path) -> None:
+    """The stable node-local root makes the recorded path the path seed restores the entry to."""
+    local, shared = tmp_path / "local", tmp_path / "shared"
+    backbone = local / "95ea305896" / "rank_0_0" / "backbone"
+    write(shared / "95ea305896" / "rank_0_0" / "backbone" / "artifact_compile_range_1_8192_subgraph_0", "code")
+    write(shared / "95ea305896" / "rank_0_0" / "backbone" / "vllm_compile_cache.py",
+          compile_cache([backbone / "artifact_compile_range_1_8192_subgraph_0"]))
+    run("seed", str(shared), str(local))
+    assert (backbone / "artifact_compile_range_1_8192_subgraph_0").read_text() == "code"
+    assert (backbone / "vllm_compile_cache.py").exists()
+
+
+def test_scrubbing_a_dead_entry_leaves_the_other_ranks_alone(tmp_path: pathlib.Path) -> None:
+    local, shared = tmp_path / "local", tmp_path / "shared"
+    good = local / "95ea305896" / "rank_1_0" / "backbone"
+    for rank, recorded in (("rank_0_0", tmp_path / "gone" / "art"), ("rank_1_0", good / "art")):
+        entry = shared / "95ea305896" / rank / "backbone"
+        write(entry / "art", "code")
+        write(entry / "vllm_compile_cache.py", compile_cache([recorded]))
+    run("seed", str(shared), str(local))
+    assert not (local / "95ea305896" / "rank_0_0" / "backbone").exists(), tree(local)
+    assert (good / "art").read_text() == "code"

@@ -541,6 +541,10 @@ PY
     if [[ "${HPCAGENT_BENCH_JIT_LOCAL:-1}" == "1" && ! -x "${layer}" ]]; then
         echo "jit cache: ${layer} missing; the engine writes the shared tree directly" >&2
     elif [[ "${HPCAGENT_BENCH_JIT_LOCAL:-1}" == "1" ]]; then
+        # Keyed by job AND rank: two jobs sharing a node must not share a write layer. vLLM records
+        # each compiled artifact by ABSOLUTE path, so an entry published from here names this job's
+        # root; jit_cache_layer.sh seed drops such entries in the next job (they recompile) instead
+        # of letting the engine die on FileNotFoundError (640638-640640, 640611, 640613).
         local local_root="${TMPDIR:-/tmp}/hpcagent-bench-jit-${SLURM_JOB_ID:-$$}-${node_rank}"
         local -a shared_dirs=("${TRITON_CACHE_DIR}" "${TORCHINDUCTOR_CACHE_DIR}" "${VLLM_CACHE_ROOT}")
         local -a local_dirs=("${local_root}/triton" "${local_root}/inductor" "${local_root}/vllm")

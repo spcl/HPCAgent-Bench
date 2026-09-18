@@ -33,6 +33,10 @@ shopt -s nullglob
 for owed in "${WAVE_DIR}"/*.txt; do
     arm=$(basename "${owed}" .txt)
     [[ "${arm}" == *${ARM_FILTER:-}* ]] || continue
+    # ARM_SKIP holds back a whole class of arm the wave is not meant to re-run yet -- ARM_FILTER
+    # cannot express it, because the names it would have to keep are prefixes of the ones to drop
+    # (oss120b-c matches oss120b-c-skills). Empty by default: a wave re-runs everything it owes.
+    [[ -n "${ARM_SKIP:-}" && "${arm}" == *${ARM_SKIP}* ]] && { echo "skipping ${arm}: ARM_SKIP"; continue; }
     case "${arm}" in
         cpf-llr-focus40-*) campaign=cpf-llr-focus40 ;;
         gpu-llr-focus40-*) campaign=gpu-llr-focus40 ;;
