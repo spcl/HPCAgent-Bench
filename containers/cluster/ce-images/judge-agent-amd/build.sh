@@ -17,6 +17,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../../.." && pwd)"
 # shellcheck source=../build_common.sh
 source "${SCRIPT_DIR}/../build_common.sh"
+# Unified cache root, for the pip/spack caches below -- disposable build output, not the CE image
+# store itself. shellcheck source=../../../../scripts/cache_env.sh
+[[ -f "${REPO_ROOT}/scripts/cache_env.sh" ]] && . "${REPO_ROOT}/scripts/cache_env.sh"
 
 # TWO TARGETS, ONE BUILD. `judge` is `FROM agent` plus the hpcagent_bench install, so building
 # both in this one invocation costs the agent build plus a pip layer -- the agent stage is already
@@ -62,7 +65,7 @@ ce_cache_base_image
 
 # Wheels survive between jobs here, OUTSIDE the image, so a retry does not rebuild cupy
 # from its sdist. The bind mount means nothing lands in an image layer either way.
-PIP_CACHE="${PIP_CACHE:-${SCRATCH:?}/pip-cache}"
+PIP_CACHE="${PIP_CACHE:-${HPCAGENT_BENCH_PIP_CACHE_DIR:-${SCRATCH:?}/pip-cache}}"
 mkdir -p "${PIP_CACHE}"
 
 # DaCe: resolve the TIP of extended HERE and pass the sha in. The Dockerfile cannot do this --
@@ -107,7 +110,7 @@ ce_require_mirror_commit "ofiwg/libfabric.git" "${LIBFABRIC_COMMIT}"
 # Spack binary buildcache on scratch: gcc 16 and llvm 22 are 60-80 minutes this image has paid
 # repeatedly, every time to fail at something after them. The Dockerfile pushes here after each
 # install and registers it as a mirror when non-empty; both halves no-op without the mount.
-SPACK_BUILDCACHE="${SPACK_BUILDCACHE:-${SCRATCH:?}/spack-buildcache}"
+SPACK_BUILDCACHE="${SPACK_BUILDCACHE:-${HPCAGENT_BENCH_SPACK_BUILDCACHE_DIR:-${SCRATCH:?}/spack-buildcache}}"
 mkdir -p "${SPACK_BUILDCACHE}"
 CACHE_ARGS=(-v "${SPACK_BUILDCACHE}:/spack-buildcache:rw" -v "${PIP_CACHE}:/pip-cache:rw")
 printf 'spack buildcache %s\n' "${SPACK_BUILDCACHE}"

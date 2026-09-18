@@ -178,6 +178,8 @@ AGENT_LAUNCH_DIR="${AGENT_LAUNCH_DIR:-${RUN_ROOT}/.agent-launch/${SLURM_JOB_ID:-
 # Emitted lowerings, keyed by the CONTENT of each kernel's numpy source. Mounted at a FIXED
 # container path so nothing in the image needs to know the host layout -- same contract as
 # /opt/moe-configs. NOT image-keyed: a lowering is pure text, valid for any image.
+# cache_env.sh already exports this (unified cache root, scripts/cache_env.sh); the repo-relative
+# fallback here only matters if that sourcing above silently found neither candidate path.
 GENERATED_CACHE_HOST="${HPCAGENT_BENCH_GENERATED_CACHE_HOST:-${HPCAGENT_BENCH_REPO}/.cache/generated}"
 GENERATED_CACHE_MOUNT="/opt/generated"
 mkdir -p "${GENERATED_CACHE_HOST}"
@@ -217,7 +219,7 @@ run_vllm_node() {
     # HF_HOME MUST be exported before the snapshot resolution below: inside the CE container
     # ~/.cache is the RAM-backed overlay, and resolving there made the fallback download 60 GB
     # of weights into the job cgroup - the OOM that killed 585035.
-    export HF_HOME="${HF_HOME:-${FAST_SCRATCH}/hf}"
+    export HF_HOME="${HF_HOME:-${HPCAGENT_BENCH_WEIGHTS_DIR:-${FAST_SCRATCH}/.hpcagentbench-cache}/hf}"
     export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
 
     # pp=4 lazy PG init mints a per-pair NCCL communicator over CXI (594541-543, 0 tokens decoded).
@@ -837,9 +839,9 @@ mkdir -p "${RUN_DIR}" "${SHARED_HOST_DIR}"
 # `lfs migrate -c 16 -S 4M` while nothing reads them. Best-effort: a non-Lustre HF_HOME
 # (or no lustre client) must not fail the run.
 if command -v lfs >/dev/null 2>&1; then
-    mkdir -p "${HF_HOME:-${FAST_SCRATCH}/hf}/hub"
-    lfs setstripe -E 64M -c 1 -E -1 -c 16 -S 4M "${HF_HOME:-${FAST_SCRATCH}/hf}/hub" 2>/dev/null \
-        || echo "note: lfs setstripe on ${HF_HOME:-${FAST_SCRATCH}/hf}/hub failed (non-Lustre?)"
+    mkdir -p "${HF_HOME:-${HPCAGENT_BENCH_WEIGHTS_DIR:-${FAST_SCRATCH}/.hpcagentbench-cache}/hf}/hub"
+    lfs setstripe -E 64M -c 1 -E -1 -c 16 -S 4M "${HF_HOME:-${HPCAGENT_BENCH_WEIGHTS_DIR:-${FAST_SCRATCH}/.hpcagentbench-cache}/hf}/hub" 2>/dev/null \
+        || echo "note: lfs setstripe on ${HF_HOME:-${HPCAGENT_BENCH_WEIGHTS_DIR:-${FAST_SCRATCH}/.hpcagentbench-cache}/hf}/hub failed (non-Lustre?)"
 fi
 
 # Read-only per-kernel material + the prompt template, once per run, before any role starts.
@@ -1004,7 +1006,7 @@ role_mounts() {
         # writes its log and its readiness marker. SCRIPT_DIR because the step re-executes
         # run_cluster.sh from there -- see the srun at the end of role_srun.
         vllm*|inference*)
-            printf '%s\n' "${HF_HOME:-${FAST_SCRATCH}/hf}" \
+            printf '%s\n' "${HF_HOME:-${HPCAGENT_BENCH_WEIGHTS_DIR:-${FAST_SCRATCH}/.hpcagentbench-cache}/hf}" \
                 "${JIT_CACHE_ROOT:-${HPCAGENT_BENCH_REPO}/.cache/jit}" \
                 "${RUN_ROOT}" "${SCRIPT_DIR}" ;;
         # The judge needs the TREE, and that is not tidiness we can trim away: hidden_tests is

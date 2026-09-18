@@ -7,7 +7,8 @@ and submits to a Slurm account that differs per person. A literal ``/users/ybuda
 ``/iopsstor/scratch/cscs/ybudanaz``, or ``-A a-g34`` works once, for the person who wrote it, and
 then silently reads or writes the WRONG user's data (or bills the wrong project) for everyone else
 who checks the repo out. The central resolvers exist precisely so nothing has to guess:
-``scripts/cache_env.sh`` (FAST_SCRATCH, HPCAGENT_BENCH_CACHE, HF_HOME, JIT_CACHE_ROOT),
+``scripts/cache_env.sh`` (FAST_SCRATCH, HPCAGENT_BENCH_WEIGHTS_DIR, HPCAGENT_BENCH_CACHE, HF_HOME,
+JIT_CACHE_ROOT),
 ``scripts/cscs/account_env.sh`` (the Slurm account), ``experiments/env.sh`` (sources both) and
 ``EDF_PATH`` / ``${HOME}/.edf`` (EDFs).
 

@@ -13,8 +13,10 @@ set -Eeuo pipefail
 SCRATCH="${SCRATCH:?set SCRATCH}"
 REPO="${REPO:-${SCRATCH}/hpcagent-bench}"
 VENV="${VENV:-${SCRATCH}/venv-hpcagent-bench-314}"
-export PIP_CACHE_DIR="${SCRATCH}/.cache/pip"
-export TMPDIR="${SCRATCH}/.tmp"
+# shellcheck source=../scripts/cache_env.sh
+[[ -f "${REPO}/scripts/cache_env.sh" ]] && . "${REPO}/scripts/cache_env.sh"
+export PIP_CACHE_DIR="${PIP_CACHE_DIR:-${HPCAGENT_BENCH_PIP_CACHE_DIR:-${SCRATCH}/.cache/pip}}"
+export TMPDIR="${TMPDIR:-${HPCAGENT_BENCH_TMP_DIR:-${SCRATCH}/.tmp}}"
 mkdir -p "${PIP_CACHE_DIR}" "${TMPDIR}"
 
 PY="$(pyenv prefix 2>/dev/null)/bin/python3"

@@ -32,6 +32,7 @@ import json
 import pathlib
 from collections.abc import Callable, Iterable
 
+
 #: Offline HuggingFace cache the tokenizers are read from. No download is ever attempted: a missing
 #: tokenizer is a counter that returns None, not a network call on a compute node.
 #:
@@ -48,15 +49,17 @@ def _hf_hub_dir() -> pathlib.Path:
     """The hub cache directory, resolved in this order:
 
     1. ``HF_HOME`` -- what every sbatch and EDF in this repo exports.
-    2. ``HPCAGENT_BENCH_CACHE`` -- the single cache root; ``HF_HOME`` defaults underneath it.
+    2. ``HPCAGENT_BENCH_WEIGHTS_DIR`` -- the weights root; ``HF_HOME`` defaults underneath it
+       (``scripts/cache_env.sh``). NOT ``HPCAGENT_BENCH_CACHE``: that is the general-scratch build
+       cache root, a different filesystem entirely -- see the cache-unification split.
     3. ``huggingface_hub``'s own default, so a workstation with neither set still works.
     """
     import os
 
     if hf_home := os.environ.get("HF_HOME"):
         return pathlib.Path(hf_home) / "hub"
-    if cache := os.environ.get("HPCAGENT_BENCH_CACHE"):
-        return pathlib.Path(cache) / "hf" / "hub"
+    if weights := os.environ.get("HPCAGENT_BENCH_WEIGHTS_DIR"):
+        return pathlib.Path(weights) / "hf" / "hub"
     try:
         from huggingface_hub.constants import HF_HUB_CACHE
 
@@ -110,7 +113,7 @@ def snapshot(repo: str) -> pathlib.Path | None:
         raise FileNotFoundError(
             f"HuggingFace hub cache {HF_HUB} does not exist, so no tokenizer can be found and "
             f"every token count would silently be None. Set HF_HOME (hub is $HF_HOME/hub) or "
-            f"HPCAGENT_BENCH_CACHE (hub is $HPCAGENT_BENCH_CACHE/hf/hub)."
+            f"HPCAGENT_BENCH_WEIGHTS_DIR (hub is $HPCAGENT_BENCH_WEIGHTS_DIR/hf/hub)."
         )
     found = sorted(glob.glob(str(HF_HUB / f"models--{repo.replace('/', '--')}" / "snapshots" / "*")))
     return pathlib.Path(found[-1]) if found else None
