@@ -47,10 +47,17 @@ case "${mpicc_path}" in
     /opt/view/bin/*) say wrapper OK "${mpicc_path}" ;;
     *) say wrapper FAIL "mpicc is ${mpicc_path}, not the spack MPICH in /opt/view"; fail=1 ;;
 esac
-if mpichversion 2>/dev/null | grep -qiE 'rocm|hip'; then
-    say mpichversion OK "ROCm in configure line"
+# The PATH check above covers mpicc; it does not prove mpichversion resolves to the same prefix,
+# and a `2>/dev/null` on the call below used to throw away the one line that would show a wrong
+# binary or a dynamic-linker failure as the reason for an empty match. Both are captured now.
+mpichversion_path="$(command -v mpichversion || true)"
+mpichversion_out="$(mpichversion 2>"${work}/mpichversion.err" || true)"
+if [[ "${mpichversion_out}" == *[Rr][Oo][Cc][Mm]* || "${mpichversion_out}" == *[Hh][Ii][Pp]* ]]; then
+    say mpichversion OK "ROCm in configure line (${mpichversion_path})"
 else
-    say mpichversion FAIL "no ROCm/HIP in mpichversion -- this MPI is not GPU-aware"
+    say mpichversion FAIL "no ROCm/HIP in mpichversion output from ${mpichversion_path:-<not on PATH>}"
+    [[ -s "${work}/mpichversion.err" ]] && sed 's/^/    stderr: /' "${work}/mpichversion.err"
+    [[ -n "${mpichversion_out}" ]] && printf '    stdout: %s\n' "${mpichversion_out}"
     fail=1
 fi
 
@@ -70,7 +77,11 @@ int main(int argc, char **argv) {
 }
 C
 if ! mpicc -O0 -o "${work}/world" "${work}/world.c" 2>"${work}/world.log"; then
-    say multirank FAIL "compile failed: $(tail -1 "${work}/world.log")"
+    # tail -1 used to print only "collect2: error: ld returned 1 exit status" -- collect2's own
+    # summary line -- and discard the actual undefined-reference or missing-library line ld wrote
+    # just above it, which is the one line that says WHY. The full log is a handful of lines.
+    say multirank FAIL "compile failed, see log below"
+    sed 's/^/    /' "${work}/world.log"
     exit 1
 fi
 # -launcher fork keeps the ranks INSIDE this container: hydra's default ssh launcher would leave
