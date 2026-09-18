@@ -35,6 +35,8 @@ Usage::
     python scripts/size_audit.py --undersized L2       # only presets at or below L2
     python scripts/size_audit.py --pack 4,8,16         # stride vs LPT max-rank load
     python scripts/size_audit.py --pack 4 --ranks-per-node 4 --node-ram-gb 128
+    python scripts/size_audit.py --kernels all56 --emit-partition 8 --partition-preset XL \\
+        --ranks-per-node 8 --node-ram-gb 501 --partition-out shard.json
 """
 
 import argparse
@@ -251,6 +253,41 @@ def print_packing(
     return bad
 
 
+def write_partition(
+    specs: Dict[str, BenchSpec],
+    preset: str,
+    ranks: int,
+    out: pathlib.Path,
+    ranks_per_node: Optional[int] = None,
+    node_ram_bytes: Optional[int] = None,
+    stream: TextIO = sys.stdout,
+) -> int:
+    """Write the LPT partition of ``specs`` at ``preset`` across ``ranks`` to ``out`` as JSON.
+
+    Unlike :func:`print_packing`'s diagnostic table, this passes the memory cap straight to
+    :func:`pack_lpt`, so an over-budget packing is REFUSED (a message on ``stream`` and a
+    nonzero return) rather than written -- a caller that shards a real sweep off this file must
+    not launch a partition the packer itself would not stand behind.
+
+    ``out`` gets ``{"rank_<i>": [kernel, ...]}`` for every rank, an index-keyed object rather
+    than a bare list so a shell reader (``jq '.rank_0[]'``) needs no positional guesswork.
+    """
+    names = sorted(specs)
+    costs = cost_vector(specs, preset)
+    try:
+        packed = pack_lpt(names, costs, ranks, ranks_per_node, node_ram_bytes)
+    except ValueError as exc:
+        print(f"REFUSED: {exc}", file=stream)
+        return 1
+    out.write_text(json.dumps({f"rank_{i}": kernels for i, kernels in enumerate(packed)}, indent=1))
+    loads = partition_loads(packed, costs)
+    print(
+        f"wrote {ranks} rank(s), {len(names)} kernel(s), preset {preset}, max predicted load {max(loads):.2f} -> {out}",
+        file=stream,
+    )
+    return 0
+
+
 def write_ceiling_proposal(specs: Mapping[str, BenchSpec], out: pathlib.Path) -> int:
     """Write an ``apply_sizes.py`` proposal shrinking every kernel that now overruns its ceiling.
 
@@ -332,6 +369,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--node-ram-gb", type=float, default=0.0, help="RAM budget of one node in GB (needs --ranks-per-node)"
     )
     ap.add_argument(
+        "--emit-partition",
+        type=int,
+        default=0,
+        metavar="RANKS",
+        help="write the LPT partition of the selected kernels across RANKS ranks to "
+        "--partition-out, refusing (not just reporting) an over-budget packing",
+    )
+    ap.add_argument("--partition-preset", default="XL", help="preset the --emit-partition cost model uses")
+    ap.add_argument("--partition-out", type=pathlib.Path, default=None, help="JSON destination for --emit-partition")
+    ap.add_argument(
         "--over-ceiling",
         type=pathlib.Path,
         default=None,
@@ -359,6 +406,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             ap.error(f"selector {args.kernels!r} matched no kernel")
     if args.over_ceiling is not None:
         return write_ceiling_proposal(specs, args.over_ceiling)
+    if args.emit_partition:
+        if not args.partition_out:
+            ap.error("--emit-partition needs --partition-out")
+        if (args.ranks_per_node > 0) != (args.node_ram_gb > 0):
+            ap.error("--ranks-per-node and --node-ram-gb go together: a budget with no layout checks nothing")
+        per_node = args.ranks_per_node if args.ranks_per_node > 0 else None
+        node_ram = int(args.node_ram_gb * (1 << 30)) if args.node_ram_gb > 0 else None
+        return write_partition(
+            specs, args.partition_preset, args.emit_partition, args.partition_out, per_node, node_ram
+        )
     if args.pack:
         if (args.ranks_per_node > 0) != (args.node_ram_gb > 0):
             ap.error("--ranks-per-node and --node-ram-gb go together: a budget with no layout checks nothing")
