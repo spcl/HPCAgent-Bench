@@ -501,36 +501,57 @@ def service_prompt(
     return finish_prompt(body, prompt_config)
 
 
-def _source_from_file(path: str, kernel: str, language: str) -> str:
+def source_file_ext(language: str, device: bool) -> str:
+    """The extension a submitted source FILE must carry.
+
+    A single-unit language's file is its own extension (:data:`SOURCE_EXT`). A two-unit GPU
+    language (:data:`languages.GPU_HOST_LANG`) splits: ``device=True`` is the kernels, still the
+    language's own extension (``.hip``, ``.cu``); ``device=False`` is the HOST entry, always the
+    GPU host TU's C++ extension -- nvcc/hipcc compile a C++ host file same as a plain ``cpp``
+    submission's, so ``source_file`` for a hip/cuda submission is named ``<kernel>.cpp``, never
+    ``<kernel>.hip``.
+    """
+    lookup = language if device else languages.GPU_HOST_LANG.get(language, language)
+    ext = SOURCE_EXT.get(lookup)
+    if ext is None:
+        raise ValueError(f"unknown submission language {language!r}: one of {', '.join(sorted(SOURCE_EXT))}")
+    return ext
+
+
+def _source_from_file(path: str, kernel: str, language: str, device: bool = False) -> str:
     """The text of a submitted source FILE, which must be ``<kernel>.<ext>`` in the shared mount.
 
     Resolved through :func:`sandbox.resolve_shared` for the same reason a prebuilt ``library`` is:
     the path arrived over HTTP from an untrusted agent, it means nothing in this container unless it
     names the one filesystem both containers see, and the judge compiles then ``dlopen``s the result.
 
-    The basename is the contract: the kernel key verbatim plus the language's one extension
-    (:data:`SOURCE_EXT`), which is how every other file in the kernel's directory is named
-    (``<kernel>_numpy.py``, ``<kernel>_reference.cpp``). Alternates a compiler would also accept
-    (``.F90``, ``.cc``) are REFUSED rather than mapped: :meth:`Sandbox.build` rewrites the source
-    under ``LANG_EXT``'s extension before building, so a ``.F90`` would silently lose the
-    preprocessing its name promises -- one name, one meaning.
+    The basename is the contract: the kernel key verbatim plus :func:`source_file_ext`'s extension,
+    which is how every other file in the kernel's directory is named (``<kernel>_numpy.py``,
+    ``<kernel>_reference.cpp``). Alternates a compiler would also accept (``.F90``, ``.cc``) are
+    REFUSED rather than mapped: :meth:`Sandbox.build` rewrites the source under ``LANG_EXT``'s
+    extension before building, so a ``.F90`` would silently lose the preprocessing its name
+    promises -- one name, one meaning. ``device`` picks which half of a GPU submission this file is
+    (:func:`source_file_ext`); host languages never set it.
     """
-    ext = SOURCE_EXT.get(language)
-    if ext is None:
-        raise ValueError(f"unknown submission language {language!r}: one of {', '.join(sorted(SOURCE_EXT))}")
+    ext = source_file_ext(language, device)
     resolved = sandbox.resolve_shared(path)
     # A path-key request ("track/dir/gemm") names the same kernel as the bare key; its last segment
     # is the key the kernel's own files are named after.
     expected = f"{kernel.rsplit('/', 1)[-1]}.{ext}"
+    field = "device_source_file" if device else "source_file"
+    # A GPU host half is named after its C++ host TU, not the submission's own language -- say so,
+    # or 'the hip extension' would name the WRONG extension (that is the device file's).
+    host_lang = languages.GPU_HOST_LANG.get(language)
+    ext_owner = language if device or host_lang is None else host_lang
     if resolved.name != expected:
         raise ValueError(
-            f"'source_file' must be named {expected!r} -- the kernel key plus the "
-            f"{language} extension {ext!r}; got {resolved.name!r}"
+            f"'{field}' must be named {expected!r} -- the kernel key plus the {ext_owner} "
+            f"extension {ext!r}; got {resolved.name!r}"
         )
     try:
         return resolved.read_text()
     except OSError as exc:
-        raise ValueError(f"'source_file' {expected!r} is not readable in the shared folder: {exc}") from exc
+        raise ValueError(f"'{field}' {expected!r} is not readable in the shared folder: {exc}") from exc
 
 
 def _submission_from_body(body: RequestBody, kernel: str, language: str, cfg: RunConfig) -> Submission:
@@ -567,10 +588,25 @@ def _submission_from_body(body: RequestBody, kernel: str, language: str, cfg: Ru
             f"language {' / '.join(allowed)}; got {language!r}"
         )
     source = _source_from_file(source_file, kernel, language) if source_file else body.text_or_none("source")
+    # 'device_source' / 'device_source_file' -- the device half of a two-unit GPU submission,
+    # symmetric with 'source' / 'source_file' for the host half. Never both spellings at once, same
+    # rule as the host pair; Submission.__post_init__ raises the same way for that.
+    device_source_file = body.text_or_none("device_source_file")
+    has_device_source = body.flag("device_source")
+    if has_device_source and device_source_file:
+        raise ValueError(
+            "deliver the device kernels ONE way: inline 'device_source' or 'device_source_file' "
+            "(a path in the shared folder), not both"
+        )
+    device_source = (
+        _source_from_file(device_source_file, kernel, language, device=True)
+        if device_source_file
+        else body.optional_text("device_source")
+    )
     return Submission(
         language=language,
         source=source,
-        device_source=body.optional_text("device_source"),
+        device_source=device_source,
         library=str(sandbox.resolve_shared(library)) if library else None,
         build=body.argv("build"),
         workspace_bytes=body.optional_text("workspace_bytes"),
