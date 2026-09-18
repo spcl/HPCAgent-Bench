@@ -1040,7 +1040,9 @@ def test_hipify_exe_prefers_path_over_rocm_path(monkeypatch: pytest.MonkeyPatch)
     assert ppcg_transform.hipify_exe() == "/opt/rocm/bin/hipify-perl"
 
 
-def test_ppcg_run_env_puts_its_own_lib_dir_ahead_of_ld_library_path(tmp_path, monkeypatch) -> None:
+def test_ppcg_run_env_puts_its_own_lib_dir_ahead_of_ld_library_path(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """ppcg's binaries carry a correct RPATH into their own install prefix, but RPATH/RUNPATH is
     consulted AFTER ``LD_LIBRARY_PATH`` -- and this image's own EDF sets ``LD_LIBRARY_PATH`` to
     include ``/usr/lib/x86_64-linux-gnu``, where Ubuntu packages an OLDER ``libisl23`` (a gcc
@@ -1064,7 +1066,7 @@ def test_ppcg_run_env_puts_its_own_lib_dir_ahead_of_ld_library_path(tmp_path, mo
     assert "/usr/lib/x86_64-linux-gnu" in env["LD_LIBRARY_PATH"].split(":")
 
 
-def test_ppcg_run_env_works_through_a_path_symlink(tmp_path, monkeypatch) -> None:
+def test_ppcg_run_env_works_through_a_path_symlink(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``ppcg_exe()`` may return a PATH entry that is a symlink into the real install (the
     Dockerfile's own ``/usr/local/bin/ppcg -> /opt/ppcg-install/bin/ppcg``) -- the lib dir has to
     be resolved from the REAL prefix, not from the symlink's own directory (``/usr/local/lib``,
@@ -1089,7 +1091,9 @@ def test_ppcg_run_env_works_through_a_path_symlink(tmp_path, monkeypatch) -> Non
     assert env["LD_LIBRARY_PATH"] == str(real_prefix / "lib")
 
 
-def test_ppcg_run_env_is_a_noop_with_no_lib_dir_beside_the_exe(tmp_path, monkeypatch) -> None:
+def test_ppcg_run_env_is_a_noop_with_no_lib_dir_beside_the_exe(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """An ordinary system ppcg (``/usr/bin/ppcg``, say) has no sibling ``lib`` this module
     installed -- there is nothing to prepend, and returning ``None`` tells :func:`run_ppcg` to
     pass ``subprocess.run`` no ``env`` override at all, inheriting the caller's environment

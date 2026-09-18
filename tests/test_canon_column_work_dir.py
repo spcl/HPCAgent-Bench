@@ -24,6 +24,8 @@ import sqlite3
 import stat
 import subprocess
 
+import pytest
+
 from hpcagent_bench import paths
 
 CANON_COLUMN = paths.ROOT / "experiments" / "canon_column.sh"
@@ -60,12 +62,12 @@ def _fake_bin_dir(tmp_path: pathlib.Path) -> pathlib.Path:
         'if [[ "$1" == "-m" && "$2" == "hpcagent_bench.cli" && "$3" == "run-framework" ]]; then\n'
         "    shift 3\n"
         '    kernel="" preset="" csv=""\n'
-        '    while [[ $# -gt 0 ]]; do\n'
+        "    while [[ $# -gt 0 ]]; do\n"
         '        case "$1" in\n'
-        '            -b) kernel=$2; shift 2 ;;\n'
-        '            -p) preset=$2; shift 2 ;;\n'
-        '            --csv) csv=$2; shift 2 ;;\n'
-        '            *) shift ;;\n'
+        "            -b) kernel=$2; shift 2 ;;\n"
+        "            -p) preset=$2; shift 2 ;;\n"
+        "            --csv) csv=$2; shift 2 ;;\n"
+        "            *) shift ;;\n"
         "        esac\n"
         "    done\n"
         '    [[ -s "$csv" ]] || printf \'kernel,preset,datatype,median_ms,validated\\n\' > "$csv"\n'
@@ -124,7 +126,9 @@ def test_a_managed_work_dir_is_derived_from_the_cache_root_never_from_scratch(tm
     assert str(out_root).startswith(str(runs_root)), "the test's own out_root must itself be under the cache root"
 
 
-def test_the_per_rank_db_lands_under_the_work_dir_not_the_repo_or_cwd(tmp_path: pathlib.Path, monkeypatch) -> None:
+def test_the_per_rank_db_lands_under_the_work_dir_not_the_repo_or_cwd(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Before this redirection, run-framework's own default (record.db_path, repo-relative) put
     every rank's shard DB in whatever the process's CWD happened to be -- the repo checkout, for a
     canon job launched from there. A managed out_root must never let that happen."""
@@ -171,7 +175,9 @@ def test_a_verified_merge_deletes_the_build_tree_and_shard_db_but_keeps_the_csv(
     assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
     assert "merged 1 row(s)" in result.stdout, result.stdout
     assert not (out_root / "dacecache-fakecol").exists(), "the DaCe build tree must be cleared after a verified merge"
-    assert not (out_root / "db" / "fakecol").exists(), "the redundant shard DB dir must be cleared after a verified merge"
+    assert not (out_root / "db" / "fakecol").exists(), (
+        "the redundant shard DB dir must be cleared after a verified merge"
+    )
     assert (out_root / "fakecol.rank0.csv").exists(), "the CSV is the external hand-off and must survive cleanup"
 
     db_path = pathlib.Path(env["JIT_CACHE_ROOT"]) / "results" / "canon.db"

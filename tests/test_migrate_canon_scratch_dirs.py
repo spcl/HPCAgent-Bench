@@ -16,6 +16,8 @@ import pathlib
 import sqlite3
 import sys
 
+import pytest
+
 from hpcagent_bench import paths
 
 SPEC = importlib.util.spec_from_file_location(
@@ -48,7 +50,9 @@ def read_canon_rows(db_path: pathlib.Path) -> list[tuple]:
         return conn.execute("SELECT column, kernel FROM canon ORDER BY column").fetchall()
 
 
-def test_a_completed_columns_job_is_merged_and_its_build_tree_cleared(tmp_path: pathlib.Path, monkeypatch) -> None:
+def test_a_completed_columns_job_is_merged_and_its_build_tree_cleared(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     run_dir = tmp_path / "canon-llr-cpu-old"
     run_dir.mkdir()
     write_column(run_dir, "numba", jobid="1")
@@ -62,7 +66,9 @@ def test_a_completed_columns_job_is_merged_and_its_build_tree_cleared(tmp_path: 
     assert read_canon_rows(db) == [("numba", "wf_triangular")]
 
 
-def test_a_column_whose_job_is_not_completed_keeps_every_one_of_its_files(tmp_path: pathlib.Path, monkeypatch) -> None:
+def test_a_column_whose_job_is_not_completed_keeps_every_one_of_its_files(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """CANCELLED, FAILED, RUNNING, PENDING -- anything but exactly COMPLETED -- must not be merged
     or cleaned; this script makes no judgment call about a non-completed run's partial data."""
     run_dir = tmp_path / "canon-llr-cpu-old"
@@ -80,7 +86,7 @@ def test_a_column_whose_job_is_not_completed_keeps_every_one_of_its_files(tmp_pa
 
 
 def test_a_directory_with_a_mix_of_states_merges_only_the_completed_columns_and_survives(
-    tmp_path: pathlib.Path, monkeypatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The exact shape observed in canon-llr-cpu-20260917-1314: some columns COMPLETED, others
     CANCELLED and resubmitted elsewhere. The directory must not be removed while any column in it
@@ -108,7 +114,9 @@ def test_a_directory_with_a_mix_of_states_merges_only_the_completed_columns_and_
     assert read_canon_rows(db) == [("numba", "wf_triangular")]
 
 
-def test_a_fully_completed_directory_is_archived_then_removed(tmp_path: pathlib.Path, monkeypatch) -> None:
+def test_a_fully_completed_directory_is_archived_then_removed(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Once every column in a directory is COMPLETED and merged, the directory itself goes -- but
     its CSVs (the external reproducibility repos' own hand-off) must survive in the archive."""
     run_dir = tmp_path / "canon-llr-cpu-old"
@@ -134,7 +142,9 @@ def test_a_fully_completed_directory_is_archived_then_removed(tmp_path: pathlib.
     assert sorted(read_canon_rows(db)) == [("cc", "wf_triangular"), ("numba", "wf_triangular")]
 
 
-def test_a_column_with_no_matching_job_name_is_left_alone(tmp_path: pathlib.Path, monkeypatch) -> None:
+def test_a_column_with_no_matching_job_name_is_left_alone(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A manual smoke invocation (smoke-canon-parallel*, smoke-optreports*) does not follow
     submit-canon-llr40.sh's `<prefix>-<column>` job-name convention; this script must recognize
     that it cannot identify the owning job rather than guess one."""
@@ -153,7 +163,7 @@ def test_a_column_with_no_matching_job_name_is_left_alone(tmp_path: pathlib.Path
     assert not db.exists()
 
 
-def test_dry_run_performs_no_mutation_at_all(tmp_path: pathlib.Path, monkeypatch) -> None:
+def test_dry_run_performs_no_mutation_at_all(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The default (no --apply) is the safety net for a script meant to be run by hand once: it
     must be provably a no-op on disk regardless of what it decides the plan would be."""
     run_dir = tmp_path / "canon-llr-cpu-old"
