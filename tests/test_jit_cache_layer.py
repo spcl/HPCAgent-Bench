@@ -112,8 +112,10 @@ def test_seeding_drops_an_entry_whose_recorded_artifact_path_is_gone(tmp_path: p
     local, shared = tmp_path / "local", tmp_path / "shared"
     entry = shared / "95ea305896" / "rank_0_0" / "backbone"
     write(entry / "artifact_compile_range_1_8192_subgraph_0", "code")
-    write(entry / "vllm_compile_cache.py",
-          compile_cache([tmp_path / "gone" / "vllm" / "artifact_compile_range_1_8192_subgraph_0"]))
+    write(
+        entry / "vllm_compile_cache.py",
+        compile_cache([tmp_path / "gone" / "vllm" / "artifact_compile_range_1_8192_subgraph_0"]),
+    )
     run("seed", str(shared), str(local))
     assert not (local / "95ea305896" / "rank_0_0" / "backbone").exists(), tree(local)
 
@@ -123,8 +125,10 @@ def test_seeding_keeps_an_entry_whose_recorded_artifacts_all_resolve(tmp_path: p
     local, shared = tmp_path / "local", tmp_path / "shared"
     backbone = local / "95ea305896" / "rank_0_0" / "backbone"
     write(shared / "95ea305896" / "rank_0_0" / "backbone" / "artifact_compile_range_1_8192_subgraph_0", "code")
-    write(shared / "95ea305896" / "rank_0_0" / "backbone" / "vllm_compile_cache.py",
-          compile_cache([backbone / "artifact_compile_range_1_8192_subgraph_0"]))
+    write(
+        shared / "95ea305896" / "rank_0_0" / "backbone" / "vllm_compile_cache.py",
+        compile_cache([backbone / "artifact_compile_range_1_8192_subgraph_0"]),
+    )
     run("seed", str(shared), str(local))
     assert (backbone / "artifact_compile_range_1_8192_subgraph_0").read_text() == "code"
     assert (backbone / "vllm_compile_cache.py").exists()
