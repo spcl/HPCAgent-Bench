@@ -62,6 +62,10 @@ com.hooks.netstack.version = "26.08.1"
 com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
+# 90-aws-ofi-nccl.sh's case statement has no `set -u` guard on its own *) branch message, so an
+# unset variant is a hard "unbound variable" crash even though artifact mode never reads the
+# value (measured 641224: line 74, before this was restored). Keep it set regardless of source.
+com.hooks.aws_ofi_nccl.variant = "rocm6"
 
 [env]
 PATH = "/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/rocm/bin:/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
