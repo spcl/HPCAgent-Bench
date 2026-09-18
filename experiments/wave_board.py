@@ -24,10 +24,13 @@ import sys
 import yaml
 
 HERE = pathlib.Path(__file__).resolve().parent
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
+REPO_ROOT = HERE.parent
+for _extra_path in (HERE, REPO_ROOT, REPO_ROOT / "hpcagent_bench" / "numpy_translators" / "src"):
+    if str(_extra_path) not in sys.path:
+        sys.path.insert(0, str(_extra_path))
 
 import remaining_kernels
+from hpcagent_bench.frameworks.framework import FRAMEWORK_META
 
 TEMPLATE = HERE / "wave_board.html"
 REGISTRY = HERE.parent / "hpcagent_bench" / "envs" / "registry.yaml"
@@ -65,6 +68,10 @@ CAMPAIGNS = {
     "scicomp-perf-playbook": Campaign(
         "scicomp-focus40", "Scientific Computing Focus@40, Perf Playbook", "CPU", "scicomp40"
     ),
+    "harness-focus20": Campaign("harness-focus20", "Harness Comparison Focus@20", "CPU", "harness-focus20"),
+    # No roster: submit-harness-focus20.sh's SMOKE=1 path times one kernel per harness, not the
+    # 20-kernel roster, so this arm's coverage is never "complete" (Campaign's tag="" contract).
+    "harness-focus20-smoke": Campaign("harness-focus20-smoke", "Harness Comparison Focus@20, Smoke", "CPU", ""),
 }
 
 #: Campaign -> the experiment its CPF arms are reported under. CPF is its own experiment on the board,
@@ -205,41 +212,108 @@ def arm_rows(runs: pathlib.Path, opt: str, models: tuple[str, ...]) -> list[dict
     return rows
 
 
-#: The seven canon_column.sh columns, in submit-canon-llr40.sh's order.
-CANON_COLUMNS = ("numba", "cc", "cc_autopar", "dace_cpu", "dace_cpu_canonicalize", "dace_gpu", "dace_gpu_canonicalize")
-CANON_GPU_COLUMNS = frozenset(col for col in CANON_COLUMNS if "gpu" in col)
+#: canon_column.sh's deterministic-framework columns (hpcagent_bench.frameworks.framework.FRAMEWORK_META
+#: is the registry submit-canon-llr40.sh validates COLUMNS against; this is the subset the sweeps
+#: actually run, verified against sacct job names and the canon-*/reports/<col> dirs on disk).
+CANON_COLUMNS = (
+    "numba",
+    "cc",
+    "cc_autopar",
+    "cpp",
+    "fortran",
+    "fortran_autopar",
+    "ppcg",
+    "pluto",
+    "dace_cpu",
+    "dace_cpu_canonicalize",
+    "dace_cpu_parallel",
+    "dace_gpu",
+    "dace_gpu_canonicalize",
+    "dace_gpu_parallel",
+)
+
+
+def validate_canon_columns(columns: tuple[str, ...]) -> None:
+    """Every name in ``columns`` must be a real FRAMEWORK_META entry, so a typo or a renamed flavor
+    fails loudly here instead of reporting a silent 0/roster row for a column that never runs."""
+    unknown = [col for col in columns if col not in FRAMEWORK_META]
+    if unknown:
+        raise ValueError(f"unknown canon column(s) {unknown}; known: {sorted(FRAMEWORK_META)}")
+
+
+validate_canon_columns(CANON_COLUMNS)
+
+#: The three canon (deterministic-optimizer) experiments the board reports, independent of which
+#: arm campaigns happen to share a roster tag.
+CANON_TAGS = ("llr-focus40", "loop_level_reasoning", "scicomp37")
 
 #: Roster tag -> the name its "Compiler baselines" board section is headed with.
 TAG_NAMES = {
     "llr-focus40": "Loop Level Reasoning Focus@40",
-    "scicomp40": "Scientific Computing Focus@40",
-    "git-scicomp": "Repository vs Kernel",
+    "loop_level_reasoning": "Loop Level Reasoning, Full Track",
+    "scicomp37": "Scientific Computing Focus@37",
+}
+
+#: Roster tag -> every job-name prefix canon_column.sh has used for it, oldest first. llr-focus40
+#: carries two legacy spellings (``canon40``, the historical TAG==llr-focus40 default, and
+#: ``canon-llr``, an older TAG=llr run over the same 40-kernel roster) beside the current
+#: ``canon-<tag>`` form submit-canon-llr40.sh now writes for every other tag.
+CANON_JOB_PREFIXES = {
+    "llr-focus40": ("canon40", "canon-llr-focus40", "canon-llr"),
+    "loop_level_reasoning": ("canon-loop_level_reasoning",),
+    "scicomp37": ("canon-scicomp37",),
+}
+
+#: Roster tag -> every ``canon-<stem>-<stamp>`` legacy directory stem under $SCRATCH it wrote to
+#: before HPCAGENT_BENCH_RUNS_ROOT existed (canon-llr40-20260917, canon-llr-cpu-20260917-1314, ...).
+CANON_LEGACY_DIR_STEMS = {
+    "llr-focus40": ("llr-focus40", "llr40", "llr-cpu", "llr-gpu", "llr"),
 }
 
 
 def canon_device(col: str) -> str:
-    return "GPU" if col in CANON_GPU_COLUMNS else "CPU"
+    """CPU or GPU, read from the registry's own ``arch`` field -- not a name guess, so a column like
+    ``ppcg`` (a GPU column whose name has no "gpu" in it) is not silently reported as CPU."""
+    return FRAMEWORK_META[col]["arch"].upper()
 
 
-def canon_job_name_matches(name: str, col: str) -> bool:
-    """``name`` is exactly this column's job, or that job plus a ``-suffix`` re-run (e.g. ``-b``).
+def canon_job_name_matches(name: str, prefix: str, col: str) -> bool:
+    """``name`` is exactly ``<prefix>-<col>``, or that job plus a ``-suffix`` re-run (e.g. ``-b``).
     Column names share prefixes (``cc``/``cc_autopar``, ``dace_cpu``/``dace_cpu_canonicalize``), so a
     bare ``startswith`` would fold one column's jobs into another's."""
-    return name == f"canon40-{col}" or name.startswith(f"canon40-{col}-")
+    full = f"{prefix}-{col}"
+    return name == full or name.startswith(full + "-")
 
 
 def canon_dirs(scratch: pathlib.Path, tag: str) -> list[pathlib.Path]:
-    """Every ``canon-<tag>-<stamp>[-suffix]`` directory for ``tag``, oldest first: a later one (a
-    fresher stamp, or a ``-b`` re-run) supersedes an earlier one's rows for the same kernel."""
-    if not scratch.is_dir():
-        return []
-    return sorted((path for path in scratch.glob(f"canon-{tag}-*") if path.is_dir()), key=lambda p: p.stat().st_mtime)
+    """Every ``canon-<stem>-<stamp>[-suffix]`` legacy directory for ``tag`` under ``scratch`` (its
+    own name plus any legacy alias stem), and every ``<runs root>/canon/<stem>-<stamp>`` directory
+    under the cache root (HPCAGENT_BENCH_RUNS_ROOT, default ``<scratch>/.hpcagentbench-cache/runs``
+    -- see scripts/cache_env.sh), oldest first: a later one (a fresher stamp, or a ``-b`` re-run)
+    supersedes an earlier one's rows for the same kernel."""
+    stems = CANON_LEGACY_DIR_STEMS.get(tag, (tag,))
+    found: set[pathlib.Path] = set()
+    if scratch.is_dir():
+        for stem in stems:
+            found.update(path for path in scratch.glob(f"canon-{stem}-*") if path.is_dir())
+    runs_root = pathlib.Path(os.environ.get("HPCAGENT_BENCH_RUNS_ROOT", str(scratch / ".hpcagentbench-cache" / "runs")))
+    canon_root = runs_root / "canon"
+    if canon_root.is_dir():
+        for stem in stems:
+            found.update(path for path in canon_root.glob(f"{stem}-*") if path.is_dir())
+    return sorted(found, key=lambda p: p.stat().st_mtime)
 
 
 def canon_csv_rows(path: pathlib.Path) -> list[tuple[str, str]]:
     """(kernel, status) over one column's rank shard."""
     with path.open(newline="", encoding="utf-8") as handle:
         return [(row["kernel"], row["status"]) for row in csv.DictReader(handle)]
+
+
+def canon_opt_reports_saved(dirs: list[pathlib.Path], col: str) -> bool:
+    """True if canon_column.sh's opt-report pass (CANON_OPT_REPORTS=1, the default) wrote at least
+    one hpcagent_bench/opt_reports.py manifest for ``col``, over every canon directory for the tag."""
+    return any(any((one / "reports" / col).glob("*/manifest.json")) for one in dirs)
 
 
 def canon_column_row(tag: str, col: str, dirs: list[pathlib.Path], roster: list[str], jobs: list[Job]) -> dict:
@@ -263,15 +337,17 @@ def canon_column_row(tag: str, col: str, dirs: list[pathlib.Path], roster: list[
         "done": done,
         "roster": len(roster),
         "failed": failed,
+        "opt_reports": canon_opt_reports_saved(dirs, col),
         "status": arm_status(done, len(roster), [job.state for job in jobs]),
         "jobs": [dataclasses.asdict(job) for job in sorted(jobs, key=lambda job: (len(job.id), job.id))],
     }
 
 
-def canon_jobs(since: str) -> list[Job]:
-    """Every ``canon40-*`` slurm entry since ``since`` (``YYYY-MM-DD``), StdOut included so a row can
-    tell which canon directory ran it. Unbounded queries over the account's whole history are slow;
-    ``since`` is the earliest canon directory's mtime, so this reads only the relevant window."""
+def canon_jobs(since: str, prefixes: tuple[str, ...]) -> list[Job]:
+    """Every slurm entry since ``since`` (``YYYY-MM-DD``) whose name starts with one of ``prefixes``,
+    StdOut included so a row can tell which canon directory ran it. Unbounded queries over the
+    account's whole history are slow; ``since`` is the earliest canon directory's mtime, so this
+    reads only the relevant window."""
     fields = "JobID,JobName,State,NNodes,Start,End,StdOut%200"
     out = subprocess.run(
         ["sacct", "-X", "-n", "-P", "-S", since, "-o", fields], capture_output=True, text=True, check=True
@@ -279,28 +355,43 @@ def canon_jobs(since: str) -> list[Job]:
     jobs = []
     for line in out.stdout.splitlines():
         job, name, state, nodes, start, end, stdout = line.split("|")
-        if name.startswith("canon40-"):
+        if any(name.startswith(prefix + "-") for prefix in prefixes):
             jobs.append(Job(job, name, state.split()[0], int(nodes), start, end, stdout))
     return jobs
 
 
+def canon_roster(tag: str, opt: str, scratch: pathlib.Path) -> list[str]:
+    """Kernel roster for one canon tag. ``scicomp37``'s roster is a bare ``$SCRATCH/kernels-
+    scicomp37.txt`` file, not a repo ``experiments/kernels-<tag>.txt`` or ``experiment_tags`` entry,
+    so ``remaining_kernels.roster`` (which only reads the repo checkout) cannot resolve it; every
+    other canon tag goes through that shared roster script."""
+    if tag == "scicomp37":
+        listing = scratch / "kernels-scicomp37.txt"
+        if not listing.is_file():
+            return []
+        return sorted({line.strip() for line in listing.read_text().splitlines() if line.strip()})
+    return remaining_kernels.roster(tag, opt)
+
+
 def canon_rows(scratch: pathlib.Path, opt: str) -> list[dict]:
-    """One "Compiler baselines" row per (roster tag, canon column) that has at least one directory."""
+    """One "Compiler baselines" row per (canon tag, column) that has at least one directory."""
     rows = []
-    for tag in sorted({spec.tag for spec in CAMPAIGNS.values() if spec.tag}):
+    for tag in CANON_TAGS:
         dirs = canon_dirs(scratch, tag)
         if not dirs:
             continue
         oldest = min(path.stat().st_mtime for path in dirs)
         since = datetime.datetime.fromtimestamp(oldest).astimezone().date().isoformat()
-        all_jobs = canon_jobs(since)
+        prefixes = CANON_JOB_PREFIXES[tag]
+        all_jobs = canon_jobs(since, prefixes)
         dir_paths = {str(path) for path in dirs}
-        roster = remaining_kernels.roster(tag, opt)
+        roster = canon_roster(tag, opt, scratch)
         for col in CANON_COLUMNS:
             jobs = [
                 job
                 for job in all_jobs
-                if canon_job_name_matches(job.name, col) and os.path.dirname(job.stdout) in dir_paths
+                if os.path.dirname(job.stdout) in dir_paths
+                and any(canon_job_name_matches(job.name, prefix, col) for prefix in prefixes)
             ]
             rows.append(canon_column_row(tag, col, dirs, roster, jobs))
     return rows

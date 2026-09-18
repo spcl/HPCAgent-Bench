@@ -48,10 +48,17 @@ def test_an_arm_name_splits_into_its_campaign_model_variant_and_clean_flag(
     assert board.split_arm(arm, MODELS) == expected
 
 
-def test_the_dropped_harness_comparison_is_not_on_the_board(board: types.ModuleType) -> None:
-    """Agent Harness Comparison@20 and its smoke were taken off the board; their jobs must not come
-    back as an experiment window the next time one of them is in the queue."""
-    assert board.campaign_of("harness-focus20-smoke-qwen38-claude-autokernel") == ""
+def test_the_harness_smoke_is_back_on_the_board(board: types.ModuleType) -> None:
+    """Agent Harness Comparison@20's smoke (CAMPAIGNS 2026-09-18) is reported again: it disappeared
+    only because no CAMPAIGNS entry matched harness-focus20-smoke-<model>-<harness>, not because it
+    was meant to stay off the board."""
+    assert board.campaign_of("harness-focus20-smoke-qwen38-claude-autokernel") == "harness-focus20-smoke"
+    assert board.split_arm("harness-focus20-smoke-oss120b-optimas", MODELS) == (
+        "harness-focus20-smoke",
+        "oss120b",
+        "optimas",
+        False,
+    )
 
 
 def test_a_job_outside_every_campaign_has_no_campaign(board: types.ModuleType) -> None:
@@ -161,8 +168,14 @@ def canon_csv(path: pathlib.Path, col: str, rank: int, rows: list[tuple[str, str
     (path / f"{col}.rank{rank}.csv").write_text("\n".join(lines) + "\n")
 
 
-@pytest.mark.parametrize(("col", "device"), [("cc", "CPU"), ("dace_cpu", "CPU"), ("dace_gpu", "GPU")])
-def test_a_canon_column_is_cpu_unless_its_name_says_gpu(board: types.ModuleType, col: str, device: str) -> None:
+@pytest.mark.parametrize(
+    ("col", "device"), [("cc", "CPU"), ("dace_cpu", "CPU"), ("dace_gpu", "GPU"), ("pluto", "CPU"), ("ppcg", "GPU")]
+)
+def test_a_canon_columns_device_reads_the_framework_registrys_arch_field(
+    board: types.ModuleType, col: str, device: str
+) -> None:
+    """``ppcg``'s name has no "gpu" in it; reading FRAMEWORK_META["arch"] instead of guessing from
+    the name is what gets it (and every future column) right."""
     assert board.canon_device(col) == device
 
 
@@ -182,7 +195,24 @@ def test_a_canon_job_name_does_not_fold_into_a_column_that_prefixes_its_own(
 ) -> None:
     """``cc`` prefixes ``cc_autopar`` and ``dace_cpu`` prefixes ``dace_cpu_canonicalize``: a bare
     startswith would count one column's job as the other's."""
-    assert board.canon_job_name_matches(name, col) == expected
+    assert board.canon_job_name_matches(name, "canon40", col) == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "prefix", "col", "expected"),
+    [
+        ("canon-llr-cc", "canon-llr", "cc", True),
+        ("canon-llr-cc_autopar", "canon-llr", "cc", False),
+        ("canon-loop_level_reasoning-dace_gpu", "canon-loop_level_reasoning", "dace_gpu", True),
+        ("canon-loop_level_reasoning-dace_gpu_canonicalize", "canon-loop_level_reasoning", "dace_gpu", False),
+        ("canon-scicomp37-numba", "canon-scicomp37", "numba", True),
+    ],
+)
+def test_a_canon_job_name_matches_its_tags_own_prefix(
+    board: types.ModuleType, name: str, prefix: str, col: str, expected: bool
+) -> None:
+    """The sweeps write canon-<tag>-<col> job names now, not just the historical canon40-<col>."""
+    assert board.canon_job_name_matches(name, prefix, col) == expected
 
 
 def test_a_canon_columns_done_and_failed_kernels_read_the_latest_dir(
@@ -222,21 +252,20 @@ def test_canon_rows_join_the_arms_list_as_their_own_experiment_group(
     board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The board shows compiler baselines the same way it shows every other experiment: strip, rows,
-    jobs, grouped by ``experiment`` -- so a canon row must carry that same shape."""
-    root = tmp_path / "canon-scicomp40-20260915"
+    jobs, grouped by ``experiment`` -- so a canon row must carry that same shape. canon_rows is fixed
+    to CANON_TAGS now, not CAMPAIGNS: the three canon experiments are their own thing."""
+    root = tmp_path / "canon-llr-focus40-20260915"
     canon_csv(root, "numba", 0, [("a", "ok")])
     canon_csv(root, "dace_gpu", 0, [("a", "crash")])
     monkeypatch.setattr(board.remaining_kernels, "roster", lambda tag, opt: ["a"])
-    monkeypatch.setattr(board, "canon_jobs", lambda since: [])
-    one_tag = {"scicomp-dc": board.Campaign("scicomp-focus40", "SciComp", "CPU", "scicomp40")}
-    monkeypatch.setattr(board, "CAMPAIGNS", one_tag)
+    monkeypatch.setattr(board, "canon_jobs", lambda since, prefixes: [])
 
     rows = board.canon_rows(tmp_path, "/opt")
 
-    by_col = {row["variant"]: row for row in rows}
+    by_col = {row["variant"]: row for row in rows if row["experiment"] == "canon40-llr-focus40"}
     assert by_col["numba"]["done"] == 1 and by_col["numba"]["device"] == "CPU"
     assert by_col["dace_gpu"]["done"] == 0 and by_col["dace_gpu"]["device"] == "GPU"
-    assert all(row["experiment"] == "canon40-scicomp40" for row in rows)
+    assert len(rows) == len(board.CANON_COLUMNS)  # only llr-focus40 has a directory here
 
 
 def test_a_clean_rerun_gets_its_own_row_beside_the_arm_it_supersedes(
