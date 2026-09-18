@@ -182,6 +182,20 @@ def test_an_arms_coverage_is_the_union_of_every_jobs_rows(
     assert (row["done"], row["status"]) == (done, status), row
 
 
+def test_a_touched_kernel_outside_the_roster_does_not_inflate_done(
+    board: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """A submissions row for a kernel a retired tag or rename dropped from the CURRENT roster must
+    not push `done` past `roster` -- kernel_status bounds `done` to `full`, the same bound
+    remaining_kernels.py's own report_arm keeps by summing over the roster rather than counting
+    every touched name."""
+    arm = "cpf-llr-focus40-oss120b-c-cpfsrc"
+    dirs = {"100": job_dir_with_rows(tmp_path, "100", ["a", "b", "retired_kernel"])}
+    jobs = [board.Job("100", arm, "COMPLETED", 3, "", "")]
+    row = board.arm_row(arm, jobs, dirs, ["a", "b"], MODELS)
+    assert (row["done"], row["roster"], row["status"]) == (2, 2, "complete"), row
+
+
 def test_a_clean_reruns_row_folds_into_the_arm_it_supersedes(board: types.ModuleType, tmp_path: pathlib.Path) -> None:
     """The clean job's coverage ADDS to the plain arm's (2026-09-18 fold), so an arm the clean re-run
     only partly repeated still reads its plain jobs' rows too, not just the clean one's."""
