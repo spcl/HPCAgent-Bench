@@ -16,8 +16,10 @@ import tempfile
 
 import matplotlib.colors
 import matplotlib.markers
+import numpy as np
 import pandas as pd
 import pytest
+from PIL import Image
 
 from hpcagent_bench import experiment_tags
 from hpcagent_bench.harness import efficacy
@@ -552,6 +554,87 @@ def test_a_paper_row_width_derives_the_panel_side_from_the_text_width() -> None:
     iclr = efficacy_figures.panel_side(3, plotstyle.ICLR_TEXT_WIDTH_IN)
     assert iclr != natural
     assert 3 * iclr + 2 * efficacy_figures.ROW_PANEL_GAP <= plotstyle.ICLR_TEXT_WIDTH_IN + 1e-9
+
+
+@pytest.mark.parametrize(
+    ("span", "expected_step"),
+    [(2.2, 1), (8.0, 1), (9.0, 2), (16.0, 2), (17.0, 4), (64.0, 8)],
+)
+def test_x_tick_step_widens_before_the_tick_budget_is_crossed(span: float, expected_step: int) -> None:
+    """A step of 1 (every power of 2) crams a label onto every few pixels once the window is wide
+    enough -- two crashed-to-1/512x and ran-away-to-256x kernels in the same panel widened it past
+    twenty octaves in production. The step doubles (every power of 4, then 16, ...) instead of
+    landing on an arbitrary 'nice number' spacing, so every tick still names a clean ratio."""
+    assert efficacy_figures.x_tick_step(span) == expected_step
+    assert span / efficacy_figures.x_tick_step(span) <= efficacy_figures.MAX_X_TICKS - 1
+
+
+def test_a_wide_ranging_panel_never_crosses_the_x_tick_budget() -> None:
+    """The end-to-end path: a treated arm landing two orders of magnitude from its control (the
+    autoscaled window then spans 0 to that log2 exponent, since the control mark sits at x=0)
+    still draws under :data:`~hpcagent_bench.stats.figures.efficacy.MAX_X_TICKS` labelled ticks."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    try:
+        efficacy_figures.draw_panel(ax, one_arm_raw(on_speedup=1e5), one_arm_stats(), "cpf")
+        fig.canvas.draw()
+        ticks = [t for t in ax.xaxis.get_major_ticks() if t.label1.get_visible()]
+        assert 0 < len(ticks) <= efficacy_figures.MAX_X_TICKS
+    finally:
+        plt.close(fig)
+
+
+def png_ink_columns(path: pathlib.Path, row_lo: int, row_hi: int) -> tuple[int, int]:
+    """The leftmost and rightmost non-white pixel column PNG ``path`` carries within
+    ``[row_lo, row_hi)`` -- how a rendered title or axis label is checked for clipping: matplotlib's
+    own measured 'it fits' is a claim about a font metrics table, this is a claim about the file."""
+    with Image.open(path) as image:
+        band = np.array(image.convert("L"))[row_lo:row_hi, :]
+    cols = np.where((band < 240).any(axis=0))[0]
+    return (int(cols.min()), int(cols.max())) if cols.size else (-1, -1)
+
+
+def test_a_joined_rows_title_never_touches_the_saved_canvas_edge(tmp_path: pathlib.Path) -> None:
+    """``style.title`` shrinks its font to fit the WIDTH IT MEASURES -- against a figure still at
+    matplotlib's default dpi, before :func:`~hpcagent_bench.stats.style.save` writes the PNG at
+    :data:`~hpcagent_bench.stats.style.SAVE_DPI`. FreeType hints a glyph run tighter at a lower dpi,
+    so a title that 'fit' at measurement time came out overflowing both edges of the saved file --
+    this is caught on the file itself, not on the same measurement that missed it the first time."""
+    panels = [("Comparison", "cpf", one_arm_stats(), one_arm_raw())]
+    long_label = "A row title long enough to need the shrink-to-fit loop to do real work here"
+    out = tmp_path / "row.pdf"
+    efficacy_figures.figure_row(panels, long_label, out)
+    with Image.open(out.with_suffix(".png")) as image:
+        width = image.size[0]
+        rows = np.where((np.array(image.convert("L")) < 240).any(axis=1))[0]
+    left, right = png_ink_columns(out.with_suffix(".png"), int(rows.min()), int(rows.min()) + 40)
+    assert 0 < left, "the title's own ink starts at the canvas edge"
+    assert right < width - 1, "the title's own ink runs to the canvas edge"
+
+
+def test_required_left_margin_reserves_more_than_the_rows_old_flat_fraction() -> None:
+    """A direct measurement: a wide-ranging axis's own long tick labels (``0.0078125x``) beside the
+    panel's Y label need more room than :func:`figure_row` used to reserve, a FLAT 0.13 of the row's
+    width regardless of content -- on a two-panel NATURAL row (3.6in side each) that fraction gave
+    the label 0.13 * 7.45 =~ 0.97in, and the label's own ink ran past it off the canvas."""
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import FuncFormatter
+
+    fig, ax = plt.subplots(figsize=(3.6, 3.6))
+    fig.set_dpi(plotstyle.SAVE_DPI)
+    ax.set_yscale("log", base=2.0)
+    ax.set_ylim(2.0**-7, 2.0**7)  # 0.0078125x .. 128x, the dynamic range a real outlier kernel gave
+    plotstyle.value_axis(ax, "y", log_base=2.0)
+    ax.yaxis.set_major_formatter(FuncFormatter(efficacy_figures.ratio_tick))
+    ax.set_ylabel("Token-Cost Ratio, Treated / Control", fontsize=plotstyle.LABEL_PT * 0.68)
+    ax.tick_params(axis="both", labelsize=plotstyle.TICK_PT * 0.6)
+    try:
+        left_in = efficacy_figures.required_left_margin(fig, ax)
+        old_fixed_in = 0.13 * 7.45  # the row's own former constant, at a real two-panel row's width
+        assert left_in > old_fixed_in, (left_in, old_fixed_in)
+    finally:
+        plt.close(fig)
 
 
 def test_the_legend_names_the_interval_method_and_the_kernels_it_is_over() -> None:
