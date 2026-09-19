@@ -235,10 +235,13 @@ def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, 
         # because a caller on one has usually pinned landmarks of its own that these would
         # overwrite.
         if major:
-            # A decade gets 1, 2, 5; an octave gets 1 and 1.5. Either way more than one labelled
-            # tick lands in the window, and a panel spanning under two decades is exactly where the
-            # default locator leaves a single number on the axis with nothing to read against.
-            subs = (1.0, 2.0, 5.0) if log_base == 10.0 else (1.0, 1.5)
+            # A decade gets 1, 2, 5, more than one labelled tick even under two decades. A base-2
+            # (ratio) axis gets 1 ONLY: a 1.5 sub would label 1.5x, 3x, 6x, 0.75x, ... -- ticks a
+            # power-of-2 formatter (:func:`~hpcagent_bench.stats.figures.per_kernel.
+            # speedup_tick_label`) cannot spell as a clean fraction and a reader cannot place on a
+            # log2 grid by eye. The caller widens its own limits (SC15 speed-up/ratio axes always
+            # do) so a narrow window still gets more than the one tick this alone would leave it.
+            subs = (1.0, 2.0, 5.0) if log_base == 10.0 else (1.0,)
             target.set_major_locator(LogLocator(base=log_base, subs=subs, numticks=20))
         if log_base == 10.0 and major:
             # NOT LogFormatterSciNotation: even with labelOnlyBase=False it returns the empty
@@ -266,7 +269,6 @@ def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, 
 FILL_Z: float = 3.0
 CONNECTOR_Z: float = 4.0
 MARK_Z: float = 5.0
-
 
 #: How much of a mark's area the NOT-DELIVERED cross covers. Small enough that the model shape is
 #: still read first, large enough to survive a column-width reduction.

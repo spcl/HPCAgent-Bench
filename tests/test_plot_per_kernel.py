@@ -93,6 +93,7 @@ def test_token_cells_keeps_every_episodes_own_total_not_the_kernel_sum() -> None
 @pytest.mark.parametrize(
     "ratio, label",
     [
+        pytest.param(0.125, "1/8x", id="eighth"),
         pytest.param(0.25, "1/4x", id="quarter"),
         pytest.param(0.5, "1/2x", id="half"),
         pytest.param(1.0, "1x", id="unity"),

@@ -16,15 +16,28 @@ token-cost geomean, ALSO paired per kernel and treated over control, ALSO a
 with no effect on either axis draws its mark at ``(0, 1)``, which is where the hollow control
 reference sits by construction.
 
-EVERY ARM IS A CLOUD PLUS ITS SUMMARY (SC15 Rules 5, 7 and 12): the per-kernel paired ratios,
-scattered at low alpha, and the geomean crossed with its 95% interval on both axes. NOTHING IS
-JOINED BY A LINE -- an arm's mark is one measurement, not a trend, the same discipline
-:mod:`hpcagent_bench.stats.figures.signed` draws its own rows under.
+EACH ARM IS ITS SUMMARY MARK: the geomean crossed with its 95% interval on both axes, plus the
+control reference at ``(0, 1)``. The per-kernel paired ratios (SC15 Rules 5, 7 and 12) draw only
+behind ``show_cloud=True`` (default off, :func:`draw_panel`) -- one comparison's cloud already
+crowds a square panel past legibility once every kernel is a dot, and the reader who wants it can
+still ask. A kernel served and never delivered still scores 1x and still counts its tokens in the
+geomean either way (:data:`~hpcagent_bench.stats.population.NOT_DELIVERED`); only its OWN dot or
+cross stops drawing. NOTHING IS JOINED BY A LINE -- an arm's mark is one measurement, not a trend,
+the same discipline :mod:`hpcagent_bench.stats.figures.signed` draws its own rows under.
 
-COLOUR IS THE INTERVENTION, SHAPE IS THE MODEL. :func:`hpcagent_bench.stats.palette.color` for the
-treated mark, :func:`~hpcagent_bench.stats.palette.control_color` for the control reference, and
-:func:`~hpcagent_bench.stats.palette.model_markers` for the shape -- colouring by model instead
-would spend the intervention's channel on the entity the shape already carries.
+COLOUR IS THE MODEL, SHAPE IS THE PACKET -- the inverse of most figures in this repo
+(:mod:`hpcagent_bench.stats.palette`'s module docstring has the reasoning). One panel already
+belongs to one packet, so its shape never has to separate anything; the two or three models sharing
+that panel do, and a hue tells two overlapping summary marks apart at a glance where a
+circle-vs-square edge does not. :func:`hpcagent_bench.stats.palette.model_color` for the mark,
+:func:`~hpcagent_bench.stats.palette.control_color` for the control reference, and
+:func:`~hpcagent_bench.stats.palette.packet_marker` for the one shape the whole panel wears.
+
+SIGNIFICANCE IS FILL: a mark is FILLED when either axis' Benjamini-Hochberg-adjusted verdict for
+that (model, leg) is significant (q < 0.05 over the figure's whole family of tests), HOLLOW
+otherwise -- an outline in the mark's own colour and shape, never redrawn in the control's neutral
+grey. The legend spells the rule once (:func:`legend_handles`) rather than marking every point with
+a symbol a reader has to look up.
 
 Several comparisons join as ONE ROW of square panels (:func:`panel_side`, :func:`figure_row`), sized
 either to a panel's natural width or to a paper's own text width (:data:`~hpcagent_bench.stats.
@@ -183,9 +196,11 @@ def reduce_pair(
 
 
 def ratio_tick(value: float, position: int = 0) -> str:
-    """A base-2 major on the token-cost axis read back as the ratio it is: ``1x``, ``2x``, ``0.5x``."""
+    """A base-2 major on the token-cost axis read back as the ratio it is: ``1x``, ``2x``, ``1/2x``
+    -- the same spelling :func:`~hpcagent_bench.stats.figures.per_kernel.speedup_tick_label` gives
+    every other speed-up/ratio axis in this repo, so a ratio below 1 never prints as a decimal."""
     del position
-    return "1x" if value == 1.0 else f"{value:g}x"
+    return speedup_tick_label(value)
 
 
 def log2_tick(value: float, position: int = 0) -> str:
@@ -197,23 +212,37 @@ def log2_tick(value: float, position: int = 0) -> str:
     return speedup_tick_label(2.0**value)
 
 
-def draw_series(ax: Axes, series: Series, colour: str, shape: str, filled: bool) -> None:
-    """One arm's per-kernel cloud, its crossed 95% interval and its summary mark.
+def draw_series(ax: Axes, series: Series, colour: str, shape: str, filled: bool, show_cloud: bool = False) -> None:
+    """One arm's crossed 95% interval and summary mark, plus its per-kernel cloud when
+    ``show_cloud`` asks for it (default off: :func:`draw_panel`'s own docstring).
 
     The cloud splits on ``delivered``: a verified kernel is a small dot, a served-and-never-answered
     placeholder a small cross, both in the arm's own colour -- the shape and the fill still say
     which model and which condition the mark itself belongs to.
     """
-    delivered, missing = series.cloud[series.cloud.delivered], series.cloud[~series.cloud.delivered]
-    if not delivered.empty:
-        ax.scatter(
-            delivered.x, delivered.y, s=CLOUD_SIZE, color=colour, alpha=CLOUD_ALPHA, linewidth=0, zorder=style.FILL_Z
-        )
-    if not missing.empty:
-        ax.scatter(
-            missing.x, missing.y, s=CLOUD_SIZE, marker="x", color=colour, alpha=CLOUD_ALPHA, linewidth=1.1,
-            zorder=style.FILL_Z,
-        )  # fmt: skip
+    if show_cloud:
+        delivered, missing = series.cloud[series.cloud.delivered], series.cloud[~series.cloud.delivered]
+        if not delivered.empty:
+            ax.scatter(
+                delivered.x,
+                delivered.y,
+                s=CLOUD_SIZE,
+                color=colour,
+                alpha=CLOUD_ALPHA,
+                linewidth=0,
+                zorder=style.FILL_Z,
+            )  # fmt: skip
+        if not missing.empty:
+            ax.scatter(
+                missing.x,
+                missing.y,
+                s=CLOUD_SIZE,
+                marker="x",
+                color=colour,
+                alpha=CLOUD_ALPHA,
+                linewidth=1.1,
+                zorder=style.FILL_Z,
+            )  # fmt: skip
     if np.isfinite(series.x_low) and np.isfinite(series.x_high):
         ax.hlines(
             series.y, series.x_low, series.x_high, color=colour, linewidth=1.2, alpha=0.75, zorder=style.CONNECTOR_Z
@@ -265,31 +294,46 @@ def interval_note(counts: Sequence[int], statistic: str) -> str:
     return f"{statistic}, 95% {GEOMEAN_METHOD} Interval, n={span(counts)}"
 
 
+#: The legend text for a FILLED mark, ``family`` filled in with how many tests the figure's marks
+#: were corrected over together (:func:`family_size`). Spelled once, here, so the module docstring's
+#: significance rule and what the figure actually prints can never drift apart.
+def significance_label(filled: bool, family: int) -> str:
+    """The legend text for one fill state -- ``filled`` significant, hollow not."""
+    if filled:
+        return f"Filled: Significant (BH-Adjusted p < 0.05, {family} Tests)"
+    return "Hollow: Not Significant"
+
+
 def legend_handles(
-    treatment: str, models: Sequence[str], notes: Sequence[str], control_over: Sequence[str], family: int,
+    treatment: str,
+    models: Sequence[str],
+    notes: Sequence[str],
+    control_over: Sequence[str],
+    family: int,
     control_name: str = "",
+    show_cloud: bool = False,
 ) -> list[Line2D]:  # fmt: skip
-    """The figure's one key: a MODEL is a shape in neutral ink, a CONDITION is a colour.
+    """The figure's one key: a MODEL is a colour, the PACKET is the one shape the whole panel wears,
+    and FILL says which marks cleared the Benjamini-Hochberg correction (:data:`significance_label`).
 
     ``control_over`` is every treatment the FIGURE reads against this one control -- a joined row
     takes the whole set so the hollow mark's text (:func:`hpcagent_bench.packets.control_label`) is
     not read off one panel's own treatment while the row draws several. ``control_name`` overrides
     that text outright, for a control that is not the absence of a packet.
     """
-    shapes = palette.model_markers(models)
     marks = [
         Line2D(
             [],
             [],
-            marker=shapes[name],
+            marker="o",
             linestyle="none",
-            color=style.MUTED,
+            color=palette.model_color(name),
             markersize=9,
             label=experiment_tags.model_name(name),
         )  # fmt: skip
         for name in palette.in_order(models)
     ]
-    return marks + [
+    handles = marks + [
         Line2D(
             [],
             [],
@@ -304,20 +348,44 @@ def legend_handles(
         Line2D(
             [],
             [],
-            marker="o",
+            marker=palette.packet_marker(treatment),
             linestyle="none",
-            color=palette.color(treatment),
+            color=style.MUTED,
             markersize=9,
             label=experiment_tags.packet_name(treatment),
         ),  # fmt: skip
+    ]
+    if show_cloud:
+        handles.append(
+            Line2D(
+                [], [], marker="x", linestyle="none", color=style.MUTED, markersize=7, label=style.NOT_DELIVERED_LABEL
+            )  # fmt: skip
+        )
+    handles += [Line2D([], [], linestyle="-", linewidth=1.3, color=style.MUTED, label=text) for text in notes]
+    handles += [
         Line2D(
-            [], [], marker="x", linestyle="none", color=style.MUTED, markersize=7, label=style.NOT_DELIVERED_LABEL
+            [],
+            [],
+            marker="o",
+            linestyle="none",
+            markerfacecolor=style.MUTED,
+            markeredgecolor=style.MUTED,
+            markersize=9,
+            label=significance_label(True, family),
         ),  # fmt: skip
-        *[Line2D([], [], linestyle="-", linewidth=1.3, color=style.MUTED, label=text) for text in notes],
         Line2D(
-            [], [], marker="*", linestyle="none", color=style.MUTED, markersize=11, label=f"BH q < 0.05 of {family}"
+            [],
+            [],
+            marker="o",
+            linestyle="none",
+            markerfacecolor="none",
+            markeredgecolor=style.MUTED,
+            markeredgewidth=1.4,
+            markersize=9,
+            label=significance_label(False, family),
         ),  # fmt: skip
     ]
+    return handles
 
 
 #: The narrowest span, in exponent units, the X axis is ever drawn at: two whole-ratio steps either
@@ -334,6 +402,23 @@ def widen_x_axis(ax: Axes) -> None:
     if high - low < MIN_X_SPAN:
         centre = (low + high) / 2.0
         ax.set_xlim(centre - MIN_X_SPAN / 2.0, centre + MIN_X_SPAN / 2.0)
+
+
+#: The Y axis' own :data:`MIN_X_SPAN`: a log2-scaled ratio axis needs the same floor in exponent
+#: units, or a panel whose every arm moved cost by a few percent draws the single tick
+#: :func:`~hpcagent_bench.stats.style.value_axis` warns a sub-two-octave window leaves once the
+#: 1.5x sub-tick is gone (:data:`~hpcagent_bench.stats.style.value_axis`'s own base-2 branch).
+MIN_Y_SPAN: float = MIN_X_SPAN
+
+
+def widen_y_axis(ax: Axes) -> None:
+    """Pad ``ax``'s Y limits (a base-2 log scale) to at least :data:`MIN_Y_SPAN` octaves, centred in
+    log space where they already are."""
+    low, high = ax.get_ylim()
+    log_low, log_high = math.log2(low), math.log2(high)
+    if log_high - log_low < MIN_Y_SPAN:
+        centre = (log_low + log_high) / 2.0
+        ax.set_ylim(2.0 ** (centre - MIN_Y_SPAN / 2.0), 2.0 ** (centre + MIN_Y_SPAN / 2.0))
 
 
 #: The most labelled ticks the X axis draws before its whole-ratio spacing widens. A few outlier
@@ -375,6 +460,7 @@ def style_panel(ax: Axes, compact: bool) -> None:
     style.value_axis(ax, "y", log_base=2.0)
     ax.margins(x=0.22, y=0.22)
     widen_x_axis(ax)
+    widen_y_axis(ax)
     low, high = ax.get_xlim()
     ax.xaxis.set_major_locator(MultipleLocator(x_tick_step(high - low)))
     ax.xaxis.set_major_formatter(FuncFormatter(log2_tick))
@@ -392,16 +478,17 @@ def draw_panel(
     control_over: Sequence[str] = (),
     control_name: str = "",
     repeats: population.RepeatPolicy = "latest",
+    show_cloud: bool = False,
 ) -> list[Line2D]:
-    """One comparison: every arm's paired cloud and summary mark, on one panel.
+    """One comparison: every arm's summary mark (and, with ``show_cloud``, its paired cloud) on one
+    panel.
 
     ``frame`` is the RAW tagged observations (one row per record, ``skills`` True/False for the two
     conditions) -- the per-kernel cloud needs the individual kernels, which an already-reduced table
     cannot give back. Grouped by (model, leg): a leg is the language, unless ``frame`` carries an
     explicit one (:func:`leg_labels`).
     """
-    treated_colour = palette.color(treatment)
-    shapes = palette.model_markers(sorted(frame.model.unique()))
+    shape = palette.packet_marker(treatment)
     significant = significant_flags(stats)
     drawn_models: set[str] = set()
     counts: list[int] = []
@@ -410,11 +497,11 @@ def draw_panel(
         if series is None:
             continue
         drawn_models.add(str(model))
-        draw_series(ax, series, treated_colour, shapes[model], True)
+        filled = significant.get((str(model), str(leg)), False)
+        draw_series(ax, series, palette.model_color(str(model)), shape, filled, show_cloud)
         counts.append(series.kernels)
-        star = " *" if significant.get((str(model), str(leg)), False) else ""
         ax.annotate(
-            f"{leg}{star}",
+            str(leg),
             (series.x, series.y),
             textcoords="offset points",
             xytext=(13, 0),
@@ -426,8 +513,14 @@ def draw_panel(
     style_panel(ax, compact)
     notes = [interval_note(counts, "Speed-Up Geomean"), interval_note(counts, "Token-Cost Geomean")]
     return legend_handles(
-        treatment, sorted(drawn_models), notes, list(control_over) or [treatment], family_size(stats), control_name
-    )
+        treatment,
+        sorted(drawn_models),
+        notes,
+        list(control_over) or [treatment],
+        family_size(stats),
+        control_name,
+        show_cloud,
+    )  # fmt: skip
 
 
 #: A point label's candidate places around its mark, tried in order: (dx, dy) in points, then the
@@ -543,13 +636,14 @@ def figure_one(
     out: pathlib.Path,
     control_name: str = "",
     repeats: population.RepeatPolicy = "latest",
+    show_cloud: bool = False,
 ) -> pathlib.Path:
     """ONE comparison: its square panel under a title and its own legend."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=PANEL_SIZE)
     fig.set_dpi(style.SAVE_DPI)  # measure title/legend fit at the dpi save() actually writes
-    handles = draw_panel(ax, frame, stats, treatment, control_name=control_name, repeats=repeats)
+    handles = draw_panel(ax, frame, stats, treatment, control_name=control_name, repeats=repeats, show_cloud=show_cloud)
     fig.subplots_adjust(**PANEL_MARGINS)
     style.legend_below(fig, handles, ncol=2, y=0.01, fontsize=style.LABEL_PT * 0.8)
     style.title(fig, label)
@@ -563,6 +657,7 @@ def figure_row(
     out: pathlib.Path,
     row_width_in: float | None = None,
     repeats: population.RepeatPolicy = "latest",
+    show_cloud: bool = False,
 ) -> pathlib.Path:
     """N comparisons as ONE ROW of N square panels, every one against its own control.
 
@@ -570,7 +665,7 @@ def figure_row(
     sequence, so a reader compares them by panel shape as well as by content. Each panel is
     ``(title, treatment, stats, frame)`` -- ``title`` is what the panel is CALLED (a caller's own
     "Kernel Formulation" or the packet's own :func:`~hpcagent_bench.packets.label`), ``treatment``
-    is the registry key the panel is COLOURED by; they differ whenever a joined figure names its
+    is the registry key the panel is SHAPED by; they differ whenever a joined figure names its
     panels for something other than the packet itself.
     """
     import matplotlib.pyplot as plt
@@ -585,11 +680,21 @@ def figure_row(
         fig.set_dpi(style.SAVE_DPI)  # measure title/legend/margins at the dpi save() writes
         handles_by_label: dict[str, Line2D] = {}
         for ax, (title, treatment, stats, frame) in zip(axes[0], panels, strict=True):
-            for handle in draw_panel(ax, frame, stats, treatment, True, treatments_here, repeats=repeats):
+            handles = draw_panel(
+                ax, frame, stats, treatment, True, treatments_here, repeats=repeats, show_cloud=show_cloud
+            )
+            for handle in handles:
                 handles_by_label.setdefault(handle.get_label(), handle)
             ax.text(
-                0.5, 0.98, title, transform=ax.transAxes, ha="center", va="top",
-                fontsize=style.SUBTITLE_PT * 0.72, color=style.INK, zorder=7,
+                0.5,
+                0.98,
+                title,
+                transform=ax.transAxes,
+                ha="center",
+                va="top",
+                fontsize=style.SUBTITLE_PT * 0.72,
+                color=style.INK,
+                zorder=7,
             )  # fmt: skip
         for ax in axes[0][1:]:
             ax.set_ylabel("")
@@ -598,9 +703,11 @@ def figure_row(
     def dress(fig: Figure, handles: list[Line2D]) -> float:
         """Title and legend, drawn once per pass; returns the legend's own measured height (in)."""
         style.title(fig, label)
-        return style.legend_below(
-            fig, handles, ncol=min(len(handles), 3), y=0.005, fontsize=style.LABEL_PT * 0.55
-        )  # fmt: skip
+        return style.legend_below(fig,
+                                  handles,
+                                  ncol=min(len(handles), 3),
+                                  y=0.005,
+                                  fontsize=style.LABEL_PT * 0.55)  # fmt: skip
 
     # Pass 1 (a throwaway figure): :data:`ROW_LEGEND_IN` is a worst-case guess at how tall the
     # legend's row wrap will come out and :data:`PANEL_MARGINS`-style left fraction is a guess at
@@ -621,7 +728,10 @@ def figure_row(
     fig, axes, handles = build(width, height)
     dress(fig, handles)
     fig.subplots_adjust(
-        left=min(0.4, left_in / width), right=0.99, top=1.0 - ROW_TITLE_IN / height, bottom=bottom_in / height,
+        left=min(0.4, left_in / width),
+        right=0.99,
+        top=1.0 - ROW_TITLE_IN / height,
+        bottom=bottom_in / height,
         wspace=0.5,
     )  # fmt: skip
     for ax in axes:

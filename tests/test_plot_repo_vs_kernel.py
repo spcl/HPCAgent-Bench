@@ -151,14 +151,16 @@ def test_the_token_ratio_is_the_effective_task_total_not_the_billed_per_turn_cou
 
 
 def test_the_series_wears_the_registry_hue_and_the_registry_model_name() -> None:
-    """Colour is the INTERVENTION and shape is the MODEL, both from ``registry.yaml``. The paper-repo
-    copy carried two hues of its own and a name map that called ``kimi27`` "Kimi K2.7" where the
-    registry says "Kimi-K2.7-Code"."""
+    """Colour is the MODEL and shape is the INTERVENTION, both from ``registry.yaml`` -- the
+    inversion :mod:`hpcagent_bench.stats.figures.efficacy` draws under (one series is already one
+    intervention, so colour is free for the models sharing it). The paper-repo copy carried two
+    hues of its own and a name map that called ``kimi27`` "Kimi K2.7" where the registry says
+    "Kimi-K2.7-Code"."""
     frame, series_list, flags = one_pair_series()
     series = series_list[0]
 
-    assert series.color == palette.color("repo")
-    assert series.marker == palette.marker("qwen38")
+    assert series.color == palette.model_color("qwen38")
+    assert series.marker == palette.packet_marker("repo")
     assert series.label == experiment_tags.model_name("qwen38")
 
 
@@ -251,7 +253,7 @@ def test_a_point_no_arm_delivered_carries_a_cross_at_its_own_ratio() -> None:
     # the white halo, the mark itself and the cross style.point_mark lays over it
     assert len(placeholder) == 3, placeholder
     assert cross.vertices.shape in drawn, drawn
-    assert palette.color("repo") in hues
+    assert palette.model_color("qwen38") in hues
     # the delivered kernel keeps the halo and the mark, and gains nothing
     assert len(measured) == 2, measured
 
@@ -291,8 +293,8 @@ def test_the_script_writes_the_table_beside_the_figure(tmp_path: pathlib.Path) -
     assert written.read_text().startswith("#")
 
 
-def test_two_pairs_draw_in_registry_model_order_with_one_hue_and_two_shapes() -> None:
-    """Shape separates the models; colour stays the intervention's, so the figure spends one channel
+def test_two_pairs_draw_in_registry_model_order_with_two_hues_and_one_shape() -> None:
+    """Colour separates the models; shape stays the intervention's, so the figure spends one channel
     on one entity. Registry order, never the order the pairs happened to be typed in."""
     rows = list(one_pair_frame().to_dict("records"))
     rows += submission_rows(SECOND_CONTROL, {"k1": 2.0})
@@ -304,8 +306,8 @@ def test_two_pairs_draw_in_registry_model_order_with_one_hue_and_two_shapes() ->
     series_list, flags = plot.build_series(pd.DataFrame(rows), pairs, "repo", "latest")
 
     assert [series.model for series in series_list] == palette.in_order(["kimi27sglang", "qwen38"], "models")
-    assert len({series.color for series in series_list}) == 1
-    assert len({series.marker for series in series_list}) == 2
+    assert len({series.color for series in series_list}) == 2
+    assert len({series.marker for series in series_list}) == 1
 
 
 def test_an_unusable_pair_is_named_on_stderr_and_skipped(capsys: pytest.CaptureFixture[str]) -> None:

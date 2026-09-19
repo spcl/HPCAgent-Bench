@@ -6,9 +6,17 @@ A reader carries a colour between figures whether or not we meant them to, so a 
 property of the entity rather than of its position in whatever list one figure happened to hold:
 dropping a series must not repaint the survivors.
 
-**Shape is always the MODEL. Colour is whatever the figure VARIES.** There are a few models and
-there will be many packets, and colour separates more values than shape does, so the model takes
-the shape and keeps it everywhere.
+**Shape is always the MODEL, colour whatever the figure VARIES -- except the packet efficacy
+panels, which invert this.** There are a few models and there will be many packets, and colour
+separates more values than shape does, so the model takes the shape and keeps it everywhere, EXCEPT
+in :mod:`hpcagent_bench.stats.figures.efficacy` and
+:mod:`hpcagent_bench.stats.figures.kernel_comparison`: those panels already split one packet per
+panel (or per pair), so colour is spent there for nothing, while the few models sharing that one
+panel need telling apart at a glance when their summary marks overlap -- checked by rendering both
+orders on the same llr40 figure; a shared hue with only a circle-vs-square edge to tell two
+overlapping marks apart read far worse than two distinct hues with a shape that does not have to
+carry any information. Those two modules read colour off :func:`model_color` and shape off
+:func:`packet_marker` instead of :func:`color` and :func:`marker`.
 
 Four things get coloured, and a figure varies exactly one of them, so they never compete for the
 ramp: an INTERVENTION (a skill packet, or a scope such as `kernel`/`repo`/`no-score`), a HARNESS (an
@@ -203,6 +211,28 @@ def marker(model: str) -> str:
     return shapes[zlib.crc32(str(model).encode()) % len(shapes)]
 
 
+def packet_marker(packet: str) -> str:
+    """The one SHAPE ``packet`` wears in a figure that colours by MODEL instead: the packet
+    efficacy panels (:mod:`hpcagent_bench.stats.figures.efficacy`,
+    :mod:`hpcagent_bench.stats.figures.kernel_comparison`) already split one packet per panel, so
+    colour is free for the model -- and with few models sharing one panel, a strong hue tells two
+    overlapping summary marks apart far better than a faint circle-vs-square edge does. Shape is
+    read off the SAME registry order :func:`color` uses for hue, wrapping at :func:`markers`'
+    eight entries; harmless here since one panel never draws two packets at once."""
+    shapes = markers()
+    known = hue_order("packets")
+    resolved = canonical("packets", packet)
+    if resolved in known:
+        return shapes[known.index(resolved) % len(shapes)]
+    LOG.warning("palette: packet %r is not in registry.yaml; using a hash marker", packet)
+    return shapes[zlib.crc32(str(packet).encode()) % len(shapes)]
+
+
+def packet_markers(packets_: Iterable[str]) -> dict[str, str]:
+    """``{packet: marker}`` for one figure."""
+    return {p: packet_marker(p) for p in dict.fromkeys(packets_)}
+
+
 def model_markers(models: Iterable[str]) -> dict[str, str]:
     """``{model: marker}`` for one figure."""
     chosen = {m: marker(m) for m in dict.fromkeys(models)}
@@ -226,9 +256,10 @@ def framework_colors(names: Iterable[str]) -> dict[str, str]:
 
 
 def model_color(name: str) -> str:
-    """The one colour a model wears in a figure whose ONLY axis is which model ran.
+    """The one colour a model wears: a figure whose ONLY axis is which model ran, or a packet
+    efficacy panel (:func:`packet_marker`'s own docstring), where shape is spent on the packet.
 
-    Shape identifies the model in every figure; this exists because a figure that varies nothing
+    Shape identifies the model everywhere else; this exists because a figure that varies nothing
     else would otherwise draw four series in one grey."""
     return ordered_color("models", name)
 

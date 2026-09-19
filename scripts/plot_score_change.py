@@ -54,7 +54,11 @@ POINT_COLUMNS: tuple[str, ...] = (
 
 
 def compare_slice(
-    model: str, language: str, leg: str, control: pd.DataFrame, treated: pd.DataFrame,
+    model: str,
+    language: str,
+    leg: str,
+    control: pd.DataFrame,
+    treated: pd.DataFrame,
     repeats: population.RepeatPolicy = "latest",
 ) -> dict[str, float | str | int] | None:  # fmt: skip
     """ONE comparison's two geomean ratios (treated over control) and their raw significance p
@@ -300,11 +304,21 @@ def pair_frame(frame_all: pd.DataFrame, pairs: Sequence[tuple[str, str]], interv
                 continue
             parts.append(
                 part.assign(
-                    model=experiment_tags.model_of(arm), language=experiment_tags.language_of(arm), leg=leg,
+                    model=experiment_tags.model_of(arm),
+                    language=experiment_tags.language_of(arm),
+                    leg=leg,
                     skills=skills,
-                )
-            )  # fmt: skip
+                ))  # fmt: skip
     return pd.concat(parts, ignore_index=True) if parts else frame_all.iloc[0:0].assign(leg="", skills=False)
+
+
+def default_label(scope: str, comparisons: Sequence[str], cost_model_key: str) -> str:
+    """A title nobody had to pass ``--label`` for: WHAT was compared, in WHAT campaign (when one is
+    known), priced by WHICH cost model -- never a bare word like ``"Efficacy"`` that names nothing
+    the figure itself did not already have to say."""
+    what = " / ".join(comparisons) if comparisons else "Efficacy"
+    body = f"{scope}: {what}" if scope else what
+    return f"{body} ({cost_model_key} Tokens)"
 
 
 def figure_from_pairs(args: argparse.Namespace) -> None:
@@ -326,8 +340,12 @@ def figure_from_pairs(args: argparse.Namespace) -> None:
     efficacy_figures.pairs_table(frame, args.repeats).to_csv(
         args.table.with_name(f"{args.table.stem}-absolute{args.table.suffix}"), index=False
     )
-    label = args.label or experiment_tags.packet_name(args.intervention)
-    written = efficacy_figures.figure_one(frame, stats, args.intervention, label, args.out, args.control_label)
+    control_text = args.control_label or packets.control_label([args.intervention])
+    comparison = f"{experiment_tags.packet_name(args.intervention)} vs {control_text}"
+    label = args.label or default_label("", [comparison], card.key)
+    written = efficacy_figures.figure_one(
+        frame, stats, args.intervention, label, args.out, args.control_label, show_cloud=args.show_cloud
+    )
     report(args.intervention, stats)
     print(f"table  -> {args.table}")
     print(f"figure -> {written} (+ .png)")
@@ -357,8 +375,12 @@ def parse_spec(spec: str) -> dict[str, str]:
 
 
 def build_comparison(
-    spec: dict[str, str], default_observations: Sequence[pathlib.Path], default_experiment: str,
-    repeats: population.RepeatPolicy, include_incomplete: bool, card: cost.CostModel,
+    spec: dict[str, str],
+    default_observations: Sequence[pathlib.Path],
+    default_experiment: str,
+    repeats: population.RepeatPolicy,
+    include_incomplete: bool,
+    card: cost.CostModel,
 ) -> tuple[str, str, pd.DataFrame, pd.DataFrame] | None:  # fmt: skip
     """One ``--comparison`` spec as a ``(title, treatment, stats, frame)`` panel -- either its own
     explicit pair list (``pairs=``) or a packet-suffix split (``treatment=``) of its own or the
@@ -400,52 +422,87 @@ def main() -> None:
         "--experiment", default="", help="arm prefix naming ONE campaign; required without --pairs-csv/--comparison"
     )
     parser.add_argument(
-        "--pairs-csv", type=pathlib.Path, default=None,
-        help="a family CSV from experiments/paired_arms.py. Its arm_a,arm_b rows ARE the pairs and "
+        "--pairs-csv",
+        type=pathlib.Path,
+        default=None,
+        help=
+        "a family CSV from experiments/paired_arms.py. Its arm_a,arm_b rows ARE the pairs and "
         "its corrected verdicts ARE the stars, so the figure and the paper's table cannot disagree",
     )  # fmt: skip
     parser.add_argument(
-        "--intervention", default="",
-        help="with --pairs-csv: the registered packet key whose hue and display name the TREATED side wears",
+        "--intervention",
+        default="",
+        help=
+        "with --pairs-csv: the registered packet key whose hue and display name the TREATED side wears",
     )  # fmt: skip
     parser.add_argument(
-        "--control-label", default="",
-        help="with --pairs-csv: the hollow mark's legend text, for a control that is not the "
+        "--control-label",
+        default="",
+        help=
+        "with --pairs-csv: the hollow mark's legend text, for a control that is not the "
         "absence of a packet. Default: packets.control_label",
     )  # fmt: skip
     parser.add_argument(
-        "--treatment", action="append", default=[],
-        help="packet naming a TREATED side (skills, cpf, cpfsrc, ...); repeatable -- each is read "
+        "--treatment",
+        action="append",
+        default=[],
+        help=
+        "packet naming a TREATED side (skills, cpf, cpfsrc, ...); repeatable -- each is read "
         "against the SAME no-packet control, one at a time. Default: skills. Two or more join as "
         "SQUARE panels in one row",
     )  # fmt: skip
     parser.add_argument(
-        "--comparison", action="append", default=[],
+        "--comparison",
+        action="append",
+        default=[],
         help="'title=...;intervention=...;treatment=...' or "
         "'title=...;intervention=...;pairs=<csv>[;control-label=...][;observations=a.csv,b.csv]"
         "[;experiment=...]'; repeatable -- joins into ONE row alongside --treatment, mixing a "
         "packet-suffix comparison and an explicit-pairs one in the same figure",
     )  # fmt: skip
     parser.add_argument(
-        "--row-width", choices=("natural", "iclr", "acm-column", "acm-text"), default="natural",
-        help="the joined row's target width: its panels' own natural size, or a paper's page budget "
+        "--row-width",
+        choices=("natural", "iclr", "acm-column", "acm-text"),
+        default="natural",
+        help=
+        "the joined row's target width: its panels' own natural size, or a paper's page budget "
         "(style.ICLR_TEXT_WIDTH_IN / ACM_COLUMN_WIDTH_IN / ACM_TEXT_WIDTH_IN) so the PDF drops in at "
         "scale 1.0",
     )  # fmt: skip
     parser.add_argument(
-        "--include-incomplete", action="store_true", default=False,
-        help="draw an arm even without a row for every roster kernel (default: dropped, named on stderr)",
+        "--include-incomplete",
+        action="store_true",
+        default=False,
+        help=
+        "draw an arm even without a row for every roster kernel (default: dropped, named on stderr)",
     )  # fmt: skip
-    parser.add_argument("--label", default="", help="figure title; defaults to the campaign's display name")
+    parser.add_argument(
+        "--label",
+        default="",
+        help=
+        "figure title; default is derived from the campaign, the comparison and the cost model, never empty",
+    )  # fmt: skip
+    parser.add_argument(
+        "--show-cloud",
+        action="store_true",
+        default=False,
+        help=
+        "draw the per-kernel paired-ratio cloud behind each summary mark (default: summary marks only)",
+    )  # fmt: skip
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/score_change.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/score_change.csv"))
     parser.add_argument(
-        "--repeats", choices=population.REPEAT_POLICIES, default="latest",
-        help="a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
+        "--repeats",
+        choices=population.REPEAT_POLICIES,
+        default="latest",
+        help=
+        "a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
     )  # fmt: skip
     parser.add_argument(
-        "--cost-model", default=cost.DEFAULT_COST_MODEL,
-        help="the cost card the Y axis is priced with: a name in envs/cost_models.yaml or --cost-models, or "
+        "--cost-model",
+        default=cost.DEFAULT_COST_MODEL,
+        help=
+        "the cost card the Y axis is priced with: a name in envs/cost_models.yaml or --cost-models, or "
         "inline weights fresh_input=1,cached_input=0.1,output=5; must match a --pairs-csv's own card",
     )  # fmt: skip
     parser.add_argument("--cost-models", type=pathlib.Path, default=None, help="a YAML file of extra cost cards")
@@ -471,16 +528,19 @@ def main() -> None:
             panels.append(built)
         if not panels:
             raise SystemExit(f"no --comparison of {args.comparison} produced a panel")
-        label = args.label or "Efficacy"
+        scope = experiment_tags.display_name(args.experiment) if args.experiment else ""
+        label = args.label or default_label(scope, [title for title, *_rest in panels], card.key)
         args.table.parent.mkdir(parents=True, exist_ok=True)
         for title, treatment, stats, frame in panels:
-            del treatment  # the CSV is keyed by title, not by the packet colouring the panel
+            del treatment  # the CSV is keyed by title, not by the packet shaping the panel
             suffix = f"-{title.lower().replace(' ', '-')}"
             stats.to_csv(args.table.with_name(f"{args.table.stem}{suffix}{args.table.suffix}"), index=False)
             efficacy_figures.pairs_table(frame, args.repeats).to_csv(
                 args.table.with_name(f"{args.table.stem}{suffix}-absolute{args.table.suffix}"), index=False
             )
-        written = efficacy_figures.figure_row(panels, label, args.out, row_width_in=row_width, repeats=args.repeats)
+        written = efficacy_figures.figure_row(
+            panels, label, args.out, row_width_in=row_width, repeats=args.repeats, show_cloud=args.show_cloud
+        )
         for title, treatment, stats, frame in panels:
             del treatment, frame  # the summary line names the panel, not its packet or its rows
             report(title, stats)
@@ -521,13 +581,19 @@ def main() -> None:
     if not panels:
         raise SystemExit(f"no treatment of {treatments} produced a comparison for experiment {args.experiment!r}")
 
-    label = args.label or experiment_tags.display_name(args.experiment)
+    label = args.label or default_label(
+        experiment_tags.display_name(args.experiment), [packets.label(t) for t in treatments], card.key
+    )
     if len(panels) == 1:
         title, treatment, stats, frame = panels[0]
         del title  # figure_one's own title is the campaign's, not the one panel's
-        written = efficacy_figures.figure_one(frame, stats, treatment, label, args.out, repeats=args.repeats)
+        written = efficacy_figures.figure_one(
+            frame, stats, treatment, label, args.out, repeats=args.repeats, show_cloud=args.show_cloud
+        )
     else:
-        written = efficacy_figures.figure_row(panels, label, args.out, row_width_in=row_width, repeats=args.repeats)
+        written = efficacy_figures.figure_row(
+            panels, label, args.out, row_width_in=row_width, repeats=args.repeats, show_cloud=args.show_cloud
+        )
 
     for title, treatment, stats, frame in panels:
         del title, frame  # the summary line names the treatment, not its caption or its rows

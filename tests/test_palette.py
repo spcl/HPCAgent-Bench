@@ -146,7 +146,12 @@ PUBLISHED_PACKET_COLORS = {
 #: model shifts neither. dace and cpf moved off "v"/"P" once, when that rule replaced one shared
 #: front-to-back sequence; figures drawn before that carry the old two shapes.
 PUBLISHED_MODEL_MARKERS = {
-    "qwen38": "o", "oss120b": "s", "kimi27sglang": "^", "glm53": "D", "dace": "*", "cpf": "X",
+    "qwen38": "o",
+    "oss120b": "s",
+    "kimi27sglang": "^",
+    "glm53": "D",
+    "dace": "*",
+    "cpf": "X",
 }  # fmt: skip
 
 PUBLISHED_FRAMEWORK_COLORS = {
@@ -266,6 +271,36 @@ def test_no_score_is_an_alias_of_the_registered_key_and_takes_no_hue_slot_of_its
     every packet registered after it, repainting figures already drawn."""
     assert palette.color("no-score") == palette.color("no-score-tool")
     assert "no-score" not in palette.hue_order("packets")
+
+
+def test_packet_marker_follows_the_same_registry_order_as_colour() -> None:
+    """The packet efficacy panels shape by packet instead of colouring by it
+    (:mod:`hpcagent_bench.stats.figures.efficacy`'s module docstring); shape still comes off the
+    SAME registry order :func:`color` uses for hue, so the two never disagree about which packet a
+    figure means."""
+    leads = palette.hue_order("packets")
+    assert palette.packet_marker(leads[0]) == palette.markers()[0]
+    assert palette.packet_marker("cpfsrc") != palette.packet_marker("cpf")
+
+
+def test_an_unregistered_packet_marker_is_stable_and_warns(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING"):
+        first = palette.packet_marker("mystery")
+    assert first == palette.packet_marker("mystery")
+    assert "not in registry.yaml" in caplog.text
+
+
+def test_packet_markers_is_the_per_figure_dict_form() -> None:
+    chosen = palette.packet_markers(["cpf", "cpfsrc", "cpf"])
+    assert set(chosen) == {"cpf", "cpfsrc"}
+    assert chosen["cpf"] == palette.packet_marker("cpf")
+
+
+def test_model_colour_is_reused_by_the_packet_efficacy_panels() -> None:
+    """``model_color`` used to serve only a figure whose sole axis was the model; the packet
+    efficacy panels now read colour off it too, so a model's hue is the same one everywhere."""
+    assert palette.model_color("qwen38") == palette.ordered_color("models", "qwen38")
+    assert len({palette.model_color(m) for m in ("qwen38", "oss120b", "kimi27sglang")}) == 3
 
 
 def test_a_harness_wears_a_registered_colour_of_its_own(caplog: pytest.LogCaptureFixture) -> None:

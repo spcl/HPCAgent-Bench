@@ -7,10 +7,11 @@ the two scopes on one kernel -- the treated arm over the control arm -- so the n
 1x line instead of off two similar heights. Speed-up and token spend are different measurements
 (SC15 Rule 4), so they are two panels sharing one kernel axis and never one scale.
 
-COLOUR IS THE INTERVENTION AND SHAPE IS THE MODEL, from the one registry every other figure reads
-(``palette.color`` / ``palette.marker``, ``experiment_tags``): ``repo`` and ``kernel`` are
-registered scopes with their own global hues, so this figure spells them the way the paired figures
-do rather than inventing two hues and two model names of its own.
+COLOUR IS THE MODEL AND SHAPE IS THE INTERVENTION (``palette.model_color`` / ``palette.
+packet_marker``), the same inversion :mod:`hpcagent_bench.stats.figures.efficacy` draws under --
+each series here is already ONE intervention (``repo`` or ``kernel``, registered scopes with their
+own display names), so shape carries nothing a colour-coded intervention did not already say, while
+the models sharing one series' worth of kernel marks need the stronger channel to read apart.
 
 A KERNEL AN ARM WAS SERVED AND NEVER DELIVERED SCORES 1x AND STILL COSTS ITS TOKENS
 (:data:`~hpcagent_bench.stats.population.NOT_DELIVERED`, the ``served`` policy). It is a real
@@ -133,8 +134,9 @@ def build_series(
 ) -> tuple[list[kernel_comparison.Series], dict[str, dict[str, bool]]]:
     """One series per pair, in registry model order, plus each series' per-kernel delivered flags.
 
-    The series wears the TREATMENT's hue -- the ratio is what that intervention did -- and the
-    MODEL's shape, the two channels every figure in this repo uses.
+    The series wears the MODEL's hue and the TREATMENT's shape (:mod:`hpcagent_bench.stats.
+    figures.efficacy`'s own inversion, module docstring): one series is already one intervention, so
+    colour is free for telling the models apart.
     """
     built: dict[str, kernel_comparison.Series] = {}
     flags: dict[str, dict[str, bool]] = {}
@@ -150,8 +152,8 @@ def build_series(
         built[model] = kernel_comparison.Series(
             treated_arm,
             experiment_tags.model_name(model),
-            palette.color(treatment),
-            palette.marker(model),
+            palette.model_color(model),
+            palette.packet_marker(treatment),
             model,
             treatment,
             values,
@@ -191,15 +193,15 @@ def interval_note(values: Iterable[float]) -> str:
 def legend_handles(
     series_list: Sequence[kernel_comparison.Series], treatment: str, control: str, notes: Sequence[str]
 ) -> list[matplotlib.lines.Line2D]:
-    """The figure's ONE key: the intervention (colour), each model (shape, neutral ink), the
-    placeholder cross, and one interval note per panel."""
+    """The figure's ONE key: each model (colour, neutral shape), the intervention (shape, neutral
+    ink), the placeholder cross, and one interval note per panel."""
     handles = [
         matplotlib.lines.Line2D(
             [],
             [],
-            marker="o",
+            marker=palette.packet_marker(treatment),
             linestyle="none",
-            color=palette.color(treatment),
+            color=plotstyle.MUTED,
             markersize=9,
             label=f"{experiment_tags.packet_name(treatment)} / {experiment_tags.packet_name(control)}",
         )  # fmt: skip
@@ -208,9 +210,9 @@ def legend_handles(
         matplotlib.lines.Line2D(
             [],
             [],
-            marker=series.marker,
+            marker="o",
             linestyle="none",
-            color=plotstyle.MUTED,
+            color=series.color,
             markersize=9,
             label=series.label,
         )  # fmt: skip
@@ -385,7 +387,9 @@ def run(
         print("no pair produced a series; nothing to draw", file=sys.stderr)
         return 1
     kernels = kernels_of(series_list)
-    title = label or experiment_tags.display_name(DEFAULT_EXPERIMENT)
+    scope = experiment_tags.display_name(DEFAULT_EXPERIMENT)
+    comparison = f"{experiment_tags.packet_name(treatment)} vs {experiment_tags.packet_name(control)}"
+    title = label or f"{scope}: {comparison}"
     fig = figure(series_list, flags, kernels, title, treatment, control, double_column)
     stem = plotstyle.save(fig, out.with_suffix(""))
     table = write_table(table_rows(series_list, flags), stem.with_suffix(".csv"))
@@ -407,7 +411,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--treatment", default=DEFAULT_TREATMENT, help="registered packet key the TREATED arm wears")
     ap.add_argument("--control", default=DEFAULT_CONTROL, help="registered packet key the CONTROL arm wears")
-    ap.add_argument("--label", default="", help="figure title; defaults to the campaign's display name")
+    ap.add_argument(
+        "--label",
+        default="",
+        help="figure title; default is the campaign plus the two scopes compared"
+    )  # fmt: skip
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/repo_vs_kernel.pdf"))
     ap.add_argument("--double-column", action="store_true", help="compact insert sized from DOUBLE_COLUMN_WIDTH")
     ap.add_argument(
