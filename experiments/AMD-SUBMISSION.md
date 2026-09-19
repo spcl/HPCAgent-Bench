@@ -270,6 +270,22 @@ variable any more -- from 2026-09-17 a skill reaches the agent as its trigger li
 disk only, never as text stuffed into the main prompt. Every current `.env.*` leaves
 `AGENT_HINTS_FILE` empty. Do not point a new arm at it.
 
+## Lost setups (experiments/rerun-lost.tsv)
+
+On 2026-09-19 a cleanup deleted the job dirs, judge DBs included, of 19 setups (Kimi GPU LLR, Kimi
+llrblind and llrblind-cmp, Kimi scicomp perf-playbook, and qwen38/oss120b LLR CPU Fortran). Their
+extracted rows survive read-only in the frozen observations (`experiments/frozen_observations.py`,
+default `$SCRATCH/audit-20260918/frozen-observations-0919/extract-v2`). The extractor,
+`remaining_kernels.py` and `wave_board.py` count them as existing coverage; the board shows these
+setups yellow ("rerun") until their `status` in `rerun-lost.tsv` is `done`.
+
+Rerun in two phases:
+
+1. Now: rerun only their missing entries, the owed kernels computed with the frozen rows as
+   coverage, inside the normal fused owed waves. Plot and discuss from frozen plus new rows.
+2. Only after every other experiment is done: rerun each setup in full (the explicit opt-in of
+   `submit-owed-wave.sh`), replace the frozen rows, and set `status` to `done`.
+
 ## Results and watching
 
 `RUN_ROOT` in the .env decides where a run lands; point a new campaign at a new folder rather than
