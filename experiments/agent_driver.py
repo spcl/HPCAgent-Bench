@@ -2058,7 +2058,7 @@ def dead_stream_threshold_seconds(environment: dict[str, str]) -> float:
 
 
 def watch_dead_stream(
-    process: subprocess.Popen[bytes], log_path: pathlib.Path, threshold_s: float, state: AgentState
+    process: subprocess.Popen[bytes], log_path: pathlib.Path, threshold_s: float, state: "AgentState"
 ) -> None:
     """Kill ``process`` when its stream dies mid ``tool_use`` and stays silent past ``threshold_s``.
 
