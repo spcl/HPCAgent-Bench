@@ -64,3 +64,4 @@ output_args:
 - ddt_vort
 experiment_tags:
 - scicomp-focus40
+- mixed

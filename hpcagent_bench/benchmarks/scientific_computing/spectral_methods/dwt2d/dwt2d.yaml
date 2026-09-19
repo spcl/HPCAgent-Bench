@@ -52,3 +52,4 @@ output_args:
 experiment_tags:
 - dwt2d
 - scicomp-focus40
+- mixed

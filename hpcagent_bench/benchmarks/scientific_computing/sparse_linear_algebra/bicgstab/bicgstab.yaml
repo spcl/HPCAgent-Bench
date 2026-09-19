@@ -67,3 +67,4 @@ _note_concurrency: 'Iterative Krylov-subspace solver for non-symmetric systems (
 experiment_tags:
 - sparse
 - scicomp-focus40
+- mixed
