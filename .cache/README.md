@@ -15,6 +15,17 @@ moved out of the checkout because it grows tens of GB of build output that a git
 should not carry -- see the "why the repo and not scratch" note below for `generated/`/`packs/`,
 which is a different, smaller kind of artefact.
 
+**No `$SCRATCH` at all** (a bare local invocation with no cluster session -- CI, a laptop clone, or
+just a shell that never sourced `experiments/env.sh`): `JIT_CACHE_ROOT` falls back to
+`${HPCAGENT_BENCH_REPO}/.cache/jit` -- the checkout's own root, resolved once by
+`experiments/env.sh` and reused by every script instead of each guessing its own answer (`~/.cache`,
+a bare `__file__` walk, the checkout's parent directory all used to disagree). The Python side of
+the same default is `hpcagent_bench.paths.repo_root()`/`scratch_root()`. This only fires when
+`HPCAGENT_BENCH_REPO` is set (every real caller has one) and neither `$SCRATCH` nor an explicit
+`JIT_CACHE_ROOT` is; a bare `. cache_env.sh` with nothing configured at all still aborts loudly
+rather than guessing. `tools/run_tests.sh --container` (a real Slurm submission) always has
+`$SCRATCH` and does not need this path -- it exists for the scripts that run with neither.
+
 ## Node-local JIT write layer
 
 `${JIT_CACHE_ROOT}` is on `${SCRATCH}`, which is NFS on Beverin. Several engines compiling into the

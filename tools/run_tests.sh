@@ -17,10 +17,27 @@
 # A FULL run still belongs in an sbatch on a compute node -- this only fixes what the run sees,
 # not where it belongs; the login node is for a targeted selection.
 #
-# Usage: tools/run_tests.sh [pytest args...]   (default: -q --maxfail=20 tests/)
+# NEITHER of the above is where the translator suite's C23 cases actually need to run. Both the
+# login node and a bare compute node are the cluster's own SLES image, whose gcc has no -std=c23 --
+# about 720 translator cases fail there as a red compile error instead of the translator bug they
+# exist to catch. `--container` runs the SAME command inside the judge image
+# (containers/cluster/ce-images/judge-agent-amd/Dockerfile), which ships gcc 16 and is the
+# toolchain graded runs already use, so a green run here means what it says.
+#
+# Usage: tools/run_tests.sh [pytest args...]              (default: -q --maxfail=20 tests/)
+#        tools/run_tests.sh --container [pytest args...]  (submits tools/run_tests_container.sbatch,
+#                                                           1 mi300 node, and waits for it)
 set -Eeuo pipefail
 
 REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ "${1:-}" == --container ]]; then
+    shift
+    : "${SCRATCH:?run_tests.sh --container needs SCRATCH set (sbatch propagates it to the job)}"
+    echo "run_tests.sh: submitting the suite inside the judge EDF (mi300, 1 node)..." >&2
+    exec sbatch --wait -A a-g34 --partition=mi300 --job-name=run-tests-container \
+        "${REPO}/tools/run_tests_container.sbatch" "$@"
+fi
 # PATH, PYTHONPATH, PYTHONHASHSEED and ulimit -c 0 all come from the one file that already derives
 # them, so this script cannot drift from what a campaign runs under.
 . "${REPO}/experiments/env.sh"
