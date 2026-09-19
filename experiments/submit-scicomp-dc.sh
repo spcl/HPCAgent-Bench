@@ -162,7 +162,7 @@ submit_arm() {  # submit_arm <model> <kind: plain|cpf|cpfsrc> <deps or empty>
     local name="${kind}"
     [[ "${DEVICE}" == gpu ]] && name="${LANGUAGE}${OFFLOAD:+-${OFFLOAD}}-${kind}"
     local arm="${EXPERIMENT}-${model}-${name}${CLEAN_SUFFIX}"
-    local env=".env.${arm}"
+    local env=".env.${arm}$(budget_env_suffix)"
     # an arm env is pinned key by key, so a gate that returns midway would leave a file that looks
     # complete and silently lacks a key: build under a staging name and rename once every gate passes
     local staged="${env}.staging"

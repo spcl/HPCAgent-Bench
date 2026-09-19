@@ -223,7 +223,8 @@ def test_budget_scale_doubles_tokens_only(tmp_path: pathlib.Path) -> None:
     """BUDGET_SCALE=2 (2026-09-18 owed-classification decision) doubles AGENT_MAX_TOKENS (60000000
     -> 120000000, the decision's own scicomp target) but leaves AGENT_TIMEOUT_SECONDS at 72000: the
     partition tops out at 24h and a re-batch already costs another AGENT_TIMEOUT_SECONDS, so there is
-    no room to double the wall clock too."""
+    no room to double the wall clock too. Lands in the scaled submission's OWN "-budget2x" env, never
+    the arm's canonical .env (2026-09-19 fix: a scaled rerun must not mutate it in place)."""
     root = submit_tree(tmp_path)
     result = run_submit(
         root,
@@ -235,7 +236,8 @@ def test_budget_scale_doubles_tokens_only(tmp_path: pathlib.Path) -> None:
         BUDGET_SCALE="2",
     )
     assert result.returncode == 0, result.stderr
-    env = env_dict(root / "experiments" / ".env.scicomp-dc-qwen38-plain")
+    assert not (root / "experiments" / ".env.scicomp-dc-qwen38-plain").exists()
+    env = env_dict(root / "experiments" / ".env.scicomp-dc-qwen38-plain-budget2x")
     assert (env["AGENT_TIMEOUT_SECONDS"], env["AGENT_MAX_TOKENS"]) == ("72000", "120000000")
 
 

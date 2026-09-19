@@ -90,6 +90,16 @@ scaled_budget_from() {
     scale_budget "${configured}"
 }
 
+# budget_env_suffix -> "" at BUDGET_SCALE=1 (the arm's canonical .env filename, untouched), else
+# "-budget<N>x": a scaled submission's OWN env file. Every submit-*.sh builds its arm's env path as
+# ".env.${arm}${...}$(budget_env_suffix)" so a BUDGET_SCALE=2 rerun never mutates the canonical
+# .env a later normal-budget submission of the same arm would read -- the scaled numbers still land
+# in that file's own HPCAGENT_BENCH_RECORD_AGENT_* rows, just never under the canonical name.
+budget_env_suffix() {
+    [[ "${BUDGET_SCALE}" == 1 ]] && return 0
+    printf -- '-budget%sx' "${BUDGET_SCALE}"
+}
+
 # deadline_setup <deadline> <margin-seconds> -- a wave that must END before <deadline> instead of
 # being killed mid-episode: sets DEADLINE_LIMIT_SECONDS and DEADLINE_WALLTIME (the job's --time) and
 # echoes a report line. Both stay 0/empty when <deadline> is empty, so every reader downstream sees

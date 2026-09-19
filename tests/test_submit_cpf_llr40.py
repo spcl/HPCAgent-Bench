@@ -123,7 +123,7 @@ def launch(
 
     ``extra`` adds launcher knobs (``CLEAN``, ``DEADLINE``) on top of the fixed ones."""
     experiments = root / "experiments"
-    experiments.mkdir(parents=True)
+    experiments.mkdir(parents=True, exist_ok=True)
     for name in SUBMIT_INPUTS:
         shutil.copy2(EXPERIMENTS / name, experiments / name)
     (experiments / "kernels.txt").write_text("\n".join(ROSTER_KERNELS) + "\n")
@@ -234,11 +234,31 @@ def test_an_arm_reads_the_prompt_of_its_target(
 def test_budget_scale_doubles_the_agent_timeout_and_tokens(tmp_path: pathlib.Path) -> None:
     """BUDGET_SCALE=2 (2026-09-18 owed-classification decision: a "budget"-class rerun) must double
     BOTH .env.base-qwen38's AGENT_TIMEOUT_SECONDS (14400) and AGENT_MAX_TOKENS (12000000), not just
-    one of them -- a kernel that hit either cap needs headroom on both."""
+    one of them -- a kernel that hit either cap needs headroom on both. It lands in the scaled
+    submission's OWN "-budget2x" env, not the arm's canonical .env (see the byte-identical test
+    below)."""
     built = launch(tmp_path, "c:plain", ROSTER_KERNELS, "cpu", extra={"BUDGET_SCALE": "2"})
     assert built.result.returncode == 0, built.result.stderr
-    env = env_dict(arm_env(built.experiments, "c"))
+    env = env_dict(built.experiments / ".env.cpf-llr-focus40-qwen38-c-budget2x")
     assert (env["AGENT_TIMEOUT_SECONDS"], env["AGENT_MAX_TOKENS"]) == ("28800", "24000000")
+
+
+def test_scaled_submit_leaves_canonical_env_byte_identical(tmp_path: pathlib.Path) -> None:
+    """A BUDGET_SCALE=2 rerun must never mutate the arm's canonical .env in place (2026-09-19 bug:
+    it wrote straight into .env.<arm>, so any LATER normal-budget submission of that arm silently
+    inherited the 2x timeout/tokens). A scaled rerun writes its own "-budget2x" file instead and
+    leaves whatever canonical .env is already on disk untouched, byte for byte."""
+    normal = launch(tmp_path, "c:plain", ROSTER_KERNELS, "cpu")
+    assert normal.result.returncode == 0, normal.result.stderr
+    canonical = arm_env(normal.experiments, "c")
+    before = canonical.read_bytes()
+
+    scaled = launch(tmp_path, "c:plain", ROSTER_KERNELS, "cpu", extra={"BUDGET_SCALE": "2"})
+    assert scaled.result.returncode == 0, scaled.result.stderr
+
+    assert canonical.read_bytes() == before
+    scaled_env = env_dict(normal.experiments / ".env.cpf-llr-focus40-qwen38-c-budget2x")
+    assert (scaled_env["AGENT_TIMEOUT_SECONDS"], scaled_env["AGENT_MAX_TOKENS"]) == ("28800", "24000000")
 
 
 @pytest.mark.parametrize(

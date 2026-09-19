@@ -716,3 +716,106 @@ def test_the_arm_row_counts_what_the_arm_delivered_not_the_size_of_its_populatio
     row = paired_arms.arm_rows(best, paired_arms.graded_rows(obs, ["a"]), table, served, {}, usage)[0]
     assert (row["n_served"], row["n_solved"]) == (8, 5)
     assert row["coverage"] == pytest.approx(5 / 8)
+
+
+def test_no_submit_rate_is_over_every_episode_not_the_kernels_final_one(
+    paired_arms: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """k1 is rerun as a separate job (same run_id, different job -- the rerun shape
+    ``test_a_rerun_job_is_a_separate_run_and_the_latest_run_stands`` already covers): job j1 never
+    submitted (harvest only), job j2 reran and DID submit. ``best_by_arm_kernel`` picks j2 as k1's
+    final answer, so ``n_never_submitted`` (kernel-level) reads 0 -- but j1 was still a real episode
+    that ended with nobody choosing an answer, and ``no_submit_rate`` must count it: 1 of 2 episodes.
+    """
+    rows = [
+        graded("a", "k1", 5.0, job="j1", ts=1000, optimizer=paired_arms.HARVESTED_TAG),
+        call("a", "k1", 50.0, job="j1"),
+        task("a", "k1", 50.0, job="j1"),
+        graded("a", "k1", 3.0, job="j2", ts=2000),
+        call("a", "k1", 80.0, job="j2"),
+        task("a", "k1", 80.0, job="j2"),
+    ]
+    path = observations(rows, tmp_path)
+    obs = paired_arms.load_observations([path])
+    graded_frame = paired_arms.graded_rows(obs, ["a"])
+    rate = paired_arms.no_submit_rate_by_arm(graded_frame)
+    assert rate == {"a": pytest.approx(0.5)}
+
+    best = paired_arms.best_by_arm_kernel(graded_frame)
+    served = paired_arms.served_by_arm(obs)
+    table = paired_arms.arm_aggregates(best, served, "numba")
+    tokens = paired_arms.tokens_by_arm_kernel(obs)
+    row = paired_arms.arm_rows(
+        best, graded_frame, table, served, tokens, paired_arms.task_usage(obs, "latest"), no_submit=rate
+    )[0]
+    assert row["n_never_submitted"] == 0
+    assert row["no_submit_rate"] == pytest.approx(0.5)
+
+
+def test_no_submit_rate_is_absent_for_an_arm_with_no_episodes_in_the_frame(paired_arms: ModuleType) -> None:
+    """An empty ``graded`` frame names no arm at all, so the mapping stays empty and a caller reading
+    it back with ``.get(arm, nan)`` sees NaN, never a fabricated 0.0."""
+    empty = frame([]).assign(
+        **{name: pd.Series(dtype="object") for name in (*population.EPISODE_KEY, "arm", "optimizer")}
+    )
+    assert paired_arms.no_submit_rate_by_arm(empty) == {}
+
+
+def test_cpf_uptake_reads_the_iteration_counts_call_column(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
+    """``cpf_uptake_by_arm`` reads an ``iteration_counts.py`` CSV per arm: the fraction of its rows
+    (one per transcript) whose ``canonical_parallel_form_calls`` is nonzero. 2 of 3 episodes here
+    called the tool at least once."""
+    csv_path = tmp_path / "iters-cpf.csv"
+    pd.DataFrame(
+        [
+            {"agent_dir": "w0", "canonical_parallel_form_calls": 2},
+            {"agent_dir": "w1", "canonical_parallel_form_calls": 0},
+            {"agent_dir": "w2", "canonical_parallel_form_calls": 1},
+        ]
+    ).to_csv(csv_path, index=False)
+    assert paired_arms.cpf_uptake_by_arm({"x-qwen38-c-cpf": csv_path}) == {"x-qwen38-c-cpf": pytest.approx(2 / 3)}
+
+
+def test_cpf_uptake_is_absent_without_the_call_column(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
+    """A CSV from before the tool existed (or any CSV missing the column) contributes no arm rather
+    than a misleading 0.0."""
+    csv_path = tmp_path / "iters-old.csv"
+    pd.DataFrame([{"agent_dir": "w0", "turns": 4}]).to_csv(csv_path, index=False)
+    assert paired_arms.cpf_uptake_by_arm({"x-qwen38-c-cpf": csv_path}) == {}
+
+
+def test_parse_iteration_counts_splits_arm_and_path(paired_arms: ModuleType) -> None:
+    arm, path = paired_arms.parse_iteration_counts("x-qwen38-c-cpf=/tmp/iters.csv")
+    assert (arm, path) == ("x-qwen38-c-cpf", pathlib.Path("/tmp/iters.csv"))
+    with pytest.raises(SystemExit):
+        paired_arms.parse_iteration_counts("no-equals-sign")
+
+
+def test_the_impact_table_carries_cpf_uptake_only_for_the_arm_it_was_given(
+    paired_arms: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """``--iteration-counts`` names one arm's CSV; the treated arm reports its measured uptake and the
+    control -- never passed one -- reports NaN rather than 0.0 (it did not run with the tool at all)."""
+    rows: list[dict[str, object]] = []
+    for kernel in KERNELS:
+        control, treated = episode("x-qwen38-c", kernel, 2.0, 100.0), episode("x-qwen38-c-cpf", kernel, 3.0, 50.0)
+        rows += control + treated
+    obs_path = observations(rows, tmp_path)
+    iters_path = tmp_path / "iters.csv"
+    pd.DataFrame(
+        [{"agent_dir": f"w{i}", "canonical_parallel_form_calls": 1 if i < 6 else 0} for i in range(len(KERNELS))]
+    ).to_csv(iters_path, index=False)
+    out = tmp_path / "impact.csv"
+    rc = paired_arms.main(
+        [
+            "--observations", str(obs_path),
+            "--pair", "x-qwen38-c-cpf,x-qwen38-c",
+            "--family", "f",
+            "--impact-out", str(out),
+            "--iteration-counts", f"x-qwen38-c-cpf={iters_path}",
+        ]
+    )  # fmt: skip
+    assert rc == 0
+    table = pd.read_csv(out).set_index("arm")
+    assert table.loc["x-qwen38-c-cpf", "cpf_uptake"] == pytest.approx(6 / 8)
+    assert pd.isna(table.loc["x-qwen38-c", "cpf_uptake"])

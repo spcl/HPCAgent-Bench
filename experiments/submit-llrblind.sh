@@ -126,7 +126,7 @@ submit_arm() {
     [[ -f "${base}" ]] || { echo "no base env ${base}; skipped" >&2; return 0; }
     local arm="${EXPERIMENT}-${model}-${lang}${suffix}"
     local max_tokens="${AGENT_MAX_TOKENS:-$(scale_budget "${MAX_TOKENS_BY_MODEL[${model}]:-12000000}")}"
-    local env=".env.${arm}"
+    local env=".env.${arm}$(budget_env_suffix)"
     # an arm env is written key by key, so a gate that bails midway leaves a file that looks
     # complete and silently lacks a key: build under a staging name, rename once gates pass
     local staged="${env}.staging"
