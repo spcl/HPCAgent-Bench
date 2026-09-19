@@ -245,12 +245,38 @@ def test_an_arm_reads_the_prompt_of_its_target(
 
 
 def test_arm_tag_names_a_new_identity_ahead_of_the_clean_suffix(tmp_path: pathlib.Path) -> None:
-    """ARM_TAG=-v2 with CLEAN=1 builds ``<arm>-v2-clean``: -clean folds away, -v2 stays the identity."""
-    built = launch(tmp_path, "c:cpfsrc", ROSTER_KERNELS, "cpu", extra={"ARM_TAG": "-v2", "CLEAN": "1"})
+    """ARM_TAG=-r2 with CLEAN=1 builds ``<arm>-r2-clean``: -clean folds away, -r2 stays the identity.
+
+    Deliberately NOT ``-v2``: that string is now ``cpfsrc-v2``'s own arm suffix (its own registered
+    packet, see below), and reusing it here would let a generic ARM_TAG rename collide with it in
+    the arm-name column while recording a different packet."""
+    built = launch(tmp_path, "c:cpfsrc", ROSTER_KERNELS, "cpu", extra={"ARM_TAG": "-r2", "CLEAN": "1"})
     assert built.result.returncode == 0, built.result.stderr
-    env = env_dict(arm_env(built.experiments, "c-cpfsrc-v2-clean"))
-    assert env["HPCAGENT_BENCH_RECORD_ARM"] == "cpf-llr-focus40-qwen38-c-cpfsrc-v2-clean"
+    env = env_dict(arm_env(built.experiments, "c-cpfsrc-r2-clean"))
+    assert env["HPCAGENT_BENCH_RECORD_ARM"] == "cpf-llr-focus40-qwen38-c-cpfsrc-r2-clean"
     assert env["HPCAGENT_BENCH_RECORD_PACKET"] == "cpfsrc"
+
+
+def test_cpfsrc_v2_is_its_own_registered_packet_not_an_arm_tag(tmp_path: pathlib.Path) -> None:
+    """cpfsrc-v2 is a NEW packet key registered in the registry, not ``cpfsrc`` renamed via
+    ARM_TAG: its own arm suffix and its own HPCAGENT_BENCH_RECORD_PACKET, so v1 rows (packet
+    ``cpfsrc``, view 103c492b6) and v2 rows never pool in a pairing, a DB query or a wave-board
+    count that groups by packet."""
+    built = launch(tmp_path, "c:cpfsrc-v2", ROSTER_KERNELS, "cpu")
+    assert built.result.returncode == 0, built.result.stderr
+    env = env_dict(arm_env(built.experiments, "c-cpfsrc-v2"))
+    assert env["HPCAGENT_BENCH_RECORD_ARM"] == "cpf-llr-focus40-qwen38-c-cpfsrc-v2"
+    assert env["HPCAGENT_BENCH_RECORD_PACKET"] == "cpfsrc-v2"
+    assert env[DROPIN_KEY] == str(built.view)
+
+
+def test_cpfsrc_v2_refuses_without_an_explicit_view(tmp_path: pathlib.Path) -> None:
+    """No TAG-derived default: the pinned v1 view (llr-focus40-cpu-103c492b6) must never fill in
+    silently for a v2 arm. A v2 launch needs CPF_DROPIN_DIR named, or it refuses before staging."""
+    built = launch(tmp_path, "c:cpfsrc-v2", ROSTER_KERNELS, "cpu", extra={"CPF_DROPIN_DIR": ""})
+    assert built.result.returncode == 2, built.result.stdout
+    assert "explicit view" in built.result.stderr
+    assert not arm_env(built.experiments, "c-cpfsrc-v2").exists()
 
 
 def test_budget_scale_doubles_the_agent_timeout_and_tokens(tmp_path: pathlib.Path) -> None:
