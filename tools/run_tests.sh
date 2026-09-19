@@ -34,8 +34,11 @@ REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ "${1:-}" == --container ]]; then
     shift
     : "${SCRATCH:?run_tests.sh --container needs SCRATCH set (sbatch propagates it to the job)}"
+    # The Slurm account is resolved once, here, and handed to sbatch through its own SBATCH_ACCOUNT
+    # env var -- never a literal -A: the account differs per person (scripts/cscs/account_env.sh).
+    . "${REPO}/scripts/cscs/account_env.sh"
     echo "run_tests.sh: submitting the suite inside the judge EDF (mi300, 1 node)..." >&2
-    exec sbatch --wait -A a-g34 --partition=mi300 --job-name=run-tests-container \
+    exec sbatch --wait --partition=mi300 --job-name=run-tests-container \
         "${REPO}/tools/run_tests_container.sbatch" "$@"
 fi
 # PATH, PYTHONPATH, PYTHONHASHSEED and ulimit -c 0 all come from the one file that already derives

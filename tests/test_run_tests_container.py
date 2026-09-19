@@ -16,11 +16,22 @@ RUN_TESTS = REPO / "tools" / "run_tests.sh"
 CONTAINER_SBATCH = REPO / "tools" / "run_tests_container.sbatch"
 
 
-def stub_sbatch(bin_dir: pathlib.Path, marker: pathlib.Path) -> None:
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    script = bin_dir / "sbatch"
-    script.write_text(f'#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "{marker}"\nexit 0\n')
+def stub(directory: pathlib.Path, name: str, body: str) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / name
+    script.write_text(f"#!/usr/bin/env bash\n{body}\n")
     script.chmod(0o755)
+
+
+def stub_sbatch(bin_dir: pathlib.Path, marker: pathlib.Path) -> None:
+    stub(bin_dir, "sbatch", f'printf \'%s\\n\' "$@" > "{marker}"\nexit 0')
+
+
+def stub_account(bin_dir: pathlib.Path) -> None:
+    """A one-association sacctmgr: account_env.sh runs for real (scripts/cscs/account_env.sh),
+    just against a fixed placeholder answer instead of this user's actual (ambiguous)
+    associations -- a made-up name on purpose, so this fixture is never mistaken for a real one."""
+    stub(bin_dir, "sacctmgr", "printf 'placeholder-acct\n'")
 
 
 def run_container(
@@ -29,7 +40,8 @@ def run_container(
     bin_dir = tmp_path / "bin"
     marker = tmp_path / "sbatch-argv.txt"
     stub_sbatch(bin_dir, marker)
-    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path / "home")}
+    stub_account(bin_dir)
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path / "home"), "USER": "tester"}
     if scratch is not None:
         env["SCRATCH"] = scratch
     proc = subprocess.run(
@@ -43,12 +55,14 @@ def run_container(
     return proc, marker
 
 
-def test_container_flag_submits_with_the_account_partition_and_sbatch_script(tmp_path: pathlib.Path) -> None:
+def test_container_flag_submits_with_the_partition_and_sbatch_script(tmp_path: pathlib.Path) -> None:
+    """The account is NOT a literal here -- account_env.sh hands it to sbatch through
+    SBATCH_ACCOUNT, exercised for real against the stub sacctmgr above."""
     proc, marker = run_container(tmp_path)
     assert proc.returncode == 0, proc.stderr
     argv = marker.read_text().splitlines()
     assert "--wait" in argv
-    assert argv[argv.index("-A") + 1] == "a-g34"
+    assert "-A" not in argv
     assert "--partition=mi300" in argv
     assert str(CONTAINER_SBATCH) in argv
 
