@@ -173,6 +173,25 @@ def rerun_setups(path: pathlib.Path | None = None) -> dict[str, str]:
         }
 
 
+def rerun_kernel_arms(path: pathlib.Path | None = None) -> dict[str, str]:
+    """identity -> how many of its kernels ``rerun-kernels.tsv`` still lists as owed.
+
+    Kernel-level losses (a judge rank that died under one arm) never move the arm's coverage: the
+    rows the dead rank's workers left still read as done. The board would show such an arm complete
+    and green, so it is marked for rerun here the same way a lost SETUP is."""
+    path = remaining_kernels.RERUN_KERNELS if path is None else path
+    if not path.is_file():
+        return {}
+    counts: dict[str, int] = {}
+    with path.open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader((line for line in handle if not line.startswith("#")), delimiter="\t"):
+            if row["status"].strip() == RERUN_DONE:
+                continue
+            identity = remaining_kernels.base_arm(row["arm"].strip())
+            counts[identity] = counts.get(identity, 0) + 1
+    return {arm: f"{count} kernels" for arm, count in counts.items()}
+
+
 def arm_status(done: int, roster: int, states: list[str], rerun: bool = False, placeholder: int = 0) -> str:
     """A setup listed for rerun (rerun-lost.tsv) is ``rerun`` until its rerun is done; a queued rerun
     is ``running`` even over full coverage; a smoke with no roster is never complete.
@@ -410,7 +429,8 @@ def arm_rows(
 ) -> list[dict]:
     dirs = job_dirs(runs)
     frozen = frozen_jobs(runs, frozen_dir, dirs)
-    reruns = rerun_setups()
+    # A lost SETUP's status wins over a kernel count: it is the stronger statement about the arm.
+    reruns = {**rerun_kernel_arms(), **rerun_setups()}
     by_arm: dict[str, list[Job]] = {}
     #: (fused job id, identity) -> the raw arm that job ran for the identity.
     served: dict[tuple[str, str], str] = {}

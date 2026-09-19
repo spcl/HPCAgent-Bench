@@ -286,6 +286,19 @@ Rerun in two phases:
 2. Only after every other experiment is done: rerun each setup in full (the explicit opt-in of
    `submit-owed-wave.sh`), replace the frozen rows, and set `status` to `done`.
 
+## Lost kernels (experiments/rerun-kernels.tsv)
+
+Job 641799 lost two of its eight judge upstreams -- rank 4 to the OOM killer at 10:44 on a node that
+had walked to its memory ceiling, rank 0 at 21:46 with no OOM and no log line -- and the router in
+front of each kept answering `/health` while every grade behind it returned 502. Nine kernels of
+`scicomp-perf-playbook-kimi27sglang-plain` are listed in `rerun-kernels.tsv` as owed whatever their
+rows say: `xsbench`, `minife`, `bout_elm_pb`, `jacobi_2d` (rank 4, which recorded nothing at all) and
+`rayleigh_ritz_rotation`, `lavamd`, `ls3df_scf`, `fdtd_2d`, `lulesh` (rank 0, whose work up to 21:26
+is real). The owed waves rerun them as class `infra`; set `status` to `done` once they land.
+
+`experiments/judge_upstream.py` supervises every judge upstream from now on, so this failure costs
+one grade instead of a rank.
+
 ## Results and watching
 
 `RUN_ROOT` in the .env decides where a run lands; point a new campaign at a new folder rather than

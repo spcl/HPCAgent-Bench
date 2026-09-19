@@ -728,6 +728,28 @@ only episode was in it classifies as `infra`. `owed_wave.py` does not read froze
 `status` = `pending` | `rerun-submitted` | `done`). The board shows each as `rerun` (yellow) with its
 frozen coverage until its status is `done`, including LLR CPU Fortran setups the board otherwise drops.
 
+## Kernels to rerun (experiments/rerun-kernels.tsv)
+
+A judge rank that dies mid-run is a KERNEL-level loss, not a setup-level one: the arm keeps its
+other ranks' coverage, and the dead rank's workers leave rows that read exactly like finished work
+(a score promoted before the death, an `attempts` row from the grade that killed the rank). No rule
+over the databases can separate the two, so the operator writes the judgement down instead.
+
+`rerun-kernels.tsv` carries one row per `(arm, kernel)` with `jobs`, `reason` and
+`status` = `pending` | `rerun-submitted` | `done`. `remaining_kernels.forced_rerun` subtracts those
+kernels from the arm's coverage, so they are owed with class `infra` whatever their rows say, and
+`owed_wave.py` reruns them like any other owed kernel. The board marks an arm with listed kernels
+`rerun` (yellow) with a "<n> kernels" note -- without it such an arm reads complete and green,
+because a kernel loss never moves its coverage.
+
+Rows in the results databases are NEVER deleted to force a rerun: they stay, and the rerun's own
+rows supersede them under the usual latest-run rule.
+
+Seeded 2026-09-20 with the nine kernels job 641799 lost when two of its eight judge upstreams died
+(rank 4 OOM-killed at 10:44 on a node that had reached its memory ceiling, rank 0 at 21:46 with no
+OOM and nothing in its log). `experiments/judge_upstream.py` now supervises each upstream and
+restarts it, so a rank that dies comes back instead of refusing every grade for the rest of the run.
+
 ## Problem format and scheduling
 
 `PROBLEMS_FILE` accepts a JSON array, a single JSON object, or JSONL. An entry
