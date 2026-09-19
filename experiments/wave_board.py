@@ -333,7 +333,7 @@ def arm_rows(runs: pathlib.Path, opt: str, models: tuple[str, ...]) -> list[dict
     for job in slurm_jobs(sorted(set(dirs) | set(queued_ids()))):
         if job.name.startswith(FUSED_JOB_PREFIX):
             for arm in sorted(fused_job_arms(job, dirs)):
-                if not campaign_of(arm) or DROPPED_ARMS.search(arm):
+                if not campaign_of(arm) or DROPPED_ARMS.search(arm) or remaining_kernels.is_smoke(job.id, arm):
                     continue
                 identity = remaining_kernels.base_arm(arm)
                 by_arm.setdefault(identity, []).append(job)
