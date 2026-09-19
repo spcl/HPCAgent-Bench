@@ -68,6 +68,42 @@ def test_every_base_renders_to_a_complete_flat_env() -> None:
             assert key in values, f"{base.name} renders no {key}"
 
 
+def introducing_commit(path: str) -> str:
+    """The oldest commit that added <path> (git log --follow), full hash."""
+    out = subprocess.run(
+        ["git", "log", "--format=%H", "--follow", "--diff-filter=A", "--", path],
+        cwd=EXPERIMENTS.parent,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert out, f"no commit added {path}"
+    return out[-1]
+
+
+def old_base_env(name: str) -> str:
+    """<name> as it stood one commit before env_layers.sh landed (pre-layering, flat)."""
+    old_ref = introducing_commit("experiments/env_layers.sh") + "^"
+    run = subprocess.run(
+        ["git", "show", f"{old_ref}:experiments/{name}"],
+        cwd=EXPERIMENTS.parent,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return run.stdout
+
+
+def test_every_base_renders_byte_equivalent_to_its_pre_layering_original() -> None:
+    """Every queued job's CLUSTER_ENV_FILE traces back to one of these 24 bases through
+    stage_base_env's unchanged sed pipeline, so an effective-env match at the base covers every
+    arm transitively: the layering must not move a single key=value a PENDING job reads."""
+    for base in BASES:
+        old = flat(old_base_env(base.name))
+        new = flat(layers("render", base.name))
+        assert new == old, f"{base.name}: layered render diverges from its pre-layering original"
+
+
 def test_llrbase_siblings_extend_c_and_keep_every_key() -> None:
     """A sibling of .env.llrbase-<m>-c extends it; it may override keys but never lose one."""
     siblings = [path for path in EXPERIMENTS.glob(".env.llrbase-*") if SIBLING.search(path.name)]

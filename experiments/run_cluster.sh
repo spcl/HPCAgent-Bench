@@ -427,7 +427,7 @@ PY
         # SGLANG_ATTENTION_BACKEND= (empty) and gets the flag OMITTED. With :- an empty value
         # substitutes the default instead, which is the trap that killed 628589 on LANGUAGE_ONLY.
         # GLM-5.3 is exactly that case -- GlmMoeDsaForCausalLM selects DSA from its own config and
-        # make_glm53_envs.py deliberately strips any --attention-backend, so forcing one here
+        # layers/model-glm53.env deliberately strips any --attention-backend, so forcing one here
         # would override the backend the model requires.
         sgl_attention_backend="${SGLANG_ATTENTION_BACKEND-aiter}"
         if [[ -n "${sgl_attention_backend}" ]]; then
