@@ -7,6 +7,7 @@ non-normal sample. That is the misleading figure the whole exercise exists to pr
 asserted against the rendered Axes rather than trusted to a code path reading correctly.
 """
 
+import contextlib
 import pathlib
 import sqlite3
 from typing import Dict, List, Tuple
@@ -54,6 +55,7 @@ def build_results_db(db: pathlib.Path, shift: float = 0.0) -> None:
                         )
                     )
         session.commit()
+    engine.dispose()
 
 
 def test_diagnostics_figure_renders_for_a_normal_sample(tmp_path: pathlib.Path) -> None:
@@ -188,4 +190,5 @@ def test_corpus_comparisons_order_is_deterministic(tmp_path: pathlib.Path) -> No
     first = [row.key for row in plotting.corpus_comparisons("dace_cpu", "numpy", db=str(db), preset="S")]
     second = [row.key for row in plotting.corpus_comparisons("dace_cpu", "numpy", db=str(db), preset="S")]
     assert first == second
-    assert sqlite3.connect(str(db)).execute("SELECT COUNT(*) FROM results").fetchone()[0] > 0
+    with contextlib.closing(sqlite3.connect(str(db))) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM results").fetchone()[0] > 0

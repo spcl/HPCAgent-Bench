@@ -37,6 +37,7 @@ import csv
 import glob
 import hashlib
 import json
+import multiprocessing
 import pathlib
 import re
 import shutil
@@ -448,7 +449,12 @@ def task_totals_by_dir(job_dirs: list[pathlib.Path], workers: int) -> dict[pathl
     fold = token_cost_module().task_totals
     if workers <= 1 or len(dirs) <= 1:
         return {path: fold(path) for path in dirs}
-    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as pool:
+    # spawn, not the platform default: this runs inside a test session where OTHER tests may have
+    # left threads alive in this same process, and fork() from a multi-threaded process is a
+    # DeprecationWarning (3.12+) headed for an error -- spawn sidesteps it regardless of what else
+    # is running here.
+    ctx = multiprocessing.get_context("spawn")
+    with concurrent.futures.ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
         return dict(zip(dirs, pool.map(fold, dirs, chunksize=4), strict=True))
 
 

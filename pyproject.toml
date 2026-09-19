@@ -262,6 +262,22 @@ hpcagent_bench = [
 ]
 
 # ---------------------------------------------------------------------------------------------
+# Warnings this repo does not own. Narrow ignores only -- anything raised by OUR code stays visible
+# (zero-warning policy: fix at the source, never blanket-suppress). Each entry names the exact
+# third-party origin so a future warning from the SAME category/module is not silently swallowed
+# too.
+# ---------------------------------------------------------------------------------------------
+[tool.pytest.ini_options]
+filterwarnings = [
+    # starlette's TestClient opens an anyio BlockingPortal (a background thread running an event
+    # loop) per `with TestClient(app) as client:`; on repeated short-lived clients (the judge
+    # router tests build one per test) anyio/starlette warn about portal teardown timing that is
+    # entirely inside their own thread-handoff code, not anything this repo's routes do.
+    "ignore:.*BlockingPortal.*:DeprecationWarning:anyio",
+    "ignore:.*BlockingPortal.*:DeprecationWarning:starlette",
+]
+
+# ---------------------------------------------------------------------------------------------
 # Coverage. Collected in CI by setting PYTEST_ADDOPTS at the JOB level rather than editing each of
 # the 21 pytest invocations -- so an invocation added later is covered without anyone remembering.
 #

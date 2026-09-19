@@ -635,6 +635,10 @@ class Test(object):
                     )
                 )
             session.commit()
+        # dispose(), not just closing the Session -- the Session returns its connection to the
+        # engine's pool, and only dispose() closes THAT, which is what leaves a bare
+        # sqlite3.Connection for the GC to warn about.
+        engine.dispose()
 
         # Return per-impl timing dict so the CLI can persist it as JSONL.
         return per_impl_timings
