@@ -18,6 +18,7 @@
 #
 #   VIEW=<dir> KERNELS_FILE=kernels-scicomp40.txt sbatch prerender_cpf.sbatch
 #   VIEW=<dir> TAG=llr-focus40 TARGET=gpu sbatch prerender_cpf.sbatch
+#   VIEW=<dir> TAG=llr-focus40 CPF_POOL=1 sbatch prerender_cpf.sbatch   # one rank, per-core kernel pool
 #
 # DACE_TREE must be a dace git checkout: every key holds its HEAD commit, and a commit that moves
 # during the run withdraws what the run rendered. OPT may name a frozen snapshot.
@@ -51,11 +52,18 @@ ulimit -c 0
 #: which mounts the real checkout, not slurmd's spool. OPT is required below before this is used.
 self_path() { printf '%s/experiments/prerender_cpf.sbatch' "${OPT:?}"; }
 
-# --- inner: one rank, INSIDE the container -----------------------------------------------------
-if [[ "${1:-}" == inner ]]; then
+# --- inner / inner-pool: INSIDE the container ---------------------------------------------------
+# `inner` renders one rank's shard. `inner-pool` (CPF_POOL=1) is the whole roster in ONE rank: a
+# pool of workers, each rendering one kernel at a time and taking the next when it finishes, so a
+# slow kernel holds one core rather than a whole static shard. Every worker is its own
+# `cpf_prerender --rank 0 --ranks 1` over one kernel: open_view accepts a view already pinned to
+# the same header and each process scratches under its own pid, so concurrent workers are safe.
+if [[ "${1:-}" == inner || "${1:-}" == inner-pool ]]; then
+    MODE=$1
     shift
     CACHE=${1:?inner: cache}; VIEW_ARG=${2:?inner: view}; KERNELS_ARG=${3:?inner: kernels}
     TARGET_ARG=${4:?inner: target}; DACE_TREE_ARG=${5:?inner: dace tree}; OPT_ARG=${6:?inner: opt}
+    WORKERS_ARG=${7:-1}
     export DACE_TREE="${DACE_TREE_ARG}"
     export PYTHONPATH="${DACE_TREE}:${OPT_ARG}:${OPT_ARG}/hpcagent_bench/numpy_translators/src"
     export PYTHONHASHSEED=0  # dace codegen is iteration-order sensitive; an unpinned seed moves text
@@ -68,6 +76,13 @@ if [[ "${1:-}" == inner ]]; then
     # that silently resolved there would file every rendered form under the wrong dace commit.
     python3 -c 'import sys, dace; sys.exit(dace.__file__ != sys.argv[1])' "${DACE_TREE}/dace/__init__.py" \
         || { echo "prerender: dace does not resolve to ${DACE_TREE}" >&2; exit 1; }
+    if [[ "${MODE}" == inner-pool ]]; then
+        # Roster order is kept, so the FIRST (slowest) kernels start first.
+        tr ',' '\n' <<<"${KERNELS_ARG}" | grep . | xargs -P "${WORKERS_ARG}" -I{} \
+            python3 -m hpcagent_bench.cpf_prerender --cache "${CACHE}" --view "${VIEW_ARG}" \
+            --kernels {} --target "${TARGET_ARG}" --rank 0 --ranks 1
+        exit
+    fi
     exec python3 -m hpcagent_bench.cpf_prerender --cache "${CACHE}" --view "${VIEW_ARG}" \
         --kernels "${KERNELS_ARG}" --target "${TARGET_ARG}"
 fi
@@ -104,9 +119,21 @@ KERNEL_LIST=$(IFS=,; echo "${ordered[*]}")
 
 # Default: one rank per socket over that socket's cores. A render is single-threaded dace, so a
 # roster of many small kernels goes faster as ONE RANK PER CORE: CPF_RANKS=96 CPF_CORES_PER_RANK=1.
-ranks=${CPF_RANKS:-$(lscpu -p=SOCKET | grep -v '^#' | sort -u | wc -l)}
-cores=${CPF_CORES_PER_RANK:-$(lscpu -p=CORE,SOCKET | grep -v '^#' | sort -u | awk -F, '$2 == 0' | wc -l)}
-echo "prerender ${TARGET}: ${#ordered[@]} kernels, ${ranks} ranks x ${cores} cores"
+# Render times are uneven, so a static shard waits on its slowest kernel; CPF_POOL=1 runs ONE rank
+# over every core instead, with CPF_POOL_WORKERS (default: one per core) pulling kernels from a
+# shared queue.
+inner_mode=inner
+workers=1
+if [[ "${CPF_POOL:-0}" == 1 ]]; then
+    inner_mode=inner-pool
+    ranks=1
+    cores=$(lscpu -p=CORE | grep -v '^#' | sort -u | wc -l)
+    workers=${CPF_POOL_WORKERS:-${cores}}
+else
+    ranks=${CPF_RANKS:-$(lscpu -p=SOCKET | grep -v '^#' | sort -u | wc -l)}
+    cores=${CPF_CORES_PER_RANK:-$(lscpu -p=CORE,SOCKET | grep -v '^#' | sort -u | awk -F, '$2 == 0' | wc -l)}
+fi
+echo "prerender ${TARGET}: ${#ordered[@]} kernels, ${ranks} ranks x ${cores} cores, ${inner_mode} x ${workers}"
 echo "  cache ${CPF_CACHE}"
 echo "  view  ${VIEW}"
 echo "  dace  ${DACE_TREE} ($(git -C "${DACE_TREE}" rev-parse HEAD 2>/dev/null || echo 'no checkout'))"
@@ -128,13 +155,13 @@ status=0
 if [[ "${launch}" == enroot ]]; then
     "${OPT}/scripts/cscs/enroot_srun.sh" "${CPF_CE_ENV}" \
         --ntasks="${ranks}" --cpus-per-task="${cores}" --hint=nomultithread --mem=0 --kill-on-bad-exit=0 \
-        -- bash "${SELF}" inner "${CPF_CACHE}" "${VIEW}" "${KERNEL_LIST}" "${TARGET}" "${DACE_TREE}" "${OPT}" \
-        || status=$?
+        -- bash "${SELF}" "${inner_mode}" "${CPF_CACHE}" "${VIEW}" "${KERNEL_LIST}" "${TARGET}" "${DACE_TREE}" \
+        "${OPT}" "${workers}" || status=$?
 else
     srun --environment="${CPF_CE_ENV}" --ntasks="${ranks}" --cpus-per-task="${cores}" --hint=nomultithread \
         --mem=0 --kill-on-bad-exit=0 \
-        bash "${SELF}" inner "${CPF_CACHE}" "${VIEW}" "${KERNEL_LIST}" "${TARGET}" "${DACE_TREE}" "${OPT}" \
-        || status=$?
+        bash "${SELF}" "${inner_mode}" "${CPF_CACHE}" "${VIEW}" "${KERNEL_LIST}" "${TARGET}" "${DACE_TREE}" \
+        "${OPT}" "${workers}" || status=$?
 fi
 
 # The roster-wide verdict table: every shard has finished (or failed hard) by the time this runs, so
