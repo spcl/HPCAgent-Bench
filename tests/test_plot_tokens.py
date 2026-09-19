@@ -1,10 +1,10 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``scripts/plot_tokens.py`` -- what one cell of the token figure is a measure of.
+"""``statistics/plot_tokens.py`` -- what one cell of the token figure is a measure of.
 
 A kernel's cost is the tokens the arm spent on it, the SUM over the tasks that ran it
 (:func:`hpcagent_bench.stats.population.kernel_tokens`). That is the quantity `plot_arm_summary.py`,
-`plot_score_change.py` and `experiments/paired_arms.py` all cost a kernel at, and a median over the
+`plot_score_change.py` and `statistics/paired_arms.py` all cost a kernel at, and a median over the
 EPISODES inside a cell is a different number with a different unit -- so this file pins the cell to
 the sum with a fixture whose two statistics cannot be mistaken for each other.
 """
@@ -22,8 +22,8 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
 def load_script() -> types.ModuleType:
-    """Import ``scripts/plot_tokens.py`` as a module (scripts/ is not a package)."""
-    spec = importlib.util.spec_from_file_location("plot_tokens", REPO / "scripts" / "plot_tokens.py")
+    """Import ``statistics/plot_tokens.py`` as a module (scripts/ is not a package)."""
+    spec = importlib.util.spec_from_file_location("plot_tokens", REPO / "statistics" / "plot_tokens.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module

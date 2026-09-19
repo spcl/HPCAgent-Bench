@@ -50,7 +50,7 @@ def test_a_language_never_recorded_on_any_row_falls_back_to_the_arm_name() -> No
     is no recorded value to fill from -- unlike ``packet``, the arm name is the last resort here,
     same rule :func:`hpcagent_bench.experiment_tags.model_of` already uses. Without this, the arm's
     language stayed blank and it shared no (model, language) key with its control at all, which is
-    what crashed ``scripts/plot_score_change.py`` rather than skipping the pair."""
+    what crashed ``statistics/plot_score_change.py`` rather than skipping the pair."""
     frame = pd.DataFrame({"arm": ["cpf-llr-focus40-oss120b-c-cpf"] * 2, "language": ["", None]})
     filled = experiments.fill_arm_identity(frame)
     assert filled.language.tolist() == ["c", "c"]

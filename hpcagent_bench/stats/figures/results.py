@@ -12,7 +12,7 @@ then machine_learning.
 
 * :func:`plot_heatmap` -- the NPBench-style ``RdYlGn_r`` speedup table, now OPT-IN: no default
   flow emits it, because its ratio axis reads a 0.5x regression as a smaller event than a 1.5x
-  win (``scripts/plot_speedup.py`` is the speed-up figure a run plots). The per-cell median
+  win (``statistics/plot_speedup.py`` is the speed-up figure a run plots). The per-cell median
   used for best-selection AND the bootstrap-CI superscript both come from OUTLIER-CLEANED
   samples via :func:`hpcagent_bench.stats.summary.median_ci` (which warns, naming the cell, on every
   dropped sample); NumPy's own column shows absolute runtimes.
@@ -87,7 +87,7 @@ CI_SEED: int = 0
 #: STATISTIC colours for the per-sample diagnostic panels (the sample's own histogram/ECDF/violin,
 #: a fitted curve, the raw jittered points, the QQ reference line) -- not entity colours:
 #: palette.py reserves colour for a packet, a framework or a model, and none of these marks is one
-#: of those, the same precedent ``scripts/plot_canon_speedup.py``'s MEDIAN_HUE/GEOMEAN_HUE sets.
+#: of those, the same precedent ``statistics/plot_canon_speedup.py``'s MEDIAN_HUE/GEOMEAN_HUE sets.
 SAMPLE_HUE: str = "#2a78d6"
 FITTED_HUE: str = "#d64550"
 RAW_POINT_HUE: str = "#1baf7a"

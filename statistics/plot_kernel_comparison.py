@@ -8,7 +8,7 @@ that model's own complete arms, the token panel is agents only. An arm without a
 every roster kernel is dropped and printed to stderr with its coverage; ``--include-incomplete``
 draws it anyway.
 
-Usage:  python3 scripts/plot_kernel_comparison.py --observations obs.db --canon-db canon.db \
+Usage:  python3 statistics/plot_kernel_comparison.py --observations obs.db --canon-db canon.db \
             --out figures/kernel_comparison.pdf --table tables/kernel_comparison.csv
 """
 

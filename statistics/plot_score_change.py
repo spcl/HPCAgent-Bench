@@ -279,7 +279,7 @@ def family_pairs(table: pd.DataFrame) -> list[tuple[str, str]]:
     return list(seen)
 
 
-#: What ``experiments/paired_arms.py`` calls each leg of a pair in the family CSV it writes.
+#: What ``statistics/paired_arms.py`` calls each leg of a pair in the family CSV it writes.
 SPEEDUP_LEG: str = "speedup"
 TOKENS_LEG: str = "tokens"
 
@@ -510,7 +510,7 @@ def main() -> None:
         type=pathlib.Path,
         default=None,
         help=
-        "a family CSV from experiments/paired_arms.py. Its arm_a,arm_b rows ARE the pairs and "
+        "a family CSV from statistics/paired_arms.py. Its arm_a,arm_b rows ARE the pairs and "
         "its corrected verdicts ARE the stars, so the figure and the paper's table cannot disagree",
     )  # fmt: skip
     parser.add_argument(

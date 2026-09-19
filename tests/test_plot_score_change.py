@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``scripts/plot_score_change.py`` -- the efficacy figure and the stars on it.
+"""``statistics/plot_score_change.py`` -- the efficacy figure and the stars on it.
 
 The load-bearing assertions are about MULTIPLICITY (a raw threshold does not survive the BH
 correction, a real effect does) and about the 2D CONTRACT: X is log2 of the speed-up geomean, Y the
@@ -40,8 +40,8 @@ KERNELS: int = 8
 
 
 def load_script():
-    """Import ``scripts/plot_score_change.py`` as a module (scripts/ is not a package)."""
-    spec = importlib.util.spec_from_file_location("plot_score_change", REPO / "scripts" / "plot_score_change.py")
+    """Import ``statistics/plot_score_change.py`` as a module (scripts/ is not a package)."""
+    spec = importlib.util.spec_from_file_location("plot_score_change", REPO / "statistics" / "plot_score_change.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -829,7 +829,7 @@ SCICOMP_PAIR: tuple[str, str] = ("git-scicomp-qwen38-c-repo", "git-scicomp-qwen3
 
 
 def family_csv(pairs: list[tuple[str, str]], score_verdict: str, cost_verdict: str, n: int = 40) -> pd.DataFrame:
-    """A family table in the shape ``experiments/paired_arms.py`` writes, one row per pair per leg."""
+    """A family table in the shape ``statistics/paired_arms.py`` writes, one row per pair per leg."""
     return pd.DataFrame(
         [
             {
@@ -869,7 +869,7 @@ def test_a_pairs_leg_never_names_the_intervention_the_two_sides_differ_in() -> N
 
 
 def test_the_stars_come_off_the_family_csv_and_are_never_recomputed_here() -> None:
-    """``experiments/paired_arms.py`` already ran the paired test and the Benjamini-Hochberg
+    """``statistics/paired_arms.py`` already ran the paired test and the Benjamini-Hochberg
     correction over exactly this family, and the paper's table is printed from the same CSV."""
     table = family_csv([BLIND_PAIR], efficacy.SIGNIFICANT, efficacy.NOT_SIGNIFICANT)
     stats = plot.family_stats(table, "no-score")

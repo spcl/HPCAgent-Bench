@@ -10,9 +10,9 @@ into one series per kernel -- this script draws ONE condition at a time; compare
 
 Usage::
 
-    python scripts/plot_per_kernel.py obs.csv --experiment cpf-llr-focus40-qwen38-c
-    python scripts/plot_per_kernel.py obs.csv --experiment cpf-llr-focus40-qwen38-c --style box
-    python scripts/plot_per_kernel.py obs.csv --experiment git-scicomp --style box --summary --layout stacked
+    python statistics/plot_per_kernel.py obs.csv --experiment cpf-llr-focus40-qwen38-c
+    python statistics/plot_per_kernel.py obs.csv --experiment cpf-llr-focus40-qwen38-c --style box
+    python statistics/plot_per_kernel.py obs.csv --experiment git-scicomp --style box --summary --layout stacked
 """
 
 import argparse

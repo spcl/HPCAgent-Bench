@@ -206,7 +206,7 @@ def test_the_dace_report_names_the_pipeline_it_measured(swept: pathlib.Path) -> 
 @pytest.mark.integration
 def test_the_run_plots_a_speedup_table(swept: pathlib.Path) -> None:
     """The whole point of running three columns into one DB: a speedup table against numpy. Rendered
-    through the CLI verb, not scripts/plot_results.py -- that shim is on its way out."""
+    through the CLI verb, not statistics/plot_results.py -- that shim is on its way out."""
     output_name = "heatmap.pdf"
     run_cli(
         swept,

@@ -851,7 +851,7 @@ def mcnemar_exact(only_left: int, only_right: int) -> float:
     The concordant pairs carry no information about a difference, so the null is that each of the
     ``only_left + only_right`` disagreements was equally likely to go either way: a binomial(n, 1/2)
     tail on the smaller count, doubled. This is what turns the kernels an intersection dropped into
-    a tested claim rather than a footnote. ``experiments/ablation_stats.py`` keeps a stdlib copy for
+    a tested claim rather than a footnote. ``statistics/ablation_stats.py`` keeps a stdlib copy for
     the login node, exactly as it does for the signed-rank rule, and the two are proved to agree.
     """
     n = only_left + only_right

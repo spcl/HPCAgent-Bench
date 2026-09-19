@@ -241,7 +241,7 @@ def load_arm_costs(name: str, path: str) -> dict[str, float]:
     (docs/token_accounting.md). The effective total lives on the extraction's ``task`` rows, which
     this script never sees: a merged RESULTS database holds ``submissions``/``attempts``/``calls``
     and nothing else, and reading the observations table instead is a change to what ``--arm`` means.
-    ``experiments/paired_arms.py`` is the comparison that costs a kernel in effective tokens
+    ``statistics/paired_arms.py`` is the comparison that costs a kernel in effective tokens
     (``population.kernel_tokens``); prefer it wherever both arms have been extracted. With
     ``--observations`` this script reads that same definition instead (:func:`load_effective_costs`)
     and ``rho_cost`` is an effective-token ratio; without it, read ``rho_cost`` as billed.

@@ -4,7 +4,7 @@
 implementation of the exact distribution.
 
 TWO IMPLEMENTATIONS, ONE RULE. This repo computes the signed-rank p twice, and it has to: the
-figures take it from scipy, and ``experiments/ablation_stats.py`` is deliberately stdlib-only
+figures take it from scipy, and ``statistics/ablation_stats.py`` is deliberately stdlib-only
 because it runs on a login node from a shell that never activated the benchmark environment. Two
 implementations are fine. Two independently chosen CUTOFFS are not -- one module switched to the
 normal approximation above n = 25 while the other inherited scipy's ``auto`` heuristic and stayed

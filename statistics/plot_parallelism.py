@@ -15,7 +15,7 @@ The table (``<stem>.csv``) carries every named rate definition (:data:`RATE_DEFI
 drawn column, spelling out numerator and denominator terms AND their raw counts -- a rate is never
 written down as a bare percentage.
 
-Usage:  python3 scripts/plot_parallelism.py --db parallelism.db --out figures
+Usage:  python3 statistics/plot_parallelism.py --db parallelism.db --out figures
 """
 
 import argparse

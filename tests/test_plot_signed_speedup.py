@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``scripts/plot_speedup.py`` -- the signed-change speed-up chart.
+"""``statistics/plot_speedup.py`` -- the signed-change speed-up chart.
 
 The load-bearing assertions are about the AXIS, not the drawing. A 2x speed-up and a 2x
 slow-down must be the same distance from 0 (the whole reason the figure replaces a ratio axis),
@@ -25,8 +25,8 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
 def load_script():
-    """Import ``scripts/plot_speedup.py`` as a module (scripts/ is not a package)."""
-    spec = importlib.util.spec_from_file_location("plot_speedup", REPO / "scripts" / "plot_speedup.py")
+    """Import ``statistics/plot_speedup.py`` as a module (scripts/ is not a package)."""
+    spec = importlib.util.spec_from_file_location("plot_speedup", REPO / "statistics" / "plot_speedup.py")
     module = importlib.util.module_from_spec(spec)
     # Registered BEFORE exec: dataclasses resolves a string annotation through
     # sys.modules[cls.__module__], which is None for a module loaded by path alone.

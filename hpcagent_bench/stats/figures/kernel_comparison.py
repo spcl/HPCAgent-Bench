@@ -11,7 +11,7 @@ ALL MODELS IN ONE PANEL, never a panel column per model. A 40-name kernel axis i
 binding constraint, and a column per model divides the room each name gets by the number of models --
 below what a legible label needs at any width a page can print. Colour names the intervention
 (:func:`hpcagent_bench.stats.palette.color`: grey control, orange CPF page, blue CPF as source -- the
-same packet palette :mod:`scripts.plot_arm_summary` draws with) and SHAPE names the model
+same packet palette :mod:`statistics.plot_arm_summary` draws with) and SHAPE names the model
 (:func:`hpcagent_bench.stats.palette.marker`), so the two channels already separate what a per-model
 column would have separated by position. The DaCe canon CPU column keeps the framework colour
 (:func:`hpcagent_bench.stats.palette.framework_color`) and its own fixed shape (:data:`CANON_MARKER`).
@@ -263,7 +263,7 @@ def rank_condition(condition: str, order: Sequence[str] = CONDITION_ORDER) -> tu
     A condition axis need not be a skill packet: git-scicomp's arm names carry ``kernel``/``repo``,
     neither of which is in :data:`CONDITION_ORDER`. ``CONDITION_ORDER.index`` would raise on those;
     this is the same "known order first, unregistered last" tiebreak :func:`palette.in_order` and
-    :mod:`scripts.plot_arm_summary`'s ``condition_order`` already use for model and packet axes.
+    :mod:`statistics.plot_arm_summary`'s ``condition_order`` already use for model and packet axes.
     """
     return (order.index(condition), "") if condition in order else (len(order), condition)
 
@@ -607,7 +607,7 @@ def legend_handles(
     canon_mark: Series | None, panels: dict[str, list[Series]], condition_order: Sequence[str] = CONDITION_ORDER
 ) -> list[matplotlib.artist.Artist]:
     """One legend for the whole figure: the optional reference mark, each condition present
-    (colour), each model present (shape) -- the same two channels :mod:`scripts.plot_arm_summary`
+    (colour), each model present (shape) -- the same two channels :mod:`statistics.plot_arm_summary`
     draws with."""
     conditions = sorted(
         {series.condition for series_list in panels.values() for series in series_list},

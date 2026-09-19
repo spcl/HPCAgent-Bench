@@ -698,7 +698,7 @@ def test_a_rerun_of_the_script_writes_byte_identical_files(
 
     repo = pathlib.Path(__file__).resolve().parents[1]
     spec = importlib.util.spec_from_file_location(
-        "plot_kernel_comparison", repo / "scripts" / "plot_kernel_comparison.py"
+        "plot_kernel_comparison", repo / "statistics" / "plot_kernel_comparison.py"
     )
     assert spec is not None and spec.loader is not None
     script = importlib.util.module_from_spec(spec)
@@ -747,7 +747,7 @@ def test_a_partial_arm_is_printed_as_dropped_with_its_coverage(
 
     repo = pathlib.Path(__file__).resolve().parents[1]
     spec = importlib.util.spec_from_file_location(
-        "plot_kernel_comparison", repo / "scripts" / "plot_kernel_comparison.py"
+        "plot_kernel_comparison", repo / "statistics" / "plot_kernel_comparison.py"
     )
     assert spec is not None and spec.loader is not None
     script = importlib.util.module_from_spec(spec)
@@ -909,7 +909,7 @@ def test_the_script_hands_the_figure_the_baseline_its_observations_carry(
 
     repo = pathlib.Path(__file__).resolve().parents[1]
     spec = importlib.util.spec_from_file_location(
-        "plot_kernel_comparison", repo / "scripts" / "plot_kernel_comparison.py"
+        "plot_kernel_comparison", repo / "statistics" / "plot_kernel_comparison.py"
     )
     assert spec is not None and spec.loader is not None
     script = importlib.util.module_from_spec(spec)

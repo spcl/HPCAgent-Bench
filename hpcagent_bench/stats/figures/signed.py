@@ -801,7 +801,7 @@ def llr40_two_row_figure(
 ) -> pathlib.Path:
     """Build the llr-focus40 compiler rows, write their tables (Rule 4's costs, rules 5/7's
     intervals -- :func:`write_tables`, :func:`token_summary_table`) and render the two-panel
-    figure. The ONE function a script calls; ``scripts/plot_llr40_compilers.py`` only parses args.
+    figure. The ONE function a script calls; ``statistics/plot_llr40_compilers.py`` only parses args.
     ``labels`` renames a row by its framework or arm key (a paper's own name for a column); the
     tables carry the same names the legend does.
     ``dpi`` defaults to 150 -- this figure's own review/paper convention, not

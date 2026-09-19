@@ -543,7 +543,7 @@ def parse_iteration_counts(spec: str) -> tuple[str, pathlib.Path]:
 def cpf_uptake_by_arm(paths: dict[str, pathlib.Path]) -> dict[str, float]:
     """Per ``cpf``-packet arm: the fraction of its logged episodes that called the
     ``canonical_parallel_form`` MCP tool at least once, read from an ``iteration_counts.py`` CSV
-    (``experiments/iteration_counts.py``, one row per transcript, already folding tool_use blocks out
+    (``statistics/iteration_counts.py``, one row per transcript, already folding tool_use blocks out
     of the run's ``claude.log`` files).
 
     This is the same signal the 2026-09-19 audit counted by hand -- grepping

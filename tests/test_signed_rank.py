@@ -3,7 +3,7 @@
 """The stdlib signed-rank test and the scipy one must be the SAME test, not two similar ones.
 
 This repo computes the Wilcoxon signed-rank p twice on purpose: the figures take it from scipy, and
-``experiments/ablation_stats.py`` is stdlib-only because it runs on a login node from a shell that
+``statistics/ablation_stats.py`` is stdlib-only because it runs on a login node from a shell that
 never activated the benchmark environment. Two implementations are fine. Two cutoffs are not.
 
 THE FAILURE THIS PREVENTS. One module switched to the normal approximation above n = 25 while the
@@ -105,7 +105,7 @@ def test_paired_change_reports_the_same_p_as_the_stdlib_rule(n: int, shift: floa
 def test_both_paths_read_one_threshold() -> None:
     """The cutoff is a shared CONSTANT, never a number each module picked. If this stops holding,
     the two agree today and drift the next time either is touched."""
-    ablation = pathlib.Path(__file__).resolve().parents[1] / "experiments" / "ablation_stats.py"
+    ablation = pathlib.Path(__file__).resolve().parents[1] / "statistics" / "ablation_stats.py"
     spec = importlib.util.spec_from_file_location("ablation_stats_threshold", ablation)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

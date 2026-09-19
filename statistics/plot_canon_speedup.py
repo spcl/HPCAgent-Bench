@@ -16,7 +16,7 @@ The x axis is base-2 logarithmic: a 2x slow-down and a 2x speed-up are then equa
 1x line, where a linear axis crushes every slow-down into the 0..1 sliver next to an unbounded
 speed-up tail.
 
-Usage:  python3 scripts/plot_canon_speedup.py --db canon.db --out figures [--baseline cc]
+Usage:  python3 statistics/plot_canon_speedup.py --db canon.db --out figures [--baseline cc]
 """
 
 import argparse

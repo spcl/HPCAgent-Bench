@@ -3,7 +3,7 @@
 """``model_of`` is a CONSUMED function, and deleting it breaks four figures at import time.
 
 THE FAILURE THIS PREVENTS. A consolidation commit deleted this function while
-``scripts/plot_tokens.py``, ``plot_score_change.py``, ``plot_arm_summary.py`` and
+``statistics/plot_tokens.py``, ``plot_score_change.py``, ``plot_arm_summary.py`` and
 ``plot_single_shot_score.py`` still called it, so all four died with ``AttributeError`` the next
 time anyone drew a figure -- and nothing in the suite noticed, because no test called it and the
 scripts have no import-time consumer. These are that consumer: the parametrised cases below fail if
@@ -20,10 +20,10 @@ from hpcagent_bench import experiment_tags
 
 #: The scripts that call it. A figure that cannot resolve its model draws every arm as one series.
 CALLERS = (
-    "scripts/plot_tokens.py",
-    "scripts/plot_score_change.py",
-    "scripts/plot_arm_summary.py",
-    "scripts/plot_single_shot_score.py",
+    "statistics/plot_tokens.py",
+    "statistics/plot_score_change.py",
+    "statistics/plot_arm_summary.py",
+    "statistics/plot_single_shot_score.py",
 )
 
 

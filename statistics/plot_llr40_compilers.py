@@ -8,7 +8,7 @@ repetitions), tokens spent on the bottom (compiler columns spend none); a geomea
 summary column sits past a dashed separator on both. ``--observations`` may be omitted to draw
 the two DaCe columns alone.
 
-Usage:  python3 scripts/plot_llr40_compilers.py --canon-db canon.db --observations obs.db \\
+Usage:  python3 statistics/plot_llr40_compilers.py --canon-db canon.db --observations obs.db \\
             --roster-file roster.txt --out figures/llr40_compilers
 """
 

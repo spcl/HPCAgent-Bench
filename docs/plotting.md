@@ -4,7 +4,7 @@ Set by the user on 2026-09-16. Every figure in the HPCAgent-Bench, agentbench an
 a figure that does not is wrong, and the drawing agent returns a self-check table against these items.
 
 1. API: every figure is drawn by a function in `hpcagent_bench.stats` (`figures.signed`, `figures.efficacy`,
-   `figures.kernel_comparison`, `summary`, `palette`, `style`); `scripts/plot_*.py` only parse arguments. A
+   `figures.kernel_comparison`, `summary`, `palette`, `style`); `statistics/plot_*.py` only parse arguments. A
    missing capability is added to the library, never worked around in a script or a paper repository.
 2. Speed-up axis = log2 of the speed-up (`summary.log2_change`): 2x at +1, 0.5x at -1, 0 = no change, ticks
    labeled back in ratios (1/4x .. 16x). Never `signed_change` (ratio - 1) and never a bare ratio axis.
@@ -65,11 +65,11 @@ missing campaign. From Python, `experiments.observations(globs, experiment=[...]
 thing as a DataFrame.
 
 ```bash
-python scripts/plot_arm_summary.py  data/llr40_observations.csv --experiment llr40v11 \
+python statistics/plot_arm_summary.py  data/llr40_observations.csv --experiment llr40v11 \
     --out figures/arm.pdf   --table data/arm.csv      # -speedup, -tokens, -pair
-python scripts/plot_score_change.py data/llr40_observations.csv --experiment llr40v11 \
+python statistics/plot_score_change.py data/llr40_observations.csv --experiment llr40v11 \
     --out figures/skills.pdf --table data/skills.csv
-python scripts/plot_tokens.py       data/llr40_observations.csv --experiment llr40v11 \
+python statistics/plot_tokens.py       data/llr40_observations.csv --experiment llr40v11 \
     --out figures/tokens.pdf --table data/tokens.csv
 ```
 
@@ -84,7 +84,7 @@ not fit that and still get the same two panels:
 * **llrblind against the scored arms**: the two sides are two CAMPAIGNS with different arm prefixes.
 * **git-scicomp**: the condition is a `kernel`/`repo` scope, not a packet the arm staged.
 
-Both go through `--pairs-csv`, which reads the family CSV `experiments/paired_arms.py` already
+Both go through `--pairs-csv`, which reads the family CSV `statistics/paired_arms.py` already
 writes. Its `arm_a,arm_b` rows ARE the pairs and its corrected verdicts ARE the stars; the figure
 computes only the drawn point, through
 `hpcagent_bench.stats.figures.efficacy.reduce_pair` every other panel uses. The statistic therefore
@@ -92,11 +92,11 @@ keeps ONE definition: a figure that re-derived it could star a pair the paper's 
 significant, and a reader would have no way to tell which of the two is the finding.
 
 ```bash
-python scripts/plot_score_change.py scored.csv blind.csv \
+python statistics/plot_score_change.py scored.csv blind.csv \
     --pairs-csv blind_vs_scored.csv --intervention no-score --label "No Score Tool" \
     --out figures/blind.pdf --table data/blind.csv
 
-python scripts/plot_score_change.py git_scicomp.csv \
+python statistics/plot_score_change.py git_scicomp.csv \
     --pairs-csv git_scicomp_pairs.csv --intervention repo --label "Whole Repository" \
     --control-label "Bare Kernel" --out figures/scicomp.pdf --table data/scicomp.csv
 ```

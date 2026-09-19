@@ -20,7 +20,7 @@ from hpcagent_bench.harness import recording
 from hpcagent_bench.stats import arms, population
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-ABLATION = REPO / "experiments" / "ablation_stats.py"
+ABLATION = REPO / "statistics" / "ablation_stats.py"
 
 
 def load_by_path(path: pathlib.Path, name: str):

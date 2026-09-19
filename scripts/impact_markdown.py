@@ -115,7 +115,7 @@ def rendered_readme(text: str, tables: pathlib.Path) -> str:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     source = ap.add_mutually_exclusive_group(required=True)
-    source.add_argument("--table", type=pathlib.Path, help="an impact CSV written by experiments/paired_arms.py")
+    source.add_argument("--table", type=pathlib.Path, help="an impact CSV written by statistics/paired_arms.py")
     source.add_argument("--readme", type=pathlib.Path, help="a README whose <!--TABLE name--> blocks to rewrite")
     return ap.parse_args(argv)
 
