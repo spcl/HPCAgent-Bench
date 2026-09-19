@@ -35,8 +35,10 @@ import collections
 import concurrent.futures
 import contextlib
 import csv
+import fnmatch
 import glob
 import hashlib
+import importlib
 import json
 import multiprocessing
 import pathlib
@@ -148,6 +150,9 @@ OBSERVATION_FIELDS = (
     # The evidence an ``adhoc`` judge row was re-attributed on (experiments/recover_adhoc.py); blank
     # on every row that carried its own run id.
     "retagged",
+    # 1 for a row read from the frozen observations of a job whose judge DB no longer exists
+    # (experiments/frozen_observations.py), 0 for a row read from a live DB or worker directory.
+    "frozen",
 )
 
 SOURCE_FIELDS = (
@@ -299,6 +304,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "id) and the run it belongs to, and the row is extracted under that run; repeatable",
     )
     ap.add_argument(
+        "--frozen-observations",
+        default=None,
+        metavar="DIR",
+        help="frozen extracted observations of job dirs whose judge DBs were deleted (experiments/"
+        "frozen_observations.py); a job whose live directory is gone is read from here, marked frozen=1. "
+        "Default $HPCAGENT_BENCH_FROZEN_OBSERVATIONS, else $SCRATCH/<frozen_observations.DEFAULT_SUBPATH>; "
+        "'' reads none",
+    )
+    ap.add_argument(
         "--allow-unstamped",
         action="store_true",
         help="extract unstamped (pre-mwd-v2) submissions unmigrated instead of refusing when --regrades "
@@ -437,6 +451,38 @@ def mcp_run_id(mcp_config: pathlib.Path) -> str:
             if isinstance(run_id, str):
                 return run_id
     return ""
+
+
+def experiments_module(name: str) -> ModuleType:
+    """``experiments/<name>.py``, imported on first use (standard library only until then)."""
+    here = pathlib.Path(__file__).resolve().parents[2] / "experiments"
+    if str(here) not in sys.path:
+        sys.path.insert(0, str(here))
+    return importlib.import_module(name)
+
+
+def frozen_rows(
+    frozen_dir: pathlib.Path | None, run_globs: Iterable[str], arm_prefix: str, excluded: frozenset[str]
+) -> list[dict[str, Any]]:
+    """The frozen observations of every job the ``run_globs`` cover whose live directory is gone
+    (``experiments/frozen_observations.py``): the live DB wins, job by job. A run root is matched by
+    name against each glob's last component, so a campaign directory deleted whole still matches."""
+    frozen = experiments_module("frozen_observations")
+    if frozen_dir is None:
+        return []
+    out: list[dict[str, Any]] = []
+    for (run_root, job), rows in sorted(frozen.by_job(str(frozen_dir)).items()):
+        parents = [pathlib.Path(p).parent for p in run_globs if fnmatch.fnmatch(run_root, pathlib.Path(p).name)]
+        if not parents or any((parent / run_root / job).is_dir() for parent in parents):
+            continue
+        for row in rows:
+            arm = row.get("arm") or ""
+            if not arm.startswith(arm_prefix) or not excluded.isdisjoint(arm.split("-")):
+                continue
+            kept: dict[str, Any] = {field: row.get(field, "") for field in OBSERVATION_FIELDS}
+            kept[frozen.COLUMN] = "1"
+            out.append(kept)
+    return out
 
 
 def token_cost_module() -> ModuleType:
@@ -1150,6 +1196,7 @@ def apply_regrades(
 #: from a blank the extractor never filled.
 NUMERIC_COLUMNS: dict[str, str] = {
     "job": "INTEGER",
+    "frozen": "INTEGER",
     "skills": "INTEGER",
     "node_index": "INTEGER",
     "problem_index": "INTEGER",
@@ -1299,6 +1346,16 @@ def main(argv: list[str]) -> int:
     for piece, count in sorted(missing.items()):
         print(f"task rows: {count} worker dir(s): {piece}", file=sys.stderr)
     observations.extend(task_rows)
+    for row in observations:
+        row["frozen"] = "0"
+    frozen_dir = experiments_module("frozen_observations").resolve(args.frozen_observations)
+    lost = frozen_rows(frozen_dir, args.runs, args.arm_prefix, excluded)
+    lost_jobs = {(str(row["run_root"]), str(row["job"])) for row in lost}
+    print(
+        f"frozen: {len(lost)} rows of {len(lost_jobs)} job(s) with no live directory, from {frozen_dir}",
+        file=sys.stderr,
+    )
+    observations.extend(lost)
 
     observations.sort(
         key=lambda r: (

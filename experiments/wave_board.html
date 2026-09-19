@@ -16,6 +16,8 @@
   --complete-soft: #e3f1e8;
   --running-soft: #e5ecfa;
   --incomplete-soft: #f7ecdc;
+  --rerun: #7a6400;
+  --rerun-soft: #fff4b8;
   --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
   --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
@@ -25,14 +27,14 @@
     --ground: #101513; --surface: #171e1b; --ink: #e4ebe7; --muted: #95a39c; --rule: #2a3430;
     --cell-empty: #26302c; --accent: #4db3ab; --complete: #5cc488; --running: #7ea6ff;
     --incomplete: #e3a347; --complete-soft: #1c3226; --running-soft: #1d2a45;
-    --incomplete-soft: #3a2c16;
+    --incomplete-soft: #3a2c16; --rerun: #f2d64b; --rerun-soft: #3d3510;
   }
 }
 :root[data-theme="dark"] {
   --ground: #101513; --surface: #171e1b; --ink: #e4ebe7; --muted: #95a39c; --rule: #2a3430;
   --cell-empty: #26302c; --accent: #4db3ab; --complete: #5cc488; --running: #7ea6ff;
   --incomplete: #e3a347; --complete-soft: #1c3226; --running-soft: #1d2a45;
-  --incomplete-soft: #3a2c16;
+  --incomplete-soft: #3a2c16; --rerun: #f2d64b; --rerun-soft: #3d3510;
 }
 * { box-sizing: border-box; }
 body { background: var(--ground); color: var(--ink); font: 14px/1.5 var(--body); }
@@ -49,6 +51,7 @@ h1 { font: 600 30px/1.1 var(--display); letter-spacing: 0.01em; margin: 0; text-
 .tile .d { font-size: 12px; color: var(--muted); }
 .tile.complete .n { color: var(--complete); } .tile.running .n { color: var(--running); }
 .tile.incomplete .n { color: var(--incomplete); }
+.tile.rerun { background: var(--rerun-soft); } .tile.rerun .n { color: var(--rerun); }
 .filters { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
 .filters fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .filters legend { float: left; font: 500 12px var(--display); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-right: 4px; }
@@ -64,6 +67,8 @@ section.exp { display: grid; gap: 10px; }
 .pill.complete { color: var(--complete); background: var(--complete-soft); }
 .pill.running { color: var(--running); background: var(--running-soft); }
 .pill.incomplete { color: var(--incomplete); background: var(--incomplete-soft); }
+.pill.rerun { color: var(--rerun); background: var(--rerun-soft); border: 1px solid var(--rerun); }
+tr.rerun td { background: var(--rerun-soft); }
 .pill.clean { color: var(--accent); border: 1px solid var(--rule); }
 .table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
 table { border-collapse: collapse; width: 100%; min-width: 860px; }
@@ -84,6 +89,7 @@ td.num .placeholder { color: var(--muted); }
 .jobs a.s-RUNNING, .jobs a.s-PENDING { color: var(--running); border-color: var(--running); }
 .jobs a.s-FAILED, .jobs a.s-TIMEOUT, .jobs a.s-OUT_OF_MEMORY, .jobs a.s-NODE_FAIL { color: var(--incomplete); }
 .jobs a.s-CANCELLED { text-decoration: line-through; }
+.jobs a.frozen { border-style: dashed; }
 .legend { font-size: 12px; color: var(--muted); display: grid; gap: 4px; border-top: 1px solid var(--rule); padding-top: 14px; max-width: 90ch; }
 .empty { color: var(--muted); font-style: italic; }
 @media (max-width: 520px) { h1 { font-size: 24px; } .stamp { text-align: left; } }
@@ -112,6 +118,7 @@ td.num .placeholder { color: var(--muted); }
   <div class="legend">
     <div><span class="pill complete">complete</span> every roster kernel has a row in <code>submissions</code> or <code>attempts</code>, over the union of all waves.</div>
     <div><span class="pill running">running</span> a job for the arm is running or queued. <span class="pill incomplete">incomplete</span> kernels are owed and nothing is queued: the next wave runs exactly that complement.</div>
+    <div><span class="pill rerun">rerun</span> the setup's job directories were deleted (2026-09-19, <code>experiments/rerun-lost.tsv</code>); its coverage is read from the frozen observations (dashed job chips) until the rerun is done.</div>
     <div>Rows that measured a broken treatment are deleted with their run directories, so an arm rerun from scratch starts at 0.</div>
     <div>Job chips: green COMPLETED, amber FAILED or TIMEOUT, struck-through CANCELLED. A kimi arm labelled FAILED with every agent finished is the rc 123-125 teardown, not a crash. Smoke arms have no roster.</div>
   </div>
@@ -120,7 +127,7 @@ td.num .placeholder { color: var(--muted); }
 <script type="application/json" id="data">__STATUS_JSON__</script>
 <script>
 const DATA = JSON.parse(document.getElementById("data").textContent);
-const STATUSES = ["complete", "running", "incomplete"];
+const STATUSES = ["complete", "running", "incomplete", "rerun"];
 const MODEL_NAMES = { kimi27sglang: "Kimi-K2.7-Code", oss120b: "GPT-OSS-120B", qwen38: "Qwen3.8-27B", glm53: "GLM-5.3", "": "none" };
 const filters = { status: new Set(), model: new Set(), device: new Set() };
 
@@ -177,6 +184,7 @@ function armSort(x, y) {
 
 function experimentStatus(arms) {
   if (arms.some(a => a.status === "running")) return "running";
+  if (arms.some(a => a.status === "rerun")) return "rerun";
   if (arms.every(a => a.status === "complete")) return "complete";
   return "incomplete";
 }
@@ -189,7 +197,7 @@ function groups(arms) {
     byKey.get(key).push(arm);
   }
   const order = [...byKey.entries()].map(([key, list]) => ({ key, list, status: experimentStatus(list) }));
-  const rank = { running: 0, incomplete: 1, complete: 2 };
+  const rank = { running: 0, rerun: 1, incomplete: 2, complete: 3 };
   return order.sort((x, y) => rank[x.status] - rank[y.status] || x.key.localeCompare(y.key));
 }
 
@@ -202,6 +210,7 @@ function renderTally() {
     const kernels = arms.reduce((sum, a) => sum + owed(a), 0);
     const detail = status === "complete" ? `${expCount} experiment groups fully done`
       : status === "running" ? `${arms.reduce((s, a) => s + a.jobs.filter(j => j.state === "RUNNING" || j.state === "PENDING").length, 0)} jobs running or queued`
+      : status === "rerun" ? `to rerun, job dirs deleted (frozen coverage shown)`
       : `${kernels} roster kernels owed`;
     tally.append(el("div", { class: "tile " + status },
       el("span", { class: "l" }, status), el("span", { class: "n" }, String(arms.length)),
@@ -241,7 +250,9 @@ function jobChips(arm) {
   const box = el("div", { class: "jobs" });
   for (const job of arm.jobs) {
     const title = `${job.state}, ${job.nodes} node${job.nodes === 1 ? "" : "s"}, ${job.start} to ${job.end}`;
-    box.append(el("a", { class: "s-" + job.state, title, tabindex: "0" }, `${job.id} ${job.state.slice(0, 4).toLowerCase()}`));
+    const frozen = (arm.frozen_jobs || []).includes(job.id);
+    const chipTitle = frozen ? title + " (directory deleted; rows from the frozen observations)" : title;
+    box.append(el("a", { class: "s-" + job.state + (frozen ? " frozen" : ""), title: chipTitle, tabindex: "0" }, `${job.id} ${job.state.slice(0, 4).toLowerCase()}`));
   }
   if (!arm.jobs.length) box.append(el("span", { class: "empty" }, "no job found"));
   return box;
@@ -291,7 +302,7 @@ function renderBoard() {
       if (arm.failed && arm.failed.length) rowAttrs.title = "failed: " + arm.failed.join(", ");
       tbody.append(el("tr", rowAttrs,
         armCell, el("td", {}, arm.roster ? strip(arm) : el("span", { class: "empty" }, "no roster")),
-        counts, el("td", {}, el("span", { class: "pill " + arm.status }, arm.status)), el("td", {}, jobChips(arm))));
+        counts, el("td", {}, el("span", { class: "pill " + arm.status, title: arm.rerun ? "rerun-lost.tsv: " + arm.rerun : "" }, arm.status)), el("td", {}, jobChips(arm))));
     }
     const table = el("table", {},
       el("thead", {}, el("tr", {}, el("th", {}, "Arm"), el("th", {}, "Kernel coverage"), el("th", {}, "Rows"), el("th", {}, "Status"), el("th", {}, "Slurm jobs"))),

@@ -107,6 +107,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 import agent_driver  # noqa: E402  -- path insert above must run first
+import frozen_observations  # noqa: E402  -- same
 
 #: The only table that means a kernel is DONE outright: see the module docstring for why ``attempts``
 #: alone does not count -- MOST ``attempts`` rows don't. :func:`genuine_attempts` names the ones
@@ -556,12 +557,18 @@ def roster(tag: str, opt: str) -> list:
     return sorted(name for name in out.stdout.strip().split(",") if name)
 
 
-def collect_arms(run_roots: list, dropped: set, unreadable: list | None = None) -> tuple:
+def collect_arms(
+    run_roots: list, dropped: set, unreadable: list | None = None, frozen_dir: pathlib.Path | None = None
+) -> tuple:
     """{identity: [(job id, job dir, arm)]} folded over :func:`base_arm`, plus the job ids with no
     shard DBs and the job ids dropped as smoke, over every root.
 
     A job dir whose arm cannot be read is a hard error, unless ``unreadable`` is given: a caller
-    sweeping EVERY root (owed_wave.py) collects those job dirs there and carries on."""
+    sweeping EVERY root (owed_wave.py) collects those job dirs there and carries on.
+
+    ``frozen_dir`` adds every job of these roots whose directory is GONE but whose rows survive in
+    the frozen observations (frozen_observations.py): its triple names the missing directory, and
+    :func:`covered` reads its coverage from the frozen rows instead."""
     arms: dict = {}
     empty_jobs: list = []
     smoke_jobs: list = []
@@ -585,7 +592,29 @@ def collect_arms(run_roots: list, dropped: set, unreadable: list | None = None) 
                     smoke_jobs.append(job)
                     continue
                 arms.setdefault(base_arm(arm), []).append((job, job_dir, arm))
+    lost = frozen_observations.lost_jobs(frozen_dir, [pathlib.Path(root) for root in run_roots])
+    for (run_root, job), rows in sorted(lost.items()):
+        if job in dropped:
+            continue
+        job_dir = next(os.path.join(root, job) for root in run_roots if os.path.basename(root.rstrip("/")) == run_root)
+        for arm in sorted(frozen_observations.arms_of(rows)):
+            if is_smoke(job, arm):
+                smoke_jobs.append(job)
+                continue
+            arms.setdefault(base_arm(arm), []).append((job, job_dir, arm))
     return arms, empty_jobs, smoke_jobs
+
+
+def frozen_coverage(job_dir: str, arm: str, opt: str, frozen_dir: pathlib.Path | None) -> set:
+    """What :func:`touched` + :func:`genuine_attempts` gave for a job whose directory is gone, read
+    from its frozen rows (every row for a single-arm job, as the DB query was; ``arm``'s rows only
+    when the frozen job holds several arms). Empty without ``frozen_dir``."""
+    if frozen_dir is None:
+        return set()
+    key = (os.path.basename(os.path.dirname(job_dir.rstrip("/"))), os.path.basename(job_dir.rstrip("/")))
+    rows = frozen_observations.by_job(str(frozen_dir)).get(key, ())
+    only = arm if len(frozen_observations.arms_of(rows)) > 1 else ""
+    return frozen_observations.delivered(rows, lambda kernel: comparable_since_ms(kernel, opt), only)
 
 
 #: rc's :func:`classify_exit` resolves without needing log evidence at all -- reading a claude.log
@@ -678,18 +707,22 @@ def owed_exit_classes(job_dirs: list, owed: list, arms: frozenset = frozenset())
     return classes
 
 
-def covered(jobs: list, opt: str) -> set:
-    """Every kernel ``jobs`` (collect_arms's (job, job_dir, arm) triples of one identity) delivered."""
+def covered(jobs: list, opt: str, frozen_dir: pathlib.Path | None = None) -> set:
+    """Every kernel ``jobs`` (collect_arms's (job, job_dir, arm) triples of one identity) delivered;
+    a job whose directory is gone counts its frozen rows (:func:`frozen_coverage`)."""
     seen: set = set()
     for _, job_dir, arm in jobs:
+        if not os.path.isdir(job_dir):
+            seen |= frozen_coverage(job_dir, arm, opt, frozen_dir)
+            continue
         only = arm_filter(job_dir, arm)
         seen |= touched(job_dir, opt, only) | genuine_attempts(job_dir, opt, only)
     return seen
 
 
-def owed_classes(jobs: list, full: list, opt: str) -> dict:
+def owed_classes(jobs: list, full: list, opt: str, frozen_dir: pathlib.Path | None = None) -> dict:
     """kernel -> :class:`ExitClass` for every roster kernel ``jobs`` still owe, in roster order."""
-    seen = covered(jobs, opt)
+    seen = covered(jobs, opt, frozen_dir)
     owed = [name for name in full if name not in seen]
     return owed_exit_classes(sorted({job_dir for _, job_dir, _ in jobs}), owed, frozenset(arm for _, _, arm in jobs))
 
@@ -702,8 +735,9 @@ def report_arm(
     out_dir: pathlib.Path | None,
     only_class: ExitClass | None,
     opt: str,
+    frozen_dir: pathlib.Path | None = None,
 ) -> None:
-    seen = covered(jobs, opt)
+    seen = covered(jobs, opt, frozen_dir)
     owed = [name for name in full if name not in seen]
     classes = owed_exit_classes(sorted({job_dir for _, job_dir, _ in jobs}), owed, frozenset(arm for _, _, arm in jobs))
     budget = sorted(name for name in owed if classes[name] == ExitClass.BUDGET)
@@ -771,6 +805,13 @@ def main() -> int:
         "behind, so an operator can review them before deleting",
     )
     ap.add_argument(
+        "--frozen-observations",
+        default=None,
+        metavar="DIR",
+        help="frozen observations of job dirs whose judge DBs were deleted: their rows count as coverage "
+        f"(default ${frozen_observations.ENV}, else $SCRATCH/{frozen_observations.DEFAULT_SUBPATH}; '' reads none)",
+    )
+    ap.add_argument(
         "--class",
         dest="owed_class",
         choices=[cls.value for cls in (ExitClass.BUDGET, ExitClass.INFRA)],
@@ -785,7 +826,8 @@ def main() -> int:
         raise SystemExit(f"tag {args.tag} names no kernels")
 
     dropped = set(args.exclude_job)
-    arms, empty_jobs, smoke_jobs = collect_arms(args.run_root, dropped)
+    frozen_dir = frozen_observations.resolve(args.frozen_observations)
+    arms, empty_jobs, smoke_jobs = collect_arms(args.run_root, dropped, frozen_dir=frozen_dir)
 
     out_dir = pathlib.Path(args.out_dir) if args.out_dir else None
     if out_dir:
@@ -799,7 +841,9 @@ def main() -> int:
     for identity in sorted(arms):
         if args.arm_prefix and not identity.startswith(tuple(f"{prefix}-" for prefix in args.arm_prefix)):
             continue
-        report_arm(identity, arms[identity], full, args.list_progress, out_dir, only_class, opt)
+        report_arm(identity, arms[identity], full, args.list_progress, out_dir, only_class, opt, frozen_dir)
+    if frozen_dir is not None:
+        print(f"frozen observations (jobs with no live directory count as coverage): {frozen_dir}")
     return 0
 
 
