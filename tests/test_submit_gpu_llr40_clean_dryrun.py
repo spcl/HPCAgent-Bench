@@ -9,6 +9,7 @@ so both are checked without touching the queue.
 """
 
 import datetime
+import json
 import os
 import pathlib
 import re
@@ -246,6 +247,50 @@ def test_a_deadline_too_close_to_measure_anything_refuses_the_wave(tmp_path: pat
     assert result.returncode == 2, result.stdout
     assert "under the 3600s floor" in result.stderr
     assert list((root / "experiments").glob(".env.gpu-llr-focus40-*")) == []
+
+
+def test_kernels_file_order_is_deterministic_not_the_files_own_line_order(tmp_path: pathlib.Path) -> None:
+    """make_problems.py sorts the resolved kernel set; kernels.txt here (used verbatim by this
+    fixture's own submit_tree) already happens to list fuse_diamond before tsvc_2_s115 -- a fresh
+    file with the opposite order must still come out sorted, not the file's own line order."""
+    root = submit_tree(tmp_path)
+    reversed_kf = root / "experiments" / "reversed.txt"
+    reversed_kf.write_text("tsvc_2_s115\nfuse_diamond\n")
+    result = run_submit(root, MODELS="qwen38", LANGUAGES="hip", LEGS="0", KERNELS_FILE="reversed.txt")
+    assert result.returncode == 0, result.stderr
+    problems = root / "experiments" / "problems-gpu-llr40-qwen38-hip-reversed.jsonl"
+    kernels = [json.loads(line)["kernel"].rsplit("/", 1)[-1] for line in problems.read_text().splitlines()]
+    assert kernels == sorted(ROSTER_KERNELS)
+
+
+def test_an_unknown_kernel_name_is_refused_not_silently_dropped(tmp_path: pathlib.Path) -> None:
+    root = submit_tree(tmp_path)
+    (root / "experiments" / "bad.txt").write_text("fuse_diamond\nnosuchkernel123\n")
+    result = run_submit(root, MODELS="qwen38", LANGUAGES="hip", LEGS="0", KERNELS_FILE="bad.txt")
+    assert result.returncode != 0
+    assert "nosuchkernel123" in result.stderr
+    assert not list((root / "experiments").glob(".env.gpu-llr-focus40-*bad*"))
+    # make_problems.py writes into problems.jsonl.tmp before the final `mv`; a failed selector never
+    # reaches that mv (set -e kills the script first), so the .tmp precursor is expected litter --
+    # only the final .jsonl name matters, since nothing else ever reads a .jsonl.tmp file.
+    assert not list((root / "experiments").glob("problems-gpu-llr40-*bad*.jsonl"))
+
+
+def test_walltime_scales_with_the_subsets_own_kernel_count(tmp_path: pathlib.Path) -> None:
+    """arm_walltime batches on AGENTS_PER_NODE * AGENT_NODES workers; the real base env's 40 agents
+    on 1 node cover both fixture rosters in a single batch, hiding any scaling bug, so this pins
+    AGENTS_PER_NODE down to 1 worker to force one batch PER kernel and prove a 3-kernel subset needs
+    more wall clock than the 2-kernel one (test_a_wave_without_clean_or_a_deadline_is_unchanged)."""
+    root = submit_tree(tmp_path)
+    base = root / "experiments" / ".env.base-qwen38"
+    base.write_text(re.sub(r"^AGENTS_PER_NODE=\d+$", "AGENTS_PER_NODE=1", base.read_text(), flags=re.MULTILINE))
+    three_kf = root / "experiments" / "three.txt"
+    three_kf.write_text("fuse_diamond\ntsvc_2_s115\nargmax_with_index\n")
+    result = run_submit(root, MODELS="qwen38", LANGUAGES="hip", LEGS="0", KERNELS_FILE="three.txt")
+    assert result.returncode == 0, result.stderr
+    walltime = next(iter(prepared(result).values()))
+    # 1 worker, 3 kernels -> 3 batches of AGENT_TIMEOUT_SECONDS (14400s = 4h) + 3h staging = 15h
+    assert walltime == "15:00:00", walltime
 
 
 def test_a_wave_without_clean_or_a_deadline_is_unchanged(tmp_path: pathlib.Path) -> None:

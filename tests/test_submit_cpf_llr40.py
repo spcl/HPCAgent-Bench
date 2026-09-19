@@ -321,3 +321,95 @@ def test_the_cpfsrc_arm_stages_exactly_its_own_page_and_the_pages_trigger_is_ind
     assert cpfsrc_when in " ".join(task.split()), "the cpfsrc page's own trigger is not in the frozen index"
     recorded = env_dict(arm_env(built.experiments, "c-cpfsrc"))["HPCAGENT_BENCH_RECORD_PACKET"]
     assert recorded == "cpfsrc"
+
+
+def launch_plain(root: pathlib.Path, kernels_file_text: str, extra: Mapping[str, str] | None = None) -> Launch:
+    """A c:plain arm off a custom KERNELS_FILE -- no CPF view needed, since submit_arm only
+    resolves one for the cpf/cpfsrc kinds."""
+    experiments = root / "experiments"
+    experiments.mkdir(parents=True, exist_ok=True)
+    for name in SUBMIT_INPUTS:
+        shutil.copy2(EXPERIMENTS / name, experiments / name)
+    (experiments / "kfile.txt").write_text(kernels_file_text)
+    stub(root / "bin", "sbatch", 'touch "${STUB_MARKERS}/sbatch-called"; exit 1')
+    stub(root / "scratch" / "venv-hpcagent-bench-314" / "bin", "python", f'exec "{sys.executable}" "$@"')
+    env = {key: value for key, value in os.environ.items() if key not in KNOBS and not key.startswith("SLURM_")}
+    env.update(
+        PATH=f"{root / 'bin'}:{env['PATH']}",
+        SCRATCH=str(root / "scratch"),
+        OPT=str(REPO),
+        SUBMIT="0",
+        MODELS="qwen38",
+        ARMS="c:plain",
+        KERNELS_FILE="kfile.txt",
+        STAMP="20260914",
+        STUB_MARKERS=str(root),
+    )
+    env.update(extra or {})
+    result = subprocess.run(
+        ["bash", str(experiments / "submit-cpf-llr40.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    return Launch(experiments, experiments, result)
+
+
+def test_kernels_file_order_is_deterministic_not_the_files_own_line_order(tmp_path: pathlib.Path) -> None:
+    """make_problems.py sorts the resolved kernel set; kfile.txt here lists tsvc_2_s115 before
+    fuse_diamond (alphabetically reversed) and the problems file must not carry that order through."""
+    built = launch_plain(tmp_path, "tsvc_2_s115\nfuse_diamond\n")
+    assert built.result.returncode == 0, built.result.stderr
+    problems = built.experiments / "problems-cpf-llr-focus40-qwen38-c-kfile.jsonl"
+    kernels = [json.loads(line)["kernel"].rsplit("/", 1)[-1] for line in problems.read_text().splitlines()]
+    assert kernels == sorted(ROSTER_KERNELS)
+
+
+def test_an_unknown_kernel_name_is_refused_not_silently_dropped(tmp_path: pathlib.Path) -> None:
+    built = launch_plain(tmp_path, "fuse_diamond\nnosuchkernel123\n")
+    assert built.result.returncode != 0
+    assert "nosuchkernel123" in built.result.stderr
+    assert not list(built.experiments.glob(".env.cpf-llr-focus40-*kfile*"))
+    # make_problems.py writes into problems.jsonl.tmp before the final `mv`; a failed selector never
+    # reaches that mv (set -e kills the script first), so the .tmp precursor is expected litter --
+    # only the final .jsonl name matters, since nothing else ever reads a .jsonl.tmp file.
+    assert not list(built.experiments.glob("problems-cpf-llr-focus40-*kfile*.jsonl"))
+
+
+def test_walltime_scales_with_the_subsets_own_kernel_count(tmp_path: pathlib.Path) -> None:
+    """arm_walltime batches on AGENTS_PER_NODE * AGENT_NODES workers; the real base env's 40 agents
+    on 1 node cover a 2- or 3-kernel subset in a single batch, hiding any scaling bug, so this pins
+    AGENTS_PER_NODE down to 1 worker to force one batch PER kernel."""
+    root = tmp_path
+    experiments = root / "experiments"
+    experiments.mkdir(parents=True)
+    for name in SUBMIT_INPUTS:
+        shutil.copy2(EXPERIMENTS / name, experiments / name)
+    base = experiments / ".env.base-qwen38"
+    base.write_text(re.sub(r"^AGENTS_PER_NODE=\d+$", "AGENTS_PER_NODE=1", base.read_text(), flags=re.MULTILINE))
+    (experiments / "kfile.txt").write_text("fuse_diamond\ntsvc_2_s115\nargmax_with_index\n")
+    stub(root / "bin", "sbatch", 'touch "${STUB_MARKERS}/sbatch-called"; exit 1')
+    stub(root / "scratch" / "venv-hpcagent-bench-314" / "bin", "python", f'exec "{sys.executable}" "$@"')
+    env = {key: value for key, value in os.environ.items() if key not in KNOBS and not key.startswith("SLURM_")}
+    env.update(
+        PATH=f"{root / 'bin'}:{env['PATH']}",
+        SCRATCH=str(root / "scratch"),
+        OPT=str(REPO),
+        SUBMIT="0",
+        MODELS="qwen38",
+        ARMS="c:plain",
+        KERNELS_FILE="kfile.txt",
+        STAMP="20260914",
+        STUB_MARKERS=str(root),
+    )
+    result = subprocess.run(
+        ["bash", str(experiments / "submit-cpf-llr40.sh")], env=env, capture_output=True, text=True, timeout=300,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    match = re.search(r"^prepared cpf-llr-focus40-qwen38-c \(\d+ nodes, (\d\d:\d\d:\d\d),", result.stdout, re.M)
+    assert match, result.stdout
+    # 1 worker, 3 kernels -> 3 batches of AGENT_TIMEOUT_SECONDS (14400s = 4h) + 3h staging = 15h
+    assert match.group(1) == "15:00:00", result.stdout

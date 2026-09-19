@@ -190,6 +190,19 @@ def test_kernels_file_stages_only_the_owed_kernels_and_resizes_nodes(tmp_path: p
     assert not (root / "sbatch-called").exists()
 
 
+def test_kernels_file_order_follows_the_full_problems_file_not_the_lists_own_order(tmp_path: pathlib.Path) -> None:
+    """owed_problems keeps rows in problems-llrblind-c.jsonl's own order. owed.txt here lists k4
+    before k1 -- the opposite of the full file's order -- so an output that followed the LIST's
+    order instead of the FULL FILE's would reorder rows a downstream consumer keys by position."""
+    root = submit_tree(tmp_path)
+    (root / "experiments" / "owed.txt").write_text("k4\nk1\n")
+    result = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain", KERNELS_FILE="owed.txt")
+    assert result.returncode == 0, result.stderr
+    owed = root / "experiments" / "problems-llrblind-qwen38-c-owed.jsonl"
+    rows = [json.loads(line) for line in owed.read_text().splitlines()]
+    assert [row["kernel"].rsplit("/", 1)[-1] for row in rows] == ["k1", "k4"]
+
+
 def test_a_second_models_complement_leaves_a_queued_arms_owed_kernels_untouched(tmp_path: pathlib.Path) -> None:
     """prepare_job.sh reads PROBLEMS_FILE when the job STARTS. A model-less owed name let the next
     complement, for another model with its own KERNELS_FILE, rewrite the kernel list of an arm still
