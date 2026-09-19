@@ -77,7 +77,7 @@ PATH = "/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/rocm/bin:/opt/venv/bin:/us
 # dlopen libnccl-net.so, does not error, and falls back to TCP sockets over hsn* (629800/629802).
 # The judge is the role that RUNS graded distributed submissions, so it is the LAST place that
 # should be silently on the slow fabric.
-LD_LIBRARY_PATH = "/opt/cscs/netstack:/opt/rocm/lib:/opt/rocm/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/x86_64-linux-gnu"
+LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/x86_64-linux-gnu"
 # Named, not left to PATH: a stale configure cache beats PATH, so a toolchain that looks selected
 # can still be ignored.
 CC = "/opt/gcc/bin/gcc"
@@ -103,7 +103,16 @@ LD_PRELOAD = "/usr/local/lib/libmimalloc.so"
 # FABRIC_1.9). 10-netstack.sh mounts the whole bundle to /opt/cscs/netstack in artifact mode, and
 # librccl-net.so's own RUNPATH already points there -- so sglang/vllm need nothing extra. libmpi.so
 # has no such RUNPATH (it was spack-linked against the compile-only /opt/ofi-sdk stub, which the
-# build gate deletes), so LD_LIBRARY_PATH below carries /opt/cscs/netstack explicitly, first, for it.
+# build gate deletes), but it does not need /opt/cscs/netstack in LD_LIBRARY_PATH either:
+# 89-libfabric-cxi.sh bind-mounts the artifact's libfabric.so.1 onto every path this image's OWN
+# ldconfig cache already lists for it (here, the base OS's apt-installed
+# /usr/lib/x86_64-linux-gnu/libfabric.so.1) and refreshes that cache, so libmpi.so resolves it
+# through the NORMAL system search path. Putting the bare "/opt/cscs/netstack" DIRECTORY in
+# LD_LIBRARY_PATH crashed TaskProlog outright, reproducibly (bisected 2026-09-19, job 643113):
+# pyxis appears to leak the EDF's [env] into the host-side process that runs the prestart hooks
+# (root, pre-chroot), and the netstack artifact bundle ships its own libc.so.6, which shadows the
+# host's when a hook tool (ldconfig/awk/enroot-mount) picks it up. LD_LIBRARY_PATH below therefore
+# omits it; 643126 confirmed MPI still selects provider=cxi with it gone.
 # version/name are PINNED so a CSCS-side bump is a loud failure (scripts/cscs/netstack_preflight.sh),
 # not a campaign that silently straddles two fabric stacks.
 com.hooks.netstack.source = "artifact"

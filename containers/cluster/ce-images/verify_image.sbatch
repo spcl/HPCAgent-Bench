@@ -78,7 +78,7 @@ case "${PROFILE}" in
         ce_toolchain_env='CC = "/opt/gcc/bin/gcc"
 CXX = "/opt/gcc/bin/g++"
 FC = "/opt/gcc/bin/gfortran"
-LD_LIBRARY_PATH = "/opt/cscs/netstack:/opt/rocm/lib:/opt/rocm/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/x86_64-linux-gnu"'
+LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/x86_64-linux-gnu"'
         ;;
     *) ce_toolchain_env='' ;;
 esac
