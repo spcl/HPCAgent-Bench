@@ -23,6 +23,7 @@ import os
 import pathlib
 import signal
 import sys
+import tempfile
 import threading
 import time
 import types
@@ -192,12 +193,17 @@ class SpilledArray:
 def spill_outputs(
     outputs: Mapping[str, KernelValue], root: str, tag: str, threshold: int = SPILL_BYTES
 ) -> Dict[str, SpilledValue]:
-    """Replace every ndarray of ``threshold`` bytes or more with a :class:`SpilledArray`."""
+    """Replace every ndarray of ``threshold`` bytes or more with a :class:`SpilledArray`.
+
+    Every spill is a NEW file (``mkstemp``, O_EXCL). A sealed child is pid 2 of its own pid
+    namespace, so a pid-named file repeated across children sharing one library directory: the
+    next call truncated the file the parent still had mapped, and the parent died of SIGBUS."""
     spilled: Dict[str, SpilledValue] = {}
     for name, val in outputs.items():
         if isinstance(val, np.ndarray) and val.nbytes >= threshold:
-            path = os.path.join(root, f"spill-{os.getpid()}-{tag}-{name}.npy")
-            np.save(path, val)
+            handle, path = tempfile.mkstemp(prefix=f"spill-{tag}-{name}-", suffix=".npy", dir=root)
+            with os.fdopen(handle, "wb") as out:
+                np.save(out, val)
             spilled[name] = SpilledArray(path)
         else:
             spilled[name] = val

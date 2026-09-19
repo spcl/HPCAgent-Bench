@@ -535,3 +535,21 @@ def test_the_teardown_sweep_reads_each_workers_cut_off_its_own_worker_directory(
     assert promoter.worker_cuts(run_dir) == {"arm.n0.p1.w1": 2000}
     assert promoter.swept_candidates(run_dir)[0]["source"] == "/* the answer */"
     assert promoter.best_speedups(run_dir, "arm.n0.p1.w1", 2000)[("arm.n0.p1.w1", "gemm")] == 2.0
+
+
+@pytest.mark.parametrize(
+    "verdict,expected",
+    [
+        ({"correct": "yes", "request_id": "ab12"}, "SUBMITTED request_id=ab12"),
+        ({"correct": "no", "request_id": "ab12"}, "not a submission -- built but incorrect"),
+        ({"correct": "no", "request_id": "ab12", "build_log": "kern.c:3: error"}, "not a submission -- build failed"),
+        ({"correct": "no", "request_id": "ab12", "judge_fault": True}, "not a submission -- built but incorrect"),
+    ],
+)
+def test_a_promotion_reads_the_routers_verdict(promoter, monkeypatch, verdict: dict, expected: str) -> None:
+    """The router answers /submit with the verdict alone (correct "yes"/"no", build_log on a failed
+    build). Read as a full grade, a correct "yes" had no build_ok and every promotion printed
+    "build failed: judge gave no detail" over a recorded correct row (643241, 643242)."""
+    monkeypatch.setattr(promoter.urllib.request, "urlopen", fake_urlopen([], body=verdict))
+    item = {"kernel": "gemm", "run_id": "arm.n0.p1.w1", "language": "c", "source": "void gemm(void){}"}
+    assert promoter.promote("http://judge:8800", item, dry_run=False, rank=0).startswith(expected)
