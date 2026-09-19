@@ -11,6 +11,7 @@ a copy baked into the image. The shell function is cut out of the shipped script
 
 import ast
 import importlib.util
+import json
 import os
 import pathlib
 import re
@@ -288,3 +289,80 @@ def test_a_snapshot_problems_path_resolves_to_the_staged_copy(tmp_path: pathlib.
         [sys.executable, "-P", "-c", probe], cwd=run_dir, env=env, capture_output=True, text=True, check=False
     )
     assert done.returncode == 0, done.stderr
+
+
+def test_a_fused_waves_worker_reads_its_problems_through_the_whole_launch_plan(tmp_path: pathlib.Path) -> None:
+    """End to end, dry: submit-owed-wave.sh's files -> the read-only snapshot a job gets
+    (snapshot_env) -> the batch step's own env and problems path (run_cluster.sh) -> the staged launch
+    directory and the PROBLEMS_FILE the agent step inherits -> the staged driver, run from RUN_DIR,
+    loading every problem with its setup. Both ways the step can see its env: the batch step's export
+    as it stands (643226, 643245-643248 died there on `.rendered/<stem>.jsonl`), and after re-sourcing
+    the staged .env."""
+    owed_spec = importlib.util.spec_from_file_location("owed_wave_launch_plan", EXPERIMENTS / "owed_wave.py")
+    assert owed_spec is not None and owed_spec.loader is not None
+    owed = importlib.util.module_from_spec(owed_spec)
+    sys.modules[owed_spec.name] = owed
+    owed_spec.loader.exec_module(owed)
+    env = (("AGENTS_PER_NODE", "40"), ("INFERENCE_NODES", "1"), ("HPCAGENT_BENCH_RECORD_MODEL", "qwen38"))
+    cpu = owed.Setup("arm-c-clean", "arm-c-clean", "llr-focus40", (*env, ("CAMPAIGN_ARM", "arm-c-clean")))
+    hip = owed.Setup("arm-hip-clean", "arm-hip-clean", "llr-focus40", (*env, ("CAMPAIGN_ARM", "arm-hip-clean")))
+    items = [owed.Owed(setup, {"kernel": f"k{i}", "task": "t"}, "infra") for i, setup in enumerate((cpu, hip, hip))]
+    submit_dir = tmp_path / "experiments"
+    submit_dir.mkdir()
+    wave_env = owed.write_wave(owed.build_wave("owed-w1", items, "${SCRATCH:?}/runs/owed"), tmp_path / "wave")
+    snapshot = subprocess.run(
+        ["bash", str(EXPERIMENTS / "env_layers.sh"), "snapshot", str(wave_env), "owed-w1"],
+        cwd=submit_dir,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert "PROBLEMS_FILE=.rendered/" in (submit_dir / snapshot).read_text(), "the shape that broke the agent step"
+    launch = tmp_path / "runs" / ".agent-launch" / "7"
+    run_dir = tmp_path / "runs" / "7"
+    run_dir.mkdir(parents=True)
+    batch = "\n".join(
+        [
+            "set -euo pipefail",
+            f"cd {shlex.quote(str(submit_dir))}",
+            f"export SCRATCH={shlex.quote(str(tmp_path))}",
+            f"set -a; . {shlex.quote(str(submit_dir / snapshot))}; set +a",
+            LAUNCH_FILES_RE.search(RUN_CLUSTER.read_text()).group(0),
+            f"SCRIPT_DIR={shlex.quote(str(EXPERIMENTS))}",
+            f"AGENT_LAUNCH_DIR={shlex.quote(str(launch))}",
+            f"RUN_DIR={shlex.quote(str(run_dir))}",
+            'problems_file="${PROBLEMS_FILE:-}"',
+            'if [[ -n "${problems_file}" && ! -f "${problems_file}" ]]; then problems_file="${SCRIPT_DIR}/${problems_file}"; fi',
+            shell_function("stage_agent_launch"),
+            shell_function("export_staged_problems"),
+            'stage_agent_launch "$(pwd)/' + snapshot + '" "${problems_file}"',
+            'export_staged_problems "${problems_file}"',
+            "env -0",
+        ]
+    )
+    done = subprocess.run(["bash", "-c", batch], capture_output=True, check=False)
+    assert done.returncode == 0, done.stderr.decode()
+    step_env = dict(item.split("=", 1) for item in done.stdout.decode().split("\0") if "=" in item)
+    step_env.pop("PYTHONPATH", None)
+    load = "\n".join(
+        [
+            "import importlib.util, json, sys",
+            f"spec = importlib.util.spec_from_file_location('agent_driver', {str(launch / 'agent_driver.py')!r})",
+            "driver = importlib.util.module_from_spec(spec)",
+            "sys.modules['agent_driver'] = driver",
+            "spec.loader.exec_module(driver)",
+            "print(json.dumps([(p['kernel'], p['setup']) for p in driver.load_problems()]))",
+        ]
+    )
+    expected = [["k0", "arm-c-clean"], ["k1", "arm-hip-clean"], ["k2", "arm-hip-clean"]]
+    for resource in ("", f"set -a; . {shlex.quote(str(launch / '.env'))}; set +a; "):
+        agent = subprocess.run(
+            ["bash", "-c", f'{resource}exec "$0" -P -c "$1"', sys.executable, load],
+            cwd=run_dir,
+            env=step_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert agent.returncode == 0, (resource, agent.stderr)
+        assert json.loads(agent.stdout) == expected, resource

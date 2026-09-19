@@ -1152,6 +1152,16 @@ stage_agent_launch() {
     done
 }
 
+# export_staged_problems <problems file or empty>: PROBLEMS_FILE, for every step this batch step
+# starts, names the staged copy in AGENT_LAUNCH_DIR (mounted at its own path in the agent
+# container). The steps inherit this environment (srun --export=ALL), and a snapshot env's own value
+# is `.rendered/<stem>.jsonl`, relative to experiments/, which no agent container can read: every
+# snapshot job's driver died on it (643226, 643245-643248).
+export_staged_problems() {
+    [[ -n "$1" ]] || return 0
+    export PROBLEMS_FILE="${AGENT_LAUNCH_DIR}/$(basename -- "$1")"
+}
+
 derived_edf() {
     # derived_edf <registered EDF name> <role tag> -- leaves in EDF_FILE a per-run COPY of that EDF
     # which also mounts the shared folder. An EDF is a static registered file, so a run-specific
@@ -1416,6 +1426,7 @@ trap cleanup_steps EXIT INT TERM
 # COLOCATE DRY_RUN=1 prints the steps only, so nothing is staged either.
 if [[ "${COLOCATE:-0}" != 1 || "${DRY_RUN:-0}" != 1 ]]; then
     stage_agent_launch "${ENV_FILE}" "${problems_file}"
+    export_staged_problems "${problems_file}"
 fi
 # Every role of a fused wave reads its setups from the staged copy (hpcagent_bench.fused); exported
 # before any step starts, so the judge's mounts and every re-entered role see the same directory.
