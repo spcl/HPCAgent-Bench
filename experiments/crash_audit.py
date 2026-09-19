@@ -203,6 +203,9 @@ def audit_arm(arm: str, jobs: list, full_roster: list, log_dir: pathlib.Path, op
     missing_logs: list = []
 
     for job, job_dir in jobs:
+        # A fused owed wave holds several arms' rows; this audit reads a job dir as ONE arm's.
+        if rk.is_fused(job_dir):
+            raise SystemExit(f"crash_audit: {job_dir} is a fused owed wave (several arms); audit it per arm by hand")
         touched_set |= rk.touched(job_dir, opt)
         judge_rows |= judge_row_benchmarks(job_dir)
         log_path = log_dir / f"beverin-services-{job}.out"

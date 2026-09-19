@@ -365,3 +365,10 @@ def test_a_smoke_wave_is_small_short_and_never_coverage(owed: ModuleType) -> Non
     (wave,) = owed.plan_waves(smoke, "qwen38", 0, "20260919T000000Z", "owed-smoke")
     assert wave.name == "owed-smoke-llr-focus40-qwen38-claude-w1"
     assert wave.walltime_hours == 1 + owed.STAGING_HOURS
+
+
+def test_the_crash_audit_refuses_a_fused_job_rather_than_mixing_its_arms(tmp_path: pathlib.Path) -> None:
+    audit = load("crash_audit")
+    job_dir = fused_job_dir(tmp_path, "640103")
+    with pytest.raises(SystemExit, match="fused owed wave"):
+        audit.audit_arm("cpf-llr-focus40-qwen38-c", [("640103", str(job_dir))], ["a"], tmp_path, str(REPO))
