@@ -440,8 +440,10 @@ def gather(
     token_scale: int,
     time_scale: int,
     dropped: set[str],
+    every_kernel: bool = False,
 ) -> Plan:
-    """Every owed kernel of ``model``'s arms, each with the setup it reruns under."""
+    """Every owed kernel of ``model``'s arms, each with the setup it reruns under (``every_kernel``:
+    the whole roster instead, for a smoke of arms that may owe nothing)."""
     plan = Plan()
     roots = sorted(str(root) for root in runs.iterdir() if root.is_dir())
     unreadable: list[str] = []
@@ -470,8 +472,10 @@ def gather(
             continue
         full = rosters.setdefault(spec.tag, remaining_kernels.roster(spec.tag, opt))
         owed = remaining_kernels.owed_classes(jobs, full, opt)
+        if every_kernel:
+            owed = {kernel: owed.get(kernel, remaining_kernels.ExitClass.INFRA) for kernel in full}
         for kernel, owed_class in owed.items():
-            if owed_class.value not in classes:
+            if owed_class.value not in classes and not every_kernel:
                 continue
             found = latest_problem(jobs, kernel)
             if found is None:
@@ -601,6 +605,7 @@ def main() -> int:
         args.token_scale,
         args.time_scale,
         set(args.exclude_job),
+        every_kernel=args.smoke_kernels > 0,
     )
     budget = [item for item in plan.owed if item.owed_class == remaining_kernels.ExitClass.BUDGET.value]
     if budget and args.token_scale == 1 and args.time_scale == 1:
