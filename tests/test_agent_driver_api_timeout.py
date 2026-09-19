@@ -91,3 +91,39 @@ def test_every_other_ending_is_left_alone(driver: ModuleType, tmp_path: pathlib.
 
 def test_a_finished_run_is_still_not_a_crash(driver: ModuleType, tmp_path: pathlib.Path) -> None:
     assert driver.crashed(0, transcript(tmp_path, FINISHED)) is False
+
+
+#: A tool_use block opened and never closed, verbatim in shape from 641738/problem-0/attempt3
+#: (2026-09-19): the model finishes a text block, opens a Bash call with input={}, and the stream
+#: sends nothing else for THAT block before the client gives up.
+DIED_MID_TOOL_USE = (
+    '{"type":"stream_event","event":{"type":"content_block_start","index":1,'
+    '"content_block":{"type":"text"}}}\n'
+    '{"type":"stream_event","event":{"type":"content_block_stop","index":1}}\n'
+    '{"type":"stream_event","event":{"type":"content_block_start","index":2,'
+    '"content_block":{"type":"tool_use","id":"call_1","name":"Bash","input":{}}}}\n'
+) + TIMED_OUT
+
+#: The same shape, but the tool_use block DOES close before the timeout -- a slow-but-alive request
+#: that ran out of patience on some LATER, unopened block, not a dead stream.
+TIMED_OUT_AFTER_TOOL_USE_CLOSED = (
+    '{"type":"stream_event","event":{"type":"content_block_start","index":2,'
+    '"content_block":{"type":"tool_use","id":"call_1","name":"Bash","input":{"command":"ls"}}}}\n'
+    '{"type":"stream_event","event":{"type":"content_block_stop","index":2}}\n'
+) + TIMED_OUT
+
+
+def test_a_timeout_that_opened_a_tool_use_and_never_closed_it_is_a_dead_stream(
+    driver: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    assert driver.timed_out_mid_tool_use(transcript(tmp_path, DIED_MID_TOOL_USE)) is True
+
+
+@pytest.mark.parametrize("closing", [TIMED_OUT_AFTER_TOOL_USE_CLOSED, TIMED_OUT, FINISHED])
+def test_a_timeout_that_closed_every_block_it_opened_is_not(
+    driver: ModuleType, tmp_path: pathlib.Path, closing: str
+) -> None:
+    """Covers a plain timeout with no tool_use at all (TIMED_OUT), one that closed its tool_use
+    before dying (TIMED_OUT_AFTER_TOOL_USE_CLOSED, the gpuv2/gpuv4 KV-pressure shape this file
+    documents above), and a run that never timed out at all (FINISHED)."""
+    assert driver.timed_out_mid_tool_use(transcript(tmp_path, closing)) is False

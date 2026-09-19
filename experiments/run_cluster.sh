@@ -779,12 +779,17 @@ EOF
     # that were duplicated per model had drifted: kimi and glm53 set these values, qwen38 and
     # oss120b set neither and ran on the CLI's defaults.
     #
-    # The client gives up on a stream that sends NO BYTES for this long. Its default is 15 min, and
-    # that is what killed the Qwen agents: a 115k-token prompt behind ~19 concurrent decodes emits
-    # nothing until its first token, the server was answering the whole time, and the silence alone
-    # ended the agent. In Claude Code 2.1.197 this watchdog REPLACES the total-request timeout as
-    # the wall that fires first, so it is raised to 30 min, the CLI's ceiling for it.
-    export CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS="${CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS:-1800000}"
+    # The client gives up on a stream that sends NO BYTES for this long. Its default is 5-15 min
+    # (CLI-version-dependent), and that is what killed the Qwen agents once already: a 115k-token
+    # prompt behind ~19 concurrent decodes emits nothing until its first token, the server was
+    # answering the whole time, and the silence alone ended the agent. Derived from this arm's own
+    # CONTEXT_LENGTH and AGENTS_PER_NODE in stream_idle_timeout.py (2026-09-19), not copied: worst-
+    # case full-context prefill at the slowest measured per-request throughput share, x3 margin,
+    # clamped into the CLI's own [10s, 30min] -- 30min is that ceiling, not a chosen number, and an
+    # arm that names neither var gets it same as before this module existed. Still not a fix for a
+    # stream that dies AFTER opening (agent_driver.timed_out_mid_tool_use) -- no client-side timeout
+    # is, since that one never resumes no matter how long the wait.
+    export CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS="${CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS:-$(python3 "${SCRIPT_DIR}/stream_idle_timeout.py")}"
     # The whole-request cap above it: one hour, so a request that keeps producing bytes is never
     # cut off by the outer timer. AGENT_TIMEOUT_SECONDS still bounds the episode either way.
     export API_TIMEOUT_MS="${API_TIMEOUT_MS:-3600000}"

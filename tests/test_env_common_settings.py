@@ -26,10 +26,12 @@ LAUNCHER = EXPERIMENTS / "run_cluster.sh"
 COMMON_VARS = ("API_TIMEOUT_MS", "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS", "CLAUDE_CODE_MAX_OUTPUT_TOKENS")
 
 #: The launcher's default for each of them. The idle watchdog is the wall that fires first in Claude
-#: Code 2.1.197, and 1800000 ms is the CLI's ceiling for it.
+#: Code 2.1.197; its default is DERIVED (stream_idle_timeout.py, 2026-09-19) from the arm's own
+#: CONTEXT_LENGTH and AGENTS_PER_NODE rather than copied, but every arm that named neither still
+#: lands on 1800000 ms, the CLI's ceiling for it -- see test_stream_idle_timeout.py.
 LAUNCHER_DEFAULTS = {
     "API_TIMEOUT_MS": "3600000",
-    "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS": "1800000",
+    "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS": '$(python3 "${SCRIPT_DIR}/stream_idle_timeout.py")',
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32768",
 }
 
