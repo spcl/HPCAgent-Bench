@@ -340,12 +340,17 @@ never transport** -- the same sum comes back over the `tcp` provider, several ti
 every other assertion still green. That mistake was made here once and reported as "MPI is already
 reaching Slingshot".
 
-All of libfabric, libcxi and `librccl-net.so` come from the **host**: every EDF sets
-`com.hooks.netstack.source = "host"` plus `com.hooks.aws_ofi_nccl.variant = "rocm6"` (the variant
-is required in host mode -- the hook calls `common::err` without it), and the EDF must still carry
-all five hook annotations. The images ship none of the three and a build gate refuses any that
-survives; with a partial hook set `libmpi.so` does not resolve at all, which is a loud failure
-rather than a silent fallback. Run it standalone against any image:
+All of libfabric, libcxi and `librccl-net.so` come from the **artifact** netstack bundle under
+`/capstor/store`, pinned by `com.hooks.netstack.source = "artifact"` plus
+`com.hooks.netstack.version`/`.name`: `"host"` binds `/opt/cray/libfabric/host`, whose symlink
+predates `FABRIC_1.9`, and its only installed `aws_ofi_nccl` plugin (`variant = "rocm6"`) needs
+`libamdhip64.so.6`, which the ROCm 7.2 images do not ship (`.so.7` only). `aws_ofi_nccl.variant`
+must still be set to `"rocm6"` even in artifact mode -- the hook's own `*)` branch has no `set -u`
+guard, so an unset value is a hard crash even though artifact mode never reads it -- and the EDF
+must still carry all five hook annotations. The images ship none of the three and a build gate
+refuses any that survives in a prefix this repo controls; with a partial hook set `libmpi.so` does
+not resolve at all, which is a loud failure rather than a silent fallback. Run it standalone
+against any image:
 
 ```bash
 sbatch containers/cluster/ce-images/mpi_check.sbatch   # single node, generates its own EDF
