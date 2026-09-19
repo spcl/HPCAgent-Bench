@@ -579,6 +579,12 @@ def main() -> None:
         default=None,
         help="override FigureConfig.mark_size (summary mark area, pt^2); default: the library's own",
     )
+    parser.add_argument(
+        "--legend-ncol", type=int, default=None, help="override FigureConfig.legend_ncol (column ceiling)"
+    )
+    parser.add_argument(
+        "--legend-pt", type=float, default=None, help="override FigureConfig.legend_pt (legend text size, points)"
+    )
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/score_change.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/score_change.csv"))
     parser.add_argument(
@@ -598,9 +604,18 @@ def main() -> None:
     parser.add_argument("--cost-models", type=pathlib.Path, default=None, help="a YAML file of extra cost cards")
     args = parser.parse_args()
     card = cost.resolve(args.cost_model, args.cost_models)
+    config_overrides = {
+        name: value
+        for name, value in (
+            ("mark_size", args.mark_size),
+            ("legend_ncol", args.legend_ncol),
+            ("legend_pt", args.legend_pt),
+        )
+        if value is not None
+    }
     figure_config = (
-        dataclasses.replace(efficacy_figures.DEFAULT_CONFIG, mark_size=args.mark_size)
-        if args.mark_size is not None
+        dataclasses.replace(efficacy_figures.DEFAULT_CONFIG, **config_overrides)
+        if config_overrides
         else efficacy_figures.DEFAULT_CONFIG
     )
 

@@ -739,6 +739,13 @@ ROW_PANEL_GAP: float = 0.25
 ROW_TITLE_IN: float = 0.05
 ROW_XLABEL_IN: float = 0.55
 
+#: The chrome band below the panels under ``shared_x_label``: just the per-panel tick numbers plus
+#: ONE shared label line -- smaller than :data:`ROW_XLABEL_IN`, which was sized for a per-panel
+#: xlabel drawn INSIDE that band by matplotlib's own auto layout. A shared label is placed by hand
+#: (:func:`figure_row`'s own ``fig.text``) right above the legend, so reserving the wider band left
+#: a dead gap between the tick numbers and it that nothing was actually drawing into.
+SHARED_ROW_XLABEL_IN: float = 0.08
+
 #: :func:`figure_row`'s worst-case GUESS at the legend's height, for the PROBE pass only -- big
 #: enough that the probe legend never wraps onto more rows than the real one will. The real bottom
 #: margin is the legend's MEASURED height (:func:`~hpcagent_bench.stats.style.legend_below` already
@@ -914,17 +921,19 @@ def figure_row(
             fig, handles, ncol=min(len(handles), config.legend_ncol), y=0.005, fontsize=config.legend_pt
         )
 
+    xlabel_band_in = SHARED_ROW_XLABEL_IN if shared_x_label else ROW_XLABEL_IN
+
     # Pass 1 (a throwaway figure): :data:`ROW_LEGEND_IN` is a worst-case guess at how tall the
     # legend's row wrap will come out and :data:`PANEL_MARGINS`-style left fraction is a guess at
     # how far a Y label and its ticks protrude -- both measured for real here, so pass 2 reserves
     # exactly what this row's own content needs instead of a constant sized for a wider one.
-    probe_height = side + ROW_TITLE_IN + ROW_XLABEL_IN + ROW_LEGEND_IN
+    probe_height = side + ROW_TITLE_IN + xlabel_band_in + ROW_LEGEND_IN
     probe_fig, probe_axes, probe_handles = build(data_width, probe_height)
     legend_h = dress(probe_fig, probe_handles)
     left_in = required_left_margin(probe_fig, probe_axes[0])
     plt.close(probe_fig)
 
-    bottom_in = ROW_XLABEL_IN + legend_h + MEASURE_PAD_IN
+    bottom_in = xlabel_band_in + legend_h + MEASURE_PAD_IN
     height = side + ROW_TITLE_IN + bottom_in
     # A page-budgeted row (``row_width_in`` given) keeps its CONTRACTED width and shrinks the data
     # area to fit the Y label inside it -- the promise that width exists to keep. A natural row
