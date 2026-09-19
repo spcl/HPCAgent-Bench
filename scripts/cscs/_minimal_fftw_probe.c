@@ -1,5 +1,9 @@
 /* Isolates: is fftw_execute itself slow/hung in THIS image, or is it something in the
  * numpyto-emitted code (ABI mismatch, cast, build flags)? Raw FFTW3 API only. */
+/* clock_gettime/CLOCK_MONOTONIC are POSIX, not C11: glibc only declares them under
+ * -std=c11 when a feature-test macro asks for POSIX.1-2008. Define it before any header
+ * pulls in <time.h> (the first probe run hit "implicit declaration" and never linked). */
+#define _POSIX_C_SOURCE 200809L
 #include <fftw3.h>
 #include <stdio.h>
 #include <stdlib.h>
