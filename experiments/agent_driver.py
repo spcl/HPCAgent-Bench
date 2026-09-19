@@ -1718,6 +1718,24 @@ def worker_home(workdir: pathlib.Path) -> pathlib.Path:
     return workdir / "home"
 
 
+def worker_cache_root(node_dir: pathlib.Path, workdir: pathlib.Path) -> pathlib.Path:
+    """Node-local scratch for this worker's JIT/package caches, under ``${TMPDIR:-/tmp}``.
+
+    Neither TRITON_CACHE_DIR nor XDG_CACHE_HOME was ever set for an agent, so every episode's
+    compiler defaulted to $HOME/.triton and $HOME/.cache under the PERSISTENT workdir -- 119k and
+    27k files respectively per campaign, never swept, the bulk of the inode quota blown on
+    2026-09-19. Nothing an agent submits lives in a compiler cache, so it belongs on node-local
+    storage and is removed by :func:`run_agent` when the worker exits, not carried in the run tree.
+
+    Keyed by the Slurm job plus this worker's own directory name (already unique per node: one
+    ``problem-<id>-worker-<index>`` per problem ever scheduled here), so two jobs sharing a node
+    across a requeue never collide and no lookup needs the node rank as a separate field.
+    """
+    tmp_root = pathlib.Path(os.environ.get("TMPDIR", "/tmp"))
+    job_id = os.environ.get("SLURM_JOB_ID", "local")
+    return tmp_root / f"hpcagent-bench-agent-cache-{job_id}-{node_dir.name}-{workdir.name}"
+
+
 def host_home_root() -> str:
     """The directory the HOST home lives under (``/users`` on beverin), which the seal covers.
 
@@ -2453,6 +2471,11 @@ def run_agent(
     seal = seal_argv(workdir, agent_dir, task_dir(environment["KERNEL"]), cpus)
     if seal:
         environment["HOME"] = str(worker_home(workdir))
+    # Compiler/package caches, node-local: no submission data lives in a Triton JIT cache or a pip
+    # wheel cache, so neither belongs under the persistent workdir these used to default into.
+    cache_root = worker_cache_root(node_dir, workdir)
+    environment["TRITON_CACHE_DIR"] = str(cache_root / "triton")
+    environment["XDG_CACHE_HOME"] = str(cache_root / "xdg-cache")
     while True:
         # Epoch ms, the unit the judge stamps its rows with, so a row can be told to belong to this
         # attempt or to the wiped state of an earlier one (X7).
@@ -2539,6 +2562,9 @@ def run_agent(
                 kept.replace(kept.with_name(f"{kept.stem}.attempt{crash_attempts}{kept.suffix}"))
         clear_for_relaunch(workdir, agent_dir)
         crash_attempts += 1
+    # Node-local, so this never touches the inode quota either way; removed here so a long-lived
+    # node (many problems, one TMPDIR) does not pile up one tree per worker it ever ran.
+    shutil.rmtree(cache_root, ignore_errors=True)
     closing = harness.closing(workdir)
     is_claude = harness.name == harnesses.CLAUDE
     # Only over a 0: a run the driver killed has the cap it hit already recorded, and the transcript

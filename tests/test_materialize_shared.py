@@ -72,6 +72,35 @@ def test_one_folder_per_kernel_carries_the_reference_material(tmp_path, repo) ->
     assert not (task_dir / "argmax_value.yaml").exists()  # the manifest is the judge's, not the agent's
 
 
+def test_reference_material_is_hard_linked_not_copied(tmp_path, repo) -> None:
+    """A staged reference file is byte-identical to its repo source (unlike signature.json or the
+    CPF drop-in, which are rendered per arm), so it must be a HARD LINK: same inode, no new one
+    spent. Before this, every job's own ``cp`` of the same handful of reference files across a
+    whole campaign history was the second-largest source of the 2026-09-19 inode-quota incident
+    (42k duplicate files)."""
+    shared = tmp_path / "shared"
+    materialize(repo, shared, problems_file(tmp_path / "problems.jsonl", [KERNEL]))
+    source = repo / "hpcagent_bench/benchmarks/loop_level_reasoning/argmax_value/argmax_value_numpy.py"
+    staged = shared / "tasks/argmax_value/argmax_value_numpy.py"
+    assert staged.stat().st_ino == source.stat().st_ino
+    assert staged.stat().st_nlink >= 2
+
+
+def test_reference_material_falls_back_to_a_copy_across_a_filesystem_boundary(tmp_path, repo, monkeypatch) -> None:
+    """``ln`` refuses EXDEV when the repo and the shared dir are not on one filesystem -- the two
+    roots ``scripts/cache_env.sh`` derives them from need not agree. The staged file must still
+    land, readable, with the source's content, even though it can no longer share its inode."""
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    (fake_bin / "ln").write_text("#!/bin/sh\nexit 1\n")
+    (fake_bin / "ln").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+    shared = tmp_path / "shared"
+    materialize(repo, shared, problems_file(tmp_path / "problems.jsonl", [KERNEL]))
+    staged = shared / "tasks/argmax_value/argmax_value_numpy.py"
+    assert staged.read_text() == "def argmax_value(a): return a.max()\n"
+
+
 def test_the_bare_stem_reference_is_the_fallback(tmp_path, repo) -> None:
     """``spec.numpy_reference_path``'s second candidate: a kernel with no ``<stem>_numpy.py``."""
     shared = tmp_path / "shared"
