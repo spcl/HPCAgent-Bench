@@ -53,10 +53,11 @@ def test_subset_env_and_problems_names_never_touch_the_canonical_files(tmp_path:
 
 
 def test_agent_nodes_and_walltime_scale_with_the_subsets_own_kernel_count(tmp_path: pathlib.Path) -> None:
-    """AGENT_NODES and arm_walltime must size off the SUBSET's own kernel count, not the fixture's
-    canonical kernels-scicomp40.txt roster. AGENT_NODES=1/AGENTS_PER_NODE=1 (both fixed, so nodes
-    stay put) forces one batch per kernel: 3 kernels -> 3 batches of the 72000s (20h) budget plus
-    the 3h staging allowance."""
+    """arm_walltime must size off the SUBSET's own kernel count, not the fixture's canonical
+    kernels-scicomp40.txt roster. AGENT_NODES=1/AGENTS_PER_NODE=1 (both fixed, so AGENT_NODES stays
+    put rather than being recomputed from the subset) forces one batch per kernel: 3 kernels -> 3
+    batches of the 72000s (20h) budget plus the 3h staging allowance -- a different number than a
+    2-kernel subset needs (see test_the_arms_differ_in_their_packet_and_nothing_else's 2-kernel run)."""
     root = submit_tree(tmp_path)
     (root / "experiments" / "subset3.txt").write_text("heat_3d\nkmp\ndfa\n")
     result = run_submit(
@@ -66,9 +67,13 @@ def test_agent_nodes_and_walltime_scale_with_the_subsets_own_kernel_count(tmp_pa
     arms = prepared(result)
     # the "prepared" report names the ARM, never the file-suffixed env/problems names -- the same
     # convention test_submit_gpu_llr40_clean_dryrun.py's own KERNELS_FILE="kernels.txt" runs rely on.
+    # arm_nodes() totals INFERENCE_NODES(1, inherited unchanged from .env.llrbase-qwen38-c) +
+    # AGENT_NODES(1, held at the override) + JUDGE_NODES(1, pinned) = 3.
     nodes, walltime = arms["scicomp-perf-playbook-qwen38-plain"]
-    assert nodes == "1"  # AGENT_NODES held at the explicit override, not recomputed
+    assert nodes == "3"
     assert walltime == "63:00:00"  # (72000 * 3 + 3599) // 3600 + 3 staging hours = 63
+    env = env_dict(root / "experiments" / ".env.scicomp-perf-playbook-qwen38-plain-subset3")
+    assert env["AGENT_NODES"] == "1"  # the override held, not silently recomputed
     env = env_dict(root / "experiments" / ".env.scicomp-perf-playbook-qwen38-plain-subset3")
     assert env["AGENT_NODES"] == "1"
 

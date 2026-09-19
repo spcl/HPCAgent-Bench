@@ -88,15 +88,24 @@ def test_kernels_file_narrows_the_roster_instead_of_the_whole_tag(tmp_path: path
 
 
 def test_kernels_file_kernels_are_exact_and_in_deterministic_order(tmp_path: pathlib.Path) -> None:
-    """KERNELS is comma-joined straight into canon_column.sh's argv; a scrambled input file must not
-    scramble the column's own kernel loop, so it is sorted the same way roster_for's own output is."""
+    """KERNELS is comma-joined straight into canon_column.sh's argv (not printed on the SUBMIT=0
+    preview line, only the column name is) -- a scrambled input file must not scramble the column's
+    own kernel loop, so this reads it back off the real --wrap string a recording sbatch stub
+    captures, and checks it is sorted the same way roster_for's own output is."""
     root = submit_tree(tmp_path)
+    stub(
+        root / "bin",
+        "sbatch",
+        'printf \'%s\\n\' "$@" > "${STUB_MARKERS}/sbatch-argv.txt"; echo 999999; exit 0',
+    )
     kf = root / "experiments" / "owed.txt"
     kf.write_text("kmp\n# a comment line\ndfa\n\n")
-    result = run_submit(root, KERNELS_FILE=str(kf), COLUMNS="numba")
+    result = run_submit(root, KERNELS_FILE=str(kf), COLUMNS="numba", SUBMIT="1")
     assert result.returncode == 0, result.stderr
-    line = next(ln for ln in result.stdout.splitlines() if ln.startswith("would submit "))
-    kernels = line.split()[-1].split(",")
+    argv = (root / "sbatch-argv.txt").read_text().splitlines()
+    wrap = argv[argv.index("--wrap") + 1]
+    # bash <path>/canon_column.sh outer <col> <out_root> <kernels> <preset> <opt>
+    kernels = wrap.split()[5].split(",")
     assert kernels == sorted(ROSTER_KERNELS)
 
 
