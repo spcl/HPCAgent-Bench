@@ -613,24 +613,34 @@ def main() -> None:
 
     if args.comparison:
         comparison_panels: list[efficacy_figures.Panel] = []
+        # A joined row's comparisons need not share one repeat-reduction policy (git-scicomp's own
+        # designed-3x-repeats median against llr-focus40's own reruns-take-latest, say) -- each
+        # ``--comparison`` spec may say ``repeats=...``; one that does not falls back to ``--repeats``.
+        comparison_repeats: list[population.RepeatPolicy] = []
         for raw in args.comparison:
+            spec = parse_spec(raw)
+            one_repeats = spec.get("repeats", args.repeats)
+            if one_repeats not in population.REPEAT_POLICIES:
+                raise SystemExit(f"comparison {raw!r}: repeats={one_repeats!r} not in {population.REPEAT_POLICIES}")
             built = build_comparison(
-                parse_spec(raw), args.observations, args.experiment, args.repeats, args.include_incomplete, card
+                spec, args.observations, args.experiment, one_repeats, args.include_incomplete, card
             )
             if built is None:
                 print(f"skipping comparison {raw!r}: empty side, or no (model, language) shared with control")
                 continue
             comparison_panels.append(built)
+            comparison_repeats.append(one_repeats)
         if not comparison_panels:
             raise SystemExit(f"no --comparison of {args.comparison} produced a panel")
         args.table.parent.mkdir(parents=True, exist_ok=True)
-        for title, treatment, stats, frame in comparison_panels:
+        for (title, treatment, stats, frame), one_repeats in zip(comparison_panels, comparison_repeats, strict=True):
             del treatment  # the CSV is keyed by title, not by the packet(s) shaping the panel
             suffix = f"-{title.lower().replace(' ', '-')}"
-            write_panel_tables(args.table, suffix, stats, frame, args.repeats)
+            write_panel_tables(args.table, suffix, stats, frame, one_repeats)
         written = efficacy_figures.figure_row(
-            comparison_panels, args.out, row_width_in=row_width, repeats=args.repeats, show_cloud=args.show_cloud,
-            config=figure_config, shared_x_label=args.shared_x_label, ylabel=args.ylabel,
+            comparison_panels, args.out, row_width_in=row_width, repeats=comparison_repeats,
+            show_cloud=args.show_cloud, config=figure_config, shared_x_label=args.shared_x_label,
+            ylabel=args.ylabel,
         )  # fmt: skip
         for title, treatment, stats, frame in comparison_panels:
             del frame  # the summary line names the panel, not its rows

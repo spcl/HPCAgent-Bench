@@ -944,6 +944,26 @@ def llr40_legend_handles(models: Sequence[str], packet_mode: str) -> list[matplo
     return handles
 
 
+#: Inches reserved above the top (speed-up) panel for :func:`llr40_legend_above`'s one small row --
+#: at most 4 entries (3 models is this figure's largest roster, plus the missing-answer cross), so
+#: one row at :data:`~hpcagent_bench.stats.style.TICK_PT` * 0.75 never wraps to a second.
+LLR40_LEGEND_TOP_IN: float = 0.4
+
+
+def llr40_legend_above(fig: matplotlib.figure.Figure, handles: Sequence[matplotlib.artist.Artist]) -> float:
+    """One legend row centred ABOVE the whole figure -- never :func:`~hpcagent_bench.stats.style.
+    legend_below`, which places at the BOTTOM, where a 40-name rotated kernel axis already spends
+    its own room and a long name runs straight through the key. Returns the legend's own height
+    (in): this figure's roster is always <=4 entries, so ONE row is a promise, not a probe."""
+    legend = fig.legend(
+        handles=handles, loc="upper center", bbox_to_anchor=(0.5, 1.0), ncol=len(handles), frameon=False,
+        fontsize=plotstyle.TICK_PT * 0.75, markerscale=1.2, handletextpad=0.5, columnspacing=1.6,
+        borderaxespad=0.0,
+    )  # fmt: skip
+    box = legend.get_window_extent(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
+    return float(box.height)
+
+
 def llr40_model_figure(
     frame: pd.DataFrame,
     roster: Sequence[str],
@@ -987,14 +1007,18 @@ def llr40_model_figure(
     token_ax.set_ylabel(
         "Billed Tokens (1 fresh + 0.1 re-sent + 1 out)", fontsize=plotstyle.LABEL_PT * 0.7, color=plotstyle.MUTED
     )
-    width, height = figure_size(len(arms), len(kernels), double_column)
+    width, base_height = figure_size(len(arms), len(kernels), double_column)
+    # The legend sits ABOVE the top panel, never below the bottom one: BOTTOM_MARGIN_IN was sized
+    # for the rotated kernel names alone, and a 40-name axis routinely rotates a label long enough
+    # to run straight through a legend squeezed into the same band (measured: "Ragged Segmented
+    # Reduction" under "Kimi-K2.7-Code"). Above the panels there is no rotated text to collide with.
+    height = base_height + LLR40_LEGEND_TOP_IN
     fig.subplots_adjust(
-        left=LEFT_MARGIN_IN / width, right=1.0 - RIGHT_MARGIN_IN / width, top=1.0 - TOP_MARGIN_IN / height,
-        bottom=BOTTOM_MARGIN_IN / height, hspace=PANEL_GAP_IN / PANEL_HEIGHT_IN,
+        left=LEFT_MARGIN_IN / width, right=1.0 - RIGHT_MARGIN_IN / width,
+        top=1.0 - (TOP_MARGIN_IN + LLR40_LEGEND_TOP_IN) / height, bottom=BOTTOM_MARGIN_IN / height,
+        hspace=PANEL_GAP_IN / PANEL_HEIGHT_IN,
     )  # fmt: skip
-    plotstyle.legend_below(
-        fig, llr40_legend_handles(list(panels.keys()), packet_mode), y=0.005, fontsize=plotstyle.TICK_PT * 0.75
-    )
+    llr40_legend_above(fig, llr40_legend_handles(list(panels.keys()), packet_mode))
     return fig
 
 

@@ -954,6 +954,48 @@ def test_a_pair_figure_wears_the_intervention_hue_and_names_a_control_that_is_no
     assert experiment_tags.packet_name("repo") in labels, labels
 
 
+def test_resolve_row_repeats_broadcasts_a_bare_policy_and_checks_a_sequences_length() -> None:
+    """A joined row's comparisons need not share ONE repeat policy: git-scicomp's designed-3x-repeats
+    median and llr-focus40's reruns-take-latest sit in the same row."""
+    assert efficacy_figures.resolve_row_repeats("median", 3) == ["median", "median", "median"]
+    assert efficacy_figures.resolve_row_repeats(["latest", "median"], 2) == ["latest", "median"]
+    with pytest.raises(ValueError, match="panels 3"):
+        efficacy_figures.resolve_row_repeats(["latest"], 3)
+
+
+def test_a_comparison_specs_own_repeats_overrides_the_row_default(tmp_path: pathlib.Path) -> None:
+    """``repeats=`` on one ``--comparison`` spec reaches ONLY that panel; a spec without it keeps
+    ``--repeats``."""
+    obs = tmp_path / "obs.csv"
+    pd.DataFrame(observation_rows(SCICOMP_PAIR[0], 1.1, 1.4e6) + observation_rows(SCICOMP_PAIR[1], 0.6, 900e3)).to_csv(
+        obs, index=False
+    )
+    table = tmp_path / "pairs.csv"
+    family_csv([SCICOMP_PAIR], efficacy.NOT_SIGNIFICANT, efficacy.NOT_SIGNIFICANT).to_csv(table, index=False)
+
+    seen_repeats: list[object] = []
+    real = efficacy_figures.figure_row
+
+    def record(*args: object, **kwargs: object) -> object:
+        seen_repeats.append(kwargs["repeats"])
+        return real(*args, **kwargs)  # pyright: ignore[reportArgumentType, reportCallIssue]
+
+    old_figure_row = plot.efficacy_figures.figure_row
+    plot.efficacy_figures.figure_row = record
+    old_argv = sys.argv
+    sys.argv = [
+        "plot_score_change.py", str(obs), "--comparison",
+        f"title=Kernel Formulation;intervention=repo;pairs={table};repeats=median",
+        "--out", str(tmp_path / "fig.pdf"), "--table", str(tmp_path / "table.csv"),
+    ]  # fmt: skip
+    try:
+        plot.main()
+    finally:
+        sys.argv = old_argv
+        plot.efficacy_figures.figure_row = old_figure_row
+    assert seen_repeats == [["median"]]
+
+
 def test_parse_spec_reads_semicolon_separated_key_value_pairs() -> None:
     """``--comparison`` takes one string per panel; the parser is the only place its grammar is
     decided."""

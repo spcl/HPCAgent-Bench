@@ -826,11 +826,26 @@ def flat_treatments(spec: str | Sequence[str]) -> list[str]:
     return [spec] if isinstance(spec, str) else list(spec)
 
 
+def resolve_row_repeats(
+    repeats: population.RepeatPolicy | Sequence[population.RepeatPolicy], n: int
+) -> list[population.RepeatPolicy]:
+    """``repeats`` as one policy per panel: a bare policy repeats for all ``n``; a sequence must
+    already have length ``n`` -- a git-scicomp panel (designed 3x repeats, median) and an
+    llr-focus40 panel (reruns, latest) share no policy, so ONE row's panels are never forced onto
+    ONE value."""
+    if isinstance(repeats, str):
+        return [repeats] * n
+    resolved = list(repeats)
+    if len(resolved) != n:
+        raise ValueError(f"repeats names {len(resolved)} polic{'y' if len(resolved) == 1 else 'ies'}, panels {n}")
+    return resolved
+
+
 def figure_row(
     panels: Sequence[Panel],
     out: pathlib.Path,
     row_width_in: float | None = None,
-    repeats: population.RepeatPolicy = "latest",
+    repeats: population.RepeatPolicy | Sequence[population.RepeatPolicy] = "latest",
     show_cloud: bool = False,
     config: FigureConfig = DEFAULT_CONFIG,
     shared_x_label: bool = False,
@@ -845,7 +860,9 @@ def figure_row(
     "Kernel Formulation" or the packet's own :func:`~hpcagent_bench.packets.label`), drawn small
     INSIDE the panel's own box (no whole-row title: a paper's caption is that); ``treatment`` is the
     registry key (or keys, :data:`Panel`) the panel is SHAPED by, differing from ``title`` whenever a
-    joined figure names its panels for something other than the packet itself.
+    joined figure names its panels for something other than the packet itself. ``repeats`` is either
+    ONE policy for every panel or one PER panel (:func:`resolve_row_repeats`) -- a joined row's
+    comparisons need not share a repeat-reduction policy.
 
     Every panel already shares ONE Y label (the leftmost panel's; the rest blank theirs) since every
     panel reads the same quantity. ``shared_x_label`` gives the X axis -- itself already the SAME
@@ -862,20 +879,22 @@ def figure_row(
         t for panel_title, treatment, treated_arm, control_arm in panels for t in flat_treatments(treatment)
     ]
     panel_xlabel = "" if shared_x_label else xlabel
+    panel_repeats = resolve_row_repeats(repeats, n)
 
     def build(width: float, height: float) -> tuple[Figure, list[Axes], list[Line2D]]:
         fig, axes = plt.subplots(1, n, figsize=(width, height), squeeze=False)
         fig.set_dpi(style.SAVE_DPI)  # measure legend/margins at the dpi save() writes
         handles_by_label: dict[str, Line2D] = {}
-        for ax, (title, treatment, stats, frame) in zip(axes[0], panels, strict=True):
+        rows = zip(axes[0], panels, panel_repeats, strict=True)
+        for ax, (title, treatment, stats, frame), one_repeats in rows:
             if isinstance(treatment, str):
                 handles = draw_panel(
-                    ax, frame, stats, treatment, treatments_here, repeats=repeats, show_cloud=show_cloud,
+                    ax, frame, stats, treatment, treatments_here, repeats=one_repeats, show_cloud=show_cloud,
                     config=config, xlabel=panel_xlabel, ylabel=ylabel,
                 )  # fmt: skip
             else:
                 handles = draw_multi_panel(
-                    ax, frame, stats, repeats=repeats, show_cloud=show_cloud, config=config,
+                    ax, frame, stats, repeats=one_repeats, show_cloud=show_cloud, config=config,
                     xlabel=panel_xlabel, ylabel=ylabel,
                 )  # fmt: skip
             for handle in handles:
