@@ -261,8 +261,6 @@ declare -A LLRBASE_ENV=(
     [qwen38]=llrbase-qwen38-c
     [kimi27sglang]=llrbase-kimi27sglang-c
     [glm53]=llrbase-glm53-c
-    # A hosted service has no llrbase variant: its base env IS the serving block (no engine to tune).
-    [unionalpha]=base-unionalpha
 )
 
 # stage_base_env <base-env> <arm> <experiment> <stamp> <staged-out> [extra sed -e expr...]

@@ -71,7 +71,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 RECORD_NAME = "inference.json"
 
 #: The example service arms that ship with the repo, as ``.env.base-<name>`` and a models.py block.
-EXAMPLE_ARMS = ("musespark", "fable51", "gpt6astra", "unionalpha")
+EXAMPLE_ARMS = ("musespark", "fable51", "gpt6astra")
 
 #: Every variable through which the claude CLI picks a model on its own: the small/fast model for
 #: its side requests (titles, summaries), the model each tier alias resolves to, and the subagent

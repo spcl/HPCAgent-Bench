@@ -13,7 +13,7 @@
 # so the analysis pairs shards of one condition as one arm.
 #
 # One lane per language, stages run in STAGES order within a lane:
-#   MODEL=unionalpha LANGS="c fortran" ./submit-service-chain.sh        SUBMIT=0 to prepare only
+#   MODEL=musespark LANGS="c fortran" ./submit-service-chain.sh        SUBMIT=0 to prepare only
 #   STAGES="scicomp:plain scicomp:lang-skills+perf-playbook-cpu llr:plain llr:skills"
 set -euo pipefail
 ulimit -c 0
