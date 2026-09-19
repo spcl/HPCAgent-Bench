@@ -1201,3 +1201,42 @@ def test_write_panel_tables_merges_a_multi_treatment_panel_into_one_packet_tagge
     absolute = pd.read_csv(table.with_name("table-cpu-absolute.csv"))
     assert set(written.packet) == {"skills", "cpf"}
     assert set(absolute.packet) == {"skills", "cpf"}
+
+
+def test_a_kernel_without_a_token_total_keeps_its_speed_up_and_the_mark_says_n() -> None:
+    """A treated kernel whose task row was lost still has a verified answer: the speed-up
+    coordinate is the geomean over EVERY paired kernel (the family CSV's own score leg), the token
+    coordinate over the kernels priced on both sides, and the mark's label names that n. Intersecting
+    the two moved Kimi's C skill-pages point from 0.83x (38 kernels) to 1.01x (19)."""
+    import matplotlib.pyplot as plt
+
+    frame = one_arm_raw(on_speedup=2.0, on_tokens=500.0)
+    unpriced = {f"k{kernel}" for kernel in range(0, KERNELS, 2)}
+    frame = frame[~(frame.skills & (frame.record == "task") & frame.benchmark.isin(unpriced))]
+
+    series = efficacy_figures.reduce_pair(frame[~frame.skills], frame[frame.skills])
+
+    assert series is not None
+    assert (series.kernels, series.token_kernels) == (KERNELS, KERNELS - len(unpriced))
+    ratios = [2.0 * (1.03 if kernel % 2 == 0 else 0.97) for kernel in range(KERNELS)]
+    assert 2.0**series.x == pytest.approx(math.exp(np.mean(np.log(ratios))))
+    priced = [0.5 / (1.03 if kernel % 2 == 0 else 0.97) for kernel in range(KERNELS) if f"k{kernel}" not in unpriced]
+    assert series.y == pytest.approx(math.exp(np.mean(np.log(priced))))
+    fig, ax = plt.subplots()
+    try:
+        efficacy_figures.draw_panel(ax, frame, one_arm_stats(), "skills")
+        labels = [text.get_text() for text in ax.texts]
+        assert any(f"(tokens n={series.token_kernels}/{KERNELS})" in label for label in labels), labels
+    finally:
+        plt.close(fig)
+    table = efficacy_figures.pairs_table(frame.assign(baseline_ns=2.0e6, native_ns=1.0e6))
+    assert table.token_kernels.tolist() == [series.token_kernels]
+    assert table.kernels.tolist() == [KERNELS]
+
+
+def test_a_fully_priced_mark_carries_no_token_note() -> None:
+    """Both legs over the same kernels: nothing to say, so the label is the leg alone."""
+    series = efficacy_figures.reduce_pair(*(lambda f: (f[~f.skills], f[f.skills]))(one_arm_raw()))
+    assert series is not None
+    assert series.token_kernels == series.kernels
+    assert efficacy_figures.token_note(series) == ""

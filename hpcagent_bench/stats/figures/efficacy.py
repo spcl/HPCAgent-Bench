@@ -150,20 +150,22 @@ PAIRED_COLUMNS: tuple[str, ...] = (
 def paired_kernels(
     control: pd.DataFrame, treated: pd.DataFrame, repeats: population.RepeatPolicy = "latest"
 ) -> pd.DataFrame:
-    """One row per kernel BOTH sides cover on speed-up AND on tokens.
+    """One row per kernel BOTH sides cover on speed-up; its tokens are NaN where either side has no
+    task total.
 
-    The population every statistic on this comparison -- the drawn interval and the corrected
-    significance test alike -- is taken over, so the two can never disagree about which kernels are
-    in it. ``delivered`` is True only when BOTH sides verified an answer there; a kernel either side
-    only served (:data:`~hpcagent_bench.stats.population.NOT_DELIVERED`) is a placeholder ratio, not
-    a measurement, and the cloud draws it as a cross.
+    The speed-up leg is paired over every such kernel, the same population ``paired_arms.py``'s
+    score leg (and so the family's corrected test) is taken over; the token leg over the subset
+    with a total on both sides (:func:`reduce_pair`). Intersecting the two would move the speed-up
+    coordinate off the table's value whenever a token record is missing. ``delivered`` is True only
+    when BOTH sides verified an answer there; a kernel either side only served
+    (:data:`~hpcagent_bench.stats.population.NOT_DELIVERED`) is a placeholder ratio, not a
+    measurement, and the cloud draws it as a cross.
     """
     control_answers = population.kernel_answers(control, repeats=repeats)
     treated_answers = population.kernel_answers(treated, repeats=repeats)
     control_tokens = population.kernel_tokens(control, repeats=repeats)
     treated_tokens = population.kernel_tokens(treated, repeats=repeats)
     kernels = control_answers.index.intersection(treated_answers.index)
-    kernels = kernels.intersection(control_tokens.index).intersection(treated_tokens.index)
     if len(kernels) == 0:
         return pd.DataFrame(columns=PAIRED_COLUMNS)
     has_delivered = population.DELIVERED_COLUMN in control_answers and population.DELIVERED_COLUMN in treated_answers
@@ -171,8 +173,8 @@ def paired_kernels(
         {
             "control_speedup": control_answers.loc[kernels, "speedup"].astype(float),
             "treated_speedup": treated_answers.loc[kernels, "speedup"].astype(float),
-            "control_tokens": control_tokens.loc[kernels].astype(float),
-            "treated_tokens": treated_tokens.loc[kernels].astype(float),
+            "control_tokens": control_tokens.reindex(kernels).astype(float),
+            "treated_tokens": treated_tokens.reindex(kernels).astype(float),
             "baseline_ns": control_answers.loc[kernels, "baseline_ns"].astype(float)
             if "baseline_ns" in control_answers
             else math.nan,
@@ -220,18 +222,28 @@ class Series:
     native_ns: float
     control_tokens: float
     treated_tokens: float
+    #: Kernels the token leg (``y``) is over: those of ``kernels`` with a task total on both sides.
+    token_kernels: int
 
 
 def reduce_pair(
     control: pd.DataFrame, treated: pd.DataFrame, repeats: population.RepeatPolicy = "latest"
 ) -> Series | None:
-    """``(control, treated)`` as a :class:`Series`; ``None`` when they share no usable kernel."""
+    """``(control, treated)`` as a :class:`Series`; ``None`` when they share no usable kernel or no
+    kernel has a token total on both sides.
+
+    ``x`` is over every paired kernel, ``y`` over the ones with both token totals
+    (:func:`paired_kernels`); ``token_kernels`` says how many that is.
+    """
     paired = paired_kernels(control, treated, repeats)
     if paired.empty:
         return None
     score_ratio = (paired.treated_speedup / paired.control_speedup).to_numpy(dtype=float)
     cost_ratio = (paired.treated_tokens / paired.control_tokens).to_numpy(dtype=float)
-    score, cost = summary.geomean_ci(score_ratio), summary.geomean_ci(cost_ratio)
+    priced = np.isfinite(cost_ratio) & (cost_ratio > 0.0)
+    if not priced.any():
+        return None
+    score, cost = summary.geomean_ci(score_ratio), summary.geomean_ci(cost_ratio[priced])
     cloud = pd.DataFrame(
         {"x": summary.log2_changes(score_ratio), "y": cost_ratio, "delivered": paired.delivered.to_numpy(dtype=bool)},
         index=paired.index,
@@ -248,9 +260,16 @@ def reduce_pair(
         delivered=int(paired.delivered.sum()),
         baseline_ns=float(paired.baseline_ns.median()),
         native_ns=float(paired.native_ns.median()),
-        control_tokens=float(paired.control_tokens.median()),
-        treated_tokens=float(paired.treated_tokens.median()),
+        control_tokens=float(paired.control_tokens[priced].median()),
+        treated_tokens=float(paired.treated_tokens[priced].median()),
+        token_kernels=int(priced.sum()),
     )
+
+
+def token_note(series: Series) -> str:
+    """`` (tokens n=19/38)`` when the token leg is over fewer kernels than the speed-up leg, else ""
+    -- so a mark whose two coordinates rest on different populations says so on the figure."""
+    return f" (tokens n={series.token_kernels}/{series.kernels})" if series.token_kernels < series.kernels else ""
 
 
 def ratio_tick(value: float, position: int = 0) -> str:
@@ -585,7 +604,7 @@ def draw_treatment_marks(
         draw_series(ax, series, palette.model_color(str(model)), shape, show_cloud, config)
         score_sig, cost_sig = significance.get((str(model), str(leg)), (False, False))
         suffix = significance_suffix(score_sig, cost_sig)
-        text = f"{label_prefix}{leg}{f' {suffix}' if suffix else ''}"
+        text = f"{label_prefix}{leg}{f' {suffix}' if suffix else ''}{token_note(series)}"
         ax.annotate(
             text,
             (series.x, series.y),
@@ -980,6 +999,7 @@ def pairs_table(frame: pd.DataFrame, repeats: population.RepeatPolicy = "latest"
                 "cost_ratio_low": series.y_low,
                 "cost_ratio_high": series.y_high,
                 "kernels": series.kernels,
+                "token_kernels": series.token_kernels,
                 "delivered": series.delivered,
                 "baseline_ns": series.baseline_ns,
                 "native_ns": series.native_ns,
