@@ -294,18 +294,12 @@ def test_every_registered_key_is_covered_by_the_reaches_split_above() -> None:
 # prompt always agrees with grading.allow_agent_build_tokens, whichever way an arm sets it.
 # ---------------------------------------------------------------------------------------------
 
+#: Hand-picked expected values, independent of packets.libraries_enabled's own implementation --
+#: the same discipline STAGES_DROPIN/STAGES_NOTHING hold section D to above. all-in-nvidia is
+#: covered too (see the split test), left out of the literal here only because it is also
+#: device-pinned to cuda, which the other all-in-* keys are not.
 LIBRARY_ENABLED_KEYS = ("perf-playbook-cpu", "perf-playbook-amd", "perf-playbook-nvidia", "all-in-cpu", "all-in-amd")
 LIBRARY_DISABLED_KEYS = ("", "lang-skills", "cpf", "cpfsrc", "no-score-tool", "rocprof", "profiling", "autokernel")
-
-
-@pytest.mark.parametrize("key", REGISTERED_KEYS)
-def test_library_requests_are_classified_only_for_the_perf_playbooks(key: str) -> None:
-    expected = any(sub in packets.LIBRARY_ENABLED_PACKETS for sub in reaches_all(key))
-    assert packets.libraries_enabled(key) == expected, key
-
-
-def reaches_all(key: str) -> frozenset[str]:
-    return frozenset(sub for part in packets.spec_parts(key) for sub in packets.reached_keys(part, DEFINITIONS))
 
 
 def test_every_registered_key_is_covered_by_the_library_enabled_split() -> None:
