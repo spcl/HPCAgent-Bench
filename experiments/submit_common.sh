@@ -67,37 +67,81 @@ clean_suffix() {
     [[ "$1" == 1 ]] && printf -- '-clean' || printf ''
 }
 
-# BUDGET_SCALE=<N> -- the 2x-budget rerun knob (2026-09-18 owed-classification decision): a kernel
-# whose latest episode hit its own AGENT_TIMEOUT_SECONDS or AGENT_MAX_TOKENS (remaining_kernels.py's
-# ``budget`` owed class) gets a bigger allowance next time, not a plain rerun -- BUDGET_SCALE=2 on
-# the resubmission is the whole mechanism, same as CLEAN=1 is for a from-scratch rerun. Left at 1 it
-# is a no-op: every arm's budget is unchanged.
+# BUDGET_SCALE=<N> -- the owed-rerun knob (2026-09-18 owed-classification decision): a kernel whose
+# latest episode hit its own AGENT_TIMEOUT_SECONDS or AGENT_MAX_TOKENS (remaining_kernels.py's
+# ``budget`` owed class) gets a bigger allowance next time, not a plain rerun -- setting it on the
+# resubmission is the whole mechanism, same as CLEAN=1 is for a from-scratch rerun. Left at 1 it is
+# a no-op: every arm's budget is unchanged. TOKEN_SCALE/TIME_SCALE (2026-09-19: a 4x-tokens rerun
+# whose base model's AGENT_TIMEOUT_SECONDS is already large enough that 4x wall clock no longer
+# fits the partition) default to it, so an old BUDGET_SCALE=N caller -- every prior owed rerun --
+# scales both exactly as before.
 BUDGET_SCALE=${BUDGET_SCALE:-1}
+TOKEN_SCALE=${TOKEN_SCALE:-${BUDGET_SCALE}}
+TIME_SCALE=${TIME_SCALE:-${BUDGET_SCALE}}
 
-# scale_budget <value> -> <value> * BUDGET_SCALE, integer.
-scale_budget() {
-    printf '%s\n' "$(( $1 * BUDGET_SCALE ))"
+# PARTITION_TIME_LIMIT_HOURS -- the partition's own MaxTime with a safety margin (mi300's is
+# 24h/1-00:00:00 per `scontrol show partition mi300`; 23 leaves an hour of slack). A scaled
+# AGENT_TIMEOUT_SECONDS past what fits under this asks sbatch for a --time no partition will ever
+# grant, and arm_walltime's job silently sits PENDING forever instead of failing at submit time.
+PARTITION_TIME_LIMIT_HOURS=${PARTITION_TIME_LIMIT_HOURS:-23}
+
+# time_cap_seconds -> the largest AGENT_TIMEOUT_SECONDS one batch can still fit under
+# PARTITION_TIME_LIMIT_HOURS once arm_walltime adds its own STAGING_HOURS on top.
+time_cap_seconds() {
+    printf '%s\n' "$(( (PARTITION_TIME_LIMIT_HOURS - STAGING_HOURS) * 3600 ))"
 }
 
-# scaled_budget_from <base-env> <KEY> -> <KEY>'s configured value in <base-env>, times BUDGET_SCALE.
-# Refuses when <base-env> sets no <KEY>: a scaled rerun of an arm whose base does not carry the value
-# would otherwise apply no scale at all instead of failing loudly, exactly like agent_seconds refuses
-# a base with no AGENT_TIMEOUT_SECONDS.
+# scale_tokens <value> -> <value> * TOKEN_SCALE, integer. Uncapped: a token ceiling costs money, not
+# a PENDING job the partition can never start.
+scale_tokens() {
+    printf '%s\n' "$(( $1 * TOKEN_SCALE ))"
+}
+
+# scale_time <value> -> <value> * TIME_SCALE, clamped to time_cap_seconds. A model whose base
+# AGENT_TIMEOUT_SECONDS is small enough (e.g. qwen38/oss120b's 4h) never reaches the cap at 4x; a
+# larger base (Kimi's 8h) does, and is clamped rather than handed a --time the scheduler refuses.
+scale_time() {
+    local cap; cap=$(time_cap_seconds)
+    (( cap > 0 )) || {
+        echo "scale_time: STAGING_HOURS=${STAGING_HOURS} leaves no room under PARTITION_TIME_LIMIT_HOURS=${PARTITION_TIME_LIMIT_HOURS}" >&2
+        return 2
+    }
+    local scaled=$(( $1 * TIME_SCALE ))
+    (( scaled > cap )) && scaled="${cap}"
+    printf '%s\n' "${scaled}"
+}
+
+# scaled_budget_from <base-env> <KEY> -> <KEY>'s configured value in <base-env>, scaled by whichever
+# of TOKEN_SCALE/TIME_SCALE applies to it (AGENT_TIMEOUT_SECONDS also clamped to time_cap_seconds).
+# Refuses when <base-env> sets no <KEY>: a scaled rerun of an arm whose base does not carry the
+# value would otherwise apply no scale at all instead of failing loudly, exactly like agent_seconds
+# refuses a base with no AGENT_TIMEOUT_SECONDS.
 scaled_budget_from() {
     local base="$1" key="$2" configured
     configured="$(grep -oP "^${key}=\K[0-9]+" "${base}" || true)"
     [[ -n "${configured}" ]] || { echo "scaled_budget_from: ${base} sets no ${key}" >&2; return 2; }
-    scale_budget "${configured}"
+    case "${key}" in
+        AGENT_TIMEOUT_SECONDS) scale_time "${configured}" ;;
+        AGENT_MAX_TOKENS) scale_tokens "${configured}" ;;
+        *) echo "scaled_budget_from: no scale defined for ${key}" >&2; return 2 ;;
+    esac
 }
 
-# budget_env_suffix -> "" at BUDGET_SCALE=1 (the arm's canonical .env filename, untouched), else
-# "-budget<N>x": a scaled submission's OWN env file. Every submit-*.sh builds its arm's env path as
-# ".env.${arm}${...}$(budget_env_suffix)" so a BUDGET_SCALE=2 rerun never mutates the canonical
-# .env a later normal-budget submission of the same arm would read -- the scaled numbers still land
-# in that file's own HPCAGENT_BENCH_RECORD_AGENT_* rows, just never under the canonical name.
+# budget_env_suffix -> "" when TOKEN_SCALE and TIME_SCALE are both 1 (the arm's canonical .env
+# filename, untouched); "-budget<N>x" when they agree (the common case, byte-identical to every
+# prior BUDGET_SCALE=N caller); "-tok<N>x-time<M>x" when a caller asks for them independently, so
+# the two numbers a reader actually needs are in the filename rather than collapsed into one that
+# is not what either scale was. Every submit-*.sh builds its arm's env path as
+# ".env.${arm}${...}$(budget_env_suffix)" so a scaled rerun never mutates the canonical .env a later
+# normal-budget submission of the same arm would read -- the scaled numbers still land in that
+# file's own HPCAGENT_BENCH_RECORD_AGENT_* rows, just never under the canonical name.
 budget_env_suffix() {
-    [[ "${BUDGET_SCALE}" == 1 ]] && return 0
-    printf -- '-budget%sx' "${BUDGET_SCALE}"
+    if [[ "${TOKEN_SCALE}" == "${TIME_SCALE}" ]]; then
+        [[ "${TOKEN_SCALE}" == 1 ]] && return 0
+        printf -- '-budget%sx' "${TOKEN_SCALE}"
+    else
+        printf -- '-tok%sx-time%sx' "${TOKEN_SCALE}" "${TIME_SCALE}"
+    fi
 }
 
 # kernels_file_suffix [default] -- "" when KERNELS_FILE is unset or equals <default> (the
@@ -240,6 +284,27 @@ problem_kernel_count() {
     printf '%s\n' "${n}"
 }
 
+# refuse_unfiltered_snapshot_problems <staged> <env>
+# <env>'s basename names a snapshot (a suffix from arm_file_suffix -- KERNELS_FILE and/or
+# BUDGET_SCALE) whenever it differs from ".env.<staged's own CAMPAIGN_ARM>" -- refuses when such a
+# snapshot's PROBLEMS_FILE is nonetheless the bare "problems-<arm>.jsonl": the canonical
+# full-roster file a PENDING job of the UNSUFFIXED arm reads at start. 642734 (2026-09-19) was
+# hand-submitted as a "-cpfleak0919" snapshot pointed at that canonical file by mistake, silently
+# re-running all 6 kernels 642644 already owed instead of the 3 it was meant to exclude.
+refuse_unfiltered_snapshot_problems() {
+    local staged="$1" env="$2" arm pf canonical
+    arm=$(sed -n 's/^CAMPAIGN_ARM=//p' "${staged}" | tail -n 1)
+    [[ -n "${arm}" ]] || { echo "refuse_unfiltered_snapshot_problems: ${staged} sets no CAMPAIGN_ARM" >&2; return 2; }
+    [[ "$(basename -- "${env}")" == ".env.${arm}" ]] && return 0
+    pf=$(sed -n 's/^PROBLEMS_FILE=//p' "${staged}" | tail -n 1)
+    canonical="problems-${arm}.jsonl"
+    if [[ "${pf}" == "${canonical}" ]]; then
+        echo "refusing ${env}: a snapshot of ${arm} but PROBLEMS_FILE=${pf} is the canonical full-roster file" >&2
+        echo "  give it its own filtered problems-${arm}<suffix>.jsonl, never the base name" >&2
+        return 2
+    fi
+}
+
 # finalize_staged_env <staged> <env>
 # The context-budget gate every arm needs before it becomes real: refuse rather than discover the
 # overrun hours in as an API error. Renames only on success, so a bailed gate leaves neither a
@@ -247,6 +312,7 @@ problem_kernel_count() {
 finalize_staged_env() {
     local staged="$1" env="$2"
     check_context_budget "${staged}" || { rm -f "${staged}"; return 2; }
+    refuse_unfiltered_snapshot_problems "${staged}" "${env}" || { rm -f "${staged}"; return 2; }
     mv -- "${staged}" "${env}"
 }
 
