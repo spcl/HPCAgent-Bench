@@ -68,7 +68,7 @@ def submit_tree(root: pathlib.Path) -> pathlib.Path:
     (root / "experiments").mkdir(parents=True)
     for name in SUBMIT_INPUTS:
         shutil.copy2(EXPERIMENTS / name, root / "experiments" / name)
-    (root / "experiments" / "kernels.txt").write_text("\n".join(ROSTER_KERNELS) + "\n")
+    (root / "experiments" / "kernels-scicomp40.txt").write_text("\n".join(ROSTER_KERNELS) + "\n")
     (root / "bin").mkdir()
     sbatch = root / "bin" / "sbatch"
     sbatch.write_text('#!/usr/bin/env bash\ntouch "${STUB_MARKERS}/sbatch-called"; exit 1\n')
@@ -87,7 +87,7 @@ def run_submit(root: pathlib.Path, **knobs: str) -> subprocess.CompletedProcess[
         "STUB_MARKERS": str(root),
         "SUBMIT": "0",
         "MODELS": "qwen38",
-        "KERNELS_FILE": "kernels.txt",
+        "KERNELS_FILE": "kernels-scicomp40.txt",
         "REPEAT": "1",
         "JUDGE_NODES": "1",
     }
@@ -143,7 +143,9 @@ def test_the_treated_problems_name_the_cpu_pages_and_no_device_tracer(tmp_path: 
 def test_a_second_models_complement_leaves_a_queued_arms_problems_untouched(tmp_path: pathlib.Path) -> None:
     """prepare_job.sh reads PROBLEMS_FILE when the job STARTS. A model-less problems name let a later
     submission for another model, with its own KERNELS_FILE, rewrite the kernel list of an arm that
-    was still queued."""
+    was still queued -- and (2026-09-19 fix) a KERNELS_FILE override now names its OWN env too, so
+    the complement gets ".env.scicomp-perf-playbook-oss120b-plain-owed-oss120b", never the canonical
+    ".env.scicomp-perf-playbook-oss120b-plain" a later full-roster submission of that model would read."""
     root = submit_tree(tmp_path)
     experiments = root / "experiments"
     (experiments / ".env.llrbase-oss120b-c").write_text((experiments / ".env.llrbase-qwen38-c").read_text())
@@ -151,10 +153,11 @@ def test_a_second_models_complement_leaves_a_queued_arms_problems_untouched(tmp_
     first = run_submit(root, ARMS="plain")
     second = run_submit(root, ARMS="plain", MODELS="oss120b", KERNELS_FILE="owed-oss120b.txt")
     assert (first.returncode, second.returncode) == (0, 0), first.stderr + second.stderr
-    for model, kernels in (("qwen38", sorted(ROSTER_KERNELS)), ("oss120b", ["dfa"])):
-        env = env_dict(experiments / f".env.scicomp-perf-playbook-{model}-plain")
+    for model, file_sfx, kernels in (("qwen38", "", sorted(ROSTER_KERNELS)), ("oss120b", "-owed-oss120b", ["dfa"])):
+        env = env_dict(experiments / f".env.scicomp-perf-playbook-{model}-plain{file_sfx}")
         rows = [json.loads(line) for line in (experiments / env["PROBLEMS_FILE"]).read_text().splitlines()]
         assert sorted(row["kernel"].rsplit("/", 1)[-1] for row in rows) == kernels, (model, env["PROBLEMS_FILE"])
+    assert not (experiments / ".env.scicomp-perf-playbook-oss120b-plain").exists()
 
 
 @pytest.mark.parametrize(

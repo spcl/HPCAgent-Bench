@@ -135,8 +135,10 @@ forms_missing() {
 
 make_arm_problems() {  # make_arm_problems <model> <slug> <packet spec>
     local model="$1" slug="$2" spec="${3:-}"
-    # per model: prepare_job.sh reads PROBLEMS_FILE when the job STARTS (see submit-scicomp-perf-playbook.sh)
-    local problems="problems-${EXPERIMENT}-${model}-${slug}${CLEAN_SUFFIX}.jsonl"
+    # per model AND per KERNELS_FILE: prepare_job.sh reads PROBLEMS_FILE when the job STARTS (see
+    # submit-scicomp-perf-playbook.sh), so an override left off this name let a later, differently
+    # scoped submission of the same model/slug overwrite a queued arm's kernel list.
+    local problems="problems-${EXPERIMENT}-${model}-${slug}${CLEAN_SUFFIX}$(kernels_file_suffix kernels-scicomp40.txt).jsonl"
     # --image cpu is make_problems.py's own default; naming it drops nothing new on the CPU control
     # and is what makes the GPU arm ask for the amd-imaged form of every kernel instead of the CPU one
     local image=cpu
@@ -162,7 +164,11 @@ submit_arm() {  # submit_arm <model> <kind: plain|cpf|cpfsrc> <deps or empty>
     local name="${kind}"
     [[ "${DEVICE}" == gpu ]] && name="${LANGUAGE}${OFFLOAD:+-${OFFLOAD}}-${kind}"
     local arm="${EXPERIMENT}-${model}-${name}${CLEAN_SUFFIX}"
-    local env=".env.${arm}$(budget_env_suffix)"
+    # file_sfx (budget + KERNELS_FILE) keeps a subset/scaled submission off the canonical env name,
+    # so it can never collide with a PENDING job of the same arm still reading its own copy.
+    local file_sfx; file_sfx=$(arm_file_suffix kernels-scicomp40.txt)
+    local env=".env.${arm}${file_sfx}"
+    refuse_if_queue_references "${PWD}/${env}" || exit 2
     # an arm env is pinned key by key, so a gate that returns midway would leave a file that looks
     # complete and silently lacks a key: build under a staging name and rename once every gate passes
     local staged="${env}.staging"

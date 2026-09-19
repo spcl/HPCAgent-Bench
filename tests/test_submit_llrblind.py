@@ -167,9 +167,11 @@ def test_the_default_run_is_unchanged_full_roster_no_score_tool(tmp_path: pathli
 
 
 def test_kernels_file_stages_only_the_owed_kernels_and_resizes_nodes(tmp_path: pathlib.Path) -> None:
-    """A 2-kernel KERNELS_FILE writes a separate -owed.jsonl (the full file untouched), points
-    PROBLEMS_FILE at it and sizes AGENT_NODES from its count, not the roster's; arm/EXPERIMENT stay
-    unchanged, so coverage keeps pooling under the same arm name."""
+    """A 2-kernel KERNELS_FILE writes a separate -owed.jsonl (the full file untouched) and its OWN
+    .env.llrblind-qwen38-c-owed (never the canonical .env, 2026-09-19 fix: a PENDING job of the
+    canonical full-roster arm must not have its kernel list or its env rewritten from under it),
+    points PROBLEMS_FILE at it and sizes AGENT_NODES from its count, not the roster's; CAMPAIGN_ARM/
+    EXPERIMENT stay unchanged, so coverage keeps pooling under the same arm name."""
     root = submit_tree(tmp_path)
     (root / "experiments" / "owed.txt").write_text("k1\nk3  # rerun\n")
     result = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain", KERNELS_FILE="owed.txt")
@@ -179,11 +181,12 @@ def test_kernels_file_stages_only_the_owed_kernels_and_resizes_nodes(tmp_path: p
     assert sorted(row["kernel"] for row in rows) == ["loop_level_reasoning/k1/k1", "loop_level_reasoning/k3/k3"]
     assert sorted(row["id"] for row in rows) == [1, 3]
     assert (root / "experiments" / "problems-llrblind-c.jsonl").read_text() == problems_text(PROBLEM_KERNELS)
-    env = env_dict(root / "experiments" / ".env.llrblind-qwen38-c")
+    env = env_dict(root / "experiments" / ".env.llrblind-qwen38-c-owed")
     assert env["PROBLEMS_FILE"] == "problems-llrblind-qwen38-c-owed.jsonl"
     assert env["AGENT_NODES"] == "1"
     assert env["CAMPAIGN_ARM"] == "llrblind-qwen38-c"
     assert env["HPCAGENT_BENCH_RECORD_EXPERIMENT"] == "llr-focus40"
+    assert not (root / "experiments" / ".env.llrblind-qwen38-c").exists()
     assert not (root / "sbatch-called").exists()
 
 
@@ -199,8 +202,11 @@ def test_a_second_models_complement_leaves_a_queued_arms_owed_kernels_untouched(
     first = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain", KERNELS_FILE="owed-qwen38.txt")
     second = run_submit(root, MODELS="oss120b", LANGS="c", SKILLS="plain", KERNELS_FILE="owed-oss120b.txt")
     assert (first.returncode, second.returncode) == (0, 0), first.stderr + second.stderr
-    for model, kernels in (("qwen38", ["k1", "k3"]), ("oss120b", ["k2"])):
-        env = env_dict(experiments / f".env.llrblind-{model}-c")
+    for model, kernels_file, kernels in (
+        ("qwen38", "owed-qwen38", ["k1", "k3"]),
+        ("oss120b", "owed-oss120b", ["k2"]),
+    ):
+        env = env_dict(experiments / f".env.llrblind-{model}-c-{kernels_file}")
         rows = [json.loads(line) for line in (experiments / env["PROBLEMS_FILE"]).read_text().splitlines()]
         assert sorted(row["kernel"].rsplit("/", 1)[-1] for row in rows) == kernels, (model, env["PROBLEMS_FILE"])
 

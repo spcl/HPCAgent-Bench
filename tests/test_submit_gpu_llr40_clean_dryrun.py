@@ -134,8 +134,14 @@ def run_submit(root: pathlib.Path, **knobs: str) -> subprocess.CompletedProcess[
     )
 
 
+#: Every run here feeds the roster through KERNELS_FILE="kernels.txt" (real roster_for(TAG) cannot
+#: be redirected into a temp tree), so every env name carries submit_common.sh's
+#: kernels_file_suffix("kernels.txt" -> "-kernels") the same way a real owed/subset rerun would.
+FILE_SFX = "-kernels"
+
+
 def arm_env(experiments: pathlib.Path, arm: str) -> pathlib.Path:
-    return experiments / f".env.gpu-llr-focus40-qwen38-{arm}"
+    return experiments / f".env.gpu-llr-focus40-qwen38-{arm}{FILE_SFX}"
 
 
 @pytest.fixture(name="clean", scope="module")
@@ -210,7 +216,7 @@ def test_a_deadline_the_episode_does_not_fit_in_shortens_the_episode(tmp_path: p
     )
     assert result.returncode == 0, result.stderr
     walltime = next(iter(prepared(result).values()))
-    env = env_dict(root / "experiments" / ".env.gpu-llr-focus40-qwen38-hip")
+    env = env_dict(arm_env(root / "experiments", "hip"))
     agent = int(env["AGENT_TIMEOUT_SECONDS"])
     assert agent == seconds_of(walltime) - STAGING_SECONDS < CONFIGURED_AGENT_SECONDS
 

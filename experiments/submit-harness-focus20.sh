@@ -15,9 +15,10 @@
 set -euo pipefail
 ulimit -c 0
 cd "$(dirname "$0")"
-# The Slurm account for every sbatch below (scripts/cscs/account_env.sh; this script does not source
-# submit_common.sh, which is where the family submitters get it).
-. "${HPCAGENT_BENCH_REPO:-$(dirname -- "${BASH_SOURCE[0]}")/..}/scripts/cscs/account_env.sh" || { echo "no Slurm account resolved; see scripts/cscs/account_env.sh" >&2; exit 2; }
+# submit_common.sh resolves the Slurm account (scripts/cscs/account_env.sh) and gives this
+# launcher kernels_file_suffix/subset_suffix/refuse_if_queue_references, the same file/queue
+# isolation every other family submitter uses for a KERNELS/KERNELS_FILE subset.
+. ./submit_common.sh
 PY="${PY:-${SCRATCH:?set SCRATCH}/venv-hpcagent-bench-314/bin/python}"
 # this checkout, so a worktree generates from its own tree
 HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-$(cd .. && pwd)}"
@@ -149,6 +150,10 @@ for spec in ${HARNESSES}; do
     arm="${EXPERIMENT}-${MODEL}-${spec/+/-}"
     [[ "${CLEAN}" == 1 ]] && arm="${arm}-clean"
     env=".env.${arm}"
+    # the EXPERIMENT/RECORD_EXPERIMENT guard above already forces a KERNELS/KERNELS_FILE wave onto
+    # its own name; this catches the residual case (the SAME EXPERIMENT reused for two differently
+    # scoped waves) that guard does not.
+    refuse_if_queue_references "${PWD}/${env}" "${PWD}/${PROBLEMS}" || exit 2
     # built under a staging name: a gate that bails midway must not leave a complete-looking env
     staged="${env}.staging"
     sed -e "s|^PROBLEMS_FILE=.*|PROBLEMS_FILE=${PROBLEMS}|" \

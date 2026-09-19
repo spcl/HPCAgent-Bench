@@ -172,8 +172,14 @@ def wave_fixture(tmp_path_factory: pytest.TempPathFactory) -> Callable[[str], La
     return for_target
 
 
+#: launch() always feeds the roster through KERNELS_FILE="kernels.txt" (roster_for(TAG) cannot be
+#: redirected into a temp tree), so every env/problems name here carries submit_common.sh's
+#: kernels_file_suffix("kernels.txt" -> "-kernels") the same way a real owed/subset rerun would.
+FILE_SFX = "-kernels"
+
+
 def arm_env(experiments: pathlib.Path, arm: str) -> pathlib.Path:
-    return experiments / f".env.cpf-llr-focus40-qwen38-{arm}"
+    return experiments / f".env.cpf-llr-focus40-qwen38-{arm}{FILE_SFX}"
 
 
 @pytest.mark.parametrize(
@@ -239,7 +245,9 @@ def test_budget_scale_doubles_the_agent_timeout_and_tokens(tmp_path: pathlib.Pat
     below)."""
     built = launch(tmp_path, "c:plain", ROSTER_KERNELS, "cpu", extra={"BUDGET_SCALE": "2"})
     assert built.result.returncode == 0, built.result.stderr
-    env = env_dict(built.experiments / ".env.cpf-llr-focus40-qwen38-c-budget2x")
+    # arm_file_suffix order: budget_env_suffix then kernels_file_suffix (FILE_SFX, launch()'s own
+    # KERNELS_FILE="kernels.txt") -- "-budget2x-kernels", not just "-budget2x".
+    env = env_dict(built.experiments / f".env.cpf-llr-focus40-qwen38-c-budget2x{FILE_SFX}")
     assert (env["AGENT_TIMEOUT_SECONDS"], env["AGENT_MAX_TOKENS"]) == ("28800", "24000000")
 
 
@@ -257,7 +265,7 @@ def test_scaled_submit_leaves_canonical_env_byte_identical(tmp_path: pathlib.Pat
     assert scaled.result.returncode == 0, scaled.result.stderr
 
     assert canonical.read_bytes() == before
-    scaled_env = env_dict(normal.experiments / ".env.cpf-llr-focus40-qwen38-c-budget2x")
+    scaled_env = env_dict(normal.experiments / f".env.cpf-llr-focus40-qwen38-c-budget2x{FILE_SFX}")
     assert (scaled_env["AGENT_TIMEOUT_SECONDS"], scaled_env["AGENT_MAX_TOKENS"]) == ("28800", "24000000")
 
 
@@ -276,7 +284,8 @@ def test_a_view_missing_a_kernel_refuses_the_arm_by_name_and_leaves_no_env(
     assert f"  {absent}:" in built.result.stderr
     assert f"  {served}:" not in built.result.stderr
     assert not arm_env(built.experiments, arm).exists()
-    assert not arm_env(built.experiments, f"{arm}.staging").exists()
+    # the FILE_SFX comes before .staging in the real name (env="....${FILE_SFX}", staged="${env}.staging")
+    assert not arm_env(built.experiments, arm).with_name(arm_env(built.experiments, arm).name + ".staging").exists()
     assert not (tmp_path / "sbatch-called").exists()
 
 
@@ -285,7 +294,7 @@ def test_the_perf_arm_stages_exactly_its_packet_pages_and_records_its_packet(wav
     would make base vs perf-playbook measure a different treatment than the one the row records."""
     built = wave("cpu")
     assert built.result.returncode == 0, built.result.stderr
-    problems = built.experiments / "problems-cpf-llr-focus40-qwen38-c-perf-playbook-cpu.jsonl"
+    problems = built.experiments / f"problems-cpf-llr-focus40-qwen38-c-perf-playbook-cpu{FILE_SFX}.jsonl"
     staged = set(re.findall(r"/shared/skills/([A-Za-z0-9._-]+)\.md", problems.read_text()))
     assert staged == set(packets.resolve("perf-playbook-cpu", "c").skills)
     recorded = env_dict(arm_env(built.experiments, "c-perf-playbook-cpu"))["HPCAGENT_BENCH_RECORD_PACKET"]
@@ -302,7 +311,7 @@ def test_the_cpfsrc_arm_stages_exactly_its_own_page_and_the_pages_trigger_is_ind
 
     built = wave("cpu")
     assert built.result.returncode == 0, built.result.stderr
-    problems = built.experiments / "problems-cpf-llr-focus40-qwen38-c-cpfsrc.jsonl"
+    problems = built.experiments / f"problems-cpf-llr-focus40-qwen38-c-cpfsrc{FILE_SFX}.jsonl"
     text = problems.read_text()
     staged = set(re.findall(r"/shared/skills/([A-Za-z0-9._-]+)\.md", text))
     assert staged == set(packets.resolve("cpfsrc", "c", fill=False).skills) == {"cpfsrc"}

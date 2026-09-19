@@ -133,8 +133,10 @@ def test_the_default_run_generates_the_full_roster_untouched(tmp_path: pathlib.P
 
 
 def test_kernels_file_narrows_the_roster_to_its_own_problems_file(tmp_path: pathlib.Path) -> None:
-    """A 2-kernel KERNELS_FILE writes problems-git-scicomp-owed.jsonl (never the default name), both
-    arms of the model point PROBLEMS_FILE at it, and the default file is never generated."""
+    """A 2-kernel KERNELS_FILE writes problems-git-scicomp-owed.jsonl (never the default name) and
+    .env.git-scicomp-qwen38-kernel-owed (never the canonical .env name either -- a PENDING job of
+    the canonical full-roster arm must not have its kernel list or its env rewritten from under it,
+    2026-09-19 fix), and the default file/env are never generated."""
     root = submit_tree(tmp_path)
     (root / "experiments" / "owed.txt").write_text("kmp\ndfa  # rerun\n")
     result = run_submit(root, MODELS="qwen38", LAYOUTS="kernel", REPEAT="1", KERNELS_FILE="owed.txt")
@@ -142,9 +144,10 @@ def test_kernels_file_narrows_the_roster_to_its_own_problems_file(tmp_path: path
     owed = root / "experiments" / "problems-git-scicomp-owed.jsonl"
     assert kernel_stems(owed) == ["dfa", "kmp"]
     assert not (root / "experiments" / "problems-git-scicomp.jsonl").exists()
-    env = env_dict(root / "experiments" / ".env.git-scicomp-qwen38-kernel")
+    env = env_dict(root / "experiments" / ".env.git-scicomp-qwen38-kernel-owed")
     assert env["PROBLEMS_FILE"] == "problems-git-scicomp-owed.jsonl"
-    assert not (root / "experiments" / ".env.git-scicomp-qwen38-repo").exists()
+    assert not (root / "experiments" / ".env.git-scicomp-qwen38-kernel").exists()
+    assert not (root / "experiments" / ".env.git-scicomp-qwen38-repo-owed").exists()
     assert not (root / "sbatch-called").exists()
 
 
