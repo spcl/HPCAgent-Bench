@@ -53,6 +53,14 @@ def board() -> types.ModuleType:
             "scicomp-perf-playbook-qwen38-perf-playbook-cpu",
             ("scicomp-perf-playbook", "qwen38", "perf-playbook-cpu"),
         ),
+        # scicomp-dc-fortran-<model>-plain: EXPERIMENT is overridden to put the language BEFORE the
+        # model, unlike a GPU arm's <model>-<lang>-plain -- split_arm must still find the model and
+        # keep "fortran-" on the variant so a Fortran baseline row reads apart from the C one.
+        ("scicomp-dc-fortran-oss120b-plain", ("scicomp-dc", "oss120b", "fortran-plain")),
+        ("scicomp-dc-fortran-qwen38-plain", ("scicomp-dc", "qwen38", "fortran-plain")),
+        # scicomp-dc-gpu-<model>-<lang>-plain: same shape as scicomp-perf-playbook-gpu's arms.
+        ("scicomp-dc-gpu-oss120b-hip-plain", ("scicomp-dc-gpu", "oss120b", "hip-plain")),
+        ("scicomp-dc-gpu-qwen38-triton-plain", ("scicomp-dc-gpu", "qwen38", "triton-plain")),
     ],
 )
 def test_an_arm_name_splits_into_its_campaign_model_and_variant(
@@ -86,6 +94,30 @@ def test_scicomp_perf_playbook_gpu_wins_over_its_cpu_prefix(board: types.ModuleT
         "qwen38",
         "hip-perf-playbook-amd",
     )
+
+
+def test_scicomp_dc_gpu_wins_over_its_cpu_prefix(board: types.ModuleType) -> None:
+    """Same trap as scicomp-perf-playbook-gpu: without its own CAMPAIGNS key, a
+    scicomp-dc-gpu-<model>-<lang>-plain arm falls through to "scicomp-dc" (CPU) and its "rest" starts
+    "gpu-<model>-...", so the model never matches and both device and model come back wrong."""
+    assert board.campaign_of("scicomp-dc-gpu-oss120b-hip-plain") == "scicomp-dc-gpu"
+    assert board.CAMPAIGNS["scicomp-dc-gpu"].device == "GPU"
+    row_campaign, model, variant = board.split_arm("scicomp-dc-gpu-oss120b-hip-plain", MODELS)
+    assert (row_campaign, model, variant) == ("scicomp-dc-gpu", "oss120b", "hip-plain")
+
+
+def test_scicomp_baseline_and_perf_playbook_are_one_board_experiment(board: types.ModuleType) -> None:
+    """User 2026-09-19: scicomp-dc (the plain baseline), scicomp-dc-gpu, scicomp-perf-playbook and
+    scicomp-perf-playbook-gpu report under one display name, split into a CPU and a GPU section only
+    by device -- the board groups rows by (experiment, device)."""
+    cpu_keys = ("scicomp-dc", "scicomp-perf-playbook")
+    gpu_keys = ("scicomp-dc-gpu", "scicomp-perf-playbook-gpu")
+    for key in cpu_keys + gpu_keys:
+        assert board.CAMPAIGNS[key].experiment == "scicomp-focus40"
+    assert {board.CAMPAIGNS[key].name for key in cpu_keys} == {"Scientific Computing Focus@40"}
+    assert {board.CAMPAIGNS[key].name for key in gpu_keys} == {"Scientific Computing Focus@40, GPU"}
+    assert all(board.CAMPAIGNS[key].device == "CPU" for key in cpu_keys)
+    assert all(board.CAMPAIGNS[key].device == "GPU" for key in gpu_keys)
 
 
 def test_a_job_outside_every_campaign_has_no_campaign(board: types.ModuleType) -> None:
