@@ -71,6 +71,13 @@ def nvidia_missing() -> str:
     return device_and_tools_missing(gpu_profiling.NVIDIA_DEVICE, ("nsys", "ncu"))
 
 
+def nvcc_missing() -> str:
+    """ "" when nvcc is on PATH, else what is missing. Compile-only checks need the CUDA
+    toolchain, not a device -- keep this separate from the "nvidia" group, which also demands
+    ``/dev/nvidiactl``, ``nsys`` and ``ncu`` a syntax-only test does not use."""
+    return "" if shutil.which("nvcc") else "nvcc (apt nvidia-cuda-toolkit) -- compile-only, no device needed"
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class HardwareGroup:
     """A marker for tests that need real hardware: what they need, and a probe naming what is missing."""
@@ -90,6 +97,7 @@ HARDWARE_GROUPS: Mapping[str, HardwareGroup] = MappingProxyType(
         "perf": HardwareGroup("perf sampling (perf on PATH, perf_event_paranoid <= 2)", perf_missing),
         "amd": HardwareGroup("an AMD GPU (/dev/kfd) with rocminfo and rocprofv3", amd_missing),
         "nvidia": HardwareGroup("an NVIDIA GPU (/dev/nvidiactl) with nsys", nvidia_missing),
+        "nvcc": HardwareGroup("the nvcc compiler on PATH -- compile-only, no device", nvcc_missing),
     }
 )
 

@@ -1054,7 +1054,7 @@ esac
 #: What an agent step executes from experiments/: its entry script, the sampler, the driver and the
 #: sibling modules the driver imports.
 AGENT_LAUNCH_FILES=(run_cluster.sh node_monitor.sh agent_driver.py harnesses.py seal_worker.py effort.py token_cost.py
-    promote_unsubmitted.py)
+    promote_unsubmitted.py stream_idle_timeout.py)
 
 # agent_ro_binds <role>: the read-only binds an agent step runs from, as src:dst -- the checkout's
 # tools at AGENT_PAYLOAD_MOUNT and the job's launch directory at its own path. Nothing for other roles.
