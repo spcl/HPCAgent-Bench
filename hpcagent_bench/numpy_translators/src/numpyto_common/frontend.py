@@ -1178,6 +1178,8 @@ def build_kernel_ir(
     # ``conv_stride``, ``*_groups``) live here, not in the presets. Evidence for
     # :func:`symbol_sign_from_bindings`, and for the promoted names the emitter declares.
     _manifest_scalars = as_block(init_block.get("scalars"))
+    # Every value each config knob takes; ``parameters`` holds only one representative.
+    _config_values = as_block(info.get("config_values"))
 
     src = numpy_py.read_text()
     tree = ast.parse(src, filename=str(numpy_py))
@@ -1592,7 +1594,7 @@ def build_kernel_ir(
                     # routed to scalars above), so a declared non-integer dtype describes
                     # something else and must not narrow the binding's int64.
                     dtype=declared_dt if declared_dt and dtypes.is_integer(declared_dt) else "int64",
-                    assumption=symbol_sign_from_bindings(arg, parameters, _manifest_scalars),
+                    assumption=symbol_sign_from_bindings(arg, parameters, _manifest_scalars, _config_values),
                 )
             )
         elif arg in _bool_preset_names:
@@ -1689,7 +1691,9 @@ def build_kernel_ir(
     # instead of re-deriving it there, where the manifest is out of scope.
     bound = set(_manifest_scalars) | {n for preset in parameters.values() for n in as_block(preset)}
     kir.symbol_signs = {
-        n: sign for n in sorted(bound) if (sign := symbol_sign_from_bindings(n, parameters, _manifest_scalars))
+        n: sign
+        for n in sorted(bound)
+        if (sign := symbol_sign_from_bindings(n, parameters, _manifest_scalars, _config_values))
     }
     for helper in kir.helpers:
         helper.symbol_signs = kir.symbol_signs
@@ -8142,7 +8146,10 @@ _PRESET_FALLBACK = "S"
 
 
 def symbol_sign_from_bindings(
-    name: str, parameters: Mapping[str, object], scalars: Optional[Mapping[str, object]] = None
+    name: str,
+    parameters: Mapping[str, object],
+    scalars: Optional[Mapping[str, object]] = None,
+    config_values: Optional[Mapping[str, object]] = None,
 ) -> str:
     """What the manifest's declared values prove about ``name``'s sign.
 
@@ -8162,6 +8169,9 @@ def symbol_sign_from_bindings(
     values: List[object] = [as_block(preset)[name] for preset in parameters.values() if name in as_block(preset)]
     if scalars and name in scalars:
         values.append(scalars[name])
+    # A config knob's presets hold one representative; every value its domain takes is evidence too.
+    if config_values and name in config_values:
+        values.extend(as_list(config_values[name]))
     ints = [v for v in values if isinstance(v, int) and not isinstance(v, bool)]
     if not values or len(ints) != len(values):
         return ""

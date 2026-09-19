@@ -204,6 +204,22 @@ def test_symbol_sign_only_claims_what_the_presets_prove() -> None:
     assert symbol_sign_from_bindings("P", presets, {"P": 4}) == "nonnegative"
 
 
+def test_a_config_knob_sign_holds_for_every_value_its_domain_takes() -> None:
+    """The presets carry one representative per config knob; the sign must hold for all of them."""
+    presets = {"S": {"K": 1}, "L": {"K": 1}}
+    assert symbol_sign_from_bindings("K", presets) == "positive"
+    assert symbol_sign_from_bindings("K", presets, None, {"K": [1, -1]}) == ""
+    assert symbol_sign_from_bindings("K", presets, None, {"K": [1, 0]}) == "nonnegative"
+    assert symbol_sign_from_bindings("K", presets, None, {"K": [1, 4]}) == "positive"
+
+
+def test_a_branch_knob_with_a_negative_value_is_declared_unsigned() -> None:
+    """fuse_move_ifs: ``config.K.domain: [1, -1]`` emitted ``K`` positive, so canonicalize folded
+    ``if K > 0`` to true and the drop-in wrote ``b`` at the hidden ``K=-1`` case."""
+    _, src = _emit("fuse_move_ifs")
+    assert "K = dc.symbol('K', dtype=dc.int64)" in src, src
+
+
 def test_promoted_shape_symbol_is_positive_without_a_manifest() -> None:
     """A symbol the lowering promoted out of a body shape never passed the manifest, so only the
     allocation rule reaches it -- :func:`stamp_symbol_assumptions` is what stops it emitting bare."""
