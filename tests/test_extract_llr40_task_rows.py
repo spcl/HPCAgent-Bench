@@ -606,3 +606,18 @@ def test_main_reports_every_missing_piece_and_keeps_the_reduced_workers_row(
     assert sorted(row["run_id"] for row in task_rows) == ["arm-a.n0.p0.w0", "arm-a.n0.p1.w1"]
     assert {row["tokens"] for row in task_rows} == {"5000"}
     assert "task rows: 2 worker dir(s): prompt.txt/mcp.json gone" in capsys.readouterr().err
+
+
+def test_a_rerun_waves_slot_numbered_run_id_is_found_by_worker_slot_and_kernel(tmp_path: pathlib.Path) -> None:
+    """A rerun wave numbers the run id's problem by slot (``p4``) and the directory by the full
+    problems file (``problem-10-worker-4``): the judge row of the same node, worker slot and kernel
+    names the worker, not the directory's problem index."""
+    reduced_worker(tmp_path, node=0, problem=10).rename(tmp_path / "agents" / "node-0" / "problem-10-worker-4")
+    rows = [{"run_root": "r", "job": "j", "run_id": "arm-a.n0.p4.w4", "language": "c", "benchmark": KERNEL}]
+    judge = extract_llr40.judge_workers(rows)[("r", "j")]
+
+    task = extract_llr40.task_rows_for_job(
+        tmp_path, "r", "j", "", frozenset(), extract_llr40.JobIdentity({}, {}), None, judge
+    )  # fmt: skip
+
+    assert [(row["run_id"], row["benchmark"]) for row in task] == [("arm-a.n0.p4.w4", KERNEL)]

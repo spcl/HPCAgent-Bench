@@ -224,12 +224,15 @@ class JobIdentity(NamedTuple):
 
 
 class JudgeWorkers(NamedTuple):
-    """A job's judge-side view of its workers: ``(node, problem, worker) -> run_id`` and ``run_id ->
-    language``, read off its judge rows. It names a worker whose ``mcp.json``/``prompt.txt`` the run
-    directory no longer holds (the job-dir reducer keeps ``tokens.json`` only)."""
+    """A job's judge-side view of its workers, read off its judge rows: ``(node, problem, worker) ->
+    run_id``, ``(node, worker, kernel) -> run_id`` and ``run_id -> language``. It names a worker whose
+    ``mcp.json``/``prompt.txt`` the run directory no longer holds (the job-dir reducer keeps
+    ``tokens.json`` only). The kernel key exists because a rerun wave's run id numbers its problem
+    by slot (``p4``) while the directory numbers it in the full problems file (``problem-10``)."""
 
     run_ids: dict[tuple[str, str, str], str]
     languages: dict[str, str]
+    by_kernel: dict[tuple[str, str, str], str]
 
 
 class WorkerIdentity(NamedTuple):
@@ -466,14 +469,14 @@ def frozen_rows(
     run_globs: Iterable[str],
     arm_prefix: str,
     excluded: frozenset[str],
-    live_tasks: frozenset[tuple[str, str, str]] = frozenset(),
+    live_tasks: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     """The frozen observations (``experiments/frozen_observations.py``) of the jobs the ``run_globs``
     cover, where the live run directory no longer holds them. A job whose directory is gone
     contributes every frozen row. A job still on disk keeps its live judge rows (the DB wins: a row
     deleted from it on purpose stays deleted) and takes only the frozen ``task`` rows of workers whose
-    ``tokens.json`` a reducer has since removed (``live_tasks``: the live ``(run_root, job, run_id)``
-    task rows). A run root is matched by name against each glob's last component."""
+    ``tokens.json`` a reducer has since removed (``live_tasks``: the worker directories, a task row's
+    ``db``, of the live rows to keep). A run root is matched by name against each glob's last component."""
     frozen = experiments_module("frozen_observations")
     if frozen_dir is None:
         return []
@@ -487,17 +490,12 @@ def frozen_rows(
             arm = row.get("arm") or ""
             if not arm.startswith(arm_prefix) or not excluded.isdisjoint(arm.split("-")):
                 continue
-            if live and (row["record"] != "task" or (run_root, job, row["run_id"]) in live_tasks):
+            if live and (row["record"] != "task" or row.get("db", "") in live_tasks):
                 continue
             kept: dict[str, Any] = {field: row.get(field, "") for field in OBSERVATION_FIELDS}
             kept[frozen.COLUMN] = "1"
             out.append(kept)
     return out
-
-
-def task_key(row: dict[str, Any]) -> tuple[str, str, str]:
-    """``(run_root, job, run_id)``: the one worker a task row is about."""
-    return str(row["run_root"]), str(row["job"]), str(row["run_id"])
 
 
 def token_cost_module() -> ModuleType:
@@ -550,26 +548,31 @@ def judge_workers(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, str], Judge
         indices = agent_indices(run_id)
         if arm_of(run_id) in ("", ADHOC_ARM) or not all(indices):
             continue
-        job = out.setdefault((str(row["run_root"]), str(row["job"])), JudgeWorkers({}, {}))
+        job = out.setdefault((str(row["run_root"]), str(row["job"])), JudgeWorkers({}, {}, {}))
         job.run_ids.setdefault(indices, run_id)
+        if row.get("benchmark"):
+            job.by_kernel.setdefault((indices[0], indices[2], str(row["benchmark"])), run_id)
         if row.get("language"):
             job.languages.setdefault(run_id, str(row["language"]))
     return out
 
 
-def fallback_run_id(worker_dir: pathlib.Path, judge: JudgeWorkers) -> str:
+def fallback_run_id(worker_dir: pathlib.Path, judge: JudgeWorkers, kernel: str) -> str:
     """The run id of a worker directory that lost its ``mcp.json``: the judge's own run id for the
-    same ``(node, problem, worker)``, else -- when every judge row of the job names ONE arm -- that
-    arm's run id for these indices (the launcher's ``<arm>.n<N>.p<P>.w<W>``); "" when neither holds."""
+    same node, worker slot and kernel, else for the same ``(node, problem, worker)``, else -- when
+    every judge row of the job names ONE arm -- that arm's run id for the directory's indices (the
+    launcher's ``<arm>.n<N>.p<P>.w<W>``); "" when none holds."""
     indices = dir_indices(worker_dir)
     if indices is None:
         return ""
+    node, problem, worker = indices
+    if (node, worker, kernel) in judge.by_kernel:
+        return judge.by_kernel[(node, worker, kernel)]
     if indices in judge.run_ids:
         return judge.run_ids[indices]
     arms = {arm_of(run_id) for run_id in judge.run_ids.values()}
     if len(arms) != 1:
         return ""
-    node, problem, worker = indices
     return f"{next(iter(arms))}.n{node}.p{problem}.w{worker}"
 
 
@@ -590,15 +593,16 @@ def worker_identity(
     counted in ``missing`` under the piece that was absent, never silently -- when neither names it."""
     if names_its_run(worker_dir):
         text = (worker_dir / "prompt.txt").read_text(encoding="utf-8", errors="replace")
-        run_id = mcp_run_id(worker_dir / "mcp.json") or fallback_run_id(worker_dir, judge)
+        benchmark = prompt_benchmark(text)
+        run_id = mcp_run_id(worker_dir / "mcp.json") or fallback_run_id(worker_dir, judge, benchmark)
         ts_ms = int((worker_dir / "prompt.txt").stat().st_mtime * 1000)
-        return WorkerIdentity(run_id, prompt_benchmark(text), prompt_language(text), ts_ms)
+        return WorkerIdentity(run_id, benchmark, prompt_language(text), ts_ms)
     record = read_record(worker_dir)
     if record is None:
         missing["worker dir with no prompt.txt/mcp.json and no readable tokens.json (no row)"] += 1
         return None
-    run_id = fallback_run_id(worker_dir, judge)
     benchmark = str(record.get("kernel") or "").rsplit("/", 1)[-1]
+    run_id = fallback_run_id(worker_dir, judge, benchmark)
     if not run_id or not benchmark:
         missing["prompt.txt/mcp.json gone and no judge run id or kernel for the worker (no row)"] += 1
         return None
@@ -721,7 +725,7 @@ def task_rows_for_job(
     rows: list[dict[str, Any]] = []
     tally = collections.Counter[str]() if missing is None else missing
     for worker_dir in agent_dirs(job_dir):
-        who = worker_identity(worker_dir, judge or JudgeWorkers({}, {}), tally)
+        who = worker_identity(worker_dir, judge or JudgeWorkers({}, {}, {}), tally)
         if who is None:
             continue
         run_id = who.run_id
@@ -1353,7 +1357,7 @@ def main(argv: list[str]) -> int:
     missing: collections.Counter[str] = collections.Counter()
     for (run_root, job), job_dir in sorted(job_dirs.items()):
         identity = identity_by_job.get((run_root, job), JobIdentity({}, {}))
-        judge = judged.get((run_root, job), JudgeWorkers({}, {}))
+        judge = judged.get((run_root, job), JudgeWorkers({}, {}, {}))
         task_rows.extend(
             task_rows_for_job(job_dir, run_root, job, args.arm_prefix, excluded, identity, totals, judge, missing)
         )
@@ -1367,11 +1371,11 @@ def main(argv: list[str]) -> int:
     # A worker dir cut to tokens.json AFTER the frozen snapshot yields a lower-fidelity row (identity and
     # start read from tokens.json); the frozen row of the same worker, taken while prompt.txt was there,
     # replaces it.
-    degraded = {task_key(row) for row in task_rows if not names_its_run(pathlib.Path(str(row["db"])))}
-    live_tasks = frozenset(task_key(row) for row in task_rows) - degraded
+    degraded = {str(row["db"]) for row in task_rows if not names_its_run(pathlib.Path(str(row["db"])))}
+    live_tasks = frozenset(str(row["db"]) for row in task_rows) - degraded
     lost = frozen_rows(frozen_dir, args.runs, args.arm_prefix, excluded, live_tasks)
-    replaced = {task_key(row) for row in lost if row["record"] == "task"} & degraded
-    observations = [row for row in observations if row["record"] != "task" or task_key(row) not in replaced]
+    replaced = {str(row["db"]) for row in lost if row["record"] == "task"} & degraded
+    observations = [row for row in observations if row["record"] != "task" or str(row["db"]) not in replaced]
     lost_jobs = {(str(row["run_root"]), str(row["job"])) for row in lost if row["record"] != "task"}
     lost_tasks = sum(1 for row in lost if row["record"] == "task")
     print(
