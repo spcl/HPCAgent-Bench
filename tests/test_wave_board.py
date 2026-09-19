@@ -439,8 +439,13 @@ def test_a_canon_columns_done_and_failed_kernels_read_the_latest_dir(
 
 
 def test_canon_dirs_finds_only_this_tags_directories_oldest_first(
-    board: types.ModuleType, tmp_path: pathlib.Path
+    board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # canon_dirs also globs $HPCAGENT_BENCH_RUNS_ROOT/canon/<stem>-* -- a real value inherited from
+    # the surrounding shell (every campaign session sources scripts/cache_env.sh, which exports it
+    # off the REAL $SCRATCH) would fold this run's actual accumulated canon dirs in beside tmp_path's
+    # two synthetic ones, and the exact-list assert below would see more than it wrote.
+    monkeypatch.delenv("HPCAGENT_BENCH_RUNS_ROOT", raising=False)
     older = tmp_path / "canon-llr-focus40-20260915"
     newer = tmp_path / "canon-llr-focus40-20260915-b"
     unrelated = tmp_path / "canon-scicomp40-20260915"
@@ -459,6 +464,9 @@ def test_canon_rows_join_the_arms_list_as_their_own_experiment_group(
     """The board shows compiler baselines the same way it shows every other experiment: strip, rows,
     jobs, grouped by ``experiment`` -- so a canon row must carry that same shape. canon_rows is fixed
     to CANON_TAGS now, not CAMPAIGNS: the three canon experiments are their own thing."""
+    # See test_canon_dirs_finds_only_this_tags_directories_oldest_first: an inherited
+    # HPCAGENT_BENCH_RUNS_ROOT would fold in the REAL scratch's accumulated canon rows too.
+    monkeypatch.delenv("HPCAGENT_BENCH_RUNS_ROOT", raising=False)
     root = tmp_path / "canon-llr-focus40-20260915"
     canon_csv(root, "numba", 0, [("a", "ok")])
     canon_csv(root, "dace_gpu", 0, [("a", "crash")])
