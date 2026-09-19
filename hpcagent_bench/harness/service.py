@@ -74,6 +74,7 @@ import ast
 import collections
 import contextlib
 import dataclasses
+import faulthandler
 import heapq
 import itertools
 import json
@@ -1485,6 +1486,17 @@ def make_server(
     return ThreadingHTTPServer((host, port), handler)
 
 
+def enable_crash_traces() -> None:
+    """Print a Python traceback when the judge process itself dies of a fatal signal.
+
+    The upstream is a long-lived process that runs numpy and BLAS in its own address space (the
+    baselines, the references, the comparison). When one of those takes it down, the process
+    vanishes and the rank's log ends mid-line: 641799 lost two ranks that way and neither left a
+    word behind. faulthandler writes to the log the launcher already redirects, and costs nothing
+    until the signal arrives."""
+    faulthandler.enable(file=sys.stderr, all_threads=True)
+
+
 def serve(
     host: str = "0.0.0.0",
     port: int = 8800,
@@ -1501,6 +1513,7 @@ def serve(
     grade that fails somewhere in the middle of a sweep. Zero (the default) allocates on demand,
     which is what a local judge wants.
     """
+    enable_crash_traces()
     # Threaded server: forking a native child from a thread can deadlock, so pin the scorer's
     # isolated calls to forkserver (forks from a clean single-threaded helper).
     config.set_override("runtime.mp_context", "forkserver")

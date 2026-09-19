@@ -672,7 +672,16 @@ run_judge_node() {
     if [[ -n "${JUDGE_INPUT_MODE:-}" ]]; then
         serve+=(--input-mode "${JUDGE_INPUT_MODE}")
     fi
-    "${serve[@]}" >"${log_dir}/upstream-${judge_rank}.log" 2>&1 &
+    # Through judge_upstream.py, never bare: a bare child that dies takes the rank with it for the
+    # rest of the run, because the router in front of it keeps answering /health and turns every
+    # grade into a 502. 641799 lost rank 4 that way at 10:44 -- the node's memory hit its ceiling,
+    # the OOM killer took the upstream, and that rank refused every call for the next 14 hours.
+    # The supervisor restarts it and still ends non-zero on a crash loop, which the readiness loop
+    # below reads as "died during startup" exactly as it did before.
+    python3 "${SCRIPT_DIR}/judge_upstream.py" --label "rank=${judge_rank}" \
+        --min-uptime-seconds "${JUDGE_UPSTREAM_MIN_UPTIME_SECONDS:-60}" \
+        --max-quick-restarts "${JUDGE_UPSTREAM_MAX_QUICK_RESTARTS:-3}" \
+        -- "${serve[@]}" >"${log_dir}/upstream-${judge_rank}.log" 2>&1 &
     upstream_pid="$!"
 
     # Come up only once grading works. The router's own /health cannot answer for the upstream, and
