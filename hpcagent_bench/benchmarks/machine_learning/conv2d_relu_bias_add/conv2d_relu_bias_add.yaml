@@ -49,3 +49,4 @@ output_args:
 - out
 experiment_tags:
 - kernelbench
+- mixed

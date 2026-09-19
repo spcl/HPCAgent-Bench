@@ -114,3 +114,4 @@ precisions:
 experiment_tags:
 - gromacs
 - scicomp-focus40
+- mixed

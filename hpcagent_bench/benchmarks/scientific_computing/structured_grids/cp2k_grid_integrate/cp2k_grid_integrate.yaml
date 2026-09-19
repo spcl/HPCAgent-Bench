@@ -90,3 +90,4 @@ precisions:
 experiment_tags:
 - cp2k_grid_integrate
 - scicomp-focus40
+- mixed
