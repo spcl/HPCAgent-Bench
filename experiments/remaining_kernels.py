@@ -385,15 +385,48 @@ def shard_dbs(job_dir: str) -> list:
     return sorted(glob.glob(os.path.join(job_dir, "judge", "rank-*", "hpcagent_bench*.db")))
 
 
-def table_counts(job_dir: str, table: str) -> dict:
-    """(run_id, benchmark) -> row count in ``table``, summed over every shard of this job dir."""
+#: A FUSED owed wave's run dir (submit-owed-wave.sh) holds ``setups/<setup>.resolved``, one per
+#: setup it served, each naming its arm. Its rows belong to several arms, so every read of such a
+#: job is filtered to one arm: DB rows by ``runs.arm`` of their run_id, episodes by the ``arm`` their
+#: tokens.json carries (agent_driver.FUSED_PROBLEM_KEYS).
+FUSED_SETUPS_DIR = "setups"
+
+#: The judge rows of ONE arm in a fused job: its run_ids, as ``runs`` recorded them.
+ARM_RUN_IDS = "run_id in (select run_id from runs where arm = ?)"
+
+
+def is_fused(job_dir: str) -> bool:
+    return os.path.isdir(os.path.join(job_dir, FUSED_SETUPS_DIR))
+
+
+def fused_arms(job_dir: str) -> set:
+    """Every arm a fused job served, from its setups' resolved overlays (planned, not just graded)."""
+    arms: set = set()
+    for path in glob.glob(os.path.join(job_dir, FUSED_SETUPS_DIR, "*.resolved")):
+        for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
+            if line.startswith("CAMPAIGN_ARM="):
+                arms.add(line.partition("=")[2].strip())
+    return {arm for arm in arms if arm}
+
+
+def arm_filter(job_dir: str, arm: str) -> str:
+    """``arm`` when ``job_dir`` is a fused job (its rows must be filtered to it), else ""."""
+    return arm if is_fused(job_dir) else ""
+
+
+def table_counts(job_dir: str, table: str, arm: str = "") -> dict:
+    """(run_id, benchmark) -> row count in ``table``, summed over every shard of this job dir (one
+    arm's rows only when ``arm`` is given -- see :func:`arm_filter`)."""
     counts: dict = {}
+    where, args = (f" where {ARM_RUN_IDS}", (arm,)) if arm else ("", ())
     for db in shard_dbs(job_dir):
         conn = open_shard(db)
         if conn is None:
             continue
         try:
-            rows = conn.execute(f"select run_id, benchmark, count(*) from {table} group by run_id, benchmark")
+            rows = conn.execute(
+                f"select run_id, benchmark, count(*) from {table}{where} group by run_id, benchmark", args
+            )
             for run_id, benchmark, n in rows:
                 counts[(run_id, benchmark)] = counts.get((run_id, benchmark), 0) + n
         except sqlite3.Error:  # a shard whose judge never started has no schema
@@ -403,7 +436,7 @@ def table_counts(job_dir: str, table: str) -> dict:
     return counts
 
 
-def touched(job_dir: str, opt: str) -> set:
+def touched(job_dir: str, opt: str, arm: str = "") -> set:
     """Every benchmark this job graded a real submission for, deliberate or promoted, at or after
     that kernel's own :func:`comparable_since_ms` -- a row graded before the kernel's manifest/sizing
     last changed measured a DIFFERENT roster and must not count as coverage (2026-09-18
@@ -415,12 +448,13 @@ def touched(job_dir: str, opt: str) -> set:
     """
     seen: set = set()
     thresholds: dict = {}
+    where, args = (f" where {ARM_RUN_IDS}", (arm,)) if arm else ("", ())
     for db in shard_dbs(job_dir):
         conn = open_shard(db)
         if conn is None:
             continue
         try:
-            rows = conn.execute(f"select benchmark, max(ts) from {DONE_TABLE} group by benchmark")
+            rows = conn.execute(f"select benchmark, max(ts) from {DONE_TABLE}{where} group by benchmark", args)
             for benchmark, ts in rows:
                 threshold = thresholds.setdefault(benchmark, comparable_since_ms(benchmark, opt))
                 if ts is not None and ts >= threshold:
@@ -432,7 +466,7 @@ def touched(job_dir: str, opt: str) -> set:
     return seen
 
 
-def genuine_attempts(job_dir: str, opt: str) -> set:
+def genuine_attempts(job_dir: str, opt: str, arm: str = "") -> set:
     """Every benchmark this job holds a REAL judge verdict for in ``attempts`` -- a ``/submit`` the
     judge actually graded and did not accept (wrong answer, build failure, too slow, timed out,
     overfit) -- at or after that kernel's own :func:`comparable_since_ms`, same gate :func:`touched`
@@ -449,14 +483,15 @@ def genuine_attempts(job_dir: str, opt: str) -> set:
     """
     seen: set = set()
     thresholds: dict = {}
+    where, args = (f" and {ARM_RUN_IDS}", (HARNESS_FAULT_REASON, arm)) if arm else ("", (HARNESS_FAULT_REASON,))
     for db in shard_dbs(job_dir):
         conn = open_shard(db)
         if conn is None:
             continue
         try:
             rows = conn.execute(
-                "select benchmark, max(ts) from attempts where reason is not ? group by benchmark",
-                (HARNESS_FAULT_REASON,),
+                f"select benchmark, max(ts) from attempts where reason is not ?{where} group by benchmark",
+                args,
             )
             for benchmark, ts in rows:
                 threshold = thresholds.setdefault(benchmark, comparable_since_ms(benchmark, opt))
@@ -469,11 +504,11 @@ def genuine_attempts(job_dir: str, opt: str) -> set:
     return seen
 
 
-def progress_rows(job_dir: str, done: set) -> list:
+def progress_rows(job_dir: str, done: set, arm: str = "") -> list:
     """(table, run_id, benchmark, count) for every row of a NOT-done kernel in this job dir."""
     rows = []
     for table in PROGRESS_TABLES:
-        for (run_id, benchmark), count in table_counts(job_dir, table).items():
+        for (run_id, benchmark), count in table_counts(job_dir, table, arm).items():
             if benchmark not in done:
                 rows.append((table, run_id, benchmark, count))
     return rows
@@ -481,11 +516,28 @@ def progress_rows(job_dir: str, done: set) -> list:
 
 def job_arm(job_dir: str) -> str:
     """The arm this job ran, from ``runs.arm``. Empty when the job has no shard DBs at all."""
-    dbs = shard_dbs(job_dir)
-    if not dbs:
+    arms = recorded_arms(job_dir)
+    if len(arms) == 1:
+        return arms.pop()
+    if not arms:
+        if shard_dbs(job_dir):
+            raise SystemExit(f"{job_dir}: shard DB(s) present but runs.arm named no arm")
         return ""
+    raise SystemExit(f"{job_dir}: runs.arm disagrees within one job dir: {sorted(arms)}")
+
+
+def job_arms(job_dir: str) -> set:
+    """Every arm this job ran: :func:`job_arm`'s one, or a fused job's planned and recorded arms."""
+    if is_fused(job_dir):
+        return fused_arms(job_dir) | recorded_arms(job_dir)
+    arm = job_arm(job_dir)
+    return {arm} if arm else set()
+
+
+def recorded_arms(job_dir: str) -> set:
+    """The distinct non-empty ``runs.arm`` values over this job's shard DBs."""
     arms: set = set()
-    for db in dbs:
+    for db in shard_dbs(job_dir):
         conn = open_shard(db)
         if conn is None:
             continue
@@ -495,11 +547,7 @@ def job_arm(job_dir: str) -> str:
             pass
         finally:
             conn.close()
-    if len(arms) == 1:
-        return arms.pop()
-    if not arms:
-        raise SystemExit(f"{job_dir}: shard DB(s) present but runs.arm named no arm")
-    raise SystemExit(f"{job_dir}: runs.arm disagrees within one job dir: {sorted(arms)}")
+    return arms
 
 
 def roster(tag: str, opt: str) -> list:
@@ -508,9 +556,12 @@ def roster(tag: str, opt: str) -> list:
     return sorted(name for name in out.stdout.strip().split(",") if name)
 
 
-def collect_arms(run_roots: list, dropped: set) -> tuple:
+def collect_arms(run_roots: list, dropped: set, unreadable: list | None = None) -> tuple:
     """{identity: [(job id, job dir, arm)]} folded over :func:`base_arm`, plus the job ids with no
-    shard DBs and the job ids dropped as smoke, over every root."""
+    shard DBs and the job ids dropped as smoke, over every root.
+
+    A job dir whose arm cannot be read is a hard error, unless ``unreadable`` is given: a caller
+    sweeping EVERY root (owed_wave.py) collects those job dirs there and carries on."""
     arms: dict = {}
     empty_jobs: list = []
     smoke_jobs: list = []
@@ -519,14 +570,21 @@ def collect_arms(run_roots: list, dropped: set) -> tuple:
             job = os.path.basename(job_dir)
             if not job.isdigit() or job in dropped:
                 continue
-            arm = job_arm(job_dir)
-            if not arm:
+            try:
+                ran = job_arms(job_dir)
+            except SystemExit as exc:
+                if unreadable is None:
+                    raise
+                unreadable.append(f"{job_dir}: {exc}")
+                continue
+            if not ran:
                 empty_jobs.append(job)
                 continue
-            if is_smoke(job, arm):
-                smoke_jobs.append(job)
-                continue
-            arms.setdefault(base_arm(arm), []).append((job, job_dir, arm))
+            for arm in sorted(ran):
+                if is_smoke(job, arm):
+                    smoke_jobs.append(job)
+                    continue
+                arms.setdefault(base_arm(arm), []).append((job, job_dir, arm))
     return arms, empty_jobs, smoke_jobs
 
 
@@ -537,7 +595,7 @@ CONCLUSIVE_RETURNCODES = frozenset(
 )
 
 
-def episode_records(job_dirs: list) -> list:
+def episode_records(job_dirs: list, arms: frozenset = frozenset()) -> list:
     """One dict per worker episode across ``job_dirs``: its graded kernel, a deterministic ordering
     key (the episode's own ``final_attempt_start_ms``, falling back to the file's mtime for an older
     record that predates that field), its exit code, whether the job cancelled it, and its
@@ -562,6 +620,9 @@ def episode_records(job_dirs: list) -> list:
             kernel = str(data.get("kernel") or "").rsplit("/", 1)[-1]
             if not kernel:
                 continue
+            # A fused job's episode names its arm; one of another arm is not this arm's evidence.
+            if arms and "arm" in data and data["arm"] not in arms:
+                continue
             start_ms = int(data.get("final_attempt_start_ms") or 0)
             sort_key = start_ms or int(path.stat().st_mtime * 1000)
             cancelled = (path.parent / agent_driver.CANCELLED_MARKER).exists()
@@ -578,7 +639,7 @@ def episode_records(job_dirs: list) -> list:
     return records
 
 
-def owed_exit_classes(job_dirs: list, owed: list) -> dict:
+def owed_exit_classes(job_dirs: list, owed: list, arms: frozenset = frozenset()) -> dict:
     """kernel -> :class:`ExitClass` for every name in ``owed``, from its LATEST episode across
     ``job_dirs`` (ties broken by whichever record :func:`episode_records` visits last, which cannot
     happen for two DIFFERENT episodes of the same kernel since their start times differ). A kernel
@@ -591,7 +652,7 @@ def owed_exit_classes(job_dirs: list, owed: list) -> dict:
     """
     latest: dict = {}
     owed_set = set(owed)
-    for record in episode_records(job_dirs):
+    for record in episode_records(job_dirs, arms):
         if record["kernel"] not in owed_set:
             continue
         current = latest.get(record["kernel"])
@@ -617,6 +678,22 @@ def owed_exit_classes(job_dirs: list, owed: list) -> dict:
     return classes
 
 
+def covered(jobs: list, opt: str) -> set:
+    """Every kernel ``jobs`` (collect_arms's (job, job_dir, arm) triples of one identity) delivered."""
+    seen: set = set()
+    for _, job_dir, arm in jobs:
+        only = arm_filter(job_dir, arm)
+        seen |= touched(job_dir, opt, only) | genuine_attempts(job_dir, opt, only)
+    return seen
+
+
+def owed_classes(jobs: list, full: list, opt: str) -> dict:
+    """kernel -> :class:`ExitClass` for every roster kernel ``jobs`` still owe, in roster order."""
+    seen = covered(jobs, opt)
+    owed = [name for name in full if name not in seen]
+    return owed_exit_classes(sorted({job_dir for _, job_dir, _ in jobs}), owed, frozenset(arm for _, _, arm in jobs))
+
+
 def report_arm(
     identity: str,
     jobs: list,
@@ -626,11 +703,9 @@ def report_arm(
     only_class: ExitClass | None,
     opt: str,
 ) -> None:
-    seen: set = set()
-    for _, job_dir, _ in jobs:
-        seen |= touched(job_dir, opt) | genuine_attempts(job_dir, opt)
+    seen = covered(jobs, opt)
     owed = [name for name in full if name not in seen]
-    classes = owed_exit_classes([job_dir for _, job_dir, _ in jobs], owed)
+    classes = owed_exit_classes(sorted({job_dir for _, job_dir, _ in jobs}), owed, frozenset(arm for _, _, arm in jobs))
     budget = sorted(name for name in owed if classes[name] == ExitClass.BUDGET)
     infra = sorted(name for name in owed if classes[name] == ExitClass.INFRA)
     clean = any(arm.endswith(CLEAN_SUFFIX) for _, _, arm in jobs)
@@ -642,8 +717,8 @@ def report_arm(
     )
     if list_progress:
         rows = []
-        for job, job_dir, _ in jobs:
-            rows.extend((job, *row) for row in progress_rows(job_dir, seen))
+        for job, job_dir, arm in jobs:
+            rows.extend((job, *row) for row in progress_rows(job_dir, seen, arm_filter(job_dir, arm)))
         for job, table, run_id, benchmark, count in sorted(rows):
             print(f"  progress job={job} table={table} run_id={run_id} benchmark={benchmark} count={count}")
     if out_dir is None:
@@ -680,6 +755,13 @@ def main() -> int:
         help="job id whose rows measured a SUPERSEDED treatment; repeat as needed",
     )
     ap.add_argument("--tag", required=True, help="experiment tag naming the roster")
+    ap.add_argument(
+        "--arm-prefix",
+        action="append",
+        default=[],
+        help="report only arms starting with <prefix>-; repeat as needed. A fused owed wave's run root "
+        "holds arms of every campaign of its model, so a campaign's own report names its prefixes",
+    )
     ap.add_argument("--opt", default=os.environ.get("OPT", ""), help="hpcagent-bench checkout (default $OPT)")
     ap.add_argument("--out-dir", default="", help="write <identity>.txt kernels files here (default: print only)")
     ap.add_argument(
@@ -715,6 +797,8 @@ def main() -> int:
     if smoke_jobs:
         print(f"smoke rows, excluded from coverage: jobs {sorted(smoke_jobs)}")
     for identity in sorted(arms):
+        if args.arm_prefix and not identity.startswith(tuple(f"{prefix}-" for prefix in args.arm_prefix)):
+            continue
         report_arm(identity, arms[identity], full, args.list_progress, out_dir, only_class, opt)
     return 0
 

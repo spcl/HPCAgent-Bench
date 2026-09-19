@@ -14,12 +14,13 @@ layered on top of these defaults by the caller.
 """
 
 import contextlib
+import contextvars
 import dataclasses
 import functools
 import json
 import os
 import pathlib
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from typing import Any, ClassVar, Optional, Self, Tuple, cast
 
 import yaml
@@ -92,6 +93,33 @@ def overridden(dotted: str, value: ConfigValue) -> Generator[None]:
             clear_override(dotted)
 
 
+#: Environment scoped to ONE request of a fused job's judge (:mod:`hpcagent_bench.fused`): the
+#: setup the request's worker belongs to. A name mapped to None is UNSET for the scope, so a control
+#: setup never falls through to a value the process environment happens to hold. Context-local:
+#: each ThreadingHTTPServer request thread starts empty.
+SCOPED_ENVIRONMENT: contextvars.ContextVar[Mapping[str, str | None] | None] = contextvars.ContextVar(
+    "hpcagent_bench_scoped_environment", default=None
+)
+
+
+@contextlib.contextmanager
+def scoped_environment(values: Mapping[str, str | None]) -> Generator[None]:
+    """Resolve ``values``' names from ``values`` instead of ``os.environ`` for the block, in this context."""
+    token = SCOPED_ENVIRONMENT.set(dict(values))
+    try:
+        yield
+    finally:
+        SCOPED_ENVIRONMENT.reset(token)
+
+
+def env_value(name: str) -> str | None:
+    """``name`` from the scoped environment when it names it, else from ``os.environ``."""
+    scoped = SCOPED_ENVIRONMENT.get()
+    if scoped is not None and name in scoped:
+        return scoped[name]
+    return os.environ.get(name)
+
+
 def _coerce(s: str) -> ConfigValue:
     low = s.lower()
     if low in ("true", "false"):
@@ -120,14 +148,15 @@ def get(dotted: str, default: ConfigValue = None) -> ConfigValue:
     """Return the config value at ``dotted`` (e.g. ``"seeds.fuzz"``).
 
     Precedence: a runtime :func:`set_override` wins over an env var
-    ``HPCAGENT_BENCH_<DOTTED_KEY_UPPER>`` (dots -> underscores), which wins over the
-    file. Env values are coerced to bool/int/float when they look like one.
+    ``HPCAGENT_BENCH_<DOTTED_KEY_UPPER>`` (dots -> underscores; read through
+    :func:`env_value`, so a :func:`scoped_environment` wins over ``os.environ``), which wins
+    over the file. Env values are coerced to bool/int/float when they look like one.
     """
     if dotted in _OVERRIDES:
         return _OVERRIDES[dotted]
-    env = "HPCAGENT_BENCH_" + dotted.replace(".", "_").upper()
-    if env in os.environ:
-        return _coerce(os.environ[env])
+    raw = env_value("HPCAGENT_BENCH_" + dotted.replace(".", "_").upper())
+    if raw is not None:
+        return _coerce(raw)
     node: object = _cfg()
     for key in dotted.split("."):
         if not isinstance(node, dict):

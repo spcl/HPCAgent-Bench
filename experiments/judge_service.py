@@ -26,6 +26,8 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 
+from hpcagent_bench import config, fused
+
 # The judge mounts the submitting checkout and loads its tools from there; no image carries a copy.
 TOOLS_DIR = pathlib.Path(__file__).resolve().parents[1] / "containers" / "judge" / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
@@ -77,12 +79,38 @@ CLIENT_CLOSED_REQUEST = 499
 SEARCH_NOT_PROVISIONED = 503
 
 
-async def send_upstream(method: str, url: str, body: bytes) -> httpx.Response:
-    """One request to the upstream judge. Cancelling it closes the connection, which the judge sees."""
+async def send_upstream(method: str, url: str, body: bytes, setup: str = "") -> httpx.Response:
+    """One request to the upstream judge. Cancelling it closes the connection, which the judge sees.
+
+    ``setup`` is the fused-job setup the router resolved for the caller; it rides on a header the
+    upstream trusts because nothing but this router can reach its loopback port."""
+    headers = {fused.SETUP_HEADER: setup} if setup else {}
     async with httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT_SECONDS) as client:
         if method == "GET":
-            return await client.get(url)
-        return await client.post(url, content=body, headers={"Content-Type": "application/json"})
+            return await client.get(url, headers=headers)
+        return await client.post(url, content=body, headers={"Content-Type": "application/json", **headers})
+
+
+def caller_setup(request: Request, body: bytes) -> str:
+    """The fused-job setup of this request's worker, "" outside a fused job.
+
+    Resolved from the worker's token, never from anything the body says; a POST whose run_id is not
+    that setup's arm is refused as well, since rows are attributed by run_id. Raises the refusal as
+    an HTTPException, before anything is graded or recorded."""
+    if not fused.fused():
+        return ""
+    try:
+        setup = fused.token_setup(request.headers.get(fused.TOKEN_HEADER, "").strip())
+        if request.method == "POST":
+            try:
+                parsed = json.loads(body or b"{}")
+            except ValueError:
+                parsed = {}
+            run_id = str(parsed.get("run_id") or "") if isinstance(parsed, dict) else ""
+            fused.check_run_id(setup, run_id)
+    except fused.FusedRefusal as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+    return setup
 
 
 async def client_left(request: Request) -> None:
@@ -108,7 +136,9 @@ async def forward(request: Request, path: str) -> httpx.Response:
     query = request.url.query
     url = f"{UPSTREAM_URL}{path}?{query}" if query else f"{UPSTREAM_URL}{path}"
     body = await request.body()
-    upstream = asyncio.ensure_future(send_upstream(request.method, url, body))
+    setup = caller_setup(request, body)
+    request.state.fused_setup = setup
+    upstream = asyncio.ensure_future(send_upstream(request.method, url, body, setup))
     if path != GRADED_WITHOUT_CLIENT:
         left = asyncio.ensure_future(client_left(request))
         await asyncio.wait((upstream, left), return_when=asyncio.FIRST_COMPLETED)
@@ -182,7 +212,15 @@ def read_shared_source(path: JSONValue) -> str:
         return ""
 
 
-def log_grade(route: str, body: dict, graded: dict | None) -> None:
+def log_grade(route: str, body: dict, graded: dict | None, setup: str = "") -> None:
+    """:func:`log_call` under ``setup``'s identity in a fused job, as-is otherwise."""
+    if not setup:
+        return log_call(route, body, graded)
+    with config.scoped_environment(fused.judge_overlay(setup)):
+        return log_call(route, body, graded)
+
+
+def log_call(route: str, body: dict, graded: dict | None) -> None:
     """Write one ``calls`` row for a grade this router just relayed (blocking SQLite).
 
     The per-call TRAJECTORY is logged here and nowhere else. Upstream recording is
@@ -304,7 +342,9 @@ async def record_grade(route: str, request: Request, upstream: httpx.Response) -
         if not isinstance(body, dict):
             return
         graded = upstream.json() if upstream.status_code == 200 else None
-        await asyncio.to_thread(log_grade, route, body, graded)
+        # forward() stamped it: record_grade only ever follows a relayed request.
+        setup = str(request.state.fused_setup or "")
+        await asyncio.to_thread(log_grade, route, body, graded, setup)
     except Exception as exc:  # noqa: BLE001 - bookkeeping never breaks a grade
         print(f"call log failed for /{route}: {exc}", file=sys.stderr)
 

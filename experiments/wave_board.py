@@ -189,7 +189,11 @@ def queued_ids() -> list[str]:
 
 
 def kernel_status(
-    jobs: list[Job], dirs: dict[str, pathlib.Path], full: list[str], opt: str
+    jobs: list[Job],
+    dirs: dict[str, pathlib.Path],
+    full: list[str],
+    opt: str,
+    served: dict[str, str] | None = None,
 ) -> tuple[set[str], set[str], list[str], list[str]]:
     """(delivered kernels, placeholder-done kernels, owed at 2x budget, owed as-is) over ``jobs``'
     union coverage.
@@ -206,13 +210,18 @@ def kernel_status(
     left splits into BUDGET (the harness's own timeout/token cap fired: rerun at double budget) and
     INFRA (the job took the episode down, or its exit is one the classifier does not recognise:
     rerun as-is) -- both undelivered AND owed (2026-09-19 decision: "forced 1x is not completed"
-    reruns only these two classes, never a placeholder-done kernel)."""
+    reruns only these two classes, never a placeholder-done kernel).
+
+    ``served`` maps a FUSED job's id to the raw arm it ran for this row (:func:`arm_rows`): such a
+    job holds rows of several arms, and only that arm's count here."""
+    served = served or {}
     touched_kernels: set[str] = set()
     for job in jobs:
         if job.id in dirs:
             job_dir = str(dirs[job.id])
-            touched_kernels |= remaining_kernels.touched(job_dir, opt) | remaining_kernels.genuine_attempts(
-                job_dir, opt
+            only = remaining_kernels.arm_filter(job_dir, served.get(job.id, ""))
+            touched_kernels |= remaining_kernels.touched(job_dir, opt, only) | remaining_kernels.genuine_attempts(
+                job_dir, opt, only
             )
     # bounded to `full`: a touched kernel outside the roster (a retired tag, a renamed kernel) must
     # not inflate `delivered` past `roster` -- the same bound remaining_kernels.py's own report_arm
@@ -222,7 +231,7 @@ def kernel_status(
     if not owed_kernels:
         return delivered, set(), [], []
     job_dirs = [str(dirs[job.id]) for job in jobs if job.id in dirs]
-    classes = remaining_kernels.owed_exit_classes(job_dirs, owed_kernels)
+    classes = remaining_kernels.owed_exit_classes(job_dirs, owed_kernels, frozenset(served.values()))
     placeholder = {kernel for kernel in owed_kernels if classes[kernel] == remaining_kernels.ExitClass.DONE}
     budget = sorted(kernel for kernel in owed_kernels if classes[kernel] == remaining_kernels.ExitClass.BUDGET)
     infra = sorted(kernel for kernel in owed_kernels if classes[kernel] == remaining_kernels.ExitClass.INFRA)
@@ -230,7 +239,13 @@ def kernel_status(
 
 
 def arm_row(
-    arm: str, jobs: list[Job], dirs: dict[str, pathlib.Path], full: list[str], models: tuple[str, ...], opt: str
+    arm: str,
+    jobs: list[Job],
+    dirs: dict[str, pathlib.Path],
+    full: list[str],
+    models: tuple[str, ...],
+    opt: str,
+    served: dict[str, str] | None = None,
 ) -> dict:
     """One board row per arm IDENTITY (``arm`` never carries ``-clean``: :func:`arm_rows` folds a
     clean re-run into the arm it supersedes before this is called, 2026-09-18). Coverage is the union
@@ -239,7 +254,7 @@ def arm_row(
     campaign, model, variant = split_arm(arm, models)
     spec = board_campaign(campaign, variant)
     clean = any(job.name.endswith(remaining_kernels.CLEAN_SUFFIX) for job in jobs)
-    delivered_kernels, placeholder_kernels, budget, infra = kernel_status(jobs, dirs, full, opt)
+    delivered_kernels, placeholder_kernels, budget, infra = kernel_status(jobs, dirs, full, opt, served)
     delivered = len(delivered_kernels)
     placeholder = len(placeholder_kernels)
     # "done" keeps its 2026-09-18 meaning (never rerun): delivered kernels plus placeholder-done
@@ -274,10 +289,56 @@ DROPPED_ARMS = re.compile(
 )
 
 
+#: The job-name prefix of a fused owed wave (submit-owed-wave.sh): one job serving many arms.
+FUSED_JOB_PREFIX = "owed-"
+
+
+def planned_fused_arms(job_id: str) -> set[str]:
+    """The arms a fused job was SUBMITTED to serve, from its snapshot's setups file (sacct SubmitLine).
+
+    Used while the job has no run directory yet, so a queued fused wave still shows as running on
+    every arm it will serve. Empty when accounting or the snapshot cannot be read."""
+    out = subprocess.run(
+        ["sacct", "-X", "-n", "-P", "-j", job_id, "-o", "SubmitLine"], capture_output=True, text=True, check=False
+    )
+    match = re.search(r"CLUSTER_ENV_FILE=(\S+)", out.stdout)
+    if not match or not os.path.isfile(match.group(1)):
+        return set()
+    return setups_file_arms(pathlib.Path(match.group(1)))
+
+
+def setups_file_arms(env: pathlib.Path) -> set[str]:
+    """The arms named by the SETUPS_FILE a fused job's snapshot env points at (relative to experiments/)."""
+    lines = env.read_text(encoding="utf-8").splitlines()
+    setups = next((line.partition("=")[2] for line in reversed(lines) if line.startswith("SETUPS_FILE=")), "")
+    path = pathlib.Path(setups) if os.path.isabs(setups) else HERE / setups
+    if not setups or not path.is_file():
+        return set()
+    spec = json.loads(path.read_text(encoding="utf-8")).get("setups", {})
+    return {str(entry.get("arm") or "") for entry in spec.values()} - {""}
+
+
+def fused_job_arms(job: Job, dirs: dict[str, pathlib.Path]) -> set[str]:
+    """Every raw arm a fused job serves: its run directory's setups, else what it was submitted with."""
+    if job.id in dirs:
+        return remaining_kernels.job_arms(str(dirs[job.id]))
+    return planned_fused_arms(job.id)
+
+
 def arm_rows(runs: pathlib.Path, opt: str, models: tuple[str, ...]) -> list[dict]:
     dirs = job_dirs(runs)
     by_arm: dict[str, list[Job]] = {}
+    #: (fused job id, identity) -> the raw arm that job ran for the identity.
+    served: dict[tuple[str, str], str] = {}
     for job in slurm_jobs(sorted(set(dirs) | set(queued_ids()))):
+        if job.name.startswith(FUSED_JOB_PREFIX):
+            for arm in sorted(fused_job_arms(job, dirs)):
+                if not campaign_of(arm) or DROPPED_ARMS.search(arm):
+                    continue
+                identity = remaining_kernels.base_arm(arm)
+                by_arm.setdefault(identity, []).append(job)
+                served[(job.id, identity)] = arm
+            continue
         if not campaign_of(job.name) or DROPPED_ARMS.search(job.name):
             continue
         # A smoke job that reused a REAL arm's name is not that arm's data (2026-09-18, job 641175:
@@ -293,7 +354,8 @@ def arm_rows(runs: pathlib.Path, opt: str, models: tuple[str, ...]) -> list[dict
     rows = []
     for arm, jobs in sorted(by_arm.items()):
         roster = rosters.get(CAMPAIGNS[campaign_of(arm)].tag, [])
-        rows.append(arm_row(arm, jobs, dirs, roster, models, opt))
+        fused = {job.id: served[(job.id, arm)] for job in jobs if (job.id, arm) in served}
+        rows.append(arm_row(arm, jobs, dirs, roster, models, opt, fused))
     return rows
 
 
