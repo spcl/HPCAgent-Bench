@@ -100,6 +100,25 @@ def test_every_model_the_palette_colours_also_has_a_name() -> None:
     assert not unnamed, f"models with a colour but no display name: {unnamed}"
 
 
+@pytest.mark.parametrize(
+    "raw, language, packet",
+    [
+        ("c-clean", "c", ""),
+        ("hip-perf-playbook-amd-clean", "hip", "perf-playbook-amd"),
+        ("triton-skills-clean", "triton", "lang-skills"),
+        # "openmp" is the OFFLOAD directive, never a packet (device=gpu + language=c already says
+        # offload) -- an unregistered tail must resolve to no packet, not a bogus one.
+        ("c-openmp-clean", "c", ""),
+    ],
+)
+def test_split_record_language_strips_clean_and_the_baked_in_packet(raw: str, language: str, packet: str) -> None:
+    """A Kimi `-clean` env file an older submitter wrote (see the LANGUAGE folding rule, USER RULE
+    2026-09-18) must still resolve to its bare, registered language -- clean is a run flag the arm
+    name alone carries, never the language."""
+    assert experiment_tags.split_record_language(raw) == (language, packet)
+    assert experiment_tags.canonical("languages", raw) == language
+
+
 def test_an_unknown_tag_falls_back_instead_of_raising() -> None:
     """A new campaign must not break a figure -- it gets a plain label until someone names it."""
     assert experiment_tags.display_name("brand-new-campaign") == "brand-new-campaign"

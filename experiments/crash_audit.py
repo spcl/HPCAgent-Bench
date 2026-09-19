@@ -153,16 +153,23 @@ def absorb_job_episodes(
             )
 
 
-def delete_rows_for(jobs: list, arm: str, drop: set) -> list:
-    """``(db, table, run_id, benchmark, count)`` for every DROP kernel's row THIS ARM wrote.
+def delete_rows_for(jobs: list, drop: set) -> list:
+    """``(db, table, run_id, benchmark, count)`` for every DROP kernel's row each job's OWN arm wrote.
 
-    Scoped to ``run_id`` starting with ``"<arm>."`` (the ``<arm>.n<node>.p<problem>.w<worker>``
-    convention every real episode writes) -- a shard can carry an unrelated ``adhoc`` run_id for the
-    same benchmark name, and that row is not this arm's coverage to delete.
+    Scoped to ``run_id`` starting with ``"<job's own runs.arm>."`` (the ``<arm>.n<node>.p<problem>.w<worker>``
+    convention every real episode writes), read PER JOB rather than from one caller-supplied identity
+    -- a `-clean` job folded into a shared identity (remaining_kernels.collect_arms's ``base_arm``)
+    writes run_ids under its own, unfolded arm name (submit_common.sh's ``clean_suffix`` leaves the
+    identity columns untouched but DOES change the arm name), which the folded identity's prefix
+    would never match. A shard can also carry an unrelated ``adhoc`` run_id for the same benchmark
+    name, and that row is not this job's coverage to delete either way.
     """
-    prefix = f"{arm}."
     rows = []
     for job, job_dir in jobs:
+        arm = rk.job_arm(job_dir)
+        if not arm:
+            continue
+        prefix = f"{arm}."
         for table in DELETE_TABLES:
             for db in rk.shard_dbs(job_dir):
                 conn = rk.open_shard(db)
@@ -181,7 +188,12 @@ def delete_rows_for(jobs: list, arm: str, drop: set) -> list:
 
 
 def audit_arm(arm: str, jobs: list, full_roster: list, log_dir: pathlib.Path, opt: str) -> ArmAudit:
-    """The keep/drop/never-ran partition of ``full_roster`` for one arm's jobs."""
+    """The keep/drop/never-ran partition of ``full_roster`` for one arm's jobs.
+
+    ``arm`` is the caller's identity label only -- kept in the signature for every existing caller
+    (``main`` and this module's own tests), but the partition itself reads each job's real arm back
+    out of its own shard DB (see :func:`delete_rows_for`) rather than trusting this string, so it
+    stays correct for a caller that passes a `-clean`-folded identity covering more than one job."""
     roster_set = set(full_roster)
     touched_set: set = set()
     judge_rows: set = set()
@@ -210,7 +222,7 @@ def audit_arm(arm: str, jobs: list, full_roster: list, log_dir: pathlib.Path, op
         drop=drop,
         never_ran=never_ran,
         drop_evidence={b: sorted(drop_evidence.get(b, [])) for b in drop},
-        delete_rows=delete_rows_for(jobs, arm, set(drop)),
+        delete_rows=delete_rows_for(jobs, set(drop)),
         unmapped=sorted(unmapped),
         missing_logs=sorted(missing_logs),
     )
@@ -268,19 +280,27 @@ def main() -> int:
     opt = args.opt or str(pathlib.Path(__file__).resolve().parents[1])
     log_dir = pathlib.Path(args.log_dir)
     dropped = set(args.exclude_job)
-    arms, empty_jobs = rk.collect_arms(args.run_root, dropped)
+    arms, empty_jobs, smoke_jobs = rk.collect_arms(args.run_root, dropped)
     if empty_jobs:
         print(f"no shard DBs, contributed nothing: jobs {sorted(empty_jobs)}")
+    if smoke_jobs:
+        print(f"smoke rows, excluded from the audit: jobs {sorted(smoke_jobs)}")
 
     rosters: dict = {}
     report: dict = {}
-    for arm in sorted(arms):
-        tag = roster_tag(arm)
+    for identity in sorted(arms):
+        tag = roster_tag(identity)
         if tag not in rosters:
             rosters[tag] = rk.roster(tag, opt)
-        audit = audit_arm(arm, arms[arm], rosters[tag], log_dir, opt)
-        report_arm(arm, audit, args.list_evidence)
-        report[arm] = arm_json(audit)
+        # audit_arm still takes (job, job_dir) pairs -- collect_arms's own (job, job_dir, arm)
+        # triple exists so remaining_kernels.py's report_arm can fold a `-clean` re-run into its
+        # base identity for COVERAGE; delete_rows_for below reads each job's own `runs.arm` back
+        # out of its shard DB instead of trusting this loop's folded `identity`, since a `-clean`
+        # job's run_id is still prefixed by its own unfolded arm name.
+        jobs = [(job, job_dir) for job, job_dir, _ in arms[identity]]
+        audit = audit_arm(identity, jobs, rosters[tag], log_dir, opt)
+        report_arm(identity, audit, args.list_evidence)
+        report[identity] = arm_json(audit)
 
     if args.out_json:
         pathlib.Path(args.out_json).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

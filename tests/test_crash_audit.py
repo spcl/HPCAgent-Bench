@@ -274,6 +274,40 @@ def test_delete_rows_names_only_the_dropped_kernels_rows(tmp_path: pathlib.Path)
     assert all(run_id != "adhoc" for _, _, run_id, _, _ in audit.delete_rows)
 
 
+def test_delete_rows_matches_each_jobs_own_arm_not_the_callers_folded_identity(tmp_path: pathlib.Path) -> None:
+    """A caller that folds a `-clean` re-run into its base identity (remaining_kernels.py's
+    ``collect_arms``/``base_arm``, USER RULE 2026-09-18) can pass ``audit_arm`` one identity label
+    covering jobs whose OWN run_ids are still prefixed by their real, unfolded arm names --
+    `submit_common.sh`'s `clean_suffix` changes the arm name, not the identity columns. Both jobs'
+    rows must still be found: a delete report that only matched the caller's label would silently
+    keep the `-clean` job's stale rows around after every rerun.
+    """
+    root, log_dir = tmp_path / "runs", tmp_path / "logs"
+    conn = make_shard(root, "100")
+    with conn:
+        conn.execute("insert into runs values (?, ?)", ("base-arm.n0.p0.w0", "base-arm"))
+        conn.execute("insert into submissions values (?, ?, ?, ?)", ("base-arm.n0.p0.w0", "a", "qwen38", FAR_FUTURE_TS_MS))
+    conn.close()
+    write_problems(root, "100", [(0, "a")])
+    write_log(log_dir, "100", [exit_line(0, 1)])  # crashed: "a" is DROP
+
+    conn = make_shard(root, "101")
+    with conn:
+        conn.execute("insert into runs values (?, ?)", ("base-arm-clean.n0.p0.w7", "base-arm-clean"))
+        conn.execute(
+            "insert into submissions values (?, ?, ?, ?)", ("base-arm-clean.n0.p0.w7", "a", "qwen38", FAR_FUTURE_TS_MS)
+        )
+    conn.close()
+    write_problems(root, "101", [(0, "a")])
+    write_log(log_dir, "101", [exit_line(0, 1)])  # crashed too: still DROP
+
+    jobs = [("100", str(root / "100")), ("101", str(root / "101"))]
+    audit = crash_audit.audit_arm("base-arm", jobs, ROSTER, log_dir, str(tmp_path))
+    assert audit.drop == ["a"]
+    run_ids = {run_id for _, _, run_id, _, _ in audit.delete_rows}
+    assert run_ids == {"base-arm.n0.p0.w0", "base-arm-clean.n0.p0.w7"}
+
+
 def test_roster_tag_reads_the_wave_boards_own_campaign_table() -> None:
     """The tag lookup must be the SAME table the wave board scores arms under, not a second copy
     that can drift from it."""

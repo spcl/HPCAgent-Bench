@@ -97,6 +97,21 @@ _ALLOW = {
     "tests/test_materialize_shared.py",  # asserts a-g34/a-g200 are ABSENT from account_env.sh
     "tests/test_agent_driver_sealed.py",  # HOST_HOME = "/users/someone" is a placeholder fixture
     "scripts/cscs/account_env.sh",  # the one file allowed to rule account names in/out by name
+    # OPTARENA_RUN_ID/OPTARENA_OPTIMIZER: every job through 2026-09-16 wrote a worker's mcp.json
+    # under the tool's pre-rename server/env names. These two scripts READ old, already-recorded
+    # rows and worker dirs -- not a place that still WRITES the legacy name -- so the keys stay as
+    # a named legacy constant (RUN_ID_KEYS/OPTIMIZER_KEYS, RUN_ID_ENV_KEYS) rather than being
+    # renamed away and losing the ability to attribute that whole window's data.
+    "experiments/recover_adhoc.py",
+    "reproducibility/llr40/extract_llr40.py",
+    # Same legacy-key reads, exercised as fixtures: a worker dir/mcp.json written the pre-rename
+    # way, and the MCP server key rename (twice) that iteration_counts.py must still parse.
+    "tests/test_extract_llr40_task_rows.py",
+    "tests/test_ablation_stats.py",
+    # sacctmgr stub output: a fixed, fake single-association answer (this user's real associations
+    # are ambiguous) for a file-naming check unrelated to which account submits -- the same role as
+    # test_agent_driver_sealed.py's "/users/someone" placeholder above, not a real submission path.
+    "tests/test_submit_file_isolation.py",
 }
 
 #: Storage-root rule: committed code must not spell out the MOUNT itself, not just a user segment
