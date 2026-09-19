@@ -440,9 +440,7 @@ def build_comparison(
     :func:`build_multi_comparison`), or a single packet-suffix split (``treatment=``) of its own or
     the default campaign. ``treatment`` is the registry key(s) the panel is SHAPED by."""
     if "treatments" in spec:
-        return build_multi_comparison(
-            spec, default_observations, default_experiment, repeats, include_incomplete, card
-        )
+        return build_multi_comparison(spec, default_observations, default_experiment, repeats, include_incomplete, card)
     intervention = spec["intervention"]
     title = spec.get("title") or experiment_tags.packet_name(intervention)
     observations = (
@@ -576,7 +574,7 @@ def main() -> None:
     }[args.row_width]
 
     if args.comparison:
-        panels: list[efficacy_figures.Panel] = []
+        comparison_panels: list[efficacy_figures.Panel] = []
         for raw in args.comparison:
             built = build_comparison(
                 parse_spec(raw), args.observations, args.experiment, args.repeats, args.include_incomplete, card
@@ -584,20 +582,20 @@ def main() -> None:
             if built is None:
                 print(f"skipping comparison {raw!r}: empty side, or no (model, language) shared with control")
                 continue
-            panels.append(built)
-        if not panels:
+            comparison_panels.append(built)
+        if not comparison_panels:
             raise SystemExit(f"no --comparison of {args.comparison} produced a panel")
         args.table.parent.mkdir(parents=True, exist_ok=True)
-        for title, treatment, stats, frame in panels:
+        for title, treatment, stats, frame in comparison_panels:
             del treatment  # the CSV is keyed by title, not by the packet(s) shaping the panel
             suffix = f"-{title.lower().replace(' ', '-')}"
             write_panel_tables(args.table, suffix, stats, frame, args.repeats)
         written = efficacy_figures.figure_row(
-            panels, args.out, row_width_in=row_width, repeats=args.repeats, show_cloud=args.show_cloud
+            comparison_panels, args.out, row_width_in=row_width, repeats=args.repeats, show_cloud=args.show_cloud
         )
-        for title, treatment, stats, frame in panels:
+        for title, treatment, stats, frame in comparison_panels:
             del frame  # the summary line names the panel, not its rows
-            for name, one_stats in (stats.items() if isinstance(stats, dict) else ((treatment, stats),)):
+            for name, one_stats in stats.items() if isinstance(stats, dict) else ((treatment, stats),):
                 report(f"{title}/{name}", one_stats)
         print(f"table  -> {args.table}")
         print(f"figure -> {written} (+ .png)")

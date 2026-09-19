@@ -60,6 +60,7 @@ import dataclasses
 import math
 import pathlib
 from collections.abc import Sequence
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -357,9 +358,7 @@ def interval_note(statistic: str) -> str:
 #: (:func:`figure_row`) the same way :func:`interval_note` does. No per-panel test count: the
 #: family size differs panel to panel and a caller after the exact number already has it from
 #: ``report()``'s own printed line or the emitted stats CSV.
-SIGNIFICANCE_NOTE: str = (
-    f"{SCORE_SIG_MARK} Speed-Up, {COST_SIG_MARK} Token-Cost Significant (BH-Adjusted p < 0.05)"
-)
+SIGNIFICANCE_NOTE: str = f"{SCORE_SIG_MARK} Speed-Up, {COST_SIG_MARK} Token-Cost Significant (BH-Adjusted p < 0.05)"
 
 
 def model_legend_marks(models: Sequence[str]) -> list[Line2D]:
@@ -368,7 +367,12 @@ def model_legend_marks(models: Sequence[str]) -> list[Line2D]:
     it."""
     return [
         Line2D(
-            [], [], marker="o", linestyle="none", color=palette.model_color(name), markersize=9,
+            [],
+            [],
+            marker="o",
+            linestyle="none",
+            color=palette.model_color(name),
+            markersize=9,
             label=experiment_tags.model_name(name),
         )  # fmt: skip
         for name in palette.in_order(models)
@@ -425,7 +429,10 @@ def legend_handles(
 ) -> list[Line2D]:  # fmt: skip
     """The figure's one key: a MODEL is a colour, the PACKET is the one shape the whole panel wears
     (:data:`SIGNIFICANCE_NOTE` explains the superscript)."""
-    handles = model_legend_marks(models) + [control_legend_mark(control_over, control_name), packet_legend_mark(treatment)]
+    handles = model_legend_marks(models) + [
+        control_legend_mark(control_over, control_name),
+        packet_legend_mark(treatment),
+    ]
     return handles + legend_tail(show_cloud)
 
 
@@ -486,7 +493,7 @@ def x_tick_step(span: float) -> int:
     return step
 
 
-def minor_log2_grid(ax: Axes, axis: str, config: FigureConfig) -> None:
+def minor_log2_grid(ax: Axes, axis: Literal["x", "y"], config: FigureConfig) -> None:
     """A light minor gridline every :data:`FigureConfig.minor_grid_step` octaves on ``axis`` -- a
     half power of two by default, between each major (:func:`x_tick_step`/:func:`ratio_tick`'s own
     majors) -- with NO minor tick labels: a number at every half-octave would double the axis' own
@@ -791,7 +798,10 @@ def figure_one(
 #: shape (:func:`draw_panel`'s own ``treatment: str``, ``stats``/``frame`` each one table) or the
 #: MULTI-treatment one (:func:`draw_multi_panel`'s ``treatments: Sequence[str]``, ``stats``/``frame``
 #: each a ``{treatment: table}`` dict, several packets sharing this one panel and control).
-Panel = tuple[str, str, pd.DataFrame, pd.DataFrame] | tuple[str, Sequence[str], dict[str, pd.DataFrame], dict[str, pd.DataFrame]]
+Panel = (
+    tuple[str, str, pd.DataFrame, pd.DataFrame]
+    | tuple[str, Sequence[str], dict[str, pd.DataFrame], dict[str, pd.DataFrame]]
+)
 
 
 def flat_treatments(spec: str | Sequence[str]) -> list[str]:
@@ -822,7 +832,9 @@ def figure_row(
     n = len(panels)
     side = panel_side(n, row_width_in)
     data_width = side * n + ROW_PANEL_GAP * (n - 1)
-    treatments_here = [t for panel_title, treatment, treated_arm, control_arm in panels for t in flat_treatments(treatment)]
+    treatments_here = [
+        t for panel_title, treatment, treated_arm, control_arm in panels for t in flat_treatments(treatment)
+    ]
 
     def build(width: float, height: float) -> tuple[Figure, list[Axes], list[Line2D]]:
         fig, axes = plt.subplots(1, n, figsize=(width, height), squeeze=False)
