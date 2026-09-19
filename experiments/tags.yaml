@@ -27,8 +27,7 @@
 # aliases:
 #   <spelling>: <canonical tag name>
 #
-# EXAMPLE (commented out -- enable once the two kernel sets are confirmed equivalent; this repo's
-# ./experiments/kernels-harness20.txt is NOT auto-checked against the union below):
+# FORMAT (commented out -- a worked example, not a live entry):
 #
 # tags:
 #   harness20-demo:
@@ -39,4 +38,11 @@
 #   mixed-demo: harness20-demo
 
 tags: {}
-aliases: {}
+aliases:
+  # mixed = harness20's own 20-kernel roster (user, 2026-09-19): the old hand-curated
+  # kernels-mixed.txt (KernelBench/numba slice, wt-mixed worktree) never merged past its archive
+  # branch and is retired. bfcd7766 already tagged all 20 kernels `mixed` in their own manifests
+  # (pinned equal to kernels-harness20.txt by tests/test_mixed_roster.py); this alias makes the
+  # SAME roster reachable as a tag through this resolver too, without a second source of truth --
+  # kernels-harness20.txt (resolve()'s file-wins precedence) is what both now read.
+  mixed: harness20
