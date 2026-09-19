@@ -78,7 +78,7 @@ case "${PROFILE}" in
         ce_toolchain_env='CC = "/opt/gcc/bin/gcc"
 CXX = "/opt/gcc/bin/g++"
 FC = "/opt/gcc/bin/gfortran"
-LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/x86_64-linux-gnu"'
+LD_LIBRARY_PATH = "/opt/cscs/netstack:/opt/rocm/lib:/opt/rocm/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/x86_64-linux-gnu"'
         ;;
     *) ce_toolchain_env='' ;;
 esac
@@ -105,29 +105,26 @@ mounts = [$(hpcagent_bench_edf_mounts)${ce_agent_mount}]
 workdir = "/"
 
 [annotations]
-com.hooks.netstack.source = "host"
-# The hooks hardcode the artifact path at /capstor/store; that tree does not exist,
-# so no version or name resolves there.
-# The hooks do NOT fail on a missing artifact -- they point libfabric and the RCCL plugin
-# at files that are not there, the bind-mounts quietly do nothing, and RCCL drops from
-# CXI to TCP sockets. The job still finishes; it is just far slower, and it reads as a
-# slow model rather than a dead fabric.
+# Matches judge-agent-amd/edf.toml.example, the production template this generated file stands in
+# for (see the ce_toolchain_env note above): source=host resolved libmpi.so against the ROCm/
+# pytorch BASE IMAGE's own bundled /usr/lib/x86_64-linux-gnu/libfabric.so.1 -- predates FABRIC_1.9
+# symbol versioning -- because the images ship no libfabric/libcxi/librccl-net of their own (a
+# build gate fails if any survives) and host mode's bind-mount never lands on this cluster
+# (build-verify 641056: "version 'FABRIC_1.9' not found", plus libcxi.so.1 wanting versioned
+# libnl_3 symbols the base image's unversioned Ubuntu libnl-3.so.200 does not provide). host+rocm6
+# was also never actually working here: its plugin needs libamdhip64.so.6, and this image ships
+# ROCm 7.2 (libamdhip64.so.7 only, no compat symlink).
 #
-# "host" was previously the documented OPT-OUT because it grafts 29 host libraries into
-# the image and job 629822 died that way: a host libcurl needing glibc 2.38 met an image
-# with 2.35. THAT NO LONGER APPLIES -- the base moved to Ubuntu 24.04 and the shipped
-# libc.so.6 is "Ubuntu GLIBC 2.39-0ubuntu8.8", verified by extracting it from the pulled
-# squashfs. glibc is backward compatible, so 2.39 satisfies every GLIBC_2.38 the grafted
-# libraries ask for. Re-check this if the base image is ever moved backwards.
-#
-# Fabric speed is unaffected. fi_pingpong over cxi, 1 MB, beverin 2026-09-16:
-#   host -> 2.3.1  19329 MB/s | 1.22.0  20011 MB/s | 2.3.1 explicit  19878 MB/s
-# -- within noise of each other, at 4 CXI NICs per node.
-#
-# version/name are NOT set: they only index into the dead artifact tree. The host path is
-# /opt/cray/libfabric/host, a root-owned symlink (-> 2.3.1). It cannot be pinned by
-# annotation, so scripts/cscs/netstack_preflight.sh ASSERTS what it resolves to and aborts
-# on a repoint, rather than letting one campaign straddle two fabric stacks.
+# /capstor/store/cscs/cscs/public/containers/netstack/x86_64/26.08.1/ is reachable again as of
+# 2026-09-17 and its libfabric.so.1 exports FABRIC_1.9. 10-netstack.sh mounts the whole bundle to
+# /opt/cscs/netstack in artifact mode; ce_toolchain_env's LD_LIBRARY_PATH below carries that path
+# first for libmpi.so,
+# which (unlike the RCCL plugin) has no RUNPATH of its own into the mount. version/name are PINNED
+# so a CSCS-side bump is a loud failure (scripts/cscs/netstack_preflight.sh), not a campaign that
+# silently straddles two fabric stacks.
+com.hooks.netstack.source = "artifact"
+com.hooks.netstack.version = "26.08.1"
+com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
 com.hooks.aws_ofi_nccl.variant = "rocm6"
