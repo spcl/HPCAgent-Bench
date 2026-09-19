@@ -511,21 +511,34 @@ def minor_log2_grid(ax: Axes, axis: Literal["x", "y"], config: FigureConfig) -> 
     )  # fmt: skip
 
 
-def style_panel(ax: Axes, config: FigureConfig = DEFAULT_CONFIG) -> None:
+#: :func:`style_panel`'s default axis labels -- a caller overrides either to fold in a cost card's
+#: own weights (:data:`~hpcagent_bench.stats.cost.CostModel.key` is not this module's to name) or to
+#: blank the X label where :func:`figure_row`'s ``shared_x_label`` draws it once for the whole row.
+DEFAULT_XLABEL: str = "Geomean Speed-Up"
+DEFAULT_YLABEL: str = "Token-Cost (x)"
+
+
+def style_panel(
+    ax: Axes, config: FigureConfig = DEFAULT_CONFIG, xlabel: str = DEFAULT_XLABEL, ylabel: str = DEFAULT_YLABEL
+) -> None:
     """One SQUARE panel: the speed-up geomean on X as ``log2(ratio)`` (0 = no change, +1 = 2x, -1 =
     0.5x), ticks read back in ratios like every other speed-up axis in this repo
     (:func:`~hpcagent_bench.stats.figures.per_kernel.speedup_tick_label`); the token-cost ratio on Y
     (1x = no change), log-scaled. Both are log-space quantities, on their own scales, with the
     hollow control reference drawn at their shared origin ``(0, 1)`` and an equal box aspect so
     joined panels are one shape. NO TITLE: a paper's caption carries that, and the caller's own small
-    subtitle (:func:`figure_one`/:func:`figure_row`) is the most a panel draws.
+    subtitle (:func:`figure_one`/:func:`figure_row`) is the most a panel draws. ``xlabel``/``ylabel``
+    blank to ``""`` draw no label at all -- :func:`figure_row`'s own Y-dedup and ``shared_x_label``
+    both blank every panel but the one that keeps it.
     """
     ax.axvline(0.0, color=style.REFERENCE, linewidth=1.0, zorder=1)
     ax.axhline(1.0, color=style.REFERENCE, linewidth=1.0, zorder=1)
     style.point_mark(ax, 0.0, 1.0, palette.control_color(), "o", False, size=config.mark_size)
     ax.set_yscale("log", base=2.0)
-    ax.set_xlabel("Geomean Speed-Up", fontsize=config.label_pt)
-    ax.set_ylabel("Token-Cost Ratio, Treated / Control", fontsize=config.label_pt)
+    if xlabel:
+        ax.set_xlabel(xlabel, fontsize=config.label_pt)
+    if ylabel:
+        ax.set_ylabel(ylabel, fontsize=config.label_pt)
     ax.tick_params(axis="both", labelsize=config.tick_pt)
     style.value_axis(ax, "x")
     style.value_axis(ax, "y", log_base=2.0)
@@ -596,6 +609,8 @@ def draw_panel(
     repeats: population.RepeatPolicy = "latest",
     show_cloud: bool = False,
     config: FigureConfig = DEFAULT_CONFIG,
+    xlabel: str = DEFAULT_XLABEL,
+    ylabel: str = DEFAULT_YLABEL,
 ) -> list[Line2D]:
     """One comparison: every arm's summary mark (and, with ``show_cloud``, its paired cloud) on one
     panel.
@@ -608,7 +623,7 @@ def draw_panel(
     drawn_models = draw_treatment_marks(
         ax, frame, stats, palette.packet_marker(treatment), "", repeats, show_cloud, config
     )
-    style_panel(ax, config)
+    style_panel(ax, config, xlabel, ylabel)
     return legend_handles(
         treatment, sorted(drawn_models), list(control_over) or [treatment], control_name, show_cloud
     )  # fmt: skip
@@ -622,6 +637,8 @@ def draw_multi_panel(
     repeats: population.RepeatPolicy = "latest",
     show_cloud: bool = False,
     config: FigureConfig = DEFAULT_CONFIG,
+    xlabel: str = DEFAULT_XLABEL,
+    ylabel: str = DEFAULT_YLABEL,
 ) -> list[Line2D]:
     """SEVERAL packets sharing one panel and one control, each its own SHAPE
     (:data:`palette.packet_marker`) with the mark's colour still the model's -- the whole-panel
@@ -649,7 +666,7 @@ def draw_multi_panel(
         if models:
             drawn_treatments.append(treatment)
         drawn_models |= models
-    style_panel(ax, config)
+    style_panel(ax, config, xlabel, ylabel)
     return multi_legend_handles(drawn_treatments, sorted(drawn_models), control_name, show_cloud)
 
 
@@ -816,6 +833,9 @@ def figure_row(
     repeats: population.RepeatPolicy = "latest",
     show_cloud: bool = False,
     config: FigureConfig = DEFAULT_CONFIG,
+    shared_x_label: bool = False,
+    xlabel: str = DEFAULT_XLABEL,
+    ylabel: str = DEFAULT_YLABEL,
 ) -> pathlib.Path:
     """N comparisons as ONE ROW of N square panels, every one against its own control.
 
@@ -826,6 +846,12 @@ def figure_row(
     INSIDE the panel's own box (no whole-row title: a paper's caption is that); ``treatment`` is the
     registry key (or keys, :data:`Panel`) the panel is SHAPED by, differing from ``title`` whenever a
     joined figure names its panels for something other than the packet itself.
+
+    Every panel already shares ONE Y label (the leftmost panel's; the rest blank theirs) since every
+    panel reads the same quantity. ``shared_x_label`` gives the X axis -- itself already the SAME
+    quantity in every panel -- the identical treatment: every panel's own X label is blanked and
+    ``xlabel`` is drawn ONCE, centred under the whole row, instead of repeating verbatim under each
+    square. Off by default so an existing caller's per-panel X label is unchanged.
     """
     import matplotlib.pyplot as plt
 
@@ -835,6 +861,7 @@ def figure_row(
     treatments_here = [
         t for panel_title, treatment, treated_arm, control_arm in panels for t in flat_treatments(treatment)
     ]
+    panel_xlabel = "" if shared_x_label else xlabel
 
     def build(width: float, height: float) -> tuple[Figure, list[Axes], list[Line2D]]:
         fig, axes = plt.subplots(1, n, figsize=(width, height), squeeze=False)
@@ -844,10 +871,13 @@ def figure_row(
             if isinstance(treatment, str):
                 handles = draw_panel(
                     ax, frame, stats, treatment, treatments_here, repeats=repeats, show_cloud=show_cloud,
-                    config=config,
+                    config=config, xlabel=panel_xlabel, ylabel=ylabel,
                 )  # fmt: skip
             else:
-                handles = draw_multi_panel(ax, frame, stats, repeats=repeats, show_cloud=show_cloud, config=config)
+                handles = draw_multi_panel(
+                    ax, frame, stats, repeats=repeats, show_cloud=show_cloud, config=config,
+                    xlabel=panel_xlabel, ylabel=ylabel,
+                )  # fmt: skip
             for handle in handles:
                 handles_by_label.setdefault(handle.get_label(), handle)
             if title:
@@ -890,6 +920,14 @@ def figure_row(
         bottom=bottom_in / height,
         wspace=0.5,
     )  # fmt: skip
+    if shared_x_label:
+        # Between the legend (below, up to legend_h/height) and each panel's own tick numbers
+        # (above, right under bottom_in/height) -- the same ROW_XLABEL_IN band a per-panel X label
+        # used to sit in, now drawn once for the row instead of once per panel.
+        fig.text(
+            0.5, (legend_h + MEASURE_PAD_IN) / height, xlabel, ha="center", va="bottom",
+            fontsize=config.label_pt, color=style.INK,
+        )  # fmt: skip
     for ax in axes:
         untangle_labels(ax)
     return style.save(fig, out.with_suffix(""), fixed=True)

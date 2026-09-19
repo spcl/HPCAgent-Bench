@@ -950,3 +950,94 @@ def test_the_script_hands_the_figure_the_baseline_its_observations_carry(
 
     assert rc == 0
     assert seen == ["c-autopar"]
+
+
+# ---------------------------------------------------------------------------------------------
+# llr40_model_figure -- colour=model, one point per (kernel, model) under a packet SELECTION.
+# ---------------------------------------------------------------------------------------------
+
+
+def test_llr40_arm_names_the_control_and_each_packet() -> None:
+    assert kernel_comparison.llr40_arm("qwen38", "") == "cpf-llr-focus40-qwen38-c"
+    assert kernel_comparison.llr40_arm("qwen38", "lang-skills") == "cpf-llr-focus40-qwen38-c-skills"
+    assert kernel_comparison.llr40_arm("oss120b", "perf-playbook-cpu") == "cpf-llr-focus40-oss120b-c-perf-playbook-cpu"
+
+
+def test_median_over_packets_takes_the_median_of_whichever_packets_answered_a_kernel() -> None:
+    per_packet = [{"k1": 2.0, "k2": 4.0}, {"k1": 4.0}, {"k1": 6.0, "k2": 8.0}]
+    # k1: median(2,4,6)=4; k2: median(4,8)=6 -- one packet's absence never dilutes k2's median.
+    assert kernel_comparison.median_over_packets(per_packet) == {"k1": 4.0, "k2": 6.0}
+
+
+def test_llr40_model_panels_reads_the_control_arm_by_default() -> None:
+    frame = observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 4.0, "k2": 2.0}),
+            *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0, "k2": 200.0}),
+            *submission_rows("cpf-llr-focus40-oss120b-c", {"k1": 8.0}),
+            *task_rows("cpf-llr-focus40-oss120b-c", {"k1": 300.0}),
+        ]
+    )
+    panels = kernel_comparison.llr40_model_panels(frame, ["qwen38", "oss120b"], "", "latest")
+    assert set(panels) == {"qwen38", "oss120b"}
+    qwen = panels["qwen38"][0]
+    assert qwen.values == {"k1": 4.0, "k2": 2.0}
+    assert qwen.tokens == {"k1": 100.0, "k2": 200.0}
+    assert qwen.color == palette.model_color("qwen38")
+    # Every model's mark shares ONE shape under the control/median modes -- colour alone tells
+    # the series apart, the settled rule this figure shares with the efficacy panels.
+    assert qwen.marker == panels["oss120b"][0].marker == kernel_comparison.LLR40_DEFAULT_MARKER
+
+
+def test_llr40_model_panels_median_mode_aggregates_the_packet_arms_one_model_has() -> None:
+    frame = observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0}),
+            *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0}),
+            *submission_rows("cpf-llr-focus40-qwen38-c-cpf", {"k1": 8.0}),
+            *task_rows("cpf-llr-focus40-qwen38-c-cpf", {"k1": 300.0}),
+        ]
+    )
+    panels = kernel_comparison.llr40_model_panels(frame, ["qwen38"], "median", "latest")
+    series = panels["qwen38"][0]
+    # Only 2 of the 5 registered packets have an arm here; the other 3 contribute nothing and do
+    # not drag the median toward a value neither arm reported.
+    assert series.values == {"k1": 5.0}
+    assert series.tokens == {"k1": 200.0}
+
+
+def test_llr40_model_panels_drops_a_model_with_no_value_under_the_chosen_packet() -> None:
+    frame = observations(submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0}))
+    panels = kernel_comparison.llr40_model_panels(frame, ["qwen38"], "cpf", "latest")
+    assert panels == {}
+
+
+def test_llr40_model_figure_draws_one_mark_per_kernel_per_model_plus_a_summary_column() -> None:
+    frame = observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 4.0, "k2": 2.0}),
+            *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0, "k2": 200.0}),
+            *submission_rows("cpf-llr-focus40-oss120b-c", {"k1": 8.0}),
+            *task_rows("cpf-llr-focus40-oss120b-c", {"k1": 300.0}),
+        ]
+    )
+    fig = kernel_comparison.llr40_model_figure(
+        frame, list(ROSTER), ["qwen38", "oss120b"], packet_mode="", repeats="latest"
+    )
+    try:
+        speedup_ax, token_ax = fig.axes[0], fig.axes[1]
+        # 2 models * 3 roster kernels, plus each model's own summary mark past the separator.
+        assert len(speedup_ax.collections) >= 1
+        assert len(token_ax.collections) >= 1
+        # NO title anywhere -- a paper caption carries it (module docstring).
+        assert fig._suptitle is None
+        assert speedup_ax.get_title() == ""
+    finally:
+        plt = pytest.importorskip("matplotlib.pyplot")
+        plt.close(fig)
+
+
+def test_llr40_model_figure_refuses_when_no_model_has_a_value() -> None:
+    frame = observations(submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0}))
+    with pytest.raises(ValueError, match="no model"):
+        kernel_comparison.llr40_model_figure(frame, list(ROSTER), ["oss120b"], packet_mode="cpf", repeats="latest")

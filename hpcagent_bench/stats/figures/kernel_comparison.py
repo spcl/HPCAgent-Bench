@@ -803,6 +803,201 @@ def figure(
     return fig
 
 
+# ---------------------------------------------------------------------------------------------
+# llr40_model_figure -- the SAME 40-kernel dodge, coloured by MODEL instead of packet: one point
+# per (kernel, model) under a single packet SELECTION for the whole figure (the control arm, one
+# named packet, or the per-kernel median over every packet arm), rather than build_panels' one
+# point per (kernel, model, packet). No canon column, no title (a paper caption carries it).
+# ---------------------------------------------------------------------------------------------
+
+#: The llr-focus40 skill packets this figure may select over, control first -- registry keys
+#: (:func:`hpcagent_bench.experiment_tags.order`), not their arm-name spelling (:data:`LLR40_ARM_SUFFIX`).
+LLR40_PACKETS: tuple[str, ...] = ("", "lang-skills", "perf-playbook-cpu", "cpf", "cpfsrc")
+
+#: One packet's arm-name suffix in the llr-focus40-cpf campaign -- the token after ``-c``/``-fortran``,
+#: never derived from :func:`~hpcagent_bench.experiment_tags.packet_spellings` because that table's
+#: spelling for ``lang-skills`` ("skills") is shorter than the registry key itself.
+LLR40_ARM_SUFFIX: dict[str, str] = {
+    "": "",
+    "lang-skills": "skills",
+    "perf-playbook-cpu": "perf-playbook-cpu",
+    "cpf": "cpf",
+    "cpfsrc": "cpfsrc",
+}
+
+#: ``packet_mode`` values :func:`llr40_model_value` treats as "aggregate", not one arm.
+LLR40_MEDIAN_MODE: str = "median"
+
+#: The dodged mark's shape when no single packet names it (the control, or a "median" aggregate
+#: over every packet) -- a plain circle, never a registered packet's own shape, so it cannot be
+#: misread as that one packet.
+LLR40_DEFAULT_MARKER: str = "o"
+
+
+def llr40_arm(model: str, packet_mode: str, language: str = "c") -> str:
+    """The llr-focus40-cpf arm name for (``model``, one packet of :data:`LLR40_PACKETS`);
+    ``packet_mode=""`` is the bare control."""
+    suffix = LLR40_ARM_SUFFIX[packet_mode]
+    return f"cpf-llr-focus40-{model}-{language}" + (f"-{suffix}" if suffix else "")
+
+
+def median_over_packets(per_packet: Sequence[dict[str, float]]) -> dict[str, float]:
+    """The per-kernel MEDIAN over whichever packet arms have a value there -- never an average of
+    averages: a kernel only one packet arm answered still gets that one value, not a value diluted
+    by the packets that never verified it."""
+    kernels = {kernel for one in per_packet for kernel in one}
+    return {kernel: float(np.median([one[kernel] for one in per_packet if kernel in one])) for kernel in kernels}
+
+
+def llr40_model_value(
+    frame: pd.DataFrame, model: str, packet_mode: str, repeats: population.RepeatPolicy, language: str = "c"
+) -> tuple[dict[str, float], dict[str, float]]:
+    """``(speed-up, billed tokens)`` per kernel for one model under one packet selection.
+
+    ``packet_mode`` is one of :data:`LLR40_PACKETS` (the bare control is ``""``) or
+    :data:`LLR40_MEDIAN_MODE`, the per-kernel median over every packet arm that has a value there.
+    ``frame`` must already be priced by the caller's chosen cost card (:func:`hpcagent_bench.stats.
+    cost.priced`) -- this reads whatever ``tokens`` column that left behind, the same contract
+    :func:`arm_tokens` already has.
+    """
+    if packet_mode == LLR40_MEDIAN_MODE:
+        per_packet_speed = [arm_speedups(frame, llr40_arm(model, p, language), repeats) for p in LLR40_PACKETS]
+        per_packet_tokens = [arm_tokens(frame, llr40_arm(model, p, language), repeats)[0] for p in LLR40_PACKETS]
+        return median_over_packets(per_packet_speed), median_over_packets(per_packet_tokens)
+    arm = llr40_arm(model, packet_mode, language)
+    return arm_speedups(frame, arm, repeats), arm_tokens(frame, arm, repeats)[0]
+
+
+def llr40_model_marker(packet_mode: str) -> str:
+    """The one SHAPE every dodged mark wears: the packet's own registered shape
+    (:func:`~hpcagent_bench.stats.palette.packet_marker`) for a single named packet,
+    :data:`LLR40_DEFAULT_MARKER` for the control or the "median" aggregate, neither of which is a
+    packet a reader could mistake this for."""
+    if packet_mode in ("", LLR40_MEDIAN_MODE):
+        return LLR40_DEFAULT_MARKER
+    return palette.packet_marker(packet_mode)
+
+
+def llr40_model_panels(
+    frame: pd.DataFrame,
+    models: Sequence[str],
+    packet_mode: str,
+    repeats: population.RepeatPolicy,
+    language: str = "c",
+) -> dict[str, list[Series]]:
+    """One :class:`Series` per model -- COLOUR is the model (:func:`~hpcagent_bench.stats.palette.
+    model_color`, the settled rule this figure's own row shares with :mod:`hpcagent_bench.stats.
+    figures.efficacy`), SHAPE the packet selection (:func:`llr40_model_marker`): a model with no
+    value under ``packet_mode`` (every packet arm incomplete or unverified) is silently absent, the
+    same contract :func:`build_panels` already has."""
+    marker_shape = llr40_model_marker(packet_mode)
+    panels: dict[str, list[Series]] = {}
+    for model in models:
+        speed, tokens = llr40_model_value(frame, model, packet_mode, repeats, language)
+        if not speed:
+            continue
+        panels[model] = [
+            Series(
+                model,
+                experiment_tags.model_name(model),
+                palette.model_color(model),
+                marker_shape,
+                model,
+                packet_mode,
+                speed,
+                tokens,
+                {},
+                {},
+            )  # fmt: skip
+        ]
+    return panels
+
+
+def llr40_legend_handles(models: Sequence[str], packet_mode: str) -> list[matplotlib.artist.Artist]:
+    """One legend row per drawn model (colour), the packet selection's own shape once, and the
+    missing-answer cross -- the colour-is-model mirror of :func:`legend_handles`."""
+    marker_shape = llr40_model_marker(packet_mode)
+    handles: list[matplotlib.artist.Artist] = [
+        matplotlib.lines.Line2D(
+            [],
+            [],
+            marker=marker_shape,
+            linestyle="none",
+            color=palette.model_color(model),
+            markersize=8,
+            label=experiment_tags.model_name(model),
+        )  # fmt: skip
+        for model in palette.in_order(models)
+    ]
+    handles.append(
+        matplotlib.lines.Line2D(
+            [],
+            [],
+            marker="x",
+            linestyle="none",
+            color=plotstyle.MUTED,
+            markeredgewidth=1.6,
+            markersize=7,
+            label=MISSING_LABEL,
+        )  # fmt: skip
+    )
+    return handles
+
+
+def llr40_model_figure(
+    frame: pd.DataFrame,
+    roster: Sequence[str],
+    models: Sequence[str],
+    packet_mode: str = "",
+    repeats: population.RepeatPolicy = "latest",
+    language: str = "c",
+    double_column: bool = True,
+    baseline: str = DEFAULT_BASELINE,
+) -> matplotlib.figure.Figure:
+    """LLR40 by MODEL: one dodged, coloured-by-model mark per kernel (:func:`llr40_model_panels`),
+    speed-up over billed token spend, on the SAME 40-kernel dodge :func:`figure` draws by packet --
+    the per-kernel twin of :mod:`hpcagent_bench.stats.figures.efficacy`'s geomean summary row. NO
+    title (a paper caption carries it; the module-level :func:`figure` still draws one for its own,
+    older callers -- this entry point never does).
+    """
+    panels = llr40_model_panels(frame, models, packet_mode, repeats, language)
+    if not panels:
+        raise ValueError(f"no model of {list(models)} has a value under packet_mode={packet_mode!r}")
+    kernels = sorted(roster)
+    plotstyle.apply()
+    arms = [series for model_arms in panels.values() for series in model_arms]
+    speedup_ticks = value_ticks(v for series in arms for v in series.values.values())
+    token_limits = token_axis_limits(v for series in arms for v in series.tokens.values())
+    size = mark_size(kernel_pitch(len(arms), len(kernels), double_column), len(arms))
+    fig, axes = plt.subplots(
+        2, 1, sharex=True, figsize=figure_size(len(arms), len(kernels), double_column), squeeze=False
+    )
+    speedup_ax, token_ax = axes[0][0], axes[1][0]
+    style_speedup_y_axis(speedup_ax, speedup_ticks)
+    draw_panel(
+        speedup_ax, kernels, arms, lambda s: s.values, MISSING_MARKER_Y, summary_speedup, "Geomean", False, size,
+        value_text=speedup_value_text,
+    )  # fmt: skip
+    style_token_y_axis(token_ax, token_limits)
+    draw_panel(
+        token_ax, kernels, arms, lambda s: s.tokens, token_limits[0], summary_tokens, "Median", True, size,
+        mark_missing=False, value_text=plotstyle.decade_label,
+    )  # fmt: skip
+    speedup_ax.set_ylabel(speedup_label(baseline), fontsize=plotstyle.LABEL_PT * 0.7, color=plotstyle.MUTED)
+    token_ax.set_ylabel(
+        "Billed Tokens (1 fresh + 0.1 re-sent + 1 out)", fontsize=plotstyle.LABEL_PT * 0.7, color=plotstyle.MUTED
+    )
+    width, height = figure_size(len(arms), len(kernels), double_column)
+    fig.subplots_adjust(
+        left=LEFT_MARGIN_IN / width, right=1.0 - RIGHT_MARGIN_IN / width, top=1.0 - TOP_MARGIN_IN / height,
+        bottom=BOTTOM_MARGIN_IN / height, hspace=PANEL_GAP_IN / PANEL_HEIGHT_IN,
+    )  # fmt: skip
+    plotstyle.legend_below(
+        fig, llr40_legend_handles(list(panels.keys()), packet_mode), y=0.005, fontsize=plotstyle.TICK_PT * 0.75
+    )
+    return fig
+
+
 #: ``table_rows``' ``status`` column: whether a KERNEL row carries a real speed-up or names a
 #: kernel the series covers (roster-complete) but never verified. Blank on a ``summary`` row.
 STATUS_VERIFIED: str = "verified"

@@ -25,6 +25,7 @@ packet-suffix comparison and an explicit-pairs one in the same row.
 """
 
 import argparse
+import dataclasses
 import math
 import pathlib
 import sys
@@ -339,6 +340,19 @@ def figure_from_pairs(args: argparse.Namespace) -> None:
     print(f"figure -> {written} (+ .png)")
 
 
+def safe_pairs_table(frame: pd.DataFrame, repeats: population.RepeatPolicy, label: str) -> pd.DataFrame:
+    """:func:`~hpcagent_bench.stats.figures.efficacy.pairs_table`, but a raw-row population that
+    mixes timing-reduction stamps (some episodes pre-date the mwd-v2 migration) is named on stderr
+    and skipped -- an extraction issue in the SOURCE data, never this figure's to silently paper
+    over. The drawn marks are unaffected: they come from the caller's own pre-corrected ``stats``
+    table, never from this recompute, which exists only for the informational per-point CSV."""
+    try:
+        return efficacy_figures.pairs_table(frame, repeats)
+    except population.MixedPopulationError as error:
+        print(f"{label}: -absolute table skipped ({error})", file=sys.stderr)
+        return pd.DataFrame()
+
+
 def write_panel_tables(
     table: pathlib.Path,
     suffix: str,
@@ -356,14 +370,14 @@ def write_panel_tables(
         )
         combined_points = pd.concat(
             [
-                efficacy_figures.pairs_table(one_frame, repeats).assign(packet=name)
+                safe_pairs_table(one_frame, repeats, name).assign(packet=name)
                 for name, one_frame in frame.items()
                 if not one_frame.empty
             ],
             ignore_index=True,
         )
     else:
-        combined_stats, combined_points = stats, efficacy_figures.pairs_table(frame, repeats)
+        combined_stats, combined_points = stats, safe_pairs_table(frame, repeats, suffix or "panel")
     combined_stats.to_csv(table.with_name(f"{table.stem}{suffix}{table.suffix}"), index=False)
     combined_points.to_csv(table.with_name(f"{table.stem}{suffix}-absolute{table.suffix}"), index=False)
 
@@ -546,6 +560,25 @@ def main() -> None:
         help=
         "draw the per-kernel paired-ratio cloud behind each summary mark (default: summary marks only)",
     )  # fmt: skip
+    parser.add_argument(
+        "--shared-x-label",
+        action="store_true",
+        default=False,
+        help=
+        "a joined row's panels all read the same X quantity -- draw its label ONCE, centred under "
+        "the row, instead of once per panel (single-panel figures are unaffected)",
+    )  # fmt: skip
+    parser.add_argument(
+        "--ylabel",
+        default=efficacy_figures.DEFAULT_YLABEL,
+        help="override the Y axis label -- state a non-default cost card's own weights here",
+    )
+    parser.add_argument(
+        "--mark-size",
+        type=float,
+        default=None,
+        help="override FigureConfig.mark_size (summary mark area, pt^2); default: the library's own",
+    )
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/score_change.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/score_change.csv"))
     parser.add_argument(
@@ -565,6 +598,11 @@ def main() -> None:
     parser.add_argument("--cost-models", type=pathlib.Path, default=None, help="a YAML file of extra cost cards")
     args = parser.parse_args()
     card = cost.resolve(args.cost_model, args.cost_models)
+    figure_config = (
+        dataclasses.replace(efficacy_figures.DEFAULT_CONFIG, mark_size=args.mark_size)
+        if args.mark_size is not None
+        else efficacy_figures.DEFAULT_CONFIG
+    )
 
     row_width = {
         "natural": None,
@@ -591,8 +629,9 @@ def main() -> None:
             suffix = f"-{title.lower().replace(' ', '-')}"
             write_panel_tables(args.table, suffix, stats, frame, args.repeats)
         written = efficacy_figures.figure_row(
-            comparison_panels, args.out, row_width_in=row_width, repeats=args.repeats, show_cloud=args.show_cloud
-        )
+            comparison_panels, args.out, row_width_in=row_width, repeats=args.repeats, show_cloud=args.show_cloud,
+            config=figure_config, shared_x_label=args.shared_x_label, ylabel=args.ylabel,
+        )  # fmt: skip
         for title, treatment, stats, frame in comparison_panels:
             del frame  # the summary line names the panel, not its rows
             for name, one_stats in stats.items() if isinstance(stats, dict) else ((treatment, stats),):
@@ -638,12 +677,14 @@ def main() -> None:
         title, treatment, stats, frame = panels[0]
         del title  # figure_one's subtitle is --title (blank by default), not the one panel's own name
         written = efficacy_figures.figure_one(
-            frame, stats, treatment, args.out, repeats=args.repeats, show_cloud=args.show_cloud, title=args.title
-        )
+            frame, stats, treatment, args.out, repeats=args.repeats, show_cloud=args.show_cloud, title=args.title,
+            config=figure_config,
+        )  # fmt: skip
     else:
         written = efficacy_figures.figure_row(
-            panels, args.out, row_width_in=row_width, repeats=args.repeats, show_cloud=args.show_cloud
-        )
+            panels, args.out, row_width_in=row_width, repeats=args.repeats, show_cloud=args.show_cloud,
+            config=figure_config, shared_x_label=args.shared_x_label, ylabel=args.ylabel,
+        )  # fmt: skip
 
     for title, treatment, stats, frame in panels:
         del title, frame  # the summary line names the treatment, not its caption or its rows
