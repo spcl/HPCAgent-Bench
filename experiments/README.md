@@ -794,7 +794,9 @@ bare `${SCRATCH}/<name>` path. A one-off manual invocation of `canon_column.sh` 
 `${HPCAGENT_BENCH_RUNS_ROOT}` gets none of the cleanup below and simply accumulates like any other
 bare-scratch directory, which is the exact problem this convention exists to stop.
 
-Inside a column's job, `canon_column.sh`:
+Inside a column's job, `canon_column.sh` wraps each kernel's `run-framework` call in `timeout`, so a
+hung kernel (job 640524: one `dace_gpu` kernel ate a whole 12h column) costs only its own share; a
+kill is recorded as a CSV row (`status=timeout`) rather than a silent gap. `canon_column.sh`:
 
 1. writes the timed shard `<column>.rank<N>.csv` and, with `OPT_REPORTS=1` (the default), the
    compile-only vectorization report under `reports/<column>/` -- both are the sweep's documented
@@ -818,6 +820,15 @@ fresh table from a WHOLE sweep's directory once every column has finished -- see
 incrementally, per column, by the in-job step above) is a convenience for this repo's own queries
 across many sweeps; it is not a substitute for that rebuild and does not need `out_root` to still
 exist.
+
+`scripts/canon_sdfg_prerender.py` warms (or reports on) the DaCe base-SDFG cache a `dace_*` column
+reads from, ahead of a sweep, so its own kernels do not each pay the parse cold and one hung kernel
+does not consume the sweep's own budget:
+
+```bash
+python3 scripts/canon_sdfg_prerender.py sweep --roster experiments/kernels-llr248.txt \
+    --out-dir "$SCRATCH/prerender/llr" --workers 16 --timeout 3600
+```
 
 ## Troubleshooting
 

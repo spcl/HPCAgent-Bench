@@ -157,8 +157,9 @@ not drag a modest win halfway across the panel, with the ticks read back in rati
 axis here -- never a bare ratio axis ticked in raw ratios. Y is the paired token-cost geomean,
 treated over control, ALSO a `geomean_ci` interval, on its own log scale (SC15 Rule 4: a speed-up
 and a spend are different measurements and never share one). ONE mark per arm, crossed with its 95%
-interval on both axes, scattered over its own per-kernel cloud; nothing joined by a line (SC15 Rule
-12). A bar or a slope figure elsewhere in this repo keeps its measured VALUE on Y and its categories
+interval on both axes; the per-kernel paired cloud behind it is opt-in (`--show-cloud`, default
+off -- one comparison's cloud already crowds a square panel past legibility once every kernel is a
+dot), and nothing is ever joined by a line (SC15 Rule 12). A bar or a slope figure elsewhere in this repo keeps its measured VALUE on Y and its categories
 on X -- that older rule still holds for `plot_arm_summary.py` and the per-kernel figures, which are
 not paired ratios. Pinned by `tests/test_plot_score_change.py`'s
 `test_x_is_log2_of_the_speed_up_and_zero_is_the_no_change_line` and
@@ -175,10 +176,17 @@ packet also varies is the bug: it spends the intervention's channel on the entit
 carries, so one arm reads as a different treatment in every figure it appears in. Where only ONE
 entity varies the colour is that entity: `palette.framework_color` for the canon compiler figure (no
 agent in it), `palette.harness_color` for the harness comparison (claude / miniswe / openhands /
-optimas), and `palette.model_color` for a figure whose only axis is which LLM ran. Pinned by
-`tests/test_plot_score_change.py`'s
-`test_the_filled_mark_wears_the_packet_colour_and_the_hollow_control_wears_the_control_colour`
-and `test_the_marker_shape_is_the_model_and_nothing_else`.
+optimas), and `palette.model_color` for a figure whose only axis is which LLM ran.
+
+**This inverts on `hpcagent_bench.stats.figures.efficacy` and `kernel_comparison`** (2026-09-19):
+one panel already belongs to one packet (rule 3), so its shape carries no information, while the
+few models sharing that panel need telling apart when their summary marks overlap -- checked by
+rendering both orders on the same llr40 figure, where a shared hue and only a circle-vs-square edge
+read far worse. Those two modules read colour off `palette.model_color` and shape off
+`palette.packet_marker` (one shape for the whole panel) instead of `palette.color`/`palette.marker`
+-- see `palette`'s own module docstring. Pinned by `tests/test_plot_score_change.py`'s
+`test_the_filled_mark_wears_the_model_colour_and_the_hollow_control_wears_the_control_colour`
+and `test_the_marker_shape_is_the_packet_and_nothing_else`.
 
 **3. Several comparisons join as ONE ROW of square panels.** `hpcagent_bench.stats.figures.
 efficacy.figure_row`/`panel_side`: every comparison is a square panel against its own control, and a

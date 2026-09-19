@@ -31,6 +31,25 @@ every `HPCAGENT_BENCH_JIT_PUBLISH_INTERVAL_SECONDS` (default 1800). `HPCAGENT_BE
 disables the layer and writes the shared tree directly, as before. `AITER_JIT_DIR` is not part of
 this layer; it is seeded once from the image's own prebuild and still writes the shared tree.
 
+## Node-local agent caches, hard-linked task material, dace_numeric (2026-09-19 inode fix)
+
+The 2026-09-19 inode-quota incident (1.67M vs 1M on `$SCRATCH`) had three sources, all fixed the
+same way -- move the many-small-files tree off the swept, shared root:
+
+- **Agent JIT/pip caches.** `TRITON_CACHE_DIR`/`XDG_CACHE_HOME` were never set for an agent, so
+  every episode's compiler defaulted to `$HOME/.triton` and `$HOME/.cache` under the persistent
+  workdir (119k and 27k files/campaign, never swept). `agent_driver.worker_cache_root()` now points
+  both at `${TMPDIR:-/tmp}/hpcagent-bench-agent-cache-<job>-<node>-<worker>`, removed when the
+  worker exits.
+- **Hard-linked task reference material.** `materialize_shared.sh` used to `cp` each kernel's
+  reference files into every job's `shared/tasks/<kernel>/` (42k duplicates of the same repo
+  files across a campaign's history). It now hard-links them (`ln -f`, falling back to `cp` only
+  across a filesystem boundary, `EXDEV`) -- same inode, no extra file.
+- **`dace_numeric` build tree.** The numerics harness's DaCe probe used to build under a bare
+  `$SCRATCH/hpcagent_bench/dace_numeric` (35k inodes, outside the unified cache). `dace_build_root()`
+  (`tests/numerical_oracle.py`) now builds under `${JIT_CACHE_ROOT}/dace_numeric` (else
+  `HPCAGENT_BENCH_CACHE`), same root as `jit/`.
+
 ## Why the repo and not scratch (`generated/`, `packs/`)
 
 Same filesystem either way -- the checkout and `$SCRATCH` are on the same scratch mount -- so this
