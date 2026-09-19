@@ -136,6 +136,29 @@ def test_a_scaled_wall_clock_is_clamped_under_the_partition_cap(owed: ModuleType
     assert int(setup.value("AGENT_TIMEOUT_SECONDS")) == owed.time_cap_seconds()
 
 
+@pytest.mark.parametrize(
+    ("source_tokens", "source_seconds"),
+    [("48000000", "57600"), ("24000000", "28800"), ("12000000", "9000")],
+    ids=["a-4x-rerun", "a-2x-rerun", "deadline-cut"],
+)
+def test_a_rerun_budget_is_the_model_base_times_the_class_scale_whatever_the_source_ran(
+    owed: ModuleType, source_tokens: str, source_seconds: str
+) -> None:
+    """Regression: a budget rerun of an arm whose newest job was itself a 4x rerun got 4 x 48M = 192M."""
+    source = setup_env("cpf-llr-focus40-qwen38-c", AGENT_MAX_TOKENS=source_tokens, AGENT_TIMEOUT_SECONDS=source_seconds)
+    base = owed.Budget("12000000", "14400")
+    budget = owed.make_setup(source, "cpf-llr-focus40-qwen38-c", "llr-focus40", "", 4, 4, base=base)
+    infra = owed.make_setup(source, "cpf-llr-focus40-qwen38-c", "llr-focus40", "", base=base)
+    assert (budget.value("AGENT_MAX_TOKENS"), budget.value("AGENT_TIMEOUT_SECONDS")) == ("48000000", "57600")
+    assert (infra.value("AGENT_MAX_TOKENS"), infra.value("AGENT_TIMEOUT_SECONDS")) == ("12000000", "14400")
+    assert budget.value("HPCAGENT_BENCH_RECORD_AGENT_MAX_TOKENS") == "48000000"
+
+
+@pytest.mark.parametrize(("model", "seconds"), [("qwen38", "14400"), ("oss120b", "14400"), ("kimi27sglang", "28800")])
+def test_the_model_base_budget_is_the_rendered_base_env(owed: ModuleType, model: str, seconds: str) -> None:
+    assert owed.model_base_budget(str(REPO), model) == owed.Budget("12000000", seconds)
+
+
 def test_a_wave_is_one_batch_of_agents_per_node_with_the_longest_budget_as_walltime(owed: ModuleType) -> None:
     long_setup = make(owed, "a", scale=4)
     short_setup = make(owed, "b")

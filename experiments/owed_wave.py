@@ -212,6 +212,18 @@ def group_setups(setups: list[Setup]) -> list[list[Setup]]:
     return list(groups.values())
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class Budget:
+    """An arm's 1x agent budget: AGENT_MAX_TOKENS and AGENT_TIMEOUT_SECONDS."""
+
+    tokens: str
+    seconds: str
+
+
+#: Experiments whose 1x budget is the model's base env (``.env.base-<model>``); the owed rule scales that.
+MODEL_BASE_BUDGET_EXPERIMENTS = frozenset({"llr-focus40", "llr-focus40-blind"})
+
+
 def scaled(value: str, factor: int, cap: int = 0) -> str:
     result = int(value) * factor
     return str(min(result, cap) if cap else result)
@@ -235,10 +247,14 @@ def make_setup(
     token_scale: int = 1,
     time_scale: int = 1,
     layer: tuple[tuple[str, str], ...] = (),
+    base: Budget | None = None,
 ) -> Setup:
     """The rerun condition of ``identity`` from its source job's env: the model ``layer``'s CURRENT
     serving keys (what a fresh submit of the arm renders), the ``-clean`` arm (the rerun rule), this
-    checkout's commit, and the budget scaled (the ``budget`` owed class)."""
+    checkout's commit, and the budget scaled (the ``budget`` owed class).
+
+    With ``base`` the budget is ``base`` times the class scale at ANY scale: the source job may be a
+    scaled rerun or deadline-cut, and scaling its budget again would compound."""
     arm = f"{remaining_kernels.base_arm(identity)}{remaining_kernels.CLEAN_SUFFIX}"
     env = {key: value for key, value in source_env if key not in INERT_KEYS}
     env.update(job_level(layer))
@@ -246,7 +262,9 @@ def make_setup(
     env["HPCAGENT_BENCH_RECORD_ARM"] = arm
     if commit:
         env["HPCAGENT_BENCH_RECORD_COMMIT"] = commit
-    if token_scale != 1 or time_scale != 1:
+    if base is not None:
+        env["AGENT_MAX_TOKENS"], env["AGENT_TIMEOUT_SECONDS"] = base.tokens, base.seconds
+    if base is not None or token_scale != 1 or time_scale != 1:
         env["AGENT_MAX_TOKENS"] = scaled(env.get("AGENT_MAX_TOKENS", "0") or "0", token_scale)
         env["AGENT_TIMEOUT_SECONDS"] = scaled(
             env.get("AGENT_TIMEOUT_SECONDS", "0") or "0", time_scale, time_cap_seconds()
@@ -424,6 +442,24 @@ def model_layer(opt: str, model: str) -> tuple[tuple[str, str], ...]:
     return parse_env(out.stdout)
 
 
+def model_base_budget(opt: str, model: str) -> Budget:
+    """``.env.base-<model>`` rendered through its layers: the model's 1x agent budget."""
+    base = pathlib.Path(opt) / "experiments" / f".env.base-{model}"
+    if not base.is_file():
+        raise SystemExit(f"owed_wave: no base env {base}")
+    out = subprocess.run(
+        ["bash", str(pathlib.Path(opt) / "experiments" / "env_layers.sh"), "render", str(base)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    env = dict(parse_env(out.stdout))
+    tokens, seconds = env.get("AGENT_MAX_TOKENS", ""), env.get("AGENT_TIMEOUT_SECONDS", "")
+    if not tokens or not seconds:
+        raise SystemExit(f"owed_wave: {base} renders no AGENT_MAX_TOKENS/AGENT_TIMEOUT_SECONDS")
+    return Budget(tokens, seconds)
+
+
 def checkout_commit(opt: str) -> str:
     out = subprocess.run(
         ["git", "-C", opt, "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=False
@@ -498,6 +534,7 @@ def gather(
     active = queued_arms()
     commit = checkout_commit(opt)
     layer = model_layer(opt, model)
+    model_base = model_base_budget(opt, model)
     rosters: dict[str, list[str]] = {}
     for identity in sorted(identities):
         campaign = wave_board.campaign_of(identity)
@@ -526,7 +563,8 @@ def gather(
             budget = owed_class == remaining_kernels.ExitClass.BUDGET and not whole
             scale = (token_scale, time_scale) if budget else (1, 1)
             # The arm's NEWEST job's env for every kernel: one condition per arm, the latest it ran.
-            setup = make_setup(source.env, identity, spec.experiment, commit, *scale, layer=layer)
+            base = model_base if spec.experiment in MODEL_BASE_BUDGET_EXPERIMENTS else None
+            setup = make_setup(source.env, identity, spec.experiment, commit, *scale, layer=layer, base=base)
             plan.owed.append(Owed(setup, found[1], owed_class.value))
     return plan
 
