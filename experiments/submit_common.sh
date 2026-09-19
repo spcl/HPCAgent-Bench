@@ -79,6 +79,14 @@ BUDGET_SCALE=${BUDGET_SCALE:-1}
 TOKEN_SCALE=${TOKEN_SCALE:-${BUDGET_SCALE}}
 TIME_SCALE=${TIME_SCALE:-${BUDGET_SCALE}}
 
+# scale_budget <value> -> <value> * BUDGET_SCALE, integer. Legacy: submit-llrblind.sh,
+# submit-git-scicomp.sh, submit-scicomp-dc.sh and submit-scicomp-perf-playbook.sh call this
+# directly (uncapped, unlike AGENT_TIMEOUT_SECONDS through scaled_budget_from) and have not been
+# migrated to TOKEN_SCALE/TIME_SCALE -- a caller that only sets those two never touches this.
+scale_budget() {
+    printf '%s\n' "$(( $1 * BUDGET_SCALE ))"
+}
+
 # PARTITION_TIME_LIMIT_HOURS -- the partition's own MaxTime with a safety margin (mi300's is
 # 24h/1-00:00:00 per `scontrol show partition mi300`; 23 leaves an hour of slack). A scaled
 # AGENT_TIMEOUT_SECONDS past what fits under this asks sbatch for a --time no partition will ever
