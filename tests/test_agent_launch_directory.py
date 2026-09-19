@@ -179,3 +179,47 @@ def test_a_bound_directory_without_tools_stops_the_driver_before_any_agent(
     monkeypatch.setenv("HPCAGENT_BENCH_AGENT_DIR", str(tmp_path))
     with pytest.raises(SystemExit, match="HPCAGENT_BENCH_AGENT_DIR"):
         load_driver("agent_driver_unbound").tool_registry()
+
+
+def test_a_read_only_snapshot_env_is_staged_with_its_problems_line(tmp_path: pathlib.Path) -> None:
+    """Every job gets a read-only snapshot as its env (env_layers.sh snapshot_env). Copied with its
+    mode, the staged .env refused the PROBLEMS_FILE line and the job died at launch (643180, 643222)."""
+    env_file = tmp_path / "snapshot.env"
+    env_file.write_text("CAMPAIGN_ARM=arm-c\n")
+    env_file.chmod(0o400)
+    (tmp_path / PROBLEMS).write_text("{}\n")
+    launch = tmp_path / "launch"
+    stage(EXPERIMENTS, launch, env_file, str(tmp_path / PROBLEMS))
+    assert (launch / ".env").read_text().splitlines()[-1] == f"PROBLEMS_FILE={PROBLEMS}"
+    assert not os.access(launch / ".env", os.W_OK), "the staged env is still read-only once written"
+
+
+def test_a_fused_waves_setups_are_staged_beside_the_env(tmp_path: pathlib.Path) -> None:
+    """The resolved overlays, split envs and problems of every setup: the driver and judge read them there."""
+    run_dir = tmp_path / "run"
+    setups = run_dir / "setups"
+    setups.mkdir(parents=True)
+    for suffix in (".resolved", ".env", ".jsonl", ".keys"):
+        (setups / f"arm-c-clean{suffix}").write_text("x\n")
+    env_file = tmp_path / "job.env"
+    env_file.write_text("CAMPAIGN_ARM=owed-w1\n")
+    (tmp_path / PROBLEMS).write_text("{}\n")
+    launch = tmp_path / "launch"
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            LAUNCH_FILES_RE.search(RUN_CLUSTER.read_text()).group(0),
+            f"SCRIPT_DIR={shlex.quote(str(EXPERIMENTS))}",
+            f"AGENT_LAUNCH_DIR={shlex.quote(str(launch))}",
+            f"RUN_DIR={shlex.quote(str(run_dir))}",
+            shell_function("stage_agent_launch"),
+            f"stage_agent_launch {shlex.quote(str(env_file))} {shlex.quote(str(tmp_path / PROBLEMS))}",
+        ]
+    )
+    done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    assert sorted(path.name for path in (launch / "setups").iterdir()) == [
+        "arm-c-clean.env",
+        "arm-c-clean.jsonl",
+        "arm-c-clean.resolved",
+    ]
