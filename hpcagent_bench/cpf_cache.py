@@ -55,6 +55,8 @@ LAYOUT = 1
 MANIFEST_NAME = "manifest.json"
 VIEW_NAME = "cpf-view.json"
 ENTRIES_NAME = "entries"
+#: Per-pointer judge verdicts on a view's drop-ins (hpcagent_bench.cpf_verify), beside the pointers.
+VERIFIED_NAME = "verified"
 
 #: Canonical SDFG entries live under this directory of a cache root, apart from rendered forms.
 CANONICAL_DIR = "canonical"
@@ -278,10 +280,10 @@ def served_dialect(header: Mapping[str, str], language: str) -> str:
     return "hip" if header.get("target") == "gpu" else DIALECT[language]
 
 
-def resolve(
+def pointer_outcome(
     view: pathlib.Path, kernel: str, language: str, fptype: str, mode: str
-) -> tuple[pathlib.Path, pathlib.Path]:
-    """``(source, binding)`` in the cache for one exact (kernel, language, precision, mode)."""
+) -> tuple[str, str, dict[str, str]]:
+    """``(pointer name, key, view header)`` of one exact (kernel, language, precision, mode) render."""
     header = read_view(view)
     name = pointer_name(kernel, fptype, served_dialect(header, language))
     try:
@@ -295,12 +297,42 @@ def resolve(
             f"view {view} entry {name} has no {mode} (verdict {outcome.get('verdict')!r}, key {key}): "
             f"{outcome.get('error', 'not rendered')}"
         )
+    return name, str(key), header
+
+
+def resolve(
+    view: pathlib.Path, kernel: str, language: str, fptype: str, mode: str
+) -> tuple[pathlib.Path, pathlib.Path]:
+    """``(source, binding)`` in the cache for one exact (kernel, language, precision, mode)."""
+    _, key, header = pointer_outcome(view, kernel, language, fptype, mode)
     cache_root = pathlib.Path(header["cache_root"])
     manifest = verified_manifest(cache_root, key)
     artefacts = manifest["artefacts"]
     assert isinstance(artefacts, dict)
     where = entry_path(cache_root, key)
     return where / artefacts["source"]["name"], where / artefacts["binding"]["name"]
+
+
+def record_verification(
+    view: pathlib.Path, kernel: str, language: str, fptype: str, verdict: Mapping[str, object]
+) -> None:
+    """File the judge's ``verdict`` on the drop-in the view serves for this kernel, tied to its key."""
+    name, key, _ = pointer_outcome(view, kernel, language, fptype, "dropin")
+    write_json(view / VERIFIED_NAME / name, {**verdict, "key": key})
+
+
+def unverified(view: pathlib.Path, kernel: str, language: str, fptype: str) -> str:
+    """Why the served drop-in is not judge-verified; "" when a grade of these exact bytes was correct."""
+    name, key, _ = pointer_outcome(view, kernel, language, fptype, "dropin")
+    try:
+        verdict = json.loads((view / VERIFIED_NAME / name).read_text())
+    except (OSError, ValueError):
+        return f"view {view} drop-in {name} was never graded (run experiments/verify_cpf.sbatch)"
+    if verdict.get("key") != key:
+        return f"view {view} drop-in {name} was graded as {verdict.get('key')}, it now serves {key}"
+    if verdict.get("verdict") != "ok":
+        return f"view {view} drop-in {name} is unverified: {verdict.get('reason', '')}"
+    return ""
 
 
 def wrong_target(view: pathlib.Path, target: str) -> str:
@@ -316,17 +348,28 @@ def wrong_target(view: pathlib.Path, target: str) -> str:
 
 
 def missing(
-    view: pathlib.Path, kernels: Sequence[str], language: str, fptype: str, mode: str, target: str
+    view: pathlib.Path,
+    kernels: Sequence[str],
+    language: str,
+    fptype: str,
+    mode: str,
+    target: str,
+    verified: bool = False,
 ) -> list[str]:
-    """One line per kernel the view cannot serve, each naming why; empty when it serves them all."""
+    """One line per kernel the view cannot serve, each naming why; empty when it serves them all.
+
+    ``verified`` also refuses a drop-in the judge never graded correct (:func:`unverified`)."""
     if reason := wrong_target(view, target):
         return [reason]
     misses: list[str] = []
     for kernel in kernels:
         try:
             resolve(view, kernel, language, fptype, mode)
+            reason = unverified(view, kernel, language, fptype) if verified and mode == "dropin" else ""
         except CacheMiss as exc:
-            misses.append(f"{short_name(kernel)}: {exc}")
+            reason = str(exc)
+        if reason:
+            misses.append(f"{short_name(kernel)}: {reason}")
     return misses
 
 
@@ -400,6 +443,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     check = sub.add_parser("check", help="print every kernel the view cannot serve; exit 1 if any")
     check.add_argument("--kernels", required=True, help="comma-separated kernels")
     check.add_argument("--mode", choices=MODES, required=True)
+    check.add_argument("--verified", action="store_true", help="a drop-in also needs a correct judge grade")
     put = sub.add_parser("stage", help="copy one kernel's drop-in into a task directory")
     put.add_argument("--kernel", required=True)
     put.add_argument("--dest", required=True, type=pathlib.Path)
@@ -426,7 +470,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1 if misses else 0
     if args.command == "check":
         kernels = [k for k in args.kernels.split(",") if k.strip()]
-        misses = missing(args.view, kernels, args.language, args.precision, args.mode, args.target)
+        misses = missing(args.view, kernels, args.language, args.precision, args.mode, args.target, args.verified)
         for line in misses:
             print(line)
         return 1 if misses else 0
