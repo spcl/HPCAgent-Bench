@@ -74,6 +74,7 @@ td.arm { font: 13px var(--mono); }
 td.arm .variant { color: var(--ink); } td.arm .model { color: var(--muted); }
 td.num { font: 13px var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 td.num .owed { color: var(--incomplete); }
+td.num .placeholder { color: var(--muted); }
 .strip { display: grid; grid-auto-flow: column; grid-auto-columns: 7px; gap: 2px; height: 14px; }
 .strip i { display: block; border-radius: 1px; background: var(--cell-empty); }
 .strip i.on { background: var(--complete); }
@@ -274,12 +275,18 @@ function renderBoard() {
       // A clean re-run folds into this same row (2026-09-18); the badge just says a clean job contributed.
       if (arm.clean) armCell.append(" ", el("span", { class: "pill clean" }, "clean"));
       const counts = el("td", { class: "num" }, arm.roster ? `${arm.done}/${arm.roster}` : "n/a");
+      const badges = [];
       if (owed(arm)) {
         const bits = [`${owed(arm)} owed`];
         if (arm.owed_budget) bits.push(`${arm.owed_budget} budget`);
         if (arm.owed_infra) bits.push(`${arm.owed_infra} infra`);
-        counts.append(" ", el("span", { class: "owed" }, `(${bits.join(", ")})`));
+        badges.push(el("span", { class: "owed" }, `(${bits.join(", ")})`));
       }
+      // A forced-1x placeholder (self-exit or context overflow, never submitted -- 2026-09-18
+      // owed rule) counts as done (never rerun) but is NOT a delivered answer (2026-09-19
+      // forced-1x completion decision): flagged apart so "done" is never read as "measured".
+      if (arm.placeholder) badges.push(el("span", { class: "placeholder" }, `(${arm.placeholder} placeholder)`));
+      for (const badge of badges) counts.append(" ", badge);
       const rowAttrs = { class: arm.status };
       if (arm.failed && arm.failed.length) rowAttrs.title = "failed: " + arm.failed.join(", ");
       tbody.append(el("tr", rowAttrs,
