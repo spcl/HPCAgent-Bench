@@ -372,3 +372,10 @@ def test_the_crash_audit_refuses_a_fused_job_rather_than_mixing_its_arms(tmp_pat
     job_dir = fused_job_dir(tmp_path, "640103")
     with pytest.raises(SystemExit, match="fused owed wave"):
         audit.audit_arm("cpf-llr-focus40-qwen38-c", [("640103", str(job_dir))], ["a"], tmp_path, str(REPO))
+
+
+def test_a_stale_key_nothing_reads_never_splits_a_wave(owed: ModuleType) -> None:
+    old = make(owed, "cpf-llr-focus40-kimi27sglang-c-cpfsrc", OPTARENA_OPTIMIZER="moonshotai/Kimi-K2.7-Code")
+    new = make(owed, "gpu-llr-focus40-kimi27sglang-hip-skills", LANGUAGE="hip")
+    assert "OPTARENA_OPTIMIZER" not in dict(old.env)
+    assert [len(group) for group in owed.group_setups([old, new])] == [2]

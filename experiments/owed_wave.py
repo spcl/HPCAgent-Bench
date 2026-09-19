@@ -85,6 +85,11 @@ PER_PROBLEM_KEYS = (
 #: Keys the fused job sets for itself: its own files, roster and node counts.
 JOB_OWNED_KEYS = ("RUN_ROOT", "PROBLEMS_FILE", "SETUPS_FILE", "KERNELS", "AGENT_NODES", "JUDGE_NODES")
 
+#: Keys an older arm env still carries that nothing reads any more (renamed to
+#: HPCAGENT_BENCH_OPTIMIZER on 2026-09-17). Dropped from a setup, so a stale spelling cannot split
+#: two setups into separate waves over a value no process sees.
+INERT_KEYS = ("OPTARENA_OPTIMIZER",)
+
 #: The partition's MaxTime less a margin, and the staging a job spends before its first agent
 #: (submit_common.sh PARTITION_TIME_LIMIT_HOURS, arm_nodes.sh STAGING_HOURS).
 PARTITION_TIME_LIMIT_HOURS = int(os.environ.get("PARTITION_TIME_LIMIT_HOURS", "23"))
@@ -233,7 +238,7 @@ def make_setup(
     serving keys (what a fresh submit of the arm renders), the ``-clean`` arm (the rerun rule), this
     checkout's commit, and the budget scaled (the ``budget`` owed class)."""
     arm = f"{remaining_kernels.base_arm(identity)}{remaining_kernels.CLEAN_SUFFIX}"
-    env = dict(source_env)
+    env = {key: value for key, value in source_env if key not in INERT_KEYS}
     env.update(job_level(layer))
     env["CAMPAIGN_ARM"] = arm
     env["HPCAGENT_BENCH_RECORD_ARM"] = arm
@@ -467,7 +472,8 @@ def gather(
         source = job_sources(newest[1]).get(newest[2])
         if source is None or dict(source.env).get("HPCAGENT_BENCH_RECORD_MODEL") != model:
             continue
-        if identity in active:
+        # A smoke's rows are never coverage, so an arm still queued is no reason to skip it.
+        if identity in active and not every_kernel:
             plan.notes.append(f"skip {identity}: a job of it is queued or running")
             continue
         full = rosters.setdefault(spec.tag, remaining_kernels.roster(spec.tag, opt))
@@ -608,7 +614,7 @@ def main() -> int:
         every_kernel=args.smoke_kernels > 0,
     )
     budget = [item for item in plan.owed if item.owed_class == remaining_kernels.ExitClass.BUDGET.value]
-    if budget and args.token_scale == 1 and args.time_scale == 1:
+    if budget and args.token_scale == 1 and args.time_scale == 1 and not args.smoke_kernels:
         plan.notes.append(
             f"{len(budget)} budget-class kernels rerun at their own budget: set TOKEN_SCALE/TIME_SCALE to scale them"
         )
