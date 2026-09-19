@@ -143,6 +143,37 @@ function displayVariant(variant) {
   return variant || "base";
 }
 
+//: Known packet suffixes a treatment variant carries after its language, if any ("hip-perf-playbook-
+//: amd", "perf-playbook-cpu" with no language). Used only to sort a baseline next to its treatment;
+//: arm.variant itself is untouched.
+const PACKET_SUFFIXES = ["perf-playbook-cpu", "perf-playbook-amd"];
+
+// The language a variant names, "" for a bare baseline/treatment with none. Falls back to the whole
+// variant for a shape this does not recognise, so an unmatched variant still sorts (just alone).
+function variantLanguage(variant) {
+  if (variant === "plain") return "";
+  if (variant.endsWith("-plain")) return variant.slice(0, -"-plain".length);
+  for (const suffix of PACKET_SUFFIXES) {
+    if (variant === suffix) return "";
+    if (variant.endsWith("-" + suffix)) return variant.slice(0, -(suffix.length + 1));
+  }
+  return variant;
+}
+
+function variantIsBaseline(variant) {
+  return variant === "plain" || variant.endsWith("-plain");
+}
+
+// model -> language -> baseline before its treatment, so a pair reads side by side; a variant shape
+// this does not recognise (variantLanguage falls back to the whole string) sorts exactly as the
+// plain model/variant compare did before this rule existed.
+function armSort(x, y) {
+  return x.model.localeCompare(y.model)
+    || variantLanguage(x.variant).localeCompare(variantLanguage(y.variant))
+    || Number(variantIsBaseline(y.variant)) - Number(variantIsBaseline(x.variant))
+    || x.variant.localeCompare(y.variant);
+}
+
 function experimentStatus(arms) {
   if (arms.some(a => a.status === "running")) return "running";
   if (arms.every(a => a.status === "complete")) return "complete";
@@ -232,12 +263,12 @@ function renderBoard() {
     const roster = group.list.reduce((s, a) => s + a.roster, 0);
     const owedTotal = group.list.reduce((s, a) => s + owed(a), 0);
     const head = el("div", { class: "exp-head" },
-      el("h2", {}, first.experiment_name + (first.device === "GPU" && !/GPU/.test(first.experiment_name) ? ", GPU" : "")),
+      el("h2", {}, first.experiment_name),
       el("span", { class: "key" }, `${first.experiment} / ${first.device.toLowerCase()}`),
       el("span", { class: "pill " + group.status }, group.status),
       el("span", { class: "facts" }, roster ? `${group.list.length} arms, ${done}/${roster} kernel rows, ${owedTotal} owed` : `${group.list.length} arms, smoke (no roster)`));
     const tbody = el("tbody");
-    for (const arm of arms.sort((x, y) => x.model.localeCompare(y.model) || x.variant.localeCompare(y.variant))) {
+    for (const arm of arms.sort(armSort)) {
       const armCell = el("td", { class: "arm" },
         el("span", { class: "variant" }, displayVariant(arm.variant)), " ", el("span", { class: "model" }, MODEL_NAMES[arm.model] || arm.model));
       // A clean re-run folds into this same row (2026-09-18); the badge just says a clean job contributed.

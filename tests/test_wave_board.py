@@ -107,17 +107,19 @@ def test_scicomp_dc_gpu_wins_over_its_cpu_prefix(board: types.ModuleType) -> Non
 
 
 def test_scicomp_baseline_and_perf_playbook_are_one_board_experiment(board: types.ModuleType) -> None:
-    """User 2026-09-19: scicomp-dc (the plain baseline), scicomp-dc-gpu, scicomp-perf-playbook and
-    scicomp-perf-playbook-gpu report under one display name, split into a CPU and a GPU section only
-    by device -- the board groups rows by (experiment, device)."""
-    cpu_keys = ("scicomp-dc", "scicomp-perf-playbook")
-    gpu_keys = ("scicomp-dc-gpu", "scicomp-perf-playbook-gpu")
-    for key in cpu_keys + gpu_keys:
+    """User 2026-09-19 (corrected same day): scicomp-dc (the plain baseline), scicomp-dc-gpu,
+    scicomp-perf-playbook and scicomp-perf-playbook-gpu report under ONE name -- "..., Perf Playbook",
+    no "Divide and Conquer" and no ", GPU" suffix, CPU and GPU alike -- split into a CPU and a GPU
+    section only by device (the board groups rows by (experiment, device))."""
+    keys = ("scicomp-dc", "scicomp-dc-gpu", "scicomp-perf-playbook", "scicomp-perf-playbook-gpu")
+    for key in keys:
         assert board.CAMPAIGNS[key].experiment == "scicomp-focus40"
-    assert {board.CAMPAIGNS[key].name for key in cpu_keys} == {"Scientific Computing Focus@40"}
-    assert {board.CAMPAIGNS[key].name for key in gpu_keys} == {"Scientific Computing Focus@40, GPU"}
-    assert all(board.CAMPAIGNS[key].device == "CPU" for key in cpu_keys)
-    assert all(board.CAMPAIGNS[key].device == "GPU" for key in gpu_keys)
+    names = {board.CAMPAIGNS[key].name for key in keys}
+    assert names == {"Scientific Computing Focus@40, Perf Playbook"}
+    assert "GPU" not in next(iter(names))
+    assert "Divide and Conquer" not in next(iter(names))
+    assert board.CAMPAIGNS["scicomp-dc"].device == board.CAMPAIGNS["scicomp-perf-playbook"].device == "CPU"
+    assert board.CAMPAIGNS["scicomp-dc-gpu"].device == board.CAMPAIGNS["scicomp-perf-playbook-gpu"].device == "GPU"
 
 
 def test_a_job_outside_every_campaign_has_no_campaign(board: types.ModuleType) -> None:
