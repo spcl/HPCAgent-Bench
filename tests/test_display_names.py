@@ -14,6 +14,7 @@ import pytest
 
 from hpcagent_bench import experiment_tags, paths
 from hpcagent_bench.stats import palette
+from tests.env_render import rendered
 
 ENVS = paths.ROOT / "experiments"
 
@@ -66,6 +67,15 @@ def test_the_registered_checkpoint_is_what_the_arms_served() -> None:
     generated .env files, which is what the runner actually hands the endpoint.
     """
     served: dict[str, set[str]] = {}
+    # the sources: every arm of model <m> is rendered from .env.base-<m> or .env.llrbase-<m>-*
+    # (a hosted base the registry does not list yet has served no arm)
+    registered = set(experiment_tags.registry().models)
+    for base in sorted(ENVS.glob(".env.*base-*")):
+        optimizer = OPTIMIZER.search(rendered(base))
+        if optimizer:
+            model = SEED.sub("", base.name).split("-")[0]
+            if model in registered:
+                served.setdefault(model, set()).add(optimizer.group(1).strip())
     for env in arm_envs():
         text = env.read_text(encoding="utf-8", errors="replace")
         optimizer = OPTIMIZER.search(text)
@@ -116,11 +126,8 @@ def stamped_arm_envs() -> list[pathlib.Path]:
     return [p for p in arm_envs() if recorded_identity(p.read_text(encoding="utf-8", errors="replace"))]
 
 
-@pytest.mark.parametrize("env", stamped_arm_envs(), ids=lambda p: p.name)
-def test_every_value_an_arm_records_is_registered(env: pathlib.Path) -> None:
-    """Every identity value that reaches the database can be coloured and labelled.
-
-    Checked per ARM rather than over the union, so the failure names the file to fix."""
+def unregistered_values(env: pathlib.Path) -> list[str]:
+    """Every identity value ``env`` records that registry.yaml cannot colour or label."""
     identity = recorded_identity(env.read_text(encoding="utf-8", errors="replace"))
 
     unknown = []
@@ -129,15 +136,23 @@ def test_every_value_an_arm_records_is_registered(env: pathlib.Path) -> None:
         if not value:
             continue
         if experiment_tags.canonical(kind, value.lower()) not in experiment_tags.names(kind):
-            unknown.append(f"{key}={value!r} is in no `{kind}` key of registry.yaml")
+            unknown.append(f"{env.name}: {key}={value!r} is in no `{kind}` key of registry.yaml")
 
     # The packet is a '+'-joined SET, and '' is the control rather than a missing value, so it is
     # checked part by part instead of as one string.
     for part in experiment_tags.packet_parts(identity.get("PACKET", "")):
         if part not in experiment_tags.names("packets"):
-            unknown.append(f"packet {part!r} is in no `packets` key of registry.yaml")
+            unknown.append(f"{env.name}: packet {part!r} is in no `packets` key of registry.yaml")
+    return unknown
 
-    assert not unknown, f"{env.name}:\n  " + "\n  ".join(unknown)
+
+def test_every_value_an_arm_records_is_registered() -> None:
+    """Every identity value that reaches the database can be coloured and labelled.
+
+    Arm envs are rendered at submit time and untracked, so this checks whichever sit on disk; each
+    failure line names the file to fix."""
+    unknown = [line for env in stamped_arm_envs() for line in unregistered_values(env)]
+    assert not unknown, "\n  ".join(unknown)
 
 
 def test_an_arm_that_records_an_experiment_records_the_whole_tuple() -> None:

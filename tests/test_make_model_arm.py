@@ -15,6 +15,7 @@ import sys
 from types import ModuleType
 
 import pytest
+from tests.env_render import rendered
 
 EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
 
@@ -51,6 +52,6 @@ def test_derive_raises_on_a_source_carrying_a_key_twice(make_model_arm: ModuleTy
 def test_oss120b_model_table_matches_its_base_env(make_model_arm: ModuleType) -> None:
     """models.py is the one source oss120b's serving block comes from; a base env edited without
     this table is exactly the drift this generator exists to prevent."""
-    base_text = (EXAMPLE / ".env.base-oss120b").read_text()
+    base_text = rendered(EXAMPLE / ".env.base-oss120b")
     for key, value in make_model_arm.MODELS["oss120b"].items():
         assert f"{key}={value}" in base_text, f"{key} in models.py no longer matches .env.base-oss120b"

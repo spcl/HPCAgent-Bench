@@ -24,6 +24,10 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
 
 SUBMIT_INPUTS = (
+    # the layered bases' parents and their renderer (experiments/README.md "Env layers")
+    "env_layers.sh",
+    "layers/common.env",
+    "layers/model-qwen38.env",
     "submit-scicomp-dc.sh",
     "check_problems.sh",
     "arm_nodes.sh",
@@ -130,6 +134,7 @@ def clean_env(root: pathlib.Path, **knobs: str) -> dict[str, str]:
 def submit_tree(root: pathlib.Path) -> pathlib.Path:
     (root / "experiments").mkdir(parents=True)
     for name in SUBMIT_INPUTS:
+        (root / "experiments" / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(EXPERIMENTS / name, root / "experiments" / name)
     (root / "experiments" / "kernels-scicomp40.txt").write_text("\n".join(ROSTER_KERNELS) + "\n")
     stub(root / "bin", "sbatch", 'touch "${STUB_MARKERS}/sbatch-called"; exit 1')

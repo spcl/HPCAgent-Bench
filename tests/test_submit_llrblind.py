@@ -9,7 +9,6 @@ sbatch, and the script never touches the checkout's own arm envs or problems fil
 import json
 import os
 import pathlib
-import re
 import shutil
 import subprocess
 import sys
@@ -18,6 +17,10 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
 
 SUBMIT_INPUTS = (
+    # the layered bases' parents and their renderer (experiments/README.md "Env layers")
+    "env_layers.sh",
+    "layers/common.env",
+    "layers/model-qwen38.env",
     "submit-llrblind.sh",
     "arm_nodes.sh",
     "pin_env_kv.sh",
@@ -119,12 +122,12 @@ def submit_tree(root: pathlib.Path, agents_per_node: int = 2) -> pathlib.Path:
     """A temp experiments/ with the launcher's inputs, a 2-per-node base env and a 6-kernel roster."""
     (root / "experiments").mkdir(parents=True)
     for name in SUBMIT_INPUTS:
+        (root / "experiments" / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(EXPERIMENTS / name, root / "experiments" / name)
     for base_name in (".env.llrbase-qwen38-c", ".env.llrbase-qwen38-c-skills"):
         base = root / "experiments" / base_name
-        base.write_text(
-            re.sub(r"^AGENTS_PER_NODE=\d+$", f"AGENTS_PER_NODE={agents_per_node}", base.read_text(), flags=re.MULTILINE)
-        )
+        # a layered base: a key appended here wins over the one its model layer sets
+        base.write_text(f"{base.read_text()}AGENTS_PER_NODE={agents_per_node}\n")
     for suffix in ("", "-skills"):
         (root / "experiments" / f"problems-llrblind-c{suffix}.jsonl").write_text(problems_text(PROBLEM_KERNELS))
     stub(root / "bin", "sbatch", 'touch "${STUB_MARKERS}/sbatch-called"; exit 1')

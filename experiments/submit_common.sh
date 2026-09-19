@@ -13,6 +13,8 @@
 # The checkout is OPT / HPCAGENT_BENCH_REPO when the caller names one (the submitter tests run a
 # temp copy of experiments/ with no scripts/ beside it), else this file's own parent.
 . "${OPT:-${HPCAGENT_BENCH_REPO:-$(dirname -- "${BASH_SOURCE[0]}")/..}}/scripts/cscs/account_env.sh" || { echo "no Slurm account resolved; see scripts/cscs/account_env.sh" >&2; exit 2; }
+# render_env (a layered base env, flattened) and snapshot_env (the per-submission copy a job reads).
+. "$(dirname -- "${BASH_SOURCE[0]}")/env_layers.sh"
 
 # resolve_packet_kv <packet> <language> <assoc-array-name> -- runs packet_env.py once and fills the
 # named associative array from its KEY=VALUE lines (PY must already be set). Placeholders such as
@@ -126,7 +128,7 @@ scale_time() {
 # refuses a base with no AGENT_TIMEOUT_SECONDS.
 scaled_budget_from() {
     local base="$1" key="$2" configured
-    configured="$(grep -oP "^${key}=\K[0-9]+" "${base}" || true)"
+    configured="$(render_env "${base}" | grep -oP "^${key}=\K[0-9]+" || true)"
     [[ -n "${configured}" ]] || { echo "scaled_budget_from: ${base} sets no ${key}" >&2; return 2; }
     case "${key}" in
         AGENT_TIMEOUT_SECONDS) scale_time "${configured}" ;;
@@ -264,16 +266,16 @@ declare -A LLRBASE_ENV=(
 )
 
 # stage_base_env <base-env> <arm> <experiment> <stamp> <staged-out> [extra sed -e expr...]
-# Every arm inherits one base env whole -- serving config cannot also vary between arms -- with
-# CAMPAIGN_ARM and RUN_ROOT rewritten and comments/blank lines dropped. Written to <staged-out>,
-# NEVER the final arm env: a later gate that bails leaves no file that looks complete.
+# Every arm inherits one base env whole -- serving config cannot also vary between arms -- rendered
+# flat through its layers (env_layers.sh), with CAMPAIGN_ARM and RUN_ROOT rewritten. Written to
+# <staged-out>, NEVER the final arm env: a later gate that bails leaves no file that looks complete.
 stage_base_env() {
-    local base="$1" arm="$2" experiment="$3" stamp="$4" out="$5"
+    local base="$1" arm="$2" experiment="$3" stamp="$4" out="$5" flat
     shift 5
-    [[ -f "${base}" ]] || { echo "stage_base_env: no such base env ${base}" >&2; return 2; }
+    flat="$(render_env "${base}")" || { echo "stage_base_env: cannot render base env ${base}" >&2; return 2; }
     sed -e "s|^CAMPAIGN_ARM=.*|CAMPAIGN_ARM=${arm}|" \
         -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:?}/hpcagent-bench-runs/${experiment}-${stamp}|" \
-        "$@" "${base}" | grep -vE '^[[:space:]]*(#|$)' >"${out}"
+        "$@" <<<"${flat}" >"${out}"
 }
 
 # kernels_file_list <kernels-file> -- kernel names, one per line: strips whole-line comments,
@@ -327,9 +329,10 @@ finalize_staged_env() {
 # submit_arm_job <env> <arm> <walltime> [dep-ids] [begin] [detail]
 # The SUBMIT gate and sbatch call every submit script ends on. SUBMIT=0 reports what would run and
 # returns 0 without touching the queue; otherwise chains on dep-ids (colon-joined jobids,
-# "afterany"), holds for begin, and submits <env> as beverin.sbatch's CLUSTER_ENV_FILE. Sets
-# SUBMITTED_JID. <detail> is free text appended inside the "(... nodes)" parenthetical, e.g. a
-# walltime or problem count a caller wants echoed.
+# "afterany"), holds for begin, and submits a read-only SNAPSHOT of <env> and its problems file
+# (snapshot_env, .rendered/) as beverin.sbatch's CLUSTER_ENV_FILE: <env> itself is only the arm's
+# latest render, free to be re-staged while this job still queues. Sets SUBMITTED_JID. <detail> is
+# free text appended inside the "(... nodes)" parenthetical, e.g. a walltime or problem count.
 submit_arm_job() {
     local env="$1" arm="$2" walltime="$3" dep_ids="${4:-}" begin="${5:-}" detail="${6:-}"
     local nodes; nodes=$(arm_nodes "${env}")
@@ -338,6 +341,7 @@ submit_arm_job() {
         return 0
     fi
     local dep=(); [[ -n "${dep_ids}" ]] && dep=(--dependency="afterany:${dep_ids}")
+    local snapshot; snapshot=$(snapshot_env "${env}" "${arm}") || return 2
     # --export=ALL would hand a CPF view exported by the caller to every arm; the env file pins it for
     # the arms whose packet asks, and materialize_shared.sh stages drop-ins wherever it is set.
     # --no-requeue: a NODE_FAIL requeue restarts the job in the SAME run directory under the same id,
@@ -345,6 +349,6 @@ submit_arm_job() {
     SUBMITTED_JID=$(env -u CPF_DROPIN_DIR -u CPF_FORMS_DIR -u HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR \
         sbatch --parsable --no-requeue --nodes="${nodes}" --time="${walltime}" --job-name="${arm}" \
         "${dep[@]}" ${begin:+--begin="${begin}"} \
-        --export=ALL,CLUSTER_ENV_FILE="${PWD}/${env}" beverin.sbatch)
-    echo "submitted ${arm} -> ${SUBMITTED_JID} (${nodes} nodes${detail})"
+        --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" beverin.sbatch)
+    echo "submitted ${arm} -> ${SUBMITTED_JID} (${nodes} nodes${detail}) env ${snapshot}"
 }

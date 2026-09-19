@@ -1,0 +1,6 @@
+# Arm envs are rendered by the submit-*.sh scripts from a layered base (env_layers.sh, layers/), and
+# every job reads its own read-only snapshot under .rendered/. Only the bases are sources.
+/.env.*
+!/.env.base-*
+!/.env.llrbase-*
+/.rendered/

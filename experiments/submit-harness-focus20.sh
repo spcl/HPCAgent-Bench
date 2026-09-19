@@ -144,6 +144,7 @@ mv -f "${PROBLEMS}.tmp" "${PROBLEMS}"
 . ./arm_nodes.sh
 . ./pin_env_kv.sh
 . ./record_identity.sh
+. ./env_layers.sh
 
 node_kvs=("AGENTS_PER_NODE=${AGENTS_PER_NODE}")
 if [[ "${SMOKE:-0}" == 1 ]]; then
@@ -167,10 +168,9 @@ for spec in ${HARNESSES}; do
     refuse_if_queue_references "${PWD}/${env}" "${PWD}/${PROBLEMS}" || exit 2
     # built under a staging name: a gate that bails midway must not leave a complete-looking env
     staged="${env}.staging"
-    sed -e "s|^PROBLEMS_FILE=.*|PROBLEMS_FILE=${PROBLEMS}|" \
+    render_env "${BASE}" | sed -e "s|^PROBLEMS_FILE=.*|PROBLEMS_FILE=${PROBLEMS}|" \
         -e "s|^CAMPAIGN_ARM=.*|CAMPAIGN_ARM=${arm}|" \
-        -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:?}/hpcagent-bench-runs/${EXPERIMENT}-${STAMP}|" \
-        "${BASE}" | grep -vE '^[[:space:]]*(#|$)' >"${staged}"
+        -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:?}/hpcagent-bench-runs/${EXPERIMENT}-${STAMP}|" >"${staged}"
     # the arm's whole packet env, KEY=VALUE lines plus a trailing HPCAGENT_BENCH_RECORD_PACKET=<key>
     # -- one source for what record_identity records and what the arm's env pins, so they can never
     # name two different packets (already validated packet-skills-free, above)
@@ -221,7 +221,9 @@ for arm in "${arms[@]}"; do
         echo "prepared ${arm} (${nodes} nodes, ${limit}) -- not submitted, SUBMIT=1 submits"
         continue
     fi
+    # the job reads a read-only per-submission copy, never the re-stageable .env.<arm>
+    snapshot=$(snapshot_env "${env}" "${arm}") || exit 2
     jid=$(sbatch --parsable --no-requeue --partition=mi300 --mem=0 --nodes="${nodes}" --time="${limit}" \
-        --job-name="${arm}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${env}" beverin.sbatch)
-    echo "submitted ${arm} -> ${jid} (${nodes} nodes, ${limit})"
+        --job-name="${arm}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" beverin.sbatch)
+    echo "submitted ${arm} -> ${jid} (${nodes} nodes, ${limit}) env ${snapshot}"
 done

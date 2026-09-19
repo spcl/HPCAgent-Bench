@@ -16,6 +16,7 @@ import sys
 import types
 
 import pytest
+from tests.env_render import rendered
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
@@ -81,9 +82,9 @@ effort = load_effort()
 
 
 def env_values(path: pathlib.Path) -> dict[str, str]:
-    """``KEY=VALUE`` lines of a shell-compatible env file, quotes stripped, comments skipped."""
+    """``KEY=VALUE`` lines of the rendered env file, quotes stripped."""
     values: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in rendered(path).splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or "=" not in stripped:
             continue
@@ -128,7 +129,7 @@ def test_a_base_env_names_the_context_window_its_server_is_started_with(path: pa
     engine: a hosted-service env (INFERENCE_SOURCE=service) serves through a provider API and starts
     no engine to name a window for."""
     values = env_values(path)
-    served = re.findall(r"(?:--context-length|--max-model-len)[= ](\d+)", path.read_text(encoding="utf-8"))
+    served = re.findall(r"(?:--context-length|--max-model-len)[= ](\d+)", rendered(path))
     assert served, f"{path.name} starts no engine with a context window"
     assert len(set(served)) == 1, f"{path.name} names several context windows: {served}"
     assert values.get("CONTEXT_LENGTH") == served[0]

@@ -54,10 +54,10 @@ SGLANG_EXTRA_ARGS="--chat-template ${SCRIPT_DIR}/chat-template-qwen38.jinja --tr
 
 Model files such as a chat template sit in `experiments/`, named through `${SCRIPT_DIR}`, which
 `run_cluster.sh` sets before sourcing the env and mounts into the inference container. For a
-counterfactual of an existing model, generate the envs so only the serving block differs:
-`make_glm53_envs.py` (kimi to GLM-5.3), `make_model_arm.py --to-model <tag>` (existing arm files;
-add a `MODELS` entry), `make_llrbase_lang_envs.py` (fortran and skills siblings; add to `MODELS`).
-Fix a value in the base and its generator together; the next run overwrites a generated file.
+counterfactual of an existing model, add `layers/model-<tag>.env` (serving block only, extends
+`common.env`) and point `.env.base-<tag>` / `.env.llrbase-<tag>-c` at it with `# extends:`; language
+and skills siblings extend `-c` (see `experiments/README.md` "Env layers"). `make_model_arm.py
+--to-model <tag>` still re-targets an existing rendered arm file (add a `MODELS` entry).
 
 **3. Serve it alone.** From `experiments/`, `SUBMIT=0 MODEL=<tag> ./serve-only.sbatch` prints the
 plan and `MODEL=<tag> ./serve-only.sbatch` runs the campaign's own `--vllm-node` role with the base

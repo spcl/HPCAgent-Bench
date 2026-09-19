@@ -221,12 +221,12 @@ agent and judge files copied by its container build.
 
 ## Configure the run
 
-No template ships in this directory. Start from one of the existing arm files (for example
-`experiments/.env.base-qwen38`) or write `experiments/.env` from the variable tables below, then
-restrict its permissions before adding secrets:
+No template ships in this directory. Render one of the layered bases (see "Env layers" below) or
+write `experiments/.env` from the variable tables below, then restrict its permissions before
+adding secrets:
 
 ```bash
-cp experiments/.env.base-qwen38 experiments/.env
+experiments/env_layers.sh render experiments/.env.base-qwen38 >experiments/.env
 chmod 600 experiments/.env
 ```
 
@@ -571,10 +571,31 @@ build and EDF-install steps; this file does not repeat them.
   you; see [`containers/cluster/ce-images/README.md`](../containers/cluster/ce-images/README.md)
   for the current podman storage setup.
 
+## Env layers
+
+Hand-edited sources, each naming its parent on a `# extends: <path>` line (later key wins):
+
+| Layer | Holds |
+| --- | --- |
+| `layers/common.env` | defaults every model and campaign shares: judge sizing, images, budgets, paths |
+| `layers/model-<m>.env` | one model's serving config (extends `common.env`) |
+| `.env.base-<m>` | llr40 campaign base (extends the model layer, or `common.env` for a hosted model) |
+| `.env.llrbase-<m>-<lang>[-skills]` | llrblind/scicomp base; `-c` extends the model layer, siblings extend `-c` |
+
+`./env_layers.sh render <file>` prints the flat `KEY=VALUE` env a layer stands for. Values are
+copied verbatim, so `${SCRATCH:?}` still resolves where the job sources the result.
+
+A submitter renders a base, applies the arm's own keys (name, packet, language, device, budget,
+problems file) and writes `.env.<arm>`: the arm's LATEST render, untracked, rewritten by every
+staging or `SUBMIT=0` dry run of that arm. The job never reads it. `submit_arm_job` (and
+`submit-harness-focus20.sh`) snapshot it first: `.rendered/<arm>-<UTC time>-<hash>.env` plus a copy
+of its problems file, both read-only, never overwritten, kept as provenance, and passed as
+`CLUSTER_ENV_FILE`. A queued job cannot see a later submission of the same arm.
+
 ## Campaign arms
 
-An arm is one `.env.<arm>` file, and the file is the single source of truth: role sizes, the
-problems list, the language and the treatment all come from it, so the allocation and the job
+An arm is one rendered `.env.<arm>` file, and the file is the single source of truth: role sizes,
+the problems list, the language and the treatment all come from it, so the allocation and the job
 cannot drift from each other. `arm_nodes.sh` reads the same three node counts `beverin.sbatch`
 validates against, which is what keeps a resized judge pool from killing every arm at once.
 

@@ -20,6 +20,10 @@ EXPERIMENTS = REPO / "experiments"
 LAUNCHER = "submit-scicomp-perf-playbook.sh"
 
 SUBMIT_INPUTS = (
+    # the layered bases' parents and their renderer (experiments/README.md "Env layers")
+    "env_layers.sh",
+    "layers/common.env",
+    "layers/model-qwen38.env",
     LAUNCHER,
     "check_problems.sh",
     "arm_nodes.sh",
@@ -67,6 +71,7 @@ def submit_tree(root: pathlib.Path) -> pathlib.Path:
     """A copy of the launcher's inputs, a two-kernel roster and an sbatch that records being called."""
     (root / "experiments").mkdir(parents=True)
     for name in SUBMIT_INPUTS:
+        (root / "experiments" / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(EXPERIMENTS / name, root / "experiments" / name)
     (root / "experiments" / "kernels-scicomp40.txt").write_text("\n".join(ROSTER_KERNELS) + "\n")
     (root / "bin").mkdir()

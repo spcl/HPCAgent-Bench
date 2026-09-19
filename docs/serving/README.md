@@ -353,8 +353,10 @@ supposed to prevent exactly that. If you template a flag, use the dash form.
 
 ### Configuration files are layered, last assignment wins
 
-`serve-only.sbatch` sources the model's file first and `experiments/serve-only.env` second, under
-`set -a`, so every value is exported and a later assignment overrides an earlier one. The override
+The model's file is itself layered (`layers/common.env` < `layers/model-<m>.env` < `.env.base-<m>`,
+see `experiments/README.md` "Env layers"); a layer can override a key but never unset one.
+`serve-only.sbatch` sources the model's file rendered flat first and `experiments/serve-only.env`
+second, under `set -a`, so every value is exported and a later assignment overrides an earlier one. The override
 file sets the judge and agent node counts to zero and redirects the run root; everything else comes
 from the model's own file, unchanged. That is what keeps this documentation and a real deployment
 from drifting apart.
@@ -362,15 +364,11 @@ from drifting apart.
 The job writes the merged result to `serve.env` in its run directory. That file is the record of
 what actually ran; read it rather than re-deriving the layering by hand.
 
-### A GENERATED configuration freezes the decision it was generated from
+### An arm `.env` is a render, not a source
 
-Some models' per-run configurations are produced by a generator script from a base file. When a
-setting has to change, it must change in the base **and** in the generator. Change one and the two
-disagree, and which value a server gets depends on which file it was launched from.
-
-**Never fix a setting in a generated file** -- it will be regenerated over. When a base file and its
-generator disagree (for example `.env.base-glm53` and `make_glm53_envs.py`), treat the disagreement
-as the bug rather than picking the value you prefer.
+`experiments/.env.<arm>` is written by a submit script from a layered base, and each job reads its
+own read-only snapshot under `experiments/.rendered/`. **Never fix a setting in an arm file**: the
+next submission renders over it. Fix the layer that owns the key.
 
 ### The campaign launcher narrows container mounts; this one does not
 

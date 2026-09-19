@@ -30,19 +30,20 @@ DEPEND_ON=${DEPEND_ON:-}
 SHARD_DIR=${SHARD_DIR:-shards}
 
 base=".env.base-${MODEL}"
-[[ -s "${base}" ]] || { echo "${base} is missing" >&2; exit 2; }
-grep -qx 'INFERENCE_SOURCE=service' "${base}" || { echo "${base} is not a service arm" >&2; exit 2; }
+# the base flattened through its layers (env_layers.sh): a key may live in layers/common.env
+base_flat="$(./env_layers.sh render "${base}")" || { echo "${base} is missing or does not render" >&2; exit 2; }
+grep -qx 'INFERENCE_SOURCE=service' <<<"${base_flat}" || { echo "${base} is not a service arm" >&2; exit 2; }
 # concurrency is the base env's, sized for the key; a caller may narrow it, never silently widen it
-BASE_WIDTH="$(grep -oP '^AGENTS_PER_NODE=\K[0-9]+' "${base}")"
+BASE_WIDTH="$(grep -oP '^AGENTS_PER_NODE=\K[0-9]+' <<<"${base_flat}")"
 export AGENTS_PER_NODE=${AGENTS_PER_NODE:-${BASE_WIDTH}}
 (( AGENTS_PER_NODE <= BASE_WIDTH )) || { echo "AGENTS_PER_NODE=${AGENTS_PER_NODE} exceeds ${base}'s ${BASE_WIDTH}" >&2; exit 2; }
 # no engine to pull or warm: only the judge starts before the agents
 export STAGING_HOURS=${STAGING_HOURS:-1}
 # the service key must be in THIS environment: sbatch --export=ALL is how it reaches the job
-key_env="$(grep -oP '^INFERENCE_SERVICE_KEY_ENV=\K\S+' "${base}")"
+key_env="$(grep -oP '^INFERENCE_SERVICE_KEY_ENV=\K\S+' <<<"${base_flat}")"
 [[ "${SUBMIT:-1}" != 1 || -n "${!key_env:-}" ]] || { echo "${key_env} is not exported" >&2; exit 2; }
-if grep -qx 'INFERENCE_SERVICE_FREE_ONLY=1' "${base}"; then
-    ( set -a; . "./${base}"; set +a; export "${key_env}=${!key_env:-unset}"; "${PY}" ./inference_service.py --check-free )
+if grep -qx 'INFERENCE_SERVICE_FREE_ONLY=1' <<<"${base_flat}"; then
+    ( set -a; . <(printf '%s\n' "${base_flat}"); set +a; export "${key_env}=${!key_env:-unset}"; "${PY}" ./inference_service.py --check-free )
 fi
 
 . ./check_problems.sh

@@ -18,6 +18,7 @@ import subprocess
 import sys
 
 import pytest
+from tests.env_render import rendered
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
@@ -49,6 +50,10 @@ ARM_KEYS = frozenset(
 
 #: What submit-harness-focus20.sh reads from experiments/.
 SUBMIT_INPUTS = (
+    # the layered bases' parents and their renderer (experiments/README.md "Env layers")
+    "env_layers.sh",
+    "layers/common.env",
+    "layers/model-qwen38.env",
     "submit-harness-focus20.sh",
     "submit_common.sh",
     "make_problems.py",
@@ -131,6 +136,7 @@ def submit_tree(root: pathlib.Path) -> pathlib.Path:
     """A temp experiments/ holding the submit script's inputs, and an sbatch stub that marks a call."""
     (root / "experiments").mkdir(parents=True)
     for name in SUBMIT_INPUTS:
+        (root / "experiments" / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(EXPERIMENTS / name, root / "experiments" / name)
     stub(root / "bin", "sbatch", 'touch "${STUB_MARKERS}/sbatch-called"; exit 1')
     return root
@@ -265,7 +271,7 @@ def test_an_unknown_packet_is_refused_before_any_file_is_written(tmp_path: pathl
 def test_every_arm_carries_the_shared_budget_and_sizing(full: pathlib.Path) -> None:
     """Multi submission with its policy text, a 4 h episode, the base token cap, 2x30 agents and
     judges sized by judge_nodes.py (one rank per 5 agents), on the tag's problems file and record experiment."""
-    base = env_dict(EXPERIMENTS / ".env.llrbase-qwen38-c")
+    base = dict(line.split("=", 1) for line in rendered(EXPERIMENTS / ".env.llrbase-qwen38-c").splitlines())
     env = env_dict(full / "experiments" / f".env.{TAG}-qwen38-claude")
     assert env["AGENT_SINGLE_SUBMISSION"] == "0"
     assert env["AGENT_SUBMISSION_POLICY_FILE"] == "submission-multi.md"

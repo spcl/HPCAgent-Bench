@@ -36,9 +36,12 @@ for env_file in "${BASE_ENV}" "${SERVE_ENV}"; do
 done
 
 # Campaign values first, role split second: last assignment wins, as the submit scripts do it.
+# The base is layered (env_layers.sh): flatten it once, source and record the flat form.
+. "${SCRIPT_DIR}/env_layers.sh"
+BASE_FLAT="$(render_env "${BASE_ENV}")" || exit 2
 set -a
 # shellcheck disable=SC1090
-. "${BASE_ENV}"
+. <(printf '%s\n' "${BASE_FLAT}")
 # shellcheck disable=SC1090
 . "${SERVE_ENV}"
 set +a
@@ -80,7 +83,7 @@ fi
 RUN_DIR="${RUN_ROOT}/${SLURM_JOB_ID}"
 mkdir -p "${RUN_DIR}"
 # The one file run_cluster.sh re-reads in the container, and the record of what this job served.
-cat -- "${BASE_ENV}" "${SERVE_ENV}" >"${RUN_DIR}/serve.env"
+{ printf '%s\n' "${BASE_FLAT}"; cat -- "${SERVE_ENV}"; } >"${RUN_DIR}/serve.env"
 
 export CLUSTER_ENV_FILE="${RUN_DIR}/serve.env"
 export HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"

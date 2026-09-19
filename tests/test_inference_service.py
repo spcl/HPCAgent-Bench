@@ -28,6 +28,7 @@ from typing import ClassVar
 import pytest
 
 from hpcagent_bench.harness.agent import anthropic_usage, http_chat_json
+from tests.env_render import rendered
 
 EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "experiments"
 AGENT_HARNESS = pathlib.Path(__file__).resolve().parents[1] / "containers" / "agent" / "harness"
@@ -247,7 +248,12 @@ def test_a_server_arm_records_its_engine_instead(service: types.ModuleType, tmp_
     """One file answers "what produced these tokens" for both modes, or a reader has to know which
     mode a run used before knowing where to look."""
     service.record(
-        tmp_path, {"INFERENCE_ENGINE": "sglang", "INFERENCE_CE_ENV": "hpcagent-bench-sglang-mi300-latest", "VLLM_MODEL": "Qwen/Q"}
+        tmp_path,
+        {
+            "INFERENCE_ENGINE": "sglang",
+            "INFERENCE_CE_ENV": "hpcagent-bench-sglang-mi300-latest",
+            "VLLM_MODEL": "Qwen/Q",
+        },
     )
     written = json.loads((tmp_path / service.RECORD_NAME).read_text(encoding="utf-8"))
     assert written["source"] == "node"
@@ -458,7 +464,7 @@ def test_the_example_arms_match_the_model_table(service: types.ModuleType) -> No
         sys.path.insert(0, str(EXPERIMENTS))
     models = load("models", EXPERIMENTS / "models.py")
     for name in service.EXAMPLE_ARMS:
-        text = (EXPERIMENTS / f".env.base-{name}").read_text(encoding="utf-8")
+        text = rendered(EXPERIMENTS / f".env.base-{name}")
         for key, value in models.MODELS[name].items():
             assert f"{key}={value}" in text, f"{key} in models.py no longer matches .env.base-{name}"
 
@@ -467,7 +473,7 @@ def test_the_example_arms_match_the_model_table(service: types.ModuleType) -> No
 def test_every_example_arm_resolves_when_its_key_is_set(service: types.ModuleType, name: str) -> None:
     """Each shipped example must be a WORKING arm, not a template: reading its env plus the one
     variable it names has to produce a resolved service."""
-    text = (EXPERIMENTS / f".env.base-{name}").read_text(encoding="utf-8")
+    text = rendered(EXPERIMENTS / f".env.base-{name}")
     arm = dict(line.split("=", 1) for line in text.splitlines() if line and not line.startswith("#") and "=" in line)
     arm = {key: value.strip('"') for key, value in arm.items()}
     arm[arm["INFERENCE_SERVICE_KEY_ENV"]] = SECRET
@@ -479,7 +485,7 @@ def test_every_example_arm_resolves_when_its_key_is_set(service: types.ModuleTyp
 def test_a_service_arm_never_leaks_its_key_into_the_staged_arm_env() -> None:
     """The arm env is copied into the run tree and read by every role; the key is named there, not
     written there, so rotating it never means editing a committed file."""
-    text = (EXPERIMENTS / ".env.base-musespark").read_text(encoding="utf-8")
+    text = rendered(EXPERIMENTS / ".env.base-musespark")
     assert "META_MODEL_API_KEY=" not in text.replace("INFERENCE_SERVICE_KEY_ENV=META_MODEL_API_KEY", "")
 
 
@@ -506,7 +512,12 @@ def test_the_launcher_never_writes_the_key_value_into_the_run_tree() -> None:
 
 def listing(model: str, *pricings: dict[str, str]) -> dict[str, object]:
     """An OpenRouter ``/models/<id>/endpoints`` body, one endpoint per pricing."""
-    return {"data": {"id": model, "endpoints": [{"provider_name": f"p{i}", "pricing": dict(p)} for i, p in enumerate(pricings)]}}
+    return {
+        "data": {
+            "id": model,
+            "endpoints": [{"provider_name": f"p{i}", "pricing": dict(p)} for i, p in enumerate(pricings)],
+        }
+    }
 
 
 def test_a_model_priced_zero_on_every_endpoint_is_free(service: types.ModuleType) -> None:
@@ -537,7 +548,7 @@ def test_a_free_only_arm_refuses_any_listing_that_does_not_prove_the_model_free(
 def test_every_model_the_claude_cli_picks_itself_is_pinned_to_the_arm_model(service: types.ModuleType) -> None:
     """Unpinned, the CLI's side requests name a Claude model; a router answers that with a model the
     arm never declared, which on OpenRouter is billed."""
-    text = (EXPERIMENTS / ".env.base-unionalpha").read_text(encoding="utf-8")
+    text = rendered(EXPERIMENTS / ".env.base-unionalpha")
     arm = dict(line.split("=", 1) for line in text.splitlines() if line and not line.startswith("#") and "=" in line)
     arm = {key: value.strip('"') for key, value in arm.items()}
     arm["OPENROUTER_API_KEY"] = SECRET
@@ -560,5 +571,5 @@ def test_the_launcher_exports_every_pinned_model_variable_after_the_free_check(s
 
 
 def test_the_free_only_example_arm_declares_the_check(service: types.ModuleType) -> None:
-    text = (EXPERIMENTS / ".env.base-unionalpha").read_text(encoding="utf-8")
+    text = rendered(EXPERIMENTS / ".env.base-unionalpha")
     assert f"{service.FREE_ONLY_KEY}=1" in text.splitlines()

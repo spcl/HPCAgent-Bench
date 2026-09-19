@@ -30,6 +30,10 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
 
 SUBMIT_INPUTS = (
+    # the layered bases' parents and their renderer (experiments/README.md "Env layers")
+    "env_layers.sh",
+    "layers/common.env",
+    "layers/model-qwen38.env",
     "submit-cpf-llr40.sh",
     "arm_nodes.sh",
     "roster.sh",
@@ -125,6 +129,7 @@ def launch(
     experiments = root / "experiments"
     experiments.mkdir(parents=True, exist_ok=True)
     for name in SUBMIT_INPUTS:
+        (experiments / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(EXPERIMENTS / name, experiments / name)
     (experiments / "kernels.txt").write_text("\n".join(ROSTER_KERNELS) + "\n")
     stub(root / "bin", "sbatch", 'touch "${STUB_MARKERS}/sbatch-called"; exit 1')
