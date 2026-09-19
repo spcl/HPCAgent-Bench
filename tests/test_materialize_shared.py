@@ -72,7 +72,7 @@ def test_one_folder_per_kernel_carries_the_reference_material(tmp_path, repo) ->
     assert not (task_dir / "argmax_value.yaml").exists()  # the manifest is the judge's, not the agent's
 
 
-def test_reference_material_is_hard_linked_not_copied(tmp_path, repo) -> None:
+def test_reference_material_is_hard_linked_not_copied(tmp_path: pathlib.Path, repo: pathlib.Path) -> None:
     """A staged reference file is byte-identical to its repo source (unlike signature.json or the
     CPF drop-in, which are rendered per arm), so it must be a HARD LINK: same inode, no new one
     spent. Before this, every job's own ``cp`` of the same handful of reference files across a
@@ -86,7 +86,9 @@ def test_reference_material_is_hard_linked_not_copied(tmp_path, repo) -> None:
     assert staged.stat().st_nlink >= 2
 
 
-def test_reference_material_falls_back_to_a_copy_across_a_filesystem_boundary(tmp_path, repo, monkeypatch) -> None:
+def test_reference_material_falls_back_to_a_copy_across_a_filesystem_boundary(
+    tmp_path: pathlib.Path, repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """``ln`` refuses EXDEV when the repo and the shared dir are not on one filesystem -- the two
     roots ``scripts/cache_env.sh`` derives them from need not agree. The staged file must still
     land, readable, with the source's content, even though it can no longer share its inode."""
