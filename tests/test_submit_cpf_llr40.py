@@ -114,6 +114,7 @@ def build_view(root: pathlib.Path, kernels: tuple[str, ...], target: str) -> pat
                 cpf_cache.publish(cache, key, {"kernel": kernel}, source, (f"{stem}_binding.json", "{}\n"))
                 modes[mode] = {"key": key, "verdict": "ok", "cached": False}
             cpf_cache.record(view, kernel, dialect, "fp64", modes)
+            cpf_cache.record_verification(view, kernel, dialect, "fp64", {"verdict": "ok"})
     return view
 
 

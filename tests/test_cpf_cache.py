@@ -171,7 +171,9 @@ def test_an_entry_that_fails_verification_is_replaced_by_the_next_publish(tmp_pa
     cpf_cache.publish(cache, PINNED_KEY, {"kernel": "k"}, ("k_fp64_cpf.c", "one\n"), ("k_fp64_cpf_binding.json", "{}"))
     entry = cpf_cache.entry_path(cache, PINNED_KEY)
     (entry / "k_fp64_cpf.c").write_text("damaged\n")
-    assert cpf_cache.publish(cache, PINNED_KEY, {"kernel": "k"}, ("k_fp64_cpf.c", "two\n"), ("k_fp64_cpf_binding.json", "{}"))
+    assert cpf_cache.publish(
+        cache, PINNED_KEY, {"kernel": "k"}, ("k_fp64_cpf.c", "two\n"), ("k_fp64_cpf_binding.json", "{}")
+    )
     assert (entry / "k_fp64_cpf.c").read_text() == "two\n"
     assert cpf_cache.is_hit(cache, PINNED_KEY)
     assert not [p for p in entry.parent.iterdir() if p.name.startswith(".")], "moved-aside entry left behind"
@@ -455,3 +457,37 @@ def test_stage_refuses_a_view_of_the_other_target(tmp_path: pathlib.Path) -> Non
     stage = ["stage", "--view", str(view), "--kernel", "k", "--language", "c", "--target", "cpu"]
     assert cpf_cache.main([*stage, "--dest", str(dest)]) == 1
     assert not dest.exists()
+
+
+def test_check_verified_refuses_a_dropin_the_judge_never_graded(tmp_path: pathlib.Path) -> None:
+    """A rendered drop-in is not a checked one: ``--verified`` names it until a grade is filed."""
+    view = view_with(tmp_path, "gemm")
+    assert cpf_cache.missing(view, ["gemm"], "c", "fp64", "dropin", "cpu") == []
+    (line,) = cpf_cache.missing(view, ["gemm"], "c", "fp64", "dropin", "cpu", verified=True)
+    assert "never graded" in line
+
+
+def test_check_verified_refuses_an_unverified_verdict_and_passes_an_ok_one(tmp_path: pathlib.Path) -> None:
+    view = view_with(tmp_path, "gemm")
+    cpf_cache.record_verification(view, "gemm", "c", "fp64", {"verdict": "unverified", "reason": "segfault"})
+    (line,) = cpf_cache.missing(view, ["gemm"], "c", "fp64", "dropin", "cpu", verified=True)
+    assert "unverified: segfault" in line
+    cpf_cache.record_verification(view, "gemm", "c", "fp64", {"verdict": "ok"})
+    assert cpf_cache.missing(view, ["gemm"], "c", "fp64", "dropin", "cpu", verified=True) == []
+
+
+def test_a_verdict_on_other_bytes_does_not_verify_the_served_dropin(tmp_path: pathlib.Path) -> None:
+    """The verdict is tied to the drop-in's cache key: re-pointing the view voids it."""
+    view = view_with(tmp_path, "gemm")
+    cpf_cache.record_verification(view, "gemm", "c", "fp64", {"verdict": "ok"})
+    name = cpf_cache.pointer_name("gemm", "fp64", "c")
+    record = json.loads((view / cpf_cache.VERIFIED_NAME / name).read_text())
+    cpf_cache.write_json(view / cpf_cache.VERIFIED_NAME / name, {**record, "key": "0" * 64})
+    (line,) = cpf_cache.missing(view, ["gemm"], "c", "fp64", "dropin", "cpu", verified=True)
+    assert "was graded as" in line
+
+
+def test_verified_does_not_touch_the_form_mode(tmp_path: pathlib.Path) -> None:
+    """The cpf tool serves the read form, which nobody builds; only a drop-in needs a grade."""
+    view = view_with(tmp_path, "gemm")
+    assert cpf_cache.missing(view, ["gemm"], "c", "fp64", "form", "cpu", verified=True) == []
