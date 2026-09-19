@@ -156,6 +156,7 @@ def test_the_embedded_data_survives_a_value_that_closes_a_script_element(board: 
     [
         ("cpf-llr-focus40", "c-cpf", "cpf-llr"),
         ("cpf-llr-focus40", "c-cpfsrc", "cpf-llr"),
+        ("cpf-llr-focus40", "c-cpfsrc-v2", "cpf-llr"),
         ("cpf-llr-focus40", "c-skills", "llr-focus40"),
         ("scicomp-dc", "cpf", "cpf-scicomp"),
         ("scicomp-dc", "dc-cpfsrc", "cpf-scicomp"),
