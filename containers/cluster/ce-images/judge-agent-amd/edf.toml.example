@@ -80,7 +80,13 @@ PATH = "/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/rocm/bin:/opt/venv/bin:/us
 # RCCL cannot dlopen libnccl-net.so, and it does not error -- it falls back to TCP sockets over
 # hsn* and is merely slow. Measured (629800/629802, 8 ranks over 2 nodes):
 #   NET/Plugin: Could not find: libnccl-net.so  ->  Using network Socket
-LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/x86_64-linux-gnu"
+#
+# /opt/cscs/netstack FIRST, and it is what this file's mpicc/libmpi.so need that vLLM/sglang do
+# not: their RCCL plugin carries its own RUNPATH into that mount, libmpi.so does not (its spack
+# build's libfabric external pointed at the compile-only /opt/ofi-sdk stub, deleted by the build
+# gate), so without this entry ld and ld.so both fall through past the empty RPATH to the base
+# image's own stale /usr/lib/x86_64-linux-gnu/libfabric.so.1 -- see the netstack annotation above.
+LD_LIBRARY_PATH = "/opt/cscs/netstack:/opt/rocm/lib:/opt/rocm/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/x86_64-linux-gnu"
 # Name the transport explicitly rather than letting RCCL pick. Same stanza the vLLM EDF carries,
 # which is the one configuration on this cluster measured to actually reach Slingshot.
 # Named, not left to PATH: a stale configure cache beats PATH, so a toolchain that looks selected
@@ -94,43 +100,26 @@ HWLOC_COMPONENTS = "-opencl,-levelzero,-gl"
 LD_PRELOAD = "/usr/local/lib/libmimalloc.so"
 
 [annotations]
-# The CSCS-documented set. Three hooks, and we previously enabled only the middle one:
-#   10-netstack.sh    source defaults to "artifact"; setting "host" makes it exit(0) and fall back
-#                     to a raw filesystem graft -- which is how a host libcurl needing glibc 2.38
-#                     reached an image with 2.35 and killed its whole OFI stack (629822).
-#   89-libfabric-cxi  the cxi provider and /dev/cxi*.
-#   90-aws-ofi-nccl   exits(0) unless enabled == "true". Never set until now, which is exactly why
-#                     RCCL logged "NET/Plugin: Could not find: libnccl-net.so" and fell back to TCP
-#                     over hsn* (629800/629802).
+# com.hooks.netstack.source = "host" resolved MPICH's libmpi.so against /usr/lib/x86_64-linux-gnu/
+# libfabric.so.1 -- the ROCm/pytorch BASE IMAGE's own bundled copy, which predates FABRIC_1.9
+# symbol versioning -- because the images ship no libfabric/libcxi/librccl-net of their own (a
+# build gate fails if any survives) and host mode's bind-mount never lands on this cluster (build-
+# verify 641056: "version 'FABRIC_1.9' not found", plus libcxi.so.1 wanting versioned libnl_3
+# symbols the base image's unversioned Ubuntu libnl-3.so.200 does not provide). host+rocm6 was also
+# never actually working here: its plugin (/opt/cscs/aws-ofi-ccl-plugin/rocm6/librccl-net.so) needs
+# libamdhip64.so.6, and this image ships ROCm 7.2 (libamdhip64.so.7 only, no compat symlink).
 #
-# With all three, job 629967 measured on an UNMODIFIED image: /opt/cscs/netstack/librccl-net.so,
-# "Using network AWS Libfabric", GPU Direct RDMA on cxi0-2, 8 ranks over 2 nodes, correct result.
-#
-# Version and name are PINNED rather than left to the hook defaults, so a CSCS-side bump cannot
-# change the fabric under a running campaign.
-com.hooks.netstack.source = "host"
-# The hooks hardcode the artifact path at /capstor/store; that tree does not exist,
-# so no version or name resolves there.
-# The hooks do NOT fail on a missing artifact -- they point libfabric and the RCCL plugin
-# at files that are not there, the bind-mounts quietly do nothing, and RCCL drops from
-# CXI to TCP sockets. The job still finishes; it is just far slower, and it reads as a
-# slow model rather than a dead fabric.
-#
-# "host" was previously the documented OPT-OUT because it grafts 29 host libraries into
-# the image and job 629822 died that way: a host libcurl needing glibc 2.38 met an image
-# with 2.35. THAT NO LONGER APPLIES -- the base moved to Ubuntu 24.04 and the shipped
-# libc.so.6 is "Ubuntu GLIBC 2.39-0ubuntu8.8", verified by extracting it from the pulled
-# squashfs. glibc is backward compatible, so 2.39 satisfies every GLIBC_2.38 the grafted
-# libraries ask for. Re-check this if the base image is ever moved backwards.
-#
-# Fabric speed is unaffected. fi_pingpong over cxi, 1 MB, beverin 2026-09-16:
-#   host -> 2.3.1  19329 MB/s | 1.22.0  20011 MB/s | 2.3.1 explicit  19878 MB/s
-# -- within noise of each other, at 4 CXI NICs per node.
-#
-# version/name are NOT set: they only index into the dead artifact tree. The host path is
-# /opt/cray/libfabric/host, a root-owned symlink (-> 2.3.1). It cannot be pinned by
-# annotation, so scripts/cscs/netstack_preflight.sh ASSERTS what it resolves to and aborts
-# on a repoint, rather than letting one campaign straddle two fabric stacks.
+# /capstor/store/cscs/cscs/public/containers/netstack/x86_64/26.08.1/ is reachable again as of
+# 2026-09-17 (confirmed 2026-09-18: contains the exact name below, and its libfabric.so.1 exports
+# FABRIC_1.9). 10-netstack.sh mounts the whole bundle to /opt/cscs/netstack in artifact mode, and
+# librccl-net.so's own RUNPATH already points there -- so sglang/vllm need nothing extra. libmpi.so
+# has no such RUNPATH (it was spack-linked against the compile-only /opt/ofi-sdk stub, which the
+# build gate deletes), so LD_LIBRARY_PATH below carries /opt/cscs/netstack explicitly, first, for it.
+# version/name are PINNED so a CSCS-side bump is a loud failure (scripts/cscs/netstack_preflight.sh),
+# not a campaign that silently straddles two fabric stacks.
+com.hooks.netstack.source = "artifact"
+com.hooks.netstack.version = "26.08.1"
+com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
 com.hooks.aws_ofi_nccl.variant = "rocm6"
