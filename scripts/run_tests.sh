@@ -24,8 +24,8 @@
 # (containers/cluster/ce-images/judge-agent-amd/Dockerfile), which ships gcc 16 and is the
 # toolchain graded runs already use, so a green run here means what it says.
 #
-# Usage: tools/run_tests.sh [pytest args...]              (default: -q --maxfail=20 tests/)
-#        tools/run_tests.sh --container [pytest args...]  (submits tools/run_tests_container.sbatch,
+# Usage: scripts/run_tests.sh [pytest args...]              (default: -q --maxfail=20 tests/)
+#        scripts/run_tests.sh --container [pytest args...]  (submits scripts/run_tests_container.sbatch,
 #                                                           1 mi300 node, and waits for it)
 set -Eeuo pipefail
 
@@ -39,7 +39,7 @@ if [[ "${1:-}" == --container ]]; then
     . "${REPO}/scripts/cscs/account_env.sh"
     echo "run_tests.sh: submitting the suite inside the judge EDF (mi300, 1 node)..." >&2
     exec sbatch --wait --partition=mi300 --job-name=run-tests-container \
-        "${REPO}/tools/run_tests_container.sbatch" "$@"
+        "${REPO}/scripts/run_tests_container.sbatch" "$@"
 fi
 # PATH, PYTHONPATH, PYTHONHASHSEED and ulimit -c 0 all come from the one file that already derives
 # them, so this script cannot drift from what a campaign runs under.

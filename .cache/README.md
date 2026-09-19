@@ -23,7 +23,7 @@ a bare `__file__` walk, the checkout's parent directory all used to disagree). T
 the same default is `hpcagent_bench.paths.repo_root()`/`scratch_root()`. This only fires when
 `HPCAGENT_BENCH_REPO` is set (every real caller has one) and neither `$SCRATCH` nor an explicit
 `JIT_CACHE_ROOT` is; a bare `. cache_env.sh` with nothing configured at all still aborts loudly
-rather than guessing. `tools/run_tests.sh --container` (a real Slurm submission) always has
+rather than guessing. `scripts/run_tests.sh --container` (a real Slurm submission) always has
 `$SCRATCH` and does not need this path -- it exists for the scripts that run with neither.
 
 ## Node-local JIT write layer

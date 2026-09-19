@@ -42,7 +42,7 @@ export HF_HOME="${HF_HOME:-${HPCAGENT_BENCH_CACHE}/hf}"
 # hpcagent_bench/paths.py's repo_root() for the Python side of the same default). That fallback only
 # fires when HPCAGENT_BENCH_REPO is itself set: a bare `. cache_env.sh` with neither var configured
 # still aborts here rather than landing caches under $HOME or /tmp where no later job would look --
-# a container-run pytest suite (tools/run_tests.sh --container) is the case this exists for. A
+# a container-run pytest suite (scripts/run_tests.sh --container) is the case this exists for. A
 # caller with no scratch AND no repo (the pre-commit hooks, via scripts/run_hook.sh) passes
 # JIT_CACHE_ROOT directly instead.
 if [[ -z "${JIT_CACHE_ROOT:-}" ]]; then

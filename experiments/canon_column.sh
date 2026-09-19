@@ -35,7 +35,7 @@ SELF="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_
 
 #: SCRATCH else HPCAGENT_BENCH_REPO -- the checkout root every caller of this file has already
 #: resolved (experiments/env.sh exports it; hpcagent_bench/paths.py's scratch_or_repo() is the
-#: python side of the same fallback). A container test run (tools/run_tests.sh --container) has no
+#: python side of the same fallback). A container test run (scripts/run_tests.sh --container) has no
 #: $SCRATCH mount, and this is what keeps `opt`'s default resolvable there instead of aborting on
 #: "SCRATCH: parameter null or not set".
 canon_repo_root() {

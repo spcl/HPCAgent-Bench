@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""tools/run_tests.sh --container: the one entry point for running the suite inside the judge
+"""scripts/run_tests.sh --container: the one entry point for running the suite inside the judge
 EDF instead of the login/compute-node toolchain (see that script's own header for why -- the
 cluster's gcc has no -std=c23 and about 720 translator cases fail there as a false regression).
 
@@ -12,8 +12,8 @@ import pathlib
 import subprocess
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-RUN_TESTS = REPO / "tools" / "run_tests.sh"
-CONTAINER_SBATCH = REPO / "tools" / "run_tests_container.sbatch"
+RUN_TESTS = REPO / "scripts" / "run_tests.sh"
+CONTAINER_SBATCH = REPO / "scripts" / "run_tests_container.sbatch"
 
 
 def stub(directory: pathlib.Path, name: str, body: str) -> None:
@@ -84,7 +84,7 @@ def test_container_flag_without_scratch_fails_before_touching_sbatch(tmp_path: p
 
 def test_run_tests_container_sbatch_has_the_mi300_single_node_directives() -> None:
     """The directives baked into the companion .sbatch file itself, so a direct `sbatch
-    tools/run_tests_container.sbatch` (bypassing the wrapper) still lands on one mi300 node."""
+    scripts/run_tests_container.sbatch` (bypassing the wrapper) still lands on one mi300 node."""
     text = CONTAINER_SBATCH.read_text()
     assert "#SBATCH --partition=mi300" in text
     assert "#SBATCH --nodes=1" in text
