@@ -17,6 +17,11 @@ REPO="${REPO:?set REPO}"
 srun --environment=hpcagent-bench-judge-mi300-latest bash -c '
   set -x
   export SCRATCH="'"${SCRATCH}"'"
+  # experiments/env.sh derives VENV/PY from $SCRATCH by default, a login-node-only venv
+  # (symlinked into $HOME, not mounted in this container -- 643138 hit exactly that: "No
+  # such file or directory"). VENV already-set wins (env.sh: VENV="${VENV:-...}"), so point
+  # it at the containers own venv, the one the judge EDF says has hpcagent_bench installed.
+  export VENV=/opt/venv
   cd "'"${REPO}"'"
   bash tools/run_tests.sh hpcagent_bench/numpy_translators/tests/test_fft_library_lowering.py -q
 '
