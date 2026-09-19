@@ -47,6 +47,11 @@ KNOBS = frozenset(
         "BASE",
         "AGENT_MAX_TOKENS",
         "AGENT_TIMEOUT_SECONDS",
+        "TOKEN_SCALE",
+        "TIME_SCALE",
+        "BUDGET_SCALE",
+        "STAGING_HOURS",
+        "PARTITION_TIME_LIMIT_HOURS",
         "API_TIMEOUT_MS",
         "WALLCLOCK",
         "BEGIN",
@@ -303,6 +308,59 @@ def test_base_llrbase_default_still_pins_18000_regardless_of_the_base_file(tmp_p
     assert result.returncode == 0, result.stderr
     env = env_dict(root / "experiments" / ".env.llrblind-qwen38-c")
     assert env["AGENT_TIMEOUT_SECONDS"] == "18000"
+
+
+def test_token_scale_grows_max_tokens_uncapped(tmp_path: pathlib.Path) -> None:
+    """A plain BUDGET_SCALE=4 rerun (2026-09-19: 4x-tokens owed class) used to ask sbatch for 32h
+    on Kimi's own 8h base -- over the mi300 partition's 24h MaxTime. TOKEN_SCALE scales
+    AGENT_MAX_TOKENS on its own, uncapped: a token ceiling costs money, not a PENDING job."""
+    root = submit_tree(tmp_path)
+    result = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain", TOKEN_SCALE="4")
+    assert result.returncode == 0, result.stderr
+    env = env_dict(root / "experiments" / ".env.llrblind-qwen38-c-tok4x-time1x")
+    assert env["AGENT_MAX_TOKENS"] == "48000000"
+
+
+def test_time_scale_grows_agent_timeout_seconds_but_clamps_to_the_partition_cap(tmp_path: pathlib.Path) -> None:
+    """TIME_SCALE=6 on the 18000s llrbase default asks for 30h -- clamped to (23 - 3)h = 20h
+    (PARTITION_TIME_LIMIT_HOURS - STAGING_HOURS), not left to overrun the partition's real MaxTime."""
+    root = submit_tree(tmp_path)
+    result = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain", TIME_SCALE="6")
+    assert result.returncode == 0, result.stderr
+    env = env_dict(root / "experiments" / ".env.llrblind-qwen38-c-tok1x-time6x")
+    assert env["AGENT_TIMEOUT_SECONDS"] == "72000"  # 20h, not 108000 (30h)
+
+
+def test_wallclock_floor_rises_to_cover_a_capped_time_scale(tmp_path: pathlib.Path) -> None:
+    """The 643115/643117 class mismatch, generalized: WALLCLOCK's fixed 06:30:00 default must not
+    outlive a TIME_SCALE-grown AGENT_TIMEOUT_SECONDS -- SLURM would kill the job before its own
+    internal budget does. A clamped 72000s (20h) timeout needs a 23h SLURM allocation (+3h staging),
+    over the 6.5h default, so the floor must rise to cover it."""
+    root = submit_tree(tmp_path)
+    stub(
+        root / "bin",
+        "sbatch",
+        f'printf "%s\\n" "$@" > "{tmp_path}/sbatch_argv.txt"\nprintf "999001\\n"\n',
+    )
+    result = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain", TIME_SCALE="6", SUBMIT="1")
+    assert result.returncode == 0, result.stderr
+    argv = (tmp_path / "sbatch_argv.txt").read_text().splitlines()
+    assert "--time=23:00:00" in argv, argv
+
+
+def test_wallclock_explicit_caller_value_is_never_shrunk(tmp_path: pathlib.Path) -> None:
+    """The floor only ever RAISES WALLCLOCK -- a caller who already asked for more than the
+    (unscaled) default timeout needs keeps exactly what they asked for."""
+    root = submit_tree(tmp_path)
+    stub(
+        root / "bin",
+        "sbatch",
+        f'printf "%s\\n" "$@" > "{tmp_path}/sbatch_argv.txt"\nprintf "999002\\n"\n',
+    )
+    result = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain", WALLCLOCK="23:59:00", SUBMIT="1")
+    assert result.returncode == 0, result.stderr
+    argv = (tmp_path / "sbatch_argv.txt").read_text().splitlines()
+    assert "--time=23:59:00" in argv, argv
 
 
 def test_unknown_device_or_base_is_refused(tmp_path: pathlib.Path) -> None:
