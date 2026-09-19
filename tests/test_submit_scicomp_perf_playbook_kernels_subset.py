@@ -60,9 +60,7 @@ def test_agent_nodes_and_walltime_scale_with_the_subsets_own_kernel_count(tmp_pa
     2-kernel subset needs (see test_the_arms_differ_in_their_packet_and_nothing_else's 2-kernel run)."""
     root = submit_tree(tmp_path)
     (root / "experiments" / "subset3.txt").write_text("heat_3d\nkmp\ndfa\n")
-    result = run_submit(
-        root, ARMS="plain", KERNELS_FILE="subset3.txt", AGENT_NODES="1", AGENTS_PER_NODE="1"
-    )
+    result = run_submit(root, ARMS="plain", KERNELS_FILE="subset3.txt", AGENT_NODES="1", AGENTS_PER_NODE="1")
     assert result.returncode == 0, result.stderr
     arms = prepared(result)
     # the "prepared" report names the ARM, never the file-suffixed env/problems names -- the same
