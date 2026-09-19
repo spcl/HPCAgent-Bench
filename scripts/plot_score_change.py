@@ -312,15 +312,6 @@ def pair_frame(frame_all: pd.DataFrame, pairs: Sequence[tuple[str, str]], interv
     return pd.concat(parts, ignore_index=True) if parts else frame_all.iloc[0:0].assign(leg="", skills=False)
 
 
-def default_label(scope: str, comparisons: Sequence[str], cost_model_key: str) -> str:
-    """A title nobody had to pass ``--label`` for: WHAT was compared, in WHAT campaign (when one is
-    known), priced by WHICH cost model -- never a bare word like ``"Efficacy"`` that names nothing
-    the figure itself did not already have to say."""
-    what = " / ".join(comparisons) if comparisons else "Efficacy"
-    body = f"{scope}: {what}" if scope else what
-    return f"{body} ({cost_model_key} Tokens)"
-
-
 def figure_from_pairs(args: argparse.Namespace) -> None:
     """The ``--pairs-csv`` route: an EXPLICIT pair list drawn as the same panel every packet
     comparison goes through."""
@@ -340,15 +331,41 @@ def figure_from_pairs(args: argparse.Namespace) -> None:
     efficacy_figures.pairs_table(frame, args.repeats).to_csv(
         args.table.with_name(f"{args.table.stem}-absolute{args.table.suffix}"), index=False
     )
-    control_text = args.control_label or packets.control_label([args.intervention])
-    comparison = f"{experiment_tags.packet_name(args.intervention)} vs {control_text}"
-    label = args.label or default_label("", [comparison], card.key)
     written = efficacy_figures.figure_one(
-        frame, stats, args.intervention, label, args.out, args.control_label, show_cloud=args.show_cloud
+        frame, stats, args.intervention, args.out, args.control_label, show_cloud=args.show_cloud, title=args.title
     )
     report(args.intervention, stats)
     print(f"table  -> {args.table}")
     print(f"figure -> {written} (+ .png)")
+
+
+def write_panel_tables(
+    table: pathlib.Path,
+    suffix: str,
+    stats: pd.DataFrame | dict[str, pd.DataFrame],
+    frame: pd.DataFrame | dict[str, pd.DataFrame],
+    repeats: population.RepeatPolicy,
+) -> None:
+    """One panel's stats/points CSVs beside the figure, ``stats``/``frame`` either the single-
+    treatment shape or the ``{treatment: table}`` one :func:`build_multi_comparison` returns -- a
+    multi-treatment panel writes ONE combined CSV per file, a ``packet`` column telling the rows
+    apart (the same shape a caller merging several single-treatment CSVs by hand would build)."""
+    if isinstance(stats, dict):
+        combined_stats = pd.concat(
+            [one.assign(packet=name) for name, one in stats.items() if not one.empty], ignore_index=True
+        )
+        combined_points = pd.concat(
+            [
+                efficacy_figures.pairs_table(one_frame, repeats).assign(packet=name)
+                for name, one_frame in frame.items()
+                if not one_frame.empty
+            ],
+            ignore_index=True,
+        )
+    else:
+        combined_stats, combined_points = stats, efficacy_figures.pairs_table(frame, repeats)
+    combined_stats.to_csv(table.with_name(f"{table.stem}{suffix}{table.suffix}"), index=False)
+    combined_points.to_csv(table.with_name(f"{table.stem}{suffix}-absolute{table.suffix}"), index=False)
 
 
 def report(treatment: str, stats: pd.DataFrame) -> None:
@@ -374,6 +391,42 @@ def parse_spec(spec: str) -> dict[str, str]:
     return fields
 
 
+def build_multi_comparison(
+    spec: dict[str, str],
+    default_observations: Sequence[pathlib.Path],
+    default_experiment: str,
+    repeats: population.RepeatPolicy,
+    include_incomplete: bool,
+    card: cost.CostModel,
+) -> tuple[str, Sequence[str], dict[str, pd.DataFrame], dict[str, pd.DataFrame]] | None:
+    """``treatments=a,b,c`` as ONE panel drawing several packets against their shared no-packet
+    control (:func:`~hpcagent_bench.stats.figures.efficacy.draw_multi_panel`) -- every llr-focus40
+    skill packet against C at once, say, instead of a row of one-packet panels. Packet-suffix only:
+    an explicit ``pairs=`` figure is already one panel per pair list, and mixing the two routes in
+    one panel would need a control this function has no way to reconcile."""
+    treatments = [t.strip() for t in spec["treatments"].split(",") if t.strip()]
+    title = spec.get("title") or " / ".join(experiment_tags.packet_name(t) for t in treatments)
+    observations = (
+        [pathlib.Path(p) for p in spec["observations"].split(",")] if "observations" in spec else default_observations
+    )
+    experiment = spec.get("experiment", default_experiment)
+    frame_all = load(observations[0], experiment, card)
+    control = control_rows(frame_all)
+    if control.empty:
+        return None
+    roster = sorted(frame_all["benchmark"].dropna().astype(str).unique())
+    stats_by_treatment: dict[str, pd.DataFrame] = {}
+    frame_by_treatment: dict[str, pd.DataFrame] = {}
+    for treatment in treatments:
+        built = one_treatment_panel(frame_all, control, treatment, roster, include_incomplete, repeats)
+        if built is None:
+            continue
+        stats_by_treatment[treatment], frame_by_treatment[treatment] = built
+    if not frame_by_treatment:
+        return None
+    return title, treatments, stats_by_treatment, frame_by_treatment
+
+
 def build_comparison(
     spec: dict[str, str],
     default_observations: Sequence[pathlib.Path],
@@ -381,11 +434,15 @@ def build_comparison(
     repeats: population.RepeatPolicy,
     include_incomplete: bool,
     card: cost.CostModel,
-) -> tuple[str, str, pd.DataFrame, pd.DataFrame] | None:  # fmt: skip
-    """One ``--comparison`` spec as a ``(title, treatment, stats, frame)`` panel -- either its own
-    explicit pair list (``pairs=``) or a packet-suffix split (``treatment=``) of its own or the
-    default campaign. ``treatment`` is the registry key :func:`~hpcagent_bench.stats.figures.
-    efficacy.draw_panel` colours the panel by."""
+) -> efficacy_figures.Panel | None:
+    """One ``--comparison`` spec as a panel (:data:`~hpcagent_bench.stats.figures.efficacy.Panel`)
+    -- an explicit pair list (``pairs=``), several packets sharing one panel (``treatments=``,
+    :func:`build_multi_comparison`), or a single packet-suffix split (``treatment=``) of its own or
+    the default campaign. ``treatment`` is the registry key(s) the panel is SHAPED by."""
+    if "treatments" in spec:
+        return build_multi_comparison(
+            spec, default_observations, default_experiment, repeats, include_incomplete, card
+        )
     intervention = spec["intervention"]
     title = spec.get("title") or experiment_tags.packet_name(intervention)
     observations = (
@@ -477,10 +534,12 @@ def main() -> None:
         "draw an arm even without a row for every roster kernel (default: dropped, named on stderr)",
     )  # fmt: skip
     parser.add_argument(
-        "--label",
+        "--title",
         default="",
         help=
-        "figure title; default is derived from the campaign, the comparison and the cost model, never empty",
+        "a short in-panel subtitle (single panel: figure_one; joined row: every panel keeps its own "
+        "'title=' from --comparison instead). Blank by default -- a paper's caption is the title, "
+        "this figure never draws a whole-figure one",
     )  # fmt: skip
     parser.add_argument(
         "--show-cloud",
@@ -517,7 +576,7 @@ def main() -> None:
     }[args.row_width]
 
     if args.comparison:
-        panels: list[tuple[str, str, pd.DataFrame, pd.DataFrame]] = []
+        panels: list[efficacy_figures.Panel] = []
         for raw in args.comparison:
             built = build_comparison(
                 parse_spec(raw), args.observations, args.experiment, args.repeats, args.include_incomplete, card
@@ -528,22 +587,18 @@ def main() -> None:
             panels.append(built)
         if not panels:
             raise SystemExit(f"no --comparison of {args.comparison} produced a panel")
-        scope = experiment_tags.display_name(args.experiment) if args.experiment else ""
-        label = args.label or default_label(scope, [title for title, *_rest in panels], card.key)
         args.table.parent.mkdir(parents=True, exist_ok=True)
         for title, treatment, stats, frame in panels:
-            del treatment  # the CSV is keyed by title, not by the packet shaping the panel
+            del treatment  # the CSV is keyed by title, not by the packet(s) shaping the panel
             suffix = f"-{title.lower().replace(' ', '-')}"
-            stats.to_csv(args.table.with_name(f"{args.table.stem}{suffix}{args.table.suffix}"), index=False)
-            efficacy_figures.pairs_table(frame, args.repeats).to_csv(
-                args.table.with_name(f"{args.table.stem}{suffix}-absolute{args.table.suffix}"), index=False
-            )
+            write_panel_tables(args.table, suffix, stats, frame, args.repeats)
         written = efficacy_figures.figure_row(
-            panels, label, args.out, row_width_in=row_width, repeats=args.repeats, show_cloud=args.show_cloud
+            panels, args.out, row_width_in=row_width, repeats=args.repeats, show_cloud=args.show_cloud
         )
         for title, treatment, stats, frame in panels:
-            del treatment, frame  # the summary line names the panel, not its packet or its rows
-            report(title, stats)
+            del frame  # the summary line names the panel, not its rows
+            for name, one_stats in (stats.items() if isinstance(stats, dict) else ((treatment, stats),)):
+                report(f"{title}/{name}", one_stats)
         print(f"table  -> {args.table}")
         print(f"figure -> {written} (+ .png)")
         return
@@ -581,18 +636,15 @@ def main() -> None:
     if not panels:
         raise SystemExit(f"no treatment of {treatments} produced a comparison for experiment {args.experiment!r}")
 
-    label = args.label or default_label(
-        experiment_tags.display_name(args.experiment), [packets.label(t) for t in treatments], card.key
-    )
     if len(panels) == 1:
         title, treatment, stats, frame = panels[0]
-        del title  # figure_one's own title is the campaign's, not the one panel's
+        del title  # figure_one's subtitle is --title (blank by default), not the one panel's own name
         written = efficacy_figures.figure_one(
-            frame, stats, treatment, label, args.out, repeats=args.repeats, show_cloud=args.show_cloud
+            frame, stats, treatment, args.out, repeats=args.repeats, show_cloud=args.show_cloud, title=args.title
         )
     else:
         written = efficacy_figures.figure_row(
-            panels, label, args.out, row_width_in=row_width, repeats=args.repeats, show_cloud=args.show_cloud
+            panels, args.out, row_width_in=row_width, repeats=args.repeats, show_cloud=args.show_cloud
         )
 
     for title, treatment, stats, frame in panels:

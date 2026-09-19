@@ -31,18 +31,29 @@ belongs to one packet, so its shape never has to separate anything; the two or t
 that panel do, and a hue tells two overlapping summary marks apart at a glance where a
 circle-vs-square edge does not. :func:`hpcagent_bench.stats.palette.model_color` for the mark,
 :func:`~hpcagent_bench.stats.palette.control_color` for the control reference, and
-:func:`~hpcagent_bench.stats.palette.packet_marker` for the one shape the whole panel wears.
+:func:`~hpcagent_bench.stats.palette.packet_marker` for the one shape the whole panel wears. EVERY
+DRAWN MARK IS FILLED; the control reference is the ONLY hollow one, so hollow always means "no
+packet" and never doubles as a second signal.
 
-SIGNIFICANCE IS FILL: a mark is FILLED when either axis' Benjamini-Hochberg-adjusted verdict for
-that (model, leg) is significant (q < 0.05 over the figure's whole family of tests), HOLLOW
-otherwise -- an outline in the mark's own colour and shape, never redrawn in the control's neutral
-grey. The legend spells the rule once (:func:`legend_handles`) rather than marking every point with
-a symbol a reader has to look up.
+SIGNIFICANCE IS A SUPERSCRIPT, not fill: ``*`` beside a mark's label means the SPEED-UP axis cleared
+the Benjamini-Hochberg-adjusted 5% threshold for that (model, leg), ``\N{DAGGER}`` means the
+TOKEN-COST axis did, over the figure's own family of tests; a mark can carry either, both or
+neither. Fill was tried first and dropped: the control reference is ALREADY the hollow mark, so a
+hollow treated mark read as "maybe another control" instead of "not significant." The legend spells
+the rule once, in ONE row, rather than marking every point with a symbol a reader has to look up
+twice.
 
 Several comparisons join as ONE ROW of square panels (:func:`panel_side`, :func:`figure_row`), sized
 either to a panel's natural width or to a paper's own text width (:data:`~hpcagent_bench.stats.
 style.ICLR_TEXT_WIDTH_IN`), never stacked: they are alternatives against one control, not a
-sequence.
+sequence. NEITHER FORM DRAWS A WHOLE-FIGURE TITLE -- a paper's caption is the title, and a joined
+row's own per-panel subtitle (drawn small, :data:`FigureConfig.subtitle_pt`) is the most either
+draws; :func:`figure_one`'s own optional ``title`` is the single-panel equivalent, blank by default.
+
+EVERY SIZE A CALLER MIGHT WANT TO HAND-TUNE LIVES IN ONE PLACE, :class:`FigureConfig`: tick, label,
+subtitle and legend point sizes, legend columns, mark and cloud size, the axis margin and its floor,
+and the minor grid's step and shade. Change a field there (or pass a new instance to any drawing
+function's ``config`` argument) rather than a magic number inside a function.
 """
 
 import dataclasses
@@ -57,23 +68,69 @@ from matplotlib.collections import PathCollection
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.text import Annotation
-from matplotlib.ticker import FuncFormatter, MultipleLocator
+from matplotlib.ticker import FuncFormatter, LogLocator, MultipleLocator, NullFormatter
 
 from hpcagent_bench import experiment_tags, packets
 from hpcagent_bench.harness import efficacy
 from hpcagent_bench.stats import palette, population, rules, style, summary
 from hpcagent_bench.stats.figures.per_kernel import speedup_tick_label
 
-#: The per-kernel cloud's dot size and alpha -- matches figures.signed's own cloud so the two read
-#: as one visual language.
-CLOUD_SIZE: float = 12.0
-CLOUD_ALPHA: float = 0.45
 
-#: The summary mark's own size, well above the cloud's so it reads as the arm's headline point.
-MARK_SIZE: float = 130.0
+@dataclasses.dataclass(frozen=True, slots=True)
+class FigureConfig:
+    """Every knob a reader of this figure might want to change by hand, in one place, sized for an
+    ICLR-column figure by default (:data:`~hpcagent_bench.stats.style.ICLR_TEXT_WIDTH_IN`). Pass a
+    replacement instance to a drawing function's ``config`` argument rather than editing a constant
+    inside it; a figure's own inch geometry (panel side, row width) stays a separate concern, set by
+    :func:`panel_side`/``--row-width`` -- this dataclass is TYPE size and marker/grid density, not
+    layout.
+    """
+
+    #: Axis tick label size, points.
+    tick_pt: float = 7.5
+    #: Axis (X/Y) label size, points.
+    label_pt: float = 8.0
+    #: A joined row's small per-panel subtitle, and :func:`figure_one`'s own optional ``title``.
+    subtitle_pt: float = 7.0
+    #: Legend entry text size, points.
+    legend_pt: float = 6.75
+    #: The legend's column count ceiling (:func:`~hpcagent_bench.stats.style.legend_below` wraps a
+    #: row that does not fit the canvas onto fewer columns, never more than this).
+    legend_ncol: int = 4
+    #: A summary mark's own size (points^2, matplotlib's ``s=``).
+    mark_size: float = 90.0
+    #: The per-kernel cloud's dot size (``show_cloud=True`` only) and alpha.
+    cloud_size: float = 10.0
+    cloud_alpha: float = 0.45
+    #: Fractional padding ``ax.margins`` adds around the plotted extent on each axis -- SMALL: the
+    #: panel fits the data and its 95% intervals plus a little air, not a fixed wide window.
+    margin: float = 0.15
+    #: The narrowest total span EITHER axis is ever drawn at, in octaves (log2 units): a panel whose
+    #: every arm moved a kernel by a few percent still gets more than the one tick a degenerate
+    #: sub-octave window would leave (:func:`~hpcagent_bench.stats.style.value_axis`'s own log2
+    #: branch). Small on purpose -- large enough for >=2 ticks, not so large it reopens the "huge
+    #: empty area" a wider floor left around a tightly clustered result.
+    min_span: float = 1.0
+    #: A minor gridline every this many octaves (0.5 = a half power of two, between each major);
+    #: ``0`` draws no minor grid at all.
+    minor_grid_step: float = 0.5
+    #: The minor grid's own line weight and colour, lighter than the major grid
+    #: (:data:`~hpcagent_bench.stats.style.RULE`) so it reads as texture under the marks, not a
+    #: second reference.
+    minor_grid_width: float = 0.35
+    minor_grid_color: str = "#e8e8ea"
+
+
+#: The default a caller draws with unless it hands a replacement in.
+DEFAULT_CONFIG = FigureConfig()
+
+#: Back-compat aliases some tests and callers pin by name; both read off :data:`DEFAULT_CONFIG`.
+CLOUD_SIZE: float = DEFAULT_CONFIG.cloud_size
+CLOUD_ALPHA: float = DEFAULT_CONFIG.cloud_alpha
+MARK_SIZE: float = DEFAULT_CONFIG.mark_size
 
 #: Both axes here are always a log-space Student-t interval (SC15 Rules 5/7); named once so the
-#: legend text and the emitted table agree.
+#: emitted table's own column names agree with it.
 GEOMEAN_METHOD: str = "log-t"
 
 #: Columns of :func:`paired_kernels`' frame: everything a drawn interval or a significance test on
@@ -212,36 +269,29 @@ def log2_tick(value: float, position: int = 0) -> str:
     return speedup_tick_label(2.0**value)
 
 
-def draw_series(ax: Axes, series: Series, colour: str, shape: str, filled: bool, show_cloud: bool = False) -> None:
+def draw_series(
+    ax: Axes, series: Series, colour: str, shape: str, show_cloud: bool = False, config: FigureConfig = DEFAULT_CONFIG
+) -> None:
     """One arm's crossed 95% interval and summary mark, plus its per-kernel cloud when
-    ``show_cloud`` asks for it (default off: :func:`draw_panel`'s own docstring).
+    ``show_cloud`` asks for it (default off: :func:`draw_panel`'s own docstring). Always FILLED --
+    the control reference, drawn separately (:func:`style_panel`), is the only hollow mark this
+    figure ever wears; significance is a superscript on the mark's own label instead
+    (:func:`draw_treatment_marks`).
 
     The cloud splits on ``delivered``: a verified kernel is a small dot, a served-and-never-answered
-    placeholder a small cross, both in the arm's own colour -- the shape and the fill still say
-    which model and which condition the mark itself belongs to.
+    placeholder a small cross, both in the arm's own colour.
     """
     if show_cloud:
         delivered, missing = series.cloud[series.cloud.delivered], series.cloud[~series.cloud.delivered]
         if not delivered.empty:
             ax.scatter(
-                delivered.x,
-                delivered.y,
-                s=CLOUD_SIZE,
-                color=colour,
-                alpha=CLOUD_ALPHA,
-                linewidth=0,
+                delivered.x, delivered.y, s=config.cloud_size, color=colour, alpha=config.cloud_alpha, linewidth=0,
                 zorder=style.FILL_Z,
             )  # fmt: skip
         if not missing.empty:
             ax.scatter(
-                missing.x,
-                missing.y,
-                s=CLOUD_SIZE,
-                marker="x",
-                color=colour,
-                alpha=CLOUD_ALPHA,
-                linewidth=1.1,
-                zorder=style.FILL_Z,
+                missing.x, missing.y, s=config.cloud_size, marker="x", color=colour, alpha=config.cloud_alpha,
+                linewidth=1.1, zorder=style.FILL_Z,
             )  # fmt: skip
     if np.isfinite(series.x_low) and np.isfinite(series.x_high):
         ax.hlines(
@@ -251,7 +301,7 @@ def draw_series(ax: Axes, series: Series, colour: str, shape: str, filled: bool,
         ax.vlines(
             series.x, series.y_low, series.y_high, color=colour, linewidth=1.2, alpha=0.75, zorder=style.CONNECTOR_Z
         )
-    style.point_mark(ax, series.x, series.y, colour, shape, filled, size=MARK_SIZE)
+    style.point_mark(ax, series.x, series.y, colour, shape, True, size=config.mark_size)
 
 
 def leg_labels(frame: pd.DataFrame) -> pd.Series:
@@ -262,15 +312,30 @@ def leg_labels(frame: pd.DataFrame) -> pd.Series:
     return frame["language"].astype(str).map(experiment_tags.language_name)
 
 
-def significant_flags(stats: pd.DataFrame) -> dict[tuple[str, str], bool]:
-    """Per (model, leg), whether EITHER axis' corrected verdict is significant -- one star per arm,
-    since the mark now carries both intervals at once."""
-    flags: dict[tuple[str, str], bool] = {}
+#: One mark's significance superscript, per axis -- ``*`` for the SPEED-UP axis, DAGGER for the
+#: TOKEN-COST one (:data:`significance_note`'s legend text names both). Concatenated onto the
+#: mark's own label, never onto the mark itself: a symbol drawn on top of a small shape is easy to
+#: miss, one beside a label a reader is already reading is not.
+SCORE_SIG_MARK: str = "*"
+COST_SIG_MARK: str = "\N{DAGGER}"
+
+
+def axis_significance(stats: pd.DataFrame) -> dict[tuple[str, str], tuple[bool, bool]]:
+    """Per (model, leg), ``(score axis cleared BH, cost axis cleared BH)`` -- the two independent
+    verdicts a mark's superscript reads off (:data:`SCORE_SIG_MARK`/:data:`COST_SIG_MARK`)."""
+    flags: dict[tuple[str, str], tuple[bool, bool]] = {}
     legs = leg_labels(stats)
-    for (row_index, row), leg in zip(stats.iterrows(), legs, strict=True):
-        verdicts = (str(row.get("score_verdict", "")), str(row.get("cost_verdict", "")))
-        flags[(str(row["model"]), str(leg))] = efficacy.SIGNIFICANT in verdicts
+    for (_, row), leg in zip(stats.iterrows(), legs, strict=True):
+        score_sig = str(row.get("score_verdict", "")) == efficacy.SIGNIFICANT
+        cost_sig = str(row.get("cost_verdict", "")) == efficacy.SIGNIFICANT
+        flags[(str(row["model"]), str(leg))] = (score_sig, cost_sig)
     return flags
+
+
+def significance_suffix(score_sig: bool, cost_sig: bool) -> str:
+    """The superscript text one mark's label carries: neither, one or both of
+    :data:`SCORE_SIG_MARK`/:data:`COST_SIG_MARK`, space-joined onto the label by the caller."""
+    return (SCORE_SIG_MARK if score_sig else "") + (COST_SIG_MARK if cost_sig else "")
 
 
 def family_size(stats: pd.DataFrame) -> int:
@@ -280,145 +345,127 @@ def family_size(stats: pd.DataFrame) -> int:
     return int(stats.family_size.iloc[0])
 
 
-def span(counts: Sequence[int]) -> str:
-    """``counts`` as an n for a legend: one number, a range, or ``?`` when there are none."""
-    if not counts:
-        return "?"
-    ordered = sorted(counts)
-    return str(ordered[0]) if ordered[0] == ordered[-1] else f"{ordered[0]}-{ordered[-1]}"
+def interval_note(statistic: str) -> str:
+    """ONE axis's own interval, named with its estimator (:data:`GEOMEAN_METHOD`) -- fixed text, so
+    every panel's copy is byte-identical and a joined row's legend (:func:`figure_row`) collapses
+    them into ONE shared entry instead of one per panel."""
+    return f"{statistic}, 95% {GEOMEAN_METHOD} CI"
 
 
-def interval_note(counts: Sequence[int], statistic: str) -> str:
-    """ONE axis's own interval, named with its estimator and the kernel count it is over. Both axes
-    here always draw the same estimator (:data:`GEOMEAN_METHOD`)."""
-    return f"{statistic}, 95% {GEOMEAN_METHOD} Interval, n={span(counts)}"
+#: The legend's ONE line spelling the significance rule (:data:`SCORE_SIG_MARK`/
+#: :data:`COST_SIG_MARK`) -- fixed text, so it dedupes across a joined row's panels
+#: (:func:`figure_row`) the same way :func:`interval_note` does. No per-panel test count: the
+#: family size differs panel to panel and a caller after the exact number already has it from
+#: ``report()``'s own printed line or the emitted stats CSV.
+SIGNIFICANCE_NOTE: str = (
+    f"{SCORE_SIG_MARK} Speed-Up, {COST_SIG_MARK} Token-Cost Significant (BH-Adjusted p < 0.05)"
+)
 
 
-#: The legend text for a FILLED mark, ``family`` filled in with how many tests the figure's marks
-#: were corrected over together (:func:`family_size`). Spelled once, here, so the module docstring's
-#: significance rule and what the figure actually prints can never drift apart.
-def significance_label(filled: bool, family: int) -> str:
-    """The legend text for one fill state -- ``filled`` significant, hollow not."""
-    if filled:
-        return f"Filled: Significant (BH-Adjusted p < 0.05, {family} Tests)"
-    return "Hollow: Not Significant"
-
-
-def legend_handles(
-    treatment: str,
-    models: Sequence[str],
-    notes: Sequence[str],
-    control_over: Sequence[str],
-    family: int,
-    control_name: str = "",
-    show_cloud: bool = False,
-) -> list[Line2D]:  # fmt: skip
-    """The figure's one key: a MODEL is a colour, the PACKET is the one shape the whole panel wears,
-    and FILL says which marks cleared the Benjamini-Hochberg correction (:data:`significance_label`).
-
-    ``control_over`` is every treatment the FIGURE reads against this one control -- a joined row
-    takes the whole set so the hollow mark's text (:func:`hpcagent_bench.packets.control_label`) is
-    not read off one panel's own treatment while the row draws several. ``control_name`` overrides
-    that text outright, for a control that is not the absence of a packet.
-    """
-    marks = [
+def model_legend_marks(models: Sequence[str]) -> list[Line2D]:
+    """One legend row per model: a neutral circle in the model's own colour -- the shape the mark
+    itself wears is the panel's packet, never the model's, so the swatch does not pretend to draw
+    it."""
+    return [
         Line2D(
-            [],
-            [],
-            marker="o",
-            linestyle="none",
-            color=palette.model_color(name),
-            markersize=9,
+            [], [], marker="o", linestyle="none", color=palette.model_color(name), markersize=9,
             label=experiment_tags.model_name(name),
         )  # fmt: skip
         for name in palette.in_order(models)
     ]
-    handles = marks + [
-        Line2D(
-            [],
-            [],
-            marker="o",
-            linestyle="none",
-            markerfacecolor="none",
-            markeredgecolor=palette.control_color(),
-            markeredgewidth=1.8,
-            markersize=9,
-            label=control_name or packets.control_label(list(control_over)),
-        ),  # fmt: skip
-        Line2D(
-            [],
-            [],
-            marker=palette.packet_marker(treatment),
-            linestyle="none",
-            color=style.MUTED,
-            markersize=9,
-            label=experiment_tags.packet_name(treatment),
-        ),  # fmt: skip
-    ]
+
+
+def control_legend_mark(control_over: Sequence[str], control_name: str = "") -> Line2D:
+    """The hollow control reference's one legend row. ``control_over`` is every treatment the
+    FIGURE reads against this one control -- a joined row takes the whole set so the text
+    (:func:`hpcagent_bench.packets.control_label`) is not read off one panel's own treatment while
+    the row draws several. ``control_name`` overrides that text outright, for a control that is not
+    the absence of a packet."""
+    return Line2D(
+        [], [], marker="o", linestyle="none", markerfacecolor="none", markeredgecolor=palette.control_color(),
+        markeredgewidth=1.8, markersize=9, label=control_name or packets.control_label(list(control_over)),
+    )  # fmt: skip
+
+
+def packet_legend_mark(treatment: str) -> Line2D:
+    """One packet's shape, in neutral ink -- colour is the model's on this mark, so the swatch
+    carries only the shape."""
+    return Line2D(
+        [], [], marker=palette.packet_marker(treatment), linestyle="none", color=style.MUTED, markersize=9,
+        label=experiment_tags.packet_name(treatment),
+    )  # fmt: skip
+
+
+def legend_tail(show_cloud: bool) -> list[Line2D]:
+    """The rows every panel's legend ends on: the cloud's cross (only with ``show_cloud``), the two
+    interval notes and the significance rule -- every one FIXED TEXT
+    (:func:`interval_note`/:data:`SIGNIFICANCE_NOTE`), so a joined row's per-panel legends
+    (:func:`figure_row`) collapse the repeats into one shared entry each instead of one per panel."""
+    handles: list[Line2D] = []
     if show_cloud:
         handles.append(
             Line2D(
                 [], [], marker="x", linestyle="none", color=style.MUTED, markersize=7, label=style.NOT_DELIVERED_LABEL
             )  # fmt: skip
         )
-    handles += [Line2D([], [], linestyle="-", linewidth=1.3, color=style.MUTED, label=text) for text in notes]
     handles += [
-        Line2D(
-            [],
-            [],
-            marker="o",
-            linestyle="none",
-            markerfacecolor=style.MUTED,
-            markeredgecolor=style.MUTED,
-            markersize=9,
-            label=significance_label(True, family),
-        ),  # fmt: skip
-        Line2D(
-            [],
-            [],
-            marker="o",
-            linestyle="none",
-            markerfacecolor="none",
-            markeredgecolor=style.MUTED,
-            markeredgewidth=1.4,
-            markersize=9,
-            label=significance_label(False, family),
-        ),  # fmt: skip
+        Line2D([], [], linestyle="-", linewidth=1.3, color=style.MUTED, label=interval_note("Speed-Up Geomean")),
+        Line2D([], [], linestyle="-", linewidth=1.3, color=style.MUTED, label=interval_note("Token-Cost Geomean")),
+        Line2D([], [], linestyle="none", marker="", label=SIGNIFICANCE_NOTE),
     ]
     return handles
 
 
-#: The narrowest span, in exponent units, the X axis is ever drawn at: two whole-ratio steps either
-#: side of centre, so :data:`MultipleLocator(1.0)` always lands at least THREE labelled ticks (a
-#: panel whose every arm moved a kernel by a few percent otherwise autoscales to a window under one
-#: octave wide, which gets exactly ONE labelled tick under a fixed whole-ratio spacing -- the same
-#: trap :func:`~hpcagent_bench.stats.style.value_axis` names for a log axis under two decades).
-MIN_X_SPAN: float = 2.2
+def legend_handles(
+    treatment: str,
+    models: Sequence[str],
+    control_over: Sequence[str],
+    control_name: str = "",
+    show_cloud: bool = False,
+) -> list[Line2D]:  # fmt: skip
+    """The figure's one key: a MODEL is a colour, the PACKET is the one shape the whole panel wears
+    (:data:`SIGNIFICANCE_NOTE` explains the superscript)."""
+    handles = model_legend_marks(models) + [control_legend_mark(control_over, control_name), packet_legend_mark(treatment)]
+    return handles + legend_tail(show_cloud)
 
 
-def widen_x_axis(ax: Axes) -> None:
-    """Pad ``ax``'s X limits to at least :data:`MIN_X_SPAN`, centred where they already are."""
+def multi_legend_handles(
+    treatments: Sequence[str],
+    models: Sequence[str],
+    control_name: str = "",
+    show_cloud: bool = False,
+) -> list[Line2D]:
+    """:func:`legend_handles` for a panel drawing SEVERAL packets against one control
+    (:func:`draw_multi_panel`): a model is still one colour, but now every drawn packet gets its own
+    shape row instead of the panel's single one."""
+    handles = model_legend_marks(models) + [control_legend_mark(treatments, control_name)]
+    handles += [packet_legend_mark(treatment) for treatment in treatments]
+    return handles + legend_tail(show_cloud)
+
+
+def widen_x_axis(ax: Axes, config: FigureConfig) -> None:
+    """Pad ``ax``'s X limits to at least :data:`FigureConfig.min_span`, centred where they already
+    are -- a panel whose every arm moved a kernel by a few percent otherwise autoscales to a window
+    under one octave wide, which gets exactly ONE labelled tick under a fixed whole-ratio spacing
+    (the same trap :func:`~hpcagent_bench.stats.style.value_axis` names for a log axis under two
+    decades)."""
     low, high = ax.get_xlim()
-    if high - low < MIN_X_SPAN:
+    if high - low < config.min_span:
         centre = (low + high) / 2.0
-        ax.set_xlim(centre - MIN_X_SPAN / 2.0, centre + MIN_X_SPAN / 2.0)
+        ax.set_xlim(centre - config.min_span / 2.0, centre + config.min_span / 2.0)
 
 
-#: The Y axis' own :data:`MIN_X_SPAN`: a log2-scaled ratio axis needs the same floor in exponent
-#: units, or a panel whose every arm moved cost by a few percent draws the single tick
-#: :func:`~hpcagent_bench.stats.style.value_axis` warns a sub-two-octave window leaves once the
-#: 1.5x sub-tick is gone (:data:`~hpcagent_bench.stats.style.value_axis`'s own base-2 branch).
-MIN_Y_SPAN: float = MIN_X_SPAN
-
-
-def widen_y_axis(ax: Axes) -> None:
-    """Pad ``ax``'s Y limits (a base-2 log scale) to at least :data:`MIN_Y_SPAN` octaves, centred in
-    log space where they already are."""
+def widen_y_axis(ax: Axes, config: FigureConfig) -> None:
+    """Pad ``ax``'s Y limits (a base-2 log scale) to at least :data:`FigureConfig.min_span` octaves,
+    centred in log space where they already are -- :func:`widen_x_axis`'s own floor, applied in log
+    space since a sub-floor Y window draws the single tick
+    :func:`~hpcagent_bench.stats.style.value_axis` warns a sub-two-octave window leaves once its 1.5x
+    sub-tick is gone."""
     low, high = ax.get_ylim()
     log_low, log_high = math.log2(low), math.log2(high)
-    if log_high - log_low < MIN_Y_SPAN:
+    if log_high - log_low < config.min_span:
         centre = (log_low + log_high) / 2.0
-        ax.set_ylim(2.0 ** (centre - MIN_Y_SPAN / 2.0), 2.0 ** (centre + MIN_Y_SPAN / 2.0))
+        ax.set_ylim(2.0 ** (centre - config.min_span / 2.0), 2.0 ** (centre + config.min_span / 2.0))
 
 
 #: The most labelled ticks the X axis draws before its whole-ratio spacing widens. A few outlier
@@ -439,34 +486,97 @@ def x_tick_step(span: float) -> int:
     return step
 
 
-def style_panel(ax: Axes, compact: bool) -> None:
+def minor_log2_grid(ax: Axes, axis: str, config: FigureConfig) -> None:
+    """A light minor gridline every :data:`FigureConfig.minor_grid_step` octaves on ``axis`` -- a
+    half power of two by default, between each major (:func:`x_tick_step`/:func:`ratio_tick`'s own
+    majors) -- with NO minor tick labels: a number at every half-octave would double the axis' own
+    text. ``minor_grid_step`` of 0 (or a caller who wants only the major grid) draws nothing."""
+    if config.minor_grid_step <= 0.0:
+        return
+    target = ax.yaxis if axis == "y" else ax.xaxis
+    if axis == "y":
+        target.set_minor_locator(LogLocator(base=2.0, subs=(2.0**config.minor_grid_step,), numticks=40))
+    else:
+        target.set_minor_locator(MultipleLocator(config.minor_grid_step))
+    target.set_minor_formatter(NullFormatter())
+    ax.grid(
+        axis=axis, which="minor", color=config.minor_grid_color, linewidth=config.minor_grid_width, zorder=0
+    )  # fmt: skip
+
+
+def style_panel(ax: Axes, config: FigureConfig = DEFAULT_CONFIG) -> None:
     """One SQUARE panel: the speed-up geomean on X as ``log2(ratio)`` (0 = no change, +1 = 2x, -1 =
     0.5x), ticks read back in ratios like every other speed-up axis in this repo
     (:func:`~hpcagent_bench.stats.figures.per_kernel.speedup_tick_label`); the token-cost ratio on Y
     (1x = no change), log-scaled. Both are log-space quantities, on their own scales, with the
     hollow control reference drawn at their shared origin ``(0, 1)`` and an equal box aspect so
-    joined panels are one shape.
+    joined panels are one shape. NO TITLE: a paper's caption carries that, and the caller's own small
+    subtitle (:func:`figure_one`/:func:`figure_row`) is the most a panel draws.
     """
     ax.axvline(0.0, color=style.REFERENCE, linewidth=1.0, zorder=1)
     ax.axhline(1.0, color=style.REFERENCE, linewidth=1.0, zorder=1)
-    style.point_mark(ax, 0.0, 1.0, palette.control_color(), "o", False, size=MARK_SIZE)
+    style.point_mark(ax, 0.0, 1.0, palette.control_color(), "o", False, size=config.mark_size)
     ax.set_yscale("log", base=2.0)
-    label_pt = style.LABEL_PT * (0.68 if compact else 1.0)
-    ax.set_xlabel("Geomean Speed-Up", fontsize=label_pt)
-    ax.set_ylabel("Token-Cost Ratio, Treated / Control", fontsize=label_pt)
-    if compact:
-        ax.tick_params(axis="both", labelsize=style.TICK_PT * 0.6)
+    ax.set_xlabel("Geomean Speed-Up", fontsize=config.label_pt)
+    ax.set_ylabel("Token-Cost Ratio, Treated / Control", fontsize=config.label_pt)
+    ax.tick_params(axis="both", labelsize=config.tick_pt)
     style.value_axis(ax, "x")
     style.value_axis(ax, "y", log_base=2.0)
-    ax.margins(x=0.22, y=0.22)
-    widen_x_axis(ax)
-    widen_y_axis(ax)
+    ax.margins(x=config.margin, y=config.margin)
+    widen_x_axis(ax, config)
+    widen_y_axis(ax, config)
     low, high = ax.get_xlim()
     ax.xaxis.set_major_locator(MultipleLocator(x_tick_step(high - low)))
     ax.xaxis.set_major_formatter(FuncFormatter(log2_tick))
     ax.yaxis.set_major_formatter(FuncFormatter(ratio_tick))
+    minor_log2_grid(ax, "x", config)
+    minor_log2_grid(ax, "y", config)
     ax.set_box_aspect(1.0)
     style.despine(ax)
+
+
+def draw_treatment_marks(
+    ax: Axes,
+    frame: pd.DataFrame,
+    stats: pd.DataFrame,
+    shape: str,
+    label_prefix: str,
+    repeats: population.RepeatPolicy,
+    show_cloud: bool,
+    config: FigureConfig,
+) -> set[str]:
+    """Every (model, leg) mark ONE packet's already-tagged ``frame`` draws (``skills`` True/False
+    for the two conditions) -- the loop :func:`draw_panel` and :func:`draw_multi_panel` share, so a
+    panel drawing one packet or several marks every point the same way. Returns the models actually
+    drawn, for the caller's own legend.
+
+    ``label_prefix`` goes before the point's own leg label (the language, unless ``frame`` carries
+    an explicit ``leg``) -- empty for one packet's own panel, the packet's name when several packets
+    share one panel and a bare language would no longer say which mark is which. The label's own
+    SUFFIX is its significance superscript (:func:`significance_suffix`).
+    """
+    significance = axis_significance(stats)
+    drawn_models: set[str] = set()
+    for (model, leg), pair in frame.assign(leg=leg_labels(frame)).groupby(["model", "leg"]):
+        series = reduce_pair(pair[~pair.skills], pair[pair.skills], repeats)
+        if series is None:
+            continue
+        drawn_models.add(str(model))
+        draw_series(ax, series, palette.model_color(str(model)), shape, show_cloud, config)
+        score_sig, cost_sig = significance.get((str(model), str(leg)), (False, False))
+        suffix = significance_suffix(score_sig, cost_sig)
+        text = f"{label_prefix}{leg}{f' {suffix}' if suffix else ''}"
+        ax.annotate(
+            text,
+            (series.x, series.y),
+            textcoords="offset points",
+            xytext=(13, 0),
+            fontsize=config.subtitle_pt,
+            color=style.MUTED,
+            va="center",
+            zorder=style.MARK_Z + 2.0,
+        )
+    return drawn_models
 
 
 def draw_panel(
@@ -474,11 +584,11 @@ def draw_panel(
     frame: pd.DataFrame,
     stats: pd.DataFrame,
     treatment: str,
-    compact: bool = False,
     control_over: Sequence[str] = (),
     control_name: str = "",
     repeats: population.RepeatPolicy = "latest",
     show_cloud: bool = False,
+    config: FigureConfig = DEFAULT_CONFIG,
 ) -> list[Line2D]:
     """One comparison: every arm's summary mark (and, with ``show_cloud``, its paired cloud) on one
     panel.
@@ -488,39 +598,52 @@ def draw_panel(
     cannot give back. Grouped by (model, leg): a leg is the language, unless ``frame`` carries an
     explicit one (:func:`leg_labels`).
     """
-    shape = palette.packet_marker(treatment)
-    significant = significant_flags(stats)
-    drawn_models: set[str] = set()
-    counts: list[int] = []
-    for (model, leg), pair in frame.assign(leg=leg_labels(frame)).groupby(["model", "leg"]):
-        series = reduce_pair(pair[~pair.skills], pair[pair.skills], repeats)
-        if series is None:
-            continue
-        drawn_models.add(str(model))
-        filled = significant.get((str(model), str(leg)), False)
-        draw_series(ax, series, palette.model_color(str(model)), shape, filled, show_cloud)
-        counts.append(series.kernels)
-        ax.annotate(
-            str(leg),
-            (series.x, series.y),
-            textcoords="offset points",
-            xytext=(13, 0),
-            fontsize=style.ANNOTATION_PT * (0.62 if compact else 1.0),
-            color=style.MUTED,
-            va="center",
-            zorder=style.MARK_Z + 2.0,
-        )
-    style_panel(ax, compact)
-    notes = [interval_note(counts, "Speed-Up Geomean"), interval_note(counts, "Token-Cost Geomean")]
+    drawn_models = draw_treatment_marks(
+        ax, frame, stats, palette.packet_marker(treatment), "", repeats, show_cloud, config
+    )
+    style_panel(ax, config)
     return legend_handles(
-        treatment,
-        sorted(drawn_models),
-        notes,
-        list(control_over) or [treatment],
-        family_size(stats),
-        control_name,
-        show_cloud,
+        treatment, sorted(drawn_models), list(control_over) or [treatment], control_name, show_cloud
     )  # fmt: skip
+
+
+def draw_multi_panel(
+    ax: Axes,
+    frames: dict[str, pd.DataFrame],
+    stats: dict[str, pd.DataFrame],
+    control_name: str = "",
+    repeats: population.RepeatPolicy = "latest",
+    show_cloud: bool = False,
+    config: FigureConfig = DEFAULT_CONFIG,
+) -> list[Line2D]:
+    """SEVERAL packets sharing one panel and one control, each its own SHAPE
+    (:data:`palette.packet_marker`) with the mark's colour still the model's -- the whole-panel
+    version of :func:`draw_panel`, for a reader comparing every intervention against the same
+    control at a glance instead of hunting across a row of panels.
+
+    ``frames``/``stats`` are keyed by packet, each value in :func:`draw_panel`'s own shape (a
+    ``skills``-tagged frame, that packet's verdict table); a packet whose frame draws no arm at all
+    (empty, or every group paired to nothing) is silently absent from the legend rather than drawn
+    as a shape nothing wears. Each packet's significance is corrected within its OWN family
+    (:func:`~hpcagent_bench.harness.efficacy.correct_family` ran once per packet, upstream, exactly
+    as a row of one-packet panels would) -- a panel drawing several packets does not re-run BH
+    jointly across them.
+    """
+    drawn_models: set[str] = set()
+    drawn_treatments: list[str] = []
+    for treatment, frame in frames.items():
+        if frame.empty:
+            continue
+        prefix = f"{experiment_tags.packet_name(treatment)} "
+        models = draw_treatment_marks(
+            ax, frame, stats.get(treatment, pd.DataFrame()), palette.packet_marker(treatment), prefix, repeats,
+            show_cloud, config,
+        )  # fmt: skip
+        if models:
+            drawn_treatments.append(treatment)
+        drawn_models |= models
+    style_panel(ax, config)
+    return multi_legend_handles(drawn_treatments, sorted(drawn_models), control_name, show_cloud)
 
 
 #: A point label's candidate places around its mark, tried in order: (dx, dy) in points, then the
@@ -575,7 +698,9 @@ def untangle_labels(ax: Axes) -> None:
 #: A single comparison's SQUARE panel side, inches, when only one is drawn.
 PANEL_SIDE: float = 5.0
 PANEL_SIZE: tuple[float, float] = (PANEL_SIDE + 2.0, PANEL_SIDE + 3.1)
-PANEL_MARGINS: dict[str, float] = {"left": 0.135, "right": 0.97, "top": 0.90, "bottom": 0.30}
+#: ``top`` reserves only a hair: neither :func:`figure_one` nor :func:`figure_row` draws a
+#: whole-figure title any more, so nothing sits above the panel box itself.
+PANEL_MARGINS: dict[str, float] = {"left": 0.135, "right": 0.97, "top": 0.98, "bottom": 0.30}
 
 #: A single panel's side, inches, when several comparisons join in one row at their NATURAL size
 #: (no target row width given).
@@ -584,8 +709,10 @@ ROW_PANEL_GAP: float = 0.25
 
 #: The fixed chrome around a joined row, in INCHES: a band costs the same inches whether the row's
 #: panels are 1.7in or 3.6in on a side, and a constant FRACTION of the figure gives a wide row
-#: whitespace it does not need and a narrow one less than it does.
-ROW_TITLE_IN: float = 0.60
+#: whitespace it does not need and a narrow one less than it does. ``ROW_TITLE_IN`` is a hair of top
+#: padding only -- no whole-row title is drawn; each panel's own subtitle sits INSIDE its box
+#: (:func:`figure_row`'s own ``build``).
+ROW_TITLE_IN: float = 0.05
 ROW_XLABEL_IN: float = 0.55
 
 #: :func:`figure_row`'s worst-case GUESS at the legend's height, for the PROBE pass only -- big
@@ -632,82 +759,99 @@ def figure_one(
     frame: pd.DataFrame,
     stats: pd.DataFrame,
     treatment: str,
-    label: str,
     out: pathlib.Path,
     control_name: str = "",
     repeats: population.RepeatPolicy = "latest",
     show_cloud: bool = False,
+    title: str = "",
+    config: FigureConfig = DEFAULT_CONFIG,
 ) -> pathlib.Path:
-    """ONE comparison: its square panel under a title and its own legend."""
+    """ONE comparison: its square panel and its own legend. NO whole-figure title -- a paper's
+    caption is that; ``title``, blank by default, draws a small subtitle INSIDE the panel, the same
+    place :func:`figure_row` draws one for each of its own panels."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=PANEL_SIZE)
-    fig.set_dpi(style.SAVE_DPI)  # measure title/legend fit at the dpi save() actually writes
-    handles = draw_panel(ax, frame, stats, treatment, control_name=control_name, repeats=repeats, show_cloud=show_cloud)
+    fig.set_dpi(style.SAVE_DPI)  # measure the legend's fit at the dpi save() actually writes
+    handles = draw_panel(
+        ax, frame, stats, treatment, control_name=control_name, repeats=repeats, show_cloud=show_cloud, config=config
+    )
     fig.subplots_adjust(**PANEL_MARGINS)
-    style.legend_below(fig, handles, ncol=2, y=0.01, fontsize=style.LABEL_PT * 0.8)
-    style.title(fig, label)
+    style.legend_below(fig, handles, ncol=config.legend_ncol, y=0.01, fontsize=config.legend_pt)
+    if title:
+        ax.text(
+            0.5, 0.98, title, transform=ax.transAxes, ha="center", va="top", fontsize=config.subtitle_pt,
+            color=style.INK, zorder=7,
+        )  # fmt: skip
     untangle_labels(ax)
     return style.save(fig, out.with_suffix(""), fixed=True)
 
 
+#: One panel of a joined row: ``title`` (what the panel is CALLED) plus either the SINGLE-treatment
+#: shape (:func:`draw_panel`'s own ``treatment: str``, ``stats``/``frame`` each one table) or the
+#: MULTI-treatment one (:func:`draw_multi_panel`'s ``treatments: Sequence[str]``, ``stats``/``frame``
+#: each a ``{treatment: table}`` dict, several packets sharing this one panel and control).
+Panel = tuple[str, str, pd.DataFrame, pd.DataFrame] | tuple[str, Sequence[str], dict[str, pd.DataFrame], dict[str, pd.DataFrame]]
+
+
+def flat_treatments(spec: str | Sequence[str]) -> list[str]:
+    """``spec`` as a flat list, whether it names one treatment or several."""
+    return [spec] if isinstance(spec, str) else list(spec)
+
+
 def figure_row(
-    panels: Sequence[tuple[str, str, pd.DataFrame, pd.DataFrame]],
-    label: str,
+    panels: Sequence[Panel],
     out: pathlib.Path,
     row_width_in: float | None = None,
     repeats: population.RepeatPolicy = "latest",
     show_cloud: bool = False,
+    config: FigureConfig = DEFAULT_CONFIG,
 ) -> pathlib.Path:
     """N comparisons as ONE ROW of N square panels, every one against its own control.
 
     Square and joined side by side rather than stacked: the comparisons are alternatives, not a
     sequence, so a reader compares them by panel shape as well as by content. Each panel is
     ``(title, treatment, stats, frame)`` -- ``title`` is what the panel is CALLED (a caller's own
-    "Kernel Formulation" or the packet's own :func:`~hpcagent_bench.packets.label`), ``treatment``
-    is the registry key the panel is SHAPED by; they differ whenever a joined figure names its
-    panels for something other than the packet itself.
+    "Kernel Formulation" or the packet's own :func:`~hpcagent_bench.packets.label`), drawn small
+    INSIDE the panel's own box (no whole-row title: a paper's caption is that); ``treatment`` is the
+    registry key (or keys, :data:`Panel`) the panel is SHAPED by, differing from ``title`` whenever a
+    joined figure names its panels for something other than the packet itself.
     """
     import matplotlib.pyplot as plt
 
     n = len(panels)
     side = panel_side(n, row_width_in)
     data_width = side * n + ROW_PANEL_GAP * (n - 1)
-    treatments_here = [treatment for panel_title, treatment, treated_arm, control_arm in panels]
+    treatments_here = [t for panel_title, treatment, treated_arm, control_arm in panels for t in flat_treatments(treatment)]
 
     def build(width: float, height: float) -> tuple[Figure, list[Axes], list[Line2D]]:
         fig, axes = plt.subplots(1, n, figsize=(width, height), squeeze=False)
-        fig.set_dpi(style.SAVE_DPI)  # measure title/legend/margins at the dpi save() writes
+        fig.set_dpi(style.SAVE_DPI)  # measure legend/margins at the dpi save() writes
         handles_by_label: dict[str, Line2D] = {}
         for ax, (title, treatment, stats, frame) in zip(axes[0], panels, strict=True):
-            handles = draw_panel(
-                ax, frame, stats, treatment, True, treatments_here, repeats=repeats, show_cloud=show_cloud
-            )
+            if isinstance(treatment, str):
+                handles = draw_panel(
+                    ax, frame, stats, treatment, treatments_here, repeats=repeats, show_cloud=show_cloud,
+                    config=config,
+                )  # fmt: skip
+            else:
+                handles = draw_multi_panel(ax, frame, stats, repeats=repeats, show_cloud=show_cloud, config=config)
             for handle in handles:
                 handles_by_label.setdefault(handle.get_label(), handle)
-            ax.text(
-                0.5,
-                0.98,
-                title,
-                transform=ax.transAxes,
-                ha="center",
-                va="top",
-                fontsize=style.SUBTITLE_PT * 0.72,
-                color=style.INK,
-                zorder=7,
-            )  # fmt: skip
+            if title:
+                ax.text(
+                    0.5, 0.98, title, transform=ax.transAxes, ha="center", va="top", fontsize=config.subtitle_pt,
+                    color=style.INK, zorder=7,
+                )  # fmt: skip
         for ax in axes[0][1:]:
             ax.set_ylabel("")
         return fig, list(axes[0]), list(handles_by_label.values())
 
     def dress(fig: Figure, handles: list[Line2D]) -> float:
-        """Title and legend, drawn once per pass; returns the legend's own measured height (in)."""
-        style.title(fig, label)
-        return style.legend_below(fig,
-                                  handles,
-                                  ncol=min(len(handles), 3),
-                                  y=0.005,
-                                  fontsize=style.LABEL_PT * 0.55)  # fmt: skip
+        """The shared legend, drawn once per pass; returns its own measured height (in)."""
+        return style.legend_below(
+            fig, handles, ncol=min(len(handles), config.legend_ncol), y=0.005, fontsize=config.legend_pt
+        )
 
     # Pass 1 (a throwaway figure): :data:`ROW_LEGEND_IN` is a worst-case guess at how tall the
     # legend's row wrap will come out and :data:`PANEL_MARGINS`-style left fraction is a guess at

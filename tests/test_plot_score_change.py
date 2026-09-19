@@ -427,39 +427,46 @@ def test_nothing_is_joined_by_a_line() -> None:
         plt.close(fig)
 
 
-def mark_faces(frame: pd.DataFrame, stats: pd.DataFrame, treatment: str) -> tuple[set[str], list]:
-    """Every non-transparent facecolor a panel's marks draw, plus its legend handles."""
+def test_a_marks_significance_superscript_reads_off_the_corrected_verdict_per_axis() -> None:
+    """The gate is the VERDICT, per axis: a raw p that was never corrected, and a pairing too small
+    for any test, both draw NO superscript. Every mark is filled regardless -- only the control is
+    ever hollow (:mod:`hpcagent_bench.stats.figures.efficacy`'s own module docstring); significance
+    is the label's own ``*``/DAGGER suffix instead."""
+    import matplotlib.pyplot as plt
+
+    def leg_labels_of(stats: pd.DataFrame) -> list[str]:
+        fig, ax = plt.subplots()
+        try:
+            efficacy_figures.draw_panel(ax, one_arm_raw(), stats, "skills")
+            return [text.get_text() for text in ax.texts]
+        finally:
+            plt.close(fig)
+
+    neither = leg_labels_of(one_arm_stats())
+    both = leg_labels_of(one_arm_stats(score_verdict=efficacy.SIGNIFICANT, cost_verdict=efficacy.SIGNIFICANT))
+    assert neither == ["C"], neither
+    assert both == [f"C {efficacy_figures.SCORE_SIG_MARK}{efficacy_figures.COST_SIG_MARK}"], both
+
+
+def test_every_drawn_mark_is_filled_and_only_the_control_is_hollow() -> None:
+    """Fill no longer carries significance (superscripts do); it is now a constant so a treated mark
+    is never mistaken for a second control reference."""
     import matplotlib.pyplot as plt
     from matplotlib.collections import PathCollection
 
     fig, ax = plt.subplots()
     try:
-        handles = efficacy_figures.draw_panel(ax, frame, stats, treatment)
-        faces = {
-            matplotlib.colors.to_hex(rgba)
-            for collection in ax.collections
-            if isinstance(collection, PathCollection)
-            for rgba in collection.get_facecolor()
-            if rgba[3] > 0.0
-        }
-        return faces, handles
+        efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), "cpf")
+        summary_marks = [
+            c for c in ax.collections
+            if isinstance(c, PathCollection) and c.get_sizes().size
+            and c.get_sizes().max() == pytest.approx(efficacy_figures.DEFAULT_CONFIG.mark_size)
+        ]  # fmt: skip
+        hollow = [c for c in summary_marks if not any(rgba[3] > 0.0 for rgba in c.get_facecolor())]
     finally:
         plt.close(fig)
-
-
-def test_a_mark_fills_only_on_a_corrected_significant_verdict() -> None:
-    """The gate is the VERDICT: a raw p that was never corrected, and a pairing too small for any
-    test, both draw a HOLLOW mark -- fill is earned by the family's own correction, never assumed."""
-    filled_faces, filled_handles = mark_faces(
-        one_arm_raw(), one_arm_stats(score_verdict=efficacy.SIGNIFICANT), "skills"
-    )
-    hollow_faces, hollow_handles = mark_faces(one_arm_raw(), one_arm_stats(), "skills")
-    assert palette.model_color("qwen38") in filled_faces
-    assert palette.model_color("qwen38") not in hollow_faces
-    labels = {h.get_label() for h in filled_handles}
-    assert any(label.startswith("Filled: Significant (BH-Adjusted p < 0.05, 2 Tests)") for label in labels), labels
-    assert any(label == "Hollow: Not Significant" for label in labels), labels
-    assert labels == {h.get_label() for h in hollow_handles}, "the legend explains the rule, not one verdict"
+    assert len(summary_marks) >= 2, "expected the control reference plus at least one treated mark"
+    assert len(hollow) == 1, "exactly the control reference should be hollow"
 
 
 def test_the_filled_mark_wears_the_model_colour_and_the_hollow_control_wears_the_control_colour() -> None:
@@ -473,7 +480,7 @@ def test_the_filled_mark_wears_the_model_colour_and_the_hollow_control_wears_the
     assert palette.model_color("qwen38") != palette.color(treatment)
     fig, ax = plt.subplots()
     try:
-        efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(score_verdict=efficacy.SIGNIFICANT), treatment)
+        efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), treatment)
         edges, faces = set(), set()
         for collection in (c for c in ax.collections if isinstance(c, PathCollection)):
             for rgba in collection.get_edgecolor():
@@ -503,17 +510,21 @@ def test_the_marker_shape_is_the_packet_and_nothing_else() -> None:
         plt.close(fig)
 
 
-def test_neither_axis_enables_a_minor_grid() -> None:
-    """Major grid only. A minor line is a second grid at a second weight, and once the figure is
-    reduced for print the panel reads as a texture instead of a reference."""
+def test_a_light_minor_grid_sits_between_the_major_lines() -> None:
+    """A half-octave minor grid is now drawn (denser than the major-only original), but lighter and
+    thinner so it reads as texture under the marks rather than a second reference the major line
+    already is."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
     try:
         efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), "cpfsrc")
-        assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
-        assert not [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
-        assert not [tick for tick in ax.xaxis.get_minor_ticks() if tick.gridline.get_visible()]
+        major = [line for line in ax.yaxis.get_gridlines() if line.get_visible()]
+        minor = [tick.gridline for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
+        assert major, "the major grid should still be there"
+        assert minor, "a minor grid should now be drawn too"
+        assert minor[0].get_linewidth() < major[0].get_linewidth()
+        assert not ax.yaxis.get_minor_ticks()[0].label1.get_text(), "minor ticks carry no text"
     finally:
         plt.close(fig)
 
@@ -522,19 +533,20 @@ def test_the_legend_is_drawn_once_on_the_figure_and_never_on_an_axes() -> None:
     """One key for the whole figure: several panels draw the same models in the same colours, and a
     key on each axes invites reading them as different sets of series."""
     out = pathlib.Path(tempfile.mkdtemp()) / "fig.pdf"
-    written = efficacy_figures.figure_one(one_arm_raw(), one_arm_stats(), "cpfsrc", "label", out)
+    written = efficacy_figures.figure_one(one_arm_raw(), one_arm_stats(), "cpfsrc", out)
     assert written.with_suffix(".pdf").exists()
 
     panels = [("CPF", "cpf", one_arm_stats(), one_arm_raw()), ("CPFSRC", "cpfsrc", one_arm_stats(), one_arm_raw())]
-    written_row = efficacy_figures.figure_row(panels, "label", pathlib.Path(tempfile.mkdtemp()) / "row.pdf")
+    written_row = efficacy_figures.figure_row(panels, pathlib.Path(tempfile.mkdtemp()) / "row.pdf")
     assert written_row.with_suffix(".pdf").exists()
 
 
 def test_a_joined_row_has_exactly_one_legend_with_deduplicated_unique_labels() -> None:
-    """A 1x3 figure draws one intervention hue, one model shape, one control mark and one
-    undelivered cross ONCE each, never once per panel: every panel repeats the same channels, so a
-    key on each would invite reading them as different sets of series, and a naive concatenation of
-    three panels' handles would repeat every one of them three times."""
+    """A 1x3 figure draws one intervention hue, one model shape, one control mark and the interval
+    notes ONCE each, never once per panel: every panel repeats the same channels (all fixed text, so
+    identical across panels), so a key on each would invite reading them as different sets of
+    series, and a naive concatenation of three panels' handles would repeat every one of them three
+    times."""
     import matplotlib.pyplot as plt
 
     n = 3
@@ -543,7 +555,7 @@ def test_a_joined_row_has_exactly_one_legend_with_deduplicated_unique_labels() -
         treatments = ["cpf", "cpfsrc", "lang-skills"]
         handles_by_label: dict[str, object] = {}
         for ax, treatment in zip(axes[0], treatments, strict=True):
-            for handle in efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), treatment, True, treatments):
+            for handle in efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), treatment, treatments):
                 handles_by_label.setdefault(handle.get_label(), handle)
         plotstyle.legend_below(fig, list(handles_by_label.values()))
         assert len(fig.legends) == 1
@@ -568,7 +580,7 @@ def test_the_joined_figure_names_its_one_control_once_over_every_treatment() -> 
         for ax, treatment in zip(axes[0], treatments, strict=True):
             labels += [
                 h.get_label()
-                for h in efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), treatment, True, treatments)
+                for h in efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), treatment, treatments)
             ]
     finally:
         plt.close(fig)
@@ -581,7 +593,7 @@ def test_n_comparisons_draw_one_row_of_n_square_panels(n: int) -> None:
     """Several comparisons join as ONE ROW of square panels, never stacked: they are alternatives
     against one control, not a sequence."""
     panels = [(f"Comparison {i}", "skills", one_arm_stats(), one_arm_raw()) for i in range(n)]
-    written = efficacy_figures.figure_row(panels, "label", pathlib.Path(tempfile.mkdtemp()) / "row.pdf")
+    written = efficacy_figures.figure_row(panels, pathlib.Path(tempfile.mkdtemp()) / "row.pdf")
     assert written.with_suffix(".pdf").exists()
 
 
@@ -633,22 +645,34 @@ def png_ink_columns(path: pathlib.Path, row_lo: int, row_hi: int) -> tuple[int, 
     return (int(cols.min()), int(cols.max())) if cols.size else (-1, -1)
 
 
-def test_a_joined_rows_title_never_touches_the_saved_canvas_edge(tmp_path: pathlib.Path) -> None:
-    """``style.title`` shrinks its font to fit the WIDTH IT MEASURES -- against a figure still at
-    matplotlib's default dpi, before :func:`~hpcagent_bench.stats.style.save` writes the PNG at
-    :data:`~hpcagent_bench.stats.style.SAVE_DPI`. FreeType hints a glyph run tighter at a lower dpi,
-    so a title that 'fit' at measurement time came out overflowing both edges of the saved file --
-    this is caught on the file itself, not on the same measurement that missed it the first time."""
+def test_neither_figure_one_nor_figure_row_calls_style_title(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The new contract: a paper's caption is the title, so neither function ever draws a
+    whole-figure one (:func:`~hpcagent_bench.stats.style.title`) -- only each panel's own small
+    subtitle, drawn with ``ax.text`` INSIDE its box, ever runs."""
+
+    def refuse(*args: object, **kwargs: object) -> float:
+        raise AssertionError("style.title must never be called")
+
+    monkeypatch.setattr(plotstyle, "title", refuse)
+    efficacy_figures.figure_one(one_arm_raw(), one_arm_stats(), "cpf", pathlib.Path(tempfile.mkdtemp()) / "one.pdf")
     panels = [("Comparison", "cpf", one_arm_stats(), one_arm_raw())]
-    long_label = "A row title long enough to need the shrink-to-fit loop to do real work here"
+    efficacy_figures.figure_row(panels, pathlib.Path(tempfile.mkdtemp()) / "row.pdf")
+
+
+def test_a_panels_own_subtitle_never_touches_the_saved_canvas_edge(tmp_path: pathlib.Path) -> None:
+    """A long per-panel ``title`` (:func:`figure_row`'s own small in-box text) is measured against
+    the SAVED file, not the same measurement that used to miss a whole-figure title's clipping at a
+    different dpi (:func:`~hpcagent_bench.stats.style.save`'s own docstring)."""
+    long_title = "A panel subtitle long enough that it could, in principle, run off either edge"
+    panels = [(long_title, "cpf", one_arm_stats(), one_arm_raw())]
     out = tmp_path / "row.pdf"
-    efficacy_figures.figure_row(panels, long_label, out)
+    efficacy_figures.figure_row(panels, out)
     with Image.open(out.with_suffix(".png")) as image:
         width = image.size[0]
         rows = np.where((np.array(image.convert("L")) < 240).any(axis=1))[0]
-    left, right = png_ink_columns(out.with_suffix(".png"), int(rows.min()), int(rows.min()) + 40)
-    assert 0 < left, "the title's own ink starts at the canvas edge"
-    assert right < width - 1, "the title's own ink runs to the canvas edge"
+    left, right = png_ink_columns(out.with_suffix(".png"), int(rows.min()), int(rows.min()) + 20)
+    assert 0 < left, "the subtitle's own ink starts at the canvas edge"
+    assert right < width - 1, "the subtitle's own ink runs to the canvas edge"
 
 
 def y_axis_left_margin(low: float, high: float) -> float:
@@ -682,28 +706,24 @@ def test_required_left_margin_grows_with_the_widest_tick_the_range_draws() -> No
     assert wide > narrow, (wide, narrow)
 
 
-def test_the_legend_names_the_interval_method_and_the_kernels_it_is_over() -> None:
+def test_the_legend_names_the_interval_method() -> None:
     """Both axes here always draw the same estimator (a log-space t interval), and the legend says
-    so and over how many kernels (SC15 Rule 5)."""
-    note = efficacy_figures.interval_note([8, 8], "Speed-Up Geomean")
+    so (SC15 Rule 5). Fixed text, never a per-panel sample count any more (:data:`GEOMEAN_METHOD`)
+    -- so a joined row's per-panel copies dedupe into one shared entry
+    (:func:`~hpcagent_bench.stats.figures.efficacy.legend_tail`)."""
+    note = efficacy_figures.interval_note("Speed-Up Geomean")
     assert "log-t" in note
-    assert "n=8" in note
+    assert efficacy_figures.interval_note("Speed-Up Geomean") == note, "fixed text, not sample-size-chosen"
 
 
-def test_interval_note_names_are_fixed_never_chosen_by_sample_size() -> None:
-    """Unlike the older per-arm reduction, the paired geomean drawn here
-    (``summary.geomean_ci``) is ALWAYS the log-space t interval, at any n -- there is no adaptive
-    bootstrap fallback to name."""
-    small = efficacy_figures.interval_note([2], "Speed-Up Geomean")
-    large = efficacy_figures.interval_note([200], "Speed-Up Geomean")
-    assert "log-t" in small and "log-t" in large
-
-
-def test_the_figure_key_carries_one_interval_note_per_axis() -> None:
-    """Both notes reach the reader, in the figure's ONE key."""
-    handles = efficacy_figures.legend_handles("cpfsrc", ["qwen38"], ["note-a", "note-b"], ["cpfsrc"], 12)
+def test_the_figure_key_carries_one_interval_note_per_axis_and_the_significance_rule() -> None:
+    """Both notes -- and the ``*``/DAGGER significance rule -- reach the reader, in the figure's ONE
+    key."""
+    handles = efficacy_figures.legend_handles("cpfsrc", ["qwen38"], ["cpfsrc"])
     labels = [h.get_label() for h in handles]
-    assert "note-a" in labels and "note-b" in labels, labels
+    assert efficacy_figures.interval_note("Speed-Up Geomean") in labels, labels
+    assert efficacy_figures.interval_note("Token-Cost Geomean") in labels, labels
+    assert efficacy_figures.SIGNIFICANCE_NOTE in labels, labels
 
 
 def test_an_undelivered_kernel_still_counts_but_its_cross_only_draws_behind_show_cloud() -> None:
@@ -747,10 +767,10 @@ def test_an_undelivered_kernel_still_counts_but_its_cross_only_draws_behind_show
     assert series.delivered < series.kernels
     assert not series.cloud[~series.cloud.delivered].empty
 
-    default_handles = efficacy_figures.legend_handles("skills", ["qwen38"], ["a", "b"], ["skills"], 1)
+    default_handles = efficacy_figures.legend_handles("skills", ["qwen38"], ["skills"])
     assert not any(h.get_label() == plotstyle.NOT_DELIVERED_LABEL for h in default_handles), default_handles
 
-    cloud_handles = efficacy_figures.legend_handles("skills", ["qwen38"], ["a", "b"], ["skills"], 1, show_cloud=True)
+    cloud_handles = efficacy_figures.legend_handles("skills", ["qwen38"], ["skills"], show_cloud=True)
     assert any(h.get_label() == plotstyle.NOT_DELIVERED_LABEL for h in cloud_handles)
 
 
@@ -973,34 +993,30 @@ def test_the_per_kernel_cloud_is_off_by_default_and_only_draws_behind_show_cloud
 
 
 # ---------------------------------------------------------------------------
-# The default title: every figure carries one, derived from what it compares, even when the caller
-# passes no ``--label`` at all -- never a bare, generic word.
+# No title: a paper's caption is the title now (supersedes the earlier derived-default-title
+# contract). ``--title`` is an optional, blank-by-default in-panel SUBTITLE, never a whole-figure
+# title, and it is threaded straight through -- there is no more derivation logic to test.
 
 
-def test_the_default_title_is_never_empty_or_the_bare_word_efficacy() -> None:
-    assert plot.default_label("", [], "effective") not in ("", "Efficacy", "()")
-    assert "Efficacy" not in plot.default_label("Llr Focus40", ["CPF vs C"], "effective")
+def test_cli_title_flag_produces_no_whole_figure_title(tmp_path: pathlib.Path) -> None:
+    """The CLI route: even a caller who asks for a subtitle gets a small one INSIDE the panel, never
+    a whole-figure title (:func:`~hpcagent_bench.stats.figures.efficacy.figure_one` draws it with
+    ``ax.text``, not :func:`~hpcagent_bench.stats.style.title`)."""
+    obs = one_arm_observations_csv(tmp_path)
+    out = tmp_path / "fig.pdf"
+    argv = [
+        str(obs), "--experiment", "exp", "--treatment", "skills", "--title", "A Subtitle", "--out", str(out),
+        "--table", str(tmp_path / "table.csv"),
+    ]  # fmt: skip
+    import sys
 
-
-def test_the_default_title_names_the_campaign_the_comparison_and_the_cost_model() -> None:
-    label = plot.default_label("Llr Focus40", ["CPF vs C"], "effective")
-    assert "Llr Focus40" in label
-    assert "CPF vs C" in label
-    assert "effective" in label.lower()
-
-
-def test_the_default_title_still_says_something_without_a_known_campaign() -> None:
-    """``--pairs-csv`` and some ``--comparison`` specs carry no single campaign name; the title still
-    names what was compared and how it was priced rather than falling back to a blank scope."""
-    label = plot.default_label("", ["Whole Repository vs Bare Kernel"], "billed")
-    assert label == "Whole Repository vs Bare Kernel (billed Tokens)"
-
-
-def test_an_explicit_label_always_overrides_the_derived_default() -> None:
-    """``args.label or default_label(...)`` is the whole rule; pin it so a future refactor cannot
-    quietly start deriving a title the caller explicitly asked NOT to see."""
-    explicit = "Exactly What I Asked For"
-    assert (explicit or plot.default_label("Llr Focus40", ["CPF"], "effective")) == explicit
+    old_argv = sys.argv
+    sys.argv = ["plot_score_change.py", *argv]
+    try:
+        plot.main()
+    finally:
+        sys.argv = old_argv
+    assert out.with_suffix(".pdf").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -1032,3 +1048,113 @@ def test_a_drawn_panels_y_axis_never_labels_a_non_power_of_two_tick() -> None:
         ratio = float(text.rstrip("x").split("/")[-1]) if "/" in text else float(text.rstrip("x"))
         exponent = math.log2(ratio)
         assert exponent == pytest.approx(round(exponent)), text
+
+
+# ---------------------------------------------------------------------------
+# Several packets sharing ONE panel (draw_multi_panel): each its own shape, every model still its
+# own colour, one packet with nothing drawn silently absent rather than a shape nothing wears.
+
+
+def test_draw_multi_panel_gives_each_packet_its_own_shape_and_each_model_its_own_colour() -> None:
+    import matplotlib.markers
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import PathCollection
+
+    frames = {"cpf": one_arm_raw(model="qwen38"), "cpfsrc": one_arm_raw(model="oss120b")}
+    stats = {"cpf": one_arm_stats(model="qwen38"), "cpfsrc": one_arm_stats(model="oss120b")}
+    fig, ax = plt.subplots()
+    try:
+        handles = efficacy_figures.draw_multi_panel(ax, frames, stats)
+        labels = [h.get_label() for h in handles]
+        drawn_shapes = {
+            path.vertices.shape for collection in ax.collections if isinstance(collection, PathCollection)
+            for path in collection.get_paths()
+        }  # fmt: skip
+    finally:
+        plt.close(fig)
+    assert experiment_tags.packet_name("cpf") in labels, labels
+    assert experiment_tags.packet_name("cpfsrc") in labels, labels
+    assert experiment_tags.model_name("qwen38") in labels, labels
+    assert experiment_tags.model_name("oss120b") in labels, labels
+    for packet in ("cpf", "cpfsrc"):
+        shape = matplotlib.markers.MarkerStyle(palette.packet_marker(packet)).get_path().vertices.shape
+        assert shape in drawn_shapes, (packet, drawn_shapes)
+
+
+def test_draw_multi_panel_drops_a_packet_with_nothing_to_draw_from_its_own_legend() -> None:
+    """A packet whose frame is empty (no arm ever ran it in this figure's slice) is silently absent
+    from the legend -- drawing its shape with nothing under it would be a key for a mark that is not
+    on the panel."""
+    import matplotlib.pyplot as plt
+
+    frames = {"cpf": one_arm_raw(model="qwen38"), "cpfsrc": one_arm_raw(model="qwen38").iloc[0:0]}
+    stats = {"cpf": one_arm_stats(model="qwen38"), "cpfsrc": one_arm_stats(model="qwen38")}
+    fig, ax = plt.subplots()
+    try:
+        labels = [h.get_label() for h in efficacy_figures.draw_multi_panel(ax, frames, stats)]
+    finally:
+        plt.close(fig)
+    assert experiment_tags.packet_name("cpf") in labels, labels
+    assert experiment_tags.packet_name("cpfsrc") not in labels, labels
+
+
+def test_a_multi_treatment_panel_joins_a_row_beside_a_single_treatment_one() -> None:
+    """:data:`efficacy_figures.Panel` covers both shapes at once: :func:`figure_row` dispatches on
+    whether a panel's treatment is one key or several."""
+    single = ("Skills Only", "skills", one_arm_stats(), one_arm_raw())
+    multi = (
+        "CPU",
+        ["skills", "cpf"],
+        {"skills": one_arm_stats(), "cpf": one_arm_stats()},
+        {"skills": one_arm_raw(), "cpf": one_arm_raw()},
+    )
+    written = efficacy_figures.figure_row([single, multi], pathlib.Path(tempfile.mkdtemp()) / "row.pdf")
+    assert written.with_suffix(".pdf").exists()
+
+
+def one_arm_observations_csv(tmp_path: pathlib.Path) -> pathlib.Path:
+    """One tiny campaign as an extracted-observations CSV: a control, a ``skills`` arm and a
+    ``cpf`` arm, two models -- what :func:`plot.build_multi_comparison` reads off disk. Reuses
+    :func:`observation_rows`'s own shape so the emitted rows carry the ``baseline_ns``/``native_ns``
+    columns :func:`~hpcagent_bench.stats.figures.efficacy.pairs_table` requires (SC15 Rule 4)."""
+    rows: list[dict[str, object]] = []
+    for model, base in (("qwen38", 2.0), ("oss120b", 3.0)):
+        for packet, suffix, factor in (("", "", 1.0), ("skills", "-skills", 1.2), ("cpf", "-cpf", 0.8)):
+            arm = f"exp-{model}-c{suffix}"
+            rows += [
+                {**row, "language": "c", "packet": packet} for row in observation_rows(arm, base * factor, 1000.0 / factor)
+            ]  # fmt: skip
+    path = tmp_path / "observations.csv"
+    pd.DataFrame(rows).to_csv(path, index=False)
+    return path
+
+
+def test_build_multi_comparison_reads_treatments_as_a_comma_list() -> None:
+    obs = one_arm_observations_csv(pathlib.Path(tempfile.mkdtemp()))
+    built = plot.build_multi_comparison(
+        {"treatments": "skills,cpf", "title": "CPU"}, [obs], "exp", "latest", False, plot.cost.resolve()
+    )
+    assert built is not None
+    title, treatments, stats, frame = built
+    assert title == "CPU"
+    assert list(treatments) == ["skills", "cpf"]
+    assert set(frame) == {"skills", "cpf"}
+    assert set(stats) == {"skills", "cpf"}
+    assert set(frame["skills"].model.unique()) == {"qwen38", "oss120b"}
+
+
+def test_write_panel_tables_merges_a_multi_treatment_panel_into_one_packet_tagged_csv(
+    tmp_path: pathlib.Path,
+) -> None:
+    obs = one_arm_observations_csv(tmp_path)
+    built = plot.build_multi_comparison(
+        {"treatments": "skills,cpf"}, [obs], "exp", "latest", False, plot.cost.resolve()
+    )
+    assert built is not None
+    _, _, stats, frame = built
+    table = tmp_path / "table.csv"
+    plot.write_panel_tables(table, "-cpu", stats, frame, "latest")
+    written = pd.read_csv(table.with_name("table-cpu.csv"))
+    absolute = pd.read_csv(table.with_name("table-cpu-absolute.csv"))
+    assert set(written.packet) == {"skills", "cpf"}
+    assert set(absolute.packet) == {"skills", "cpf"}
