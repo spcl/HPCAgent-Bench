@@ -112,6 +112,9 @@ _ALLOW = {
     # are ambiguous) for a file-naming check unrelated to which account submits -- the same role as
     # test_agent_driver_sealed.py's "/users/someone" placeholder above, not a real submission path.
     "tests/test_submit_file_isolation.py",
+    # Same sacctmgr stub pattern, same reason: submit-canon-llr40.sh sources account_env.sh by a
+    # path relative to its own location rather than through OPT/HPCAGENT_BENCH_REPO.
+    "tests/test_submit_canon_llr40_kernels_file.py",
 }
 
 #: Storage-root rule: committed code must not spell out the MOUNT itself, not just a user segment
