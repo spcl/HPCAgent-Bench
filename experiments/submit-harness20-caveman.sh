@@ -37,6 +37,9 @@ LANGUAGE=c
 # to caveman -- ${VAR:-x} treats an explicitly empty string the same as unset, ${VAR-x} does not.
 PACKET=${PACKET-caveman}
 EXPERIMENT=${EXPERIMENT:-harness20-caveman}
+# "harness20", the roster tag wave_board.CAMPAIGNS["harness20"] and this file's own KERNELS_FILE
+# default (kernels-harness20.txt) already key on -- its OWN campaign, deliberately distinct from
+# submit-harness-focus20.sh's "harness-focus20" (a different roster). Registered in registry.yaml.
 RECORD_EXPERIMENT=${RECORD_EXPERIMENT:-harness20}
 CLEAN=${CLEAN:-0}
 CLEAN_SUFFIX=$(clean_suffix "${CLEAN}")
@@ -112,6 +115,6 @@ if [[ "${SUBMIT:-0}" != 1 ]]; then
     echo "prepared ${arm}${file_sfx} (${nodes} nodes, ${limit}) -- not submitted, SUBMIT=1 submits"
     exit 0
 fi
-jid=$(sbatch --parsable --no-requeue -A a-g34 --partition=mi300 --mem=0 --nodes="${nodes}" --time="${limit}" \
+jid=$(sbatch --parsable --no-requeue --partition=mi300 --mem=0 --nodes="${nodes}" --time="${limit}" \
     --job-name="${arm}${file_sfx}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${env}" beverin.sbatch)
 echo "submitted ${arm}${file_sfx} -> ${jid} (${nodes} nodes, ${limit})"
