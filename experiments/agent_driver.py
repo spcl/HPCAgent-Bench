@@ -2005,6 +2005,80 @@ def timed_out_mid_tool_use(log_path: pathlib.Path) -> bool:
     return open_tool_use_index(tail) is not None
 
 
+def stream_idle_timeout_module() -> ModuleType:
+    """``stream_idle_timeout.py`` from beside this file, imported on first use. Same reason
+    ``harness_module`` is not a top-level import: tests load this file by path with nothing on
+    ``sys.path``, and the agent image runs it as a script from the checkout."""
+    here = str(pathlib.Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import stream_idle_timeout
+
+    return stream_idle_timeout
+
+
+def open_tool_use_stall_seconds(log_path: pathlib.Path) -> float | None:
+    """Seconds since ``log_path`` last grew, IF its tail sits mid an unclosed ``tool_use`` block.
+
+    ``None`` covers three cases the caller treats alike -- file missing, or its tail shows no open
+    block -- there is nothing stale to report. Reads the same tail shape :func:`open_tool_use_index`
+    already parses for the post-mortem case; this is the live-polling half of the same check.
+    """
+    try:
+        mtime = log_path.stat().st_mtime
+    except OSError:
+        return None
+    try:
+        with log_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - RESULT_TAIL_BYTES))
+            tail = handle.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    if open_tool_use_index(tail) is None:
+        return None
+    return max(0.0, time.time() - mtime)
+
+
+def dead_stream_threshold_seconds(environment: dict[str, str]) -> float:
+    """How long an open ``tool_use`` block may sit silent before :func:`watch_dead_stream` kills it.
+
+    Reads the SAME ``CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS`` the arm already derived for the child's
+    own environment (stream_idle_timeout.py), so the watchdog enforces the arm's own budget instead
+    of a second number to keep in step with it by hand. Falls back to the CLI's own ceiling if the
+    var is absent or unparseable -- the same default stream_idle_timeout.py itself falls back to.
+    """
+    try:
+        ms = int(environment.get("CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS", ""))
+    except ValueError:
+        ms = 0
+    if ms <= 0:
+        ms = stream_idle_timeout_module().CEILING_MS
+    return ms / 1000.0
+
+
+def watch_dead_stream(
+    process: subprocess.Popen[bytes], log_path: pathlib.Path, threshold_s: float, state: AgentState
+) -> None:
+    """Kill ``process`` when its stream dies mid ``tool_use`` and stays silent past ``threshold_s``.
+
+    The still-open half of the 2026-09-15 qwen38 stall (see :func:`timed_out_mid_tool_use`): a
+    stream that opens a ``tool_use`` content block and then sends NOTHING never gives the CLI's own
+    ``CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS`` anything to fire against on some transports, so a dead
+    stream can sit for the full ``AGENT_TIMEOUT_SECONDS`` (hours) instead of the arm's own idle
+    budget. This polls the transcript's tail directly instead of trusting the process to notice its
+    own silence, so the crash-and-relaunch path below still gets a bounded wait.
+    """
+    poll_s = max(1.0, min(30.0, threshold_s / 10))
+    while process.poll() is None:
+        time.sleep(poll_s)
+        stalled_for = open_tool_use_stall_seconds(log_path)
+        if stalled_for is not None and stalled_for >= threshold_s:
+            state["dead_stream"] = True
+            terminate(process)
+            return
+
+
 def transcript_closing(log_path: pathlib.Path) -> "Closing":
     """claude's transcript as a :class:`~harnesses.Closing`, read off its closing ``result`` event."""
     subtype, turns = final_result(log_path)
@@ -2074,6 +2148,7 @@ class AgentState(TypedDict, total=False):
     tokens: int
     exceeded: bool
     submitted: bool
+    dead_stream: bool
 
 
 def watch_submission(process: subprocess.Popen[bytes], marker: pathlib.Path, state: AgentState) -> None:
@@ -2469,6 +2544,9 @@ def run_agent(
         marker=marker.absolute(),
     )
     environment = harness.env(context, environment)
+    # Claude-only: the tail parse the watchdog polls (open_tool_use_stall_seconds) reads claude's
+    # own stream-json shape, which a runner harness does not emit.
+    dead_stream_threshold = dead_stream_threshold_seconds(environment) if harness.name == harnesses.CLAUDE else 0.0
     attempts_path = workdir / ATTEMPTS_NAME
     attempt_start_ms = 0
     # The worker's view of the filesystem: its own workdir, its own shared folder, its own kernel's
@@ -2516,6 +2594,14 @@ def run_agent(
                 )
             if submit_single_submission():
                 watchers.append(threading.Thread(target=watch_submission, args=(process, marker, state), daemon=True))
+            if dead_stream_threshold > 0:
+                watchers.append(
+                    threading.Thread(
+                        target=watch_dead_stream,
+                        args=(process, log_path, dead_stream_threshold, state),
+                        daemon=True,
+                    )
+                )
             for watcher in watchers:
                 watcher.start()
             remaining = max(1.0, deadline - time.monotonic()) if deadline else None
@@ -2543,6 +2629,12 @@ def run_agent(
                     f"(total tokens counted={state['tokens']})\n"
                 )
                 returncode = RC_TOKEN_BUDGET
+            elif state.get("dead_stream") and returncode != RC_TIMEOUT:
+                log.write(
+                    f"\nagent_driver: killed after dead-stream watchdog (tool_use content block "
+                    f"open, no bytes for >={dead_stream_threshold:.0f}s)\n"
+                )
+                returncode = RC_API_TIMEOUT
             spent = deadline and time.monotonic() >= deadline
             attempt_crashed = closing_crashed(returncode, harness.closing(workdir))
             relaunching = bool(attempt_crashed and crash_attempts < AGENT_CRASH_ATTEMPTS and not spent)
