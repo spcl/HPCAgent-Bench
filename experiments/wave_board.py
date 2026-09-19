@@ -267,8 +267,11 @@ def arm_row(
 
 
 #: Arms the user took out of the experiments (2026-09-18): union-alpha (the stealth model is gone), scicomp
-#: C++ and GPU c-openmp offload, and the LLR CPU Fortran arms.
-DROPPED_ARMS = re.compile(r"unionalpha|^scicomp-dc-cpp-|^scicomp-dc-gpu-.*-c-openmp-|^cpf-llr-focus40-[^-]+-fortran")
+#: C++ and GPU c-openmp offload, and the LLR CPU Fortran arms. 2026-09-19: only cpfsrc-v2 counts, so every
+#: cpfsrc (v1) arm, whose staged source was not announced as parallel, leaves the board.
+DROPPED_ARMS = re.compile(
+    r"unionalpha|^scicomp-dc-cpp-|^scicomp-dc-gpu-.*-c-openmp-|^cpf-llr-focus40-[^-]+-fortran|-cpfsrc(?!-v2)"
+)
 
 
 def arm_rows(runs: pathlib.Path, opt: str, models: tuple[str, ...]) -> list[dict]:

@@ -487,7 +487,7 @@ def test_a_clean_rerun_folds_into_one_board_row(
     """PROPERTY CHANGED on purpose (user, 2026-09-18): an arm and its clean re-run are ONE identity,
     ONE board row, union coverage over both -- not two rows and not the clean one replacing the
     other (the 2026-09-15 rule showed both; a 2026-09-18 rule before this one showed only the clean)."""
-    arm = "cpf-llr-focus40-oss120b-c-cpfsrc"
+    arm = "cpf-llr-focus40-oss120b-c-cpfsrc-v2"
     runs = tmp_path / "runs" / "cpf-llr-focus40-20260915"
     for job_id, names in (("100", ["a"]), ("200", ["b"])):
         job_dir_with_rows(runs, job_id, names)
@@ -554,3 +554,19 @@ def test_an_arm_the_user_dropped_is_not_on_the_board(
     rows = board.arm_rows(tmp_path / "runs", "/opt", MODELS)
 
     assert [row["arm"] for row in rows] == [kept], rows
+
+
+@pytest.mark.parametrize(
+    ("job_name", "dropped"),
+    [
+        ("cpf-llr-focus40-qwen38-c-cpfsrc", True),
+        ("cpf-llr-focus40-kimi27sglang-c-cpfsrc-clean", True),
+        ("scicomp-dc-oss120b-c-cpfsrc-clean-kernels-x", True),
+        ("cpf-llr-focus40-qwen38-c-cpfsrc-v2-clean", False),
+        ("cpf-llr-focus40-qwen38-c-cpf", False),
+        ("cpf-llr-focus40-qwen38-c", False),
+    ],
+)
+def test_only_cpfsrc_v2_stays_on_the_board(board: types.ModuleType, job_name: str, dropped: bool) -> None:
+    """Every cpfsrc (v1) arm leaves the board; cpfsrc-v2, the cpf tool and the control stay."""
+    assert bool(board.DROPPED_ARMS.search(job_name)) is dropped
