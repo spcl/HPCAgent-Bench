@@ -24,6 +24,7 @@ from typing import Generic, Literal, ParamSpec, TypeAlias, TypeVar
 
 from hpcagent_bench import osinfo
 from hpcagent_bench.isolation import pause_openmp_pools
+from hpcagent_bench.seal import SealPlan, enter
 
 P = ParamSpec("P")
 
@@ -267,8 +268,15 @@ def child_main(
     args: tuple[object, ...],
     kwargs: dict[str, object],
     q: "ChildQueue[ResultT]",
+    seal: SealPlan | None = None,
 ) -> None:
     die_with_parent()
+    try:
+        if seal is not None:  # before the queue's feeder thread starts: a user namespace wants one thread
+            enter(seal)
+    except BaseException:  # noqa: BLE001 -- a refused seal is surfaced like any other child failure
+        q.put(("error", traceback.format_exc()))
+        return
     # First act, before any work: this is what arms the parent's deadline (see run_forked).
     q.put(("started", None))
     try:
@@ -330,11 +338,13 @@ def run_forked(
     timeout: float | None = None,
     stream_progress: bool = False,
     mp_context: str | None = None,
+    seal: SealPlan | None = None,
     **kwargs: P.kwargs,
 ) -> RunResult[ResultT]:
     """Run ``fn(*args, **kwargs)`` in a forked child; returns a failed RunResult (cause logged to stdout) on
     a fatal signal, exception, or timeout overrun, else ``ok=True`` with the picklable return value.
-    ``stream_progress=True`` preserves the child's last ``progress`` snapshot even if it is later killed."""
+    ``stream_progress=True`` preserves the child's last ``progress`` snapshot even if it is later killed.
+    ``seal`` runs the child sealed (:func:`hpcagent_bench.seal.enter`) before ``fn`` sees it."""
     tag = f"[{label}] " if label else ""
     abandoned = ABANDONED.get()
     if abandoned is not None and abandoned.is_set():
@@ -349,7 +359,7 @@ def run_forked(
     call_kwargs: dict[str, object] = dict(kwargs)
     if progress_q is not None:
         call_kwargs["progress"] = progress_q
-    p = ctx.Process(target=child_main, args=(fn, args, call_kwargs, q))
+    p = ctx.Process(target=child_main, args=(fn, args, call_kwargs, q, seal))
     p.start()
     last_progress: ResultT | None = None
     # The deadline measures the CHILD'S runtime, so the child arms it by reporting that it started

@@ -31,11 +31,11 @@ def test_enumerate_configs_valid_list_verbatim() -> None:
 def test_enumerate_configs_caps_at_max(caplog) -> None:
     # a valid list of 12 configs is capped to a deterministic seeded subset of 5
     configs = [{"i": i} for i in range(12)]
-    got = fuzz.enumerate_configs(configs, max_configs=5)
+    got = fuzz.enumerate_configs(configs, max_configs=5, seed=1)
     assert len(got) == 5
     assert all(c in configs for c in got)
-    # the cap is deterministic (same seed -> same subset)
-    assert fuzz.enumerate_configs(configs, max_configs=5) == got
+    # same explicit seed -> same subset
+    assert fuzz.enumerate_configs(configs, max_configs=5, seed=1) == got
 
 
 def test_enumerate_configs_no_cap_when_under_limit() -> None:

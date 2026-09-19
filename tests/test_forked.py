@@ -281,7 +281,7 @@ def test_the_child_entry_point_keeps_the_name_a_running_judge_pickles() -> None:
     """
     assert forked._child is forked.child_main
     assert pickle.loads(pickle.dumps(forked._child)) is forked.child_main
-    assert list(inspect.signature(forked.child_main).parameters) == ["fn", "args", "kwargs", "q"]
+    assert list(inspect.signature(forked.child_main).parameters) == ["fn", "args", "kwargs", "q", "seal"]
 
 
 @pytest.mark.parametrize(
