@@ -116,7 +116,7 @@ A heterogeneous Slurm job was tested on beverin (Slurm 25.05) with one mi300 and
 ## 7. Testing
 
 ```bash
-tools/run_tests.sh -q -W error tests/test_serve_private.py tests/test_alps_endpoint.py
+scripts/run_tests.sh -q -W error tests/test_serve_private.py tests/test_alps_endpoint.py
 ```
 
 - Launcher tests run the script with `DRY_RUN=1`, an empty environment and stub `srun`, `sbatch` and

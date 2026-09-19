@@ -18,7 +18,7 @@ ulimit -c 0
 # SLURM_SUBMIT_DIR, not BASH_SOURCE: sbatch COPIES the script to /var/spool/slurmd, so inside the
 # job BASH_SOURCE names the spool copy and dirname/.. is /var/spool/slurmd.
 REPO="${REPO:-${SLURM_SUBMIT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}}"
-[[ -x "${REPO}/tools/run_tests.sh" ]] || { echo "no tools/run_tests.sh under REPO=${REPO}" >&2; exit 2; }
+[[ -x "${REPO}/scripts/run_tests.sh" ]] || { echo "no scripts/run_tests.sh under REPO=${REPO}" >&2; exit 2; }
 # On disk, not /tmp: /tmp is tmpfs here and a compile-heavy suite fills it.
 export TMPDIR="${SCRATCH:?set SCRATCH}/.tmp/suite-${SLURM_JOB_ID:-0}"
 mkdir -p "${TMPDIR}"
@@ -29,4 +29,4 @@ mkdir -p "${TMPDIR}"
 cd -- "${REPO}"
 # xdist workers: serially the suite reached 19% in 3 h on a compute node; 64 workers ran out of memory
 # (469 GB RSS) and stalled, 16 finish inside the limit.
-"${REPO}/tools/run_tests.sh" -q --maxfail=25 -n "${SUITE_WORKERS:-16}" --dist loadgroup tests/
+"${REPO}/scripts/run_tests.sh" -q --maxfail=25 -n "${SUITE_WORKERS:-16}" --dist loadgroup tests/

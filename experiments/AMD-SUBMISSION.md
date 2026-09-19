@@ -285,6 +285,6 @@ scontrol release <jobid>          # for launch failed requeued held
 
 `$SCRATCH/venv-hpcagent-bench-314` (3.14.7, pyenv global). The repo is
 MOUNTED, never pip-installed, so put it on `PYTHONPATH`. Rebuild with
-`tools/rebuild_venv.sh`. Keep caches off HOME -- that quota is INODES, not bytes.
+`scripts/rebuild_venv.sh`. Keep caches off HOME -- that quota is INODES, not bytes.
 Note that `pre-commit`'s format hook needs the venv on `PATH` or it reports `missing formatter(s):
 ruff` even when ruff is installed.

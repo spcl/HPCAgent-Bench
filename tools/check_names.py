@@ -171,8 +171,13 @@ def parse_diff(diff_output: str) -> dict[str, tuple[bool, set[int]]]:
 
 
 def collect_diff_ranges(file_args: list[str], ref: str | None) -> dict[str, tuple[bool, set[int]]]:
+    # No `-- file_args` pathspec here: restricting the diff to only the NEW side of a pure
+    # rename stops git from pairing it with its old path, so a `git mv` with no content change
+    # reads back as a brand-new file with every line "added" -- a false-positive ratchet trip on
+    # files that were never touched. The full diff still pairs renames; parse_diff's per-path map
+    # is filtered down to file_args by the caller below.
     diff_target = [ref] if ref else ["--cached"]
-    command = ["git", "diff", *diff_target, "-U0", "--", *file_args]
+    command = ["git", "diff", *diff_target, "-U0"]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         print(f"warning: git diff failed: {result.stderr.strip()}", file=sys.stderr)

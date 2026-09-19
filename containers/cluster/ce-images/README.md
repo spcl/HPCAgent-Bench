@@ -239,7 +239,7 @@ To bump a pin, edit it, regenerate, test, rebuild:
 # a CLI: node/package.json. A Python harness: its freeze line in freeze.sh.
 # uv or node: pins.env, with both sha256 values from uv's .sha256 files or node's SHASUMS256.txt.
 containers/agent/harness/freeze.sh      # rewrites requirements-*.txt and node/package-lock.json
-tools/run_tests.sh tests/test_harness_pins.py
+scripts/run_tests.sh tests/test_harness_pins.py
 ```
 
 `freeze.sh` starts from the current lock files, so it moves only what the changed pin forces; delete a lock file first

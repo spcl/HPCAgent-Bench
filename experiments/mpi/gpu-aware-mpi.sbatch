@@ -5,8 +5,8 @@
 # Can this image's MPI take a DEVICE pointer? Two ranks, one node, one GPU each.
 #
 # Point it at any image; the answer is a property of the image, not of the harness:
-#   sbatch reproducibility/mpi/gpu-aware-mpi.sbatch                             # v6, expect GPU-AWARE
-#   EDF=<other-image> sbatch reproducibility/mpi/gpu-aware-mpi.sbatch   # any other image
+#   sbatch experiments/mpi/gpu-aware-mpi.sbatch                             # v6, expect GPU-AWARE
+#   EDF=<other-image> sbatch experiments/mpi/gpu-aware-mpi.sbatch   # any other image
 #
 # NO expected answer is recorded for v5 here. The earlier "v5 is NOT GPU-AWARE" reading came from a
 # probe that asked Open MPI's question of an MPICH, which reports a false NO for every MPICH (see
@@ -64,7 +64,7 @@ GFX="$(rocminfo | sed -nE "s/^[[:space:]]*Name:[[:space:]]+(gfx[0-9a-f]+)[[:spac
 test -n "${GFX}" || { echo "rocminfo lists no GPU agent: no arch to build for" >&2; exit 2; }
 hipcc -x hip -O2 -Wall -Wextra -Werror --offload-arch="${GFX}" \
     -DOMPI_SKIP_MPICXX=1 -DMPICH_SKIP_MPICXX=1 -DMPI_NO_CPPBIND=1 \
-    "${REPO}/reproducibility/mpi/gpu_aware_mpi_probe.c" ${MPIFLAGS} -o probe
+    "${REPO}/experiments/mpi/gpu_aware_mpi_probe.c" ${MPIFLAGS} -o probe
 echo "built"
 echo
 
@@ -76,7 +76,7 @@ echo "################ launcher selection"
 #     -- P processes that each do the whole job, and NOTHING reports an error.
 # So the launcher is CHOSEN by experiment against a trivial 2-rank world-size test, not assumed
 # from the MPI family, and the probe itself aborts unless it gets exactly 2 ranks.
-mpicc -O0 "${REPO}/reproducibility/mpi/mpi_worldsize.c" -o worldsize
+mpicc -O0 "${REPO}/experiments/mpi/mpi_worldsize.c" -o worldsize
 
 LAUNCHER=""
 try_launcher() {

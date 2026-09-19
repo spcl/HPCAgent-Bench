@@ -13,7 +13,7 @@
 # ONE RANK PER NODE, deliberately: it puts every ring exchange on the network. A second rank per
 # node would let shared memory serve half the traffic and hide a broken fabric path.
 #
-#   NODES=8 sbatch reproducibility/mpi/multinode-mpi.sbatch
+#   NODES=8 sbatch experiments/mpi/multinode-mpi.sbatch
 #
 # The launcher is CHOSEN, not named. Hydra's `-launcher fork` keeps ranks inside the container but
 # cannot leave the node, so cross-node ranks have to come from Slurm's own PMI -- and which plugin
@@ -53,9 +53,9 @@ srun --nodes=1 --ntasks=1 --environment="${EDF}" bash -c '
 set -eu
 cd '"${WORK}"'
 hipcc -x hip -O2 -DOMPI_SKIP_MPICXX=1 -DMPICH_SKIP_MPICXX=1 \
-    '"${REPO}"'/reproducibility/mpi/gpu_aware_mpi_probe.c \
+    '"${REPO}"'/experiments/mpi/gpu_aware_mpi_probe.c \
     $(mpicc -show | cut -d" " -f2-) -o probe
-mpicc -O2 '"${REPO}"'/reproducibility/mpi/mpi_worldsize.c -o worldsize
+mpicc -O2 '"${REPO}"'/experiments/mpi/mpi_worldsize.c -o worldsize
 echo built
 '
 

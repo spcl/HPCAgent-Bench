@@ -12,7 +12,7 @@
 #
 # Everything is DERIVED. A spack prefix carries a content hash that changes on every reinstall, so
 # a pasted path is a setting that silently stops existing -- the glob spelling is the one already
-# used by experiments/smoke-gpu-models.sbatch and reproducibility/mpi/smoke-mpi-judge.sbatch.
+# used by experiments/smoke-gpu-models.sbatch and experiments/mpi/smoke-mpi-judge.sbatch.
 #
 # A FULL run still belongs in an sbatch on a compute node -- this only fixes what the run sees,
 # not where it belongs; the login node is for a targeted selection.

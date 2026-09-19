@@ -352,7 +352,7 @@ at all: `/opt` on v5 holds `rocm`, `venv`, `dace` and the agent/judge trees, wit
 `view`, so its `mpicc` is whatever `/usr/bin` provides.
 
 **Why "we tested device pointers and it worked" is not evidence here.** Measured on v5, job
-626782 (`reproducibility/mpi/gpu-aware-mpi.sbatch`):
+626782 (`experiments/mpi/gpu-aware-mpi.sbatch`):
 
 ```
 GPU-support query: no GPU-support query in this MPI -> UNKNOWN
@@ -414,7 +414,7 @@ unrelated to what the test is measuring.
 **Across nodes the launcher changes again, and the wrong one lies.** Hydra's `-launcher fork`
 keeps ranks inside the container but cannot leave the node, so cross-node ranks have to come from
 Slurm's own PMI. Measured on v6 at 2, 4, 8, 16 and 32 nodes, one rank per node
-(`reproducibility/mpi/multinode-mpi.sbatch`):
+(`experiments/mpi/multinode-mpi.sbatch`):
 
 | `srun --mpi=` | result |
 |---|---|
@@ -432,7 +432,7 @@ rather than being served by shared memory.
 
 The singleton case is the dangerous one: P processes each solving the whole problem, at P times the
 cost, with a plausible number at the end. Any MPI job here must assert the size it actually got --
-`reproducibility/mpi/smoke-mpi-judge.sbatch` does, which is why it is a gate and not a demo.
+`experiments/mpi/smoke-mpi-judge.sbatch` does, which is why it is a gate and not a demo.
 
 Note also that `/usr/bin/mpicc` on v5 is an alternatives symlink to **Open MPI**, not MPICH. A
 wrapper and a launcher from different MPIs is the singleton failure again, so `mpi.compilers` and

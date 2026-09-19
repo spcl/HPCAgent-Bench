@@ -245,8 +245,8 @@ id_ecdsa*
 # width, so a committed report would describe someone else's CPU), and the tree is
 # created on demand per kernel. The directory itself is kept (.gitkeep) so an
 # enabled run has a root to write under without the first one having to mkdir it.
-perf_reports/**
-!perf_reports/.gitkeep
+.perf_reports/**
+!.perf_reports/.gitkeep
 
 # Per-kernel framework-autogen + DaCe SDFG cache (hpcagent_bench.framework_cache) lives in each
 # kernel's `.cache/` and is already covered by the bare `.cache` rule near the top of this file --
@@ -254,8 +254,12 @@ perf_reports/**
 # (regenerated from <kernel>_numpy.py whenever it changes), and `kernel_cache_dir` mkdirs on demand,
 # so nothing has to be tracked to keep a directory alive. Re-including the .gitkeep instead would
 # put 356 empty files in the repo (one per kernel) and leave an untracked `.cache/` in `git status`
-# for every kernel ever run -- the same reason perf_reports/ is one root dir, not one per kernel.
+# for every kernel ever run -- the same reason .perf_reports/ is one root dir, not one per kernel.
 experiments/problems-*.jsonl
+
+# loop_report.py's own --report-dir default (opt-reports skill packet), unrelated to
+# hpcagent_bench/perf_reports.py's perf_reports.opt_report kind -- distinct dir, same-ish name.
+/opt_reports/
 
 # Crash dumps from cluster jobs (ROCm/vLLM workers drop multi-GB cores next to the sbatch)
 core_*
