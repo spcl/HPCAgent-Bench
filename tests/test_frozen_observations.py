@@ -182,7 +182,8 @@ def test_collect_arms_names_a_deleted_job_under_its_frozen_arm(
 
 def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: pathlib.Path) -> None:
     """Live rows carry frozen=0; the deleted job's rows come from the frozen CSV with frozen=1; the
-    live job's own frozen copy is not added a second time."""
+    live job keeps its DB's judge rows (its frozen copy of a row since purged from the DB, ``z``, is
+    not brought back), and takes a frozen task row only for a worker whose tokens.json is gone."""
     from hpcagent_bench.harness import recording
 
     extract = load("extract_llr40_frozen", REPO / "reproducibility" / "llr40" / "extract_llr40.py")
@@ -203,7 +204,16 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
     )
     conn.commit()
     conn.close()
-    frozen = write_frozen(tmp_path, [frozen_row("100", "submission", "a"), frozen_row("200", "submission", "z")])
+    kept_worker = runs_root / "200" / "agents" / "node-0" / "problem-0-worker-0"
+    kept_worker.mkdir(parents=True)
+    kept_worker.joinpath("tokens.json").write_text(
+        json.dumps({"kernel": "loop_level_reasoning/c/c", "token_fold": 2, "tokens_effective": 7}), encoding="utf-8"
+    )
+    task_p0 = {**frozen_row("200", "task", "c"), "tokens": "999"}
+    task_p1 = {**frozen_row("200", "task", "b"), "run_id": f"{ARM}.n0.p1.w1", "tokens": "555"}
+    frozen = write_frozen(
+        tmp_path, [frozen_row("100", "submission", "a"), frozen_row("200", "submission", "z"), task_p0, task_p1]
+    )
     benchmarks = tmp_path / "benchmarks"
     benchmarks.mkdir()
     out = tmp_path / "out"
@@ -215,11 +225,14 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
 
     assert rc == 0
     with (out / "llr40_observations.csv").open(newline="", encoding="utf-8") as handle:
-        rows = [row for row in csv.DictReader(handle) if row["record"] == "submission"]
-    assert sorted((row["job"], row["benchmark"], row["frozen"]) for row in rows) == [
+        rows = list(csv.DictReader(handle))
+    graded = [row for row in rows if row["record"] == "submission"]
+    assert sorted((row["job"], row["benchmark"], row["frozen"]) for row in graded) == [
         ("100", "a", "1"),
         ("200", "c", "0"),
     ]
+    tasks = sorted((row["run_id"], row["tokens"], row["frozen"]) for row in rows if row["record"] == "task")
+    assert tasks == [(f"{ARM}.n0.p0.w0", "7", "0"), (f"{ARM}.n0.p1.w1", "555", "1")]
 
 
 # --- wave_board.py ----------------------------------------------------------------------------

@@ -462,22 +462,32 @@ def experiments_module(name: str) -> ModuleType:
 
 
 def frozen_rows(
-    frozen_dir: pathlib.Path | None, run_globs: Iterable[str], arm_prefix: str, excluded: frozenset[str]
+    frozen_dir: pathlib.Path | None,
+    run_globs: Iterable[str],
+    arm_prefix: str,
+    excluded: frozenset[str],
+    live_tasks: frozenset[tuple[str, str, str]] = frozenset(),
 ) -> list[dict[str, Any]]:
-    """The frozen observations of every job the ``run_globs`` cover whose live directory is gone
-    (``experiments/frozen_observations.py``): the live DB wins, job by job. A run root is matched by
-    name against each glob's last component, so a campaign directory deleted whole still matches."""
+    """The frozen observations (``experiments/frozen_observations.py``) of the jobs the ``run_globs``
+    cover, where the live run directory no longer holds them. A job whose directory is gone
+    contributes every frozen row. A job still on disk keeps its live judge rows (the DB wins: a row
+    deleted from it on purpose stays deleted) and takes only the frozen ``task`` rows of workers whose
+    ``tokens.json`` a reducer has since removed (``live_tasks``: the live ``(run_root, job, run_id)``
+    task rows). A run root is matched by name against each glob's last component."""
     frozen = experiments_module("frozen_observations")
     if frozen_dir is None:
         return []
     out: list[dict[str, Any]] = []
     for (run_root, job), rows in sorted(frozen.by_job(str(frozen_dir)).items()):
         parents = [pathlib.Path(p).parent for p in run_globs if fnmatch.fnmatch(run_root, pathlib.Path(p).name)]
-        if not parents or any((parent / run_root / job).is_dir() for parent in parents):
+        if not parents:
             continue
+        live = any((parent / run_root / job).is_dir() for parent in parents)
         for row in rows:
             arm = row.get("arm") or ""
             if not arm.startswith(arm_prefix) or not excluded.isdisjoint(arm.split("-")):
+                continue
+            if live and (row["record"] != "task" or (run_root, job, row["run_id"]) in live_tasks):
                 continue
             kept: dict[str, Any] = {field: row.get(field, "") for field in OBSERVATION_FIELDS}
             kept[frozen.COLUMN] = "1"
@@ -1349,10 +1359,13 @@ def main(argv: list[str]) -> int:
     for row in observations:
         row["frozen"] = "0"
     frozen_dir = experiments_module("frozen_observations").resolve(args.frozen_observations)
-    lost = frozen_rows(frozen_dir, args.runs, args.arm_prefix, excluded)
-    lost_jobs = {(str(row["run_root"]), str(row["job"])) for row in lost}
+    live_tasks = frozenset((str(row["run_root"]), str(row["job"]), str(row["run_id"])) for row in task_rows)
+    lost = frozen_rows(frozen_dir, args.runs, args.arm_prefix, excluded, live_tasks)
+    lost_jobs = {(str(row["run_root"]), str(row["job"])) for row in lost if row["record"] != "task"}
+    lost_tasks = sum(1 for row in lost if row["record"] == "task")
     print(
-        f"frozen: {len(lost)} rows of {len(lost_jobs)} job(s) with no live directory, from {frozen_dir}",
+        f"frozen: {len(lost) - lost_tasks} judge rows of {len(lost_jobs)} job(s) with no live directory, "
+        f"{lost_tasks} task rows of workers whose tokens.json is gone, from {frozen_dir}",
         file=sys.stderr,
     )
     observations.extend(lost)
