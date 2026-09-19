@@ -164,6 +164,10 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc|cp
         -e "s|^AMD_CE_ENV=.*|AMD_CE_ENV=${CPF_CE_ENV}|" \
         "${budget_sed[@]}"
     record_identity "${staged}" "${RECORD_EXPERIMENT}" "${model}" "${lang}" "${target}" "${packet}" "${arm}"
+    # best-effort: most TAG values here (llr-focus40) resolve through the plain manifest
+    # experiment_tags scan roster_for() falls back to, which hpcagent_bench.tags does not cover --
+    # only a file-backed or experiments/tags.yaml-registered TAG gets a frozen version stamp.
+    record_tag_version "${staged}" "${TAG}" || true
     # provenance only (2026-09-18): BUDGET_SCALE does not rename the arm, so this is what tells a
     # 2x-budget rerun's rows apart from the campaign's own budget when reading the run back.
     {
