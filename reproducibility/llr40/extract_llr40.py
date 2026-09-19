@@ -495,6 +495,11 @@ def frozen_rows(
     return out
 
 
+def task_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    """``(run_root, job, run_id)``: the one worker a task row is about."""
+    return str(row["run_root"]), str(row["job"]), str(row["run_id"])
+
+
 def token_cost_module() -> ModuleType:
     """``experiments/token_cost.py``, imported on first use so this script's own dependency
     footprint (standard library only) is unaffected until a caller actually asks for task rows."""
@@ -1359,13 +1364,20 @@ def main(argv: list[str]) -> int:
     for row in observations:
         row["frozen"] = "0"
     frozen_dir = experiments_module("frozen_observations").resolve(args.frozen_observations)
-    live_tasks = frozenset((str(row["run_root"]), str(row["job"]), str(row["run_id"])) for row in task_rows)
+    # A worker dir cut to tokens.json AFTER the frozen snapshot yields a lower-fidelity row (identity and
+    # start read from tokens.json); the frozen row of the same worker, taken while prompt.txt was there,
+    # replaces it.
+    degraded = {task_key(row) for row in task_rows if not names_its_run(pathlib.Path(str(row["db"])))}
+    live_tasks = frozenset(task_key(row) for row in task_rows) - degraded
     lost = frozen_rows(frozen_dir, args.runs, args.arm_prefix, excluded, live_tasks)
+    replaced = {task_key(row) for row in lost if row["record"] == "task"} & degraded
+    observations = [row for row in observations if row["record"] != "task" or task_key(row) not in replaced]
     lost_jobs = {(str(row["run_root"]), str(row["job"])) for row in lost if row["record"] != "task"}
     lost_tasks = sum(1 for row in lost if row["record"] == "task")
     print(
         f"frozen: {len(lost) - lost_tasks} judge rows of {len(lost_jobs)} job(s) with no live directory, "
-        f"{lost_tasks} task rows of workers whose tokens.json is gone, from {frozen_dir}",
+        f"{lost_tasks} task rows of workers whose tokens.json is gone or cut down ({len(replaced)} replacing a "
+        f"live row read off tokens.json alone), from {frozen_dir}",
         file=sys.stderr,
     )
     observations.extend(lost)

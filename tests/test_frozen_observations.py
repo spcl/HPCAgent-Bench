@@ -209,10 +209,22 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
     kept_worker.joinpath("tokens.json").write_text(
         json.dumps({"kernel": "loop_level_reasoning/c/c", "token_fold": 2, "tokens_effective": 7}), encoding="utf-8"
     )
+    # a full worker dir: its live row wins over the frozen one
+    kept_worker.joinpath("prompt.txt").write_text("Optimize benchmark kernel x/c/c.", encoding="utf-8")
+    kept_worker.joinpath("mcp.json").write_text(
+        json.dumps({"mcpServers": {"s": {"env": {"HPCAGENT_BENCH_RUN_ID": f"{ARM}.n0.p0.w0"}}}}), encoding="utf-8"
+    )
+    cut_worker = runs_root / "200" / "agents" / "node-0" / "problem-2-worker-2"  # cut to tokens.json after the snapshot
+    cut_worker.mkdir(parents=True)
+    cut_worker.joinpath("tokens.json").write_text(
+        json.dumps({"kernel": "loop_level_reasoning/d/d", "token_fold": 2, "tokens_effective": 3}), encoding="utf-8"
+    )
     task_p0 = {**frozen_row("200", "task", "c"), "tokens": "999"}
     task_p1 = {**frozen_row("200", "task", "b"), "run_id": f"{ARM}.n0.p1.w1", "tokens": "555"}
+    task_p2 = {**frozen_row("200", "task", "d", ts=1234), "run_id": f"{ARM}.n0.p2.w2", "tokens": "3"}
     frozen = write_frozen(
-        tmp_path, [frozen_row("100", "submission", "a"), frozen_row("200", "submission", "z"), task_p0, task_p1]
+        tmp_path,
+        [frozen_row("100", "submission", "a"), frozen_row("200", "submission", "z"), task_p0, task_p1, task_p2],
     )
     benchmarks = tmp_path / "benchmarks"
     benchmarks.mkdir()
@@ -232,7 +244,9 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
         ("200", "c", "0"),
     ]
     tasks = sorted((row["run_id"], row["tokens"], row["frozen"]) for row in rows if row["record"] == "task")
-    assert tasks == [(f"{ARM}.n0.p0.w0", "7", "0"), (f"{ARM}.n0.p1.w1", "555", "1")]
+    assert tasks == [(f"{ARM}.n0.p0.w0", "7", "0"), (f"{ARM}.n0.p1.w1", "555", "1"), (f"{ARM}.n0.p2.w2", "3", "1")]
+    cut = next(row for row in rows if row["record"] == "task" and row["run_id"] == f"{ARM}.n0.p2.w2")
+    assert cut["ts_ms"] == "1234"  # the snapshot's start, not the cut dir's tokens.json mtime
 
 
 # --- wave_board.py ----------------------------------------------------------------------------
