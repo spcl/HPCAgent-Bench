@@ -379,3 +379,29 @@ def test_a_stale_key_nothing_reads_never_splits_a_wave(owed: ModuleType) -> None
     new = make(owed, "gpu-llr-focus40-kimi27sglang-hip-skills", LANGUAGE="hip")
     assert "OPTARENA_OPTIMIZER" not in dict(old.env)
     assert [len(group) for group in owed.group_setups([old, new])] == [2]
+
+
+def test_an_llr_setups_problems_are_rendered_fresh_and_an_llrblind_setups_are_kept(owed: ModuleType) -> None:
+    """The llr submitters re-render a rerun's problems (an old job's text can index the CPF page for a
+    lang-skills arm, fixed since); llrblind reruns its arm's own rows. A fused wave does the same."""
+    key = "loop_level_reasoning/argmax_with_index/argmax_with_index"
+    stale = {"id": 7, "kernel": key, "language": "hip", "task": "see `/shared/skills/canonical-parallel-form.md`"}
+    hip = make(
+        owed,
+        "gpu-llr-focus40-qwen38-hip-skills",
+        LANGUAGE="hip",
+        HPCAGENT_BENCH_RECORD_DEVICE="gpu",
+        HPCAGENT_BENCH_RECORD_PACKET="lang-skills",
+    )
+    blind = make(owed, "llrblind-cmp-qwen38-hip", experiment="llr-focus40-blind", LANGUAGE="hip")
+    plan = owed.Plan([owed.Owed(hip, stale, "budget"), owed.Owed(blind, stale, "infra")])
+    fresh = owed.rerender(plan, str(REPO), sys.executable)
+    rendered, kept = fresh.owed
+    assert kept.problem is stale
+    assert rendered.problem["kernel"] == key and rendered.problem["language"] == "hip"
+    assert "/shared/skills/lang-hip.md" in str(rendered.problem["task"])
+    assert "canonical-parallel-form" not in str(rendered.problem["task"])
+    assert owed.render_args(hip, "loop_level_reasoning", "llr-focus40") == [
+        "--track", "loop_level_reasoning", "--tag", "llr-focus40", "--language", "hip",
+        "--image", "amd", "--packet", "lang-skills",
+    ]  # fmt: skip
