@@ -131,8 +131,14 @@ def resolve_problems_path(problem_file: str) -> pathlib.Path:
     to the script's own directory only for a bare name that does not exist as given; a path with a
     directory component or an absolute path is used exactly as given, error and all."""
     path = pathlib.Path(problem_file)
-    if not path.exists() and path.parent == pathlib.Path("."):
-        return pathlib.Path(__file__).resolve().parent / problem_file
+    if path.exists():
+        return path
+    # The launch directory holds the staged copy under its BASENAME. A snapshot env names
+    # `.rendered/<stem>.jsonl`, relative to experiments/, which no agent container mounts: the
+    # agent step reads that value from the batch step's environment and died on it (643226).
+    staged = pathlib.Path(__file__).resolve().parent / path.name
+    if path.parent == pathlib.Path(".") or staged.exists():
+        return staged
     return path
 
 

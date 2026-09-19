@@ -223,3 +223,29 @@ def test_a_fused_waves_setups_are_staged_beside_the_env(tmp_path: pathlib.Path) 
         "arm-c-clean.jsonl",
         "arm-c-clean.resolved",
     ]
+
+
+def test_a_snapshot_problems_path_resolves_to_the_staged_copy(tmp_path: pathlib.Path) -> None:
+    """A snapshot env names its problems file `.rendered/<stem>.jsonl`, relative to experiments/. The
+    agent step sees that value (not the launch .env's basename line) and no experiments/ at all, so
+    the driver must find the staged copy in its own launch directory (643226 died on it)."""
+    launch, _ = staged_checkout(tmp_path)
+    probe = "\n".join(
+        [
+            "import importlib.util, pathlib, sys",
+            f"launch = pathlib.Path({str(launch)!r})",
+            "spec = importlib.util.spec_from_file_location('agent_driver', launch / 'agent_driver.py')",
+            "driver = importlib.util.module_from_spec(spec)",
+            "sys.modules['agent_driver'] = driver",
+            "spec.loader.exec_module(driver)",
+            f"assert driver.resolve_problems_path('.rendered/{PROBLEMS}') == launch / {PROBLEMS!r}",
+            "assert driver.resolve_problems_path('/elsewhere/absent.jsonl') == pathlib.Path('/elsewhere/absent.jsonl')",
+        ]
+    )
+    env = {key: value for key, value in os.environ.items() if key not in ("PYTHONPATH", "PYTHONHOME")}
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    done = subprocess.run(
+        [sys.executable, "-P", "-c", probe], cwd=run_dir, env=env, capture_output=True, text=True, check=False
+    )
+    assert done.returncode == 0, done.stderr
