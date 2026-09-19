@@ -72,35 +72,19 @@ def test_one_folder_per_kernel_carries_the_reference_material(tmp_path, repo) ->
     assert not (task_dir / "argmax_value.yaml").exists()  # the manifest is the judge's, not the agent's
 
 
-def test_reference_material_is_hard_linked_not_copied(tmp_path: pathlib.Path, repo: pathlib.Path) -> None:
-    """A staged reference file is byte-identical to its repo source (unlike signature.json or the
-    CPF drop-in, which are rendered per arm), so it must be a HARD LINK: same inode, no new one
-    spent. Before this, every job's own ``cp`` of the same handful of reference files across a
-    whole campaign history was the second-largest source of the 2026-09-19 inode-quota incident
-    (42k duplicate files)."""
+def test_reference_material_is_a_read_only_copy_never_the_repo_inode(
+    tmp_path: pathlib.Path, repo: pathlib.Path
+) -> None:
+    """The repo's reference file is the judge's oracle and the source of its numba baseline, so the
+    staged copy must be its OWN inode (an in-place write by an agent must never reach the repo)
+    and read-only."""
     shared = tmp_path / "shared"
     materialize(repo, shared, problems_file(tmp_path / "problems.jsonl", [KERNEL]))
     source = repo / "hpcagent_bench/benchmarks/loop_level_reasoning/argmax_value/argmax_value_numpy.py"
     staged = shared / "tasks/argmax_value/argmax_value_numpy.py"
-    assert staged.stat().st_ino == source.stat().st_ino
-    assert staged.stat().st_nlink >= 2
-
-
-def test_reference_material_falls_back_to_a_copy_across_a_filesystem_boundary(
-    tmp_path: pathlib.Path, repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``ln`` refuses EXDEV when the repo and the shared dir are not on one filesystem -- the two
-    roots ``scripts/cache_env.sh`` derives them from need not agree. The staged file must still
-    land, readable, with the source's content, even though it can no longer share its inode."""
-    fake_bin = tmp_path / "fake-bin"
-    fake_bin.mkdir()
-    (fake_bin / "ln").write_text("#!/bin/sh\nexit 1\n")
-    (fake_bin / "ln").chmod(0o755)
-    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
-    shared = tmp_path / "shared"
-    materialize(repo, shared, problems_file(tmp_path / "problems.jsonl", [KERNEL]))
-    staged = shared / "tasks/argmax_value/argmax_value_numpy.py"
-    assert staged.read_text() == "def argmax_value(a): return a.max()\n"
+    assert staged.read_bytes() == source.read_bytes()
+    assert staged.stat().st_ino != source.stat().st_ino
+    assert not staged.stat().st_mode & 0o222
 
 
 def test_the_bare_stem_reference_is_the_fallback(tmp_path, repo) -> None:
@@ -122,12 +106,13 @@ def test_a_renamed_module_still_finds_its_reference(tmp_path, repo) -> None:
     assert (shared / "tasks/sp_minres/minres_numpy.py").is_file()
 
 
-def test_a_repeated_kernel_and_a_relaunch_copy_once(tmp_path, repo) -> None:
+def test_a_repeated_kernel_and_a_relaunch_copy_once(tmp_path: pathlib.Path, repo: pathlib.Path) -> None:
     """The smoke variant repeats ONE kernel per agent, and a relaunch re-enters the same RUN_DIR."""
     shared = tmp_path / "shared"
     proc = materialize(repo, shared, problems_file(tmp_path / "problems.jsonl", [KERNEL] * 10))
     assert "1 kernel folders" in proc.stdout
     edited = shared / "tasks/argmax_value/argmax_value_numpy.py"
+    edited.chmod(0o644)  # staged read-only; the marker only proves a relaunch does not re-stage
     edited.write_text("marker\n")
     proc = materialize(repo, shared, tmp_path / "problems.jsonl")
     assert "0 kernel folders" in proc.stdout
