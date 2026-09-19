@@ -335,3 +335,49 @@ def test_budget_env_suffix_names_both_scales_when_they_diverge(
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == f"[{want}]"
+
+
+def run_submit_arm_job_probe(tmp_path: pathlib.Path, extra_env: dict[str, str]) -> tuple[str, str]:
+    """Source arm_nodes.sh + submit_common.sh, call submit_arm_job against a stub sbatch that
+    records its own argv, and return (sbatch's captured argv, submit_arm_job's own stdout)."""
+    env_file = tmp_path / ".env.some-arm"
+    env_file.write_text("INFERENCE_NODES=2\nAGENT_NODES=1\nJUDGE_NODES=1\n")
+    captured = tmp_path / "sbatch_argv.txt"
+    stub(
+        tmp_path / "bin",
+        "sbatch",
+        f'printf "%s\\n" "$@" > "{captured}"\nprintf "999000\\n"\n',
+    )
+    stub_account(tmp_path / "bin")
+    probe = tmp_path / "probe.sh"
+    probe.write_text(
+        "set -eu\n"
+        f". {EXPERIMENTS / 'arm_nodes.sh'}\n"
+        f". {EXPERIMENTS / 'submit_common.sh'}\n"
+        f'cd "{tmp_path}"\n'
+        f'submit_arm_job "{env_file}" some-arm 01:00:00\n'
+    )
+    env = {"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin", "USER": "tester", "SUBMIT": "1", **extra_env}
+    result = subprocess.run(
+        [BASH, str(probe)], env=env, cwd=tmp_path, capture_output=True, text=True, timeout=10, check=False
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return captured.read_text(), result.stdout
+
+
+def test_hold_1_asks_sbatch_for_hold(tmp_path: pathlib.Path) -> None:
+    """The 643115/643117 race (2026-09-19): a follow-up `scontrol hold` after sbatch returns can
+    lose to the scheduler if a node is free that instant -- both started RUNNING before the hold
+    call reached them, on a live checkout the anti-cheat merge gate had not yet cleared. HOLD=1
+    passes --hold to the SAME sbatch call that submits the job, so there is no gap to race."""
+    argv, stdout = run_submit_arm_job_probe(tmp_path, {"HOLD": "1"})
+    assert "--hold" in argv.splitlines()
+    assert "HELD" in stdout
+
+
+def test_hold_unset_does_not_ask_sbatch_for_hold(tmp_path: pathlib.Path) -> None:
+    """The default: every submit-*.sh call before 2026-09-19 never held, and must not start
+    holding just because the knob now exists."""
+    argv, stdout = run_submit_arm_job_probe(tmp_path, {})
+    assert "--hold" not in argv.splitlines()
+    assert "HELD" not in stdout
