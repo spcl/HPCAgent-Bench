@@ -1094,33 +1094,53 @@ agent_ro_binds() {
 # stage_agent_launch <env file> <problems file or empty>: copy what an agent step executes into
 # AGENT_LAUNCH_DIR. The arm's env lands as .env, the name run_cluster.sh falls back to without
 # CLUSTER_ENV_FILE, and PROBLEMS_FILE is restated there as the staged basename.
+#
+# Built in a PRIVATE sibling dir, then renamed into place: every role (inference, agent, judge)
+# runs its own copy of run_cluster.sh and each calls this on the SAME AGENT_LAUNCH_DIR (keyed by
+# SLURM_JOB_ID, not by role or node), so two callers land here concurrently. In-place rm-rf +
+# populate + chmod let one caller's chmod a-w (making .env read-only) land between another
+# caller's cp and its later `>>` append to that same .env -- "Permission denied", rc1, the whole
+# job dead before any agent work (643180/643181/643182, 2026-09-19). `mv` between two directories
+# on the same filesystem is a single rename(2): whichever caller finishes and renames last wins
+# outright, but no caller ever observes a half-built or already-locked-down directory.
 stage_agent_launch() {
     local env_file="$1" problems="$2" name
-    rm -rf "${AGENT_LAUNCH_DIR}"
-    mkdir -p "${AGENT_LAUNCH_DIR}"
+    mkdir -p -- "$(dirname -- "${AGENT_LAUNCH_DIR}")"
+    local tmp; tmp="$(mktemp -d "${AGENT_LAUNCH_DIR}.XXXXXX")"
     for name in "${AGENT_LAUNCH_FILES[@]}"; do
-        cp -p -- "${SCRIPT_DIR}/${name}" "${AGENT_LAUNCH_DIR}/${name}"
+        cp -p -- "${SCRIPT_DIR}/${name}" "${tmp}/${name}"
     done
     if [[ -f "${env_file}" ]]; then
-        # cat, not cp: a snapshot env (snapshot_env) is read-only, cp keeps that mode, and the
-        # PROBLEMS_FILE line below could then not be appended -- every snapshot job died here.
-        cat -- "${env_file}" >"${AGENT_LAUNCH_DIR}/.env"
+        # cat, not cp: a snapshot env (snapshot_env) is read-only, and cp without -p still takes
+        # its mode from the DESTINATION's ACL default on this filesystem, not just the umask, so
+        # the copy came out read-only too and the PROBLEMS_FILE append below failed -- every
+        # snapshot job died here. `>` redirection always opens the destination for writing.
+        cat -- "${env_file}" >"${tmp}/.env"
     else
-        : >"${AGENT_LAUNCH_DIR}/.env"
+        : >"${tmp}/.env"
     fi
     if [[ -n "${problems}" ]]; then
-        cp -- "${problems}" "${AGENT_LAUNCH_DIR}/"
-        printf '\nPROBLEMS_FILE=%s\n' "$(basename -- "${problems}")" >>"${AGENT_LAUNCH_DIR}/.env"
+        cp -- "${problems}" "${tmp}/"
+        printf '\nPROBLEMS_FILE=%s\n' "$(basename -- "${problems}")" >>"${tmp}/.env"
     fi
     # A fused wave: every setup's split env, problems and resolved overlay, as prepare_job.sh left
-    # them. Here, like the rest, because the seal hides this directory from every worker.
+    # them. Staged into the same private tmp dir, so it is covered by the one atomic rename below
+    # rather than appearing after AGENT_LAUNCH_DIR is already visible to a reader.
     if [[ -d "${RUN_DIR:-}/setups" ]]; then
-        mkdir -p "${AGENT_LAUNCH_DIR}/setups"
+        mkdir -p "${tmp}/setups"
         cp -- "${RUN_DIR}/setups"/*.resolved "${RUN_DIR}/setups"/*.env "${RUN_DIR}/setups"/*.jsonl \
-            "${AGENT_LAUNCH_DIR}/setups/"
-        chmod a-w "${AGENT_LAUNCH_DIR}/setups"/*
+            "${tmp}/setups/"
+        chmod a-w "${tmp}/setups"/*
     fi
-    chmod a-w "${AGENT_LAUNCH_DIR}"/* "${AGENT_LAUNCH_DIR}/.env"
+    chmod a-w "${tmp}"/* "${tmp}/.env"
+    # rename(2) replaces an EMPTY or absent target atomically, not a populated one (ENOTEMPTY), so
+    # a stale AGENT_LAUNCH_DIR from an earlier attempt in this same job (a requeue) is cleared
+    # first. A concurrent sibling doing the same two steps may win the final mv -- its content is
+    # byte-identical (same env_file/problems), so losing that race changes nothing a reader sees.
+    rm -rf -- "${AGENT_LAUNCH_DIR}"
+    if ! mv -T -- "${tmp}" "${AGENT_LAUNCH_DIR}" 2>/dev/null; then
+        rm -rf -- "${tmp}"
+    fi
 }
 
 derived_edf() {

@@ -101,6 +101,45 @@ def test_restaging_the_same_job_replaces_the_launch_directory(tmp_path: pathlib.
     assert PROBLEMS not in {path.name for path in launch.iterdir()}
 
 
+def test_concurrent_staging_of_the_same_job_never_leaves_a_readonly_partial_env(tmp_path: pathlib.Path) -> None:
+    """Every role of a job (inference, agent, judge) runs its own run_cluster.sh and each one calls
+    stage_agent_launch on the SAME AGENT_LAUNCH_DIR (keyed by job id, not role). The in-place
+    rm-rf + populate + chmod version let one caller's chmod a-w land between another caller's cp
+    and its later `>>` append, so the append hit a file it no longer had permission to write --
+    "Permission denied", the whole job dead before any agent work (643180/643181/643182,
+    2026-09-19). Runs several stagers of the SAME arm in parallel; every one must still exit 0 and
+    the launch directory must end up complete and read-only, not truncated mid-write."""
+    scripts = tmp_path / "experiments"
+    scripts.mkdir()
+    for name in launch_files():
+        (scripts / name).write_text(f"# {name}\n")
+    env_file = scripts / ".env.arm-c"
+    env_file.write_text("CAMPAIGN_ARM=arm-c\n")
+    (scripts / PROBLEMS).write_text("{}\n")
+    launch = tmp_path / "runs" / ".agent-launch" / "7"
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            LAUNCH_FILES_RE.search(RUN_CLUSTER.read_text()).group(0),
+            f"SCRIPT_DIR={shlex.quote(str(scripts))}",
+            f"AGENT_LAUNCH_DIR={shlex.quote(str(launch))}",
+            shell_function("stage_agent_launch"),
+            f"stage_agent_launch {shlex.quote(str(env_file))} {shlex.quote(str(scripts / PROBLEMS))}",
+        ]
+    )
+    procs = [
+        subprocess.Popen(["bash", "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for _ in range(8)
+    ]
+    results = [(proc.wait(), *proc.communicate()) for proc in procs]
+    failed = [err for code, _, err in results if code != 0]
+    assert not failed, failed
+    assert sorted(path.name for path in launch.iterdir()) == sorted((*launch_files(), ".env", PROBLEMS))
+    assert (launch / ".env").read_text().splitlines()[-1] == f"PROBLEMS_FILE={PROBLEMS}"
+    writable = [path.name for path in launch.iterdir() if path.stat().st_mode & (stat.S_IWUSR | stat.S_IWGRP)]
+    assert not writable, writable
+
+
 def test_every_file_the_agent_step_reaches_beside_itself_is_staged() -> None:
     """A file the agent step opens next to run_cluster.sh or agent_driver.py that is missing from the
     launch directory fails only on a compute node, minutes into a job."""
