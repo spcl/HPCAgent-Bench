@@ -1358,6 +1358,7 @@ def test_the_transform_publishes_from_a_scratch_dir_beside_the_scop(tmp_path, mo
     assert not scratch.exists(), "the scratch dir was left behind in the checkout"
 
 
+@pytest.mark.integration
 def test_a_validation_that_could_not_run_is_not_recorded_as_validated(tmp_path, monkeypatch) -> None:
     """A comparison that raised is not a comparison that passed.
 
@@ -1368,20 +1369,28 @@ def test_a_validation_that_could_not_run_is_not_recorded_as_validated(tmp_path, 
     ``ArrayMemoryError`` (the per-kernel RLIMIT_AS cap, on arrays that size) came out of the sweep
     marked validated -- a compiler column publishing agreement with NumPy that was never checked.
 
-    Driven through the numpy framework, because the invariant is the harness's and not a backend's;
-    the DB override is the pair ``test_framework_datatype_resync`` uses, so the run's rows land in
-    ``tmp_path`` instead of the checkout's results DB."""
+    Driven through NUMBA with the numpy oracle handed in as the third constructor argument --
+    the shape ``collect.sweep`` uses. Both halves are load-bearing and both were measured: numpy
+    alone IS the reference and never reaches the comparison (job 644317), and a Test built without
+    the oracle sets ``validate = False`` outright (job 644325), so either one passes this vacuously.
+    The ``called`` flag is what refuses to let it. The DB override is the pair
+    ``test_framework_datatype_resync`` uses, so the run's rows land in ``tmp_path`` instead of the
+    checkout's results DB."""
     from hpcagent_bench import config
     from hpcagent_bench.frameworks import Benchmark, Test, generate_framework, utilities
 
+    called: List[bool] = []
+
     def boom(*_args: Any, **_kwargs: Any) -> bool:
+        called.append(True)
         raise MemoryError("Unable to allocate 3.32 GiB for an array with shape (445241460,)")
 
     config.set_override("record.db_path", str(tmp_path / "hpcagent_bench.db"))
     config.set_override("record.allow_memory_db", True)
     monkeypatch.setattr(utilities, "validate", boom)
     try:
-        timings = Test(Benchmark("arc_distance"), generate_framework("numpy")).run(
+        numpy_oracle = generate_framework("numpy")
+        timings = Test(Benchmark("arc_distance"), generate_framework("numba"), numpy_oracle).run(
             preset="S", validate=True, repeat=1, timeout=120.0, ignore_errors=True
         )
     finally:
@@ -1389,5 +1398,6 @@ def test_a_validation_that_could_not_run_is_not_recorded_as_validated(tmp_path, 
         config.clear_override("record.allow_memory_db")
 
     assert timings, "the run recorded no timing at all, so it cannot show what it claims about them"
+    assert called, "the comparison was never attempted, so this test would pass on any `valid` at all"
     for impl, timing in timings.items():
         assert timing["validated"] is False, f"{impl} was recorded as validated although the comparison raised"
