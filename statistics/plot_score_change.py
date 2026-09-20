@@ -389,12 +389,12 @@ def write_dot_rows(
     written = efficacy_figures.figure_arm_dots(
         frame, stats, treatment, out, control_name=args.control_label, repeats=args.repeats,
         config=config, channels=args.channels, panel_labels=args.dots_panel_labels,
-        reference_name=experiment_tags.framework_name(baseline), differences=args.difference,
+        differences=args.difference,
         **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
         labels={
             # The baseline's NAME rides on the 1x line instead (reference_name), which keeps this
             # rotated label to one line.
-            "speedup": efficacy_figures.DEFAULT_XLABEL,
+            "speedup": efficacy_figures.MEASURE_LABELS["speedup"],
             "cost": efficacy_figures.cost_label((card.fresh_input, card.cached_input, card.output), card.key),
         },
     )  # fmt: skip
@@ -848,10 +848,9 @@ def main() -> None:
                 channels=args.channels, row_width_in=row_width or plotstyle.ACM_TEXT_WIDTH_IN,
                 panel_labels=args.panel_labels,
                 **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
-                references=[comparison_baseline(panel) for panel in comparison_panels],
                 control_names=comparison_controls, differences=comparison_differences,
                 labels={
-                    "speedup": efficacy_figures.DEFAULT_XLABEL,
+                    "speedup": efficacy_figures.MEASURE_LABELS["speedup"],
                     "cost": efficacy_figures.cost_label(
                         (card.fresh_input, card.cached_input, card.output), card.key
                     ),

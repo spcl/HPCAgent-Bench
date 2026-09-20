@@ -101,7 +101,7 @@ class FigureConfig:
     #: than the subtitle's: a panel title and a mark's name are read at different distances.
     point_pt: float = 11.0
     #: Legend entry text size, points.
-    legend_pt: float = 10.5
+    legend_pt: float = 7.4
     #: A legend SWATCH's own size, points, and how far matplotlib scales it past that. At paper
     #: type a swatch drawn for authoring scale is taller than the row it sits in and the rows
     #: collide.
@@ -154,6 +154,8 @@ class FigureConfig:
     #: because a figure drawn at its FINAL printed size needs all three thinner: a 1.2pt whisker
     #: that reads as a line at authoring scale reproduces as a bar at 8pt type.
     interval_width: float = 1.2
+    #: Half the width of the cap on a capped interval bar, points.
+    interval_cap_pt: float = 2.0
     grid_width: float = 0.7
     spine_width: float = 0.8
     #: ABSOLUTE panels only (:func:`draw_arm_pair`): join an arm to its own no-packet twin with a
@@ -188,13 +190,14 @@ PAPER_CONFIG = dataclasses.replace(
     label_pt=8.0,
     subtitle_pt=8.0,
     point_pt=6.5,
-    legend_pt=6.5,
+    legend_pt=4.6,
     legend_marker_pt=5.5,
     legend_marker_scale=1.0,
     mark_size=26.0,
     label_offset_pt=6.0,
     symbol_offset_pt=3.0,
     interval_width=0.9,
+    interval_cap_pt=1.5,
     grid_width=0.5,
     spine_width=0.5,
 )
@@ -356,28 +359,25 @@ class ArmPoint:
     token_kernels: int
 
 
-def total_ci(values: "np.ndarray") -> tuple[float, float, float]:
-    """A TOTAL and its 95% interval: what the whole roster cost, not what one kernel cost on
-    average.
+def per_kernel_ci(values: "np.ndarray") -> tuple[float, float, float]:
+    """What ONE KERNEL cost, and its 95% interval: the mean over the kernels of the pair, with the
+    bootstrap mean interval around it.
 
-    The total is the count times the mean, so its interval is the bootstrap MEAN interval scaled by
-    the same count -- one statistic, read at the scale the question is asked at. A geomean over the
-    same kernels answers a different question ("the typical kernel") and reads an order of magnitude
-    lower, which is why the row said 200k where the campaign billed 8M.
+    Per kernel rather than per roster so the row is comparable across campaigns whose rosters are
+    different sizes -- git-scicomp's ten against llr-focus40's forty -- which a total is not.
     """
     if values.size == 0:
         return math.nan, math.nan, math.nan
     spend = summary.bootstrap_ci(values, np.mean, "mean")
-    n = float(values.size)
-    return spend.point * n, spend.low * n, spend.high * n
+    return spend.point, spend.low, spend.high
 
 
 def arm_point(speedup: "pd.Series", tokens: "pd.Series", priced: "np.ndarray", kernels: int) -> ArmPoint:
-    """One arm's geomean speed-up and TOTAL token spend, each with its interval. ``priced`` selects
+    """One arm's geomean speed-up and PER-KERNEL token spend, each with its interval. ``priced`` selects
     the kernels whose token total exists on BOTH sides, so the two arms of a pair are costed over
     one population."""
     speed = summary.geomean_ci(speedup.to_numpy(dtype=float))
-    spend, spend_low, spend_high = total_ci(tokens.to_numpy(dtype=float)[priced])
+    spend, spend_low, spend_high = per_kernel_ci(tokens.to_numpy(dtype=float)[priced])
     return ArmPoint(
         x=summary.log2_change(speed.point),
         x_low=summary.log2_change(speed.low),
@@ -846,9 +846,9 @@ DEFAULT_XLABEL: str = "Geomean Speed-Up"
 DEFAULT_YLABEL: str = "Token Cost (x)"
 
 
-#: The token-cost label of an ABSOLUTE panel, whose Y is the whole roster's token COUNT
-#: (:func:`total_ci`) and not a ratio.
-ABSOLUTE_YLABEL: str = "Total Token Cost"
+#: The token-cost label of an ABSOLUTE panel, whose Y is a per-kernel token COUNT
+#: (:func:`per_kernel_ci`) and not a ratio.
+ABSOLUTE_YLABEL: str = "Token Cost"
 
 
 def speedup_label(baseline: str = "", mode: str = "absolute", control_name: str = "") -> str:
@@ -1625,7 +1625,7 @@ def figure_row(
 MEASURES: tuple[str, ...] = ("speedup", "cost")
 
 #: Each measure's default axis label.
-MEASURE_LABELS: dict[str, str] = {"speedup": DEFAULT_XLABEL, "cost": ABSOLUTE_YLABEL}
+MEASURE_LABELS: dict[str, str] = {"speedup": "Speed-Up", "cost": ABSOLUTE_YLABEL}
 
 #: A dot-row figure's rows are ABSOLUTE: an arm's own speed-up over the campaign baseline, and the
 #: whole roster's own token bill.
@@ -1676,6 +1676,29 @@ def arm_rows(
         )  # fmt: skip
     order = {name: index for index, name in enumerate(palette.in_order([row.model for row in rows]))}
     return sorted(rows, key=lambda row: (order.get(row.model, len(order)), row.leg))
+
+
+#: Short tick spellings for deliveries whose display name does not fit a column of a joined row,
+#: with the footnote the key carries for each. The tick is the abbreviation, so the column stays
+#: readable; the key is where the reader finds out what it stands for.
+TICK_ALIASES: dict[str, tuple[str, str]] = {
+    experiment_tags.OFFLOAD_DELIVERY_NAME: ("OMP*", "* OpenMP Offloading + C"),
+}
+
+
+def tick_alias(leg: str) -> str:
+    """``leg``'s tick spelling: its abbreviation where it has one."""
+    alias = TICK_ALIASES.get(leg)
+    return alias[0] if alias else leg
+
+
+def alias_footnotes(legs: Sequence[str]) -> list[Line2D]:
+    """One text-only key row per abbreviation the figure actually drew."""
+    return [
+        Line2D([], [], linestyle="none", marker="none", label=TICK_ALIASES[leg][1])
+        for leg in dict.fromkeys(legs)
+        if leg in TICK_ALIASES
+    ]
 
 
 #: The widest a delivery's tick text runs before it folds. "OpenMP Offload" on one line is wider
@@ -1731,7 +1754,7 @@ def draw_category_axis(ax: Axes, rows: Sequence[ArmRow], config: FigureConfig) -
     solo = len(deliveries) <= 1
     ax.set_xticks(range(len(rows)))
     ax.set_xticklabels(
-        [""] * len(rows) if solo else [wrapped_label(row.label, TICK_WRAP) for row in rows],
+        [""] * len(rows) if solo else [wrapped_label(tick_alias(row.label), TICK_WRAP) for row in rows],
         fontsize=config.tick_pt, color=style.INK,
     )  # fmt: skip
     transform = blended_transform_factory(ax.transData, ax.transAxes)
@@ -1892,7 +1915,8 @@ def draw_difference_arrow(
     ax.annotate(
         factor_label(factor), xy=(x, middle), textcoords="offset points",
         xytext=(config.symbol_offset_pt + 2.0, 0.0), ha="left", va="center", fontsize=config.point_pt,
-        color=style.INK, zorder=style.MARK_Z + 2.0,
+        color=style.INK, zorder=style.MARK_Z + 3.0,
+        bbox={"facecolor": "white", "edgecolor": "none", "pad": 0.8},
     )  # fmt: skip
 
 
@@ -1935,10 +1959,19 @@ def draw_measure_row(
             value, low, high = measure_value(point, measure)
             x = index + dodge
             if np.isfinite(low) and np.isfinite(high):
-                ax.vlines(
-                    x, low, high, color=row.colour, linewidth=config.interval_width, alpha=0.75,
-                    linestyles=config.cost_linestyle if cost else "-", zorder=style.CONNECTOR_Z,
-                )  # fmt: skip
+                if cost:
+                    ax.vlines(
+                        x, low, high, color=row.colour, linewidth=config.interval_width, alpha=0.75,
+                        linestyles=config.cost_linestyle, zorder=style.CONNECTOR_Z,
+                    )  # fmt: skip
+                else:
+                    # A capped bar in light ink: the speed-up interval sits under the mark rather
+                    # than competing with it, and the caps say where it ends without a second hue.
+                    ax.errorbar(
+                        x, value, yerr=[[value - low], [high - value]], fmt="none", ecolor=style.FAINT,
+                        elinewidth=config.interval_width, capsize=config.interval_cap_pt,
+                        capthick=config.interval_width, zorder=style.CONNECTOR_Z,
+                    )  # fmt: skip
             style.point_mark(ax, x, value, row.colour, mark, filled, size=config.mark_size)
         control_value = measure_value(row.control, measure)[0]
         treated_value = measure_value(row.treated, measure)[0]
@@ -2037,7 +2070,7 @@ def dot_rows_legend(
         handles = model_legend_marks(sorted({row.model for row in rows}), config)
     handles.append(packet_legend_mark(treatment, config))
     handles.append(control_legend_mark([treatment], control_name, CONTROL_MARKER, config))
-    return handles + legend_tail(False, symbols)
+    return handles + legend_tail(False, symbols) + alias_footnotes([row.leg for row in rows])
 
 
 def figure_arm_dots(
@@ -2051,7 +2084,7 @@ def figure_arm_dots(
     channels: str = "pair-packet",
     measures: Sequence[str] = MEASURES,
     width_in: float = style.DOUBLE_COLUMN_WIDTH,
-    row_height_in: float = 1.25,
+    row_height_in: float = 1.5,
     labels: dict[str, str] | None = None,
     panel_labels: str = "outside",
     reference_name: str = "",
@@ -2187,7 +2220,7 @@ def dot_row_legend(columns: Sequence[DotColumn], channels: str, config: FigureCo
         any(column.symbols[0] for column in columns),
         any(column.symbols[1] for column in columns),
     )
-    return handles + legend_tail(False, symbols)
+    return handles + legend_tail(False, symbols) + alias_footnotes([row.leg for row in rows])
 
 
 #: The gap between the two measure rows, as a fraction of a row's own height -- enough for the
@@ -2230,7 +2263,7 @@ def figure_dot_row(
     channels: str = "model-packet",
     measures: Sequence[str] = MEASURES,
     row_width_in: float = style.ACM_TEXT_WIDTH_IN,
-    row_height_in: float = 0.8,
+    row_height_in: float = 0.96,
     labels: dict[str, str] | None = None,
     references: Sequence[str] = (),
     control_names: Sequence[str] = (),
