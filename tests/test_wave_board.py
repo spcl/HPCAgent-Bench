@@ -252,13 +252,14 @@ def test_a_clean_reruns_row_folds_into_the_arm_it_supersedes(board: types.Module
     assert [job["id"] for job in row["jobs"]] == ["100", "200"], row
 
 
-def test_owed_kernels_split_into_done_by_rule_budget_and_infra(board: types.ModuleType, tmp_path: pathlib.Path) -> None:
-    """A kernel with no ``submissions`` row is still DONE when its latest episode ended on its own
-    (context overflow, rc 126); one that hit its own timeout (rc 124) is owed at BUDGET; one the job
-    cancelled mid-episode is owed as INFRA. All three must be told apart in one arm's row."""
+def test_owed_kernels_split_into_placeholder_budget_and_infra(board: types.ModuleType, tmp_path: pathlib.Path) -> None:
+    """A kernel with no ``submissions`` row whose episode ended on its own (context overflow, rc
+    126) is a PLACEHOLDER -- owed, not delivered (2026-09-20); one that hit its own timeout (rc 124)
+    is owed at BUDGET; one the job cancelled mid-episode is owed as INFRA. All three must be told
+    apart in one arm's row, and all three count against ``roster - done``."""
     arm = "cpf-llr-focus40-oss120b-c-cpfsrc"
     job_dir = job_dir_with_rows(tmp_path, "100", ["a"])  # a: a real submissions row
-    write_episode(job_dir, 1, "b", 126)  # b: context overflow -> done by rule
+    write_episode(job_dir, 1, "b", 126)  # b: context overflow -> placeholder, owed
     write_episode(job_dir, 2, "c", 124)  # c: hit AGENT_TIMEOUT_SECONDS -> owed, budget
     write_episode(job_dir, 3, "d", 124, cancelled=True)  # d: the job took it down -> owed, infra
 
@@ -266,7 +267,10 @@ def test_owed_kernels_split_into_done_by_rule_budget_and_infra(board: types.Modu
     jobs = [board.Job("100", arm, "COMPLETED", 3, "", "")]
     row = board.arm_row(arm, jobs, dirs, ["a", "b", "c", "d"], MODELS, str(tmp_path))
 
-    assert (row["done"], row["owed_budget"], row["owed_infra"], row["status"]) == (2, 1, 1, "incomplete"), row
+    assert (row["done"], row["placeholder"], row["owed_budget"], row["owed_infra"], row["status"]) == (
+        1, 1, 1, 1, "incomplete",
+    ), row  # fmt: skip
+    assert row["roster"] - row["done"] == row["placeholder"] + row["owed_budget"] + row["owed_infra"] == 3, row
 
 
 def job_dir_with_attempt(root: pathlib.Path, job_id: str, benchmark: str, reason: str) -> pathlib.Path:
@@ -304,19 +308,44 @@ def test_a_harness_fault_attempt_is_a_placeholder_not_delivered(
     dirs = {"100": job_dir}
     jobs = [board.Job("100", arm, "COMPLETED", 3, "", "")]
     row = board.arm_row(arm, jobs, dirs, ["a"], MODELS, str(tmp_path))
-    assert (row["done"], row["delivered"], row["placeholder"]) == (1, 0, 1), row
+    # 2026-09-20: "done" is DELIVERED only -- a placeholder is owed, not done.
+    assert (row["done"], row["delivered"], row["placeholder"], row["status"]) == (0, 0, 1, "incomplete"), row
 
 
 def test_placeholder_done_kernels_split_from_delivered_ones(board: types.ModuleType, tmp_path: pathlib.Path) -> None:
-    """A row combining a real submission with a self-exited placeholder must report both counts, so
-    ``done`` alone (2026-09-18 meaning: never rerun) cannot be misread as "measured"."""
+    """A row combining a real submission with a self-exited placeholder must report both counts, and
+    a placeholder is OWED (2026-09-20: superseded the 2026-09-18 "never rerun" meaning) -- an arm
+    holding one is never ``complete``, and ``done`` counts DELIVERED kernels only."""
     arm = "cpf-llr-focus40-oss120b-c-cpfsrc"
     job_dir = job_dir_with_rows(tmp_path, "100", ["a"])  # a: a real submissions row
     write_episode(job_dir, 1, "b", 126)  # b: context overflow, never submitted -> placeholder
     dirs = {"100": job_dir}
     jobs = [board.Job("100", arm, "COMPLETED", 3, "", "")]
     row = board.arm_row(arm, jobs, dirs, ["a", "b"], MODELS, str(tmp_path))
-    assert (row["done"], row["delivered"], row["placeholder"], row["status"]) == (2, 1, 1, "complete"), row
+    assert (row["done"], row["delivered"], row["placeholder"], row["status"]) == (1, 1, 1, "incomplete"), row
+
+
+def test_a_placeholder_is_owed_and_blocks_complete_at_the_row(board: types.ModuleType, tmp_path: pathlib.Path) -> None:
+    """The exact scenario the 2026-09-20 board fix exists for: 7 delivered, 3 forced-1x
+    placeholders, a 10-kernel roster. The row must read 7/10 (delivered only), the 3 placeholders
+    must be OWED (not a separate non-owed footnote), and the row can never show "complete" while
+    any of them stand -- a placeholder is scored 1x but no real grade happened."""
+    arm = "cpf-llr-focus40-oss120b-c-cpfsrc"
+    delivered = ["a", "b", "c", "d", "e", "f", "g"]
+    placeholders = ["h", "i", "j"]
+    roster = delivered + placeholders
+    job_dir = job_dir_with_rows(tmp_path, "100", delivered)
+    for n, kernel in enumerate(placeholders):
+        write_episode(job_dir, n, kernel, 126)  # self-exit, never submitted -> placeholder
+    dirs = {"100": job_dir}
+    jobs = [board.Job("100", arm, "COMPLETED", 3, "", "")]
+    row = board.arm_row(arm, jobs, dirs, roster, MODELS, str(tmp_path))
+    assert (row["done"], row["delivered"], row["placeholder"], row["roster"]) == (7, 7, 3, 10), row
+    assert row["status"] != "complete", row
+    owed = row["roster"] - row["done"]
+    assert owed == 3 == row["placeholder"], row  # the placeholder share IS the owed total here
+    # arm_status on its own, with the exact 7/10 + placeholder=3 the row reports:
+    assert board.arm_status(row["done"], row["roster"], ["COMPLETED"], placeholder=row["placeholder"]) == "incomplete"
 
 
 def make_git_repo_with_manifest(tmp_path: pathlib.Path, kernel: str = "probe_kernel") -> tuple:
