@@ -1316,3 +1316,43 @@ def test_the_ppcg_hip_column_times_and_validates_one_kernel(tmp_path) -> None:
 
     np.testing.assert_allclose(c, a @ b, rtol=1e-12, atol=1e-12)
     assert elapsed_ms > 0.0, "the column produced no time for a kernel it just ran"
+
+
+def test_the_transform_publishes_from_a_scratch_dir_beside_the_scop(tmp_path, monkeypatch) -> None:
+    """ppcg's outputs are published with ``os.replace``, so its cwd has to be on the scop's own
+    filesystem.
+
+    ppcg has no ``-o`` for the pair it writes, so it runs in a throwaway cwd and the results are
+    moved next to the scop. ``os.replace`` is atomic and therefore cannot cross a filesystem
+    boundary, and ``$TMPDIR`` on a cluster node is node-local while the checkout is on Lustre: with
+    the default temporary directory every kernel died with ``Invalid cross-device link`` (job
+    644285, eight affine kernels, eight ``runtime_error`` rows). Pinned on the MECHANISM -- the cwd
+    is a sibling of the scop -- because a tmp_path test has only one filesystem and could not
+    reproduce the EXDEV itself.
+    """
+    cpp_backend = tmp_path / "cpp_backend"
+    scop = write_scop(cpp_backend)
+    record = tmp_path / "cwd"
+    stub = tmp_path / "ppcg"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'for a in "$@"; do last="$a"; done\n'
+        'stem=$(basename "$last" .c)\n'
+        f'pwd > "{record}"\n'
+        'printf \'void %s(void) {}\\n\' "${stem%_pluto_input}" > "${stem}_host.cu"\n'
+        "printf '__global__ void kernel0(void) {}\\n' > \"${stem}_kernel.cu\"\n"
+        "printf '#include <cuda.h>\\n' > \"${stem}_kernel.hu\"\n"
+    )
+    stub.chmod(0o755)
+    monkeypatch.setattr(ppcg_transform, "ppcg_lookup", lambda: (str(stub), ""))
+
+    _argv, proc = ppcg_transform.run_ppcg(scop, "cuda")
+
+    assert proc.returncode == 0, proc.stderr
+    host, device = ppcg_transform.transformed_paths(scop, "cuda")
+    assert host.is_file() and device.is_file(), "the transform published nothing"
+    assert scop.with_name(f"{scop.stem}_kernel.hu").is_file(), "the shared header was not published"
+
+    scratch = pathlib.Path(record.read_text().strip())
+    assert scratch.parent == scop.parent, f"ppcg ran in {scratch}, not beside the scop in {scop.parent}"
+    assert not scratch.exists(), "the scratch dir was left behind in the checkout"

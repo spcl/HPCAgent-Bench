@@ -297,6 +297,16 @@ def run_ppcg(
     ``-o`` for the pair, so it runs in a throwaway cwd and the results are moved next to ``scop``
     only on success -- a failed run leaves no half-written .cu for the build to pick up.
 
+    That cwd is made BESIDE THE SCOP, not in ``$TMPDIR``. Publication is one ``os.replace`` per
+    file, which is atomic and which therefore cannot cross a filesystem boundary: with the default
+    temporary directory this raised ``OSError: [Errno 18] Invalid cross-device link`` for every
+    kernel on a cluster node, where ``$TMPDIR`` is node-local and the checkout is on Lustre
+    (measured, job 644285 -- eight affine kernels, eight ``runtime_error`` rows, the failure that
+    had left this column with no measurement of any kind). ``shutil.move`` would paper over it by
+    copying, and copying is not atomic: a concurrent build would be free to pick up a half-written
+    ``.hip``. Same rule as the Pluto column, which puts its temporary OUTPUT beside the destination
+    for exactly this reason (:func:`pluto_transform.run_polycc`).
+
     What it reads is a copy in that same cwd (:func:`drop_const_params`), not ``scop`` itself. The
     returned argv names ``scop``, which is the file a reader can re-run this on and the only one that
     outlives the call; the copy differs from it by qualifiers that change nothing about the transform.
@@ -305,7 +315,7 @@ def run_ppcg(
     vendor = resolve_backend(backend)
     entry = entry_symbol(scop)
     argv = [str(exe), *args, str(scop)]
-    with tempfile.TemporaryDirectory() as scratch:
+    with tempfile.TemporaryDirectory(dir=scop.parent, prefix=f".{FRAMEWORK}_transform_") as scratch:
         # ppcg names its outputs after the input's STEM, so the copy has to keep it.
         readable = pathlib.Path(scratch) / scop.name
         readable.write_text(drop_const_params(scop.read_text(), entry))
