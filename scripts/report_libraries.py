@@ -99,12 +99,16 @@ def reason_missing(name: str, lang: str) -> str:
         if not languages.toolset_link_tokens(str(entry["toolset"])):
             return f"no soname for {entry['toolset']} in toolset.yaml"
         return "trial link failed (toolkit library absent)"
-    pkg = entry.get("pkg")
-    if pkg and languages.pkg_config_answer(pkg, "--libs") is None:
+    pkgs = languages.pkg_modules(entry)
+    if pkgs and languages.pkg_config_answer(pkgs, "--libs") is None:
+        named = " ".join(pkgs)
         if not entry.get("link"):
-            return f"pkg-config has no {pkg}, and no link fallback is declared"
+            return f"pkg-config cannot answer for {named}, and no link fallback is declared"
         tokens = tuple(entry["link"])
-        return f"pkg-config has no {pkg}; link fallback {' '.join(tokens)} did not link -- {link_error(lang, tokens)}"
+        return (
+            f"pkg-config cannot answer for {named}; link fallback {' '.join(tokens)} "
+            f"did not link -- {link_error(lang, tokens)}"
+        )
     compile_tokens, link = languages.library_tokens(name, lang)
     # Ask the gate the library actually faces. A header-only entry is decided by the preprocessor,
     # and a link probe on its empty link line succeeds and says nothing.

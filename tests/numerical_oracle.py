@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -200,6 +201,32 @@ _FFTW_CFLAGS, _FFTW_LDFLAGS = (
     {lang: list(groups[0]) for lang, groups in _fftw.items()},
     {lang: [t for group in groups[1:] for t in group] for lang, groups in _fftw.items()},
 )
+
+#: The call every FFT lowering renders, in either precision (``fftw_plan_dft_1d`` /
+#: ``fftwf_plan_dft_1d``). Looked for in the EMITTED SOURCE, so the question asked is "did this
+#: kernel actually reach the FFT library path", not "is this kernel named like an FFT".
+FFT_CALL = "_plan_dft_1d("
+
+
+def needs_fftw(src: pathlib.Path) -> bool:
+    """Does this emitted source call into FFTW?"""
+    try:
+        return FFT_CALL in src.read_text(errors="replace")
+    except OSError:
+        return False
+
+
+def fftw_missing(backend: str) -> bool:
+    """Can this host NOT link the emitted FFTW call for ``backend``?
+
+    ``library_build_flags`` returns no link tokens when the catalog entry does not resolve here,
+    which for ``fftw`` means BOTH precisions' pkg-config modules (see envs/libraries.yaml). A
+    shared object keeps undefined symbols, so without this the build SUCCEEDS and ctypes fails to
+    load it -- a host-capability gap recorded as a numerical failure. Mirrors the probe
+    numpy_translators/tests/test_fft_library_lowering.py already skips on.
+    """
+    return not _FFTW_LDFLAGS.get(backend)
+
 
 #: Library group per backend, appended AFTER the source by :func:`native_build_command`.
 LINK = {
@@ -565,6 +592,22 @@ def call_by_name(fn, ordered_names, values):
 _ERROR_LINE_RE = re.compile(r"\b(?:error|fatal)\b", re.IGNORECASE)
 
 
+def exc_status(exc: BaseException, limit: int = 240) -> str:
+    """``FAIL:<Type>: <message>`` -- the exception TYPE alone is not a diagnosis.
+
+    Every one of these sites used to record only ``type(exc).__name__`` and drop ``str(exc)``
+    on the floor, at the single point where the cause was in hand. ``FAIL:OSError`` was the entire
+    verdict for three fft_1d cases whose ``.so`` carried an undefined ``fftwf_plan_dft_1d``; the
+    message that said so exactly was discarded, and the status read like a missing file.
+
+    The ``FAIL:`` prefix and the type are unchanged, so every consumer that buckets on
+    ``startswith("FAIL:")`` / ``split(":")[1]`` / ``== "ok"`` reads this the same way. Same shape
+    the sibling op oracle already records (``numpy_translators/tests/_op_oracle.py``).
+    """
+    text = " ".join(str(exc).split())
+    return f"FAIL:{type(exc).__name__}" + (f": {text[:limit]}" if text else "")
+
+
 def _diag(proc, limit: int = 240) -> str:
     """The shortest decisive line of a failed subprocess, as a ``": ..."`` status suffix.
 
@@ -881,6 +924,9 @@ def run_kernel(
                 status[backend] = "FAIL:no-source"
                 continue
             src = matches[0]
+            if needs_fftw(src) and fftw_missing(backend):
+                status[backend] = "skip:no-fftw"
+                continue
             so = tdp / f"lib{short}_{backend}.so"
             try:
                 c = subprocess.run(
@@ -900,7 +946,7 @@ def run_kernel(
                     backend, binding, so, by, syms, expected, compare, rtol, atol, index_names
                 )
             except Exception as exc:  # noqa: BLE001
-                status[backend] = f"FAIL:{type(exc).__name__}"
+                status[backend] = exc_status(exc)
         # ISO standard-algorithm C++: a second emit of the same kernel, opt-in only.
         if only_backends is not None and ISOPAR in only_backends:
             status[ISOPAR] = (
@@ -916,7 +962,7 @@ def run_kernel(
             try:
                 status[DACE] = _run_dace_backend(short, info, by, syms, expected, compare, rtol, atol)
             except Exception as exc:  # noqa: BLE001
-                status[DACE] = f"FAIL:{type(exc).__name__}"
+                status[DACE] = exc_status(exc)
         # Pluto: polyhedral transform of the emitted C source, opt-in only.
         if only_backends is not None and PLUTO in only_backends:
             # No native emit -> nothing to transform; that gap is already c's FAIL, so skip
@@ -950,14 +996,14 @@ def run_kernel(
                     pb, short, info, by, syms, expected, compare, rtol, atol, emit_prec=emit_prec
                 )
             except Exception as exc:  # noqa: BLE001
-                status[pb] = f"FAIL:{type(exc).__name__}"
+                status[pb] = exc_status(exc)
         if only_backends is None or "jax" in only_backends:
             try:
                 status["jax"] = _run_jax_backend(
                     short, info, by, syms, expected, compare, rtol, atol, emit_prec=emit_prec, timeout_s=jax_timeout_s
                 )
             except Exception as exc:  # noqa: BLE001
-                status["jax"] = f"FAIL:{type(exc).__name__}"
+                status["jax"] = exc_status(exc)
     finally:
         td_ctx.cleanup()
     return status
@@ -1182,18 +1228,41 @@ def _py_backend_compute(backend, short, info, by, syms, expected, compare, rtol,
         return "ok"
 
 
+def fork_a_single_threaded_child() -> int:
+    """``os.fork()``, with the multi-threading DeprecationWarning silenced AT THE FORK.
+
+    CPython 3.12+ warns on every fork from a multi-threaded process, and this one always is: numpy
+    and the BLAS it loads bring their own threads up at import, long before any oracle call. The
+    warning was ~225 per sweep, which under a zero-warning policy is the whole policy drowned out.
+
+    Silenced rather than heeded because the condition it warns about does not hold here, and the
+    child proves it: it calls :func:`die_with_parent`, runs ONE ctypes or python call with no
+    threading of its own, writes the verdict to a pipe and ``os._exit``s -- it never re-enters a
+    pool the parent's other threads held a lock on, and it never returns to the interpreter's
+    shutdown path, which is the deadlock the warning is about. Same reasoning and the same shape as
+    :func:`hpcagent_bench.seal.fork_and_relay`, which forks under the same suppression.
+
+    The fork stays raw (not :mod:`hpcagent_bench.frameworks.forked`) because these two callers want
+    the crash ITSELF -- ``FAIL:crash:SIG<n>`` from a miscompiled kernel is the result being
+    collected, not an error to be routed.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return os.fork()
+
+
 def _forked_status(compute, timeout_s: float) -> str:
     """Run ``compute()`` in a forked child (contains RSS growth, segfaults, JAX fork-after-threads
     deadlock); SIGKILLed and reported ``skip:too-long`` past ``timeout_s``."""
     r, w = os.pipe()
-    pid = os.fork()
+    pid = fork_a_single_threaded_child()
     if pid == 0:  # child
         die_with_parent()
         os.close(r)
         try:
             res = compute()
         except Exception as exc:  # noqa: BLE001
-            res = f"FAIL:{type(exc).__name__}"
+            res = exc_status(exc)
         try:
             os.write(w, res.encode()[:4096])
         finally:
@@ -1522,21 +1591,21 @@ def _run_isopar(
     try:
         return _invoke_isolated("cpp", binding, so, by, syms, expected, compare, rtol, atol, index_names)
     except Exception as exc:  # noqa: BLE001
-        return f"FAIL:{type(exc).__name__}"
+        return exc_status(exc)
 
 
 def _invoke_isolated(backend, binding, so, by, syms, expected, compare, rtol, atol, index_names) -> str:
     """Run a compiled backend's ctypes call in a forked child, so a miscompile (heap corruption,
     segfault) reports ``FAIL:crash:SIG<n>`` instead of killing the whole sweep."""
     r, w = os.pipe()
-    pid = os.fork()
+    pid = fork_a_single_threaded_child()
     if pid == 0:  # child
         die_with_parent()
         os.close(r)
         try:
             res = _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol, index_names)
         except Exception as exc:  # noqa: BLE001
-            res = f"FAIL:{type(exc).__name__}"
+            res = exc_status(exc)
         try:
             os.write(w, res.encode()[:4096])
         finally:

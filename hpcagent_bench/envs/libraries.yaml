@@ -35,7 +35,13 @@ lapack:
     interface; the Fortran symbols (dgesv_, dpotrf_) are in the same library.
 
 fftw:
-  pkg: fftw3
+  # BOTH precisions, because the translator picks between them: numpyto_c/emit.py renders
+  # `fftw_plan_dft_1d` at fp64 and `fftwf_plan_dft_1d` at fp32, and those symbols live in
+  # libfftw3 and libfftw3f respectively. Resolving only fftw3 left the fp32 spelling undefined;
+  # a shared object links clean with undefined symbols, so it surfaced as an OSError at dlopen
+  # time on every FFT kernel in the fp32 leg rather than as a link error. Both .pc files ship in
+  # the same packages everywhere this runs (Ubuntu libfftw3-dev, spack fftw +float+double).
+  pkg: [fftw3, fftw3f]
   langs: [c, cpp, fortran, cuda, hip]
   headers: ["fftw3.h"]
   summary: >-

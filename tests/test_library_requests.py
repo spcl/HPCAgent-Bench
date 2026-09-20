@@ -127,10 +127,18 @@ LIBRARY_PROBES = {
         "int n = 2, one = 1; double v[2] = {3, 4}; return (int)dnrm2_(&n, v, &one);",
         5,
     ),
+    # BOTH precisions in one probe, because the translator reaches for both behind this one
+    # catalog name: numpyto_c/emit.py renders `fftw_plan_dft_1d` at fp64 and `fftwf_plan_dft_1d`
+    # at fp32, and those live in libfftw3 and libfftw3f. The single-precision half is the half
+    # that was missing -- a shared object keeps undefined symbols, so it linked clean and every
+    # fp32 FFT kernel died at dlopen with `undefined symbol: fftwf_plan_dft_1d`. The double-only
+    # probe here passed throughout, which is why this test never said so.
     "fftw": (
         "fftw3.h",
-        "void *fftw_malloc(size_t); void fftw_free(void *);",
-        "void *p = fftw_malloc(64); if (!p) return 0; fftw_free(p); return 7;",
+        "void *fftw_malloc(size_t); void fftw_free(void *);\nvoid *fftwf_malloc(size_t); void fftwf_free(void *);",
+        "void *p = fftw_malloc(64); if (!p) return 0; fftw_free(p);\n"
+        "  void *q = fftwf_malloc(64); if (!q) return 0; fftwf_free(q);\n"
+        "  return 7;",
         7,
     ),
 }
@@ -222,3 +230,27 @@ def test_header_only_availability_is_not_token_emptiness() -> None:
                 return  # the case the old predicate got wrong is reachable here
     # Nothing on this host exercises it; the language gate must still hold.
     assert not languages.library_offered("eigen", "fortran")
+
+
+def test_one_catalog_name_may_resolve_several_pkg_config_modules() -> None:
+    """``pkg:`` is one module or a LIST, and a list means ALL of them.
+
+    fftw is why: the emitter picks ``fftw_plan_dft_1d`` or ``fftwf_plan_dft_1d`` from the run's
+    precision, and those are different libraries behind one advertised name. Resolving only the
+    double module made "fftw is available" mean less than what the emitter may actually emit --
+    and the gap did not surface as a link error, because a shared object keeps undefined symbols.
+    Asserted as a PAIR: the entry names both modules, and the resolver asks for both together.
+    """
+    entry = languages.load_libraries()["fftw"]
+    assert languages.pkg_modules(entry) == ("fftw3", "fftw3f")
+    # A plain string entry still resolves to exactly one module -- the list form is additive.
+    assert languages.pkg_modules(languages.load_libraries()["blas"]) == ("openblas",)
+    link_tokens = languages.library_tokens("fftw", "c")[1]
+    if not link_tokens:
+        assert "fftw" not in languages.available_libraries("c")
+        return
+    linked = " ".join(link_tokens)
+    assert "-lfftw3" in linked and "-lfftw3f" in linked, (
+        f"fftw resolved to {linked!r}: both precisions have to be on the link line, or the fp32 "
+        "spelling of every FFT kernel is an undefined symbol that only surfaces at dlopen"
+    )

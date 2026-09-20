@@ -5,6 +5,7 @@ structured result instead of eating it -- the native-collection contract."""
 
 import faulthandler
 import inspect
+import multiprocessing.queues
 import os
 import pathlib
 import pickle
@@ -20,6 +21,7 @@ import hpcagent_bench
 from hpcagent_bench import osinfo
 from hpcagent_bench.frameworks import forked
 from hpcagent_bench.frameworks.forked import forked_failure_reason, is_core_dumping, run_forked
+from hpcagent_bench.seal import SealError, SealPlan
 
 
 def _ok():
@@ -278,10 +280,24 @@ def test_the_child_entry_point_keeps_the_name_a_running_judge_pickles() -> None:
     starts dies on an AttributeError the parent only sees as a broken result pipe -- a whole arm's
     rows lost with no failing kernel to point at. Both names must resolve, to ONE function, through
     a pickle round trip, and take the argument tuple run_forked builds.
+
+    The five leading parameters are the ABI and are pinned by NAME AND POSITION. Anything after
+    them must be OPTIONAL, which is the property that actually matters here: an old parent calls
+    with exactly five positional arguments, so a new REQUIRED parameter would make every grade it
+    starts die on a TypeError the parent only sees as a broken pipe -- the same silent, whole-arm
+    loss as a renamed entry point. Asserting that, rather than a literal parameter list, is why
+    ``err_w`` could be added (the raw error pipe; child_main falls back to the queue without it)
+    without loosening the guard.
     """
     assert forked._child is forked.child_main
     assert pickle.loads(pickle.dumps(forked._child)) is forked.child_main
-    assert list(inspect.signature(forked.child_main).parameters) == ["fn", "args", "kwargs", "q", "seal"]
+    params = inspect.signature(forked.child_main).parameters
+    assert list(params)[:5] == ["fn", "args", "kwargs", "q", "seal"]
+    required = [n for n, p in params.items() if p.default is inspect.Parameter.empty]
+    assert required == ["fn", "args", "kwargs", "q"], (
+        f"child_main requires {required}; an old judge parent calls it with five positional "
+        "arguments, so everything from `seal` on has to carry a default"
+    )
 
 
 @pytest.mark.parametrize(
@@ -386,3 +402,39 @@ def test_a_command_past_its_timeout_raises_with_what_it_printed() -> None:
     with forked.abandoned_by(threading.Event()), pytest.raises(subprocess.TimeoutExpired) as wedged:
         forked.run_command(["sh", "-c", "echo early; sleep 60"], timeout=0.5)
     assert wedged.value.stdout == "early\n"
+
+
+def refuse_the_seal(plan: SealPlan) -> None:
+    """Stand-in for a host that refuses a user namespace, with the real exception type."""
+    raise SealError("seal: cannot enter new namespaces: [Errno 1] Operation not permitted")
+
+
+def no_thread_for_you(self: object) -> None:
+    """What ``Queue._start_thread`` does in a child that cannot start one."""
+    raise RuntimeError("can't start new thread")
+
+
+def test_a_refused_seal_is_reported_even_when_the_child_cannot_start_a_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refused-seal report must not need the queue's feeder thread, because the child that
+    carries it cannot start one.
+
+    A refused seal leaves the child inside a user namespace with no id map, where every uid is the
+    overflow uid and pthread_create fails with EAGAIN. ``multiprocessing.Queue.put`` starts a
+    feeder thread on first use, so the report died as ``RuntimeError: can't start new thread``
+    ON TOP of the SealError, the queue stayed empty, and run_forked reported "child exited 1 with
+    no result" -- naming neither cause. Worse, native_call recognises a seal fault only by the
+    SealError name in that string, so the misreport also lost the routing: the judge blamed the
+    SUBMISSION for a host it could not seal on.
+
+    Both halves are asserted: the real cause survives, and it survives a queue that cannot be used
+    at all. mp_context is pinned to fork because the monkeypatches have to reach the child.
+    """
+    monkeypatch.setattr(forked, "enter", refuse_the_seal)
+    monkeypatch.setattr(multiprocessing.queues.Queue, "_start_thread", no_thread_for_you)
+    run = run_forked(_ok, seal=SealPlan(hide=(), workdir="/"), timeout=60, mp_context="fork")
+    assert not run.ok, run
+    assert "SealError" in (run.error or ""), run.error
+    assert "cannot enter new namespaces" in (run.error or ""), run.error
+    assert "no result" not in (run.error or ""), "the generic no-payload message replaced the real cause"

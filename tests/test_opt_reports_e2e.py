@@ -51,8 +51,8 @@ FRAMEWORKS = ("numpy", "dace_cpu_autoopt", "pluto")
 #: three frameworks above and no numba, which is what plotting.DEFAULT_BASELINE is.
 BASELINE = "numpy"
 
-#: The two report kinds and the root each lands under -- ``perf_reports/<kind>/``, the
-#: disassembly in ``perf_reports/``. Asserting the ROOTS differ is part of the contract.
+#: The two report kinds and the root each lands under -- ``.perf_reports/<kind>/``, the
+#: disassembly in ``.perf_reports/``. Asserting the ROOTS differ is part of the contract.
 KINDS = ("opt_report", "lowered_code")
 
 #: A report that exists but says nothing is the failure mode this test is for. The smallest real
@@ -152,10 +152,13 @@ def test_the_selector_still_names_both_kernels() -> None:
 
 
 def test_the_two_report_kinds_have_separate_roots() -> None:
-    """Each kind lands under its own ``perf_reports/<kind>/`` subtree; the paths
-    asserted below are only meaningful if those roots are still distinct."""
-    assert perf_reports.report_root("opt_report") == paths.ROOT / "perf_reports" / "opt_report"
-    assert perf_reports.report_root("lowered_code") == paths.ROOT / "perf_reports" / "lowered_code"
+    """Each kind lands under its own ``.perf_reports/<kind>/`` subtree; the paths
+    asserted below are only meaningful if those roots are still distinct.
+
+    The root is spelled out rather than read back from :data:`perf_reports.REPORTS`, so a rename
+    of the tree has to be made here too instead of passing silently."""
+    assert perf_reports.report_root("opt_report") == paths.ROOT / ".perf_reports" / "opt_report"
+    assert perf_reports.report_root("lowered_code") == paths.ROOT / ".perf_reports" / "lowered_code"
 
 
 @requires_polycc

@@ -1348,7 +1348,7 @@ def library_tokens(name: str, lang: str) -> Tuple[Tuple[str, ...], Tuple[str, ..
         # /usr/include/eigen3, so a bare `#include <Eigen/Dense>` does not compile without it. When
         # the headers are on the default include path this correctly yields no tokens at all;
         # library_offered, not emptiness, is what says whether the library is available.
-        cflags = pkg_config_answer(entry["pkg"], "--cflags") if entry.get("pkg") else None
+        cflags = pkg_config_answer(pkg_modules(entry), "--cflags")
         include = tuple(f"-I{d}" for d in entry.get("include") or ())
         if cflags is None:
             return include, ()
@@ -1362,8 +1362,8 @@ def library_tokens(name: str, lang: str) -> Tuple[Tuple[str, ...], Tuple[str, ..
         if not link_tokens:
             return (), ()
     else:
-        cflags = pkg_config_answer(entry["pkg"], "--cflags") if entry.get("pkg") else None
-        libs = pkg_config_answer(entry["pkg"], "--libs") if entry.get("pkg") else None
+        cflags = pkg_config_answer(pkg_modules(entry), "--cflags")
+        libs = pkg_config_answer(pkg_modules(entry), "--libs")
         if libs is None or cflags is None:
             # No .pc file: a library built into the image's own prefix (hptt, tblis) is on the
             # compiler's default search path already, so a bare -l is the whole answer. The trial
@@ -1382,11 +1382,33 @@ def library_tokens(name: str, lang: str) -> Tuple[Tuple[str, ...], Tuple[str, ..
     return compile_tokens, link_tokens
 
 
+def pkg_modules(entry: Dict[str, object]) -> Tuple[str, ...]:
+    """The pkg-config module names one catalog entry resolves through.
+
+    ``pkg:`` is one name or a LIST of them, and a list means ALL of them: fftw is the case that
+    forced it -- the emitter picks ``fftw_plan_dft_1d`` or ``fftwf_plan_dft_1d`` from the run's
+    precision, and those live in different libraries (``fftw3`` / ``fftw3f``) behind one catalog
+    name. Resolving only the double module made an fp32 FFT kernel link CLEAN (a shared object
+    keeps undefined symbols) and fail at ``dlopen``. One name, one meaning: available means every
+    module the emitter may reach for is here.
+    """
+    pkg = entry.get("pkg")
+    if not pkg:
+        return ()
+    return (pkg,) if isinstance(pkg, str) else tuple(str(name) for name in pkg)  # type: ignore[union-attr]
+
+
 @functools.lru_cache(maxsize=None, typed=True)
-def pkg_config_answer(pkg: str, what: str) -> Optional[Tuple[str, ...]]:
-    """``pkg-config <what> <pkg>`` split into tokens, or None when pkg-config cannot answer."""
+def pkg_config_answer(pkgs: Tuple[str, ...], what: str) -> Optional[Tuple[str, ...]]:
+    """``pkg-config <what> <pkgs...>`` split into tokens, or None when pkg-config cannot answer.
+
+    Every module is asked in ONE invocation, so pkg-config merges and de-duplicates the flags
+    itself; a single missing module fails the whole answer, which is the intended reading (see
+    :func:`pkg_modules`)."""
+    if not pkgs:
+        return None
     try:
-        r = subprocess.run(["pkg-config", what, pkg], capture_output=True, text=True, timeout=_STDPAR_PROBE_TIMEOUT_S)
+        r = subprocess.run(["pkg-config", what, *pkgs], capture_output=True, text=True, timeout=_STDPAR_PROBE_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode != 0:

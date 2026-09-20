@@ -7,6 +7,7 @@ import contextlib
 import contextvars
 import ctypes
 import multiprocessing
+import multiprocessing.connection
 import multiprocessing.context
 import multiprocessing.queues
 import os
@@ -47,6 +48,22 @@ ResultMessage: TypeAlias = tuple[Literal["ok"], ResultT | None] | tuple[Literal[
 
 ChildQueue: TypeAlias = "multiprocessing.queues.Queue[ChildMessage[ResultT]]"
 ProgressQueue: TypeAlias = "multiprocessing.queues.Queue[ResultT]"
+
+#: The child's LAST-RESORT report channel: a raw pipe, not a queue.
+#:
+#: multiprocessing.Queue.put starts a feeder thread the first time it is used, and the one failure
+#: this module most needs to report is raised in a child that CANNOT start a thread. A refused seal
+#: leaves the process inside a user namespace with no id map, where every uid is the overflow uid
+#: (65534); pthread_create is charged against that uid's RLIMIT_NPROC and fails with EAGAIN. The
+#: report then died as `RuntimeError: can't start new thread` on top of the SealError, the queue
+#: stayed empty, and the parent reported "child exited 1 with no result" -- which names neither
+#: cause. `Connection.send_bytes` writes straight to the fd: no thread, no pickling of the payload,
+#: and a Connection survives being passed to a spawned child (multiprocessing reduces it by fd).
+ErrorWriter: TypeAlias = "multiprocessing.connection.Connection"
+ErrorReader: TypeAlias = "multiprocessing.connection.Connection"
+
+#: Cap on that report, so a runaway traceback cannot fill the pipe and block the dying child.
+ERROR_BYTES = 64 * 1024
 
 #: A start-method context that can fork a process. ``get_context(method)`` is typed as the BaseContext
 #: those three derive from, which declares no ``Process``.
@@ -263,19 +280,49 @@ def process_context(method: str) -> ProcessContext:
     return ctx
 
 
+def report_without_a_thread(err_w: "ErrorWriter | None", text: str) -> None:
+    """Write ``text`` to the raw error pipe. No queue, no feeder thread, no allocation that needs one.
+
+    This is the only reporting path that works after a REFUSED seal (see :data:`ErrorWriter`), and
+    it is deliberately total: a child that cannot even do this is already past reporting anything,
+    and raising here would replace the real cause with the failure to report it -- which is exactly
+    the bug this function exists to end.
+    """
+    if err_w is None:
+        return
+    try:
+        err_w.send_bytes(text.encode("utf-8", "replace")[:ERROR_BYTES])
+    except (OSError, ValueError):  # pipe closed, or the parent is already gone
+        pass
+
+
 def child_main(
     fn: Callable[..., ResultT],
     args: tuple[object, ...],
     kwargs: dict[str, object],
     q: "ChildQueue[ResultT]",
     seal: SealPlan | None = None,
+    err_w: "ErrorWriter | None" = None,
 ) -> None:
     die_with_parent()
     try:
         if seal is not None:  # before the queue's feeder thread starts: a user namespace wants one thread
             enter(seal)
     except BaseException:  # noqa: BLE001 -- a refused seal is surfaced like any other child failure
-        q.put(("error", traceback.format_exc()))
+        tb = traceback.format_exc()
+        if err_w is not None:
+            # The PIPE, not the queue: this child may be unable to start the queue's feeder thread
+            # at all (see :data:`ErrorWriter`), and a report that raises hides the failure it was
+            # carrying.
+            report_without_a_thread(err_w, tb)
+        else:
+            # No pipe means an OLD parent: a long-lived judge service holds `forked` from the tree
+            # it started with and calls this entry point with the five arguments that tree built
+            # (see tests/test_forked.py's entry-point ABI test). Fall back to the queue it does
+            # understand -- the feeder thread may well fail, which is the whole reason the pipe
+            # exists, but trying and failing is what that parent already got, and silence is worse.
+            with contextlib.suppress(Exception):
+                q.put(("error", tb))
         return
     # First act, before any work: this is what arms the parent's deadline (see run_forked).
     q.put(("started", None))
@@ -321,6 +368,19 @@ def take_result(q: "ChildQueue[ResultT]", timeout: float) -> ResultMessage[Resul
             return item
 
 
+def take_error(err_r: "ErrorReader", timeout: float) -> str:
+    """The child's raw-pipe report, or ``""`` when it wrote none within ``timeout``.
+
+    ``poll`` before ``recv_bytes`` because the child may have died without writing, and a bare
+    ``recv_bytes`` on a pipe whose only other writer is gone would raise rather than wait."""
+    try:
+        if not err_r.poll(timeout):
+            return ""
+        return bytes(err_r.recv_bytes()).decode("utf-8", "replace")
+    except (OSError, EOFError, ValueError):
+        return ""
+
+
 def drain_progress(progress_q: "ProgressQueue[ResultT]", current: ResultT | None) -> ResultT | None:
     """Return the last item pushed to ``progress_q`` (or ``current``), so a kill preserves the last progress."""
     try:
@@ -359,8 +419,12 @@ def run_forked(
     call_kwargs: dict[str, object] = dict(kwargs)
     if progress_q is not None:
         call_kwargs["progress"] = progress_q
-    p = ctx.Process(target=child_main, args=(fn, args, call_kwargs, q, seal))
+    err_r, err_w = ctx.Pipe(duplex=False)
+    p = ctx.Process(target=child_main, args=(fn, args, call_kwargs, q, seal, err_w))
     p.start()
+    # The parent's copy of the write end goes NOW, so the read end sees EOF as soon as the child is
+    # gone rather than blocking on a writer that only this process still holds.
+    err_w.close()
     last_progress: ResultT | None = None
     # The deadline measures the CHILD'S runtime, so the child arms it by reporting that it started
     # -- not p.start(). Fork/spawn latency is the parent's cost (seconds under spawn, and on a
@@ -439,6 +503,14 @@ def run_forked(
     if result_item is None:  # not drained in-loop -- covers the clean-exit race window
         result_item = take_result(q, DRAIN_S)
         if result_item is None:
+            # The raw pipe FIRST: a child that could not use the queue at all (a refused seal, see
+            # ErrorWriter) reported here, and its traceback is the actual cause. Falling through to
+            # the generic message instead is what turned "SealError: cannot enter new namespaces"
+            # into "child exited 1 with no result" -- and native_call only recognises a seal fault
+            # by the SealError name in this string, so the generic text also lost that routing.
+            reported = take_error(err_r, DRAIN_S)
+            if reported:
+                return RunResult(ok=False, exit_code=ec, error=f"{tag}{reported}", result=last_progress)
             return RunResult(
                 ok=False,
                 exit_code=ec,
