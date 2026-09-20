@@ -86,6 +86,10 @@ class KernelCell:
     kernel: str
     episodes: tuple[float, ...]
     delivered: bool = True
+    #: The judge or a source audit disowned this answer, so its value is drawn but not believed
+    #: (:func:`draw_flagged`). Distinct from ``delivered`` False: there IS a number here, and the
+    #: point of showing it is that it is large.
+    flagged: bool = False
 
     @property
     def n(self) -> int:
@@ -130,8 +134,22 @@ def token_cells(frame: pd.DataFrame) -> list[KernelCell]:
 
 
 def ordered_kernels(cells: Sequence[KernelCell]) -> list[str]:
-    """Kernels ascending by their own median -- the order every panel here draws in."""
-    return [cell.kernel for cell in sorted(cells, key=lambda cell: cell.median())]
+    """Kernels ascending by median, each named ONCE.
+
+    A panel may carry several series over one kernel axis, so a kernel appears in ``cells`` once
+    per series. Ordering the cells directly would then emit that kernel once per series and the
+    axis would grow to the CELL count -- six series over forty kernels drew 201 columns. A kernel
+    is ranked by the median of its cells' medians, which for one series is its own median and
+    leaves a single-series panel in exactly the order it had.
+    """
+    grouped: dict[str, list[float]] = {}
+    for cell in cells:
+        value = cell.median()
+        if math.isfinite(value):
+            grouped.setdefault(cell.kernel, []).append(value)
+    for cell in cells:
+        grouped.setdefault(cell.kernel, [])
+    return sorted(grouped, key=lambda kernel: float(np.median(grouped[kernel])) if grouped[kernel] else math.inf)
 
 
 def shared_kernel_order(speed: Sequence[KernelCell], tokens: Sequence[KernelCell]) -> list[str]:
@@ -239,18 +257,81 @@ def style_token_axis(ax: matplotlib.axes.Axes) -> None:
     plotstyle.value_axis(ax, "y", log_base=10.0)
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class Series:
+    """One drawn population inside a panel: a model, a language, a device, or any combination.
+
+    A panel used to carry exactly one, so colour was a panel-level argument. It is a SERIES
+    property now, because the question "is this kernel hard, or is this model bad at it" needs
+    several populations over one kernel axis to answer.
+    """
+
+    label: str
+    cells: tuple[KernelCell, ...]
+    color: str
+    marker: str = "o"
+    filled: bool = True
+
+
+#: Total x width one kernel column's series are spread over. Below ~0.8 the intervals of adjacent
+#: kernels start to touch and the reader loses which column a mark belongs to.
+DODGE_SPAN: float = 0.62
+
+
+def dodge_offsets(count: int) -> list[float]:
+    """Symmetric x offsets for ``count`` series sharing one kernel column, centred on it.
+
+    One series draws ON the column, not beside it, so a single-series figure is pixel-identical to
+    what it was before series existed.
+    """
+    if count < 2:
+        return [0.0]
+    step = DODGE_SPAN / (count - 1)
+    return [-DODGE_SPAN / 2.0 + i * step for i in range(count)]
+
+
 def draw_ci(
-    ax: matplotlib.axes.Axes, cells: Sequence[KernelCell], x_of: dict[str, int], color: str, log2_space: bool
+    ax: matplotlib.axes.Axes, cells: Sequence[KernelCell], x_of: dict[str, int], color: str, log2_space: bool,
+    offset: float = 0.0, marker: str = "o", filled: bool = True,
 ) -> None:
     for cell in cells:
-        x = x_of[cell.kernel]
+        x = x_of[cell.kernel] + offset
         if not cell.delivered:
             draw_placeholder(ax, x, color)
             continue
+        if cell.flagged:
+            draw_flagged(ax, x, cell.median(), color)
+            continue
         med, low, high = bootstrap_point(cell, log2_space)
         if math.isfinite(low) and math.isfinite(high) and low != high:
-            ax.vlines(x, low, high, color=color, linewidth=1.2, alpha=0.6, zorder=2)
-        ax.plot([x], [med], marker="o", markersize=4.0, color=color, linestyle="none", zorder=3)
+            ax.vlines(x, low, high, color=color, linewidth=1.0, alpha=0.6, zorder=2)
+        ax.plot(
+            [x], [med], marker=marker, markersize=3.6, color=color, linestyle="none", zorder=3,
+            markerfacecolor=color if filled else "none", markeredgewidth=0.9,
+        )  # fmt: skip
+
+
+#: The mark for a disowned answer, and the superscript that separates it from an unanswered one.
+FLAGGED_MARKER: str = "X"
+FLAGGED_ANNOTATION: str = "*"
+
+
+def draw_flagged(ax: matplotlib.axes.Axes, x: float, value: float, color: str) -> None:
+    """A disowned answer at the value it claimed: a filled cross carrying a ``*``.
+
+    An unanswered kernel is already a cross at 1x (:func:`draw_placeholder`), so a reader who has
+    learnt that mark reads this one as its neighbour: no credit. The ``*`` is what says the two
+    are not the same, and the value is drawn where it landed because the claim being far above the
+    honest ceiling is the whole observation.
+    """
+    ax.plot(
+        [x], [value], marker=FLAGGED_MARKER, markersize=5.0, markeredgewidth=1.4, color=color,
+        linestyle="none", zorder=4,
+    )  # fmt: skip
+    ax.annotate(
+        FLAGGED_ANNOTATION, (x, value), textcoords="offset points", xytext=(3.5, 2.0), color=color,
+        fontsize=7.0, ha="left", va="bottom", zorder=4, annotation_clip=False,
+    )  # fmt: skip
 
 
 def draw_placeholder(ax: matplotlib.axes.Axes, x: float, color: str) -> None:
@@ -267,7 +348,9 @@ def draw_box(ax: matplotlib.axes.Axes, cells: Sequence[KernelCell], x_of: dict[s
     mixing the two in one panel is deliberate (see the module docstring)."""
     for cell in (cell for cell in cells if not cell.delivered):
         draw_placeholder(ax, x_of[cell.kernel], color)
-    cells = [cell for cell in cells if cell.delivered]
+    for cell in (cell for cell in cells if cell.delivered and cell.flagged):
+        draw_flagged(ax, x_of[cell.kernel], cell.median(), color)
+    cells = [cell for cell in cells if cell.delivered and not cell.flagged]
     boxed = [cell for cell in cells if cell.n >= MIN_EPISODES_FOR_SPREAD]
     pointwise = [cell for cell in cells if cell.n < MIN_EPISODES_FOR_SPREAD]
     if boxed:
@@ -303,6 +386,9 @@ def draw_summary_column(
     color: str,
     reducer: SummaryReducer,
     label: str,
+    offset: float = 0.0,
+    marker: str = "D",
+    filled: bool = True,
 ) -> float:
     """The dashed separator, the summary reducer's marker, and a small label ABOVE it naming its
     own statistic; returns the column's x position.
@@ -314,16 +400,19 @@ def draw_summary_column(
     An annotation anchored to the panel's own data coordinates has no such sharing.
     """
     separator_x = n_kernels - 0.5 + SUMMARY_GAP
-    summary_x = separator_x + SUMMARY_GAP
+    summary_x = separator_x + SUMMARY_GAP + offset
     ax.axvline(separator_x, color=plotstyle.RULE, linestyle=(0, (3, 3)), linewidth=1.0, zorder=1)
     point, low, high = reducer(cells)
     if math.isfinite(point):
         if math.isfinite(low) and math.isfinite(high) and low != high:
-            ax.vlines(summary_x, low, high, color=color, linewidth=1.5, alpha=0.7, zorder=2)
-        ax.plot([summary_x], [point], marker="D", markersize=5.0, color=color, linestyle="none", zorder=3)
+            ax.vlines(summary_x, low, high, color=color, linewidth=1.3, alpha=0.7, zorder=2)
+        ax.plot(
+            [summary_x], [point], marker=marker, markersize=5.0, color=color, linestyle="none", zorder=3,
+            markerfacecolor=color if filled else "none", markeredgewidth=1.1,
+        )  # fmt: skip
     ax.annotate(
         label,
-        xy=(summary_x, 1.0),
+        xy=(separator_x + SUMMARY_GAP, 1.0),
         xycoords=("data", "axes fraction"),
         xytext=(0, 3),
         textcoords="offset points",
@@ -338,10 +427,9 @@ def draw_summary_column(
 
 def draw_panel(
     ax: matplotlib.axes.Axes,
-    cells: Sequence[KernelCell],
+    series: Sequence[Series],
     kernels: Sequence[str],
     style_: Style,
-    color: str,
     log2_space: bool,
     ylabel: str,
     summary_reducer: SummaryReducer,
@@ -349,18 +437,30 @@ def draw_panel(
     summary_column: bool,
     label_ticks: bool,
 ) -> None:
-    """One metric's panel: its cells over ``kernels`` (a FIXED order, so a stacked figure's two
-    panels share x), plus the optional summary column."""
+    """One metric's panel: every series over ``kernels`` (a FIXED order, so a stacked figure's two
+    panels share x), plus the optional summary column.
+
+    Several series in one column are spread by :func:`dodge_offsets` so their intervals stay
+    readable; one series keeps the column's exact x, so a single-series panel is unchanged.
+    """
     x_of = {kernel: i for i, kernel in enumerate(kernels)}
-    present = [cell for cell in cells if cell.kernel in x_of]
-    if style_ == "box":
-        draw_box(ax, present, x_of, color)
-    else:
-        draw_ci(ax, present, x_of, color, log2_space)
+    offsets = dodge_offsets(len(series))
+    present: list[KernelCell] = []
+    for one, offset in zip(series, offsets, strict=True):
+        cells = [cell for cell in one.cells if cell.kernel in x_of]
+        present.extend(cells)
+        if style_ == "box" and len(series) == 1:
+            draw_box(ax, cells, x_of, one.color)
+        else:
+            draw_ci(ax, cells, x_of, one.color, log2_space, offset, one.marker, one.filled)
     n = len(kernels)
     right_edge = float(n) - 0.4
     if summary_column:
-        right_edge = draw_summary_column(ax, present, n, color, summary_reducer, summary_label) + 0.5
+        for one, offset in zip(series, offsets, strict=True):
+            cells = [cell for cell in one.cells if cell.kernel in x_of]
+            right_edge = draw_summary_column(
+                ax, cells, n, one.color, summary_reducer, summary_label, offset * 2.0, one.marker, one.filled
+            ) + 0.5
     ax.set_xlim(-0.6, right_edge)
     # Kernel names are the only x TICKS -- the summary column carries its own statistic as an
     # annotation (draw_summary_column), never a tick label, which a shared stacked x axis would
@@ -391,20 +491,32 @@ class Metric:
     :func:`summary_point_speedup` and :func:`summary_point_tokens`.
     """
 
-    cells: tuple[KernelCell, ...]
+    series: tuple[Series, ...]
     log2_space: bool
     ylabel: str
-    color: str
     summary_reducer: SummaryReducer
     summary_label: str
 
+    @property
+    def cells(self) -> tuple[KernelCell, ...]:
+        """Every series' cells, for the callers that only need the kernel axis."""
+        return tuple(cell for one in self.series for cell in one.cells)
+
 
 def speedup_metric(cells: Sequence[KernelCell], ylabel: str, color: str) -> Metric:
-    return Metric(tuple(cells), True, ylabel, color, summary_point_speedup, "Geomean")
+    return Metric((Series("", tuple(cells), color),), True, ylabel, summary_point_speedup, "Geomean")
 
 
 def token_metric(cells: Sequence[KernelCell], ylabel: str, color: str) -> Metric:
-    return Metric(tuple(cells), False, ylabel, color, summary_point_tokens, "Median")
+    return Metric((Series("", tuple(cells), color),), False, ylabel, summary_point_tokens, "Median")
+
+
+def speedup_series_metric(series: Sequence[Series], ylabel: str) -> Metric:
+    return Metric(tuple(series), True, ylabel, summary_point_speedup, "Geomean")
+
+
+def token_series_metric(series: Sequence[Series], ylabel: str) -> Metric:
+    return Metric(tuple(series), False, ylabel, summary_point_tokens, "Median")
 
 
 def figure_one(
@@ -414,10 +526,9 @@ def figure_one(
     fig, ax = plt.subplots(figsize=(plotstyle.DOUBLE_COLUMN_WIDTH, PANEL_HEIGHT_IN + CHROME_IN))
     draw_panel(
         ax,
-        metric.cells,
+        metric.series,
         kernels,
         style_,
-        metric.color,
         metric.log2_space,
         metric.ylabel,
         metric.summary_reducer,
@@ -438,10 +549,9 @@ def figure_stacked(
     fig, axes = plt.subplots(2, 1, sharex=True, figsize=(plotstyle.DOUBLE_COLUMN_WIDTH, height))
     draw_panel(
         axes[0],
-        speed.cells,
+        speed.series,
         kernels,
         style_,
-        speed.color,
         speed.log2_space,
         speed.ylabel,
         speed.summary_reducer,
@@ -451,10 +561,9 @@ def figure_stacked(
     )
     draw_panel(
         axes[1],
-        tokens.cells,
+        tokens.series,
         kernels,
         style_,
-        tokens.color,
         tokens.log2_space,
         tokens.ylabel,
         tokens.summary_reducer,
