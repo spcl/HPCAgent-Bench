@@ -16,6 +16,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 . ./roster.sh
 . ./record_identity.sh
 . ./submit_common.sh
+. ./pin_env_kv.sh
 
 PY=${SCRATCH:?}/venv-hpcagent-bench-314/bin/python
 OPT=${OPT:-$(dirname "${PWD}")}
@@ -163,6 +164,10 @@ submit_arm() {  # submit_arm <model> <language> <kind:plain|skills|cpf|cpfsrc|cp
         -e "s|^LANGUAGE=.*|LANGUAGE=${lang}|" \
         -e "s|^AMD_CE_ENV=.*|AMD_CE_ENV=${CPF_CE_ENV}|" \
         "${budget_sed[@]}"
+    # llr-focus40 deliberately runs commit-unbounded (mode A): pinned explicitly, never inherited
+    # from the campaign default (experiments/layers/common.env), which is commit-single (mode B).
+    pin_env_kv "${staged}" "AGENT_SINGLE_SUBMISSION=0"
+    pin_env_kv "${staged}" "AGENT_SUBMISSION_POLICY_FILE=submission-multi.md"
     record_identity "${staged}" "${RECORD_EXPERIMENT}" "${model}" "${lang}" "${target}" "${packet}" "${arm}"
     # best-effort: most TAG values here (llr-focus40) resolve through the plain manifest
     # experiment_tags scan roster_for() falls back to, which hpcagent_bench.tags does not cover --
