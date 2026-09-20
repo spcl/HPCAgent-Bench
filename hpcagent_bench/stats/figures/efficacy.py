@@ -1928,6 +1928,22 @@ def measure_value(point: ArmPoint, measure: str) -> tuple[float, float, float]:
     return point.x, point.x_low, point.x_high
 
 
+def snap_axis_to_ticks(ax: Axes, data_low: float, data_high: float) -> None:
+    """Pull the Y limits in to the outermost TICKS that still contain the data.
+
+    A fractional margin leaves the top and bottom borders in dead space: the panel is taller than
+    anything it draws and the reader's eye has no labelled edge to measure a mark against. Snapping
+    to the tick either side puts a number on both borders.
+    """
+    if not (math.isfinite(data_low) and math.isfinite(data_high)):
+        return
+    ticks = np.asarray(ax.yaxis.get_major_locator().tick_values(data_low, data_high), dtype=float)
+    below, above = ticks[ticks <= data_low], ticks[ticks >= data_high]
+    if below.size == 0 or above.size == 0:
+        return
+    ax.set_ylim(float(below.max()), float(above.min()))
+
+
 def draw_measure_row(
     ax: Axes,
     rows: Sequence[ArmRow],
@@ -1950,6 +1966,7 @@ def draw_measure_row(
     (1x over the campaign baseline on the speed-up row).
     """
     cost = measure == "cost"
+    span: list[float] = []
     for index, row in enumerate(rows):
         pair = (
             (row.control, False, -config.dodge, CONTROL_MARKER),
@@ -1957,6 +1974,7 @@ def draw_measure_row(
         )
         for point, filled, dodge, mark in pair:
             value, low, high = measure_value(point, measure)
+            span += [v for v in (value, low, high) if math.isfinite(v)]
             x = index + dodge
             if np.isfinite(low) and np.isfinite(high):
                 if cost:
@@ -2018,8 +2036,13 @@ def draw_measure_row(
     ax.margins(y=config.margin)
     if not cost:
         widen_y_axis_linear(ax, config)
-        low, high = ax.get_ylim()
-        ax.yaxis.set_major_locator(MultipleLocator(x_tick_step(high - low, config.max_ticks)))
+        span.append(0.0)  # the 1x reference is drawn, so it is part of what the axis has to hold
+        # The spacing follows the DATA's own span, not the autoscaled window: sized against the
+        # padded window and then snapped outward, a six-octave panel came back spanning fourteen.
+        reach = max(span) - min(span) if span else config.min_span
+        ax.yaxis.set_major_locator(MultipleLocator(x_tick_step(max(reach, config.min_span), config.max_ticks)))
+    if span:
+        snap_axis_to_ticks(ax, min(span), max(span))
     if ylabel:
         ax.set_ylabel(wrapped_label(ylabel, label_wrap(config)), fontsize=config.label_pt)
     note = MEASURE_DIRECTION.get(measure) if direction else None
@@ -2250,7 +2273,7 @@ def measure_row_config(config: FigureConfig, row_height_in: float) -> FigureConf
     return dataclasses.replace(
         config,
         label_pt=min(config.label_pt, max(6.0, row_height_in * 8.0)),
-        max_ticks=max(3, int(row_height_in * 5.0)),
+        max_ticks=max(4, int(row_height_in * 7.0)),
         token_subs=config.token_subs if row_height_in >= 1.6 else (1.0, 3.0),
     )
 
