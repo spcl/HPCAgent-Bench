@@ -511,3 +511,161 @@ def test_without_frozen_observations_a_lost_setup_would_look_owed_in_full(
         "qwen38", runs, str(REPO), owed.Selection(setups=frozenset({"cpf-llr-focus40-qwen38-c"})), 4, 4, set(), None
     )
     assert sorted(str(item.problem["kernel"]).rsplit("/", 1)[-1] for item in plan.owed) == ["b", "c"]
+
+
+# ------------------------------------------------------------------ a launch directory gone entirely
+#
+# 2026-09-20 bug: the 09-19 reducer deleted 147 ".agent-launch/<job>" directories, job dirs (and
+# their judge DBs, so remaining_kernels.py's own coverage rule) intact. newest_source() then returns
+# None for an arm none of whose surviving jobs kept a launch dir, and gather() dropped it with no
+# note at all -- "no owed kernels" while remaining_kernels.py still showed real owed work. Every skip
+# below must say why; a fallback env, when the checkout still carries one, must let the arm plan.
+
+
+def no_launch_run(tmp_path: pathlib.Path, job: str, arm: str) -> pathlib.Path:
+    """A run root holding one job whose judge DB names ``arm`` (collect_arms/covered read it fine,
+    delivering nothing) but NO ``.agent-launch/<job>`` directory -- newest_source(jobs) is None for
+    it, same as a job the reducer's dropped mode stripped down to its judge DB alone."""
+    root = tmp_path / "runs" / "root"
+    shard = root / job / "judge" / "rank-0"
+    shard.mkdir(parents=True)
+    conn = sqlite3.connect(shard / "hpcagent_bench0.db")
+    with conn:
+        conn.execute("create table runs (run_id text, arm text)")
+        conn.execute("create table submissions (run_id text, benchmark text, optimizer text, ts integer)")
+        conn.execute("create table attempts (run_id text, benchmark text, reason text, ts integer)")
+        conn.execute("insert into runs values (?, ?)", (f"{arm}.n0.p0.w0", arm))
+    conn.close()
+    return root.parent
+
+
+def model_mismatch_run(tmp_path: pathlib.Path, job: str, arm: str, model: str) -> pathlib.Path:
+    """Like :func:`no_launch_run`, but WITH a surviving launch directory whose env names ``model`` --
+    a source newest_source finds fine, for a caller asking a different model's plan."""
+    root = no_launch_run(tmp_path, job, arm) / "root"
+    launch = root / ".agent-launch" / job
+    launch.mkdir(parents=True)
+    env = dict(setup_env(arm, HPCAGENT_BENCH_RECORD_MODEL=model))
+    env["PROBLEMS_FILE"] = "problems.jsonl"
+    (launch / ".env").write_text("".join(f"{key}={value}\n" for key, value in env.items()))
+    (launch / "problems.jsonl").write_text(
+        json.dumps({"id": 0, "kernel": "loop_level_reasoning/a/a", "task": "t"}) + "\n"
+    )
+    return root.parent
+
+
+def test_a_lost_arm_with_no_fallback_env_is_skipped_with_a_loud_note(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    arm = "cpf-llr-focus40-qwen38-c-nolaunch"
+    runs = no_launch_run(tmp_path, "700001", arm)
+    monkeypatch.setattr(owed, "queued_arms", set)
+    monkeypatch.setattr(owed.remaining_kernels, "roster", lambda tag, opt: ["a", "b", "c"])
+    monkeypatch.setattr(owed, "fallback_env", lambda identity, opt: None)
+    plan = owed.gather("qwen38", runs, str(REPO), owed.Selection(setups=frozenset({arm})), 1, 1, set())
+    assert plan.owed == []
+    assert any(
+        arm in note
+        and "no surviving launch dir" in note
+        and f"no .env.{arm}[-clean]" in note
+        and "3 kernels owed" in note
+        for note in plan.notes
+    ), plan.notes
+
+
+def test_a_lost_arm_whose_campaign_has_no_safe_problem_source_is_skipped_with_a_loud_note(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """git-scicomp is not a RENDERED_TRACKS campaign and not llrblind: a fallback env is not enough,
+    since nothing here knows how to render its problems from scratch -- stays skipped, loudly."""
+    arm = "git-scicomp-qwen38-c-nolaunch"
+    runs = no_launch_run(tmp_path, "700002", arm)
+    monkeypatch.setattr(owed, "queued_arms", set)
+    monkeypatch.setattr(owed.remaining_kernels, "roster", lambda tag, opt: ["a", "b"])
+    monkeypatch.setattr(owed, "fallback_env", lambda identity, opt: setup_env(identity))
+    plan = owed.gather("qwen38", runs, str(REPO), owed.Selection(setups=frozenset({arm})), 1, 1, set())
+    assert plan.owed == []
+    assert any(
+        arm in note and "no safe problem source for campaign git-scicomp" in note and "2 kernels owed" in note
+        for note in plan.notes
+    ), plan.notes
+
+
+def test_a_model_mismatched_source_is_skipped_with_a_note(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    arm = "cpf-llr-focus40-oss120b-c-modelcheck"
+    runs = model_mismatch_run(tmp_path, "700003", arm, "oss120b")
+    monkeypatch.setattr(owed, "queued_arms", set)
+    monkeypatch.setattr(owed.remaining_kernels, "roster", lambda tag, opt: ["a"])
+    plan = owed.gather("qwen38", runs, str(REPO), owed.Selection(setups=frozenset({arm})), 1, 1, set())
+    assert plan.owed == []
+    assert any(arm in note and "does not match qwen38" in note for note in plan.notes), plan.notes
+
+
+def test_a_queued_arm_is_skipped_with_a_note(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    arm = "cpf-llr-focus40-qwen38-c-queuedcheck"
+    runs = model_mismatch_run(tmp_path, "700004", arm, "qwen38")
+    monkeypatch.setattr(owed, "queued_arms", lambda: {arm})
+    monkeypatch.setattr(owed.remaining_kernels, "roster", lambda tag, opt: ["a"])
+    plan = owed.gather("qwen38", runs, str(REPO), owed.Selection(setups=frozenset({arm})), 1, 1, set())
+    assert plan.owed == []
+    assert any(arm in note and "queued or running" in note for note in plan.notes), plan.notes
+
+
+def test_a_lost_rendered_tracks_arm_falls_back_to_its_own_env_and_a_placeholder_for_rerender(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cpf-llr-focus40 is a RENDERED_TRACKS campaign: gather() seeds a placeholder (rerender() -- the
+    SAME pass every one of its setups already gets -- supplies the real task text), but the SETUP
+    itself (arm, commit, budget) is built from the fallback env right here."""
+    arm = "cpf-llr-focus40-qwen38-c-nolaunch"
+    runs = no_launch_run(tmp_path, "700005", arm)
+    monkeypatch.setattr(owed, "queued_arms", set)
+    monkeypatch.setattr(owed.remaining_kernels, "roster", lambda tag, opt: ["argmax_with_index"])
+    fallback = setup_env(arm, LANGUAGE="c", HPCAGENT_BENCH_RECORD_DEVICE="cpu", HPCAGENT_BENCH_RECORD_PACKET="")
+    monkeypatch.setattr(owed, "fallback_env", lambda identity, opt: fallback)
+    plan = owed.gather("qwen38", runs, str(REPO), owed.Selection(setups=frozenset({arm})), 1, 1, set())
+    assert len(plan.owed) == 1
+    item = plan.owed[0]
+    assert item.setup.arm == f"{arm}-clean"
+    assert item.setup.value("HPCAGENT_BENCH_RECORD_COMMIT") == owed.checkout_commit(str(REPO))
+    assert (item.setup.value("AGENT_MAX_TOKENS"), item.setup.value("AGENT_TIMEOUT_SECONDS")) == ("12000000", "14400")
+    assert item.problem == {"kernel": "loop_level_reasoning/argmax_with_index/argmax_with_index"}, "a placeholder only"
+    final = owed.rerender(plan, str(REPO), sys.executable)
+    assert final.owed[0].problem["kernel"] == item.problem["kernel"]
+    assert final.owed[0].problem["task"], "rerender() renders the real task text for a RENDERED_TRACKS setup"
+
+
+def test_a_lost_llrblind_arm_falls_back_to_its_own_env_and_renders_its_problems_now(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """llrblind is not a RENDERED_TRACKS campaign, so rerender() never touches it: with no old row
+    left to reuse, gather() itself must render the real task text -- there is no later pass that would."""
+    arm = "llrblind-cmp-qwen38-c-nolaunch"
+    runs = no_launch_run(tmp_path, "700006", arm)
+    monkeypatch.setattr(owed, "queued_arms", set)
+    monkeypatch.setattr(owed.remaining_kernels, "roster", lambda tag, opt: ["argmax_with_index"])
+    fallback = setup_env(
+        arm, LANGUAGE="c", HPCAGENT_BENCH_RECORD_DEVICE="cpu", HPCAGENT_BENCH_RECORD_PACKET="no-score-tool"
+    )
+    monkeypatch.setattr(owed, "fallback_env", lambda identity, opt: fallback)
+    plan = owed.gather(
+        "qwen38",
+        runs,
+        str(REPO),
+        owed.Selection(experiments=frozenset({"llr-focus40-blind"}), setups=frozenset({arm})),
+        1,
+        1,
+        set(),
+    )
+    assert len(plan.owed) == 1
+    item = plan.owed[0]
+    assert item.setup.arm == f"{arm}-clean"
+    assert item.problem["kernel"] == "loop_level_reasoning/argmax_with_index/argmax_with_index"
+    assert item.problem.get("task"), "llrblind's fallback renders the real task text itself"
+    # rerender() must be a no-op for it (campaign not in RENDERED_TRACKS): the same text survives.
+    final = owed.rerender(plan, str(REPO), sys.executable)
+    assert final.owed[0].problem is item.problem
