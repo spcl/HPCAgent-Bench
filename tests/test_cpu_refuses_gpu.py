@@ -18,6 +18,7 @@ Two layers, tested apart because they fail apart:
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -161,11 +162,10 @@ def fake_runtime(tmp_path: pathlib.Path) -> pathlib.Path:
     source = shared / "runtime.c"
     source.write_text("int gsum_run(void) { return 0; }\n")
     library = shared / FAKE_RUNTIME
-    subprocess.run(
-        [os.environ.get("CC", "cc"), "-shared", "-fPIC", "-o", str(library), str(source)],
-        check=True,
-        capture_output=True,
-    )
+    names = [os.environ.get("CC", ""), "cc", "gcc", "clang"]
+    compiler = next((found for found in (shutil.which(name) for name in names if name) if found), "")
+    assert compiler, f"no C compiler on PATH ({names}); this image grades C submissions, so it has one"
+    subprocess.run([compiler, "-shared", "-fPIC", "-o", str(library), str(source)], check=True, capture_output=True)
     return library
 
 
