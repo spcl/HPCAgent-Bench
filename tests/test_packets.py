@@ -87,7 +87,7 @@ def test_resolve_lang_skills_stages_every_shipped_page_but_a_packet_tools_own_or
     image or topology named, nothing else narrows it (packets.applies_to)."""
     resolved = packets.resolve("lang-skills", "", multinode=True)
     assert resolved.key == "lang-skills"
-    assert resolved.label == "All Skill Pages"
+    assert resolved.label == "Language Skill Packet"
     shipped = sorted(p.name for p in packets.SKILLS_DIR.iterdir() if p.is_dir())
     applicable = [page for page in shipped if packets.applies_to(page, "", None, True)]
     assert list(resolved.skills) == [page for page in applicable if page not in packets.tool_pages()]

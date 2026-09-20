@@ -23,7 +23,7 @@ import pandas as pd
 import pytest
 from PIL import Image
 
-from hpcagent_bench import experiment_tags
+from hpcagent_bench import experiment_tags, packets
 from hpcagent_bench.harness import efficacy
 from hpcagent_bench.stats import palette, score_rule
 from hpcagent_bench.stats import style as plotstyle
@@ -404,7 +404,7 @@ def test_y_is_the_paired_token_cost_ratio_with_one_at_the_control() -> None:
     fig, ax = plt.subplots()
     try:
         efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), "skills")
-        assert "Token-Cost" in ax.get_ylabel()
+        assert "Token Cost" in ax.get_ylabel()
         assert ax.get_yscale() == "log"
         assert any(line.get_ydata()[0] == pytest.approx(1.0) for line in ax.lines if len(set(line.get_ydata())) == 1)
     finally:
@@ -442,14 +442,16 @@ def test_a_marks_significance_superscript_reads_off_the_corrected_verdict_per_ax
     """The gate is the VERDICT, per axis: a raw p that was never corrected, and a pairing too small
     for any test, both draw NO superscript. Every mark is filled regardless -- only the control is
     ever hollow (:mod:`hpcagent_bench.stats.figures.efficacy`'s own module docstring); significance
-    is the label's own ``*``/DAGGER suffix instead."""
+    is the label's own ``*``/``+`` suffix instead."""
     import matplotlib.pyplot as plt
 
     def leg_labels_of(stats: pd.DataFrame) -> list[str]:
         fig, ax = plt.subplots()
         try:
             efficacy_figures.draw_panel(ax, one_arm_raw(), stats, "skills")
-            return [text.get_text() for text in ax.texts]
+            # The origin's own "No Skill Packet" is a label too; it names the reference, not a mark.
+            control = packets.control_label(["skills"])
+            return [text.get_text() for text in ax.texts if text.get_text() != control]
         finally:
             plt.close(fig)
 
@@ -729,14 +731,39 @@ def test_the_interval_note_is_fixed_text_and_does_not_name_the_estimator() -> No
     assert note == efficacy_figures.interval_note("Speed-up"), "fixed text, not sample-size-chosen"
 
 
-def test_the_figure_key_carries_one_interval_note_per_axis_and_no_significance_rule() -> None:
-    """Both intervals reach the reader in the figure's ONE key. The significance rule does not: a
-    legend names what is DRAWN, and how to read a superscript is a caption sentence."""
+def test_the_figure_key_carries_one_interval_note_per_axis() -> None:
+    """Both intervals reach the reader in the figure's ONE key."""
     handles = efficacy_figures.legend_handles("cpfsrc", ["qwen38"], ["cpfsrc"])
     labels = [h.get_label() for h in handles]
-    assert efficacy_figures.interval_note("Speed-up") in labels, labels
-    assert efficacy_figures.interval_note("Token cost") in labels, labels
-    assert not [line for line in labels if efficacy_figures.SCORE_SIG_MARK in line and "Significant" in line], labels
+    assert efficacy_figures.interval_note("Speed-Up") in labels, labels
+    assert efficacy_figures.interval_note("Token Cost") in labels, labels
+
+
+@pytest.mark.parametrize(
+    ("symbols", "wanted"),
+    [
+        ((False, False), []),
+        ((True, False), [efficacy_figures.SCORE_SIG_LABEL]),
+        ((False, True), [efficacy_figures.COST_SIG_LABEL]),
+        ((True, True), [efficacy_figures.SCORE_SIG_LABEL, efficacy_figures.COST_SIG_LABEL]),
+    ],
+)
+def test_the_key_explains_a_superscript_exactly_when_the_panel_drew_one(
+    symbols: tuple[bool, bool], wanted: list[str]
+) -> None:
+    """A reader meeting ``*`` beside a mark has to be able to look it up (user, 2026-09-20). A row
+    for a symbol NO mark wears is the opposite problem: a lookup made for nothing."""
+    labels = [h.get_label() for h in efficacy_figures.legend_handles("cpfsrc", ["qwen38"], ["cpfsrc"], symbols=symbols)]
+    explained = [line for line in labels if "Significant" in line]
+    assert explained == [
+        f"{mark}  {text}"
+        for mark, text in zip(
+            (efficacy_figures.SCORE_SIG_MARK, efficacy_figures.COST_SIG_MARK),
+            (efficacy_figures.SCORE_SIG_LABEL, efficacy_figures.COST_SIG_LABEL),
+            strict=True,
+        )
+        if text in wanted
+    ], explained
 
 
 def test_an_undelivered_kernel_still_counts_but_its_cross_only_draws_behind_show_cloud() -> None:
@@ -825,7 +852,8 @@ def test_no_two_arm_labels_overprint_each_other_however_close_the_arms_land() ->
 
         notes = [text for text in ax.texts if isinstance(text, Annotation)]
         boxes = [tuple(note.get_window_extent(renderer).extents) for note in notes]
-        assert len(boxes) == 6
+        # Six arms, plus the origin's own "No Skill Packet", which has to clear them too.
+        assert len(boxes) == 7
         for index, box in enumerate(boxes):
             for other in boxes[index + 1 :]:
                 assert not efficacy_figures.boxes_touch(box, other), notes[index].get_text()
@@ -1318,6 +1346,10 @@ def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_aske
         title="",
         out=tmp_path / "f.pdf",
         table=tmp_path / "f.csv",
+        channels="model-packet",
+        mode="paired",
+        dots=None,
+        dots_row_height=2.3,
     )
     plot.figure_from_pairs(args, efficacy_figures.DEFAULT_CONFIG)
     assert drawn == pytest.approx([by_policy["median"]]), (drawn, by_policy)

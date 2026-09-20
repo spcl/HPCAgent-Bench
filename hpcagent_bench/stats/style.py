@@ -30,6 +30,12 @@ from matplotlib.ticker import FuncFormatter, LogLocator, MaxNLocator, NullFormat
 
 #: Ink, in decreasing emphasis. Text NEVER takes a series colour: a coloured mark beside a label
 #: carries the identity, and a coloured label just makes the text harder to read.
+#:
+#: EVERY PIECE OF TEXT IS :data:`INK`, near-black -- axis labels, tick numbers, point labels and
+#: legend entries alike. MUTED is for the marks that are not text: a neutral legend swatch, a tick
+#: dash, an interval whose colour would otherwise compete with the data. Grey text renders lighter
+#: still once a figure is reduced to a paper column, and the labels went illegible before the
+#: marks did.
 INK: str = "#1c1c1e"
 MUTED: str = "#6b6b70"
 RULE: str = "#d6d6da"
@@ -95,7 +101,7 @@ def apply() -> None:
             "figure.facecolor": "white",
             "axes.facecolor": "white",
             "axes.edgecolor": RULE,
-            "axes.labelcolor": MUTED,
+            "axes.labelcolor": INK,
             "axes.labelsize": LABEL_PT,
             "axes.titlesize": LABEL_PT + 1,
             "axes.titlecolor": INK,
@@ -103,8 +109,10 @@ def apply() -> None:
             "axes.axisbelow": True,  # data over guides, never the reverse
             "grid.color": RULE,
             "grid.linewidth": 0.6,
-            "xtick.color": MUTED,
+            "xtick.color": MUTED,  # the tick DASH stays a guide
             "ytick.color": MUTED,
+            "xtick.labelcolor": INK,  # its NUMBER is text, and text is ink
+            "ytick.labelcolor": INK,
             "xtick.labelsize": TICK_PT,
             "ytick.labelsize": TICK_PT,
             "legend.frameon": False,

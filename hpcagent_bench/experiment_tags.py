@@ -518,6 +518,36 @@ def language_name(language: str) -> str:
     return names("languages").get(key, str(language))
 
 
+#: What a GPU C arm actually delivered. Offload is device=gpu plus language=c and never a packet
+#: (:func:`hpcagent_bench.records.split_record_language`), so the recorded language of an arm that
+#: wrote ``#pragma omp target`` kernels is plain ``c`` -- and "C" beside "HIP" and "Triton" in a
+#: figure names the host language while hiding what was written. DISPLAY ONLY: the arm's identity,
+#: and so every pairing taken over it, is untouched.
+OFFLOAD_DELIVERY_NAME: str = "OpenMP Offload"
+
+#: The arm-name token those arms carry, for a caller holding a name and no device column.
+OFFLOAD_ARM_TOKEN: str = "-c-openmp-"
+
+
+def delivery_name(language: str, device: str = "") -> str:
+    """The display spelling of what an arm DELIVERED: its language, except a GPU C arm, which is an
+    OpenMP target offload (:data:`OFFLOAD_DELIVERY_NAME`)."""
+    key = canonical("languages", str(language).lower())
+    if key == "c" and str(device).lower() == "gpu":
+        return OFFLOAD_DELIVERY_NAME
+    return language_name(key)
+
+
+def arm_delivery_name(arm: str) -> str:
+    """:func:`delivery_name` for an arm read off its NAME. An extracted observations table carries
+    no ``device`` column, so :data:`OFFLOAD_ARM_TOKEN` -- the offload arms' own spelling -- is how a
+    figure grouping those rows sees device=gpu plus language=c."""
+    name = str(arm)
+    if OFFLOAD_ARM_TOKEN in f"-{name}-":
+        return OFFLOAD_DELIVERY_NAME
+    return language_name(language_of(name))
+
+
 def framework_name(framework: str) -> str:
     """The display spelling of a compiler or framework, through its alias.
 

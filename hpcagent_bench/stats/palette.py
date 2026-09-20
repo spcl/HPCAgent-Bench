@@ -42,6 +42,7 @@ raw-string label.
 """
 
 import colorsys
+import functools
 import logging
 import zlib
 from collections.abc import Iterable
@@ -267,6 +268,145 @@ def model_color(name: str) -> str:
 def model_colors(names: Iterable[str]) -> dict[str, str]:
     """``{model: colour}`` for one figure."""
     return warn_on_collision({n: model_color(n) for n in dict.fromkeys(names)}, "model")
+
+
+#: How many (model, language) pairs the combined ramp is generated for: every registered model
+#: against every registered delivery language, which is the worst case one paper can draw.
+COMBINED_SLOTS: int = 24
+
+#: The band a generated hue must sit in to read as a MARK on a white page: light enough not to be
+#: mistaken for the axis rule, dark enough to be seen, and chromatic enough not to read as the grey
+#: the control wears (:func:`control_color`).
+COMBINED_L: tuple[float, float] = (25.0, 85.0)
+COMBINED_MIN_CHROMA: float = 18.0
+
+#: Sampling density per sRGB channel for :func:`combined_ramp`. 18 is where the min separation of
+#: the generated 24 stops improving (measured: 10.9 at 18, 10.9 at 24) and the sweep stays cheap.
+COMBINED_GRID: int = 18
+
+
+def _oklab(rgb: "object") -> "object":
+    """sRGB (0-1, shape (n, 3)) as OKLab. Perceptual distance is what a categorical ramp has to
+    maximise, and sRGB distance is not it."""
+    import numpy as np
+
+    lin = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+    lms = np.cbrt(
+        np.clip(
+            lin
+            @ np.array(
+                [
+                    [0.4122214708, 0.5363325363, 0.0514459929],
+                    [0.2119034982, 0.6806995451, 0.1073969566],
+                    [0.0883024619, 0.2817188376, 0.6299787005],
+                ]
+            ).T,
+            0,
+            None,
+        )
+    )
+    return lms @ np.array(
+        [
+            [0.2104542553, 0.7936177850, -0.0040720468],
+            [1.9779984951, -2.4285922050, 0.4505937099],
+            [0.0259040371, 0.7827717662, -0.8086757660],
+        ]
+    ).T
+
+
+@functools.lru_cache(maxsize=1)
+def combined_ramp(slots: int = COMBINED_SLOTS) -> tuple[str, ...]:
+    """``slots`` hues, GENERATED rather than picked from a shipped palette.
+
+    A (model, language) pair is the entity a multi-language figure colours, and there are up to 24
+    of them -- three times what Okabe-Ito holds. Concatenating shipped palettes does not scale:
+    Okabe-Ito and Tol together contain near-duplicates (a teal pair 6.9 apart, a pink pair 7.0),
+    and the best 24-subset of matplotlib's qualitative maps separates by only 6.9, under the 8 a
+    colour-vision-deficient reader needs. Farthest-point selection over the sRGB gamut reaches
+    10.9 for the same 24, which is why this is computed instead of tabulated.
+
+    Deterministic: a fixed grid and a greedy seeded on the most chromatic candidate, so a slot
+    keeps its colour between runs and a published figure does not repaint itself.
+    """
+    import numpy as np
+
+    axis = np.linspace(0.0, 1.0, COMBINED_GRID)
+    rgb = np.array(np.meshgrid(axis, axis, axis)).reshape(3, -1).T
+    lab = _oklab(rgb) * 100.0
+    chroma = np.hypot(lab[:, 1], lab[:, 2])
+    inside = (lab[:, 0] > COMBINED_L[0]) & (lab[:, 0] < COMBINED_L[1]) & (chroma > COMBINED_MIN_CHROMA)
+    rgb, lab = rgb[inside], lab[inside]
+    chosen = [int(np.argmax(np.hypot(lab[:, 1], lab[:, 2])))]
+    far = np.linalg.norm(lab - lab[chosen[0]], axis=1)
+    while len(chosen) < slots:
+        nxt = int(np.argmax(far))
+        chosen.append(nxt)
+        far = np.minimum(far, np.linalg.norm(lab - lab[nxt], axis=1))
+    return tuple(matplotlib.colors.to_hex(rgb[i]) for i in chosen)
+
+
+def combined_slot(model: str, language: str) -> int:
+    """The ramp slot a (model, language) pair takes: MODEL-OUTER, so the pairs that share a figure
+    land far apart in the ramp.
+
+    Measured on the llr-gpu figure (three models x three languages): model-outer separates its nine
+    colours by 10.0, language-outer by 9.2. The ramp is ordered by farthest-point, so consecutive
+    slots are the CLOSEST pair in it -- putting a model's own languages consecutively is what keeps
+    the set a reader actually sees spread out."""
+    models, languages = order("models"), order("languages")
+    # A caller hands the LEG as it is drawn ("HIP", "Triton", "C"), which is a display name, not a
+    # registry tag. Lower-casing first is what makes it one; without it every leg of a model fell
+    # through to the same index and its languages all took ONE colour.
+    key = canonical("models", str(model).lower())
+    m = models.index(key) if key in models else len(models)
+    lang = canonical("languages", str(language).lower())
+    n = languages.index(lang) if lang in languages else len(languages)
+    return (m * len(languages) + n) % COMBINED_SLOTS
+
+
+def model_language_color(model: str, language: str) -> str:
+    """The colour a (model, language) pair wears, everywhere it is drawn."""
+    return combined_ramp()[combined_slot(model, language)]
+
+
+def model_language_colors(pairs: Iterable[tuple[str, str]]) -> dict[tuple[str, str], str]:
+    """``{(model, language): colour}`` for one figure."""
+    return {pair: model_language_color(*pair) for pair in dict.fromkeys(pairs)}
+
+
+def language_marker(language: str) -> str:
+    """The shape a delivery language wears, when a figure spends COLOUR on the model.
+
+    One shape per language in registry order, from the same marker table every other shape channel
+    draws from, so HIP is one shape wherever it appears."""
+    shapes = markers()
+    languages = order("languages")
+    key = canonical("languages", language)
+    slot = languages.index(key) if key in languages else len(languages)
+    return shapes[slot % len(shapes)]
+
+
+def language_markers(names: Iterable[str]) -> dict[str, str]:
+    """``{language: shape}`` for one figure."""
+    return {n: language_marker(n) for n in dict.fromkeys(names)}
+
+
+def min_separation(colours: Iterable[str]) -> float:
+    """The smallest perceptual gap in a set of hues, OKLab distance x100.
+
+    What a figure has to clear, not what the whole ramp clears: a reader only ever matches the
+    colours in ONE legend, so a pair that never shares a figure may sit close."""
+    import itertools
+
+    import numpy as np
+
+    values = list(colours)
+    if len(values) < 2:
+        return float("inf")
+    if len(set(values)) < len(values):
+        return 0.0  # two entities share a hue: worse than any small separation
+    lab = _oklab(np.array([matplotlib.colors.to_rgb(c) for c in values])) * 100.0
+    return float(min(np.linalg.norm(lab[i] - lab[j]) for i, j in itertools.combinations(range(len(lab)), 2)))
 
 
 def harness_color(name: str) -> str:

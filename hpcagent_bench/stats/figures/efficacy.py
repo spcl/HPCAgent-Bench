@@ -59,7 +59,8 @@ function's ``config`` argument) rather than a magic number inside a function.
 import dataclasses
 import math
 import pathlib
-from collections.abc import Sequence
+import textwrap
+from collections.abc import Callable, Sequence
 from typing import Literal
 
 import numpy as np
@@ -88,18 +89,27 @@ class FigureConfig:
     """
 
     #: Axis tick label size, points.
-    tick_pt: float = 9.5
-    #: Axis (X/Y) label size, points.
-    label_pt: float = 10.5
+    tick_pt: float = 12.0
+    #: Axis (X/Y) label size, points. Deliberately the largest type in the panel: the axes are what
+    #: a reader has to know BEFORE any mark means anything, and they are read once, from further
+    #: away than the tick numbers.
+    label_pt: float = 15.5
     #: A joined row's small per-panel subtitle, and :func:`figure_one`'s own optional ``title``.
-    subtitle_pt: float = 9.0
+    subtitle_pt: float = 11.0
+    #: A drawn point's own label (its leg, plus any significance superscript). Its own knob rather
+    #: than the subtitle's: a panel title and a mark's name are read at different distances.
+    point_pt: float = 11.0
     #: Legend entry text size, points.
-    legend_pt: float = 8.5
+    legend_pt: float = 10.5
     #: The legend's column count ceiling (:func:`~hpcagent_bench.stats.style.legend_below` wraps a
     #: row that does not fit the canvas onto fewer columns, never more than this).
     legend_ncol: int = 4
     #: A summary mark's own size (points^2, matplotlib's ``s=``).
     mark_size: float = 90.0
+    #: How far a point's label sits from its mark, in points (:func:`label_places` lays the
+    #: candidate places out around it at this radius). SMALL: a label further from its mark than
+    #: from its neighbour's is a label a reader has to guess the owner of.
+    label_offset_pt: float = 9.0
     #: The TOKEN-COST interval's line style. Dashed, so the two axes' intervals cannot be read as
     #: one quantity: they are a speed-up and a spend, on their own scales (SC15 Rule 4). The
     #: speed-up interval stays solid.
@@ -126,6 +136,16 @@ class FigureConfig:
     #: second reference.
     minor_grid_width: float = 0.35
     minor_grid_color: str = "#e8e8ea"
+    #: ABSOLUTE panels only (:func:`draw_arm_pair`): join an arm to its own no-packet twin with a
+    #: faint segment. It is not a trend line -- both ends are measurements of the same arm, and the
+    #: segment IS the intervention's displacement, the quantity a paired panel draws as one mark.
+    link_pairs: bool = True
+    link_width: float = 0.9
+    link_alpha: float = 0.35
+    #: Dot-row figures only (:func:`draw_measure_row`): how far either side of its category's own
+    #: position each of the two arms is drawn, in category units. Half of it is the gap between the
+    #: pair; 0.5 would put one pair's mark on top of the next pair's.
+    dodge: float = 0.16
 
 
 #: The default a caller draws with unless it hands a replacement in.
@@ -272,7 +292,68 @@ def reduce_pair(
     )
 
 
-def token_note(series: Series) -> str:
+@dataclasses.dataclass(frozen=True, slots=True)
+class ArmPoint:
+    """ONE ARM's own position on an absolute panel: its geomean speed-up over the campaign's
+    BASELINE as ``log2(ratio)``, its geomean token cost as a COUNT, each with its 95% log-t
+    interval."""
+
+    x: float
+    x_low: float
+    x_high: float
+    y: float
+    y_low: float
+    y_high: float
+    kernels: int
+    token_kernels: int
+
+
+def arm_point(speedup: "pd.Series", tokens: "pd.Series", priced: "np.ndarray", kernels: int) -> ArmPoint:
+    """One arm's geomean speed-up and geomean token count, each with its interval. ``priced``
+    selects the kernels whose token total exists on BOTH sides, so the two arms of a pair are
+    costed over one population."""
+    speed = summary.geomean_ci(speedup.to_numpy(dtype=float))
+    spend = summary.geomean_ci(tokens.to_numpy(dtype=float)[priced])
+    return ArmPoint(
+        x=summary.log2_change(speed.point),
+        x_low=summary.log2_change(speed.low),
+        x_high=summary.log2_change(speed.high),
+        y=spend.point,
+        y_low=spend.low,
+        y_high=spend.high,
+        kernels=kernels,
+        token_kernels=int(priced.sum()),
+    )
+
+
+def arm_points(
+    control: pd.DataFrame, treated: pd.DataFrame, repeats: population.RepeatPolicy = "latest"
+) -> tuple[ArmPoint, ArmPoint] | None:
+    """``(control, treated)`` as the two points an ABSOLUTE panel draws: where each arm sits against
+    the CAMPAIGN BASELINE, not where one sits against the other.
+
+    Both are taken over the kernels the two arms SHARE (:func:`paired_kernels`), so the pair is
+    comparable and the displacement between the two points is EXACTLY the single mark
+    :func:`reduce_pair` draws on a paired panel -- a geomean of ratios is the ratio of the geomeans.
+    The absolute panel is not a second statistic; it is the same one, read absolutely, which is the
+    reading "HIP reached 3.2x" needs and a ratio-only panel cannot give.
+    """
+    paired = paired_kernels(control, treated, repeats)
+    if paired.empty:
+        return None
+    control_tokens = paired.control_tokens.to_numpy(dtype=float)
+    treated_tokens = paired.treated_tokens.to_numpy(dtype=float)
+    priced = np.isfinite(control_tokens) & (control_tokens > 0.0) & np.isfinite(treated_tokens) & (treated_tokens > 0.0)
+    if not priced.any():
+        return None
+    kernels = len(paired)
+    return (
+        arm_point(paired.control_speedup, paired.control_tokens, priced, kernels),
+        arm_point(paired.treated_speedup, paired.treated_tokens, priced, kernels),
+    )
+
+
+def token_note(series: "Series | ArmPoint") -> str:
     """`` (tokens n=19/38)`` when the token leg is over fewer kernels than the speed-up leg, else ""
     -- so a mark whose two coordinates rest on different populations says so on the figure."""
     return f" (tokens n={series.token_kernels}/{series.kernels})" if series.token_kernels < series.kernels else ""
@@ -284,6 +365,17 @@ def ratio_tick(value: float, position: int = 0) -> str:
     every other speed-up/ratio axis in this repo, so a ratio below 1 never prints as a decimal."""
     del position
     return speedup_tick_label(value)
+
+
+def token_tick(value: float, position: int = 0) -> str:
+    """An ABSOLUTE token count on a log axis, spelled the way a person says it: ``30k``, ``300k``,
+    ``2M``. A raw ``300000`` costs a reader a digit count per tick."""
+    del position
+    if value >= 1e6:
+        return f"{value / 1e6:g}M"
+    if value >= 1e3:
+        return f"{value / 1e3:g}k"
+    return f"{value:g}"
 
 
 def log2_tick(value: float, position: int = 0) -> str:
@@ -319,32 +411,84 @@ def draw_series(
                 missing.x, missing.y, s=config.cloud_size, marker="x", color=colour, alpha=config.cloud_alpha,
                 linewidth=1.1, zorder=style.FILL_Z,
             )  # fmt: skip
-    if np.isfinite(series.x_low) and np.isfinite(series.x_high):
-        ax.hlines(
-            series.y, series.x_low, series.x_high, color=colour, linewidth=1.2, alpha=0.75, zorder=style.CONNECTOR_Z
-        )
-    if np.isfinite(series.y_low) and np.isfinite(series.y_high):
-        ax.vlines(
-            series.x, series.y_low, series.y_high, color=colour, linewidth=1.2, alpha=0.75,
-            linestyles=config.cost_linestyle, zorder=style.CONNECTOR_Z,
-        )  # fmt: skip
+    draw_interval_cross(
+        ax, series.x, series.y, (series.x_low, series.x_high, series.y_low, series.y_high), colour, config
+    )
     style.point_mark(ax, series.x, series.y, colour, shape, True, size=config.mark_size)
 
 
+def draw_interval_cross(ax: Axes, x: float, y: float, bounds: tuple[float, float, float, float], colour: str,
+                        config: FigureConfig) -> None:  # fmt: skip
+    """The crossed 95% interval one point wears: solid on the speed-up axis, dashed on the token
+    one (:data:`FigureConfig.cost_linestyle`), so the two cannot be read as one quantity."""
+    x_low, x_high, y_low, y_high = bounds
+    if np.isfinite(x_low) and np.isfinite(x_high):
+        ax.hlines(y, x_low, x_high, color=colour, linewidth=1.2, alpha=0.75, zorder=style.CONNECTOR_Z)
+    if np.isfinite(y_low) and np.isfinite(y_high):
+        ax.vlines(
+            x, y_low, y_high, color=colour, linewidth=1.2, alpha=0.75, linestyles=config.cost_linestyle,
+            zorder=style.CONNECTOR_Z,
+        )  # fmt: skip
+
+
+def draw_arm_pair(
+    ax: Axes,
+    control_point: ArmPoint,
+    treated_point: ArmPoint,
+    colour: str,
+    shape: str,
+    config: FigureConfig = DEFAULT_CONFIG,
+) -> None:
+    """One (model, leg)'s TWO marks on an absolute panel: the no-packet arm HOLLOW, the packet arm
+    FILLED, one colour and one shape between them, joined by a faint segment
+    (:data:`FigureConfig.link_pairs`).
+
+    Hollow keeps exactly the meaning it has on a paired panel -- no packet -- and the segment is not
+    a trend: both ends are measurements of the same arm, and what it spans IS the single mark a
+    paired panel draws.
+    """
+    if config.link_pairs:
+        ax.plot(
+            [control_point.x, treated_point.x], [control_point.y, treated_point.y], color=colour,
+            linewidth=config.link_width, alpha=config.link_alpha, zorder=style.CONNECTOR_Z - 0.5,
+        )  # fmt: skip
+    for point, filled in ((control_point, False), (treated_point, True)):
+        bounds = (point.x_low, point.x_high, point.y_low, point.y_high)
+        draw_interval_cross(ax, point.x, point.y, bounds, colour, config)
+        style.point_mark(ax, point.x, point.y, colour, shape, filled, size=config.mark_size)
+
+
 def leg_labels(frame: pd.DataFrame) -> pd.Series:
-    """``frame``'s per-arm LEG label: the language, unless ``frame`` already carries a resolved
-    ``leg`` (an explicit pair list can hold several legs in one language)."""
+    """``frame``'s per-arm LEG label: what the arm DELIVERED, unless ``frame`` already carries a
+    resolved ``leg`` (an explicit pair list can hold several legs in one language).
+
+    Read off the ARM name wherever there is one. An extracted observations table records a GPU C
+    offload arm's language as plain ``c``, so "C" next to "HIP" and "Triton" names the host
+    language and hides the OpenMP target kernels the agent actually wrote
+    (:func:`~hpcagent_bench.experiment_tags.arm_delivery_name`).
+    """
     if "leg" in frame:
         return frame["leg"].astype(str)
+    if "arm" in frame:
+        return frame["arm"].astype(str).map(experiment_tags.arm_delivery_name)
     return frame["language"].astype(str).map(experiment_tags.language_name)
 
 
-#: One mark's significance superscript, per axis -- ``*`` for the SPEED-UP axis, DAGGER for the
-#: TOKEN-COST one (:data:`significance_note`'s legend text names both). Concatenated onto the
-#: mark's own label, never onto the mark itself: a symbol drawn on top of a small shape is easy to
-#: miss, one beside a label a reader is already reading is not.
+#: One mark's significance superscript, per axis -- ``*`` for the SPEED-UP axis, ``+`` for the
+#: TOKEN-COST one. Concatenated onto the mark's own label, never onto the mark itself: a symbol
+#: drawn on top of a small shape is easy to miss, one beside a label a reader is already reading is
+#: not. ``+`` rather than a dagger: the dagger is a footnote mark in running text and half the
+#: readers of a printed panel read it as one.
 SCORE_SIG_MARK: str = "*"
-COST_SIG_MARK: str = "\N{DAGGER}"
+COST_SIG_MARK: str = "+"
+
+#: What each superscript MEANS, as the legend spells it. Both name a CHANGE, because both
+#: Benjamini-Hochberg tests behind them are on the packet's effect -- the arm against its own
+#: no-packet twin -- and never on the arm's distance from the campaign's baseline, which nothing
+#: here tests. One row each, symbol first: a reader looking a symbol up wants it at the start of
+#: the row, not inside a sentence.
+SCORE_SIG_LABEL: str = "Speed-Up Change Significant"
+COST_SIG_LABEL: str = "Token Cost Change Significant"
 
 
 def axis_significance(stats: pd.DataFrame) -> dict[tuple[str, str], tuple[bool, bool]]:
@@ -381,12 +525,33 @@ def interval_note(statistic: str) -> str:
     return f"{statistic}, 95% CI"
 
 
-#: The legend's ONE line spelling the significance rule (:data:`SCORE_SIG_MARK`/
-#: :data:`COST_SIG_MARK`) -- fixed text, so it dedupes across a joined row's panels
-#: (:func:`figure_row`) the same way :func:`interval_note` does. No per-panel test count: the
-#: family size differs panel to panel and a caller after the exact number already has it from
-#: ``report()``'s own printed line or the emitted stats CSV.
-SIGNIFICANCE_NOTE: str = f"{SCORE_SIG_MARK} Speed-Up, {COST_SIG_MARK} Token-Cost Significant (BH-Adjusted p < 0.05)"
+def drawn_symbols(stats: pd.DataFrame) -> tuple[bool, bool]:
+    """Whether ANY mark of ``stats`` wears each superscript. The legend explains a symbol only when
+    the panel draws one: a row for a mark nothing carries is a lookup a reader makes for nothing."""
+    if stats.empty:
+        return False, False
+    flags = list(axis_significance(stats).values())
+    return any(score for score, _ in flags), any(cost for _, cost in flags)
+
+
+def significance_legend_marks(score_sig: bool, cost_sig: bool) -> list[Line2D]:
+    """One legend row per superscript the panel actually drew: the symbol itself as the swatch,
+    then what it means (:data:`SCORE_SIG_LABEL`/:data:`COST_SIG_LABEL`). Fixed text, so a joined
+    row's panels collapse their copies into one shared entry each (:func:`figure_row`).
+
+    No test count and no threshold: the family size differs panel to panel, the threshold is one
+    sentence of caption, and a caller after either already has it from ``report()``'s printed line
+    or the emitted stats CSV.
+    """
+    rows = ((score_sig, SCORE_SIG_MARK, SCORE_SIG_LABEL), (cost_sig, COST_SIG_MARK, COST_SIG_LABEL))
+    return [
+        # The symbol goes in the TEXT, not in the swatch: a mathtext swatch renders the asterisk as
+        # a six-pointed star, and a reader matching it against the plain one beside a mark does not
+        # find it.
+        Line2D([], [], linestyle="none", marker="none", label=f"{symbol}  {text}")
+        for drawn, symbol, text in rows
+        if drawn
+    ]
 
 
 def model_legend_marks(models: Sequence[str]) -> list[Line2D]:
@@ -428,13 +593,38 @@ def packet_legend_mark(treatment: str) -> Line2D:
     )  # fmt: skip
 
 
-def legend_tail(show_cloud: bool) -> list[Line2D]:
-    """The rows every panel's legend ends on: the cloud's cross (only with ``show_cloud``) and the
-    two interval notes, every one FIXED TEXT (:func:`interval_note`) so a joined row's per-panel
-    legends (:func:`figure_row`) collapse the repeats into one shared entry each.
+def pair_legend_handles(
+    treatment: str,
+    pairs: Sequence[tuple[str, str]],
+    control_name: str = "",
+    show_cloud: bool = False,
+    symbols: tuple[bool, bool] = (False, False),
+) -> list[Line2D]:
+    """The key for ``pair-packet``: one swatch per (model, language) pair, which is what colour
+    identifies there, plus the packet's own shape and the control."""
+    handles = [
+        Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="none",
+            color=palette.model_language_color(model, leg),
+            markersize=7,
+            label=f"{experiment_tags.model_name(model)} / {leg}",
+        )  # fmt: skip
+        for model, leg in pairs
+    ]
+    handles.append(packet_legend_mark(treatment))
+    handles.append(control_legend_mark([treatment], control_name))
+    return handles + legend_tail(show_cloud, symbols)
 
-    The significance rule is NOT here. A legend names what is drawn; how to read a superscript is a
-    sentence for the caption, and as a legend row it was the densest line in the figure."""
+
+def legend_tail(show_cloud: bool, symbols: tuple[bool, bool] = (False, False)) -> list[Line2D]:
+    """The rows every panel's legend ends on: the cloud's cross (only with ``show_cloud``), the two
+    interval notes, and one row per significance superscript the panel actually drew
+    (``symbols``, from :func:`drawn_symbols`). Every one is FIXED TEXT (:func:`interval_note`,
+    :func:`significance_legend_marks`) so a joined row's per-panel legends (:func:`figure_row`)
+    collapse the repeats into one shared entry each."""
     handles: list[Line2D] = []
     if show_cloud:
         handles.append(
@@ -443,17 +633,17 @@ def legend_tail(show_cloud: bool) -> list[Line2D]:
             )  # fmt: skip
         )
     handles += [
-        Line2D([], [], linestyle="-", linewidth=1.3, color=style.MUTED, label=interval_note("Speed-up")),
+        Line2D([], [], linestyle="-", linewidth=1.3, color=style.MUTED, label=interval_note("Speed-Up")),
         Line2D(
             [],
             [],
             linestyle=DEFAULT_CONFIG.cost_linestyle,
             linewidth=1.3,
             color=style.MUTED,
-            label=interval_note("Token cost"),
+            label=interval_note("Token Cost"),
         ),  # fmt: skip
     ]
-    return handles
+    return handles + significance_legend_marks(*symbols)
 
 
 def legend_handles(
@@ -462,14 +652,15 @@ def legend_handles(
     control_over: Sequence[str],
     control_name: str = "",
     show_cloud: bool = False,
+    symbols: tuple[bool, bool] = (False, False),
 ) -> list[Line2D]:  # fmt: skip
     """The figure's one key: a MODEL is a colour, the PACKET is the one shape the whole panel wears
-    (:data:`SIGNIFICANCE_NOTE` explains the superscript)."""
+    (:func:`significance_legend_marks` explains the superscripts)."""
     handles = model_legend_marks(models) + [
         control_legend_mark(control_over, control_name),
         packet_legend_mark(treatment),
     ]
-    return handles + legend_tail(show_cloud)
+    return handles + legend_tail(show_cloud, symbols)
 
 
 def multi_legend_handles(
@@ -477,13 +668,14 @@ def multi_legend_handles(
     models: Sequence[str],
     control_name: str = "",
     show_cloud: bool = False,
+    symbols: tuple[bool, bool] = (False, False),
 ) -> list[Line2D]:
     """:func:`legend_handles` for a panel drawing SEVERAL packets against one control
     (:func:`draw_multi_panel`): a model is still one colour, but now every drawn packet gets its own
     shape row instead of the panel's single one."""
     handles = model_legend_marks(models) + [control_legend_mark(treatments, control_name)]
     handles += [packet_legend_mark(treatment) for treatment in treatments]
-    return handles + legend_tail(show_cloud)
+    return handles + legend_tail(show_cloud, symbols)
 
 
 def widen_x_axis(ax: Axes, config: FigureConfig) -> None:
@@ -551,34 +743,63 @@ def minor_log2_grid(ax: Axes, axis: Literal["x", "y"], config: FigureConfig) -> 
 #: own weights (:data:`~hpcagent_bench.stats.cost.CostModel.key` is not this module's to name) or to
 #: blank the X label where :func:`figure_row`'s ``shared_x_label`` draws it once for the whole row.
 DEFAULT_XLABEL: str = "Geomean Speed-Up"
-DEFAULT_YLABEL: str = "Token-Cost (x)"
+DEFAULT_YLABEL: str = "Token Cost (x)"
 
 
-def speedup_label(baseline: str = "") -> str:
-    """The X label, naming the denominator the ratio was taken against.
+#: The token-cost label of an ABSOLUTE panel, whose Y is a token COUNT and not a ratio.
+ABSOLUTE_YLABEL: str = "Token Cost"
 
-    "Geomean speed-up" alone does not say over WHAT, and the answer differs by track: Numba for the
-    loop-level kernels, auto-parallelised C for scientific computing. A reader of the git-scicomp
-    panel could not tell which formulation the control was."""
+
+def speedup_label(baseline: str = "", mode: str = "absolute", control_name: str = "") -> str:
+    """The speed-up axis label, naming the DENOMINATOR the ratio was taken against -- which is a
+    different arm in each mode, and the single thing most likely to be misread on this figure.
+
+    A PAIRED panel's speed-up is over the arm's own no-packet twin: "3.2x" there means the packet
+    made it 3.2x faster, not that it reached 3.2x. An ABSOLUTE panel's is over the campaign's
+    baseline, which differs by track -- Numba for the loop-level kernels, auto-parallelised C for
+    scientific computing. "Geomean Speed-Up" alone does not distinguish them, and a reader who
+    assumes the wrong one reads every mark wrong.
+    """
+    if mode != "absolute":
+        return f"{DEFAULT_XLABEL} Over {control_name}" if control_name else DEFAULT_XLABEL
     if not baseline:
         return DEFAULT_XLABEL
-    return f"{DEFAULT_XLABEL} over {experiment_tags.framework_name(baseline)}"
+    return f"{DEFAULT_XLABEL} Over {experiment_tags.framework_name(baseline)}"
 
 
-def cost_label(weights: tuple[float, float, float] | None = None, name: str = "") -> str:
-    """The Y label, naming the weights the cost was priced with.
+def cost_card_name(name: str) -> str:
+    """A cost card's KEY as a label word: ``billed`` -> ``Billed`` (:data:`~hpcagent_bench.stats.
+    style.INK`'s own module docstring carries this repo's Title Case rule for figure text)."""
+    return str(name).replace("-", " ").replace("_", " ").title()
+
+
+def cost_label(
+    weights: tuple[float, float, float] | None = None,
+    name: str = "",
+    mode: str = "absolute",
+    control_name: str = "",
+) -> str:
+    """The token-cost axis label, naming the weights the cost was priced with -- and, on a PAIRED
+    panel, the arm the ratio is over (:func:`speedup_label` has the reasoning).
 
     A token cost is meaningless without its weight vector: the same run is 35k, 47k or 154k tokens
-    under the three cards this repo ships, so the axis says which one it is."""
+    under the three cards this repo ships, so the axis says which one it is.
+    """
+    over = f" Over {control_name}" if mode != "absolute" and control_name else ""
     if weights is None:
-        return DEFAULT_YLABEL
+        return DEFAULT_YLABEL if mode != "absolute" else ABSOLUTE_YLABEL
     fresh, resent, output = weights
     spelled = ", ".join(f"{w:g}" for w in (fresh, resent, output))
-    return f"Token Cost, {name} ({spelled})" if name else f"Token Cost ({spelled})"
+    card = cost_card_name(name)
+    return f"Token Cost{over}, {card} ({spelled})" if card else f"Token Cost{over} ({spelled})"
 
 
 def style_panel(
-    ax: Axes, config: FigureConfig = DEFAULT_CONFIG, xlabel: str = DEFAULT_XLABEL, ylabel: str = DEFAULT_YLABEL
+    ax: Axes,
+    config: FigureConfig = DEFAULT_CONFIG,
+    xlabel: str = DEFAULT_XLABEL,
+    ylabel: str = DEFAULT_YLABEL,
+    control_name: str = "",
 ) -> None:
     """One SQUARE panel: the speed-up geomean on X as ``log2(ratio)`` (0 = no change, +1 = 2x, -1 =
     0.5x), ticks read back in ratios like every other speed-up axis in this repo
@@ -593,6 +814,14 @@ def style_panel(
     ax.axvline(0.0, color=style.REFERENCE, linewidth=1.0, zorder=1)
     ax.axhline(1.0, color=style.REFERENCE, linewidth=1.0, zorder=1)
     style.point_mark(ax, 0.0, 1.0, palette.control_color(), "o", False, size=config.mark_size)
+    if control_name:
+        # The origin is not "nothing" -- it is the arm WITHOUT the packet, which every mark on this
+        # panel is measured against. Named at the point itself, so a reader who never reaches the
+        # legend still knows what 1x, 1x means here.
+        ax.annotate(
+            control_name, (0.0, 1.0), textcoords="offset points", xytext=(config.label_offset_pt, 0.0),
+            fontsize=config.point_pt, color=style.INK, va="center", zorder=style.MARK_Z + 2.0,
+        )  # fmt: skip
     ax.set_yscale("log", base=2.0)
     if xlabel:
         ax.set_xlabel(xlabel, fontsize=config.label_pt)
@@ -614,6 +843,79 @@ def style_panel(
     style.despine(ax)
 
 
+def style_absolute_panel(
+    ax: Axes,
+    config: FigureConfig = DEFAULT_CONFIG,
+    xlabel: str = DEFAULT_XLABEL,
+    ylabel: str = ABSOLUTE_YLABEL,
+    control_name: str = "",
+) -> None:
+    """:func:`style_panel` for an ABSOLUTE panel, where each ARM is a point rather than each
+    comparison.
+
+    X is still the speed-up as ``log2(ratio)`` read back in ratios, but the reference at 0 is the
+    CAMPAIGN BASELINE -- 1x means "as fast as Numba", not "the packet changed nothing". Y is a token
+    COUNT on a base-10 log axis (a campaign spans 30k to 3M) with NO reference line: no number of
+    tokens is privileged. Nothing sits at the origin either, so ``control_name`` is not drawn there;
+    the no-packet arm is the HOLLOW mark of each pair (:func:`draw_arm_pair`) and the legend names
+    it.
+    """
+    del control_name
+    ax.axvline(0.0, color=style.REFERENCE, linewidth=1.0, zorder=1)
+    ax.set_yscale("log", base=10.0)
+    if xlabel:
+        ax.set_xlabel(xlabel, fontsize=config.label_pt)
+    if ylabel:
+        ax.set_ylabel(ylabel, fontsize=config.label_pt)
+    ax.tick_params(axis="both", labelsize=config.tick_pt)
+    style.value_axis(ax, "x")
+    style.value_axis(ax, "y", log_base=10.0)
+    ax.margins(x=config.margin, y=config.margin)
+    widen_x_axis(ax, config)
+    low, high = ax.get_xlim()
+    ax.xaxis.set_major_locator(MultipleLocator(x_tick_step(high - low, config.max_ticks)))
+    ax.xaxis.set_major_formatter(FuncFormatter(log2_tick))
+    ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 2.0, 5.0), numticks=20))
+    ax.yaxis.set_major_formatter(FuncFormatter(token_tick))
+    minor_log2_grid(ax, "x", config)
+    ax.set_box_aspect(1.0)
+    style.despine(ax)
+
+
+#: How a panel reads its two arms. ``paired`` draws ONE mark per (model, leg) -- the packet's own
+#: effect, with its control at the origin by construction, which is the form every significance
+#: test here is on. ``absolute`` draws BOTH arms where they sit against the campaign baseline and
+#: joins them, so a reader sees that Qwen-HIP reached 3.2x AND where it started; the displacement
+#: between the two is the paired panel's single mark.
+MODES: tuple[str, ...] = ("paired", "absolute")
+
+
+def style_for(mode: str) -> Callable[..., None]:
+    """The panel styler ``mode`` draws under."""
+    return style_absolute_panel if mode == "absolute" else style_panel
+
+
+def mode_ylabel(mode: str, ylabel: str) -> str:
+    """``ylabel``, but never a RATIO label on an absolute panel: a caller that left the default in
+    place would otherwise put "Token Cost (x)" over an axis of token counts."""
+    return ABSOLUTE_YLABEL if mode == "absolute" and ylabel == DEFAULT_YLABEL else ylabel
+
+
+#: How a panel spends its two channels. ``model-packet`` gives COLOUR to the model and SHAPE to the
+#: packet, which leaves shape carrying nothing on a panel that holds one packet. ``pair-packet``
+#: gives colour to the (model, language) PAIR -- the thing that actually varies when one packet is
+#: compared across delivery languages -- and keeps shape for the packet, so two packets can still
+#: share a panel.
+CHANNELS: tuple[str, ...] = ("model-packet", "pair-packet")
+
+
+def series_colour(model: str, leg: str, channels: str) -> str:
+    """The colour one mark wears under ``channels``."""
+    if channels == "pair-packet":
+        return palette.model_language_color(model, leg)
+    return palette.model_color(model)
+
+
 def draw_treatment_marks(
     ax: Axes,
     frame: pd.DataFrame,
@@ -623,6 +925,8 @@ def draw_treatment_marks(
     repeats: population.RepeatPolicy,
     show_cloud: bool,
     config: FigureConfig,
+    channels: str = "model-packet",
+    mode: str = "paired",
 ) -> set[str]:
     """Every (model, leg) mark ONE packet's already-tagged ``frame`` draws (``skills`` True/False
     for the two conditions) -- the loop :func:`draw_panel` and :func:`draw_multi_panel` share, so a
@@ -637,21 +941,31 @@ def draw_treatment_marks(
     significance = axis_significance(stats)
     drawn_models: set[str] = set()
     for (model, leg), pair in frame.assign(leg=leg_labels(frame)).groupby(["model", "leg"]):
-        series = reduce_pair(pair[~pair.skills], pair[pair.skills], repeats)
-        if series is None:
-            continue
+        colour = series_colour(str(model), str(leg), channels)
+        control, treated = pair[~pair.skills], pair[pair.skills]
+        if mode == "absolute":
+            points = arm_points(control, treated, repeats)
+            if points is None:
+                continue
+            draw_arm_pair(ax, points[0], points[1], colour, shape, config)
+            anchor, priced = (points[1].x, points[1].y), points[1]
+        else:
+            series = reduce_pair(control, treated, repeats)
+            if series is None:
+                continue
+            draw_series(ax, series, colour, shape, show_cloud, config)
+            anchor, priced = (series.x, series.y), series
         drawn_models.add(str(model))
-        draw_series(ax, series, palette.model_color(str(model)), shape, show_cloud, config)
         score_sig, cost_sig = significance.get((str(model), str(leg)), (False, False))
         suffix = significance_suffix(score_sig, cost_sig)
-        text = f"{label_prefix}{leg}{f' {suffix}' if suffix else ''}{token_note(series)}"
+        text = f"{label_prefix}{leg}{f' {suffix}' if suffix else ''}{token_note(priced)}"
         ax.annotate(
             text,
-            (series.x, series.y),
+            anchor,
             textcoords="offset points",
-            xytext=(13, 0),
-            fontsize=config.subtitle_pt,
-            color=style.MUTED,
+            xytext=(config.label_offset_pt, 0.0),
+            fontsize=config.point_pt,
+            color=style.INK,
             va="center",
             zorder=style.MARK_Z + 2.0,
         )
@@ -670,21 +984,41 @@ def draw_panel(
     config: FigureConfig = DEFAULT_CONFIG,
     xlabel: str = DEFAULT_XLABEL,
     ylabel: str = DEFAULT_YLABEL,
+    channels: str = "model-packet",
+    mode: str = "paired",
 ) -> list[Line2D]:
     """One comparison: every arm's summary mark (and, with ``show_cloud``, its paired cloud) on one
-    panel.
+    panel -- or, under ``mode="absolute"``, both of every arm's OWN positions against the campaign
+    baseline (:data:`MODES`).
 
     ``frame`` is the RAW tagged observations (one row per record, ``skills`` True/False for the two
     conditions) -- the per-kernel cloud needs the individual kernels, which an already-reduced table
     cannot give back. Grouped by (model, leg): a leg is the language, unless ``frame`` carries an
     explicit one (:func:`leg_labels`).
     """
+    dress = style_for(mode)
+    ylabel = mode_ylabel(mode, ylabel)
+    control_text = control_name or packets.control_label(list(control_over) or [treatment])
+    if frame.empty:
+        # A stub panel: the box and its axes, nothing plotted. Styling still runs so the empty
+        # slot is the same shape as its neighbours and the row does not re-lay out when it fills.
+        dress(ax, config, xlabel, ylabel, "")
+        return []
     drawn_models = draw_treatment_marks(
-        ax, frame, stats, palette.packet_marker(treatment), "", repeats, show_cloud, config
+        ax, frame, stats, palette.packet_marker(treatment), "", repeats, show_cloud, config, channels, mode
     )
-    style_panel(ax, config, xlabel, ylabel)
+    dress(ax, config, xlabel, ylabel, control_text)
+    symbols = drawn_symbols(stats)
+    if channels == "pair-packet":
+        pairs = sorted(
+            {
+                (str(m), str(leg))
+                for m, leg in frame.assign(leg=leg_labels(frame))[["model", "leg"]].itertuples(index=False)
+            }
+        )
+        return pair_legend_handles(treatment, pairs, control_text, show_cloud, symbols)
     return legend_handles(
-        treatment, sorted(drawn_models), list(control_over) or [treatment], control_name, show_cloud
+        treatment, sorted(drawn_models), list(control_over) or [treatment], control_text, show_cloud, symbols
     )  # fmt: skip
 
 
@@ -698,6 +1032,7 @@ def draw_multi_panel(
     config: FigureConfig = DEFAULT_CONFIG,
     xlabel: str = DEFAULT_XLABEL,
     ylabel: str = DEFAULT_YLABEL,
+    mode: str = "paired",
 ) -> list[Line2D]:
     """SEVERAL packets sharing one panel and one control, each its own SHAPE
     (:data:`palette.packet_marker`) with the mark's colour still the model's -- the whole-panel
@@ -714,33 +1049,41 @@ def draw_multi_panel(
     """
     drawn_models: set[str] = set()
     drawn_treatments: list[str] = []
+    symbols = (False, False)
     for treatment, frame in frames.items():
         if frame.empty:
             continue
         prefix = f"{experiment_tags.packet_name(treatment)} "
+        table = stats.get(treatment, pd.DataFrame())
         models = draw_treatment_marks(
-            ax, frame, stats.get(treatment, pd.DataFrame()), palette.packet_marker(treatment), prefix, repeats,
-            show_cloud, config,
+            ax, frame, table, palette.packet_marker(treatment), prefix, repeats, show_cloud, config,
+            "model-packet", mode,
         )  # fmt: skip
         if models:
             drawn_treatments.append(treatment)
         drawn_models |= models
-    style_panel(ax, config, xlabel, ylabel)
-    return multi_legend_handles(drawn_treatments, sorted(drawn_models), control_name, show_cloud)
+        symbols = tuple(a or b for a, b in zip(symbols, drawn_symbols(table), strict=True))
+    control_text = control_name or packets.control_label(drawn_treatments)
+    style_for(mode)(ax, config, xlabel, mode_ylabel(mode, ylabel), control_text)
+    return multi_legend_handles(drawn_treatments, sorted(drawn_models), control_text, show_cloud, symbols)
 
 
-#: A point label's candidate places around its mark, tried in order: (dx, dy) in points, then the
-#: horizontal and vertical alignment. Right of the mark first, where the label has always sat.
-LABEL_PLACES: tuple[tuple[float, float, str, str], ...] = (
-    (13.0, 0.0, "left", "center"),
-    (-13.0, 0.0, "right", "center"),
-    (0.0, 11.0, "center", "bottom"),
-    (0.0, -11.0, "center", "top"),
-    (13.0, 11.0, "left", "bottom"),
-    (-13.0, 11.0, "right", "bottom"),
-    (13.0, -11.0, "left", "top"),
-    (-13.0, -11.0, "right", "top"),
-)
+def label_places(offset: float = DEFAULT_CONFIG.label_offset_pt) -> tuple[tuple[float, float, str, str], ...]:
+    """A point label's candidate places around its mark, tried in order: (dx, dy) in points, then
+    the horizontal and vertical alignment. Right of the mark first, where the label has always sat;
+    ``offset`` is :data:`FigureConfig.label_offset_pt`, so moving a label closer to its mark is one
+    field and not eight constants."""
+    up = offset * 0.85  # a label above its mark clears it sooner than one beside it
+    return (
+        (offset, 0.0, "left", "center"),
+        (-offset, 0.0, "right", "center"),
+        (0.0, up, "center", "bottom"),
+        (0.0, -up, "center", "top"),
+        (offset, up, "left", "bottom"),
+        (-offset, up, "right", "bottom"),
+        (offset, -up, "left", "top"),
+        (-offset, -up, "right", "top"),
+    )
 
 
 def boxes_touch(a: tuple[float, ...], b: tuple[float, ...]) -> bool:
@@ -748,9 +1091,9 @@ def boxes_touch(a: tuple[float, ...], b: tuple[float, ...]) -> bool:
     return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
 
-def untangle_labels(ax: Axes) -> None:
+def untangle_labels(ax: Axes, config: FigureConfig = DEFAULT_CONFIG) -> None:
     """Move each point label (an :class:`~matplotlib.text.Annotation`) to the first of
-    :data:`LABEL_PLACES` where its RENDERED text touches no mark and no label settled before it; a
+    :func:`label_places` where its RENDERED text touches no mark and no label settled before it; a
     label with every place taken keeps the first. Call once the layout is final: a label's offset is
     in points, so a place clear before ``subplots_adjust`` need not be clear after it."""
     fig = ax.figure
@@ -768,7 +1111,8 @@ def untangle_labels(ax: Axes) -> None:
                 taken.append((px - half, py - half, px + half, py + half))
     for note in [text for text in ax.texts if isinstance(text, Annotation)]:
         box: tuple[float, ...] = ()
-        for dx, dy, ha, va in (*LABEL_PLACES, LABEL_PLACES[0]):
+        places = label_places(config.label_offset_pt)
+        for dx, dy, ha, va in (*places, places[0]):
             note.xyann = (dx, dy)
             note.set_horizontalalignment(ha)
             note.set_verticalalignment(va)
@@ -857,6 +1201,8 @@ def figure_one(
     config: FigureConfig = DEFAULT_CONFIG,
     xlabel: str = DEFAULT_XLABEL,
     ylabel: str = DEFAULT_YLABEL,
+    channels: str = "model-packet",
+    mode: str = "paired",
 ) -> pathlib.Path:
     """ONE comparison: its square panel and its own legend. NO whole-figure title -- a paper's
     caption is that; ``title``, blank by default, draws a small subtitle INSIDE the panel, the same
@@ -867,7 +1213,7 @@ def figure_one(
     fig.set_dpi(style.SAVE_DPI)  # measure the legend's fit at the dpi save() actually writes
     handles = draw_panel(
         ax, frame, stats, treatment, control_name=control_name, repeats=repeats, show_cloud=show_cloud,
-        config=config, xlabel=xlabel, ylabel=ylabel,
+        config=config, xlabel=xlabel, ylabel=ylabel, channels=channels, mode=mode,
     )  # fmt: skip
     fig.subplots_adjust(**PANEL_MARGINS)
     style.legend_below(fig, handles, ncol=config.legend_ncol, y=0.01, fontsize=config.legend_pt)
@@ -876,7 +1222,7 @@ def figure_one(
             0.5, 0.98, title, transform=ax.transAxes, ha="center", va="top", fontsize=config.subtitle_pt,
             color=style.INK, zorder=7,
         )  # fmt: skip
-    untangle_labels(ax)
+    untangle_labels(ax, config)
     return style.save(fig, out.with_suffix(""), fixed=True)
 
 
@@ -920,6 +1266,7 @@ def figure_row(
     shared_x_label: bool = False,
     xlabel: str = DEFAULT_XLABEL,
     ylabel: str = DEFAULT_YLABEL,
+    mode: str = "paired",
 ) -> pathlib.Path:
     """N comparisons as ONE ROW of N square panels, every one against its own control.
 
@@ -959,12 +1306,12 @@ def figure_row(
             if isinstance(treatment, str):
                 handles = draw_panel(
                     ax, frame, stats, treatment, treatments_here, repeats=one_repeats, show_cloud=show_cloud,
-                    config=config, xlabel=panel_xlabel, ylabel=ylabel,
+                    config=config, xlabel=panel_xlabel, ylabel=ylabel, mode=mode,
                 )  # fmt: skip
             else:
                 handles = draw_multi_panel(
                     ax, frame, stats, repeats=one_repeats, show_cloud=show_cloud, config=config,
-                    xlabel=panel_xlabel, ylabel=ylabel,
+                    xlabel=panel_xlabel, ylabel=ylabel, mode=mode,
                 )  # fmt: skip
             for handle in handles:
                 handles_by_label.setdefault(handle.get_label(), handle)
@@ -1019,13 +1366,345 @@ def figure_row(
             fontsize=config.label_pt, color=style.INK,
         )  # fmt: skip
     for ax in axes:
-        untangle_labels(ax)
+        untangle_labels(ax, config)
+    return style.save(fig, out.with_suffix(""), fixed=True)
+
+
+#: The measures a dot-row figure stacks, top to bottom: what each arm REACHED over the campaign
+#: baseline, and what it SPENT reaching it. One row each, over one shared categorical X.
+MEASURES: tuple[str, ...] = ("speedup", "cost")
+
+#: Each measure's default axis label.
+MEASURE_LABELS: dict[str, str] = {"speedup": DEFAULT_XLABEL, "cost": ABSOLUTE_YLABEL}
+
+#: Which way is GOOD on each measure, and the corner the note sits in (axes fraction, plus the
+#: alignment that pins it there). Speed-up reads up, cost reads down, and the two rows of a dot-row
+#: figure are otherwise identical squares -- without this a reader has to remember which is which
+#: between one row and the next.
+MEASURE_DIRECTION: dict[str, tuple[str, float, float, str]] = {
+    "speedup": ("Higher -> Better", 0.99, 0.97, "top"),
+    "cost": ("Lower -> Better", 0.99, 0.03, "bottom"),
+}
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ArmRow:
+    """One CATEGORY of a dot-row figure: an (LLM, delivery) pair and its two arms."""
+
+    model: str
+    leg: str
+    colour: str
+    control: ArmPoint
+    treated: ArmPoint
+
+    @property
+    def label(self) -> str:
+        """The category's own tick text: what it DELIVERED. The model is drawn once per run of
+        columns instead (:func:`draw_category_axis`) -- spelled on every column, "Qwen3.8-27B"
+        three times over collides with itself long before nine categories."""
+        return self.leg
+
+
+def arm_rows(
+    frame: pd.DataFrame, repeats: population.RepeatPolicy = "latest", channels: str = "pair-packet"
+) -> list[ArmRow]:
+    """Every (model, leg) of ``frame`` as a category, in the order the categorical axis draws them.
+
+    Sorted by MODEL first, then delivery, so one model's languages stand together and a reader
+    comparing models reads a block rather than hunting a colour across the axis.
+    """
+    rows: list[ArmRow] = []
+    for (model, leg), pair in frame.assign(leg=leg_labels(frame)).groupby(["model", "leg"]):
+        points = arm_points(pair[~pair.skills], pair[pair.skills], repeats)
+        if points is None:
+            continue
+        rows.append(
+            ArmRow(str(model), str(leg), series_colour(str(model), str(leg), channels), points[0], points[1])
+        )  # fmt: skip
+    order = {name: index for index, name in enumerate(palette.in_order([row.model for row in rows]))}
+    return sorted(rows, key=lambda row: (order.get(row.model, len(order)), row.leg))
+
+
+#: The widest a delivery's tick text runs before it folds. "OpenMP Offload" on one line is wider
+#: than the gap between two columns.
+TICK_WRAP: int = 8
+
+#: Where a model's group name sits under the delivery ticks, and where the row's own band ends, in
+#: axes fractions below the panel.
+GROUP_LABEL_Y: float = -0.30
+
+#: Extra height per row when each carries a left-aligned subtitle, in inches.
+SUBTITLE_BAND_IN: float = 0.22
+
+#: The band :func:`figure_arm_dots` reserves under the bottom row for the delivery ticks plus the
+#: model names drawn below them, in inches.
+CATEGORY_BAND_IN: float = 0.85
+
+
+def model_runs(rows: Sequence[ArmRow]) -> list[tuple[str, int, int]]:
+    """Each CONTIGUOUS run of one model as ``(model, first index, last index)``. Contiguous because
+    :func:`arm_rows` already sorts by model, so a run is the model's whole block."""
+    runs: list[tuple[str, int, int]] = []
+    for index, row in enumerate(rows):
+        if runs and runs[-1][0] == row.model:
+            runs[-1] = (row.model, runs[-1][1], index)
+        else:
+            runs.append((row.model, index, index))
+    return runs
+
+
+def draw_category_axis(ax: Axes, rows: Sequence[ArmRow], config: FigureConfig) -> None:
+    """The shared categorical X of a dot-row figure: one tick per column naming what it delivered,
+    each model named ONCE under its own run of columns, and a light rule between runs."""
+    from matplotlib.transforms import blended_transform_factory
+
+    ax.set_xticks(range(len(rows)))
+    ax.set_xticklabels(
+        [wrapped_label(row.label, TICK_WRAP) for row in rows], fontsize=config.tick_pt, color=style.INK
+    )  # fmt: skip
+    transform = blended_transform_factory(ax.transData, ax.transAxes)
+    for model, first, last in model_runs(rows):
+        ax.text(
+            (first + last) / 2.0, GROUP_LABEL_Y, experiment_tags.model_name(model), transform=transform,
+            ha="center", va="top", fontsize=config.label_pt * 0.8, color=style.INK, clip_on=False,
+        )  # fmt: skip
+
+
+def group_rules(ax: Axes, rows: Sequence[ArmRow]) -> None:
+    """A light rule between one model's block of columns and the next, on every row of the figure,
+    so the blocks read as blocks without a box around each."""
+    for _, first, _ in model_runs(rows)[1:]:
+        ax.axvline(first - 0.5, color=style.RULE, linewidth=0.8, zorder=0)
+
+
+def wrapped_label(text: str, width: int = 18) -> str:
+    """A label folded onto as many lines as it needs, never INSIDE a word. A dot-row panel is about
+    two inches tall and its Y label is rotated, so "Geomean Speed-Up Over Numba" on one line runs
+    off both ends of the row -- but a fold at the hyphen gives "Geomean Speed-" over "Up", which is
+    worse than the overflow."""
+    return textwrap.fill(text, width=width, break_long_words=False, break_on_hyphens=False)
+
+
+#: How a stacked figure names its own panels, so a caption can refer to one of them.
+#: ``none`` leaves the naming to the Y labels. ``outside`` puts a bold ``a)`` just ABOVE the
+#: panel's left edge and ``inside`` puts it in the plot area's top-left corner; both keep the Y
+#: label. ``subtitle`` puts ``a) <measure>`` on one left-aligned line above the panel and drops the
+#: rotated Y label, which buys back the whole left margin.
+PANEL_LABELS: tuple[str, ...] = ("none", "outside", "inside", "subtitle")
+
+#: The letters, in order.
+PANEL_LETTERS: str = "abcdefgh"
+
+
+def panel_letter(index: int) -> str:
+    """``a)``, ``b)``, ... for panel ``index``."""
+    return f"{PANEL_LETTERS[index]})" if index < len(PANEL_LETTERS) else f"{index + 1})"
+
+
+def draw_panel_label(ax: Axes, index: int, name: str, placement: str, config: FigureConfig) -> str:
+    """Name one panel of a stacked figure under ``placement``; returns the Y label that panel should
+    still carry (blank under ``subtitle``, which has already said it)."""
+    if placement == "none":
+        return name
+    letter = panel_letter(index)
+    if placement == "subtitle":
+        ax.set_title(f"{letter} {name}", loc="left", fontsize=config.subtitle_pt, color=style.INK)
+        return ""
+    # Above the panel's own left edge, not out in the margin: the margin is where the rotated Y
+    # label is, and a letter placed there printed on top of it.
+    x, y, va = (0.0, 1.02, "bottom") if placement == "outside" else (0.012, 0.98, "top")
+    ax.text(
+        x, y, letter, transform=ax.transAxes, ha="left", va=va, fontsize=config.label_pt, fontweight="bold",
+        color=style.INK, clip_on=False, zorder=style.MARK_Z + 3.0,
+    )  # fmt: skip
+    return name
+
+
+def measure_value(point: ArmPoint, measure: str) -> tuple[float, float, float]:
+    """``(value, low, high)`` of one arm on one measure: the speed-up in ``log2(ratio)``, or the
+    token count as a count."""
+    if measure == "cost":
+        return point.y, point.y_low, point.y_high
+    return point.x, point.x_low, point.x_high
+
+
+def draw_measure_row(
+    ax: Axes,
+    rows: Sequence[ArmRow],
+    measure: str,
+    shape: str,
+    significance: dict[tuple[str, str], tuple[bool, bool]],
+    config: FigureConfig = DEFAULT_CONFIG,
+    ylabel: str = "",
+) -> None:
+    """ONE measure over the shared categorical X: two marks per category, the no-packet arm HOLLOW
+    and the packet arm FILLED, each with its 95% interval as a vertical bar, joined by a faint
+    segment.
+
+    The two marks are dodged either side of the category's own position so they never sit on top of
+    one another, and the pair is read vertically: how far the filled mark is ABOVE the hollow one is
+    the packet's effect, in the measure's own units, against a reference a reader already knows
+    (1x over the campaign baseline on the speed-up row).
+    """
+    cost = measure == "cost"
+    for index, row in enumerate(rows):
+        for point, filled, dodge in ((row.control, False, -config.dodge), (row.treated, True, config.dodge)):
+            value, low, high = measure_value(point, measure)
+            x = index + dodge
+            if np.isfinite(low) and np.isfinite(high):
+                ax.vlines(
+                    x, low, high, color=row.colour, linewidth=1.2, alpha=0.75,
+                    linestyles=config.cost_linestyle if cost else "-", zorder=style.CONNECTOR_Z,
+                )  # fmt: skip
+            style.point_mark(ax, x, value, row.colour, shape, filled, size=config.mark_size)
+        if config.link_pairs:
+            control_value = measure_value(row.control, measure)[0]
+            treated_value = measure_value(row.treated, measure)[0]
+            ax.plot(
+                [index - config.dodge, index + config.dodge], [control_value, treated_value], color=row.colour,
+                linewidth=config.link_width, alpha=config.link_alpha, zorder=style.CONNECTOR_Z - 0.5,
+            )  # fmt: skip
+        # Each row carries only ITS OWN verdict: a star on the cost row would test the speed-up.
+        score_sig, cost_sig = significance.get((row.model, row.leg), (False, False))
+        if cost_sig if cost else score_sig:
+            ax.annotate(
+                COST_SIG_MARK if cost else SCORE_SIG_MARK, (index + config.dodge, measure_value(row.treated, measure)[0]),
+                textcoords="offset points", xytext=(config.label_offset_pt, 0.0), fontsize=config.point_pt,
+                color=style.INK, va="center", zorder=style.MARK_Z + 2.0,
+            )  # fmt: skip
+    if cost:
+        ax.set_yscale("log", base=10.0)
+        style.value_axis(ax, "y", log_base=10.0)
+        ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 2.0, 5.0), numticks=20))
+        ax.yaxis.set_major_formatter(FuncFormatter(token_tick))
+    else:
+        ax.axhline(0.0, color=style.REFERENCE, linewidth=1.0, zorder=1)
+        style.value_axis(ax, "y")
+        ax.yaxis.set_major_formatter(FuncFormatter(log2_tick))
+    ax.set_xlim(-0.6, len(rows) - 0.4)
+    ax.set_xticks(range(len(rows)))
+    group_rules(ax, rows)
+    ax.margins(y=config.margin)
+    if not cost:
+        widen_y_axis_linear(ax, config)
+        low, high = ax.get_ylim()
+        ax.yaxis.set_major_locator(MultipleLocator(x_tick_step(high - low, config.max_ticks)))
+    if ylabel:
+        ax.set_ylabel(wrapped_label(ylabel), fontsize=config.label_pt)
+    direction = MEASURE_DIRECTION.get(measure)
+    if direction:
+        text, x, y, va = direction
+        ax.text(
+            x, y, text, transform=ax.transAxes, ha="right", va=va, fontsize=config.point_pt, color=style.INK,
+            zorder=style.MARK_Z + 2.0,
+        )  # fmt: skip
+    ax.tick_params(axis="both", labelsize=config.tick_pt)
+    style.despine(ax)
+
+
+def widen_y_axis_linear(ax: Axes, config: FigureConfig) -> None:
+    """:func:`widen_x_axis`' floor, on a LINEAR log2 Y (the speed-up row of a dot-row figure)."""
+    low, high = ax.get_ylim()
+    if high - low < config.min_span:
+        centre = (low + high) / 2.0
+        ax.set_ylim(centre - config.min_span / 2.0, centre + config.min_span / 2.0)
+
+
+def dot_rows_legend(
+    treatment: str, rows: Sequence[ArmRow], control_name: str, symbols: tuple[bool, bool], channels: str
+) -> list[Line2D]:
+    """A dot-row figure's key: one swatch per colour the figure actually spent, the packet's shape,
+    the hollow no-packet mark, and one row per superscript drawn."""
+    if channels == "pair-packet":
+        handles = [
+            Line2D(
+                [],
+                [],
+                marker="o",
+                linestyle="none",
+                color=row.colour,
+                markersize=7,
+                label=f"{experiment_tags.model_name(row.model)} / {row.leg}",
+            )  # fmt: skip
+            for row in rows
+        ]
+    else:
+        handles = model_legend_marks(sorted({row.model for row in rows}))
+    handles.append(packet_legend_mark(treatment))
+    handles.append(control_legend_mark([treatment], control_name))
+    return handles + legend_tail(False, symbols)
+
+
+def figure_arm_dots(
+    frame: pd.DataFrame,
+    stats: pd.DataFrame,
+    treatment: str,
+    out: pathlib.Path,
+    control_name: str = "",
+    repeats: population.RepeatPolicy = "latest",
+    config: FigureConfig = DEFAULT_CONFIG,
+    channels: str = "pair-packet",
+    measures: Sequence[str] = MEASURES,
+    width_in: float = style.DOUBLE_COLUMN_WIDTH,
+    row_height_in: float = 2.3,
+    labels: dict[str, str] | None = None,
+    panel_labels: str = "none",
+) -> pathlib.Path:
+    """The ABSOLUTE reading as stacked 1-D rows: one panel per measure, one column per (LLM,
+    delivery), two marks per column.
+
+    The 2-D efficacy panel puts speed-up and cost on two axes of one square, which reads one
+    comparison well and nine badly -- every mark needs its own label, and the label is what a reader
+    ends up reading instead of the position. Here the category is the X axis and each measure gets
+    its own row, so the columns line up: two arms of one pair are one short vertical segment, and
+    the same column on the row below says what that segment cost. ``measures`` picks the rows and
+    their order; ``labels`` overrides a row's Y label (the cost card's own weights, the baseline's
+    name).
+    """
+    import matplotlib.pyplot as plt
+
+    rows = arm_rows(frame, repeats, channels)
+    if not rows:
+        raise ValueError("no (model, leg) pair draws a point")
+    texts = {**MEASURE_LABELS, **(labels or {})}
+    significance = axis_significance(stats)
+    shape = palette.packet_marker(treatment)
+    control_text = control_name or packets.control_label([treatment])
+    # Both placements that draw ABOVE a panel need the band reserved once per row -- once at the
+    # top of the figure and once between the rows.
+    # 0.12in even with nothing drawn above a panel: a two-line rotated Y label is taller than the
+    # axes box it is centred on, and clipped off the canvas without it.
+    band = SUBTITLE_BAND_IN if panel_labels in ("subtitle", "outside") else 0.12
+    height = row_height_in * len(measures) + CATEGORY_BAND_IN + band * len(measures)
+    fig, axes = plt.subplots(len(measures), 1, figsize=(width_in, height), squeeze=False, sharex=True)
+    fig.set_dpi(style.SAVE_DPI)  # measure the legend and the labels at the dpi save() writes
+    for index, (ax, measure) in enumerate(zip(axes[:, 0], measures, strict=True)):
+        name = draw_panel_label(ax, index, texts.get(measure, measure), panel_labels, config)
+        draw_measure_row(ax, rows, measure, shape, significance, config, name)
+    draw_category_axis(axes[-1, 0], rows, config)
+    handles = dot_rows_legend(treatment, rows, control_text, drawn_symbols(stats), channels)
+    fig.subplots_adjust(
+        left=0.1, right=0.99, top=1.0 - (band + MEASURE_PAD_IN) / height, bottom=0.01,
+        hspace=0.14 + band / row_height_in,
+    )  # fmt: skip
+    legend_h = style.legend_below(fig, handles, ncol=config.legend_ncol, y=0.005, fontsize=config.legend_pt)
+    # The Y labels are wrapped but still the widest thing left of the panels; reserve what they
+    # MEASURE rather than a fraction guessed for one label length.
+    left_in = max(required_left_margin(fig, ax) for ax in axes[:, 0])
+    fig.subplots_adjust(
+        left=min(0.35, left_in / width_in),
+        bottom=(legend_h + CATEGORY_BAND_IN + MEASURE_PAD_IN) / height,
+    )  # fmt: skip
     return style.save(fig, out.with_suffix(""), fixed=True)
 
 
 def pairs_table(frame: pd.DataFrame, repeats: population.RepeatPolicy = "latest") -> pd.DataFrame:
     """One row per (model, leg): the drawn point behind :func:`draw_panel`'s mark, as the CSV record
-    beside the figure (SC15 Rule 4: the costs a ratio was taken over travel with it)."""
+    beside the figure (SC15 Rule 4: the costs a ratio was taken over travel with it).
+
+    An empty frame is a STUB panel, which draws nothing and therefore records nothing."""
+    if frame.empty:
+        return pd.DataFrame()
     rows = []
     for (model, leg), pair in frame.assign(leg=leg_labels(frame)).groupby(["model", "leg"]):
         series = reduce_pair(pair[~pair.skills], pair[pair.skills], repeats)

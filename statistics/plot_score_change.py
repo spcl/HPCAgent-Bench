@@ -242,7 +242,7 @@ def shared_spelling(pair: tuple[str, str], packet: str) -> str:
 def pair_leg_label(pair: tuple[str, str], intervention: str) -> str:
     """One pair's LEG: the language, plus every packet BOTH its arms carried -- never the
     intervention the two sides differ in, which the title and the legend already say once."""
-    language = experiment_tags.language_name(experiment_tags.language_of(pair[0]))
+    language = experiment_tags.arm_delivery_name(pair[0])
     resolved = packets.canonical(intervention)
     extra = [shared_spelling(pair, key) for key in experiment_tags.order("packets") if key and key != resolved]
     return " ".join([language, *[f"+{token}" for token in extra if token]])
@@ -327,6 +327,32 @@ def pair_frame(frame_all: pd.DataFrame, pairs: Sequence[tuple[str, str]], interv
     return pd.concat(parts, ignore_index=True) if parts else frame_all.iloc[0:0].assign(leg="", skills=False)
 
 
+def write_dot_rows(
+    args: argparse.Namespace,
+    config: efficacy_figures.FigureConfig,
+    frame: pd.DataFrame,
+    stats: pd.DataFrame,
+    treatment: str,
+    card: cost.CostModel,
+    baseline: str,
+) -> None:
+    """``--dots``: the same arms read as stacked 1-D rows (speed-up over the baseline, then what it
+    cost), one column per (LLM, delivery). Silent when ``--dots`` was not asked for."""
+    if args.dots is None:
+        return
+    args.dots.parent.mkdir(parents=True, exist_ok=True)
+    written = efficacy_figures.figure_arm_dots(
+        frame, stats, treatment, args.dots, control_name=args.control_label, repeats=args.repeats,
+        config=config, channels=args.channels, row_height_in=args.dots_row_height,
+        panel_labels=args.dots_panel_labels,
+        labels={
+            "speedup": efficacy_figures.speedup_label(baseline),
+            "cost": efficacy_figures.cost_label((card.fresh_input, card.cached_input, card.output), card.key),
+        },
+    )  # fmt: skip
+    print(f"dots   -> {written} (+ .png)")
+
+
 def figure_from_pairs(args: argparse.Namespace, config: efficacy_figures.FigureConfig) -> None:
     """The ``--pairs-csv`` route: an EXPLICIT pair list drawn as the same panel every packet
     comparison goes through.
@@ -352,12 +378,17 @@ def figure_from_pairs(args: argparse.Namespace, config: efficacy_figures.FigureC
         args.table.with_name(f"{args.table.stem}-absolute{args.table.suffix}"), index=False
     )
     baseline = results_figures.baseline_of(frame)
+    control = args.control_label or packets.control_label([args.intervention])
     written = efficacy_figures.figure_one(
         frame, stats, args.intervention, args.out, args.control_label, repeats=args.repeats,
         show_cloud=args.show_cloud, title=args.title, config=config,
-        xlabel=efficacy_figures.speedup_label(baseline),
-        ylabel=efficacy_figures.cost_label((card.fresh_input, card.cached_input, card.output), card.key),
+        xlabel=efficacy_figures.speedup_label(baseline, args.mode, control),
+        ylabel=efficacy_figures.cost_label(
+            (card.fresh_input, card.cached_input, card.output), card.key, args.mode, control
+        ),
+        channels=args.channels, mode=args.mode,
     )  # fmt: skip
+    write_dot_rows(args, config, frame, stats, args.intervention, card, baseline)
     report(args.intervention, stats)
     print(f"table  -> {args.table}")
     print(f"figure -> {written} (+ .png)")
@@ -387,6 +418,9 @@ def write_panel_tables(
     treatment shape or the ``{treatment: table}`` one :func:`build_multi_comparison` returns -- a
     multi-treatment panel writes ONE combined CSV per file, a ``packet`` column telling the rows
     apart (the same shape a caller merging several single-treatment CSVs by hand would build)."""
+    if isinstance(frame, pd.DataFrame) and frame.empty:
+        return  # a stub panel holds the slot and records nothing
+
     if isinstance(stats, dict):
         combined_stats = pd.concat(
             [one.assign(packet=name) for name, one in stats.items() if not one.empty], ignore_index=True
@@ -407,6 +441,9 @@ def write_panel_tables(
 
 def report(treatment: str, stats: pd.DataFrame) -> None:
     """One line: how many of the family's tests fired, and how many were underpowered."""
+    if stats.empty or "score_verdict" not in stats.columns:
+        print(f"{treatment or '(stub)'}: placeholder panel, nothing drawn")
+        return
     score_hits = int((stats.score_verdict == efficacy.SIGNIFICANT).sum())
     cost_hits = int((stats.cost_verdict == efficacy.SIGNIFICANT).sum())
     withheld = int((stats.score_verdict == efficacy.UNDERPOWERED).sum())
@@ -476,6 +513,11 @@ def build_comparison(
     -- an explicit pair list (``pairs=``), several packets sharing one panel (``treatments=``,
     :func:`build_multi_comparison`), or a single packet-suffix split (``treatment=``) of its own or
     the default campaign. ``treatment`` is the registry key(s) the panel is SHAPED by."""
+    if spec.get("stub", "").lower() in ("1", "true", "yes"):
+        # A PLACEHOLDER panel: the box, the axes and the caption, with nothing plotted. It keeps a
+        # slot in the row for a comparison that has not finished running, so the figure can go into
+        # the paper at its final width and the panel fills in later without re-laying out the page.
+        return spec.get("title", ""), spec.get("intervention", ""), pd.DataFrame(), pd.DataFrame()
     if "treatments" in spec:
         return build_multi_comparison(spec, default_observations, default_experiment, repeats, include_incomplete, card)
     intervention = spec["intervention"]
@@ -598,6 +640,43 @@ def main() -> None:
         help="override the Y axis label -- state a non-default cost card's own weights here",
     )
     parser.add_argument(
+        "--channels",
+        default="model-packet",
+        choices=efficacy_figures.CHANNELS,
+        help="how the two channels are spent: model-packet gives colour to the model and shape to "
+        "the packet; pair-packet gives colour to the (model, language) pair, which is what varies "
+        "when one packet is compared across delivery languages",
+    )
+    parser.add_argument(
+        "--mode",
+        default="paired",
+        choices=efficacy_figures.MODES,
+        help="paired draws ONE mark per (model, language) -- the packet's own effect, its control "
+        "at the origin; absolute draws BOTH arms where they sit against the campaign baseline, "
+        "hollow without the packet and filled with it, so a reader sees what each arm reached and "
+        "not only what the packet changed",
+    )
+    parser.add_argument(
+        "--dots",
+        type=pathlib.Path,
+        default=None,
+        help="also write the stacked 1-D reading here: one row per measure (speed-up, token cost), "
+        "one column per (LLM, delivery), two marks per column",
+    )
+    parser.add_argument(
+        "--dots-panel-labels",
+        default="none",
+        choices=efficacy_figures.PANEL_LABELS,
+        help="how --dots names its rows: none (Y labels alone), outside/inside (a bold 'a)'), or "
+        "subtitle ('a) Geomean Speed-Up ...' on one line above the row, no rotated Y label)",
+    )
+    parser.add_argument(
+        "--dots-row-height",
+        type=float,
+        default=2.3,
+        help="one --dots row's height, inches (default 2.3)",
+    )
+    parser.add_argument(
         "--mark-size",
         type=float,
         default=None,
@@ -679,7 +758,7 @@ def main() -> None:
         written = efficacy_figures.figure_row(
             comparison_panels, args.out, row_width_in=row_width, repeats=comparison_repeats,
             show_cloud=args.show_cloud, config=figure_config, shared_x_label=args.shared_x_label,
-            ylabel=args.ylabel,
+            ylabel=args.ylabel, mode=args.mode,
         )  # fmt: skip
         for title, treatment, stats, frame in comparison_panels:
             del frame  # the summary line names the panel, not its rows
@@ -727,12 +806,13 @@ def main() -> None:
         del title  # figure_one's subtitle is --title (blank by default), not the one panel's own name
         written = efficacy_figures.figure_one(
             frame, stats, treatment, args.out, repeats=args.repeats, show_cloud=args.show_cloud, title=args.title,
-            config=figure_config,
+            config=figure_config, channels=args.channels, mode=args.mode,
         )  # fmt: skip
+        write_dot_rows(args, figure_config, frame, stats, treatment, card, results_figures.baseline_of(frame))
     else:
         written = efficacy_figures.figure_row(
             panels, args.out, row_width_in=row_width, repeats=args.repeats, show_cloud=args.show_cloud,
-            config=figure_config, shared_x_label=args.shared_x_label, ylabel=args.ylabel,
+            config=figure_config, shared_x_label=args.shared_x_label, ylabel=args.ylabel, mode=args.mode,
         )  # fmt: skip
 
     for title, treatment, stats, frame in panels:
