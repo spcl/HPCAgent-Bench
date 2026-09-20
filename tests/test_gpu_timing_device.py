@@ -59,17 +59,26 @@ def strided_reference(data: dict) -> np.ndarray:
 
 
 def python_call(
-    path: pathlib.Path, source: str, data: dict, reps: int = 3, warmup: int = 1
+    path: pathlib.Path, source: str, data: dict, *, device: bool = True, reps: int = 3, warmup: int = 1
 ) -> tuple[native_call.OutputMap, list[int], native_call.CallProbes, list[native_call.OutputMap]]:
-    """Write ``source`` as a python delivery and grade it on a DEVICE task, in one isolated child.
+    """Write ``source`` as a python delivery and grade it at ``device`` residency, in one child.
 
-    ``lang="python"`` with ``device=True`` is the triton/cupy route: the call stays in the host
-    process on host arrays (``_call_isolated`` sends it down the host path deliberately) while the
-    TASK is still a GPU one, so it is the route where the judge's own device wait and the
-    one-visible-device narrowing have to hold without any help from a C-ABI library handle.
+    RESIDENCY decides the child for every delivery, python included, so the two calls here are the
+    two shipped python arms rather than two spellings of one:
+
+    * ``device=True`` (``triton-device``) -- the harness stages every array argument on the GPU
+      before the bracket, times with a GPU event pair, and reads the outputs back after. The
+      submission is handed CUPY arrays and no transfer is inside a sample. This is the route where
+      the judge's own device wait and the one-visible-device narrowing have to hold without any
+      help from a C-ABI library handle, since there is no library.
+    * ``device=False`` (``triton``) -- host arrays, host monotonic bracket, and whatever the
+      submission moves to a device it moves inside its own sample. That is the arm's contract, and
+      it is what makes it a usable PRICE for a transfer further down.
     """
     path.write_text(source)
-    return native_call._call_isolated(path, BINDING, data, "python", device=True, timeout=300, reps=reps, warmup=warmup)
+    return native_call._call_isolated(
+        path, BINDING, data, "python", device=device, timeout=300, reps=reps, warmup=warmup
+    )
 
 
 @pytest.fixture
@@ -91,6 +100,7 @@ def offload_arm(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 #: Returns what the child can SEE, not what it was told: the count comes from the device runtime
 #: after the harness narrowed the environment, so nothing the harness believes is echoed back.
+#: ``dst`` arrives as a cupy array on this route and is written as one.
 COUNT_DEVICES = """import cupy
 
 
@@ -118,19 +128,13 @@ def test_a_grading_child_can_reach_exactly_one_gpu(tmp_path: pathlib.Path) -> No
 
 # ------------------------------------------------------- an honest kernel trips neither probe
 
-#: Real device work, synchronized by the submission itself, returning normally. The rounds are what
-#: put the sample far enough above the synchronize call's own cost for the ratios below to mean
-#: something.
-HONEST_KERNEL = """import cupy
-import numpy
-
-
-def ext_strided_load_2(src, dst, scale, LEN_1D):
-    device_src = cupy.asarray(src)
-    device_dst = device_src[0::2] * scale
+#: Real device work, returning normally, written against the arrays it was handed rather than
+#: against a framework it names -- the device route hands it cupy. The rounds are what put the
+#: sample far enough above the synchronize call's own cost for the ratios below to mean something.
+HONEST_KERNEL = """def ext_strided_load_2(src, dst, scale, LEN_1D):
+    dst[:] = src[0::2] * scale
     for _ in range(64):
-        cupy.multiply(device_dst, 1.0, out=device_dst)
-    dst[:] = cupy.asnumpy(device_dst)
+        dst *= 1.0
     return dst
 """
 
@@ -140,8 +144,8 @@ def test_an_honest_kernel_trips_neither_probe(tmp_path: pathlib.Path) -> None:
     to work that was really done, and it does it silently through the suspect flag.
 
     So this is the defence of the gates rather than of the harness. The submission does real device
-    work and waits for it, which must leave the post-clock re-synchronize with nothing to find and
-    the two clocks in agreement UNDER THE SHIPPED CONFIG -- whatever numbers
+    work and leaves none of it outstanding, which must leave the post-clock re-synchronize with
+    nothing to find and the two clocks in agreement UNDER THE SHIPPED CONFIG -- whatever numbers
     ``measurement.quiescence`` ships with, these are the readings they have to pass.
     """
     data = strided_data(BIG // 2)
@@ -156,9 +160,8 @@ def test_an_honest_kernel_trips_neither_probe(tmp_path: pathlib.Path) -> None:
     assert probe.residual_ns * 10 < probe.event_ns, (probe.residual_ns, probe.event_ns)
     assert probe.residual_ns < 2_000_000, probe.residual_ns
     assert timing.quiescent(probe.residual_ns, probe.event_ns), probe
-    # A python delivery reads ONE clock twice (it is host-bracketed either way), so what this
-    # states is that the shipped divergence gate does not fire on an honest reading. The two-clock
-    # version of the same claim is asserted on the event-timed offload grade below.
+    # A device-resident grade reads TWO clocks over the one rep -- the event pair and the host
+    # bracket -- so this is the real divergence reading, not one number compared with itself.
     assert timing.clocks_agree(probe.event_ns, probe.host_ns), probe
 
 
@@ -249,11 +252,12 @@ void ext_strided_load_2_fp64(double *restrict dst, const double *restrict src, c
 }
 """
 
-#: The transfer, priced on its own: cupy moves exactly the bytes ``map(to: src) map(from: dst)``
-#: would move, around exactly the same kernel, under the same host bracket. What a mapping variant
-#: would have put inside a sample, measured without building one.
+#: The transfer, priced by the arm whose contract is to pay for it. Graded HOST-resident, so it is
+#: handed host arrays and moves exactly the bytes ``map(to: src) map(from: dst)`` would move,
+#: around exactly the same kernel, inside its own bracket. Nothing about it is special-cased: it is
+#: what the shipped host-resident python arm measures, which is why it is a fair price for what a
+#: mapping variant would have put inside an offload sample.
 TRANSFER_COST = """import cupy
-import numpy
 
 
 def ext_strided_load_2(src, dst, scale, LEN_1D):
@@ -286,10 +290,10 @@ def test_an_offload_kernel_is_timed_without_its_transfers(offload_arm, tmp_path:
     The harness places the arrays on the device BEFORE the bracket and reads them back after it, so
     a conforming submission only launches. The gap between what it costs to launch and what it
     costs to MOVE those same bytes IS the transfer, and for four waves that gap was inside every
-    offload sample while the CPU baseline it was divided by paid none of it. Priced here by moving
-    the same bytes through cupy under the same host bracket rather than by building the mapping
-    variant, because the build path now refuses that variant -- see the test below, which is the
-    other half of this one.
+    offload sample while the CPU baseline it was divided by paid none of it. The mapping variant
+    that would show the gap directly no longer builds (see the test below, which is the other half
+    of this one), so the price comes from the arm that is SUPPOSED to pay it: the same computation
+    graded host-resident, moving the same bytes inside its own bracket.
     """
     data = strided_data(BIG)
     dst, samples, probe = offload_sample(OFFLOAD_SOURCE.replace("__NOWAIT__", ""), data)
@@ -300,7 +304,8 @@ def test_an_offload_kernel_is_timed_without_its_transfers(offload_arm, tmp_path:
     assert timing.quiescent(probe.residual_ns, probe.event_ns), probe
     assert timing.clocks_agree(probe.event_ns, probe.host_ns), probe
 
-    _outputs, transfer, _probes, _ = python_call(tmp_path / "transfer.py", TRANSFER_COST, data)
+    moved, transfer, _probes, _ = python_call(tmp_path / "transfer.py", TRANSFER_COST, data, device=False)
+    np.testing.assert_allclose(moved["dst"], strided_reference(data), rtol=1e-12)
     moved_ns = min(transfer)
     assert probe.host_ns * 8 < moved_ns, (
         f"the offload sample is {probe.host_ns} ns and moving its arrays costs {moved_ns} ns -- "
