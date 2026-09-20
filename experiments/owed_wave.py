@@ -14,8 +14,10 @@ its arm would.
 
     owed_wave.py qwen38 [--experiments llr-focus40] [--setups <arm>,...] [--out DIR]
 
-What is owed is remaining_kernels.py's rule over EVERY run root (budget and infra classes; a
-placeholder-done kernel is never rerun). A setup is the arm's latest job's own launch env and
+What is owed is remaining_kernels.py's rule over EVERY run root (budget and infra classes; since
+2026-09-20 a forced-1x placeholder -- an episode that ended on its own with no real grade -- owes
+one INFRA rerun too, never scaled: remaining_kernels.owed_classes turns its DONE into INFRA before
+this ever sees it). A setup is the arm's latest job's own launch env and
 problem entry for that kernel -- the condition the rest of the arm ran under -- renamed to the
 arm's ``-clean`` identity, stamped with this checkout's commit, and for the ``budget`` class scaled
 by TOKEN_SCALE/TIME_SCALE (clamped under the partition cap, as submit_common.sh's scale_time).

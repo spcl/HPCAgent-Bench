@@ -100,6 +100,11 @@ models:
 optimizers:
   dace: DaCe
   cpf: Canonical Parallel Form
+  # Polyhedral compiler baselines the llr-focus40 speed-up figure compares against (2026-09-20),
+  # APPENDED so neither repaints dace/cpf's shapes. Their colour stays framework_color's own
+  # `frameworks:` slot (pluto, ppcg_hip below); this only gives each its own marker shape.
+  pluto: Pluto
+  ppcg_hip: PPCG (HIP)
 
 # Skill packets, keyed by the canonical `packet` column value. KEY ORDER IS HUE ORDER, and it also
 # picks the LEAD of a combination: the lead of `cpfsrc+lang-skills` is cpfsrc, so a CPF figure's

@@ -485,6 +485,38 @@ def test_a_kernel_with_no_episode_at_all_is_infra(module: types.ModuleType, tmp_
     assert classes == {"a": module.ExitClass.INFRA}
 
 
+def test_a_forced_1x_placeholder_is_owed_as_infra_not_skipped(module: types.ModuleType, tmp_path: pathlib.Path) -> None:
+    """2026-09-20 decision: DONE (a clean rc=0 self-exit, no submissions/attempts row) is a forced-1x
+    placeholder, not a completed measurement. owed_exit_classes still reads it as DONE (unchanged --
+    classify_exit's own contract), but owed_classes, the planner's single source of truth, must turn
+    it into INFRA: owed, one unscaled rerun, not silently dropped as done forever."""
+    root = tmp_path / "runs"
+    job_dir = root / "100"
+    conn = make_shard(root, "100", ARM)
+    add_run(conn, f"{ARM}.n0.p0.w0", ARM)
+    conn.close()
+    write_episode(job_dir, 0, "a", 0)  # rc=0, no submission: classify_exit -> DONE
+    assert module.owed_exit_classes([str(job_dir)], ["a"]) == {"a": module.ExitClass.DONE}, "unchanged at this level"
+    classes = module.owed_classes([("100", str(job_dir), ARM)], ROSTER, "")
+    assert classes["a"] == module.ExitClass.INFRA
+
+
+def test_an_arm_of_nothing_but_placeholders_owes_its_whole_roster(
+    module: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """Every roster kernel ends in a placeholder, none delivered: owed_classes must not read any of
+    them as covered or done -- the whole roster comes back owed, all INFRA, none silently complete."""
+    root = tmp_path / "runs"
+    job_dir = root / "100"
+    conn = make_shard(root, "100", ARM)
+    add_run(conn, f"{ARM}.n0.p0.w0", ARM)
+    conn.close()
+    for index, kernel in enumerate(ROSTER):
+        write_episode(job_dir, index, kernel, 0)
+    classes = module.owed_classes([("100", str(job_dir), ARM)], ROSTER, "")
+    assert classes == {kernel: module.ExitClass.INFRA for kernel in ROSTER}
+
+
 #: Real log excerpts, one per owed class, pulled from actual runs during the 2026-09-18 triage
 #: (audit-20260918/failure-triage-1850.md) so each class is proven against evidence that actually
 #: shipped, not an invented string.

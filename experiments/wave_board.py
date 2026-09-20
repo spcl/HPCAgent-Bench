@@ -4,12 +4,15 @@
 
 Coverage is remaining_kernels.py's rule: the union of judge rows over every job that ran the arm,
 folding a ``-clean`` re-run into the identity it re-runs (2026-09-18) rather than giving it a second
-row, and never counting a smoke job's rows. "Done" also covers a kernel with no judge row whose
-latest episode still ended on its own -- context overflow, or a clean self-exit
-(remaining_kernels.ExitClass.DONE) -- so an owed count only ever means a kernel the next wave still
-has to run. An arm is ``running`` while any of its jobs is queued or running, ``complete`` when every
-roster kernel is done, and ``incomplete`` otherwise, with its owed kernels split into a ``budget``
-share (rerun at double AGENT_TIMEOUT_SECONDS/AGENT_MAX_TOKENS) and an ``infra`` share (rerun as-is).
+row, and never counting a smoke job's rows. ``done`` means DELIVERED (2026-09-20 correction: a real
+grade happened, correct or not) -- NOT a kernel with no judge row whose latest episode still ended
+on its own (context overflow, or a clean self-exit, ``remaining_kernels.ExitClass.DONE``). That
+class is a ``placeholder``: scored at 1x and never rerun, but no real grade happened, so it counts
+neither as done nor as owed -- it is its own third bucket, badged apart, and an arm holding one is
+never ``complete``. An arm is ``running`` while any of its jobs is queued or running, ``complete``
+only when every roster kernel is DELIVERED (a placeholder blocks it), and ``incomplete`` otherwise,
+with its genuinely owed kernels (neither delivered nor placeholder) split into a ``budget`` share
+(rerun at double AGENT_TIMEOUT_SECONDS/AGENT_MAX_TOKENS) and an ``infra`` share (rerun as-is).
 Rows that measured a broken treatment are deleted, not hidden. The page does not update itself:
 rebuild and republish it whenever a campaign job leaves the queue.
 
@@ -170,13 +173,21 @@ def rerun_setups(path: pathlib.Path | None = None) -> dict[str, str]:
         }
 
 
-def arm_status(done: int, roster: int, states: list[str], rerun: bool = False) -> str:
+def arm_status(done: int, roster: int, states: list[str], rerun: bool = False, placeholder: int = 0) -> str:
     """A setup listed for rerun (rerun-lost.tsv) is ``rerun`` until its rerun is done; a queued rerun
-    is ``running`` even over full coverage; a smoke with no roster is never complete."""
+    is ``running`` even over full coverage; a smoke with no roster is never complete.
+
+    ``done`` is DELIVERED kernels only (2026-09-20): ``done >= roster`` already excludes a
+    placeholder-holding arm on its own (delivered + placeholder + budget + infra == roster, so
+    delivered alone cannot reach roster while placeholder > 0), but ``placeholder`` is still
+    checked explicitly -- an arm with any forced-1x placeholder is never ``complete``, full stop,
+    not an accident of how the two happen to add up."""
     if rerun:
         return "rerun"
     if any(state in ACTIVE_STATES for state in states):
         return "running"
+    if placeholder:
+        return "incomplete"
     if roster and done >= roster:
         return "complete"
     return "incomplete"
@@ -229,14 +240,19 @@ def kernel_status(
     manifest/sizing last changed -- 2026-09-18 manifest-epoch fix): a real grade happened, correct or
     not (2026-09-19 forced-1x completion decision). PLACEHOLDER-DONE is a kernel with no such row
     whose latest episode still ended on its own -- context overflow, or a clean self-exit that never
-    submitted (remaining_kernels.ExitClass.DONE, 2026-09-18 rule): scored at 1x, tokens counted,
-    never rerun, so it must not keep counting against the arm as owed, but no real grade happened --
-    it is a forced-1x PLACEHOLDER, not a delivered answer (see
+    submitted (remaining_kernels.ExitClass.DONE, 2026-09-18 rule): scored at 1x, tokens counted, no
+    real grade happened -- it is a forced-1x PLACEHOLDER, not a delivered answer (see
     hpcagent_bench.stats.population.DELIVERED_COLUMN for the same split in the analysis). What is
     left splits into BUDGET (the harness's own timeout/token cap fired: rerun at double budget) and
     INFRA (the job took the episode down, or its exit is one the classifier does not recognise:
-    rerun as-is) -- both undelivered AND owed (2026-09-19 decision: "forced 1x is not completed"
-    reruns only these two classes, never a placeholder-done kernel).
+    rerun as-is).
+
+    ALL THREE of placeholder/budget/infra are OWED on the board (2026-09-20 decision, superseding
+    2026-09-18's "never rerun" for a placeholder): a placeholder is not a delivered answer, so it
+    counts against the arm exactly like budget/infra do, and gets one rerun at NORMAL budget (not
+    the double budget a BUDGET kernel gets) -- that scheduling change lands separately in
+    remaining_kernels.owed_classes; this function's own four-way split is unchanged, only what
+    :func:`arm_row` and the page DO with the placeholder set is.
 
     ``served`` maps a FUSED job's id to the raw arm it ran for this row (:func:`arm_rows`): such a
     job holds rows of several arms, and only that arm's count here.
@@ -295,10 +311,11 @@ def arm_row(
     delivered_kernels, placeholder_kernels, budget, infra = kernel_status(jobs, dirs, full, opt, served, frozen)
     delivered = len(delivered_kernels)
     placeholder = len(placeholder_kernels)
-    # "done" keeps its 2026-09-18 meaning (never rerun): delivered kernels plus placeholder-done
-    # ones. "delivered"/"placeholder" split it for the 2026-09-19 forced-1x distinction -- a
-    # placeholder-done kernel is not rerun, but it is not a real measurement either.
-    done = delivered + placeholder
+    # "done" is DELIVERED kernels ONLY (2026-09-20 fix -- the 2026-09-18 meaning, delivered PLUS
+    # placeholder-done, made a forced-1x placeholder read as complete coverage on the board; a
+    # placeholder is now owed like budget/infra, just its own named share of it -- see arm_status
+    # and kernel_status's own docstring).
+    done = delivered
     return {
         "arm": arm,
         "campaign": campaign,
@@ -314,7 +331,7 @@ def arm_row(
         "roster": len(full),
         "owed_budget": len(budget),
         "owed_infra": len(infra),
-        "status": arm_status(done, len(full), [job.state for job in jobs], bool(rerun)),
+        "status": arm_status(done, len(full), [job.state for job in jobs], bool(rerun), placeholder),
         # rerun-lost.tsv's status for a setup whose job dirs were deleted, "" otherwise; its coverage
         # above still counts the frozen rows of those jobs (frozen_jobs).
         "rerun": rerun,
@@ -522,10 +539,17 @@ def canon_dirs(scratch: pathlib.Path, tag: str) -> list[pathlib.Path]:
     return sorted(found, key=lambda p: p.stat().st_mtime)
 
 
-def canon_csv_rows(path: pathlib.Path) -> list[tuple[str, str]]:
-    """(kernel, status) over one column's rank shard."""
+def canon_csv_rows(path: pathlib.Path) -> list[tuple[str, str, str]]:
+    """(kernel, status, failure) over one column's rank shard.
+
+    ``failure`` matters as much as ``status``: run-framework exits ``status=ok`` for a kernel it
+    merely DECLINED (a non-affine loop, no scop emitted, ppcg offloaded nothing -- see
+    :mod:`hpcagent_bench.ppcg_transform`), with ``failure=unsupported`` the only sign it never
+    produced a result. A shard from before this field existed has an empty ``failure`` column,
+    which reads the same as a genuine success -- ``status`` alone was the whole story then.
+    """
     with path.open(newline="", encoding="utf-8") as handle:
-        return [(row["kernel"], row["status"]) for row in csv.DictReader(handle)]
+        return [(row["kernel"], row["status"], row.get("failure", "")) for row in csv.DictReader(handle)]
 
 
 def canon_opt_reports_saved(dirs: list[pathlib.Path], col: str) -> bool:
@@ -536,13 +560,20 @@ def canon_opt_reports_saved(dirs: list[pathlib.Path], col: str) -> bool:
 
 def canon_column_row(tag: str, col: str, dirs: list[pathlib.Path], roster: list[str], jobs: list[Job]) -> dict:
     """One board row for ``col`` over ``tag``'s roster: the LATEST status per kernel across every
-    canon directory, oldest to newest, so a superseding ``-b`` wave overrides the wave it re-ran."""
-    latest: dict[str, str] = {}
+    canon directory, oldest to newest, so a superseding ``-b`` wave overrides the wave it re-ran.
+
+    ``done`` requires a genuine result (``status=="ok"`` AND no ``failure``): a DECLINED kernel
+    (``status=="ok"``, ``failure=="unsupported"``) is not a placeholder gap either -- run-framework
+    already ran it and it answered "no result", and that answer belongs in ``failed`` beside a
+    crash, not silently counted as done (2026-09-20 fix: this used to count every ``status=="ok"``
+    row, which read a compiler that declined its whole roster as 100% complete).
+    """
+    latest: dict[str, tuple[str, str]] = {}
     for one in dirs:
         for path in sorted(one.glob(f"{col}.rank*.csv")):
-            latest.update(canon_csv_rows(path))
-    done = sum(1 for kernel in roster if latest.get(kernel) == "ok")
-    failed = sorted(kernel for kernel in roster if kernel in latest and latest[kernel] != "ok")
+            latest.update({kernel: (status, failure) for kernel, status, failure in canon_csv_rows(path)})
+    done = sum(1 for kernel in roster if latest.get(kernel) == ("ok", ""))
+    failed = sorted(kernel for kernel in roster if kernel in latest and latest[kernel] != ("ok", ""))
     return {
         "arm": f"canon40-{tag}-{col}",
         "campaign": f"canon40-{tag}",

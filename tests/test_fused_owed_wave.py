@@ -669,3 +669,54 @@ def test_a_lost_llrblind_arm_falls_back_to_its_own_env_and_renders_its_problems_
     # rerender() must be a no-op for it (campaign not in RENDERED_TRACKS): the same text survives.
     final = owed.rerender(plan, str(REPO), sys.executable)
     assert final.owed[0].problem is item.problem
+
+
+# ------------------------------------------------------------------ a forced-1x placeholder is owed
+
+
+def placeholder_only_run(tmp_path: pathlib.Path, job: str, arm: str) -> pathlib.Path:
+    """A run root whose one job delivers nothing and whose one worker's tokens.json is a clean rc=0
+    self-exit (classify_exit's DONE, a forced-1x placeholder) -- launch dir intact, so this exercises
+    the placeholder rule on its own, apart from the fallback-source path above."""
+    root = tmp_path / "runs" / "root"
+    shard = root / job / "judge" / "rank-0"
+    shard.mkdir(parents=True)
+    conn = sqlite3.connect(shard / "hpcagent_bench0.db")
+    with conn:
+        conn.execute("create table runs (run_id text, arm text)")
+        conn.execute("create table submissions (run_id text, benchmark text, optimizer text, ts integer)")
+        conn.execute("create table attempts (run_id text, benchmark text, reason text, ts integer)")
+        conn.execute("insert into runs values (?, ?)", (f"{arm}.n0.p0.w0", arm))
+    conn.close()
+    worker = root / job / "agents" / "node-0" / "problem-0-worker-0"
+    worker.mkdir(parents=True)
+    (worker / "tokens.json").write_text(json.dumps({"kernel": "loop_level_reasoning/a/a", "returncode": 0, "arm": arm}))
+    launch = root / ".agent-launch" / job
+    launch.mkdir(parents=True)
+    env = dict(setup_env(arm))
+    env["PROBLEMS_FILE"] = "problems.jsonl"
+    (launch / ".env").write_text("".join(f"{key}={value}\n" for key, value in env.items()))
+    (launch / "problems.jsonl").write_text(
+        json.dumps({"id": 0, "kernel": "loop_level_reasoning/a/a", "task": "t"}) + "\n"
+    )
+    return root.parent
+
+
+def test_a_placeholder_only_arm_is_planned_as_owed_infra_at_1x(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """2026-09-20 decision, end to end through the planner: a forced-1x placeholder is owed, class
+    INFRA, and reruns at the model's normal (1x) budget even when the caller asked TOKEN_SCALE/
+    TIME_SCALE=4 for the budget class -- INFRA never scales, so it cannot compound a cap it never hit."""
+    arm = "cpf-llr-focus40-qwen38-c-placeholder"
+    runs = placeholder_only_run(tmp_path, "700007", arm)
+    monkeypatch.setattr(owed, "queued_arms", set)
+    monkeypatch.setattr(owed.remaining_kernels, "roster", lambda tag, opt: ["a"])
+    plan = owed.gather("qwen38", runs, str(REPO), owed.Selection(setups=frozenset({arm})), 4, 4, set())
+    assert len(plan.owed) == 1
+    item = plan.owed[0]
+    assert item.owed_class == "infra"
+    assert (item.setup.value("AGENT_MAX_TOKENS"), item.setup.value("AGENT_TIMEOUT_SECONDS")) == (
+        "12000000",
+        "14400",
+    ), "the model's own base budget, unscaled"

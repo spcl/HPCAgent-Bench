@@ -79,7 +79,6 @@ td.arm { font: 13px var(--mono); }
 td.arm .variant { color: var(--ink); } td.arm .model { color: var(--muted); }
 td.num { font: 13px var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 td.num .owed { color: var(--incomplete); }
-td.num .placeholder { color: var(--muted); }
 .strip { display: grid; grid-auto-flow: column; grid-auto-columns: 7px; gap: 2px; height: 14px; }
 .strip i { display: block; border-radius: 1px; background: var(--cell-empty); }
 .strip i.on { background: var(--complete); }
@@ -116,8 +115,9 @@ td.num .placeholder { color: var(--muted); }
   <main id="board" style="display:grid;gap:30px"></main>
 
   <div class="legend">
-    <div><span class="pill complete">complete</span> every roster kernel has a row in <code>submissions</code> or <code>attempts</code>, over the union of all waves.</div>
+    <div><span class="pill complete">complete</span> every roster kernel is DELIVERED -- a real grade happened, in <code>submissions</code> or <code>attempts</code>, over the union of all waves. A placeholder blocks it.</div>
     <div><span class="pill running">running</span> a job for the arm is running or queued. <span class="pill incomplete">incomplete</span> kernels are owed and nothing is queued: the next wave runs exactly that complement.</div>
+    <div>A <b>placeholder</b> is a roster kernel the agent never delivered an answer for (self-exit or context overflow): scored 1x, and OWED -- it gets one rerun at normal budget (2026-09-20). It counts inside the "N owed" breakdown, never as a separate "complete" kernel.</div>
     <div><span class="pill rerun">rerun</span> the setup's job directories were deleted (2026-09-19, <code>experiments/rerun-lost.tsv</code>); its coverage is read from the frozen observations (dashed job chips) until the rerun is done.</div>
     <div>Rows that measured a broken treatment are deleted with their run directories, so an arm rerun from scratch starts at 0.</div>
     <div>Job chips: green COMPLETED, amber FAILED or TIMEOUT, struck-through CANCELLED. A kimi arm labelled FAILED with every agent finished is the rc 123-125 teardown, not a crash. Smoke arms have no roster.</div>
@@ -287,16 +287,18 @@ function renderBoard() {
       if (arm.clean) armCell.append(" ", el("span", { class: "pill clean" }, "clean"));
       const counts = el("td", { class: "num" }, arm.roster ? `${arm.done}/${arm.roster}` : "n/a");
       const badges = [];
+      // A forced-1x placeholder (self-exit or context overflow, never submitted) is OWED like a
+      // budget/infra kernel (2026-09-20: superseded the 2026-09-18 "never rerun" rule) -- one
+      // shape, everywhere: "(N owed: P placeholder, B budget, I infra)", only the nonzero shares
+      // named, so the headline "N owed" and the row breakdown can never disagree.
       if (owed(arm)) {
-        const bits = [`${owed(arm)} owed`];
-        if (arm.owed_budget) bits.push(`${arm.owed_budget} budget`);
-        if (arm.owed_infra) bits.push(`${arm.owed_infra} infra`);
-        badges.push(el("span", { class: "owed" }, `(${bits.join(", ")})`));
+        const share = [];
+        if (arm.placeholder) share.push(`${arm.placeholder} placeholder`);
+        if (arm.owed_budget) share.push(`${arm.owed_budget} budget`);
+        if (arm.owed_infra) share.push(`${arm.owed_infra} infra`);
+        const label = share.length ? `${owed(arm)} owed: ${share.join(", ")}` : `${owed(arm)} owed`;
+        badges.push(el("span", { class: "owed" }, `(${label})`));
       }
-      // A forced-1x placeholder (self-exit or context overflow, never submitted -- 2026-09-18
-      // owed rule) counts as done (never rerun) but is NOT a delivered answer (2026-09-19
-      // forced-1x completion decision): flagged apart so "done" is never read as "measured".
-      if (arm.placeholder) badges.push(el("span", { class: "placeholder" }, `(${arm.placeholder} placeholder)`));
       for (const badge of badges) counts.append(" ", badge);
       const rowAttrs = { class: arm.status };
       if (arm.failed && arm.failed.length) rowAttrs.title = "failed: " + arm.failed.join(", ");

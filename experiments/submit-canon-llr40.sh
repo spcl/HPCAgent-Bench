@@ -109,9 +109,14 @@ for col in ${COLUMNS}; do
         continue
     fi
     dep=(); [[ -n "${DEPEND_ON:-}" ]] && dep=(--dependency="afterany:${DEPEND_ON}")
+    #: NICE=300, e.g., puts a gap-filling canon run behind the priority queue's LLR/cpfsrc waves
+    #: but ahead of a background scicomp sweep (2026-09-20 queue-priority convention) without
+    #: touching either queue's own submitter. Unset (the default) keeps every existing caller's
+    #: ordinary priority.
+    nice=(); [[ -n "${NICE:-}" ]] && nice=(--nice="${NICE}")
     jid=$(sbatch --parsable --no-requeue --partition=mi300 --nodes=1 --exclusive --mem=0 \
         "${gres[@]}" --time="${TIME_LIMIT}" --job-name="${JOB_PREFIX}-${JOB_TAG:-${col%%,*}}" \
-        "${dep[@]}" ${BEGIN:+--begin="${BEGIN}"} \
+        "${dep[@]}" "${nice[@]}" ${BEGIN:+--begin="${BEGIN}"} \
         --output="${OUT_ROOT}/%x-%j.out" --error="${OUT_ROOT}/%x-%j.err" \
         --wrap "bash ${PWD}/canon_column.sh outer ${col} ${OUT_ROOT} ${KERNELS} ${PRESET} ${OPT}")
     echo "submitted ${col} -> ${jid}${BEGIN:+ (begin ${BEGIN})}"

@@ -333,11 +333,13 @@ def llr40_observations_fixture() -> pd.DataFrame:
 
 def test_canon_row_matches_the_ratio_and_scopes_to_the_roster(llr40_canon: pd.DataFrame) -> None:
     row = signed.canon_kernel_row(llr40_canon, "dace_cpu_canonicalize", ROSTER40)
-    assert row.ratios == {"k1": pytest.approx(10.0), "k2": pytest.approx(10.0)}
-    assert row.numerator_ms == {"k1": pytest.approx(100.0), "k2": pytest.approx(200.0)}
-    assert row.denominator_ms == {"k1": pytest.approx(10.0), "k2": pytest.approx(20.0)}
-    # k3 is missing (not zero): numba timed it, dace_cpu_canonicalize never did.
-    assert "k3" not in row.ratios
+    assert row.ratios == {"k1": pytest.approx(10.0), "k2": pytest.approx(10.0), "k3": 1.0}
+    assert row.numerator_ms["k1"] == pytest.approx(100.0) and row.numerator_ms["k2"] == pytest.approx(200.0)
+    assert row.denominator_ms["k1"] == pytest.approx(10.0) and row.denominator_ms["k2"] == pytest.approx(20.0)
+    # k3 is FILLED at 1x, not dropped (2026-09-20 rule): numba timed it, dace_cpu_canonicalize
+    # never did, and that "no result" is flagged rather than made to look like a real measurement.
+    assert row.ratios["k3"] == 1.0 and math.isnan(row.denominator_ms["k3"])
+    assert row.delivered == {"k1": True, "k2": True, "k3": False}
     assert row.color == palette.framework_color("dace_cpu_canonicalize")
     assert row.marker == palette.marker("cpf")
     assert row.label == "Canonical Parallel Form"
@@ -412,6 +414,37 @@ def test_rows_keep_only_roster_complete_conditions(llr40_canon: pd.DataFrame, ll
     }  # fmt: skip
 
 
+def test_adding_compiler_columns_does_not_change_any_agent_rows_ratios(
+    llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame
+) -> None:
+    """Wiring Pluto/ppcg_hip into the figure (``statistics/plot_llr40_compilers.py``'s own
+    ``--canon-columns`` default, 2026-09-20) only ADDS rows -- it must never change an agent arm's
+    own per-kernel speed-up (its S_i). ``pluto``/``ppcg_hip`` are absent from ``llr40_canon`` here
+    (never a validated row, exactly the historical ppcg canon sweep, job 640520), so every roster
+    kernel on those two rows fills at 1x -- and every agent row's ratios must be BIT-IDENTICAL to
+    the two-column baseline."""
+    columns_2 = signed.LLR40_CANON_COLUMNS
+    columns_4 = (*columns_2, "pluto", "ppcg_hip")
+    before = {
+        row.framework: row.ratios
+        for row in signed.llr40_rows(llr40_canon, llr40_observations, ROSTER40, canon_columns=columns_2)
+    }
+    after = {
+        row.framework: row.ratios
+        for row in signed.llr40_rows(llr40_canon, llr40_observations, ROSTER40, canon_columns=columns_4)
+    }
+    agent_arms = [key for key in before if key not in columns_2]
+    assert agent_arms  # the fixture must actually carry agent rows, or this test proves nothing
+    for arm in agent_arms:
+        assert after[arm] == before[arm], arm
+    assert "pluto" not in before and "ppcg_hip" not in before
+    assert "pluto" in after and "ppcg_hip" in after
+    rows_4 = signed.llr40_rows(llr40_canon, llr40_observations, ROSTER40, canon_columns=columns_4)
+    pluto_row = next(row for row in rows_4 if row.framework == "pluto")
+    assert pluto_row.ratios == {k: 1.0 for k in ROSTER40}  # no validated pluto row anywhere -> every kernel 1x
+    assert pluto_row.delivered == {k: False for k in ROSTER40}
+
+
 def test_llr40_figure_renders_with_missing_marks_and_rule_checked_tables(
     llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame, tmp_path: pathlib.Path
 ) -> None:
@@ -420,9 +453,9 @@ def test_llr40_figure_renders_with_missing_marks_and_rule_checked_tables(
     assert stem.with_suffix(".pdf").is_file() and stem.with_suffix(".png").is_file()
     kernels = pd.read_csv(tmp_path / "llr40-kernels.csv")
     # dace_cpu never timed k3 (test_canon_row_matches_the_ratio_and_scopes_to_the_roster): the
-    # emitted table names it MISSING rather than silently dropping the row.
+    # emitted table carries it at 1x rather than dropping the row (2026-09-20 rule).
     dace_k3 = kernels[(kernels.framework == "dace_cpu") & (kernels.kernel == "k3")]
-    assert dace_k3.empty  # canon_kernel_row never enters a kernel it has no ratio for
+    assert len(dace_k3) == 1 and dace_k3["speedup"].iloc[0] == pytest.approx(1.0)
     summary = pd.read_csv(tmp_path / "llr40-summary.csv")
     assert (summary["n"] > 0).all()
     assert (summary["geomean_low"] <= summary["geomean"]).all()
