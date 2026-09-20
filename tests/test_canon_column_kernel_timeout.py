@@ -8,8 +8,8 @@ SLURM time limit killed it -- every kernel after the hang, on every rank, got no
 inner loop had no per-kernel wall cap, so one stuck ``run-framework`` invocation blocked the rest
 of that rank's share for the rest of the job.
 
-This drives the real script's ``inner`` entry point against a STUB ``hpcagent_bench.cli`` that
-sleeps forever, the same way ``test_canon_column_zero_kernel_rank.py`` drives it against a stub
+This drives the real script's ``inner`` entry point against a STUB ``hpcagent_bench.cli`` whose
+run-framework sleeps forever, the same way ``test_canon_column_zero_kernel_rank.py`` drives it against a stub
 column with no working dace tree -- not a reimplementation of the timeout's bash, so a regression
 in the actual wrapping (wrong flag, wrong field count in the synthetic CSV row) is caught the same
 way a real hang would be.
@@ -26,7 +26,7 @@ CANON_COLUMN = paths.ROOT / "experiments" / "canon_column.sh"
 
 def stub_opt(tmp_path: pathlib.Path) -> pathlib.Path:
     """An ``opt`` tree with just enough to satisfy ``inner`` up to the run-framework call: a no-op
-    ``scripts/cache_env.sh`` and a fake ``hpcagent_bench.cli`` that never returns."""
+    ``scripts/cache_env.sh`` and a fake ``hpcagent_bench.cli`` whose run-framework never returns."""
     opt_dir = tmp_path / "opt"
     (opt_dir / "scripts").mkdir(parents=True)
     (opt_dir / "scripts" / "cache_env.sh").write_text("# stub cache_env.sh for this test, no-op\n")
@@ -34,10 +34,15 @@ def stub_opt(tmp_path: pathlib.Path) -> pathlib.Path:
     pkg.mkdir()
     (pkg / "__init__.py").write_text("")
     (pkg / "cli.py").write_text(
-        "# stub run-framework that never returns, so canon_column.sh's own `timeout` wrapper is\n"
-        "# what has to end this process -- nothing in this file does.\n"
+        "# stub cli, one answer per subcommand. `preflight --tools-only` is the gate canon_column.sh\n"
+        "# runs BEFORE its first kernel, and it has to return, or the hang under test happens there\n"
+        "# instead -- outside the per-kernel `timeout` wrapper, which is the thing being driven.\n"
+        "# run-framework never returns, so that wrapper is what has to end this process.\n"
+        "import sys\n"
         "import time\n\n"
         "if __name__ == '__main__':\n"
+        "    if sys.argv[1:2] == ['preflight']:\n"
+        "        raise SystemExit(0)\n"
         "    time.sleep(9999)\n"
     )
     return opt_dir
@@ -76,6 +81,6 @@ def test_a_hung_kernel_is_killed_and_recorded_as_a_timeout_row_not_a_silent_gap(
     # $6 != ok, so the summary line's own tally counts this row as crashed, and `failed` (the
     # hard-nonzero-exit counter) is bumped too -- this is what makes finalize_column's own row
     # count agree with merge_canon_results.py's independent CSV parse instead of quietly diverging.
-    assert "1 rows -- 0 ok, 0 unsupported, 1 crashed, 0 failed-in-column, 1 nonzero-exit" in result.stdout, (
+    assert "1 rows -- 0 ok, 0 unsupported, 0 tool-missing, 1 crashed, 0 failed-in-column, 1 nonzero-exit" in (
         result.stdout
-    )
+    ), result.stdout
