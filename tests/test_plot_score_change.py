@@ -1098,6 +1098,41 @@ def test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor(measure
     assert "4x" not in texts(frozenset())
 
 
+@pytest.mark.parametrize("measure", ["speedup", "cost"])
+def test_a_measure_row_puts_a_labelled_tick_on_each_of_its_borders(measure: str) -> None:
+    """A fractional margin leaves the top and bottom in dead space, so a mark has no labelled edge
+    to be read against (user, 2026-09-20).
+
+    The bug this guards: the snap asked the locator for ticks over the DATA's own range, which is
+    the one range whose answer omits the tick either side of it. A token axis whose arms all sit
+    inside one decade fell through and kept the padded window, drawing no labelled tick on either
+    border.
+    """
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    try:
+        efficacy_figures.draw_measure_row(ax, [arrow_row()], measure, "^", {}, efficacy_figures.PAPER_CONFIG)
+        low, high = ax.get_ylim()
+        ticks = [tick for tick in ax.get_yticks() if low <= tick <= high]
+        assert ticks, (low, high)
+        assert ticks[0] == pytest.approx(low), (ticks, low)
+        assert ticks[-1] == pytest.approx(high), (ticks, high)
+    finally:
+        plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    "name", ["i) Loop Reasoning (LLR), CPU", "iii) Repository Context", "iv) Repo vs. Kernel", "ii) X"]
+)
+def test_a_panel_name_never_folds_onto_a_third_line(name: str) -> None:
+    """A third line comes out of the panel. The width is SEARCHED because the first line carries
+    the tag as well as its first word ("iii) Repository"), which no per-word rule predicts -- the
+    estimate put "Repository Context" on three lines in an 11-character column."""
+    folded = efficacy_figures.wrapped_label(name, efficacy_figures.name_line_width(name, 11))
+    assert folded.count("\n") + 1 <= efficacy_figures.MAX_NAME_LINES, folded
+
+
 def test_parse_spec_reads_semicolon_separated_key_value_pairs() -> None:
     """``--comparison`` takes one string per panel; the parser is the only place its grammar is
     decided."""

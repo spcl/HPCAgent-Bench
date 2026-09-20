@@ -189,9 +189,9 @@ PAPER_CONFIG = dataclasses.replace(
     DEFAULT_CONFIG,
     tick_pt=7.0,
     label_pt=8.0,
-    subtitle_pt=8.0,
+    subtitle_pt=10.0,
     point_pt=6.5,
-    legend_pt=4.6,
+    legend_pt=5.8,
     legend_marker_pt=5.5,
     legend_marker_scale=1.0,
     mark_size=26.0,
@@ -1683,7 +1683,7 @@ def arm_rows(
 #: with the footnote the key carries for each. The tick is the abbreviation, so the column stays
 #: readable; the key is where the reader finds out what it stands for.
 TICK_ALIASES: dict[str, tuple[str, str]] = {
-    experiment_tags.OFFLOAD_DELIVERY_NAME: ("OMP-C", "OMP-C = OpenMP Offloading + C"),
+    experiment_tags.OFFLOAD_DELIVERY_NAME: ("OMP", "OMP = OpenMP Offloading"),
 }
 
 
@@ -1804,23 +1804,35 @@ def panel_tag(index: int, numbering: str = "letter") -> str:
     return f"{seq[index]})" if index < len(seq) else f"{index + 1})"
 
 
-def name_line_width(text: str, wrap: int) -> int:
-    """How many characters per line ``text`` needs to fold onto :data:`MAX_NAME_LINES` without
-    breaking a word -- at least ``wrap``, the panel's own width."""
-    longest = max((len(word) for word in text.split()), default=wrap)
-    return max(wrap, -(-len(text) // MAX_NAME_LINES), longest)
+def fold_width(text: str, wrap: int, lines: int) -> int:
+    """The narrowest width at or above ``wrap`` that folds ``text`` onto at most ``lines``.
 
-
-def name_scale(names: Sequence[str], wraps: Sequence[int]) -> float:
-    """The ONE type scale every panel name of a row is set at: the smallest any of them needs.
-
-    Per panel, each would be set at its own size, and a row whose third name happens to be longer
-    than its column reads as three different headings rather than one row of them.
+    Searched rather than estimated: the first line carries the tag as well as its first word
+    ("iii) Repository"), which no per-word or per-character rule predicts -- estimating it is what
+    put one panel name on three lines.
     """
-    scales = [
-        min(1.0, wrap / name_line_width(name, wrap)) for name, wrap in zip(names, wraps, strict=True) if wrap
-    ]  # fmt: skip
-    return min(scales) if scales else 1.0
+    for width in range(max(wrap, -(-len(text) // lines)), max(len(text), wrap) + 1):
+        if wrapped_label(text, width).count("\n") < lines:
+            return width
+    return max(len(text), wrap)
+
+
+def name_line_width(text: str, wrap: int) -> int:
+    """:func:`fold_width` at :data:`MAX_NAME_LINES`."""
+    return fold_width(text, wrap, MAX_NAME_LINES)
+
+
+def name_layout(names: Sequence[str], wraps: Sequence[int]) -> tuple[float, list[int]]:
+    """``(one type scale, one fold width per panel)`` for a row of panel names.
+
+    ONE scale, the smallest any name needs: set at its own size each, a row whose third name is
+    longer than its column reads as three headings rather than one row of them. Each fold width is
+    then that panel's own, widened by the same scale, so every name still folds onto at most
+    :data:`MAX_NAME_LINES` -- and onto ONE where its column is wide enough to hold it.
+    """
+    needed = [name_line_width(name, wrap) for name, wrap in zip(names, wraps, strict=True)]
+    scale = min((wrap / line for wrap, line in zip(wraps, needed, strict=True) if wrap), default=1.0)
+    return min(1.0, scale), needed
 
 
 def draw_panel_label(
@@ -1843,12 +1855,12 @@ def draw_panel_label(
         # pushed the first line four characters past the panel's own right edge. Never past TWO
         # lines: a third steals the band from the panel, so the type shrinks to fit instead.
         whole = f"{letter} {name}"
-        size = config.subtitle_pt
-        if wrap:
-            per_line = name_line_width(whole, wrap)
-            size *= min(1.0, wrap / per_line)
-            whole = wrapped_label(whole, per_line)
-        ax.set_title(whole, loc="left", fontsize=size, color=style.INK, pad=pad)
+        # ``wrap`` is the EXACT fold width the caller settled on, at the type it also settled on.
+        # Recomputing it here against a scaled width is what folded one name onto a third line.
+        ax.set_title(
+            wrapped_label(whole, wrap) if wrap else whole, loc="left", fontsize=config.subtitle_pt,
+            color=style.INK, pad=pad,
+        )  # fmt: skip
         return ""
     # Above the panel's own left edge, not out in the margin: the margin is where the rotated Y
     # label is, and a letter placed there printed on top of it.
@@ -1925,7 +1937,7 @@ def draw_difference_arrow(
     # keep it legible was worse than the overlap it was hiding.
     ax.annotate(
         factor_label(factor), xy=(x, middle), textcoords="offset points",
-        xytext=(config.symbol_offset_pt + 2.0, 0.0), ha="left", va="center",
+        xytext=(config.symbol_offset_pt * 0.5, 0.0), ha="left", va="center",
         fontsize=config.point_pt * 0.85, color=style.MUTED, zorder=style.FILL_Z,
     )  # fmt: skip
 
@@ -1947,7 +1959,14 @@ def snap_axis_to_ticks(ax: Axes, data_low: float, data_high: float) -> None:
     """
     if not (math.isfinite(data_low) and math.isfinite(data_high)):
         return
-    ticks = np.asarray(ax.yaxis.get_major_locator().tick_values(data_low, data_high), dtype=float)
+    # Asked over the DATA's own range a locator answers with the ticks INSIDE it, and the tick
+    # either side -- the one this needs -- is exactly what it leaves out. The range is widened
+    # first, so both ends are in the answer: a token axis that fell through this kept the padded
+    # window and drew no labelled tick on either border.
+    log = ax.get_yscale() == "log"
+    reach = max(data_high - data_low, 1.0)
+    span = (data_low / 100.0, data_high * 100.0) if log else (data_low - reach, data_high + reach)
+    ticks = np.asarray(ax.yaxis.get_major_locator().tick_values(*span), dtype=float)
     below, above = ticks[ticks <= data_low], ticks[ticks >= data_high]
     if below.size == 0 or above.size == 0:
         return
@@ -2045,7 +2064,12 @@ def draw_measure_row(
     if span:
         snap_axis_to_ticks(ax, min(span), max(span))
     if ylabel:
-        ax.set_ylabel(wrapped_label(ylabel, label_wrap(config)), fontsize=config.label_pt)
+        # Two lines at most, same rule the panel names fold under: a rotated third line is wider
+        # than the chrome band beside the data box.
+        ax.set_ylabel(
+            wrapped_label(ylabel, fold_width(ylabel, label_wrap(config), MAX_NAME_LINES)),
+            fontsize=config.label_pt,
+        )  # fmt: skip
     note = MEASURE_DIRECTION.get(measure) if direction else None
     if note:
         # Lighter than the data's own labels: this one tells a reader how to READ the row, and at
@@ -2273,14 +2297,14 @@ def dot_row_legend(columns: Sequence[DotColumn], channels: str, config: FigureCo
 #: measured: the data box has to be the same size in every efficacy figure of a paper, so a longer
 #: Y label may not eat into it. It is checked against what the labels actually need
 #: (:func:`required_left_margin`) and the shortfall is reported, never silently absorbed.
-LEFT_CHROME_IN: float = 0.62
+LEFT_CHROME_IN: float = 1.0
 
 #: The chrome BELOW the data box, in inches: everything the key is allowed to take. FIXED, like
 #: :data:`LEFT_CHROME_IN` and for the same reason -- the canvas AND the data box are both the same
 #: in every efficacy figure of a paper, so a figure with four more key rows may not grow the page
 #: or shrink the panels. A key that does not fit is set smaller until it does
 #: (:func:`fit_legend`).
-LEGEND_CHROME_IN: float = 0.42
+LEGEND_CHROME_IN: float = 0.36
 
 #: How far :func:`fit_legend` will shrink the key's type, as a fraction of the config's own, before
 #: it gives up and says so.
@@ -2403,10 +2427,8 @@ def figure_dot_row(
         gridspec_kw={"width_ratios": ratios},
     )  # fmt: skip
     fig.set_dpi(style.SAVE_DPI)
-    wraps = [panel_name_wrap(width) for width in widths]
-    scale = name_scale(
-        [f"{panel_tag(index, 'roman')} {column.title}" for index, column in enumerate(columns)], wraps
-    )  # fmt: skip
+    names = [f"{panel_tag(index, 'roman')} {column.title}" for index, column in enumerate(columns)]
+    scale, folds = name_layout(names, [panel_name_wrap(width) for width in widths])
     name_config = dataclasses.replace(config, subtitle_pt=config.subtitle_pt * scale)
     for row_index, measure in enumerate(measures):
         for col_index, column in enumerate(columns):
@@ -2419,7 +2441,7 @@ def figure_dot_row(
             )  # fmt: skip
             if row_index == 0 and panel_labels != "none":
                 draw_panel_label(ax, col_index, column.title, panel_labels, name_config, "roman",
-                                 int(panel_name_wrap(widths[col_index]) / scale), note_pad)  # fmt: skip
+                                 folds[col_index], note_pad)  # fmt: skip
     for ax, column in zip(axes[-1], columns, strict=True):
         draw_category_axis(ax, column.rows, config)
     handles = dot_row_legend(columns, channels, config)

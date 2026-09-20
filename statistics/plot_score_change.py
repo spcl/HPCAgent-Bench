@@ -391,7 +391,10 @@ def write_dot_rows(
         config=config, channels=args.channels, panel_labels=args.dots_panel_labels,
         differences=args.difference,
         **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
-        labels=dict(efficacy_figures.MEASURE_LABELS),
+        labels={
+            "speedup": efficacy_figures.MEASURE_LABELS["speedup"],
+            "cost": efficacy_figures.cost_label((card.fresh_input, card.cached_input, card.output), card.key),
+        },
     )  # fmt: skip
     print(f"dots   -> {written} (+ .png)")
 
@@ -849,10 +852,12 @@ def main() -> None:
                 **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
                 control_names=comparison_controls, differences=comparison_differences,
                 placeholders=comparison_placeholders,
-                # The Y titles are the MEASURE, nothing else: the cost card's weights are a
-                # sentence of caption, and as a rotated three-line label they were wider than the
-                # chrome band the data box leaves them.
-                labels=dict(efficacy_figures.MEASURE_LABELS),
+                labels={
+                    "speedup": efficacy_figures.MEASURE_LABELS["speedup"],
+                    "cost": efficacy_figures.cost_label(
+                        (card.fresh_input, card.cached_input, card.output), card.key
+                    ),
+                },
             )  # fmt: skip
         else:
             written = efficacy_figures.figure_row(
