@@ -104,7 +104,10 @@ optimizers:
   # APPENDED so neither repaints dace/cpf's shapes. Their colour stays framework_color's own
   # `frameworks:` slot (pluto, ppcg_hip below); this only gives each its own marker shape.
   pluto: Pluto
-  ppcg_hip: PPCG (HIP)
+  # ppcg has no AMD target, so this column is ppcg's CUDA through hipify-perl (see `frameworks:`).
+  # The two blocks must SAY the same thing: a figure that draws this from here and the compiler
+  # legend from there would label one number two ways.
+  ppcg_hip: PPCG (CUDA via hipify)
 
 # Skill packets, keyed by the canonical `packet` column value. KEY ORDER IS HUE ORDER, and it also
 # picks the LEAD of a combination: the lead of `cpfsrc+lang-skills` is cpfsrc, so a CPF figure's
@@ -353,7 +356,11 @@ frameworks:
   triton: Triton
   ppcg: PPCG
   ppcg_cuda: PPCG (CUDA)
-  ppcg_hip: PPCG (HIP)
+  # NOT "PPCG (HIP)". ppcg has no AMD target -- --target takes c, cuda or opencl -- so this column
+  # is ppcg's CUDA put through ROCm's hipify-perl and built by hipcc (hpcagent_bench.ppcg_transform).
+  # The label says so, because a reader comparing it with a hand-written HIP column is comparing
+  # against a translated source, not against what a polyhedral compiler emits for this device.
+  ppcg_hip: PPCG (CUDA via hipify)
   tvm_cpu: TVM (CPU)
 
 # Alternate spellings that resolve to a registered entity. Kept OUT of the ordered blocks above so

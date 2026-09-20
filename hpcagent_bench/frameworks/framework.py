@@ -758,7 +758,9 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
     "ppcg_hip": {
         "base": "pluto",
         "sweep_deterministic": False,
-        "full_name": "Polyhedral GPU (PPCG, HIP)",
+        # Named for the chain it actually is, not for the device it lands on: ppcg has no AMD
+        # target, so this is ppcg's CUDA translated by hipify-perl and built by hipcc.
+        "full_name": "Polyhedral GPU (PPCG, CUDA via hipify)",
         "prefix": "ppcg_hip",
         "postfix": "cpp",
         "arch": "gpu",

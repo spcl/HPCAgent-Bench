@@ -32,7 +32,7 @@ import subprocess
 import tempfile
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from hpcagent_bench.frameworks.errors import NotSupportedByFramework
+from hpcagent_bench.frameworks.errors import NotSupportedByFramework, ToolMissing
 from hpcagent_bench.languages import LANG_EXT, gpu_backend
 from hpcagent_bench.pluto_transform import assert_affine, scop_inputs
 
@@ -69,39 +69,6 @@ def _exe_under_prefix(prefix: Optional[str], name: str) -> Optional[str]:
     return str(candidate) if os.access(candidate, os.X_OK) else None
 
 
-def ppcg_exe() -> Optional[str]:
-    """``ppcg``, resolved in order: :data:`PPCG_HOME_ENV`, ``<tools dir>/ppcg/bin/ppcg``, PATH.
-
-    The first two never fire on a host that has not built ppcg -- both env vars are then either
-    unset or point at a directory :func:`_exe_under_prefix` finds nothing executable under -- so a
-    host that installs ``ppcg`` onto PATH the ordinary way keeps working exactly as before. What
-    changes is that a ppcg built into ``$HPCAGENT_BENCH_TOOLS_DIR/ppcg-<version>`` (a ``<tool>``
-    symlink pointed at the current build; see ``scripts/cache_env.sh``) is found WITHOUT the image's
-    EDF ``PATH`` -- which is re-declared absolutely at run time and does not include it -- ever
-    having to name that cache directory.
-    """
-    direct = _exe_under_prefix(os.environ.get(PPCG_HOME_ENV), "ppcg")
-    if direct is not None:
-        return direct
-    tools_dir = os.environ.get(TOOLS_DIR_ENV)
-    from_tools = _exe_under_prefix(f"{tools_dir}/ppcg" if tools_dir else None, "ppcg")
-    if from_tools is not None:
-        return from_tools
-    return shutil.which("ppcg")
-
-
-def hipify_exe() -> Optional[str]:
-    """``hipify-perl`` on PATH, or under ``$ROCM_PATH/bin`` when PATH omits it, or ``None`` when
-    this host has neither. The image already ships ``hipify-perl`` under ``$ROCM_PATH/bin`` and
-    puts that directory on PATH, so the fallback exists for a host or launch mode where PATH does
-    not carry the image's own declaration -- never a hardcoded ROCm path, since ``ROCM_PATH`` is
-    the same env var the rest of this image's tooling (``compilers.yaml``'s hipcc block) reads."""
-    exe = shutil.which(HIPIFY)
-    if exe is not None:
-        return exe
-    return _exe_under_prefix(os.environ.get("ROCM_PATH"), HIPIFY)
-
-
 def _ppcg_run_env(exe: str) -> Optional[Dict[str, str]]:
     """The environment ``ppcg`` must run under: its OWN ``lib`` dir prepended to
     ``LD_LIBRARY_PATH``, or ``None`` when that directory does not exist (an ordinary system
@@ -128,6 +95,89 @@ def _ppcg_run_env(exe: str) -> Optional[Dict[str, str]]:
     existing = env.get("LD_LIBRARY_PATH", "")
     env["LD_LIBRARY_PATH"] = f"{lib}:{existing}" if existing else str(lib)
     return env
+
+
+def ppcg_lookup() -> Tuple[Optional[str], str]:
+    """The ``ppcg`` this host will actually run, as ``(exe, "")`` -- or ``(None, why not)``.
+
+    Candidates in order: :data:`PPCG_HOME_ENV`, ``<tools dir>/ppcg/bin/ppcg``, PATH. The first two
+    never fire on a host that has not built ppcg, so a host that installs ``ppcg`` onto PATH the
+    ordinary way is unaffected; what they add is that a ppcg built into
+    ``$HPCAGENT_BENCH_TOOLS_DIR/ppcg-<version>`` (a ``<tool>`` symlink pointed at the current build,
+    see ``scripts/cache_env.sh``) is found WITHOUT the image's EDF ``PATH`` -- re-declared
+    absolutely at run time, and not including that cache -- ever naming the directory.
+
+    A candidate has to RUN, not merely exist, and that is what makes the ORDER safe. The cache
+    outranks the image on purpose (a host pinning a build to test it must win), so an executable
+    there that dies at startup would otherwise shadow the pinned ppcg the image carries and take
+    the column down with it -- measured: the cache build left over from the /ritom scratch
+    migration still has its executable bit and still fails with ``libLLVM-17.so.1: cannot open
+    shared object file``. Probed with the tool's own ``--version``, under exactly the environment
+    :func:`run_ppcg` gives it (see :func:`_ppcg_run_env`), so what this accepts is the call the
+    column actually makes. Every refusal is kept and reported together: "installed but broken" and
+    "not here at all" are different faults and only one of them is fixed by installing anything.
+    """
+    tools_dir = os.environ.get(TOOLS_DIR_ENV)
+    candidates = (
+        _exe_under_prefix(os.environ.get(PPCG_HOME_ENV), "ppcg"),
+        _exe_under_prefix(f"{tools_dir}/ppcg" if tools_dir else None, "ppcg"),
+        shutil.which("ppcg"),
+    )
+    refused: List[str] = []
+    for exe in candidates:
+        if exe is None:
+            continue
+        try:
+            proc = subprocess.run([exe, "--version"], capture_output=True, text=True, env=_ppcg_run_env(exe))
+        except OSError as exc:
+            refused.append(f"{exe} cannot be executed: {exc}")
+            continue
+        if proc.returncode == 0:
+            return exe, ""
+        refused.append(f"{exe} is installed but does not run: {(proc.stderr or proc.stdout).strip()[-300:]}")
+    if refused:
+        return None, "; ".join(refused)
+    return None, (
+        f"ppcg is not installed on this host: nothing under ${PPCG_HOME_ENV}, ${TOOLS_DIR_ENV}/ppcg/bin, or PATH"
+    )
+
+
+def ppcg_exe() -> Optional[str]:
+    """The ``ppcg`` binary this host runs, or ``None``. See :func:`ppcg_lookup` for the order."""
+    return ppcg_lookup()[0]
+
+
+def ppcg_problem() -> str:
+    """``""`` when this host has a ``ppcg`` that runs, else what is wrong with every candidate."""
+    return ppcg_lookup()[1]
+
+
+def hipify_exe() -> Optional[str]:
+    """``hipify-perl`` on PATH, or under ``$ROCM_PATH/bin`` when PATH omits it, or ``None`` when
+    this host has neither. The image already ships ``hipify-perl`` under ``$ROCM_PATH/bin`` and
+    puts that directory on PATH, so the fallback exists for a host or launch mode where PATH does
+    not carry the image's own declaration -- never a hardcoded ROCm path, since ``ROCM_PATH`` is
+    the same env var the rest of this image's tooling (``compilers.yaml``'s hipcc block) reads."""
+    exe = shutil.which(HIPIFY)
+    if exe is not None:
+        return exe
+    return _exe_under_prefix(os.environ.get("ROCM_PATH"), HIPIFY)
+
+
+def missing_tool(backend: Optional[str] = None) -> str:
+    """``""`` when this host can build the ppcg column for ``backend``, else why not.
+
+    The ONE answer to "is this column's compiler here", asked per kernel by
+    :func:`transformed_sources` and once per job by ``hpcagent_bench.harness.preflight`` -- so a
+    preflight cannot pass on a toolchain the build would then decline, and the job log and the
+    per-kernel row cannot give two different reasons for one absence.
+    """
+    problem = ppcg_problem()
+    if problem:
+        return problem
+    if resolve_backend(backend) == "hip" and hipify_exe() is None:
+        return f"ppcg emits CUDA and this column builds HIP, but {HIPIFY} is not installed"
+    return ""
 
 
 def resolve_backend(backend: Optional[str]) -> str:
@@ -162,7 +212,7 @@ def hipify(scratch: pathlib.Path, stem: str) -> None:
     """
     exe = hipify_exe()
     if exe is None:  # transformed_sources already declines for this; here it keeps the argv typed
-        raise NotSupportedByFramework(FRAMEWORK, stem, f"{HIPIFY} is not installed on this host")
+        raise ToolMissing(FRAMEWORK, stem, f"{HIPIFY} is not installed on this host")
     for half in ("host", "kernel"):
         cu = scratch / f"{stem}_{half}.cu"
         translated = subprocess.run([exe, str(cu)], capture_output=True, text=True, check=True)
@@ -291,15 +341,16 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str, backend: Optional[
     emitted C would be an nvcc column wearing PPCG's label.
     """
     vendor = resolve_backend(backend)
+    # THE TOOL BEFORE THE KERNEL. A host with no ppcg has nothing to say about any kernel, and
+    # asking the scop question first says it anyway: job 640520 declined 55 of its 248 rows as "the
+    # translator emitted no #pragma scop" -- a fact about those kernels -- on a node where the real
+    # and only answer was that the image shipped no ppcg at all, which the other 193 rows did say.
+    problem = missing_tool(vendor)
+    if problem:
+        raise ToolMissing(FRAMEWORK, base, problem)
     scops = scop_inputs(cpp_backend, base)
     if not scops:
         raise NotSupportedByFramework(FRAMEWORK, base, "the translator emitted no #pragma scop for this kernel")
-    if ppcg_exe() is None:
-        raise NotSupportedByFramework(FRAMEWORK, base, "ppcg is not installed on this host")
-    if vendor == "hip" and hipify_exe() is None:
-        raise NotSupportedByFramework(
-            FRAMEWORK, base, f"ppcg emits CUDA and this column builds HIP, but {HIPIFY} is not installed"
-        )
     out: List[pathlib.Path] = []
     for scop in scops:
         assert_affine(scop, base)

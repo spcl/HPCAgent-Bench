@@ -19,6 +19,7 @@ import concurrent.futures
 import ctypes
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import time
@@ -332,7 +333,7 @@ def test_a_scop_ppcg_passed_through_is_declined_rather_than_timed(tmp_path, monk
 
     cpp_backend = tmp_path / "cpp_backend"
     scop = write_scop(cpp_backend)
-    monkeypatch.setattr(ppcg_transform, "ppcg_exe", lambda: "/usr/bin/true")
+    monkeypatch.setattr(ppcg_transform, "ppcg_lookup", lambda: ("/usr/bin/true", ""))
     monkeypatch.setattr(ppcg_transform, "hipify_exe", lambda: "/usr/bin/true")
     monkeypatch.setattr(ppcg_transform, "assert_affine", lambda *a, **k: None)
 
@@ -946,10 +947,13 @@ def test_an_exception_out_of_the_invoke_is_not_blamed_on_polycc(tmp_path, monkey
 
 
 def _make_exe(path: pathlib.Path) -> pathlib.Path:
-    """A file at ``path`` that :func:`os.access(..., os.X_OK)` accepts, for the lookup tests below
-    (they never actually run it -- only the executable BIT is checked)."""
+    """A runnable stand-in at ``path``, for the lookup tests below.
+
+    It has to RUN and exit 0, not merely carry the executable bit: :func:`ppcg_transform.ppcg_lookup`
+    probes each candidate with its own ``--version`` and walks past one that fails, so a file that
+    only looks executable is deliberately not a ppcg as far as the lookup is concerned."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/bin/sh\n")
+    path.write_text("#!/bin/sh\nexit 0\n")
     path.chmod(0o755)
     return path
 
@@ -983,10 +987,11 @@ def test_ppcg_exe_falls_back_from_the_shared_tools_dir_to_path(
     build ever had, and it must keep working exactly as before."""
     from hpcagent_bench import ppcg_transform
 
+    on_path = _make_exe(tmp_path / "path" / "bin" / "ppcg")
     monkeypatch.delenv(ppcg_transform.PPCG_HOME_ENV, raising=False)
     monkeypatch.delenv(ppcg_transform.TOOLS_DIR_ENV, raising=False)
-    monkeypatch.setattr(ppcg_transform.shutil, "which", lambda name: f"/usr/bin/{name}" if name == "ppcg" else None)
-    assert ppcg_transform.ppcg_exe() == "/usr/bin/ppcg"
+    monkeypatch.setattr(ppcg_transform.shutil, "which", lambda name: str(on_path) if name == "ppcg" else None)
+    assert ppcg_transform.ppcg_exe() == str(on_path)
 
     tools_ppcg = _make_exe(tmp_path / "tools" / "ppcg" / "bin" / "ppcg")
     monkeypatch.setenv(ppcg_transform.TOOLS_DIR_ENV, str(tmp_path / "tools"))
@@ -1106,3 +1111,208 @@ def test_ppcg_run_env_is_a_noop_with_no_lib_dir_beside_the_exe(
     lone.chmod(0o755)
 
     assert ppcg_transform._ppcg_run_env(str(lone)) is None
+
+
+# A MISSING TOOL IS NOT A KERNEL VERDICT. Job 640520 shipped 248 ppcg rows and no ppcg: 193 of them
+# read "ppcg is not installed on this host" and 55 read "the translator emitted no #pragma scop",
+# and every one of them reached the results DB as the same `unsupported` decline a kernel outside
+# the polyhedral model gets. The tests below pin the three things that stop that repeating: the
+# recorded WORD differs, the tool is asked about BEFORE the kernel, and the job refuses to start.
+
+
+def test_a_missing_ppcg_is_recorded_as_tool_missing_and_a_real_decline_is_not(tmp_path, monkeypatch) -> None:
+    """The two declines must not share a spelling in the CSV's ``failure`` field.
+
+    Both stop the kernel being measured, so both are :class:`NotSupportedByFramework` and every
+    existing handler keeps working; what changes is that ``errors.decline_kind`` gives the host
+    problem its own word. A reader who cannot tell them apart reads an empty image as a statement
+    about the corpus."""
+    from hpcagent_bench.frameworks.errors import decline_kind, ToolMissing
+
+    cpp_backend = tmp_path / "cpp_backend"
+    write_scop(cpp_backend)
+    monkeypatch.setattr(ppcg_transform, "ppcg_lookup", lambda: (None, "ppcg is not installed on this host: nowhere"))
+    with pytest.raises(ToolMissing) as absent:
+        ppcg_transform.transformed_sources(cpp_backend, "mm", "hip")
+    assert "ppcg is not installed on this host" in str(absent.value)
+    assert decline_kind(absent.value) == "tool_missing"
+
+    # The control: a tool that is here, and a kernel the transform genuinely has nothing to read.
+    monkeypatch.setattr(ppcg_transform, "ppcg_lookup", lambda: ("/usr/bin/true", ""))
+    monkeypatch.setattr(ppcg_transform, "hipify_exe", lambda: "/usr/bin/true")
+    with pytest.raises(NotSupportedByFramework) as declined:
+        ppcg_transform.transformed_sources(tmp_path / "empty", "mm", "hip")
+    assert not isinstance(declined.value, ToolMissing)
+    assert decline_kind(declined.value) == "unsupported"
+
+
+def test_the_ppcg_column_asks_about_its_tool_before_it_asks_about_the_kernel(tmp_path, monkeypatch) -> None:
+    """With no ppcg on the host, EVERY kernel's reason is the missing tool -- including the ones
+    that also have no scop.
+
+    This is the exact conflation job 640520 published: 55 of its rows blamed the kernels ("the
+    translator emitted no #pragma scop") on a node where the one true answer, which the other 193
+    rows gave, was that the image shipped no ppcg. A host without the compiler has nothing to say
+    about any kernel, so the tool question comes first."""
+    from hpcagent_bench.frameworks.errors import ToolMissing
+
+    monkeypatch.setattr(ppcg_transform, "ppcg_lookup", lambda: (None, "ppcg is not installed on this host: nowhere"))
+    with pytest.raises(ToolMissing, match="ppcg is not installed"):
+        ppcg_transform.transformed_sources(tmp_path / "no_scop_here", "mm", "hip")
+
+
+def test_a_broken_ppcg_is_walked_past_rather_than_shadowing_a_working_one(tmp_path, monkeypatch) -> None:
+    """ "Installed" and "works" are different claims, and the ORDER is what makes that matter.
+
+    The shared tools cache outranks the image on purpose -- a host pinning a build to test it has
+    to win -- so an executable there that dies at startup would otherwise shadow the pinned ppcg the
+    image carries and take the whole column down. Measured, and not hypothetical: the cache build
+    left over from the /ritom scratch migration still has its executable bit and still fails with
+    ``libLLVM-17.so.1: cannot open shared object file``, and ppcg has a standing reason to die this
+    way anyway (job 640113's ``undefined symbol: isl_id_set_alloc``, an isl the EDF's
+    LD_LIBRARY_PATH wins). So the lookup runs each candidate and takes the first that answers."""
+    broken = tmp_path / "tools" / "ppcg" / "bin" / "ppcg"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("#!/bin/sh\necho 'symbol lookup error: undefined symbol: isl_id_set_alloc' >&2\nexit 127\n")
+    broken.chmod(0o755)
+    working = _make_exe(tmp_path / "image" / "bin" / "ppcg")
+    monkeypatch.delenv(ppcg_transform.PPCG_HOME_ENV, raising=False)
+    monkeypatch.setenv(ppcg_transform.TOOLS_DIR_ENV, str(tmp_path / "tools"))
+    monkeypatch.setattr(ppcg_transform.shutil, "which", lambda name: str(working) if name == "ppcg" else None)
+
+    assert ppcg_transform.ppcg_exe() == str(working)
+    assert ppcg_transform.ppcg_problem() == ""
+
+    # With nothing further down the order, the refusal is REPORTED, not rewritten as an absence.
+    monkeypatch.setattr(ppcg_transform.shutil, "which", lambda _name: None)
+    exe, problem = ppcg_transform.ppcg_lookup()
+    assert exe is None
+    assert "does not run" in problem and "isl_id_set_alloc" in problem
+    assert "is not installed" not in problem
+
+    # And a host with no candidate at all says so, rather than naming a binary it never found.
+    monkeypatch.delenv(ppcg_transform.TOOLS_DIR_ENV, raising=False)
+    assert "is not installed on this host" in ppcg_transform.ppcg_problem()
+
+
+def test_the_hip_column_declines_when_only_hipify_is_missing(monkeypatch) -> None:
+    """ppcg emits CUDA and nothing else, so on ROCm the column is ppcg PLUS hipify-perl. A host with
+    ppcg and no hipify can build the CUDA column and not this one, and the message has to name the
+    tool that is actually absent rather than blame ppcg."""
+    monkeypatch.setattr(ppcg_transform, "ppcg_lookup", lambda: ("/usr/bin/true", ""))
+    monkeypatch.setattr(ppcg_transform, "hipify_exe", lambda: None)
+
+    assert ppcg_transform.missing_tool("cuda") == ""
+    problem = ppcg_transform.missing_tool("hip")
+    assert ppcg_transform.HIPIFY in problem and "is not installed" in problem
+
+
+def test_hipify_translates_both_ppcg_halves_and_the_shared_header_in_place(tmp_path, monkeypatch) -> None:
+    """The HIP column's translation step, argv and all.
+
+    ppcg writes ``<stem>_host.cu``, ``<stem>_kernel.cu`` and a ``<stem>_kernel.hu`` the two halves
+    ``#include`` by name. Both .cu files are translated to NEW ``.hip`` files (the extension is what
+    makes hipcc build them for an AMD device); the header is translated ``-inplace`` and keeps its
+    name, because ppcg has already written that include and offers no way to rename it. A stand-in
+    hipify on disk records its own argv and does the rename hipify-perl does, so this pins the whole
+    invocation -- including that the translation is read from STDOUT -- on a host with no ROCm.
+    """
+    log = tmp_path / "argv.log"
+    stub = tmp_path / "hipify-perl"
+    stub.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$*" >> "{log}"\n'
+        'if [ "$1" = "-inplace" ]; then sed -i "s/cuda/hip/g" "$2"; exit 0; fi\n'
+        'sed "s/cuda/hip/g" "$1"\n'
+    )
+    stub.chmod(0o755)
+    monkeypatch.setattr(ppcg_transform, "hipify_exe", lambda: str(stub))
+    (tmp_path / "mm_fp64_host.cu").write_text("cudaMalloc(&p, n);\n")
+    (tmp_path / "mm_fp64_kernel.cu").write_text("__global__ void kernel0(void) { cudaFoo(); }\n")
+    (tmp_path / "mm_fp64_kernel.hu").write_text("#include <cuda.h>\n")
+
+    ppcg_transform.hipify(tmp_path, "mm_fp64")
+
+    assert log.read_text().split("\n")[:3] == [
+        f"{tmp_path}/mm_fp64_host.cu",
+        f"{tmp_path}/mm_fp64_kernel.cu",
+        f"-inplace {tmp_path}/mm_fp64_kernel.hu",
+    ]
+    assert (tmp_path / "mm_fp64_host.hip").read_text() == "hipMalloc(&p, n);\n"
+    assert (tmp_path / "mm_fp64_kernel.hip").read_text() == "__global__ void kernel0(void) { hipFoo(); }\n"
+    assert (tmp_path / "mm_fp64_kernel.hu").read_text() == "#include <hip.h>\n"
+    assert (tmp_path / "mm_fp64_host.cu").exists(), "the .cu halves are translated, not consumed"
+
+
+def test_hipify_absent_makes_the_translation_step_a_tool_problem(tmp_path, monkeypatch) -> None:
+    """:func:`ppcg_transform.hipify` is reachable from ``run_ppcg`` as well as from the column's
+    own gate, and its refusal has to carry the same word: a host with no hipify is a host problem,
+    never a kernel that ppcg could not transform."""
+    from hpcagent_bench.frameworks.errors import decline_kind, ToolMissing
+
+    monkeypatch.setattr(ppcg_transform, "hipify_exe", lambda: None)
+    with pytest.raises(ToolMissing) as absent:
+        ppcg_transform.hipify(tmp_path, "mm_fp64")
+    assert decline_kind(absent.value) == "tool_missing"
+
+
+def test_preflight_refuses_a_ppcg_column_whose_toolchain_is_absent(monkeypatch) -> None:
+    """The startup gate: one loud FATAL line instead of one silent row per kernel.
+
+    ``--tools-only`` is what ``experiments/canon_column.sh`` runs inside the container before its
+    first kernel, and it must check ONLY the toolchain: the canon campaign runs columns
+    (numba, the ppcg family) that :data:`preflight.DETERMINISTIC_FRAMEWORKS` does not list, so the
+    full preflight would refuse a campaign over a label rather than over a missing compiler."""
+    monkeypatch.setattr(ppcg_transform, "ppcg_lookup", lambda: (None, "ppcg is not installed on this host: nowhere"))
+    assert preflight.needs_ppcg(["ppcg", "ppcg_hip", "numba", "cc"]) == ["ppcg", "ppcg_hip"]
+
+    code, report, env = preflight.run(["ppcg_hip"], tools_only=True)
+    assert code == 1 and env == []
+    assert any("FATAL" in line and "ppcg is not installed" in line for line in report)
+    assert any("ppcg_hip" in line for line in report)
+
+    monkeypatch.setattr(ppcg_transform, "ppcg_lookup", lambda: ("/usr/bin/true", ""))
+    monkeypatch.setattr(ppcg_transform, "hipify_exe", lambda: "/usr/bin/true")
+    assert preflight.run(["ppcg_hip"], tools_only=True)[0] == 0
+    # A column with no external tool of its own is not made to invent one.
+    assert preflight.run(["numba", "cc", "dace_gpu"], tools_only=True)[0] == 0
+
+
+@pytest.mark.ppcg
+def test_the_ppcg_hip_column_times_and_validates_one_kernel(tmp_path) -> None:
+    """The whole chain with nothing faked: ppcg transforms the scop to CUDA, hipify-perl rewrites it
+    as HIP, hipcc builds it for this GPU, it RUNS, it agrees with numpy, and it produces a time.
+
+    The transformed source is checked for both marks before the arithmetic is: a ``__global__`` (so
+    ppcg really offloaded, rather than copying the serial nest through -- its silent refusal) and
+    ``hip``-prefixed runtime calls with no ``cuda`` ones left (so the file hipcc compiled is the
+    translated one). Without those, a library that happened to answer correctly on the host would
+    pass this as a GPU measurement."""
+    write_scop(tmp_path)
+
+    so_path = cpp_runtime._ensure_built(tmp_path, "mm", "ppcg_hip")
+
+    assert so_path.name == "libmm_ppcg_hip.so"
+    device = (tmp_path / "mm_fp64_pluto_input_kernel.hip").read_text()
+    host = (tmp_path / "mm_fp64_pluto_input_host.hip").read_text()
+    assert "__global__" in device, "ppcg offloaded nothing: it copied the scop through unchanged"
+    assert re.search(r"hip(Malloc|Memcpy|Free)", host), "the host half was not translated to HIP"
+    assert not re.search(r"cuda(Malloc|Memcpy|Free)", host), "CUDA runtime calls survived hipify"
+
+    lib = ctypes.CDLL(str(so_path))
+    kernel = lib["mm_fp64"]
+    ptr = ctypes.POINTER(ctypes.c_double)
+    kernel.argtypes = [ctypes.c_int64, ptr, ptr, ptr]
+    kernel.restype = None
+
+    n = 64
+    rng = np.random.default_rng(0)
+    a = np.ascontiguousarray(rng.random((n, n)))
+    b = np.ascontiguousarray(rng.random((n, n)))
+    c = np.zeros((n, n))
+    start = time.perf_counter()
+    kernel(n, *(arr.ctypes.data_as(ptr) for arr in (a, b, c)))
+    elapsed_ms = (time.perf_counter() - start) * 1e3
+
+    np.testing.assert_allclose(c, a @ b, rtol=1e-12, atol=1e-12)
+    assert elapsed_ms > 0.0, "the column produced no time for a kernel it just ran"

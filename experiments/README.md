@@ -896,7 +896,18 @@ bare `${SCRATCH}/<name>` path. A one-off manual invocation of `canon_column.sh` 
 `${HPCAGENT_BENCH_RUNS_ROOT}` gets none of the cleanup below and simply accumulates like any other
 bare-scratch directory, which is the exact problem this convention exists to stop.
 
-Inside a column's job, `canon_column.sh` wraps each kernel's `run-framework` call in `timeout`, so a
+Inside a column's job, before its first kernel and INSIDE the container, `canon_column.sh` runs
+`hpcagent-bench preflight --frameworks <column> --tools-only` and refuses to start the column if its
+own compiler is not on that node. That check exists because the alternative is not a failed job but
+a finished one: with no `ppcg` in the image, job 640520 wrote 248 rows that all said the column
+declined -- the same word a kernel outside the polyhedral model gets -- and they reached `canon.db`
+as ordinary declines. `--tools-only` deliberately skips preflight's deterministic-column,
+dace-pipeline and autopar checks: this campaign runs columns (numba, the `ppcg*` family) that
+`preflight.DETERMINISTIC_FRAMEWORKS` does not list, and refusing those would kill a campaign over a
+label rather than over a missing compiler. A decline that IS a host problem is recorded as
+`failure=tool_missing` rather than `unsupported`, and the per-rank summary counts it separately.
+
+Then `canon_column.sh` wraps each kernel's `run-framework` call in `timeout`, so a
 hung kernel (job 640524: one `dace_gpu` kernel ate a whole 12h column) costs only its own share; a
 kill is recorded as a CSV row (`status=timeout`) rather than a silent gap. `canon_column.sh`:
 

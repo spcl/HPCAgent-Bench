@@ -19,7 +19,7 @@ an autopar name is a wrong measurement wearing a right label.
 
 from typing import Dict, List, Sequence, Tuple
 
-from hpcagent_bench import flags, languages, pluto_transform
+from hpcagent_bench import flags, languages, pluto_transform, ppcg_transform
 from hpcagent_bench.flags import AutoparVerdict, Mode
 from hpcagent_bench.frameworks.framework import FRAMEWORK_META
 
@@ -100,6 +100,55 @@ def check_polycc() -> str:
     return ""
 
 
+def needs_ppcg(frameworks: Sequence[str]) -> List[str]:
+    """The requested columns whose TIMED build runs ``ppcg``.
+
+    The GPU half of the polyhedral pair, and the same argument as :func:`needs_polycc`: ppcg is
+    source-to-source, so with ppcg absent the column has nothing to compile and declines every
+    kernel. Read from :data:`hpcagent_bench.benchmarks.cpp_runtime.PPCG_FRAMEWORKS`, the same table
+    that routes a column to the transform, so a fourth ppcg column cannot be added there and left
+    ungated here."""
+    from hpcagent_bench.benchmarks.cpp_runtime import PPCG_FRAMEWORKS
+
+    return [name for name in frameworks if name in PPCG_FRAMEWORKS]
+
+
+def check_ppcg(frameworks: Sequence[str]) -> str:
+    """``""`` when every requested ppcg column's toolchain is here, else why not.
+
+    Asked through :func:`ppcg_transform.missing_tool` -- the same answer the per-kernel build uses
+    -- and asked PER COLUMN, because the vendor is what decides whether ``hipify-perl`` is part of
+    the toolchain: ``ppcg_hip`` builds ppcg's CUDA through hipify, ``ppcg_cuda`` does not."""
+    from hpcagent_bench.benchmarks.cpp_runtime import FRAMEWORK_LANG
+
+    for name in frameworks:
+        problem = ppcg_transform.missing_tool(FRAMEWORK_LANG[name])
+        if problem:
+            return problem
+    return ""
+
+
+def missing_tools(frameworks: Sequence[str]) -> List[Tuple[str, str]]:
+    """``(column, why)`` for every requested column whose own COMPILER this host does not have.
+
+    The source-to-source columns are the only ones that shell out to a tool the image may not
+    carry, and a job that runs one without it produces a full set of rows that all say the column
+    declined -- indistinguishable, in a results table, from a corpus the compiler genuinely cannot
+    handle. That is what job 640520 published: 248 ppcg rows, no ``ppcg`` anywhere on the node.
+    Called at job startup so the answer is one loud line instead of one silent row per kernel."""
+    out: List[Tuple[str, str]] = []
+    for name in needs_polycc(frameworks):
+        problem = check_polycc()
+        if problem:
+            out.append((name, problem))
+    ppcg_columns = needs_ppcg(frameworks)
+    if ppcg_columns:
+        problem = check_ppcg(ppcg_columns)
+        if problem:
+            out.extend((name, problem) for name in ppcg_columns)
+    return out
+
+
 def check_dace_pipeline() -> str:
     """``""`` when the installed dace carries the fork's canonicalize pipeline, else why not.
 
@@ -146,7 +195,7 @@ def thread_env(mode: Mode = Mode.MULTI_CORE, ranks_per_node: int = 1) -> Dict[st
 
 
 def run(
-    frameworks: Sequence[str], print_env: bool = False, ranks_per_node: int = 1
+    frameworks: Sequence[str], print_env: bool = False, ranks_per_node: int = 1, tools_only: bool = False
 ) -> Tuple[int, List[str], List[str]]:
     """Every preflight check, as ``(exit_code, report_lines, env_lines)``.
 
@@ -160,6 +209,19 @@ def run(
     only warns, because the run is still valid; its LABEL is what misleads.
     """
     report: List[str] = []
+    if tools_only:
+        #: TOOL PRESENCE ONLY, for a runner that has already settled which columns it may run:
+        #: ``experiments/canon_column.sh`` submits columns (numba, the ppcg family) that
+        #: :data:`DETERMINISTIC_FRAMEWORKS` does not list, so the full check below would refuse a
+        #: campaign that has been running for weeks. What it must never do is start a column whose
+        #: compiler is absent -- that check is this one, and it is cheap enough to run per column.
+        absent = missing_tools(frameworks)
+        for name, problem in absent:
+            report.append(f"preflight: FATAL -- {name} cannot run here: {problem}")
+        if absent:
+            return 1, report, []
+        report.append(f"preflight: the toolchain of {', '.join(frameworks)} is installed on this node")
+        return 0, report, []
     unknown = check_deterministic(frameworks)
     if unknown:
         report.append(f"preflight: FATAL -- not deterministic optimizers: {', '.join(unknown)}")
@@ -178,6 +240,13 @@ def run(
             report.append(f"preflight: FATAL -- {problem} (needed by {', '.join(pluto_columns)})")
             return 1, report, []
         report.append(f"preflight: polycc present (needed by {', '.join(pluto_columns)})")
+    ppcg_columns = needs_ppcg(frameworks)
+    if ppcg_columns:
+        problem = check_ppcg(ppcg_columns)
+        if problem:
+            report.append(f"preflight: FATAL -- {problem} (needed by {', '.join(ppcg_columns)})")
+            return 1, report, []
+        report.append(f"preflight: ppcg present (needed by {', '.join(ppcg_columns)})")
     for name, verdict, detail in check_autopar(frameworks):
         if verdict == AutoparVerdict.OK.value:
             report.append(f"preflight: {name} PARALLELIZES on this node ({detail})")
