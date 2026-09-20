@@ -391,12 +391,7 @@ def write_dot_rows(
         config=config, channels=args.channels, panel_labels=args.dots_panel_labels,
         differences=args.difference,
         **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
-        labels={
-            # The baseline's NAME rides on the 1x line instead (reference_name), which keeps this
-            # rotated label to one line.
-            "speedup": efficacy_figures.MEASURE_LABELS["speedup"],
-            "cost": efficacy_figures.cost_label((card.fresh_input, card.cached_input, card.output), card.key),
-        },
+        labels=dict(efficacy_figures.MEASURE_LABELS),
     )  # fmt: skip
     print(f"dots   -> {written} (+ .png)")
 
@@ -820,6 +815,9 @@ def main() -> None:
         # packet, and one shared key cannot spell both without being told.
         comparison_controls: list[str] = []
         comparison_differences: list[str] = []
+        # A delivery that has not been measured yet still keeps its slot, so the column's spacing
+        # is its final spacing (llr-cpu's Fortran, pending the regrade migration).
+        comparison_placeholders: list[str] = []
         for raw in args.comparison:
             spec = parse_spec(raw)
             one_repeats = spec.get("repeats", args.repeats)
@@ -835,6 +833,7 @@ def main() -> None:
             comparison_repeats.append(one_repeats)
             comparison_controls.append(spec.get("control-label", ""))
             comparison_differences.append(spec.get("difference", args.difference))
+            comparison_placeholders.append(spec.get("placeholders", ""))
         if not comparison_panels:
             raise SystemExit(f"no --comparison of {args.comparison} produced a panel")
         args.table.parent.mkdir(parents=True, exist_ok=True)
@@ -849,12 +848,11 @@ def main() -> None:
                 panel_labels=args.panel_labels,
                 **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
                 control_names=comparison_controls, differences=comparison_differences,
-                labels={
-                    "speedup": efficacy_figures.MEASURE_LABELS["speedup"],
-                    "cost": efficacy_figures.cost_label(
-                        (card.fresh_input, card.cached_input, card.output), card.key
-                    ),
-                },
+                placeholders=comparison_placeholders,
+                # The Y titles are the MEASURE, nothing else: the cost card's weights are a
+                # sentence of caption, and as a rotated three-line label they were wider than the
+                # chrome band the data box leaves them.
+                labels=dict(efficacy_figures.MEASURE_LABELS),
             )  # fmt: skip
         else:
             written = efficacy_figures.figure_row(

@@ -58,6 +58,7 @@ function's ``config`` argument) rather than a magic number inside a function.
 
 import dataclasses
 import functools
+import logging
 import math
 import pathlib
 import textwrap
@@ -1682,7 +1683,7 @@ def arm_rows(
 #: with the footnote the key carries for each. The tick is the abbreviation, so the column stays
 #: readable; the key is where the reader finds out what it stands for.
 TICK_ALIASES: dict[str, tuple[str, str]] = {
-    experiment_tags.OFFLOAD_DELIVERY_NAME: ("OMP*", "* OpenMP Offloading + C"),
+    experiment_tags.OFFLOAD_DELIVERY_NAME: ("OMP-C", "OMP-C = OpenMP Offloading + C"),
 }
 
 
@@ -1743,37 +1744,15 @@ def draw_category_axis(ax: Axes, rows: Sequence[ArmRow], config: FigureConfig) -
     """The shared categorical X of a dot-row figure: one tick per column naming what it delivered,
     each model named ONCE under its own run of columns, and a light rule between runs.
 
-    A column whose rows all share ONE delivery labels NOTHING per category: the model is already
-    the colour and the key already names it, and three model names under three columns of a
-    text-width row print on top of one another whatever they are folded to. Its one delivery is
-    named once, centred under the column, instead.
+    The MODEL is never labelled: it is the colour, and the key already names it. Three model names
+    under three columns of a text-width row print on top of one another whatever they are folded
+    to, and the reader was being told the same thing twice.
     """
-    from matplotlib.transforms import blended_transform_factory
-
-    deliveries = {row.leg for row in rows}
-    solo = len(deliveries) <= 1
     ax.set_xticks(range(len(rows)))
     ax.set_xticklabels(
-        [""] * len(rows) if solo else [wrapped_label(tick_alias(row.label), TICK_WRAP) for row in rows],
-        fontsize=config.tick_pt, color=style.INK,
+        [wrapped_label(tick_alias(row.label), TICK_WRAP) for row in rows], fontsize=config.tick_pt,
+        color=style.INK,
     )  # fmt: skip
-    transform = blended_transform_factory(ax.transData, ax.transAxes)
-    drop = -(text_band(config.tick_pt, 2) * 72.0 + GROUP_LABEL_PAD)
-    if solo:
-        delivery = next(iter(deliveries), "")
-        if delivery and rows:
-            ax.annotate(
-                delivery, xy=((len(rows) - 1) / 2.0, 0.0), xycoords=transform, xytext=(0.0, drop),
-                textcoords="offset points", ha="center", va="top", fontsize=config.label_pt * 0.85,
-                color=style.INK, annotation_clip=False,
-            )  # fmt: skip
-        return
-    for model, first, last in model_runs(rows):
-        ax.annotate(
-            experiment_tags.model_name(model), xy=((first + last) / 2.0, 0.0), xycoords=transform,
-            xytext=(0.0, drop), textcoords="offset points", ha="center", va="top",
-            fontsize=config.label_pt * 0.85, color=style.INK, annotation_clip=False,
-        )  # fmt: skip
 
 
 def group_rules(ax: Axes, rows: Sequence[ArmRow]) -> None:
@@ -1807,6 +1786,11 @@ def wrapped_label(text: str, width: int = 18, hyphens: bool = False) -> str:
 #: rotated Y label, which buys back the whole left margin.
 PANEL_LABELS: tuple[str, ...] = ("none", "outside", "inside", "subtitle")
 
+LOG = logging.getLogger(__name__)
+
+#: The most lines a panel's own name may take. A third line comes out of the panel.
+MAX_NAME_LINES: int = 2
+
 #: The two numbering schemes, so a paper can carry a stacked figure's ``a)`` rows and a joined
 #: row's ``i)`` panels at once and a caption referring to "(ii)" cannot mean either.
 PANEL_LETTERS: tuple[str, ...] = ("a", "b", "c", "d", "e", "f", "g", "h")
@@ -1818,6 +1802,25 @@ def panel_tag(index: int, numbering: str = "letter") -> str:
     """``a)``/``i)``, ``b)``/``ii)``, ... for panel ``index``."""
     seq = PANEL_ROMAN if numbering == "roman" else PANEL_LETTERS
     return f"{seq[index]})" if index < len(seq) else f"{index + 1})"
+
+
+def name_line_width(text: str, wrap: int) -> int:
+    """How many characters per line ``text`` needs to fold onto :data:`MAX_NAME_LINES` without
+    breaking a word -- at least ``wrap``, the panel's own width."""
+    longest = max((len(word) for word in text.split()), default=wrap)
+    return max(wrap, -(-len(text) // MAX_NAME_LINES), longest)
+
+
+def name_scale(names: Sequence[str], wraps: Sequence[int]) -> float:
+    """The ONE type scale every panel name of a row is set at: the smallest any of them needs.
+
+    Per panel, each would be set at its own size, and a row whose third name happens to be longer
+    than its column reads as three different headings rather than one row of them.
+    """
+    scales = [
+        min(1.0, wrap / name_line_width(name, wrap)) for name, wrap in zip(names, wraps, strict=True) if wrap
+    ]  # fmt: skip
+    return min(scales) if scales else 1.0
 
 
 def draw_panel_label(
@@ -1837,9 +1840,15 @@ def draw_panel_label(
     letter = panel_tag(index, numbering)
     if placement == "subtitle":
         # Folded with the tag ATTACHED: folding the name alone and prepending "iv) " afterwards
-        # pushed the first line four characters past the panel's own right edge.
-        text = wrapped_label(f"{letter} {name}", wrap) if wrap else f"{letter} {name}"
-        ax.set_title(text, loc="left", fontsize=config.subtitle_pt, color=style.INK, pad=pad)
+        # pushed the first line four characters past the panel's own right edge. Never past TWO
+        # lines: a third steals the band from the panel, so the type shrinks to fit instead.
+        whole = f"{letter} {name}"
+        size = config.subtitle_pt
+        if wrap:
+            per_line = name_line_width(whole, wrap)
+            size *= min(1.0, wrap / per_line)
+            whole = wrapped_label(whole, per_line)
+        ax.set_title(whole, loc="left", fontsize=size, color=style.INK, pad=pad)
         return ""
     # Above the panel's own left edge, not out in the margin: the margin is where the rotated Y
     # label is, and a letter placed there printed on top of it.
@@ -1905,18 +1914,19 @@ def draw_difference_arrow(
     middle = difference_middle(control_value, treated_value, measure)
     if not (np.isfinite(factor) and np.isfinite(middle)):
         return
-    ax.annotate(
-        "", xy=(x, treated_value), xytext=(x, control_value), zorder=style.CONNECTOR_Z + 0.5,
-        arrowprops={
-            "arrowstyle": "<->", "color": colour, "linewidth": config.interval_width,
-            "shrinkA": 1.5, "shrinkB": 1.5,
-        },
+    del colour  # the comparison is not one arm's: it is the span between two, in neutral ink
+    low, high = sorted((control_value, treated_value))
+    ax.errorbar(
+        x, low, yerr=[[0.0], [high - low]], fmt="none", ecolor=style.FAINT,
+        elinewidth=config.interval_width, capsize=config.interval_cap_pt * 2.0,
+        capthick=config.interval_width, zorder=style.FILL_Z,
     )  # fmt: skip
+    # BEHIND the marks and smaller than a point label: a white ground punched through the panel to
+    # keep it legible was worse than the overlap it was hiding.
     ax.annotate(
         factor_label(factor), xy=(x, middle), textcoords="offset points",
-        xytext=(config.symbol_offset_pt + 2.0, 0.0), ha="left", va="center", fontsize=config.point_pt,
-        color=style.INK, zorder=style.MARK_Z + 3.0,
-        bbox={"facecolor": "white", "edgecolor": "none", "pad": 0.8},
+        xytext=(config.symbol_offset_pt + 2.0, 0.0), ha="left", va="center",
+        fontsize=config.point_pt * 0.85, color=style.MUTED, zorder=style.FILL_Z,
     )  # fmt: skip
 
 
@@ -1977,19 +1987,10 @@ def draw_measure_row(
             span += [v for v in (value, low, high) if math.isfinite(v)]
             x = index + dodge
             if np.isfinite(low) and np.isfinite(high):
-                if cost:
-                    ax.vlines(
-                        x, low, high, color=row.colour, linewidth=config.interval_width, alpha=0.75,
-                        linestyles=config.cost_linestyle, zorder=style.CONNECTOR_Z,
-                    )  # fmt: skip
-                else:
-                    # A capped bar in light ink: the speed-up interval sits under the mark rather
-                    # than competing with it, and the caps say where it ends without a second hue.
-                    ax.errorbar(
-                        x, value, yerr=[[value - low], [high - value]], fmt="none", ecolor=style.FAINT,
-                        elinewidth=config.interval_width, capsize=config.interval_cap_pt,
-                        capthick=config.interval_width, zorder=style.CONNECTOR_Z,
-                    )  # fmt: skip
+                ax.vlines(
+                    x, low, high, color=row.colour, linewidth=config.interval_width, alpha=0.75,
+                    linestyles=config.cost_linestyle if cost else "-", zorder=style.CONNECTOR_Z,
+                )  # fmt: skip
             style.point_mark(ax, x, value, row.colour, mark, filled, size=config.mark_size)
         control_value = measure_value(row.control, measure)[0]
         treated_value = measure_value(row.treated, measure)[0]
@@ -2185,6 +2186,25 @@ class DotColumn:
     differences: frozenset[DifferenceKey]
 
 
+#: An ArmPoint with nothing in it: the slot a delivery that has not been measured yet keeps, so a
+#: column's spacing is its FINAL spacing and the figure does not re-lay out when the data lands.
+EMPTY_POINT = ArmPoint(math.nan, math.nan, math.nan, math.nan, math.nan, math.nan, 0, 0)
+
+
+def placeholder_rows(rows: Sequence[ArmRow], deliveries: Sequence[str], channels: str) -> list[ArmRow]:
+    """``rows`` plus one empty category per (model already drawn, delivery in ``deliveries``)."""
+    if not deliveries:
+        return list(rows)
+    extra = [
+        ArmRow(model, leg, series_colour(model, leg, channels), EMPTY_POINT, EMPTY_POINT)
+        for model in dict.fromkeys(row.model for row in rows)
+        for leg in deliveries
+        if (model, leg) not in {(r.model, r.leg) for r in rows}
+    ]
+    order = {name: index for index, name in enumerate(palette.in_order([row.model for row in (*rows, *extra)]))}
+    return sorted([*rows, *extra], key=lambda row: (order.get(row.model, len(order)), row.leg))
+
+
 def dot_columns(
     panels: Sequence[Panel],
     repeats: Sequence[population.RepeatPolicy],
@@ -2192,6 +2212,7 @@ def dot_columns(
     references: Sequence[str],
     control_names: Sequence[str] = (),
     differences: Sequence[str] = (),
+    placeholders: Sequence[str] = (),
 ) -> list[DotColumn]:
     """Each panel of a joined row reduced to its own :class:`DotColumn`."""
     columns: list[DotColumn] = []
@@ -2199,6 +2220,8 @@ def dot_columns(
         key = treatment if isinstance(treatment, str) else (flat_treatments(treatment) or [""])[0]
         table = stats if isinstance(stats, pd.DataFrame) else pd.concat(stats.values(), ignore_index=True)
         rows = arm_rows(frame, repeats[index], channels) if isinstance(frame, pd.DataFrame) and not frame.empty else []
+        empty = [leg.strip() for leg in str(placeholders[index] if index < len(placeholders) else "").split(",")]
+        rows = placeholder_rows(rows, [leg for leg in empty if leg], channels)
         columns.append(
             DotColumn(
                 title=str(title),
@@ -2246,6 +2269,23 @@ def dot_row_legend(columns: Sequence[DotColumn], channels: str, config: FigureCo
     return handles + legend_tail(False, symbols) + alias_footnotes([row.leg for row in rows])
 
 
+#: The chrome LEFT of the data box, in inches, at a page-budgeted figure's own type. FIXED, not
+#: measured: the data box has to be the same size in every efficacy figure of a paper, so a longer
+#: Y label may not eat into it. It is checked against what the labels actually need
+#: (:func:`required_left_margin`) and the shortfall is reported, never silently absorbed.
+LEFT_CHROME_IN: float = 0.62
+
+#: The chrome BELOW the data box, in inches: everything the key is allowed to take. FIXED, like
+#: :data:`LEFT_CHROME_IN` and for the same reason -- the canvas AND the data box are both the same
+#: in every efficacy figure of a paper, so a figure with four more key rows may not grow the page
+#: or shrink the panels. A key that does not fit is set smaller until it does
+#: (:func:`fit_legend`).
+LEGEND_CHROME_IN: float = 0.42
+
+#: How far :func:`fit_legend` will shrink the key's type, as a fraction of the config's own, before
+#: it gives up and says so.
+LEGEND_MIN_SCALE: float = 0.7
+
 #: The gap between the two measure rows, as a fraction of a row's own height -- enough for the
 #: lower row's own "Lower -> Better" note, which sits above its panel.
 ROW_GAP: float = 0.42
@@ -2258,11 +2298,20 @@ COLUMN_GAP: float = 0.3
 #: one beside a nine-category neighbour it collapsed to a sliver its own name could not sit over.
 MIN_COLUMN_CATEGORIES: int = 3
 
+#: What the WIDEST column keeps of its share. A column with three times the categories does not
+#: need three times the width -- its marks are already the densest on the page -- and the 15% it
+#: gives back is width the narrow columns have nothing else to take from.
+WIDE_COLUMN_SCALE: float = 0.85
+
 
 def dot_row_widths(columns: Sequence[DotColumn]) -> list[float]:
     """Each column's share of the row's width: its own category count, floored at
     :data:`MIN_COLUMN_CATEGORIES`."""
-    return [float(max(len(column.rows), MIN_COLUMN_CATEGORIES)) for column in columns]
+    widths = [float(max(len(column.rows), MIN_COLUMN_CATEGORIES)) for column in columns]
+    if widths:
+        widest = widths.index(max(widths))
+        widths[widest] *= WIDE_COLUMN_SCALE
+    return widths
 
 
 def measure_row_config(config: FigureConfig, row_height_in: float) -> FigureConfig:
@@ -2278,6 +2327,29 @@ def measure_row_config(config: FigureConfig, row_height_in: float) -> FigureConf
     )
 
 
+def fit_legend(fig: Figure, handles: Sequence[Line2D], config: FigureConfig, budget: float) -> float:
+    """Draw the key below ``fig`` inside ``budget`` inches, shrinking its type where it does not
+    fit; returns the height it settled at.
+
+    The budget is fixed so the canvas and the data box are, which means the key is what has to
+    give. It shrinks rather than wrapping onto another row: another row is the one thing that
+    cannot fit a fixed band.
+    """
+    scale = 1.0
+    while True:
+        height = style.legend_below(
+            fig, handles, ncol=config.legend_ncol, y=0.005, fontsize=config.legend_pt * scale,
+            markerscale=config.legend_marker_scale,
+        )  # fmt: skip
+        if height <= budget or scale <= LEGEND_MIN_SCALE:
+            if height > budget:
+                LOG.warning("efficacy: the key needs %.2fin at its smallest, the band is %.2fin", height, budget)
+            return min(height, budget)
+        for legend in list(fig.legends):
+            legend.remove()
+        scale = max(LEGEND_MIN_SCALE, scale - 0.08)
+
+
 def figure_dot_row(
     panels: Sequence[Panel],
     out: pathlib.Path,
@@ -2286,11 +2358,12 @@ def figure_dot_row(
     channels: str = "model-packet",
     measures: Sequence[str] = MEASURES,
     row_width_in: float = style.ACM_TEXT_WIDTH_IN,
-    row_height_in: float = 0.96,
+    row_height_in: float = 1.15,
     labels: dict[str, str] | None = None,
     references: Sequence[str] = (),
     control_names: Sequence[str] = (),
     differences: Sequence[str] = (),
+    placeholders: Sequence[str] = (),
     panel_labels: str = "subtitle",
 ) -> pathlib.Path:
     """N comparisons as a GRID of stacked 1-D panels: one column per comparison, one ROW per
@@ -2306,7 +2379,7 @@ def figure_dot_row(
 
     n = len(panels)
     columns = dot_columns(
-        panels, resolve_row_repeats(repeats, n), channels, references, control_names, differences
+        panels, resolve_row_repeats(repeats, n), channels, references, control_names, differences, placeholders
     )  # fmt: skip
     texts = {**MEASURE_LABELS, **(labels or {})}
     rows_config = measure_row_config(config, row_height_in)
@@ -2314,15 +2387,27 @@ def figure_dot_row(
     # other: both are drawn just above the axes, so the name is padded past the note.
     note_pad = config.point_pt * 1.7
     title_band = text_band(config.subtitle_pt, 2) + note_pad / 72.0 if panel_labels != "none" else ROW_TITLE_IN
-    category_band = text_band(config.tick_pt, 2) + text_band(config.label_pt)
-    height = row_height_in * len(measures) + title_band + category_band
+    category_band = text_band(config.tick_pt, 2)
+    # The DATA box is the fixed quantity: rows of a stated height plus the gaps between them. Every
+    # piece of chrome is added OUTSIDE it, so a taller legend or a longer label grows the canvas
+    # instead of shrinking the panels -- two efficacy figures of one paper draw the same size box.
+    data_height = row_height_in * len(measures) * (1.0 + ROW_GAP) - row_height_in * ROW_GAP
+    # EVERY band is fixed, so the canvas and the data box are both the same in every efficacy
+    # figure: a longer label or a fuller key changes neither.
+    height = data_height + title_band + category_band + LEGEND_CHROME_IN + MEASURE_PAD_IN
     ratios = dot_row_widths(columns)
-    widths = [row_width_in * ratio / sum(ratios) for ratio in ratios]
+    data_width = row_width_in - LEFT_CHROME_IN
+    widths = [data_width * ratio / sum(ratios) for ratio in ratios]
     fig, axes = plt.subplots(
         len(measures), n, figsize=(row_width_in, height), squeeze=False, sharex="col",
         gridspec_kw={"width_ratios": ratios},
     )  # fmt: skip
     fig.set_dpi(style.SAVE_DPI)
+    wraps = [panel_name_wrap(width) for width in widths]
+    scale = name_scale(
+        [f"{panel_tag(index, 'roman')} {column.title}" for index, column in enumerate(columns)], wraps
+    )  # fmt: skip
+    name_config = dataclasses.replace(config, subtitle_pt=config.subtitle_pt * scale)
     for row_index, measure in enumerate(measures):
         for col_index, column in enumerate(columns):
             ax = axes[row_index][col_index]
@@ -2333,23 +2418,20 @@ def figure_dot_row(
                 differences=column.differences,
             )  # fmt: skip
             if row_index == 0 and panel_labels != "none":
-                draw_panel_label(ax, col_index, column.title, panel_labels, config, "roman",
-                                 panel_name_wrap(widths[col_index]), note_pad)  # fmt: skip
+                draw_panel_label(ax, col_index, column.title, panel_labels, name_config, "roman",
+                                 int(panel_name_wrap(widths[col_index]) / scale), note_pad)  # fmt: skip
     for ax, column in zip(axes[-1], columns, strict=True):
         draw_category_axis(ax, column.rows, config)
     handles = dot_row_legend(columns, channels, config)
     fig.subplots_adjust(
-        left=0.08, right=0.995, top=1.0 - (title_band + MEASURE_PAD_IN) / height, bottom=0.01,
-        hspace=ROW_GAP, wspace=COLUMN_GAP,
+        left=LEFT_CHROME_IN / row_width_in, right=0.995,
+        top=1.0 - (title_band + MEASURE_PAD_IN) / height, bottom=0.01, hspace=ROW_GAP, wspace=COLUMN_GAP,
     )  # fmt: skip
-    legend_h = style.legend_below(
-        fig, handles, ncol=config.legend_ncol, y=0.005, fontsize=config.legend_pt,
-        markerscale=config.legend_marker_scale,
-    )  # fmt: skip
-    left_in = max(required_left_margin(fig, ax) for ax in axes[:, 0])
-    fig.subplots_adjust(
-        left=min(0.3, left_in / row_width_in), bottom=(legend_h + category_band + MEASURE_PAD_IN) / height
-    )  # fmt: skip
+    fit_legend(fig, handles, config, LEGEND_CHROME_IN)
+    needed = max(required_left_margin(fig, ax) for ax in axes[:, 0])
+    if needed > LEFT_CHROME_IN:
+        LOG.warning("efficacy: Y labels need %.2fin, LEFT_CHROME_IN reserves %.2fin", needed, LEFT_CHROME_IN)
+    fig.subplots_adjust(bottom=(LEGEND_CHROME_IN + category_band + MEASURE_PAD_IN) / height)
     return style.save(fig, out.with_suffix(""), fixed=True)
 
 

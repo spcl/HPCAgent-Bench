@@ -204,6 +204,14 @@ def legend_below(
         )
         box = legend.get_window_extent(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
         if columns <= 1 or box.width <= float(fig.get_size_inches()[0]):
+            # FILL the box: among the column counts that give this many rows, the smallest leaves
+            # no ragged cells. Five columns and four both wrap twelve entries onto three rows, and
+            # four of them is a rectangle.
+            full = -(-len(handles) // max(1, -(-len(handles) // columns)))
+            if full < columns:
+                legend.remove()
+                columns = full
+                continue
             return float(box.height)
         legend.remove()
         columns -= 1
