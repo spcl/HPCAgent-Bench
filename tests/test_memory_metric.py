@@ -184,7 +184,7 @@ def test_the_legacy_queue_channel_carries_the_worker_payload(tmp_path) -> None:
     )
 
     assert len(q.items) == 1
-    status, outputs, samples, peak_bytes, increment_bytes, _, _ = q.items[0]
+    status, outputs, samples, peak_bytes, increment_bytes, _, _, _ = q.items[0]
     assert status == "ok", outputs
     assert set(outputs) == {"y"} and len(samples) == 1
     # No increment assertion here: in-process, the baseline is pytest's own high-water mark.
