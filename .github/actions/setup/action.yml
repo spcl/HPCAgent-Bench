@@ -92,6 +92,23 @@ runs:
         # in one go. Complete the directory clang picks rather than pinning it to a path.
         set -euo pipefail
         GCC_MAJOR=16
+        # add-apt-repository ships in software-properties-common, which is NOT in every runner
+        # image -- a slimmer one answers `sudo: add-apt-repository: command not found`. Installed
+        # here rather than assumed, because the retry loop below cannot tell that apart from an
+        # outage on its own.
+        if ! command -v add-apt-repository >/dev/null 2>&1; then
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends software-properties-common
+        fi
+        # And a HARD stop if it is still missing. A missing binary is not a transient failure:
+        # retrying it burns the wait five times over and then reports the wrong cause. This is
+        # what a runner image without software-properties-common looked like -- "Launchpad is
+        # down, not this branch" printed after 100 seconds of retries, about a command that was
+        # never going to exist. The loop below may only be reached when the command is present,
+        # so from there a failure really is the remote.
+        command -v add-apt-repository >/dev/null 2>&1 || {
+          echo "::error::add-apt-repository is absent after installing software-properties-common"
+          exit 1; }
         # add-apt-repository talks to Launchpad, which answered HTTP 500 twice in a row on
         # 2026-08-23 and took out five jobs across two runs before a single test had run
         # (lazr.restfulclient.errors.ServerError -> no python -> "No module named pytest").
@@ -100,7 +117,7 @@ runs:
         for attempt in 1 2 3 4 5; do
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test && break
           if [ "$attempt" = 5 ]; then
-            echo "::error::add-apt-repository failed 5 times; Launchpad is down, not this branch"
+            echo "::error::add-apt-repository reached Launchpad and failed 5 times; the PPA is unreachable, not this branch"
             exit 1
           fi
           echo "add-apt-repository attempt $attempt failed (Launchpad); retrying in $((attempt * 10))s" >&2
