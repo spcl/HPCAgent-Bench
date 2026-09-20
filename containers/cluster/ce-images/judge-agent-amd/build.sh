@@ -13,6 +13,10 @@
 #   OUTPUT_SQSH=$SCRATCH/ce-images/some-candidate.sqsh .../build.sh
 set -euo pipefail
 
+# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
+# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
+# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+ulimit -c 0
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../../.." && pwd)"
 # shellcheck source=../build_common.sh

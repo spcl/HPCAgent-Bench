@@ -77,17 +77,23 @@ repos:
         require_serial: true
         files: '\.ya?ml$'
       # A core dump lands in the crashing process's CWD (beverin's core_pattern is machine-global),
-      # so an agent segfault litters the checkout with core_nid<node>_<pid> files on a filesystem
+      # so an agent segfault litters the checkout with core_<host>_<pid> files on a filesystem
       # whose quota is inodes. `ulimit -c 0` in the script body is the only thing that imposes a
-      # floor -- --propagate can only carry the submitter's limit, never override it.
+      # floor -- --propagate can only carry the submitter's limit, never override it. The scope is
+      # EVERY .sbatch AND .sh, not just the submitters: keying on .sbatch left the container launch
+      # wrappers, the login-node helpers and the sourced env layers open, and a login-node repro run
+      # through one of them left 21.6 GB of core_beverin-ln001_* on 2026-09-20. The check also
+      # rejects a later `ulimit -c unlimited` (the old substring test passed straight through one)
+      # unless the line says why with `# core-dumps-ok: <reason>`.
       - id: hpcagent_bench-core-dumps
-        name: batch scripts disable core dumps (ulimit -c 0)
+        name: shell entry points disable core dumps (ulimit -c 0)
         entry: python scripts/check_core_dumps.py --fix
         language: system
         require_serial: true
-        # .py/.sh too: a file that EMITS an SBATCH header submits a job just as much as a
-        # .sbatch does, and keying on the suffix is how preset_sweep.py shipped without the guard.
-        files: '\.(sbatch|py|sh)$'
+        # NO `files` filter on purpose: the script owns the scope, because the scope is not a
+        # suffix. It is .sbatch, .sh, any shebang naming a shell (hpcagent-bench-tool and bash-norc
+        # have no suffix at all), and any .py that EMITS an SBATCH header -- which is how
+        # preset_sweep.py shipped without the guard.
       # No prompt material may name a benchmark kernel: a page written while looking at one
       # kernel teaches that kernel's shape, and the score then measures how well the packet was
       # fitted to the corpus rather than how well the agent optimizes -- invisibly, because the

@@ -232,6 +232,6 @@ These apply only to a server split across nodes.
 | `--mem=0` | always | A step's memory cgroup is sized from its CPU share. Without this the server is capped far below the node and dies during weight load. |
 | `--cpus-per-task` | `${SLURM_CPUS_ON_NODE}` for the server | A step that does not ask gets **one** core of 192. The server then degrades with load rather than failing: 2 s per decode step early, 147 s after half an hour, with nothing queued. Measured against 88-91 tok/s for the same model with the CPUs it needs. Give a client or probe running alongside one socket instead: `--cpus-per-task=24 --hint=nomultithread`. See the README for the full account. |
 | `--gpus-per-node` | `4` | Every recipe here is tensor-parallel 4 inside a node. |
-| `ulimit -c 0` | in the script | Beverin's `core_pattern` is machine-global; a crash otherwise drops a zero-byte stub in the working directory. Slurm propagates the limit to steps. |
+| `ulimit -c 0` | in the script | Beverin's `core_pattern` is machine-global; a crash otherwise drops a `core_<host>_<pid>` file in the working directory -- up to the process's whole address space (17.5 GB measured). Slurm propagates the limit to steps. `scripts/check_core_dumps.py` requires it in every `.sbatch` and `.sh`. |
 
 For how to start a server, find it and read its log, see [`README.md`](README.md) in this folder.

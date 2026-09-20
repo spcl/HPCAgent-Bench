@@ -9,6 +9,10 @@
 # Then exports VLLM_BASE_URL, VLLM_API_KEY and VLLM_MODEL. Any failure returns non-zero and exports
 # nothing. The key reaches curl on stdin (-H @-), never argv, and is never printed.
 
+# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
+# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
+# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+ulimit -c 0
 alps_endpoint_request() {  # alps_endpoint_request <key> <url> [json body]: prints the body, then the HTTP code
     local data=()
     [[ $# -lt 3 ]] || data=(-H 'Content-Type: application/json' --data-binary "$3")

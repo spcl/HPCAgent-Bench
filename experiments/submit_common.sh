@@ -12,6 +12,11 @@
 # file, which makes this the one place that has to.
 # The checkout is OPT / HPCAGENT_BENCH_REPO when the caller names one (the submitter tests run a
 # temp copy of experiments/ with no scripts/ beside it), else this file's own parent.
+
+# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
+# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
+# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+ulimit -c 0
 . "${OPT:-${HPCAGENT_BENCH_REPO:-$(dirname -- "${BASH_SOURCE[0]}")/..}}/scripts/cscs/account_env.sh" || { echo "no Slurm account resolved; see scripts/cscs/account_env.sh" >&2; exit 2; }
 # render_env (a layered base env, flattened) and snapshot_env (the per-submission copy a job reads).
 . "$(dirname -- "${BASH_SOURCE[0]}")/env_layers.sh"

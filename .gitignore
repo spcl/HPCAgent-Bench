@@ -264,6 +264,10 @@ experiments/problems-*.jsonl
 # Crash dumps from cluster jobs (ROCm/vLLM workers drop multi-GB cores next to the sbatch)
 core_*
 core.[0-9]*
+# A dump is `core_<host>_<pid>` and never a source file, but `core_*` hides one anyway -- it
+# swallowed hpcagent_bench/core_dumps.py, the module that turns the dumps OFF, and `git add`
+# said nothing.
+!core_*.py
 
 # Per-run job logs written beside the launcher, one pair per SLURM id
 experiments/results/

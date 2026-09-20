@@ -15,6 +15,8 @@ these names is first touched::
 
 import os
 
+from hpcagent_bench import core_dumps
+
 #: Importing mpi4py must not call ``MPI_Init``. Every ``@dace.program`` parse calls dace's
 #: ``mpi4py_is_usable()``, which does ``from mpi4py import MPI``; with auto-init on, that import
 #: dlopens libmpi and lets it probe the interconnect, and on a node with an MPI runtime but no
@@ -31,6 +33,14 @@ import os
 #: shared memory and no fabric) would silently break multi-node MPI, so they stay in the test
 #: conftests that want them.
 os.environ.setdefault("MPI4PY_RC_INITIALIZE", "0")
+
+#: A segfaulting dace/sympy parse writes its whole address space to the crashing process's CWD --
+#: beverin's core_pattern is machine-global -- on a filesystem whose quota is inodes. The shell
+#: entry points carry `ulimit -c 0` (scripts/check_core_dumps.py), but an ad-hoc login-node script
+#: does not, and one of those left 21.6 GB of core files on 2026-09-20. Set at PACKAGE import for
+#: the same reason as the line above: one line covers every entry point. Soft limit only, and
+#: HPCAGENT_BENCH_CORE_DUMPS=1 opts out.
+core_dumps.disable()
 
 #: Names forwarded to :mod:`hpcagent_bench.api` on first access (PEP 562). Kept explicit
 #: so submodule attributes (``hpcagent_bench.config`` / ``hpcagent_bench.spec`` / ...) resolve

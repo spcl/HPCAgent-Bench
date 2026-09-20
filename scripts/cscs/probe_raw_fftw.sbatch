@@ -12,10 +12,15 @@
 # plan vs execute timed separately. A hang gets SIGABRT'd (core dump on) instead of a plain
 # `timeout` kill, so a gdb backtrace on the core pinpoints where it is stuck.
 set -uo pipefail
+
+# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
+# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
+# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+ulimit -c 0
 REPO="${REPO:?set REPO}"
 srun --environment=hpcagent-bench-judge-mi300-latest bash -c '
   set -x
-  ulimit -c unlimited
+  ulimit -c unlimited  # core-dumps-ok: gdb reads this probe core; it lands in the container /tmp and is removed below, never in the checkout
   cd /tmp
   gcc --version | head -1
   gcc -O2 -std=c11 -I/opt/spack-install/linux-zen4/fftw-3.3.11-eiyz4wxr6nxiqinbwtz5vtkxvytjrdqc/include \
@@ -39,4 +44,5 @@ srun --environment=hpcagent-bench-judge-mi300-latest bash -c '
       fi
     fi
   done
+  rm -f /tmp/core /tmp/core.*
 '

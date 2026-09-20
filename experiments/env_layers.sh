@@ -14,6 +14,11 @@
 # render_env <file> -- the flat KEY=VALUE env <file> stands for: parents first, a later key wins
 # in its parent's position, comments and blank lines dropped. Values are copied verbatim (no
 # expansion), so ${SCRATCH:?} and friends still resolve where the job sources the result.
+
+# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
+# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
+# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+ulimit -c 0
 render_env() {
     local file="$1" parent
     local -a chain=()

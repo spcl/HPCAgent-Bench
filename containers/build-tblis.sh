@@ -12,6 +12,10 @@
 # Requires: git, make, a C++ compiler (g++). Override TBLIS_REPO / TBLIS_REF / CXX via env.
 set -eu
 
+# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
+# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
+# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+ulimit -c 0
 REPO="${TBLIS_REPO:-https://github.com/devinamatthews/tblis.git}"
 # PINNED to the last autotools release. master is v2.0-beta, which VENDORS BLIS through CMake
 # FetchContent, and gcc 16 rejects that BLIS's haswell sup kernels -- "bp cannot be used in `asm`
