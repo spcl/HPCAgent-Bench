@@ -1363,13 +1363,23 @@ ENV SWE_AGENT_CONFIG_DIR=/opt/harness/sweagent/share/config \
 #
 # HERE and not beside the apt install, because the target must exist when update-alternatives is
 # told about it, and /opt/view/lib/libopenblas.so arrives with the spack view in step 5.
+#
+# update-alternatives ONLY where a group already exists. libblas.so.3, libblas.so and
+# liblapack.so.3 are real alternatives groups here; liblapack.so, libcblas.so and liblapacke.so
+# are not (no -dev package provides them -- measured: `-llapack` fails with "cannot find
+# -llapack"), so a plain symlink is what those names need, and handing update-alternatives a link
+# path it does not manage is not a thing to find out at layer 13b of a multi-hour build.
 RUN set -eux; \
     openblas_so="$(readlink -f /opt/view/lib/libopenblas.so)"; \
     test -f "${openblas_so}"; \
     for group in libblas.so.3 libblas.so liblapack.so.3 liblapack.so libcblas.so liblapacke.so; do \
       link="/usr/lib/x86_64-linux-gnu/${group}"; \
-      update-alternatives --install "${link}" "${group}-x86_64-linux-gnu" "${openblas_so}" 100; \
-      update-alternatives --set "${group}-x86_64-linux-gnu" "${openblas_so}"; \
+      if update-alternatives --list "${group}-x86_64-linux-gnu" >/dev/null 2>&1; then \
+        update-alternatives --install "${link}" "${group}-x86_64-linux-gnu" "${openblas_so}" 100; \
+        update-alternatives --set "${group}-x86_64-linux-gnu" "${openblas_so}"; \
+      else \
+        ln -sfn "${openblas_so}" "${link}"; \
+      fi; \
     done; \
     ldconfig; \
     for group in libblas.so.3 libblas.so liblapack.so.3 liblapack.so libcblas.so liblapacke.so; do \
