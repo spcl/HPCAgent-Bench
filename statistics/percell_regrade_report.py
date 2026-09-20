@@ -95,8 +95,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"nodes used: {sorted({str(row['node']) for row in graded})}")
     print()
     print("RE-TIMED g_i vs RECORDED speedup (x1.000 = no shift)")
-    print(describe("all", shifts(graded)))
-    for column in ("original_reduction", "timing_reduction", "residency", "node"):
+    # Two stamps are two estimators of different things. Pooling them makes the difference between
+    # the protocols read as a property of the submissions, so the pooled line is REFUSED, not drawn.
+    stamps = {(str(row["timing_reduction"]), str(row["grading_protocol"])) for row in graded}
+    if len(stamps) > 1:
+        print(f"all                          REFUSED: {len(stamps)} (reduction, protocol) stamps -- {sorted(stamps)}")
+    else:
+        print(describe("all", shifts(graded)))
+    for column in ("original_reduction", "timing_reduction", "grading_protocol", "residency", "node"):
         for name, group in sorted(by(graded, column).items()):
             print(describe(f"  {column}={name}", shifts(group)))
     print()
