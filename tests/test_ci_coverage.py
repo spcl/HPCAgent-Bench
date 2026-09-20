@@ -478,8 +478,10 @@ def test_the_unit_sweep_matrix_runs_every_slice_it_deals_into() -> None:
 #: Import names for the distributions in ``[project.optional-dependencies]`` whose spelling as a
 #: module differs from their spelling on PyPI. Only the ones a test could plausibly import.
 EXTRA_IMPORT_NAMES = {
+    "aider-chat": "aider",
     "apache-tvm": "tvm",
     "apache-tvm-ffi": "tvm_ffi",
+    "cupy-cuda13x": "cupy",
     "optimas-ai": "optimas",
     "py-cpuinfo": "cpuinfo",
     "z3-solver": "z3",
