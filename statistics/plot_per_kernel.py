@@ -20,7 +20,7 @@ import pathlib
 
 import pandas as pd
 
-from hpcagent_bench import experiment_tags, experiments
+from hpcagent_bench import experiments
 from hpcagent_bench.stats import palette
 from hpcagent_bench.stats.figures import per_kernel
 
@@ -47,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="separate",
         help="two files (default) or one figure with speed-up over tokens, sharing the kernel axis",
     )
-    parser.add_argument("--label", default="", help="figure title; defaults to the experiment's display name")
+    parser.add_argument("--label", default="", help="draw this title above the figure; default: no title")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/per_kernel.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/per_kernel.csv"))
     return parser
@@ -86,11 +86,11 @@ def render(
         return written
     if speed_cells:
         kernels = per_kernel.ordered_kernels(speed_cells)
-        fig = per_kernel.figure_one(speed, kernels, args.style, args.summary, f"{label}: Speed-Up")
+        fig = per_kernel.figure_one(speed, kernels, args.style, args.summary, f"{label}: Speed-Up" if label else "")
         written.append(per_kernel.save(fig, args.out.with_name(f"{stem}-speedup{suffix}")))
     if token_cells:
         kernels = per_kernel.ordered_kernels(token_cells)
-        fig = per_kernel.figure_one(tokens, kernels, args.style, args.summary, f"{label}: Tokens")
+        fig = per_kernel.figure_one(tokens, kernels, args.style, args.summary, f"{label}: Tokens" if label else "")
         written.append(per_kernel.save(fig, args.out.with_name(f"{stem}-tokens{suffix}")))
     return written
 
@@ -103,7 +103,9 @@ def main() -> None:
     if not speed_cells and not token_cells:
         raise SystemExit(f"no per-kernel speed-up or tokens for experiment={args.experiment!r} arm={args.arm!r}")
 
-    label = args.label or experiment_tags.display_name(args.experiment) or "all arms"
+    # NO TITLE by default: a paper's caption is the title, and "all arms" over a panel naming one
+    # arm's kernels was a caption that said nothing. --label draws one for a standalone render.
+    label = args.label
     hues = palette.hues()
     speed = per_kernel.speedup_metric(speed_cells, "Speed-Up", hues[0])
     tokens = per_kernel.token_metric(token_cells, "Tokens per Episode", hues[1])

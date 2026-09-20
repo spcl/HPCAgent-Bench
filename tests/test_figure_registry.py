@@ -102,8 +102,8 @@ def test_an_arm_name_resolves_to_a_registered_model_or_to_nothing() -> None:
 
 
 def load_script(name: str) -> ModuleType:
-    """A figure script under ``scripts/``, which is not a package."""
-    spec = importlib.util.spec_from_file_location(name, paths.ROOT / "scripts" / f"{name}.py")
+    """A figure script under ``statistics/``, which is not a package."""
+    spec = importlib.util.spec_from_file_location(name, paths.ROOT / "statistics" / f"{name}.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module

@@ -74,10 +74,18 @@ CHROME_IN: float = 1.15
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class KernelCell:
-    """One kernel's per-episode values for one metric, sorted."""
+    """One kernel's per-episode values for one metric, sorted.
+
+    ``delivered`` False is the 2026-09-16 rule: a kernel the arm was SERVED and never verified an
+    answer for still scores 1x and its tokens are still spent. Dropping it instead would report the
+    arm's speed-up over the kernels it happened to solve, which is a different and always kinder
+    number -- a 28-of-40 arm would read like a 40-of-40 one. Such a cell holds the single
+    placeholder value and draws as a cross (:func:`draw_ci`, :func:`draw_box`).
+    """
 
     kernel: str
     episodes: tuple[float, ...]
+    delivered: bool = True
 
     @property
     def n(self) -> int:
@@ -87,8 +95,15 @@ class KernelCell:
         return float(np.median(self.episodes)) if self.episodes else math.nan
 
 
-def speedup_cells(frame: pd.DataFrame) -> list[KernelCell]:
-    """One cell per kernel: every episode's own final speed-up (:func:`population.graded_episode_rows`)."""
+def speedup_cells(frame: pd.DataFrame, served: bool = True) -> list[KernelCell]:
+    """One cell per kernel: every episode's own final speed-up
+    (:func:`population.graded_episode_rows`), plus -- under ``served`` -- one placeholder cell at
+    :data:`~hpcagent_bench.stats.population.NOT_DELIVERED` for every kernel the frame was served and
+    never answered.
+
+    ``served=False`` draws the solved kernels alone, which is the right population only when the
+    caller has already said so somewhere else on the page.
+    """
     graded = frame[frame.record == "submission"]
     episodes = population.graded_episode_rows(graded)
     cells: list[KernelCell] = []
@@ -96,7 +111,11 @@ def speedup_cells(frame: pd.DataFrame) -> list[KernelCell]:
         values = sorted(float(v) for v in group.speedup if v > 0)
         if values:
             cells.append(KernelCell(str(kernel), tuple(values)))
-    return cells
+    if not served:
+        return cells
+    answered = {cell.kernel for cell in cells}
+    unanswered = sorted(set(frame["benchmark"].dropna().astype(str)) - answered)
+    return cells + [KernelCell(kernel, (population.NOT_DELIVERED,), False) for kernel in unanswered]
 
 
 def token_cells(frame: pd.DataFrame) -> list[KernelCell]:
@@ -225,15 +244,30 @@ def draw_ci(
 ) -> None:
     for cell in cells:
         x = x_of[cell.kernel]
+        if not cell.delivered:
+            draw_placeholder(ax, x, color)
+            continue
         med, low, high = bootstrap_point(cell, log2_space)
         if math.isfinite(low) and math.isfinite(high) and low != high:
             ax.vlines(x, low, high, color=color, linewidth=1.2, alpha=0.6, zorder=2)
         ax.plot([x], [med], marker="o", markersize=4.0, color=color, linestyle="none", zorder=3)
 
 
+def draw_placeholder(ax: matplotlib.axes.Axes, x: float, color: str) -> None:
+    """A served-and-never-answered kernel: a cross at the 1x placeholder, in the panel's own colour.
+    A cross, not a dot, so a reader never reads it as a measured 1x."""
+    ax.plot(
+        [x], [population.NOT_DELIVERED], marker="x", markersize=4.5, markeredgewidth=1.1, color=color,
+        linestyle="none", zorder=3,
+    )  # fmt: skip
+
+
 def draw_box(ax: matplotlib.axes.Axes, cells: Sequence[KernelCell], x_of: dict[str, int], color: str) -> None:
     """A real box for a kernel with :data:`MIN_EPISODES_FOR_SPREAD`+ episodes; a point otherwise --
     mixing the two in one panel is deliberate (see the module docstring)."""
+    for cell in (cell for cell in cells if not cell.delivered):
+        draw_placeholder(ax, x_of[cell.kernel], color)
+    cells = [cell for cell in cells if cell.delivered]
     boxed = [cell for cell in cells if cell.n >= MIN_EPISODES_FOR_SPREAD]
     pointwise = [cell for cell in cells if cell.n < MIN_EPISODES_FOR_SPREAD]
     if boxed:
