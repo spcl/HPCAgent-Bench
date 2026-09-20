@@ -255,6 +255,48 @@ REDUCTION_COLUMN: str = "timing_reduction"
 UNSTAMPED: str = "unstamped"
 
 
+#: The recorded grading protocol, which carries the TIMING BRACKET after a ``+``
+#: (``sealed-nonce-v1+gpu-event-nocopy``; :func:`hpcagent_bench.harness.timing.timing_bracket`).
+PROTOCOL_COLUMN: str = "grading_protocol"
+
+#: What a row recorded before the bracket existed counts as. Unlike :data:`UNSTAMPED` an
+#: all-unbracketed slice is POOLED, not refused: those rows were all taken under one protocol, it
+#: simply has no name on them, and there is no migration that can put one there after the fact.
+#: What is refused is a MIXTURE, because that is two protocols in one mean.
+UNBRACKETED: str = "unbracketed"
+
+
+def timing_bracket_of(protocol: object) -> str:
+    """The bracket a recorded ``grading_protocol`` names, or :data:`UNBRACKETED`."""
+    return str(protocol).strip().partition("+")[2] or UNBRACKETED if is_named(protocol) else UNBRACKETED
+
+
+def one_bracket(values: Iterable[object], label: str = "") -> str:
+    """The single timing BRACKET a slice's samples were taken under, or raise.
+
+    Two brackets are two quantities, not two estimators of one. A ``gpu-event-nocopy`` sample holds
+    no host/device transfer because the harness placed the inputs on the device before it opened; a
+    ``host-monotonic`` sample of the same kernel holds every copy the submission made. Averaging
+    across them produces a number neither protocol measured -- which is how a device-resident arm
+    and a host-resident one bearing similar names come to be read as one setup.
+
+    That is the case this exists for: ``triton`` and ``triton-device`` are different experiments
+    over the same DSL, and their arm keys are the first thing that separates them. This is the
+    second, and it holds even for a reader that pools on something other than the arm.
+    """
+    found = sorted({timing_bracket_of(value) for value in values})
+    prefix = f"{label}: " if label else ""
+    if not found:
+        return UNBRACKETED
+    if len(found) > 1:
+        raise MixedPopulationError(
+            f"{prefix}this slice mixes timing brackets {found}; a sample taken with the inputs "
+            f"already on the device holds no transfer and one taken on the host clock holds all of "
+            f"them, so split it by {PROTOCOL_COLUMN} rather than pooling it"
+        )
+    return found[0]
+
+
 #: The command that turns an UNSTAMPED row into a mwd-v2 one -- named in every refusal below, so
 #: the error tells a caller what to run rather than just what is wrong.
 MIGRATION_COMMAND: str = "hpcagent-bench regrade (or reproducibility/llr40/extract_llr40.py --regrades)"
@@ -424,6 +466,13 @@ def graded_episode_rows(
             f"mwd-v2; migrate first with {MIGRATION_COMMAND}, or pass allow_unstamped=True for a "
             "deliberate legacy-only analysis"
         )
+    # The bracket is the other half of "are these the same measurement": the reduction says how the
+    # samples became a credit, the bracket says what a sample contains. Checked separately from the
+    # reduction and never as its `elif`: a frame can carry one column and not the other. An
+    # all-unbracketed slice is every row recorded before the stamp and pools fine; a MIXTURE does
+    # not, which is what keeps `triton` and `triton-device` rows out of one mean.
+    if PROTOCOL_COLUMN in timed.columns:
+        one_bracket(timed[PROTOCOL_COLUMN].tolist(), label="graded episodes")
     return scored_answers(last_per_episode(timed, order or SUBMISSION_ORDER))
 
 
