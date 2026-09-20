@@ -15,7 +15,6 @@ two extractions of the same experiment are told apart by more than a file mtime.
 import argparse
 import dataclasses
 import datetime
-import glob
 import logging
 import pathlib
 import sqlite3
@@ -23,7 +22,7 @@ import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from hpcagent_bench import campaigns, experiments, frozen_observations
+from hpcagent_bench import campaigns, experiments, frozen_observations, observations_extract, paths
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -89,33 +88,26 @@ def keep_owned(frame: "pd.DataFrame", selection: campaigns.Selection) -> tuple["
     return frame[mine & ~retired], int((mine & retired).sum()), int((~mine).sum())
 
 
-def extract(selection: campaigns.Selection) -> "pd.DataFrame":
-    """The experiment's rows from every LIVE judge database under its run roots."""
+def extract(selection: campaigns.Selection, frozen: pathlib.Path | None = None, **options: object) -> "pd.DataFrame":
+    """Every row of the experiment: judge rows, task rows with their token totals, and the frozen
+    rows of jobs whose directories are gone or unreadable.
+
+    One extractor (:mod:`hpcagent_bench.observations_extract`), because there were two and they
+    disagreed: the other wrote the plural table name into ``record`` and no ``task`` rows at all,
+    so a frame from it carried no token cost and every ``record == "task"`` rule silently did
+    nothing."""
     import pandas as pd
 
-    try:
-        frame = experiments.observations(selection.run_globs(), experiment=selection.experiment)
-    except SystemExit:  # no judge database matched: an empty frame, not a crash
-        LOG.warning("no judge database under %s", list(selection.run_globs()))
-        frame = pd.DataFrame()
-    return frame
-
-
-def frozen_frame(selection: campaigns.Selection, root: pathlib.Path | None) -> "pd.DataFrame":
-    """The frozen rows of ``selection``'s jobs whose live directory is gone.
-
-    The live-wins rule is :func:`hpcagent_bench.frozen_observations.lost_jobs`, the one every other
-    reader of these rows already uses -- a job is read from the frozen copy only when its directory
-    no longer exists, so there is never a row-level conflict to resolve."""
-    import pandas as pd
-
-    roots = [pathlib.Path(path) for pattern in selection.run_globs() for path in sorted(glob.glob(pattern))]
-    lost = frozen_observations.lost_jobs(root, roots)
-    rows = [row for job_rows in lost.values() for row in job_rows]
-    frame = pd.DataFrame(rows) if rows else pd.DataFrame()
-    if not frame.empty:
-        frame[frozen_observations.COLUMN] = "1"
-    return frame
+    got = observations_extract.extract(
+        observations_extract.Options(
+            runs=selection.run_globs(),
+            benchmarks=paths.BENCHMARKS,
+            focus_tag=selection.tag,
+            frozen_dir=frozen,
+            **options,  # type: ignore[arg-type]
+        )
+    )
+    return pd.DataFrame(got.observations)
 
 
 def check_columns(live: "pd.DataFrame", frozen: "pd.DataFrame") -> None:
@@ -193,12 +185,16 @@ def build(
     csv_out: pathlib.Path | None = None,
     frozen: pathlib.Path | None = None,
     root: pathlib.Path | None = None,
+    csvs: Sequence[pathlib.Path] = (),
 ) -> tuple["pd.DataFrame", Provenance]:
-    """Extract ``experiment``, fuse the frozen rows in, write ``out`` (and ``csv_out``)."""
+    """Extract ``experiment``, fuse any extra CSVs in, write ``out`` (and ``csv_out``)."""
+    import pandas as pd
+
     selection = campaigns.resolve(experiment, root)
     extracted_at = now()
-    live = extract(selection)
-    frame, provenance = fuse(selection, live, frozen_frame(selection, frozen), extracted_at)
+    live = extract(selection, frozen)
+    extra = pd.concat([load(path) for path in csvs], ignore_index=True) if csvs else pd.DataFrame()
+    frame, provenance = fuse(selection, live, extra, extracted_at)
     if frame.empty:
         raise SystemExit(f"no observations for experiment {experiment!r} under {list(selection.run_globs())}")
     write_db(frame, out) if out.suffix == ".db" else write_csv(frame, out)
@@ -212,6 +208,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--experiment", required=True, help=f"one of: {', '.join(campaigns.experiments_available())}")
     parser.add_argument("--out", type=pathlib.Path, required=True, help="observations .db (or .csv) to write")
     parser.add_argument("--csv", dest="csv_out", type=pathlib.Path, help="also write the frame as a CSV here")
+    parser.add_argument(
+        "--fuse-csv",
+        type=pathlib.Path,
+        action="append",
+        default=[],
+        help="extra observations CSV to fuse in; repeatable",
+    )
     parser.add_argument("--runs-root", type=pathlib.Path, help=f"default {campaigns.runs_root()}")
     parser.add_argument(
         "--frozen-observations",
@@ -227,6 +230,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         csv_out=args.csv_out,
         frozen=frozen_observations.resolve(args.frozen_observations),
         root=args.runs_root,
+        csvs=tuple(args.fuse_csv),
     )
     print(provenance.report())
     LOG.debug("fused frame: %d rows", len(frame))

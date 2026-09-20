@@ -19,11 +19,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 #: The pair is written by the extractor that writes every shipped artifact, not by a hand-rolled
 #: CREATE TABLE here: the two files have to agree on the COLUMN TYPES as well as on the rows, and a
 #: writer invented in the test body agrees with nothing.
-SPEC = importlib.util.spec_from_file_location("extract_llr40", REPO / "reproducibility" / "llr40" / "extract_llr40.py")
-assert SPEC is not None and SPEC.loader is not None
-extract_llr40 = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = extract_llr40
-SPEC.loader.exec_module(extract_llr40)
+from hpcagent_bench import observations_extract as extract_llr40
 
 FIELDS = ("run_root", "job", "record", "arm", "benchmark", "speedup", "tokens", "tokens_billed", "packet")
 ROWS = [

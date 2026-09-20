@@ -35,7 +35,7 @@ def load(name: str, relative: str) -> types.ModuleType:
     return module
 
 
-extract = load("extract_llr40", "reproducibility/llr40/extract_llr40.py")
+from hpcagent_bench import observations_extract as extract  # noqa: E402
 
 RUN = "gpu-llr-focus40-qwen38-hip.n0.p0.w0"
 ARM = "gpu-llr-focus40-qwen38-hip"
