@@ -20,9 +20,26 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 FIXTURE = pathlib.Path(__file__).with_name("data") / "observations-mini.db"
 
 
+#: Where a standalone plotting script may live. ``statistics/`` is where the figure scripts moved
+#: (a12a5881); ``scripts/`` still holds the rest. Searched rather than pinned, because this loader
+#: pointing at one directory is what took the whole container suite down at COLLECTION -- one
+#: missing file, 0 tests run, and the login-node suite never noticed because it stops earlier.
+SCRIPT_DIRS: tuple[str, ...] = ("statistics", "scripts")
+
+
+def script_path(name: str) -> pathlib.Path:
+    """``<name>.py`` in whichever of :data:`SCRIPT_DIRS` holds it; raises naming both if neither."""
+    for directory in SCRIPT_DIRS:
+        candidate = REPO / directory / f"{name}.py"
+        if candidate.is_file():
+            return candidate
+    searched = ", ".join(f"{d}/{name}.py" for d in SCRIPT_DIRS)
+    raise FileNotFoundError(f"no {name}.py under the repo root; looked in {searched}")
+
+
 def load_script(name: str) -> types.ModuleType:
-    """Import ``scripts/<name>.py`` as a module (scripts/ is not a package)."""
-    spec = importlib.util.spec_from_file_location(name, REPO / "scripts" / f"{name}.py")
+    """Import a standalone script as a module (neither directory is a package)."""
+    spec = importlib.util.spec_from_file_location(name, script_path(name))
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
