@@ -1129,8 +1129,9 @@ def test_a_panel_name_never_folds_onto_a_third_line(name: str) -> None:
     """A third line comes out of the panel. The width is SEARCHED because the first line carries
     the tag as well as its first word ("iii) Repository"), which no per-word rule predicts -- the
     estimate put "Repository Context" on three lines in an 11-character column."""
-    folded = efficacy_figures.wrapped_label(name, efficacy_figures.name_line_width(name, 11))
-    assert folded.count("\n") + 1 <= efficacy_figures.MAX_NAME_LINES, folded
+    lines = efficacy_figures.PAPER_CONFIG.max_name_lines
+    folded = efficacy_figures.wrapped_label(name, efficacy_figures.name_line_width(name, 11, lines))
+    assert folded.count("\n") + 1 <= lines, folded
 
 
 def test_parse_spec_reads_semicolon_separated_key_value_pairs() -> None:
