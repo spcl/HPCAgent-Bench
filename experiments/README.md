@@ -671,6 +671,18 @@ serving keys, the `-clean` arm, this checkout's commit, and for the budget class
 `TOKEN_SCALE`/`TIME_SCALE` (the wall clock clamped under the partition cap). `owed_wave.py` splits
 every env key in two:
 
+An identity whose every surviving job lost its `.agent-launch/<job>` directory (the 09-19 reducer's
+dropped mode did this to 147 jobs whose own directory and judge DB otherwise survive) has no launch
+env or problem row left to read. `owed_wave.gather` falls back to `experiments/.env.<identity>-clean`
+or `.env.<identity>` (`fallback_env`, rendered through `env_layers.sh` the same way the model layer
+is) for its condition, and to the roster for its problems: a `RENDERED_TRACKS` campaign (cpf/gpu
+llr-focus40) gets the SAME fresh `make_problems.py` render every one of its setups already gets;
+llrblind, which normally reuses an old row and which nothing downstream re-renders, gets that render
+run immediately instead. A campaign with no known track (anything else) stays skipped. Every skip --
+no surviving launch dir, no safe problem source, a model that does not match, a queued arm -- is a
+`plan.notes` line naming the arm and, where it applies, how many kernels it still owes; a plan that
+drops owed work without saying why is the exact bug this fallback exists to stop recurring.
+
 | Kind | Keys | Where it lives |
 | --- | --- | --- |
 | per problem | `owed_wave.PER_PROBLEM_KEYS`: arm, language, packet/tool switches, prompt and policy files, budgets, `CLAUDE_BARE`, CPF dirs, repo layout, score/library switches, every `HPCAGENT_BENCH_RECORD_*` but model/harness | the setup's overlay (`SETUPS_FILE`) |
