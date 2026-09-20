@@ -341,6 +341,15 @@ def panel_mode(mode: str) -> str:
     return mode if mode in efficacy_figures.MODES else "paired"
 
 
+def comparison_baseline(panel: efficacy_figures.Panel) -> str:
+    """One panel's speed-up DENOMINATOR, spelled for its 1x line. Blank for a stub panel, which has
+    no rows to read one off."""
+    frame = panel[3]
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return ""
+    return experiment_tags.framework_name(results_figures.baseline_of(frame))
+
+
 def write_dot_rows(
     args: argparse.Namespace,
     config: efficacy_figures.FigureConfig,
@@ -359,8 +368,9 @@ def write_dot_rows(
     out.parent.mkdir(parents=True, exist_ok=True)
     written = efficacy_figures.figure_arm_dots(
         frame, stats, treatment, out, control_name=args.control_label, repeats=args.repeats,
-        config=config, channels=args.channels, row_height_in=args.dots_row_height,
-        panel_labels=args.dots_panel_labels, reference_name=experiment_tags.framework_name(baseline),
+        config=config, channels=args.channels, panel_labels=args.dots_panel_labels,
+        reference_name=experiment_tags.framework_name(baseline),
+        **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
         labels={
             # The baseline's NAME rides on the 1x line instead (reference_name), which keeps this
             # rotated label to one line.
@@ -714,8 +724,10 @@ def main() -> None:
     parser.add_argument(
         "--dots-row-height",
         type=float,
-        default=2.3,
-        help="one --dots row's height, inches (default 2.3)",
+        default=None,
+        help="one stacked row's height, inches. Default: the figure's own -- a single comparison "
+        "gets a tall row, a joined row of comparisons a short one, since the joined figure spends "
+        "its height on two rows across the whole page",
     )
     parser.add_argument(
         "--mark-size",
@@ -757,12 +769,6 @@ def main() -> None:
         )
         if value is not None
     }
-    figure_config = (
-        dataclasses.replace(efficacy_figures.DEFAULT_CONFIG, **config_overrides)
-        if config_overrides
-        else efficacy_figures.DEFAULT_CONFIG
-    )
-
     row_width = {
         "natural": None,
         "iclr": plotstyle.ICLR_TEXT_WIDTH_IN,
@@ -770,12 +776,21 @@ def main() -> None:
         "acm-text": plotstyle.ACM_TEXT_WIDTH_IN,
     }[args.row_width]
 
+    # A --row-width is a promise to drop the figure in at scale 1.0, so it is drawn at the size it
+    # will be PRINTED at and its type follows the two-column convention rather than the authored-
+    # large-then-shrunk default. Explicit --mark-size/--legend-pt still win.
+    base_config = efficacy_figures.PAPER_CONFIG if row_width is not None else efficacy_figures.DEFAULT_CONFIG
+    figure_config = dataclasses.replace(base_config, **config_overrides) if config_overrides else base_config
+
     if args.comparison:
         comparison_panels: list[efficacy_figures.Panel] = []
         # A joined row's comparisons need not share one repeat-reduction policy (git-scicomp's own
         # designed-3x-repeats median against llr-focus40's own reruns-take-latest, say) -- each
         # ``--comparison`` spec may say ``repeats=...``; one that does not falls back to ``--repeats``.
         comparison_repeats: list[population.RepeatPolicy] = []
+        # Each panel names its OWN control: git-scicomp's is the bare kernel, not the absence of a
+        # packet, and one shared key cannot spell both without being told.
+        comparison_controls: list[str] = []
         for raw in args.comparison:
             spec = parse_spec(raw)
             one_repeats = spec.get("repeats", args.repeats)
@@ -789,6 +804,7 @@ def main() -> None:
                 continue
             comparison_panels.append(built)
             comparison_repeats.append(one_repeats)
+            comparison_controls.append(spec.get("control-label", ""))
         if not comparison_panels:
             raise SystemExit(f"no --comparison of {args.comparison} produced a panel")
         args.table.parent.mkdir(parents=True, exist_ok=True)
@@ -796,12 +812,28 @@ def main() -> None:
             del treatment  # the CSV is keyed by title, not by the packet(s) shaping the panel
             suffix = f"-{title.lower().replace(' ', '-')}"
             write_panel_tables(args.table, suffix, stats, frame, one_repeats)
-        written = efficacy_figures.figure_row(
-            comparison_panels, args.out, row_width_in=row_width, repeats=comparison_repeats,
-            show_cloud=args.show_cloud, config=figure_config, shared_x_label=args.shared_x_label,
-            ylabel=args.ylabel, mode=panel_mode(args.mode), panel_labels=args.panel_labels,
-            shapes=args.shapes, mark_labels=args.mark_labels,
-        )  # fmt: skip
+        if args.mode == "dots":
+            written = efficacy_figures.figure_dot_row(
+                comparison_panels, args.out, repeats=comparison_repeats, config=figure_config,
+                channels=args.channels, row_width_in=row_width or plotstyle.ACM_TEXT_WIDTH_IN,
+                panel_labels=args.panel_labels,
+                **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
+                references=[comparison_baseline(panel) for panel in comparison_panels],
+                control_names=comparison_controls,
+                labels={
+                    "speedup": efficacy_figures.DEFAULT_XLABEL,
+                    "cost": efficacy_figures.cost_label(
+                        (card.fresh_input, card.cached_input, card.output), card.key
+                    ),
+                },
+            )  # fmt: skip
+        else:
+            written = efficacy_figures.figure_row(
+                comparison_panels, args.out, row_width_in=row_width, repeats=comparison_repeats,
+                show_cloud=args.show_cloud, config=figure_config, shared_x_label=args.shared_x_label,
+                ylabel=args.ylabel, mode=panel_mode(args.mode), panel_labels=args.panel_labels,
+                shapes=args.shapes, mark_labels=args.mark_labels,
+            )  # fmt: skip
         for title, treatment, stats, frame in comparison_panels:
             del frame  # the summary line names the panel, not its rows
             for name, one_stats in stats.items() if isinstance(stats, dict) else ((treatment, stats),):

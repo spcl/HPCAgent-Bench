@@ -1005,9 +1005,18 @@ def test_resolve_row_repeats_broadcasts_a_bare_policy_and_checks_a_sequences_len
         efficacy_figures.resolve_row_repeats(["latest"], 3)
 
 
-def test_a_comparison_specs_own_repeats_overrides_the_row_default(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    ("mode", "builder"), [("dots", "figure_dot_row"), ("paired", "figure_row")], ids=["dots", "paired"]
+)
+def test_a_comparison_specs_own_repeats_overrides_the_row_default(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, mode: str, builder: str
+) -> None:
     """``repeats=`` on one ``--comparison`` spec reaches ONLY that panel; a spec without it keeps
-    ``--repeats``."""
+    ``--repeats``.
+
+    Both row builders, because the default one changed: a joined row is drawn as stacked 1-D rows
+    unless ``--mode`` asks for the 2-D panels, and a policy forwarded by one route and dropped by
+    the other is the same bug the ``--pairs-csv`` route already shipped once."""
     obs = tmp_path / "obs.csv"
     pd.DataFrame(observation_rows(SCICOMP_PAIR[0], 1.1, 1.4e6) + observation_rows(SCICOMP_PAIR[1], 0.6, 900e3)).to_csv(
         obs, index=False
@@ -1016,25 +1025,23 @@ def test_a_comparison_specs_own_repeats_overrides_the_row_default(tmp_path: path
     family_csv([SCICOMP_PAIR], efficacy.NOT_SIGNIFICANT, efficacy.NOT_SIGNIFICANT).to_csv(table, index=False)
 
     seen_repeats: list[object] = []
-    real = efficacy_figures.figure_row
+    real = {"figure_dot_row": efficacy_figures.figure_dot_row, "figure_row": efficacy_figures.figure_row}[builder]
 
     def record(*args: object, **kwargs: object) -> object:
         seen_repeats.append(kwargs["repeats"])
         return real(*args, **kwargs)  # pyright: ignore[reportArgumentType, reportCallIssue]
 
-    old_figure_row = plot.efficacy_figures.figure_row
-    plot.efficacy_figures.figure_row = record
+    monkeypatch.setattr(plot.efficacy_figures, builder, record)
     old_argv = sys.argv
     sys.argv = [
         "plot_score_change.py", str(obs), "--comparison",
         f"title=Kernel Formulation;intervention=repo;pairs={table};repeats=median",
-        "--out", str(tmp_path / "fig.pdf"), "--table", str(tmp_path / "table.csv"),
+        "--mode", mode, "--out", str(tmp_path / "fig.pdf"), "--table", str(tmp_path / "table.csv"),
     ]  # fmt: skip
     try:
         plot.main()
     finally:
         sys.argv = old_argv
-        plot.efficacy_figures.figure_row = old_figure_row
     assert seen_repeats == [["median"]]
 
 

@@ -141,6 +141,12 @@ class FigureConfig:
     #: second reference.
     minor_grid_width: float = 0.35
     minor_grid_color: str = "#e8e8ea"
+    #: An interval's own line weight, the major grid's, and the panel frame's. Separate knobs
+    #: because a figure drawn at its FINAL printed size needs all three thinner: a 1.2pt whisker
+    #: that reads as a line at authoring scale reproduces as a bar at 8pt type.
+    interval_width: float = 1.2
+    grid_width: float = 0.7
+    spine_width: float = 0.8
     #: ABSOLUTE panels only (:func:`draw_arm_pair`): join an arm to its own no-packet twin with a
     #: faint segment. It is not a trend line -- both ends are measurements of the same arm, and the
     #: segment IS the intervention's displacement, the quantity a paired panel draws as one mark.
@@ -153,8 +159,31 @@ class FigureConfig:
     dodge: float = 0.16
 
 
-#: The default a caller draws with unless it hands a replacement in.
+#: The default a caller draws with unless it hands a replacement in. Sized for a figure AUTHORED
+#: large and reproduced at roughly half its width -- one panel, standing alone.
 DEFAULT_CONFIG = FigureConfig()
+
+#: For a figure drawn at the size it will be PRINTED at: a row of panels budgeted to a paper's own
+#: text width, which goes into the page at scale 1.0 and is never shrunk.
+#:
+#: Figure size and type size are one decision, not two. A 13.5pt axis label is right on a 7in
+#: single panel reproduced at half width; on a 1.2in panel of a text-width row it is larger than
+#: the body text around it, and the panel it leaves is a postage stamp. The numbers are the usual
+#: two-column convention (8pt text, 6pt legend, 0.5pt rules) rather than anything derived here.
+PAPER_CONFIG = dataclasses.replace(
+    DEFAULT_CONFIG,
+    tick_pt=7.0,
+    label_pt=8.0,
+    subtitle_pt=8.0,
+    point_pt=6.5,
+    legend_pt=6.5,
+    mark_size=26.0,
+    label_offset_pt=6.0,
+    symbol_offset_pt=3.0,
+    interval_width=0.9,
+    grid_width=0.5,
+    spine_width=0.5,
+)
 
 #: Back-compat aliases some tests and callers pin by name; both read off :data:`DEFAULT_CONFIG`.
 CLOUD_SIZE: float = DEFAULT_CONFIG.cloud_size
@@ -449,11 +478,12 @@ def draw_interval_cross(ax: Axes, x: float, y: float, bounds: tuple[float, float
     one (:data:`FigureConfig.cost_linestyle`), so the two cannot be read as one quantity."""
     x_low, x_high, y_low, y_high = bounds
     if np.isfinite(x_low) and np.isfinite(x_high):
-        ax.hlines(y, x_low, x_high, color=colour, linewidth=1.2, alpha=0.75, zorder=style.CONNECTOR_Z)
+        ax.hlines(y, x_low, x_high, color=colour, linewidth=config.interval_width, alpha=0.75,
+                  zorder=style.CONNECTOR_Z)  # fmt: skip
     if np.isfinite(y_low) and np.isfinite(y_high):
         ax.vlines(
-            x, y_low, y_high, color=colour, linewidth=1.2, alpha=0.75, linestyles=config.cost_linestyle,
-            zorder=style.CONNECTOR_Z,
+            x, y_low, y_high, color=colour, linewidth=config.interval_width, alpha=0.75,
+            linestyles=config.cost_linestyle, zorder=style.CONNECTOR_Z,
         )  # fmt: skip
 
 
@@ -521,6 +551,9 @@ def axis_significance(stats: pd.DataFrame) -> dict[tuple[str, str], tuple[bool, 
     """Per (model, leg), ``(score axis cleared BH, cost axis cleared BH)`` -- the two independent
     verdicts a mark's superscript reads off (:data:`SCORE_SIG_MARK`/:data:`COST_SIG_MARK`)."""
     flags: dict[tuple[str, str], tuple[bool, bool]] = {}
+    if stats.empty:
+        # A stub panel's table has no columns at all, so there is no leg to read.
+        return flags
     legs = leg_labels(stats)
     for (_, row), leg in zip(stats.iterrows(), legs, strict=True):
         score_sig = str(row.get("score_verdict", "")) == efficacy.SIGNIFICANT
@@ -877,6 +910,7 @@ def style_panel(
     minor_log2_grid(ax, "y", config)
     ax.set_box_aspect(1.0)
     style.despine(ax)
+    thin_rules(ax, config)
 
 
 def style_absolute_panel(
@@ -916,6 +950,7 @@ def style_absolute_panel(
     minor_log2_grid(ax, "x", config)
     ax.set_box_aspect(1.0)
     style.despine(ax)
+    thin_rules(ax, config)
 
 
 #: How a panel reads its two arms. ``paired`` draws ONE mark per (model, leg) -- the packet's own
@@ -924,6 +959,15 @@ def style_absolute_panel(
 #: joins them, so a reader sees that Qwen-HIP reached 3.2x AND where it started; the displacement
 #: between the two is the paired panel's single mark.
 MODES: tuple[str, ...] = ("paired", "absolute")
+
+
+def thin_rules(ax: Axes, config: FigureConfig) -> None:
+    """Set the major grid and the panel frame to ``config``'s own weights. Applied after the axis
+    stylers, which draw both at the weight a full-size figure wants."""
+    for line in (*ax.get_xgridlines(), *ax.get_ygridlines()):
+        line.set_linewidth(config.grid_width)
+    for spine in ax.spines.values():
+        spine.set_linewidth(config.spine_width)
 
 
 def style_for(mode: str) -> Callable[..., None]:
@@ -1282,7 +1326,7 @@ ROW_XLABEL_IN: float = 0.55
 #: xlabel drawn INSIDE that band by matplotlib's own auto layout. A shared label is placed by hand
 #: (:func:`figure_row`'s own ``fig.text``) right above the legend, so reserving the wider band left
 #: a dead gap between the tick numbers and it that nothing was actually drawing into.
-SHARED_ROW_XLABEL_IN: float = 0.34
+SHARED_ROW_XLABEL_IN: float = 0.34  # superseded by text_band; kept for callers pinning it
 
 #: :func:`figure_row`'s worst-case GUESS at the legend's height, for the PROBE pass only -- big
 #: enough that the probe legend never wraps onto more rows than the real one will. The real bottom
@@ -1496,8 +1540,8 @@ def figure_row(
         ),
         default=1,
     )
-    title_band_in = SUBTITLE_BAND_IN * name_lines if panel_labels != "none" else ROW_TITLE_IN
-    xlabel_band_in = SHARED_ROW_XLABEL_IN if shared_x_label else ROW_XLABEL_IN
+    title_band_in = text_band(config.subtitle_pt, name_lines) if panel_labels != "none" else ROW_TITLE_IN
+    xlabel_band_in = text_band(config.tick_pt) if shared_x_label else text_band(config.label_pt, 3)
 
     # Pass 1 (a throwaway figure): :data:`ROW_LEGEND_IN` is a worst-case guess at how tall the
     # legend's row wrap will come out and :data:`PANEL_MARGINS`-style left fraction is a guess at
@@ -1570,10 +1614,12 @@ class ArmRow:
 
     @property
     def label(self) -> str:
-        """The category's own tick text: what it DELIVERED. The model is drawn once per run of
-        columns instead (:func:`draw_category_axis`) -- spelled on every column, "Qwen3.8-27B"
-        three times over collides with itself long before nine categories."""
-        return self.leg
+        """The category's own tick text: what it DELIVERED, or the MODEL where the comparison has
+        no delivery of its own (git-scicomp's repository against the bare kernel). The model is
+        otherwise drawn once per run of columns instead (:func:`draw_category_axis`) -- spelled on
+        every column, "Qwen3.8-27B" three times over collides with itself long before nine
+        categories."""
+        return self.leg or experiment_tags.model_name(self.model)
 
 
 def arm_rows(
@@ -1600,16 +1646,26 @@ def arm_rows(
 #: than the gap between two columns.
 TICK_WRAP: int = 8
 
-#: Where a model's group name sits under the delivery ticks, and where the row's own band ends, in
-#: axes fractions below the panel.
-GROUP_LABEL_Y: float = -0.30
+#: How far under the axis a model's group name sits, in POINTS below the delivery ticks. In points
+#: rather than an axes fraction: a fraction of a 1.45in row lands in the legend, and a fraction of
+#: a 2.3in one leaves a gap.
+GROUP_LABEL_PAD: float = 3.0
 
-#: Extra height per row when each carries a left-aligned subtitle, in inches.
-SUBTITLE_BAND_IN: float = 0.22
+#: How much taller one line of drawn text makes a band than the type itself: leading plus the gap
+#: to whatever sits under it. Bands are DERIVED from the type scale rather than fixed in inches --
+#: a 0.22in band is right above a 13.5pt name and half empty above an 8pt one, and that empty half
+#: is what makes a page-budgeted row's panels look small.
+LINE_BAND: float = 1.5
+
+
+def text_band(points: float, lines: int = 1) -> float:
+    """``lines`` of ``points``-sized text as a band height, inches."""
+    return points / 72.0 * LINE_BAND * lines
+
 
 #: The band :func:`figure_arm_dots` reserves under the bottom row for the delivery ticks plus the
 #: model names drawn below them, in inches.
-CATEGORY_BAND_IN: float = 0.85
+CATEGORY_BAND_IN: float = 0.85  # superseded by text_band; kept for callers pinning it
 
 
 def model_runs(rows: Sequence[ArmRow]) -> list[tuple[str, int, int]]:
@@ -1626,18 +1682,38 @@ def model_runs(rows: Sequence[ArmRow]) -> list[tuple[str, int, int]]:
 
 def draw_category_axis(ax: Axes, rows: Sequence[ArmRow], config: FigureConfig) -> None:
     """The shared categorical X of a dot-row figure: one tick per column naming what it delivered,
-    each model named ONCE under its own run of columns, and a light rule between runs."""
+    each model named ONCE under its own run of columns, and a light rule between runs.
+
+    A column whose rows all share ONE delivery labels NOTHING per category: the model is already
+    the colour and the key already names it, and three model names under three columns of a
+    text-width row print on top of one another whatever they are folded to. Its one delivery is
+    named once, centred under the column, instead.
+    """
     from matplotlib.transforms import blended_transform_factory
 
+    deliveries = {row.leg for row in rows}
+    solo = len(deliveries) <= 1
     ax.set_xticks(range(len(rows)))
     ax.set_xticklabels(
-        [wrapped_label(row.label, TICK_WRAP) for row in rows], fontsize=config.tick_pt, color=style.INK
+        [""] * len(rows) if solo else [wrapped_label(row.label, TICK_WRAP) for row in rows],
+        fontsize=config.tick_pt, color=style.INK,
     )  # fmt: skip
     transform = blended_transform_factory(ax.transData, ax.transAxes)
+    drop = -(text_band(config.tick_pt, 2) * 72.0 + GROUP_LABEL_PAD)
+    if solo:
+        delivery = next(iter(deliveries), "")
+        if delivery and rows:
+            ax.annotate(
+                delivery, xy=((len(rows) - 1) / 2.0, 0.0), xycoords=transform, xytext=(0.0, drop),
+                textcoords="offset points", ha="center", va="top", fontsize=config.label_pt * 0.85,
+                color=style.INK, annotation_clip=False,
+            )  # fmt: skip
+        return
     for model, first, last in model_runs(rows):
-        ax.text(
-            (first + last) / 2.0, GROUP_LABEL_Y, experiment_tags.model_name(model), transform=transform,
-            ha="center", va="top", fontsize=config.label_pt * 0.8, color=style.INK, clip_on=False,
+        ax.annotate(
+            experiment_tags.model_name(model), xy=((first + last) / 2.0, 0.0), xycoords=transform,
+            xytext=(0.0, drop), textcoords="offset points", ha="center", va="top",
+            fontsize=config.label_pt * 0.85, color=style.INK, annotation_clip=False,
         )  # fmt: skip
 
 
@@ -1648,12 +1724,16 @@ def group_rules(ax: Axes, rows: Sequence[ArmRow]) -> None:
         ax.axvline(first - 0.5, color=style.RULE, linewidth=0.8, zorder=0)
 
 
-def wrapped_label(text: str, width: int = 18) -> str:
+def wrapped_label(text: str, width: int = 18, hyphens: bool = False) -> str:
     """A label folded onto as many lines as it needs, never INSIDE a word. A dot-row panel is about
     two inches tall and its Y label is rotated, so "Geomean Speed-Up Over Numba" on one line runs
     off both ends of the row -- but a fold at the hyphen gives "Geomean Speed-" over "Up", which is
-    worse than the overflow."""
-    return textwrap.fill(text, width=width, break_long_words=False, break_on_hyphens=False)
+    worse than the overflow.
+
+    ``hyphens`` allows the fold at a hyphen, for a TICK: a model name has no spaces to fold at
+    ("Qwen3.8-27B"), so without it three of them under three columns print on top of one another.
+    """
+    return textwrap.fill(text, width=width, break_long_words=False, break_on_hyphens=hyphens)
 
 
 #: How a stacked figure names its own panels, so a caption can refer to one of them.
@@ -1723,6 +1803,7 @@ def draw_measure_row(
     config: FigureConfig = DEFAULT_CONFIG,
     ylabel: str = "",
     reference_name: str = "",
+    direction: bool = True,
 ) -> None:
     """ONE measure over the shared categorical X: two marks per category, the no-packet arm HOLLOW
     and the packet arm FILLED, each with its 95% interval as a vertical bar, joined by a faint
@@ -1740,7 +1821,7 @@ def draw_measure_row(
             x = index + dodge
             if np.isfinite(low) and np.isfinite(high):
                 ax.vlines(
-                    x, low, high, color=row.colour, linewidth=1.2, alpha=0.75,
+                    x, low, high, color=row.colour, linewidth=config.interval_width, alpha=0.75,
                     linestyles=config.cost_linestyle if cost else "-", zorder=style.CONNECTOR_Z,
                 )  # fmt: skip
             style.point_mark(ax, x, value, row.colour, shape, filled, size=config.mark_size)
@@ -1777,7 +1858,7 @@ def draw_measure_row(
             )  # fmt: skip
         style.value_axis(ax, "y")
         ax.yaxis.set_major_formatter(FuncFormatter(log2_tick))
-    ax.set_xlim(-0.6, len(rows) - 0.4)
+    ax.set_xlim(-0.6, max(len(rows) - 0.4, 0.6))
     ax.set_xticks(range(len(rows)))
     group_rules(ax, rows)
     ax.margins(y=config.margin)
@@ -1787,9 +1868,9 @@ def draw_measure_row(
         ax.yaxis.set_major_locator(MultipleLocator(x_tick_step(high - low, config.max_ticks)))
     if ylabel:
         ax.set_ylabel(wrapped_label(ylabel), fontsize=config.label_pt)
-    direction = MEASURE_DIRECTION.get(measure)
-    if direction:
-        text, x, y, va = direction
+    corner = MEASURE_DIRECTION.get(measure) if direction else None
+    if corner:
+        text, x, y, va = corner
         # Lighter than the data's own labels: this one tells a reader how to READ the panel, and at
         # full ink it competes with the marks for the same attention.
         ax.text(
@@ -1798,6 +1879,7 @@ def draw_measure_row(
         )  # fmt: skip
     ax.tick_params(axis="both", labelsize=config.tick_pt)
     style.despine(ax)
+    thin_rules(ax, config)
 
 
 def widen_y_axis_linear(ax: Axes, config: FigureConfig) -> None:
@@ -1873,8 +1955,9 @@ def figure_arm_dots(
     # top of the figure and once between the rows.
     # 0.12in even with nothing drawn above a panel: a two-line rotated Y label is taller than the
     # axes box it is centred on, and clipped off the canvas without it.
-    band = SUBTITLE_BAND_IN if panel_labels in ("subtitle", "outside") else 0.12
-    height = row_height_in * len(measures) + CATEGORY_BAND_IN + band * len(measures)
+    band = text_band(config.subtitle_pt) if panel_labels in ("subtitle", "outside") else 0.12
+    category_band = text_band(config.tick_pt, 2) + text_band(config.label_pt)
+    height = row_height_in * len(measures) + category_band + band * len(measures)
     fig, axes = plt.subplots(len(measures), 1, figsize=(width_in, height), squeeze=False, sharex=True)
     fig.set_dpi(style.SAVE_DPI)  # measure the legend and the labels at the dpi save() writes
     for index, (ax, measure) in enumerate(zip(axes[:, 0], measures, strict=True)):
@@ -1892,7 +1975,158 @@ def figure_arm_dots(
     left_in = max(required_left_margin(fig, ax) for ax in axes[:, 0])
     fig.subplots_adjust(
         left=min(0.35, left_in / width_in),
-        bottom=(legend_h + CATEGORY_BAND_IN + MEASURE_PAD_IN) / height,
+        bottom=(legend_h + category_band + MEASURE_PAD_IN) / height,
+    )  # fmt: skip
+    return style.save(fig, out.with_suffix(""), fixed=True)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class DotColumn:
+    """ONE experiment's column of a stacked row figure: its categories, its packet's shape and the
+    verdicts its marks wear. An empty ``rows`` is a STUB column -- the axes and the name, nothing
+    plotted -- which holds a slot for a comparison that has not finished running."""
+
+    title: str
+    treatment: str
+    shape: str
+    rows: tuple[ArmRow, ...]
+    significance: dict[tuple[str, str], tuple[bool, bool]]
+    symbols: tuple[bool, bool]
+    reference: str
+    control: str
+
+
+def dot_columns(
+    panels: Sequence[Panel],
+    repeats: Sequence[population.RepeatPolicy],
+    channels: str,
+    references: Sequence[str],
+    control_names: Sequence[str] = (),
+) -> list[DotColumn]:
+    """Each panel of a joined row reduced to its own :class:`DotColumn`."""
+    columns: list[DotColumn] = []
+    for index, (title, treatment, stats, frame) in enumerate(panels):
+        key = treatment if isinstance(treatment, str) else (flat_treatments(treatment) or [""])[0]
+        table = stats if isinstance(stats, pd.DataFrame) else pd.concat(stats.values(), ignore_index=True)
+        rows = arm_rows(frame, repeats[index], channels) if isinstance(frame, pd.DataFrame) and not frame.empty else []
+        columns.append(
+            DotColumn(
+                title=str(title),
+                treatment=str(key),
+                shape=palette.packet_marker(str(key)),
+                rows=tuple(rows),
+                significance=axis_significance(table),
+                symbols=drawn_symbols(table),
+                reference=references[index] if index < len(references) else "",
+                control=(control_names[index] if index < len(control_names) else "") or packets.control_label([key]),
+            )
+        )
+    return columns
+
+
+def dot_row_legend(columns: Sequence[DotColumn], channels: str) -> list[Line2D]:
+    """One key for the whole row: every colour it spent, then each packet's own filled shape beside
+    the hollow no-packet mark of the SAME shape -- a circle there would name a mark the figure never
+    draws."""
+    rows = [row for column in columns for row in column.rows]
+    if channels == "pair-packet":
+        handles = [
+            Line2D(
+                [],
+                [],
+                marker="o",
+                linestyle="none",
+                color=row.colour,
+                markersize=7,
+                label=f"{experiment_tags.model_name(row.model)} / {row.leg}",
+            )  # fmt: skip
+            for row in {(r.model, r.leg): r for r in rows}.values()
+        ]
+    else:
+        handles = model_legend_marks(sorted({row.model for row in rows}))
+    for treatment, control in dict.fromkeys(
+        (column.treatment, column.control) for column in columns if column.rows
+    ):  # fmt: skip
+        handles.append(packet_legend_mark(treatment))
+        handles.append(control_legend_mark([treatment], control, palette.packet_marker(treatment)))
+    symbols = (
+        any(column.symbols[0] for column in columns),
+        any(column.symbols[1] for column in columns),
+    )
+    return handles + legend_tail(False, symbols)
+
+
+#: The narrowest a column may be, in categories. A stub column has none, and at a width ratio of
+#: one beside a nine-category neighbour it collapsed to a sliver its own name could not sit over.
+MIN_COLUMN_CATEGORIES: int = 3
+
+
+def dot_row_widths(columns: Sequence[DotColumn]) -> list[float]:
+    """Each column's share of the row's width: its own category count, floored at
+    :data:`MIN_COLUMN_CATEGORIES`."""
+    return [float(max(len(column.rows), MIN_COLUMN_CATEGORIES)) for column in columns]
+
+
+def figure_dot_row(
+    panels: Sequence[Panel],
+    out: pathlib.Path,
+    repeats: population.RepeatPolicy | Sequence[population.RepeatPolicy] = "latest",
+    config: FigureConfig = PAPER_CONFIG,
+    channels: str = "model-packet",
+    measures: Sequence[str] = MEASURES,
+    row_width_in: float = style.ACM_TEXT_WIDTH_IN,
+    row_height_in: float = 1.45,
+    labels: dict[str, str] | None = None,
+    references: Sequence[str] = (),
+    control_names: Sequence[str] = (),
+    panel_labels: str = "subtitle",
+) -> pathlib.Path:
+    """N comparisons as a GRID of stacked 1-D panels: one column per comparison, one ROW per
+    measure, every column sharing the row's Y scale and every row sharing the column's categories.
+
+    The 2-D version of this row puts speed-up and cost on two axes of one square, which at four
+    panels across a text width leaves each square about an inch and a half and no room beside a mark
+    for the label saying which delivery it is. Here the delivery is the X axis, so nine comparisons
+    fit a column that one square panel could not hold three of, and the same column on the row below
+    says what they cost. Columns are as wide as they have categories (:func:`dot_row_widths`).
+    """
+    import matplotlib.pyplot as plt
+
+    n = len(panels)
+    columns = dot_columns(panels, resolve_row_repeats(repeats, n), channels, references, control_names)
+    texts = {**MEASURE_LABELS, **(labels or {})}
+    title_band = text_band(config.subtitle_pt, 2) if panel_labels != "none" else ROW_TITLE_IN
+    category_band = text_band(config.tick_pt, 2) + text_band(config.label_pt)
+    height = row_height_in * len(measures) + title_band + category_band
+    ratios = dot_row_widths(columns)
+    widths = [row_width_in * ratio / sum(ratios) for ratio in ratios]
+    fig, axes = plt.subplots(
+        len(measures), n, figsize=(row_width_in, height), squeeze=False, sharex="col", sharey="row",
+        gridspec_kw={"width_ratios": ratios},
+    )  # fmt: skip
+    fig.set_dpi(style.SAVE_DPI)
+    for row_index, measure in enumerate(measures):
+        for col_index, column in enumerate(columns):
+            ax = axes[row_index][col_index]
+            draw_measure_row(
+                ax, column.rows, measure, column.shape, column.significance, config,
+                texts.get(measure, measure) if col_index == 0 else "",
+                column.reference if measure != "cost" else "", direction=col_index == n - 1,
+            )  # fmt: skip
+            if row_index == 0 and panel_labels != "none":
+                draw_panel_label(ax, col_index, column.title, panel_labels, config, "roman",
+                                 panel_name_wrap(widths[col_index]))  # fmt: skip
+    for ax, column in zip(axes[-1], columns, strict=True):
+        draw_category_axis(ax, column.rows, config)
+    handles = dot_row_legend(columns, channels)
+    fig.subplots_adjust(
+        left=0.08, right=0.995, top=1.0 - (title_band + MEASURE_PAD_IN) / height, bottom=0.01,
+        hspace=0.14, wspace=0.08,
+    )  # fmt: skip
+    legend_h = style.legend_below(fig, handles, ncol=config.legend_ncol, y=0.005, fontsize=config.legend_pt)
+    left_in = max(required_left_margin(fig, ax) for ax in axes[:, 0])
+    fig.subplots_adjust(
+        left=min(0.3, left_in / row_width_in), bottom=(legend_h + category_band + MEASURE_PAD_IN) / height
     )  # fmt: skip
     return style.save(fig, out.with_suffix(""), fixed=True)
 
