@@ -61,16 +61,20 @@ def shard_db(tmp_path: pathlib.Path) -> pathlib.Path:
     (store / "host.txt").write_text("host half", encoding="utf-8")
     (store / "device.txt").write_text("device half", encoding="utf-8")
     with sqlite3.connect(db) as conn:
+        # The column set recording._SOURCES_DDL writes, `hash` included: the content address is
+        # what a re-timing quotes for the bytes it graded, so a fixture without it tests a store
+        # that does not exist.
         conn.execute(
-            "CREATE TABLE sources (id INTEGER PRIMARY KEY, run_id TEXT, ts INTEGER, benchmark TEXT, "
+            "CREATE TABLE sources (id INTEGER PRIMARY KEY, hash TEXT, run_id TEXT, ts INTEGER, benchmark TEXT, "
             "language TEXT, path TEXT)"
         )
         conn.executemany(
-            "INSERT INTO sources (run_id, ts, benchmark, language, path) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO sources (hash, run_id, ts, benchmark, language, path) VALUES (?, ?, ?, ?, ?, ?)",
             [
-                (RUN, 10, "k1", "hip", "aa/host.txt"),
-                (RUN, 10, "k1", "hip:device", "aa/device.txt"),
-                (RUN, 20, "k1", "hip", "aa/host.txt"),
+                ("h0", RUN, 10, "k1", "hip", "aa/host.txt"),
+                ("h1", RUN, 10, "k1", "hip:device", "aa/device.txt"),
+                ("h2", RUN, 20, "k1", "hip", "aa/host.txt"),
+                ("h3", RUN, 30, "k2", "hip", "aa/host.txt"),
             ],
         )
     return db
@@ -410,12 +414,12 @@ def test_regrade_grades_a_real_kernel_end_to_end(tmp_path: pathlib.Path) -> None
     (store / "host.c").write_text(submission.source, encoding="utf-8")
     with sqlite3.connect(db) as conn:
         conn.execute(
-            "CREATE TABLE sources (id INTEGER PRIMARY KEY, run_id TEXT, ts INTEGER, benchmark TEXT, "
+            "CREATE TABLE sources (id INTEGER PRIMARY KEY, hash TEXT, run_id TEXT, ts INTEGER, benchmark TEXT, "
             "language TEXT, path TEXT)"
         )
         conn.execute(
-            "INSERT INTO sources (run_id, ts, benchmark, language, path) VALUES (?, ?, ?, ?, ?)",
-            (RUN, 10, kernel, "c", "aa/host.c"),
+            "INSERT INTO sources (hash, run_id, ts, benchmark, language, path) VALUES (?, ?, ?, ?, ?, ?)",
+            ("h0", RUN, 10, kernel, "c", "aa/host.c"),
         )
 
     observations = tmp_path / "exp.db"
@@ -518,8 +522,10 @@ def test_a_rerun_per_cell_shard_re_times_nothing_it_already_recorded(tmp_path: p
     assert regrade.run_cells_shard(items, 0, 1, tmp_path / "out", grader) == 0
     assert sorted(calls) == [10, 20]
     with sqlite3.connect(tmp_path / "out" / "regrade-cells-0.db") as conn:
-        assert conn.execute(f"SELECT COUNT(*) FROM {regrade.CELL_TABLE}").fetchone()[0] == 6
-        assert conn.execute(f"SELECT COUNT(*) FROM {regrade.TASK_TABLE}").fetchone()[0] == 2
+        # The ts=20 row stored only the host half of a hip submission, so it cannot be rebuilt: it
+        # is recorded as a failed task with no cells, never silently dropped from the corpus.
+        assert conn.execute(f"SELECT COUNT(*) FROM {regrade.CELL_TABLE}").fetchone()[0] == 3
+        assert sorted(r[0] for r in conn.execute(f"SELECT status FROM {regrade.TASK_TABLE}")) == ["error", "graded"]
         stamped = conn.execute(f"SELECT source_hash, node, commit_sha, job FROM {regrade.TASK_TABLE}").fetchall()
     assert all(row[1] for row in stamped), stamped  # every re-timed row names the machine it ran on
 
@@ -555,3 +561,4 @@ def test_a_worklist_over_every_timed_submission_keeps_the_stamped_rows_too(tmp_p
     assert [item.ts_ms for item in unstamped] == [20, 10]
     assert sorted(item.ts_ms for item in everything) == [10, 20, 30]
     assert [item.reduction for item in everything if item.ts_ms == 30] == ["mwd-v2"]
+    assert [item.source_hash for item in everything if item.ts_ms == 10] == ["h0"]

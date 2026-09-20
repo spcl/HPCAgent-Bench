@@ -918,6 +918,7 @@ def test_a_database_written_before_the_cell_table_still_opens_and_gains_it(tmp_p
     a row that is already there -- an additive table, never a rebuild of the recorded tables."""
     db = str(tmp_path / "old.db")
     conn = recording.connect(db)
+    conn.execute("INSERT INTO benchmarks(name) VALUES ('k')")  # submissions REFERENCES it
     conn.execute(
         "INSERT INTO submissions(run_id, ts, benchmark, preset, datatype, source_mode, baseline, speedup)"
         " VALUES ('r', 1, 'k', 'XL', 'float64', 'restricted', 'numpy', 3.5)"

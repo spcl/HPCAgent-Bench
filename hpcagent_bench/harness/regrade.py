@@ -228,17 +228,20 @@ def stored_sources(db: pathlib.Path, run_id: str, benchmark: str, ts_ms: int) ->
     identifier a re-timing can quote that does not depend on where the store happens to live."""
     store = db.parent / f"{db.stem}_prompts"
     host = device = language = digest = ""
-    try:
-        # closing(), not `with conn:` -- a connection's own context manager commits and never closes.
-        with contextlib.closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as conn:
-            rows = conn.execute(
-                "SELECT language, path, hash FROM sources WHERE run_id = ? AND benchmark = ? AND ts = ?",
-                (run_id, benchmark, ts_ms),
-            ).fetchall()
-    except sqlite3.Error:
-        # The observations outlive the DB they were extracted from (a purged run dir, a shard that
-        # never had a sources table). Nothing to grade here, and the caller counts it as a gap.
+    # The observations outlive the DB they were extracted from: a purged run dir leaves rows whose
+    # shard is gone, and a shard that never recorded a source has no table. Both are coverage gaps
+    # the caller counts -- NOT errors to swallow, which is why this tests for them instead of
+    # catching sqlite3.Error around the query (that would hide a schema mismatch as an empty list).
+    if not db.is_file():
         return "", "", "", ""
+    # closing(), not `with conn:` -- a connection's own context manager commits and never closes.
+    with contextlib.closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as conn:
+        if not conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sources'").fetchone():
+            return "", "", "", ""
+        rows = conn.execute(
+            "SELECT language, path, hash FROM sources WHERE run_id = ? AND benchmark = ? AND ts = ?",
+            (run_id, benchmark, ts_ms),
+        ).fetchall()
     for tag, rel, sha in rows:
         if str(tag).endswith(DEVICE_SUFFIX):
             device = str(store / rel)
@@ -583,10 +586,12 @@ def run_cells_shard(
             cell_rows, task_row = grader(item)
         except Exception as exc:  # noqa: BLE001 -- one broken item must not stop the shard
             print(f"cells: {item.benchmark} {item.run_id} {item.ts_ms}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            # NULL, not "": an item that never graded has no cell count and no g_i, and a zero
+            # there would average into a report as a measured result.
             cell_rows, task_row = (
                 [],
                 {
-                    **{name: "" for name in TASK_COLUMNS},
+                    **{name: None for name in TASK_COLUMNS},
                     "db": item.db,
                     "run_id": item.run_id,
                     "benchmark": item.benchmark,
