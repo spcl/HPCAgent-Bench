@@ -1045,6 +1045,59 @@ def test_a_comparison_specs_own_repeats_overrides_the_row_default(
     assert seen_repeats == [["median"]]
 
 
+# ---------------------------------------------------------------------------
+# The control's own shape, and the arrow a named comparison carries.
+
+
+@pytest.mark.parametrize("treatment", ["lang-skills", "cpf", "cpfsrc", "repo", "no-score-tool"])
+def test_no_packet_is_ever_given_the_shape_the_control_wears(treatment: str) -> None:
+    """The control is HOLLOW, and hollow-versus-filled alone does not separate two marks once a
+    figure is reduced to a column (user, 2026-09-20): it is a different OUTLINE. A packet handed
+    that outline would put a filled circle beside a hollow one and undo the separation."""
+    assert efficacy_figures.treatment_marker(treatment) != efficacy_figures.CONTROL_MARKER
+
+
+def test_a_difference_spec_reads_delivery_colon_model_pairs() -> None:
+    """``--difference`` is the one place the arrow grammar is decided."""
+    assert efficacy_figures.parse_differences("HIP:qwen38, Triton:kimi27sglang ") == frozenset(
+        {("qwen38", "HIP"), ("kimi27sglang", "Triton")}
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "want"), [(6.34919, "6.3x"), (0.92137, "0.92x"), (1.0, "1x"), (4.0, "4x"), (0.5, "0.5x")]
+)
+def test_an_arrows_factor_is_two_significant_figures(value: float, want: str) -> None:
+    """The tick spelling keeps full precision, which beside a mark reads as ``6.34919x``."""
+    assert efficacy_figures.factor_label(value) == want
+
+
+def arrow_row() -> efficacy_figures.ArmRow:
+    """One category whose packet arm is 4x its control on both measures."""
+    control = efficacy_figures.ArmPoint(1.0, 0.9, 1.1, 1e6, 0.9e6, 1.1e6, 40, 40)
+    treated = efficacy_figures.ArmPoint(3.0, 2.9, 3.1, 4e6, 3.9e6, 4.1e6, 40, 40)
+    return efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", control, treated)
+
+
+@pytest.mark.parametrize("measure", ["speedup", "cost"])
+def test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor(measure: str) -> None:
+    """An arrow on every column is a second grid, so they are asked for by name. Its label is the
+    factor BETWEEN the two marks -- on the speed-up row the axis holds log2, so the factor is a
+    power of two and not the difference the axis shows."""
+    import matplotlib.pyplot as plt
+
+    def texts(differences: frozenset[tuple[str, str]]) -> list[str]:
+        fig, ax = plt.subplots()
+        try:
+            efficacy_figures.draw_measure_row(ax, [arrow_row()], measure, "^", {}, differences=differences)
+            return [text.get_text() for text in ax.texts]
+        finally:
+            plt.close(fig)
+
+    assert "4x" in texts(frozenset({("qwen38", "HIP")}))
+    assert "4x" not in texts(frozenset())
+
+
 def test_parse_spec_reads_semicolon_separated_key_value_pairs() -> None:
     """``--comparison`` takes one string per panel; the parser is the only place its grammar is
     decided."""

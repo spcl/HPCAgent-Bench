@@ -239,10 +239,26 @@ def shared_spelling(pair: tuple[str, str], packet: str) -> str:
     return ""
 
 
-def pair_leg_label(pair: tuple[str, str], intervention: str) -> str:
-    """One pair's LEG: the language, plus every packet BOTH its arms carried -- never the
-    intervention the two sides differ in, which the title and the legend already say once."""
-    language = experiment_tags.arm_delivery_name(pair[0])
+def arm_languages(frame: pd.DataFrame) -> dict[str, str]:
+    """``{arm: recorded language}``.
+
+    The language column is the identity the extractor STAMPED; the arm name is a fallback for rows
+    that predate it. git-scicomp's arms are ``git-scicomp-<model>-repo`` and carry no language token
+    at all, so reading the name there gives an empty leg -- a blank tick and an unnamed shape.
+    """
+    if "arm" not in frame.columns or "language" not in frame.columns:
+        return {}
+    known = frame[["arm", "language"]].dropna().astype(str)
+    return dict(zip(known["arm"], known["language"], strict=True))
+
+
+def pair_leg_label(pair: tuple[str, str], intervention: str, recorded_language: str = "") -> str:
+    """One pair's LEG: what it DELIVERED, plus every packet BOTH its arms carried -- never the
+    intervention the two sides differ in, which the title and the legend already say once.
+
+    ``recorded_language`` is :func:`arm_languages`' answer, used when the arm name has none.
+    """
+    language = experiment_tags.arm_delivery_name(pair[0]) or experiment_tags.language_name(recorded_language)
     resolved = packets.canonical(intervention)
     extra = [shared_spelling(pair, key) for key in experiment_tags.order("packets") if key and key != resolved]
     return " ".join([language, *[f"+{token}" for token in extra if token]])
@@ -285,18 +301,20 @@ SPEEDUP_LEG: str = "speedup"
 TOKENS_LEG: str = "tokens"
 
 
-def family_stats(table: pd.DataFrame, intervention: str) -> pd.DataFrame:
+def family_stats(table: pd.DataFrame, intervention: str, languages: dict[str, str] | None = None) -> pd.DataFrame:
     """The family CSV's OWN corrected verdicts, as the stats table :func:`~hpcagent_bench.stats.
     figures.efficacy.draw_panel` stars from -- NEVER recomputed here (see module docstring)."""
     verdicts = {(str(row.arm_a), str(row.arm_b), str(row.leg)): row for row in table.itertuples(index=False)}
+    known = languages or {}
     rows: list[dict[str, float | str | int]] = []
     for pair in family_pairs(table):
         score, cost = verdicts.get((*pair, SPEEDUP_LEG)), verdicts.get((*pair, TOKENS_LEG))
+        recorded = known.get(pair[0], "") or known.get(pair[1], "")
         rows.append(
             {
                 "model": experiment_tags.model_of(pair[1]),
-                "language": experiment_tags.language_of(pair[1]),
-                "leg": pair_leg_label(pair, intervention),
+                "language": experiment_tags.language_of(pair[1]) or recorded,
+                "leg": pair_leg_label(pair, intervention, recorded),
                 "score_verdict": str(score.verdict) if score is not None else "",
                 "cost_verdict": str(cost.verdict) if cost is not None else "",
                 "kernels": int(score.n_pairs) if score is not None else 0,
@@ -310,9 +328,11 @@ def pair_frame(frame_all: pd.DataFrame, pairs: Sequence[tuple[str, str]], interv
     """The RAW rows of every arm ``pairs`` names, tagged ``model``/``language``/``leg``/``skills`` --
     the same shape :func:`treatment_frame` produces, keyed by explicit arm identity instead of a
     packet suffix (llrblind's two campaigns, git-scicomp's kernel/repo scope)."""
+    known = arm_languages(frame_all)
     parts = []
     for pair in pairs:
-        leg = pair_leg_label(pair, intervention)
+        recorded = known.get(pair[0], "") or known.get(pair[1], "")
+        leg = pair_leg_label(pair, intervention, recorded)
         for arm, skills in zip(pair, (True, False), strict=True):
             part = frame_all[frame_all["arm"].astype(str) == arm]
             if part.empty:
@@ -320,7 +340,7 @@ def pair_frame(frame_all: pd.DataFrame, pairs: Sequence[tuple[str, str]], interv
             parts.append(
                 part.assign(
                     model=experiment_tags.model_of(arm),
-                    language=experiment_tags.language_of(arm),
+                    language=experiment_tags.language_of(arm) or known.get(arm, ""),
                     leg=leg,
                     skills=skills,
                 ))  # fmt: skip
@@ -369,7 +389,7 @@ def write_dot_rows(
     written = efficacy_figures.figure_arm_dots(
         frame, stats, treatment, out, control_name=args.control_label, repeats=args.repeats,
         config=config, channels=args.channels, panel_labels=args.dots_panel_labels,
-        reference_name=experiment_tags.framework_name(baseline),
+        reference_name=experiment_tags.framework_name(baseline), differences=args.difference,
         **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
         labels={
             # The baseline's NAME rides on the 1x line instead (reference_name), which keeps this
@@ -399,7 +419,7 @@ def figure_from_pairs(args: argparse.Namespace, config: efficacy_figures.FigureC
     frame = pair_frame(frame_all, pairs, args.intervention)
     if frame.empty:
         raise SystemExit(f"no observations for the arms {args.pairs_csv} names")
-    stats = family_stats(table, args.intervention)
+    stats = family_stats(table, args.intervention, arm_languages(frame_all))
     args.table.parent.mkdir(parents=True, exist_ok=True)
     stats.to_csv(args.table, index=False)
     efficacy_figures.pairs_table(frame, args.repeats).to_csv(
@@ -561,10 +581,11 @@ def build_comparison(
         pairs = family_pairs(table)
         if not pairs:
             return None
-        frame = pair_frame(load_all(observations, card), pairs, intervention)
+        frame_all = load_all(observations, card)
+        frame = pair_frame(frame_all, pairs, intervention)
         if frame.empty:
             return None
-        return title, intervention, family_stats(table, intervention), frame
+        return title, intervention, family_stats(table, intervention, arm_languages(frame_all)), frame
     experiment = spec.get("experiment", default_experiment)
     frame_all = load(observations[0], experiment, card)
     control = control_rows(frame_all)
@@ -715,6 +736,13 @@ def main() -> None:
         "outside/inside/subtitle, which number them 'i) <name>' above the panel instead",
     )
     parser.add_argument(
+        "--difference",
+        default="",
+        help="draw an ARROW across these comparisons, labelled with the factor between the two "
+        "marks: 'HIP:qwen38,HIP:kimi27sglang' (delivery:model, comma separated). On a joined row "
+        "say it per panel instead, as a --comparison spec's own 'difference=' key",
+    )
+    parser.add_argument(
         "--dots-panel-labels",
         default="outside",
         choices=efficacy_figures.PANEL_LABELS,
@@ -791,6 +819,7 @@ def main() -> None:
         # Each panel names its OWN control: git-scicomp's is the bare kernel, not the absence of a
         # packet, and one shared key cannot spell both without being told.
         comparison_controls: list[str] = []
+        comparison_differences: list[str] = []
         for raw in args.comparison:
             spec = parse_spec(raw)
             one_repeats = spec.get("repeats", args.repeats)
@@ -805,6 +834,7 @@ def main() -> None:
             comparison_panels.append(built)
             comparison_repeats.append(one_repeats)
             comparison_controls.append(spec.get("control-label", ""))
+            comparison_differences.append(spec.get("difference", args.difference))
         if not comparison_panels:
             raise SystemExit(f"no --comparison of {args.comparison} produced a panel")
         args.table.parent.mkdir(parents=True, exist_ok=True)
@@ -819,7 +849,7 @@ def main() -> None:
                 panel_labels=args.panel_labels,
                 **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
                 references=[comparison_baseline(panel) for panel in comparison_panels],
-                control_names=comparison_controls,
+                control_names=comparison_controls, differences=comparison_differences,
                 labels={
                     "speedup": efficacy_figures.DEFAULT_XLABEL,
                     "cost": efficacy_figures.cost_label(

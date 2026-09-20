@@ -159,7 +159,14 @@ def title(fig: Figure, text: str, subtitle: str = "") -> float:
     return max(0.5, top - 0.30 / height)
 
 
-def legend_below(fig: Figure, handles: Sequence[Artist], ncol: int = 0, y: float = 0.0, fontsize: float = 0.0) -> float:
+def legend_below(
+    fig: Figure,
+    handles: Sequence[Artist],
+    ncol: int = 0,
+    y: float = 0.0,
+    fontsize: float = 0.0,
+    markerscale: float = 1.4,
+) -> float:
     """One legend, under the whole figure, centred, wrapped to the figure width. Never inside the
     axes. Returns the legend's height in inches, which the caller adds to its bottom margin.
 
@@ -177,7 +184,9 @@ def legend_below(fig: Figure, handles: Sequence[Artist], ncol: int = 0, y: float
 
     ``fontsize`` overrides :data:`LABEL_PT` for a figure whose height cannot afford it -- several
     SQUARE panels joined into one short row still budget the same fixed pixels for the legend as a
-    full-height figure, and LABEL_PT alone would not fit.
+    full-height figure, and LABEL_PT alone would not fit. ``markerscale`` is the swatch's own size
+    against the handle's: the 1.4 default enlarges a swatch so it reads beside authoring-scale type,
+    and at 6.5pt type the same 1.4 makes the swatch taller than the row it sits in.
     """
     columns = ncol if ncol != 0 else min(len(handles), 5)
     while True:
@@ -188,7 +197,7 @@ def legend_below(fig: Figure, handles: Sequence[Artist], ncol: int = 0, y: float
             ncol=columns,
             frameon=False,
             fontsize=fontsize if fontsize > 0.0 else LABEL_PT,
-            markerscale=1.4,
+            markerscale=markerscale,
             handletextpad=0.5,
             columnspacing=1.6,
             borderaxespad=0.0,
