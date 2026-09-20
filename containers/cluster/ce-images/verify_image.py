@@ -658,6 +658,9 @@ def checks(profile: str) -> list[Check]:
         Check("canonicalize", "isl gate (WavefrontSkew)", "dace-gate", "isl"),
         Check("canonicalize", "z3 gate (LoopToMap proof)", "dace-gate", "z3"),
         Check("python", "mpi4py", "py", "mpi4py"),
+        # openai-agents, imported as `agents`. optimas_tools.ToolAgent.__init__ calls for it on
+        # every optimas episode, so its absence costs the whole harness rather than one kernel.
+        Check("agent", "openai-agents SDK", "py", "agents"),
         # The agent side. A library the image lacks costs one kernel; an agent runtime it lacks
         # costs the whole arm, because every agent dies on the same exec before its first token.
         Check("agent", "claude CLI", "exe", "claude"),
