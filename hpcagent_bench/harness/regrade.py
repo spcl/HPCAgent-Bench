@@ -298,7 +298,7 @@ def timed_rows(observations: pathlib.Path, scope: str = UNSTAMPED) -> list[dict[
     ]
     if scope != ALL:
         rows = [row for row in rows if not str(row.get("timing_reduction") or "")]
-    rows.sort(key=lambda row: (row["run_root"], row["job"], row["run_id"], row["benchmark"], int(row["ts_ms"])))
+    rows.sort(key=lambda row: (row["run_root"], str(row["job"]), row["run_id"], row["benchmark"], int(row["ts_ms"])))
     return rows
 
 
