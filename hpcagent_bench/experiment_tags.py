@@ -37,7 +37,6 @@ REGISTRY = pathlib.Path(__file__).resolve().parent / "envs" / "registry.yaml"
 #: :func:`split_record_language`, which is what unwinds it.
 CLEAN_SUFFIX = "-clean"
 
-
 #: One entity kind's tag -> display name. Key ORDER is the colour and marker order.
 Names = dict[str, str]
 
@@ -51,6 +50,31 @@ class ModelEntry:
 
     name: str
     serves: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class BaselineSpec:
+    """The canon-sweep columns an experiment is drawn against.
+
+    ``denominator`` is the column every speed-up ratio is divided by -- one per experiment, so two
+    figures of the same experiment cannot quietly use different references. ``comparators`` are the
+    other toolchain columns drawn as their own series beside the agents; they are never the
+    denominator (user, 2026-09-20)."""
+
+    denominator: str
+    comparators: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class CampaignEntry:
+    """One launcher's job-name prefix: which experiment its arms belong to, on which device, served
+    which roster. ``name`` is the campaign's own label, finer than the experiment's -- llr-focus40's
+    CPU and GPU halves are one experiment under two campaign names. An empty ``tag`` means no roster."""
+
+    experiment: str
+    name: str
+    device: str
+    tag: str
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -95,6 +119,12 @@ class Registry:
     languages: Names
     frameworks: Names
     harnesses: Names
+    #: job-name prefix -> the campaign it names. Longest prefix wins; see :mod:`hpcagent_bench.campaigns`.
+    campaigns: dict[str, CampaignEntry]
+    #: One regex matching every arm the user retired from the experiments.
+    dropped_arms: str
+    #: experiment -> the canon columns it is scored against and drawn beside.
+    experiment_baselines: dict[str, "BaselineSpec"]
     #: kind -> {spelling: the tag it names}, so an alias never takes its own colour slot.
     aliases: dict[str, Names]
 
@@ -161,6 +191,32 @@ def packet_defs_of(raw: object) -> dict[str, PacketDef]:
     return out
 
 
+def baselines_of(raw: object) -> dict[str, BaselineSpec]:
+    """The experiment -> canon-column block."""
+    out: dict[str, BaselineSpec] = {}
+    for key, entry in as_block(raw).items():
+        fields = as_block(entry)
+        out[str(key)] = BaselineSpec(
+            denominator=str(fields.get("denominator", "")),
+            comparators=tuple(str(c) for c in as_list(fields.get("comparators"))),
+        )
+    return out
+
+
+def campaigns_of(raw: object) -> dict[str, CampaignEntry]:
+    """The campaigns block. A missing field falls back to the prefix itself, never to a guess."""
+    out: dict[str, CampaignEntry] = {}
+    for prefix, entry in as_block(raw).items():
+        fields = as_block(entry)
+        out[str(prefix)] = CampaignEntry(
+            experiment=str(fields.get("experiment", prefix)),
+            name=str(fields.get("name", prefix)),
+            device=str(fields.get("device", "")),
+            tag=str(fields.get("tag", "")),
+        )
+    return out
+
+
 @functools.lru_cache(maxsize=1, typed=True)
 def registry() -> Registry:
     """The parsed registry. Cached: every label and every colour on every figure goes through here."""
@@ -181,6 +237,9 @@ def registry() -> Registry:
         languages=names_of(doc.get("languages"), "languages"),
         frameworks=names_of(doc.get("frameworks"), "frameworks"),
         harnesses=names_of(doc.get("harnesses"), "harnesses"),
+        campaigns=campaigns_of(doc.get("campaigns")),
+        dropped_arms=str(doc.get("dropped_arms", "")),
+        experiment_baselines=baselines_of(doc.get("experiment_baselines")),
         aliases={str(kind): names_of(block, str(kind)) for kind, block in as_block(aliases).items()},
     )
 
