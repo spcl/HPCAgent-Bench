@@ -391,7 +391,7 @@ def test_x_is_log2_of_the_speed_up_and_zero_is_the_no_change_line() -> None:
         assert ax.get_xscale() == "linear"
         assert any(line.get_xdata()[0] == pytest.approx(0.0) for line in ax.lines if len(set(line.get_xdata())) == 1)
         assert efficacy_figures.log2_tick(2.0) == "4x"
-        assert efficacy_figures.log2_tick(-1.0) == "1/2x"
+        assert efficacy_figures.log2_tick(-1.0) == "0.5x"
     finally:
         plt.close(fig)
 
@@ -633,7 +633,9 @@ def test_x_tick_step_widens_before_the_tick_budget_is_crossed(span: float, expec
 def test_a_wide_ranging_panel_never_crosses_the_x_tick_budget() -> None:
     """The end-to-end path: a treated arm landing two orders of magnitude from its control (the
     autoscaled window then spans 0 to that log2 exponent, since the control mark sits at x=0)
-    still draws under :data:`~hpcagent_bench.stats.figures.efficacy.MAX_X_TICKS` labelled ticks."""
+    still draws under the budget. The budget is the CONFIG's, not the module constant: tick density
+    is a knob a caller turns, and the property that survives a turn of it is that the axis never
+    exceeds whatever budget is in force."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
@@ -641,7 +643,7 @@ def test_a_wide_ranging_panel_never_crosses_the_x_tick_budget() -> None:
         efficacy_figures.draw_panel(ax, one_arm_raw(on_speedup=1e5), one_arm_stats(), "cpf")
         fig.canvas.draw()
         ticks = [t for t in ax.xaxis.get_major_ticks() if t.label1.get_visible()]
-        assert 0 < len(ticks) <= efficacy_figures.MAX_X_TICKS
+        assert 0 < len(ticks) <= efficacy_figures.DEFAULT_CONFIG.max_ticks
     finally:
         plt.close(fig)
 
@@ -717,24 +719,24 @@ def test_required_left_margin_grows_with_the_widest_tick_the_range_draws() -> No
     assert wide > narrow, (wide, narrow)
 
 
-def test_the_legend_names_the_interval_method() -> None:
-    """Both axes here always draw the same estimator (a log-space t interval), and the legend says
-    so (SC15 Rule 5). Fixed text, never a per-panel sample count any more (:data:`GEOMEAN_METHOD`)
-    -- so a joined row's per-panel copies dedupe into one shared entry
-    (:func:`~hpcagent_bench.stats.figures.efficacy.legend_tail`)."""
-    note = efficacy_figures.interval_note("Speed-Up Geomean")
-    assert "log-t" in note
-    assert efficacy_figures.interval_note("Speed-Up Geomean") == note, "fixed text, not sample-size-chosen"
+def test_the_interval_note_is_fixed_text_and_does_not_name_the_estimator() -> None:
+    """Fixed text so a joined row's per-panel copies dedupe into one shared entry
+    (:func:`~hpcagent_bench.stats.figures.efficacy.legend_tail`). The estimator is NOT named: "95%
+    log-t CI" on two of five rows was the densest text in the figure, and which interval it is
+    belongs in the caption beside the test it came from (user, 2026-09-20)."""
+    note = efficacy_figures.interval_note("Speed-up")
+    assert "log-t" not in note, note
+    assert note == efficacy_figures.interval_note("Speed-up"), "fixed text, not sample-size-chosen"
 
 
-def test_the_figure_key_carries_one_interval_note_per_axis_and_the_significance_rule() -> None:
-    """Both notes -- and the ``*``/DAGGER significance rule -- reach the reader, in the figure's ONE
-    key."""
+def test_the_figure_key_carries_one_interval_note_per_axis_and_no_significance_rule() -> None:
+    """Both intervals reach the reader in the figure's ONE key. The significance rule does not: a
+    legend names what is DRAWN, and how to read a superscript is a caption sentence."""
     handles = efficacy_figures.legend_handles("cpfsrc", ["qwen38"], ["cpfsrc"])
     labels = [h.get_label() for h in handles]
-    assert efficacy_figures.interval_note("Speed-Up Geomean") in labels, labels
-    assert efficacy_figures.interval_note("Token-Cost Geomean") in labels, labels
-    assert efficacy_figures.SIGNIFICANCE_NOTE in labels, labels
+    assert efficacy_figures.interval_note("Speed-up") in labels, labels
+    assert efficacy_figures.interval_note("Token cost") in labels, labels
+    assert not [line for line in labels if efficacy_figures.SCORE_SIG_MARK in line and "Significant" in line], labels
 
 
 def test_an_undelivered_kernel_still_counts_but_its_cross_only_draws_behind_show_cloud() -> None:
@@ -1079,7 +1081,7 @@ def test_cli_title_flag_produces_no_whole_figure_title(tmp_path: pathlib.Path) -
 
 
 def test_the_token_cost_axis_formatter_spells_a_ratio_below_one_as_a_fraction() -> None:
-    assert efficacy_figures.ratio_tick(0.125) == "1/8x"
+    assert efficacy_figures.ratio_tick(0.125) == "0.125x"
     assert efficacy_figures.ratio_tick(1.0) == "1x"
     assert efficacy_figures.ratio_tick(8.0) == "8x"
 

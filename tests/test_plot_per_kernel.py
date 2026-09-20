@@ -93,15 +93,15 @@ def test_token_cells_keeps_every_episodes_own_total_not_the_kernel_sum() -> None
 @pytest.mark.parametrize(
     "ratio, label",
     [
-        pytest.param(0.125, "1/8x", id="eighth"),
-        pytest.param(0.25, "1/4x", id="quarter"),
-        pytest.param(0.5, "1/2x", id="half"),
+        pytest.param(0.125, "0.125x", id="eighth"),
+        pytest.param(0.25, "0.25x", id="quarter"),
+        pytest.param(0.5, "0.5x", id="half"),
         pytest.param(1.0, "1x", id="unity"),
         pytest.param(2.0, "2x", id="double"),
         pytest.param(4.0, "4x", id="quadruple"),
     ],
 )
-def test_speedup_tick_label_reads_a_log2_ratio_back_as_a_fraction_or_a_multiple(ratio: float, label: str) -> None:
+def test_speedup_tick_label_reads_a_log2_ratio_back_as_a_ratio(ratio: float, label: str) -> None:
     assert pk.speedup_tick_label(ratio) == label
 
 
@@ -324,3 +324,20 @@ def test_the_token_panel_puts_its_measured_value_on_a_log_y_axis_with_a_major_gr
         assert not [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
     finally:
         plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    ("value", "want"),
+    [
+        (0.125, "0.125x"),
+        (0.5, "0.5x"),
+        (1.0, "1x"),
+        (2.0, "2x"),
+        # Not a power of two, and not a whole reciprocal: the old 1/n spelling rounded this to
+        # "1/1x", a ratio of one marking a point 30% below it.
+        (0.5**0.5, "0.707x"),
+        (0.35, "0.35x"),
+    ],
+)
+def test_a_ratio_below_one_prints_as_a_decimal(value: float, want: str) -> None:
+    assert pk.speedup_tick_label(value) == want

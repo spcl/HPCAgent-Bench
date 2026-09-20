@@ -1,0 +1,12 @@
+bicgstab
+bout_hasegawa_wakatani
+dwt2d
+fdtd_2d
+fft_1d
+gem
+gemm
+nussinov
+scan_affine_decay
+seidel_2d
+seissol_tensor_contraction
+warpx_boris_push

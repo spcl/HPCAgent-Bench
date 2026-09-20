@@ -188,12 +188,18 @@ def speedup_yticks(cells: Sequence[KernelCell]) -> list[float]:
 
 
 def speedup_tick_label(value: float) -> str:
-    """``0.25 -> "1/4x"``, ``1.0 -> "1x"``, ``4.0 -> "4x"``: a log2 tick read back as a ratio."""
+    """``0.25 -> "0.25x"``, ``1.0 -> "1x"``, ``4.0 -> "4x"``: a log2 tick read back as a ratio.
+
+    A ratio below 1 prints as a decimal (user, 2026-09-20). The earlier ``1/n`` spelling only ever
+    worked for a whole reciprocal: it rounded, so a half-octave tick at 0.707 printed ``1/1x``, a
+    ratio of one marking a point 30% below it. Decimals also let a tick land anywhere, which is
+    what densifying the token-cost axis needs.
+    """
     if value == 1.0:
         return "1x"
     if value > 1.0:
         return f"{value:g}x"
-    return f"1/{round(1.0 / value):g}x"
+    return f"{float(f'{value:.3g}'):g}x"
 
 
 def style_speedup_axis(ax: matplotlib.axes.Axes, cells: Sequence[KernelCell]) -> None:

@@ -88,18 +88,24 @@ class FigureConfig:
     """
 
     #: Axis tick label size, points.
-    tick_pt: float = 7.5
+    tick_pt: float = 9.5
     #: Axis (X/Y) label size, points.
-    label_pt: float = 8.0
+    label_pt: float = 10.5
     #: A joined row's small per-panel subtitle, and :func:`figure_one`'s own optional ``title``.
-    subtitle_pt: float = 7.0
+    subtitle_pt: float = 9.0
     #: Legend entry text size, points.
-    legend_pt: float = 6.75
+    legend_pt: float = 8.5
     #: The legend's column count ceiling (:func:`~hpcagent_bench.stats.style.legend_below` wraps a
     #: row that does not fit the canvas onto fewer columns, never more than this).
     legend_ncol: int = 4
     #: A summary mark's own size (points^2, matplotlib's ``s=``).
     mark_size: float = 90.0
+    #: The TOKEN-COST interval's line style. Dashed, so the two axes' intervals cannot be read as
+    #: one quantity: they are a speed-up and a spend, on their own scales (SC15 Rule 4). The
+    #: speed-up interval stays solid.
+    cost_linestyle: str = "--"
+    #: Most labelled ticks an axis may carry. Raising it thins the spacing between whole ratios.
+    max_ticks: int = 13
     #: The per-kernel cloud's dot size (``show_cloud=True`` only) and alpha.
     cloud_size: float = 10.0
     cloud_alpha: float = 0.45
@@ -319,8 +325,9 @@ def draw_series(
         )
     if np.isfinite(series.y_low) and np.isfinite(series.y_high):
         ax.vlines(
-            series.x, series.y_low, series.y_high, color=colour, linewidth=1.2, alpha=0.75, zorder=style.CONNECTOR_Z
-        )
+            series.x, series.y_low, series.y_high, color=colour, linewidth=1.2, alpha=0.75,
+            linestyles=config.cost_linestyle, zorder=style.CONNECTOR_Z,
+        )  # fmt: skip
     style.point_mark(ax, series.x, series.y, colour, shape, True, size=config.mark_size)
 
 
@@ -366,10 +373,12 @@ def family_size(stats: pd.DataFrame) -> int:
 
 
 def interval_note(statistic: str) -> str:
-    """ONE axis's own interval, named with its estimator (:data:`GEOMEAN_METHOD`) -- fixed text, so
-    every panel's copy is byte-identical and a joined row's legend (:func:`figure_row`) collapses
-    them into ONE shared entry instead of one per panel."""
-    return f"{statistic}, 95% {GEOMEAN_METHOD} CI"
+    """ONE axis's own interval -- fixed text, so every panel's copy is byte-identical and a joined
+    row's legend (:func:`figure_row`) collapses them into ONE shared entry instead of one per panel.
+
+    The estimator is NOT named here. "95% log-t CI" on two of five legend rows was the densest text
+    in the figure, and which interval it is belongs in the caption beside the test it came from."""
+    return f"{statistic}, 95% CI"
 
 
 #: The legend's ONE line spelling the significance rule (:data:`SCORE_SIG_MARK`/
@@ -420,10 +429,12 @@ def packet_legend_mark(treatment: str) -> Line2D:
 
 
 def legend_tail(show_cloud: bool) -> list[Line2D]:
-    """The rows every panel's legend ends on: the cloud's cross (only with ``show_cloud``), the two
-    interval notes and the significance rule -- every one FIXED TEXT
-    (:func:`interval_note`/:data:`SIGNIFICANCE_NOTE`), so a joined row's per-panel legends
-    (:func:`figure_row`) collapse the repeats into one shared entry each instead of one per panel."""
+    """The rows every panel's legend ends on: the cloud's cross (only with ``show_cloud``) and the
+    two interval notes, every one FIXED TEXT (:func:`interval_note`) so a joined row's per-panel
+    legends (:func:`figure_row`) collapse the repeats into one shared entry each.
+
+    The significance rule is NOT here. A legend names what is drawn; how to read a superscript is a
+    sentence for the caption, and as a legend row it was the densest line in the figure."""
     handles: list[Line2D] = []
     if show_cloud:
         handles.append(
@@ -432,9 +443,15 @@ def legend_tail(show_cloud: bool) -> list[Line2D]:
             )  # fmt: skip
         )
     handles += [
-        Line2D([], [], linestyle="-", linewidth=1.3, color=style.MUTED, label=interval_note("Speed-Up Geomean")),
-        Line2D([], [], linestyle="-", linewidth=1.3, color=style.MUTED, label=interval_note("Token-Cost Geomean")),
-        Line2D([], [], linestyle="none", marker="", label=SIGNIFICANCE_NOTE),
+        Line2D([], [], linestyle="-", linewidth=1.3, color=style.MUTED, label=interval_note("Speed-up")),
+        Line2D(
+            [],
+            [],
+            linestyle=DEFAULT_CONFIG.cost_linestyle,
+            linewidth=1.3,
+            color=style.MUTED,
+            label=interval_note("Token cost"),
+        ),  # fmt: skip
     ]
     return handles
 
@@ -501,13 +518,13 @@ def widen_y_axis(ax: Axes, config: FigureConfig) -> None:
 MAX_X_TICKS: int = 9
 
 
-def x_tick_step(span: float) -> int:
+def x_tick_step(span: float, max_ticks: int = MAX_X_TICKS) -> int:
     """The whole-ratio spacing (in log2 units: 1 is every power of 2, 2 every power of 4, ...) that
     keeps the X axis under :data:`MAX_X_TICKS` labelled ticks for a window ``span`` wide. Doubled
     rather than picked from an arbitrary "nice number" table, so a tick always lands on an INTEGER
     log2 value -- the only kind :func:`log2_tick` spells as a clean ratio."""
     step = 1
-    while span / step > MAX_X_TICKS - 1:
+    while span / step > max(max_ticks - 1, 1):
         step *= 2
     return step
 
@@ -535,6 +552,29 @@ def minor_log2_grid(ax: Axes, axis: Literal["x", "y"], config: FigureConfig) -> 
 #: blank the X label where :func:`figure_row`'s ``shared_x_label`` draws it once for the whole row.
 DEFAULT_XLABEL: str = "Geomean Speed-Up"
 DEFAULT_YLABEL: str = "Token-Cost (x)"
+
+
+def speedup_label(baseline: str = "") -> str:
+    """The X label, naming the denominator the ratio was taken against.
+
+    "Geomean speed-up" alone does not say over WHAT, and the answer differs by track: Numba for the
+    loop-level kernels, auto-parallelised C for scientific computing. A reader of the git-scicomp
+    panel could not tell which formulation the control was."""
+    if not baseline:
+        return DEFAULT_XLABEL
+    return f"{DEFAULT_XLABEL} over {experiment_tags.framework_name(baseline)}"
+
+
+def cost_label(weights: tuple[float, float, float] | None = None, name: str = "") -> str:
+    """The Y label, naming the weights the cost was priced with.
+
+    A token cost is meaningless without its weight vector: the same run is 35k, 47k or 154k tokens
+    under the three cards this repo ships, so the axis says which one it is."""
+    if weights is None:
+        return DEFAULT_YLABEL
+    fresh, resent, output = weights
+    spelled = ", ".join(f"{w:g}" for w in (fresh, resent, output))
+    return f"Token Cost, {name} ({spelled})" if name else f"Token Cost ({spelled})"
 
 
 def style_panel(
@@ -565,7 +605,7 @@ def style_panel(
     widen_x_axis(ax, config)
     widen_y_axis(ax, config)
     low, high = ax.get_xlim()
-    ax.xaxis.set_major_locator(MultipleLocator(x_tick_step(high - low)))
+    ax.xaxis.set_major_locator(MultipleLocator(x_tick_step(high - low, config.max_ticks)))
     ax.xaxis.set_major_formatter(FuncFormatter(log2_tick))
     ax.yaxis.set_major_formatter(FuncFormatter(ratio_tick))
     minor_log2_grid(ax, "x", config)
@@ -740,10 +780,10 @@ def untangle_labels(ax: Axes) -> None:
 
 #: A single comparison's SQUARE panel side, inches, when only one is drawn.
 PANEL_SIDE: float = 5.0
-PANEL_SIZE: tuple[float, float] = (PANEL_SIDE + 2.0, PANEL_SIDE + 3.1)
+PANEL_SIZE: tuple[float, float] = (PANEL_SIDE + 2.0, PANEL_SIDE + 1.7)
 #: ``top`` reserves only a hair: neither :func:`figure_one` nor :func:`figure_row` draws a
 #: whole-figure title any more, so nothing sits above the panel box itself.
-PANEL_MARGINS: dict[str, float] = {"left": 0.135, "right": 0.97, "top": 0.98, "bottom": 0.30}
+PANEL_MARGINS: dict[str, float] = {"left": 0.135, "right": 0.97, "top": 0.98, "bottom": 0.20}
 
 #: A single panel's side, inches, when several comparisons join in one row at their NATURAL size
 #: (no target row width given).
@@ -815,6 +855,8 @@ def figure_one(
     show_cloud: bool = False,
     title: str = "",
     config: FigureConfig = DEFAULT_CONFIG,
+    xlabel: str = DEFAULT_XLABEL,
+    ylabel: str = DEFAULT_YLABEL,
 ) -> pathlib.Path:
     """ONE comparison: its square panel and its own legend. NO whole-figure title -- a paper's
     caption is that; ``title``, blank by default, draws a small subtitle INSIDE the panel, the same
@@ -824,8 +866,9 @@ def figure_one(
     fig, ax = plt.subplots(figsize=PANEL_SIZE)
     fig.set_dpi(style.SAVE_DPI)  # measure the legend's fit at the dpi save() actually writes
     handles = draw_panel(
-        ax, frame, stats, treatment, control_name=control_name, repeats=repeats, show_cloud=show_cloud, config=config
-    )
+        ax, frame, stats, treatment, control_name=control_name, repeats=repeats, show_cloud=show_cloud,
+        config=config, xlabel=xlabel, ylabel=ylabel,
+    )  # fmt: skip
     fig.subplots_adjust(**PANEL_MARGINS)
     style.legend_below(fig, handles, ncol=config.legend_ncol, y=0.01, fontsize=config.legend_pt)
     if title:
