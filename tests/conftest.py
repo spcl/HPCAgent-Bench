@@ -14,6 +14,25 @@ from types import MappingProxyType
 
 import pytest
 
+#: Where a standalone script may live. Scripts move between these (plot_score_change.py and
+#: ablation_stats.py both landed in statistics/), and a test that PINS one directory does not fail
+#: as one red test: importing at module scope makes it a COLLECTION error, which aborts the whole
+#: run. That is how the full container suite reported "1 error, 0 tests" for days while targeted
+#: login-node selections stayed green. Searched, so the next move costs nothing.
+SCRIPT_DIRS: tuple[str, ...] = ("statistics", "scripts", "experiments")
+
+
+def script_path(name: str, root: pathlib.Path | None = None) -> pathlib.Path:
+    """``<name>.py`` in whichever of :data:`SCRIPT_DIRS` holds it; raises naming all of them."""
+    base = root if root is not None else pathlib.Path(__file__).resolve().parents[1]
+    for directory in SCRIPT_DIRS:
+        candidate = base / directory / f"{name}.py"
+        if candidate.is_file():
+            return candidate
+    searched = ", ".join(f"{d}/{name}.py" for d in SCRIPT_DIRS)
+    raise FileNotFoundError(f"no {name}.py under {base}; looked in {searched}")
+
+
 from hpcagent_bench import config, osinfo, perf_reports
 from hpcagent_bench.api import RunConfig
 from hpcagent_bench.harness import gpu_profiling
