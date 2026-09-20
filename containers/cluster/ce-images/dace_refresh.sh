@@ -16,6 +16,16 @@
 # A NETWORK FAILURE IS NOT FATAL. The baked commit is a working dace, so refusing to start on a
 # GitHub hiccup would trade a slightly stale run for no run at all. It reports which commit is
 # live either way, and that line is what a results table should quote.
+#
+# NOTHING CALLS THIS, AND NOTHING MAY CALL IT PER JOB. That is deliberate, not an oversight:
+# each job would resolve the tip independently, so two arms of one campaign could run different
+# dace commits and stop being comparable -- the standing "never pull dace mid-sweep" rule, applied
+# to the container. The supported way to be on the tip is a REBUILD: build.sh resolves
+# spcl/dace@extended with `git ls-remote` and passes the sha in as DACE_COMMIT, which both busts
+# the layer cache (a `--branch extended` clone would be reused forever) and gives every job of
+# every campaign the one commit recorded in /opt/dace.commit. Keep this script opt-in, by hand,
+# for a single deliberate experiment. Wiring it into a launcher is how a campaign loses its
+# denominator.
 set -Eeuo pipefail
 
 # Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing

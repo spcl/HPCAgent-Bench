@@ -30,6 +30,7 @@ h5py
 netCDF4
 islpy
 z3-solver
+einops
 torch
 jax
 apache-tvm>=0.25.0rc0

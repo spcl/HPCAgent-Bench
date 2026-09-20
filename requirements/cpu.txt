@@ -31,5 +31,6 @@ h5py
 netCDF4
 islpy
 z3-solver
+einops
 torch
 jax
