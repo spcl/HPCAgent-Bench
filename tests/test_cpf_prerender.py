@@ -277,6 +277,41 @@ def test_inner_pool_renders_every_kernel_once_as_its_own_single_rank_process(tmp
     assert all("-m hpcagent_bench.cpf_prerender --cache C --view V" in line for line in lines), lines
 
 
+def test_the_kernels_whose_render_never_finishes_are_started_first(tmp_path: pathlib.Path) -> None:
+    """The pool cannot end before its slowest kernel, so a render that runs out the whole
+    ``timeouts.cpf_render_s`` budget must not be the one that STARTS last.
+
+    warpx_field_gather and gromacs_nbnxm are the two the scicomp-focus40 views record as ``timeout``
+    -- warpx on cpu and gpu, gromacs on gpu -- and reaching them at the end of the roster left the
+    other 95 workers idle for the four hours it took to give up on them. The default FIRST list is
+    what puts that budget under the rest of the roster instead of after it."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    launched = tmp_path / "launched"
+    stub(bin_dir / "srun", f'echo "$*" >> {launched}')
+    stub(bin_dir / "python3.11", "exit 0")
+    stub(bin_dir / "lscpu", 'printf "# CORE\\n0\\n1\\n"')
+    repo = SBATCH.parent.parent
+    roster = "atax,warpx_field_gather,lulesh,gromacs_nbnxm,cloudsc,sw4_rhs4sg"
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "SCRATCH": str(tmp_path),
+        "OPT": str(repo),
+        "DACE_TREE": str(tmp_path),
+        "VIEW": str(tmp_path / "view"),
+        "KERNELS": roster,
+        "CPF_POOL": "1",
+        "CPF_LAUNCH": "pyxis",
+    }
+    run = subprocess.run(["bash", str(SBATCH)], env=env, capture_output=True, text=True, check=False)
+    assert run.returncode == 0, run.stdout + run.stderr
+    [line] = launched.read_text().splitlines()
+    ordered = line.split(" inner-pool ")[1].split()[2].split(",")
+    assert set(ordered) == set(roster.split(",")), ordered  # nothing dropped or duplicated
+    for kernel in ("warpx_field_gather", "gromacs_nbnxm"):
+        assert ordered.index(kernel) < ordered.index("atax"), (kernel, ordered)
+
+
 def test_cpf_pool_launches_one_rank_over_every_core_and_keeps_the_roster_check(tmp_path: pathlib.Path) -> None:
     """The outer script, with a stub launcher: one rank, all cores, `inner-pool` with one worker per
     core, and the roster-wide verdict check still runs after it."""
