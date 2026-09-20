@@ -1,3 +1,5 @@
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Extract the agentic LLR campaign runs into a flat, plottable reproducibility folder.
 
 Reads the per-job judge databases a campaign leaves under its run roots and writes into ``--out``:
@@ -1523,11 +1525,20 @@ def main(argv: list[str]) -> int:
     if args.no_sources:
         return 0
 
-    arms: dict[tuple[str, str], str] = {}
+    # Keyed by WORKER too, not just (run_root, job): a job can run more than one arm at once (each
+    # arm claiming a disjoint slice of the job's worker indices), and a job-level key silently
+    # forced every worker's saved-but-ungraded file onto whichever arm's row the loop over
+    # `observations` happened to reach first -- a real job (644349) filed a HIP worker's last-saved
+    # file under the job's OTHER, C, arm this way. Empty when the worker never produced a judge or
+    # task row at all, which reads honestly as "unlabelled" below rather than a guessed arm.
+    worker_identity_map: dict[tuple[str, str, str], tuple[str, str]] = {}
     for row in observations:
         arm = str(row.get("arm") or "")
-        if arm and arm != ADHOC_ARM:
-            arms.setdefault((str(row["run_root"]), str(row["job"])), arm)
+        worker = str(row.get("worker_index") or "")
+        if arm and arm != ADHOC_ARM and worker:
+            worker_identity_map.setdefault(
+                (str(row["run_root"]), str(row["job"]), worker), (arm, str(row.get("run_id") or ""))
+            )
 
     grouped: dict[Agent, list[dict[str, Any]]] = {}
     for row in sources:
@@ -1544,7 +1555,8 @@ def main(argv: list[str]) -> int:
     for (run_root, job), held in sorted(assets.items()):
         seen = {(a.worker_index, a.benchmark) for a in grouped if (a.run_root, a.job) == (run_root, job)}
         for worker, bench in sorted(held.saved - seen):
-            grouped.setdefault(Agent(run_root, job, arms.get((run_root, job), ""), bench, "", worker), [])
+            arm, run_id = worker_identity_map.get((run_root, job, worker), ("", ""))
+            grouped.setdefault(Agent(run_root, job, arm, bench, run_id, worker), [])
 
     indexed: list[dict[str, Any]] = []
     for agent in sorted(grouped):
