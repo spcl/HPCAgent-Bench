@@ -41,7 +41,7 @@ def test_scicomp_races_three_candidates_and_the_other_tracks_do_not() -> None:
         "scientific_computing": ("c-autopar", "c", "numba"),
     }
     assert grading.baseline_policy(("c-autopar", "c", "numba")) == grading.BEST_OF_BASELINE_POLICY
-    assert grading.baseline_policy(("numba",)) == grading.FIXED_BASELINE_POLICY
+    assert grading.baseline_policy(("numba",)) == grading.SINGLE_BASELINE_POLICY
 
 
 def test_the_single_kind_a_track_names_is_the_head_of_its_set() -> None:
@@ -72,7 +72,7 @@ def test_resolve_set_is_best_of_only_for_the_auto_token() -> None:
     assert grading.resolve_baseline_set(None, hpc) == ("c-autopar", "c", "numba")
     for explicit in ("c", "c-autopar", "numba", "numpy"):
         assert grading.resolve_baseline_set(explicit, hpc) == (explicit,)
-        assert grading.baseline_policy(grading.resolve_baseline_set(explicit, hpc)) == grading.FIXED_BASELINE_POLICY
+        assert grading.baseline_policy(grading.resolve_baseline_set(explicit, hpc)) == grading.SINGLE_BASELINE_POLICY
 
 
 def test_llr_and_ml_resolve_to_exactly_one_candidate() -> None:
@@ -92,7 +92,7 @@ def test_a_vendored_kernel_keeps_its_own_reference_alone() -> None:
     vendored = BenchSpec.load("cp2k_grid_integrate")
     assert vendored.baseline is not None
     assert grading.resolve_baseline_set("auto", vendored) == (grading.VENDORED_BASELINE,)
-    assert grading.baseline_policy(grading.resolve_baseline_set(None, vendored)) == grading.FIXED_BASELINE_POLICY
+    assert grading.baseline_policy(grading.resolve_baseline_set(None, vendored)) == grading.SINGLE_BASELINE_POLICY
 
 
 def test_a_best_of_set_may_only_hold_kinds_timeable_in_the_candidates_bracket(monkeypatch) -> None:
@@ -152,8 +152,8 @@ def test_selection_uses_the_statistic_the_reduction_divides_by() -> None:
 
 def test_the_stamp_names_the_rule_and_the_set_it_chose_from() -> None:
     assert grading.baseline_policy_stamp(("c-autopar", "c", "numba")) == "best-of-v1:c-autopar+c+numba"
-    assert grading.baseline_policy_stamp(("numba",)) == "fixed-v1:numba"
-    assert grading.baseline_policy_stamp(("vendored",)) == "fixed-v1:vendored"
+    assert grading.baseline_policy_stamp(("numba",)) == "single-v1:numba"
+    assert grading.baseline_policy_stamp(("vendored",)) == "single-v1:vendored"
 
 
 def test_a_score_carries_the_stamp_and_defaults_to_none() -> None:
@@ -186,15 +186,28 @@ def test_two_policies_do_not_pool() -> None:
     """The defect this refuses is invisible in the rows: both slices can read baseline=c-autopar on
     the same kernel, and only the policy says whether that kind won a race or was simply named."""
     with pytest.raises(MixedPopulationError, match="mixes baseline policies"):
-        population.one_baseline_policy(["fixed-v1:c-autopar", "best-of-v1:c-autopar+c+numba"])
+        population.one_baseline_policy(["single-v1:c-autopar", "best-of-v1:c-autopar+c+numba"])
+
+
+def test_the_one_declared_reference_policy_has_ONE_spelling() -> None:
+    """grading decides the policy, recording persists it and stats refuses across it. stats cannot
+    import the grading stack to read one string, so the three are pinned together here instead --
+    two spellings of one policy is the defect this whole stamp exists to prevent."""
+    from hpcagent_bench.harness import recording
+
+    assert grading.SINGLE_BASELINE_POLICY == "single-v1"
+    assert recording.LEGACY_BASELINE_POLICY == grading.SINGLE_BASELINE_POLICY
+    assert population.LEGACY_BASELINE_POLICY == grading.SINGLE_BASELINE_POLICY
+    # A bare stamp (what recording's config default writes) and a derived one agree.
+    assert population.policies_agree(grading.SINGLE_BASELINE_POLICY, "single-v1:c-autopar")
 
 
 def test_a_legacy_row_is_named_not_refused() -> None:
     """Until 2026-09-20 there was exactly ONE rule, so a blank cell is known, not unknown -- and it
     stays poolable with a later fixed-policy row whose KIND one_denominator guards separately."""
     assert population.one_baseline_policy([None, "", float("nan")]) == population.LEGACY_BASELINE_POLICY
-    assert population.one_baseline_policy([None, "fixed-v1:numba"]) == "fixed-v1:numba"
-    assert population.one_baseline_policy(["fixed-v1:numba"] * 3) == "fixed-v1:numba"
+    assert population.one_baseline_policy([None, "single-v1:numba"]) == "single-v1:numba"
+    assert population.one_baseline_policy(["single-v1:numba"] * 3) == "single-v1:numba"
 
 
 def test_a_legacy_row_never_pools_with_a_best_of_row() -> None:
@@ -229,7 +242,7 @@ def _frame(policies: list[str | None]) -> pd.DataFrame:
 def test_a_frame_mixing_policies_is_refused_rather_than_pooled() -> None:
     """The guarantee is in the screening every per-episode speed-up statistic passes through, so it
     does not depend on a caller remembering to group by the stamp."""
-    mixed = _frame(["best-of-v1:c-autopar+c+numba", "fixed-v1:c-autopar"])
+    mixed = _frame(["best-of-v1:c-autopar+c+numba", "single-v1:c-autopar"])
     with pytest.raises(MixedPopulationError, match="mixes baseline policies"):
         population.graded_episode_rows(mixed, order=("ts_ms",), tainted=())
 
