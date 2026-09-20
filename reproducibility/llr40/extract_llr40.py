@@ -153,6 +153,14 @@ OBSERVATION_FIELDS = (
     # 1 for a row read from the frozen observations of a job whose judge DB no longer exists
     # (experiments/frozen_observations.py), 0 for a row read from a live DB or worker directory.
     "frozen",
+    # The dispersion behind `speedup`, from the judge's `submission_cells` table: how many TIMED
+    # cells the grade reduced, their unclamped geomean g_i and their geometric standard deviation
+    # gsd_i. BLANK on every row whose DB predates that table -- which is not "one cell", it is "not
+    # recorded", and a reader must not fill it in: gsd_i = 1 is what a single ratio yields, so a
+    # blank read as 1 would turn an unrecorded dispersion into a measured one.
+    "n_cells",
+    "g_i",
+    "gsd_i",
 )
 
 SOURCE_FIELDS = (
@@ -873,6 +881,16 @@ def read_db(
         if "sources" in tables:
             for row in conn.execute("SELECT * FROM sources ORDER BY id"):
                 blobs[(row["run_id"] or "", row["benchmark"] or "", int(row["ts"] or 0))] = row
+        # The per-cell disclosure behind a recorded speed-up, keyed the same way. Absent on any DB
+        # written before the table existed, which every reader must treat as "not recorded".
+        cells: dict[tuple[str, str, int], tuple[int, Any, Any]] = {}
+        if "submission_cells" in tables:
+            for row in conn.execute(
+                "SELECT run_id, benchmark, ts, COUNT(*) AS n, MAX(g_i) AS g_i, MAX(gsd_i) AS gsd_i "
+                "FROM submission_cells GROUP BY run_id, benchmark, ts"
+            ):
+                key = (row["run_id"] or "", row["benchmark"] or "", int(row["ts"] or 0))
+                cells[key] = (int(row["n"]), row["g_i"], row["gsd_i"])
         store = db.path.parent / f"{db.path.stem}_prompts"
         for table in RECORD_TABLES:
             if table not in tables:
@@ -904,6 +922,9 @@ def read_db(
                     ordinals[(run_id, bench)] = ordinals.get((run_id, bench), 0) + 1
                     index = ordinals[(run_id, bench)]
                 blob = blobs.get((stored, bench, int(row["ts"] or 0)))
+                # g_i / gsd_i are stored per cell and are constant within a submission, so MAX()
+                # above reads the value the grader credited rather than re-deriving one.
+                n_cells, g_i, gsd_i = cells.get((stored, bench, int(row["ts"] or 0)), (0, None, None))
                 record = table[:-1]
                 observations.append(
                     {
@@ -948,6 +969,9 @@ def read_db(
                         "ts_ms": row["ts"],
                         "source_blob": blob["path"] if blob is not None else "",
                         "retagged": retagged,
+                        "n_cells": n_cells or "",
+                        "g_i": "" if g_i is None else g_i,
+                        "gsd_i": "" if gsd_i is None else gsd_i,
                     }
                 )
                 if blob is not None:
