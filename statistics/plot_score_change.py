@@ -646,11 +646,12 @@ def main() -> None:
     parser.add_argument(
         "--row-width",
         choices=("natural", "iclr", "acm-column", "acm-text"),
-        default="natural",
+        default="acm-text",
         help=
-        "the joined row's target width: its panels' own natural size, or a paper's page budget "
-        "(style.ICLR_TEXT_WIDTH_IN / ACM_COLUMN_WIDTH_IN / ACM_TEXT_WIDTH_IN) so the PDF drops in at "
-        "scale 1.0",
+        "the joined row's target width: a paper's page budget (style.ACM_TEXT_WIDTH_IN, the full "
+        "width of a two-column page, by default; also ICLR_TEXT_WIDTH_IN / ACM_COLUMN_WIDTH_IN) so "
+        "the PDF drops in at scale 1.0, or 'natural' for its panels' own size. A page budget also "
+        "sets the type to PAPER_CONFIG, which is the two-column convention",
     )  # fmt: skip
     parser.add_argument(
         "--include-incomplete",
@@ -728,7 +729,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--panel-labels",
-        default="none",
+        default="subtitle",
         choices=efficacy_figures.PANEL_LABELS,
         help="how a JOINED ROW names its panels: none (the panel's own name inside its box) or "
         "outside/inside/subtitle, which number them 'i) <name>' above the panel instead",

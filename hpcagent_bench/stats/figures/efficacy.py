@@ -173,7 +173,7 @@ class FigureConfig:
     #: pair; 0.5 would put one pair's mark on top of the next pair's.
     dodge: float = 0.16
     #: The gap between the two measure rows, as a fraction of a row's own height.
-    row_gap: float = 0.22
+    row_gap: float = 0.2
     #: The gap between two columns of a stacked row, as a fraction of a column's own width. Wide
     #: enough that each column reads as its own panel, since they share no Y scale.
     column_gap: float = 0.3
@@ -215,6 +215,7 @@ PAPER_CONFIG = dataclasses.replace(
     subtitle_pt=12.5,
     point_pt=6.5,
     legend_pt=7.25,
+    legend_ncol=5,
     legend_marker_pt=5.5,
     legend_marker_scale=1.0,
     mark_size=26.0,
@@ -1655,11 +1656,12 @@ MEASURE_LABELS: dict[str, str] = {"speedup": "Speed-Up", "cost": ABSOLUTE_YLABEL
 #: whole roster's own token bill.
 MEASURE_MODE: str = "absolute"
 
-#: Which way is GOOD on each measure. Drawn ABOVE the panel, right-aligned, in the same band the
-#: column's own name sits in: inside the plot area it competed with the marks for the corner, and a
-#: short row has no corner to spare. Speed-up reads up, cost reads down, and the two rows of a
-#: dot-row figure are otherwise identical strips.
-MEASURE_DIRECTION: dict[str, str] = {"speedup": "Higher -> Better", "cost": "Lower -> Better"}
+#: Which way is GOOD on each measure, as the PARENTHETICAL of the axis label -- the slot an axis
+#: label conventionally puts its qualifier in, beside the unit. It rides on the Y title rather than
+#: in a band of its own: it belongs to the axis it describes, reads in the same sweep as the
+#: measure's name, and costs the figure no height. Lower case inside the parentheses, which is how
+#: a qualifier is set; the measure's own name keeps Title Case.
+MEASURE_DIRECTION: dict[str, str] = {"speedup": "(higher is better)", "cost": "(lower is better)"}
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -2083,15 +2085,11 @@ def draw_measure_row(
         # The direction note rides on the Y TITLE rather than in a band of its own: it belongs to
         # the axis it describes, it reads in the same sweep as the measure's name, and it costs the
         # figure no height, which is what lets the two rows sit close.
+        # The measure's name folds to at most ``max_name_lines``; its qualifier never folds, since
+        # half a parenthetical on its own line reads as a second label.
         note = MEASURE_DIRECTION.get(measure, "") if direction else ""
-        text = f"{ylabel}\n{note}" if note else ylabel
-        # Two lines at most PER PART, same rule the panel names fold under: a rotated line wider
-        # than the chrome band beside the data box is a clipped label.
-        folded = "\n".join(
-            wrapped_label(part, fold_width(part, label_wrap(config), config.max_name_lines))
-            for part in text.split("\n")
-        )  # fmt: skip
-        ax.set_ylabel(folded, fontsize=config.label_pt)
+        folded = wrapped_label(ylabel, fold_width(ylabel, label_wrap(config), config.max_name_lines))
+        ax.set_ylabel(f"{folded}\n{note}" if note else folded, fontsize=config.label_pt)
 
     ax.tick_params(axis="both", labelsize=config.tick_pt)
     style.despine(ax)
@@ -2368,7 +2366,7 @@ def figure_dot_row(
     channels: str = "model-packet",
     measures: Sequence[str] = MEASURES,
     row_width_in: float = style.ACM_TEXT_WIDTH_IN,
-    row_height_in: float = 1.15,
+    row_height_in: float = 0.98,
     labels: dict[str, str] | None = None,
     references: Sequence[str] = (),
     control_names: Sequence[str] = (),
