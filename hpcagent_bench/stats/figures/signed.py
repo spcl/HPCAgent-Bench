@@ -93,13 +93,17 @@ class Arm:
 class Row:
     """One drawn row: its ratios per kernel, the costs behind them, and what it excluded.
 
-    ``color``/``marker`` and the trailing three fields are used only by the llr-focus40 compiler
+    ``color``/``marker`` and the trailing four fields are used only by the llr-focus40 compiler
     figure (:func:`llr40_rows`, :func:`llr40_figure`): the TSVC rows :func:`arm_rows` and
     :func:`paired_rows` build never set them, so ``draw()`` keeps colouring by
     :func:`~hpcagent_bench.stats.palette.framework_colors` and every mark keeps the plain circle it
     always drew. ``ratios_low``/``ratios_high`` are a per-kernel confidence bound on ``ratios`` OVER
     THE KERNEL'S OWN REPETITIONS (SC15 rules 5/7) -- empty for a deterministic column, which has
-    none to bound. ``tokens`` is the per-kernel spend a canon column has none of.
+    none to bound. ``tokens`` is the per-kernel spend a canon column has none of. ``delivered`` says
+    which of ``ratios`` are real measurements versus the :data:`~hpcagent_bench.stats.population.
+    NOT_DELIVERED` 1x placeholder (:func:`~hpcagent_bench.stats.canon.roster_speedups`) -- empty for
+    an agent row, whose ``ratios`` only ever holds delivered kernels already (``policy="solved"``),
+    so every present value there reads as delivered by the same default an empty dict gives it.
     """
 
     framework: str
@@ -113,6 +117,7 @@ class Row:
     ratios_low: dict[str, float] = dataclasses.field(default_factory=dict)
     ratios_high: dict[str, float] = dataclasses.field(default_factory=dict)
     tokens: dict[str, float] = dataclasses.field(default_factory=dict)
+    delivered: dict[str, bool] = dataclasses.field(default_factory=dict)
 
 
 def shard_paths(root: pathlib.Path, framework: str) -> list[pathlib.Path]:
@@ -395,7 +400,10 @@ def paired_rows(
 LLR40_BASELINE: str = kernel_comparison.CANON_BASELINE
 
 #: The two canon-sweep columns this figure draws as their OWN rows, in draw order: DaCe's
-#: parallel-CPU backend, then its canonicalizing pass over the same backend.
+#: parallel-CPU backend, then its canonicalizing pass over the same backend. The LIBRARY default --
+#: a caller wanting the polyhedral compiler baselines too (Pluto, PPCG-on-AMD) passes its own
+#: ``canon_columns`` (:data:`statistics.plot_llr40_compilers`'s own CLI default does exactly this,
+#: 2026-09-20), rather than widening what every existing caller of this constant draws.
 LLR40_CANON_COLUMNS: tuple[str, ...] = ("dace_cpu", "dace_cpu_canonicalize")
 
 #: The two CPF conditions this figure draws, per model -- never the no-packet control, which
@@ -412,24 +420,35 @@ TOKEN_SUMMARY_COLUMNS: tuple[str, ...] = (
 def canon_kernel_row(
     canon_frame: pd.DataFrame, column: str, roster: Sequence[str], baseline: str = LLR40_BASELINE
 ) -> Row:
-    """One canon-sweep column's row against ``baseline``, restricted to ``roster``: a single
-    deterministic ``median_ms`` per kernel (:func:`hpcagent_bench.stats.canon.read_times`), so
-    ``ratios_low``/``ratios_high`` and ``tokens`` stay empty -- a canon sweep has no repetition to
-    bound and runs no agent to cost. A canon sweep commonly spans MORE kernels than one figure's
-    roster (:data:`kernel_comparison.CANON_COLUMN` sweeps 40); without this restriction the
-    summary column would geomean a population the panel never drew."""
+    """One canon-sweep column's row against ``baseline``, ROSTER-COMPLETE: a single deterministic
+    ``median_ms`` per kernel (:func:`hpcagent_bench.stats.canon.read_times`), so ``ratios_low``/
+    ``ratios_high`` and ``tokens`` stay empty -- a canon sweep has no repetition to bound and runs
+    no agent to cost. A canon sweep commonly spans MORE kernels than one figure's roster
+    (:data:`kernel_comparison.CANON_COLUMN` sweeps 40); restricting to ``roster`` keeps the summary
+    column from geomeaning a population the panel never drew.
+
+    A roster kernel ``column`` produced no validated result for -- declined, crashed, or never
+    attempted -- is FILLED at 1x, never dropped (:func:`hpcagent_bench.stats.canon.roster_speedups`,
+    the 2026-09-20 decision): a compiler baseline that cannot handle a kernel is no different from
+    an agent that never delivered one, and ``delivered`` flags it the same way
+    :data:`~hpcagent_bench.stats.population.DELIVERED_COLUMN` flags that placeholder for an agent
+    row, so ``llr40_figure`` draws and geomeans both under the one existing convention.
+    """
     times = canon.read_times(canon_frame)
     base, cur = times.get(baseline, {}), times.get(column, {})
-    kernels = set(roster)
-    ratios = {k: base[k] / ms for k, ms in sorted(cur.items()) if k in base and k in kernels}
+    kernels = sorted(roster)
+    ratios, delivered = canon.roster_speedups(times, baseline, column, kernels)
+    nan = math.nan
+    numerator_ms = {k: base.get(k, nan) for k in ratios}
+    denominator_ms = {k: cur.get(k, nan) for k in ratios}
     optimizer = experiment_tags.canonical("optimizers", column)
     standalone = experiment_tags.names("optimizers")
     label = (
         standalone[optimizer] if optimizer in standalone else experiment_tags.names("frameworks").get(column, column)
     )
     return Row(
-        column, label, ratios, {k: base[k] for k in ratios}, {k: cur[k] for k in ratios}, "none",
-        palette.framework_color(column), palette.marker(column),
+        column, label, ratios, numerator_ms, denominator_ms, "none",
+        palette.framework_color(column), palette.marker(column), delivered=delivered,
     )  # fmt: skip
 
 
@@ -626,7 +645,7 @@ def legend_handles(rows: Sequence[Row], kernels: Sequence[str]) -> list[Line2D]:
         )
         for row in rows
     ]
-    if any(kernel not in row.ratios for row in rows for kernel in kernels):
+    if any(kernel not in row.ratios or not row.delivered.get(kernel, True) for row in rows for kernel in kernels):
         handles.append(
             Line2D(
                 [],
@@ -699,6 +718,7 @@ def llr40_figure(
         speedup_ax, kernels, speedup_series, lambda s: s.values, 1.0, geomean_reducer, "",
         not has_tokens, size,
         range_of=lambda s: (row_by_key[s.key].ratios_low, row_by_key[s.key].ratios_high),
+        delivered_of=lambda s: row_by_key[s.key].delivered,
         interval_of=geomean_interval_of(row_by_key, lambda r: r.ratios),
         transform=log2_change, value_text=kernel_comparison.speedup_value_text, span=offset,
     )  # fmt: skip

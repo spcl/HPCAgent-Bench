@@ -438,6 +438,31 @@ def test_a_canon_columns_done_and_failed_kernels_read_the_latest_dir(
     assert row["experiment_name"] == "Compiler baselines: Loop Level Reasoning Focus@40"
 
 
+def test_a_declined_kernel_is_not_counted_done(board: types.ModuleType, tmp_path: pathlib.Path) -> None:
+    """run-framework exits ``status=ok`` for a kernel it merely DECLINED (``failure=unsupported``,
+    e.g. a non-affine loop pluto/ppcg refuses) -- the SAME status a genuine success carries. A
+    column that declined every roster kernel must show 0 done and every kernel in ``failed``, not
+    100% done: the pre-fix version read ``status`` alone and reported exactly the inverse (measured
+    against the real ppcg canon sweep, job 640520: 40/40 "done", 0 real results)."""
+    run_dir = tmp_path / "canon-llr-focus40-20260920"
+    run_dir.mkdir(parents=True)
+    header = "framework,preset,datatype,kernel,impl,status,validated,median_ms,failure,error"
+    (run_dir / "ppcg.rank0.csv").write_text(
+        "\n".join(
+            [
+                header,
+                "ppcg,fuzzed,float64,a,default,ok,False,,unsupported,",
+                "ppcg,fuzzed,float64,b,default,ok,True,12.0,,",
+            ]
+        )
+        + "\n"
+    )
+
+    row = board.canon_column_row("llr-focus40", "ppcg", [run_dir], ["a", "b"], [])
+
+    assert (row["done"], row["failed"]) == (1, ["a"]), row
+
+
 def test_canon_dirs_finds_only_this_tags_directories_oldest_first(
     board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

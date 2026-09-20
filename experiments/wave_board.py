@@ -522,10 +522,17 @@ def canon_dirs(scratch: pathlib.Path, tag: str) -> list[pathlib.Path]:
     return sorted(found, key=lambda p: p.stat().st_mtime)
 
 
-def canon_csv_rows(path: pathlib.Path) -> list[tuple[str, str]]:
-    """(kernel, status) over one column's rank shard."""
+def canon_csv_rows(path: pathlib.Path) -> list[tuple[str, str, str]]:
+    """(kernel, status, failure) over one column's rank shard.
+
+    ``failure`` matters as much as ``status``: run-framework exits ``status=ok`` for a kernel it
+    merely DECLINED (a non-affine loop, no scop emitted, ppcg offloaded nothing -- see
+    :mod:`hpcagent_bench.ppcg_transform`), with ``failure=unsupported`` the only sign it never
+    produced a result. A shard from before this field existed has an empty ``failure`` column,
+    which reads the same as a genuine success -- ``status`` alone was the whole story then.
+    """
     with path.open(newline="", encoding="utf-8") as handle:
-        return [(row["kernel"], row["status"]) for row in csv.DictReader(handle)]
+        return [(row["kernel"], row["status"], row.get("failure", "")) for row in csv.DictReader(handle)]
 
 
 def canon_opt_reports_saved(dirs: list[pathlib.Path], col: str) -> bool:
@@ -536,13 +543,20 @@ def canon_opt_reports_saved(dirs: list[pathlib.Path], col: str) -> bool:
 
 def canon_column_row(tag: str, col: str, dirs: list[pathlib.Path], roster: list[str], jobs: list[Job]) -> dict:
     """One board row for ``col`` over ``tag``'s roster: the LATEST status per kernel across every
-    canon directory, oldest to newest, so a superseding ``-b`` wave overrides the wave it re-ran."""
-    latest: dict[str, str] = {}
+    canon directory, oldest to newest, so a superseding ``-b`` wave overrides the wave it re-ran.
+
+    ``done`` requires a genuine result (``status=="ok"`` AND no ``failure``): a DECLINED kernel
+    (``status=="ok"``, ``failure=="unsupported"``) is not a placeholder gap either -- run-framework
+    already ran it and it answered "no result", and that answer belongs in ``failed`` beside a
+    crash, not silently counted as done (2026-09-20 fix: this used to count every ``status=="ok"``
+    row, which read a compiler that declined its whole roster as 100% complete).
+    """
+    latest: dict[str, tuple[str, str]] = {}
     for one in dirs:
         for path in sorted(one.glob(f"{col}.rank*.csv")):
-            latest.update(canon_csv_rows(path))
-    done = sum(1 for kernel in roster if latest.get(kernel) == "ok")
-    failed = sorted(kernel for kernel in roster if kernel in latest and latest[kernel] != "ok")
+            latest.update({kernel: (status, failure) for kernel, status, failure in canon_csv_rows(path)})
+    done = sum(1 for kernel in roster if latest.get(kernel) == ("ok", ""))
+    failed = sorted(kernel for kernel in roster if kernel in latest and latest[kernel] != ("ok", ""))
     return {
         "arm": f"canon40-{tag}-{col}",
         "campaign": f"canon40-{tag}",

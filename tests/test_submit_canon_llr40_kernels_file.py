@@ -127,6 +127,32 @@ def test_a_missing_kernels_file_is_refused(tmp_path: pathlib.Path) -> None:
     assert "missing or empty" in result.stderr
 
 
+def test_nice_is_passed_through_when_set_and_omitted_when_not(tmp_path: pathlib.Path) -> None:
+    """NICE=300 (2026-09-20: a gap-filling canon run sits behind the priority LLR/cpfsrc waves but
+    ahead of a background scicomp sweep) reaches sbatch as ``--nice=300``; unset, no such flag is
+    added -- every caller that never sets it keeps its ordinary priority."""
+    root = submit_tree(tmp_path)
+    stub(
+        root / "bin",
+        "sbatch",
+        'printf \'%s\\n\' "$@" > "${STUB_MARKERS}/sbatch-argv.txt"; echo 999999; exit 0',
+    )
+    result = run_submit(root, TAG="llr-focus40", COLUMNS="numba", SUBMIT="1", NICE="300")
+    assert result.returncode == 0, result.stderr
+    argv = (root / "sbatch-argv.txt").read_text().splitlines()
+    assert "--nice=300" in argv
+
+    stub(
+        root / "bin",
+        "sbatch",
+        'printf \'%s\\n\' "$@" > "${STUB_MARKERS}/sbatch-argv-no-nice.txt"; echo 999999; exit 0',
+    )
+    result = run_submit(root, TAG="llr-focus40", COLUMNS="numba", SUBMIT="1")
+    assert result.returncode == 0, result.stderr
+    argv = (root / "sbatch-argv-no-nice.txt").read_text().splitlines()
+    assert not any(flag.startswith("--nice") for flag in argv)
+
+
 def test_kernels_file_unset_still_uses_the_whole_tag_roster(tmp_path: pathlib.Path) -> None:
     """The pre-existing behaviour, untouched: no KERNELS_FILE, no KERNELS -- roster_for(TAG)."""
     root = submit_tree(tmp_path)
