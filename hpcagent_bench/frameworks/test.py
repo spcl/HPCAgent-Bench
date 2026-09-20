@@ -542,6 +542,13 @@ class Test(object):
                     elif not ignore_errors:
                         raise ValueError("{} did not validate!".format(frmwrk_name))
                 except Exception as e:
+                    # A comparison that never ran is not a passed comparison. `valid` is optimistic
+                    # by default so an unvalidated run still times, and under --ignore-errors (every
+                    # canon column) this branch used to leave that True -- so a row whose validation
+                    # died recorded `validated=True` and was published as agreeing with NumPy.
+                    # Measured on job 644305: two ppcg_hip kernels whose comparison itself raised
+                    # ArrayMemoryError came out of the sweep marked validated.
+                    valid = False
                     print("Failed to run {} validation.".format(self.frmwrk.info["full_name"]))
                     traceback.print_exception(e)
                     if not ignore_errors:

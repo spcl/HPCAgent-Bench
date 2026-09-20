@@ -30,7 +30,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework, ToolMissing
 from hpcagent_bench.languages import LANG_EXT, gpu_backend
@@ -118,13 +118,17 @@ def ppcg_lookup() -> Tuple[Optional[str], str]:
     "not here at all" are different faults and only one of them is fixed by installing anything.
     """
     tools_dir = os.environ.get(TOOLS_DIR_ENV)
-    candidates = (
-        _exe_under_prefix(os.environ.get(PPCG_HOME_ENV), "ppcg"),
-        _exe_under_prefix(f"{tools_dir}/ppcg" if tools_dir else None, "ppcg"),
-        shutil.which("ppcg"),
+    # Each candidate is a THUNK, so a source further down the order is never even consulted once an
+    # earlier one answers: an explicit override exists precisely to stop the host's own PATH being
+    # searched, and building the tuple eagerly searched it anyway.
+    sources: Tuple[Callable[[], Optional[str]], ...] = (
+        lambda: _exe_under_prefix(os.environ.get(PPCG_HOME_ENV), "ppcg"),
+        lambda: _exe_under_prefix(f"{tools_dir}/ppcg" if tools_dir else None, "ppcg"),
+        lambda: shutil.which("ppcg"),
     )
     refused: List[str] = []
-    for exe in candidates:
+    for source in sources:
+        exe = source()
         if exe is None:
             continue
         try:

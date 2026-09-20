@@ -1356,3 +1356,38 @@ def test_the_transform_publishes_from_a_scratch_dir_beside_the_scop(tmp_path, mo
     scratch = pathlib.Path(record.read_text().strip())
     assert scratch.parent == scop.parent, f"ppcg ran in {scratch}, not beside the scop in {scop.parent}"
     assert not scratch.exists(), "the scratch dir was left behind in the checkout"
+
+
+def test_a_validation_that_could_not_run_is_not_recorded_as_validated(tmp_path, monkeypatch) -> None:
+    """A comparison that raised is not a comparison that passed.
+
+    ``valid`` starts optimistic so an unvalidated run still produces timings, and under
+    ``ignore_errors`` -- which every canon column runs with -- the except branch used to leave it
+    that way: the row said ``validated=True`` about a comparison that never completed. Measured on
+    job 644305, where two ``ppcg_hip`` kernels whose own ``np.allclose`` raised
+    ``ArrayMemoryError`` (the per-kernel RLIMIT_AS cap, on arrays that size) came out of the sweep
+    marked validated -- a compiler column publishing agreement with NumPy that was never checked.
+
+    Driven through the numpy framework, because the invariant is the harness's and not a backend's;
+    the DB override is the pair ``test_framework_datatype_resync`` uses, so the run's rows land in
+    ``tmp_path`` instead of the checkout's results DB."""
+    from hpcagent_bench import config
+    from hpcagent_bench.frameworks import Benchmark, Test, generate_framework, utilities
+
+    def boom(*_args: Any, **_kwargs: Any) -> bool:
+        raise MemoryError("Unable to allocate 3.32 GiB for an array with shape (445241460,)")
+
+    config.set_override("record.db_path", str(tmp_path / "hpcagent_bench.db"))
+    config.set_override("record.allow_memory_db", True)
+    monkeypatch.setattr(utilities, "validate", boom)
+    try:
+        timings = Test(Benchmark("arc_distance"), generate_framework("numpy")).run(
+            preset="S", validate=True, repeat=1, timeout=120.0, ignore_errors=True
+        )
+    finally:
+        config.clear_override("record.db_path")
+        config.clear_override("record.allow_memory_db")
+
+    assert timings, "the run recorded no timing at all, so it cannot show what it claims about them"
+    for impl, timing in timings.items():
+        assert timing["validated"] is False, f"{impl} was recorded as validated although the comparison raised"
