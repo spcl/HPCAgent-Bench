@@ -141,12 +141,18 @@ def fuse(
     # provenance, and re-stamping an already-stamped frame is the same value.
     if not frame.empty:
         frame = stamp(frame, selection.experiment, extracted_at)
-    jobs = tuple(sorted(frozen["job"].astype(str).unique())) if not frozen.empty else ()
+    # Counted off the FUSED frame's own flag, not off the `frozen` argument: the extractor merges
+    # the frozen rows of gone-or-unreadable jobs itself, so they arrive inside `live` and a count
+    # taken from the argument reported 0 while hundreds sat in the frame.
+    flag = frame.get(frozen_observations.COLUMN) if not frame.empty else None
+    is_frozen = flag.astype(str).eq("1") if flag is not None else None
+    frozen_rows = int(is_frozen.sum()) if is_frozen is not None else 0
+    jobs = tuple(sorted(frame.loc[is_frozen, "job"].astype(str).unique())) if frozen_rows else ()
     arms = tuple(sorted(frame["arm"].astype(str).unique())) if not frame.empty else ()
     return frame, Provenance(
         experiment=selection.experiment,
-        live_rows=len(live),
-        frozen_rows=len(frozen),
+        live_rows=len(frame) - frozen_rows,
+        frozen_rows=frozen_rows,
         dropped_retired=live_retired + frozen_retired,
         dropped_foreign=live_foreign + frozen_foreign,
         arms=arms,
@@ -186,13 +192,14 @@ def build(
     frozen: pathlib.Path | None = None,
     root: pathlib.Path | None = None,
     csvs: Sequence[pathlib.Path] = (),
+    regrades: Sequence[str] = (),
 ) -> tuple["pd.DataFrame", Provenance]:
     """Extract ``experiment``, fuse any extra CSVs in, write ``out`` (and ``csv_out``)."""
     import pandas as pd
 
     selection = campaigns.resolve(experiment, root)
     extracted_at = now()
-    live = extract(selection, frozen)
+    live = extract(selection, frozen, regrades=tuple(regrades))
     extra = pd.concat([load(path) for path in csvs], ignore_index=True) if csvs else pd.DataFrame()
     frame, provenance = fuse(selection, live, extra, extracted_at)
     if frame.empty:
@@ -215,6 +222,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         help="extra observations CSV to fuse in; repeatable",
     )
+    parser.add_argument(
+        "--regrades",
+        action="append",
+        default=[],
+        help="glob of regrade-*.db re-timing a pre-mwd-v2 grade; repeatable. Without it an unstamped row "
+        "is refused rather than silently mixed with the current timing rule",
+    )
     parser.add_argument("--runs-root", type=pathlib.Path, help=f"default {campaigns.runs_root()}")
     parser.add_argument(
         "--frozen-observations",
@@ -231,6 +245,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         frozen=frozen_observations.resolve(args.frozen_observations),
         root=args.runs_root,
         csvs=tuple(args.fuse_csv),
+        regrades=tuple(args.regrades),
     )
     print(provenance.report())
     LOG.debug("fused frame: %d rows", len(frame))
