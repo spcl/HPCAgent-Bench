@@ -326,9 +326,13 @@ def pair_frame(frame_all: pd.DataFrame, pairs: Sequence[tuple[str, str]], interv
     return pd.concat(parts, ignore_index=True) if parts else frame_all.iloc[0:0].assign(leg="", skills=False)
 
 
-def figure_from_pairs(args: argparse.Namespace) -> None:
+def figure_from_pairs(args: argparse.Namespace, config: efficacy_figures.FigureConfig) -> None:
     """The ``--pairs-csv`` route: an EXPLICIT pair list drawn as the same panel every packet
-    comparison goes through."""
+    comparison goes through.
+
+    ``config`` and ``--repeats`` are passed on EXPLICITLY. Left to their defaults, this route drew
+    its marks under ``latest`` while the table beside it was written under the requested policy, so
+    a git-scicomp panel (REPEAT=3, median) showed Kimi at 3.57x where its own CSV said 0.67x."""
     table = pd.read_csv(args.pairs_csv)
     pairs = family_pairs(table)
     if not pairs:
@@ -347,8 +351,9 @@ def figure_from_pairs(args: argparse.Namespace) -> None:
         args.table.with_name(f"{args.table.stem}-absolute{args.table.suffix}"), index=False
     )
     written = efficacy_figures.figure_one(
-        frame, stats, args.intervention, args.out, args.control_label, show_cloud=args.show_cloud, title=args.title
-    )
+        frame, stats, args.intervention, args.out, args.control_label, repeats=args.repeats,
+        show_cloud=args.show_cloud, title=args.title, config=config,
+    )  # fmt: skip
     report(args.intervention, stats)
     print(f"table  -> {args.table}")
     print(f"figure -> {written} (+ .png)")
@@ -681,7 +686,7 @@ def main() -> None:
         return
 
     if args.pairs_csv is not None:
-        return figure_from_pairs(args)
+        return figure_from_pairs(args, figure_config)
     if not args.experiment:
         raise SystemExit("--experiment names the campaign to split; pass it, or --pairs-csv/--comparison")
 

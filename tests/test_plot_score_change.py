@@ -10,6 +10,7 @@ the model, shape the packet, and the drawing itself lives in
 """
 
 import importlib.util
+import argparse
 import math
 import pathlib
 import sys
@@ -80,7 +81,17 @@ def episode(arm: str, model: str, language: str, kernel: int, run: str, speedup:
         "timing_reduction": "mwd-v2",
     }
     return [
-        {**common, "record": "submission", "speedup": speedup, "tokens": None, "suspect": 0},
+        {
+            **common,
+            "record": "submission",
+            "speedup": speedup,
+            "tokens": None,
+            "suspect": 0,
+            # SC15 Rule 4: a summarized ratio travels with the times it was taken over, and
+            # stats.rules refuses a table whose cost columns are entirely absent.
+            "baseline_ns": 1.0e6,
+            "native_ns": 1.0e6 / speedup,
+        },
         {**common, "record": "task", "speedup": None, "tokens": tokens, "suspect": None},
     ]
 
@@ -1240,3 +1251,71 @@ def test_a_fully_priced_mark_carries_no_token_note() -> None:
     assert series is not None
     assert series.token_kernels == series.kernels
     assert efficacy_figures.token_note(series) == ""
+
+
+def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_asked_for(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``figure_from_pairs`` passed neither ``--repeats`` nor the figure config on to
+    ``figure_one``, so its marks were drawn under the default ``latest`` while the table written
+    one line above used the policy the caller asked for. On git-scicomp, whose campaign rule is the
+    median of three repeats, that put Kimi-K2.7-Code at 3.57x where its own CSV said 0.67x -- the
+    difference between the repository helping and hurting."""
+    rows: list[dict] = []
+    for index in range(KERNELS):
+        # Three runs per kernel that disagree: the LATEST is fast, their median is slow, so a
+        # figure drawn under the wrong policy lands on the far side of 1x.
+        for run, speedup in (("r1", 0.5), ("r2", 0.5), ("r3", 8.0)):
+            rows += episode("git-repo", "qwen38", "c", index, f"k{index}-{run}", speedup, 100.0)
+        rows += episode("git-kernel", "qwen38", "c", index, f"k{index}-c", 1.0, 100.0)
+    observations_csv = tmp_path / "obs.csv"
+    pd.DataFrame(rows).to_csv(observations_csv, index=False)
+
+    pairs_csv = tmp_path / "pairs.csv"
+    pd.DataFrame(
+        [
+            {
+                "family": "f",
+                "cost_model": "effective",
+                "score_rule": score_rule.SCORE_RULE,
+                "arm_a": "git-repo",
+                "arm_b": "git-kernel",
+                "leg": leg,
+                "verdict": efficacy.NOT_SIGNIFICANT,
+                "n_pairs": KERNELS,
+                "p_adjusted": 0.9,
+            }
+            for leg in (plot.SPEEDUP_LEG, plot.TOKENS_LEG)
+        ]
+    ).to_csv(pairs_csv, index=False)
+
+    frame = plot.pair_frame(plot.load_all([observations_csv]), [("git-repo", "git-kernel")], "repo")
+    by_policy = {
+        policy: efficacy_figures.reduce_pair(frame[~frame.skills], frame[frame.skills], policy).x
+        for policy in ("median", "latest")
+    }
+    assert by_policy["median"] != pytest.approx(by_policy["latest"]), by_policy
+
+    drawn: list[float] = []
+    real = efficacy_figures.draw_series
+
+    def spy(ax, series, *args, **kwargs):
+        drawn.append(series.x)
+        return real(ax, series, *args, **kwargs)
+
+    monkeypatch.setattr(efficacy_figures, "draw_series", spy)
+    args = argparse.Namespace(
+        pairs_csv=pairs_csv,
+        observations=[observations_csv],
+        intervention="repo",
+        control_label="Kernel Formulation",
+        cost_model="effective",
+        cost_models=None,
+        repeats="median",
+        show_cloud=False,
+        title="",
+        out=tmp_path / "f.pdf",
+        table=tmp_path / "f.csv",
+    )
+    plot.figure_from_pairs(args, efficacy_figures.DEFAULT_CONFIG)
+    assert drawn == pytest.approx([by_policy["median"]]), (drawn, by_policy)

@@ -162,12 +162,17 @@ def fuse(
 
 
 def write_db(frame: "pd.DataFrame", path: pathlib.Path) -> pathlib.Path:
-    """``frame`` as the ``observations`` table of a fresh SQLite file at ``path``."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.unlink(missing_ok=True)
-    with sqlite3.connect(path) as connection:
-        frame.to_sql(experiments.OBSERVATIONS_TABLE, connection, index=False)
-    return path
+    """``frame`` as the ``observations`` table of a fresh SQLite file at ``path``.
+
+    Written through the extractor's own TYPED schema, not ``to_sql``: pandas gives an object column
+    the TEXT affinity, so a speed-up read back out of such a file is a string and the first
+    comparison against a number raises. The extractor already declares each column's type, and a
+    file written here has to be indistinguishable from one it wrote.
+    """
+    names = [name for name in observations_extract.OBSERVATION_FIELDS if name in frame.columns]
+    extra = [name for name in frame.columns if name not in names]
+    rows = frame.to_dict("records")
+    return observations_extract.write_db(path, [*names, *extra], rows) and path
 
 
 def write_csv(frame: "pd.DataFrame", path: pathlib.Path) -> pathlib.Path:

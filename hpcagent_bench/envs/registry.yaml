@@ -406,6 +406,14 @@ frameworks:
 # Alternate spellings that resolve to a registered entity. Kept OUT of the ordered blocks above so
 # an alias can never take a colour slot; it inherits the colour of what it aliases.
 aliases:
+  # The JUDGE stamps a graded row's denominator in its own spelling, which is not the canon sweep's
+  # column name for the same toolchain: a git-scicomp submission carries baseline `c-autopar` while
+  # the sweep column is `cc_autopar`. Two spellings of one framework take one colour slot and one
+  # name only while they are registered as aliases -- unregistered, a baseline filter written in
+  # either spelling silently matches nothing (paired_arms refused git-scicomp outright).
+  frameworks:
+    c-autopar: cc_autopar
+    c: cc
   optimizers:
     dace_cpu: dace
     dace_gpu: dace
