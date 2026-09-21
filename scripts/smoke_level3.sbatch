@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # Level-3 kernel smoke sweep (parse / numba / fuzz-gate timing) on one mi300 node.
 #
-#   sbatch -A a-g34 --partition=mi300 --nodes=1 --mem=0 --time=03:00:00 \
+#   sbatch -A a-g34 --partition=mi300 --nodes=1 --mem=0 --time=03:00:00 --no-requeue \
 #       scripts/smoke_level3.sbatch
 #
 # All paths are derived: WT (this worktree), DACE_TREE (the sibling checkout this task was told to
 # prefer), SCRATCH/cache roots (scripts/cache_env.sh). Nothing here is hardcoded to this user.
+#
+# NODE_FAIL auto-requeue reruns a job id into the same RUN_DIR and stacks rows (637040); the
+# standing rule is jobs never requeue. This script has no other #SBATCH directives (it is always
+# submitted with flags on the sbatch command line), so the flag is repeated here too in case a
+# future caller forgets it on the command line.
+#SBATCH --no-requeue
 set -Eeuo pipefail
 
 # Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing

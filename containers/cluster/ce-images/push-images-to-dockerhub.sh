@@ -66,6 +66,7 @@ JOB_SCRIPT="$(mktemp "${SCRATCH}/.tmp/push-dockerhub-XXXXXX.sbatch")"
     printf '#SBATCH --cpus-per-task=96\n'
     printf '#SBATCH --hint=nomultithread\n'
     printf '#SBATCH --mem=0\n'
+    printf '#SBATCH --no-requeue\n'
     printf '#SBATCH --time=08:00:00\n'
     printf '#SBATCH --output=%s/logs/%%x-%%j.out\n' "${CE_DIR}"
     printf '#SBATCH --error=%s/logs/%%x-%%j.err\n' "${CE_DIR}"
