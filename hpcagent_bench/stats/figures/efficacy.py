@@ -2126,7 +2126,8 @@ def snap_axis_to_ticks(ax: Axes, data_low: float, data_high: float) -> None:
     span = (data_low / 100.0, data_high * 100.0) if log else (data_low - reach, data_high + reach)
     ticks = np.asarray(ax.yaxis.get_major_locator().tick_values(*span), dtype=float)
     below, above = ticks[ticks <= data_low], ticks[ticks >= data_high]
-    if below.size == 0 or above.size == 0:
+    # A single value (a stub row holds only its 1x line) lands on one tick: no window to snap to.
+    if below.size == 0 or above.size == 0 or below.max() >= above.min():
         return
     ax.set_ylim(float(below.max()), float(above.min()))
 
@@ -2604,20 +2605,23 @@ def fit_panel_names(
         draw_panel_label(ax, index, names[index], placement, measured, "roman", folds[index], MEASURE_PAD_IN * 72.0)
 
 
-def fit_legend(fig: Figure, handles: Sequence[Line2D], config: FigureConfig) -> float:
+def fit_legend(
+    fig: Figure, handles: Sequence[Line2D], config: FigureConfig, span: tuple[float, float] | None = None
+) -> float:
     """Draw the key below ``fig`` inside ``budget`` inches, shrinking its type where it does not
     fit; returns the height it settled at.
 
     The budget is fixed so the canvas and the data box are, which means the key is what has to
     give. It shrinks rather than wrapping onto another row: another row is the one thing that
-    cannot fit a fixed band.
+    cannot fit a fixed band. ``span`` is the plot body the key may not be wider than
+    (:func:`~hpcagent_bench.stats.style.legend_below`).
     """
     budget = config.legend_chrome_in
     scale = 1.0
     while True:
         height = style.legend_below(
             fig, handles, ncol=config.legend_ncol, y=0.005, fontsize=config.legend_pt * scale,
-            markerscale=config.legend_marker_scale,
+            markerscale=config.legend_marker_scale, span=span,
         )  # fmt: skip
         if height <= budget or scale <= config.legend_min_scale:
             if height > budget:
@@ -2720,7 +2724,8 @@ def figure_dot_row(
         top=1.0 - (title_band + MEASURE_PAD_IN) / height, bottom=0.01, hspace=config.row_gap,
         wspace=config.column_gap,
     )  # fmt: skip
-    fit_legend(fig, handles, config)
+    body = (axes[0][0].get_position().x0, axes[0][-1].get_position().x1)
+    fit_legend(fig, handles, config, body)
     needed = max(required_left_margin(fig, ax) for ax in axes[:, 0])
     if needed > config.left_chrome_in:
         LOG.warning("efficacy: Y labels need %.2fin, left_chrome_in reserves %.2fin", needed, config.left_chrome_in)

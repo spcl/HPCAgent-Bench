@@ -739,7 +739,12 @@ def legend_handles(rows: Sequence[Row], kernels: Sequence[str]) -> list[Line2D]:
 
 
 def llr40_figure(
-    rows: Sequence[Row], roster: Sequence[str], title: str = "", baseline: str = LLR40_BASELINE, offset: float = 0.0
+    rows: Sequence[Row],
+    roster: Sequence[str],
+    title: str = "",
+    baseline: str = LLR40_BASELINE,
+    offset: float = 0.0,
+    panel_height_in: float = LLR40_PANEL_HEIGHT_IN,
 ) -> matplotlib.figure.Figure:
     """The llr-focus40 compiler figure: DaCe's own canon-sweep columns and every model's CPF arm,
     ONE KERNEL AXIS shared by a speed-up panel (LOG2 geometry, ratio-labelled ticks) and, only when
@@ -837,14 +842,14 @@ def llr40_figure(
     legend_in = style.legend_below(fig, handles, ncol=len(handles), y=0.0, fontsize=LLR40_LEGEND_PT)
     title_in = 0.0 if not title else 0.22
     bottom_in = labels_in + LLR40_LEGEND_GAP_IN + legend_in + 0.04
-    height = title_in + LLR40_TOP_IN + n_panels * LLR40_PANEL_HEIGHT_IN + (n_panels - 1) * LLR40_GAP_IN + bottom_in
+    height = title_in + LLR40_TOP_IN + n_panels * panel_height_in + (n_panels - 1) * LLR40_GAP_IN + bottom_in
     fig.set_size_inches(width, height)
     fig.subplots_adjust(
         left=LLR40_LEFT_IN / width,
         right=1.0 - LLR40_RIGHT_IN / width,
         top=1.0 - (title_in + LLR40_TOP_IN) / height,
         bottom=bottom_in / height,
-        hspace=LLR40_GAP_IN / LLR40_PANEL_HEIGHT_IN,
+        hspace=LLR40_GAP_IN / panel_height_in,
     )
     for legend in fig.legends:
         legend.set_bbox_to_anchor((0.5, 0.0), transform=fig.transFigure)
@@ -898,6 +903,7 @@ def llr40_two_row_figure(
     offset: float = 0.0,
     mark_pending: bool = False,
     baseline_fallback: str = "",
+    panel_height_in: float = LLR40_PANEL_HEIGHT_IN,
 ) -> pathlib.Path:
     """Build the llr-focus40 compiler rows, write their tables (Rule 4's costs, rules 5/7's
     intervals -- :func:`write_tables`, :func:`token_summary_table`) and render the two-panel
@@ -924,7 +930,7 @@ def llr40_two_row_figure(
     tokens = token_summary_table(rows)
     if not tokens.empty:
         tokens.to_csv(out.with_name(f"{out.name}-tokens-summary.csv"), index=False)
-    fig = llr40_figure(rows, roster, title, baseline, offset)
+    fig = llr40_figure(rows, roster, title, baseline, offset, panel_height_in)
     return style.save(fig, out, formats=("pdf", "png"), fixed=True, dpi=dpi)
 
 

@@ -61,6 +61,7 @@ def run(
     offset: float,
     mark_pending: bool = False,
     baseline_fallback: str = "",
+    panel_height_in: float = signed.LLR40_PANEL_HEIGHT_IN,
 ) -> int:
     canon_frame = read_table(canon_db, "canon")
     roster = load_roster(roster_file, canon_frame)
@@ -85,6 +86,7 @@ def run(
         offset=offset,
         mark_pending=mark_pending,
         baseline_fallback=baseline_fallback,
+        panel_height_in=panel_height_in,
     )
     print(f"{stem}.pdf / .png")
     print(f"{stem}-kernels.csv / {stem}-summary.csv")
@@ -137,6 +139,12 @@ def main(argv: list[str] | None = None) -> int:
         default="cc_autopar",
         help="canon column that times a kernel --baseline did not verify; '' keeps such a kernel unscored",
     )
+    ap.add_argument(
+        "--panel-height",
+        type=float,
+        default=signed.LLR40_PANEL_HEIGHT_IN,
+        help="height of each data panel in inches; fonts stay at their printed size",
+    )
     ap.add_argument("--dpi", type=float, default=150.0)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/llr40_compilers"))
     args = ap.parse_args(argv)
@@ -156,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         args.offset,
         args.mark_pending,
         args.baseline_fallback,
+        args.panel_height,
     )
 
 

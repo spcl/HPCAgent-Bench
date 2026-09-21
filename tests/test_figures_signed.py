@@ -676,3 +676,14 @@ def test_the_fallback_never_replaces_a_numba_time() -> None:
     merged, filled = canon.with_fallback(times, "numba", "cc_autopar")
     assert merged["numba"] == {"k1": 100.0, "k2": 7.0} and filled == frozenset({"k2"})
     assert canon.with_fallback(times, "numba", "") == (times, frozenset())
+
+
+def test_a_shorter_panel_makes_a_shorter_figure_at_the_same_width(llr40_canon: pd.DataFrame) -> None:
+    rows = signed.llr40_rows(llr40_canon, None, ROSTER40)
+    tall, short = signed.llr40_figure(rows, ROSTER40), signed.llr40_figure(rows, ROSTER40, panel_height_in=1.0)
+    try:
+        assert short.get_size_inches()[0] == pytest.approx(tall.get_size_inches()[0])
+        assert short.get_size_inches()[1] == pytest.approx(tall.get_size_inches()[1] - 0.5, abs=0.01)
+    finally:
+        plt.close(tall)
+        plt.close(short)
