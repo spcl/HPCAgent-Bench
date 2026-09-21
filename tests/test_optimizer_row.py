@@ -158,6 +158,64 @@ def test_an_undelivered_placeholder_is_drawn_hollow() -> None:
         plt.close(fig)
 
 
+def optimizer_mark(key: str, ratio: float) -> optimizers.OptimizerMark:
+    """A one-kernel mark at ``ratio``, for tests that only care about the axis it forces."""
+    return optimizers.OptimizerMark(key, key, key, "#009e73", "o", {"k1": ratio}, {"k1": True})
+
+
+def captured_optimizer_row(monkeypatch: pytest.MonkeyPatch, panels: list, tmp_path: pathlib.Path) -> plt.Figure:
+    """``figure_optimizer_row`` with the write intercepted, so a test can measure the canvas
+    :func:`~hpcagent_bench.stats.figures.optimizers.figure_optimizer_row` actually built instead of
+    the file it would have written."""
+    captured: list[plt.Figure] = []
+
+    def fake_save(fig: plt.Figure, stem: pathlib.Path, formats: tuple = ("pdf", "png"), fixed: bool = False):
+        del formats, fixed
+        captured.append(fig)
+        return stem
+
+    monkeypatch.setattr(optimizers.style, "save", fake_save)
+    optimizers.figure_optimizer_row(panels, tmp_path / "row.pdf")
+    return captured[0]
+
+
+def test_a_wide_ranging_axis_widens_the_left_margin_instead_of_clipping_its_ticks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """The left margin used to be ``config.left_chrome_in``, one fixed inch regardless of what the
+    shared log2 axis ended up ticked in. A geomean near 1x prints short ticks ("1x", "2x"); one
+    fourteen octaves down prints "0.0000610x" -- the margin has to grow to hold it or the number
+    prints outside the canvas."""
+    narrow = optimizers.OptimizerPanel("T", "Numba", (optimizer_mark("m", 1.02),))
+    wide = optimizers.OptimizerPanel("T", "Numba", (optimizer_mark("m", 2.0**-14),))
+    narrow_fig = captured_optimizer_row(monkeypatch, [narrow], tmp_path)
+    narrow_left = narrow_fig.axes[0].get_position().x0 * narrow_fig.get_size_inches()[0]
+    plt.close(narrow_fig)
+    wide_fig = captured_optimizer_row(monkeypatch, [wide], tmp_path)
+    wide_left = wide_fig.axes[0].get_position().x0 * wide_fig.get_size_inches()[0]
+    plt.close(wide_fig)
+    assert wide_left > narrow_left, (narrow_left, wide_left)
+
+
+def test_the_legend_never_overlaps_a_panels_tick_names(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    """The legend used to hang below the canvas edge inside a fixed ``AXIS_BAND_IN`` band; a panel
+    with several optimizers and a long baseline name could overrun it and print the key through the
+    "1x = baseline" tick row instead of under it."""
+    panel = optimizers.OptimizerPanel(
+        "A Long Panel Subtitle", "A Rather Long Baseline Name For The 1x Note",
+        tuple(optimizer_mark(f"m{i}", 1.0 + 0.1 * i) for i in range(5)),
+    )  # fmt: skip
+    fig = captured_optimizer_row(monkeypatch, [panel, panel], tmp_path)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    legend_box = fig.legends[0].get_window_extent(renderer)
+    for ax in fig.axes:
+        for label in ax.get_xticklabels():
+            if label.get_text():
+                assert not legend_box.overlaps(label.get_window_extent(renderer))
+    plt.close(fig)
+
+
 def test_spread_labels_are_settled_at_save_time(tmp_path: pathlib.Path) -> None:
     """Close geomean labels on one axes end up at least a gap apart on the saved page."""
     fig, ax = plt.subplots(figsize=(3, 2))

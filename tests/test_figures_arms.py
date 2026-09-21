@@ -5,6 +5,7 @@
 import logging
 import pathlib
 
+import matplotlib.figure
 import pandas as pd
 import pytest
 
@@ -62,6 +63,80 @@ def test_both_arm_figures_render_in_registered_language_colours(
         "per_kernel_c_vs_fortran_numba.pdf",
         "per_kernel_c_vs_fortran_numba.png",
     ]
+
+
+def long_paired_table() -> pd.DataFrame:
+    """:func:`paired_table` with kernel names long enough to force a wide rotated tick label --
+    the bottom band a fixed fraction used to clip must grow to hold them instead."""
+    frame = pd.DataFrame(
+        {
+            "baseline": "numba",
+            "benchmark": [f"a-rather-long-canonical-kernel-name-{i:02d}" for i in range(3)],
+            "c_best_su": [2.0, 5.0, 1.5],
+            "fortran_best_su": [3.0, 4.0, None],
+        }
+    )
+    return frame.set_index(["baseline", "benchmark"])
+
+
+def captured_paired_figure(
+    monkeypatch: pytest.MonkeyPatch, paired: pd.DataFrame, tmp_path: pathlib.Path
+) -> matplotlib.figure.Figure:
+    """:func:`~hpcagent_bench.stats.figures.arms.figure_paired` with the write intercepted, so a
+    test can measure the canvas ``finish`` actually built instead of the file it would have
+    written."""
+    import matplotlib.pyplot as plt
+
+    captured: list[plt.Figure] = []
+
+    def fake_save(fig: plt.Figure, stem: pathlib.Path, formats: tuple = ("pdf", "png"), fixed: bool = False):
+        del formats, fixed
+        captured.append(fig)
+        return stem
+
+    monkeypatch.setattr(arms.style, "save", fake_save)
+    arms.figure_paired(paired, "numba", tmp_path)
+    return captured[0]
+
+
+def test_long_kernel_names_grow_the_canvas_instead_of_clipping_the_tick(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """``finish`` used to reserve a fixed ``bottom=0.34`` band for the rotated kernel names; a name
+    long enough to need more than that printed off the bottom of the canvas. The band is measured
+    off the rendered tick labels now, so a longer name grows the canvas instead."""
+    import matplotlib.pyplot as plt
+
+    short = captured_paired_figure(monkeypatch, paired_table(), tmp_path)
+    short_height = float(short.get_size_inches()[1])
+    plt.close(short)
+    long_fig = captured_paired_figure(monkeypatch, long_paired_table(), tmp_path)
+    long_height = float(long_fig.get_size_inches()[1])
+    plt.close(long_fig)
+    assert long_height > short_height, (short_height, long_height)
+
+
+def test_the_note_and_the_legend_never_overlap_the_tick_names(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """The caveat note and the legend used to be placed inside one fixed ``bottom=0.34`` band with
+    the rotated kernel names; nothing stopped the three from printing through one another. Each
+    band is measured now, so no two of them may overlap."""
+    import matplotlib.pyplot as plt
+
+    fig = captured_paired_figure(monkeypatch, paired_table(), tmp_path)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    ax = fig.axes[0]
+    tick_boxes = [label.get_window_extent(renderer) for label in ax.get_xticklabels() if label.get_text()]
+    note_boxes = [text.get_window_extent(renderer) for text in fig.texts if text.get_text()]
+    legend_box = fig.legends[0].get_window_extent(renderer)
+    assert note_boxes, "figure_paired always draws its UNVETTED caveat note"
+    for note_box in note_boxes:
+        assert not legend_box.overlaps(note_box)
+        assert not any(note_box.overlaps(tick_box) for tick_box in tick_boxes)
+    assert not any(legend_box.overlaps(tick_box) for tick_box in tick_boxes)
+    plt.close(fig)
 
 
 def drawn_figures(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> list:

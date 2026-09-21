@@ -9,9 +9,9 @@ the model, shape the packet, and the drawing itself lives in
 :mod:`hpcagent_bench.stats.figures.efficacy` -- this script only wires the data.
 """
 
-import importlib.util
 import argparse
 import dataclasses
+import importlib.util
 import math
 import pathlib
 import sys
@@ -19,12 +19,13 @@ import tempfile
 import warnings
 
 import matplotlib.colors
-import matplotlib.pyplot as plt
 import matplotlib.markers
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
 from matplotlib.axes import Axes
+from matplotlib.collections import PathCollection
 from matplotlib.figure import Figure
 from PIL import Image
 
@@ -1530,7 +1531,8 @@ def test_dropping_the_success_row_keeps_the_width_and_every_other_box(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The success row is optional: turning it off may only shorten the canvas. A figure with and
-    one without it sit in one paper, so the speed-up and cost boxes must be the same size in both."""
+    one without it sit in one paper, so the speed-up and cost boxes must be the same size in both.
+    The success row itself is half the height of the others (user, 2026-09-21)."""
     full = drawn_dot_row(tmp_path, monkeypatch, efficacy_figures.MEASURES)
     short = drawn_dot_row(tmp_path, monkeypatch, ("speedup", "cost"))
     assert full.get_size_inches()[0] == pytest.approx(short.get_size_inches()[0])
@@ -1538,7 +1540,78 @@ def test_dropping_the_success_row_keeps_the_width_and_every_other_box(
     speedup, success, cost = full.axes[:3]
     assert box_inches(full, speedup) == pytest.approx(box_inches(short, short.axes[0]), abs=1e-3)
     assert box_inches(full, cost) == pytest.approx(box_inches(short, short.axes[1]), abs=1e-3)
-    assert box_inches(full, success) == pytest.approx(box_inches(full, speedup), abs=1e-3), "a full-height row"
+    width, height = box_inches(full, speedup)
+    half = efficacy_figures.MEASURE_HEIGHT["success"]
+    assert box_inches(full, success) == pytest.approx((width, height * half), abs=1e-3), "a half-height row"
+
+
+def test_a_full_roster_mark_on_the_ceiling_is_drawn_whole() -> None:
+    """A mark at N sits on the axis limit's 5% headroom, thinner than a mark in a half-height row, so
+    a clipped mark printed as half a circle."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 8, 8), arm(1.0, 2.0, 8, 8))
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
+    marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
+    assert marks and not any(mark.get_clip_on() for mark in marks)
+    plt.close(fig)
+
+
+def test_a_key_too_tall_for_its_band_grows_the_canvas_instead_of_covering_the_names(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fixed band made the key the thing that gave: at text width it shrank to its floor, still did
+    not fit, and was drawn over the category names."""
+    kept: list[Figure] = []
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False: kept.append(fig) or stem)
+    config = dataclasses.replace(efficacy_figures.PAPER_CONFIG, legend_chrome_in=0.05, legend_min_scale=1.0)
+    control, treated = solved_and_failed_pair()
+    panel = ("Blind", "no-score", plot.points(control, treated), pd.concat([control, treated]))
+    efficacy_figures.figure_dot_row([panel], tmp_path / "dots.pdf", config=config)
+    fig = kept[0]
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    (legend,) = fig.legends
+    names = [label.get_window_extent(renderer) for label in fig.axes[-1].get_xticklabels() if label.get_text()]
+    assert legend.get_window_extent(renderer).y1 <= min(box.y0 for box in names)
+    assert legend.get_window_extent(renderer).y0 >= 0.0
+
+
+@pytest.mark.parametrize("legs", [("C", "Fortran") * 3])
+def test_category_names_still_touching_on_two_lines_step_down_until_clear(legs: tuple[str, ...]) -> None:
+    """Three "Fortran" placeholders two columns apart share the staggered second line and touched."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(0.9, 1.0))
+    config = efficacy_figures.PAPER_CONFIG
+    rows = [efficacy_figures.ArmRow("qwen38", leg, "#1f77b4", arm(1.0, 2.0), arm(1.0, 2.0)) for leg in legs]
+    ax.set_xlim(-0.6, len(rows) - 0.4)
+    efficacy_figures.draw_category_axis(ax, rows, config)
+    efficacy_figures.stagger_crowded_ticks(fig, [ax], config)
+    renderer = fig.canvas.get_renderer()
+    size = ax.get_xticklabels()[0].get_fontsize()
+    assert size < config.tick_pt
+    assert not plotstyle.crowded_ticks(ax, renderer, size / 3.0 * fig.dpi / 72.0)
+    plt.close(fig)
+
+
+def test_a_difference_label_under_the_top_tick_settles_inside_the_frame_and_off_the_marks() -> None:
+    """The label starts above both intervals; where one ends at the top tick it printed across the
+    frame, and holding it under the frame must not land it back on a mark."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(1.2, 1.0))
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0), arm(3.5, 4.0))
+    efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {}, differences=frozenset({("qwen38", "HIP")}))
+    plotstyle.settle_clear_labels(fig)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    (label,) = [text for text in ax.texts if text.get_gid() == plotstyle.CLEAR_GID]
+    box, frame = label.get_window_extent(renderer), ax.get_window_extent(renderer)
+    assert frame.x0 <= box.x0 and box.x1 <= frame.x1 and frame.y0 <= box.y0 and box.y1 <= frame.y1
+    assert not any(box.overlaps(mark) for mark in plotstyle.mark_boxes(ax))
+    plt.close(fig)
 
 
 @pytest.mark.parametrize(("success_row", "want"), [

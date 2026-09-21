@@ -55,14 +55,10 @@ SHORT_NAMES: dict[str, str] = {
 }
 
 #: Panel height in inches: the height of ONE measure row of the stacked 1-D figure, so this row
-#: drops into a paper beside it at the same scale.
+#: drops into a paper beside it at the same scale. Fixed by design; the chrome around it (the panel
+#: subtitle above, the tick names plus the "1x = baseline" note below, the left margin) is measured
+#: off what actually got drawn (:func:`figure_optimizer_row`), not carved out of a fixed total.
 ROW_HEIGHT_IN: float = 1.25
-
-
-#: Inches above the data box for the panel subtitle, and below it for the tick names plus the
-#: "1x = baseline" note.
-TITLE_BAND_IN: float = 0.30
-AXIS_BAND_IN: float = 0.42
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -144,8 +140,14 @@ def log2_or_nan(value: float) -> float:
     return math.log2(value) if math.isfinite(value) and value > 0.0 else math.nan
 
 
-def draw_panel(ax: Axes, panel: OptimizerPanel, config: efficacy.FigureConfig) -> list[float]:
-    """One track's marks on a log2 axis; returns the log2 values the axis has to hold."""
+def draw_panel(ax: Axes, panel: OptimizerPanel, config: efficacy.FigureConfig, column_width_in: float) -> list[float]:
+    """One track's marks on a log2 axis; returns the log2 values the axis has to hold.
+
+    ``column_width_in`` folds the panel's own title onto as many lines as ITS column needs
+    (:func:`~hpcagent_bench.stats.figures.efficacy.panel_name_wrap`/``wrapped_label``, the same
+    fold ``figure_dot_row`` uses for its own panel names): a fixed canvas save no longer auto-grows
+    to fit a title that runs past a narrow column into its neighbour.
+    """
     held: list[float] = [0.0]
     for index, mark in enumerate(panel.marks):
         interval = mark.interval()
@@ -162,7 +164,7 @@ def draw_panel(ax: Axes, panel: OptimizerPanel, config: efficacy.FigureConfig) -
         ax.annotate(
             style.ratio_label(interval.point), (index, point), textcoords="offset points",
             xytext=(config.label_offset_pt * 0.7, 0.0), ha="left", va="center", fontsize=config.point_pt,
-            color=style.INK, zorder=style.MARK_Z + 1.0,
+            color=style.INK, zorder=style.MARK_Z + 1.0, gid=style.CLEAR_GID,
         )  # fmt: skip
     ax.axhline(0.0, color=style.REFERENCE, linewidth=1.0, zorder=1)
     # The denominator goes UNDER the ticks, not on the 1x line: a label on the line sits at the
@@ -171,7 +173,9 @@ def draw_panel(ax: Axes, panel: OptimizerPanel, config: efficacy.FigureConfig) -
     ax.set_xlim(-0.6, max(len(panel.marks) - 0.4, 0.6))
     ax.set_xticks(range(len(panel.marks)))
     ax.set_xticklabels([mark.short for mark in panel.marks], fontsize=config.tick_pt)
-    ax.set_title(panel.title, loc="left", fontsize=config.subtitle_pt * 0.72, color=style.INK)
+    title_pt = config.subtitle_pt * 0.72
+    wrap = efficacy.panel_name_wrap(column_width_in, title_pt)
+    ax.set_title(efficacy.wrapped_label(panel.title, wrap), loc="left", fontsize=title_pt, color=style.INK)
     return held
 
 
@@ -239,47 +243,58 @@ def figure_optimizer_row(
 ) -> pathlib.Path:
     """Draw ``panels`` as one row, write ``out`` (.pdf + .png) and the table beside it (.csv).
 
-    Columns are as wide as they have optimizers, so a mark takes the same width in every panel.
+    Columns are as wide as they have optimizers, so a mark takes the same width in every panel. The
+    data box is the only fixed quantity, drawn first with no chrome reserved; every band around it --
+    the panel subtitle above, the tick names plus the "1x = baseline" note below, the left margin the
+    Y labels need -- is measured off what actually got drawn, the discipline
+    :func:`~hpcagent_bench.stats.figures.efficacy.figure_dot_row` and
+    :func:`~hpcagent_bench.stats.figures.per_kernel.fit_canvas` already draw their own chrome under;
+    a fixed band was right for one baseline name and wasted the page or ran the legend through the
+    tick labels on any other.
     """
     style.apply()
     widths = [max(len(panel.marks), 1) for panel in panels]
-    # Every band is fixed and added OUTSIDE the data box, as in the stacked 1-D row: the title above,
-    # the tick names plus the "1x = baseline" note below. The legend hangs under the canvas edge
-    # (legend_below's y=0 mode); without the axis band reserved it ran through the baseline note.
-    height = row_height_in + TITLE_BAND_IN + AXIS_BAND_IN
     fig, axes = plt.subplots(
-        1, len(panels), sharey=True, figsize=(row_width_in, height),
+        1, len(panels), sharey=True, figsize=(row_width_in, row_height_in),
         gridspec_kw={"width_ratios": widths, "wspace": config.column_gap},
-    )  # fmt: skip
-    fig.subplots_adjust(
-        left=config.left_chrome_in / row_width_in, right=0.99, top=1.0 - TITLE_BAND_IN / height,
-        bottom=AXIS_BAND_IN / height,
     )  # fmt: skip
     axes = list(np.atleast_1d(axes))
     held: list[float] = []
     for index, (ax, panel) in enumerate(zip(axes, panels, strict=True)):
-        titled = dataclasses.replace(panel, title=f"{roman(index + 1)}) {panel.title}")
-        held += draw_panel(ax, titled, config)
+        titled = dataclasses.replace(panel, title=f"{efficacy.panel_tag(index, 'roman')} {panel.title}")
+        # The gridspec has already laid the columns out at this width_ratio, before any margin is
+        # adjusted: close enough to fold a title by, since a wrap that turns out a hair generous or
+        # tight only changes how many lines it takes, and the height that costs is measured after.
+        column_width_in = ax.get_position().width * row_width_in
+        held += draw_panel(ax, titled, config, column_width_in)
     style_shared_axis(axes, held, config)
     handles = legend_handles(panels, config)
-    style.legend_below(
-        fig, handles, ncol=min(len(handles), config.legend_ncol), fontsize=config.legend_pt,
-        markerscale=config.legend_marker_scale,
+
+    fig.canvas.draw()
+    # Only the FIRST panel sits at the figure's own left edge; the others' tick labels protrude into
+    # the gap between columns, not into the canvas margin (per_kernel.fit_canvas's own reasoning,
+    # applied to a row instead of a stack).
+    left = style.left_protrusion_in(fig, axes[0]) + efficacy.MEASURE_PAD_IN
+    fig.subplots_adjust(left=left / row_width_in, right=0.99)
+    # Every panel shares the same top and bottom band, so the widest subtitle / longest baseline name
+    # sets it for the whole row.
+    top = max(style.above_protrusion_in(fig, ax) for ax in axes) + efficacy.MEASURE_PAD_IN
+    below = max(style.below_protrusion_in(fig, ax) for ax in axes) + efficacy.MEASURE_PAD_IN
+
+    body = (axes[0].get_position().x0, axes[-1].get_position().x1)
+    legend_in = style.legend_below(
+        fig, handles, ncol=min(len(handles), config.legend_ncol), y=0.005, fontsize=config.legend_pt,
+        markerscale=config.legend_marker_scale, span=body,
     )  # fmt: skip
+
+    bottom = below + legend_in
+    height = top + row_height_in + bottom
+    fig.set_size_inches(row_width_in, height)
+    fig.subplots_adjust(top=1.0 - top / height, bottom=bottom / height)
+
     stem = out.with_suffix("")
     # The table is written BEFORE style.save, which is what creates the directory; a fresh
     # ``figures/`` otherwise failed here with the figure never drawn.
     stem.parent.mkdir(parents=True, exist_ok=True)
     optimizer_table(panels).to_csv(stem.with_suffix(".csv"), index=False)
-    return style.save(fig, stem)
-
-
-def roman(number: int) -> str:
-    """The panel index as the paper's other figures spell it: i), ii), iii)."""
-    numerals = ((10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"))
-    out = ""
-    for value, glyph in numerals:
-        while number >= value:
-            out += glyph
-            number -= value
-    return out
+    return style.save(fig, stem, fixed=True)

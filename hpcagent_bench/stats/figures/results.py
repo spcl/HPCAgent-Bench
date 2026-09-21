@@ -765,17 +765,10 @@ def distribution_figure(
     for idx in range(len(ordered), nrows * ncols):
         axes[idx // ncols][idx % ncols].axis("off")
 
-    # One shared framework legend (colour -> framework), above the grid.
-    handles = [Rectangle((0, 0), 1, 1, color=colors[fw]) for fw in slots]
-    fig.legend(  # pyright: ignore[reportUnknownMemberType] -- matplotlib takes untyped **kwargs
-        handles,
-        slots,
-        loc="upper center",
-        ncol=min(nslots, 6),
-        bbox_to_anchor=(0.5, 1.02),
-        fontsize=style.ANNOTATION_PT * DENSE_SCALE,
-        frameon=False,
-    )
+    # One shared framework legend (colour -> framework), above the grid -- the same wrap-to-fit
+    # helper every other figure's key uses, rather than a second hand-rolled ``fig.legend`` call.
+    handles = [Rectangle((0, 0), 1, 1, color=colors[fw], label=fw) for fw in slots]
+    style.legend_below(fig, handles, ncol=min(nslots, 6), y=1.02, fontsize=style.ANNOTATION_PT * DENSE_SCALE)
 
     plt.tight_layout()
     return save_figure(output, fig)

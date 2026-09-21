@@ -216,7 +216,7 @@ PAPER_CONFIG = dataclasses.replace(
     DEFAULT_CONFIG,
     tick_pt=style.PRINT_TICK_PT,
     label_pt=style.PRINT_LABEL_PT,
-    subtitle_pt=12.5,
+    subtitle_pt=style.PRINT_LABEL_PT,
     point_pt=6.5,
     legend_pt=9.05,
     legend_ncol=5,
@@ -2701,13 +2701,16 @@ def figure_dot_row(
     ]
     fit_panel_names(fig, list(axes[0]), tagged, names, spans, config, panel_labels, size)
     body = (axes[0][0].get_position().x0, axes[0][-1].get_position().x1)
-    legend_in = max(config.legend_chrome_in, fit_legend(fig, handles, config, body))
-    height += legend_in - config.legend_chrome_in
-    fig.set_size_inches(row_width_in, height)
-    fig.subplots_adjust(
-        top=1.0 - (title_band + MEASURE_PAD_IN) / height, bottom=(legend_in + category_band + MEASURE_PAD_IN) / height
-    )
     stagger_crowded_ticks(fig, axes[-1], config)
+    legend_in = max(config.legend_chrome_in, fit_legend(fig, handles, config, body))
+    # Every band is measured now that the names, the category ticks and the key are final, and the
+    # canvas is the data box plus exactly those bands.
+    fig.canvas.draw()
+    top_in = max(style.above_protrusion_in(fig, ax) for ax in axes[0]) + MEASURE_PAD_IN
+    bottom_in = max(style.below_protrusion_in(fig, ax) for ax in axes[-1]) + legend_in + MEASURE_PAD_IN
+    height = data_height + top_in + bottom_in
+    fig.set_size_inches(row_width_in, height)
+    fig.subplots_adjust(top=1.0 - top_in / height, bottom=bottom_in / height)
     return style.save(fig, out.with_suffix(""), fixed=True)
 
 
