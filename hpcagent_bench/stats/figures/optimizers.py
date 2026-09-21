@@ -1,0 +1,285 @@
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""One row of 1-D panels comparing OPTIMIZERS on speed-up alone: LLM arms beside standalone
+compilers, one panel per track.
+
+The stacked 1-D efficacy row (:func:`hpcagent_bench.stats.figures.efficacy.figure_dot_row`) compares
+two conditions of ONE optimizer per column and carries a cost row under it. This figure answers a
+different question -- which optimizer reaches the highest speed-up on a track -- so each column is
+one optimizer, there is one mark per column, and there is no cost row: a compiler spends no tokens,
+and an empty cost cell beside every compiler would read as "free".
+
+Every mark is the geomean speed-up over the panel's own baseline with its log-space Student-t 95%
+interval (:func:`~hpcagent_bench.stats.summary.geomean_ci`), over the panel's ROSTER. A kernel an
+optimizer produced no verified answer for enters at 1x and is counted, never dropped -- the
+2026-09-16 rule for agents and :func:`~hpcagent_bench.stats.canon.roster_speedups` for compilers --
+so an LLM that solved twelve kernels and a compiler that declined twenty-eight are both scored over
+the same forty. The per-mark ``solved`` count travels in the table, since the figure cannot show it.
+
+Panels share one log2 Y axis, but each names its own denominator on its 1x line: the loop-level
+tracks are timed against Numba and the repository track against auto-parallelized C, and a shared
+"over Numba" axis title would be wrong for one of the three.
+"""
+
+import dataclasses
+import math
+import pathlib
+from collections.abc import Sequence
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from matplotlib.axes import Axes
+from matplotlib.lines import Line2D
+from matplotlib.ticker import FuncFormatter, MultipleLocator
+
+from hpcagent_bench import experiment_tags
+from hpcagent_bench.stats import canon, palette, population, style, summary
+from hpcagent_bench.stats.figures import efficacy, kernel_comparison
+
+#: Short category names for the X ticks. The legend carries the full name; a tick has about 30pt at
+#: five categories across a column, and "Qwen3.8" beside "GPT-OSS" already overprinted there.
+SHORT_NAMES: dict[str, str] = {
+    "qwen38": "Qwen",
+    "oss120b": "OSS",
+    "kimi27sglang": "Kimi",
+    "glm53": "GLM",
+    "dace_cpu_canonicalize": "DaCe",
+    "dace_gpu_canonicalize": "DaCe",
+    "dace_cpu": "DaCe",
+    "pluto": "Pluto",
+    "ppcg_hip": "PPCG",
+}
+
+#: Panel height in inches: the height of ONE measure row of the stacked 1-D figure, so this row
+#: drops into a paper beside it at the same scale.
+ROW_HEIGHT_IN: float = 1.25
+
+
+#: Inches above the data box for the panel subtitle, and below it for the tick names plus the
+#: "1x = baseline" note.
+TITLE_BAND_IN: float = 0.30
+AXIS_BAND_IN: float = 0.42
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class OptimizerMark:
+    """One optimizer on one track: its per-kernel speed-ups over the panel baseline, roster-complete.
+
+    ``delivered`` is False for a kernel the optimizer left no verified answer on; its ratio is the
+    1x placeholder and it is counted in the geomean.
+    """
+
+    key: str
+    label: str
+    short: str
+    color: str
+    marker: str
+    ratios: dict[str, float]
+    delivered: dict[str, bool]
+
+    def interval(self) -> summary.Interval:
+        values = [v for v in self.ratios.values() if math.isfinite(v) and v > 0.0]
+        return summary.geomean_ci(values)
+
+    @property
+    def solved(self) -> int:
+        return sum(1 for kernel in self.ratios if self.delivered.get(kernel, True))
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class OptimizerPanel:
+    """One track: its title, the denominator its speed-ups are against, and its optimizers."""
+
+    title: str
+    baseline: str
+    marks: tuple[OptimizerMark, ...]
+
+
+def arm_mark(
+    frame: pd.DataFrame,
+    arm: str,
+    model: str,
+    roster: Sequence[str] | None = None,
+    repeats: population.RepeatPolicy = "latest",
+) -> OptimizerMark:
+    """An LLM arm's mark: its final answer per kernel under ``repeats``, restricted to ``roster``.
+
+    A roster kernel the arm has no row for at all enters at 1x undelivered, exactly as one it ran
+    and failed: from the reader's side both are "no answer". Without a roster the arm's own served
+    kernels are the population.
+    """
+    subset = frame[frame["arm"].astype(str) == arm]
+    answers = population.kernel_answers(subset, repeats=repeats, policy="served")
+    column = population.DELIVERED_COLUMN
+    ratios = {str(k): float(v) for k, v in answers["speedup"].items()} if not answers.empty else {}
+    delivered = {str(k): bool(v) for k, v in answers[column].items()} if column in answers and not answers.empty else {}
+    if roster is not None:
+        wanted = list(roster)
+        ratios = {k: ratios.get(k, population.NOT_DELIVERED) for k in wanted}
+        delivered = {k: delivered.get(k, False) if k in delivered else False for k in wanted}
+    return OptimizerMark(
+        arm, experiment_tags.model_name(model), SHORT_NAMES.get(model, experiment_tags.model_name(model)),
+        palette.model_color(model), palette.marker(model), ratios, delivered,
+    )  # fmt: skip
+
+
+def compiler_mark(canon_frame: pd.DataFrame, column: str, roster: Sequence[str], baseline: str) -> OptimizerMark:
+    """A standalone compiler's mark from the canon sweep, over ``roster`` against ``baseline``.
+
+    Labelled by its ``frameworks`` name, which carries the device ("DaCe (GPU, canonicalized)"): on
+    this figure the same optimizer can appear on two tracks, and the legend must say which is which.
+    """
+    ratios, compiled = canon.roster_speedups(canon.read_times(canon_frame), baseline, column, list(roster))
+    return OptimizerMark(
+        column, experiment_tags.framework_name(column), SHORT_NAMES.get(column, column),
+        palette.framework_color(column), palette.marker(column), ratios, compiled,
+    )  # fmt: skip
+
+
+def log2_or_nan(value: float) -> float:
+    return math.log2(value) if math.isfinite(value) and value > 0.0 else math.nan
+
+
+def draw_panel(ax: Axes, panel: OptimizerPanel, config: efficacy.FigureConfig) -> list[float]:
+    """One track's marks on a log2 axis; returns the log2 values the axis has to hold."""
+    held: list[float] = [0.0]
+    for index, mark in enumerate(panel.marks):
+        interval = mark.interval()
+        point, low, high = (log2_or_nan(v) for v in (interval.point, interval.low, interval.high))
+        if not math.isfinite(point):
+            continue
+        if math.isfinite(low) and math.isfinite(high) and low < high:
+            ax.vlines(
+                index, low, high, color=mark.color, linewidth=config.interval_width, zorder=style.CONNECTOR_Z,
+            )  # fmt: skip
+            held += [low, high]
+        style.point_mark(ax, index, point, mark.color, mark.marker, filled=True, size=config.mark_size)
+        held.append(point)
+        ax.annotate(
+            kernel_comparison.speedup_value_text(interval.point), (index, point), textcoords="offset points",
+            xytext=(config.label_offset_pt * 0.7, 0.0), ha="left", va="center", fontsize=config.point_pt,
+            color=style.INK, zorder=style.MARK_Z + 1.0,
+        )  # fmt: skip
+    ax.axhline(0.0, color=style.REFERENCE, linewidth=1.0, zorder=1)
+    # The denominator goes UNDER the ticks, not on the 1x line: a label on the line sits at the
+    # right end, which is where the last optimizer's mark is, and its white box hid a 0.93x mark.
+    ax.set_xlabel(f"1x = {panel.baseline}", fontsize=config.point_pt, color=style.FAINT, labelpad=2.0)
+    ax.set_xlim(-0.6, max(len(panel.marks) - 0.4, 0.6))
+    ax.set_xticks(range(len(panel.marks)))
+    ax.set_xticklabels([mark.short for mark in panel.marks], fontsize=config.tick_pt)
+    ax.set_title(panel.title, loc="left", fontsize=config.subtitle_pt * 0.72, color=style.INK)
+    return held
+
+
+def style_shared_axis(axes: Sequence[Axes], held: Sequence[float], config: efficacy.FigureConfig) -> None:
+    """One log2 speed-up axis for the whole row, ticked in ratios, labelled on the first panel."""
+    finite = [v for v in held if math.isfinite(v)]
+    low, high = (min(finite), max(finite)) if finite else (-1.0, 1.0)
+    reach = max(high - low, config.min_span)
+    for ax in axes:
+        style.value_axis(ax, "y")
+        ax.yaxis.set_major_locator(MultipleLocator(efficacy.x_tick_step(reach, config.max_ticks)))
+        ax.yaxis.set_major_formatter(FuncFormatter(efficacy.log2_tick))
+        ax.tick_params(axis="both", labelsize=config.tick_pt)
+        style.despine(ax)
+        efficacy.thin_rules(ax, config)
+    axes[0].margins(y=config.margin)
+    efficacy.snap_axis_to_ticks(axes[0], low, high)
+    note = efficacy.MEASURE_DIRECTION.get("speedup", "")
+    axes[0].set_ylabel(f"Geomean Speed-Up\n{note}" if note else "Geomean Speed-Up", fontsize=config.label_pt)
+
+
+def legend_handles(panels: Sequence[OptimizerPanel], config: efficacy.FigureConfig) -> list[Line2D]:
+    """One entry per distinct optimizer label across the row, in first-seen order."""
+    seen: dict[str, OptimizerMark] = {}
+    for panel in panels:
+        for mark in panel.marks:
+            seen.setdefault(mark.label, mark)
+    return [
+        Line2D(
+            [],
+            [],
+            marker=mark.marker,
+            linestyle="none",
+            color=mark.color,
+            markersize=config.legend_marker_pt,
+            label=mark.label,
+        )  # fmt: skip
+        for mark in seen.values()
+    ]
+
+
+def optimizer_table(panels: Sequence[OptimizerPanel]) -> pd.DataFrame:
+    """The numbers behind every mark: geomean, its interval, the roster size and how many kernels
+    the optimizer actually answered -- which the figure, scoring an unanswered kernel at 1x, hides."""
+    records = []
+    for panel in panels:
+        for mark in panel.marks:
+            interval = mark.interval()
+            records.append(
+                {
+                    "panel": panel.title, "baseline": panel.baseline, "optimizer": mark.label, "key": mark.key,
+                    "geomean": interval.point, "low": interval.low, "high": interval.high,
+                    "method": efficacy.GEOMEAN_METHOD, "kernels": len(mark.ratios), "solved": mark.solved,
+                }
+            )  # fmt: skip
+    return pd.DataFrame.from_records(records)
+
+
+def figure_optimizer_row(
+    panels: Sequence[OptimizerPanel],
+    out: pathlib.Path,
+    config: efficacy.FigureConfig = efficacy.PAPER_CONFIG,
+    row_width_in: float = style.ACM_TEXT_WIDTH_IN,
+    row_height_in: float = ROW_HEIGHT_IN,
+) -> pathlib.Path:
+    """Draw ``panels`` as one row, write ``out`` (.pdf + .png) and the table beside it (.csv).
+
+    Columns are as wide as they have optimizers, so a mark takes the same width in every panel.
+    """
+    style.apply()
+    widths = [max(len(panel.marks), 1) for panel in panels]
+    # Every band is fixed and added OUTSIDE the data box, as in the stacked 1-D row: the title above,
+    # the tick names plus the "1x = baseline" note below. The legend hangs under the canvas edge
+    # (legend_below's y=0 mode); without the axis band reserved it ran through the baseline note.
+    height = row_height_in + TITLE_BAND_IN + AXIS_BAND_IN
+    fig, axes = plt.subplots(
+        1, len(panels), sharey=True, figsize=(row_width_in, height),
+        gridspec_kw={"width_ratios": widths, "wspace": config.column_gap},
+    )  # fmt: skip
+    fig.subplots_adjust(
+        left=config.left_chrome_in / row_width_in, right=0.99, top=1.0 - TITLE_BAND_IN / height,
+        bottom=AXIS_BAND_IN / height,
+    )  # fmt: skip
+    axes = list(np.atleast_1d(axes))
+    held: list[float] = []
+    for index, (ax, panel) in enumerate(zip(axes, panels, strict=True)):
+        titled = dataclasses.replace(panel, title=f"{roman(index + 1)}) {panel.title}")
+        held += draw_panel(ax, titled, config)
+    style_shared_axis(axes, held, config)
+    handles = legend_handles(panels, config)
+    style.legend_below(
+        fig, handles, ncol=min(len(handles), config.legend_ncol), fontsize=config.legend_pt,
+        markerscale=config.legend_marker_scale,
+    )  # fmt: skip
+    stem = out.with_suffix("")
+    # The table is written BEFORE style.save, which is what creates the directory; a fresh
+    # ``figures/`` otherwise failed here with the figure never drawn.
+    stem.parent.mkdir(parents=True, exist_ok=True)
+    optimizer_table(panels).to_csv(stem.with_suffix(".csv"), index=False)
+    return style.save(fig, stem)
+
+
+def roman(number: int) -> str:
+    """The panel index as the paper's other figures spell it: i), ii), iii)."""
+    numerals = ((10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"))
+    out = ""
+    for value, glyph in numerals:
+        while number >= value:
+            out += glyph
+            number -= value
+    return out

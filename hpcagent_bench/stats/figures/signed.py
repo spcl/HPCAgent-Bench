@@ -452,6 +452,25 @@ def canon_kernel_row(
     )  # fmt: skip
 
 
+def distinct_canon_labels(rows: Sequence[Row]) -> list[Row]:
+    """``rows`` with every label that two of them SHARE replaced by the framework's own name.
+
+    A canon column is labelled by its optimizer, and the registry aliases both device variants of
+    one optimizer to one name on purpose (``dace_cpu_canonicalize`` and ``dace_gpu_canonicalize``
+    are both "Canonical Parallel Form"). A figure drawing both then shows two rows under one legend
+    entry with nothing to say which device is which. Only then does the label fall back to the
+    ``frameworks`` name, which carries the device; a figure drawing one variant keeps the optimizer
+    name it always had.
+    """
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row.label] = counts.get(row.label, 0) + 1
+    return [
+        dataclasses.replace(row, label=experiment_tags.framework_name(row.framework)) if counts[row.label] > 1 else row
+        for row in rows
+    ]
+
+
 def agent_kernel_row(
     frame: pd.DataFrame,
     arm: str,
@@ -521,7 +540,7 @@ def llr40_rows(
     llr-focus40 compiler figure's row source. ``observations=None`` draws the canon rows alone: the
     campaign DB is not always reachable, and a figure with only the deterministic columns is still
     a real, if partial, answer -- never a raised error."""
-    rows = [canon_kernel_row(canon_frame, column, roster, baseline) for column in canon_columns]
+    rows = distinct_canon_labels([canon_kernel_row(canon_frame, column, roster, baseline) for column in canon_columns])
     if observations is None:
         return rows
     candidates = kernel_comparison.candidate_arms(observations, pattern)
