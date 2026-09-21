@@ -1167,10 +1167,7 @@ def build_run_prompt(
 
 def build_prompt(
     task: Task,
-    template: str | None = None,
     *,
-    template_dir: str | None = None,
-    generator: str | None = None,
     oracle: str = "numpy",
     baseline: str = "auto",
     feedback: Feedback | None = None,
@@ -1183,16 +1180,14 @@ def build_prompt(
     (2) set ``prompt.*`` config knobs (a :class:`PromptConfig` field --
     ``template``, ``inline_kernel``, ``strategy``, ...); (3) set
     ``prompt.generator`` to a ``"module:function"`` that replaces prompt
-    generation entirely. Pass a ready ``prompt_config`` for full control, or let
-    the legacy ``template`` / ``template_dir`` / ``generator`` kwargs override the
-    matching config keys for this call (how the CLI passes ad-hoc overrides).
+    generation entirely. Pass a ready ``prompt_config`` for full control (the
+    CLI builds one via ``PromptConfig.variant`` for its ad-hoc overrides).
 
     A repair loop wants :func:`build_run_prompt` instead: it renders the body once and
     finishes it per attempt, instead of re-rendering for every round.
     """
     if prompt_config is None:
-        legacy: dict[str, PromptField] = {"template": template, "template_dir": template_dir, "generator": generator}
-        prompt_config = PromptConfig.from_config(**legacy)
+        prompt_config = PromptConfig.from_config()
     return build_run_prompt(task, oracle=oracle, baseline=baseline, prompt_config=prompt_config).attempt(feedback)
 
 
