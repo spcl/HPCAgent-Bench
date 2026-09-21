@@ -308,7 +308,7 @@ def read_observations(path: pathlib.Path) -> "pd.DataFrame":
         drop_foreign_kernel_rows,
         drop_pre_relaunch_rows,
         drop_cancelled_task_rows,
-        drop_superseded_arm_rows,
+        fold_clean_arms,
     ):
         frame = rule(frame)
     return frame
@@ -436,69 +436,21 @@ def fold_renamed_arms(frame: "pd.DataFrame") -> "pd.DataFrame":
     return frame.assign(arm=frame["arm"].astype(str).map(renamed_arm))
 
 
-#: What a launcher appends to re-run an arm from scratch (``CLEAN=1``). It names no condition: the
-#: identity columns are unchanged, and the clean tasks SUPERSEDE the ones before them.
+#: What a launcher appends to re-run an arm (``CLEAN=1``, and every owed rerun). It names no
+#: condition: the identity columns are unchanged.
 CLEAN_SUFFIX: str = "-clean"
 
-#: The identity a clean re-run supersedes within. Not ``arm`` -- the whole point is that the clean arm
-#: and the arm it replaces are two names for one condition -- and not ``rep``, since a designed repeat
-#: is a task of the same condition and is re-run with it.
-CLEAN_GROUP: tuple[str, ...] = ("experiment", "model", "language", "device", "packet", "harness")
 
-
-def clean_identity(frame: "pd.DataFrame") -> "pd.Series":
-    """One identity label per row for :func:`drop_superseded_arm_rows`.
-
-    THE RECORDED COLUMNS ARE NOT ENOUGH ON THEIR OWN. An extracted observations table carries
-    ``language``, ``packet`` and ``harness`` and no ``experiment``, ``model`` or ``device``, so a
-    group built from :data:`CLEAN_GROUP` alone puts every model's C control in one identity, and one
-    model's clean re-run then drops every other model's arm. That is what it did: six finished
-    GPT-OSS-120B arms took 18 arms with them, Qwen3.8-27B's and Kimi-K2.7-Code's included.
-
-    The arm NAME carries what the columns do not, so the label is the recorded columns plus the arm
-    with its ``-clean`` suffix removed. Two arms are then one identity exactly when they are the same
-    name re-run, which is what the suffix means. A name that differs by more than the suffix
-    supersedes nothing, and the failure direction is to keep both waves rather than to delete one.
-    """
-    columns = [column for column in CLEAN_GROUP if column in frame.columns]
-    # A missing cell reads as the empty string: a row with no arm or no recorded packet still needs
-    # one label, and pandas keeps NA through astype(str) and through the string accessors.
-    condition = frame["arm"].astype(str).fillna("").str.removesuffix(CLEAN_SUFFIX).fillna("")
-    labelled = frame.assign(clean_condition=condition)
-    return labelled[[*columns, "clean_condition"]].astype(str).fillna("").agg("\x1f".join, axis=1)
-
-
-def drop_superseded_arm_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
-    """``frame`` without the rows of arms a ``-clean`` re-run superseded (spec X9).
-
-    A clean arm re-runs one condition from an empty workspace after something about the earlier wave
-    was found wrong -- a leaked view, a broken relaunch, a job that requeued onto its own rows. It
-    carries the SAME identity, so without this rule the two waves pool and the defect the re-run
-    exists to escape is averaged back in. Within one identity group (:func:`clean_identity`), a task
-    row whose arm carries the suffix therefore drops every row of every arm in that group without it.
-    The frame changes, never the database (N1), and the count is warned about.
-    """
-    import warnings
-
-    if frame.empty or "arm" not in frame.columns or "record" not in frame.columns:
+def fold_clean_arms(frame: "pd.DataFrame") -> "pd.DataFrame":
+    """``frame`` with every ``-clean`` arm under the arm it re-ran (spec X9). Nothing is dropped:
+    the waves pool and the latest run per kernel (``population.latest_runs``) picks between them
+    (2026-09-18 user rule). Dropping every earlier row on any clean task row cost whole arms: an
+    owed rerun of 1-7 kernels erased the ~40 kernels of the wave it topped up."""
+    if frame.empty or "arm" not in frame.columns:
         return frame
-    groups = clean_identity(frame)
-    clean = frame["arm"].astype(str).str.endswith(CLEAN_SUFFIX)
-    superseding = set(groups[clean & (frame["record"] == "task")])
-    if not superseding:
-        return frame
-    dropped = groups.isin(superseding) & ~clean
-    count = int(dropped.sum())
-    if count:
-        arms = sorted(set(frame.loc[dropped, "arm"].astype(str)))
-        message = f"dropped {count} row(s) of {len(arms)} arm(s) superseded by a clean re-run (spec X9)"
-        warnings.warn(message, stacklevel=2)
-    kept = frame[~dropped]
-    # The suffix names a WAVE, not a condition, so it comes off once the wave it replaces is gone.
-    # Left on, it renames the arm for everything downstream: a pair list, an --arms regex and a
-    # figure's arm pattern all ask for the condition by name and would find nothing.
-    renamed = kept["arm"].astype(str).str.removesuffix(CLEAN_SUFFIX)
-    return kept.assign(arm=renamed.where(renamed.notna(), kept["arm"]))
+    arms = frame["arm"]
+    folded = arms.astype(str).str.removesuffix(CLEAN_SUFFIX)
+    return frame.assign(arm=folded.where(arms.notna(), arms))
 
 
 def main(argv: list[str] | None = None) -> int:
