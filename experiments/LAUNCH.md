@@ -15,8 +15,9 @@ export PYTHONPATH=$R:$R/hpcagent_bench/numpy_translators/src
 
 ## 0. Submitting an arm (what `.rendered/` and the sbatch call look like)
 
-Every `submit-<family>.sh` script (`submit-cpf-llr40.sh`, `submit-gpu-llr40.sh`, `submit-git-scicomp.sh`,
-... -- full list in [`AMD-SUBMISSION.md`](AMD-SUBMISSION.md)) ends on `submit_arm_job`
+Most `submit-<family>.sh` scripts (`submit-cpf-llr40.sh`, `submit-gpu-llr40.sh`, `submit-git-scicomp.sh`,
+... -- full list in [`AMD-SUBMISSION.md`](AMD-SUBMISSION.md)) end on `submit_arm_job`
+(`submit-harness-focus20.sh` and `submit-harness20-caveman.sh` call `sbatch` themselves)
 (`submit_common.sh`): it snapshots the arm's current render read-only to
 `.rendered/<arm>-<UTC time>-<hash>.env` (`env_layers.sh snapshot`) and submits that snapshot, never
 the arm's own `.env.<arm>` (which stays writable and could be re-staged while the job still queues):
@@ -32,15 +33,16 @@ family script needs no `-A`. Every family script shares the same `SUBMIT=0|1` ga
 
 ```bash
 cd $SCRATCH/hpcagent-bench/experiments
-./submit-cpf-llr40.sh SUBMIT=0        # dry run: "prepared <arm> (N nodes) -- not submitted" per arm
-./submit-cpf-llr40.sh SUBMIT=1        # -> submitted <arm> -> <jobid> (N nodes) env .rendered/<arm>-...env
+SUBMIT=0 ./submit-cpf-llr40.sh        # dry run: "prepared <arm> (N nodes) -- not submitted" per arm
+SUBMIT=1 ./submit-cpf-llr40.sh        # -> submitted <arm> -> <jobid> (N nodes) env .rendered/<arm>-...env
 ```
 
 Read the script's own header comment for its knobs (model/language/leg selection, `KERNELS_FILE=`
 for a narrowed rerun, `CLEAN=1` for a `-clean` re-run) -- they differ per family.
 
-To submit ONE existing `.env.<arm>` file directly, bypassing a family wrapper (and there you DO
-pass `-A a-g34 --partition=mi300`), see [`SUBMITTING.md`](../SUBMITTING.md#submitting). A **fused
+To submit ONE existing `.env.<arm>` file directly, bypassing a family wrapper, see
+[`SUBMITTING.md`](../SUBMITTING.md#submitting): source `scripts/cscs/account_env.sh` first (or name
+`-A a-g34` yourself), and keep `--partition=mi300 --no-requeue`. A **fused
 wave** -- one job serving many arms' owed kernels from a single inference server -- is section 1
 below.
 
@@ -139,7 +141,7 @@ which can drift under a multi-hour job.
 
 ```bash
 cd $SCRATCH/hpcagent-bench/experiments
-git worktree add --detach ../hpcagent-bench-wt/regrade-20260922 <sha>
+git worktree add --detach ../../hpcagent-bench-wt/regrade-20260922 <sha>
 ```
 
 Then every regrade job of that wave carries `--export=ALL,HPCAGENT_BENCH_REPO=<worktree>`:
@@ -261,7 +263,7 @@ sacct -j <jobid> -o jobid,jobname%30,state,exitcode,elapsed
 squeue -j <jobid> --steps --noheader --format='%i|%j|%T|%N'
 ```
 
-Slurm output: `${SCRATCH}/hpcagent-bench-runs/slurm/beverin-services-<jobid>.{out,err}`. Run
+Slurm output: `beverin-services-<jobid>.{out,err}` in the directory `sbatch` ran from (`experiments/` for the family scripts; only `run_campaign.sh` redirects it to `${SCRATCH}/hpcagent-bench-runs/slurm/`). Run
 directory: `<RUN_ROOT>/<jobid>` (`RUN_ROOT` from the arm's `.env`, default
 `$SCRATCH/hpcagent-bench-runs`) -- see
 [`README.md`](README.md#logs-and-generated-files) for what lives under it, and
