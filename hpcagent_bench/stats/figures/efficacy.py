@@ -1739,6 +1739,13 @@ MEASURES: tuple[str, ...] = ("speedup", "success", "cost")
 #: Each measure's default axis label.
 MEASURE_LABELS: dict[str, str] = {"speedup": "Speed-Up", "success": "Tasks Completed", "cost": ABSOLUTE_YLABEL}
 
+#: Each measure's row height as a fraction of ``row_height_in``. A count out of N needs no ladder of
+#: ratios, so the success row takes half a row.
+MEASURE_HEIGHT: dict[str, float] = {"success": 0.5}
+
+#: Headroom above N on the success row, as a fraction of N, so an interval ending at N stays visible.
+SUCCESS_HEADROOM: float = 0.05
+
 #: The speed-up row's label when failures enter at 1x instead of being left out.
 SERVED_SPEEDUP_LABEL: str = "Speed-Up (1x Fallback)"
 
@@ -2265,10 +2272,11 @@ def draw_measure_row(
 
 def success_ticks(kernels: int) -> list[int]:
     """The success row's labelled ticks, 0 to ``kernels`` in equal integer steps, so the top tick IS
-    the roster size: quarters when it divides by four, halves when by two."""
+    the roster size: halves when it divides by two. The row is half height (:data:`MEASURE_HEIGHT`),
+    and quarters overprint there."""
     if kernels <= 0:
         return []
-    parts = 4 if kernels % 4 == 0 else 2 if kernels % 2 == 0 else 1
+    parts = 2 if kernels % 2 == 0 else 1
     return [kernels * part // parts for part in range(parts + 1)]
 
 
@@ -2290,7 +2298,9 @@ def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: Figur
             style.point_mark(ax, x, value, row.colour, mark, filled, size=config.mark_size)
     kernels = max((point.served for row in rows for point in (row.control, row.treated)), default=0)
     ax.set_yticks(success_ticks(kernels))
-    ax.set_ylim(-1.0, kernels + 1.0)
+    # The dashed rule marks the ceiling N; the headroom above it keeps an interval ending at N in view.
+    ax.axhline(kernels, color=style.MUTED, linestyle="--", linewidth=0.6, zorder=1)
+    ax.set_ylim(-SUCCESS_HEADROOM * kernels, (1.0 + SUCCESS_HEADROOM) * kernels)
     ax.set_xlim(-0.6, max(len(rows) - 0.4, 0.6))
     ax.set_xticks(range(len(rows)))
     group_rules(ax, rows)
@@ -2675,7 +2685,10 @@ def figure_dot_row(
     # piece of chrome is added OUTSIDE it, so a taller legend or a longer label grows the canvas
     # instead of shrinking the panels -- two efficacy figures of one paper draw the same size box.
     # hspace is a fraction of the row height, so the gaps are sized against that
-    data_height = row_height_in * (len(measures) + config.row_gap * (len(measures) - 1))
+    heights = [MEASURE_HEIGHT.get(measure, 1.0) for measure in measures]
+    data_height = row_height_in * (sum(heights) + config.row_gap * (len(measures) - 1))
+    # hspace is a fraction of the MEAN axes height, so it is rescaled to keep the gaps row_gap rows.
+    hspace = config.row_gap * len(measures) / sum(heights)
     # EVERY band is fixed, so the canvas and the data box are both the same in every efficacy
     # figure: a longer label or a fuller key changes neither.
     height = data_height + title_band + category_band + config.legend_chrome_in + MEASURE_PAD_IN
@@ -2686,10 +2699,17 @@ def figure_dot_row(
     data_width = row_width_in - config.left_chrome_in
     axes_total = data_width / (1.0 + (n - 1) * config.column_gap / n)
     widths = [axes_total * ratio / sum(ratios) for ratio in ratios]
-    fig, axes = plt.subplots(
-        len(measures), n, figsize=(row_width_in, height), squeeze=False, sharex="col",
-        gridspec_kw={"width_ratios": ratios},
+    # Every gap is a spacer column of its own, so each can be widened to what its neighbour's tick
+    # labels need (:func:`fit_column_gaps`) without narrowing the gaps that need nothing.
+    spacer = config.column_gap * sum(ratios) / n
+    grid_widths = [width for ratio in ratios for width in (ratio, spacer)][:-1]
+    fig, cells = plt.subplots(
+        len(measures), len(grid_widths), figsize=(row_width_in, height), squeeze=False, sharex="col",
+        gridspec_kw={"width_ratios": grid_widths, "height_ratios": heights},
     )  # fmt: skip
+    for gap_ax in cells[:, 1::2].flat:
+        gap_ax.remove()
+    axes = cells[:, ::2]
     fig.set_dpi(style.SAVE_DPI)
     names = [column.title for column in columns]
     tagged = [f"{panel_tag(index, 'roman')} {title}" for index, title in enumerate(names)]
@@ -2715,15 +2735,20 @@ def figure_dot_row(
             if row_index == 0 and panel_labels != "none":
                 draw_panel_label(ax, col_index, column.title, panel_labels, name_config, "roman",
                                  folds[col_index], note_pad)  # fmt: skip
-    fit_panel_names(fig, list(axes[0]), tagged, names, spans, config, panel_labels, size)
     for ax, column in zip(axes[-1], columns, strict=True):
         draw_category_axis(ax, column.rows, config)
     handles = dot_row_legend(columns, channels, config)
     fig.subplots_adjust(
         left=config.left_chrome_in / row_width_in, right=0.995,
-        top=1.0 - (title_band + MEASURE_PAD_IN) / height, bottom=0.01, hspace=config.row_gap,
-        wspace=config.column_gap,
+        top=1.0 - (title_band + MEASURE_PAD_IN) / height, bottom=0.01, hspace=hspace, wspace=0.0,
     )  # fmt: skip
+    fit_column_gaps(fig, axes)
+    # The names are fitted to the columns as finally placed: a widened gap narrows every column.
+    boxes = [ax.get_position() for ax in axes[0]]
+    spans = [(nxt.x0 - box.x0) * row_width_in for box, nxt in itertools.pairwise(boxes)] + [
+        boxes[-1].width * row_width_in
+    ]
+    fit_panel_names(fig, list(axes[0]), tagged, names, spans, config, panel_labels, size)
     body = (axes[0][0].get_position().x0, axes[0][-1].get_position().x1)
     fit_legend(fig, handles, config, body)
     needed = max(required_left_margin(fig, ax) for ax in axes[:, 0])
@@ -2732,6 +2757,44 @@ def figure_dot_row(
     fig.subplots_adjust(bottom=(config.legend_chrome_in + category_band + MEASURE_PAD_IN) / height)
     stagger_crowded_ticks(fig, axes[-1], config)
     return style.save(fig, out.with_suffix(""), fixed=True)
+
+
+#: Clearance between an inner column's widest Y tick label and the panel to its left, in inches.
+TICK_LABEL_CLEARANCE_IN: float = 0.05
+
+
+def fit_column_gaps(fig: Figure, axes: np.ndarray) -> None:
+    """Widen each spacer column of :func:`figure_dot_row` until the Y tick labels of the panel to
+    its right clear the panel to its left. Each column has its own speed-up scale, so one wide
+    ladder ("0.00391x") would otherwise print over its neighbour."""
+    grid = axes[0][0].get_subplotspec().get_gridspec()
+    ratios = list(grid.get_width_ratios())
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    span = (axes[0][-1].get_position().x1 - axes[0][0].get_position().x0) * fig.get_figwidth()
+    inch = span / sum(ratios)
+    needs = [
+        max(
+            ratios[2 * col + 1] * inch,
+            max(
+                (
+                    (ax.get_window_extent(renderer).x0 - label.get_window_extent(renderer).x0) / fig.dpi
+                    for ax in axes[:, col + 1]
+                    for label in ax.get_yticklabels()
+                    if label.get_text()
+                ),
+                default=0.0,
+            )
+            + TICK_LABEL_CLEARANCE_IN,
+        )
+        for col in range(axes.shape[1] - 1)
+    ]
+    panels = sum(ratios[::2])
+    # Gaps of g_i inches out of a fixed span: the spacers' share G solves G = sum(g) (P + G) / span.
+    total = sum(needs) * panels / max(span - sum(needs), 1e-6)
+    ratios[1::2] = [need * (panels + total) / span for need in needs]
+    grid.set_width_ratios(ratios)
+    fig.subplots_adjust()
 
 
 def pairs_table(

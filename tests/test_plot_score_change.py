@@ -1568,22 +1568,25 @@ def test_a_difference_label_sits_above_both_intervals_not_on_the_treated_mark() 
 
 
 def test_the_success_row_counts_kernels_up_to_the_roster_and_carries_no_x_ticks() -> None:
-    """The top tick is N, the kernels served, and the axis stops one past it."""
+    """The top tick is N, the kernels served, marked by a dashed rule; the axis runs 5% past it so an
+    interval ending at N stays visible."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
     row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 2, 8), arm(1.0, 2.0, 8, 8))
     efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
     fig.canvas.draw()
-    assert list(ax.get_yticks()) == [0, 2, 4, 6, 8]
-    assert ax.get_ylim() == (-1.0, 9.0)
+    assert list(ax.get_yticks()) == [0, 4, 8]
+    assert ax.get_ylim() == pytest.approx((-0.4, 8.4))
+    (ceiling,) = [line for line in ax.lines if line.get_linestyle() == "--"]
+    assert list(ceiling.get_ydata()) == [8, 8]
     assert not ax.texts
     assert all(tick.tick1line.get_markersize() == 0.0 for tick in ax.xaxis.get_major_ticks())
     plt.close(fig)
 
 
 @pytest.mark.parametrize(("kernels", "want"), [
-    (40, [0, 10, 20, 30, 40]),
+    (40, [0, 20, 40]),
     (10, [0, 5, 10]),
     (7, [0, 7]),
     (0, []),
