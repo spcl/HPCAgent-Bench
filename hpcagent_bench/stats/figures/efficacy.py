@@ -246,7 +246,32 @@ PAIRED_COLUMNS: tuple[str, ...] = (
     "baseline_ns",
     "native_ns",
     "delivered",
+    "control_solved",
+    "treated_solved",
 )
+
+#: What a speed-up aggregate is taken over (2026-09-21). ``solved``: the kernels BOTH arms answered
+#: correctly -- a wrong answer is no speed-up at all, so it is counted by the success rate and not
+#: scored as the baseline, and both arms are timed on the same kernels, so solving only the easy
+#: ones buys no speed-up. ``served``: every kernel, a failure at 1x (the fallback reading: what a
+#: user who keeps the baseline on a wrong answer gets). Token cost is over every served kernel
+#: either way -- a failed episode still spent them.
+SPEEDUP_OVER: population.KernelPolicy = "solved"
+
+
+def speedup_mask(paired: pd.DataFrame, over: population.KernelPolicy = SPEEDUP_OVER) -> "np.ndarray":
+    """The rows of :func:`paired_kernels`' frame a speed-up aggregate is taken over."""
+    if over == "served":
+        return np.ones(len(paired), dtype=bool)
+    return (paired.control_solved.astype(bool) & paired.treated_solved.astype(bool)).to_numpy(dtype=bool)
+
+
+def solved_flags(answers: pd.DataFrame, kernels: pd.Index) -> "pd.Series | bool":
+    """Which of ``kernels`` ``answers`` holds a verified answer for; all of them for a frame read
+    under the ``solved`` policy, which carries no filler."""
+    if population.SOLVED_COLUMN not in answers:
+        return True
+    return answers.loc[kernels, population.SOLVED_COLUMN].astype(bool)
 
 
 def paired_kernels(
@@ -289,6 +314,8 @@ def paired_kernels(
             )
             if has_delivered
             else True,
+            "control_solved": solved_flags(control_answers, kernels),
+            "treated_solved": solved_flags(treated_answers, kernels),
         },
         index=kernels,
     )
@@ -329,7 +356,10 @@ class Series:
 
 
 def reduce_pair(
-    control: pd.DataFrame, treated: pd.DataFrame, repeats: population.RepeatPolicy = "latest"
+    control: pd.DataFrame,
+    treated: pd.DataFrame,
+    repeats: population.RepeatPolicy = "latest",
+    over: population.KernelPolicy = SPEEDUP_OVER,
 ) -> Series | None:
     """``(control, treated)`` as a :class:`Series`; ``None`` when they share no usable kernel or no
     kernel has a token total on both sides.
@@ -343,9 +373,10 @@ def reduce_pair(
     score_ratio = (paired.treated_speedup / paired.control_speedup).to_numpy(dtype=float)
     cost_ratio = (paired.treated_tokens / paired.control_tokens).to_numpy(dtype=float)
     priced = np.isfinite(cost_ratio) & (cost_ratio > 0.0)
-    if not priced.any():
+    timed = speedup_mask(paired, over)
+    if not priced.any() or not timed.any():
         return None
-    score, cost = summary.geomean_ci(score_ratio), summary.geomean_ci(cost_ratio[priced])
+    score, cost = summary.geomean_ci(score_ratio[timed]), summary.geomean_ci(cost_ratio[priced])
     cloud = pd.DataFrame(
         {"x": summary.log2_changes(score_ratio), "y": cost_ratio, "delivered": paired.delivered.to_numpy(dtype=bool)},
         index=paired.index,
@@ -358,7 +389,7 @@ def reduce_pair(
         y=cost.point,
         y_low=cost.low,
         y_high=cost.high,
-        kernels=len(paired),
+        kernels=int(timed.sum()),
         delivered=int(paired.delivered.sum()),
         baseline_ns=float(paired.baseline_ns.median()),
         native_ns=float(paired.native_ns.median()),
@@ -382,6 +413,9 @@ class ArmPoint:
     y_high: float
     kernels: int
     token_kernels: int
+    #: Kernels this arm answered correctly, of the ``served`` ones of its pair: the success rate.
+    solved: int = 0
+    served: int = 0
 
 
 def per_kernel_ci(values: "np.ndarray") -> tuple[float, float, float]:
@@ -397,26 +431,34 @@ def per_kernel_ci(values: "np.ndarray") -> tuple[float, float, float]:
     return spend.point, spend.low, spend.high
 
 
-def arm_point(speedup: "pd.Series", tokens: "pd.Series", priced: "np.ndarray", kernels: int) -> ArmPoint:
-    """One arm's geomean speed-up and PER-KERNEL token spend, each with its interval. ``priced`` selects
-    the kernels whose token total exists on BOTH sides, so the two arms of a pair are costed over
-    one population."""
-    speed = summary.geomean_ci(speedup.to_numpy(dtype=float))
+def arm_point(
+    speedup: "pd.Series", tokens: "pd.Series", priced: "np.ndarray", timed: "np.ndarray", solved: "pd.Series | bool"
+) -> ArmPoint:
+    """One arm's geomean speed-up over the ``timed`` kernels, its PER-KERNEL token spend over the
+    ``priced`` ones (a token total on BOTH sides, so the two arms of a pair are costed over one
+    population), and how many of the pair's kernels it solved."""
+    values = speedup.to_numpy(dtype=float)[timed]
+    speed = summary.geomean_ci(values) if values.size else None
     spend, spend_low, spend_high = per_kernel_ci(tokens.to_numpy(dtype=float)[priced])
     return ArmPoint(
-        x=summary.log2_change(speed.point),
-        x_low=summary.log2_change(speed.low),
-        x_high=summary.log2_change(speed.high),
+        x=summary.log2_change(speed.point) if speed else math.nan,
+        x_low=summary.log2_change(speed.low) if speed else math.nan,
+        x_high=summary.log2_change(speed.high) if speed else math.nan,
         y=spend,
         y_low=spend_low,
         y_high=spend_high,
-        kernels=kernels,
+        kernels=int(timed.sum()),
         token_kernels=int(priced.sum()),
+        solved=int(np.sum(solved)) if not isinstance(solved, bool) else (len(tokens) if solved else 0),
+        served=len(tokens),
     )
 
 
 def arm_points(
-    control: pd.DataFrame, treated: pd.DataFrame, repeats: population.RepeatPolicy = "latest"
+    control: pd.DataFrame,
+    treated: pd.DataFrame,
+    repeats: population.RepeatPolicy = "latest",
+    over: population.KernelPolicy = SPEEDUP_OVER,
 ) -> tuple[ArmPoint, ArmPoint] | None:
     """``(control, treated)`` as the two points an ABSOLUTE panel draws: where each arm sits against
     the CAMPAIGN BASELINE, not where one sits against the other.
@@ -435,10 +477,10 @@ def arm_points(
     priced = np.isfinite(control_tokens) & (control_tokens > 0.0) & np.isfinite(treated_tokens) & (treated_tokens > 0.0)
     if not priced.any():
         return None
-    kernels = len(paired)
+    timed = speedup_mask(paired, over)
     return (
-        arm_point(paired.control_speedup, paired.control_tokens, priced, kernels),
-        arm_point(paired.treated_speedup, paired.treated_tokens, priced, kernels),
+        arm_point(paired.control_speedup, paired.control_tokens, priced, timed, paired.control_solved),
+        arm_point(paired.treated_speedup, paired.treated_tokens, priced, timed, paired.treated_solved),
     )
 
 
@@ -1685,11 +1727,25 @@ def figure_row(
 
 
 #: The measures a dot-row figure stacks, top to bottom: what each arm REACHED over the campaign
-#: baseline, and what it SPENT reaching it. One row each, over one shared categorical X.
-MEASURES: tuple[str, ...] = ("speedup", "cost")
+#: baseline, how many of its kernels it got RIGHT, and what it SPENT. One row each, over one shared
+#: categorical X.
+MEASURES: tuple[str, ...] = ("speedup", "success", "cost")
 
 #: Each measure's default axis label.
-MEASURE_LABELS: dict[str, str] = {"speedup": "Speed-Up", "cost": ABSOLUTE_YLABEL}
+MEASURE_LABELS: dict[str, str] = {"speedup": "Speed-Up", "success": "Tasks Completed", "cost": ABSOLUTE_YLABEL}
+
+#: A row's height as a fraction of the configured row height: the success rate is a 0-100% scale
+#: with a count beside each mark, which half a row holds.
+MEASURE_HEIGHT: dict[str, float] = {"success": 0.5}
+
+#: The speed-up row's label when failures enter at 1x instead of being left out.
+SERVED_SPEEDUP_LABEL: str = "Speed-Up (1x Fallback)"
+
+
+def speedup_row_label(over: population.KernelPolicy) -> str:
+    """The speed-up row's Y label under ``over``."""
+    return SERVED_SPEEDUP_LABEL if over == "served" else MEASURE_LABELS["speedup"]
+
 
 #: A dot-row figure's rows are ABSOLUTE: an arm's own speed-up over the campaign baseline, and the
 #: whole roster's own token bill.
@@ -1724,7 +1780,10 @@ class ArmRow:
 
 
 def arm_rows(
-    frame: pd.DataFrame, repeats: population.RepeatPolicy = "latest", channels: str = "pair-packet"
+    frame: pd.DataFrame,
+    repeats: population.RepeatPolicy = "latest",
+    channels: str = "pair-packet",
+    over: population.KernelPolicy = SPEEDUP_OVER,
 ) -> list[ArmRow]:
     """Every (model, leg) of ``frame`` as a category, in the order the categorical axis draws them.
 
@@ -1733,7 +1792,7 @@ def arm_rows(
     """
     rows: list[ArmRow] = []
     for (model, leg), pair in frame.assign(leg=leg_labels(frame)).groupby(["model", "leg"]):
-        points = arm_points(pair[~pair.skills], pair[pair.skills], repeats)
+        points = arm_points(pair[~pair.skills], pair[pair.skills], repeats, over)
         if points is None:
             continue
         rows.append(
@@ -2024,6 +2083,9 @@ def measure_value(point: ArmPoint, measure: str) -> tuple[float, float, float]:
     token count as a count."""
     if measure == "cost":
         return point.y, point.y_low, point.y_high
+    if measure == "success":
+        rate = summary.success_ci(point.solved, point.served)
+        return rate.point, rate.low, rate.high
     return point.x, point.x_low, point.x_high
 
 
@@ -2072,6 +2134,9 @@ def draw_measure_row(
     (1x over the campaign baseline on the speed-up row).
     """
     cost = measure == "cost"
+    if measure == "success":
+        draw_success_row(ax, rows, shape, config, ylabel)
+        return
     span: list[float] = []
     for index, row in enumerate(rows):
         pair = (
@@ -2155,6 +2220,47 @@ def draw_measure_row(
     thin_rules(ax, config)
 
 
+#: Where the success row's counts start: just below the 0% tick, running down in a band of their own.
+SUCCESS_COUNT_Y: float = -0.08
+SUCCESS_COUNT_BOTTOM: float = -0.75
+
+
+def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: FigureConfig, ylabel: str) -> None:
+    """The success-rate row: each arm's solved share of its pair's kernels, 0-100%, with its Wilson
+    interval and the count it is ("37/40") under the axis, so a 100% of ten and a 100% of forty are
+    not read as the same evidence. Each count is set vertically under its own mark, which fits a
+    column of any width."""
+    for index, row in enumerate(rows):
+        for point, filled, dodge, mark in (
+            (row.control, False, -config.dodge, CONTROL_MARKER),
+            (row.treated, True, config.dodge, shape),
+        ):
+            if point.served == 0:
+                continue
+            value, low, high = measure_value(point, "success")
+            x = index + dodge
+            ax.vlines(
+                x, low, high, color=row.colour, linewidth=config.interval_width, alpha=0.75, zorder=style.CONNECTOR_Z
+            )
+            style.point_mark(ax, x, value, row.colour, mark, filled, size=config.mark_size)
+            ax.annotate(
+                f"{point.solved}/{point.served}", (x, SUCCESS_COUNT_Y), ha="center", va="top", rotation=90.0,
+                fontsize=config.point_pt * 0.75, color=style.FAINT, zorder=style.MARK_Z + 1.0,
+            )  # fmt: skip
+    ax.set_ylim(SUCCESS_COUNT_BOTTOM, 1.08)
+    ax.set_yticks([0.0, 0.5, 1.0])
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda value, position: f"{value:.0%}"))
+    ax.set_xlim(-0.6, max(len(rows) - 0.4, 0.6))
+    ax.set_xticks(range(len(rows)))
+    group_rules(ax, rows)
+    if ylabel:
+        ax.set_ylabel(wrapped_label(ylabel, fold_width(ylabel, label_wrap(config), config.max_name_lines)),
+                      fontsize=config.label_pt)  # fmt: skip
+    ax.tick_params(axis="both", labelsize=config.tick_pt)
+    style.despine(ax)
+    thin_rules(ax, config)
+
+
 def widen_y_axis_linear(ax: Axes, config: FigureConfig) -> None:
     """:func:`widen_x_axis`' floor, on a LINEAR log2 Y (the speed-up row of a dot-row figure)."""
     low, high = ax.get_ylim()
@@ -2209,6 +2315,7 @@ def figure_arm_dots(
     panel_labels: str = "outside",
     reference_name: str = "",
     differences: str = "",
+    over: population.KernelPolicy = SPEEDUP_OVER,
 ) -> pathlib.Path:
     """The ABSOLUTE reading as stacked 1-D rows: one panel per measure, one column per (LLM,
     delivery), two marks per column.
@@ -2223,7 +2330,7 @@ def figure_arm_dots(
     """
     import matplotlib.pyplot as plt
 
-    rows = arm_rows(frame, repeats, channels)
+    rows = arm_rows(frame, repeats, channels, over)
     if not rows:
         raise ValueError("no (model, leg) pair draws a point")
     texts = {**MEASURE_LABELS, **(labels or {})}
@@ -2239,8 +2346,12 @@ def figure_arm_dots(
     note_pad = config.point_pt * 1.7
     band = text_band(config.subtitle_pt) + note_pad / 72.0 if panel_labels in ("subtitle", "outside") else 0.12
     category_band = text_band(config.tick_pt, 2) + text_band(config.label_pt)
-    height = row_height_in * len(measures) + category_band + band * len(measures)
-    fig, axes = plt.subplots(len(measures), 1, figsize=(width_in, height), squeeze=False, sharex=True)
+    heights = [MEASURE_HEIGHT.get(measure, 1.0) for measure in measures]
+    height = row_height_in * sum(heights) + category_band + band * len(measures)
+    fig, axes = plt.subplots(
+        len(measures), 1, figsize=(width_in, height), squeeze=False, sharex=True,
+        gridspec_kw={"height_ratios": heights},
+    )  # fmt: skip
     fig.set_dpi(style.SAVE_DPI)  # measure the legend and the labels at the dpi save() writes
     for index, (ax, measure) in enumerate(zip(axes[:, 0], measures, strict=True)):
         name = draw_panel_label(ax, index, texts.get(measure, measure), panel_labels, config, "letter", 0, note_pad)
@@ -2309,13 +2420,18 @@ def dot_columns(
     control_names: Sequence[str] = (),
     differences: Sequence[str] = (),
     placeholders: Sequence[str] = (),
+    over: population.KernelPolicy = SPEEDUP_OVER,
 ) -> list[DotColumn]:
     """Each panel of a joined row reduced to its own :class:`DotColumn`."""
     columns: list[DotColumn] = []
     for index, (title, treatment, stats, frame) in enumerate(panels):
         key = treatment if isinstance(treatment, str) else (flat_treatments(treatment) or [""])[0]
         table = stats if isinstance(stats, pd.DataFrame) else pd.concat(stats.values(), ignore_index=True)
-        rows = arm_rows(frame, repeats[index], channels) if isinstance(frame, pd.DataFrame) and not frame.empty else []
+        rows = (
+            arm_rows(frame, repeats[index], channels, over)
+            if isinstance(frame, pd.DataFrame) and not frame.empty
+            else []
+        )
         empty = [leg.strip() for leg in str(placeholders[index] if index < len(placeholders) else "").split(",")]
         rows = placeholder_rows(rows, [leg for leg in empty if leg], channels)
         columns.append(
@@ -2462,6 +2578,7 @@ def figure_dot_row(
     differences: Sequence[str] = (),
     placeholders: Sequence[str] = (),
     panel_labels: str = "subtitle",
+    over: population.KernelPolicy = SPEEDUP_OVER,
 ) -> pathlib.Path:
     """N comparisons as a GRID of stacked 1-D panels: one column per comparison, one ROW per
     measure, every column sharing the row's Y scale and every row sharing the column's categories.
@@ -2476,17 +2593,20 @@ def figure_dot_row(
 
     n = len(panels)
     columns = dot_columns(
-        panels, resolve_row_repeats(repeats, n), channels, references, control_names, differences, placeholders
+        panels, resolve_row_repeats(repeats, n), channels, references, control_names, differences, placeholders, over
     )  # fmt: skip
-    texts = {**MEASURE_LABELS, **(labels or {})}
+    texts = {**MEASURE_LABELS, "speedup": speedup_row_label(over), **(labels or {})}
     rows_config = measure_row_config(config, row_height_in)
+    heights = [MEASURE_HEIGHT.get(measure, 1.0) for measure in measures]
     note_pad = MEASURE_PAD_IN * 72.0
     title_band = text_band(config.subtitle_pt, 2) if panel_labels != "none" else ROW_TITLE_IN
     category_band = text_band(config.tick_pt, 2)
     # The DATA box is the fixed quantity: rows of a stated height plus the gaps between them. Every
     # piece of chrome is added OUTSIDE it, so a taller legend or a longer label grows the canvas
     # instead of shrinking the panels -- two efficacy figures of one paper draw the same size box.
-    data_height = row_height_in * len(measures) * (1.0 + config.row_gap) - row_height_in * config.row_gap
+    # hspace is a fraction of the MEAN row height, so the gaps are sized against that
+    mean_row = row_height_in * sum(heights) / len(heights)
+    data_height = row_height_in * sum(heights) + mean_row * config.row_gap * (len(measures) - 1)
     # EVERY band is fixed, so the canvas and the data box are both the same in every efficacy
     # figure: a longer label or a fuller key changes neither.
     height = data_height + title_band + category_band + config.legend_chrome_in + MEASURE_PAD_IN
@@ -2499,7 +2619,7 @@ def figure_dot_row(
     widths = [axes_total * ratio / sum(ratios) for ratio in ratios]
     fig, axes = plt.subplots(
         len(measures), n, figsize=(row_width_in, height), squeeze=False, sharex="col",
-        gridspec_kw={"width_ratios": ratios},
+        gridspec_kw={"width_ratios": ratios, "height_ratios": heights},
     )  # fmt: skip
     fig.set_dpi(style.SAVE_DPI)
     names = [column.title for column in columns]
@@ -2543,7 +2663,9 @@ def figure_dot_row(
     return style.save(fig, out.with_suffix(""), fixed=True)
 
 
-def pairs_table(frame: pd.DataFrame, repeats: population.RepeatPolicy = "latest") -> pd.DataFrame:
+def pairs_table(
+    frame: pd.DataFrame, repeats: population.RepeatPolicy = "latest", over: population.KernelPolicy = SPEEDUP_OVER
+) -> pd.DataFrame:
     """One row per (model, leg): the drawn point behind :func:`draw_panel`'s mark, as the CSV record
     beside the figure (SC15 Rule 4: the costs a ratio was taken over travel with it).
 
@@ -2552,8 +2674,9 @@ def pairs_table(frame: pd.DataFrame, repeats: population.RepeatPolicy = "latest"
         return pd.DataFrame()
     rows = []
     for (model, leg), pair in frame.assign(leg=leg_labels(frame)).groupby(["model", "leg"]):
-        series = reduce_pair(pair[~pair.skills], pair[pair.skills], repeats)
-        if series is None:
+        series = reduce_pair(pair[~pair.skills], pair[pair.skills], repeats, over)
+        arms = arm_points(pair[~pair.skills], pair[pair.skills], repeats, over)
+        if series is None or arms is None:
             continue
         rows.append(
             {
@@ -2572,6 +2695,10 @@ def pairs_table(frame: pd.DataFrame, repeats: population.RepeatPolicy = "latest"
                 "native_ns": series.native_ns,
                 "control_tokens": series.control_tokens,
                 "treated_tokens": series.treated_tokens,
+                "speedup_over": over,
+                "served": arms[0].served,
+                "control_solved": arms[0].solved,
+                "treated_solved": arms[1].solved,
             }
         )
     table = pd.DataFrame(rows)

@@ -25,7 +25,7 @@ from PIL import Image
 
 from hpcagent_bench import experiment_tags, packets
 from hpcagent_bench.harness import efficacy
-from hpcagent_bench.stats import palette, score_rule
+from hpcagent_bench.stats import palette, score_rule, summary
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
 
@@ -801,7 +801,7 @@ def test_an_undelivered_kernel_still_counts_but_its_cross_only_draws_behind_show
     control = pd.DataFrame(control_rows_list)
     treated = pd.DataFrame(treated_rows_list)
 
-    series = efficacy_figures.reduce_pair(control, treated)
+    series = efficacy_figures.reduce_pair(control, treated, over="served")
 
     assert series is not None
     assert series.delivered < series.kernels
@@ -876,6 +876,7 @@ def family_csv(pairs: list[tuple[str, str]], score_verdict: str, cost_verdict: s
             {
                 "family": "demo",
                 "score_rule": score_rule.SCORE_RULE,
+                "kernel_policy": efficacy_figures.SPEEDUP_OVER,
                 "arm_a": treated,
                 "arm_b": control,
                 "leg": leg,
@@ -1404,6 +1405,7 @@ def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_aske
                 "family": "f",
                 "cost_model": "effective",
                 "score_rule": score_rule.SCORE_RULE,
+                "kernel_policy": efficacy_figures.SPEEDUP_OVER,
                 "arm_a": "git-repo",
                 "arm_b": "git-kernel",
                 "leg": leg,
@@ -1431,6 +1433,7 @@ def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_aske
 
     monkeypatch.setattr(efficacy_figures, "draw_series", spy)
     args = argparse.Namespace(
+        speedup_over=efficacy_figures.SPEEDUP_OVER,
         pairs_csv=pairs_csv,
         observations=[observations_csv],
         intervention="repo",
@@ -1449,3 +1452,56 @@ def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_aske
     )
     plot.figure_from_pairs(args, efficacy_figures.DEFAULT_CONFIG)
     assert drawn == pytest.approx([by_policy["median"]]), (drawn, by_policy)
+
+
+def solved_and_failed_pair() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Five kernels: the control answers k0-k3 at 2x and gets k4 wrong; the treated arm answers all
+    five, k0-k3 at 4x and k4 at 8x."""
+    control = [row for row in observation_rows(BLIND_PAIR[1], 2.0, 100.0, kernels=5)
+               if not (row["benchmark"] == "k4" and row["record"] == "submission")]  # fmt: skip
+    treated = observation_rows(BLIND_PAIR[0], 4.0, 150.0, kernels=5)
+    treated = [{**row, "speedup": 8.0, "native_ns": 125.0} if row["benchmark"] == "k4" and row["record"] == "submission"
+               else row for row in treated]  # fmt: skip
+    tagged = plot.pair_frame(pd.DataFrame(control + treated), [BLIND_PAIR], "no-score")
+    return tagged[~tagged.skills], tagged[tagged.skills]
+
+
+def test_by_default_a_wrong_answer_is_no_speedup_and_counts_against_the_success_rate() -> None:
+    """2026-09-21: the speed-up of both arms is over the kernels BOTH solved, so the control's wrong
+    k4 is not scored as its baseline and the treated arm's k4 win does not lift it either; the
+    failure is the success rate's to show."""
+    points = efficacy_figures.arm_points(*solved_and_failed_pair())
+    assert points is not None
+    control, treated = points
+    assert 2.0**control.x == pytest.approx(2.0) and 2.0**treated.x == pytest.approx(4.0)
+    assert control.kernels == treated.kernels == 4
+    assert (control.solved, control.served, treated.solved, treated.served) == (4, 5, 5, 5)
+    assert efficacy_figures.measure_value(control, "success")[0] == pytest.approx(0.8)
+
+
+def test_the_fallback_reading_scores_the_wrong_answer_at_one() -> None:
+    """``served`` keeps the old reading: every kernel, a failure at 1x."""
+    points = efficacy_figures.arm_points(*solved_and_failed_pair(), over="served")
+    assert points is not None
+    control, treated = points
+    assert 2.0**control.x == pytest.approx(2.0 ** (4.0 / 5.0))
+    assert 2.0**treated.x == pytest.approx((4.0**4 * 8.0) ** (1.0 / 5.0))
+    assert control.kernels == 5
+
+
+def test_the_success_interval_stays_inside_zero_and_one_and_is_not_zero_width_at_ten_of_ten() -> None:
+    full = summary.success_ci(10, 10)
+    assert full.point == 1.0 and full.high == 1.0 and 0.6 < full.low < 0.8
+    assert summary.success_ci(0, 10).low == 0.0
+    assert math.isnan(summary.success_ci(0, 0).point)
+
+
+def test_the_dot_row_stacks_a_half_height_success_row_between_speedup_and_cost(tmp_path: pathlib.Path) -> None:
+    """Speed-up, then the success rate at half a row, then cost."""
+    assert efficacy_figures.MEASURES == ("speedup", "success", "cost")
+    assert efficacy_figures.MEASURE_HEIGHT["success"] == 0.5
+    control, treated = solved_and_failed_pair()
+    frame = pd.concat([control, treated])
+    stats = plot.points(control, treated)
+    efficacy_figures.figure_dot_row([("Blind", "no-score", stats, frame)], tmp_path / "dots.pdf")
+    assert (tmp_path / "dots.pdf").exists()

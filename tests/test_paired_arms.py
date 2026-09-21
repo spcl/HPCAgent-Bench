@@ -326,15 +326,22 @@ def test_a_pair_reports_what_the_intersection_dropped(paired_arms: ModuleType, t
     obs = paired_arms.load_observations([path])
     graded_rows = paired_arms.graded_rows(obs, ["a", "b"])
     best = paired_arms.best_by_arm_kernel(graded_rows)
-    table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
+    table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba", "served")
     reported = paired_arms.pair_rows([("a", "b")], table, paired_arms.tokens_by_arm_kernel(obs), list(KERNELS), "f")
 
     speed = next(row for row in reported if row["leg"] == "speedup")
-    # population: both arms were served all eight, so the leg is paired over eight
+    # population: both arms were served all eight, so the fallback leg is paired over eight
     assert (speed["n_a"], speed["n_b"], speed["n_pairs"]) == (8, 8, 8)
     # delivery: b answered two that a did not, and the coverage columns still say so
     assert (speed["n_both"], speed["n_only_a"], speed["n_only_b"]) == (6, 0, 2)
     assert speed["coverage_p"] == pytest.approx(population.mcnemar_exact(0, 2))
+
+    solved = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
+    by_default = paired_arms.pair_rows([("a", "b")], solved, paired_arms.tokens_by_arm_kernel(obs), list(KERNELS), "f")
+    speed = next(row for row in by_default if row["leg"] == "speedup")
+    # the default leg is over what BOTH solved; the two b alone answered move coverage, not speed-up
+    assert (speed["n_a"], speed["n_b"], speed["n_pairs"]) == (6, 8, 6)
+    assert (speed["n_both"], speed["n_only_a"], speed["n_only_b"]) == (6, 0, 2)
 
 
 def test_a_leg_below_the_interval_floor_reports_underpowered(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
@@ -692,10 +699,29 @@ def test_a_kernel_the_arm_never_delivered_scores_one_and_still_costs_its_tokens(
     rows.append(task("a", "k5", 100.0))
     obs = paired_arms.load_observations([observations(rows, tmp_path)])
     best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a"]))
-    aggregate = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")["a"]
+    aggregate = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba", "served")["a"]
     assert aggregate.policy == "served"
     assert (aggregate.n, aggregate.n_solved) == (5, 4)
     assert aggregate.geomean() == pytest.approx(4.0 ** (4.0 / 5.0))
+    assert paired_arms.tokens_by_arm_kernel(obs)[("a", "k5")] == pytest.approx(100.0)
+
+
+def test_by_default_a_wrong_answer_is_left_out_of_the_speedup_and_still_costs_its_tokens(
+    paired_arms: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """A wrong answer is no speed-up (2026-09-21): the default leg is over the solved kernels only,
+    the failure shows as coverage, and its tokens are still spent."""
+    rows: list[dict[str, object]] = []
+    for kernel in KERNELS[:4]:
+        rows += episode("a", kernel, 4.0, 100.0)
+    rows.append(call("a", "k5", 100.0))
+    rows.append(task("a", "k5", 100.0))
+    obs = paired_arms.load_observations([observations(rows, tmp_path)])
+    best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a"]))
+    aggregate = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")["a"]
+    assert aggregate.policy == "solved"
+    assert (aggregate.n, aggregate.n_solved) == (4, 4)
+    assert aggregate.geomean() == pytest.approx(4.0)
     assert paired_arms.tokens_by_arm_kernel(obs)[("a", "k5")] == pytest.approx(100.0)
 
 
