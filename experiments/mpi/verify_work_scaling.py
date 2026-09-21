@@ -35,8 +35,10 @@ import pathlib
 import re
 import sys
 
-#: Rank counts to weak-size to, per work_exponent. ``weak()`` demands a perfect k-th power, so the
-#: same ladder cannot serve every k -- 4 is a square but not a cube.
+#: Rank counts to weak-size to, per work_exponent. ``weak()`` accepts any rank count (it rounds
+#: per axis symbol), but a CLEAN k-th power keeps this check's growth factor exact -- no rounding
+#: noise mixed into the measured exponent -- so the ladder still picks one per k; 4 is a clean
+#: square but not a clean cube.
 #:
 #: R IS THE MEMORY MULTIPLIER. The axis grows by ``R**(1/k)`` and the arrays carry that symbol on
 #: k axes, so the allocation grows by ``factor**k == R`` exactly; no sizing trick avoids it, and
