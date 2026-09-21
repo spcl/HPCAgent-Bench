@@ -816,7 +816,11 @@ The role steps use `--exclusive`. The inference and judge steps also use
 `--kill-on-bad-exit=1`, so a service failure fails its Slurm step rather than
 leaving a partial role silently running. The agent step uses
 `--kill-on-bad-exit=0`: one agent node's exit status does not end the agents
-on the other nodes. Cancel the full allocation with:
+on the other nodes. A service step's death while agents are still running does
+not just run out the clock -- see [`LAUNCH.md` section
+7](LAUNCH.md#7-what-happens-when-a-service-step-dies-mid-run) for the TERM ->
+`cancelled` marker -> bounded stop -> extraction sequence. Cancel the full
+allocation with:
 
 ```bash
 scancel <job-id>
@@ -917,6 +921,9 @@ one Slurm job per column (or every column packed into one job with `ONE_JOB=1`),
 ```sh
 ./submit-canon-llr40.sh   # BEGIN=saturday|DEPEND_ON=<jid:jid>|SUBMIT=0 as env overrides
 ```
+
+For a narrow, ad-hoc rerun of one column over a short kernel list (a fix under test, not a full
+sweep), see [`LAUNCH.md` section 5](LAUNCH.md#5-rerun-a-canon-column-for-a-list-of-kernels).
 
 ### Where a sweep's files live
 

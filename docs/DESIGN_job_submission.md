@@ -1,7 +1,9 @@
 # DESIGN: job submission -- one allocation, three shapes
 
 High-level summary of how a run reaches a cluster. Three submission shapes exist because three
-things are being distributed, not because three scripts drifted apart.
+things are being distributed, not because three scripts drifted apart. For runnable examples
+against these shapes on Beverin (submit, resubmit owed work, regrade, rerun a canon column,
+inspect a running job), see [`experiments/LAUNCH.md`](../experiments/LAUNCH.md).
 
 | shape | what is distributed | ranks talk? | script |
 |---|---|---|---|
