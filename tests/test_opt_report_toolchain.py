@@ -60,7 +60,7 @@ def captured_build(monkeypatch: pytest.MonkeyPatch, *, report: bool) -> list[lis
     monkeypatch.delenv(languages.OFFLOAD_MODEL_ENV, raising=False)
     seen: list[list[str]] = []
 
-    def record(cmds: list[list[str]], cwd: pathlib.Path) -> tuple[bool, str]:
+    def record(cmds: list[list[str]], cwd: pathlib.Path, seal_plan: object = None) -> tuple[bool, str]:
         seen.extend(cmds)
         return True, "captured"
 
