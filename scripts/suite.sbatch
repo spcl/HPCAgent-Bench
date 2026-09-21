@@ -12,6 +12,7 @@
 #SBATCH --mem=0
 #SBATCH --time=05:00:00
 #SBATCH --output=%x-%j.out
+#SBATCH --no-requeue
 set -Eeuo pipefail
 ulimit -c 0
 

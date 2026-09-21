@@ -48,6 +48,7 @@
 #SBATCH --exclusive
 #SBATCH --time=04:00:00
 #SBATCH --output=results/llr-baseline-sizes-%j.out
+#SBATCH --no-requeue
 
 set -euo pipefail
 

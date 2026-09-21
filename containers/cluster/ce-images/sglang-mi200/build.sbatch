@@ -18,6 +18,7 @@
 #SBATCH --time=04:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err
+#SBATCH --no-requeue
 
 set -Eeuxo pipefail
 ulimit -c 0

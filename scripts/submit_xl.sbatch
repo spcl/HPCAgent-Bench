@@ -47,6 +47,7 @@
 #SBATCH --exclusive
 #SBATCH --time=12:00:00
 #SBATCH --output=results/xl-%j.out
+#SBATCH --no-requeue
 
 set -euo pipefail
 

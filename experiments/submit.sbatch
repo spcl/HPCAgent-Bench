@@ -6,6 +6,7 @@
 #SBATCH --time=08:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err
+#SBATCH --no-requeue
 
 # Portable entry point: the same three-role layout as beverin.sbatch, with the
 # container runtime as a knob instead of a CSCS assumption. Site specifics

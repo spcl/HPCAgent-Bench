@@ -40,6 +40,7 @@
 #SBATCH --time=01:00:00
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.out
+#SBATCH --no-requeue
 
 set -Eeuo pipefail
 
