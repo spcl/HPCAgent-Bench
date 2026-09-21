@@ -2238,15 +2238,18 @@ def draw_measure_row(
     thin_rules(ax, config)
 
 
-#: The success row's Y limits: 0-100% plus room for a mark drawn on either end.
-SUCCESS_LIMITS: tuple[float, float] = (-0.08, 1.08)
-#: Its labelled ticks, one grid line each.
-SUCCESS_TICKS: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0)
+def success_ticks(kernels: int) -> list[int]:
+    """The success row's labelled ticks, 0 to ``kernels`` in equal integer steps, so the top tick IS
+    the roster size: quarters when it divides by four, halves when by two."""
+    if kernels <= 0:
+        return []
+    parts = 4 if kernels % 4 == 0 else 2 if kernels % 2 == 0 else 1
+    return [kernels * part // parts for part in range(parts + 1)]
 
 
 def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: FigureConfig, ylabel: str) -> None:
-    """The success-rate row: each arm's solved share of its pair's kernels, 0-100%, with its Wilson
-    interval, which is what tells a 100% of ten from a 100% of forty."""
+    """The success row: how many of its pair's kernels each arm solved, on an axis running 0 to N
+    (the kernels served), with the Wilson interval scaled to counts."""
     for index, row in enumerate(rows):
         for point, filled, dodge, mark in (
             (row.control, False, -config.dodge, CONTROL_MARKER),
@@ -2254,15 +2257,15 @@ def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: Figur
         ):
             if point.served == 0:
                 continue
-            value, low, high = measure_value(point, "success")
+            value, low, high = (point.served * rate for rate in measure_value(point, "success"))
             x = index + dodge
             ax.vlines(
                 x, low, high, color=row.colour, linewidth=config.interval_width, alpha=0.75, zorder=style.CONNECTOR_Z
             )
             style.point_mark(ax, x, value, row.colour, mark, filled, size=config.mark_size)
-    ax.set_ylim(*SUCCESS_LIMITS)
-    ax.set_yticks(SUCCESS_TICKS)
-    ax.yaxis.set_major_formatter(FuncFormatter(lambda value, position: f"{value:.0%}"))
+    kernels = max((point.served for row in rows for point in (row.control, row.treated)), default=0)
+    ax.set_yticks(success_ticks(kernels))
+    ax.set_ylim(-1.0, kernels + 1.0)
     ax.set_xlim(-0.6, max(len(rows) - 0.4, 0.6))
     ax.set_xticks(range(len(rows)))
     group_rules(ax, rows)

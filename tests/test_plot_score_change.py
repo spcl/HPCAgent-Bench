@@ -1564,19 +1564,29 @@ def test_a_difference_label_sits_above_both_intervals_not_on_the_treated_mark() 
     plt.close(fig)
 
 
-def test_the_success_row_labels_every_quarter_and_carries_no_counts_or_x_ticks() -> None:
-    """A solved/served count under each mark read as a second X axis; the Wilson interval already
-    says how many tasks a rate is over."""
+def test_the_success_row_counts_kernels_up_to_the_roster_and_carries_no_x_ticks() -> None:
+    """The top tick is N, the kernels served, and the axis stops one past it."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
-    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 2, 5), arm(1.0, 2.0, 5, 5))
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 2, 8), arm(1.0, 2.0, 8, 8))
     efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
     fig.canvas.draw()
-    assert [label.get_text() for label in ax.get_yticklabels()] == ["0%", "25%", "50%", "75%", "100%"]
+    assert list(ax.get_yticks()) == [0, 2, 4, 6, 8]
+    assert ax.get_ylim() == (-1.0, 9.0)
     assert not ax.texts
     assert all(tick.tick1line.get_markersize() == 0.0 for tick in ax.xaxis.get_major_ticks())
     plt.close(fig)
+
+
+@pytest.mark.parametrize(("kernels", "want"), [
+    (40, [0, 10, 20, 30, 40]),
+    (10, [0, 5, 10]),
+    (7, [0, 7]),
+    (0, []),
+])  # fmt: skip
+def test_success_ticks_end_on_the_roster_size(kernels: int, want: list[int]) -> None:
+    assert efficacy_figures.success_ticks(kernels) == want
 
 
 def test_a_short_cost_row_labels_one_two_and_five_of_every_decade() -> None:
