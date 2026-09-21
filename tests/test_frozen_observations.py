@@ -273,10 +273,11 @@ def test_rerun_setups_reads_every_setup_not_yet_done_under_its_identity(
 
 
 def test_the_tracked_rerun_list_names_every_lost_setup_pending(board: types.ModuleType) -> None:
-    """experiments/rerun-lost.tsv is the tracked record (2026-09-19): 19 setups, none rerun yet."""
+    """experiments/rerun-lost.tsv is the tracked record (2026-09-19): 19 setups, none rerun yet; four
+    host-resident GPU triton/c-openmp setups left it on 2026-09-21 with their arms' retirement."""
     with board.RERUN_LOST.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader((line for line in handle if not line.startswith("#")), delimiter="\t"))
-    assert len(rows) == 19
+    assert len(rows) == 15
     assert {row["status"] for row in rows} <= {"pending", "rerun-submitted", "done"}
     assert all(row["deleted_jobs"] and row["reason"] for row in rows)
 
