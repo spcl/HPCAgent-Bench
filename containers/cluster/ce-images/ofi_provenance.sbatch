@@ -19,6 +19,7 @@
 #SBATCH --time=00:15:00
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err
+#SBATCH --no-requeue
 
 set -Eeuo pipefail
 SCRATCH="${SCRATCH:?set SCRATCH}"

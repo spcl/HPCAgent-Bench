@@ -53,6 +53,7 @@
 #SBATCH --ntasks-per-node=4
 #SBATCH --time=02:00:00
 #SBATCH --output=results/mpi-scaling-%j.out
+#SBATCH --no-requeue
 
 set -euo pipefail
 

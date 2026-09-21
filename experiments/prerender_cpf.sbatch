@@ -7,6 +7,8 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
 #SBATCH --time=11:00:00
+# NODE_FAIL auto-requeue reruns this job id into the same RUN_DIR and stacks rows (637040).
+#SBATCH --no-requeue
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.out
 #

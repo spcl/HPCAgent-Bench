@@ -33,6 +33,7 @@
 #SBATCH --gpus-per-node=4         # a GH200 node
 #SBATCH --time=02:00:00
 #SBATCH --output=results/launch-%j.out
+#SBATCH --no-requeue
 
 set -euo pipefail
 

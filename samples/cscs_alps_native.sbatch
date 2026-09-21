@@ -57,6 +57,7 @@
 #SBATCH --exclusive                 # whole nodes: the ranks split them, no foreign co-runners
 #SBATCH --time=12:00:00
 #SBATCH --output=results/alps-native-%j.out
+#SBATCH --no-requeue
 
 set -euo pipefail
 
