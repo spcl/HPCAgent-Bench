@@ -152,8 +152,12 @@ def summary_value_text(value: float) -> str:
 
 
 def speedup_value_text(value: float) -> str:
-    """A speed-up summary's printed value: ``6.27x``, ``0.914x``."""
-    return f"{value:.3g}x"
+    """A speed-up summary's printed value, one decimal: ``6.3x``, ``32.5x``, ``0.9x``.
+
+    Below 0.1x one decimal would print ``0.0x`` for a real, measured slowdown, so those keep one
+    significant figure instead (``0.04x``).
+    """
+    return f"{value:.1f}x" if value >= 0.1 else f"{value:.1g}x"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -455,6 +459,25 @@ def mark_size(pitch_in: float, n_series: int) -> float:
     return max(MIN_MARK_PT, min(MARK_PT, MARK_GAP_RATIO * gap_pt)) ** 2
 
 
+def draw_summary_values(
+    ax: matplotlib.axes.Axes, x: float, labels: Sequence[tuple[float, float, str]], value_text: Callable[[float], str]
+) -> None:
+    """Print each summary value beside its mark, tagged so :func:`~hpcagent_bench.stats.style.save`
+    spreads any that would overprint.
+
+    ``labels`` holds (plotted y, natural-units value, colour). The spreading cannot happen here:
+    the y-limits are still autoscaling when the summary column is drawn, so a gap measured now is
+    not the gap on the saved page.
+    """
+    for y_data, value, colour in labels:
+        ax.annotate(
+            value_text(value), xy=(x, y_data), xytext=(5, 0),
+            textcoords="offset points", ha="left", va="center", fontsize=plotstyle.TICK_PT * 0.5,
+            color=colour, annotation_clip=False, gid=plotstyle.SPREAD_GID,
+            bbox={"boxstyle": "square,pad=0.1", "facecolor": "white", "edgecolor": "none"},
+        )  # fmt: skip
+
+
 def draw_summary_column(
     ax: matplotlib.axes.Axes,
     separator_x: float,
@@ -489,6 +512,7 @@ def draw_summary_column(
     between two gridlines is a guess.
     """
     ax.axvline(separator_x, color=plotstyle.MUTED, linestyle=SEPARATOR_DASH, linewidth=SEPARATOR_WIDTH, zorder=1)
+    labels: list[tuple[float, float, str]] = []
     for offset, series in zip(dodge_offsets(len(series_list), span), series_list, strict=True):
         point = reducer(value_of(series).values())
         if math.isfinite(point):
@@ -502,12 +526,8 @@ def draw_summary_column(
             plotstyle.point_mark(
                 ax, summary_x + offset, transform(point), series.color, series.marker, filled=True, size=size
             )
-            ax.annotate(
-                value_text(point), xy=(summary_x + span / 2.0, transform(point)), xytext=(5, 0),
-                textcoords="offset points", ha="left", va="center", fontsize=plotstyle.TICK_PT * 0.5,
-                color=series.color, annotation_clip=False,
-                bbox={"boxstyle": "square,pad=0.1", "facecolor": "white", "edgecolor": "none"},
-            )  # fmt: skip
+            labels.append((transform(point), point, series.color))
+    draw_summary_values(ax, summary_x + span / 2.0, labels, value_text)
     if label:
         ax.annotate(
             label,

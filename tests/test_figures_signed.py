@@ -580,7 +580,9 @@ def test_summary_column_prints_each_geomean_value(llr40_canon: pd.DataFrame) -> 
         texts = [text.get_text() for text in fig.axes[0].texts]
     finally:
         plt.close(fig)
-    expected = [f"{signed.geomean_reducer(row.ratios.values()):.3g}x" for row in rows]
+    # The spelling is the shared speller's, not restated here: the property is that every geomean
+    # is printed, and the format is a separate decision (one decimal since 2026-09-21).
+    expected = [kernel_comparison.speedup_value_text(signed.geomean_reducer(row.ratios.values())) for row in rows]
     assert all(value in texts for value in expected), (expected, texts)
 
 

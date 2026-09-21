@@ -23,6 +23,7 @@ from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.axis import Axis
 from matplotlib.figure import Figure
+from matplotlib.text import Annotation
 from matplotlib.ticker import FuncFormatter, LogLocator, MaxNLocator, NullFormatter, NullLocator
 
 # matplotlib's drawing calls end in an untyped ``**kwargs``, so every call below suppresses the
@@ -329,8 +330,11 @@ def point_mark(
     ``delivered`` False overlays a small cross on the model's own shape: the point is the 1x
     placeholder an episode that never verified an answer leaves behind, not a measured 1x. The
     SHAPE still names the model and the colour still names the intervention -- replacing the shape
-    outright would cost the figure the one channel that survives greyscale.
+    outright would cost the figure the one channel that survives greyscale. The placeholder is
+    always drawn HOLLOW: a cross in the series' own colour laid over a FILLED mark of that colour
+    is invisible, which drew 34 of 40 PPCG placeholders as if they were measured 1x results.
     """
+    filled = filled and delivered
     ax.scatter(  # pyright: ignore[reportUnknownMemberType]
         x, y, s=size, marker=marker, color="white", edgecolor="none", zorder=FILL_Z
     )
@@ -390,6 +394,54 @@ UNDATED: dict[str, dict[str, None]] = {"pdf": {"CreationDate": None}, "svg": {"D
 SVG_HASH_SALT: str = "hpcagent-bench"
 
 
+#: Tag on an annotation whose VERTICAL position may be nudged at save time to keep it clear of
+#: the other tagged labels on the same axes (:func:`settle_spread_labels`).
+SPREAD_GID: str = "hpcagent-spread-label"
+
+#: Minimum vertical distance, in points, between two spread labels. The summary values are set at
+#: ``TICK_PT * 0.5``; under about one line height two geomeans' numbers overprint into one blot.
+SPREAD_GAP_PT: float = 6.5
+
+
+def spread_positions(positions: Sequence[float], gap: float) -> list[float]:
+    """``positions`` moved apart so no two are closer than ``gap``, returned in INPUT order.
+
+    Packed upward from the lowest with at least ``gap`` between neighbours, then the packed group
+    is shifted back so its mean equals the input mean, so a crowded cluster opens up around where it
+    was. A set that was already clear is returned unchanged.
+    """
+    order = sorted(range(len(positions)), key=lambda i: positions[i])
+    packed = [positions[i] for i in order]
+    for k in range(1, len(packed)):
+        packed[k] = max(packed[k], packed[k - 1] + gap)
+    if any(abs(value - positions[i]) > 1e-9 for value, i in zip(packed, order, strict=True)):
+        shift = (sum(positions) - sum(packed)) / len(packed)
+        packed = [value + shift for value in packed]
+    out = [0.0] * len(positions)
+    for value, i in zip(packed, order, strict=True):
+        out[i] = value
+    return out
+
+
+def settle_spread_labels(fig: Figure) -> None:
+    """Nudge every :data:`SPREAD_GID` annotation vertically so none on one axes overprints another.
+
+    Runs at save time, after every limit is final: a label's height on the page depends on the
+    y-range, which keeps autoscaling until the last artist is added. The gap is measured in POINTS,
+    so it means the same on a log axis and a linear one.
+    """
+    points_per_pixel = 72.0 / fig.dpi
+    for ax in fig.axes:
+        tagged = [a for a in ax.texts if isinstance(a, Annotation) and a.get_gid() == SPREAD_GID]
+        if len(tagged) < 2:
+            continue
+        ax.get_ylim()  # forces a pending autoscale so transData is final
+        heights = [ax.transData.transform(a.xy)[1] * points_per_pixel for a in tagged]
+        for label, was, now in zip(tagged, heights, spread_positions(heights, SPREAD_GAP_PT), strict=True):
+            dx, _ = label.xyann
+            label.xyann = (dx, now - was)
+
+
 def save(
     fig: Figure, stem: pathlib.Path, formats: Sequence[str] = ("pdf", "png"), fixed: bool = False, dpi: float = SAVE_DPI
 ) -> pathlib.Path:
@@ -403,6 +455,7 @@ def save(
     rerun is byte-identical.
     """
     stem.parent.mkdir(parents=True, exist_ok=True)
+    settle_spread_labels(fig)
     box = fig.bbox_inches if fixed else "tight"
     with plt.rc_context({"svg.hashsalt": SVG_HASH_SALT}):
         for suffix in formats:
