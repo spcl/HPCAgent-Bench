@@ -1257,7 +1257,7 @@ def build_kernel_ir(
     # Drop the scipy-sparse dispatch branch: static backends are dense-only,
     # so ``sp.issparse(x)`` is statically False and the guarded path
     # (banded_mmt's sparse branch) is dead code; this leaves the dense path.
-    _PruneSparseDispatch().visit(fn)
+    PruneSparseDispatch().visit(fn)
     # Fold ``if <param> is None`` optional-default guards (params are always
     # supplied across the C ABI) -- drops the unlowerable ``None`` literal.
     _FoldParamNoneGuard(input_args).visit(fn)
@@ -2391,7 +2391,7 @@ def _materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args:
         ast.fix_missing_locations(fn)
 
 
-class _PruneSparseDispatch(ast.NodeTransformer):
+class PruneSparseDispatch(ast.NodeTransformer):
     """Drop a sparse dispatch branch. The static dense backends only handle dense arrays, so a test
     asking "is this operand sparse?" is statically False and the path it guards is dead code
     (banded_mmt). Removing it leaves the dense path.
@@ -2422,10 +2422,10 @@ class _PruneSparseDispatch(ast.NodeTransformer):
 
     @staticmethod
     def _statically_false(test: ast.expr) -> bool:
-        if _PruneSparseDispatch._asks_if_sparse(test):
+        if PruneSparseDispatch._asks_if_sparse(test):
             return True
         if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.And):
-            return any(_PruneSparseDispatch._statically_false(v) for v in test.values)
+            return any(PruneSparseDispatch._statically_false(v) for v in test.values)
         return False
 
     def visit_If(self, node: ast.If) -> ast.stmt | List[ast.stmt]:

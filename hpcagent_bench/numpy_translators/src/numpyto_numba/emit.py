@@ -33,6 +33,7 @@ independent is left serial (plain ``range``), never guessed parallel.
 import ast
 import re
 
+from numpyto_common.frontend import PruneSparseDispatch
 from numpyto_common.parallelism import loop_is_parallel_safe
 
 #: Whole-array numpy calls numba's parfor rewriter -- what ``parallel=True`` turns on -- answers
@@ -41,6 +42,18 @@ from numpyto_common.parallelism import loop_is_parallel_safe
 #: following prange is read back as if square, so ``eye(3, 5)`` copies rows 0, 3 and 6 of its own
 #: flat buffer. A body calling one loses ``parallel=True``, the trade ``fastmath`` already makes.
 PARFOR_UNSAFE_CALLS = frozenset({"max", "min", "amax", "amin", "eye", "identity"})
+
+
+def without_sparse_dispatch(source: str) -> str:
+    """``source`` with its sparse dispatch branch dropped (:class:`PruneSparseDispatch`).
+
+    numba cannot type ``isinstance(x, np.ndarray)``, and the numba build only ever runs on dense
+    arrays, so the branch is dead here as in the static backends (banded_mmt). Returned verbatim,
+    comments kept, when nothing is pruned."""
+    tree = ast.parse(source)
+    before = ast.dump(tree)
+    PruneSparseDispatch().visit(tree)
+    return source if ast.dump(tree) == before else ast.unparse(ast.fix_missing_locations(tree))
 
 
 def emit_numba(numpy_source: str, fastmath: bool = False, kir=None) -> str:
@@ -55,6 +68,7 @@ def emit_numba(numpy_source: str, fastmath: bool = False, kir=None) -> str:
     :returns: Python source code.
     """
     sparse = False
+    numpy_source = without_sparse_dispatch(numpy_source)
     if kir is not None:
         from numpyto_common.numpy_desugar import desugar_for_python_backend
 
