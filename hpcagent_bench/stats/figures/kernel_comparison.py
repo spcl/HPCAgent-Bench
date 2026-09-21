@@ -565,6 +565,7 @@ def draw_panel(
     transform: Callable[[float], float] = lambda v: v,
     value_text: Callable[[float], str] = summary_value_text,
     span: float = DODGE_SPAN,
+    pending_of: Callable[[Series], frozenset[str]] | None = None,
 ) -> None:
     """One panel, for ONE metric (:func:`value_of` reads it off each series): the kernel slots,
     dodged apart within each slot, plus the summary group past their right end
@@ -584,6 +585,10 @@ def draw_panel(
     answer is not 1.0), so the cross has to go on a drawn mark rather than on an absent one. Without
     it every present value is a measurement, which is what an absolute panel wants.
 
+    ``pending_of``, when given, names the kernels a series has not attempted yet: each draws a
+    :func:`~hpcagent_bench.stats.style.pending_mark` at ``missing_y`` instead of the hollow
+    no-answer mark, so "not run" never reads as "failed".
+
     ``interval_of``, ``transform``, ``value_text`` and ``span`` pass straight through to :func:`draw_summary_column`; ``value_of``,
     ``range_of`` and ``missing_y`` stay in the SAME natural units regardless of ``transform`` -- only the
     plotted position changes, so a signed-axis caller reads its missing-value placeholder, its whisker
@@ -597,8 +602,12 @@ def draw_panel(
         values = value_of(series)
         low_of, high_of = range_of(series) if range_of is not None else ({}, {})
         delivered = delivered_of(series) if delivered_of is not None else {}
+        pending = pending_of(series) if pending_of is not None else frozenset()
         for kernel in kernels:
             x = x_of[kernel] + offset
+            if kernel in pending:
+                plotstyle.pending_mark(ax, x, transform(missing_y), series.color, size=size)
+                continue
             value = values.get(kernel)
             if value is None or not math.isfinite(value) or value <= 0.0:
                 if mark_missing:

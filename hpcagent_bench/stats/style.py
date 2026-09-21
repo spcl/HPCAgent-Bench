@@ -23,8 +23,10 @@ from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.axis import Axis
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.text import Annotation
 from matplotlib.ticker import FuncFormatter, LogLocator, MaxNLocator, NullFormatter, NullLocator
+from matplotlib.transforms import Transform
 
 # matplotlib's drawing calls end in an untyped ``**kwargs``, so every call below suppresses the
 # unknown-member report that fact produces; the arguments themselves are checked.
@@ -304,6 +306,15 @@ CROSS_SCALE: float = 0.45
 #: mark is a placeholder at 1x, not a measurement.
 NOT_DELIVERED_LABEL: str = "No Verified Answer (Scored 1x)"
 
+#: The PENDING mark: an entry that has not been attempted yet, as opposed to one that ran and failed
+#: (the cross). Drawn only when a figure is asked to (``--mark-pending``); it enters no summary.
+PENDING_MARKER: str = "$?$"
+PENDING_LABEL: str = "Pending (Not Run Yet)"
+#: A glyph fills less of its box than a shape does; this makes a "?" read at a shape's size.
+PENDING_SCALE: float = 2.2
+#: The artist id every pending mark carries, so a caller can find what was drawn as pending.
+PENDING_GID: str = "pending"
+
 
 def edge_width(size: float, widest: float) -> float:
     """A mark's line width in points: ``widest`` on a full-size mark, thinner on a small one, where a
@@ -352,6 +363,32 @@ def point_mark(
         ax.scatter(  # pyright: ignore[reportUnknownMemberType]
             x, y, s=size * CROSS_SCALE, marker="x", color=color, linewidth=edge_width(size, 1.6), zorder=MARK_Z + 1.0
         )
+
+
+def pending_mark(
+    ax: Axes, x: float, y: float, color: str, size: float = 110.0, transform: Transform | None = None
+) -> None:
+    """A :data:`PENDING_MARKER` in the series' own colour at ``(x, y)``, in data coordinates unless
+    ``transform`` says otherwise (a row with no value axis centres it on the axes)."""
+    extra = {} if transform is None else {"transform": transform}
+    ax.scatter(  # pyright: ignore[reportUnknownMemberType]
+        x,
+        y,
+        s=size * PENDING_SCALE,
+        marker=PENDING_MARKER,
+        color=color,
+        linewidth=0.0,
+        zorder=MARK_Z,
+        gid=PENDING_GID,
+        **extra,
+    )
+
+
+def pending_legend_mark(markersize: float) -> Line2D:
+    """The legend entry for :func:`pending_mark`."""
+    return Line2D(
+        [], [], marker=PENDING_MARKER, linestyle="none", color=MUTED, markersize=markersize, label=PENDING_LABEL
+    )
 
 
 def row_axis(ax: Axes, labels: Sequence[str]) -> None:
