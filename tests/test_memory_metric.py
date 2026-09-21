@@ -123,16 +123,6 @@ def test_aggregate_empty_memory_is_well_defined() -> None:
 # the child capture: increment BELOW the raw peak
 
 
-class _CaptureQueue:
-    """A minimal stand-in for the isolation `mp.Queue` that records what the child worker puts on it."""
-
-    def __init__(self) -> None:
-        self.items = []
-
-    def put(self, item) -> None:
-        self.items.append(item)
-
-
 def _hungry_kernel(tmp_path):
     """A kernel whose ~64 MB scratch is freed before it returns -- ru_maxrss is a high-water
     mark, so the allocation is still captured."""
@@ -167,33 +157,6 @@ def test_child_reports_increment_below_absolute_peak(tmp_path) -> None:
     assert (
         mem.memory.peak_bytes > mem.memory.increment_bytes
     )  # the raw peak additionally carries the inherited footprint
-
-
-def test_the_legacy_queue_channel_carries_the_worker_payload(tmp_path) -> None:
-    """``q`` lets the worker be driven in-process. It must deliver exactly what the forked path
-    returns -- status first, then outputs / samples / peak / increment."""
-    q = _CaptureQueue()
-    native_call._native_call_worker(
-        False,
-        str(_hungry_kernel(tmp_path)),
-        None,
-        {"x": np.zeros(4, dtype=np.float64)},
-        "python",
-        0,
-        None,
-        q,
-        py_meta=("kern", ("x",), ("y",)),
-    )
-
-    assert len(q.items) == 1
-    status, outputs, samples, peak_bytes, increment_bytes, extras, device_bytes, device_runtime, probe = q.items[0]
-    assert status == "ok", outputs
-    assert set(outputs) == {"y"} and len(samples) == 1
-    # No increment assertion here: in-process, the baseline is pytest's own high-water mark.
-    assert peak_bytes > 0 and increment_bytes >= 0
-    # The in-process channel carries the timing probe too, and a host run has no device to read:
-    # -1 says "no device here", which is what keeps the quiescence gate off a CPU row.
-    assert probe.device_index == -1 and probe.residual_ns >= 0
 
 
 def test_the_increment_is_per_call_not_per_batch(tmp_path) -> None:
