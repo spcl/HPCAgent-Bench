@@ -1,3 +1,5 @@
+Launch cheat sheet with examples: [LAUNCH.md](LAUNCH.md).
+
 # Beverin multi-role inference example
 
 This directory is a configurable Slurm example for running an HPCAgent-Bench
