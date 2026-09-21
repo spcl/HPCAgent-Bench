@@ -20,6 +20,8 @@ init:
 output_args:
 - a
 - aa
+chain_length:
+  aa: LEN_2D
 loop_level_reasoning:
   source: tsvc_2
   # What vectorizing-compiler pattern this loop probes (from the original TSVC

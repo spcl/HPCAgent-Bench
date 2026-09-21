@@ -107,6 +107,8 @@ output_args:
 - gamma_values
 - branch_history
 - state
+chain_length:
+  gamma_values: n_iter
 baseline:
   kind: vendored
   source: cp2k_density_matrix_trs4_reference.f90

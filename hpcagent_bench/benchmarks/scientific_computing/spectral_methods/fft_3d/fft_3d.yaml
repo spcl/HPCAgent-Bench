@@ -52,5 +52,7 @@ array_args:
 - chk
 output_args:
 - chk
+chain_length:
+  chk: niter
 experiment_tags:
 - fft_3d

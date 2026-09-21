@@ -15,5 +15,7 @@ init:
     aa: (N,N)
 output_args:
 - aa
+chain_length:
+  aa: 2 * N
 loop_level_reasoning:
   source: canonicalization

@@ -27,6 +27,8 @@ array_args:
 - A
 output_args:
 - A
+chain_length:
+  A: 2 * TSTEPS * N
 experiment_tags:
 - npbench
 - polybench
