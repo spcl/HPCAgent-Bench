@@ -24,6 +24,7 @@ from numpyto_common.frontend import _names_used_as_int
 from numpyto_common.lib_nodes import BLAS_GEMM_MARKER, FFT_LIBRARY_MARKER
 from numpyto_common.lowering import _walk_complex, helper_returns_int, integer_valued_locals
 from numpyto_common.statement_desugar import binding_names
+from numpyto_c.pluto_predicate import if_convert
 
 #: Whole-identifier matcher for scanning a shape-token string for the names it references.
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
@@ -2379,6 +2380,23 @@ def _branch_scoped_locals(tree: ast.FunctionDef, candidates: Set[str]) -> Dict[s
     return {name: branch_id for name, (branch_id, _) in owner.items()}
 
 
+def _value_dependent_test(kir: KernelIR) -> Callable[[ast.expr], bool]:
+    """The AST form of :meth:`_CBodyEmitter._data_dependent_cond`: a test that reads an array
+    element, a float literal, or a float scalar is not integer-affine."""
+    floats = {name for name, ctype in _collect_implicit_locals(kir) if ctype.startswith(("double", "float"))}
+    floats |= {s.name for s in kir.scalars if _c_type(s.dtype).startswith(("double", "float"))}
+
+    def test(expr: ast.expr) -> bool:
+        return any(
+            isinstance(node, ast.Subscript)
+            or (isinstance(node, ast.Constant) and isinstance(node.value, float))
+            or (isinstance(node, ast.Name) and node.id in floats)
+            for node in ast.walk(expr)
+        )
+
+    return test
+
+
 def _emit_body(
     kir: KernelIR,
     indent: str = "  ",
@@ -2402,6 +2420,10 @@ def _emit_body(
     emitter.isopar = isopar
     # Tuple targets carry no declaration and no C form; split before the locals are harvested.
     TupleTargetSplitter().visit(kir.tree)
+    if pluto:
+        # A value-dependent `if` inside a loop becomes predicated assignments, so the loop stays in a
+        # scop (numpyto_c.pluto_predicate); its flag locals are integers, declared with the others.
+        kir.int_locals = [*kir.int_locals, *if_convert(kir.tree, _value_dependent_test(kir))]
     zeros = kir.zeros_locals
     zeros_fills = kir.zeros_fills
     int_locals = kir.int_locals
