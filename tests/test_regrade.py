@@ -147,6 +147,7 @@ def fake_row(item: regrade.Item) -> dict[str, Any]:
         "build_ok": 1,
         "correct": 1,
         "reason": "",
+        "promoted": 0,
     }
 
 

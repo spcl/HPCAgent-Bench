@@ -121,8 +121,7 @@ def ppcg_lookup() -> Tuple[Optional[str], str]:
     # searched, and building the tuple eagerly searched it anyway.
     sources: Tuple[Callable[[], Optional[str]], ...] = (
         lambda: _exe_under_prefix(os.environ.get(PPCG_HOME_ENV), "ppcg"),
-        lambda: _exe_under_prefix(f"{tools_dir}/ppcg"
-                                  if tools_dir else None, "ppcg"),
+        lambda: _exe_under_prefix(f"{tools_dir}/ppcg" if tools_dir else None, "ppcg"),
         lambda: shutil.which("ppcg"),
     )
     refused: List[str] = []
@@ -131,18 +130,13 @@ def ppcg_lookup() -> Tuple[Optional[str], str]:
         if exe is None:
             continue
         try:
-            proc = subprocess.run([exe, "--version"],
-                                  capture_output=True,
-                                  text=True,
-                                  env=_ppcg_run_env(exe))
+            proc = subprocess.run([exe, "--version"], capture_output=True, text=True, env=_ppcg_run_env(exe))
         except OSError as exc:
             refused.append(f"{exe} cannot be executed: {exc}")
             continue
         if proc.returncode == 0:
             return exe, ""
-        refused.append(
-            f"{exe} is installed but does not run: {(proc.stderr or proc.stdout).strip()[-300:]}"
-        )
+        refused.append(f"{exe} is installed but does not run: {(proc.stderr or proc.stdout).strip()[-300:]}")
     if refused:
         return None, "; ".join(refused)
     return None, (
@@ -198,24 +192,18 @@ def resolve_backend(backend: Optional[str]) -> str:
     if backend is None:
         return gpu_backend()
     if backend not in LANG_EXT:
-        raise KeyError(
-            f"unknown GPU backend {backend!r}; expected one of {sorted(LANG_EXT)}"
-        )
+        raise KeyError(f"unknown GPU backend {backend!r}; expected one of {sorted(LANG_EXT)}")
     return backend
 
 
-def transformed_paths(scop: pathlib.Path,
-                      backend: Optional[str] = None) -> List[pathlib.Path]:
+def transformed_paths(scop: pathlib.Path, backend: Optional[str] = None) -> List[pathlib.Path]:
     """The two GPU sources ppcg's transform of ``scop`` compiles to, in compile order.
 
     ``.hip`` for a ROCm build rather than the ``.cu`` ppcg wrote: the extension is what makes hipcc
     build them for an AMD device instead of reading them as CUDA for an NVIDIA one.
     """
     stem, ext = scop.stem, LANG_EXT[resolve_backend(backend)]
-    return [
-        scop.with_name(f"{stem}_host.{ext}"),
-        scop.with_name(f"{stem}_kernel.{ext}")
-    ]
+    return [scop.with_name(f"{stem}_host.{ext}"), scop.with_name(f"{stem}_kernel.{ext}")]
 
 
 def hipify(scratch: pathlib.Path, stem: str) -> None:
@@ -226,20 +214,12 @@ def hipify(scratch: pathlib.Path, stem: str) -> None:
     """
     exe = hipify_exe()
     if exe is None:  # transformed_sources already declines for this; here it keeps the argv typed
-        raise ToolMissing(FRAMEWORK, stem,
-                          f"{HIPIFY} is not installed on this host")
+        raise ToolMissing(FRAMEWORK, stem, f"{HIPIFY} is not installed on this host")
     for half in ("host", "kernel"):
         cu = scratch / f"{stem}_{half}.cu"
-        translated = subprocess.run([exe, str(cu)],
-                                    capture_output=True,
-                                    text=True,
-                                    check=True)
-        (scratch / f"{stem}_{half}.{LANG_EXT['hip']}").write_text(
-            translated.stdout)
-    subprocess.run(
-        [exe, "-inplace", str(scratch / f"{stem}_kernel.hu")],
-        capture_output=True,
-        check=True)
+        translated = subprocess.run([exe, str(cu)], capture_output=True, text=True, check=True)
+        (scratch / f"{stem}_{half}.{LANG_EXT['hip']}").write_text(translated.stdout)
+    subprocess.run([exe, "-inplace", str(scratch / f"{stem}_kernel.hu")], capture_output=True, check=True)
 
 
 #: One ``hipMalloc``/``hipMemcpy``/``hipFree`` statement that names a ``dev_*`` mirror pointer --
@@ -248,14 +228,12 @@ def hipify(scratch: pathlib.Path, stem: str) -> None:
 #: macro. ``[^;]*`` is safe here: none of the three calls' arguments (a size expression,
 #: ``hipMemcpyHostToDevice``) contains a semicolon.
 _HIP_MIRROR_CALL_RE = re.compile(
-    r"^[ \t]*(?:cudaCheckReturn\()?hip(?:Malloc|Memcpy|Free)\([^;]*\bdev_\w+\b[^;]*\);[ \t]*\n?",
-    re.MULTILINE)
+    r"^[ \t]*(?:cudaCheckReturn\()?hip(?:Malloc|Memcpy|Free)\([^;]*\bdev_\w+\b[^;]*\);[ \t]*\n?", re.MULTILINE
+)
 
 #: The mirror pointer's own declaration, ``T *dev_<arg>;`` -- removed so renaming ``dev_<arg>`` to
 #: ``<arg>`` (an existing PARAMETER) does not redeclare it.
-_DEV_DECL_RE = re.compile(
-    r"^[ \t]*[A-Za-z_]\w*(?:\s+const)?\s*\*\s*dev_\w+\s*;[ \t]*\n?",
-    re.MULTILINE)
+_DEV_DECL_RE = re.compile(r"^[ \t]*[A-Za-z_]\w*(?:\s+const)?\s*\*\s*dev_\w+\s*;[ \t]*\n?", re.MULTILINE)
 
 
 def device_resident_host(host: str) -> str:
@@ -279,9 +257,7 @@ def device_resident_host(host: str) -> str:
     stripped = _HIP_MIRROR_CALL_RE.sub("", host)
     stripped = _DEV_DECL_RE.sub("", stripped)
     if stripped == host:
-        raise ValueError(
-            "no ppcg-style 'dev_<arg>' device-mirror hip call/declaration found to strip"
-        )
+        raise ValueError("no ppcg-style 'dev_<arg>' device-mirror hip call/declaration found to strip")
     return re.sub(r"\bdev_(\w+)\b", r"\1", stripped)
 
 
@@ -299,8 +275,7 @@ CXX_COMPAT_PROLOGUE: str = (
 #: helper fails to compile even for the many kernels that never call it. Rewritten at its ONE call
 #: site rather than by defining ``conj`` away: a define at the top of the file would also rewrite the
 #: declarations ``<complex.h>`` itself pulls in.
-CONJ_CALL_RE = re.compile(
-    r"(__npb_conj\(double _Complex z\)\s*\{\s*return\s+)conj(\s*\(z\);)")
+CONJ_CALL_RE = re.compile(r"(__npb_conj\(double _Complex z\)\s*\{\s*return\s+)conj(\s*\(z\);)")
 
 
 def cxx_compat(host: str, entry: str) -> str:
@@ -314,11 +289,7 @@ def cxx_compat(host: str, entry: str) -> str:
     ppcg's output agree with the sibling column rather than inventing a convention.
     """
     host = CXX_COMPAT_PROLOGUE + CONJ_CALL_RE.sub(r"\1__builtin_conj\2", host)
-    return re.sub(rf"^(void\s+{re.escape(entry)}\s*\()",
-                  r'extern "C" \1',
-                  host,
-                  count=1,
-                  flags=re.MULTILINE)
+    return re.sub(rf"^(void\s+{re.escape(entry)}\s*\()", r'extern "C" \1', host, count=1, flags=re.MULTILINE)
 
 
 def entry_symbol(scop: pathlib.Path) -> str:
@@ -340,13 +311,10 @@ def drop_const_params(scop_src: str, entry: str) -> str:
     compile-time qualifier over a positional ctypes call, so dropping it changes no semantics --
     only which overload the GPU driver's headers will accept.
     """
-    match = re.search(rf"^(void\s+{re.escape(entry)}\s*\()([^)]*)(\))",
-                      scop_src,
-                      flags=re.MULTILINE)
+    match = re.search(rf"^(void\s+{re.escape(entry)}\s*\()([^)]*)(\))", scop_src, flags=re.MULTILINE)
     if match is None:
         return scop_src
-    return scop_src[:match.start(2)] + match.group(2).replace(
-        "const ", "") + scop_src[match.end(2):]
+    return scop_src[: match.start(2)] + match.group(2).replace("const ", "") + scop_src[match.end(2) :]
 
 
 def offloaded(kernel_src: str) -> bool:
@@ -362,10 +330,7 @@ def offloaded(kernel_src: str) -> bool:
 
 
 def run_ppcg(
-    scop: pathlib.Path,
-    backend: Optional[str] = None,
-    args: Sequence[str] = PPCG_ARGS,
-    timeout: Optional[float] = None
+    scop: pathlib.Path, backend: Optional[str] = None, args: Sequence[str] = PPCG_ARGS, timeout: Optional[float] = None
 ) -> Tuple[List[str], subprocess.CompletedProcess]:
     """Transform one scop with ``ppcg``. Returns ``(argv, result)``.
 
@@ -391,8 +356,7 @@ def run_ppcg(
     vendor = resolve_backend(backend)
     entry = entry_symbol(scop)
     argv = [str(exe), *args, str(scop)]
-    with tempfile.TemporaryDirectory(
-            dir=scop.parent, prefix=f".{FRAMEWORK}_transform_") as scratch:
+    with tempfile.TemporaryDirectory(dir=scop.parent, prefix=f".{FRAMEWORK}_transform_") as scratch:
         # ppcg names its outputs after the input's STEM, so the copy has to keep it.
         readable = pathlib.Path(scratch) / scop.name
         readable.write_text(drop_const_params(scop.read_text(), entry))
@@ -412,8 +376,7 @@ def run_ppcg(
                 hipify(pathlib.Path(scratch), scop.stem)
                 host_hip = pathlib.Path(scratch) / f"{scop.stem}_host.hip"
                 if host_hip.is_file():
-                    host_hip.write_text(
-                        device_resident_host(host_hip.read_text()))
+                    host_hip.write_text(device_resident_host(host_hip.read_text()))
             for produced in transformed_paths(scop, vendor):
                 src = pathlib.Path(scratch) / produced.name
                 if src.is_file():
@@ -424,9 +387,7 @@ def run_ppcg(
     return argv, proc
 
 
-def transformed_sources(cpp_backend: pathlib.Path,
-                        base: str,
-                        backend: Optional[str] = None) -> List[pathlib.Path]:
+def transformed_sources(cpp_backend: pathlib.Path, base: str, backend: Optional[str] = None) -> List[pathlib.Path]:
     """The ppcg-transformed CUDA the ``ppcg`` column compiles, generated on demand.
 
     Mirrors :func:`pluto_transform.transformed_sources`: regenerate when stale, reuse when fresh,
@@ -443,20 +404,17 @@ def transformed_sources(cpp_backend: pathlib.Path,
         raise ToolMissing(FRAMEWORK, base, problem)
     scops = scop_inputs(cpp_backend, base)
     if not scops:
-        raise NotSupportedByFramework(
-            FRAMEWORK, base,
-            "the translator emitted no #pragma scop for this kernel")
+        raise NotSupportedByFramework(FRAMEWORK, base, "the translator emitted no #pragma scop for this kernel")
     out: List[pathlib.Path] = []
     for scop in scops:
         assert_affine(scop, base)
         produced = transformed_paths(scop, vendor)
-        if any(not p.exists() or p.stat().st_mtime < scop.stat().st_mtime
-               for p in produced):
+        if any(not p.exists() or p.stat().st_mtime < scop.stat().st_mtime for p in produced):
             argv, proc = run_ppcg(scop, vendor)
             if proc.returncode != 0 or any(not p.is_file() for p in produced):
                 raise NotSupportedByFramework(
-                    FRAMEWORK, base,
-                    f"ppcg rejected {scop.name}: {proc.stderr.strip()[-500:]}")
+                    FRAMEWORK, base, f"ppcg rejected {scop.name}: {proc.stderr.strip()[-500:]}"
+                )
         # Re-read rather than trusting the run above: a passthrough that was published by an EARLIER
         # call is fresh against its scop, so a gate that only fired on a fresh transform would let
         # the second run of the same kernel time the serial host loop.

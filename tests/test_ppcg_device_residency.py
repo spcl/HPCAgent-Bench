@@ -108,8 +108,7 @@ PPCG_CHECKED_HOST = textwrap.dedent("""\
     """)
 
 
-def test_device_resident_host_strips_mirror_calls_inside_ppcgs_check_macro(
-) -> None:
+def test_device_resident_host_strips_mirror_calls_inside_ppcgs_check_macro() -> None:
     """Left in place, ``hipMalloc(&A)`` overwrites the caller's device pointer with a fresh buffer:
     the kernel reads garbage and writes into memory that is then freed."""
     rewritten = device_resident_host(PPCG_CHECKED_HOST)
@@ -119,8 +118,7 @@ def test_device_resident_host_strips_mirror_calls_inside_ppcgs_check_macro(
     assert "cudaCheckKernel();" in rewritten, rewritten
 
 
-def test_device_resident_host_declines_a_source_with_no_mirror_to_strip(
-) -> None:
+def test_device_resident_host_declines_a_source_with_no_mirror_to_strip() -> None:
     """A ppcg host that does not match the mirror shape (e.g. already hand-edited, or a future
     ppcg version with a different codegen) must fail LOUD, not silently emit ppcg's own text back
     out as if it had been made device-resident."""
@@ -150,7 +148,6 @@ class FakeCupyArray:
         self.dtype = host.dtype
 
     class _Data:
-
         def __init__(self, ptr: int) -> None:
             self.ptr = ptr
 
@@ -159,8 +156,7 @@ class FakeCupyArray:
         return FakeCupyArray._Data(self._host.ctypes.data)
 
 
-def test_is_device_array_accepts_a_cupy_shaped_object_and_rejects_numpy(
-) -> None:
+def test_is_device_array_accepts_a_cupy_shaped_object_and_rejects_numpy() -> None:
     host = np.zeros(4, dtype=np.float64)
     assert cpp_runtime._is_device_array(FakeCupyArray(host)) is True
     assert cpp_runtime._is_device_array(host) is False
@@ -194,7 +190,8 @@ def test_call_selects_fp64_off_a_device_array_too() -> None:
     is_double = any(
         (isinstance(a, np.ndarray) or cpp_runtime._is_device_array(a))
         and a.dtype in (np.dtype(np.float64), np.dtype(np.complex128))
-        for a in (fake, 1, 2.0))
+        for a in (fake, 1, 2.0)
+    )
     assert is_double
 
 
@@ -202,7 +199,6 @@ def test_call_selects_fp64_off_a_device_array_too() -> None:
 
 
 class FakeEvent:
-
     def __init__(self, log: list[str], label: str) -> None:
         self.log = log
         self.label = label
@@ -231,8 +227,7 @@ def fake_cupy_module(log: list[str]) -> object:
         log.append("asarray")
         return FakeCupyArray(arr)
 
-    stream = _types.SimpleNamespace(
-        synchronize=lambda: log.append("stream-sync"))
+    stream = _types.SimpleNamespace(synchronize=lambda: log.append("stream-sync"))
     cuda = _types.SimpleNamespace(
         Event=make_event,
         get_elapsed_time=get_elapsed_time,
@@ -248,8 +243,7 @@ def make_pluto(fname: str) -> pluto_framework.PlutoFramework:
     return fw
 
 
-def test_ppcg_hip_copy_func_stages_to_device(
-        monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ppcg_hip_copy_func_stages_to_device(monkeypatch: pytest.MonkeyPatch) -> None:
     log: list[str] = []
     monkeypatch.setattr(
         "hpcagent_bench.harness.native_call.import_device_array_module",
@@ -275,11 +269,9 @@ def test_every_other_pluto_flavor_keeps_the_host_copy() -> None:
         assert out is not arr  # still a COPY, just a host one
 
 
-def test_ppcg_hip_timer_uses_device_events(
-        monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ppcg_hip_timer_uses_device_events(monkeypatch: pytest.MonkeyPatch) -> None:
     log: list[str] = []
-    monkeypatch.setitem(
-        __import__("sys").modules, "cupy", fake_cupy_module(log))
+    monkeypatch.setitem(__import__("sys").modules, "cupy", fake_cupy_module(log))
     fw = make_pluto("ppcg_hip")
     from hpcagent_bench.frameworks.framework import Timer
 
@@ -322,8 +314,7 @@ HIP_KERNEL_SRC = textwrap.dedent("""\
     """)
 
 
-def test_a_device_pointer_call_runs_a_real_hip_so(
-        tmp_path: pathlib.Path) -> None:
+def test_a_device_pointer_call_runs_a_real_hip_so(tmp_path: pathlib.Path) -> None:
     """End to end, with real hardware: a hand-written HIP .so (standing in for what
     ``device_resident_host`` would leave ppcg's build), called through ``cpp_runtime``'s device
     pointer path with a REAL cupy array. Proves the whole chain -- stage to device outside a
@@ -343,9 +334,7 @@ def test_a_device_pointer_call_runs_a_real_hip_so(
     src.write_text(HIP_KERNEL_SRC)
     so = tmp_path / "libaxpy.so"
     subprocess.run(
-        ["hipcc", "-shared", "-fPIC", "-O2",
-         str(src), "-o",
-         str(so)],
+        ["hipcc", "-shared", "-fPIC", "-O2", str(src), "-o", str(so)],
         check=True,
         capture_output=True,
         text=True,
