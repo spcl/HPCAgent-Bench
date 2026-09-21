@@ -303,7 +303,13 @@ def read_observations(path: pathlib.Path) -> "pd.DataFrame":
     else:
         frame = read_table(path, OBSERVATIONS_TABLE)
     frame = fill_arm_identity(frame)
-    for rule in (drop_foreign_kernel_rows, drop_pre_relaunch_rows, drop_cancelled_task_rows, drop_superseded_arm_rows):
+    for rule in (
+        fold_renamed_arms,
+        drop_foreign_kernel_rows,
+        drop_pre_relaunch_rows,
+        drop_cancelled_task_rows,
+        drop_superseded_arm_rows,
+    ):
         frame = rule(frame)
     return frame
 
@@ -406,6 +412,28 @@ def drop_cancelled_task_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     dropped = task_labels(frame).isin(cancelled)
     warnings.warn(f"dropped {int(dropped.sum())} row(s) of {len(cancelled)} cancelled task(s) (spec X8)", stacklevel=2)
     return frame[~dropped]
+
+
+#: Arm prefixes a campaign was renamed from, and the name it runs under now (2026-09-19 user decision:
+#: ``llrblind-cmp`` is the pre-cmp ``llrblind`` arm under a later name, the same condition, and its
+#: data is reused). ``experiments/remaining_kernels.py:base_arm`` applies the same fold to coverage.
+RENAMED_ARM_PREFIXES: tuple[tuple[str, str], ...] = (("llrblind-", "llrblind-cmp-"),)
+
+
+def renamed_arm(arm: str) -> str:
+    """``arm`` under the name its campaign runs under now; itself when it was never renamed."""
+    for old, new in RENAMED_ARM_PREFIXES:
+        if arm.startswith(old) and not arm.startswith(new):
+            return new + arm.removeprefix(old)
+    return arm
+
+
+def fold_renamed_arms(frame: "pd.DataFrame") -> "pd.DataFrame":
+    """``frame`` with every renamed arm under its current name, so the two waves are one arm and the
+    latest run per kernel (``population.latest_runs``) picks between them."""
+    if frame.empty or "arm" not in frame.columns:
+        return frame
+    return frame.assign(arm=frame["arm"].astype(str).map(renamed_arm))
 
 
 #: What a launcher appends to re-run an arm from scratch (``CLEAN=1``). It names no condition: the

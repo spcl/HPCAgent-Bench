@@ -1025,7 +1025,9 @@ def llr40_model_figure(
     )  # fmt: skip
     speedup_ax.set_ylabel(speedup_label(baseline), fontsize=plotstyle.LABEL_PT * 0.7, color=plotstyle.MUTED)
     token_ax.set_ylabel(
-        "Billed Tokens (1 fresh + 0.1 re-sent + 1 out)", fontsize=plotstyle.LABEL_PT * 0.7, color=plotstyle.MUTED
+        "Billed Tokens (1 input + 0.1 cached input + 1 output)",
+        fontsize=plotstyle.LABEL_PT * 0.7,
+        color=plotstyle.MUTED,
     )
     width, base_height = figure_size(len(arms), len(kernels), double_column)
     # The legend sits ABOVE the top panel, never below the bottom one: BOTTOM_MARGIN_IN was sized

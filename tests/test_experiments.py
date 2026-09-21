@@ -353,3 +353,23 @@ def test_a_column_no_row_in_the_table_ever_recorded_still_fills_from_the_arm_nam
 
     assert filled.language.tolist() == ["c", "c"]
     assert [value != value for value in filled.recorded_language.tolist()] == [True, True]
+
+
+@pytest.mark.parametrize(
+    ("arm", "folded"),
+    [
+        ("llrblind-qwen38-c", "llrblind-cmp-qwen38-c"),
+        ("llrblind-oss120b-fortran-skills", "llrblind-cmp-oss120b-fortran-skills"),
+        ("llrblind-cmp-qwen38-c", "llrblind-cmp-qwen38-c"),
+        ("cpf-llr-focus40-qwen38-c", "cpf-llr-focus40-qwen38-c"),
+    ],
+)
+def test_a_renamed_blind_arm_reads_under_its_current_name(arm: str, folded: str) -> None:
+    """2026-09-19: llrblind-cmp is the old llrblind arm renamed. Read as two arms, a blind pair sees
+    only half of its kernels, and a cmp arm must never fold a second time."""
+    assert experiments.renamed_arm(arm) == folded
+
+
+def test_both_waves_of_a_renamed_arm_become_one_arm() -> None:
+    frame = pd.DataFrame({"arm": ["llrblind-kimi27sglang-c", "llrblind-cmp-kimi27sglang-c"], "benchmark": ["a", "b"]})
+    assert set(experiments.fold_renamed_arms(frame).arm) == {"llrblind-cmp-kimi27sglang-c"}
