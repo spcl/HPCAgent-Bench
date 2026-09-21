@@ -22,7 +22,7 @@ import pandas as pd
 import pytest
 from PIL import Image
 
-from hpcagent_bench.stats import palette, rules, style
+from hpcagent_bench.stats import canon, palette, rules, style
 from hpcagent_bench.stats.figures import kernel_comparison, signed
 from hpcagent_bench.stats.summary import geomean_ci
 
@@ -593,3 +593,86 @@ def test_render_at_150dpi_matches_the_requested_dpi(
     signed.llr40_two_row_figure(llr40_canon, llr40_observations, ROSTER40, out, dpi=150.0)
     with Image.open(out.with_suffix(".png")) as image:
         assert image.info["dpi"][0] == pytest.approx(150.0, abs=1.0)
+
+
+@pytest.fixture(name="pending_canon")
+def pending_canon_fixture() -> pd.DataFrame:
+    """numba times k1-k3; the CPF column validates k1, runs k2 and fails it, and has no row for k3."""
+    frame = canon_table([("numba", "k1", 100.0), ("numba", "k2", 100.0), ("numba", "k3", 100.0),
+                         ("dace_cpu_canonicalize", "k1", 10.0), ("dace_cpu_canonicalize", "k2", 50.0)])  # fmt: skip
+    frame.loc[(frame["column"] == "dace_cpu_canonicalize") & (frame["kernel"] == "k2"), "validated"] = "False"
+    return frame
+
+
+def test_by_default_a_kernel_never_attempted_is_a_failure_at_one(pending_canon: pd.DataFrame) -> None:
+    row = signed.canon_kernel_row(pending_canon, "dace_cpu_canonicalize", ROSTER40)
+    assert row.ratios == {"k1": pytest.approx(10.0), "k2": 1.0, "k3": 1.0}
+    assert row.pending == frozenset() and row.excluded == "none"
+
+
+def test_mark_pending_splits_a_kernel_never_attempted_from_one_that_failed(pending_canon: pd.DataFrame) -> None:
+    """k2 ran and failed: it keeps its cross at 1x. k3 has no row yet: it leaves the ratios and the
+    geomean and is named pending."""
+    row = signed.canon_kernel_row(pending_canon, "dace_cpu_canonicalize", ROSTER40, mark_pending=True)
+    assert row.ratios == {"k1": pytest.approx(10.0), "k2": 1.0}
+    assert row.delivered == {"k1": True, "k2": False}
+    assert row.pending == frozenset({"k3"}) and row.excluded == "1 pending"
+    summary_row = signed.summary_table([row]).iloc[0]
+    assert summary_row["n"] == 2 and summary_row["excluded"] == "1 pending"
+    assert set(signed.table([row])["kernel"]) == {"k1", "k2"}
+
+
+def test_a_kernel_the_baseline_never_ran_is_pending_too(pending_canon: pd.DataFrame) -> None:
+    frame = pending_canon[~((pending_canon["column"] == "numba") & (pending_canon["kernel"] == "k1"))]
+    row = signed.canon_kernel_row(frame, "dace_cpu_canonicalize", ROSTER40, mark_pending=True)
+    assert row.pending == frozenset({"k1", "k3"})
+
+
+def test_mark_pending_keeps_an_arm_not_yet_served_every_kernel(
+    llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame
+) -> None:
+    partial = llr40_observations[
+        ~((llr40_observations["arm"] == "cpf-llr-focus40-oss120b-c-cpf") & (llr40_observations["benchmark"] == "k3"))
+    ]
+    arm = "cpf-llr-focus40-oss120b-c-cpf"
+    assert arm not in {row.framework for row in signed.llr40_rows(llr40_canon, partial, ROSTER40)}
+    rows = {row.framework: row for row in signed.llr40_rows(llr40_canon, partial, ROSTER40, mark_pending=True)}
+    assert rows[arm].pending == frozenset({"k3"}) and set(rows[arm].ratios) == {"k1", "k2"}
+    assert rows["cpf-llr-focus40-qwen38-c-cpf"].pending == frozenset()
+
+
+def test_the_legend_keys_pending_apart_from_the_cross(pending_canon: pd.DataFrame) -> None:
+    """A pending-only kernel adds the pending entry and not the cross; a failure adds the cross."""
+    only_pending = signed.canon_kernel_row(pending_canon, "dace_cpu_canonicalize", ("k1", "k3"), mark_pending=True)
+    labels = [handle.get_label() for handle in signed.legend_handles([only_pending], ("k1", "k3"))]
+    assert labels == ["Canonical Parallel Form", style.PENDING_LABEL]
+    both = signed.canon_kernel_row(pending_canon, "dace_cpu_canonicalize", ROSTER40, mark_pending=True)
+    labels = [handle.get_label() for handle in signed.legend_handles([both], ROSTER40)]
+    assert labels == ["Canonical Parallel Form", style.NOT_DELIVERED_LABEL, style.PENDING_LABEL]
+
+
+def test_the_figure_draws_one_pending_mark_per_pending_kernel(pending_canon: pd.DataFrame) -> None:
+    row = signed.canon_kernel_row(pending_canon, "dace_cpu_canonicalize", ROSTER40, mark_pending=True)
+    fig = signed.llr40_figure([row], ROSTER40)
+    try:
+        assert sum(c.get_gid() == style.PENDING_GID for c in fig.axes[0].collections) == 1
+    finally:
+        plt.close(fig)
+
+
+def test_a_kernel_numba_did_not_verify_is_timed_against_the_fallback() -> None:
+    """2026-09-21: where Numba fails, C autopar is the baseline; the row says how many kernels took it."""
+    frame = canon_table([("numba", "k1", 100.0), ("cc_autopar", "k1", 80.0), ("cc_autopar", "k2", 40.0),
+                         ("dace_cpu_canonicalize", "k1", 10.0), ("dace_cpu_canonicalize", "k2", 10.0)])  # fmt: skip
+    row = signed.canon_kernel_row(frame, "dace_cpu_canonicalize", ("k1", "k2"), baseline_fallback="cc_autopar")
+    assert row.ratios == {"k1": pytest.approx(10.0), "k2": pytest.approx(4.0)}
+    assert row.numerator_ms["k2"] == pytest.approx(40.0) and row.excluded == "1 over cc_autopar"
+    unfilled = signed.canon_kernel_row(frame, "dace_cpu_canonicalize", ("k1", "k2"))
+    assert unfilled.ratios["k2"] == 1.0 and unfilled.delivered["k2"] is False
+
+
+def test_the_fallback_never_replaces_a_numba_time() -> None:
+    times = {"numba": {"k1": 100.0}, "cc_autopar": {"k1": 5.0, "k2": 7.0}}
+    merged, filled = canon.with_fallback(times, "numba", "cc_autopar")
+    assert merged["numba"] == {"k1": 100.0, "k2": 7.0} and filled == frozenset({"k2"})
+    assert canon.with_fallback(times, "numba", "") == (times, frozenset())

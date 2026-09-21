@@ -74,6 +74,7 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.text import Annotation
 from matplotlib.ticker import FuncFormatter, LogLocator, MultipleLocator, NullFormatter
+from matplotlib.transforms import blended_transform_factory
 
 from hpcagent_bench import experiment_tags, packets
 from hpcagent_bench.harness import efficacy
@@ -112,6 +113,9 @@ class FigureConfig:
     #: The legend's column count ceiling (:func:`~hpcagent_bench.stats.style.legend_below` wraps a
     #: row that does not fit the canvas onto fewer columns, never more than this).
     legend_ncol: int = 4
+    #: Draw a "?" in a category that holds no measurement yet (a ``pending=`` model, a
+    #: ``placeholders=`` delivery), so a comparison still running reads as pending, not as absent.
+    mark_pending: bool = False
     #: A summary mark's own size (points^2, matplotlib's ``s=``).
     mark_size: float = 90.0
     #: How far a point's label sits from its mark, in points (:func:`label_places` lays the
@@ -2127,6 +2131,25 @@ def snap_axis_to_ticks(ax: Axes, data_low: float, data_high: float) -> None:
     ax.set_ylim(float(below.max()), float(above.min()))
 
 
+def is_pending(row: ArmRow) -> bool:
+    """Whether a category holds no measurement on either side: a slot kept for data still running."""
+    return all(point.kernels == 0 and point.served == 0 for point in (row.control, row.treated))
+
+
+def draw_pending(ax: Axes, rows: Sequence[ArmRow], config: FigureConfig) -> None:
+    """A :data:`~hpcagent_bench.stats.style.PENDING_MARKER` centred in every pending category, under
+    ``config.mark_pending`` only. Placed in axes height so it moves no limit of the row's own scale."""
+    if not config.mark_pending:
+        return
+    across = blended_transform_factory(ax.transData, ax.transAxes)
+    for index, row in enumerate(rows):
+        if is_pending(row):
+            ax.text(
+                index, 0.5, "?", transform=across, ha="center", va="center", color=row.colour,
+                fontsize=config.point_pt * 1.4, fontweight="bold", zorder=style.MARK_Z, gid=style.PENDING_GID,
+            )  # fmt: skip
+
+
 def draw_measure_row(
     ax: Axes,
     rows: Sequence[ArmRow],
@@ -2149,6 +2172,7 @@ def draw_measure_row(
     (1x over the campaign baseline on the speed-up row).
     """
     cost = measure == "cost"
+    draw_pending(ax, rows, config)
     if measure == "success":
         draw_success_row(ax, rows, shape, config, ylabel)
         return
@@ -2186,7 +2210,7 @@ def draw_measure_row(
                 textcoords="offset points", xytext=(config.symbol_offset_pt, 0.0), fontsize=config.point_pt,
                 color=style.INK, va="center", zorder=style.MARK_Z + 2.0,
             )  # fmt: skip
-    if cost and not rows:
+    if cost and all(is_pending(row) for row in rows):
         # A STUB column: an empty token axis whose ticks run 1 to 10 names a scale nothing is on.
         ax.set_yticks([])
     elif cost:
@@ -2426,6 +2450,22 @@ def placeholder_rows(rows: Sequence[ArmRow], deliveries: Sequence[str], channels
     return sorted([*rows, *extra], key=lambda row: (order.get(row.model, len(order)), row.leg))
 
 
+def pending_rows(rows: Sequence[ArmRow], models: Sequence[str], channels: str) -> list[ArmRow]:
+    """``rows`` plus one empty category per model of ``models`` not drawn yet, under the delivery the
+    drawn models use (none in a stub panel), in the registry's model order."""
+    drawn = {row.model for row in rows}
+    leg = rows[0].leg if rows else ""
+    extra = [
+        ArmRow(model, leg, series_colour(model, leg, channels), EMPTY_POINT, EMPTY_POINT)
+        for model in dict.fromkeys(models)
+        if model not in drawn
+    ]
+    if not extra:
+        return list(rows)
+    order = {name: index for index, name in enumerate(palette.in_order([row.model for row in (*rows, *extra)]))}
+    return sorted([*rows, *extra], key=lambda row: (order.get(row.model, len(order)), row.leg))
+
+
 def dot_columns(
     panels: Sequence[Panel],
     repeats: Sequence[population.RepeatPolicy],
@@ -2435,8 +2475,10 @@ def dot_columns(
     differences: Sequence[str] = (),
     placeholders: Sequence[str] = (),
     over: population.KernelPolicy = SPEEDUP_OVER,
+    pending: Sequence[str] = (),
 ) -> list[DotColumn]:
-    """Each panel of a joined row reduced to its own :class:`DotColumn`."""
+    """Each panel of a joined row reduced to its own :class:`DotColumn`. ``pending[i]`` names, comma
+    separated, the models panel ``i`` keeps an empty category for (:func:`pending_rows`)."""
     columns: list[DotColumn] = []
     for index, (title, treatment, stats, frame) in enumerate(panels):
         key = treatment if isinstance(treatment, str) else (flat_treatments(treatment) or [""])[0]
@@ -2448,6 +2490,8 @@ def dot_columns(
         )
         empty = [leg.strip() for leg in str(placeholders[index] if index < len(placeholders) else "").split(",")]
         rows = placeholder_rows(rows, [leg for leg in empty if leg], channels)
+        waiting = [m.strip() for m in str(pending[index] if index < len(pending) else "").split(",") if m.strip()]
+        rows = pending_rows(rows, waiting, channels)
         columns.append(
             DotColumn(
                 title=str(title),
@@ -2492,6 +2536,8 @@ def dot_row_legend(columns: Sequence[DotColumn], channels: str, config: FigureCo
         any(column.symbols[0] for column in columns),
         any(column.symbols[1] for column in columns),
     )
+    if config.mark_pending and any(is_pending(row) for row in rows):
+        handles.append(style.pending_legend_mark(config.legend_marker_pt))
     return handles + legend_tail(False, symbols) + alias_footnotes([row.leg for row in rows])
 
 
@@ -2598,6 +2644,7 @@ def figure_dot_row(
     placeholders: Sequence[str] = (),
     panel_labels: str = "subtitle",
     over: population.KernelPolicy = SPEEDUP_OVER,
+    pending: Sequence[str] = (),
 ) -> pathlib.Path:
     """N comparisons as a GRID of stacked 1-D panels: one column per comparison, one ROW per
     measure, every column sharing the row's Y scale and every row sharing the column's categories.
@@ -2612,7 +2659,8 @@ def figure_dot_row(
 
     n = len(panels)
     columns = dot_columns(
-        panels, resolve_row_repeats(repeats, n), channels, references, control_names, differences, placeholders, over
+        panels, resolve_row_repeats(repeats, n), channels, references, control_names, differences, placeholders, over,
+        pending,
     )  # fmt: skip
     texts = {**MEASURE_LABELS, "speedup": speedup_row_label(over), **(labels or {})}
     rows_config = measure_row_config(config, row_height_in)

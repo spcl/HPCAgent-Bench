@@ -696,6 +696,13 @@ def main() -> None:
         "sets the type to PAPER_CONFIG, which is the two-column convention",
     )  # fmt: skip
     parser.add_argument(
+        "--mark-pending",
+        action="store_true",
+        default=False,
+        help="draw a '?' in every category with no measurement yet: a comparison's 'pending=' models "
+        "and 'placeholders=' deliveries (default: the slot stays empty)",
+    )
+    parser.add_argument(
         "--include-incomplete",
         action="store_true",
         default=False,
@@ -849,6 +856,7 @@ def main() -> None:
             ("mark_size", args.mark_size),
             ("legend_ncol", args.legend_ncol),
             ("legend_pt", args.legend_pt),
+            ("mark_pending", args.mark_pending or None),
         )
         if value is not None
     }
@@ -878,6 +886,8 @@ def main() -> None:
         # A delivery that has not been measured yet still keeps its slot, so the column's spacing
         # is its final spacing (llr-cpu's Fortran, pending the regrade migration).
         comparison_placeholders: list[str] = []
+        # A MODEL whose arms have not run yet keeps a category too ('pending=kimi27sglang,...').
+        comparison_pending: list[str] = []
         for raw in args.comparison:
             spec = parse_spec(raw)
             one_repeats = spec.get("repeats", args.repeats)
@@ -894,6 +904,7 @@ def main() -> None:
             comparison_controls.append(spec.get("control-label", ""))
             comparison_differences.append(spec.get("difference", args.difference))
             comparison_placeholders.append(spec.get("placeholders", ""))
+            comparison_pending.append(spec.get("pending", ""))
         if not comparison_panels:
             raise SystemExit(f"no --comparison of {args.comparison} produced a panel")
         args.table.parent.mkdir(parents=True, exist_ok=True)
@@ -909,6 +920,7 @@ def main() -> None:
                 **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
                 control_names=comparison_controls, differences=comparison_differences,
                 placeholders=comparison_placeholders, over=args.speedup_over, measures=dot_measures(args),
+                pending=comparison_pending,
                 labels={
                     "speedup": efficacy_figures.speedup_row_label(args.speedup_over),
                     "cost": efficacy_figures.cost_label(
