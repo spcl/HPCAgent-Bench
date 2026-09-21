@@ -154,9 +154,9 @@ def test_a_rerun_budget_is_the_model_base_times_the_class_scale_whatever_the_sou
     assert budget.value("HPCAGENT_BENCH_RECORD_AGENT_MAX_TOKENS") == "48000000"
 
 
-@pytest.mark.parametrize(("model", "seconds"), [("qwen38", "14400"), ("oss120b", "14400"), ("kimi27sglang", "28800")])
+@pytest.mark.parametrize(("model", "seconds"), [("qwen38", "21600"), ("oss120b", "21600"), ("kimi27sglang", "43200")])
 def test_the_model_base_budget_is_the_rendered_base_env(owed: ModuleType, model: str, seconds: str) -> None:
-    assert owed.model_base_budget(str(REPO), model) == owed.Budget("12000000", seconds)
+    assert owed.model_base_budget(str(REPO), model) == owed.Budget("24000000", seconds)
 
 
 def test_a_wave_is_one_batch_of_agents_per_node_with_the_longest_budget_as_walltime(owed: ModuleType) -> None:
@@ -490,7 +490,7 @@ def test_a_lost_setup_owes_its_missing_kernels_now_and_its_whole_roster_only_on_
     got = sorted((item.setup.arm, str(item.problem["kernel"]).rsplit("/", 1)[-1]) for item in plan.owed)
     if rerun_lost:
         assert got == [("cpf-llr-focus40-qwen38-c-clean", k) for k in "abc"]
-        assert {item.setup.value("AGENT_MAX_TOKENS") for item in plan.owed} == {"12000000"}, "a full rerun is as-is"
+        assert {item.setup.value("AGENT_MAX_TOKENS") for item in plan.owed} == {"24000000"}, "a full rerun is as-is"
     else:
         assert got == [
             ("cpf-llr-focus40-qwen38-c-clean", "c"),
@@ -632,11 +632,27 @@ def test_a_lost_rendered_tracks_arm_falls_back_to_its_own_env_and_a_placeholder_
     item = plan.owed[0]
     assert item.setup.arm == f"{arm}-clean"
     assert item.setup.value("HPCAGENT_BENCH_RECORD_COMMIT") == owed.checkout_commit(str(REPO))
-    assert (item.setup.value("AGENT_MAX_TOKENS"), item.setup.value("AGENT_TIMEOUT_SECONDS")) == ("12000000", "14400")
+    assert (item.setup.value("AGENT_MAX_TOKENS"), item.setup.value("AGENT_TIMEOUT_SECONDS")) == ("24000000", "21600")
     assert item.problem == {"kernel": "loop_level_reasoning/argmax_with_index/argmax_with_index"}, "a placeholder only"
     final = owed.rerender(plan, str(REPO), sys.executable)
     assert final.owed[0].problem["kernel"] == item.problem["kernel"]
     assert final.owed[0].problem["task"], "rerender() renders the real task text for a RENDERED_TRACKS setup"
+
+
+def test_a_launch_dir_pruned_to_part_of_its_roster_still_plans_every_owed_kernel(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cleanup pass kept problems 0-19 of a 40-kernel launch: the kernels whose entry went with it
+    were skipped as "no launched problem entry" and never rerun (23 perf-playbook kernels, 09-21).
+    A RENDERED_TRACKS arm gets the placeholder rerender() replaces, like a lost launch dir."""
+    arm = "cpf-llr-focus40-qwen38-c-pruned"
+    runs = model_mismatch_run(tmp_path, "700006", arm, "qwen38")
+    monkeypatch.setattr(owed, "queued_arms", set)
+    monkeypatch.setattr(owed.remaining_kernels, "roster", lambda tag, opt: ["a", "b"])
+    plan = owed.gather("qwen38", runs, str(REPO), owed.Selection(setups=frozenset({arm})), 1, 1, set())
+    kernels = sorted(str(item.problem["kernel"]) for item in plan.owed)
+    assert kernels == ["loop_level_reasoning/a/a", "loop_level_reasoning/b/b"], plan.notes
+    assert not any("no launched problem entry" in note for note in plan.notes), plan.notes
 
 
 def test_a_lost_llrblind_arm_falls_back_to_its_own_env_and_renders_its_problems_now(
@@ -717,6 +733,6 @@ def test_a_placeholder_only_arm_is_planned_as_owed_infra_at_1x(
     item = plan.owed[0]
     assert item.owed_class == "infra"
     assert (item.setup.value("AGENT_MAX_TOKENS"), item.setup.value("AGENT_TIMEOUT_SECONDS")) == (
-        "12000000",
-        "14400",
+        "24000000",
+        "21600",
     ), "the model's own base budget, unscaled"
