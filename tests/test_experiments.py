@@ -16,6 +16,7 @@ import pandas as pd
 import pytest
 
 from hpcagent_bench import experiments
+from hpcagent_bench.stats import population
 
 
 def test_a_blank_and_filled_arm_reads_as_one_identity() -> None:
@@ -178,37 +179,39 @@ def clean_frame() -> pd.DataFrame:
     )
 
 
-def test_an_arm_superseded_by_a_clean_rerun_is_dropped_with_a_warning() -> None:
-    """Spec X9: the clean arm re-ran the condition from scratch because the earlier wave was wrong,
-    and the two carry one identity -- pooled, the defect the re-run exists to escape is averaged
-    back in. What survives is reported under the CONDITION's name: the suffix named the wave."""
-    with pytest.warns(UserWarning, match="dropped 2 row"):
-        kept = experiments.drop_superseded_arm_rows(clean_frame())
-    assert set(kept.arm) == {"cpf-llr-focus40-qwen38-c-cpf", "cpf-llr-focus40-qwen38-c-cpfsrc"}
-    assert len(kept[kept.arm == "cpf-llr-focus40-qwen38-c-cpf"]) == 2
-
-
-def test_a_clean_rerun_supersedes_only_its_own_identity_group() -> None:
-    """The suffix says which TASKS are live for one condition, not that every other arm of the
-    campaign was re-run; a cpfsrc arm with no clean wave keeps every row."""
-    with pytest.warns(UserWarning, match="spec X9"):
-        kept = experiments.drop_superseded_arm_rows(clean_frame())
-    assert (kept.packet == "cpfsrc").sum() == 2
-
-
 def test_a_campaign_with_no_clean_arm_is_left_alone() -> None:
-    """Every wave so far ran without the suffix, and X9 must be invisible to them."""
     frame = clean_frame()
     frame = frame[~frame.arm.str.endswith("-clean")]
-    assert len(experiments.drop_superseded_arm_rows(frame)) == len(frame)
+    assert experiments.fold_clean_arms(frame).equals(frame)
 
 
-def test_a_clean_arm_with_no_task_row_supersedes_nothing() -> None:
-    """A judge row alone does not say a re-run happened: the task row is what records that an agent
-    was launched under the clean arm, the same evidence X6-X8 read."""
-    frame = clean_frame()
-    frame = frame[(frame.record != "task") | (~frame.arm.str.endswith("-clean"))]
-    assert len(experiments.drop_superseded_arm_rows(frame)) == len(frame)
+def test_a_clean_rerun_folds_into_the_arm_it_re_ran_and_keeps_every_row() -> None:
+    """Spec X9 (2026-09-18 user rule): the suffix names a wave, not a condition, so the clean arm is
+    reported under the arm it re-ran and both waves' rows stay for the latest run to choose from."""
+    kept = experiments.fold_clean_arms(clean_frame())
+    assert len(kept) == len(clean_frame())
+    assert (kept.arm == "cpf-llr-focus40-qwen38-c-cpf").sum() == 4
+    assert (kept.arm == "cpf-llr-focus40-qwen38-c-cpfsrc").sum() == 2
+
+
+def test_a_one_kernel_owed_rerun_keeps_the_arms_other_kernels_and_wins_its_own() -> None:
+    """The bug: an owed rerun is named -clean and covers a few kernels, and X9 used to drop every row
+    of the wave it topped up -- 40 kernels became the rerun's one."""
+    common = {"record": "task", "run_root": "r", "language": "c", "packet": "", "harness": "claude"}
+    rows = [
+        {**common, "arm": "x-qwen38-c", "job": "1", "run_id": f"a{i}", "benchmark": f"k{i}", "ts_ms": 1}
+        for i in range(3)
+    ] + [{**common, "arm": "x-qwen38-c-clean", "job": "2", "run_id": "b0", "benchmark": "k0", "ts_ms": 2}]
+    latest = population.latest_runs(experiments.fold_clean_arms(pd.DataFrame(rows)))
+    assert sorted(latest.benchmark) == ["k0", "k1", "k2"]
+    assert latest.set_index("benchmark").loc["k0", "job"] == "2"
+    assert set(latest.arm) == {"x-qwen38-c"}
+
+
+def test_a_blank_arm_stays_blank_through_the_fold() -> None:
+    frame = pd.DataFrame({"arm": [math.nan, "x-c-clean"], "record": ["call", "task"]})
+    kept = experiments.fold_clean_arms(frame)
+    assert experiments.is_blank(kept.arm.iloc[0]) and kept.arm.iloc[1] == "x-c"
 
 
 @pytest.mark.parametrize(
@@ -285,56 +288,6 @@ def test_read_observations_fills_arm_identity_from_a_csv(tmp_path: pathlib.Path)
 def test_nan_is_blank_but_zero_is_not() -> None:
     assert experiments.is_blank(math.nan)
     assert not experiments.is_blank("0")
-
-
-def test_a_clean_rerun_of_one_model_does_not_supersede_another_model(tmp_path: pathlib.Path) -> None:
-    """Spec X9 groups by identity, and an extracted table records language, packet and harness but
-    not the model. Grouping on those alone put every model's C control in one identity, so six
-    finished GPT-OSS-120B re-runs deleted Qwen3.8-27B's and Kimi-K2.7-Code's arms as well."""
-    rows = [
-        {
-            "arm": "cpf-llr-focus40-oss120b-c-clean",
-            "record": "task",
-            "language": "c",
-            "packet": "",
-            "harness": "claude",
-        },
-        {"arm": "cpf-llr-focus40-oss120b-c", "record": "task", "language": "c", "packet": "", "harness": "claude"},
-        {"arm": "cpf-llr-focus40-qwen38-c", "record": "task", "language": "c", "packet": "", "harness": "claude"},
-        {"arm": "cpf-llr-focus40-kimi27sglang-c", "record": "task", "language": "c", "packet": "", "harness": "claude"},
-    ]
-    with pytest.warns(UserWarning, match="superseded by a clean re-run"):
-        kept = experiments.drop_superseded_arm_rows(pd.DataFrame(rows))
-    assert sorted(kept.arm) == [
-        "cpf-llr-focus40-kimi27sglang-c",
-        "cpf-llr-focus40-oss120b-c",
-        "cpf-llr-focus40-qwen38-c",
-    ]
-
-
-def test_a_clean_rerun_supersedes_the_arm_of_its_own_name(tmp_path: pathlib.Path) -> None:
-    """The suffix names no condition, so the clean wave replaces the wave it re-ran and nothing else."""
-    rows = [
-        {"arm": "x-qwen38-c-skills-clean", "record": "task", "language": "c", "packet": "lang-skills", "harness": "h"},
-        {"arm": "x-qwen38-c-skills", "record": "task", "language": "c", "packet": "lang-skills", "harness": "h"},
-        {"arm": "x-qwen38-c", "record": "task", "language": "c", "packet": "", "harness": "h"},
-    ]
-    with pytest.warns(UserWarning, match="superseded by a clean re-run"):
-        kept = experiments.drop_superseded_arm_rows(pd.DataFrame(rows))
-    assert sorted(kept.arm) == ["x-qwen38-c", "x-qwen38-c-skills"]
-
-
-def test_a_surviving_clean_arm_is_reported_under_the_condition_it_re_ran() -> None:
-    """The suffix names a wave, not a condition. Left on the arm, it renames the condition for every
-    consumer downstream: a pair list, an --arms regex and a figure's arm pattern all ask by name."""
-    rows = [
-        {"arm": "x-qwen38-c-clean", "record": "task", "language": "c", "packet": "", "harness": "h"},
-        {"arm": "x-qwen38-c", "record": "task", "language": "c", "packet": "", "harness": "h"},
-        {"arm": "x-oss120b-c", "record": "task", "language": "c", "packet": "", "harness": "h"},
-    ]
-    with pytest.warns(UserWarning, match="superseded by a clean re-run"):
-        kept = experiments.drop_superseded_arm_rows(pd.DataFrame(rows))
-    assert sorted(kept.arm) == ["x-oss120b-c", "x-qwen38-c"]
 
 
 def test_a_column_no_row_in_the_table_ever_recorded_still_fills_from_the_arm_name() -> None:
