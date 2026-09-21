@@ -224,6 +224,42 @@ def hipify(scratch: pathlib.Path, stem: str) -> None:
     subprocess.run([exe, "-inplace", str(scratch / f"{stem}_kernel.hu")], capture_output=True, check=True)
 
 
+#: One ``hipMalloc``/``hipMemcpy``/``hipFree`` statement that names a ``dev_*`` mirror pointer --
+#: ppcg's own device-buffer convention (``--target=cuda`` always spells the mirror ``dev_<arg>``),
+#: which is the only thing this call ever touches. ``[^;]*`` is safe here: none of the three calls'
+#: arguments (a size expression, ``hipMemcpyHostToDevice``) contains a semicolon.
+_HIP_MIRROR_CALL_RE = re.compile(r"^[ \t]*hip(?:Malloc|Memcpy|Free)\([^;]*\bdev_\w+\b[^;]*\);[ \t]*\n?", re.MULTILINE)
+
+#: The mirror pointer's own declaration, ``T *dev_<arg>;`` -- removed so renaming ``dev_<arg>`` to
+#: ``<arg>`` (an existing PARAMETER) does not redeclare it.
+_DEV_DECL_RE = re.compile(r"^[ \t]*[A-Za-z_]\w*(?:\s+const)?\s*\*\s*dev_\w+\s*;[ \t]*\n?", re.MULTILINE)
+
+
+def device_resident_host(host: str) -> str:
+    """ppcg's hipified host code, rewritten to use its own parameters as device pointers directly,
+    instead of allocating a device mirror and copying through it.
+
+    ppcg's ``--target=cuda`` output always shapes a GPU array argument the same way: declare
+    ``T *dev_X;``, ``hipMalloc`` it, ``hipMemcpy`` the caller's ``X`` into it (H2D), launch every
+    kernel against ``dev_X``, ``hipMemcpy`` the result back into ``X`` (D2H, output arrays only),
+    then ``hipFree`` it. The harness's GPU contract puts every array argument on the device BEFORE
+    the timed call (docs/abi_contract.md Sec. 10; ``ppcg_hip``'s own ``copy_func`` stages it, see
+    :meth:`hpcagent_bench.frameworks.pluto_framework.PlutoFramework.copy_func`), so ``X`` already
+    IS a device pointer by the time this runs: the mirror is redundant, and left in place it is
+    timed INSIDE ppcg's own perf_counter bracket -- the malloc/H2D/D2H/free the column's number
+    used to include and every other GPU column's does not.
+
+    Purely textual, and deliberately loud rather than quietly wrong: raises if it finds no ``dev_``
+    mirror to strip, since a ppcg host that does not match the shape above would otherwise compile
+    and measure something this rewrite never looked at.
+    """
+    stripped = _HIP_MIRROR_CALL_RE.sub("", host)
+    stripped = _DEV_DECL_RE.sub("", stripped)
+    if stripped == host:
+        raise ValueError("no ppcg-style 'dev_<arg>' device-mirror hip call/declaration found to strip")
+    return re.sub(r"\bdev_(\w+)\b", r"\1", stripped)
+
+
 #: Prepended to ppcg's host output. ppcg copies everything OUTSIDE the scop through verbatim, so
 #: what reaches nvcc/hipcc is the translator's C11 prelude -- and both drivers compile a .cu/.hip as
 #: C++, where ``restrict`` is not a keyword at all. Spelled as a define in the SOURCE rather than as
@@ -337,6 +373,9 @@ def run_ppcg(
                 host_cu.write_text(cxx_compat(host_cu.read_text(), entry))
             if vendor == "hip":
                 hipify(pathlib.Path(scratch), scop.stem)
+                host_hip = pathlib.Path(scratch) / f"{scop.stem}_host.hip"
+                if host_hip.is_file():
+                    host_hip.write_text(device_resident_host(host_hip.read_text()))
             for produced in transformed_paths(scop, vendor):
                 src = pathlib.Path(scratch) / produced.name
                 if src.is_file():

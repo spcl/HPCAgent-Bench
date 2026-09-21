@@ -83,10 +83,13 @@ def test_both_timer_ends_synchronize(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_every_gpu_framework_reaches_a_synchronize() -> None:
     """The fix lives in the BASE, so a GPU framework cannot miss it by not overriding a timer.
 
-    PlutoFramework (ppcg, ppcg_cuda, ppcg_hip) and TVMFramework ride the default host clock and
-    carried the identical undercount until the hook moved down here. CuPy and the torch mixin
-    replace the timer ends outright and synchronize with device events instead, which is why they
-    are checked for a synchronize of their OWN rather than for the inherited one.
+    TVMFramework rides the default host clock and carried the identical undercount until the hook
+    moved down here. CuPy and the torch mixin replace the timer ends outright and synchronize with
+    device events instead, which is why they are checked for a synchronize of their OWN rather than
+    for the inherited one. PlutoFramework is a THIRD shape now: ``ppcg_hip`` also does its own
+    device-event wait (the same technique CupyFramework uses, see
+    tests/test_ppcg_device_residency.py), while ``pluto``/``ppcg``/``ppcg_cuda`` still fall through
+    to the inherited timer -- so its ``stop_timer`` source has to carry BOTH.
     """
     from hpcagent_bench.frameworks.cupy_framework import CupyFramework
     from hpcagent_bench.frameworks.framework import Framework, TorchCudaEventTiming
@@ -97,7 +100,7 @@ def test_every_gpu_framework_reaches_a_synchronize() -> None:
     import inspect
 
     # Riding the default timer is now safe: the base synchronizes at both ends.
-    for cls in (PlutoFramework, TVMFramework, dace_framework.DaceFramework):
+    for cls in (TVMFramework, dace_framework.DaceFramework):
         assert "synchronize_device" in inspect.getsource(cls.stop_timer) or (cls.stop_timer is Framework.stop_timer), (
             f"{cls.__name__} reads the clock without waiting for the device"
         )
@@ -106,6 +109,12 @@ def test_every_gpu_framework_reaches_a_synchronize() -> None:
     assert "synchronize" in inspect.getsource(CupyFramework.stop_timer)
     assert "synchronize" in inspect.getsource(TorchCudaEventTiming.stop_timer)
     assert issubclass(TritonFramework, TorchCudaEventTiming)
+
+    # PlutoFramework: ppcg_hip's own event wait, AND the inherited base-timer fallback every other
+    # flavor of this class still rides.
+    pluto_stop_timer_src = inspect.getsource(PlutoFramework.stop_timer)
+    assert "synchronize" in pluto_stop_timer_src
+    assert "super().stop_timer" in pluto_stop_timer_src
 
 
 def test_the_base_timer_synchronizes(monkeypatch: pytest.MonkeyPatch) -> None:

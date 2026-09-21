@@ -555,6 +555,7 @@ def test_build_call_stamps_the_kernel_the_gate_will_ask_about(monkeypatch) -> No
     """``measure``'s signature carries no benchmark, so the name has to be taken at the last hook
     before timing that still sees one."""
     framework = PlutoFramework.__new__(PlutoFramework)
+    framework.fname = "pluto"
     monkeypatch.setattr(PlutoFramework, "_native_base", lambda self, bench: "pagerank")
 
     framework.build_call(ManifestFreeBench(), no_impl, {})

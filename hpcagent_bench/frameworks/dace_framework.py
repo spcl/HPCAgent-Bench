@@ -1152,6 +1152,16 @@ class DaceFramework(Framework):
                 if not PIPELINES_BY_NAME[name].finalized:
                     opt.set_fast_implementations(sdfg, ctx.device)
                 self._prepare_gpu(sdfg, ctx)
+                # BEFORE compile: codegen reads sdfg.instrument while it builds the .so
+                # (dace.codegen.codegen picks the provider off it), so setting this after
+                # compile() -- as create_timer used to -- never reaches the generated code and
+                # get_latest_report() always came back None, silently falling through to the
+                # host python series.
+                sdfg.instrument = (
+                    dace.InstrumentationType.GPU_Events
+                    if self.info["arch"] == "gpu"
+                    else dace.InstrumentationType.Timer
+                )
                 dc_exec = sdfg.compile()
                 compiled[name] = TimedCompiledSDFG(dc_exec, sdfg, name)
             except Exception as exc:
@@ -1369,11 +1379,20 @@ class DaceFramework(Framework):
     # Timing override
 
     def create_timer(self, program: KernelImpl) -> Timer:
-        """Enable SDFG-level Timer instrumentation for TimedCompiledSDFG programs; else default host timing."""
+        """Clear any report left over from an earlier call to this build folder's ``.so``.
+
+        Instrumentation itself is set on the SDFG in :meth:`compile_variants`, BEFORE ``compile()``
+        -- codegen is what reads ``sdfg.instrument``, so setting it here (after the .so already
+        exists) would be a no-op, which is the bug this replaced. What still belongs here is making
+        sure :meth:`stop_timer`'s ``get_latest_report`` cannot read a STALE ``perf/report-*`` file:
+        a build folder can be reused across calls (the cache in :meth:`build_with_cache`), and
+        ``get_latest_report`` otherwise happily returns the newest file on disk even when this run
+        never wrote one.
+        """
         timer = Timer(program)
         if isinstance(program, TimedCompiledSDFG):
             try:
-                program.sdfg.instrument = dace.InstrumentationType.Timer
+                program.sdfg.clear_instrumentation_reports()
             except Exception:
                 pass
         return timer
