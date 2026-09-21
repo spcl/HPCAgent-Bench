@@ -473,3 +473,81 @@ def test_the_unit_sweep_matrix_runs_every_slice_it_deals_into() -> None:
     assert indices == set(range(count)), (
         f"unit runs shards {sorted(indices)} of {count}; the missing ones are test files nothing sweeps"
     )
+
+
+#: Import names for the distributions in ``[project.optional-dependencies]`` whose spelling as a
+#: module differs from their spelling on PyPI. Only the ones a test could plausibly import.
+EXTRA_IMPORT_NAMES = {
+    "aider-chat": "aider",
+    "apache-tvm": "tvm",
+    "apache-tvm-ffi": "tvm_ffi",
+    "cupy-cuda13x": "cupy",
+    "optimas-ai": "optimas",
+    "py-cpuinfo": "cpuinfo",
+    "z3-solver": "z3",
+}
+
+#: The one extras module every CI job really does have. ``.github/actions/setup/action.yml``
+#: clones and ``pip install -e``s dace from git in EVERY job (it is deliberately not passed as an
+#: extra, because pip would resolve the direct reference into a wheel without ``tests/corpus``),
+#: so a module-level ``import dace`` under tests/ cannot abort collection anywhere.
+ALWAYS_INSTALLED_EXTRAS = frozenset({"dace"})
+
+
+def optional_extra_modules() -> set[str]:
+    """Module names provided only by a pyproject EXTRA, i.e. not installed unless a job asks."""
+    import tomllib
+
+    extras = tomllib.loads((REPO / "pyproject.toml").read_text())["project"]["optional-dependencies"]
+    out: set[str] = set()
+    for requirements in extras.values():
+        for requirement in requirements:
+            dist = re.split(r"[<>=!\[ ;@]", requirement.strip())[0]
+            if dist.startswith("hpcagent_bench"):
+                continue
+            out.add(EXTRA_IMPORT_NAMES.get(dist, dist.replace("-", "_")))
+    return out - ALWAYS_INSTALLED_EXTRAS
+
+
+def module_level_imports(path: pathlib.Path) -> list[tuple[int, str]]:
+    """``(lineno, top-level package)`` for every import statement in ``path``'s module body.
+
+    Only ``tree.body``: an import inside a function or an ``if TYPE_CHECKING`` block runs at call
+    time or never, and neither can fail collection.
+    """
+    import ast
+
+    found: list[tuple[int, str]] = []
+    for node in ast.parse(path.read_text()).body:
+        if isinstance(node, ast.Import):
+            found += [(node.lineno, alias.name.split(".")[0]) for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            found.append((node.lineno, node.module.split(".")[0]))
+    return found
+
+
+def test_no_test_module_imports_an_optional_extra_at_module_scope() -> None:
+    """A module-level import of a dependency some job does not install kills that job's COLLECTION.
+
+    Not one test: pytest exits 2 with ``Interrupted: 1 error during collection`` and reports no
+    verdict for the other twenty-two thousand. Three files did this in one day --
+    ``test_observations_mini_fixture.py``, ``test_ablation_stats.py`` and ``test_fused_router.py``
+    (``from fastapi.testclient import TestClient``, while only the ``unit`` job installs the
+    ``judge-proxy`` extra) -- and every green recorded while one was in place attested to nothing.
+
+    The rule is the one the judge-router tests already follow: reach an extra through
+    ``tests.optional_imports.import_or_skip`` inside the fixture or test that needs it, keep the
+    name under ``if TYPE_CHECKING`` for annotations, and a job without the extra SKIPS instead of
+    taking the run down.
+    """
+    extras = optional_extra_modules()
+    offenders = [
+        f"{path.relative_to(REPO)}:{lineno}: {name}"
+        for path in sorted((REPO / "tests").rglob("*.py"))
+        for lineno, name in module_level_imports(path)
+        if name in extras
+    ]
+    assert not offenders, (
+        "module-level import of an optional extra under tests/ -- a job that does not install it "
+        "aborts COLLECTION and reports no verdict at all:\n  " + "\n  ".join(offenders)
+    )
