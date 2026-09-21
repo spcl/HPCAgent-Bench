@@ -1,2 +1,0 @@
-fft_1d
-gemm
