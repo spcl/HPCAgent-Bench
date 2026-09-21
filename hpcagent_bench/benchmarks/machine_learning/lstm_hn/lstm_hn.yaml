@@ -43,5 +43,7 @@ init:
     out: (num_layers, batch_size, hidden_size)
 output_args:
 - out
+chain_length:
+  out: hidden_size * sequence_length * num_layers
 experiment_tags:
 - kernelbench

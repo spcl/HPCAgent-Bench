@@ -22,6 +22,8 @@ init:
 output_args:
 - a
 - e
+chain_length:
+  e: LEN_1D
 loop_level_reasoning:
   source: tsvc_2
   category: loop distribution

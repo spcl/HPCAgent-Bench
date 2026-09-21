@@ -35,6 +35,8 @@ array_args:
 - imgOut
 output_args:
 - imgOut
+chain_length:
+  imgOut: H + W
 experiment_tags:
 - npbench
 - polybench
