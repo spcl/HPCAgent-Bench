@@ -12,6 +12,8 @@ Neutrals carry a slight cool bias rather than being a pure grey, so they sit und
 blues without looking like a different rendering of the page.
 """
 
+import itertools
+import logging
 import math
 import pathlib
 from collections.abc import Sequence
@@ -19,14 +21,19 @@ from typing import Literal
 
 import matplotlib
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.axis import Axis
+from matplotlib.backend_bases import RendererBase
+from matplotlib.collections import LineCollection, PathCollection
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.text import Annotation
 from matplotlib.ticker import FuncFormatter, LogLocator, MaxNLocator, NullFormatter, NullLocator
-from matplotlib.transforms import Transform
+from matplotlib.transforms import Bbox, Transform
+
+LOG = logging.getLogger(__name__)
 
 # matplotlib's drawing calls end in an untyped ``**kwargs``, so every call below suppresses the
 # unknown-member report that fact produces; the arguments themselves are checked.
@@ -69,6 +76,11 @@ SUBTITLE_PT: float = 13.0
 LABEL_PT: float = 16.0
 TICK_PT: float = 14.0
 ANNOTATION_PT: float = 13.0
+
+#: Type sizes of a figure drawn at the width it is placed at (scale 1.0), in points: what the page
+#: prints. Every figure module's paper mode starts from these, so two figures of one page agree.
+PRINT_TICK_PT: float = 7.0
+PRINT_LABEL_PT: float = 8.0
 
 #: The dpi every figure is finally written at (:func:`save`'s own default). FreeType hints a glyph
 #: run tighter at a LOW dpi than the same point size renders at a higher one, so a fit measured via
@@ -136,6 +148,13 @@ def despine(ax: Axes, keep: tuple[str, ...] = ("top", "right", "left", "bottom")
             ax.spines[side].set_color(RULE)
 
 
+#: Where :func:`title` puts a figure title: its top edge this far below the canvas top, and the plot
+#: area this much further down. A figure that reserves room for a title reserves TITLE_BAND_IN.
+TITLE_TOP_IN: float = 0.34
+TITLE_GAP_IN: float = 0.30
+TITLE_BAND_IN: float = TITLE_TOP_IN + TITLE_GAP_IN
+
+
 def title(fig: Figure, text: str, subtitle: str = "") -> float:
     """Centred title; returns the top of the plot area for ``tight_layout(rect=...)``.
 
@@ -148,7 +167,7 @@ def title(fig: Figure, text: str, subtitle: str = "") -> float:
     width, height = (float(value) for value in fig.get_size_inches())
     # Work in inches, then convert: a fraction of a 4-inch figure is a different gap than the same
     # fraction of a 12-inch one, which is what made the fixed offsets collide.
-    top = 1.0 - (0.34 / height)
+    top = 1.0 - (TITLE_TOP_IN / height)
     artist = fig.text(0.5, top, text, fontsize=TITLE_PT, color=INK, ha="center", va="top")  # pyright: ignore[reportUnknownMemberType]
     # A title longer than the canvas is centred and clipped at both ends, so the figure loses the
     # first and last words of its own name. Shrink it to the width the template gives it.
@@ -159,7 +178,7 @@ def title(fig: Figure, text: str, subtitle: str = "") -> float:
             break
         size -= 0.5
         artist.set_fontsize(size)
-    return max(0.5, top - 0.30 / height)
+    return max(0.5, top - TITLE_GAP_IN / height)
 
 
 def legend_below(
@@ -248,6 +267,40 @@ def decade_label(value: float, position: int = 0) -> str:
     return f"{value:g}"
 
 
+def ratio_tick_label(value: float) -> str:
+    """A ratio tick at full precision: ``0.25 -> "0.25x"``, ``1.0 -> "1x"``, ``4.0 -> "4x"``.
+
+    A ratio below 1 prints as a decimal (user, 2026-09-20). The earlier ``1/n`` spelling only ever
+    worked for a whole reciprocal: it rounded, so a half-octave tick at 0.707 printed ``1/1x``, a
+    ratio of one marking a point 30% below it.
+    """
+    if value == 1.0:
+        return "1x"
+    if value > 1.0:
+        return f"{value:g}x"
+    return f"{float(f'{value:.3g}'):g}x"
+
+
+def ratio_tick(value: float, position: int = 0) -> str:
+    """:func:`ratio_tick_label` as a :class:`~matplotlib.ticker.FuncFormatter` on a log ratio axis."""
+    del position
+    return ratio_tick_label(value)
+
+
+def log2_ratio_tick(value: float, position: int = 0) -> str:
+    """:func:`ratio_tick_label` for an axis that holds ``log2(ratio)`` (``+1`` is 2x, ``-1`` 0.5x)."""
+    del position
+    return ratio_tick_label(2.0**value)
+
+
+def ratio_label(value: float) -> str:
+    """A measured ratio printed beside its mark, to TWO significant figures: ``6.3x``, ``33x``,
+    ``0.92x``. The tick spelling keeps full precision, which beside a mark reads ``6.34919x``."""
+    if not math.isfinite(value) or value <= 0.0:
+        return ""
+    return f"{float(f'{value:.2g}'):g}x"
+
+
 def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, major: bool = True) -> None:
     """Ticks and a MAJOR grid for the axis carrying the MEASURED quantity.
 
@@ -272,9 +325,7 @@ def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, 
         if major:
             # A decade gets 1, 2, 5, more than one labelled tick even under two decades. A base-2
             # (ratio) axis gets 1 ONLY: a 1.5 sub would label 1.5x, 3x, 6x, 0.75x, ... -- ticks a
-            # power-of-2 formatter (:func:`~hpcagent_bench.stats.figures.per_kernel.
-            # speedup_tick_label`) cannot spell as a clean fraction and a reader cannot place on a
-            # log2 grid by eye. The caller widens its own limits (SC15 speed-up/ratio axes always
+            # reader cannot place on a log2 grid by eye (:func:`ratio_tick_label`). The caller widens its own limits (SC15 speed-up/ratio axes always
             # do) so a narrow window still gets more than the one tick this alone would leave it.
             subs = (1.0, 2.0, 5.0) if log_base == 10.0 else (1.0,)
             target.set_major_locator(LogLocator(base=log_base, subs=subs, numticks=20))
@@ -338,6 +389,7 @@ def point_mark(
     filled: bool,
     size: float = 110.0,
     delivered: bool = True,
+    clip: bool = True,
 ) -> None:
     """One point of a two-condition pair, drawn as a white disc plus the mark itself.
 
@@ -351,10 +403,12 @@ def point_mark(
     outright would cost the figure the one channel that survives greyscale. The placeholder is
     always drawn HOLLOW: a cross in the series' own colour laid over a FILLED mark of that colour
     is invisible, which drew 34 of 40 PPCG placeholders as if they were measured 1x results.
+
+    ``clip`` False lets a mark on the axis limit print whole across the frame instead of halved.
     """
     filled = filled and delivered
     ax.scatter(  # pyright: ignore[reportUnknownMemberType]
-        x, y, s=size, marker=marker, color="white", edgecolor="none", zorder=FILL_Z
+        x, y, s=size, marker=marker, color="white", edgecolor="none", zorder=FILL_Z, clip_on=clip
     )
     ax.scatter(  # pyright: ignore[reportUnknownMemberType]
         x,
@@ -365,10 +419,18 @@ def point_mark(
         edgecolor=color,
         linewidth=edge_width(size, 1.8),
         zorder=MARK_Z,
+        clip_on=clip,
     )
     if not delivered:
         ax.scatter(  # pyright: ignore[reportUnknownMemberType]
-            x, y, s=size * CROSS_SCALE, marker="x", color=color, linewidth=edge_width(size, 1.6), zorder=MARK_Z + 1.0
+            x,
+            y,
+            s=size * CROSS_SCALE,
+            marker="x",
+            color=color,
+            linewidth=edge_width(size, 1.6),
+            zorder=MARK_Z + 1.0,
+            clip_on=clip,
         )
 
 
@@ -500,6 +562,7 @@ def save(
     """
     stem.parent.mkdir(parents=True, exist_ok=True)
     settle_spread_labels(fig)
+    settle_clear_labels(fig)
     box = fig.bbox_inches if fixed else "tight"
     with plt.rc_context({"svg.hashsalt": SVG_HASH_SALT}):
         for suffix in formats:
@@ -508,3 +571,178 @@ def save(
             )
     plt.close(fig)
     return stem
+
+
+# ---------------------------------------------------------------------------------------------
+# Measured layout. Every figure module sizes its chrome from what its text MEASURES on the laid-out
+# figure, never from a fixed fraction: a fixed band is right for one width and one label length,
+# and on any other it either wastes the page or prints the chrome over the data.
+# ---------------------------------------------------------------------------------------------
+
+
+def left_protrusion_in(fig: Figure, ax: Axes) -> float:
+    """How far ``ax``'s Y tick labels and axis label reach left of its frame, in inches."""
+    renderer = fig.canvas.get_renderer()
+    return max(0.0, ax.get_window_extent(renderer).x0 - ax.yaxis.get_tightbbox(renderer).x0) / fig.dpi
+
+
+def below_protrusion_in(fig: Figure, ax: Axes) -> float:
+    """How far ``ax``'s X tick labels and axis label reach below its frame, in inches."""
+    renderer = fig.canvas.get_renderer()
+    return max(0.0, ax.get_window_extent(renderer).y0 - ax.xaxis.get_tightbbox(renderer).y0) / fig.dpi
+
+
+def above_protrusion_in(fig: Figure, ax: Axes) -> float:
+    """How far the text drawn on ``ax`` (its title, and annotations placed over the frame, such as a
+    summary column's statistic) reaches above its frame, in inches."""
+    renderer = fig.canvas.get_renderer()
+    top = ax.get_window_extent(renderer).y1
+    texts = [text for text in (ax.title, *ax.texts) if text.get_visible() and text.get_text()]
+    return max((text.get_window_extent(renderer).y1 - top for text in texts), default=0.0) / fig.dpi
+
+
+def crowded_ticks(ax: Axes, renderer: RendererBase, gap: float) -> bool:
+    """Whether two X tick labels printed on one line of ``ax`` come within ``gap`` pixels. The labels
+    on one line are the ticks sharing a pad: a staggered axis prints two lines."""
+    lines: dict[float, list[Bbox]] = {}
+    for tick in ax.xaxis.get_major_ticks():
+        if tick.label1.get_text():
+            lines.setdefault(tick.get_pad(), []).append(tick.label1.get_window_extent(renderer))
+    return any(
+        left.x1 + gap > right.x0
+        for boxes in lines.values()
+        for left, right in itertools.pairwise(sorted(boxes, key=lambda box: box.x0))
+    )
+
+
+def shrink_crowded_ticks(fig: Figure, axes: Sequence[Axes], start_pt: float, floor_pt: float) -> float:
+    """Step the X tick labels of ``axes`` down from ``start_pt``, all to one size, until no printed
+    line is crowded (:func:`crowded_ticks`); returns the size they got. Labels still crowded at
+    ``floor_pt`` stay at the floor and are reported: below it they are no longer readable, and an
+    overprint is a layout the caller has to change.
+
+    Two labels closer than a third of their type size read as one word ("OMPTriton").
+    """
+    renderer = fig.canvas.get_renderer()
+    size = start_pt
+    while True:
+        for ax in axes:
+            for label in ax.get_xticklabels():
+                label.set_fontsize(size)
+        gap = size / 3.0 * fig.dpi / 72.0
+        if not any(crowded_ticks(ax, renderer, gap) for ax in axes):
+            return size
+        if size <= floor_pt:
+            LOG.warning("style: tick labels still overlap at the %.2fpt floor; the axis needs more width", floor_pt)
+            return size
+        size = max(floor_pt, size - 0.25)
+
+
+def mark_boxes(ax: Axes) -> list[Bbox]:
+    """The display box of every mark and interval drawn on ``ax``: one per scatter point, sized by
+    its own marker area, one per interval segment, and one per marker of a plotted line."""
+    fig = ax.figure
+    dpi = fig.dpi
+    boxes: list[Bbox] = []
+    for collection in ax.collections:
+        if isinstance(collection, PathCollection) and len(collection.get_sizes()):
+            centres = collection.get_offset_transform().transform(collection.get_offsets())
+            sizes = np.broadcast_to(collection.get_sizes(), (len(centres),))
+            for (x, y), size in zip(centres, sizes, strict=True):
+                radius = math.sqrt(size) / 2.0 * dpi / 72.0
+                boxes.append(Bbox.from_extents(x - radius, y - radius, x + radius, y + radius))
+        elif isinstance(collection, LineCollection):
+            for segment in collection.get_segments():
+                if len(segment):
+                    ends = collection.get_transform().transform(segment)
+                    boxes.append(Bbox.from_extents(*ends.min(axis=0), *ends.max(axis=0)))
+    for line in ax.lines:
+        if line.get_marker() in (None, "", "None", " ") or not line.get_visible():
+            continue
+        radius = line.get_markersize() / 2.0 * dpi / 72.0
+        # A line's data may arrive as Python lists of mixed int/float (an errorbar's caps), which
+        # stack into an OBJECT array that a log transform cannot take.
+        xs, ys = (np.asarray(values, dtype=float) for values in line.get_data())
+        for x, y in line.get_transform().transform(np.column_stack((xs, ys))):
+            boxes.append(Bbox.from_extents(x - radius, y - radius, x + radius, y + radius))
+    return boxes
+
+
+#: Tags an annotation :func:`settle_clear_labels` places clear of the marks, of the other tagged
+#: labels, and inside its axes' frame.
+CLEAR_GID: str = "hpcagent-clear-label"
+
+#: Clearance a settled label keeps from the frame and from every mark, in points.
+CLEAR_PAD_PT: float = 1.5
+
+
+def settle_clear_labels(fig: Figure) -> None:
+    """Place every :data:`CLEAR_GID` annotation clear of the marks, of the labels settled before it
+    and of its axes' frame, moving it as little as possible.
+
+    A label starts where its caller put it (above a mark, beside a bracket). It is shifted inside the
+    frame sideways, raised until nothing under its span touches it, and held under the frame top; if
+    holding it there lands it on a mark again, it slides sideways at that height, and failing that
+    takes the highest clear gap below (:func:`clear_place`). Runs at
+    save time, when every limit and margin is final: a label's offset is in points, so a place clear
+    before the last ``subplots_adjust`` need not be clear after it.
+    """
+    tagged = [
+        (ax, text) for ax in fig.axes for text in ax.texts
+        if isinstance(text, Annotation) and text.get_gid() == CLEAR_GID and text.get_text()
+    ]  # fmt: skip
+    if not tagged:
+        return
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    pad = CLEAR_PAD_PT * fig.dpi / 72.0
+    labels = {id(text) for _, text in tagged}
+    obstacles: dict[int, list[Bbox]] = {}
+    for ax, label in tagged:
+        frame = ax.get_window_extent(renderer)
+        if id(ax) not in obstacles:
+            others = [
+                text.get_window_extent(renderer) for text in ax.texts if id(text) not in labels and text.get_text()
+            ]
+            obstacles[id(ax)] = [box for box in mark_boxes(ax) + others if box.overlaps(frame)]
+        taken = obstacles[id(ax)]
+        drawn = label.get_window_extent(renderer)
+        box = clear_place(drawn, taken, frame, pad)
+        taken.append(box)
+        x, y = label.xyann
+        label.xyann = (x + (box.x0 - drawn.x0) * 72.0 / fig.dpi, y + (box.y0 - drawn.y0) * 72.0 / fig.dpi)
+
+
+def clear_place(box: Bbox, taken: Sequence[Bbox], frame: Bbox, pad: float) -> Bbox:
+    """Where :func:`settle_clear_labels` puts a label drawn at ``box``: inside ``frame``, clear of
+    every box in ``taken`` by ``pad`` pixels, as near its drawn place as that allows."""
+
+    def hits(candidate: Bbox) -> list[Bbox]:
+        return [
+            other for other in taken
+            if other.x0 < candidate.x1 + pad and other.x1 > candidate.x0 - pad
+            and other.y0 < candidate.y1 + pad and other.y1 > candidate.y0 - pad
+        ]  # fmt: skip
+
+    box = box.translated(max(0.0, frame.x0 + pad - box.x0) - max(0.0, box.x1 + pad - frame.x1), 0.0)
+    for _ in range(len(taken) + 1):
+        blocking = hits(box)
+        if not blocking:
+            break
+        box = box.translated(0.0, max(other.y1 for other in blocking) + pad - box.y0)
+    held = box.translated(0.0, min(0.0, frame.y1 - pad - box.y1))
+    if not hits(held):
+        return held
+    # Held under the frame it lands on a mark again. Nearest first: slide it sideways at that height,
+    # up to two label widths each way inside the frame; failing that, the highest clear gap below.
+    step = held.width / 4.0
+    for shift in (sign * step * k for k in range(1, 9) for sign in (1.0, -1.0)):
+        candidate = held.translated(shift, 0.0)
+        if candidate.x0 >= frame.x0 + pad and candidate.x1 <= frame.x1 - pad and not hits(candidate):
+            return candidate
+    for other in sorted(taken, key=lambda other: -other.y0):
+        candidate = held.translated(0.0, other.y0 - pad - held.y1)
+        if candidate.y0 >= frame.y0 + pad and not hits(candidate):
+            return candidate
+    LOG.warning("style: no clear place for the label %r inside its panel", box)
+    return held

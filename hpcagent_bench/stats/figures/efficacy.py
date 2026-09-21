@@ -9,7 +9,7 @@ X is the speed-up geomean as ``log2(ratio)``
 :func:`~hpcagent_bench.stats.summary.geomean_ci`'s point and interval): 0 is no change, +1 is 2x
 faster, -1 is 2x slower, +2 is 4x -- a LINEAR scale in the exponent, so a 74x kernel does not drag a
 modest win halfway across the panel the way a raw ``ratio - 1`` axis would, with the ticks read back
-in ratios (:func:`~hpcagent_bench.stats.figures.per_kernel.speedup_tick_label`) exactly as every
+in ratios (:func:`~hpcagent_bench.stats.style.ratio_tick_label`) exactly as every
 other speed-up axis in this repo, never a bare ``1x``/``2x``-ticked ratio axis on its own. Y is the
 token-cost geomean, ALSO paired per kernel and treated over control, ALSO a
 :func:`~hpcagent_bench.stats.summary.geomean_ci` interval -- a ratio, not a median, so a comparison
@@ -59,7 +59,6 @@ function's ``config`` argument) rather than a magic number inside a function.
 import dataclasses
 import functools
 import itertools
-import logging
 import math
 import pathlib
 import textwrap
@@ -69,7 +68,6 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 from matplotlib.axes import Axes
-from matplotlib.collections import PathCollection
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.text import Annotation
@@ -79,7 +77,6 @@ from matplotlib.transforms import blended_transform_factory
 from hpcagent_bench import experiment_tags, packets
 from hpcagent_bench.harness import efficacy
 from hpcagent_bench.stats import palette, population, rules, style, summary
-from hpcagent_bench.stats.figures.per_kernel import speedup_tick_label
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -186,15 +183,17 @@ class FigureConfig:
     #: need three times the width -- its marks are already the densest on the page -- and what it
     #: gives back is width the narrow columns have nothing else to take from.
     wide_column_scale: float = 0.85
-    #: The chrome LEFT of, and BELOW, the data box, in inches. FIXED, and the reason the canvas and
-    #: the data box are the same in every efficacy figure of a paper: a longer Y label or a fuller
-    #: key may not grow the page or shrink the panels. A label that overruns is reported
-    #: (:func:`figure_dot_row`); a key that does not fit is set smaller (:func:`fit_legend`).
+    #: The chrome LEFT of the data box, in inches: the first estimate :func:`figure_dot_row` lays
+    #: out with before it measures the Y labels and takes exactly what they need.
     left_chrome_in: float = 1.0
+    #: The band BELOW the category names the key is fitted into, in inches (:func:`fit_legend`).
     legend_chrome_in: float = 0.48
-    #: How far :func:`fit_legend` will shrink the key's type, as a fraction of :attr:`legend_pt`,
-    #: before it gives up and says so.
+    #: How far :func:`fit_legend` shrinks the key's type, as a fraction of :attr:`legend_pt`, before
+    #: it grows the band instead.
     legend_min_scale: float = 0.7
+    #: How far :func:`stagger_crowded_ticks` shrinks the category names, as a fraction of
+    #: :attr:`tick_pt`, when two staggered lines still leave them touching.
+    category_min_scale: float = 0.7
     #: The most lines a panel's name, or a rotated axis label, may fold onto. A third line comes out
     #: of the panel.
     max_name_lines: int = 2
@@ -215,8 +214,8 @@ DEFAULT_CONFIG = FigureConfig()
 #: two-column convention (8pt text, 6pt legend, 0.5pt rules) rather than anything derived here.
 PAPER_CONFIG = dataclasses.replace(
     DEFAULT_CONFIG,
-    tick_pt=7.0,
-    label_pt=8.0,
+    tick_pt=style.PRINT_TICK_PT,
+    label_pt=style.PRINT_LABEL_PT,
     subtitle_pt=12.5,
     point_pt=6.5,
     legend_pt=9.05,
@@ -493,34 +492,6 @@ def token_note(series: "Series | ArmPoint") -> str:
     """`` (tokens n=19/38)`` when the token leg is over fewer kernels than the speed-up leg, else ""
     -- so a mark whose two coordinates rest on different populations says so on the figure."""
     return f" (tokens n={series.token_kernels}/{series.kernels})" if series.token_kernels < series.kernels else ""
-
-
-def ratio_tick(value: float, position: int = 0) -> str:
-    """A base-2 major on the token-cost axis read back as the ratio it is: ``1x``, ``2x``, ``1/2x``
-    -- the same spelling :func:`~hpcagent_bench.stats.figures.per_kernel.speedup_tick_label` gives
-    every other speed-up/ratio axis in this repo, so a ratio below 1 never prints as a decimal."""
-    del position
-    return speedup_tick_label(value)
-
-
-def token_tick(value: float, position: int = 0) -> str:
-    """An ABSOLUTE token count on a log axis, spelled the way a person says it: ``30k``, ``300k``,
-    ``2M``. A raw ``300000`` costs a reader a digit count per tick."""
-    del position
-    if value >= 1e6:
-        return f"{value / 1e6:g}M"
-    if value >= 1e3:
-        return f"{value / 1e3:g}k"
-    return f"{value:g}"
-
-
-def log2_tick(value: float, position: int = 0) -> str:
-    """A major on the LOG2 speed-up axis read back as the ratio it is: the axis holds
-    ``log2(ratio)`` (``+1`` is 2x, ``-1`` is 0.5x), and :func:`~hpcagent_bench.stats.figures.
-    per_kernel.speedup_tick_label` already spells the ratio the same way this repo's other
-    speed-up axes do."""
-    del position
-    return speedup_tick_label(2.0**value)
 
 
 def draw_series(
@@ -886,7 +857,7 @@ def x_tick_step(span: float, max_ticks: int = MAX_X_TICKS) -> int:
     """The whole-ratio spacing (in log2 units: 1 is every power of 2, 2 every power of 4, ...) that
     keeps the X axis under :data:`MAX_X_TICKS` labelled ticks for a window ``span`` wide. Doubled
     rather than picked from an arbitrary "nice number" table, so a tick always lands on an INTEGER
-    log2 value -- the only kind :func:`log2_tick` spells as a clean ratio."""
+    log2 value -- the only kind :func:`~hpcagent_bench.stats.style.log2_ratio_tick` spells as a clean ratio."""
     step = 1
     while span / step > max(max_ticks - 1, 1):
         step *= 2
@@ -895,7 +866,7 @@ def x_tick_step(span: float, max_ticks: int = MAX_X_TICKS) -> int:
 
 def minor_log2_grid(ax: Axes, axis: Literal["x", "y"], config: FigureConfig) -> None:
     """A light minor gridline every :data:`FigureConfig.minor_grid_step` octaves on ``axis`` -- a
-    half power of two by default, between each major (:func:`x_tick_step`/:func:`ratio_tick`'s own
+    half power of two by default, between each major (:func:`x_tick_step`/:func:`~hpcagent_bench.stats.style.ratio_tick`'s own
     majors) -- with NO minor tick labels: a number at every half-octave would double the axis' own
     text. ``minor_grid_step`` of 0 (or a caller who wants only the major grid) draws nothing."""
     if config.minor_grid_step <= 0.0:
@@ -977,7 +948,7 @@ def style_panel(
 ) -> None:
     """One SQUARE panel: the speed-up geomean on X as ``log2(ratio)`` (0 = no change, +1 = 2x, -1 =
     0.5x), ticks read back in ratios like every other speed-up axis in this repo
-    (:func:`~hpcagent_bench.stats.figures.per_kernel.speedup_tick_label`); the token-cost ratio on Y
+    (:func:`~hpcagent_bench.stats.style.ratio_tick_label`); the token-cost ratio on Y
     (1x = no change), log-scaled. Both are log-space quantities, on their own scales, with the
     hollow control reference drawn at their shared origin ``(0, 1)`` and an equal box aspect so
     joined panels are one shape. NO TITLE: a paper's caption carries that, and the caller's own small
@@ -1009,8 +980,8 @@ def style_panel(
     widen_y_axis(ax, config)
     low, high = ax.get_xlim()
     ax.xaxis.set_major_locator(MultipleLocator(x_tick_step(high - low, config.max_ticks)))
-    ax.xaxis.set_major_formatter(FuncFormatter(log2_tick))
-    ax.yaxis.set_major_formatter(FuncFormatter(ratio_tick))
+    ax.xaxis.set_major_formatter(FuncFormatter(style.log2_ratio_tick))
+    ax.yaxis.set_major_formatter(FuncFormatter(style.ratio_tick))
     minor_log2_grid(ax, "x", config)
     minor_log2_grid(ax, "y", config)
     ax.set_box_aspect(1.0)
@@ -1049,9 +1020,9 @@ def style_absolute_panel(
     widen_x_axis(ax, config)
     low, high = ax.get_xlim()
     ax.xaxis.set_major_locator(MultipleLocator(x_tick_step(high - low, config.max_ticks)))
-    ax.xaxis.set_major_formatter(FuncFormatter(log2_tick))
+    ax.xaxis.set_major_formatter(FuncFormatter(style.log2_ratio_tick))
     ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=config.token_subs, numticks=40))
-    ax.yaxis.set_major_formatter(FuncFormatter(token_tick))
+    ax.yaxis.set_major_formatter(FuncFormatter(style.decade_label))
     minor_log2_grid(ax, "x", config)
     ax.set_box_aspect(1.0)
     style.despine(ax)
@@ -1389,16 +1360,8 @@ def untangle_labels(ax: Axes, config: FigureConfig = DEFAULT_CONFIG) -> None:
     fig = ax.figure
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
-    taken: list[tuple[float, ...]] = []
-    for collection in ax.collections:
-        if not isinstance(collection, PathCollection):
-            continue
-        offsets = collection.get_offsets()
-        if len(offsets):
-            sizes = collection.get_sizes()
-            half = (math.sqrt(float(np.max(sizes))) / 2.0 * fig.dpi / 72.0) if sizes.size else 0.0
-            for px, py in collection.get_offset_transform().transform(offsets):
-                taken.append((px - half, py - half, px + half, py + half))
+    # Every mark and interval: a label set on an error bar hides the bar and reads as its value.
+    taken = [tuple(box.extents) for box in style.mark_boxes(ax)]
     for note in [text for text in ax.texts if isinstance(text, Annotation)]:
         box: tuple[float, ...] = ()
         places = label_places(config.label_offset_pt)
@@ -1457,11 +1420,7 @@ def required_left_margin(fig: Figure, ax: Axes) -> float:
     wide-ranging axis's longest tick (``0.0078125x``, wider than the fixed fraction this used to
     reserve), never renders past the canvas's own left edge."""
     fig.canvas.draw()
-    renderer = fig.canvas.get_renderer()
-    axes_left = ax.get_window_extent(renderer).x0
-    label_left = ax.yaxis.get_tightbbox(renderer).x0
-    protrusion_in = max(0.0, axes_left - label_left) / fig.dpi
-    return protrusion_in + MEASURE_PAD_IN
+    return style.left_protrusion_in(fig, ax) + MEASURE_PAD_IN
 
 
 #: One character of panel name, as a fraction of the type's own point size. The sans face this
@@ -1892,12 +1851,12 @@ def stagger_crowded_ticks(fig: Figure, axes: Sequence[Axes], config: FigureConfi
     # Two labels closer than a third of the type size read as one word ("OMPTriton").
     gap = config.tick_pt / 3.0 * fig.dpi / 72.0
     for ax in axes:
-        ticks = ax.xaxis.get_major_ticks()
-        boxes = [tick.label1.get_window_extent(renderer) for tick in ticks if tick.label1.get_text()]
-        if not any(left.x1 + gap > right.x0 for left, right in itertools.pairwise(boxes)):
-            continue
-        for tick in ticks[1::2]:
-            tick.set_pad(tick.get_pad() + config.tick_pt * 1.15)
+        if style.crowded_ticks(ax, renderer, gap):
+            for tick in ax.xaxis.get_major_ticks()[1::2]:
+                tick.set_pad(tick.get_pad() + config.tick_pt * 1.15)
+    # Two lines are not always enough: three "Fortran" placeholders two columns apart still touch on
+    # their shared line, so their type steps down, the same in every column.
+    style.shrink_crowded_ticks(fig, axes, config.tick_pt, config.tick_pt * config.category_min_scale)
 
 
 def group_rules(ax: Axes, rows: Sequence[ArmRow]) -> None:
@@ -1930,8 +1889,6 @@ def wrapped_label(text: str, width: int = 18, hyphens: bool = False) -> str:
 #: label. ``subtitle`` puts ``a) <measure>`` on one left-aligned line above the panel and drops the
 #: rotated Y label, which buys back the whole left margin.
 PANEL_LABELS: tuple[str, ...] = ("none", "outside", "inside", "subtitle")
-
-LOG = logging.getLogger(__name__)
 
 #: The two numbering schemes, so a paper can carry a stacked figure's ``a)`` rows and a joined
 #: row's ``i)`` panels at once and a caption referring to "(ii)" cannot mean either.
@@ -2068,22 +2025,16 @@ def difference_middle(control_value: float, treated_value: float, measure: str) 
     return (control_value + treated_value) / 2.0
 
 
-def factor_label(value: float) -> str:
-    """A difference arrow's own factor, to TWO significant figures: ``6.3x``, ``0.92x``. The tick
-    spelling keeps full precision, which on a label beside a mark reads as ``6.34919x``."""
-    if not math.isfinite(value) or value <= 0.0:
-        return ""
-    return f"{float(f'{value:.2g}'):g}x"
-
-
 def draw_difference_arrow(
     ax: Axes, x: float, control_value: float, treated_value: float, colour: str, measure: str,
     config: FigureConfig = DEFAULT_CONFIG, top: float = math.nan,
 ) -> None:  # fmt: skip
     """A double-headed arrow spanning one comparison's two marks, labelled with the factor between
     them -- so a number a caption quotes is on the figure instead of being measured off the axis.
-    The label sits ABOVE ``top``, the higher end of both arms' intervals: beside the bracket it lands
-    on the treated mark, which is only ``dodge`` away."""
+    The label starts ABOVE ``top``, the higher end of both arms' intervals (beside the bracket it
+    lands on the treated mark, which is only ``dodge`` away); being wider than a narrow column, it is
+    settled clear of the neighbouring marks and inside the frame at save time
+    (:func:`~hpcagent_bench.stats.style.settle_clear_labels`)."""
     if not (np.isfinite(control_value) and np.isfinite(treated_value)):
         return
     factor = difference_factor(control_value, treated_value, measure)
@@ -2098,9 +2049,9 @@ def draw_difference_arrow(
         capthick=config.interval_width, zorder=style.FILL_Z,
     )  # fmt: skip
     ax.annotate(
-        factor_label(factor), xy=(x, top if math.isfinite(top) else high), textcoords="offset points",
+        style.ratio_label(factor), xy=(x, top if math.isfinite(top) else high), textcoords="offset points",
         xytext=(0.0, config.symbol_offset_pt * 0.5), ha="center", va="bottom", annotation_clip=False,
-        fontsize=config.point_pt * 0.85, color=style.REFERENCE, zorder=style.FILL_Z,
+        fontsize=config.point_pt * 0.85, color=style.REFERENCE, zorder=style.FILL_Z, gid=style.CLEAR_GID,
     )  # fmt: skip
 
 
@@ -2225,7 +2176,7 @@ def draw_measure_row(
         ax.set_yscale("log", base=10.0)
         style.value_axis(ax, "y", log_base=10.0)
         ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=config.token_subs, numticks=40))
-        ax.yaxis.set_major_formatter(FuncFormatter(token_tick))
+        ax.yaxis.set_major_formatter(FuncFormatter(style.decade_label))
     else:
         ax.axhline(0.0, color=style.REFERENCE, linewidth=1.0, zorder=1)
         if reference_name:
@@ -2239,7 +2190,7 @@ def draw_measure_row(
                 bbox={"facecolor": "white", "edgecolor": "none", "pad": 0.6},
             )  # fmt: skip
         style.value_axis(ax, "y")
-        ax.yaxis.set_major_formatter(FuncFormatter(log2_tick))
+        ax.yaxis.set_major_formatter(FuncFormatter(style.log2_ratio_tick))
     ax.set_xlim(-0.6, max(len(rows) - 0.4, 0.6))
     ax.set_xticks(range(len(rows)))
     group_rules(ax, rows)
@@ -2295,7 +2246,8 @@ def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: Figur
             ax.vlines(
                 x, low, high, color=row.colour, linewidth=config.interval_width, alpha=0.75, zorder=style.CONNECTOR_Z
             )
-            style.point_mark(ax, x, value, row.colour, mark, filled, size=config.mark_size)
+            # A full roster sits on N, and the headroom above it is thinner than a mark in a half-height row.
+            style.point_mark(ax, x, value, row.colour, mark, filled, size=config.mark_size, clip=False)
     kernels = max((point.served for row in rows for point in (row.control, row.treated)), default=0)
     ax.set_yticks(success_ticks(kernels))
     # The dashed rule marks the ceiling N; the headroom above it keeps an interval ending at N in view.
@@ -2618,25 +2570,22 @@ def fit_panel_names(
 def fit_legend(
     fig: Figure, handles: Sequence[Line2D], config: FigureConfig, span: tuple[float, float] | None = None
 ) -> float:
-    """Draw the key below ``fig`` inside ``budget`` inches, shrinking its type where it does not
-    fit; returns the height it settled at.
+    """Draw the key below ``fig`` inside the ``legend_chrome_in`` band, shrinking its type where it
+    does not fit; returns the height it settled at. ``span`` is the plot body the key may not be
+    wider than (:func:`~hpcagent_bench.stats.style.legend_below`).
 
-    The budget is fixed so the canvas and the data box are, which means the key is what has to
-    give. It shrinks rather than wrapping onto another row: another row is the one thing that
-    cannot fit a fixed band. ``span`` is the plot body the key may not be wider than
-    (:func:`~hpcagent_bench.stats.style.legend_below`).
+    A key still taller than the band at ``legend_min_scale`` keeps that size and its height is
+    returned anyway, for the caller to grow the canvas by: returning the band instead drew a key
+    that could not fit a text-width page over the category names.
     """
-    budget = config.legend_chrome_in
     scale = 1.0
     while True:
         height = style.legend_below(
             fig, handles, ncol=config.legend_ncol, y=0.005, fontsize=config.legend_pt * scale,
             markerscale=config.legend_marker_scale, span=span,
         )  # fmt: skip
-        if height <= budget or scale <= config.legend_min_scale:
-            if height > budget:
-                LOG.warning("efficacy: the key needs %.2fin at its smallest, the band is %.2fin", height, budget)
-            return min(height, budget)
+        if height <= config.legend_chrome_in or scale <= config.legend_min_scale:
+            return height
         for legend in list(fig.legends):
             legend.remove()
         scale = max(config.legend_min_scale, scale - 0.08)
@@ -2681,16 +2630,15 @@ def figure_dot_row(
     note_pad = MEASURE_PAD_IN * 72.0
     title_band = text_band(config.subtitle_pt, 2) if panel_labels != "none" else ROW_TITLE_IN
     category_band = text_band(config.tick_pt, 2)
-    # The DATA box is the fixed quantity: rows of a stated height plus the gaps between them. Every
-    # piece of chrome is added OUTSIDE it, so a taller legend or a longer label grows the canvas
-    # instead of shrinking the panels -- two efficacy figures of one paper draw the same size box.
+    # The DATA box's height is the fixed quantity: rows of a stated height plus the gaps between
+    # them. The chrome is measured and added OUTSIDE it, so a taller key grows the canvas instead of
+    # shrinking the rows, and every dot-row figure of a paper draws rows of one height.
     # hspace is a fraction of the row height, so the gaps are sized against that
     heights = [MEASURE_HEIGHT.get(measure, 1.0) for measure in measures]
     data_height = row_height_in * (sum(heights) + config.row_gap * (len(measures) - 1))
     # hspace is a fraction of the MEAN axes height, so it is rescaled to keep the gaps row_gap rows.
     hspace = config.row_gap * len(measures) / sum(heights)
-    # EVERY band is fixed, so the canvas and the data box are both the same in every efficacy
-    # figure: a longer label or a fuller key changes neither.
+    # The key gets a fixed band, and grows it only when it cannot fit at its smallest type.
     height = data_height + title_band + category_band + config.legend_chrome_in + MEASURE_PAD_IN
     ratios = dot_row_widths(columns, config)
     # The gaps come OUT of the data width: matplotlib's wspace is a fraction of the mean axes width,
@@ -2742,6 +2690,9 @@ def figure_dot_row(
         left=config.left_chrome_in / row_width_in, right=0.995,
         top=1.0 - (title_band + MEASURE_PAD_IN) / height, bottom=0.01, hspace=hspace, wspace=0.0,
     )  # fmt: skip
+    # The left margin is what the Y labels measure, not the reserve: the reserve's slack comes out
+    # of the columns, and on a text-width figure that is what overprints neighbouring category names.
+    fig.subplots_adjust(left=max(required_left_margin(fig, ax) for ax in axes[:, 0]) / row_width_in)
     fit_column_gaps(fig, axes)
     # The names are fitted to the columns as finally placed: a widened gap narrows every column.
     boxes = [ax.get_position() for ax in axes[0]]
@@ -2750,11 +2701,12 @@ def figure_dot_row(
     ]
     fit_panel_names(fig, list(axes[0]), tagged, names, spans, config, panel_labels, size)
     body = (axes[0][0].get_position().x0, axes[0][-1].get_position().x1)
-    fit_legend(fig, handles, config, body)
-    needed = max(required_left_margin(fig, ax) for ax in axes[:, 0])
-    if needed > config.left_chrome_in:
-        LOG.warning("efficacy: Y labels need %.2fin, left_chrome_in reserves %.2fin", needed, config.left_chrome_in)
-    fig.subplots_adjust(bottom=(config.legend_chrome_in + category_band + MEASURE_PAD_IN) / height)
+    legend_in = max(config.legend_chrome_in, fit_legend(fig, handles, config, body))
+    height += legend_in - config.legend_chrome_in
+    fig.set_size_inches(row_width_in, height)
+    fig.subplots_adjust(
+        top=1.0 - (title_band + MEASURE_PAD_IN) / height, bottom=(legend_in + category_band + MEASURE_PAD_IN) / height
+    )
     stagger_crowded_ticks(fig, axes[-1], config)
     return style.save(fig, out.with_suffix(""), fixed=True)
 

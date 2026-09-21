@@ -20,8 +20,8 @@ three raw numbers where a bootstrap interval of three is not. Pick ``box`` to se
 
 THE SPEED-UP AXIS IS LOG2. A ratio axis on a linear scale reads a 2x slow-down as a small event and
 a 2x speed-up as a large one; log2 puts them the same distance from the 1x line and the ticks are
-labelled back into ratios (``1/4x .. 4x``) rather than left as the small integers a bare log2 axis
-would show.
+labelled back into ratios (``0.25x .. 4x``, :func:`~hpcagent_bench.stats.style.ratio_tick_label`)
+rather than left as the small integers a bare log2 axis would show.
 
 ``--summary`` appends a narrow column to the right of the per-kernel panel, past a dashed
 separator, carrying the OVERALL value over the plotted kernels (of their own per-kernel medians).
@@ -36,16 +36,20 @@ axis: the two panels are given the SAME kernel order (:func:`shared_kernel_order
 names one kernel in both, even when a kernel has one metric and not the other (an empty column at
 its slot, never a re-packed one).
 
-Sized for a double-column paper page (:data:`hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH`, ~7.0in):
-each panel is :data:`PANEL_HEIGHT_IN` (1.8in) tall, well inside the 1.6-2.0in a reviewer asked for.
+Sized for a double-column paper page (:data:`hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH`, ~7.0in)
+by default, or drawn at a stated ``width_in`` at print size (:data:`PRINT_TYPE`): each panel is
+:data:`PANEL_HEIGHT_IN` (1.8in) tall, well inside the 1.6-2.0in a reviewer asked for, and the canvas
+around it is measured from what its labels and key need (:func:`fit_canvas`).
 """
 
 import dataclasses
 import math
 import pathlib
+import textwrap
 from collections.abc import Callable, Sequence
 from typing import Literal
 
+import matplotlib.artist
 import matplotlib.axes
 import matplotlib.figure
 import matplotlib.pyplot as plt
@@ -53,9 +57,8 @@ import numpy as np
 import pandas as pd
 
 from hpcagent_bench import experiment_tags
-from hpcagent_bench.stats import population
+from hpcagent_bench.stats import population, summary
 from hpcagent_bench.stats import style as plotstyle
-from hpcagent_bench.stats import summary
 
 #: The two drawing modes: the median (+ bootstrap CI) or the raw per-episode boxplot.
 Style = Literal["ci", "box"]
@@ -68,8 +71,33 @@ MIN_EPISODES_FOR_SPREAD: int = 3
 #: A single panel's height, inches. Comfortably inside the 1.6-2.0in a paper figure gets.
 PANEL_HEIGHT_IN: float = 1.8
 
-#: Extra inches below every panel for the rotated kernel-name ticks, and above for the title.
-CHROME_IN: float = 1.15
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PanelType:
+    """A per-kernel figure's type sizes, in points."""
+
+    tick_pt: float
+    label_pt: float
+    #: The kernel names' starting size: :func:`fit_canvas` steps them down to the column pitch.
+    name_pt: float
+    legend_pt: float
+
+
+#: Authoring sizes, for a figure drawn at the double-column width and scaled when it is placed.
+AUTHOR_TYPE = PanelType(
+    plotstyle.TICK_PT * 0.55, plotstyle.LABEL_PT * 0.72, plotstyle.TICK_PT * 0.5, plotstyle.TICK_PT * 0.5
+)
+#: Print sizes, for a figure drawn at the width it is placed at: the tick and label sizes every paper
+#: figure starts from (:data:`hpcagent_bench.stats.style.PRINT_TICK_PT`), the key at tick size.
+PRINT_TYPE = PanelType(
+    plotstyle.PRINT_TICK_PT, plotstyle.PRINT_LABEL_PT, plotstyle.PRINT_TICK_PT, plotstyle.PRINT_TICK_PT
+)
+
+#: How far the kernel names may shrink below ``name_pt`` to fit the column pitch.
+MIN_NAME_SCALE: float = 0.6
+
+#: Air between the canvas edge and the chrome :func:`fit_canvas` measures, in inches.
+CHROME_PAD_IN: float = 0.04
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -120,6 +148,17 @@ def speedup_cells(frame: pd.DataFrame, served: bool = True) -> list[KernelCell]:
     answered = {cell.kernel for cell in cells}
     unanswered = sorted(set(frame["benchmark"].dropna().astype(str)) - answered)
     return cells + [KernelCell(kernel, (population.NOT_DELIVERED,), False) for kernel in unanswered]
+
+
+def answer_cells(frame: pd.DataFrame, repeats: population.RepeatPolicy = "latest") -> list[KernelCell]:
+    """One single-value cell per SOLVED kernel: its final answer under ``repeats``
+    (:func:`population.kernel_answers`), the policy the tables score a kernel by. :func:`speedup_cells`
+    keeps every episode instead, which is what the box style's spread needs and what a rerun kernel's
+    stale first run must not contribute to."""
+    answers = population.kernel_answers(frame, repeats=repeats, policy="solved")
+    if "speedup" not in answers.columns:
+        return []
+    return [KernelCell(str(kernel), (float(value),)) for kernel, value in answers["speedup"].items() if value > 0]
 
 
 def token_cells(frame: pd.DataFrame) -> list[KernelCell]:
@@ -178,8 +217,13 @@ def bootstrap_point(cell: KernelCell, log2_space: bool) -> tuple[float, float, f
 
 
 def kernel_medians(cells: Sequence[KernelCell]) -> np.ndarray:
-    """The plotted kernels' own per-kernel medians -- what the ``--summary`` column reduces one level up."""
-    return np.array([cell.median() for cell in cells if math.isfinite(cell.median())], dtype=np.float64)
+    """The plotted kernels' own per-kernel medians -- what the ``--summary`` column reduces one level
+    up -- over the SOLVED kernels only: an undelivered placeholder's 1x and a disowned answer's claim
+    are drawn, but neither is a measured speed-up, so neither enters the summary (2026-09-21)."""
+    return np.array(
+        [cell.median() for cell in cells if cell.delivered and not cell.flagged and math.isfinite(cell.median())],
+        dtype=np.float64,
+    )
 
 
 def summary_point_speedup(cells: Sequence[KernelCell]) -> tuple[float, float, float]:
@@ -215,46 +259,45 @@ def summary_point_tokens(cells: Sequence[KernelCell]) -> tuple[float, float, flo
 SummaryReducer = Callable[[Sequence["KernelCell"]], tuple[float, float, float]]
 
 
-def speedup_yticks(cells: Sequence[KernelCell]) -> list[float]:
-    """Powers of two spanning every plotted value, always at least ``1/4x .. 4x``."""
+#: The most labelled powers of two a speed-up axis carries. A wider range labels every second (or
+#: third) octave instead: twelve octaves on a 1.8in panel printed their labels on top of each other.
+MAX_SPEEDUP_TICKS: int = 7
+
+
+def speedup_yticks(cells: Sequence[KernelCell], max_ticks: int = MAX_SPEEDUP_TICKS) -> list[float]:
+    """Powers of two spanning every plotted value, always at least ``1/4x .. 4x`` and always 1x, in
+    steps of as many octaves as keep the count at or under ``max_ticks``."""
     values = [v for cell in cells for v in cell.episodes if math.isfinite(v) and v > 0]
     low, high = (min(values), max(values)) if values else (1.0, 1.0)
     low_exp = min(-2, math.floor(math.log2(low)))
     high_exp = max(2, math.ceil(math.log2(high)))
-    return [2.0**exp for exp in range(low_exp, high_exp + 1)]
+    step = 1
+    while True:
+        first, last = math.floor(low_exp / step) * step, math.ceil(high_exp / step) * step
+        if (last - first) // step + 1 <= max_ticks:
+            return [2.0**exp for exp in range(first, last + 1, step)]
+        step += 1
 
 
-def speedup_tick_label(value: float) -> str:
-    """``0.25 -> "0.25x"``, ``1.0 -> "1x"``, ``4.0 -> "4x"``: a log2 tick read back as a ratio.
-
-    A ratio below 1 prints as a decimal (user, 2026-09-20). The earlier ``1/n`` spelling only ever
-    worked for a whole reciprocal: it rounded, so a half-octave tick at 0.707 printed ``1/1x``, a
-    ratio of one marking a point 30% below it. Decimals also let a tick land anywhere, which is
-    what densifying the token-cost axis needs.
-    """
-    if value == 1.0:
-        return "1x"
-    if value > 1.0:
-        return f"{value:g}x"
-    return f"{float(f'{value:.3g}'):g}x"
-
-
-def style_speedup_axis(ax: matplotlib.axes.Axes, cells: Sequence[KernelCell]) -> None:
+def style_speedup_axis(
+    ax: matplotlib.axes.Axes, cells: Sequence[KernelCell], tick_pt: float = AUTHOR_TYPE.tick_pt
+) -> None:
     """Powers of two, read back as ratios, with a MAJOR grid on the value axis and nothing on the
     kernel axis -- the ticks are pinned here, so the grid is drawn beside them rather than through
     ``plotstyle.value_axis``, which would relocate them."""
     ax.set_yscale("log", base=2)
     ticks = speedup_yticks(cells)
     ax.set_yticks(ticks)
-    ax.set_yticklabels([speedup_tick_label(tick) for tick in ticks], fontsize=plotstyle.TICK_PT * 0.55)
+    ax.set_yticklabels([plotstyle.ratio_tick_label(tick) for tick in ticks], fontsize=tick_pt)
     ax.axhline(1.0, color=plotstyle.REFERENCE, linewidth=0.9, zorder=1)
     ax.grid(axis="y", which="major", color=plotstyle.RULE, linewidth=0.7, zorder=0)
     ax.set_axisbelow(True)
 
 
-def style_token_axis(ax: matplotlib.axes.Axes) -> None:
+def style_token_axis(ax: matplotlib.axes.Axes, tick_pt: float = AUTHOR_TYPE.tick_pt) -> None:
     ax.set_yscale("log")
     plotstyle.value_axis(ax, "y", log_base=10.0)
+    ax.tick_params(axis="y", labelsize=tick_pt)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -291,8 +334,14 @@ def dodge_offsets(count: int) -> list[float]:
 
 
 def draw_ci(
-    ax: matplotlib.axes.Axes, cells: Sequence[KernelCell], x_of: dict[str, int], color: str, log2_space: bool,
-    offset: float = 0.0, marker: str = "o", filled: bool = True,
+    ax: matplotlib.axes.Axes,
+    cells: Sequence[KernelCell],
+    x_of: dict[str, int],
+    color: str,
+    log2_space: bool,
+    offset: float = 0.0,
+    marker: str = "o",
+    filled: bool = True,
 ) -> None:
     for cell in cells:
         x = x_of[cell.kernel] + offset
@@ -378,106 +427,115 @@ def draw_box(ax: matplotlib.axes.Axes, cells: Sequence[KernelCell], x_of: dict[s
 #: separator and the summary column.
 SUMMARY_GAP: float = 0.7
 
+#: X distance between consecutive series' summary marks, in kernel columns. Each series gets a slot
+#: of its own: summaries that agree to a few percent, drawn in one column, hid all but the top mark.
+SUMMARY_SLOT: float = 1.0
 
-def draw_summary_column(
-    ax: matplotlib.axes.Axes,
-    cells: Sequence[KernelCell],
-    n_kernels: int,
-    color: str,
-    reducer: SummaryReducer,
-    label: str,
-    offset: float = 0.0,
-    marker: str = "D",
-    filled: bool = True,
-) -> float:
-    """The dashed separator, the summary reducer's marker, and a small label ABOVE it naming its
-    own statistic; returns the column's x position.
 
-    The label is an annotation at the marker, never an x-axis TICK label: a stacked figure shares
-    one x axis between two panels (:func:`figure_stacked`) and matplotlib shares the same tick
-    label text for every row sharing that axis, so a per-panel tick label silently loses whichever
-    panel drew first -- the top panel's "Geomean" was overwritten by the bottom panel's "Median".
-    An annotation anchored to the panel's own data coordinates has no such sharing.
+def summary_slot_x(n_kernels: int, slot: int) -> float:
+    """The x position of the ``slot``-th series' summary mark, past the dashed separator."""
+    return n_kernels - 0.5 + 2.0 * SUMMARY_GAP + slot * SUMMARY_SLOT
+
+
+def draw_summary_column(ax: matplotlib.axes.Axes, n_kernels: int, slots: int, label: str, label_pt: float) -> None:
+    """The dashed separator and a small label ABOVE the column's slots naming its own statistic.
+
+    The label is an annotation, never an x-axis TICK label: a stacked figure shares one x axis
+    between two panels (:func:`figure_stacked`) and matplotlib shares the same tick label text for
+    every row sharing that axis, so a per-panel tick label silently loses whichever panel drew first
+    -- the top panel's "Geomean" was overwritten by the bottom panel's "Median". An annotation
+    anchored to the panel's own data coordinates has no such sharing.
     """
     separator_x = n_kernels - 0.5 + SUMMARY_GAP
-    summary_x = separator_x + SUMMARY_GAP + offset
     ax.axvline(separator_x, color=plotstyle.RULE, linestyle=(0, (3, 3)), linewidth=1.0, zorder=1)
-    point, low, high = reducer(cells)
-    if math.isfinite(point):
-        if math.isfinite(low) and math.isfinite(high) and low != high:
-            ax.vlines(summary_x, low, high, color=color, linewidth=1.3, alpha=0.7, zorder=2)
-        ax.plot(
-            [summary_x], [point], marker=marker, markersize=5.0, color=color, linestyle="none", zorder=3,
-            markerfacecolor=color if filled else "none", markeredgewidth=1.1,
-        )  # fmt: skip
+    centre = (summary_slot_x(n_kernels, 0) + summary_slot_x(n_kernels, slots - 1)) / 2.0
     ax.annotate(
-        label,
-        xy=(separator_x + SUMMARY_GAP, 1.0),
-        xycoords=("data", "axes fraction"),
-        xytext=(0, 3),
-        textcoords="offset points",
-        ha="center",
-        va="bottom",
-        fontsize=plotstyle.TICK_PT * 0.5,
-        color=plotstyle.MUTED,
-        annotation_clip=False,
-    )
-    return summary_x
+        label, xy=(centre, 1.0), xycoords=("data", "axes fraction"), xytext=(0, 3), textcoords="offset points",
+        ha="center", va="bottom", fontsize=label_pt, color=plotstyle.MUTED, annotation_clip=False,
+    )  # fmt: skip
+
+
+def draw_summary_mark(
+    ax: matplotlib.axes.Axes, cells: Sequence[KernelCell], x: float, one: Series, metric: "Metric", value_pt: float
+) -> None:
+    """One series' summary: the reducer's point with its interval, and the point's own value printed
+    above the interval in the series' colour, so the number a caption quotes is on the figure. The
+    value settles clear of the marks and inside the frame at save time
+    (:func:`~hpcagent_bench.stats.style.settle_clear_labels`)."""
+    point, low, high = metric.summary_reducer(cells)
+    if not math.isfinite(point):
+        return
+    if math.isfinite(low) and math.isfinite(high) and low != high:
+        ax.vlines(x, low, high, color=one.color, linewidth=1.3, alpha=0.7, zorder=2)
+    ax.plot(
+        [x], [point], marker=one.marker, markersize=5.0, color=one.color, linestyle="none", zorder=3,
+        markerfacecolor=one.color if one.filled else "none", markeredgewidth=1.1,
+    )  # fmt: skip
+    ax.annotate(
+        metric.value_label(point), xy=(x, high if math.isfinite(high) else point), xytext=(0, 2),
+        textcoords="offset points", rotation=90, ha="center", va="bottom", fontsize=value_pt, color=one.color,
+        gid=plotstyle.CLEAR_GID, annotation_clip=False,
+    )  # fmt: skip
+
+
+def kernel_tick_label(kernel: str) -> str:
+    """The kernel's short manifest name (:func:`experiment_tags.kernel_short_display_name`). A kernel
+    with no short name falls back to its full name, folded at the short-name limit onto at most two
+    lines so the rotated names stay a shallow band under the panel."""
+    name = experiment_tags.kernel_short_display_name(kernel)
+    return "\n".join(textwrap.wrap(name, experiment_tags.SHORT_NAME_MAX, max_lines=2, placeholder=".."))
 
 
 def draw_panel(
     ax: matplotlib.axes.Axes,
-    series: Sequence[Series],
+    metric: "Metric",
     kernels: Sequence[str],
     style_: Style,
-    log2_space: bool,
-    ylabel: str,
-    summary_reducer: SummaryReducer,
-    summary_label: str,
     summary_column: bool,
     label_ticks: bool,
+    type_: PanelType = AUTHOR_TYPE,
 ) -> None:
     """One metric's panel: every series over ``kernels`` (a FIXED order, so a stacked figure's two
-    panels share x), plus the optional summary column.
+    panels share x), plus the optional summary column, one slot per series.
 
     Several series in one column are spread by :func:`dodge_offsets` so their intervals stay
     readable; one series keeps the column's exact x, so a single-series panel is unchanged.
     """
     x_of = {kernel: i for i, kernel in enumerate(kernels)}
-    offsets = dodge_offsets(len(series))
+    offsets = dodge_offsets(len(metric.series))
     present: list[KernelCell] = []
-    for one, offset in zip(series, offsets, strict=True):
+    for one, offset in zip(metric.series, offsets, strict=True):
         cells = [cell for cell in one.cells if cell.kernel in x_of]
         present.extend(cells)
-        if style_ == "box" and len(series) == 1:
+        if style_ == "box" and len(metric.series) == 1:
             draw_box(ax, cells, x_of, one.color)
         else:
-            draw_ci(ax, cells, x_of, one.color, log2_space, offset, one.marker, one.filled)
+            draw_ci(ax, cells, x_of, one.color, metric.log2_space, offset, one.marker, one.filled)
     n = len(kernels)
     right_edge = float(n) - 0.4
     if summary_column:
-        for one, offset in zip(series, offsets, strict=True):
-            cells = [cell for cell in one.cells if cell.kernel in x_of]
-            right_edge = draw_summary_column(
-                ax, cells, n, one.color, summary_reducer, summary_label, offset * 2.0, one.marker, one.filled
-            ) + 0.5
+        draw_summary_column(ax, n, len(metric.series), metric.summary_label, type_.name_pt)
+        for slot, one in enumerate(metric.series):
+            x = summary_slot_x(n, slot)
+            draw_summary_mark(ax, [cell for cell in one.cells if cell.kernel in x_of], x, one, metric, type_.name_pt)
+            right_edge = x + 0.6
     ax.set_xlim(-0.6, right_edge)
     # Kernel names are the only x TICKS -- the summary column carries its own statistic as an
     # annotation (draw_summary_column), never a tick label, which a shared stacked x axis would
     # silently hand to the wrong panel (see that function's docstring).
     ax.set_xticks(range(n))
     if label_ticks:
-        # The tick is the kernel's manifest NAME; ``kernels`` are the identifiers the columns and
-        # the results table are keyed by (:func:`experiment_tags.kernel_display_name`).
-        labels = [experiment_tags.kernel_display_name(kernel) for kernel in kernels]
-        ax.set_xticklabels(labels, rotation=90, fontsize=plotstyle.TICK_PT * 0.5)
+        # The tick is the kernel's short manifest NAME; ``kernels`` are the identifiers the columns
+        # and the results table are keyed by.
+        ax.set_xticklabels([kernel_tick_label(kernel) for kernel in kernels], rotation=90, fontsize=type_.name_pt,
+                           linespacing=0.95)  # fmt: skip
     else:
         ax.set_xticklabels([])
-    if log2_space:
-        style_speedup_axis(ax, present)
+    if metric.log2_space:
+        style_speedup_axis(ax, present, type_.tick_pt)
     else:
-        style_token_axis(ax)
-    ax.set_ylabel(ylabel, fontsize=plotstyle.LABEL_PT * 0.72)
+        style_token_axis(ax, type_.tick_pt)
+    ax.set_ylabel(metric.ylabel, fontsize=type_.label_pt)
     plotstyle.despine(ax)
 
 
@@ -496,6 +554,8 @@ class Metric:
     ylabel: str
     summary_reducer: SummaryReducer
     summary_label: str
+    #: How a summary point's own value is printed beside it.
+    value_label: Callable[[float], str] = plotstyle.ratio_label
 
     @property
     def cells(self) -> tuple[KernelCell, ...]:
@@ -508,7 +568,9 @@ def speedup_metric(cells: Sequence[KernelCell], ylabel: str, color: str) -> Metr
 
 
 def token_metric(cells: Sequence[KernelCell], ylabel: str, color: str) -> Metric:
-    return Metric((Series("", tuple(cells), color),), False, ylabel, summary_point_tokens, "Median")
+    return Metric(
+        (Series("", tuple(cells), color),), False, ylabel, summary_point_tokens, "Median", plotstyle.decade_label
+    )
 
 
 def speedup_series_metric(series: Sequence[Series], ylabel: str) -> Metric:
@@ -516,64 +578,87 @@ def speedup_series_metric(series: Sequence[Series], ylabel: str) -> Metric:
 
 
 def token_series_metric(series: Sequence[Series], ylabel: str) -> Metric:
-    return Metric(tuple(series), False, ylabel, summary_point_tokens, "Median")
+    return Metric(tuple(series), False, ylabel, summary_point_tokens, "Median", plotstyle.decade_label)
 
 
 def figure_one(
-    metric: Metric, kernels: Sequence[str], style_: Style, summary_column: bool, title: str
+    metric: Metric,
+    kernels: Sequence[str],
+    style_: Style,
+    summary_column: bool,
+    title: str,
+    width_in: float | None = None,
+    legend: Sequence[matplotlib.artist.Artist] = (),
 ) -> matplotlib.figure.Figure:
-    """A single metric's panel as its own figure."""
-    fig, ax = plt.subplots(figsize=(plotstyle.DOUBLE_COLUMN_WIDTH, PANEL_HEIGHT_IN + CHROME_IN))
-    draw_panel(
-        ax,
-        metric.series,
-        kernels,
-        style_,
-        metric.log2_space,
-        metric.ylabel,
-        metric.summary_reducer,
-        metric.summary_label,
-        summary_column,
-        True,
-    )
-    fig.subplots_adjust(left=0.11, right=0.985, top=0.86, bottom=0.40)
-    plotstyle.title(fig, title)
+    """A single metric's panel as its own figure. A ``width_in`` draws it at that width and at print
+    size (:data:`PRINT_TYPE`), to be placed at scale 1.0; ``legend`` is a key drawn under the names."""
+    type_ = AUTHOR_TYPE if width_in is None else PRINT_TYPE
+    width = plotstyle.DOUBLE_COLUMN_WIDTH if width_in is None else width_in
+    fig, ax = plt.subplots(figsize=(width, PANEL_HEIGHT_IN))
+    fig.set_dpi(plotstyle.SAVE_DPI)  # measure at the dpi save() writes
+    draw_panel(ax, metric, kernels, style_, summary_column, True, type_)
+    fit_canvas(fig, [ax], title, legend, type_)
     return fig
 
 
 def figure_stacked(
-    speed: Metric, tokens: Metric, kernels: Sequence[str], style_: Style, summary_column: bool, title: str
+    speed: Metric,
+    tokens: Metric,
+    kernels: Sequence[str],
+    style_: Style,
+    summary_column: bool,
+    title: str,
+    width_in: float | None = None,
+    legend: Sequence[matplotlib.artist.Artist] = (),
 ) -> matplotlib.figure.Figure:
     """Both metrics as one figure, speed-up over tokens, sharing the kernel axis."""
-    height = 2 * PANEL_HEIGHT_IN + CHROME_IN
-    fig, axes = plt.subplots(2, 1, sharex=True, figsize=(plotstyle.DOUBLE_COLUMN_WIDTH, height))
-    draw_panel(
-        axes[0],
-        speed.series,
-        kernels,
-        style_,
-        speed.log2_space,
-        speed.ylabel,
-        speed.summary_reducer,
-        speed.summary_label,
-        summary_column,
-        False,
-    )
-    draw_panel(
-        axes[1],
-        tokens.series,
-        kernels,
-        style_,
-        tokens.log2_space,
-        tokens.ylabel,
-        tokens.summary_reducer,
-        tokens.summary_label,
-        summary_column,
-        True,
-    )
-    fig.subplots_adjust(left=0.11, right=0.985, top=0.90, bottom=0.30, hspace=0.12)
-    plotstyle.title(fig, title)
+    type_ = AUTHOR_TYPE if width_in is None else PRINT_TYPE
+    width = plotstyle.DOUBLE_COLUMN_WIDTH if width_in is None else width_in
+    fig, axes = plt.subplots(2, 1, sharex=True, figsize=(width, 2 * PANEL_HEIGHT_IN))
+    fig.set_dpi(plotstyle.SAVE_DPI)
+    draw_panel(axes[0], speed, kernels, style_, summary_column, False, type_)
+    draw_panel(axes[1], tokens, kernels, style_, summary_column, True, type_)
+    fit_canvas(fig, list(axes), title, legend, type_)
     return fig
+
+
+#: The least gap between two stacked panels, in inches; :func:`fit_canvas` widens it to whatever the
+#: lower panel prints above its frame (its summary statistic and value labels).
+STACK_GAP_IN: float = 0.2
+
+
+def fit_canvas(
+    fig: matplotlib.figure.Figure,
+    axes: Sequence[matplotlib.axes.Axes],
+    title: str,
+    legend: Sequence[matplotlib.artist.Artist],
+    type_: PanelType,
+) -> None:
+    """Size the canvas around panels of :data:`PANEL_HEIGHT_IN` each, every band MEASURED: the left
+    margin from the Y labels, the gap and top band from what each panel prints above its frame, the
+    bottom band from the kernel names (stepped down to the column pitch first) and the key. Fixed
+    fractions put the names over the key on a narrow page and wasted columns beside a short Y label."""
+    width = float(fig.get_size_inches()[0])
+    fig.canvas.draw()
+    left = max(plotstyle.left_protrusion_in(fig, ax) for ax in axes)
+    fig.subplots_adjust(left=(left + CHROME_PAD_IN) / width, right=1.0 - CHROME_PAD_IN / width)
+    plotstyle.shrink_crowded_ticks(fig, [axes[-1]], type_.name_pt, type_.name_pt * MIN_NAME_SCALE)
+    names = plotstyle.below_protrusion_in(fig, axes[-1])
+    above = [plotstyle.above_protrusion_in(fig, ax) for ax in axes]
+    top = (plotstyle.TITLE_BAND_IN if title else 0.0) + above[0] + CHROME_PAD_IN
+    gap = max([STACK_GAP_IN, *(value + CHROME_PAD_IN for value in above[1:])])
+    body = (axes[0].get_position().x0, axes[0].get_position().x1)
+    key = (
+        plotstyle.legend_below(fig, legend, y=0.005, fontsize=type_.legend_pt, markerscale=1.0, span=body)
+        if legend
+        else 0.0
+    )
+    bottom = names + CHROME_PAD_IN + (key + CHROME_PAD_IN if legend else 0.0)
+    height = top + len(axes) * PANEL_HEIGHT_IN + (len(axes) - 1) * gap + bottom
+    fig.set_size_inches(width, height)
+    fig.subplots_adjust(top=1.0 - top / height, bottom=bottom / height, hspace=gap / PANEL_HEIGHT_IN)
+    if title:
+        plotstyle.title(fig, title)
 
 
 def cells_table(cells: Sequence[KernelCell], metric: str) -> pd.DataFrame:
@@ -592,4 +677,6 @@ def cells_table(cells: Sequence[KernelCell], metric: str) -> pd.DataFrame:
 
 
 def save(fig: matplotlib.figure.Figure, out: pathlib.Path) -> pathlib.Path:
-    return plotstyle.save(fig, out.with_suffix(""))
+    """Write ``fig`` at its own canvas (:func:`fit_canvas` measured it), so a figure drawn at a
+    ``width_in`` is placed at exactly that width rather than a tight crop of its ink."""
+    return plotstyle.save(fig, out.with_suffix(""), fixed=True)

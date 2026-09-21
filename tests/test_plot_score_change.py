@@ -395,8 +395,8 @@ def test_x_is_log2_of_the_speed_up_and_zero_is_the_no_change_line() -> None:
         assert "Speed-Up" in ax.get_xlabel()
         assert ax.get_xscale() == "linear"
         assert any(line.get_xdata()[0] == pytest.approx(0.0) for line in ax.lines if len(set(line.get_xdata())) == 1)
-        assert efficacy_figures.log2_tick(2.0) == "4x"
-        assert efficacy_figures.log2_tick(-1.0) == "0.5x"
+        assert plotstyle.log2_ratio_tick(2.0) == "4x"
+        assert plotstyle.log2_ratio_tick(-1.0) == "0.5x"
     finally:
         plt.close(fig)
 
@@ -707,7 +707,7 @@ def y_axis_left_margin(low: float, high: float) -> float:
     ax.set_yscale("log", base=2.0)
     ax.set_ylim(low, high)
     plotstyle.value_axis(ax, "y", log_base=2.0)
-    ax.yaxis.set_major_formatter(FuncFormatter(efficacy_figures.ratio_tick))
+    ax.yaxis.set_major_formatter(FuncFormatter(plotstyle.ratio_tick))
     ax.set_ylabel("Token-Cost Ratio, Treated / Control", fontsize=plotstyle.LABEL_PT * 0.68)
     ax.tick_params(axis="both", labelsize=plotstyle.TICK_PT * 0.6)
     try:
@@ -1075,7 +1075,7 @@ def test_a_difference_spec_reads_delivery_colon_model_pairs() -> None:
 )
 def test_an_arrows_factor_is_two_significant_figures(value: float, want: str) -> None:
     """The tick spelling keeps full precision, which beside a mark reads as ``6.34919x``."""
-    assert efficacy_figures.factor_label(value) == want
+    assert plotstyle.ratio_label(value) == want
 
 
 def arrow_row() -> efficacy_figures.ArmRow:
@@ -1211,14 +1211,14 @@ def test_cli_title_flag_produces_no_whole_figure_title(tmp_path: pathlib.Path) -
 
 
 def test_the_token_cost_axis_formatter_spells_a_ratio_below_one_as_a_fraction() -> None:
-    assert efficacy_figures.ratio_tick(0.125) == "0.125x"
-    assert efficacy_figures.ratio_tick(1.0) == "1x"
-    assert efficacy_figures.ratio_tick(8.0) == "8x"
+    assert plotstyle.ratio_tick(0.125) == "0.125x"
+    assert plotstyle.ratio_tick(1.0) == "1x"
+    assert plotstyle.ratio_tick(8.0) == "8x"
 
 
 def test_a_drawn_panels_y_axis_never_labels_a_non_power_of_two_tick() -> None:
     """The bug this guards: a base-2 ``LogLocator`` with a 1.5 sub used to label 1.5x, 3x, 0.75x --
-    ticks :func:`~hpcagent_bench.stats.figures.per_kernel.speedup_tick_label` cannot spell as a
+    ticks :func:`~hpcagent_bench.stats.style.ratio_tick_label` cannot spell as a
     clean fraction and a reader cannot place on a log2 grid by eye."""
     import matplotlib.pyplot as plt
 

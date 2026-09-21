@@ -19,6 +19,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 
+from hpcagent_bench.stats import style
 from hpcagent_bench.stats.figures import per_kernel as pk
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -102,7 +103,7 @@ def test_token_cells_keeps_every_episodes_own_total_not_the_kernel_sum() -> None
     ],
 )
 def test_speedup_tick_label_reads_a_log2_ratio_back_as_a_ratio(ratio: float, label: str) -> None:
-    assert pk.speedup_tick_label(ratio) == label
+    assert style.ratio_tick_label(ratio) == label
 
 
 def test_speedup_yticks_always_spans_at_least_a_quarter_to_four_x() -> None:
@@ -340,4 +341,4 @@ def test_the_token_panel_puts_its_measured_value_on_a_log_y_axis_with_a_major_gr
     ],
 )
 def test_a_ratio_below_one_prints_as_a_decimal(value: float, want: str) -> None:
-    assert pk.speedup_tick_label(value) == want
+    assert style.ratio_tick_label(value) == want

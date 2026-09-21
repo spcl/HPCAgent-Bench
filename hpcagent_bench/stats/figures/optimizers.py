@@ -160,7 +160,7 @@ def draw_panel(ax: Axes, panel: OptimizerPanel, config: efficacy.FigureConfig) -
         style.point_mark(ax, index, point, mark.color, mark.marker, filled=True, size=config.mark_size)
         held.append(point)
         ax.annotate(
-            kernel_comparison.speedup_value_text(interval.point), (index, point), textcoords="offset points",
+            style.ratio_label(interval.point), (index, point), textcoords="offset points",
             xytext=(config.label_offset_pt * 0.7, 0.0), ha="left", va="center", fontsize=config.point_pt,
             color=style.INK, zorder=style.MARK_Z + 1.0,
         )  # fmt: skip
@@ -183,7 +183,7 @@ def style_shared_axis(axes: Sequence[Axes], held: Sequence[float], config: effic
     for ax in axes:
         style.value_axis(ax, "y")
         ax.yaxis.set_major_locator(MultipleLocator(efficacy.x_tick_step(reach, config.max_ticks)))
-        ax.yaxis.set_major_formatter(FuncFormatter(efficacy.log2_tick))
+        ax.yaxis.set_major_formatter(FuncFormatter(style.log2_ratio_tick))
         ax.tick_params(axis="both", labelsize=config.tick_pt)
         style.despine(ax)
         efficacy.thin_rules(ax, config)

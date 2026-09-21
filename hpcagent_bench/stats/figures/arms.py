@@ -21,16 +21,10 @@ from hpcagent_bench.stats import palette, style
 LANGUAGES: tuple[str, ...] = ("c", "fortran", "cpp")
 
 
-def ratio_tick(value: float, position: int = 0) -> str:
-    """A speed-up major read back as the ratio it is: ``1x``, ``2x``, ``50x``."""
-    del position
-    return f"{value:g}x"
-
-
 def finish(fig: plt.Figure, ax: plt.Axes, handles: list, stem: pathlib.Path) -> None:
     """Grid on the measured axis, a light frame and the legend below, then the PDF and the PNG."""
     style.value_axis(ax, "y", log_base=10.0)
-    ax.yaxis.set_major_formatter(FuncFormatter(ratio_tick))
+    ax.yaxis.set_major_formatter(FuncFormatter(style.ratio_tick))
     style.despine(ax)
     style.legend_below(fig, handles)
     fig.subplots_adjust(left=0.10, right=0.98, top=0.90, bottom=0.34)

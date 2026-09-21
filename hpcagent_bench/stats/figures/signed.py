@@ -47,7 +47,6 @@ from matplotlib.lines import Line2D
 from hpcagent_bench import experiment_tags, flags
 from hpcagent_bench.stats import canon, palette, population, rules, style
 from hpcagent_bench.stats.figures import kernel_comparison
-from hpcagent_bench.stats.figures.per_kernel import speedup_tick_label
 from hpcagent_bench.stats.summary import DEFAULT_CONFIDENCE, geomean_ci, log2_change, signed_change, usable_ratios
 
 #: Framework -> the name a reader knows it by. Insertion order is the order on the axis.
@@ -640,7 +639,7 @@ def geomean_interval_of(
 def style_log2_speedup_y_axis(ax: Axes, ratios: Sequence[float], reference_color: str = style.REFERENCE) -> None:
     """The speed-up panel's Y axis: LOG2 GEOMETRY (every doubling the same distance apart,
     :func:`~hpcagent_bench.stats.summary.log2_change`), ticks and labels read back in RATIOS
-    (:func:`~hpcagent_bench.stats.figures.per_kernel.speedup_tick_label`) so the axis still READS
+    (:func:`~hpcagent_bench.stats.style.ratio_tick_label`) so the axis still READS
     as a speed-up while only its geometry is log2. A LINEAR signed change (:func:`~hpcagent_bench.stats.summary.signed_change`)
     stretches every multiple of the baseline the same amount, so one 75x outlier would sit 74 units
     from zero and swamp every other kernel's mark onto a sliver near it; log2 puts that same 75x
@@ -648,7 +647,7 @@ def style_log2_speedup_y_axis(ax: Axes, ratios: Sequence[float], reference_color
     ticks = kernel_comparison.value_ticks(ratios)
     positions = [log2_change(tick) for tick in ticks]
     ax.set_yticks(positions)
-    ax.set_yticklabels([speedup_tick_label(tick) for tick in ticks], fontsize=style.TICK_PT * 0.6)
+    ax.set_yticklabels([style.ratio_tick_label(tick) for tick in ticks], fontsize=style.TICK_PT * 0.6)
     ax.set_ylim(positions[0] - 0.3, positions[-1] + 0.3)
     ax.axhline(0.0, color=reference_color, linewidth=0.9, zorder=1)
     ax.grid(axis="y", which="major", color=style.RULE, linewidth=0.7, zorder=0)
@@ -702,7 +701,7 @@ def thin_speedup_ticks(ax: Axes) -> None:
     if len(positions) > LLR40_MAX_TICKS:
         positions = [position for position in positions if round(position) % 2 == 0]
     ax.set_yticks(positions)
-    ax.set_yticklabels([speedup_tick_label(2.0**position) for position in positions], fontsize=LLR40_TEXT_PT)
+    ax.set_yticklabels([style.ratio_tick_label(2.0**position) for position in positions], fontsize=LLR40_TEXT_PT)
 
 
 def legend_handles(rows: Sequence[Row], kernels: Sequence[str]) -> list[Line2D]:
