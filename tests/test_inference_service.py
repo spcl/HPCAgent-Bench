@@ -507,7 +507,7 @@ def test_the_launcher_never_writes_the_key_value_into_the_run_tree() -> None:
     assert "api_key: ${VLLM_API_KEY" not in script, "the proxy config would hold the key literally"
     assert "os.environ/VLLM_API_KEY" in script
     assert 'JOB_ENV_FILE="${RUN_DIR}' not in script, "the env slice would persist in the run tree"
-    assert "chmod 600" in script and 'rm -f "${JOB_ENV_FILE}"' in script
+    assert "chmod 600" in script and 'rm -f "${JOB_ENV_FILE:-}"' in script
 
 
 def listing(model: str, *pricings: dict[str, str]) -> dict[str, object]:
