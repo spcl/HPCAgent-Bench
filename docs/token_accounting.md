@@ -8,9 +8,9 @@ and the measurements behind each choice. The implementation is
 
 | number | definition | quote it when |
 |---|---|---|
-| `effective` card | every token counted **once**, in the turn it first appeared: fresh input + output | comparing **arms within this work** (paper headline) |
-| `billed` card | fresh input + cache reads at **0.1** + output | the paper's second number: what a hosted service meters, output unweighted |
-| `api-priced` card | fresh input + cache reads at 0.1 + output at **5x** | a bill-shaped number (list-price ratios, [below](#cost-cards)) |
+| `effective` card | every token counted **once**, in the turn it first appeared: input + output | comparing **arms within this work** (paper headline) |
+| `billed` card | input + cached input at **0.1** + output | the paper's second number: what a hosted service meters, output unweighted |
+| `api-priced` card | input + cached input at 0.1 + output at **5x** | a bill-shaped number (list-price ratios, [below](#cost-cards)) |
 | `total` card | every prompt in full on every turn, plus output | comparing against **other papers** ([how](#reading-it)) |
 | `api_ms` | wall time this episode occupied the shared inference node | asking what an arm **cost us** |
 
@@ -96,7 +96,7 @@ at zero. Because the transcript only grows, `fresh` **telescopes to the final co
 verified monotone over all 173 turns of the episode above, summing to exactly 98,723.
 
 So every token is counted once, when it first appeared, which is what the forward passes actually
-computed: a fresh input token needs one pass to build its KV, an output token needs one pass to
+computed: an input token needs one pass to build its KV, an output token needs one pass to
 exist, and a cached token needs none. What this omits is the KV **re-read** on each decode step --
 real, but memory traffic rather than a forward pass.
 
@@ -123,7 +123,7 @@ On a hit the prefill for that prefix is not recomputed -- published measurements
 qwen38 runs on SGLang (radix-tree prefix cache) and oss120b on vLLM (block-level LRU), so the two
 arms' measured hit rates are recorded per run rather than assumed equal.
 
-Our own servers report a **99.3% prefix cache hit rate** on these runs, so the re-sent transcript is
+Our own servers report a **99.3% prefix cache hit rate** on these runs, so the cached transcript is
 nearly free in compute while `billed` charges it in full.
 
 Charging a cache hit at any nonzero fraction in a TOKEN COUNT (vendors bill a read at 0.1x the
@@ -235,7 +235,7 @@ once. A dash is not stated.
 | SWE-rebench 2505.20411 | wall time | - | - | - | - | run; vLLM |
 | SERA 2601.20789 | GPU-h, $ | cached/uncached | provider cache price | - | $2 per H100-hour assumed | trajectory |
 | TraceLab 2606.30560 | $ | fresh/cache read | hit rate 95.7% | req | - | trace |
-| **ours** | T | fresh, re-sent, out | transcript model; engine hit rate a diagnostic | once (effective), req (billed at 0.1, total) | none; cards | task final attempt; landed kernel |
+| **ours** | T | input, cached input, output | transcript model; engine hit rate a diagnostic | once (effective), req (billed at 0.1, total) | none; cards | task final attempt; landed kernel |
 
 No surveyed work counts each context token once. Two caveats from the serving side: SGLang evicts the
 least recently used radix leaf when its pool fills (arXiv:2312.07104), and vLLM caches only full
@@ -257,7 +257,7 @@ to 30x between runs (arXiv:2605.09104).
 ## What we report, and why
 
 Decided from the survey (2026-09-16). Per arm: the three components of each task's final attempt
-(fresh input, re-sent input, output) with turns and compactions, so any convention above can be
+(input, cached input, output) with turns and compactions, so any convention above can be
 recomputed; the three proxies `effective` (axis of every paired comparison), `billed`, `total`, all
 output 1x; no dollars (no open-weight model has one price); the measured engine hit rate and engine
 configuration as a diagnostic; node-hours on the serving node; cost per landed kernel; no judge tokens.
