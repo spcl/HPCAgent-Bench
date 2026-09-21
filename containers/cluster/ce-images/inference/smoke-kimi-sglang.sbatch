@@ -19,6 +19,7 @@
 #SBATCH --time=03:00:00
 #SBATCH --output=logs/smoke-kimi-sglang-%j.out
 #SBATCH --error=logs/smoke-kimi-sglang-%j.err
+#SBATCH --no-requeue
 
 set -Eeuo pipefail
 ulimit -c 0
