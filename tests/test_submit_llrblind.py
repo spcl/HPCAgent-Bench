@@ -249,7 +249,7 @@ def test_base_campaign_gpu_inherits_the_baselines_own_budget_and_gpu_prompt(tmp_
     """DEVICE=gpu BASE=campaign: the arm's base is .env.base-<model> (the SAME file
     submit-cpf-llr40.sh/submit-gpu-llr40.sh stage for the plain baselines), not
     .env.llrbase-<model>-hip -- there is no such file. Comparability means AGENT_TIMEOUT_SECONDS
-    (14400 here) is inherited untouched rather than pinned to this script's own 18000 default, and
+    (14400 here) is inherited untouched rather than pinned to this script's own 27000 default, and
     LANGUAGE/AGENT_PROMPT_FILE/device follow DEVICE=gpu the same way submit-gpu-llr40.sh sets them."""
     root = submit_tree(tmp_path)
     experiments = root / "experiments"
@@ -262,7 +262,7 @@ def test_base_campaign_gpu_inherits_the_baselines_own_budget_and_gpu_prompt(tmp_
     assert env["PROBLEMS_FILE"] == "problems-llrblind-hip.jsonl"
     assert env["LANGUAGE"] == "hip"
     assert env["AGENT_PROMPT_FILE"] == "prompt-gpu.md"
-    assert env["AGENT_TIMEOUT_SECONDS"] == "14400", "must inherit the baseline's own budget, not 18000"
+    assert env["AGENT_TIMEOUT_SECONDS"] == "14400", "must inherit the baseline's own budget, not 27000"
     assert env["CAMPAIGN_ARM"] == "llrblind-qwen38-hip"
     assert env["HPCAGENT_BENCH_RECORD_DEVICE"] == "gpu"
     assert env["HPCAGENT_BENCH_RECORD_PACKET"] == "no-score-tool"
@@ -289,7 +289,7 @@ def test_base_campaign_cpu_leaves_language_and_prompt_alone(tmp_path: pathlib.Pa
 
 def test_base_campaign_explicit_agent_timeout_seconds_still_overrides(tmp_path: pathlib.Path) -> None:
     """An operator naming AGENT_TIMEOUT_SECONDS explicitly must still win under BASE=campaign --
-    the skip only applies to the script's own unrequested 18000 default."""
+    the skip only applies to the script's own unrequested 27000 default."""
     root = submit_tree(tmp_path)
     experiments = root / "experiments"
     (experiments / ".env.base-qwen38").write_text(CAMPAIGN_BASE_TEXT)
@@ -299,15 +299,15 @@ def test_base_campaign_explicit_agent_timeout_seconds_still_overrides(tmp_path: 
     assert env["AGENT_TIMEOUT_SECONDS"] == "9999"
 
 
-def test_base_llrbase_default_still_pins_18000_regardless_of_the_base_file(tmp_path: pathlib.Path) -> None:
+def test_base_llrbase_default_still_pins_27000_regardless_of_the_base_file(tmp_path: pathlib.Path) -> None:
     """Old use, unaffected: BASE defaults to llrbase and AGENT_TIMEOUT_SECONDS is still pinned to
-    18000 even though .env.llrbase-qwen38-c itself carries 28800 -- byte-for-byte the pre-existing
+    27000 even though .env.llrbase-qwen38-c itself carries 28800 -- byte-for-byte the pre-existing
     behavior, not a side effect of adding the campaign path."""
     root = submit_tree(tmp_path)
     result = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain")
     assert result.returncode == 0, result.stderr
     env = env_dict(root / "experiments" / ".env.llrblind-qwen38-c")
-    assert env["AGENT_TIMEOUT_SECONDS"] == "18000"
+    assert env["AGENT_TIMEOUT_SECONDS"] == "27000"
 
 
 def test_token_scale_grows_max_tokens_uncapped(tmp_path: pathlib.Path) -> None:
@@ -318,17 +318,17 @@ def test_token_scale_grows_max_tokens_uncapped(tmp_path: pathlib.Path) -> None:
     result = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain", TOKEN_SCALE="4")
     assert result.returncode == 0, result.stderr
     env = env_dict(root / "experiments" / ".env.llrblind-qwen38-c-tok4x-time1x")
-    assert env["AGENT_MAX_TOKENS"] == "48000000"
+    assert env["AGENT_MAX_TOKENS"] == "96000000"
 
 
 def test_time_scale_grows_agent_timeout_seconds_but_clamps_to_the_partition_cap(tmp_path: pathlib.Path) -> None:
-    """TIME_SCALE=6 on the 18000s llrbase default asks for 30h -- clamped to (23 - 3)h = 20h
+    """TIME_SCALE=6 on the 27000s llrbase default asks for 45h -- clamped to (23 - 3)h = 20h
     (PARTITION_TIME_LIMIT_HOURS - STAGING_HOURS), not left to overrun the partition's real MaxTime."""
     root = submit_tree(tmp_path)
     result = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain", TIME_SCALE="6")
     assert result.returncode == 0, result.stderr
     env = env_dict(root / "experiments" / ".env.llrblind-qwen38-c-tok1x-time6x")
-    assert env["AGENT_TIMEOUT_SECONDS"] == "72000"  # 20h, not 108000 (30h)
+    assert env["AGENT_TIMEOUT_SECONDS"] == "72000"  # 20h, not 162000 (45h)
 
 
 def test_wallclock_floor_rises_to_cover_a_capped_time_scale(tmp_path: pathlib.Path) -> None:
