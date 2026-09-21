@@ -17,17 +17,10 @@
 # GitHub hiccup would trade a slightly stale run for no run at all. It reports which commit is
 # live either way, and that line is what a results table should quote.
 #
-# NOTHING CALLS THIS, AND NOTHING MAY CALL IT PER JOB. That is deliberate, not an oversight:
-# each job would resolve the tip independently, so two arms of one campaign could run different
-# dace commits and stop being comparable -- the standing "never pull dace mid-sweep" rule, applied
-# to the container. The supported way to be on the tip is a REBUILD: build.sh resolves
-# spcl/dace@extended with `git ls-remote` and passes the sha in as DACE_COMMIT, which both busts
-# the layer cache (a `--branch extended` clone would be reused forever) and gives every job of
-# every campaign the one commit recorded in /opt/dace.commit. Keep this script opt-in, by hand,
-# for a single deliberate experiment. Wiring it into a launcher is how a campaign loses its
-# denominator.
-set -Eeuo pipefail
-
+# Called at job start by the judge step (run_cluster.sh run_judge_node) and by regrade.sbatch
+# (user 2026-09-21: fixes pushed before a job starts must reach it). The price: two jobs that start
+# on either side of a dace push run different dace commits, so the "live commit" line in the log
+# is the provenance a results table quotes.
 # Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
 # process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
 # quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
@@ -76,4 +69,4 @@ PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-cache-dir --no-deps -q -
 cd /tmp  # never import dace from a directory that may contain one; see PYTHONSAFEPATH in the EDF
 python3 -c "import dace; print('dace-refresh: import OK, dace', dace.__version__)"
 echo "dace-refresh: ${baked} -> ${tip}"
-echo "dace-refresh: live commit ${tip}"
+echo "dace-refresh: live commit $(git -C "${DACE_DIR}" rev-parse HEAD)"
