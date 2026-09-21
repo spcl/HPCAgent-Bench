@@ -169,6 +169,7 @@ def legend_below(
     y: float = 0.0,
     fontsize: float = 0.0,
     markerscale: float = 1.4,
+    span: tuple[float, float] | None = None,
 ) -> float:
     """One legend, under the whole figure, centred, wrapped to the figure width. Never inside the
     axes. Returns the legend's height in inches, which the caller adds to its bottom margin.
@@ -190,13 +191,19 @@ def legend_below(
     full-height figure, and LABEL_PT alone would not fit. ``markerscale`` is the swatch's own size
     against the handle's: the 1.4 default enlarges a swatch so it reads beside authoring-scale type,
     and at 6.5pt type the same 1.4 makes the swatch taller than the row it sits in.
+
+    ``span``, the plot body's (left, right) in figure fractions, centres the legend on the body
+    instead of the canvas and makes the BODY's width the limit: a key never runs out past the panels
+    under the Y labels, it drops a column first.
     """
     columns = ncol if ncol != 0 else min(len(handles), 5)
+    left, right = span if span is not None else (0.0, 1.0)
+    limit = (right - left) * float(fig.get_size_inches()[0])
     while True:
         legend = fig.legend(  # pyright: ignore[reportUnknownMemberType]
             handles=handles,
             loc="lower center" if y != 0.0 else "upper center",
-            bbox_to_anchor=(0.5, y),
+            bbox_to_anchor=((left + right) / 2.0, y),
             ncol=columns,
             frameon=False,
             fontsize=fontsize if fontsize > 0.0 else LABEL_PT,
@@ -206,7 +213,7 @@ def legend_below(
             borderaxespad=0.0,
         )
         box = legend.get_window_extent(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
-        if columns <= 1 or box.width <= float(fig.get_size_inches()[0]):
+        if columns <= 1 or box.width <= limit:
             # FILL the box: among the column counts that give this many rows, the smallest leaves
             # no ragged cells. Five columns and four both wrap twelve entries onto three rows, and
             # four of them is a rectangle.

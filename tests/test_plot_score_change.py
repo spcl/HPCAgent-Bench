@@ -16,8 +16,10 @@ import math
 import pathlib
 import sys
 import tempfile
+import warnings
 
 import matplotlib.colors
+import matplotlib.pyplot as plt
 import matplotlib.markers
 import numpy as np
 import pandas as pd
@@ -1653,3 +1655,27 @@ def test_without_mark_pending_a_pending_category_stays_empty(
     fig = pending_dot_row(tmp_path, monkeypatch, mark=False)
     assert not any(t.get_gid() == plotstyle.PENDING_GID for ax in fig.axes for t in ax.texts)
     assert len(fig.axes[0].get_xticks()) == 2  # the slots are kept either way
+
+
+def test_the_key_is_never_wider_than_the_plot_body(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A single-column figure's key drops columns before it runs out past the panels."""
+    fig = pending_dot_row(tmp_path, monkeypatch, mark=True)
+    renderer = fig.canvas.get_renderer()
+    body_left, body_right = fig.axes[0].get_position().x0, fig.axes[-1].get_position().x1
+    (legend,) = fig.legends
+    box = legend.get_window_extent(renderer).transformed(fig.transFigure.inverted())
+    assert box.width <= body_right - body_left + 1e-6
+    assert (box.x0 + box.x1) / 2.0 == pytest.approx((body_left + body_right) / 2.0, abs=0.01)
+
+
+def test_a_single_value_axis_is_left_unsnapped() -> None:
+    """A stub row's only value is its 1x line; snapping it would set equal limits (a singular axis)."""
+    fig, ax = plt.subplots()
+    try:
+        ax.set_ylim(-1.0, 1.0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            efficacy_figures.snap_axis_to_ticks(ax, 0.0, 0.0)
+        assert ax.get_ylim() == (-1.0, 1.0)
+    finally:
+        plt.close(fig)
