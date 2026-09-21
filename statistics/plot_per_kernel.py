@@ -40,7 +40,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--experiment", default="", help="arm prefix selecting one experiment; blank keeps all")
     parser.add_argument("--arm", default="", help="regex; keep only arms whose full name matches")
     parser.add_argument("--style", choices=("ci", "box"), default="ci", help="median+CI (default) or a boxplot")
-    parser.add_argument("--summary", action="store_true", default=False, help="append a median-over-kernels column")
+    parser.add_argument(
+        "--summary",
+        action="store_true",
+        default=False,
+        help="append a summary column over the solved kernels: geomean speed-up, median tokens",
+    )
     parser.add_argument(
         "--layout",
         choices=("separate", "stacked"),
@@ -81,7 +86,7 @@ def render(
         if not (speed_cells and token_cells):
             raise SystemExit("--layout stacked needs both a speed-up and a tokens cell to share the kernel axis")
         kernels = per_kernel.shared_kernel_order(speed_cells, token_cells)
-        fig = per_kernel.figure_stacked(speed, tokens, kernels, args.style, args.summary, label)
+        fig = per_kernel.figure_panels([speed, tokens], kernels, args.style, args.summary, label)
         written.append(per_kernel.save(fig, args.out))
         return written
     if speed_cells:
@@ -107,8 +112,8 @@ def main() -> None:
     # arm's kernels was a caption that said nothing. --label draws one for a standalone render.
     label = args.label
     hues = palette.hues()
-    speed = per_kernel.speedup_metric(speed_cells, "Speed-Up", hues[0])
-    tokens = per_kernel.token_metric(token_cells, "Tokens per Episode", hues[1])
+    speed = per_kernel.speedup_series_metric([per_kernel.Series("", tuple(speed_cells), hues[0])], "Speed-Up")
+    tokens = per_kernel.token_series_metric([per_kernel.Series("", tuple(token_cells), hues[1])], "Tokens per Episode")
 
     write_tables(speed_cells, token_cells, args.table)
     written = render(speed, tokens, speed_cells, token_cells, args, label)

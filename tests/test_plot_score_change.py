@@ -1072,10 +1072,11 @@ def test_a_difference_spec_reads_delivery_colon_model_pairs() -> None:
 
 
 @pytest.mark.parametrize(
-    ("value", "want"), [(6.34919, "6.3x"), (0.92137, "0.92x"), (1.0, "1x"), (4.0, "4x"), (0.5, "0.5x")]
+    ("value", "want"), [(6.34919, "6.3x"), (0.92137, "0.9x"), (1.0, "1.0x"), (4.0, "4.0x"), (0.5, "0.5x")]
 )
-def test_an_arrows_factor_is_two_significant_figures(value: float, want: str) -> None:
-    """The tick spelling keeps full precision, which beside a mark reads as ``6.34919x``."""
+def test_an_arrows_factor_is_printed_to_one_decimal(value: float, want: str) -> None:
+    """The label beside a mark is what a reader quotes, one decimal (user, 2026-09-21); the tick
+    spelling keeps full precision, which beside a mark reads as ``6.34919x``."""
     assert plotstyle.ratio_label(value) == want
 
 

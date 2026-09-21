@@ -20,14 +20,17 @@ from hpcagent_bench.stats import style
 @pytest.mark.parametrize(
     ("value", "want"),
     [
-        pytest.param(6.34919, "6.3x", id="two-figures"),
-        pytest.param(32.5, "32x", id="no-decimal-past-ten"),
-        pytest.param(0.9166, "0.92x", id="below-one"),
-        pytest.param(1.0, "1x", id="unity"),
+        pytest.param(6.34919, "6.3x", id="one-decimal"),
+        pytest.param(32.45, "32.5x", id="one-decimal-past-ten"),
+        pytest.param(0.928, "0.9x", id="below-one"),
+        pytest.param(1.0, "1.0x", id="unity"),
+        pytest.param(0.04, "0.04x", id="below-a-tenth-keeps-a-figure"),
         pytest.param(0.0, "", id="no-ratio"),
     ],
 )
-def test_a_ratio_beside_its_mark_prints_two_significant_figures(value: float, want: str) -> None:
+def test_a_ratio_beside_its_mark_prints_one_decimal(value: float, want: str) -> None:
+    """One decimal is what a reader quotes; below 0.1x one decimal would print a real slowdown as
+    0.0x, so those keep a significant figure."""
     assert style.ratio_label(value) == want
 
 

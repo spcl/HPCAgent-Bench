@@ -11,6 +11,7 @@ rendering anything.
 
 import sys
 import importlib.util
+import itertools
 import math
 import pathlib
 from typing import List, Tuple
@@ -19,6 +20,7 @@ import pandas as pd
 import pytest
 
 from hpcagent_bench.stats import summary
+from hpcagent_bench.stats.figures import per_kernel
 from hpcagent_bench.stats.figures import results as plotting
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -451,14 +453,22 @@ def test_every_cell_is_drawn_exactly_once_whichever_way_it_is_drawn(tmp_path: pa
     assert drawn == 1, f"expected the one thin cell as a marker, got {drawn}"
 
 
+def box_offsets(count: int) -> list[float]:
+    """The offsets the banded figure gives ``count`` frameworks' boxes: the shared dodge over the
+    span that lets boxes of width ``0.8 / count`` tile the slot."""
+    return per_kernel.dodge_offsets(count, speedup.box_span(count))
+
+
 def test_dodged_frameworks_do_not_share_an_x_position() -> None:
     """Two frameworks' boxes at one kernel must not sit on top of each other, and a single
     framework must stay ON its kernel's tick -- where the marker figure puts it."""
-    assert speedup.dodge_offsets(1) == [0.0]
-    two = speedup.dodge_offsets(2)
+    assert box_offsets(1) == [0.0]
+    two = box_offsets(2)
     assert two[0] < 0.0 < two[1]
     assert sum(two) == pytest.approx(0.0), "the group must stay centred on the tick"
-    assert max(speedup.dodge_offsets(4)) - min(speedup.dodge_offsets(4)) <= 0.8, "the group must stay in its slot"
+    four = box_offsets(4)
+    assert max(four) - min(four) + 0.8 / 4 <= 0.8 + 1e-9, "the group, boxes included, must stay in its slot"
+    assert min(b - a for a, b in itertools.pairwise(four)) >= 0.8 / 4 - 1e-9, "neighbouring boxes must not overlap"
 
 
 def test_compact_weights_panel_heights_by_population_and_is_otherwise_the_equal_split() -> None:

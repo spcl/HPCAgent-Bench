@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """llr-focus40: the DaCe canon CPU column against every COMPLETE agent arm, per kernel.
 
-Two small-multiple panels per model, speed-up over tokens (:mod:`hpcagent_bench.stats.figures.kernel_comparison`),
-sharing the 40-kernel row axis; the speed-up panel repeats the deterministic reference column beside
-that model's own complete arms, the token panel is agents only. An arm without a recorded row for
-every roster kernel is dropped and printed to stderr with its coverage; ``--include-incomplete``
-draws it anyway.
+Two panels on one kernel axis, speed-up over tokens (:mod:`hpcagent_bench.stats.figures.kernel_comparison`
+picks the values, :mod:`hpcagent_bench.stats.figures.per_kernel` draws them): the speed-up panel
+carries the deterministic reference column beside every model's complete arms, the token panel is
+agents only. An arm without a recorded row for every roster kernel is dropped and printed to stderr
+with its coverage; ``--include-incomplete`` draws it anyway.
 
 Usage:  python3 statistics/plot_kernel_comparison.py --observations obs.db --canon-db canon.db \
             --out figures/kernel_comparison.pdf --table tables/kernel_comparison.csv
@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 from hpcagent_bench.experiments import read_observations, read_table
 from hpcagent_bench.stats import population
-from hpcagent_bench.stats.figures import kernel_comparison
+from hpcagent_bench.stats.figures import kernel_comparison, per_kernel, results
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -82,11 +82,11 @@ def run(
     # The denominator the JUDGE stamped, never a constant: llr-focus40 grades against numba and
     # scientific_computing against c-autopar, and the speed-up axis has to name the one the scores
     # in front of it were divided by.
-    baseline = kernel_comparison.baseline_of(observations)
+    baseline = results.baseline_of(observations)
     fig = kernel_comparison.figure(
         panels, canon_mark, kernels, double_column, label or DEFAULT_TITLE, condition_order, baseline
     )
-    stem = kernel_comparison.save(fig, out)
+    stem = per_kernel.save(fig, out)
 
     frame = kernel_comparison.table_rows(panels, canon_mark, kernels)
     table.parent.mkdir(parents=True, exist_ok=True)

@@ -58,18 +58,22 @@ How to read it:
 - **Numba is the denominator**, not a series: it is the orange 1x line, and the Y axis says
   "Speed-up over Numba" (`--baseline` changes it). This is the 2026-09-20 decision; Pluto and PPCG
   are comparators drawn beside it, never the reference.
-- **Filled mark = a measured result. Hollow mark = no verified result, scored 1x.** A kernel a
-  compiler declined (non-affine, emission refused) or never ran enters at 1x and is counted in the
-  geomean, never dropped (`canon.roster_speedups`).
-- The rightmost column is the geomean over the roster with its 95% log-t interval, value printed
-  to one decimal.
+- **Filled mark = a measured result. Hollow, crossed mark = no verified result, scored 1x.** A
+  kernel a compiler declined (non-affine, emission refused) or never ran enters at 1x, drawn and
+  kept as a row of `-kernels.csv`, never dropped (`canon.roster_speedups`) -- but it is no
+  measurement, so no summary takes it.
+- Past the dashed separator each row gets a summary slot: the geomean over the kernels it SOLVED
+  with its 95% log-t interval on the speed-up panel, the median over its served kernels on the
+  token panel, value printed to one decimal (`style.ratio_label`). `-summary.csv` and
+  `-tokens-summary.csv` carry the same numbers; the token median has no interval under 5 kernels,
+  and a tokens table with no interval on any row is refused (Rule 5).
 - `--offset` spreads a kernel's series across its slot so marks at the same height stay readable;
   0 stacks them.
 
 **Caveat on the current data.** PPCG has a validated result on 6 of the 40 kernels and Pluto on
-22, so their geomeans (0.9x and 1.4x) are mostly placeholders at 1x. Read them with
-`compilers-per-kernel-kernels.csv`, where an empty `denominator_ms` is a placeholder. The DaCe
-columns are complete (40 of 40).
+22, so their geomeans are over those few kernels only (the `n` column of
+`compilers-per-kernel-summary.csv`). Read them with `compilers-per-kernel-kernels.csv`, where an
+empty `denominator_ms` is a placeholder. The DaCe columns are complete (40 of 40).
 
 ## 2. Optimizers, one row, speed-up only
 
@@ -192,6 +196,7 @@ a test, never into a script or a paper repository.
 | figure | library function | script |
 |---|---|---|
 | compilers per kernel | `stats/figures/signed.py: llr40_two_row_figure` | `statistics/plot_llr40_compilers.py` |
+| any per-kernel figure | `stats/figures/per_kernel.py: figure_panels` | `plot_per_kernel.py`, `plot_kernel_comparison.py`, `plot_repo_vs_kernel.py` |
 | optimizer row | `stats/figures/optimizers.py: figure_optimizer_row` | `statistics/plot_optimizer_row.py` |
 | LLR efficacy | `stats/figures/efficacy.py: figure_dot_row` | `statistics/plot_score_change.py` |
 
@@ -202,12 +207,13 @@ Shared behaviour these figures rely on, all in the library:
   back to its `frameworks` name, which carries the device (`signed.distinct_canon_labels`).
 - **Placeholders are hollow.** `style.point_mark(..., delivered=False)` always draws an empty face;
   a cross in the series colour on a filled mark of that colour is invisible.
-- **Summary values do not overprint.** Value labels tagged `style.SPREAD_GID` are moved apart at
-  save time, after the axis limits are final (`style.settle_spread_labels`, called from
-  `style.save`).
-- **One decimal.** Speed-up values print as `6.3x`, `0.9x`
-  (`kernel_comparison.speedup_value_text`); below 0.1x they keep one significant figure so a real
-  slowdown never reads `0.0x`.
+- **Summary values do not overprint.** Value labels tagged `style.CLEAR_GID` are placed clear of
+  the marks and of each other, inside their frame, at save time, after the axis limits are final
+  (`style.settle_clear_labels`, called from `style.save`).
+- **One decimal.** Speed-up values print as `6.3x`, `0.9x` (`style.ratio_label`); below 0.1x they
+  keep one significant figure so a real slowdown never reads `0.0x`.
+- **One per-kernel API.** `per_kernel` draws every kernel-axis figure; `kernel_comparison` and
+  `signed.llr40_rows` only pick the values ([plotting.md](plotting.md#layout)).
 
 To add an optimizer to the row: give it a `SHORT_NAMES` entry in `stats/figures/optimizers.py` and
 make sure the registry (`hpcagent_bench/envs/registry.yaml`) names it under `optimizers` (shape) and
@@ -217,5 +223,7 @@ make sure the registry (`hpcagent_bench/envs/registry.yaml`) names it under `opt
 
 - Open the PNG. The legend, tick labels and value labels must not collide.
 - Check the CSV's `solved` column against what the text claims.
-- Every number is a geomean with a 95% log-t interval over the roster, with an unanswered kernel
-  at 1x. If a caption says anything else, the caption is wrong.
+- Every speed-up is a geomean with a 95% log-t interval, over the kernels the figure says: the
+  roster with an unanswered kernel at 1x on the optimizer row, the solved kernels on the per-kernel
+  and efficacy figures. Tokens beside a per-kernel figure are a median. If a caption says anything
+  else, the caption is wrong.

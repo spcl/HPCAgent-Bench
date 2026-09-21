@@ -294,11 +294,13 @@ def log2_ratio_tick(value: float, position: int = 0) -> str:
 
 
 def ratio_label(value: float) -> str:
-    """A measured ratio printed beside its mark, to TWO significant figures: ``6.3x``, ``33x``,
-    ``0.92x``. The tick spelling keeps full precision, which beside a mark reads ``6.34919x``."""
+    """A measured ratio printed beside its mark, to one decimal: ``6.3x``, ``32.5x``, ``0.9x``
+    (user, 2026-09-21). One decimal is what a reader quotes; below 0.1x it would print a real
+    slowdown as ``0.0x``, so those keep one significant figure (``0.04x``). The tick spelling keeps
+    full precision, which beside a mark reads ``6.34919x``."""
     if not math.isfinite(value) or value <= 0.0:
         return ""
-    return f"{float(f'{value:.2g}'):g}x"
+    return f"{value:.1f}x" if value >= 0.1 else f"{value:.1g}x"
 
 
 def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, major: bool = True) -> None:
@@ -500,54 +502,6 @@ UNDATED: dict[str, dict[str, None]] = {"pdf": {"CreationDate": None}, "svg": {"D
 SVG_HASH_SALT: str = "hpcagent-bench"
 
 
-#: Tag on an annotation whose VERTICAL position may be nudged at save time to keep it clear of
-#: the other tagged labels on the same axes (:func:`settle_spread_labels`).
-SPREAD_GID: str = "hpcagent-spread-label"
-
-#: Minimum vertical distance, in points, between two spread labels. The summary values are set at
-#: ``TICK_PT * 0.5``; under about one line height two geomeans' numbers overprint into one blot.
-SPREAD_GAP_PT: float = 6.5
-
-
-def spread_positions(positions: Sequence[float], gap: float) -> list[float]:
-    """``positions`` moved apart so no two are closer than ``gap``, returned in INPUT order.
-
-    Packed upward from the lowest with at least ``gap`` between neighbours, then the packed group
-    is shifted back so its mean equals the input mean, so a crowded cluster opens up around where it
-    was. A set that was already clear is returned unchanged.
-    """
-    order = sorted(range(len(positions)), key=lambda i: positions[i])
-    packed = [positions[i] for i in order]
-    for k in range(1, len(packed)):
-        packed[k] = max(packed[k], packed[k - 1] + gap)
-    if any(abs(value - positions[i]) > 1e-9 for value, i in zip(packed, order, strict=True)):
-        shift = (sum(positions) - sum(packed)) / len(packed)
-        packed = [value + shift for value in packed]
-    out = [0.0] * len(positions)
-    for value, i in zip(packed, order, strict=True):
-        out[i] = value
-    return out
-
-
-def settle_spread_labels(fig: Figure) -> None:
-    """Nudge every :data:`SPREAD_GID` annotation vertically so none on one axes overprints another.
-
-    Runs at save time, after every limit is final: a label's height on the page depends on the
-    y-range, which keeps autoscaling until the last artist is added. The gap is measured in POINTS,
-    so it means the same on a log axis and a linear one.
-    """
-    points_per_pixel = 72.0 / fig.dpi
-    for ax in fig.axes:
-        tagged = [a for a in ax.texts if isinstance(a, Annotation) and a.get_gid() == SPREAD_GID]
-        if len(tagged) < 2:
-            continue
-        ax.get_ylim()  # forces a pending autoscale so transData is final
-        heights = [ax.transData.transform(a.xy)[1] * points_per_pixel for a in tagged]
-        for label, was, now in zip(tagged, heights, spread_positions(heights, SPREAD_GAP_PT), strict=True):
-            dx, _ = label.xyann
-            label.xyann = (dx, now - was)
-
-
 def save(
     fig: Figure, stem: pathlib.Path, formats: Sequence[str] = ("pdf", "png"), fixed: bool = False, dpi: float = SAVE_DPI
 ) -> pathlib.Path:
@@ -561,7 +515,6 @@ def save(
     rerun is byte-identical.
     """
     stem.parent.mkdir(parents=True, exist_ok=True)
-    settle_spread_labels(fig)
     settle_clear_labels(fig)
     box = fig.bbox_inches if fixed else "tight"
     with plt.rc_context({"svg.hashsalt": SVG_HASH_SALT}):
@@ -587,18 +540,18 @@ def left_protrusion_in(fig: Figure, ax: Axes) -> float:
 
 
 def below_protrusion_in(fig: Figure, ax: Axes) -> float:
-    """How far ``ax``'s X tick labels and axis label reach below its frame, in inches."""
+    """How far everything ``ax`` draws (X tick labels, axis label, annotations under the frame)
+    reaches below its frame, in inches."""
     renderer = fig.canvas.get_renderer()
-    return max(0.0, ax.get_window_extent(renderer).y0 - ax.xaxis.get_tightbbox(renderer).y0) / fig.dpi
+    return max(0.0, ax.get_window_extent(renderer).y0 - ax.get_tightbbox(renderer).y0) / fig.dpi
 
 
 def above_protrusion_in(fig: Figure, ax: Axes) -> float:
-    """How far the text drawn on ``ax`` (its title, and annotations placed over the frame, such as a
-    summary column's statistic) reaches above its frame, in inches."""
+    """How far everything ``ax`` draws reaches above its frame, in inches: all three title slots
+    (a ``loc="left"`` title is not ``ax.title``), and annotations placed over the frame, such as a
+    panel name or a summary column's statistic."""
     renderer = fig.canvas.get_renderer()
-    top = ax.get_window_extent(renderer).y1
-    texts = [text for text in (ax.title, *ax.texts) if text.get_visible() and text.get_text()]
-    return max((text.get_window_extent(renderer).y1 - top for text in texts), default=0.0) / fig.dpi
+    return max(0.0, ax.get_tightbbox(renderer).y1 - ax.get_window_extent(renderer).y1) / fig.dpi
 
 
 def crowded_ticks(ax: Axes, renderer: RendererBase, gap: float) -> bool:
@@ -746,3 +699,11 @@ def clear_place(box: Bbox, taken: Sequence[Bbox], frame: Bbox, pad: float) -> Bb
             return candidate
     LOG.warning("style: no clear place for the label %r inside its panel", box)
     return held
+
+
+def right_protrusion_in(fig: Figure, ax: Axes) -> float:
+    """How far everything ``ax`` draws reaches right of its frame, in inches: a label centred on the
+    last column (a summary column's statistic) overruns it by half its own width, and a fixed right
+    pad cut it off at the canvas edge."""
+    renderer = fig.canvas.get_renderer()
+    return max(0.0, ax.get_tightbbox(renderer).x1 - ax.get_window_extent(renderer).x1) / fig.dpi

@@ -8,7 +8,6 @@ kernel at 1x, a compiler's label says which device it ran on, and the numbers be
 ship beside the figure.
 """
 
-import math
 import pathlib
 
 import matplotlib
@@ -19,7 +18,7 @@ import pandas as pd
 import pytest
 
 from hpcagent_bench.stats import population, style
-from hpcagent_bench.stats.figures import kernel_comparison, optimizers, signed
+from hpcagent_bench.stats.figures import optimizers, signed
 
 ROSTER: tuple[str, ...] = ("k1", "k2", "k3")
 
@@ -130,20 +129,7 @@ def test_one_device_variant_keeps_its_optimizer_name(canon: pd.DataFrame) -> Non
 def test_a_speedup_value_is_printed_to_one_decimal(value: float, want: str) -> None:
     """One decimal is what a reader quotes; below 0.1x one decimal would print a real slowdown as
     0.0x, so those keep a significant figure."""
-    assert kernel_comparison.speedup_value_text(value) == want
-
-
-def test_spread_positions_leaves_a_clear_set_untouched() -> None:
-    """A label that already has room must not move."""
-    assert style.spread_positions([0.0, 20.0, 40.0], 6.5) == [0.0, 20.0, 40.0]
-
-
-def test_spread_positions_opens_a_crowded_pair_around_where_it_was() -> None:
-    """Two geomeans a few percent apart printed their numbers through each other. After spreading
-    they are a full gap apart, still in input order, and centred on the same mean."""
-    out = style.spread_positions([10.0, 9.0], 6.5)
-    assert out[0] - out[1] == pytest.approx(6.5)
-    assert sum(out) / 2 == pytest.approx(9.5)
+    assert style.ratio_label(value) == want
 
 
 def test_an_undelivered_placeholder_is_drawn_hollow() -> None:
@@ -213,19 +199,4 @@ def test_the_legend_never_overlaps_a_panels_tick_names(monkeypatch: pytest.Monke
         for label in ax.get_xticklabels():
             if label.get_text():
                 assert not legend_box.overlaps(label.get_window_extent(renderer))
-    plt.close(fig)
-
-
-def test_spread_labels_are_settled_at_save_time(tmp_path: pathlib.Path) -> None:
-    """Close geomean labels on one axes end up at least a gap apart on the saved page."""
-    fig, ax = plt.subplots(figsize=(3, 2))
-    ax.set_ylim(0.0, 10.0)
-    for y in (5.0, 5.05):
-        ax.annotate("x", (0.5, y), xytext=(5, 0), textcoords="offset points", gid=style.SPREAD_GID)
-    style.settle_spread_labels(fig)
-    offsets = sorted(a.xyann[1] for a in ax.texts)
-    points_per_pixel = 72.0 / fig.dpi
-    heights = [ax.transData.transform((0.5, y))[1] * points_per_pixel for y in (5.0, 5.05)]
-    assert abs((heights[1] + offsets[1]) - (heights[0] + offsets[0])) >= style.SPREAD_GAP_PT - 1e-6
-    assert not math.isnan(offsets[0])
     plt.close(fig)

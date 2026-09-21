@@ -9,17 +9,20 @@ before any per-kernel value is read, and a model whose every arm is incomplete g
 
 ORIENTATION: the MEASURED quantity is on Y (speed-up on the top panel, tokens on the bottom) and the
 kernel NAMES are on X, rotated, on one axis both panels share; the geomean/median summary is a group
-past the last kernel at the RIGHT END of that axis, behind a dashed vertical separator.
+past the last kernel at the RIGHT END of that axis, behind a dashed vertical separator. The drawing
+itself is :mod:`hpcagent_bench.stats.figures.per_kernel`'s (tests/test_plot_per_kernel.py); what is
+asserted here is that this figure's data reaches it with the right values and statuses.
 """
 
 import pathlib
 
+import matplotlib.axes
 import pandas as pd
 import pytest
 
 from hpcagent_bench.stats import palette, population
 from hpcagent_bench.stats import style as plotstyle
-from hpcagent_bench.stats.figures import kernel_comparison
+from hpcagent_bench.stats.figures import kernel_comparison, per_kernel, results
 
 ROSTER: tuple[str, ...] = ("k1", "k2", "k3")
 
@@ -265,6 +268,8 @@ def test_table_rows_carries_one_row_per_series_per_roster_kernel_not_only_the_ve
         "row",
         "statistic",
         "value",
+        "low",
+        "high",
         "n_kernels",
     }
     kernel_rows = table[table.row == kernel_comparison.ROW_KERNEL]
@@ -295,6 +300,19 @@ def test_summary_row_carries_the_geomean_of_the_plotted_per_kernel_speedups() ->
     summary_row = table[(table.row == kernel_comparison.ROW_SUMMARY) & (table.statistic == "geomean")].iloc[0]
     assert math.isclose(float(summary_row.value), (2.0 * 8.0 * 2.0) ** (1.0 / 3.0))
     assert summary_row.n_kernels == 3
+
+
+def test_summary_row_carries_the_geomean_interval_the_summary_slot_draws() -> None:
+    """The table is read apart from the figure, so its summary row has to be the slot's statistic
+    exactly: the geomean over the solved kernels (k3 unanswered is left out) and its 95% interval."""
+    frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 8.0})])
+    panels, _canon, _dropped = kernel_comparison.build_panels(frame, ROSTER, include_incomplete=True)
+    series = panels["qwen38"][0]
+    table = kernel_comparison.table_rows(panels, None, ROSTER)
+    row = table[(table.row == kernel_comparison.ROW_SUMMARY) & (table.statistic == "geomean")].iloc[0]
+    point, low, high = per_kernel.summary_point_speedup(kernel_comparison.speedup_series(series, ROSTER).cells)
+    assert (row.value, row.low, row.high, row.n_kernels) == pytest.approx((point, low, high, 2))
+    assert point == pytest.approx(4.0) and low < point < high
 
 
 def test_summary_row_carries_the_median_of_the_plotted_per_kernel_tokens() -> None:
@@ -462,11 +480,26 @@ def test_git_scicomps_two_conditions_both_read_as_proper_names() -> None:
     assert kernel_comparison.condition_label("kernel") == "Bare Kernel"
 
 
-def test_missing_answer_legend_entry_is_present() -> None:
-    frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0})])
-    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER)
-    labels = [handle.get_label() for handle in kernel_comparison.legend_handles(canon_mark, panels)]
-    assert kernel_comparison.MISSING_LABEL in labels
+def figure_key(frame: pd.DataFrame) -> list[str]:
+    """The labels of the one key :func:`kernel_comparison.figure` draws for ``frame``."""
+    import matplotlib.pyplot as plt
+
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER, include_incomplete=True)
+    fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
+    try:
+        (legend,) = fig.legends
+        return [text.get_text() for text in legend.get_texts()]
+    finally:
+        plt.close(fig)
+
+
+def test_the_key_names_the_placeholder_cross_only_when_a_kernel_draws_one() -> None:
+    """An entry for a mark that is not on the figure is one more thing to read and find nowhere; a
+    kernel nobody answered draws the cross, and then the key has to say what it means."""
+    solved = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0})])
+    missing = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0})])
+    assert plotstyle.NOT_DELIVERED_LABEL not in figure_key(solved)
+    assert plotstyle.NOT_DELIVERED_LABEL in figure_key(missing)
 
 
 def test_the_two_panels_share_one_kernel_x_axis_and_keep_their_own_value_y_scales() -> None:
@@ -545,7 +578,8 @@ def test_the_summary_group_sits_past_the_last_kernel_behind_a_dashed_vertical_se
     panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER)
     fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
     try:
-        separator_x, summary_x = kernel_comparison.summary_column_position(len(ROSTER))
+        separator_x = per_kernel.summary_separator_x(len(ROSTER))
+        summary_x = per_kernel.summary_slot_x(len(ROSTER), 0)
         assert separator_x > len(ROSTER) - 1 and summary_x > separator_x
         for ax in fig.axes:
             assert ax.get_xlim()[1] > summary_x
@@ -618,7 +652,7 @@ def test_a_kernel_with_no_token_total_draws_no_mark_on_the_token_panel() -> None
     fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
     try:
         token_ax = fig.axes[1]
-        separator_x, _summary_x = kernel_comparison.summary_column_position(len(ROSTER))
+        separator_x = per_kernel.summary_separator_x(len(ROSTER))
         slots = {
             round(float(x), 6)
             for collection in token_ax.collections
@@ -803,29 +837,114 @@ def test_a_series_shape_is_the_model_and_its_colour_is_the_condition() -> None:
     assert panels["qwen38"][0].color == panels["oss120b"][0].color
 
 
-def test_the_value_axis_carries_a_major_grid_and_the_kernel_axis_carries_none() -> None:
+def test_both_panels_carry_a_major_value_grid_and_no_kernel_grid() -> None:
     """Major grid only, on the measured axis -- which is Y here. The kernel axis carries NAMES, where
     a guide line per category measures nothing."""
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots()
+    frame = observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
+            *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0, "k2": 200.0, "k3": 300.0}),
+        ]
+    )
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER)
+    fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
     try:
-        kernel_comparison.style_speedup_y_axis(ax, [0.25, 1.0, 4.0])
-        kernel_comparison.kernel_axis(ax, ["k1", "k2"], True)
-        assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
-        assert not [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
-        assert not [tick for tick in ax.xaxis.get_major_ticks() if tick.gridline.get_visible()]
+        for ax in fig.axes:
+            assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
+            assert not [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
+            assert not [tick for tick in ax.xaxis.get_major_ticks() if tick.gridline.get_visible()]
     finally:
         plt.close(fig)
 
 
-def test_a_kernel_with_no_verified_answer_is_drawn_as_a_crossed_mark_at_one() -> None:
-    """A real 1.0x speed-up and a kernel nobody answered land on the same coordinate -- 1x on the
-    speed-up panel's value axis, which is Y -- so the two may not draw as one mark: the placeholder
-    carries the cross and the shared legend text says so."""
-    assert kernel_comparison.MISSING_MARKER_Y == population.NOT_DELIVERED
-    assert kernel_comparison.MISSING_LABEL == plotstyle.NOT_DELIVERED_LABEL
-    assert "1x" in kernel_comparison.MISSING_LABEL
+def test_a_kernel_with_no_verified_answer_enters_the_speedup_series_crossed_at_one() -> None:
+    """A real 1.0x speed-up and a kernel nobody answered land on the same coordinate -- 1x, what a
+    served but unsolved kernel leaves standing -- so the two may not draw as one mark: the
+    placeholder is an UNDELIVERED cell, which per_kernel draws hollow and crossed and keeps out of
+    the summary."""
+    values = kernel_comparison.SeriesValues("arm", "Arm", "#4d4d4d", "o", "qwen38", "", {"k1": 2.0}, {}, {}, {})
+    cells = {cell.kernel: cell for cell in kernel_comparison.speedup_series(values, ROSTER).cells}
+    assert set(cells) == set(ROSTER)
+    assert cells["k1"].delivered and cells["k1"].episodes == (2.0,)
+    assert not cells["k3"].delivered and cells["k3"].episodes == (population.NOT_DELIVERED,)
+    assert "1x" in plotstyle.NOT_DELIVERED_LABEL
+
+
+def test_a_kernel_with_no_token_total_is_absent_from_the_token_series() -> None:
+    """No token count is a neutral cost (R7): the kernel gets no cell rather than a stand-in."""
+    values = kernel_comparison.SeriesValues("arm", "Arm", "#4d4d4d", "o", "qwen38", "", {}, {"k1": 50.0}, {}, {})
+    assert [cell.kernel for cell in kernel_comparison.token_series(values, ROSTER).cells] == ["k1"]
+
+
+def test_a_repeats_median_kernel_carries_its_task_range_as_its_interval() -> None:
+    """R5: the median over designed repeats is drawn with the minimum and maximum of those same
+    tasks, the whisker the token panel shows."""
+    values = kernel_comparison.SeriesValues(
+        "arm", "Arm", "#4d4d4d", "o", "qwen38", "", {}, {"k1": 250.0}, {"k1": 100.0}, {"k1": 400.0}
+    )
+    (cell,) = kernel_comparison.token_series(values, ROSTER).cells
+    assert cell.episodes == (250.0,) and cell.interval == (100.0, 400.0)
+
+
+def test_an_arm_sits_at_the_same_x_in_both_panels_although_canon_has_no_tokens() -> None:
+    """The canon column keeps an empty series on the token panel, so every arm keeps its dodge
+    offset: a reader matches a mark across the two panels by its position."""
+    import matplotlib.pyplot as plt
+
+    frame = observations(
+        [
+            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
+            *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0, "k2": 100.0, "k3": 100.0}),
+        ]
+    )
+    canon = canon_frame(
+        [("numba", k, 100.0, "True") for k in ROSTER]
+        + [(kernel_comparison.CANON_COLUMN, k, 50.0, "True") for k in ROSTER]
+    )
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER, canon_frame=canon)
+    fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
+    try:
+        colour = panels["qwen38"][0].color
+        speed, tokens = (marks_in(ax, colour, per_kernel.summary_separator_x(len(ROSTER))) for ax in fig.axes)
+    finally:
+        plt.close(fig)
+    assert speed == tokens != set(), (speed, tokens)
+
+
+def marks_in(ax: matplotlib.axes.Axes, colour: str, before: float) -> set[float]:
+    """The x of every scatter mark edged in ``colour`` left of ``before`` (the kernel columns)."""
+    import matplotlib.colors
+    from matplotlib.collections import PathCollection
+
+    return {
+        round(float(x), 6)
+        for collection in ax.collections
+        if isinstance(collection, PathCollection)
+        and len(collection.get_edgecolors())
+        and matplotlib.colors.to_hex(collection.get_edgecolors()[0]) == colour
+        for x, _ in collection.get_offsets()
+        if x < before
+    }
+
+
+def test_a_double_column_render_is_the_page_width_and_a_standalone_one_follows_its_kernels() -> None:
+    """``--double-column`` is a page insert, so its width is the page's; a standalone render asks
+    for room per kernel instead, so it is wider than the page for forty kernels."""
+    import matplotlib.pyplot as plt
+
+    roster = [f"k{i}" for i in range(40)]
+    frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {k: 2.0 for k in roster})])
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, roster)
+    insert = kernel_comparison.figure(panels, canon_mark, roster, True, "title")
+    standalone = kernel_comparison.figure(panels, canon_mark, roster, False, "title")
+    try:
+        assert insert.get_size_inches()[0] == pytest.approx(plotstyle.DOUBLE_COLUMN_WIDTH)
+        assert standalone.get_size_inches()[0] > plotstyle.DOUBLE_COLUMN_WIDTH
+    finally:
+        plt.close(insert)
+        plt.close(standalone)
 
 
 def test_a_never_answered_kernel_draws_a_hollow_crossed_mark_at_one_on_the_speedup_panel() -> None:
@@ -847,7 +966,7 @@ def test_a_never_answered_kernel_draws_a_hollow_crossed_mark_at_one_on_the_speed
             for collection in speedup_ax.collections
             if isinstance(collection, PathCollection)
             for x, y in collection.get_offsets()
-            if x == 2.0 and y == kernel_comparison.MISSING_MARKER_Y
+            if x == 2.0 and y == population.NOT_DELIVERED
         ]
         # the white halo, the hollow mark and the cross plotstyle.point_mark lays over it
         assert len(crosses) == 3
@@ -856,19 +975,6 @@ def test_a_never_answered_kernel_draws_a_hollow_crossed_mark_at_one_on_the_speed
         import matplotlib.pyplot as plt
 
         plt.close(fig)
-
-
-def test_the_key_for_a_never_delivered_kernel_shows_the_cross_and_names_it() -> None:
-    """A kernel the arm was served and never answered enters at 1x and keeps its tokens, so its
-    mark is a placeholder. The CROSS is what separates it from a measured 1.0x -- hollow alone is
-    this repo's spelling for the control, so a key showing only that names the wrong thing."""
-    handles = kernel_comparison.legend_handles(None, {}, ())
-    missing = [handle for handle in handles if handle.get_label() == kernel_comparison.MISSING_LABEL]
-
-    assert len(missing) == 1
-    assert missing[0].get_marker() == "x"
-    assert kernel_comparison.MISSING_LABEL == plotstyle.NOT_DELIVERED_LABEL
-    assert "1x" in kernel_comparison.MISSING_LABEL
 
 
 def test_the_speedup_axis_names_the_denominator_the_judge_recorded() -> None:
@@ -890,10 +996,11 @@ def test_the_speedup_axis_names_the_denominator_the_judge_recorded() -> None:
         False,
         "title",
         kernel_comparison.CONDITION_ORDER,
-        kernel_comparison.baseline_of(frame),
+        results.baseline_of(frame),
     )
     try:
-        assert fig.axes[0].get_ylabel() == "Speed-Up vs c-autopar"
+        # the words, not the line breaks: a label taller than its panel is broken onto two lines
+        assert " ".join(fig.axes[0].get_ylabel().split()) == "Speed-Up vs c-autopar"
     finally:
         import matplotlib.pyplot as plt
 
