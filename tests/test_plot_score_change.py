@@ -21,6 +21,8 @@ import matplotlib.markers
 import numpy as np
 import pandas as pd
 import pytest
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 from PIL import Image
 
 from hpcagent_bench import experiment_tags, packets
@@ -1496,12 +1498,110 @@ def test_the_success_interval_stays_inside_zero_and_one_and_is_not_zero_width_at
     assert math.isnan(summary.success_ci(0, 0).point)
 
 
-def test_the_dot_row_stacks_a_half_height_success_row_between_speedup_and_cost(tmp_path: pathlib.Path) -> None:
-    """Speed-up, then the success rate at half a row, then cost."""
+def test_the_dot_row_stacks_the_success_row_between_speedup_and_cost(tmp_path: pathlib.Path) -> None:
     assert efficacy_figures.MEASURES == ("speedup", "success", "cost")
-    assert efficacy_figures.MEASURE_HEIGHT["success"] == 0.5
     control, treated = solved_and_failed_pair()
     frame = pd.concat([control, treated])
     stats = plot.points(control, treated)
     efficacy_figures.figure_dot_row([("Blind", "no-score", stats, frame)], tmp_path / "dots.pdf")
     assert (tmp_path / "dots.pdf").exists()
+
+
+def drawn_dot_row(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, measures: tuple[str, ...]) -> Figure:
+    """The figure :func:`figure_dot_row` hands to ``style.save``, kept open to be measured."""
+    kept: list[Figure] = []
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False: kept.append(fig) or stem)
+    control, treated = solved_and_failed_pair()
+    panel = ("Blind", "no-score", plot.points(control, treated), pd.concat([control, treated]))
+    efficacy_figures.figure_dot_row([panel], tmp_path / "dots.pdf", measures=measures)
+    return kept[0]
+
+
+def box_inches(fig: Figure, ax: Axes) -> tuple[float, float]:
+    width, height = fig.get_size_inches()
+    box = ax.get_position()
+    return box.width * width, box.height * height
+
+
+def test_dropping_the_success_row_keeps_the_width_and_every_other_box(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The success row is optional: turning it off may only shorten the canvas. A figure with and
+    one without it sit in one paper, so the speed-up and cost boxes must be the same size in both."""
+    full = drawn_dot_row(tmp_path, monkeypatch, efficacy_figures.MEASURES)
+    short = drawn_dot_row(tmp_path, monkeypatch, ("speedup", "cost"))
+    assert full.get_size_inches()[0] == pytest.approx(short.get_size_inches()[0])
+    assert full.get_size_inches()[1] > short.get_size_inches()[1]
+    speedup, success, cost = full.axes[:3]
+    assert box_inches(full, speedup) == pytest.approx(box_inches(short, short.axes[0]), abs=1e-3)
+    assert box_inches(full, cost) == pytest.approx(box_inches(short, short.axes[1]), abs=1e-3)
+    assert box_inches(full, success) == pytest.approx(box_inches(full, speedup), abs=1e-3), "a full-height row"
+
+
+@pytest.mark.parametrize(("success_row", "want"), [
+    (True, ("speedup", "success", "cost")),
+    (False, ("speedup", "cost")),
+])  # fmt: skip
+def test_without_the_success_row_speedup_and_cost_keep_their_order(success_row: bool, want: tuple[str, ...]) -> None:
+    assert plot.dot_measures(argparse.Namespace(success_row=success_row)) == want
+
+
+def arm(x: float, high: float, solved: int = 4, served: int = 5) -> efficacy_figures.ArmPoint:
+    """An arm at ``log2`` speed-up ``x`` whose interval tops out at ``high``."""
+    return efficacy_figures.ArmPoint(x, x - 1.0, high, 1e5, 5e4, 2e5, served, served, solved, served)
+
+
+def test_a_difference_label_sits_above_both_intervals_not_on_the_treated_mark() -> None:
+    """Beside the bracket the label landed on the treated mark, which is only ``dodge`` away."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(4.0, 5.0), arm(4.5, 7.0))
+    efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {}, differences=frozenset({("qwen38", "HIP")}))
+    (label,) = [text for text in ax.texts if text.get_text().endswith("x")]
+    assert label.xy == (0, 7.0), label.xy
+    assert (label.get_ha(), label.get_va()) == ("center", "bottom")
+    plt.close(fig)
+
+
+def test_the_success_row_labels_every_quarter_and_carries_no_counts_or_x_ticks() -> None:
+    """A solved/served count under each mark read as a second X axis; the Wilson interval already
+    says how many tasks a rate is over."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 2, 5), arm(1.0, 2.0, 5, 5))
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
+    fig.canvas.draw()
+    assert [label.get_text() for label in ax.get_yticklabels()] == ["0%", "25%", "50%", "75%", "100%"]
+    assert not ax.texts
+    assert all(tick.tick1line.get_markersize() == 0.0 for tick in ax.xaxis.get_major_ticks())
+    plt.close(fig)
+
+
+def test_a_short_cost_row_labels_one_two_and_five_of_every_decade() -> None:
+    config = efficacy_figures.measure_row_config(efficacy_figures.PAPER_CONFIG, 0.98)
+    assert config.token_subs == (1.0, 2.0, 5.0)
+
+
+@pytest.mark.parametrize(("legs", "staggered"), [
+    (("HIP", "OpenMP Offloading", "Triton") * 3, True),
+    (("C",), False),
+])  # fmt: skip
+def test_crowded_category_ticks_alternate_two_lines_and_sparse_ones_do_not(
+    legs: tuple[str, ...], staggered: bool
+) -> None:
+    """Nine categories on a 1.6in axis: "Triton" beside "OMP" printed as one word."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(1.6, 1.0))
+    config = efficacy_figures.PAPER_CONFIG
+    rows = [efficacy_figures.ArmRow("qwen38", leg, "#1f77b4", arm(1.0, 2.0), arm(1.0, 2.0)) for leg in legs]
+    ax.set_xlim(-0.6, len(rows) - 0.4)
+    efficacy_figures.draw_category_axis(ax, rows, config)
+    before = [tick.get_pad() for tick in ax.xaxis.get_major_ticks()]
+    efficacy_figures.stagger_crowded_ticks(fig, [ax], config)
+    after = [tick.get_pad() for tick in ax.xaxis.get_major_ticks()]
+    assert after[0::2] == before[0::2]
+    assert (after[1::2] != before[1::2]) is staggered, (before, after)
+    plt.close(fig)

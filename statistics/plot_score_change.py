@@ -395,6 +395,11 @@ def comparison_baseline(panel: efficacy_figures.Panel) -> str:
     return experiment_tags.framework_name(results_figures.baseline_of(frame))
 
 
+def dot_measures(args: argparse.Namespace) -> tuple[str, ...]:
+    """The stacked rows ``--success-row`` asks for, in :data:`efficacy_figures.MEASURES` order."""
+    return tuple(measure for measure in efficacy_figures.MEASURES if args.success_row or measure != "success")
+
+
 def write_dot_rows(
     args: argparse.Namespace,
     config: efficacy_figures.FigureConfig,
@@ -414,7 +419,7 @@ def write_dot_rows(
     written = efficacy_figures.figure_arm_dots(
         frame, stats, treatment, out, control_name=args.control_label, repeats=args.repeats,
         config=config, channels=args.channels, panel_labels=args.dots_panel_labels,
-        differences=args.difference, over=args.speedup_over,
+        differences=args.difference, over=args.speedup_over, measures=dot_measures(args),
         **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
         labels={
             "speedup": efficacy_figures.speedup_row_label(args.speedup_over),
@@ -793,6 +798,13 @@ def main() -> None:
         "subtitle ('a) Geomean Speed-Up ...' on one line above the row, no rotated Y label)",
     )
     parser.add_argument(
+        "--success-row",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="draw the half-height Tasks Completed row between speed-up and cost (default); "
+        "--no-success-row drops it, which shortens the canvas and leaves every other box unchanged",
+    )
+    parser.add_argument(
         "--dots-row-height",
         type=float,
         default=None,
@@ -896,7 +908,7 @@ def main() -> None:
                 panel_labels=args.panel_labels,
                 **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
                 control_names=comparison_controls, differences=comparison_differences,
-                placeholders=comparison_placeholders, over=args.speedup_over,
+                placeholders=comparison_placeholders, over=args.speedup_over, measures=dot_measures(args),
                 labels={
                     "speedup": efficacy_figures.speedup_row_label(args.speedup_over),
                     "cost": efficacy_figures.cost_label(

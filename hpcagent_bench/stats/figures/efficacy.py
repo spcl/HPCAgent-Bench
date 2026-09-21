@@ -58,6 +58,7 @@ function's ``config`` argument) rather than a magic number inside a function.
 
 import dataclasses
 import functools
+import itertools
 import logging
 import math
 import pathlib
@@ -1734,10 +1735,6 @@ MEASURES: tuple[str, ...] = ("speedup", "success", "cost")
 #: Each measure's default axis label.
 MEASURE_LABELS: dict[str, str] = {"speedup": "Speed-Up", "success": "Tasks Completed", "cost": ABSOLUTE_YLABEL}
 
-#: A row's height as a fraction of the configured row height: the success rate is a 0-100% scale
-#: with a count beside each mark, which half a row holds.
-MEASURE_HEIGHT: dict[str, float] = {"success": 0.5}
-
 #: The speed-up row's label when failures enter at 1x instead of being left out.
 SERVED_SPEEDUP_LABEL: str = "Speed-Up (1x Fallback)"
 
@@ -1872,6 +1869,24 @@ def draw_category_axis(ax: Axes, rows: Sequence[ArmRow], config: FigureConfig) -
         [wrapped_label(tick_alias(row.label), config.tick_wrap) for row in rows], fontsize=config.tick_pt,
         color=style.INK,
     )  # fmt: skip
+
+
+def stagger_crowded_ticks(fig: Figure, axes: Sequence[Axes], config: FigureConfig) -> None:
+    """Drop every other category tick one line lower in a column whose tick labels overlap.
+
+    A nine-category column at text width gives each tick about 16pt, and "Triton" beside "OMP" at
+    7pt needs more. Folding cannot help a word with no break in it; alternating two lines can, and
+    the category band already reserves two (:func:`figure_dot_row`)."""
+    renderer = fig.canvas.get_renderer()
+    # Two labels closer than a third of the type size read as one word ("OMPTriton").
+    gap = config.tick_pt / 3.0 * fig.dpi / 72.0
+    for ax in axes:
+        ticks = ax.xaxis.get_major_ticks()
+        boxes = [tick.label1.get_window_extent(renderer) for tick in ticks if tick.label1.get_text()]
+        if not any(left.x1 + gap > right.x0 for left, right in itertools.pairwise(boxes)):
+            continue
+        for tick in ticks[1::2]:
+            tick.set_pad(tick.get_pad() + config.tick_pt * 1.15)
 
 
 def group_rules(ax: Axes, rows: Sequence[ArmRow]) -> None:
@@ -2052,10 +2067,12 @@ def factor_label(value: float) -> str:
 
 def draw_difference_arrow(
     ax: Axes, x: float, control_value: float, treated_value: float, colour: str, measure: str,
-    config: FigureConfig = DEFAULT_CONFIG,
+    config: FigureConfig = DEFAULT_CONFIG, top: float = math.nan,
 ) -> None:  # fmt: skip
     """A double-headed arrow spanning one comparison's two marks, labelled with the factor between
-    them -- so a number a caption quotes is on the figure instead of being measured off the axis."""
+    them -- so a number a caption quotes is on the figure instead of being measured off the axis.
+    The label sits ABOVE ``top``, the higher end of both arms' intervals: beside the bracket it lands
+    on the treated mark, which is only ``dodge`` away."""
     if not (np.isfinite(control_value) and np.isfinite(treated_value)):
         return
     factor = difference_factor(control_value, treated_value, measure)
@@ -2069,11 +2086,9 @@ def draw_difference_arrow(
         elinewidth=config.interval_width, capsize=config.interval_cap_pt * 2.0,
         capthick=config.interval_width, zorder=style.FILL_Z,
     )  # fmt: skip
-    # BEHIND the marks and smaller than a point label: a white ground punched through the panel to
-    # keep it legible was worse than the overlap it was hiding.
     ax.annotate(
-        factor_label(factor), xy=(x, middle), textcoords="offset points",
-        xytext=(config.symbol_offset_pt * 0.5, 0.0), ha="left", va="center",
+        factor_label(factor), xy=(x, top if math.isfinite(top) else high), textcoords="offset points",
+        xytext=(0.0, config.symbol_offset_pt * 0.5), ha="center", va="bottom", annotation_clip=False,
         fontsize=config.point_pt * 0.85, color=style.REFERENCE, zorder=style.FILL_Z,
     )  # fmt: skip
 
@@ -2161,7 +2176,8 @@ def draw_measure_row(
                 linewidth=config.link_width, alpha=config.link_alpha, zorder=style.CONNECTOR_Z - 0.5,
             )  # fmt: skip
         if (row.model, row.leg) in differences:
-            draw_difference_arrow(ax, index, control_value, treated_value, row.colour, measure, config)
+            top = max((measure_value(point, measure)[2] for point in (row.control, row.treated)), default=math.nan)
+            draw_difference_arrow(ax, index, control_value, treated_value, row.colour, measure, config, top)
         # Each row carries only ITS OWN verdict: a star on the cost row would test the speed-up.
         score_sig, cost_sig = significance.get((row.model, row.leg), (False, False))
         if cost_sig if cost else score_sig:
@@ -2216,20 +2232,21 @@ def draw_measure_row(
         ax.set_ylabel(f"{folded}\n{note}" if note else folded, fontsize=config.label_pt)
 
     ax.tick_params(axis="both", labelsize=config.tick_pt)
+    # The categories are named under the last row; a tick mark on every row points at nothing.
+    ax.tick_params(axis="x", length=0.0)
     style.despine(ax)
     thin_rules(ax, config)
 
 
-#: Where the success row's counts start: just below the 0% tick, running down in a band of their own.
-SUCCESS_COUNT_Y: float = -0.08
-SUCCESS_COUNT_BOTTOM: float = -0.75
+#: The success row's Y limits: 0-100% plus room for a mark drawn on either end.
+SUCCESS_LIMITS: tuple[float, float] = (-0.08, 1.08)
+#: Its labelled ticks, one grid line each.
+SUCCESS_TICKS: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0)
 
 
 def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: FigureConfig, ylabel: str) -> None:
     """The success-rate row: each arm's solved share of its pair's kernels, 0-100%, with its Wilson
-    interval and the count it is ("37/40") under the axis, so a 100% of ten and a 100% of forty are
-    not read as the same evidence. Each count is set vertically under its own mark, which fits a
-    column of any width."""
+    interval, which is what tells a 100% of ten from a 100% of forty."""
     for index, row in enumerate(rows):
         for point, filled, dodge, mark in (
             (row.control, False, -config.dodge, CONTROL_MARKER),
@@ -2243,12 +2260,8 @@ def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: Figur
                 x, low, high, color=row.colour, linewidth=config.interval_width, alpha=0.75, zorder=style.CONNECTOR_Z
             )
             style.point_mark(ax, x, value, row.colour, mark, filled, size=config.mark_size)
-            ax.annotate(
-                f"{point.solved}/{point.served}", (x, SUCCESS_COUNT_Y), ha="center", va="top", rotation=90.0,
-                fontsize=config.point_pt * 0.75, color=style.FAINT, zorder=style.MARK_Z + 1.0,
-            )  # fmt: skip
-    ax.set_ylim(SUCCESS_COUNT_BOTTOM, 1.08)
-    ax.set_yticks([0.0, 0.5, 1.0])
+    ax.set_ylim(*SUCCESS_LIMITS)
+    ax.set_yticks(SUCCESS_TICKS)
     ax.yaxis.set_major_formatter(FuncFormatter(lambda value, position: f"{value:.0%}"))
     ax.set_xlim(-0.6, max(len(rows) - 0.4, 0.6))
     ax.set_xticks(range(len(rows)))
@@ -2257,6 +2270,7 @@ def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: Figur
         ax.set_ylabel(wrapped_label(ylabel, fold_width(ylabel, label_wrap(config), config.max_name_lines)),
                       fontsize=config.label_pt)  # fmt: skip
     ax.tick_params(axis="both", labelsize=config.tick_pt)
+    ax.tick_params(axis="x", length=0.0)
     style.despine(ax)
     thin_rules(ax, config)
 
@@ -2346,12 +2360,8 @@ def figure_arm_dots(
     note_pad = config.point_pt * 1.7
     band = text_band(config.subtitle_pt) + note_pad / 72.0 if panel_labels in ("subtitle", "outside") else 0.12
     category_band = text_band(config.tick_pt, 2) + text_band(config.label_pt)
-    heights = [MEASURE_HEIGHT.get(measure, 1.0) for measure in measures]
-    height = row_height_in * sum(heights) + category_band + band * len(measures)
-    fig, axes = plt.subplots(
-        len(measures), 1, figsize=(width_in, height), squeeze=False, sharex=True,
-        gridspec_kw={"height_ratios": heights},
-    )  # fmt: skip
+    height = row_height_in * len(measures) + category_band + band * len(measures)
+    fig, axes = plt.subplots(len(measures), 1, figsize=(width_in, height), squeeze=False, sharex=True)
     fig.set_dpi(style.SAVE_DPI)  # measure the legend and the labels at the dpi save() writes
     for index, (ax, measure) in enumerate(zip(axes[:, 0], measures, strict=True)):
         name = draw_panel_label(ax, index, texts.get(measure, measure), panel_labels, config, "letter", 0, note_pad)
@@ -2373,6 +2383,7 @@ def figure_arm_dots(
         left=min(0.35, left_in / width_in),
         bottom=(legend_h + category_band + MEASURE_PAD_IN) / height,
     )  # fmt: skip
+    stagger_crowded_ticks(fig, axes[-1], config)
     return style.save(fig, out.with_suffix(""), fixed=True)
 
 
@@ -2496,6 +2507,11 @@ def dot_row_widths(columns: Sequence[DotColumn], config: FigureConfig = DEFAULT_
     return widths
 
 
+#: A short row's token ticks: 1-2-5 per decade, each one labelled. 1 and 3 left a decade two grid
+#: lines, too few to read a mark's cost off.
+SHORT_ROW_TOKEN_SUBS: tuple[float, ...] = (1.0, 2.0, 5.0)
+
+
 def measure_row_config(config: FigureConfig, row_height_in: float) -> FigureConfig:
     """``config`` sized for a row this tall. A rotated Y label and a tick ladder are both bounded by
     the row's HEIGHT, not by the figure's width: the same 8pt label and thirteen ratios that fit a
@@ -2505,7 +2521,7 @@ def measure_row_config(config: FigureConfig, row_height_in: float) -> FigureConf
         config,
         label_pt=min(config.label_pt, max(6.0, row_height_in * 8.0)),
         max_ticks=max(4, int(row_height_in * 7.0)),
-        token_subs=config.token_subs if row_height_in >= 1.6 else (1.0, 3.0),
+        token_subs=config.token_subs if row_height_in >= 1.6 else SHORT_ROW_TOKEN_SUBS,
     )
 
 
@@ -2597,16 +2613,14 @@ def figure_dot_row(
     )  # fmt: skip
     texts = {**MEASURE_LABELS, "speedup": speedup_row_label(over), **(labels or {})}
     rows_config = measure_row_config(config, row_height_in)
-    heights = [MEASURE_HEIGHT.get(measure, 1.0) for measure in measures]
     note_pad = MEASURE_PAD_IN * 72.0
     title_band = text_band(config.subtitle_pt, 2) if panel_labels != "none" else ROW_TITLE_IN
     category_band = text_band(config.tick_pt, 2)
     # The DATA box is the fixed quantity: rows of a stated height plus the gaps between them. Every
     # piece of chrome is added OUTSIDE it, so a taller legend or a longer label grows the canvas
     # instead of shrinking the panels -- two efficacy figures of one paper draw the same size box.
-    # hspace is a fraction of the MEAN row height, so the gaps are sized against that
-    mean_row = row_height_in * sum(heights) / len(heights)
-    data_height = row_height_in * sum(heights) + mean_row * config.row_gap * (len(measures) - 1)
+    # hspace is a fraction of the row height, so the gaps are sized against that
+    data_height = row_height_in * (len(measures) + config.row_gap * (len(measures) - 1))
     # EVERY band is fixed, so the canvas and the data box are both the same in every efficacy
     # figure: a longer label or a fuller key changes neither.
     height = data_height + title_band + category_band + config.legend_chrome_in + MEASURE_PAD_IN
@@ -2619,7 +2633,7 @@ def figure_dot_row(
     widths = [axes_total * ratio / sum(ratios) for ratio in ratios]
     fig, axes = plt.subplots(
         len(measures), n, figsize=(row_width_in, height), squeeze=False, sharex="col",
-        gridspec_kw={"width_ratios": ratios, "height_ratios": heights},
+        gridspec_kw={"width_ratios": ratios},
     )  # fmt: skip
     fig.set_dpi(style.SAVE_DPI)
     names = [column.title for column in columns]
@@ -2660,6 +2674,7 @@ def figure_dot_row(
     if needed > config.left_chrome_in:
         LOG.warning("efficacy: Y labels need %.2fin, left_chrome_in reserves %.2fin", needed, config.left_chrome_in)
     fig.subplots_adjust(bottom=(config.legend_chrome_in + category_band + MEASURE_PAD_IN) / height)
+    stagger_crowded_ticks(fig, axes[-1], config)
     return style.save(fig, out.with_suffix(""), fixed=True)
 
 
