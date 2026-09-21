@@ -69,6 +69,8 @@ output_args:
 - y
 - n_accept
 - n_reject
+chain_length:
+  y: MAX_STEPS
 experiment_tags:
 - solvers
 precisions:

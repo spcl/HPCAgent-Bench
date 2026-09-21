@@ -17,6 +17,8 @@ init:
     c: (LEN_1D,)
 output_args:
 - a
+chain_length:
+  a: LEN_1D
 loop_level_reasoning:
   source: guarded_parallelism
   category: guarded loop-carried dependence

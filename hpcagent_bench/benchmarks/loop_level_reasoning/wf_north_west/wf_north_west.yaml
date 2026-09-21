@@ -15,5 +15,7 @@ init:
     a: (LEN_2D,LEN_2D)
 output_args:
 - a
+chain_length:
+  a: 2 * LEN_2D
 loop_level_reasoning:
   source: tsvc_2_5

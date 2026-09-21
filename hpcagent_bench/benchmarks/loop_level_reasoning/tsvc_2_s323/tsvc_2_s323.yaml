@@ -20,6 +20,9 @@ init:
 output_args:
 - a
 - b
+chain_length:
+  a: 2 * LEN_1D
+  b: 2 * LEN_1D
 loop_level_reasoning:
   source: tsvc_2
   category: recurrences

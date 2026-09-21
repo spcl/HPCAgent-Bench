@@ -19,5 +19,8 @@ init:
 output_args:
 - a
 - b
+chain_length:
+  a: LEN_1D
+  b: LEN_1D
 loop_level_reasoning:
   source: tsvc_2_5

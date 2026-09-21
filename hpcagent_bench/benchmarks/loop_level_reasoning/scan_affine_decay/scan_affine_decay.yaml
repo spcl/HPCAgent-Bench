@@ -21,6 +21,8 @@ init:
   func_name: initialize
 output_args:
 - y
+chain_length:
+  y: LEN_1D
 loop_level_reasoning:
   source: tsvc_2_5
   category: reductions
