@@ -163,8 +163,10 @@ def test_child_reports_increment_below_absolute_peak(tmp_path) -> None:
         py_meta=("kern", ("x",), ("y",)),
     )
     assert len(samples) == 1
-    assert mem.increment_bytes > 16 * 1024 * 1024  # the ~64 MB allocation is a clear increment
-    assert mem.peak_bytes > mem.increment_bytes  # the raw peak additionally carries the inherited footprint
+    assert mem.memory.increment_bytes > 16 * 1024 * 1024  # the ~64 MB allocation is a clear increment
+    assert (
+        mem.memory.peak_bytes > mem.memory.increment_bytes
+    )  # the raw peak additionally carries the inherited footprint
 
 
 def test_the_legacy_queue_channel_carries_the_worker_payload(tmp_path) -> None:
@@ -184,11 +186,14 @@ def test_the_legacy_queue_channel_carries_the_worker_payload(tmp_path) -> None:
     )
 
     assert len(q.items) == 1
-    status, outputs, samples, peak_bytes, increment_bytes, _, _, _ = q.items[0]
+    status, outputs, samples, peak_bytes, increment_bytes, extras, device_bytes, device_runtime, probe = q.items[0]
     assert status == "ok", outputs
     assert set(outputs) == {"y"} and len(samples) == 1
     # No increment assertion here: in-process, the baseline is pytest's own high-water mark.
     assert peak_bytes > 0 and increment_bytes >= 0
+    # The in-process channel carries the timing probe too, and a host run has no device to read:
+    # -1 says "no device here", which is what keeps the quiescence gate off a CPU row.
+    assert probe.device_index == -1 and probe.residual_ns >= 0
 
 
 def test_the_increment_is_per_call_not_per_batch(tmp_path) -> None:
@@ -208,11 +213,11 @@ def test_the_increment_is_per_call_not_per_batch(tmp_path) -> None:
     _, _, many, _ = native_call._call_isolated(str(kernel), _BINDING, {"x": np.zeros(4)}, "python", reps=6, **common)
 
     # 6 reps retain ~192 MB between them; the reported increment must still be ~one call's.
-    assert many.increment_bytes < one.increment_bytes + 32 * 1024 * 1024, (
-        f"increment grew with the rep count: {one.increment_bytes} -> {many.increment_bytes}"
+    assert many.memory.increment_bytes < one.memory.increment_bytes + 32 * 1024 * 1024, (
+        f"increment grew with the rep count: {one.memory.increment_bytes} -> {many.memory.increment_bytes}"
     )
     # The raw peak is disclosure-only and DOES span the batch, so it still sees the growth.
-    assert many.peak_bytes > one.peak_bytes
+    assert many.memory.peak_bytes > one.memory.peak_bytes
 
 
 # device (GPU) footprint
@@ -258,8 +263,8 @@ def test_the_host_path_reports_no_device_memory(tmp_path) -> None:
         py_meta=("kern", ("x",), ("y",)),
         reps=1,
     )
-    assert memory.device_bytes == 0
-    assert memory.increment_bytes >= 0
+    assert memory.memory.device_bytes == 0
+    assert memory.memory.increment_bytes >= 0
 
 
 @pytest.mark.amd
