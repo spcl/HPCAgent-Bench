@@ -64,6 +64,8 @@ array_args:
 - A_indptr
 output_args:
 - A_data
+chain_length:
+  A_data: N
 experiment_tags:
 - solvers
 precisions:

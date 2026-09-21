@@ -107,6 +107,8 @@ array_args:
 - y
 output_args:
 - y
+chain_length:
+  y: 2 * EDGE ** 3
 experiment_tags:
 - solvers
 precisions:
