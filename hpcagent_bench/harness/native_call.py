@@ -21,6 +21,7 @@ import math
 import os
 import pathlib
 import signal
+import statistics
 import sys
 import tempfile
 import threading
@@ -267,7 +268,8 @@ def restrict_visible_device(env: MutableMapping[str, str], index: Optional[int])
     The inherited list is the launcher's (srun hands the step its whole gres) and the pinned index
     is a position IN it, so the entry chosen is that list's ``index``-th element rather than the raw
     number -- a child on slot 2 of ``ROCR_VISIBLE_DEVICES=4,5,6,7`` must reach device 6, not 2.
-    ``HIP_VISIBLE_DEVICES`` is REMOVED rather than set beside it; see :data:`VISIBLE_DEVICE_ENV`.
+    ``HIP_VISIBLE_DEVICES`` and ``CUDA_VISIBLE_DEVICES`` (HIP reads it as HIP's) are REMOVED rather
+    than set beside it; see :data:`VISIBLE_DEVICE_ENV`.
 
     Called in the child before any device runtime is loaded. A runtime already initialised in the
     parent of a FORKED child keeps the view it initialised with -- which is why the device path
@@ -278,8 +280,8 @@ def restrict_visible_device(env: MutableMapping[str, str], index: Optional[int])
     slot = index or 0
     chosen = devices[slot % len(devices)] if devices else str(slot)
     env["ROCR_VISIBLE_DEVICES"] = chosen
-    env["CUDA_VISIBLE_DEVICES"] = chosen
     env.pop("HIP_VISIBLE_DEVICES", None)
+    env.pop("CUDA_VISIBLE_DEVICES", None)
     return chosen
 
 
@@ -654,17 +656,19 @@ class TimingProbe:
 
 
 def summarize_reps(reps: Sequence[RepTiming], device_index: int) -> TimingProbe:
-    """The WORST residual over ``reps`` and the two clocks of the FASTEST one.
+    """The residual the gate reads over ``reps`` and the two clocks of the FASTEST one.
 
     Fastest, because that is the rep ``min_of_k`` credits and the one a kernel that returned early
     produces -- the divergence gate has to read the sample that would be believed, not an average.
-    Worst residual, because one rep that left work in flight is one too many.
+    Residual = the larger of the fastest rep's and the median: work left in flight on the believed
+    rep, or on most reps, is caught; one host preemption during another rep's re-synchronize is
+    not a verdict on an honest kernel (the worst over 20+ reps was).
     """
     if not reps:
         return TimingProbe(device_index=device_index)
     best = min(reps, key=lambda rep: rep.ns)
     return TimingProbe(
-        residual_ns=max(rep.residual_ns for rep in reps),
+        residual_ns=max(best.residual_ns, statistics.median_low(rep.residual_ns for rep in reps)),
         event_ns=best.ns,
         host_ns=best.host_ns,
         device_index=device_index,
