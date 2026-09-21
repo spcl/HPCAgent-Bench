@@ -22,7 +22,7 @@ import pandas as pd
 import pytest
 from PIL import Image
 
-from hpcagent_bench.stats import palette, rules, style
+from hpcagent_bench.stats import canon, palette, rules, style
 from hpcagent_bench.stats.figures import kernel_comparison, signed
 from hpcagent_bench.stats.summary import geomean_ci
 
@@ -658,3 +658,21 @@ def test_the_figure_draws_one_pending_mark_per_pending_kernel(pending_canon: pd.
         assert sum(c.get_gid() == style.PENDING_GID for c in fig.axes[0].collections) == 1
     finally:
         plt.close(fig)
+
+
+def test_a_kernel_numba_did_not_verify_is_timed_against_the_fallback() -> None:
+    """2026-09-21: where Numba fails, C autopar is the baseline; the row says how many kernels took it."""
+    frame = canon_table([("numba", "k1", 100.0), ("cc_autopar", "k1", 80.0), ("cc_autopar", "k2", 40.0),
+                         ("dace_cpu_canonicalize", "k1", 10.0), ("dace_cpu_canonicalize", "k2", 10.0)])  # fmt: skip
+    row = signed.canon_kernel_row(frame, "dace_cpu_canonicalize", ("k1", "k2"), baseline_fallback="cc_autopar")
+    assert row.ratios == {"k1": pytest.approx(10.0), "k2": pytest.approx(4.0)}
+    assert row.numerator_ms["k2"] == pytest.approx(40.0) and row.excluded == "1 over cc_autopar"
+    unfilled = signed.canon_kernel_row(frame, "dace_cpu_canonicalize", ("k1", "k2"))
+    assert unfilled.ratios["k2"] == 1.0 and unfilled.delivered["k2"] is False
+
+
+def test_the_fallback_never_replaces_a_numba_time() -> None:
+    times = {"numba": {"k1": 100.0}, "cc_autopar": {"k1": 5.0, "k2": 7.0}}
+    merged, filled = canon.with_fallback(times, "numba", "cc_autopar")
+    assert merged["numba"] == {"k1": 100.0, "k2": 7.0} and filled == frozenset({"k2"})
+    assert canon.with_fallback(times, "numba", "") == (times, frozenset())

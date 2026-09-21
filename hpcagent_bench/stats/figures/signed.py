@@ -426,6 +426,7 @@ def canon_kernel_row(
     roster: Sequence[str],
     baseline: str = LLR40_BASELINE,
     mark_pending: bool = False,
+    baseline_fallback: str = "",
 ) -> Row:
     """One canon-sweep column's row against ``baseline``, ROSTER-COMPLETE: a single deterministic
     ``median_ms`` per kernel (:func:`hpcagent_bench.stats.canon.read_times`), so ``ratios_low``/
@@ -444,15 +445,22 @@ def canon_kernel_row(
     ``mark_pending`` separates a kernel with NO canon row yet for ``column`` or ``baseline`` (never
     attempted) from one that ran and failed: it leaves the ratios and the summary and lands in
     ``pending``.
+
+    ``baseline_fallback`` times a kernel ``baseline`` did not verify by that column instead
+    (:func:`hpcagent_bench.stats.canon.with_fallback`); the row's ``excluded`` names how many did.
     """
-    times = canon.read_times(canon_frame)
+    times, substituted = canon.with_fallback(canon.read_times(canon_frame), baseline, baseline_fallback)
+    substituted = substituted & set(roster)
     base, cur = times.get(baseline, {}), times.get(column, {})
     kernels = sorted(roster)
     ratios, delivered = canon.roster_speedups(times, baseline, column, kernels)
     pending: frozenset[str] = frozenset()
     if mark_pending:
         status = canon.read_status(canon_frame)
-        attempted = status.get(column, {}).keys() & status.get(baseline, {}).keys()
+        base_run = status.get(baseline, {}).keys() | (
+            status.get(baseline_fallback, {}).keys() if baseline_fallback else set()
+        )
+        attempted = status.get(column, {}).keys() & base_run
         pending = frozenset(k for k in kernels if k not in attempted)
         ratios = {k: v for k, v in ratios.items() if k not in pending}
         delivered = {k: v for k, v in delivered.items() if k not in pending}
@@ -465,9 +473,16 @@ def canon_kernel_row(
         standalone[optimizer] if optimizer in standalone else experiment_tags.names("frameworks").get(column, column)
     )
     return Row(
-        column, label, ratios, numerator_ms, denominator_ms, pending_note(pending),
+        column, label, ratios, numerator_ms, denominator_ms,
+        "; ".join(note for note in (pending_note(pending), fallback_note(substituted, baseline_fallback)) if note != "none")
+        or "none",
         palette.framework_color(column), palette.marker(column), delivered=delivered, pending=pending,
     )  # fmt: skip
+
+
+def fallback_note(substituted: frozenset[str], fallback: str) -> str:
+    """A row's ``excluded`` text: how many kernels were timed against ``fallback``."""
+    return f"{len(substituted)} over {fallback}" if substituted else "none"
 
 
 def pending_note(pending: frozenset[str]) -> str:
@@ -559,6 +574,7 @@ def llr40_rows(
     pattern: re.Pattern[str] = kernel_comparison.ARM_PATTERN,
     repeats: population.RepeatPolicy = "latest",
     mark_pending: bool = False,
+    baseline_fallback: str = "",
 ) -> list[Row]:
     """DaCe's own canon-sweep rows, then every model's ROSTER-COMPLETE CPF arm rows
     (:func:`~hpcagent_bench.stats.population.complete_arms`), all against ``baseline`` -- the
@@ -569,7 +585,10 @@ def llr40_rows(
     ``mark_pending`` also keeps an arm that has not been served every roster kernel yet, its missing
     kernels in ``pending``, where the default drops it."""
     rows = distinct_canon_labels(
-        [canon_kernel_row(canon_frame, column, roster, baseline, mark_pending) for column in canon_columns]
+        [
+            canon_kernel_row(canon_frame, column, roster, baseline, mark_pending, baseline_fallback)
+            for column in canon_columns
+        ]
     )
     if observations is None:
         return rows
@@ -878,6 +897,7 @@ def llr40_two_row_figure(
     labels: Mapping[str, str] | None = None,
     offset: float = 0.0,
     mark_pending: bool = False,
+    baseline_fallback: str = "",
 ) -> pathlib.Path:
     """Build the llr-focus40 compiler rows, write their tables (Rule 4's costs, rules 5/7's
     intervals -- :func:`write_tables`, :func:`token_summary_table`) and render the two-panel
@@ -888,7 +908,16 @@ def llr40_two_row_figure(
     :func:`~hpcagent_bench.stats.style.save`'s general-purpose 200.
     """
     rows = llr40_rows(
-        canon_frame, observations, roster, baseline, canon_columns, conditions, pattern, repeats, mark_pending
+        canon_frame,
+        observations,
+        roster,
+        baseline,
+        canon_columns,
+        conditions,
+        pattern,
+        repeats,
+        mark_pending,
+        baseline_fallback,
     )
     rows = [dataclasses.replace(row, label=(labels or {}).get(row.framework, row.label)) for row in rows]
     write_tables(rows, out)
