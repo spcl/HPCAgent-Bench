@@ -11,6 +11,7 @@ the model, shape the packet, and the drawing itself lives in
 
 import importlib.util
 import argparse
+import dataclasses
 import math
 import pathlib
 import sys
@@ -1615,3 +1616,40 @@ def test_crowded_category_ticks_alternate_two_lines_and_sparse_ones_do_not(
     assert after[0::2] == before[0::2]
     assert (after[1::2] != before[1::2]) is staggered, (before, after)
     plt.close(fig)
+
+
+def test_a_pending_model_gets_an_empty_category_in_registry_order() -> None:
+    drawn = efficacy_figures.ArmRow(
+        "qwen38", "C", "#000000", efficacy_figures.EMPTY_POINT, efficacy_figures.EMPTY_POINT
+    )  # fmt: skip
+    rows = efficacy_figures.pending_rows([drawn], ["kimi27sglang", "qwen38", "oss120b"], "model-packet")
+    assert [row.model for row in rows] == palette.in_order(["qwen38", "kimi27sglang", "oss120b"])
+    assert {row.leg for row in rows} == {"C"}
+    assert efficacy_figures.pending_rows([], [], "model-packet") == []
+
+
+def pending_dot_row(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, mark: bool) -> Figure:
+    """A stub panel with two pending models, drawn and kept open."""
+    kept: list[Figure] = []
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False: kept.append(fig) or stem)
+    config = dataclasses.replace(efficacy_figures.PAPER_CONFIG, mark_pending=mark)
+    stub = ("Scientific", "cpfsrc", pd.DataFrame(), pd.DataFrame())
+    efficacy_figures.figure_dot_row([stub], tmp_path / "dots.pdf", config=config, pending=["oss120b,kimi27sglang"])
+    return kept[0]
+
+
+def test_mark_pending_draws_a_question_mark_per_pending_category_on_every_row(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fig = pending_dot_row(tmp_path, monkeypatch, mark=True)
+    for ax in fig.axes:
+        assert [t.get_text() for t in ax.texts if t.get_gid() == plotstyle.PENDING_GID] == ["?", "?"]
+    assert plotstyle.PENDING_LABEL in [t.get_text() for legend in fig.legends for t in legend.get_texts()]
+
+
+def test_without_mark_pending_a_pending_category_stays_empty(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fig = pending_dot_row(tmp_path, monkeypatch, mark=False)
+    assert not any(t.get_gid() == plotstyle.PENDING_GID for ax in fig.axes for t in ax.texts)
+    assert len(fig.axes[0].get_xticks()) == 2  # the slots are kept either way

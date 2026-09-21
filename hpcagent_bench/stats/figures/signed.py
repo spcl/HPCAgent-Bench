@@ -104,6 +104,8 @@ class Row:
     NOT_DELIVERED` 1x placeholder (:func:`~hpcagent_bench.stats.canon.roster_speedups`) -- empty for
     an agent row, whose ``ratios`` only ever holds delivered kernels already (``policy="solved"``),
     so every present value there reads as delivered by the same default an empty dict gives it.
+    ``pending`` names the kernels the row has not attempted yet (only under ``mark_pending``): they
+    carry no ratio, enter no summary, and draw as :data:`~hpcagent_bench.stats.style.PENDING_MARKER`.
     """
 
     framework: str
@@ -118,6 +120,7 @@ class Row:
     ratios_high: dict[str, float] = dataclasses.field(default_factory=dict)
     tokens: dict[str, float] = dataclasses.field(default_factory=dict)
     delivered: dict[str, bool] = dataclasses.field(default_factory=dict)
+    pending: frozenset[str] = frozenset()
 
 
 def shard_paths(root: pathlib.Path, framework: str) -> list[pathlib.Path]:
@@ -418,7 +421,12 @@ TOKEN_SUMMARY_COLUMNS: tuple[str, ...] = (
 
 
 def canon_kernel_row(
-    canon_frame: pd.DataFrame, column: str, roster: Sequence[str], baseline: str = LLR40_BASELINE
+    canon_frame: pd.DataFrame,
+    column: str,
+    roster: Sequence[str],
+    baseline: str = LLR40_BASELINE,
+    mark_pending: bool = False,
+    baseline_fallback: str = "",
 ) -> Row:
     """One canon-sweep column's row against ``baseline``, ROSTER-COMPLETE: a single deterministic
     ``median_ms`` per kernel (:func:`hpcagent_bench.stats.canon.read_times`), so ``ratios_low``/
@@ -433,11 +441,29 @@ def canon_kernel_row(
     an agent that never delivered one, and ``delivered`` flags it the same way
     :data:`~hpcagent_bench.stats.population.DELIVERED_COLUMN` flags that placeholder for an agent
     row, so ``llr40_figure`` draws and geomeans both under the one existing convention.
+
+    ``mark_pending`` separates a kernel with NO canon row yet for ``column`` or ``baseline`` (never
+    attempted) from one that ran and failed: it leaves the ratios and the summary and lands in
+    ``pending``.
+
+    ``baseline_fallback`` times a kernel ``baseline`` did not verify by that column instead
+    (:func:`hpcagent_bench.stats.canon.with_fallback`); the row's ``excluded`` names how many did.
     """
-    times = canon.read_times(canon_frame)
+    times, substituted = canon.with_fallback(canon.read_times(canon_frame), baseline, baseline_fallback)
+    substituted = substituted & set(roster)
     base, cur = times.get(baseline, {}), times.get(column, {})
     kernels = sorted(roster)
     ratios, delivered = canon.roster_speedups(times, baseline, column, kernels)
+    pending: frozenset[str] = frozenset()
+    if mark_pending:
+        status = canon.read_status(canon_frame)
+        base_run = status.get(baseline, {}).keys() | (
+            status.get(baseline_fallback, {}).keys() if baseline_fallback else set()
+        )
+        attempted = status.get(column, {}).keys() & base_run
+        pending = frozenset(k for k in kernels if k not in attempted)
+        ratios = {k: v for k, v in ratios.items() if k not in pending}
+        delivered = {k: v for k, v in delivered.items() if k not in pending}
     nan = math.nan
     numerator_ms = {k: base.get(k, nan) for k in ratios}
     denominator_ms = {k: cur.get(k, nan) for k in ratios}
@@ -447,9 +473,21 @@ def canon_kernel_row(
         standalone[optimizer] if optimizer in standalone else experiment_tags.names("frameworks").get(column, column)
     )
     return Row(
-        column, label, ratios, numerator_ms, denominator_ms, "none",
-        palette.framework_color(column), palette.marker(column), delivered=delivered,
+        column, label, ratios, numerator_ms, denominator_ms,
+        "; ".join(note for note in (pending_note(pending), fallback_note(substituted, baseline_fallback)) if note != "none")
+        or "none",
+        palette.framework_color(column), palette.marker(column), delivered=delivered, pending=pending,
     )  # fmt: skip
+
+
+def fallback_note(substituted: frozenset[str], fallback: str) -> str:
+    """A row's ``excluded`` text: how many kernels were timed against ``fallback``."""
+    return f"{len(substituted)} over {fallback}" if substituted else "none"
+
+
+def pending_note(pending: frozenset[str]) -> str:
+    """A row's ``excluded`` text: how many roster kernels it has not attempted yet."""
+    return f"{len(pending)} pending" if pending else "none"
 
 
 def distinct_canon_labels(rows: Sequence[Row]) -> list[Row]:
@@ -478,6 +516,7 @@ def agent_kernel_row(
     condition: str,
     roster: Sequence[str],
     repeats: population.RepeatPolicy = "latest",
+    pending: frozenset[str] = frozenset(),
 ) -> Row:
     """One CPF arm's row, restricted to ``roster``: its final answer per kernel (Rule 4's costs
     behind the ratio), plus each kernel's OWN confidence interval over every graded episode that
@@ -520,8 +559,8 @@ def agent_kernel_row(
     tokens = {k: v for k, v in raw_tokens.items() if k in kernels}
     label = f"{experiment_tags.model_name(model)} - {kernel_comparison.condition_label(condition)}"
     return Row(
-        arm, label, ratios, numerator_ms, denominator_ms, "none",
-        palette.color(condition), palette.marker(model), ratios_low, ratios_high, tokens,
+        arm, label, ratios, numerator_ms, denominator_ms, pending_note(pending),
+        palette.color(condition), palette.marker(model), ratios_low, ratios_high, tokens, pending=pending,
     )  # fmt: skip
 
 
@@ -534,19 +573,30 @@ def llr40_rows(
     conditions: Sequence[str] = LLR40_CONDITIONS,
     pattern: re.Pattern[str] = kernel_comparison.ARM_PATTERN,
     repeats: population.RepeatPolicy = "latest",
+    mark_pending: bool = False,
+    baseline_fallback: str = "",
 ) -> list[Row]:
     """DaCe's own canon-sweep rows, then every model's ROSTER-COMPLETE CPF arm rows
     (:func:`~hpcagent_bench.stats.population.complete_arms`), all against ``baseline`` -- the
     llr-focus40 compiler figure's row source. ``observations=None`` draws the canon rows alone: the
     campaign DB is not always reachable, and a figure with only the deterministic columns is still
-    a real, if partial, answer -- never a raised error."""
-    rows = distinct_canon_labels([canon_kernel_row(canon_frame, column, roster, baseline) for column in canon_columns])
+    a real, if partial, answer -- never a raised error.
+
+    ``mark_pending`` also keeps an arm that has not been served every roster kernel yet, its missing
+    kernels in ``pending``, where the default drops it."""
+    rows = distinct_canon_labels(
+        [
+            canon_kernel_row(canon_frame, column, roster, baseline, mark_pending, baseline_fallback)
+            for column in canon_columns
+        ]
+    )
     if observations is None:
         return rows
     candidates = kernel_comparison.candidate_arms(observations, pattern)
     frame = observations[observations["arm"].astype(str).isin(candidates)]
     kept, dropped = population.complete_arms(frame, roster)
-    del dropped  # a caller wanting the drop reasons reads population.complete_arms itself
+    if mark_pending:
+        kept = [*kept, *dropped]
     by_model: dict[str, list[str]] = {}
     for arm in kept:
         model, condition = candidates[arm]
@@ -555,7 +605,9 @@ def llr40_rows(
     for model in palette.in_order(by_model.keys(), "models"):
         for arm in sorted(by_model[model], key=lambda a: kernel_comparison.rank_condition(candidates[a][1])):
             model_tag, condition = candidates[arm]
-            rows.append(agent_kernel_row(frame, arm, model_tag, condition, roster, repeats))
+            served = set(frame.loc[frame["arm"].astype(str) == arm, "benchmark"].astype(str))
+            pending = frozenset(k for k in roster if k not in served)
+            rows.append(agent_kernel_row(frame, arm, model_tag, condition, roster, repeats, pending))
     return rows
 
 
@@ -664,7 +716,11 @@ def legend_handles(rows: Sequence[Row], kernels: Sequence[str]) -> list[Line2D]:
         )
         for row in rows
     ]
-    if any(kernel not in row.ratios or not row.delivered.get(kernel, True) for row in rows for kernel in kernels):
+    if any(
+        kernel not in row.pending and (kernel not in row.ratios or not row.delivered.get(kernel, True))
+        for row in rows
+        for kernel in kernels
+    ):
         handles.append(
             Line2D(
                 [],
@@ -677,6 +733,8 @@ def legend_handles(rows: Sequence[Row], kernels: Sequence[str]) -> list[Line2D]:
                 label=style.NOT_DELIVERED_LABEL,
             )  # fmt: skip
         )
+    if any(row.pending for row in rows):
+        handles.append(style.pending_legend_mark(7))
     return handles
 
 
@@ -738,6 +796,7 @@ def llr40_figure(
         not has_tokens, size,
         range_of=lambda s: (row_by_key[s.key].ratios_low, row_by_key[s.key].ratios_high),
         delivered_of=lambda s: row_by_key[s.key].delivered,
+        pending_of=lambda s: row_by_key[s.key].pending,
         interval_of=geomean_interval_of(row_by_key, lambda r: r.ratios),
         transform=log2_change, value_text=kernel_comparison.speedup_value_text, span=offset,
     )  # fmt: skip
@@ -837,6 +896,8 @@ def llr40_two_row_figure(
     dpi: float = 150.0,
     labels: Mapping[str, str] | None = None,
     offset: float = 0.0,
+    mark_pending: bool = False,
+    baseline_fallback: str = "",
 ) -> pathlib.Path:
     """Build the llr-focus40 compiler rows, write their tables (Rule 4's costs, rules 5/7's
     intervals -- :func:`write_tables`, :func:`token_summary_table`) and render the two-panel
@@ -846,7 +907,18 @@ def llr40_two_row_figure(
     ``dpi`` defaults to 150 -- this figure's own review/paper convention, not
     :func:`~hpcagent_bench.stats.style.save`'s general-purpose 200.
     """
-    rows = llr40_rows(canon_frame, observations, roster, baseline, canon_columns, conditions, pattern, repeats)
+    rows = llr40_rows(
+        canon_frame,
+        observations,
+        roster,
+        baseline,
+        canon_columns,
+        conditions,
+        pattern,
+        repeats,
+        mark_pending,
+        baseline_fallback,
+    )
     rows = [dataclasses.replace(row, label=(labels or {}).get(row.framework, row.label)) for row in rows]
     write_tables(rows, out)
     tokens = token_summary_table(rows)

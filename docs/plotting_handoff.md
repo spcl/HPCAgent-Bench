@@ -171,6 +171,8 @@ other one. Per-comparison options go inside each `--comparison` spec:
 | key | effect |
 |---|---|
 | `placeholders=Fortran` | draws an empty column for a leg with no data yet, so the spacing does not change when it lands |
+| `pending=kimi27sglang,qwen38` | an empty column for each MODEL with no pair yet; with `--mark-pending` it shows a `?` |
+| `--mark-pending` (both scripts, off by default) | a `?` for data not run yet, never a cross: per kernel in `plot_llr40_compilers.py` (no canon row for the column or Numba; left out of the geomean), per empty column in `plot_score_change.py` |
 | `difference=HIP:qwen38,...` | a grey bar between a named pair's two marks, its factor printed above both intervals |
 | `repeats=median` | median over designed repeats instead of latest-run-wins |
 | `control-label=...` | what the control is called in the legend |
