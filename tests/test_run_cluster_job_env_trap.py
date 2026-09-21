@@ -2,13 +2,21 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """``experiments/run_cluster.sh`` sets an EXIT trap where it creates ``JOB_ENV_FILE`` (the tmpfs
 copy of the job env that podman/docker read; it carries the inference key) and a SECOND, unrelated
-EXIT trap later where it defines ``cleanup_steps``. Bash keeps only the LAST trap registered for a
+EXIT trap later where it defined ``cleanup_steps``. Bash keeps only the LAST trap registered for a
 given signal, so the second trap silently replaced the first one and the mktemp'd env file was never
-removed -- on a real job or a plain successful exit. The fix folds the removal into ``cleanup_steps``
-itself, guarded for ``set -u``. These tests lift the exact creation lines and the exact
-``cleanup_steps``/``trap`` lines straight out of the file (never retyped) and run only those, the
-same "read the real text, run only the real text" approach ``test_run_cluster_cache_env.py`` and
-``test_run_cluster_frozen_tree.py`` already take for this file."""
+removed -- on a real job or a plain successful exit. The fix folded the removal into that later
+trap.
+
+``cleanup_steps`` has since split into two: ``cleanup_steps_on_exit`` (EXIT only) and
+``cleanup_steps_on_signal`` (INT/TERM). JOB_ENV_FILE is removed ONLY on EXIT: an INT/TERM here falls
+through into the mandatory token-record extraction further down in the real file instead of exiting,
+and that extraction's containerized call still needs the file (podman/docker only) to exist at that
+point, so removing it from the signal path would recreate a version of the very bug this test file
+exists to catch -- just moved from "never removed" to "removed too early". These tests lift the
+exact creation lines and the exact ``cleanup_steps_on_exit`` / ``cleanup_steps_on_signal`` / `trap`
+lines straight out of the file (never retyped) and run only those, the same "read the real text, run
+only the real text" approach ``test_run_cluster_cache_env.py`` and ``test_run_cluster_frozen_tree.py``
+already take for this file."""
 
 import pathlib
 import signal
@@ -22,15 +30,23 @@ CREATE_START = 'job_env_dir="${XDG_RUNTIME_DIR:-}"'
 CREATE_END = 'chmod 600 "${JOB_ENV_FILE}"\n'
 CREATE_BLOCK = TEXT[TEXT.index(CREATE_START) : TEXT.index(CREATE_END) + len(CREATE_END)]
 
-CLEANUP_START = "step_pids=()\ncleanup_steps() {"
-CLEANUP_END = "trap cleanup_steps EXIT INT TERM\n"
+CLEANUP_START = "step_pids=()\n"
+CLEANUP_END = "trap cleanup_steps_on_signal INT TERM\n"
 CLEANUP_BLOCK = TEXT[TEXT.index(CLEANUP_START) : TEXT.index(CLEANUP_END) + len(CLEANUP_END)]
 
 # JOB_ENV_FILE is never removed by its own creation-site trap any more (see docstring); this test
 # pins that the old, now-dead `trap ... EXIT` line stays gone rather than quietly creeping back in
-# and shadowing cleanup_steps's removal again.
+# and shadowing cleanup_steps_on_exit's removal again.
 assert "trap 'rm -f " not in CREATE_BLOCK, "a creation-site EXIT trap on JOB_ENV_FILE reappeared"
-assert 'rm -f "${JOB_ENV_FILE:-}"' in CLEANUP_BLOCK, "cleanup_steps no longer removes JOB_ENV_FILE"
+assert 'rm -f "${JOB_ENV_FILE:-}"' in CLEANUP_BLOCK, "cleanup_steps_on_exit no longer removes JOB_ENV_FILE"
+# The removal must stay EXIT-only: an INT/TERM falls through into extraction in the real file, which
+# still needs the file to exist. Pin this by checking the two trap registrations land on the
+# functions this test expects, and that the removal line appears strictly before the INT/TERM trap
+# is registered (i.e. inside cleanup_steps_on_exit, not cleanup_steps_on_signal).
+assert "trap cleanup_steps_on_exit EXIT\n" in CLEANUP_BLOCK, "the EXIT trap no longer names cleanup_steps_on_exit"
+_rm_index = CLEANUP_BLOCK.index('rm -f "${JOB_ENV_FILE:-}"')
+_exit_trap_index = CLEANUP_BLOCK.index("trap cleanup_steps_on_exit EXIT\n")
+assert _rm_index < _exit_trap_index, "JOB_ENV_FILE's removal moved out of cleanup_steps_on_exit"
 
 
 def build(tmp_path: pathlib.Path, tail: str) -> pathlib.Path:
@@ -45,7 +61,7 @@ def env_files(runtime_dir: pathlib.Path) -> list[pathlib.Path]:
 
 
 def test_a_plain_exit_removes_the_job_env_file(tmp_path: pathlib.Path) -> None:
-    """Normal completion: cleanup_steps's EXIT trap fires and the mktemp'd file is gone."""
+    """Normal completion: cleanup_steps_on_exit's EXIT trap fires and the mktemp'd file is gone."""
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir()
     script = build(tmp_path, 'echo "created: ${JOB_ENV_FILE}"')
@@ -61,14 +77,20 @@ def test_a_plain_exit_removes_the_job_env_file(tmp_path: pathlib.Path) -> None:
 
 
 def test_a_sigterm_still_removes_the_job_env_file(tmp_path: pathlib.Path) -> None:
-    """The trap runs on TERM too (scancel, or the job's time limit), not only on a clean exit.
+    """The file is still gone once the process actually exits after a TERM (scancel, or the job's
+    time limit), not only on a clean exit -- even though cleanup_steps_on_signal (the INT/TERM trap)
+    itself no longer removes it directly (see docstring). Bash still runs the EXIT trap
+    (cleanup_steps_on_exit) once the script falls off its own end, which is what actually removes
+    the file here, the same way falling through to the real file's mandatory extraction ends in its
+    own `exit` and the same EXIT trap.
 
     ``sleep`` is backgrounded and waited on, not run in the foreground: bash only runs a caught
     signal's trap between commands (or when a `wait` is interrupted), never while it is itself
     blocked in `waitpid` for a FOREGROUND child, so a foreground `sleep 30` would just eat the
     signal for the full 30s and defeat what this test is checking. It goes into step_pids (the
-    real script's own bookkeeping for its role steps) so cleanup_steps's kill loop -- not just its
-    trailing `rm` -- actually reaps it instead of the later bare `wait` blocking on an orphan.
+    real script's own bookkeeping for its role steps) so cleanup_steps_on_signal's kill loop --
+    not just cleanup_steps_on_exit's trailing `rm` -- actually reaps it instead of a later bare
+    `wait` blocking on an orphan.
     """
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir()
