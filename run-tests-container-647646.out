@@ -1,0 +1,4 @@
+enroot_srun: comm hooks off (INFERENCE_NODES=unset)
+enroot_srun: forwarding rank (EDF /users/ybudanaz/x86_64/.edf/hpcagent-bench-judge-mi300-latest.toml)
+.............................................                            [100%]
+45 passed in 6.86s

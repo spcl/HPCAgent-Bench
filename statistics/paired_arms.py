@@ -18,15 +18,22 @@ A FAILED EPISODE IS NOT A SPEED-UP, AND IT STILL COSTS ITS TOKENS (``--policy``,
 a failure shows up in the coverage columns (``n_solved``, ``coverage_p``) instead; ``served`` keeps
 the fallback reading, a failure at 1.0 -- the baseline the agent left standing.
 
-THE TWO LEGS ARE PAIRED OVER DIFFERENT POPULATIONS AND ARE NEVER INTERSECTED. A graded ``submission``
+THE LEGS ARE PAIRED OVER DIFFERENT POPULATIONS AND ARE NEVER INTERSECTED. A graded ``submission``
 row carries the timings and no token count; a ``call`` row carries the token count and no timings.
 The score leg is therefore paired over the kernels both arms SOLVED and the cost leg over the kernels
 both arms have a token count for, each with its own n. Intersecting them drops graded kernels for
-want of a call row, which is the defect that withdrew the CPF cost claim.
+want of a call row, which is the defect that withdrew the CPF cost claim. A third, ``success`` leg
+tests whether the intervention changed WHICH kernels solve at all: over :math:`\\mathcal{K}`, the
+kernels both arms were served (``served_by_arm``), ``g`` counts those arm ``a`` alone solved
+(gained) and ``l`` those arm ``b`` alone solved (lost); :func:`mcnemar_p` gives the two-sided exact
+p on ``(g, l)`` from ``scipy.stats.binomtest``, never withheld for a small n -- the test is exact,
+not a bootstrap flag that needs a floor. ``g`` and ``l`` are also carried on every leg of a pair, beside
+``coverage_p`` (paper section 4.3: :math:`\\rho_R = (|\\mathcal{B}|+g)/(|\\mathcal{B}|+l)`).
 
-The family is every test in the output: both legs of every pair. Benjamini-Hochberg runs across it
-once, and a leg with fewer than ``summary.MIN_PAIRS_FOR_INTERVAL`` pairs reports ``underpowered``
-rather than a verdict -- a bootstrap flag at n = 2-4 is a coin toss.
+The family is every test in the output: every leg of every pair, ``success`` included.
+Benjamini-Hochberg runs across it once, and a continuous leg with fewer than
+``summary.MIN_PAIRS_FOR_INTERVAL`` pairs reports ``underpowered`` rather than a verdict -- a
+bootstrap flag at n = 2-4 is a coin toss.
 
     python3 paired_arms.py --observations scored.db --observations blind.db \\
         --pair cpf-llr-focus40-oss120b-c,llrblind-oss120b-c \\
@@ -42,6 +49,7 @@ import pathlib
 import sys
 
 import pandas as pd
+from scipy.stats import binomtest  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 
 from hpcagent_bench import experiment_tags, experiments
 from hpcagent_bench.harness import efficacy
@@ -96,6 +104,8 @@ PAIR_COLUMNS = (
     "n_only_a",
     "n_only_b",
     "coverage_p",
+    "g",
+    "l",
     "leg",
     "n_pairs",
     "n_tested",
@@ -239,6 +249,8 @@ COUNT_COLUMNS = frozenset(
         "n_both",
         "n_only_a",
         "n_only_b",
+        "g",
+        "l",
         "n_pairs",
         "n_tested",
         "wins_a",
@@ -436,18 +448,66 @@ def tested_p(change: summary.PairedChange) -> float:
     return change.pvalue
 
 
+#: The paper's own label for the McNemar leg's method column (Appendix "efficacy-statistics").
+MCNEMAR_METHOD: str = "mcnemar-exact"
+
+
+def mcnemar_p(gained: int, lost: int) -> float:
+    """Two-sided exact McNemar p on the discordant counts, via :func:`scipy.stats.binomtest`.
+
+    The null is that each of the ``gained + lost`` disagreements was equally likely to go either
+    way: ``binomtest(gained, gained + lost, 0.5, alternative="two-sided")``. ``binomtest`` itself
+    refuses ``n = 0``, and a comparison with no discordant kernel at all carries no information
+    about a difference, so that case is handed back as ``p = 1.0`` directly rather than run.
+    """
+    n = gained + lost
+    if n == 0:
+        return 1.0
+    return float(binomtest(gained, n, 0.5, alternative="two-sided").pvalue)
+
+
+def success_leg(
+    left: population.ArmAggregate, right: population.ArmAggregate, universe: frozenset[str]
+) -> tuple[int, int, int]:
+    """``(n_both, gained, lost)`` over ``universe`` -- the paper's :math:`\\mathcal{K}`.
+
+    ``n_both`` is :math:`|\\mathcal{B}|`, the kernels both arms solved; ``gained`` (``g``) is those
+    ``left`` alone solved and ``lost`` (``l``) those ``right`` alone solved. A kernel outside
+    ``universe`` -- one either arm was never SERVED -- carries no information about the change and
+    is excluded before the split, whichever side solved it.
+    """
+    solved_left = left.delivered_kernels() & universe
+    solved_right = right.delivered_kernels() & universe
+    return len(solved_left & solved_right), len(solved_left - solved_right), len(solved_right - solved_left)
+
+
+def success_ratio(n_both: int, gained: int, lost: int) -> float:
+    """:math:`\\rho_R=(|\\mathcal{B}|+g)/(|\\mathcal{B}|+l)`, NaN when ``before`` solved nothing at all."""
+    denominator = n_both + lost
+    return (n_both + gained) / denominator if denominator else math.nan
+
+
 def pair_rows(
     pairs: list[tuple[str, str]],
     table: dict[str, population.ArmAggregate],
     tokens: dict[tuple[str, str], float],
     roster: list[str],
     family: str,
+    served: dict[str, frozenset[str]] | None = None,
 ) -> list[dict[str, object]]:
-    """One row per leg per pair, with the family's Benjamini-Hochberg verdicts already applied."""
+    """One row per leg per pair, with the family's Benjamini-Hochberg verdicts already applied.
+
+    ``served`` maps an arm to every kernel it has a recorded observation for
+    (:func:`served_by_arm`); a caller that omits it gets an empty universe on the ``success`` leg
+    (``g = l = 0``, ``p = 1.0``) rather than a crash, since not every caller needs that leg.
+    """
+    served = served or {}
     rows: list[dict[str, object]] = []
     for arm_a, arm_b in pairs:
         left, right = table[arm_a], table[arm_b]
         gap = population.coverage(left, right, roster=roster)
+        universe = served.get(arm_a, frozenset()) & served.get(arm_b, frozenset())
+        n_both_solved, gained, lost = success_leg(left, right, universe)
         head = {
             "family": family,
             "arm_a": arm_a,
@@ -458,7 +518,9 @@ def pair_rows(
             "n_both": gap.n_both,
             "n_only_a": gap.n_only_left,
             "n_only_b": gap.n_only_right,
-            "coverage_p": population.mcnemar_exact(gap.n_only_left, gap.n_only_right),
+            "coverage_p": mcnemar_p(gap.n_only_left, gap.n_only_right),
+            "g": gained,
+            "l": lost,
         }
         score, n_score = score_leg(left, right)
         empty: dict[str, object] = {"total_ratio": math.nan, "total_ci_low": math.nan, "total_ci_high": math.nan}
@@ -490,6 +552,26 @@ def pair_rows(
                     **extra,
                 }
             )
+        # The success leg is an EXACT test (McNemar on the discordant counts): unlike the two
+        # continuous legs above, its p is never withheld below MIN_PAIRS_FOR_INTERVAL -- there is
+        # no bootstrap-at-n=2 coin toss here for a floor to guard against.
+        rows.append(
+            {
+                **head,
+                "leg": "success",
+                "n_pairs": len(universe),
+                "n_tested": gained + lost,
+                "estimate_a_over_b": success_ratio(n_both_solved, gained, lost),
+                "ci_low": math.nan,
+                "ci_high": math.nan,
+                "wins_a": gained,
+                "wins_b": lost,
+                "ties": len(universe) - gained - lost,
+                "method": MCNEMAR_METHOD,
+                "p_value": mcnemar_p(gained, lost),
+                **empty,
+            }
+        )
     verdicts = efficacy.correct_family([float(row["p_value"]) for row in rows])
     for row, verdict in zip(rows, verdicts, strict=True):
         row["p_adjusted"] = verdict.adjusted
@@ -878,7 +960,7 @@ def main(argv: list[str]) -> int:
         .reindex(columns=list(ARM_COLUMNS))
     )
     pair_frame = (
-        pd.DataFrame(pair_rows(pairs, table, tokens, roster, args.family))
+        pd.DataFrame(pair_rows(pairs, table, tokens, roster, args.family, served=served))
         .assign(cost_model=card.key, score_rule=score_rule.SCORE_RULE, kernel_policy=args.policy)
         .reindex(columns=list(PAIR_COLUMNS))
     )

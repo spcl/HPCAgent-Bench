@@ -347,7 +347,11 @@ def test_a_pair_reports_what_the_intersection_dropped(paired_arms: ModuleType, t
 def test_a_leg_below_the_interval_floor_reports_underpowered(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
     """Under ``MIN_PAIRS_FOR_INTERVAL`` no interval and no p can be had, and the verdict says so
     rather than reading a bootstrap flag that is a coin toss at n = 2. The cost leg here is
-    degenerate as well -- both arms spent the same on every kernel -- which is equally not a test."""
+    degenerate as well -- both arms spent the same on every kernel -- which is equally not a test.
+
+    The ``success`` leg is EXACT, not a bootstrap, so it is never withheld this way: both arms
+    solved the same three kernels here (concordant), so it reports a real, tested null (``g = l =
+    0``, ``p = 1.0``) rather than ``underpowered``."""
     rows: list[dict[str, object]] = []
     for kernel in KERNELS[:3]:
         rows += episode("a", kernel, 3.0, 100.0)
@@ -355,19 +359,30 @@ def test_a_leg_below_the_interval_floor_reports_underpowered(paired_arms: Module
 
     path = observations(rows, tmp_path)
     obs = paired_arms.load_observations([path])
+    served = paired_arms.served_by_arm(obs)
     best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a", "b"]))
-    table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
-    reported = paired_arms.pair_rows([("a", "b")], table, paired_arms.tokens_by_arm_kernel(obs), list(KERNELS), "f")
+    table = paired_arms.arm_aggregates(best, served, "numba")
+    reported = paired_arms.pair_rows(
+        [("a", "b")], table, paired_arms.tokens_by_arm_kernel(obs), list(KERNELS), "f", served=served
+    )
 
     assert len(KERNELS[:3]) < summary.MIN_PAIRS_FOR_INTERVAL
-    for row in reported:
+    continuous = [row for row in reported if row["leg"] != "success"]
+    assert continuous  # speedup and tokens legs are both present
+    for row in continuous:
         assert row["verdict"] == "underpowered"
         assert math.isnan(float(row["ci_low"])) and math.isnan(float(row["ci_high"]))
 
+    success = next(row for row in reported if row["leg"] == "success")
+    assert (success["g"], success["l"], success["p_value"]) == (0, 0, 1.0)
+    assert success["verdict"] != "underpowered"
+
 
 def test_the_correction_runs_over_every_leg_of_every_pair(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
-    """The family is the whole table: two pairs on two legs is four tests, and a per-row threshold
-    applied four times is the multiplicity error the correction exists to prevent."""
+    """The family is the whole table: two pairs on three legs (speedup, tokens, success) is six
+    tests, and a per-row threshold applied six times is the multiplicity error the correction
+    exists to prevent. The ``success`` leg's McNemar p enters the SAME correction as the other two
+    -- one family, one Benjamini-Hochberg pass, not a separate one for the discordant-solve test."""
     rows: list[dict[str, object]] = []
     for index, kernel in enumerate(KERNELS):
         rows += episode("a", kernel, 2.0 + index * 0.1, 100.0 + index)
@@ -376,14 +391,76 @@ def test_the_correction_runs_over_every_leg_of_every_pair(paired_arms: ModuleTyp
 
     path = observations(rows, tmp_path)
     obs = paired_arms.load_observations([path])
+    served = paired_arms.served_by_arm(obs)
     best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a", "b", "c"]))
-    table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
+    table = paired_arms.arm_aggregates(best, served, "numba")
     tokens = paired_arms.tokens_by_arm_kernel(obs)
-    reported = paired_arms.pair_rows([("a", "b"), ("a", "c")], table, tokens, list(KERNELS), "f")
+    reported = paired_arms.pair_rows([("a", "b"), ("a", "c")], table, tokens, list(KERNELS), "f", served=served)
 
-    assert len(reported) == 4
+    assert len(reported) == 6
     assert all(row["p_adjusted"] >= row["p_value"] for row in reported)
-    assert {row["leg"] for row in reported} == {"speedup", "tokens"}
+    assert {row["leg"] for row in reported} == {"speedup", "tokens", "success"}
+
+
+def test_gained_and_lost_are_counted_only_within_the_served_by_both_universe(paired_arms: ModuleType) -> None:
+    """A solves ``kX`` and b never has ANY row for it -- not even a call -- so ``kX`` is outside
+    ``K`` (kernels served by both) and must not count as gained, however the counts would read
+    without the universe restriction."""
+    left = population.aggregate_arm("after", "numba", {"k1": 2.0, "kX": 3.0}, ["k1", "kX"], "solved")
+    right = population.aggregate_arm("before", "numba", {"k1": 2.5}, ["k1"], "solved")
+
+    # b was never served kX: the universe excludes it, so it cannot be gained.
+    assert paired_arms.success_leg(left, right, frozenset({"k1"})) == (1, 0, 0)
+    # had b been served (and failed) kX, the same kernel would be gained.
+    assert paired_arms.success_leg(left, right, frozenset({"k1", "kX"})) == (1, 1, 0)
+
+
+def test_concordant_kernels_do_not_change_gained_lost_or_the_mcnemar_p(paired_arms: ModuleType) -> None:
+    """Two more kernels both arms solve, and one more both arms fail, move ``n_both`` and leave
+    ``g``, ``l`` and the McNemar p exactly where they were: only the discordant kernels carry
+    information about the change."""
+    left = population.aggregate_arm("after", "numba", {"k1": 2.0, "k2": 3.0}, ["k1", "k2"], "solved")
+    right = population.aggregate_arm("before", "numba", {"k1": 2.5}, ["k1"], "solved")
+    universe = frozenset({"k1", "k2"})
+    n_both, gained, lost = paired_arms.success_leg(left, right, universe)
+    assert (n_both, gained, lost) == (1, 1, 0)
+
+    grown_left = population.aggregate_arm(
+        "after", "numba", {"k1": 2.0, "k2": 3.0, "k3": 1.5, "k4": 1.5}, ["k1", "k2", "k3", "k4", "k5"], "solved"
+    )
+    grown_right = population.aggregate_arm(
+        "before", "numba", {"k1": 2.5, "k3": 1.5, "k4": 1.5}, ["k1", "k3", "k4", "k5"], "solved"
+    )
+    grown_universe = frozenset({"k1", "k2", "k3", "k4", "k5"})
+    grown_n_both, grown_gained, grown_lost = paired_arms.success_leg(grown_left, grown_right, grown_universe)
+
+    assert (grown_gained, grown_lost) == (gained, lost)
+    assert grown_n_both == 3  # k1 was already both-solved; k3 and k4 are now too; k5 both fail
+    assert paired_arms.mcnemar_p(grown_gained, grown_lost) == paired_arms.mcnemar_p(gained, lost)
+
+
+@pytest.mark.parametrize(
+    ("gained", "lost", "expected_p"),
+    [(1, 0, 1.0), (6, 0, 0.03125), (5, 5, 1.0)],
+)
+def test_the_success_legs_p_value_matches_the_known_exact_mcnemar_value(
+    paired_arms: ModuleType, gained: int, lost: int, expected_p: float
+) -> None:
+    """(g, l) = (1, 0) -> p = 1 (a single disagreement is never significant); (6, 0) -> p = 0.03125
+    (six one-sided disagreements, the smallest n an exact two-sided binomial test can call
+    significant at 0.05); (5, 5) -> p = 1 (an even split is the null exactly)."""
+    kernels = [f"g{i}" for i in range(gained)] + [f"l{i}" for i in range(lost)]
+    served = frozenset(kernels)
+    left = population.aggregate_arm("after", "numba", {k: 2.0 for k in kernels[:gained]}, kernels, "solved")
+    right = population.aggregate_arm("before", "numba", {k: 2.0 for k in kernels[gained:]}, kernels, "solved")
+    table = {"after": left, "before": right}
+
+    reported = paired_arms.pair_rows(
+        [("after", "before")], table, {}, kernels, "f", served={"after": served, "before": served}
+    )
+    success = next(row for row in reported if row["leg"] == "success")
+    assert (success["g"], success["l"]) == (gained, lost)
+    assert success["p_value"] == pytest.approx(expected_p)
 
 
 def test_the_estimate_is_the_geomean_of_the_paired_ratios(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
