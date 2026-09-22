@@ -97,7 +97,7 @@ cmd_build() {
 cmd_nested() {
     local work=$1 edf=$2 out
     echo "srun in image: $(command -v srun || echo none)"
-    out="$(timeout --signal=KILL 180 srun --overlap --mpi=pmi2 --environment="${edf}" -N2 -n8 hostname 2>&1)"
+    out="$(timeout --signal=KILL 180 srun --overlap --time=4 --mpi=pmi2 --environment="${edf}" -N2 -n8 hostname 2>&1)"
     echo "${out}" | sed 's/^/NESTED-SRUN /'
     local lines hosts
     lines="$(grep -c -E '^[a-z]+[0-9]+' <<<"${out}")"
@@ -145,7 +145,8 @@ cmd_report() {
         done
     } | tee "${out}"
     echo "results: ${out}"
-    ! awk 'NR > 1 && $3 == "FAIL"' "${out}" | grep -q .
+    # FAIL_HANG (a watchdog fired) counts as a failure; UNSUPPORTED and UNSUPPORTED_HANG do not.
+    ! awk 'NR > 1 && $3 ~ /^FAIL/' "${out}" | grep -q .
 }
 
 case "${1:-}" in

@@ -102,7 +102,16 @@ def test_the_c_probe_parses(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("source", "must_use"),
     [
-        ("gpuaware.hip", ("MPIX_GPU_query_support(MPIX_GPU_SUPPORT_HIP", "hipPointerGetAttributes", "MPI_T_cvar_read")),
+        (
+            "gpuaware.hip",
+            (
+                "MPIX_GPU_query_support(MPIX_GPU_SUPPORT_HIP",
+                "hipPointerGetAttributes",
+                "MPI_T_cvar_read",
+                "MPI_ERRORS_RETURN",  # an MPI error is a verdict, never an abort with no output
+                "64KiB",  # under MPICH's GPU IPC threshold; the 4MiB leg crosses it
+            ),
+        ),
         (
             "gpu_initiated.hip",
             (
@@ -113,6 +122,7 @@ def test_the_c_probe_parses(tmp_path: Path) -> None:
                 "MPIX_Recv_enqueue",
                 "MPIX_Allreduce_enqueue",
                 "V_UNSUPPORTED",
+                "MPIR_CVAR_CH4_RESERVE_VCIS",  # read before the call, and reported with the verdict
             ),
         ),
         ("rccl_allreduce.hip", ("ncclBfloat16", "ncclFloat", "MPI_Bcast(&id", "busbw")),
@@ -132,6 +142,32 @@ def test_every_check_prints_a_one_word_verdict_name() -> None:
     names |= set(re.findall(r"verdict \"?(\w+)", (VERIFY / "verify.sh").read_text()))
     assert {"mpi_hello", "gpuaware", "gpuaware_control", "gpu_initiated", "rccl_"} <= names
     assert {"nested_srun", "nested_mpi_gang", "compile_", "offered_", "ldd_"} <= names
+
+
+def test_every_step_overlaps_and_carries_its_own_time_limit() -> None:
+    """A killed srun client leaves its step holding the nodes, and the next step then waits on
+    "Requested nodes are busy" instead of running (measured on job 647706). --overlap lets it run
+    anyway; --time makes Slurm reap the orphan."""
+    for line in (VERIFY / "verify.sbatch").read_text().splitlines():
+        if "srun" in line and not line.lstrip().startswith("#"):
+            assert "--overlap" in line and "--time=" in line, line
+
+
+@pytest.mark.parametrize("source", HIP_PROBES)
+def test_every_blocking_probe_reports_a_hang_instead_of_dying_silently(source: str) -> None:
+    """A probe killed by the step timeout must not leave a zero-byte log: unbuffered stdout, and a
+    watchdog on the calls that can block (job 647706's gpu_initiated wrote nothing at all)."""
+    text = (VERIFY / source).read_text()
+    assert "setvbuf(stdout, NULL, _IONBF, 0)" in text
+    if source != "rccl_allreduce.hip":
+        assert "watchdog(" in text
+
+
+def test_a_fired_watchdog_is_a_failure_but_an_unsupported_one_is_not() -> None:
+    """The table's own rule: FAIL and FAIL_HANG fail the run, UNSUPPORTED and UNSUPPORTED_HANG do not."""
+    assert "UNSUPPORTED_HANG" in (VERIFY / "gpu_initiated.hip").read_text()
+    assert "FAIL_HANG" in (VERIFY / "gpuaware.hip").read_text()
+    assert "$3 ~ /^FAIL/" in (VERIFY / "verify.sh").read_text()
 
 
 @pytest.mark.amd

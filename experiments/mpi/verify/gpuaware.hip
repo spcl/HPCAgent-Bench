@@ -16,6 +16,14 @@
 // ("works" only through the APU host path). The `control` mode runs under MPIR_CVAR_ENABLE_GPU=0
 // and PASSes only if the query then says NO: that proves the query is live, not hard-wired.
 //
+// The exchange runs at TWO message sizes, because MPICH takes a different route for each and only
+// one of them was broken here: a short message is copied eagerly, while a long one goes through the
+// GPU IPC / LMT path (MPIR_CVAR_CH4_IPC_GPU_P2P_THRESHOLD, default 1 MiB) and yaksa's pointer-attr
+// query. Reporting one verdict per leg names the route that failed instead of failing the probe.
+//
+// Every MPI call returns its error (MPI_ERRORS_RETURN) and runs under a watchdog: an aborting or
+// hanging MPI must not take the step down with an empty log, it must leave a verdict line.
+//
 // Also prints pingpong bandwidth host vs hipMalloc buffers, intra-node pair (0,1) and inter-node
 // pair (0, first rank of the second node) -- the number that tells a real device path from a
 // staged one.
@@ -92,8 +100,54 @@ static double pingpong(int me, int a, int b, size_t bytes, int device, int iters
   return t > 0 ? (double)bytes * iters * 2 / t / 1e6 : 0.0;
 }
 
+// One device-buffer exchange at `bytes`: a Sendrecv ring, then an Allreduce, both checked
+// elementwise. Returns V_PASS / V_FAIL and leaves the first MPI error in `err`.
+static int exchange(int rank, int size, size_t bytes, const char *label, int *err) {
+  int n = (int)(bytes / sizeof(float)), from = (rank - 1 + size) % size;
+  float *dsend = NULL, *drecv = NULL, *host = (float *)malloc(bytes);
+  HC(hipMalloc((void **)&dsend, bytes));
+  HC(hipMalloc((void **)&drecv, bytes));
+  for (int i = 0; i < n; ++i)
+    host[i] = (float)(rank + 1) + (float)(i % 7);
+  HC(hipMemcpy(dsend, host, bytes, hipMemcpyHostToDevice));
+  HC(hipDeviceSynchronize());
+  long long bad = 0;
+  watchdog(60, "FAIL_HANG", rank == 0 ? "gpuaware_sendrecv" : NULL, label);
+  *err = MPI_Sendrecv(dsend, n, MPI_FLOAT, (rank + 1) % size, 1, drecv, n, MPI_FLOAT, from, 1, MPI_COMM_WORLD,
+                      MPI_STATUS_IGNORE);
+  watchdog_off();
+  if (*err == MPI_SUCCESS) {
+    HC(hipMemcpy(host, drecv, bytes, hipMemcpyDeviceToHost));
+    for (int i = 0; i < n; ++i)
+      bad += host[i] != (float)(from + 1) + (float)(i % 7);
+  }
+  int sendrecv_err = *err;
+  watchdog(60, "FAIL_HANG", rank == 0 ? "gpuaware_allreduce" : NULL, label);
+  int allreduce_err = MPI_Allreduce(dsend, drecv, n, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+  watchdog_off();
+  if (allreduce_err == MPI_SUCCESS) {
+    HC(hipMemcpy(host, drecv, bytes, hipMemcpyDeviceToHost));
+    for (int i = 0; i < n; ++i)
+      bad += host[i] != (float)(size * (size + 1) / 2) + (float)(size * (i % 7));
+  }
+  HC(hipFree(dsend));
+  HC(hipFree(drecv));
+  free(host);
+  if (*err == MPI_SUCCESS)
+    *err = allreduce_err;
+  int v = world_worst(*err != MPI_SUCCESS || bad > 0 ? V_FAIL : V_PASS);
+  long long all_bad = world_sum(bad);
+  if (rank == 0)
+    printf("VERDICT gpuaware_exchange_%s %s bytes=%zu bad=%lld sendrecv='%s' allreduce='%s'\n", label, verdict_name(v),
+           bytes, all_bad, mpi_error_text(sendrecv_err), mpi_error_text(allreduce_err));
+  fflush(stdout);
+  return v;
+}
+
 int main(int argc, char **argv) {
   MPI_Init(&argc, &argv);
+  setvbuf(stdout, NULL, _IONBF, 0); // a killed step must still show how far the probe got
+  MPI_Comm_set_errhandler(MPI_COMM_WORLD, MPI_ERRORS_RETURN);
   int rank = 0, size = 0, ndev = 0;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
@@ -112,7 +166,6 @@ int main(int argc, char **argv) {
     printf("GPUAWARE query_hip=%d env MPICH_GPU_SUPPORT_ENABLED=%s MPIR_CVAR_ENABLE_GPU=%s ndev=%d nodes=%d\n", query,
            e1 ? e1 : "unset", e2 ? e2 : "unset", ndev, nodes);
     print_cvars();
-    fflush(stdout);
   }
   if (control) {
     int v = query == 0 ? V_PASS : V_FAIL;
@@ -123,29 +176,17 @@ int main(int argc, char **argv) {
     return v == V_PASS ? 0 : 1;
   }
 
-  const int n = 1 << 22;
-  float *dsend = NULL, *drecv = NULL, *host = (float *)malloc(n * sizeof(float));
-  HC(hipMalloc((void **)&dsend, n * sizeof(float)));
-  HC(hipMalloc((void **)&drecv, n * sizeof(float)));
+  float *probe = NULL;
+  HC(hipMalloc((void **)&probe, sizeof(float)));
   hipPointerAttribute_t attr;
-  HC(hipPointerGetAttributes(&attr, dsend));
-  int is_device = attr.type == hipMemoryTypeDevice;
-  for (int i = 0; i < n; ++i)
-    host[i] = (float)(rank + 1) + (float)(i % 7);
-  HC(hipMemcpy(dsend, host, n * sizeof(float), hipMemcpyHostToDevice));
-  int from = (rank - 1 + size) % size;
-  long long bad = 0;
-  MPI_Sendrecv(dsend, n, MPI_FLOAT, (rank + 1) % size, 1, drecv, n, MPI_FLOAT, from, 1, MPI_COMM_WORLD,
-               MPI_STATUS_IGNORE);
-  HC(hipMemcpy(host, drecv, n * sizeof(float), hipMemcpyDeviceToHost));
-  for (int i = 0; i < n; ++i)
-    bad += host[i] != (float)(from + 1) + (float)(i % 7);
-  MPI_Allreduce(dsend, drecv, n, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-  HC(hipMemcpy(host, drecv, n * sizeof(float), hipMemcpyDeviceToHost));
-  for (int i = 0; i < n; ++i)
-    bad += host[i] != (float)(size * (size + 1) / 2) + (float)(size * (i % 7));
-  bad = world_sum(bad);
-  int all_device = world_worst(!is_device) == 0;
+  HC(hipPointerGetAttributes(&attr, probe));
+  int all_device = world_worst(attr.type == hipMemoryTypeDevice ? 0 : 1) == 0;
+  HC(hipFree(probe));
+
+  // 64 KiB stays under MPICH's GPU IPC threshold (eager copy); 4 MiB crosses it (IPC / LMT path).
+  int eager_err = MPI_SUCCESS, lmt_err = MPI_SUCCESS;
+  int eager = exchange(rank, size, 64u << 10, "64KiB", &eager_err);
+  int lmt = exchange(rank, size, 4u << 20, "4MiB", &lmt_err);
 
   // Rank layout is block by node (srun default): the second node starts at the first rank whose
   // node-local rank is 0, other than rank 0.
@@ -156,20 +197,20 @@ int main(int argc, char **argv) {
   for (int s = 0; s < 2; ++s)
     for (int d = 0; d < 2; ++d) {
       int iters = s == 0 ? 50 : 10;
+      watchdog(120, "FAIL_HANG", rank == 0 ? "gpuaware_bandwidth" : NULL, d ? "hipMalloc" : "host");
       bw[s][d][0] = size > 1 ? pingpong(rank, 0, 1, sizes[s], d, iters) : 0;
       bw[s][d][1] = first_other < size ? pingpong(rank, 0, first_other, sizes[s], d, iters) : 0;
+      watchdog_off();
       if (rank == 0)
         printf("BW %-9s %6zu KiB intra(0-1)=%8.0f MB/s inter(0-%d)=%8.0f MB/s\n", d ? "hipMalloc" : "host",
                sizes[s] >> 10, bw[s][d][0], first_other < size ? first_other : -1, bw[s][d][1]);
     }
-  int v = query == 1 && all_device && bad == 0 ? V_PASS : V_FAIL;
+  int v = query == 1 && all_device && eager == V_PASS && lmt == V_PASS ? V_PASS : V_FAIL;
   if (rank == 0)
-    printf("VERDICT gpuaware %s query_hip=%d device_ptr=%d bad=%lld bw64M_dev_intra=%.0f bw64M_dev_inter=%.0f "
-           "bw64M_host_intra=%.0f bw64M_host_inter=%.0f MB/s\n",
-           verdict_name(v), query, all_device, bad, bw[1][1][0], bw[1][1][1], bw[1][0][0], bw[1][0][1]);
-  HC(hipFree(dsend));
-  HC(hipFree(drecv));
-  free(host);
+    printf("VERDICT gpuaware %s query_hip=%d device_ptr=%d eager=%s lmt=%s bw64M_dev_intra=%.0f "
+           "bw64M_dev_inter=%.0f bw64M_host_intra=%.0f bw64M_host_inter=%.0f MB/s\n",
+           verdict_name(v), query, all_device, verdict_name(eager), verdict_name(lmt), bw[1][1][0], bw[1][1][1],
+           bw[1][0][0], bw[1][0][1]);
   MPI_Finalize();
   return v == V_PASS ? 0 : 1;
 }
