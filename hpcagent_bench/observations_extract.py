@@ -52,7 +52,7 @@ from collections.abc import Iterable, Iterator
 from types import ModuleType
 from typing import Any, NamedTuple
 
-from hpcagent_bench import frozen_observations, paths
+from hpcagent_bench import campaigns, frozen_observations, paths
 from hpcagent_bench.experiments import DB_SKIP_NAMES
 
 #: Tag that marks a kernel as part of the 40-kernel LLR focus set.
@@ -1162,7 +1162,23 @@ def write_csv(path: pathlib.Path, fields: Iterable[str], rows: Iterable[dict[str
 
 
 #: A regrade row's key: the observation it replaces, as ``db``, ``run_id``, ``benchmark``, ``ts_ms``.
+#: ``db`` is keyed by :func:`run_path`, so a row recorded under one mount of the run root matches
+#: its regrade recorded under another.
 RegradeKey = tuple[str, str, str, int]
+
+
+def run_path(db: object) -> str:
+    """``db`` from the run root's own directory on (``hpcagent-bench-runs/<campaign>/<job>/...``).
+
+    The same storage has been mounted under more than one root over the campaign's lifetime (old
+    rows recorded one scratch mount, newer ones another), so the absolute path is not an identity:
+    matching a regrade to its observation on it drops every row recorded under the older mount.
+    The part from :data:`~hpcagent_bench.campaigns.RUNS_DIRNAME` on names one file whatever root it
+    was reached through. A path outside any run root is returned as is."""
+    parts = pathlib.Path(str(db)).parts
+    if campaigns.RUNS_DIRNAME not in parts:
+        return str(db)
+    return str(pathlib.Path(*parts[parts.index(campaigns.RUNS_DIRNAME) :]))
 
 
 def load_regrades(patterns: Iterable[str]) -> dict[RegradeKey, dict[str, Any]]:
@@ -1173,7 +1189,7 @@ def load_regrades(patterns: Iterable[str]) -> dict[RegradeKey, dict[str, Any]]:
             with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
                 conn.row_factory = sqlite3.Row
                 for row in conn.execute("SELECT * FROM regrades WHERE status = 'graded'"):
-                    found[(row["db"], row["run_id"], row["benchmark"], int(row["ts_ms"]))] = dict(row)
+                    found[(run_path(row["db"]), row["run_id"], row["benchmark"], int(row["ts_ms"]))] = dict(row)
     return found
 
 
@@ -1223,7 +1239,7 @@ def apply_regrades(
         if not needs_regrade(row):
             kept.append(row)
             continue
-        new = regrades.get((str(row["db"]), str(row["run_id"]), str(row["benchmark"]), int(row["ts_ms"])))
+        new = regrades.get((run_path(row["db"]), str(row["run_id"]), str(row["benchmark"]), int(row["ts_ms"])))
         if new is None:
             counts["dropped"] += 1
             continue
@@ -1257,8 +1273,9 @@ PROMOTED_OPTIMIZER = "promoted-unsubmitted"
 
 
 def judge_dir_of(db: object) -> str:
-    """The job's judge directory a shard DB sits in: every rank of one job shares it."""
-    return str(pathlib.Path(str(db)).parent.parent)
+    """The job's judge directory a shard DB sits in: every rank of one job shares it (as a
+    :func:`run_path`, so both mounts of the run root name the same job)."""
+    return str(pathlib.Path(run_path(db)).parent.parent)
 
 
 def promotion_episode(row: dict[str, Any]) -> tuple[str, str, str]:

@@ -56,6 +56,8 @@ if ! python3 -m compileall -q "${repo}/hpcagent_bench/harness" >/dev/null; then
     exit 2
 fi
 
+# SCRATCH is exported INSIDE the container: pyxis starts it with a sanitised environment, and without
+# it campaigns.runs_root() falls back to <repo>/hpcagent-bench-runs, which holds none of the data.
 # One slot per task: judge.gpus_per_node=0 makes grading_cpus and grading_ncores take the task's
 # whole cpuset (its 24 cores), and ROCR_VISIBLE_DEVICES leaves the task one GPU, device 0.
 srun --ntasks-per-node=4 --cpus-per-task=24 --hint=nomultithread --mem=0 --environment="${edf}" \
@@ -64,6 +66,7 @@ srun --ntasks-per-node=4 --cpus-per-task=24 --hint=nomultithread --mem=0 --envir
              export ROCR_VISIBLE_DEVICES="${SLURM_LOCALID}" HPCAGENT_BENCH_JUDGE_GPUS_PER_NODE=0
              export OMP_NUM_THREADS=24 OMP_PROC_BIND=close OMP_PLACES=cores
              export PYTHONPATH="$1:$1/hpcagent_bench/numpy_translators/src:$1/containers/judge/tools"
+             export SCRATCH="$5"
              exec python3 "$1/scripts/regrade.py" "$4" --worklist "$2" --shard "${SLURM_PROCID}" \
-                 --shards "${SLURM_NTASKS}" --out-dir "$3" "${@:5}"' _ "${repo}" "${worklist}" "${out}" "${command}" \
-    "${migrate_flag[@]}"
+                 --shards "${SLURM_NTASKS}" --out-dir "$3" "${@:6}"' _ "${repo}" "${worklist}" "${out}" "${command}" \
+    "${SCRATCH:?SCRATCH must be set: the run root and every worklist path live under it}" "${migrate_flag[@]}"
