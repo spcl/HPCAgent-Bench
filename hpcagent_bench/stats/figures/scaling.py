@@ -352,9 +352,8 @@ def common_kernels(curves_: Sequence[Curve], mode: str) -> set[str]:
     """The kernels EVERY arm of ``mode`` has a drawable curve for.
 
     Overlaying two arms whose kernel sets differ compares each against its own roster, which is a
-    different and always kinder number than the comparison the panel looks like it is making --
-    the same trap ``figures.arms`` names on its per-arm bars. The callers default to this set and
-    say how many kernels it cost.
+    different and always kinder number than the comparison the panel looks like it is making. The
+    callers default to this set and say how many kernels it cost.
     """
     per_arm: dict[str, set[str]] = {}
     for curve in drawable(curves_):

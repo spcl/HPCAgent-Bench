@@ -386,15 +386,6 @@ def panel_mode(mode: str) -> str:
     return mode if mode in efficacy_figures.MODES else "paired"
 
 
-def comparison_baseline(panel: efficacy_figures.Panel) -> str:
-    """One panel's speed-up DENOMINATOR, spelled for its 1x line. Blank for a stub panel, which has
-    no rows to read one off."""
-    frame = panel[3]
-    if not isinstance(frame, pd.DataFrame) or frame.empty:
-        return ""
-    return experiment_tags.framework_name(results_figures.baseline_of(frame))
-
-
 def dot_measures(args: argparse.Namespace) -> tuple[str, ...]:
     """The stacked rows ``--success-row`` asks for, in :data:`efficacy_figures.MEASURES` order."""
     return tuple(measure for measure in efficacy_figures.MEASURES if args.success_row or measure != "success")

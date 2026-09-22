@@ -305,13 +305,16 @@ def _oklab(rgb: "object") -> "object":
             None,
         )
     )
-    return lms @ np.array(
-        [
-            [0.2104542553, 0.7936177850, -0.0040720468],
-            [1.9779984951, -2.4285922050, 0.4505937099],
-            [0.0259040371, 0.7827717662, -0.8086757660],
-        ]
-    ).T
+    return (
+        lms
+        @ np.array(
+            [
+                [0.2104542553, 0.7936177850, -0.0040720468],
+                [1.9779984951, -2.4285922050, 0.4505937099],
+                [0.0259040371, 0.7827717662, -0.8086757660],
+            ]
+        ).T
+    )
 
 
 @functools.lru_cache(maxsize=1)
@@ -367,46 +370,6 @@ def combined_slot(model: str, language: str) -> int:
 def model_language_color(model: str, language: str) -> str:
     """The colour a (model, language) pair wears, everywhere it is drawn."""
     return combined_ramp()[combined_slot(model, language)]
-
-
-def model_language_colors(pairs: Iterable[tuple[str, str]]) -> dict[tuple[str, str], str]:
-    """``{(model, language): colour}`` for one figure."""
-    return {pair: model_language_color(*pair) for pair in dict.fromkeys(pairs)}
-
-
-def language_marker(language: str) -> str:
-    """The shape a delivery language wears, when a figure spends COLOUR on the model.
-
-    One shape per language in registry order, from the same marker table every other shape channel
-    draws from, so HIP is one shape wherever it appears."""
-    shapes = markers()
-    languages = order("languages")
-    key = canonical("languages", language)
-    slot = languages.index(key) if key in languages else len(languages)
-    return shapes[slot % len(shapes)]
-
-
-def language_markers(names: Iterable[str]) -> dict[str, str]:
-    """``{language: shape}`` for one figure."""
-    return {n: language_marker(n) for n in dict.fromkeys(names)}
-
-
-def min_separation(colours: Iterable[str]) -> float:
-    """The smallest perceptual gap in a set of hues, OKLab distance x100.
-
-    What a figure has to clear, not what the whole ramp clears: a reader only ever matches the
-    colours in ONE legend, so a pair that never shares a figure may sit close."""
-    import itertools
-
-    import numpy as np
-
-    values = list(colours)
-    if len(values) < 2:
-        return float("inf")
-    if len(set(values)) < len(values):
-        return 0.0  # two entities share a hue: worse than any small separation
-    lab = _oklab(np.array([matplotlib.colors.to_rgb(c) for c in values])) * 100.0
-    return float(min(np.linalg.norm(lab[i] - lab[j]) for i, j in itertools.combinations(range(len(lab)), 2)))
 
 
 def harness_color(name: str) -> str:
