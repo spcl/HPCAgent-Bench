@@ -22,9 +22,9 @@ entrypoint = false
 #   aws_ofi_nccl  the NCCL net plugin over libfabric/CXI. Without it NCCL does not fail -- it falls
 #                 back to TCP sockets over hsn* and multi-node serving is merely slow (beverin
 #                 629800/629802). Single-node serving never loads a net plugin at all.
-# VERIFY the variant on Daint before a multi-node serve: this image is CUDA 13, and on beverin a
-# plugin built for the previous runtime major (rocm6 against ROCm 7) failed to load. serve-daint.sbatch
-# forces NCCL_NET for a multi-node serve, so a plugin that does not load is a loud init failure there.
+# The image is CUDA 12.9 so that this cuda12 plugin matches its runtime major -- on beverin a plugin
+# one major behind (rocm6 against ROCm 7) failed to load. serve-daint.sbatch still forces NCCL_NET for
+# a multi-node serve, so a plugin that does not load is a loud init failure there, never a slow serve.
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
 com.hooks.aws_ofi_nccl.variant = "cuda12"

@@ -6,7 +6,7 @@
 # file needs no change here.
 #
 #   containers/cluster/ce-images/vllm-cuda/build.sh
-#   EXTRA_BUILD_ARGS="BASE_IMAGE=docker.io/vllm/vllm-openai:v0.30.0-aarch64-cu129@sha256:<digest>" .../build.sh
+#   BASE_IMAGE=docker.io/vllm/vllm-openai:<tag>@sha256:<digest> EXTRA_BUILD_ARGS="VLLM_VERSION=<x.y.z> TORCH_CUDA=<12.9>" .../build.sh
 set -euo pipefail
 
 # Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
@@ -29,7 +29,7 @@ fi
 IMAGE_TAG="${IMAGE_TAG:-hpcagent-bench-vllm-cuda:latest}"
 OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/${INFERENCE_VLLM_CUDA_SQSH%.sqsh}-candidate.sqsh}"
 # MUST track the Dockerfile's ARG default: passing it here overrides that default.
-BASE_IMAGE="${BASE_IMAGE:-docker.io/vllm/vllm-openai:v0.30.0-aarch64@sha256:4864d46625cbc3307623e29ac742030655e27249feba7b97ec925ce4cc4dfb56}"
+BASE_IMAGE="${BASE_IMAGE:-docker.io/vllm/vllm-openai:v0.30.0-aarch64-cu129@sha256:d2f87fcd67d8c80c7c68d2faf3e97f6e6facb688d04734d906f7ee2f70e6a311}"
 IMAGE_VERSION="${IMAGE_VERSION:-dev}"
 mkdir -p "$(dirname "${OUTPUT_SQSH}")"
 
@@ -38,7 +38,7 @@ cd "${REPO_ROOT}"
 ce_mirror_args
 ce_cache_base_image
 
-# Bare KEY=VALUE pairs for the ARGs a candidate varies (VLLM_VERSION with a different base).
+# Bare KEY=VALUE pairs for the ARGs a candidate varies (VLLM_VERSION, TORCH_CUDA with another base).
 EXTRA_ARGS=()
 for kv in ${EXTRA_BUILD_ARGS:-}; do EXTRA_ARGS+=(--build-arg "${kv}"); done
 
