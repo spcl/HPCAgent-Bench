@@ -1,0 +1,224 @@
+enroot_srun: comm hooks off (INFERENCE_NODES=unset)
+enroot_srun: forwarding rank (EDF /users/ybudanaz/x86_64/.edf/hpcagent-bench-judge-mi300-latest.toml)
+....................................F
+=== FAILED tests/test_plot_score_change.py::test_a_panels_own_subtitle_never_touches_the_saved_canvas_edge (call) ===
+tmp_path = PosixPath('/tmp/pytest-of-ybudanaz/pytest-0/test_a_panels_own_subtitle_nev0')
+
+    def test_a_panels_own_subtitle_never_touches_the_saved_canvas_edge(tmp_path: pathlib.Path) -> None:
+        """A long per-panel ``title`` (:func:`figure_row`'s own small in-box text) is measured against
+        the SAVED file, not the same measurement that used to miss a whole-figure title's clipping at a
+        different dpi (:func:`~hpcagent_bench.stats.style.save`'s own docstring)."""
+        long_title = "A panel subtitle long enough that it could, in principle, run off either edge"
+        panels = [(long_title, "cpf", one_arm_stats(), one_arm_raw())]
+        out = tmp_path / "row.pdf"
+        efficacy_figures.figure_row(panels, out)
+        with Image.open(out.with_suffix(".png")) as image:
+            width = image.size[0]
+            rows = np.where((np.array(image.convert("L")) < 240).any(axis=1))[0]
+        left, right = png_ink_columns(out.with_suffix(".png"), int(rows.min()), int(rows.min()) + 20)
+        assert 0 < left, "the subtitle's own ink starts at the canvas edge"
+>       assert right < width - 1, "the subtitle's own ink runs to the canvas edge"
+E       AssertionError: the subtitle's own ink runs to the canvas edge
+E       assert 838 < (839 - 1)
+
+tests/test_plot_score_change.py:696: AssertionError
+
+.............................F
+=== FAILED tests/test_plot_score_change.py::test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor[speedup] (call) ===
+measure = 'speedup'
+
+    @pytest.mark.parametrize("measure", ["speedup", "cost"])
+    def test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor(measure: str) -> None:
+        """An arrow on every column is a second grid, so they are asked for by name. Its label is the
+        factor BETWEEN the two marks -- on the speed-up row the axis holds log2, so the factor is a
+        power of two and not the difference the axis shows."""
+        import matplotlib.pyplot as plt
+    
+        def texts(differences: frozenset[tuple[str, str]]) -> list[str]:
+            fig, ax = plt.subplots()
+            try:
+                efficacy_figures.draw_measure_row(ax, [arrow_row()], measure, "^", {}, differences=differences)
+                return [text.get_text() for text in ax.texts]
+            finally:
+                plt.close(fig)
+    
+>       assert "4x" in texts(frozenset({("qwen38", "HIP")}))
+E       AssertionError: assert '4x' in ['4.0x']
+E        +  where ['4.0x'] = <function test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor.<locals>.texts at 0x1460cc9093a0>(frozenset({('qwen38', 'HIP')}))
+E        +    where frozenset({('qwen38', 'HIP')}) = frozenset({('qwen38', 'HIP')})
+
+tests/test_plot_score_change.py:1105: AssertionError
+
+F
+=== FAILED tests/test_plot_score_change.py::test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor[cost] (call) ===
+measure = 'cost'
+
+    @pytest.mark.parametrize("measure", ["speedup", "cost"])
+    def test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor(measure: str) -> None:
+        """An arrow on every column is a second grid, so they are asked for by name. Its label is the
+        factor BETWEEN the two marks -- on the speed-up row the axis holds log2, so the factor is a
+        power of two and not the difference the axis shows."""
+        import matplotlib.pyplot as plt
+    
+        def texts(differences: frozenset[tuple[str, str]]) -> list[str]:
+            fig, ax = plt.subplots()
+            try:
+                efficacy_figures.draw_measure_row(ax, [arrow_row()], measure, "^", {}, differences=differences)
+                return [text.get_text() for text in ax.texts]
+            finally:
+                plt.close(fig)
+    
+>       assert "4x" in texts(frozenset({("qwen38", "HIP")}))
+E       AssertionError: assert '4x' in ['4.0x']
+E        +  where ['4.0x'] = <function test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor.<locals>.texts at 0x1460cf500fe0>(frozenset({('qwen38', 'HIP')}))
+E        +    where frozenset({('qwen38', 'HIP')}) = frozenset({('qwen38', 'HIP')})
+
+tests/test_plot_score_change.py:1105: AssertionError
+
+.... [ 23%]
+..........................F
+=== FAILED tests/test_plot_score_change.py::test_category_names_still_touching_on_two_lines_step_down_until_clear[legs0] (call) ===
+legs = ('C', 'Fortran', 'C', 'Fortran', 'C', 'Fortran')
+
+    @pytest.mark.parametrize("legs", [("C", "Fortran") * 3])
+    def test_category_names_still_touching_on_two_lines_step_down_until_clear(legs: tuple[str, ...]) -> None:
+        """Three "Fortran" placeholders two columns apart share the staggered second line and touched."""
+        import matplotlib.pyplot as plt
+    
+        fig, ax = plt.subplots(figsize=(0.9, 1.0))
+        config = efficacy_figures.PAPER_CONFIG
+        rows = [efficacy_figures.ArmRow("qwen38", leg, "#1f77b4", arm(1.0, 2.0), arm(1.0, 2.0)) for leg in legs]
+        ax.set_xlim(-0.6, len(rows) - 0.4)
+        efficacy_figures.draw_category_axis(ax, rows, config)
+        efficacy_figures.stagger_crowded_ticks(fig, [ax], config)
+        renderer = fig.canvas.get_renderer()
+        size = ax.get_xticklabels()[0].get_fontsize()
+        assert size < config.tick_pt
+>       assert not plotstyle.crowded_ticks(ax, renderer, size / 3.0 * fig.dpi / 72.0)
+E       assert not True
+E        +  where True = <function crowded_ticks at 0x1460cfefade0>(<Axes: >, <matplotlib.backends.backend_agg.RendererAgg object at 0x1460cf6e32c0>, (((4.8999999999999995 / 3.0) * 100.0) / 72.0))
+E        +    where <function crowded_ticks at 0x1460cfefade0> = plotstyle.crowded_ticks
+E        +    and   100.0 = <Figure size 90x100 with 1 Axes>.dpi
+
+tests/test_plot_score_change.py:1634: AssertionError
+
+............................................. [ 47%]
+........................................................................ [ 71%]
+........................................................................ [ 95%]
+..............                                                           [100%]
+=================================== FAILURES ===================================
+________ test_a_panels_own_subtitle_never_touches_the_saved_canvas_edge ________
+
+tmp_path = PosixPath('/tmp/pytest-of-ybudanaz/pytest-0/test_a_panels_own_subtitle_nev0')
+
+    def test_a_panels_own_subtitle_never_touches_the_saved_canvas_edge(tmp_path: pathlib.Path) -> None:
+        """A long per-panel ``title`` (:func:`figure_row`'s own small in-box text) is measured against
+        the SAVED file, not the same measurement that used to miss a whole-figure title's clipping at a
+        different dpi (:func:`~hpcagent_bench.stats.style.save`'s own docstring)."""
+        long_title = "A panel subtitle long enough that it could, in principle, run off either edge"
+        panels = [(long_title, "cpf", one_arm_stats(), one_arm_raw())]
+        out = tmp_path / "row.pdf"
+        efficacy_figures.figure_row(panels, out)
+        with Image.open(out.with_suffix(".png")) as image:
+            width = image.size[0]
+            rows = np.where((np.array(image.convert("L")) < 240).any(axis=1))[0]
+        left, right = png_ink_columns(out.with_suffix(".png"), int(rows.min()), int(rows.min()) + 20)
+        assert 0 < left, "the subtitle's own ink starts at the canvas edge"
+>       assert right < width - 1, "the subtitle's own ink runs to the canvas edge"
+E       AssertionError: the subtitle's own ink runs to the canvas edge
+E       assert 838 < (839 - 1)
+
+tests/test_plot_score_change.py:696: AssertionError
+_ test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor[speedup] _
+
+measure = 'speedup'
+
+    @pytest.mark.parametrize("measure", ["speedup", "cost"])
+    def test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor(measure: str) -> None:
+        """An arrow on every column is a second grid, so they are asked for by name. Its label is the
+        factor BETWEEN the two marks -- on the speed-up row the axis holds log2, so the factor is a
+        power of two and not the difference the axis shows."""
+        import matplotlib.pyplot as plt
+    
+        def texts(differences: frozenset[tuple[str, str]]) -> list[str]:
+            fig, ax = plt.subplots()
+            try:
+                efficacy_figures.draw_measure_row(ax, [arrow_row()], measure, "^", {}, differences=differences)
+                return [text.get_text() for text in ax.texts]
+            finally:
+                plt.close(fig)
+    
+>       assert "4x" in texts(frozenset({("qwen38", "HIP")}))
+E       AssertionError: assert '4x' in ['4.0x']
+E        +  where ['4.0x'] = <function test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor.<locals>.texts at 0x1460cc9093a0>(frozenset({('qwen38', 'HIP')}))
+E        +    where frozenset({('qwen38', 'HIP')}) = frozenset({('qwen38', 'HIP')})
+
+tests/test_plot_score_change.py:1105: AssertionError
+__ test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor[cost] __
+
+measure = 'cost'
+
+    @pytest.mark.parametrize("measure", ["speedup", "cost"])
+    def test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor(measure: str) -> None:
+        """An arrow on every column is a second grid, so they are asked for by name. Its label is the
+        factor BETWEEN the two marks -- on the speed-up row the axis holds log2, so the factor is a
+        power of two and not the difference the axis shows."""
+        import matplotlib.pyplot as plt
+    
+        def texts(differences: frozenset[tuple[str, str]]) -> list[str]:
+            fig, ax = plt.subplots()
+            try:
+                efficacy_figures.draw_measure_row(ax, [arrow_row()], measure, "^", {}, differences=differences)
+                return [text.get_text() for text in ax.texts]
+            finally:
+                plt.close(fig)
+    
+>       assert "4x" in texts(frozenset({("qwen38", "HIP")}))
+E       AssertionError: assert '4x' in ['4.0x']
+E        +  where ['4.0x'] = <function test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor.<locals>.texts at 0x1460cf500fe0>(frozenset({('qwen38', 'HIP')}))
+E        +    where frozenset({('qwen38', 'HIP')}) = frozenset({('qwen38', 'HIP')})
+
+tests/test_plot_score_change.py:1105: AssertionError
+_ test_category_names_still_touching_on_two_lines_step_down_until_clear[legs0] _
+
+legs = ('C', 'Fortran', 'C', 'Fortran', 'C', 'Fortran')
+
+    @pytest.mark.parametrize("legs", [("C", "Fortran") * 3])
+    def test_category_names_still_touching_on_two_lines_step_down_until_clear(legs: tuple[str, ...]) -> None:
+        """Three "Fortran" placeholders two columns apart share the staggered second line and touched."""
+        import matplotlib.pyplot as plt
+    
+        fig, ax = plt.subplots(figsize=(0.9, 1.0))
+        config = efficacy_figures.PAPER_CONFIG
+        rows = [efficacy_figures.ArmRow("qwen38", leg, "#1f77b4", arm(1.0, 2.0), arm(1.0, 2.0)) for leg in legs]
+        ax.set_xlim(-0.6, len(rows) - 0.4)
+        efficacy_figures.draw_category_axis(ax, rows, config)
+        efficacy_figures.stagger_crowded_ticks(fig, [ax], config)
+        renderer = fig.canvas.get_renderer()
+        size = ax.get_xticklabels()[0].get_fontsize()
+        assert size < config.tick_pt
+>       assert not plotstyle.crowded_ticks(ax, renderer, size / 3.0 * fig.dpi / 72.0)
+E       assert not True
+E        +  where True = <function crowded_ticks at 0x1460cfefade0>(<Axes: >, <matplotlib.backends.backend_agg.RendererAgg object at 0x1460cf6e32c0>, (((4.8999999999999995 / 3.0) * 100.0) / 72.0))
+E        +    where <function crowded_ticks at 0x1460cfefade0> = plotstyle.crowded_ticks
+E        +    and   100.0 = <Figure size 90x100 with 1 Axes>.dpi
+
+tests/test_plot_score_change.py:1634: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  hpcagent_bench.stats.style:style.py:737 style: tick labels still overlap at the 4.90pt floor; the axis needs more width
+=============================== warnings summary ===============================
+tests/test_plot_score_change.py::test_mark_pending_draws_a_question_mark_per_pending_category_on_every_row
+tests/test_plot_score_change.py::test_without_mark_pending_a_pending_category_stays_empty
+tests/test_plot_score_change.py::test_the_key_is_never_wider_than_the_plot_body
+  /capstor/scratch/cscs/ybudanaz/x86_64/hpcagent-bench-wt/fig-0921/hpcagent_bench/stats/figures/efficacy.py:2308: UserWarning: Attempting to set identical low and high ylims makes transformation singular; automatically expanding.
+    ax.set_ylim(-SUCCESS_HEADROOM * kernels, (1.0 + SUCCESS_HEADROOM) * kernels)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_plot_score_change.py::test_a_panels_own_subtitle_never_touches_the_saved_canvas_edge
+FAILED tests/test_plot_score_change.py::test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor[speedup]
+FAILED tests/test_plot_score_change.py::test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor[cost]
+FAILED tests/test_plot_score_change.py::test_category_names_still_touching_on_two_lines_step_down_until_clear[legs0]
+4 failed, 298 passed, 3 warnings in 33.95s
+srun: error: nid002768: task 0: Exited with exit code 1
+srun: Terminating StepId=647035.0
