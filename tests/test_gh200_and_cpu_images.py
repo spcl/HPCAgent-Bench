@@ -202,9 +202,13 @@ def test_the_gh200_serving_profile_checks_the_engine_and_the_hook_fabric(verify:
 
 
 def serve(model: str, **extra: str) -> subprocess.CompletedProcess[str]:
-    """serve-daint.sbatch in DRY_RUN, with nothing of the caller's job or node choice leaking in."""
+    """serve-daint.sbatch in DRY_RUN, with nothing of the caller's job or node choice leaking in.
+
+    SCRATCH is a fixed path, never the caller's: the script names its run dir and (through
+    scripts/cache_env.sh) its JIT cache under it, and a host with no SCRATCH -- a CI runner --
+    otherwise refuses before printing the command this test reads. A dry run creates neither."""
     inherited = {k: v for k, v in os.environ.items() if not k.startswith("SLURM_") and k != "SERVE_NODES"}
-    env = inherited | {"MODEL": model, "DRY_RUN": "1", **extra}
+    env = inherited | {"MODEL": model, "DRY_RUN": "1", "SCRATCH": "/serve-daint-dry-run", **extra}
     return subprocess.run(["bash", str(SERVE)], capture_output=True, text=True, check=False, env=env, cwd=ROOT)
 
 
