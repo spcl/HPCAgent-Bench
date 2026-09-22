@@ -107,6 +107,7 @@ static int run(const char *name, ncclDataType_t dt, size_t esize, size_t bytes, 
 
 int main(int argc, char **argv) {
   MPI_Init(&argc, &argv);
+  setvbuf(stdout, NULL, _IONBF, 0); // a killed step must still show how far the probe got
   int rank = 0, size = 0, ver = 0;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
@@ -117,14 +118,21 @@ int main(int argc, char **argv) {
     NC(ncclGetUniqueId(&id));
   MPI_Bcast(&id, sizeof id, MPI_BYTE, 0, MPI_COMM_WORLD);
   ncclComm_t comm;
+  // Bootstrap is where RCCL blocks when the network plugin cannot reach a peer; without this the
+  // step dies on its timeout with nothing but NCCL's INFO log to read.
+  watchdog(180, "FAIL_HANG", rank == 0 ? "rccl" : NULL, "ncclCommInitRank");
   NC(ncclCommInitRank(&comm, size, id, rank));
+  watchdog_off();
   NC(ncclGetVersion(&ver));
   if (rank == 0)
     printf("RCCL version=%d ranks=%d\n", ver, size);
   hipStream_t st;
   HC(hipStreamCreate(&st));
+  watchdog(180, "FAIL_HANG", rank == 0 ? "rccl_fp32" : NULL, "ncclAllReduce");
   int rc = run("fp32", ncclFloat, 4, bytes, comm, st, rank, size);
+  watchdog(180, "FAIL_HANG", rank == 0 ? "rccl_bf16" : NULL, "ncclAllReduce");
   rc |= run("bf16", ncclBfloat16, 2, bytes, comm, st, rank, size);
+  watchdog_off();
   NC(ncclCommDestroy(comm));
   MPI_Finalize();
   return rc;

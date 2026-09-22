@@ -12,10 +12,15 @@
 #               gpuaware           MPIX_GPU_query_support(HIP) + MPI_T GPU cvars + device-pointer
 #                                  Sendrecv/Allreduce + host vs hipMalloc bandwidth
 #               gpuaware_control   same under MPIR_CVAR_ENABLE_GPU=0: the query MUST flip to 0
+#               gpuaware_noipc     same with the GPU IPC / LMT route off: which route failed
 #               gpu_initiated      MPIX_Stream on a hipStream + *_enqueue (UNSUPPORTED != FAIL)
 #               rccl               RCCL all-reduce bf16 + fp32, busbw, NET/OFI vs NET/Socket
 #   C-nested  from inside a CE step: `srun --overlap --mpi=pmi2 --environment=<EDF> -N2 -n8`,
 #             then the judge's own launcher (hpcagent_bench.harness.mpi_gang) on 8 ranks.
+#
+# Step timeouts are a backstop only: each probe carries its own watchdogs, so a hung MPI call
+# leaves a verdict in seconds. Their sum (420 + 2 x 960 + 300 s) fits the 45-minute limit even if
+# every one of them fires.
 #
 # Result: ${SCRATCH}/hpcagent-bench-logs/mlscale-verify-<jobid>/results.txt (one row per check,
 # PASS / FAIL / UNSUPPORTED + key numbers); per-step logs beside it. Exit 1 on any FAIL.
@@ -55,20 +60,27 @@ export HWLOC_COMPONENTS=-opencl,-levelzero,-gl
 export HPCAGENT_BENCH_MPI_GANG_NODELIST="$(IFS=,; printf '%s' "${NODES[*]}")"
 
 # step <name> <timeout_s> <srun args...> -- <cmd...>: one CE step, log + rc under ${WORK}/logs.
+#
+# --overlap and --time are both about the PREVIOUS step. Killing the srun CLIENT (the timeout
+# below, or an aborted rank) does not reap the step: it keeps its nodes, and the next srun then
+# waits on "Requested nodes are busy" until its own timeout -- which is how one hung probe turned
+# every later step into a no-verdict failure. --overlap lets the next step share those nodes, and
+# --time makes Slurm itself end a step whose client is gone. Both are needed: the first stops the
+# wait, the second stops the leak.
 step() {
     local name=$1 to=$2 args=() rc=0
     shift 2
     while [[ "$1" != "--" ]]; do args+=("$1"); shift; done
     shift
     echo "===== ${name} $(date +%T)"
-    timeout --signal=KILL "${to}" srun "${args[@]}" --environment="${EDF}" "$@" >"${WORK}/logs/${name}.log" 2>&1 ||
-        rc=$?
+    timeout --signal=KILL "${to}" srun --overlap --time="$(( to / 60 + 1 ))" "${args[@]}" --environment="${EDF}" "$@" \
+        >"${WORK}/logs/${name}.log" 2>&1 || rc=$?
     echo "${rc}" >"${WORK}/logs/${name}.rc"
     grep '^VERDICT' "${WORK}/logs/${name}.log" || echo "(no verdict, rc=${rc})"
 }
 
 B="${WORK}/bin"
-step 0-build__build 900 --nodes=1 --ntasks=1 --cpus-per-task=24 --nodelist="${NODES[0]}" -- \
+step 0-build__build 420 --nodes=1 --ntasks=1 --cpus-per-task=24 --nodelist="${NODES[0]}" -- \
     "${V}/verify.sh" build "${WORK}"
 
 # <tag> <nodes> <ranks>
@@ -76,16 +88,18 @@ run_set() {
     local tag=$1 nodes=$2 ranks=$3
     local launch=(--nodes="${nodes}" --ntasks="${ranks}" --ntasks-per-node=4 --cpus-per-task=24 --hint=nomultithread
         --mpi=pmi2 --kill-on-bad-exit=1)
-    step "${tag}__mpi_hello" 180 "${launch[@]}" -- "${B}/mpi_hello" "${ranks}" "${nodes}"
-    step "${tag}__gpuaware" 300 "${launch[@]}" -- env MPIR_CVAR_DEBUG_SUMMARY=1 "${B}/gpuaware"
-    step "${tag}__gpuaware_control" 180 "${launch[@]}" -- env MPIR_CVAR_ENABLE_GPU=0 "${B}/gpuaware" control
-    step "${tag}__gpu_initiated" 240 "${launch[@]}" -- env MPIR_CVAR_CH4_RESERVE_VCIS=1 "${B}/gpu_initiated"
-    step "${tag}__rccl" 300 "${launch[@]}" -- env NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET "${B}/rccl_allreduce"
+    step "${tag}__mpi_hello" 120 "${launch[@]}" -- "${B}/mpi_hello" "${ranks}" "${nodes}"
+    step "${tag}__gpuaware" 200 "${launch[@]}" -- env MPIR_CVAR_DEBUG_SUMMARY=1 "${B}/gpuaware"
+    step "${tag}__gpuaware_control" 90 "${launch[@]}" -- env MPIR_CVAR_ENABLE_GPU=0 "${B}/gpuaware" control
+    step "${tag}__gpu_initiated" 150 "${launch[@]}" -- env MPIR_CVAR_CH4_RESERVE_VCIS=1 "${B}/gpu_initiated"
+    step "${tag}__gpuaware_noipc" 200 "${launch[@]}" -- env MPIR_CVAR_CH4_IPC_GPU_P2P_THRESHOLD=1073741824 \
+        "${B}/gpuaware"
+    step "${tag}__rccl" 200 "${launch[@]}" -- env NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET "${B}/rccl_allreduce"
 }
 run_set A-1n4r 1 4
 run_set B-2n8r 2 8
 
-step C-nested__nested 480 --nodes=1 --ntasks=1 --cpus-per-task=24 --nodelist="${NODES[0]}" -- \
+step C-nested__nested 300 --nodes=1 --ntasks=1 --cpus-per-task=24 --nodelist="${NODES[0]}" -- \
     "${V}/verify.sh" nested "${WORK}" "${EDF}"
 
 echo
