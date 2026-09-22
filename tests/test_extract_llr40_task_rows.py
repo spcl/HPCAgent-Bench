@@ -356,7 +356,7 @@ def write_record(worker_dir: pathlib.Path, fold: int | None, **fields: object) -
     (worker_dir / "tokens.json").write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def test_a_fold_2_record_is_read_instead_of_refolding_the_transcript(tmp_path: pathlib.Path) -> None:
+def test_a_fold_3_record_is_read_instead_of_refolding_the_transcript(tmp_path: pathlib.Path) -> None:
     """The record is where the task's numbers were computed -- by the driver with the transcript in
     front of it, or by the migration with a tokenizer available. Re-folding here reaches the server
     tiers only, so a task whose output was RETOKENIZED would come back out as "none" and lose the
@@ -365,7 +365,7 @@ def test_a_fold_2_record_is_read_instead_of_refolding_the_transcript(tmp_path: p
     write_worker(worker_dir, "arm-a.n0.p0.w0")
     write_record(
         worker_dir,
-        2,
+        3,
         tokens_effective=99_001,
         tokens_billed=99_002,
         attempts=3,
@@ -380,7 +380,23 @@ def test_a_fold_2_record_is_read_instead_of_refolding_the_transcript(tmp_path: p
     assert (row["output_source"], row["output_suspect"]) == ("retokenized", 1.0)
 
 
-def test_a_fold_2_record_carries_its_components_and_prices_the_provider_total_from_them(
+def test_a_fold_2_record_is_now_below_the_minimum_and_is_refolded(tmp_path: pathlib.Path) -> None:
+    """USER 2026-09-22: fold 2 never recovered a compaction request's own tokens
+    (``token_cost.fold_compaction_recovery``), so bumping ``MIN_RECORD_FOLD`` to 3 is what makes an
+    already-written fold-2 record stop being trusted and fall back to a fresh re-fold of its
+    transcript -- the same path :func:`test_a_worker_without_a_record_is_still_folded_from_its_transcript`
+    exercises for a directory with no record at all."""
+    worker_dir = tmp_path / "agents" / "node-0" / "problem-0-worker-0"
+    write_worker(worker_dir, "arm-a.n0.p0.w0")
+    write_record(worker_dir, 2, tokens_effective=99_001, tokens_billed=99_002, attempts=3)
+    identity = extract_llr40.JobIdentity({}, {})
+
+    row = extract_llr40.task_rows_for_job(tmp_path, "r", "j", "", frozenset(), identity)[0]
+
+    assert (row["tokens"], row["tokens_billed"], row["attempts"]) == (440, 400, 1), "folded, not read"
+
+
+def test_a_fold_3_record_carries_its_components_and_prices_the_provider_total_from_them(
     tmp_path: pathlib.Path,
 ) -> None:
     """The driver's record never wrote ``tokens_provider``, so it extracted blank; the components the
@@ -389,7 +405,7 @@ def test_a_fold_2_record_carries_its_components_and_prices_the_provider_total_fr
     write_worker(worker_dir, "arm-a.n0.p0.w0")
     write_record(
         worker_dir,
-        2,
+        3,
         tokens_effective=1_300,
         tokens_billed=99,
         attempts=1,
@@ -437,7 +453,7 @@ def test_output_source_output_suspect_and_tokens_billed_crashed_round_trip_throu
     is only worth anything once it has gone through :func:`extract_llr40.write_db` and back --
     ``NUMERIC_COLUMNS``/``sql_value`` retype a column on the way in, and a column dropped from
     ``OBSERVATION_FIELDS`` would silently vanish from the CREATE TABLE and every INSERT, with the
-    in-memory row dict (what ``test_a_fold_2_record_is_read_instead_of_refolding_the_transcript``
+    in-memory row dict (what ``test_a_fold_3_record_is_read_instead_of_refolding_the_transcript``
     checks) never showing the difference. This is the gap: those three columns had never been
     pushed through SQLite and read back before.
     """
@@ -445,7 +461,7 @@ def test_output_source_output_suspect_and_tokens_billed_crashed_round_trip_throu
     write_worker(worker_dir, "arm-a.n0.p0.w0")
     write_record(
         worker_dir,
-        2,
+        3,
         tokens_effective=99_001,
         tokens_billed=99_002,
         attempts=3,
@@ -486,7 +502,7 @@ def test_a_judge_row_carries_no_output_tier_of_its_own(tmp_path: pathlib.Path) -
 # ---------------------------------------------------------------------------------------------
 
 
-def reduced_worker(job_dir: pathlib.Path, node: int, problem: int, fold: int | None = 2) -> pathlib.Path:
+def reduced_worker(job_dir: pathlib.Path, node: int, problem: int, fold: int | None = 3) -> pathlib.Path:
     """A worker dir exactly as the reducer leaves it: ``tokens.json`` and nothing else."""
     worker_dir = job_dir / "agents" / f"node-{node}" / f"problem-{problem}-worker-{problem}"
     worker_dir.mkdir(parents=True)
@@ -563,9 +579,10 @@ def test_a_worker_nobody_can_name_is_counted_not_dropped_silently(tmp_path: path
     assert "no judge run id" in next(iter(missing))
 
 
-def test_a_reduced_worker_with_a_pre_fold_2_record_keeps_its_row_without_a_total(tmp_path: pathlib.Path) -> None:
-    """A record from the double-counting fold is never read for tokens (F8), and no transcript is
-    left to refold: the task row stays (the episode ran) with a blank total, and is counted."""
+def test_a_reduced_worker_with_a_pre_fold_3_record_keeps_its_row_without_a_total(tmp_path: pathlib.Path) -> None:
+    """A record from a fold below the minimum is never read for tokens (F8, and the compaction
+    recovery of fold 3), and no transcript is left to refold: the task row stays (the episode ran)
+    with a blank total, and is counted."""
     reduced_worker(tmp_path, node=0, problem=2, fold=None)
     missing: collections.Counter[str] = collections.Counter()
 
@@ -576,7 +593,7 @@ def test_a_reduced_worker_with_a_pre_fold_2_record_keeps_its_row_without_a_total
 
     assert len(rows) == 1
     assert (rows[0]["tokens"], rows[0]["tokens_billed"], rows[0]["attempts"]) == ("", "", "")
-    assert any("below fold 2" in piece for piece in missing)
+    assert any("below fold 3" in piece for piece in missing)
 
 
 def test_main_reports_every_missing_piece_and_keeps_the_reduced_workers_row(

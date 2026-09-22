@@ -192,8 +192,8 @@ def max_output_tokens() -> int:
 def context_length() -> int | None:
     """``$CONTEXT_LENGTH``, the window this model is SERVED with; ``None`` when the arm names none.
 
-    Per model, not common: the engine is started with it (``--context-length`` / ``--max-model-len``)
-    and the .env files carry it next to CLAUDE_AUTOCOMPACT."""
+    Per model, not common: the engine is started with it (``--context-length`` / ``--max-model-len``),
+    and ``agent_driver.served_context`` reads the same .env value to size the compaction trigger."""
     return positive_int(os.environ.get("CONTEXT_LENGTH", ""))
 
 

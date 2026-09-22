@@ -630,9 +630,10 @@ def test_the_container_tool_and_the_analysis_agree_on_the_overlap_rule(
 def test_a_compaction_charges_the_rebuilt_prompt_as_fresh_and_is_counted(
     token_cost: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """USER 2026-09-16: the claude arms compact under a CLAUDE_AUTOCOMPACT wall. After a compaction the
-    prompt is SHORTER than the previous one and shares no prefix with it -- a full cache miss -- so the
-    whole rebuilt prompt is fresh. The old fold charged it at zero (max(0, 400 - 1500))."""
+    """USER 2026-09-16: the claude arms compact proactively (agent_driver.claude_context_env). After a
+    compaction the prompt is SHORTER than the previous one and shares no prefix with it -- a full
+    cache miss -- so the whole rebuilt prompt is fresh. The old fold charged it at zero
+    (max(0, 400 - 1500))."""
     lines = [
         assistant_line("m1", 1000, 0),
         assistant_line("m2", 1500, 0),
@@ -649,3 +650,149 @@ def test_a_compaction_charges_the_rebuilt_prompt_as_fresh_and_is_counted(
     assert cost["effective"] == 1900 + 70
     assert token_cost.fold_prompt(400, 1500) == (400, 0, 1)
     assert token_cost.fold_prompt(1500, 1000) == (500, 1000, 0)
+
+
+# -------------------------------------------------------------------------------------------------
+# USER 2026-09-22: a proactive compaction's own REQUEST -- the call that reads the transcript and
+# asks for a summary -- never appears as an "assistant" stream event the way a normal turn's does.
+# Its tokens land only in the closing `result` event's `modelUsage` (claude-code's own
+# session-cumulative tally, camelCase, distinct from the `usage` block `result_line` above writes),
+# so every per-turn fold is blind to it unless a `compact_boundary` marker says to look there.
+# -------------------------------------------------------------------------------------------------
+
+
+def compact_boundary_line() -> str:
+    """claude-code's own system event marking that it just ran a proactive compaction."""
+    return json.dumps({"type": "system", "subtype": "compact_boundary"})
+
+
+def result_line_with_model_usage(output_tokens: int, model_usage: dict[str, dict[str, int]]) -> str:
+    """The claude ``result`` event, carrying claude-code's own session-cumulative ``modelUsage``
+    beside the ``usage`` block :func:`result_line` writes."""
+    return json.dumps({"type": "result", "usage": {"output_tokens": output_tokens}, "modelUsage": model_usage})
+
+
+#: Two real turns (input only, as these endpoints report output_tokens: 0 on every per-turn event),
+#: a compaction, and a result whose modelUsage totals 7500 input + 270 output -- 5000 input and 200
+#: output more than the two visible turns (2500) and the result's own output (70) account for. That
+#: 5000/200 gap is the compaction request's own tokens: never sent as a turn, so it is invisible to
+#: every fold below unless the compact_boundary marker recovers it from modelUsage.
+COMPACTED_LINES = [
+    assistant_line("m1", 1000, 0),
+    assistant_line("m2", 1500, 0),
+    compact_boundary_line(),
+    result_line_with_model_usage(
+        70,
+        {
+            "hpcagent-bench-llm": {
+                "inputTokens": 7500,
+                "cacheCreationInputTokens": 0,
+                "cacheReadInputTokens": 0,
+                "outputTokens": 270,
+            }
+        },
+    ),
+]
+
+
+def test_a_compaction_requests_own_tokens_are_recovered_once_in_the_effective_fold(
+    token_cost: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """``events_cost`` (``episode_cost``, what ``AGENT_MAX_TOKENS`` and the extractor's ``effective``
+    both trace back to): the missing 5000 input is charged as fresh -- a full cache miss, like the
+    rebuilt prompt's own rule -- and the missing 200 output added to the result tier's 70."""
+    log = tmp_path / "claude.log"
+    log.write_text("\n".join(COMPACTED_LINES) + "\n", encoding="utf-8")
+
+    cost = token_cost.episode_cost(log)
+
+    # Two real turns: fresh 1000 (turn 1) + 500 (turn 2's growth over turn 1) = 1500, cached 1000.
+    # Plus the compaction's own missing input (5000), charged entirely as fresh.
+    assert (cost["fresh_input"], cost["cached_input"]) == (1500 + 5000, 1000)
+    assert cost["output"] == 70 + 200
+    assert cost["naive_total"] == 7500 + 2500 + 270 - 2500  # == fresh + cached + output, spelled out below
+    assert cost["naive_total"] == (1500 + 5000) + 1000 + (70 + 200)
+    assert cost["effective"] == (1500 + 5000) + (70 + 200)
+
+
+def test_a_compaction_requests_own_tokens_are_recovered_once_in_the_billed_fold(
+    token_cost: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """``accumulate_total_tokens`` (what the live ``AGENT_MAX_TOKENS`` watcher sums and
+    ``transcript_total_tokens`` writes into ``tokens.json``) recovers the SAME gap under a synthetic
+    message id, so the billed total picks up the compaction's tokens exactly once too."""
+    total_by_message: dict[str, int] = {}
+
+    total = token_cost.accumulate_total_tokens(COMPACTED_LINES, total_by_message)
+
+    assert total == 1000 + 1500 + (7500 + 270 - 2500)
+    assert total_by_message[token_cost.COMPACTION_MESSAGE_ID] == 7500 + 270 - 2500
+    # The billed and effective folds agree: both are "everything, once" with no cache discount.
+    cost = token_cost.episode_cost(tmp_path_log(tmp_path, COMPACTED_LINES))
+    assert total == cost["naive_total"]
+
+
+def test_refolding_the_same_lines_does_not_double_the_recovered_tokens(token_cost: ModuleType) -> None:
+    """A re-fold over lines this dict has already seen -- the driver's whole-file re-read after a
+    live-watched run, or a second migration pass -- must not add the recovery twice: the synthetic
+    id is "last write wins", exactly like every real message id."""
+    total_by_message: dict[str, int] = {}
+    once = token_cost.accumulate_total_tokens(COMPACTED_LINES, total_by_message)
+    twice = token_cost.accumulate_total_tokens(COMPACTED_LINES, total_by_message)
+
+    assert once == twice
+
+
+def test_the_compact_boundary_and_the_result_may_arrive_in_separate_polls(token_cost: ModuleType) -> None:
+    """The live budget watcher hands this fold one new BATCH of lines per poll, never the whole file
+    at once -- the compact_boundary marker is typically consumed calls before the transcript's
+    closing result line even exists. The sentinel that says "a compaction happened" has to survive
+    across those calls for the recovery to ever fire."""
+    total_by_message: dict[str, int] = {}
+    token_cost.accumulate_total_tokens(COMPACTED_LINES[:3], total_by_message)  # up to compact_boundary
+    assert token_cost.COMPACTION_MESSAGE_ID not in total_by_message, "nothing to recover yet"
+
+    total = token_cost.accumulate_total_tokens(COMPACTED_LINES[3:], total_by_message)  # the result, later
+
+    assert total == 1000 + 1500 + (7500 + 270 - 2500)
+
+
+def test_modelusage_noise_without_a_compaction_is_never_mistaken_for_one(
+    token_cost: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """An UNCOMPACTED episode's modelUsage can disagree with the per-turn fold by measurement noise
+    alone (~10%, ``token_report.py``'s own docstring) -- without a compact_boundary that noise must
+    never be charged as a compaction's tokens, in either fold."""
+    lines = [
+        assistant_line("m1", 1000, 0),
+        assistant_line("m2", 1500, 0),
+        result_line_with_model_usage(
+            70,
+            {
+                "hpcagent-bench-llm": {
+                    "inputTokens": 7500,
+                    "cacheCreationInputTokens": 0,
+                    "cacheReadInputTokens": 0,
+                    "outputTokens": 270,
+                }
+            },
+        ),
+    ]
+    log = tmp_path / "claude.log"
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    cost = token_cost.episode_cost(log)
+    assert (cost["fresh_input"], cost["cached_input"], cost["output"]) == (1500, 1000, 70)
+
+    total_by_message: dict[str, int] = {}
+    total = token_cost.accumulate_total_tokens(lines, total_by_message)
+    assert total == 1000 + 1500
+    assert token_cost.COMPACTION_MESSAGE_ID not in total_by_message
+
+
+def tmp_path_log(tmp_path: pathlib.Path, lines: list[str]) -> pathlib.Path:
+    """A throwaway ``claude.log`` under ``tmp_path`` holding ``lines``, for a test that needs both
+    folds over the same transcript without redeclaring the write-and-join boilerplate."""
+    log = tmp_path / "compare.log"
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return log

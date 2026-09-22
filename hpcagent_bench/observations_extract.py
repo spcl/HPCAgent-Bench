@@ -661,13 +661,14 @@ def task_totals_by_dir(job_dirs: list[pathlib.Path], workers: int) -> dict[pathl
         return dict(zip(dirs, pool.map(fold, dirs, chunksize=4), strict=True))
 
 
-#: The fold that wrote a ``tokens.json``. From 2 on the record carries the output precedence (T9)
-#: and is the ONE place the task's numbers were computed, by the driver at task end or by
-#: ``scripts/migrate_tokens.py`` afterwards. Below it -- or absent -- the record predates the
-#: precedence and is ignored in favour of folding the transcripts here.
-MIN_RECORD_FOLD = 2
+#: The fold that wrote a ``tokens.json``. From 3 on the record carries the output precedence (T9)
+#: and recovers a compaction request's own tokens (``token_cost.fold_compaction_recovery``, USER
+#: 2026-09-22), and is the ONE place the task's numbers were computed, by the driver at task end or
+#: by ``scripts/migrate_tokens.py`` afterwards. Below it -- or absent -- the record predates one of
+#: those and is ignored in favour of folding the transcripts here.
+MIN_RECORD_FOLD = 3
 
-#: What a fold-2 record is read for, as ``(row column, record key)``. ``tokens`` is the FINAL
+#: What a fold-3 record is read for, as ``(row column, record key)``. ``tokens`` is the FINAL
 #: attempt's total (T2, T5); the crashed attempts' spend and the final attempt's start ride beside it.
 RECORD_COLUMNS: tuple[tuple[str, str], ...] = (
     ("tokens", "tokens_effective"),
@@ -693,7 +694,7 @@ RECORD_COLUMNS: tuple[tuple[str, str], ...] = (
 def record_provider_tokens(record: dict[str, Any], stated: object) -> object:
     """A record's provider-priced total: the one it states, else priced from its own components.
 
-    The driver's ``tokens.json`` has never written ``tokens_provider``, so every fold-2 record
+    The driver's ``tokens.json`` has never written ``tokens_provider``, so every fold-3 record
     extracted a blank; its ``fresh_input``/``cached_input``/``output`` are the final attempt's, and the
     fold's own ``PROVIDER_CACHE_DISCOUNT`` prices them exactly as ``task_totals`` would."""
     if stated not in ("", None):
@@ -706,7 +707,7 @@ def record_provider_tokens(record: dict[str, Any], stated: object) -> object:
 
 
 def cost_record(worker_dir: pathlib.Path) -> dict[str, Any] | None:
-    """This worker's ``tokens.json`` when it was written by fold 2 or later, else None.
+    """This worker's ``tokens.json`` when it was written by fold 3 or later, else None.
 
     PREFERRED OVER RE-FOLDING, and not as an optimisation. The record is what the driver computed
     with the transcript in front of it, or what the migration computed with a tokenizer available;
@@ -765,7 +766,7 @@ def task_rows_for_job(
         node, problem, worker = agent_indices(run_id)
         record = cost_record(worker_dir)
         if record is None and not names_its_run(worker_dir):
-            tally["tokens.json below fold 2 and no transcript left (row, no token total)"] += 1
+            tally["tokens.json below fold 3 and no transcript left (row, no token total)"] += 1
             counts: dict[str, Any] = {column: "" for column, _ in RECORD_COLUMNS}
         elif record is None:
             task = totals[worker_dir] if totals is not None else token_cost_module().task_totals(worker_dir)
@@ -782,7 +783,7 @@ def task_rows_for_job(
                 "final_attempt_start_ms": task.final_attempt_start_ms,
             }
             if task.tokens_effective is None:
-                tally["no fold-2 tokens.json and the transcript fold found no usage (row, no token total)"] += 1
+                tally["no fold-3 tokens.json and the transcript fold found no usage (row, no token total)"] += 1
         else:
             counts = {column: record.get(key, "") for column, key in RECORD_COLUMNS}
             counts["tokens_provider"] = record_provider_tokens(record, counts["tokens_provider"])

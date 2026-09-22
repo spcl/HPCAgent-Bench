@@ -219,7 +219,7 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
     kept_worker = runs_root / "200" / "agents" / "node-0" / "problem-0-worker-0"
     kept_worker.mkdir(parents=True)
     kept_worker.joinpath("tokens.json").write_text(
-        json.dumps({"kernel": "loop_level_reasoning/c/c", "token_fold": 2, "tokens_effective": 7}), encoding="utf-8"
+        json.dumps({"kernel": "loop_level_reasoning/c/c", "token_fold": 3, "tokens_effective": 7}), encoding="utf-8"
     )
     # a full worker dir: its live row wins over the frozen one
     kept_worker.joinpath("prompt.txt").write_text("Optimize benchmark kernel x/c/c.", encoding="utf-8")
@@ -229,7 +229,7 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
     cut_worker = runs_root / "200" / "agents" / "node-0" / "problem-2-worker-2"  # cut to tokens.json after the snapshot
     cut_worker.mkdir(parents=True)
     cut_worker.joinpath("tokens.json").write_text(
-        json.dumps({"kernel": "loop_level_reasoning/d/d", "token_fold": 2, "tokens_effective": 3}), encoding="utf-8"
+        json.dumps({"kernel": "loop_level_reasoning/d/d", "token_fold": 3, "tokens_effective": 3}), encoding="utf-8"
     )
     gone_worker = runs_root / "200" / "agents" / "node-0" / "problem-1-worker-1"  # removed after the snapshot
     task_p0 = {**frozen_row("200", "task", "c"), "tokens": "999", "db": str(kept_worker)}

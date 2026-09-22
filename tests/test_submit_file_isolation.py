@@ -173,8 +173,7 @@ def test_an_empty_queue_passes_through(tmp_path: pathlib.Path) -> None:
 
 
 def run_finalize_probe(tmp_path: pathlib.Path, staged_body: str, env_name: str) -> subprocess.CompletedProcess[str]:
-    """Source submit_common.sh and call finalize_staged_env on a hand-written staged file, with
-    check_context_budget stubbed out (it needs a token budget it has no business asking here)."""
+    """Source submit_common.sh and call finalize_staged_env on a hand-written staged file."""
     staged = tmp_path / "staged.env.staging"
     staged.write_text(staged_body)
     env = tmp_path / env_name
@@ -182,7 +181,6 @@ def run_finalize_probe(tmp_path: pathlib.Path, staged_body: str, env_name: str) 
     probe.write_text(
         "set -eu\n"
         f". {EXPERIMENTS / 'submit_common.sh'}\n"
-        "check_context_budget() { return 0; }\n"
         f'finalize_staged_env "{staged}" "{env}"\n'
         'echo "finalize_staged_env returned $?"\n'
     )

@@ -57,7 +57,6 @@ while IFS= read -r key; do unsets+=(-u "${key}"); done < <("${PY}" ./owed_wave.p
 
 while IFS=$'\t' read -r name env nodes walltime; do
     [[ -n "${name}" ]] || continue
-    check_context_budget "${env}" || exit 2
     if [[ "${SUBMIT:-0}" != 1 ]]; then
         echo "prepared ${name} (${nodes} nodes, --time ${walltime}) -- not submitted: ${env}"
         continue

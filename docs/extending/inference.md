@@ -35,7 +35,6 @@ EFFORT_LADDER="low medium xhigh"
 VLLM_MODEL=Qwen/Qwen3.8-27B-FP8
 VLLM_SERVED_MODEL=hpcagent-bench-vllm
 HPCAGENT_BENCH_OPTIMIZER=Qwen/Qwen3.8-27B-FP8
-CLAUDE_AUTOCOMPACT=200144
 INFERENCE_ENGINE=sglang
 SGLANG_EXTRA_ARGS="--chat-template ${SCRIPT_DIR}/chat-template-qwen38.jinja --trust-remote-code --context-length 262144 --mem-fraction-static <measured> --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-metrics"
 ```
@@ -50,7 +49,10 @@ SGLANG_EXTRA_ARGS="--chat-template ${SCRIPT_DIR}/chat-template-qwen38.jinja --tr
 | `SGLANG_ATTENTION_BACKEND` | `run_vllm_node` | absent appends `--attention-backend aiter`; assigned empty omits it |
 | `HPCAGENT_BENCH_OPTIMIZER` | `tests/test_display_names.py` | the checkpoint id; must equal the registry `serves:` |
 | `EFFORT_LADDER` | `effort.py`, from `run_cluster.sh` and `harnesses.py` | the rungs THIS server accepts, lowest first; empty for a model with no ladder. The launcher resolves `AGENT_EFFORT` from it (`AGENT_EFFORT_POLICY=max`: xhigh where the ladder has it, else its top rung, else no field) and a client that types fewer rungs gets the top one it can spell |
-| `CLAUDE_AUTOCOMPACT` | `arm_nodes.sh` `check_context_budget` | at most context - 32000 - 30000 |
+
+Compaction needs no key of its own: `agent_driver.claude_context_env` reads `CONTEXT_LENGTH` /
+`--context-length` / `--max-model-len` off the same env (`agent_driver.served_context`) and computes
+the trigger itself, capped at 262144. See [`docs/token_accounting.md`](../token_accounting.md#context-compaction).
 
 Model files such as a chat template sit in `experiments/`, named through `${SCRIPT_DIR}`, which
 `run_cluster.sh` sets before sourcing the env and mounts into the inference container. For a
@@ -83,7 +85,7 @@ vLLM, `smoke-kimi-eager-pg.sbatch` takes `MODEL_REPO`, `TOOL_PARSER`, `REASONING
 **5. Name it in the launchers.** `submit-cpf-llr40.sh` reads `.env.base-${model}`, so `MODELS=<tag>`
 is enough. `submit-gpu-llr40.sh`, `submit-scicomp-dc.sh`, `submit-git-scicomp.sh` (`BASE_ENV`) and
 `submit-llrblind.sh` (`MAX_TOKENS_BY_MODEL`, `.env.llrbase-<tag>-<lang>`) keep their own per-model
-maps. Each runs `check_context_budget`, which refuses an arm before it is submitted.
+maps.
 
 **In-process and API models.** The Python harness ignores these env files. An OpenAI-shaped endpoint
 is one `ModelSpec` entry in `MODELS` (`hpcagent_bench/harness/baselines.py`): `backend="openai"`,

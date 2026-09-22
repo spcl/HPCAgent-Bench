@@ -177,10 +177,38 @@ def usage_total(usage: dict[str, object]) -> int | None:
 
 
 #: Substrings every event a token fold reads must contain: an ``assistant`` turn, the ``result``
-#: record, a ``thinking_tokens`` delta. A line with none of them -- a tool result or a user turn, most
-#: of a transcript's bytes -- is skipped without being decoded; a line that only mentions one is
-#: decoded and then rejected by its type, so the filter saves work and changes no total.
-USAGE_EVENT_MARKERS: tuple[str, ...] = ('"assistant"', '"result"', "thinking_tokens", "message_delta")
+#: record, a ``thinking_tokens`` delta, a proactive ``compact_boundary``. A line with none of them --
+#: a tool result or a user turn, most of a transcript's bytes -- is skipped without being decoded; a
+#: line that only mentions one is decoded and then rejected by its type, so the filter saves work and
+#: changes no total.
+USAGE_EVENT_MARKERS: tuple[str, ...] = (
+    '"assistant"',
+    '"result"',
+    "thinking_tokens",
+    "message_delta",
+    "compact_boundary",
+)
+
+#: claude-code's own system event marking a PROACTIVE compaction (2.1.197, claude_context_env in
+#: agent_driver.py): the CLI replaced the transcript with a request for a summary. USER 2026-09-22,
+#: measured: that request's own tokens never appear as an "assistant" stream event the way a normal
+#: turn's do -- only the session-cumulative ``result.modelUsage`` (below) includes them, so every
+#: fold that sums per-turn "assistant" usage undercounts by exactly one such call per compaction.
+COMPACT_BOUNDARY_SUBTYPE = "compact_boundary"
+
+#: Synthetic message id the recovered compaction tokens are filed under in a ``{message id: tokens}``
+#: fold -- never a real one, which the CLI mints as ``msg_...``. "Last write wins" (the same rule
+#: every real message id folds under) makes a later re-fold of the same lines OVERWRITE this entry
+#: rather than add to it, so the recovery is counted once no matter how many times the transcript is
+#: re-read.
+COMPACTION_MESSAGE_ID = "compaction-recovery"
+
+#: Sentinel key marking that a :data:`COMPACT_BOUNDARY_SUBTYPE` event has been seen in a ``{message
+#: id: tokens}`` fold carried across incremental calls (the live budget watcher hands this function
+#: one new batch of lines per poll, never the whole file at once) -- excluded from every total, kept
+#: only so a LATER call, once the transcript's closing ``result`` line finally exists, still knows a
+#: compaction happened even though the ``compact_boundary`` line itself was folded calls ago.
+COMPACTION_SEEN_KEY = "compaction-boundary-seen"
 
 #: What produced an attempt's ``output``, best first (8.2). ``message_delta`` is the server's own
 #: per-REQUEST count and the only exact one a killed episode leaves; ``result`` is the server's
@@ -298,13 +326,79 @@ def fold_billed_event(event: dict[str, object], total_by_message: dict[str, int]
         total_by_message[message_id] = total
 
 
+def is_compact_boundary(event: dict[str, object]) -> bool:
+    """Whether ``event`` is the claude CLI's own marker that it just ran a proactive compaction."""
+    return event.get("type") == "system" and event.get("subtype") == COMPACT_BOUNDARY_SUBTYPE
+
+
+def model_usage_totals(event: dict[str, object]) -> tuple[int, int]:
+    """Summed ``(input, output)`` over every model in a ``result`` event's ``modelUsage``.
+
+    ``modelUsage`` is claude-code's OWN running tally of every request it made this session
+    (camelCase, distinct from the Anthropic-shaped ``usage`` block the same event carries), and --
+    unlike the per-turn ``assistant`` events :func:`fold_billed_event` and :func:`events_cost` fold --
+    it includes a compaction request, which the CLI never echoes back as an ``assistant`` event of
+    its own. ``input`` folds in both cache fields, matching :data:`INPUT_FIELDS`'s per-turn reading.
+    ``(0, 0)`` when the event carries no ``modelUsage``, which a caller reads as "nothing to recover".
+    """
+    input_total = output_total = 0
+    for per_model in as_block(event.get("modelUsage")).values():
+        model = as_block(per_model)
+        input_total += int(model.get("inputTokens") or 0)
+        input_total += int(model.get("cacheCreationInputTokens") or 0)
+        input_total += int(model.get("cacheReadInputTokens") or 0)
+        output_total += int(model.get("outputTokens") or 0)
+    return input_total, output_total
+
+
+def fold_compaction_recovery(event: dict[str, object], total_by_message: dict[str, int]) -> None:
+    """Recover a compaction request's tokens into a billed ``{message id: tokens}`` fold.
+
+    Two markers, and both are needed: :data:`COMPACT_BOUNDARY_SUBTYPE` says a compaction happened,
+    ``result.modelUsage`` is the only place its tokens are ever reported (:func:`model_usage_totals`).
+    They can arrive in the SAME call (:func:`episode_cost`'s one-shot re-read of a finished
+    transcript) or across separate ones (the live budget watcher hands this fold one new batch of
+    lines per poll) -- :data:`COMPACTION_SEEN_KEY` is carried IN ``total_by_message`` so either order
+    works, and is excluded from every total a caller sums from it.
+
+    Filed under :data:`COMPACTION_MESSAGE_ID`, the same "last write wins" rule every real message id
+    folds under: a later call over the same lines (the driver's final whole-file re-read after a
+    live-watched run) overwrites this entry rather than adding to it, so a compaction is billed once
+    no matter how many times the transcript is refolded.
+    """
+    if is_compact_boundary(event):
+        total_by_message[COMPACTION_SEEN_KEY] = 1
+        return
+    if event.get("type") != "result" or not total_by_message.get(COMPACTION_SEEN_KEY):
+        return
+    model_input, model_output = model_usage_totals(event)
+    if model_input == 0 and model_output == 0:
+        return  # a result record with no modelUsage at all -- nothing to reconcile against
+    folded = sum(
+        value for key, value in total_by_message.items() if key not in (COMPACTION_MESSAGE_ID, COMPACTION_SEEN_KEY)
+    )
+    total_by_message[COMPACTION_MESSAGE_ID] = max(0, model_input + model_output - folded)
+
+
+def billed_total(total_by_message: dict[str, int]) -> int:
+    """The billed sum of a ``{message id: tokens}`` fold, excluding the bookkeeping sentinel."""
+    return sum(value for key, value in total_by_message.items() if key != COMPACTION_SEEN_KEY)
+
+
 def accumulate_total_tokens(lines: list[str], total_by_message: dict[str, int]) -> int:
-    """Fold stream-json transcript lines into {message id: billed tokens}; return the running total."""
+    """Fold stream-json transcript lines into {message id: billed tokens}; return the running total.
+
+    A compaction's own tokens are recovered too (:func:`fold_compaction_recovery`) once its
+    ``compact_boundary`` marker and the transcript's closing ``result.modelUsage`` have both been
+    seen, in this call or an earlier one.
+    """
     for line in lines:
         event = usage_event(line)
-        if event is not None:
-            fold_billed_event(event, total_by_message)
-    return sum(total_by_message.values())
+        if event is None:
+            continue
+        fold_compaction_recovery(event, total_by_message)
+        fold_billed_event(event, total_by_message)
+    return billed_total(total_by_message)
 
 
 def overlapping_usage_line(path: pathlib.Path) -> bool:
@@ -341,11 +435,14 @@ def fold_prompt(prompt: int, previous: int) -> tuple[int, int, int]:
     """One call's ``(fresh, cached, compacted)`` under the perfect-prefix model.
 
     A transcript only grows, so the fresh part of call N is what exceeds call N-1 and the rest was
-    served from cache. A prompt SHORTER than the previous one is a context compaction (the claude
-    arms run with a ``CLAUDE_AUTOCOMPACT`` wall): the transcript was replaced by a summary, so the
-    rebuilt prompt shares no prefix with the last one and is a full cache miss -- the whole prompt is
-    fresh, nothing is cached, and the event is counted so a task can say how often it compacted.
-    Without this rule a compaction charged the rebuilt prompt at zero (fresh = max(0, negative)).
+    served from cache. A prompt SHORTER than the previous one is a context compaction (claude-code
+    2.1.197 proactively compacts before a served window overflows, ``agent_driver.claude_context_env``):
+    the transcript was replaced by a summary, so the rebuilt prompt shares no prefix with the last
+    one and is a full cache miss -- the whole prompt is fresh, nothing is cached, and the event is
+    counted so a task can say how often it compacted. Without this rule a compaction charged the
+    rebuilt prompt at zero (fresh = max(0, negative)). This is the REBUILT prompt's own charge, not
+    the compaction REQUEST's -- that one is recovered separately (:func:`fold_compaction_recovery`,
+    the ``events_cost`` addendum beside it), since it never appears as a turn this fold ever sees.
     """
     if prompt < previous:
         return prompt, 0, 1
@@ -460,7 +557,12 @@ def events_cost(events: list[dict[str, object]], output_counter: OutputCounter |
     deltas: dict[str, list[int]] = {}
     current = ""
     wall_ms = api_ms = 0
+    compacted_by_cli = False
+    model_usage_event: dict[str, object] | None = None
     for event in events:
+        if is_compact_boundary(event):
+            compacted_by_cli = True
+            continue
         if event.get("subtype") == "thinking_tokens":
             thinking += int(event.get("estimated_tokens_delta") or 0)
             continue
@@ -486,6 +588,12 @@ def events_cost(events: list[dict[str, object]], output_counter: OutputCounter |
             reported = True
             wall_ms = max(wall_ms, int(event.get("duration_ms") or 0))
             api_ms = max(api_ms, int(event.get("duration_api_ms") or 0))
+            if as_block(event.get("modelUsage")):
+                # The session-cumulative reading (:func:`model_usage_totals`), consulted below only
+                # when a compact_boundary marked a compaction happened -- an ordinary episode's
+                # modelUsage disagrees with the per-turn fold by measurement noise alone (~10%,
+                # token_report.py), and that noise must not be mistaken for a compaction's tokens.
+                model_usage_event = event
             continue
         if event.get("type") != "assistant":
             continue
@@ -511,6 +619,14 @@ def events_cost(events: list[dict[str, object]], output_counter: OutputCounter |
         compactions += compacted
         previous_input = turn_input
     output, source, shape, suspect = resolve_output(deltas, output_total if reported else None, events, output_counter)
+    if compacted_by_cli and model_usage_event is not None:
+        # The compaction request's own tokens (:func:`model_usage_totals`), missing from every turn
+        # folded above -- charged as a full cache miss, the same rule already applied to the REBUILT
+        # prompt the next visible turn opens with (:func:`fold_prompt`): nothing here shares a prefix
+        # with anything this fold has already priced.
+        model_input, model_output = model_usage_totals(model_usage_event)
+        fresh += max(0, model_input - (fresh + cached))
+        output += max(0, model_output - output)
     return {
         "turns": len(order),
         "fresh_input": fresh,
@@ -653,22 +769,24 @@ class AttemptTotals(NamedTuple):
 def attempt_totals(log: pathlib.Path, output_counter: OutputCounter | None = None) -> AttemptTotals:
     """One attempt's effective, provider and billed tokens (8.1) and their components, from ONE read of its transcript: the
     effective cost model of :func:`events_cost` and the last-usage-per-message-id fold of
-    :func:`fold_billed_event` over the same parsed events. Each attempt folds fresh, since the driver
-    starts every attempt with a new transcript (no message id repeats across attempts)."""
+    :func:`fold_billed_event` (plus :func:`fold_compaction_recovery`, the same as
+    :func:`accumulate_total_tokens`) over the same parsed events. Each attempt folds fresh, since the
+    driver starts every attempt with a new transcript (no message id repeats across attempts)."""
     if is_usage_transcript(log):
         cost = usage_episode_cost(log)
-        billed_total = int(cast("float", cost["naive_total"]))
+        billed = int(cast("float", cost["naive_total"]))
     else:
         events = claude_events(log)
-        billed: dict[str, int] = {}
+        billed_by_message: dict[str, int] = {}
         for event in events:
-            fold_billed_event(event, billed)
+            fold_compaction_recovery(event, billed_by_message)
+            fold_billed_event(event, billed_by_message)
         cost = events_cost(events, output_counter)
-        billed_total = sum(billed.values())
+        billed = billed_total(billed_by_message)
     return AttemptTotals(
         int(cast("float", cost["effective"])),
         int(cast("float", cost["effective_provider"])),
-        billed_total,
+        billed,
         int(cast("float", cost["fresh_input"])),
         int(cast("float", cost["cached_input"])),
         int(cast("float", cost["output"])),

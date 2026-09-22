@@ -3,8 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Shared submit-*.sh plumbing: stage a base env, then either report what would run (SUBMIT=0) or
 # submit it as beverin.sbatch's CLUSTER_ENV_FILE. Sourced, not executed. Callers also source
-# arm_nodes.sh (arm_nodes/check_context_budget/arm_walltime) and pin_env_kv.sh: this file assumes
-# both are already in scope.
+# arm_nodes.sh (arm_nodes/arm_walltime) and pin_env_kv.sh: both are already in scope.
 
 # The Slurm account, resolved ONCE from the user's own associations. beverin refuses a job without
 # one, and no submitter may spell one (tests/test_materialize_shared.py), so a submitter that never
@@ -319,12 +318,10 @@ refuse_unfiltered_snapshot_problems() {
 }
 
 # finalize_staged_env <staged> <env>
-# The context-budget gate every arm needs before it becomes real: refuse rather than discover the
-# overrun hours in as an API error. Renames only on success, so a bailed gate leaves neither a
-# staged nor a final file lying around looking complete.
+# The last gate an arm needs before it becomes real. Renames only on success, so a bailed gate
+# leaves neither a staged nor a final file lying around looking complete.
 finalize_staged_env() {
     local staged="$1" env="$2"
-    check_context_budget "${staged}" || { rm -f "${staged}"; return 2; }
     refuse_unfiltered_snapshot_problems "${staged}" "${env}" || { rm -f "${staged}"; return 2; }
     mv -- "${staged}" "${env}"
 }

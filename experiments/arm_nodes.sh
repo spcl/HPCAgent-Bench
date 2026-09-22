@@ -33,25 +33,8 @@ arm_walltime() {
     printf '%02d:00:00\n' "${hours}"
 }
 
-# The completion the client reserves on every request, and what one turn can add on top of it: a
-# compiler log or an asm dump fills tens of thousands of tokens by itself.
-COMPLETION_RESERVE=${COMPLETION_RESERVE:-32000}
-TURN_HEADROOM=${TURN_HEADROOM:-30000}
-
-# check_context_budget <env-file>
-# An agent 400s and the arm records NOTHING once input + completion passes the served context, so
-# the compaction threshold has to sit that far below it. Refuses rather than warns: the failure
-# costs a whole arm and only shows up hours in, as an API error in one transcript.
-check_context_budget() {
-    local env_file="$1" compact context margin
-    [[ -s "${env_file}" ]] || { echo "check_context_budget: missing env file ${env_file}" >&2; return 2; }
-    compact="$(grep -oP '^CLAUDE_AUTOCOMPACT=\K[0-9]+' "${env_file}" || true)"
-    context="$(grep -oP '(--context-length|--max-model-len)[= ]\K[0-9]+' "${env_file}" | head -1 || true)"
-    [[ -n "${compact}" && -n "${context}" ]] || return 0
-    margin=$(( context - COMPLETION_RESERVE - compact ))
-    if (( margin < TURN_HEADROOM )); then
-        echo "${env_file}: CLAUDE_AUTOCOMPACT=${compact} leaves ${margin} tokens under a ${context} context;" >&2
-        echo "  needs <= $(( context - COMPLETION_RESERVE - TURN_HEADROOM )) so one turn cannot overrun it" >&2
-        return 1
-    fi
-}
+# check_context_budget and its CLAUDE_AUTOCOMPACT env-file key are GONE (USER 2026-09-22):
+# claude-code 2.1.197 never read the --autocompact flag this validated (no such CLI option), and
+# agent_driver.claude_context_env now computes the compaction trigger itself from the served window
+# it actually observes, so no .env-declared number can be wrong by construction. See
+# docs/token_accounting.md#context-compaction.

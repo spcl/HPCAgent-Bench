@@ -52,6 +52,12 @@ never compacted (300 of 300 episodes) until the driver named the window and the 
 (agent_driver.claude_context_env, tests/test_agent_driver_claude_context.py); the golden env names
 no window, so the values are the 262144 policy cap's. The flag was never on a recorded argv: 2.1.197
 has no such option, so claude_supports_flag dropped it on every arm. Nothing else in the capture moved.
+
+A SEVENTH DELIBERATE EXCEPTION, 2026-09-22: ``closings.json``'s ``token_fold`` moved 2 -> 3 in all
+five scenarios, and nothing else in any of them moved. Fold 3 recovers a compaction request's own
+tokens from ``result.modelUsage`` (``token_cost.fold_compaction_recovery``); none of these five
+canned transcripts carries a ``compact_boundary``, so every number the fold computes is unchanged --
+only the version it stamps the record with is.
 """
 
 import importlib.util

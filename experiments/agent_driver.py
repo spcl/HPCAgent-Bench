@@ -469,8 +469,9 @@ AGENT_EFFORT = os.environ.get("AGENT_EFFORT", "xhigh").strip()
 
 #: Environment the SUBMITTER's Claude Code session exports and the agent's must not inherit: these
 #: name that session's socket, entrypoint and effort, none of which describe the agent. Deny-list
-#: rather than a CLAUDE_* sweep, because CLAUDE_BIN / CLAUDE_MODEL / CLAUDE_MAX_TURNS /
-#: CLAUDE_AUTOCOMPACT are the campaign's own knobs and the .env files set them.
+#: rather than a CLAUDE_* sweep, because CLAUDE_BIN / CLAUDE_MODEL / CLAUDE_MAX_TURNS are the
+#: campaign's own knobs and the .env files set them (the context-window knobs are computed by
+#: claude_context_env, not read from the .env).
 AGENT_ENV_DENYLIST = (
     "AI_AGENT",
     "CLAUDECODE",
@@ -1474,8 +1475,13 @@ def task_token_totals(
 
 
 #: The token fold a cost record was computed with (docs 8.2 T7-T12). The extractor reads a record
-#: only from fold 2 on and re-folds older ones; the migration stamps the same number.
-TOKEN_FOLD = 2
+#: only from fold 3 on and re-folds older ones; the migration stamps the same number.
+#:
+#: 3 (USER 2026-09-22): fold 2's records never recovered a compaction request's own tokens
+#: (``token_cost.fold_compaction_recovery``) -- they undercount by exactly one such call per
+#: compaction, and bumping this is what makes the extractor re-fold them from their surviving
+#: transcripts instead of trusting the stale number.
+TOKEN_FOLD = 3
 
 #: What this driver does to a crashed agent's state before relaunching it (T5), recorded in
 #: tokens.json so a reading of the run does not have to date the driver.

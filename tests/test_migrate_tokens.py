@@ -1,10 +1,12 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``scripts/migrate_tokens.py``: re-folding finished ``tokens.json`` records under token fold 2.
+"""``scripts/migrate_tokens.py``: re-folding finished ``tokens.json`` records under the current
+token fold (``agent_driver.TOKEN_FOLD``, 3 as of 2026-09-22).
 
 Fold 1 added the client's streamed thinking estimate to a server ``output_tokens`` that already
-counted reasoning, so every claude record's ``effective`` was high by its reasoning (13/F8). The
-records are rewritten from the transcripts they were folded from, which makes three things
+counted reasoning, so every claude record's ``effective`` was high by its reasoning (13/F8). Fold 3
+recovers a compaction request's own tokens, missing from fold 2 (``token_cost.fold_compaction_recovery``).
+The records are rewritten from the transcripts they were folded from, which makes three things
 load-bearing: the new numbers come from the DRIVER's own function and not a copy of it, whatever
 moved is still readable afterwards, and nothing is written unless asked.
 """
@@ -116,7 +118,7 @@ def test_applying_rewrites_the_double_counted_effective_and_keeps_what_it_replac
     assert done["output"] == 24_153 and done["thinking_estimate"] == 34_517
     assert done["tokens_effective"] == 46_243 + 24_153
     assert "tokens_effective_all_attempts" not in done, "the all-attempts sum is retired under T5"
-    assert done["token_fold"] == 2
+    assert done["token_fold"] == 3
     assert done["before_migration"]["effective"] == 104_913.0
     assert done["before_migration"]["thinking"] == 34_517 and done["before_migration"]["generated"] == 58_670
     # Not re-derivable from a transcript, so never touched: the billed count and the task's identity.

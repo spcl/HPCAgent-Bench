@@ -59,8 +59,9 @@ pool(f) = 39.0M * (f - 0.4838) tokens          90470 tokens per GB per rank
 | 0.62 | -- | host OOM killer takes the heaviest pipeline stage |
 
 Size the pool against the ARM, not against the device. An arm runs 20 agents on one agent node, and
-`CLAUDE_AUTOCOMPACT` tracks the served 262144-token window. The pool-to-working-set ratio at that
-window has not been measured, so read the prefix-cache hit rate rather than assume a number.
+the compaction trigger `agent_driver.claude_context_env` computes tracks the served 262144-token
+window. The pool-to-working-set ratio at that window has not been measured, so read the prefix-cache
+hit rate rather than assume a number.
 
 That ratio is a **threshold, not a slope**: above the crossing the prefix cache holds, below it
 every turn re-prefills, and moving within either regime buys almost nothing. The crossing is
