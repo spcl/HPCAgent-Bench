@@ -396,6 +396,17 @@ jobs:
             sleep $((attempt * 10))
           done
 
+      # tests/test_optimas_tools.py drives the optimas harness through the REAL openai-agents SDK,
+      # which is vendored rather than installed (hpcagent_bench/harness/optimas_tools.py: the judge
+      # image carries a cp312 copy under vendor/, and the suite's own test that the SDK is ABSENT
+      # needs it off the main environment). vendor/ is gitignored, so the runner builds the cp314
+      # copy the file asks for and names it through the override the file already reads.
+      - name: Setup -- vendored openai-agents SDK (tests/test_optimas_tools.py)
+        run: |
+          target="${RUNNER_TEMP}/agent-optimas-test"
+          python -m pip install --target "${target}" openai-agents
+          echo "HPCAGENT_BENCH_OPTIMAS_VENDOR_DIR=${target}" >> "$GITHUB_ENV"
+
       - name: Phase 1 -- unit sweep (every test file no other phase claims)
         if: ${{ !cancelled() }}
         # DISCOVERED, not enumerated. `ls` decides what runs and .github/dedicated_tests.txt
@@ -2078,10 +2089,11 @@ jobs:
         # because it wants one BLAS thread per xdist worker where this one runs serial. The two
         # selections partition tests/ports/ exactly.
         #
-        # 12: 6.3 min on run 34690017930 for this selection (788 of the 830 tests), and the caps on
-        # this job have to sum under its 45.
+        # 12 -> 16: 6.3 min on run 34690017930 for this selection (788 of the 830 tests), 10.0 min on
+        # 35774240424, and killed at the 12-minute cap on 35762006928 and 35786611309 as tests/ports/
+        # grew. The job's own 45 still bounds it: its steps measured ~30 min end to end.
         if: ${{ !cancelled() }}
-        timeout-minutes: 12
+        timeout-minutes: 16
         #
         # --forked: every port oracle here is hand-written C/C++/Fortran reached through ctypes, so
         # a bad index does not raise -- it aborts the INTERPRETER, taking the whole session with it.
@@ -2233,6 +2245,12 @@ jobs:
       # This job runs as root in the container, and OpenMPI refuses to launch as root without it.
       OMPI_ALLOW_RUN_AS_ROOT: "1"
       OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: "1"
+      # No compiler cache here. The sealed child drops to a nested user namespace with NO
+      # capability, so this job's root loses CAP_DAC_OVERRIDE there, and $HOME (/github/home) is
+      # the runner user's bind mount: ccache's default cache dir under it is unwritable and every
+      # sealed C build died with "ccache: error: Permission denied" (test_distributed_scaling_curve_e2e).
+      # The job restores no cache anyway, so build.ccache off costs it nothing.
+      HPCAGENT_BENCH_BUILD_CCACHE: "false"
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
     steps:
       # A bare image has no sudo, and ./.github/actions/setup shells out to it -- that action is
