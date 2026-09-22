@@ -374,7 +374,12 @@ def test_every_campaign_variant_declares_its_own_arm() -> None:
     variants split one arm's problem list across jobs that differ only in PROBLEMS_FILE, so they
     share a label and the run_id keeps the shard apart. It strips the suffix before comparing, and
     this pins the same rule -- demanding the suffix in CAMPAIGN_ARM would split one arm's rows into
-    as many arms as there are workers."""
+    as many arms as there are workers.
+
+    Nor is the file suffix a submitter appends (experiments/submit_common.sh arm_file_suffix): a
+    budget-scaled or KERNELS_FILE-subset submission of an arm gets its own env file,
+    ``<arm>-budget2x`` / ``<arm>-kernels-<subset>``, so a PENDING job of the arm keeps reading its
+    own copy, and it records the arm's label unchanged."""
     for path in sorted(EXAMPLE.glob(".env.*")):
         # .env.base-* are generator inputs, not arms: make_model_arm.py rewrites the model inside
         # their CAMPAIGN_ARM (it requires exactly one carrying the from-model), so the value there
@@ -391,7 +396,7 @@ def test_every_campaign_variant_declares_its_own_arm() -> None:
         ):
             continue
         variant = path.name[len(".env.") :]
-        arm = re.sub(r"-w\d$", "", variant)
+        arm = re.sub(r"(-budget\d+x|-tok\d+x-time\d+x)?(-kernels-[\w.-]+)?$", "", re.sub(r"-w\d$", "", variant))
         text = path.read_text()
         assert f"\nCAMPAIGN_ARM={arm}\n" in text or f"\nCAMPAIGN_ARM={variant}\n" in text, (
             f"{path.name} must carry CAMPAIGN_ARM={arm} (or {variant}); rename the file to the arm "

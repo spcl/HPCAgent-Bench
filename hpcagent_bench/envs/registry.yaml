@@ -71,6 +71,7 @@ experiments:
   smoke-hooks: Comm Hooks Smoke
   harness-focus20-smoke: Agent Harness Comparison Smoke
   lib-smoke-agent-20260918: Library Request Smoke
+  lib-smoke-agent-20260919-libtest: Library Request Smoke (libtest)
 
 # ---------------------------------------------------------------------------------------------
 # Campaigns: the JOB-NAME PREFIX a launcher used -> the experiment its arms belong to, the device
