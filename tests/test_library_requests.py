@@ -254,3 +254,38 @@ def test_one_catalog_name_may_resolve_several_pkg_config_modules() -> None:
         f"fftw resolved to {linked!r}: both precisions have to be on the link line, or the fp32 "
         "spelling of every FFT kernel is an undefined symbol that only surfaces at dlopen"
     )
+
+
+def test_mpi_resolves_from_the_wrapper_line_like_findmpi(monkeypatch) -> None:
+    """hipcc is not an MPI wrapper, so `mpi` has to hand it the wrapper's own include + link line;
+    the rpath is what lets the graded bench load libmpi without the image's LD_LIBRARY_PATH."""
+    line = (["-I/opt/mpich/include"], ["-L/opt/mpich/lib", "-lmpi"])
+    monkeypatch.setattr(languages, "mpi_wrapper_flags", lambda wrapper: line if wrapper == "mpicc.mpich" else ([], []))
+    monkeypatch.setattr(languages, "library_links", lambda lang, tokens: True)
+    languages.library_tokens.cache_clear()
+    try:
+        got = languages.library_tokens("mpi", "hip")
+    finally:
+        languages.library_tokens.cache_clear()
+    assert got == (("-I/opt/mpich/include",), ("-L/opt/mpich/lib", "-lmpi", "-Wl,-rpath,/opt/mpich/lib"))
+
+
+def test_mpi_without_its_wrapper_falls_back_to_pkg_config(monkeypatch) -> None:
+    monkeypatch.setattr(languages, "mpi_wrapper_flags", lambda wrapper: ([], []))
+    monkeypatch.setattr(languages, "library_links", lambda lang, tokens: True)
+    answers = {"--cflags": ("-I/pc/include",), "--libs": ("-L/pc/lib", "-lmpi")}
+    monkeypatch.setattr(
+        languages, "pkg_config_answer", lambda pkgs, what: answers[what] if pkgs == ("mpich",) else None
+    )
+    languages.library_tokens.cache_clear()
+    try:
+        got = languages.library_tokens("mpi", "c")
+    finally:
+        languages.library_tokens.cache_clear()
+    assert got == (("-I/pc/include",), ("-L/pc/lib", "-lmpi", "-Wl,-rpath,/pc/lib"))
+
+
+def test_mpi_and_rccl_are_requestable_by_a_hip_submission() -> None:
+    libraries = languages.load_libraries()
+    assert "hip" in libraries["mpi"]["langs"] and "hip" in libraries["rccl"]["langs"]
+    assert languages.toolset_link_tokens(libraries["rccl"]["toolset"]) == ("-lrccl",)

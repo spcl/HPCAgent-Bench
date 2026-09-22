@@ -1595,7 +1595,13 @@ def library_tokens(name: str, lang: str) -> Tuple[Tuple[str, ...], Tuple[str, ..
         if cflags is None:
             return include, ()
         return tuple(t for t in cflags if t.startswith(LIBRARY_COMPILE_PREFIXES)) + include, ()
-    if entry.get("toolset"):
+    wrapped = mpi_wrapper_flags(str(entry["mpi_wrapper"])) if entry.get("mpi_wrapper") else ([], [])
+    if wrapped[1]:
+        # An MPI, asked the way CMake's FindMPI asks: interrogate the compiler wrapper (`-show`) for
+        # its include and link line, so hipcc/nvcc/clang compile MPI code without BEING the wrapper.
+        # A host without the wrapper falls through to the entry's pkg-config module below.
+        compile_tokens, link_tokens = tuple(wrapped[0]), tuple(wrapped[1]) + rpath_tokens(wrapped[1])
+    elif entry.get("toolset"):
         # Toolkit-resident: CUDA and ROCm ship no pkg-config files, but their own compiler already
         # searches the toolkit's lib and include directories, so a bare -l is the whole answer and
         # no -L or rpath is wanted. The trial link below is what decides whether it is really here.
@@ -1618,10 +1624,16 @@ def library_tokens(name: str, lang: str) -> Tuple[Tuple[str, ...], Tuple[str, ..
             link_tokens = tuple(t for t in libs if t.startswith(LIBRARY_LINK_PREFIXES))
             if not link_tokens:
                 return (), ()
-            link_tokens += tuple(f"-Wl,-rpath,{t[2:]}" for t in link_tokens if t.startswith("-L") and t[2:])
+            link_tokens += rpath_tokens(link_tokens)
     if not library_links(lang, link_tokens):
         return (), ()
     return compile_tokens, link_tokens
+
+
+def rpath_tokens(link_tokens: Sequence[str]) -> Tuple[str, ...]:
+    """One ``-Wl,-rpath,<dir>`` per ``-L<dir>``: none of these prefixes is on the loader path, and a
+    build that links but cannot load fails at run time with no visible cause."""
+    return tuple(f"-Wl,-rpath,{t[2:]}" for t in link_tokens if t.startswith("-L") and t[2:])
 
 
 def pkg_modules(entry: Dict[str, object]) -> Tuple[str, ...]:
