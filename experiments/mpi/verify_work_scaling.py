@@ -2,16 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Does a kernel's declared ``mpi.decomposition.work_exponent`` match the work it actually does?
 
-``mpi_sizing.weak`` grows the decomposition axis by ``R**(1/k)`` so per-rank work stays constant
-across a weak-scaling sweep. That promise holds only when ``k`` is the split symbol's true
-exponent in the kernel's FLOP count, and NOTHING in the harness checks it: a wrong ``k`` produces
-a perfectly well-formed run whose efficiency curve measures the sizing mistake instead of the
-implementation. So the check is empirical.
+``mpi_sizing.weak`` grows the decomposition axis by the exact integer ``m`` where ``R = m**k`` so
+per-rank work stays constant across a weak-scaling sweep. That promise holds only when ``k`` is
+the split symbol's true exponent in the kernel's FLOP count, and NOTHING in the harness checks it:
+a wrong ``k`` produces a perfectly well-formed run whose efficiency curve measures the sizing
+mistake instead of the implementation. So the check is empirical.
 
 Each kernel is counted at a LADDER of weak-scaled sizes, which answers two questions rather than
-one. Per point: growing the axis by ``R**(1/k)`` must multiply the work by exactly ``R``. Over the
-ladder: the slope of ``log(flops)`` against ``log(axis factor)`` IS the exponent, so a kernel that
-fails is told what ``k`` should have been instead of only that it was wrong.
+one. Per point: growing the axis by the integer m (R = m**k) must multiply the work by exactly
+``R``. Over the ladder: the slope of ``log(flops)`` against ``log(axis factor)`` IS the exponent,
+so a kernel that fails is told what ``k`` should have been instead of only that it was wrong.
 
 The counter is PAPI's ``fp_ops`` (``PAPI_FP_OPS``, else ``PAPI_DP_OPS + PAPI_SP_OPS``), which
 counts OPERATIONS, not instructions: one FMA is two. ``--calibrate-only`` proves that on this host
@@ -35,13 +35,12 @@ import pathlib
 import re
 import sys
 
-#: Rank counts to weak-size to, per work_exponent. ``weak()`` accepts any rank count (it rounds
-#: per axis symbol), but a CLEAN k-th power keeps this check's growth factor exact -- no rounding
-#: noise mixed into the measured exponent -- so the ladder still picks one per k; 4 is a clean
-#: square but not a clean cube.
+#: Rank counts to weak-size to, per work_exponent. ``weak()`` REQUIRES a perfect k-th power (a
+#: non-power R is refused outright), so the ladder picks one per k; 4 is a clean square but not a
+#: clean cube.
 #:
-#: R IS THE MEMORY MULTIPLIER. The axis grows by ``R**(1/k)`` and the arrays carry that symbol on
-#: k axes, so the allocation grows by ``factor**k == R`` exactly; no sizing trick avoids it, and
+#: R IS THE MEMORY MULTIPLIER. The axis grows by the integer m where R = m**k, and the arrays carry
+#: that symbol on k axes, so the allocation grows by ``m**k == R`` exactly; no sizing trick avoids it, and
 #: where the ladder stops is the only lever on how big this check's arrays get. It stops early on
 #: purpose: the verdict is the fitted exponent, which sits at least 0.50 from any wrong integer
 #: against measured noise of 0.04, so a third rung buys robustness that :data:`DRIFT_NOTE` now
