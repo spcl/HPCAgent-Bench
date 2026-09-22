@@ -27,10 +27,12 @@ from hpcagent_bench.dtypes import storage_dtype
 from hpcagent_bench.frameworks.benchmark import Benchmark
 from hpcagent_bench.spec import KERNELS
 
-#: The precision the check runs at. fp64 is what every job submission asks for
-#: (scripts/submit_xl.sbatch pins DATATYPE=float64), so it is the precision a disagreement is
-#: reached at in practice.
+#: The precision the check runs at where the kernel supports it. fp64 is what every job submission
+#: asks for (scripts/submit_xl.sbatch pins DATATYPE=float64), so it is the precision a
+#: disagreement is reached at in practice.
 PRECISION = "float64"
+#: The Precision-enum spelling of :data:`PRECISION`, to test a manifest's ``precisions`` list against.
+PRECISION_NAME = "fp64"
 
 KERNEL_NAMES = sorted(KERNELS.select_keys("all"))
 
@@ -48,13 +50,24 @@ def declared_dtypes(spec) -> Dict[str, str]:
     return out
 
 
+def check_precision(spec) -> str:
+    """The precision to materialise ``spec`` at: :data:`PRECISION` where the manifest declares
+    fp64, else the first precision it DOES declare.
+
+    A kernel that pins one narrow precision -- the bf16 distributed ML operators -- is never run
+    at fp64, so materialising it at fp64 compares a declaration against a run that does not
+    exist. Every fp64-declaring kernel (678 of the 689) keeps the fp64 check unchanged.
+    """
+    return PRECISION if PRECISION_NAME in spec.precisions else spec.precisions[0]
+
+
 def disagreements(key: str) -> List[Tuple[str, str, str]]:
     """``(array, declared, realised)`` for every array of ``key`` whose dtype does not match."""
     spec = KERNELS.specs()[key]
     declared = declared_dtypes(spec)
     if not declared:
         return []
-    data = Benchmark(key).get_data("S", datatype=PRECISION)
+    data = Benchmark(key).get_data("S", datatype=check_precision(spec))
     bad = []
     for name, want in declared.items():
         value = data.get(name)
@@ -69,6 +82,7 @@ def disagreements(key: str) -> List[Tuple[str, str, str]]:
 @pytest.mark.parametrize("key", KERNEL_NAMES)
 def test_every_declared_array_dtype_is_the_one_materialised(key: str) -> None:
     bad = disagreements(key)
-    assert not bad, f"declared dtype is not the one the run materialises at {PRECISION}: " + ", ".join(
+    at = check_precision(KERNELS.specs()[key])
+    assert not bad, f"declared dtype is not the one the run materialises at {at}: " + ", ".join(
         f"{n}: declared {w}, got {g}" for n, w, g in bad
     )
