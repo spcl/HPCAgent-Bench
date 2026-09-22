@@ -376,6 +376,24 @@ def test_a_smoke_named_arm_is_excluded_by_pattern(
     assert "smoke rows, excluded from coverage: jobs ['100']" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize(
+    ("arm", "expected"),
+    [
+        ("harness-focus20-smoke-oss120b-claude", True),
+        # job 642813: a re-submitted smoke run numbers itself instead of just repeating "-smoke".
+        ("harness20-caveman-qwen38-c-clean-kernels-harness20-caveman-smoke2", True),
+        ("harness-focus20-smoke10-qwen38-claude", True),
+        ("cpf-llr-focus40-qwen38-c-cpf", False),
+        ("gpusmoke5-hip-cpf", False),  # "smoke" not on a "-" boundary: not this pattern's business
+    ],
+)
+def test_smoke_arm_matches_a_numbered_smoke_run_too(module: types.ModuleType, arm: str, expected: bool) -> None:
+    """SMOKE_ARM must catch a re-submitted smoke's own numbering (``-smoke2``, ``-smoke10``, ...),
+    not just a bare trailing ``-smoke`` -- job 642813 fell through this gap and leaked into the
+    "harness20" campaign's coverage on the board."""
+    assert bool(module.SMOKE_ARM.search(arm)) is expected
+
+
 def test_a_smoke_job_reusing_a_real_arms_name_is_excluded_by_job_id(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:

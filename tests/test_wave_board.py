@@ -3,6 +3,7 @@
 """The wave board's arm identity, status rule and data embedding: the persistent experiment-status page
 reports these, and a wrong one shows a finished experiment as owed or an owed one as finished."""
 
+import contextlib
 import importlib.util
 import json
 import os
@@ -255,7 +256,8 @@ def test_a_clean_reruns_row_folds_into_the_arm_it_supersedes(board: types.Module
     }
     jobs = [board.Job("100", arm, "COMPLETED", 3, "", ""), board.Job("200", arm + "-clean", "COMPLETED", 3, "", "")]
     row = board.arm_row(arm, jobs, dirs, ["a", "b", "c"], MODELS, str(tmp_path))
-    assert (row["clean"], row["done"], row["status"]) == (True, 3, "complete"), row
+    assert "clean" not in row, row  # clean vs non-clean is not a board distinction (2026-09-18)
+    assert (row["done"], row["status"]) == (3, "complete"), row
     assert [job["id"] for job in row["jobs"]] == ["100", "200"], row
 
 
@@ -400,13 +402,20 @@ def test_arm_row_forwards_opt_so_a_stale_pre_resize_row_stays_owed(
     assert row["done"] == 0, row
 
 
-def canon_csv(path: pathlib.Path, col: str, rank: int, rows: list[tuple[str, str]]) -> None:
-    """A ``<col>.rank<N>.csv`` shard with a header and one ``kernel,status`` row per entry in ``rows``."""
-    path.mkdir(parents=True, exist_ok=True)
-    lines = ["framework,preset,datatype,kernel,impl,status,validated,median_ms,failure,error"]
-    for kernel, status in rows:
-        lines.append(f"{col},fuzzed,float64,{kernel},default,{status},True,1.0,,")
-    (path / f"{col}.rank{rank}.csv").write_text("\n".join(lines) + "\n")
+def canon_db_rows(db: pathlib.Path, run: str, col: str, rows: list[tuple[str, str]]) -> None:
+    """One canon.db row per ``(kernel, validated)`` pair in ``rows``, for ``run``/``col`` -- the
+    same shape scripts/merge_canon_results.py writes at the end of every canon_column.sh job."""
+    db.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.closing(sqlite3.connect(db)) as conn:
+        conn.execute(
+            "create table if not exists canon "
+            "(run text, column text, kernel text, preset text, datatype text, median_ms real, validated text)"
+        )
+        conn.executemany(
+            "insert into canon values (?, ?, ?, 'fuzzed', 'float64', 1.0, ?)",
+            [(run, col, kernel, validated) for kernel, validated in rows],
+        )
+        conn.commit()
 
 
 @pytest.mark.parametrize(
@@ -459,15 +468,14 @@ def test_a_canon_job_name_matches_its_tags_own_prefix(
 def test_a_canon_columns_done_and_failed_kernels_read_the_latest_dir(
     board: types.ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """A later canon directory (a fresh stamp, or a ``-b`` re-run) supersedes an earlier one's status
-    for the same kernel -- the row must read the latest one, not the union of every wave's rows."""
-    base = tmp_path / "canon-llr-focus40-20260915"
-    rerun = tmp_path / "canon-llr-focus40-20260915-b"
-    canon_csv(base, "cc", 0, [("a", "ok"), ("b", "crash"), ("c", "crash")])
-    canon_csv(rerun, "cc", 0, [("b", "ok")])  # the re-run fixed b; c is still owed and still failed
-    dirs = [base, rerun]
+    """A later run (a fresh stamp, or a ``-b`` re-run: a higher rowid, since canon.db is APPEND-only)
+    supersedes an earlier one's status for the same kernel -- the row must read the latest one, not
+    the union of every run's rows."""
+    db = tmp_path / "canon.db"
+    canon_db_rows(db, "canon-llr-focus40-20260915", "cc", [("a", "True"), ("b", "False"), ("c", "False")])
+    canon_db_rows(db, "canon-llr-focus40-20260915-b", "cc", [("b", "True")])  # re-run fixed b; c still owed
 
-    row = board.canon_column_row("llr-focus40", "cc", dirs, ["a", "b", "c"], [])
+    row = board.canon_column_row("llr-focus40", "cc", [], ["a", "b", "c"], [], db)
 
     assert (row["done"], row["failed"], row["roster"]) == (2, ["c"], 3), row
     assert row["device"] == "CPU"
@@ -475,26 +483,15 @@ def test_a_canon_columns_done_and_failed_kernels_read_the_latest_dir(
 
 
 def test_a_declined_kernel_is_not_counted_done(board: types.ModuleType, tmp_path: pathlib.Path) -> None:
-    """run-framework exits ``status=ok`` for a kernel it merely DECLINED (``failure=unsupported``,
-    e.g. a non-affine loop pluto/ppcg refuses) -- the SAME status a genuine success carries. A
-    column that declined every roster kernel must show 0 done and every kernel in ``failed``, not
-    100% done: the pre-fix version read ``status`` alone and reported exactly the inverse (measured
-    against the real ppcg canon sweep, job 640520: 40/40 "done", 0 real results)."""
-    run_dir = tmp_path / "canon-llr-focus40-20260920"
-    run_dir.mkdir(parents=True)
-    header = "framework,preset,datatype,kernel,impl,status,validated,median_ms,failure,error"
-    (run_dir / "ppcg.rank0.csv").write_text(
-        "\n".join(
-            [
-                header,
-                "ppcg,fuzzed,float64,a,default,ok,False,,unsupported,",
-                "ppcg,fuzzed,float64,b,default,ok,True,12.0,,",
-            ]
-        )
-        + "\n"
-    )
+    """canon.db carries no decline REASON, only ``validated`` -- a DECLINED kernel (run-framework ran
+    it and answered "no result", e.g. a non-affine loop pluto/ppcg refuses) reads validated=False the
+    same as a crash, and both land in ``failed``, never counted done (measured against the real ppcg
+    canon sweep, job 640520: the pre-fix CSV-``status``-only version read 40/40 "done", 0 real
+    results)."""
+    db = tmp_path / "canon.db"
+    canon_db_rows(db, "canon-llr-focus40-20260920", "ppcg", [("a", "False"), ("b", "True")])
 
-    row = board.canon_column_row("llr-focus40", "ppcg", [run_dir], ["a", "b"], [])
+    row = board.canon_column_row("llr-focus40", "ppcg", [], ["a", "b"], [], db)
 
     assert (row["done"], row["failed"]) == (1, ["a"]), row
 
@@ -526,11 +523,15 @@ def test_canon_rows_join_the_arms_list_as_their_own_experiment_group(
     jobs, grouped by ``experiment`` -- so a canon row must carry that same shape. canon_rows is fixed
     to CANON_TAGS now, not CAMPAIGNS: the three canon experiments are their own thing."""
     # See test_canon_dirs_finds_only_this_tags_directories_oldest_first: an inherited
-    # HPCAGENT_BENCH_RUNS_ROOT would fold in the REAL scratch's accumulated canon rows too.
+    # HPCAGENT_BENCH_RUNS_ROOT (or HPCAGENT_BENCH_RESULTS_DIR, for the canon.db this row's coverage
+    # now reads) would fold in the REAL scratch's accumulated canon rows too.
     monkeypatch.delenv("HPCAGENT_BENCH_RUNS_ROOT", raising=False)
+    monkeypatch.delenv("HPCAGENT_BENCH_RESULTS_DIR", raising=False)
     root = tmp_path / "canon-llr-focus40-20260915"
-    canon_csv(root, "numba", 0, [("a", "ok")])
-    canon_csv(root, "dace_gpu", 0, [("a", "crash")])
+    root.mkdir()  # canon_dirs only needs the directory to exist; coverage comes from canon.db below
+    db = tmp_path / ".hpcagentbench-cache" / "results" / "canon.db"
+    canon_db_rows(db, "canon-llr-focus40-20260915", "numba", [("a", "True")])
+    canon_db_rows(db, "canon-llr-focus40-20260915", "dace_gpu", [("a", "False")])
     monkeypatch.setattr(board.remaining_kernels, "roster", lambda tag, opt: ["a"])
     monkeypatch.setattr(board, "canon_jobs", lambda since, prefixes: [])
 
@@ -559,7 +560,8 @@ def test_a_clean_rerun_folds_into_one_board_row(
 
     rows = board.arm_rows(tmp_path / "runs", "/opt", MODELS)
 
-    assert [(row["arm"], row["clean"], row["done"], row["status"]) for row in rows] == [(arm, True, 2, "complete")]
+    assert [(row["arm"], row["done"], row["status"]) for row in rows] == [(arm, 2, "complete")]
+    assert "clean" not in rows[0], rows  # clean vs non-clean is not a board distinction (2026-09-18)
     assert [job["id"] for job in rows[0]["jobs"]] == ["100", "200"], rows
 
 
@@ -586,6 +588,32 @@ def test_a_smoke_job_that_reused_a_real_arms_name_is_excluded(
 
     assert [(row["arm"], row["done"]) for row in rows] == [(arm, 1)], rows
     assert [job["id"] for job in rows[0]["jobs"]] == ["100"], rows
+
+
+def test_a_numbered_smoke_named_job_does_not_leak_into_a_real_campaign(
+    board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Job 642813 (2026-09-23): "harness20-caveman-qwen38-c-clean-kernels-harness20-caveman-smoke2"
+    is a re-submitted smoke run (SMOKE_ARM's numbered ``-smoke2``), but no CAMPAIGNS entry is a
+    prefix of its exact name, so ``campaign_of`` folded it into "harness20" and it showed up there
+    as a phantom arm. It must be excluded before ``by_arm`` ever sees it, the same as a job whose id
+    is in SMOKE_JOBS."""
+    real_arm = "harness20-qwen38-claude"
+    smoke_name = "harness20-caveman-qwen38-c-clean-kernels-harness20-caveman-smoke2"
+    runs = tmp_path / "runs" / "harness20-20260919"
+    job_dir_with_rows(runs, "100", ["a"])
+    job_dir_with_rows(runs, "101", ["a", "b"])  # the smoke job's own kernel row must not count anywhere
+    jobs = [
+        board.Job("100", real_arm, "COMPLETED", 3, "", ""),
+        board.Job("101", smoke_name, "FAILED", 1, "", ""),
+    ]
+    monkeypatch.setattr(board, "slurm_jobs", lambda ids: jobs)
+    monkeypatch.setattr(board, "queued_ids", list)
+    monkeypatch.setattr(board.remaining_kernels, "roster", lambda tag, opt: ["a", "b"])
+
+    rows = board.arm_rows(tmp_path / "runs", "/opt", MODELS)
+
+    assert [row["arm"] for row in rows] == [real_arm], rows
 
 
 @pytest.mark.parametrize(

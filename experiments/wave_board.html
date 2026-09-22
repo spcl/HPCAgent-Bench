@@ -69,7 +69,6 @@ section.exp { display: grid; gap: 10px; }
 .pill.incomplete { color: var(--incomplete); background: var(--incomplete-soft); }
 .pill.rerun { color: var(--rerun); background: var(--rerun-soft); border: 1px solid var(--rerun); }
 tr.rerun td { background: var(--rerun-soft); }
-.pill.clean { color: var(--accent); border: 1px solid var(--rule); }
 .table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
 table { border-collapse: collapse; width: 100%; min-width: 860px; }
 th { font: 500 11px var(--display); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
@@ -283,8 +282,6 @@ function renderBoard() {
     for (const arm of arms.sort(armSort)) {
       const armCell = el("td", { class: "arm" },
         el("span", { class: "variant" }, displayVariant(arm.variant)), " ", el("span", { class: "model" }, MODEL_NAMES[arm.model] || arm.model));
-      // A clean re-run folds into this same row (2026-09-18); the badge just says a clean job contributed.
-      if (arm.clean) armCell.append(" ", el("span", { class: "pill clean" }, "clean"));
       const counts = el("td", { class: "num" }, arm.roster ? `${arm.done}/${arm.roster}` : "n/a");
       const badges = [];
       // A forced-1x placeholder (self-exit or context overflow, never submitted) is OWED like a

@@ -20,6 +20,7 @@ rebuild and republish it whenever a campaign job leaves the queue.
 """
 
 import argparse
+import contextlib
 import csv
 import dataclasses
 import datetime
@@ -28,6 +29,7 @@ import os
 import pathlib
 import re
 import socket
+import sqlite3
 import subprocess
 import sys
 
@@ -293,11 +295,10 @@ def arm_row(
 ) -> dict:
     """One board row per arm IDENTITY (``arm`` never carries ``-clean``: :func:`arm_rows` folds a
     clean re-run into the arm it supersedes before this is called, 2026-09-18). Coverage is the union
-    over every job of the identity, plain and clean alike; ``clean`` is just a badge for "at least one
-    clean job contributed", not a filter on which jobs count."""
+    over every job of the identity, plain and clean alike -- clean vs non-clean is not a distinction
+    the board reports (2026-09-18 user rule: all data is clean), so no field here names it."""
     campaign, model, variant = split_arm(arm, models)
     spec = board_campaign(campaign, variant)
-    clean = any(job.name.endswith(remaining_kernels.CLEAN_SUFFIX) for job in jobs)
     delivered_kernels, placeholder_kernels, budget, infra = kernel_status(jobs, dirs, full, opt, served, frozen)
     delivered = len(delivered_kernels)
     placeholder = len(placeholder_kernels)
@@ -314,7 +315,6 @@ def arm_row(
         "device": spec.device,
         "model": model,
         "variant": variant,
-        "clean": clean,
         "done": done,
         "delivered": delivered,
         "placeholder": placeholder,
@@ -418,10 +418,12 @@ def arm_rows(
         ):
             continue
         # A smoke job that reused a REAL arm's name is not that arm's data (2026-09-18, job 641175:
-        # see remaining_kernels.SMOKE_JOBS). A *-smoke*-NAMED arm needs no such exclusion here: it is
-        # already its own CAMPAIGNS entry (e.g. "harness-focus20-smoke"), a distinct board row with no
-        # roster of its own, so it was never counted as another arm's coverage to begin with.
-        if job.id in remaining_kernels.SMOKE_JOBS:
+        # see remaining_kernels.SMOKE_JOBS). A job whose OWN name says "smoke" (remaining_kernels.
+        # SMOKE_ARM) is excluded here too (2026-09-23 fix, job 642813:
+        # "harness20-caveman-qwen38-c-clean-kernels-harness20-caveman-smoke2" fell through to the
+        # "harness20" campaign -- no CAMPAIGNS entry matches its exact prefix, so it leaked in as a
+        # phantom arm) -- the same check the fused path above already runs on every arm it serves.
+        if remaining_kernels.is_smoke(job.id, job.name):
             continue
         # A clean re-run FOLDS into the identity it re-runs (user, 2026-09-18): one board row, union
         # coverage over both, latest run wins row for row -- not a second row and not a replacement.
@@ -446,6 +448,7 @@ CANON_COLUMNS = (
     "fortran",
     "fortran_autopar",
     "ppcg",
+    "ppcg_hip",
     "pluto",
     "dace_cpu",
     "dace_cpu_canonicalize",
@@ -527,17 +530,34 @@ def canon_dirs(scratch: pathlib.Path, tag: str) -> list[pathlib.Path]:
     return sorted(found, key=lambda p: p.stat().st_mtime)
 
 
-def canon_csv_rows(path: pathlib.Path) -> list[tuple[str, str, str]]:
-    """(kernel, status, failure) over one column's rank shard.
+def canon_db_path(scratch: pathlib.Path) -> pathlib.Path:
+    """The persistent, cross-run canon results DB every canon_column.sh job appends to as it
+    finishes (scripts/merge_canon_results.py): default $HPCAGENT_BENCH_RESULTS_DIR/canon.db, else
+    ``<scratch>/.hpcagentbench-cache/results/canon.db`` -- the same default scripts/cache_env.sh
+    exports for every other canon.db reader (statistics/plot_*.py)."""
+    results_dir = os.environ.get("HPCAGENT_BENCH_RESULTS_DIR", str(scratch / ".hpcagentbench-cache" / "results"))
+    return pathlib.Path(results_dir) / "canon.db"
 
-    ``failure`` matters as much as ``status``: run-framework exits ``status=ok`` for a kernel it
-    merely DECLINED (a non-affine loop, no scop emitted, ppcg offloaded nothing -- see
-    :mod:`hpcagent_bench.ppcg_transform`), with ``failure=unsupported`` the only sign it never
-    produced a result. A shard from before this field existed has an empty ``failure`` column,
-    which reads the same as a genuine success -- ``status`` alone was the whole story then.
-    """
-    with path.open(newline="", encoding="utf-8") as handle:
-        return [(row["kernel"], row["status"], row.get("failure", "")) for row in csv.DictReader(handle)]
+
+def canon_db_latest(db: pathlib.Path, col: str, roster: list[str]) -> dict[str, str]:
+    """kernel -> its LATEST ``validated`` value in canon.db's ``canon`` table for ``col``, read
+    GLOBALLY over every run that ever reported it -- NOT just the runs a tag's own directory-name
+    alias happens to glob (2026-09-23 fix: llr-focus40's 40 kernels are a NAMED SUBSET of the full
+    loop_level_reasoning track, so a full-track sweep such as canon-loop_level_reasoning-pluto also
+    covers them, but the old per-tag directory-stem grouping never looked there for the llr-focus40
+    tag and the board read stale, pre-09-20 numbers). Ordered by ``rowid``: canon.db is APPEND-only
+    (merge_canon_results.py, one ``INSERT OR REPLACE`` call per column per job as it finishes), and
+    a later run never reuses an earlier run's ``(run, column, kernel, preset, datatype)`` key, so
+    the highest rowid for a kernel is always its most recent result."""
+    if not db.is_file() or not roster:
+        return {}
+    with contextlib.closing(sqlite3.connect(db)) as conn:
+        placeholders = ",".join("?" * len(roster))
+        rows = conn.execute(
+            f"select kernel, validated from canon where column = ? and kernel in ({placeholders}) order by rowid",
+            (col, *roster),
+        ).fetchall()
+    return dict(rows)  # a later rowid overwrites an earlier one for the same kernel
 
 
 def canon_opt_reports_saved(dirs: list[pathlib.Path], col: str) -> bool:
@@ -546,22 +566,20 @@ def canon_opt_reports_saved(dirs: list[pathlib.Path], col: str) -> bool:
     return any(any((one / "reports" / col).glob("*/manifest.json")) for one in dirs)
 
 
-def canon_column_row(tag: str, col: str, dirs: list[pathlib.Path], roster: list[str], jobs: list[Job]) -> dict:
-    """One board row for ``col`` over ``tag``'s roster: the LATEST status per kernel across every
-    canon directory, oldest to newest, so a superseding ``-b`` wave overrides the wave it re-ran.
+def canon_column_row(
+    tag: str, col: str, dirs: list[pathlib.Path], roster: list[str], jobs: list[Job], db: pathlib.Path
+) -> dict:
+    """One board row for ``col`` over ``tag``'s roster: canon.db's LATEST ``validated`` value per
+    roster kernel (:func:`canon_db_latest`), read across every run that ever reported it.
 
-    ``done`` requires a genuine result (``status=="ok"`` AND no ``failure``): a DECLINED kernel
-    (``status=="ok"``, ``failure=="unsupported"``) is not a placeholder gap either -- run-framework
-    already ran it and it answered "no result", and that answer belongs in ``failed`` beside a
-    crash, not silently counted as done (2026-09-20 fix: this used to count every ``status=="ok"``
-    row, which read a compiler that declined its whole roster as 100% complete).
+    ``done`` requires ``validated == "True"``: a DECLINED kernel (run-framework ran it and answered
+    "no result", the same as any other compiler) is not a placeholder gap either -- it belongs in
+    ``failed`` beside a crash, not silently counted as done (2026-09-20 rule, still the same test
+    now that ``validated`` is canon.db's own word for it).
     """
-    latest: dict[str, tuple[str, str]] = {}
-    for one in dirs:
-        for path in sorted(one.glob(f"{col}.rank*.csv")):
-            latest.update({kernel: (status, failure) for kernel, status, failure in canon_csv_rows(path)})
-    done = sum(1 for kernel in roster if latest.get(kernel) == ("ok", ""))
-    failed = sorted(kernel for kernel in roster if kernel in latest and latest[kernel] != ("ok", ""))
+    latest = canon_db_latest(db, col, roster)
+    done = sum(1 for kernel in roster if latest.get(kernel) == "True")
+    failed = sorted(kernel for kernel in roster if kernel in latest and latest[kernel] != "True")
     return {
         "arm": f"canon40-{tag}-{col}",
         "campaign": f"canon40-{tag}",
@@ -570,7 +588,6 @@ def canon_column_row(tag: str, col: str, dirs: list[pathlib.Path], roster: list[
         "device": canon_device(col),
         "model": "",
         "variant": col,
-        "clean": False,
         "done": done,
         # No agent episodes here (a deterministic compiler run, not an agent one): every "ok" kernel
         # is a real compile-and-run, never a forced-1x placeholder, so delivered==done and neither
@@ -619,7 +636,12 @@ def canon_roster(tag: str, opt: str, scratch: pathlib.Path) -> list[str]:
 
 
 def canon_rows(scratch: pathlib.Path, opt: str) -> list[dict]:
-    """One "Compiler baselines" row per (canon tag, column) that has at least one directory."""
+    """One "Compiler baselines" row per (canon tag, column) that has at least one directory.
+
+    A directory still gates whether a tag's section appears at all, and still supplies the Jobs
+    panel; the per-kernel coverage itself comes from canon.db (:func:`canon_column_row`), not from
+    parsing these directories' CSV shards."""
+    db = canon_db_path(scratch)
     rows = []
     for tag in CANON_TAGS:
         dirs = canon_dirs(scratch, tag)
@@ -638,7 +660,7 @@ def canon_rows(scratch: pathlib.Path, opt: str) -> list[dict]:
                 if os.path.dirname(job.stdout) in dir_paths
                 and any(canon_job_name_matches(job.name, prefix, col) for prefix in prefixes)
             ]
-            rows.append(canon_column_row(tag, col, dirs, roster, jobs))
+            rows.append(canon_column_row(tag, col, dirs, roster, jobs, db))
     return rows
 
 
