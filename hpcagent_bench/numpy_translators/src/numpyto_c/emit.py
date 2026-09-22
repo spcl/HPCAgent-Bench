@@ -3093,6 +3093,23 @@ _FP8_HELPERS = {
         "/* Round a float to the fp8 grid, STAYING in float -- see __npb_rn_e4m3. */\n"
         "static inline float __npb_rn_e5m2(float x) {{ return __npb_e5m2_to_f32(__npb_f32_to_e5m2(x)); }}\n"
     ),
+    "bfloat16": (
+        "/* bfloat16: the top 16 bits of an IEEE float32 -- 1 sign / 8 exp (bias 127) / 7\n"
+        " * mantissa. 2-byte STORAGE only, promoted to float to compute. Promotion is exact\n"
+        " * (append 16 zero bits); demotion rounds to nearest, ties to even, as ml_dtypes does. */\n"
+        "typedef uint16_t {ct};\n"
+        "static inline float __npb_bf16_to_f32({ct} b) {{\n"
+        "    uint32_t u = (uint32_t)b << 16; float f; memcpy(&f, &u, 4); return f;\n"
+        "}}\n"
+        "static inline {ct} __npb_f32_to_bf16(float f) {{\n"
+        "    uint32_t u; memcpy(&u, &f, 4);\n"
+        "    if ((u & 0x7fffffffu) > 0x7f800000u) return ({ct})((u >> 16) | 0x0040u);  /* NaN stays quiet */\n"
+        "    u += 0x7fffu + ((u >> 16) & 1u);   /* ties to even; the largest finite rounds up to Inf */\n"
+        "    return ({ct})(u >> 16);\n"
+        "}}\n"
+        "/* Round a float to the bf16 grid, STAYING in float -- see __npb_rn_e4m3. */\n"
+        "static inline float __npb_rn_bf16(float x) {{ return __npb_bf16_to_f32(__npb_f32_to_bf16(x)); }}\n"
+    ),
 }
 
 
