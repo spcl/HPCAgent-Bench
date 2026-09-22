@@ -142,11 +142,6 @@ def build_csr_index(mi, mf, ai, af, list_index, list_norms=None):
     return row_p, blk_info, csr_norms
 
 
-def filter_indices(index, row_min, row_max, col_min, col_max):
-    mask = (index[:, 0] >= row_min) & (index[:, 0] <= row_max) & (index[:, 1] >= col_min) & (index[:, 1] <= col_max)
-    return index[mask]
-
-
 def find_cut_row(ai, af, index, val):
     """Translation of DBCSR find_cut_row for 0-based coordinates."""
 

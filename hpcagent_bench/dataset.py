@@ -17,7 +17,6 @@ import dataclasses
 import datetime
 import logging
 import pathlib
-import sqlite3
 import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING

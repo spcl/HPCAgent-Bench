@@ -17,11 +17,9 @@ Each test pins one rule so a regression points straight at it.
 import ast
 import json
 import pathlib
-import subprocess
 import sys
 import tempfile
 
-import pytest
 
 SRC = pathlib.Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
@@ -33,10 +31,6 @@ from numpyto_common.lowering import _SubscriptifyNames, _WholeArrayAssignRewrite
 
 def _expr(src: str) -> ast.expr:
     return ast.parse(src, mode="eval").body
-
-
-def _ivars(*names):
-    return [ast.Name(id=n, ctx=ast.Load()) for n in names]
 
 
 # A. ``_SubscriptifyNames`` -- newaxis binds the slice to the right iter       #

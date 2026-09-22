@@ -11,7 +11,6 @@ import sys
 import importlib.util
 import tempfile
 
-import numpy as np
 
 import _native_tu as tu
 

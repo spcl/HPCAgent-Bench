@@ -47,12 +47,6 @@ VLLM_SERIES = {
     RUNNING: "vllm:num_requests_running",
     WAITING: "vllm:num_requests_waiting",
 }
-SGLANG_SERIES = {
-    GENERATION: "sglang:generation_tokens_total",
-    PROMPT: "sglang:prompt_tokens_total",
-    RUNNING: "sglang:num_running_reqs",
-    WAITING: "sglang:num_queue_reqs",
-}
 
 
 def load_example_module(name: str) -> ModuleType:

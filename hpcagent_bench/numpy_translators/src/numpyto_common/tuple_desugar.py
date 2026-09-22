@@ -30,7 +30,7 @@ import ast
 import copy
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
-from numpyto_common.numpy_desugar import expr_rank, is_len_of
+from numpyto_common.numpy_desugar import expr_rank
 from numpyto_common.ordered import OrderedSet
 
 #: Module aliases a kernel may spell numpy as.

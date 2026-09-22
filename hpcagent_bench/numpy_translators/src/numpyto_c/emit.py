@@ -1700,7 +1700,6 @@ class _CBodyEmitter(BaseEmitter):
         norm_kind = node.args[4].value  # 0 backward / 1 forward / 2 ortho -- _NORM_KIND's encoding
         f32 = self._is_float32_kernel()
         prefix = "fftwf" if f32 else "fftw"
-        ctype = "float _Complex" if f32 else "double _Complex"
         num = "float" if f32 else "double"
         sign = "FFTW_BACKWARD" if inverse else "FFTW_FORWARD"
         divides = norm_kind == 2 or (norm_kind == 0) == inverse

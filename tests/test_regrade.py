@@ -14,7 +14,6 @@ import contextlib
 import dataclasses
 import functools
 import importlib.util
-import math
 import os
 import pathlib
 import sqlite3

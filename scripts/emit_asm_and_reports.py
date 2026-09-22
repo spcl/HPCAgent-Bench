@@ -24,7 +24,6 @@ import dataclasses
 import hashlib
 import pathlib
 import subprocess
-import sys
 from typing import Dict, List, Optional, Tuple
 
 from hpcagent_bench import languages, paths
