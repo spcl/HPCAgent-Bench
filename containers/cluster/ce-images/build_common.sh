@@ -30,6 +30,32 @@ ce_podman_env() {
     mkdir -p -m 0700 "${XDG_RUNTIME_DIR}"
 }
 
+# A podman store of this run's own, for a node where another podman may be live -- a LOGIN node,
+# where ce_podman_env's wipe of the shared /dev/shm graphroot would destroy someone else's work.
+# Every podman call inherits it through CONTAINERS_STORAGE_CONF, including the ones enroot import
+# makes. $1 must be on tmpfs: the overlay graphroot cannot live on scratch (ce_cache_base_image),
+# and neither can TMPDIR during a build, because RUN steps create their rootfs mountpoint under it
+# and that mkdir is refused on Lustre (measured on beverin-ln001). Use "$1/tmp" for that.
+ce_private_podman_store() {
+    local store="$1"
+    mkdir -p "${store}/root" "${store}/runroot" "${store}/tmp"
+    printf '[storage]\ndriver = "overlay"\ngraphroot = "%s/root"\nrunroot = "%s/runroot"\n' \
+        "${store}" "${store}" > "${store}/storage.conf"
+    export CONTAINERS_STORAGE_CONF="${store}/storage.conf"
+}
+
+# Removes a store ce_private_podman_store made: containers and images first, so no overlay mount
+# still holds it, then the tree through `podman unshare` (its layers are owned by subuids).
+ce_remove_podman_store() {
+    local store="$1"
+    [[ -f "${store}/storage.conf" ]] || return 0
+    CONTAINERS_STORAGE_CONF="${store}/storage.conf" podman rm -a -f >/dev/null 2>&1 || true
+    CONTAINERS_STORAGE_CONF="${store}/storage.conf" podman rmi -a -f >/dev/null 2>&1 || true
+    podman unshare rm -rf "${store}" 2>/dev/null || true
+    rm -rf "${store}" 2>/dev/null || true
+    [[ ! -e "${store}" ]] || echo "warning: ${store} is still there; remove it with podman unshare rm -rf" >&2
+}
+
 # Sets the global MIRROR_ARGS. Every clone in the build is rewritten to the mirror (see each
 # Dockerfile), which took GitHub off the critical path: the rate limiter answers an
 # unauthenticated clone with a 401 under load, and the callers that died on it -- spack's

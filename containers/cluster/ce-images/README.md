@@ -420,10 +420,94 @@ measuring one: a kernel that is correct can still lose to triton end to end.
 
 ## Registry
 
-One repository for every image: `docker.io/spcleth/hpcagent-bench`. The tag is the `.sqsh` basename
-minus the `hpcagent-bench-` prefix, so a tag names the ROLE and cannot drift from the file it was built
-from. **Credentials come from the environment (`REGISTRY_USER`, `REGISTRY_TOKEN`) and are never
-written into the repo.** Do not push without explicit instruction.
+One repository for every image: `docker.io/spcleth/hpcagent-bench`. The TAG names the role, from
+the explicit `*_TAG` map in `images.env` (never derived from a file name), and `push_image.sh` adds
+an immutable `sha-<digest>` tag to every push. **Credentials come from the environment
+(`REGISTRY_USER`, and `REGISTRY_TOKEN` = a Docker Hub access token with write access to
+`spcleth/hpcagent-bench`) and are never written into the repo.** Do not push without explicit
+instruction.
+
+What is published is always an **OCI archive**, `<image>.oci.tar` beside the `.sqsh`: the squashfs
+is flat and carries no image config. `build.sh` writes one with every build; the two scripts below
+make one without a build job, then `push_images.sbatch` publishes it.
+
+Both scripts are login-node jobs. Run them as a transient user **service** (a session child dies
+with the session), niced, one heavy step at a time; `SCRATCH` and `HOME` must be exported inside,
+because a user service has neither:
+
+```bash
+systemd-run --user --unit=<name> --collect bash -c \
+  'export SCRATCH=<scratch> HOME=<home>; exec nice -n 19 ionice -c3 <command> > <log> 2>&1'
+```
+
+### Release judge: the agent archive plus hpcagent_bench at one git sha
+
+Runs never use a baked judge library -- `run_cluster.sh` puts the mounted checkout first on
+`PYTHONPATH` -- so the published judge is built separately, and says which commit it carries.
+`build-judge-release.sh` loads the agent's saved `.oci.tar` and builds only the Dockerfile's `judge`
+stage on it (`AGENT_BASE`), with a detached worktree at the ref as the context. No toolchain rebuild,
+a login node is enough.
+
+```bash
+containers/cluster/ce-images/judge-agent-amd/build-judge-release.sh             # HEAD of this checkout
+containers/cluster/ce-images/judge-agent-amd/build-judge-release.sh <git-ref>   # any commit
+```
+
+It writes `$SCRATCH/ce-images/hpcagent-bench-judge-mi300-release-candidate.{oci.tar,sqsh}` plus
+`.digest`/`.sha256`, refuses to overwrite any of them, labels the image
+`org.opencontainers.image.version=<sha12>` and `.revision=<sha>`, and fails unless the judge's
+environment equals the agent's. Measured for 2cf442701 on beverin-ln001: 28 minutes (agent load 8.5,
+judge stage 10.5, squashfs 2.5, OCI save 6.5), peak 69 GB of `/dev/shm`, and 55 of the judge's 60
+layers are the agent archive's own blobs, so a push after the agent's uploads 5 layers. Verify the
+squashfs, then publish the archive as `judge-mi300-<sha12>` (below):
+
+```bash
+IMAGE=$SCRATCH/ce-images/hpcagent-bench-judge-mi300-release-candidate.sqsh PROFILE=judge \
+  sbatch containers/cluster/ce-images/verify_image.sbatch
+```
+
+The judge stage's RUN steps run WITHOUT the agent's mimalloc preload here: it is built for the
+MI300A's Zen 4 and the login node's Zen 3 dies on it with SIGILL (`JUDGE_RUN_LD_PRELOAD`, in the
+Dockerfile). The shipped image preloads it as before.
+
+### Inference images: re-export the squashfs the runs used
+
+The sglang and vllm images predate the saved archives, and a rebuild would be a different image.
+`sqsh_to_oci.sh` publishes the squashfs itself, streamed from a squashfuse mount:
+
+```bash
+containers/cluster/ce-images/sqsh_to_oci.sh $SCRATCH/ce-images/hpcagent-bench-sglang-mi300.sqsh
+containers/cluster/ce-images/sqsh_to_oci.sh $SCRATCH/ce-images/hpcagent-bench-vllm-mi300.sqsh
+```
+
+Each writes `<image>.oci.tar` + `.oci.tar.sha256` beside the squashfs, the name `push_images.sbatch`
+looks for. The file tree is the squashfs, byte for byte, hard links included, cut into layers of at
+most 4 GiB uncompressed (`LAYER_BYTES`) because the registry refuses a layer over 10 GB. The image
+config (Env, WorkingDir, Entrypoint/Cmd, Labels) is read back from what `enroot import` recorded in
+the rootfs (`/etc/environment`, `/etc/rc`, `/etc/fstab`), which is what the runs used. Labels
+`hpcagent-bench.reexport.source{,.sha256}` name the squashfs; its hash is checked against its
+`.sha256` first. The same squashfs always gives the same archive bytes. Measured on beverin-ln001:
+sglang 16 min (17 layers, 22.8 GB, largest 2.6 GB), vllm 13 min (15 layers, 23.4 GB, largest
+2.8 GB); nothing lands on `/dev/shm` but an empty mountpoint, since FUSE refuses to mount on Lustre.
+
+### Push: preflight first
+
+`push_images.sbatch` runs on a compute node and defaults to `DRY_RUN=1`: every gate that can reject
+an upload (layer and image size against the registry limits, archive load), no login, no bytes out.
+
+```bash
+cd containers/cluster/ce-images
+# preflight: the four roles, then the release judge
+DRY_RUN=1 sbatch push_images.sbatch
+DRY_RUN=1 ROLES=judge-release JUDGE_AMD_RELEASE_TAG=judge-mi300-<sha12> sbatch push_images.sbatch
+
+# publish (explicit)
+REGISTRY_USER=<user> REGISTRY_TOKEN=<token> DRY_RUN=0 ROLES="sglang vllm" sbatch push_images.sbatch
+REGISTRY_USER=<user> REGISTRY_TOKEN=<token> DRY_RUN=0 ROLES=judge-release \
+  JUDGE_AMD_RELEASE_TAG=judge-mi300-<sha12> sbatch push_images.sbatch
+```
+
+`build-judge-release.sh` prints both commands with its sha filled in.
 
 ## What is on scratch
 

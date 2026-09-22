@@ -5,6 +5,9 @@
 #   ROLES="judge" sbatch containers/cluster/ce-images/push_images.sbatch
 #   DRY_RUN=1 sbatch ...                                            # every gate, no bytes out
 #
+#   # the release judge (judge-agent-amd/build-judge-release.sh), tagged with its git sha:
+#   ROLES=judge-release JUDGE_AMD_RELEASE_TAG=judge-mi300-<sha12> sbatch ...
+#
 # NOTHING IS PUBLISHED WITHOUT DRY_RUN=0 AND AN EXPLICIT ROLES/ALL. Publishing is one-way: a tag
 # that reaches a public registry has been fetched and cached before anyone notices it was wrong.
 #
@@ -46,8 +49,22 @@ role_sqsh() {
     case "$1" in
         judge-agent-amd) printf '%s' "${JUDGE_AGENT_AMD_SQSH}" ;;
         judge)           printf '%s' "${JUDGE_AMD_SQSH}" ;;
+        judge-release)   printf '%s' "${JUDGE_AMD_RELEASE_SQSH}" ;;
         sglang)          printf '%s' "${INFERENCE_SGLANG_SQSH}" ;;
         vllm)            printf '%s' "${INFERENCE_VLLM_SQSH}" ;;
+        *) return 2 ;;
+    esac
+}
+
+# The tag each role publishes, from the explicit map in images.env. This called sqsh_tag, which
+# images.env stopped defining when tags became a map, so every role died on "command not found".
+role_tag() {
+    case "$1" in
+        judge-agent-amd) printf '%s' "${JUDGE_AGENT_AMD_TAG}" ;;
+        judge)           printf '%s' "${JUDGE_AMD_TAG}" ;;
+        judge-release)   printf '%s' "${JUDGE_AMD_RELEASE_TAG}" ;;
+        sglang)          printf '%s' "${INFERENCE_SGLANG_TAG}" ;;
+        vllm)            printf '%s' "${INFERENCE_VLLM_TAG}" ;;
         *) return 2 ;;
     esac
 }
@@ -60,7 +77,12 @@ echo
 failed=""
 for role in ${ROLES}; do
     sqsh="$(role_sqsh "${role}")" || { echo "unknown role ${role}" >&2; failed="${failed} ${role}"; continue; }
-    tag="$(sqsh_tag "${sqsh}")"
+    tag="$(role_tag "${role}")"
+    if [ -z "${tag}" ]; then
+        echo "=== ${role}: no tag; set JUDGE_AMD_RELEASE_TAG=judge-mi300-<sha12> (build-judge-release.sh prints it)" >&2
+        failed="${failed} ${role}"
+        continue
+    fi
     archive="${CE}/${sqsh%.sqsh}.oci.tar"
     echo "=== ${role}  ->  ${REGISTRY_REPO}:${tag}"
     echo "    archive ${archive}"
@@ -86,4 +108,4 @@ if [ -n "${failed}" ]; then
     exit 1
 fi
 [ "${DRY_RUN}" != "0" ] && echo "preflight PASSED for: ${ROLES} (nothing was published; set DRY_RUN=0 to publish)"
-echo done
+echo "done"
