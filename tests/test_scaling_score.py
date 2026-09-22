@@ -15,7 +15,14 @@ import math
 
 import pytest
 
-from hpcagent_bench.harness.metric import ScalingScore, ideal_speedup, scaling_point, scaling_score
+from hpcagent_bench.harness.metric import (
+    NO_SAMPLES_NOTE,
+    ScalingDrop,
+    ScalingScore,
+    ideal_speedup,
+    scaling_point,
+    scaling_score,
+)
 
 
 # ideal speed-up: P for strong (Amdahl), 1 for weak (Gustafson)
@@ -186,3 +193,38 @@ def test_score_weak_uses_the_per_p_work_ratio_and_exact_growth_for_an_absent_p()
     """A P in work_ratio is corrected by its realized r; a P absent from it grew exactly (r = P)."""
     s = scaling_score("k", "weak", single_rank_ns=1000, measured_ns={2: 1000, 4: 1000}, work_ratio={2: 1.9})
     assert [p.efficiency for p in s.points] == [pytest.approx(1.9 / 2), 1.0]
+
+
+# the per-P record the results DB persists (recording.record_scaling)
+def test_score_points_carry_their_recorded_placement_shape_and_note() -> None:
+    s = scaling_score(
+        "k",
+        "weak",
+        1000,
+        {1: 1000, 2: 1100},
+        work_ratio={1: 1.0, 2: 1.96},
+        nodes={1: 1, 2: 1},
+        shapes={1: {"N": 100}, 2: {"N": 140}},
+        rank_notes={2: "rounded"},
+    )
+    got = [(p.ranks, p.nodes, p.shape, p.note, p.work_ratio) for p in s.points]
+    assert got == [(1, 1, {"N": 100}, "", 1.0), (2, 1, {"N": 140}, "rounded", 1.96)], got
+
+
+def test_score_a_noted_p_without_a_time_is_a_hole_not_a_point() -> None:
+    """A dropped P must survive on the curve as a hole with its reason, or a record cannot show it."""
+    s = scaling_score(
+        "k", "strong", 1000, {1: 1000, 4: 300}, nodes={8: 2}, shapes={8: {"N": 64}}, rank_notes={8: "mpi build failed"}
+    )
+    assert [p.ranks for p in s.points] == [1, 4]
+    assert s.dropped == (ScalingDrop(ranks=8, note="mpi build failed", nodes=2, shape={"N": 64}),), s.dropped
+
+
+def test_score_a_p_timed_at_zero_is_a_hole_that_says_so() -> None:
+    s = scaling_score("k", "strong", 1000, {1: 1000, 2: 0})
+    assert s.dropped == (ScalingDrop(ranks=2, note=NO_SAMPLES_NOTE),), s.dropped
+
+
+def test_a_strong_point_carries_no_work_ratio() -> None:
+    """Strong never reads r; storing one would make a reader recompute eta under the weak law."""
+    assert scaling_point("strong", 4, 1000, 250, work_ratio=4.0).work_ratio is None
