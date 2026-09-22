@@ -2445,12 +2445,18 @@ def claude_command(context: "Context") -> list[str]:
 #: 1M-token service included.
 CLAUDE_CONTEXT_CAP = 262144
 
+#: The reply reserve is at most this fraction of the window: 32768 at 262144, 16384 at 131072, where
+#: GPT-OSS's replies peak at 9.4k (p99 5.6k over 487 requests). The server reserves max_tokens on
+#: EVERY request, so a smaller reserve is window handed back to the transcript.
+CLAUDE_REPLY_FRACTION_DENOMINATOR = 8
+
 #: Room for ONE turn between the last compaction check that passes and the compaction request after
-#: it. That request re-sends the transcript with the turn's new output and tool results plus a 1.3k
-#: summary prompt, and reserves a full CLAUDE_CODE_MAX_OUTPUT_TOKENS reply of its own. When it
-#: overflows, 2.1.197 sends the main request anyway and dies on the same 400 (stub-measured). Per-turn
-#: prompt growth over 1583 requests of 28 llr-focus40 transcripts: p99 11.5k, p99.9 30.0k, max 32.6k.
-CLAUDE_TURN_HEADROOM = 40000
+#: it, as a fraction of the window. That request re-sends the transcript with a ~1.3k summary prompt
+#: and reserves a full reply; when it overflows, 2.1.197 sends the main request anyway and dies on the
+#: same 400 (stub-measured). Per-turn prompt growth over 1583 requests of 28 llr-focus40 transcripts:
+#: p99 11.5k, p99.9 30.0k, max 32.6k -- and 2.1.197 leaves the newest turn out of the compaction
+#: request (it is kept verbatim after the summary), so that request is the previous one plus ~2k.
+CLAUDE_TURN_HEADROOM_FRACTION = 0.12
 
 #: claude-code 2.1.197 compacts at floor(E * pct / 100), E = window - min(max output, this).
 CLAUDE_SUMMARY_RESERVE = 20000
@@ -2481,17 +2487,19 @@ def claude_context_env(environment: Mapping[str, str]) -> dict[str, str]:
     never on vLLM/SGLang's "maximum context length". CLAUDE_CODE_AUTO_COMPACT_WINDOW makes the source
     "env", which is what turns proactive compaction on; CLAUDE_CODE_MAX_CONTEXT_TOKENS lifts the
     200000 guess to the real window; the percentage then puts the trigger at
-    window - max output - CLAUDE_TURN_HEADROOM, which the window variable alone cannot express below
-    its 100000 floor (131072 served).
+    window - reply reserve - one-turn headroom, which the window variable alone cannot express below
+    its 100000 floor (131072 served). The reply reserve is exported as CLAUDE_CODE_MAX_OUTPUT_TOKENS,
+    so it is also the max_tokens every request asks the server to hold free.
     """
     limit = min(served_context(environment), CLAUDE_CONTEXT_CAP)
     harnesses = harness_module()
-    max_output = (
+    configured = (
         harnesses.positive_int(environment.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS", ""))
         or harnesses.DEFAULT_MAX_OUTPUT_TOKENS
     )
-    threshold = limit - max_output - CLAUDE_TURN_HEADROOM
-    effective = limit - min(max_output, CLAUDE_SUMMARY_RESERVE)
+    reply = min(configured, limit // CLAUDE_REPLY_FRACTION_DENOMINATOR)
+    threshold = limit - reply - round(CLAUDE_TURN_HEADROOM_FRACTION * limit)
+    effective = limit - min(reply, CLAUDE_SUMMARY_RESERVE)
     # Truncated to the 4 decimals written out, so the CLI's floor(effective * pct / 100) never
     # lands above the threshold.
     percent = math.floor(threshold * 10**6 / effective) / 10**4
@@ -2499,6 +2507,7 @@ def claude_context_env(environment: Mapping[str, str]) -> dict[str, str]:
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS": str(limit),
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(limit),
         "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": f"{percent:.4f}",
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(reply),
     }
 
 

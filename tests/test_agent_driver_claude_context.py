@@ -9,8 +9,9 @@ so Qwen episodes grew to 230674 input tokens and died on the 400. agent_driver.c
 names the window (CLAUDE_CODE_MAX_CONTEXT_TOKENS, CLAUDE_CODE_AUTO_COMPACT_WINDOW) and places the
 trigger (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE); scripts/claude_compaction_stub.py proves it on the binary.
 
-USER 2026-09-22: the limit is min(served window, 262144) for every model, and the trigger leaves a
-full reply (CLAUDE_CODE_MAX_OUTPUT_TOKENS) plus one turn of growth under it. The window comes from
+USER 2026-09-22: the limit L is min(served window, 262144) for every model; the reply reserve R is
+min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, L // 8) and is exported as the reply cap; the trigger leaves R plus
+one turn of growth, round(0.12 * L), under L -- ~198k at 256k, ~99k at 128k. The window comes from
 keys every arm snapshot ALREADY carries -- CONTEXT_LENGTH and the engine's --context-length /
 --max-model-len -- so a pending job picks the fix up at start without being re-rendered.
 """
@@ -41,19 +42,30 @@ SERVED = {
     "gpt6astra": 1050000,
 }
 
-#: What claude is given for each served window at the common 32768-token reply cap. The percentage
-#: puts the CLI's trigger floor((window - 20000) * pct / 100) at window - 32768 - 40000.
+#: What claude is given for each served window at the launcher's 32768-token reply cap:
+#: 262144 -> R 32768, H 31457, trigger 197919; 131072 -> R 16384, H 15729, trigger 98959. The CLI
+#: compacts at floor((window - min(R, 20000)) * pct / 100).
 EXPECTED = {
     262144: {
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "262144",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "262144",
-        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "78.2080",
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "81.7360",
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32768",
     },
     131072: {
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "131072",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "131072",
-        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "52.4920",
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "86.2854",
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16384",
     },
+}
+
+#: (served window, configured reply cap) -> (reply reserve, trigger the CLI must not pass).
+TRIGGERS = {
+    (262144, 32768): (32768, 262144 - 32768 - 31457),
+    (262144, 16384): (16384, 262144 - 16384 - 31457),
+    (131072, 32768): (16384, 131072 - 16384 - 15729),
+    (131072, 8192): (8192, 131072 - 8192 - 15729),
 }
 
 
@@ -87,9 +99,10 @@ def model_of(path: pathlib.Path) -> str:
     return names[0]
 
 
-def cli_trigger(environment: dict[str, str], max_output: int) -> int:
+def cli_trigger(environment: dict[str, str]) -> int:
     """The token count claude-code 2.1.197 compacts at, as its own arithmetic computes it:
     floor(E * (pct / 100)) with E = window - min(max output, 20000), capped at E - 13000."""
+    max_output = int(environment["CLAUDE_CODE_MAX_OUTPUT_TOKENS"])
     effective = int(environment["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]) - min(max_output, 20000)
     percent = float(environment["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"])
     return min(math.floor(effective * (percent / 100)), effective - 13000)
@@ -106,19 +119,21 @@ def test_every_arm_env_gives_claude_its_models_window_capped_at_256k(driver: Mod
     assert driver.claude_context_env(values) == EXPECTED[min(served, 262144)]
 
 
-@pytest.mark.parametrize("window", sorted(EXPECTED))
-@pytest.mark.parametrize("max_output", [32768, 16384])
-def test_the_trigger_leaves_a_full_reply_and_one_turn_under_the_window(
-    driver: ModuleType, window: int, max_output: int
+@pytest.mark.parametrize(("window", "configured"), sorted(TRIGGERS))
+def test_the_trigger_leaves_the_reply_reserve_and_one_turn_under_the_window(
+    driver: ModuleType, window: int, configured: int
 ) -> None:
-    """A request sent just under the trigger still fits with its whole reply reserved, and so does the
-    compaction request after one more turn of up to CLAUDE_TURN_HEADROOM tokens. The truncated
-    percentage may place the trigger a token or two early, never late."""
+    """The reply cap shrinks to an eighth of a small window and never grows past what the launcher
+    configured; it is exported, so the server holds exactly that much free. A request sent just under
+    the trigger still fits with its reply reserved, and so does the compaction request after one more
+    turn of 12% of the window. The truncated percentage may place the trigger a token or two early,
+    never late."""
     environment = driver.claude_context_env(
-        {"CONTEXT_LENGTH": str(window), "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(max_output)}
+        {"CONTEXT_LENGTH": str(window), "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(configured)}
     )
-    wanted = window - max_output - driver.CLAUDE_TURN_HEADROOM
-    assert wanted - 2 <= cli_trigger(environment, max_output) <= wanted
+    reply, wanted = TRIGGERS[window, configured]
+    assert environment["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == str(reply)
+    assert wanted - 2 <= cli_trigger(environment) <= wanted
 
 
 def test_the_smallest_window_any_source_names_wins(driver: ModuleType) -> None:
