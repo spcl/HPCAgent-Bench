@@ -176,10 +176,11 @@ def test_export_builds_once_and_feeds_both_write_and_push(tmp_path, monkeypatch)
         captured["builds"] = captured.get("builds", 0) + 1
         return real_build(*a, **k)
 
-    def fake_push(rows, repo_id, *, config=None, token=None, revision=None) -> None:
+    def fake_push(rows, repo_id, *, config=None, token=None, revision=None, private=None) -> None:
         captured["rows"] = rows
         captured["repo"] = repo_id
         captured["config"] = config
+        captured["private"] = private
 
     monkeypatch.setattr(H, "build_rows", counting_build)
     monkeypatch.setattr(H, "push_to_hub", fake_push)
@@ -207,6 +208,36 @@ def test_export_builds_once_and_feeds_both_write_and_push(tmp_path, monkeypatch)
     assert [r.id for r in captured["rows"]] == [w["id"] for w in written]
     assert captured["repo"] == "org/demo"
     assert captured["config"] == "loop_level_reasoning_tsvc_2_s212"  # slash-bearing selector flattened
+    assert captured["private"] is None  # --private absent -> leaves the Hub's own default alone
+
+
+def test_export_push_private_flag_reaches_push_to_hub(tmp_path, monkeypatch) -> None:
+    """``--private`` on the CLI must reach push_to_hub as private=True, not silently drop."""
+    from hpcagent_bench import cli, hf_export as H
+
+    captured = {}
+
+    def fake_push(rows, repo_id, *, config=None, token=None, revision=None, private=None) -> None:
+        captured["private"] = private
+
+    monkeypatch.setattr(H, "push_to_hub", fake_push)
+    out = tmp_path / "ds.jsonl"
+    args = cli.build_parser().parse_args(
+        [
+            "export-hf",
+            "--selector",
+            "loop_level_reasoning/tsvc_2_s212",
+            "--out",
+            str(out),
+            "--format",
+            "jsonl",
+            "--push",
+            "org/demo",
+            "--private",
+        ]
+    )
+    assert cli.cmd_export_hf(args) == 0
+    assert captured["private"] is True
 
 
 def test_bad_selector_is_a_clean_error_not_a_traceback(tmp_path, capsys) -> None:
