@@ -11,16 +11,23 @@
 #
 # WHAT DIFFERS FROM judge-agent-amd, and nothing else should. Every other layer is the AMD recipe
 # with its measured fixes; the reasons are written there once and referenced here, not repeated.
-#   base          the CSCS alps build of NGC PyTorch (CUDA 13, Ubuntu 24.04, python 3.12)
+#   base          public NGC PyTorch 25.06 (CUDA 12.9.1, Ubuntu 24.04, python 3.12, NCCL 2.27.3)
 #   vendor stack  CUDA toolkit, cuTENSOR, NCCL, Nsight Compute/Systems, NVHPC (the ONLY OpenACC path)
 #   offload       LLVM OpenMP -> nvptx sm_90. No amdclang, no hipify, and GCC is built without
 #                 +nvptx: IMAGE_REQUIREMENTS.md "GCC is not an offload compiler here"
 #   GPU-aware     mpich/superlu-dist/strumpack/magma/petsc/sundials +cuda cuda_arch=${CUDA_ARCH}
-#   python        the base's NGC torch, the cupy WHEEL, jax[cuda13]
+#   python        the base's NGC torch, the cupy WHEEL, jax -- both for the base's CUDA major
 #   absent        Intel MKL (x86_64 only), the rocprof tools, PAPI's rocm components
 #
+# CUDA 12.9 ON PURPOSE, not the newest NGC. Its runtime runs on any driver >= 525 through minor-
+# version compatibility, where CUDA 13 needs >= 580 on every node; and the CE's NCCL net plugin
+# (com.hooks.aws_ofi_nccl.variant = "cuda12") is built for this major -- the beverin failure was a
+# plugin one runtime major behind its image. 25.06 is the newest NGC PyTorch release on CUDA 12.9
+# (25.08 onward is CUDA 13). Pinned by its ARM64 manifest digest, resolved from nvcr.io without a
+# pull; the multi-arch index is sha256:025d9b102b5436d4af8af58f12c6a46b7e5d16f19543b1d2cc4446bf2650b4f1.
+#
 # LAYER ORDER is build cost, most expensive first -- see judge-agent-amd for the full table.
-ARG BASE_IMAGE=jfrog.svc.cscs.ch/docker-group-csstaff/alps-images/ngc-pytorch:26.02-py3-alps6
+ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:25.06-py3@sha256:6d46ebd64cfbc74c84e11678c0c5ae298ca97c26171c17a23fd04d23fec5123e
 
 # ------------------------------------------------------------------------------------------------
 # Stage 0: a compile-only libfabric, and nothing else. Identical to judge-agent-amd stage 0.
@@ -124,11 +131,13 @@ ARG SPACK_PACKAGES_REF=3936d6c1796a095cd29f24f3082a5f32f4b5f938
 # it off the build node's `srun --version`, and the spack bootstrap below refuses a version the
 # pinned spack-packages does not carry, in seconds rather than after the compiler build.
 ARG SLURM_VERSION=
-# NVIDIA HPC SDK from the arm64 repo; cuTENSOR and Nsight from the CUDA sbsa repo.
+# NVIDIA HPC SDK from the arm64 repo; cuTENSOR and Nsight from the CUDA sbsa repo. Nsight is the
+# CUDA 12.9 generation: ncu 2025.2.1 is the one CUDA 12.9.1 ships, nsys 2025.3.2 the repo's nearest to
+# the base's 2025.3.1 -- a 2026 Nsight would outrun the driver CUDA 12.9 was chosen for.
 ARG NVHPC_APT_VERSION=26-5
 ARG CUTENSOR_VERSION=2.7.0.5-1
-ARG NSIGHT_COMPUTE_PKG=nsight-compute-2026.2.1
-ARG NSIGHT_SYSTEMS_PKG=nsight-systems-2026.1.3
+ARG NSIGHT_COMPUTE_PKG=nsight-compute-2025.2.1
+ARG NSIGHT_SYSTEMS_PKG=nsight-systems-2025.3.2
 # The four packages every CPU reference number is computed with: a pip CONSTRAINT for every
 # install below, asserted at the end. Values are what the host venv grades with.
 ARG NUMPY_VERSION=2.5.2
@@ -137,16 +146,18 @@ ARG PANDAS_VERSION=3.0.5
 ARG ASTUNPARSE_VERSION=1.6.3
 
 # Spack keeps ALL its state inside the image (a runtime $HOME must not change what it knows).
-# NVCC_PREPEND_FLAGS is set BEFORE the spack layers: gcc 16 is newer than any host compiler CUDA 13
+# NVCC_PREPEND_FLAGS is set BEFORE the spack layers: gcc 16 is newer than any host compiler CUDA 12.9
 # whitelists, and nvcc refuses on the version check alone -- in magma's and petsc's builds as much
 # as in a graded one. The final gate compiles and links real kernels, so "the check was waived" is
-# never mistaken for "the pair works".
+# never mistaken for "the pair works". NVHPC_CUDA_HOME points nvc/nvfortran at the base's CUDA 12.9
+# instead of the newer CUDA the SDK bundles, so an OpenACC binary needs the same driver as the rest.
 ENV LC_ALL=C \
     PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,profiler \
     CUDA_HOME=/usr/local/cuda \
     NVCC_PREPEND_FLAGS=-allow-unsupported-compiler \
+    NVHPC_CUDA_HOME=/usr/local/cuda \
     SPACK_ROOT=/opt/spack \
     SPACK_ENV_DIR=/opt/spack-env \
     SPACK_DISABLE_LOCAL_CONFIG=true \
@@ -768,7 +779,9 @@ RUN set -eux; \
 # move numpy fails to resolve instead of moving the CPU reference. The base's torch is the NGC build
 # for this architecture and is asserted unmoved. `triton` is filtered out of the requirements for
 # the reason judge-agent-amd step 11 gives: `pip install triton` is a different distribution than
-# the one the base's torch was built with, overwriting the same site-packages directory.
+# the one the base's torch was built with, overwriting the same site-packages directory. The
+# requirements' CUDA-suffixed jax and cupy lines go too (pyproject names CUDA 13's): the next layer
+# installs both for the base's own CUDA major, and a second cupy would share the `cupy` package.
 ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
     PIP_CONSTRAINT=/opt/image-pins.txt
 COPY requirements/ /requirements/
@@ -784,7 +797,7 @@ RUN set -eux; \
       print(next((d.metadata["Name"] for d in m.distributions() \
       if d.metadata["Name"] and "triton" in d.metadata["Name"].lower()), ""))')"; \
     printf 'triton distribution before: %s\n' "${triton_before:-none}"; \
-    grep -v '^triton$' "/${PYTHON_REQUIREMENTS}" > /tmp/requirements-image.txt; \
+    grep -vE '^(triton|jax\[cuda[0-9]+\]|cupy-cuda[0-9]+x)$' "/${PYTHON_REQUIREMENTS}" > /tmp/requirements-image.txt; \
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
     MPICC=/opt/view/bin/mpicc \
       python3 -m pip install --no-cache-dir --no-binary=mpi4py -r /tmp/requirements-image.txt; \

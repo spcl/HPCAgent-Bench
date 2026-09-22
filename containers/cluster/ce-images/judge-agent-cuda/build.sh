@@ -43,7 +43,9 @@ target_sqsh() {
     esac
 }
 
-BASE_IMAGE="${BASE_IMAGE:-jfrog.svc.cscs.ch/docker-group-csstaff/alps-images/ngc-pytorch:26.02-py3-alps6}"
+# MUST track the Dockerfile's ARG default (public NGC PyTorch 25.06, CUDA 12.9, arm64 manifest digest):
+# passing it here overrides that default.
+BASE_IMAGE="${BASE_IMAGE:-nvcr.io/nvidia/pytorch:25.06-py3@sha256:6d46ebd64cfbc74c84e11678c0c5ae298ca97c26171c17a23fd04d23fec5123e}"
 IMAGE_VERSION="${IMAGE_VERSION:-dev}"
 mkdir -p "${CE_DIR}"
 

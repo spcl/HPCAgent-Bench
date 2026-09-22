@@ -29,6 +29,7 @@ FC = "/opt/gcc/bin/gfortran"
 DACE_compiler_cpu_executable = "/opt/gcc/bin/g++"
 CUDA_HOME = "/usr/local/cuda"
 NVCC_PREPEND_FLAGS = "-allow-unsupported-compiler"
+NVHPC_CUDA_HOME = "/usr/local/cuda"
 OPENMPI_ROOT = "/opt/openmpi"
 PMIX_MCA_psec = "native"
 HWLOC_COMPONENTS = "-opencl,-levelzero,-gl"
@@ -38,6 +39,6 @@ LD_PRELOAD = "/usr/local/lib/libmimalloc.so"
 
 [annotations]
 com.hooks.cxi.enabled = "true"
-# See edf.toml.example: verify the variant against this CUDA 13 image on a Daint node.
+# See edf.toml.example: cuda12 matches this CUDA 12.9 image; the NCCL_DEBUG log is the check.
 com.hooks.aws_ofi_nccl.enabled = "true"
 com.hooks.aws_ofi_nccl.variant = "cuda12"
