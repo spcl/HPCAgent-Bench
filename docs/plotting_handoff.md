@@ -149,8 +149,10 @@ into `llrblind-cmp-*` (`experiments.fold_renamed_arms`).
 
 Drawn by `hpcagent_bench.stats.figures.efficacy.figure_dot_row` (the default `--mode dots`). Three
 rows share one set of columns: geomean speed-up on top, tasks completed, billed token cost below.
-No row carries X tick marks; the categories are named under the last one. Each column is one model and delivery; its two marks are the control (hollow circle) and
-the treated arm (the packet's shape).
+No row carries X tick marks; the categories are named under the last one. Every row's value axis
+carries unlabelled minor ticks and a faint minor grid (`style.minor_ticks`; the rule per axis kind is in
+[plotting.md](plotting.md)). Each column is one model and delivery; its two marks are the control
+(hollow circle) and the treated arm (the packet's shape).
 
 What each row is over (2026-09-21):
 
@@ -159,8 +161,9 @@ What each row is over (2026-09-21):
   answer slower than the baseline keeps its own sub-1 ratio. Both arms are timed on the same
   kernels, so an arm cannot look faster by solving only the easy ones. `--speedup-over served`
   draws the fallback reading instead (every kernel, a failure at 1x; label "Speed-Up (1x Fallback)").
-- **Tasks completed**: kernels solved per arm, on an axis from 0 to N (the kernels served; ticks in
-  quarters or halves ending on N, limit N+1), with the Wilson 95% interval scaled to counts.
+- **Tasks completed**: kernels solved per arm, on an axis from 0 to N (the kernels served; ticks at
+  0, N/2 and N, or 0 and N for an odd N; limit 5% past N), drawn as a mark at the count and NO
+  interval (user, 2026-09-22): the roster is fixed, so the count is a census, not a sample.
   Optional: `--no-success-row` drops it. An answer scored correct and never submitted counts once
   it is promoted: `hpcagent-bench regrade worklist --scope unpromoted` lists them, `regrade run`
   grades them as /submit does, and `regrade promote-apply` (or extraction with `--regrades`) adds

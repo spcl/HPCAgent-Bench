@@ -30,6 +30,10 @@ a figure that does not is wrong, and the drawing agent returns a self-check tabl
    method and n and the undelivered cross.
 8. Deliverable = the 150 dpi PNG beside the PDF, the exact CLI, and the CSV beside the figure. A bad figure
    is saved and shown to the user with bad-vs-good, then asked about; it is never silently redrawn.
+9. (2026-09-22) Every log value axis, every linear axis in log2 units and the tasks-completed count row
+   carry unlabelled minor ticks and a faint minor grid under the labelled majors (`style.minor_ticks`). A
+   linear axis whose units the caller does not name, and every category axis, carry none. A count over a fixed roster (tasks completed) is
+   a census, not a sample: it is drawn as a mark at the count with no interval.
 
 # Plotting
 
@@ -197,11 +201,23 @@ same panel, whichever way its pairs were formed -- see "A comparison whose pairs
 suffix" below. Pinned by `tests/test_plot_score_change.py`'s
 `test_n_comparisons_draw_one_row_of_n_square_panels`.
 
-**4. Major grid only.** `style.value_axis` draws it, on both axes here (each carries a measured
-ratio), and switches every minor line and minor label off. A minor line is a second grid at a second
-weight, and once a figure is reduced for print the panel reads as a texture the marks sit on rather
-than a reference they sit against. Pinned by `tests/test_plot_score_change.py`'s
-`test_neither_axis_enables_a_minor_grid`.
+**4. A major grid plus a faint minor ruling (user, 2026-09-22).** `style.value_axis` draws the
+major grid on the measured axis, and on a log axis `style.minor_ticks` adds unlabelled minor ticks
+(0.55x the major's length, 0.6x its width) and a minor grid in `style.MINOR_RULE` at
+`style.MINOR_GRID_WIDTH`, under everything. One rule per axis kind, read off the majors actually set
+(`style.MinorLocator`, so a later limit or major change stays right):
+
+| kind | majors | minors |
+|---|---|---|
+| `ratio` (log2 axis) / `log2` (linear axis in log2 units) | one octave apart (1x, 2x, 4x) | 1.25, 1.5, 1.75 x each major (between 4x and 8x: 5x, 6x, 7x) |
+| same | k > 1 octaves apart (1x, 4x, 16x) | every octave between (2x, 8x) |
+| `token` (log10) | 1-2-5 or the config's subs | every whole multiple 1..9 x 10^k that is not a major (300K, 400K, 600K ... 900K) |
+| `count` (success row, 0..N) | `success_ticks` | whole-number parts of the major step: quarters, else fifths, thirds, halves (0/20/40 -> every 5; 0/5/10 -> every 1; 0/9 -> every 3; a prime step gets none) |
+
+A linear value axis gets minors only when its caller names the kind (the efficacy and optimizer
+speed-up axes name `log2`, the success row `count`). Category axes get none. Pinned by
+`tests/test_style_layout.py`'s `test_minor_ticks_fall_where_the_shared_rule_puts_them`,
+`test_no_minor_tick_carries_a_label` and `test_no_minor_tick_lands_on_a_major`.
 
 **5. One legend, on the FIGURE.** `style.legend_below(fig, handles, ...)`, once per figure, never
 `ax.legend`. A key on each panel of a multi-panel figure invites reading the panels as different
@@ -319,11 +335,12 @@ canvas (`style.save(..., fixed=True)`, i.e. `bbox_inches=fig.bbox_inches`). `bbo
 spelling (`numba`, `lang-c`). Ticks rotate 0 or 90 degrees, never an angle. If a figure caps
 coverage, print what was dropped -- silent truncation reads as "this is everything".
 
-`value_axis()` handles four matplotlib traps once: `AutoMinorLocator` refuses log scales; the
-default log locator labels a single tick on a panel under two decades; `LogFormatterSciNotation`
-returns `""` for 5x10^n; and integer minor subs leave the 1-to-2 interval empty while 2-to-5 gets
-several. `log_base` is passed, never sniffed -- matplotlib keeps it private and a wrong guess puts
-minor lines at wrong ratios.
+`value_axis()` handles four matplotlib traps once: `AutoMinorLocator` refuses log scales (a log
+axis takes `style.MinorLocator` instead); the default log locator labels a single tick on a panel
+under two decades; `LogFormatterSciNotation` returns `""` for 5x10^n, and the default log minor
+formatter prints a scientific-notation 3x10^n beside plain majors (minors carry `NullFormatter`).
+`log_base` is passed, never sniffed -- matplotlib keeps it private and a wrong guess puts minor
+lines at wrong ratios.
 
 ## The figures
 

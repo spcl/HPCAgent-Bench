@@ -188,6 +188,7 @@ def style_shared_axis(axes: Sequence[Axes], held: Sequence[float], config: effic
         style.value_axis(ax, "y")
         ax.yaxis.set_major_locator(MultipleLocator(efficacy.x_tick_step(reach, config.max_ticks)))
         ax.yaxis.set_major_formatter(FuncFormatter(style.log2_ratio_tick))
+        efficacy.minor_grid(ax, "y", "log2", config)
         ax.tick_params(axis="both", labelsize=config.tick_pt)
         style.despine(ax)
         efficacy.thin_rules(ax, config)

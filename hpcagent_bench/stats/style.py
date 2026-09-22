@@ -24,13 +24,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.artist import Artist
 from matplotlib.axes import Axes
-from matplotlib.axis import Axis
+from matplotlib.axis import Axis, YAxis
 from matplotlib.backend_bases import RendererBase
 from matplotlib.collections import LineCollection, PathCollection
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.text import Annotation
-from matplotlib.ticker import FuncFormatter, LogLocator, MaxNLocator, NullFormatter, NullLocator
+from matplotlib.ticker import FuncFormatter, Locator, LogLocator, MaxNLocator, NullFormatter
 from matplotlib.transforms import Bbox, Transform
 
 LOG = logging.getLogger(__name__)
@@ -54,6 +54,14 @@ RULE: str = "#d6d6da"
 FAINT: str = "#a8a8ae"
 #: The zero/parity reference. Darker than the grid because it is a statement, not a guide.
 REFERENCE: str = "#3a3a3e"
+#: The MINOR grid's colour and line weight (:func:`minor_ticks`): lighter and thinner than the major
+#: grid (:data:`RULE` at 0.7pt), so it reads as a finer ruling of the same reference and never as a
+#: second one.
+MINOR_RULE: str = "#e8e8ea"
+MINOR_GRID_WIDTH: float = 0.35
+#: A minor tick MARK against a major one, as fractions of the major's length and line width.
+MINOR_TICK_LENGTH: float = 0.55
+MINOR_TICK_WIDTH: float = 0.6
 
 #: TEXT CASE, for every label a figure shows: Title Case. Capitalise each word except articles,
 #: coordinating conjunctions and prepositions ("and", "or", "of", "per", "over", "to", "vs"), and
@@ -303,13 +311,157 @@ def ratio_label(value: float) -> str:
     return f"{value:.1f}x" if value >= 0.1 else f"{value:.1g}x"
 
 
-def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, major: bool = True) -> None:
-    """Ticks and a MAJOR grid for the axis carrying the MEASURED quantity.
+#: What a value axis holds, as far as its minor ticks care (:func:`minor_ticks`). ``ratio``: a log2
+#: axis in ratio units, majors at powers of two. ``log2``: a LINEAR axis holding ``log2(ratio)``
+#: (the efficacy speed-up axes), majors at whole exponents. ``token``: a log10 token axis.
+#: ``count``: a linear count from 0 to N (the efficacy success row).
+MinorKind = Literal["ratio", "log2", "token", "count"]
 
-    MAJOR ONLY. A minor line is a second grid at a second weight, and once a figure is reduced for
-    print the two stop separating: the panel reads as a texture the marks sit on rather than as a
-    reference they sit against. Applied to the value axis only -- the other axis carries names,
-    where a guide line per category measures nothing.
+#: Where the minors of a ONE-octave ratio axis sit inside each octave, as multiples of its lower
+#: major: the quarters, i.e. the integers 5x, 6x, 7x between 4x and 8x.
+OCTAVE_SUBS: tuple[float, ...] = (1.25, 1.5, 1.75)
+
+#: How close, in octaves, two exponents are to count as one: majors come back from a locator as
+#: floats, and a minor landing a rounding error off a major is still that major.
+OCTAVE_TOLERANCE: float = 1e-6
+
+
+def ratio_minor_exponents(majors: Sequence[float], low: float, high: float) -> list[float]:
+    """The minor ticks of a ratio axis inside ``[low, high]``; majors, limits and result all in log2
+    units (exponents).
+
+    The spacing is read off ``majors``, never assumed: majors more than an octave apart get a minor
+    at every octave between them (1x, 4x, 16x -> 2x, 8x); majors one octave apart get
+    :data:`OCTAVE_SUBS` inside each octave (1x, 2x -> 1.25x, 1.5x, 1.75x). Fewer than two majors
+    leave no spacing to read, and majors under an octave apart no power of two between them: both
+    get no minors. A minor never lands on a major."""
+    exponents = sorted(set(majors))
+    if len(exponents) < 2:
+        return []
+    step = min(b - a for a, b in itertools.pairwise(exponents))
+    octaves = range(math.floor(low), math.ceil(high) + 1)
+    if step > 1.0 + OCTAVE_TOLERANCE:
+        candidates = [float(octave) for octave in octaves]
+    elif step > 1.0 - OCTAVE_TOLERANCE:
+        candidates = [octave + math.log2(sub) for octave in octaves for sub in OCTAVE_SUBS]
+    else:
+        return []
+    return [
+        value for value in candidates
+        if low <= value <= high
+        and not any(math.isclose(value, exponent, abs_tol=OCTAVE_TOLERANCE) for exponent in exponents)
+    ]  # fmt: skip
+
+
+def token_minor_values(majors: Sequence[float], low: float, high: float) -> list[float]:
+    """The minor ticks of a log10 token axis inside ``[low, high]``: every whole multiple 1..9 of a
+    power of ten that is not a major (majors 100K, 200K, 500K, 1M -> 300K, 400K, 600K ... 900K)."""
+    if low <= 0.0 or high <= 0.0:
+        return []
+    decades = range(math.floor(math.log10(low)), math.ceil(math.log10(high)) + 1)
+    return [
+        value for value in (multiple * 10.0**decade for decade in decades for multiple in range(1, 10))
+        if low <= value <= high and not any(math.isclose(value, major, rel_tol=1e-9) for major in majors)
+    ]  # fmt: skip
+
+
+#: The parts a count axis' major step is split into, first whole-number step wins: quarters, then
+#: fifths, thirds, halves (0/20/40 -> every 5, 0/5/10 -> every 1, 0/9 -> every 3).
+COUNT_DIVISIONS: tuple[int, ...] = (4, 5, 3, 2)
+
+
+def count_minor_values(majors: Sequence[float], low: float, high: float) -> list[float]:
+    """The minor ticks of a linear count axis inside ``[low, high]``: the major step split into the
+    first of :data:`COUNT_DIVISIONS` that gives a WHOLE step. A count is a whole number of tasks, so
+    a line at 4.5 of them marks nothing; a step no division splits evenly (a prime N) gets none."""
+    values = sorted(set(majors))
+    if len(values) < 2:
+        return []
+    step = min(b - a for a, b in itertools.pairwise(values))
+    minor = next((step / parts for parts in COUNT_DIVISIONS if float(step / parts).is_integer()), 0.0)
+    if minor < 1.0:
+        return []
+    start = math.ceil(low / minor) * minor
+    candidates = [start + index * minor for index in range(int((high - start) // minor) + 1)]
+    return [value for value in candidates if not any(math.isclose(value, major) for major in values)]
+
+
+def minor_positions(kind: MinorKind, majors: Sequence[float], low: float, high: float) -> list[float]:
+    """The minors of a ``kind`` axis inside ``[low, high]``, majors and limits in the axis' own
+    units: :func:`ratio_minor_exponents` on the exponents of a ``ratio`` axis (mapped back to
+    ratios) or directly on a ``log2`` one, :func:`token_minor_values` on a ``token`` one,
+    :func:`count_minor_values` on a ``count`` one."""
+    if kind == "count":
+        return count_minor_values(majors, low, high)
+    if kind == "token":
+        return token_minor_values(majors, low, high)
+    if kind == "log2":
+        return ratio_minor_exponents(majors, low, high)
+    if low <= 0.0:
+        return []
+    positive = [math.log2(value) for value in majors if value > 0.0]
+    return [2.0**exponent for exponent in ratio_minor_exponents(positive, math.log2(low), math.log2(high))]
+
+
+class MinorLocator(Locator):
+    """:func:`minor_positions` as a matplotlib locator, derived at every draw from the axis' CURRENT
+    majors and view: a caller that pins its majors or moves its limits after the axis was styled
+    still gets minors that fit them."""
+
+    def __init__(self, kind: MinorKind) -> None:
+        self.kind: MinorKind = kind
+
+    def __call__(self) -> Sequence[float]:
+        if not isinstance(self.axis, Axis):
+            return []
+        low, high = (float(value) for value in self.axis.get_view_interval())
+        return self.tick_values(low, high)
+
+    def tick_values(self, vmin: float, vmax: float) -> Sequence[float]:
+        if not isinstance(self.axis, Axis):
+            return []
+        low, high = sorted((float(vmin), float(vmax)))
+        majors = [float(value) for value in self.axis.get_major_locator().tick_values(low, high)]
+        return minor_positions(self.kind, majors, low, high)
+
+
+def minor_ticks(axis: Axis, kind: MinorKind, color: str = MINOR_RULE, width: float = MINOR_GRID_WIDTH) -> None:
+    """Unlabelled minor ticks and a light minor grid on the VALUE axis ``axis``, by the one rule every
+    figure shares (user, 2026-09-22: more minor ticks on the paper plots).
+
+    ``ratio``/``log2``: by the spacing of the majors actually set (:func:`ratio_minor_exponents`).
+    ``token``: every whole multiple of a power of ten that is not a major
+    (:func:`token_minor_values`). ``count``: whole-number steps only (:func:`count_minor_values`;
+    majors 0/20/40 -> every 5, 0/5/10 -> every 1).
+
+    The marks point the way the majors do, shorter and thinner (:data:`MINOR_TICK_LENGTH`,
+    :data:`MINOR_TICK_WIDTH` of the major's), and carry NO label: a number at every minor doubles
+    the axis' text, and matplotlib's own log minor formatter prints a scientific-notation 3x10^n
+    beside plain majors. The grid is :data:`MINOR_RULE` at ``width``, under everything. A category
+    axis never takes this: a line between two names measures nothing.
+    """
+    axis.set_minor_locator(MinorLocator(kind))
+    axis.set_minor_formatter(NullFormatter())
+    vertical = isinstance(axis, YAxis)
+    axis.set_tick_params(
+        which="minor",
+        length=MINOR_TICK_LENGTH * float(matplotlib.rcParams["ytick.major.size" if vertical else "xtick.major.size"]),
+        width=MINOR_TICK_WIDTH * float(matplotlib.rcParams["ytick.major.width" if vertical else "xtick.major.width"]),
+    )
+    axis.grid(True, which="minor", color=color, linewidth=width, zorder=0)  # pyright: ignore[reportUnknownMemberType]
+
+
+def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, major: bool = True) -> None:
+    """Ticks and a major grid for the axis carrying the MEASURED quantity, plus, on a log axis, the
+    shared minor ruling (:func:`minor_ticks`).
+
+    A LOG axis gets unlabelled minor ticks and a light minor grid (user, 2026-09-22, superseding the
+    earlier major-only rule): a ratio (log2) axis by its majors' octave spacing, a token (log10)
+    axis at every whole multiple of a power of ten. The majors stay the only labelled reference; the minors are shorter,
+    lighter and unlabelled, so a reader places a mark between two labels without the panel turning
+    into a texture. A LINEAR axis keeps its majors alone: whether it holds ``log2`` units or a
+    0..N count is the caller's to say, to :func:`minor_ticks`. Applied to the value axis only -- the other axis
+    carries names, where a guide line per category measures nothing.
 
     ``log_base`` is passed rather than sniffed off the axis: matplotlib keeps it on the scale
     object under a private name, and a wrong guess puts the lines at the wrong ratios -- which
@@ -337,15 +489,11 @@ def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, 
             # -- which looks like a stray rule rather than a tick. This labels every major it is
             # given, which is the only contract a caller pinning majors can rely on.
             target.set_major_formatter(FuncFormatter(decade_label))
-        # No minor ticks and no minor labels. Matplotlib's own log minor formatter labels a 3x10^n
-        # tick whenever few majors are visible, which puts a scientific-notation number on an axis
-        # whose majors are plain ones.
-        target.set_minor_locator(NullLocator())
-        target.set_minor_formatter(NullFormatter())
+        minor_ticks(target, "ratio" if log_base == 2.0 else "token")
     else:
         target.set_major_locator(MaxNLocator(nbins=8, steps=[1, 2, 2.5, 5, 10]))
+        target.grid(False, which="minor")  # pyright: ignore[reportUnknownMemberType]
     ax.grid(axis=axis, which="major", color=RULE, linewidth=0.7, zorder=0)  # pyright: ignore[reportUnknownMemberType]
-    ax.grid(False, which="minor")  # pyright: ignore[reportUnknownMemberType]
     ax.set_axisbelow(True)
 
 

@@ -52,7 +52,7 @@ draws; :func:`figure_one`'s own optional ``title`` is the single-panel equivalen
 
 EVERY SIZE A CALLER MIGHT WANT TO HAND-TUNE LIVES IN ONE PLACE, :class:`FigureConfig`: tick, label,
 subtitle and legend point sizes, legend columns, mark and cloud size, the axis margin and its floor,
-and the minor grid's step and shade. Change a field there (or pass a new instance to any drawing
+and the minor grid's shade and weight. Change a field there (or pass a new instance to any drawing
 function's ``config`` argument) rather than a magic number inside a function.
 """
 
@@ -71,7 +71,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.text import Annotation
-from matplotlib.ticker import FuncFormatter, LogLocator, MultipleLocator, NullFormatter
+from matplotlib.ticker import FuncFormatter, LogLocator, MultipleLocator
 from matplotlib.transforms import blended_transform_factory
 
 from hpcagent_bench import experiment_tags, packets
@@ -145,14 +145,11 @@ class FigureConfig:
     #: branch). Small on purpose -- large enough for >=2 ticks, not so large it reopens the "huge
     #: empty area" a wider floor left around a tightly clustered result.
     min_span: float = 1.0
-    #: A minor gridline every this many octaves (0.5 = a half power of two, between each major);
-    #: ``0`` draws no minor grid at all.
-    minor_grid_step: float = 0.5
-    #: The minor grid's own line weight and colour, lighter than the major grid
-    #: (:data:`~hpcagent_bench.stats.style.RULE`) so it reads as texture under the marks, not a
-    #: second reference.
-    minor_grid_width: float = 0.35
-    minor_grid_color: str = "#e8e8ea"
+    #: The minor grid's own line weight and colour (:func:`minor_grid`), lighter than the major grid
+    #: (:data:`~hpcagent_bench.stats.style.RULE`) so it reads as a finer ruling under the marks, not
+    #: a second reference. Default to :mod:`~hpcagent_bench.stats.style`'s, the one source.
+    minor_grid_width: float = style.MINOR_GRID_WIDTH
+    minor_grid_color: str = style.MINOR_RULE
     #: An interval's own line weight, the major grid's, and the panel frame's. Separate knobs
     #: because a figure drawn at its FINAL printed size needs all three thinner: a 1.2pt whisker
     #: that reads as a line at authoring scale reproduces as a bar at 8pt type.
@@ -864,22 +861,13 @@ def x_tick_step(span: float, max_ticks: int = MAX_X_TICKS) -> int:
     return step
 
 
-def minor_log2_grid(ax: Axes, axis: Literal["x", "y"], config: FigureConfig) -> None:
-    """A light minor gridline every :data:`FigureConfig.minor_grid_step` octaves on ``axis`` -- a
-    half power of two by default, between each major (:func:`x_tick_step`/:func:`~hpcagent_bench.stats.style.ratio_tick`'s own
-    majors) -- with NO minor tick labels: a number at every half-octave would double the axis' own
-    text. ``minor_grid_step`` of 0 (or a caller who wants only the major grid) draws nothing."""
-    if config.minor_grid_step <= 0.0:
-        return
+def minor_grid(ax: Axes, axis: Literal["x", "y"], kind: style.MinorKind, config: FigureConfig) -> None:
+    """The shared minor ruling (:func:`~hpcagent_bench.stats.style.minor_ticks`) on ``ax``'s value
+    axis ``axis`` of ``kind``, in ``config``'s own minor-grid shade and weight: unlabelled ticks
+    read off the majors this module sets (:func:`x_tick_step`'s whole exponents, the token subs,
+    :func:`success_ticks`)."""
     target = ax.yaxis if axis == "y" else ax.xaxis
-    if axis == "y":
-        target.set_minor_locator(LogLocator(base=2.0, subs=(2.0**config.minor_grid_step,), numticks=40))
-    else:
-        target.set_minor_locator(MultipleLocator(config.minor_grid_step))
-    target.set_minor_formatter(NullFormatter())
-    ax.grid(
-        axis=axis, which="minor", color=config.minor_grid_color, linewidth=config.minor_grid_width, zorder=0
-    )  # fmt: skip
+    style.minor_ticks(target, kind, config.minor_grid_color, config.minor_grid_width)
 
 
 #: :func:`style_panel`'s default axis labels -- a caller overrides either to fold in a cost card's
@@ -982,8 +970,8 @@ def style_panel(
     ax.xaxis.set_major_locator(MultipleLocator(x_tick_step(high - low, config.max_ticks)))
     ax.xaxis.set_major_formatter(FuncFormatter(style.log2_ratio_tick))
     ax.yaxis.set_major_formatter(FuncFormatter(style.ratio_tick))
-    minor_log2_grid(ax, "x", config)
-    minor_log2_grid(ax, "y", config)
+    minor_grid(ax, "x", "log2", config)
+    minor_grid(ax, "y", "ratio", config)
     ax.set_box_aspect(1.0)
     style.despine(ax)
     thin_rules(ax, config)
@@ -1023,7 +1011,8 @@ def style_absolute_panel(
     ax.xaxis.set_major_formatter(FuncFormatter(style.log2_ratio_tick))
     ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=config.token_subs, numticks=40))
     ax.yaxis.set_major_formatter(FuncFormatter(style.decade_label))
-    minor_log2_grid(ax, "x", config)
+    minor_grid(ax, "x", "log2", config)
+    minor_grid(ax, "y", "token", config)
     ax.set_box_aspect(1.0)
     style.despine(ax)
     thin_rules(ax, config)
@@ -1702,7 +1691,7 @@ MEASURE_LABELS: dict[str, str] = {"speedup": "Speed-Up", "success": "Tasks Compl
 #: ratios, so the success row takes half a row.
 MEASURE_HEIGHT: dict[str, float] = {"success": 0.5}
 
-#: Headroom above N on the success row, as a fraction of N, so an interval ending at N stays visible.
+#: Headroom above N on the success row, as a fraction of N, so the dashed ceiling at N is not the frame.
 SUCCESS_HEADROOM: float = 0.05
 
 #: The speed-up row's label when failures enter at 1x instead of being left out.
@@ -2057,12 +2046,9 @@ def draw_difference_arrow(
 
 def measure_value(point: ArmPoint, measure: str) -> tuple[float, float, float]:
     """``(value, low, high)`` of one arm on one measure: the speed-up in ``log2(ratio)``, or the
-    token count as a count."""
+    token count as a count. The success row draws its count alone (:func:`draw_success_row`)."""
     if measure == "cost":
         return point.y, point.y_low, point.y_high
-    if measure == "success":
-        rate = summary.success_ci(point.solved, point.served)
-        return rate.point, rate.low, rate.high
     return point.x, point.x_low, point.x_high
 
 
@@ -2123,7 +2109,7 @@ def draw_measure_row(
 ) -> None:
     """ONE measure over the shared categorical X: two marks per category, the no-packet arm HOLLOW
     and the packet arm FILLED, each with its 95% interval as a vertical bar, joined by a faint
-    segment.
+    segment -- except the success row (:func:`draw_success_row`): a mark at the count only.
 
     The two marks are dodged either side of the category's own position so they never sit on top of
     one another, and the pair is read vertically: how far the filled mark is ABOVE the hollow one is
@@ -2177,6 +2163,7 @@ def draw_measure_row(
         style.value_axis(ax, "y", log_base=10.0)
         ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=config.token_subs, numticks=40))
         ax.yaxis.set_major_formatter(FuncFormatter(style.decade_label))
+        minor_grid(ax, "y", "token", config)
     else:
         ax.axhline(0.0, color=style.REFERENCE, linewidth=1.0, zorder=1)
         if reference_name:
@@ -2191,6 +2178,7 @@ def draw_measure_row(
             )  # fmt: skip
         style.value_axis(ax, "y")
         ax.yaxis.set_major_formatter(FuncFormatter(style.log2_ratio_tick))
+        minor_grid(ax, "y", "log2", config)
     ax.set_xlim(-0.6, max(len(rows) - 0.4, 0.6))
     ax.set_xticks(range(len(rows)))
     group_rules(ax, rows)
@@ -2233,7 +2221,9 @@ def success_ticks(kernels: int) -> list[int]:
 
 def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: FigureConfig, ylabel: str) -> None:
     """The success row: how many of its pair's kernels each arm solved, on an axis running 0 to N
-    (the kernels served), with the Wilson interval scaled to counts."""
+    (the kernels served), as a mark at the count and NOTHING around it (user, 2026-09-22). The roster
+    is fixed, so the count is a census, not a sample: there is no sampling error to draw, and an
+    interval under a 10/10 mark reaching down to 7 read as seven solved."""
     for index, row in enumerate(rows):
         for point, filled, dodge, mark in (
             (row.control, False, -config.dodge, CONTROL_MARKER),
@@ -2241,16 +2231,14 @@ def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: Figur
         ):
             if point.served == 0:
                 continue
-            value, low, high = (point.served * rate for rate in measure_value(point, "success"))
-            x = index + dodge
-            ax.vlines(
-                x, low, high, color=row.colour, linewidth=config.interval_width, alpha=0.75, zorder=style.CONNECTOR_Z
-            )
             # A full roster sits on N, and the headroom above it is thinner than a mark in a half-height row.
-            style.point_mark(ax, x, value, row.colour, mark, filled, size=config.mark_size, clip=False)
+            style.point_mark(
+                ax, index + dodge, point.solved, row.colour, mark, filled, size=config.mark_size, clip=False
+            )  # fmt: skip
     kernels = max((point.served for row in rows for point in (row.control, row.treated)), default=0)
     ax.set_yticks(success_ticks(kernels))
-    # The dashed rule marks the ceiling N; the headroom above it keeps an interval ending at N in view.
+    minor_grid(ax, "y", "count", config)
+    # The dashed rule marks the ceiling N; the headroom above it keeps the rule off the frame.
     ax.axhline(kernels, color=style.MUTED, linestyle="--", linewidth=0.6, zorder=1)
     ax.set_ylim(-SUCCESS_HEADROOM * kernels, (1.0 + SUCCESS_HEADROOM) * kernels)
     ax.set_xlim(-0.6, max(len(rows) - 0.4, 0.6))

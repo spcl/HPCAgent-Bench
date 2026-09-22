@@ -25,13 +25,13 @@ import numpy as np
 import pandas as pd
 import pytest
 from matplotlib.axes import Axes
-from matplotlib.collections import PathCollection
+from matplotlib.collections import LineCollection, PathCollection
 from matplotlib.figure import Figure
 from PIL import Image
 
 from hpcagent_bench import experiment_tags, packets
 from hpcagent_bench.harness import efficacy
-from hpcagent_bench.stats import palette, score_rule, summary
+from hpcagent_bench.stats import palette, score_rule
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
 
@@ -530,9 +530,9 @@ def test_the_marker_shape_is_the_packet_and_nothing_else() -> None:
 
 
 def test_a_light_minor_grid_sits_between_the_major_lines() -> None:
-    """A half-octave minor grid is now drawn (denser than the major-only original), but lighter and
-    thinner so it reads as texture under the marks rather than a second reference the major line
-    already is."""
+    """A minor grid is drawn between the majors (user, 2026-09-22), but lighter and thinner so it
+    reads as a finer ruling under the marks rather than a second reference the major line already
+    is."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
@@ -1483,7 +1483,6 @@ def test_by_default_a_wrong_answer_is_no_speedup_and_counts_against_the_success_
     assert 2.0**control.x == pytest.approx(2.0) and 2.0**treated.x == pytest.approx(4.0)
     assert control.kernels == treated.kernels == 4
     assert (control.solved, control.served, treated.solved, treated.served) == (4, 5, 5, 5)
-    assert efficacy_figures.measure_value(control, "success")[0] == pytest.approx(0.8)
 
 
 def test_the_fallback_reading_scores_the_wrong_answer_at_one() -> None:
@@ -1494,13 +1493,6 @@ def test_the_fallback_reading_scores_the_wrong_answer_at_one() -> None:
     assert 2.0**control.x == pytest.approx(2.0 ** (4.0 / 5.0))
     assert 2.0**treated.x == pytest.approx((4.0**4 * 8.0) ** (1.0 / 5.0))
     assert control.kernels == 5
-
-
-def test_the_success_interval_stays_inside_zero_and_one_and_is_not_zero_width_at_ten_of_ten() -> None:
-    full = summary.success_ci(10, 10)
-    assert full.point == 1.0 and full.high == 1.0 and 0.6 < full.low < 0.8
-    assert summary.success_ci(0, 10).low == 0.0
-    assert math.isnan(summary.success_ci(0, 0).point)
 
 
 def test_the_dot_row_stacks_the_success_row_between_speedup_and_cost(tmp_path: pathlib.Path) -> None:
@@ -1557,6 +1549,52 @@ def test_a_full_roster_mark_on_the_ceiling_is_drawn_whole() -> None:
     marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
     assert marks and not any(mark.get_clip_on() for mark in marks)
     plt.close(fig)
+
+
+def test_the_success_row_draws_its_marks_and_no_interval() -> None:
+    """The roster is fixed, so the count solved is a census, not a sample (user, 2026-09-22): a Wilson
+    bar under a 10/10 mark reaching down to 7 read as seven solved."""
+    fig, ax = plt.subplots()
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 7, 10), arm(1.0, 2.0, 10, 10))
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
+    assert [collection for collection in ax.collections if isinstance(collection, PathCollection)]
+    assert not [collection for collection in ax.collections if isinstance(collection, LineCollection)]
+    plt.close(fig)
+
+
+@pytest.mark.parametrize(("solved", "served", "want"), [
+    ((2, 8), 8, [(-0.16, 2.0), (0.16, 8.0)]),
+    ((10, 10), 10, [(-0.16, 10.0), (0.16, 10.0)]),
+    ((0, 31), 40, [(-0.16, 0.0), (0.16, 31.0)]),
+])  # fmt: skip
+def test_a_success_mark_sits_at_the_solved_count(
+    solved: tuple[int, int], served: int, want: list[tuple[float, float]]
+) -> None:
+    """The mark IS the count, the control's hollow one left of the column and the treated one right;
+    a rate or an interval centre would put a 10/10 arm below the ceiling."""
+    fig, ax = plt.subplots()
+    control, treated = (arm(1.0, 2.0, count, served) for count in solved)
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", control, treated)
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
+    marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
+    drawn = sorted({(float(x), float(y)) for mark in marks for x, y in mark.get_offsets()})
+    assert drawn == pytest.approx(want)
+    plt.close(fig)
+
+
+def test_every_value_row_of_the_dot_row_carries_a_minor_grid(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """User, 2026-09-22: more minor ticks on the paper plots -- the speed-up, tasks-completed and
+    token rows alike, each ruled by its own axis kind (log2 units, a count, a log10 count)."""
+    kept: list[Figure] = []
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False: kept.append(fig) or stem)
+    rows = observation_rows(BLIND_PAIR[1], 2.0, 100.0) + observation_rows(BLIND_PAIR[0], 4.0, 1000.0)
+    frame = plot.pair_frame(pd.DataFrame(rows), [BLIND_PAIR], "no-score")
+    stats = plot.points(frame[~frame.skills], frame[frame.skills])
+    efficacy_figures.figure_dot_row([("Blind", "no-score", stats, frame)], tmp_path / "dots.pdf")
+    for ax in kept[0].axes[:3]:
+        assert [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()], ax.get_ylabel()
 
 
 def test_a_key_too_tall_for_its_band_grows_the_canvas_instead_of_covering_the_names(
@@ -1642,8 +1680,8 @@ def test_a_difference_label_sits_above_both_intervals_not_on_the_treated_mark() 
 
 
 def test_the_success_row_counts_kernels_up_to_the_roster_and_carries_no_x_ticks() -> None:
-    """The top tick is N, the kernels served, marked by a dashed rule; the axis runs 5% past it so an
-    interval ending at N stays visible."""
+    """The top tick is N, the kernels served, marked by a dashed rule; the axis runs 5% past it so the
+    rule is not the frame."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()

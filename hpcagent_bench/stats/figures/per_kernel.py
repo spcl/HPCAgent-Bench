@@ -75,7 +75,6 @@ import matplotlib.lines
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.ticker import NullLocator
 
 from hpcagent_bench import experiment_tags
 from hpcagent_bench.stats import population, summary
@@ -402,14 +401,15 @@ def style_speedup_axis(
     tick_pt: float = AUTHOR_TYPE.tick_pt,
     reference_color: str = plotstyle.REFERENCE,
 ) -> None:
-    """Powers of two, read back as ratios, over limits pinned just past them, with a MAJOR grid on
-    the value axis and nothing on the kernel axis -- the ticks are pinned here, so the grid is drawn
-    beside them rather than through ``plotstyle.value_axis``, which would relocate them."""
+    """Powers of two, read back as ratios, over limits pinned just past them, with a major grid and
+    the shared minor ruling (:func:`plotstyle.minor_ticks`, read off these majors) on the value axis
+    and nothing on the kernel axis -- the ticks are pinned here, so the grid is drawn beside them
+    rather than through ``plotstyle.value_axis``, which would relocate them."""
     ax.set_yscale("log", base=2)
     ticks = speedup_yticks(cells)
     ax.set_yticks(ticks)
     ax.set_yticklabels([plotstyle.ratio_tick_label(tick) for tick in ticks], fontsize=tick_pt)
-    ax.yaxis.set_minor_locator(NullLocator())
+    plotstyle.minor_ticks(ax.yaxis, "ratio")
     pad = 2.0**VALUE_PAD_OCTAVES
     ax.set_ylim(ticks[0] / pad, ticks[-1] * pad)
     ax.axhline(1.0, color=reference_color, linewidth=0.9, zorder=1)

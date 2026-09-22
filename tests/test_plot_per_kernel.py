@@ -300,27 +300,28 @@ def test_a_rerun_writes_byte_identical_png_and_pdf(tmp_path: pathlib.Path, monke
         assert first.read_bytes() == second.read_bytes(), f"{name} depends on when it was saved"
 
 
-def test_the_speedup_panel_carries_a_major_grid_and_no_minor_one() -> None:
-    """Major grid only, on the measured axis. The ticks are pinned to powers of two here, so the
-    grid is drawn beside them rather than through ``value_axis``, which would relocate them."""
+def test_the_speedup_panel_carries_a_major_grid_and_a_minor_one_on_the_value_axis_only() -> None:
+    """The measured axis is ruled at the pinned powers of two and, lighter, at the shared minors
+    between them (user, 2026-09-22); the kernel axis carries names and no line at all."""
     fig, ax = plt.subplots()
     try:
         pk.style_speedup_axis(ax, [pk.KernelCell("k1", (1.0, 2.0))])
         assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
-        assert not [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
+        assert [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
         assert not [tick for tick in ax.xaxis.get_major_ticks() if tick.gridline.get_visible()]
+        assert not [tick for tick in ax.xaxis.get_minor_ticks() if tick.gridline.get_visible()]
     finally:
         plt.close(fig)
 
 
-def test_the_token_panel_puts_its_measured_value_on_a_log_y_axis_with_a_major_grid() -> None:
+def test_the_token_panel_puts_its_measured_value_on_a_log_y_axis_with_a_major_and_a_minor_grid() -> None:
     """A token count is a measured quantity, so it is on Y; the kernel names are the x categories."""
     fig, ax = plt.subplots()
     try:
         pk.style_token_axis(ax, [pk.KernelCell("k1", (120.0,)), pk.KernelCell("k2", (90000.0,))])
         assert ax.get_yscale() == "log"
         assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
-        assert not [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
+        assert [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
     finally:
         plt.close(fig)
 
