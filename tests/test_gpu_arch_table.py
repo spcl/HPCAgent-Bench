@@ -30,7 +30,11 @@ GFX_LITERAL = re.compile(r"\bgfx[0-9a-f]{3,4}\b")
 #: The AMD image directories; each builds with ROCM_ARCH from the table.
 AMD_IMAGES = ("judge-agent-amd", "sglang", "sglang-mi200", "vllm")
 #: Image directories outside the table, with the reason.
-NOT_AMD = {"judge-agent-cuda": "GH200 image built on another Alps cluster; its arch is a CUDA capability"}
+NOT_AMD = {
+    "judge-agent-cuda": "GH200 image built on another Alps cluster; its arch is a CUDA capability",
+    "vllm-cuda": "GH200 inference image built on another Alps cluster; its arch is a CUDA capability",
+    "judge-agent-cpu": "CPU-only image with no GPU code at all, built on whichever host architecture",
+}
 #: The arch variables an image ENV sets and an EDF template may restate.
 ARCH_VARS = ("HCC_AMDGPU_TARGET", "PYTORCH_ROCM_ARCH", "GPU_ARCHS", "GPU_ARCH_LIST")
 #: Non-comment gfx literals that must stay, keyed by (file, stripped line), with the reason.
