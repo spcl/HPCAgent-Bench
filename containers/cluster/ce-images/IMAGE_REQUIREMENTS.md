@@ -12,9 +12,14 @@ then differ by it.
 | image | base | serves |
 |---|---|---|
 | judge + agent, AMD | ROCm 7.2.0, x86_64 | both roles -- `run_cluster.sh:814,817` already pass one `AMD_CE_ENV` to both `role_srun` calls |
-| judge + agent, CUDA | CUDA, aarch64 / GH200 | same roles, other vendor |
+| judge + agent, CUDA | CSCS alps NGC PyTorch 26.02 (CUDA 13.1, py3.12), aarch64 / GH200 | same roles, other vendor: two targets, `agent` and `judge` |
 | vLLM | ROCm 7.2.0 | oss120b |
 | SGLang | ROCm 7.2.0 | qwen38, kimi -- 12 of 18 v9 arms |
+| vLLM, GH200 | `vllm/vllm-openai:v0.30.0-aarch64` by digest (CUDA 13.0) | qwen38, kimi and oss120b on Daint |
+| judge + agent, CPU only | `ubuntu:24.04` by digest, x86_64 or aarch64 | both roles on a host with no GPU toolchain; binary packages only |
+
+The last three are built on Daint (or any node, for the CPU one), not on beverin; what they carry and
+why is [GH200 and CPU-only images](#gh200-and-cpu-only-images) at the end of this file.
 
 **ROCm 7.2.0 is the global pin.** SGLang consumes a vendor prebuilt already tagged `rocm720`, so it
 stays a straight pull; the vLLM images are ours and change one base line in a Dockerfile we are
@@ -40,9 +45,11 @@ Two consequences to handle rather than discover:
   `requires-python = ">=3.10, <3.15"`, so both are supported and this is a deliberate split, not a
   break -- but it must be WRITTEN DOWN, because a result that reproduces locally and not in the
   container will otherwise cost someone a day. (`ml-ci.yml` runs 3.13, so there are three.)
-* **Both judge/agent bases must agree on the minor.** The AMD base is py3.12; confirm the CUDA base
-  (`ngc-pytorch:26.02-py3-alps6`) is too. Two judge images grading on different Pythons is the one
-  version split with no upside at all.
+* **Both judge/agent bases must agree on the minor.** The AMD base is py3.12, and so is the CUDA
+  base: NGC PyTorch 26.02 (which `ngc-pytorch:26.02-py3-alps6` is built from) is Ubuntu 24.04 with
+  `/usr/bin/python3.12` -- read off the published arm64 image config, whose `LD_LIBRARY_PATH` names
+  `/usr/local/lib/python3.12/dist-packages`. The CPU-only image is Ubuntu 24.04's python3.12 too. Two judge
+  images grading on different Pythons is the one version split with no upside at all.
 
 The final gate should assert the interpreter is the base's, pin numpy / scipy / pandas / astunparse
 to the versions the judge grades with, and record the Python version in the provenance file so a
@@ -461,13 +468,14 @@ lands in `/opt/venv/lib`, not the system python. `PIP_BREAK_SYSTEM_PACKAGES=1` o
 defeats PEP 668; it does not redirect the install. Drop `/opt/venv/bin` from the EDF and `python3`
 resolves to `/usr/bin/python3`, which imports none of them: the judge dies at `import dace` having
 never reached a kernel. `judge-agent-amd/edf.toml.example` is the reference copy.
-**Open on the CUDA side, deliberately not changed.** `judge-agent-cuda` already builds
-CUDA-aware MPICH (`mpich +cuda cuda_arch=... device=ch4 netmod=ofi`) but ships **no NCCL at all**,
-so a submission reaching for device collectives there has nothing to link. The fix is one spec
-(`nccl +cuda cuda_arch=...`) plus its name in the layer-2 install list -- left undone because this
-site has only `mi300`/`mi200` partitions, so the change could be neither built nor verified here,
-and an unverified edit to a build recipe fails for whoever builds it next rather than for whoever
-made it.
+**The CUDA side, since 2026-09-22.** `judge-agent-cuda` builds CUDA-aware MPICH
+(`mpich +cuda cuda_arch=90 device=ch4 netmod=ofi +slurm`) with the same MPI gate as the AMD image --
+wrappers in `/opt/view`, CUDA in `mpichversion`, `libmpi` linking the CUDA runtime -- and against the
+same compile-only libfabric stub, deleted before the image ships. NCCL is the NGC base's (the one its
+torch was built with), asserted by header and a real link rather than rebuilt beside it. The NGC base
+also ships HPC-X Open MPI in `/usr/local/mpi/bin`; the image and its EDFs keep that behind `/opt/view`,
+for the wrapper/launcher split described above. None of this has been built yet -- it is written, and
+parse-checked, but the first Daint build is its first verification.
 
 **Two things this pins down for the next image.**
 
@@ -757,3 +765,58 @@ round-robin -- PP=4 lost 42% of engine time to 30 s stalls while PP=1 arms lost 
 **Smoke every rebuilt image against these arguments before promoting it**, not just against
 "the server started". A tuned-MoE config that fails to load is the failure that voided a whole set
 of throughput numbers, and it does not announce itself.
+
+## GH200 and CPU-only images
+
+### judge-agent-cuda (Daint GH200)
+
+The AMD recipe with CUDA in place of ROCm; every AMD layer's fix carries over. What is specific:
+
+* **GCC is built without `+nvptx`**, as the offload matrix above says: the OpenACC path is NVHPC,
+  hard-gated on `nvc -acc -gpu=cc90` reporting GPU code, and OpenMP offload is LLVM's, hard-gated on a
+  LINKED binary carrying an `sm_90` image. The CSCS gcc overlay patch the old recipe carried for gcc's
+  nvptx multilib is gone with it.
+* **CUDA is a spack external with `+allow-unsupported-compilers`.** Spack's `CudaPackage` declares
+  `conflicts("%gcc@16:", when="%cuda@:13.3")` unless the cuda node carries that variant, so no `+cuda`
+  spec concretizes with gcc 16 otherwise. `NVCC_PREPEND_FLAGS=-allow-unsupported-compiler` is the same
+  waiver at nvcc's end, set before the spack layers so MAGMA and PETSc build under it.
+* **`SLURM_VERSION` is the build host's**, read by `build.sh` off `srun --version` in spack's spelling
+  (`25-05-8-1`); the spack bootstrap refuses a version the pinned spack-packages does not list, in
+  seconds rather than after the compiler build.
+* **NVHPC, cuTENSOR and Nsight** come from NVIDIA's arm64/sbsa apt repos at pinned versions; the
+  `ncu`/`nsys` symlinks name the pinned version directories, because the NGC base ships older ones.
+* **No MKL** (x86_64 only), no rocprof, no PAPI rocm components; PAPI carries `cuda` and `nvml`.
+
+### vllm-cuda (Daint GH200)
+
+The official arm64 image, pinned by digest, and nothing ROCm-shaped: aiter, flash-attn's triton_amd
+path, the MI300A MoE configs and the RCCL eager-PG patch do not transfer. Its one build step asserts
+the engine version, a CUDA torch built for `sm_90`, every parser name the serving configs use (resolved
+through vLLM's own registries), and that no NCCL net plugin ships in the image. Its CUDA 13 runtime
+needs a driver >= 580 on the node; the `-cu129` tag of the same release, whose digest is recorded in
+the Dockerfile, is the fallback for an older one.
+
+Serving on Daint is `inference/serve-daint.sbatch`, one model per job, the beverin served name and
+windows (262144 for qwen38 and kimi, 131072 for oss120b) and parsers. kimi is PP across nodes: its
+~595 GB of INT4 weights do not fit one node's 4 x 96 GB.
+
+### judge-agent-cpu
+
+Binary packages only, so a build is about an hour rather than a day, on either architecture:
+
+* **gcc 14, not the distro default 13**, for the masked-select mis-vectorization the AMD EDF records
+  against gcc 13; **clang/flang 22 from apt.llvm.org**, the LLVM release the AMD image builds, with
+  Polly linked into its libLLVM (the `polly` column) and flang new enough for `do concurrent`.
+* **MPICH only.** Debian's default MPI is Open MPI, so only the `-mpich` flavours of ScaLAPACK and
+  HDF5 are installed, and the build fails if any Open MPI package arrives. The distro MPICH is for
+  single-node grading; no fabric hook is enabled.
+* **Debian's OpenBLAS (openmp)** wins the generic `libblas.so.3`/`liblapack.so.3` names over BLIS,
+  asserted. Its generic-named files are thin wrappers inside `openblas-openmp/` that NEED
+  `libopenblas.so.0`, and LAPACKE is netlib's interface over that LAPACK -- which is why
+  `verify_image.py`'s link-closure check counts a path under an OpenBLAS directory, and `liblapacke`,
+  as OpenBLAS rather than as a foreign BLAS. BLIS and reference BLAS still fail it.
+* **torch is the CPU wheel**, installed before the requirements so PyPI's x86_64 CUDA wheel never is.
+* Absent by design: ROCm, CUDA, spack, the distributed and GPU solvers (PETSc, SLEPc, hypre, MAGMA,
+  SuperLU_DIST, STRUMPACK, ParMETIS), NVHPC, ppcg, cupy, triton. A column that needs one declines.
+
+Its CPU baselines are gcc 14's and are not comparable with the AMD image's gcc 16 ones.

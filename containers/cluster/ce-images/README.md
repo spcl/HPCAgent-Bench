@@ -1,15 +1,18 @@
 # CE images -- build, promote, extend
 
-Four Dockerfiles, one directory each, each building one image end to end. `IMAGE_REQUIREMENTS.md`
-is the *specification* (what an image must carry and why); this file is how to **build, verify,
-promote and extend** one.
+One Dockerfile per directory, each building one image end to end. `IMAGE_REQUIREMENTS.md` is the
+*specification* (what an image must carry and why); this file is how to **build, verify, promote and
+extend** one. The beverin (AMD) images come first; the GH200 and CPU-only ones have their own
+section, [Daint (GH200) and the CPU-only image](#daint-gh200-and-the-cpu-only-image).
 
 | directory | promoted name | role |
 |---|---|---|
 | `judge-agent-amd/` | `hpcagent-bench-ce-amd-mi300.sqsh` (agent), `hpcagent-bench-ce-judge-amd-mi300.sqsh` (judge) | **TWO targets, one Dockerfile.** `agent` is the whole toolchain and carries NO hpcagent_bench, so an agent cannot reach the references it is graded against. `judge` is `FROM agent` plus the library -- one extra layer. |
 | `sglang/` | `hpcagent-bench-sglang.sqsh` | SGLang inference -- the dominant serving engine (qwen38, kimi, GLM-5.3) |
 | `vllm/` | `hpcagent-bench-vllm.sqsh` | vLLM 0.23.0 inference, kept for oss120b's mxfp4 path |
-| `judge-agent-cuda/` | not built here | CUDA counterpart of `judge-agent-amd`; parse-checked only, no NVIDIA partition on this cluster |
+| `judge-agent-cuda/` | `hpcagent-bench-agent-gh200.sqsh`, `hpcagent-bench-judge-gh200.sqsh` | Daint GH200 counterpart of `judge-agent-amd`, the same two targets and firewall. Built on Daint, not here |
+| `vllm-cuda/` | `hpcagent-bench-vllm-gh200.sqsh` | Daint GH200 inference: the official vLLM 0.30.0 arm64 image, pinned by digest, serving qwen38, kimi and oss120b |
+| `judge-agent-cpu/` | `hpcagent-bench-agent-cpu-<arch>.sqsh`, `hpcagent-bench-judge-cpu-<arch>.sqsh` | Lightweight CPU-only judge + agent, same two targets, built for the host's architecture (x86_64 or aarch64) |
 
 vLLM 0.27.1 was retired 2026-09-08 (25% slower than 0.23.0 on oss120b, entirely in decode) and
 lives on the `parked/vllm-0271` branch. Do not re-derive that; restore the branch.
@@ -434,3 +437,189 @@ for j in $(squeue -u $USER -h -o %i); do grep -h '^image' \
 
 The run directory's `edf/*.toml` records what a job **actually mounted**, which is the only
 trustworthy answer -- the `.env` file on disk may have been rewritten since that job launched.
+
+## Daint (GH200) and the CPU-only image
+
+Three more image directories, built and used on Alps clusters other than beverin. Everything above
+about candidates, `.verified` markers, promotion by rename and the digest as identity holds
+unchanged; what differs is that each `build.sbatch` here **builds and verifies in one job** (via
+`build_common.sh`'s `ce_verify_candidate`, under the image's own EDF template), and that one switch,
+`CE_PLATFORM`, picks which roles `install_edfs.sh` and `promote_image.sh` act on.
+
+| directory | targets -> EDF (`CE_PLATFORM`) | base | build job |
+|---|---|---|---|
+| `judge-agent-cuda/` | `agent` -> `hpcagent-bench-agent-gh200-latest`, `judge` -> `hpcagent-bench-judge-gh200-latest` (`gh200`) | CSCS alps build of NGC PyTorch 26.02 (CUDA 13.1, py3.12, aarch64) | 1 GH200 node, up to 24 h cold; gcc 16 + llvm 22 + PETSc/MAGMA from spack, cached in `$SCRATCH/spack-buildcache-aarch64` |
+| `vllm-cuda/` | -> `hpcagent-bench-vllm-gh200-latest` (`gh200`) | `vllm/vllm-openai:v0.30.0-aarch64@sha256:4864d466...` (CUDA 13.0, ~10 GB) | 1 GH200 node, < 1 h |
+| `judge-agent-cpu/` | `agent` -> `hpcagent-bench-agent-cpu-<arch>-latest`, `judge` -> `hpcagent-bench-judge-cpu-<arch>-latest` (`cpu`) | `ubuntu:24.04` by index digest | 1 node of either arch, ~1 h; binary packages only |
+
+`judge-agent-cuda` carries what `judge-agent-amd` carries, with the CUDA counterparts: nvcc,
+cuBLAS/cuFFT/cuSOLVER/cuSPARSE/cuRAND/cuTENSOR/NCCL, NVHPC (the only OpenACC compiler), LLVM OpenMP
+offload to `sm_90`, CUDA-aware MPICH (netmod=ofi, host Slurm PMI), PETSc/MAGMA/SuperLU_DIST/
+STRUMPACK/SUNDIALS `+cuda`, PAPI with the cuda/nvml components, Nsight Compute/Systems, cupy, jax,
+Pluto and ppcg, dace@extended and every agent harness. No MKL (x86_64 only), nothing ROCm.
+`judge-agent-cpu` is the light one: distro gcc 14, clang/flang 22 with Polly from apt.llvm.org,
+OpenBLAS/BLIS/FFTW/ScaLAPACK/HDF5/SuiteSparse/SuperLU/METIS/Scotch/ARPACK/MUMPS-seq, the distro MPICH,
+tblis, HPTT, Pluto, numba, dace, the harnesses; no GPU anything, no distributed solvers. Its CPU
+baselines are gcc 14's, so do not mix its numbers with beverin's gcc 16 ones.
+
+### Once per account on Daint
+
+```bash
+# podman's layer store lives in RAM on the diskless compute nodes, exactly as on beverin
+mkdir -p ~/.config/containers
+printf '[storage]\ndriver = "overlay"\nrunroot = "/dev/shm/%s/runroot"\ngraphroot = "/dev/shm/%s/root"\n' \
+    "$USER" "$USER" > ~/.config/containers/storage.conf
+# no -A or -p is written in any of these scripts; sbatch takes both from here
+export SBATCH_ACCOUNT=<project> SBATCH_PARTITION=normal
+# judge-agent-cuda's base is on CSCS's internal registry
+podman login jfrog.svc.cscs.ch
+# the key MODE=serve requires (step 4)
+umask 077; mkdir -p ~/.config/hpcagent-bench; openssl rand -hex 32 > ~/.config/hpcagent-bench/daint-endpoint.key
+cd <checkout>/containers/cluster/ce-images
+```
+
+### 1. Build and verify
+
+```bash
+IMAGE_DIR=$PWD/vllm-cuda        sbatch vllm-cuda/build.sbatch          # vllm-cuda profile
+IMAGE_DIR=$PWD/judge-agent-cuda sbatch judge-agent-cuda/build.sbatch   # judge-agent-cuda + judge-cuda, then a GPU probe
+IMAGE_DIR=$PWD/judge-agent-cpu  sbatch judge-agent-cpu/build.sbatch    # judge-agent-cpu + judge-cpu, this node's arch
+```
+
+`IMAGE_DIR`, never `--chdir`: `SLURM_SUBMIT_DIR` is where sbatch was invoked, whatever `--chdir`
+says. Each job ends `... BUILT AND VERIFIED` or exits non-zero naming the failed stage; the logs hold
+`verify_image.py --verbose` output. Two of its checks are informative on these images until someone
+records them: `libraries.yaml registry` prints what links (copy it into `REGISTRY_RECORDS` in
+`verify_image.py` to make it a ratchet), and the GPU probe in `judge-agent-cuda/build.sbatch` is where
+the node's driver, cupy/jax/torch device visibility and PAPI's cuda events show.
+
+Re-verify an existing candidate without rebuilding, from inside an allocation:
+
+```bash
+salloc -N1 --exclusive --gpus-per-node=4 -t 01:00:00
+bash -c '. build_common.sh; ce_verify_candidate judge-agent-cuda/edf.toml.example \
+    $SCRATCH/ce-images/hpcagent-bench-agent-gh200-candidate.sqsh judge-agent-cuda'
+```
+
+### 2. Promote and install the EDFs
+
+```bash
+DRY_RUN=1 CE_PLATFORM=gh200 ./promote_image.sh --all   # say what would move
+CE_PLATFORM=gh200 ./promote_image.sh --all             # judge-agent-cuda judge-cuda vllm-cuda
+CE_PLATFORM=cpu   ./promote_image.sh --all             # judge-agent-cpu judge-cpu
+# a fresh account whose images are already promoted (or pulled) only renders:
+CE_PLATFORM=gh200 ./install_edfs.sh
+```
+
+`CE_PLATFORM` defaults to `amd`, which is beverin's set exactly as before; a platform renders none of
+another's names. The GH200 EDFs enable the CE's `cxi` and `aws_ofi_nccl` hooks (variant `cuda12`,
+see step 4 for how to confirm it loads against these CUDA 13 images); the CPU EDFs enable none.
+
+### 3. Weights
+
+```bash
+cd inference
+EDF=hpcagent-bench-vllm-gh200-latest PYTHON=python3 HF_TOKEN=<token> \
+  MODELS="Qwen/Qwen3.8-27B-FP8 openai/gpt-oss-120b moonshotai/Kimi-K2.7-Code" \
+  sbatch -p normal --time=08:00:00 fetch_weights.sbatch
+```
+
+Same job as on beverin (download inside the image, restripe and verify on the host); `HF_HOME` comes
+from `scripts/cache_env.sh`, on the iopsstor scratch every Alps cluster mounts, so weights already
+fetched from beverin are found, not fetched again.
+
+### 4. Serve
+
+`inference/serve-daint.sbatch` serves one model per job with the same served name
+(`hpcagent-bench-vllm`), window and parsers as the beverin configs, so `agent_driver`'s context policy
+and the judge need no change. It passes the window as `--max-model-len`, which is what
+`agent_driver.served_context` reads.
+
+| `MODEL` | weights | nodes | TP x PP | window | tool / reasoning parser | notes |
+|---|---|---|---|---|---|---|
+| `qwen38` | `Qwen/Qwen3.8-27B-FP8`, ~28 GB | 1 | 4 x 1 | 262144 | `qwen3_coder` / `qwen3` | repo chat template; on beverin vLLM was too slow for this hybrid backbone and SGLang served it -- unmeasured on GH200, so probe before a campaign |
+| `oss120b` | `openai/gpt-oss-120b`, MXFP4 ~65 GB | 1 | 4 x 1 | 131072 | `openai` / `openai_gptoss` | `--generation-config auto`, never `vllm` |
+| `kimi` | `moonshotai/Kimi-K2.7-Code`, INT4 ~595 GB | 2 (min) - 4 | 4 x N | 262144 | `kimi_k2` / `kimi_k2` | 2 nodes hold the weights with ~13 GB/GPU for KV; 4 (beverin's width) leave ~50 GB/GPU |
+
+```bash
+cd <checkout>
+# smoke: bind 127.0.0.1, run verify-tools-reasoning.py + accuracy-gate.py, check NCCL transport, stop
+MODEL=qwen38  MODE=smoke sbatch -N 1 --time=01:00:00 containers/cluster/ce-images/inference/serve-daint.sbatch
+MODEL=oss120b MODE=smoke sbatch -N 1 --time=01:00:00 containers/cluster/ce-images/inference/serve-daint.sbatch
+MODEL=kimi    MODE=smoke sbatch -N 2 --time=02:00:00 containers/cluster/ce-images/inference/serve-daint.sbatch
+# serve: bind hsn0, require the key, write endpoint.json, hold until the job ends
+MODEL=kimi sbatch -N 4 --time=12:00:00 containers/cluster/ce-images/inference/serve-daint.sbatch
+# print the exact command, launch nothing
+MODEL=kimi DRY_RUN=1 SLURM_JOB_NUM_NODES=2 bash containers/cluster/ce-images/inference/serve-daint.sbatch
+```
+
+`EXTRA_ARGS` appends engine flags (e.g. `EXTRA_ARGS="--kv-cache-dtype fp8"` for more kimi KV);
+`GPU_MEM_UTIL` (0.90) and `EDF` override the defaults. A multi-node serve sets `NCCL_NET="AWS
+Libfabric"`, so an NCCL net plugin that fails to load is an init error rather than a silent TCP
+fallback, and the smoke fails unless the log shows `NET/OFI` and no `NET/Socket`. That is the check
+for the hook's `aws_ofi_nccl.variant`: if a 2-node kimi smoke fails there, the `cuda12` plugin does
+not load against CUDA 13 -- ask CSCS for the CUDA 13 variant name and change it in the two
+`judge-agent-cuda` EDFs and `vllm-cuda/edf.toml.example`.
+
+### 5. Point an agent at it
+
+From any job on Daint, while the serving job runs:
+
+```bash
+source containers/cluster/ce-images/inference/alps-endpoint.sh \
+    $SCRATCH/inference-server/daint-<model>/<serve job id>/endpoint.json
+# exports VLLM_BASE_URL, VLLM_API_KEY, VLLM_MODEL after checking /v1/models and one chat
+python3 containers/cluster/ce-images/inference/verify-tools-reasoning.py --base "${VLLM_BASE_URL%/v1}" \
+    --model "${VLLM_MODEL}" --api-key-file ~/.config/hpcagent-bench/daint-endpoint.key --reasoning-effort ""
+```
+
+For the campaign launcher the endpoint is a **service arm** -- the contract
+`experiments/inference_service.py` already defines, with the served window restated:
+
+```bash
+INFERENCE_SOURCE=service
+INFERENCE_NODES=0
+INFERENCE_SERVICE_PROVIDER=daint-vllm
+INFERENCE_SERVICE_BASE_URL=http://<hsn0 address from endpoint.json>:8000/v1
+INFERENCE_SERVICE_MODEL=hpcagent-bench-vllm
+INFERENCE_SERVICE_TIER=self-hosted
+INFERENCE_SERVICE_API=openai          # miniswe/openhands/optimas; `anthropic` for claude (vLLM serves /v1/messages)
+INFERENCE_SERVICE_AUTH=bearer
+INFERENCE_SERVICE_KEY_ENV=DAINT_VLLM_KEY
+CONTEXT_LENGTH=262144                  # 131072 for oss120b
+AMD_CE_ENV=hpcagent-bench-agent-gh200-latest
+JUDGE_CE_ENV=hpcagent-bench-judge-gh200-latest
+```
+
+That block is the whole agent/judge side of the contract. What still stops a campaign from running
+on Daint is the launcher, which is beverin-shaped (next section) -- nothing in the images.
+
+### CPU-only image, anywhere
+
+```bash
+export SBATCH_ACCOUNT=<project> SBATCH_PARTITION=<a partition of this architecture>
+cd containers/cluster/ce-images
+IMAGE_DIR=$PWD/judge-agent-cpu sbatch judge-agent-cpu/build.sbatch
+CE_PLATFORM=cpu ./promote_image.sh --all
+# run in it
+srun -N1 --environment=hpcagent-bench-agent-cpu-$(uname -m)-latest gcc --version
+srun -N1 --environment=hpcagent-bench-judge-cpu-$(uname -m)-latest python3 -c 'import hpcagent_bench, dace; print("ok")'
+# a test selection, inside the image (pytest and ruff are baked in; run_tests.sh sources host paths)
+srun -N1 --environment=hpcagent-bench-judge-cpu-$(uname -m)-latest \
+    bash -c 'cd <checkout> && python3 -m pytest -q --maxfail=20 tests/test_compile_flags.py'
+```
+
+### Still beverin/AMD-only (not refactored here)
+
+- `experiments/run_cluster.sh`: default EDF names are the `-mi300-latest` ones; it translates
+  `ROCR_VISIBLE_DEVICES` and gives each judge its GPUs through `ROCR_VISIBLE_DEVICES`; it seeds an aiter
+  JIT cache and sets `VLLM_ROCM_USE_AITER`; `check_gpu_arch` runs `gpu_arch_check.sh` (rocminfo against
+  `gpu_arch.env`, which knows only `mi300`/`mi200`); its vLLM branch has no GH200 flags.
+- `experiments/beverin.sbatch` (`--partition=mi300`, `netstack_preflight.sh` with the `rocm6` variant)
+  and `experiments/submit.sbatch`; `experiments/preflight_gpu.sh` defaults to the mi300 agent EDF.
+- `experiments/layers/*.env`: `INFERENCE_CE_ENV`, `AMD_CE_ENV`, `JUDGE_CE_ENV` and the SGLang/aiter
+  flags are the beverin ones; qwen38 and kimi select `INFERENCE_ENGINE=sglang`.
+- `verify_image.sbatch` / `build_and_verify.sbatch` generate a beverin EDF (netstack artifact hooks,
+  rocminfo arch check); the GH200/CPU builds verify through `ce_verify_candidate` instead.
+- `pull_image.sh` / `push_image.sh` / `images.env` registry tags know only the beverin roles, so these
+  images are build-only until someone publishes them.
