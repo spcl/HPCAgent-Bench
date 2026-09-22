@@ -690,6 +690,21 @@ def test_a_level_or_notes_only_edit_does_not_move_the_comparable_epoch(
     assert module.comparable_since_ms("probe_kernel", str(repo)) == first_ts_ms
 
 
+def test_a_chain_length_declaration_does_not_move_the_comparable_epoch(
+    module: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """eeb73277e declared ``chain_length`` on 54 scan manifests. It is grading metadata (the
+    tolerance floor's accumulation length), not the task, so every earlier row stays comparable --
+    otherwise 10 LLR kernels' rows on every arm read as stale and the owed planner reruns them."""
+    repo, manifest, git = init_repo(tmp_path, "probe_kernel")
+    first_ts_ms = commit_manifest(git, manifest, "parameters:\n  XL:\n    n: 100\n", "add")
+    later_ts_ms = commit_manifest(
+        git, manifest, "parameters:\n  XL:\n    n: 100\nchain_length:\n  a: n\n", "declare chain length"
+    )
+    assert later_ts_ms > first_ts_ms
+    assert module.comparable_since_ms("probe_kernel", str(repo)) == first_ts_ms
+
+
 def test_a_resize_after_a_tag_only_edit_still_invalidates(module: types.ModuleType, tmp_path: pathlib.Path) -> None:
     """The backward walk must skip a cosmetic commit in the MIDDLE of history too, not just at the
     tip: a resize after a tag edit still moves the epoch forward to the resize."""
