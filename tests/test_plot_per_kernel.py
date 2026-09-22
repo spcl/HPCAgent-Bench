@@ -184,10 +184,9 @@ def test_draw_panel_labels_the_summary_column_with_its_own_statistic() -> None:
     try:
         pk.draw_panel(
             ax,
-            speed.cells,
+            speed.series,
             ["k1"],
             "ci",
-            speed.color,
             speed.log2_space,
             speed.ylabel,
             speed.summary_reducer,
