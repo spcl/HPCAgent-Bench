@@ -90,8 +90,11 @@ Style = Literal["ci", "box"]
 #: something for, as opposed to being the two endpoints wearing quartile marks.
 MIN_EPISODES_FOR_SPREAD: int = 3
 
-#: A single panel's height, inches. Comfortably inside the 1.6-2.0in a paper figure gets.
+#: A single panel's height, inches, for a figure authored at double-column width.
 PANEL_HEIGHT_IN: float = 1.8
+#: A single panel's height at print size (``width_in`` given): a text-width strip of forty kernels
+#: (user, 2026-09-22: 30% shorter than it was).
+PRINT_PANEL_HEIGHT_IN: float = 1.12
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -621,17 +624,27 @@ def summary_slot_x(n_kernels: int, slot: int) -> float:
     return summary_separator_x(n_kernels) + SUMMARY_GAP + slot * SUMMARY_SLOT
 
 
-def draw_summary_column(ax: matplotlib.axes.Axes, n_kernels: int, slots: int, label: str, label_pt: float) -> None:
+def summary_centre_x(n_kernels: int, slots: int) -> float:
+    """The x position centred under the summary column's ``slots`` slots."""
+    return (summary_slot_x(n_kernels, 0) + summary_slot_x(n_kernels, max(slots, 1) - 1)) / 2.0
+
+
+def draw_summary_column(
+    ax: matplotlib.axes.Axes, n_kernels: int, slots: int, label: str, label_pt: float, annotate: bool = True
+) -> None:
     """The dashed separator and a small label ABOVE the column's slots naming its own statistic.
 
     The label is an annotation, never an x-axis TICK label: a stacked figure shares one x axis
     between its panels (:func:`figure_panels`) and matplotlib shares the same tick label text for
     every row sharing that axis, so a per-panel tick label silently loses whichever panel drew first
     -- the top panel's "Geomean" was overwritten by the bottom panel's "Median". An annotation
-    anchored to the panel's own data coordinates has no such sharing.
+    anchored to the panel's own data coordinates has no such sharing. Where every panel's statistic
+    is the same, :func:`style_panel` names it once as an x tick instead and ``annotate`` is off.
     """
     ax.axvline(summary_separator_x(n_kernels), color=plotstyle.RULE, linestyle=(0, (3, 3)), linewidth=1.0, zorder=1)
-    centre = (summary_slot_x(n_kernels, 0) + summary_slot_x(n_kernels, max(slots, 1) - 1)) / 2.0
+    if not annotate:
+        return
+    centre = summary_centre_x(n_kernels, slots)
     ax.annotate(
         label, xy=(centre, 1.0), xycoords=("data", "axes fraction"), xytext=(0, 3), textcoords="offset points",
         ha="center", va="bottom", fontsize=label_pt, color=plotstyle.MUTED, annotation_clip=False,
@@ -672,6 +685,13 @@ def kernel_tick_label(kernel: str) -> str:
     (:func:`fit_canvas`). A word longer than the limit keeps its own line whole."""
     name = experiment_tags.kernel_short_display_name(kernel)
     return "\n".join(textwrap.wrap(name, experiment_tags.SHORT_NAME_MAX, break_long_words=False))
+
+
+def compact_tick_label(kernel: str) -> str:
+    """:func:`kernel_tick_label` at print size: the compact name
+    (:func:`experiment_tags.kernel_compact_display_name`), folded like it, never cut."""
+    name = experiment_tags.kernel_compact_display_name(kernel)
+    return "\n".join(textwrap.wrap(name, experiment_tags.COMPACT_NAME_MAX, break_long_words=False))
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -719,6 +739,8 @@ def style_panel(
     label_ticks: bool,
     type_: PanelType = AUTHOR_TYPE,
     slots: int = 0,
+    tick_label: Callable[[str], str] = kernel_tick_label,
+    summary_tick: bool = False,
 ) -> None:
     """Every piece of ``ax``'s chrome and none of its data: the kernel axis over ``kernels`` (a FIXED
     order, so a stacked figure's panels share x), the summary column's separator and statistic, and
@@ -726,24 +748,29 @@ def style_panel(
     measure the chrome and the marks can then be sized to the pitch it leaves.
 
     ``slots`` reserves that many summary slots (default: one per series), so every panel of a
-    stacked figure ends at the same x even when one carries fewer series.
+    stacked figure ends at the same x even when one carries fewer series. ``tick_label`` spells a
+    kernel's tick (default :func:`kernel_tick_label`). ``summary_tick`` names the summary column
+    with an x tick under it (horizontal, e.g. "Geomean") instead of an annotation above it: right
+    only when every panel sharing the x axis reports the same statistic (:func:`figure_panels`).
     """
     n = len(kernels)
     slots = slots or len(metric.series)
     ax.set_xlim(-0.6, summary_slot_x(n, slots - 1) + 0.6 if summary_column else n - 0.4)
-    # Kernel names are the only x TICKS -- the summary column carries its own statistic as an
-    # annotation (draw_summary_column), never a tick label, which a shared stacked x axis would
-    # silently hand to the wrong panel (see that function's docstring).
-    ax.set_xticks(range(n))
+    # A shared stacked x axis hands one panel's tick labels to all of them (draw_summary_column's
+    # docstring), so the summary tick is only drawn when every panel's statistic is the same.
+    named_summary = summary_column and summary_tick
+    ax.set_xticks([*range(n), summary_centre_x(n, slots)] if named_summary else list(range(n)))
     if label_ticks:
-        # The tick is the kernel's short manifest NAME; ``kernels`` are the identifiers the columns
-        # and the results table are keyed by.
-        ax.set_xticklabels([kernel_tick_label(kernel) for kernel in kernels], rotation=90, fontsize=type_.name_pt,
-                           linespacing=0.95)  # fmt: skip
+        # The tick is the kernel's short NAME; ``kernels`` are the identifiers the columns and the
+        # results table are keyed by.
+        names = [tick_label(kernel) for kernel in kernels] + ([metric.summary_label] if named_summary else [])
+        ax.set_xticklabels(names, rotation=90, fontsize=type_.name_pt, linespacing=0.95)
+        if named_summary:
+            ax.get_xticklabels()[-1].set_rotation(0)
     else:
         ax.set_xticklabels([])
     if summary_column:
-        draw_summary_column(ax, n, slots, metric.summary_label, type_.name_pt)
+        draw_summary_column(ax, n, slots, metric.summary_label, type_.name_pt, annotate=not named_summary)
     named = set(kernels)
     cells = [cell for cell in metric.cells if cell.kernel in named]
     if metric.log2_space:
@@ -840,9 +867,14 @@ def figure_one(
     title: str,
     width_in: float | None = None,
     legend: Sequence[matplotlib.artist.Artist] = (),
+    panel_height_in: float | None = None,
+    tick_label: Callable[[str], str] | None = None,
 ) -> matplotlib.figure.Figure:
     """A single metric's panel as its own figure (:func:`figure_panels` with one panel)."""
-    return figure_panels([metric], kernels, style_, summary_column, title, width_in, legend)
+    return figure_panels(
+        [metric], kernels, style_, summary_column, title, width_in, legend, panel_height_in=panel_height_in,
+        tick_label=tick_label,
+    )  # fmt: skip
 
 
 def figure_panels(
@@ -855,7 +887,8 @@ def figure_panels(
     legend: Sequence[matplotlib.artist.Artist] = (),
     pitch_in: float | None = None,
     span: float = DODGE_SPAN,
-    panel_height_in: float = PANEL_HEIGHT_IN,
+    panel_height_in: float | None = None,
+    tick_label: Callable[[str], str] | None = None,
 ) -> matplotlib.figure.Figure:
     """``metrics`` as panels stacked top to bottom on ONE kernel axis, names under the last.
 
@@ -864,9 +897,17 @@ def figure_panels(
     (:data:`AUTHOR_TYPE`), or -- given ``pitch_in`` -- as wide as that many inches per column plus
     its measured chrome. ``legend`` is a key drawn under the names; ``span`` is the dodge
     (:func:`dodge_offsets`). Every panel reserves the same number of summary slots, so a panel with
-    fewer series still ends where the others do.
+    fewer series still ends where the others do. ``tick_label`` spells the kernel names; when every
+    panel reports the same summary statistic, it is named once as an x tick under its column.
+
+    At print size the panels default to :data:`PRINT_PANEL_HEIGHT_IN` and the names to
+    :func:`compact_tick_label`; authored, to :data:`PANEL_HEIGHT_IN` and :func:`kernel_tick_label`.
     """
     type_ = AUTHOR_TYPE if width_in is None else PRINT_TYPE
+    if panel_height_in is None:
+        panel_height_in = PANEL_HEIGHT_IN if width_in is None else PRINT_PANEL_HEIGHT_IN
+    if tick_label is None:
+        tick_label = kernel_tick_label if width_in is None else compact_tick_label
     width = plotstyle.DOUBLE_COLUMN_WIDTH if width_in is None else width_in
     fig, grid = plt.subplots(
         len(metrics), 1, sharex=True, figsize=(width, len(metrics) * panel_height_in), squeeze=False
@@ -874,8 +915,9 @@ def figure_panels(
     fig.set_dpi(plotstyle.SAVE_DPI)  # measure at the dpi save() writes
     axes = [row[0] for row in grid]
     slots = max(len(metric.series) for metric in metrics)
+    summary_tick = len({metric.summary_label for metric in metrics}) == 1
     for index, (ax, metric) in enumerate(zip(axes, metrics, strict=True)):
-        style_panel(ax, metric, kernels, summary_column, index == len(axes) - 1, type_, slots)
+        style_panel(ax, metric, kernels, summary_column, index == len(axes) - 1, type_, slots, tick_label, summary_tick)
     fit_canvas(fig, axes, title, legend, type_, panel_height_in, pitch_in)
     size = mark_size(column_pitch_in(axes[0]), slots, span)
     for ax, metric in zip(axes, metrics, strict=True):

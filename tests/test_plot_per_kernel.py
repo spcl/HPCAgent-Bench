@@ -205,6 +205,32 @@ def test_draw_panel_labels_the_summary_column_with_its_own_statistic() -> None:
     assert "Geomean" in labels
 
 
+def test_a_figure_with_one_summary_statistic_names_it_as_a_horizontal_x_tick() -> None:
+    """User, 2026-09-22: "Geomean" belongs on the x axis under its column, read like a kernel name,
+    not floating above the frame."""
+    speed = speed_metric([pk.KernelCell("k1", (2.0,)), pk.KernelCell("k2", (4.0,))])
+    fig = pk.figure_one(speed, ["k1", "k2"], "ci", True, "")
+    try:
+        (ax,) = fig.axes
+        ticks = ax.get_xticklabels()
+        assert [tick.get_text() for tick in ticks][-1] == "Geomean"
+        assert ticks[-1].get_rotation() == 0.0
+        assert "Geomean" not in [text.get_text() for text in ax.texts]
+    finally:
+        plt.close(fig)
+
+
+def test_a_caller_spells_the_kernel_ticks() -> None:
+    """A text-width figure of forty kernels needs names shorter than the manifest's, and those are
+    the caller's to choose; the library's own spelling is only the default."""
+    speed = speed_metric([pk.KernelCell("tsvc_2_s115", (2.0,))])
+    fig = pk.figure_one(speed, ["tsvc_2_s115"], "ci", True, "", tick_label=lambda kernel: kernel.split("_")[-1])
+    try:
+        assert fig.axes[0].get_xticklabels()[0].get_text() == "s115"
+    finally:
+        plt.close(fig)
+
+
 def test_the_top_panel_of_a_stacked_figure_still_names_its_own_summary_statistic() -> None:
     """Kernel names are hidden on every panel but the bottom (shared x axis, shown once) -- but
     the two panels' summary columns carry DIFFERENT statistics (geomean, median), and a plain x
@@ -666,3 +692,32 @@ def test_a_y_label_taller_than_its_panel_is_fitted_to_the_panel() -> None:
         plt.close(fig)
     assert all(height <= pk.PANEL_HEIGHT_IN for height in heights), heights
     assert words == [long, long]
+
+
+def test_a_print_size_figure_gets_the_short_print_panel() -> None:
+    """User, 2026-09-22: a paper figure of forty kernels is a strip 30% shorter than the authored
+    panel, and the height is the library's to set, not each caller's."""
+    speed = speed_metric([pk.KernelCell("k1", (2.0,))])
+    fig = pk.figure_one(speed, ["k1"], "ci", True, "", width_in=5.5)
+    try:
+        height = fig.axes[0].get_position().height * fig.get_size_inches()[1]
+        assert height == pytest.approx(pk.PRINT_PANEL_HEIGHT_IN, abs=1e-3)
+    finally:
+        plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    ("kernel", "want"),
+    [
+        pytest.param("tsvc_2_s2710", "s2710", id="suite-prefix-dropped"),
+        pytest.param("ext_war_unit", "WAR Unit", id="table-abbreviation"),
+    ],
+)
+def test_a_print_size_tick_is_the_compact_kernel_name(kernel: str, want: str) -> None:
+    """Forty rotated names under a text-width strip: the band is as deep as the longest, so every
+    tick spends at most ten characters on the loop itself."""
+    assert pk.compact_tick_label(kernel) == want
+
+
+def test_every_compact_name_fits_the_compact_limit() -> None:
+    assert all(len(name) <= experiment_tags.COMPACT_NAME_MAX for name in experiment_tags.COMPACT_NAMES.values())
