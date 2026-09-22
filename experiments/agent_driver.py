@@ -2386,20 +2386,7 @@ def claude_command(context: "Context") -> list[str]:
     # Read once and passed through as the string it already was: an unparseable value must keep
     # failing at the CLI, where the message names the flag, rather than in the driver.
     turn_cap = os.environ.get("CLAUDE_MAX_TURNS", "40")
-    # claude cannot see the served window and compacts too late for it, so the flag is how the wall
-    # is declared. Unset leaves the command byte-identical: older agent images have no such flag.
-    autocompact = os.environ.get("CLAUDE_AUTOCOMPACT", "").strip()
     claude_bin = os.environ.get("CLAUDE_BIN", "claude")
-    if autocompact and not claude_supports_flag(claude_bin, "--autocompact"):
-        # Loud, and once per driver process: the arm now runs WITHOUT the compaction wall its .env
-        # asked for, which is a real difference from an arm whose image accepts the flag.
-        print(
-            f"agent_driver: {claude_bin} does not accept --autocompact; running WITHOUT the "
-            f"CLAUDE_AUTOCOMPACT={autocompact} wall. Rebuild the image against a CLI that has it "
-            "if this arm must match one that does.",
-            flush=True,
-        )
-        autocompact = ""
 
     command = [
         claude_bin,
@@ -2412,7 +2399,6 @@ def claude_command(context: "Context") -> list[str]:
         os.environ.get("CLAUDE_MODEL", "hpcagent-bench-llm"),
         "--max-turns",
         turn_cap,
-        *(["--autocompact", autocompact] if autocompact else []),
         # Per-REQUEST token usage, which is the only exact output count a killed episode leaves:
         # the endpoints report output_tokens: 0 on every assistant event and fill the real number
         # in once, on a result record an agent killed at its wall never reaches (T7-T9). With this
@@ -2455,8 +2441,69 @@ def claude_command(context: "Context") -> list[str]:
     return command
 
 
+#: USER 2026-09-22: the context an agent may fill is min(served window, this), for every model -- a
+#: 1M-token service included.
+CLAUDE_CONTEXT_CAP = 262144
+
+#: Room for ONE turn between the last compaction check that passes and the compaction request after
+#: it. That request re-sends the transcript with the turn's new output and tool results plus a 1.3k
+#: summary prompt, and reserves a full CLAUDE_CODE_MAX_OUTPUT_TOKENS reply of its own. When it
+#: overflows, 2.1.197 sends the main request anyway and dies on the same 400 (stub-measured). Per-turn
+#: prompt growth over 1583 requests of 28 llr-focus40 transcripts: p99 11.5k, p99.9 30.0k, max 32.6k.
+CLAUDE_TURN_HEADROOM = 40000
+
+#: claude-code 2.1.197 compacts at floor(E * pct / 100), E = window - min(max output, this).
+CLAUDE_SUMMARY_RESERVE = 20000
+
+#: The served window as the engine is told it, in either engine's spelling.
+SERVED_CONTEXT_FLAG = re.compile(r"--(?:context-length|max-model-len)[= ](\d+)")
+
+
+def served_context(environment: Mapping[str, str]) -> int:
+    """The window the engine enforces: the smallest of ``CONTEXT_LENGTH`` and the --context-length /
+    --max-model-len in the serving args. Every arm snapshot names one (107 of 107 on 2026-09-22: all
+    carry the serving args, 68 CONTEXT_LENGTH too, a service arm CONTEXT_LENGTH alone); an arm naming
+    none gets the policy cap."""
+    serving_args = " ".join(environment.get(name, "") for name in ("SGLANG_EXTRA_ARGS", "VLLM_EXTRA_ARGS"))
+    windows = [int(value) for value in SERVED_CONTEXT_FLAG.findall(serving_args)]
+    context_length = harness_module().positive_int(environment.get("CONTEXT_LENGTH", ""))
+    if context_length is not None:
+        windows.append(context_length)
+    return min(windows, default=CLAUDE_CONTEXT_CAP)
+
+
+def claude_context_env(environment: Mapping[str, str]) -> dict[str, str]:
+    """The variables that make claude-code 2.1.197 compact before a request can overflow the window.
+
+    Why it never compacted (300 of 300 episodes, stub-reproduced): for a model it does not know it
+    assumes a 200000 window and, while that window's source is "auto", skips proactive compaction
+    and relies on REACTIVE compaction, which fires only on Anthropic's "prompt is too long" error --
+    never on vLLM/SGLang's "maximum context length". CLAUDE_CODE_AUTO_COMPACT_WINDOW makes the source
+    "env", which is what turns proactive compaction on; CLAUDE_CODE_MAX_CONTEXT_TOKENS lifts the
+    200000 guess to the real window; the percentage then puts the trigger at
+    window - max output - CLAUDE_TURN_HEADROOM, which the window variable alone cannot express below
+    its 100000 floor (131072 served).
+    """
+    limit = min(served_context(environment), CLAUDE_CONTEXT_CAP)
+    harnesses = harness_module()
+    max_output = (
+        harnesses.positive_int(environment.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS", ""))
+        or harnesses.DEFAULT_MAX_OUTPUT_TOKENS
+    )
+    threshold = limit - max_output - CLAUDE_TURN_HEADROOM
+    effective = limit - min(max_output, CLAUDE_SUMMARY_RESERVE)
+    # Truncated to the 4 decimals written out, so the CLI's floor(effective * pct / 100) never
+    # lands above the threshold.
+    percent = math.floor(threshold * 10**6 / effective) / 10**4
+    return {
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": str(limit),
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(limit),
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": f"{percent:.4f}",
+    }
+
+
 def claude_env(context: "Context", base: dict[str, str]) -> dict[str, str]:
-    """The shared environment plus the two variables only claude reads."""
+    """The shared environment plus the variables only claude reads."""
     environment = dict(base)
     # Direct mode (default): claude speaks vLLM's native /v1/messages; agents stripe over the
     # replicas the same way problems stripe over judges. ANTHROPIC_BASE_URL must be the server
@@ -2468,6 +2515,7 @@ def claude_env(context: "Context", base: dict[str, str]) -> dict[str, str]:
     # happens to work -- naming the path outright means a future cwd change cannot silently zero
     # the token column again.
     environment["CLAUDE_LOG_PATH"] = str(context.workdir / "claude.log")
+    environment.update(claude_context_env(environment))
     return environment
 
 
