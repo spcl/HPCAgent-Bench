@@ -65,8 +65,12 @@ render() {
         fi
     fi
 
-    local arch
-    arch="$(template_arch "${template}")" || return 1
+    # Only a template that restates the arch needs one; the GH200 and CPU templates name no gfx arch
+    # and their build.sbatch names no partition, so asking would refuse them for nothing.
+    local arch=""
+    if grep -qF '${GPU_ARCH}' "${SCRIPT_DIR}/${template}"; then
+        arch="$(template_arch "${template}")" || return 1
+    fi
     sed -e "s|\${SCRATCH}|${SCRATCH}|g" \
         -e "s|\"<hpcagent_bench_edf_mounts>\"|${EDF_MOUNTS}|" \
         -e "s|\${GPU_ARCH}|${arch}|g" \
@@ -81,7 +85,34 @@ render() {
 failed=0
 try_render() { render "$@" || failed=$((failed + 1)); }
 
-echo "installing EDFs into ${EDF_DIR}"
+# Which cluster's roles to render, one platform per run: a checkout on Daint has no beverin images
+# to point at, and a render of a missing image is refused. amd (the default) is beverin's set,
+# exactly as before this switch existed; gh200 is Daint's; cpu is the CPU-only pair of this host's
+# architecture.
+CE_PLATFORM="${CE_PLATFORM:-amd}"
+echo "installing ${CE_PLATFORM} EDFs into ${EDF_DIR}"
+case "${CE_PLATFORM}" in
+    amd) ;;
+    gh200)
+        try_render "${JUDGE_AGENT_CUDA_EDF_LATEST}" "${JUDGE_AGENT_CUDA_TEMPLATE}" "${JUDGE_AGENT_CUDA_SQSH}"
+        try_render "${JUDGE_CUDA_EDF_LATEST}" "${JUDGE_CUDA_TEMPLATE}" "${JUDGE_CUDA_SQSH}"
+        try_render "${INFERENCE_VLLM_CUDA_EDF_LATEST}" "${INFERENCE_VLLM_CUDA_TEMPLATE}" "${INFERENCE_VLLM_CUDA_SQSH}"
+        echo
+        echo "follow images.env:  AMD_CE_ENV=${JUDGE_AGENT_CUDA_EDF_LATEST}"
+        echo "                    JUDGE_CE_ENV=${JUDGE_CUDA_EDF_LATEST}"
+        echo "                    INFERENCE_CE_ENV=${INFERENCE_VLLM_CUDA_EDF_LATEST}"
+        exit $(( failed > 0 ))
+        ;;
+    cpu)
+        try_render "${JUDGE_AGENT_CPU_EDF_LATEST}" "${JUDGE_AGENT_CPU_TEMPLATE}" "${JUDGE_AGENT_CPU_SQSH}"
+        try_render "${JUDGE_CPU_EDF_LATEST}" "${JUDGE_CPU_TEMPLATE}" "${JUDGE_CPU_SQSH}"
+        echo
+        echo "follow images.env:  AMD_CE_ENV=${JUDGE_AGENT_CPU_EDF_LATEST}"
+        echo "                    JUDGE_CE_ENV=${JUDGE_CPU_EDF_LATEST}"
+        exit $(( failed > 0 ))
+        ;;
+    *) echo "CE_PLATFORM must be amd, gh200 or cpu, got '${CE_PLATFORM}'" >&2; exit 2 ;;
+esac
 try_render "${JUDGE_AGENT_AMD_EDF_LATEST}" "${JUDGE_AGENT_AMD_TEMPLATE}" "${JUDGE_AGENT_AMD_SQSH}"
 # The judge image. Rendered only when its template exists, so a checkout that predates the split
 # installs the same set it always did rather than reporting a failure for a name it has never had.

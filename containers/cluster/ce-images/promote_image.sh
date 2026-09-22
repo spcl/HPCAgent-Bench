@@ -33,6 +33,9 @@ role_candidate() {
         sglang)          printf 'hpcagent-bench-sglang-candidate.sqsh' ;;
         sglang-mi200)    printf 'hpcagent-bench-sglang-mi200-candidate.sqsh' ;;
         vllm)            printf 'hpcagent-bench-vllm-candidate.sqsh' ;;
+        # The GH200 and CPU builders name their candidate after the live name.
+        judge-agent-cuda|judge-cuda|vllm-cuda|judge-agent-cpu|judge-cpu)
+                         printf '%s' "$(role_live "$1" | sed 's/\.sqsh$/-candidate.sqsh/')" ;;
         *) return 2 ;;
     esac
 }
@@ -43,11 +46,21 @@ role_live() {
         sglang)          printf '%s' "${INFERENCE_SGLANG_SQSH}" ;;
         sglang-mi200)    printf '%s' "${INFERENCE_SGLANG_MI200_SQSH}" ;;
         vllm)            printf '%s' "${INFERENCE_VLLM_SQSH}" ;;
+        judge-agent-cuda) printf '%s' "${JUDGE_AGENT_CUDA_SQSH}" ;;
+        judge-cuda)      printf '%s' "${JUDGE_CUDA_SQSH}" ;;
+        vllm-cuda)       printf '%s' "${INFERENCE_VLLM_CUDA_SQSH}" ;;
+        judge-agent-cpu) printf '%s' "${JUDGE_AGENT_CPU_SQSH}" ;;
+        judge-cpu)       printf '%s' "${JUDGE_CPU_SQSH}" ;;
         *) return 2 ;;
     esac
 }
 
-ALL_ROLES="judge-agent-amd judge sglang sglang-mi200 vllm"
+# --all means the roles of ONE platform, the same CE_PLATFORM install_edfs.sh renders at the end.
+case "${CE_PLATFORM:-amd}" in
+    gh200) ALL_ROLES="judge-agent-cuda judge-cuda vllm-cuda" ;;
+    cpu)   ALL_ROLES="judge-agent-cpu judge-cpu" ;;
+    *)     ALL_ROLES="judge-agent-amd judge sglang sglang-mi200 vllm" ;;
+esac
 case "${1:-}" in
     --all) roles="${ALL_ROLES}" ;;
     "")    echo "usage: $0 <role>... | --all   (roles: ${ALL_ROLES})" >&2; exit 2 ;;
@@ -99,7 +112,13 @@ for role in ${roles}; do
         # The judge is a second TARGET of the judge-agent-amd build, not a directory of its own.
         dir="${role}"; [ "${role}" = "judge" ] && dir="judge-agent-amd"
         echo "${role}: REFUSING -- ${cand##*/} carries no .verified marker" >&2
-        echo "  run: IMAGE_DIR=${SCRIPT_DIR}/${dir} sbatch build_and_verify.sbatch" >&2
+        case "${role}" in
+            *-cuda|*-cpu)
+                # These verify inside their own build.sbatch; the judge is the agent build's 2nd target.
+                dir="${role/#judge-c/judge-agent-c}"
+                echo "  run: sbatch ${SCRIPT_DIR}/${dir}/build.sbatch" >&2 ;;
+            *)  echo "  run: IMAGE_DIR=${SCRIPT_DIR}/${dir} sbatch build_and_verify.sbatch" >&2 ;;
+        esac
         failed=$((failed + 1))
         continue
     fi
