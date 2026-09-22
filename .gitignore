@@ -305,3 +305,10 @@ experiments/*-[0-9]*.out
 # Vendored openai-agents SDK for the optimas harness (hpcagent_bench.harness.optimas_tools):
 # pip-installed --target here at launch time, never committed (see experiments/harnesses.py).
 /vendor/
+
+# scratch that escaped the experiments/ rules (2026-09-22 cleanup)
+/out.txt
+/*.out
+*.ritom-orig
+.perf_reports/
+experiments/mwd-final-*/
