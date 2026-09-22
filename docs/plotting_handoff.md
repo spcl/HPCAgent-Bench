@@ -137,7 +137,7 @@ python3 statistics/plot_score_change.py "$AR/experiments/llr-gpu/data/llr-gpu.db
   --comparison "title=Loop Reasoning CPU (LLR);intervention=lang-skills;pairs=$AR/experiments/llr-cpu/tables/skills_billed.csv;observations=$AR/experiments/llr-cpu/data/llr-cpu.db;placeholders=Fortran" \
   --comparison "title=Loop Reasoning GPU (LLR);intervention=lang-skills;pairs=$AR/experiments/llr-gpu/tables/skills_billed.csv;observations=$AR/experiments/llr-gpu/data/llr-gpu.db;difference=HIP:qwen38,HIP:kimi27sglang" \
   --comparison "title=Blind (LLR CPU);intervention=lang-skills;pairs=$AR/experiments/llrblind/tables/skills_billed.csv;observations=$AR/experiments/llrblind/data/llrblind.db" \
-  --comparison "title=Repository Context;intervention=repo;pairs=$AR/experiments/git-scicomp/tables/repo-vs-kernel_billed.csv;observations=$AR/experiments/git-scicomp/data/git-scicomp.db;repeats=median;control-label=Kernel Formulation" \
+  --comparison "title=Repo. Context;intervention=repo;pairs=$AR/experiments/git-scicomp/tables/repo-vs-kernel_billed.csv;observations=$AR/experiments/git-scicomp/data/git-scicomp.db;repeats=median;control-label=Kernel Formulation" \
   --cost-model billed --row-width acm-text --out figures/efficacy-packets-and-scope.pdf --table figures/efficacy-packets-and-scope.csv
 ```
 
@@ -153,10 +153,14 @@ No row carries X tick marks; the categories are named under the last one. Every 
 carries unlabelled minor ticks and a faint minor grid (`style.minor_ticks`; the rule per axis kind is in
 [plotting.md](plotting.md)). Each column is one model and delivery; its two marks are the control
 (hollow circle) and the treated arm (the packet's shape).
-Row heights (`efficacy.MEASURE_HEIGHT`, fractions of `row_height_in`): speed-up and cost 0.82,
-tasks completed 0.5 (user, 2026-09-22). Each interval is drawn at most `FigureConfig.interval_reach`
+Row heights (`efficacy.MEASURE_HEIGHT`, fractions of `row_height_in`): speed-up and cost 0.7,
+tasks completed 0.45 (user, 2026-09-22). Each interval is drawn at most `FigureConfig.interval_reach`
 (4x) past the panel's outermost mark and cut there with an arrowhead in the arm's colour, so one
 few-kernel interval cannot stretch its panel's axis (`efficacy.interval_bounds`, `draw_interval`).
+A mark over fewer than `FigureConfig.min_interval_kernels` (5) kernels is drawn without an interval
+and the key says so. At print size (`PAPER_CONFIG`) the key is 7.24pt and the row Y titles 6.4pt;
+panel names keep 0.1in clear of the next one (`NAME_CLEARANCE_IN`), and the paper's fourth panel is
+titled "Repo. Context" so the narrow column does not shrink every name.
 
 What each row is over (2026-09-21):
 

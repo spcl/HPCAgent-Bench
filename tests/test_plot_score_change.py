@@ -1525,8 +1525,8 @@ def test_dropping_the_success_row_keeps_the_width_and_every_other_box(
 ) -> None:
     """The success row is optional: turning it off may only shorten the canvas. A figure with and
     one without it sit in one paper, so the speed-up and cost boxes must be the same size in both.
-    The success row is half a row and the speed-up and cost rows 0.82 of one (users, 2026-09-21 and
-    2026-09-22), so the success row is 0.5/0.82 of a speed-up row."""
+    The success row is 0.45 of a row and the speed-up and cost rows 0.7 of one (user, 2026-09-22),
+    so the success row is 0.45/0.7 of a speed-up row."""
     full = drawn_dot_row(tmp_path, monkeypatch, efficacy_figures.MEASURES)
     short = drawn_dot_row(tmp_path, monkeypatch, ("speedup", "cost"))
     assert full.get_size_inches()[0] == pytest.approx(short.get_size_inches()[0])
@@ -1535,7 +1535,7 @@ def test_dropping_the_success_row_keeps_the_width_and_every_other_box(
     assert box_inches(full, speedup) == pytest.approx(box_inches(short, short.axes[0]), abs=1e-3)
     assert box_inches(full, cost) == pytest.approx(box_inches(short, short.axes[1]), abs=1e-3)
     width, height = box_inches(full, speedup)
-    assert box_inches(full, success) == pytest.approx((width, height * 0.5 / 0.82), abs=1e-3), "a half row"
+    assert box_inches(full, success) == pytest.approx((width, height * 0.45 / 0.7), abs=1e-3), "the success row's share"
 
 
 def test_a_full_roster_mark_on_the_ceiling_is_drawn_whole() -> None:
@@ -1823,3 +1823,39 @@ def test_an_interval_past_the_reach_is_cut_at_it_with_an_arrowhead() -> None:
     heads = {line.get_marker() for line in ax.lines if line.get_marker() in ("^", "v")}
     assert heads == {"^", "v"}, heads
     plt.close(fig)
+
+
+def few_kernel_arm(x: float, kernels: int) -> efficacy_figures.ArmPoint:
+    """An arm at ``log2`` speed-up ``x`` over ``kernels`` kernels whose interval runs 20 octaves wide."""
+    return efficacy_figures.ArmPoint(x, x - 10.0, x + 10.0, 1e5, 5e4, 2e5, kernels, 40, kernels, 40)
+
+
+def test_a_mark_from_fewer_than_five_kernels_draws_no_interval_and_does_not_stretch_the_axis() -> None:
+    """User, 2026-09-22: Qwen's GPU OpenMP control solved three kernels, its interval ran 0.19x to
+    302x and was the only one in the figure cut at both ends; below five kernels the mark stands alone."""
+    lines = {}
+    limits = {}
+    for kernels in (3, 5):
+        fig, ax = plt.subplots()
+        point = few_kernel_arm(2.0, kernels)
+        row = efficacy_figures.ArmRow("qwen38", "OpenMP Offload", "#1f77b4", point, point)
+        efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {}, config=efficacy_figures.PAPER_CONFIG)
+        lines[kernels] = len(ax.lines)
+        limits[kernels] = ax.get_ylim()
+        plt.close(fig)
+    assert lines[3] < lines[5], lines
+    assert limits[3][1] - limits[3][0] < limits[5][1] - limits[5][0], limits
+
+
+@pytest.mark.parametrize(
+    ("kernels", "want"),
+    [
+        pytest.param(3, True, id="three-kernels-needs-the-note"),
+        pytest.param(5, False, id="five-kernels-draws-its-interval"),
+        pytest.param(0, False, id="an-unmeasured-slot-is-not-a-few-kernel-mark"),
+    ],
+)
+def test_the_key_notes_a_missing_interval_only_when_a_few_kernel_mark_is_drawn(kernels: int, want: bool) -> None:
+    point = few_kernel_arm(1.0, kernels)
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", point, point)
+    assert efficacy_figures.few_kernel_marks([row], efficacy_figures.PAPER_CONFIG) is want

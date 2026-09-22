@@ -161,6 +161,10 @@ class FigureConfig:
     #: ticks read 0.00391x and every mark sat in a sliver; the interval is cut at this reach instead,
     #: with an arrowhead where it continues (:func:`draw_interval`).
     interval_reach: float = 4.0
+    #: The fewest kernels a dot-row mark's interval is drawn from. Three kernels put the 95% log-t
+    #: critical value at 4.3 and the interval over three decades, cut at both ends; below this the
+    #: mark stands alone and the key says why (:data:`FEW_KERNELS_NOTE`).
+    min_interval_kernels: int = 5
     grid_width: float = 0.7
     spine_width: float = 0.8
     #: ABSOLUTE panels only (:func:`draw_arm_pair`): join an arm to its own no-packet twin with a
@@ -217,10 +221,10 @@ DEFAULT_CONFIG = FigureConfig()
 PAPER_CONFIG = dataclasses.replace(
     DEFAULT_CONFIG,
     tick_pt=style.PRINT_TICK_PT,
-    label_pt=style.PRINT_LABEL_PT,
+    label_pt=0.8 * style.PRINT_LABEL_PT,
     subtitle_pt=style.PRINT_LABEL_PT,
     point_pt=6.5,
-    legend_pt=9.05,
+    legend_pt=7.24,
     legend_ncol=5,
     legend_marker_pt=5.5,
     legend_marker_scale=1.0,
@@ -1693,9 +1697,9 @@ MEASURES: tuple[str, ...] = ("speedup", "success", "cost")
 MEASURE_LABELS: dict[str, str] = {"speedup": "Speed-Up", "success": "Tasks Completed", "cost": ABSOLUTE_YLABEL}
 
 #: Each measure's row height as a fraction of ``row_height_in``. A count out of N needs no ladder of
-#: ratios, so the success row takes half a row; the speed-up and cost rows are 0.82 of one (user,
-#: 2026-09-22: about a fifth shorter, the success row unchanged).
-MEASURE_HEIGHT: dict[str, float] = {"speedup": 0.82, "success": 0.5, "cost": 0.82}
+#: ratios, so the success row is the shortest; the speed-up and cost rows are 0.7 of one and the
+#: success row 0.45 (user, 2026-09-22: 15% and 10% below the earlier 0.82 and 0.5).
+MEASURE_HEIGHT: dict[str, float] = {"speedup": 0.7, "success": 0.45, "cost": 0.7}
 
 #: Headroom above N on the success row, as a fraction of N, so the dashed ceiling at N is not the frame.
 SUCCESS_HEADROOM: float = 0.05
@@ -2079,6 +2083,26 @@ def draw_interval(
     return bottom, top
 
 
+def interval_kernels(point: ArmPoint, measure: str) -> int:
+    """How many kernels one arm's interval on ``measure`` is taken over: every served kernel for cost,
+    the kernels both arms solved for speed-up."""
+    return point.token_kernels if measure == "cost" else point.kernels
+
+
+#: The key's note for a mark drawn without its interval (:attr:`FigureConfig.min_interval_kernels`).
+FEW_KERNELS_NOTE: str = "No interval: fewer than {} kernels"
+
+
+def few_kernel_marks(rows: Sequence[ArmRow], config: FigureConfig) -> bool:
+    """Whether any drawn speed-up or cost mark has too few kernels for its interval."""
+    return any(
+        0 < interval_kernels(point, measure) < config.min_interval_kernels
+        for row in rows
+        for point in (row.control, row.treated)
+        for measure in ("speedup", "cost")
+    )
+
+
 def measure_value(point: ArmPoint, measure: str) -> tuple[float, float, float]:
     """``(value, low, high)`` of one arm on one measure: the speed-up in ``log2(ratio)``, or the
     token count as a count. The success row draws its count alone (:func:`draw_success_row`)."""
@@ -2169,6 +2193,8 @@ def draw_measure_row(
         for point, filled, dodge, mark in pair:
             value, low, high = measure_value(point, measure)
             x = index + dodge
+            if interval_kernels(point, measure) < config.min_interval_kernels:
+                low, high = math.nan, math.nan
             if np.isfinite(low) and np.isfinite(high):
                 low, high = draw_interval(
                     ax, x, low, high, bounds, row.colour, config.cost_linestyle if cost else "-", config
@@ -2528,6 +2554,9 @@ def dot_row_legend(columns: Sequence[DotColumn], channels: str, config: FigureCo
     )
     if config.mark_pending and any(is_pending(row) for row in rows):
         handles.append(style.pending_legend_mark(config.legend_marker_pt))
+    if few_kernel_marks(rows, config):
+        note = FEW_KERNELS_NOTE.format(config.min_interval_kernels)
+        handles.append(Line2D([], [], linestyle="none", marker="none", label=note))
     return handles + legend_tail(False, symbols) + alias_footnotes([row.leg for row in rows])
 
 
@@ -2564,6 +2593,10 @@ def measure_row_config(config: FigureConfig, row_height_in: float) -> FigureConf
     )
 
 
+#: Clearance kept between the end of one panel name and the start of the next, inches.
+NAME_CLEARANCE_IN: float = 0.1
+
+
 def fit_panel_names(
     fig: Figure,
     top: Sequence[Axes],
@@ -2588,6 +2621,8 @@ def fit_panel_names(
     # first pass may already have shrunk them, and dividing by the wrong size hands back the same
     # optimistic width the pass was there to replace.
     em = max((measured_char_em(ax, drawn_pt) for ax in top if ax.get_title()), default=NAME_CHAR_EM)
+    # A name that fills its span to the last glyph runs straight into the next one ("(LLR)ii)").
+    spans = [span - NAME_CLEARANCE_IN for span in spans[:-1]] + list(spans[-1:])
     size, folds = name_layout(tagged, spans, config.subtitle_pt, config.max_name_lines, em)
     measured = dataclasses.replace(config, subtitle_pt=size)
     for index, ax in enumerate(top):
