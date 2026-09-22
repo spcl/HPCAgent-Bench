@@ -162,6 +162,57 @@ ce_cache_base_image() {
     fi
 }
 
+# Verify a candidate INSIDE itself, under an EDF rendered from its production template, and write
+# the .verified marker promote_image.sh requires -- only on a clean verdict. The GH200 and CPU
+# builders call this from their build.sbatch; the AMD images go through build_and_verify.sbatch,
+# whose generated EDF carries beverin's hooks and its rocminfo arch check.
+#
+# Rendered from the TEMPLATE, not generated, so what is verified is what a job will run under. The
+# checkout's agent tree is bound where run_cluster.sh binds it, and the probes run from `/` (a CWD
+# holding a `dace` directory shadows the image's own, IMAGE_REQUIREMENTS.md).
+#
+#   ce_verify_candidate <template under ce-images/> <sqsh> <verify_image.py profile> [srun args...]
+ce_verify_candidate() {
+    local template="$1" sqsh="$2" profile="$3" repo edf modules rc=0
+    shift 3
+    repo="$(cd -- "${CE_IMAGES_DIR}/../../.." && pwd)"
+    # shellcheck source=../../../scripts/cache_env.sh
+    . "${repo}/scripts/cache_env.sh"
+    edf="${SCRATCH:?}/.tmp/verify-${SLURM_JOB_ID:-$$}-${profile}.toml"
+    mkdir -p "$(dirname "${edf}")"
+    sed -e "s|\${SCRATCH}|${SCRATCH}|g" \
+        -e "s|\"<hpcagent_bench_edf_mounts>\"|$(hpcagent_bench_edf_mounts), \"${repo}/containers/agent:/opt/hpcagent-bench-agent\"|" \
+        -e "s|^image = .*|image = \"${sqsh}\"|" \
+        -e "s|^workdir = .*|workdir = \"/\"|" \
+        "${CE_IMAGES_DIR}/${template}" > "${edf}"
+    rm -f "${sqsh}.verified"
+    printf '\n===== verifying %s as profile=%s =====\n' "${sqsh}" "${profile}"
+    srun "$@" --environment="${edf}" python3 "${CE_IMAGES_DIR}/verify_image.py" --profile "${profile}" \
+        --verbose || rc=$((rc + 1))
+    case "${profile}" in
+        vllm-*) modules="numpy,torch,vllm,triton" ;;
+        *)      modules="" ;;
+    esac
+    srun "$@" --environment="${edf}" python3 "${CE_IMAGES_DIR}/selfcontained_check.py" \
+        ${modules:+--modules "${modules}"} || rc=$((rc + 1))
+    case "${profile}" in
+        judge*)
+            srun "$@" --environment="${edf}" python3 "${CE_IMAGES_DIR}/tools_launch_check.py" \
+                --agent-dir /opt/hpcagent-bench-agent --judge-tools "${repo}/containers/judge/tools" \
+                || rc=$((rc + 1))
+            ;;
+    esac
+    rm -f "${edf}"
+    if [[ "${rc}" -eq 0 ]]; then
+        printf 'verified profile=%s job=%s digest=%s\n' "${profile}" "${SLURM_JOB_ID:-none}" \
+            "$(cat "${sqsh}.digest" 2>/dev/null || echo unknown)" > "${sqsh}.verified"
+        printf 'VERIFIED: %s\n' "${sqsh}"
+    else
+        printf 'NOT VERIFIED (%s failed stage(s)): %s\n' "${rc}" "${sqsh}" >&2
+    fi
+    return "${rc}"
+}
+
 # Everything after a successful `podman build`: identity, artifact, archive, publish.
 ce_export_image() {
     local image_tag="$1" output_sqsh="$2"
