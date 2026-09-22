@@ -12,12 +12,31 @@ own, so a test importing ``conftest`` by name gets whichever was imported first.
 """
 
 import os
+import socket
 
 import pytest
 
 from dace_build_isolation import pin_per_worker_dace_build_folder
 
 pin_per_worker_dace_build_folder()
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "beverin: needs the Beverin login node itself (its ~/.edf, Slurm, /capstor); skipped on any host "
+        "whose name does not contain 'beverin'.",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip every ``beverin`` test unless this host's name says it is Beverin."""
+    if "beverin" in socket.gethostname():
+        return
+    off_site = pytest.mark.skip(reason="beverin: not a Beverin host")
+    for item in items:
+        if item.get_closest_marker("beverin") is not None:
+            item.add_marker(off_site)
 
 
 #: Error annotations one pytest process emits per test before the end-of-run list takes over.
@@ -56,7 +75,7 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
     if os.environ.get("GITHUB_ACTIONS") != "true" or not report.failed:
         return
     reason = failure_line(report).replace("\n", " | ")
-    failures_annotated.append(f"{report.nodeid} ({report.when}): {reason[:100]}")
+    failures_annotated.append(f"{report.nodeid} ({report.when}): {reason[:300]}")
     if len(failures_annotated) <= FAILURE_ANNOTATION_LIMIT:
         title = workflow_escape(f"FAILED {report.nodeid}", prop=True)
         print(f"\n::error title={title}::{workflow_escape(failure_line(report)[:2000])}", flush=True)

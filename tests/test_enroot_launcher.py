@@ -310,12 +310,13 @@ def _exported_annotations(edf: pathlib.Path) -> dict[str, str]:
 RENDERED = sorted(pathlib.Path.home().joinpath(".edf").glob("hpcagent-bench-*-mi300-latest.toml"))
 
 
-@pytest.mark.skipif(not RENDERED, reason="no rendered EDFs in ~/.edf to parse")
+@pytest.mark.beverin  # the EDFs install_edfs.sh renders into the Beverin user's ~/.edf
 @pytest.mark.parametrize("edf", RENDERED, ids=lambda p: p.stem)
 @pytest.mark.parametrize(
     "variable, expected",
     [
-        ("OCI_ANNOTATION_com__hooks__netstack__source", "host"),
+        # artifact since abcd4fe85; scripts/cscs/netstack_preflight.sh refuses anything else.
+        ("OCI_ANNOTATION_com__hooks__netstack__source", "artifact"),
         ("OCI_ANNOTATION_com__hooks__cxi__enabled", "true"),
         ("OCI_ANNOTATION_com__hooks__aws_ofi_nccl__enabled", "true"),
         ("OCI_ANNOTATION_com__hooks__aws_ofi_nccl__variant", "rocm6"),
