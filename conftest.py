@@ -24,6 +24,10 @@ pin_per_worker_dace_build_folder()
 #: GitHub keeps 10 error annotations per step, so the list at the end needs the tenth.
 FAILURE_ANNOTATION_LIMIT = 9
 
+#: GitHub cuts an annotation's message near 4 KiB and keeps 10 notices per step, so the end-of-run
+#: list goes out as notices of at most this many characters each.
+ANNOTATION_CHUNK_CHARS = 3500
+
 failures_annotated: list[str] = []
 
 
@@ -46,20 +50,28 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
     """On GitHub Actions, turn a failure into an error ANNOTATION as it happens.
 
     A public repository's job logs need admin rights to read (``/actions/jobs/<id>/logs`` answers
-    403), but a check run's annotations do not (``/check-runs/<id>/annotations``). Without this a
-    red job told anyone outside the admin list only "Process completed with exit code 1"."""
+    403), but a check run's annotations do not (``/check-runs/<id>/annotations``, or the run's page).
+    Without this a red job told anyone outside the admin list only "Process completed with exit
+    code 1"."""
     if os.environ.get("GITHUB_ACTIONS") != "true" or not report.failed:
         return
-    failures_annotated.append(f"{report.nodeid} ({report.when}): {failure_line(report)[:300]}".replace("\n", " | "))
+    reason = failure_line(report).replace("\n", " | ")
+    failures_annotated.append(f"{report.nodeid} ({report.when}): {reason[:100]}")
     if len(failures_annotated) <= FAILURE_ANNOTATION_LIMIT:
         title = workflow_escape(f"FAILED {report.nodeid}", prop=True)
         print(f"\n::error title={title}::{workflow_escape(failure_line(report)[:2000])}", flush=True)
 
 
 def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
-    """Every failure of the run in one annotation, past the per-step cap the ones above hit."""
+    """Every failure of the run, in notices past the per-step error cap the ones above hit."""
     if os.environ.get("GITHUB_ACTIONS") != "true" or not failures_annotated:
         return
-    title = workflow_escape(f"{len(failures_annotated)} failed", prop=True)
-    body = "\n".join(failures_annotated)[:60000]
-    terminalreporter.write_line(f"::error title={title}::{workflow_escape(body)}")
+    chunks: list[list[str]] = [[]]
+    for entry in failures_annotated:
+        if chunks[-1] and sum(len(line) + 1 for line in chunks[-1]) + len(entry) > ANNOTATION_CHUNK_CHARS:
+            chunks.append([])
+        chunks[-1].append(entry)
+    terminalreporter.write_line(f"::error title={len(failures_annotated)} failed::see the notices for the full list")
+    for index, chunk in enumerate(chunks, start=1):
+        title = workflow_escape(f"failed {index}/{len(chunks)}", prop=True)
+        terminalreporter.write_line(f"::notice title={title}::{workflow_escape(chr(10).join(chunk))}")
