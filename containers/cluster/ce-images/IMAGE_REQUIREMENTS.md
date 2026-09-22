@@ -12,10 +12,10 @@ then differ by it.
 | image | base | serves |
 |---|---|---|
 | judge + agent, AMD | ROCm 7.2.0, x86_64 | both roles -- `run_cluster.sh:814,817` already pass one `AMD_CE_ENV` to both `role_srun` calls |
-| judge + agent, CUDA | CSCS alps NGC PyTorch 26.02 (CUDA 13.1, py3.12), aarch64 / GH200 | same roles, other vendor: two targets, `agent` and `judge` |
+| judge + agent, CUDA | public NGC PyTorch 25.06 by digest (CUDA 12.9.1, py3.12), aarch64 / GH200 | same roles, other vendor: two targets, `agent` and `judge` |
 | vLLM | ROCm 7.2.0 | oss120b |
 | SGLang | ROCm 7.2.0 | qwen38, kimi -- 12 of 18 v9 arms |
-| vLLM, GH200 | `vllm/vllm-openai:v0.30.0-aarch64` by digest (CUDA 13.0) | qwen38, kimi and oss120b on Daint |
+| vLLM, GH200 | `vllm/vllm-openai:v0.30.0-aarch64-cu129` by digest (CUDA 12.9.1) | qwen38, kimi and oss120b on Daint |
 | judge + agent, CPU only | `ubuntu:24.04` by digest, x86_64 or aarch64 | both roles on a host with no GPU toolchain; binary packages only |
 
 The last three are built on Daint (or any node, for the CPU one), not on beverin; what they carry and
@@ -46,9 +46,8 @@ Two consequences to handle rather than discover:
   break -- but it must be WRITTEN DOWN, because a result that reproduces locally and not in the
   container will otherwise cost someone a day. (`ml-ci.yml` runs 3.13, so there are three.)
 * **Both judge/agent bases must agree on the minor.** The AMD base is py3.12, and so is the CUDA
-  base: NGC PyTorch 26.02 (which `ngc-pytorch:26.02-py3-alps6` is built from) is Ubuntu 24.04 with
-  `/usr/bin/python3.12` -- read off the published arm64 image config, whose `LD_LIBRARY_PATH` names
-  `/usr/local/lib/python3.12/dist-packages`. The CPU-only image is Ubuntu 24.04's python3.12 too. Two judge
+  base: NGC PyTorch 25.06 is Ubuntu 24.04 with `/usr/bin/python3.12` -- read off the published arm64
+  image config, whose `LD_LIBRARY_PATH` names `/usr/local/lib/python3.12/dist-packages`. The CPU-only image is Ubuntu 24.04's python3.12 too. Two judge
   images grading on different Pythons is the one version split with no upside at all.
 
 The final gate should assert the interpreter is the base's, pin numpy / scipy / pandas / astunparse
@@ -772,6 +771,13 @@ of throughput numbers, and it does not announce itself.
 
 The AMD recipe with CUDA in place of ROCm; every AMD layer's fix carries over. What is specific:
 
+* **CUDA 12.9, on a public base.** `nvcr.io/nvidia/pytorch:25.06-py3`, pinned by its arm64 manifest
+  digest, is the newest NGC PyTorch on CUDA 12.9 (12.9.1; 25.08 onward is CUDA 13). 12.9 because its
+  runtime runs on any driver >= 525 through minor-version compatibility, where CUDA 13 needs >= 580 on
+  every node, and because the CE's NCCL plugin variant is `cuda12` -- the beverin RCCL failure was a
+  plugin one runtime major behind its image. The vLLM image is the same release's `-cu129` build, and
+  `NVHPC_CUDA_HOME` keeps nvc/nvfortran on the base's CUDA rather than the SDK's bundled newer one.
+
 * **GCC is built without `+nvptx`**, as the offload matrix above says: the OpenACC path is NVHPC,
   hard-gated on `nvc -acc -gpu=cc90` reporting GPU code, and OpenMP offload is LLVM's, hard-gated on a
   LINKED binary carrying an `sm_90` image. The CSCS gcc overlay patch the old recipe carried for gcc's
@@ -783,8 +789,9 @@ The AMD recipe with CUDA in place of ROCm; every AMD layer's fix carries over. W
 * **`SLURM_VERSION` is the build host's**, read by `build.sh` off `srun --version` in spack's spelling
   (`25-05-8-1`); the spack bootstrap refuses a version the pinned spack-packages does not list, in
   seconds rather than after the compiler build.
-* **NVHPC, cuTENSOR and Nsight** come from NVIDIA's arm64/sbsa apt repos at pinned versions; the
-  `ncu`/`nsys` symlinks name the pinned version directories, because the NGC base ships older ones.
+* **NVHPC, cuTENSOR and Nsight** come from NVIDIA's arm64/sbsa apt repos at pinned versions, Nsight
+  of the CUDA 12.9 generation (ncu 2025.2.1, nsys 2025.3.2); the `ncu`/`nsys` symlinks name the pinned
+  version directories rather than whichever the base also ships.
 * **No MKL** (x86_64 only), no rocprof, no PAPI rocm components; PAPI carries `cuda` and `nvml`.
 
 ### vllm-cuda (Daint GH200)
@@ -792,21 +799,25 @@ The AMD recipe with CUDA in place of ROCm; every AMD layer's fix carries over. W
 The official arm64 image, pinned by digest, and nothing ROCm-shaped: aiter, flash-attn's triton_amd
 path, the MI300A MoE configs and the RCCL eager-PG patch do not transfer. Its one build step asserts
 the engine version, a CUDA torch built for `sm_90`, every parser name the serving configs use (resolved
-through vLLM's own registries), and that no NCCL net plugin ships in the image. Its CUDA 13 runtime
-needs a driver >= 580 on the node; the `-cu129` tag of the same release, whose digest is recorded in
-the Dockerfile, is the fallback for an older one.
+through vLLM's own registries), and that no NCCL net plugin ships in the image. It is the CUDA 12.9
+build (`v0.30.0-aarch64-cu129`) for the reasons above; the release's CUDA 13 build is recorded in the
+Dockerfile as a comment.
 
 Serving on Daint is `inference/serve-daint.sbatch`, one model per job, the beverin served name and
-windows (262144 for qwen38 and kimi, 131072 for oss120b) and parsers. kimi is PP across nodes: its
-~595 GB of INT4 weights do not fit one node's 4 x 96 GB.
+windows (262144 for qwen38 and kimi, 131072 for oss120b) and parsers. kimi is PP across 4 nodes by
+default (2 allowed): its ~595 GB of INT4 weights do not fit one node's 4 x 96 GB.
 
 ### judge-agent-cpu
 
 Binary packages only, so a build is about an hour rather than a day, on either architecture:
 
-* **gcc 14, not the distro default 13**, for the masked-select mis-vectorization the AMD EDF records
-  against gcc 13; **clang/flang 22 from apt.llvm.org**, the LLVM release the AMD image builds, with
-  Polly linked into its libLLVM (the `polly` column) and flang new enough for `do concurrent`.
+* **gcc 16, like beverin: the CPU-image baselines are gcc 16's.** The only gcc 16 packaged for noble
+  is the ubuntu-toolchain-r PPA's snapshot, pinned to `16-20260315-1ubuntu1~24~ppa1` (a pre-release of
+  the 16 series beverin runs as 16.2.0), key checked by fingerprint, the PPA source removed after the
+  install. The distro gcc 13 stays only for Pluto's clang 17 (the masked-select mis-vectorization the
+  AMD EDF records rules it out as a bare name). **clang/flang 22 from apt.llvm.org**, the LLVM release
+  the AMD image builds, with Polly linked into its libLLVM (the `polly` column) and flang new enough
+  for `do concurrent`.
 * **MPICH only.** Debian's default MPI is Open MPI, so only the `-mpich` flavours of ScaLAPACK and
   HDF5 are installed, and the build fails if any Open MPI package arrives. The distro MPICH is for
   single-node grading; no fabric hook is enabled.
@@ -819,4 +830,5 @@ Binary packages only, so a build is about an hour rather than a day, on either a
 * Absent by design: ROCm, CUDA, spack, the distributed and GPU solvers (PETSc, SLEPc, hypre, MAGMA,
   SuperLU_DIST, STRUMPACK, ParMETIS), NVHPC, ppcg, cupy, triton. A column that needs one declines.
 
-Its CPU baselines are gcc 14's and are not comparable with the AMD image's gcc 16 ones.
+Its CPU baselines use gcc 16 like beverin's, but a snapshot on another machine: compare numbers within
+one image, never across the two.

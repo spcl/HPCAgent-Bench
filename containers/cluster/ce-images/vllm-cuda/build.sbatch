@@ -8,7 +8,7 @@
 #
 # IMAGE_DIR, not --chdir: SLURM_SUBMIT_DIR is where sbatch was INVOKED, whatever --chdir says.
 #
-# COST: one node, well under an hour -- a ~10 GB pull (cached under $SCRATCH/base-images after the
+# COST: one node, well under an hour -- a ~14 GB pull (cached under $SCRATCH/base-images after the
 # first), one small gate layer, the squashfs import, then verify_image.py inside the result. The
 # serving half a build cannot answer is inference/serve-daint.sbatch MODE=smoke, per model.
 #

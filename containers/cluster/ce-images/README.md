@@ -448,8 +448,8 @@ unchanged; what differs is that each `build.sbatch` here **builds and verifies i
 
 | directory | targets -> EDF (`CE_PLATFORM`) | base | build job |
 |---|---|---|---|
-| `judge-agent-cuda/` | `agent` -> `hpcagent-bench-agent-gh200-latest`, `judge` -> `hpcagent-bench-judge-gh200-latest` (`gh200`) | CSCS alps build of NGC PyTorch 26.02 (CUDA 13.1, py3.12, aarch64) | 1 GH200 node, up to 24 h cold; gcc 16 + llvm 22 + PETSc/MAGMA from spack, cached in `$SCRATCH/spack-buildcache-aarch64` |
-| `vllm-cuda/` | -> `hpcagent-bench-vllm-gh200-latest` (`gh200`) | `vllm/vllm-openai:v0.30.0-aarch64@sha256:4864d466...` (CUDA 13.0, ~10 GB) | 1 GH200 node, < 1 h |
+| `judge-agent-cuda/` | `agent` -> `hpcagent-bench-agent-gh200-latest`, `judge` -> `hpcagent-bench-judge-gh200-latest` (`gh200`) | public NGC `pytorch:25.06-py3@sha256:6d46ebd6...` (arm64 manifest; CUDA 12.9.1, py3.12, NCCL 2.27.3) | 1 GH200 node, up to 24 h cold; gcc 16 + llvm 22 + PETSc/MAGMA from spack, cached in `$SCRATCH/spack-buildcache-aarch64` |
+| `vllm-cuda/` | -> `hpcagent-bench-vllm-gh200-latest` (`gh200`) | `vllm/vllm-openai:v0.30.0-aarch64-cu129@sha256:d2f87fcd...` (CUDA 12.9.1, ~14 GB) | 1 GH200 node, < 1 h |
 | `judge-agent-cpu/` | `agent` -> `hpcagent-bench-agent-cpu-<arch>-latest`, `judge` -> `hpcagent-bench-judge-cpu-<arch>-latest` (`cpu`) | `ubuntu:24.04` by index digest | 1 node of either arch, ~1 h; binary packages only |
 
 `judge-agent-cuda` carries what `judge-agent-amd` carries, with the CUDA counterparts: nvcc,
@@ -457,10 +457,13 @@ cuBLAS/cuFFT/cuSOLVER/cuSPARSE/cuRAND/cuTENSOR/NCCL, NVHPC (the only OpenACC com
 offload to `sm_90`, CUDA-aware MPICH (netmod=ofi, host Slurm PMI), PETSc/MAGMA/SuperLU_DIST/
 STRUMPACK/SUNDIALS `+cuda`, PAPI with the cuda/nvml components, Nsight Compute/Systems, cupy, jax,
 Pluto and ppcg, dace@extended and every agent harness. No MKL (x86_64 only), nothing ROCm.
-`judge-agent-cpu` is the light one: distro gcc 14, clang/flang 22 with Polly from apt.llvm.org,
+`judge-agent-cpu` is the light one: gcc 16 (a pinned ubuntu-toolchain-r snapshot, the major beverin
+grades with), clang/flang 22 with Polly from apt.llvm.org,
 OpenBLAS/BLIS/FFTW/ScaLAPACK/HDF5/SuiteSparse/SuperLU/METIS/Scotch/ARPACK/MUMPS-seq, the distro MPICH,
-tblis, HPTT, Pluto, numba, dace, the harnesses; no GPU anything, no distributed solvers. Its CPU
-baselines are gcc 14's, so do not mix its numbers with beverin's gcc 16 ones.
+tblis, HPTT, Pluto, numba, dace, the harnesses; no GPU anything, no distributed solvers.
+
+Both GPU images are CUDA 12.9, not the newest CUDA 13 builds: CUDA 12.9 runs on any driver >= 525
+by minor-version compatibility, and it matches the CE's `aws_ofi_nccl` plugin variant `cuda12`.
 
 ### Once per account on Daint
 
@@ -471,8 +474,6 @@ printf '[storage]\ndriver = "overlay"\nrunroot = "/dev/shm/%s/runroot"\ngraphroo
     "$USER" "$USER" > ~/.config/containers/storage.conf
 # no -A or -p is written in any of these scripts; sbatch takes both from here
 export SBATCH_ACCOUNT=<project> SBATCH_PARTITION=normal
-# judge-agent-cuda's base is on CSCS's internal registry
-podman login jfrog.svc.cscs.ch
 # the key MODE=serve requires (step 4)
 umask 077; mkdir -p ~/.config/hpcagent-bench; openssl rand -hex 32 > ~/.config/hpcagent-bench/daint-endpoint.key
 cd <checkout>/containers/cluster/ce-images
@@ -513,7 +514,7 @@ CE_PLATFORM=gh200 ./install_edfs.sh
 
 `CE_PLATFORM` defaults to `amd`, which is beverin's set exactly as before; a platform renders none of
 another's names. The GH200 EDFs enable the CE's `cxi` and `aws_ofi_nccl` hooks (variant `cuda12`,
-see step 4 for how to confirm it loads against these CUDA 13 images); the CPU EDFs enable none.
+the images' CUDA major; step 4 is where it is confirmed to load); the CPU EDFs enable none.
 
 ### 3. Weights
 
@@ -539,27 +540,28 @@ and the judge need no change. It passes the window as `--max-model-len`, which i
 |---|---|---|---|---|---|---|
 | `qwen38` | `Qwen/Qwen3.8-27B-FP8`, ~28 GB | 1 | 4 x 1 | 262144 | `qwen3_coder` / `qwen3` | repo chat template; on beverin vLLM was too slow for this hybrid backbone and SGLang served it -- unmeasured on GH200, so probe before a campaign |
 | `oss120b` | `openai/gpt-oss-120b`, MXFP4 ~65 GB | 1 | 4 x 1 | 131072 | `openai` / `openai_gptoss` | `--generation-config auto`, never `vllm` |
-| `kimi` | `moonshotai/Kimi-K2.7-Code`, INT4 ~595 GB | 2 (min) - 4 | 4 x N | 262144 | `kimi_k2` / `kimi_k2` | 2 nodes hold the weights with ~13 GB/GPU for KV; 4 (beverin's width) leave ~50 GB/GPU |
+| `kimi` | `moonshotai/Kimi-K2.7-Code`, INT4 ~595 GB | 4 (`SERVE_NODES=2` allowed) | 4 x 4 | 262144 | `kimi_k2` / `kimi_k2` | 4 nodes (beverin's width) leave ~50 GB/GPU for KV; 2 is the floor that holds the weights (~13 GB/GPU) |
 
 ```bash
 cd <checkout>
 # smoke: bind 127.0.0.1, run verify-tools-reasoning.py + accuracy-gate.py, check NCCL transport, stop
 MODEL=qwen38  MODE=smoke sbatch -N 1 --time=01:00:00 containers/cluster/ce-images/inference/serve-daint.sbatch
 MODEL=oss120b MODE=smoke sbatch -N 1 --time=01:00:00 containers/cluster/ce-images/inference/serve-daint.sbatch
-MODEL=kimi    MODE=smoke sbatch -N 2 --time=02:00:00 containers/cluster/ce-images/inference/serve-daint.sbatch
+MODEL=kimi    MODE=smoke sbatch -N 4 --time=02:00:00 containers/cluster/ce-images/inference/serve-daint.sbatch
 # serve: bind hsn0, require the key, write endpoint.json, hold until the job ends
 MODEL=kimi sbatch -N 4 --time=12:00:00 containers/cluster/ce-images/inference/serve-daint.sbatch
+MODEL=kimi SERVE_NODES=2 sbatch -N 2 --time=12:00:00 containers/cluster/ce-images/inference/serve-daint.sbatch
 # print the exact command, launch nothing
-MODEL=kimi DRY_RUN=1 SLURM_JOB_NUM_NODES=2 bash containers/cluster/ce-images/inference/serve-daint.sbatch
+MODEL=kimi DRY_RUN=1 bash containers/cluster/ce-images/inference/serve-daint.sbatch
 ```
 
 `EXTRA_ARGS` appends engine flags (e.g. `EXTRA_ARGS="--kv-cache-dtype fp8"` for more kimi KV);
-`GPU_MEM_UTIL` (0.90) and `EDF` override the defaults. A multi-node serve sets `NCCL_NET="AWS
-Libfabric"`, so an NCCL net plugin that fails to load is an init error rather than a silent TCP
-fallback, and the smoke fails unless the log shows `NET/OFI` and no `NET/Socket`. That is the check
-for the hook's `aws_ofi_nccl.variant`: if a 2-node kimi smoke fails there, the `cuda12` plugin does
-not load against CUDA 13 -- ask CSCS for the CUDA 13 variant name and change it in the two
-`judge-agent-cuda` EDFs and `vllm-cuda/edf.toml.example`.
+`GPU_MEM_UTIL` (0.90) and `EDF` override the defaults; the job's `-N` must equal the serve width
+(`SERVE_NODES`, default the table's). A multi-node serve sets `NCCL_NET="AWS Libfabric"`, so an NCCL
+net plugin that fails to load is an init error rather than a silent TCP fallback, and the smoke fails
+unless the log shows `NET/OFI` and no `NET/Socket`. That is the check that the hook's `cuda12` plugin
+loads in these CUDA 12.9 images; if it does not, the variant in the two `judge-agent-cuda` EDFs and
+`vllm-cuda/edf.toml.example` is the line to change.
 
 ### 5. Point an agent at it
 

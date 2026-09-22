@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the GH200 vLLM inference image and import it to a squashfs. Run it on a Daint GH200 node via
-# build.sbatch: the base is ~10 GB compressed and arm64-only, so an x86_64 host would emulate it.
+# build.sbatch: the base is ~14 GB compressed and arm64-only, so an x86_64 host would emulate it.
 #
 # Build context is the repository root, like every image in ce-images, so a later COPY of a repo
 # file needs no change here.
