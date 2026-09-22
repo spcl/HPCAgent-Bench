@@ -380,12 +380,10 @@ def test_a_fold_3_record_is_read_instead_of_refolding_the_transcript(tmp_path: p
     assert (row["output_source"], row["output_suspect"]) == ("retokenized", 1.0)
 
 
-def test_a_fold_2_record_is_now_below_the_minimum_and_is_refolded(tmp_path: pathlib.Path) -> None:
-    """USER 2026-09-22: fold 2 never recovered a compaction request's own tokens
-    (``token_cost.fold_compaction_recovery``), so bumping ``MIN_RECORD_FOLD`` to 3 is what makes an
-    already-written fold-2 record stop being trusted and fall back to a fresh re-fold of its
-    transcript -- the same path :func:`test_a_worker_without_a_record_is_still_folded_from_its_transcript`
-    exercises for a directory with no record at all."""
+def test_a_fold_2_record_is_still_read_not_refolded(tmp_path: pathlib.Path) -> None:
+    """A fold-2 record predates compaction recovery (fold 3), but no episode ever compacted before
+    the context fix, so its numbers are exact -- and for the many older runs whose transcripts were
+    purged it is the ONLY token record left. Re-folding it (a fold-3 minimum) would drop them."""
     worker_dir = tmp_path / "agents" / "node-0" / "problem-0-worker-0"
     write_worker(worker_dir, "arm-a.n0.p0.w0")
     write_record(worker_dir, 2, tokens_effective=99_001, tokens_billed=99_002, attempts=3)
@@ -393,7 +391,7 @@ def test_a_fold_2_record_is_now_below_the_minimum_and_is_refolded(tmp_path: path
 
     row = extract_llr40.task_rows_for_job(tmp_path, "r", "j", "", frozenset(), identity)[0]
 
-    assert (row["tokens"], row["tokens_billed"], row["attempts"]) == (440, 400, 1), "folded, not read"
+    assert (row["tokens"], row["tokens_billed"], row["attempts"]) == (99_001, 99_002, 3), "read, not refolded"
 
 
 def test_a_fold_3_record_carries_its_components_and_prices_the_provider_total_from_them(
@@ -579,10 +577,9 @@ def test_a_worker_nobody_can_name_is_counted_not_dropped_silently(tmp_path: path
     assert "no judge run id" in next(iter(missing))
 
 
-def test_a_reduced_worker_with_a_pre_fold_3_record_keeps_its_row_without_a_total(tmp_path: pathlib.Path) -> None:
-    """A record from a fold below the minimum is never read for tokens (F8, and the compaction
-    recovery of fold 3), and no transcript is left to refold: the task row stays (the episode ran)
-    with a blank total, and is counted."""
+def test_a_reduced_worker_with_a_pre_fold_2_record_keeps_its_row_without_a_total(tmp_path: pathlib.Path) -> None:
+    """A record from the double-counting fold is never read for tokens (F8), and no transcript is
+    left to refold: the task row stays (the episode ran) with a blank total, and is counted."""
     reduced_worker(tmp_path, node=0, problem=2, fold=None)
     missing: collections.Counter[str] = collections.Counter()
 
@@ -593,7 +590,7 @@ def test_a_reduced_worker_with_a_pre_fold_3_record_keeps_its_row_without_a_total
 
     assert len(rows) == 1
     assert (rows[0]["tokens"], rows[0]["tokens_billed"], rows[0]["attempts"]) == ("", "", "")
-    assert any("below fold 3" in piece for piece in missing)
+    assert any("below fold 2" in piece for piece in missing)
 
 
 def test_main_reports_every_missing_piece_and_keeps_the_reduced_workers_row(
