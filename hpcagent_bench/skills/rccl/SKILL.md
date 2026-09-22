@@ -1,14 +1,14 @@
 ---
 name: rccl
 description: "RCCL/NCCL collectives on AMD GPUs. Use whenever you call `ncclAllReduce`, `ncclCommInitRank`, link `rccl`, or a multi-GPU/multi-node collective hangs instead of failing."
-when: "work spans more than one AMD GPU or node and data must move between them: ALWAYS read this page before you write a collective -- allreduce, broadcast, all-to-all -- or decide one is needed"
+when: "a collective -- allreduce, reduce-scatter, all-gather -- has to move bf16 or fp32 tensors between AMD GPUs, on one node or across nodes: ALWAYS read this page before you write it or decide one is needed"
 applies: {images: [amd], multinode: true, languages: [c, cpp, hip]}
 ---
 
 # rccl
 
-RCCL 2.27 = NCCL API (`nccl*`), `#include <rccl/rccl.h>`, library `rccl` (HIP only; add `mpi` for
-the bootstrap). Host calls that enqueue on a stream; no device-side API.
+RCCL 2.27.7 (ROCm 7.2.0) = the NCCL API (`nccl*`), `#include <rccl/rccl.h>`, library `rccl` (HIP
+only; add `mpi` for the bootstrap). Host calls that enqueue on a stream; no device-side API.
 
 ## Setup: once, cached, on the harness's device
 
@@ -35,7 +35,7 @@ once, cached the same way.
 | layer/group norm, feature-split | `ncclAllReduce` `ncclSum` on (sum, sumsq) packed in one buffer |
 | split-K GEMM, row-parallel GEMM | `ncclReduceScatter` `ncclSum`: each rank keeps its shard |
 | ring / sequence-parallel attention | `ncclAllGather` K,V, or `ncclSend`/`ncclRecv` ring steps |
-| MoE dispatch / combine | `ncclAllToAll`, or `ncclSend`/`ncclRecv` inside `ncclGroupStart`/`End` |
+| MoE dispatch / combine | `ncclAllToAll` (an RCCL EXTENSION, absent from NCCL), or `ncclSend`/`ncclRecv` inside `ncclGroupStart`/`End` |
 
 bf16 = `ncclBfloat16`; chained reductions: fp32 buffer (`ncclFloat32`), downcast once at the end.
 
@@ -45,7 +45,10 @@ bf16 = `ncclBfloat16`; chained reductions: fp32 buffer (`ncclFloat32`), downcast
 - **Grouped ops are not enqueued until `ncclGroupEnd()`** returns; sync after it, not inside.
 - **Overlap**: collective on its own stream, compute on another, `hipEventRecord` +
   `hipStreamWaitEvent` for the dependency. Before returning, sync every stream you used.
-- **Network path**: dev runs with `NCCL_DEBUG=INFO` must show `NET/OFI`; `NET/Socket` = slow
-  fallback, fix before tuning anything.
-<!-- MEASURED: fill (RCCL vs MPI crossover message size) -->
-<!-- GPU-INITIATED: pending runtime test (MPIX_Stream / MPIX_*_enqueue) -->
+- **Never `hipSetDevice`.** The harness bound your GPU to the node-local rank before it allocated
+  your tiles, and `ncclCommInitRank` binds the communicator to the CURRENT device: switching it
+  puts the collective on another GPU than the data. `hipGetDevice` to read it.
+- **Network path**: a dev run with `NCCL_DEBUG=INFO` must show `NET/OFI Selected provider is cxi,
+  fabric is cxi (found 4 nics)` and `Using network AWS Libfabric` -- plugin `librccl-net-ofi.so`,
+  aws-ofi-nccl 1.20.0 over libfabric 2.6. `NET/Socket` is the slow fallback: fix it before tuning
+  anything.
