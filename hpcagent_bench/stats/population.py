@@ -48,7 +48,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from hpcagent_bench.frozen_observations import ADHOC_RUN_ID
-from hpcagent_bench.harness.timing import TIMING_BRACKETS
+from hpcagent_bench.harness.timing import FINAL_GRADE_REDUCTION, TIMING_BRACKETS
 from hpcagent_bench.stats import score_rule, summary
 
 if TYPE_CHECKING:
@@ -487,14 +487,32 @@ def repeat_policy(repeats: str) -> RepeatPolicy:
     raise MixedPopulationError(f"repeats must be one of {REPEAT_POLICIES}, got {repeats!r}")
 
 
-def latest_runs(frame: "pd.DataFrame", by: Sequence[str] = ("arm", "benchmark")) -> "pd.DataFrame":
-    """Every row, of any record type, of each ``by`` group's LATEST run.
+def valid_submission_rows(frame: "pd.DataFrame") -> "pd.Series":
+    """True for a row that is a VALID graded answer under the final rule: a submission the final
+    re-timing stamped (``timing_reduction`` == :data:`FINAL_GRADE_REDUCTION`), or one it graded
+    UNSOLVED (the extractor turns those into attempts with ``regrade_status`` "unsolved") -- a loss
+    is still an answer. A submission whose re-timing errored, or that was never re-timed, is not."""
+    import pandas as pd
 
-    A run is one :data:`EPISODE_KEY`; its start is the earliest ``ts_ms`` over ALL of its rows, and
-    the latest is the greatest ``(start, job, run_root, run_id)``, the last three compared as text so
-    a tie has one answer. Call and task rows count, so a rerun that never had a submission persisted
-    still supersedes the earlier run: the kernel then has no answer, which is what its latest run
-    delivered. A run with no timestamp sorts first and never supersedes a dated one.
+    def column(name: str) -> "pd.Series":
+        return frame[name].astype(str) if name in frame.columns else pd.Series("", index=frame.index)
+
+    record, reduction, status = column("record"), column("timing_reduction"), column("regrade_status")
+    stamped = (record == "submission") & (reduction == FINAL_GRADE_REDUCTION) & (status != "error")
+    return stamped | (record.isin(("submission", "attempt")) & (status == "unsolved"))
+
+
+def latest_runs(frame: "pd.DataFrame", by: Sequence[str] = ("arm", "benchmark")) -> "pd.DataFrame":
+    """Every row, of any record type, of each ``by`` group's chosen run: the run holding the group's
+    NEWEST VALID submission (:func:`valid_submission_rows`), across all runs (2026-09-23 USER). A
+    rerun that crashed or timed out without a valid answer therefore does not erase an older valid
+    one. When no run of the group holds a valid submission, the newest run is chosen, and the
+    kernel has no answer -- which is what its runs delivered.
+
+    A run is one :data:`EPISODE_KEY`; its start is the earliest ``ts_ms`` over ALL of its rows.
+    Ties break on ``(start, job, run_root, run_id)``, the last three compared as text, so a tie has
+    one answer. A run with no timestamp sorts first and never supersedes a dated one. The whole
+    chosen run is kept (calls, tasks, attempts), so the score and the cost come from the same run.
     """
     import pandas as pd
 
@@ -504,10 +522,15 @@ def latest_runs(frame: "pd.DataFrame", by: Sequence[str] = ("arm", "benchmark"))
         raise MixedPopulationError(f"cannot pick the latest run without {missing}")
     if frame.empty:
         return frame
-    starts = frame[keys].assign(start=pd.to_numeric(frame["ts_ms"], errors="coerce"))
+    ts = pd.to_numeric(frame["ts_ms"], errors="coerce")
+    starts = frame[keys].assign(start=ts)
     starts = starts.groupby(keys, as_index=False, dropna=False).start.min()
+    answered = frame.loc[valid_submission_rows(frame), keys].assign(answer_ts=ts)
+    answered = answered.groupby(keys, as_index=False, dropna=False).answer_ts.max()
+    starts = starts.merge(answered, on=keys, how="left")
+    starts["has_answer"] = starts["answer_ts"].notna()
     tie_break = {f"{name}_text": starts[name].astype(str) for name in ("job", "run_root", "run_id")}
-    order = ["start", *tie_break]
+    order = ["has_answer", "answer_ts", "start", *tie_break]
     latest = (
         starts.assign(**tie_break)
         .sort_values(order, kind="stable", na_position="first")
