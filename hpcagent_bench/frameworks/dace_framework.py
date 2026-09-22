@@ -910,6 +910,23 @@ def stage_to_device(cupy: DeviceStagingModule, arr: AnyArray) -> ArrayLike:
     return darr
 
 
+def stage_device_arguments(sdfg: dace.SDFG, kwargs: dict[str, ArgValue], cupy: DeviceStagingModule) -> None:
+    """Stage to the device every host array ``kwargs`` hands a device-resident descriptor, in place.
+
+    The per-run copy in ``CallPlan.before_each`` stages the manifest's ``array_args`` by name, and a
+    sparse array is listed there by its LOGICAL name: the buffers it expands into (``A_data``,
+    ``A_indices``, ``A_indptr``) are read straight from the data bag and reach
+    :func:`enforce_gpu_residency`'s device-only signature as host memory. npbench bicgstab failed
+    every GPU call that way. The descriptor decides, so a scalar or a host-storage array is left as is.
+    """
+    from dace import data as dace_data
+
+    for name, value in list(kwargs.items()):
+        desc = sdfg.arrays.get(name)
+        if is_numpy_array(value) and isinstance(desc, dace_data.Array) and desc.storage in GPU_RESIDENT_STORAGE:
+            kwargs[name] = stage_to_device(cupy, value)
+
+
 # Compiled-SDFG wrapper: exposes .sdfg for timing hooks.
 
 
@@ -1447,6 +1464,8 @@ class DaceFramework(Framework):
         kwargs.update(self.shape_symbols(impl, bench, resolved, kwargs))
         if declared is not None:
             kwargs.update(bind_closure_arrays(self._import_kernel(bench), declared))
+        if isinstance(impl, TimedCompiledSDFG) and self.info["arch"] == "gpu":
+            stage_device_arguments(impl.sdfg, kwargs, device_staging_module())
         return [], kwargs
 
     def arg_renames(self, bench: Benchmark) -> dict[str, str]:
