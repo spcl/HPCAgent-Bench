@@ -1595,7 +1595,7 @@ def library_tokens(name: str, lang: str) -> Tuple[Tuple[str, ...], Tuple[str, ..
         if cflags is None:
             return include, ()
         return tuple(t for t in cflags if t.startswith(LIBRARY_COMPILE_PREFIXES)) + include, ()
-    wrapped = mpi_wrapper_flags(str(entry["mpi_wrapper"])) if entry.get("mpi_wrapper") else ([], [])
+    wrapped = mpich_wrapper_flags(tuple(entry.get("mpi_wrapper") or ()))
     if wrapped[1]:
         # An MPI, asked the way CMake's FindMPI asks: interrogate the compiler wrapper (`-show`) for
         # its include and link line, so hipcc/nvcc/clang compile MPI code without BEING the wrapper.
@@ -2225,6 +2225,23 @@ def mpi_wrapper_flags(wrapper_cc: str) -> Tuple[List[str], List[str]]:
     # toolchain's link defaults.
     link = [t for t in toks if t.startswith(("-L", "-l"))]
     return include, link
+
+
+#: A library file only MPICH installs: how a wrapper is told apart from Open MPI / Intel MPI, whose
+#: libmpi.so would otherwise link just as clean.
+MPICH_MARKER = "libmpich.so"
+
+
+def mpich_wrapper_flags(wrappers: Sequence[str]) -> Tuple[List[str], List[str]]:
+    """:func:`mpi_wrapper_flags` of the first wrapper in ``wrappers`` that is MPICH (a ``-L``
+    directory of its link line holds :data:`MPICH_MARKER`), with that directory moved first so
+    ``-lmpi`` resolves there; ``([], [])`` when none is."""
+    for wrapper in wrappers:
+        include, link = mpi_wrapper_flags(wrapper)
+        mpich = [t for t in link if t.startswith("-L") and os.path.exists(os.path.join(t[2:], MPICH_MARKER))]
+        if mpich:
+            return include, mpich[:1] + [t for t in link if t != mpich[0]]
+    return [], []
 
 
 def build_mpi_executable_commands(
