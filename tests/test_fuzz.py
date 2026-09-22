@@ -278,3 +278,38 @@ def test_size_cap_does_not_clamp_a_declared_config_knob(monkeypatch) -> None:
     assert capped["multrec_limit"] == 512  # exempt from the size cap entirely
     assert capped["seed"] == 7
     assert capped["N"][1] <= 10  # the real dimension IS still capped
+
+
+#: One integer size whose timed upper half, [14, 19], holds six values -- nqueens' shape.
+NARROW_DOMAIN = {"S": {"N": 10}, "XL": {"N": 19}, "fuzzed": {"N": [9, 19]}}
+
+
+def test_large_shapes_are_distinct_on_a_narrow_integer_domain() -> None:
+    """Seeds whose first draw repeats an earlier one resample, so n timed shapes are n inputs.
+
+    Uniform draws over six integers collide for most seed sets (the public seeds gave N = 17, 18,
+    17, 17), and the geomean over cells then double-weights the repeated shape."""
+    shapes = fuzz.large_shapes(NARROW_DOMAIN, mode="all_configs_3shapes", n=4)
+    values = [s["N"] for _, s in shapes]
+    assert len(values) == 4 and len(set(values)) == 4, values
+    assert all(14 <= v <= 19 for v in values), values
+
+
+def test_large_shapes_keep_every_first_draw_that_was_already_distinct() -> None:
+    """Deduplication only replaces a repeat: each seed's first distinct draw is unchanged, so a
+    kernel whose timed shapes never collided keeps exactly the inputs it was timed on."""
+    shapes = fuzz.large_shapes(_BIG, mode="all_configs_3shapes", n=4)
+    big_spec = fuzz.respec_ranges(
+        _BIG, fuzz.resolve_ranges(_BIG), lambda lo, hi: [int(lo) + (int(hi) - int(lo)) // 2, int(hi)]
+    )
+    first = [fuzz._resolve_against(big_spec, {}, sd, "uniform", None) for sd in fuzz._public_large_seeds(4)]
+    assert len({tuple(sorted(s.items())) for s in first}) == 4  # premise: no collision here
+    assert [s for _, s in shapes] == first
+
+
+def test_large_shapes_keep_the_repeat_when_the_domain_has_one_point() -> None:
+    """A pinned domain (one downloaded matrix) cannot yield distinct shapes; it keeps the n
+    repeats it always timed rather than dropping cells."""
+    pinned = {"S": {"N": 7}, "fuzzed": {"N": {"set": [7]}}}
+    shapes = fuzz.large_shapes(pinned, mode="all_configs_3shapes", n=3)
+    assert [s["N"] for _, s in shapes] == [7, 7, 7]

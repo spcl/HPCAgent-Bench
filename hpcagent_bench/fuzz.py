@@ -573,6 +573,7 @@ def _resolve_against(
     constraints: Sequence[str] | None,
     size_cap: int | None = None,
     config_names: frozenset[str] = NO_CONFIG_NAMES,
+    exclude: Sequence[Mapping[str, FuzzValue]] = (),
 ) -> dict[str, FuzzValue]:
     """Resolve sizes against an already-chosen ``fixed`` config namespace.
 
@@ -581,14 +582,16 @@ def _resolve_against(
     merged ``config + sizes`` dict, or raises ``ValueError`` if no draw satisfies
     the constraints within the resample budget. Deterministic in ``seed``.
     ``size_cap`` forwards to :func:`resolve_ranges` (the correctness path caps small).
-    ``config_names`` forwards to :func:`resolve_ranges` (declared knobs stay fixed)."""
+    ``config_names`` forwards to :func:`resolve_ranges` (declared knobs stay fixed).
+    A draw equal to one in ``exclude`` is rejected like a constraint violation, so an
+    attempt that was already distinct and legal is returned exactly as before."""
     fuzzed = resolve_ranges(parameters, size_cap, config_names)
     constraints = constraints or []
     for attempt in range(_MAX_RESAMPLE):
         rng = np.random.default_rng(int(seed) + attempt * 1_000_003)
         out: dict[str, FuzzValue] = dict(fixed)
         out.update(_resolve_sizes(fuzzed, out, rng, distribution))
-        if all(safe_eval(c, out) for c in constraints):
+        if out not in exclude and all(safe_eval(c, out) for c in constraints):
             return out
     raise ValueError(f"could not satisfy constraints {constraints} for config {fixed}")
 
@@ -735,8 +738,18 @@ def large_shapes(
 
     out: list[tuple[str, dict[str, FuzzValue]]] = []
     for label, sd in zip(labels, seeds):
+        # A seed whose draw repeats an earlier one resamples, like a constraint rejection: an
+        # integer size with a few values in the upper half (nqueens N in [14, 19]) otherwise hands
+        # back the same shape for most seeds, and the geomean over cells double-weights it. Only
+        # a domain with fewer legal points than seeds (a pinned matrix) keeps the repeat.
+        drawn = [sample for _, sample in out]
         try:
-            sample = _resolve_against(big_spec, fixed, sd, "uniform", constraints, config_names=config_names)
+            try:
+                sample = _resolve_against(
+                    big_spec, fixed, sd, "uniform", constraints, config_names=config_names, exclude=drawn
+                )
+            except ValueError:
+                sample = _resolve_against(big_spec, fixed, sd, "uniform", constraints, config_names=config_names)
         except ValueError:
             continue
         out.append((label, sample))
