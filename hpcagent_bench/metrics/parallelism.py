@@ -490,9 +490,3 @@ def report_lines(records: Sequence[ParallelismRecord]) -> list[str]:
             f"  fully_parallelized [parallelized AND residual == 0]: {counts.fully_parallelized}/{counts.total} kernels"
         )
     return lines
-
-
-def print_report(records: Sequence[ParallelismRecord]) -> None:
-    """:func:`report_lines`, printed one line at a time."""
-    for line in report_lines(records):
-        print(line)
