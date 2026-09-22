@@ -206,6 +206,11 @@ def test_guillotine_is_off_without_a_baseline_or_a_factor(pinned_guillotine) -> 
     assert guillotine_seconds(2_000_000_000, 300.0) == 0.0
 
 
+#: All a stubbed ``_call_isolated`` reads off its binding before ``run_forked``: the kernel name
+#: that prefixes the call's spill directory.
+STUB_BINDING = types.SimpleNamespace(kernel="gemm")
+
+
 def _captured_batch_timeout(monkeypatch, **kwargs) -> float:
     """The wall-clock budget _call_isolated hands run_forked, with the fork itself stubbed out."""
     seen = {}
@@ -216,7 +221,7 @@ def _captured_batch_timeout(monkeypatch, **kwargs) -> float:
 
     monkeypatch.setattr(native_call, "run_forked", fake_run_forked)
     with pytest.raises(AssertionError):
-        native_call._call_isolated(None, None, {}, "c", device=False, timeout=300.0, **kwargs)
+        native_call._call_isolated(None, STUB_BINDING, {}, "c", device=False, timeout=300.0, **kwargs)
     return seen["timeout"]
 
 
@@ -238,7 +243,7 @@ def _timeout_kill(monkeypatch, **kwargs):
 
     monkeypatch.setattr(native_call, "run_forked", fake_run_forked)
     with pytest.raises(native_call.NativeCallTimeout) as caught:
-        native_call._call_isolated(None, None, {}, "c", device=False, timeout=300.0, **kwargs)
+        native_call._call_isolated(None, STUB_BINDING, {}, "c", device=False, timeout=300.0, **kwargs)
     return caught.value
 
 

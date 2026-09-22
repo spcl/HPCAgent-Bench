@@ -97,6 +97,26 @@ def _clamp_kir() -> KernelIR:
     )
 
 
+def while_kir() -> KernelIR:
+    """A data-dependent ``while`` nest between two plain nests: a trip count no polyhedron bounds."""
+    return _lower_src(
+        "import numpy as np\n"
+        "def wl(a, out, N):\n"
+        "    for i in range(N):\n"
+        "        out[i] = a[i] + 1.0\n"
+        "    for i in range(N):\n"
+        "        while out[i] > 1.0:\n"
+        "            out[i] = out[i] * 0.5\n"
+        "    for i in range(N):\n"
+        "        out[i] = out[i] * 2.0\n",
+        "wl",
+        ["a"],
+        ["out"],
+        {"a": "(N,)", "out": "(N,)"},
+        {"N": 64},
+    )
+
+
 def test_no_region_holds_a_construct_pet_cannot_model() -> None:
     text = emit_pluto(_sized_zeros_kir(), fn_name="sz")
     regions = _regions(text)
@@ -129,16 +149,29 @@ def test_a_nest_between_two_others_splits_the_kernel_into_several_regions() -> N
 
 
 def test_an_unmodellable_nest_does_not_cost_its_scopable_neighbours() -> None:
-    """Per-NEST, never per-program: the clamp is excluded, the nests around it are still scoped."""
+    """Per-NEST, never per-program: the while nest is excluded, the nests around it are still scoped.
+
+    The value-dependent clamp used to be the example here; since 95f9ae0be the emitter if-converts
+    it into a ternary and keeps it IN the scop (the test below), so it no longer splits anything."""
+    text = emit_pluto(while_kir(), fn_name="wl")
+    regions = _regions(text)
+    assert len(regions) == 2, f"expected the while nest to split, not to swallow, the kernel:\n{text}"
+    assert not any("while (" in body for body in regions), regions
+    assert "while (" in text, text
+
+
+def test_a_value_dependent_clamp_is_if_converted_and_stays_scoped() -> None:
+    """The clamp's ``if`` becomes a ternary assignment, so its loop is affine and one region holds
+    all three nests -- the whole kernel stays visible to Pluto."""
     text = emit_pluto(_clamp_kir(), fn_name="cl")
     regions = _regions(text)
-    assert len(regions) == 2, f"expected the clamp to split, not to swallow, the kernel:\n{text}"
-    assert not any("if (" in body for body in regions), regions
-    assert "if (" in text, text
+    assert len(regions) == 1, f"expected one region over the whole kernel:\n{text}"
+    assert "if (" not in regions[0], regions
+    assert " ? " in regions[0], regions
 
 
 def test_regions_never_nest() -> None:
-    for kir, name in ((_sized_zeros_kir(), "sz"), (_two_nests_kir(), "tn"), (_clamp_kir(), "cl")):
+    for kir, name in ((_sized_zeros_kir(), "sz"), (_two_nests_kir(), "tn"), (_clamp_kir(), "cl"), (while_kir(), "wl")):
         depth = 0
         for line in emit_pluto(kir, fn_name=name).split("\n"):
             depth += (line.strip() == "#pragma scop") - (line.strip() == "#pragma endscop")
@@ -147,7 +180,7 @@ def test_regions_never_nest() -> None:
 
 
 def test_emitting_twice_gives_byte_identical_c() -> None:
-    for src_fn, name in ((_sized_zeros_kir, "sz"), (_two_nests_kir, "tn"), (_clamp_kir, "cl")):
+    for src_fn, name in ((_sized_zeros_kir, "sz"), (_two_nests_kir, "tn"), (_clamp_kir, "cl"), (while_kir, "wl")):
         assert emit_pluto(src_fn(), fn_name=name) == emit_pluto(src_fn(), fn_name=name), name
 
 

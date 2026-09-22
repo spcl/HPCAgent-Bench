@@ -26,6 +26,7 @@ from tests.conftest import script_path
 
 import pytest
 
+from hpcagent_bench import observations_extract
 from hpcagent_bench.harness import recording
 
 EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
@@ -777,20 +778,18 @@ def test_the_rank_interval_matches_the_library_definition(ablation_stats) -> Non
 
 
 def seed_observations(path: pathlib.Path, rows: list[tuple[str, str, str, int, int]]) -> None:
-    """An extracted observations DB of task rows only: (arm, benchmark, run_id, tokens, ts_ms)."""
-    import sys
+    """An extracted observations DB of task rows only: (arm, benchmark, run_id, tokens, ts_ms).
 
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "reproducibility" / "llr40"))
-    import extract_llr40
-
+    Written by the one extractor, :mod:`hpcagent_bench.observations_extract` (reproducibility/llr40's
+    extract_llr40.py is now only a shim that calls its ``main``)."""
     records = []
     for arm, benchmark, run_id, tokens, ts_ms in rows:
-        record = dict.fromkeys(extract_llr40.OBSERVATION_FIELDS, "")
+        record = dict.fromkeys(observations_extract.OBSERVATION_FIELDS, "")
         record.update(
             record="task", arm=arm, benchmark=benchmark, run_root="rr", job=1, run_id=run_id, tokens=tokens, ts_ms=ts_ms
         )
         records.append(record)
-    extract_llr40.write_db(path, extract_llr40.OBSERVATION_FIELDS, records)
+    observations_extract.write_db(path, observations_extract.OBSERVATION_FIELDS, records)
 
 
 def test_with_observations_the_cost_half_is_the_task_rows_effective_total(
@@ -817,7 +816,8 @@ def test_with_observations_the_cost_half_is_the_task_rows_effective_total(
     )
 
     assert code == 0
-    rows = list(csv.DictReader(open(f"{prefix}{ablation_stats.PAIRS_SUFFIX}", newline="")))
+    with open(f"{prefix}{ablation_stats.PAIRS_SUFFIX}", newline="") as pairs:
+        rows = list(csv.DictReader(pairs))
     pair = next(row for row in rows if row["test"] == "wilcoxon_logspeedup")
     assert float(pair["rho_cost"]) == pytest.approx(3.0), pair
 
