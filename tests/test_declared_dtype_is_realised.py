@@ -72,3 +72,34 @@ def test_every_declared_array_dtype_is_the_one_materialised(key: str) -> None:
     assert not bad, f"declared dtype is not the one the run materialises at {PRECISION}: " + ", ".join(
         f"{n}: declared {w}, got {g}" for n, w, g in bad
     )
+
+
+def undeclared_integer_arrays(key: str) -> List[Tuple[str, str]]:
+    """``(array, realised)`` for every INTEGER array of ``key`` the manifest leaves undeclared."""
+    spec = KERNELS.specs()[key]
+    if spec.init is None:
+        return []
+    declared = declared_dtypes(spec)
+    data = Benchmark(key).get_data("S", datatype=PRECISION)
+    bad = []
+    for name in spec.array_args:
+        value = data.get(name)
+        if isinstance(value, np.ndarray) and value.dtype.kind in "iub" and name not in declared:
+            bad.append((name, value.dtype.name))
+    return bad
+
+
+@pytest.mark.parametrize("key", KERNEL_NAMES)
+def test_every_integer_array_declares_its_dtype(key: str) -> None:
+    """The other direction: an array left undeclared is typed at the RUN PRECISION.
+
+    For a float array that is right, and for an integer one it is a wrong ABI -- the emitted
+    signature takes ``double *`` while the harness binds an int32 buffer, so the kernel reads the
+    bytes as doubles. lavamd left its three box tables undeclared: the run read a garbage
+    neighbour count out of ``neighbor_counts`` and sized a transient from it, and the CPU canon
+    column died on ``std::bad_array_new_length``. pathfinder carried the same declaration gap.
+    """
+    bad = undeclared_integer_arrays(key)
+    assert not bad, "an integer array the initializer materialises is not declared: " + ", ".join(
+        f"{name}: {dtype}" for name, dtype in bad
+    )
