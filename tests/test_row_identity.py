@@ -515,6 +515,20 @@ def test_the_observations_reader_selects_on_harness(tmp_path, monkeypatch):
     assert [(r["run_id"], r["harness"]) for r in rows] == [("new.n0.p0.w0", "miniswe")]
 
 
+def test_the_observations_reader_never_returns_an_adhoc_grade(tmp_path, monkeypatch):
+    """Job 640078: a grade sent with no run id lands under the recorder's ``adhoc`` default, and its
+    ``runs`` row carries the JOB's identity, so the join read it as the arm's own answer. 2026-09-22
+    user decision: it answers nothing and its kernel is owed a rerun."""
+    db = tmp_path / "r.db"
+    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_ARM", "gpu-llr-focus40-qwen38-hip")
+    task = Task(KERNEL, "restricted", "c")
+    recording.record_call(_score(), task, status="ok", route="score", run_id="gpu.n0.p4.w4", path=str(db))
+    recording.record_call(_score(), task, status="ok", route="score", path=str(db))
+    assert ("adhoc", "gpu-llr-focus40-qwen38-hip") in _runs(str(db), ("run_id", "arm"))
+    rows = list(experiments.read_database(experiments.Database(db, "root", "job"), {}))
+    assert [r["run_id"] for r in rows] == ["gpu.n0.p4.w4"]
+
+
 def test_the_observations_reader_reads_a_db_without_the_harness_column(tmp_path):
     """Read-only readers see a running campaign's shard as its judge wrote it, never migrated."""
     db = tmp_path / "r.db"

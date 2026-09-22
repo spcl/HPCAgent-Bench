@@ -124,6 +124,17 @@ def test_delivered_is_a_submission_or_a_genuine_attempt_after_the_epoch() -> Non
     assert frozen_observations.delivered(rows, lambda kernel: 10, arm="other-arm") == set()
 
 
+def test_delivered_never_counts_a_row_stored_under_adhoc() -> None:
+    """2026-09-22 user decision: a grade the judge filed under ``adhoc`` (or an extraction retagged
+    from it) has no episode identity, so a lost job's frozen copy of it is no delivery either."""
+    rows = [
+        {**frozen_row("1", "submission", "a"), "run_id": "adhoc", "arm": "adhoc"},
+        {**frozen_row("1", "attempt", "b", reason="incorrect"), "retagged": "transcript"},
+        frozen_row("1", "submission", "c"),
+    ]
+    assert frozen_observations.delivered(rows, lambda kernel: 10) == {"c"}
+
+
 def test_a_frozen_job_counts_only_when_its_live_directory_is_gone(tmp_path: pathlib.Path) -> None:
     runs_root = tmp_path / "runs" / ROOT
     live_job(runs_root, "200", ["a"])
