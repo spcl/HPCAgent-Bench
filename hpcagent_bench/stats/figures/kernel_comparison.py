@@ -583,7 +583,11 @@ def draw_panel(
     ``delivered_of``, when given, says which of a series' PRESENT values are measurements: a panel
     of RATIOS carries the 1x placeholder inside the value itself (a non-delivery divided by a real
     answer is not 1.0), so the cross has to go on a drawn mark rather than on an absent one. Without
-    it every present value is a measurement, which is what an absolute panel wants.
+    it every present value is a measurement, which is what an absolute panel wants. It also decides
+    what the summary column reduces: a placeholder draws in its kernel slot and enters no summary,
+    so the geomean is taken over the kernels the series SOLVED and a failure is never credited with
+    parity. A panel that passes no ``delivered_of``, a token panel among them, summarizes every
+    present value, which is what a spend a failed attempt still incurred asks for.
 
     ``pending_of``, when given, names the kernels a series has not attempted yet: each draws a
     :func:`~hpcagent_bench.stats.style.pending_mark` at ``missing_y`` instead of the hollow
@@ -626,8 +630,18 @@ def draw_panel(
                 ax, x, transform(value), series.color, series.marker, filled=True, size=size,
                 delivered=delivered.get(kernel, True),
             )  # fmt: skip
+
+    def summary_value_of(series: Series) -> dict[str, float]:
+        """What the summary reduces: the series' values, less the placeholders ``delivered_of``
+        flags, so a kernel drawn as a non-delivery is counted in the success rate and nowhere else."""
+        values = value_of(series)
+        if delivered_of is None:
+            return values
+        delivered = delivered_of(series)
+        return {kernel: value for kernel, value in values.items() if delivered.get(kernel, True)}
+
     draw_summary_column(
-        ax, separator_x, summary_x, series_list, value_of, reducer, summary_label, size,
+        ax, separator_x, summary_x, series_list, summary_value_of, reducer, summary_label, size,
         interval_of=interval_of, transform=transform, value_text=value_text, span=span,
     )  # fmt: skip
 

@@ -582,7 +582,9 @@ def test_summary_column_prints_each_geomean_value(llr40_canon: pd.DataFrame) -> 
         plt.close(fig)
     # The spelling is the shared speller's, not restated here: the property is that every geomean
     # is printed, and the format is a separate decision (one decimal since 2026-09-21).
-    expected = [kernel_comparison.speedup_value_text(signed.geomean_reducer(row.ratios.values())) for row in rows]
+    expected = [
+        kernel_comparison.speedup_value_text(signed.geomean_reducer(signed.solved_ratios(row).values())) for row in rows
+    ]
     assert all(value in texts for value in expected), (expected, texts)
 
 
@@ -611,15 +613,28 @@ def test_by_default_a_kernel_never_attempted_is_a_failure_at_one(pending_canon: 
 
 
 def test_mark_pending_splits_a_kernel_never_attempted_from_one_that_failed(pending_canon: pd.DataFrame) -> None:
-    """k2 ran and failed: it keeps its cross at 1x. k3 has no row yet: it leaves the ratios and the
-    geomean and is named pending."""
+    """k2 ran and failed: it keeps its cross at 1x and enters no summary. k3 has no row yet: it
+    leaves the ratios and the geomean and is named pending."""
     row = signed.canon_kernel_row(pending_canon, "dace_cpu_canonicalize", ROSTER40, mark_pending=True)
     assert row.ratios == {"k1": pytest.approx(10.0), "k2": 1.0}
     assert row.delivered == {"k1": True, "k2": False}
     assert row.pending == frozenset({"k3"}) and row.excluded == "1 pending"
     summary_row = signed.summary_table([row]).iloc[0]
-    assert summary_row["n"] == 2 and summary_row["excluded"] == "1 pending"
+    assert summary_row["n"] == 1 and summary_row["excluded"] == "1 pending"
+    assert summary_row["geomean"] == pytest.approx(10.0)
     assert set(signed.table([row])["kernel"]) == {"k1", "k2"}
+
+
+def test_a_failed_kernel_draws_at_one_and_enters_no_summary(pending_canon: pd.DataFrame) -> None:
+    """The 1x placeholder is a drawing convention, not a measurement: k2 failed, so it draws in its
+    kernel slot and stays out of the geomean, which would otherwise credit the failure with parity
+    and pull a 10x row down to 3.2x. The success rate is the separate number (``excluded``)."""
+    row = signed.canon_kernel_row(pending_canon, "dace_cpu_canonicalize", ROSTER40)
+    assert row.ratios == {"k1": pytest.approx(10.0), "k2": 1.0, "k3": 1.0}
+    summary_row = signed.summary_table([row]).iloc[0]
+    assert summary_row["n"] == 1
+    assert summary_row["geomean"] == pytest.approx(10.0)
+    assert summary_row["wins"] == 1 and summary_row["losses"] == 0
 
 
 def test_a_kernel_the_baseline_never_ran_is_pending_too(pending_canon: pd.DataFrame) -> None:

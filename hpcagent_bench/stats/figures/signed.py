@@ -221,6 +221,15 @@ TABLE_COLUMNS: tuple[str, ...] = (
 )
 
 
+def solved_ratios(row: Row) -> dict[str, float]:
+    """The row's ratios for the kernels it SOLVED: every ratio whose kernel ``delivered`` does not
+    flag as the 1x placeholder (:func:`~hpcagent_bench.stats.canon.roster_speedups`). A row with an
+    empty ``delivered`` -- an agent row, whose ratios only ever hold solved kernels -- keeps all of
+    them. This is the population every summary of a ratio is taken over: an unanswered kernel is
+    counted in the success rate, never averaged in at parity."""
+    return {k: v for k, v in row.ratios.items() if row.delivered.get(k, True)}
+
+
 def summary_table(rows: Sequence[Row]) -> pd.DataFrame:
     """One record per drawn row: the geomean, its interval, the median, n and the sign test.
 
@@ -229,12 +238,13 @@ def summary_table(rows: Sequence[Row]) -> pd.DataFrame:
     """
     records: list[dict[str, object]] = []
     for row in rows:
-        values = usable_ratios(list(row.ratios.values()), label=row.label)
+        solved = solved_ratios(row)
+        values = usable_ratios(list(solved.values()), label=row.label)
         if values.size == 0:
             records.append({"row": row.label, "framework": row.framework, "n": 0, "excluded": row.excluded})
             continue
         interval = geomean_ci(values)
-        wins, losses = sign_test(row.ratios)
+        wins, losses = sign_test(solved)
         records.append(
             {
                 "row": row.label,
@@ -613,9 +623,11 @@ def llr40_rows(
 
 def geomean_reducer(values: "Sequence[float]") -> float:
     """The RIGHTMOST summary column's statistic for EVERY llr-focus40 row, on both panels: the
-    geomean over the kernels the row has a value for (SC15 Rule 4's "use the geometric mean for
-    summarizing ratios" applied identically to a speed-up ratio and to a token count -- neither
-    is summed, and a median would not carry the log-space interval Rule 5/7 asks for)."""
+    geomean over the values handed to it (SC15 Rule 4's "use the geometric mean for summarizing
+    ratios" applied identically to a speed-up ratio and to a token count -- neither is summed, and
+    a median would not carry the log-space interval Rule 5/7 asks for). On the speed-up panel those
+    are the kernels the row solved, since :func:`kernel_comparison.draw_panel` drops the 1x
+    placeholder from the summary wherever a ``delivered_of`` says which values are measurements."""
     usable = usable_ratios(list(values), warn=False)
     return float(geomean_ci(usable).point) if usable.size else math.nan
 
@@ -802,7 +814,7 @@ def llr40_figure(
         range_of=lambda s: (row_by_key[s.key].ratios_low, row_by_key[s.key].ratios_high),
         delivered_of=lambda s: row_by_key[s.key].delivered,
         pending_of=lambda s: row_by_key[s.key].pending,
-        interval_of=geomean_interval_of(row_by_key, lambda r: r.ratios),
+        interval_of=geomean_interval_of(row_by_key, solved_ratios),
         transform=log2_change, value_text=kernel_comparison.speedup_value_text, span=offset,
     )  # fmt: skip
     thin_speedup_ticks(speedup_ax)
