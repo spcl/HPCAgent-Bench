@@ -3,7 +3,7 @@
 """agent_driver.py: the context-window death, the one budget the CLI spends without saying so.
 
 Campaign 594529 lost agents at ~60 turns to vLLM refusing a prompt longer than the served window.
-The CLI closes such a run with subtype ``success`` and exit 0 -- the refusal appears only as
+The CLI closes such a run with subtype ``success`` and exit 0 (2.1.197: exit 1) -- the refusal appears only as
 ``is_error`` plus the served text in ``result`` -- so without this check the driver records the
 death as a finished run and the arm reads as complete.
 """
@@ -17,10 +17,18 @@ import pytest
 
 EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
 
-#: The closing event of a killed agent, verbatim in shape from a 594529 claude.log.
+#: The closing event of a killed agent, verbatim in shape from a 594529 claude.log (vLLM).
 OVERFLOW = (
     '{"type":"result","subtype":"success","is_error":true,"num_turns":61,'
     '"result":"API Error: 500 Input length (66001) exceeds model\'s maximum context length (65536)"}\n'
+)
+#: The same death on SGLang, verbatim in shape from 643179/problem-0-worker-0 (autokernel): "the
+#: model's", which the old "exceeds model's maximum context length" mark did not match.
+SGLANG_OVERFLOW = (
+    '{"type":"result","subtype":"success","is_error":true,"num_turns":61,'
+    '"result":"API Error: 400 Requested token count exceeds the model\'s maximum context length of 262144 '
+    "tokens. You requested a total of 263393 tokens: 230625 tokens from the input messages and 32768 tokens "
+    'for the completion."}\n'
 )
 
 
@@ -38,10 +46,11 @@ def driver_fixture() -> ModuleType:
     return load_example_module("agent_driver")
 
 
-def test_a_context_overflow_death_is_not_a_success(driver, tmp_path) -> None:
+@pytest.mark.parametrize("closing", [OVERFLOW, SGLANG_OVERFLOW], ids=["vllm", "sglang"])
+def test_a_context_overflow_death_is_not_a_success(driver, tmp_path, closing) -> None:
     log = tmp_path / "claude.log"
     log.write_text(
-        '{"type":"assistant","message":{"id":"a","usage":{"output_tokens":5}}}\n' + OVERFLOW, encoding="utf-8"
+        '{"type":"assistant","message":{"id":"a","usage":{"output_tokens":5}}}\n' + closing, encoding="utf-8"
     )
     assert driver.context_overflow(log) is True
     # ...and the subtype the CLI reports is exactly the one that made this invisible

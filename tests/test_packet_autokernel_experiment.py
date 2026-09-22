@@ -184,6 +184,41 @@ def test_kept_snapshots_and_the_best_file_hold_the_right_bytes(
     assert (tmp_path / ".experiments/best.cu").read_text() == "v2-source-faster"
 
 
+def test_no_reply_carries_source_text_or_grows_with_the_kept_snapshots(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """The snapshots stay on disk; a reply names the best one by path. Measured on 643179, every
+    ``experiment`` reply was <= 374 characters and the autokernel episodes still died at ~230k prompt
+    tokens -- the ledger is not what fills the window, and this keeps it that way however many
+    versions are kept."""
+    experiment = load_experiment_module()
+    set_ledger_root(monkeypatch, tmp_path)
+    source = tmp_path / "kernel.c"
+    sizes: list[int] = []
+    for index in range(1, 31):
+        write_source(source, f"/* version {index} */\n" + "x" * 20_000)
+        answer = experiment.run(
+            {
+                "action": "record",
+                "hypothesis": f"tile {index}",
+                "source_file": str(source),
+                "score": {"correct": True, "speedup": float(index)},
+            }
+        )
+        assert answer["decision"] == "keep"
+        sizes.append(len(repr(answer)) - len(str(tmp_path)))
+    answers = [
+        experiment.run({"action": "best"}),
+        experiment.run({"action": "restore", "dest": str(source)}),
+        experiment.run({"action": "list", "limit": 200}),
+    ]
+
+    assert len(list((tmp_path / ".experiments").glob("exp-*.c"))) == 30
+    assert all("x" * 100 not in repr(answer) for answer in answers)
+    assert max(sizes) < 300
+    assert max(sizes) - min(sizes) < 20
+
+
 def test_restore_copies_the_best_source_over_dest(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
     experiment = load_experiment_module()
     set_ledger_root(monkeypatch, tmp_path)
