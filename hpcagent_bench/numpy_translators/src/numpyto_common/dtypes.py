@@ -96,6 +96,24 @@ REGISTRY: Dict[str, DTypeInfo] = {
         ctypes.c_uint8,
         "float32",
     ),
+    # bfloat16 is the fp8 pattern at two bytes: STORAGE only, computed in float32. It is the top
+    # half of an IEEE float32 (same 8-bit exponent, 7-bit mantissa), so it keeps float32's range --
+    # softmax/cross-entropy logits that saturate float16 at 65504 fit -- while halving the bytes.
+    # numpy has no native bfloat16; ml_dtypes registers the name, so np.dtype("bfloat16") has
+    # itemsize 2 once ml_dtypes is imported. This module stays numpy-free (itemsize() answers
+    # from the ctype), so the import lives in the harness's hpcagent_bench/dtypes.py, which is
+    # the door every numpy-allocating caller comes through. The C type is a distinct
+    # typedef, NOT a bare uint16_t, for the same reason as fp8: _is_narrow_int would match
+    # uint16_t and widen every read to int64.
+    "bfloat16": _row(
+        "bfloat16",
+        "__npb_bf16",
+        "integer(c_int16_t)",
+        "bfloat16",
+        "ptr_bfloat16",
+        ctypes.c_uint16,
+        "float32",
+    ),
     "int64": _row("int64", "int64_t", "integer(c_int64_t)", "int64", "ptr_int64", ctypes.c_int64),
     "int32": _row("int32", "int32_t", "integer(c_int32_t)", "int32", "ptr_int32", ctypes.c_int32),
     "int16": _row("int16", "int16_t", "integer(c_int16_t)", "int16", "ptr_int16", ctypes.c_int16),
@@ -146,6 +164,8 @@ _ALIASES = {
     "fp8_e4m3": "float8_e4m3",
     "fp8_e5m2": "float8_e5m2",
     "float8_e4m3fn": "float8_e4m3",
+    # The Precision-enum spelling a manifest's `precisions:` uses (``bf16``).
+    "bf16": "bfloat16",
 }
 
 
@@ -202,8 +222,8 @@ def accumulator_dtype(dtype: str) -> str:
 
 
 def is_storage_only(dtype: str) -> bool:
-    """True for a format that is 1-byte STORAGE and cannot be computed in
-    directly (the fp8 pair) -- reads promote, writes demote."""
+    """True for a format that is STORAGE only and cannot be computed in directly
+    (the fp8 pair, 1 byte; bfloat16, 2 bytes) -- reads promote, writes demote."""
     try:
         return info(dtype).compute is not None
     except KeyError:

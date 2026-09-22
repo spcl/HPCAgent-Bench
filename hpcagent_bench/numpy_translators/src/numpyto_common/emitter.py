@@ -60,10 +60,13 @@ FP8_NON_ARITH_OPS = (ast.BitAnd, ast.BitOr, ast.BitXor, ast.LShift, ast.RShift)
 
 
 def fp8_function_names(prefix: str) -> dict[str, Fp8Fns]:
-    """The fp8 prelude function names per canonical registry dtype, each spelled ``<prefix><function>``."""
+    """The prelude function names per storage-only registry dtype (the fp8 pair and bfloat16), each
+    spelled ``<prefix><function>``. Every dtype :func:`dtypes.is_storage_only` accepts needs an entry
+    here, or :func:`fp8_functions` raises KeyError on the first kernel that uses it."""
+    short = {"float8_e4m3": "e4m3", "float8_e5m2": "e5m2", "bfloat16": "bf16"}
     return {
-        f"float8_{fmt}": Fp8Fns(f"{prefix}{fmt}_to_f32", f"{prefix}f32_to_{fmt}", f"{prefix}rn_{fmt}")
-        for fmt in ("e4m3", "e5m2")
+        dtype: Fp8Fns(f"{prefix}{fmt}_to_f32", f"{prefix}f32_to_{fmt}", f"{prefix}rn_{fmt}")
+        for dtype, fmt in short.items()
     }
 
 

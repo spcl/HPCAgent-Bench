@@ -254,3 +254,80 @@ def test_one_catalog_name_may_resolve_several_pkg_config_modules() -> None:
         f"fftw resolved to {linked!r}: both precisions have to be on the link line, or the fp32 "
         "spelling of every FFT kernel is an undefined symbol that only surfaces at dlopen"
     )
+
+
+def fake_mpi_prefix(root: pathlib.Path, mpich: bool) -> pathlib.Path:
+    """A lib directory holding libmpi.so, plus libmpich.so when it is MPICH's."""
+    lib = root / "lib"
+    lib.mkdir(parents=True)
+    (lib / "libmpi.so").write_bytes(b"")
+    if mpich:
+        (lib / languages.MPICH_MARKER).write_bytes(b"")
+    return lib
+
+
+def test_mpi_resolves_from_the_first_mpich_wrapper_like_findmpi(monkeypatch, tmp_path) -> None:
+    """hipcc is not an MPI wrapper, so `mpi` hands it the wrapper's own include + link line; the
+    judge image also ships Open MPI and Intel MPI, whose libmpi.so links just as clean, so a
+    wrapper counts only when its -L holds libmpich.so -- and that -L comes first, with an rpath."""
+    ompi = fake_mpi_prefix(tmp_path / "openmpi", mpich=False)
+    mpich = fake_mpi_prefix(tmp_path / "mpich", mpich=True)
+    lines = {
+        "mpicc.mpich": (["-I/ompi/include"], [f"-L{ompi}", "-lmpi"]),
+        "mpicc": (["-I/mpich/include"], ["-L/opt/rocm/lib", f"-L{mpich}", "-lmpi"]),
+    }
+    monkeypatch.setattr(languages, "mpi_wrapper_flags", lambda wrapper: lines.get(wrapper, ([], [])))
+    monkeypatch.setattr(languages, "library_links", lambda lang, tokens: True)
+    languages.library_tokens.cache_clear()
+    try:
+        got = languages.library_tokens("mpi", "hip")
+    finally:
+        languages.library_tokens.cache_clear()
+    assert got[0] == ("-I/mpich/include",)
+    assert got[1][:3] == (f"-L{mpich}", "-L/opt/rocm/lib", "-lmpi")
+    assert f"-Wl,-rpath,{mpich}" in got[1] and f"-L{ompi}" not in got[1]
+
+
+def test_no_mpich_wrapper_resolves_to_nothing(monkeypatch, tmp_path) -> None:
+    ompi = fake_mpi_prefix(tmp_path / "openmpi", mpich=False)
+    monkeypatch.setattr(languages, "mpi_wrapper_flags", lambda wrapper: (["-I/x"], [f"-L{ompi}", "-lmpi"]))
+    assert languages.mpich_wrapper_flags(("mpicc.mpich", "mpicc")) == ([], [])
+
+
+def test_libraries_yaml_has_no_duplicate_keys() -> None:
+    """PyYAML keeps the LAST of two equal keys and drops the first without a word: a second `mpi:`
+    entry once silently replaced the first."""
+    import yaml
+
+    class UniqueKeyLoader(yaml.SafeLoader):
+        pass
+
+    def construct_mapping(loader, node, deep=False):
+        keys = [loader.construct_object(k, deep=deep) for k, _ in node.value]
+        duplicates = sorted({k for k in keys if keys.count(k) > 1})
+        assert not duplicates, f"duplicate keys {duplicates} at line {node.start_mark.line + 1}"
+        return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+
+    UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, construct_mapping)
+    yaml.load(languages.LIBRARIES_YAML.read_text(), Loader=UniqueKeyLoader)
+
+
+def test_mpi_without_its_wrapper_falls_back_to_pkg_config(monkeypatch) -> None:
+    monkeypatch.setattr(languages, "mpi_wrapper_flags", lambda wrapper: ([], []))
+    monkeypatch.setattr(languages, "library_links", lambda lang, tokens: True)
+    answers = {"--cflags": ("-I/pc/include",), "--libs": ("-L/pc/lib", "-lmpi")}
+    monkeypatch.setattr(
+        languages, "pkg_config_answer", lambda pkgs, what: answers[what] if pkgs == ("mpich",) else None
+    )
+    languages.library_tokens.cache_clear()
+    try:
+        got = languages.library_tokens("mpi", "c")
+    finally:
+        languages.library_tokens.cache_clear()
+    assert got == (("-I/pc/include",), ("-L/pc/lib", "-lmpi", "-Wl,-rpath,/pc/lib"))
+
+
+def test_mpi_and_rccl_are_requestable_by_a_hip_submission() -> None:
+    libraries = languages.load_libraries()
+    assert "hip" in libraries["mpi"]["langs"] and "hip" in libraries["rccl"]["langs"]
+    assert languages.toolset_link_tokens(libraries["rccl"]["toolset"]) == ("-lrccl",)

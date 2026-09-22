@@ -229,6 +229,44 @@ _FP8_HELPER_SRC = {
         r = npb_e5m2_to_f32(npb_f32_to_e5m2(x))
     end function npb_rn_e5m2
 """,
+    # bfloat16 is the top half of a real(c_float): promotion appends 16 zero bits, demotion
+    # rounds to nearest, ties to even (ml_dtypes' rule). ishft is a LOGICAL shift, so a negative
+    # float's bit pattern shifts in zeros as the C version's uint32_t does. The 16-bit result is
+    # folded into c_int16_t's signed range explicitly: int() of a value above 32767 is
+    # processor-dependent, and a bf16 with its sign bit set is exactly such a value.
+    "bfloat16": """
+    pure function npb_bf16_to_f32(b) result(r)
+        use, intrinsic :: iso_c_binding
+        integer(c_int16_t), intent(in) :: b
+        real(c_float) :: r
+        integer(c_int32_t) :: u
+        u = ishft(iand(int(b, c_int32_t), 65535), 16)
+        r = transfer(u, 0.0_c_float)
+    end function npb_bf16_to_f32
+
+    pure function npb_f32_to_bf16(f) result(b)
+        use, intrinsic :: iso_c_binding
+        real(c_float), intent(in) :: f
+        integer(c_int16_t) :: b
+        integer(c_int32_t) :: u, out
+        u = transfer(f, 0_c_int32_t)
+        if (iand(u, int(z'7fffffff', c_int32_t)) > int(z'7f800000', c_int32_t)) then
+            out = ior(iand(ishft(u, -16), 65535), 64)
+        else
+            u = u + 32767 + iand(ishft(u, -16), 1)
+            out = iand(ishft(u, -16), 65535)
+        end if
+        if (out > 32767) out = out - 65536
+        b = int(out, c_int16_t)
+    end function npb_f32_to_bf16
+
+    pure function npb_rn_bf16(x) result(r)
+        use, intrinsic :: iso_c_binding
+        real(c_float), intent(in) :: x
+        real(c_float) :: r
+        r = npb_bf16_to_f32(npb_f32_to_bf16(x))
+    end function npb_rn_bf16
+""",
 }
 
 

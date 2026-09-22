@@ -93,13 +93,11 @@ S_BYTE_CEILING = 4 << 30
 #: 32/40 GB datacenter part mostly free -- and four ranks per node (DESIGN_job_submission.md) hold
 #: ~16 GB of live data rather than ~64 GB.
 XL_BYTE_CEILING = 4 << 30
-#: Per-track override of :data:`XL_BYTE_CEILING`, consulted by :func:`xl_ceiling`. EMPTY since
-#: 2026-09-01: it held loop_level_reasoning and scientific_computing at 4 GB while the global
-#: ceiling was 16 GB, and the global ceiling is now that same 4 GB, so every entry it could hold
-#: would restate the default. Two constants spelling one number is exactly how the 16 GB/4 GB split
-#: arose in the first place. The hook stays because a track that genuinely needs a TIGHTER ceiling
-#: is a live possibility and `xl_ceiling` is already the single point every script asks.
-TRACK_XL_CEILING: Dict[str, int] = {}
+#: Per-track override of :data:`XL_BYTE_CEILING`, consulted by :func:`xl_ceiling` -- the single point
+#: every script and ``tests/test_xl_ceiling.py`` asks. machine_learning holds 8 GB (2026-09-22 USER):
+#: the distributed bf16 operators (@mlscale10) carry 8x the element count of their source XL so that
+#: 16 GPUs still get real work per rank; every other track stays at the 4 GB default.
+TRACK_XL_CEILING: Dict[str, int] = {"machine_learning": 8 << 30}
 #: Element width assumed for an array the manifest declares no dtype for.
 DEFAULT_DTYPE = "float64"
 #: Fraction of a ceiling :func:`fit_to_ceiling` actually targets, so per-symbol integer rounding
