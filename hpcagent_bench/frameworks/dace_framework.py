@@ -911,13 +911,13 @@ def stage_to_device(cupy: DeviceStagingModule, arr: AnyArray) -> ArrayLike:
 
 
 def stage_device_arguments(sdfg: dace.SDFG, kwargs: dict[str, ArgValue], cupy: DeviceStagingModule) -> None:
-    """Stage to the device every host array ``kwargs`` hands a device-resident descriptor, in place.
+    """Stage to the device, in place, every host array in ``kwargs`` whose descriptor is device-resident.
 
-    The per-run copy in ``CallPlan.before_each`` stages the manifest's ``array_args`` by name, and a
-    sparse array is listed there by its LOGICAL name: the buffers it expands into (``A_data``,
-    ``A_indices``, ``A_indptr``) are read straight from the data bag and reach
+    The per-run copy in ``CallPlan.before_each`` stages the manifest's ``array_args`` by name, and
+    ``array_args`` lists a sparse array by its logical name. The buffers it expands into (``A_data``,
+    ``A_indices``, ``A_indptr``) are read straight from the data bag, so they reach
     :func:`enforce_gpu_residency`'s device-only signature as host memory. npbench bicgstab failed
-    every GPU call that way. The descriptor decides, so a scalar or a host-storage array is left as is.
+    every GPU call that way. Staging follows the descriptor, so a scalar or a host-storage array is left as is.
     """
     from dace import data as dace_data
 
