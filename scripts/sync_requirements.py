@@ -76,8 +76,25 @@ GENERATED: dict[str, Rendered] = {
         "baselines with platform install friction, and they live in optional.txt so this "
         "file installs cleanly everywhere, macOS arm64 included.",
     ),
+    # mpi and the linting/testing groups for the same reason as amd.txt below: this file is what
+    # the GH200 judge-agent image installs, and the suite has to be runnable inside it.
     "requirements/nvidia.txt": Rendered(
-        ("nvidia",), core=True, options=("--pre",), note="--pre is required for apache-tvm."
+        ("nvidia", "mpi"),
+        core=True,
+        groups=("linting", "testing"),
+        options=("--pre",),
+        note="--pre is required for apache-tvm.",
+    ),
+    # The CPU-only judge-agent image: cpu.txt's stack plus mpi and the linting/testing groups, so
+    # the suite runs inside it too. apache-tvm comes from optional.txt in a SECOND pip call: its
+    # --pre would otherwise let every fresh resolve here pick a pre-release.
+    "requirements/cpu-image.txt": Rendered(
+        ("cpu", "mpi"),
+        core=True,
+        groups=("linting", "testing"),
+        note="The CPU-only judge-agent image (containers/cluster/ce-images/judge-agent-cpu): the "
+        "cpu extra plus mpi4py/pytest-mpi and the formatters and test runner, so the suite runs "
+        "in-container. apache-tvm is installed from optional.txt in a separate pip call.",
     ),
     # linting is in the IMAGE, not just a developer's laptop: tests/test_header_hook.py asserts
     # `shutil.which("ruff")` and the format hook shells out to it, so without it those tests pass
