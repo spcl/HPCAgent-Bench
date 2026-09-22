@@ -1525,7 +1525,8 @@ def test_dropping_the_success_row_keeps_the_width_and_every_other_box(
 ) -> None:
     """The success row is optional: turning it off may only shorten the canvas. A figure with and
     one without it sit in one paper, so the speed-up and cost boxes must be the same size in both.
-    The success row itself is half the height of the others (user, 2026-09-21)."""
+    The success row is half a row and the speed-up and cost rows 0.82 of one (users, 2026-09-21 and
+    2026-09-22), so the success row is 0.5/0.82 of a speed-up row."""
     full = drawn_dot_row(tmp_path, monkeypatch, efficacy_figures.MEASURES)
     short = drawn_dot_row(tmp_path, monkeypatch, ("speedup", "cost"))
     assert full.get_size_inches()[0] == pytest.approx(short.get_size_inches()[0])
@@ -1534,8 +1535,7 @@ def test_dropping_the_success_row_keeps_the_width_and_every_other_box(
     assert box_inches(full, speedup) == pytest.approx(box_inches(short, short.axes[0]), abs=1e-3)
     assert box_inches(full, cost) == pytest.approx(box_inches(short, short.axes[1]), abs=1e-3)
     width, height = box_inches(full, speedup)
-    half = efficacy_figures.MEASURE_HEIGHT["success"]
-    assert box_inches(full, success) == pytest.approx((width, height * half), abs=1e-3), "a half-height row"
+    assert box_inches(full, success) == pytest.approx((width, height * 0.5 / 0.82), abs=1e-3), "a half row"
 
 
 def test_a_full_roster_mark_on_the_ceiling_is_drawn_whole() -> None:
@@ -1671,10 +1671,10 @@ def test_a_difference_label_sits_above_both_intervals_not_on_the_treated_mark() 
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
-    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(4.0, 5.0), arm(4.5, 7.0))
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(4.0, 5.0), arm(4.5, 6.0))
     efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {}, differences=frozenset({("qwen38", "HIP")}))
     (label,) = [text for text in ax.texts if text.get_text().endswith("x")]
-    assert label.xy == (0, 7.0), label.xy
+    assert label.xy == (0, 6.0), label.xy
     assert (label.get_ha(), label.get_va()) == ("center", "bottom")
     plt.close(fig)
 
@@ -1794,3 +1794,32 @@ def test_a_single_value_axis_is_left_unsnapped() -> None:
         assert ax.get_ylim() == (-1.0, 1.0)
     finally:
         plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    ("marks", "cost", "want"),
+    [
+        pytest.param([0.0, 3.0], False, (-2.0, 5.0), id="speedup-two-octaves-past-the-marks"),
+        pytest.param([1e5, 4e5], True, (2.5e4, 1.6e6), id="cost-a-factor-four-past-the-marks"),
+        pytest.param([math.nan], False, (-math.inf, math.inf), id="no-mark-cuts-nothing"),
+    ],
+)
+def test_intervals_reach_a_factor_four_past_the_outermost_marks(
+    marks: list[float], cost: bool, want: tuple[float, float]
+) -> None:
+    """User, 2026-09-22: a few-kernel interval down to 0.004x stretched the GPU panel over twenty
+    octaves and its ticks read 0.00391x; the panel now spans its marks and a bounded reach."""
+    assert efficacy_figures.interval_bounds(marks, cost, efficacy_figures.PAPER_CONFIG) == pytest.approx(want)
+
+
+def test_an_interval_past_the_reach_is_cut_at_it_with_an_arrowhead() -> None:
+    """The axis must not follow the interval out, and the cut end has to say the interval goes on."""
+    fig, ax = plt.subplots()
+    wide = efficacy_figures.ArmPoint(0.0, -9.0, 12.0, 1e5, 5e4, 2e5, 5, 5, 5, 5)
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0), wide)
+    efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {})
+    low, high = ax.get_ylim()
+    assert high < 12.0 and low > -9.0, (low, high)
+    heads = {line.get_marker() for line in ax.lines if line.get_marker() in ("^", "v")}
+    assert heads == {"^", "v"}, heads
+    plt.close(fig)

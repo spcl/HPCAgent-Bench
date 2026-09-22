@@ -156,6 +156,11 @@ class FigureConfig:
     interval_width: float = 1.2
     #: Half the width of the cap on a capped interval bar, points.
     interval_cap_pt: float = 2.0
+    #: How far past the outermost MARK of a dot-row panel an interval is drawn, as a factor (4 = two
+    #: octaves). A few-kernel interval reaching 0.004x stretched its panel over twenty octaves, the
+    #: ticks read 0.00391x and every mark sat in a sliver; the interval is cut at this reach instead,
+    #: with an arrowhead where it continues (:func:`draw_interval`).
+    interval_reach: float = 4.0
     grid_width: float = 0.7
     spine_width: float = 0.8
     #: ABSOLUTE panels only (:func:`draw_arm_pair`): join an arm to its own no-packet twin with a
@@ -1688,8 +1693,9 @@ MEASURES: tuple[str, ...] = ("speedup", "success", "cost")
 MEASURE_LABELS: dict[str, str] = {"speedup": "Speed-Up", "success": "Tasks Completed", "cost": ABSOLUTE_YLABEL}
 
 #: Each measure's row height as a fraction of ``row_height_in``. A count out of N needs no ladder of
-#: ratios, so the success row takes half a row.
-MEASURE_HEIGHT: dict[str, float] = {"success": 0.5}
+#: ratios, so the success row takes half a row; the speed-up and cost rows are 0.82 of one (user,
+#: 2026-09-22: about a fifth shorter, the success row unchanged).
+MEASURE_HEIGHT: dict[str, float] = {"speedup": 0.82, "success": 0.5, "cost": 0.82}
 
 #: Headroom above N on the success row, as a fraction of N, so the dashed ceiling at N is not the frame.
 SUCCESS_HEADROOM: float = 0.05
@@ -2044,6 +2050,35 @@ def draw_difference_arrow(
     )  # fmt: skip
 
 
+def interval_bounds(values: Sequence[float], cost: bool, config: FigureConfig) -> tuple[float, float]:
+    """How far a panel's intervals are drawn: :data:`FigureConfig.interval_reach` past its lowest and
+    highest mark, in the row's own units (tokens on the cost row, ``log2(ratio)`` on the speed-up
+    row). No finite mark leaves nothing to cut against."""
+    marks = [value for value in values if math.isfinite(value)]
+    if not marks:
+        return -math.inf, math.inf
+    if cost:
+        return min(marks) / config.interval_reach, max(marks) * config.interval_reach
+    reach = math.log2(config.interval_reach)
+    return min(marks) - reach, max(marks) + reach
+
+
+def draw_interval(
+    ax: Axes, x: float, low: float, high: float, bounds: tuple[float, float], colour: str, linestyle: str,
+    config: FigureConfig,
+) -> tuple[float, float]:  # fmt: skip
+    """One arm's interval as a vertical bar cut to ``bounds``, with an arrowhead in the arm's colour
+    at each cut end; returns the ends drawn."""
+    bottom, top = max(low, bounds[0]), min(high, bounds[1])
+    ax.vlines(x, bottom, top, color=colour, linewidth=config.interval_width, alpha=0.75, linestyles=linestyle,
+              zorder=style.CONNECTOR_Z)  # fmt: skip
+    for cut, end, marker in ((low < bounds[0], bottom, "v"), (high > bounds[1], top, "^")):
+        if cut:
+            ax.plot([x], [end], marker=marker, markersize=config.interval_cap_pt * 1.6, color=colour,
+                    linestyle="none", clip_on=False, zorder=style.CONNECTOR_Z)  # fmt: skip
+    return bottom, top
+
+
 def measure_value(point: ArmPoint, measure: str) -> tuple[float, float, float]:
     """``(value, low, high)`` of one arm on one measure: the speed-up in ``log2(ratio)``, or the
     token count as a count. The success row draws its count alone (:func:`draw_success_row`)."""
@@ -2122,6 +2157,10 @@ def draw_measure_row(
         draw_success_row(ax, rows, shape, config, ylabel)
         return
     span: list[float] = []
+    bounds = interval_bounds(
+        [measure_value(point, measure)[0] for row in rows for point in (row.control, row.treated)], cost, config
+    )
+    tops: dict[int, float] = {}
     for index, row in enumerate(rows):
         pair = (
             (row.control, False, -config.dodge, CONTROL_MARKER),
@@ -2129,13 +2168,13 @@ def draw_measure_row(
         )
         for point, filled, dodge, mark in pair:
             value, low, high = measure_value(point, measure)
-            span += [v for v in (value, low, high) if math.isfinite(v)]
             x = index + dodge
             if np.isfinite(low) and np.isfinite(high):
-                ax.vlines(
-                    x, low, high, color=row.colour, linewidth=config.interval_width, alpha=0.75,
-                    linestyles=config.cost_linestyle if cost else "-", zorder=style.CONNECTOR_Z,
-                )  # fmt: skip
+                low, high = draw_interval(
+                    ax, x, low, high, bounds, row.colour, config.cost_linestyle if cost else "-", config
+                )
+                tops[index] = max(tops.get(index, -math.inf), high)
+            span += [v for v in (value, low, high) if math.isfinite(v)]
             style.point_mark(ax, x, value, row.colour, mark, filled, size=config.mark_size)
         control_value = measure_value(row.control, measure)[0]
         treated_value = measure_value(row.treated, measure)[0]
@@ -2145,7 +2184,7 @@ def draw_measure_row(
                 linewidth=config.link_width, alpha=config.link_alpha, zorder=style.CONNECTOR_Z - 0.5,
             )  # fmt: skip
         if (row.model, row.leg) in differences:
-            top = max((measure_value(point, measure)[2] for point in (row.control, row.treated)), default=math.nan)
+            top = tops.get(index, math.nan)
             draw_difference_arrow(ax, index, control_value, treated_value, row.colour, measure, config, top)
         # Each row carries only ITS OWN verdict: a star on the cost row would test the speed-up.
         score_sig, cost_sig = significance.get((row.model, row.leg), (False, False))
