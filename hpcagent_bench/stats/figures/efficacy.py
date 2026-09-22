@@ -2677,8 +2677,12 @@ def figure_dot_row(
     # hspace is a fraction of the row height, so the gaps are sized against that
     data_height = row_height_in * (len(measures) + config.row_gap * (len(measures) - 1))
     # EVERY band is fixed, so the canvas and the data box are both the same in every efficacy
-    # figure: a longer label or a fuller key changes neither.
-    height = data_height + title_band + category_band + config.legend_chrome_in + MEASURE_PAD_IN
+    # figure: a longer label or a fuller key changes neither. MEASURE_PAD_IN counts TWICE: once as
+    # the top margin's pad below the title band and once as the bottom margin's pad above the
+    # category band (both subplots_adjust calls below add it) -- one MEASURE_PAD_IN here left the
+    # data box MEASURE_PAD_IN short of data_height, and a 3-row and a 2-row figure amortise that
+    # shortfall over a different row count, so their row heights stopped matching.
+    height = data_height + title_band + category_band + config.legend_chrome_in + 2 * MEASURE_PAD_IN
     ratios = dot_row_widths(columns, config)
     # The gaps come OUT of the data width: matplotlib's wspace is a fraction of the mean axes width,
     # so n panels and n-1 gaps share it. Ignoring that overstated every span by about a fifth, which
