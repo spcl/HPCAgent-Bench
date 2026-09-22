@@ -10,11 +10,12 @@
 #   MODEL     nodes  TP x PP  window  parsers (tool / reasoning)   why that width
 #   qwen38    1      4 x 1    262144  qwen3_coder / qwen3          27B FP8, ~28 GB: one node, KV to spare
 #   oss120b   1      4 x 1    131072  openai / openai_gptoss       MXFP4, ~65 GB
-#   kimi      2+     4 x N    262144  kimi_k2 / kimi_k2            ~595 GB INT4 weights > one node's 384 GB
+#   kimi      4      4 x 4    262144  kimi_k2 / kimi_k2            ~595 GB INT4 weights > one node's 384 GB
 #
-# kimi: PP is the node count. Two nodes hold the weights with ~13 GB per GPU left for KV and graphs;
-# four (the beverin width) leave ~50 GB per GPU, which is what concurrent agent streams at a 262144
-# window need. MIN_NODES refuses fewer than two.
+# kimi: PP is the node count, 4 by default -- the beverin width, ~50 GB per GPU left for KV, which is
+# what concurrent agent streams at a 262144 window need. SERVE_NODES=2 is the floor that still holds
+# the weights (~13 GB per GPU for KV and graphs); fewer is refused. The job's node count must equal
+# SERVE_NODES (default: the model's width), so -N and the engine cannot disagree.
 #
 # MODE=serve (default): wait for /health, print the endpoint, write endpoint.json for
 #   alps-endpoint.sh, and hold the server until the job ends. Binds this node's hsn0 address and
@@ -27,8 +28,9 @@
 #   export SBATCH_ACCOUNT=<project> SBATCH_PARTITION=normal
 #   MODEL=qwen38 MODE=smoke sbatch -N 1 --time=01:00:00 containers/cluster/ce-images/inference/serve-daint.sbatch
 #   MODEL=oss120b           sbatch -N 1 --time=12:00:00 containers/cluster/ce-images/inference/serve-daint.sbatch
-#   MODEL=kimi              sbatch -N 2 --time=12:00:00 containers/cluster/ce-images/inference/serve-daint.sbatch
-#   MODEL=kimi DRY_RUN=1 SLURM_JOB_NUM_NODES=2 bash containers/cluster/ce-images/inference/serve-daint.sbatch
+#   MODEL=kimi              sbatch -N 4 --time=12:00:00 containers/cluster/ce-images/inference/serve-daint.sbatch
+#   MODEL=kimi SERVE_NODES=2 sbatch -N 2 --time=12:00:00 containers/cluster/ce-images/inference/serve-daint.sbatch
+#   MODEL=kimi DRY_RUN=1 bash containers/cluster/ce-images/inference/serve-daint.sbatch
 #
 # Submit from inside a checkout: the chat template and the gates are read from it.
 #SBATCH --job-name=serve-daint
@@ -60,21 +62,21 @@ INFERENCE="${REPO}/containers/cluster/ce-images/inference"
 [[ -n "${REPO}" && -f "${INFERENCE}/verify-tools-reasoning.py" ]] || refuse "no checkout: set REPO or submit from inside one"
 . "${REPO}/scripts/cache_env.sh"
 
-use_model() {  # sets MODEL_REPO, CONTEXT, MIN_NODES, EFFORT and MODEL_FLAGS
+use_model() {  # sets MODEL_REPO, CONTEXT, NODES, MIN_NODES, EFFORT and MODEL_FLAGS
     case "${MODEL:-}" in
         qwen38)
-            MODEL_REPO=Qwen/Qwen3.8-27B-FP8 CONTEXT=262144 MIN_NODES=1 EFFORT=xhigh
+            MODEL_REPO=Qwen/Qwen3.8-27B-FP8 CONTEXT=262144 NODES=1 MIN_NODES=1 EFFORT=xhigh
             MODEL_FLAGS=(--chat-template "${REPO}/experiments/chat-template-qwen38.jinja" --trust-remote-code
                 --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3)
             ;;
         oss120b)
-            MODEL_REPO=openai/gpt-oss-120b CONTEXT=131072 MIN_NODES=1 EFFORT=high
+            MODEL_REPO=openai/gpt-oss-120b CONTEXT=131072 NODES=1 MIN_NODES=1 EFFORT=high
             MODEL_FLAGS=(--dtype bfloat16 --load-format safetensors --safetensors-load-strategy prefetch
                 --enable-auto-tool-choice --tool-call-parser openai --reasoning-parser openai_gptoss)
             ;;
         kimi)
             # No reasoning_effort: Moonshot documents it as a K3-only field (.env.base-kimi27sglang).
-            MODEL_REPO=moonshotai/Kimi-K2.7-Code CONTEXT=262144 MIN_NODES=2 EFFORT=""
+            MODEL_REPO=moonshotai/Kimi-K2.7-Code CONTEXT=262144 NODES=4 MIN_NODES=2 EFFORT=""
             MODEL_FLAGS=(--trust-remote-code
                 --enable-auto-tool-choice --tool-call-parser kimi_k2 --reasoning-parser kimi_k2)
             ;;
@@ -94,12 +96,15 @@ READY_TIMEOUT="${READY_TIMEOUT:-3600}"
 KEY_FILE="${KEY_FILE:-${HOME}/.config/hpcagent-bench/daint-endpoint.key}"
 # Operator words appended to the command (e.g. "--kv-cache-dtype fp8"); never host, port or key.
 EXTRA_ARGS="${EXTRA_ARGS:-}"
-NNODES="${SLURM_JOB_NUM_NODES:-1}"
+NNODES="${SERVE_NODES:-${NODES}}"
 NODE="${SLURMD_NODENAME:-${HOSTNAME%%.*}}"
 RUN_DIR="${SCRATCH:?set SCRATCH}/inference-server/daint-${MODEL}/${SLURM_JOB_ID:-dry-$$}"
 SERVER_PID=""
 
-((NNODES >= MIN_NODES)) || refuse "${MODEL} needs at least ${MIN_NODES} node(s), the job has ${NNODES}"
+[[ "${NNODES}" =~ ^[1-9][0-9]*$ ]] || refuse "SERVE_NODES must be a node count, got '${NNODES}'"
+((NNODES >= MIN_NODES)) || refuse "${MODEL} needs at least ${MIN_NODES} node(s), SERVE_NODES asks for ${NNODES}"
+[[ -z "${SLURM_JOB_ID:-}" || "${SLURM_JOB_NUM_NODES:-1}" == "${NNODES}" ]] \
+    || refuse "${MODEL} serves on ${NNODES} node(s) but the job has ${SLURM_JOB_NUM_NODES:-1}: submit with -N ${NNODES}, or set SERVE_NODES"
 for word in ${EXTRA_ARGS}; do
     case "${word}" in --host* | --port* | --api-key* | --headless* | --node-rank*) refuse "EXTRA_ARGS may not set ${word%%=*}" ;; esac
 done

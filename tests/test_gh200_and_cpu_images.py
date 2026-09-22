@@ -62,11 +62,12 @@ TOOLCHAIN_EDFS = {
     ),
 }
 
-#: Daint serve: model -> (nodes, served window, tool-call parser, reasoning parser), the beverin configs'.
+#: Daint serve: model -> (default nodes, served window, tool-call parser, reasoning parser), the beverin
+#: configs' windows and parsers; kimi's default width is beverin's four nodes.
 SERVED = {
     "qwen38": (1, 262144, "qwen3_coder", "qwen3"),
     "oss120b": (1, 131072, "openai", "openai_gptoss"),
-    "kimi": (2, 262144, "kimi_k2", "kimi_k2"),
+    "kimi": (4, 262144, "kimi_k2", "kimi_k2"),
 }
 
 
@@ -200,9 +201,10 @@ def test_the_gh200_serving_profile_checks_the_engine_and_the_hook_fabric(verify:
     assert names.isdisjoint({"aiter", "flydsl", "rocBLAS"}), names
 
 
-def serve(model: str, nodes: int, **extra: str) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "MODEL": model, "DRY_RUN": "1", "SLURM_JOB_NUM_NODES": str(nodes), **extra}
-    env.pop("SLURM_JOB_ID", None)
+def serve(model: str, **extra: str) -> subprocess.CompletedProcess[str]:
+    """serve-daint.sbatch in DRY_RUN, with nothing of the caller's job or node choice leaking in."""
+    inherited = {k: v for k, v in os.environ.items() if not k.startswith("SLURM_") and k != "SERVE_NODES"}
+    env = inherited | {"MODEL": model, "DRY_RUN": "1", **extra}
     return subprocess.run(["bash", str(SERVE)], capture_output=True, text=True, check=False, env=env, cwd=ROOT)
 
 
@@ -212,8 +214,8 @@ def argv(done: subprocess.CompletedProcess[str]) -> str:
 
 @pytest.mark.parametrize("model", sorted(SERVED))
 def test_the_daint_serve_keeps_the_served_name_window_and_parsers(model: str) -> None:
-    nodes, window, tool, reasoning = SERVED[model]
-    done = serve(model, nodes)
+    _, window, tool, reasoning = SERVED[model]
+    done = serve(model)
     assert done.returncode == 0, done.stderr
     line = argv(done)
     for words in (
@@ -230,25 +232,42 @@ def test_the_daint_serve_keeps_the_served_name_window_and_parsers(model: str) ->
 def test_the_agent_driver_reads_the_daint_window_off_the_serve_command(model: str) -> None:
     """claude-code compacts against agent_driver.served_context; a spelling it cannot read falls back to
     the 262144 cap and overflows a 131072 server."""
-    nodes, window, _, _ = SERVED[model]
+    _, window, _, _ = SERVED[model]
     driver = load(ROOT / "experiments" / "agent_driver.py", "gh200_cpu_agent_driver")
-    assert driver.served_context({"VLLM_EXTRA_ARGS": argv(serve(model, nodes))}) == window
+    assert driver.served_context({"VLLM_EXTRA_ARGS": argv(serve(model))}) == window
 
 
-def test_a_multi_node_daint_serve_is_one_pipeline_across_the_nodes() -> None:
-    line = argv(serve("kimi", 4))
-    for words in ("--tensor-parallel-size 4", "--pipeline-parallel-size 4", "--nnodes 4"):
-        assert words in line, (words, line)
+@pytest.mark.parametrize("model", sorted(SERVED))
+def test_a_daint_serve_is_one_pipeline_across_its_default_width(model: str) -> None:
+    nodes = SERVED[model][0]
+    line = argv(serve(model))
+    assert "--tensor-parallel-size 4" in line, line
+    if nodes == 1:
+        assert "--pipeline-parallel-size" not in line and "--nnodes" not in line, line
+    else:
+        assert f"--pipeline-parallel-size {nodes}" in line and f"--nnodes {nodes}" in line, line
+
+
+def test_kimi_may_run_on_the_two_node_floor_when_asked() -> None:
+    line = argv(serve("kimi", SERVE_NODES="2"))
+    assert "--pipeline-parallel-size 2" in line and "--nnodes 2" in line, line
 
 
 def test_kimi_is_refused_on_a_node_that_cannot_hold_its_weights() -> None:
-    done = serve("kimi", 1)
+    done = serve("kimi", SERVE_NODES="1")
     assert done.returncode == 2
     assert "kimi needs at least 2 node(s)" in done.stderr
 
 
+def test_a_job_whose_node_count_is_not_the_serve_width_is_refused() -> None:
+    """-N and the engine's PP must agree: fewer nodes than PP never comes up, more sit idle."""
+    done = serve("kimi", SLURM_JOB_ID="1", SLURM_JOB_NUM_NODES="2")
+    assert done.returncode == 2
+    assert "submit with -N 4, or set SERVE_NODES" in done.stderr
+
+
 @pytest.mark.parametrize("word", ["--host=0.0.0.0", "--port", "--api-key=x"])
 def test_the_daint_serve_refuses_extra_args_that_rebind_or_rekey_it(word: str) -> None:
-    done = serve("qwen38", 1, EXTRA_ARGS=word)
+    done = serve("qwen38", EXTRA_ARGS=word)
     assert done.returncode == 2
     assert f"EXTRA_ARGS may not set {word.split('=')[0]}" in done.stderr
