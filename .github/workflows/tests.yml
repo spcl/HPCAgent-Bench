@@ -1945,10 +1945,19 @@ jobs:
       # the simple self + shared-memory transports and disable UCX's VFS probe -- otherwise MPI_Init
       # selects a missing transport and the REAL multi-rank launches (Phase 3) fail or hang. The
       # rmaps oversubscribe knob lets R ranks share the 4 CI cores (belt-and-suspenders with the
-      # launcher's mpirun --oversubscribe).
+      # launcher's mpirun --oversubscribe, tests/mpi_launch_helpers.py). Spelled TWICE because the
+      # knob moved: Open MPI 4.x (ubuntu-24.04's openmpi-bin 4.1.6) reads OMPI_MCA_rmaps_base_oversubscribe
+      # (mpirun(1) v4.1, "--oversubscribe"), Open MPI 5 hands mapping to PRRTE and reads
+      # PRTE_MCA_rmaps_default_mapping_policy=:oversubscribe instead (docs.open-mpi.org/en/v5.0.x/mca.html,
+      # "Old environment variable ... OMPI_MCA_rmaps_base_oversubscribe=1 / New ... :oversubscribe").
+      # ubuntu-latest moves to Ubuntu 26 (Open MPI 5) from 2026-10-19 (actions/runner-images#14748);
+      # each version ignores the other's variable. MPICH's Hydra needs neither: it places ranks
+      # round-robin with no per-core slot limit, which is why mpi_call.with_oversubscribe is a
+      # no-op for mpiexec.mpich.
       OMPI_MCA_pml: ob1
       OMPI_MCA_btl: self,vader
       OMPI_MCA_rmaps_base_oversubscribe: "1"
+      PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
       UCX_VFS_ENABLE: "n"
       # Job-level so every pytest here collects; --cov-report= suppresses the per-job
       # render (the combine job owns the only report).
@@ -2038,7 +2047,7 @@ jobs:
             tests/test_mpi_sizing.py \
             tests/test_mpi_prompt.py
 
-      - name: Phase 2 -- driver / stub codegen + ABI shape (mpicc.mpich -c compile checks)
+      - name: Phase 2 -- driver / stub codegen + ABI shape (OpenMPI mpicc -c compile checks)
         if: ${{ !cancelled() }}
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs --timeout=600 \
@@ -2219,6 +2228,7 @@ jobs:
       OMPI_MCA_pml: ob1
       OMPI_MCA_btl: self,vader
       OMPI_MCA_rmaps_base_oversubscribe: "1"
+      PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"  # Open MPI 5's spelling; see the mpi job
       UCX_VFS_ENABLE: "n"
       # This job runs as root in the container, and OpenMPI refuses to launch as root without it.
       OMPI_ALLOW_RUN_AS_ROOT: "1"
