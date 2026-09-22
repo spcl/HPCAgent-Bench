@@ -48,9 +48,10 @@ JobKey = tuple[str, str]
 #: answered is owed a rerun instead. The databases keep the row; only its readers skip it.
 ADHOC_RUN_ID = "adhoc"
 
-#: The observations column holding the evidence an ``adhoc`` row was re-attributed on
-#: (observations_extract ``--retags``). Non-blank means the row was STORED under
-#: :data:`ADHOC_RUN_ID`, whatever run id the extraction then gave it.
+#: The observations column holding the evidence an ``adhoc`` row was re-attributed on, from the
+#: now-removed retag extraction path (deleted 2026-09-22, superseded by aad8dbdc5's run-id-only
+#: adhoc drop). Legacy extractions still carry it: non-blank means the row was STORED under
+#: :data:`ADHOC_RUN_ID`, whatever run id that extraction then gave it.
 RETAGGED_COLUMN = "retagged"
 
 

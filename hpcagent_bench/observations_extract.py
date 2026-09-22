@@ -157,8 +157,9 @@ OBSERVATION_FIELDS = (
     "tokens_fresh_input",
     "tokens_cached_input",
     "tokens_output",
-    # The evidence an ``adhoc`` judge row was re-attributed on (experiments/recover_adhoc.py); blank
-    # on every row that carried its own run id.
+    # The evidence an ``adhoc`` judge row was re-attributed on, from the now-removed retag path
+    # (2026-09-22 aad8dbdc5 dropped every ``adhoc`` row by run id regardless); blank on every row
+    # extracted since, and on every row that carried its own run id.
     "retagged",
     # 1 for a row read from the frozen observations of a job whose judge DB no longer exists
     # (experiments/frozen_observations.py), 0 for a row read from a live DB or worker directory.
@@ -213,10 +214,6 @@ class Agent(NamedTuple):
     benchmark: str
     run_id: str
     worker_index: str
-
-
-#: ``(db, table, id)`` of an ``adhoc`` judge row -> ``(run_id, optimizer, evidence)`` it is re-attributed to.
-Retags = dict[tuple[str, str, int], tuple[str, str, str]]
 
 
 class DbResult(NamedTuple):
@@ -315,14 +312,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         metavar="GLOB",
         help="regrade-<shard>.db files from scripts/regrade.py (or `hpcagent-bench regrade`); every unstamped "
         "timed submission takes its re-timed row, and one without a re-timed row is dropped; repeatable",
-    )
-    ap.add_argument(
-        "--retags",
-        action="append",
-        default=[],
-        metavar="CSV",
-        help="retag CSVs from experiments/recover_adhoc.py; each names an `adhoc` judge row by (db, table, "
-        "id) and the run it belongs to, and the row is extracted under that run; repeatable",
     )
     ap.add_argument(
         "--frozen-observations",
@@ -841,24 +830,12 @@ def column(row: sqlite3.Row, keys: frozenset[str], name: str) -> Any:
     return row[name] if name in keys else ""
 
 
-def load_retags(paths: Iterable[str]) -> Retags:
-    """Every row of the retag CSVs ``paths``, keyed the way :func:`read_db` looks a judge row up."""
-    retags: Retags = {}
-    for path in paths:
-        with open(path, encoding="utf-8", newline="") as handle:
-            for row in csv.DictReader(handle):
-                key = (str(pathlib.Path(row["db"]).resolve()), row["table"], int(row["id"]))
-                retags[key] = (row["run_id"], row["optimizer"], row["evidence"])
-    return retags
-
-
 def read_db(
     db: Database,
     focus: frozenset[str],
     arm_prefix: str,
     excluded: frozenset[str],
     c_fix_ms: int,
-    retags: Retags | None = None,
 ) -> DbResult:
     """One database -> the rows it contributes. Opens read-only, never writes.
 
@@ -872,10 +849,6 @@ def read_db(
     a name rule, because an arm can straddle the date: ``llr8-oss120b-c`` is 67% pre-fix, so any
     name-based test either keeps broken rows or throws away good ones. A C row whose stamp will not
     parse is dropped and counted -- undated is not the same as cleared -- and the count is reported.
-
-    ``retags`` re-attributes an ``adhoc`` row to the run it was proven to belong to (see
-    experiments/recover_adhoc.py) BEFORE the arm filter, so the row reaches its arm; its source blob
-    is still looked up under ``adhoc``, the run id it was stored with.
     """
     observations: list[dict[str, Any]] = []
     sources: list[dict[str, Any]] = []
@@ -926,10 +899,6 @@ def read_db(
                 keys = frozenset(row.keys())
                 stored = row["run_id"] or ""
                 run_id, optimizer, retagged = stored, column(row, keys, "optimizer"), ""
-                if stored == ADHOC_ARM and retags:
-                    run_id, optimizer, retagged = retags.get(
-                        (str(db.path), table, int(row["id"])), (run_id, optimizer, retagged)
-                    )
                 bench = row["benchmark"] or ""
                 arm = arm_of(run_id)
                 if not arm.startswith(arm_prefix) or not excluded.isdisjoint(arm.split("-")):
@@ -1479,7 +1448,6 @@ class Options:
     threads: int = 32
     task_workers: int = 16
     regrades: tuple[str, ...] = ()
-    retags: tuple[str, ...] = ()
     frozen_dir: pathlib.Path | None = None
     allow_unstamped: bool = False
 
@@ -1514,13 +1482,10 @@ def extract(options: Options) -> Extracted:
     identity_by_job: dict[tuple[str, str], JobIdentity] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as pool:
         excluded = frozenset(args.exclude_arm)
-        retags = load_retags(args.retags)
         undated_c = 0
         for db, result in zip(
             databases,
-            pool.map(
-                lambda db: read_db(db, focus, args.arm_prefix, excluded, args.c_reference_fix_ms, retags), databases
-            ),
+            pool.map(lambda db: read_db(db, focus, args.arm_prefix, excluded, args.c_reference_fix_ms), databases),
         ):
             observations.extend(result.observations)
             sources.extend(result.sources)
@@ -1616,7 +1581,6 @@ def main(argv: list[str]) -> int:
                 threads=args.threads,
                 task_workers=args.task_workers,
                 regrades=tuple(args.regrades),
-                retags=tuple(args.retags),
                 frozen_dir=frozen_observations.resolve(args.frozen_observations),
                 allow_unstamped=args.allow_unstamped,
             )
