@@ -824,15 +824,17 @@ def test_live_grading_times_under_the_policy_the_migration_moves_rows_to() -> No
     assert config.get_int("measurement.vary_inputs_pool_size", 0) == rep_variation.DEFAULT_POOL_SIZE
 
 
-PROMO_COLUMNS = (*OBS_COLUMNS, "correct", "final_attempt_start_ms")
+PROMO_COLUMNS = (*OBS_COLUMNS, "correct", "final_attempt_start_ms", "reason")
 
 
 def promotion_observations(tmp_path: pathlib.Path, db: pathlib.Path, rows: list[tuple]) -> pathlib.Path:
-    """Observation rows as ``(record, benchmark, correct, speedup, ts_ms, final_attempt_start_ms)``."""
+    """Observation rows as ``(record, benchmark, correct, speedup, ts_ms, final_attempt_start_ms[,
+    reason])``."""
     path = tmp_path / "promo.db"
     full = [
-        ("root", "631272", str(db), record, RUN, ARM, bench, "restricted", speedup, "", ts, correct, cut)
-        for record, bench, correct, speedup, ts, cut in rows
+        ("root", "631272", str(db), row[0], RUN, ARM, row[1], "restricted", row[3], "", row[4], row[2], row[5])
+        + ((row[6] if len(row) > 6 else ""),)
+        for row in rows
     ]
     with sqlite3.connect(path) as conn:
         conn.execute(f"CREATE TABLE observations ({', '.join(PROMO_COLUMNS)})")
@@ -867,6 +869,14 @@ def test_an_unsubmitted_correct_score_is_owed_a_promotion_of_its_newest_source(t
 def test_no_promotion_is_owed_when(tmp_path: pathlib.Path, rows: list[tuple], why: str) -> None:
     items, _ = regrade.build_promotion_worklist([promotion_observations(tmp_path, shard_db(tmp_path), rows)], [])
     assert items == [], why
+
+
+def test_a_judge_fault_on_submit_leaves_the_correct_score_owed_a_promotion(tmp_path: pathlib.Path) -> None:
+    """wf_triangular (job 639211): /score correct, every /submit died in the judge (score_error).
+    Nothing was graded, so the episode spent nothing and its answer is still owed a grade."""
+    rows = [("call", "k1", 1, 3.0, 12, None), ("attempt", "k1", None, None, 15, None, "score_error")]
+    (item,), _ = regrade.build_promotion_worklist([promotion_observations(tmp_path, shard_db(tmp_path), rows)], [])
+    assert (item.benchmark, item.promoted) == ("k1", True)
 
 
 def promotion_regrade(db: str, verified: int, **changes: object) -> dict[tuple[str, str, str, int], dict[str, Any]]:
