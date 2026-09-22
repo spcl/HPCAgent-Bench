@@ -291,9 +291,12 @@ def test_the_claude_arm_environment_and_files_carry_nothing_of_the_runners(drive
 def expected_runner_argv(harness: str, workdir: pathlib.Path) -> list[str]:
     """The contract argv; for optimas without its trailing ``--timeout-seconds`` value."""
     endpoint = ["--base-url", "http://n1:8000/v1", "--model", "qwen38", "--usage", str(workdir / "usage.jsonl")]
-    # The launcher's common reply cap, sent by every harness; the fixture sets no AGENT_EFFORT or
-    # CONTEXT_LENGTH, so neither flag is on the contract argv.
+    # The launcher's common reply cap, sent by every harness; the fixture sets no AGENT_EFFORT, so
+    # no rung is on the contract argv. It names no window either, so the context policy's cap
+    # applies: L 262144, R 32768, trigger 262144 - 32768 - 31457.
     endpoint += ["--max-output-tokens", "32768"]
+    window = ["--context-length", "262144"]
+    compaction = ["--compaction-trigger", "197919"]
     if harness == "miniswe":
         return [
             "/opt/harness/miniswe/bin/python",
@@ -303,6 +306,7 @@ def expected_runner_argv(harness: str, workdir: pathlib.Path) -> list[str]:
             "--prompt",
             str(workdir / "prompt.txt"),
             *endpoint,
+            *compaction,
         ]
     if harness == "openhands":
         return [
@@ -313,6 +317,8 @@ def expected_runner_argv(harness: str, workdir: pathlib.Path) -> list[str]:
             "--prompt",
             str(workdir / "prompt.txt"),
             *endpoint,
+            *window,
+            *compaction,
             "--mcp-config",
             str(workdir / "mcp.json"),
         ]
@@ -331,6 +337,7 @@ def expected_runner_argv(harness: str, workdir: pathlib.Path) -> list[str]:
         "--prompt",
         str(workdir / "prompt.txt"),
         *endpoint,
+        *window,
         "--timeout-seconds",
     ]
 
@@ -459,25 +466,34 @@ def test_a_model_with_no_ladder_sends_no_effort_flag_at_all(
     assert "--reasoning-effort" not in launches[0]["argv"]
 
 
-@pytest.mark.parametrize(("harness", "expected"), [("miniswe", False), ("openhands", True), ("optimas", True)])
-def test_only_a_runner_whose_client_has_an_input_window_is_told_the_served_context(
-    driver: types.ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: pathlib.Path,
-    harness: str,
-    expected: bool,
+#: What each runner is told for an arm served at 131072 (L 131072, R 16384, trigger 98959): the window
+#: where its client takes one, the trigger where it compacts (OpenHands' condenser, mini-SWE's own
+#: history window). Optimas' tool loop restarts from the prompt every round and has no trigger.
+POLICY_FLAGS = {
+    "miniswe": {"--max-output-tokens": "16384", "--compaction-trigger": "98959"},
+    "openhands": {"--max-output-tokens": "16384", "--context-length": "131072", "--compaction-trigger": "98959"},
+    "optimas": {"--max-output-tokens": "16384", "--context-length": "131072"},
+}
+
+
+@pytest.mark.parametrize("harness", RUNNERS)
+def test_a_runner_is_told_the_context_policy_of_the_window_its_engine_serves(
+    driver: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, harness: str
 ) -> None:
-    """CONTEXT_LENGTH is the window the engine was STARTED with. mini-SWE 2.4.6 has no knob for it --
-    it neither counts the prompt nor condenses history -- so it is handed none rather than a flag it
-    would ignore."""
+    """The harness arms name their window only in the serving args (their llrbase layer carries no
+    CONTEXT_LENGTH), which is why OpenHands ran with no input window at all before the policy: the
+    window, the reply cap and the trigger are read the way claude's are."""
     monkeypatch.setenv("HARNESS", harness)
-    monkeypatch.setenv("CONTEXT_LENGTH", "262144")
+    monkeypatch.setenv("SGLANG_EXTRA_ARGS", "--trust-remote-code --context-length 131072 --enable-metrics")
     launches = launcher(monkeypatch, driver, runner_run(end=FINISHED))
     run(driver, tmp_path)
     argv = launches[0]["argv"]
-    assert ("--context-length" in argv) is expected, argv
-    if expected:
-        assert argv[argv.index("--context-length") + 1] == "262144"
+    told = {
+        flag: argv[argv.index(flag) + 1]
+        for flag in ("--max-output-tokens", "--context-length", "--compaction-trigger")
+        if flag in argv
+    }
+    assert told == POLICY_FLAGS[harness]
 
 
 def test_a_runner_without_a_replica_key_sends_empty(driver, monkeypatch, tmp_path) -> None:
