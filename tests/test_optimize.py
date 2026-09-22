@@ -123,3 +123,40 @@ def test_agent_budget_tokens() -> None:
     assert budget_tokens(256, 512) == 256
     assert budget_tokens(OptimizeBudget(scale="x", trials=1, configs=1, cost=1024), 512) == 1024
     assert budget_tokens(OptimizeBudget.from_env("small"), 512) == 512  # no cost -> default
+
+
+def test_dace_optimize_returns_a_single_compiled_variant_without_running_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With one compiled variant there is nothing to select: ``optimize`` returns it without computing
+    the reference, verifying or scoring it -- select_fastest would return it on every outcome."""
+    import dace
+
+    from hpcagent_bench.frameworks import dace_framework as df
+
+    for pin in ("pin_cpp_standard", "pin_host_compiler", "pin_per_rank_build_dirs", "pin_build_caching"):
+        monkeypatch.setattr(df, pin, lambda *a, **k: None)
+    only = object()
+    ran: list[str] = []
+
+    class OneVariant(df.DaceFramework):
+        def __init__(self) -> None:
+            self.info = {"arch": "cpu"}
+            self.fname = "dace_cpu_canonicalize"
+
+        def _build_sdfgs(self, program: object, ctx: object, bench: object) -> dict[str, object]:
+            return {"canon_cpu": object()}
+
+        def compile_variants(self, sdfgs: dict[str, object], ctx: object) -> dict[str, object]:
+            return {"canon_cpu": only}
+
+        def reference_outputs(self, bench: object, bdata: object) -> None:
+            ran.append("reference")
+
+        def select_fastest(self, *a: object) -> object:
+            ran.append("select")
+            return only
+
+    def kernel(a: dace.float64[4]) -> None:
+        a[:] = 0.0
+
+    assert OneVariant().optimize(dace.program(kernel), None, {}) is only
+    assert ran == [], f"a single variant still ran {ran}"
