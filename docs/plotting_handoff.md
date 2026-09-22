@@ -153,6 +153,10 @@ No row carries X tick marks; the categories are named under the last one. Every 
 carries unlabelled minor ticks and a faint minor grid (`style.minor_ticks`; the rule per axis kind is in
 [plotting.md](plotting.md)). Each column is one model and delivery; its two marks are the control
 (hollow circle) and the treated arm (the packet's shape).
+Row heights (`efficacy.MEASURE_HEIGHT`, fractions of `row_height_in`): speed-up and cost 0.82,
+tasks completed 0.5 (user, 2026-09-22). Each interval is drawn at most `FigureConfig.interval_reach`
+(4x) past the panel's outermost mark and cut there with an arrowhead in the arm's colour, so one
+few-kernel interval cannot stretch its panel's axis (`efficacy.interval_bounds`, `draw_interval`).
 
 What each row is over (2026-09-21):
 
