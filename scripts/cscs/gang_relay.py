@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Host-side srun relay for the scaling judge gang: the fallback to a nested srun.
+"""Host-side srun relay for the scaling judge gang: the ONLY way its ranks start.
 
-The judge runs inside a CE container. If an ``srun`` started there cannot open a fresh CE step
-(``--environment``), the ranks have to be started from the HOST. The job script starts this relay
-in its batch shell, outside any container, and exports the directory to the judge:
+The judge runs inside a CE container, which has no usable srun (Slurm lives at a spack prefix off
+PATH, with no slurm.conf and no munge socket mounted, and its client is a patch release behind the
+host's). So the ranks are started from the HOST: the job script starts this relay in its batch
+shell, outside any container, and exports the directory to the judge:
 
     python3 scripts/cscs/gang_relay.py "$RUN_DIR/gang-relay" &
     export HPCAGENT_BENCH_GANG_RELAY_DIR="$RUN_DIR/gang-relay"
@@ -15,9 +16,11 @@ directory on the shared file system:
 
 * ``<id>.req``   -- JSON ``{"argv": [...]}`` written by the judge, renamed into place;
 * ``<id>.alive`` -- touched by the judge while it waits. Stale for :data:`HEARTBEAT_S` seconds
-  means the judge gave up (mpi_call's timeout SIGKILLs it), and the step is killed;
+  means the judge gave up, and the step is cancelled;
 * ``<id>.out`` / ``<id>.err`` -- the step's output;
-* ``<id>.rc``    -- the exit status, renamed into place LAST: the judge's completion signal.
+* ``<id>.rc``    -- the exit status, renamed into place LAST: the judge's completion signal;
+* :data:`ALIVE`  -- touched by the relay every pass, so a judge waiting on a dead relay fails at
+  once instead of at its launch timeout.
 
 Standard library only and Python 3.6: the batch host's python3 is the site's, not the image's.
 The relay exits once its parent (the batch shell) is gone, so it dies with the job.
@@ -30,10 +33,24 @@ import subprocess
 import sys
 import time
 
-#: Seconds a waiting judge may go without touching its heartbeat before its step is killed.
-HEARTBEAT_S = 30.0
+#: Seconds either side may go without touching its heartbeat before the other declares it dead.
+#: These files live on Lustre; a tighter window reads propagation delay as a death.
+HEARTBEAT_S = 120.0
 #: Poll period of the request directory.
 POLL_S = 0.2
+#: Grace after the SIGTERM that lets srun cancel its own step before the SIGKILL.
+TERM_GRACE_S = 10.0
+#: The relay's own heartbeat file in the request directory.
+ALIVE = "relay.alive"
+#: Cap on a squeue/scancel call: a loaded controller must not wedge the relay's whole loop,
+#: which would strand every other judge on this job behind one abandoned launch.
+SLURM_CALL_S = 30.0
+
+
+def touch(path):
+    """Create or refresh the mtime of ``path``."""
+    with open(path, "a"):
+        os.utime(path, None)
 
 
 def finish(base, rc):
@@ -54,7 +71,10 @@ def claim(directory, name):
 
 
 def start(directory, ident):
-    """Launch one claimed request; None (with its rc already written) when it cannot start."""
+    """Launch one claimed request; None (with its rc already written) when it cannot start.
+
+    The judge already named the step after the request (``--job-name``), which is how
+    :func:`step_id` finds it again."""
     base = os.path.join(directory, ident)
     with open(base + ".out", "w") as out, open(base + ".err", "w") as err:
         try:
@@ -65,6 +85,52 @@ def start(directory, ident):
             err.write("gang_relay: cannot start request %s: %s\n" % (ident, exc))
     finish(base, 127)
     return None
+
+
+def step_id(ident):
+    """``<jobid>.<stepid>`` of the step started for ``ident``, or None when it cannot be resolved."""
+    job = os.environ.get("SLURM_JOB_ID", "")
+    if not job:
+        return None
+    try:
+        listing = subprocess.check_output(
+            ["squeue", "-h", "-s", "-j", job, "-o", "%i %j"], universal_newlines=True, timeout=SLURM_CALL_S
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1] == ident:
+            return fields[0]
+    return None
+
+
+def signal_group(proc, sig):
+    """Send ``sig`` to the step's whole process group; a group already gone is not an error."""
+    try:
+        os.killpg(proc.pid, sig)
+    except OSError:
+        pass
+
+
+def kill(ident, proc):
+    """End an abandoned launch and return its exit status.
+
+    ``scancel`` on the step id first, because killing the local srun client leaves the ranks it
+    already started on the other nodes running; then SIGTERM, :data:`TERM_GRACE_S`, SIGKILL."""
+    sid = step_id(ident)
+    if sid is not None:
+        try:
+            subprocess.call(["scancel", sid], timeout=SLURM_CALL_S)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    signal_group(proc, signal.SIGTERM)
+    deadline = time.time() + TERM_GRACE_S
+    while proc.poll() is None and time.time() < deadline:
+        time.sleep(POLL_S)
+    if proc.poll() is None:
+        signal_group(proc, signal.SIGKILL)
+    return proc.wait()
 
 
 def stale(base, now):
@@ -78,20 +144,20 @@ def stale(base, now):
 
 
 def step(directory, running):
-    """One pass: start new requests, reap finished or abandoned steps."""
+    """One pass: start new requests, reap finished or abandoned steps, publish the heartbeat."""
     for name in sorted(os.listdir(directory)):
         if name.endswith(".req"):
             ident = claim(directory, name)
             proc = start(directory, ident) if ident is not None else None
             if proc is not None:
                 running[ident] = proc
+    touch(os.path.join(directory, ALIVE))
     now = time.time()
     for ident, proc in list(running.items()):
         base = os.path.join(directory, ident)
         rc = proc.poll()
         if rc is None and stale(base, now):
-            os.killpg(proc.pid, signal.SIGKILL)
-            rc = proc.wait()
+            rc = kill(ident, proc)
         if rc is not None:
             finish(base, 128 - rc if rc < 0 else rc)
             del running[ident]
@@ -107,8 +173,13 @@ def serve(directory, parent):
             step(directory, running)
             time.sleep(POLL_S)
     finally:
-        for proc in running.values():
-            os.killpg(proc.pid, signal.SIGKILL)
+        for ident, proc in running.items():
+            kill(ident, proc)
+        # A judge still waiting must see the relay is gone rather than sit out its launch timeout.
+        try:
+            os.remove(os.path.join(directory, ALIVE))
+        except OSError:
+            pass
 
 
 def main(argv):
