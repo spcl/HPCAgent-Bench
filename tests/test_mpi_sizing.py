@@ -54,7 +54,7 @@ def test_weak_does_not_mutate_the_caller_dict() -> None:
     assert params == {"N": 100}
 
 
-# The textbook contract: P = m**k, every axis symbol multiplied by the integer m, exactly
+# At P = m**k every axis symbol is multiplied by the integer m, exactly
 @pytest.mark.parametrize(
     "ranks,work_exponent,m,expected_n",
     [
@@ -73,18 +73,99 @@ def test_weak_at_p_equal_m_to_the_k_multiplies_each_axis_symbol_by_m(ranks, work
 
 
 @pytest.mark.parametrize(
-    "ranks,work_exponent",
+    "ranks,work_exponent,expected_n",
     [
-        (8, 2),  # 8 is not a perfect square (2**2=4, 3**2=9)
-        (4, 3),  # 4 is not a perfect cube (1**3=1, 2**3=8)
+        (8, 2, 283),  # 100 * 8**0.5 = 282.84... -> 283 (8 is not a perfect square)
+        (4, 3, 159),  # 100 * 4**(1/3) = 158.74... -> 159 (4 is not a perfect cube)
     ],
     ids=["not-a-perfect-square", "not-a-perfect-cube"],
 )
-def test_weak_at_a_non_perfect_kth_power_p_raises_valueerror_naming_p_and_k(ranks, work_exponent) -> None:
-    """A rank count that is not P = m**k for an integer m >= 1 is REFUSED, not sized by rounding --
-    the textbook weak-scaling definition has no growth factor to fall back on."""
-    with pytest.raises(ValueError, match=f"R={ranks} is not a perfect {work_exponent}-th power"):
-        mpi_sizing.weak({"N": 100}, ["N"], ranks=ranks, work_exponent=work_exponent)
+def test_weak_at_a_non_perfect_kth_power_p_rounds_each_axis_symbol(ranks, work_exponent, expected_n) -> None:
+    """A rank count that is not P = m**k is still sized (user decision 2026-09-22, pending a paper
+    edit): each axis symbol is scaled by the real ``P**(1/k)`` and rounded to the nearest integer."""
+    out = mpi_sizing.weak({"N": 100}, ["N"], ranks=ranks, work_exponent=work_exponent)
+    assert out == {"N": expected_n}
+
+
+def test_weak_rounding_never_drops_a_size_below_one() -> None:
+    assert mpi_sizing.weak({"N": 1}, ["N"], ranks=2, work_exponent=3) == {"N": 1}  # 1 * 2**(1/3) -> 1
+
+
+def test_work_ratio_is_one_for_strong_scaling() -> None:
+    """Strong scaling's base and sized maps are identical, so every per-symbol ratio is 1."""
+    params = {"N": 645, "TSTEPS": 10}
+    assert mpi_sizing.work_ratio(params, mpi_sizing.strong(params), ["N"], work_exponent=1) == 1.0
+
+
+def test_work_ratio_is_one_with_no_declared_axis() -> None:
+    """No axis_symbols present in the params => nothing to account for => ratio 1.0."""
+    assert mpi_sizing.work_ratio({"N": 100}, {"N": 400}, [], work_exponent=1) == 1.0
+    assert mpi_sizing.work_ratio({"N": 100}, {"N": 400}, ["M"], work_exponent=1) == 1.0
+
+
+def test_work_ratio_matches_the_rank_count_when_growth_is_exact() -> None:
+    """A single decomposition axis (d=k=1) grows by exactly ``ranks`` with no rounding drift, so
+    the realized work ratio equals the rank count exactly."""
+    base = {"N": 512}
+    grown = mpi_sizing.weak(base, ["N"], ranks=4, work_exponent=1)
+    assert grown == {"N": 2048}
+    assert mpi_sizing.work_ratio(base, grown, ["N"], work_exponent=1) == pytest.approx(4.0)
+
+
+def test_work_ratio_is_the_product_for_two_symmetric_axes() -> None:
+    """d=2, k=2 (e.g. mat_scaled_add's M*N work): the ratio is the plain product of the two
+    per-axis ratios (k/d = 1), exact when both axes grow by the same clean factor."""
+    base = {"M": 100, "N": 200}
+    grown = mpi_sizing.weak(base, ["M", "N"], ranks=4, work_exponent=2)  # factor = 4**0.5 = 2
+    assert grown == {"M": 200, "N": 400}
+    assert mpi_sizing.work_ratio(base, grown, ["M", "N"], work_exponent=2) == pytest.approx(4.0)
+
+
+def test_work_ratio_drifts_from_the_rank_count_under_rounding() -> None:
+    """A rank count whose per-symbol growth is not a clean integer makes the REALIZED work ratio
+    (from the actual rounded sizes) differ a little from the continuous rank count."""
+    base = {"N": 100}
+    grown = mpi_sizing.weak(base, ["N"], ranks=8, work_exponent=2)  # 100 * 8**0.5 = 282.84 -> 283
+    assert grown == {"N": 283}
+    ratio = mpi_sizing.work_ratio(base, grown, ["N"], work_exponent=2)
+    assert ratio == pytest.approx((283 / 100) ** 2)
+    assert ratio != pytest.approx(8.0)  # NOT the idealized continuous ratio
+
+
+def test_work_ratio_of_a_rounded_two_symbol_tuple() -> None:
+    """d=2, k=2 (mat_scaled_add's M*N) at P=2, not a perfect square: each symbol grows by 2**0.5
+    and rounds on its own, and the realized ratio is the product of the two rounded ratios."""
+    base = {"M": 100, "N": 200}
+    grown = mpi_sizing.weak(base, ["M", "N"], ranks=2, work_exponent=2)
+    assert grown == {"M": 141, "N": 283}
+    assert mpi_sizing.work_ratio(base, grown, ["M", "N"], work_exponent=2) == pytest.approx(1.41 * 1.415)
+
+
+def test_work_ratio_ignores_a_symbol_absent_from_either_map() -> None:
+    """Only axis symbols present in BOTH maps count toward d; an absent one is dropped, not a KeyError."""
+    base = {"N": 100}
+    grown = {"N": 400}
+    assert mpi_sizing.work_ratio(base, grown, ["N", "M"], work_exponent=1) == pytest.approx(4.0)
+
+
+def test_work_ratio_rejects_a_nonpositive_base_size() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        mpi_sizing.work_ratio({"N": 0}, {"N": 4}, ["N"], work_exponent=1)
+
+
+# weak_rounding_note: the per-P disclosure of a rounded weak size
+def test_weak_rounding_note_is_none_at_an_exact_kth_power() -> None:
+    base = {"N": 100}
+    assert mpi_sizing.weak_rounding_note(base, mpi_sizing.weak(base, ["N"], 8, 3), ["N"], 8, 3) is None
+
+
+def test_weak_rounding_note_names_p_k_m_sizes_and_the_realized_work_ratio() -> None:
+    base = {"N": 100, "T": 5}
+    grown = mpi_sizing.weak(base, ["N"], ranks=4, work_exponent=3)  # 100 * 4**(1/3) = 158.74 -> 159
+    note = mpi_sizing.weak_rounding_note(base, grown, ["N"], 4, 3)
+    assert note == (
+        "P=4: k=3, m=1.587 -> sizes {'N': 159}, work ratio 4.02 (not a perfect k-th power; rounded)"
+    )  # (159/100)**3 = 4.0197
 
 
 # A manifest without work_exponent is strong-only: weak refuses it, never defaults k to 1
@@ -146,11 +227,9 @@ def test_sized_params_weak_multiplies_axis_by_the_exact_kth_root() -> None:
     assert out == {"N": 200}  # 4 == 2**2, m=2
 
 
-def test_sized_params_weak_propagates_the_non_power_refusal() -> None:
-    """The scorer's single call site sees the same ValueError weak() raises, not a silent
-    rounding fallback -- this is what lets a P-sweep skip the point with a recorded reason."""
-    with pytest.raises(ValueError, match="R=8"):
-        mpi_sizing.sized_params({"N": 100}, "weak", ["N"], 8, work_exponent=2)
+def test_sized_params_weak_rounds_a_non_power_p() -> None:
+    """The scorer's single call site sizes a non-power weak P by rounding, same as weak()."""
+    assert mpi_sizing.sized_params({"N": 100}, "weak", ["N"], 8, work_exponent=2) == {"N": 283}
 
 
 def test_sized_params_unknown_mode_raises() -> None:

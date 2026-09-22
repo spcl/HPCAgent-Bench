@@ -1,14 +1,14 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Multi-node scaling scores (paper sec:distributed), the textbook definitions: achieved speed-up
-sigma_i(P)=T_i(1)/T_i(P); strong efficiency eta(P) = T_i(1) / (P * T_i(P)) (Amdahl); weak
-efficiency eta(P) = T_i(1) / T_i(P) (Gustafson), UNCAPPED so super-linear scaling is preserved.
-Pure arithmetic, no cluster.
+"""Multi-node scaling scores (paper sec:distributed): achieved speed-up sigma_i(P)=T_i(1)/T_i(P);
+strong efficiency eta(P) = T_i(1) / (P * T_i(P)) (Amdahl); weak efficiency
+eta(P) = r * T_i(1) / (P * T_i(P)) (Gustafson), with r = W(N_P)/W(N_1) the realized work ratio --
+exactly P at P = m**k, so eta = T_i(1)/T_i(P) there -- UNCAPPED so super-linear scaling is
+preserved. Pure arithmetic, no cluster.
 
 ``T_i(1)`` is ONE number per curve: the single-rank anchor timed once on the BASE (never grown)
-problem. There is no work-ratio correction to fold in: ``mpi_sizing.weak`` grows the problem by
-EXACTLY ``P`` (``P = m**k``, an integer, no rounding), so the mode string alone -- via
-:func:`ideal_speedup` -- picks the right formula.
+problem. The mode string picks the formula (:func:`ideal_speedup`); a weak P that was not a perfect
+k-th power was ROUNDED by ``mpi_sizing.weak`` and carries its realized r.
 """
 
 import math
@@ -29,6 +29,21 @@ def test_ideal_speedup_weak_is_always_one() -> None:
     P-times-larger problem growing by exactly P (mpi_sizing.weak) is what makes this exact."""
     assert ideal_speedup(1, "weak") == 1.0
     assert ideal_speedup(8, "weak") == 1.0
+
+
+def test_ideal_speedup_weak_divides_p_by_the_realized_work_ratio() -> None:
+    """A rounded weak size's realized ratio r moves sigma* = P / r off 1; r = P gives 1 exactly."""
+    assert ideal_speedup(4, "weak", work_ratio=4.0) == 1.0
+    assert ideal_speedup(4, "weak", work_ratio=3.8) == pytest.approx(4 / 3.8)
+
+
+def test_ideal_speedup_strong_ignores_a_work_ratio() -> None:
+    assert ideal_speedup(4, "strong", work_ratio=3.8) == 4.0
+
+
+def test_ideal_speedup_weak_rejects_a_nonpositive_work_ratio() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        ideal_speedup(4, "weak", work_ratio=0.0)
 
 
 def test_ideal_speedup_defaults_to_strong() -> None:
@@ -70,6 +85,15 @@ def test_point_weak_efficiency_equals_the_achieved_speedup_directly() -> None:
     p = scaling_point("weak", 8, single_rank_ns=3000, ranked_ns=1000)
     assert p.achieved_speedup == pytest.approx(3.0)
     assert p.efficiency == pytest.approx(p.achieved_speedup)
+
+
+def test_point_weak_rounded_size_folds_the_work_ratio_into_eta() -> None:
+    """eta = r * T_i(1) / (P * T_i(P)): a rounded weak P with r = 3.8 at P = 4 is not scored as if
+    its problem had grown by exactly 4."""
+    p = scaling_point("weak", 4, single_rank_ns=4000, ranked_ns=4000, work_ratio=3.8)
+    assert p.achieved_speedup == 1.0
+    assert p.ideal_speedup == pytest.approx(4 / 3.8)
+    assert p.efficiency == pytest.approx(3.8 * 4000 / (4 * 4000))
 
 
 def test_point_strong_efficiency_divides_the_achieved_speedup_by_p() -> None:
@@ -156,3 +180,9 @@ def test_score_weak_and_strong_diverge_on_the_same_raw_numbers() -> None:
     weak = scaling_score("k", "weak", single_rank_ns=1000, measured_ns={4: 1000})
     assert strong.points[0].efficiency == pytest.approx(0.25)
     assert weak.points[0].efficiency == pytest.approx(1.0)
+
+
+def test_score_weak_uses_the_per_p_work_ratio_and_exact_growth_for_an_absent_p() -> None:
+    """A P in work_ratio is corrected by its realized r; a P absent from it grew exactly (r = P)."""
+    s = scaling_score("k", "weak", single_rank_ns=1000, measured_ns={2: 1000, 4: 1000}, work_ratio={2: 1.9})
+    assert [p.efficiency for p in s.points] == [pytest.approx(1.9 / 2), 1.0]
