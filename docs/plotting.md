@@ -210,7 +210,7 @@ sets of series when they draw the same ones. Pinned by `tests/test_plot_score_ch
 **6. A kernel the arm never delivered carries a cross.** It enters the paired ratio at
 `population.NOT_DELIVERED` and its tokens still count, so it is a placeholder and not a measurement.
 The per-kernel cloud draws it as a small cross in the arm's own colour instead of a dot, and the key
-names it `style.NOT_DELIVERED_LABEL` (`No Verified Answer (Scored 1x)`). Hollow alone will not do --
+names it `style.NOT_DELIVERED_LABEL` (`No Verified Answer (Drawn at 1x)`). Hollow alone will not do --
 hollow is this repo's spelling for the control. Pinned by `tests/test_plot_score_change.py`'s
 `test_an_undelivered_kernel_draws_a_cross_and_the_legend_names_it`, and by `tests/test_style_save.py`'s
 `test_a_point_mark_that_never_delivered_an_answer_carries_a_cross_on_the_model_shape` for the shared
