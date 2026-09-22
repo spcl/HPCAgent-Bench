@@ -25,7 +25,7 @@ parameters:
     model_dim: 2048
     num_experts: 32
   XL:
-    num_tokens: 393216
+    num_tokens: 389120
     model_dim: 4096
     num_experts: 64
   fuzzed:

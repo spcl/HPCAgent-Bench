@@ -27,7 +27,7 @@ parameters:
     hidden_size: 4096
     output_size: 4096
   XL:
-    batch_size: 262144
+    batch_size: 458752
     input_size: 8192
     hidden_size: 8192
     output_size: 8192
