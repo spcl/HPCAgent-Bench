@@ -1940,8 +1940,8 @@ class BenchSpec:
         # means partitioning + rebuilding the coupled indptr/indices/data arrays, which the
         # dense ownership descriptor does not express, so sparse kernels run multi-node only
         # replicated (omit ``mpi:``).
-        # block_of, not nested_block_of: ``mpi.replicatable`` is a LIST of array names, the one
-        # entry in the block that is not itself a mapping.
+        # A flat block, not a block of mappings: ``mpi.replicatable`` is a LIST of array names,
+        # the one entry in the block that is not itself a mapping.
         mpi_blk = block_of(ext.get("mpi", bench.get("mpi")), "mpi", source)
         if mpi_blk and sparse_layouts:
             raise ValueError(
