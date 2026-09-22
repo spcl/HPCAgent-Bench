@@ -97,6 +97,26 @@ def test_build_commands_device_routes_driver_and_link_to_gpu_compiler() -> None:
     assert _driver(cmds[-1]) == "nvcc" and "-shared" not in " ".join(cmds[-1])  # link exe with nvcc
 
 
+def test_build_commands_kernel_lib_links_the_kernel_objects_alone_as_a_pic_shared_library() -> None:
+    """The sharded rank driver dlopens this next to an mpi4py that owns MPI_Init: a second main
+    or non-PIC objects would make it unloadable."""
+    kernels = [("cpp", Path("k.cpp")), ("hip", Path("k.hip"))]
+    cmds = build_mpi_executable_commands(
+        kernels, Path("d.hip"), Path("bench"), driver_lang="hip", kernel_lib=Path("bench.kernel.so")
+    )
+    compiles, exe_link, lib_link = cmds[:-2], cmds[-2], cmds[-1]
+    assert all(c[-1] == "-fPIC" for c in compiles)
+    assert lib_link[1] == "-shared" and lib_link[lib_link.index("-o") + 1] == "bench.kernel.so"
+    assert "k.cpp.o" in " ".join(lib_link) and "k.hip.o" in " ".join(lib_link)
+    assert "d.hip.o" not in " ".join(lib_link) and "d.hip.o" in " ".join(exe_link)
+
+
+def test_build_commands_without_kernel_lib_are_unchanged() -> None:
+    cmds = build_mpi_executable_commands([("c", Path("k.c"))], Path("d.c"), Path("bench"))
+    assert len(cmds) == 3 and not any("-shared" in c for c in cmds)
+    assert all(c[-1] != "-fPIC" for c in cmds[:2])  # no PIC appended after the matrix flags
+
+
 def test_mpi_wrapper_flags_extracts_include_and_link() -> None:
     # MPICH's `-show` carries -I<include> (compile) and -L/-l<lib> (link); kept so nvcc/hipcc can build MPI code.
     from hpcagent_bench.languages import mpi_wrapper_flags
