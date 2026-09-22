@@ -457,7 +457,10 @@ def fold_renamed_arms(frame: "pd.DataFrame") -> "pd.DataFrame":
     latest run per kernel (``population.latest_runs``) picks between them."""
     if frame.empty or "arm" not in frame.columns:
         return frame
-    return frame.assign(arm=frame["arm"].astype(str).map(renamed_arm))
+    # pandas's default "str" dtype keeps a missing cell as NaN straight through .astype(str)
+    # (PDEP-14), so a blank/adhoc arm-less row stays a float and renamed_arm's .startswith crashes
+    # on it -- the same gap fill_arm_identity's language/packet columns settle with the same call.
+    return frame.assign(arm=frame["arm"].astype(str).fillna("").map(renamed_arm))
 
 
 #: What a launcher appends to re-run an arm (``CLEAN=1``, and every owed rerun). It names no
