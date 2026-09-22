@@ -29,8 +29,6 @@ The fix has two independently-testable halves:
    own real-cupy pin.
 """
 
-from __future__ import annotations
-
 import ctypes
 import pathlib
 import shutil
