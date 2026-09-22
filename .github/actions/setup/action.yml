@@ -247,7 +247,10 @@ runs:
         set -euo pipefail
         git clone --depth 1 --recurse-submodules --shallow-submodules --branch extended \
           https://github.com/spcl/dace "${RUNNER_TEMP}/dace"
-        pip install -e "${RUNNER_TEMP}/dace"
+        # `python -m pip`, never a bare `pip`: the pip that belongs to the interpreter setup-python
+        # provisioned. In the mpi-sealed job's bare ubuntu:24.04 container there was no `pip` on PATH
+        # at all and this line died with exit 127 before dace was installed.
+        python -m pip install -e "${RUNNER_TEMP}/dace"
 
     - name: Base Python deps (translators + the frameworks every phase shares)
       shell: bash
