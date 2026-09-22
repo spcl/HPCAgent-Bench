@@ -78,7 +78,6 @@ import argparse
 import dataclasses
 import math
 import pathlib
-import statistics
 from collections.abc import Sequence
 
 import pandas as pd
@@ -148,7 +147,9 @@ def geomean_gsd(cells: Sequence[float]) -> tuple[float, float]:
     g = positive[0] if len(positive) == 1 else summary.geomean(positive)
     if len(positive) < 2:
         return g, 1.0
-    return g, math.exp(statistics.stdev(math.log(c) for c in positive))
+    from scipy.stats import gstd  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
+
+    return g, float(gstd(positive, ddof=1))
 
 
 # --------------------------------------------------------------------------------------------

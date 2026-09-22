@@ -1,0 +1,97 @@
+enroot_srun: comm hooks off (INFERENCE_NODES=unset)
+enroot_srun: forwarding rank (EDF /users/ybudanaz/x86_64/.edf/hpcagent-bench-judge-mi300-latest.toml)
+.................................................F
+=== FAILED tests/test_ablation_stats.py::test_with_observations_the_cost_half_is_the_task_rows_effective_total (call) ===
+ablation_stats = <module 'ablation_stats' from '/capstor/scratch/cscs/ybudanaz/x86_64/hpcagent-bench-wt/scipy-stats/statistics/ablation_stats.py'>
+tmp_path = PosixPath('/tmp/pytest-of-ybudanaz/pytest-0/test_with_observations_the_cos0')
+
+    def test_with_observations_the_cost_half_is_the_task_rows_effective_total(
+        ablation_stats: ModuleType, tmp_path: pathlib.Path
+    ) -> None:
+        """USER 2026-09-16: every published token number is EFFECTIVE (the task row, final attempt), so the
+        cost ratio here must be too, and it must come from the one shared reduction rather than from the
+        results DB's cumulative billed calls.tokens. Arm ``b`` spent 3x arm ``a`` on the one kernel both
+        solved, and its rerun of that kernel is reduced to the LATEST run, not summed."""
+        db_a, db_b = tmp_path / "a.db", tmp_path / "b.db"
+        seed_db(db_a, [("k1", 1, 2.0)])
+        seed_db(db_b, [("k1", 1, 4.0)])
+        seed_calls(db_a, (("k1", "r1", 1, 999),))
+        seed_calls(db_b, (("k1", "r1", 1, 999),))
+        observations = tmp_path / "observations.db"
+>       seed_observations(
+            observations,
+            [("a", "k1", "r1", 100, 1_000), ("b", "k1", "r2", 900, 1_000), ("b", "k1", "r3", 300, 2_000)],
+        )
+
+tests/test_ablation_stats.py:809: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+path = PosixPath('/tmp/pytest-of-ybudanaz/pytest-0/test_with_observations_the_cos0/observations.db')
+rows = [('a', 'k1', 'r1', 100, 1000), ('b', 'k1', 'r2', 900, 1000), ('b', 'k1', 'r3', 300, 2000)]
+
+    def seed_observations(path: pathlib.Path, rows: list[tuple[str, str, str, int, int]]) -> None:
+        """An extracted observations DB of task rows only: (arm, benchmark, run_id, tokens, ts_ms)."""
+        import sys
+    
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "reproducibility" / "llr40"))
+        import extract_llr40
+    
+        records = []
+        for arm, benchmark, run_id, tokens, ts_ms in rows:
+>           record = dict.fromkeys(extract_llr40.OBSERVATION_FIELDS, "")
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AttributeError: module 'extract_llr40' has no attribute 'OBSERVATION_FIELDS'
+
+tests/test_ablation_stats.py:788: AttributeError
+
+...................... [ 90%]
+........                                                                 [100%]
+=================================== FAILURES ===================================
+____ test_with_observations_the_cost_half_is_the_task_rows_effective_total _____
+
+ablation_stats = <module 'ablation_stats' from '/capstor/scratch/cscs/ybudanaz/x86_64/hpcagent-bench-wt/scipy-stats/statistics/ablation_stats.py'>
+tmp_path = PosixPath('/tmp/pytest-of-ybudanaz/pytest-0/test_with_observations_the_cos0')
+
+    def test_with_observations_the_cost_half_is_the_task_rows_effective_total(
+        ablation_stats: ModuleType, tmp_path: pathlib.Path
+    ) -> None:
+        """USER 2026-09-16: every published token number is EFFECTIVE (the task row, final attempt), so the
+        cost ratio here must be too, and it must come from the one shared reduction rather than from the
+        results DB's cumulative billed calls.tokens. Arm ``b`` spent 3x arm ``a`` on the one kernel both
+        solved, and its rerun of that kernel is reduced to the LATEST run, not summed."""
+        db_a, db_b = tmp_path / "a.db", tmp_path / "b.db"
+        seed_db(db_a, [("k1", 1, 2.0)])
+        seed_db(db_b, [("k1", 1, 4.0)])
+        seed_calls(db_a, (("k1", "r1", 1, 999),))
+        seed_calls(db_b, (("k1", "r1", 1, 999),))
+        observations = tmp_path / "observations.db"
+>       seed_observations(
+            observations,
+            [("a", "k1", "r1", 100, 1_000), ("b", "k1", "r2", 900, 1_000), ("b", "k1", "r3", 300, 2_000)],
+        )
+
+tests/test_ablation_stats.py:809: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+path = PosixPath('/tmp/pytest-of-ybudanaz/pytest-0/test_with_observations_the_cos0/observations.db')
+rows = [('a', 'k1', 'r1', 100, 1000), ('b', 'k1', 'r2', 900, 1000), ('b', 'k1', 'r3', 300, 2000)]
+
+    def seed_observations(path: pathlib.Path, rows: list[tuple[str, str, str, int, int]]) -> None:
+        """An extracted observations DB of task rows only: (arm, benchmark, run_id, tokens, ts_ms)."""
+        import sys
+    
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "reproducibility" / "llr40"))
+        import extract_llr40
+    
+        records = []
+        for arm, benchmark, run_id, tokens, ts_ms in rows:
+>           record = dict.fromkeys(extract_llr40.OBSERVATION_FIELDS, "")
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AttributeError: module 'extract_llr40' has no attribute 'OBSERVATION_FIELDS'
+
+tests/test_ablation_stats.py:788: AttributeError
+=========================== short test summary info ============================
+FAILED tests/test_ablation_stats.py::test_with_observations_the_cost_half_is_the_task_rows_effective_total
+1 failed, 79 passed in 6.08s
+srun: error: nid002672: task 0: Exited with exit code 1
+srun: Terminating StepId=647649.0
