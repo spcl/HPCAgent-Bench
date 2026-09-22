@@ -69,6 +69,14 @@ REGISTRY: Dict[str, DTypeInfo] = {
     "float64": _row("float64", "double", "real(c_double)", "double", "ptr_double", ctypes.c_double),
     "float32": _row("float32", "float", "real(c_float)", "float", "ptr_float", ctypes.c_float),
     "float16": _row("float16", "_Float16", None, "float16", "ptr_float16", None),
+    # bf16, the distributed ML track's element type. No C dialect has a native bfloat16 scalar, so
+    # the C type is the vendor class from ``<hip/hip_bf16.h>`` -- the declaration a kernel_mpi stub
+    # must carry, since ``double *`` over 2-byte elements is a 4x overrun. It is NOT storage-only
+    # like the fp8 pair (``__hip_bfloat16`` carries its own arithmetic), so ``compute`` stays None
+    # and no promote/demote prelude is emitted for it. ctypes has no 2-byte float, hence no
+    # ``ctype``: bf16 arrays are never marshalled by the single-node ctypes path, and
+    # :func:`itemsize` falls back to the bit count in the canonical name (2).
+    "bfloat16": _row("bfloat16", "__hip_bfloat16", None, "bfloat16", "ptr_bfloat16", None),
     "float128": _row("float128", "long double", None, "float128", "ptr_float128", ctypes.c_longdouble),
     # The OCP fp8 pair. No language has a native fp8 scalar, so both are 1-byte
     # STORAGE with a ``compute`` of float32: an element is promoted to float on
@@ -143,6 +151,9 @@ _ALIASES = {
     # fp8 spellings: the Precision-enum value (``fp8_e4m3``) and the ml_dtypes
     # name (``float8_e4m3fn``) both resolve to the canonical registry key, so
     # ``--precision fp8_e4m3`` and ``--precision float8_e4m3`` are the same leg.
+    # ``bf16`` is the Precision-enum value AND the manifest spelling; ``bfloat16`` is the ml_dtypes
+    # / numpy name. Both resolve to the one row, so ``c_type("bf16")`` answers.
+    "bf16": "bfloat16",
     "fp8_e4m3": "float8_e4m3",
     "fp8_e5m2": "float8_e5m2",
     "float8_e4m3fn": "float8_e4m3",
