@@ -9,12 +9,15 @@ floor/fallback rule, and the property that makes the cap a real limit: a kernel 
 failure, not a dead runner.
 """
 
+import concurrent.futures
 import dataclasses
+import multiprocessing
 import os
 import pathlib
 import shutil
 import subprocess
-from typing import Dict
+from collections.abc import Callable
+from typing import Dict, TypeVar
 
 import numpy as np
 import pytest
@@ -166,6 +169,23 @@ def test_an_agents_container_gets_the_stack_the_judge_grades_with() -> None:
     assert line == f'export OMP_STACKSIZE="${{OMP_STACKSIZE:-{flags.thread_stack_bytes() >> 20}M}}"', line
 
 
+#: What :func:`fresh_interpreter` hands back.
+FreshT = TypeVar("FreshT")
+
+
+def fresh_interpreter(fn: Callable[..., FreshT], *args: object) -> FreshT:
+    """``fn(*args)`` run from a newly spawned interpreter.
+
+    libgomp reads ``OMP_STACKSIZE`` and ``OMP_THREAD_LIMIT`` once, when it is first loaded, and a
+    forked grading child inherits whatever runtime its parent already started. A pytest worker that
+    loaded an OpenMP library in-process for an earlier test hands every later child that runtime, so
+    what :func:`native_call.grant_thread_stacks` exports is never read: these tests passed alone and
+    failed in CI's sweep (exit -11 on the stack arrays, an unclamped team). A spawned interpreter
+    has loaded nothing. Not a pool worker: those are daemons, and a daemon may not fork the child."""
+    with concurrent.futures.ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("spawn")) as pool:
+        return pool.submit(fn, *args).result()
+
+
 def vla_kernel(tmp_path) -> pathlib.Path:
     """A python delivery driving :data:`VLA_SOURCE`, built with the host compiler and OpenMP."""
     lib = tmp_path / "libvla.so"
@@ -192,6 +212,13 @@ def vla_kernel(tmp_path) -> pathlib.Path:
 def test_a_kernel_with_large_stack_arrays_on_every_thread_is_graded_not_crashed(tmp_path) -> None:
     """CPF drop-ins keep column scratch on the stack (CloudSC: 20 x 1 MB per thread at XL). Under a
     default 8 MiB stack that was ``exit -11, SIGSEGV``: a correct kernel scored as a crash."""
+    y, samples = fresh_interpreter(call_vla, tmp_path)
+    np.testing.assert_array_equal(y, np.full(4, float(sum(range(8)))))
+    assert samples == 1
+
+
+def call_vla(tmp_path: pathlib.Path) -> tuple[np.ndarray, int]:
+    """:func:`vla_kernel` through the real grading child: its output and how many samples it took."""
     outs, samples, _mem, _ = native_call._call_isolated(
         str(vla_kernel(tmp_path)),
         BINDING,
@@ -203,8 +230,7 @@ def test_a_kernel_with_large_stack_arrays_on_every_thread_is_graded_not_crashed(
         threads=4,
         py_meta=("kern", ("x",), ("y",)),
     )
-    np.testing.assert_array_equal(outs["y"], np.full(4, float(sum(range(8)))))
-    assert len(samples) == 1
+    return outs["y"], len(samples)
 
 
 #: A team sized the way ext_war_unit and edge_laplacian size theirs, but four times the whole
@@ -228,6 +254,9 @@ int team(void) {
 #: is a GiB or two of address space, far past the tiny budget below all the same.
 SMALL_STACK_MB = 16
 
+#: A single thread stack larger than the 0.25 GB cap :func:`call_oversubscribed` arms.
+OVERSIZED_STACK_MB = 512
+
 
 def oversubscribed_kernel(tmp_path) -> pathlib.Path:
     """A python delivery returning the size of the team :data:`OVERSUBSCRIBED_SOURCE` got."""
@@ -245,9 +274,9 @@ def oversubscribed_kernel(tmp_path) -> pathlib.Path:
     return kernel
 
 
-def call_oversubscribed(tmp_path) -> np.ndarray:
+def call_oversubscribed(tmp_path, stack_mb: int = SMALL_STACK_MB) -> np.ndarray:
     """:func:`oversubscribed_kernel` through the real grading child, under a 0.25 GB cap."""
-    with config.overridden("limits.thread_stack_mb", SMALL_STACK_MB):
+    with config.overridden("limits.thread_stack_mb", stack_mb):
         outs, _samples, _mem, _ = native_call._call_isolated(
             str(oversubscribed_kernel(tmp_path)),
             BINDING,
@@ -268,20 +297,33 @@ def test_a_kernel_that_oversubscribes_the_machine_is_clamped_not_crashed(tmp_pat
     """``omp_set_num_threads(4 * ncpu)`` is legal OpenMP. With stacks reserved for the slot's
     ``OMP_NUM_THREADS`` alone, every thread past them failed to map and libgomp exited 1. The child
     reserves one stack per physical core and exports that as ``OMP_THREAD_LIMIT``, so the runtime
-    clamps the team to it and the kernel runs."""
+    clamps the team to it and the kernel runs. The limit is native_call.thread_limit's: the physical
+    cores, or the call's own OMP_NUM_THREADS (``threads=4``) where that is larger -- a 2-core CI
+    runner's team is 4, not 2."""
     cores = flags.physical_cores(set(range(os.cpu_count() or 1)))
-    np.testing.assert_array_equal(call_oversubscribed(tmp_path), [float(cores)])
+    np.testing.assert_array_equal(fresh_interpreter(call_oversubscribed, tmp_path), [float(max(4, cores))])
+
+
+def call_without_stack_reserve(tmp_path: pathlib.Path) -> np.ndarray:
+    """:func:`call_oversubscribed` at :data:`OVERSIZED_STACK_MB` with NO stacks reserved (the shape of the
+    regression). For :func:`fresh_interpreter`, whose interpreter exits after it: the patch goes with it."""
+    native_call.thread_stack_reserve = lambda: 0
+    return call_oversubscribed(tmp_path, stack_mb=OVERSIZED_STACK_MB)
 
 
 @pytest.mark.skipif(not osinfo.IS_LINUX, reason="RLIMIT_DATA and the stack grant are Linux-only")
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="needs the host C compiler with OpenMP")
-def test_a_thread_the_runtime_cannot_create_is_named_as_a_harness_limit(tmp_path, monkeypatch) -> None:
+def test_a_thread_the_runtime_cannot_create_is_named_as_a_harness_limit(tmp_path) -> None:
     """With no stacks reserved (the shape of the regression), the runtime prints "Thread creation
     failed" and exits 1. The parent sees only the exit code; read back from the child's stderr, the
     reason names the harness limit instead of an opaque ``native call crashed (exit 1)``."""
-    monkeypatch.setattr(native_call, "thread_stack_reserve", lambda: 0)
+    # One stack alone past the 0.25 GB cap, so the FIRST worker thread cannot map whatever the
+    # machine's size. At SMALL_STACK_MB the failure needed a team of more than 16 threads, and the
+    # team is clamped to OMP_THREAD_LIMIT -- a 4-thread team on a small CI runner mapped its 16 MB
+    # stacks inside the cap and the call succeeded (DID NOT RAISE).
+    assert native_call.thread_limit() > 1, "the premise needs at least one worker thread past the main one"
     with pytest.raises(RuntimeError) as err:
-        call_oversubscribed(tmp_path)
+        fresh_interpreter(call_without_stack_reserve, tmp_path)
     message = str(err.value)
     assert message.startswith("native call crashed (exit 1)"), message
     assert "Thread creation failed" in message and "harness resource limit" in message, message
