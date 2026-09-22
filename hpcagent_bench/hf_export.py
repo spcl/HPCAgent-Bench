@@ -220,15 +220,17 @@ def push_to_hub(
     config: str = "all",
     token: Optional[str] = None,
     revision: Optional[str] = None,
+    private: Optional[bool] = None,
 ) -> None:
     """Push rows to the HuggingFace Hub as a Dataset config. Requires ``datasets``.
 
     This is the only outward-facing operation in the module; it publishes a public
-    dataset. The CLI/workflow gates it on an explicit ``--push`` + ``HF_TOKEN``.
+    dataset (or a private one when ``private=True``, e.g. while a paper is under
+    double-blind review). The CLI/workflow gates it on an explicit ``--push`` + ``HF_TOKEN``.
     """
     try:
         from datasets import Dataset
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("hub push needs `datasets` (`pip install -r requirements/hf.txt`)") from exc
     ds = Dataset.from_list([r.to_dict() for r in rows])
-    ds.push_to_hub(repo_id, config_name=config, token=token, revision=revision)
+    ds.push_to_hub(repo_id, config_name=config, token=token, revision=revision, private=private)

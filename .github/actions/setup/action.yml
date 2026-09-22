@@ -267,13 +267,15 @@ runs:
         # symbol-propagation failures that the tip had already fixed -- a whole triage spent on
         # dead bugs. Bisect by installing a dace commit locally, not by teaching CI to freeze.
         #
-        # `dace` is deliberately ABSENT from extras here. pyproject's `dace` extra is a direct
-        # git+https reference; asking THIS resolution for it would hand pip a URL that does not
-        # match the checkout's own file:// direct_url, and pip resolves that mismatch by rebuilding
-        # dace from the URL into a WHEEL -- undoing the checkout above and losing tests/corpus
-        # again. Leaving it out is how this step finds dace already satisfied without asking pip
-        # to re-source it, the same way it finds `torch` already satisfied above: by never handing
-        # the resolver a spelling of the requirement that disagrees with what is already installed.
+        # `dace` is deliberately ABSENT from extras here -- pyproject no longer defines a `dace`
+        # extra at all (removed so the published wheel carries no direct-URL Requires-Dist; see
+        # pyproject.toml and README). Even before that removal, asking this resolution for a
+        # git+https spelling of dace would have handed pip a URL that does not match the checkout's
+        # own file:// direct_url, and pip resolves that mismatch by rebuilding dace from the URL
+        # into a WHEEL -- undoing the checkout above and losing tests/corpus again. Leaving it out
+        # is how this step finds dace already satisfied without asking pip to re-source it, the
+        # same way it finds `torch` already satisfied above: by never handing the resolver a
+        # spelling of the requirement that disagrees with what is already installed.
         extras="cpu"
         for extra in ${{ inputs.extras }}; do
           extras="${extras},${extra}"
