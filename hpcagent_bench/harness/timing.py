@@ -4,7 +4,7 @@
 
 A measurement collects repeated candidate and baseline run times; a backend
 reduces those two sample sets to a single credited speed-up ``r(i,j)`` for the
-metric. Three backends, selected by ``measurement.timing_backend``:
+metric. Two backends, selected by ``measurement.timing_backend``:
 
 * ``min_of_k`` -- keep the minimum (best-of-repeat) of each side and divide:
   ``speedup = min(baseline) / min(candidate)``. Simple and adequate when the timed
@@ -14,12 +14,6 @@ metric. Three backends, selected by ``measurement.timing_backend``:
   test in the direction the medians point clears ``measurement.mannwhitney.p``. A
   difference the test cannot see is credited exactly 1.0 with ``significant=False``;
   a significant slow-down is credited below 1.
-* ``paired_geomean`` -- PAIR run k of the candidate with run k of the baseline (both sides ran the
-  same seeded draw, :func:`hpcagent_bench.harness.rep_variation.pooled_seeds`) and take the mean of
-  the log ratios ``l_k = ln(baseline_k / candidate_k)``: ``speedup = exp(mean l_k)``, the geomean of
-  the run ratios. No gate here: the credit test is TASK-level, over every pair of every input
-  (:func:`hpcagent_bench.stats.score_rule.paired_credit`), so the cell discloses ``mean_log``,
-  ``sd_log`` and ``n_pairs`` for it to pool. Lists that are not aligned run-for-run are refused.
 
 Either way the reduced ``native_ns`` and ``baseline_ns`` are the two statistics the
 credit divides: a reader dividing the recorded columns lands on the recorded speed-up
@@ -31,7 +25,6 @@ This module is pure (sample arrays in, a :class:`ReducedTiming` out); it owns no
 sandbox / FFI. The scoring layer feeds it the raw per-repeat samples.
 """
 
-import math
 import os
 import statistics
 import sys
@@ -61,12 +54,15 @@ REDUCTIONS_VARIED: dict[str, str] = {"min_of_k": "mok-v1-varied", "mannwhitney_d
 #: timing rule, tolerance, denominator and credit rule together (MWD-FINAL.md section 1), not
 #: four independent ones. Defined over ``mannwhitney_delta`` only; a pooled ``min_of_k`` reduction
 #: has no stamp of its own and still reads as ``REDUCTIONS_VARIED``'s ``mok-v1-varied``.
-#:
-#: ``pg20-final`` (2026-09-22 USER): the paired-geomean FINAL grade -- 20 paired runs per task dealt
-#: round-robin over its inputs, per-run pairing on the pooled draws, credited by the task-level
-#: t-interval (:func:`hpcagent_bench.stats.score_rule.paired_credit`). Replaces mwd-final for the
-#: final grade; ``mwd-final`` itself stays defined, unchanged, for the rows recorded under it.
-REDUCTIONS_FINAL: dict[str, str] = {"mannwhitney_delta": "mwd-final", "paired_geomean": "pg20-final"}
+REDUCTIONS_FINAL: dict[str, str] = {"mannwhitney_delta": "mwd-final"}
+
+#: mw4x5-final (2026-09-22 USER): the FINAL grade's contract -- m timed inputs (default 4) x n runs
+#: per side (default 5) on mwd-final's pooled draws, each input credited by the one-sided
+#: Mann-Whitney at alpha (default 0.1), the task by the plain geomean of the per-input credits
+#: (:func:`hpcagent_bench.stats.score_rule.final_credit`). Same per-input ARITHMETIC as mwd-final
+#: at a different (m, n, alpha), so a new identity: ``regrade cells --migrate`` stamps it on every
+#: row it writes, and a live mwd-final row (n = 20) is never pooled with one.
+FINAL_GRADE_REDUCTION: str = "mw4x5-final"
 
 #: Residency -> how a sample of it was BRACKETED, as ``grading_protocol`` records it beside
 #: :data:`REDUCTIONS`. The reduction stamp says how samples became a credit; this says what a
@@ -207,7 +203,7 @@ class ReducedTiming:
     ``slots=True``: minted once per TIMED cell (:func:`reduce`), fixed schema -- same
     high-instance rationale as ``CellScore``/``IterationResult``."""
 
-    native_ns: float  # candidate statistic: min (min_of_k), median (mannwhitney_delta), geomean (paired_geomean)
+    native_ns: float  # candidate statistic: the minimum (min_of_k) or the median (mannwhitney_delta)
     baseline_ns: float  # the same statistic of the baseline samples
     speedup: float  # the CREDITED r(i,j)
     backend: str
@@ -217,25 +213,17 @@ class ReducedTiming:
     #: (rep_variation.pooled_seeds) rather than a fresh draw per repeat; None = not pooled. A
     #: non-None value stamps mwd-final (REDUCTIONS_FINAL) instead of the REDUCTIONS_VARIED family.
     pool_size: int | None = None
-    #: ``paired_geomean`` only (None under every other backend): the mean and the sample standard
-    #: deviation of the paired log ratios ``ln(baseline_k / candidate_k)`` and how many pairs they
-    #: cover -- the per-input triple the task-level credit pools exactly
-    #: (:func:`hpcagent_bench.stats.score_rule.pool_log_stats`). ``sd_log`` is 0.0 for one pair.
-    mean_log: float | None = None
-    sd_log: float | None = None
-    n_pairs: int | None = None
+    #: mannwhitney_delta only: the one-sided U-test p the credit was gated on; None when no test ran
+    #: (min_of_k, fewer than two samples a side, or equal medians).
+    p_value: float | None = None
 
     @property
     def reduction(self) -> str:
         """The version stamp of the reduction that produced this credit (:data:`REDUCTIONS` /
-        :data:`REDUCTIONS_VARIED` / :data:`REDUCTIONS_FINAL`). ``paired_geomean`` is defined over a
-        bounded draw pool only, so it has no stamp outside :data:`REDUCTIONS_FINAL`."""
+        :data:`REDUCTIONS_VARIED` / :data:`REDUCTIONS_FINAL`)."""
         if self.pool_size is not None and self.backend in REDUCTIONS_FINAL:
             return REDUCTIONS_FINAL[self.backend]
-        table = REDUCTIONS_VARIED if self.varied else REDUCTIONS
-        if self.backend not in table:
-            raise ValueError(f"timing backend {self.backend!r} has a stamp only over a bounded draw pool (pool_size)")
-        return table[self.backend]
+        return (REDUCTIONS_VARIED if self.varied else REDUCTIONS)[self.backend]
 
 
 def warmup_count() -> int:
@@ -343,67 +331,15 @@ def reduce_mannwhitney_delta(
     ratio = b_ns / a_ns
     # alternative="less": candidate times stochastically smaller (= faster); no rank information is p = 1.
     alternative = "less" if ratio > 1.0 else "greater"
-    if summary.rank_sum_test(a, b, alternative=alternative)[1] >= p:
-        return ReducedTiming(a_ns, b_ns, 1.0, "mannwhitney_delta", significant=False)
-    return ReducedTiming(a_ns, b_ns, ratio, "mannwhitney_delta", significant=True)
-
-
-def reduce_paired_geomean(
-    candidate_ns: Sequence[float],
-    baseline_ns: Sequence[float],
-    *,
-    candidate_draws: Sequence[int] | None = None,
-    baseline_draws: Sequence[int] | None = None,
-) -> ReducedTiming:
-    """Geomean of the PAIRED run ratios: ``speedup = exp(mean_k ln(baseline_k / candidate_k))``.
-
-    Run k of one side is paired with run k of the other, so the two lists must be aligned: equal
-    length, and -- when the draws are given -- the same seeded draw at every index. Anything else is
-    REFUSED with :class:`ValueError` rather than paired by guesswork (e.g. a memoized baseline timed
-    under another seed list). A pair with a non-positive time on either side is not a measurement
-    and is dropped as a PAIR, which keeps every other index aligned.
-
-    Never gated: ``significant`` is always True and ``speedup`` is the raw geomean, because the
-    credit test is task-level, over every input's pairs together
-    (:func:`hpcagent_bench.stats.score_rule.paired_credit`). ``native_ns`` / ``baseline_ns`` are
-    the geometric means of the two sides, so their quotient IS ``speedup`` (mean of log differences
-    = difference of mean logs). No pair at all is speed-up 0.0: nothing was timed."""
-    if len(candidate_ns) != len(baseline_ns):
-        raise ValueError(
-            f"paired_geomean: {len(candidate_ns)} candidate runs vs {len(baseline_ns)} baseline runs -- "
-            "the lists are not aligned run-for-run, refusing to pair them"
-        )
-    if (candidate_draws is None) != (baseline_draws is None):
-        raise ValueError("paired_geomean: draws given for one side only -- cannot check the pairing")
-    if candidate_draws is not None and baseline_draws is not None:
-        if list(candidate_draws) != list(baseline_draws) or len(candidate_draws) != len(candidate_ns):
-            raise ValueError(
-                "paired_geomean: candidate and baseline were timed on different draw sequences "
-                f"({list(candidate_draws)} vs {list(baseline_draws)}) -- refusing to pair them"
-            )
-    pairs = [(float(a), float(b)) for a, b in zip(candidate_ns, baseline_ns, strict=True) if a > 0 and b > 0]
-    if not pairs:
-        return ReducedTiming(0.0, 0.0, 0.0, "paired_geomean", significant=False, n_pairs=0)
-    logs = [math.log(b) - math.log(a) for a, b in pairs]
-    mean_log = math.fsum(logs) / len(logs)
-    sd_log = statistics.stdev(logs) if len(logs) > 1 else 0.0
-    native = math.exp(math.fsum(math.log(a) for a, _ in pairs) / len(pairs))
-    base = math.exp(math.fsum(math.log(b) for _, b in pairs) / len(pairs))
-    return ReducedTiming(
-        native,
-        base,
-        math.exp(mean_log),
-        "paired_geomean",
-        mean_log=mean_log,
-        sd_log=sd_log,
-        n_pairs=len(logs),
-    )
+    pvalue = float(summary.rank_sum_test(a, b, alternative=alternative)[1])
+    if pvalue >= p:
+        return ReducedTiming(a_ns, b_ns, 1.0, "mannwhitney_delta", significant=False, p_value=pvalue)
+    return ReducedTiming(a_ns, b_ns, ratio, "mannwhitney_delta", significant=True, p_value=pvalue)
 
 
 def central_ns(samples: Sequence[float], backend: str | None = None) -> float:
     """The ONE number the active backend reduces a sample list to: the minimum under ``min_of_k``,
-    the median under ``mannwhitney_delta``, the geometric mean under ``paired_geomean`` (whose
-    speed-up is the quotient of the two geomeans). 0.0 when nothing positive was sampled.
+    the median under ``mannwhitney_delta``. 0.0 when nothing positive was sampled.
 
     This is exactly what becomes ``baseline_ns`` in :func:`reduce`, which is why choosing a
     best-of denominator by it and reducing with it cannot disagree: the winner is the candidate
@@ -413,10 +349,7 @@ def central_ns(samples: Sequence[float], backend: str | None = None) -> float:
     positive = _positive(samples)
     if not positive:
         return 0.0
-    chosen = active_backend(backend)
-    if chosen == "paired_geomean":
-        return math.exp(math.fsum(math.log(s) for s in positive) / len(positive))
-    return statistics.median(positive) if chosen == "mannwhitney_delta" else min(positive)
+    return statistics.median(positive) if active_backend(backend) == "mannwhitney_delta" else min(positive)
 
 
 #: The backend the UNRECORDED local route (/score) reduces with. Best-of-k over few repeats:
@@ -433,15 +366,9 @@ def reduce(
     backend: str | None = None,
     varied: bool = False,
     pool_size: int | None = None,
-    candidate_draws: Sequence[int] | None = None,
-    baseline_draws: Sequence[int] | None = None,
 ) -> ReducedTiming:
     """Reduce paired samples to a credited speed-up via the configured backend
     (``measurement.timing_backend``; overridable per call via ``backend``).
-
-    ``candidate_draws`` / ``baseline_draws`` are the seeded draws each side's timed runs ran on,
-    index for index; only ``paired_geomean`` reads them (to refuse a misaligned pairing), and it is
-    refused outright without ``pool_size`` -- its stamp exists over the bounded pool only.
 
     ``varied=True`` stamps the result under :data:`REDUCTIONS_VARIED` -- pass it when the
     samples came from repeats run on varied inputs (:mod:`rep_variation`), so the recorded row
@@ -450,13 +377,7 @@ def reduce(
     stamps :data:`REDUCTIONS_FINAL` (mwd-final) instead -- pass it only when the repeats drew
     from a pool of that size, never for a fully-distinct-draw ``mwd-v3`` measurement."""
     chosen = active_backend(backend)
-    if chosen == "paired_geomean":
-        if pool_size is None:
-            raise ValueError("timing_backend='paired_geomean' needs the bounded draw pool (pool_size); refusing")
-        reduced = reduce_paired_geomean(
-            candidate_ns, baseline_ns, candidate_draws=candidate_draws, baseline_draws=baseline_draws
-        )
-    elif chosen == "mannwhitney_delta":
+    if chosen == "mannwhitney_delta":
         reduced = reduce_mannwhitney_delta(
             candidate_ns, baseline_ns, p=config.get_float("measurement.mannwhitney.p", 0.1)
         )
