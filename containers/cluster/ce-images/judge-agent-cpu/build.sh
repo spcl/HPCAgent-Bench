@@ -7,7 +7,7 @@
 #   BUILD_TARGETS=agent .../build.sh
 #
 # Overrides: BUILD_TARGETS, OUTPUT_SQSH (single target only), BASE_IMAGE, DACE_COMMIT, CE_DIR,
-# BASE_CACHE, EXTRA_BUILD_ARGS (bare KEY=VALUE pairs, e.g. "GCC_MAJOR=13").
+# BASE_CACHE, EXTRA_BUILD_ARGS (bare KEY=VALUE pairs, e.g. "GCC_PPA_VERSION=<newer snapshot>").
 set -euo pipefail
 
 # Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing

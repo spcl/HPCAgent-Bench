@@ -9,8 +9,9 @@
 # `judge` is `FROM agent` plus the library.
 #
 # LIGHTWEIGHT means minutes, not hours: every compiler and numerical library is a BINARY package.
-#   compilers  gcc/g++/gfortran ${GCC_MAJOR} (Ubuntu 24.04) and clang/flang ${LLVM_MAJOR} with Polly
-#              (apt.llvm.org, the same LLVM 22.1.x judge-agent-amd builds with spack). HOST OpenMP only.
+#   compilers  gcc/g++/gfortran 16 (a pinned snapshot from the ubuntu-toolchain-r PPA: the major
+#              judge-agent-amd builds with spack) and clang/flang ${LLVM_MAJOR} with Polly (apt.llvm.org,
+#              the same LLVM 22.1.x judge-agent-amd builds). HOST OpenMP only.
 #   numerics   OpenBLAS (openmp flavour) + LAPACKE, BLIS, FFTW, ScaLAPACK, HDF5, SuiteSparse,
 #              SuperLU, METIS, Scotch, ARPACK, MUMPS (sequential), GSL, TBB, Eigen, mimalloc
 #   MPI        the distro MPICH (single-node grading; it is not GPU-aware and nothing here needs it)
@@ -18,8 +19,8 @@
 #   absent     ROCm, CUDA, GPU libraries, spack, GPU-aware MPI, PETSc/SLEPc/hypre/MAGMA and the
 #              other distributed solvers, NVHPC, ppcg (GPU-only), cupy, triton
 #
-# The CPU reference numbers this image grades are NOT comparable with judge-agent-amd's: a different
-# gcc (${GCC_MAJOR} here, 16 there) produces different baselines. Pick one image per campaign.
+# The CPU baselines are gcc 16's, the major judge-agent-amd grades with -- but a pre-release snapshot
+# against its 16.2.0 release, on another machine: compare within one image, not across the two.
 #
 # Pinned by digest: ubuntu:24.04's multi-arch index, so each architecture resolves its own manifest.
 ARG BASE_IMAGE=docker.io/library/ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
@@ -39,9 +40,15 @@ LABEL org.opencontainers.image.title="hpcagent-bench-judge-agent-cpu" \
 ARG DEBIAN_FRONTEND=noninteractive
 # The build platform's architecture, set by podman; only likwid and msr-tools (x86) depend on it.
 ARG TARGETARCH
-# Ubuntu 24.04's default gcc 13 is skipped on purpose: judge-agent-amd records its auto-vectorizer
-# mislowering a masked select (zeros in the upper half of each vector). 14 is the newest in noble.
-ARG GCC_MAJOR=14
+# gcc 16, the major beverin grades with, as the ubuntu-toolchain-r PPA's binary snapshot -- the only
+# gcc 16 packaged for noble. Pinned to the exact package version, so a PPA that moves on fails the
+# build instead of quietly changing the compiler; bump GCC_PPA_VERSION on purpose. The distro gcc 13
+# (build-essential) stays for Pluto's clang 17 only: judge-agent-amd records its auto-vectorizer
+# mislowering a masked select, so no bare name may resolve to it.
+ARG GCC_MAJOR=16
+ARG GCC_PPA_VERSION=16-20260315-1ubuntu1~24~ppa1
+# The PPA's signing key (Launchpad, rsa4096, 2024-05-02), fetched by fingerprint and checked.
+ARG GCC_PPA_KEY=C8EC952E2A0E1FBDC5090F6A2C277A0A352154E5
 ARG LLVM_MAJOR=22
 ARG PYTHON_REQUIREMENTS=requirements/cpu-image.txt
 
@@ -103,7 +110,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       python3 python3-venv python3-dev python3-pip \
-      build-essential "gcc-${GCC_MAJOR}" "g++-${GCC_MAJOR}" "gfortran-${GCC_MAJOR}" \
+      build-essential \
       gdb valgrind heaptrack strace ltrace util-linux hwloc numactl binutils patch \
       curl wget openssh-client gnupg lsb-release ripgrep fd-find jq less tree htop \
       unzip vim nano file bzip2 xz-utils zstd diffutils gzip gawk \
@@ -127,11 +134,6 @@ RUN set -eux; \
       if [ -x "${tool_bin}" ]; then ln -sf "${tool_bin}" /usr/local/bin/perf; fi; \
     done; \
     rm -rf /var/lib/apt/lists/*; \
-    for tool in gcc g++ gfortran cpp gcov gcc-ar gcc-nm gcc-ranlib; do \
-      ln -sf "/usr/bin/${tool}-${GCC_MAJOR}" "/usr/local/bin/${tool}"; \
-    done; \
-    ln -sf "/usr/bin/gcc-${GCC_MAJOR}" /usr/local/bin/cc; \
-    ln -sf "/usr/bin/g++-${GCC_MAJOR}" /usr/local/bin/c++; \
     command -v perf; \
     if dpkg -l | grep -qE '^ii +(libopenmpi|openmpi-bin)'; then \
       echo "Open MPI was pulled in beside MPICH; find the -mpi- package that did it" >&2; exit 1; \
@@ -140,6 +142,37 @@ RUN set -eux; \
       *mpich*) ;; \
       *) echo "mpicc is $(readlink -f "$(command -v mpicc)"), not MPICH" >&2; exit 1;; \
     esac
+
+# ---------------------------------------------------------------------------------------------
+# 1b. gcc 16 from the ubuntu-toolchain-r PPA, pinned to one package version, bare names onto it.
+#
+# The PPA source is REMOVED again once gcc is in: every later apt step resolves against noble and
+# apt.llvm.org alone, so nothing else in the image quietly comes from a snapshot archive. gcc 16's
+# runtime libraries (libstdc++6, libgomp1, libgfortran5) do come from it, as its packages require.
+RUN set -eux; \
+    curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${GCC_PPA_KEY}" -o /tmp/ppa.asc; \
+    got="$(gpg --show-keys --with-colons /tmp/ppa.asc | awk -F: '/^fpr/ {print $10; exit}')"; \
+    [ "${got}" = "${GCC_PPA_KEY}" ] || { echo "toolchain PPA key is ${got}, want ${GCC_PPA_KEY}" >&2; exit 1; }; \
+    gpg --dearmor < /tmp/ppa.asc > /etc/apt/trusted.gpg.d/ubuntu-toolchain-r.gpg; \
+    rm -f /tmp/ppa.asc; \
+    codename="$(. /etc/os-release; echo "${VERSION_CODENAME}")"; \
+    echo "deb https://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu ${codename} main" \
+      > /etc/apt/sources.list.d/ubuntu-toolchain-r.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      "gcc-${GCC_MAJOR}=${GCC_PPA_VERSION}" "g++-${GCC_MAJOR}=${GCC_PPA_VERSION}" \
+      "gfortran-${GCC_MAJOR}=${GCC_PPA_VERSION}" "cpp-${GCC_MAJOR}=${GCC_PPA_VERSION}"; \
+    rm -f /etc/apt/sources.list.d/ubuntu-toolchain-r.list; \
+    rm -rf /var/lib/apt/lists/*; \
+    for tool in gcc g++ gfortran cpp gcov gcc-ar gcc-nm gcc-ranlib; do \
+      ln -sf "/usr/bin/${tool}-${GCC_MAJOR}" "/usr/local/bin/${tool}"; \
+    done; \
+    ln -sf "/usr/bin/gcc-${GCC_MAJOR}" /usr/local/bin/cc; \
+    ln -sf "/usr/bin/g++-${GCC_MAJOR}" /usr/local/bin/c++; \
+    for pkg in "gcc-${GCC_MAJOR}" "g++-${GCC_MAJOR}" "gfortran-${GCC_MAJOR}"; do \
+      [ "$(dpkg-query -W -f='${Version}' "${pkg}")" = "${GCC_PPA_VERSION}" ] \
+        || { echo "${pkg} is not ${GCC_PPA_VERSION}" >&2; exit 1; }; \
+    done
 
 # ---------------------------------------------------------------------------------------------
 # 2. clang, flang and libomp from apt.llvm.org -- binary packages of the LLVM release judge-agent-amd
@@ -196,7 +229,9 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------------------------
 # 3. The source-built pieces: tblis and HPTT from the repo's scripts, and Pluto (polycc) against the
 # distro clang 17 its recipe is verified with (judge-agent-amd step 10). /opt/pluto is KEPT: polycc
-# bakes build-tree paths that `make install` does not relocate.
+# bakes build-tree paths that `make install` does not relocate. clang 17 is pointed at gcc 13's
+# libstdc++, the pairing that recipe was verified with: left alone it takes the NEWEST installed gcc,
+# 16, whose headers a clang that old is not guaranteed to parse.
 COPY containers/build-hptt.sh /build-hptt.sh
 COPY containers/build-tblis.sh /build-tblis.sh
 ARG TBLIS_REF=v1.3.0
@@ -225,8 +260,9 @@ RUN set -eux; \
     gitretry -C /opt/pluto submodule update --init --recursive; \
     cd /opt/pluto; \
     ./autogen.sh; \
+    gcc13="--gcc-install-dir=/usr/lib/gcc/$(uname -m)-linux-gnu/13"; \
     ./configure --with-clang-prefix="/usr/lib/llvm-${PLUTO_CLANG_MAJOR}" \
-      CC="clang-${PLUTO_CLANG_MAJOR}" CXX="clang++-${PLUTO_CLANG_MAJOR}" \
+      CC="clang-${PLUTO_CLANG_MAJOR} ${gcc13}" CXX="clang++-${PLUTO_CLANG_MAJOR} ${gcc13}" \
       CXXFLAGS='-std=c++17 -include cstdint'; \
     make -j"$(nproc)"; \
     make install; \
