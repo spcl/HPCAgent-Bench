@@ -61,10 +61,11 @@ RELAY_ALIVE = "relay.alive"
 #: Lustre, where an mtime takes its time to reach the other node.
 HEARTBEAT_S = 120.0
 
-#: Slack over ``mpi.launch_timeout_s`` before the judge stops waiting for the relay's rc file: the
-#: step's own ``--time`` already ends the launch, so anything past it is a relay that will not
-#: answer.
-RC_WAIT_SLACK_S = 60.0
+#: Slack over ``mpi.launch_timeout_s`` before the judge stops waiting for the relay's rc file.
+#: The step's own ``--time`` is the timeout rounded up to a minute PLUS one, so this has to be
+#: longer than that minute for the step limit to fire first and the real status to come back;
+#: past it there is nothing left but a relay that will not answer.
+RC_WAIT_SLACK_S = 120.0
 
 #: Variables a rank gets from its own step; never forwarded through the relay.
 RANK_OWNED_PREFIXES: tuple[str, ...] = ("SLURM_", "PMI_", "PMIX_", "PMI2_")

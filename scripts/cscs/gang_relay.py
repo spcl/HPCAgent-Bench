@@ -42,6 +42,9 @@ POLL_S = 0.2
 TERM_GRACE_S = 10.0
 #: The relay's own heartbeat file in the request directory.
 ALIVE = "relay.alive"
+#: Cap on a squeue/scancel call: a loaded controller must not wedge the relay's whole loop,
+#: which would strand every other judge on this job behind one abandoned launch.
+SLURM_CALL_S = 30.0
 
 
 def touch(path):
@@ -90,8 +93,10 @@ def step_id(ident):
     if not job:
         return None
     try:
-        listing = subprocess.check_output(["squeue", "-h", "-s", "-j", job, "-o", "%i %j"], universal_newlines=True)
-    except (OSError, subprocess.CalledProcessError):
+        listing = subprocess.check_output(
+            ["squeue", "-h", "-s", "-j", job, "-o", "%i %j"], universal_newlines=True, timeout=SLURM_CALL_S
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
     for line in listing.splitlines():
         fields = line.split()
@@ -115,7 +120,10 @@ def kill(ident, proc):
     already started on the other nodes running; then SIGTERM, :data:`TERM_GRACE_S`, SIGKILL."""
     sid = step_id(ident)
     if sid is not None:
-        subprocess.call(["scancel", sid])
+        try:
+            subprocess.call(["scancel", sid], timeout=SLURM_CALL_S)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
     signal_group(proc, signal.SIGTERM)
     deadline = time.time() + TERM_GRACE_S
     while proc.poll() is None and time.time() < deadline:
