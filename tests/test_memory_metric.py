@@ -198,12 +198,12 @@ def test_device_free_bytes_tracks_a_real_device_allocation() -> None:
         pytest.skip(f"no CUDA device: {exc}")
     if devices < 1:
         pytest.skip("no CUDA device")
-    before = native_call._device_free_bytes()
+    before = native_call.device_free_bytes()
     assert before > 0, "a present device must report a positive free-byte count"
     nbytes = 64 * 1024 * 1024
     held = cp.empty(nbytes, dtype=cp.uint8)
     held[...] = 0  # touch it: the driver need not commit an untouched reservation
-    after = native_call._device_free_bytes()
+    after = native_call.device_free_bytes()
     del held
     # Only a lower bound is assertable: the pool rounds up, and the number is device-wide, so any
     # other process on this GPU moves it in the SAME direction. Over-counting cannot make it pass.
@@ -241,4 +241,4 @@ def test_device_free_bytes_answers_zero_instead_of_raising(monkeypatch) -> None:
         raise RuntimeError("driver went away")
 
     monkeypatch.setattr(cp.cuda.runtime, "memGetInfo", boom)
-    assert native_call._device_free_bytes() == 0
+    assert native_call.device_free_bytes() == 0
