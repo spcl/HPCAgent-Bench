@@ -7,7 +7,7 @@ Loads a sparse-layout block (typically the ``sparse_layouts`` /
 and verifies each rule, raising :class:`SparseConfigError` with a
 specific message on the first violation.
 
-Rules 1--10 are the original Workstream 0 structural checks (format /
+Rules 1--10 are the structural checks (format /
 roles / dtypes / configuration wiring). **Rule 9** keeps physical buffer
 names out of ``array_args`` (logical names only). **Rule 11** enforces
 the ``<logical>_<role>`` buffer-naming convention so the unpacked C-ABI

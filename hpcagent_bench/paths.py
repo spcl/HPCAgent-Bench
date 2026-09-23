@@ -1,12 +1,7 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Single source for repo-relative paths.
-
-Previously the path math :code:`__file__.parent.absolute() / ".." / ".."`
-was triplicated across :mod:`hpcagent_bench.frameworks.benchmark`,
-:mod:`hpcagent_bench.frameworks.framework`, and the top-level
-``run_*.py`` drivers. Consolidate here so a layout change touches one file."""
+"""Single source for repo-relative paths, so a layout change touches one file."""
 
 import os
 import pathlib
@@ -31,9 +26,7 @@ def repo_root() -> pathlib.Path:
     this file's own location.
 
     The one fallback TARGET for every script that needs a durable root and has no ``$SCRATCH`` --
-    a container, CI runner, or a laptop clone -- instead of each guessing its own (``~/.cache``,
-    ``__file__``'s grandparent, the checkout's parent directory: three actual, independently wrong
-    spellings this replaced)."""
+    a container, CI runner, or a laptop clone."""
     repo = os.environ.get("HPCAGENT_BENCH_REPO")
     return pathlib.Path(repo) if repo else ROOT
 
@@ -50,17 +43,10 @@ def scratch_root(name: str) -> pathlib.Path:
     """Where a REBUILDABLE tree named ``name`` belongs: ``$SCRATCH/<name>``, else
     ``<repo_root>/.cache/<name>``.
 
-    Three of these grew independently -- the numeric oracle's DaCe builds, the size-extrapolation
-    workdir, the preset sweep -- and all three defaulted under ``~/.cache``. That is the wrong
-    default twice over on a cluster: an HPC home is typically quota'd on INODE COUNT rather than
-    bytes, and a corpus of C++ build trees is precisely tens of thousands of tiny files (measured
-    here: 26k inodes, 195 MB, from one gate). ``/tmp`` is not the alternative either -- it is tmpfs
-    on these nodes, so a build competes with the run for RAM. Scratch is the one filesystem that is
-    on disk, large, and expected to be purged.
-
-    ``repo_root()`` stays the fallback rather than an error so a laptop or a container with no
-    ``$SCRATCH`` still works, and rather than ``~/.cache`` because a checkout is a real, durable
-    location THIS process already proved exists, where the previous default was a guess.
+    Not ``~/.cache``: an HPC home is quota'd on INODE COUNT and a corpus of C++ build trees is tens
+    of thousands of tiny files. Not ``/tmp``: it is tmpfs on these nodes, so a build competes with
+    the run for RAM. ``repo_root()`` is the fallback so a laptop or a container with no
+    ``$SCRATCH`` still works.
     """
     scratch = os.environ.get("SCRATCH")
     base = pathlib.Path(scratch) if scratch else repo_root() / ".cache"
