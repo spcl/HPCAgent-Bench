@@ -59,6 +59,11 @@ KNOBS = frozenset(
         "STAMP",
         "PY",
         "PYTHONPATH",
+        # The host's resolved account (a login shell exports it): scripts/cscs/account_env.sh must
+        # resolve from the stub sacctmgr below, the same on a login node and on a CI runner.
+        "HPCAGENT_BENCH_ACCOUNT",
+        "SBATCH_ACCOUNT",
+        "SALLOC_ACCOUNT",
     }
 )
 
@@ -136,6 +141,9 @@ def submit_tree(root: pathlib.Path, agents_per_node: int = 2) -> pathlib.Path:
     for suffix in ("", "-skills"):
         (root / "experiments" / f"problems-llrblind-c{suffix}.jsonl").write_text(problems_text(PROBLEM_KERNELS))
     stub(root / "bin", "sbatch", 'touch "${STUB_MARKERS}/sbatch-called"; exit 1')
+    # One association, a made-up name: SUBMIT=1 refuses to submit with no account resolved, and a
+    # runner without sacctmgr resolves none -- the wallclock tests then saw no sbatch call at all.
+    stub(root / "bin", "sacctmgr", "printf 'a-stub\\n'")
     return root
 
 
