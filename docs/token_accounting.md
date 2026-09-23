@@ -238,7 +238,7 @@ otherwise reads: claude-code's own SESSION-CUMULATIVE tally, camelCase (`inputTo
 `cacheCreationInputTokens`, `cacheReadInputTokens`, `outputTokens`), summed over every request the
 CLI made -- turns and compactions alike.
 
-`token_cost.fold_compaction_recovery` (USER 2026-09-22) is what recovers it: on a `compact_boundary`
+`token_cost.fold_compaction_recovery` recovers it: on a `compact_boundary`
 system event (claude-code's own marker that it just compacted), the next `result.modelUsage` is
 compared against what the visible-turn fold already collected, and the difference -- never negative,
 and computed only once a `compact_boundary` has actually been seen, so ordinary ~10% measurement
@@ -313,7 +313,7 @@ to 30x between runs (arXiv:2605.09104).
 
 ## What we report, and why
 
-Decided from the survey (2026-09-16). Per arm: the three components of each task's final attempt
+Per arm: the three components of each task's final attempt
 (input, cached input, output) with turns and compactions, so any convention above can be
 recomputed; the three proxies `effective` (axis of every paired comparison), `billed`, `total`, all
 output 1x; no dollars (no open-weight model has one price); the measured engine hit rate and engine
@@ -326,7 +326,7 @@ is a compile-and-run verifier, so no judge tokens exist to exclude), and the com
 
 ## Three readings of one fold: `effective`, `effective_provider`, `billed`
 
-The fold above is computed once and priced three ways (USER, 2026-09-16), all recorded per task and
+The fold above is computed once and priced three ways, all recorded per task and
 per attempt:
 
 | column | cache read priced at | what it is |
@@ -340,7 +340,7 @@ definition the paper states (see the cost survey); the other two are reported be
 
 ## Cost cards
 
-Decided 2026-09-16 (user): the paper reports THREE cost numbers side by side, all with output at 1x:
+The paper reports THREE cost numbers side by side, all with output at 1x:
 `effective` (the efficacy axis), `billed` (cache reads at 0.1, the API-equivalent proxy) and `total`
 (every prompt in full on every turn plus output, the number other papers print).
 Anyone else picks or writes their own card.
