@@ -4,8 +4,7 @@
 #
 # One canon column over the roster. Split out of submit-canon-llr40.sh because the body has to
 # detect the NODE's own topology before it can bind a step, and then loop over kernels -- and both
-# of those inside an sbatch --wrap "srun ... bash -lc '...'" is three levels of quoting deep, which
-# is how an earlier version of this loop lost its kernels.
+# of those inside an sbatch --wrap "srun ... bash -lc '...'" is three levels of quoting deep.
 #
 # Two modes, one file. `outer` runs on the compute node in the batch context and sizes the step;
 # `inner` runs inside the container and does the work.
@@ -307,24 +306,15 @@ sys.exit(0 if os.path.realpath(dace.__file__) == os.path.realpath(sys.argv[1]) e
     mkdir -p "${DACE_default_build_folder}"
     cd "${opt}"
 
-    #: ONE RANK PER GPU. srun hands every task the JOB's whole gres, and nothing downstream picks a
-    #: device by rank -- dace_framework's mpi_rank() only splits the build folder -- so all four ranks
-    #: ran on device 0 while the other three GPUs sat idle. Four processes timing kernels on one GPU
-    #: is a contended measurement, not the per-socket one the column claims to report.
-    #: Narrowing the inherited list here rather than asking srun for --gpus-per-task: requesting gres
-    #: a second time inside the step is the nested-gres trap that leaves it with no devices at all.
-    #: A CPU column inherits no list and is left untouched.
     #: ONE RANK PER GPU, masked at the HIP level ONLY. srun hands every task the job's whole gres and
-    #: nothing downstream picks a device by rank, so all four ranks ran on ONE device while the other
-    #: three sat idle -- measured: unmasked, every rank reported the same device with 119.6 GiB free
-    #: after four 1.94 GiB stages, i.e. one device holding all four; masked, each reports 125.9 GiB
-    #: free, i.e. its own.
+    #: nothing downstream picks a device by rank (dace_framework's mpi_rank() only splits the build
+    #: folder), so unmasked all four ranks time kernels on ONE device. A CPU column inherits no list
+    #: and is left untouched.
     #:
-    #: ROCR_VISIBLE_DEVICES and HIP_VISIBLE_DEVICES COMPOSE, and setting both is why an earlier form of
-    #: this broke every GPU kernel but the one on rank 0: narrowing ROCr to a single device and then
+    #: ROCR_VISIBLE_DEVICES and HIP_VISIBLE_DEVICES COMPOSE: narrowing ROCr to a single device and then
     #: asking HIP for index N of that one-element set is hipErrorNoDevice. ROCr keeps the job's list;
-    #: only HIP picks. --gpus-per-task is deliberately not used either: asking for gres a second time
-    #: inside the step is the nested-gres trap that leaves it with no devices at all.
+    #: only HIP picks. Not --gpus-per-task: asking for gres a second time inside the step is the
+    #: nested-gres trap that leaves it with no devices at all.
     visible="${ROCR_VISIBLE_DEVICES:-${HIP_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-}}}"
     if [[ -z "${visible}" ]]; then
         echo "canon ${col} rank ${rank}: no device list inherited, leaving the step's binding alone"
