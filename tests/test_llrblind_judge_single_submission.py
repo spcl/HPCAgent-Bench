@@ -13,6 +13,7 @@ hand-copied subset, so a launcher change that moves either key is caught here.
 import importlib
 import pathlib
 import sys
+import types
 import urllib.request
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
@@ -60,7 +61,7 @@ def router_fixture(blind_env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -
             yield client
 
 
-def load(directory: pathlib.Path, name: str):
+def load(directory: pathlib.Path, name: str) -> types.ModuleType:
     sys.path.insert(0, str(directory))
     try:
         if name in sys.modules:

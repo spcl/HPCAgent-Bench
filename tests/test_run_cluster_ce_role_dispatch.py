@@ -117,7 +117,7 @@ def run_role_srun(tmp_path: pathlib.Path, role_flag: str, *, inference_nodes: in
     raise AssertionError(f"neither launcher ran: {proc.stdout}\n{proc.stderr}")
 
 
-def test_agent_node_under_ce_never_takes_the_pyxis_fabric_hooks(tmp_path) -> None:
+def test_agent_node_under_ce_never_takes_the_pyxis_fabric_hooks(tmp_path: pathlib.Path) -> None:
     """The agent never runs an MPI/RCCL collective; forcing pyxis's comm hooks onto it under ce
     buys nothing and (via the SAME registered EDF the judge uses) risks the identical NET-plugin
     failure the inference role hit in the 2026-09-17 wave."""
@@ -126,7 +126,7 @@ def test_agent_node_under_ce_never_takes_the_pyxis_fabric_hooks(tmp_path) -> Non
     assert result["hooks"] == "off"
 
 
-def test_single_node_inference_under_ce_takes_the_hook_gated_path(tmp_path) -> None:
+def test_single_node_inference_under_ce_takes_the_hook_gated_path(tmp_path: pathlib.Path) -> None:
     """INFERENCE_NODES=1 (qwen38, oss120b): no cross-node collective, so this must route through
     enroot_srun.sh with comm hooks off, exactly like every non-mlscale single-node wave -- not
     through pyxis --environment=, which applies the registered EDF's hooks unconditionally."""
@@ -135,7 +135,7 @@ def test_single_node_inference_under_ce_takes_the_hook_gated_path(tmp_path) -> N
     assert result["hooks"] == "off"
 
 
-def test_multi_node_inference_under_ce_keeps_the_pyxis_fabric(tmp_path) -> None:
+def test_multi_node_inference_under_ce_keeps_the_pyxis_fabric(tmp_path: pathlib.Path) -> None:
     """INFERENCE_NODES=4 (kimi27sglang, glm53): a real cross-node NCCL collective, so this arm
     still needs pyxis's comm hooks -- this must NOT be rerouted onto the single-node path."""
     result = run_role_srun(tmp_path, "--vllm-node", inference_nodes=4)
@@ -143,7 +143,7 @@ def test_multi_node_inference_under_ce_keeps_the_pyxis_fabric(tmp_path) -> None:
     assert "--environment=" in result["argv"]
 
 
-def test_judge_node_under_ce_always_keeps_the_pyxis_fabric(tmp_path) -> None:
+def test_judge_node_under_ce_always_keeps_the_pyxis_fabric(tmp_path: pathlib.Path) -> None:
     """The judge gang's rank launches need CE (run_cluster.sh's own JUDGE_GANG_NODES gate); the
     judge-node role step itself must stay on pyxis --environment= whatever INFERENCE_NODES is."""
     result = run_role_srun(tmp_path, "--judge-node", inference_nodes=1)

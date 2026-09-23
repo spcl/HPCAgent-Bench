@@ -11,6 +11,7 @@ kernel with only MPI_Barrier (a CPU-side rendezvous) between them, so a cupy ker
 return, and the wall clock stop, before the GPU had actually finished the work being measured.
 """
 
+import pathlib
 import sys
 import types
 
@@ -59,25 +60,25 @@ class _FakeCart:
     def Barrier(self) -> None:
         self._events.append("barrier")
 
-    def bcast(self, value, root=0):
+    def bcast(self, value: object, root: int = 0) -> object:
         return value
 
-    def scatter(self, value, root=0):
+    def scatter(self, value: list[object], root: int = 0) -> object:
         return value[0]
 
-    def gather(self, value, root=0):
+    def gather(self, value: object, root: int = 0) -> list[object]:
         return [value]
 
-    def reduce(self, value, op=None, root=0):
+    def reduce(self, value: object, op: object = None, root: int = 0) -> object:
         return value
 
 
 class _FakeWorld(_FakeCart):
-    def Create_cart(self, dims, periods=None, reorder=False):
+    def Create_cart(self, dims: object, periods: object = None, reorder: bool = False) -> "_FakeWorld":
         return self
 
 
-def _fake_mpi4py_module(events: list[str]) -> types.ModuleType:
+def _fake_mpi4py_module(events: list[str]) -> tuple[types.ModuleType, types.ModuleType]:
     """A single-rank stand-in for `from mpi4py import MPI`, so this test needs no real MPI
     launcher (mpi4py is not installed in this environment; see test_mpi_drivers_launch.py's own
     skip for the real-launcher variant)."""
@@ -96,7 +97,9 @@ def _fake_mpi4py_module(events: list[str]) -> types.ModuleType:
     return mpi4py_pkg, mpi_module
 
 
-def test_run_brackets_each_kernel_call_with_a_device_sync(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_brackets_each_kernel_call_with_a_device_sync(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """End to end through run(): a device-resident submission must sync, Barrier, time, run the
     kernel, sync again, Barrier, and only then stop the clock -- twice (k_repeats=2), never
     fewer, never in the wrong order. A version missing either sync would drop a "sync" marker or

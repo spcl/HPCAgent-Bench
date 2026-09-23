@@ -383,3 +383,13 @@ def test_an_oom_nccl_error_or_traceback_in_the_job_log_fails(
 def test_a_job_without_an_env_snapshot_is_not_a_wave(tmp_path: pathlib.Path) -> None:
     job = check_job.Job("900002", "regrade-v6-p00", "RUNNING", tmp_path, None)
     assert [item.verdict for item in check_job.check(job, 3, "mwd-final")] == ["SKIP"]
+
+
+def test_the_expected_tool_parser_follows_the_engine_the_arm_serves_on() -> None:
+    both = {
+        "VLLM_EXTRA_ARGS": "--tool-call-parser qwen3_xml",
+        "SGLANG_EXTRA_ARGS": "--tool-call-parser qwen3_coder",
+    }
+    assert check_job.expected_tool_parser({**both, "INFERENCE_ENGINE": "sglang"}) == "qwen3_coder"
+    assert check_job.expected_tool_parser({**both, "INFERENCE_ENGINE": "vllm"}) == "qwen3_xml"
+    assert check_job.expected_tool_parser(both) == "qwen3_xml"

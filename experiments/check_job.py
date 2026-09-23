@@ -246,11 +246,10 @@ def check_contract(env: dict[str, str], expects: list[Expect]) -> Stage:
 
 
 def expected_tool_parser(env: dict[str, str]) -> str:
-    for key in ("VLLM_EXTRA_ARGS", "SGLANG_EXTRA_ARGS"):
-        found = TOOL_PARSER_ARG.search(env.get(key, ""))
-        if found:
-            return found.group(1)
-    return ""
+    """The parser the arm asks of the engine it serves on: an arm .env carries both engines' args."""
+    key = "SGLANG_EXTRA_ARGS" if env.get("INFERENCE_ENGINE", "") == "sglang" else "VLLM_EXTRA_ARGS"
+    found = TOOL_PARSER_ARG.search(env.get(key, ""))
+    return found.group(1) if found else ""
 
 
 def moe_findings(env: dict[str, str], logs: str) -> list[str]:
