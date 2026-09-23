@@ -10,6 +10,7 @@ concurrently running test over shared state.
 """
 
 import pathlib
+from collections.abc import Iterator
 
 import pytest
 
@@ -18,6 +19,16 @@ from hpcagent_bench import tags
 #: Real scientific_computing kernels (shared with other submit-*.sh tests), with known levels:
 #: kmp=2, dfa=2, heat_3d=2, eigh_test=3.
 LEVEL2 = ("kmp", "dfa", "heat_3d")
+
+
+@pytest.fixture(autouse=True)
+def forget_the_temp_registry() -> Iterator[None]:
+    """Clear ``tags.registry``'s cache AFTER each test too: monkeypatch restores ``tags.REGISTRY``,
+    but the lru_cache still held this test's temp registry, so the next test in the same process
+    (tests/test_mixed_roster.py's `mixed` alias) resolved against it and failed by run order."""
+    yield
+    tags.registry.cache_clear()
+    tags.RESOLVING.clear()
 
 
 def write_registry(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, text: str) -> None:
