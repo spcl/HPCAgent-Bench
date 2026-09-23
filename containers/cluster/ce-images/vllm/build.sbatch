@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
 # Build the vLLM inference image on a compute node.
 #
-# Replaces the six-job chain in ce-images/inference/build/build-chain.sh (phase1 OFI, phase1 gate,
-# pytorch 2.11, numpy, vLLM 0.23.0, flash-attn) plus the two in-place patch jobs that followed it,
-# with one job. It asks for no GPUs, but the mi300 node exposes /dev/kfd anyway and
-# build.sh hands it to podman, so a RUN step sees gfx942 (measured, job 619976). It still proves
-# less than a serve: an import and a JIT build are not a kernel launch. See LIMITATION in the
-# Dockerfile.
+# It asks for no GPUs, but the mi300 node exposes /dev/kfd anyway and build.sh hands it to podman,
+# so a RUN step sees gfx942. It still proves less than a serve: an import and a JIT build are not a
+# kernel launch. See LIMITATION in the Dockerfile.
 #
-# Cost: one mi300 node. The stages it merges asked for 4 h (phase1) + 2 h (pytorch) + 2 h (vLLM) +
-# 2 h (aiter) of wall clock, and the aiter JIT prebuild adds its own compile, so 8 h is the safe
-# request and roughly 4-6 h the expectation.
+# Cost: one mi300 node; 8 h is the safe request and roughly 4-6 h the expectation.
 #
 #   sbatch --chdir=containers/cluster/ce-images/vllm build.sbatch
 #   OUTPUT_SQSH=$SCRATCH/ce-images/hpcagent-bench-vllm-candidate.sqsh sbatch ... build.sbatch
@@ -37,10 +32,8 @@ set -Eeuxo pipefail
 ulimit -c 0
 
 # Slurm SPOOLS the batch script, so BASH_SOURCE points at /var/spool/slurmd -- pass the directory
-# rather than deriving it (this is exactly what killed build job 600467). --chdir sets it for free.
-# IMAGE_DIR, the same name all five builders take. This one also answers to VLLM_DIR, which is
-# what it used to be called and what older submit lines still say.
-IMAGE_DIR="${IMAGE_DIR:-${VLLM_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}}"
+# rather than deriving it. --chdir sets it for free. IMAGE_DIR, the same name all five builders take.
+IMAGE_DIR="${IMAGE_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
 test -x "${IMAGE_DIR}/build.sh"
 
 export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/hpcagent-bench-vllm-candidate.sqsh}"

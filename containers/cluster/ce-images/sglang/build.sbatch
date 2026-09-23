@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 # Build the SGLang inference image on a compute node.
 #
-# Replaces a PULL plus two out-of-image steps: a flydsl install that built a --target prefix
-# on scratch that the arms reached through PYTHONPATH, and prebuild-aiter-jit.sbatch, whose whole
-# job was to warm a cache the image can simply carry. It asks for no GPUs, but the mi300 node exposes /dev/kfd anyway and
-# build.sh hands it to podman, so a RUN step sees gfx942 (measured, job 619976). It still proves
-# less than a serve: an import and a JIT build are not a kernel launch. See LIMITATION in the
-# Dockerfile.
+# It asks for no GPUs, but the mi300 node exposes /dev/kfd anyway and build.sh hands it to podman,
+# so a RUN step sees gfx942. It still proves less than a serve: an import and a JIT build are not a
+# kernel launch. See LIMITATION in the Dockerfile.
 #
 # Cost: one mi300 node. The 52 GB base pull dominates; after it, the Slingshot stack (libcxi,
 # libfabric, aws-ofi-nccl) and the aiter JIT prebuild are each minutes. 4 h is the safe request and
@@ -40,9 +37,8 @@ ulimit -c 0
 # rather than deriving it. $PWD is right either way: --chdir sets the job's cwd, and without it the
 # cwd IS the submit dir. SLURM_SUBMIT_DIR is NOT -- it is where sbatch was RUN, which --chdir does
 # not change, so a --chdir invocation resolved to the wrong tree and died on the test below.
-# IMAGE_DIR, the same name all five builders take. This one also answers to SGLANG_DIR, which is
-# what it used to be called and what older submit lines still say.
-IMAGE_DIR="${IMAGE_DIR:-${SGLANG_DIR:-$PWD}}"
+# IMAGE_DIR, the same name all five builders take.
+IMAGE_DIR="${IMAGE_DIR:-$PWD}"
 test -x "${IMAGE_DIR}/build.sh" || { echo "no build.sh under IMAGE_DIR=${IMAGE_DIR}" >&2; exit 2; }
 
 export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/hpcagent-bench-sglang-candidate.sqsh}"

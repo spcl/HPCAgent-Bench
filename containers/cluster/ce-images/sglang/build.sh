@@ -5,9 +5,8 @@ set -euo pipefail
 # build.sbatch: the base alone is 52 GB and cupy compiles from source.
 #
 # The build context is the REPOSITORY ROOT, because the Dockerfile bakes in the tuned fused_moe
-# configs from there. Nothing is reached from outside the image at RUN time -- which is the point:
-# flydsl used to arrive through PYTHONPATH=${SCRATCH}/pyprefix/sglang-rocm-mi30x, and an upgrade
-# reached that way is invisible to the image digest.
+# configs from there. Nothing is reached from outside the image at RUN time: a package reached
+# through PYTHONPATH is invisible to the image digest.
 
 # Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
 # process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
