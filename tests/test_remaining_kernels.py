@@ -311,6 +311,58 @@ def test_exclude_job_drops_a_superseded_jobs_coverage(
     assert owed == {ARM: ["a", "b", "c"]}
 
 
+OTHER_ARM = "cpf-llr-focus40-oss120b-c-cpf"
+
+
+@pytest.mark.parametrize(
+    ("prefix", "expected"),
+    [
+        (ARM, [ARM]),
+        (f"{ARM}-clean", [ARM]),
+        ("cpf-llr-focus40-qwen38", [ARM]),
+        ("cpf-llr-focus40", [ARM, OTHER_ARM]),
+    ],
+    ids=["exact", "exact-clean", "model", "campaign"],
+)
+def test_arm_prefix_selects_an_arm_named_in_full_or_by_prefix(
+    module: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    prefix: str,
+    expected: list[str],
+) -> None:
+    """``--arm-prefix <the arm's own name>`` printed NOTHING (2026-09-23): the filter only matched
+    ``<prefix>-``, so naming one arm in full -- the natural way to ask about it -- dropped it silently."""
+    job_dir_with_rows(tmp_path / "runs", "100", ARM, ["a"])
+    job_dir_with_rows(tmp_path / "runs", "101", OTHER_ARM, ["a"])
+    monkeypatch.setattr(module, "roster", lambda tag, opt: list(ROSTER))
+    argv = ["remaining_kernels.py", "--run-root", str(tmp_path / "runs"), "--tag", "t", "--arm-prefix", prefix]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert module.main() == 0
+
+    reported = [line.split()[0] for line in capsys.readouterr().out.splitlines() if " jobs " in line]
+    assert reported == sorted(expected)
+
+
+def test_an_arm_prefix_that_names_no_arm_says_so(
+    module: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A prefix matching nothing reports that, rather than an empty report that reads as "nothing owed"."""
+    job_dir_with_rows(tmp_path / "runs", "100", ARM, ["a"])
+    monkeypatch.setattr(module, "roster", lambda tag, opt: list(ROSTER))
+    argv = ["remaining_kernels.py", "--run-root", str(tmp_path / "runs"), "--tag", "t", "--arm-prefix", f"{ARM}-x"]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert module.main() == 0
+
+    assert f"no arm matches --arm-prefix {ARM}-x" in capsys.readouterr().out
+
+
 def test_a_clean_rerun_folds_into_the_arm_it_supersedes(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:

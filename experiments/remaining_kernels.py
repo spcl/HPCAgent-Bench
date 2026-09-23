@@ -871,6 +871,15 @@ def owed_classes(jobs: list, full: list, opt: str, frozen_dir: pathlib.Path | No
     return classes
 
 
+def arm_selected(identity: str, prefixes: list[str]) -> bool:
+    """Whether a ``--arm-prefix`` names ``identity``: the whole identity (a ``-clean`` spelling folds
+    into it, as the report does) or its leading ``<prefix>-``. No prefixes selects every arm. A bare
+    ``startswith(prefix + "-")`` printed nothing for an arm named in full."""
+    if not prefixes:
+        return True
+    return any(identity == name or identity.startswith(f"{name}-") for name in map(base_arm, prefixes))
+
+
 def report_arm(
     identity: str,
     jobs: list,
@@ -937,8 +946,8 @@ def main() -> int:
         "--arm-prefix",
         action="append",
         default=[],
-        help="report only arms starting with <prefix>-; repeat as needed. A fused owed wave's run root "
-        "holds arms of every campaign of its model, so a campaign's own report names its prefixes",
+        help="report only the arm named <prefix> or starting with <prefix>-; repeat as needed. A fused owed "
+        "wave's run root holds arms of every campaign of its model, so a campaign's own report names its prefixes",
     )
     ap.add_argument("--opt", default=os.environ.get("OPT", ""), help="hpcagent-bench checkout (default $OPT)")
     ap.add_argument("--out-dir", default="", help="write <identity>.txt kernels files here (default: print only)")
@@ -982,10 +991,12 @@ def main() -> int:
         print(f"no shard DBs, contributed nothing: jobs {sorted(empty_jobs)}")
     if smoke_jobs:
         print(f"smoke rows, excluded from coverage: jobs {sorted(smoke_jobs)}")
+    for prefix in args.arm_prefix:
+        if not any(arm_selected(identity, [prefix]) for identity in arms):
+            print(f"no arm matches --arm-prefix {prefix}")
     for identity in sorted(arms):
-        if args.arm_prefix and not identity.startswith(tuple(f"{prefix}-" for prefix in args.arm_prefix)):
-            continue
-        report_arm(identity, arms[identity], full, args.list_progress, out_dir, only_class, opt, frozen_dir)
+        if arm_selected(identity, args.arm_prefix):
+            report_arm(identity, arms[identity], full, args.list_progress, out_dir, only_class, opt, frozen_dir)
     if frozen_dir is not None:
         print(f"frozen observations (jobs with no live directory count as coverage): {frozen_dir}")
     return 0
