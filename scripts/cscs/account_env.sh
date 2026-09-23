@@ -57,7 +57,9 @@ hpcagent_bench_resolve_account() {
             echo "Slurm accounting does not answer: HPCAGENT_BENCH_ACCOUNT=${HPCAGENT_BENCH_ACCOUNT} used unchecked" >&2
             printf '%s' "${HPCAGENT_BENCH_ACCOUNT}"; return 0
         fi
-        if ! printf '%s\n' "${candidates}" | grep -qxF "${HPCAGENT_BENCH_ACCOUNT}"; then
+        # A here-string, not printf | grep -q: under pipefail grep -q exits on the first match, printf
+        # dies of SIGPIPE, and the pipeline reads as "no match" -- a listed account refused at random.
+        if ! grep -qxF "${HPCAGENT_BENCH_ACCOUNT}" <<<"${candidates}"; then
             echo "HPCAGENT_BENCH_ACCOUNT=${HPCAGENT_BENCH_ACCOUNT} is not one of your associations:" >&2
             printf '%s\n' "${candidates}" | sed 's/^/    /' >&2
             return 1

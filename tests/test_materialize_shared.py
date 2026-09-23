@@ -639,6 +639,20 @@ def test_the_resolver_survives_slurm_accounting_that_does_not_answer(
     assert "does not answer" in result.stderr or preset == "root", result.stderr
 
 
+def test_an_exported_account_early_in_a_long_association_list_is_accepted(tmp_path: pathlib.Path) -> None:
+    """``printf | grep -q`` under ``pipefail``: grep exits on the first match, printf dies of SIGPIPE,
+    and the pipeline read as "not one of your associations" -- a listed account refused (a pre-commit
+    hook on a loaded login node, 2026-09-23). A list past the pipe buffer makes the race certain."""
+    fake = tmp_path / "sacctmgr"
+    fake.write_text("#!/bin/sh\necho a-one\nseq -f 'z%06g' 1 100000\n")
+    fake.chmod(0o755)
+    script = f'. "{REPO}/scripts/cscs/account_env.sh"; rc=$?; echo "got=${{SBATCH_ACCOUNT:-}}"; exit $rc'
+    env = {"PATH": f"{tmp_path}:/usr/bin:/bin", "USER": "tester", "HPCAGENT_BENCH_ACCOUNT": "a-one"}
+    result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert "got=a-one" in result.stdout
+
+
 def test_no_treatment_hints_file_is_staged_for_every_arm(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
