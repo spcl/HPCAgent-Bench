@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import importlib
-import importlib.metadata
 import inspect
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -923,10 +922,6 @@ class Framework:
     def supports(self, precision: Precision) -> bool:
         """``True`` when ``precision`` is in :attr:`SUPPORTED_PRECISIONS`."""
         return precision in self.info["precisions"]
-
-    def version(self) -> str:
-        """Returns the framework version."""
-        return importlib.metadata.version(self.fname)
 
     def imports(self) -> dict[str, ModuleType]:
         """Returns modules/methods needed for running a benchmark."""
