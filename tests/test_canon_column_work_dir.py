@@ -89,6 +89,11 @@ def _base_env(tmp_path: pathlib.Path, bindir: pathlib.Path) -> dict:
     dace_stub = tmp_path / "dace-stub"
     (dace_stub / "dace" / "external" / "moodycamel").mkdir(parents=True)
     (dace_stub / "dace" / "external" / "moodycamel" / "blockingconcurrentqueue.h").write_text("")
+    # A real __init__.py, not just the directory: inner mode asserts `dace.__file__` resolves
+    # inside DACE_TREE (canon_column.sh, mirroring prerender_cpf.sbatch) before running anything,
+    # and a namespace package (no __init__.py) has no __file__ at all, which would fail that
+    # assert for every test here regardless of DACE_TREE being set correctly.
+    (dace_stub / "dace" / "__init__.py").write_text("")
     env = dict(os.environ)
     env["PATH"] = f"{bindir}:{env['PATH']}"
     # Isolate the cache root the real scripts/cache_env.sh derives everything from, so this test

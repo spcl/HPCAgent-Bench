@@ -76,7 +76,13 @@ if [[ "${1:-}" == inner || "${1:-}" == inner-pool ]]; then
     cd "${OPT_ARG}"
     # The container ships its OWN dace at /opt/dace (editable install); without this check a run
     # that silently resolved there would file every rendered form under the wrong dace commit.
-    python3 -c 'import sys, dace; sys.exit(dace.__file__ != sys.argv[1])' "${DACE_TREE}/dace/__init__.py" \
+    #: Compared through realpath, not as raw strings: DACE_TREE may reach here with a trailing
+    #: slash, a `//`, or a relative path, and a raw string compare fails a run whose dace is
+    #: genuinely the right tree just because the two spellings of the same path do not match
+    #: character-for-character. Same fix as canon_column.sh's inner mode (~:231).
+    python3 -c 'import os, sys, dace
+sys.exit(0 if os.path.realpath(dace.__file__) == os.path.realpath(sys.argv[1]) else 1)' \
+        "${DACE_TREE}/dace/__init__.py" \
         || { echo "prerender: dace does not resolve to ${DACE_TREE}" >&2; exit 1; }
     if [[ "${MODE}" == inner-pool ]]; then
         # Roster order is kept, so the FIRST (slowest) kernels start first.
