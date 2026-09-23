@@ -2271,7 +2271,10 @@ def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: Figur
     minor_grid(ax, "y", "count", config)
     # The dashed rule marks the ceiling N; the headroom above it keeps the rule off the frame.
     ax.axhline(kernels, color=style.MUTED, linestyle="--", linewidth=0.6, zorder=1)
-    ax.set_ylim(-SUCCESS_HEADROOM * kernels, (1.0 + SUCCESS_HEADROOM) * kernels)
+    # A column nobody was served yet (every arm pending) has N = 0; its headroom is taken against one
+    # kernel, since a fraction of zero is a singular axis.
+    headroom = SUCCESS_HEADROOM * max(kernels, 1)
+    ax.set_ylim(-headroom, kernels + headroom)
     ax.set_xlim(-0.6, max(len(rows) - 0.4, 0.6))
     ax.set_xticks(range(len(rows)))
     group_rules(ax, rows)

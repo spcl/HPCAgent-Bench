@@ -961,6 +961,10 @@ def fit_ylabels(fig: matplotlib.figure.Figure, axes: Sequence[matplotlib.axes.Ax
 #: lower panel prints above its frame (its summary statistic).
 STACK_GAP_IN: float = 0.2
 
+#: The band above and below the panels while :func:`fit_canvas` measures, in inches: room for the
+#: chrome to be drawn and read, replaced by the measured bands afterwards.
+PROBE_BAND_IN: float = 0.5
+
 
 def fit_canvas(
     fig: matplotlib.figure.Figure,
@@ -982,6 +986,14 @@ def fit_canvas(
     The value labels a summary prints are not measured: they settle inside the frame at save
     (:func:`~hpcagent_bench.stats.style.settle_clear_labels`) and need no band of their own.
     """
+    # Measure with every panel already at its final height: a rotated Y label is centred on its
+    # frame, so on the shorter frame subplots() starts with it reached past both ends and was billed
+    # as a band the final panel never draws.
+    probe = len(axes) * panel_height_in + (len(axes) - 1) * STACK_GAP_IN + 2.0 * PROBE_BAND_IN
+    fig.set_size_inches(float(fig.get_size_inches()[0]), probe)
+    fig.subplots_adjust(
+        top=1.0 - PROBE_BAND_IN / probe, bottom=PROBE_BAND_IN / probe, hspace=STACK_GAP_IN / panel_height_in
+    )
     fig.canvas.draw()
     fit_ylabels(fig, axes, panel_height_in)
     left = max(plotstyle.left_protrusion_in(fig, ax) for ax in axes) + CHROME_PAD_IN

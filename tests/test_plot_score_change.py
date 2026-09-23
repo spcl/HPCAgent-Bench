@@ -1102,8 +1102,9 @@ def test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor(measure
         finally:
             plt.close(fig)
 
-    assert "4x" in texts(frozenset({("qwen38", "HIP")}))
-    assert "4x" not in texts(frozenset())
+    # Printed as every value beside a mark is, to one decimal (``style.ratio_label``, 2026-09-21).
+    assert plotstyle.ratio_label(4.0) in texts(frozenset({("qwen38", "HIP")}))
+    assert plotstyle.ratio_label(4.0) not in texts(frozenset())
 
 
 @pytest.mark.parametrize("measure", ["speedup", "cost"])
@@ -1619,10 +1620,12 @@ def test_a_key_too_tall_for_its_band_grows_the_canvas_instead_of_covering_the_na
 
 @pytest.mark.parametrize("legs", [("C", "Fortran") * 3])
 def test_category_names_still_touching_on_two_lines_step_down_until_clear(legs: tuple[str, ...]) -> None:
-    """Three "Fortran" placeholders two columns apart share the staggered second line and touched."""
+    """Three "Fortran" placeholders two columns apart share the staggered second line and touched.
+    The column is as narrow as that gets while the step-down floor (``category_min_scale``) can still
+    clear them; any narrower is the floor's warning, not a smaller type."""
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(0.9, 1.0))
+    fig, ax = plt.subplots(figsize=(1.2, 1.0))
     config = efficacy_figures.PAPER_CONFIG
     rows = [efficacy_figures.ArmRow("qwen38", leg, "#1f77b4", arm(1.0, 2.0), arm(1.0, 2.0)) for leg in legs]
     ax.set_xlim(-0.6, len(rows) - 0.4)
@@ -1664,6 +1667,22 @@ def test_without_the_success_row_speedup_and_cost_keep_their_order(success_row: 
 def arm(x: float, high: float, solved: int = 4, served: int = 5) -> efficacy_figures.ArmPoint:
     """An arm at ``log2`` speed-up ``x`` whose interval tops out at ``high``."""
     return efficacy_figures.ArmPoint(x, x - 1.0, high, 1e5, 5e4, 2e5, served, served, solved, served)
+
+
+def test_a_success_row_nobody_was_served_is_not_a_singular_axis() -> None:
+    """Every arm of a column pending leaves N = 0, and a headroom taken as a fraction of N set the
+    limits to (0, 0): matplotlib warns and expands them on its own."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    unserved = arm(1.0, 2.0, solved=0, served=0)
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", unserved, unserved)
+    try:
+        efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "")
+        low, high = ax.get_ylim()
+    finally:
+        plt.close(fig)
+    assert low < 0.0 < high
 
 
 def test_a_difference_label_sits_above_both_intervals_not_on_the_treated_mark() -> None:
