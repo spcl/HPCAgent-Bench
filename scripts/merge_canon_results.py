@@ -53,9 +53,17 @@ SCHEMA: tuple[tuple[str, str], ...] = (
 def rows_for(run_dir: pathlib.Path, column: str, run: str) -> list[dict[str, object]]:
     """Every rank shard of ``column`` in ``run_dir``, as tidy rows. A column with no shard (a rank
     whose kernel share was empty writes none at all -- see canon_column.sh's zero-kernel-rank
-    guard) yields an empty list, which is a fact, not an error."""
+    guard) yields an empty list, which is a fact, not an error.
+
+    Shards are read OLDEST-write-last (mtime ascending, filename as a stable tiebreaker for equal
+    mtimes), not alphabetically. canon_column.sh's ``outer`` mode now rotates any of this column's
+    PRE-EXISTING shards aside before a fresh run ever opens a CSV path (a fresh column run never
+    appends to an old one), so every shard this function sees for a given call normally belongs to
+    the SAME run; this ordering is kept as defense-in-depth for a caller that points this script
+    directly at a directory it does not manage that way -- a single stale file straggling in would
+    still lose to a genuinely newer one instead of winning by alphabetical accident."""
     out: list[dict[str, object]] = []
-    for shard in sorted(run_dir.glob(f"{column}.rank*.csv")):
+    for shard in sorted(run_dir.glob(f"{column}.rank*.csv"), key=lambda p: (p.stat().st_mtime, p.name)):
         with shard.open(newline="") as fh:
             for row in csv.DictReader(fh):
                 out.append(
@@ -86,8 +94,7 @@ def merge(rows: list[dict[str, object]], db_path: pathlib.Path) -> int:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute(f"CREATE TABLE IF NOT EXISTS {TABLE} ({columns_sql})")
         conn.execute(
-            f"CREATE UNIQUE INDEX IF NOT EXISTS ux_{TABLE}_row "
-            f"ON {TABLE}(run, column, kernel, preset, datatype)"
+            f"CREATE UNIQUE INDEX IF NOT EXISTS ux_{TABLE}_row ON {TABLE}(run, column, kernel, preset, datatype)"
         )
         conn.executemany(
             f"INSERT OR REPLACE INTO {TABLE} ({', '.join(names)}) VALUES ({placeholders})",

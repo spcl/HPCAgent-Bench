@@ -106,6 +106,35 @@ finalize_column() {
     fi
 }
 
+#: Rotate any of THIS column's shard CSVs already sitting in out_root aside, before inner ever
+#: opens a CSV path for the fresh run. run-framework's own CSV writer APPENDS to an existing rank
+#: CSV (sweep.write_csv_rows), so a re-run into the same out_root -- a smoke then the full sweep,
+#: an owed resubmit -- otherwise leaves an OLD run's row sitting beside this run's fresh ones in
+#: the very same file. That is worse than ordinary staleness: a single file's mtime reflects
+#: whichever run touched it LAST, so once a roster or rank-count change moves a kernel to a
+#: DIFFERENT rank, the file that kept its old row can end up looking newer than the file carrying
+#: the actually-fresh one -- mtime (or filename) ordering across shards cannot tell them apart at
+#: that point, only which FILE a row happens to sit in can. Moving the old files aside here means
+#: inner always starts every rank from a clean file for this run, so a repeated kernel's row can
+#: only ever come from the current run. Only for a MANAGED out_root (see the caller's own
+#: HPCAGENT_BENCH_RUNS_ROOT check): an out_root outside that root is the documented, accumulating
+#: hand-off to collect_canon.py's own whole-sweep rebuild, and must be left exactly as it always
+#: was. Rotated, never deleted: the old rows survive under out_root for inspection, same as every
+#: other artifact this file keeps on a doubtful outcome.
+rotate_stale_shards() {
+    local column=$1
+    local stale_dir="${out_root}/.stale-shards/${column}-$$-${SECONDS}"
+    shopt -s nullglob
+    local shards=("${out_root}/${column}".rank*.csv)
+    shopt -u nullglob
+    if (( ${#shards[@]} )); then
+        mkdir -p "${stale_dir}"
+        mv -- "${shards[@]}" "${stale_dir}/"
+        echo "canon ${column}: moved ${#shards[@]} pre-existing shard(s) aside to ${stale_dir}" \
+            "before starting this run"
+    fi
+}
+
 if [[ "${mode}" == outer ]]; then
     . "${opt}/scripts/cache_env.sh"
     #: A DaCe tree cloned without its submodules compiles nothing: stream.h includes
@@ -135,6 +164,12 @@ if [[ "${mode}" == outer ]]; then
     rc=0
     for one in ${col//,/ }; do
         echo "=== column ${one} ==="
+        #: Same gate as finalize_column below: only a work dir this script's own convention created
+        #: is safe to rotate. An out_root outside HPCAGENT_BENCH_RUNS_ROOT is the documented,
+        #: accumulating hand-off to collect_canon.py and must keep every shard it has ever written.
+        if [[ -n "${HPCAGENT_BENCH_RUNS_ROOT:-}" && "${out_root}" == "${HPCAGENT_BENCH_RUNS_ROOT}"/* ]]; then
+            rotate_stale_shards "${one}"
+        fi
         # Not exec: the next column has to run after this one in the same allocation.
         #: CANON_LAUNCH=enroot|pyxis. Unset, scripts/cscs/container_runtime.sh decides (enroot unless
         #: CONTAINER_RUNTIME says otherwise). enroot reads the SAME EDF, so the two launchers cannot
