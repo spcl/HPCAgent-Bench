@@ -1,4 +1,5 @@
-Launch cheat sheet with examples: [LAUNCH.md](LAUNCH.md).
+Launch cheat sheet with examples: [LAUNCH.md](LAUNCH.md). Resuming a campaign that already has
+some finished or dead jobs: [LAUNCH.md section 9](LAUNCH.md#9-resume-an-experiment-from-where-it-stopped).
 
 # Beverin multi-role inference example
 
