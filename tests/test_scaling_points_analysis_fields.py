@@ -12,6 +12,7 @@ already goes through. ``scaling_grade.open_grades`` (a shard opened OUTSIDE ``re
 by the replay job) migrates it too, or an old grade shard's first record_scaling call fails outright
 (the bug this file's first test caught before landing the fix)."""
 
+import pathlib
 import sqlite3
 
 import pytest
@@ -36,7 +37,7 @@ def _old_schema_scaling_points(path: str) -> None:
     conn.close()
 
 
-def test_an_old_shard_migrates_on_connect(tmp_path) -> None:
+def test_an_old_shard_migrates_on_connect(tmp_path: pathlib.Path) -> None:
     """recording.connect on a pre-feature scaling_points table adds the three new columns, and an
     old row already there reads back with them NULL."""
     db = str(tmp_path / "old.db")
@@ -58,7 +59,7 @@ def test_an_old_shard_migrates_on_connect(tmp_path) -> None:
         conn.close()
 
 
-def test_an_old_grade_shard_migrates_through_open_grades(tmp_path) -> None:
+def test_an_old_grade_shard_migrates_through_open_grades(tmp_path: pathlib.Path) -> None:
     """scaling_grade.open_grades (a shard opened outside recording.connect) also migrates an old
     scaling_points table -- the exact bug a first version of this feature shipped with."""
     db = tmp_path / "old_shard.db"
@@ -71,7 +72,7 @@ def test_an_old_grade_shard_migrates_through_open_grades(tmp_path) -> None:
         conn.close()
 
 
-def test_record_scaling_persists_the_new_fields(tmp_path) -> None:
+def test_record_scaling_persists_the_new_fields(tmp_path: pathlib.Path) -> None:
     """A point carrying grid/layout/rank_spread round-trips through record_scaling into the DB."""
     conn = recording.connect(str(tmp_path / "db.sqlite"))
     point = metric.ScalingPoint(
@@ -120,7 +121,7 @@ def test_record_scaling_persists_the_new_fields(tmp_path) -> None:
         (16, True, (4, 4)),
     ],
 )
-def test_ml_grid_at_matches_the_worked_examples(p, declared_larger_first, want) -> None:
+def test_ml_grid_at_matches_the_worked_examples(p: int, declared_larger_first: bool, want: tuple) -> None:
     """The exact P=2/4/8/16 examples the USER decision named, both orientations."""
     declared = Grid((2, 1)) if declared_larger_first else Grid((1, 2))
     assert ml_grid_at(declared, p).dims == want
