@@ -423,8 +423,6 @@ METRICS_TIMEOUT_SECONDS = 10.0
 #: probe exists to report, so the noise would be indistinguishable from the measurement.
 AGGREGATE_MIN_INTERVAL_SECONDS = 1.0
 
-#: An interval counts as saturated when both its ends saw at least this share of the run's OWN peak
-#: concurrency. Relative to that peak rather than to an absolute request count because the probe
 #: Seconds of delay per worker index before an agent starts, so the per-agent MCP servers do not
 #: all initialize at once. 0 disables the stagger.
 #:
@@ -523,6 +521,8 @@ def start_gate() -> Iterator[None]:
         os.close(descriptor)
 
 
+#: An interval counts as saturated when both its ends saw at least this share of the run's OWN peak
+#: concurrency. Relative to that peak rather than to an absolute request count because the probe
 #: cannot know how many agents the arm launched; the peak itself is printed beside every figure, so
 #: a run that never had more than two requests in flight reads as one instead of hiding behind a
 #: threshold it technically passed.
