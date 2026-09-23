@@ -47,10 +47,19 @@ SCHEMA: tuple[tuple[str, str], ...] = (
     ("datatype", "TEXT NOT NULL"),
     ("median_ms", "REAL"),
     ("validated", "TEXT NOT NULL"),
+    #: The dace commit this column was measured against (``dace <short-sha>``), the SAME label
+    #: HPCAGENT_BENCH_RECORD_BUILD stamps into the per-rank shard DB's Result.build -- but that
+    #: shard DB is deleted once its column is merged, so without a copy here a re-render after a
+    #: dace fix could not be told apart from the run before it. One value per (column, run) --
+    #: canon_column.sh's whole job runs against one checked-out dace tree -- not one per kernel, so
+    #: it is stamped onto every row of a merge from :func:`main`'s ``--build``, never read out of
+    #: the CSV shards themselves. Nullable: a caller that does not pass ``--build`` (or an older
+    #: canon.db row from before this column existed) leaves it NULL rather than fabricating a value.
+    ("build", "TEXT"),
 )
 
 
-def rows_for(run_dir: pathlib.Path, column: str, run: str) -> list[dict[str, object]]:
+def rows_for(run_dir: pathlib.Path, column: str, run: str, build: str | None = None) -> list[dict[str, object]]:
     """Every rank shard of ``column`` in ``run_dir``, as tidy rows. A column with no shard (a rank
     whose kernel share was empty writes none at all -- see canon_column.sh's zero-kernel-rank
     guard) yields an empty list, which is a fact, not an error.
@@ -75,9 +84,26 @@ def rows_for(run_dir: pathlib.Path, column: str, run: str) -> list[dict[str, obj
                         "datatype": row.get("datatype", ""),
                         "median_ms": float(row["median_ms"]) if row.get("median_ms") else None,
                         "validated": row.get("validated", ""),
+                        "build": build,
                     }
                 )
     return out
+
+
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    """Create ``canon`` if it does not exist, else add any :data:`SCHEMA` column an EXISTING table
+    predates -- the idempotent migration a canon.db written before ``build`` existed needs, without
+    which every reader that names ``build`` explicitly would fail on an old database, and without
+    which a plain ``CREATE TABLE IF NOT EXISTS`` (a no-op once the table exists) would never add it
+    at all."""
+    columns_sql = ", ".join(f"{name} {sqltype}" for name, sqltype in SCHEMA)
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {TABLE} ({columns_sql})")
+    present = {row[1] for row in conn.execute(f"PRAGMA table_info({TABLE})")}
+    for name, sqltype in SCHEMA:
+        if name not in present:
+            # ALTER TABLE ADD COLUMN cannot carry a NOT NULL without a DEFAULT; every column this
+            # migration might ever need to add after the fact is, like `build`, nullable.
+            conn.execute(f"ALTER TABLE {TABLE} ADD COLUMN {name} {sqltype}")
 
 
 def merge(rows: list[dict[str, object]], db_path: pathlib.Path) -> int:
@@ -88,11 +114,10 @@ def merge(rows: list[dict[str, object]], db_path: pathlib.Path) -> int:
     calling this twice for one column's shards is always safe."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     names = [name for name, _sqltype in SCHEMA]
-    columns_sql = ", ".join(f"{name} {sqltype}" for name, sqltype in SCHEMA)
     placeholders = ", ".join(f":{name}" for name in names)
     with contextlib.closing(sqlite3.connect(db_path, timeout=30.0)) as conn:
         conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute(f"CREATE TABLE IF NOT EXISTS {TABLE} ({columns_sql})")
+        _ensure_schema(conn)
         conn.execute(
             f"CREATE UNIQUE INDEX IF NOT EXISTS ux_{TABLE}_row ON {TABLE}(run, column, kernel, preset, datatype)"
         )
@@ -116,13 +141,18 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="an independently counted row total this script's own CSV parse must match",
     )
+    ap.add_argument(
+        "--build",
+        default=None,
+        help="the dace commit this column was measured against (e.g. 'dace abc1234'); stamped onto every row",
+    )
     args = ap.parse_args(argv)
 
     if not args.run_dir.is_dir():
         print(f"no such run directory: {args.run_dir}", file=sys.stderr)
         return 2
 
-    rows = rows_for(args.run_dir, args.column, args.run)
+    rows = rows_for(args.run_dir, args.column, args.run, args.build)
     found = len(rows)
     if args.expected is not None and args.expected != found:
         print(

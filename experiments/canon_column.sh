@@ -94,7 +94,8 @@ finalize_column() {
     done
     shopt -u nullglob
     if PYTHONPATH="${opt}" python3 "${opt}/scripts/merge_canon_results.py" \
-        --run-dir "${out_root}" --column "${column}" --run "${run_label}" --db "${db}" --expected "${expected}"; then
+        --run-dir "${out_root}" --column "${column}" --run "${run_label}" --db "${db}" \
+        --expected "${expected}" --build "${build_label:-}"; then
         rm -rf -- "${out_root}/db/${column}"
         shopt -s nullglob
         rm -rf -- "${out_root}/dacecache-${column}" "${out_root}/dacecache-${column}_rank"*
@@ -146,6 +147,13 @@ if [[ "${mode}" == outer ]]; then
         echo "canon_column: ${dace_tree} has no submodules; run ${opt}/scripts/bootstrap_repos.sh" >&2
         exit 2
     fi
+    #: PROVENANCE for canon.db (scripts/merge_canon_results.py's `build` column): the SAME dace
+    #: commit label `inner` stamps into HPCAGENT_BENCH_RECORD_BUILD, computed once here so every
+    #: column of this job's merge carries it -- inner's own copy lives only in the per-rank shard
+    #: DB, which finalize_column deletes once its column is merged, so this is the only place the
+    #: label survives past the job. A caller that already exported HPCAGENT_BENCH_RECORD_BUILD
+    #: (inherited by inner too) is left alone, same override rule as inner's own default.
+    build_label="${HPCAGENT_BENCH_RECORD_BUILD:-dace $(git -C "${dace_tree}" rev-parse --short HEAD 2>/dev/null || echo notree)}"
     cpt="$(cores_per_socket)"
     if [[ ! "${cpt}" =~ ^[1-9][0-9]*$ ]]; then
         echo "canon_column: could not detect cores per socket and HPCAGENT_BENCH_NCORES is unset" >&2
@@ -271,6 +279,19 @@ sys.exit(0 if os.path.realpath(dace.__file__) == os.path.realpath(sys.argv[1]) e
     #: trees, one cache, and the build that reports a number was not built from the tree the
     #: run cites.
     dace_sha="$(git -C "${DACE_TREE}" rev-parse --short HEAD 2>/dev/null || echo notree)"
+    #: PROVENANCE: record.build (hpcagent_bench/frameworks/schema.py) is NULL on every canon row
+    #: today, so a re-render after a dace fix cannot be told apart from the run before it just by
+    #: reading canon.db. Stamped from the SAME dace_sha computed for the PCH key just above --
+    #: one fact, not a second copy of it -- through the launcher knob config.yaml's `record.build`
+    #: already documents (HPCAGENT_BENCH_RECORD_BUILD); a caller that already set a more specific
+    #: build label is left alone.
+    export HPCAGENT_BENCH_RECORD_BUILD="${HPCAGENT_BENCH_RECORD_BUILD:-dace ${dace_sha}}"
+    #: One log line per rank naming exactly what this row's provenance will be, next to canon.db's
+    #: own `build` column (scripts/merge_canon_results.py) -- the checkout this repo itself ran
+    #: from, not just the dace commit, since the same dace tree measured through two different
+    #: harness commits is not the same experiment either.
+    harness_sha="$(git -C "${opt}" rev-parse --short HEAD 2>/dev/null || echo notree)"
+    echo "canon ${col} rank ${rank}: dace ${DACE_TREE}@${dace_sha} harness ${harness_sha}"
     export DACE_BUILD_CACHE_DIR="/dev/shm/${USER}/dace_bc_${col}_${dace_sha}"
     export DACE_default_build_folder="${out_root}/dacecache-${col}"
     mkdir -p "${DACE_default_build_folder}"
