@@ -416,8 +416,7 @@ LLR40_BASELINE: str = kernel_comparison.CANON_BASELINE
 #: The two canon-sweep columns this figure draws as their OWN rows, in draw order: DaCe's
 #: parallel-CPU backend, then its canonicalizing pass over the same backend. The LIBRARY default --
 #: a caller wanting the polyhedral compiler baselines too (Pluto, PPCG-on-AMD) passes its own
-#: ``canon_columns`` (:data:`statistics.plot_llr40_compilers`'s own CLI default does exactly this,
-#: 2026-09-20), rather than widening what every existing caller of this constant draws.
+#: ``canon_columns`` (as :data:`statistics.plot_llr40_compilers`'s CLI default does).
 LLR40_CANON_COLUMNS: tuple[str, ...] = ("dace_cpu", "dace_cpu_canonicalize")
 
 #: The two CPF conditions this figure draws, per model -- never the no-packet control, which

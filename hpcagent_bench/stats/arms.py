@@ -160,7 +160,7 @@ def arm_ranking(best: pd.DataFrame, served: dict[tuple[str, str], frozenset[str]
     Grouped by ``(policy, baseline, campaign)``: two campaigns of one model were served different
     rosters, so ranking across them ranks scheduling. This is the only population in which "arm X
     leads" is a statement about the arms, and ``n_common`` is usually far smaller than any arm's own
-    count -- for the six llr40v10 arms it is 4 of 40, not the 19 a pooled reading suggests.
+    count.
     """
     arm_packet = arm_packet_map(best)
     rows = []

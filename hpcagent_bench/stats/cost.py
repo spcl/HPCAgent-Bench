@@ -23,7 +23,7 @@ COST_MODELS = pathlib.Path(__file__).resolve().parents[1] / "envs" / "cost_model
 #: The card a figure prices with when none is named: the paper's default reading, cache reads at 0.1.
 DEFAULT_COST_MODEL: str = "billed"
 
-#: The three cost proxies the paper reports, in report order (user, 2026-09-16).
+#: The three cost proxies the paper reports, in report order.
 PROXY_CARDS: tuple[str, ...] = ("effective", "billed", "total")
 
 #: The weight names a card declares, in the order an inline spec may give them.

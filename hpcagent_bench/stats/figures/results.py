@@ -103,17 +103,13 @@ TICK_SCALE: float = 0.43
 #: The speed-up denominator. Named here because it is not just another series: every ratio in the
 #: heatmap divides by it, so it has to survive :func:`load_results` under its own name.
 #:
-#: Overridable because numpy is not always AVAILABLE as one. The llr-focus40 roster has a numpy XL
-#: row for 8 of its 40 kernels and a `cc` row for all 40 -- the references that carry a loop-carried
-#: dependence are Python loops, and at XL that is ~10^8 interpreted iterations, so those rows do not
-#: exist and will not. A heatmap of that roster against numpy is therefore not a thin heatmap, it is
-#: no heatmap at all.
+#: Overridable because numpy is not always AVAILABLE as one: a reference with a loop-carried
+#: dependence is a Python loop, too slow to time at XL, so most llr-focus40 kernels have no numpy
+#: XL row.
 #:
-#: So the default is ``numba``, which is what every campaign since llr40v11 is actually graded
-#: against -- a figure that silently divided by a framework the judge never used was comparing
-#: against a denominator no score in the table had seen. Prefer :func:`baseline_of`, which reads
-#: the denominator the judge RECORDED, over this constant; this is only the fallback for a frame
-#: that does not carry one. Every function that divides takes a ``baseline`` argument rather than
+#: The default is ``numba``, the loop-level tracks' graded denominator. Prefer :func:`baseline_of`,
+#: which reads the denominator the judge RECORDED, over this constant; this is only the fallback for
+#: a frame that does not carry one. Every function that divides takes a ``baseline`` argument rather than
 #: reading a global: which framework is the denominator is a property of the figure being drawn,
 #: not of the process drawing it, and two figures in one process may want different ones.
 DEFAULT_BASELINE: str = "numba"
@@ -122,16 +118,11 @@ DEFAULT_BASELINE: str = "numba"
 def baseline_of(frame: pd.DataFrame, default: str = DEFAULT_BASELINE) -> str:
     """The denominator a slice of observations was actually GRADED against.
 
-    The baseline is a property of the track and the campaign, not of the figure: llr40v9 and v10
-    graded against the single-core C lowering and everything from v11 on grades against numba. A
-    figure that picks its own denominator is not plotting the campaign's speed-ups, it is plotting
-    a ratio nobody scored -- so this reads the ``baseline`` column the judge stamped on each row
-    rather than letting the caller assume.
+    The baseline is a property of the track and the campaign, not of the figure, so this reads the
+    ``baseline`` column the judge stamped on each row rather than letting the caller assume.
 
-    The MODE, not the unique value: a handful of rows in a campaign carry a stale denominator (v11
-    has four ``numpy`` rows against 3,918 ``numba`` ones) and refusing to plot over four rows would
-    be a worse failure than naming the one the campaign ran on. A genuinely mixed slice is warned
-    about and its majority used, because that is a slice that should have been split.
+    The MODE, not the unique value: a few rows with a stale denominator must not block the plot. A
+    mixed slice is warned about and its majority used.
     """
     if "baseline" not in frame.columns:
         return default
@@ -163,11 +154,9 @@ def format_fixed(x: float, width: int) -> str:
 def column_geomean(x: pd.Series) -> float:
     """The column's geomean over the cells that carry a ratio; NaN when none does.
 
-    NOT :func:`scipy.stats.mstats.gmean`, which this used to be. ``gmean``'s ``log(0)`` sends the
-    WHOLE column to 0.0, so a single unmeasured cell entered as a zero made a framework's summary
-    read as a total collapse -- a figure showing an arm at 0.00x when nothing regressed. Every
-    other copy of the geometric mean in this repo dropped that cell;
-    :func:`~hpcagent_bench.stats.summary.usable_ratios` is now the one that does it here.
+    NOT :func:`scipy.stats.mstats.gmean`: its ``log(0)`` sends the WHOLE column to 0.0, so one
+    unmeasured cell entered as a zero would read as a total collapse.
+    :func:`~hpcagent_bench.stats.summary.usable_ratios` drops that cell.
 
     A dropped cell is NAMED, because the useful question is which kernel produced a zero and why.
     ``x`` is indexed by kernel, so the warning quotes ``kernel=value`` for each one.
@@ -294,8 +283,7 @@ def load_results(
     # baseline is the DIVISOR, not a series. Fold it and one job's reference becomes `numpy/main`,
     # which is no longer the name every speedup is divided by; fold two builds and there are two
     # references and no defined denominator at all. It is also semantically empty: numpy does not
-    # depend on which DaCe tree was checked out. A sample that stamps a whole multi-stage run
-    # therefore used to sweep the entire corpus and only then fail in `plot`.
+    # depend on which DaCe tree was checked out.
     for axis in ("flavor", "build"):
         if axis in data.columns:
             mask = data[axis].notna() & (data["framework"] != baseline)
@@ -326,11 +314,8 @@ def machine_groups(data: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
 
     Sorted by label, so one DB always yields the same files in the same order.
     """
-    # Normalized FIRST, because a machine that recorded no device wrote it as NULL in some rows and
-    # as "" in others -- two group keys, one machine, and machine_label maps both to the same
-    # string. They were then two figures competing for one filename, the second silently
-    # overwriting the first: on the llr XL scope that split 9,957 rows into 2,264 (no cc, skipped)
-    # and 7,693, and the figure that survived was missing a third of the machine's data.
+    # Normalized FIRST: a machine with no device records it as NULL in some rows and "" in others,
+    # which would be two group keys (and two figures overwriting one filename) for one machine.
     normalized: pd.DataFrame = data.assign(
         cpu=data["cpu"].fillna("").astype(str),
         gpu=data["gpu"].fillna("").astype(str),
@@ -461,9 +446,7 @@ def plot_heatmap(
     set_usetex(usetex)
     everything = load_results(db, benchmark, preset, datatype, variant, baseline)
     groups = machine_groups(everything)
-    # An empty selection must FAIL, not return []. Before the per-machine split this function always
-    # drew something or raised; the comprehension below would instead write no file and exit 0 --
-    # a plot leg that silently produces nothing while reporting success.
+    # An empty selection must FAIL: the comprehension below would otherwise write no file and exit 0.
     if not groups:
         raise RuntimeError(
             f"no rows to plot: benchmark={benchmark!r} preset={preset!r} "
@@ -510,8 +493,7 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
 
     frmwrks = cast("list[str]", list(data["framework"].unique()))
     # Raised, not asserted, and the CALLER decides: figures are emitted one per machine, and a
-    # machine that ran only one framework has nothing to divide by. That is a thin slice of the
-    # data, not a broken run, and it used to take the whole plot down with it.
+    # machine that ran only one framework has nothing to divide by -- a thin slice, not a broken run.
     if baseline not in frmwrks:
         raise NoBaselineRows(f"no {baseline} rows to divide by; frameworks present: {sorted(frmwrks)}")
     frmwrks.remove(baseline)

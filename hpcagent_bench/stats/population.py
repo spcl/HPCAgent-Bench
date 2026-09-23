@@ -2,29 +2,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The POPULATION an aggregate is taken over, made explicit so a wrong one cannot be expressed.
 
-Three defects in this repo's published tables were the same shape: a correct statistic applied to a
-population the claim was not about.
-
-* Speed-ups over DIFFERENT DENOMINATORS were pooled. The judge stamps ``baseline`` on every graded
-  row and it is a per-JOB property: the llr40v9/v10 jobs graded against the single-core C lowering
-  or against parallel numba, and the same agent work reads 95.3x under one and 1.82x under the
-  other while ``native_ns`` moves 7%. A mean over both is a ratio with no denominator, so
-  :class:`ArmAggregate` carries its ``baseline`` and :func:`ratio` REFUSES two that disagree.
-* Speed-ups chosen by different RULES were pooled, and nothing in the rows showed it. From
-  2026-09-20 a scientific_computing denominator is the FASTEST of ``c-autopar``, ``c`` and
-  ``numba``, all timed in the candidate's own bracket, where it used to be whichever single kind
-  the track named. Both rows can read ``baseline=c-autopar`` on the same kernel, so the kind alone
-  cannot tell them apart -- only ``baseline_policy`` can, and :func:`one_baseline_policy` refuses a
-  slice that mixes it. A blank cell is the legacy fixed rule, which is known, not unknown.
-* Each arm's geomean was taken over a DIFFERENT KERNEL SET -- whatever that arm happened to solve.
-  Ranking those numbers ranks coverage as much as quality, and it penalises an arm for reaching the
-  hard kernels at all. So an aggregate carries the exact ``kernels`` behind it and :func:`ratio`
-  refuses two whose kernel tuples differ; :func:`align` is how a caller gets two that do not.
-* The EPISODE key was wrong. ``runs.run_id`` is a PRIMARY KEY inside ONE results database, and a
-  launcher derives it from the rank layout (``<arm>.n<node>.p<problem>.w<worker>``), so two jobs of
-  one arm reuse it: 154 of 226 llr40 run_ids appear under more than one job. Deduplicating on
-  ``run_id`` alone therefore discards whole agent runs. :data:`EPISODE_KEY` is the key that is
-  actually one agent on one kernel.
+* ONE DENOMINATOR. ``baseline`` is a per-job property of every graded row, and the same agent work
+  reads very differently over two denominators. :class:`ArmAggregate` carries its ``baseline`` and
+  :func:`ratio` refuses two that disagree.
+* ONE BASELINE RULE. A scientific_computing denominator is either the track's single kind or the
+  FASTEST of ``c-autopar``, ``c`` and ``numba``; both can read ``baseline=c-autopar`` on one kernel,
+  so only ``baseline_policy`` tells them apart and :func:`one_baseline_policy` refuses a slice that
+  mixes them. A blank cell is the fixed single-kind rule.
+* ONE KERNEL SET. A geomean over whatever each arm solved ranks coverage as much as quality. An
+  aggregate carries the exact ``kernels`` behind it, :func:`ratio` refuses two whose kernel tuples
+  differ, and :func:`align` makes two that match.
+* ONE EPISODE KEY. ``runs.run_id`` is unique only inside one results database and repeats across
+  jobs of one arm (it is derived from the rank layout ``<arm>.n<node>.p<problem>.w<worker>``);
+  :data:`EPISODE_KEY` is one agent on one kernel.
 
 TWO POLICIES, AND A TABLE MUST NAME ITS OWN. ``solved`` is "how good when it works" -- the geomean
 over the kernels the arm verified. ``served`` is "how good overall" -- every kernel the arm was
@@ -394,10 +384,9 @@ def one_reduction(values: Iterable[object], label: str = "", *, allow_unstamped:
 #: set it chose from. ``baseline`` names the winner, and :func:`one_denominator` guards that.
 BASELINE_POLICY_COLUMN: str = "baseline_policy"
 
-#: What a row recorded before the stamp counts as. Unlike an unstamped REDUCTION this is not an
-#: unknown -- until 2026-09-20 there was exactly one rule, one declared kind per track -- so a
-#: legacy row is named rather than refused. It is compatible with any later ``single-v1:<kind>``
-#: stamp (the kind is :func:`one_denominator`'s job) and with no best-of stamp at all.
+#: What an unstamped row counts as: the one declared kind per track, so it is named rather than
+#: refused. It is compatible with any ``single-v1:<kind>`` stamp (the kind is
+#: :func:`one_denominator`'s job) and with no best-of stamp.
 #:
 #: Spelled here rather than imported: ``stats`` must not pull the grading stack in to read one
 #: string. ``tests/test_best_of_baseline.py`` pins it equal to
@@ -513,7 +502,7 @@ def valid_submission_rows(frame: "pd.DataFrame") -> "pd.Series":
 
 def latest_runs(frame: "pd.DataFrame", by: Sequence[str] = ("arm", "benchmark")) -> "pd.DataFrame":
     """Every row, of any record type, of each ``by`` group's chosen run: the run holding the group's
-    NEWEST VALID submission (:func:`valid_submission_rows`), across all runs (2026-09-23 USER). A
+    NEWEST VALID submission (:func:`valid_submission_rows`), across all runs. A
     rerun that crashed or timed out without a valid answer therefore does not erase an older valid
     one. When no run of the group holds a valid submission, the newest run is chosen, and the
     kernel has no answer -- which is what its runs delivered.

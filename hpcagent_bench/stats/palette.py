@@ -27,18 +27,14 @@ ONE GLOBAL PALETTE: matplotlib's ``tab20``, extended by ``tab20b`` once its twen
 and nothing else. Every entity a figure colours -- packet, framework, model, harness, language --
 takes a SLOT decided by its position in
 ``envs/registry.yaml``, so a colour is looked up in exactly one table and no figure, script or
-registry entry carries a hex literal of its own. The ramp it used to carry was hand-picked
-Okabe-Ito with per-packet hex overrides bolted on wherever six hues wrapped, which is two palettes
-pretending to be one.
+registry entry carries a hex literal of its own.
 
 A packet's colour is :func:`color`: its LEAD packet's slot and one lightness step per additional
 packet, so ``cpfsrc`` and ``cpfsrc+lang-skills`` read as the same treatment family at two
 strengths, and neutral grey for the no-packet control.
 
-THE VOCABULARY AND THE ORDER ARE DATA, in ``envs/registry.yaml``, beside the display names. They
-were tuples here and names there, which is two registries for one vocabulary -- and the failure
-mode is silent, because a packet missing from one of them still draws, in a hash colour, under a
-raw-string label.
+THE VOCABULARY AND THE ORDER ARE DATA, in ``envs/registry.yaml``, beside the display names: one
+registry for one vocabulary.
 """
 
 import colorsys
@@ -65,7 +61,7 @@ TAB20: str = "tab20"
 #: are spent.
 TAB20_ORDER: tuple[int, ...] = (0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19)
 
-#: Slots 21-40 (user, 2026-09-16: the 21st packet extends the palette rather than wrapping or sharing).
+#: Slots 21-40: the 21st entity extends the palette; it never wraps or shares a colour.
 #: tab20b is five hues of four shades each; taken darkest shade of every hue first, then the next
 #: shade, so its first entries stay as far apart as tab20's dark half.
 TAB20B: str = "tab20b"

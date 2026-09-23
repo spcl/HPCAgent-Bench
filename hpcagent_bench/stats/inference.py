@@ -62,10 +62,8 @@ Samples = Sequence[float] | FloatArray
 #: Default two-sided error rate for every test and interval here. One definition, in
 #: :mod:`hpcagent_bench.stats.summary`, which the paired estimator there already reports against.
 DEFAULT_ALPHA: float = summary.DEFAULT_ALPHA
-#: The confidence level and bootstrap replicate count come from :mod:`hpcagent_bench.stats`, not
-#: restated here. Both modules quote intervals of the same resolution BY CONSTRUCTION -- a second
-#: copy of the number is a second thing to keep in step, and the comment that used to sit here said
-#: exactly that while still holding a copy.
+#: The confidence level and bootstrap replicate count come from :mod:`hpcagent_bench.stats.summary`,
+#: so both modules quote intervals of the same resolution.
 
 #: Every bootstrap seeds from here, so a published figure is reproducible from the same DB.
 DEFAULT_SEED: int = 0
@@ -230,7 +228,7 @@ def anderson_darling_pvalue(statistic: float, n: int) -> float:
 def check_normality(samples: Samples, alpha: float = DEFAULT_ALPHA) -> NormalityVerdict:
     """Is this sample close enough to normal to justify a parametric interval?
 
-    ⛔ Feed the RAW per-repeat timings. Feeding the reduced ``min_of_k`` number tests an
+    WARNING: Feed the RAW per-repeat timings. Feeding the reduced ``min_of_k`` number tests an
     extreme-value statistic's distribution, which answers a question nobody asked.
 
     Test selection: Shapiro-Wilk for ``n <= 5000`` -- the most powerful omnibus normality test at
@@ -350,7 +348,7 @@ def min_of_k_ci(
     ``n_resamples`` times. With ``k`` held FIXED this is a bootstrap of a fixed-dimension
     functional and is consistent -- it answers "what min would a fresh k-repeat run produce?".
 
-    ⛔ The classic ``k == n`` case is NOT that. The n-out-of-n bootstrap of an extreme order
+    WARNING: The classic ``k == n`` case is NOT that. The n-out-of-n bootstrap of an extreme order
     statistic is inconsistent (Bickel & Freedman 1981): ~63% of the resamples reproduce the
     observed minimum exactly, so the bootstrap law does not converge to the law of the minimum.
     ``method`` records ``bootstrap-min-of-k`` when ``k < n`` and ``bootstrap-min-of-n
@@ -429,7 +427,7 @@ def speedup_ci(
 ) -> Interval:
     """Interval for the SPEED-UP ``stat(baseline) / stat(candidate)`` -- the ratio itself.
 
-    ⛔ An interval on the numerator and one on the denominator do not compose into an interval on
+    WARNING: An interval on the numerator and one on the denominator do not compose into an interval on
     the ratio -- dividing endpoint by endpoint gives a strictly and needlessly wider band. This
     bootstraps the RATIO: each replicate resamples both sides independently (they ARE independent
     -- see the module docstring) and divides, so the denominator's variability is carried through
@@ -514,7 +512,7 @@ def wilcoxon_signed_rank(a: Samples, b: Samples, alpha: float = DEFAULT_ALPHA) -
     """Two-sided Wilcoxon signed-rank for PAIRED samples -- rep ``i`` of both sides measured
     back-to-back on the same input and machine.
 
-    ⛔ Nothing in the harness today collects that way (see the module docstring): using this on
+    WARNING: Nothing in the harness collects that way (see the module docstring): using this on
     the harness's independently-collected passes would pair unrelated observations. It exists so
     an INTERLEAVED collector -- which would be the stronger design, since it cancels slow drift
     such as thermal throttling -- has the right test waiting for it, and so the choice between the
@@ -548,7 +546,7 @@ def tost_equivalence(
 ) -> Equivalence:
     """Two one-sided tests for EQUIVALENCE: can we assert "this changed nothing measurable"?
 
-    ⛔ Failing to reject a difference is NOT evidence of no difference -- it is equally consistent
+    WARNING: Failing to reject a difference is NOT evidence of no difference -- it is equally consistent
     with having no power. TOST inverts the burden: the null is "the difference is at least
     ``margin``", and REJECTING it on both sides is a positive claim of equivalence.
 
@@ -609,7 +607,7 @@ def benjamini_hochberg(pvalues: Sequence[float]) -> list[float]:
 def adjust_pvalues(pvalues: Sequence[float], method: str = "fdr_bh") -> list[float]:
     """Multiplicity-adjusted p-values. ``fdr_bh`` (default) or ``holm``.
 
-    ⛔ The corpus is ~578 kernels. Testing each at alpha=0.05 manufactures ~29 false positives by
+    WARNING: The corpus is ~578 kernels. Testing each at alpha=0.05 manufactures ~29 false positives by
     construction, so an unadjusted per-kernel p-value is not a finding.
 
     BH FDR is the DEFAULT because the corpus question is a screening one -- "which kernels sped

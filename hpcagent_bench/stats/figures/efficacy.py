@@ -168,11 +168,8 @@ class FigureConfig:
     grid_width: float = 0.7
     spine_width: float = 0.8
     #: ABSOLUTE panels only (:func:`draw_arm_pair`): join an arm to its own no-packet twin with a
-    #: faint segment. It is not a trend line -- both ends are measurements of the same arm, and the
-    #: segment IS the intervention's displacement, the quantity a paired panel draws as one mark.
-    #: Join an arm to its own no-packet twin with a faint segment. OFF: at paper scale the segment
-    #: reads as a third mark between the two, and the quantity it stood for is now drawn on request
-    #: and labelled (:func:`draw_difference_arrow`).
+    #: faint segment. OFF: at paper scale the segment reads as a third mark between the two;
+    #: :func:`draw_difference_arrow` draws the displacement, labelled, on request.
     link_pairs: bool = False
     link_width: float = 0.9
     link_alpha: float = 0.35
@@ -258,7 +255,7 @@ PAIRED_COLUMNS: tuple[str, ...] = (
     "treated_solved",
 )
 
-#: What a speed-up aggregate is taken over (2026-09-21). ``solved``: the kernels BOTH arms answered
+#: What a speed-up aggregate is taken over. ``solved``: the kernels BOTH arms answered
 #: correctly -- a wrong answer is no speed-up at all, so it is counted by the success rate and not
 #: scored as the baseline, and both arms are timed on the same kernels, so solving only the easy
 #: ones buys no speed-up. ``served``: every kernel, a failure at 1x (the fallback reading: what a
