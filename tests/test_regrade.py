@@ -902,6 +902,33 @@ def test_no_promotion_is_owed_when(tmp_path: pathlib.Path, rows: list[tuple], wh
     assert items == [], why
 
 
+def test_a_submission_from_a_wiped_attempt_leaves_the_final_attempts_score_owed_a_promotion(
+    tmp_path: pathlib.Path,
+) -> None:
+    """645737 tsvc_2_s152: the crashed attempt submitted (ts 12), the relaunch (cut 15) scored correct
+    (ts 18) and timed out. X7 drops the ts-12 row, so the final attempt spent nothing."""
+    rows = [
+        ("submission", "k1", None, 3.0, 12, None),
+        ("call", "k1", 1, 2.0, 18, None),
+        ("task", "k1", None, None, 5, 15),
+    ]
+    (item,), problems = regrade.build_promotion_worklist(
+        [promotion_observations(tmp_path, shard_db(tmp_path), rows)], []
+    )
+    assert problems == []
+    assert (item.benchmark, item.ts_ms, item.promoted, item.speedup) == ("k1", 20, True, 2.0)
+
+
+def test_a_submission_from_the_final_attempt_still_spends_it(tmp_path: pathlib.Path) -> None:
+    rows = [
+        ("call", "k1", 1, 2.0, 18, None),
+        ("submission", "k1", None, 2.0, 19, None),
+        ("task", "k1", None, None, 5, 15),
+    ]
+    items, _ = regrade.build_promotion_worklist([promotion_observations(tmp_path, shard_db(tmp_path), rows)], [])
+    assert items == []
+
+
 def test_a_judge_fault_on_submit_leaves_the_correct_score_owed_a_promotion(tmp_path: pathlib.Path) -> None:
     """wf_triangular (job 639211): /score correct, every /submit died in the judge (score_error).
     Nothing was graded, so the episode spent nothing and its answer is still owed a grade."""
