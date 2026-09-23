@@ -581,7 +581,7 @@ def queued_arms() -> set[str]:
 @dataclasses.dataclass(frozen=True, slots=True)
 class Queue:
     """What is queued, as the planner subtracts it: identities a single-setup job serves WHOLE, and
-    per identity the kernels queued fused waves serve. A fused wave holds only the kernels its
+    per identity the kernels queued fused waves serve or queued promotions file a submission for. A fused wave holds only the kernels its
     problems file names, so the identity still owes the rest: a harness20 wave queueing the scicomp
     baseline's gemm leaves that baseline's other scicomp37 kernels to the scicomp wave."""
 
@@ -590,13 +590,16 @@ class Queue:
 
 
 def queue_state() -> Queue:
-    """:class:`Queue` from squeue and each queued fused wave's snapshot. Raises :class:`QueueUnknown`
-    as :func:`queued_arms` does, and when a queued fused wave's problems cannot be read."""
+    """:class:`Queue` from squeue, each queued fused wave's snapshot and each queued promotion's
+    worklist (:func:`wave_board.promoted_kernels`). Raises :class:`QueueUnknown` as
+    :func:`queued_arms` does, and when a queued fused wave's problems cannot be read."""
     whole: set[str] = set()
     kernels: dict[str, set[str]] = {}
     for job, name in queue_jobs():
         if not name.startswith(wave_board.FUSED_JOB_PREFIX):
             whole.add(remaining_kernels.base_arm(name))
+            for arm, names in wave_board.promoted_kernels(job).items():
+                kernels.setdefault(remaining_kernels.base_arm(arm), set()).update(names)
             continue
         served = wave_board.planned_fused_kernels(job)
         if not served:
