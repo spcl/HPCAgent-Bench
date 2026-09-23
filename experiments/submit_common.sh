@@ -377,7 +377,8 @@ finalize_staged_env() {
 # (PriorityWeightJobSize 0) but a pending job gains ~515 priority an hour (PriorityWeightAge 172800
 # over PriorityMaxAge 14 days), so a band keeps its order only against families submitted within
 # (gap / 515) hours after it: submit the families in this order.
-declare -A PRIORITY_NICE=([regrade]=0 [llr-gpu-device]=1000 [harness20]=2000 [scicomp]=3000 [mlscale]=4000 [kimi]=10000)
+# User 2026-09-23 23:35: LLR (blind, cpu, gpu) > mlscale > harness20 > scicomp (qwen, oss) > kimi.
+declare -A PRIORITY_NICE=([regrade]=0 [llr]=1000 [llr-gpu-device]=1000 [mlscale]=1500 [harness20]=2000 [scicomp]=3000 [kimi]=10000)
 
 # priority_nice -- NICE from PRIORITY (PRIORITY_NICE); refuses an unknown family or a NICE that
 # disagrees with it. Without PRIORITY, NICE stays whatever the caller set.

@@ -132,12 +132,12 @@ def test_a_family_submits_at_its_priority_band(tmp_path: pathlib.Path) -> None:
 
 
 def test_the_priority_bands_follow_the_users_submission_order() -> None:
-    script = f'. "{EXPERIMENTS / "submit_common.sh"}" 2>/dev/null; for f in regrade llr-gpu-device harness20 scicomp mlscale kimi; do echo "${{PRIORITY_NICE[$f]}}"; done'
+    script = f'. "{EXPERIMENTS / "submit_common.sh"}" 2>/dev/null; for f in regrade llr llr-gpu-device mlscale harness20 scicomp kimi; do echo "${{PRIORITY_NICE[$f]}}"; done'
     done = subprocess.run(
         ["bash", "-c", script], capture_output=True, text=True, check=True, env={**os.environ, "OPT": str(REPO)}
     )
     bands = [int(line) for line in done.stdout.split()]
-    assert bands == [0, 1000, 2000, 3000, 4000, 10000]
+    assert bands == [0, 1000, 1000, 1500, 2000, 3000, 10000]
 
 
 def test_an_unknown_family_or_a_disagreeing_nice_submits_nothing(tmp_path: pathlib.Path) -> None:
