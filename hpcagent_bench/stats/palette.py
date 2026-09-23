@@ -281,7 +281,7 @@ COMBINED_MIN_CHROMA: float = 18.0
 COMBINED_GRID: int = 18
 
 
-def _oklab(rgb: "object") -> "object":
+def oklab(rgb: "object") -> "object":
     """sRGB (0-1, shape (n, 3)) as OKLab. Perceptual distance is what a categorical ramp has to
     maximise, and sRGB distance is not it."""
     import numpy as np
@@ -331,7 +331,7 @@ def combined_ramp(slots: int = COMBINED_SLOTS) -> tuple[str, ...]:
 
     axis = np.linspace(0.0, 1.0, COMBINED_GRID)
     rgb = np.array(np.meshgrid(axis, axis, axis)).reshape(3, -1).T
-    lab = _oklab(rgb) * 100.0
+    lab = oklab(rgb) * 100.0
     chroma = np.hypot(lab[:, 1], lab[:, 2])
     inside = (lab[:, 0] > COMBINED_L[0]) & (lab[:, 0] < COMBINED_L[1]) & (chroma > COMBINED_MIN_CHROMA)
     rgb, lab = rgb[inside], lab[inside]

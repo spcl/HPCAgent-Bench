@@ -12,17 +12,17 @@ from pathlib import Path
 import numpy as np
 import scipy.sparse as sp
 
-_SUPPORTED_FORMATS = ("csr", "csc", "coo", "bsr", "dia")
+SUPPORTED_FORMATS = ("csr", "csc", "coo", "bsr", "dia")
 
 # Manifests spell block-CSR ``bcsr`` (the emit's name); scipy calls it ``bsr``.
-_FORMAT_ALIASES = {"bcsr": "bsr"}
+FORMAT_ALIASES = {"bcsr": "bsr"}
 
-_SUITESPARSE_BASE = "https://suitesparse-collection-website.herokuapp.com/MM"
+SUITESPARSE_BASE = "https://suitesparse-collection-website.herokuapp.com/MM"
 
 #: Socket timeout (s) on the SuiteSparse fetch. Without one, ``urlopen`` on a runner with no egress
 #: blocks until the kernel's own timeout fires and takes the enclosing sweep with it -- the failure
 #: reads as a hung benchmark rather than as a missing matrix.
-_SUITESPARSE_TIMEOUT_S = int(os.environ.get("HPCAGENT_BENCH_SUITESPARSE_TIMEOUT_S", "120"))
+SUITESPARSE_TIMEOUT_S = int(os.environ.get("HPCAGENT_BENCH_SUITESPARSE_TIMEOUT_S", "120"))
 
 
 class SuiteSparseUnavailable(RuntimeError):
@@ -34,7 +34,7 @@ class SuiteSparseUnavailable(RuntimeError):
     """
 
 
-def _cache_dir() -> Path:
+def cache_dir() -> Path:
     """Return the hpcagent_bench cache dir under which downloaded matrices live."""
     override = os.environ.get("HPCAGENT_BENCH_CACHE_DIR")
     if override:
@@ -48,9 +48,9 @@ def _cache_dir() -> Path:
 
 def to_format(m, fmt: str):
     """Convert ``m`` to a scipy.sparse format: csr/csc/coo/bsr (alias bcsr)/dia."""
-    fmt = _FORMAT_ALIASES.get(fmt, fmt)
-    if fmt not in _SUPPORTED_FORMATS:
-        raise ValueError(f"Unsupported sparse format: {fmt!r}. Choose one of {_SUPPORTED_FORMATS}.")
+    fmt = FORMAT_ALIASES.get(fmt, fmt)
+    if fmt not in SUPPORTED_FORMATS:
+        raise ValueError(f"Unsupported sparse format: {fmt!r}. Choose one of {SUPPORTED_FORMATS}.")
     return sp.csr_matrix(m).asformat(fmt) if fmt != "csr" else sp.csr_matrix(m)
 
 
@@ -130,22 +130,22 @@ def make_diagonal(
     return sp.coo_matrix((vals, (rows, cols)), shape=(n, n))
 
 
-def _fetch_suitesparse(matrix_name: str) -> Path:
+def fetch_suitesparse(matrix_name: str) -> Path:
     """Download a SuiteSparse Matrix Market tarball into the cache; return the path to the
     extracted ``.mtx`` file."""
     import tarfile
 
     group, name = matrix_name.split("/", 1)
-    cache = _cache_dir() / "suitesparse"
+    cache = cache_dir() / "suitesparse"
     extracted = cache / name
     mtx_path = extracted / f"{name}.mtx"
     if mtx_path.exists():
         return mtx_path
-    url = f"{_SUITESPARSE_BASE}/{group}/{name}.tar.gz"
+    url = f"{SUITESPARSE_BASE}/{group}/{name}.tar.gz"
     tarball = cache / f"{name}.tar.gz"
     print(f"[hpcagent_bench] downloading SuiteSparse matrix {matrix_name} -> {tarball}")
     try:
-        with urllib.request.urlopen(url, timeout=_SUITESPARSE_TIMEOUT_S) as r, tarball.open("wb") as fp:
+        with urllib.request.urlopen(url, timeout=SUITESPARSE_TIMEOUT_S) as r, tarball.open("wb") as fp:
             fp.write(r.read())
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         tarball.unlink(missing_ok=True)
@@ -165,7 +165,7 @@ def make_suitesparse(matrix_name: str, dtype=np.float64):
     return COO; downloaded once and cached under ``.hpcagent_bench_cache/suitesparse/``."""
     import scipy.io as sio
 
-    mtx = _fetch_suitesparse(matrix_name)
+    mtx = fetch_suitesparse(matrix_name)
     m = sio.mmread(mtx)
     return sp.coo_matrix(m).astype(dtype)
 
@@ -217,7 +217,7 @@ def build_sparse_rect(spec: dict, rows, cols, nnz, dtype=np.float64, slot: str =
         m = sp.random(rows, cols, density=density, format="coo", dtype=dtype, random_state=rng)
     elif dist == "banded":
         bandwidth = spec.get("bandwidth") or max(1, int(np.ceil(nnz / min(rows, cols))))
-        m = _banded_rect(rows, cols, nnz, dtype, bandwidth, rng)
+        m = banded_rect(rows, cols, nnz, dtype, bandwidth, rng)
     elif dist == "diagonal":
         # Full diagonal + scattered off-diagonals; the diagonal runs to the SMALLER dim so it
         # cannot run off the edge of a rectangular matrix.
@@ -245,7 +245,7 @@ def build_sparse_rect(spec: dict, rows, cols, nnz, dtype=np.float64, slot: str =
     return to_format(m, fmt)
 
 
-def _banded_rect(rows, cols, nnz, dtype, bandwidth, rng):
+def banded_rect(rows, cols, nnz, dtype, bandwidth, rng):
     """``nnz`` distinct entries with |i - j| <= bandwidth on a rows x cols grid."""
     seen = set()
     rs = np.empty(nnz, dtype=np.int64)
@@ -325,7 +325,7 @@ def make_stencil_3d(nx: int, ny: int, nz: int, dtype=np.float64, seed: int = 42)
     diag = np.zeros((nx, ny, nz), dtype=np.float64)
     vals = [None]  # the diagonal, filled once every off-diagonal contribution is known
 
-    def _span(d: int, extent: int):
+    def span(d: int, extent: int):
         """Source and destination slices along one axis for a shift of ``d``."""
         if d == 0:
             return slice(0, extent), slice(0, extent)
@@ -335,9 +335,9 @@ def make_stencil_3d(nx: int, ny: int, nz: int, dtype=np.float64, seed: int = 42)
 
     for o in canonical:
         dx, dy, dz = o
-        sx, tx = _span(dx, nx)
-        sy, ty = _span(dy, ny)
-        sz, tz = _span(dz, nz)
+        sx, tx = span(dx, nx)
+        sy, ty = span(dy, ny)
+        sz, tz = span(dz, nz)
         w = weights[o][sx, sy, sz]
         src = idx[sx, sy, sz].reshape(-1)
         dst = idx[tx, ty, tz].reshape(-1)
