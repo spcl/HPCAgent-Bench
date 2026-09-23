@@ -216,8 +216,6 @@ Examples in the tree:
 * `banded_mmt_numpytoc_numpy.py` -- inline buffer-form replacing
   3-tuple returns through helper functions
 * `gmres_numpytoc_numpy.py` -- pre-materialised lstsq `b` argument
-* `vadv_numpytoc_numpy.py` -- explicit `[:-1, :, k]` writes
-  replacing gt4py write-to-subset semantics
 
 ---
 
