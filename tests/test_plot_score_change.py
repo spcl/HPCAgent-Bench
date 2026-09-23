@@ -31,7 +31,7 @@ from PIL import Image
 
 from hpcagent_bench import experiment_tags, packets
 from hpcagent_bench.harness import efficacy
-from hpcagent_bench.stats import palette, score_rule
+from hpcagent_bench.stats import cost, palette, score_rule
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
 
@@ -70,6 +70,12 @@ DECISIVE: tuple[float, ...] = tuple(1.25 + 0.01 * k for k in range(KERNELS))
 FLAT: tuple[float, ...] = tuple(1.05 if k % 2 == 0 else 1.0 / 1.05 for k in range(KERNELS))
 
 
+def spent(tokens: float) -> dict[str, float]:
+    """A task row's token columns: the total, stated as fresh input alone so every cost card prices
+    the task at ``tokens``."""
+    return {"tokens": tokens, "tokens_fresh_input": tokens, "tokens_cached_input": 0.0, "tokens_output": 0.0}
+
+
 def episode(arm: str, model: str, language: str, kernel: int, run: str, speedup: float, tokens: float) -> list[dict]:
     """One episode as the judge records it: a GRADED row carrying the speed-up and no token count,
     and a ``task`` row carrying the token total and no timings."""
@@ -98,7 +104,7 @@ def episode(arm: str, model: str, language: str, kernel: int, run: str, speedup:
             "baseline_ns": 1.0e6,
             "native_ns": 1.0e6 / speedup,
         },
-        {**common, "record": "task", "speedup": None, "tokens": tokens, "suspect": None},
+        {**common, "record": "task", "speedup": None, **spent(tokens), "suspect": None},
     ]
 
 
@@ -195,6 +201,11 @@ def test_the_family_the_marks_are_corrected_over_is_every_test_the_figure_could_
     assert plot.efficacy_figures.family_size(frame) == 12
 
 
+#: The card for a frame that carries only ``arm`` and ``packet``: ``effective`` leaves the frame
+#: unpriced, so a test about packets needs no token columns.
+PACKET_ONLY = cost.resolve("effective")
+
+
 def test_load_reads_skills_off_the_recorded_packet_before_the_arm_name(tmp_path: pathlib.Path) -> None:
     """An arm renamed away from the ``-skills`` suffix but recording ``lang-skills`` loads as skilled, and a recorded
     packet beats a ``-skills`` name."""
@@ -207,7 +218,7 @@ def test_load_reads_skills_off_the_recorded_packet_before_the_arm_name(tmp_path:
         ]
     ).to_csv(path, index=False)
 
-    frame = plot.load(path, prefix="")
+    frame = plot.load(path, prefix="", card=PACKET_ONLY)
 
     by_arm = frame.set_index("arm").skills
     assert bool(by_arm["renamed-qwen38-c"]) is True
@@ -227,7 +238,7 @@ def test_load_counts_a_composite_packet_as_skilled(tmp_path: pathlib.Path) -> No
         ]
     ).to_csv(path, index=False)
 
-    frame = plot.load(path, prefix="")
+    frame = plot.load(path, prefix="", card=PACKET_ONLY)
 
     by_arm = frame.set_index("arm").skills
     assert bool(by_arm["llrsingle-qwen38-c-skills"]) is True
@@ -247,7 +258,7 @@ def test_control_rows_is_exactly_the_no_packet_arm(tmp_path: pathlib.Path) -> No
         ]
     ).to_csv(path, index=False)
 
-    frame_all = plot.load(path, prefix="")
+    frame_all = plot.load(path, prefix="", card=PACKET_ONLY)
     control = plot.control_rows(frame_all)
 
     assert set(control.arm) == {"cpf-llr-focus40-qwen38-c"}
@@ -264,7 +275,7 @@ def test_a_perf_playbook_arm_never_enters_the_control_side(tmp_path: pathlib.Pat
         ]
     ).to_csv(path, index=False)
 
-    frame_all = plot.load(path, prefix="")
+    frame_all = plot.load(path, prefix="", card=PACKET_ONLY)
     control = plot.control_rows(frame_all)
 
     assert "cpf-llr-focus40-qwen38-c-perf-playbook-cpu" not in set(control.arm)
@@ -332,7 +343,7 @@ def test_a_treatment_arm_that_never_recorded_its_language_still_pairs_against_co
                 "baseline_ns": 1000.0,
                 "native_ns": 1000.0 / speedup
             })  # fmt: skip
-            rows.append({**base, "record": "task", "speedup": None, "tokens": 1000.0})
+            rows.append({**base, "record": "task", "speedup": None, **spent(1000.0)})
     pd.DataFrame(rows).to_csv(path, index=False)
 
     frame_all = plot.load(path, prefix="")
@@ -882,6 +893,7 @@ def family_csv(pairs: list[tuple[str, str]], score_verdict: str, cost_verdict: s
             {
                 "family": "demo",
                 "score_rule": score_rule.SCORE_RULE,
+                "cost_model": cost.DEFAULT_COST_MODEL,
                 "kernel_policy": efficacy_figures.SPEEDUP_OVER,
                 "arm_a": treated,
                 "arm_b": control,
@@ -959,7 +971,7 @@ def observation_rows(arm: str, speedup: float, tokens: float, kernels: int = KER
             "baseline_ns": 1000.0,
             "native_ns": 1000.0 / speedup
         })  # fmt: skip
-        rows.append({**common, "record": "task", "speedup": None, "tokens": tokens})
+        rows.append({**common, "record": "task", "speedup": None, **spent(tokens)})
     return rows
 
 

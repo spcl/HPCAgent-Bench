@@ -52,7 +52,7 @@ KERNELS: tuple[str, ...] = ("argmax_with_index", "tsvc_2_s116", "tsvc_2_s119", "
 COLUMNS: tuple[str, ...] = (
     "run_root", "job", "record", "run_id", "arm", "packet", "language", "benchmark",
     "attempt_index", "ts_ms", "speedup", "baseline_ns", "native_ns", "tokens", "baseline",
-    "timing_reduction", "suspect",
+    "timing_reduction", "suspect", "tokens_fresh_input", "tokens_cached_input", "tokens_output",
 )  # fmt: skip
 
 #: The arm's trailing suffix for each packet, matching the launcher's own naming.
@@ -72,7 +72,8 @@ def episode_rows(run_root: str, arm: str, packet: str, kernel: str, index: int, 
     """One episode's submission + call + task row, in :data:`COLUMNS` order: a plausible speed-up
     and token spend, distinct per (arm, kernel) so no two cells in the fixture are accidentally
     identical. The task's effective total equals the call's running count: this fixture gives every
-    episode exactly one attempt, so the two happen to agree (a relaunch would not)."""
+    episode exactly one attempt, so the two happen to agree (a relaunch would not). The task row
+    states its whole spend as fresh input, so every cost card prices it at ``tokens``."""
     run_id = f"{arm}.n0.p{index}.w{index}"
     speedup = 1.2 + 0.3 * index + (0.5 if packet else 0.0)
     tokens = 80000.0 + 5000.0 * index
@@ -80,14 +81,17 @@ def episode_rows(run_root: str, arm: str, packet: str, kernel: str, index: int, 
     submission = (
         run_root, run_root, "submission", run_id, arm, packet, "c", kernel,
         1, ts, speedup, baseline_ns, baseline_ns / speedup, None, "numba", "mwd-v2", 0,
+        None, None, None,
     )  # fmt: skip
     call = (
         run_root, run_root, "call", run_id, arm, packet, "c", kernel,
         1, ts + 1, speedup, None, None, tokens, "numba", "mwd-v2", 0,
+        None, None, None,
     )  # fmt: skip
     task = (
         run_root, run_root, "task", run_id, arm, packet, "c", kernel,
         1, ts + 2, None, None, None, tokens, "numba", "mwd-v2", 0,
+        tokens, 0.0, 0.0,
     )  # fmt: skip
     return [submission, call, task]
 

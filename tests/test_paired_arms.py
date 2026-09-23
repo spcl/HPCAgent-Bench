@@ -111,7 +111,8 @@ def observations(rows: list[dict[str, object]], tmp_path: pathlib.Path) -> pathl
 
 
 def task(arm: str, kernel: str, tokens: float, job: str = "j1", ts: int = 900) -> dict[str, object]:
-    """One task record: the task's token total over all its attempts, stamped with its start."""
+    """One task record: the task's token total over all its attempts, stamped with its start. The
+    total is stated as fresh input alone, so every cost card prices the task at ``tokens``."""
     return {
         "optimizer": "",
         "run_root": "stamp",
@@ -122,6 +123,9 @@ def task(arm: str, kernel: str, tokens: float, job: str = "j1", ts: int = 900) -
         "benchmark": kernel,
         "speedup": "",
         "tokens": tokens,
+        "tokens_fresh_input": tokens,
+        "tokens_cached_input": 0.0,
+        "tokens_output": 0.0,
         "suspect": "",
         "baseline": "",
         "ts_ms": ts,

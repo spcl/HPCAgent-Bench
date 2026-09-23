@@ -97,8 +97,8 @@ def reassociation_growth(n: int) -> float:
     ``n`` is the worst-case bound and it is too wide to be a gate. It clears these races only
     because each loses tens of thousands of updates; the defect the leg has to catch is the
     SMALLEST one, a single lost term, and at this ``n`` the ``n``-band is 3.4 absolute against a
-    term of ~0.01 -- admitted, ratio 0.003. Under ``sqrt(n)`` the same single term scores 20 at the
-    largest size in this corpus and is rejected (tests/test_determinism_gate.py).
+    term of ~0.01 -- admitted, ratio 0.003. Under ``sqrt(n)`` the same single term scores ~760 (25x the
+    threshold) at the largest size in this corpus and is rejected (tests/test_determinism_gate.py).
     """
     return math.sqrt(max(n, 1))
 

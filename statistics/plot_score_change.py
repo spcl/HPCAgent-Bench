@@ -277,7 +277,7 @@ def same_card(table: pd.DataFrame, card: cost.CostModel, source: pathlib.Path) -
     """Refuse a family CSV priced with a different cost card: its stars would describe one cost model
     and the Y axis another. A CSV written before the column existed was priced ``effective``."""
     recorded = set(table["cost_model"].dropna().astype(str)) if "cost_model" in table.columns else set()
-    recorded = recorded or {cost.DEFAULT_COST_MODEL}
+    recorded = recorded or {"effective"}
     if recorded != {card.key}:
         raise SystemExit(
             f"{source} was priced with {sorted(recorded)}, the figure with {card.key!r}; pass --cost-model"

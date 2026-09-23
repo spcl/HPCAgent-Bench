@@ -20,8 +20,8 @@ import yaml
 #: The shipped cards.
 COST_MODELS = pathlib.Path(__file__).resolve().parents[1] / "envs" / "cost_models.yaml"
 
-#: The card a figure prices with when none is named: the paper's headline reading.
-DEFAULT_COST_MODEL: str = "effective"
+#: The card a figure prices with when none is named: the paper's default reading, cache reads at 0.1.
+DEFAULT_COST_MODEL: str = "billed"
 
 #: The three cost proxies the paper reports, in report order (user, 2026-09-16).
 PROXY_CARDS: tuple[str, ...] = ("effective", "billed", "total")

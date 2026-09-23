@@ -8,8 +8,8 @@ and the measurements behind each choice. The implementation is
 
 | number | definition | quote it when |
 |---|---|---|
-| `effective` card | every token counted **once**, in the turn it first appeared: input + output | comparing **arms within this work** (paper headline) |
-| `billed` card | input + cached input at **0.1** + output | the paper's second number: what a hosted service meters, output unweighted |
+| `effective` card | every token counted **once**, in the turn it first appeared: input + output | a reading that prices cache reads at zero |
+| `billed` card | input + cached input at **0.1** + output | **default** (`cost.DEFAULT_COST_MODEL`) and the paper's reading: what a hosted service meters, output unweighted |
 | `api-priced` card | input + cached input at 0.1 + output at **5x** | a bill-shaped number (list-price ratios, [below](#cost-cards)) |
 | `total` card | every prompt in full on every turn, plus output | comparing against **other papers** ([how](#reading-it)) |
 | `api_ms` | wall time this episode occupied the shared inference node | asking what an arm **cost us** |
