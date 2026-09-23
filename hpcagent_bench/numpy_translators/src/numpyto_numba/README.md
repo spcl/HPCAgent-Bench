@@ -13,6 +13,5 @@ Numba caveats:
   supported. We emit them anyway; if numba refuses we surface the
   error at first call.
 * `@njit(parallel=True)` rewrites `range` loops via `prange` when
-  the harness imports `numba.prange`; we leave that to the existing
-  framework wiring (`<short>_numba_np.py` historically uses
-  `numba.prange` explicitly).
+  the harness imports `numba.prange`; that is left to the framework
+  wiring.
