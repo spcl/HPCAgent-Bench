@@ -14,8 +14,8 @@ section, [Daint (GH200) and the CPU-only image](#daint-gh200-and-the-cpu-only-im
 | `vllm-cuda/` | `hpcagent-bench-vllm-gh200.sqsh` | Daint GH200 inference: the official vLLM 0.30.0 arm64 image, pinned by digest, serving qwen38, kimi and oss120b |
 | `judge-agent-cpu/` | `hpcagent-bench-agent-cpu-<arch>.sqsh`, `hpcagent-bench-judge-cpu-<arch>.sqsh` | Lightweight CPU-only judge + agent, same two targets, built for the host's architecture (x86_64 or aarch64) |
 
-vLLM 0.27.1 was retired 2026-09-08 (25% slower than 0.23.0 on oss120b, entirely in decode) and
-lives on the `parked/vllm-0271` branch. Do not re-derive that; restore the branch.
+vLLM 0.27.1 is 25% slower than 0.23.0 on oss120b, entirely in decode; it lives on the
+`parked/vllm-0271` branch. Do not re-derive that; restore the branch.
 
 ## From nothing to a served model, in order
 

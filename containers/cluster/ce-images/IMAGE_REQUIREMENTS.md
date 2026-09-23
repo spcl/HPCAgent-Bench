@@ -69,7 +69,6 @@ inside the image" means, and it is what makes these files deletable:
   bake, do not drop.
 * `external-eager-pg-patch/sitecustomize.py` -- referenced by `run_cluster.sh:168`. Belongs in the
   image's site-packages.
-* `build/` and `build-chain.sh` -- the 6-job vLLM build chain is replaced by the single Dockerfile.
 * `prebuild-aiter-jit.sbatch` -- aiter's JIT-on-first-request baton lock is an IMAGE problem; prebuild
   during the build, not as a separate job.
 * `beverin-rocm723-host-ofi-phase1/`, `accuracy-gate.py`, the `smoke-kimi-*` and `gate-0271-*`
@@ -94,9 +93,9 @@ python3 -c "from dace.sdfg.analysis.polyhedral_isl import HAVE_ISL; \
   assert HAVE_ISL; assert smt_dependence.has_z3()"
 ```
 
-`verify_image.py` carries the same two as `dace-gate` checks. Measured 2026-09-06 on
-two now-deleted predecessors and re-verified 2026-09-08 on `hpcagent-bench-agent-mi300-latest`: islpy
-2026.2.1, z3 5.1.0, `HAVE_ISL` true and `has_z3()` true. Both gates are OPEN.
+`verify_image.py` carries the same two as `dace-gate` checks. Measured on
+`hpcagent-bench-agent-mi300-latest`: islpy 2026.2.1, z3 5.1.0, `HAVE_ISL` true and `has_z3()` true.
+Both gates are OPEN.
 
 **Measure it from a CWD with no `dace` directory in it, or the answer is meaningless.** The image
 installs dace editable, so `import dace` is resolved through a finder -- but a plain DIRECTORY
@@ -214,10 +213,9 @@ com.hooks.aws_ofi_nccl.enabled = "true"    # exits(0) unless this is exactly "tr
 com.hooks.aws_ofi_nccl.variant = "rocm6"   # REQUIRED in host mode; hard error if unset
 ```
 
-**The artifact bundle no longer exists.** It lived under
-`/capstor/store/cscs/cscs/public/containers/netstack/`, a *hardcoded literal* in all three hooks,
-so no `version` or `name` can resolve there -- which is why both are now omitted rather than
-pinned.
+**The artifact bundle does not exist.** All three hooks hardcode
+`/capstor/store/cscs/cscs/public/containers/netstack/` as a literal, so no `version` or `name` can
+resolve there; both are omitted rather than pinned.
 
 A missing artifact does not fail the job. The hooks set `libfabric_host_path` and
 `plugin_host_path` to files that are not there, the bind-mounts silently do nothing, and RCCL
@@ -225,11 +223,10 @@ falls back from CXI to **TCP sockets** -- the same invisible degradation describ
 unset `aws_ofi_nccl.enabled`, and the most expensive way for this to fail, because the run
 completes and merely looks like a slow model.
 
-**Why `host` is now safe, having been the opt-out.** The objection was real: host mode grafts 29
-host libraries into the image, and job **629822** died exactly that way -- a host `libcurl`
-needing glibc 2.38 reached an image with 2.35. The base image has since moved to Ubuntu 24.04 and
-the shipped `libc.so.6` reports `Ubuntu GLIBC 2.39-0ubuntu8.8` (verified by extracting it from the
-pulled squashfs, not read off the tag). glibc is backward compatible, so 2.39 satisfies every
+**Why `host` is safe.** Host mode grafts 29 host libraries into the image, and job **629822**
+died that way -- a host `libcurl` needing glibc 2.38 reached an image with 2.35. The base image is
+Ubuntu 24.04 and the shipped `libc.so.6` reports `Ubuntu GLIBC 2.39-0ubuntu8.8` (verified by
+extracting it from the pulled squashfs, not read off the tag). glibc is backward compatible, so 2.39 satisfies every
 `GLIBC_2.38` the grafted libraries require. **Re-check this if the base image is ever moved
 backwards**; the gate is `container glibc >= 2.38`, and it is a `>=`, never a match.
 
@@ -243,30 +240,27 @@ backwards**; the gate is `container glibc >= 2.38`, and it is a `>=`, never a ma
 
 Within noise of one another, at 4 CXI NICs per node.
 
-**Pinning, now that version/name are gone.** `host` resolves through
+**Pinning without version/name.** `host` resolves through
 `/opt/cray/libfabric/host`, a root-owned symlink (currently `-> 2.3.1`) that no annotation can
 redirect. Pinning therefore means *asserting* what it resolved to:
 `scripts/cscs/netstack_preflight.sh` checks the version, the plugin variant and the CXI device
 count, prints citable provenance, and **aborts** on a repoint -- so a CSCS-side bump cannot change
-the fabric under a running campaign, which is what pinning version/name used to buy.
+the fabric under a running campaign.
 
-This replaced a self-built `aws-ofi-nccl` plugin in all three images. Two measurements settled it:
+No image ships a self-built `aws-ofi-nccl` plugin. Two measurements settled it:
 
 * **629967** -- with all three hooks on an *unmodified* image, RCCL selects
   `/opt/cscs/netstack/librccl-net.so`, logs `NET/OFI` / "Using network AWS Libfabric", and reports
   GPU Direct RDMA on `cxi0-2`: 8 ranks over 2 nodes, correct. The self-built plugin bought nothing.
 * **629822** -- `netstack.source = "host"` grafts host paths in, which is how a host `libcurl`
   needing glibc 2.38 reached an image with 2.35 and killed its whole OFI stack. The artifact is
-  internally consistent (its own libc, libcurl, libcxi, libfabric); a graft is not.
-  **Superseded 2026-09-16**: the artifact is gone, and the base image is now glibc 2.39, so the
-  graft this measured no longer skews. Kept because it records the exact failure mode to watch
-  for if the base image ever moves backwards.
+  internally consistent (its own libc, libcurl, libcxi, libfabric); a graft is not. With the base
+  at glibc 2.39 the graft is safe; this is the failure mode if the base ever moves backwards.
 
-Why the omission was invisible for so long: `com.hooks.aws_ofi_nccl.enabled` was **never set**, so
-that hook `exit(0)`d, RCCL found no plugin and fell back to its **TCP sockets** transport. A
-cross-node collective rode the IP stack over `hsn*` and nothing reported it, because the fallback
-*works* -- it is merely slow. Single-node grading never noticed either: four ranks on one node use
-XGMI/IPC and load no net plugin at all.
+Why a missing `com.hooks.aws_ofi_nccl.enabled` is invisible: that hook `exit(0)`s, RCCL finds no
+plugin and falls back to its **TCP sockets** transport. A cross-node collective rides the IP stack
+over `hsn*` and nothing reports it, because the fallback *works* -- it is merely slow. Single-node
+grading does not notice either: four ranks on one node use XGMI/IPC and load no net plugin at all.
 
 `judge-agent-amd` still has an `ofi-builder` stage, and it is **not** a plugin build. It compiles a
 providerless libfabric for one purpose -- spack's MPICH needs something to link against at build
