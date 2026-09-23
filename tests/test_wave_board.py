@@ -144,6 +144,64 @@ def test_an_arm_is_running_before_its_coverage_decides(
     assert board.arm_status(done, roster, states) == expected
 
 
+def test_an_arm_with_owed_kernels_no_queued_job_grades_is_not_running(board: types.ModuleType) -> None:
+    """A queued job that grades only part of the owed kernels leaves the arm ``incomplete``."""
+    assert board.arm_status(1, 3, ["COMPLETED", "PENDING"], unqueued=1) == "incomplete"
+    assert board.arm_status(1, 3, ["COMPLETED", "PENDING"], unqueued=0) == "running"
+
+
+FUSED_WAVE = "owed-harness20-qwen38-claude-w1"
+
+
+@pytest.mark.parametrize(
+    ("wave_kernels", "unqueued", "status"),
+    [({"b"}, 1, "incomplete"), ({"b", "c"}, 0, "running"), (set(), 0, "running")],
+    ids=["part-queued", "all-queued", "snapshot-unreadable"],
+)
+def test_a_fused_wave_covers_only_the_kernels_it_was_planned_with(
+    board: types.ModuleType,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    wave_kernels: set[str],
+    unqueued: int,
+    status: str,
+) -> None:
+    """2026-09-23: an arm owing b and c with a queued owed wave holding only b showed ``running``,
+    as if c were covered too, and no wave would ever be planned for c from the board. A fused wave
+    grades only its problems file's kernels (owed_wave.queue_state reads the queue the same way);
+    a snapshot that cannot be read stays ``running`` rather than guess."""
+    arm = "harness20-qwen38-claude"
+    runs = tmp_path / "runs" / "harness20-20260918"
+    job_dir_with_rows(runs, "100", ["a"])
+    jobs = [board.Job("100", arm, "COMPLETED", 3, "", ""), board.Job("200", FUSED_WAVE, "PENDING", 3, "", "")]
+    monkeypatch.setattr(board, "slurm_jobs", lambda ids: jobs)
+    monkeypatch.setattr(board, "queued_ids", lambda: ["200"])
+    monkeypatch.setattr(board, "planned_fused_arms", lambda job_id: {f"{arm}-clean"})
+    served = {f"{arm}-clean": wave_kernels} if wave_kernels else {}
+    monkeypatch.setattr(board, "planned_fused_kernels", lambda job_id: served)
+    monkeypatch.setattr(board.remaining_kernels, "roster", lambda tag, opt: ["a", "b", "c"])
+
+    (row,) = board.arm_rows(tmp_path / "runs", "/opt", MODELS)
+
+    assert (row["arm"], row["done"], row["unqueued"], row["status"]) == (arm, 1, unqueued, status)
+
+
+def test_a_queued_single_setup_job_covers_its_whole_arm(
+    board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A queued job of the arm itself runs its whole roster: the arm is ``running``."""
+    arm = "harness20-qwen38-claude"
+    job_dir_with_rows(tmp_path / "runs" / "harness20-20260918", "100", ["a"])
+    jobs = [board.Job("100", arm, "COMPLETED", 3, "", ""), board.Job("200", f"{arm}-clean", "PENDING", 3, "", "")]
+    monkeypatch.setattr(board, "slurm_jobs", lambda ids: jobs)
+    monkeypatch.setattr(board, "queued_ids", lambda: ["200"])
+    monkeypatch.setattr(board.remaining_kernels, "roster", lambda tag, opt: ["a", "b", "c"])
+
+    (row,) = board.arm_rows(tmp_path / "runs", "/opt", MODELS)
+
+    assert (row["unqueued"], row["status"]) == (0, "running")
+
+
 def test_the_embedded_data_survives_a_value_that_closes_a_script_element(board: types.ModuleType) -> None:
     """A value carrying ``</script>`` would end the data block early and the page would parse nothing."""
     data = {"generated": "now", "cluster": "beverin", "arms": [{"arm": "</script><b>x</b>"}]}

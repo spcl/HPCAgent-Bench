@@ -115,7 +115,7 @@ td.num .owed { color: var(--incomplete); }
 
   <div class="legend">
     <div><span class="pill complete">complete</span> every roster kernel is DELIVERED -- a real grade happened, in <code>submissions</code> or <code>attempts</code>, over the union of all waves. A placeholder blocks it.</div>
-    <div><span class="pill running">running</span> a job for the arm is running or queued. <span class="pill incomplete">incomplete</span> kernels are owed and nothing is queued: the next wave runs exactly that complement.</div>
+    <div><span class="pill running">running</span> a job for the arm is running or queued. <span class="pill incomplete">incomplete</span> kernels are owed that no queued job will grade ("K not queued" while a wave holds the rest): the next wave runs exactly that complement.</div>
     <div>A <b>placeholder</b> is a roster kernel the agent never delivered an answer for (self-exit or context overflow): scored 1x, and OWED -- it gets one rerun at normal budget (2026-09-20). It counts inside the "N owed" breakdown, never as a separate "complete" kernel.</div>
     <div><span class="pill rerun">rerun</span> the setup's job directories were deleted (2026-09-19, <code>experiments/rerun-lost.tsv</code>); its coverage is read from the frozen observations (dashed job chips) until the rerun is done.</div>
     <div>Rows that measured a broken treatment are deleted with their run directories, so an arm rerun from scratch starts at 0.</div>
@@ -295,6 +295,8 @@ function renderBoard() {
         if (arm.owed_infra) share.push(`${arm.owed_infra} infra`);
         const label = share.length ? `${owed(arm)} owed: ${share.join(", ")}` : `${owed(arm)} owed`;
         badges.push(el("span", { class: "owed" }, `(${label})`));
+        const active = arm.jobs.some(j => j.state === "RUNNING" || j.state === "PENDING");
+        if (active && arm.unqueued) badges.push(el("span", { class: "owed" }, `(${arm.unqueued} not queued)`));
       }
       for (const badge of badges) counts.append(" ", badge);
       const rowAttrs = { class: arm.status };
