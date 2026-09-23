@@ -1415,6 +1415,77 @@ def test_the_preflight_refuses_host_resident_gpu_c_a_short_walltime_and_a_missin
     assert any(line.startswith("INFERENCE_CE_ENV=") for line in problems), problems
 
 
+def unrecorded(env: pathlib.Path) -> pathlib.Path:
+    """``env``'s wave as a planner before 2026-09-23 13:06 wrote it: its setups carry no contract."""
+    setups = env.parent / f"setups-{env.name.removeprefix('.env.')}.json"
+    document = json.loads(setups.read_text())
+    for entry in document["setups"].values():
+        entry.pop("reference")
+    setups.write_text(json.dumps(document))
+    return env
+
+
+def launched_arm(tmp_path: pathlib.Path, arm: str, reference: dict[str, str]) -> dict[str, list]:
+    """One job of ``arm`` whose launch env is ``reference``, as run_root_identities returns it."""
+    job_dir = tmp_path / "runs" / "root" / "100"
+    launch = tmp_path / "runs" / "root" / ".agent-launch" / "100"
+    launch.mkdir(parents=True)
+    (launch / ".env").write_text("".join(f"{key}={value}\n" for key, value in reference.items()))
+    return {arm: [("100", str(job_dir), arm)]}
+
+
+def test_the_preflight_reads_an_unrecorded_contract_from_the_run_roots(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every wave queued on 2026-09-23 was planned before setups recorded their arm's contract, and
+    ``--preflight --queued`` failed all 17 of them on that alone, hiding the two real findings."""
+    env = staged_wave(owed, tmp_path, "triton-device", JUDGE_INPUT_MODE="source")
+    installed_edfs(owed, tmp_path, monkeypatch, env)
+    (setup,) = owed.staged_setups(env)
+    identities = launched_arm(tmp_path, "gpu-llr-focus40-qwen38-x", dict(setup.reference))
+    monkeypatch.setattr(owed, "run_root_identities", lambda runs: identities)
+    unrecorded(env)
+
+    problems = owed.preflight(env, "15:00:00", str(REPO), str(tmp_path / "runs"))
+
+    assert any("JUDGE_INPUT_MODE: py-binding -> source" in line for line in problems), problems
+    assert not any("no arm contract" in line for line in problems), problems
+
+
+def test_the_preflight_fails_a_setup_with_no_contract_anywhere(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = unrecorded(staged_wave(owed, tmp_path, "triton-device"))
+    installed_edfs(owed, tmp_path, monkeypatch, env)
+    monkeypatch.setattr(owed, "run_root_identities", lambda runs: {})
+    monkeypatch.setattr(owed, "fallback_env", lambda identity, opt: None)
+
+    problems = owed.preflight(env, "15:00:00", str(REPO), str(tmp_path / "runs"))
+
+    assert any("no arm contract to check against" in line for line in problems), problems
+
+
+def test_the_preflight_cli_takes_its_options_in_any_order(tmp_path: pathlib.Path) -> None:
+    """``--preflight --queued --opt X`` read ``--queued`` as a snapshot path and died on a traceback."""
+    result = subprocess.run(
+        [sys.executable, str(EXPERIMENTS / "owed_wave.py"), "--preflight", str(tmp_path), "--opt", str(REPO)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": f"{REPO}:{REPO}/hpcagent_bench/numpy_translators/src"},
+        check=False,
+    )
+    assert result.returncode == 1, result.stderr
+    assert "preflight: 0 waves, 0 failed" in result.stdout
+    both = subprocess.run(
+        [sys.executable, str(EXPERIMENTS / "owed_wave.py"), "--preflight", "--queued", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": f"{REPO}:{REPO}/hpcagent_bench/numpy_translators/src"},
+        check=False,
+    )
+    assert both.returncode == 2 and "not both or neither" in both.stderr
+
+
 def test_the_preflight_refuses_a_serving_key_staged_from_an_older_model_layer(
     owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

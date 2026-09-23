@@ -33,6 +33,7 @@ the largest budget in it plus staging.
 import argparse
 import dataclasses
 import datetime
+import functools
 import json
 import os
 import pathlib
@@ -1259,13 +1260,32 @@ def staged_setups(env_path: pathlib.Path) -> list[Setup]:
     return setups
 
 
-def preflight(env_path: pathlib.Path, walltime: str, opt: str) -> list[str]:
+@functools.lru_cache(maxsize=4, typed=True)
+def run_root_identities(runs: str) -> dict[str, list]:
+    """identity -> its jobs over every run root under ``runs`` (remaining_kernels.collect_arms)."""
+    roots = sorted(str(root) for root in pathlib.Path(runs).iterdir() if root.is_dir())
+    identities, _, _ = remaining_kernels.collect_arms(roots, set(), [], frozen_observations.resolve(None))
+    return identities
+
+
+def arm_contract(identity: str, runs: str, opt: str) -> tuple[tuple[str, str], ...]:
+    """``identity``'s contract as :func:`plan_arm` reads it (:func:`own_env`): the newest env its own
+    submitter launched it with under ``runs``, else its checked-in ``.env.<identity>[-clean]``."""
+    launched = newest_launches(run_root_identities(runs).get(identity, []))
+    checked_in = fallback_env(identity, opt) if all(launch.fused for launch in launched) else None
+    return own_env(launched, checked_in)
+
+
+def preflight(env_path: pathlib.Path, walltime: str, opt: str, runs: str = "") -> list[str]:
     """Every reason the fused wave ``env_path`` (a staged ``.env.<wave>`` or its queued snapshot)
     must not start from checkout ``opt`` with ``walltime`` (HH:MM:SS; "" skips that check): a setup
     off its arm's contract (:func:`contract_drift`, allowlist as ``opt`` spells it) or its language's
     (:func:`language_contract`), a serving key other than the image staged from an older model layer
     than ``opt``'s, an EDF not installed, a budget under the policy, or a walltime that cannot hold
-    the longest agent plus staging or exceeds the partition cap."""
+    the longest agent plus staging or exceeds the partition cap.
+
+    A setup planned before its wave recorded the contract (2026-09-23) is held to the one
+    :func:`arm_contract` reads from ``runs`` now; without ``runs`` it cannot be checked and fails."""
     job_env = parse_env(env_path.read_text(encoding="utf-8"))
     values = dict(job_env)
     model = values.get("HPCAGENT_BENCH_RECORD_MODEL", "")
@@ -1285,8 +1305,10 @@ def preflight(env_path: pathlib.Path, walltime: str, opt: str) -> list[str]:
     longest = 0
     for setup in staged_setups(env_path):
         effective = {**dict(setup.env), **job_level(job_env)}
+        if not setup.reference and runs:
+            setup = dataclasses.replace(setup, reference=arm_contract(remaining_kernels.base_arm(setup.arm), runs, opt))
         if not setup.reference:
-            problems.append(f"{setup.setup_id}: no arm contract recorded (planned before 2026-09-23)")
+            problems.append(f"{setup.setup_id}: no arm contract to check against (no launch env, no .env of the arm)")
         else:
             problems += [f"{setup.setup_id}: {line}" for line in contract_drift(wave, setup, serving_keys(opt, model))]
         problems += [f"{setup.setup_id}: {line}" for line in language_contract(effective)]
@@ -1335,11 +1357,11 @@ def queued_targets() -> list[tuple[pathlib.Path, str]]:
     return targets
 
 
-def run_preflight(targets: list[tuple[pathlib.Path, str]], opt: str) -> int:
+def run_preflight(targets: list[tuple[pathlib.Path, str]], opt: str, runs: str = "") -> int:
     """Print one PASS/FAIL line per wave (and each reason); exit 1 on any FAIL or no wave at all."""
     failed = 0
     for env, walltime in targets:
-        problems = preflight(env, walltime, opt)
+        problems = preflight(env, walltime, opt, runs)
         failed += bool(problems)
         print(f"{'FAIL' if problems else 'PASS'} {env} {walltime or '-'}")
         print("".join(f"  {line}\n" for line in problems), end="")
@@ -1380,13 +1402,20 @@ def main() -> int:
         print("\n".join(PER_PROBLEM_KEYS))
         return 0
     if sys.argv[1:2] == ["--preflight"]:
-        # --preflight [--opt CHECKOUT] (--queued | <staged OUT dir | snapshot env>...)
-        rest = sys.argv[2:]
-        opt = str(HERE.parent)
-        if rest[:1] == ["--opt"]:
-            opt, rest = rest[1], rest[2:]
-        targets = queued_targets() if rest == ["--queued"] else preflight_targets(rest)
-        return run_preflight(targets, opt)
+        pre = argparse.ArgumentParser(prog="owed_wave.py --preflight", description=preflight.__doc__)
+        pre.add_argument("--opt", default=str(HERE.parent), help="the checkout the waves will start from")
+        pre.add_argument(
+            "--runs",
+            default=os.environ.get("RUNS") or str(campaigns.runs_root()),
+            help="run roots an unrecorded arm contract is read from (default $RUNS, else $SCRATCH's)",
+        )
+        pre.add_argument("--queued", action="store_true", help="every PENDING/RUNNING fused wave of this user")
+        pre.add_argument("targets", nargs="*", help="staged OUT dirs or snapshot envs")
+        args = pre.parse_args(sys.argv[2:])
+        if args.queued == bool(args.targets):
+            pre.error("give --queued or staged OUT dirs / snapshot envs, not both or neither")
+        targets = queued_targets() if args.queued else preflight_targets(args.targets)
+        return run_preflight(targets, args.opt, args.runs)
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("model", help="the model every wave serves, as HPCAGENT_BENCH_RECORD_MODEL names it")
     ap.add_argument("--runs", default=os.environ.get("RUNS", ""), help="directory of every run root")

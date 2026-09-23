@@ -723,7 +723,9 @@ contract change is a new arm (a new name through its own submitter), never an ow
 
 The same check runs again on the files a job reads: each setup carries its arm's contract in the
 setups file (`reference`, which the job ignores), and `owed_wave.py --preflight [--opt <checkout>]
-(--queued | <OUT dir> | <snapshot .env>...)` re-checks every wave against that checkout -- contract,
+[--runs <dir>] (--queued | <OUT dir> | <snapshot .env>...)` re-checks every wave against that checkout
+(a wave planned before its setups recorded `reference`, before 2026-09-23 13:06, is held to the
+contract the planner reads from the run roots now, `--runs` default `$SCRATCH/hpcagent-bench-runs`) -- contract,
 language (Triton judges `py-binding`, GPU C runs `HPCAGENT_BENCH_OFFLOAD_RESIDENCY=device`), serving
 keys against the checkout's model layer (`re-stage` when a pull moved them), installed EDFs, budget
 at or over the policy, walltime between the longest agent plus staging and the partition cap.
