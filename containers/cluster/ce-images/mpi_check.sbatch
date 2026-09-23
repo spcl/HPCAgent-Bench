@@ -39,8 +39,8 @@ IMAGE="${IMAGE:-${SCRATCH}/ce-images/hpcagent-bench-ce-amd-mi300.sqsh}"
 # All FIVE hook annotations, matching judge-agent-amd/edf.toml.example exactly. The cxi hook alone
 # was never enough: it supplies the provider, while 10-netstack supplies the libfabric itself and
 # 90-aws-ofi-nccl the RCCL plugin, and that last one exit(0)s unless enabled == "true" -- which is
-# why RCCL logged "Could not find: libnccl-net.so" and fell back to TCP (629800/629802). The image
-# now ships no libfabric at all, so with a partial hook set libmpi.so does not even resolve and
+# why RCCL logs "Could not find: libnccl-net.so" and falls back to TCP. The image
+# ships no libfabric at all, so with a partial hook set libmpi.so does not even resolve and
 # this check would fail a correct image for its own missing configuration.
 #
 # FI_PROVIDER is deliberately ABSENT: setting it on an image that also runs MPI aborted MPI_Init
