@@ -58,17 +58,12 @@ ARMS=${ARMS:-"plain ${PACKET}"}
 # partition tops out at 24h, so only the token cap doubles for a scicomp "budget" rerun.
 [[ -n "${AGENT_MAX_TOKENS_EXPLICIT}" ]] || AGENT_MAX_TOKENS=$(scale_budget "${AGENT_MAX_TOKENS}")
 
-# CLEAN=1 re-runs the wave as "<arm>-clean". The IDENTITY (experiment, model, language, device,
-# packet) is untouched -- the analysis pairs on those columns and prefers the clean arm (rule X9),
-# so the suffix says "these tasks supersede the ones before them" without inventing a condition.
+# CLEAN=1 re-runs the wave as "<arm>-clean" (clean_suffix in submit_common.sh).
 CLEAN=${CLEAN:-0}
 CLEAN_SUFFIX=$(clean_suffix "${CLEAN}")
 
-# DEADLINE=<any time date(1) parses> shrinks the wave so it ENDS before that moment instead of being
-# killed mid-episode: the job's --time becomes deadline - now - DEADLINE_MARGIN_SECONDS, and every
-# agent gets the SMALLER of AGENT_TIMEOUT_SECONDS and what is left of that after the staging
-# allowance (STAGING_HOURS). Never the larger. Under an hour of agent time measures nothing, so it
-# refuses instead.
+# DEADLINE=<any time date(1) parses>: the wave ENDS before it, never lengthening an episode
+# (deadline_setup and deadline_shrink_seconds in submit_common.sh).
 DEADLINE=${DEADLINE:-}
 DEADLINE_MARGIN_SECONDS=${DEADLINE_MARGIN_SECONDS:-300}
 MIN_AGENT_SECONDS=${MIN_AGENT_SECONDS:-3600}
