@@ -19,6 +19,13 @@ a figure that does not is wrong, and the drawing agent returns a self-check tabl
 5. Efficacy figure = 2D: X = log2 speed-up geomean with its interval, Y = token-cost geomean with its interval,
    one mark per arm; n comparisons = one row of n square panels (up to 3). The agentbench paper's row is
    kernel formulation | language skill packet | three languages.
+   **STATUS (2026-09-21/23, user):** this 2D panel (`figures.efficacy.figure_one`/`figure_row`) is superseded
+   by the tuple-efficacy stacked row (`figure_dot_row`, `E = (rho_R, rho_S, rho_C)`,
+   `project_efficacy_tuple_pareto_20260921`) and is not drawn by any current figure script or by
+   `statistics/render_sample_plots.py`. It has NOT been deleted -- `figures/efficacy.py` still backs the
+   still-used `figure_dot_row`, and pulling the 2D panel out (plus its `docs/plotting.md` rule, `scripts/
+   plot_score_change.py`, and every pinned test in `tests/test_plot_score_change.py`) is a separate, larger
+   change that needs its own review before it is archived to a branch and removed from `main`.
 6. Per-kernel figure (MPR/CPF) = wide, two rows sharing the kernel axis: log2 speed-up per kernel with its
    interval on top, tokens per kernel as a scatter below; past a dashed separator one summary slot per series
    on each row (2026-09-21: speed-up = geomean with its interval over the SOLVED kernels, tokens = median over
@@ -120,6 +127,20 @@ once per panel. `--row-width {natural,iclr,acm-column,acm-text}` sizes the joine
 own natural width or to a paper's page budget
 (`hpcagent_bench.stats.style.ICLR_TEXT_WIDTH_IN`/`ACM_COLUMN_WIDTH_IN`/`ACM_TEXT_WIDTH_IN`) so the
 PDF drops into the page at scale 1.0 instead of being shrunk by `\includegraphics`.
+
+## Sample plots from stub-random data
+
+`make sample-plots` (`statistics/render_sample_plots.py`) needs no cluster run: it writes a seeded,
+deterministic observations CSV in the real schema (`hpcagent_bench.stats.stub_data.generate`,
+`hpcagent_bench.experiments.read_observations` reads it exactly like a real campaign's CSV) and
+drives it through the SAME entry points a real campaign uses --
+`statistics/plot_per_kernel.py --summary` (40 kernels + geomean),
+`statistics/plot_scaling.py --figure all` (weak- and strong-scaling: efficiency, speed-up,
+per-kernel, summary), and the new `hpcagent_bench.stats.figures.stack3d.figure_stack3d` (a
+3D stacked-bar figure: X = a representative kernel subset, Y = arm, Z = log2 geomean speed-up,
+colour = packet). Output goes to `$SCRATCH/sample-plots-0923/{data,figures,tables}` by default
+(`hpcagent_bench.paths.scratch_root`), overridable with `--out-dir`. It deliberately does not
+render the 2D efficacy/pareto scatter -- see rule 5's status note above.
 
 ## A new figure
 
