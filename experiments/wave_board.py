@@ -48,7 +48,7 @@ from hpcagent_bench.frameworks.framework import FRAMEWORK_META
 
 TEMPLATE = HERE / "wave_board.html"
 
-#: Setups whose job directories were deleted (2026-09-19) and must be rerun: tracked, one row each.
+#: Setups whose job directories were deleted and must be rerun: tracked, one row each.
 RERUN_LOST = HERE / "rerun-lost.tsv"
 
 #: rerun-lost.tsv's status once the rerun has landed; any other status keeps the setup at "rerun".
@@ -101,7 +101,7 @@ def campaign_of(arm: str) -> str:
 #: A campaign can name its language BEFORE the model (scicomp-dc-fortran-<model>-plain: EXPERIMENT
 #: itself is overridden to "scicomp-dc-fortran" rather than adding a LANGUAGE-after-model suffix the
 #: way a GPU arm does, e.g. "<model>-hip-plain") -- strip it here so it does not get read as an
-#: unknown model and blank the model out (2026-09-19).
+#: unknown model and blank the model out.
 LANGUAGE_PREFIXES = ("fortran",)
 
 
@@ -319,10 +319,8 @@ def arm_row(
     delivered_kernels, placeholder_kernels, budget, infra = kernel_status(jobs, dirs, full, opt, served, frozen)
     delivered = len(delivered_kernels)
     placeholder = len(placeholder_kernels)
-    # "done" is DELIVERED kernels ONLY (2026-09-20 fix -- the 2026-09-18 meaning, delivered PLUS
-    # placeholder-done, made a forced-1x placeholder read as complete coverage on the board; a
-    # placeholder is now owed like budget/infra, just its own named share of it -- see arm_status
-    # and kernel_status's own docstring).
+    # "done" is DELIVERED kernels ONLY: a placeholder is owed like budget/infra, just its own named
+    # share of it -- see arm_status and kernel_status's own docstring.
     done = delivered
     queued = queued_kernels(jobs, served or {})
     unqueued = 0 if queued is None else len(set(full) - delivered_kernels - queued)
@@ -351,9 +349,8 @@ def arm_row(
     }
 
 
-#: Arms the user took out of the experiments (2026-09-18): union-alpha (the stealth model is gone), scicomp
-#: C++ and GPU c-openmp offload, and the LLR CPU Fortran arms. 2026-09-19: only cpfsrc-v2 counts, so every
-#: cpfsrc (v1) arm, whose staged source was not announced as parallel, leaves the board.
+#: Arms taken out of the experiments: union-alpha, scicomp C++ and GPU c-openmp offload, the LLR CPU
+#: Fortran arms, and every cpfsrc (v1) arm (only cpfsrc-v2 counts).
 DROPPED_ARMS = campaigns.dropped_pattern()
 
 #: The job-name prefix of a fused owed wave (submit-owed-wave.sh): one job serving many arms.
@@ -494,21 +491,17 @@ def arm_rows(
                 by_arm.setdefault(identity, []).append(job)
                 served[(job.id, identity)] = arm
             continue
-        # A setup listed for rerun stays on the board even if its arm family was dropped (the user
-        # listed the LLR CPU Fortran arms for rerun on 2026-09-19).
+        # A setup listed for rerun stays on the board even if its arm family was dropped.
         if not campaign_of(job.name) or (
             DROPPED_ARMS.search(job.name) and remaining_kernels.base_arm(job.name) not in reruns
         ):
             continue
-        # A smoke job that reused a REAL arm's name is not that arm's data (2026-09-18, job 641175:
-        # see remaining_kernels.SMOKE_JOBS). A job whose OWN name says "smoke" (remaining_kernels.
-        # SMOKE_ARM) is excluded here too (2026-09-23 fix, job 642813:
-        # "harness20-caveman-qwen38-c-clean-kernels-harness20-caveman-smoke2" fell through to the
-        # "harness20" campaign -- no CAMPAIGNS entry matches its exact prefix, so it leaked in as a
-        # phantom arm) -- the same check the fused path above already runs on every arm it serves.
+        # A smoke job that reused a REAL arm's name is not that arm's data (remaining_kernels.
+        # SMOKE_JOBS), nor is a job whose OWN name says "smoke" (remaining_kernels.SMOKE_ARM) -- the
+        # same check the fused path above runs on every arm it serves.
         if remaining_kernels.is_smoke(job.id, job.name):
             continue
-        # A clean re-run FOLDS into the identity it re-runs (user, 2026-09-18): one board row, union
+        # A clean re-run FOLDS into the identity it re-runs: one board row, union
         # coverage over both, latest run wins row for row -- not a second row and not a replacement.
         by_arm.setdefault(remaining_kernels.base_arm(job.name), []).append(job)
     rosters = {spec.tag: remaining_kernels.roster(spec.tag, opt) for spec in CAMPAIGNS.values() if spec.tag}
@@ -565,8 +558,8 @@ TAG_NAMES = {
 
 #: Roster tag -> every job-name prefix canon_column.sh has used for it, oldest first. llr-focus40
 #: carries two legacy spellings (``canon40``, the historical TAG==llr-focus40 default, and
-#: ``canon-llr``, an older TAG=llr run over the same 40-kernel roster) beside the current
-#: ``canon-<tag>`` form submit-canon-llr40.sh now writes for every other tag.
+#: ``canon-llr``, an older TAG=llr run over the same 40-kernel roster) beside the
+#: ``canon-<tag>`` form submit-canon-llr40.sh writes for every other tag.
 CANON_JOB_PREFIXES = {
     "llr-focus40": ("canon40", "canon-llr-focus40", "canon-llr"),
     "loop_level_reasoning": ("canon-loop_level_reasoning",),
