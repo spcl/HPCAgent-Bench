@@ -11,9 +11,14 @@ import pathlib
 
 import numpy as np
 import pytest
-import torch
-import torch.distributed as dist
-import torch.multiprocessing as mp
+
+#: torch is an optional extra: reached like this, ahead of the imports that pull it in
+#: (hpcagent_bench.support.shard_torch), a job without it skips the module instead of aborting
+#: collection (tests/test_ci_coverage.py).
+torch = pytest.importorskip("torch")
+dist = pytest.importorskip("torch.distributed")
+mp = pytest.importorskip("torch.multiprocessing")
+
 from numpyto_common import dtypes
 
 from hpcagent_bench import sizing
