@@ -267,11 +267,13 @@ def test_install_edfs_renders_sglang_mi200_latest_onto_the_mi200_image(tmp_path:
     assert edf["workdir"] == str(tmp_path)
     assert edf["env"]["SGLANG_USE_AITER"] == "0"
     # Unquoted dotted TOML keys nest: com.hooks.aws_ofi_nccl.enabled is com -> hooks -> aws_ofi_nccl.
-    # netstack.source is "host": the /capstor artifact bundle is decommissioned (a89567493), and the
-    # hooks fail silently to TCP rather than erroring when it is missing, so "artifact" is now wrong.
+    # The mi300 sglang EDF's pinned netstack artifact, not "host": host mode's rocm6 RCCL plugin needs
+    # libamdhip64.so.6, which a ROCm 7.2 image lacks, so tp8 init dies with no NET plugin (649811).
     hooks = edf["annotations"]["com"]["hooks"]
+    mi300 = tomllib.loads((CE / "sglang" / "edf.toml.example").read_text(encoding="utf-8"))["annotations"]
+    assert hooks == mi300["com"]["hooks"]
     assert (hooks["netstack"]["source"], hooks["cxi"]["enabled"], hooks["aws_ofi_nccl"]["enabled"]) == (
-        "host",
+        "artifact",
         "true",
         "true",
     )

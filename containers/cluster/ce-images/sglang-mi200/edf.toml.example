@@ -45,29 +45,13 @@ NCCL_DEBUG_SUBSYS = "INIT,NET"
 [annotations]
 # netstack: the CSCS artifact (libfabric, libcxi, RCCL plugin); cxi: provider and /dev/cxi*;
 # aws_ofi_nccl: the RCCL net plugin. Version and name pinned so a CSCS bump cannot move the fabric.
-com.hooks.netstack.source = "host"
-# The hooks hardcode the artifact path at /capstor/store; that tree does not exist,
-# so no version or name resolves there.
-# The hooks do NOT fail on a missing artifact -- they point libfabric and the RCCL plugin
-# at files that are not there, the bind-mounts quietly do nothing, and RCCL drops from
-# CXI to TCP sockets. The job still finishes; it is just far slower, and it reads as a
-# slow model rather than a dead fabric.
-#
-# "host" was previously the documented OPT-OUT because it grafts 29 host libraries into
-# the image and job 629822 died that way: a host libcurl needing glibc 2.38 met an image
-# with 2.35. THAT NO LONGER APPLIES -- the base moved to Ubuntu 24.04 and the shipped
-# libc.so.6 is "Ubuntu GLIBC 2.39-0ubuntu8.8", verified by extracting it from the pulled
-# squashfs. glibc is backward compatible, so 2.39 satisfies every GLIBC_2.38 the grafted
-# libraries ask for. Re-check this if the base image is ever moved backwards.
-#
-# Fabric speed is unaffected. fi_pingpong over cxi, 1 MB, beverin 2026-09-16:
-#   host -> 2.3.1  19329 MB/s | 1.22.0  20011 MB/s | 2.3.1 explicit  19878 MB/s
-# -- within noise of each other, at 4 CXI NICs per node.
-#
-# version/name are NOT set: they only index into the dead artifact tree. The host path is
-# /opt/cray/libfabric/host, a root-owned symlink (-> 2.3.1). It cannot be pinned by
-# annotation, so scripts/cscs/netstack_preflight.sh ASSERTS what it resolves to and aborts
-# on a repoint, rather than letting one campaign straddle two fabric stacks.
+# The same artifact as ../sglang/edf.toml.example, whose comments carry the history. NOT "host":
+# host mode's plugin (/opt/cscs/aws-ofi-ccl-plugin/rocm6) needs libamdhip64.so.6 and this image is
+# ROCm 7.2, so RCCL logs "NET/Plugin: libamdhip64.so.6: cannot open shared object file", finds no
+# "ofi" plugin, and with NCCL_NET pinned in [env] tp8 init dies "NCCL error: invalid usage" (649811).
+com.hooks.netstack.source = "artifact"
+com.hooks.netstack.version = "26.08.1"
+com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
 com.hooks.aws_ofi_nccl.variant = "rocm6"
