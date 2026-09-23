@@ -12,15 +12,17 @@ setup's overlay, which the job applies per worker (agent_driver.run_fused_proble
 request (hpcagent_bench.fused), so each episode runs and records exactly as a single-setup job of
 its arm would.
 
-    owed_wave.py qwen38 [--experiments llr-focus40] [--setups <arm>,...] [--out DIR]
+    owed_wave.py qwen38 [--experiments llr-focus40] [--setups <arm>,...] [--kernels-file F] [--out DIR]
 
 What is owed is remaining_kernels.py's rule over EVERY run root (budget and infra classes; since
 2026-09-20 a forced-1x placeholder -- an episode that ended on its own with no real grade -- owes
 one INFRA rerun too, never scaled: remaining_kernels.owed_classes turns its DONE into INFRA before
 this ever sees it). A setup is the arm's latest job's own launch env and
 problem entry for that kernel -- the condition the rest of the arm ran under -- renamed to the
-arm's ``-clean`` identity, stamped with this checkout's commit, and for the ``budget`` class scaled
-by TOKEN_SCALE/TIME_SCALE (clamped under the partition cap, as submit_common.sh's scale_time).
+arm's ``-clean`` identity, stamped with this checkout's commit, at the 1x of :func:`rerun_base`
+(the budget policy or the arm's own, the larger), for the ``budget`` class scaled by
+TOKEN_SCALE/TIME_SCALE (clamped under the partition cap, as submit_common.sh's scale_time). No
+wave is written whose setup leaves its arm's own contract (:func:`refuse_contract_drift`).
 
 ONE experiment, ONE model and ONE harness per wave, never mixed (:func:`refuse_mixed`); setups
 whose job-level keys differ in anything else go to separate waves, and the plan says which keys.
@@ -46,6 +48,8 @@ if str(HERE) not in sys.path:
 import frozen_observations
 import remaining_kernels
 import wave_board
+
+from hpcagent_bench.spec import KERNELS
 
 #: Everything a setup may vary inside one wave: what the agent is given (packet, tools, prompt,
 #: language, budget, harness switches), what is staged for it, and what the judge records and
@@ -106,6 +110,28 @@ ARM_CONTRACT_KEYS = ("JUDGE_INPUT_MODE",)
 #: rerun planned from one of them would refuse every Triton call again.
 PY_BINDING_LANGUAGES = frozenset({"triton", "triton-device", "python", "pytriton"})
 
+#: What an owed rerun MAY change against its arm's own launch: the budget (the owed rule), the
+#: identity and its bookkeeping, the fused job's own files and node counts, keys nothing reads, and
+#: the container images (a rerun runs on the current release). The model layer's own keys -- how
+#: the engine is served -- may change too (:func:`serving_keys`). Any other difference is a CONTRACT
+#: change, a new arm identity and never a rerun: the 09-22 waves judged Triton arms in
+#: JUDGE_INPUT_MODE=source and voided every row (:func:`refuse_contract_drift`).
+RERUN_MAY_CHANGE = frozenset(
+    {
+        "AGENT_MAX_TOKENS",
+        "AGENT_TIMEOUT_SECONDS",
+        "HPCAGENT_BENCH_RECORD_AGENT_MAX_TOKENS",
+        "HPCAGENT_BENCH_RECORD_AGENT_TIMEOUT_SECONDS",
+        "CAMPAIGN_ARM",
+        "HPCAGENT_BENCH_RECORD_ARM",
+        "HPCAGENT_BENCH_RECORD_COMMIT",
+        "AMD_CE_ENV",
+        "JUDGE_CE_ENV",
+        *JOB_OWNED_KEYS,
+        *INERT_KEYS,
+    }
+)
+
 #: The partition's MaxTime less a margin, and the staging a job spends before its first agent
 #: (submit_common.sh PARTITION_TIME_LIMIT_HOURS, arm_nodes.sh STAGING_HOURS).
 PARTITION_TIME_LIMIT_HOURS = int(os.environ.get("PARTITION_TIME_LIMIT_HOURS", "23"))
@@ -116,6 +142,10 @@ ENV_LINE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 
 class FuseRefused(ValueError):
     """Setups that may not share one fused job."""
+
+
+class QueueUnknown(RuntimeError):
+    """Which arms have a job queued or running cannot be read (Slurm down, accounting unreadable)."""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -135,6 +165,9 @@ class Setup:
     arm: str
     experiment: str
     env: tuple[tuple[str, str], ...]
+    #: The env the arm's OWN submitter launched it with: the contract the rerun must keep
+    #: (:func:`contract_drift`). Empty for a setup built outside :func:`gather`.
+    reference: tuple[tuple[str, str], ...] = ()
 
     def value(self, key: str, default: str = "") -> str:
         return next((value for name, value in self.env if name == key), default)
@@ -234,8 +267,46 @@ class Budget:
     seconds: str
 
 
-#: Experiments whose 1x budget is the model's base env (``.env.base-<model>``); the owed rule scales that.
-MODEL_BASE_BUDGET_EXPERIMENTS = frozenset({"llr-focus40", "llr-focus40-blind"})
+#: The 2026-09-21 budget policy, one row per experiment the planner can plan: the 1x a fresh submit
+#: renders today. An empty field is the model's own base (``.env.base-<model>``: 24M tokens; 21600 s
+#: qwen38/oss120b, 43200 s kimi). The harness submitters (submit-harness-focus20.sh,
+#: submit-harness20-caveman.sh) pin 21600 s whatever the model; the scicomp ones
+#: (submit-scicomp-perf-playbook.sh, submit-scicomp-dc.sh, submit-git-scicomp.sh) default to 120M
+#: tokens and 72000 s, the partition cap less staging. tests/test_fused_owed_wave.py holds the
+#: submitters to these numbers.
+POLICY_BUDGETS = {
+    "llr-focus40": Budget("", ""),
+    "llr-focus40-blind": Budget("", ""),
+    "harness20": Budget("", "21600"),
+    "harness-focus20": Budget("", "21600"),
+    "scicomp-focus40": Budget("120000000", "72000"),
+    "git-scicomp": Budget("120000000", "72000"),
+}
+
+
+def policy_budget(experiment: str, model_base: Budget) -> Budget:
+    """``experiment``'s 1x under the budget policy; refused for an experiment the policy has no row for."""
+    row = POLICY_BUDGETS.get(experiment)
+    if row is None:
+        raise SystemExit(f"owed_wave: no budget policy for experiment {experiment}: add it to POLICY_BUDGETS")
+    return Budget(row.tokens or model_base.tokens, row.seconds or model_base.seconds)
+
+
+def env_budget(env: tuple[tuple[str, str], ...]) -> Budget | None:
+    values = dict(env)
+    tokens, seconds = values.get("AGENT_MAX_TOKENS", ""), values.get("AGENT_TIMEOUT_SECONDS", "")
+    return Budget(tokens, seconds) if tokens and seconds else None
+
+
+def rerun_base(policy: Budget, arm_own: Budget | None) -> Budget:
+    """An owed rerun's 1x: the policy's, raised to the arm's own where the arm ran with more (the
+    harness20 claude arms ran 28800 s against a 21600 s policy). The owed class then scales THIS,
+    never the source job's budget, which may itself be a scaled rerun (a 2x of a 2x compounds)."""
+    if arm_own is None:
+        return policy
+    return Budget(
+        str(max(int(policy.tokens), int(arm_own.tokens))), str(max(int(policy.seconds), int(arm_own.seconds)))
+    )
 
 
 def scaled(value: str, factor: int, cap: int = 0) -> str:
@@ -331,6 +402,46 @@ def build_wave(name: str, owed: list[Owed], run_root: str) -> Wave:
     )
     nodes = int(job_env.get("INFERENCE_NODES", "2") or 2) + agent_nodes + judge_nodes
     return Wave(name, setups[0].experiment, tuple(owed), tuple(job_env.items()), nodes, walltime_hours(owed))
+
+
+def serving_keys(opt: str, model: str) -> frozenset[str]:
+    """The keys ``layers/model-<model>.env`` sets ITSELF: how its engine is served. A rerun takes the
+    layer's current values (what a fresh submit renders), never common.env's, which it inherits."""
+    layer = pathlib.Path(opt) / "experiments" / "layers" / f"model-{model}.env"
+    if not layer.is_file():
+        raise SystemExit(f"owed_wave: no model layer {layer}")
+    return frozenset(key for key, _ in parse_env(layer.read_text(encoding="utf-8")))
+
+
+def contract_drift(wave: Wave, setup: Setup, serving: frozenset[str]) -> list[str]:
+    """``KEY: <arm's own> -> <rerun's>`` for every key outside :data:`RERUN_MAY_CHANGE` and
+    ``serving`` on which ``setup``, as ``wave``'s job runs it (the job env under the setup's
+    per-problem overlay), leaves the env its arm's own submitter launched it with."""
+    effective = {**dict(setup.env), **job_level(wave.job_env)}
+    reference = dict(setup.reference)
+    keys = sorted((set(reference) | set(effective)) - RERUN_MAY_CHANGE - serving)
+    return [
+        f"{key}: {reference.get(key, '<unset>')} -> {effective.get(key, '<unset>')}"
+        for key in keys
+        if reference.get(key) != effective.get(key)
+    ]
+
+
+def refuse_contract_drift(waves: list[Wave], serving: frozenset[str]) -> None:
+    """Refuse the plan when any setup leaves its arm's contract (:func:`contract_drift`), or has no
+    arm env to hold it to: such a rerun would record rows its arm's analysis cannot pair."""
+    problems = []
+    for wave in waves:
+        for setup in {item.setup.setup_id: item.setup for item in wave.owed}.values():
+            if not setup.reference:
+                problems.append(f"{wave.name} {setup.setup_id}: no env of its arm's own submitter to check against")
+                continue
+            problems += [f"{wave.name} {setup.setup_id}: {line}" for line in contract_drift(wave, setup, serving)]
+    if problems:
+        raise SystemExit(
+            "owed_wave: refusing a plan that changes an arm's contract (a new identity, never a rerun):\n  "
+            + "\n  ".join(problems)
+        )
 
 
 def setups_document(wave: Wave) -> dict[str, object]:
@@ -432,13 +543,26 @@ def latest_problem(jobs: list, kernel: str) -> tuple[Source, dict[str, object]] 
 
 
 def queued_arms() -> set[str]:
-    """Identities with a PENDING/RUNNING job, fused waves included: they are not owed yet."""
-    out = subprocess.run(["squeue", "--me", "-h", "-o", "%i|%j"], capture_output=True, text=True, check=False)
+    """Identities with a PENDING/RUNNING job, fused waves included: they are not owed yet.
+
+    Raises :class:`QueueUnknown` when squeue does not answer, or a queued fused wave's arms cannot be
+    read: an unanswered queue is UNKNOWN, never empty, and reading it as empty plans those arms'
+    kernels a second time."""
+    try:
+        out = subprocess.run(["squeue", "--me", "-h", "-o", "%i|%j"], capture_output=True, text=True, check=False)
+    except OSError as exc:
+        raise QueueUnknown(f"squeue did not run: {exc}") from exc
+    if out.returncode != 0:
+        reason = (out.stderr.strip().splitlines() or [f"exit {out.returncode}"])[-1]
+        raise QueueUnknown(f"squeue failed: {reason}")
     arms: set[str] = set()
     for line in out.stdout.splitlines():
         job, _, name = line.partition("|")
         if name.startswith(wave_board.FUSED_JOB_PREFIX):
-            arms |= wave_board.planned_fused_arms(job)
+            served = wave_board.planned_fused_arms(job)
+            if not served:
+                raise QueueUnknown(f"queued fused wave {job} ({name}): its setups file names no arm")
+            arms |= served
         else:
             arms.add(name)
     return {remaining_kernels.base_arm(arm) for arm in arms}
@@ -487,6 +611,9 @@ def checkout_commit(opt: str) -> str:
 class Plan:
     owed: list[Owed] = dataclasses.field(default_factory=list)
     notes: list[str] = dataclasses.field(default_factory=list)
+    #: Why the queued-job check could not run ("" when it did): no arm was skipped as queued, so the
+    #: plan may double-submit and is for review only (main's --require-queue refuses it).
+    queue_unknown: str = ""
 
 
 def newest_source(jobs: list) -> Source | None:
@@ -496,6 +623,56 @@ def newest_source(jobs: list) -> Source | None:
         if source is not None:
             return source
     return None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Launch:
+    """One env an arm ran under in one job, and who wrote it: the arm's own submitter (a single-setup
+    job) or a planner (a fused setup, ``scaled`` when its id carries a budget suffix)."""
+
+    env: tuple[tuple[str, str], ...]
+    fused: bool
+    scaled: bool
+
+
+def launches(job_dir: str, arm: str) -> list[Launch]:
+    """Every env ``arm`` ran under in one job's launch dir. A fused setup's file stem is its setup
+    id, ``<arm>`` at 1x and ``<arm>.budget2x`` scaled (:func:`budget_suffix`)."""
+    launch = launch_dir(job_dir)
+    setups = launch / "setups"
+    if setups.is_dir():
+        found = []
+        for path in sorted(setups.glob("*.env")):
+            env = parse_env(path.read_text(encoding="utf-8"))
+            if dict(env).get("CAMPAIGN_ARM") == arm:
+                found.append(Launch(env, fused=True, scaled=path.stem != arm))
+        return found
+    path = launch / ".env"
+    if not path.is_file():
+        return []
+    env = parse_env(path.read_text(encoding="utf-8"))
+    return [Launch(env, fused=False, scaled=False)] if dict(env).get("CAMPAIGN_ARM") == arm else []
+
+
+def newest_launches(jobs: list) -> list[Launch]:
+    return [
+        found
+        for _, job_dir, arm in sorted(jobs, key=lambda item: int(item[0]), reverse=True)
+        for found in launches(job_dir, arm)
+    ]
+
+
+def own_env(found: list[Launch], fallback: tuple[tuple[str, str], ...] | None) -> tuple[tuple[str, str], ...]:
+    """The arm's contract: the newest env its OWN submitter launched it with, else its checked-in
+    ``.env.<identity>[-clean]`` (:func:`fallback_env`); empty when neither survives. A fused setup's
+    env is never the contract -- a planner wrote it, and the 09-22 planner wrote it wrong."""
+    return next((launch.env for launch in found if not launch.fused), fallback or ())
+
+
+def own_budget(found: list[Launch], fallback: tuple[tuple[str, str], ...] | None) -> Budget | None:
+    """The arm's own 1x: the budget of its newest launch that no owed rule scaled."""
+    env = next((launch.env for launch in found if not launch.scaled), fallback)
+    return env_budget(env) if env else None
 
 
 def fallback_env(identity: str, opt: str) -> tuple[tuple[str, str], ...] | None:
@@ -560,6 +737,8 @@ class Selection:
     smoke: bool = False
     #: Phase 2 of rerun-lost.tsv: ONLY its setups, each over its whole roster.
     rerun_lost: bool = False
+    #: Kernel names (roster stems) to plan; empty plans every owed kernel.
+    kernels: frozenset[str] = frozenset()
 
     def takes(self, identity: str, experiment: str, lost: set[str]) -> bool:
         if self.experiments and experiment not in self.experiments:
@@ -597,7 +776,12 @@ def gather(
     lost = set(wave_board.rerun_setups())
     # A setup listed for rerun is planned even when its arm family was dropped, as the board shows it.
     listed = lost | set(wave_board.rerun_kernel_arms())
-    active = queued_arms()
+    try:
+        active = queued_arms()
+    except QueueUnknown as exc:
+        active = set()
+        plan.queue_unknown = str(exc)
+        plan.notes.append(f"queued-job check unavailable ({exc}): no arm skipped as queued; review only, never submit")
     commit = checkout_commit(opt)
     layer = model_layer(opt, model)
     model_base = model_base_budget(opt, model)
@@ -642,21 +826,28 @@ def gather(
             for kernel, owed_class in arm_owed(jobs, full, opt, frozen_dir, whole).items()
             if owed_class.value in selection.classes or whole
         }
-        base = model_base if spec.experiment in MODEL_BASE_BUDGET_EXPERIMENTS else None
+        if selection.kernels:
+            outside = sorted(set(owed) - selection.kernels)
+            owed = {kernel: owed_class for kernel, owed_class in owed.items() if kernel in selection.kernels}
+            if outside:
+                plan.notes.append(f"{identity}: {len(outside)} owed kernels outside --kernels-file left out")
+        launched = newest_launches(jobs)
+        checked_in = source.env if fell_back else None
+        if not fell_back and all(launch.fused for launch in launched):
+            checked_in = fallback_env(identity, opt)
+        reference = own_env(launched, checked_in)
+        base = rerun_base(policy_budget(spec.experiment, model_base), own_budget(launched, checked_in))
         # llrblind's own render IS the final task text (rerender() leaves its campaign alone); a
         # RENDERED_TRACKS campaign's fallback stays a placeholder -- rerender() replaces it anyway.
         eager_render = fell_back and campaign not in RENDERED_TRACKS
         eager: dict[str, dict] = {}
         if eager_render:
             probe = Setup(identity, identity, spec.experiment, source.env)
-            eager = rendered_rows(track, spec.tag, probe, [f"{track}/{k}/{k}" for k in owed], opt, python)
+            eager = rendered_rows(track, probe, [kernel_key(track.track, k) for k in owed], opt, python)
         for kernel, owed_class in owed.items():
             if fell_back:
-                row = (
-                    eager.get(f"{track}/{kernel}/{kernel}")
-                    if eager_render
-                    else {"kernel": f"{track}/{kernel}/{kernel}"}
-                )
+                key = kernel_key(track.track, kernel)
+                row = eager.get(key) if eager_render else {"kernel": key}
                 if row is None:
                     plan.notes.append(f"skip {identity}/{kernel}: make_problems renders no task for it")
                     continue
@@ -667,7 +858,7 @@ def gather(
                     entry = found[1]
                 elif campaign in RENDERED_TRACKS:
                     # A launch dir pruned to part of its roster: rerender() writes this task fresh anyway.
-                    entry = {"kernel": f"{RENDERED_TRACKS[campaign]}/{kernel}/{kernel}"}
+                    entry = {"kernel": kernel_key(RENDERED_TRACKS[campaign].track, kernel)}
                 else:
                     plan.notes.append(f"skip {identity}/{kernel}: no launched problem entry to rerun")
                     continue
@@ -675,16 +866,37 @@ def gather(
             scale = (token_scale, time_scale) if budget else (1, 1)
             # The arm's NEWEST job's env for every kernel: one condition per arm, the latest it ran.
             setup = make_setup(source.env, identity, spec.experiment, commit, *scale, layer=layer, base=base)
-            plan.owed.append(Owed(setup, entry, owed_class.value))
+            plan.owed.append(Owed(dataclasses.replace(setup, reference=reference), entry, owed_class.value))
     return plan
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class Render:
+    """How a campaign's submitter calls make_problems.py: the track, and the manifest tag it filters
+    by. The scicomp submitters filter by none: they name their kernels by --kernels-file, and their
+    roster tag (scicomp40) is a kernels file, a label no manifest carries."""
+
+    track: str
+    tag: str = ""
+
+
+LLR_RENDER = Render("loop_level_reasoning", "llr-focus40")
+SCICOMP_RENDER = Render("scientific_computing")
+
 #: Campaigns whose own submitter RE-RENDERS a rerun's problems with make_problems.py (submit-cpf-llr40.sh,
-#: submit-gpu-llr40.sh), and the track it renders from. Their setups get a fresh render too: an old
-#: job's task text can carry a condition since fixed -- a lang-skills arm's text from before the
-#: tool-page gating indexed the canonical-parallel-form page. Other campaigns (llrblind) rerun their
-#: arm's existing problem rows, and so does a fused wave.
-RENDERED_TRACKS = {"cpf-llr-focus40": "loop_level_reasoning", "gpu-llr-focus40": "loop_level_reasoning"}
+#: submit-gpu-llr40.sh, submit-scicomp-perf-playbook.sh, submit-scicomp-dc.sh's GPU arms), and how.
+#: Their setups get a fresh render too: an old job's task text can carry a condition since fixed -- a
+#: lang-skills arm's text from before the tool-page gating indexed the canonical-parallel-form page --
+#: and a launch dir pruned to part of the roster holds no row for the rest (scicomp-perf-playbook's
+#: surviving launches hold 6-30 of 40 kernels). Other campaigns (llrblind) rerun their arm's
+#: existing problem rows, and so does a fused wave.
+RENDERED_TRACKS = {
+    "cpf-llr-focus40": LLR_RENDER,
+    "gpu-llr-focus40": LLR_RENDER,
+    "scicomp-perf-playbook": SCICOMP_RENDER,
+    "scicomp-perf-playbook-gpu": SCICOMP_RENDER,
+    "scicomp-dc-gpu": SCICOMP_RENDER,
+}
 
 #: RENDERED_TRACKS plus llrblind: when NO job of an identity has a surviving launch directory at
 #: all, there is no old row left to reuse even for a campaign that normally reuses one (llrblind),
@@ -693,24 +905,33 @@ RENDERED_TRACKS = {"cpf-llr-focus40": "loop_level_reasoning", "gpu-llr-focus40":
 #: kernel/language/packet selects the identical skill pages the saved task did, in the same order --
 #: only a couple of triggers' own wording moved, since those pages were edited after that job
 #: launched. That is the exact staleness RENDERED_TRACKS already treats as fine to overwrite.
-FALLBACK_PROBLEM_TRACKS = {**RENDERED_TRACKS, "llrblind": "loop_level_reasoning"}
+FALLBACK_PROBLEM_TRACKS = {**RENDERED_TRACKS, "llrblind": LLR_RENDER}
+
+
+def kernel_key(track: str, kernel: str) -> str:
+    """``kernel``'s path key in ``track``, as make_problems.py names its problem: a scicomp kernel sits
+    under its dwarf (``scientific_computing/dense_linear_algebra/gemm/gemm``), an LLR kernel does not.
+    The flat ``<track>/<kernel>/<kernel>`` when the registry holds no single such kernel."""
+    keys = [key for key in KERNELS if key.startswith(f"{track}/") and stem(key) == kernel]
+    return keys[0] if len(keys) == 1 else f"{track}/{kernel}/{kernel}"
 
 
 def render_args(setup: Setup, track: str, tag: str) -> list[str]:
     """make_problems.py's arguments for ``setup``, as its campaign's submitter spells them."""
     image = "amd" if setup.value("HPCAGENT_BENCH_RECORD_DEVICE") == "gpu" else "cpu"
     packet = setup.value("HPCAGENT_BENCH_RECORD_PACKET").replace("+", ";")
-    return ["--track", track, "--tag", tag, "--language", setup.value("LANGUAGE"), "--image", image, "--packet", packet]
+    tagged = ["--tag", tag] if tag else []
+    return ["--track", track, *tagged, "--language", setup.value("LANGUAGE"), "--image", image, "--packet", packet]
 
 
-def rendered_rows(track: str, tag: str, setup: Setup, kernels: list[str], opt: str, python: str) -> dict[str, dict]:
-    """make_problems.py's rows for ``kernels`` (full ``track/name/name`` paths) of ``setup`` on
-    ``track``/``tag``: kernel -> row, one call for the whole list. Shared by :func:`rerender`
+def rendered_rows(render: Render, setup: Setup, kernels: list[str], opt: str, python: str) -> dict[str, dict]:
+    """make_problems.py's rows for ``kernels`` (full path keys, :func:`kernel_key`) of ``setup``,
+    rendered as ``render`` says: kernel -> row, one call for the whole list. Shared by :func:`rerender`
     (a RENDERED_TRACKS setup, whatever its problems' source) and :func:`gather`'s own fallback render
     (a campaign :func:`rerender` never touches, e.g. llrblind, with no old row left to reuse)."""
     if not kernels:
         return {}
-    args = render_args(setup, track, tag)
+    args = render_args(setup, render.track, render.tag)
     with tempfile.TemporaryDirectory() as scratch:
         listing = pathlib.Path(scratch) / "kernels.txt"
         listing.write_text("".join(f"{key}\n" for key in kernels), encoding="utf-8")
@@ -746,9 +967,8 @@ def rerender(plan: Plan, opt: str, python: str) -> Plan:
         if campaign not in RENDERED_TRACKS:
             out.owed.extend(items)
             continue
-        tag = wave_board.CAMPAIGNS[campaign].tag
         keys = sorted({str(item.problem.get("kernel")) for item in items})
-        rendered = rendered_rows(RENDERED_TRACKS[campaign], tag, setup, keys, opt, python)
+        rendered = rendered_rows(RENDERED_TRACKS[campaign], setup, keys, opt, python)
         for item in items:
             row = rendered.get(str(item.problem.get("kernel")))
             if row is None:
@@ -785,7 +1005,7 @@ def smoke_plan(plan: Plan, per_setup: int, seconds: int, tokens: int) -> Plan:
                 "HPCAGENT_BENCH_RECORD_AGENT_MAX_TOKENS": str(tokens),
             }
         )
-        setup = Setup(arm, arm, item.setup.experiment, tuple(env.items()))
+        setup = Setup(arm, arm, item.setup.experiment, tuple(env.items()), item.setup.reference)
         smoke.owed.append(Owed(setup, item.problem, item.owed_class))
     return smoke
 
@@ -811,6 +1031,24 @@ def plan_waves(plan: Plan, model: str, capacity: int, stamp: str, prefix: str = 
     return waves
 
 
+def pin_inference_image(wave: Wave, edf: str) -> Wave:
+    """``wave`` served from the EDF ``edf`` instead of its model layer's INFERENCE_CE_ENV: one wave's
+    engine pinned apart from the model's (oss120b mini-SWE on vLLM 0.27.1, whose tool-call parser has
+    vLLM PR #45171; 0.23.0 moves gpt-oss tool calls into the reasoning)."""
+    job_env = {**dict(wave.job_env), "INFERENCE_CE_ENV": edf}
+    return dataclasses.replace(wave, job_env=tuple(job_env.items()))
+
+
+def kernels_file_names(path: str) -> frozenset[str]:
+    """The kernel names a kernels file lists, as submit_common.sh's kernels_file_list reads it: a
+    ``#`` starts a comment, blank lines are skipped, and a ``track/.../name`` path counts as its name."""
+    lines = pathlib.Path(path).read_text(encoding="utf-8").splitlines()
+    names = frozenset(stem(line.split("#", 1)[0].strip()) for line in lines) - {""}
+    if not names:
+        raise SystemExit(f"owed_wave: --kernels-file {path} lists no kernels")
+    return names
+
+
 def report(waves: list[Wave], plan: Plan) -> str:
     lines = [f"note: {note}" for note in plan.notes]
     for wave in waves:
@@ -819,7 +1057,8 @@ def report(waves: list[Wave], plan: Plan) -> str:
             counts[item.setup.setup_id] = counts.get(item.setup.setup_id, 0) + 1
         lines.append(
             f"{wave.name}: {len(wave.owed)} kernels, {len(counts)} setups, {wave.nodes} nodes, "
-            f"walltime {wave.walltime_hours:02d}:00:00 ({wave.experiment})"
+            f"walltime {wave.walltime_hours:02d}:00:00 ({wave.experiment}) "
+            f"inference {dict(wave.job_env).get('INFERENCE_CE_ENV', '?')}"
         )
         for setup_id, count in sorted(counts.items()):
             setup = next(item.setup for item in wave.owed if item.setup.setup_id == setup_id)
@@ -848,6 +1087,17 @@ def main() -> int:
     ap.add_argument("--opt", default=str(HERE.parent), help="hpcagent-bench checkout")
     ap.add_argument("--experiments", default="", help="comma list of campaign experiments (wave_board names)")
     ap.add_argument("--setups", default="", help="comma list of arm identities to include (default all)")
+    ap.add_argument("--kernels-file", default="", help="plan only the owed kernels this file lists (default all)")
+    ap.add_argument(
+        "--inference-ce-env",
+        default="",
+        help="serve every planned wave from this EDF instead of the model layer's INFERENCE_CE_ENV",
+    )
+    ap.add_argument(
+        "--require-queue",
+        action="store_true",
+        help="refuse to plan when the queued-job check cannot run (a submission, never a review)",
+    )
     ap.add_argument("--classes", default="budget,infra", help="owed classes to rerun")
     ap.add_argument("--token-scale", type=int, default=1, help="AGENT_MAX_TOKENS factor for the budget class")
     ap.add_argument("--time-scale", type=int, default=1, help="AGENT_TIMEOUT_SECONDS factor for the budget class")
@@ -884,6 +1134,7 @@ def main() -> int:
         classes=frozenset(split_csv(args.classes)),
         smoke=args.smoke_kernels > 0,
         rerun_lost=args.rerun_lost,
+        kernels=kernels_file_names(args.kernels_file) if args.kernels_file else frozenset(),
     )
     plan = gather(
         args.model,
@@ -895,6 +1146,8 @@ def main() -> int:
         set(args.exclude_job),
         frozen_observations.resolve(args.frozen_observations),
     )
+    if args.require_queue and plan.queue_unknown:
+        raise SystemExit(f"owed_wave: refusing to plan a submission, the queued-job check failed: {plan.queue_unknown}")
     budget = [item for item in plan.owed if item.owed_class == remaining_kernels.ExitClass.BUDGET.value]
     if budget and args.token_scale == 1 and args.time_scale == 1 and not (selection.smoke or selection.rerun_lost):
         plan.notes.append(
@@ -907,7 +1160,10 @@ def main() -> int:
         prefix = "owed-smoke"
     plan = rerender(plan, args.opt, sys.executable)
     waves = plan_waves(plan, args.model, args.wave_agents, stamp, prefix)
+    if args.inference_ce_env:
+        waves = [pin_inference_image(wave, args.inference_ce_env) for wave in waves]
     print(report(waves, plan))
+    refuse_contract_drift(waves, serving_keys(args.opt, args.model))
     if not waves:
         print(f"no owed kernels for {args.model}")
     if args.out:

@@ -74,11 +74,27 @@ DRY RUN.
   `harness-focus20` and `harness20` the two harness studies (their own rosters). It defaults to
   `llr-focus40,llr-focus40-blind`.
 - `TOKEN_SCALE=2 TIME_SCALE=2`: the owed rule. A kernel owed for hitting its budget reruns at 2x
-  of the arm's base (base since 2026-09-21: 24M tokens; 6 h qwen38/oss120b, 12 h kimi27sglang;
-  so 48M and 12 h / 20 h capped). This scales only the budget class; infra-class kernels rerun at 1x.
+  of the arm's 1x; infra-class kernels rerun at 1x. The 1x is the 2026-09-21 policy (LLR 24M and
+  6 h qwen38/oss120b, 12 h kimi27sglang; harness 24M and 6 h; scicomp 120M and 20 h) or the arm's
+  own unscaled budget where that is larger (README "Owed kernels"). Time clamps at 20 h.
+- Every setup is checked against its arm's own launch env before a wave is written; a difference in
+  any key other than budget, identity, images and the model layer's serving refuses the plan
+  (`refusing a plan that changes an arm's contract`, README "Contract preflight").
 - Kernels of an arm with a job still PENDING or RUNNING are not planned again (the log says
   `skip <arm>: a job of it is queued or running`), so running the planner twice does not
-  double-submit. The flip side: an arm with a queued job shows no owed work until that job ends.
+  double-submit. The flip side: an arm with a queued job shows no owed work until that job ends,
+  so `scancel` a stale queued wave BEFORE planning its replacement.
+- Slurm down (weekly maintenance): the dry run still plans, with `note: queued-job check unavailable
+  (squeue failed: ...)`; `SUBMIT=1` refuses (`refusing to plan a submission`). A queued `owed-*`
+  wave whose snapshot is gone (its worktree deleted) is refused the same way. With Slurm down,
+  `scripts/cscs/account_env.sh` also refuses an exported `HPCAGENT_BENCH_ACCOUNT` it cannot check:
+  dry-run as `env -u HPCAGENT_BENCH_ACCOUNT ./submit-owed-wave.sh ...`.
+- `KERNELS_FILE=<file>`: only the owed kernels the file lists (`note: <arm>: N owed kernels outside
+  --kernels-file left out` counts the rest).
+- `WAVE_INFERENCE_CE_ENV=<edf>`: every wave of this call serves from that EDF instead of the model
+  layer's `INFERENCE_CE_ENV` (the plan line ends `inference <edf>`). Plan the one arm it is for with
+  `SETUPS=`, so no other wave moves with it.
+- `PYTHONPATH` is set by the script from its own checkout.
 - A judge shard written before the `runs` table existed (2026-09-09..11) names its arm by its
   run ids. `unreadable job dir, not coverage` now means a shard whose run ids name no arm, or two.
 - Every other skip is a `note: skip <arm>/<kernel>: <why>` line. Read them: a skipped kernel is
@@ -129,6 +145,21 @@ submitted as 645755 and 645756.
 
 Harness waves and later experiments go behind the LLR and scicomp waves by priority, never by a
 dependency: `NICE=<n>` submits each wave with `--nice=<n>`.
+
+Example, 2026-09-23: the scicomp perf-playbook reruns, scicomp37 kernels only, CPU C and GPU HIP
+arms (the HIP control is `scicomp-dc-gpu-<model>-hip-plain`), and oss120b mini-SWE on vLLM 0.27.1:
+
+```bash
+M=qwen38
+./submit-owed-wave.sh MODEL=$M EXPERIMENTS=scicomp-focus40 KERNELS_FILE=$SCRATCH/kernels-scicomp37.txt \
+    SETUPS=scicomp-perf-playbook-$M-plain,scicomp-perf-playbook-$M-perf-playbook-cpu,scicomp-perf-playbook-gpu-$M-hip-perf-playbook-amd,scicomp-dc-gpu-$M-hip-plain \
+    TOKEN_SCALE=2 TIME_SCALE=2 NICE=500
+# -> owed-scicomp-focus40-qwen38-claude-w1: 40 kernels, 2 setups, 4 nodes, walltime 23:00:00 ...
+#      scicomp-dc-gpu-qwen38-hip-plain-clean   26 kernels  hip  gpu  packet=-  tokens=120000000 secs=72000 class=infra
+./submit-owed-wave.sh MODEL=oss120b EXPERIMENTS=harness20 SETUPS=harness20-oss120b-miniswe \
+    WAVE_INFERENCE_CE_ENV=hpcagent-bench-vllm0271-mi300 TOKEN_SCALE=2 TIME_SCALE=2 NICE=600
+# -> owed-harness20-oss120b-miniswe-w1: 15 kernels, 2 setups, 3 nodes, walltime 15:00:00 (harness20) inference hpcagent-bench-vllm0271-mi300
+```
 
 ```bash
 ./submit-owed-wave.sh MODEL=qwen38 EXPERIMENTS=harness-focus20,harness20 TOKEN_SCALE=2 TIME_SCALE=2 \

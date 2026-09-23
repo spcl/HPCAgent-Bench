@@ -674,6 +674,20 @@ latest episode ended:
 | `budget` | the harness's own token cap or timeout, or a `rerun-kernels.tsv` row with class `budget` | scaled: pass `BUDGET_SCALE=2` (or `TOKEN_SCALE`/`TIME_SCALE`) per the 2026-09-18 owed rule |
 | `infra` | the job (wall clock, node failure, judge crash, unknown exit), a forced-1x placeholder (clean self-exit or context overflow with no grade), or a `rerun-kernels.tsv` row with a blank class | unscaled, 1x |
 
+The 1x is ONE rule for every experiment (`owed_wave.rerun_base`): the 2026-09-21 policy
+(`owed_wave.POLICY_BUDGETS`, what a fresh submit renders), raised to the arm's own budget where the
+arm ran with more. The arm's own is its newest launch no owed rule scaled -- a fused wave's
+`<arm>-clean.budget2x` setup never counts, so a second budget rerun does not compound.
+
+| Experiment | Policy 1x |
+| --- | --- |
+| `llr-focus40`, `llr-focus40-blind` | the model base `.env.base-<model>`: 24M tokens, 21600 s qwen38/oss120b, 43200 s kimi |
+| `harness20`, `harness-focus20` | 24M tokens, 21600 s (the harness20 claude arms ran 28800 s, so theirs is 28800 s) |
+| `scicomp-focus40`, `git-scicomp` | 120M tokens, 72000 s |
+
+The budget class doubles that at `TOKEN_SCALE=2 TIME_SCALE=2`; time clamps at 72000 s (23 h
+partition margin less 3 h staging), and the wave's walltime is its longest agent time plus 3 h.
+
 Frozen rows of deleted job dirs count as coverage. `rerun-lost.tsv` setups owe their missing
 kernels like any arm; `RERUN_LOST=1` plans only those setups over their whole roster.
 
@@ -682,10 +696,30 @@ kernels like any arm; `RERUN_LOST=1` plans only those setups over their whole ro
 `-clean` arm name and the class budget. Each owed kernel's problem row comes from the newest of the
 arm's jobs that launched it; a kernel none of them launched (a top-up job pruned to part of the
 roster) gets a fresh `make_problems.py` render if the campaign is in `RENDERED_TRACKS` (cpf/gpu
-`llr-focus40`). An arm whose every launch dir is gone falls back to `experiments/.env.<identity>[-clean]`
-and a fresh render (llrblind included). An arm with a queued job, another model, or no safe problem
-source is skipped, and every skip is a `note:` line in the plan naming the arm and how many kernels
-it still owes.
+`llr-focus40`, `scicomp-perf-playbook`, `scicomp-perf-playbook-gpu`, `scicomp-dc-gpu`: their
+submitters render fresh too; a scicomp kernel's row names its dwarf,
+`scientific_computing/dense_linear_algebra/gemm/gemm`). An arm whose every launch dir is gone falls
+back to `experiments/.env.<identity>[-clean]` and a fresh render (llrblind included). An arm with a
+queued job, another model, or no safe problem source is skipped, and every skip is a `note:` line in
+the plan naming the arm and how many kernels it still owes. `KERNELS_FILE=<file>` keeps only the
+owed kernels it lists (one note per arm counts the rest). When squeue does not answer (Slurm down)
+the queue is unknown, not empty: a dry run plans every arm and says so in a note, `SUBMIT=1` refuses.
+
+**Contract preflight.** Before it writes a wave, the planner holds every setup, as the job will run
+it, against the env the arm's OWN submitter launched it with (its newest single-setup launch, else
+`experiments/.env.<identity>[-clean]`; never a fused setup, which a planner wrote). A rerun may
+change only its budget, its `-clean` identity and commit stamp, the fused job's own files and node
+counts, keys nothing reads, the container images (`AMD_CE_ENV`, `JUDGE_CE_ENV`) and the model
+layer's own serving keys (`layers/model-<model>.env`, `INFERENCE_CE_ENV` included). Any other
+difference refuses the whole plan and names it:
+
+```
+owed_wave: refusing a plan that changes an arm's contract (a new identity, never a rerun):
+  owed-llr-focus40-qwen38-claude-w2 gpu-llr-focus40-qwen38-triton-device-clean.budget2x: JUDGE_INPUT_MODE: py-binding -> source
+```
+
+That is the 2026-09-22 void: the waves judged Triton arms in the model layer's `source` mode. A
+contract change is a new arm (a new name through its own submitter), never an owed rerun.
 
 **3. Fusing.** One job serves many arms of ONE experiment, ONE model and ONE harness from one
 inference server. Each problem row names its `setup`; `owed_wave.py` splits every env key in two:
