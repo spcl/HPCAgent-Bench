@@ -830,6 +830,23 @@ def test_a_chain_length_declaration_does_not_move_the_comparable_epoch(
     assert module.comparable_since_ms("probe_kernel", str(repo)) == first_ts_ms
 
 
+def test_a_display_name_edit_does_not_move_the_comparable_epoch(
+    module: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """87c15901e shortened the ``name`` label on 82 manifests and changed nothing the judge runs.
+    Moving the epoch there made the owed planner rerun done scicomp40 kernels (amg_setup's
+    09-16 02:31 submission on scicomp-dc-oss120b-plain read as owed)."""
+    repo, manifest, git = init_repo(tmp_path, "probe_kernel")
+    first_ts_ms = commit_manifest(
+        git, manifest, "name: Algebraic multigrid setup (smoothed aggregation)\nparameters:\n  XL:\n    n: 100\n", "add"
+    )
+    later_ts_ms = commit_manifest(
+        git, manifest, "name: Algebraic Multigrid Setup\nparameters:\n  XL:\n    n: 100\n", "shorten the label"
+    )
+    assert later_ts_ms > first_ts_ms
+    assert module.comparable_since_ms("probe_kernel", str(repo)) == first_ts_ms
+
+
 def test_a_resize_after_a_tag_only_edit_still_invalidates(module: types.ModuleType, tmp_path: pathlib.Path) -> None:
     """The backward walk must skip a cosmetic commit in the MIDDLE of history too, not just at the
     tip: a resize after a tag edit still moves the epoch forward to the resize."""
