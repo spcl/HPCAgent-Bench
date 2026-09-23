@@ -338,8 +338,9 @@ CREATE TABLE IF NOT EXISTS submission_cells (
 """
 
 #: One row per (grade, rank count P) of a distributed kernel's weak/strong SCALING curve
-#: (``TaskScore.scaling``), so every scaling figure can be rebuilt from stored rows. Keyed like ``submission_cells``: ``(run_id, ts,
-#: benchmark)`` is the grade (``ts`` = its epoch-ms stamp), ``ranks`` the point.
+#: (``TaskScore.scaling``), so every scaling figure can be rebuilt from stored rows. Keyed like
+#: ``submission_cells``: ``(run_id, ts, benchmark)`` is the grade (``ts`` = its epoch-ms stamp),
+#: ``ranks`` the point.
 #:
 #: A DROPPED P is a row too -- ``ranked_ns`` / ``achieved_speedup`` / ``ideal_speedup`` /
 #: ``efficiency`` NULL and ``note`` the sweep's reason -- so a curve with a hole reads as a hole,
@@ -1774,8 +1775,9 @@ def record(
 
         # Before the verdict branches, so an UNGRADEABLE body is kept as well as a winning one.
         # BOTH halves: a hip/cuda submission is two translation units, and a GPU row is reproducible
-        # only with the device half. The device half goes in as its OWN row tagged in `language`, not a new column: this schema is never
-        # ALTERed, so a column would silently not appear on an existing DB while a row is additive.
+        # only with the device half. The device half goes in as its OWN row tagged in `language`, not
+        # a new column: this schema is never ALTERed, so a column would silently not appear on an
+        # existing DB while a row is additive.
         for body, tag in ((submission.source, delivered), (submission.device_source, f"{delivered}:device")):
             if body:
                 store_source(

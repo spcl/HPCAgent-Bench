@@ -1703,8 +1703,8 @@ def enable_crash_traces() -> None:
 
     The upstream is a long-lived process that runs numpy and BLAS in its own address space (the
     baselines, the references, the comparison). When one of those takes it down, the process
-    vanishes and the rank's log ends mid-line. faulthandler writes to the log the launcher already redirects, and costs nothing
-    until the signal arrives."""
+    vanishes and the rank's log ends mid-line. faulthandler writes to the log the launcher already
+    redirects, and costs nothing until the signal arrives."""
     faulthandler.enable(file=sys.stderr, all_threads=True)
 
 
