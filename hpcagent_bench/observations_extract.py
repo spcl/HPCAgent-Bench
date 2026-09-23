@@ -515,7 +515,9 @@ def readable_job(job_dir: pathlib.Path) -> bool:
         if db.name in DB_SKIP_NAMES or not db.is_file():
             continue
         try:
-            with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as connection:
+            # closing(): sqlite3's own context manager ends the transaction but leaves the handle
+            # open, one per judge DB walked, until the garbage collector finds it.
+            with contextlib.closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as connection:
                 names = {row[0] for row in connection.execute("select name from sqlite_master where type='table'")}
         except sqlite3.Error:
             continue

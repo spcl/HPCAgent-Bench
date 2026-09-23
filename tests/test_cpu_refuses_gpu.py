@@ -574,8 +574,9 @@ def test_a_cpu_arm_refuses_a_hip_language_submit_over_http(make_judge, monkeypat
         urlopen(request, timeout=60)
         raise AssertionError("expected HTTPError 400")
     except urllib.error.HTTPError as exc:
-        assert exc.code == 400
-        payload = json.loads(exc.read())
+        with exc:  # an HTTPError holds the response body open until closed
+            assert exc.code == 400
+            payload = json.loads(exc.read())
         assert "hip" in payload["error"] and "host-only" in payload["error"]
 
 
