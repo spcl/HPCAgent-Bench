@@ -152,7 +152,7 @@ if [[ "${mode}" == outer ]]; then
     . "${opt}/scripts/cache_env.sh"
     #: A DaCe tree cloned without its submodules compiles nothing: stream.h includes
     #: external/moodycamel, and every DaCe kernel then lands in the CSV as `unsupported`, which reads
-    #: as a fact about the kernels (smoke 640048). Refused here, before the node does any work.
+    #: as a fact about the kernels. Refused here, before the node does any work.
     dace_tree=${DACE_TREE:-$(canon_dace_tree)}
     [[ -n "${dace_tree}" ]] || { echo "canon_column: no DACE_TREE and no SCRATCH/HPCAGENT_BENCH_REPO to default it from" >&2; exit 2; }
     if [[ ! -f "${dace_tree}/dace/external/moodycamel/blockingconcurrentqueue.h" ]]; then
@@ -231,8 +231,7 @@ nranks=${SLURM_NTASKS:-1}
 
 #: This rank's share of ${kernels}, decided BEFORE the DaCe/cache setup below. A rank with fewer
 #: kernels than ranks (a small smoke run) gets none, and that must stay a no-op needing no working
-#: PYTHONPATH/dace tree -- not a crash on a cache/tree this rank never touches (smoke 640088: 3
-#: kernels, 4 ranks, rank 3's setup killed ranks 0-2 mid-run over having nothing to do).
+#: PYTHONPATH/dace tree -- not a crash (srun would tear down the sibling ranks).
 i=0
 mine=""
 for k in ${kernels//,/ }; do
@@ -340,9 +339,7 @@ sys.exit(0 if os.path.realpath(dace.__file__) == os.path.realpath(sys.argv[1]) e
     #: THE COLUMN'S OWN COMPILER, before the first kernel -- and INSIDE the container, which is the
     #: only place the question means anything (the batch context `outer` runs in has the host
     #: toolchain, not the image's). A source-to-source column shells out to a tool the image may
-    #: simply not carry, and without this the job runs to completion: `ppcg` absent made every one
-    #: of job 640520's 248 rows an ordinary `unsupported` decline, which is the spelling a kernel
-    #: the polyhedral model cannot express gets -- an empty image published as a compiler result.
+    #: not carry; without this every row becomes an ordinary `unsupported` decline.
     #: --tools-only, not the full preflight: this campaign runs columns (numba, the ppcg family)
     #: that preflight's DETERMINISTIC_FRAMEWORKS does not list, and refusing those here would kill
     #: a campaign over a label. What it checks is only whether the compiler is on this node.
@@ -362,60 +359,34 @@ sys.exit(0 if os.path.realpath(dace.__file__) == os.path.realpath(sys.argv[1]) e
         opt_reports_args=(--opt-reports "${out_root}/reports/${col}")
     fi
     #: Wall cap on ONE kernel's run-framework invocation. Without this a single kernel that hangs
-    #: (job 640524, dace_gpu rank 3: 44 of 62 kernels done by 23:45, then nothing until the job's own
-    #: 12h SLURM limit killed it at 09:52 -- kernel tsvc_2_s315 stuck for ~10h) eats the WHOLE job's
-    #: time budget, and every other kernel that rank would have run never gets a row. `timeout -k`
+    #: eats the WHOLE job's time budget, and every other kernel that rank would have run never gets
+    #: a row. `timeout -k`
     #: sends TERM first and KILL a few seconds later, so a process ignoring TERM still dies; SIGKILL
     #: alone (-s KILL) can leave a compiled-extension child or a GPU context half torn down.
     kernel_timeout_sec="${CANON_KERNEL_TIMEOUT_SEC:-7200}"
     #: run-framework's own first-execution timer (--timeout, default 200 s) covers canonicalize +
-    #: compile + the first run: CloudSC's canonicalize alone outruns 200 s, so 15 of scicomp37's
-    #: dace_cpu_canonicalize rows came back validated=False/timeout inside the wall budget. The
-    #: wall cap above is the limit; the framework timer fires just before it so the row is its own.
+    #: compile + the first run: CloudSC's canonicalize alone outruns 200 s. The wall cap above is
+    #: the limit; the framework timer fires just before it so the row is its own.
     first_run_timeout_sec=$((kernel_timeout_sec - 120))
     #: Generated code keeps input-sized scratch on the stack as VLAs (gem: ~1 GB per OpenMP thread at
     #: the fuzzed top of natoms), so the main thread gets its hard limit and every OpenMP thread
     #: CANON_OMP_STACKSIZE. Reserved, not touched: only what a kernel uses costs memory, and the
     #: reservation counts against the RLIMIT_DATA cap below (24 threads x 2 GiB = 48 of 96 GiB).
     export OMP_STACKSIZE="${CANON_OMP_STACKSIZE:-2G}"
-    #: Per-kernel memory cap (2026-09-20, job 640519: pluto rank 2 OOM-killed at 487684852K
-    #: (~465 GB) RSS with --mem=0 giving every rank the WHOLE node and no per-rank reservation; the
-    #: kernel's own step got torn down by the OOM killer, taking every sibling rank's in-flight
-    #: kernel down with it -- the failure mode this exists to remove, not the memory use itself,
-    #: which a legitimate XL-array kernel is entitled to up to this ceiling). Set in a SUBSHELL
-    #: around just this one kernel's process tree, so the cap dies with it and never leaks into the
-    #: merge step below or the next column's own invocation.
+    #: Per-kernel memory cap: with --mem=0 every rank sees the WHOLE node, and one kernel's OOM kill
+    #: tears down every sibling rank's in-flight kernel. Set in a SUBSHELL around just this one
+    #: kernel's process tree, so the cap never leaks into the merge step or the next column.
     #:
-    #: ``ulimit -d`` (RLIMIT_DATA), not ``-v`` (RLIMIT_AS): this was RLIMIT_AS until a GPU column
-    #: run under it (job 644343, ppcg_hip, first GPU column after the cap landed) crashed 7 of 40
-    #: kernels -- hipMalloc "out of memory" and, on the host side, a numpy MemoryError on a 2.84 GiB
-    #: array that a 513 GB node should never fail to give. Measured with a probe job (644414,
-    #: gfx942): a bare ``hipInit`` + trivial hipMalloc reserves ~97 GiB of VIRTUAL ADDRESS SPACE
-    #: (VmSize 101922308K after hipInit, no limit) for the GPU's VRAM aperture alone -- RLIMIT_AS
-    #: counts that against the same 96 GiB budget as every host allocation. Under a 96 GiB RLIMIT_AS
-    #: cap the HIP runtime still started (it shrinks its reservation to fit, VmSize 76756484K =
-    #: ~73 GiB measured), but that leaves only ~23 GiB of address space for the kernel's own
-    #: device+host buffers -- not enough for a kernel with several 2.84 GiB arrays, which is what
-    #: 644343 actually hit. RLIMIT_DATA does not count that aperture at all (VmData held flat at
-    #: 1083244K, ~1.03 GiB, in every case the probe measured, hipMalloc'd or not) while still
-    #: bounding real anonymous/heap growth -- confirmed separately (not on the GPU probe) that a
-    #: RLIMIT_DATA cap actually rejects an allocation over it, the same as RLIMIT_AS does; it is not
-    #: a no-op on this kernel. That is the pluto failure mode job 640519 hit, so the CPU protection
-    #: is unchanged, just under the other knob -- and job 644379 (pluto CPU revalidation, still
-    #: under the OLD RLIMIT_AS cap) came back 25/25 rows, 0 crashed, confirming the CPU case was
-    #: never the problem here. One knob for every column, CPU and GPU alike, rather than a
-    #: column-name branch to keep in sync with the device-column list elsewhere.
+    #: ``ulimit -d`` (RLIMIT_DATA), not ``-v`` (RLIMIT_AS): hipInit reserves ~97 GiB of VIRTUAL
+    #: ADDRESS SPACE for the VRAM aperture, which RLIMIT_AS counts and RLIMIT_DATA does not.
+    #: RLIMIT_DATA still rejects heap growth over the cap. One knob for every column, CPU and GPU.
     #:
-    #: 96 GiB: below the node's 513 GB divided even by a single rank with headroom for the OTHER
-    #: three under full CANON_RANKS parallelism (4 x 96 = 384 GB < 513 GB), and far above what any
-    #: of these kernels legitimately need on the heap (measured peaks are single-digit GB; see job
-    #: 644283's diagnostic).
+    #: 96 GiB: 4 ranks x 96 = 384 GB < the node's 513 GB; measured kernel peaks are single-digit GB.
     kernel_mem_kb="${CANON_KERNEL_MEM_KB:-100663296}"  # 96 GiB, ulimit -d is KB
     for k in ${mine}; do
         # NOT `if ! cmd; then rc=$?`: bash's `!` negation collapses the pipeline's exit status to a
         # plain 0/1 for the `if` test, so `$?` inside the `then` branch is that collapsed value, not
-        # `timeout`'s real 124/137 -- every kill was misread as an ordinary failure and never got the
-        # synthetic CSV row below. Run it un-negated and branch on the real `$?` instead.
+        # `timeout`'s real 124/137. Run it un-negated and branch on the real `$?` instead.
         (
             ulimit -d "${kernel_mem_kb}"
             ulimit -s "$(ulimit -H -s)" || true
@@ -447,14 +418,12 @@ fi
 # number. Read the column back instead of trusting the loop, or a dace_gpu column that lowered
 # nothing at all reports a clean run.
 # OK needs BOTH fields: status ok AND no failure. A row whose status is `crash` has an EMPTY failure
-# field, and the earlier summary (failure field alone) counted those as ok -- a column name the
-# registry does not know crashed on every kernel and printed "1 ok" per rank (smoke 640048).
+# field.
 # Fields 6 and 9 precede the only free-text field (error, last), so a comma in it cannot shift them.
 # A rank whose kernel share is empty (fewer kernels than ranks, e.g. a small smoke run) never
 # calls run-framework above, so ${csv} is never created -- not a crash, just zero rows for this
-# rank. awk on a missing file exits fatal ("cannot open file"), and that nonzero exit used to be
-# this task's own exit code, which made srun tear down every sibling task over one rank that
-# simply had nothing to do (smoke 640088: 3 kernels, 4 ranks, rank 3 killed the whole step).
+# rank. awk on a missing file exits fatal ("cannot open file"), and a nonzero task exit makes srun
+# tear down every sibling task.
 if [[ -f "${csv}" ]]; then
     awk -F, -v col="${col}" -v hard="${failed}" '
         NR > 1 { total++
