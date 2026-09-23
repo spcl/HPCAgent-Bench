@@ -568,7 +568,7 @@ def test_read_records_on_an_empty_frame_is_an_empty_mapping() -> None:
 def test_dace_root_for_tests_names_the_missing_corpus_path_not_a_bare_module_error(
     tmp_path: pathlib.Path,
 ) -> None:
-    """A dace install with no ``tests/`` (a wheel, or the pyproject ``dace`` extra resolved into
+    """A dace install with no ``tests/`` (a wheel, or a ``dace @ git+https`` reference resolved into
     one) must fail here, naming the path CI is supposed to provide, rather than three frames later
     as a bare ``ModuleNotFoundError: No module named 'tests.corpus'``.
 

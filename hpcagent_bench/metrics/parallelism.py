@@ -264,7 +264,7 @@ def dace_root_for_tests(root: pathlib.Path | None = None) -> pathlib.Path:
     Raises :class:`ModuleNotFoundError` naming the missing directory when ``tests/corpus`` is not
     there, instead of leaving the caller to hit a bare ``ModuleNotFoundError`` for ``tests.corpus``
     three frames down with no path in it. A WHEEL install of dace (the PyPI release, or pip
-    resolving the ``dace`` extra's git+https reference into a build) never ships ``tests/``; only a
+    resolving a ``dace @ git+https`` reference into a build) never ships ``tests/``; only a
     checkout does, which is what ``.github/actions/setup/action.yml``'s "DaCe checkout" step
     installs on CI (``git clone`` + ``pip install -e``).
     """

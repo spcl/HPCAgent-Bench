@@ -13,8 +13,9 @@
 # runs.
 #
 # Refuses --upload when:
-#   * pyproject.toml still declares a direct-URL (`@ git+...`) dependency -- PyPI rejects the
-#     upload anyway, and failing here is a clearer error than PyPI's.
+#   * pyproject.toml would publish a direct-URL (`name @ git+...`) requirement -- PyPI rejects the
+#     upload anyway, and failing here is a clearer error than PyPI's
+#     (scripts/check_direct_url_requirements.py).
 #   * the git worktree is dirty -- an upload must come from a committed tree, not a scratch edit.
 #
 # Credentials come from the environment (TWINE_USERNAME/TWINE_PASSWORD or TWINE_API_KEY /
@@ -25,6 +26,10 @@
 #   TWINE_*                 read by `twine upload` itself; unset unless --upload is used
 set -euo pipefail
 
+# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
+# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
+# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+ulimit -c 0
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="${HPCAGENT_BENCH_PYTHON:-python3}"
 
@@ -58,12 +63,12 @@ echo "=== hpcagent_bench ${VERSION} ==="
 
 if [ "${UPLOAD}" -eq 1 ]; then
   # PyPI rejects a published Requires-Dist that names a URL (PEP 508 direct reference); catch
-  # it here rather than at PyPI's upload validator.
-  if grep -qE '@\s*git\+' "${REPO_ROOT}/pyproject.toml"; then
-    echo "error: pyproject.toml still has a direct-URL dependency; PyPI will reject the upload" >&2
-    grep -nE '@\s*git\+' "${REPO_ROOT}/pyproject.toml" >&2
+  # it here rather than at PyPI's upload validator. Parsed, not grepped: pyproject's comments spell
+  # the separate `pip install "dace @ git+..."` and are not requirements.
+  "${PY}" "${REPO_ROOT}/scripts/check_direct_url_requirements.py" "${REPO_ROOT}/pyproject.toml" || {
+    echo "error: PyPI will reject the upload" >&2
     exit 1
-  fi
+  }
   if [ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]; then
     echo "error: git worktree is dirty; commit before --upload" >&2
     git -C "${REPO_ROOT}" status --short >&2

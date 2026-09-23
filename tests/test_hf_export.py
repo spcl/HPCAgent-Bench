@@ -6,6 +6,10 @@ than letting the dataset silently fall behind. The rest pins the flat schema, pe
 and parquet/jsonl round-trips."""
 
 import json
+import pathlib
+from collections.abc import Sequence
+
+import pytest
 
 from hpcagent_bench import hf_export
 from hpcagent_bench.hf_export import ExportRow
@@ -176,7 +180,7 @@ def test_export_builds_once_and_feeds_both_write_and_push(tmp_path, monkeypatch)
         captured["builds"] = captured.get("builds", 0) + 1
         return real_build(*a, **k)
 
-    def fake_push(rows, repo_id, *, config=None, token=None, revision=None, private=None) -> None:
+    def fake_push(rows, repo_id, *, config=None, token=None, revision=None, private: bool | None = None) -> None:
         captured["rows"] = rows
         captured["repo"] = repo_id
         captured["config"] = config
@@ -211,13 +215,21 @@ def test_export_builds_once_and_feeds_both_write_and_push(tmp_path, monkeypatch)
     assert captured["private"] is None  # --private absent -> leaves the Hub's own default alone
 
 
-def test_export_push_private_flag_reaches_push_to_hub(tmp_path, monkeypatch) -> None:
+def test_export_push_private_flag_reaches_push_to_hub(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``--private`` on the CLI must reach push_to_hub as private=True, not silently drop."""
     from hpcagent_bench import cli, hf_export as H
 
-    captured = {}
+    captured: dict[str, bool | None] = {}
 
-    def fake_push(rows, repo_id, *, config=None, token=None, revision=None, private=None) -> None:
+    def fake_push(
+        rows: Sequence[ExportRow],
+        repo_id: str,
+        *,
+        config: str = "all",
+        token: str | None = None,
+        revision: str | None = None,
+        private: bool | None = None,
+    ) -> None:
         captured["private"] = private
 
     monkeypatch.setattr(H, "push_to_hub", fake_push)

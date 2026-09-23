@@ -86,7 +86,9 @@ def test_wheel_is_pip_installable_and_complete(tmp_path: pathlib.Path) -> None:
     missing = [name for name in tracked_package_data() if name not in shipped]
     assert not missing, f"{len(missing)} tracked data files missing from the wheel, e.g. {missing[:5]}"
     missing_refs = [name for name in tracked_numpy_references() if name not in shipped]
-    assert not missing_refs, f"{len(missing_refs)} numpy reference source(s) missing from the wheel, e.g. {missing_refs[:5]}"
+    assert not missing_refs, (
+        f"{len(missing_refs)} numpy reference source(s) missing from the wheel, e.g. {missing_refs[:5]}"
+    )
     # A broken package_dir remap drops the numpyto_* translators from the wheel silently.
     assert any(n.startswith("numpyto_common/") for n in names), "numpyto_common missing from the wheel"
     ep = next(n for n in names if n.endswith("entry_points.txt"))

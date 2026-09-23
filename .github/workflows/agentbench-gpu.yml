@@ -37,11 +37,11 @@ jobs:
         # torch index here -- nvidia wants the default PyPI wheel, which IS the CUDA build.
         #
         # dace is NOT a pyproject extra (PyPI rejects a published direct-URL dependency; see
-        # pyproject.toml and README). Install it separately, tracking the extended branch tip.
+        # pyproject.toml and README): it is named beside the extras, still in the ONE install, and
+        # tracks the extended branch tip.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --group testing -e ".[nvidia,tvm]"
-          python -m pip install "dace @ git+https://github.com/spcl/dace.git@extended"
+          python -m pip install --group testing -e ".[nvidia,tvm]" "dace @ git+https://github.com/spcl/dace.git@extended"
 
       - name: cupy runs on the GPU
         # Not just device presence: allocate + reduce on the device and check the

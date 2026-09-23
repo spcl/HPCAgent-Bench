@@ -6,7 +6,8 @@
 # There is NO lockfile, deliberately. A lock demands one resolution valid across every extra at
 # once, and two things here make that impossible: agent-aider hard-pins numpy==1.26.x against this
 # project's numpy>=2, and dace must track a moving branch tip rather than a commit. Installs
-# therefore resolve fresh (`pip install -e ".[<hw>,dace]"`), which is also what keeps dace current.
+# therefore resolve fresh (`pip install -e ".[<hw>]" "dace @ git+https://github.com/spcl/dace.git@extended"`),
+# which is also what keeps dace current.
 # This file is the whole of the dependency metadata; pip is the installer.
 #
 # Why package-dir matters: the numpyto_* translators live under
@@ -41,8 +42,9 @@ classifiers = [
 # extra first; a downstream consumer doing the plain install gets ModuleNotFoundError one dep at
 # a time (sqlmodel, via hpcagent_bench/frameworks/schema.py, is how this surfaced).
 #
-# dace is deliberately ABSENT here and is an extra instead: the PyPI wheel is an old release that
-# imports the numpy-2-removed ``np.int``, so it is sourced from spcl/dace@extended.
+# dace is deliberately ABSENT here and is not an extra either (see the note above `mpi` below): the
+# PyPI wheel is an old release that imports the numpy-2-removed ``np.int``, so it is sourced from
+# spcl/dace@extended.
 dependencies = [
     "numpy>=2,<3",  # the array type of every benchmark + translator signature
     "scipy",  # hpcagent_bench/support/helpers/sparse/generators.py, plotting
