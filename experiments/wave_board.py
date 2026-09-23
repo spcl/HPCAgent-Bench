@@ -354,10 +354,13 @@ def planned_fused_arms(job_id: str) -> set[str]:
 
 
 def setups_file_arms(env: pathlib.Path) -> set[str]:
-    """The arms named by the SETUPS_FILE a fused job's snapshot env points at (relative to experiments/)."""
+    """The arms named by the SETUPS_FILE a fused job's snapshot env points at. A relative one sits
+    beside the snapshot (env_layers.sh snapshot_env writes both under one stem), so it resolves in the
+    checkout that SUBMITTED the job, never in the one reading it: a worktree's planner read the live
+    checkout's running waves as serving nothing, and planned their kernels a second time."""
     lines = env.read_text(encoding="utf-8").splitlines()
     setups = next((line.partition("=")[2] for line in reversed(lines) if line.startswith("SETUPS_FILE=")), "")
-    path = pathlib.Path(setups) if os.path.isabs(setups) else HERE / setups
+    path = pathlib.Path(setups) if os.path.isabs(setups) else env.parent / pathlib.PurePath(setups).name
     if not setups or not path.is_file():
         return set()
     spec = json.loads(path.read_text(encoding="utf-8")).get("setups", {})

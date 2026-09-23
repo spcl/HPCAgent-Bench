@@ -56,7 +56,7 @@ runs, not to grade the roster, and a smoke agent typically gets a fraction of th
 own docstring for why that cannot be told apart from the arm name or the run's recorded fields).
 
 The arm is read from ``runs.arm`` in the job's own shard DBs, verified against ``sacct`` job names
-on 12 real jobs. Not sacct: a job whose accounting record has already rolled off gives an empty
+on 12 real jobs (a shard written before the ``runs`` table existed names it by its run ids). Not sacct: a job whose accounting record has already rolled off gives an empty
 name and used to drop the whole job silently, crediting an arm with coverage it never earned. A job
 dir with shard DBs but no readable arm is a hard error -- guessing at coverage from a broken shard
 is worse than stopping. A job dir with no shard DBs at all (the judge never started) contributes no
@@ -282,10 +282,20 @@ def classify_exit(
 MANIFEST_GLOB = "hpcagent_bench/benchmarks/**/{kernel}.yaml"
 
 
+@functools.lru_cache(maxsize=8)
+def manifests_by_name(opt: str) -> dict:
+    """kernel name -> every manifest yaml of that stem under checkout ``opt``: ONE walk of the
+    benchmark tree for all kernels (a recursive glob per kernel cost ~0.3 s each)."""
+    index: dict = {}
+    for path in sorted(pathlib.Path(opt).glob(MANIFEST_GLOB.format(kernel="*"))):
+        index.setdefault(path.stem, []).append(path)
+    return {name: tuple(paths) for name, paths in index.items()}
+
+
 def kernel_manifest(kernel: str, opt: str) -> pathlib.Path | None:
     """The one manifest yaml naming ``kernel`` under checkout ``opt``, or None when it is not
     exactly one file (not found, or the name is ambiguous)."""
-    matches = sorted(pathlib.Path(opt).glob(MANIFEST_GLOB.format(kernel=kernel)))
+    matches = manifests_by_name(opt).get(kernel, ())
     return matches[0] if len(matches) == 1 else None
 
 
@@ -572,15 +582,39 @@ def job_arms(job_dir: str) -> set:
     return {arm} if arm else set()
 
 
+#: A run id as the launcher writes it, ``<arm>.n<N>.p<P>.w<W>``.
+LAUNCHER_RUN_ID = re.compile(r"^(?P<arm>[^.]+)\.n\d+\.p\d+\.w\d+$")
+
+
+def run_id_arms(conn: sqlite3.Connection) -> set:
+    """The arms named by the launcher-shaped run ids of a shard's graded rows: the arm of a shard
+    written before the ``runs`` table existed (judges of 2026-09-09..11), read off the same run id
+    convention the observations extractor reads every row's arm by. A run id of any other shape (an
+    unexpanded ``${HPCAGENT_BENCH_RUN_ID}``, an ad-hoc test id) names no arm."""
+    tables = {row[0] for row in conn.execute("select name from sqlite_master where type = 'table'")}
+    arms: set = set()
+    for table in (DONE_TABLE, "attempts", "calls"):
+        if table in tables:
+            for (run_id,) in conn.execute(f"select distinct run_id from {table}"):
+                match = LAUNCHER_RUN_ID.match(run_id or "")
+                if match:
+                    arms.add(match["arm"])
+    return arms
+
+
 def recorded_arms(job_dir: str) -> set:
-    """The distinct non-empty ``runs.arm`` values over this job's shard DBs."""
+    """The distinct non-empty ``runs.arm`` values over this job's shard DBs; a shard with no ``runs``
+    table at all names its arm by its run ids (:func:`run_id_arms`)."""
     arms: set = set()
     for db in shard_dbs(job_dir):
         conn = open_shard(db)
         if conn is None:
             continue
         try:
-            arms.update(row[0] for row in conn.execute("select distinct arm from runs") if row[0])
+            if conn.execute("select 1 from sqlite_master where type = 'table' and name = 'runs'").fetchone():
+                arms.update(row[0] for row in conn.execute("select distinct arm from runs") if row[0])
+            else:
+                arms.update(run_id_arms(conn))
         except sqlite3.Error:
             pass
         finally:
@@ -744,22 +778,40 @@ def owed_exit_classes(job_dirs: list, owed: list, arms: frozenset = frozenset())
     return classes
 
 
-def forced_rerun(arms: Iterable[str], path: pathlib.Path | None = None) -> set:
-    """Kernels :data:`RERUN_KERNELS` still lists for any of ``arms`` -- owed however they look.
+#: ``rerun-kernels.tsv``'s optional ``class`` column -> the owed class a forced kernel reruns as. Blank
+#: is INFRA (see :func:`owed_classes`); ``budget`` keeps the owed rule's scaled rerun for a kernel
+#: whose last valid episode hit its budget and whose scaled rerun was voided.
+FORCED_CLASSES = {"": ExitClass.INFRA, "infra": ExitClass.INFRA, "budget": ExitClass.BUDGET}
+
+
+def forced_kernels(arms: Iterable[str], path: pathlib.Path | None = None) -> dict:
+    """kernel -> :class:`ExitClass` for every kernel :data:`RERUN_KERNELS` still lists for any of
+    ``arms`` -- owed however they look.
 
     Matched on :func:`base_arm`, like every other identity here, so a ``-clean`` re-run of a listed
-    arm owes the same kernels."""
+    arm owes the same kernels. The class is the row's optional ``class`` column (:data:`FORCED_CLASSES`),
+    INFRA when blank."""
     path = RERUN_KERNELS if path is None else path
     if not path.is_file():
-        return set()
+        return {}
     wanted = {base_arm(arm) for arm in arms}
+    forced = {}
     with path.open(newline="", encoding="utf-8") as handle:
-        rows = csv.DictReader((line for line in handle if not line.startswith("#")), delimiter="\t")
-        return {
-            row["kernel"].strip()
-            for row in rows
-            if base_arm(row["arm"].strip()) in wanted and row["status"].strip() != RERUN_DONE
-        }
+        for row in csv.DictReader((line for line in handle if not line.startswith("#")), delimiter="\t"):
+            if base_arm(row["arm"].strip()) not in wanted or row["status"].strip() == RERUN_DONE:
+                continue
+            label = (row.get("class") or "").strip()
+            if label not in FORCED_CLASSES:
+                raise SystemExit(
+                    f"{path}: class {label!r} of {row['arm']}/{row['kernel']} is not one of {sorted(FORCED_CLASSES)}"
+                )
+            forced[row["kernel"].strip()] = FORCED_CLASSES[label]
+    return forced
+
+
+def forced_rerun(arms: Iterable[str], path: pathlib.Path | None = None) -> set:
+    """The kernels of :func:`forced_kernels`, whatever their class."""
+    return set(forced_kernels(arms, path))
 
 
 def owed_names(jobs: list, full: list, opt: str, frozen_dir: pathlib.Path | None = None) -> list:
@@ -797,13 +849,17 @@ def owed_classes(jobs: list, full: list, opt: str, frozen_dir: pathlib.Path | No
     A kernel forced back by :data:`RERUN_KERNELS` is also INFRA whatever its episode ended as: the
     judge that was to grade it is what failed, so the agent's own exit says nothing about it. That
     override runs after the DONE remap, so it wins either way -- both routes land on the same
-    unscaled INFRA, never BUDGET, so neither can compound a cap it never asked for."""
+    unscaled INFRA, never BUDGET, so neither can compound a cap it never asked for. The one exception
+    is a row whose ``class`` says ``budget``: the operator's judgement that the kernel's last VALID
+    episode hit its own budget and the rerun meant to double it was voided (2026-09-23: a fused wave
+    judged Triton setups with the wrong input mode), so the owed rule's scaled rerun still applies."""
     owed = owed_names(jobs, full, opt, frozen_dir)
     arms = frozenset(arm for _, _, arm in jobs)
     classes = owed_exit_classes(sorted({job_dir for _, job_dir, _ in jobs}), owed, arms)
     classes = {kernel: (ExitClass.INFRA if cls == ExitClass.DONE else cls) for kernel, cls in classes.items()}
-    for kernel in forced_rerun(arms) & set(full):
-        classes[kernel] = ExitClass.INFRA
+    for kernel, forced_class in forced_kernels(arms).items():
+        if kernel in full:
+            classes[kernel] = forced_class
     return classes
 
 

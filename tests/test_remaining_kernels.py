@@ -127,6 +127,25 @@ def test_the_arm_comes_from_runs_arm_with_no_sacct_call(
     assert owed == {ARM: ["c"]}
 
 
+def test_a_shard_written_before_the_runs_table_names_its_arm_by_its_run_ids(
+    module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """Judges of 2026-09-09..11 wrote no ``runs`` table; reading that as "no arm" dropped their
+    coverage and hid an arm whose every job is that old (cpf-llr-focus40-kimi27sglang-c-skills). A run
+    id not in the launcher's shape names no arm, so it cannot make the job look two-armed."""
+    shard = tmp_path / "runs" / "631233" / "judge" / "rank-0"
+    shard.mkdir(parents=True)
+    conn = sqlite3.connect(shard / "hpcagent_bench0.db")
+    with conn:
+        conn.execute("create table submissions (run_id text, benchmark text, optimizer text, ts integer)")
+        conn.execute("create table attempts (run_id text, benchmark text, reason text, ts integer)")
+    add_submission(conn, f"{ARM}.n0.p0.w0", "a")
+    add_attempt(conn, "${HPCAGENT_BENCH_RUN_ID}", "b", reason="wrong")
+    conn.close()
+    assert module.job_arm(str(tmp_path / "runs" / "631233")) == ARM
+    assert owed_lists(module, monkeypatch, tmp_path) == {ARM: ["c"]}
+
+
 def test_a_submitted_kernel_is_done(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
