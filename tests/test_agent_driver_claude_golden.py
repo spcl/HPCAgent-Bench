@@ -58,6 +58,12 @@ five scenarios, and nothing else in any of them moved. Fold 3 recovers a compact
 tokens from ``result.modelUsage`` (``token_cost.fold_compaction_recovery``); none of these five
 canned transcripts carries a ``compact_boundary``, so every number the fold computes is unchanged --
 only the version it stamps the record with is.
+
+AN EIGHTH DELIBERATE EXCEPTION, 2026-09-23: ``CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`` was inserted
+into ``launches.json``'s ``env`` right after ``CLAUDE_CODE_MAX_OUTPUT_TOKENS``, in all three scenarios,
+and nowhere else. Under --print the CLI kills a Bash ``run_in_background`` task when the session
+ends, so the "you'll be notified" promise it makes is false there
+(tests/test_agent_driver_claude_background_tasks.py). Nothing else in the capture moved.
 """
 
 import importlib.util
