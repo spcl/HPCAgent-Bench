@@ -127,6 +127,9 @@ class Registry:
     experiment_baselines: dict[str, "BaselineSpec"]
     #: kind -> {spelling: the tag it names}, so an alias never takes its own colour slot.
     aliases: dict[str, Names]
+    #: ``track/device/language`` -> {"arm": template on ``{model}``, <model>: that model's own arm}:
+    #: the one baseline arm a treatment on such a kernel pairs against (:func:`baseline_arms_of`).
+    baseline_arms: dict[str, dict[str, str]] = dataclasses.field(default_factory=dict)
 
 
 def as_list(raw: object) -> list[object]:
@@ -203,6 +206,11 @@ def baselines_of(raw: object) -> dict[str, BaselineSpec]:
     return out
 
 
+def baseline_arms_of(raw: object) -> dict[str, dict[str, str]]:
+    """The ``track/device/language`` -> baseline-arm block, every key and value forced to text."""
+    return {str(key): {str(k): str(v) for k, v in as_block(entry).items()} for key, entry in as_block(raw).items()}
+
+
 def campaigns_of(raw: object) -> dict[str, CampaignEntry]:
     """The campaigns block. A missing field falls back to the prefix itself, never to a guess."""
     out: dict[str, CampaignEntry] = {}
@@ -241,6 +249,7 @@ def registry() -> Registry:
         dropped_arms=str(doc.get("dropped_arms", "")),
         experiment_baselines=baselines_of(doc.get("experiment_baselines")),
         aliases={str(kind): names_of(block, str(kind)) for kind, block in as_block(aliases).items()},
+        baseline_arms=baseline_arms_of(doc.get("baseline_arms")),
     )
 
 

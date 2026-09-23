@@ -111,7 +111,9 @@ def shard_rows(db: str, sql: str, args: tuple = ()) -> list[tuple]:
         con.close()
 
 
-def submitted_pairs(run_dir: pathlib.Path, only_run_id: str = "") -> set[tuple[str, str]]:
+def submitted_pairs(
+    run_dir: pathlib.Path, only_run_id: str = "", cuts: dict[str, int] | None = None
+) -> set[tuple[str, str]]:
     """Every ``(run_id, kernel)`` this run already holds a submission for.
 
     ONE definition, because both promotion paths must skip the same episodes. The score-store path
@@ -121,13 +123,22 @@ def submitted_pairs(run_dir: pathlib.Path, only_run_id: str = "") -> set[tuple[s
     that had already submitted. That row is later than the agent's, and the scoring rule takes the
     LAST row of an episode, so the harvest replaced the answer the agent chose: 18 of 22 tagged rows
     on one blind arm. A second skip list here would be the same defect waiting to reopen.
+
+    ``cuts`` maps a run id to its worker's FINAL-attempt start (T5), as :func:`candidates` and
+    :func:`swept_candidates` cut the grades. A submission older than that came from an attempt the
+    relaunch wiped, and the analysis drops it (spec X7), so it does not stand for the episode and
+    must not block promoting the final attempt's own correct score: 645737's tsvc_2_s152 and
+    645712's tsvc_2_s1232 each held a correct final-attempt score behind such a submission and were
+    left with no answer at all.
     """
     where = " where run_id = ?" if only_run_id else ""
     args: tuple = (only_run_id,) if only_run_id else ()
+    cut_of = cuts or {}
+    stamp = "ts" if cut_of else "0"
     pairs: set[tuple[str, str]] = set()
     for db in db_files(run_dir):
-        for bench, run_id in shard_rows(db, f"select benchmark, run_id from submissions{where}", args):
-            if bench and run_id:
+        for bench, run_id, ts in shard_rows(db, f"select benchmark, run_id, {stamp} from submissions{where}", args):
+            if bench and run_id and (ts or 0) >= cut_of.get(run_id, 0):
                 pairs.add((run_id, short_name(bench)))
     return pairs
 
@@ -210,7 +221,7 @@ def candidates(run_dir: pathlib.Path, only_run_id: str = "", since_ms: int = 0) 
     """
     cuts = {only_run_id: since_ms} if only_run_id and since_ms > 0 else {}
     best = best_speedups(run_dir, only_run_id, since_ms)
-    return promotable(run_dir, best, submitted_pairs(run_dir, only_run_id), cuts)
+    return promotable(run_dir, best, submitted_pairs(run_dir, only_run_id, cuts), cuts)
 
 
 def read_json(path: pathlib.Path) -> dict[str, object]:
@@ -269,7 +280,7 @@ def swept_candidates(run_dir: pathlib.Path) -> list[dict[str, str]]:
         for key in [key for key in best if key[0] == run_id]:
             del best[key]
         best.update(best_speedups(run_dir, run_id, cut))
-    return promotable(run_dir, best, submitted_pairs(run_dir), cuts)
+    return promotable(run_dir, best, submitted_pairs(run_dir, cuts=cuts), cuts)
 
 
 #: What ``submissions.optimizer`` says about an unsubmitted row: PROMOTED_TAG is a SCORED
@@ -543,7 +554,8 @@ def promote_one_worker(
     try:
         items = candidates(run_dir, only_run_id=run_id, since_ms=since_ms)
         if not items and kernel and harvest_enabled():
-            if (run_id, short_name(kernel)) in submitted_pairs(run_dir, only_run_id=run_id):
+            cut = {run_id: since_ms} if since_ms > 0 else {}
+            if (run_id, short_name(kernel)) in submitted_pairs(run_dir, only_run_id=run_id, cuts=cut):
                 return ""
             harvested = workspace_candidate(run_dir, run_id, kernel)
             items = [harvested] if harvested else []

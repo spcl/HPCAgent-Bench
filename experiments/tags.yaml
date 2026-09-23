@@ -69,3 +69,7 @@ aliases:
   # SAME roster reachable as a tag through this resolver too, without a second source of truth --
   # kernels-harness20.txt (resolve()'s file-wins precedence) is what both now read.
   mixed: harness20
+  # mlscale = the mlscale10 roster: submit-mlscale.sh records its arms as experiment `mlscale`
+  # (weak and strong are one experiment) while make_problems selects `mlscale10`, and
+  # remaining_kernels.py / roster_for look a campaign's roster up by the recorded experiment name.
+  mlscale: mlscale10

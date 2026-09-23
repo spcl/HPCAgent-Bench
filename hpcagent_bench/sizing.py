@@ -939,8 +939,9 @@ def node_footprint_violations(
     reach for, and inventing one would put a machine's size inside a pure function.
 
     Worst case, not average. A rank holds ONE kernel's working set at a time, so a node holds at
-    most the sum of its ranks' LARGEST kernels. ``XL`` is bounded at :data:`XL_BYTE_CEILING`, so
-    four ranks of ``XL`` on one node is four times that -- 16 GB, which no 8 GB node survives.
+    most the sum of its ranks' LARGEST kernels. ``XL`` is bounded at its track's :func:`xl_ceiling`,
+    so four ranks of ``XL`` on one node is four times that -- 16 GB (32 GB on machine_learning),
+    which no 8 GB node survives.
     Ranks are assumed laid out in blocks (rank ``r`` on node ``r // ranks_per_node``), which is
     what ``srun --ntasks-per-node`` does.
 

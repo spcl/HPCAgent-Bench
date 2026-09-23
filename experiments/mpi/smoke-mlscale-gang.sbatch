@@ -22,9 +22,10 @@
 #   Every check prints a PASS / FAIL / SKIP row in the table at the end; the job exits non-zero if
 #   any row failed.
 #
-# Submittable any time; 1 h, so Slurm keeps it clear of the 2026-09-23 09:00-17:00 maintenance:
-#   cd hpcagent-bench-wt/mlscale-launch && sbatch experiments/mpi/smoke-mlscale-gang.sbatch
+# From the checkout under test (the job reads it live):
+#   cd $SCRATCH/hpcagent-bench && sbatch experiments/mpi/smoke-mlscale-gang.sbatch
 #   RANKS=1,4 PRESET=L sbatch ...   # env knobs: RANKS, PRESET (atax), PRESET_ML (dist_softmax)
+#   EDF_NAME=hpcagent-bench-judge-mi300-latest sbatch ...   # the shared judge EDF instead
 #
 #SBATCH --job-name=smoke-mlscale-gang
 #SBATCH --account=a-g34
@@ -42,7 +43,11 @@ ulimit -c 0
 
 SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
 REPO="${HPCAGENT_BENCH_REPO:-$(cd -- "${SUBMIT_DIR}" && git rev-parse --show-toplevel)}"
-EDF_NAME="${EDF_NAME:-hpcagent-bench-judge-mi300-latest}"
+# The mlscale judge EDF, the one submit-mlscale.sh pins as JUDGE_CE_ENV and mlscale-grade.sbatch
+# runs: the shared judge EDF plus the Ubuntu libhwloc.so.15 preload. Without that preload every
+# rank of a 2+ node launch aborts in MPI_Init (mpir_hwtopo.c:570 io_device; the image's spack hwloc
+# is --disable-pci), so the shared EDF fails every multi-node check below.
+EDF_NAME="${EDF_NAME:-hpcagent-bench-judge-mi300-mlscale}"
 # An absolute path, not the name: the relay resolves it on the host, the ranks inside the image.
 EDF="${EDF:-${HOME}/.edf/${EDF_NAME}.toml}"
 RANKS="${RANKS:-1,4,8,16}"

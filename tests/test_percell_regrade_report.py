@@ -8,6 +8,8 @@ difference between the POLICIES read as a property of the submissions -- the exa
 stamps exist to prevent -- so the pooled line is refused rather than drawn.
 """
 
+import contextlib
+import gc
 import importlib.util
 import pathlib
 import sqlite3
@@ -64,7 +66,7 @@ def row(**changes: object) -> dict[str, object]:
 def write(path: pathlib.Path, rows: list[dict[str, object]]) -> pathlib.Path:
     path.mkdir(parents=True, exist_ok=True)
     db = path / "regrade-cells-0.db"
-    with sqlite3.connect(db) as conn:
+    with contextlib.closing(sqlite3.connect(db)) as conn, conn:
         conn.execute(f"CREATE TABLE regrade_tasks ({COLUMNS})")
         for item in rows:
             names = list(item)
@@ -108,3 +110,11 @@ def test_a_shard_without_the_policy_column_reads_as_the_legacy_policy(
     printed = capsys.readouterr().out
     assert "REFUSED" not in printed, printed
     assert f"baseline_policy={report.LEGACY_BASELINE_POLICY}" in printed, printed
+
+
+def test_reading_the_rows_closes_every_connection(tmp_path: pathlib.Path) -> None:
+    """A connection left to the collector warns at whatever LATER test the collection lands in
+    (``-W error`` then fails that test): the reader closes what it opens."""
+    write(tmp_path / "out", [row(), row(ts_ms=2)])
+    assert len(report.task_rows([tmp_path / "out"])) == 2
+    gc.collect()

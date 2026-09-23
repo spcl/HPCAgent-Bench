@@ -16,6 +16,7 @@ recorded rows could not carry, and how often the dispersion gate would change S_
 """
 
 import argparse
+import contextlib
 import math
 import pathlib
 import sqlite3
@@ -44,7 +45,7 @@ def task_rows(paths: Iterable[pathlib.Path]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for directory in paths:
         for path in sorted(directory.rglob("regrade-cells-*.db")):
-            with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
+            with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
                 conn.row_factory = sqlite3.Row
                 rows.extend(dict(row) for row in conn.execute("SELECT * FROM regrade_tasks"))
     return rows
