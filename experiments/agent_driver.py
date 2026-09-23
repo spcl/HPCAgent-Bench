@@ -2454,21 +2454,10 @@ CLAUDE_TURN_HEADROOM_FRACTION = 0.12
 #: claude-code 2.1.197 compacts at floor(E * pct / 100), E = window - min(max output, this).
 CLAUDE_SUMMARY_RESERVE = 20000
 
-#: The served window as the engine is told it, in either engine's spelling.
-SERVED_CONTEXT_FLAG = re.compile(r"--(?:context-length|max-model-len)[= ](\d+)")
-
-
 def served_context(environment: Mapping[str, str]) -> int:
-    """The window the engine enforces: the smallest of ``CONTEXT_LENGTH`` and the --context-length /
-    --max-model-len in the serving args. Every arm snapshot names one (107 of 107 on 2026-09-22: all
-    carry the serving args, 68 CONTEXT_LENGTH too, a service arm CONTEXT_LENGTH alone); an arm naming
-    none gets the policy cap."""
-    serving_args = " ".join(environment.get(name, "") for name in ("SGLANG_EXTRA_ARGS", "VLLM_EXTRA_ARGS"))
-    windows = [int(value) for value in SERVED_CONTEXT_FLAG.findall(serving_args)]
-    context_length = harness_module().positive_int(environment.get("CONTEXT_LENGTH", ""))
-    if context_length is not None:
-        windows.append(context_length)
-    return min(windows, default=CLAUDE_CONTEXT_CAP)
+    """The window the engine enforces; ``harnesses.served_context`` is the one implementation (its
+    policy cap equals :data:`CLAUDE_CONTEXT_CAP`)."""
+    return harness_module().served_context(environment)
 
 
 def claude_context_env(environment: Mapping[str, str]) -> dict[str, str]:
