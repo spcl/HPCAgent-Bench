@@ -1542,7 +1542,6 @@ def figure_row(
     ylabel: str = DEFAULT_YLABEL,
     mode: str = "paired",
     panel_labels: str = "none",
-    reference_name: str = "",
     shapes: str = "language",
     mark_labels: bool = False,
 ) -> pathlib.Path:
