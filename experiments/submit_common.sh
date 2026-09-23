@@ -333,11 +333,13 @@ finalize_staged_env() {
 # (snapshot_env, .rendered/) as beverin.sbatch's CLUSTER_ENV_FILE: <env> itself is only the arm's
 # latest render, free to be re-staged while this job still queues. Sets SUBMITTED_JID. <detail> is
 # free text appended inside the "(... nodes)" parenthetical, e.g. a walltime or problem count.
+# NICE=<n> submits with --nice=<n>: a later experiment queues behind the running waves by priority
+# alone, never by a dependency (submit-owed-wave.sh and submit-canon-llr40.sh spell it the same way).
 submit_arm_job() {
     local env="$1" arm="$2" walltime="$3" dep_ids="${4:-}" begin="${5:-}" detail="${6:-}"
     local nodes; nodes=$(arm_nodes "${env}")
     if [[ "${SUBMIT:-1}" != 1 ]]; then
-        echo "prepared ${arm} (${nodes} nodes${detail})${begin:+ begin ${begin}}${dep_ids:+ after ${dep_ids}} -- not submitted"
+        echo "prepared ${arm} (${nodes} nodes${detail})${begin:+ begin ${begin}}${dep_ids:+ after ${dep_ids}}${NICE:+ nice ${NICE}} -- not submitted"
         return 0
     fi
     local dep=(); [[ -n "${dep_ids}" ]] && dep=(--dependency="afterany:${dep_ids}")
@@ -348,13 +350,14 @@ submit_arm_job() {
     # a merge gate had not yet cleared. --hold never loses that race because slurmctld never
     # schedules the job in the first place.
     local hold=(); [[ "${HOLD:-0}" == 1 ]] && hold=(--hold)
+    local nice=(); [[ -n "${NICE:-}" ]] && nice=(--nice="${NICE}")
     # --export=ALL would hand a CPF view exported by the caller to every arm; the env file pins it for
     # the arms whose packet asks, and materialize_shared.sh stages drop-ins wherever it is set.
     # --no-requeue: a NODE_FAIL requeue restarts the job in the SAME run directory under the same id,
     # so the second run's agents grade on top of the first's rows and the arm reports both as one.
     SUBMITTED_JID=$(env -u CPF_DROPIN_DIR -u CPF_FORMS_DIR -u HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR \
         sbatch --parsable --no-requeue --nodes="${nodes}" --time="${walltime}" --job-name="${arm}" \
-        "${dep[@]}" "${hold[@]}" ${begin:+--begin="${begin}"} \
+        "${dep[@]}" "${hold[@]}" "${nice[@]}" ${begin:+--begin="${begin}"} \
         --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" beverin.sbatch)
-    echo "submitted ${arm} -> ${SUBMITTED_JID} (${nodes} nodes${detail})${hold:+ HELD} env ${snapshot}"
+    echo "submitted ${arm} -> ${SUBMITTED_JID} (${nodes} nodes${detail})${hold:+ HELD}${NICE:+ nice ${NICE}} env ${snapshot}"
 }
