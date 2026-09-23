@@ -33,18 +33,6 @@ import pathlib
 from collections.abc import Callable, Iterable
 
 
-#: Offline HuggingFace cache the tokenizers are read from. No download is ever attempted: a missing
-#: tokenizer is a counter that returns None, not a network call on a compute node.
-#:
-#: ONE name for the weights, and it is HuggingFace's own ``HF_HOME``, whose hub cache is always
-#: ``$HF_HOME/hub``. That is the library's contract rather than our convention, so a separate
-#: "weights directory" variable would only be a second spelling of the same path -- free to drift
-#: from the one the serving jobs actually load from.
-#:
-#: This was an absolute path naming one user's scratch. For anyone else the glob below simply came
-#: up empty, and because an absent tokenizer is reported as "no counter" rather than an error, the
-#: visible effect was token counts going None -- a misconfiguration wearing the costume of a model
-#: this repo happens not to have cached.
 def hf_hub_dir() -> pathlib.Path:
     """The hub cache directory, resolved in this order:
 
@@ -66,6 +54,13 @@ def hf_hub_dir() -> pathlib.Path:
         return pathlib.Path.home() / ".cache" / "huggingface" / "hub"
 
 
+#: Offline HuggingFace cache the tokenizers are read from. No download is ever attempted: a missing
+#: tokenizer is a counter that returns None, not a network call on a compute node.
+#:
+#: ONE name for the weights, and it is HuggingFace's own ``HF_HOME``, whose hub cache is always
+#: ``$HF_HOME/hub``. That is the library's contract rather than our convention, so a separate
+#: "weights directory" variable would only be a second spelling of the same path -- free to drift
+#: from the one the serving jobs actually load from.
 HF_HUB = hf_hub_dir()
 
 #: Arm model tag (``HPCAGENT_BENCH_RECORD_MODEL``) -> the repo id its ``VLLM_MODEL`` names. The env
