@@ -338,15 +338,13 @@ class TorchCudaEventTiming:
 
 #: One flavor's descriptor. A TypedDict rather than a dataclass because these entries are read by
 #: SUBSCRIPT across the repo (the CLI, preflight, the flavor tests) and :attr:`Framework.info` is one
-#: of them with two keys added, so a record type here would rewrite every reader. ``simple_name`` and
-#: ``class`` are what a Framework adds about itself; a registry entry does not carry them.
+#: of them with ``simple_name`` added, so a record type here would rewrite every reader.
 FrameworkMeta = TypedDict(
     "FrameworkMeta",
     {
         "base": str,
         "sweep_deterministic": bool,
         "full_name": str,
-        "prefix": str,
         "postfix": str,
         "arch": str,
         "precisions": frozenset[Precision],
@@ -358,7 +356,6 @@ FrameworkMeta = TypedDict(
         "compiler": NotRequired[str],
         "flags": NotRequired[str],
         "simple_name": NotRequired[str],
-        "class": NotRequired[str],
     },
 )
 
@@ -375,7 +372,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "numpy",
         "sweep_deterministic": True,
         "full_name": "NumPy",
-        "prefix": "np",
         "postfix": "numpy",
         "arch": "cpu",
         "precisions": ALL_PRECISIONS,
@@ -384,7 +380,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "numba",
         "sweep_deterministic": False,
         "full_name": "Numba",
-        "prefix": "nb",
         "postfix": "numba",
         "arch": "cpu",
         "precisions": IEEE_PRECISIONS,
@@ -393,7 +388,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "cupy",
         "sweep_deterministic": False,
         "full_name": "CuPy",
-        "prefix": "cp",
         "postfix": "cupy",
         "arch": "gpu",
         "precisions": frozenset({Precision.FP64, Precision.FP32, Precision.FP16, Precision.BF16}),
@@ -402,7 +396,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "jax",
         "sweep_deterministic": False,
         "full_name": "Jax",
-        "prefix": "jax",
         "postfix": "jax",
         "arch": "cpu",
         "precisions": ALL_PRECISIONS,
@@ -411,7 +404,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "pythran",
         "sweep_deterministic": False,
         "full_name": "Pythran",
-        "prefix": "pt",
         "postfix": "pythran",
         "arch": "cpu",
         "precisions": IEEE_PRECISIONS,
@@ -429,7 +421,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "dace",
         "sweep_deterministic": True,
         "full_name": "DaCe CPU",
-        "prefix": "dc",
         "postfix": "dace",
         "arch": "cpu",
         "pipelines": ("parallel_cpu",),
@@ -439,7 +430,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "dace",
         "sweep_deterministic": True,
         "full_name": "DaCe GPU",
-        "prefix": "dc",
         "postfix": "dace",
         "arch": "gpu",
         # GPU searches upstream ``autoopt``, not ``canonicalize``: it is the pipeline this column
@@ -454,7 +444,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "dace",
         "sweep_deterministic": True,
         "full_name": "DaCe CPU auto_optimize",
-        "prefix": "dc",
         "postfix": "dace",
         "arch": "cpu",
         "pipelines": ("autoopt_cpu",),
@@ -466,7 +455,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "dace",
         "sweep_deterministic": True,
         "full_name": "DaCe GPU auto_optimize",
-        "prefix": "dc",
         "postfix": "dace",
         "arch": "gpu",
         "pipelines": ("autoopt_gpu",),
@@ -478,7 +466,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "dace",
         "sweep_deterministic": True,
         "full_name": "DaCe CPU canonicalize",
-        "prefix": "dc",
         "postfix": "dace",
         "arch": "cpu",
         "pipelines": ("canon_cpu",),
@@ -490,7 +477,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "dace",
         "sweep_deterministic": True,
         "full_name": "DaCe GPU canonicalize",
-        "prefix": "dc",
         "postfix": "dace",
         "arch": "gpu",
         "pipelines": ("canon_gpu",),
@@ -513,7 +499,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "dace",
         "sweep_deterministic": True,
         "full_name": "DaCe CPU parallel (loop2map)",
-        "prefix": "dc",
         "postfix": "dace",
         "arch": "cpu",
         "pipelines": ("loop2map_cpu",),
@@ -525,7 +510,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "dace",
         "sweep_deterministic": True,
         "full_name": "DaCe GPU parallel (loop2map)",
-        "prefix": "dc",
         "postfix": "dace",
         "arch": "gpu",
         "pipelines": ("loop2map_gpu",),
@@ -540,7 +524,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "native",
         "sweep_deterministic": True,
         "full_name": "C (gcc)",
-        "prefix": "cc",
         "postfix": "cpp",
         "arch": "cpu",
         "language": "c",
@@ -552,7 +535,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "native",
         "sweep_deterministic": True,
         "full_name": "C autopar (gcc)",
-        "prefix": "cc_autopar",
         "postfix": "cpp",
         "arch": "cpu",
         "language": "c",
@@ -573,7 +555,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "native",
         "sweep_deterministic": False,
         "full_name": "C (clang)",
-        "prefix": "cc_llvm",
         "postfix": "cpp",
         "arch": "cpu",
         "language": "c",
@@ -584,7 +565,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "native",
         "sweep_deterministic": False,
         "full_name": "C Polly (clang)",
-        "prefix": "cc_llvm_autopar",
         "postfix": "cpp",
         "arch": "cpu",
         "language": "c",
@@ -596,7 +576,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "native",
         "sweep_deterministic": False,
         "full_name": "C (icx)",
-        "prefix": "cc_oneapi",
         "postfix": "cpp",
         "arch": "cpu",
         "language": "c",
@@ -607,7 +586,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "native",
         "sweep_deterministic": False,
         "full_name": "C (nvc)",
-        "prefix": "cc_nvhpc",
         "postfix": "cpp",
         "arch": "cpu",
         "language": "c",
@@ -618,7 +596,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "native",
         "sweep_deterministic": False,
         "full_name": "C autopar (nvc)",
-        "prefix": "cc_nvhpc_autopar",
         "postfix": "cpp",
         "arch": "cpu",
         "language": "c",
@@ -630,7 +607,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "native",
         "sweep_deterministic": True,
         "full_name": "C++ (clang)",
-        "prefix": "llvm",
         "postfix": "cpp",
         "arch": "cpu",
         "language": "cpp",
@@ -645,7 +621,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "native",
         "sweep_deterministic": True,
         "full_name": "C++ (g++)",
-        "prefix": "cpp",
         "postfix": "cpp",
         "arch": "cpu",
         "language": "cpp",
@@ -656,7 +631,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "native",
         "sweep_deterministic": True,
         "full_name": "Fortran (gfortran)",
-        "prefix": "fortran",
         "postfix": "cpp",
         "arch": "cpu",
         "language": "fortran",
@@ -668,7 +642,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "native",
         "sweep_deterministic": True,
         "full_name": "Fortran autopar (gfortran)",
-        "prefix": "fortran_autopar",
         "postfix": "cpp",
         "arch": "cpu",
         "language": "fortran",
@@ -681,7 +654,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "native",
         "sweep_deterministic": True,
         "full_name": "Fortran (flang)",
-        "prefix": "flang",
         "postfix": "cpp",
         "arch": "cpu",
         "language": "fortran",
@@ -692,7 +664,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "native",
         "sweep_deterministic": True,
         "full_name": "C++ Polly (clang)",
-        "prefix": "polly",
         "postfix": "cpp",
         "arch": "cpu",
         "language": "cpp",
@@ -708,7 +679,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "pluto",
         "sweep_deterministic": True,
         "full_name": "Polyhedral CPU (Pluto)",
-        "prefix": "pluto",
         "postfix": "cpp",
         "arch": "cpu",
         # polycc reads the C target's ``_pluto_input.c`` and writes C (VLA ``restrict`` parameters).
@@ -721,7 +691,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "pluto",
         "sweep_deterministic": False,
         "full_name": "Polyhedral GPU (PPCG)",
-        "prefix": "ppcg",
         "postfix": "cpp",
         "arch": "gpu",
         # ppcg only ever emits CUDA; which language this column COMPILES is the local GPU
@@ -742,7 +711,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "pluto",
         "sweep_deterministic": False,
         "full_name": "Polyhedral GPU (PPCG, CUDA)",
-        "prefix": "ppcg_cuda",
         "postfix": "cpp",
         "arch": "gpu",
         "column": "ppcg",
@@ -760,7 +728,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         # Named for the chain it actually is, not for the device it lands on: ppcg has no AMD
         # target, so this is ppcg's CUDA translated by hipify-perl and built by hipcc.
         "full_name": "Polyhedral GPU (PPCG, CUDA via hipify)",
-        "prefix": "ppcg_hip",
         "postfix": "cpp",
         "arch": "gpu",
         "column": "ppcg",
@@ -773,7 +740,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "triton",
         "sweep_deterministic": False,
         "full_name": "Triton",
-        "prefix": "tr",
         "postfix": "triton",
         "arch": "gpu",
         # No fp64 path; runs the low-precision matrix instead.
@@ -792,7 +758,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "tvm",
         "sweep_deterministic": False,
         "full_name": "TVM",
-        "prefix": "tvm",
         "postfix": "tvm",
         "arch": "gpu",
         "precisions": ALL_PRECISIONS,
@@ -801,7 +766,6 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "tvm",
         "sweep_deterministic": False,
         "full_name": "TVM (CPU)",
-        "prefix": "tvm_cpu",
         "postfix": "tvm_cpu",
         "arch": "cpu",
         "precisions": ALL_PRECISIONS,
@@ -911,8 +875,7 @@ class Framework:
         self.fname = fname
         if fname not in FRAMEWORK_META:
             raise KeyError(f"unknown framework {fname!r}; known: {sorted(FRAMEWORK_META)}")
-        # ``self.info`` keeps the legacy shape; ``class`` is derived from the actual type.
-        self.info: FrameworkMeta = {"simple_name": fname, "class": type(self).__name__, **FRAMEWORK_META[fname]}
+        self.info: FrameworkMeta = {"simple_name": fname, **FRAMEWORK_META[fname]}
 
     @property
     def SUPPORTED_PRECISIONS(self) -> frozenset[Precision]:
