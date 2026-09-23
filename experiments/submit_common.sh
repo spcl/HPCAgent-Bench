@@ -363,6 +363,7 @@ submit_arm_job() {
         echo "prepared ${arm} (${nodes} nodes${detail})${begin:+ begin ${begin}}${dep_ids:+ after ${dep_ids}}${NICE:+ nice ${NICE}} -- not submitted"
         return 0
     fi
+    hpcagent_bench_require_account || return 2
     local dep=(); [[ -n "${dep_ids}" ]] && dep=(--dependency="afterany:${dep_ids}")
     local snapshot; snapshot=$(snapshot_env "${env}" "${arm}") || return 2
     # HOLD=1 -- sbatch's own --hold, atomic at submit time. A follow-up `scontrol hold` after the

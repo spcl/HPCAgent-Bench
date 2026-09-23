@@ -87,8 +87,9 @@ DRY RUN.
 - Slurm down (weekly maintenance): the dry run still plans, with `note: queued-job check unavailable
   (squeue failed: ...)`; `SUBMIT=1` refuses (`refusing to plan a submission`). A queued `owed-*`
   wave whose snapshot is gone (its worktree deleted) is refused the same way. With Slurm down,
-  `scripts/cscs/account_env.sh` also refuses an exported `HPCAGENT_BENCH_ACCOUNT` it cannot check:
-  dry-run as `env -u HPCAGENT_BENCH_ACCOUNT ./submit-owed-wave.sh ...`.
+  `scripts/cscs/account_env.sh` uses an exported `HPCAGENT_BENCH_ACCOUNT` unchecked (`Slurm
+  accounting does not answer`) and resolves none without one. Every `SUBMIT=1` refuses to sbatch
+  with no account resolved: beverin would run it on root.
 - `KERNELS_FILE=<file>`: only the owed kernels the file lists (`note: <arm>: N owed kernels outside
   --kernels-file left out` counts the rest).
 - `WAVE_INFERENCE_CE_ENV=<edf>`: every wave of this call serves from that EDF instead of the model

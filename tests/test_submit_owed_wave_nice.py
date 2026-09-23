@@ -43,8 +43,15 @@ def stub(directory: pathlib.Path, name: str, body: str) -> None:
     path.chmod(0o755)
 
 
-def submit(tmp_path: pathlib.Path, submit_flag: str = "1", expect_rc: int = 0, **knobs: str) -> list[str]:
-    """The sbatch argv one SUBMIT=1 run of the launcher sends, with ``knobs`` in its environment."""
+def submit(
+    tmp_path: pathlib.Path,
+    submit_flag: str = "1",
+    expect_rc: int = 0,
+    associations: str = "a-stub",
+    **knobs: str,
+) -> list[str]:
+    """The sbatch argv one SUBMIT=1 run of the launcher sends, with ``knobs`` in its environment and
+    ``associations`` (one per line) as sacctmgr's answer."""
     experiments = tmp_path / "experiments"
     experiments.mkdir(exist_ok=True)
     for name in ("submit-owed-wave.sh", "submit_common.sh", "arm_nodes.sh", "env_layers.sh"):
@@ -52,7 +59,7 @@ def submit(tmp_path: pathlib.Path, submit_flag: str = "1", expect_rc: int = 0, *
     (experiments / "owed_wave.py").write_text(PLANNER)
     (tmp_path / "scripts" / "cscs").mkdir(parents=True, exist_ok=True)
     shutil.copy2(REPO / "scripts" / "cscs" / "account_env.sh", tmp_path / "scripts" / "cscs" / "account_env.sh")
-    stub(tmp_path / "bin", "sacctmgr", "printf 'a-stub\\n'")  # one association, a made-up name
+    stub(tmp_path / "bin", "sacctmgr", f"printf '{associations}'")  # a made-up name
     stub(tmp_path / "bin", "sbatch", 'printf \'%s\\n\' "$@" > "${STUB_MARKERS}/sbatch-argv.txt"; echo 999999')
     env = {
         "PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin",
@@ -146,3 +153,12 @@ def test_every_planned_wave_passes_the_preflight_before_anything_is_submitted(tm
     failed = tmp_path / "failed"
     failed.mkdir()
     assert submit(failed, expect_rc=2, STUB_PREFLIGHT_RC="1") == [], "a FAIL submits no wave"
+
+
+def test_a_submission_with_no_account_resolved_submits_nothing(tmp_path: pathlib.Path) -> None:
+    """beverin runs an accountless job on root (fairshare ~0) since its cli_filter went away: no
+    account, no sbatch -- where the resolver's "no association" used to be caught by the cluster."""
+    assert submit(tmp_path, expect_rc=2, associations="") == []
+    dry = tmp_path / "dry"
+    dry.mkdir()
+    submit(dry, submit_flag="0", associations="")
