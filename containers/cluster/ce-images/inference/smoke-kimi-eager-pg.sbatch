@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Does Kimi K2.7 at tp=4 pp=4 actually DECODE, with eager process-group init?
 #
-# 594541-543 all reached a live API and then produced nothing: engine up, /v1/models answering,
-# 71 requests accepted, GPUs pegged at 100%, and generation_tokens_total frozen at 8 across two
-# separate sampling windows. The signature is 24 of these, on the PP ranks only:
+# The failure mode: a live API that produces nothing -- engine up, /v1/models answering, requests
+# accepted, GPUs pegged at 100%, generation_tokens_total frozen. The signature, on PP ranks only:
 #
 #   ProcessGroupNCCL.cpp:4094] An unbatched P2P op (send/recv) was called on this ProcessGroup
 #   with size 4. In lazy initialization mode, this will result in a new 2-rank NCCL communicator
@@ -15,12 +14,8 @@
 # init_process_group/new_group so the PGs initialise EAGERLY and the per-pair communicators are
 # never minted. ("eager" here is eager PG INIT -- the opposite knob from --enforce-eager.)
 #
-# The patch has been in the tree since 2026-08-07 and is referenced by nothing. This job is the
-# first thing that actually loads it.
-#
-# Every previous kimi smoke asserted the API answered. That is exactly what a wedged engine does,
-# which is why three arms burned 80 minutes each looking healthy. This one gates on DECODE
-# PROGRESS and nothing else, then measures the saturated ceiling.
+# A wedged engine still answers the API, so this gates on DECODE PROGRESS and nothing else, then
+# measures the saturated ceiling.
 #
 #   cd containers/cluster/ce-images/inference
 #   mkdir -p logs && sbatch smoke-kimi-eager-pg.sbatch
@@ -44,7 +39,7 @@ export RUN_DIR="${SCRATCH}/kimi-smoke/${SLURM_JOB_ID}"
 # Under sbatch BASH_SOURCE is the spooled copy; the checkout is where the job was submitted from.
 REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2>/dev/null || true)}"
 [[ -n "${REPO}" && -f "${REPO}/scripts/cache_env.sh" ]] || { echo "FAIL: no checkout: set REPO or submit from inside one" >&2; exit 1; }
-# iopsstor reads ~11x faster than the general scratch (job 593523, measured on the retired Lustre mount); $SCRATCH keeps the durable copy.
+# iopsstor reads faster than the general scratch; $SCRATCH keeps the durable copy.
 . "${REPO}/scripts/cache_env.sh"
 # Unset, this defaults under ~/.cache, which is unmounted here, so every smoke re-ran Inductor
 # codegen from scratch before the API could bind.
@@ -69,12 +64,8 @@ for cand in "${PG_PATCH_DIR:-}" "${SUBMIT_DIR}/external-eager-pg-patch" "${SUBMI
     fi
 done
 
-# 0.23.0. The 2026-08-20 decision to serve everything on 0.27.1 was REVERSED on 2026-09-08:
-# measured on one pinned node, same probe and parsers, 0.27.1 served oss120b at 2405 tok/s
-# against 0.23.0's 3013, and the whole 25% is decode (steady-state 2540 vs 3187; prefill matched
-# to 0.3%) with identical dtype, quantization, MoE and attention backends and identical torch and
-# triton. 0.27.1 is parked on the parked/vllm-0271 branch with the aiter v3-varlen and MLA
-# prefill work that motivated it.
+# 0.23.0: 0.27.1 is 25% slower on oss120b, all of it decode (inference/README.md); it is parked
+# on the parked/vllm-0271 branch.
 INFERENCE_EDF="${INFERENCE_EDF:-hpcagent-bench-vllm-mi300-latest}"
 export MODEL_REPO="${MODEL_REPO:-moonshotai/Kimi-K2.7-Code}"
 export SERVED_MODEL="${SERVED_MODEL:-hpcagent-bench-vllm}"
@@ -236,12 +227,9 @@ chmod +x "${SERVE_SCRIPT}"
 rm -f "${SMOKE_DONE}"
 
 # 192 logical CPUs per node = 4 sockets x 24 physical cores x 2 SMT threads. --exclusive gives the
-# JOB the node; it does NOT give a STEP the node's CPUs, and a step without --cpus-per-task claims
-# ONE. That is not a slow-down, it is a hang: 620948's serving step ran on 2 CPUs across 2 nodes,
-# its Triton JIT of alloc_extend_kernel never finished, and the peer's PP SEND blocked until the
-# 600 s NCCL watchdog aborted every rank. Every vLLM smoke before this served on 1 CPU too, so
-# their tok/s were floor numbers. run_cluster.sh:749 carries the full account; an acceptance run
-# must allocate the way the campaign does or it is not measuring the campaign.
+# JOB the node, not a STEP its CPUs: a step without --cpus-per-task claims ONE, and a serving step
+# on too few CPUs hangs (Triton JIT never finishes, the peer's PP SEND hits the NCCL watchdog).
+# Allocate the way the campaign does (run_cluster.sh).
 SERVE_CPUS="${SERVE_CPUS:-${SLURM_CPUS_ON_NODE:-192}}"
 # Clients and gates run --overlap ALONGSIDE the server, so they take one socket's PHYSICAL cores
 # (--hint=nomultithread) rather than the node -- enough not to be the bottleneck, not so much that
