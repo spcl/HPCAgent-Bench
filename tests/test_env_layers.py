@@ -94,13 +94,25 @@ def old_base_env(name: str) -> str:
     return run.stdout
 
 
-def test_every_base_renders_byte_equivalent_to_its_pre_layering_original() -> None:
+def test_every_base_renders_byte_equivalent_to_its_pre_layering_original(tmp_path: pathlib.Path) -> None:
     """Every queued job's CLUSTER_ENV_FILE traces back to one of these 24 bases through
     stage_base_env's unchanged sed pipeline, so an effective-env match at the base covers every
-    arm transitively: the layering must not move a single key=value a PENDING job reads."""
-    for base in BASES:
+    arm transitively: the layering must not move a single key=value a PENDING job reads.
+
+    The layered files are read as the layering commit left them, and rendered by today's
+    env_layers.sh: later commits change base keys on purpose (the 2026-09-21 budgets, single
+    submission), which is not the layering moving them, while a renderer change still shows here."""
+    commit = introducing_commit("experiments/env_layers.sh")
+    archive = subprocess.run(
+        ["git", "archive", commit, "experiments"], cwd=EXPERIMENTS.parent, capture_output=True, check=True
+    ).stdout
+    subprocess.run(["tar", "-x", "-C", str(tmp_path)], input=archive, check=True)
+    at_layering = tmp_path / "experiments"
+    bases = sorted([*at_layering.glob(".env.base-*"), *at_layering.glob(".env.llrbase-*")])
+    assert len(bases) == 24, bases
+    for base in bases:
         old = flat(old_base_env(base.name))
-        new = flat(layers("render", base.name))
+        new = flat(layers("render", base.name, cwd=at_layering))
         assert new == old, f"{base.name}: layered render diverges from its pre-layering original"
 
 

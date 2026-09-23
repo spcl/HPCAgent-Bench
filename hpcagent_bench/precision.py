@@ -20,6 +20,7 @@ from typing import Dict, Tuple
 
 import ml_dtypes
 import numpy as np
+from numpy.typing import DTypeLike
 
 
 class Precision(enum.Enum):
@@ -172,11 +173,19 @@ def machine_eps(precision: Precision) -> float:
     through ``ml_dtypes.finfo`` -- so every :class:`Precision` yields a real eps and
     the derived band below needs no per-format magic constant.
     """
-    dt = numpy_dtype(precision)
+    return dtype_eps(numpy_dtype(precision))
+
+
+def dtype_eps(dtype: DTypeLike) -> float:
+    """Machine epsilon of a floating ``dtype``, the ml_dtypes formats included.
+
+    ``numpy.finfo`` refuses them: ml_dtypes 0.6 reports ``float8_e5m2`` with dtype kind ``f``, so a
+    ``kind == "f"`` guard in front of ``np.finfo`` raised ``not compatible with finfo`` in the middle
+    of validating an fp8 output."""
     try:
-        return float(np.finfo(dt).eps)
+        return float(np.finfo(dtype).eps)
     except (TypeError, ValueError):
-        return float(ml_dtypes.finfo(dt).eps)
+        return float(ml_dtypes.finfo(dtype).eps)
 
 
 def derived_band(precision: Precision) -> ToleranceBand:

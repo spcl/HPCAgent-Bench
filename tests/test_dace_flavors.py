@@ -157,10 +157,15 @@ def test_the_registry_as_shipped_is_valid() -> None:
 
 
 def test_ranks_per_node_splits_the_node() -> None:
-    """Four co-resident ranks get a quarter of the threads each; one rank still gets the node."""
+    """Four co-resident ranks get a quarter of the threads each; one rank still gets the node.
+
+    ``OMP_STACKSIZE`` is a per-thread SIZE (``512M``), not a count: splitting the node leaves it alone."""
     whole = preflight.thread_env()
     quarter = preflight.thread_env(ranks_per_node=4)
-    for name, value in whole.items():
+    assert quarter["OMP_STACKSIZE"] == whole["OMP_STACKSIZE"]
+    counts = {name: value for name, value in whole.items() if name != "OMP_STACKSIZE"}
+    assert counts, whole
+    for name, value in counts.items():
         assert int(quarter[name]) == max(1, int(value) // 4)
     assert preflight.thread_env(ranks_per_node=1) == whole
 

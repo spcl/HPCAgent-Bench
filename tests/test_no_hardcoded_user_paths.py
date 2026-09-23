@@ -102,7 +102,11 @@ _ALLOW = {
     # rows and worker dirs -- not a place that still WRITES the legacy name -- so the keys stay as
     # a named legacy constant (RUN_ID_KEYS/OPTIMIZER_KEYS, RUN_ID_ENV_KEYS) rather than being
     # renamed away and losing the ability to attribute that whole window's data.
-    "reproducibility/llr40/extract_llr40.py",
+    "hpcagent_bench/observations_extract.py",  # the extractor, moved here from reproducibility/llr40
+    # owed_wave.py DROPS OPTARENA_OPTIMIZER (INERT_KEYS) from an old arm env so a stale spelling
+    # nothing reads cannot split a wave; its test builds such an env on purpose.
+    "experiments/owed_wave.py",
+    "tests/test_fused_owed_wave.py",
     # Same legacy-key reads, exercised as fixtures: a worker dir/mcp.json written the pre-rename
     # way, and the MCP server key rename (twice) that iteration_counts.py must still parse.
     "tests/test_extract_llr40_task_rows.py",

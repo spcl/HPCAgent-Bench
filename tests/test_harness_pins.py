@@ -326,7 +326,10 @@ def test_an_agent_runtime_check_is_required_of_every_judge_agent_profile() -> No
     verify = verifier()
     for profile in ("judge-agent-amd", "judge"):
         agent = {check.name: check for check in verify.checks(profile) if check.group == "agent"}
-        assert set(agent) == {"claude CLI", *(f"{name} interpreter" for name in verify.HARNESS_RUNTIMES)}, agent
+        # The openai-agents SDK is the optimas harness's tool mechanism (fb9da0313): an image without it
+        # cannot start that arm, so it is an agent-runtime check like the CLI and the interpreters.
+        want = {"openai-agents SDK", "claude CLI", *(f"{name} interpreter" for name in verify.HARNESS_RUNTIMES)}
+        assert set(agent) == want, agent
         assert all(check.required for check in agent.values()), agent
 
 

@@ -112,7 +112,9 @@ done
     || refuse "no ${MODEL_REPO} under ${HF_HOME}/hub: run inference/fetch_weights.sbatch first"
 
 # THIS node is rank 0: the API server binds here and the other ranks rendezvous here, over hsn0.
-HSN_ADDR="$(ip -4 -o addr show dev hsn0 2>/dev/null | awk '{ split($4, a, "/"); print a[1]; exit }')"
+# `|| true`: under pipefail a node with no hsn0 (ip exits 1) would end the script here, before the
+# two checks below that exist to name exactly that -- and a DRY_RUN off-cluster never reached its argv.
+HSN_ADDR="$(ip -4 -o addr show dev hsn0 2>/dev/null | awk '{ split($4, a, "/"); print a[1]; exit }' || true)"
 if [[ "${MODE}" == smoke ]]; then
     BIND_HOST=127.0.0.1
 else

@@ -36,6 +36,11 @@ PRECISION_NAME = "fp64"
 
 KERNEL_NAMES = sorted(KERNELS.select_keys("all"))
 
+#: Every manifest parsed ONCE per process. KERNELS.specs() re-parses all ~690 of them on every call
+#: (1.5-2.6 s), and three calls per parametrized case made this file 51 CPU-minutes, which pushed
+#: its CI unit shard past the step cap.
+SPECS = KERNELS.specs()
+
 
 def declared_dtypes(spec) -> Dict[str, str]:
     """``{array: dtype}`` the manifest declares, from either spelling of the init block."""
@@ -63,7 +68,7 @@ def check_precision(spec) -> str:
 
 def disagreements(key: str) -> List[Tuple[str, str, str]]:
     """``(array, declared, realised)`` for every array of ``key`` whose dtype does not match."""
-    spec = KERNELS.specs()[key]
+    spec = SPECS[key]
     declared = declared_dtypes(spec)
     if not declared:
         return []
@@ -82,7 +87,7 @@ def disagreements(key: str) -> List[Tuple[str, str, str]]:
 @pytest.mark.parametrize("key", KERNEL_NAMES)
 def test_every_declared_array_dtype_is_the_one_materialised(key: str) -> None:
     bad = disagreements(key)
-    at = check_precision(KERNELS.specs()[key])
+    at = check_precision(SPECS[key])
     assert not bad, f"declared dtype is not the one the run materialises at {at}: " + ", ".join(
         f"{n}: declared {w}, got {g}" for n, w, g in bad
     )
@@ -90,7 +95,7 @@ def test_every_declared_array_dtype_is_the_one_materialised(key: str) -> None:
 
 def undeclared_integer_arrays(key: str) -> List[Tuple[str, str]]:
     """``(array, realised)`` for every integer array of ``key`` the manifest leaves undeclared."""
-    spec = KERNELS.specs()[key]
+    spec = SPECS[key]
     if spec.init is None:
         return []
     declared = declared_dtypes(spec)
