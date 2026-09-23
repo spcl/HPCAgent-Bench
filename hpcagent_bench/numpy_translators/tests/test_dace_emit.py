@@ -317,8 +317,9 @@ def test_dace_keeps_native_linalg() -> None:
 @pytest.mark.parametrize("kernel", _FEATURE_KERNELS)
 def test_dace_feature_kernels_desugared(kernel: str) -> None:
     """Each desugar-requiring kernel emits parseable ``@dc.program``s with size symbols module-level
-    (not parameters) and NO residual construct dace cannot trace -- the same np.fft / np.add.at /
-    np.mgrid / np.histogram / ufunc.outer lowering numba and pythran get.
+    (not parameters) and NO residual construct dace cannot trace -- the same np.add.at / np.mgrid /
+    np.histogram / ufunc.outer lowering numba and pythran get. ``np.fft`` is the exception: dace
+    compiles it natively, to its FFT library nodes, so the fft kernels must KEEP the call.
 
     The kernel program is LAST. It used to be the only one: a kept helper is now emitted as its own
     ``@dc.program`` above it rather than inlined, so a module carries one program per helper the
@@ -338,8 +339,39 @@ def test_dace_feature_kernels_desugared(kernel: str) -> None:
     assert not stray, f"{kernel}: a program that is neither the kernel nor a kept helper: {stray}"
     params = {a.arg for a in progs[-1].args.args}
     assert not (params & {s.name for s in kir.symbols}), f"{kernel}: symbol leaked into the signature"
-    for tok in ("np.fft", "np.add.at", "np.mgrid", "np.histogram", ".outer(", "np.ndarray("):
+    for tok in ("np.add.at", "np.mgrid", "np.histogram", ".outer(", "np.ndarray("):
         assert tok not in src, f"{kernel}: unsupported intrinsic {tok!r} was not desugared for dace"
+    if kernel.startswith("fft_"):
+        assert "np.fft." in src, f"{kernel}: the transform was inlined into an O(N^2) loop DFT for dace"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    y[:] = np.fft.fft(x)\n    z[:] = np.fft.ifft(y)\n",
+        "    z[:] = np.fft.ifftn(np.fft.fftn(x) * 4.0).real\n",
+        "    return np.fft.fftn(x, axes=(0,))\n",
+    ],
+)
+def test_dace_keeps_every_np_fft_call_for_its_library_node(body: str) -> None:
+    """dace binds ``np.fft.*`` to its FFT library nodes (FFTW3 on the CPU, cuFFT/hipFFT on the GPU),
+    so its desugar leaves each call in place -- bare, wrapped in arithmetic, or returned. The loop
+    DFT the other backends get is O(N^2) per axis: fft_1d's 7e7-point transform never finishes.
+    numba, which has no ``np.fft``, still gets the loop lowering from the same source."""
+    from types import SimpleNamespace
+
+    from numpyto_common.numpy_desugar import desugar_for_python_backend
+
+    src = "def k(x, y, z):\n" + body
+    arrays = {name: (("N",), "complex128") for name in ("x", "y", "z")}
+    kir = SimpleNamespace(
+        kernel_name="k",
+        input_args=list(arrays),
+        arrays=[SimpleNamespace(name=name, shape=shape, dtype=dtype) for name, (shape, dtype) in arrays.items()],
+    )
+    kept = desugar_for_python_backend(src, kir, backend="dace")
+    assert kept.count("np.fft.") == src.count("np.fft."), kept
+    assert "np.fft" not in desugar_for_python_backend(src, kir, backend="numba")
 
 
 # _ResolveZeros: the LOWERED-kir ``__hpcagent_bench_zeros__`` marker resolver. The    #

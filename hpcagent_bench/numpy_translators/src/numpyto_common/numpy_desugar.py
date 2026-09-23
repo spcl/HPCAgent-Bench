@@ -1938,9 +1938,8 @@ class _FftInline(ast.NodeTransformer):
     A transform that is one OPERAND of a larger right-hand side
     (``np.fft.ifftn(g) * nnr``, QE's unscaled backward transform) is hoisted the
     same way and then lowered, because the whole point is that no ``np.fft`` call
-    survives into the emitted program. dace does not refuse a surviving call --
-    it binds its own N-D DFT library node, whose symbolic normalization factor
-    codegens as an INTEGER division and silently zeroes every output element."""
+    survives into the emitted program. dace is not lowered at all
+    (:data:`NATIVE_FFT_BACKENDS`): its FFT library nodes are the real transform."""
 
     def __init__(self, ranks: Dict[str, int], array_dtypes: Dict[str, str]) -> None:
         self.ranks = ranks
@@ -5474,6 +5473,12 @@ _NATIVE_LINALG: Dict[Optional[str], set] = {
 #: Lowering just that variant keeps the native matrix solve (contour_integral's 2-D rhs) intact.
 _LOWER_SOLVE_RHS_RANKS: Dict[Optional[str], frozenset] = {"dace": frozenset({1})}
 
+#: Backends that compile ``np.fft.*`` NATIVELY, so :class:`_FftInline` leaves the call in place. dace's
+#: frontend binds its FFT/IFFT library nodes, which the canonicalize finalize lowers to FFTW3 on the
+#: CPU and cuFFT/hipFFT on the GPU; the inlined loop DFT is O(N^2) per axis and never finishes at
+#: benchmark sizes (fft_1d's N ~ 7e7).
+NATIVE_FFT_BACKENDS = frozenset({"dace"})
+
 
 def lowers_linalg(tables: HoistTables) -> bool:
     """Whether the backend lowers any ``np.linalg`` call at all (pythran every op, dace a ``solve`` rhs rank)."""
@@ -7255,7 +7260,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             _BatchedMatmulToLoop(ranks),
             _PadInline(ranks, lower_symbolic_constant=backend == "dace"),
             ValueHoist(EINSUM_HOIST, tables),
-            _FftInline(ranks, kir_array_dtypes),
+            *([] if backend in NATIVE_FFT_BACKENDS else [_FftInline(ranks, kir_array_dtypes)]),
             _MgridInline(),
             ValueHoist(FANCY_GATHER_HOIST, tables),
             ValueHoist(REDUCE_AXIS_HOIST, tables),
