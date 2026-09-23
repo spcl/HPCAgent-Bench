@@ -336,8 +336,9 @@ and every step re-execs from there (`experiments/README.md#mount-policy`), so fa
 live checkout reaches every queued job and no running one. The log's `frozen tree ... at <sha>`
 line names the commit, and `runs.commit_sha` records it. So `grep container runtime: ...out` and any path a log
 prints under `HPCAGENT_BENCH_REPO` point into that copy, not the live tree. Inspect it like any
-other checkout; delete it by hand (`rm -rf .frozen/job-<jobid>`) once the job is done AND extracted
--- nothing else cleans it up.
+other checkout while the job runs: the batch step removes it when the job ends (normal end,
+failure, scancel or time limit), after its steps and the token extraction. Only a SIGKILL past
+KillWait leaves one behind; `rm -rf .frozen/job-<jobid>` once that job has left the queue.
 
 **Is a new wave healthy?** Run `check_job.py` 30-45 minutes after a wave starts, before trusting it:
 
