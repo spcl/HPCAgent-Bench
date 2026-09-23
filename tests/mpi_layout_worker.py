@@ -53,7 +53,13 @@ def axis_dist_for(shape: tuple, grid, scheme: str, block_size: int) -> ArrayDist
 
 
 def main() -> int:
+    # explicit check-and-init, matching mpi_py_driver.py: an ambient MPI4PY_RC_INITIALIZE=0 (set on
+    # this CI image) makes `from mpi4py import MPI` skip mpi4py's own auto-init, so touching
+    # MPI.COMM_WORLD without this raises "MPI_Comm_rank() called before MPI_INIT" on every rank.
     from mpi4py import MPI
+
+    if not MPI.Is_initialized():
+        MPI.Init()
 
     shape = tuple(int(x) for x in sys.argv[1].split(","))
     scheme = sys.argv[2]
