@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Tune the fused_moe Triton config kimi K2.7 is missing on MI300A.
 #
-# 595040/595049 both decode at ~90-100 tok/s aggregate at 64 concurrent and both warn
+# Serving decodes at ~90-100 tok/s aggregate at 64 concurrent and warns
 # "Using default MoE config ... E=384,N=512,device_name=AMD_Instinct_MI300A,dtype=int4_w4a16.json
-# not found". aiter does not cover the int4 W4A16 expert path (595049 proved it: warning still
-# printed, 89.8 tok/s), so the fix is vLLM's own tuner: benchmark_moe.py --tune derives the expert
+# not found". aiter does not cover the int4 W4A16 expert path, so the fix is vLLM's own tuner: benchmark_moe.py --tune derives the expert
 # shape from the model config and emits exactly that JSON. Serving picks it up via
 # VLLM_TUNED_CONFIG_FOLDER -- no image change.
 #
@@ -69,8 +68,8 @@ PY
 
     # NOT benchmark_moe.py --tune: its ray harness gives one whole batch-size per worker,
     # streams tqdm only into ray worker logs inside the container /tmp, and needs a ray
-    # install fighting the visible-devices env (595059/595060/595061/595167/595201 -- two of
-    # those ran for hours with zero observable progress). Same search space, same
+    # install fighting the visible-devices env (runs for hours with zero observable progress).
+    # Same search space, same
     # benchmark_config, same save_configs -- driven sequentially on one GPU with one printed
     # line per config, so cost and ETA are visible from the first minute. ray is imported by
     # the module at load but never initialized.

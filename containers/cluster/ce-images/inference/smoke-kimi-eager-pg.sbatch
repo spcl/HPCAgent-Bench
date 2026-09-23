@@ -45,16 +45,13 @@ REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2
 # codegen from scratch before the API could bind.
 export VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT:-${FAST_SCRATCH}/vllm-cache}"
 SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
-# Tuned fused_moe Triton configs, the folder run_cluster.sh has pointed the campaign at since
-# 7726aed4. Unset, vLLM falls back to its default MoE config for this shape: 69 ms per kernel at
-# bs=64 against 4.4 ms tuned (45e16a46), on a kernel that is ~88% of decode time for a W4A16 MoE
-# (AMD measured 87.8-89.7% for the same kernel on Kimi at MI300X). EVERY smoke up to 600906 ran
-# WITHOUT it, which is why they all read ~90-96 tok/s aggregate -- that is the untuned signature
-# recorded in run_cluster.sh, not a topology result. Set TUNED_MOE_DIR= to reproduce the old runs.
+# Tuned fused_moe Triton configs, the folder run_cluster.sh points the campaign at. Unset, vLLM
+# falls back to its default MoE config for this shape: 69 ms per kernel at bs=64 against 4.4 ms
+# tuned, on a kernel that is ~88% of decode time for a W4A16 MoE. ~90-96 tok/s aggregate is the
+# untuned signature, not a topology result. Set TUNED_MOE_DIR= to run untuned.
 export TUNED_MOE_DIR="${TUNED_MOE_DIR-${SUBMIT_DIR}/moe-configs}"
 # Slurm spools this script to /var/spool/slurmd, so BASH_SOURCE cannot locate the patch and
-# SLURM_SUBMIT_DIR is all there is. Resolving against ONE assumed submit directory is a trap --
-# 594563 died on it in 1 s because the job was submitted from the repo root, not from here -- so
+# SLURM_SUBMIT_DIR is all there is. The job may be submitted from the repo root or from here, so
 # try both the sibling-directory and repo-root spellings before giving up.
 PG_PATCH_REL="containers/cluster/ce-images/inference/external-eager-pg-patch"
 for cand in "${PG_PATCH_DIR:-}" "${SUBMIT_DIR}/external-eager-pg-patch" "${SUBMIT_DIR}/${PG_PATCH_REL}"; do
@@ -73,16 +70,13 @@ export API_PORT="${API_PORT:-8000}"
 export MASTER_PORT="${MASTER_PORT:-$((20000 + SLURM_JOB_ID % 20000))}"
 READY_TIMEOUT="${READY_TIMEOUT:-5400}"
 # How long the workers may go completely silent before we call it wedged. A healthy start
-# is SLOW but never INDEFINITELY quiet, and 601165 hung with all 16 ranks stopped at the
-# same NCCL bootstrap line, wrote nothing for 81 minutes, and still burned the full
-# READY_TIMEOUT. Silence separates the two cases; elapsed time does not, which is why
-# READY_TIMEOUT stays where it is -- 600903 legitimately needed 73 of its 90 minutes.
+# is SLOW but never INDEFINITELY quiet; a wedged one stops all ranks at the same NCCL bootstrap
+# line and writes nothing. Silence separates the two cases; elapsed time does not, which is why
+# READY_TIMEOUT stays where it is (a healthy start measured 73 of its 90 minutes).
 #
 # 2700 clears every healthy observation with room to spare. Longest quiet stretch in a
-# run that went on to serve: 1768 s (600903; 600756/600762/600720/600737/598021 ranged
-# 651-898). Slowest NCCL bootstrap: 1335 s (601168, tp2pp8; the other eight of that fleet
-# ranged 235-558). A tighter bound is tempting and wrong -- 1200 would have killed both
-# 600903 and 601168 mid-startup.
+# run that went on to serve: 1768 s (others 651-898). Slowest NCCL bootstrap: 1335 s (tp2pp8;
+# others 235-558). 1200 would kill healthy starts.
 STALL_LIMIT="${STALL_LIMIT:-2700}"
 PROBE_STREAMS="${PROBE_STREAMS:-64}"
 PROBE_MAX_TOKENS="${PROBE_MAX_TOKENS:-512}"
@@ -108,8 +102,7 @@ export NODE0="${NODES[0]}"
 export NNODES="${#NODES[@]}"
 export TP_SIZE="${TP_SIZE:-4}"
 export PP_SIZE="${PP_SIZE:-${NNODES}}"
-# Parsers are MODEL-specific (594631: gpt-oss has no kimi think tokens, the API server died on
-# them). Defaults fit kimi; the control passes its own, e.g. TOOL_PARSER=openai
+# Parsers are MODEL-specific (gpt-oss has no kimi think tokens; the API server dies on them). Defaults fit kimi; the control passes its own, e.g. TOOL_PARSER=openai
 # REASONING_PARSER=openai_gptoss EXTRA_SERVE_ARGS="--dtype bfloat16".
 export TOOL_PARSER="${TOOL_PARSER:-kimi_k2}"
 export REASONING_PARSER="${REASONING_PARSER:-kimi_k2}"
@@ -305,13 +298,13 @@ fi
 
 stage "gate 2: unbatched-P2P warnings (594541 had 24; expect 0)"
 # Zero matches is the PASS here, and grep exits nonzero on it -- which pipefail propagates
-# through wc -l, so the bare pipeline killed 594708 AND 594710 at the moment they succeeded.
-# The || true must sit on grep itself, inside the pipe. Verified in isolation both ways.
+# through wc -l, so the bare pipeline kills the job at the moment it succeeds.
+# The || true must sit on grep itself, inside the pipe.
 p2p=$({ grep -h "unbatched P2P op" "${RUN_DIR}"/vllm-rank*.log 2>/dev/null || true; } | wc -l)
 echo "unbatched P2P warnings: ${p2p}"
 
 stage "gate 3: DOES IT DECODE -- the gate every previous smoke skipped"
-# aiter JIT-compiles kernels on FIRST use (one MHA kernel measured at 924 s in 595047), so a
+# aiter JIT-compiles kernels on FIRST use (one MHA kernel measured at 924 s), so a
 # cold cache blows a 300 s budget and the smoke reports "wedged" for a server that is merely
 # compiling. Raise it whenever AITER_JIT_DIR starts empty; 300 s is right for a warm cache.
 before=$(metric generation_tokens_total)
@@ -330,8 +323,8 @@ stage "gate 4: saturation probe, ${PROBE_STREAMS} concurrent x ${PROBE_MAX_TOKEN
 # max_tokens is a floor on how long each stream lives, and ignore_eos keeps it from finishing
 # early -- otherwise short answers drain the batch and the "saturated" number is measured
 # against a half-empty engine, which is the same mistake as reading 92 tok/s off idle arms.
-# Bracket the burst instead of timing a fixed window after a fill sleep: 594717 finished all
-# 32k tokens INSIDE the 25s fill sleep, so the window measured an idle engine and reported 0.
+# Bracket the burst instead of timing a fixed window after a fill sleep: a burst can finish
+# INSIDE the fill sleep, and the window then measures an idle engine and reports 0.
 g0=$(metric generation_tokens_total); t0=$SECONDS
 PROBE_PIDS=()
 for i in $(seq 1 "${PROBE_STREAMS}"); do
@@ -344,8 +337,8 @@ done
 : >"${RUN_DIR}/probe-conc.txt"
 # Three columns per sample -- elapsed, cumulative generated tokens, resident requests. The token
 # column is what makes a steady-state read possible: the aggregate below divides by the WHOLE
-# burst, ramp included, and on 604647 that ramp was ~170s of a 359s run, so the headline number
-# came out at half the rate the engine's own counter reported while saturated.
+# burst, ramp included (~170s of a 359s run measured), so the headline number can read half the
+# rate the engine's own counter reports while saturated.
 ( while :; do printf '%s %s %s\n' "${SECONDS}" "$(metric generation_tokens_total)" \
     "$(metric num_requests_running)" >>"${RUN_DIR}/probe-conc.txt"; sleep 5; done ) &
 SAMPLER_PID=$!
