@@ -150,6 +150,8 @@ from hpcagent_bench.support.bindings.contract import index_base  # noqa: E402
 from hpcagent_bench.initialize import auto_initialize  # noqa: E402
 from hpcagent_bench.precision import Precision  # noqa: E402
 
+from numpyto_common.dtypes import canonical, compute_dtype  # noqa: E402
+
 # The emitter's own fp-tag helper, so this file's globs match what it names emitted files.
 from numpyto_common.naming import fptype_tag  # noqa: E402
 
@@ -547,7 +549,9 @@ def _custom_initialize(info, syms, datatype=np.float64) -> Dict[str, Any]:
         want = decl.get("dtype") if isinstance(decl, dict) else None
         if want is None or not isinstance(val, np.ndarray):
             continue
-        want = np.dtype(want)
+        # Through the registry: numpy has no name for a manifest's ``bf16``, and a storage-only float
+        # (bf16, fp8) declares a FLOAT, whose width the sweep's precision chooses.
+        want = np.dtype(compute_dtype(canonical(want)))
         if want.kind != val.dtype.kind:
             by[name] = _coerce_to_dtype(val, want.type)
     return by
