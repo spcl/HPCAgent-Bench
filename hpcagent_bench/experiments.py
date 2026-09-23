@@ -462,11 +462,6 @@ def fold_renamed_arms(frame: "pd.DataFrame") -> "pd.DataFrame":
     return frame.assign(arm=frame["arm"].astype(str).fillna("").map(renamed_arm))
 
 
-#: What a launcher appends to re-run an arm (``CLEAN=1``, and every owed rerun). It names no
-#: condition: the identity columns are unchanged.
-CLEAN_SUFFIX: str = "-clean"
-
-
 def fold_clean_arms(frame: "pd.DataFrame") -> "pd.DataFrame":
     """``frame`` with every ``-clean`` arm under the arm it re-ran (spec X9). Nothing is dropped:
     the waves pool and the latest run per kernel (``population.latest_runs``) picks between them,
@@ -474,7 +469,7 @@ def fold_clean_arms(frame: "pd.DataFrame") -> "pd.DataFrame":
     if frame.empty or "arm" not in frame.columns:
         return frame
     arms = frame["arm"]
-    folded = arms.astype(str).str.removesuffix(CLEAN_SUFFIX)
+    folded = arms.astype(str).str.removesuffix(experiment_tags.CLEAN_SUFFIX)
     return frame.assign(arm=folded.where(arms.notna(), arms))
 
 
