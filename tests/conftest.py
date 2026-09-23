@@ -118,6 +118,15 @@ def nvcc_missing() -> str:
     return "" if shutil.which("nvcc") else "nvcc (apt nvidia-cuda-toolkit) -- compile-only, no device needed"
 
 
+def rocm_missing() -> str:
+    """ "" when the ROCm SDK is installed, else what is missing. Compile-only, like ``nvcc``: a HIP
+    build configures against HIP's CMake package (found where ``dace_framework.pin_gpu_toolchain``
+    looks: ``ROCM_PATH``, else ``/opt/rocm``) and needs no device -- keep this separate from the
+    "amd" group, which also demands ``/dev/kfd`` and the profilers a build never touches."""
+    hip_cmake = pathlib.Path(os.environ.get("ROCM_PATH") or "/opt/rocm") / "lib" / "cmake" / "hip"
+    return "" if hip_cmake.is_dir() else f"the ROCm SDK ({hip_cmake}) -- compile-only, no device needed"
+
+
 def ppcg_missing() -> str:
     """ "" when this host can run the ppcg_hip column end to end, else what is missing.
 
@@ -156,6 +165,7 @@ HARDWARE_GROUPS: Mapping[str, HardwareGroup] = MappingProxyType(
         ),
         "nvidia": HardwareGroup("an NVIDIA GPU (/dev/nvidiactl) with nsys", nvidia_missing),
         "nvcc": HardwareGroup("the nvcc compiler on PATH -- compile-only, no device", nvcc_missing),
+        "rocm": HardwareGroup("the ROCm SDK (HIP's CMake package) -- compile-only, no device", rocm_missing),
         "ppcg": HardwareGroup(
             "the ppcg column's whole toolchain: ppcg, hipify-perl, hipcc and an AMD GPU (/dev/kfd)",
             ppcg_missing,
