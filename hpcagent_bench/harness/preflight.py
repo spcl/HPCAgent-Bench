@@ -62,9 +62,7 @@ def needs_canonicalize(frameworks: Sequence[str]) -> List[str]:
         meta = FRAMEWORK_META.get(name, {})
         if meta.get("base") != "dace":
             continue
-        # ``canon_cpu`` / ``canon_gpu``, by prefix: the pipelines are named per target now, so an
-        # equality test against "canonicalize" silently matched nothing and every canonicalize
-        # column skipped its fork probe.
+        # ``canon_cpu`` / ``canon_gpu``, by prefix: the pipelines are named per target.
         if any(p.startswith("canon") for p in meta.get("pipelines", DEFAULT_PIPELINES)):
             out.append(name)
     return out

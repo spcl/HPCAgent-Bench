@@ -337,9 +337,8 @@ CREATE TABLE IF NOT EXISTS submission_cells (
 );
 """
 
-#: One row per (grade, rank count P) of a distributed kernel's weak/strong SCALING curve -- the
-#: sweep that lived only in memory (``TaskScore.scaling``) until it was persisted here, so every
-#: scaling figure can be rebuilt from stored rows. Keyed like ``submission_cells``: ``(run_id, ts,
+#: One row per (grade, rank count P) of a distributed kernel's weak/strong SCALING curve
+#: (``TaskScore.scaling``), so every scaling figure can be rebuilt from stored rows. Keyed like ``submission_cells``: ``(run_id, ts,
 #: benchmark)`` is the grade (``ts`` = its epoch-ms stamp), ``ranks`` the point.
 #:
 #: A DROPPED P is a row too -- ``ranked_ns`` / ``achieved_speedup`` / ``ideal_speedup`` /
@@ -730,7 +729,7 @@ _INDEXES = (
     "CREATE INDEX IF NOT EXISTS ix_sources_row ON sources(run_id, benchmark, ts)",
     # the dispersion lookup: every timed cell behind one graded row
     "CREATE INDEX IF NOT EXISTS ix_cells_row ON submission_cells(run_id, benchmark, ts)",
-    # the identity lookup: every figure groups by this tuple, now once per run rather than per row
+    # the identity lookup: every figure groups by this tuple, once per run
     "CREATE INDEX IF NOT EXISTS ix_runs_ident ON runs(experiment, model, language, device, packet, harness)",
 )
 
@@ -1774,11 +1773,8 @@ def record(
         )
 
         # Before the verdict branches, so an UNGRADEABLE body is kept as well as a winning one.
-        # BOTH halves: a hip/cuda submission is two translation units and only the host one was
-        # stored, so no GPU row was ever reproducible from the record -- the archived 251 bytes for
-        # a graded tsvc_2_s255 held the `extern "C"` shim and none of the __global__ kernels, and
-        # re-grading it (to lift a ceiling-censored speedup, say) was impossible. The device half
-        # goes in as its OWN row tagged in `language`, not a new column: this schema is never
+        # BOTH halves: a hip/cuda submission is two translation units, and a GPU row is reproducible
+        # only with the device half. The device half goes in as its OWN row tagged in `language`, not a new column: this schema is never
         # ALTERed, so a column would silently not appear on an existing DB while a row is additive.
         for body, tag in ((submission.source, delivered), (submission.device_source, f"{delivered}:device")):
             if body:
@@ -1806,9 +1802,8 @@ def record(
 
         verified = bool(score.build_ok and score.correct and (verify is None or verify.ok))
         if verified:
-            # Decided HERE, off the row being written, not inherited from `verify`. Inherited, the
-            # flag was only ever computed when record.harden was on, so a harden-off arm recorded
-            # every speed-up clean however large; verify.suspect is OR-ed in rather than trusted.
+            # Decided HERE, off the row being written: `verify` computes it only under record.harden.
+            # verify.suspect is OR-ed in rather than trusted.
             flagged = suspect_timing(
                 score.speedup,
                 score.baseline_ns,
