@@ -19,6 +19,26 @@ import sys
 import tempfile
 from typing import Any
 
+import pytest
+
+#: CI sets this to "1" on the job that installs a real MPI, so a launcher that fails to bootstrap
+#: there is a FAILURE (the install broke) rather than a silent SKIP (the environment lacks MPI,
+#: true only on a bare login/dev venv). :func:`skip_or_fail` is the one place this is read.
+REQUIRE_MPI = os.environ.get("HPCAGENT_BENCH_REQUIRE_MPI") == "1"
+
+
+def skip_or_fail(reason: str) -> None:
+    """``pytest.skip(reason)`` normally; ``pytest.fail(reason)`` under HPCAGENT_BENCH_REQUIRE_MPI=1.
+
+    Every gated MPI e2e test calls this instead of ``pytest.skip`` directly, so the CI job that
+    installs OpenMPI/mpi4py cannot regress to "green because everything quietly skipped" -- a
+    missing launcher there fails loudly instead.
+    """
+    if REQUIRE_MPI:
+        pytest.fail(reason)
+    pytest.skip(reason)
+
+
 # In some sandboxes/containers hwloc's GPU device plugins (opencl/levelzero/gl) hang during
 # topology discovery, so MPICH's hydra proxy never answers the ranks' PMI hwloc-xml request and
 # every rank blocks forever in MPI_Init. Skipping just those probes (the real CPU topology is
