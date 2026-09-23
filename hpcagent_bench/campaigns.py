@@ -3,10 +3,8 @@
 """Which rows belong to an experiment.
 
 An arm name says which launcher produced it (``git-scicomp-qwen38-repo``), not which experiment it
-answers. The mapping between the two lived in three places that nothing checked against each other
--- a dict in ``experiments/wave_board.py``, a differently-typed one in ``scripts/migrate_db.py``,
-and an f-string in ``stats/figures/kernel_comparison.py`` -- so a prefix added to one was simply
-absent from the others. It is now data in ``envs/registry.yaml`` and this module is the only reader.
+answers. The mapping between the two is data in ``envs/registry.yaml`` and this module is its only
+reader.
 
 A figure asks for an EXPERIMENT and gets back where to look and what to keep:
 

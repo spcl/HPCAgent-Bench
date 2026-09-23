@@ -3,8 +3,7 @@
 """Shared helpers for the scripts/check_*.py pre-commit hooks.
 
 Each hook falls back to scanning the tracked tree when pre-commit hands it no positional files (a
-standalone run, or ``--all-files``); that discovery and the autogen-marker check were three and two
-independent copies respectively before this.
+standalone run, or ``--all-files``).
 """
 
 import pathlib

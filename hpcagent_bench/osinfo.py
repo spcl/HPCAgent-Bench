@@ -3,9 +3,8 @@
 
 """Host-OS facts that keep the build + runtime portable across Linux, macOS, and WSL2.
 
-Stdlib-only (``sys`` + ``platform``) so the lowest layers -- the flag matrix, the
-fork primitive -- can import it without pulling in config/yaml. The one config-aware
-helper (:func:`mp_context`) is the exception and reads the runtime config.
+The lowest layers -- the flag matrix, the fork primitive -- import it;
+:func:`mp_context` reads the runtime config.
 
 WSL2 is a real Linux kernel, so it is ``IS_LINUX`` and needs no special casing.
 """
