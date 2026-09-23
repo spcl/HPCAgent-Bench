@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
 
 import numpy as np
 import pytest
@@ -370,6 +371,47 @@ def test_the_config_gate_turns_ccache_off(tmp_path, pretend_ccache, monkeypatch)
     assert languages.compiler_launcher() == ()
     argv = languages.build_shared_lib_commands("c", tmp_path / "k.c", tmp_path / "libk.so", mode=Mode.SINGLE_CORE)[0]
     assert FAKE_CCACHE not in argv
+
+
+@pytest.fixture
+def ccache_masquerade(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[str, str]]:
+    """A launcher ccache and a masquerade ``g++`` symlinked to it, laid out the way the ccache
+    package installs them (``/usr/bin/ccache``, ``/usr/lib/ccache/g++ -> ../../bin/ccache``) and
+    the way CI's PATH puts them first. Only ``shutil.which`` is faked; the symlink is real."""
+    launcher = tmp_path / "bin" / "ccache"
+    launcher.parent.mkdir()
+    launcher.write_text("#!/bin/sh\n")
+    masquerade = tmp_path / "lib" / "ccache" / "g++"
+    masquerade.parent.mkdir(parents=True)
+    masquerade.symlink_to(os.path.relpath(launcher, masquerade.parent))
+    monkeypatch.setattr(languages.shutil, "which", lambda name: str(launcher) if name == "ccache" else None)
+    monkeypatch.delenv("CCACHE_NAMESPACE", raising=False)
+    languages.compiler_launcher.cache_clear()
+    yield str(launcher), str(masquerade)
+    languages.compiler_launcher.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "recorded, compiler",
+    [
+        # CMake's compile_commands.json: the launcher is left out, the compiler is the masquerade.
+        (("{masquerade}", "-O3", "-c", "k.cpp"), "{masquerade}"),
+        # ninja -t compdb / a harness compile: the launcher is spelled in front of the compiler.
+        (("{launcher}", "{masquerade}", "-O3", "-c", "k.cpp"), "{masquerade}"),
+    ],
+    ids=["cmake-compile-database", "launcher-prefixed"],
+)
+def test_a_ccache_masquerade_compiler_is_not_stripped_as_the_launcher(
+    ccache_masquerade: tuple[str, str], recorded: tuple[str, ...], compiler: str
+) -> None:
+    """``/usr/lib/ccache/g++`` resolves to the ccache binary but IS the compiler (ccache picks launcher
+    mode by the file NAME). Stripping it left ``-D...`` as the compiler, and DaceFramework.opt_report
+    died on the first build of every CI sweep (FileNotFoundError: '-DDACE_BINARY_DIR=...')."""
+    launcher, masquerade = ccache_masquerade
+    names = {"launcher": launcher, "masquerade": masquerade}
+    argv = tuple(token.format(**names) for token in recorded)
+    got = languages.strip_launcher(argv)
+    assert got == (compiler.format(**names), "-O3", "-c", "k.cpp"), got
 
 
 def test_a_language_ccache_does_not_support_compiles_directly(tmp_path) -> None:
