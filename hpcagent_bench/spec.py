@@ -422,7 +422,7 @@ SUPPORTED_SPARSE_FORMATS = frozenset(
         "csc",
         "coo",
         "dia",
-        "bcsr",  # Block CSR (formerly "bsr").
+        "bcsr",  # Block CSR (scipy's "bsr").
         "bcoo",  # Block COO -- COO with R x C dense value blocks.
         "ell",
         "packed_banded",
