@@ -12,12 +12,9 @@
 # 30-40 min the inference endpoint needs to load weights, so it is noise on the arm's own clock --
 # and running first means a refusal costs seconds instead of 755 GB of weight load.
 #
-# Preparation used to live in three places with three sets of rules: make_problems.py at submit
-# time, materialize_shared.sh from inside run_cluster.sh, and prerender_cpf.sh by hand, whenever
-# someone remembered. The third is why this exists -- a CPF arm whose forms were never rendered
-# does not fail, it serves `unavailable` with HTTP 200 for every kernel and measures nothing while
-# looking healthy. One entrypoint means one place to ask "is this arm ready", and one place that
-# can refuse.
+# A CPF arm whose forms were never rendered does not fail: it serves `unavailable` with HTTP 200 for
+# every kernel and measures nothing while looking healthy. One entrypoint means one place to ask
+# "is this arm ready", and one place that can refuse.
 #
 # WHAT IS NOT PREPARED, and why it cannot be: /bench, /score, /verify and /profile MEASURE. They
 # compile the submission and time it against the reference, in the judge's own container, on the
@@ -29,7 +26,7 @@ set -Eeuo pipefail
 # root, and the bare PROBLEMS_FILE name the submit scripts write. run_cluster.sh runs a COPY of
 # this file from RUN_DIR (so an edit of the checkout cannot shift the byte offsets of a script a
 # job is already executing), and a copy that located itself by $0 would resolve every one of
-# those against RUN_DIR: 629715 died at 5 s with "no problems file at <RUN_DIR>/problems-*.jsonl".
+# those against RUN_DIR.
 # run_cluster.sh exports SCRIPT_DIR, so the snapshot lands in the right directory; a standalone
 # invocation has none and falls back to where the file actually is.
 cd -- "${SCRIPT_DIR:-$(dirname -- "${BASH_SOURCE[0]}")}"
@@ -188,9 +185,8 @@ if [[ -n "${SHARED_HOST_DIR:-}" ]]; then
     # image that can drift from it and that every new checkout has to recreate. The signatures
     # describe the C ABI agents code against, so they should come from the image that grades them.
     # ABSOLUTE PATH, and no --chdir. The EDF sets `workdir` to $SCRATCH and that wins over
-    # `srun --chdir`, so a relative command resolved to $SCRATCH/./materialize_shared.sh and every
-    # arm died ~20 s in with execve(): No such file or directory -- the whole 09-10 next wave, 15
-    # arms, before an agent started. Naming the script outright does not care where the container
+    # `srun --chdir`, so a relative command resolves to $SCRATCH/./materialize_shared.sh (execve:
+    # No such file or directory). Naming the script outright does not care where the container
     # decides to stand.
     [[ "${CHECK_ONLY:-0}" == 1 ]] \
         || ce_run "${PWD}/materialize_shared.sh" "${REPO}" "${SHARED_HOST_DIR}" "${PROBLEMS}"

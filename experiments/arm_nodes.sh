@@ -33,8 +33,5 @@ arm_walltime() {
     printf '%02d:00:00\n' "${hours}"
 }
 
-# check_context_budget and its CLAUDE_AUTOCOMPACT env-file key are GONE (USER 2026-09-22):
-# claude-code 2.1.197 never read the --autocompact flag this validated (no such CLI option), and
-# agent_driver.claude_context_env now computes the compaction trigger itself from the served window
-# it actually observes, so no .env-declared number can be wrong by construction. See
-# docs/token_accounting.md#context-compaction.
+# No .env compaction key: agent_driver.claude_context_env computes the compaction trigger from the
+# served window. See docs/token_accounting.md#context-compaction.

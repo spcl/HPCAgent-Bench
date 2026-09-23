@@ -6,7 +6,7 @@
 # grading width (a baseline on a different core count is not a baseline).
 #   ./submit-canon-llr40.sh   BEGIN=saturday|DEPEND_ON=<jid:jid>|SUBMIT=0 ./submit-canon-llr40.sh
 #   KERNELS_FILE=owed/arm-budget.txt ./submit-canon-llr40.sh   -- one kernel name per line, replaces
-#   the ${TAG} roster (used to be silently ignored here while every other family submitter read it)
+#   the ${TAG} roster
 set -euo pipefail
 ulimit -c 0
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
@@ -94,11 +94,8 @@ fi
 
 for col in ${COLUMNS}; do
     gres=()
-    # A DEVICE column gets GPUs. The name test used to be *gpu* alone, which catches dace_gpu* and
-    # misses the PPCG columns -- so ppcg_hip, the AMD CUDA->HIP column, was submitted with no GPU
-    # and could only fail or run nowhere near a device. tests/test_canon_device_columns.py keeps
-    # this pattern equal to the set cpp_runtime.FRAMEWORK_LANG marks as hip/cuda, so a new device
-    # column cannot be added there and silently left CPU-only here.
+    # A DEVICE column gets GPUs: *gpu* (dace_gpu*) and ppcg* (ppcg_hip). tests/test_canon_device_columns.py
+    # keeps this pattern equal to the set cpp_runtime.FRAMEWORK_LANG marks as hip/cuda.
     # Tested PER COLUMN: with TIME_LIMIT_ONE_JOB the columns are packed into one comma-joined
     # value, and "numba,ppcg_hip" neither contains "gpu" nor starts with "ppcg".
     for one in ${col//,/ }; do
@@ -110,9 +107,8 @@ for col in ${COLUMNS}; do
     fi
     dep=(); [[ -n "${DEPEND_ON:-}" ]] && dep=(--dependency="afterany:${DEPEND_ON}")
     #: NICE=300, e.g., puts a gap-filling canon run behind the priority queue's LLR/cpfsrc waves
-    #: but ahead of a background scicomp sweep (2026-09-20 queue-priority convention) without
-    #: touching either queue's own submitter. Unset (the default) keeps every existing caller's
-    #: ordinary priority.
+    #: but ahead of a background scicomp sweep without touching either queue's own submitter.
+    #: Unset (the default) keeps the ordinary priority.
     nice=(); [[ -n "${NICE:-}" ]] && nice=(--nice="${NICE}")
     jid=$(sbatch --parsable --no-requeue --partition=mi300 --nodes=1 --exclusive --mem=0 \
         "${gres[@]}" --time="${TIME_LIMIT}" --job-name="${JOB_PREFIX}-${JOB_TAG:-${col%%,*}}" \

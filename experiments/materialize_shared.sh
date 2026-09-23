@@ -37,10 +37,8 @@ kernel_names() {
 # venv is found without every arm having to name it.
 #
 # PICK BY WHAT IT CAN IMPORT, not by whether it exists. `command -v` is satisfied by any python3 on
-# PATH, so a bare interpreter without ml_dtypes won the selection and then failed on every single
-# kernel -- which is the 2026-09-09 case the comment below counts. Probing costs one interpreter
-# start per candidate and is the difference between an arm that stages signatures and one that
-# stages none, so it happens here rather than being discovered forty warnings later.
+# PATH, so a bare interpreter without ml_dtypes would win the selection and then fail on every
+# kernel. Probing costs one interpreter start per candidate.
 bench_python=""
 bench_python_tried=()
 for candidate in "${REPO_LAYOUT_PYTHON:-}" "${VIRTUAL_ENV:+${VIRTUAL_ENV}/bin/python}" python3; do
@@ -67,11 +65,9 @@ if [[ -z "${bench_python}" ]]; then
     echo "  REPO_LAYOUT_PYTHON in its .env to a campaign venv." >&2
 fi
 
-#: Signature staging, counted. A kernel that fails on its own is a warning and always was -- but
-#: EVERY kernel failing is not forty odd kernels, it is one broken interpreter, and that used to
-#: print forty warnings and exit 0 with a whole campaign staged and no signature.json in it. The
-#: comment on the staging call says what that costs. The 2026-09-09 CPF arms are the case: bare
-#: python3 could not import ml_dtypes, so all forty died and the launch continued.
+#: Signature staging, counted. A kernel that fails on its own is a warning; EVERY kernel failing
+#: is one broken interpreter, and must not exit 0 with no signature.json staged. The comment on the
+#: staging call says what that costs.
 sig_ok=0
 sig_fail=0
 

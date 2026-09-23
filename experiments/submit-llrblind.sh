@@ -52,8 +52,8 @@ esac
 # explicitly (either BASE) or when BASE=llrbase (its longstanding default); a campaign-base arm left
 # at its own default inherits AGENT_TIMEOUT_SECONDS from .env.base-<model> untouched.
 AGENT_TIMEOUT_SECONDS_EXPLICIT=${AGENT_TIMEOUT_SECONDS+1}
-# the default scales with TIME_SCALE, capped at time_cap_seconds (submit_common.sh, 2026-09-19: a
-# plain BUDGET_SCALE=4 would ask for 32h, over the mi300 partition's 24h MaxTime); a caller-typed
+# the default scales with TIME_SCALE, capped at time_cap_seconds (submit_common.sh: a plain
+# BUDGET_SCALE=4 would ask for 32h, over the mi300 partition's 24h MaxTime); a caller-typed
 # value is left exactly as typed, same convention submit-cpf-llr40.sh's agent_seconds applies.
 AGENT_TIMEOUT_SECONDS=${AGENT_TIMEOUT_SECONDS:-$(scale_time 27000)}
 # Must stop an agent that never converges on a submission, without capping a converging one. The
@@ -73,7 +73,7 @@ API_TIMEOUT_MS=${API_TIMEOUT_MS:-3600000}
 WALLCLOCK=${WALLCLOCK:-06:30:00}
 # AGENT_NODES is sized above (submit_arm) so the whole roster runs in ONE batch, so the SLURM
 # allocation must cover AGENT_TIMEOUT_SECONDS plus staging or the job is killed before its own
-# internal budget is -- the 643115/643117 class mismatch (2026-09-19), generalized: a scaled
+# internal budget is: a scaled
 # AGENT_TIMEOUT_SECONDS (TIME_SCALE, above) stretches WALLCLOCK's floor with it, but a caller's own
 # WALLCLOCK is never shrunk.
 IFS=: read -r llrblind_wc_h llrblind_wc_m llrblind_wc_s <<<"${WALLCLOCK}"

@@ -9,10 +9,8 @@
 #
 # WHY. The shared cache lives on ${SCRATCH}, which is NFS on beverin. Several engines compiling at
 # the same moment each rewrite the same content-addressed files there, and NFS turns "a file another
-# client just replaced" into ESTALE for the reader: 640074, 640075 and 640090 (three oss120b arms
-# started within a minute of each other) died with `OSError: [Errno 116] Stale file handle` inside
-# torch inductor's autotune, one TP worker down and the engine core waiting on it forever -- a job
-# that looks alive and serves nothing. So an engine never writes the shared tree while it runs: it
+# client just replaced" into ESTALE for the reader (`OSError: [Errno 116] Stale file handle` in
+# inductor's autotune: one TP worker down, the engine hung). So an engine never writes the shared tree while it runs: it
 # compiles into a node-local copy, and publishes what it added once it is serving.
 #
 # PUBLISH IS ADD-ONLY AND ATOMIC PER ENTRY. A directory the shared cache lacks is copied under a
@@ -34,7 +32,7 @@ STAGE_PREFIX=".jit-layer-staging"
 # vllm_compile_cache.py. An entry another job compiled under a node-local root that no longer
 # exists is therefore not a cache MISS but a cache TRAP: the engine reads the manifest, opens the
 # recorded path and dies at startup with FileNotFoundError on artifact_compile_range_*, taking the
-# whole arm with it (640572 poisoned 640611, 640613 and 640638-640640). Such an entry is dropped
+# whole arm with it. Such an entry is dropped
 # after seeding so the engine simply recompiles it.
 scrub_dead_entries() {
     local root="$1" manifest dir path

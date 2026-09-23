@@ -7,7 +7,7 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
 #SBATCH --time=11:00:00
-# NODE_FAIL auto-requeue reruns this job id into the same RUN_DIR and stacks rows (637040).
+# NODE_FAIL auto-requeue reruns this job id into the same RUN_DIR and stacks rows.
 #SBATCH --no-requeue
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.out
@@ -25,11 +25,8 @@
 # DACE_TREE must be a dace git checkout: every key holds its HEAD commit, and a commit that moves
 # during the run withdraws what the run rendered. OPT may name a frozen snapshot.
 #
-# CONTAINER, NOT HOST. This job used to source ${SCRATCH}/dace-env.sh for a host spack toolchain
-# (a pinned CXX, OPENBLAS_DIR) before rendering directly on the batch node. Both the toolchain and
-# dace-env.sh itself are gone with /capstor, which does not exist here, and this repo's rule is
-# that nothing runs outside a container any more. The render step therefore runs INSIDE the agent
-# image, which already carries a toolchain (/opt/gcc, /opt/view, its own spack install) -- this
+# CONTAINER, NOT HOST: nothing runs outside a container. The render step runs INSIDE the agent
+# image, which carries a toolchain (/opt/gcc, /opt/view, its own spack install) -- this
 # script stays the ORCHESTRATOR on the batch host (roster, sharding, the launcher choice, the
 # post-shard verdict table) and only the one `python3 -m hpcagent_bench.cpf_prerender` per rank
 # crosses into the container, via the `outer`/`inner` split below (the pattern
@@ -101,7 +98,7 @@ OPT=${OPT:-${SCRATCH_ROOT}/hpcagent-bench}
 export DACE_TREE=${DACE_TREE:-${SCRATCH_ROOT}/dace}
 # scripts/cache_env.sh is the one place HPCAGENT_BENCH_CPF_PRERENDER_DIR is defined, so a submitter
 # that never sources it still lands the cache under the same root every submit script's VIEW default
-# now points into (experiments/submit-cpf-llr40.sh, submit-scicomp-dc.sh).
+# points into (experiments/submit-cpf-llr40.sh, submit-scicomp-dc.sh).
 . "${OPT}/scripts/cache_env.sh"
 CPF_CACHE=${CPF_CACHE:-${HPCAGENT_BENCH_CPF_PRERENDER_DIR}/cache}
 TARGET=${TARGET:-cpu}
