@@ -295,8 +295,8 @@ def test_program_argv_python_forwards_device_mask_only_for_device() -> None:
     art, inf, out = Path("/x/bench"), Path("/t/in.bin"), Path("/t/out.bin")
     host = mpi_call._program_argv(art, inf, out, is_python=True, python_exe="py", grid_dims=(4,), device_mask=())
     dev = mpi_call._program_argv(art, inf, out, is_python=True, python_exe="py", grid_dims=(2, 2), device_mask=(0, 2))
-    assert host[:3] == ["py", "-m", mpi_call.PY_DRIVER_MODULE] and "--device-mask" not in host
-    assert dev[6] == "2,2" and dev[-2:] == ["--device-mask", "0,2"]  # grid forwarded, then the mask
+    assert host[:4] == ["py", "-m", mpi_call.ENTRY_MODULE, mpi_call.PY_DRIVER_MODULE] and "--device-mask" not in host
+    assert dev[7] == "2,2" and dev[-2:] == ["--device-mask", "0,2"]  # grid forwarded, then the mask
     c = mpi_call._program_argv(art, inf, out, is_python=False, python_exe="py", grid_dims=(4,), device_mask=(0,))
     assert c == ["/x/bench", "/t/in.bin", "/t/out.bin"]  # the mask never leaks into the C program tail
 

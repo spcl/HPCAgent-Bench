@@ -149,7 +149,7 @@ def test_run_sharded_returns_rank_verdicts_and_ns_samples(monkeypatch, tmp_path)
     )
     assert verdicts == [(True, 0.0, "r0"), (True, 0.5, "r1"), (False, 1.0, "r2"), (True, 1.5, "r3")]
     assert samples == [250_000_000, 500_000_000]
-    assert seen["ranks"] == 4 and seen["program"][1:3] == ["-m", mpi_call.SHARD_DRIVER_MODULE]
+    assert seen["ranks"] == 4 and seen["program"][1:4] == ["-m", mpi_call.ENTRY_MODULE, mpi_call.SHARD_DRIVER_MODULE]
     assert seen["plan"]["artifact"] == str(kernel_library_path(exe)) and seen["plan"]["seed"] == 3
     assert not list(tmp_path.glob("mpishard_*")), "the plan directory must not outlive the launch"
 
