@@ -379,7 +379,7 @@ def probe_write_mask(
 PROBE_RECHECK_SEED: int = 0x5EED2
 
 
-def _collapsed_axis_positions(written: np.ndarray) -> Tuple[Tuple[int, Tuple[int, ...]], ...]:
+def collapsed_axis_positions(written: np.ndarray) -> Tuple[Tuple[int, Tuple[int, ...]], ...]:
     """For every axis of ``written`` whose OWN extent is > 1 and whose written extent collapses to
     <=1 position (the same "written extent is 1" test :func:`contracted_extent` applies per
     declared axis), the axis index paired with the sorted positions written along it.
@@ -403,7 +403,7 @@ def _collapsed_axis_positions(written: np.ndarray) -> Tuple[Tuple[int, Tuple[int
 
 def data_dependent_outputs(mask1: Mapping[str, np.ndarray], mask2: Mapping[str, np.ndarray]) -> frozenset[str]:
     """Names present in BOTH ``mask1`` and ``mask2`` whose collapsed axes
-    (:func:`_collapsed_axis_positions`) disagree between the two -- two independently drawn input
+    (:func:`collapsed_axis_positions`) disagree between the two -- two independently drawn input
     sets for the SAME configuration produced a DIFFERENT written set, which can only happen when
     the written set depends on the data itself (a filter, a compaction, an argmax-indexed write),
     not on the shape or the control flow alone.
@@ -416,7 +416,7 @@ def data_dependent_outputs(mask1: Mapping[str, np.ndarray], mask2: Mapping[str, 
         m2 = mask2.get(name)
         if m2 is None:
             continue
-        if _collapsed_axis_positions(m1) != _collapsed_axis_positions(m2):
+        if collapsed_axis_positions(m1) != collapsed_axis_positions(m2):
             out.add(name)
     return frozenset(out)
 
@@ -475,7 +475,7 @@ def probe_write_mask_cached(
         result: Tuple[Optional[Dict[str, np.ndarray]], Dict[str, str]] = (mask1, {})
         _PROBE_MASK_CACHE[key] = result
         return result
-    collapsing = {name: mask for name, mask in mask1.items() if _collapsed_axis_positions(mask)}
+    collapsing = {name: mask for name, mask in mask1.items() if collapsed_axis_positions(mask)}
     if not collapsing:
         result = (mask1, {})
         _PROBE_MASK_CACHE[key] = result
