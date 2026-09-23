@@ -10,6 +10,7 @@
 #   CLEAN=1 SUBMIT=1 ./submit-harness-focus20.sh                  # resubmission, arm/job name get -clean
 #   KERNELS=tsvc_2_s235,kmp EXPERIMENT=x RECORD_EXPERIMENT=x ./submit-harness-focus20.sh
 #   EXTRA_ENV_KV="AMD_CE_ENV=hpcagent-bench-amd-mi300-candidate" ./submit-harness-focus20.sh
+#   PARTITION=mi200 SMOKE=1 HARNESSES=claude SUBMIT=1 ./submit-harness-focus20.sh # the smoke on mi200
 # KERNELS takes make_problems.py --select tokens; KERNELS_FILE is relative to experiments/.
 # EXTRA_ENV_KV pins KEY=VALUE words into EVERY arm; a key that may differ between arms is refused.
 set -euo pipefail
@@ -40,8 +41,10 @@ if [[ "${SMOKE:-0}" == 1 ]]; then
     # one edit/build/judge cycle plus promotion on qwen38 does not fit 25-40 minutes
     TIME_LIMIT=${TIME_LIMIT:-02:00:00}
     AGENT_TIMEOUT_SECONDS=${AGENT_TIMEOUT_SECONDS:-3000}
-    EXPERIMENT=${EXPERIMENT:-${TAG}-smoke}
-    RECORD_EXPERIMENT=${RECORD_EXPERIMENT:-${TAG}-smoke}
+    smoke_name="${TAG}-smoke"
+    partition_is_default || smoke_name="${smoke_name}-${PARTITION}"
+    EXPERIMENT=${EXPERIMENT:-${smoke_name}}
+    RECORD_EXPERIMENT=${RECORD_EXPERIMENT:-${smoke_name}}
 fi
 if [[ -n "${KERNELS:-}${KERNELS_FILE:-}" ]]; then
     if [[ -z "${EXPERIMENT:-}" || -z "${RECORD_EXPERIMENT:-}" ]]; then
@@ -197,7 +200,7 @@ for spec in ${HARNESSES}; do
     )
     # the optimas runner imports hpcagent_bench, which only the judge image carries
     if [[ "${h}" == optimas ]]; then
-        kvs+=("AGENT_CE_ENV=${OPTIMAS_CE_ENV:-hpcagent-bench-judge-mi300-latest}")
+        kvs+=("AGENT_CE_ENV=${OPTIMAS_CE_ENV:-hpcagent-bench-judge-${PARTITION:-mi300}-latest}")
     fi
     if [[ -n "${packet_env_lines}" ]]; then
         while IFS= read -r line; do
@@ -206,6 +209,7 @@ for spec in ${HARNESSES}; do
     fi
     for extra in ${EXTRA_ENV_KV:-}; do kvs+=("${extra}"); done
     for kv in "${kvs[@]}"; do pin_env_kv "${staged}" "${kv}"; done
+    apply_partition "${staged}" "${MODEL}" || { rm -f "${staged}"; exit 2; }
     mv "${staged}" "${env}"
     arms+=("${arm}")
 done
@@ -228,7 +232,9 @@ for arm in "${arms[@]}"; do
     fi
     # the job reads a read-only per-submission copy, never the re-stageable .env.<arm>
     snapshot=$(snapshot_env "${env}" "${arm}") || exit 2
-    jid=$(sbatch --parsable --no-requeue --partition=mi300 --mem=0 --nodes="${nodes}" --time="${limit}" \
+    part=(--partition=mi300)
+    partition_is_default || mapfile -t part < <(partition_sbatch_args)
+    jid=$(sbatch --parsable --no-requeue "${part[@]}" --mem=0 --nodes="${nodes}" --time="${limit}" \
         --job-name="${arm}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" beverin.sbatch)
     echo "submitted ${arm} -> ${jid} (${nodes} nodes, ${limit}) env ${snapshot}"
 done

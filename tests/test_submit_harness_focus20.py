@@ -54,6 +54,8 @@ SUBMIT_INPUTS = (
     "env_layers.sh",
     "layers/common.env",
     "layers/model-qwen38.env",
+    "layers/partition-mi200.env",
+    "layers/partition-mi200-qwen38.env",
     "submit-harness-focus20.sh",
     "submit_common.sh",
     "make_problems.py",
@@ -98,6 +100,7 @@ KNOBS = frozenset(
         "CONTAINER_RUNTIME",
         "CONTAINER_MOUNTS",
         "HPCAGENT_BENCH_REPO",
+        "PARTITION",
     }
 )
 
@@ -561,3 +564,81 @@ def test_colocate_runs_three_overlapping_steps_on_one_node_with_disjoint_cpus(tm
     assert masks["--judge-node"] == set(range(72, 96))
     assert masks["--agent-node"] == set(range(48, 56)) | set(range(144, 152))
     assert masks["--vllm-node"] == set(range(192)) - set(range(72, 96)) - set(range(168, 192)) - masks["--agent-node"]
+
+
+def arm_envs(root: pathlib.Path) -> dict[str, str]:
+    """Every arm env the submit script wrote, by file name."""
+    return {path.name: path.read_text() for path in sorted((root / "experiments").glob(".env.*"))}
+
+
+def test_partition_mi300_writes_the_same_arm_envs_as_no_partition(tmp_path: pathlib.Path) -> None:
+    """The knob's default is the campaign as it always ran: naming mi300 must not move one byte."""
+    unset, mi300 = submit_tree(tmp_path / "unset"), submit_tree(tmp_path / "mi300")
+    for root, knobs in ((unset, {}), (mi300, {"PARTITION": "mi300"})):
+        result = run_submit(root, SMOKE="1", HARNESSES="claude optimas", **knobs)
+        assert result.returncode == 0, result.stderr
+    assert arm_envs(unset) and arm_envs(unset) == arm_envs(mi300)
+
+
+def test_an_mi200_smoke_runs_the_mi200_images_and_serving_under_an_mi200_experiment(tmp_path: pathlib.Path) -> None:
+    """The mi300 images die at container start on mi200, and FP8/aiter do not exist on MI250X."""
+    root = submit_tree(tmp_path)
+    result = run_submit(root, SMOKE="1", HARNESSES="claude optimas", PARTITION="mi200")
+    assert result.returncode == 0, result.stderr
+    for harness, agent_edf in (("claude", None), ("optimas", "hpcagent-bench-judge-mi200-latest")):
+        env = env_dict(root / "experiments" / f".env.{TAG}-smoke-mi200-qwen38-{harness}")
+        want = {
+            "HPCAGENT_BENCH_PARTITION": "mi200",
+            "HPCAGENT_BENCH_RECORD_EXPERIMENT": f"{TAG}-smoke-mi200",
+            "GPUS_PER_NODE": "8",
+            "AMD_CE_ENV": "hpcagent-bench-agent-mi200-latest",
+            "JUDGE_CE_ENV": "hpcagent-bench-judge-mi200-latest",
+            "INFERENCE_CE_ENV": "hpcagent-bench-sglang-mi200-latest",
+            "VLLM_MODEL": "Qwen/Qwen3.8-27B",
+            "SGLANG_USE_AITER": "0",
+            "SGLANG_ATTENTION_BACKEND": "triton",
+            "COLOCATE": "1",
+        }
+        assert {key: env.get(key) for key in want} == want, harness
+        assert env.get("AGENT_CE_ENV") == agent_edf, harness
+        assert "--mem-fraction-static 0.80" in env["SGLANG_EXTRA_ARGS"]
+        assert "--tool-call-parser qwen3_coder" in env["SGLANG_EXTRA_ARGS"]
+        assert "aiter" not in env["SGLANG_EXTRA_ARGS"]
+    assert not (root / "sbatch-called").exists()
+
+
+def test_an_mi200_arm_whose_experiment_does_not_name_mi200_is_refused(tmp_path: pathlib.Path) -> None:
+    root = submit_tree(tmp_path)
+    result = run_submit(
+        root, SMOKE="1", HARNESSES="claude", PARTITION="mi200", EXPERIMENT="x-smoke", RECORD_EXPERIMENT="x-smoke"
+    )
+    assert result.returncode == 2
+    assert "experiment 'x-smoke' does not name mi200" in result.stderr
+    assert not list((root / "experiments").glob(".env.x-smoke-*"))
+
+
+def test_a_model_with_no_serving_config_on_the_partition_is_refused(tmp_path: pathlib.Path) -> None:
+    root = submit_tree(tmp_path)
+    (root / "experiments" / "layers" / "partition-mi200-qwen38.env").unlink()
+    result = run_submit(root, SMOKE="1", HARNESSES="claude", PARTITION="mi200")
+    assert result.returncode == 2
+    assert "no partition-mi200-qwen38.env: qwen38 has no mi200 config" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("knobs", "want", "absent"),
+    [
+        ({}, ["--partition=mi300"], "--gpus-per-node"),
+        ({"PARTITION": "mi200"}, ["--partition=mi200", "--gpus-per-node=8"], "--partition=mi300"),
+    ],
+)
+def test_the_job_lands_on_the_partition_with_its_gpu_count(
+    tmp_path: pathlib.Path, knobs: dict[str, str], want: list[str], absent: str
+) -> None:
+    root = submit_tree(tmp_path)
+    stub(root / "bin", "sbatch", 'printf "%s\\n" "$@" > "${STUB_MARKERS}/sbatch-args"; echo 4242')
+    result = run_submit(root, SMOKE="1", HARNESSES="claude", SUBMIT="1", **knobs)
+    assert result.returncode == 0, result.stderr
+    args = (root / "sbatch-args").read_text().splitlines()
+    assert [arg for arg in args if arg in want] == want, args
+    assert not [arg for arg in args if arg.startswith(absent)], args
