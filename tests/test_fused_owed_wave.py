@@ -827,6 +827,27 @@ def test_a_kernels_file_limits_the_plan_and_says_what_it_left_out(
     assert any(arm in note and "1 owed kernels outside --kernels-file" in note for note in plan.notes), plan.notes
 
 
+def test_a_kernel_a_promotion_answers_is_never_rerun(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """2026-09-23 X7 promotions: the judge DBs still owe a kernel whose correct final-attempt score a
+    promotion regrade answers, so the plan must leave it out by the worklist, for that arm only."""
+    arm = "cpf-llr-focus40-qwen38-c-subset"
+    runs = model_mismatch_run(tmp_path, "700009", arm, "qwen38")
+    monkeypatch.setattr(owed, "queued_arms", set)
+    monkeypatch.setattr(owed.remaining_kernels, "roster", lambda tag, opt: ["a", "b", "c"])
+    worklist = tmp_path / "worklist.jsonl"
+    items = [{"arm": f"{arm}-clean", "benchmark": "b"}, {"arm": "another-arm", "benchmark": "c"}]
+    worklist.write_text("".join(json.dumps(item) + "\n" for item in items), encoding="utf-8")
+    promoting = owed.promoting_pairs([str(worklist)])
+    assert promoting == frozenset({(arm, "b"), ("another-arm", "c")})
+    plan = owed.gather(
+        "qwen38", runs, str(REPO), owed.Selection(setups=frozenset({arm}), promoting=promoting), 1, 1, set()
+    )
+    assert sorted(stem_of(item) for item in plan.owed) == ["a", "c"]
+    assert any(arm in note and "promotion regrade answers left out: ['b']" in note for note in plan.notes), plan.notes
+
+
 def stem_of(item: object) -> str:
     return str(item.problem["kernel"]).rsplit("/", 1)[-1]
 
