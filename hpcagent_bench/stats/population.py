@@ -350,7 +350,7 @@ def one_reduction(values: Iterable[object], label: str = "", *, allow_unstamped:
     deliberate legacy-only analysis -- never as a script's default.
 
     The final grade's stamps (:data:`FINAL_GRADE_REDUCTIONS`: v2 and its v1 fallback) are ONE
-    reduction here (2026-09-23 USER): the extractor keeps one of them per submission and never
+    reduction here: the extractor keeps one of them per submission and never
     averages the two, so a slice mixing submissions of each is returned as their ``+``-join, and
     each answer keeps its own stamp (:func:`kernel_answers`).
     """

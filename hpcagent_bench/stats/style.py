@@ -247,9 +247,7 @@ def decade_label(value: float, position: int = 0) -> str:
 def ratio_tick_label(value: float) -> str:
     """A ratio tick at full precision: ``0.25 -> "0.25x"``, ``1.0 -> "1x"``, ``4.0 -> "4x"``.
 
-    A ratio below 1 prints as a decimal (user, 2026-09-20). The earlier ``1/n`` spelling only ever
-    worked for a whole reciprocal: it rounded, so a half-octave tick at 0.707 printed ``1/1x``, a
-    ratio of one marking a point 30% below it.
+    A ratio below 1 prints as a decimal, so a half-octave tick (0.707) reads correctly.
     """
     if value == 1.0:
         return "1x"
@@ -272,7 +270,7 @@ def log2_ratio_tick(value: float, position: int = 0) -> str:
 
 def ratio_label(value: float) -> str:
     """A measured ratio printed beside its mark, to one decimal: ``6.3x``, ``32.5x``, ``0.9x``
-    (user, 2026-09-21). One decimal is what a reader quotes; below 0.1x it would print a real
+    -- one decimal is what a reader quotes; below 0.1x it would print a real
     slowdown as ``0.0x``, so those keep one significant figure (``0.04x``). The tick spelling keeps
     full precision, which beside a mark reads ``6.34919x``."""
     if not math.isfinite(value) or value <= 0.0:
@@ -396,7 +394,7 @@ class MinorLocator(Locator):
 
 def minor_ticks(axis: Axis, kind: MinorKind, color: str = MINOR_RULE, width: float = MINOR_GRID_WIDTH) -> None:
     """Unlabelled minor ticks and a light minor grid on the VALUE axis ``axis``, by the one rule every
-    figure shares (user, 2026-09-22: more minor ticks on the paper plots).
+    figure shares.
 
     ``ratio``/``log2``: by the spacing of the majors actually set (:func:`ratio_minor_exponents`).
     ``token``: every whole multiple of a power of ten that is not a major
@@ -424,8 +422,8 @@ def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, 
     """Ticks and a major grid for the axis carrying the MEASURED quantity, plus, on a log axis, the
     shared minor ruling (:func:`minor_ticks`).
 
-    A LOG axis gets unlabelled minor ticks and a light minor grid (user, 2026-09-22, superseding the
-    earlier major-only rule): a ratio (log2) axis by its majors' octave spacing, a token (log10)
+    A LOG axis gets unlabelled minor ticks and a light minor grid: a ratio (log2) axis by its majors'
+    octave spacing, a token (log10)
     axis at every whole multiple of a power of ten. The majors stay the only labelled reference; the minors are shorter,
     lighter and unlabelled, so a reader places a mark between two labels without the panel turning
     into a texture. A LINEAR axis keeps its majors alone: whether it holds ``log2`` units or a

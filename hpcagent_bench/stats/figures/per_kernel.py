@@ -22,7 +22,7 @@ A CELL IS ONE KERNEL'S VALUES FOR ONE SERIES, and its status decides its mark:
   experiment draws plain points, and git-scicomp's 3 episodes stay a point in ``ci`` and become a
   real box in ``box`` (:data:`MIN_EPISODES_FOR_SPREAD`), where three raw quartiles still mean
   something and a bootstrap interval of three does not;
-* undelivered -- served and never verified (the 2026-09-16 rule: it still scores 1x and its tokens
+* undelivered -- served and never verified (it still scores 1x and its tokens
   are still spent): the shape HOLLOW and CROSSED (:func:`~hpcagent_bench.stats.style.point_mark`)
   at the value the cell carries, the 1x placeholder for a missing answer or the ratio a one-sided
   failure left, so a reader never takes it for a measured 1x;
@@ -45,7 +45,7 @@ summaries that agree to a few percent, drawn in one column, hid all but the top 
 carries the series' overall value with its interval and prints the value (tagged
 :data:`~hpcagent_bench.stats.style.CLEAR_GID`, settled clear of the marks at save), over the
 SOLVED kernels only (:func:`kernel_medians`): an undelivered placeholder's 1x and a disowned claim
-are drawn, but neither is a measured speed-up (2026-09-21). Speed-up is a ratio, so its overall
+are drawn, but neither is a measured speed-up. Speed-up is a ratio, so its overall
 value is the GEOMETRIC MEAN (:func:`summary_point_speedup`) -- never a median, which equals the
 geomean only when the values happen to be symmetric; tokens are not a ratio, so theirs is the
 median (:func:`summary_point_tokens`). The statistic is named ABOVE the panel, never as an x tick,
@@ -92,8 +92,7 @@ MIN_EPISODES_FOR_SPREAD: int = 3
 
 #: A single panel's height, inches, for a figure authored at double-column width.
 PANEL_HEIGHT_IN: float = 1.8
-#: A single panel's height at print size (``width_in`` given): a text-width strip of forty kernels
-#: (user, 2026-09-22: 30% shorter than it was).
+#: A single panel's height at print size (``width_in`` given): a text-width strip of forty kernels.
 PRINT_PANEL_HEIGHT_IN: float = 1.12
 
 
@@ -300,8 +299,7 @@ def cell_point(cell: KernelCell, log2_space: bool) -> tuple[float, float, float]
 def kernel_medians(cells: Sequence[KernelCell]) -> np.ndarray:
     """The plotted kernels' own per-kernel medians -- what the summary column reduces one level
     up -- over the SOLVED kernels only: an undelivered placeholder's 1x, a pending kernel and a
-    disowned answer's claim are drawn, but none is a measured value, so none enters the summary
-    (2026-09-21)."""
+    disowned answer's claim are drawn, but none is a measured value, so none enters the summary."""
     return np.array(
         [cell.median() for cell in cells if cell.delivered and not cell.flagged and math.isfinite(cell.median())],
         dtype=np.float64,
@@ -434,8 +432,7 @@ def style_token_axis(
 class Series:
     """One drawn population inside a panel: a model, a language, a device, a condition, a column.
 
-    A panel used to carry exactly one, so colour was a panel-level argument. It is a SERIES
-    property now, because the question "is this kernel hard, or is this model bad at it" needs
+    Colour is a SERIES property, because the question "is this kernel hard, or is this model bad at it" needs
     several populations over one kernel axis to answer. A series with no cells still holds its
     dodge offset and its summary slot, so a series that has nothing to show on one panel of a
     stacked figure (a compiler on the token panel) leaves every other series where the panel

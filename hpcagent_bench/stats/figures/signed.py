@@ -224,7 +224,7 @@ TABLE_COLUMNS: tuple[str, ...] = (
 def solved_ratios(row: Row) -> dict[str, float]:
     """``row``'s ratios over the kernels it SOLVED: a compiler's 1x placeholder (``delivered``
     False) is a row of the per-kernel table and a crossed mark on the figure, but no measurement,
-    so no summary takes it (2026-09-21). A row with no ``delivered`` flags (every TSVC row, every
+    so no summary takes it. A row with no ``delivered`` flags (every TSVC row, every
     agent row) solved every kernel it has a ratio for."""
     return {kernel: ratio for kernel, ratio in row.ratios.items() if row.delivered.get(kernel, True)}
 
