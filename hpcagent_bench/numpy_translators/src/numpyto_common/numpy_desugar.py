@@ -2080,7 +2080,6 @@ class _MgridInline(ast.NodeTransformer):
 
     def __init__(self) -> None:
         self.changed = False
-        self._ctr = 0
 
     def visit_Assign(self, node: ast.Assign):
         self.generic_visit(node)
@@ -2102,7 +2101,6 @@ class _MgridInline(ast.NodeTransformer):
         stmts = _mgrid_inline_stmts([e.id for e in elts], slices)
         if stmts is None:
             return node
-        self._ctr += 1
         self.changed = True
         return stmts
 
