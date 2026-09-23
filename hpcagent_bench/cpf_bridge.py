@@ -161,8 +161,7 @@ def binding_for(rendering: "Rendering", kernel: str, symbol: str) -> Binding:
 
     sdfg = rendering.sdfg
     # The renderer's OWN answer, not a second derivation: CPF qualifies these params ``const`` in
-    # the signature it emits, so asking it keeps the two from disagreeing (cppcheck once reported
-    # ``constParameterPointer`` on every read-only pointer when they did).
+    # the signature it emits, so asking it keeps the two from disagreeing.
     readonly = readonly_entry_arrays(sdfg)
     arglist = sdfg.arglist()
     args: list[Arg] = []

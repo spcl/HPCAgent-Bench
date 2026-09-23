@@ -230,8 +230,7 @@ def build_view(plan: SealPlan) -> None:
                 # One remount per mountpoint the recursive bind just brought in, not one call on
                 # ``path`` alone: MS_REMOUNT ignores MS_REC, so a nested mount under a read-only
                 # root (see :func:`submounts`) would otherwise stay exactly as writable as it was
-                # outside the seal -- measured on beverin's login /opt, which alone carries five
-                # dozen of them (module autofs, cray libs, a nomad secrets mount).
+                # outside the seal (a login node's /opt carries dozens: autofs, cray libs, secrets).
                 for mount_point in submounts(path):
                     try:
                         remount_flags = locked_flags(mount_point)

@@ -308,7 +308,7 @@ def run_bounded(
 
     polycc forks grandchildren (pet, the pluto binary, clang-format) and a plain SIGKILL orphans
     them; the pipes they keep open then wedge the parent's own read, so the bound would not bind.
-    Raises :class:`subprocess.TimeoutExpired` on expiry, like the call it replaces.
+    Raises :class:`subprocess.TimeoutExpired` on expiry, like ``subprocess.run``.
     """
     proc = subprocess.Popen(
         cmd,

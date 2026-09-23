@@ -74,9 +74,7 @@ class ExportRow:
     warnings: str  # JSON list[str]; empty when the row is fully clean
 
     def to_dict(self) -> Dict[str, Any]:
-        # dataclasses.fields, not vars(self): the field list is the declared schema, and vars()
-        # raises once this carries __slots__. Shallow like the dict(vars(...)) it replaces --
-        # asdict() would deep-copy every value, which the callers do not want.
+        # dataclasses.fields, not vars(self): vars() raises under __slots__. Shallow, unlike asdict().
         return {f.name: getattr(self, f.name) for f in dataclasses.fields(self)}
 
 
