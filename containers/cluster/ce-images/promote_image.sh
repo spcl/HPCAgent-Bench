@@ -84,7 +84,8 @@ EDF_DIR="${EDF_DIR:-${HOME}/.edf}"
 # Repoint every EDF that named the image we just renamed.
 #
 # install_edfs.sh (run at the end) re-renders the four MANAGED names from their templates, which
-# is not all of ~/.edf. An EDF written by hand is managed by nothing, so a promotion renames the image out from under it and leaves it pointing at a path that
+# is not all of ~/.edf. An EDF written by hand is managed by nothing, so a promotion renames the
+# image out from under it and leaves it pointing at a path that
 # no longer exists -- the arm then dies at container start with nothing but "image does not exist",
 # a long way from the rename that caused it. sglang-glm-halfconv is one such file and there is no
 # reason to believe it is the last, so this keys off the RENAME rather than off a list of names:

@@ -102,7 +102,8 @@ export NODE0="${NODES[0]}"
 export NNODES="${#NODES[@]}"
 export TP_SIZE="${TP_SIZE:-4}"
 export PP_SIZE="${PP_SIZE:-${NNODES}}"
-# Parsers are MODEL-specific (gpt-oss has no kimi think tokens; the API server dies on them). Defaults fit kimi; the control passes its own, e.g. TOOL_PARSER=openai
+# Parsers are MODEL-specific (gpt-oss has no kimi think tokens; the API server dies on them).
+# Defaults fit kimi; the control passes its own, e.g. TOOL_PARSER=openai
 # REASONING_PARSER=openai_gptoss EXTRA_SERVE_ARGS="--dtype bfloat16".
 export TOOL_PARSER="${TOOL_PARSER:-kimi_k2}"
 export REASONING_PARSER="${REASONING_PARSER:-kimi_k2}"

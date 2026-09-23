@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # SGLang leg of the Kimi-on-gfx942 decision tree. vLLM 0.27.1 is exhausted: TRITON_MLA is
 # correct but prefills at ~300 tok/s (starves the campaign), aiter master-on prefills 3x and
-# runs the campaign shape at 78 tok/s but silently corrupts output past ~9k context. This runs the official SGLang K2.7 gfx942 recipe -- SGLANG_USE_AITER=1,
+# runs the campaign shape at 78 tok/s but silently corrupts output past ~9k context. This runs
+# the official SGLang K2.7 gfx942 recipe -- SGLANG_USE_AITER=1,
 # fused decode MLA off, TP=4 in-node (AITER MLA needs heads%16==0) x PP=2 across 2 nodes,
 # fp8_e4m3 KV, page 64 -- and gates on the SAME long-context accuracy questions before any
 # throughput number counts. Short-context accuracy passes on broken kernels; only the long leg

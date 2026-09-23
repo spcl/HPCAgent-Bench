@@ -3,8 +3,8 @@
 #
 # Serving decodes at ~90-100 tok/s aggregate at 64 concurrent and warns
 # "Using default MoE config ... E=384,N=512,device_name=AMD_Instinct_MI300A,dtype=int4_w4a16.json
-# not found". aiter does not cover the int4 W4A16 expert path, so the fix is vLLM's own tuner: benchmark_moe.py --tune derives the expert
-# shape from the model config and emits exactly that JSON. Serving picks it up via
+# not found". aiter does not cover the int4 W4A16 expert path, so the fix is vLLM's own tuner:
+# benchmark_moe.py --tune derives the expert shape from the model config and emits exactly that JSON. Serving picks it up via
 # VLLM_TUNED_CONFIG_FOLDER -- no image change.
 #
 # The tuner parallelizes the search over every GPU ray sees, hence a full node.
@@ -69,10 +69,9 @@ PY
     # NOT benchmark_moe.py --tune: its ray harness gives one whole batch-size per worker,
     # streams tqdm only into ray worker logs inside the container /tmp, and needs a ray
     # install fighting the visible-devices env (runs for hours with zero observable progress).
-    # Same search space, same
-    # benchmark_config, same save_configs -- driven sequentially on one GPU with one printed
-    # line per config, so cost and ETA are visible from the first minute. ray is imported by
-    # the module at load but never initialized.
+    # Same search space, same benchmark_config, same save_configs -- driven sequentially on one GPU
+    # with one printed line per config, so cost and ETA are visible from the first minute. ray is
+    # imported by the module at load but never initialized.
     if ! python3 -c "import ray" 2>/dev/null; then
         python3 -m pip install --no-cache-dir --quiet --target "${RUN_DIR}/pydeps" ray
         export PYTHONPATH="${RUN_DIR}/pydeps:${PYTHONPATH:-}"
