@@ -30,9 +30,8 @@ def stamp_denominator(observations: pd.DataFrame) -> pd.DataFrame:
 
     The denominator is a property of the job -- the judge was pointed at one reference for the whole
     of it -- so a row the writer left blank is recoverable. It is read from the ``submission`` rows
-    because those are the ones the judge divided and recorded: a ``call`` row takes the field from
-    the trajectory writer, and three jobs carry a stray ``numpy`` there while every graded row of
-    those jobs says ``numba``. A job with no graded row falls back to its remaining rows, and
+    because those are the ones the judge divided and recorded; a ``call`` row takes the field from
+    the trajectory writer, which can disagree. A job with no graded row falls back to its remaining rows, and
     ``one_denominator`` raises rather than picking when even those disagree.
     """
     stamped = observations.copy()
