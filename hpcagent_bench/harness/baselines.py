@@ -384,8 +384,8 @@ class AgentBaseline:
 #   * Weight tuning / router   -> NOT implemented, and not reachable upstream either: its PPO surface
 #     needs trl's removed PPOTrainer (see below), so it would need a pinned trl<1.0 environment.
 #
-# UPSTREAM ``optimas-ai`` IS SUPPORTED, OPT-IN (verified 2026-07-28 in an isolated venv on MODERN
-# dependencies -- transformers 5.14.1, tokenizers 0.22.2, litellm 1.93.0, trl 1.9.2, hub 1.25.1).
+# UPSTREAM ``optimas-ai`` IS SUPPORTED, OPT-IN (runs in an isolated venv on MODERN dependencies --
+# transformers 5.14.1, tokenizers 0.22.2, litellm 1.93.0, trl 1.9.2, hub 1.25.1).
 # ``optimas_proposer`` drives the real OPRO through the ``propose`` seam below.
 #
 #   * The PyPI distribution is ``optimas-ai``. The plain ``optimas`` name belongs to an unrelated
@@ -703,7 +703,7 @@ MODELS: dict[str, ModelSpec] = {
         context_tokens=200_000,
     ),
     # Moonshot's API is OpenAI-shaped, so it needs no backend of its own -- just its endpoint + key.
-    # kimi-k3 (2026-07-27) FIXES its own decoding at temperature 1.0 / top_p 0.95 and ERRORS on any
+    # kimi-k3 FIXES its own decoding at temperature 1.0 / top_p 0.95 and ERRORS on any
     # other value, and deprecates max_tokens for max_completion_tokens -- hence the two capability
     # flags. Its 1M window means the context ladder never fires for it.
     "kimi": ModelSpec(
