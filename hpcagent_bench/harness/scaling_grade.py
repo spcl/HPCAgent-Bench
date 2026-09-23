@@ -74,6 +74,10 @@ GRADE_COLUMNS: tuple[str, ...] = (
     "node",
     "commit_sha",
     "grade_ts",
+    # 2026-09-23 USER: the distribution JSON the replay used -- so an adhoc/smoke grade (no judge
+    # DB behind it, per Item.db's docstring) is self-contained without re-reading the source's own
+    # sidecar file. NULL on a row written before this column existed.
+    "distribution",
 )
 #: A replay's outcomes: a curve; a correct grade whose sweep produced no valid curve; a grade that
 #: failed (fuzz gate or leaderboard run at the job's widest P); a layout the live route refuses
@@ -353,8 +357,13 @@ def open_grades(path: pathlib.Path) -> sqlite3.Connection:
         f"CREATE TABLE IF NOT EXISTS {GRADE_TABLE} ({', '.join(GRADE_COLUMNS)}, PRIMARY KEY ({', '.join(GRADE_KEY)}))"
     )
     regrade.add_missing_columns(conn, GRADE_TABLE, GRADE_COLUMNS)
-    # The curves' own tables, which record_scaling writes into and never creates.
+    # The curves' own tables, which record_scaling writes into and never creates. scaling_points
+    # is also in recording._TABLE_DDL/ADDED_COLUMNS (a results DB migrates it through
+    # recording.connect()), but a shard opened HERE never calls that -- migrate it the same way
+    # GRADE_TABLE just was, or an old shard's scaling_points predates recording.record_scaling's
+    # optional grid/layout/rank_spread columns and every insert into it fails outright.
     conn.execute(SCALING_POINTS_DDL)
+    regrade.add_missing_columns(conn, "scaling_points", ["grid", "layout", "rank_spread"])
     conn.execute(SCALING_CURVES_DDL)
     conn.commit()
     return conn
@@ -383,6 +392,7 @@ def grade_row(
         "detail": reason if graded is None else graded.detail,
         "job": item.job,
         "source_hash": item.source_hash,
+        "distribution": json.dumps(item.distribution) if item.distribution is not None else None,
     }
 
 

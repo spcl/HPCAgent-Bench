@@ -706,6 +706,17 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("attempts", "workspace_bytes", "TEXT"),
     ("calls", "distribution", "TEXT"),
     ("calls", "workspace_bytes", "TEXT"),
+    # 2026-09-23 USER: per scaling POINT, optional analysis fields -- NULL on every point recorded
+    # before this column existed, and on any point a caller does not supply them for (every
+    # non-ML-track sweep today). `grid` is the process grid ACTUALLY used at this P (JSON list,
+    # mpi_descriptor.Grid.dims); `layout` the resolved per-array layout at that grid (JSON: per
+    # pointer, scheme/grid_dim/block_size/replicated); both computed by mpi_descriptor (the one
+    # layout function), never re-derived here. `rank_spread` is this P's per-repeat timing spread
+    # across ranks (JSON: min/median/max, or the full per-rank list at <= 16 ranks) -- the GRADED
+    # `ranked_ns` on the same row (max over ranks, median of k) does not read this column.
+    ("scaling_points", "grid", "TEXT"),
+    ("scaling_points", "layout", "TEXT"),
+    ("scaling_points", "rank_spread", "TEXT"),
 )
 
 #: DDL literal per table that carries :data:`ADDED_COLUMNS` entries -- the rebuild path in
@@ -714,6 +725,7 @@ _TABLE_DDL: dict[str, str] = {
     "runs": _RUNS_DDL,
     "submissions": _SUBMISSIONS_DDL,
     "attempts": _ATTEMPTS_DDL,
+    "scaling_points": SCALING_POINTS_DDL,
     "calls": _CALLS_DDL,
 }
 
@@ -2006,10 +2018,30 @@ def record_scaling(
             p.efficiency,
             shape_json(p.shape),
             p.note or None,
+            json.dumps(p.grid) if p.grid is not None else None,
+            json.dumps(p.layout) if p.layout is not None else None,
+            json.dumps(p.rank_spread) if p.rank_spread is not None else None,
         )
         for p in points
     ] + [
-        (*key, h.ranks, h.nodes, mode, anchor, None, None, None, None, None, shape_json(h.shape), h.note) for h in holes
+        (
+            *key,
+            h.ranks,
+            h.nodes,
+            mode,
+            anchor,
+            None,
+            None,
+            None,
+            None,
+            None,
+            shape_json(h.shape),
+            h.note,
+            None,
+            None,
+            None,
+        )
+        for h in holes
     ]
     where = "WHERE run_id = ? AND ts = ? AND benchmark = ? AND scaling_mode = ?"
     conn.execute(f"DELETE FROM scaling_points {where}", law_key)
@@ -2017,8 +2049,8 @@ def record_scaling(
     conn.executemany(
         """INSERT INTO scaling_points(
             run_id, ts, benchmark, ranks, nodes, scaling_mode, single_rank_ns, ranked_ns, work_ratio,
-            achieved_speedup, ideal_speedup, efficiency, shape, note)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            achieved_speedup, ideal_speedup, efficiency, shape, note, grid, layout, rank_spread)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         sorted(rows, key=lambda row: row[3]),
     )
     if scaling is not None:
