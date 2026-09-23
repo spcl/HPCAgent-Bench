@@ -1,17 +1,10 @@
 #!/usr/bin/env bash
 # Push a built image to a registry, so it can be pulled instead of rebuilt.
 #
-# TWO WAYS IN, and the second exists because the first used to be the only one.
-#
 # podman's graphroot here is /dev/shm/$USER/root -- node-local tmpfs that every build.sh wipes on
-# entry and that dies with the job. So a freshly built image exists only between `podman build`
-# and the end of that job, and the .sqsh left on scratch is a flattened filesystem rather than an
-# OCI image: reimporting one collapses it to a single layer, loses the image config, and lands
-# well over the registry's per-layer ceiling anyway. That is why "push the images we already have"
-# was impossible and an unpushed image had to be REBUILT to be published.
-#
-# build.sh now also writes an OCI archive beside the squashfs, which keeps the layer structure and
-# the config, so publishing no longer has to happen during the build:
+# entry and that dies with the job. The .sqsh left on scratch is a flattened filesystem, not an OCI
+# image: reimporting one collapses it to a single layer and loses the image config. build.sh also
+# writes an OCI archive beside the squashfs, which keeps layers and config. Two ways in:
 #
 #   in-build, from build.sh, straight out of the build graphroot:
 #     REGISTRY_USER=<user> REGISTRY_TOKEN=<token> \
@@ -102,20 +95,10 @@ if awk -v b="${total}" -v m="${MAX_IMAGE_GB}" 'BEGIN { exit !(b > m * 1073741824
     exit 2
 fi
 
-# `podman history` reports per-layer sizes; the largest is the one that decides whether a push can
-# succeed at all. Read them out of --format json, whose `size` is a plain byte count: the Go
-# template's {{.Size}} humanises to strings like `2.05kB` and `0B`, and `numfmt --from=auto`
-# rejects both of those two-letter suffixes. That combination made this gate exit 2 on EVERY
-# image under `set -e`, with the reason swallowed -- a size check meant to prevent a rejected
-# upload was instead refusing all of them.
-# COMPRESSED blob size, which is what the registry actually receives and what its ceiling is
-# about. `podman history` reports the UNCOMPRESSED diff, and the two differ by ~3x here: it called
-# the sglang image's biggest layer 23.3 GB where the blob that would be uploaded is 7.84 GB. Gating
-# on the uncompressed number condemns images that would upload perfectly well, which is a worse
-# failure than not checking -- it sends you into a rebuild you did not need.
-#
-# For an archive the manifest is authoritative and free to read, so prefer it. Only the in-build
-# path (no archive) falls back to history, and there the number is an upper bound, not the limit.
+# The registry ceiling applies to the COMPRESSED blob. `podman history` reports the UNCOMPRESSED
+# diff, ~3x larger here (sglang's biggest layer: 23.3 GB history vs 7.84 GB blob), so the archive
+# manifest is preferred; the in-build path (no archive) falls back to history, an upper bound.
+# History is read via --format json: the Go template's {{.Size}} humanises (`2.05kB`, `0B`).
 biggest=""
 if [[ -n "${ARCHIVE}" ]]; then
     biggest="$(python3 - "${ARCHIVE}" <<'PY'
@@ -159,15 +142,10 @@ if [[ -n "${REGISTRY_USER:-}" && -n "${REGISTRY_TOKEN:-}" ]]; then
     printf '%s' "${REGISTRY_TOKEN}" | "${PODMAN[@]}" login --username "${REGISTRY_USER}" --password-stdin "${registry}"
 fi
 
-# The DIGEST is the version, exactly as build.sh records it locally -- a tag is mutable and two
-# builds under one tag is the thing that made a results table unreadable before. Pushed as
-# `sha-<12>` alongside whatever human-facing tags the caller names, so a campaign can always cite
-# something immutable.
-# What goes UP is an OCI image, stated rather than inherited. podman is only the tool used to
-# move it: `podman push --format` defaults to "manifest type of source, with fallbacks", podman
-# build's default can be flipped by BUILDAH_FORMAT in the environment, and a docker v2s2 manifest
-# would otherwise be published without anything saying so. --format oci below is what makes the
-# published artifact an OCI image regardless of how it was built or which path it took to here.
+# The DIGEST is the version, exactly as build.sh records it locally: a tag is mutable. Pushed as
+# `sha-<12>` alongside whatever tags the caller names, so a campaign can always cite something
+# immutable. --format oci: `podman push` otherwise follows the source manifest type, which
+# BUILDAH_FORMAT can flip to docker v2s2.
 manifest="$("${PODMAN[@]}" image inspect --format '{{.ManifestType}}' "${LOCAL_TAG}")"
 printf 'source manifest: %s\n' "${manifest}"
 printf 'pushing as:      application/vnd.oci.image.manifest.v1+json (forced with --format oci)\n'
