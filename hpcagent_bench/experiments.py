@@ -439,7 +439,8 @@ def drop_cancelled_task_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
 
 
 #: Arm prefixes a campaign was renamed from, and the name it runs under now (``llrblind-cmp`` is the
-#: pre-cmp ``llrblind`` arm under a later name, the same condition, and its data is reused). ``experiments/remaining_kernels.py:base_arm`` applies the same fold to coverage.
+#: pre-cmp ``llrblind`` arm under a later name, the same condition, and its data is reused).
+#: ``experiments/remaining_kernels.py:base_arm`` applies the same fold to coverage.
 RENAMED_ARM_PREFIXES: tuple[tuple[str, str], ...] = (("llrblind-", "llrblind-cmp-"),)
 
 

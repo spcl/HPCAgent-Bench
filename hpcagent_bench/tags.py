@@ -346,14 +346,13 @@ def track_roster(tag: str) -> list[str]:
 def roster(tag: str) -> tuple[str, ...]:
     """The KERNEL NAMES ``tag`` selects, sorted -- the roster a figure filters its rows to.
 
-    Four tiers, the order ``experiments/roster.sh`` has always used: a ``kernels-<tag>.txt`` file,
+    Four tiers, in the order ``experiments/roster.sh`` uses: a ``kernels-<tag>.txt`` file,
     a tags.yaml entry, the manifests carrying ``tag`` in ``experiment_tags``, then the tag read as
     a track name. Names, not path keys: a canon sweep and a judge row both name a kernel by its
     last segment.
 
-    The one chain python callers and the launcher share, so both serve the same roster. Empty is
-    never returned -- an empty roster reads downstream as "nothing selected" rather than "your tag
-    was wrong".
+    A python caller gets the roster the launcher serves. Empty is never returned -- an empty roster
+    reads downstream as "nothing selected" rather than "your tag was wrong".
 
     :raises KeyError: ``tag`` matches no file, no tags.yaml entry, no manifest and no track.
     """
