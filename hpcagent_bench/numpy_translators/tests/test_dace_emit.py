@@ -1784,6 +1784,27 @@ def test_a_store_through_a_reshaped_name_never_writes_through_a_view_dace_cannot
     assert "np.copy" not in _transform(MaterializeWrittenReshape(), observed)
 
 
+def test_a_store_through_a_reshaped_fft_result_writes_a_copy() -> None:
+    """vexx_k's ``fwfft`` inlines to ``out = np.fft.fftn(...)`` then ``rhocg = out.reshape(..., order='F')``
+    and ``rhocg[nl0] += ...``. An fft result is a new array just like ``np.zeros``, so it gets the same
+    copy; before, dace refused the store and vexx_k failed to load in every dace column."""
+    src = (
+        "def k(x, idx, v):\n"
+        "    out = np.fft.fftn(x, axes=(0, 1))\n"
+        "    flat = out.reshape((6,), order='F')\n"
+        "    flat[idx] += v\n"
+        "    return flat\n"
+    )
+    program = _transform(MaterializeWrittenReshape(), src)
+    assert "flat = np.copy(out.reshape((6,), order='F'))" in program, program
+    scope = {"np": np}
+    exec(program, scope)  # noqa: S102
+    x, idx, v = np.arange(6.0).reshape(2, 3), np.array([0, 4]), np.array([10.0, 20.0])
+    want = np.fft.fftn(x, axes=(0, 1)).reshape((6,), order="F")
+    want[idx] += v
+    assert np.array_equal(scope["k"](x, idx, v), want)
+
+
 def test_a_minus_one_flatten_keeps_its_order_when_it_becomes_ravel() -> None:
     """``reshape((-1,), order='F')`` became a plain ``ravel()``, which reads C order: vexx_k's FFT
     output came back permuted, and nothing refused it."""

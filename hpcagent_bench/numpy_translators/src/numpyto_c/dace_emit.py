@@ -788,9 +788,11 @@ class NormalizeReshape(ast.NodeTransformer):
         return ast.fix_missing_locations(node)
 
 
-#: numpy calls that return a new array no other name refers to.
+#: numpy calls that return a new array no other name refers to. The ``np.fft`` transforms always
+#: allocate their result (vexx_k's ``fwfft`` reshapes an ``fftn`` result and writes through it).
 FRESH_ARRAY_CALLS = frozenset(
     {"zeros", "empty", "ones", "full", "zeros_like", "empty_like", "ones_like", "full_like", "copy"}
+    | {f"fft.{kind}{axes}" for kind in ("fft", "ifft", "rfft", "irfft") for axes in ("", "2", "n")}
 )
 
 
