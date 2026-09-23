@@ -291,8 +291,14 @@ def dodge_offsets(count: int) -> list[float]:
 
 
 def draw_ci(
-    ax: matplotlib.axes.Axes, cells: Sequence[KernelCell], x_of: dict[str, int], color: str, log2_space: bool,
-    offset: float = 0.0, marker: str = "o", filled: bool = True,
+    ax: matplotlib.axes.Axes,
+    cells: Sequence[KernelCell],
+    x_of: dict[str, int],
+    color: str,
+    log2_space: bool,
+    offset: float = 0.0,
+    marker: str = "o",
+    filled: bool = True,
 ) -> None:
     for cell in cells:
         x = x_of[cell.kernel] + offset
@@ -458,9 +464,12 @@ def draw_panel(
     if summary_column:
         for one, offset in zip(series, offsets, strict=True):
             cells = [cell for cell in one.cells if cell.kernel in x_of]
-            right_edge = draw_summary_column(
-                ax, cells, n, one.color, summary_reducer, summary_label, offset * 2.0, one.marker, one.filled
-            ) + 0.5
+            right_edge = (
+                draw_summary_column(
+                    ax, cells, n, one.color, summary_reducer, summary_label, offset * 2.0, one.marker, one.filled
+                )
+                + 0.5
+            )
     ax.set_xlim(-0.6, right_edge)
     # Kernel names are the only x TICKS -- the summary column carries its own statistic as an
     # annotation (draw_summary_column), never a tick label, which a shared stacked x axis would
@@ -513,10 +522,6 @@ def token_metric(cells: Sequence[KernelCell], ylabel: str, color: str) -> Metric
 
 def speedup_series_metric(series: Sequence[Series], ylabel: str) -> Metric:
     return Metric(tuple(series), True, ylabel, summary_point_speedup, "Geomean")
-
-
-def token_series_metric(series: Sequence[Series], ylabel: str) -> Metric:
-    return Metric(tuple(series), False, ylabel, summary_point_tokens, "Median")
 
 
 def figure_one(

@@ -22,9 +22,7 @@ rule below, on data extracted with task records (T3).
 
 Scope: `hpcagent_bench/stats/population.py`, `hpcagent_bench/stats/summary.py`,
 `reproducibility/llr40/extract_llr40.py`, `statistics/paired_arms.py`, and every plot script an
-artifact `reproduce.sh` calls. `reproducibility/llr40/analyze_llr40.py` with
-`hpcagent_bench/stats/arms.py` rebuilds the pre-2026-09 llr40 tables with the old reduction and is
-LEGACY: no current artifact or paper number may come from it.
+artifact `reproduce.sh` calls.
 
 ## 1. Data model
 
@@ -456,7 +454,7 @@ family; the table states the pairs it kept.
 | T6 | `agent_driver.cancelled_by_the_job`, `mark_cancelled`, `watch_for_job_cancellation`; `extract_llr40` (`cancelled` column) | `test_agent_driver_cancellation.py`: signal and allocation end cancel, own caps and a finished episode do not; `test_extract_llr40_task_rows.py`: the flag reaches the row |
 | section 9 | `paired_arms.task_usage`, `arm_rows` | `test_paired_arms.py`: usage over selected tasks |
 | section 10 | `paired_arms.impact_rows`, `--impact-out` | `test_paired_arms.py`: impact table rows and orientation |
-| N1-N4 | no write path to the databases in `stats/`, `paired_arms.py` or the plot scripts; `summary` casts to float64; `paired_arms.with_integer_counts`; no rounding before a table write (`paired_arms.py`, `stats/arms.py`) | `test_paired_arms.py`: counts as integers, ratios at full precision |
+| N1-N4 | no write path to the databases in `stats/`, `paired_arms.py` or the plot scripts; `summary` casts to float64; `paired_arms.with_integer_counts`; no rounding before a table write (`paired_arms.py`) | `test_paired_arms.py`: counts as integers, ratios at full precision |
 
 ## 12. Open changes
 

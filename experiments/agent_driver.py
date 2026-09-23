@@ -373,7 +373,6 @@ METRIC_GENERATION = "generation_tokens_total"
 METRIC_PROMPT = "prompt_tokens_total"
 METRIC_RUNNING = "num_requests_running"
 METRIC_WAITING = "num_requests_waiting"
-AGGREGATE_METRICS = (METRIC_GENERATION, METRIC_PROMPT, METRIC_RUNNING, METRIC_WAITING)
 
 #: The Prometheus series each engine publishes for those four. Both engines serve the campaign, and
 #: only the two token counters happen to be spelled alike: SGLang calls the gauges
@@ -588,7 +587,7 @@ def scrape_metrics(url: str, headers: dict[str, str]) -> dict[str, float] | None
 
 
 def engine_totals(text: str) -> dict[str, float] | None:
-    """One exposition's four numbers under :data:`AGGREGATE_METRICS`' names, whichever engine wrote
+    """One exposition's four numbers under the ``METRIC_*`` names, whichever engine wrote
     it, or ``None`` when neither engine's four are all there.
 
     ENGINE-AWARE, and fails closed: the prefix that is PRESENT wins, an exposition carrying neither

@@ -232,10 +232,8 @@ PAPER_CONFIG = dataclasses.replace(
     spine_width=0.5,
 )
 
-#: Back-compat aliases some tests and callers pin by name; both read off :data:`DEFAULT_CONFIG`.
+#: The cloud marker size a test pins by name; reads off :data:`DEFAULT_CONFIG`.
 CLOUD_SIZE: float = DEFAULT_CONFIG.cloud_size
-CLOUD_ALPHA: float = DEFAULT_CONFIG.cloud_alpha
-MARK_SIZE: float = DEFAULT_CONFIG.mark_size
 
 #: Both axes here are always a log-space Student-t interval (SC15 Rules 5/7); named once so the
 #: emitted table's own column names agree with it.
@@ -1430,14 +1428,6 @@ ROW_PANEL_GAP: float = 0.25
 #: padding only -- no whole-row title is drawn; each panel's own subtitle sits INSIDE its box
 #: (:func:`figure_row`'s own ``build``).
 ROW_TITLE_IN: float = 0.05
-ROW_XLABEL_IN: float = 0.55
-
-#: The chrome band below the panels under ``shared_x_label``: just the per-panel tick numbers plus
-#: ONE shared label line -- smaller than :data:`ROW_XLABEL_IN`, which was sized for a per-panel
-#: xlabel drawn INSIDE that band by matplotlib's own auto layout. A shared label is placed by hand
-#: (:func:`figure_row`'s own ``fig.text``) right above the legend, so reserving the wider band left
-#: a dead gap between the tick numbers and it that nothing was actually drawing into.
-SHARED_ROW_XLABEL_IN: float = 0.34  # superseded by text_band; kept for callers pinning it
 
 #: :func:`figure_row`'s worst-case GUESS at the legend's height, for the PROBE pass only -- big
 #: enough that the probe legend never wraps onto more rows than the real one will. The real bottom
@@ -1473,14 +1463,6 @@ NAME_CHAR_EM: float = 0.52
 def panel_name_wrap(side: float, points: float, em: float = NAME_CHAR_EM) -> int:
     """How many characters of a ``points``-sized name fit a span ``side`` inches wide."""
     return max(4, int(side * 72.0 / (points * em)))
-
-
-def name_type_size(text: str, span: float, points: float, lines: int, em: float = NAME_CHAR_EM) -> float:
-    """The largest type at or below ``points`` that folds ``text`` onto ``lines`` within ``span``
-    inches. A name that fits on ONE line gets one line, instead of being folded because the fold
-    was measured at a type nobody was going to set it in."""
-    per_line = -(-len(text) // lines)
-    return min(points, span * 72.0 / (per_line * em))
 
 
 #: The gid a panel's own name is drawn under, so a later pass can find it, measure it and replace
@@ -1720,8 +1702,7 @@ def figure_row(
     )  # fmt: skip
     if shared_x_label:
         # Between the legend (below, up to legend_h/height) and each panel's own tick numbers
-        # (above, right under bottom_in/height) -- the same ROW_XLABEL_IN band a per-panel X label
-        # used to sit in, now drawn once for the row instead of once per panel.
+        # (above, right under bottom_in/height), drawn once for the row instead of once per panel.
         fig.text(
             0.5, (legend_h + MEASURE_PAD_IN) / height, xlabel, ha="center", va="bottom",
             fontsize=config.label_pt, color=style.INK,
@@ -1747,10 +1728,6 @@ def speedup_row_label(over: population.KernelPolicy) -> str:
     """The speed-up row's Y label under ``over``."""
     return SERVED_SPEEDUP_LABEL if over == "served" else MEASURE_LABELS["speedup"]
 
-
-#: A dot-row figure's rows are ABSOLUTE: an arm's own speed-up over the campaign baseline, and the
-#: whole roster's own token bill.
-MEASURE_MODE: str = "absolute"
 
 #: Which way is GOOD on each measure, as the PARENTHETICAL of the axis label -- the slot an axis
 #: label conventionally puts its qualifier in, beside the unit. It rides on the Y title rather than
@@ -1826,11 +1803,6 @@ def alias_footnotes(legs: Sequence[str]) -> list[Line2D]:
     ]
 
 
-#: How far under the axis a model's group name sits, in POINTS below the delivery ticks. In points
-#: rather than an axes fraction: a fraction of a 1.45in row lands in the legend, and a fraction of
-#: a 2.3in one leaves a gap.
-GROUP_LABEL_PAD: float = 3.0
-
 #: How much taller one line of drawn text makes a band than the type itself: leading plus the gap
 #: to whatever sits under it. Bands are DERIVED from the type scale rather than fixed in inches --
 #: a 0.22in band is right above a 13.5pt name and half empty above an 8pt one, and that empty half
@@ -1841,11 +1813,6 @@ LINE_BAND: float = 1.5
 def text_band(points: float, lines: int = 1) -> float:
     """``lines`` of ``points``-sized text as a band height, inches."""
     return points / 72.0 * LINE_BAND * lines
-
-
-#: The band :func:`figure_arm_dots` reserves under the bottom row for the delivery ticks plus the
-#: model names drawn below them, in inches.
-CATEGORY_BAND_IN: float = 0.85  # superseded by text_band; kept for callers pinning it
 
 
 def model_runs(rows: Sequence[ArmRow]) -> list[tuple[str, int, int]]:
@@ -1930,7 +1897,6 @@ LOG = logging.getLogger(__name__)
 #: row's ``i)`` panels at once and a caption referring to "(ii)" cannot mean either.
 PANEL_LETTERS: tuple[str, ...] = ("a", "b", "c", "d", "e", "f", "g", "h")
 PANEL_ROMAN: tuple[str, ...] = ("i", "ii", "iii", "iv", "v", "vi", "vii", "viii")
-NUMBERINGS: tuple[str, ...] = ("letter", "roman")
 
 
 def panel_tag(index: int, numbering: str = "letter") -> str:

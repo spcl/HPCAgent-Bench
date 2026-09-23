@@ -32,7 +32,6 @@ _BENCH = (
 )
 
 N = 32
-LAM = 6.0
 MAX_NEWTON = 20
 INNER_TOL = 1.0e-4
 GMRES_RESTART = 50

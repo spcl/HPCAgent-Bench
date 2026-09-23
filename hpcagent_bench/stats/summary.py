@@ -425,12 +425,6 @@ def geomean_interval(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA, s
     )
 
 
-def interval_method(n: int) -> str:
-    """Which interval :func:`geomean_interval` draws at ``n`` samples, so a figure can name it in
-    its own key without holding the :class:`Interval` the number came out of."""
-    return "log-t" if n >= LOG_T_MIN_SAMPLES else "bootstrap-percentile"
-
-
 def signed_change(ratio: float) -> float:
     """Speed-up ratio -> signed relative change. ``2x -> +1``, ``1x -> 0``, ``0.5x -> -1``.
 

@@ -529,19 +529,11 @@ OFFLOAD_DELIVERY_NAME: str = "OpenMP Offload"
 OFFLOAD_ARM_TOKEN: str = "-c-openmp-"
 
 
-def delivery_name(language: str, device: str = "") -> str:
-    """The display spelling of what an arm DELIVERED: its language, except a GPU C arm, which is an
-    OpenMP target offload (:data:`OFFLOAD_DELIVERY_NAME`)."""
-    key = canonical("languages", str(language).lower())
-    if key == "c" and str(device).lower() == "gpu":
-        return OFFLOAD_DELIVERY_NAME
-    return language_name(key)
-
-
 def arm_delivery_name(arm: str) -> str:
-    """:func:`delivery_name` for an arm read off its NAME. An extracted observations table carries
-    no ``device`` column, so :data:`OFFLOAD_ARM_TOKEN` -- the offload arms' own spelling -- is how a
-    figure grouping those rows sees device=gpu plus language=c."""
+    """The display spelling of what an arm DELIVERED, read off its NAME: its language, except a GPU
+    C arm, which is an OpenMP target offload (:data:`OFFLOAD_DELIVERY_NAME`). An extracted
+    observations table carries no ``device`` column, so :data:`OFFLOAD_ARM_TOKEN` -- the offload
+    arms' own spelling -- is how a figure grouping those rows sees device=gpu plus language=c."""
     name = str(arm)
     if OFFLOAD_ARM_TOKEN in f"-{name}-":
         return OFFLOAD_DELIVERY_NAME

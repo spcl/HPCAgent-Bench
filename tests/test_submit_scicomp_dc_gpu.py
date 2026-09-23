@@ -18,8 +18,6 @@ import pytest
 
 from tests.test_submit_scicomp_dc_cpfsrc import env_dict, run_submit, submit_tree
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
-
 
 def prepared_arms(result: subprocess.CompletedProcess[str]) -> list[str]:
     return [line.split()[1] for line in result.stdout.splitlines() if line.startswith("prepared ")]
@@ -27,8 +25,6 @@ def prepared_arms(result: subprocess.CompletedProcess[str]) -> list[str]:
 
 def env_path(experiments: pathlib.Path, arm: str) -> pathlib.Path:
     return experiments / f".env.{arm}"
-
-
 
 
 @pytest.mark.parametrize(
@@ -132,7 +128,12 @@ def test_offload_without_device_gpu_refuses(tmp_path: pathlib.Path) -> None:
     named it would silently be measuring nothing the record shows."""
     root = submit_tree(tmp_path)
     result = run_submit(
-        root, MODELS="qwen38", ARMS="plain", KERNELS_FILE="kernels-scicomp40.txt", REPEAT="1", JUDGE_NODES="1",
+        root,
+        MODELS="qwen38",
+        ARMS="plain",
+        KERNELS_FILE="kernels-scicomp40.txt",
+        REPEAT="1",
+        JUDGE_NODES="1",
         OFFLOAD="openmp",
     )
     assert result.returncode == 2, result.stdout
@@ -146,8 +147,14 @@ def test_device_gpu_refuses_a_packet_kind(tmp_path: pathlib.Path) -> None:
     baseline is a GPU arm today."""
     root = submit_tree(tmp_path)
     result = run_submit(
-        root, MODELS="qwen38", ARMS="cpf", KERNELS_FILE="kernels-scicomp40.txt", REPEAT="1", JUDGE_NODES="1",
-        DEVICE="gpu", LANGUAGE="hip",
+        root,
+        MODELS="qwen38",
+        ARMS="cpf",
+        KERNELS_FILE="kernels-scicomp40.txt",
+        REPEAT="1",
+        JUDGE_NODES="1",
+        DEVICE="gpu",
+        LANGUAGE="hip",
     )
     assert result.returncode == 2, result.stdout
     assert "DEVICE=gpu supports only ARMS=plain" in result.stderr
@@ -156,7 +163,12 @@ def test_device_gpu_refuses_a_packet_kind(tmp_path: pathlib.Path) -> None:
 def test_an_invalid_device_refuses(tmp_path: pathlib.Path) -> None:
     root = submit_tree(tmp_path)
     result = run_submit(
-        root, MODELS="qwen38", ARMS="plain", KERNELS_FILE="kernels-scicomp40.txt", REPEAT="1", JUDGE_NODES="1",
+        root,
+        MODELS="qwen38",
+        ARMS="plain",
+        KERNELS_FILE="kernels-scicomp40.txt",
+        REPEAT="1",
+        JUDGE_NODES="1",
         DEVICE="nvidia",
     )
     assert result.returncode == 2, result.stdout
@@ -167,7 +179,9 @@ def test_device_cpu_is_the_default_and_leaves_the_control_arm_unchanged(tmp_path
     """The existing scicomp-dc CPU identity (EXPERIMENT, arm name, device column) is untouched by
     this knob: jobs already queued against it must not see their env files move."""
     root = submit_tree(tmp_path)
-    result = run_submit(root, MODELS="qwen38", ARMS="plain", KERNELS_FILE="kernels-scicomp40.txt", REPEAT="1", JUDGE_NODES="1")
+    result = run_submit(
+        root, MODELS="qwen38", ARMS="plain", KERNELS_FILE="kernels-scicomp40.txt", REPEAT="1", JUDGE_NODES="1"
+    )
     assert result.returncode == 0, result.stderr
     assert prepared_arms(result) == ["scicomp-dc-qwen38-plain"]
     env = env_dict(env_path(root / "experiments", "scicomp-dc-qwen38-plain"))
