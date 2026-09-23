@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # SGLang leg of the Kimi-on-gfx942 decision tree. vLLM 0.27.1 is exhausted: TRITON_MLA is
 # correct but prefills at ~300 tok/s (starves the campaign), aiter master-on prefills 3x and
-# runs the campaign shape at 78 tok/s but silently corrupts output past ~9k context (probes
-# 604783/604789/604790). This runs the official SGLang K2.7 gfx942 recipe -- SGLANG_USE_AITER=1,
+# runs the campaign shape at 78 tok/s but silently corrupts output past ~9k context. This runs the official SGLang K2.7 gfx942 recipe -- SGLANG_USE_AITER=1,
 # fused decode MLA off, TP=4 in-node (AITER MLA needs heads%16==0) x PP=2 across 2 nodes,
 # fp8_e4m3 KV, page 64 -- and gates on the SAME long-context accuracy questions before any
 # throughput number counts. Short-context accuracy passes on broken kernels; only the long leg
@@ -38,8 +37,8 @@ export READY_TIMEOUT="${READY_TIMEOUT:-5400}"
 export EDF="${EDF:-${HOME}/.edf/hpcagent-bench-sglang-mi300-latest.toml}"
 # 0.42, not the 0.8-0.9 this knob takes anywhere else: MI300A reports is_integrated, so SGLang
 # sizes the static budget against NODE-WIDE memory and every rank claims all of it. 0.93 read
-# as ~0.79 after the VLM derate and the serving step was OOM-killed at 58.5 GB RSS (620806,
-# exit 0:125) after 68 minutes of load and capture. 0.42 is the fraction the campaign serves.
+# as ~0.79 after the VLM derate and the serving step was OOM-killed at 58.5 GB RSS after 68
+# minutes of load and capture. 0.42 is the fraction the campaign serves.
 #
 # It is only meaningful WITH the node count above. The fraction applies to pre-weight-load
 # node-wide free memory, so the floor is 1 - available/pre and PP decides the numerator: at pp=4
@@ -48,9 +47,9 @@ export EDF="${EDF:-${HOME}/.edf/hpcagent-bench-sglang-mi300-latest.toml}"
 # spot -- "minimum viable = 0.7525". Raise the NODES, not this number.
 # 0.42 needs --cuda-graph-max-bs-decode in the launch args below to mean what it means in the
 # campaign. Without it sglang captures graphs for its default decode batch and the residual comes
-# out of KV: 628052 and its live-image control 628063 both died on an effective 0.357 against a
-# 0.3988 floor, at the campaign's own 4 nodes and pp=4. The cap is in every kimi SGLANG_EXTRA_ARGS;
-# the smoke had dropped it, so it was measuring a topology the campaign never serves.
+# out of KV: an effective 0.357 against a 0.3988 floor, at the campaign's own 4 nodes and pp=4.
+# The cap is in every kimi SGLANG_EXTRA_ARGS; without it the smoke measures a topology the
+# campaign never serves.
 export MEM_FRACTION="${MEM_FRACTION:-0.42}"
 export CONTEXT_LEN="${CONTEXT_LEN:-65536}"
 export SWEEP_CONCURRENCY="${SWEEP_CONCURRENCY:-1 8 16}"
@@ -75,10 +74,9 @@ export PP_SIZE="${PP_SIZE:-${SLURM_NNODES}}"
 # --language-only is NOT a generic "text only" switch in this SGLang: it selects the VLM
 # ENCODER-DISAGGREGATION receiver role, and server_args._handle_encoder_disaggregation raises
 # outright for any architecture off its allowlist. GLM-5.3 (GlmMoeDsaForCausalLM) is text-only
-# to begin with, so it must pass EMPTY here -- 628586 died at launch on exactly this.
-# A 0/1 knob, NOT a string default: ${VAR:-default} substitutes on EMPTY as well as unset, so
-# passing LANGUAGE_ONLY_ARG="" silently reverted to --language-only and killed 628589 with the
-# same encoder-disaggregation error it had already killed 628586 with. 1 for VLM-capable models
+# to begin with, so it must pass EMPTY here.
+# A 0/1 knob, NOT a string default: ${VAR:-default} substitutes on EMPTY as well as unset, so an
+# empty LANGUAGE_ONLY_ARG would silently revert to --language-only. 1 for VLM-capable models
 # (kimi), 0 for text-only ones (GLM-5.3).
 export LANGUAGE_ONLY="${LANGUAGE_ONLY:-1}"
 LANGUAGE_ONLY_ARG=""
@@ -124,21 +122,19 @@ srun --nodes="${SLURM_NNODES}" --ntasks="${SLURM_NNODES}" --ntasks-per-node=1 --
     --cpus-per-task="${SERVE_CPUS}" --environment="${EDF}" bash -c '
   export SGLANG_USE_AITER="${SGLANG_USE_AITER:-1}"
   # FUSED DECODE MLA, off by default because the recipe it came from says so. Overridable from
-  # the submitting environment so an A/B can flip exactly this one flag and nothing else: job
-  # 630338 verified aiter.mla.mla_decode_fwd -- the kernel this routes decode to -- against an
+  # the submitting environment so an A/B can flip exactly this one flag and nothing else:
+  # aiter.mla.mla_decode_fwd -- the kernel this routes decode to -- matches an
   # fp32 reference (max|d| 6e-4 at kv1024, 7e-4 at kv4096), which is the prerequisite for
   # trying it here, NOT evidence that serving with it on is correct. The long-context gates
   # below are what decide that; short-context accuracy passes on broken kernels.
   export SGLANG_ROCM_FUSED_DECODE_MLA="${SGLANG_ROCM_FUSED_DECODE_MLA:-0}"
-  # slurm cgroup rejects sglang default CPU pinning (psutil EINVAL, 604937 node1)
+  # slurm cgroup rejects sglang default CPU pinning (psutil EINVAL)
   export SGLANG_SET_CPU_AFFINITY=0
   export HF_HUB_OFFLINE=1
   export TRITON_CACHE_DIR='"${FAST_SCRATCH}"'/triton-cache-sglang
-  # aiter builds into the read-only image by default; the mha_varlen build on the first request
-  # outran the 300 s watchdog in 610164. Persist it, and the second run pays nothing.
-  # An image that ships a prebuilt /opt/aiter-jit wins; older ones still fall back to
-  # persistent scratch, because aiter JIT-building into a read-only image is what blew the
-  # 300 s watchdog in 610164.
+  # aiter JIT-builds into the read-only image by default, and the first mha_varlen build outruns
+  # the 300 s watchdog. An image that ships a prebuilt /opt/aiter-jit wins; otherwise the build
+  # persists on scratch and the second run pays nothing.
   export AITER_JIT_DIR="${AITER_JIT_DIR:-'"${FAST_SCRATCH}"'/aiter-jit/sglang-rocm-mi30x}"
   mkdir -p "${TRITON_CACHE_DIR}" "${AITER_JIT_DIR}"
   exec /opt/venv/bin/python3 -m sglang.launch_server \
