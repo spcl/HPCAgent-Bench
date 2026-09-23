@@ -672,6 +672,7 @@ def test_a_queued_arm_is_skipped_with_a_note(
     arm = "cpf-llr-focus40-qwen38-c-queuedcheck"
     runs = model_mismatch_run(tmp_path, "700004", arm, "qwen38")
     monkeypatch.setattr(owed, "queued_arms", lambda: {arm})
+    monkeypatch.setattr(owed, "queue_state", lambda: owed.Queue(whole=frozenset({arm})))
     monkeypatch.setattr(owed.remaining_kernels, "roster", lambda tag, opt: ["a"])
     plan = owed.gather("qwen38", runs, str(REPO), owed.Selection(setups=frozenset({arm})), 1, 1, set())
     assert plan.owed == []
@@ -1246,3 +1247,183 @@ def test_the_serving_keys_are_the_model_layers_own_not_common_envs(owed: ModuleT
     serving = owed.serving_keys(str(REPO), "qwen38")
     assert {"INFERENCE_CE_ENV", "VLLM_SERVED_MODEL", "AGENTS_PER_NODE"} <= serving
     assert not {"JUDGE_INPUT_MODE", "HPCAGENT_BENCH_FLAGS_FP_ASSOCIATIVE", "AGENT_SUBMISSION_POLICY_FILE"} & serving
+
+
+# ------------------------------------------------------------------ baseline reuse, queue, preflight
+
+
+@pytest.mark.parametrize(
+    ("model", "track", "device", "language", "arm"),
+    [
+        ("qwen38", "scientific_computing", "cpu", "c", "scicomp-dc-qwen38-plain"),
+        ("kimi27sglang", "scientific_computing", "cpu", "c", "scicomp-perf-playbook-kimi27sglang-plain"),
+        ("oss120b", "scientific_computing", "gpu", "hip", "scicomp-dc-gpu-oss120b-hip-plain"),
+        ("qwen38", "loop_level_reasoning", "cpu", "c", "cpf-llr-focus40-qwen38-c"),
+        ("oss120b", "loop_level_reasoning", "gpu", "c", "gpu-llr-focus40-oss120b-c-openmp-device"),
+        ("qwen38", "loop_level_reasoning", "gpu", "triton-device", "gpu-llr-focus40-qwen38-triton-device"),
+        ("qwen38", "scientific_computing", "cpu", "fortran", ""),
+    ],
+)
+def test_one_baseline_arm_per_model_track_device_and_language(
+    model: str, track: str, device: str, language: str, arm: str
+) -> None:
+    """User 2026-09-19/23: every treatment pairs against ONE baseline arm; none declared is ""."""
+    from hpcagent_bench import campaigns
+
+    assert campaigns.baseline_arm(model, track, device, language) == arm
+
+
+def planned(owed: ModuleType, identity: str, experiment: str, kernels: set[str], **extra: str) -> object:
+    return owed.Planned(identity, experiment, setup_env(identity, **extra), frozenset(kernels))
+
+
+def test_a_treatment_needs_its_baseline_on_every_kernel_it_is_served(owed: ModuleType) -> None:
+    """harness20 mixes scicomp and LLR kernels: each needs the baseline of ITS track, once."""
+    claude = planned(owed, "harness20-qwen38-claude", "harness20", {"gemm", "tsvc_2_s235"})
+    miniswe = planned(owed, "harness20-qwen38-miniswe", "harness20", {"gemm", "jacobi_2d"})
+    assert owed.baseline_needs([claude, miniswe], "qwen38") == {
+        "cpf-llr-focus40-qwen38-c": frozenset({"tsvc_2_s235"}),
+        "scicomp-dc-qwen38-plain": frozenset({"gemm", "jacobi_2d"}),
+    }
+    baseline = planned(owed, "scicomp-dc-qwen38-plain", "scicomp-focus40", {"gemm"})
+    assert "scicomp-dc-qwen38-plain" not in owed.baseline_needs([claude, baseline], "qwen38"), (
+        "a baseline the plan already takes needs nothing extra"
+    )
+
+
+def test_a_skill_less_arm_beside_its_baseline_is_a_per_treatment_control(owed: ModuleType) -> None:
+    control = planned(owed, "scicomp-perf-playbook-qwen38-plain", "scicomp-focus40", {"gemm"})
+    ran = {"scicomp-dc-qwen38-plain": []}
+    assert owed.per_treatment_control(control, "qwen38", ran) == "scicomp-dc-qwen38-plain"
+    assert owed.per_treatment_control(control, "qwen38", {}) == "", "the only control there is stays"
+    harness = planned(owed, "harness20-qwen38-claude", "harness20", {"gemm"})
+    assert owed.per_treatment_control(harness, "qwen38", ran) == "", "another experiment: a treatment"
+    skilled = planned(
+        owed,
+        "scicomp-perf-playbook-qwen38-perf-playbook-cpu",
+        "scicomp-focus40",
+        {"gemm"},
+        HPCAGENT_BENCH_RECORD_PACKET="perf-playbook-cpu",
+    )
+    assert owed.per_treatment_control(skilled, "qwen38", ran) == ""
+    baseline = planned(owed, "scicomp-dc-qwen38-plain", "scicomp-focus40", {"gemm"})
+    assert owed.per_treatment_control(baseline, "qwen38", ran) == ""
+
+
+def queued_snapshot(tmp_path: pathlib.Path, rows: list[dict[str, str]]) -> pathlib.Path:
+    """A queued fused wave's snapshot env, its problems file named relative to it as snapshot_env does."""
+    snapshot = tmp_path / "rendered"
+    snapshot.mkdir(parents=True, exist_ok=True)
+    (snapshot / "owed-x.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    env = snapshot / "owed-x.env"
+    env.write_text("CAMPAIGN_ARM=owed-x\nPROBLEMS_FILE=.rendered/owed-x.jsonl\n")
+    return env
+
+
+def test_a_queued_fused_wave_holds_only_the_kernels_its_problems_name(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression 09-23: a harness20 wave queueing the scicomp baseline's gemm used to mark the whole
+    baseline queued, so the scicomp wave planned none of its other scicomp37 kernels."""
+    rows = [
+        {"arm": "scicomp-dc-qwen38-plain-clean", "kernel": "scientific_computing/dense_linear_algebra/gemm/gemm"},
+        {"arm": "harness20-qwen38-claude-clean", "kernel": "gemm"},
+    ]
+    env = queued_snapshot(tmp_path, rows)
+    stub_command(tmp_path / "bin", "squeue", 'echo "648200|owed-harness20-qwen38-claude-w1"; echo "648201|solo-arm"')
+    stub_command(tmp_path / "bin", "sacct", f'echo "sbatch --export=ALL,CLUSTER_ENV_FILE={env} beverin.sbatch"')
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:{os.environ['PATH']}")
+    state = owed.queue_state()
+    assert state.whole == frozenset({"solo-arm"})
+    assert state.kernels == {
+        "scicomp-dc-qwen38-plain": frozenset({"gemm"}),
+        "harness20-qwen38-claude": frozenset({"gemm"}),
+    }
+
+
+def test_a_fused_queued_arm_still_owes_its_other_kernels(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    arm = "cpf-llr-focus40-qwen38-c-fusedqueue"
+    runs = model_mismatch_run(tmp_path, "700012", arm, "qwen38")
+    monkeypatch.setattr(owed, "queued_arms", lambda: {arm})
+    monkeypatch.setattr(owed, "queue_state", lambda: owed.Queue(kernels={arm: frozenset({"a"})}))
+    monkeypatch.setattr(owed.remaining_kernels, "roster", lambda tag, opt: ["a", "b"])
+    plan = owed.gather("qwen38", runs, str(REPO), owed.Selection(setups=frozenset({arm})), 1, 1, set())
+    assert [stem_of(item) for item in plan.owed] == ["b"], plan.notes
+    assert any("1 owed kernels already in a queued fused wave" in note for note in plan.notes), plan.notes
+
+
+def staged_wave(owed: ModuleType, tmp_path: pathlib.Path, language: str, **rerun: str) -> pathlib.Path:
+    """One planned qwen38 wave staged under tmp_path: its serving from the checkout's model layer,
+    its arm's contract as the arm's own submitter launched it."""
+    layer = dict(owed.job_level(owed.model_layer(str(REPO), "qwen38")))
+    reference = {**layer, "CAMPAIGN_ARM": "gpu-llr-focus40-qwen38-x", "LANGUAGE": language}
+    reference.update({"HPCAGENT_BENCH_RECORD_MODEL": "qwen38", "HPCAGENT_BENCH_RECORD_DEVICE": "gpu"})
+    reference.update({"AGENT_MAX_TOKENS": "48000000", "AGENT_TIMEOUT_SECONDS": "43200"})
+    if language == "triton-device":
+        reference["JUDGE_INPUT_MODE"] = "py-binding"
+    else:
+        reference["HPCAGENT_BENCH_OFFLOAD_RESIDENCY"] = "device"
+    env = tuple({**reference, **rerun}.items())
+    setup = owed.Setup("gpu-llr-focus40-qwen38-x-clean", "gpu-llr-focus40-qwen38-x-clean", "llr-focus40", env)
+    setup = owed.dataclasses.replace(setup, reference=tuple(reference.items()))
+    wave = owed.build_wave("owed-llr-focus40-qwen38-claude-w1", [owed.Owed(setup, {"kernel": "k"}, "budget")], "r")
+    return owed.write_wave(wave, tmp_path)
+
+
+def installed_edfs(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, env: pathlib.Path
+) -> None:
+    edf = tmp_path / "edf"
+    edf.mkdir()
+    values = dict(owed.parse_env(env.read_text()))
+    for key in owed.CE_KEYS:
+        value = values.get(key)
+        if value:
+            (edf / f"{value}.toml").write_text("")
+    monkeypatch.setattr(owed, "EDF_DIR", edf)
+
+
+def test_the_preflight_passes_a_wave_that_keeps_every_contract(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = staged_wave(owed, tmp_path, "triton-device")
+    installed_edfs(owed, tmp_path, monkeypatch, env)
+    assert owed.preflight(env, "15:00:00", str(REPO)) == []
+
+
+def test_the_preflight_refuses_a_triton_setup_judged_from_source(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 2026-09-22 void, caught on the staged files a job reads, not only while planning."""
+    env = staged_wave(owed, tmp_path, "triton-device", JUDGE_INPUT_MODE="source")
+    installed_edfs(owed, tmp_path, monkeypatch, env)
+    problems = owed.preflight(env, "15:00:00", str(REPO))
+    assert any("JUDGE_INPUT_MODE: py-binding -> source" in line for line in problems), problems
+    assert any("JUDGE_INPUT_MODE=source for LANGUAGE=triton-device" in line for line in problems), problems
+
+
+def test_the_preflight_refuses_host_resident_gpu_c_a_short_walltime_and_a_missing_image(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = staged_wave(owed, tmp_path, "c", HPCAGENT_BENCH_OFFLOAD_RESIDENCY="host")
+    monkeypatch.setattr(owed, "EDF_DIR", tmp_path / "no-edf")
+    problems = owed.preflight(env, "14:00:00", str(REPO))
+    assert any("HPCAGENT_BENCH_OFFLOAD_RESIDENCY=host for GPU C" in line for line in problems), problems
+    assert any(line.startswith("walltime 14:00:00: needs 15h") for line in problems), problems
+    assert any(line.startswith("INFERENCE_CE_ENV=") for line in problems), problems
+
+
+def test_the_preflight_refuses_a_serving_key_staged_from_an_older_model_layer(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A wave staged before the final pull runs the old engine args: re-stage it."""
+    env = staged_wave(owed, tmp_path, "triton-device")
+    installed_edfs(owed, tmp_path, monkeypatch, env)
+    layer = owed.job_level(owed.model_layer(str(REPO), "qwen38"))
+    key = next(k for k in sorted(layer) if k not in owed.ARM_CONTRACT_KEYS and k != "INFERENCE_CE_ENV")
+    text = env.read_text()
+    env.write_text(text.replace(f"\n{key}=", f"\n{key}=stale-", 1))
+    problems = owed.preflight(env, "15:00:00", str(REPO))
+    assert any(line.startswith(f"serving key {key}") and "re-stage" in line for line in problems), problems

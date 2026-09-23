@@ -335,8 +335,29 @@ finalize_staged_env() {
 # free text appended inside the "(... nodes)" parenthetical, e.g. a walltime or problem count.
 # NICE=<n> submits with --nice=<n>: a later experiment queues behind the running waves by priority
 # alone, never by a dependency (submit-owed-wave.sh and submit-canon-llr40.sh spell it the same way).
+# The submission ORDER (user, 2026-09-23), one Slurm --nice band per family, first runs first:
+# PRIORITY=<family> submits with that band's --nice. Job size weighs nothing on beverin
+# (PriorityWeightJobSize 0) but a pending job gains ~515 priority an hour (PriorityWeightAge 172800
+# over PriorityMaxAge 14 days), so a band keeps its order only against families submitted within
+# (gap / 515) hours after it: submit the families in this order.
+declare -A PRIORITY_NICE=([regrade]=0 [llr-gpu-device]=1000 [harness20]=2000 [scicomp]=3000 [mlscale]=4000 [kimi]=10000)
+
+# priority_nice -- NICE from PRIORITY (PRIORITY_NICE); refuses an unknown family or a NICE that
+# disagrees with it. Without PRIORITY, NICE stays whatever the caller set.
+priority_nice() {
+    [[ -n "${PRIORITY:-}" ]] || return 0
+    local band="${PRIORITY_NICE[${PRIORITY}]:-}"
+    [[ -n "${band}" ]] || { echo "PRIORITY=${PRIORITY} is not one of: ${!PRIORITY_NICE[*]}" >&2; return 2; }
+    if [[ -n "${NICE:-}" && "${NICE}" != "${band}" ]]; then
+        echo "PRIORITY=${PRIORITY} submits at nice ${band}; NICE=${NICE} disagrees" >&2
+        return 2
+    fi
+    NICE="${band}"
+}
+
 submit_arm_job() {
     local env="$1" arm="$2" walltime="$3" dep_ids="${4:-}" begin="${5:-}" detail="${6:-}"
+    priority_nice || return 2
     local nodes; nodes=$(arm_nodes "${env}")
     if [[ "${SUBMIT:-1}" != 1 ]]; then
         echo "prepared ${arm} (${nodes} nodes${detail})${begin:+ begin ${begin}}${dep_ids:+ after ${dep_ids}}${NICE:+ nice ${NICE}} -- not submitted"

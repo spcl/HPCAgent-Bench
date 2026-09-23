@@ -338,27 +338,62 @@ def planned_fused_arms(job_id: str) -> set[str]:
 
     Used while the job has no run directory yet, so a queued fused wave still shows as running on
     every arm it will serve. Empty when accounting or the snapshot cannot be read."""
+    env = submitted_env(job_id)
+    return setups_file_arms(env) if env is not None else set()
+
+
+def planned_fused_kernels(job_id: str) -> dict[str, set[str]]:
+    """arm -> kernels a fused job was SUBMITTED to serve (:func:`problems_file_kernels`); empty when
+    accounting or the snapshot cannot be read."""
+    env = submitted_env(job_id)
+    return problems_file_kernels(env) if env is not None else {}
+
+
+def snapshot_file(env: pathlib.Path, key: str) -> pathlib.Path | None:
+    """The file ``key`` (SETUPS_FILE, PROBLEMS_FILE) of a fused job's snapshot env names, None when
+    unset or missing. A relative one sits beside the snapshot (env_layers.sh snapshot_env writes all
+    three under one stem), so it resolves in the checkout that SUBMITTED the job, never in the one
+    reading it: a worktree's planner read the live checkout's running waves as serving nothing, and
+    planned their kernels a second time."""
+    lines = env.read_text(encoding="utf-8").splitlines()
+    value = next((line.partition("=")[2] for line in reversed(lines) if line.startswith(f"{key}=")), "")
+    path = pathlib.Path(value) if os.path.isabs(value) else env.parent / pathlib.PurePath(value).name
+    return path if value and path.is_file() else None
+
+
+def setups_file_arms(env: pathlib.Path) -> set[str]:
+    """The arms named by the SETUPS_FILE a fused job's snapshot env points at (:func:`snapshot_file`)."""
+    path = snapshot_file(env, "SETUPS_FILE")
+    if path is None:
+        return set()
+    spec = json.loads(path.read_text(encoding="utf-8")).get("setups", {})
+    return {str(entry.get("arm") or "") for entry in spec.values()} - {""}
+
+
+def problems_file_kernels(env: pathlib.Path) -> dict[str, set[str]]:
+    """arm -> the kernel names the PROBLEMS_FILE of a fused job's snapshot env serves it; empty when
+    the file cannot be read. What a queued wave WILL serve, kernel by kernel: an arm with one kernel
+    queued still owes the rest (owed_wave.queued_fused_kernels)."""
+    path = snapshot_file(env, "PROBLEMS_FILE")
+    if path is None:
+        return {}
+    served: dict[str, set[str]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            row = json.loads(line)
+            kernel = str(row.get("kernel") or "").rsplit("/", 1)[-1]
+            if row.get("arm") and kernel:
+                served.setdefault(str(row["arm"]), set()).add(kernel)
+    return served
+
+
+def submitted_env(job_id: str) -> pathlib.Path | None:
+    """The CLUSTER_ENV_FILE snapshot a job was submitted with (sacct SubmitLine), None when unread."""
     out = subprocess.run(
         ["sacct", "-X", "-n", "-P", "-j", job_id, "-o", "SubmitLine"], capture_output=True, text=True, check=False
     )
     match = re.search(r"CLUSTER_ENV_FILE=(\S+)", out.stdout)
-    if not match or not os.path.isfile(match.group(1)):
-        return set()
-    return setups_file_arms(pathlib.Path(match.group(1)))
-
-
-def setups_file_arms(env: pathlib.Path) -> set[str]:
-    """The arms named by the SETUPS_FILE a fused job's snapshot env points at. A relative one sits
-    beside the snapshot (env_layers.sh snapshot_env writes both under one stem), so it resolves in the
-    checkout that SUBMITTED the job, never in the one reading it: a worktree's planner read the live
-    checkout's running waves as serving nothing, and planned their kernels a second time."""
-    lines = env.read_text(encoding="utf-8").splitlines()
-    setups = next((line.partition("=")[2] for line in reversed(lines) if line.startswith("SETUPS_FILE=")), "")
-    path = pathlib.Path(setups) if os.path.isabs(setups) else env.parent / pathlib.PurePath(setups).name
-    if not setups or not path.is_file():
-        return set()
-    spec = json.loads(path.read_text(encoding="utf-8")).get("setups", {})
-    return {str(entry.get("arm") or "") for entry in spec.values()} - {""}
+    return pathlib.Path(match.group(1)) if match and os.path.isfile(match.group(1)) else None
 
 
 def fused_job_arms(job: Job, dirs: dict[str, pathlib.Path]) -> set[str]:

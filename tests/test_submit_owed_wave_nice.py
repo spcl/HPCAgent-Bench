@@ -25,6 +25,9 @@ import json, os, pathlib, sys
 if "--per-problem-keys" in sys.argv:
     print("CAMPAIGN_ARM")
     raise SystemExit(0)
+if "--preflight" in sys.argv:
+    pathlib.Path(os.environ["STUB_MARKERS"], "preflight-argv.json").write_text(json.dumps(sys.argv[1:]))
+    raise SystemExit(int(os.environ.get("STUB_PREFLIGHT_RC", "0")))
 out = pathlib.Path(sys.argv[sys.argv.index("--out") + 1])
 out.parent.joinpath("planner-call.json").write_text(json.dumps({"argv": sys.argv[1:], "pythonpath": os.environ.get("PYTHONPATH", "")}))
 env = out / ".env.owed-harness20-qwen38-openhands-w1"
@@ -40,7 +43,7 @@ def stub(directory: pathlib.Path, name: str, body: str) -> None:
     path.chmod(0o755)
 
 
-def submit(tmp_path: pathlib.Path, submit_flag: str = "1", **knobs: str) -> list[str]:
+def submit(tmp_path: pathlib.Path, submit_flag: str = "1", expect_rc: int = 0, **knobs: str) -> list[str]:
     """The sbatch argv one SUBMIT=1 run of the launcher sends, with ``knobs`` in its environment."""
     experiments = tmp_path / "experiments"
     experiments.mkdir(exist_ok=True)
@@ -69,7 +72,7 @@ def submit(tmp_path: pathlib.Path, submit_flag: str = "1", **knobs: str) -> list
         timeout=120,
         check=False,
     )
-    assert done.returncode == 0, done.stderr
+    assert done.returncode == expect_rc, done.stderr
     argv = tmp_path / "sbatch-argv.txt"
     return argv.read_text(encoding="utf-8").splitlines() if argv.exists() else []
 
@@ -114,3 +117,32 @@ def test_the_planner_imports_the_package_from_the_checkout_it_runs_in(tmp_path: 
     """Without it: ModuleNotFoundError: No module named 'hpcagent_bench' unless the caller exported one."""
     submit(tmp_path)
     assert str(planner_call(tmp_path)["pythonpath"]).split(os.pathsep)[0] == str(tmp_path)
+
+
+def test_a_family_submits_at_its_priority_band(tmp_path: pathlib.Path) -> None:
+    """User 2026-09-23: PRIORITY names the family, submit_common.sh's PRIORITY_NICE its --nice."""
+    assert "--nice=2000" in submit(tmp_path, PRIORITY="harness20")
+
+
+def test_the_priority_bands_follow_the_users_submission_order() -> None:
+    script = f'. "{EXPERIMENTS / "submit_common.sh"}" 2>/dev/null; for f in regrade llr-gpu-device harness20 scicomp mlscale kimi; do echo "${{PRIORITY_NICE[$f]}}"; done'
+    done = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, check=True, env={**os.environ, "OPT": str(REPO)}
+    )
+    bands = [int(line) for line in done.stdout.split()]
+    assert bands == [0, 1000, 2000, 3000, 4000, 10000]
+
+
+def test_an_unknown_family_or_a_disagreeing_nice_submits_nothing(tmp_path: pathlib.Path) -> None:
+    assert submit(tmp_path, expect_rc=2, PRIORITY="harness") == []
+    other = tmp_path / "other"
+    other.mkdir()
+    assert submit(other, expect_rc=2, PRIORITY="kimi", NICE="0") == []
+
+
+def test_every_planned_wave_passes_the_preflight_before_anything_is_submitted(tmp_path: pathlib.Path) -> None:
+    submit(tmp_path)
+    assert json.loads((tmp_path / "preflight-argv.json").read_text())[-1] == str(tmp_path / "out")
+    failed = tmp_path / "failed"
+    failed.mkdir()
+    assert submit(failed, expect_rc=2, STUB_PREFLIGHT_RC="1") == [], "a FAIL submits no wave"
