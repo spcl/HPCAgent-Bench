@@ -2372,7 +2372,7 @@ def claude_command(context: "Context") -> list[str]:
         claude_bin,
         *(["--bare"] if bare else []),
         # The prompt must precede the variadic tool flags: after --disallowedTools it is consumed
-        # as deny rules and claude exits 1 with no input (all 10 agents, 585091).
+        # as deny rules and claude exits 1 with no input.
         "--print",
         prompt,
         "--model",
@@ -2387,7 +2387,7 @@ def claude_command(context: "Context") -> list[str]:
         # small event per request, not a copy of the transcript.
         *(["--include-partial-messages"] if claude_supports_flag(claude_bin, "--include-partial-messages") else []),
         # Non-interactive: a permission prompt has no one to answer it, and a --print agent that
-        # pauses to ask simply ends its run unsubmitted (5 of 10 agents, 585108).
+        # pauses to ask simply ends its run unsubmitted.
         "--permission-mode",
         "bypassPermissions",
         # Full per-turn JSONL transcript in claude.log: the judge records /submit only, so iteration
