@@ -52,7 +52,7 @@ mkdir -p "$(dirname "${EDF}")"
 # PER PROFILE, and that is not tidiness. Naming both prefixes in one PATH does not work: the
 # rocm/pytorch base ships /opt/venv, and the vLLM images install vLLM into /opt/pytorch211 --
 # so a PATH with /opt/venv/bin first probes the BASE venv and reports vllm and aiter missing from
-# an image that has them (job 627183). Each image has exactly one interpreter that matters.
+# an image that has them. Each image has exactly one interpreter that matters.
 case "${PROFILE}" in
     sglang|sglang-mi200) ce_path="/opt/venv/bin" ;;
     vllm)                ce_path="/opt/pytorch211/bin" ;;
@@ -156,9 +156,8 @@ rc=$?
 
 # Self-containment is part of ACCEPTANCE, not a separate errand. An image that has every library
 # but reaches a host directory for one of them is not reproducible: its behaviour depends on the
-# state of somebody's scratch rather than on its digest. That is not hypothetical -- cupy and
-# flydsl arrived through PYTHONPATH=${SCRATCH}/pyprefix for the sglang arms, invisible to the
-# digest, until both were baked in. Run with the SAME EDF, so it sees what a real job sees.
+# state of somebody's scratch rather than on its digest. Run with the SAME EDF, so it sees what a
+# real job sees.
 echo "=== self-containment: nothing may resolve outside the image ==="
 case "${PROFILE}" in
     sglang)        sc_modules="numpy,torch,sglang,flydsl,triton,cupy" ;;
