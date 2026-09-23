@@ -2441,6 +2441,7 @@ CLAUDE_TURN_HEADROOM_FRACTION = 0.12
 #: claude-code 2.1.197 compacts at floor(E * pct / 100), E = window - min(max output, this).
 CLAUDE_SUMMARY_RESERVE = 20000
 
+
 def served_context(environment: Mapping[str, str]) -> int:
     """The window the engine enforces; ``harnesses.served_context`` is the one implementation (its
     policy cap equals :data:`CLAUDE_CONTEXT_CAP`)."""
