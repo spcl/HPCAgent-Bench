@@ -42,7 +42,9 @@ def _post(port: int, path: str, body: dict) -> tuple[int, dict]:
         with urllib.request.urlopen(req, timeout=300) as r:
             return r.status, json.loads(r.read())
     except urllib.error.HTTPError as refused:
-        return refused.code, json.loads(refused.read())
+        # An HTTPError owns the response body's file; left to the collector it is a ResourceWarning.
+        with refused:
+            return refused.code, json.loads(refused.read())
 
 
 def test_catalog_refusal_is_none_for_an_empty_request() -> None:
