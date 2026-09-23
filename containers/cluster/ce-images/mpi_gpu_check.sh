@@ -103,9 +103,9 @@ fi
 # libfabric's tcp provider, several times slower, with every assertion above still green.
 #
 # Read what the LIVE process mapped, not what ldd predicts. The two disagree exactly where it
-# matters: MPICH binds its libfabric by RPATH, RPATH is searched before LD_LIBRARY_PATH, and in
-# 629966 that pinned it to a providerless /opt/spack-install libfabric while ldd against a
-# different search order looked fine. The compile-only stub is deleted from the image so the
+# matters: MPICH binds its libfabric by RPATH, RPATH is searched before LD_LIBRARY_PATH, and that
+# can pin it to a providerless /opt/spack-install libfabric while ldd against a different search
+# order looks fine. The compile-only stub is deleted from the image so the
 # loader falls through to the artifact; this is the check that proves the fall-through happened.
 cat >"${work}/prov.c" <<'C'
 #include <mpi.h>
@@ -279,11 +279,9 @@ if [[ -n "${plugin}" ]]; then
     # At run time nothing of the sort happens: libc is already mapped by the program interpreter
     # before any dlopen, and the image's 2.39 satisfies them all.
     #
-    # Job 630088 is why this distinction is written down rather than inferred. It reported
-    # "rccl-deps FAIL, GLIBC_2.38 not found" and, four lines below, "rccl-net OK, Using network AWS
-    # Libfabric" -- in the SAME run, on a plugin that 630033 had just driven through a correct
-    # 8-rank cross-node collective. Failing on that rejects a working stack for an artefact of the
-    # diagnostic, which is the error this file exists to stop making.
+    # A run can report "rccl-deps FAIL, GLIBC_2.38 not found" and "rccl-net OK, Using network AWS
+    # Libfabric" on a plugin that drives a correct cross-node collective; failing on the first
+    # rejects a working stack for an artefact of the diagnostic.
     #
     # So: "=> not found" (an absent library) FAILS. "version `GLIBC_x' not found" is REPORTED and
     # does not fail, because rccl-net below tests the thing that actually matters -- selection.

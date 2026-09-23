@@ -12,9 +12,7 @@
 #   REPO=$PWD IMAGE_DIR=containers/cluster/ce-images/sglang-mi200 \
 #     sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 containers/cluster/ce-images/build_and_verify.sbatch
 #
-# WHY ONE JOB. build.sbatch produced an artifact and told the operator, in prose, to go and verify
-# it separately. Nothing enforced that, so an image could be built, named and promoted without the
-# verifier ever running -- which is how a v6 with no agent tools reached a campaign and emptied it.
+# WHY ONE JOB. A build verified separately can be promoted without the verifier ever running.
 # Chaining the two here means a build that cannot pass verification does not report success, and
 # the artifact keeps its CANDIDATE name until a human promotes it.
 #

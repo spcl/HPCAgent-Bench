@@ -15,7 +15,7 @@
 # for what is, on top of the agent, one pip layer. So this takes the agent image the full build
 # already saved, and builds only the Dockerfile's `judge` stage on it (AGENT_BASE, top of the
 # Dockerfile): no toolchain rebuild, a login node is enough. The agent layers are the archive's
-# own blobs (all 55 for 2cf442701), so a push of the judge uploads only the judge's own layers.
+# own blobs, so a push of the judge uploads only the judge's own layers.
 #
 # The build CONTEXT is a detached worktree at <git-ref> under the scratch spool dir, removed at
 # exit, so the image carries exactly that commit and never a dirty tree. The DOCKERFILE is this
@@ -27,8 +27,8 @@
 #
 # Login-node safe: a PRIVATE podman store on /dev/shm (the shared graphroot is never touched, see
 # ce_private_podman_store), archive unpack and save spooled to scratch, mksquashfs capped at
-# ENROOT_MAX_PROCESSORS threads. Measured for 2cf442701 on beverin-ln001: 28 min (agent load 8.5,
-# judge stage 10.5, squashfs 2.5, OCI save 6.5), peak /dev/shm 69 GB (the unpacked agent image).
+# ENROOT_MAX_PROCESSORS threads. Measured on beverin-ln001: 28 min (agent load 8.5, judge stage
+# 10.5, squashfs 2.5, OCI save 6.5), peak /dev/shm 69 GB (the unpacked agent image).
 #
 #   CE_IMAGES         image directory (default ${SCRATCH}/ce-images)
 #   AGENT_ARCHIVE     agent OCI archive (default <CE_IMAGES>/<JUDGE_AGENT_AMD_SQSH>.oci.tar)

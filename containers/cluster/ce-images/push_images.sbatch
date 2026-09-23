@@ -56,8 +56,7 @@ role_sqsh() {
     esac
 }
 
-# The tag each role publishes, from the explicit map in images.env. This called sqsh_tag, which
-# images.env stopped defining when tags became a map, so every role died on "command not found".
+# The tag each role publishes, from the explicit map in images.env.
 role_tag() {
     case "$1" in
         judge-agent-amd) printf '%s' "${JUDGE_AGENT_AMD_TAG}" ;;
