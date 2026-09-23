@@ -41,7 +41,7 @@ sbatch --nodes="${nodes}" --partition=mi300 \
 squeue -u "$USER" -o "%.10i %.30j %.9T %.10M %.5D %R"           # 3. watch it
 ```
 
-**Downloading is the default, and it is not just the fast path.** A pull gets the same bytes we
+**Downloading is the default.** A pull gets the same bytes we
 published, so the digest in a results table is the digest that ran; a rebuild from the same
 Dockerfile is a different image that merely resembles it, because apt and PyPI move underneath.
 Build only when you are CHANGING an image or a role has not been published yet -- one node, several

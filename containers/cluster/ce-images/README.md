@@ -81,22 +81,16 @@ WEIGHTS READY: downloaded and wide-striped under $HF_HOME
 
 `STILL NARROW` above zero, or `no blobs over 1G found`, fails the job -- the second catches a
 metadata-only directory, which is what an interrupted download leaves behind and what a serving
-job would otherwise hit as a confusing runtime error. Measured: the audit over all four models
-takes ~4 s (job 630444); a fresh 7B download plus verify took 52 s (job 630445).
-
-Restriping is safe only while nothing is serving that model.
+job would otherwise hit as a confusing runtime error. The audit over all four models takes ~4 s;
+a fresh 7B download plus verify takes ~52 s.
 
 **Do not skip step 2 because the weights are already on disk.** A checkpoint downloaded into a
 stripe-1 layout loads at ONE OST's bandwidth: measured, kimi's 554 GiB took 55 minutes, against
-9.45 GB/s at 16 readers on a wide-striped iopsstor (0.83 GB/s on the retired Lustre scratch mount).
-`run_cluster.sh` sets a
-PFL default on the hub dir, and inheritance USUALLY works: the five models fetched in 2026-08 got
-it, and a control download of Qwen2.5-Coder-7B into a fresh hub dir (job 630445) came down with
-all 4 of its >1G blobs already at stripe_count 16, restriping nothing. But GLM-5.3, downloaded
-into that same directory on 2026-09-08, arrived with all 141 blobs at `stripe_count 1`. So
-inheritance is the common case and NOT a guarantee -- which is why `fetch_weights.sbatch`
-restripes and then VERIFIES, and fails the job when a blob did not move. `lfs migrate` exits 0
-having migrated nothing, so its exit code proves nothing on its own.
+9.45 GB/s at 16 readers on a wide-striped iopsstor. `run_cluster.sh` sets a PFL default on the hub
+dir, and inheritance usually works but is NOT a guarantee: GLM-5.3, downloaded into that same
+directory, arrived with all 141 blobs at `stripe_count 1`. So `fetch_weights.sbatch` restripes and
+then VERIFIES, and fails the job when a blob did not move. `lfs migrate` exits 0 having migrated
+nothing, so its exit code proves nothing on its own.
 
 Set `HF_TOKEN` before a large fetch if you have one: unauthenticated downloads are rate-limited
 (the hub says so on stderr) and 1.5 TB is where that starts to matter.
@@ -124,7 +118,9 @@ sidecar, not a tag.
 ```bash
 # every role, on a compute node (enroot unpacks 60+ GB before it writes the squashfs, and
 # extraction onto Lustre fails outright -- a rootless overlay cannot create its pivot dir there)
-sbatch containers/cluster/ce-images/pull_images.sbatch   # one role, pinned to a digest -- what a results table should cite
+sbatch containers/cluster/ce-images/pull_images.sbatch
+
+# one role, pinned to a digest -- what a results table should cite
 ./pull_image.sh judge-agent-amd sha-<digest>
 
 # then point the EDFs at what you fetched
@@ -184,10 +180,9 @@ The rename is **safe while arms are running**: a mounted squashfs is held by its
 that already started keeps reading the bytes it opened and only new jobs see the new image.
 Overwriting a file in place is NOT safe -- that is why builds go to a candidate name first.
 
-The script moves `.digest`, `.sha256` **and `.oci.tar`** with the image, which is the half that
-used to get forgotten when this was four hand-typed `mv` lines. The first two are the only record
-of *which* build a name currently holds -- with one version per role there is nothing else to tell
-two builds apart. The `.oci.tar` matters for a different reason: it is what
+The script moves `.digest`, `.sha256` **and `.oci.tar`** with the image. The first two are the only
+record of *which* build a name currently holds -- with one version per role there is nothing else to
+tell two builds apart. The `.oci.tar` matters for a different reason: it is what
 `push_image.sh --from-archive` publishes. Leave it behind and the archive under the live name is
 still the SUPERSEDED build, so the next push sends the old bytes under the promoted tag -- the
 registry and the cluster then disagree while every checksum looks fine.

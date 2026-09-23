@@ -80,10 +80,9 @@ JSON output includes:
 
 ## Install Notes
 
-The tool uses Crawl4AI in production. It is not just a raw page fetcher: live mode
-uses `arun_many()` for multi-URL crawling, `DefaultMarkdownGenerator` with citations,
-and `BM25ContentFilter(user_query=<query>)` so each page is reduced to content that
-matches the question before it is sent to the LLM.
+The tool uses Crawl4AI in production. Live mode uses `arun_many()` for multi-URL crawling,
+`DefaultMarkdownGenerator` with citations, and `BM25ContentFilter(user_query=<query>)` so each
+page is reduced to content that matches the question before it is sent to the LLM.
 
 Install:
 
