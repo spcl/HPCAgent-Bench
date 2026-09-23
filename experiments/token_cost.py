@@ -119,7 +119,7 @@ CACHE_DISCOUNT: float = 0.0
 #: token (Anthropic, OpenAI and Meta all price it near 10 percent), so ``effective_provider`` charges
 #: every re-read prefix at that rate. It is the number a hosted-service arm pays in dollars, and it
 #: grows with turn count the way the bill does; ``effective`` (the free reading) does not. Both are
-#: recorded per task, beside ``billed``; the USER (2026-09-16) asked for all three side by side.
+#: recorded per task, beside ``billed``.
 PROVIDER_CACHE_DISCOUNT: float = 0.1
 
 #: Usage fields that make up one turn's INPUT. Cache fields are summed in because a turn served
@@ -190,8 +190,8 @@ USAGE_EVENT_MARKERS: tuple[str, ...] = (
 )
 
 #: claude-code's own system event marking a PROACTIVE compaction (2.1.197, claude_context_env in
-#: agent_driver.py): the CLI replaced the transcript with a request for a summary. USER 2026-09-22,
-#: measured: that request's own tokens never appear as an "assistant" stream event the way a normal
+#: agent_driver.py): the CLI replaced the transcript with a request for a summary. Measured: that
+#: request's own tokens never appear as an "assistant" stream event the way a normal
 #: turn's do -- only the session-cumulative ``result.modelUsage`` (below) includes them, so every
 #: fold that sums per-turn "assistant" usage undercounts by exactly one such call per compaction.
 COMPACT_BOUNDARY_SUBTYPE = "compact_boundary"

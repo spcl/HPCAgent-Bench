@@ -31,8 +31,7 @@ import urllib.request
 
 #: One promotion is a full grade, so it waits as long as the ROUTER waits on the judge for one
 #: (judge_service.UPSTREAM_TIMEOUT_SECONDS, same variable). Stopping sooner saves the judge nothing: it
-#: keeps grading, and teardown kills the grade. 633871 stopped at a fixed 1800 s, 2 s before its steps
-#: were killed, with 28 min of allocation left; grades of 1616-2030 s are on record.
+#: keeps grading, and teardown kills the grade. Grades of 1616-2030 s are on record.
 SUBMIT_TIMEOUT_S = float(os.environ.get("JUDGE_UPSTREAM_TIMEOUT_SECONDS", "5400"))
 
 #: Allocation kept back for what runs after the agent step exits (the utilization, token and
@@ -41,8 +40,8 @@ TEARDOWN_MARGIN_S = 300.0
 
 #: Ceiling on the WHOLE promotion pass, mirroring ``record.harvest_budget_s``: runs at teardown
 #: inside the job's remaining wall clock, and outliving it kills every promotion, graded ones
-#: included. Job 626557 spent 900s on tsvc_2_s2233 alone (judge contention); three such kernels
-#: would exceed the 37 minutes an arm has left. What the budget cuts is REPORTED, never dropped.
+#: included. One kernel can take 900 s under judge contention. What the budget cuts is REPORTED,
+#: never dropped.
 PROMOTE_BUDGET_S = float(os.environ.get("PROMOTE_BUDGET_S", "1800"))
 
 #: Rank of a single-judge deployment, matching http_json.DEFAULT_RANK and ``serve --rank``.
@@ -503,7 +502,7 @@ def promote(judge: str, item: dict[str, str], dry_run: bool, rank: int, timeout:
             return f"refused {exc.code}: {refusal_reason(exc)}"
     except TimeoutError:
         # A connect failure arrives as URLError; a bare timeout means the body went out and no answer
-        # came back. 633871 printed "unreachable" for a judge that was busy, not gone.
+        # came back: the judge may be busy, not gone.
         return f"no answer within {wait:.0f}s (the judge may still be grading it)"
     except (urllib.error.URLError, ValueError) as exc:
         return f"unreachable ({exc})"

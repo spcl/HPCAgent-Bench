@@ -185,7 +185,7 @@ def positive_int(raw: str) -> int | None:
     return value if value > 0 else None
 
 
-#: USER 2026-09-22: no episode may die on the context window, whatever the harness. The limit an
+#: No episode may die on the context window, whatever the harness. The limit an
 #: agent may fill is L = min(served window, CONTEXT_CAP); the reply reserve is R = min(reply cap,
 #: L // 8); history is compacted once the prompt passes T = L - R - round(0.12 * L), which leaves
 #: the reply and one turn of growth under L (197919 at 262144, 98959 at 131072).
@@ -240,7 +240,7 @@ def reasoning_effort() -> str:
 #: The rungs ``openhands.sdk.LLM.reasoning_effort`` is TYPED for: it is a Literal, so a value outside
 #: them fails validation and the episode never starts.
 #: openhands-sdk 1.47.0, openhands/sdk/llm/llm.py: reasoning_effort is
-#: Literal["low", "medium", "high", "xhigh", "none"] (read from the agent image, 2026-09-15).
+#: Literal["low", "medium", "high", "xhigh", "none"] (read from the agent image).
 OPENHANDS_RUNGS = frozenset({"low", "medium", "high", "xhigh", "none"})
 
 
@@ -301,8 +301,7 @@ def compaction_args() -> list[str]:
 #: The interpreter each Python runner is EXEC'd with. The judge-agent images build one venv per
 #: runner at /opt/harness/<name> (Dockerfile section 13a), and this is the only place the driver
 #: names them. A path that is not in the image is not a degraded arm: exec fails before the runner's
-#: first line, every agent on the node dies the same way, and the arm records nothing -- which is
-#: jobs 640566/640567/640571/640572, run against an image built before those venvs existed.
+#: first line, every agent on the node dies the same way, and the arm records nothing.
 #: tests/test_harness_pins.py holds these against the Dockerfiles and the image verifier.
 HARNESS_INTERPRETER: dict[str, str] = {
     "miniswe": "/opt/harness/miniswe/bin/python",
