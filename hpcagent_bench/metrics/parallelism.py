@@ -74,27 +74,30 @@ class RateDefinition(NamedTuple):
     note: str
 
 
-_P = PARALLEL_BUCKETS
 #: ``libnode`` is a loop the pipeline recognized as a BLAS operator. Two readings are defensible:
 #: recognition is the strongest form of parallelization (default), or it is an abstention. Crossed
 #: with whether ``timestep`` sits in the denominator -- deliberately unparallelized work is still
 #: unparallelized work.
 RATE_DEFINITIONS: dict[str, RateDefinition] = {
     "libnode_parallel": RateDefinition(
-        _P + ("libnode",),
-        _P + ("libnode", "residual", "timestep"),
+        PARALLEL_BUCKETS + ("libnode",),
+        PARALLEL_BUCKETS + ("libnode", "residual", "timestep"),
         "libnode counts as parallelized; timestep is in the denominator",
     ),
     "libnode_parallel_no_timestep": RateDefinition(
-        _P + ("libnode",),
-        _P + ("libnode", "residual"),
+        PARALLEL_BUCKETS + ("libnode",),
+        PARALLEL_BUCKETS + ("libnode", "residual"),
         "libnode counts as parallelized; timestep is dropped from the denominator",
     ),
     "libnode_neutral": RateDefinition(
-        _P, _P + ("residual", "timestep"), "libnode is on neither side; timestep is in the denominator"
+        PARALLEL_BUCKETS,
+        PARALLEL_BUCKETS + ("residual", "timestep"),
+        "libnode is on neither side; timestep is in the denominator",
     ),
     "libnode_neutral_no_timestep": RateDefinition(
-        _P, _P + ("residual",), "libnode is on neither side; timestep is dropped from the denominator"
+        PARALLEL_BUCKETS,
+        PARALLEL_BUCKETS + ("residual",),
+        "libnode is on neither side; timestep is dropped from the denominator",
     ),
 }
 
