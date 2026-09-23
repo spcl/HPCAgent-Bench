@@ -32,6 +32,66 @@ two-space structural indent, no tabs, no trailing whitespace, one final newline.
 parts); GitHub Actions / docker-compose YAML follow their own schemas and are
 exempt.
 
+## Lint gate
+
+Four gates, in this order, all clang-tidy-strict on the code they cover (warnings are failures):
+
+1. **`ruff check`** (lint + bugbear + pyupgrade modernization) -- select/ignore is curated in
+   `pyproject.toml`'s `[tool.ruff.lint]`, not ruff's defaults: a bare `ruff check` reports 21k+
+   findings, most of it one house-specific pattern (numpy kernels named after paper notation)
+   repeated thousands of times. `--fix` applies the safe subset.
+2. **`ruff format`** -- the repo formatter (120 cols); NOT yapf here (yapf is dace's choice, not
+   this repo's -- see `scripts/check_format.py`).
+3. **`pyright`** -- the type gate, preferred over mypy. `[tool.pyright]` runs STANDARD mode
+   repo-wide (excluding the kernel corpus, same scope as the annotation ratchet below);
+   `pyrightconfig.strict.json` is a separate, growing allowlist of files held to STRICT mode.
+4. **`pylint`** -- the deep-analysis gate ruff's `PL*` rules only partially cover. Configured in
+   `[tool.pylint]` in `pyproject.toml` so it does not re-flag what ruff and the naming hooks
+   already own (see that section's comments for exactly which checks are off and why).
+
+```console
+# from the repo root, with the project's deps on the path
+$ export PYTHONPATH="$PWD:$PWD/hpcagent_bench/numpy_translators/src"
+
+$ ruff check hpcagent_bench experiments tests scripts tools     # gate 1 (curated select from pyproject.toml)
+$ ruff check --fix hpcagent_bench experiments tests scripts tools   # apply the safe fixes
+$ ruff format hpcagent_bench experiments tests scripts tools    # gate 2
+
+$ pyright --pythonpath "$(command -v python)"                   # gate 3, standard mode, repo-wide
+$ pyright --project pyrightconfig.strict.json                   # gate 3, strict mode, the allowlist
+
+# pylint is not on this venv's PATH by design (never `pip install` into the shared venv) --
+# install it privately once: pipx install pylint, or a throwaway venv:
+#   python3 -m venv /path/to/lint-venv && /path/to/lint-venv/bin/pip install pylint
+$ PYTHONPATH="$PWD:$PWD/hpcagent_bench/numpy_translators/src:$(python -c 'import site;print(site.getsitepackages()[0])')" \
+    /path/to/lint-venv/bin/pylint --rcfile=pyproject.toml hpcagent_bench/spec.py   # gate 4, one file
+```
+
+**The ratchet.** Fixing 13k+ pre-existing ruff findings (or 5.3k pyright diagnostics) before the
+gate can be enforced is not realistic in one pass, so `tests/test_ruff_ratchet.py` and
+`tests/test_pyright_ratchet.py` measure the DIRECTION instead, exactly like the older
+`tests/test_annotation_ratchet.py`: a per-file baseline count, checked both ways -- a file may not
+GAIN findings, and the baseline may not OVERSTATE what is actually there (a stale entry is slack a
+regression can hide in). Regenerate after a real cleanup:
+
+```console
+$ python tests/test_ruff_ratchet.py --write
+$ python tests/test_pyright_ratchet.py --write      # slower (~3 min, whole-tree pyright)
+```
+
+`pre-commit` runs `scripts/check_lint_gate.py` (ruff check, curated, + the ruff ratchet) on the
+files being committed -- fast, because it only lints what changed. It does NOT run pyright or
+pylint (both are minutes-scale over the whole repo); those run via `make lint-gate` / CI / on
+demand.
+
+**The hand-off report.** `python scripts/lint_area_report.py` groups every current ruff finding by
+top-level area and rule code, and tags each rule `safe-autofix` (ruff's own `--fix`, no behavior
+change -- modernization, cosmetic rewrites) or `manual-review` (the fix, or the finding itself, can
+change behavior: `B905` zip `strict=` raises on unequal-length inputs, `PLW1510` subprocess
+`check=` was silently absent, `F841`/`RUF059` may be a real bug rather than dead code, `B006`/`B008`
+is the mutable-default-argument bug the rule exists to catch). Never committed as a snapshot -- it
+goes stale the moment a file changes; regenerate it, do not read an old copy.
+
 Dev tasks run through the `Makefile` (`make help` lists them): `make format`
 (ruff + clang-format + fprettify, in place), `make test` (fast suite; the
 `integration`-marked build/run tests are excluded locally but run in CI), and

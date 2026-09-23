@@ -20,7 +20,7 @@ ARGS   ?=                 # extra args forwarded to launch / run
 PYTEST := $(PYTHON) -m pytest -q -p no:cacheprovider
 
 .DEFAULT_GOAL := help
-.PHONY: help format format-check lint test test-all run quickstart plot plot-table launch install
+.PHONY: help format format-check lint lint-gate lint-report test test-all run quickstart plot plot-table launch install
 
 help:            ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -34,6 +34,13 @@ format-check:    ## check formatting of changed files (CI parity, no writes)
 
 lint:            ## run every pre-commit hook over the whole tree
 	pre-commit run --all-files
+
+lint-gate:       ## ruff check (curated) + pyright, whole tree -- see CONTRIBUTING.md "Lint gate"
+	$(PYTHON) -m ruff check hpcagent_bench experiments tests scripts tools
+	pyright
+
+lint-report:     ## per-area / per-rule ruff finding counts, safe-autofix vs manual-review
+	$(PYTHON) scripts/lint_area_report.py
 
 test:           ## fast test suite (excludes the integration build/run tests)
 	$(PYTEST) -n$(N) -m "not integration" tests/

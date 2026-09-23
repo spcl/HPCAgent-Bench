@@ -19,8 +19,17 @@ repos:
         entry: python scripts/check_format.py --fix
         language: system
         require_serial: true
-        # Extensions check_format can route; the skip policy lives in that script.
         files: '\.([cC]|cc|cpp|cxx|hpp|hh|hxx|[hH]|py|[fF]|[fF]90|[fF]03|[fF]08|[fF]95|[fF]or)$'
+      # The curated ruff lint gate ([tool.ruff.lint] in pyproject.toml) + the ratchet
+      # (tests/ruff_ratchet_baseline.json), scoped to files being committed. See
+      # scripts/check_lint_gate.py's module docstring for why pyright/pylint are NOT here
+      # (both are minutes-scale over the whole repo; they run in CI / on demand instead).
+      - id: hpcagent_bench-lint-gate
+        name: lint gate (ruff check, curated + ratchet, changed files)
+        entry: python scripts/check_lint_gate.py
+        language: system
+        require_serial: true
+        files: '\.py$'
       # Copyright / SPDX header on the CORE package (scope + skip policy live in the
       # script: hpcagent_bench/ minus benchmarks/ + numpy_translators/, plus scripts/ tests/).
       - id: hpcagent_bench-headers

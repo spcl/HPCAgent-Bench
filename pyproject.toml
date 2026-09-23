@@ -329,4 +329,118 @@ exclude_also = [
 # ---------------------------------------------------------------------------------------------
 [tool.ruff]
 line-length = 120
+target-version = "py312"  # the container floor -- see project_optarena_python_floor_3_12
 extend-exclude = ["*_generated.py"]
+
+# ---------------------------------------------------------------------------------------------
+# The lint gate. Curated for THIS codebase rather than left at ruff's defaults: a bare
+# `ruff check` with no select reports ~8k findings across hpcagent_bench/experiments/tests, most
+# of it either pyflakes/pycodestyle noise already caught elsewhere or one house-specific pattern
+# (numpy kernels named after paper notation) repeated thousands of times. The set below is the
+# clang-tidy-equivalent stack from the python-quality skill (E,F,W,B,C4,UP,SIM,PERF,RUF,PL) plus
+# PIE and N, which the codebase's numpy-kernel corpus makes worth calling out explicitly through
+# per-file-ignores rather than leaving off.
+#
+# Two rule FAMILIES are deliberately absent from `select`, not merely unmentioned:
+#   - ANN (annotation-missing): tests/test_annotation_ratchet.py already ratchets this, file by
+#     file, with its own baseline and "--write" regen story. Selecting ANN here would make ruff
+#     itself fail on debt that ratchet already owns, and disagree with it about scope
+#     (tests/test_annotation_ratchet.py excludes hpcagent_bench/benchmarks; a plain ANN select
+#     would not).
+#   - D (pydocstyle): this repo's docstring rule (public functions only, dace style, no
+#     history) is a CONTENT rule pydocstyle cannot express -- it does not distinguish "missing"
+#     from "present but written as a changelog entry". Left to review, not a linter.
+#
+# New debt is NOT auto-blocked by turning ANY of the below off: everything selected here that is
+# not per-file-ignored is measured by the ratchet in tests/test_lint_ratchet.py, so pre-existing
+# findings do not fail CI today but a file gaining new ones does.
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "C4", "PIE", "RUF", "PL", "PERF", "N"]
+
+[tool.ruff.lint.per-file-ignores]
+# Numpy kernel corpus (hpcagent_bench/benchmarks/**/*_numpy.py and siblings): each kernel's
+# argument names and variable names follow the PAPER's notation (matrices A/B/C, sizes LEN_1D,
+# dims K/M/N) because a reader compares the kernel line-by-line against a reference -- renaming
+# to snake_case would break that correspondence for no benefit. Argument counts and literal
+# indices/sizes are likewise intrinsic to a fixed numerical signature, not accidental complexity.
+"hpcagent_bench/benchmarks/**" = ["N803", "N806", "PLR0913", "PLR0917", "PLR2004"]
+# The numpyto_* translators emit/manipulate that same numpy math (lib_nodes.py's K/P/R/C/F,
+# frontend.py's per-call locals) and read the paper notation directly out of the kernel it is
+# translating -- same naming rationale as the corpus above, narrower ignore list because the
+# translator's OWN argument counts and comparisons are not signature-fixed the way a kernel's are.
+"hpcagent_bench/numpy_translators/**" = ["N803", "N806"]
+# Port oracles (tests/ports/**/test_*.py) hand-transcribe the SAME kernel math to check it, so
+# they inherit the identical matrix/vector names (A, M, P, N) as the kernel they are validating.
+"tests/ports/**" = ["N803", "N806"]
+# Test assertions compare against literal expected values by nature (`assert x == 2`); PLR2004
+# fires on nearly every assert in the suite and naming a constant buys nothing a reader could not
+# already see at the call site.
+"tests/**" = ["PLR2004"]
+
+# ---------------------------------------------------------------------------------------------
+# The type gate. STANDARD mode repo-wide (this section) plus a growing STRICT allowlist
+# (pyrightconfig.strict.json, unchanged by this task) for files cleaned to the full static-typing
+# house rule. Same scope as the annotation ratchet (tests/test_annotation_ratchet.py): the kernel
+# corpus is excluded because it is reference numpy compared against a paper, not library code, and
+# whether to annotate it is a separate decision this gate does not make.
+#
+# Invocation needs the interpreter that has the project's dependencies AND the repo + translator
+# src on the import path (see CONTRIBUTING.md "Lint gate" for the exact command) -- neither is
+# baked in here, per the paths-are-env-vars house rule: a hardcoded venv path in version control
+# would be wrong the moment the venv moves.
+[tool.pyright]
+include = ["hpcagent_bench", "experiments", "tests", "scripts", "tools"]
+exclude = ["**/*_generated.py", "hpcagent_bench/benchmarks"]
+typeCheckingMode = "standard"
+pythonVersion = "3.12"
+# Several deps (scipy, several transitive ones) ship no stubs; that is a fact about them, not
+# about this code, and matches the same setting already in pyrightconfig.strict.json.
+reportMissingTypeStubs = false
+
+# ---------------------------------------------------------------------------------------------
+# pylint: the deep-analysis gate ruff's PL* rules only partially cover (ruff reimplements a
+# subset; this runs the real checker for the rest -- inconsistent-return-statements,
+# redefined-outer-name, dangerous-default-value, broad-except, and the rest of pylint's semantic
+# checks). Configured, not left at defaults, so it does not drown in the same house-specific
+# patterns the ruff per-file-ignores above already justified:
+#   - C0103 (naming style): the numpy-kernel / translator / port-oracle paper-notation names
+#     (see the ruff N803/N806 per-file-ignores above) trip pylint's naming checker the same way;
+#     ruff already owns naming, so pylint's copy is off everywhere rather than re-deriving the
+#     same per-directory carve-out in a second config language.
+#   - C0114/C0115/C0116 (missing docstrings): this repo's docstring rule is content-shaped
+#     (public functions only, dace style) -- see the ruff `D` note above. Not pylint's job either.
+#   - R0903 (too-few-public-methods): fires on every small dataclass; this codebase prefers
+#     small dataclasses over class hierarchies (house style), so the check is anti-correlated
+#     with the style this repo wants.
+#   - R0913/R0917 (too-many-arguments/positional-arguments): same kernel-signature rationale as
+#     ruff PLR0913/PLR0917 above; ruff already flags this outside the exempted directories.
+#   - W0511 (fixme): TODO/FIXME markers are tracked in the memory system, not as lint failures.
+#   - R0801 (duplicate-code): the kernel corpus is intentionally near-duplicate across languages
+#     (numpy/dace/jax siblings of the same kernel) -- see MPR/CPF paper scope. A generic
+#     similarity checker over that corpus is guaranteed noise, not a finding.
+# Kept ON, deliberately: unused-variable/argument, broad-except, dangerous-default-value,
+# inconsistent-return-statements, redefined-outer-name, too-many-branches/statements (the CC<=20
+# house rule), and everything else pylint enables by default.
+[tool.pylint.main]
+jobs = 0
+ignore-paths = ["hpcagent_bench/benchmarks/.*_generated\\.py$"]
+
+[tool.pylint."messages control"]
+disable = [
+    "C0103",  # naming style -- owned by ruff N* + per-file-ignores above
+    "C0114",
+    "C0115",
+    "C0116",  # docstrings -- content rule, not a presence check (see ruff `D` note)
+    "R0903",  # too-few-public-methods -- penalizes the house-preferred small dataclass
+    "R0913",
+    "R0917",  # too-many-(positional-)arguments -- kernel-signature rationale, see ruff PLR0913
+    "W0511",  # fixme -- TODO/FIXME tracked in the memory system
+    "R0801",  # duplicate-code -- the kernel corpus is intentionally near-duplicate across languages
+]
+
+[tool.pylint.format]
+max-line-length = 120
+
+[tool.pylint.design]
+max-branches = 21  # CC<=20 house rule (feedback_keep_cyclomatic_complexity_low), +1 slack for the implicit entry branch
+max-statements = 60
