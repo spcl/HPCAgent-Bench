@@ -21,7 +21,7 @@
 #SBATCH --job-name=mpi-mn-check
 #SBATCH --partition=mi300
 # The ALLOCATION must already have the task shape the steps ask for. Allocating 1 task/node and
-# then running `srun --ntasks-per-node=4` gets "More processors requested than permitted" (629800):
+# then running `srun --ntasks-per-node=4` gets "More processors requested than permitted":
 # a step cannot exceed the job's task count, and --cpus-per-task=192 leaves room for exactly one.
 # 4 ranks x 24 physical cores = 96 fills the node and matches the shape the campaigns use.
 #SBATCH --nodes=2

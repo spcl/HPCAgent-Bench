@@ -51,7 +51,7 @@ srun --nodes=1 --ntasks=1 --exclusive --export=ALL --cpus-per-task="${SERVE_CPUS
     --environment="${INFERENCE_EDF}" bash -c '
     set -Eeuo pipefail
     export TOKENIZERS_PARALLELISM=false
-    # Slurm hands out ROCR_VISIBLE_DEVICES; ray hard-errors on it and wants HIP_ (595060).
+    # Slurm hands out ROCR_VISIBLE_DEVICES; ray hard-errors on it and wants HIP_.
     if [[ -n "${ROCR_VISIBLE_DEVICES:-}" ]]; then
         export HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-${ROCR_VISIBLE_DEVICES}}"
         unset ROCR_VISIBLE_DEVICES

@@ -384,7 +384,7 @@ awk -v a="${g0:-0}" -v b="${g1:-0}" -v dt="$((t1-t0))" -v span="${STEADY_SPAN_S:
 
 stage "gate 5: long-context accuracy -- throughput alone never said whether a change was SAFE"
 # The sglang smoke has graded this since it was written; this one graded decode and stopped, which
-# is how a backend that reads 78.5 tok/s while echoing filler (604789) would have been promoted on
+# is how a backend that reads 78.5 tok/s while echoing filler would have been promoted on
 # its rate. aiter #1455 took kimi from 94.2% to 0.9% on gsm8k with no error anywhere.
 srun --nodes=1 --ntasks=1 --overlap --nodelist="${NODE0}" --environment="${INFERENCE_EDF}" \
     --cpus-per-task="${CLIENT_CPUS}" --hint=nomultithread \

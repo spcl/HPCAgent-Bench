@@ -31,7 +31,7 @@ INFERENCE_EDF="${INFERENCE_EDF:-hpcagent-bench-vllm-mi300-latest}"
 # The interpreter that HAS torch, which differs per image: the vLLM image puts it on PATH, the
 # sglang image keeps it at /opt/venv/bin/python3 and leaves bare `python3` as the system one with
 # no torch. Pointing this script at an sglang EDF without setting this fails on line 2 of the
-# heredoc with ModuleNotFoundError (630775).
+# heredoc with ModuleNotFoundError.
 PREBUILD_PYTHON="${PREBUILD_PYTHON:-python3}"
 # Same root and the same image key run_cluster.sh uses: the general scratch ($SCRATCH) for build artefacts, and one
 # subtree per image because these .so files are built against one aiter/ROCm build and a rank

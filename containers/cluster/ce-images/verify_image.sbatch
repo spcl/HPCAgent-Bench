@@ -59,7 +59,7 @@ case "${PROFILE}" in
     *)                   ce_path="/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/venv/bin" ;;
 esac
 # FI_PROVIDER on the INFERENCE profiles only. Setting it globally on an image that also runs MPI
-# aborted MPI_Init with "OFI call getinfo failed" (629966), so the judge-agent EDFs leave it unset
+# aborted MPI_Init with "OFI call getinfo failed", so the judge-agent EDFs leave it unset
 # and let MPICH negotiate -- and this generated EDF must match production or it is not verifying
 # the configuration anything actually runs under.
 case "${PROFILE}" in
@@ -67,8 +67,8 @@ case "${PROFILE}" in
     *)                        ce_fi_provider='' ;;
 esac
 # CC/CXX/FC and LD_LIBRARY_PATH, carried over from judge-agent-amd/edf.toml.example -- the
-# PRODUCTION template every live campaign renders through install_edfs.sh, measured working there
-# (629800/629802/629967). This generated EDF had neither: mpicc's own `-show` line bakes an
+# PRODUCTION template every live campaign renders through install_edfs.sh, measured working there.
+# This generated EDF had neither: mpicc's own `-show` line bakes an
 # absolute -I/-L/-rpath into MPICH's own lib dir, so it does not explain a link failure, but a
 # GENERATED file drifting from the file it exists to stand in for is a bug on its own -- the two
 # are supposed to describe the same running image. LD_PRELOAD (mimalloc) and PMIX_MCA_psec are

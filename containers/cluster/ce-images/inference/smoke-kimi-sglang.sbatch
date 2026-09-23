@@ -45,7 +45,7 @@ export EDF="${EDF:-${HOME}/.edf/hpcagent-bench-sglang-mi300-latest.toml}"
 # node-wide free memory, so the floor is 1 - available/pre and PP decides the numerator: at pp=4
 # the campaign loads 171 GB of compressed-tensors weights per stage against 412 GB pre, a floor
 # of 0.415 that 0.42 just clears. At pp=2 each stage holds twice that and sglang refuses on the
-# spot -- "minimum viable = 0.7525" (621070). Raise the NODES, not this number.
+# spot -- "minimum viable = 0.7525". Raise the NODES, not this number.
 # 0.42 needs --cuda-graph-max-bs-decode in the launch args below to mean what it means in the
 # campaign. Without it sglang captures graphs for its default decode batch and the residual comes
 # out of KV: 628052 and its live-image control 628063 both died on an effective 0.357 against a
