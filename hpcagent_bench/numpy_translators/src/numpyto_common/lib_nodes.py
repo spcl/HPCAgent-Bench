@@ -1476,7 +1476,7 @@ def _strided_index(ivar: ast.expr, start: Optional[ast.expr], step: int | ast.ex
 
 
 def _subscript_result_rank(
-    expr: ast.Subscript, axes: List[ast.expr], shape: Optional[Tuple[str, ...]], shape_table: Dict[str, Tuple[str, ...]]
+    axes: List[ast.expr], shape: Optional[Tuple[str, ...]], shape_table: Dict[str, Tuple[str, ...]]
 ) -> int:
     """Result-axis count of a subscript, counted by the SAME rules that consume iters below.
 
@@ -1559,7 +1559,7 @@ def _scalarize_at_iters(expr: ast.expr, iters: List[ast.expr], shape_table: Dict
         # at iter 0, so ``np.where(cond4d, cxyz[:a, :b, :c], 0)`` read cxyz at the OUTER three loops
         # and every element came from the wrong plane. Equal ranks give offset 0, which is the
         # arithmetic that was already happening.
-        iter_idx = max(0, len(iters) - _subscript_result_rank(expr, axes, shape, shape_table))
+        iter_idx = max(0, len(iters) - _subscript_result_rank(axes, shape, shape_table))
         src_axis = 0  # source-axis pointer (see _iter_extent_of).
         group_iters: Optional[List[ast.expr]] = None  # shared advanced-index iters
         for ax in axes:
@@ -3484,7 +3484,7 @@ def arange_count(args: List[ast.expr]) -> ast.expr:
     Constant arguments fold here, so the common literal ``arange`` keeps a plain integer extent
     rather than an expression a Fortran declaration would have to be able to evaluate.
 
-    Shared with the shape inference in :meth:`_extent_to_shape_token` so the extent an array is
+    Shared with the shape inference in :func:`_call_to_str` so the extent an array is
     declared with and the trip count the loop runs cannot disagree -- disagreeing is what turned
     a wrong count into an out-of-bounds write."""
     if len(args) == 1:
@@ -4458,7 +4458,7 @@ def _materialize_operands(
             continue
         _OP_SPILL_TEMP[0] += 1
         tmp = f"{prefix}op{_OP_SPILL_TEMP[0]}"
-        tmp_shape = tuple(_CallHoister._extent_to_shape_token(e) for e in op_ext)
+        tmp_shape = tuple(_call_to_str(e) for e in op_ext)
         shape_table[tmp] = tmp_shape
         if fresh_local_allocs is not None:
             fresh_local_allocs[tmp] = tmp_shape
@@ -5051,7 +5051,7 @@ def expand_diag(
         k = _const_int(k_node)
         if k is None:
             raise NotImplementedError("np.diag: offset k must be a constant int")
-    n_tok = _CallHoister._extent_to_shape_token(ext[0])
+    n_tok = _call_to_str(ext[0])
     side_tok = n_tok if k == 0 else f"({n_tok}) + {abs(k)}"
     # Zero the whole (side x side) matrix.
     zero_body = [
@@ -9309,7 +9309,7 @@ class _CallHoister(ast.NodeTransformer):
             if ext is not None:
                 self.counter[0] += 1
                 temp = f"__cb{self.counter[0]}"
-                shape = tuple(self._extent_to_shape_token(e) for e in ext)
+                shape = tuple(_call_to_str(e) for e in ext)
                 self.array_temps[temp] = shape
                 self.shape_table[temp] = shape
                 if self._infer_complex(first):
@@ -9532,26 +9532,26 @@ class _CallHoister(ast.NodeTransformer):
             call.keywords = list(keywords or [])
             ext = _iter_extent_of(call, self.shape_table)
             if ext is not None:
-                return tuple(self._extent_to_shape_token(e) for e in ext)
+                return tuple(_call_to_str(e) for e in ext)
         # ``np.bincount(idx, weights=w, minlength=M)`` -> a rank-1 result of exactly M slots (see
         # expand_bincount for why the data-dependent upper term is not the extent).
         if op == "bincount" and args:
             minlength = _kwarg_or_pos(args, keywords or [], 2, "minlength")
             if minlength is not None:
-                return (self._extent_to_shape_token(minlength),)
+                return (_call_to_str(minlength),)
         # ``np.searchsorted(a, v)`` -> one index per element of the VALUES operand, so the temp
         # takes ``v``'s extent and not the sorted array's.
         if op == "searchsorted" and len(args) >= 2:
             ext = _iter_extent_of(args[1], self.shape_table)
             if ext is not None:
-                return tuple(self._extent_to_shape_token(e) for e in ext)
+                return tuple(_call_to_str(e) for e in ext)
         # ``np.pad`` -> source shape with each axis grown by ``2 * pad_width``.
         if op == "pad" and args:
             call = _attr_call("np", "pad", list(args))
             call.keywords = list(keywords or [])
             ext = _iter_extent_of(call, self.shape_table)
             if ext is not None:
-                return tuple(self._extent_to_shape_token(e) for e in ext)
+                return tuple(_call_to_str(e) for e in ext)
         # Allocator-style calls: shape from the constructor arg.
         if op in {"linspace", "arange"}:
             # linspace(start, stop, n) -> (n,); arange(stop) -> (stop,);
@@ -9559,10 +9559,10 @@ class _CallHoister(ast.NodeTransformer):
             # arange_count: `stop - start` ignores the step, which over-allocates for step > 1 and
             # is NEGATIVE for a step < 0 (see arange_count).
             if op == "linspace" and len(args) >= 3:
-                return (self._extent_to_shape_token(args[2]),)
+                return (_call_to_str(args[2]),)
             if op == "arange":
                 if len(args) == 1:
-                    return (self._extent_to_shape_token(args[0]),)
+                    return (_call_to_str(args[0]),)
                 if len(args) == 2:
                     return (ast.unparse(ast.BinOp(left=args[1], op=ast.Sub(), right=args[0])),)
                 if len(args) >= 3:
@@ -9571,11 +9571,11 @@ class _CallHoister(ast.NodeTransformer):
         if op == "fromfunction" and len(args) >= 2:
             sh = args[1]
             elts = sh.elts if isinstance(sh, (ast.Tuple, ast.List)) else [sh]
-            return tuple(self._extent_to_shape_token(e) for e in elts)
+            return tuple(_call_to_str(e) for e in elts)
         # ``np.histogram(a, bins, ...)`` returns ``hist`` of length
         # ``bins`` (the ``[0]`` Subscript unwrap selects it).
         if op == "histogram" and len(args) >= 2:
-            return (self._extent_to_shape_token(args[1]),)
+            return (_call_to_str(args[1]),)
         # ``np.linalg.inv(A)`` returns the square inverse with A's
         # shape.
         if op == "linalg.inv" and args and isinstance(args[0], ast.Name):
@@ -9596,7 +9596,7 @@ class _CallHoister(ast.NodeTransformer):
         # ``np.fft.fftfreq(n, d=...)`` -> a 1-D frequency array of length ``n``
         # (the first positional arg is the sample count, not an array operand).
         if op == "fft.fftfreq" and args:
-            return (self._extent_to_shape_token(args[0]),)
+            return (_call_to_str(args[0]),)
         # ``np.diag(v [, k])`` -- 1-D operand builds an ``(n+|k|, n+|k|)`` matrix,
         # 2-D operand extracts the diagonal. Reuses the ``_iter_extent_of`` rule
         # so the constructed-shape logic lives in one place; lets a Lanczos
@@ -9607,7 +9607,7 @@ class _CallHoister(ast.NodeTransformer):
             call.keywords = list(keywords or [])
             ext = _iter_extent_of(call, self.shape_table)
             if ext is not None:
-                return tuple(self._extent_to_shape_token(e) for e in ext)
+                return tuple(_call_to_str(e) for e in ext)
         # ``np.roll`` / ``np.linalg.cholesky`` / ``np.tril`` / ``np.triu`` all
         # return an array with the FIRST operand's shape -- so an inline
         # ``acc + np.roll(x, m, axis)`` (the periodic-stencil idiom) can be
@@ -9626,7 +9626,7 @@ class _CallHoister(ast.NodeTransformer):
             call.keywords = list(keywords or [])
             ext = _iter_extent_of(call, self.shape_table)
             if ext is not None:
-                return tuple(self._extent_to_shape_token(e) for e in ext)
+                return tuple(_call_to_str(e) for e in ext)
         # ``np.reshape(a, shape)`` -- output extents are the shape arg, with a
         # single ``-1`` resolved to prod(source) / prod(other dims). Lets the
         # flattened-dot idiom ``a.ravel() @ a.ravel()`` (lowered to reshape)
@@ -9635,7 +9635,7 @@ class _CallHoister(ast.NodeTransformer):
             src = self.shape_table.get(args[0].id)
             sh = args[1]
             elts = sh.elts if isinstance(sh, (ast.Tuple, ast.List)) else [sh]
-            toks = [self._extent_to_shape_token(e) for e in elts]
+            toks = [_call_to_str(e) for e in elts]
             if src is not None:
                 prod_src = "(" + ") * (".join(str(s) for s in src) + ")"
                 if any(str(t).strip() == "-1" for t in toks):
@@ -9672,7 +9672,7 @@ class _CallHoister(ast.NodeTransformer):
                     continue
                 acc = ext if acc is None else _broadcast_extents(acc, ext)
             if acc is not None:
-                return tuple(self._extent_to_shape_token(e) for e in acc)
+                return tuple(_call_to_str(e) for e in acc)
         # ``np.hstack((a, b, c))`` -- horizontal stack along axis 1
         # for 2-D operands, axis 0 for 1-D operands. Sum the
         # concatenation-axis widths; the other axes are shared.
@@ -9779,32 +9779,20 @@ class _CallHoister(ast.NodeTransformer):
             a_ext = _iter_extent_of(args[0], self.shape_table)
             b_ext = _iter_extent_of(args[1], self.shape_table)
             if a_ext is not None and b_ext is not None and len(a_ext) == 1 and len(b_ext) == 1:
-                return (self._extent_to_shape_token(a_ext[0]), self._extent_to_shape_token(b_ext[0]))
+                return (_call_to_str(a_ext[0]), _call_to_str(b_ext[0]))
         # ``np.diagonal(a)`` on a SQUARE rank-2 operand: one element per row. Without a size here the
         # hoister declines, so the diagonal stayed inline inside ``np.tanh(...)`` -- where the
         # elementwise scalariser has no cell to read and the call reached emit whole.
         if op == "diagonal" and len(args) == 1:
             d_ext = _iter_extent_of(args[0], self.shape_table)
             if d_ext is not None and len(d_ext) == 2 and ast.unparse(d_ext[0]) == ast.unparse(d_ext[1]):
-                return (self._extent_to_shape_token(d_ext[0]),)
+                return (_call_to_str(d_ext[0]),)
         # linalg ops that preserve their argument's shape.
         if op in {"linalg.cholesky", "linalg.inv"} and args and isinstance(args[0], ast.Name):
             shape = self.shape_table.get(args[0].id)
             if shape:
                 return tuple(shape)
         return None
-
-    @staticmethod
-    def _extent_to_shape_token(node: ast.expr) -> str:
-        """Render an extent AST as a shape-table token (string): Constants ->
-        int string; Names -> name; BinOps -> ``ast.unparse`` (e.g. ``N - 2``),
-        which the emitter treats as a non-int symbolic shape.
-        """
-        if isinstance(node, ast.Constant) and isinstance(node.value, int):
-            return str(node.value)
-        if isinstance(node, ast.Name):
-            return node.id
-        return ast.unparse(node)
 
 
 import inspect
@@ -10348,7 +10336,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         if isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Call, ast.Subscript)):
             ext = _iter_extent_of(rhs, self.shape_table)
             if ext is not None:
-                self.shape_table[target_id] = tuple(_CallHoister._extent_to_shape_token(e) for e in ext)
+                self.shape_table[target_id] = tuple(_call_to_str(e) for e in ext)
             # ``ngm = qgm.shape[0]`` reads a DIMENSION -- an integer regardless of
             # the array's dtype. Type it int64 and skip the complex walk below,
             # which would otherwise see complex base Name ``qgm`` and wrongly tag

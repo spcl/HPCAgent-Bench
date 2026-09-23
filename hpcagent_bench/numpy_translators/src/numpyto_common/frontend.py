@@ -1486,7 +1486,7 @@ def build_kernel_ir(
     returned_outputs, _revert_return = _synthesize_return_temps(fn)
     if returned_outputs and not any(o in input_args for o in returned_outputs):
         returned_shapes, returned_dtypes = _derive_returned_array_metadata(
-            fn, returned_outputs, preset_symbols, seed_shapes=_input_array_shapes
+            fn, returned_outputs, seed_shapes=_input_array_shapes
         )
         if all(o in returned_shapes for o in returned_outputs):
             for out in returned_outputs:
@@ -3106,7 +3106,6 @@ def _promote_scalar_returns(fn: ast.FunctionDef, names: List[str]) -> List[str]:
 def _derive_returned_array_metadata(
     fn: ast.FunctionDef,
     names: List[str],
-    preset_symbols: Set[str],
     seed_shapes: Optional[Dict[str, str]] = None,
 ) -> Tuple[Dict[str, Tuple[str, ...]], Dict[str, str]]:
     """For each returned Name, find its first assignment and derive its
@@ -3944,7 +3943,7 @@ def _local_array_def(
     return None
 
 
-def alloc_call_shape(fn: ast.FunctionDef, call: ast.Call, arr_by: Dict[str, ArrayDesc]) -> Optional[Tuple[str, ...]]:
+def alloc_call_shape(call: ast.Call) -> Optional[Tuple[str, ...]]:
     """Shape of a direct ``np.zeros/empty/ones(<shape>, ...)`` call, or ``None`` for anything else."""
     f = call.func
     fname = f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else None
@@ -4370,7 +4369,7 @@ def conflicting_rebind_shapes(
                 # through a NAME, so spell it out here -- otherwise a local allocated once and then
                 # rebound from a call has two unresolvable bindings that collapse to one "unknown"
                 # and the disagreement goes unseen.
-                alloc = alloc_call_shape(fn, stmt.value, arr_by)
+                alloc = alloc_call_shape(stmt.value)
                 res = (alloc, "") if alloc is not None else None
             shape = res[0] if res is not None else None
             if shape not in shapes:
@@ -4713,9 +4712,7 @@ def scalar_value_names(hfn: ast.FunctionDef, seed: Set[str]) -> Set[str]:
     return known
 
 
-def _extent_operands_resolved(
-    value: ast.expr, hfn: ast.FunctionDef, table: Dict[str, Tuple[str, ...]], scalars: Set[str]
-) -> bool:
+def _extent_operands_resolved(value: ast.expr, table: Dict[str, Tuple[str, ...]], scalars: Set[str]) -> bool:
     """Whether every name the expression uses AS AN ARRAY has an extent in ``table``.
 
     Only the positions that carry an extent are checked -- a direct operand of an arithmetic
@@ -4808,7 +4805,7 @@ def helper_returns_rank0(
     scalar_names = scalar_value_names(hfn, {d.name for d in (*scalars, *symbols)})
     table = {a.name: tuple(str(s) for s in a.shape) for a in arrays}
     _propagate_local_extents(hfn, table)
-    if any(not _extent_operands_resolved(value, hfn, table, scalar_names) for value in returns):
+    if any(not _extent_operands_resolved(value, table, scalar_names) for value in returns):
         return False
     return all(iter_extent_of(value, table) is None for value in returns)
 
@@ -4845,7 +4842,7 @@ def _helper_return_shape_from_body(
     # ``return seg + np.triu(__full1, 1)``), not from its parameters directly, so sizing it needs
     # those locals too -- propagated forward, since each is sized against the ones before it.
     _propagate_local_extents(hfn, table)
-    if any(not _extent_operands_resolved(value, hfn, table, scalar_names) for value in returns):
+    if any(not _extent_operands_resolved(value, table, scalar_names) for value in returns):
         # ``iter_extent_of`` answers a BinOp with the operand it COULD size when the other comes
         # back None. That is a serviceable broadcast hint and a wrong allocation: mamba2's
         # ``seg + np.triu(...)`` reported the triangle's ``(span, span)`` for a 4-D result, which

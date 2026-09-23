@@ -2052,7 +2052,7 @@ class _SubstituteFftCalls(ast.NodeTransformer):
         return self.visitor(node) or node
 
 
-def _mgrid_inline_stmts(tnames: List[str], slices: List[ast.AST], ctr: int) -> Optional[List[ast.stmt]]:
+def _mgrid_inline_stmts(tnames: List[str], slices: List[ast.AST]) -> Optional[List[ast.stmt]]:
     """``i, j = np.mgrid[a0:b0, a1:b1]`` -> per-axis ``arange`` reshaped onto its
     own axis and broadcast-added to a full-shape int zeros. numba and pythran
     support neither ``np.mgrid``; both support ``arange`` + ``reshape`` +
@@ -2101,7 +2101,7 @@ class _MgridInline(ast.NodeTransformer):
         if not all(isinstance(e, ast.Name) for e in elts):
             return node
         slices = val.slice.elts if isinstance(val.slice, ast.Tuple) else [val.slice]
-        stmts = _mgrid_inline_stmts([e.id for e in elts], slices, self._ctr)
+        stmts = _mgrid_inline_stmts([e.id for e in elts], slices)
         if stmts is None:
             return node
         self._ctr += 1

@@ -4591,9 +4591,7 @@ def folded_with_constants(text: str, pinned: Dict[str, PinnedValue]) -> str:
     return str(canonical) if canonical is not None else fold_shape_expr(substituted)
 
 
-def caller_side_recipe(
-    owner: ast.FunctionDef, arg: ast.expr, pinned: Dict[str, PinnedValue], descriptors: Set[str]
-) -> str:
+def caller_side_recipe(owner: ast.FunctionDef, arg: ast.expr, pinned: Dict[str, PinnedValue]) -> str:
     """The folded expression a call ARGUMENT stands for, or ``""`` when there is not one.
 
     An expression argument is its own recipe; a bare Name is one only through the owner's single
@@ -4757,14 +4755,13 @@ def helper_call_bindings(owner: ast.FunctionDef, hkir: KernelIR, pinned: Dict[st
         # scalar parameter (``c_out_per_group``) and only becomes a dc.symbol later, when
         # render_program sees it size an array.
         extents = own | scalar_names
-        declared = {i for a in hkir.arrays for dim in a.shape for i in _IDENT_RE.findall(str(dim))}
         ambiguous: Set[str] = set()
         for pname, arg in zip(abi, node.args):
             if pname not in extents or pname in binding.constants or pname in binding.collapse:
                 continue
             # A bare Name is the caller's own local for the quantity, so its DEFINITION is the
             # expression a descriptor would have been written with.
-            recipe = caller_side_recipe(owner, arg, pinned, declared)
+            recipe = caller_side_recipe(owner, arg, pinned)
             if not recipe:
                 continue
             # A recipe that folds to ONE name the helper already holds is that name: with
