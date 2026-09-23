@@ -163,6 +163,16 @@ def load_problems() -> list[Problem]:
     return fetch_problems() or []
 
 
+def response_closed(error: BaseException) -> BaseException:
+    """``error`` with its response closed when it is an HTTP status: an ``HTTPError`` is also the open
+    reply, and one kept for the timeout message holds its socket until the GC finds it. Every 503
+    poll of a warming engine leaked one that way, and the ResourceWarning it raises on collection
+    failed whichever test the collector happened to run in."""
+    if isinstance(error, urllib.error.HTTPError):
+        error.close()
+    return error
+
+
 def wait_for_json(name: str, url: str, timeout: float, headers: dict[str, str] | None = None) -> None:
     deadline = time.monotonic() + timeout
     last_error: BaseException | None = None
@@ -175,7 +185,7 @@ def wait_for_json(name: str, url: str, timeout: float, headers: dict[str, str] |
                     print(f"{name} ready: {url}", flush=True)
                     return
         except (OSError, ValueError, urllib.error.URLError) as exc:
-            last_error = exc
+            last_error = response_closed(exc)
         time.sleep(3)
     raise TimeoutError(f"{name} did not become ready within {timeout:.0f}s: {last_error}")
 
@@ -201,7 +211,7 @@ def wait_for_engine(name: str, replica: str, timeout: float, headers: dict[str, 
                     print(f"{name} warm: {health}", flush=True)
                     return
         except (OSError, ValueError, urllib.error.URLError) as exc:
-            last_error = exc
+            last_error = response_closed(exc)
         time.sleep(5)
     raise TimeoutError(f"{name} served models but never warmed up within {timeout:.0f}s: {last_error}")
 
@@ -317,7 +327,7 @@ def throughput_probe(replica: str, headers: dict[str, str], requests: int) -> li
             with urllib.request.urlopen(request, timeout=600) as response:
                 payload = as_block(json.load(response))
         except (OSError, ValueError, urllib.error.URLError) as exc:
-            print(f"throughput probe {index} failed: {exc}", flush=True)
+            print(f"throughput probe {index} failed: {response_closed(exc)}", flush=True)
             continue
         elapsed = time.monotonic() - start
         usage = as_block(payload.get("usage"))
@@ -581,7 +591,8 @@ def scrape_metrics(url: str, headers: dict[str, str]) -> dict[str, float] | None
     try:
         with urllib.request.urlopen(request, timeout=METRICS_TIMEOUT_SECONDS) as response:
             text = response.read().decode("utf-8", errors="replace")
-    except (OSError, ValueError, urllib.error.URLError):
+    except (OSError, ValueError, urllib.error.URLError) as exc:
+        response_closed(exc)
         return None
     return engine_totals(text)
 

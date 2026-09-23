@@ -13,12 +13,14 @@ The returned order is pinned too. Completion order is a race between replicas, a
 should not differ between two identical runs.
 """
 
+import gc
 import http.server
 import importlib.util
 import pathlib
 import sys
 import threading
 import time
+import warnings
 from types import ModuleType
 from typing import ClassVar
 
@@ -121,3 +123,24 @@ def test_a_replica_stuck_before_health_is_not_returned_as_ready(driver) -> None:
         for server in (ready_server, stuck_server):
             server.shutdown()
             server.server_close()
+
+
+def test_a_warming_replica_leaves_no_response_open(driver) -> None:
+    """Each 503 of a warming /health is an HTTPError that is also the open reply. Kept unclosed for the
+    timeout message, it held its socket until collection, and the ResourceWarning it then raised
+    failed whichever test the collector ran in (test_agent_driver_sealed, under -n 2)."""
+    stuck_server, stuck_url = start_fake_engine(503)
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with pytest.raises(TimeoutError, match="never warmed up") as raised:
+                driver.wait_for_engine("replica", stuck_url, 1.0)
+            # The traceback holds the driver's frame and so its last_error; drop both, then collect,
+            # so an unclosed reply is finalized while the warnings are still being recorded.
+            raised.value.__traceback__ = None
+            del raised
+            gc.collect()
+    finally:
+        stuck_server.shutdown()
+        stuck_server.server_close()
+    assert [str(warning.message) for warning in caught if issubclass(warning.category, ResourceWarning)] == []
