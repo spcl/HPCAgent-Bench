@@ -5,9 +5,8 @@
 beta, laplace. Each respects the seeded ``spec['rng']`` stream and clips to the target precision's
 safe range so a downcast never yields inf.
 
-These used to go through ``scipy.stats.<dist>.rvs(random_state=rng)``. Every one of them is already
-a method on ``numpy.random.Generator``, and the wrapper cost 1.2-1.8x (measured at 1e8: scipy
-2346ms vs 1919ms native) plus a scipy import on the data path, for no added capability.
+Every sampler is a ``numpy.random.Generator`` method: ``scipy.stats.<dist>.rvs`` adds 1.2-1.8x and a
+scipy import on the data path for no added capability.
 
 Each sampler is a function of ``(rng, spec, shape)`` over a deliberately small primitive set --
 uniform, normal, exponential, gamma, beta -- because that set is what a GPU generator can also

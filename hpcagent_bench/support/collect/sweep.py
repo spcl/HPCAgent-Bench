@@ -54,12 +54,10 @@ MPI_LAUNCHER_VARS = (
 def drop_mpi_launcher_vars() -> List[str]:
     """Unset the MPI launcher variables in THIS process; returns the names removed.
 
-    WHY THIS EXISTS. ``dace/frontend/python/parser.py`` calls ``ensure_mpi_initialized()`` at import
-    time, which returns early only when no launcher variable is set. Slurm's pmix plugin exports
-    ``PMIX_RANK`` for EVERY step, MPI or not -- so a per-kernel child of this sweep imported DaCe,
-    called ``MPI_Init``, and deadlocked. Measured: the faulthandler stack stands in importlib under
-    ``dace/__init__.py`` line 20, a pure-Python import with no device call in it, because MPI_Init in
-    a forked child whose parent already holds an MPI library is the fork-unsafe case.
+    ``dace/frontend/python/parser.py`` calls ``ensure_mpi_initialized()`` at import time, which
+    returns early only when no launcher variable is set. Slurm's pmix plugin exports ``PMIX_RANK``
+    for EVERY step, so a per-kernel child of this sweep would import DaCe, call ``MPI_Init`` in a
+    forked child whose parent already holds an MPI library (the fork-unsafe case), and deadlock.
 
     ``MPI4PY_RC_INITIALIZE=0`` does NOT cover this. It suppresses mpi4py's automatic init, and DaCe
     then calls MPI_Init itself; the environment switch it names is exactly the one DaCe overrides.
@@ -195,7 +193,7 @@ def filter_out_completed_benchmarks(
                 print("Results table does not exist, running all benchmarks")
                 return all_benchmarks
 
-            # Legacy DBs without the datatype column are treated as containing float64 rows.
+            # A DB without the datatype column holds float64 rows.
             cur.execute("PRAGMA table_info(results)")
             has_datatype = any(row[1] == "datatype" for row in cur.fetchall())
 
