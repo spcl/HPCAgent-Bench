@@ -590,7 +590,13 @@ def recorded_arms(job_dir: str) -> set:
     return arms
 
 
+@functools.lru_cache(maxsize=None)
 def roster(tag: str, opt: str) -> list:
+    """A pure read of ``opt``'s checkout, so callers safely share one cached result per (tag, opt):
+    several CAMPAIGNS entries can name the same tag (2026-09-23 perf fix, wave_board.py: a plain
+    ``{spec.tag: roster(spec.tag, opt) for spec in CAMPAIGNS.values()}`` dict comprehension spent
+    most of its ~450ms/call cost re-spawning roster.sh's own recursive manifest glob for a tag it
+    had already resolved one entry ago, since only the LAST spec sharing a tag keeps its dict slot)."""
     script = f'OPT="{opt}"; . "$OPT/experiments/roster.sh"; roster_for "{tag}"'
     out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
     return sorted(name for name in out.stdout.strip().split(",") if name)
