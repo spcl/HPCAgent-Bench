@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # Shared by every <image>/build.sh. What differs between images is the base, the build-args and
-# the Dockerfile; everything around that was copied five times, which is how the OCI archive
-# reached four builders and not the fifth, and how one of them still called its build directory
-# by a different name.
+# the Dockerfile; everything around that lives here once.
 #
 # Source it, do not execute it:
 #   source "$(dirname -- "${BASH_SOURCE[0]}")/../build_common.sh"
@@ -57,9 +55,9 @@ ce_remove_podman_store() {
 }
 
 # Sets the global MIRROR_ARGS. Every clone in the build is rewritten to the mirror (see each
-# Dockerfile), which took GitHub off the critical path: the rate limiter answers an
-# unauthenticated clone with a 401 under load, and the callers that died on it -- spack's
-# in-process package-repo clone, vLLM's CMake FetchContent of triton -- have no retry. Refresh it
+# Dockerfile), which takes GitHub off the critical path: the rate limiter answers an
+# unauthenticated clone with a 401 under load, and some callers -- spack's in-process
+# package-repo clone, vLLM's CMake FetchContent of triton -- have no retry. Refresh it
 # from a login node with mirror-repos.sh. Absent, the build still works and still uses GitHub.
 ce_mirror_args() {
     MIRROR_ARGS=()
@@ -72,7 +70,7 @@ ce_mirror_args() {
 
 # A commit resolved from GITHUB but cloned from the MIRROR is a sha the mirror may not have, and
 # git says so as `upload-pack: not our ref` -- two hours in, with every expensive layer already
-# paid for. That is build 626608. Check it here, where it costs seconds.
+# paid for. Check it here, where it costs seconds.
 ce_require_mirror_commit() {
     local repo_path="$1" commit="$2"
     local mirror="${GIT_MIRRORS:-}/${repo_path}"
@@ -272,7 +270,7 @@ ce_export_image() {
     # enroot's exit code lies when cleanup fails after a good write, so gate on the ARTIFACT:
     # listing reads the inode table at file END, which a truncated image fails. Remove the output
     # first -- enroot refuses to overwrite, `|| true` swallows that, and `unsquashfs -l` would
-    # then validate LAST run's file (620068 printed "IMAGE READY" over a stale image).
+    # then validate LAST run's file.
     rm -f "${output_sqsh}"
     enroot import -x mount -o "${output_sqsh}" "podman://${image_tag}" || true
     unsquashfs -l "${output_sqsh}" opt >/dev/null

@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Does the CSCS aws_ofi_nccl hook give RCCL the fabric? NO MPI ANYWHERE IN THIS TEST.
 #
-# 629966 tried to answer this and could not: it bootstraps RCCL over MPI, and MPI_Init aborted
-# first -- FI_PROVIDER=cxi against MPICH's spack libfabric, which has no cxi provider, so
-# "OFI call getinfo failed". The RCCL question was never reached. torch.distributed needs only
-# MASTER_ADDR/PORT, so this isolates RCCL from MPI entirely.
+# Bootstrapping RCCL over MPI would let an MPI_Init failure (FI_PROVIDER=cxi against MPICH's
+# providerless spack libfabric: "OFI call getinfo failed") hide the RCCL answer. torch.distributed
+# needs only MASTER_ADDR/PORT, so this isolates RCCL from MPI entirely.
 #
 #SBATCH --job-name=rccl-hook
 #SBATCH --partition=mi300
