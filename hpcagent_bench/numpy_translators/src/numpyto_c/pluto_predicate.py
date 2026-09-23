@@ -4,8 +4,8 @@
 assignments, ``t = c ? e : t``, so the loop keeps an affine domain and stays inside a scop.
 
 A scop may not contain an ``if`` whose condition reads an array element or a float: clan cannot
-put it in the iteration domain, and the emitter used to leave the whole enclosing loop out of the
-scop, so Pluto never saw kernels like an argmax or a conditional sum. A ternary is part of the
+put it in the iteration domain, so the whole enclosing loop (an argmax, a conditional sum) would
+fall outside the scop. A ternary is part of the
 statement's expression, which Pluto treats as an opaque read, so the domain stays affine.
 
 Two forms, both exact:

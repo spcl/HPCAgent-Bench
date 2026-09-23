@@ -2960,9 +2960,7 @@ def _resolve_call_args(call: ast.Call, helper: ast.FunctionDef) -> Optional[List
     ``def batchnorm2d(x, eps=1e-5)`` called as ``batchnorm2d(arr)``
     yields ``[arr, Constant(1e-5)]``.
 
-    KEYWORD arguments bind by name. They used to be dropped in favour of the parameter's default,
-    which is silent whenever the two happen to agree -- ``_logsumexp(x, axis=1)`` on a rank-2 input
-    took the default ``axis=-1`` and only matched because -1 IS 1 there.
+    KEYWORD arguments bind by name (``_logsumexp(x, axis=1)``), never to the parameter's default.
 
     Returns ``None`` when the call cannot be reconciled (too many positional args, an unknown or
     doubly-bound keyword, or a missing param without a default) -- the inliner then leaves the Call
@@ -3894,9 +3892,8 @@ def _ctor_dtype_tag(fn: ast.FunctionDef, node: ast.expr, arr_by: Dict[str, Array
 def _assigns_to(fn: ast.FunctionDef, name: str) -> List[ast.Assign]:
     """Every ``name = <value>`` in ``fn``, in walk order.
 
-    Collected ONCE per name: :func:`_resolve_array_ref` used to walk the whole function twice for
-    it -- once here for the allocation, once again for the alias chase -- and it recurses down the
-    alias chain, so a chain of depth d cost 2*d full walks of the kernel.
+    Collected ONCE per name: :func:`_resolve_array_ref` needs it for the allocation and for the
+    alias chase, and recurses down the alias chain.
     """
     return [
         node
@@ -7163,9 +7160,8 @@ def _axis_argument(call: ast.Call) -> Optional[ast.expr]:
 def _reject_symbolic_axis(fn: ast.FunctionDef) -> None:
     """Refuse a reduction / scan whose axis is present but not a literal.
 
-    Not pedantry: ``read_axis_keepdims`` reports an unreadable axis as ``None``, which is the SAME
-    value it reports for ``np.sum(x)`` -- so ``np.sum(x, axis=dim)`` used to lower as a FULL
-    reduction over every axis and compile cleanly. A wrong answer is worse than no answer.
+    ``read_axis_keepdims`` reports an unreadable axis as ``None``, the SAME value it reports for
+    ``np.sum(x)``, so ``np.sum(x, axis=dim)`` would otherwise lower as a FULL reduction.
 
     Reached only for an axis :func:`_specialize_runtime_axis` could not dispatch on -- a runtime
     axis with a known operand rank is emitted as one specialised nest per axis, chosen at run time.

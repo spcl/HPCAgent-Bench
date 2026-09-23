@@ -549,9 +549,8 @@ def _logical_locals(kir: KernelIR) -> Set[str]:
     """Every local the backend must emit as Fortran LOGICAL.
 
     ONE definition, read by both the body emitter (operand routing: a bare use is the logical,
-    not an integer flag to wrap ``/= 0``) and the declaration pass (``logical(c_bool) :: x``).
-    The two used to be computed separately and drifted, which is how a mask could be *used* as a
-    logical while being *declared* real.
+    not an integer flag to wrap ``/= 0``) and the declaration pass (``logical(c_bool) :: x``), so
+    a mask is never *used* as a logical while *declared* real.
 
     Sources: a bare ``True``/``False`` assign, a ``bool`` entry in ``local_dtypes``, a
     boolean-valued RHS, and -- transitively -- a plain copy from any of those.

@@ -251,10 +251,7 @@ def size_multiple(dtype: str) -> int:
 def is_integer(dtype: str) -> bool:
     """True for a signed or unsigned integer dtype.
 
-    One spelling of the predicate for every backend. It used to be written two ways --
-    ``dtype.startswith(("int", "uint"))`` in the lowering and
-    ``fortran_type(dtype).startswith("integer")`` in the Fortran emitter -- which agree on
-    the common names and drift on anything else. Unknown dtypes fall back to the name shape
+    One spelling of the predicate for every backend. Unknown dtypes fall back to the name shape
     so a non-registry token (a Fortran ``float_precision`` default) still answers.
     """
     try:
