@@ -89,8 +89,7 @@ def is_value_arg(arg: Arg, overrides: Optional[Mapping[str, bool]] = None) -> bo
 #: not an index/offset/mask the generator derives the WORK from. Found by a corpus scan for
 #: kernels the dtype-only rule left with ZERO value pointer arrays (rep_variation would give
 #: THEM no protection at all) and triaged by hand, one array at a time, against each kernel's
-#: numpy reference -- the same judgment call a `rep_value_overrides` manifest entry would make,
-#: pending that field actually landing in a manifest. A kernel not listed here keeps the plain
+#: numpy reference. A kernel not listed here keeps the plain
 #: dtype/role/is_index default; most of the scanned all-int kernels (bfs, nqueens, spgemm_hash,
 #: triangle_count, and the structural arrays of dfa/nfa_frontier) are CORRECTLY all-structural --
 #: their only content IS the graph/automaton/DP topology, which must stay static.
@@ -110,18 +109,14 @@ MANUAL_VALUE_OVERRIDES: Dict[str, Dict[str, bool]] = {
 }
 
 
-def classify_args(binding: Binding, overrides: Optional[Mapping[str, bool]] = None) -> Dict[str, bool]:
+def classify_args(binding: Binding) -> Dict[str, bool]:
     """Per pointer-arg name -> True (value, redrawn each repeat) / False (structural, static).
 
-    ``overrides`` (a caller-supplied manifest field, when one exists) wins outright; below that,
     :data:`MANUAL_VALUE_OVERRIDES` supplies the hand-triaged corrections for a KERNEL the
     dtype/role/is_index default gets wrong; below that, :func:`is_value_arg`'s plain default.
     """
-    kernel = binding.kernel
-    merged: Dict[str, bool] = dict(MANUAL_VALUE_OVERRIDES.get(kernel, {}))
-    if overrides is not None:
-        merged.update(overrides)
-    return {a.name: is_value_arg(a, merged) for a in binding.args if a.kind == "ptr"}
+    overrides = MANUAL_VALUE_OVERRIDES.get(binding.kernel, {})
+    return {a.name: is_value_arg(a, overrides) for a in binding.args if a.kind == "ptr"}
 
 
 def rep_total(warmup: int, repeat: int) -> int:
