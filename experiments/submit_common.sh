@@ -37,22 +37,12 @@ resolve_packet_kv() {
     done < <("${PY}" ./packet_env.py --packet "${packet}" --language "${language}")
 }
 
-# symbolic_path <root-var-name> <resolved-absolute-path> -- <resolved-absolute-path> with the
-# CURRENT value of ${<root-var-name>} (e.g. HPCAGENT_BENCH_CPF_PRERENDER_DIR, SCRATCH) rewritten
-# back to a literal, unexpanded "${<root-var-name>}" prefix, when that is in fact where the path
-# lives. tests/test_no_hardcoded_user_paths.py refuses a committed .env with a literal
-# scratch path segment -- resolve_packet_kv necessarily returns one, since
-# packet_env.py fills every ${VAR} placeholder before printing (a launcher needs the real path to
-# gate coverage against it) -- so a caller that is about to WRITE that value into an arm's .env
-# calls this first. The rewritten record still resolves to the identical directory: every consumer
-# sources the .env the same way run_cluster.sh does (beverin.sbatch, prepare_job.sh, run_cluster.sh
-# itself, and the agent-node re-entry all `set -a; . "${ENV_FILE}"; set +a`, or read the shell
-# variable it left behind), and cache_env.sh has already exported <root-var-name> into that same
-# process's environment by the time any of them runs -- RUN_ROOT's own
-# "${SCRATCH:?}" is the same contract. A path the root-var does not
-# actually prefix (an explicit CPF_FORMS_DIR/CPF_DROPIN_DIR override elsewhere, e.g. the submitter
-# tests' own tmp-path views) is returned unchanged -- rewriting it would silently point a consumer
-# at the wrong directory.
+# symbolic_path <root-var-name> <resolved-absolute-path> -- the path with the CURRENT value of
+# ${<root-var-name>} (e.g. HPCAGENT_BENCH_CPF_PRERENDER_DIR, SCRATCH) rewritten back to a literal
+# "${<root-var-name>}" prefix, for a caller about to WRITE it into an arm's .env
+# (tests/test_no_hardcoded_user_paths.py refuses a literal scratch path there). Every consumer
+# sources the .env after cache_env.sh exported <root-var-name>, so it resolves to the same
+# directory. A path the root-var does not prefix is returned unchanged.
 symbolic_path() {
     local root_name="$1" path="$2" root_value="${!1:-}"
     if [[ -n "${root_value}" && "${path}" == "${root_value}"/* ]]; then
