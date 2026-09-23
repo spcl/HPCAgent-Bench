@@ -155,7 +155,9 @@ def captured_optimizer_row(monkeypatch: pytest.MonkeyPatch, panels: list, tmp_pa
     the file it would have written."""
     captured: list[plt.Figure] = []
 
-    def fake_save(fig: plt.Figure, stem: pathlib.Path, formats: tuple = ("pdf", "png"), fixed: bool = False):
+    def fake_save(
+        fig: plt.Figure, stem: pathlib.Path, formats: tuple = ("pdf", "png"), fixed: bool = False
+    ) -> pathlib.Path:
         del formats, fixed
         captured.append(fig)
         return stem

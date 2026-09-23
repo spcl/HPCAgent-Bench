@@ -46,7 +46,7 @@ def driver_fixture() -> ModuleType:
 REPLICAS = ["http://a:8000", "http://b:8000", "http://c:8000"]
 
 
-def test_a_late_replica_does_not_abort_the_run(driver, monkeypatch) -> None:
+def test_a_late_replica_does_not_abort_the_run(driver: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
 
     def probe(name: str, replica: str, timeout: float, headers: dict[str, str] | None = None) -> None:
         if replica.startswith("http://b:"):
@@ -56,7 +56,7 @@ def test_a_late_replica_does_not_abort_the_run(driver, monkeypatch) -> None:
     assert driver.wait_for_ready_replicas(REPLICAS, 1.0, {}) == ["http://a:8000", "http://c:8000"]
 
 
-def test_no_ready_replica_is_still_a_failure(driver, monkeypatch) -> None:
+def test_no_ready_replica_is_still_a_failure(driver: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """Proceeding on a subset must not become proceeding on nothing: with every replica down there
     is no endpoint to serve the agents, and starting anyway would burn the allocation producing
     242 identical connection errors."""
@@ -69,7 +69,7 @@ def test_no_ready_replica_is_still_a_failure(driver, monkeypatch) -> None:
         driver.wait_for_ready_replicas(REPLICAS, 1.0, {})
 
 
-def test_ready_replicas_come_back_in_replica_order(driver, monkeypatch) -> None:
+def test_ready_replicas_come_back_in_replica_order(driver: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """The first replica is made the slowest, so completion order is the REVERSE of replica order
     and a version that returned as_completed order would fail here."""
 
@@ -111,7 +111,7 @@ def start_fake_engine(health_status: int) -> tuple[http.server.ThreadingHTTPServ
     return server, f"http://127.0.0.1:{server.server_address[1]}/v1"
 
 
-def test_a_replica_stuck_before_health_is_not_returned_as_ready(driver) -> None:
+def test_a_replica_stuck_before_health_is_not_returned_as_ready(driver: ModuleType) -> None:
     """A replica that answers /v1/models but whose /health still 503s (mid warmup, the failure mode
     behind the qwen38 2026-09-17 23:00 incident) must not be handed agents, even though /v1/models
     alone would have looked ready under the old single-phase gate."""
@@ -125,7 +125,7 @@ def test_a_replica_stuck_before_health_is_not_returned_as_ready(driver) -> None:
             server.server_close()
 
 
-def test_a_warming_replica_leaves_no_response_open(driver) -> None:
+def test_a_warming_replica_leaves_no_response_open(driver: ModuleType) -> None:
     """Each 503 of a warming /health is an HTTPError that is also the open reply. Kept unclosed for the
     timeout message, it held its socket until collection, and the ResourceWarning it then raised
     failed whichever test the collector ran in (test_agent_driver_sealed, under -n 2)."""
