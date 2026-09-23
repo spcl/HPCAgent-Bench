@@ -83,6 +83,12 @@ def run_role_srun(tmp_path: pathlib.Path, role_flag: str, *, inference_nodes: in
             f"HPCAGENT_BENCH_REPO={shlex.quote(str(repo))}",
             f"SCRIPT_DIR={shlex.quote(str(repo / 'experiments'))}",
             f"RUN_ROOT={shlex.quote(str(run_dir))}",
+            # role_mounts' vllm*/inference* branch falls back to ${SCRATCH}/.hpcagentbench-cache
+            # when JIT_CACHE_ROOT is unset (run_cluster.sh:1195); CI's shell has no ambient
+            # SCRATCH, so the extracted function's own `${SCRATCH:?set SCRATCH}` guard aborted the
+            # subprocess with "environment: line N: SCRATCH: set SCRATCH" -- the script under test
+            # is unchanged, this only supplies the variable a real submission's env.sh exports.
+            f"SCRATCH={shlex.quote(str(tmp_path))}",
             "AGENT_PAYLOAD_MOUNT=/opt/hpcagent-bench-agent",
             f"AGENT_LAUNCH_DIR={shlex.quote(str(run_dir / '.agent-launch'))}",
             'CONTAINER_MOUNTS=""',
