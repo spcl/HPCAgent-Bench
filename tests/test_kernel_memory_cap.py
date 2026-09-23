@@ -257,6 +257,11 @@ SMALL_STACK_MB = 16
 #: A single thread stack larger than the 0.25 GB cap :func:`call_oversubscribed` arms.
 OVERSIZED_STACK_MB = 512
 
+#: Physical cores of the machine the oversubscription test pins: above the call's ``threads=4``, so
+#: the core count and not the slot sets the limit, and below the ``4 * ncpu`` team the kernel asks
+#: for on any host with two or more CPUs, so the runtime has something to clamp.
+PINNED_CORES = 6
+
 
 def oversubscribed_kernel(tmp_path) -> pathlib.Path:
     """A python delivery returning the size of the team :data:`OVERSUBSCRIBED_SOURCE` got."""
@@ -297,11 +302,24 @@ def test_a_kernel_that_oversubscribes_the_machine_is_clamped_not_crashed(tmp_pat
     """``omp_set_num_threads(4 * ncpu)`` is legal OpenMP. With stacks reserved for the slot's
     ``OMP_NUM_THREADS`` alone, every thread past them failed to map and libgomp exited 1. The child
     reserves one stack per physical core and exports that as ``OMP_THREAD_LIMIT``, so the runtime
-    clamps the team to it and the kernel runs. The limit is native_call.thread_limit's: the physical
-    cores, or the call's own OMP_NUM_THREADS (``threads=4``) where that is larger -- a 2-core CI
-    runner's team is 4, not 2."""
-    cores = flags.physical_cores(set(range(os.cpu_count() or 1)))
-    np.testing.assert_array_equal(fresh_interpreter(call_oversubscribed, tmp_path), [float(max(4, cores))])
+    clamps the team to it and the kernel runs.
+
+    On a machine of :data:`PINNED_CORES`, not the host's: the limit is max(``OMP_NUM_THREADS``,
+    physical cores), and ``OMP_NUM_THREADS`` is the call's ``threads=4`` clamped to the slot's
+    cores, so the host's answer is 2 on a 2-core CI runner and 64 on a login node. An expectation
+    re-derived from the host has to repeat that clamp; ``max(4, cores)`` did not, and expected 4
+    where the child correctly ran 2."""
+    assert 4 * (os.cpu_count() or 1) > PINNED_CORES, "the premise: the kernel asks past the limit"
+    team = fresh_interpreter(call_oversubscribed_on_pinned_machine, tmp_path)
+    np.testing.assert_array_equal(team, [float(PINNED_CORES)])
+
+
+def call_oversubscribed_on_pinned_machine(tmp_path: pathlib.Path) -> np.ndarray:
+    """:func:`call_oversubscribed` with the topology probe pinned at :data:`PINNED_CORES`. For
+    :func:`fresh_interpreter`, whose interpreter exits after it: the patch goes with it, and the
+    grading child it forks inherits it."""
+    flags.physical_cores = lambda cpus: PINNED_CORES
+    return call_oversubscribed(tmp_path)
 
 
 def call_without_stack_reserve(tmp_path: pathlib.Path) -> np.ndarray:
