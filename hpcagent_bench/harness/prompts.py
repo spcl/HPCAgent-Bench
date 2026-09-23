@@ -838,11 +838,21 @@ def ml_layout(spec: BenchSpec, binding: Binding, ranks: int) -> dict[str, object
     """The ML-track layout table the distributed contract prints: per array its shape and default
     layout (``split on <symbol>`` = contiguous 1-D block of that axis, or ``replicated``), the size
     symbols that arrive LOCAL vs GLOBAL under that layout (:meth:`Descriptor.local_symbols`), and
-    the split symbols exempt from the 64-per-rank block guarantee."""
+    the split symbols exempt from the 64-per-rank block guarantee, and per allowlisted array the
+    local symbols that arrive GLOBAL once that array is declared replicated (the same rule: the
+    symbol then also sizes a whole axis)."""
     split = cast("dict[str, str | None]", (spec.mpi or {}).get("split") or {})
-    descriptor = Descriptor.from_distribution(distribution_for_kernel(spec.mpi, binding, ranks), binding, ranks)
+    default = distribution_for_kernel(spec.mpi, binding, ranks)
+    descriptor = Descriptor.from_distribution(default, binding, ranks)
     symbols = [a.name for a in binding.scalars if a.role == "symbol"]
     local = descriptor.local_symbols()
+    globalized = []
+    for name in replicatable_allowlist(spec) or ():
+        arrays = cast("dict[str, object]", default["arrays"])
+        replicated = {**default, "arrays": {**arrays, name: {"replicated": True}}}
+        moved = local - Descriptor.from_distribution(replicated, binding, ranks).local_symbols()
+        if moved:
+            globalized.append({"array": name, "symbols": [s for s in symbols if s in moved]})
     return {
         "arrays": [
             {
@@ -858,6 +868,7 @@ def ml_layout(spec: BenchSpec, binding: Binding, ranks: int) -> dict[str, object
         "local_symbols": [s for s in symbols if s in local],
         "global_symbols": [s for s in symbols if s not in local],
         "exempt": sorted(set(split.values()) - {None} - mpi_sizing.aligned_symbols(spec.mpi)),
+        "replication_globalizes": globalized,
     }
 
 
