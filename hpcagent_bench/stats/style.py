@@ -163,15 +163,8 @@ TITLE_GAP_IN: float = 0.30
 TITLE_BAND_IN: float = TITLE_TOP_IN + TITLE_GAP_IN
 
 
-def title(fig: Figure, text: str, subtitle: str = "") -> float:
-    """Centred title; returns the top of the plot area for ``tight_layout(rect=...)``.
-
-    ``subtitle`` is accepted and IGNORED. It used to render a how-to-read sentence under the
-    title, and that sentence belongs in the caption a paper already gives every figure -- printed
-    above the axes it competes with the title and eats a chunk of the panel. Kept in the signature
-    so the callers do not all have to change at once, and so a caller passing one is not silently
-    dropping information it thought was displayed.
-    """
+def title(fig: Figure, text: str) -> float:
+    """Centred title; returns the top of the plot area for ``tight_layout(rect=...)``."""
     width, height = (float(value) for value in fig.get_size_inches())
     # Work in inches, then convert: a fraction of a 4-inch figure is a different gap than the same
     # fraction of a 12-inch one, which is what made the fixed offsets collide.
