@@ -330,9 +330,11 @@ directory: `<RUN_ROOT>/<jobid>` (`RUN_ROOT` from the arm's `.env`, default
 per-rank judge shards **read-only** (`sqlite3 "file:<db>?mode=ro"`, or the Python snippet there) --
 never open a live job's DB for writing.
 
-**The frozen tree.** A job never runs on the live checkout: its batch step copies it to
-`<RUN_ROOT>/../.frozen/job-<jobid>` and every step re-execs from there
-(`experiments/README.md#mount-policy`), so `grep container runtime: ...out` and any path a log
+**The frozen tree.** A job never runs on the live checkout: its batch step snapshots the commit
+checked out when the job STARTS (plus the untracked inputs) to `<RUN_ROOT>/../.frozen/job-<jobid>`
+and every step re-execs from there (`experiments/README.md#mount-policy`), so fast-forwarding the
+live checkout reaches every queued job and no running one. The log's `frozen tree ... at <sha>`
+line names the commit, and `runs.commit_sha` records it. So `grep container runtime: ...out` and any path a log
 prints under `HPCAGENT_BENCH_REPO` point into that copy, not the live tree. Inspect it like any
 other checkout; delete it by hand (`rm -rf .frozen/job-<jobid>`) once the job is done AND extracted
 -- nothing else cleans it up.

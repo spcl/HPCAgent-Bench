@@ -1111,11 +1111,29 @@ def harness_tag() -> str | None:
     return harness or None
 
 
-def commit_tag() -> str | None:
-    """``record.commit`` -- the hpcagent_bench commit the arm was submitted from, or None if unknown.
+#: The short commit of the code snapshot a cluster job runs from, exported by the job itself
+#: (``scripts/cscs/code_snapshot.sh`` through run_cluster.sh, regrade.sbatch, mlscale-grade.sbatch).
+SNAPSHOT_COMMIT_ENV = "HPCAGENT_BENCH_SNAPSHOT_COMMIT"
 
-    Stamped at submission because the judge cannot ask git: the container sees the tree without its
-    repository, so ``git rev-parse`` there fails, and every row of every campaign recorded NULL."""
+
+def snapshot_commit() -> str | None:
+    """The commit of the code snapshot this process runs from, or None outside a snapshot job.
+
+    Read raw, not through :func:`config.get`, which would coerce an all-digit sha to an int."""
+    commit = (config.env_value(SNAPSHOT_COMMIT_ENV) or "").strip()
+    return commit or None
+
+
+def commit_tag() -> str | None:
+    """``record.commit`` -- the hpcagent_bench commit the arm ran, or None if unknown.
+
+    The job's code snapshot wins: it is the code that ran, while the arm env's stamp is the commit
+    the arm was PLANNED at, on a checkout that kept moving until the job started. Stamped at all
+    because the judge cannot ask git: the container sees the tree without its repository, so
+    ``git rev-parse`` there fails, and every row of every campaign recorded NULL."""
+    snapshot = snapshot_commit()
+    if snapshot is not None:
+        return snapshot
     commit = str(config.get("record.commit", "") or "").strip()
     return commit or None
 
@@ -1495,8 +1513,8 @@ def upsert_benchmark(conn: sqlite3.Connection, spec: BenchSpec) -> None:
 
 
 def _commit_sha() -> str | None:
-    """The commit the arm was submitted from (``record.commit``), else this checkout's own; ``None``
-    when neither is known."""
+    """The commit the arm ran (:func:`commit_tag`), else this checkout's own; ``None`` when neither
+    is known."""
     stamped = commit_tag()
     if stamped is not None:
         return stamped

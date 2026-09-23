@@ -3,7 +3,8 @@
 """``experiments/run_cluster.sh``'s FROZEN TREE block: a batch step copies the checkout once and
 re-executes from the copy, so a commit landing mid-run never reaches the job (643369: every /score
 died on "cannot import name 'decline_kind'"). The block is lifted from the real file and run in a
-throwaway checkout whose run_cluster.sh stops right after it."""
+throwaway git checkout (with the real scripts/cscs/code_snapshot.sh) whose run_cluster.sh stops
+right after it. What the copy holds is tests/test_code_snapshot.py's subject."""
 
 import pathlib
 import shutil
@@ -16,11 +17,32 @@ END = "    export HPCAGENT_BENCH_FROZEN=live\nfi\n"
 BLOCK = TEXT[TEXT.index(START) : TEXT.index(END) + len(END)]
 REPORT = (
     'echo "ran from ${SCRIPT_DIR} repo=${HPCAGENT_BENCH_REPO:-} marker=${HPCAGENT_BENCH_FROZEN:-}'
+    " commit=${HPCAGENT_BENCH_SNAPSHOT_COMMIT:-}"
     ' packs=${PACK_ROOT:-} matrices=${HPCAGENT_BENCH_CACHE_DIR:-} generated=${HPCAGENT_BENCH_GENERATED_CACHE_HOST:-}"\n'
 )
 
 
-def checkout(live: pathlib.Path) -> pathlib.Path:
+GIT_ENV = {
+    "GIT_AUTHOR_NAME": "t",
+    "GIT_AUTHOR_EMAIL": "t@t",
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@t",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "HOME": "/nonexistent",
+}
+
+
+def git(repo: pathlib.Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        env={"PATH": "/usr/bin:/bin", **GIT_ENV},
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def checkout(live: pathlib.Path, commit: bool = True) -> pathlib.Path:
     script = live / "experiments" / "run_cluster.sh"
     script.parent.mkdir(parents=True)
     script.write_text(
@@ -28,15 +50,23 @@ def checkout(live: pathlib.Path) -> pathlib.Path:
         + BLOCK
         + REPORT
     )
+    (live / "scripts" / "cscs").mkdir(parents=True)
+    shutil.copy2(REPO / "scripts" / "cscs" / "code_snapshot.sh", live / "scripts" / "cscs" / "code_snapshot.sh")
     (live / "hpcagent_bench").mkdir()
     (live / "hpcagent_bench" / "module.py").write_text("OLD = 1\n")
-    (live / ".git").mkdir()
+    (live / ".gitignore").write_text("core_*\n")
     (live / "core_nid0001_1").write_text("dump")
+    if commit:
+        git(live.parent, "init", "-q", str(live))
+        git(live, "add", "-A")
+        git(live, "commit", "-q", "-m", "c")
     return script
 
 
 def launch(script: pathlib.Path, env: dict[str, str], path: str = "/usr/bin:/bin") -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["bash", str(script)], env={"PATH": path, **env}, capture_output=True, text=True, check=True)
+    return subprocess.run(
+        ["bash", str(script)], env={"PATH": path, **GIT_ENV, **env}, capture_output=True, text=True, check=True
+    )
 
 
 def fake_rsync(bin_dir: pathlib.Path, rc: int) -> str:
@@ -51,10 +81,12 @@ def test_a_batch_step_runs_from_a_copy_beside_its_campaign_that_later_edits_cann
     tmp_path: pathlib.Path,
 ) -> None:
     live, runs = tmp_path / "live", tmp_path / "runs" / "campaign"
-    out = launch(checkout(live), {"SLURM_JOB_ID": "123", "RUN_ROOT": str(runs)}).stdout
+    script = checkout(live)
+    head = git(live, "rev-parse", "--short", "HEAD")
+    out = launch(script, {"SLURM_JOB_ID": "123", "RUN_ROOT": str(runs)}).stdout
     frozen = tmp_path / "runs" / ".frozen" / "job-123"
     assert out.count("frozen tree") == 1, out
-    assert f"ran from {frozen}/experiments repo={frozen} marker={frozen}" in out, out
+    assert f"ran from {frozen}/experiments repo={frozen} marker={frozen} commit={head}" in out, out
     assert f"packs={live}/.cache/packs matrices={live}/hpcagent_bench/.hpcagent_bench_cache" in out, out
     assert f"generated={live}/.cache/generated" in out, out
     (live / "hpcagent_bench" / "module.py").write_text("NEW = 1\n")
@@ -71,11 +103,27 @@ def test_a_step_that_inherits_the_frozen_tree_does_not_copy_again(tmp_path: path
     assert not (tmp_path / "runs").exists()
 
 
+def test_the_kill_switch_runs_the_job_on_the_live_tree(tmp_path: pathlib.Path) -> None:
+    """HPCAGENT_BENCH_FROZEN=live, from the submit env or the arm's .env, skips the copy."""
+    live, runs = tmp_path / "live", tmp_path / "runs" / "campaign"
+    env = {"SLURM_JOB_ID": "123", "RUN_ROOT": str(runs), "HPCAGENT_BENCH_FROZEN": "live"}
+    out = launch(checkout(live), env).stdout
+    assert "frozen tree" not in out and f"ran from {live}/experiments repo= marker=live commit=" in out, out
+    assert not (tmp_path / "runs").exists()
+
+
 def test_a_failed_copy_runs_the_job_on_the_live_tree_instead_of_killing_it(tmp_path: pathlib.Path) -> None:
     live, runs = tmp_path / "live", tmp_path / "runs" / "campaign"
     result = launch(checkout(live), {"SLURM_JOB_ID": "123", "RUN_ROOT": str(runs)}, fake_rsync(tmp_path / "bin", 23))
     assert "WARNING: could not freeze" in result.stderr, result.stderr
-    assert f"ran from {live}/experiments repo= marker=live" in result.stdout, result.stdout
+    assert f"ran from {live}/experiments repo= marker=live commit=" in result.stdout, result.stdout
+
+
+def test_a_checkout_git_cannot_read_runs_the_job_on_the_live_tree(tmp_path: pathlib.Path) -> None:
+    live, runs = tmp_path / "live", tmp_path / "runs" / "campaign"
+    result = launch(checkout(live, commit=False), {"SLURM_JOB_ID": "123", "RUN_ROOT": str(runs)})
+    assert "WARNING: could not freeze" in result.stderr, result.stderr
+    assert "marker=live" in result.stdout, result.stdout
 
 
 def test_a_file_vanishing_mid_copy_still_freezes(tmp_path: pathlib.Path) -> None:
@@ -87,5 +135,5 @@ def test_a_file_vanishing_mid_copy_still_freezes(tmp_path: pathlib.Path) -> None
 def test_a_run_root_inside_the_checkout_is_not_copied_into_itself(tmp_path: pathlib.Path) -> None:
     live = tmp_path / "live"
     result = launch(checkout(live), {"SLURM_JOB_ID": "123", "RUN_ROOT": str(live / "runs" / "campaign")})
-    assert "(inside)" in result.stderr and "marker=live" in result.stdout, result
+    assert "is inside" in result.stderr and "marker=live" in result.stdout, result
     assert not (live / "runs").exists()
