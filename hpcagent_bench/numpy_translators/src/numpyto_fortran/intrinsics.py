@@ -195,10 +195,8 @@ def renders_natively(
     ``norm``'s ``ord`` each ask for something the whole-array intrinsic does not answer, and numpy
     takes the axis positionally too -- so for those keys a second argument of any kind declines.
     """
-    # The float gate belongs to the REDUCTIONS: they are the ones that disagree with numpy off the
-    # floating types (integer overflow, LOGICAL operands, integer division in mean). RESHAPE only
-    # moves elements and is exact for every type, so demanding a known float dtype there declines
-    # the intermediates the whole corpus reshapes -- 175 of them in efficientnet_b0 alone.
+    # The float gate belongs to the REDUCTIONS (integer overflow, LOGICAL operands, integer division
+    # in mean). RESHAPE only moves elements and is exact for every type.
     if key in SHAPE_INTRINSICS:
         dims = reshape_dims(call)
         if dims is None or not isinstance(call.args[0], ast.Name):

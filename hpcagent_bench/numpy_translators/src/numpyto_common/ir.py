@@ -1,10 +1,7 @@
 """In-memory representation: the Python AST + a layout side-table.
 
-Follows :mod:`affinepython.ir`'s pattern: the AST is the canonical form
-(round-trips via :func:`ast.unparse`), and three small dataclasses carry
-the layout / shape info backends need for typed C signatures and
-subscript resolution. Reusable as-is once ``NumpyToDaCe`` lands; only
-NumpyToC consumes it for now.
+The AST is the canonical form (round-trips via :func:`ast.unparse`); the dataclasses carry the
+layout / shape info backends need for typed signatures and subscript resolution.
 """
 
 import ast
@@ -124,12 +121,8 @@ class ArrayDesc:
     is_index: bool = False
 
     def __post_init__(self) -> None:
-        # Same storage contract :class:`ScalarDesc` honours, for the same reason: normalise the
-        # spelling once, where the dtype is STORED, so signature / binding JSON / ABI gate cannot
-        # disagree over ``double`` vs ``float64``. And REFUSE a token that is not a dtype at all --
-        # every emitter's dtype table falls back to ``double`` on a miss, so an unvalidated token
-        # (``dtype=x.dtype`` once read as the literal ``"dtype"``) emitted a double buffer inside
-        # an fp32 kernel instead of failing. A refusal beats a silently wrong emit.
+        # One spelling where the dtype is STORED (see ScalarDesc). A non-dtype token is refused:
+        # every emitter's dtype table falls back to ``double`` on a miss.
         try:
             self.dtype = dtypes.canonical(self.dtype)
         except KeyError:
@@ -143,21 +136,14 @@ class ScalarDesc:
     name: str
     dtype: str
     is_output: bool = False
-    #: The manifest's value for this scalar, when it declares one. A benchmark pins every scalar to a
-    #: single value across all of S/M/L/XL, so a scalar reaching an EXTENT is a compile-time constant
-    #: however the reference spells it -- conv2d_instance_norm_divide derives its output extents from
-    #: stride, padding and dilation, and its declared ``out`` shape is that formula already evaluated
-    #: at the pinned values. Emitters that need static shapes read it; the rest ignore it and keep
-    #: taking the scalar as a runtime argument, so the ABI is the same either way.
+    #: The manifest's value for this scalar, when it declares one: a scalar reaching an EXTENT is a
+    #: compile-time constant (conv2d_instance_norm_divide's stride / padding / dilation). Emitters
+    #: that need static shapes read it; the rest keep the runtime argument, so the ABI is unchanged.
     value: Optional[Union[int, float]] = None
 
     def __post_init__(self) -> None:
-        # Honour the storage contract :func:`dtypes.canonical` documents: the frontend records
-        # aliases (a plain ``int`` for anything integral, ``double`` from a precision remap), and
-        # an alias reaching the ABI reads as a DISAGREEMENT against the binding's canonical
-        # ``int64`` even though both lower to the same ``int64_t``. Normalising at the one place
-        # a scalar dtype is stored keeps every consumer -- signature, binding JSON, ABI gate --
-        # on a single spelling.
+        # One spelling where the dtype is stored, so signature, binding JSON and ABI gate agree
+        # (the frontend records aliases such as ``int`` and ``double``).
         self.dtype = dtypes.canonical(self.dtype)
 
 
@@ -215,29 +201,21 @@ class KernelIR:
     #: empty for dense kernels. Consumed by the matmul hoister to route
     #: ``A @ B`` through the sparse path.
     sparse: Dict[str, "SparseArrayDesc"] = field(default_factory=dict)
-    #: Module-level constants the frontend FOLDED into the body and the shape
-    #: tokens (cloudsc's ``nclv = 5``). They are compile-time literals, not
-    #: parameters: re-promoting one as a shape symbol would append a parameter
-    #: the harness binding never passes, shifting every trailing scalar by one
-    #: slot in the positional call.
+    #: Module-level constants the frontend FOLDED into the body and the shape tokens (cloudsc's
+    #: ``nclv = 5``). Never re-promoted to a symbol: the harness binding does not pass them.
     inlined_consts: Set[str] = field(default_factory=set)
     #: Manifest-bound integer name -> proven sign (see
     #: :func:`numpyto_common.frontend.symbol_sign_from_bindings`). Covers names that never
     #: become a :class:`SymbolDesc` -- a scalar the emitter promotes because it sizes an array.
     symbol_signs: Dict[str, str] = field(default_factory=dict)
-    #: One sub-:class:`KernelIR` per top-level helper called in the kernel body
-    #: that couldn't be inlined (early ``return`` / recursion). Built by
-    #: :func:`parse_kernel`, lowered by :func:`lower`; each emitter emits it as
-    #: its own native function, so the early return becomes a native return.
+    #: One sub-:class:`KernelIR` per called helper that could not be inlined (early ``return`` /
+    #: recursion); each emitter emits it as its own native function.
     helpers: List["KernelIR"] = field(default_factory=list)
     #: When this KernelIR is a helper: how its value comes back --
     #: ``None`` (void/in-place), ``"scalar"`` (by-value; dtype = the sole
     #: :attr:`scalars` entry marked ``is_output``), or the out array name.
     return_kind: Optional[str] = None
-    # Lowering side-tables: populated by :func:`numpyto_common.lowering.lower`
-    # (empty on a fresh parse), consumed by every emitter. Live on the IR, not
-    # monkey-patched onto ``tree.__dict__``, so access is a typed field
-    # (``kir.local_dtypes``) with a sane default, never a hand-rolled getattr.
+    # Lowering side-tables: filled by :func:`numpyto_common.lowering.lower`, read by every emitter.
     #: Loop-index / tuple-unpack integer locals the emitter must declare ``int``.
     int_locals: List[str] = field(default_factory=list)
     #: Local-name -> numpy dtype tag for body locals (``"complex128"``, ``"int64"``,
@@ -249,8 +227,7 @@ class KernelIR:
     #: Local-name -> constructor kind (``"zeros"`` / ``"ones"`` / ``"empty"`` /
     #: ...) so the emitter re-initialises a local that aliases an output buffer.
     zeros_fills: Dict[str, str] = field(default_factory=dict)
-    #: Scalar call-hoist temp names (declared as plain float locals by the emit
-    #: walker's implicit-local logic; kept for completeness / diagnostics).
+    #: Scalar call-hoist temp names (declared by the emit walker's implicit-local logic).
     scalar_call_temps: List[str] = field(default_factory=list)
     #: Local-name -> FIFO of per-reassignment shapes (SSA-versioned locals whose
     #: broadcast extent changes between writes), consumed in source order at emit.
@@ -258,20 +235,14 @@ class KernelIR:
     #: Floating precision the sweep pinned (``"float32"`` / ...); the emitter's
     #: default dtype for a temp not in ``local_dtypes``. ``None`` = natural fp64.
     float_precision: Optional[str] = None
-    #: ``{name: value}`` for each ``config:`` knob the manifest pinned to ONE value. These have the
-    #: same value for every preset and every fuzz draw, so they are compile-time constants: the
-    #: native emitters declare them (C ``constexpr`` / Fortran ``parameter``) and leave them OUT of
-    #: the ABI, which is why :meth:`param_order` drops them. They stay in ``symbols`` / ``scalars``
-    #: so lowering still resolves every body reference to them by name.
+    #: ``{name: value}`` for each ``config:`` knob the manifest pinned to ONE value: a compile-time
+    #: constant (C ``constexpr`` / Fortran ``parameter``) left OUT of the ABI by :meth:`param_order`.
+    #: Kept in ``symbols`` / ``scalars`` so lowering still resolves body references by name.
     pinned_consts: Dict[str, Any] = field(default_factory=dict)
     #: ``{name: value}`` for each manifest name that reaches the kernel ONLY through a declared
-    #: array shape -- no parameter, no body reference -- and holds the SAME integer in every
-    #: preset. conv_depthwise_separable_2d declares ``out`` with ``dilation``, whose stages the
-    #: body spells ``depthwise_dilation`` / ``pointwise_dilation``; one quantity, three spellings,
-    #: and nothing the kernel computes can observe the first. An emitter that needs the declared
-    #: extent to AGREE with the computed one reads this and substitutes the literal, which is the
-    #: only thing that unifies the spellings. The others ignore it and keep the token symbolic, so
-    #: no ABI moves.
+    #: array shape and holds the SAME integer in every preset (conv_depthwise_separable_2d's
+    #: ``dilation``). An emitter that needs the declared extent to AGREE with the computed one
+    #: substitutes the literal; the others keep the token symbolic, so no ABI moves.
     shape_only_consts: Dict[str, int] = field(default_factory=dict)
 
     def param_order(self, extra_ref: Optional[str] = None) -> List[str]:

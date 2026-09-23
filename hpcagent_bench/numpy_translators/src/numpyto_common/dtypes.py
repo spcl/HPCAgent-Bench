@@ -70,14 +70,10 @@ REGISTRY: Dict[str, DTypeInfo] = {
     "float32": _row("float32", "float", "real(c_float)", "float", "ptr_float", ctypes.c_float),
     "float16": _row("float16", "_Float16", None, "float16", "ptr_float16", None),
     "float128": _row("float128", "long double", None, "float128", "ptr_float128", ctypes.c_longdouble),
-    # The OCP fp8 pair. No language has a native fp8 scalar, so both are 1-byte
-    # STORAGE with a ``compute`` of float32: an element is promoted to float on
-    # read, every float op is rounded back to the fp8 grid, and a write demotes
-    # to the byte (``__npb_f32_to_e4m3`` & co. in the emitted prelude). float32
-    # is the compute type because that is what ml_dtypes -- and fp8 hardware --
-    # accumulate in, so the emitted arithmetic tracks the numpy oracle exactly.
-    # The C type is a distinct typedef name, NOT a bare ``uint8_t``: ``uint8_t``
-    # would match ``_is_narrow_int`` and get silently widened to int64 on read.
+    # The OCP fp8 pair: 1-byte STORAGE computed in float32 (what ml_dtypes and fp8 hardware
+    # accumulate in): promoted on read, rounded to the fp8 grid per op, demoted on write
+    # (``__npb_f32_to_e4m3`` & co.). A distinct C typedef, NOT ``uint8_t``, which ``_is_narrow_int``
+    # would widen to int64 on read.
     "float8_e4m3": _row(
         "float8_e4m3",
         "__npb_fp8_e4m3",
@@ -96,15 +92,9 @@ REGISTRY: Dict[str, DTypeInfo] = {
         ctypes.c_uint8,
         "float32",
     ),
-    # bfloat16 is the fp8 pattern at two bytes: STORAGE only, computed in float32. It is the top
-    # half of an IEEE float32 (same 8-bit exponent, 7-bit mantissa), so it keeps float32's range --
-    # softmax/cross-entropy logits that saturate float16 at 65504 fit -- while halving the bytes.
-    # numpy has no native bfloat16; ml_dtypes registers the name, so np.dtype("bfloat16") has
-    # itemsize 2 once ml_dtypes is imported. This module stays numpy-free (itemsize() answers
-    # from the ctype), so the import lives in the harness's hpcagent_bench/dtypes.py, which is
-    # the door every numpy-allocating caller comes through. The C type is a distinct
-    # typedef, NOT a bare uint16_t, for the same reason as fp8: _is_narrow_int would match
-    # uint16_t and widen every read to int64.
+    # bfloat16: the fp8 pattern at two bytes (STORAGE only, computed in float32). The top half of
+    # an IEEE float32, so it keeps float32's range. ml_dtypes registers the numpy name; that import
+    # lives in hpcagent_bench/dtypes.py so this module stays numpy-free. Distinct C typedef, as fp8.
     "bfloat16": _row(
         "bfloat16",
         "__npb_bf16",
@@ -118,15 +108,10 @@ REGISTRY: Dict[str, DTypeInfo] = {
     "int32": _row("int32", "int32_t", "integer(c_int32_t)", "int32", "ptr_int32", ctypes.c_int32),
     "int16": _row("int16", "int16_t", "integer(c_int16_t)", "int16", "ptr_int16", ctypes.c_int16),
     "int8": _row("int8", "int8_t", "integer(c_int8_t)", "int8", "ptr_int8", ctypes.c_int8),
-    # int4 is a SEMANTIC dtype, not a distinct buffer layout: storage is one value per
-    # BYTE (numpy int8 / C int8_t) and nothing in the harness packs nibbles. What "int4"
-    # declares is (a) the logical range [-8, 7] and (b) the packing contract a real int4
-    # kernel needs -- two nibbles per byte, so an array's element count is even
-    # (``size_multiple``, enforced on the innermost extent by the manifest schema).
-    # It shares int8's binding kinds ON PURPOSE: the ABI/wire form of an int4 array IS an
-    # int8 buffer, so every emitter, marshaller and oracle keeps working unchanged. The
-    # reverse kind -> dtype maps below skip storage-backed rows, so ``ptr_int8`` still
-    # resolves back to int8.
+    # int4 is a SEMANTIC dtype: storage is one value per BYTE (int8) and nothing packs nibbles.
+    # It declares the range [-8, 7] and an even element count (``size_multiple``, enforced by the
+    # manifest schema). It shares int8's binding kinds: the ABI form IS an int8 buffer. The reverse
+    # kind -> dtype maps skip storage-backed rows, so ``ptr_int8`` resolves back to int8.
     "int4": _row(
         "int4",
         "int8_t",
