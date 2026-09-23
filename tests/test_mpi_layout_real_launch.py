@@ -63,7 +63,7 @@ CASES = [
 
 
 @pytest.mark.parametrize("ranks,shape,scheme,block_size", CASES)
-def test_layout_roundtrip_real_mpi(ranks, shape, scheme, block_size) -> None:
+def test_layout_roundtrip_real_mpi(ranks: int, shape: tuple[int, ...], scheme: str, block_size: int) -> None:
     launch = mpi4py_launcher()
     if launch is None:
         skip_or_fail(f"no working mpi4py launcher in this environment: {mpi4py_launcher_diagnosis()}")
@@ -73,7 +73,7 @@ def test_layout_roundtrip_real_mpi(ranks, shape, scheme, block_size) -> None:
 
 
 @pytest.mark.parametrize("ranks,shape", [(2, (6,)), (3, (9,)), (4, (5, 5))])
-def test_replicated_layout_roundtrip_real_mpi(ranks, shape) -> None:
+def test_replicated_layout_roundtrip_real_mpi(ranks: int, shape: tuple[int, ...]) -> None:
     """Every rank generates the WHOLE array; the round trip must hold with no split axis at all."""
     launch = mpi4py_launcher()
     if launch is None:

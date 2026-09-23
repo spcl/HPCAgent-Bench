@@ -14,6 +14,8 @@ MAX-over-ranks kernel seconds"). This file adds:
    giving each rank a deterministic rank-proportional delay inside the kernel.
 """
 
+import pathlib
+import subprocess
 import sys
 import textwrap
 
@@ -111,13 +113,15 @@ SLEEP_PY_KERNEL = (
 )
 
 
-def mpirun_cmd(launch, args, timeout=60):
+def mpirun_cmd(launch: list[str], args: list[str], timeout: int = 60) -> subprocess.CompletedProcess[str]:
     r = run_cmd(launch + args, timeout=timeout)
     assert r is not None and r.returncode == 0, r and r.stderr
     return r
 
 
-def gather_output(desc, outfile, shape, dtype=np.float64):
+def gather_output(
+    desc: Descriptor, outfile: pathlib.Path, shape: tuple[int, ...], dtype: type[np.float64] = np.float64
+) -> tuple[list[float], np.ndarray]:
     samples, outputs = unpack_outfile(open(outfile, "rb").read())
     dtype_code, tiles = outputs[0]
     shaped = [t.reshape(desc.local_shape("y", shape, r)) for r, t in enumerate(tiles)]
@@ -125,7 +129,7 @@ def gather_output(desc, outfile, shape, dtype=np.float64):
 
 
 @pytest.mark.parametrize("ranks", RANKS_MATRIX)
-def test_c_driver_yax_matrix(ranks, tmp_path) -> None:
+def test_c_driver_yax_matrix(ranks: int, tmp_path: pathlib.Path) -> None:
     tc = c_toolchain()
     if tc is None:
         skip_or_fail(f"no working MPI C compiler + launcher: {c_toolchain_diagnosis()}")
@@ -148,7 +152,7 @@ def test_c_driver_yax_matrix(ranks, tmp_path) -> None:
 
 
 @pytest.mark.parametrize("ranks", RANKS_MATRIX)
-def test_py_driver_yax_matrix(ranks, tmp_path) -> None:
+def test_py_driver_yax_matrix(ranks: int, tmp_path: pathlib.Path) -> None:
     launch = mpi4py_launcher()
     if launch is None:
         skip_or_fail(f"mpi4py has no working launcher: {mpi4py_launcher_diagnosis()}")
@@ -176,7 +180,7 @@ def test_py_driver_yax_matrix(ranks, tmp_path) -> None:
 
 
 @pytest.mark.parametrize("ranks", RANKS_MATRIX)
-def test_c_driver_allreduce_sum_matrix(ranks, tmp_path) -> None:
+def test_c_driver_allreduce_sum_matrix(ranks: int, tmp_path: pathlib.Path) -> None:
     """A kernel that DOES communicate (MPI_Allreduce), checked against numpy.sum on the whole array."""
     tc = c_toolchain()
     if tc is None:
@@ -199,7 +203,7 @@ def test_c_driver_allreduce_sum_matrix(ranks, tmp_path) -> None:
 
 
 @pytest.mark.parametrize("ranks", RANKS_MATRIX)
-def test_py_driver_allreduce_sum_matrix(ranks, tmp_path) -> None:
+def test_py_driver_allreduce_sum_matrix(ranks: int, tmp_path: pathlib.Path) -> None:
     launch = mpi4py_launcher()
     if launch is None:
         skip_or_fail(f"mpi4py has no working launcher: {mpi4py_launcher_diagnosis()}")
@@ -226,7 +230,7 @@ def test_py_driver_allreduce_sum_matrix(ranks, tmp_path) -> None:
 
 
 @pytest.mark.parametrize("ranks", [2, 4])
-def test_sample_time_is_the_slowest_rank_not_the_fastest(ranks, tmp_path) -> None:
+def test_sample_time_is_the_slowest_rank_not_the_fastest(ranks: int, tmp_path: pathlib.Path) -> None:
     """Rank r sleeps 0.03*r s; the recorded sample must track the LAST rank's time (mpi_wire.py's
     documented "per-repeat MAX-over-ranks kernel seconds"), never rank 0's near-zero time."""
     launch = mpi4py_launcher()
