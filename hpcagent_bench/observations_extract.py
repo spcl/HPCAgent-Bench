@@ -899,9 +899,13 @@ def scaling_rows(
     its curve's ``mean_efficiency`` joined on the grade (blank when no curve survived). The caller
     checks the table exists; ``identity`` is the ``runs`` table's (harnesses, packets) maps."""
     harnesses, packets = identity
+    # A curve is keyed by its law since both laws of an ML grade share one stamp; a DB written
+    # before scaling_curves carried the law holds one curve per grade, read here under law NULL.
+    columns = {str(r[1]) for r in conn.execute("PRAGMA table_info(scaling_curves)")}
+    law = "scaling_mode" if "scaling_mode" in columns else "NULL AS scaling_mode"
     curves = {
-        (r["run_id"], r["benchmark"], int(r["ts"])): r["mean_efficiency"]
-        for r in conn.execute("SELECT run_id, benchmark, ts, mean_efficiency FROM scaling_curves")
+        (r["run_id"], r["benchmark"], int(r["ts"]), r["scaling_mode"]): r["mean_efficiency"]
+        for r in conn.execute(f"SELECT run_id, benchmark, ts, {law}, mean_efficiency FROM scaling_curves")
     }
     out: list[dict[str, Any]] = []
     for row in conn.execute("SELECT * FROM scaling_points ORDER BY run_id, benchmark, ts, ranks"):
@@ -937,7 +941,9 @@ def scaling_rows(
                 "scaling_shape": blank(row["shape"]),
                 "scaling_note": blank(row["note"]),
                 "efficiency": blank(row["efficiency"]),
-                "mean_efficiency": blank(curves.get((run_id, bench, ts))),
+                "mean_efficiency": blank(
+                    curves.get((run_id, bench, ts, row["scaling_mode"]), curves.get((run_id, bench, ts, None)))
+                ),
             }
         )
     return out

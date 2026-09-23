@@ -172,12 +172,15 @@ def test_a_set_valued_split_symbol_keeps_its_declared_members() -> None:
         assert int(cell["params"]["num_experts"]) in members
 
 
-def test_the_clamp_does_not_touch_undecomposed_symbols() -> None:
-    """Only the split symbols are raised: a replicated extent has no rank owning a slab of it, and
-    growing it would cost memory the edge probes exist to avoid."""
+def test_an_undecomposed_symbol_is_rounded_to_64_not_to_the_rank_count() -> None:
+    """A replicated extent has no rank owning a slab of it: it is lifted to the 64-element grid
+    every mlscale dimension sits on (USER 2026-09-23), never to 64 * P."""
     spec = BenchSpec.load("dist_softmax")
     assert metric.split_symbols(spec) == {"dim"}
-    assert any(int(cell["params"]["batch_size"]) < 16 for cell in metric.ml_fuzz_cells(spec, 16))
+    cells = metric.ml_fuzz_cells(spec, 16)
+    assert all(int(cell["params"]["batch_size"]) % 64 == 0 for cell in cells)
+    assert any(int(cell["params"]["batch_size"]) < 64 * 16 for cell in cells)
+    assert all(int(cell["params"]["dim"]) % (64 * 16) == 0 for cell in cells)
 
 
 def test_cells_are_deduplicated_after_the_clamp() -> None:

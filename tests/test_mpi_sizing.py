@@ -326,3 +326,37 @@ def test_the_work_exponent_split_and_the_one_two_symbol_tuple_match_the_paper(mp
     assert dict(split) == {1: 36, 2: 9, 3: 12}
     assert {stem: d["axis"] for stem, d in decomps.items() if len(d["axis"]) > 1} == {"mat_scaled_add": ["M", "N"]}
     assert decomps["mat_scaled_add"]["work_exponent"] == 2
+
+
+# The 64-per-rank block rule (USER 2026-09-23): an ALIGNED weak symbol snaps to a multiple of 64*P
+@pytest.mark.parametrize(("ranks", "expected"), [(2, 5760), (4, 8192), (8, 11776), (16, 16384)])
+def test_an_aligned_weak_symbol_snaps_each_rank_block_to_64(ranks: int, expected: int) -> None:
+    """dist_sdpa's sequence length (k=2): 4096 * sqrt(P), snapped to the nearest multiple of 64*P
+    -- the unaligned 5793 / 11585 left odd blocks; the exact P = m**2 sizes do not move."""
+    out = mpi_sizing.weak({"S": 4096, "B": 30}, ["S"], ranks, 2, aligned={"S"})
+    assert out == {"S": expected, "B": 30}
+    assert out["S"] % (mpi_sizing.RANK_BLOCK_QUANTUM * ranks) == 0
+
+
+def test_an_unaligned_symbol_keeps_the_plain_rounding() -> None:
+    assert mpi_sizing.weak({"S": 4096}, ["S"], 2, 2) == {"S": 5793}
+
+
+def test_the_rounding_note_names_an_alignment_that_moved_an_exact_size() -> None:
+    """At P = m**k growth is exact and needs no note -- unless the alignment moved it."""
+    grown = mpi_sizing.weak({"N": 100}, ["N"], 4, 1, aligned={"N"})
+    assert grown == {"N": 512}  # 400 -> nearest multiple of 256
+    note = mpi_sizing.weak_rounding_note({"N": 100}, grown, ["N"], 4, 1)
+    assert note is not None and "aligned to 64 per rank" in note
+    exact = mpi_sizing.weak({"N": 1024}, ["N"], 4, 1, aligned={"N"})
+    assert mpi_sizing.weak_rounding_note({"N": 1024}, exact, ["N"], 4, 1) is None
+
+
+def test_strong_ignores_the_alignment() -> None:
+    assert mpi_sizing.sized_params({"N": 100}, "strong", ["N"], 4, 1, aligned={"N"}) == {"N": 100}
+
+
+def test_aligned_symbols_are_the_split_symbols_minus_the_exempt() -> None:
+    mpi = {"split": {"x": "T", "w": "E", "g": None}, "rank_block_exempt": ["E"]}
+    assert mpi_sizing.aligned_symbols(mpi) == {"T"}
+    assert mpi_sizing.aligned_symbols(None) == frozenset()

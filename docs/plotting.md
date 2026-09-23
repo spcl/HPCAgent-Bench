@@ -412,9 +412,9 @@ python statistics/plot_scaling.py $AR/data/mlscale_observations.csv --experiment
 python statistics/plot_scaling.py $AR/data/mlscale_observations.csv --experiment mlscale \
     --figure summary --out figures/scaling
 
-# one model's pair of arms, at a paper's single-column width
+# one model's arm (both laws of each submission), at a paper's single-column width
 python statistics/plot_scaling.py $AR/data/mlscale_observations.csv \
-    --arm 'mlscale-(weak|strong)-qwen38-hip' --width 5.5 --out figures/scaling-qwen38
+    --arm 'mlscale-qwen38-hip' --width 5.5 --out figures/scaling-qwen38
 ```
 
 ## The figures
