@@ -49,7 +49,7 @@ from typing import Callable, Final, Mapping, Sequence, TypeAlias, TypeGuard
 FUZZED_PRESET = "fuzzed"
 
 #: Sentinel default for every ``config_names`` parameter below: no symbol is a declared
-#: config knob unless the caller says so (100% backward compatible -- see :func:`resolve_ranges`).
+#: config knob unless the caller says so (see :func:`resolve_ranges`).
 NO_CONFIG_NAMES: frozenset[str] = frozenset()
 
 #: A manifest parameter's raw fuzz spec: a discrete-set / derive / construct mapping, a
@@ -180,8 +180,7 @@ def resolve_ranges(
     # fuzz.anchor for every token, so this never reads a stale rung from an earlier call.
     anchor = config.get_str("fuzz.anchor", "XL")
     base = parameters.get(anchor) or parameters.get("XL") or parameters.get("L") or next(iter(parameters.values()))
-    # Defaults track config.yaml. They used to read 0.85/1.15, which silently restored the band
-    # that put every draw above 1.00x through the track ceiling whenever the key was absent.
+    # Defaults track config.yaml: a hi above 1.00 would put draws through the track ceiling.
     lo_m = config.get_float("fuzz.xl_lo_mult", 0.50)
     hi_m = config.get_float("fuzz.xl_hi_mult", 1.00)
     out: dict[str, FuzzValue] = {}

@@ -338,7 +338,7 @@ def task_rows(frame: "pd.DataFrame", column: str) -> "pd.DataFrame | None":
 def drop_adhoc_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     """``frame`` without every row stored under the judge's ``adhoc`` run id, retagged ones included.
 
-    2026-09-22 user decision (:data:`hpcagent_bench.frozen_observations.ADHOC_RUN_ID`): a grade filed
+    See :data:`hpcagent_bench.frozen_observations.ADHOC_RUN_ID`: a grade filed
     with no run id has no agent-episode identity, so it answers no arm's kernel; the kernel is owed a
     rerun (experiments/remaining_kernels.covered skips the same rows). It runs BEFORE
     :func:`fill_arm_identity`, so a retagged row cannot lend its recorded identity to a real arm. Only
@@ -438,9 +438,8 @@ def drop_cancelled_task_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     return frame[~dropped]
 
 
-#: Arm prefixes a campaign was renamed from, and the name it runs under now (2026-09-19 user decision:
-#: ``llrblind-cmp`` is the pre-cmp ``llrblind`` arm under a later name, the same condition, and its
-#: data is reused). ``experiments/remaining_kernels.py:base_arm`` applies the same fold to coverage.
+#: Arm prefixes a campaign was renamed from, and the name it runs under now (``llrblind-cmp`` is the
+#: pre-cmp ``llrblind`` arm under a later name, the same condition, and its data is reused). ``experiments/remaining_kernels.py:base_arm`` applies the same fold to coverage.
 RENAMED_ARM_PREFIXES: tuple[tuple[str, str], ...] = (("llrblind-", "llrblind-cmp-"),)
 
 
@@ -470,9 +469,8 @@ CLEAN_SUFFIX: str = "-clean"
 
 def fold_clean_arms(frame: "pd.DataFrame") -> "pd.DataFrame":
     """``frame`` with every ``-clean`` arm under the arm it re-ran (spec X9). Nothing is dropped:
-    the waves pool and the latest run per kernel (``population.latest_runs``) picks between them
-    (2026-09-18 user rule). Dropping every earlier row on any clean task row cost whole arms: an
-    owed rerun of 1-7 kernels erased the ~40 kernels of the wave it topped up."""
+    the waves pool and the latest run per kernel (``population.latest_runs``) picks between them,
+    so an owed rerun of a few kernels keeps the rest of the wave it topped up."""
     if frame.empty or "arm" not in frame.columns:
         return frame
     arms = frame["arm"]

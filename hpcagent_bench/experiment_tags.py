@@ -29,13 +29,10 @@ from hpcagent_bench.spec import as_list
 
 REGISTRY = pathlib.Path(__file__).resolve().parent / "envs" / "registry.yaml"
 
-#: A clean re-run's arm-name suffix (USER RULE 2026-09-18: fold every ``-clean`` arm into its base
-#: identity). Clean is a run flag carried by the ARM NAME alone -- submit_common.sh's
-#: ``clean_suffix`` leaves the identity columns (experiment/model/language/device/packet)
-#: untouched -- so it must never survive into a recorded ``language`` value. An older submitter bug
-#: (fixed for new arms; see each submit-*.sh's own ``record_identity`` call) baked it in anyway, and
-#: an already-queued job's env file cannot be edited to fix it after the fact -- see
-#: :func:`split_record_language`, which is what unwinds it.
+#: A clean re-run's arm-name suffix; every ``-clean`` arm folds into its base identity. Clean is a
+#: run flag carried by the ARM NAME alone -- submit_common.sh's ``clean_suffix`` leaves the identity
+#: columns (experiment/model/language/device/packet) untouched -- so it must never survive into a
+#: recorded ``language`` value. Older env files baked it in; :func:`split_record_language` unwinds it.
 CLEAN_SUFFIX = "-clean"
 
 #: One entity kind's tag -> display name. Key ORDER is the colour and marker order.
@@ -60,7 +57,7 @@ class BaselineSpec:
     ``denominator`` is the column every speed-up ratio is divided by -- one per experiment, so two
     figures of the same experiment cannot quietly use different references. ``comparators`` are the
     other toolchain columns drawn as their own series beside the agents; they are never the
-    denominator (user, 2026-09-20)."""
+    denominator."""
 
     denominator: str
     comparators: tuple[str, ...]

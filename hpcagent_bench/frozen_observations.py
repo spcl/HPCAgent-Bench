@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Frozen observations: the extracted rows of job directories whose judge databases no longer exist.
 
-2026-09-19 the job-dir reducer's dropped mode deleted 147 job directories, judge DBs included. Their
-rows survive in a read-only extraction taken just before (``extract_llr40.py`` output, one
-``<group>/llr40_observations.csv`` per campaign group). The user's decision: that frozen copy IS the
-record for those jobs until their setups are rerun (``experiments/rerun-lost.tsv``).
+Their rows survive in a read-only extraction (``extract_llr40.py`` output, one
+``<group>/llr40_observations.csv`` per campaign group). That frozen copy IS the record for those jobs
+until their setups are rerun (``experiments/rerun-lost.tsv``).
 
 Every reader that walks judge DBs joins these rows the same way: a job is read from its LIVE
 directory when that directory exists, and from the frozen rows only when it does not (the live DB
@@ -42,16 +41,15 @@ HARNESS_FAULT_REASON = "score_error"
 JobKey = tuple[str, str]
 
 #: The run id the judge files a grade under when its request named none (the recorder's default).
-#: 2026-09-22 user decision: such a row has no agent-episode identity, so it is credited to NOTHING --
+#: Such a row has no agent-episode identity, so it is credited to NOTHING --
 #: not to analysis (hpcagent_bench.experiments.read_observations) and not to coverage
 #: (experiments/remaining_kernels.covered, :func:`delivered`) -- and the (arm, kernel) it would have
 #: answered is owed a rerun instead. The databases keep the row; only its readers skip it.
 ADHOC_RUN_ID = "adhoc"
 
-#: The observations column holding the evidence an ``adhoc`` row was re-attributed on, from the
-#: now-removed retag extraction path (deleted 2026-09-22, superseded by aad8dbdc5's run-id-only
-#: adhoc drop). Legacy extractions still carry it: non-blank means the row was STORED under
-#: :data:`ADHOC_RUN_ID`, whatever run id that extraction then gave it.
+#: The observations column holding the evidence an ``adhoc`` row was re-attributed on. Older
+#: extractions carry it: non-blank means the row was STORED under :data:`ADHOC_RUN_ID`, whatever
+#: run id that extraction then gave it.
 RETAGGED_COLUMN = "retagged"
 
 

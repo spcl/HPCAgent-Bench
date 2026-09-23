@@ -129,7 +129,7 @@ def precision_from_datatype(datatype) -> Precision:
     Accepts the numpy-style (``"float32"``) or Precision-enum (``"fp32"`` /
     ``"fp8_e4m3"``) spelling, or ``None`` (-> ``FP64``). This is the single
     mapping the framework ``set_datatype`` hooks share, so a low-precision run is
-    no longer silently coerced to fp64.
+    never silently coerced to fp64.
     """
     if datatype is None:
         return Precision.FP64
@@ -262,7 +262,7 @@ def tolerance_band(precision: Precision) -> ToleranceBand:
 
 class UngradeableTolerance(RuntimeError):
     """Raised when ``eps_acc(p) * sqrt(l)`` already meets or exceeds ``rtol_p`` at this
-    (precision, accumulation length) -- 2026-09-21 USER decision. At that length the
+    (precision, accumulation length). At that length the
     accumulation-length floor would consume the WHOLE relative band on its own, so the
     configuration is refused explicitly rather than silently widened past what the band means.
     """
