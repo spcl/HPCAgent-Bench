@@ -22,6 +22,7 @@ per rank]}``. The plan (:func:`build_plan`) is computed by the judge, which neve
 import ctypes
 import json
 import math
+import os
 import socket
 import sys
 import time
@@ -55,6 +56,11 @@ TORCH_DTYPES: Mapping[str, str] = {
 
 #: The python-delivery entry point, as the mpi4py driver names it.
 PY_KERNEL = "kernel_mpi"
+
+#: "cuda" (default, unset) is byte-identical to every line this module had before this variable
+#: existed. "cpu" is the CI escape hatch: no GPU, torch.distributed falls back to gloo, and the
+#: launch skips the GPU-binding/device-synchronize calls a CPU tensor has no use for.
+MPI_DEVICE_ENV = "HPCAGENT_BENCH_MPI_DEVICE"
 
 
 def global_shapes(spec: BenchSpec, params: Mapping[str, object], names: Sequence[str]) -> dict[str, tuple[int, ...]]:
@@ -301,8 +307,11 @@ def check_gpu_binding(placements: Sequence[tuple[str, int]]) -> None:
         seen[key] = rank
 
 
-def init_torch_distributed(dist: Any, comm: Any, torch: Any) -> None:
-    """torch.distributed (nccl = RCCL) over the SAME ranks, rendezvous address from MPI rank 0."""
+def init_torch_distributed(dist: Any, comm: Any, device: Any) -> None:
+    """torch.distributed (nccl = RCCL on a cuda ``device``, gloo on a cpu one) over the SAME
+    ranks, rendezvous address from MPI rank 0. gloo takes no ``device_id`` (it is a cuda-only
+    eager-init hint), so the kwarg is cuda-only -- the cuda branch is unchanged from before this
+    function took a device at all."""
     if comm.rank == 0:
         with socket.socket() as probe:
             probe.bind(("", 0))
@@ -311,13 +320,21 @@ def init_torch_distributed(dist: Any, comm: Any, torch: Any) -> None:
     else:
         addr = None
     host, port = comm.bcast(addr, root=0)
+    backend = "nccl" if device.type == "cuda" else "gloo"
+    device_kwargs = {"device_id": device} if backend == "nccl" else {}
     dist.init_process_group(
-        backend="nccl",
+        backend=backend,
         init_method=f"tcp://{host}:{port}",
         rank=comm.rank,
         world_size=comm.size,
-        device_id=torch.device("cuda", torch.cuda.current_device()),
+        **device_kwargs,
     )
+
+
+def cpu_sync() -> None:
+    """The cpu device's ``sync`` callback for :func:`time_kernel`: a cpu kernel call is already
+    synchronous, so there is nothing to drain (the cuda branch's ``torch.cuda.synchronize``)."""
+    return
 
 
 def run(plan_path: str, out_path: str) -> None:
@@ -338,11 +355,19 @@ def run(plan_path: str, out_path: str) -> None:
 
     from hpcagent_bench.harness import torch_reference
 
-    torch.cuda.set_device(local % torch.cuda.device_count())  # before any device allocation
-    check_gpu_binding(world.allgather((socket.gethostname(), torch.cuda.current_device())))
+    device_kind = os.environ.get(MPI_DEVICE_ENV, "cuda")
+    if device_kind == "cuda":
+        torch.cuda.set_device(local % torch.cuda.device_count())  # before any device allocation
+        check_gpu_binding(world.allgather((socket.gethostname(), torch.cuda.current_device())))
+        device = torch.device("cuda", torch.cuda.current_device())
+        sync = torch.cuda.synchronize
+    elif device_kind == "cpu":
+        device = torch.device("cpu")
+        sync = cpu_sync
+    else:
+        raise ValueError(f"{MPI_DEVICE_ENV}={device_kind!r} must be 'cuda' or 'cpu'")
     cart = world.Create_cart(dims, periods=[False] * len(dims), reorder=False)
     rank, size = cart.rank, cart.size
-    device = torch.device("cuda", torch.cuda.current_device())
     module = torch_reference.load_torch_module(BenchSpec.load(str(plan["kernel"])))
 
     tensors = rank_tensors(plan, rank, size, module, torch, device)
@@ -350,7 +375,7 @@ def run(plan_path: str, out_path: str) -> None:
     workspace = torch.empty(ws_bytes, dtype=torch.uint8, device=device) if ws_bytes > 0 else None
     call = kernel_call(plan, rank, tensors, workspace, cart, cart.py2f())
     outputs = [tensors[name] for name in plan["outputs"]]
-    mine = time_kernel(call, int(plan["k_repeats"]), torch.cuda.synchronize, cart.Barrier, poison_outputs(outputs))
+    mine = time_kernel(call, int(plan["k_repeats"]), sync, cart.Barrier, poison_outputs(outputs))
     samples = [cart.reduce(dt, op=MPI.MAX, root=0) for dt in mine]  # the slowest rank sets each repeat
 
     # Everything the submission held goes before the verdict pass allocates: the kernel library
@@ -359,8 +384,9 @@ def run(plan_path: str, out_path: str) -> None:
     del call, workspace
     for name in plan["inputs"]:
         tensors.pop(name, None)
-    torch.cuda.empty_cache()
-    init_torch_distributed(dist, cart, torch)
+    if device_kind == "cuda":
+        torch.cuda.empty_cache()
+    init_torch_distributed(dist, cart, device)
     verdict = check_rank(plan, rank, size, module, outputs, torch_reference.rank_verdict, device)
     verdicts = cart.gather(verdict, root=0)
     if rank == 0:
