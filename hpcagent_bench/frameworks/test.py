@@ -113,8 +113,9 @@ NumpyArray = np.ndarray[tuple[int, ...], np.dtype[np.generic]]
 class ImplTiming(TypedDict):
     """One implementation's result, as :meth:`Test.run` hands it to the CLI: the two millisecond
     series (``native`` is None for a framework with no internal timer, and both are None when there
-    was nothing to time), whether the output matched the NumPy oracle, and -- only when there are no
-    timings -- the structured reason there are none."""
+    was nothing to time), whether the output matched the NumPy oracle on the first call AND on the
+    median run's last call, and -- only when there are no timings -- the structured reason there are
+    none."""
 
     python: list[float] | None
     native: list[float] | None
@@ -493,6 +494,41 @@ class Test(object):
         ) -> tuple[list[OutputValue | None] | None, list[float] | None, list[float] | None]:
             return self._execute(self.frmwrk, impl, impl_name, "first/validation", context, 0, ignore_errors)
 
+        def matches_oracle(frmwrk_out: list[OutputValue | None] | None, impl_name: str, stage: str) -> bool:
+            """Whether ``frmwrk_out`` agrees with the oracle's ``np_out`` at the run's band; ``stage`` names
+            the call in the log. The first call and the median run's last call are graded by this one rule."""
+            try:
+                if isinstance(frmwrk_out, (tuple, list)):
+                    frmwrk_out = [self.frmwrk.copy_back_func()(a) for a in frmwrk_out]
+                else:
+                    frmwrk_out = self.frmwrk.copy_back_func()(frmwrk_out)
+
+                frmwrk_name = self.frmwrk.info["full_name"] + " - " + impl_name
+
+                # Keyed by the actual data precision when no --datatype was given, so fp32 data
+                # grades at the fp32 band, not fp64's tight floor; per-bench rtol/atol still win below.
+                band_rtol, band_atol = tolerances_for(tolerance_datatype(datatype, detected_dtype))
+                rtol = self.bench.info.get("rtol", band_rtol)
+                atol = self.bench.info.get("atol", band_atol)
+                valid = util.validate(np_out, frmwrk_out, frmwrk_name, rtol=rtol, atol=atol)
+                if valid:
+                    print(f"{frmwrk_name} - {impl_name} - {stage}: SUCCESS")
+                elif not ignore_errors:
+                    raise ValueError(f"{frmwrk_name} did not validate ({stage})!")
+                return valid
+            except Exception as e:
+                # A comparison that never ran is not a passed comparison. `valid` is optimistic
+                # by default so an unvalidated run still times, and under --ignore-errors (every
+                # canon column) this branch used to leave that True -- so a row whose validation
+                # died recorded `validated=True` and was published as agreeing with NumPy.
+                # Measured on job 644305: two ppcg_hip kernels whose comparison itself raised
+                # ArrayMemoryError came out of the sweep marked validated.
+                print("Failed to run {} validation.".format(self.frmwrk.info["full_name"]))
+                traceback.print_exception(e)
+                if not ignore_errors:
+                    raise
+                return False
+
         bvalues: list[Sample] = []
         # Per-implementation timing series; consumed by the CLI for JSONL.
         per_impl_timings: dict[str, ImplTiming] = {}
@@ -539,42 +575,21 @@ class Test(object):
                 # The numpy oracle produced no output (failed under ignore_errors); can't assert correctness.
                 valid = False
             elif validate and np_out is not None:
-                try:
-                    if isinstance(frmwrk_out, (tuple, list)):
-                        frmwrk_out = [self.frmwrk.copy_back_func()(a) for a in frmwrk_out]
-                    else:
-                        frmwrk_out = self.frmwrk.copy_back_func()(frmwrk_out)
-
-                    frmwrk_name = self.frmwrk.info["full_name"] + " - " + impl_name
-
-                    # Keyed by the actual data precision when no --datatype was given, so fp32 data
-                    # grades at the fp32 band, not fp64's tight floor; per-bench rtol/atol still win below.
-                    _r, _a = tolerances_for(tolerance_datatype(datatype, detected_dtype))
-                    rtol = self.bench.info.get("rtol", _r)
-                    atol = self.bench.info.get("atol", _a)
-                    valid = util.validate(np_out, frmwrk_out, frmwrk_name, rtol=rtol, atol=atol)
-                    if valid:
-                        print("{} - {} - validation: SUCCESS".format(frmwrk_name, impl_name))
-                    elif not ignore_errors:
-                        raise ValueError("{} did not validate!".format(frmwrk_name))
-                except Exception as e:
-                    # A comparison that never ran is not a passed comparison. `valid` is optimistic
-                    # by default so an unvalidated run still times, and under --ignore-errors (every
-                    # canon column) this branch used to leave that True -- so a row whose validation
-                    # died recorded `validated=True` and was published as agreeing with NumPy.
-                    # Measured on job 644305: two ppcg_hip kernels whose comparison itself raised
-                    # ArrayMemoryError came out of the sweep marked validated.
-                    valid = False
-                    print("Failed to run {} validation.".format(self.frmwrk.info["full_name"]))
-                    traceback.print_exception(e)
-                    if not ignore_errors:
-                        raise
+                valid = matches_oracle(frmwrk_out, impl_name, "validation")
             # The handle first_execution optimized, not ``impl``: optimizing again re-ran the whole
             # search per kernel -- a DaCe canonicalize column paid parse, pipeline, compile, reference,
             # verify and score twice (lulesh on GPU: canonicalize alone 995 s, then 1452 s).
-            _, timelist, native_times = self._execute(
+            later_out, timelist, native_times = self._execute(
                 self.frmwrk, self._measured_impl, impl_name, "median", context, repeat, ignore_errors, optimized=True
             )
+            # first/validation graded ONE call, and the median run reuses its handle, so the median
+            # run's final capture is graded too: a miscompile right on call 1 and wrong on later calls
+            # (ls3df_scf on GPU: hipTensor read C at beta=0 and reused memory poisoned later programs)
+            # was recorded as validated. A capture that raised (_last_failure) produced no output.
+            if valid and validate and timelist and later_out is not None:
+                valid = self._last_failure is None and matches_oracle(later_out, impl_name, "later-call validation")
+                if not valid:
+                    print(f"{self.frmwrk.info['full_name']} - {impl_name}: later call did not validate")
             # Diagnostics only now, once per impl: the artifact is built and every timing is taken.
             # The MEASURED handle, not the loop's -- see _execute; for a framework whose optimize()
             # returns a compiled artifact (DaCe) they are different objects.
