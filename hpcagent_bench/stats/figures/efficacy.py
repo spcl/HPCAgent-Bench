@@ -38,8 +38,8 @@ packet" and never doubles as a second signal.
 SIGNIFICANCE IS A SUPERSCRIPT, not fill: ``*`` beside a mark's label means the SPEED-UP axis cleared
 the Benjamini-Hochberg-adjusted 5% threshold for that (model, leg), ``\N{DAGGER}`` means the
 TOKEN-COST axis did, over the figure's own family of tests; a mark can carry either, both or
-neither. Fill was tried first and dropped: the control reference is ALREADY the hollow mark, so a
-hollow treated mark read as "maybe another control" instead of "not significant." The legend spells
+neither. Not fill: the control reference is ALREADY the hollow mark, so a hollow treated mark
+would read as "maybe another control" instead of "not significant." The legend spells
 the rule once, in ONE row, rather than marking every point with a symbol a reader has to look up
 twice.
 
@@ -1402,8 +1402,8 @@ MEASURE_PAD_IN: float = 0.08
 def required_left_margin(fig: Figure, ax: Axes) -> float:
     """How far left of ``ax``'s own box its Y ticks and axis label protrude, in inches, plus
     :data:`MEASURE_PAD_IN` -- what :func:`figure_row` must reserve so a long Y label, or a
-    wide-ranging axis's longest tick (``0.0078125x``, wider than the fixed fraction this used to
-    reserve), never renders past the canvas's own left edge."""
+    wide-ranging axis's longest tick (``0.0078125x``), never renders past the canvas's own left
+    edge."""
     fig.canvas.draw()
     return style.left_protrusion_in(fig, ax) + MEASURE_PAD_IN
 
@@ -1894,9 +1894,8 @@ def name_layout(
     and onto ONE where its span holds it.
     """
     size, folds = points, [len(name) for name in names]
-    # The fold decides the size and the size decides the fold, so it is iterated to a fixed point.
-    # Solved in one step, a name whose fold came out wider than ceil(len/lines) -- which is any name
-    # with a long word in it -- was sized for a line it was never going to be set on.
+    # The fold decides the size and the size decides the fold, so it is iterated to a fixed point
+    # (a long word folds wider than ceil(len/lines)).
     for _ in range(4):
         folds = [
             name_line_width(name, panel_name_wrap(span, size, em), lines)

@@ -2,26 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The benchmarking rules a figure in this repo has to obey, as checks rather than as prose.
 
-From T. Hoefler and R. Belli, "Scientific Benchmarking of Parallel Computing Systems", SC15. The
-rules this module enforces, quoted from the paper:
-
-* **Rule 4** -- "Avoid summarizing ratios; summarize the costs or rates that the ratios base on
-  instead. Only if these are not available use the geometric mean for summarizing ratios."
-* **Rule 5** -- "Report if the measurement values are deterministic. For nondeterministic data,
-  report confidence intervals of the measurement."
-* **Rule 7** -- "Compare nondeterministic data in a statistically sound way, e.g., using
-  non-overlapping confidence intervals or ANOVA."
-* **Rule 12** -- "Plot as much information as needed to interpret the experimental results. Only
-  connect measurements by lines if they indicate trends and the interpolation is valid."
-
-WHY THEY ARE FUNCTIONS. A rule written in a style guide is a rule a figure breaks silently: the
-plot still renders, the numbers still look plausible, and nothing tells the author that the ratio
-axis they drew has no costs behind it or that the line they drew between a control and a treatment
-claims a trend across a two-point axis that has no order. These raise instead, at the point the
-figure is built, and name the rule so the fix is a decision rather than a search.
-
-Every check takes what the figure ALREADY has -- its data table, its interval columns, its x
-values -- so obeying a rule and emitting the table a reader needs are the same act.
+Rules 4, 5, 7 and 12 of T. Hoefler and R. Belli, "Scientific Benchmarking of Parallel Computing
+Systems", SC15, quoted in :data:`RULE_TEXT`. A check raises :class:`RuleViolation`, naming the rule,
+at the point the figure is built, and takes only what the figure already has: its data table, its
+interval columns, its x values.
 """
 
 from collections.abc import Sequence

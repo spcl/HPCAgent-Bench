@@ -2,10 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Every statistic a figure or a table in this repo reports, defined exactly once.
 
-A number with two definitions is a number nobody can check. Seven copies of the geometric mean
-agreed on the arithmetic and disagreed on what an empty set or a zero ratio means, which is the
-failure mode that does not show up as a wrong plot -- it shows up as two plots of the same data
-that do not match.
+A number with two definitions is a number nobody can check: two geometric means that disagree on
+an empty set or a zero ratio give two plots of the same data that do not match.
 
 WHAT LIVES HERE. Robust outlier rejection, the median and its bootstrap interval, the geometric
 mean and its log-space interval, the signed-change axis transform, the one-value-per-kernel
