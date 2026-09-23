@@ -2103,7 +2103,8 @@ jobs:
             tests/test_mpi_driver_matrix_and_timing.py \
             tests/test_mpi_shard_torch_real_launch.py \
             tests/test_mpi_scaling_curve_real_timing.py \
-            tests/test_mpi_requesting_judge_distribution.py
+            tests/test_mpi_requesting_judge_distribution.py \
+            tests/test_mpi_dtensor_layout_parity.py
 
       # Moved off the translators runner, which was the workflow's critical path at 40m32s while
       # this one finished in 5m09s. Neither phase needs MPI; they need a runner with headroom.
