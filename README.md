@@ -41,9 +41,9 @@ sbatch --nodes="${nodes}" --partition=mi300 \
 squeue -u "$USER" -o "%.10i %.30j %.9T %.10M %.5D %R"           # 3. watch it
 ```
 
-**Downloading is the default.** A pull gets the same bytes we
-published, so the digest in a results table is the digest that ran; a rebuild from the same
-Dockerfile is a different image that merely resembles it, because apt and PyPI move underneath.
+**Downloading is the default.** A pull gets the same bytes we published, so the digest in a
+results table is the digest that ran; a rebuild from the same Dockerfile is a different image that
+merely resembles it, because apt and PyPI move underneath.
 Build only when you are CHANGING an image or a role has not been published yet -- one node, several
 hours, since the agent image bootstraps gcc 16 and LLVM 22 before it reaches PETSc and MAGMA:
 
@@ -60,7 +60,7 @@ containers/cluster/ce-images/promote_image.sh --all   # rename candidate -> live
 Three things that cost a campaign if you skip them:
 
 - **Always `--partition=mi300`.** The default partition is mi200.
-- **Never pass `--account` yourself.** Beverin now rejects any accountless job outright
+- **Never pass `--account` yourself.** Beverin rejects any accountless job outright
   (`ERROR: you must specify a project account (-A <account>)`); `scripts/cscs/account_env.sh`
   resolves the account once, from your own Slurm associations, and exports `SBATCH_ACCOUNT` /
   `SLURM_ACCOUNT` / `SALLOC_ACCOUNT` so every `#SBATCH` directive already has one. A submitter
