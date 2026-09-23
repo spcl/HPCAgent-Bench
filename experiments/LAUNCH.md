@@ -67,7 +67,8 @@ DRY RUN.
 - `EXPERIMENTS`: the RECORDED experiment, not the submit script's name. `llr-focus40` covers
   every LLR arm, CPU and GPU: the `cpf-llr-focus40-*` packet arms (cpf, cpfsrc, skills,
   perf-playbook-cpu) and the `gpu-llr-focus40-*` arms. `llr-focus40-blind` is no-score,
-  `harness-focus20` the harness study. It defaults to `llr-focus40,llr-focus40-blind`.
+  `harness-focus20` and `harness20` the two harness studies (their own rosters). It defaults to
+  `llr-focus40,llr-focus40-blind`.
 - `TOKEN_SCALE=2 TIME_SCALE=2`: the owed rule. A kernel owed for hitting its budget reruns at 2x
   of the arm's base (base since 2026-09-21: 24M tokens; 6 h qwen38/oss120b, 12 h kimi27sglang;
   so 48M and 12 h / 20 h capped). This scales only the budget class; infra-class kernels rerun at 1x.
@@ -122,11 +123,13 @@ skipped them as `no launched problem entry to rerun`: their arm's newest launch 
 2-kernel top-up. Fixed in 43f5eb4a4 (a rendered-track arm renders the missing task fresh);
 submitted as 645755 and 645756.
 
-Harness waves and later experiments go behind the LLR waves:
+Harness waves and later experiments go behind the LLR and scicomp waves by priority, never by a
+dependency: `NICE=<n>` submits each wave with `--nice=<n>`.
 
 ```bash
-./submit-owed-wave.sh MODEL=qwen38 EXPERIMENTS=harness-focus20 TOKEN_SCALE=2 TIME_SCALE=2 SUBMIT=1
-scontrol update job=<jobid> nice=500
+./submit-owed-wave.sh MODEL=qwen38 EXPERIMENTS=harness-focus20,harness20 TOKEN_SCALE=2 TIME_SCALE=2 \
+    NICE=500 SUBMIT=1
+# -> submitted owed-harness20-qwen38-openhands-w6 -> <jobid> (3 nodes, --time 11:00:00) nice 500 env ...
 ```
 
 ## 2. Regrade (re-time recorded submissions under the current policy)

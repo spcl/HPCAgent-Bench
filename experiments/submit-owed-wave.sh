@@ -7,11 +7,13 @@
 #
 #   ./submit-owed-wave.sh MODEL=qwen38 [SETUPS=<arm>,...] [EXPERIMENTS=llr-focus40,...]
 #       [TOKEN_SCALE=4 TIME_SCALE=4 | BUDGET_SCALE=4] [CLASSES=budget,infra] [WAVE_AGENTS=40]
-#       [EXCLUDE_JOBS=<id>,...] [SMOKE_KERNELS=<n>] [RERUN_LOST=1] [SUBMIT=1 [HOLD=1]]
+#       [EXCLUDE_JOBS=<id>,...] [SMOKE_KERNELS=<n>] [RERUN_LOST=1] [SUBMIT=1 [HOLD=1] [NICE=<n>]]
 #
 # DRY RUN by default: prints each wave (setups, kernel counts, nodes, walltime) and leaves its env,
 # problems and setups files under OUT for review. SUBMIT=1 submits each wave's read-only snapshot
-# with --no-requeue (HOLD=1: --hold). TOKEN_SCALE/TIME_SCALE scale the budget class only.
+# with --no-requeue (HOLD=1: --hold; NICE=<n>: --nice=<n>, e.g. harness waves queued behind the
+# LLR and scicomp waves without a dependency, as submit-canon-llr40.sh's NICE does). TOKEN_SCALE/
+# TIME_SCALE scale the budget class only.
 # SMOKE_KERNELS=<n>: a pipeline smoke of the same setups instead -- n kernels per arm, 30 min each,
 # arms renamed <arm>-smoke and job owed-smoke-*, so nothing it records counts as coverage.
 # Frozen observations (frozen_observations.py) count as coverage, so a setup of rerun-lost.tsv owes
@@ -63,8 +65,9 @@ while IFS=$'\t' read -r name env nodes walltime; do
     fi
     snapshot=$(snapshot_env "${env}" "${name}") || exit 2
     hold=(); [[ "${HOLD:-0}" == 1 ]] && hold=(--hold)
+    nice=(); [[ -n "${NICE:-}" ]] && nice=(--nice="${NICE}")
     jid=$(env "${unsets[@]}" -u CPF_DROPIN_DIR -u CPF_FORMS_DIR \
         sbatch --parsable --no-requeue --nodes="${nodes}" --time="${walltime}" --job-name="${name}" \
-        "${hold[@]}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" beverin.sbatch)
-    echo "submitted ${name} -> ${jid} (${nodes} nodes, --time ${walltime})${hold:+ HELD} env ${snapshot}"
+        "${hold[@]}" "${nice[@]}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" beverin.sbatch)
+    echo "submitted ${name} -> ${jid} (${nodes} nodes, --time ${walltime})${hold:+ HELD}${NICE:+ nice ${NICE}} env ${snapshot}"
 done <"${OUT}/plan.tsv"
