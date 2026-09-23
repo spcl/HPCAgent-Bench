@@ -878,7 +878,6 @@ class _FortranBodyEmitter(BaseEmitter):
         #: dummy's kind is passed bare instead of wrapped in an identity conversion.
         self._own_scalar_types: Dict[str, str] = {sc.name: _fortran_type(sc.dtype) for sc in kir.scalars}
         self._own_scalar_types.update({sy.name: _fortran_type(sy.dtype) for sy in kir.symbols})
-        self.array_names: Set[str] = {a.name for a in kir.arrays}
         #: Arrays whose ELEMENTS are subscripts (``init.arrays[name].index_array``). The harness
         #: hands Fortran these buffers already rebased to 1 (see
         #: ``support.bindings.contract.index_base``), so a value read out of one is ALREADY a

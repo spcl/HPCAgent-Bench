@@ -8835,8 +8835,7 @@ _INL_RE = re.compile(r"__inl\w*|\w+\.shape\[")
 class LoweringContext:
     """Mutable state threaded across the ordered lowering phases in :func:`lower`.
 
-    Each ``_lp_*`` phase reads and writes fields here instead of the long list of
-    loose locals the monolithic ``lower()`` used to carry. The finalised
+    Each ``_lp_*`` phase reads and writes fields here. The finalised
     side-tables (``local_dtypes`` / ``zeros_locals`` / ``zeros_fills`` /
     ``reassign_shapes`` / ``int_locals`` / ``scalar_call_temps``) are written
     straight onto :attr:`kir` -- typed :class:`KernelIR` fields the emitter reads
@@ -8886,7 +8885,6 @@ class LoweringContext:
         self.wa_rewriter: Optional[_WholeArrayAssignRewriter] = None
         self.lib_rewriter: object = None
         self.zeros: Optional[_ZerosRewriter] = None
-        self.lifter: Optional[_LiftFreshArrayFromSlices] = None
 
 
 def _lp_seed_shape_table(ctx: LoweringContext) -> None:
@@ -9588,10 +9586,8 @@ def _lp_slice_normalize_and_lift(ctx: LoweringContext) -> None:
     # a ``Name = np.zeros(extent); Name[:] = expr`` pair so slice fusion can lower
     # the per-element loop. Computes the shape from the iteration extent of the RHS,
     # registers the new local in both ``shapes`` and ``zeros_locals``.
-    ctx.lifter = _LiftFreshArrayFromSlices(
-        shapes, local_dtypes=ctx.local_dtypes, scalar_helpers=scalar_return_helpers(ctx)
-    )
-    new_locals = ctx.lifter.run(tree)
+    lifter = _LiftFreshArrayFromSlices(shapes, local_dtypes=ctx.local_dtypes, scalar_helpers=scalar_return_helpers(ctx))
+    new_locals = lifter.run(tree)
     if new_locals:
         for name, shape in new_locals.items():
             shapes[name] = list(shape)
