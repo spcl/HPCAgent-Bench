@@ -6,18 +6,18 @@ No network and no compiler. The model endpoint is the ``agent.http_chat_json`` s
 JudgeClient. Evaluations still run in real forked children, so what the children do is observed through files.
 """
 
-import asyncio
 import itertools
 import json
 import pathlib
 import pickle
 import sys
+from typing import Self
 
 import pytest
 
 from hpcagent_bench.harness import agent, episode, optimas_tools, pipeline, runner, scoring
 from hpcagent_bench.harness.agent import ScriptedAgent
-from hpcagent_bench.harness.baselines import OPTIMAS
+from hpcagent_bench.harness.baselines import MODELS, OPTIMAS
 from hpcagent_bench.harness.episode import JudgeScorer, public_score
 from hpcagent_bench.harness.runner import solve_task, status_of
 from hpcagent_bench.harness.scoring import Score
@@ -266,52 +266,66 @@ class FakeToolFunctionTool:
 class FakeToolAgentHandle:
     def __init__(self, *, name, model, tools, model_settings=None) -> None:
         self.tools = tools
+        self.model_settings = model_settings
 
 
 class FakeToolRunner:
     """Scripts ONE turn: the model 'calls' ``submit`` with a fixed answer, ending the run -- drives
-    the REAL ``on_invoke_tool`` coroutine optimas_tools.ToolAgent built, so this only replaces the
-    network call the real SDK would make, not our own tool-wiring code."""
+    the REAL ``on_invoke_tool`` coroutine optimas_tools.ToolAgent built and the REAL usage hook, so
+    this only replaces the network call the real SDK would make, not our own wiring code."""
 
     prompts_log: pathlib.Path | None = None
 
     @staticmethod
-    def run_sync(agent_handle, prompt, *, max_turns):
+    async def run(agent_handle, prompt, *, max_turns, hooks, run_config):
         if FakeToolRunner.prompts_log is not None:
-            append_jsonl(FakeToolRunner.prompts_log, {"prompt": prompt})
+            append_jsonl(FakeToolRunner.prompts_log, {"prompt": prompt, "settings": agent_handle.model_settings})
         submit_tool = next(t for t in agent_handle.tools if t.name == "submit")
         args = json.dumps({"language": "c", "source": "void gemm_fp64(){}"})
-        asyncio.run(submit_tool.on_invoke_tool(None, args))
-        return FakeToolRunResult([FakeToolModelResponse(FakeToolUsage(255, 42))])
+        await submit_tool.on_invoke_tool(None, args)
+        await hooks.on_llm_end(None, agent_handle, FakeToolModelResponse(FakeToolUsage(255, 42)))
+        return FakeToolRunResult([])
+
+
+class FakeAsyncOpenAI:
+    """The client ToolAgent opens per round, as an async context manager."""
+
+    def __init__(self, **kwargs) -> None:
+        self.kwargs = kwargs
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc_info) -> None:
+        return None
+
+
+class FakeRunHooks:
+    async def on_llm_end(self, context, agent, response) -> None:
+        return None
 
 
 class FakeAgentsSDK:
     """Stands in for the ``agents`` (openai-agents) module: exercises optimas_tools.ToolAgent's
-    REAL tool-building and usage-folding code without the real SDK's network client."""
+    REAL tool-building and usage-booking code without the real SDK's network client."""
 
     Agent = FakeToolAgentHandle
     Runner = FakeToolRunner
     FunctionTool = FakeToolFunctionTool
-
-    @staticmethod
-    def AsyncOpenAI(**kwargs):
-        return object()
+    AsyncOpenAI = FakeAsyncOpenAI
+    RunHooks = FakeRunHooks
 
     @staticmethod
     def ModelSettings(**kwargs):
-        return object()
+        return kwargs
 
     @staticmethod
-    def set_default_openai_client(client, use_for_tracing) -> None:
-        pass
+    def OpenAIChatCompletionsModel(**kwargs):
+        return kwargs["model"]
 
     @staticmethod
-    def set_default_openai_api(api) -> None:
-        pass
-
-    @staticmethod
-    def set_tracing_disabled(disabled) -> None:
-        pass
+    def RunConfig(**kwargs):
+        return kwargs
 
 
 def test_the_prompt_flag_is_used_verbatim_as_the_agents_task_text(tmp_path, monkeypatch) -> None:
@@ -365,14 +379,37 @@ def test_the_prompt_flag_is_used_verbatim_as_the_agents_task_text(tmp_path, monk
             f"--usage={workdir / 'usage.jsonl'}",
             "--timeout-seconds=400",
             f"--prompt={prompt_file}",
+            "--max-output-tokens=4096",
+            "--reasoning-effort=high",
         ]
     )
     assert code == 0
-    seen_prompts = [record["prompt"] for record in read_jsonl(solve_prompts_log)]
+    rounds = read_jsonl(solve_prompts_log)
+    # The arm's reply cap and effort rung reach every round's requests, as they reach every runner's.
+    assert {json.dumps(record["settings"], sort_keys=True) for record in rounds} == {
+        json.dumps({"max_tokens": 4096, "extra_body": {"reasoning_effort": "high"}}, sort_keys=True)
+    }
+    # Each round's call is booked by the usage hook, in the runners' disjoint usage.jsonl shape.
+    booked = [call for call in read_jsonl(workdir / "usage.jsonl") if call["prompt"] == 255]
+    assert booked and all(call["output"] == 42 for call in booked), booked
+    assert json.loads((workdir / "harness-end.json").read_text())["effort"] == "high"
+    seen_prompts = [record["prompt"] for record in rounds]
     assert seen_prompts, "no solve call observed"
     # The FIRST solve call is the search's control round (the empty instruction): the file's text,
     # verbatim -- no task.j2 wrapping, no host-path stripping artifact, nothing prepended.
     assert seen_prompts[0] == rendered_prompt, seen_prompts[0]
+
+
+@pytest.mark.parametrize("value, root", [("", "/shared"), ("/tmp/run/shared", "/tmp/run/shared")])
+def test_the_tool_agents_files_live_under_the_shared_mount_the_driver_names(monkeypatch, value, root) -> None:
+    """Read/Edit reach real files under the mount the task text names: the driver's
+    HPCAGENT_BENCH_SHARED_DIR, else /shared (experiments/agent_driver.shared_dir)."""
+    monkeypatch.setenv("HPCAGENT_BENCH_SHARED_DIR", value)
+    monkeypatch.setitem(sys.modules, "agents", FakeAgentsSDK)
+    tool_agent = episode.UsageSinkToolAgent(
+        pathlib.Path("usage.jsonl"), MODELS["open-large"], judge_url=JUDGE_URL, judge_rank=0, preset="XL", timeout=1.0
+    )
+    assert tool_agent.file_root == pathlib.Path(root)
 
 
 def local_grade_forbidden(*args, **kwargs):
