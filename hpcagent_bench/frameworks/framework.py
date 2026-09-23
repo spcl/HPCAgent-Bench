@@ -255,22 +255,16 @@ class CallPlan:
         resolved: dict[str, ArgValue] = {
             a: (self._mutable[a] if a in self._mutable else self.bdata[a]) for a in self.input_args
         }
-        # An OUTPUT buffer is not an input_arg, so it never picked up the per-run copy made above --
-        # and on a GPU flavor that copy IS the device allocation. Without this the kernel is handed
-        # host memory for a container its own signature declares device-resident, which is where
-        # nbody's KE/PE landed once they stopped being staged back to the host.
+        # An OUTPUT buffer is not an input_arg; pass its per-run copy too, which on a GPU flavor is
+        # the device allocation the kernel's signature declares.
         resolved.update({a: self._mutable[a] for a in self.output_args if a in self._mutable})
         return resolved
 
     def run(self) -> KernelResult:
         """One kernel call, inside the timed bracket: invoke the impl and apply post_call.
 
-        The ARGUMENTS are built in :meth:`before_each`, not here. Binding them is host-side Python
-        that every framework needs and none of them is being measured on -- and the frameworks do
-        not need the same amount of it, so timing it does not even cost them equally. Measured on
-        tsvc_2_vtvtv at the fuzzed preset: 0.03 ms for the native columns against 3.2 ms for DaCe,
-        which recomputes ``sdfg.arglist() | sdfg.free_symbols`` per call. That is a fifth of the
-        kernel, charged to one column for work outside the kernel.
+        The ARGUMENTS are built in :meth:`before_each`, not here: binding is host-side Python whose
+        cost differs per framework (DaCe recomputes ``sdfg.arglist() | sdfg.free_symbols``).
         """
         args, kwargs = self._call
         self.result = self.f.post_call(self.impl(*args, **kwargs))
@@ -1052,11 +1046,8 @@ class Framework:
     def synchronize_device(self) -> None:
         """Block until the device is idle, so a timer brackets this call's work and nothing else.
 
-        A GPU kernel launch RETURNS BEFORE THE KERNEL FINISHES, so a host clock read without this
-        times the launch: measured on one DaCe kernel, 11.0 ms unsynchronised against 24.3 ms
-        synchronised, a 2.2x UNDERCOUNT published as a speedup. The damage does not stop at that
-        number -- the unfinished kernel still holds the device when the next arm is sampled, so on
-        an APU whose HBM is shared it lengthens a neighbour's measurement and an A/B mixes the two.
+        A GPU kernel launch returns before the kernel finishes, so a host clock read without this
+        times the launch, and the unfinished kernel spills into the next measurement.
 
         No-op on CPU. Frameworks that time with device EVENTS (CuPy, and the torch mixin) override
         the timer ends outright and never reach this; the ones that need it are those riding the

@@ -38,10 +38,8 @@ from hpcagent_bench.frameworks.framework import (
 from hpcagent_bench.frameworks.native_framework import NativeFramework
 from hpcagent_bench.spec import as_block, as_list
 
-#: The one column this file gives device residency + GPU-event timing to. ppcg has no AMD target of
-#: its own (see ppcg_transform's module docstring): ppcg_cuda and bare ppcg cannot be built or run
-#: on this project's AMD fleet, so they are left on the base host-copy/host-clock path they always
-#: had rather than changed unverifiable.
+#: The one column this file gives device residency + GPU-event timing to. ppcg_cuda and bare ppcg
+#: cannot run on the AMD fleet (see ppcg_transform), so they keep the base host-copy/host-clock path.
 DEVICE_RESIDENT_COLUMN = "ppcg_hip"
 
 
@@ -102,8 +100,7 @@ class PlutoFramework(NativeFramework):
 
     def stop_timer(self, timer: Timer) -> TimingResult:
         """Record + sync the stop event; native = device-only kernel time, python = host wall-clock
-        (which still includes nothing this column stages or copies back -- both now sit outside the
-        bracket, in :meth:`copy_func` and the harness's own output read-back)."""
+        (staging and read-back sit outside the bracket, in :meth:`copy_func` and the harness)."""
         if self.fname != DEVICE_RESIDENT_COLUMN or timer.state is None:
             return super().stop_timer(timer)
         import cupy
@@ -132,12 +129,9 @@ class PlutoFramework(NativeFramework):
         :func:`hpcagent_bench.pluto_transform.assert_numeric_agreement` for what it catches that
         ``assert_affine`` cannot.
 
-        The verdict is POLYCC's, so it is asked for only by the column that compiles polycc's output.
-        The PPCG columns share this class but not that toolchain: ppcg is a different transform, and
-        the oracle has no entry describing what IT did to the kernel. Asking anyway made every PPCG
-        run decline -- as "not supported by pluto", naming a tool that column never invokes -- on
-        kernels polycc merely happens not to be graded for. They keep the numerical check every other
-        column gets, the harness's own ``--validate`` against the NumPy reference.
+        The verdict is POLYCC's, so only the column that compiles polycc's output asks for it. The
+        PPCG columns share this class but not that toolchain; they keep the harness's own
+        ``--validate`` against the NumPy reference.
         """
         if self.fname not in cpp_runtime.PPCG_FRAMEWORKS:
             pluto_transform.assert_numeric_agreement(self.gate_kernel)
@@ -157,14 +151,11 @@ class PlutoFramework(NativeFramework):
         re-deriving it, so the two cannot disagree.
 
         Only the order comes from that file. Every VALUE -- shape, dtype, which arguments are output
-        pointers -- comes from :meth:`NativeFramework._abi_args`, the manifest-derived binding every
-        other native column allocates against. That is not tidiness: the pluto binding is emitted
-        PER PRECISION and this one call has no way to say which precision is running, so reading a
-        dtype out of it would be reading fp64's declaration during an fp32 run half the time.
+        pointers -- comes from :meth:`NativeFramework._abi_args`: the pluto binding is emitted per
+        precision and this call does not know which precision is running.
 
-        A positional ctypes call cannot detect a permuted argument list -- it would run and produce
-        numbers -- so falling back to the base order when the binding is missing would be the same
-        class of silent wrong answer this column was rebuilt to stop telling. Decline instead.
+        A positional ctypes call cannot detect a permuted argument list, so a missing binding
+        declines instead of falling back to the base order.
         """
         order = self._pluto_arg_names(bench)
         if order is None:
@@ -196,10 +187,7 @@ class PlutoFramework(NativeFramework):
         """polycc's argument ORDER, from any ``<base>_fpNN_pluto_binding.json``; ``None`` when none
         was emitted.
 
-        Any of them: the precision changes the declared dtypes and never the order, since the order
-        is a property of polycc's VLA signature. Globbing rather than naming one is also what stops
-        this from looking for ``<base>_pluto_binding.json`` -- a file the emitter has never written,
-        which made the column decline on every kernel with the binding sitting right there.
+        Any of them: the precision changes the declared dtypes, never polycc's VLA argument order.
         """
         paths = sorted(self._cpp_backend(bench).glob(f"{self._native_base(bench)}_fp*_pluto_binding.json"))
         for path in paths:
@@ -228,16 +216,10 @@ class PlutoFramework(NativeFramework):
         build uses -- because polycc may silently MISCOMPILE a non-affine scop rather than reject it,
         and a report from a run that had no business happening is worse than no report.
 
-        This DESCRIBES THE TIMED BINARY. It did not always: the column used to compile the
-        untransformed C++ with the same clang++ as ``llvm`` while this report described a polycc run
-        whose output nothing compiled. The report and the build now share one invocation
-        (:data:`pluto_transform.POLYCC_REPORT_ARGS` extends :data:`pluto_transform.POLYCC_ARGS`), so
-        the two are structurally incapable of describing different transforms -- the report adds
-        ``--debug`` verbosity and nothing else. Writing to the SAME path the build compiles is what
-        makes the echoed command copy-pasteable; a run that fails publishes nothing new there,
-        because :func:`pluto_transform.run_polycc` only ``os.replace``s ``out`` from a scratch
-        copy on success -- a stale-but-complete transform from an earlier run, if any, is what the
-        build would pick up instead.
+        This describes the timed binary: the report and the build share one invocation
+        (:data:`pluto_transform.POLYCC_REPORT_ARGS` extends :data:`pluto_transform.POLYCC_ARGS` with
+        ``--debug`` only) and write the same path, which :func:`pluto_transform.run_polycc` replaces
+        only on success.
 
         Bounded by :func:`pluto_transform.polycc_report_timeout_s` -- the same 360s the numerical
         oracle bounds its own ``run_polycc`` call with -- so a wedged polycc times out this ONE

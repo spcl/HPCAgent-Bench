@@ -1,8 +1,8 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Typed SQLModel schema for the framework-benchmark ``results`` table: the single Result model derives
-both the DDL (``create_all``) and row inserts, replacing the old hand-written CREATE TABLE/INSERT pair."""
+"""Typed SQLModel schema for the framework-benchmark ``results`` table: the Result model derives both
+the DDL (``create_all``) and the row inserts."""
 
 import re
 from typing import ClassVar
@@ -15,12 +15,9 @@ from sqlmodel import Field, SQLModel, create_engine
 #: The table name; SQLModel's default would be the class name lowercased, which is not it.
 RESULTS_TABLE = "results"
 
-#: SQLite's wording for "another connection finished this exact DDL first" -- ``create_all``'s
-#: CREATE TABLE and :func:`add_missing_columns`'s ALTER TABLE are both check-then-act (SQLAlchemy
-#: reads ``sqlite_master``/``PRAGMA table_info`` in Python, then issues DDL that is not itself
-#: ``IF NOT EXISTS``), so two ranks racing the first write to one shard both pass the check and one
-#: loses the DDL. Recognized by MESSAGE, not exception subclass: SQLite reports both as a plain
-#: ``OperationalError``, indistinguishable from a real schema problem by type alone.
+#: SQLite's message when another connection ran the same check-then-act DDL first (CREATE TABLE in
+#: ``create_all``, ALTER TABLE in :func:`add_missing_columns`). Matched by message: SQLite raises a
+#: plain ``OperationalError`` for real schema errors too.
 CONCURRENT_SCHEMA_RACE = re.compile(r"table \S+ already exists|duplicate column name")
 
 
@@ -42,12 +39,8 @@ class Result(SQLModel, table=True):
     domain: str | None = None  # taxonomy label; used as a heatmap grouping key
     preset: str  # S | M | L | XL
     framework: str  # numpy | dace_cpu | jax | ... -- the backend, WITHOUT its flavor suffix
-    # Which optimizer inside the framework produced this row: dace_cpu's `parallel` / `autoopt` /
-    # `canonicalize`. NULL == the framework's own default path, which for a searching column means
-    # "the fastest of its pipelines" -- so `WHERE framework='dace_cpu'` gathers every DaCe CPU row
-    # and `flavor` is what tells them apart. One flat name on the CLI (`--framework
-    # dace_cpu_parallel`), two columns here; framework.split_flavor is the one place that maps
-    # between them.
+    # Optimizer inside the framework (dace_cpu's parallel / autoopt / canonicalize); NULL == the
+    # framework's default path. framework.split_flavor maps the flat CLI name to this pair.
     flavor: str | None = None
     agent: str | None = None  # who produced the optimization (None == direct framework run)
     validated: bool  # output matched the NumPy oracle
@@ -55,27 +48,17 @@ class Result(SQLModel, table=True):
     native_time: float | None = None  # framework-internal runtime, ms (None if no native timer)
     datatype: str | None = None  # float32 | float64 | ... (None == legacy float64)
     variant: str | None = None  # sparse storage/distribution axis (None == dense)
-    # WHICH BUILD ran it -- upstream `main` vs the fork's `extended`, a different BLAS, a different
-    # image. A separate axis from `flavor` because you cannot ASK for it: the flavor is a column you
-    # name on the command line, the build is whatever PYTHONPATH resolved to, so it is stamped by
-    # the launcher (HPCAGENT_BENCH_RECORD_BUILD) exactly like `execution`. NULL == single-build run.
-    # Without it, the same pipeline measured on two DaCe trees is two indistinguishable rows.
+    # Which build ran it (dace main vs extended, another BLAS or image), stamped by the launcher via
+    # HPCAGENT_BENCH_RECORD_BUILD. NULL == single-build run.
     build: str | None = None
     prompt_hash: str | None = None  # -> the content-addressed prompt store (None if no prompt)
     execution: str = "native"  # native (no container) | container -- where the runtime was measured
-    # WHICH MACHINE measured it. Two nodes are two experiments: a baseline timed on one CPU against
-    # a candidate timed on another is a hardware comparison wearing a software label, and nothing
-    # downstream can tell, because both rows look perfectly normal. REQUIRED, unlike every other
-    # axis here -- a row that cannot name its host cannot be checked for that, so it must not be
-    # expressible. Stamped from the machine (osinfo.cpu_model) rather than an env knob like `build`,
-    # because the one thing that must never be forgotten is the one nobody has to remember.
+    # CPU model that measured it (osinfo.cpu_model); required, so every row names its hardware.
     cpu: str
-    # The DEVICE the measurement ran on; NULL for a CPU-only column. Not "the GPU in this box": a
-    # device that took no part in the run must not split the figure for it, or the same CPU
-    # measurement lands in two plots because someone swapped a card that was never used.
+    # Device the measurement ran on; NULL for a CPU-only column even when the node has a GPU.
     gpu: str | None = None
-    # The NODE (osinfo.node_name). ``cpu`` cannot separate two nodes of one cluster, and a ratio
-    # across two nodes is a hardware comparison. NULL == recorded before the column existed.
+    # Node name (osinfo.node_name); ``cpu`` cannot separate two nodes of one cluster. NULL on
+    # rows recorded before the column existed.
     node: str | None = None
 
 
@@ -85,9 +68,8 @@ KERNEL_METRICS_TABLE = "kernel_metrics"
 
 class KernelMetric(SQLModel, table=True):
     """One named count about a column's compiled kernel (``autovec.loops_vectorized``,
-    ``parallelism.map``, ...). Long rather than wide: a new metric is a new ``metric`` value, not a
-    column, so a metric family added later lands in every existing DB without a migration. Counts
-    only; a rate is a reading of counts and belongs to the report."""
+    ``parallelism.map``, ...). Long format: a new metric is a new ``metric`` value, so existing DBs
+    need no migration. Counts only; rates belong to the report."""
 
     __tablename__: ClassVar[str] = KERNEL_METRICS_TABLE
 
@@ -100,8 +82,7 @@ class KernelMetric(SQLModel, table=True):
     datatype: str | None = None
     metric: str  # <family>.<count>
     value: float
-    # What the count was taken under, as "key=value" pairs (compiler family, cost model): two rows
-    # with different details are two measurements, never one averaged number.
+    # Conditions of the count as "key=value" pairs (compiler family, cost model).
     detail: str | None = None
     build: str | None = None
     cpu: str
@@ -109,22 +90,11 @@ class KernelMetric(SQLModel, table=True):
 
 
 def add_missing_columns(engine: Engine) -> None:
-    """Add to an EXISTING ``results`` table any nullable column :class:`Result` has grown since.
-
-    ``create_all`` is CREATE TABLE IF NOT EXISTS: it builds the table when absent and does nothing
-    whatsoever when it is present. A results DB is a persistent artifact -- every machine and every
-    rank of every past run has one -- so on all of them a newly declared column would exist in the
-    model and not in the table, and the very next INSERT would fail with "table results has no
-    column named X". Reconciling here rather than at each call site is what keeps the model the
-    single source of the schema.
-
-    ADD COLUMN only: additive, no table rewrite, cannot lose a row, and a legacy row reads back with
-    NULL for the new column -- which is exactly what "this run predates the axis" means. A missing
-    NOT NULL column is NOT invented: there is no honest value to backfill, so it is raised.
-
-    Each ADD COLUMN commits on its own: two ranks reconciling the SAME shard at once can both pass
-    the ``present`` check and both issue the ALTER for the same column, and the loser must not roll
-    back a sibling column the SAME call already added -- see :data:`CONCURRENT_SCHEMA_RACE`."""
+    """Add to an existing ``results`` table every nullable column :class:`Result` declares and the
+    table lacks (``create_all`` never alters a present table). Old rows read NULL for it; a missing
+    NOT NULL column raises, since no value can be backfilled. Each ADD COLUMN commits on its own, so
+    losing a same-column race to another rank (:data:`CONCURRENT_SCHEMA_RACE`) keeps the columns
+    this call already added."""
     # The metadata, not ``Result.__table__``: the same Table object, and the one spelling typed.
     table: Table = SQLModel.metadata.tables[RESULTS_TABLE]
     with engine.connect() as conn:
@@ -151,15 +121,10 @@ def add_missing_columns(engine: Engine) -> None:
 
 
 def results_engine(db_path: str) -> Engine:
-    """A SQLModel engine for the results DB at ``db_path``, with the schema ensured: the table is
-    created from :class:`Result` when absent, and reconciled to it when present
-    (:func:`add_missing_columns`).
-
-    ``create_all`` checks ``sqlite_master`` and then issues CREATE TABLE -- check-then-act, not
-    atomic -- so two ranks racing the first write to a not-yet-existing shard can both pass the
-    check and one loses the CREATE with "table results already exists". The loser's table is the
-    winner's table, which is the schema this call wanted anyway, so that race is swallowed rather
-    than surfaced as a run-ending exception (see :data:`CONCURRENT_SCHEMA_RACE`)."""
+    """A SQLModel engine for the results DB at ``db_path``, with the table created from
+    :class:`Result` when absent and reconciled to it when present (:func:`add_missing_columns`).
+    A lost CREATE TABLE race (:data:`CONCURRENT_SCHEMA_RACE`) is ignored: the winner built the
+    same table."""
     engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
     try:
         SQLModel.metadata.create_all(engine)

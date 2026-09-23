@@ -49,16 +49,10 @@ ResultMessage: TypeAlias = tuple[Literal["ok"], ResultT | None] | tuple[Literal[
 ChildQueue: TypeAlias = "multiprocessing.queues.Queue[ChildMessage[ResultT]]"
 ProgressQueue: TypeAlias = "multiprocessing.queues.Queue[ResultT]"
 
-#: The child's LAST-RESORT report channel: a raw pipe, not a queue.
-#:
-#: multiprocessing.Queue.put starts a feeder thread the first time it is used, and the one failure
-#: this module most needs to report is raised in a child that CANNOT start a thread. A refused seal
-#: leaves the process inside a user namespace with no id map, where every uid is the overflow uid
-#: (65534); pthread_create is charged against that uid's RLIMIT_NPROC and fails with EAGAIN. The
-#: report then died as `RuntimeError: can't start new thread` on top of the SealError, the queue
-#: stayed empty, and the parent reported "child exited 1 with no result" -- which names neither
-#: cause. `Connection.send_bytes` writes straight to the fd: no thread, no pickling of the payload,
-#: and a Connection survives being passed to a spawned child (multiprocessing reduces it by fd).
+#: The child's LAST-RESORT report channel: a raw pipe, not a queue. Queue.put needs a feeder
+#: thread, and a child after a refused seal (user namespace, no id map, uid 65534 at its
+#: RLIMIT_NPROC) cannot start one. ``Connection.send_bytes`` writes straight to the fd with no
+#: thread and survives being passed to a spawned child.
 ErrorWriter: TypeAlias = "multiprocessing.connection.Connection"
 ErrorReader: TypeAlias = "multiprocessing.connection.Connection"
 
@@ -88,13 +82,9 @@ ARM_GRACE_S = 30.0
 #: How long a SIGTERMed child has to exit before the parent escalates to SIGKILL.
 TERM_GRACE_S = 5.0
 
-#: Extra time granted to a child the kernel says is DUMPING CORE. Its cause is already decided --
-#: it took a fatal signal and the kernel is writing the image -- so a SIGKILL here does not stop a
-#: hung child, it relabels a crash as a kill and the caller records the wrong cause. On a distro
-#: whose ``core_pattern`` pipes to a helper the dump costs a second even on an idle box (measured:
-#: 1.1s for a 20MB python child), and the helper is itself a process that has to be scheduled, so
-#: on a loaded runner it is the SIGTERM grace that runs out first. A dump terminates on its own;
-#: this only has to be longer than one takes.
+#: Extra time granted to a child the kernel says is DUMPING CORE: it already took a fatal signal,
+#: so a SIGKILL would only relabel the crash as a kill. A ``core_pattern`` helper can take seconds
+#: on a loaded node; this only has to exceed one dump.
 COREDUMP_GRACE_S = 60.0
 
 #: Set by a caller once nobody will read this thread's result: every child :func:`run_forked` or
@@ -160,11 +150,8 @@ def run_command(
 
 
 def is_core_dumping(pid: int) -> bool:
-    """True when the kernel reports ``pid`` is writing a core image (Linux >= 4.15).
-
-    False everywhere the answer is not knowable -- another OS, a reaped pid, a hidepid mount --
-    which is the pre-existing behaviour: escalate.
-    """
+    """True when the kernel reports ``pid`` is writing a core image (Linux >= 4.15); False when
+    that is not knowable (another OS, a reaped pid, a hidepid mount), so the caller escalates."""
     try:
         with open(f"/proc/{pid}/status", "r") as fh:
             for line in fh:
@@ -188,11 +175,9 @@ class RunResult(Generic[ResultT]):
     result: ResultT | None = None
 
 
-#: An un-indented ``ExceptionType: message`` line inside a :func:`traceback.format_exc` text. Python
-#: never indents this line, so it is what tells it apart from an indented frame ("  File ...", "
-#: code") AND from an unindented CONTINUATION of a multi-line exception message -- e.g. SQLAlchemy
-#: appends an unindented ``[SQL: ...]`` dump and a doc-link URL after its own header, neither of
-#: which starts with an identifier followed by ``:``.
+#: An un-indented ``ExceptionType: message`` line inside a :func:`traceback.format_exc` text: frames
+#: are indented, and continuation lines of a multi-line message (SQLAlchemy's ``[SQL: ...]`` dump,
+#: a doc-link URL) do not start with an identifier followed by ``:``.
 EXCEPTION_HEADER = re.compile(r"^[A-Za-z_][\w.]*:\s")
 
 
@@ -211,11 +196,7 @@ def exception_header(traceback_text: str) -> str:
 def forked_failure_reason(r: RunResult[object]) -> str:
     """One-line cause for a failed :class:`RunResult`: signal name, else the raised exception's type
     and message (:func:`exception_header`), else the raw text's last line (a non-traceback message,
-    e.g. a timeout or an abandoned-child notice), else "unknown".
-
-    Cutting the LAST line of the traceback text used to stand in for the exception header, which is
-    wrong whenever the exception's own message spans multiple lines -- a SQLAlchemy error whose
-    message ends with a documentation link left THAT as the one-line cause, useless for triage."""
+    e.g. a timeout or an abandoned-child notice), else "unknown"."""
     if r.signal:
         return r.signal
     if not r.error:
@@ -230,12 +211,8 @@ PR_SET_PDEATHSIG = 1
 def reparented(parent_at_entry: int, parent_now: int) -> bool:
     """True when the pid that had us at entry is no longer our parent.
 
-    NOT ``parent_now == 1``: a sealed worker (:mod:`experiments.seal_worker`) is PID 1 of its own
-    PID namespace, so every child it forks legitimately reads ``getppid() == 1`` from the moment it
-    starts -- that used to be misread as "reparented to init" and every evaluator child born under
-    the sealed worker self-killed on its first breath. Comparing against the pid recorded AT ENTRY
-    (rather than the literal constant) is correct in both the namespaced and the plain case: it
-    only fires when the parent identity actually CHANGED underneath us.
+    Not ``parent_now == 1``: a sealed worker (:mod:`experiments.seal_worker`) is PID 1 of its own
+    PID namespace, so its children legitimately read ``getppid() == 1``.
     """
     return parent_at_entry != parent_now
 
@@ -243,20 +220,9 @@ def reparented(parent_at_entry: int, parent_now: int) -> bool:
 def die_with_parent() -> None:
     """Ask the kernel to SIGKILL this child when its parent dies. Linux only; best effort.
 
-    run_forked reaps its own child on every path it controls, but it cannot reap one when the
-    PARENT is what dies -- pytest-timeout's thread method calls os._exit on the worker, and a CI
-    step cap is a SIGKILL. The orphan then keeps every descriptor it inherited, and under pytest-
-    xdist one of those is the pipe execnet talks to the controller over: the controller's receiver
-    never sees EOF, xdist never reports the worker down, and the session waits on an empty queue
-    until the job's own cap kills it with nothing printed. Measured: a hanging test that leaves a
-    forked child alive wedges the whole session, the same test with no child left alive is named
-    and reported in 13.53 s.
-
-    A kernel child outliving the judge that forked it is the same bug wearing production clothes,
-    so this is not a test-only guard. The pre/post-prctl getppid comparison (:func:`reparented`)
-    closes the race where the parent already died before prctl ran, which the kernel would
-    otherwise never signal us for -- without assuming what a live parent's pid looks like, which a
-    PID-namespace init (pid 1) is a legitimate value for.
+    An orphaned child keeps every inherited descriptor alive (a judge's, or pytest-xdist's execnet
+    pipe, which then hangs the session). The pre/post-prctl getppid comparison (:func:`reparented`)
+    covers a parent that died before prctl ran.
     """
     if not osinfo.IS_LINUX:
         return
@@ -266,7 +232,7 @@ def die_with_parent() -> None:
         if libc.prctl(PR_SET_PDEATHSIG, ctypes.c_ulong(signal.SIGKILL), 0, 0, 0) != 0:
             return
     except (OSError, AttributeError, ValueError):
-        return  # no prctl (musl, a sandbox, a non-Linux kernel claiming linux): keep the old behaviour
+        return  # no prctl (musl, a sandbox, a non-Linux kernel claiming linux)
     if reparented(parent_at_entry, os.getppid()):  # died in the gap above; the signal just armed never arrives
         os._exit(0)
 
@@ -281,13 +247,9 @@ def process_context(method: str) -> ProcessContext:
 
 
 def report_without_a_thread(err_w: "ErrorWriter | None", text: str) -> None:
-    """Write ``text`` to the raw error pipe. No queue, no feeder thread, no allocation that needs one.
-
-    This is the only reporting path that works after a REFUSED seal (see :data:`ErrorWriter`), and
-    it is deliberately total: a child that cannot even do this is already past reporting anything,
-    and raising here would replace the real cause with the failure to report it -- which is exactly
-    the bug this function exists to end.
-    """
+    """Write ``text`` to the raw error pipe (no queue, no feeder thread). The only reporting path
+    after a REFUSED seal (see :data:`ErrorWriter`); never raises, so the real cause is not replaced
+    by a failure to report it."""
     if err_w is None:
         return
     try:
@@ -311,16 +273,11 @@ def child_main(
     except BaseException:  # noqa: BLE001 -- a refused seal is surfaced like any other child failure
         tb = traceback.format_exc()
         if err_w is not None:
-            # The PIPE, not the queue: this child may be unable to start the queue's feeder thread
-            # at all (see :data:`ErrorWriter`), and a report that raises hides the failure it was
-            # carrying.
+            # The pipe, not the queue: this child may be unable to start a feeder thread.
             report_without_a_thread(err_w, tb)
         else:
-            # No pipe means an OLD parent: a long-lived judge service holds `forked` from the tree
-            # it started with and calls this entry point with the five arguments that tree built
-            # (see tests/test_forked.py's entry-point ABI test). Fall back to the queue it does
-            # understand -- the feeder thread may well fail, which is the whole reason the pipe
-            # exists, but trying and failing is what that parent already got, and silence is worse.
+            # No pipe: a long-lived judge built from an older tree calls with five arguments
+            # (tests/test_forked.py entry-point ABI test). Best effort through the queue.
             with contextlib.suppress(Exception):
                 q.put(("error", tb))
         return
@@ -329,10 +286,9 @@ def child_main(
     try:
         out = fn(*args, **kwargs)
         try:
-            # NOTE: put() only enqueues -- pickling happens later in the queue's feeder thread, so an
-            # unpicklable or oversized payload is NOT caught here. It surfaces in the parent as
-            # "child exited 0 with no result"; callers with large payloads must spill to disk
-            # (see native_call.spill_outputs). This except covers only put() itself failing.
+            # put() only enqueues; pickling runs in the feeder thread, so an unpicklable or oversized
+            # payload surfaces in the parent as "child exited 0 with no result" (large payloads
+            # spill to disk: native_call.spill_outputs). This except covers put() itself failing.
             q.put(("ok", out))
         except Exception:  # queue unusable -> success without a payload
             q.put(("ok", None))
@@ -343,21 +299,15 @@ def child_main(
         q.put(("error", tb))
 
 
-#: WIRE NAME for :func:`child_main`, not a private helper. ``Process(target=...)`` under
-#: forkserver/spawn pickles the target BY QUALIFIED NAME, so the name a long-lived judge service
-#: holds in memory is the one its children must resolve on disk -- and a judge that outlives a
-#: checkout update keeps asking for this spelling. A forkserver daemon it respawns imports this
-#: file fresh, and without the name every forked grade that parent starts dies on a broken result
-#: pipe. An ALIAS, never a second body: two would let the two entry points drift apart.
+#: WIRE NAME for :func:`child_main`: forkserver/spawn pickle the target by qualified name, and a
+#: long-lived judge started from an older checkout still asks for this spelling. An alias, never a
+#: second body.
 _child = child_main
 
 
 def take_result(q: "ChildQueue[ResultT]", timeout: float) -> ResultMessage[ResultT] | None:
-    """Next item from ``q`` that is a RESULT, or None within ``timeout``.
-
-    ``started`` is a clock signal rather than an outcome, and a child that starts and finishes
-    inside one poll leaves both queued -- so every read has to be able to step past it.
-    """
+    """Next item from ``q`` that is a RESULT, or None within ``timeout``; steps past ``started``,
+    which a child that starts and finishes inside one poll leaves queued."""
     end = time.monotonic() + timeout
     while True:
         try:
@@ -426,11 +376,8 @@ def run_forked(
     # gone rather than blocking on a writer that only this process still holds.
     err_w.close()
     last_progress: ResultT | None = None
-    # The deadline measures the CHILD'S runtime, so the child arms it by reporting that it started
-    # -- not p.start(). Fork/spawn latency is the parent's cost (seconds under spawn, and on a
-    # loaded box a fork can be slow to schedule too); billing it to the callee means a child that
-    # takes longer to reach its first bytecode than its own timeout is SIGTERMed before it runs,
-    # and every failure it was about to report is attributed to a clock it never got to start.
+    # The deadline measures the CHILD'S runtime: the child arms it by reporting that it started,
+    # so fork/spawn latency is not billed to the callee.
     started_at = time.monotonic()
     deadline: float | None = None
     # Poll so the result queue drains while the child is alive -- a payload bigger than the OS
@@ -462,13 +409,8 @@ def run_forked(
                 p.join()
             if progress_q is not None:
                 last_progress = drain_progress(progress_q, last_progress)
-            # The child can die of its OWN fatal signal in the window between the deadline check
-            # and terminate() -- a segfaulting vendor runtime on a loaded box is exactly that race.
-            # Reporting it as TIMEOUT hides the cause the caller is trying to attribute, so the
-            # exit code decides: anything other than the signal we just sent is the child's own.
-            # Losing that race was never about the DEADLINE (widened 0.5s -> 2s, and CI went red
-            # again): the child dies on time and the kernel then takes a second or more to reap it
-            # through the core_pattern helper, which is charged against the grace above.
+            # The child can die of its OWN fatal signal between the deadline check and terminate();
+            # the exit code decides: any signal other than the one just sent is the child's own.
             ec = p.exitcode
             if ec is not None and ec < 0 and -ec not in (signal.SIGTERM, signal.SIGKILL):
                 break
@@ -503,11 +445,8 @@ def run_forked(
     if result_item is None:  # not drained in-loop -- covers the clean-exit race window
         result_item = take_result(q, DRAIN_S)
         if result_item is None:
-            # The raw pipe FIRST: a child that could not use the queue at all (a refused seal, see
-            # ErrorWriter) reported here, and its traceback is the actual cause. Falling through to
-            # the generic message instead is what turned "SealError: cannot enter new namespaces"
-            # into "child exited 1 with no result" -- and native_call only recognises a seal fault
-            # by the SealError name in this string, so the generic text also lost that routing.
+            # The raw pipe first: a child that could not use the queue (a refused seal, see
+            # ErrorWriter) reported there, and native_call routes seal faults by the SealError name.
             reported = take_error(err_r, DRAIN_S)
             if reported:
                 return RunResult(ok=False, exit_code=ec, error=f"{tag}{reported}", result=last_progress)
