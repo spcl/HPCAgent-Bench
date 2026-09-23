@@ -163,13 +163,9 @@ def call_json(url: str, data: bytes | None, timeout: float) -> dict[str, Any]:
         # propagates bare, a timeout is the branch below), so the judge never received this request.
         return {"ok": False, "unreached": True, "error": f"cannot reach {url}: {exc.reason}"}
     except TimeoutError:
-        # A socket timeout used to escape both handlers above and surface through mcp_server's
-        # blanket except as a bare "TimeoutError: timed out", which reads to the model as a
-        # transient error worth another go. It is the opposite: the judge does NOT cancel the
-        # grade we walked away from, it holds its device slot to completion, and the pool is four
-        # slots wide -- four abandoned grades and the judge answers nobody (589510: 106 broken
-        # pipes, every one a grade finished for a client that had already left). So say plainly
-        # that the work is still running and that retrying makes it worse.
+        # A bare "TimeoutError" reads to the model as a transient error worth another go. The judge
+        # does NOT cancel the abandoned grade: it holds its device slot to completion, and a few
+        # abandoned grades starve the pool. So say plainly that retrying makes it worse.
         return {
             "ok": False,
             "error": f"judge did not answer within {timeout:.0f}s. The grade is STILL RUNNING "

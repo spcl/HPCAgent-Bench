@@ -14,12 +14,11 @@ so it never condenses reactively either -- the request fails and the episode end
 Two SDK waits are set from the driver's numbers, not left at the SDK's 300 s. ``LLM.timeout`` is the
 request timeout every harness is handed (``API_TIMEOUT_MS``, claude's whole-request cap): at 300 s a
 request queued behind a loaded server's prefills timed out, was retried from scratch five times and
-ended the attempt (owed wave 645701: 18 of 20 agents). Each MCP tool's executor waits
+ended the attempt. Each MCP tool's executor waits
 ``runner_common.judge_call_timeout``: 1.47.0 fixes it at ``MCP_TOOL_TIMEOUT_SECONDS`` = 300 with no
 config field (upstream PR OpenHands/software-agent-sdk#3254, unmerged), below the judge's own 1800 s,
 so a slow grade came back as an error while it kept running on the judge, and the stdio server stayed
-busy with it, so every later call timed out behind it too (harness20 643335: 285 timed-out calls in 18
-of 20 agents, most of which then stopped without an answer).
+busy with it, so every later call timed out behind it too.
 
 Writes ``usage.jsonl`` (one line per model call, condenser calls included), ``openhands.events.jsonl``
 (one event per line) and ``harness-end.json``; see ``runner_common``. Prints ``harness: tools ready: ...``
