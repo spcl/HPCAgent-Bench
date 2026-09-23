@@ -10,10 +10,10 @@ that are not ours to fix, see
 
 ## 1. Motivation
 
-The NumpyToC translator turns `*_numpy.py` kernels into C/C++/Fortran. It used to
-chase *arbitrary* NumPy idioms -- chained subscripts, rank-changing reshapes, fancy
-indexing, whole-array reassignment -- through roughly two dozen interacting AST
-rewriter passes in `lowering.py`, all sharing one fragile mutable `shape_table`. One
+The NumpyToC translator turns `*_numpy.py` kernels into C/C++/Fortran. Arbitrary
+NumPy idioms -- chained subscripts, rank-changing reshapes, fancy indexing, whole-array
+reassignment -- go through roughly two dozen interacting AST rewriter passes in
+`lowering.py`, all sharing one fragile mutable `shape_table`. One
 pass rewriting a statement another didn't anticipate leaves the table stale, and
 emission produces wrong or non-compiling code.
 
@@ -402,9 +402,9 @@ With CNF guaranteed, these `numpyto_common/lowering.py` mechanisms can be retire
   buffer of a declared shape (Inv. 1 / cookbook 4.2, 4.4), so the rank-changing
   in-place reshape path disappears.
 
-`numpyto_c/emit.py`'s `_emit_subscript` already took this step: a rank-mismatched
-subscript on a flat C pointer used to silently emit an uncompilable chained
-`w[i][j]` access; it now raises `NotImplementedError` instead of guessing. Full-rank
+`numpyto_c/emit.py`'s `_emit_subscript` already takes this step: a rank-mismatched
+subscript on a flat C pointer raises `NotImplementedError` instead of emitting an
+uncompilable chained `w[i][j]` access. Full-rank
 indexing (Inv. 2) means that error never fires on a CNF kernel.
 
 The `shape_table`/`_harvest_local_shapes` machinery can then be a single up-front

@@ -18,23 +18,19 @@ Which pattern applies is a property of which submission script and CLI subcomman
 job uses (`run-framework --shard` for corpus, `submit_mpi_scaling.sbatch` for
 problem), not a single shared flag. Everything below is static -- the assignment is a
 pure function of `(kernel list, cost vector, ranks, nodes)`, so every rank computes the
-identical answer alone. No master, no work stealing, no communication. That is not a
-performance choice, it is a reproducibility one: the results DB is keyed by shard, so
-the same job must produce the same partition twice.
+identical answer alone. No master, no work stealing, no communication. The reason is
+reproducibility: the results DB is keyed by shard, so the same job must produce the same
+partition twice.
 
-## corpus: round-robin was a guess, and LPT bin-packing replaced it
+## corpus: LPT bin-packing, with a stride fallback
 
-`shard_names` (`support/collect/sweep.py`) used to keep `names[index::total]`, a pure
-stride: neighbours in the sorted name list tend to be similar sizes, so a stride
-spreads them. That was the right call when kernel cost was unknown.
-
-It is known now. The preset ladder fits every kernel against a work model and a
-footprint, so each kernel has a predicted time at every rung. `shard_names` passes that
+The preset ladder fits every kernel against a work model and a footprint, so each kernel
+has a predicted time at every rung. `shard_names` (`support/collect/sweep.py`) passes that
 preset into `sizing.pack_lpt`, which sorts kernels descending by predicted cost and
 gives each to the least-loaded rank -- deterministic, same on every rank, no
 coordination. This is the default path in `run-framework` whenever a preset is known.
 
-The stride remains the fallback for when no cost model resolves at all (opaque
+The stride `names[index::total]` is the fallback when no cost model resolves at all (opaque
 kernels -- `size_audit.py` classifies those as `opaque` / `unresolved`); a kernel with
 no prediction is packed last, round-robin, so an unknown cost cannot skew the packing.
 
