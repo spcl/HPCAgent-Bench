@@ -266,7 +266,8 @@ def upstream_get(url: str, setup: str | None) -> tuple[int, dict[str, object]]:
         with urlopen(request, timeout=60) as reply:
             return reply.status, json.loads(reply.read())
     except HTTPError as exc:
-        return exc.code, json.loads(exc.read() or b"{}")
+        with exc:  # an HTTPError holds the response body open until closed
+            return exc.code, json.loads(exc.read() or b"{}")
 
 
 def test_the_upstream_serves_each_setup_its_own_cpf_view(fused_job: dict[str, str], make_judge) -> None:
@@ -292,8 +293,9 @@ def test_the_upstream_score_route_follows_the_setup(fused_job: dict[str, str], m
     request = Request(f"{url}/score", data=b"{}", headers={fused.SETUP_HEADER: fused_job["control"]}, method="POST")
     with pytest.raises(HTTPError) as refused:
         urlopen(request, timeout=60)
-    assert refused.value.code == 403
-    assert "disabled" in refused.value.read().decode()
+    with refused.value:
+        assert refused.value.code == 403
+        assert "disabled" in refused.value.read().decode()
 
 
 # ------------------------------------------------------------------ the clients send the token
