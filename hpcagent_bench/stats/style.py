@@ -35,17 +35,11 @@ from matplotlib.transforms import Bbox, Transform
 
 LOG = logging.getLogger(__name__)
 
-# matplotlib's drawing calls end in an untyped ``**kwargs``, so every call below suppresses the
-# unknown-member report that fact produces; the arguments themselves are checked.
+# matplotlib's drawing calls end in an untyped ``**kwargs``: every call below suppresses that report.
 
-#: Ink, in decreasing emphasis. Text NEVER takes a series colour: a coloured mark beside a label
-#: carries the identity, and a coloured label just makes the text harder to read.
-#:
-#: EVERY PIECE OF TEXT IS :data:`INK`, near-black -- axis labels, tick numbers, point labels and
-#: legend entries alike. MUTED is for the marks that are not text: a neutral legend swatch, a tick
-#: dash, an interval whose colour would otherwise compete with the data. Grey text renders lighter
-#: still once a figure is reduced to a paper column, and the labels went illegible before the
-#: marks did.
+#: Ink, in decreasing emphasis. EVERY PIECE OF TEXT IS :data:`INK` (never a series colour, never
+#: grey: grey text goes illegible at column width); MUTED is for non-text marks (a neutral legend
+#: swatch, a tick dash, an interval that would compete with the data).
 INK: str = "#1c1c1e"
 MUTED: str = "#6b6b70"
 RULE: str = "#d6d6da"
@@ -63,20 +57,12 @@ MINOR_GRID_WIDTH: float = 0.35
 MINOR_TICK_LENGTH: float = 0.55
 MINOR_TICK_WIDTH: float = 0.6
 
-#: TEXT CASE, for every label a figure shows: Title Case. Capitalise each word except articles,
-#: coordinating conjunctions and prepositions ("and", "or", "of", "per", "over", "to", "vs"), and
-#: always capitalise the first and last word. Identifiers keep their own spelling -- ``numba``,
-#: ``oss120b`` and ``lang-c`` are names, not words, and title-casing them makes them wrong.
-#:
-#: Written down rather than enforced by a function because these strings carry mathtext
-#: (``$\log_2$``) and identifiers, and a naive title-caser mangles both.
+#: TEXT CASE, for every label a figure shows: Title Case, except articles, coordinating conjunctions
+#: and prepositions ("and", "or", "of", "per", "over", "to", "vs") inside the label. Identifiers
+#: (``numba``, ``oss120b``, ``lang-c``) and mathtext keep their own spelling, so no function enforces it.
 
-#: Type scale, in points, sized for PRINT rather than for a screen.
-#:
-#: A figure in a paper is reproduced at roughly half the width it was authored at, so 8pt ticks
-#: land near 4pt on the page -- below what most venues will accept and below what a reader can
-#: comfortably read. These are set so the SMALLEST text survives that reduction: 13pt ticks reach
-#: the page around 6.5pt, and the axis labels and title scale with them.
+#: Type scale, in points, sized for PRINT: a paper reproduces a figure at about half width, so 13pt
+#: ticks reach the page around 6.5pt.
 TITLE_PT: float = 20.0
 #: Floor for the shrink in :func:`title`: below this the title is smaller than the tick labels.
 MIN_TITLE_PT: float = 8.0
@@ -90,19 +76,13 @@ ANNOTATION_PT: float = 13.0
 PRINT_TICK_PT: float = 7.0
 PRINT_LABEL_PT: float = 8.0
 
-#: The dpi every figure is finally written at (:func:`save`'s own default). FreeType hints a glyph
-#: run tighter at a LOW dpi than the same point size renders at a higher one, so a fit measured via
-#: ``get_window_extent`` against a figure still at matplotlib's default dpi (100) UNDERSTATES the
-#: text's width at :data:`SAVE_DPI` -- a title :func:`title` shrank to "fit" at 100 dpi came out
-#: overflowing both edges of the canvas :func:`save` actually wrote. A caller that measures anything
-#: against a figure (title, legend, an axis label's own protrusion) sets the figure to this dpi
-#: first, so what it measures is what gets saved.
+#: The dpi every figure is written at (:func:`save`'s default). FreeType hints tighter at a low dpi,
+#: so ``get_window_extent`` at matplotlib's default 100 dpi UNDERSTATES text width: a caller that
+#: measures text against a figure sets the figure to this dpi first.
 SAVE_DPI: float = 200.0
 
-#: The full text width of a double-column A4 paper, in inches. A figure meant to sit in a paper
-#: rather than stand alone (the per-kernel and efficacy figures) is sized to this so it never
-#: covers more of the page than its own content needs; a script exposes it as ``--double-column``
-#: rather than each guessing its own width.
+#: The full text width of a double-column A4 paper, in inches: the width of a paper figure (the
+#: per-kernel and efficacy figures), exposed by scripts as ``--double-column``.
 DOUBLE_COLUMN_WIDTH: float = 7.0
 
 #: Per-paper page budgets, in inches, so a figure drops in at scale 1.0 instead of being shrunk by
@@ -166,12 +146,10 @@ TITLE_BAND_IN: float = TITLE_TOP_IN + TITLE_GAP_IN
 def title(fig: Figure, text: str) -> float:
     """Centred title; returns the top of the plot area for ``tight_layout(rect=...)``."""
     width, height = (float(value) for value in fig.get_size_inches())
-    # Work in inches, then convert: a fraction of a 4-inch figure is a different gap than the same
-    # fraction of a 12-inch one, which is what made the fixed offsets collide.
+    # Work in inches, then convert: a figure fraction is a different gap at every figure height.
     top = 1.0 - (TITLE_TOP_IN / height)
     artist = fig.text(0.5, top, text, fontsize=TITLE_PT, color=INK, ha="center", va="top")  # pyright: ignore[reportUnknownMemberType]
-    # A title longer than the canvas is centred and clipped at both ends, so the figure loses the
-    # first and last words of its own name. Shrink it to the width the template gives it.
+    # A title wider than the canvas is clipped at both ends: shrink it to fit.
     size = TITLE_PT
     while size > MIN_TITLE_PT:
         box = artist.get_window_extent(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
@@ -234,9 +212,7 @@ def legend_below(
         )
         box = legend.get_window_extent(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
         if columns <= 1 or box.width <= limit:
-            # FILL the box: among the column counts that give this many rows, the smallest leaves
-            # no ragged cells. Five columns and four both wrap twelve entries onto three rows, and
-            # four of them is a rectangle.
+            # FILL the box: the fewest columns that give this many rows (12 entries: 4, not 5).
             full = -(-len(handles) // max(1, -(-len(handles) // columns)))
             if full < columns:
                 legend.remove()
@@ -477,10 +453,8 @@ def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, 
             subs = (1.0, 2.0, 5.0) if log_base == 10.0 else (1.0,)
             target.set_major_locator(LogLocator(base=log_base, subs=subs, numticks=20))
         if log_base == 10.0 and major:
-            # NOT LogFormatterSciNotation: even with labelOnlyBase=False it returns the empty
-            # string for a 5x10^n tick, so the axis got a line and a gap where its label should be
-            # -- which looks like a stray rule rather than a tick. This labels every major it is
-            # given, which is the only contract a caller pinning majors can rely on.
+            # NOT LogFormatterSciNotation: it returns "" for a 5x10^n tick even with
+            # labelOnlyBase=False. This labels every major it is given.
             target.set_major_formatter(FuncFormatter(decade_label))
         minor_ticks(target, "ratio" if log_base == 2.0 else "token")
     else:
@@ -490,24 +464,17 @@ def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, 
     ax.set_axisbelow(True)
 
 
-#: The three layers a paired point mark occupies. A connector between two conditions is drawn
-#: BETWEEN a mark's fill and its outline: an unfilled mark reads as a box with a white centre, and
-#: the reader follows the dashed connector THROUGH that centre to the other condition. Putting the
-#: connector under the fill breaks it at both ends, which is where the eye is trying to start.
-#: The outline stays on top of the line, so the mark keeps its shape where the two cross.
+#: The three layers a paired point mark occupies: fill, then the connector between two conditions
+#: (so it runs through an unfilled mark's white centre, unbroken), then the outline on top.
 FILL_Z: float = 3.0
 CONNECTOR_Z: float = 4.0
 MARK_Z: float = 5.0
 
-#: How much of a mark's area the NOT-DELIVERED cross covers. Small enough that the model shape is
-#: still read first, large enough to survive a column-width reduction.
+#: How much of a mark's area the NOT-DELIVERED cross covers: the model shape still reads first.
 CROSS_SCALE: float = 0.45
 
-#: What the cross means, wherever a figure draws one. The legend says this and nothing else: the
-#: mark sits at 1x and is a placeholder, not a measurement. It does not say how a summary treats it,
-#: because that differs by figure: a compiler panel leaves it out of its geomean (the kernel counts
-#: in the success rate instead), while a paired efficacy ratio carries it at
-#: :data:`~hpcagent_bench.stats.population.NOT_DELIVERED`.
+#: What the cross means, wherever a figure draws one: a 1x placeholder, not a measurement. How a
+#: summary treats it differs by figure, so the legend does not say.
 NOT_DELIVERED_LABEL: str = "No Verified Answer (Drawn at 1x)"
 
 #: The PENDING mark: an entry that has not been attempted yet, as opposed to one that ran and failed
