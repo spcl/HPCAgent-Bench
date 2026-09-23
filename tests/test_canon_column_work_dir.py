@@ -17,6 +17,7 @@ build toolchain, and no benchmark registry -- this is a test of canon_column.sh'
 of run-framework's CSV correctness (covered elsewhere).
 """
 
+import contextlib
 import os
 import pathlib
 import shutil
@@ -181,7 +182,10 @@ def test_a_verified_merge_deletes_the_build_tree_and_shard_db_but_keeps_the_csv(
     assert (out_root / "fakecol.rank0.csv").exists(), "the CSV is the external hand-off and must survive cleanup"
 
     db_path = pathlib.Path(env["JIT_CACHE_ROOT"]) / "results" / "canon.db"
-    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+    # sqlite3.Connection's context manager only commits/rolls back the transaction; it never
+    # closes the connection, so the plain `with` form used here before left a ResourceWarning
+    # pending, which -W error turns into a failure in whichever LATER test happens to trigger GC.
+    with contextlib.closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as conn:
         rows = conn.execute("SELECT column, kernel, validated FROM canon").fetchall()
     assert rows == [("fakecol", "fakekernel", "True")]
 
