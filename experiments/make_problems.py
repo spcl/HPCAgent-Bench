@@ -104,9 +104,8 @@ def trigger_line(skill: Skill) -> str:
 
     The trigger is the whole of what the packet spends on a page. `when` is the page's own; it
     falls back to the description (prompts.Skill). A line that named the file without saying when
-    to open it is a path the reader has no reason to follow -- measured across
-    619952/619964/619984/620067, where divide-and-conquer rode in every packet unreferenced and no
-    agent opened its subject. The file is named by the page's directory, the name it is staged under.
+    to open it is a path the reader has no reason to follow. The file is named by the page's
+    directory, the name it is staged under.
     """
     return (
         textwrap.fill(
@@ -214,9 +213,7 @@ def auto_pages(language: str = "any", image: str | None = None, multinode: bool 
 
     Each page states in its own ``applies:`` frontmatter which languages, images and topologies it
     can be of use to (:func:`hpcagent_bench.packets.applies_to`), and the arm's own language and
-    directive pages come first (:func:`hpcagent_bench.packets.arm_order`). The selection used to be
-    every page on every arm -- 21 triggers on a single-node C CPU task, 16 of them for situations
-    that cannot occur in it, with the two it needed third and thirteenth. ``--skills`` and
+    directive pages come first (:func:`hpcagent_bench.packets.arm_order`). ``--skills`` and
     ``--packet lang-skills`` both come through here, so the two spellings stay byte-identical.
 
     An experiment that wants a narrower packet names it with ``--skill``, which is what every
@@ -242,10 +239,8 @@ def packet_skills(
 ) -> list[Skill]:
     """The packet's pages: every shipped page, or exactly the pages ``also`` names.
 
-    Language-agnostic. It used to select `lang-<language>` plus the parallelism-model pages that
-    language could spell, because each page's BODY was inlined; nothing is inlined now, so a page
-    costs one trigger line and the trigger states its own language. `language` is kept in the
-    signature because callers pass it, and is used only for the error messages below.
+    Language-agnostic: a page costs one trigger line and the trigger states its own language.
+    `language` is used only for the error messages below.
 
     ``also`` names further SHIPPED pages to add, and is how an arm opts into a page that is not
     part of the default packet. ``--extra-skill-root`` cannot do this: it only considers pages a

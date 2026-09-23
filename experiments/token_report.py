@@ -3,10 +3,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Token totals for one run: input, output and THINKING, summed over every agent log.
 
-Reporting output_tokens alone understates a reasoning model by multiples. On 621016 one agent
-that hit its wall clock reported 25,888 output tokens and 80,441 thinking tokens -- three times
-its answer in reasoning it was never credited with -- because the OpenAI-compatible endpoints
-here leave ``usage.output_tokens_details.thinking_tokens`` at 0. The only record of that work is
+Reporting output_tokens alone understates a reasoning model by multiples, because the
+OpenAI-compatible endpoints here leave ``usage.output_tokens_details.thinking_tokens`` at 0. The only record of that work is
 the client's own stream counter, so this reads BOTH and prints them side by side rather than
 picking one and calling it the total.
 

@@ -3,13 +3,13 @@
 """Which of an arm's done-looking kernels a crashed or cancelled episode actually owes a rerun.
 
 ``remaining_kernels.py`` reads a kernel as DONE the moment a ``submissions`` row exists (the
-2026-09-17 owed-cancel rule). That rule is right for deciding what the NEXT WAVE runs, but it is
+owed-cancel rule). That rule is right for deciding what the NEXT WAVE runs, but it is
 not proof the row is trustworthy: ``AGENT_SINGLE_SUBMISSION=0`` lets more than one episode work the
 same kernel, and a kernel can carry a clean submission from one episode while a SECOND episode for
-the same kernel crashed or was cut off by the job. The 2026-09-17 owed-cancel rule only looks at the
+the same kernel crashed or was cut off by the job. The owed-cancel rule only looks at the
 database; this script is the audit that also reads the episodes themselves.
 
-USER RULE (2026-09-17, final): a kernel's existing measurement is carried over only if no agent
+RULE: a kernel's existing measurement is carried over only if no agent
 crashed on it. Per (arm, kernel):
 
 - KEEP:            a ``submissions`` row exists AND every episode for that kernel ended cleanly --
