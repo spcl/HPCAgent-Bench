@@ -13,7 +13,7 @@ Usage::
     python statistics/plot_scaling.py obs.csv --experiment mlscale
     python statistics/plot_scaling.py obs.csv --experiment mlscale --figure efficiency
     python statistics/plot_scaling.py obs.csv --experiment mlscale --figure per-kernel --mode weak
-    python statistics/plot_scaling.py obs.csv --arm 'mlscale-(weak|strong)-qwen38-hip'
+    python statistics/plot_scaling.py obs.csv --arm 'mlscale-qwen38-hip.*'
 """
 
 import argparse
@@ -48,8 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mode",
         choices=scaling.MODES,
-        default="weak",
-        help="which scaling law the per-kernel small multiples draw (default: weak)",
+        default=None,
+        help="which scaling law the per-kernel small multiples draw (default: both, one figure each)",
     )
     parser.add_argument(
         "--quantity",
@@ -61,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--width",
         type=float,
         default=0.0,
-        help="figure width in inches; default is the double-column paper width",
+        help="figure width in inches; default is the ICLR text width (scaling.DEFAULT_WIDTH_IN)",
     )
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/scaling"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/scaling.csv"))
@@ -106,18 +106,21 @@ def draw(curves: list[scaling.Curve], args: argparse.Namespace) -> list[pathlib.
     width = args.width or None
     written: list[pathlib.Path] = []
     wanted = FIGURES[1:] if args.figure == "all" else (args.figure,)
+    sized = {"width": width} if width else {}
     for name in wanted:
         if name == "per-kernel":
-            fig = scaling.figure_per_kernel(curves, args.mode, args.quantity, **({"width": width} if width else {}))
-            stem = args.out.with_name(f"{args.out.name}-per-kernel-{args.mode}")
+            modes = (args.mode,) if args.mode else scaling.MODES
+            drawn = [
+                (scaling.figure_per_kernel(curves, mode, args.quantity, **sized), f"per-kernel-{mode}")
+                for mode in modes
+            ]
         else:
-            builder = scaling.BUILDERS[name]
-            fig = builder(curves, **({"width": width} if width else {}))
-            stem = args.out.with_name(f"{args.out.name}-{name}")
-        if fig is None:
-            print(f"nothing drawable for --figure {name}", file=sys.stderr)
-            continue
-        written.append(scaling.save(fig, stem))
+            drawn = [(scaling.BUILDERS[name](curves, **sized), name)]
+        for fig, suffix in drawn:
+            if fig is None:
+                print(f"nothing drawable for --figure {name} ({suffix})", file=sys.stderr)
+                continue
+            written.append(scaling.save(fig, args.out.with_name(f"{args.out.name}-{suffix}")))
     return written
 
 

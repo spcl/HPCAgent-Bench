@@ -4,15 +4,17 @@
 
 Reads one selection of observations (``--experiment`` for an arm prefix, ``--arm`` for a further
 regex) and draws its per-kernel speed-up and its per-kernel tokens
-(:mod:`hpcagent_bench.stats.figures.per_kernel`). Every episode matching the selection is pooled
-into one series per kernel -- this script draws ONE condition at a time; compare two conditions
-(a model, a packet) by rendering it once per ``--arm`` selection.
+(:mod:`hpcagent_bench.stats.figures.per_kernel`). By default every episode matching the selection is
+pooled into one series per kernel; ``--series arm`` draws one series per arm instead (colour = model,
+shape = packet, a control hollow), each with its own geomean slot in the summary column.
 
 Usage::
 
     python statistics/plot_per_kernel.py obs.csv --experiment cpf-llr-focus40-qwen38-c
     python statistics/plot_per_kernel.py obs.csv --experiment cpf-llr-focus40-qwen38-c --style box
     python statistics/plot_per_kernel.py obs.csv --experiment git-scicomp --style box --summary --layout stacked
+    python statistics/plot_per_kernel.py obs.csv --arm 'llr-focus40-.*-c-cpf' --series arm --summary \
+        --layout stacked --width 5.5
 """
 
 import argparse
@@ -52,6 +54,18 @@ def build_parser() -> argparse.ArgumentParser:
         default="separate",
         help="two files (default) or one figure with speed-up over tokens, sharing the kernel axis",
     )
+    parser.add_argument(
+        "--series",
+        choices=("pooled", "arm"),
+        default="pooled",
+        help="one series pooling every selected arm (default), or one series per arm",
+    )
+    parser.add_argument(
+        "--width",
+        type=float,
+        default=0.0,
+        help="draw at this width in inches at print type size (e.g. 5.5 for ICLR); default: authoring size",
+    )
     parser.add_argument("--label", default="", help="draw this title above the figure; default: no title")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/per_kernel.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/per_kernel.csv"))
@@ -82,20 +96,27 @@ def render(
 ) -> list[pathlib.Path]:
     stem, suffix = args.out.stem, args.out.suffix
     written: list[pathlib.Path] = []
+    width = args.width or None
+    # A pooled series is one unlabelled colour: no key. Per-arm series need theirs.
+    legend = []
+    if args.series == "arm":
+        legend = [*per_kernel.series_handles(speed.series), *per_kernel.status_handles([speed, tokens])]
     if args.layout == "stacked":
         if not (speed_cells and token_cells):
             raise SystemExit("--layout stacked needs both a speed-up and a tokens cell to share the kernel axis")
         kernels = per_kernel.shared_kernel_order(speed_cells, token_cells)
-        fig = per_kernel.figure_panels([speed, tokens], kernels, args.style, args.summary, label)
+        fig = per_kernel.figure_panels([speed, tokens], kernels, args.style, args.summary, label, width, legend)
         written.append(per_kernel.save(fig, args.out))
         return written
     if speed_cells:
         kernels = per_kernel.ordered_kernels(speed_cells)
-        fig = per_kernel.figure_one(speed, kernels, args.style, args.summary, f"{label}: Speed-Up" if label else "")
+        title = f"{label}: Speed-Up" if label else ""
+        fig = per_kernel.figure_one(speed, kernels, args.style, args.summary, title, width, legend)
         written.append(per_kernel.save(fig, args.out.with_name(f"{stem}-speedup{suffix}")))
     if token_cells:
         kernels = per_kernel.ordered_kernels(token_cells)
-        fig = per_kernel.figure_one(tokens, kernels, args.style, args.summary, f"{label}: Tokens" if label else "")
+        title = f"{label}: Tokens" if label else ""
+        fig = per_kernel.figure_one(tokens, kernels, args.style, args.summary, title, width, legend)
         written.append(per_kernel.save(fig, args.out.with_name(f"{stem}-tokens{suffix}")))
     return written
 
@@ -111,9 +132,15 @@ def main() -> None:
     # NO TITLE by default: a paper's caption is the title, and "all arms" over a panel naming one
     # arm's kernels was a caption that said nothing. --label draws one for a standalone render.
     label = args.label
-    hues = palette.hues()
-    speed = per_kernel.speedup_series_metric([per_kernel.Series("", tuple(speed_cells), hues[0])], "Speed-Up")
-    tokens = per_kernel.token_series_metric([per_kernel.Series("", tuple(token_cells), hues[1])], "Tokens per Episode")
+    if args.series == "arm":
+        speed_series = per_kernel.arm_series(frame, "speedup")
+        token_series = per_kernel.arm_series(frame, "tokens")
+    else:
+        hues = palette.hues()
+        speed_series = [per_kernel.Series("", tuple(speed_cells), hues[0])]
+        token_series = [per_kernel.Series("", tuple(token_cells), hues[1])]
+    speed = per_kernel.speedup_series_metric(speed_series, "Speed-Up")
+    tokens = per_kernel.token_series_metric(token_series, "Tokens per Episode")
 
     write_tables(speed_cells, token_cells, args.table)
     written = render(speed, tokens, speed_cells, token_cells, args, label)

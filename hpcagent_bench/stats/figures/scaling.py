@@ -24,10 +24,11 @@ Four figures, all in the repo's shared ink (:mod:`hpcagent_bench.stats.style`) a
 * :func:`figure_per_kernel` -- one small panel per kernel, every model overlaid.
 * :func:`figure_summary` -- the geomean eta per arm with its interval, weak beside strong.
 
-ONE ENTITY VARIES on these panels -- which LLM ran -- because the track fixes the harness, the
-language and the packet, so colour AND shape are the model (``docs/plotting.md`` rule 2's
-"where only ONE entity varies the colour is that entity"). Weak against strong is never a colour:
-the two measure different things and are drawn as different panels.
+A SERIES IS ONE (MODEL, PACKET): colour is the model and shape the packet, a control (no packet)
+a hollow circle on a dashed line -- the encoding every efficacy figure of this repo uses, so the
+mlscale arm matrix (each model with and without ``dist-rccl-amd``) reads the same way here. Weak
+against strong is never a colour: the two measure different things and are drawn as different
+panels, and one graded submission contributes a curve to each.
 
 THE MEASURED AXIS IS Y and carries the grid; P is a parameter the experiment set, so its axis gets
 fixed ticks at the rank counts actually run (1, 2, 4, 8, 16) on a log2 scale and no grid of its own.
@@ -35,9 +36,14 @@ Efficiency is drawn LINEAR from 0: it is a fraction of the ideal, a reader place
 eye, and a log axis would spend its resolution on the region a curve reaches only when it has
 already failed. Speed-up is a ratio and keeps this repo's log2 ratio axis.
 
-An aggregate line is the GEOMEAN over the arm's kernels at that P with its 95% interval as a band
-(:func:`hpcagent_bench.stats.summary.geomean_interval`) -- never a mean and never a median, the same
-rule every ratio in this repo is summarized under.
+An aggregate line is the GEOMEAN over the series' kernels at that P with its 95% interval as a whisker
+(:func:`hpcagent_bench.stats.summary.geomean_interval`), the series dodged along P so the whiskers do
+not overprint -- never a mean and never a median, the same rule every ratio in this repo is
+summarized under. Every kernel's own curve is the small multiples' (:func:`figure_per_kernel`).
+Each point's T(P) is the median of k timed runs, recorded by the grade; T(1) is the submission's
+own single-GPU time on the base problem, shared by every P of its curve -- the note under every
+key says so (:data:`TIME_NOTE`). Every figure is drawn at the paper's text width at print type
+sizes, so it drops in at scale 1.0.
 """
 
 import dataclasses
@@ -53,7 +59,7 @@ import pandas as pd
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FixedFormatter, FixedLocator, FuncFormatter
 
-from hpcagent_bench import experiment_tags
+from hpcagent_bench import experiment_tags, packets
 from hpcagent_bench.harness import metric
 from hpcagent_bench.stats import palette, summary
 from hpcagent_bench.stats import style as plotstyle
@@ -82,8 +88,8 @@ RANKS_PER_NODE: int = 4
 MIN_CURVE_POINTS: int = 2
 
 #: A single panel's height in inches, and the extra the chrome (ticks, axis labels, legend) needs.
-PANEL_HEIGHT_IN: float = 2.4
-CHROME_IN: float = 1.35
+PANEL_HEIGHT_IN: float = 2.0
+CHROME_IN: float = 1.0
 
 #: The small-multiple grid's columns. Ten kernels land as two rows of five across a paper's width.
 SMALL_MULTIPLE_COLUMNS: int = 5
@@ -91,7 +97,7 @@ SMALL_MULTIPLE_COLUMNS: int = 5
 #: Point size of a small multiple's kernel name. Below the rest of the scale on purpose: five
 #: panels across a paper's width leave ~1.4in per title, and at :data:`style.ANNOTATION_PT` two
 #: neighbouring kernel names overprint each other.
-SMALL_MULTIPLE_TITLE_PT: float = 9.0
+SMALL_MULTIPLE_TITLE_PT: float = plotstyle.PRINT_TICK_PT
 
 #: How close a recorded ``efficiency`` must sit to the one :func:`metric.scaling_point` computes
 #: before :func:`disagreements` reports the row. A relative tolerance, because eta is a ratio.
@@ -147,6 +153,8 @@ class Curve:
     mode: str
     points: tuple[Point, ...]
     dropped: tuple[tuple[int, str], ...] = ()
+    #: The arm's packet (registry key, "" for the control): its recorded ``packet``, else its name's.
+    packet: str = ""
 
     @property
     def ranks(self) -> tuple[int, ...]:
@@ -296,6 +304,7 @@ def curves(frame: pd.DataFrame) -> list[Curve]:
             else:
                 points.append(point)
         model = text_cell(group.iloc[0], "model") or experiment_tags.model_of(str(arm))
+        packet = packets.canonical(text_cell(group.iloc[0], "packet") or experiment_tags.packet_of(str(arm)))
         out.append(
             Curve(
                 arm=str(arm),
@@ -304,6 +313,7 @@ def curves(frame: pd.DataFrame) -> list[Curve]:
                 mode=str(mode),
                 points=tuple(sorted(points, key=lambda p: p.ranks)),
                 dropped=tuple(sorted(dropped)),
+                packet=packet,
             )
         )
     return out
@@ -393,6 +403,82 @@ def series(curves_: Sequence[Curve], quantity: Quantity) -> dict[int, summary.In
     return {ranks: summary.geomean_interval(values) for ranks, values in sorted(buckets.items()) if values}
 
 
+#: Type sizes, in points: the paper's print sizes, since the figures are drawn at the width they are
+#: placed at (:data:`DEFAULT_WIDTH_IN`), never shrunk by ``\includegraphics``.
+TICK_PT: float = plotstyle.PRINT_TICK_PT
+LABEL_PT: float = plotstyle.PRINT_LABEL_PT
+LEGEND_PT: float = plotstyle.PRINT_TICK_PT
+NOTE_PT: float = plotstyle.PRINT_TICK_PT - 0.5
+
+#: Default figure width: the ICLR text width, so the PDF drops in at scale 1.0.
+DEFAULT_WIDTH_IN: float = plotstyle.ICLR_TEXT_WIDTH_IN
+
+#: Line and mark sizes of an aggregated series, and of a small multiple's per-kernel curve.
+LINE_WIDTH: float = 1.3
+MARK_PT: float = 4.2
+SMALL_LINE_WIDTH: float = 0.9
+SMALL_MARK_PT: float = 2.8
+
+#: Half the span, in octaves of P, that the series at one P are spread over, so their intervals
+#: do not print on top of each other (a dodge on the log2 axis).
+DODGE_OCTAVES: float = 0.09
+
+#: The mark a control (no packet) series wears, hollow; its line is dashed.
+CONTROL_MARKER: str = "o"
+CONTROL_LINESTYLE: tuple[int, tuple[float, float]] = (0, (3.0, 1.6))
+
+#: The ideal reference: thin, grey and dotted, so it never reads as a control's dashed line.
+IDEAL_STYLE: dict[str, object] = {"color": plotstyle.REFERENCE, "linewidth": 0.9, "linestyle": (0, (1.0, 1.4))}
+
+#: What every scaling figure says about its two times, under its key. T(1) is the anchor the whole
+#: curve is divided by, so a reader must not have to guess which single-GPU time it is.
+TIME_NOTE: str = (
+    "$T_1$: the submission's own 1-GPU time on the base problem, shared by every $P$; "
+    "$T_P$: median of $k$ timed runs at $P$ ranks."
+)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class SeriesStyle:
+    """How one (model, packet) series is drawn: colour = model, shape = packet, a control hollow on
+    a dashed line -- the encoding every efficacy figure of this repo uses."""
+
+    label: str
+    color: str
+    marker: str
+    filled: bool
+    linestyle: str | tuple[int, tuple[float, float]]
+
+
+def series_style(model: str, packet: str, several_packets: bool) -> SeriesStyle:
+    """``(model, packet)``'s :class:`SeriesStyle`; the label names the packet only when the figure
+    carries more than one."""
+    label = label_of(model)
+    if several_packets:
+        label += f" + {experiment_tags.packet_name(packet)}" if packet else " (No Packet)"
+    return SeriesStyle(
+        label=label,
+        color=palette.model_color(model),
+        marker=palette.packet_marker(packet) if packet else CONTROL_MARKER,
+        filled=bool(packet),
+        linestyle="-" if packet else CONTROL_LINESTYLE,
+    )
+
+
+def series_keys(curves_: Sequence[Curve]) -> list[tuple[str, str]]:
+    """Every (model, packet) the curves carry, models in registry order, the control first."""
+    models = palette.in_order({curve.model for curve in curves_})
+    keys = {(curve.model, curve.packet) for curve in curves_}
+    return sorted(keys, key=lambda key: (models.index(key[0]), key[1] != "", key[1]))
+
+
+def dodge(index: int, count: int) -> float:
+    """The factor series ``index`` of ``count`` is shifted by along the log2 P axis."""
+    if count < 2:
+        return 1.0
+    return 2.0 ** (-DODGE_OCTAVES + 2.0 * DODGE_OCTAVES * index / (count - 1))
+
+
 def rank_ticks(ax: matplotlib.axes.Axes, ranks: Sequence[int]) -> None:
     """A log2 P axis ticked at exactly the measured rank counts, labelled as plain integers.
 
@@ -406,7 +492,7 @@ def rank_ticks(ax: matplotlib.axes.Axes, ranks: Sequence[int]) -> None:
     ax.xaxis.set_major_locator(FixedLocator([float(p) for p in ranks]))
     ax.xaxis.set_major_formatter(FixedFormatter([str(p) for p in ranks]))
     ax.xaxis.set_minor_locator(FixedLocator([]))
-    ax.set_xlim(ranks[0] / 1.3, ranks[-1] * 1.3)
+    ax.set_xlim(ranks[0] / 1.35, ranks[-1] * 1.35)
 
 
 def measured_axis(ax: matplotlib.axes.Axes, quantity: Quantity) -> None:
@@ -415,41 +501,56 @@ def measured_axis(ax: matplotlib.axes.Axes, quantity: Quantity) -> None:
         ax.set_yscale("log", base=2)
         plotstyle.value_axis(ax, "y", log_base=2.0)
         ax.yaxis.set_major_formatter(FuncFormatter(plotstyle.ratio_tick))
-        return
-    ax.set_ylim(bottom=0.0)
-    plotstyle.value_axis(ax, "y")
+    else:
+        top = max(1.1, ax.get_ylim()[1])
+        ax.set_ylim(0.0, top)
+        plotstyle.value_axis(ax, "y")
+    ax.tick_params(labelsize=TICK_PT)
 
 
 def ideal_mark(ax: matplotlib.axes.Axes, quantity: Quantity, ranks: Sequence[int]) -> Line2D:
     """The ideal reference: eta = 1, or sigma = P. Returns its legend handle."""
-    style = {"color": plotstyle.REFERENCE, "linewidth": 1.1, "linestyle": (0, (4, 3)), "zorder": 2}
     if quantity == "efficiency":
-        ax.axhline(1.0, **style)
-        return Line2D([], [], label="Ideal (Efficiency = 1)", **style)
+        ax.axhline(1.0, zorder=2, **IDEAL_STYLE)  # pyright: ignore[reportArgumentType]
+        return Line2D([], [], label="Ideal ($\\eta = 1$)", **IDEAL_STYLE)  # pyright: ignore[reportArgumentType]
     xs = [float(p) for p in ranks]
-    ax.plot(xs, xs, **style)
-    return Line2D([], [], label="Ideal (Speed-Up = P)", **style)
+    ax.plot(xs, xs, zorder=2, **IDEAL_STYLE)  # pyright: ignore[reportArgumentType]
+    return Line2D([], [], label="Ideal (Speed-Up $= P$)", **IDEAL_STYLE)  # pyright: ignore[reportArgumentType]
+
+
+def handle(style: SeriesStyle, mark_pt: float = MARK_PT) -> Line2D:
+    """A key entry drawing ``style``'s line and mark."""
+    return Line2D(
+        [], [], color=style.color, linestyle=style.linestyle, linewidth=LINE_WIDTH, marker=style.marker,
+        markersize=mark_pt, markerfacecolor=style.color if style.filled else "white", label=style.label,
+    )  # fmt: skip
 
 
 def draw_series(
     ax: matplotlib.axes.Axes,
     points: dict[int, summary.Interval],
-    color: str,
-    marker: str,
-    label: str,
+    style: SeriesStyle,
+    shift: float = 1.0,
     band: bool = True,
+    small: bool = False,
 ) -> None:
-    """One arm's line: the per-P geomean, its marks, and its interval as a band."""
+    """One series: the per-P geomean joined by its line, and -- under ``band`` -- its 95% interval
+    as a whisker at each P. ``shift`` dodges the whole series along the P axis."""
     if not points:
         return
-    xs = [float(p) for p in sorted(points)]
-    ys = [points[int(p)].point for p in xs]
-    ax.plot(xs, ys, color=color, linewidth=1.6, marker=marker, markersize=6.0, label=label, zorder=5)
-    if not band:
-        return
-    low = [points[int(p)].low for p in xs]
-    high = [points[int(p)].high for p in xs]
-    ax.fill_between(xs, low, high, color=color, alpha=0.16, linewidth=0.0, zorder=3)
+    ranks = sorted(points)
+    xs = [float(p) * shift for p in ranks]
+    ys = [points[p].point for p in ranks]
+    ax.plot(
+        xs, ys, color=style.color, linestyle=style.linestyle, linewidth=SMALL_LINE_WIDTH if small else LINE_WIDTH,
+        marker=style.marker, markersize=SMALL_MARK_PT if small else MARK_PT,
+        markerfacecolor=style.color if style.filled else "white", markeredgewidth=0.9, label=style.label, zorder=5,
+    )  # fmt: skip
+    if band:
+        ax.vlines(
+            xs, [points[p].low for p in ranks], [points[p].high for p in ranks],
+            color=style.color, linewidth=0.9, alpha=0.75, zorder=4,
+        )  # fmt: skip
 
 
 def panel_curves(
@@ -458,15 +559,21 @@ def panel_curves(
     quantity: Quantity,
     ranks: Sequence[int],
     band: bool = True,
+    several_packets: bool | None = None,
+    small: bool = False,
 ) -> list[Line2D]:
-    """One panel: an ideal reference and one aggregated line per arm. Returns the legend handles."""
+    """One panel: the ideal reference and one aggregated line per (model, packet) series. Returns
+    the legend handles."""
     handles = [ideal_mark(ax, quantity, ranks)]
-    models = palette.in_order({curve.model for curve in curves_})
-    hues, shapes = palette.model_colors(models), palette.model_markers(models)
-    for model in models:
-        part = [curve for curve in curves_ if curve.model == model]
-        draw_series(ax, series(part, quantity), hues[model], shapes[model], label_of(model), band=band)
-        handles.append(Line2D([], [], color=hues[model], marker=shapes[model], linewidth=1.6, label=label_of(model)))
+    keys = series_keys(curves_)
+    if several_packets is None:
+        several_packets = len({packet for _, packet in keys}) > 1
+    for index, (model, packet) in enumerate(keys):
+        part = [curve for curve in curves_ if (curve.model, curve.packet) == (model, packet)]
+        style = series_style(model, packet, several_packets)
+        shift = 1.0 if small else dodge(index, len(keys))
+        draw_series(ax, series(part, quantity), style, shift, band=band, small=small)
+        handles.append(handle(style))
     rank_ticks(ax, ranks)
     measured_axis(ax, quantity)
     plotstyle.despine(ax)
@@ -477,7 +584,7 @@ def axis_label(quantity: Quantity, mode: str) -> str:
     """The Y label: what was measured, and under which scaling law."""
     if quantity == "efficiency":
         return "Parallel Efficiency $\\eta(P)$"
-    return "Work-Scaled Speed-Up" if mode == "weak" else "Speed-Up $T_1/T_P$"
+    return "Work-Scaled Speed-Up $r\\,T_1/T_P$" if mode == "weak" else "Speed-Up $T_1/T_P$"
 
 
 def mode_label(mode: str) -> str:
@@ -485,13 +592,46 @@ def mode_label(mode: str) -> str:
     return {"weak": "Weak Scaling", "strong": "Strong Scaling"}[mode]
 
 
+RANK_LABEL: str = "Ranks $P$ (1 GPU Each)"
+
+
+def finish(fig: matplotlib.figure.Figure, handles: Sequence[Line2D], note: str = TIME_NOTE) -> None:
+    """Lay the panels out above one key and the times note, every band MEASURED: the note sits at
+    the foot, the key above it, and the panels fill what is left. A fixed bottom fraction put the
+    key over the axis labels at one width and left a hole at another."""
+    fig.set_dpi(plotstyle.SAVE_DPI)
+    height = float(fig.get_size_inches()[1])
+    pad = 0.04
+    note_in = 0.0
+    if note:
+        text = fig.text(0.5, pad / height, note, ha="center", va="bottom", fontsize=NOTE_PT, color=plotstyle.MUTED)
+        box = text.get_window_extent(fig.canvas.get_renderer())
+        note_in = box.height / fig.dpi + pad
+    unique = list({str(h.get_label()): h for h in handles}.values())
+    key_in = plotstyle.legend_below(
+        fig, unique, y=(note_in + pad) / height, fontsize=LEGEND_PT, markerscale=1.0
+    )  # fmt: skip
+    fig.tight_layout(rect=(0.0, (note_in + key_in + 2.0 * pad) / height, 1.0, 1.0), w_pad=1.2, h_pad=0.6)
+
+
+def style_axes(ax: matplotlib.axes.Axes, title: str, xlabel: str, ylabel: str, title_pt: float = LABEL_PT) -> None:
+    """A panel's name and axis labels at print size."""
+    if title:
+        ax.set_title(title, fontsize=title_pt, color=plotstyle.INK, pad=3.0)
+    if xlabel:
+        ax.set_xlabel(xlabel, fontsize=LABEL_PT)
+    if ylabel:
+        ax.set_ylabel(ylabel, fontsize=LABEL_PT)
+
+
 def figure_modes(
     curves_: Sequence[Curve],
     quantity: Quantity,
-    width: float = plotstyle.DOUBLE_COLUMN_WIDTH,
+    width: float = DEFAULT_WIDTH_IN,
     band: bool = True,
 ) -> matplotlib.figure.Figure | None:
-    """Weak beside strong, one aggregated line per arm in each. None when nothing is drawable.
+    """Weak beside strong, one aggregated line per (model, packet) in each. None when nothing is
+    drawable.
 
     The two panels do NOT share a Y axis: weak efficiency and strong efficiency are different
     quantities on the same scale, and forcing one pair of limits lets the harder panel decide how
@@ -501,30 +641,25 @@ def figure_modes(
     present = [mode for mode in MODES if drawn[mode]]
     if not present:
         return None
-    fig, axes = plt.subplots(1, len(present), figsize=(width, PANEL_HEIGHT_IN + CHROME_IN), squeeze=False)
+    several = len({curve.packet for mode in present for curve in drawn[mode]}) > 1
+    side = min(PANEL_HEIGHT_IN, (width - 0.3) / len(present) * 0.82)
+    fig, axes = plt.subplots(1, len(present), figsize=(width, side + CHROME_IN), squeeze=False)
     handles: list[Line2D] = []
     for ax, mode in zip(axes[0], present):
         ranks = rank_axis(drawn[mode])
-        handles = panel_curves(ax, drawn[mode], quantity, ranks, band=band)
-        ax.set_xlabel("Ranks $P$ (1 GPU per Rank)")
-        ax.set_ylabel(axis_label(quantity, mode))
-        ax.set_title(mode_label(mode), fontsize=plotstyle.SUBTITLE_PT, color=plotstyle.INK)
-    fig.tight_layout()
-    fig.subplots_adjust(bottom=0.34)
-    plotstyle.legend_below(fig, handles, y=0.01)
+        handles = panel_curves(ax, drawn[mode], quantity, ranks, band=band, several_packets=several)
+        n = len({curve.kernel for curve in drawn[mode]})
+        style_axes(ax, f"{mode_label(mode)} ({n} Kernels)", RANK_LABEL, axis_label(quantity, mode))
+    finish(fig, handles)
     return fig
 
 
-def figure_efficiency(
-    curves_: Sequence[Curve], width: float = plotstyle.DOUBLE_COLUMN_WIDTH
-) -> matplotlib.figure.Figure | None:
+def figure_efficiency(curves_: Sequence[Curve], width: float = DEFAULT_WIDTH_IN) -> matplotlib.figure.Figure | None:
     """eta(P) against P, weak and strong, with the ideal at 1.0."""
     return figure_modes(curves_, "efficiency", width=width)
 
 
-def figure_speedup(
-    curves_: Sequence[Curve], width: float = plotstyle.DOUBLE_COLUMN_WIDTH
-) -> matplotlib.figure.Figure | None:
+def figure_speedup(curves_: Sequence[Curve], width: float = DEFAULT_WIDTH_IN) -> matplotlib.figure.Figure | None:
     """sigma(P) against P -- work-scaled on the weak panel -- with the ideal y = P line."""
     return figure_modes(curves_, "speedup", width=width)
 
@@ -533,9 +668,10 @@ def figure_per_kernel(
     curves_: Sequence[Curve],
     mode: str,
     quantity: Quantity = "efficiency",
-    width: float = plotstyle.DOUBLE_COLUMN_WIDTH,
+    width: float = DEFAULT_WIDTH_IN,
 ) -> matplotlib.figure.Figure | None:
-    """One small panel per kernel of ``mode``, every model overlaid. None when nothing is drawable.
+    """One small panel per kernel of ``mode``, every (model, packet) overlaid. None when nothing is
+    drawable.
 
     NOT restricted to the common kernels: the point of the small multiples is to see WHICH kernels
     one model solved and another did not, so a kernel with a single model's curve draws that curve
@@ -546,26 +682,29 @@ def figure_per_kernel(
         return None
     kernels = sorted({curve.kernel for curve in drawn})
     ranks = rank_axis(drawn)
+    several = len({curve.packet for curve in drawn}) > 1
     columns = min(SMALL_MULTIPLE_COLUMNS, len(kernels))
     rows = -(-len(kernels) // columns)
+    side = (width - 0.5) / columns
     fig, axes = plt.subplots(
-        rows, columns, figsize=(width, PANEL_HEIGHT_IN * rows + CHROME_IN), squeeze=False, sharex=True, sharey=True
+        rows, columns, figsize=(width, side * rows + CHROME_IN), squeeze=False, sharex=True, sharey=True
     )
     flat = [ax for row in axes for ax in row]
     handles: list[Line2D] = []
     for ax, kernel in zip(flat, kernels):
         part = [curve for curve in drawn if curve.kernel == kernel]
-        handles = panel_curves(ax, part, quantity, ranks, band=False)
-        ax.set_title(panel_title(kernel, kernels), fontsize=SMALL_MULTIPLE_TITLE_PT, color=plotstyle.INK)
+        handles = panel_curves(ax, part, quantity, ranks, band=False, several_packets=several, small=True)
+        style_axes(ax, panel_title(kernel, kernels), "", "", title_pt=SMALL_MULTIPLE_TITLE_PT)
     for ax in flat[len(kernels) :]:
         ax.set_visible(False)
     for ax in axes[-1]:
-        ax.set_xlabel("Ranks $P$")
+        ax.set_xlabel("$P$", fontsize=LABEL_PT)
     for row in axes:
-        row[0].set_ylabel(axis_label(quantity, mode))
-    fig.tight_layout()
-    fig.subplots_adjust(bottom=0.20 / rows + 0.10)
-    plotstyle.legend_below(fig, handles, y=0.01)
+        row[0].set_ylabel("$\\eta(P)$" if quantity == "efficiency" else axis_label(quantity, mode), fontsize=LABEL_PT)
+    keys = series_keys(drawn)
+    handles = [handles[0], *(handle(series_style(model, packet, several)) for model, packet in keys)]
+    fig.suptitle(mode_label(mode), fontsize=LABEL_PT, color=plotstyle.INK, y=0.995)
+    finish(fig, handles)
     return fig
 
 
@@ -583,63 +722,64 @@ def summary_rows(curves_: Sequence[Curve]) -> list[tuple[str, str, str, summary.
     ]
 
 
-def figure_summary(
-    curves_: Sequence[Curve], width: float = plotstyle.DOUBLE_COLUMN_WIDTH
-) -> matplotlib.figure.Figure | None:
+#: Half the x span the packets of one model are spread over on the summary panel.
+SUMMARY_DODGE: float = 0.18
+
+
+def figure_summary(curves_: Sequence[Curve], width: float = DEFAULT_WIDTH_IN) -> matplotlib.figure.Figure | None:
     """Geomean eta per arm with its 95% interval, weak beside strong. None when nothing is drawable.
 
+    One X category per model, its packets side by side in it (shape = packet, the control hollow).
     A point with an interval, not a bar: the quantity is a geomean of ratios and the interval is
     the claim, while a bar's area from zero is a length nobody reads a ratio off.
     """
     rows = summary_rows(curves_)
     if not rows:
         return None
+    packet_by_arm = {curve.arm: curve.packet for curve in curves_}
     present = [mode for mode in MODES if any(row[2] == mode for row in rows)]
-    fig, axes = plt.subplots(1, len(present), figsize=(width, PANEL_HEIGHT_IN + CHROME_IN), squeeze=False, sharey=True)
     models = palette.in_order({row[1] for row in rows})
-    hues, shapes = palette.model_colors(models), palette.model_markers(models)
-    # NO model key here: this figure puts the model on the X axis, and a legend repeating the tick
-    # labels spends the one legend slot on the identity the axis already spells out.
-    handles = [Line2D([], [], color=plotstyle.REFERENCE, linestyle=(0, (4, 3)), label="Ideal (Efficiency = 1)")]
-    ceiling = max(1.0, max(row[3].high for row in rows)) * 1.15
+    packet_keys = sorted({packet_by_arm[row[0]] for row in rows}, key=lambda p: (p != "", p))
+    several = len(packet_keys) > 1
+    side = min(PANEL_HEIGHT_IN, (width - 0.3) / len(present) * 0.82)
+    fig, axes = plt.subplots(1, len(present), figsize=(width, side + CHROME_IN), squeeze=False, sharey=True)
+    ceiling = max(1.0, max(row[3].high for row in rows)) * 1.1
     for ax, mode in zip(axes[0], present):
-        part = [row for row in rows if row[2] == mode]
-        for index, (arm, model, row_mode, interval, n_kernels) in enumerate(part):
+        for arm, model, row_mode, interval, n_kernels in rows:
+            if row_mode != mode:
+                continue
+            packet = packet_by_arm[arm]
+            offset = 0.0 if not several else -SUMMARY_DODGE + 2 * SUMMARY_DODGE * packet_keys.index(packet) / (len(packet_keys) - 1)
+            style = series_style(model, packet, several)
             ax.errorbar(
-                index,
-                interval.point,
+                models.index(model) + offset, interval.point,
                 yerr=[[interval.point - interval.low], [interval.high - interval.point]],
-                color=hues[model],
-                marker=shapes[model],
-                markersize=8.0,
-                linestyle="",
-                elinewidth=1.2,
-                capsize=3.0,
-                zorder=5,
-            )
-            # BELOW the mark: above it the label lands on the ideal line and on the panel's name.
-            ax.annotate(
-                f"n={n_kernels}",
-                (index, interval.low),
-                textcoords="offset points",
-                xytext=(0, -7),
-                ha="center",
-                va="top",
-                fontsize=plotstyle.ANNOTATION_PT,
-                color=plotstyle.MUTED,
-            )
-        ax.axhline(1.0, color=plotstyle.REFERENCE, linewidth=1.1, linestyle=(0, (4, 3)), zorder=2)
-        ax.set_xticks(range(len(part)))
-        ax.set_xticklabels([label_of(row[1]) for row in part], rotation=30, ha="right")
-        ax.set_xlim(-0.6, len(part) - 0.4)
+                color=style.color, marker=style.marker, markersize=MARK_PT + 0.8,
+                markerfacecolor=style.color if style.filled else "white", linestyle="", elinewidth=1.0,
+                capsize=0.0, zorder=5,
+            )  # fmt: skip
+            del n_kernels  # in the table beside the figure
+        ax.axhline(1.0, zorder=2, **IDEAL_STYLE)  # pyright: ignore[reportArgumentType]
+        ax.set_xticks(range(len(models)))
+        ax.set_xticklabels([label_of(model) for model in models], fontsize=TICK_PT)
+        ax.set_xlim(-0.6, len(models) - 0.4)
         ax.set_ylim(0.0, ceiling)
-        ax.set_title(mode_label(mode), fontsize=plotstyle.SUBTITLE_PT, color=plotstyle.INK)
         plotstyle.value_axis(ax, "y")
+        ax.tick_params(labelsize=TICK_PT)
         plotstyle.despine(ax)
-    axes[0][0].set_ylabel("Geomean $\\eta$ over Kernels")
-    fig.tight_layout()
-    fig.subplots_adjust(bottom=0.40)
-    plotstyle.legend_below(fig, handles, y=0.01)
+        style_axes(ax, mode_label(mode), "", "")
+    axes[0][0].set_ylabel("Geomean $\\eta$ over Kernels", fontsize=LABEL_PT)
+    # Colour is on the X axis already (one category per model), so the key names the packets.
+    handles = [Line2D([], [], label="Ideal ($\\eta = 1$)", **IDEAL_STYLE)]  # pyright: ignore[reportArgumentType]
+    handles += [
+        Line2D(
+            [], [], color=plotstyle.MUTED, marker=palette.packet_marker(p) if p else CONTROL_MARKER, linestyle="",
+            markersize=MARK_PT, markerfacecolor=plotstyle.MUTED if p else "white",
+            label=experiment_tags.packet_name(p) if p else "No Packet",
+        )  # fmt: skip
+        for p in packet_keys
+    ]
+    finish(fig, handles, note="Interval: 95% over kernels of each curve's geomean $\\eta$ over $P$.")
     return fig
 
 

@@ -1,268 +1,314 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Stub-random observations: seeded, deterministic rows in the SAME schema the real extractor
-writes (:func:`hpcagent_bench.experiments.read_observations`), for rendering sample figures with no
-cluster data.
+"""Stub-random observations: seeded, deterministic rows in the EXACT schema the extractor writes.
 
-Every plotting entry point in this repo (``statistics/plot_per_kernel.py``,
-``statistics/plot_scaling.py``, the library under :mod:`hpcagent_bench.stats.figures`) reads one
-long-format observations table and does not care whether its rows came from a judge database or
-were made up -- so this module builds that exact table, not a shortcut past it. Two row shapes:
+Every figure reads one long-format observations table through
+:func:`hpcagent_bench.experiments.read_observations`. This module writes that table from a seeded
+random model instead of from judge databases, so a sample of every figure renders with no cluster
+data and through the SAME entry points a campaign uses. A row is built from
+:data:`hpcagent_bench.observations_extract.OBSERVATION_FIELDS` (every column, in its order, blank
+where the extractor leaves it blank), so the stub cannot drift from the real schema without
+:func:`row` raising.
 
-* an EPISODE (:func:`_episode_rows`): a ``submission`` row (``speedup``) and a ``task`` row
-  (``tokens``), the shape :func:`hpcagent_bench.stats.population.graded_episode_rows` /
-  ``episode_tokens`` read, one per (arm, kernel) -- see ``tests/test_plot_per_kernel.py::episode``,
-  which this mirrors so a stub row can never drift from what the real tests already pin.
-* a SCALING POINT (:func:`_scaling_rows`): one row per (arm, kernel, mode, P), the shape
-  :mod:`hpcagent_bench.stats.figures.scaling` reads under ``record == "scaling"`` -- mirrors
-  ``tests/test_plot_scaling.py::row``.
+Two experiments, each the shape of a real one:
 
-Nothing here recomputes a statistic (no geomean, no efficiency): the numbers are synthetic INPUTS,
-and the figures compute every summary from them exactly as they would from real data. Seeded with
-:mod:`random`'s Mersenne Twister so the same seed always writes the same CSV bytes.
+* ``sample-llr`` (:func:`episode_frame`): the llr-focus40 roster, three models, a control arm and
+  two packet arms per model, one episode per (arm, kernel). A solved episode is a ``submission``
+  row graded under the final rule (``mw4x5-final-v2``); an unsolved one is an ``attempt`` row
+  (drawn as the crossed 1x mark); every episode has its ``task`` row with the billed-token
+  components. Speed-ups are log-normal: a per-kernel difficulty shared by every arm, a per-model
+  skill, a per-packet effect, and episode noise.
+* ``sample-mlscale`` (:func:`scaling_frame`): the mlscale roster, three models, the control and the
+  ``dist-rccl-amd`` arm, ONE submission per (arm, kernel) graded under BOTH laws over P = 1..16 --
+  the rows :func:`hpcagent_bench.observations_extract.scaling_rows` writes off the grade job's
+  ``scaling_points``. T(P) is the median of k timed runs; T(1) is the single-PE anchor shared by
+  every P of a curve; a few P are holes with a note, never zeros. Recorded ``efficiency`` is
+  :func:`hpcagent_bench.harness.metric.scaling_point`'s, so the figures' consistency check passes.
+
+Nothing here computes a figure's statistic: the numbers are inputs. Every draw is on one seeded
+:class:`random.Random`, so a seed always writes the same bytes.
 """
 
 import dataclasses
 import math
 import random
 from collections.abc import Sequence
+from typing import Any
 
 import pandas as pd
 
-#: Real benchmark names (``hpcagent_bench/benchmarks/*/*``), so a sample figure reads like a real
-#: one instead of "kernel_07". Order is fixed so a caller asking for N kernels always gets the same
-#: N regardless of ``seed`` (the seed only randomizes the MEASUREMENTS, not which kernels appear).
-KERNEL_NAMES: tuple[str, ...] = (
-    "gemm",
-    "heat_3d",
-    "lavamd",
-    "conv2d_relu_bias_add",
-    "conv2d_bias",
-    "conv2d_gelu_global_avg_pool",
-    "conv2d_tanh_scaling_bias_add_max",
-    "conv2d_activation_batch_norm",
-    "conv2d_divide_leaky_relu",
-    "conv2d_relu_hardswish",
-    "conv2d_scaling_min",
-    "conv2d_subtract_hardswish_max_pool_mish",
-    "conv2d_multiply_leaky_relu_gelu",
-    "conv2d_group_norm_scale_max_pool_clamp",
-    "conv2d_add_scale_sigmoid_group_norm",
-    "conv3d_hardswish_group_norm_mean",
-    "conv3d_mish_tanh",
-    "conv3d_multiply_instance_norm_clamp_multiply_max",
-    "conv3d_divide_max_global_avg_pool_bias_add_sum",
-    "average_pooling_3d",
-    "max_pooling_3d",
-    "bmm_instance_norm_sum_residual_add_multiply",
-    "matmul_sigmoid_sum",
-    "vanilla_rnn_hidden",
-    "swin_mlp",
-    "vision_attention",
-    "backtrack_branch_bound",
-    "wavefront2d",
-    "two_stream_reftrans",
-    "scatter_accum_dup",
-    "compact_threshold_pack",
-    "argmax_value",
-    "argmin_value",
-    "argmin_over_a_dimension",
-    "unroll_prime_17_uniform",
-    "unroll_partial_5_then_12",
-    "tsvc_2_s111",
-    "tsvc_2_s273",
-    "tsvc_2_s279",
-    "tsvc_2_s441",
-    "tsvc_2_s482",
-    "tsvc_2_vpv",
-)
+from hpcagent_bench import tags
+from hpcagent_bench.harness import metric
+from hpcagent_bench.observations_extract import OBSERVATION_FIELDS, SCALING_RECORD
 
-#: The models a sample figure overlays, in registry order (``hpcagent_bench/envs/registry.yaml``
-#: ``models``) so ``palette.model_color``/``marker`` resolve them to real hues and shapes rather
-#: than the "unknown tag" fallback.
+#: Default seed of ``make sample-plots``.
+DEFAULT_SEED: int = 20260923
+
+#: Arm prefixes of the two stub experiments (``--experiment`` of the plotting scripts).
+EPISODE_EXPERIMENT: str = "sample-llr"
+SCALING_EXPERIMENT: str = "sample-mlscale"
+
+#: The models every stub arm set covers, in registry order.
 MODELS: tuple[str, ...] = ("qwen38", "oss120b", "kimi27sglang")
 
-#: The packets a sample figure's arms carry (``registry.yaml`` ``packets``): no packet (control)
-#: and one treatment.
-PACKETS: tuple[str, ...] = ("", "cpf")
+#: Control ("") and the treatments of the episode experiment, by registry key.
+EPISODE_PACKETS: tuple[str, ...] = ("", "cpf", "lang-skills")
 
-#: Rank counts the stub scaling sweep measures -- the same grid the real mlscale track runs
-#: (:mod:`hpcagent_bench.stats.figures.scaling` docstring).
+#: Control and treatment of the scaling experiment (the mlscale arm matrix).
+SCALING_PACKETS: tuple[str, ...] = ("", "dist-rccl-amd")
+
+#: The grade job's rank counts and their node placement (4 ranks per MI300A node).
 RANKS: tuple[int, ...] = (1, 2, 4, 8, 16)
+RANKS_PER_NODE: int = 4
 
-#: Distributed kernel names for the scaling figures (mlscale's own roster shape: ``dist_*``).
-SCALING_KERNELS: tuple[str, ...] = (
-    "dist_softmax",
-    "dist_layer_norm",
-    "dist_cross_entropy",
-    "dist_matmul_large_k",
-    "dist_sdpa",
-    "dist_matmul_gelu_softmax",
-    "dist_gemm_add_relu",
-    "dist_gemm_group_norm_swish",
-    "dist_mlp_tp",
-    "dist_moe_dispatch",
-)
+#: Timed runs per point; the recorded T(P) is their median.
+REPEATS_PER_POINT: int = 5
+
+#: Epoch ms the stub timeline starts at (2026-09-21 UTC), so ``ts_ms`` looks like a real stamp.
+EPOCH_MS: int = 1_790_000_000_000
+
+#: Log-mean speed-up per model, per-packet shift, and each model's chance to leave a kernel unsolved.
+MODEL_SKILL: dict[str, float] = {"qwen38": math.log(2.2), "oss120b": math.log(1.6), "kimi27sglang": math.log(2.6)}
+PACKET_EFFECT: dict[str, float] = {"": 0.0, "cpf": math.log(1.35), "lang-skills": math.log(1.1)}
+FAIL_RATE: dict[str, float] = {"qwen38": 0.15, "oss120b": 0.1, "kimi27sglang": 0.06}
+
+#: Median billed tokens per episode by model, and the packet's multiplier on it.
+MODEL_TOKENS: dict[str, float] = {"qwen38": 800_000.0, "oss120b": 150_000.0, "kimi27sglang": 500_000.0}
+PACKET_TOKENS: dict[str, float] = {"": 1.0, "cpf": 0.8, "lang-skills": 1.1}
+
+#: Scaling model per packet: strong-law serial fraction and communication cost per doubling of P
+#: (a fraction of T(1)), weak-law communication cost per doubling. RCCL keeps device buffers on the
+#: device, so its overheads are the smaller ones.
+SERIAL_FRACTION: dict[str, float] = {"": 0.04, "dist-rccl-amd": 0.015}
+STRONG_COMM: dict[str, float] = {"": 0.02, "dist-rccl-amd": 0.006}
+WEAK_COMM: dict[str, float] = {"": 0.12, "dist-rccl-amd": 0.04}
+
+#: Chance a rank count is a hole (launch timeout, OOM), and the note it carries.
+DROP_RATE: float = 0.04
+DROP_NOTE: str = "mpi launch timed out after 900 s"
 
 
-def _arm_name(model: str, packet: str, mode: str = "") -> str:
-    """One arm label, in the ``<experiment>-<model>-<language>[-<packet>][-<mode>]`` shape
-    :func:`hpcagent_bench.experiment_tags.packet_of`/``language_of`` parse back out of an arm name."""
-    tail = f"-{packet}" if packet else ""
-    modepart = f"-{mode}" if mode else ""
-    return f"sample-plots{modepart}-{model}-hip{tail}"
+def row(**values: Any) -> dict[str, Any]:
+    """One observations row: every extractor column, blank unless given. An unknown column raises,
+    so the stub can only write what the extractor writes."""
+    unknown = set(values) - set(OBSERVATION_FIELDS)
+    if unknown:
+        raise KeyError(f"not an observations column: {sorted(unknown)}")
+    out: dict[str, Any] = dict.fromkeys(OBSERVATION_FIELDS, "")
+    out.update(values)
+    return out
 
 
-def _lognormal(rng: random.Random, mu: float, sigma: float) -> float:
-    return math.exp(rng.gauss(mu, sigma))
+def arm_name(experiment: str, model: str, language: str, packet: str) -> str:
+    """``<experiment>-<model>-<language>[-<packet>]``, the launcher's arm key shape."""
+    return f"{experiment}-{model}-{language}" + (f"-{packet}" if packet else "")
 
 
-def _episode_rows(rng: random.Random, arm: str, kernel: str, rep: int, mu_log_speedup: float) -> list[dict]:
-    """One episode: a ``submission`` row (log-normal speed-up around ``exp(mu_log_speedup)``) and a
-    ``task`` row (log-normal token count), the shape ``tests/test_plot_per_kernel.py::episode``
-    pins. A small chance of a non-delivery (``suspect`` speedup <= 0 is what
-    :func:`hpcagent_bench.stats.population.graded_episode_rows` drops, so a "never verified" episode
-    here just omits the ``submission`` row and keeps only ``task`` -- read as unserved-not-answered
-    by :func:`hpcagent_bench.stats.figures.per_kernel.speedup_cells`'s ``served`` fallback)."""
-    run = f"{arm}-{kernel}-w{rep}"
-    common = {
+def lognormal(rng: random.Random, median: float, sigma: float) -> float:
+    return median * math.exp(rng.gauss(0.0, sigma))
+
+
+def identity(arm: str, problem: int, kernel: str, packet: str, language: str, job: str) -> dict[str, Any]:
+    """The columns naming one task: run id ``<arm>.n0.p<problem>.w0`` and its recorded identity."""
+    return {
+        "run_root": "sample-plots",
+        "job": job,
+        "run_id": f"{arm}.n0.p{problem}.w0",
         "arm": arm,
+        "harness": "claude",
+        "packet": packet,
+        "node_index": "0",
+        "problem_index": str(problem),
+        "worker_index": "0",
         "benchmark": kernel,
-        "run_root": "sample-plots-0923",
-        "job": run,
-        "run_id": run,
-        "attempt_index": 1,
-        "ts_ms": 1_000 + rep,
-        "suspect": 0,
-        "timing_reduction": "mwd-v2",
+        "language": language,
     }
-    rows = []
-    delivered = rng.random() > 0.06  # ~6% undelivered, so the "No Verified Answer" cross renders
-    if delivered:
-        speedup = max(_lognormal(rng, mu_log_speedup, 0.35), 1e-3)
-        rows.append({**common, "record": "submission", "speedup": speedup, "tokens": None})
-    tokens = _lognormal(rng, math.log(120_000.0), 0.4)
-    rows.append({**common, "record": "task", "speedup": None, "tokens": tokens})
+
+
+def token_columns(billed: float) -> dict[str, Any]:
+    """A task's token columns from its billed total: output 6%, fresh input 24%, and the cached
+    input that makes the billed sum (weights 1 / 0.1 / 1) come out at ``billed``."""
+    output, fresh = 0.06 * billed, 0.24 * billed
+    cached = (billed - output - fresh) / 0.1
+    return {
+        "tokens": round(fresh + output),
+        "tokens_billed": round(billed),
+        "tokens_provider": round(billed),
+        "tokens_fresh_input": round(fresh),
+        "tokens_cached_input": round(cached),
+        "tokens_output": round(output),
+        "attempts": 1,
+        "tokens_crashed": 0,
+        "tokens_billed_crashed": 0,
+        "cancelled": "0",
+        "frozen": "0",
+    }
+
+
+def episode_rows(
+    rng: random.Random, arm: str, problem: int, kernel: str, model: str, packet: str, difficulty: float
+) -> list[dict[str, Any]]:
+    """One episode: its ``task`` row, then a graded ``submission`` or an unsolved ``attempt``."""
+    who = identity(arm, problem, kernel, packet, "c", "sample-llr-0923")
+    start = EPOCH_MS + problem * 60_000
+    billed = lognormal(rng, MODEL_TOKENS[model] * PACKET_TOKENS[packet], 0.55)
+    rows = [row(record="task", ts_ms=start, final_attempt_start_ms=start, **who, **token_columns(billed))]
+    graded = {
+        "ts_ms": start + rng.randrange(600_000, 3_000_000),
+        "attempt_index": 1,
+        "baseline": "numba",
+        "baseline_ns": round(lognormal(rng, 40e6, 0.8)),
+        "timing_reduction": "mw4x5-final-v2",
+        "suspect": 0,
+        "frozen": "0",
+    }
+    if rng.random() < FAIL_RATE[model] + (0.05 if packet == "cpf" else 0.0):
+        rows.append(
+            row(
+                record="attempt",
+                status="incorrect",
+                correct=0,
+                build_ok=1,
+                reason="hidden input differs from the reference",
+                regrade_status="unsolved",
+                **who,
+                **graded,
+            )
+        )
+        return rows
+    speedup = math.exp(MODEL_SKILL[model] + PACKET_EFFECT[packet] + difficulty + rng.gauss(0.0, 0.45))
+    rows.append(
+        row(
+            record="submission",
+            submitted=1,
+            status="ok",
+            correct=1,
+            build_ok=1,
+            speedup=speedup,
+            native_ns=round(graded["baseline_ns"] / speedup),
+            regrade_status="graded",
+            s_bar=speedup,
+            n_cells=4,
+            n_credited=4,
+            g_i=speedup,
+            gsd_i=round(math.exp(abs(rng.gauss(0.0, 0.05))), 4),
+            **who,
+            **graded,
+        )
+    )
     return rows
 
 
-def per_kernel_frame(
-    seed: int = 20260923,
-    kernels: Sequence[str] = KERNEL_NAMES,
+def episode_frame(
+    seed: int = DEFAULT_SEED,
+    kernels: Sequence[str] | None = None,
     models: Sequence[str] = MODELS,
-    packets: Sequence[str] = PACKETS,
-    episodes_per_cell: int = 1,
+    packets: Sequence[str] = EPISODE_PACKETS,
 ) -> pd.DataFrame:
-    """One observations table for the per-kernel + geomean figure: every (model, packet) arm times
-    every kernel, ``episodes_per_cell`` episodes each. The control packet centres near 1x
-    (log-mean 0); the treatment centres near a real win with per-kernel spread, so the geomean
-    column has something to summarize."""
+    """The episode experiment: every (model, packet) arm on every kernel (default: the llr-focus40
+    roster), one episode each. A kernel's difficulty is drawn once and shared by every arm, so the
+    arms agree on which kernels are hard, as real ones do."""
     rng = random.Random(seed)
-    rows: list[dict] = []
+    roster = list(kernels) if kernels is not None else list(tags.roster("llr-focus40"))
+    difficulty = {kernel: rng.gauss(0.0, 0.8) for kernel in roster}
+    rows: list[dict[str, Any]] = []
     for model in models:
         for packet in packets:
-            arm = _arm_name(model, packet)
-            base_mu = math.log(1.0) if not packet else math.log(2.2)
-            for kernel in kernels:
-                kernel_mu = base_mu + rng.gauss(0.0, 0.5)
-                for rep in range(episodes_per_cell):
-                    rows += _episode_rows(rng, arm, kernel, rep, kernel_mu)
-    return pd.DataFrame(rows)
+            arm = arm_name(EPISODE_EXPERIMENT, model, "c", packet)
+            for problem, kernel in enumerate(roster):
+                rows += episode_rows(rng, arm, problem, kernel, model, packet, difficulty[kernel])
+    return pd.DataFrame(rows, columns=list(OBSERVATION_FIELDS))
 
 
-def _scaling_rows(
-    rng: random.Random, arm: str, kernel: str, mode: str, base_efficiency: float, jitter: float
-) -> list[dict]:
-    """One (arm, kernel, mode) curve over :data:`RANKS`, the shape
-    ``tests/test_plot_scaling.py::row`` pins, plus the task-identity columns
-    (:data:`hpcagent_bench.experiments.TASK_KEY`) every extracted row carries -- a real curve's P
-    points are one graded submission replayed at several rank counts, so they share one
-    ``run_root``/``job``/``run_id``/``attempt_index``, the same episode identity an episode row's
-    ``submission``/``task`` pair carries. Efficiency decays gently with P around
-    ``base_efficiency`` (communication overhead growing with rank count), with per-P jitter."""
-    t1 = 4096.0
-    run = f"{arm}-{kernel}-{mode}"
-    rows = []
-    for p in RANKS:
-        eta = max(0.05, min(1.05, base_efficiency - 0.015 * math.log2(p) + rng.gauss(0.0, jitter)))
-        if mode == "strong":
-            ranked_ns = t1 / (p * eta)
-            work_ratio = float("nan")
-        else:
-            ranked_ns = t1 / eta
-            work_ratio = float(p)
-        rows.append(
-            {
-                "record": "scaling",
-                "arm": arm,
-                "benchmark": kernel,
-                "run_root": "sample-plots-0923",
-                "job": run,
-                "run_id": run,
-                "attempt_index": 1,
-                "scaling_mode": mode,
-                "ranks": p,
-                "nodes": -(-p // 4),
-                "ranked_ns": ranked_ns,
-                "single_rank_ns": t1,
-                "work_ratio": work_ratio,
-                "scaling_note": "",
-                "ts_ms": 10,
-            }
+def ideal_time(mode: str, ranks: int, t1: float, packet: str, work_ratio: float, skew: float) -> float:
+    """The noiseless T(P): strong = Amdahl plus a log2(P) communication term; weak = the base time
+    grown by the realized work ratio per rank plus its own communication term. ``skew`` scales the
+    overheads per kernel (a softmax all-reduce is cheaper than an all-to-all)."""
+    doublings = math.log2(ranks)
+    if mode == "strong":
+        serial = SERIAL_FRACTION[packet] * skew
+        return t1 * (serial + (1.0 - serial) / ranks + STRONG_COMM[packet] * skew * doublings)
+    return t1 * (work_ratio / ranks) * (1.0 + WEAK_COMM[packet] * skew * doublings)
+
+
+def curve_rows(
+    rng: random.Random, arm: str, problem: int, kernel: str, packet: str, mode: str, grade_ts: int
+) -> list[dict[str, Any]]:
+    """One law's curve of one submission, one row per P, as ``scaling_rows`` writes them."""
+    who = identity(arm, problem, kernel, packet, "hip", "sample-mlscale-grade-0923")
+    t1 = round(lognormal(rng, 8e6, 0.6))
+    skew = lognormal(rng, 1.0, 0.35)
+    points: list[dict[str, Any]] = []
+    for ranks in RANKS:
+        # Weak sizes round every dim to a multiple of 64, so r is P give or take a few percent.
+        work_ratio = 1.0 if ranks == 1 else round(ranks * (1.0 + rng.uniform(-0.03, 0.03)), 4)
+        base = ideal_time(mode, ranks, t1, packet, work_ratio, skew)
+        runs = sorted(lognormal(rng, base, 0.04) for _ in range(REPEATS_PER_POINT))
+        dropped = ranks > 1 and rng.random() < DROP_RATE
+        ranked = None if dropped else round(runs[REPEATS_PER_POINT // 2])
+        ratio = work_ratio if mode == "weak" else None
+        point = None if ranked is None else metric.scaling_point(mode, ranks, t1, ranked, work_ratio=ratio)
+        points.append(
+            row(
+                record=SCALING_RECORD,
+                submitted="0",
+                ts_ms=grade_ts,
+                ranks=ranks,
+                nodes=-(-ranks // RANKS_PER_NODE),
+                scaling_mode=mode,
+                ranked_ns="" if ranked is None else ranked,
+                single_rank_ns=t1,
+                work_ratio="" if ratio is None else ratio,
+                scaling_note=DROP_NOTE if dropped else "",
+                efficiency="" if point is None else point.efficiency,
+                **who,
+            )
         )
-    return rows
+    measured = [float(p["efficiency"]) for p in points if p["efficiency"] != ""]
+    mean = math.exp(sum(math.log(e) for e in measured) / len(measured))
+    return [p | {"mean_efficiency": mean} for p in points]
 
 
 def scaling_frame(
-    seed: int = 20260923,
-    kernels: Sequence[str] = SCALING_KERNELS,
+    seed: int = DEFAULT_SEED,
+    kernels: Sequence[str] | None = None,
     models: Sequence[str] = MODELS,
-    packets: Sequence[str] = ("", "dist-rccl-amd"),
+    packets: Sequence[str] = SCALING_PACKETS,
 ) -> pd.DataFrame:
-    """One observations table for the weak/strong scaling figures: every (model, packet) arm's
-    weak AND strong curve over every kernel in :data:`RANKS`. The RCCL packet scales a little
-    better (higher base efficiency, less jitter) than the control, so the per-arm geomean summary
-    has a real gap to show."""
+    """The scaling experiment: every (model, packet) arm's one submission per kernel (default: the
+    mlscale roster), graded under both laws in one grade (one ``ts_ms``)."""
     rng = random.Random(seed + 1)
-    rows: list[dict] = []
+    roster = list(kernels) if kernels is not None else list(tags.roster("mlscale"))
+    rows: list[dict[str, Any]] = []
     for model in models:
         for packet in packets:
-            base_eta = 0.62 if not packet else 0.82
-            jitter = 0.05 if not packet else 0.03
-            for mode in ("weak", "strong"):
-                arm = _arm_name(model, packet, mode=mode)
-                for kernel in kernels:
-                    kernel_eta = max(0.1, min(1.0, base_eta + rng.gauss(0.0, 0.06)))
-                    rows += _scaling_rows(rng, arm, kernel, mode, kernel_eta, jitter)
-    return pd.DataFrame(rows)
+            arm = arm_name(SCALING_EXPERIMENT, model, "hip", packet)
+            for problem, kernel in enumerate(roster):
+                grade_ts = EPOCH_MS + 86_400_000 + problem * 60_000
+                for mode in ("weak", "strong"):
+                    rows += curve_rows(rng, arm, problem, kernel, packet, mode, grade_ts)
+    return pd.DataFrame(rows, columns=list(OBSERVATION_FIELDS))
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class StubDataset:
-    """The two tables a sample-plots run needs, plus the combined observations CSV
-    :func:`hpcagent_bench.experiments.read_observations` reads (each row shape ignores columns it
-    does not use, so one CSV serves both figure families)."""
+    """Both stub experiments; :meth:`combined` is the one observations CSV every figure reads."""
 
-    per_kernel: pd.DataFrame
+    episodes: pd.DataFrame
     scaling: pd.DataFrame
 
     def combined(self) -> pd.DataFrame:
-        return pd.concat([self.per_kernel, self.scaling], ignore_index=True, sort=False)
+        return pd.concat([self.episodes, self.scaling], ignore_index=True)
 
 
 def generate(
-    seed: int = 20260923,
-    kernels: Sequence[str] = KERNEL_NAMES,
-    scaling_kernels: Sequence[str] = SCALING_KERNELS,
+    seed: int = DEFAULT_SEED,
+    kernels: Sequence[str] | None = None,
+    scaling_kernels: Sequence[str] | None = None,
     models: Sequence[str] = MODELS,
 ) -> StubDataset:
-    """The full stub dataset at one seed. Deterministic: two calls with the same seed produce
-    byte-identical CSVs (:func:`hpcagent_bench.stats.stub_data.generate` has no wall-clock or
-    hash-order dependence -- every draw is on the seeded :class:`random.Random`, and DataFrame
-    construction preserves row order). ``kernels``/``scaling_kernels``/``models`` narrow the
-    default rosters -- a test wanting a handful of rows does not have to pay for the full 40
-    kernels x 6 arms."""
+    """The full stub dataset at ``seed``; the rosters and models narrow it (tests)."""
     return StubDataset(
-        per_kernel=per_kernel_frame(seed=seed, kernels=kernels, models=models),
-        scaling=scaling_frame(seed=seed, kernels=scaling_kernels, models=models),
+        episodes=episode_frame(seed, kernels, models),
+        scaling=scaling_frame(seed, scaling_kernels, models),
     )

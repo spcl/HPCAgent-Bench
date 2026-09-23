@@ -77,7 +77,7 @@ import numpy as np
 import pandas as pd
 
 from hpcagent_bench import experiment_tags
-from hpcagent_bench.stats import population, summary
+from hpcagent_bench.stats import palette, population, summary
 from hpcagent_bench.stats import style as plotstyle
 
 LOG = logging.getLogger(__name__)
@@ -447,6 +447,51 @@ class Series:
     color: str
     marker: str = "o"
     filled: bool = True
+
+
+#: The mark a no-packet (control) arm wears, hollow: the efficacy figures' spelling of a control.
+CONTROL_MARKER: str = "o"
+
+
+def arm_series(frame: pd.DataFrame, kind: Literal["speedup", "tokens"]) -> list[Series]:
+    """One :class:`Series` per arm of ``frame``, in registry order: colour = the model, shape = the
+    packet, a control a hollow circle -- the encoding every efficacy figure uses. The label names
+    the packet only when the arms carry more than one, since a shared packet is the caption's."""
+    names = {str(arm) for arm in frame["arm"].dropna()}
+    models = palette.in_order({experiment_tags.model_of(arm) for arm in names})
+    packets = palette.in_order({experiment_tags.packet_of(arm) for arm in names}, kind="packets")
+    arms = sorted(
+        names,
+        key=lambda arm: (
+            models.index(experiment_tags.model_of(arm)),
+            experiment_tags.packet_of(arm) != "",
+            packets.index(experiment_tags.packet_of(arm)),
+            arm,
+        ),
+    )
+    several = len(packets) > 1
+    out: list[Series] = []
+    for arm in arms:
+        part = frame[frame["arm"].astype(str) == arm]
+        cells = speedup_cells(part) if kind == "speedup" else token_cells(part)
+        model, packet = experiment_tags.model_of(arm), experiment_tags.packet_of(arm)
+        label = experiment_tags.model_name(model)
+        if several:
+            label += f" + {experiment_tags.packet_name(packet)}" if packet else " (Control)"
+        marker = palette.packet_marker(packet) if packet else CONTROL_MARKER
+        out.append(Series(label, tuple(cells), palette.model_color(model), marker, filled=bool(packet)))
+    return out
+
+
+def series_handles(series: Sequence[Series]) -> list[matplotlib.artist.Artist]:
+    """One key entry per series: its colour, shape and fill."""
+    return [
+        matplotlib.lines.Line2D(
+            [], [], marker=one.marker, linestyle="none", color=one.color, markersize=LEGEND_MARK_PT,
+            markerfacecolor=one.color if one.filled else "white", label=one.label,
+        )  # fmt: skip
+        for one in series
+    ]
 
 
 #: Total x width one kernel column's series are spread over by default. Below ~0.8 the intervals of
