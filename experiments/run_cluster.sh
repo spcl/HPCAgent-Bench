@@ -987,8 +987,8 @@ else
     VLLM_BASE_URL="http://${VLLM_MASTER_HOST}:${VLLM_PORT}/v1"
 
     # Every endpoint that actually serves. In `pp` mode that is the master alone (the other ranks are
-    # headless members of its pipeline and answer nothing), so this stays the single base URL and every
-    # consumer behaves as before. VLLM_BASE_URL remains the first one either way: the judge's web-search
+    # headless members of its pipeline and answer nothing), so this stays the single base URL.
+    # VLLM_BASE_URL remains the first one either way: the judge's web-search
     # LLM and the readiness probe want ONE endpoint, and any replica can answer for the rest.
     replica_urls=("${VLLM_BASE_URL}")
     if [[ "${INFERENCE_MODE}" == "replicas" ]]; then
