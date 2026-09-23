@@ -48,8 +48,6 @@ _LAZY_EXPORTS: dict[str, str] = {
     "SdfgPipeline": "dace_framework",
     "TimedCompiledSDFG": "dace_framework",
     "TorchCudaEventTiming": "triton_framework",
-    "METASCHEDULE_TRIALS_DEFAULT": "tvm_framework",
-    "METASCHEDULE_TRIALS_FULL": "tvm_framework",
     "metaschedule_trials": "tvm_framework",
     "tvm_dtype_str": "tvm_framework",
 }
