@@ -162,6 +162,33 @@ def test_the_arm_env_keeps_the_declared_device_a_grade_reads(tmp_path: pathlib.P
         assert native_call.host_only_grade(device=False), "a CPU arm's regrade still hides it"
 
 
+def test_the_arm_env_is_found_under_a_kernel_list_launchs_file_name(tmp_path: pathlib.Path) -> None:
+    """A launch with a kernel list renders ``.env.<arm>-<list>`` and no ``.env.<arm>``: the live
+    checkout holds only ``.env.scicomp-perf-playbook-qwen38-plain-clean-scicomp-perf-playbook-qwen38-plain``
+    for that arm. Read as no env, the re-grade fell back to the config defaults -- agent build tokens
+    ON where the judge that recorded the row had them off, and no declared device -- so the final
+    grade built and graded under a setup the arm never ran."""
+    arm = "scicomp-perf-playbook-qwen38-plain-clean"
+    (tmp_path / f".env.{arm}-scicomp-perf-playbook-qwen38-plain").write_text(
+        f"CAMPAIGN_ARM={arm}\nHPCAGENT_BENCH_GRADING_ALLOW_AGENT_BUILD_TOKENS=false\n"
+        "HPCAGENT_BENCH_RECORD_DEVICE=cpu\nHPCAGENT_BENCH_RECORD_ARM=x\n",
+        encoding="utf-8",
+    )
+    assert regrade.arm_env(arm, [tmp_path]) == {
+        "HPCAGENT_BENCH_GRADING_ALLOW_AGENT_BUILD_TOKENS": "false",
+        "HPCAGENT_BENCH_RECORD_DEVICE": "cpu",
+    }
+
+
+def test_another_arm_sharing_the_name_prefix_is_not_the_arm_env(tmp_path: pathlib.Path) -> None:
+    """``.env.<arm>-skills`` starts with the arm's name but is a different arm (its own packet, and
+    for an offload arm its own residency); only a file recording the arm itself stands in for it."""
+    (tmp_path / f".env.{ARM}-skills").write_text(
+        f"CAMPAIGN_ARM={ARM}-skills\nHPCAGENT_BENCH_OFFLOAD=openmp\n", encoding="utf-8"
+    )
+    assert regrade.arm_env(ARM, [tmp_path]) == {}
+
+
 def fake_row(item: regrade.Item) -> dict[str, Any]:
     return {
         "db": item.db,
