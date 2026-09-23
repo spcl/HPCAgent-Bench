@@ -54,7 +54,7 @@ STRUCTURAL_ROLES = frozenset(
 #: integer/boolean pointer array is a COUNT, INDEX, or FLAG -- never a measured value (see
 #: ``Arg.is_index`` / the sparse-layout dtype rules in ``spec.py``, which already require
 #: integer dtype for every index-role array).
-_STRUCTURAL_DTYPE_PREFIXES = ("int", "uint", "bool")
+STRUCTURAL_DTYPE_PREFIXES = ("int", "uint", "bool")
 
 
 def is_value_arg(arg: Arg, overrides: Optional[Mapping[str, bool]] = None) -> bool:
@@ -76,7 +76,7 @@ def is_value_arg(arg: Arg, overrides: Optional[Mapping[str, bool]] = None) -> bo
     if arg.role and arg.role.lower() in STRUCTURAL_ROLES:
         return False
     dtype = arg.dtype.lower()
-    if dtype.startswith(_STRUCTURAL_DTYPE_PREFIXES):
+    if dtype.startswith(STRUCTURAL_DTYPE_PREFIXES):
         return False
     return True
 
