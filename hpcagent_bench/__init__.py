@@ -36,9 +36,8 @@ os.environ.setdefault("MPI4PY_RC_INITIALIZE", "0")
 
 #: A segfaulting dace/sympy parse writes its whole address space to the crashing process's CWD --
 #: beverin's core_pattern is machine-global -- on a filesystem whose quota is inodes. The shell
-#: entry points carry `ulimit -c 0` (scripts/check_core_dumps.py), but an ad-hoc login-node script
-#: does not, and one of those left 21.6 GB of core files on 2026-09-20. Set at PACKAGE import for
-#: the same reason as the line above: one line covers every entry point. Soft limit only, and
+#: entry points carry `ulimit -c 0` (scripts/check_core_dumps.py), an ad-hoc login-node script does
+#: not. Set at PACKAGE import so one line covers every entry point. Soft limit only, and
 #: HPCAGENT_BENCH_CORE_DUMPS=1 opts out.
 core_dumps.disable()
 

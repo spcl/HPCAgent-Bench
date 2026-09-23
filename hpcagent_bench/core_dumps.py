@@ -4,16 +4,14 @@
 
 ``scripts/check_core_dumps.py`` puts ``ulimit -c 0`` in every shell entry point this repo owns,
 and anything those launch inherits it. Nothing reaches a script a human writes by hand outside the
-checkout, and that is where 21.6 GB of ``core_beverin-ln001_*`` came from on 2026-09-20: a CPF
-repro run started ``python3 diag.py`` from an ad-hoc login-node script, dace segfaulted twice, and
-each dump was the interpreter's whole address space (17.5 GB and 4 GB).
+checkout, and a segfaulting interpreter there dumps its whole address space.
 
 Importing :mod:`hpcagent_bench` is the one thing every such process does, so the floor is set
 there. It is one ``setrlimit`` call and it changes no behaviour a caller can observe. Unlike the
 shell's ``ulimit -c 0``, which sets both limits, this touches the SOFT limit only and leaves the
 hard one alone, so ``HPCAGENT_BENCH_CORE_DUMPS=1`` really does hand the dump back to someone
-debugging. Measured 2026-09-20 from a shell at ``(unlimited, unlimited)``: the limit reads
-``(0, unlimited)`` after the import, and the sampled canonicalize that segfaults leaves no file.
+debugging: from a shell at ``(unlimited, unlimited)`` the limit reads ``(0, unlimited)`` after the
+import.
 """
 
 import os

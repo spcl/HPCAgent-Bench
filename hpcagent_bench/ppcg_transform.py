@@ -80,7 +80,7 @@ def _ppcg_run_env(exe: str) -> Optional[Dict[str, str]]:
     a build dependency of gcc's Graphite pass. That copy shares ppcg's isl's SONAME
     (``libisl.so.23``) but predates ``isl_id_set_alloc``, so with LD_LIBRARY_PATH left alone the
     loader finds the OLDER system isl first and ppcg dies at startup: ``ppcg: symbol lookup
-    error: .../libpet.so.10: undefined symbol: isl_id_set_alloc`` (measured, job 640113). The
+    error: .../libpet.so.10: undefined symbol: isl_id_set_alloc``. The
     same clash exists whether ppcg lives in the shared tools cache or is baked into the image
     (containers/cluster/ce-images/judge-agent-amd/Dockerfile's PPCG stage) -- it is a property of
     the SEARCH ORDER, not of where ppcg was installed -- so this runs unconditionally rather than
@@ -247,8 +247,8 @@ def device_resident_host(host: str) -> str:
     the timed call (docs/abi_contract.md Sec. 10; ``ppcg_hip``'s own ``copy_func`` stages it, see
     :meth:`hpcagent_bench.frameworks.pluto_framework.PlutoFramework.copy_func`), so ``X`` already
     IS a device pointer by the time this runs: the mirror is redundant, and left in place it is
-    timed INSIDE ppcg's own perf_counter bracket -- the malloc/H2D/D2H/free the column's number
-    used to include and every other GPU column's does not.
+    timed INSIDE ppcg's own perf_counter bracket -- a malloc/H2D/D2H/free no other GPU column's
+    number includes.
 
     Purely textual, and deliberately loud rather than quietly wrong: raises if it finds no ``dev_``
     mirror to strip, since a ppcg host that does not match the shape above would otherwise compile
@@ -341,9 +341,8 @@ def run_ppcg(
     That cwd is made BESIDE THE SCOP, not in ``$TMPDIR``. Publication is one ``os.replace`` per
     file, which is atomic and which therefore cannot cross a filesystem boundary: with the default
     temporary directory this raised ``OSError: [Errno 18] Invalid cross-device link`` for every
-    kernel on a cluster node, where ``$TMPDIR`` is node-local and the checkout is on Lustre
-    (measured, job 644285 -- eight affine kernels, eight ``runtime_error`` rows, the failure that
-    had left this column with no measurement of any kind). ``shutil.move`` would paper over it by
+    kernel on a cluster node, where ``$TMPDIR`` is node-local and the checkout is on Lustre.
+    ``shutil.move`` would paper over it by
     copying, and copying is not atomic: a concurrent build would be free to pick up a half-written
     ``.hip``. Same rule as the Pluto column, which puts its temporary OUTPUT beside the destination
     for exactly this reason (:func:`pluto_transform.run_polycc`).
@@ -395,10 +394,8 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str, backend: Optional[
     emitted C would be an nvcc column wearing PPCG's label.
     """
     vendor = resolve_backend(backend)
-    # THE TOOL BEFORE THE KERNEL. A host with no ppcg has nothing to say about any kernel, and
-    # asking the scop question first says it anyway: job 640520 declined 55 of its 248 rows as "the
-    # translator emitted no #pragma scop" -- a fact about those kernels -- on a node where the real
-    # and only answer was that the image shipped no ppcg at all, which the other 193 rows did say.
+    # THE TOOL BEFORE THE KERNEL. A host with no ppcg has nothing to say about any kernel; asking
+    # the scop question first would decline rows as "no #pragma scop" when the image lacks ppcg.
     problem = missing_tool(vendor)
     if problem:
         raise ToolMissing(FRAMEWORK, base, problem)

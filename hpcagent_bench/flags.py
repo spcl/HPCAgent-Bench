@@ -624,10 +624,10 @@ def smt_enabled() -> bool:
 def ncores() -> int:
     """The number of physical cores available to THIS process, for OMP / autopar sizing.
 
-    Three things this must get right, each of which it previously got wrong:
+    Three things this must get right:
 
     1. PHYSICAL, not logical. ``os.cpu_count()`` counts hyperthreads, so on a 16-thread /
-       8-core box it returned 16 and autopar was sized at 2x the real cores.
+       8-core box it returns 16 and autopar would be sized at 2x the real cores.
     2. THIS PROCESS's share, not the machine's. ``os.cpu_count()`` is affinity-blind: under
        ``taskset -c 0-3`` it still says 16. That matters most where it costs most -- one node
        with 288 cores running 4 ranks gives each rank 72, and a rank that reads 288 oversubscribes

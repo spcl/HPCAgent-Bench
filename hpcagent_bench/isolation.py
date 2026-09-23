@@ -63,7 +63,7 @@ def pause_openmp_pools(mode: int = OMP_PAUSE_SOFT) -> None:
                 f"was NOT torn down before the fork -- fork safety for this runtime now rests on "
                 f"its own pthread_atfork handler, if it installs one (libgomp installs none)."
             )
-            continue  # best effort, but no longer SILENT: the caller can see the fork was left unhardened
+            continue  # best effort; the warning tells the caller the fork was left unhardened
         pause.argtypes = [ctypes.c_int]
         pause.restype = ctypes.c_int
         # libgomp refuses only inside a parallel region, where the pool is live and a child hangs.
