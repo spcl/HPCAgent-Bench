@@ -228,7 +228,7 @@ These apply only to a server split across nodes.
 | Flag | Value | Why |
 |---|---|---|
 | `--partition` | `mi300` | The default partition is `mi200`: different hardware, none of this applies. |
-| `--account` | **omit** | Mandatory now -- Slurm rejects an accountless job -- but supplied centrally by `scripts/cscs/account_env.sh` via `SBATCH_ACCOUNT`. Naming one yourself still splits otherwise identical jobs across project accounts. |
+| `--account` | **omit** | Mandatory -- Slurm rejects an accountless job -- but supplied centrally by `scripts/cscs/account_env.sh` via `SBATCH_ACCOUNT`. Naming one yourself still splits otherwise identical jobs across project accounts. |
 | `--mem=0` | always | A step's memory cgroup is sized from its CPU share. Without this the server is capped far below the node and dies during weight load. |
 | `--cpus-per-task` | `${SLURM_CPUS_ON_NODE}` for the server | A step that does not ask gets **one** core of 192. The server then degrades with load rather than failing: 2 s per decode step early, 147 s after half an hour, with nothing queued. Measured against 88-91 tok/s for the same model with the CPUs it needs. Give a client or probe running alongside one socket instead: `--cpus-per-task=24 --hint=nomultithread`. See the README for the full account. |
 | `--gpus-per-node` | `4` | Every recipe here is tensor-parallel 4 inside a node. |
