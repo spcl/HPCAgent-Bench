@@ -130,7 +130,10 @@ def bind_closure_arrays(program: DaceProgram, declared: set[str]) -> dict[str, A
     # is parsed, so the widened declaration is the true one.
     resolver: SDFGClosure | None = program.resolver
     if resolver is None:
-        return {}
+        # A base SDFG loaded from the .cache skips the parse that sets it: cp2k_density_matrix_trs4
+        # then died on the missing arange argument. Resolving the closure is the preprocessing pass
+        # alone, without building the SDFG again.
+        resolver = program.closure_resolver(None, set(program.argnames))
     return {name: spec[2]() for name, spec in resolver.closure_arrays.items() if name in declared}
 
 
