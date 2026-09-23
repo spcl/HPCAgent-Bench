@@ -284,8 +284,7 @@ def store_submission_cells(
 
 
 #: One row per TIMED (config, shape) CELL of a recorded submission -- the per-cell ratios the
-#: single ``submissions.speedup`` is a reduction OVER, which nothing persisted before this table.
-#: Without them a recorded row carries exactly one ratio, so
+#: single ``submissions.speedup`` is a reduction OVER. Without them a recorded row carries exactly one ratio, so
 #: :func:`hpcagent_bench.stats.score_rule.gsd` reads 1.0 for every submission, the dispersion gate
 #: in :func:`~hpcagent_bench.stats.score_rule.credit` can never bind on a post-hoc number, and no
 #: alternative gate (every cell winning, no credited regression) is computable at all.
@@ -592,10 +591,8 @@ def residual_or_none(l_used: int, value: ResidualT) -> ResidualT | None:
 
 #: WHO produced a row, once per run instead of on every row of it.
 #:
-#: The identity used to be seven columns repeated on submissions, attempts AND calls -- the same
-#: fact written three times per grade, free to disagree between the three for one run, which is the
-#: bug the identity columns were added to kill. It is a property of the RUN, so it is stored on the
-#: run and joined: `SELECT ... FROM submissions JOIN runs USING (run_id)`.
+#: The identity is a property of the RUN, so it is stored on the run and joined:
+#: `SELECT ... FROM submissions JOIN runs USING (run_id)`.
 #:
 #: `rep` is the repetition index of one arm, 1-based. It is here because it exists nowhere else: a
 #: run id is `<arm>.n<node>.p<agent>.w<worker>`, so three repetitions of one arm write rows that
@@ -669,7 +666,7 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("submissions", "timing_host_ns", "INTEGER"),
     ("submissions", "timing_event_ns", "INTEGER"),
     ("submissions", "device_index", "INTEGER"),
-    # The PUBLIC grade's worst-margin output (2026-09-21 USER tolerance decision): see
+    # The PUBLIC grade's worst-margin output: see
     # Score.max_abs_err's docstring. NULL = graded before this column, or nothing was graded
     # (a build failure) -- both read the same as "not recorded", which is correct for either.
     ("submissions", "max_abs_err", "REAL"),
@@ -680,11 +677,11 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("attempts", "atol_used", "REAL"),
     ("attempts", "l_used", "INTEGER"),
     ("attempts", "ref_inf_norm", "REAL"),
-    # Which RULE produced l_used (2026-09-21 USER decision: "say so in the row") -- see
+    # Which RULE produced l_used -- see
     # Score.l_rule's docstring. Same NULL convention as the other residual columns.
     ("submissions", "l_rule", "TEXT"),
     ("attempts", "l_rule", "TEXT"),
-    # The ML scaling track's curve (2026-09-22): the sizing `mpi_mode` ("strong"/"weak"), the
+    # The ML scaling track's curve: the sizing `mpi_mode` ("strong"/"weak"), the
     # largest rank count `mpi_ranks` a point was measured at, the geomean efficiency
     # `scaling_efficiency` over those points, and `scaling_curve`, the JSON behind them -- per-P
     # T_i(P) and work ratio plus the reason every DROPPED P was dropped. NULL on every non-ML row
@@ -1071,16 +1068,12 @@ def _split_record_language() -> tuple[str, str]:
 def language_tag() -> str | None:
     """``record.language`` -- the language the ARM asked for, or None when the arm declared none.
 
-    The request body's own claim is NOT recorded. It was a column until it had 19171 rows to be
-    judged on: it differed from the arm's language on 1690 of them, 1406 of those are a Triton
-    kernel honestly calling itself ``python``, and 1332 of the 1690 graded ``ok`` anyway. Where a
-    claim did mislead the judge, the consequence is already in ``status`` and ``reason``. Bodies
-    have also arrived naming ``py``, ``zzz`` and a file path.
+    The request body's own claim is NOT recorded: a Triton kernel honestly calls itself ``python``,
+    and a claim that misleads the judge already shows in ``status`` and ``reason``.
 
-    Canonicalized through :func:`experiment_tags.split_record_language`, so a value an older
-    submitter corrupted with a baked-in packet token and/or a clean suffix (USER RULE 2026-09-18:
-    clean is a run flag the arm name alone carries, never the language) still records the bare
-    language instead of the raw, uncomparable string."""
+    Canonicalized through :func:`experiment_tags.split_record_language`, so a value carrying a
+    packet token and/or a clean suffix (clean is a run flag the arm name alone carries, never the
+    language) still records the bare language."""
     language, _ = _split_record_language()
     return language or None
 

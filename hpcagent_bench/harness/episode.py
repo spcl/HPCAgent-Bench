@@ -138,10 +138,9 @@ def append_usage(path: pathlib.Path, input_tokens: int, output_tokens: int, cach
     ``input_tokens`` arrives as the WHOLE prompt (``usage.prompt_tokens``) with ``cached_tokens`` a
     part of it, so ``input`` is written as the difference -- the same subtraction
     ``containers/agent/harness/runner_common.usage_line`` makes, and the contract every reader of a
-    runner's ``usage.jsonl`` applies (``experiments/harnesses.py``). Writing the whole prompt here
-    AND the cached part beside it billed the cached prefix twice, once per field. The whole prompt
-    is repeated as ``prompt`` so a reader tells a fixed line from an old one by the field, never by
-    comparing magnitudes (an early turn's uncached remainder legitimately exceeds its cached part).
+    runner's ``usage.jsonl`` applies (``experiments/harnesses.py``). The whole prompt is repeated as
+    ``prompt``; readers key on that field, never on comparing magnitudes (an early turn's uncached
+    remainder legitimately exceeds its cached part).
     """
     # record_usage carries no reasoning split; an OpenAI-shaped server counts reasoning inside completion_tokens.
     prompt = max(input_tokens, 0)
@@ -337,9 +336,8 @@ def write_end(workdir: pathlib.Path, reason: str, turns: int, detail: str, effor
 
 def finished_detail(row: RunRow) -> str:
     """``harness-end.json``'s ``detail`` for a non-raising episode: the status, plus the row's OWN
-    detail when it has one (an agent_error/score_error/build_error row's cause -- repr + traceback
-    for agent_error, see runner._solve_rounds -- dropped here before, leaving nothing to diagnose a
-    failed round from but the bare status word)."""
+    detail when it has one (an agent_error/score_error/build_error row's cause; repr + traceback
+    for agent_error, see runner._solve_rounds)."""
     return f"status={row.status}: {row.detail}" if row.detail else f"status={row.status}"
 
 

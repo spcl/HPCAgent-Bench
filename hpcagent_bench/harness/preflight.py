@@ -6,11 +6,9 @@
 Every submission script needs the same answers: are the requested columns ones this deployment can
 actually run, does the installed dace carry the fork's pipeline, is the polyhedral toolchain whose
 output the Pluto column compiles installed, and does this node's compiler genuinely parallelize for
-an autopar column. Each script used to answer them inline -- which meant three copies, and they
-drifted: one grew a hand-rolled C probe that
-compiles ``-O3 <delta>`` and greps for ``GOMP``, a weaker duplicate of
-:func:`hpcagent_bench.flags.probe_autopar`, which compiles the column's REAL composed flags and
-accepts either a ``GOMP_*`` reference or a matched outlined symbol as evidence.
+an autopar column. The autopar answer is :func:`hpcagent_bench.flags.probe_autopar`, which
+compiles the column's REAL composed flags and accepts either a ``GOMP_*`` reference or a matched
+outlined symbol as evidence.
 
 A vacuous autopar column is REPORTED, never fatal: the flags are correct and the corpus still
 runs. What is at stake is how to read the numbers, because a serial ``-O3`` run published under
@@ -134,8 +132,7 @@ def missing_tools(frameworks: Sequence[str]) -> List[Tuple[str, str]]:
     The source-to-source columns are the only ones that shell out to a tool the image may not
     carry, and a job that runs one without it produces a full set of rows that all say the column
     declined -- indistinguishable, in a results table, from a corpus the compiler genuinely cannot
-    handle. That is what job 640520 published: 248 ppcg rows, no ``ppcg`` anywhere on the node.
-    Called at job startup so the answer is one loud line instead of one silent row per kernel."""
+    handle. Called at job startup so the answer is one loud line instead of one silent row per kernel."""
     out: List[Tuple[str, str]] = []
     for name in needs_polycc(frameworks):
         problem = check_polycc()
