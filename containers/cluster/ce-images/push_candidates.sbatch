@@ -54,10 +54,7 @@ declare -A REPO=(
 # The login identity and the destination are INDEPENDENT: REGISTRY_USER authenticates, SINGLE_REPO
 # says where. But the authenticated account still needs WRITE access to the spcleth org, or the
 # push fails with "denied" after loading a 23 GB archive.
-# Both the candidate and the LIVE name of each role. Publishing used to be possible only before a
-# promotion, because the map knew candidates alone and a promoted image is reachable by no name it
-# recognised -- so an image that had just earned the live name was the one image that could not be
-# pushed. The role, not the stage, is what decides the tag.
+# Both the candidate and the LIVE name of each role: the role, not the stage, decides the tag.
 declare -A ROLE=(
   [hpcagent-bench-ce-amd-mi300-candidate]="agent"
   [hpcagent-bench-ce-amd-mi300-cxx20]="agent"

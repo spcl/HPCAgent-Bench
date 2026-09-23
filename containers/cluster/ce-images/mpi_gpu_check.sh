@@ -14,12 +14,11 @@
 #                      evidence. Note the MPICH spelling: it lives in mpi.h, there is no
 #                      mpi-ext.h, and the OpenMPI spelling reports a false NO on this stack.
 #   3. transport       WHICH libfabric the live process mapped and WHICH provider it chose, and
-#                      whether RCCL selects the OFI plugin rather than its TCP fallback. This is
-#                      the leg the script used to omit, and its absence is why "MPI works" was
-#                      once reported as "MPI is on Slingshot": a correct allreduce proves
-#                      CORRECTNESS, never TRANSPORT. The same sum comes back over tcp, slower.
+#                      whether RCCL selects the OFI plugin rather than its TCP fallback. A
+#                      correct allreduce proves CORRECTNESS, never TRANSPORT: the same sum comes
+#                      back over tcp, slower.
 #
-# All of libfabric, libcxi and librccl-net come from the HOST as of 2026-09-16 (com.hooks.netstack.
+# All of libfabric, libcxi and librccl-net come from the HOST (com.hooks.netstack.
 # source=host, com.hooks.aws_ofi_nccl.variant=rocm6; the pinned CSCS netstack artifact under
 # /capstor/store is gone), installed by the enroot hooks the EDF enables. The image ships NONE
 # of them -- a build gate fails if any survives -- so a missing annotation shows up here as an
@@ -51,9 +50,8 @@ case "${mpicc_path}" in
     /opt/view/bin/*) say wrapper OK "${mpicc_path}" ;;
     *) say wrapper FAIL "mpicc is ${mpicc_path}, not the spack MPICH in /opt/view"; fail=1 ;;
 esac
-# The PATH check above covers mpicc; it does not prove mpichversion resolves to the same prefix,
-# and a `2>/dev/null` on the call below used to throw away the one line that would show a wrong
-# binary or a dynamic-linker failure as the reason for an empty match. Both are captured now.
+# The PATH check above covers mpicc, not mpichversion; stderr is kept because it names a wrong
+# binary or a dynamic-linker failure as the reason for an empty match.
 mpichversion_path="$(command -v mpichversion || true)"
 mpichversion_out="$(mpichversion 2>"${work}/mpichversion.err" || true)"
 if [[ "${mpichversion_out}" == *[Rr][Oo][Cc][Mm]* || "${mpichversion_out}" == *[Hh][Ii][Pp]* ]]; then
@@ -81,9 +79,7 @@ int main(int argc, char **argv) {
 }
 C
 if ! mpicc -O0 -o "${work}/world" "${work}/world.c" 2>"${work}/world.log"; then
-    # tail -1 used to print only "collect2: error: ld returned 1 exit status" -- collect2's own
-    # summary line -- and discard the actual undefined-reference or missing-library line ld wrote
-    # just above it, which is the one line that says WHY. The full log is a handful of lines.
+    # Whole log: its last line is collect2's summary, the reason is the ld line above it.
     say multirank FAIL "compile failed, see log below"
     sed 's/^/    /' "${work}/world.log"
     exit 1
@@ -103,9 +99,8 @@ else
 fi
 
 # ------------------------------------------------- 1b. WHICH libfabric, and WHICH provider
-# The leg this script used to be missing, and the reason "MPI works" was once reported as "MPI is
-# on Slingshot". A correct allreduce proves CORRECTNESS, not TRANSPORT -- the same sum comes back
-# over libfabric's tcp provider, several times slower, with every assertion above still green.
+# A correct allreduce proves CORRECTNESS, not TRANSPORT -- the same sum comes back over
+# libfabric's tcp provider, several times slower, with every assertion above still green.
 #
 # Read what the LIVE process mapped, not what ldd predicts. The two disagree exactly where it
 # matters: MPICH binds its libfabric by RPATH, RPATH is searched before LD_LIBRARY_PATH, and in
@@ -190,9 +185,8 @@ have_gpu=0
 if command -v rocm-smi >/dev/null 2>&1 && rocm-smi --showid >/dev/null 2>&1; then
     have_gpu=1
 fi
-# A SKIP here used to be reachable from a batch job, where it turned every piece of real GPU
-# evidence into "not tested" and still printed PASSED. On a build node without devices that is
-# correct; inside an mi300 allocation it means the EDF or the --gres is broken, so say so.
+# No GPU is a SKIP on a build node; inside an mi300 allocation it means the EDF or the --gres is
+# broken.
 if (( ! have_gpu )) && [[ -n "${SLURM_JOB_ID:-}" ]]; then
     say gpu FAIL "no visible GPU inside job ${SLURM_JOB_ID} on mi300 -- broken EDF or missing gres"
     fail=1

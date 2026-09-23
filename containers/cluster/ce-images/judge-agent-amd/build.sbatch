@@ -38,9 +38,8 @@ set -Eeuxo pipefail
 ulimit -c 0
 
 # Slurm SPOOLS the batch script, so BASH_SOURCE points into /var/spool/slurmd -- the directory is
-# passed in rather than derived. Deriving it is what killed build job 600467. SLURM_SUBMIT_DIR is
-# the submit directory, so `cd <this dir> && sbatch build.sbatch` needs no variable; this is the
-# same fallback the other four builders use, and having a fifth spelling of it cost job 619973.
+# passed in rather than derived. SLURM_SUBMIT_DIR is the submit directory, so
+# `cd <this dir> && sbatch build.sbatch` needs no variable.
 IMAGE_DIR="${IMAGE_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
 test -x "${IMAGE_DIR}/build.sh"
 
@@ -55,11 +54,7 @@ export BUILD_TARGETS="${BUILD_TARGETS:-agent judge}"
 # WHICH FILES build.sh WILL ACTUALLY WRITE.
 #
 # build.sh honours OUTPUT_SQSH only for a SINGLE-target build -- with two targets one name cannot
-# mean both -- and otherwise writes each target's own candidate name. This script used to assume
-# OUTPUT_SQSH regardless, which broke twice over: the guard below protected a path nothing was
-# going to be written to, and the report at the end stat'd a name build.sh had deliberately not
-# used. Job 630737 built both images correctly in 3h11m and then exited 2 on `ls` of the name it
-# was told to ignore. Mirror build.sh's rule here instead of guessing at it.
+# mean both -- and otherwise writes each target's own candidate name. This mirrors that rule.
 target_sqsh() {
     local name
     name="$(ce_amd_candidate "$1" "${PARTITION}")" || return 2

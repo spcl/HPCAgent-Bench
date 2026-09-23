@@ -64,9 +64,8 @@ IMAGE_DIR="${IMAGE_DIR}" bash "${IMAGE_DIR}/build.sbatch" 2>&1 | tee "${build_ou
 # default, and verifying only the agent meant the JUDGE -- the image that grades every submission
 # -- shipped unverified. Each is verified under its own profile so the judge's extra layer (the
 # installed hpcagent_bench and the firewall assertion) is actually exercised.
-# Keyed by IMAGE_DIR, because the map used to name only the judge-agent pair: for an sglang or
-# vllm build every entry was missing, the loop below skipped both, verify_rc stayed 0 and the job
-# reported SUCCESS having verified nothing. An unknown profile is now an error, not a skip.
+# Keyed by IMAGE_DIR. An unknown profile is an error, not a skip: a skip would report SUCCESS
+# having verified nothing.
 declare -A BUILD_TARGETS_OF=(
     [judge-agent-amd]="judge-agent-amd judge"
     [sglang]="sglang"

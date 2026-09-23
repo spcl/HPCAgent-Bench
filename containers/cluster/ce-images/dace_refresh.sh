@@ -17,8 +17,8 @@
 # GitHub hiccup would trade a slightly stale run for no run at all. It reports which commit is
 # live either way, and that line is what a results table should quote.
 #
-# Called at job start by the judge step (run_cluster.sh run_judge_node) and by regrade.sbatch
-# (user 2026-09-21: fixes pushed before a job starts must reach it). The price: two jobs that start
+# Called at job start by the judge step (run_cluster.sh run_judge_node) and by regrade.sbatch, so
+# fixes pushed before a job starts reach it. The price: two jobs that start
 # on either side of a dace push run different dace commits, so the "live commit" line in the log
 # is the provenance a results table quotes.
 # Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing

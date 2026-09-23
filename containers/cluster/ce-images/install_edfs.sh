@@ -96,9 +96,8 @@ render() {
     printf '  %-32s -> %s\n' "${name}" "${image}"
 }
 
-# One missing image used to abort the whole run under set -e, so a promotion that had three of
-# four images installed nothing and left the fourth name unexplained. Each render is now reported
-# and the script exits non-zero at the end, so a partial install is visible rather than silent.
+# Each render is reported and a failure counted, so one missing image does not stop the others;
+# the script exits non-zero at the end on any failure.
 failed=0
 try_render() { render "$@" || failed=$((failed + 1)); }
 
