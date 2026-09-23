@@ -1243,8 +1243,8 @@ def _fresh_columns() -> dict[str, tuple[str, ...]]:
         scratch.close()
 
 
-def _rebuild_in_column_order(conn: sqlite3.Connection, table: str, canonical: tuple[str, ...]) -> None:
-    """Recreate ``table`` with ``canonical``'s column order.
+def rebuild_in_column_order(conn: sqlite3.Connection, table: str) -> None:
+    """Recreate ``table`` in a fresh db's column order (its DDL, then :data:`ADDED_COLUMNS`).
 
     ``ALTER TABLE ADD COLUMN`` only ever appends, so it restores a fresh db's order exactly when the
     missing columns are its trailing ones -- true of every migration until one table gained several
@@ -1288,7 +1288,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     cur.execute(_CALLS_DDL)
     # Before the indexes, which may name an added column. Per table, not per ADDED_COLUMNS row: a
     # missing column that is not canonical's trailing one needs the whole table rebuilt in order
-    # (see _rebuild_in_column_order), which an ALTER loop over individual rows cannot express.
+    # (see rebuild_in_column_order), which an ALTER loop over individual rows cannot express.
     for table, canonical in _fresh_columns().items():
         current = tuple(row[1] for row in conn.execute(f"PRAGMA table_info({table})"))
         if current == canonical:
@@ -1300,7 +1300,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             for column in missing:
                 cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kinds[column]}")
         else:
-            _rebuild_in_column_order(conn, table, canonical)
+            rebuild_in_column_order(conn, table)
     # A DB from the branch that stamped `host` before `node` merged from main carries both columns
     # on some rows; one machine, one fact, so fold the legacy value in ONCE. `node IS NULL` stops
     # matching after the first fill, so this is idempotent like the ALTERs above, and a row that
