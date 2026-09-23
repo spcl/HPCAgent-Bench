@@ -93,7 +93,19 @@ finalize_column() {
         expected=$((expected + n))
     done
     shopt -u nullglob
-    if PYTHONPATH="${opt}" python3 "${opt}/scripts/merge_canon_results.py" \
+    #: The batch host's /usr/bin/python3 is SLES 3.6 (no `dict[str, object]`-style annotations,
+    #: no tomllib) and crashes merge_canon_results.py outright; python3.11 is what the rest of the
+    #: outer path already resolves to on beverin (scripts/cscs/enroot_srun.sh, run_cluster.sh,
+    #: prepare_job.sh: `command -v python3.11 || command -v python3`). Same resolution here, with
+    #: an explicit check: silently falling through to the 3.6 default would just move the crash.
+    local merge_py
+    merge_py="$(command -v python3.11 || command -v python3)"
+    if [[ -z "${merge_py}" ]]; then
+        echo "canon ${column}: no python3.11 or python3 on PATH to run merge_canon_results.py --" \
+            "keeping ${out_root}/dacecache-${column}*, ${out_root}/db/${column} and its CSVs for inspection" >&2
+        return 1
+    fi
+    if PYTHONPATH="${opt}" "${merge_py}" "${opt}/scripts/merge_canon_results.py" \
         --run-dir "${out_root}" --column "${column}" --run "${run_label}" --db "${db}" \
         --expected "${expected}" --build "${build_label:-}"; then
         rm -rf -- "${out_root}/db/${column}"
