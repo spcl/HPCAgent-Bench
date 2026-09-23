@@ -33,15 +33,10 @@ DEEP=0
 sidecar() { [[ -s "$1" ]] && tr -d '\n' < "$1" || printf 'none'; }
 
 # A sidecar left over from a PREVIOUS build of the same name reads as valid to anything that just
-# cats it. That is how job 620068 reported an image it had not built, and it happened again here:
-# a build failed after writing the squashfs but before its checksum, leaving a four-day-old sha256
-# beside a fresh image.
-#
-# Older is NOT the test, though -- ce_export_image writes the digest, THEN imports the squashfs,
-# so a correct .digest is always a little older than the .sqsh. Measured across four images, that
-# gap is 101-133 s (the enroot import), while the real staleness was 4 days. So flag only a gap
-# large enough that no single build could produce it; anything under the threshold is the normal
-# write order, and flagging it made every correctly built image look broken.
+# cats it: a build that fails after writing the squashfs but before its checksum leaves an old
+# sha256 beside a fresh image. Older is NOT the test -- ce_export_image writes the digest, THEN
+# imports the squashfs, so a correct .digest is 101-133 s older than the .sqsh (four images
+# measured). Only a gap no single build could produce is flagged.
 STALE_AFTER_S="${STALE_AFTER_S:-21600}"   # 6 h: ~160x the observed within-build gap
 stale_note() {
     local sidecar="$1" sqsh="$2" gap

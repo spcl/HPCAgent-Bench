@@ -36,7 +36,7 @@ set -Eeuo pipefail
 ulimit -c 0
 
 # Slurm SPOOLS the batch script, so BASH_SOURCE points into /var/spool/slurmd -- the directory is
-# passed in (or is the submit directory), never derived (job 600467).
+# passed in (or is the submit directory), never derived.
 IMAGE_DIR="${IMAGE_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
 test -x "${IMAGE_DIR}/build.sh"
 # shellcheck source=../build_common.sh

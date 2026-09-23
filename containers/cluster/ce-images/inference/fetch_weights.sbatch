@@ -4,13 +4,12 @@
 # WHY THIS EXISTS. The two halves cannot be done in one place: `hf download` runs inside the CE
 # container (that is where huggingface_hub lives), and `lfs` exists only on the HOST. So a plain
 # download leaves the layout unfixed and nothing notices -- iopsstor delivers 9.45 GB/s at 16
-# readers against the general scratch's 0.83 (measured on the retired Lustre mount), but only if the blobs are actually striped.
+# readers, but only if the blobs are actually striped.
 #
-# The PFL default on the hub dir is NOT sufficient, which is the part that surprises people:
-# run_cluster.sh sets `lfs setstripe -E 64M -c 1 -E -1 -c 16 -S 4M` on ${HF_HOME}/hub, and the
-# five models fetched in 2026-08 did inherit it -- but GLM-5.3, downloaded 2026-09-08 into that
-# same directory, came down with all 141 blobs at stripe_count 1 / 1 MiB. Inheritance is not a
-# property of hf download. RESTRIPE EVERY NEW MODEL AND VERIFY; never assume.
+# The PFL default on the hub dir is NOT sufficient: run_cluster.sh sets
+# `lfs setstripe -E 64M -c 1 -E -1 -c 16 -S 4M` on ${HF_HOME}/hub, yet GLM-5.3, downloaded into
+# that same directory, came down with all 141 blobs at stripe_count 1 / 1 MiB. Inheritance is not
+# a property of hf download. RESTRIPE EVERY NEW MODEL AND VERIFY; never assume.
 #
 #   sbatch fetch_weights.sbatch                     # the four models the campaign serves
 #   MODELS="zai-org/GLM-5.3" sbatch fetch_weights.sbatch

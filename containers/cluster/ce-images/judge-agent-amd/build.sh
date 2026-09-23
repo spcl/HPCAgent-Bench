@@ -90,7 +90,7 @@ printf 'dace @ %s\n' "${DACE_COMMIT}"
 # taking different source.
 #
 # This is a COMPILE-TIME link target for spack's MPICH and nothing else -- it is deleted from the
-# shipped image so MPI resolves at run time to the host's libfabric instead: as of 2026-09-16 every
+# shipped image so MPI resolves at run time to the host's libfabric instead: every
 # EDF sets com.hooks.netstack.source=host, which binds /opt/cray/libfabric/host/lib64/libfabric.so.1
 # (currently -> 2.3.1), not the decommissioned netstack artifact's 2.6.0. No RCCL net plugin is
 # built here either; the host supplies one via com.hooks.aws_ofi_nccl.variant=rocm6 (required in

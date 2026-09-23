@@ -25,11 +25,7 @@ set -Eeuo pipefail
 # quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 SCRATCH="${SCRATCH:?set SCRATCH}"
-# ANY image, not just the judge-agent one. This replaced sglang_cxi_check.sbatch and
-# experiments/test-rccl-ofi-2node.sbatch, both of which ran a variant of this test but were written
-# for the abandoned design -- one expecting the image's own /opt/ofi/lib to win over the hook, the
-# other gating a plugin at /opt/aws-ofi-nccl. Nothing ships a fabric library now, so both tested a
-# configuration that can no longer occur:
+# ANY image, not just the judge-agent one. No image ships a fabric library; the hooks supply it:
 #
 #   IMAGE=${SCRATCH}/ce-images/hpcagent-bench-sglang-mi300.sqsh sbatch rccl_hook_check.sbatch
 #

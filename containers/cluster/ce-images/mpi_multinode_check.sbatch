@@ -3,10 +3,7 @@
 #
 # There is deliberately NO RCCL leg here. rccl_hook_check.sbatch runs the identical 2 nodes x 4
 # ranks cross-node collective, takes IMAGE= so it serves every role, and finishes in about two
-# minutes. The copy that used to live here hung instead: in 630089 only one node's four ranks ever
-# reached ncclCommInitRank, so the communicator could not form and the job burned its whole
-# 30-minute wall clock into a Slurm TIMEOUT -- which in sacct is indistinguishable from merely
-# being slow. Two implementations of one check is how you end up with one that is wrong.
+# minutes; one implementation of that check, not two.
 #
 #   IMAGE=$SCRATCH/ce-images/hpcagent-bench-ce-amd-mi300.sqsh \
 #     sbatch containers/cluster/ce-images/mpi_multinode_check.sbatch

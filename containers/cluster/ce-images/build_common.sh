@@ -89,7 +89,7 @@ ce_require_mirror_commit() {
 
 # Sets the global GPU_ARGS. aiter >= 0.1.19 reads the arch from `rocminfo` at IMPORT time and
 # ignores GPU_ARCHS on purpose, and vLLM's rocm.py probes the device too -- so a device-less build
-# cannot even import them. Measured in job 619976: an mi300 job with NO --gres still exposes
+# cannot even import them. An mi300 job with NO --gres still exposes
 # /dev/kfd, and `podman build --device` reports gfx942 inside a RUN step. Conditional, so a build
 # on a node without the device fails in the step that needs it rather than on an unusable flag.
 ce_gpu_args() {
@@ -163,9 +163,8 @@ ce_amd_candidate() {
 # user xattrs, so `overlay` and `fuse-overlayfs` fail on lsetxattr and `vfs` fails creating its
 # pivot dir under a subuid (all three measured).
 #
-# RE-VERIFIED 2026-09-16: setxattr of a user.* attribute still returns ENOTSUP on all three,
-# whatever filesystem $SCRATCH currently points at (see scripts/cache_env.sh), so the
-# conclusion stands:
+# setxattr of a user.* attribute returns ENOTSUP on all three, whatever filesystem $SCRATCH
+# points at (see scripts/cache_env.sh):
 #     scratch   rejects (ENOTSUP)
 #     iopsstor  rejects (ENOTSUP)
 #     home      rejects (ENOTSUP) The base image can, because a `dir:` tree is

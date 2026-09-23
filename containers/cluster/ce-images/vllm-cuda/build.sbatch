@@ -29,7 +29,7 @@ set -Eeuo pipefail
 # quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 
-# Slurm SPOOLS the batch script; the directory is passed in or is the submit directory (job 600467).
+# Slurm SPOOLS the batch script; the directory is passed in or is the submit directory.
 IMAGE_DIR="${IMAGE_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
 test -x "${IMAGE_DIR}/build.sh"
 # shellcheck source=../build_common.sh
