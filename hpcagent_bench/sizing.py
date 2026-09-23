@@ -765,8 +765,8 @@ def derive_ladder(
     # * only when ``sized`` is NON-EMPTY. When no symbol moves the byte count -- ``nqueens``
     #   declares one ``(1,)`` counter and ``cegterg`` has a hand-written ``init`` -- the premise is
     #   vacuously true of EVERY symbol, and faulting on it would call the kernel's only size
-    #   structural and flatten the ladder to one rung. :func:`scripts.repair_structural_knobs`
-    #   already scoped itself this way; the check the repair exists to enforce did not;
+    #   structural and flatten the ladder to one rung (:func:`scripts.repair_structural_knobs`
+    #   scopes itself the same way);
     # * only a SHRINK, and only of an int, which is what the uniform divide in
     #   :func:`fit_to_ceiling` produces. A symbol that GROWS from M to XL was authored that way, and
     #   the byte model's silence about it means only that the footprint does not follow it: a
