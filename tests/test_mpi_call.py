@@ -98,9 +98,12 @@ def test_build_commands_device_routes_driver_and_link_to_gpu_compiler() -> None:
     assert _driver(cmds[-1]) == "nvcc" and "-shared" not in " ".join(cmds[-1])  # link exe with nvcc
 
 
-def test_build_commands_kernel_lib_links_the_kernel_objects_alone_as_a_pic_shared_library() -> None:
+def test_build_commands_kernel_lib_links_the_kernel_objects_alone_as_a_pic_shared_library(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The sharded rank driver dlopens this next to an mpi4py that owns MPI_Init: a second main
     or non-PIC objects would make it unloadable."""
+    monkeypatch.setenv("HPCAGENT_BENCH_GFX", "gfx942")  # the hip line names an arch; no rocminfo here
     kernels = [("cpp", Path("k.cpp")), ("hip", Path("k.hip"))]
     cmds = build_mpi_executable_commands(
         kernels, Path("d.hip"), Path("bench"), driver_lang="hip", kernel_lib=Path("bench.kernel.so")
@@ -218,6 +221,7 @@ def test_build_mpi_compiles_the_gpu_host_unit_with_the_gpu_compiler(monkeypatch,
     followed its own signature failed to build. The single-node GPU path has always built the host
     unit with the device unit's compiler; the distributed one now does too. Asserted on the command
     lines, so no GPU toolchain is needed."""
+    monkeypatch.setenv("HPCAGENT_BENCH_GFX", "gfx942")  # the hip line names an arch; no rocminfo here
     seen: list[list[str]] = []
 
     def capture(cmds, *_args, **_kwargs):
