@@ -9,9 +9,9 @@ the model, shape the packet, and the drawing itself lives in
 :mod:`hpcagent_bench.stats.figures.efficacy` -- this script only wires the data.
 """
 
-import importlib.util
 import argparse
 import dataclasses
+import importlib.util
 import math
 import pathlib
 import sys
@@ -19,18 +19,19 @@ import tempfile
 import warnings
 
 import matplotlib.colors
-import matplotlib.pyplot as plt
 import matplotlib.markers
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
 from matplotlib.axes import Axes
+from matplotlib.collections import LineCollection, PathCollection
 from matplotlib.figure import Figure
 from PIL import Image
 
 from hpcagent_bench import experiment_tags, packets
 from hpcagent_bench.harness import efficacy
-from hpcagent_bench.stats import palette, score_rule, summary
+from hpcagent_bench.stats import palette, score_rule
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
 
@@ -395,8 +396,8 @@ def test_x_is_log2_of_the_speed_up_and_zero_is_the_no_change_line() -> None:
         assert "Speed-Up" in ax.get_xlabel()
         assert ax.get_xscale() == "linear"
         assert any(line.get_xdata()[0] == pytest.approx(0.0) for line in ax.lines if len(set(line.get_xdata())) == 1)
-        assert efficacy_figures.log2_tick(2.0) == "4x"
-        assert efficacy_figures.log2_tick(-1.0) == "0.5x"
+        assert plotstyle.log2_ratio_tick(2.0) == "4x"
+        assert plotstyle.log2_ratio_tick(-1.0) == "0.5x"
     finally:
         plt.close(fig)
 
@@ -529,9 +530,9 @@ def test_the_marker_shape_is_the_packet_and_nothing_else() -> None:
 
 
 def test_a_light_minor_grid_sits_between_the_major_lines() -> None:
-    """A half-octave minor grid is now drawn (denser than the major-only original), but lighter and
-    thinner so it reads as texture under the marks rather than a second reference the major line
-    already is."""
+    """A minor grid is drawn between the majors (user, 2026-09-22), but lighter and thinner so it
+    reads as a finer ruling under the marks rather than a second reference the major line already
+    is."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
@@ -707,7 +708,7 @@ def y_axis_left_margin(low: float, high: float) -> float:
     ax.set_yscale("log", base=2.0)
     ax.set_ylim(low, high)
     plotstyle.value_axis(ax, "y", log_base=2.0)
-    ax.yaxis.set_major_formatter(FuncFormatter(efficacy_figures.ratio_tick))
+    ax.yaxis.set_major_formatter(FuncFormatter(plotstyle.ratio_tick))
     ax.set_ylabel("Token-Cost Ratio, Treated / Control", fontsize=plotstyle.LABEL_PT * 0.68)
     ax.tick_params(axis="both", labelsize=plotstyle.TICK_PT * 0.6)
     try:
@@ -1071,11 +1072,12 @@ def test_a_difference_spec_reads_delivery_colon_model_pairs() -> None:
 
 
 @pytest.mark.parametrize(
-    ("value", "want"), [(6.34919, "6.3x"), (0.92137, "0.92x"), (1.0, "1x"), (4.0, "4x"), (0.5, "0.5x")]
+    ("value", "want"), [(6.34919, "6.3x"), (0.92137, "0.9x"), (1.0, "1.0x"), (4.0, "4.0x"), (0.5, "0.5x")]
 )
-def test_an_arrows_factor_is_two_significant_figures(value: float, want: str) -> None:
-    """The tick spelling keeps full precision, which beside a mark reads as ``6.34919x``."""
-    assert efficacy_figures.factor_label(value) == want
+def test_an_arrows_factor_is_printed_to_one_decimal(value: float, want: str) -> None:
+    """The label beside a mark is what a reader quotes, one decimal (user, 2026-09-21); the tick
+    spelling keeps full precision, which beside a mark reads as ``6.34919x``."""
+    assert plotstyle.ratio_label(value) == want
 
 
 def arrow_row() -> efficacy_figures.ArmRow:
@@ -1211,14 +1213,14 @@ def test_cli_title_flag_produces_no_whole_figure_title(tmp_path: pathlib.Path) -
 
 
 def test_the_token_cost_axis_formatter_spells_a_ratio_below_one_as_a_fraction() -> None:
-    assert efficacy_figures.ratio_tick(0.125) == "0.125x"
-    assert efficacy_figures.ratio_tick(1.0) == "1x"
-    assert efficacy_figures.ratio_tick(8.0) == "8x"
+    assert plotstyle.ratio_tick(0.125) == "0.125x"
+    assert plotstyle.ratio_tick(1.0) == "1x"
+    assert plotstyle.ratio_tick(8.0) == "8x"
 
 
 def test_a_drawn_panels_y_axis_never_labels_a_non_power_of_two_tick() -> None:
     """The bug this guards: a base-2 ``LogLocator`` with a 1.5 sub used to label 1.5x, 3x, 0.75x --
-    ticks :func:`~hpcagent_bench.stats.figures.per_kernel.speedup_tick_label` cannot spell as a
+    ticks :func:`~hpcagent_bench.stats.style.ratio_tick_label` cannot spell as a
     clean fraction and a reader cannot place on a log2 grid by eye."""
     import matplotlib.pyplot as plt
 
@@ -1481,7 +1483,6 @@ def test_by_default_a_wrong_answer_is_no_speedup_and_counts_against_the_success_
     assert 2.0**control.x == pytest.approx(2.0) and 2.0**treated.x == pytest.approx(4.0)
     assert control.kernels == treated.kernels == 4
     assert (control.solved, control.served, treated.solved, treated.served) == (4, 5, 5, 5)
-    assert efficacy_figures.measure_value(control, "success")[0] == pytest.approx(0.8)
 
 
 def test_the_fallback_reading_scores_the_wrong_answer_at_one() -> None:
@@ -1492,13 +1493,6 @@ def test_the_fallback_reading_scores_the_wrong_answer_at_one() -> None:
     assert 2.0**control.x == pytest.approx(2.0 ** (4.0 / 5.0))
     assert 2.0**treated.x == pytest.approx((4.0**4 * 8.0) ** (1.0 / 5.0))
     assert control.kernels == 5
-
-
-def test_the_success_interval_stays_inside_zero_and_one_and_is_not_zero_width_at_ten_of_ten() -> None:
-    full = summary.success_ci(10, 10)
-    assert full.point == 1.0 and full.high == 1.0 and 0.6 < full.low < 0.8
-    assert summary.success_ci(0, 10).low == 0.0
-    assert math.isnan(summary.success_ci(0, 0).point)
 
 
 def test_the_dot_row_stacks_the_success_row_between_speedup_and_cost(tmp_path: pathlib.Path) -> None:
@@ -1530,7 +1524,9 @@ def test_dropping_the_success_row_keeps_the_width_and_every_other_box(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The success row is optional: turning it off may only shorten the canvas. A figure with and
-    one without it sit in one paper, so the speed-up and cost boxes must be the same size in both."""
+    one without it sit in one paper, so the speed-up and cost boxes must be the same size in both.
+    The success row is 0.45 of a row and the speed-up and cost rows 0.7 of one (user, 2026-09-22),
+    so the success row is 0.45/0.7 of a speed-up row."""
     full = drawn_dot_row(tmp_path, monkeypatch, efficacy_figures.MEASURES)
     short = drawn_dot_row(tmp_path, monkeypatch, ("speedup", "cost"))
     assert full.get_size_inches()[0] == pytest.approx(short.get_size_inches()[0])
@@ -1538,7 +1534,123 @@ def test_dropping_the_success_row_keeps_the_width_and_every_other_box(
     speedup, success, cost = full.axes[:3]
     assert box_inches(full, speedup) == pytest.approx(box_inches(short, short.axes[0]), abs=1e-3)
     assert box_inches(full, cost) == pytest.approx(box_inches(short, short.axes[1]), abs=1e-3)
-    assert box_inches(full, success) == pytest.approx(box_inches(full, speedup), abs=1e-3), "a full-height row"
+    width, height = box_inches(full, speedup)
+    assert box_inches(full, success) == pytest.approx((width, height * 0.45 / 0.7), abs=1e-3), "the success row's share"
+
+
+def test_a_full_roster_mark_on_the_ceiling_is_drawn_whole() -> None:
+    """A mark at N sits on the axis limit's 5% headroom, thinner than a mark in a half-height row, so
+    a clipped mark printed as half a circle."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 8, 8), arm(1.0, 2.0, 8, 8))
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
+    marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
+    assert marks and not any(mark.get_clip_on() for mark in marks)
+    plt.close(fig)
+
+
+def test_the_success_row_draws_its_marks_and_no_interval() -> None:
+    """The roster is fixed, so the count solved is a census, not a sample (user, 2026-09-22): a Wilson
+    bar under a 10/10 mark reaching down to 7 read as seven solved."""
+    fig, ax = plt.subplots()
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 7, 10), arm(1.0, 2.0, 10, 10))
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
+    assert [collection for collection in ax.collections if isinstance(collection, PathCollection)]
+    assert not [collection for collection in ax.collections if isinstance(collection, LineCollection)]
+    plt.close(fig)
+
+
+@pytest.mark.parametrize(("solved", "served", "want"), [
+    ((2, 8), 8, [(-0.16, 2.0), (0.16, 8.0)]),
+    ((10, 10), 10, [(-0.16, 10.0), (0.16, 10.0)]),
+    ((0, 31), 40, [(-0.16, 0.0), (0.16, 31.0)]),
+])  # fmt: skip
+def test_a_success_mark_sits_at_the_solved_count(
+    solved: tuple[int, int], served: int, want: list[tuple[float, float]]
+) -> None:
+    """The mark IS the count, the control's hollow one left of the column and the treated one right;
+    a rate or an interval centre would put a 10/10 arm below the ceiling."""
+    fig, ax = plt.subplots()
+    control, treated = (arm(1.0, 2.0, count, served) for count in solved)
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", control, treated)
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
+    marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
+    drawn = sorted({(float(x), float(y)) for mark in marks for x, y in mark.get_offsets()})
+    assert drawn == pytest.approx(want)
+    plt.close(fig)
+
+
+def test_every_value_row_of_the_dot_row_carries_a_minor_grid(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """User, 2026-09-22: more minor ticks on the paper plots -- the speed-up, tasks-completed and
+    token rows alike, each ruled by its own axis kind (log2 units, a count, a log10 count)."""
+    kept: list[Figure] = []
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False: kept.append(fig) or stem)
+    rows = observation_rows(BLIND_PAIR[1], 2.0, 100.0) + observation_rows(BLIND_PAIR[0], 4.0, 1000.0)
+    frame = plot.pair_frame(pd.DataFrame(rows), [BLIND_PAIR], "no-score")
+    stats = plot.points(frame[~frame.skills], frame[frame.skills])
+    efficacy_figures.figure_dot_row([("Blind", "no-score", stats, frame)], tmp_path / "dots.pdf")
+    for ax in kept[0].axes[:3]:
+        assert [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()], ax.get_ylabel()
+
+
+def test_a_key_too_tall_for_its_band_grows_the_canvas_instead_of_covering_the_names(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fixed band made the key the thing that gave: at text width it shrank to its floor, still did
+    not fit, and was drawn over the category names."""
+    kept: list[Figure] = []
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False: kept.append(fig) or stem)
+    config = dataclasses.replace(efficacy_figures.PAPER_CONFIG, legend_chrome_in=0.05, legend_min_scale=1.0)
+    control, treated = solved_and_failed_pair()
+    panel = ("Blind", "no-score", plot.points(control, treated), pd.concat([control, treated]))
+    efficacy_figures.figure_dot_row([panel], tmp_path / "dots.pdf", config=config)
+    fig = kept[0]
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    (legend,) = fig.legends
+    names = [label.get_window_extent(renderer) for label in fig.axes[-1].get_xticklabels() if label.get_text()]
+    assert legend.get_window_extent(renderer).y1 <= min(box.y0 for box in names)
+    assert legend.get_window_extent(renderer).y0 >= 0.0
+
+
+@pytest.mark.parametrize("legs", [("C", "Fortran") * 3])
+def test_category_names_still_touching_on_two_lines_step_down_until_clear(legs: tuple[str, ...]) -> None:
+    """Three "Fortran" placeholders two columns apart share the staggered second line and touched."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(0.9, 1.0))
+    config = efficacy_figures.PAPER_CONFIG
+    rows = [efficacy_figures.ArmRow("qwen38", leg, "#1f77b4", arm(1.0, 2.0), arm(1.0, 2.0)) for leg in legs]
+    ax.set_xlim(-0.6, len(rows) - 0.4)
+    efficacy_figures.draw_category_axis(ax, rows, config)
+    efficacy_figures.stagger_crowded_ticks(fig, [ax], config)
+    renderer = fig.canvas.get_renderer()
+    size = ax.get_xticklabels()[0].get_fontsize()
+    assert size < config.tick_pt
+    assert not plotstyle.crowded_ticks(ax, renderer, size / 3.0 * fig.dpi / 72.0)
+    plt.close(fig)
+
+
+def test_a_difference_label_under_the_top_tick_settles_inside_the_frame_and_off_the_marks() -> None:
+    """The label starts above both intervals; where one ends at the top tick it printed across the
+    frame, and holding it under the frame must not land it back on a mark."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(1.2, 1.0))
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0), arm(3.5, 4.0))
+    efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {}, differences=frozenset({("qwen38", "HIP")}))
+    plotstyle.settle_clear_labels(fig)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    (label,) = [text for text in ax.texts if text.get_gid() == plotstyle.CLEAR_GID]
+    box, frame = label.get_window_extent(renderer), ax.get_window_extent(renderer)
+    assert frame.x0 <= box.x0 and box.x1 <= frame.x1 and frame.y0 <= box.y0 and box.y1 <= frame.y1
+    assert not any(box.overlaps(mark) for mark in plotstyle.mark_boxes(ax))
+    plt.close(fig)
 
 
 @pytest.mark.parametrize(("success_row", "want"), [
@@ -1559,31 +1671,34 @@ def test_a_difference_label_sits_above_both_intervals_not_on_the_treated_mark() 
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
-    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(4.0, 5.0), arm(4.5, 7.0))
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(4.0, 5.0), arm(4.5, 6.0))
     efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {}, differences=frozenset({("qwen38", "HIP")}))
     (label,) = [text for text in ax.texts if text.get_text().endswith("x")]
-    assert label.xy == (0, 7.0), label.xy
+    assert label.xy == (0, 6.0), label.xy
     assert (label.get_ha(), label.get_va()) == ("center", "bottom")
     plt.close(fig)
 
 
 def test_the_success_row_counts_kernels_up_to_the_roster_and_carries_no_x_ticks() -> None:
-    """The top tick is N, the kernels served, and the axis stops one past it."""
+    """The top tick is N, the kernels served, marked by a dashed rule; the axis runs 5% past it so the
+    rule is not the frame."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
     row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 2, 8), arm(1.0, 2.0, 8, 8))
     efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
     fig.canvas.draw()
-    assert list(ax.get_yticks()) == [0, 2, 4, 6, 8]
-    assert ax.get_ylim() == (-1.0, 9.0)
+    assert list(ax.get_yticks()) == [0, 4, 8]
+    assert ax.get_ylim() == pytest.approx((-0.4, 8.4))
+    (ceiling,) = [line for line in ax.lines if line.get_linestyle() == "--"]
+    assert list(ceiling.get_ydata()) == [8, 8]
     assert not ax.texts
     assert all(tick.tick1line.get_markersize() == 0.0 for tick in ax.xaxis.get_major_ticks())
     plt.close(fig)
 
 
 @pytest.mark.parametrize(("kernels", "want"), [
-    (40, [0, 10, 20, 30, 40]),
+    (40, [0, 20, 40]),
     (10, [0, 5, 10]),
     (7, [0, 7]),
     (0, []),
@@ -1679,3 +1794,68 @@ def test_a_single_value_axis_is_left_unsnapped() -> None:
         assert ax.get_ylim() == (-1.0, 1.0)
     finally:
         plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    ("marks", "cost", "want"),
+    [
+        pytest.param([0.0, 3.0], False, (-2.0, 5.0), id="speedup-two-octaves-past-the-marks"),
+        pytest.param([1e5, 4e5], True, (2.5e4, 1.6e6), id="cost-a-factor-four-past-the-marks"),
+        pytest.param([math.nan], False, (-math.inf, math.inf), id="no-mark-cuts-nothing"),
+    ],
+)
+def test_intervals_reach_a_factor_four_past_the_outermost_marks(
+    marks: list[float], cost: bool, want: tuple[float, float]
+) -> None:
+    """User, 2026-09-22: a few-kernel interval down to 0.004x stretched the GPU panel over twenty
+    octaves and its ticks read 0.00391x; the panel now spans its marks and a bounded reach."""
+    assert efficacy_figures.interval_bounds(marks, cost, efficacy_figures.PAPER_CONFIG) == pytest.approx(want)
+
+
+def test_an_interval_past_the_reach_is_cut_at_it_with_an_arrowhead() -> None:
+    """The axis must not follow the interval out, and the cut end has to say the interval goes on."""
+    fig, ax = plt.subplots()
+    wide = efficacy_figures.ArmPoint(0.0, -9.0, 12.0, 1e5, 5e4, 2e5, 5, 5, 5, 5)
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0), wide)
+    efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {})
+    low, high = ax.get_ylim()
+    assert high < 12.0 and low > -9.0, (low, high)
+    heads = {line.get_marker() for line in ax.lines if line.get_marker() in ("^", "v")}
+    assert heads == {"^", "v"}, heads
+    plt.close(fig)
+
+
+def few_kernel_arm(x: float, kernels: int) -> efficacy_figures.ArmPoint:
+    """An arm at ``log2`` speed-up ``x`` over ``kernels`` kernels whose interval runs 20 octaves wide."""
+    return efficacy_figures.ArmPoint(x, x - 10.0, x + 10.0, 1e5, 5e4, 2e5, kernels, 40, kernels, 40)
+
+
+def test_a_mark_from_fewer_than_five_kernels_draws_no_interval_and_does_not_stretch_the_axis() -> None:
+    """User, 2026-09-22: Qwen's GPU OpenMP control solved three kernels, its interval ran 0.19x to
+    302x and was the only one in the figure cut at both ends; below five kernels the mark stands alone."""
+    lines = {}
+    limits = {}
+    for kernels in (3, 5):
+        fig, ax = plt.subplots()
+        point = few_kernel_arm(2.0, kernels)
+        row = efficacy_figures.ArmRow("qwen38", "OpenMP Offload", "#1f77b4", point, point)
+        efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {}, config=efficacy_figures.PAPER_CONFIG)
+        lines[kernels] = len(ax.lines)
+        limits[kernels] = ax.get_ylim()
+        plt.close(fig)
+    assert lines[3] < lines[5], lines
+    assert limits[3][1] - limits[3][0] < limits[5][1] - limits[5][0], limits
+
+
+@pytest.mark.parametrize(
+    ("kernels", "want"),
+    [
+        pytest.param(3, True, id="three-kernels-needs-the-note"),
+        pytest.param(5, False, id="five-kernels-draws-its-interval"),
+        pytest.param(0, False, id="an-unmeasured-slot-is-not-a-few-kernel-mark"),
+    ],
+)
+def test_the_key_notes_a_missing_interval_only_when_a_few_kernel_mark_is_drawn(kernels: int, want: bool) -> None:
+    point = few_kernel_arm(1.0, kernels)
+    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", point, point)
+    assert efficacy_figures.few_kernel_marks([row], efficacy_figures.PAPER_CONFIG) is want

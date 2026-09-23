@@ -7,6 +7,7 @@ separate/stacked layout.
 
 import argparse
 import importlib.util
+import math
 import pathlib
 import sys
 import types
@@ -17,8 +18,13 @@ import pytest
 
 matplotlib.use("Agg")
 
+import matplotlib.figure
+import matplotlib.lines
 import matplotlib.pyplot as plt
+from matplotlib.collections import PathCollection
 
+from hpcagent_bench import experiment_tags
+from hpcagent_bench.stats import population, style
 from hpcagent_bench.stats.figures import per_kernel as pk
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -35,6 +41,16 @@ def load_script() -> types.ModuleType:
 
 
 plot = load_script()
+
+
+def speed_metric(cells: list[pk.KernelCell], color: str = "#1155cc") -> pk.Metric:
+    """A one-series speed-up panel, the shape ``statistics/plot_per_kernel.py`` builds."""
+    return pk.speedup_series_metric([pk.Series("", tuple(cells), color)], "Speed-Up")
+
+
+def token_metric(cells: list[pk.KernelCell], color: str = "#cc5511") -> pk.Metric:
+    """A one-series token panel, the shape ``statistics/plot_per_kernel.py`` builds."""
+    return pk.token_series_metric([pk.Series("", tuple(cells), color)], "Tokens")
 
 
 def episode(kernel: str, run: str, speedup: float, tokens: float) -> list[dict]:
@@ -102,7 +118,7 @@ def test_token_cells_keeps_every_episodes_own_total_not_the_kernel_sum() -> None
     ],
 )
 def test_speedup_tick_label_reads_a_log2_ratio_back_as_a_ratio(ratio: float, label: str) -> None:
-    assert pk.speedup_tick_label(ratio) == label
+    assert style.ratio_tick_label(ratio) == label
 
 
 def test_speedup_yticks_always_spans_at_least_a_quarter_to_four_x() -> None:
@@ -136,7 +152,7 @@ def test_box_style_draws_a_real_box_only_at_or_above_the_spread_floor(n: int, bo
     cell = pk.KernelCell("k1", tuple(float(i + 1) for i in range(n)))
     fig, ax = plt.subplots()
     try:
-        pk.draw_box(ax, [cell], {"k1": 0}, "#1155cc")
+        pk.draw_box(ax, pk.Series("", (cell,), "#1155cc"), {"k1": 0})
         assert (len(ax.patches) > 0) == boxed
     finally:
         plt.close(fig)
@@ -147,7 +163,7 @@ def test_ci_style_never_draws_a_box_patch() -> None:
     cell = pk.KernelCell("k1", (1.0, 2.0, 4.0, 8.0, 16.0))
     fig, ax = plt.subplots()
     try:
-        pk.draw_ci(ax, [cell], {"k1": 0}, "#1155cc", log2_space=True)
+        pk.draw_ci(ax, pk.Series("", (cell,), "#1155cc"), {"k1": 0}, log2_space=True)
         assert len(ax.patches) == 0
     finally:
         plt.close(fig)
@@ -179,25 +195,40 @@ def test_draw_panel_labels_the_summary_column_with_its_own_statistic() -> None:
     """The annotation above the summary marker names the statistic it draws (Geomean for
     speed-up, Median for tokens), so a reader is not left to assume it matches the per-kernel
     style."""
-    speed = pk.speedup_metric([pk.KernelCell("k1", (2.0,))], "Speed-Up", "#1155cc")
+    speed = speed_metric([pk.KernelCell("k1", (2.0,))])
     fig, ax = plt.subplots()
     try:
-        pk.draw_panel(
-            ax,
-            speed.series,
-            ["k1"],
-            "ci",
-            speed.log2_space,
-            speed.ylabel,
-            speed.summary_reducer,
-            speed.summary_label,
-            True,
-            True,
-        )
+        pk.draw_panel(ax, speed, ["k1"], "ci", True, True)
         labels = [text.get_text() for text in ax.texts]
     finally:
         plt.close(fig)
     assert "Geomean" in labels
+
+
+def test_a_figure_with_one_summary_statistic_names_it_as_a_horizontal_x_tick() -> None:
+    """User, 2026-09-22: "Geomean" belongs on the x axis under its column, read like a kernel name,
+    not floating above the frame."""
+    speed = speed_metric([pk.KernelCell("k1", (2.0,)), pk.KernelCell("k2", (4.0,))])
+    fig = pk.figure_one(speed, ["k1", "k2"], "ci", True, "")
+    try:
+        (ax,) = fig.axes
+        ticks = ax.get_xticklabels()
+        assert [tick.get_text() for tick in ticks][-1] == "Geomean"
+        assert ticks[-1].get_rotation() == 0.0
+        assert "Geomean" not in [text.get_text() for text in ax.texts]
+    finally:
+        plt.close(fig)
+
+
+def test_a_caller_spells_the_kernel_ticks() -> None:
+    """A text-width figure of forty kernels needs names shorter than the manifest's, and those are
+    the caller's to choose; the library's own spelling is only the default."""
+    speed = speed_metric([pk.KernelCell("tsvc_2_s115", (2.0,))])
+    fig = pk.figure_one(speed, ["tsvc_2_s115"], "ci", True, "", tick_label=lambda kernel: kernel.split("_")[-1])
+    try:
+        assert fig.axes[0].get_xticklabels()[0].get_text() == "s115"
+    finally:
+        plt.close(fig)
 
 
 def test_the_top_panel_of_a_stacked_figure_still_names_its_own_summary_statistic() -> None:
@@ -206,9 +237,9 @@ def test_the_top_panel_of_a_stacked_figure_still_names_its_own_summary_statistic
     TICK label would be silently overwritten by whichever panel's axis drew second, since a
     stacked figure's two axes share one set of tick labels (see draw_summary_column). The
     annotation above each panel's own marker is not shared, so both survive."""
-    speed = pk.speedup_metric([pk.KernelCell("k1", (2.0,))], "Speed-Up", "#1155cc")
-    tokens = pk.token_metric([pk.KernelCell("k1", (100.0,))], "Tokens", "#cc5511")
-    fig = pk.figure_stacked(speed, tokens, ["k1"], "ci", True, "demo")
+    speed = speed_metric([pk.KernelCell("k1", (2.0,))])
+    tokens = token_metric([pk.KernelCell("k1", (100.0,))])
+    fig = pk.figure_panels([speed, tokens], ["k1"], "ci", True, "demo")
     try:
         top_ax, bottom_ax = fig.axes
         top_texts = [text.get_text() for text in top_ax.texts]
@@ -227,12 +258,7 @@ def test_the_top_panel_of_a_stacked_figure_still_names_its_own_summary_statistic
 def build_metrics(frame: pd.DataFrame) -> tuple[pk.Metric, pk.Metric, list[pk.KernelCell], list[pk.KernelCell]]:
     speed_cells = pk.speedup_cells(frame)
     token_cells = pk.token_cells(frame)
-    return (
-        pk.speedup_metric(speed_cells, "Speed-Up", "#1155cc"),
-        pk.token_metric(token_cells, "Tokens", "#cc5511"),
-        speed_cells,
-        token_cells,
-    )
+    return speed_metric(speed_cells), token_metric(token_cells), speed_cells, token_cells
 
 
 def render_args(tmp_path: pathlib.Path, layout: str, style_: str = "ci", summary: bool = False) -> argparse.Namespace:
@@ -273,9 +299,9 @@ def test_stacked_layouts_two_panels_share_the_kernel_axis() -> None:
     kernels = pk.shared_kernel_order(speed_cells, token_cells)
     assert kernels == ["b", "a", "c"]  # speed-up's own order (b before a), then tokens-only "c"
 
-    speed = pk.speedup_metric(speed_cells, "Speed-Up", "#1155cc")
-    tokens = pk.token_metric(token_cells, "Tokens", "#cc5511")
-    fig = pk.figure_stacked(speed, tokens, kernels, "ci", False, "demo")
+    speed = speed_metric(speed_cells)
+    tokens = token_metric(token_cells)
+    fig = pk.figure_panels([speed, tokens], kernels, "ci", False, "demo")
     try:
         top_ax, bottom_ax = fig.axes
         assert top_ax.get_xlim() == bottom_ax.get_xlim()
@@ -290,7 +316,7 @@ def test_stacked_layouts_two_panels_share_the_kernel_axis() -> None:
 
 def test_a_rerun_writes_byte_identical_png_and_pdf(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     speed_cells = [pk.KernelCell("k1", (1.0, 2.0, 4.0)), pk.KernelCell("k2", (0.5,))]
-    speed = pk.speedup_metric(speed_cells, "Speed-Up", "#1155cc")
+    speed = speed_metric(speed_cells)
     for epoch, folder in (("0", "first"), ("86400", "second")):
         monkeypatch.setenv("SOURCE_DATE_EPOCH", epoch)
         fig = pk.figure_one(speed, pk.ordered_kernels(speed_cells), "box", True, "demo")
@@ -300,27 +326,28 @@ def test_a_rerun_writes_byte_identical_png_and_pdf(tmp_path: pathlib.Path, monke
         assert first.read_bytes() == second.read_bytes(), f"{name} depends on when it was saved"
 
 
-def test_the_speedup_panel_carries_a_major_grid_and_no_minor_one() -> None:
-    """Major grid only, on the measured axis. The ticks are pinned to powers of two here, so the
-    grid is drawn beside them rather than through ``value_axis``, which would relocate them."""
+def test_the_speedup_panel_carries_a_major_grid_and_a_minor_one_on_the_value_axis_only() -> None:
+    """The measured axis is ruled at the pinned powers of two and, lighter, at the shared minors
+    between them (user, 2026-09-22); the kernel axis carries names and no line at all."""
     fig, ax = plt.subplots()
     try:
         pk.style_speedup_axis(ax, [pk.KernelCell("k1", (1.0, 2.0))])
         assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
-        assert not [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
+        assert [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
         assert not [tick for tick in ax.xaxis.get_major_ticks() if tick.gridline.get_visible()]
+        assert not [tick for tick in ax.xaxis.get_minor_ticks() if tick.gridline.get_visible()]
     finally:
         plt.close(fig)
 
 
-def test_the_token_panel_puts_its_measured_value_on_a_log_y_axis_with_a_major_grid() -> None:
+def test_the_token_panel_puts_its_measured_value_on_a_log_y_axis_with_a_major_and_a_minor_grid() -> None:
     """A token count is a measured quantity, so it is on Y; the kernel names are the x categories."""
     fig, ax = plt.subplots()
     try:
-        pk.style_token_axis(ax)
+        pk.style_token_axis(ax, [pk.KernelCell("k1", (120.0,)), pk.KernelCell("k2", (90000.0,))])
         assert ax.get_yscale() == "log"
         assert any(line.get_visible() for line in ax.yaxis.get_gridlines())
-        assert not [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
+        assert [tick for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
     finally:
         plt.close(fig)
 
@@ -339,4 +366,358 @@ def test_the_token_panel_puts_its_measured_value_on_a_log_y_axis_with_a_major_gr
     ],
 )
 def test_a_ratio_below_one_prints_as_a_decimal(value: float, want: str) -> None:
-    assert pk.speedup_tick_label(value) == want
+    assert style.ratio_tick_label(value) == want
+
+
+# ---------------------------------------------------------------------------
+# The one per-kernel API every per-kernel figure draws through: cells, ticks, marks, summary, canvas.
+
+
+def answer_rows(kernel: str, run: str, ts_ms: int, speedup: float) -> dict[str, object]:
+    """One graded submission of one run, the columns ``population.kernel_answers`` reads."""
+    return {
+        "arm": "demo-arm", "benchmark": kernel, "run_root": run, "job": run, "run_id": run, "record": "submission",
+        "speedup": speedup, "baseline_ns": 1000.0, "native_ns": 1000.0 / speedup, "baseline": "numba",
+        "suspect": 0, "ts_ms": ts_ms, "attempt_index": 1, "timing_reduction": "mwd-v2",
+    }  # fmt: skip
+
+
+def test_answer_cells_takes_a_rerun_kernels_latest_run_not_its_first() -> None:
+    """A rerun supersedes the run it replaced: a stale first answer drawn beside the rerun's would
+    credit the arm with a result its latest run did not deliver."""
+    frame = pd.DataFrame([answer_rows("k1", "first", 10, 8.0), answer_rows("k1", "rerun", 30, 2.0)])
+    assert [(cell.kernel, cell.episodes) for cell in pk.answer_cells(frame)] == [("k1", (2.0,))]
+
+
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        pytest.param(1.1, 1.8, id="narrow"),
+        pytest.param(0.1, 20.0, id="eight-octaves"),
+        pytest.param(1.0 / 64.0, 1024.0, id="sixteen-octaves"),
+        pytest.param(2.0, 4096.0, id="wins-only"),
+    ],
+)
+def test_speedup_yticks_stay_within_the_tick_budget_and_always_carry_1x(low: float, high: float) -> None:
+    """Twelve octaves labelled one by one printed on top of each other; and the 1x line is the
+    reference every other tick is read against, so thinning must never drop it."""
+    ticks = pk.speedup_yticks([pk.KernelCell("a", (low,)), pk.KernelCell("b", (high,))])
+    assert len(ticks) <= pk.MAX_SPEEDUP_TICKS, ticks
+    assert 1.0 in ticks, ticks
+    assert ticks[0] <= low and ticks[-1] >= high, ticks
+
+
+def test_kernel_medians_leave_out_undelivered_pending_and_flagged_cells() -> None:
+    """A placeholder's 1x, a kernel not run yet and a disowned claim are drawn but are not measured
+    values; entering any of them would move the summary by attrition or by the exploit."""
+    cells = [
+        pk.KernelCell("solved", (4.0,)),
+        pk.KernelCell("unanswered", (1.0,), delivered=False),
+        pk.KernelCell("waiting", (1.0,), delivered=False, pending=True),
+        pk.KernelCell("exploited", (1007.0,), flagged=True),
+    ]
+    assert list(pk.kernel_medians(cells)) == [4.0]
+
+
+def test_kernel_cells_fill_a_missing_speedup_at_the_placeholder_and_drop_a_missing_cost() -> None:
+    """A kernel with no verified answer still happened (1x, crossed); a kernel with no token total
+    is no measurement, and a mark at the axis edge would read as the smallest spend."""
+    speed = pk.kernel_cells({"k1": 3.0}, ["k1", "k2"])
+    tokens = pk.kernel_cells({"k1": 900.0}, ["k1", "k2"], fill=False)
+    assert [(c.kernel, c.episodes, c.delivered) for c in speed] == [
+        ("k1", (3.0,), True),
+        ("k2", (population.NOT_DELIVERED,), False),
+    ]
+    assert [c.kernel for c in tokens] == ["k1"]
+
+
+def test_kernel_cells_keep_a_present_placeholders_own_value_and_flag() -> None:
+    """A ratio one side of which never delivered is a number but not a measurement: it keeps its
+    value (the cross goes where the ratio is) and never counts as delivered."""
+    (cell,) = pk.kernel_cells({"k1": 4.0}, ["k1"], delivered={"k1": False})
+    assert cell.episodes == (4.0,) and not cell.delivered
+
+
+@pytest.mark.parametrize(
+    "low, high, want",
+    [
+        pytest.param(90.0, 120.0, (90.0, 120.0), id="a-real-range"),
+        pytest.param(100.0, 100.0, None, id="one-task-no-range"),
+        pytest.param(math.nan, 120.0, None, id="half-a-range"),
+    ],
+)
+def test_kernel_cells_carry_an_interval_only_when_it_has_width(
+    low: float, high: float, want: tuple[float, float] | None
+) -> None:
+    (cell,) = pk.kernel_cells({"k1": 100.0}, ["k1"], fill=False, low={"k1": low}, high={"k1": high})
+    assert cell.interval == want
+
+
+def test_kernel_cells_turn_a_pending_kernel_into_a_pending_placeholder_whatever_its_value() -> None:
+    """A kernel not attempted yet must not read as a failure, nor as whatever stale value a map
+    still holds for it."""
+    (cell,) = pk.kernel_cells({"k1": 5.0}, ["k1"], pending=frozenset({"k1"}))
+    assert cell.pending and not cell.delivered and cell.episodes == (population.NOT_DELIVERED,)
+
+
+def test_an_undelivered_cell_draws_hollow_and_crossed_at_its_own_value() -> None:
+    """The cross is what separates a placeholder from a measured value at the same height; it goes
+    on the cell's own value, which for a one-sided ratio is not 1x."""
+    fig, ax = plt.subplots()
+    try:
+        pk.draw_ci(ax, pk.Series("", (pk.KernelCell("k1", (4.0,), delivered=False),), "#1155cc"), {"k1": 0}, True)
+        at = [c for c in ax.collections if isinstance(c, PathCollection) and list(c.get_offsets()[0]) == [0.0, 4.0]]
+    finally:
+        plt.close(fig)
+    assert len(at) == 3, at  # the white halo, the hollow mark, the cross
+    assert any(len(c.get_facecolors()) == 0 for c in at)
+
+
+@pytest.mark.parametrize(
+    "count, want",
+    [
+        pytest.param(0, [], id="no-series-no-offset"),
+        pytest.param(1, [0.0], id="one-series-on-the-column"),
+        pytest.param(3, [-0.31, 0.0, 0.31], id="three-over-the-span"),
+    ],
+)
+def test_dodge_offsets_centre_the_series_on_their_column(count: int, want: list[float]) -> None:
+    assert pk.dodge_offsets(count) == pytest.approx(want)
+
+
+def test_dodge_offsets_with_no_span_stack_every_series_on_the_column() -> None:
+    """``--offset 0`` on the compiler figure: optimizers differ by shape, all at the kernel's x."""
+    assert pk.dodge_offsets(4, 0.0) == [0.0, 0.0, 0.0, 0.0]
+
+
+def test_mark_size_shrinks_with_crowding_down_to_its_floor() -> None:
+    """A crowded column shrinks its marks rather than merging them, never below the size at which
+    the undelivered cross still reads."""
+    roomy = pk.mark_size(0.3, 2)
+    crowded = pk.mark_size(0.3, 12)
+    assert roomy == pytest.approx(pk.MARK_PT**2)
+    assert crowded < roomy
+    assert pk.mark_size(0.01, 40) == pytest.approx(pk.MIN_MARK_PT**2)
+
+
+def test_an_undodged_mark_is_sized_to_the_column_not_to_a_zero_gap() -> None:
+    """Stacked series are one column apart from their neighbours, not zero: a zero gap would floor
+    every mark on the compiler figure."""
+    assert pk.mark_size(0.3, 6, span=0.0) == pytest.approx(pk.MARK_PT**2)
+
+
+def test_status_handles_key_only_the_status_marks_a_figure_draws() -> None:
+    """An entry for a mark that is not on the figure is one more thing to read and find nowhere."""
+    solved = speed_metric([pk.KernelCell("k1", (2.0,))])
+    failed = speed_metric([pk.KernelCell("k1", (1.0,), delivered=False)])
+    waiting = speed_metric([pk.KernelCell("k1", (1.0,), delivered=False, pending=True)])
+    assert pk.status_handles([solved]) == []
+    assert [h.get_label() for h in pk.status_handles([failed])] == [style.NOT_DELIVERED_LABEL]
+    assert [h.get_label() for h in pk.status_handles([waiting])] == [style.PENDING_LABEL]
+
+
+def test_the_undelivered_key_entry_shows_the_cross() -> None:
+    """Hollow is this repo's spelling for a control, so a key showing only the hollow shape names
+    the wrong thing; the cross is what separates a placeholder from a measurement."""
+    (handle,) = pk.status_handles([speed_metric([pk.KernelCell("k1", (1.0,), delivered=False)])])
+    assert handle.get_marker() == "x"
+
+
+def three_series_metric() -> pk.Metric:
+    return pk.speedup_series_metric(
+        [
+            pk.Series("a", (pk.KernelCell("k1", (2.0,)), pk.KernelCell("k2", (4.0,))), "#1155cc"),
+            pk.Series("b", (pk.KernelCell("k1", (3.0,)), pk.KernelCell("k2", (1.0,), delivered=False)), "#cc5511"),
+            pk.Series("c", (pk.KernelCell("k1", (0.5,)),), "#11cc55", "^"),
+        ],
+        "Speed-Up",
+    )
+
+
+def test_every_series_gets_one_summary_slot_and_one_settled_value_label() -> None:
+    """Summaries that agree to a few percent, drawn in one column, hid all but the top mark; and the
+    value a caption quotes has to be on the figure, tagged so it settles clear of the marks."""
+    fig = pk.figure_one(three_series_metric(), ["k1", "k2"], "ci", True, "")
+    try:
+        (ax,) = fig.axes
+        separator = pk.summary_separator_x(2)
+        slots = sorted(
+            {round(float(x), 6) for c in ax.collections if isinstance(c, PathCollection) for x in c.get_offsets()[:, 0]
+             if x > separator}
+        )  # fmt: skip
+        labels = [t for t in ax.texts if t.get_gid() == style.CLEAR_GID]
+    finally:
+        plt.close(fig)
+    assert slots == [round(pk.summary_slot_x(2, slot), 6) for slot in range(3)], slots
+    assert len(labels) == 3, [t.get_text() for t in labels]
+
+
+def test_a_summary_value_label_prints_the_geomean_over_solved_kernels_only() -> None:
+    """Series b solved k1 at 3x and failed k2: its printed value is 3x, not the geomean with the
+    placeholder's 1x (1.7x)."""
+    fig = pk.figure_one(three_series_metric(), ["k1", "k2"], "ci", True, "")
+    try:
+        texts = [t.get_text() for t in fig.axes[0].texts if t.get_gid() == style.CLEAR_GID]
+    finally:
+        plt.close(fig)
+    assert texts == [style.ratio_label(8.0**0.5), style.ratio_label(3.0), style.ratio_label(0.5)], texts
+
+
+def test_kernel_tick_label_prints_the_manifest_short_name() -> None:
+    assert pk.kernel_tick_label("argmax_with_index") == experiment_tags.kernel_short_display_name("argmax_with_index")
+    assert pk.kernel_tick_label("argmax_with_index") != experiment_tags.kernel_display_name("argmax_with_index")
+
+
+@pytest.mark.parametrize(
+    "kernel",
+    [
+        pytest.param("conv2d_group_norm_tanh_hardswish_residual_add_logsumexp", id="hyphenated"),
+        pytest.param("quasi_affine_floor_div_scatter", id="spaced"),
+    ],
+)
+def test_kernel_tick_label_folds_a_long_fallback_name_without_dropping_a_character(kernel: str) -> None:
+    """A kernel with no short name falls back to its full name; unfolded, one long rotated name
+    deepens the whole band, and cut ("2-D Jacobi stencil..") it no longer names one kernel."""
+    name = experiment_tags.kernel_display_name(kernel)
+    assert len(name) > experiment_tags.SHORT_NAME_MAX
+    lines = pk.kernel_tick_label(kernel).split("\n")
+    assert len(lines) > 1, lines
+    assert "".join(lines).replace(" ", "") == name.replace(" ", ""), lines
+    assert all(len(line) <= experiment_tags.SHORT_NAME_MAX or " " not in line for line in lines), lines
+
+
+def ink_box_in(fig: matplotlib.figure.Figure, artists: list) -> list:
+    renderer = fig.canvas.get_renderer()
+    return [a.get_window_extent(renderer).transformed(fig.dpi_scale_trans.inverted()) for a in artists]
+
+
+def test_a_key_grows_the_canvas_and_never_overprints_the_kernel_names() -> None:
+    """The key's band is measured and added under the names: a fixed band put a long rotated name
+    straight through the key on a narrow page, and a band too short pushed both off the canvas."""
+    kernels = [f"k{i}" for i in range(12)]
+    metric = speed_metric([pk.KernelCell(k, (2.0,)) for k in kernels])
+    key = [matplotlib.lines.Line2D([], [], marker="o", linestyle="none", label=f"series {i}") for i in range(9)]
+    bare = pk.figure_one(metric, kernels, "ci", False, "", width_in=3.3)
+    keyed = pk.figure_one(metric, kernels, "ci", False, "", width_in=3.3, legend=key)
+    try:
+        assert keyed.get_size_inches()[1] > bare.get_size_inches()[1]
+        keyed.canvas.draw()
+        names = ink_box_in(keyed, [t for t in keyed.axes[0].get_xticklabels() if t.get_text()])
+        (legend,) = ink_box_in(keyed, list(keyed.legends))
+        width = float(keyed.get_size_inches()[0])
+    finally:
+        plt.close(bare)
+        plt.close(keyed)
+    assert min(box.y0 for box in names) >= legend.y1, (min(box.y0 for box in names), legend.y1)
+    assert legend.y0 >= 0.0 and all(0.0 <= box.x0 and box.x1 <= width for box in names)
+
+
+def test_every_panel_of_a_stack_ends_where_the_widest_summary_does() -> None:
+    """A panel with fewer series (a compiler column spends no tokens) must not end short of the one
+    above it, or the shared axis clips the upper panel's last summary slot."""
+    speed = three_series_metric()
+    tokens = pk.token_series_metric([pk.Series("a", (pk.KernelCell("k1", (100.0,)),), "#1155cc")], "Tokens")
+    fig = pk.figure_panels([speed, tokens], ["k1", "k2"], "ci", True, "")
+    try:
+        top, bottom = fig.axes
+        assert top.get_xlim() == bottom.get_xlim()
+        assert top.get_xlim()[1] > pk.summary_slot_x(2, 2)
+    finally:
+        plt.close(fig)
+
+
+def test_a_stated_pitch_sizes_the_canvas_to_the_kernel_axis() -> None:
+    """A standalone render asks for room per kernel; the canvas grows to it instead of squeezing
+    forty names into a page width."""
+    kernels = [f"k{i}" for i in range(40)]
+    metric = speed_metric([pk.KernelCell(k, (2.0,)) for k in kernels])
+    fig = pk.figure_panels([metric], kernels, "ci", True, "", pitch_in=0.3)
+    try:
+        assert pk.column_pitch_in(fig.axes[0]) == pytest.approx(0.3)
+    finally:
+        plt.close(fig)
+
+
+def test_the_speedup_axis_is_pinned_just_past_its_outermost_ticks() -> None:
+    """The limits come from the cells, not from autoscaling, so the chrome is measured before any
+    mark is drawn and a position means the same ratio wherever the figure is read."""
+    fig, ax = plt.subplots()
+    try:
+        cells = [pk.KernelCell("k1", (0.3,)), pk.KernelCell("k2", (40.0,))]
+        pk.style_speedup_axis(ax, cells)
+        ticks = pk.speedup_yticks(cells)
+        low, high = ax.get_ylim()
+    finally:
+        plt.close(fig)
+    assert low == pytest.approx(ticks[0] / 2.0**pk.VALUE_PAD_OCTAVES)
+    assert high == pytest.approx(ticks[-1] * 2.0**pk.VALUE_PAD_OCTAVES)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        pytest.param((120.0,), id="one-value"),
+        pytest.param((100.0, 110.0), id="a-narrow-window"),
+        pytest.param((15_000.0, 150_000.0), id="one-decade"),
+        pytest.param((100.0, 900_000.0), id="four-decades"),
+    ],
+)
+def test_token_limits_hold_every_value_and_at_least_two_labelled_ticks(values: tuple[float, ...]) -> None:
+    """The token axis is pinned before any mark is drawn, so its limits have to hold every value;
+    and a window labelling one tick (or none) leaves nothing to read a value against."""
+    low, high = pk.token_limits([pk.KernelCell(f"k{i}", (v,)) for i, v in enumerate(values)])
+    assert low < min(values) and max(values) < high, (low, high)
+    assert len(pk.grid_125(low, high)) >= 2, (low, high)
+
+
+def test_a_wide_interval_never_stretches_the_value_axis() -> None:
+    """A two-repeat t-interval can span thirty octaves; pinning the axis to its ends printed ticks
+    like 4.29497e+09x and flattened every mark onto one line. The whisker is cut by the frame."""
+    wide = pk.KernelCell("k1", (4.0,), interval=(1e-6, 1e9))
+    assert pk.speedup_yticks([wide]) == pk.speedup_yticks([pk.KernelCell("k1", (4.0,))])
+
+
+def test_a_y_label_taller_than_its_panel_is_fitted_to_the_panel() -> None:
+    """A rotated label taller than its panel runs past both ends of the frame, and in a stack the
+    two panels' labels printed over each other in the gap."""
+    long = "Speed-Up Ratio (Repository Formulation / Bare Kernel)"
+    metric = pk.speedup_series_metric([pk.Series("", (pk.KernelCell("k1", (2.0,)),), "#1155cc")], long)
+    fig = pk.figure_panels([metric, metric], ["k1"], "ci", True, "")
+    try:
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        heights = [ax.yaxis.label.get_window_extent(renderer).height / fig.dpi for ax in fig.axes]
+        words = [" ".join(ax.get_ylabel().split()) for ax in fig.axes]
+    finally:
+        plt.close(fig)
+    assert all(height <= pk.PANEL_HEIGHT_IN for height in heights), heights
+    assert words == [long, long]
+
+
+def test_a_print_size_figure_gets_the_short_print_panel() -> None:
+    """User, 2026-09-22: a paper figure of forty kernels is a strip 30% shorter than the authored
+    panel, and the height is the library's to set, not each caller's."""
+    speed = speed_metric([pk.KernelCell("k1", (2.0,))])
+    fig = pk.figure_one(speed, ["k1"], "ci", True, "", width_in=5.5)
+    try:
+        height = fig.axes[0].get_position().height * fig.get_size_inches()[1]
+        assert height == pytest.approx(pk.PRINT_PANEL_HEIGHT_IN, abs=1e-3)
+    finally:
+        plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    ("kernel", "want"),
+    [
+        pytest.param("tsvc_2_s2710", "s2710", id="suite-prefix-dropped"),
+        pytest.param("ext_war_unit", "WAR Unit", id="table-abbreviation"),
+    ],
+)
+def test_a_print_size_tick_is_the_compact_kernel_name(kernel: str, want: str) -> None:
+    """Forty rotated names under a text-width strip: the band is as deep as the longest, so every
+    tick spends at most ten characters on the loop itself."""
+    assert pk.compact_tick_label(kernel) == want
+
+
+def test_every_compact_name_fits_the_compact_limit() -> None:
+    assert all(len(name) <= experiment_tags.COMPACT_NAME_MAX for name in experiment_tags.COMPACT_NAMES.values())

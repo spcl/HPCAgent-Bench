@@ -191,26 +191,19 @@ def test_an_arm_that_records_an_experiment_records_the_whole_tuple() -> None:
     assert not partial, "half-stamped arm envs:\n  " + "\n  ".join(partial)
 
 
-def test_a_kernel_axis_ticks_carry_the_manifest_name_and_fall_back_to_the_identifier() -> None:
-    """The kernel axis draws the manifest's ``name``, never the folder stem: "heat_3d" is what a
+def test_a_kernel_tick_carries_the_manifest_name_and_falls_back_to_the_identifier() -> None:
+    """A kernel tick draws the manifest's (short) name, never the folder stem: "heat_3d" is what a
     results row joins on and "Heat-3D" is what a reader can expand. An identifier no manifest
     claims still gets a tick -- a campaign that adds a kernel must not break a figure."""
-    import matplotlib.pyplot as plt
+    from hpcagent_bench.stats.figures import per_kernel
 
-    from hpcagent_bench.stats.figures import kernel_comparison
-
-    fig, ax = plt.subplots()
-    try:
-        kernel_comparison.kernel_axis(ax, ["heat_3d", "addusxx_g", "kernel_nobody_declared"], True)
-        drawn = [label.get_text() for label in ax.get_xticklabels()]
-    finally:
-        plt.close(fig)
-    assert drawn == [
-        experiment_tags.kernel_names()["heat_3d"],
-        experiment_tags.kernel_names()["addusxx_g"],
-        "kernel_nobody_declared",
-    ]
-    assert drawn[0] != "heat_3d" and drawn[1] != "addusxx_g"
+    drawn = {
+        kernel: per_kernel.kernel_tick_label(kernel) for kernel in ("heat_3d", "addusxx_g", "kernel_nobody_declared")
+    }
+    # A name longer than the short-name limit folds onto a second line; the words are unchanged.
+    assert drawn["heat_3d"] == experiment_tags.kernel_short_display_name("heat_3d") != "heat_3d"
+    assert drawn["addusxx_g"].replace("\n", " ") == experiment_tags.kernel_short_display_name("addusxx_g")
+    assert drawn["kernel_nobody_declared"].replace("\n", "") == "kernel_nobody_declared"
 
 
 def test_no_two_benchmarks_share_a_display_name() -> None:

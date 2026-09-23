@@ -8,7 +8,6 @@ kernel at 1x, a compiler's label says which device it ran on, and the numbers be
 ship beside the figure.
 """
 
-import math
 import pathlib
 
 import matplotlib
@@ -19,7 +18,7 @@ import pandas as pd
 import pytest
 
 from hpcagent_bench.stats import population, style
-from hpcagent_bench.stats.figures import kernel_comparison, optimizers, signed
+from hpcagent_bench.stats.figures import optimizers, signed
 
 ROSTER: tuple[str, ...] = ("k1", "k2", "k3")
 
@@ -130,20 +129,7 @@ def test_one_device_variant_keeps_its_optimizer_name(canon: pd.DataFrame) -> Non
 def test_a_speedup_value_is_printed_to_one_decimal(value: float, want: str) -> None:
     """One decimal is what a reader quotes; below 0.1x one decimal would print a real slowdown as
     0.0x, so those keep a significant figure."""
-    assert kernel_comparison.speedup_value_text(value) == want
-
-
-def test_spread_positions_leaves_a_clear_set_untouched() -> None:
-    """A label that already has room must not move."""
-    assert style.spread_positions([0.0, 20.0, 40.0], 6.5) == [0.0, 20.0, 40.0]
-
-
-def test_spread_positions_opens_a_crowded_pair_around_where_it_was() -> None:
-    """Two geomeans a few percent apart printed their numbers through each other. After spreading
-    they are a full gap apart, still in input order, and centred on the same mean."""
-    out = style.spread_positions([10.0, 9.0], 6.5)
-    assert out[0] - out[1] == pytest.approx(6.5)
-    assert sum(out) / 2 == pytest.approx(9.5)
+    assert style.ratio_label(value) == want
 
 
 def test_an_undelivered_placeholder_is_drawn_hollow() -> None:
@@ -158,16 +144,59 @@ def test_an_undelivered_placeholder_is_drawn_hollow() -> None:
         plt.close(fig)
 
 
-def test_spread_labels_are_settled_at_save_time(tmp_path: pathlib.Path) -> None:
-    """Close geomean labels on one axes end up at least a gap apart on the saved page."""
-    fig, ax = plt.subplots(figsize=(3, 2))
-    ax.set_ylim(0.0, 10.0)
-    for y in (5.0, 5.05):
-        ax.annotate("x", (0.5, y), xytext=(5, 0), textcoords="offset points", gid=style.SPREAD_GID)
-    style.settle_spread_labels(fig)
-    offsets = sorted(a.xyann[1] for a in ax.texts)
-    points_per_pixel = 72.0 / fig.dpi
-    heights = [ax.transData.transform((0.5, y))[1] * points_per_pixel for y in (5.0, 5.05)]
-    assert abs((heights[1] + offsets[1]) - (heights[0] + offsets[0])) >= style.SPREAD_GAP_PT - 1e-6
-    assert not math.isnan(offsets[0])
+def optimizer_mark(key: str, ratio: float) -> optimizers.OptimizerMark:
+    """A one-kernel mark at ``ratio``, for tests that only care about the axis it forces."""
+    return optimizers.OptimizerMark(key, key, key, "#009e73", "o", {"k1": ratio}, {"k1": True})
+
+
+def captured_optimizer_row(monkeypatch: pytest.MonkeyPatch, panels: list, tmp_path: pathlib.Path) -> plt.Figure:
+    """``figure_optimizer_row`` with the write intercepted, so a test can measure the canvas
+    :func:`~hpcagent_bench.stats.figures.optimizers.figure_optimizer_row` actually built instead of
+    the file it would have written."""
+    captured: list[plt.Figure] = []
+
+    def fake_save(fig: plt.Figure, stem: pathlib.Path, formats: tuple = ("pdf", "png"), fixed: bool = False):
+        del formats, fixed
+        captured.append(fig)
+        return stem
+
+    monkeypatch.setattr(optimizers.style, "save", fake_save)
+    optimizers.figure_optimizer_row(panels, tmp_path / "row.pdf")
+    return captured[0]
+
+
+def test_a_wide_ranging_axis_widens_the_left_margin_instead_of_clipping_its_ticks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """The left margin used to be ``config.left_chrome_in``, one fixed inch regardless of what the
+    shared log2 axis ended up ticked in. A geomean near 1x prints short ticks ("1x", "2x"); one
+    fourteen octaves down prints "0.0000610x" -- the margin has to grow to hold it or the number
+    prints outside the canvas."""
+    narrow = optimizers.OptimizerPanel("T", "Numba", (optimizer_mark("m", 1.02),))
+    wide = optimizers.OptimizerPanel("T", "Numba", (optimizer_mark("m", 2.0**-14),))
+    narrow_fig = captured_optimizer_row(monkeypatch, [narrow], tmp_path)
+    narrow_left = narrow_fig.axes[0].get_position().x0 * narrow_fig.get_size_inches()[0]
+    plt.close(narrow_fig)
+    wide_fig = captured_optimizer_row(monkeypatch, [wide], tmp_path)
+    wide_left = wide_fig.axes[0].get_position().x0 * wide_fig.get_size_inches()[0]
+    plt.close(wide_fig)
+    assert wide_left > narrow_left, (narrow_left, wide_left)
+
+
+def test_the_legend_never_overlaps_a_panels_tick_names(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    """The legend used to hang below the canvas edge inside a fixed ``AXIS_BAND_IN`` band; a panel
+    with several optimizers and a long baseline name could overrun it and print the key through the
+    "1x = baseline" tick row instead of under it."""
+    panel = optimizers.OptimizerPanel(
+        "A Long Panel Subtitle", "A Rather Long Baseline Name For The 1x Note",
+        tuple(optimizer_mark(f"m{i}", 1.0 + 0.1 * i) for i in range(5)),
+    )  # fmt: skip
+    fig = captured_optimizer_row(monkeypatch, [panel, panel], tmp_path)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    legend_box = fig.legends[0].get_window_extent(renderer)
+    for ax in fig.axes:
+        for label in ax.get_xticklabels():
+            if label.get_text():
+                assert not legend_box.overlaps(label.get_window_extent(renderer))
     plt.close(fig)

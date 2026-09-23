@@ -53,6 +53,7 @@ import numpy as np
 import pandas as pd
 
 from hpcagent_bench.stats import palette
+from hpcagent_bench.stats.figures import per_kernel
 from hpcagent_bench.stats.summary import drop_outliers, signed_change
 from hpcagent_bench.stats import rules
 from hpcagent_bench.stats import style
@@ -309,17 +310,14 @@ def band_limits(band: str, changes: Sequence[float]) -> Tuple[float, float]:
     return bottom, top
 
 
-def dodge_offsets(count: int, slot: float = 0.8) -> List[float]:
-    """Per-framework x offsets around a kernel's tick, so N boxes share one column without overlap.
+def box_span(count: int, slot: float = 0.8) -> float:
+    """The centre-to-centre span that lets ``count`` boxes of width ``slot / count`` tile ``slot``
+    of a kernel's unit spacing, for :func:`hpcagent_bench.stats.figures.per_kernel.dodge_offsets`.
 
-    Centred on the tick: with one framework the offset is 0 and the box sits ON its kernel, which is
-    where the marker figure puts it. ``slot`` is the fraction of the unit spacing the whole group
-    may occupy, leaving a gutter so neighbouring kernels' groups stay visually separate.
+    ``slot`` leaves a gutter so neighbouring kernels' groups stay visually separate; one framework
+    gets no span, so its box sits ON its kernel, which is where the marker figure puts it.
     """
-    if count <= 1:
-        return [0.0]
-    width = slot / count
-    return [(i - (count - 1) / 2.0) * width for i in range(count)]
+    return slot - slot / max(count, 1)
 
 
 def draw_boxes(ax, points: Sequence[Point], x_of: Dict[str, int], colors: Dict[str, str]) -> List[Point]:
@@ -331,7 +329,7 @@ def draw_boxes(ax, points: Sequence[Point], x_of: Dict[str, int], colors: Dict[s
     figure's population, and drawing them as boxes would show quartiles nobody measured.
     """
     frameworks = sorted({point.framework for point in points})
-    offsets = dict(zip(frameworks, dodge_offsets(len(frameworks))))
+    offsets = dict(zip(frameworks, per_kernel.dodge_offsets(len(frameworks), box_span(len(frameworks)))))
     width = 0.8 / max(len(frameworks), 1)
     unboxed: List[Point] = []
     for framework in frameworks:
@@ -711,7 +709,7 @@ def square_figure(points: Sequence[Point], output: str, cells: int = SQUARE_CELL
     if not kernels:
         raise RuntimeError("the square figure needs at least one kernel with a cell for every framework")
     colors = framework_colors(points)
-    offsets = dict(zip(frameworks, dodge_offsets(len(frameworks), slot=0.78)))
+    offsets = dict(zip(frameworks, per_kernel.dodge_offsets(len(frameworks), box_span(len(frameworks), slot=0.78))))
     width = 0.78 / len(frameworks)
     x_of = {kernel: i for i, kernel in enumerate(kernels)}
     style.apply()

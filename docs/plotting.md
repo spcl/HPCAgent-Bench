@@ -4,10 +4,10 @@ Set by the user on 2026-09-16. Every figure in the HPCAgent-Bench, agentbench an
 a figure that does not is wrong, and the drawing agent returns a self-check table against these items.
 
 1. API: every figure is drawn by a function in `hpcagent_bench.stats` (`figures.signed`, `figures.efficacy`,
-   `figures.kernel_comparison`, `summary`, `palette`, `style`); `statistics/plot_*.py` only parse arguments. A
+   `figures.per_kernel`, `summary`, `palette`, `style`); `statistics/plot_*.py` only parse arguments. A
    missing capability is added to the library, never worked around in a script or a paper repository.
 2. Speed-up axis = log2 of the speed-up (`summary.log2_change`): 2x at +1, 0.5x at -1, 0 = no change, ticks
-   labeled back in ratios (1/4x .. 16x). Never `signed_change` (ratio - 1) and never a bare ratio axis.
+   labeled back in ratios (0.25x .. 16x). Never `signed_change` (ratio - 1) and never a bare ratio axis.
 3. Statistics follow Hoefler and Belli (SC15) as `hpcagent_bench.stats.rules` encodes them: paired per kernel,
    the GEOMEAN of per-kernel ratios with the log-space t 95% interval (`summary.geomean_ci`) for speed-up AND
    cost; every series is a scatter of its per-kernel values plus that summary as an error bar; nothing is joined
@@ -20,15 +20,20 @@ a figure that does not is wrong, and the drawing agent returns a self-check tabl
    one mark per arm; n comparisons = one row of n square panels (up to 3). The agentbench paper's row is
    kernel formulation | language skill packet | three languages.
 6. Per-kernel figure (MPR/CPF) = wide, two rows sharing the kernel axis: log2 speed-up per kernel with its
-   interval on top, tokens per kernel as a scatter below; the GEOMEAN over all kernels with its interval at the
-   rightmost column of each row; the tokens row is omitted when no series carries tokens; the hollow cross
-   marks only a missing value and is excluded from the summary.
+   interval on top, tokens per kernel as a scatter below; past a dashed separator one summary slot per series
+   on each row (2026-09-21: speed-up = geomean with its interval over the SOLVED kernels, tokens = median over
+   the served kernels); the tokens row is omitted when no series carries tokens; the hollow cross marks only a
+   missing value and is excluded from the summary.
 7. Sizing for A4/letter papers: a 3-square row or a 2-long-row figure spans the full text width, a single
    square one column; physical inches come from the paper template (`style` constants), never from
    `\includegraphics` scaling. One shared legend per figure, deduplicated across panels, naming the interval
    method and n and the undelivered cross.
 8. Deliverable = the 150 dpi PNG beside the PDF, the exact CLI, and the CSV beside the figure. A bad figure
    is saved and shown to the user with bad-vs-good, then asked about; it is never silently redrawn.
+9. (2026-09-22) Every log value axis, every linear axis in log2 units and the tasks-completed count row
+   carry unlabelled minor ticks and a faint minor grid under the labelled majors (`style.minor_ticks`). A
+   linear axis whose units the caller does not name, and every category axis, carry none. A count over a fixed roster (tasks completed) is
+   a census, not a sample: it is drawn as a mark at the count with no interval.
 
 # Plotting
 
@@ -138,7 +143,7 @@ for model in models:
 ax.set_ylabel("Median Tokens per Task")          # Title Case
 plotstyle.value_axis(ax, "y", log_base=10.0)     # ticks + grid on the MEASURED axis only
 plotstyle.despine(ax)
-fig.subplots_adjust(left=0.17, right=0.975, top=0.855, bottom=0.30)
+fig.subplots_adjust(left=0.17, right=0.975, top=0.855, bottom=0.30)  # a paper figure measures these: Layout
 plotstyle.legend_below(fig, ax.get_legend_handles_labels()[0], y=0.02)
 plotstyle.title(fig, experiment_tags.display_name("llr40v11"))
 fig.savefig("out.pdf", bbox_inches=fig.bbox_inches)
@@ -153,7 +158,7 @@ one fails when it does.
 speed-up geomean as `log2(ratio)` (`summary.log2_change` of `summary.geomean_ci`): 0 is no change,
 +1 is 2x faster, -1 is 2x slower, +2 is 4x -- a LINEAR scale in the exponent, so a 74x kernel does
 not drag a modest win halfway across the panel, with the ticks read back in ratios
-(`hpcagent_bench.stats.figures.per_kernel.speedup_tick_label`) exactly like every other speed-up
+(`hpcagent_bench.stats.style.ratio_tick_label`) exactly like every other speed-up
 axis here -- never a bare ratio axis ticked in raw ratios. Y is the paired token-cost geomean,
 treated over control, ALSO a `geomean_ci` interval, on its own log scale (SC15 Rule 4: a speed-up
 and a spend are different measurements and never share one). ONE mark per arm, crossed with its 95%
@@ -196,11 +201,23 @@ same panel, whichever way its pairs were formed -- see "A comparison whose pairs
 suffix" below. Pinned by `tests/test_plot_score_change.py`'s
 `test_n_comparisons_draw_one_row_of_n_square_panels`.
 
-**4. Major grid only.** `style.value_axis` draws it, on both axes here (each carries a measured
-ratio), and switches every minor line and minor label off. A minor line is a second grid at a second
-weight, and once a figure is reduced for print the panel reads as a texture the marks sit on rather
-than a reference they sit against. Pinned by `tests/test_plot_score_change.py`'s
-`test_neither_axis_enables_a_minor_grid`.
+**4. A major grid plus a faint minor ruling (user, 2026-09-22).** `style.value_axis` draws the
+major grid on the measured axis, and on a log axis `style.minor_ticks` adds unlabelled minor ticks
+(0.55x the major's length, 0.6x its width) and a minor grid in `style.MINOR_RULE` at
+`style.MINOR_GRID_WIDTH`, under everything. One rule per axis kind, read off the majors actually set
+(`style.MinorLocator`, so a later limit or major change stays right):
+
+| kind | majors | minors |
+|---|---|---|
+| `ratio` (log2 axis) / `log2` (linear axis in log2 units) | one octave apart (1x, 2x, 4x) | 1.25, 1.5, 1.75 x each major (between 4x and 8x: 5x, 6x, 7x) |
+| same | k > 1 octaves apart (1x, 4x, 16x) | every octave between (2x, 8x) |
+| `token` (log10) | 1-2-5 or the config's subs | every whole multiple 1..9 x 10^k that is not a major (300K, 400K, 600K ... 900K) |
+| `count` (success row, 0..N) | `success_ticks` | whole-number parts of the major step: quarters, else fifths, thirds, halves (0/20/40 -> every 5; 0/5/10 -> every 1; 0/9 -> every 3; a prime step gets none) |
+
+A linear value axis gets minors only when its caller names the kind (the efficacy and optimizer
+speed-up axes name `log2`, the success row `count`). Category axes get none. Pinned by
+`tests/test_style_layout.py`'s `test_minor_ticks_fall_where_the_shared_rule_puts_them`,
+`test_no_minor_tick_carries_a_label` and `test_no_minor_tick_lands_on_a_major`.
 
 **5. One legend, on the FIGURE.** `style.legend_below(fig, handles, ...)`, once per figure, never
 `ax.legend`. A key on each panel of a multi-panel figure invites reading the panels as different
@@ -222,6 +239,29 @@ first whose rendered box touches no mark and no label settled before it. Call it
 final: a label's offset is in points, so a place clear before `subplots_adjust` need not be clear
 after it. Pinned by `tests/test_plot_score_change.py`'s
 `test_no_two_arm_labels_overprint_each_other_however_close_the_arms_land`.
+
+## Layout
+
+- **Chrome is measured, never a fixed fraction.** `style.left_protrusion_in`, `right_protrusion_in`,
+  `above_protrusion_in` and `below_protrusion_in` read how far an axes draws past its frame;
+  `figures.per_kernel.fit_canvas` and `figures.efficacy.figure_dot_row` size the margins, the gaps,
+  the names band and the key from them. The data box is the fixed quantity; the canvas grows to fit.
+- **Labels beside marks settle at save.** An annotation tagged `style.CLEAR_GID` is moved clear of
+  the marks and of the labels settled before it, inside its frame, by `style.settle_clear_labels`
+  (called from `style.save`), once every limit is final.
+- **Crowded names step down.** `style.shrink_crowded_ticks` shrinks X tick labels together to a
+  floor and warns there; a Y label taller than its panel is broken onto two lines, then shrunk
+  (`per_kernel.fit_ylabels`). Kernel names are the manifest short name, folded, never cut
+  (`per_kernel.kernel_tick_label`).
+- **One per-kernel API.** `figures.per_kernel` draws every figure with a kernel axis: cells and
+  their status marks (measured, undelivered crossed, pending `?`, flagged `*`), the dodge, one
+  summary slot per series, the canvas. `figures.kernel_comparison`, `figures.signed.llr40_rows` and
+  `plot_repo_vs_kernel.py` are data sides that hand it `KernelCell`s.
+- **Values beside marks: one decimal,** `style.ratio_label` (`6.3x`, `0.9x`; `0.04x` below 0.1x);
+  token counts `style.decade_label` (`35.5K`).
+- **Summaries: speed-up = geomean with its 95% log-t interval over the SOLVED kernels** (a
+  placeholder is drawn crossed, never summarized); **tokens = median over the served kernels**. The
+  table written beside the figure carries the same numbers.
 
 ## Rules
 
@@ -278,27 +318,29 @@ is the unpaired sibling and throws away most of the precision.
 
 **Every ratio figure shows the geomean AND its interval,** and says which interval it is showing.
 `summary.geomean_interval` picks the log-t interval at or above `summary.LOG_T_MIN_SAMPLES` (20)
-samples and a log-space bootstrap below it, for the per-arm figures (`plot_arm_summary.py`,
-`plot_kernel_comparison.py`) that reduce ONE arm's own kernels. The efficacy figure
-(`plot_score_change.py`) is a PAIRED comparison instead, and both of its axes draw
-`summary.geomean_ci` -- always the log-space t interval, at any n, the same estimator
-`hpcagent_bench.stats.figures.signed` draws its own rows with. The method and the n go in the legend
+samples and a log-space bootstrap below it, for `plot_arm_summary.py`, which reduces ONE arm's own
+kernels. The efficacy figure (`plot_score_change.py`) is a PAIRED comparison instead, and both of
+its axes draw `summary.geomean_ci` -- always the log-space t interval, at any n, the same estimator
+every per-kernel figure's summary slot (`figures.per_kernel.summary_point_speedup`) and
+`hpcagent_bench.stats.figures.signed`'s TSVC rows draw. The method and the n go in the legend
 text either way, because two differently derived intervals drawn the same way are two claims a
 reader cannot separate. See [measurement_statistics.md](measurement_statistics.md).
 
-**Paired figures must be the same size.** Fixed figsize, fixed `subplots_adjust` (not
-`tight_layout`), legend inside the canvas, and `bbox_inches=fig.bbox_inches`. `bbox_inches=None`
-means "use the rcParam", which here is `"tight"` -- so a figure was sized by its own legend.
+**Paired figures must be the same size.** A fixed data box (panel width and height) with its bands
+measured around it (Layout, below), never `tight_layout`; legend inside the canvas; saved at its own
+canvas (`style.save(..., fixed=True)`, i.e. `bbox_inches=fig.bbox_inches`). `bbox_inches=None` means
+"use the rcParam", which here is `"tight"` -- so a figure was sized by its own legend.
 
 **Title Case**, except articles, conjunctions and short prepositions; identifiers keep their
 spelling (`numba`, `lang-c`). Ticks rotate 0 or 90 degrees, never an angle. If a figure caps
 coverage, print what was dropped -- silent truncation reads as "this is everything".
 
-`value_axis()` handles four matplotlib traps once: `AutoMinorLocator` refuses log scales; the
-default log locator labels a single tick on a panel under two decades; `LogFormatterSciNotation`
-returns `""` for 5x10^n; and integer minor subs leave the 1-to-2 interval empty while 2-to-5 gets
-several. `log_base` is passed, never sniffed -- matplotlib keeps it private and a wrong guess puts
-minor lines at wrong ratios.
+`value_axis()` handles four matplotlib traps once: `AutoMinorLocator` refuses log scales (a log
+axis takes `style.MinorLocator` instead); the default log locator labels a single tick on a panel
+under two decades; `LogFormatterSciNotation` returns `""` for 5x10^n, and the default log minor
+formatter prints a scientific-notation 3x10^n beside plain majors (minors carry `NullFormatter`).
+`log_base` is passed, never sniffed -- matplotlib keeps it private and a wrong guess puts minor
+lines at wrong ratios.
 
 ## Scaling figures
 
@@ -384,12 +426,13 @@ Exact commands for the three paper figures: [The paper figures, end to end](#the
 | `plot_arm_summary.py` | per-arm median speed-up and spend; one x slot per LANGUAGE, models dodged inside |
 | `plot_score_change.py` | one comparison as one square panel: log2 speed-up on X, paired token cost on Y, one mark per arm |
 | `plot_tokens.py` | tokens per kernel, per model |
-| `plot_repo_vs_kernel.py` | one pair's per-kernel RATIO, speed-up over tokens, on one kernel axis |
+| `plot_repo_vs_kernel.py` | one pair's per-kernel RATIO, speed-up over tokens, on one kernel axis (drawn by `per_kernel`) |
 | `plot_speedup.py` | per-kernel signed speed-up in magnitude bands, per machine (see [measurement_statistics.md](measurement_statistics.md)) |
 | `plot_optimizer_row.py` | one row of 1-D panels, speed-up only: LLM arms beside compilers (canon columns), one mark per optimizer, geomean with its 95% interval over one roster, each panel naming its own baseline (`hpcagent_bench.stats.figures.optimizers.figure_optimizer_row`; recipe below) |
-| `plot_kernel_comparison.py` | llr-focus40: DaCe canon CPU against every complete agent arm, two small-multiple panels (speed-up, tokens) per model over the shared kernel row axis |
+| `plot_per_kernel.py` | one selection's per-kernel speed-up and tokens (ci or box), separate or stacked (`hpcagent_bench.stats.figures.per_kernel`) |
+| `plot_kernel_comparison.py` | llr-focus40: DaCe canon CPU and every complete agent arm, log2 speed-up over tokens on one kernel axis, all models in one panel, a summary slot per series (`kernel_comparison` picks the values, `per_kernel` draws them) |
 | `plot_scaling.py` | the distributed track's weak and strong scaling: parallel efficiency eta(P), (work-scaled) speed-up sigma(P), per-kernel small multiples, and the per-arm geomean eta with its 95% interval (`hpcagent_bench.stats.figures.scaling`; see "Scaling figures" below) |
-| `plot_llr40_compilers.py` | llr-focus40: DaCe's own canon-sweep columns, the polyhedral compiler baselines (Pluto, `ppcg_hip`; a roster kernel either has no validated result for enters at 1x, flagged -- `hpcagent_bench.stats.canon.roster_speedups`), and every model's CPF arm, SIGNED speed-up over tokens on one shared kernel axis, geomean-with-95%-interval summary column on both panels (`hpcagent_bench.stats.figures.signed.llr40_two_row_figure`) |
+| `plot_llr40_compilers.py` | llr-focus40: DaCe's own canon-sweep columns, the polyhedral compiler baselines (Pluto, `ppcg_hip`; a roster kernel either has no validated result for enters at 1x, crossed, left out of the summary -- `hpcagent_bench.stats.canon.roster_speedups`), and every model's CPF arm, log2 speed-up over tokens on one kernel axis, a summary slot per row on both panels (`hpcagent_bench.stats.figures.signed.llr40_two_row_figure`, drawn by `per_kernel`) |
 
 The first three read the CSV this page's extraction step produces. The speed-up in each comes from
 the `submission` rows and the cost from the `task` rows, both reduced by
@@ -408,10 +451,11 @@ the results DB instead of this CSV; they are documented in
 The three figures the agentbench paper uses: the exact command behind each, what it shows, and the
 caveats on the data behind it. Every command writes three files -- the PDF for the paper, the PNG
 beside it, and the CSV holding the numbers behind every mark. A figure without its table cannot be
-checked. Every number in all three is a geomean with a 95% log-t interval over the roster, with an
-unanswered kernel at 1x; a caption that says anything else is wrong. Before a figure is used, open
-the PNG (legend, tick labels and value labels must not collide) and check the CSV's `solved` column
-against what the text claims.
+checked. Every speed-up is a geomean with a 95% log-t interval, over the kernels the figure says:
+the roster with an unanswered kernel at 1x on the optimizer row, the solved kernels on the per-kernel
+and efficacy figures. Tokens beside a per-kernel figure are a median. A caption that says anything
+else is wrong. Before a figure is used, open the PNG (legend, tick labels and value labels must not
+collide) and check the CSV's `solved` column against what the text claims.
 
 ### Setup and inputs
 
@@ -464,18 +508,22 @@ How to read it:
 - **Numba is the denominator**, not a series: it is the orange 1x line, and the Y axis says
   "Speed-up over Numba" (`--baseline` changes it). This is the 2026-09-20 decision; Pluto and PPCG
   are comparators drawn beside it, never the reference.
-- **Filled mark = a measured result. Hollow mark = no verified result, scored 1x.** A kernel a
-  compiler declined (non-affine, emission refused) or never ran enters at 1x and is counted in the
-  geomean, never dropped (`canon.roster_speedups`).
-- The rightmost column is the geomean over the roster with its 95% log-t interval, value printed
-  to one decimal.
+- **Filled mark = a measured result. Hollow, crossed mark = no verified result, drawn at 1x.** A
+  kernel a compiler declined (non-affine, emission refused) or never ran enters at 1x, drawn and
+  kept as a row of `-kernels.csv`, never dropped (`canon.roster_speedups`) -- but it is no
+  measurement, so no summary takes it.
+- Past the dashed separator each row gets a summary slot: the geomean over the kernels it SOLVED
+  with its 95% log-t interval on the speed-up panel, the median over its served kernels on the
+  token panel, value printed to one decimal (`style.ratio_label`). `-summary.csv` and
+  `-tokens-summary.csv` carry the same numbers; the token median has no interval under 5 kernels,
+  and a tokens table with no interval on any row is refused (Rule 5).
 - `--offset` spreads a kernel's series across its slot so marks at the same height stay readable;
   0 stacks them.
 
 **Caveat on the current data.** PPCG has a validated result on 6 of the 40 kernels and Pluto on
-22, so their geomeans (0.9x and 1.4x) are mostly placeholders at 1x. Read them with
-`compilers-per-kernel-kernels.csv`, where an empty `denominator_ms` is a placeholder. The DaCe
-columns are complete (40 of 40).
+22, so their geomeans are over those few kernels only (the `n` column of
+`compilers-per-kernel-summary.csv`). Read them with `compilers-per-kernel-kernels.csv`, where an
+empty `denominator_ms` is a placeholder. The DaCe columns are complete (40 of 40).
 
 ### 2. Optimizers, one row, speed-up only
 
@@ -539,7 +587,7 @@ python3 statistics/plot_score_change.py "$AR/experiments/llr-gpu/data/llr-gpu.db
   --comparison "title=Loop Reasoning CPU (LLR);intervention=lang-skills;pairs=$AR/experiments/llr-cpu/tables/skills_billed.csv;observations=$AR/experiments/llr-cpu/data/llr-cpu.db;placeholders=Fortran" \
   --comparison "title=Loop Reasoning GPU (LLR);intervention=lang-skills;pairs=$AR/experiments/llr-gpu/tables/skills_billed.csv;observations=$AR/experiments/llr-gpu/data/llr-gpu.db;difference=HIP:qwen38,HIP:kimi27sglang" \
   --comparison "title=Blind (LLR CPU);intervention=lang-skills;pairs=$AR/experiments/llrblind/tables/skills_billed.csv;observations=$AR/experiments/llrblind/data/llrblind.db" \
-  --comparison "title=Repository Context;intervention=repo;pairs=$AR/experiments/git-scicomp/tables/repo-vs-kernel_billed.csv;observations=$AR/experiments/git-scicomp/data/git-scicomp.db;repeats=median;control-label=Kernel Formulation" \
+  --comparison "title=Repo. Context;intervention=repo;pairs=$AR/experiments/git-scicomp/tables/repo-vs-kernel_billed.csv;observations=$AR/experiments/git-scicomp/data/git-scicomp.db;repeats=median;control-label=Kernel Formulation" \
   --cost-model billed --row-width acm-text --out figures/efficacy-packets-and-scope.pdf --table figures/efficacy-packets-and-scope.csv
 ```
 
@@ -551,8 +599,18 @@ into `llrblind-cmp-*` (`experiments.fold_renamed_arms`).
 
 Drawn by `hpcagent_bench.stats.figures.efficacy.figure_dot_row` (the default `--mode dots`). Three
 rows share one set of columns: geomean speed-up on top, tasks completed, billed token cost below.
-No row carries X tick marks; the categories are named under the last one. Each column is one model and delivery; its two marks are the control (hollow circle) and
-the treated arm (the packet's shape).
+No row carries X tick marks; the categories are named under the last one. Every row's value axis
+carries unlabelled minor ticks and a faint minor grid (`style.minor_ticks`; the rule per axis kind is
+under [Layout](#layout)). Each column is one model and delivery; its two marks are the control
+(hollow circle) and the treated arm (the packet's shape).
+Row heights (`efficacy.MEASURE_HEIGHT`, fractions of `row_height_in`): speed-up and cost 0.7,
+tasks completed 0.45 (user, 2026-09-22). Each interval is drawn at most `FigureConfig.interval_reach`
+(4x) past the panel's outermost mark and cut there with an arrowhead in the arm's colour, so one
+few-kernel interval cannot stretch its panel's axis (`efficacy.interval_bounds`, `draw_interval`).
+A mark over fewer than `FigureConfig.min_interval_kernels` (5) kernels is drawn without an interval
+and the key says so. At print size (`PAPER_CONFIG`) the key is 7.24pt and the row Y titles 6.4pt;
+panel names keep 0.1in clear of the next one (`NAME_CLEARANCE_IN`), and the paper's fourth panel is
+titled "Repo. Context" so the narrow column does not shrink every name.
 
 What each row is over (2026-09-21):
 
@@ -561,8 +619,9 @@ What each row is over (2026-09-21):
   answer slower than the baseline keeps its own sub-1 ratio. Both arms are timed on the same
   kernels, so an arm cannot look faster by solving only the easy ones. `--speedup-over served`
   draws the fallback reading instead (every kernel, a failure at 1x; label "Speed-Up (1x Fallback)").
-- **Tasks completed**: kernels solved per arm, on an axis from 0 to N (the kernels served; ticks in
-  quarters or halves ending on N, limit N+1), with the Wilson 95% interval scaled to counts.
+- **Tasks completed**: kernels solved per arm, on an axis from 0 to N (the kernels served; ticks at
+  0, N/2 and N, or 0 and N for an odd N; limit 5% past N), drawn as a mark at the count and NO
+  interval (user, 2026-09-22): the roster is fixed, so the count is a census, not a sample.
   Optional: `--no-success-row` drops it. An answer scored correct and never submitted counts once
   it is promoted: `hpcagent-bench regrade worklist --scope unpromoted` lists them, `regrade run`
   grades them as /submit does, and `regrade promote-apply` (or extraction with `--regrades`) adds
@@ -598,6 +657,7 @@ a test, never into a script or a paper repository.
 | figure | library function | script |
 |---|---|---|
 | compilers per kernel | `stats/figures/signed.py: llr40_two_row_figure` | `statistics/plot_llr40_compilers.py` |
+| any per-kernel figure | `stats/figures/per_kernel.py: figure_panels` | `plot_per_kernel.py`, `plot_kernel_comparison.py`, `plot_repo_vs_kernel.py` |
 | optimizer row | `stats/figures/optimizers.py: figure_optimizer_row` | `statistics/plot_optimizer_row.py` |
 | LLR efficacy | `stats/figures/efficacy.py: figure_dot_row` | `statistics/plot_score_change.py` |
 
@@ -608,12 +668,13 @@ Shared behaviour these figures rely on, all in the library:
   back to its `frameworks` name, which carries the device (`signed.distinct_canon_labels`).
 - **Placeholders are hollow.** `style.point_mark(..., delivered=False)` always draws an empty face;
   a cross in the series colour on a filled mark of that colour is invisible.
-- **Summary values do not overprint.** Value labels tagged `style.SPREAD_GID` are moved apart at
-  save time, after the axis limits are final (`style.settle_spread_labels`, called from
-  `style.save`).
-- **One decimal.** Speed-up values print as `6.3x`, `0.9x`
-  (`kernel_comparison.speedup_value_text`); below 0.1x they keep one significant figure so a real
-  slowdown never reads `0.0x`.
+- **Summary values do not overprint.** Value labels tagged `style.CLEAR_GID` are placed clear of
+  the marks and of each other, inside their frame, at save time, after the axis limits are final
+  (`style.settle_clear_labels`, called from `style.save`).
+- **One decimal.** Speed-up values print as `6.3x`, `0.9x` (`style.ratio_label`); below 0.1x they
+  keep one significant figure so a real slowdown never reads `0.0x`.
+- **One per-kernel API.** `per_kernel` draws every kernel-axis figure; `kernel_comparison` and
+  `signed.llr40_rows` only pick the values ([Layout](#layout)).
 
 To add an optimizer to the row: give it a `SHORT_NAMES` entry in `stats/figures/optimizers.py` and
 make sure the registry (`hpcagent_bench/envs/registry.yaml`) names it under `optimizers` (shape) and
