@@ -12,12 +12,17 @@
 #                     MASTER_ADDR/MASTER_PORT   torch.distributed rendezvous
 #                     NCCL_*/RCCL_*/FI_*/HSA_*  collective + libfabric + ROCm knobs set by the caller
 #                     OMP_*/TORCH_*             threading and torch knobs
-#                     HPCAGENT_BENCH_*, SCRATCH, HF_HOME, JIT_CACHE_ROOT   paths this repository resolved
-#                     CANON_OPT_REPORTS         canon_column.sh's own opt-reports switch, read
-#                                               inside the container (inner mode) -- everything
-#                                               else spelled CANON_* (CANON_LAUNCH, CANON_CE_ENV,
-#                                               CANON_RANKS) is read only in `outer`, before enroot,
-#                                               and does not need to cross this boundary.
+#                     HPCAGENT_BENCH_*, SCRATCH, HF_HOME, JIT_CACHE_ROOT, DACE_TREE   paths this
+#                                               repository resolved -- DACE_TREE is what inner mode
+#                                               prepends onto PYTHONPATH and asserts dace resolves
+#                                               inside (canon_column.sh); unforwarded, inner falls
+#                                               back to its own SCRATCH/dace guess instead.
+#                     CANON_OPT_REPORTS, CANON_KERNEL_TIMEOUT_SEC, CANON_KERNEL_MEM_KB,
+#                     CANON_OMP_STACKSIZE      canon_column.sh's own switches, READ INSIDE the
+#                                               container (inner mode); everything else spelled
+#                                               CANON_* (CANON_LAUNCH, CANON_CE_ENV, CANON_RANKS) is
+#                                               read only in `outer`, before enroot, and does not
+#                                               need to cross this boundary.
 #                   Right for a self-contained command such as a framework column.
 #
 #   all             Everything EXCEPT a DENYLIST. This is what pyxis gave a step, and what
@@ -49,7 +54,7 @@ hb_forwardable() {
             ;;
         rank)
             [[ "${key}" =~ ^(SLURM_|SLURMD_|PMI_|PMIX_|NCCL_|RCCL_|FI_|HSA_|OMP_|TORCH_|HPCAGENT_BENCH_) ]] && return 0
-            [[ "${key}" =~ ^(ROCR_VISIBLE_DEVICES|HIP_VISIBLE_DEVICES|CUDA_VISIBLE_DEVICES|GPU_DEVICE_ORDINAL|MASTER_ADDR|MASTER_PORT|SCRATCH|HF_HOME|JIT_CACHE_ROOT|CANON_OPT_REPORTS)$ ]] && return 0
+            [[ "${key}" =~ ^(ROCR_VISIBLE_DEVICES|HIP_VISIBLE_DEVICES|CUDA_VISIBLE_DEVICES|GPU_DEVICE_ORDINAL|MASTER_ADDR|MASTER_PORT|SCRATCH|HF_HOME|JIT_CACHE_ROOT|DACE_TREE|CANON_OPT_REPORTS|CANON_KERNEL_TIMEOUT_SEC|CANON_KERNEL_MEM_KB|CANON_OMP_STACKSIZE)$ ]] && return 0
             return 1
             ;;
         *)
