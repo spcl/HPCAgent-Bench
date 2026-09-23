@@ -231,7 +231,7 @@ def calibrate(reps: int, timeout: float) -> dict:
             fn.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]
             fn(ptr, n)  # warm: fault the pages in before the counted call
             try:
-                counts[name] = _count_direct(fn, ptr, n, reps)
+                counts[name] = count_direct(fn, ptr, n, reps)
             except PapiUnavailable as exc:  # no PMU here (a login node, a guest without one)
                 return {"available": False, "reason": str(exc), "fma_emitted": fma_emitted}
 
@@ -255,7 +255,7 @@ def calibrate(reps: int, timeout: float) -> dict:
     }
 
 
-def _count_direct(fn, ptr, n: int, reps: int) -> int:
+def count_direct(fn, ptr, n: int, reps: int) -> int:
     """PAPI ``fp_ops`` around ``reps`` direct calls of an already-loaded ctypes function.
 
     The calling thread only: the calibration loops are single-threaded by construction, so the
@@ -377,7 +377,7 @@ def measure_kernel(
     row["points"] = points
     row["metric"] = metric
 
-    def _smaller(reason: str) -> dict | None:
+    def smaller(reason: str) -> dict | None:
         """Retry the whole kernel one preset down, when the reason to is that it did not FIT.
 
         Fires on ANY unusable point, not only a predicted ``over_budget`` one. Prediction is
@@ -398,7 +398,7 @@ def measure_kernel(
     if not base_count:
         # The BASE size did not fit or did not count. Falling back has to be possible here too --
         # a kernel whose reference allocates 20 GiB before any growth never reaches the rung loop.
-        return _smaller("base size") or {
+        return smaller("base size") or {
             **row,
             "ok": False,
             "reason": f"{metric} unusable at R=1: {points[0].get('reason', '')}",
@@ -415,7 +415,7 @@ def measure_kernel(
     if not usable:
         # Base fits but nothing grows. Measuring it smaller answers the same question; reporting
         # nothing does not. One step at a time, so the report always names the size it used.
-        fell_back = _smaller("growth rungs")
+        fell_back = smaller("growth rungs")
         if fell_back is not None:
             return fell_back
     if skipped:

@@ -44,7 +44,7 @@ from collections.abc import Callable, Iterable
 #: up empty, and because an absent tokenizer is reported as "no counter" rather than an error, the
 #: visible effect was token counts going None -- a misconfiguration wearing the costume of a model
 #: this repo happens not to have cached.
-def _hf_hub_dir() -> pathlib.Path:
+def hf_hub_dir() -> pathlib.Path:
     """The hub cache directory, resolved in this order:
 
     1. ``HF_HOME`` -- what every sbatch and EDF in this repo exports.
@@ -65,7 +65,7 @@ def _hf_hub_dir() -> pathlib.Path:
         return pathlib.Path.home() / ".cache" / "huggingface" / "hub"
 
 
-HF_HUB = _hf_hub_dir()
+HF_HUB = hf_hub_dir()
 
 #: Arm model tag (``HPCAGENT_BENCH_RECORD_MODEL``) -> the repo id its ``VLLM_MODEL`` names. The env
 #: is the truth when a run has it; this covers the runs whose launch env was not kept beside them.

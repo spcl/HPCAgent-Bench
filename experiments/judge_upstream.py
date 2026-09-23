@@ -69,7 +69,7 @@ class Supervisor:
         self.child: subprocess.Popen[bytes] | None = None
         self.stopping = False
 
-    def stop(self, signum: int, _frame: FrameType | None) -> None:
+    def stop(self, signum: int, frame: FrameType | None) -> None:
         """Pass the launcher's signal to the upstream and stop supervising.
 
         The shell's teardown kills this process, and a child left behind would hold the loopback
