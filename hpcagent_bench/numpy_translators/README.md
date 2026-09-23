@@ -1,100 +1,49 @@
-# NumpyToC
+# NumpyToX
 
-A Python -> C99 / C++ / Pluto-input emitter, deliberately narrow:
+Emits a numpy kernel (``<short>_numpy.py``) as C99 / C++ / Pluto input, Fortran, JAX, Numba,
+CuPy, Pythran and DaCe source, plus a ctypes binding JSON for the native targets. The emitted
+kernels carry no in-kernel timing -- the harness times each call externally. The Pluto input
+wraps the loop nest in ``#pragma scop`` / ``#pragma endscop`` and survives
+``polycc --pet --tile`` for the affine subset. The accepted numpy subset is listed in
+``CONTRIBUTOR_GUIDE.md`` (section 7).
 
-* **Input**: a Python function written in a numpy-numeric subset
-  (plain loops with array indexing, optional `math.*` and `np.*`
-  numeric primitives that already appear in the Foundation corpus,
-  no slicing, no broadcasting, no objects).
-* **Output**: three sibling source files plus an auto-generated
-  ctypes binding. The emitted kernels carry no in-kernel timing --
-  the harness times each call externally. The Pluto input wraps the
-  loop nest in ``#pragma scop`` / ``#pragma endscop`` and survives
-  ``polycc --pet --tile`` for the affine subset.
-
-One family, one package. Each target lives in its own directory under
-`src/` so the dependency surface stays per-target, and the shared
-front-end / IR / lowering sits in `numpyto_common`:
+Each target lives in its own directory under `src/`; the shared front-end / IR / lowering sits
+in `numpyto_common`:
 
 | Target          | Folder                |
 |-----------------|-----------------------|
 | shared frontend | `src/numpyto_common/` |
 | C / C++ / Pluto | `src/numpyto_c/`      |
+| DaCe            | `src/numpyto_c/dace_emit.py` |
 | Fortran         | `src/numpyto_fortran/`|
 | JAX             | `src/numpyto_jax/`    |
 | Numba           | `src/numpyto_numba/`  |
 | CuPy            | `src/numpyto_cupy/`   |
 | Pythran         | `src/numpyto_pythran/`|
 
-<!-- The 'Why a new tool' argument compared this path against scripts/emit_c_variants.py,
-     which no longer exists; the comparison outlived the thing it compared against. -->
-## Roadmap (future targets)
-
-* **NumpyToFortran** (next obvious target). Fortran already has
-  the rich numeric standard library numpy emits: ``MATMUL`` for
-  ``A @ B``, ``DOT_PRODUCT`` for ``np.dot``, ``SUM`` /
-  ``MINVAL`` / ``MAXVAL`` for axis reductions, ``MAXLOC`` /
-  ``MINLOC`` for argmax / argmin, ``MERGE`` for masked select,
-  ``EXP`` / ``SQRT`` / ``LOG`` as ELEMENTAL. So Fortran emission
-  is the smallest delta from NumpyToC's IR -- the body walker
-  swaps subscript syntax, calls map to ALL CAPS, and we pick up
-  optimised vendor kernels for free.
-* **NumpyToDaCe**: same IR + auto-emit; allow user override.
-* **NumpyToCuPy** / **NumpyToNumba**: same shape, ``cupy.`` /
-  numba decorator prelude.
-* **NumpyToPythran**: similar, with Pythran's ``#pythran export``
-  comments.
-* Jax / Triton / TVM stay hand-written -- the gap from numpy to
-  those is too large to automate.
-
-## Scope (NumpyToC v0.1)
-
-Supports only what the Foundation corpus actually exercises:
-
-* Arithmetic: ``+ - * / // %``, unary ``-``, comparisons.
-* Control flow: ``for/while``, ``range``, ``if/elif/else``,
-  ``break``/``continue``.
-* Array indexing: 1D and N-D with affine OR non-affine indices.
-  Indirect access (``A[idx[i]]``) is supported but the Pluto output
-  drops to "no-scop" mode for that kernel.
-* ``math.*`` numeric primitives observed in the corpus:
-  ``exp``, ``sqrt`` (extensible -- see ``lowering.MATH_BUILTINS``).
-* ``np.*`` numeric primitives observed:
-  ``np.zeros`` (lowered to a stack-allocated VLA temporary).
-* Future: ``np.dot``, ``np.sum``, ``A @ B``, ``np.maximum`` (rewrite
-  rules already declared but unused on the current corpus).
-
-Explicitly **not** supported: slicing, broadcasting, ``dtype=``
-arguments, ``np.array`` constructors, advanced indexing, ``axis=``
-keyword reductions, object arrays, strings.
-
-## Output shape
-
-For one Python kernel ``s111(a, b, ITERATIONS, LEN_1D)`` with
-``a: f64[LEN_1D]`` / ``b: f64[LEN_1D]`` annotations:
+## Output shape (C family)
 
 ```
-out/<short>/cpp_backend/
-  <short>_d.c                  # C99
-  <short>_f.c                  # C99, single precision
-  <short>_d.cpp                # C++ wrapping the same body
-  <short>_f.cpp                # C++, single precision
-  <short>_pluto_input.c        # C99 + #pragma scop markers
-  CMakeLists.txt
-  <short>_binding.json         # ctypes signature for the wrapper
+<out>/
+  <base>.c                     # C99
+  <base>.cpp                   # C++ over the same body
+  <base>_pluto_input.c         # C99 + #pragma scop markers
+  <base>_binding.json          # ctypes signature for the wrapper
+  <base>_pluto_binding.json    # Pluto's own (symbols-first) signature
 ```
 
-The wrapper at ``<short>_cpp.py`` is unchanged -- it consumes the
-binding JSON to build the ctypes argtypes list.
+``--parallel`` writes ``<base>_omp.{c,cpp}`` + ``<base>_omp_binding.json`` instead;
+``--isopar`` writes ``<base>_isopar.cpp`` + ``<base>_isopar_binding.json``.
 
 ## CLI
 
 ```bash
 numpyto_c emit \
-    --kernel hpcagent_bench/benchmarks/loop_level_reasoning/s111/s111_numpy.py \
-    --bench-info bench_info/s111.json \
-    --out hpcagent_bench/benchmarks/loop_level_reasoning/s111/cpp_backend
+    --kernel hpcagent_bench/benchmarks/loop_level_reasoning/argmax_value/argmax_value_numpy.py \
+    --bench-info <bench_info.json> \
+    --out <out>
 ```
 
 Single command; runs through every step (parse -> IR -> lower -> emit
-x 3 targets -> bindings). Idempotent.
+x 3 targets -> bindings). Idempotent. The bench-info JSON is what
+``hpcagent_bench.emit_bridge.bench_info_tempfile`` writes from the kernel's manifest.
