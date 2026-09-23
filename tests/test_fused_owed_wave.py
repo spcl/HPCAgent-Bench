@@ -143,6 +143,22 @@ def test_the_model_layer_never_overrides_the_arms_judge_input_mode(owed: ModuleT
     assert sorted(len(group) for group in owed.group_setups([setup, c_arm])) == [1, 1]
 
 
+@pytest.mark.parametrize("language", ["triton", "triton-device", "python", "pytriton"])
+def test_a_python_delivered_arm_judges_py_binding_whatever_its_source_env_says(owed: ModuleType, language: str) -> None:
+    """The 09-22 waves' own envs carry JUDGE_INPUT_MODE=source; a rerun planned from one of them as
+    its newest job would refuse every Triton call again (647008, 647228-9)."""
+    arm = f"gpu-llr-focus40-qwen38-{language}"
+    setup = owed.make_setup(setup_env(arm, LANGUAGE=language, JUDGE_INPUT_MODE="source"), arm, "llr-focus40", "")
+    assert setup.value("JUDGE_INPUT_MODE") == "py-binding"
+
+
+def test_a_compiled_arm_keeps_its_source_judge_input_mode(owed: ModuleType) -> None:
+    assert (
+        make(owed, "gpu-llr-focus40-qwen38-hip", LANGUAGE="hip", JUDGE_INPUT_MODE="source").value("JUDGE_INPUT_MODE")
+        == "source"
+    )
+
+
 def test_a_scaled_wall_clock_is_clamped_under_the_partition_cap(owed: ModuleType) -> None:
     setup = make(owed, "cpf-llr-focus40-kimi27sglang-c", scale=4, AGENT_TIMEOUT_SECONDS="28800")
     assert int(setup.value("AGENT_TIMEOUT_SECONDS")) == owed.time_cap_seconds()
@@ -379,6 +395,21 @@ def test_the_board_reads_a_queued_fused_jobs_arms_from_its_setups_file(
     }
 
 
+def test_a_snapshots_relative_setups_file_is_read_beside_the_snapshot(tmp_path: pathlib.Path) -> None:
+    """A snapshot names its setups ``.rendered/<stem>.setups.json``, relative to the checkout that
+    submitted it; resolved against the reader's own checkout, the live waves 647226/647033/647007
+    read as serving no arm and a worktree planner re-planned their kernels."""
+    board = load("wave_board")
+    rendered = tmp_path / "other-checkout" / "experiments" / ".rendered"
+    rendered.mkdir(parents=True)
+    (rendered / "w1-x.setups.json").write_text(
+        json.dumps({"setups": {"s": {"arm": "gpu-llr-focus40-qwen38-hip-clean"}}})
+    )
+    env = rendered / "w1-x.env"
+    env.write_text("CAMPAIGN_ARM=w1\nSETUPS_FILE=.rendered/w1-x.setups.json\n")
+    assert board.setups_file_arms(env) == {"gpu-llr-focus40-qwen38-hip-clean"}
+
+
 def test_a_smoke_wave_is_small_short_and_never_coverage(owed: ModuleType) -> None:
     """SMOKE_KERNELS: n kernels per arm, the smoke budget, arms renamed so their rows count for nothing."""
     rk = load("remaining_kernels")
@@ -409,10 +440,13 @@ def test_the_crash_audit_refuses_a_fused_job_rather_than_mixing_its_arms(tmp_pat
         audit.audit_arm("cpf-llr-focus40-qwen38-c", [("640103", str(job_dir))], ["a"], tmp_path, str(REPO))
 
 
-def test_a_stale_key_nothing_reads_never_splits_a_wave(owed: ModuleType) -> None:
-    old = make(owed, "cpf-llr-focus40-kimi27sglang-c-cpfsrc", OPTARENA_OPTIMIZER="moonshotai/Kimi-K2.7-Code")
+@pytest.mark.parametrize(
+    ("key", "value"), [("OPTARENA_OPTIMIZER", "moonshotai/Kimi-K2.7-Code"), ("CLAUDE_AUTOCOMPACT", "200144")]
+)
+def test_a_stale_key_nothing_reads_never_splits_a_wave(owed: ModuleType, key: str, value: str) -> None:
+    old = make(owed, "cpf-llr-focus40-kimi27sglang-c-cpfsrc", **{key: value})
     new = make(owed, "gpu-llr-focus40-kimi27sglang-hip-skills", LANGUAGE="hip")
-    assert "OPTARENA_OPTIMIZER" not in dict(old.env)
+    assert key not in dict(old.env)
     assert [len(group) for group in owed.group_setups([old, new])] == [2]
 
 
@@ -613,6 +647,23 @@ def test_a_model_mismatched_source_is_skipped_with_a_note(
     plan = owed.gather("qwen38", runs, str(REPO), owed.Selection(setups=frozenset({arm})), 1, 1, set())
     assert plan.owed == []
     assert any(arm in note and "does not match qwen38" in note for note in plan.notes), plan.notes
+
+
+@pytest.mark.parametrize("listed", [True, False])
+def test_a_dropped_arm_is_planned_only_while_a_rerun_list_names_it(
+    owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, listed: bool
+) -> None:
+    """The board keeps a dropped arm that rerun-lost.tsv lists (the LLR CPU Fortran arms, 09-19); a
+    planner that skipped it silently could never rerun what the board shows owed."""
+    arm = "cpf-llr-focus40-qwen38-fortran"
+    runs = model_mismatch_run(tmp_path, "700005", f"{arm}-clean", "qwen38")
+    lost = tmp_path / "rerun-lost.tsv"
+    lost.write_text("arm\tdeleted_jobs\treason\tstatus\n" + (f"{arm}\t639217\tdeleted\tpending\n" if listed else ""))
+    monkeypatch.setattr(owed.wave_board, "RERUN_LOST", lost)
+    monkeypatch.setattr(owed, "queued_arms", set)
+    monkeypatch.setattr(owed.remaining_kernels, "roster", lambda tag, opt: ["a"])
+    plan = owed.gather("qwen38", runs, str(REPO), owed.Selection(), 1, 1, set())
+    assert [item.setup.arm for item in plan.owed] == ([f"{arm}-clean"] if listed else [])
 
 
 def test_a_queued_arm_is_skipped_with_a_note(

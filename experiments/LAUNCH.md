@@ -75,8 +75,8 @@ DRY RUN.
 - Kernels of an arm with a job still PENDING or RUNNING are not planned again (the log says
   `skip <arm>: a job of it is queued or running`), so running the planner twice does not
   double-submit. The flip side: an arm with a queued job shows no owed work until that job ends.
-- Old archived run directories print `unreadable job dir, not coverage`. Those runs count through
-  frozen observations; the warning is harmless.
+- A judge shard written before the `runs` table existed (2026-09-09..11) names its arm by its
+  run ids. `unreadable job dir, not coverage` now means a shard whose run ids name no arm, or two.
 - Every other skip is a `note: skip <arm>/<kernel>: <why>` line. Read them: a skipped kernel is
   owed work the plan dropped.
 - Mark a kernel owed by hand (a cheat, or a newly wrong kernel) in `rerun-kernels.tsv`, then run

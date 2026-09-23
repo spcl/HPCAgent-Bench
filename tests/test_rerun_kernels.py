@@ -114,6 +114,29 @@ def test_another_arms_rows_are_untouched(
     assert module.owed_names(jobs, ROSTER, str(EXPERIMENTS.parent)) == []
 
 
+def classed_table(path: pathlib.Path, label: str) -> pathlib.Path:
+    """A rerun-kernels.tsv with the optional ``class`` column: kernel b of ARM, class ``label``."""
+    path.write_text(f"arm\tkernel\tjobs\treason\tstatus\tclass\n{ARM}\tb\t647228\tvoided\tpending\t{label}\n")
+    return path
+
+
+def test_a_budget_class_row_reruns_at_the_scaled_budget_not_as_infra(
+    module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """A kernel whose last valid episode hit its budget still owes the owed rule's scaled rerun when
+    the scaled rerun itself was voided (647228: the judge refused Triton); INFRA would run it at 1x."""
+    job_with_coverage(tmp_path / "runs", "641799", ARM, ROSTER)
+    monkeypatch.setattr(module, "RERUN_KERNELS", classed_table(tmp_path / "t.tsv", "budget"))
+    jobs = [("641799", str(tmp_path / "runs" / "641799"), ARM)]
+    assert module.owed_classes(jobs, ROSTER, str(EXPERIMENTS.parent)) == {"b": module.ExitClass.BUDGET}
+
+
+def test_a_class_the_planner_cannot_rerun_is_refused(module: types.ModuleType, tmp_path: pathlib.Path) -> None:
+    """A ``done`` or misspelt class would drop the kernel from every wave without a word."""
+    with pytest.raises(SystemExit, match="class 'done'"):
+        module.forced_kernels([ARM], classed_table(tmp_path / "t.tsv", "done"))
+
+
 def test_a_missing_table_owes_nothing_extra(module: types.ModuleType, tmp_path: pathlib.Path) -> None:
     """A checkout without the file (or with it emptied) must behave exactly as before it existed."""
     assert module.forced_rerun([ARM], tmp_path / "absent.tsv") == set()
@@ -143,3 +166,4 @@ def test_the_shipped_table_names_real_arms_and_real_roster_kernels(board: types.
         tag = board.CAMPAIGNS[campaign].tag
         assert row["kernel"] in rosters.get(tag, set()), row
         assert row["jobs"].strip() and row["reason"].strip() and row["status"].strip()
+        assert (row.get("class") or "") in board.remaining_kernels.FORCED_CLASSES, row
