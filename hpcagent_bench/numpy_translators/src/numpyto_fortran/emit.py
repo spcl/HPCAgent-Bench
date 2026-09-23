@@ -2064,9 +2064,8 @@ class _FortranBodyEmitter(BaseEmitter):
         # kernels whose lowering didn't expand the call still produce valid code.
         if isinstance(node.func, ast.Attribute):
             attr = node.func.attr
-            # np.maximum/np.minimum go through the SAME lowering as the bare-name fmax/fmin form:
-            # emitting the operands here first would type them as written, and this path used to
-            # skip the real-promotion the Name path does, so max(x, 0) mixed a real and an integer.
+            # np.maximum/np.minimum go through the SAME lowering as the bare-name fmax/fmin form, so
+            # both get the real-promotion (max(x, 0) must not mix a real and an integer).
             if attr in ("maximum", "minimum") and len(node.args) >= 2:
                 return self._emit_minmax(node.args, attr == "maximum")
             args_e = [self.emit_expr(a) for a in node.args]
@@ -2743,8 +2742,7 @@ class _HoistIfExpVisitor(ast.NodeTransformer):
         self.counter = 0
         #: temp name -> its (body, orelse) branch expressions, in creation order (a NESTED temp
         #: lands before the temp that consumes it). :func:`_record_ifexp_temp_dtypes` types the
-        #: temps from these, so the declaration carries the join ``merge()`` used to force at the
-        #: call site.
+        #: temps from these, so the declaration carries the join ``merge()`` needs.
         self.temps: Dict[str, Tuple[ast.expr, ast.expr]] = {}
 
     def visit_IfExp(self, node: ast.IfExp) -> ast.Name:

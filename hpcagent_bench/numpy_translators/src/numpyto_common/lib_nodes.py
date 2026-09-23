@@ -740,8 +740,7 @@ def _iter_extent_of(expr: ast.expr, shape_table: Dict[str, Tuple[str, ...]]) -> 
             # that resolves against a factorisation is asked at parse time -- ls3df_scf reaches its
             # whole Rayleigh-Ritz block through ``Linv``, and an unsized factor breaks that chain.
             # Square identities and the 1-D generators state their extent in an argument, same as
-            # the zeros aliases do; unsized, ls3df_scf's ``s_sub`` chain broke on the ``np.eye(k)``
-            # jitter term and took the whole Rayleigh-Ritz block with it.
+            # the zeros aliases do (ls3df_scf's ``np.eye(k)`` jitter term).
             if attr in ("eye", "identity") and expr.args:
                 n = copy.deepcopy(expr.args[0])
                 return (
@@ -2538,7 +2537,7 @@ def _read_fft_axes(args: List[ast.expr], kwargs: Optional[List[ast.keyword]], ra
         # An axis outside the rank means the rank we resolved is not the operand's real rank -- vexx
         # reshapes through a ``.ndim``-conditional tuple that never folds, so the spilled operand is
         # recorded rank 1 and ``axes=(0, 1, 2)`` indexed past the iterator list. Declining is the
-        # sizer's contract; the IndexError it used to raise escaped as a crash.
+        # sizer's contract.
         a = int(a)
         pos = a + rank if a < 0 else a
         if not 0 <= pos < rank:
@@ -2564,9 +2563,7 @@ _NORM_KIND = {"backward": 0, "forward": 1, "ortho": 2}
 
 
 def _expand_dft_1d_library(target: ast.expr, src: ast.expr, n: str, inverse: bool, norm: str) -> List[ast.stmt]:
-    """Whole-array 1-D DFT via :data:`FFT_LIBRARY_MARKER` -- O(N log N), replacing the naive
-    O(N^2) loop for exactly the case the 2026-09-18 canon incident hit (fft_1d: every native
-    backend ran 2-3.5h/column at a fuzzed N ~43M-87M). One call does the WHOLE transform
+    """Whole-array 1-D DFT via :data:`FFT_LIBRARY_MARKER` -- O(N log N). One call does the WHOLE transform
     (norm included -- each backend's marker renderer applies it, see FFT_LIBRARY_MARKER's own
     docstring), so this returns a single statement, never wrapped in a per-element loop."""
     call = ast.Call(
@@ -2599,11 +2596,10 @@ def _expand_dftn(
     renders it as an FFTW3 call (O(N log N)); numba's emitter renders it as an ``objmode`` call
     into ``numpy.fft`` (numba's nopython mode cannot type ``np.fft.*`` at all -- see
     ``frameworks/test.py``'s ``njit_reference`` compile-stage fallback). DaCe is untouched: its
-    driver never sets ``library``, so it keeps receiving this function's naive body exactly as
-    before (see numpyto_c/dace_emit.py). A batched / N-D transform (``rank > 1``: fft_3d,
-    ls3df_scf, vloc_psi_k_acc, bout_hasegawa_wakatani, cegterg, vexx_k) keeps the naive loop on
-    every target -- batching a library plan over non-transform axes is unimplemented, out of
-    scope for this fix (canon incident 2026-09-18 is 1-D fft_1d only).
+    driver never sets ``library``, so it receives this function's naive body (see
+    numpyto_c/dace_emit.py). A batched / N-D transform (``rank > 1``: fft_3d, ls3df_scf,
+    vloc_psi_k_acc, bout_hasegawa_wakatani, cegterg, vexx_k) keeps the naive loop on every target:
+    batching a library plan over non-transform axes is unimplemented.
 
     The naive path is O(prod(N_t)^2) over the transform axes -- correctness-only, kept tiny via
     the benchmark's small preset. Over transform-axis set ``T`` (remaining axes batched
@@ -5708,9 +5704,7 @@ def expand_reshape(
         raise NotImplementedError("np.reshape: source shape unknown")
     tgt_shape = shape_table.get(target.id)
     if not tgt_shape:
-        # Target shape unknown -- fall back to the legacy flat-copy form.
-        # Same risk as before (Fortran rejects rank mismatch); preserved
-        # only so existing kernels don't regress mid-migration.
+        # Target shape unknown: flat copy (Fortran rejects a rank mismatch here).
         total = _shape_total_product(a_shape)
         body = [
             ast.Assign(
@@ -8048,9 +8042,8 @@ def sympify_shape(text: str) -> "sympy.Expr | None":
     """
     import sympy  # Deferred: sympy costs ~100s of ms to import and most kernels never reach here.
 
-    # An unresolved ``A.shape[i]`` is not sympy syntax, so the whole token used to fail to parse and
-    # every compare naming one answered False. It is a fixed extent, not arithmetic: fold it to an
-    # atom. Both sides mangle the same way, so the surrounding arithmetic still cancels.
+    # An unresolved ``A.shape[i]`` is not sympy syntax but a fixed extent: fold it to an atom. Both
+    # sides mangle the same way, so the surrounding arithmetic still cancels.
     text = SHAPE_READ_RE.sub(lambda m: f"__shp_{m.group(1)}_{m.group(2)}", text)
     # ``a // b`` and ``int_floor(a, b)`` are ONE quantity in two spellings -- ``//`` is what a
     # manifest and a numpy source write, ``int_floor`` is what the C/dace side names it. sympify

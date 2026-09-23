@@ -1870,9 +1870,8 @@ _NP_ELEMENTWISE: Set[str] = {
     "imag",
 }
 
-# Every unary libm intrinsic is elementwise by construction, so take them from the table that
-# already routes them to C rather than restating the list -- a name present there but missing here
-# used to reach the emitter unlowered (``np.log1p(x) + np.maximum(x, 0)``, softplus).
+# Every unary libm intrinsic is elementwise by construction: taken from the table that routes them
+# to C, so no name there reaches the emitter unlowered (softplus's ``np.log1p(x)``).
 _NP_ELEMENTWISE |= set(UNARY_C_MATH)
 
 
@@ -2367,10 +2366,8 @@ def _harvest_local_shapes(
     # A name bound BOTH ways -- ``padded = x`` in one branch, ``padded = np.zeros(...)`` in the
     # other -- must take the ALLOCATION's shape: the alias is derived, the allocation is the
     # declaration, and the allocation is the larger of the two wherever the branch exists to avoid
-    # it. ast.walk is not source order, so whichever was visited first used to win: conv_standard_1d
-    # sized its zero-padded buffer like the unpadded input, wrote past the end of it, and returned
-    # wrong numbers at every output position that reads the pad. Aliases are therefore deferred and
-    # applied only to targets no allocation claimed.
+    # it (conv_standard_1d's zero-padded buffer). ast.walk is not source order, so aliases are
+    # deferred and applied only to targets no allocation claimed.
     aliases: List[Tuple[str, str]] = []
     for stmt in ast.walk(tree):
         if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
@@ -9166,8 +9163,7 @@ def _lp_resolve_inlined_shapes(ctx: LoweringContext) -> None:
         a residual ``__inl`` name or a ``.shape`` on a non-parameter local
         (the chained-inline case -- ``__inl3_N = x__v1.shape[0]`` where
         ``x__v1`` is itself a local), the ORIGINAL token is kept so the
-        downstream source-order ``_ResolveArrShape`` pass still handles it
-        exactly as it did before this fix existed."""
+        downstream source-order ``_ResolveArrShape`` pass handles it."""
         if not ctx.inl_defs:
             return tuple(shape)
         subbed = _substitute_inlined_scalar_defs(tuple(shape), ctx.inl_defs)

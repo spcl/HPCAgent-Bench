@@ -18,7 +18,6 @@ hoister falls back to the dense path or reports an actionable error.
 import ast
 from typing import Callable, Dict, List, Optional, Tuple
 
-# Sparse-op result-layout rule (directive #3).
 #: Result-layout sentinel.
 DENSE = "dense"
 
@@ -47,7 +46,7 @@ def result_layout(lhs_layout: Optional[str], rhs_layout: Optional[str], target: 
     ``lhs_layout``/``rhs_layout``: sparse format name or ``None`` (dense).
     Returns the result's sparse format, or :data:`DENSE`.
 
-    Rule (directive #3): ``sparse @ dense``/``dense @ sparse`` -> always
+    Rule: ``sparse @ dense``/``dense @ sparse`` -> always
     **dense** (matches scipy). ``sparse @ sparse`` -> lhs's layout iff the
     target can produce a sparse result (:data:`FRAMEWORK_SPARSE_CAPS`), else
     **dense**.

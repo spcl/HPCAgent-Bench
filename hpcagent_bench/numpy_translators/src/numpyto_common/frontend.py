@@ -4293,8 +4293,7 @@ def fold_extent_locals(fn: ast.FunctionDef, arr_by: Dict[str, ArrayDesc]) -> Non
         # A single declared SYMBOL, not any expression built out of declared symbols. This pass
         # exists to collapse a second NAME for one extent (``nb0`` after ``nb0 = v.shape[0]``
         # resolved to ``Lb``); an expression is a derived quantity that was never a shape read, and
-        # folding it rewrites arithmetic the kernel spelled deliberately -- ``H_out = H - K + 1``
-        # passed the old gate because ``H`` and ``K`` are both shape identifiers.
+        # folding it rewrites arithmetic the kernel spelled deliberately (``H_out = H - K + 1``).
         if isinstance(node.value, ast.Name) and node.value.id in symbols:
             defs[name] = node.value
     if not defs:
@@ -4575,9 +4574,9 @@ def _specialise_helpers_by_call_signature(
     A kept helper folds its call site's literal arguments into its body, so one emitted function
     serves exactly one set of them. resnet101 calls ``_conv2d(x, w, 1, 0)`` and
     ``_conv2d(h, w, 2, 3)``; specialising on the first and calling it from the second would run a
-    stride-1 body for a stride-2 call. That used to refuse outright, naming the fix -- this is that
-    fix: the second signature gets ``_conv2d__s2``, a verbatim copy whose own call sites point at
-    it, and every later pass sees two ordinary helpers each with one consistent signature.
+    stride-1 body for a stride-2 call. So the second signature gets ``_conv2d__s2``, a verbatim copy
+    whose own call sites point at it, and every later pass sees two ordinary helpers each with one
+    consistent signature.
 
     Keyed on constant arguments and on the DECLARED shape of any array argument the parent names,
     since the body is specialised on both. A local rebound to several shapes across the body still
@@ -6062,8 +6061,7 @@ def _build_helper_kirs(
             # Not called from the kernel or from any helper built so far -- nothing reaches it.
             continue
         # Only while BUILDING the kept form: this runs again on the inlined pass, over whatever
-        # resisted inlining, and there a refusal has no fallback left to reach -- it would turn a
-        # kernel that used to emit into a hard failure rather than routing it somewhere better.
+        # resisted inlining, and there a refusal has no fallback left: it would be a hard failure.
         hostile = abi_hostile_arguments(tree, hdef.name) if keep_helpers else []
         if hostile:
             raise NotImplementedError(

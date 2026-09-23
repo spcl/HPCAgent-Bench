@@ -135,8 +135,7 @@ def emit_numba(numpy_source: str, fastmath: bool = False, kir=None) -> str:
 #: 1-D form fft_1d.yaml uses) -- ``fftn``/``ifftn`` (fft_3d, ls3df_scf, vloc_psi_k_acc,
 #: bout_hasegawa_wakatani, cegterg, vexx_k: every OTHER np.fft user in the corpus) is untouched,
 #: since the objmode return-type annotation below is hardcoded to a 1-D ``complex128[:]`` and a
-#: batched/N-D transform needs its own rank-correct annotation -- out of scope for this fix
-#: (2026-09-18 canon incident is fft_1d only).
+#: batched/N-D transform needs its own rank-correct annotation.
 _OBJMODE_FFT_FUNCS = frozenset({"fft", "ifft"})
 
 

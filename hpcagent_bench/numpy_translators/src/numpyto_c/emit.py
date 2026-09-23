@@ -1676,9 +1676,7 @@ class _CBodyEmitter(BaseEmitter):
         )
 
     def _emit_fft_library(self, node: ast.Call, indent: str) -> str:
-        """Render the 1-D FFT marker as an FFTW3 plan/execute/destroy sequence -- O(N log N),
-        replacing the naive O(N^2) loop the 2026-09-18 canon incident hit (fft_1d: 2-3.5h/column
-        at a fuzzed N ~43M-87M; FFTW execute alone measured 6.8s at that N).
+        """Render the 1-D FFT marker as an FFTW3 plan/execute/destroy sequence -- O(N log N).
 
         Args (see FFT_LIBRARY_MARKER): ``(out, src, n, inverse_flag, norm_kind)``. ``out``/``src``
         are bare Names (array params/locals; the marker is only ever built that way, see

@@ -1,4 +1,4 @@
-"""Unified ``numpyto --target <lang> ...`` driver (directive #1).
+"""Unified ``numpyto --target <lang> ...`` driver.
 
 A thin dispatcher: ``--target`` picks the backend, and every other argument is
 passed straight through to that backend's ``emit`` sub-command. So

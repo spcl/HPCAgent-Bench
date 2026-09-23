@@ -851,10 +851,8 @@ def _build_tuple_lengths(
     Used by :func:`expr_rank` while ``rank_table`` is iterating, so
     ``.reshape(name)`` reports the tuple's rank rather than guessing 1.
     """
-    # Indexed ONCE. Resolving a Name used to re-walk the whole tree to find its assignment, and it
-    # recurses, so a chain of tuple locals cost assigns x depth x nodes -- 564s of densenet121's
-    # 729s lowering sat under this one call. setdefault keeps the same first-in-body binding the
-    # scan returned.
+    # Indexed ONCE: a per-Name re-walk recurses, so a chain of tuple locals would cost
+    # assigns x depth x nodes (densenet121). setdefault keeps the first-in-body binding.
     bindings, first_values = name_binding_index(tree)
     return tuple_lengths(bindings, first_values, ranks, seed_ranks)
 

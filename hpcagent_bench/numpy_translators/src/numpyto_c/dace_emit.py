@@ -1013,9 +1013,6 @@ class DivisibleStridedSpan(ast.NodeTransformer):
     to ``A + 1`` exactly, matching the target with no assumption about ``stride`` at all. The slice
     selects the SAME elements either way -- both yield ``A + 1`` of them for any ``stride >= 1``; only
     the stop moves, from the last element to one full step past it, which a slice clamps.
-
-    Measured 2026-09-01 on average_pooling_2d: the tap accumulate went from the ``broadcast`` refusal
-    to parsed. This is the single largest cause on ``REFUSED`` (108 of 141 entries).
     """
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
@@ -3843,10 +3840,8 @@ def _plan_size_promotion(
             first_rhs, order, reassigned = _scan_size_assigns(fn_ast, cand)
     # Drop the names whose size is not symbolic -- and, transitively, whatever depended on them --
     # rather than abandoning promotion for the WHOLE kernel. The closure above follows every name in
-    # a candidate's right-hand side, including positions that are not sizes at all: np.full's dtype
-    # argument (``np.maximum(__hcall4, 0.0).dtype``) dragged an array-valued name in, and that one
-    # name used to cost every size scalar in the kernel its symbol. A dropped name simply keeps its
-    # data-dependent shape, which is the same refusal as before -- for that kernel only.
+    # a candidate's right-hand side, including positions that are not sizes at all (np.full's dtype
+    # argument ``np.maximum(__hcall4, 0.0).dtype``). A dropped name keeps its data-dependent shape.
     while True:
         allowed = known | cand
         unpromotable = {nm for nm in order if not _is_symbol_expr(first_rhs[nm], allowed)}
@@ -4082,8 +4077,8 @@ def materialize_strided_helper_args(
     ``(N * (m + 1), m + 1)`` -- to a parameter declared ``[N, N]``, whose strides are ``(N, 1)``:
     the two equations say ``__SOLVE_N = N`` and ``__SOLVE_N = (m + 1) * N`` at once, sympy returns
     nothing, and the frontend reports "Cannot infer values for symbols in inference". Accepting the
-    view would be worse than refusing it -- the callee would walk the wrong elements -- so the copy
-    is the fix, the same one ``_build_callsite_stmts`` already makes for an array-returning call.
+    view would make the callee walk the wrong elements, so the view is copied, as
+    ``_build_callsite_stmts`` does for an array-returning call.
 
     ``written_by`` says, per call-site position, whether the callee WRITES that parameter; one that
     it does is copied back after the call, or the sweep would be a silent dropped result.
