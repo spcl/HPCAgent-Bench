@@ -4,7 +4,8 @@
 """Token totals for one run: input, output and THINKING, summed over every agent log.
 
 Reporting output_tokens alone understates a reasoning model by multiples, because the
-OpenAI-compatible endpoints here leave ``usage.output_tokens_details.thinking_tokens`` at 0. The only record of that work is
+OpenAI-compatible endpoints here leave ``usage.output_tokens_details.thinking_tokens`` at 0. The
+only record of that work is
 the client's own stream counter, so this reads BOTH and prints them side by side rather than
 picking one and calling it the total.
 
