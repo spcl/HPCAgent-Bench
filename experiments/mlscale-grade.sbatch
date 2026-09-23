@@ -78,7 +78,9 @@ cleanup() {
     rm -rf "${frozen}"
 }
 trap cleanup EXIT
-if ! python3 -m compileall -q "${repo}/hpcagent_bench/harness" >/dev/null; then
+# The host's 3.11, as regrade.sbatch: the SLES python3 is 3.6 and cannot parse the package, so a
+# job whose inherited PATH lacks the venv refused every tree as "does not compile".
+if ! "$(command -v python3.11 || command -v python3)" -m compileall -q "${repo}/hpcagent_bench/harness" >/dev/null; then
     echo "mlscale-grade: ${repo}/hpcagent_bench/harness does not compile; not launching" >&2
     exit 2
 fi

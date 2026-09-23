@@ -181,3 +181,51 @@ def test_every_mlscale_launcher_defaults_to_the_one_judge_edf() -> None:
     launchers = ("submit-mlscale.sh", "mlscale-grade.sbatch", "mpi/smoke-mlscale-gang.sbatch")
     named = {name: default.findall((EXPERIMENTS / name).read_text()) for name in launchers}
     assert named == dict.fromkeys(launchers, ["hpcagent-bench-judge-mi300-mlscale"]), named
+
+
+def test_the_grade_job_compiles_the_tree_with_the_hosts_python311(tmp_path: pathlib.Path) -> None:
+    """mlscale-grade.sbatch's syntax gate runs on the bare batch host, whose python3 is SLES 3.6: it
+    cannot parse the package, so a job whose PATH lacked the venv refused every tree as "does not
+    compile". The job must reach the next gate (the EDF check, refused here on purpose)."""
+    repo, bin_dir = tmp_path / "repo", tmp_path / "bin"
+    (repo / "hpcagent_bench" / "harness").mkdir(parents=True)
+    (repo / "hpcagent_bench" / "harness" / "modern.py").write_text("match 1:\n    case _:\n        pass\n")
+    (repo / "scripts" / "cscs").mkdir(parents=True)
+    shutil.copy2(REPO / "scripts" / "cscs" / "code_snapshot.sh", repo / "scripts" / "cscs" / "code_snapshot.sh")
+    git_env = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+    for args in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "c"]):
+        subprocess.run(["git", "-C", str(repo), *args], env={"PATH": "/usr/bin:/bin", **git_env}, check=True)
+    bin_dir.mkdir()
+    for name, body in (("python3", "echo 'SyntaxError under 3.6' >&2; exit 1"), ("scontrol", "echo nid1")):
+        (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
+        (bin_dir / name).chmod(0o755)
+    (bin_dir / "python3.11").symlink_to(sys.executable)
+    edf = tmp_path / "judge.toml"
+    edf.write_text('image = "x"\n')
+    worklist = tmp_path / "w.jsonl"
+    worklist.write_text("")
+    env = {
+        "PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
+        "HOME": str(tmp_path),
+        "SCRATCH": str(tmp_path / "scratch"),
+        "HPCAGENT_BENCH_REPO": str(repo),
+        "SLURM_JOB_ID": "1",
+        "SLURM_JOB_NODELIST": "nid1",
+        "SLURM_SUBMIT_DIR": str(repo),
+        "GANG_NODES": "1",
+        "JUDGE_EDF": str(edf),
+    }
+    done = subprocess.run(
+        ["bash", str(EXPERIMENTS / "mlscale-grade.sbatch"), str(worklist), str(tmp_path / "out")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert "does not compile" not in done.stderr, done.stderr
+    assert "does not preload libhwloc.so.15" in done.stderr, done.stderr
