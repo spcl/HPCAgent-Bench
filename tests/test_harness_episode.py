@@ -277,7 +277,14 @@ class FakeToolRunner:
     prompts_log: pathlib.Path | None = None
 
     @staticmethod
-    async def run(agent_handle, prompt, *, max_turns, hooks, run_config):
+    async def run(
+        agent_handle: "FakeToolAgentHandle",
+        prompt: str,
+        *,
+        max_turns: int,
+        hooks: "FakeRunHooks",
+        run_config: object,
+    ) -> FakeToolRunResult:
         if FakeToolRunner.prompts_log is not None:
             append_jsonl(FakeToolRunner.prompts_log, {"prompt": prompt, "settings": agent_handle.model_settings})
         submit_tool = next(t for t in agent_handle.tools if t.name == "submit")
@@ -290,18 +297,18 @@ class FakeToolRunner:
 class FakeAsyncOpenAI:
     """The client ToolAgent opens per round, as an async context manager."""
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: object) -> None:
         self.kwargs = kwargs
 
     async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *exc_info) -> None:
+    async def __aexit__(self, *exc_info: object) -> None:
         return None
 
 
 class FakeRunHooks:
-    async def on_llm_end(self, context, agent, response) -> None:
+    async def on_llm_end(self, context: object, agent: "optimas_tools.ToolAgent", response: object) -> None:
         return None
 
 
@@ -316,15 +323,15 @@ class FakeAgentsSDK:
     RunHooks = FakeRunHooks
 
     @staticmethod
-    def ModelSettings(**kwargs):
+    def ModelSettings(**kwargs: object) -> dict[str, object]:
         return kwargs
 
     @staticmethod
-    def OpenAIChatCompletionsModel(**kwargs):
+    def OpenAIChatCompletionsModel(**kwargs: object) -> object:
         return kwargs["model"]
 
     @staticmethod
-    def RunConfig(**kwargs):
+    def RunConfig(**kwargs: object) -> dict[str, object]:
         return kwargs
 
 
@@ -401,7 +408,9 @@ def test_the_prompt_flag_is_used_verbatim_as_the_agents_task_text(tmp_path, monk
 
 
 @pytest.mark.parametrize("value, root", [("", "/shared"), ("/tmp/run/shared", "/tmp/run/shared")])
-def test_the_tool_agents_files_live_under_the_shared_mount_the_driver_names(monkeypatch, value, root) -> None:
+def test_the_tool_agents_files_live_under_the_shared_mount_the_driver_names(
+    monkeypatch: pytest.MonkeyPatch, value: str, root: str
+) -> None:
     """Read/Edit reach real files under the mount the task text names: the driver's
     HPCAGENT_BENCH_SHARED_DIR, else /shared (experiments/agent_driver.shared_dir)."""
     monkeypatch.setenv("HPCAGENT_BENCH_SHARED_DIR", value)

@@ -25,6 +25,7 @@ import os
 import pathlib
 import sys
 import threading
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -42,7 +43,7 @@ _TEST_VENDOR_DIR = os.environ.get("HPCAGENT_BENCH_OPTIMAS_VENDOR_DIR") or str(
 
 
 @pytest.fixture
-def agents_sdk_on_path(monkeypatch):
+def agents_sdk_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """Puts an ABI-matching vendored ``agents`` on sys.path for the DURATION of one test only."""
     if not pathlib.Path(_TEST_VENDOR_DIR).is_dir():
         pytest.fail(
@@ -52,7 +53,7 @@ def agents_sdk_on_path(monkeypatch):
     monkeypatch.syspath_prepend(_TEST_VENDOR_DIR)
 
 
-def test_require_agents_sdk_raises_a_clear_error_when_the_sdk_is_absent(monkeypatch) -> None:
+def test_require_agents_sdk_raises_a_clear_error_when_the_sdk_is_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     # None in sys.modules is the standard way to force `import agents` to fail (the import
     # system's own convention), without touching sys.path or any other test's state.
     monkeypatch.setitem(sys.modules, "agents", None)
@@ -228,7 +229,7 @@ def chat_completion(
 
 
 @pytest.fixture
-def chat_server():
+def chat_server() -> Iterator[tuple[HTTPServer, str]]:
     """A loopback HTTP server speaking the OpenAI chat-completions wire shape, for the REAL
     openai-agents SDK to talk to -- proves the wiring against the actual client, not a stand-in."""
     ScriptedChatCompletions.requests = []
@@ -243,7 +244,9 @@ def chat_server():
         thread.join(timeout=5)
 
 
-def test_tool_agent_solve_returns_the_models_submitted_source(agents_sdk_on_path, chat_server) -> None:
+def test_tool_agent_solve_returns_the_models_submitted_source(
+    agents_sdk_on_path: None, chat_server: tuple[HTTPServer, str]
+) -> None:
     """End to end: the REAL agents.Agent + agents.Runner call the REAL FunctionTool the SDK builds
     from our schema, the model's tool_call names 'submit', and solve() returns that submission --
     the exact seam runner._solve_rounds grades afterward (see optimas_tools's module docstring)."""
@@ -269,7 +272,9 @@ def test_tool_agent_solve_returns_the_models_submitted_source(agents_sdk_on_path
     assert agent.usage.total == 123 + 17 + 140 + 3
 
 
-def test_tool_agent_solve_raises_when_the_model_never_submits(agents_sdk_on_path, chat_server) -> None:
+def test_tool_agent_solve_raises_when_the_model_never_submits(
+    agents_sdk_on_path: None, chat_server: tuple[HTTPServer, str]
+) -> None:
     server, base_url = chat_server
     ScriptedChatCompletions.replies = [
         chat_completion(
@@ -283,7 +288,9 @@ def test_tool_agent_solve_raises_when_the_model_never_submits(agents_sdk_on_path
         agent.solve(TASK, prompt="Optimize the kernel gemm.")
 
 
-def test_tool_agent_solve_survives_edit_read_then_submit_by_source_file(agents_sdk_on_path, chat_server) -> None:
+def test_tool_agent_solve_survives_edit_read_then_submit_by_source_file(
+    agents_sdk_on_path: None, chat_server: tuple[HTTPServer, str]
+) -> None:
     """The prompt names 'Read' and 'Edit' as this agent's file tools (containers/agent/prompt.md);
     smoke 641802 crashed the WHOLE run the first time a model called either (agents.exceptions.
     ModelBehaviorError: Tool Read not found). Drives the same Edit -> Read -> submit(source_file=)
@@ -310,7 +317,9 @@ def test_tool_agent_solve_survives_edit_read_then_submit_by_source_file(agents_s
     assert submission.source == written
 
 
-def test_tool_agent_solve_survives_a_guessed_bash_call(agents_sdk_on_path, chat_server) -> None:
+def test_tool_agent_solve_survives_a_guessed_bash_call(
+    agents_sdk_on_path: None, chat_server: tuple[HTTPServer, str]
+) -> None:
     """The prompt says "you have a shell" without naming it; a model guessing 'Bash' (Claude Code's
     own name for its shell tool) must get an error MESSAGE back, not crash the run the way an
     unregistered tool name did before this stub existed."""
@@ -357,7 +366,7 @@ def tool_messages(request: dict) -> list[str]:
 
 
 def test_tool_agent_reads_the_reference_and_submits_the_file_it_wrote(
-    agents_sdk_on_path, chat_server, shared: pathlib.Path
+    agents_sdk_on_path: None, chat_server: tuple[HTTPServer, str], shared: pathlib.Path
 ) -> None:
     """The prompt's own workflow: read /shared/tasks/<kernel>/, write /shared/agent-<n>/<stem>.c,
     submit that path. The reference text reaches the model and the file lands where the prompt says."""
@@ -381,7 +390,9 @@ def test_tool_agent_reads_the_reference_and_submits_the_file_it_wrote(
     assert tool_messages(ScriptedChatCompletions.requests[1]) == ["def gemm(a, b, c): c[:] = a @ b\n"]
 
 
-def test_tool_agent_books_every_call_of_a_round_that_ends_on_the_turn_cap(agents_sdk_on_path, chat_server) -> None:
+def test_tool_agent_books_every_call_of_a_round_that_ends_on_the_turn_cap(
+    agents_sdk_on_path: None, chat_server: tuple[HTTPServer, str]
+) -> None:
     """Usage is booked per call as it returns, so a round the SDK ends by raising still counts what
     it spent -- folding the result's responses after the run lost all of it."""
     base_url = chat_server[1]
@@ -395,7 +406,9 @@ def test_tool_agent_books_every_call_of_a_round_that_ends_on_the_turn_cap(agents
     assert agent.usage.total == 2 * (100 + 7)
 
 
-def test_tool_agent_keeps_its_submission_when_the_turn_cap_ends_the_round(agents_sdk_on_path, chat_server) -> None:
+def test_tool_agent_keeps_its_submission_when_the_turn_cap_ends_the_round(
+    agents_sdk_on_path: None, chat_server: tuple[HTTPServer, str]
+) -> None:
     base_url = chat_server[1]
     ScriptedChatCompletions.replies = [
         chat_completion(
@@ -408,7 +421,9 @@ def test_tool_agent_keeps_its_submission_when_the_turn_cap_ends_the_round(agents
 
 
 @pytest.mark.parametrize("rung", ["high", ""])
-def test_tool_agent_sends_the_arms_effort_rung_and_reply_cap(agents_sdk_on_path, chat_server, rung: str) -> None:
+def test_tool_agent_sends_the_arms_effort_rung_and_reply_cap(
+    agents_sdk_on_path: None, chat_server: tuple[HTTPServer, str], rung: str
+) -> None:
     """harness-end.json records the rung as sent; an empty rung is no field at all."""
     base_url = chat_server[1]
     ScriptedChatCompletions.replies = [
@@ -421,7 +436,9 @@ def test_tool_agent_sends_the_arms_effort_rung_and_reply_cap(agents_sdk_on_path,
     assert request["max_tokens"] == 4096
 
 
-def test_tool_agent_answers_an_invented_tool_with_an_error_and_continues(agents_sdk_on_path, chat_server) -> None:
+def test_tool_agent_answers_an_invented_tool_with_an_error_and_continues(
+    agents_sdk_on_path: None, chat_server: tuple[HTTPServer, str]
+) -> None:
     """A tool name the prompt never offered (OpenHands' editor, here) is a message the model can
     read, not a ModelBehaviorError that throws the whole round away."""
     base_url = chat_server[1]
