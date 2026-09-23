@@ -2,8 +2,8 @@
 # Populate a shared AITER JIT cache so serving nodes never build kernels at startup.
 #
 # aiter ships no prebuilt .so: every process JIT-builds module_aiter_core (21-58s measured) and
-# then each op module lazily on first use. That is why 598021 -- the one kimi run with aiter
-# enabled -- never answered /v1/models and died on "API not ready in 5400s".
+# then each op module lazily on first use, long enough for a kimi server to die on
+# "API not ready in 5400s".
 #
 # Building once here and pointing every later run at the same AITER_JIT_DIR turns that into a
 # cache hit. Do NOT let several nodes populate a cold shared dir concurrently: aiter writes the
