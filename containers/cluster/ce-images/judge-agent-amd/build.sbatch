@@ -12,6 +12,10 @@
 #
 #   IMAGE_DIR=containers/cluster/ce-images/judge-agent-amd sbatch "${IMAGE_DIR}/build.sbatch"
 #
+# The PARTITION is a parameter: the directive below builds the mi300 images, and
+# `sbatch --partition=mi200 --cpus-per-task=64 ...` builds the mi200 ones (gfx90a from
+# gpu_arch.env, spack target zen3 from cpu_target.env) to their own candidate names.
+#
 #SBATCH --job-name=build-judge-agent-amd
 #SBATCH --partition=mi300
 #SBATCH --nodes=1
@@ -42,7 +46,10 @@ test -x "${IMAGE_DIR}/build.sh"
 
 mkdir -p "${SCRATCH:?}/ce-images/logs"
 
-export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/hpcagent-bench-ce-amd-mi300-candidate.sqsh}"
+# shellcheck source=../build_common.sh
+source "${IMAGE_DIR}/../build_common.sh"
+PARTITION="${SLURM_JOB_PARTITION:-${ROCM_PARTITION:?set ROCM_PARTITION outside Slurm}}"
+export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/$(ce_amd_candidate agent "${PARTITION}")}"
 export BUILD_TARGETS="${BUILD_TARGETS:-agent judge}"
 
 # WHICH FILES build.sh WILL ACTUALLY WRITE.
@@ -54,11 +61,9 @@ export BUILD_TARGETS="${BUILD_TARGETS:-agent judge}"
 # used. Job 630737 built both images correctly in 3h11m and then exited 2 on `ls` of the name it
 # was told to ignore. Mirror build.sh's rule here instead of guessing at it.
 target_sqsh() {
-    case "$1" in
-        agent) printf '%s/ce-images/hpcagent-bench-ce-amd-mi300-candidate.sqsh' "${SCRATCH:?}" ;;
-        judge) printf '%s/ce-images/hpcagent-bench-ce-judge-amd-mi300-candidate.sqsh' "${SCRATCH:?}" ;;
-        *) echo "unknown build target '$1'" >&2; return 2 ;;
-    esac
+    local name
+    name="$(ce_amd_candidate "$1" "${PARTITION}")" || return 2
+    printf '%s/ce-images/%s' "${SCRATCH:?}" "${name}"
 }
 built_paths() {
     local t

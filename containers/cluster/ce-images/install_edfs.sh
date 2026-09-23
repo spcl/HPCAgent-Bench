@@ -31,18 +31,26 @@ mkdir -p "${EDF_DIR}"
 # shellcheck source=build_common.sh
 source "${SCRIPT_DIR}/build_common.sh"
 
-# The GPU arch a template's image is built for: its directory's build.sbatch names the partition,
-# gpu_arch.env the arch. Rendered into ${GPU_ARCH}.
+# The GPU arch a template's image is built for: the partition passed as $2, else the one its
+# directory's build.sbatch names; gpu_arch.env the arch. Rendered into ${GPU_ARCH}.
 template_arch() {
-    local partition
-    partition="$(sed -n 's/^#SBATCH --partition=//p' "${SCRIPT_DIR}/$(dirname -- "$1")/build.sbatch")"
+    local partition="${2:-}"
+    [[ -n "${partition}" ]] \
+        || partition="$(sed -n 's/^#SBATCH --partition=//p' "${SCRIPT_DIR}/$(dirname -- "$1")/build.sbatch")"
     ce_partition_arch "${partition}"
 }
 
+# What an -mlscale judge EDF appends to LD_PRELOAD: the base image's Ubuntu hwloc, which sees PCI.
+# The spack hwloc is --disable-pci, and multi-node MPI_Init asserts in mpir_hwtopo.c without it.
+MLSCALE_PRELOAD="/usr/lib/x86_64-linux-gnu/libhwloc.so.15"
+
 # Repointing changes which image every job gets, including one that is queued now and starts in
 # an hour. With one version per role there is no pinned run to fall back on, so it is opt-in.
+# render <name> <template> <sqsh> [partition] [preload to append]. The partition picks the arch
+# for an image built off its template's default partition (the mi200 judge pair).
 render() {
-    local name="$1" template="$2" sqsh="$3" target="${EDF_DIR}/$1.toml" image="${CE_IMAGES}/$3"
+    local name="$1" template="$2" sqsh="$3" partition="${4:-}" preload="${5:-}"
+    local target="${EDF_DIR}/$1.toml" image="${CE_IMAGES}/$3"
 
     if [[ ! -f "${image}" ]]; then
         echo "refusing to write ${name}: ${image} does not exist" >&2
@@ -69,12 +77,21 @@ render() {
     # and their build.sbatch names no partition, so asking would refuse them for nothing.
     local arch=""
     if grep -qF '${GPU_ARCH}' "${SCRIPT_DIR}/${template}"; then
-        arch="$(template_arch "${template}")" || return 1
+        arch="$(template_arch "${template}" "${partition}")" || return 1
+    fi
+    local preload_edit=()
+    if [[ -n "${preload}" ]]; then
+        if [[ "$(grep -c '^LD_PRELOAD = "[^"]*"$' "${SCRIPT_DIR}/${template}")" != 1 ]]; then
+            echo "refusing to write ${name}: ${template} has no single LD_PRELOAD line to extend" >&2
+            return 1
+        fi
+        preload_edit=(-e "s|^LD_PRELOAD = \"\(.*\)\"$|LD_PRELOAD = \"\1:${preload}\"|")
     fi
     sed -e "s|\${SCRATCH}|${SCRATCH}|g" \
         -e "s|\"<hpcagent_bench_edf_mounts>\"|${EDF_MOUNTS}|" \
         -e "s|\${GPU_ARCH}|${arch}|g" \
         -e "s|^image = .*|image = \"${image}\"|" \
+        "${preload_edit[@]}" \
         "${SCRIPT_DIR}/${template}" > "${target}"
     printf '  %-32s -> %s\n' "${name}" "${image}"
 }
@@ -129,6 +146,14 @@ try_render "${INFERENCE_VLLM_EDF_LATEST}"   "${INFERENCE_VLLM_TEMPLATE}"   "${IN
 # would fail the install_edfs.sh run of every other role's promotion.
 if [[ -f "${CE_IMAGES}/${INFERENCE_SGLANG_MI200_SQSH}" ]]; then
     try_render "${INFERENCE_SGLANG_MI200_EDF_LATEST}" "${INFERENCE_SGLANG_MI200_TEMPLATE}" "${INFERENCE_SGLANG_MI200_SQSH}"
+fi
+# The mi200 judge + agent pair, same rule: rendered from the mi300 templates with mi200's arch.
+if [[ -f "${CE_IMAGES}/${JUDGE_AGENT_AMD_MI200_SQSH}" ]]; then
+    try_render "${JUDGE_AGENT_AMD_MI200_EDF_LATEST}" "${JUDGE_AGENT_AMD_TEMPLATE}" "${JUDGE_AGENT_AMD_MI200_SQSH}" mi200
+fi
+if [[ -f "${CE_IMAGES}/${JUDGE_AMD_MI200_SQSH}" ]]; then
+    try_render "${JUDGE_AMD_MI200_EDF_LATEST}" "${JUDGE_AMD_TEMPLATE}" "${JUDGE_AMD_MI200_SQSH}" mi200
+    try_render "${JUDGE_AMD_MI200_MLSCALE_EDF}" "${JUDGE_AMD_TEMPLATE}" "${JUDGE_AMD_MI200_SQSH}" mi200 "${MLSCALE_PRELOAD}"
 fi
 
 echo

@@ -18,6 +18,10 @@
 #   sbatch experiments/mpi/smoke-mlscale-e2e.sbatch
 #   ARM_ENV=experiments/.env.mlscale-oss120b-hip-dist-rccl-amd sbatch experiments/mpi/smoke-mlscale-e2e.sbatch
 #
+# On mi200 (MI250X, smoke only, never paper data): a caller's JUDGE_CE_ENV replaces the arm's pin,
+# and gpu_arch_check.sh refuses an EDF whose image was built for another partition's GPU.
+#   JUDGE_CE_ENV=hpcagent-bench-judge-mi200-mlscale sbatch --partition=mi200 experiments/mpi/smoke-mlscale-e2e.sbatch
+#
 #SBATCH --job-name=smoke-mlscale-e2e
 #SBATCH --account=a-g34
 #SBATCH --partition=mi300
@@ -44,10 +48,12 @@ mkdir -p "${RUN_DIR}/edf" "${RUN_DIR}/sandbox" "${RUN_DIR}/judge"
 # flags), the judge pins and the task language. Nothing else -- the rest (inference, agents, run
 # root) belongs to roles this smoke does not start. The config.yaml defaults are the legacy
 # contract (mpi.residency host, a 120 s launch cap); the arm's pins are what make this its judge.
+caller_judge_ce_env="${JUDGE_CE_ENV:-}"
 set -a
 # shellcheck disable=SC1090  # the staged arm env, generated
 . <(grep -E '^(HPCAGENT_BENCH_[A-Z0-9_]+|JUDGE_[A-Z_]+|LANGUAGE)=' "${ARM_ENV}")
 set +a
+JUDGE_CE_ENV="${caller_judge_ce_env:-${JUDGE_CE_ENV}}"
 for pin in HPCAGENT_BENCH_MPI_RESIDENCY=device HPCAGENT_BENCH_MPI_GRADE_DISTRIBUTED=true HPCAGENT_BENCH_MPI_LAUNCH_TIMEOUT_S=900; do
     key="${pin%%=*}"
     [[ "${!key:-}" == "${pin#*=}" ]] || { echo "${ARM_ENV}: want ${pin}, got ${key}=${!key:-}" >&2; exit 2; }
@@ -63,9 +69,12 @@ NODE="$(hostname)"
 GRADE_CPUS="${GRADE_CPUS:-24}"
 PORT="${JUDGE_UPSTREAM_PORT:-8801}"
 
-printf 'repo:    %s (%s)\narm env: %s\nedf:     %s (from %s)\nnode:    %s\nrun dir: %s\n\n' \
-    "${REPO}" "$(git -C "${REPO}" rev-parse --short HEAD)" "${ARM_ENV}" "${EDF}" "${JUDGE_CE_ENV}" "${NODE}" "${RUN_DIR}"
+printf 'repo:    %s (%s)\narm env: %s\nedf:     %s (from %s%s)\nnode:    %s (%s)\nrun dir: %s\n\n' \
+    "${REPO}" "$(git -C "${REPO}" rev-parse --short HEAD)" "${ARM_ENV}" "${EDF}" "${JUDGE_CE_ENV}" \
+    "${caller_judge_ce_env:+, caller override}" "${NODE}" "${SLURM_JOB_PARTITION:-?}" "${RUN_DIR}"
 grep -E '^(HPCAGENT_BENCH_MPI_|JUDGE_GANG_NODES|JUDGE_CE_ENV|LANGUAGE)' "${ARM_ENV}" | sed 's/^/  /'
+
+bash "${REPO}/containers/cluster/ce-images/gpu_arch_check.sh" "${EDF}"
 
 # The gang relay, in THIS batch shell outside any container: the judge container has no usable srun.
 export HPCAGENT_BENCH_GANG_RELAY_DIR="${RUN_DIR}/gang-relay"

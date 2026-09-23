@@ -30,14 +30,12 @@ source "${SCRIPT_DIR}/../build_common.sh"
 BUILD_TARGETS="${BUILD_TARGETS:-agent judge}"
 CE_DIR="${CE_DIR:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images}"
 
-# Per-target output name. The agent keeps the established name so every existing EDF and campaign
-# keeps resolving; the judge is a NEW name and nothing points at it until install_edfs.sh does.
+# Per-target output name, per partition (ce_amd_candidate): nothing points at a candidate until
+# promote_image.sh renames it over a live name.
 target_sqsh() {
-    case "$1" in
-        agent) printf '%s/hpcagent-bench-ce-amd-mi300-candidate.sqsh' "${CE_DIR}" ;;
-        judge) printf '%s/hpcagent-bench-ce-judge-amd-mi300-candidate.sqsh' "${CE_DIR}" ;;
-        *)     echo "unknown build target $1" >&2; return 2 ;;
-    esac
+    local name
+    name="$(ce_amd_candidate "$1" "${CE_PARTITION}")" || return 2
+    printf '%s/%s' "${CE_DIR}" "${name}"
 }
 
 IMAGE_TAG="${IMAGE_TAG:-hpcagent-bench-judge-agent-amd:latest}"
@@ -50,6 +48,11 @@ BASE_DIGEST="sha256:a3b65813621095e3389269417e963725b59310184588c9d2490d44e6e83f
 BASE_IMAGE="${BASE_IMAGE:-${BASE_REPO}@${BASE_DIGEST}}"
 # ROCM_ARCH from gpu_arch.env for this job's partition; an unknown partition stops before any pull.
 ce_gpu_arch
+# The spack CPU target from cpu_target.env; passed only when the partition pins one, so an mi300
+# build gets exactly the build args it always had.
+ce_spack_target
+SPACK_TARGET_ARGS=()
+[[ -z "${SPACK_TARGET}" ]] || SPACK_TARGET_ARGS=(--build-arg "SPACK_TARGET=${SPACK_TARGET}")
 
 # The version the LABEL records. Taken from the output name -- ...-v7.sqsh is v7 --
 # so the label and the artifact cannot disagree.
@@ -65,8 +68,10 @@ ce_podman_env
 ce_cache_base_image
 
 # Wheels survive between jobs here, OUTSIDE the image, so a retry does not rebuild cupy
-# from its sdist. The bind mount means nothing lands in an image layer either way.
-PIP_CACHE="${PIP_CACHE:-${SCRATCH:?}/pip-cache}"
+# from its sdist. The bind mount means nothing lands in an image layer either way. One cache per
+# GPU arch: pip keys a built wheel by its sdist, not by HCC_AMDGPU_TARGET, so a shared cache hands
+# one arch's cupy to the other's build.
+PIP_CACHE="${PIP_CACHE:-${SCRATCH:?}/pip-cache/${ROCM_ARCH}}"
 mkdir -p "${PIP_CACHE}"
 
 # DaCe: resolve the TIP of extended HERE and pass the sha in. The Dockerfile cannot do this --
@@ -140,6 +145,7 @@ for target in ${BUILD_TARGETS}; do
       --build-arg "LIBFABRIC_REF=${LIBFABRIC_REF}" \
       --build-arg "LIBFABRIC_COMMIT=${LIBFABRIC_COMMIT}" \
       --build-arg "ROCM_ARCH=${ROCM_ARCH}" \
+      "${SPACK_TARGET_ARGS[@]}" \
       --target "${target}" \
       -f "${SCRIPT_DIR}/Dockerfile" \
       -t "${tag}" \

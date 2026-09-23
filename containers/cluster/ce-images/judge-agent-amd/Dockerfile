@@ -208,6 +208,9 @@ ARG SPACK_REF=66ff2229e4ff1fbae9006dddd067e45120a5cba8
 ARG SPACK_PACKAGES_REF=3936d6c1796a095cd29f24f3082a5f32f4b5f938
 # Must equal the HOST Slurm (srun --version) exactly; PMI is a versioned wire protocol.
 ARG SLURM_VERSION=25-05-8-1
+# The spack CPU target every spack build is pinned to. build.sh passes it from ../cpu_target.env
+# for the build job's partition (zen3 on mi200); empty -- mi300 -- leaves spack on host detection.
+ARG SPACK_TARGET=
 
 ENV LC_ALL=C \
     PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \
@@ -478,6 +481,13 @@ RUN set -eux; \
       '      prefix: /opt/ofi-sdk' \
       '    buildable: false' \
       >> "${SPACK_ROOT}/etc/spack/packages.yaml"; \
+    # SPACK_TARGET pins every spack build, the standalone gcc included, to one CPU target: an
+    # image built for the build node's own CPU dies on SIGILL on an older one. On a node that
+    # cannot honour it the detected externals mismatch and concretization fails.
+    if [ -n "${SPACK_TARGET:-}" ]; then \
+      printf '%s\n' '  all:' "    require: [\"target=${SPACK_TARGET}\"]" \
+        >> "${SPACK_ROOT}/etc/spack/packages.yaml"; \
+    fi; \
     "${SPACK_ROOT}/bin/spack" external find --scope site \
       cmake ninja pkgconf perl m4 autoconf automake libtool gmake git curl openssl python \
       bison flex texinfo diffutils findutils gawk tar gzip bzip2 xz || true; \
@@ -913,7 +923,12 @@ RUN set -eux; \
     ln -sfn "${mkl_root}" /opt/intel-mkl; \
     test -x /opt/openmpi/bin/mpicc; \
     test -f /opt/intel-mkl/include/mkl.h; \
-    ls /opt/intel-mkl/lib/libmkl_core.so*
+    ls /opt/intel-mkl/lib/libmkl_core.so*; \
+    # Gate, the last spack install above: with a pinned target every prefix sits in its dir.
+    if [ -n "${SPACK_TARGET:-}" ]; then \
+      stray="$(ls /opt/spack-install | grep -vx -e bin -e "linux-${SPACK_TARGET}" || true)"; \
+      [ -z "${stray}" ] || { echo "spack built outside target ${SPACK_TARGET}: ${stray}" >&2; exit 2; }; \
+    fi
 
 # tblis and HPTT are packaged nowhere, so both CE images build them with the repo's own scripts.
 # TBLIS_REF is the v1.3.0 tag, restated here so the image records the version it built rather than

@@ -192,6 +192,20 @@ two builds apart. The `.oci.tar` matters for a different reason: it is what
 still the SUPERSEDED build, so the next push sends the old bytes under the promoted tag -- the
 registry and the cluster then disagree while every checksum looks fine.
 
+### The mi200 judge + agent pair
+
+The mi300 images do not start on mi200 (EPYC 7A53, Zen 3): their spack stack is built for zen4 and
+the mimalloc every process preloads dies on SIGILL before the container runs anything. The same
+recipe builds an mi200 pair when the job runs on mi200: `ROCM_ARCH` comes from `gpu_arch.env`
+(gfx90a) and the spack target from `cpu_target.env` (zen3, a `packages: all: require`), and the
+candidates carry the partition in their names. Smoke tests only; mi200 numbers are never paper data.
+
+```bash
+REPO=$PWD/../../.. IMAGE_DIR=$PWD/judge-agent-amd \
+  sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 build_and_verify.sbatch
+./promote_image.sh judge-agent-amd-mi200 judge-mi200   # -> hpcagent-bench-{agent,judge}-mi200-latest + judge-mi200-mlscale
+```
+
 **There is no layer cache between build jobs.** `build_common.sh` wipes the `/dev/shm` podman
 graphroot on entry because the nodes are diskless, so every build pays full cost. Budget 1-2h and
 do not casually rebuild "to check something".

@@ -22,14 +22,18 @@ ulimit -c 0
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=images.env
 source "${SCRIPT_DIR}/images.env"
+# shellcheck source=build_common.sh
+source "${SCRIPT_DIR}/build_common.sh"
 CE="${CE_IMAGES:-${SCRATCH:?set SCRATCH}/ce-images}"
 DRY_RUN="${DRY_RUN:-0}"
 
 # The candidate each role builds to, matching build.sbatch's OUTPUT_SQSH defaults.
 role_candidate() {
     case "$1" in
-        judge-agent-amd) printf 'hpcagent-bench-ce-amd-mi300-candidate.sqsh' ;;
-        judge)           printf 'hpcagent-bench-ce-judge-amd-mi300-candidate.sqsh' ;;
+        judge-agent-amd) ce_amd_candidate agent mi300 ;;
+        judge)           ce_amd_candidate judge mi300 ;;
+        judge-agent-amd-mi200) ce_amd_candidate agent mi200 ;;
+        judge-mi200)     ce_amd_candidate judge mi200 ;;
         sglang)          printf 'hpcagent-bench-sglang-candidate.sqsh' ;;
         sglang-mi200)    printf 'hpcagent-bench-sglang-mi200-candidate.sqsh' ;;
         vllm)            printf 'hpcagent-bench-vllm-candidate.sqsh' ;;
@@ -43,6 +47,8 @@ role_live() {
     case "$1" in
         judge-agent-amd) printf '%s' "${JUDGE_AGENT_AMD_SQSH}" ;;
         judge)           printf '%s' "${JUDGE_AMD_SQSH}" ;;
+        judge-agent-amd-mi200) printf '%s' "${JUDGE_AGENT_AMD_MI200_SQSH}" ;;
+        judge-mi200)     printf '%s' "${JUDGE_AMD_MI200_SQSH}" ;;
         sglang)          printf '%s' "${INFERENCE_SGLANG_SQSH}" ;;
         sglang-mi200)    printf '%s' "${INFERENCE_SGLANG_MI200_SQSH}" ;;
         vllm)            printf '%s' "${INFERENCE_VLLM_SQSH}" ;;
@@ -59,7 +65,7 @@ role_live() {
 case "${CE_PLATFORM:-amd}" in
     gh200) ALL_ROLES="judge-agent-cuda judge-cuda vllm-cuda" ;;
     cpu)   ALL_ROLES="judge-agent-cpu judge-cpu" ;;
-    *)     ALL_ROLES="judge-agent-amd judge sglang sglang-mi200 vllm" ;;
+    *)     ALL_ROLES="judge-agent-amd judge judge-agent-amd-mi200 judge-mi200 sglang sglang-mi200 vllm" ;;
 esac
 case "${1:-}" in
     --all) roles="${ALL_ROLES}" ;;
@@ -110,7 +116,7 @@ for role in ${roles}; do
     fi
     if [ ! -f "$(verified_marker "${cand}")" ]; then
         # The judge is a second TARGET of the judge-agent-amd build, not a directory of its own.
-        dir="${role}"; [ "${role}" = "judge" ] && dir="judge-agent-amd"
+        dir="${role}"; case "${role}" in judge|judge-*mi200) dir="judge-agent-amd" ;; esac
         echo "${role}: REFUSING -- ${cand##*/} carries no .verified marker" >&2
         case "${role}" in
             *-cuda|*-cpu)
