@@ -355,12 +355,26 @@ def test_a_column_no_row_in_the_table_ever_recorded_still_fills_from_the_arm_nam
         ("llrblind-oss120b-fortran-skills", "llrblind-cmp-oss120b-fortran-skills"),
         ("llrblind-cmp-qwen38-c", "llrblind-cmp-qwen38-c"),
         ("cpf-llr-focus40-qwen38-c", "cpf-llr-focus40-qwen38-c"),
+        # registry arm_aliases (2026-09-24): the dc plain CPU arm is the perf-playbook plain arm
+        ("scicomp-dc-qwen38-plain", "scicomp-perf-playbook-qwen38-plain"),
+        ("scicomp-dc-qwen38-plain-clean", "scicomp-perf-playbook-qwen38-plain-clean"),
+        ("scicomp-dc-gpu-qwen38-hip-plain", "scicomp-dc-gpu-qwen38-hip-plain"),
     ],
 )
 def test_a_renamed_blind_arm_reads_under_its_current_name(arm: str, folded: str) -> None:
     """2026-09-19: llrblind-cmp is the old llrblind arm renamed. Read as two arms, a blind pair sees
     only half of its kernels, and a cmp arm must never fold a second time."""
     assert experiments.renamed_arm(arm) == folded
+
+
+def test_the_dc_and_perf_playbook_spellings_read_as_one_arm() -> None:
+    """2026-09-24 user: "dc should be an alias for perf playbook": both spellings reach analysis as
+    ONE arm, so the latest run per kernel picks between them."""
+    frame = pd.DataFrame(
+        {"arm": ["scicomp-dc-oss120b-plain-clean", "scicomp-perf-playbook-oss120b-plain"], "benchmark": ["a", "a"]}
+    )
+    folded = experiments.fold_clean_arms(experiments.fold_renamed_arms(frame))
+    assert set(folded.arm) == {"scicomp-perf-playbook-oss120b-plain"}
 
 
 def test_both_waves_of_a_renamed_arm_become_one_arm() -> None:

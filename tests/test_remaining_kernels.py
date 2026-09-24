@@ -408,6 +408,36 @@ def test_an_unrelated_arm_starting_with_llrblind_cmp_is_never_double_folded(
     assert owed == {"llrblind-cmp-qwen38-c": ["c"]}
 
 
+def test_the_scicomp_dc_and_perf_playbook_plain_arms_are_one_arm(
+    module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """2026-09-24 user: "dc should be an alias for perf playbook" (registry arm_aliases). The dc
+    spelling, clean or not, folds into the perf-playbook arm: a kernel either delivered is owed by
+    neither, so no plan submits it twice."""
+    job_dir_with_rows(tmp_path / "runs", "100", "scicomp-perf-playbook-qwen38-plain", ["a"])
+    job_dir_with_rows(tmp_path / "runs", "200", "scicomp-dc-qwen38-plain-clean", ["b"])
+    owed = owed_lists(module, monkeypatch, tmp_path)
+    assert owed == {"scicomp-perf-playbook-qwen38-plain": ["c"]}
+
+
+@pytest.mark.parametrize(
+    ("arm", "identity"),
+    [
+        ("scicomp-dc-oss120b-plain", "scicomp-perf-playbook-oss120b-plain"),
+        ("scicomp-dc-oss120b-plain-clean", "scicomp-perf-playbook-oss120b-plain"),
+        ("scicomp-perf-playbook-oss120b-plain-clean", "scicomp-perf-playbook-oss120b-plain"),
+        # only the plain CPU C arm has two spellings: the dc GPU, Fortran and C++ arms stay
+        ("scicomp-dc-gpu-oss120b-hip-plain", "scicomp-dc-gpu-oss120b-hip-plain"),
+        ("scicomp-dc-fortran-qwen38-plain", "scicomp-dc-fortran-qwen38-plain"),
+        ("scicomp-dc-cpp-oss120b-plain", "scicomp-dc-cpp-oss120b-plain"),
+        ("scicomp-dc-qwen38-cpfsrc", "scicomp-dc-qwen38-cpfsrc"),
+        ("git-scicomp-qwen38-kernel", "git-scicomp-qwen38-kernel"),
+    ],
+)
+def test_base_arm_folds_only_the_registered_alias(module: types.ModuleType, arm: str, identity: str) -> None:
+    assert module.base_arm(arm) == identity
+
+
 def test_a_clean_arm_that_covered_the_rest_of_the_roster_owes_nothing(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:

@@ -509,16 +509,19 @@ def drop_resubmissions(frame: "pd.DataFrame") -> "pd.DataFrame":
 
 #: Arm prefixes a campaign was renamed from, and the name it runs under now (``llrblind-cmp`` is the
 #: pre-cmp ``llrblind`` arm under a later name, the same condition, and its data is reused).
-#: ``experiments/remaining_kernels.py:base_arm`` applies the same fold to coverage.
+#: ``experiments/remaining_kernels.py:base_arm`` applies the same fold to coverage. The registry's
+#: ``arm_aliases`` (``experiment_tags.aliased_arm``) are folded after these, by both.
 RENAMED_ARM_PREFIXES: tuple[tuple[str, str], ...] = (("llrblind-", "llrblind-cmp-"),)
 
 
 def renamed_arm(arm: str) -> str:
-    """``arm`` under the name its campaign runs under now; itself when it was never renamed."""
+    """``arm`` under the name its campaign runs under now, then under the registry's arm alias
+    (``experiment_tags.aliased_arm``); itself when it was never renamed or aliased."""
     for old, new in RENAMED_ARM_PREFIXES:
         if arm.startswith(old) and not arm.startswith(new):
-            return new + arm.removeprefix(old)
-    return arm
+            arm = new + arm.removeprefix(old)
+            break
+    return experiment_tags.aliased_arm(arm)
 
 
 def fold_renamed_arms(frame: "pd.DataFrame") -> "pd.DataFrame":

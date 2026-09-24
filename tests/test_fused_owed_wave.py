@@ -1276,7 +1276,7 @@ def test_the_serving_keys_are_the_model_layers_own_not_common_envs(owed: ModuleT
 @pytest.mark.parametrize(
     ("model", "track", "device", "language", "arm"),
     [
-        ("qwen38", "scientific_computing", "cpu", "c", "scicomp-dc-qwen38-plain"),
+        ("qwen38", "scientific_computing", "cpu", "c", "scicomp-perf-playbook-qwen38-plain"),
         ("kimi27sglang", "scientific_computing", "cpu", "c", "scicomp-perf-playbook-kimi27sglang-plain"),
         ("oss120b", "scientific_computing", "gpu", "hip", "scicomp-dc-gpu-oss120b-hip-plain"),
         ("qwen38", "loop_level_reasoning", "cpu", "c", "cpf-llr-focus40-qwen38-c"),
@@ -1304,18 +1304,18 @@ def test_a_treatment_needs_its_baseline_on_every_kernel_it_is_served(owed: Modul
     miniswe = planned(owed, "harness20-qwen38-miniswe", "harness20", {"gemm", "jacobi_2d"})
     assert owed.baseline_needs([claude, miniswe], "qwen38") == {
         "cpf-llr-focus40-qwen38-c": frozenset({"tsvc_2_s235"}),
-        "scicomp-dc-qwen38-plain": frozenset({"gemm", "jacobi_2d"}),
+        "scicomp-perf-playbook-qwen38-plain": frozenset({"gemm", "jacobi_2d"}),
     }
-    baseline = planned(owed, "scicomp-dc-qwen38-plain", "scicomp-focus40", {"gemm"})
-    assert "scicomp-dc-qwen38-plain" not in owed.baseline_needs([claude, baseline], "qwen38"), (
+    baseline = planned(owed, "scicomp-perf-playbook-qwen38-plain", "scicomp-focus40", {"gemm"})
+    assert "scicomp-perf-playbook-qwen38-plain" not in owed.baseline_needs([claude, baseline], "qwen38"), (
         "a baseline the plan already takes needs nothing extra"
     )
 
 
 def test_a_skill_less_arm_beside_its_baseline_is_a_per_treatment_control(owed: ModuleType) -> None:
-    control = planned(owed, "scicomp-perf-playbook-qwen38-plain", "scicomp-focus40", {"gemm"})
-    ran = {"scicomp-dc-qwen38-plain": []}
-    assert owed.per_treatment_control(control, "qwen38", ran) == "scicomp-dc-qwen38-plain"
+    control = planned(owed, "scicomp-dc-qwen38-plain", "scicomp-focus40", {"gemm"})
+    ran = {"scicomp-perf-playbook-qwen38-plain": []}
+    assert owed.per_treatment_control(control, "qwen38", ran) == "scicomp-perf-playbook-qwen38-plain"
     assert owed.per_treatment_control(control, "qwen38", {}) == "", "the only control there is stays"
     harness = planned(owed, "harness20-qwen38-claude", "harness20", {"gemm"})
     assert owed.per_treatment_control(harness, "qwen38", ran) == "", "another experiment: a treatment"
@@ -1327,7 +1327,7 @@ def test_a_skill_less_arm_beside_its_baseline_is_a_per_treatment_control(owed: M
         HPCAGENT_BENCH_RECORD_PACKET="perf-playbook-cpu",
     )
     assert owed.per_treatment_control(skilled, "qwen38", ran) == ""
-    baseline = planned(owed, "scicomp-dc-qwen38-plain", "scicomp-focus40", {"gemm"})
+    baseline = planned(owed, "scicomp-perf-playbook-qwen38-plain", "scicomp-focus40", {"gemm"})
     assert owed.per_treatment_control(baseline, "qwen38", ran) == ""
 
 
@@ -1357,7 +1357,8 @@ def test_a_queued_fused_wave_holds_only_the_kernels_its_problems_name(
     state = owed.queue_state()
     assert state.whole == frozenset({"solo-arm"})
     assert state.kernels == {
-        "scicomp-dc-qwen38-plain": frozenset({"gemm"}),
+        # the queued dc spelling holds the kernel for the ONE arm it aliases (registry arm_aliases)
+        "scicomp-perf-playbook-qwen38-plain": frozenset({"gemm"}),
         "harness20-qwen38-claude": frozenset({"gemm"}),
     }
 
@@ -1380,7 +1381,7 @@ def test_a_queued_promotion_holds_the_kernels_it_promotes(
     monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:{os.environ['PATH']}")
     state = owed.queue_state()
     assert state.whole == frozenset({"promote-owed-0923"})
-    assert state.kernels == {"scicomp-dc-qwen38-plain": frozenset({"dwt2d"})}
+    assert state.kernels == {"scicomp-perf-playbook-qwen38-plain": frozenset({"dwt2d"})}
 
 
 def test_a_fused_queued_arm_still_owes_its_other_kernels(
