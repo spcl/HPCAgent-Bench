@@ -64,25 +64,42 @@ def make_uniform(n, nnz, dtype=np.float64, symmetric: bool = False, seed: int = 
         rows = flat_idx // n
         cols = flat_idx % n
     else:
-        seen = set()
-        rows = np.empty(target, dtype=np.int64)
-        cols = np.empty(target, dtype=np.int64)
-        i = 0
-        while i < target:
-            r = int(rng.integers(0, n))
-            c = int(rng.integers(0, n))
-            if (r, c) in seen:
-                continue
-            seen.add((r, c))
-            rows[i] = r
-            cols[i] = c
-            i += 1
+        rows, cols = distinct_pairs(rng, n, target)
     vals = (rng.random(target, dtype=dtype) * 10 - 5).astype(dtype)
     if symmetric:
         rows = np.concatenate([rows, cols])
         cols = np.concatenate([cols, rows[:target]])
         vals = np.concatenate([vals, vals])
     return sp.coo_matrix((vals, (rows, cols)), shape=(n, n))
+
+
+def distinct_pairs(rng: np.random.Generator, n: int, target: int) -> tuple[np.ndarray, np.ndarray]:
+    """``target`` distinct ``(row, col)`` positions on an n x n grid, drawn exactly as a scalar loop
+    ``r = rng.integers(0, n); c = rng.integers(0, n)`` that skips repeats would draw them, leaving
+    ``rng`` in the same state. Vectorized: the scalar loop took O(nnz) interpreter steps and a set of
+    nnz tuples (hours and tens of GB at XL). Each round draws only the pairs still missing, which the
+    scalar loop would draw too, so the stream stays aligned; a pair is dropped iff its key is already
+    accepted or appears earlier in the same round (np.unique's return_index is the first occurrence)."""
+    rows = np.empty(target, dtype=np.int64)
+    cols = np.empty(target, dtype=np.int64)
+    seen = np.empty(0, dtype=np.int64)
+    filled = 0
+    while filled < target:
+        need = target - filled
+        draws = rng.integers(0, n, size=2 * need)
+        keys = draws[0::2] * n + draws[1::2]
+        keep = np.zeros(need, dtype=bool)
+        keep[np.unique(keys, return_index=True)[1]] = True
+        if seen.size:
+            at = np.minimum(np.searchsorted(seen, keys), seen.size - 1)
+            keep &= seen[at] != keys
+        taken = np.flatnonzero(keep)
+        rows[filled : filled + taken.size] = draws[0::2][taken]
+        cols[filled : filled + taken.size] = draws[1::2][taken]
+        # ``seen`` stays sorted for searchsorted; the stable (radix) sort of int64 keys is linear.
+        seen = np.sort(np.concatenate([seen, keys[taken]]), kind="stable")
+        filled += taken.size
+    return rows, cols
 
 
 def make_banded(n, nnz, dtype=np.float64, bandwidth=None, symmetric: bool = False, seed: int = 42):
