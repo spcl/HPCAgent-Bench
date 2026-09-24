@@ -34,8 +34,15 @@ import sys
 import time
 
 #: Seconds either side may go without touching its heartbeat before the other declares it dead.
-#: These files live on Lustre; a tighter window reads propagation delay as a death.
-HEARTBEAT_S = 120.0
+#: These files live on Lustre; a tighter window reads propagation delay as a death, and a capstor
+#: stall has frozen the relay and the judges together for 4-5 minutes (mlscale smokes 2026-09-24).
+HEARTBEAT_S = 300.0
+#: A gap this long between two of the relay's OWN passes means the relay itself was stalled: the
+#: judges' heartbeats are then measured from its resumption, never across time it was not watching.
+STALL_S = 10.0
+#: Suffix of the marker a step the relay cancelled for a stale judge heartbeat leaves beside its
+#: rc: the judge reads it (mpi_gang.relay_call) as the relay's fault, never the launched program's.
+STALE_MARK = ".stale"
 #: Poll period of the request directory.
 POLL_S = 0.2
 #: Grace after the SIGTERM that lets srun cancel its own step before the SIGKILL.
@@ -133,18 +140,20 @@ def kill(ident, proc):
     return proc.wait()
 
 
-def stale(base, now):
-    """True when the waiting judge stopped touching its heartbeat."""
+def stale(base: str, now: float, watching_since: float = 0.0) -> bool:
+    """True when the waiting judge stopped touching its heartbeat for :data:`HEARTBEAT_S` of the
+    time the relay was watching (``watching_since``: its last resumption from a stall)."""
     for suffix in (".alive", ".run"):
         try:
-            return now - os.stat(base + suffix).st_mtime > HEARTBEAT_S
+            return now - max(os.stat(base + suffix).st_mtime, watching_since) > HEARTBEAT_S
         except OSError:
             continue
     return True
 
 
-def step(directory, running):
-    """One pass: start new requests, reap finished or abandoned steps, publish the heartbeat."""
+def step(directory: str, running: dict, watching_since: float = 0.0) -> None:
+    """One pass: start new requests, reap finished or abandoned steps, publish the heartbeat.
+    ``watching_since`` is when the relay last resumed from a stall of its own (:data:`STALL_S`)."""
     for name in sorted(os.listdir(directory)):
         if name.endswith(".req"):
             ident = claim(directory, name)
@@ -156,7 +165,8 @@ def step(directory, running):
     for ident, proc in list(running.items()):
         base = os.path.join(directory, ident)
         rc = proc.poll()
-        if rc is None and stale(base, now):
+        if rc is None and stale(base, now, watching_since):
+            touch(base + STALE_MARK)
             rc = kill(ident, proc)
         if rc is not None:
             finish(base, 128 - rc if rc < 0 else rc)
@@ -168,9 +178,14 @@ def serve(directory, parent):
     if not os.path.isdir(directory):
         os.makedirs(directory)
     running = {}
+    watching_since = last = time.time()
     try:
         while os.getppid() == parent:
-            step(directory, running)
+            now = time.time()
+            if now - last > STALL_S:
+                watching_since = now
+            step(directory, running, watching_since)
+            last = time.time()
             time.sleep(POLL_S)
     finally:
         for ident, proc in running.items():

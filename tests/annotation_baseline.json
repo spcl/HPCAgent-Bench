@@ -112,7 +112,7 @@
  "scripts/check_no_astype_copy.py": 5,
  "scripts/check_no_out_kwarg.py": 5,
  "scripts/check_reference_naming.py": 4,
- "scripts/cscs/gang_relay.py": 30,
+ "scripts/cscs/gang_relay.py": 24,
  "scripts/extrapolate_sizes.py": 1,
  "scripts/gen_build_fragments.py": 3,
  "scripts/njit_oracle_gate.py": 8,
