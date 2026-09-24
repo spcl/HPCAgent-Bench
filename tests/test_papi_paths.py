@@ -17,6 +17,7 @@ from collections.abc import Callable, Sequence
 import pytest
 
 from hpcagent_bench.harness import papi
+from hpcagent_bench.harness.native_call import RepTiming
 
 #: Thread ids of the fake process's workers. The calling thread is always ``os.getpid()``.
 WORKERS = (101, 102, 103)
@@ -129,14 +130,20 @@ class ScriptedPapi:
 
 
 def install(monkeypatch: pytest.MonkeyPatch, lib: ScriptedPapi, *, slow_first_rep_s: float = 0.0) -> None:
-    """Point papi at ``lib`` and replace the native call with ``warmup + reps`` runs of its kernel."""
+    """Point papi at ``lib`` and replace the native call with ``warmup + reps`` runs of its kernel.
 
-    def native_call(*args: object, timed_call: Callable[..., int], reps: int, warmup: int, **kwargs: object) -> None:
+    The fake keeps the real seam's contract: ``_call_native_impl`` reads ``.ns`` off every timed
+    call, so a counter that answered a bare int fails here exactly as it failed every /profile."""
+
+    def native_call(
+        *args: object, timed_call: Callable[..., RepTiming], reps: int, warmup: int, **kwargs: object
+    ) -> None:
         for rep in range(warmup + reps):
             if rep == warmup and slow_first_rep_s:
-                timed_call(lambda: (time.sleep(slow_first_rep_s), lib.kernel()), [], lambda: None)
+                timing = timed_call(lambda: (time.sleep(slow_first_rep_s), lib.kernel()), [], lambda: None)
             else:
-                timed_call(lib.kernel, [], lambda: None)
+                timing = timed_call(lib.kernel, [], lambda: None)
+            assert timing.ns >= 0 and timing.host_ns == timing.ns, timing
 
     monkeypatch.setattr(papi, "initialised", lambda: lib)
     monkeypatch.setattr(papi, "_call_native_impl", native_call)
@@ -206,6 +213,26 @@ def test_a_known_one_two_three_four_split_comes_back_as_its_rows_and_its_imbalan
     assert spread["max_over_mean"] == pytest.approx(1.6) and spread["wasted_fraction"] == pytest.approx(0.375)
     assert spread["critical_tid"] == WORKERS[-1], spread
     assert (report["reps_counted"], report["threads_participating"]) == (3, 4), report
+
+
+def test_every_counted_rep_reaches_the_native_call_as_a_rep_timing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_call_native_impl`` reads ``rep.ns`` off each timed call. The counter answered a bare int,
+    so every /profile PAPI metric came back ``counted run failed (AttributeError: 'int' object has
+    no attribute 'ns')`` (40 such answers in the owed-harness20 runs of 2026-09-23)."""
+    lib = ScriptedPapi(one_two_three_four)
+    seen: list[object] = []
+
+    def native_call(
+        *args: object, timed_call: Callable[..., RepTiming], reps: int, warmup: int, **kwargs: object
+    ) -> None:
+        seen.extend(timed_call(lib.kernel, [], lambda: None) for _ in range(warmup + reps))
+
+    install(monkeypatch, lib)
+    monkeypatch.setattr(papi, "_call_native_impl", native_call)
+    monkeypatch.setattr(papi, "thread_ids", lambda: (os.getpid(), *WORKERS))
+    row = count(reps=2, warmup=1)
+    assert row["count"] == 10_000, row
+    assert len(seen) == 3 and all(isinstance(rep, RepTiming) for rep in seen), seen
 
 
 def test_a_summed_count_is_one_rep_s_delta_on_every_attached_thread(monkeypatch) -> None:

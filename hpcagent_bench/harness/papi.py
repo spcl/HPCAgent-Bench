@@ -196,6 +196,7 @@ from hpcagent_bench.harness.native_call import (
     CArgument,
     CKernel,
     KernelData,
+    RepTiming,
     _call_native_impl,
     _current_vmsize_bytes,
     host_buffer,
@@ -793,6 +794,15 @@ def combine(terms: Sequence[str], values: Sequence[int]) -> int:
     return sum(-v if t.startswith("-") else v for t, v in zip(terms, values))
 
 
+def host_rep(ns: int) -> RepTiming:
+    """One counted rep as the timed-call seam of ``_call_native_impl`` takes it.
+
+    The counters bracket the call on the host clock, so that bracket is both the credited sample
+    and the host one; a bare int here fails the native call on ``rep.ns`` and loses every count.
+    """
+    return RepTiming(ns=ns, host_ns=ns)
+
+
 def missing(metric: str, reason: str) -> MetricRow:
     """The "no number for this metric" payload. Always the same shape as a successful one, with
     ``count`` explicitly ``None`` -- a caller must never have to tell absence from zero."""
@@ -1175,14 +1185,14 @@ def counted_run(
         for _tid, eventset in handles:
             demand(lib, lib.PAPI_start(eventset), "PAPI_start")
 
-    def counted(fn: CKernel, c_args: list[CArgument], settle: Callable[[], None]) -> int:
+    def counted(fn: CKernel, c_args: list[CArgument], settle: Callable[[], None]) -> RepTiming:
         index = len(calls)
         calls.append(0)
         if index < warm:  # untimed as far as the counters go: this is what creates the OpenMP pool
             start = time.perf_counter_ns()
             fn(*c_args)
             settle()  # the pool arm() enumerates below must be the one the kernel actually used
-            return time.perf_counter_ns() - start
+            return host_rep(time.perf_counter_ns() - start)
         if index == warm:
             arm()
         # Sampled at every rep boundary, outside the read bracket: a thread that lives between two
@@ -1204,7 +1214,7 @@ def counted_run(
             for (tid, _es), (before, after) in zip(handles, buffers)
         )
         readings.append((ns, rows))
-        return ns
+        return host_rep(ns)
 
     _call_native_impl(
         pathlib.Path(lib_path),
@@ -2617,7 +2627,7 @@ def gpu_counting_worker(
                 f"(driver status {status}), so the count would be of an unfinished kernel",
             )
 
-    def counted(fn: CKernel, c_args: list[CArgument], settle: Callable[[], None]) -> int:
+    def counted(fn: CKernel, c_args: list[CArgument], settle: Callable[[], None]) -> RepTiming:
         index = len(calls)
         calls.append(0)
         if index < warm:  # untimed: this is the call that creates the device context
@@ -2625,7 +2635,7 @@ def gpu_counting_worker(
             fn(*c_args)
             settle()  # any host-side deferred work the kernel left running, before our own drain
             drain()
-            return time.perf_counter_ns() - start
+            return host_rep(time.perf_counter_ns() - start)
         if index == warm:
             demand(lib, lib.PAPI_create_eventset(ctypes.byref(eventset)), "PAPI_create_eventset")
             demand(lib, lib.PAPI_assign_eventset_component(eventset, component_index), "PAPI_assign_eventset_component")
@@ -2639,7 +2649,7 @@ def gpu_counting_worker(
         ns = time.perf_counter_ns() - t0
         demand(lib, lib.PAPI_read(eventset, after), "PAPI_read")
         readings.append((ns, int(after[0] - before[0])))
-        return ns
+        return host_rep(ns)
 
     _call_native_impl(
         pathlib.Path(lib_path),
