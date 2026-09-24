@@ -14,6 +14,8 @@ import pathlib
 import sys
 from types import ModuleType
 
+import pytest
+
 SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "experiments" / "jax_pilot.py"
 
 
@@ -68,6 +70,7 @@ def test_table_credits_speedup_only_to_validated_cells(tmp_path: pathlib.Path) -
     rows = {(r["column"], r["device"]): r for r in pilot.table_rows(pilot.load_cells(tmp_path))}
     cpu, gpu = rows[("jax_eager_jit", "cpu")], rows[("jax_eager_jit", "rocm")]
     assert (cpu["x_numpy"], cpu["x_numba"]) == ("5", "0.5")
+    assert cpu["cache_hit"] == "-", "no compile cache configured, so no hit/miss claim"
     assert cpu["cc_autopar_ms"] == "-", "a baseline that failed the band is no denominator"
     assert (gpu["x_numpy"], gpu["x_numba"]) == ("-", "-"), "a wrong answer is never a speed-up"
     lines = pilot.summary(list(rows.values()))
@@ -90,3 +93,18 @@ def test_canon_rows_keep_failures_and_name_columns_by_device(tmp_path: pathlib.P
     assert (timeout["validated"], timeout["median_ms"], timeout["failure"]) == ("False", "", "timeout_or_crash")
     (wrong,) = rows["jax_gpu_jit"]
     assert (wrong["validated"], wrong["median_ms"]) == ("False", ""), "a wrong answer files no time"
+
+
+def test_cache_entries_sees_a_new_entry_as_a_miss(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pilot = load_pilot()
+    monkeypatch.delenv("JAX_COMPILATION_CACHE_DIR", raising=False)
+    assert pilot.cache_entries() is None
+    monkeypatch.setenv("JAX_COMPILATION_CACHE_DIR", str(tmp_path / "jax"))
+    assert pilot.cache_entries() == frozenset(), "a cache dir not created yet is empty"
+    (tmp_path / "jax").mkdir()
+    (tmp_path / "jax" / "jit_k-abc-cache").write_text("x")
+    before = pilot.cache_entries()
+    (tmp_path / "jax" / "jit_k-abc-atime").write_text("t")
+    assert pilot.cache_entries() == before, "an access-time touch on a hit is not a new entry"
+    (tmp_path / "jax" / "jit_k-def-cache").write_text("y")
+    assert pilot.cache_entries() != before
