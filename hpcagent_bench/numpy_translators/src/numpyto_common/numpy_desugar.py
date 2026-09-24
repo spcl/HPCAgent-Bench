@@ -20,7 +20,7 @@ import copy
 import math
 from dataclasses import dataclass
 from collections.abc import Callable, Mapping, Sequence
-from typing import Dict, FrozenSet, Iterator, List, NamedTuple, Optional, Set, Tuple, Union
+from typing import Dict, FrozenSet, Iterator, List, NamedTuple, Optional, Set, Tuple, TypeGuard, Union
 
 from numpyto_common import dtypes
 from numpyto_common.lib_nodes import iter_extent_of, parse_einsum_subscripts, extent_is_scalar
@@ -590,7 +590,7 @@ def _call_return_rank(value: ast.AST, call_returns: Dict[str, int]) -> Optional[
 IDENT_RE = r"[A-Za-z_][A-Za-z0-9_]*"
 
 
-def is_native_numpy_eigh(call: ast.AST) -> bool:
+def is_native_numpy_eigh(call: ast.AST) -> TypeGuard[ast.Call]:
     """Whether ``call`` is ``np.linalg.eigh(a)`` / ``np.linalg.eigvalsh(a)``, optionally with ``UPLO=``.
 
     Only that form: scipy's generalized ``eigh(a, b)``, ``subset_by_index`` and ``eigvals_only`` have
@@ -615,9 +615,10 @@ def eigh_stand_ins(target: ast.expr, value: ast.expr) -> list[tuple[str, ast.exp
     values = ast.Subscript(value=operand, slice=ast.Tuple(elts=[ast.Constant(...), ast.Constant(0)], ctx=ast.Load()))
     if np_submodule_attr(value, "linalg") == "eigvalsh":
         return [(target.id, values)] if isinstance(target, ast.Name) else None
-    if isinstance(target, ast.Tuple) and len(target.elts) == 2 and all(isinstance(e, ast.Name) for e in target.elts):
-        return [(target.elts[0].id, values), (target.elts[1].id, operand)]
-    return None
+    if not isinstance(target, ast.Tuple) or len(target.elts) != 2:
+        return None
+    w, v = target.elts
+    return [(w.id, values), (v.id, operand)] if isinstance(w, ast.Name) and isinstance(v, ast.Name) else None
 
 
 def name_value_pairs(tree: ast.AST) -> Iterator[Tuple[str, ast.expr]]:
@@ -5218,10 +5219,9 @@ class _EighLoopRewriter(ast.NodeTransformer):
         self.array_dtypes = array_dtypes or {}
         self._ctr = 0
 
-    def keep_call(self, node: ast.Assign):
+    def keep_call(self, node: ast.Assign, call: ast.Call) -> ast.Assign | list[ast.Assign]:
         """A kept call, its operand bound to a name first: the rank and shape tables size the outputs
         from that name (:func:`eigh_stand_ins`)."""
-        call = node.value
         if isinstance(call.args[0], ast.Name):
             return node
         name = f"__eigh{self._ctr}_a"
@@ -5259,7 +5259,7 @@ class _EighLoopRewriter(ast.NodeTransformer):
         if len(node.targets) != 1:
             return node
         if self.keep_native and is_native_numpy_eigh(node.value):
-            return self.keep_call(node)
+            return self.keep_call(node, node.value)
         hit = _eigh_call_kind(node.value, self.alias_names)
         if hit is None:
             return node
