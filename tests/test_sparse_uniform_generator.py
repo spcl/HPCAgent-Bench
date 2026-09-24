@@ -11,7 +11,7 @@ bicgstab at the L/XL and fuzzed sizes: the judge built the input in-process for 
 import numpy as np
 import pytest
 
-from hpcagent_bench.support.helpers.sparse.generators import distinct_pairs, make_uniform
+from hpcagent_bench.support.helpers.sparse.generators import distinct_pairs, first_occurrences, make_uniform
 
 
 def scalar_pairs(rng: np.random.Generator, n: int, target: int) -> tuple[np.ndarray, np.ndarray]:
@@ -43,6 +43,17 @@ def test_distinct_pairs_matches_scalar_loop(n: int, target: int, seed: int) -> N
     np.testing.assert_array_equal(rows, ref_rows)
     np.testing.assert_array_equal(cols, ref_cols)
     assert new_rng.random() == ref_rng.random()
+
+
+@pytest.mark.parametrize(("size", "high"), [(0, 1), (1, 1), (50, 1), (1000, 30), (100_000, 50_000), (100_000, 10**12)])
+def test_first_occurrences_matches_unique_return_index(size: int, high: int) -> None:
+    """The mask equals marking np.unique's first-occurrence indices: all-equal, no-repeat and mixed keys."""
+    keys = np.random.default_rng(size + high).integers(0, high, size=size)
+    want = np.zeros(size, dtype=bool)
+    want[np.unique(keys, return_index=True)[1]] = True
+    keep, ordered = first_occurrences(keys)
+    np.testing.assert_array_equal(keep, want)
+    np.testing.assert_array_equal(ordered, np.sort(keys))
 
 
 @pytest.mark.parametrize("symmetric", [False, True])
