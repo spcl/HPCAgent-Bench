@@ -172,9 +172,9 @@ the vLLM path that builds on first request and dies.
   `HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR` from the sbatch environment; the arm env
   file pins them for the arms whose packet asks. A control arm's `shared/tasks/<kernel>/` must hold
   no `<kernel>.c` drop-in.
-- **One inference server does not carry 120 qwen3.8 agents.** Sessions end on
-  `API Error: The operation timed out` and the arm records almost nothing, while oss120b survives
-  the same load. Chunk the roster (see complement waves).
+- **One inference server does not carry 120 qwen3.8 agents.** Per-request decode slows until the
+  arm records almost nothing, while oss120b survives the same load. Chunk the roster (see
+  complement waves).
 - **An agent-exit promotion reads every judge rank DB.** A shard file with no schema is skipped; a
   shard whose tables lack a column still fails the promotion.
 - **Harness smokes** (`SMOKE=1 ./submit-harness-focus20.sh`) default to a 2 h wall clock and a
@@ -182,9 +182,13 @@ the vLLM path that builds on first request and dies.
 - **An rc127 is not automatically a dead stream.** `CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS`
   (`experiments/stream_idle_timeout.py`) is now derived from `CONTEXT_LENGTH`/`AGENTS_PER_NODE`
   rather than pinned to the CLI's own 1800000ms ceiling, so a request that legitimately sends no
-  bytes during a long prefill under contention is less likely to be killed as idle. A stream that
-  DIED after opening a tool-use block, never closing it (qwen38 jobs 641738/641748), is a separate,
-  still-open shape `agent_driver.timed_out_mid_tool_use()` flags apart from a slow-but-alive one.
+  bytes during a long prefill under contention is less likely to be killed as idle.
+- **`API Error: The operation timed out` with a `tool_use` block left open is not a dead server.**
+  SGLang's qwen3_coder parser sends a tool argument only once it is fully decoded, so a 4k-token
+  heredoc is minutes of silence. Against a non-Anthropic `ANTHROPIC_BASE_URL` the CLI's byte
+  watchdog is not installed; Bun's own ~300 s fetch socket timeout and the SSE-event watchdog (floor
+  300 s) are what cut it. run_cluster.sh sets `API_FORCE_IDLE_TIMEOUT=0` and
+  `CLAUDE_STREAM_IDLE_TIMEOUT_MS` from the same derived value; both are client transport settings.
 
 ## Agents
 

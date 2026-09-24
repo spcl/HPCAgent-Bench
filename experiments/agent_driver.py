@@ -2080,11 +2080,12 @@ def open_tool_use_index(tail: str) -> int | None:
 def timed_out_mid_tool_use(log_path: pathlib.Path) -> bool:
     """True when :func:`api_timeout` fired on a stream that died while announcing a tool call.
 
-    Distinguishes a DEAD stream from a slow-but-alive one for the same "operation timed out" text: a
-    dead one opens a ``tool_use`` content block (its ``content_block_start`` reaches the client) and
-    then sends nothing else -- no argument deltas, no ``content_block_stop`` -- until the client gives
-    up. A slow-but-alive request instead never gets that far, or closes every block it opens. This
-    is the qwen38 SGLang stall at the tool_use boundary.
+    The block was opened (its ``content_block_start`` reached the client) and nothing else came --
+    no argument deltas, no ``content_block_stop`` -- until the client gave up. On qwen38 that is not
+    a dead server: SGLang's qwen3_coder parser sends each argument only once its ``</parameter>`` is
+    decoded, and the request was still decoding when Bun's ~300 s fetch socket timeout cut it
+    (mlscale 649795: the server dropped the request from its running batch at the second the client
+    errored). run_cluster.sh now lifts that wall (API_FORCE_IDLE_TIMEOUT=0, CLAUDE_STREAM_IDLE_TIMEOUT_MS).
     """
     if not api_timeout(log_path):
         return False
@@ -2155,12 +2156,12 @@ def watch_dead_stream(
 ) -> None:
     """Kill ``process`` when its stream dies mid ``tool_use`` and stays silent past ``threshold_s``.
 
-    The qwen38 stall (see :func:`timed_out_mid_tool_use`): a
-    stream that opens a ``tool_use`` content block and then sends NOTHING never gives the CLI's own
-    ``CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS`` anything to fire against on some transports, so a dead
-    stream can sit for the full ``AGENT_TIMEOUT_SECONDS`` (hours) instead of the arm's own idle
-    budget. This polls the transcript's tail directly instead of trusting the process to notice its
-    own silence, so the crash-and-relaunch path below still gets a bounded wait.
+    The qwen38 shape (see :func:`timed_out_mid_tool_use`): a stream that opens a ``tool_use``
+    content block and then sends NOTHING. The CLI's byte watchdog
+    (``CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS``) is installed only for api.anthropic.com, so against a
+    local server the only CLI-side walls are the ones run_cluster.sh sets from the same value; this
+    polls the transcript's tail directly as the backstop, so a stream that really never resumes
+    still gets a bounded wait instead of the full ``AGENT_TIMEOUT_SECONDS``.
     """
     poll_s = max(1.0, min(30.0, threshold_s / 10))
     while process.poll() is None:

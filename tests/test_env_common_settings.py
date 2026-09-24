@@ -12,6 +12,7 @@ server arguments they describe.
 import importlib.util
 import pathlib
 import re
+import subprocess
 import sys
 import types
 
@@ -24,7 +25,13 @@ LAUNCHER = EXPERIMENTS / "run_cluster.sh"
 
 #: Settings that are the same for every model and every harness: the launcher owns them, and a .env
 #: that repeats one is how two arms end up on different values.
-COMMON_VARS = ("API_TIMEOUT_MS", "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS", "CLAUDE_CODE_MAX_OUTPUT_TOKENS")
+COMMON_VARS = (
+    "API_TIMEOUT_MS",
+    "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS",
+    "CLAUDE_STREAM_IDLE_TIMEOUT_MS",
+    "API_FORCE_IDLE_TIMEOUT",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+)
 
 #: The launcher's default for each of them. The idle watchdog is the wall that fires first in Claude
 #: Code 2.1.197; its default is DERIVED (stream_idle_timeout.py, 2026-09-19) from the arm's own
@@ -33,6 +40,13 @@ COMMON_VARS = ("API_TIMEOUT_MS", "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS", "CLAUDE_C
 LAUNCHER_DEFAULTS = {
     "API_TIMEOUT_MS": "3600000",
     "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS": '$(python3 "${SCRIPT_DIR}/stream_idle_timeout.py")',
+    # The byte watchdog above is installed only for api.anthropic.com. Against SGLang/vLLM the walls
+    # that fire are the SSE-event watchdog (floor 300 s) and Bun's own ~300 s fetch socket timeout,
+    # which the CLI lifts only when API_FORCE_IDLE_TIMEOUT is falsy -- both unset cut qwen38 streams
+    # at 4-5 min of silence mid tool_use ("API Error: The operation timed out.", mlscale 649795).
+    # The event watchdog takes the SAME derived number, never a second one.
+    "CLAUDE_STREAM_IDLE_TIMEOUT_MS": "${CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS}",
+    "API_FORCE_IDLE_TIMEOUT": "0",
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32768",
 }
 
@@ -151,3 +165,36 @@ def test_the_policy_resolves_each_declared_ladder_to_the_rung_that_model_runs_at
     """The ladders are only right if the rung they resolve to is the one the campaign meant to run."""
     model = path.name.removeprefix(".env.base-")
     assert effort.resolve(env_values(path)["EFFORT_LADDER"]) == RESOLVED[model]
+
+
+def test_every_cli_idle_wall_resolves_to_the_one_derived_value() -> None:
+    """Run the launcher's own idle-timeout export lines: the SSE-event watchdog must land on the
+    same number as the byte watchdog, and Bun's fetch socket timeout must be switched off (the CLI
+    reads "0" as falsy and then passes ``timeout: false`` to fetch). A 262144-token qwen38 arm at 40
+    agents per node derives the CLI's 30-minute ceiling."""
+    names = ("CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS", "CLAUDE_STREAM_IDLE_TIMEOUT_MS", "API_FORCE_IDLE_TIMEOUT")
+    lines = [
+        line.strip()
+        for line in LAUNCHER.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith(tuple(f"export {name}=" for name in names))
+    ]
+    assert len(lines) == len(names)
+    script = "\n".join([*lines, *(f'echo "{name}=${{{name}}}"' for name in names)])
+    done = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "SCRIPT_DIR": str(EXPERIMENTS),
+            "CONTEXT_LENGTH": "262144",
+            "AGENTS_PER_NODE": "40",
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    resolved = dict(line.split("=", 1) for line in done.stdout.split())
+    assert resolved == {
+        "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS": "1800000",
+        "CLAUDE_STREAM_IDLE_TIMEOUT_MS": "1800000",
+        "API_FORCE_IDLE_TIMEOUT": "0",
+    }

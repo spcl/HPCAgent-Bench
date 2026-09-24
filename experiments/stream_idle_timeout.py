@@ -6,13 +6,16 @@ Standard library only, same reason as ``effort.py``: the launcher shells out to 
 agent node, which carries no hpcagent_bench.
 
 The Claude CLI aborts a request that sends NO BYTES for this long (a long prompt behind many
-concurrent decodes emits nothing until its first token -- indistinguishable, in the transcript,
-from a request whose STREAM DIED outright once opened). That second shape does not reliably trip
-this setting on every transport; ``agent_driver.watch_dead_stream`` polls the
-transcript tail directly and kills it once :func:`derive_ms`'s own value has passed, instead of
-trusting the CLI to notice its own silence. The installed CLI (2.1.224) clamps
-whatever this is set to into ``[FLOOR_MS, CEILING_MS]`` itself (read out of its bundle's ``ViS``/
-``KiS`` constants) -- so a value above the ceiling is not a bigger number, it is the ceiling with
+concurrent decodes emits nothing until its first token; SGLang's qwen3_coder parser emits a tool
+argument only once it is fully decoded, so the stream is silent mid ``tool_use`` for as long as the
+argument takes to generate). run_cluster.sh hands this ONE value to both CLI idle walls --
+``CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS`` (byte watchdog, installed only for api.anthropic.com) and
+``CLAUDE_STREAM_IDLE_TIMEOUT_MS`` (SSE-event watchdog, every provider, floor 300 s) -- and sets
+``API_FORCE_IDLE_TIMEOUT=0`` so Bun's own ~300 s fetch socket timeout ("The operation timed out.")
+does not cut a non-first-party stream first. ``agent_driver.watch_dead_stream`` polls the transcript
+tail and kills a silent open ``tool_use`` once the same value has passed. The installed CLI clamps
+the byte watchdog into ``[FLOOR_MS, CEILING_MS]`` itself (2.1.224 bundle ``ViS``/``KiS``, 2.1.197
+``NPd``/``BPd``) -- so a value above the ceiling is not a bigger number, it is the ceiling with
 extra steps, and this module says so instead of leaving that to be rediscovered by hand.
 
 The number is derived, not copied: the worst-case LEGITIMATE gap is a full-context prefill at the
