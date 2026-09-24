@@ -908,7 +908,7 @@ def _call_native_impl(
     # The C signature is fixed by the binding's DECLARED types, so cdef/dlopen happen ONCE
     # for the whole measurement. Every language passes scalars BY VALUE (one uniform C-ABI --
     # fortran uses the ``value`` attribute, so there is no per-language marshalling here).
-    # ``ptr_cdecl`` / ``is_int`` cache each arg's cast type-string / register class by name: both
+    # ``ptr_cdecl`` / ``scalar_cast`` cache each arg's cast type-string / by-value converter by name: both
     # are functions of the binding's DECLARED dtype alone, never the rep, so precomputing them
     # here means once() (run every rep -- up to reps+warmup times per call) looks them up instead
     # of re-deriving them (np.dtype(...)/np.issubdtype/_ptr_cdecl) on every single rep.
@@ -919,7 +919,7 @@ def _call_native_impl(
     base = index_base(lang)
     rebase: Dict[str, int] = {}
     ptr_cdecl: Dict[str, str] = {}
-    is_int: Dict[str, bool] = {}
+    scalar_cast: Dict[str, Callable[[object], CArgument]] = {}
     params: List[str] = []
     for a in binding.args:
         if a.kind == "ptr":
@@ -927,15 +927,21 @@ def _call_native_impl(
             ptr_cdecl[a.name] = cdecl
             rebase[a.name] = base if a.is_index else 0
             params.append(cdecl)
+        elif np.dtype(a.dtype) == np.bool_:
+            # The emitted C declares a bool symbol `const bool`: an INTEGER-class argument. Declared
+            # double here it went to an XMM register, and every later integer argument (sizes
+            # included) was read one register off -- vexx_k's C reference crashed on every draw.
+            scalar_cast[a.name] = bool
+            params.append("bool")
         elif np.issubdtype(np.dtype(a.dtype), np.integer):
             # The C type comes from the binding's DECLARED dtype, not the runtime
             # value: a scalar declared double whose seeded value happens to be
             # whole-numbered must still be passed as double (the int/float
             # argument register classes differ in the x86-64 SysV ABI).
-            is_int[a.name] = True
+            scalar_cast[a.name] = int
             params.append("int64_t")
         else:
-            is_int[a.name] = False
+            scalar_cast[a.name] = float
             params.append("double")
     params.append(WORKSPACE_PTYPE)
     params.append("int64_t")
@@ -1004,10 +1010,8 @@ def _call_native_impl(
                     buf: ArrayBuffer = xp.asarray(host)
                     buffers[a.name] = buf
                     c_args.append(ffi.cast(ptr_cdecl[a.name], scratch_ptr(buf)))
-                elif is_int[a.name]:
-                    c_args.append(int(src[a.name]))
                 else:
-                    c_args.append(float(src[a.name]))
+                    c_args.append(scalar_cast[a.name](src[a.name]))
         c_args.append(ws_arg)
         c_args.append(ws_bytes)
 
