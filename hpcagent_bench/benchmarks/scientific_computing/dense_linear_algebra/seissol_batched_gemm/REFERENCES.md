@@ -58,7 +58,7 @@ DOI: [10.1145/3432261.3436753](https://doi.org/10.1145/3432261.3436753).
 cuBLAS batched); the citable companion to the **gemmforge** repository.
 
 **[4] gemmforge / TensorForge / chainforge -- software.**
-Ravil Dorozhinskii et al. (TU München / SeisSol project).
+Ravil Dorozhinskii et al. (TU Muenchen / SeisSol project).
 github.com/SeisSol/gemmforge (batched GEMM generator),
 github.com/SeisSol/TensorForge (batched tensor-contraction generator),
 github.com/SeisSol/chainforge (fused GEMM chains; see [1]).
@@ -94,16 +94,16 @@ ADER-DG at petascale.
 
 ## ADER-DG method & small/sparse-matrix kernel foundations
 
-**[8] Käser & Dumbser (2006) -- ADER-DG seismic, Part I (2D).**
-M. Käser, M. Dumbser. *An arbitrary high-order discontinuous Galerkin method for
+**[8] Kaeser & Dumbser (2006) -- ADER-DG seismic, Part I (2D).**
+M. Kaeser, M. Dumbser. *An arbitrary high-order discontinuous Galerkin method for
 elastic waves on unstructured meshes -- I. The two-dimensional isotropic case with
 external source terms.* Geophysical Journal International **166**(2), pp. 855-877,
 2006. DOI: [10.1111/j.1365-246X.2006.03051.x](https://doi.org/10.1111/j.1365-246X.2006.03051.x).
 -> The foundational ADER-DG scheme SeisSol implements; element updates as products
 of small per-element matrices.
 
-**[9] Dumbser & Käser (2006) -- ADER-DG seismic, Part II (3D).**
-M. Dumbser, M. Käser. *An arbitrary high-order discontinuous Galerkin method for
+**[9] Dumbser & Kaeser (2006) -- ADER-DG seismic, Part II (3D).**
+M. Dumbser, M. Kaeser. *An arbitrary high-order discontinuous Galerkin method for
 elastic waves on unstructured meshes -- II. The three-dimensional isotropic case.*
 Geophysical Journal International **167**(1), pp. 319-336, 2006.
 DOI: [10.1111/j.1365-246X.2006.03120.x](https://doi.org/10.1111/j.1365-246X.2006.03120.x).
@@ -163,6 +163,6 @@ Flagged / uncertain:
 - **[10]** Conference ParCo 2013; proceedings published 2014 (year is the only
   soft field).
 - Author-order corrections vs. the request: **[7]** is led by *Breuer* (not
-  Heinecke); **[11]**'s third author is *Rannabauer* (not Käser). The CPE 2024
+  Heinecke); **[11]**'s third author is *Rannabauer* (not Kaeser). The CPE 2024
   title is "*Fused GEMMs towards an efficient GPU implementation of the ADER-DG
   method in SeisSol*".
