@@ -5889,11 +5889,37 @@ class _FancySliceStoreToLoop(ast.NodeTransformer):
     unconditionally took the wrong plane and, where the extents differed, failed to broadcast.
     """
 
-    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str]) -> None:
+    def __init__(self, ranks: Dict[str, int], dtypes: Dict[str, str], fn: ast.AST, broadcast: bool = False) -> None:
         self.ranks = ranks
         self.dtypes = dtypes
         self.changed = False
         self._ctr = 0
+        self.broadcast = broadcast
+        # numba: a carrier bound to a list literal (lulesh's ``corners = [n0, n1, n2, n3]``) has no
+        # ``.shape``; ``len`` counts it the same way.
+        self.lists = frozenset(name for name, value in name_value_pairs(fn) if isinstance(value, (ast.List, ast.Tuple)))
+
+    def _broadcast_lines(self, p: str, target: ast.Subscript, lead: List[ast.expr], k: int, extent: str, value: ast.expr):
+        """numba: bind ``{p}_v`` to the right-hand side BROADCAST to the selection's shape, and return
+        the carrier's axis in it.
+
+        The right-hand side broadcasts against the selection: lulesh's
+        ``normal[:, corners, 0] += areaX[:, None]`` pairs a (numelem, 1) value with a (numelem, 4)
+        selection, so reading it at column ``it`` walks past the end -- unchecked in numba. The
+        selection's shape is one slot's (the carrier pinned to 0: a view, nothing read) with the
+        carrier's extent inserted where numpy puts the advanced axis -- in place, or first when a
+        scalar index is split from the carrier by a slice. Built from the subscript alone: the
+        rank table is a lower bound (``0.25 * (...)`` over an untyped call reads as rank 0), and a
+        row index read off it would be silently wrong. ``np.broadcast_to`` is a view."""
+        slices = [isinstance(e, ast.Slice) for e in lead]
+        split = any(any(slices[min(j, k) : max(j, k)]) for j, sl in enumerate(slices) if not sl and j != k)
+        axis = 0 if split else sum(slices[:k])
+        slot = [ast.unparse(e) if j != k else "0" for j, e in enumerate(lead)]
+        lines = [
+            f"{p}_s = {target.value.id}[{', '.join(slot)}].shape",
+            f"{p}_v = np.broadcast_to({ast.unparse(value)}, {p}_s[:{axis}] + ({extent},) + {p}_s[{axis}:])",
+        ]
+        return lines, axis
 
     def _carrier(self, lead: List[ast.expr]) -> Optional[int]:
         """Index of the one lead position holding a rank-1 index array, if the shape fits."""
@@ -5925,10 +5951,15 @@ class _FancySliceStoreToLoop(ast.NodeTransformer):
         idx_name = next(n.id for n in ast.walk(lead[k]) if isinstance(n, ast.Name) and self.ranks.get(n.id) == 1)
         at_iter = _SubstituteName(idx_name, f"{idx_name}[{it}]").visit(copy.deepcopy(lead[k]))
         new_lead = [ast.unparse(e) if j != k else ast.unparse(at_iter) for j, e in enumerate(lead)]
-        lines = [
-            f"{p}_v = {ast.unparse(value)}",
-            f"for {it} in range({idx_name}.shape[0]):",
-            f"    {target.value.id}[{', '.join(new_lead)}] {op} {p}_v[{', '.join([':'] * k + [it])}]",
+        if self.broadcast:
+            extent = f"len({idx_name})" if idx_name in self.lists else f"{idx_name}.shape[0]"
+            lines, axis = self._broadcast_lines(p, target, lead, k, extent, value)
+        else:
+            extent, axis = f"{idx_name}.shape[0]", k
+            lines = [f"{p}_v = {ast.unparse(value)}"]
+        lines += [
+            f"for {it} in range({extent}):",
+            f"    {target.value.id}[{', '.join(new_lead)}] {op} {p}_v[{', '.join([':'] * axis + [it])}]",
         ]
         self.changed = True
         return [ast.copy_location(st, node) for st in ast.parse("\n".join(lines)).body]
@@ -6463,6 +6494,12 @@ def _expr_of(src: str) -> ast.expr:
     return ast.parse(src, mode="eval").body
 
 
+def _leading_view(base: ast.expr, entries: List[ast.expr]) -> ast.Subscript:
+    """``base[entries]``, the one-entry case spelled without a tuple."""
+    sl = copy.deepcopy(entries[0]) if len(entries) == 1 else ast.Tuple(elts=copy.deepcopy(entries), ctx=ast.Load())
+    return ast.Subscript(value=copy.deepcopy(base), slice=sl, ctx=ast.Load())
+
+
 class _OuterBroadcastPeel(ast.NodeTransformer):
     """Peel an OUTER-PRODUCT broadcast's outermost axis into an explicit loop (numba only).
 
@@ -6540,6 +6577,10 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
                 if bi >= len(base):
                     return None
                 ext = _slice_extent_token(e, base[bi])
+                if ext is None and e.step is None:
+                    # Bounds the text cannot fold (gem's ``pos[start:stop, None, :]``): the view's own
+                    # extent is exact however numpy clips them, where ``stop - start`` is not.
+                    ext = f"{ast.unparse(_leading_view(sub.value, entries[: i + 1]))}.shape[{len(axes)}]"
                 if ext is None:
                     return None
                 axes.append((i, "slice", ext))
@@ -6595,6 +6636,21 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
             return self._peel_subscript(expr, idx)
         return None
 
+    def _dtype_probe(self, expr: ast.expr) -> ast.expr:
+        """``expr`` with every array operand replaced by a one-element array of its own dtype.
+
+        Only the probe's DTYPE is read. Row 0 of the peel is no stand-in: on an empty extent (gem's
+        tail block when ``npoints`` is a multiple of ``POINT_BLOCK``) it reads past the operand, and
+        numba does not bounds-check the read. Ones, not zeros, so an integer division cannot trap."""
+        if isinstance(expr, ast.UnaryOp):
+            return ast.UnaryOp(op=expr.op, operand=self._dtype_probe(expr.operand))
+        ops = self._operands(expr)
+        if ops is not None:
+            return self._rebuild(expr, [self._dtype_probe(o) for o in ops])
+        if isinstance(expr, ast.Constant) or not self._extents(expr):
+            return expr
+        return _expr_of(f"np.ones(1, ({ast.unparse(expr)}).dtype)")
+
     def _rebuild(self, expr: ast.expr, peeled: List[ast.expr]) -> ast.expr:
         if isinstance(expr, ast.BinOp):
             return ast.BinOp(left=peeled[0], op=expr.op, right=peeled[1])
@@ -6622,6 +6678,12 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
                 repl = e.lower if e.lower is not None else ast.Constant(value=0)
             elif e.lower is None or _const_int(e.lower) == 0:
                 repl = _expr_of(idx)
+            elif _slice_extent_token(e, None) is None:
+                # An unfolded extent (see :meth:`_axes`) reads row ``idx`` OF THE VIEW: ``lower + idx``
+                # leaves the slice's clipping behind -- a negative or past-the-end bound -- and
+                # indexes outside it.
+                view = _leading_view(sub.value, entries[: pos + 1])
+                return self._tidy(ast.Subscript(value=view, slice=_expr_of(idx), ctx=ast.Load()), entries[pos + 1 :])
             elif isinstance(e.lower, (ast.Name, ast.Constant)):
                 repl = ast.BinOp(left=copy.deepcopy(e.lower), op=ast.Add(), right=_expr_of(idx))
             else:
@@ -6720,16 +6782,16 @@ class _OuterBroadcastPeel(ast.NodeTransformer):
             return node
         temp, ivar = f"__ob{self._ctr}", f"__ob{self._ctr}_i"
         row = self._peel(copy.deepcopy(node.value), ivar, rank)
-        probe = self._peel(copy.deepcopy(node.value), "0", rank)
-        if row is None or probe is None:
+        if row is None:
             return node
+        probe = self._dtype_probe(copy.deepcopy(node.value))
         self._ctr += 1
         self.changed = True
         out: List[ast.stmt] = []
         dest = base if direct and base is not None else f"{temp}_o"
         shape = ", ".join(ext)
         if isinstance(target, ast.Name):
-            # A bare Name is a BINDING, so the loop alone would leave it unbound. The probe row
+            # A bare Name is a BINDING, so the loop alone would leave it unbound. The probe
             # carries the promoted dtype (mandelbrot's ``X + Y[:, None] * 1j`` is complex, which
             # neither operand is); only its dtype is read, never its values.
             out.append(ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=probe))
@@ -7009,6 +7071,64 @@ class ReshapeFortranOrderInline(ast.NodeTransformer):
         )
 
 
+def _is_none(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and node.value is None
+
+
+class DropNonePlaceholders(ast.NodeTransformer):
+    """Drop a function-scope ``a = b = None`` seed of names the body binds to arrays (numba only).
+
+    warpx_esirkepov_deposition seeds ``sx_new = sx_old = ... = None`` and binds each under a geometry
+    branch. numba types the merge as an optional array, and its parfor array analysis -- what
+    ``parallel=True`` turns on -- asserts ``Dimension mismatch for (sx_new.2, sx_new.1)``; a typed
+    empty placeholder instead fails at run time with a broadcast error. Unseeded, the name is simply
+    unbound on the paths that never read it, which compiles and runs.
+
+    Only a seed nothing can observe is dropped: the name is re-bound elsewhere in the scope, is not a
+    parameter, and is never tested against ``None``, returned, or handed bare to a call other than a
+    ``np.*`` one -- a helper or closure could branch on the ``None`` numba would no longer pass. Only
+    TOP-LEVEL statements are visited: a seed inside a branch is one arm of a real choice."""
+
+    def __init__(self, fn: ast.FunctionDef) -> None:
+        self.changed = False
+        params = set(parameter_names(fn))
+        rebound = {
+            node.id
+            for stmt in scope_nodes(fn)
+            if isinstance(stmt, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.For)) and not _is_none(vars(stmt).get("value"))
+            for target in (stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target])
+            for node in ast.walk(target)
+            if isinstance(node, ast.Name)
+        }
+        observed: set = set()
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Compare) and any(isinstance(op, (ast.Is, ast.IsNot)) for op in node.ops):
+                observed.update(n.id for n in (node.left, *node.comparators) if isinstance(n, ast.Name))
+            elif isinstance(node, ast.Return) and node.value is not None:
+                observed.update(n.id for n in ast.walk(node.value) if isinstance(n, ast.Name))
+            elif isinstance(node, ast.Call) and _np_attr(node) is None:
+                bare = [*node.args, *(kw.value for kw in node.keywords)]
+                observed.update(a.id for a in bare if isinstance(a, ast.Name))
+            elif isinstance(node, (ast.FunctionDef, ast.Lambda)) and node is not fn:
+                observed.update(n.id for n in ast.walk(node) if isinstance(n, ast.Name))
+        self.droppable = (rebound - params) - observed
+
+    def generic_visit(self, node: ast.AST) -> ast.AST:
+        return node
+
+    def visit_Assign(self, node: ast.Assign) -> Optional[ast.AST]:
+        if not _is_none(node.value) or not all(isinstance(t, ast.Name) for t in node.targets):
+            return node
+        kept = [t for t in node.targets if t.id not in self.droppable]
+        if len(kept) == len(node.targets):
+            return node
+        self.changed = True
+        if not kept:
+            return None
+        node.targets = kept
+        return node
+
+
 class NumbaDtypeFixups(ast.NodeTransformer):
     """Two spellings numba's dtype-strict typing refuses where numpy accepts them (numba only).
 
@@ -7249,7 +7369,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             _BoolOpIfToChain(),
             _NormalizeNegativeAxis(ranks),
             IxWriteToLoop(ranks, dtypes, fn),
-            _FancySliceStoreToLoop(ranks, dtypes),
+            _FancySliceStoreToLoop(ranks, dtypes, fn, broadcast=backend == "numba"),
             _EighInline(ranks, eigh_aliases, dtypes, kir_array_dtypes),
             ValueHoist(LINALG_HOIST, tables),
             _ReshapeMatmulInline(ranks),
@@ -7287,6 +7407,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
                 [
                     ReshapeFortranOrderInline(),
                     NumbaDtypeFixups(_dtype_table(fn, param_kinds.get(vars(fn).get("name"), {}))),
+                    *([DropNonePlaceholders(fn)] if isinstance(fn, ast.FunctionDef) else []),
                 ]
                 if backend == "numba"
                 else []
