@@ -216,9 +216,9 @@ def test_a_known_one_two_three_four_split_comes_back_as_its_rows_and_its_imbalan
 
 
 def test_every_counted_rep_reaches_the_native_call_as_a_rep_timing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``_call_native_impl`` reads ``rep.ns`` off each timed call. The counter answered a bare int,
-    so every /profile PAPI metric came back ``counted run failed (AttributeError: 'int' object has
-    no attribute 'ns')`` (40 such answers in the owed-harness20 runs of 2026-09-23)."""
+    """``_call_native_impl`` reads ``rep.ns`` off each timed call, so a counter that answers a bare
+    int fails every /profile PAPI metric with ``counted run failed (AttributeError: 'int' object
+    has no attribute 'ns')``."""
     lib = ScriptedPapi(one_two_three_four)
     seen: list[object] = []
 

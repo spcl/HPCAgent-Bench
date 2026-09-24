@@ -652,8 +652,8 @@ def stage_fused_launch(run_root: pathlib.Path, job: str) -> pathlib.Path:
 
 def test_a_worker_the_judge_never_saw_takes_its_identity_from_the_launch_env(tmp_path: pathlib.Path) -> None:
     """The ``runs`` row is written by a run's first grade, so a worker that never reached the judge
-    had a task row with no harness and no packet: 28 of the 2026-09-23 owed-harness20 task rows,
-    the cost of exactly the episodes that failed, fell out of every per-harness slice."""
+    would get a task row with no harness and no packet, and the cost of exactly the episodes that
+    failed would fall out of every per-harness slice."""
     job_dir = stage_fused_launch(tmp_path, "648819")
     write_worker(job_dir / "agents" / "node-0" / "problem-0-worker-0", "arm-caveman.n0.p0.w0")
     write_worker(job_dir / "agents" / "node-0" / "problem-1-worker-1", "arm-plain.n0.p1.w1")
@@ -686,7 +686,7 @@ def test_an_arm_its_setups_disagree_on_gets_no_launch_identity(tmp_path: pathlib
 
 
 def test_a_job_without_a_launch_dir_keeps_blank_identity(tmp_path: pathlib.Path) -> None:
-    """The 09-19 reducer deleted some launch dirs; with nothing to read, nothing is invented."""
+    """A launch dir can be gone; with nothing to read, nothing is invented."""
     job_dir = tmp_path / "621000"
     write_worker(job_dir / "agents" / "node-0" / "problem-0-worker-0", "arm-a.n0.p0.w0")
     (row,) = extract_llr40.task_rows_for_job(job_dir, "r", "621000", "", frozenset(), extract_llr40.JobIdentity({}, {}))
