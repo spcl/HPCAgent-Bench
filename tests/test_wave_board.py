@@ -719,3 +719,36 @@ def test_an_arm_the_user_dropped_is_not_on_the_board(
 def test_only_cpfsrc_v2_stays_on_the_board(board: types.ModuleType, job_name: str, dropped: bool) -> None:
     """Every cpfsrc (v1) arm leaves the board; cpfsrc-v2, the cpf tool and the control stay."""
     assert bool(board.DROPPED_ARMS.search(job_name)) is dropped
+
+
+@pytest.mark.parametrize(
+    ("arm", "campaign", "variant", "place"),
+    [
+        ("llrblind-cmp-qwen38-hip-skills", "llrblind", "cmp-qwen38-hip-skills", ("LLR", "GPU blind")),
+        ("llrblind-cmp-qwen38-c", "llrblind", "cmp-qwen38-c", ("LLR", "CPU blind")),
+        ("cpf-llr-focus40-qwen38-c-cpfsrc-v2", "cpf-llr-focus40", "c-cpfsrc-v2", ("LLR", "CPF CPU")),
+        ("gpu-llr-focus40-oss120b-hip-caveman", "gpu-llr-focus40", "hip-caveman", ("LLR", "Caveman")),
+        ("scicomp-dc-gpu-qwen38-triton-plain", "scicomp-dc-gpu", "triton-plain", ("SciComp", "Triton")),
+        ("harness20-qwen38-optimas", "harness20", "optimas", None),
+        ("harness-focus20-qwen38-claude", "harness-focus20", "claude", None),
+        ("mlscale-grade-0924", "mlscale", "grade-0924", None),
+    ],
+)
+def test_placement_puts_each_paper_arm_in_its_section_and_leaves_the_rest_off(
+    board: types.ModuleType, arm: str, campaign: str, variant: str, place: tuple[str, str] | None
+) -> None:
+    """The board shows the paper's experiments in the user's order (2026-09-25); a voided or
+    superseded arm, or a grade job read as an arm by its name, has no place."""
+    assert board.placement({"arm": arm, "campaign": campaign, "variant": variant}) == place
+
+
+def test_active_kernels_splits_owed_kernels_by_the_state_of_the_job_holding_them(
+    board: types.ModuleType,
+) -> None:
+    """A job serving the whole arm holds every owed kernel: RUNNING ones count as running, a
+    PENDING one's as queued, and a kernel both hold is running."""
+    jobs = [board.Job("1", "a", "RUNNING", 1, "", ""), board.Job("2", "a", "PENDING", 1, "", "")]
+    running, queued = board.active_kernels(jobs, {}, {"x", "y"})
+    assert (running, queued) == ({"x", "y"}, set())
+    running, queued = board.active_kernels(jobs[1:], {}, {"x"})
+    assert (running, queued) == (set(), {"x"})
