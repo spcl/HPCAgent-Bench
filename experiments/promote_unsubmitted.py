@@ -620,6 +620,12 @@ def main() -> int:
         default=PROMOTE_BUDGET_S,
         help="ceiling on the whole pass; this runs inside the job's remaining wall clock",
     )
+    ap.add_argument(
+        "--libraries",
+        default="",
+        help="comma list of catalog names (e.g. mpi,rccl) sent where the recorded envelope names none: "
+        "a shard written before the router logged each call's link request",
+    )
     args = ap.parse_args()
     if not args.run_dir.is_dir():
         print(f"no such run dir: {args.run_dir}", file=sys.stderr)
@@ -629,6 +635,10 @@ def main() -> int:
         return 2
 
     items = swept_candidates(args.run_dir)
+    fallback = [name.strip() for name in args.libraries.split(",") if name.strip()]
+    for item in items:
+        if fallback and not item.get("libraries"):
+            item["libraries"] = json.dumps(fallback)
     if not items:
         print("nothing to promote: every verified kernel already has a submission")
         return 0
