@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 
 from numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SymbolDesc
 from numpyto_common import dtypes
+from numpyto_common.emit_io import write_atomic_text
 from numpyto_common.naming import entry_symbol
 
 
@@ -69,7 +70,7 @@ def emit_binding(
         },
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(payload, indent=2))
+    write_atomic_text(out_path, json.dumps(payload, indent=2))
     return payload
 
 
@@ -97,5 +98,5 @@ def emit_pluto_binding(
         "sources": {"c": f"{base}_pluto.c"},
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(payload, indent=2))
+    write_atomic_text(out_path, json.dumps(payload, indent=2))
     return payload

@@ -370,7 +370,8 @@ line names the commit, and `runs.commit_sha` records it. So `grep container runt
 prints under `HPCAGENT_BENCH_REPO` point into that copy, not the live tree. Inspect it like any
 other checkout while the job runs: the batch step removes it when the job ends (normal end,
 failure, scancel or time limit), after its steps and the token extraction. Only a SIGKILL past
-KillWait leaves one behind; `rm -rf .frozen/job-<jobid>` once that job has left the queue.
+KillWait leaves one behind; `python3 scripts/cscs/frozen_store.py sweep <.frozen> <.frozen-store> --delete`
+removes the copies of ended jobs and the store entries nothing links (README.md#mount-policy).
 
 **Is a new wave healthy?** Run `check_job.py` 30-45 minutes after a wave starts, before trusting it:
 

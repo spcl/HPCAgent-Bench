@@ -12,6 +12,7 @@ from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, operators, parallelism
 from numpyto_common.ordered import OrderedSet
+from numpyto_common.emit_io import write_atomic_text
 from numpyto_common.emitter import (
     BaseEmitter,
     TupleTargetSplitter,
@@ -3074,7 +3075,7 @@ def write_arith_header(out_dir, lang: str) -> pathlib.Path:
     """Write :func:`arith_header_source` into ``out_dir`` and return the path."""
     path = pathlib.Path(out_dir) / ARITH_HEADER_NAME[lang]
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(arith_header_source(lang))
+    write_atomic_text(path, arith_header_source(lang))
     return path
 
 
