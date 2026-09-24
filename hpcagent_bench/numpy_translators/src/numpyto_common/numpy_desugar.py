@@ -5500,6 +5500,12 @@ _LOWER_SOLVE_RHS_RANKS: Dict[Optional[str], frozenset] = {"dace": frozenset({1})
 #: benchmark sizes (fft_1d's N ~ 7e7).
 NATIVE_FFT_BACKENDS = frozenset({"dace"})
 
+#: Backends whose ``@`` takes numpy's stacked (>2-D, broadcasting) operands NATIVELY, so
+#: :class:`_BatchedMatmulToLoop` leaves the product in place. dace's frontend binds one ``MatMul``
+#: library node, which canon lowers to a batched GEMM (an OpenBLAS batch loop on the CPU, a
+#: strided-batched rocBLAS/cuBLAS call on the GPU); the per-batch loop hides that batch from it.
+NATIVE_BATCHED_MATMUL_BACKENDS = frozenset({"dace"})
+
 
 def lowers_linalg(tables: HoistTables) -> bool:
     """Whether the backend lowers any ``np.linalg`` call at all (pythran every op, dace a ``solve`` rhs rank)."""
@@ -7278,7 +7284,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             _EighInline(ranks, eigh_aliases, dtypes, kir_array_dtypes),
             ValueHoist(LINALG_HOIST, tables),
             _ReshapeMatmulInline(ranks),
-            _BatchedMatmulToLoop(ranks),
+            *([] if backend in NATIVE_BATCHED_MATMUL_BACKENDS else [_BatchedMatmulToLoop(ranks)]),
             _PadInline(ranks, lower_symbolic_constant=backend == "dace"),
             ValueHoist(EINSUM_HOIST, tables),
             *([] if backend in NATIVE_FFT_BACKENDS else [_FftInline(ranks, kir_array_dtypes)]),
