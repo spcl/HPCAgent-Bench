@@ -409,13 +409,15 @@ def test_the_child_runs_its_problem_under_run_agent(tmp_path: pathlib.Path, monk
     monkeypatch.setenv("JUDGE_BASE_URL", "http://j0:8800")
     monkeypatch.delenv("HARNESS", raising=False)
     driver = load("agent_driver")
-    calls: list[tuple[object, ...]] = []
-    monkeypatch.setattr(driver, "run_agent", lambda *args: calls.append(args) or 0)
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(driver, "run_agent", lambda *args, **kwargs: calls.append((args, kwargs)) or 0)
     monkeypatch.setattr(driver, "watch_for_job_cancellation", lambda: None)
     assert driver.fused_problem_main(["2", "5", "7"]) == 0
-    problem, worker, node_dir, _judges, index, agents = calls[0]
+    (problem, worker, node_dir, _judges, index, agents), kwargs = calls[0]
     assert (problem["kernel"], worker, index, agents) == ("k2", 5, 2, 7)
     assert node_dir == tmp_path / "agents" / "node-0"
+    # The child grades on the judge judge_ranks deals this problem from the FULL list.
+    assert kwargs == {"judge_rank": 0}
 
 
 def test_file_start_slots_are_shared_across_processes(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
