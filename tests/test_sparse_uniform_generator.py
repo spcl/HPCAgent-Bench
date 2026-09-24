@@ -33,7 +33,7 @@ def scalar_pairs(rng: np.random.Generator, n: int, target: int) -> tuple[np.ndar
 
 
 @pytest.mark.parametrize(("n", "target", "seed"), [(40, 1200, 42), (7, 49, 3), (1000, 5000, 42), (1, 1, 0)])
-def test_distinct_pairs_matches_scalar_loop(n, target, seed):
+def test_distinct_pairs_matches_scalar_loop(n: int, target: int, seed: int) -> None:
     """Dense grids force repeats within a round and across rounds (n=7 fills every cell); the pairs
     and the rng state afterwards are identical to the scalar loop's."""
     ref_rng = np.random.default_rng(seed)
@@ -46,7 +46,7 @@ def test_distinct_pairs_matches_scalar_loop(n, target, seed):
 
 
 @pytest.mark.parametrize("symmetric", [False, True])
-def test_make_uniform_large_grid_matches_scalar_loop(symmetric):
+def test_make_uniform_large_grid_matches_scalar_loop(symmetric: bool) -> None:
     """n*n above the dense-choice cutoff takes the rejection path; the whole COO matrix, values
     included, equals the one the scalar loop built."""
     n, nnz, seed = 4096, 30000, 42
@@ -63,7 +63,7 @@ def test_make_uniform_large_grid_matches_scalar_loop(symmetric):
     np.testing.assert_array_equal(got.data, ref_vals)
 
 
-def test_distinct_pairs_scales_to_millions():
+def test_distinct_pairs_scales_to_millions() -> None:
     """Two million distinct positions on the XL grid (N=2e6): every key unique and in range. The scalar
     loop needed minutes for this; the vectorized draw needs about a second."""
     n, target = 2_000_000, 2_000_000

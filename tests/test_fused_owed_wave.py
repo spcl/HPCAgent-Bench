@@ -1029,13 +1029,15 @@ def test_an_experiment_without_a_budget_policy_is_refused(owed: ModuleType) -> N
         ("harness-focus20", ("24000000", "21600"), ("24000000", "21600")),
         ("scicomp-focus40", ("24000000", "21600"), ("120000000", "72000")),
         ("git-scicomp", ("24000000", "43200"), ("120000000", "72000")),
+        ("mlscale", ("24000000", "43200"), ("24000000", "43200")),
     ],
 )
 def test_every_plannable_experiment_has_a_budget_policy(
     owed: ModuleType, experiment: str, model_base: tuple[str, str], expected: tuple[str, str]
 ) -> None:
     """One row per experiment a campaign with a roster answers (wave_board.CAMPAIGNS): LLR at the
-    model base, the harnesses at 21600 s whatever the model, scicomp at 120M / 72000 s."""
+    model base, the harnesses at 21600 s whatever the model, scicomp at 120M / 72000 s, mlscale at
+    the model base."""
     assert owed.policy_budget(experiment, owed.Budget(*model_base)) == owed.Budget(*expected)
     plannable = {spec.experiment for spec in owed.wave_board.CAMPAIGNS.values() if spec.tag}
     assert plannable == set(owed.POLICY_BUDGETS)
