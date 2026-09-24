@@ -931,6 +931,13 @@ def cost_label(
     return f"{head}{over}, {card} ({spelled})" if card else f"{head}{over} ({spelled})"
 
 
+def cost_row_label(name: str) -> str:
+    """The one-line token-cost Y title of a dot row: the card's name (``billed`` -> ``Billed Tokens``).
+    The weight vector goes into the caption; spelled on the axis it folds the title onto three lines."""
+    card = cost_card_name(name)
+    return f"{card} Tokens" if card else "Tokens"
+
+
 def style_panel(
     ax: Axes,
     config: FigureConfig = DEFAULT_CONFIG,
@@ -1671,7 +1678,7 @@ def figure_row(
 MEASURES: tuple[str, ...] = ("speedup", "success", "cost")
 
 #: Each measure's default axis label.
-MEASURE_LABELS: dict[str, str] = {"speedup": "Speed-Up", "success": "Tasks Completed", "cost": ABSOLUTE_YLABEL}
+MEASURE_LABELS: dict[str, str] = {"speedup": "Speed-Up", "success": "Solved", "cost": ABSOLUTE_YLABEL}
 
 #: Each measure's row height as a fraction of ``row_height_in``. A count out of N needs no ladder of
 #: ratios, so the success row is the shortest; the speed-up and cost rows are 0.7 of one and the
@@ -1688,14 +1695,6 @@ SERVED_SPEEDUP_LABEL: str = "Speed-Up (1x Fallback)"
 def speedup_row_label(over: population.KernelPolicy) -> str:
     """The speed-up row's Y label under ``over``."""
     return SERVED_SPEEDUP_LABEL if over == "served" else MEASURE_LABELS["speedup"]
-
-
-#: Which way is GOOD on each measure, as the PARENTHETICAL of the axis label -- the slot an axis
-#: label conventionally puts its qualifier in, beside the unit. It rides on the Y title rather than
-#: in a band of its own: it belongs to the axis it describes, reads in the same sweep as the
-#: measure's name, and costs the figure no height. Lower case inside the parentheses, which is how
-#: a qualifier is set; the measure's own name keeps Title Case.
-MEASURE_DIRECTION: dict[str, str] = {"speedup": "(higher is better)", "cost": "(lower is better)"}
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -2124,7 +2123,6 @@ def draw_measure_row(
     config: FigureConfig = DEFAULT_CONFIG,
     ylabel: str = "",
     reference_name: str = "",
-    direction: bool = True,
     differences: frozenset[DifferenceKey] = frozenset(),
 ) -> None:
     """ONE measure over the shared categorical X: two marks per category, the no-packet arm HOLLOW
@@ -2219,14 +2217,8 @@ def draw_measure_row(
     if span:
         snap_axis_to_ticks(ax, min(span), max(span))
     if ylabel:
-        # The direction note rides on the Y TITLE rather than in a band of its own: it belongs to
-        # the axis it describes, it reads in the same sweep as the measure's name, and it costs the
-        # figure no height, which is what lets the two rows sit close.
-        # The measure's name folds to at most ``max_name_lines``; its qualifier never folds, since
-        # half a parenthetical on its own line reads as a second label.
-        note = MEASURE_DIRECTION.get(measure, "") if direction else ""
-        folded = wrapped_label(ylabel, fold_width(ylabel, label_wrap(config), config.max_name_lines))
-        ax.set_ylabel(f"{folded}\n{note}" if note else folded, fontsize=config.label_pt)
+        # One line: a folded Y title widens the left margin of every row and shrinks the panels.
+        ax.set_ylabel(ylabel, fontsize=config.label_pt)
 
     ax.tick_params(axis="both", labelsize=config.tick_pt)
     # The categories are named under the last row; a tick mark on every row points at nothing.
@@ -2704,9 +2696,7 @@ def figure_dot_row(
             draw_measure_row(
                 ax, column.rows, measure, column.shape, column.significance, rows_config,
                 texts.get(measure, measure) if col_index == 0 else "",
-                # The direction note rides on the Y title, which only the FIRST column draws.
-                column.reference if measure != "cost" else "", direction=col_index == 0,
-                differences=column.differences,
+                column.reference if measure != "cost" else "", differences=column.differences,
             )  # fmt: skip
             if row_index == 0 and panel_labels != "none":
                 draw_panel_label(ax, col_index, column.title, panel_labels, name_config, "roman",

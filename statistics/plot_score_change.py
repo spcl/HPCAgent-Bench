@@ -414,7 +414,7 @@ def write_dot_rows(
         **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
         labels={
             "speedup": efficacy_figures.speedup_row_label(args.speedup_over),
-            "cost": efficacy_figures.cost_label((card.fresh_input, card.cached_input, card.output), card.key),
+            "cost": efficacy_figures.cost_row_label(card.key),
         },
     )  # fmt: skip
     print(f"dots   -> {written} (+ .png)")
@@ -799,7 +799,7 @@ def main() -> None:
         "--success-row",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="draw the half-height Tasks Completed row between speed-up and cost (default); "
+        help="draw the half-height Solved row between speed-up and cost (default); "
         "--no-success-row drops it, which shortens the canvas and leaves every other box unchanged",
     )
     parser.add_argument(
@@ -914,9 +914,7 @@ def main() -> None:
                 pending=comparison_pending,
                 labels={
                     "speedup": efficacy_figures.speedup_row_label(args.speedup_over),
-                    "cost": efficacy_figures.cost_label(
-                        (card.fresh_input, card.cached_input, card.output), card.key
-                    ),
+                    "cost": efficacy_figures.cost_row_label(card.key),
                 },
             )  # fmt: skip
         else:

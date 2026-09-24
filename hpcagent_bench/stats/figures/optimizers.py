@@ -194,8 +194,7 @@ def style_shared_axis(axes: Sequence[Axes], held: Sequence[float], config: effic
         efficacy.thin_rules(ax, config)
     axes[0].margins(y=config.margin)
     efficacy.snap_axis_to_ticks(axes[0], low, high)
-    note = efficacy.MEASURE_DIRECTION.get("speedup", "")
-    axes[0].set_ylabel(f"Geomean Speed-Up\n{note}" if note else "Geomean Speed-Up", fontsize=config.label_pt)
+    axes[0].set_ylabel("Geomean Speed-Up", fontsize=config.label_pt)
 
 
 def legend_handles(panels: Sequence[OptimizerPanel], config: efficacy.FigureConfig) -> list[Line2D]:
