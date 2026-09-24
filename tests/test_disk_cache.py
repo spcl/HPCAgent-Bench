@@ -201,11 +201,11 @@ SCORE = textwrap.dedent(
     if sys.argv[1] == "reference":
         scoring._numpy_reference = forbidden
     if sys.argv[1] == "timing":
-        scoring.python_baseline_samples = forbidden
+        scoring.run_compiled_reference = forbidden
     task = Task("jacobi_2d", "restricted", "c")
     result = scoring.score(
         grading.reference_submission(task, "c"), task, preset="S", repeat=3, hidden=sys.argv[2] == "submit",
-        baseline="numpy",
+        baseline="c-autopar",
     )
     assert result.correct, result.detail[-2000:]
     """
@@ -247,17 +247,17 @@ def test_a_second_process_grades_from_the_stored_reference_and_timing(tmp_path: 
 
 
 @pytest.mark.integration
-def test_the_live_rule_stores_only_the_score_route_reference(tmp_path: pathlib.Path) -> None:
-    """Live grading draws the timed repeats off a fresh per-call nonce and /submit salts its seed per
-    call, so neither can ever be read back: storing them would cost a write per grade for nothing.
-    What repeats is the /score route's public reference, and a second process reads it back.
+def test_the_live_rule_stores_the_score_reference_and_one_timing_both_routes_share(tmp_path: pathlib.Path) -> None:
+    """/submit salts its seed per call, so of the reference outputs only the /score route's public
+    one repeats. The baseline timing is keyed on the redraw rule and the structural inputs, not the
+    per-call draws, so the first grade's timing serves every later /score and /submit of the cell.
     repverify_count 0: the re-verified repeats are references of per-call draws, never stored."""
     env = {"HPCAGENT_BENCH_CACHE_DISK_RESULTS_LEVELS": "[2]", "HPCAGENT_BENCH_MEASUREMENT_REPVERIFY_COUNT": "0"}
-    for forbid, route in [("nothing", "score"), ("nothing", "submit"), ("reference", "score")]:
+    for forbid, route in [("nothing", "score"), ("timing", "submit"), ("reference", "score"), ("timing", "score")]:
         run = grade_in_fresh_process(tmp_path, forbid, route, **env)
-        assert run.returncode == 0, (route, run.stderr[-3000:])
+        assert run.returncode == 0, (forbid, route, run.stderr[-3000:])
     assert len(list((tmp_path / "outputs").iterdir())) == 1
-    assert not (tmp_path / "timing").exists()
+    assert len(list((tmp_path / "timing").iterdir())) == 1
 
 
 @pytest.mark.integration
