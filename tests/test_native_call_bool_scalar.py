@@ -9,6 +9,7 @@ reference (five bool config flags ahead of its sizes) crashed with SIGSEGV / SIG
 fuzzed draw, and every best-of grade of it was a harness fault.
 """
 
+import pathlib
 import shutil
 import subprocess
 
@@ -45,7 +46,9 @@ def bool_binding() -> Binding:
 
 @pytest.mark.skipif(not shutil.which("gcc"), reason="gcc required for the native round-trip")
 @pytest.mark.parametrize("flag", [False, True])
-def test_a_bool_scalar_reaches_the_kernel_without_shifting_the_later_arguments(tmp_path, flag: bool) -> None:
+def test_a_bool_scalar_reaches_the_kernel_without_shifting_the_later_arguments(
+    tmp_path: pathlib.Path, flag: bool
+) -> None:
     """Both flag values arrive as themselves, and the size and the double after them are intact."""
     src = tmp_path / "booltest.c"
     src.write_text(_BOOL_KERNEL)

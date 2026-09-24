@@ -37,6 +37,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Iterable, Sequence
 
 #: Slurm states after which the job's steps are gone for good; anything else (or no record) keeps the tree.
 ENDED = ("BOOT_FAIL", "CANCELLED", "COMPLETED", "DEADLINE", "FAILED", "NODE_FAIL", "OUT_OF_MEMORY", "PREEMPTED")
@@ -46,7 +47,7 @@ TREE_NAME = re.compile(r"^(?:job|regrade|mlscale-grade)-([0-9]+)(?:\.partial)?$"
 CHUNK = 1 << 20
 
 
-def digest(path):
+def digest(path: str) -> str:
     """The sha256 hex digest of the file at ``path``."""
     sha = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -55,13 +56,13 @@ def digest(path):
     return sha.hexdigest()
 
 
-def entry_path(store, path, status):
+def entry_path(store: str, path: str, status: os.stat_result) -> str:
     """The store entry for the file at ``path`` whose ``lstat`` is ``status``."""
     name = f"{digest(path)}.{status.st_mode & 0o7777:o}.{status.st_mtime_ns}"
     return os.path.join(store, name[:2], name)
 
 
-def link_file(store, path):
+def link_file(store: str, path: str) -> bool:
     """Make ``path`` a hard link to its store entry; True when it now shares the entry's inode.
 
     The first tree holding a file donates its inode as the entry. Any later one swaps its own copy
@@ -85,7 +86,7 @@ def link_file(store, path):
     return True
 
 
-def link_tree(tree, store):
+def link_tree(tree: str, store: str) -> "tuple[int, int]":
     """Link every regular file under ``tree`` into ``store``; returns (files, linked)."""
     files = linked = 0
     for root, _dirs, names in os.walk(tree):
@@ -98,7 +99,7 @@ def link_tree(tree, store):
     return files, linked
 
 
-def job_states(ids):
+def job_states(ids: "Iterable[str]") -> "dict[str, list[str]]":
     """``{jobid: [state, ...]}`` from ONE sacct call (a requeued job has a row per start)."""
     out = subprocess.run(
         ["sacct", "-X", "-n", "-P", "-o", "JobIDRaw,State", "-j", ",".join(sorted(ids))],
@@ -112,7 +113,7 @@ def job_states(ids):
     return states
 
 
-def ended_trees(frozen):
+def ended_trees(frozen: str) -> "tuple[list[str], list[str]]":
     """(ended, kept): the tree paths under ``frozen`` whose job sacct reports ended, and the rest."""
     trees = {}
     for name in sorted(os.listdir(frozen)):
@@ -127,17 +128,17 @@ def ended_trees(frozen):
     return ended, kept
 
 
-def count_inodes(path):
+def count_inodes(path: str) -> int:
     """Files plus directories under ``path`` (itself included)."""
     return 1 + sum(len(dirs) + len(names) for _root, dirs, names in os.walk(path))
 
 
-def remove_tree(path):
+def remove_tree(path: str) -> None:
     """``rm -rf``: a tree holds only files and directories."""
     subprocess.run(["rm", "-rf", "--", path], check=True)
 
 
-def unlinked_entries(store):
+def unlinked_entries(store: str) -> "list[str]":
     """The store entries no frozen tree links any more."""
     found = []
     for root, _dirs, names in os.walk(store):
@@ -145,7 +146,7 @@ def unlinked_entries(store):
     return found
 
 
-def corrupt_entries(store):
+def corrupt_entries(store: str) -> "list[str]":
     """The store entries whose bytes no longer hash to their name (a writer wrote through a link)."""
     return [
         os.path.join(root, name)
@@ -155,7 +156,7 @@ def corrupt_entries(store):
     ]
 
 
-def sweep(frozen, store, delete, verify):
+def sweep(frozen: str, store: str, delete: bool, verify: bool) -> int:
     """The coordinator's cleanup; returns the exit status."""
     ended, kept = ended_trees(frozen) if os.path.isdir(frozen) else ([], [])
     freed = 0
@@ -183,7 +184,7 @@ def sweep(frozen, store, delete, verify):
     return 0
 
 
-def main(argv):
+def main(argv: "Sequence[str]") -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command")
     link = sub.add_parser("link", help="link a fresh frozen tree into the store (code_snapshot.sh)")
