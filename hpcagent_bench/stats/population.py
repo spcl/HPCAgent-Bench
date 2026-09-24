@@ -390,15 +390,28 @@ BASELINE_POLICY_COLUMN: str = "baseline_policy"
 LEGACY_BASELINE_POLICY: str = "single-v1"
 
 
+#: Stamps that record different rules but POOL as one baseline family: stamp -> the family's stamp.
+#: ``best-of-v3`` races ``best-of-v2``'s candidates numba first and cuts a compiled one already slower
+#: than numba; USER decision 2026-09-24: v2 and v3 are compatible. Each row keeps its exact stamp.
+#: Spelled here rather than imported, as :data:`LEGACY_BASELINE_POLICY` is.
+BASELINE_FAMILIES: dict[str, str] = {"best-of-v3:numba+c": "best-of-v2:c+numba"}
+
+
+def baseline_family(stamp: str) -> str:
+    """The family ``stamp`` pools under (:data:`BASELINE_FAMILIES`); any other stamp is its own."""
+    return BASELINE_FAMILIES.get(stamp, stamp)
+
+
 def policies_agree(left: str, right: str) -> bool:
     """Whether two baseline-policy stamps describe the same rule.
 
-    Equal stamps agree. A BARE policy name (what an unstamped row reads as) agrees with a stamp
+    Equal stamps agree, and so do two of one family (:func:`baseline_family`). A BARE policy name (what an unstamped row reads as) agrees with a stamp
     that names the same policy and a candidate set, because a row from before the stamp records its
     denominator in ``baseline`` instead -- so nothing is lost, and refusing there would split every
     track whose rule never changed. Nothing else agrees: best-of over two references is not best-of
     over three, and neither is the fixed rule.
     """
+    left, right = baseline_family(left), baseline_family(right)
     if left == right:
         return True
     bare, full = (left, right) if ":" not in left else (right, left)
@@ -415,9 +428,12 @@ def one_baseline_policy(values: Iterable[object], label: str = "") -> str:
     visible in the rows: both can read ``baseline=c-autopar`` on the same kernel.
 
     A blank / missing cell reads as :data:`LEGACY_BASELINE_POLICY` rather than as an unknown, so an
-    old extract keeps aggregating; what is refused is a frame that MIXES the rules.
+    old extract keeps aggregating; what is refused is a frame that MIXES the rules. Stamps of one
+    family (:data:`BASELINE_FAMILIES`) pool, and the slice is named by the family's stamp.
     """
-    found = sorted({str(value).strip() if is_named(value) else LEGACY_BASELINE_POLICY for value in values})
+    found = sorted(
+        {baseline_family(str(value).strip()) if is_named(value) else LEGACY_BASELINE_POLICY for value in values}
+    )
     if not found:
         return LEGACY_BASELINE_POLICY
     chosen = max(found, key=len)  # the most specific stamp seen; a bare policy is a prefix of it
