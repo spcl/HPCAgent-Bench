@@ -2416,6 +2416,27 @@ def hoist_reduce_axis(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
 
 REDUCE_AXIS_HOIST = HoistForm(frozenset(REDUCE_FNS), (), hoist_reduce_axis)
 
+#: Axis reductions the DaCe frontend lowers to its own ``Reduce`` node, which canon then lowers to a
+#: library reduction; the loop nest would hide them. Float only: numpy widens an integer ``sum``'s
+#: accumulator, the ``Reduce`` does not. No ``keepdims`` either, which the DaCe frontend lacks.
+DACE_NATIVE_REDUCE_FNS = frozenset({"sum", "prod", "mean", "min", "max", "amin", "amax"})
+
+
+def hoist_reduce_axis_unless_native(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+    """:func:`hoist_reduce_axis`, declining a float reduction the DaCe frontend lowers itself."""
+    if isinstance(node, ast.Call) and not any(k.arg == "keepdims" for k in node.keywords):
+        parts = reduce_call_parts(node, {k.arg: k.value for k in node.keywords})
+        if (
+            parts is not None
+            and parts[0] in DACE_NATIVE_REDUCE_FNS
+            and _dtype_kind(parts[1], hoist.tables.dtypes) == "float"
+        ):
+            return None
+    return hoist_reduce_axis(node, hoist)
+
+
+DACE_REDUCE_AXIS_HOIST = HoistForm(frozenset(REDUCE_FNS), (), hoist_reduce_axis_unless_native)
+
 
 def _keepdims_index(axes: list[int]) -> list[ast.expr] | None:
     """Subscript entries putting a length-1 axis back at each of ``axes`` -- the shape
@@ -7263,7 +7284,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             *([] if backend in NATIVE_FFT_BACKENDS else [_FftInline(ranks, kir_array_dtypes)]),
             _MgridInline(),
             ValueHoist(FANCY_GATHER_HOIST, tables),
-            ValueHoist(REDUCE_AXIS_HOIST, tables),
+            ValueHoist(DACE_REDUCE_AXIS_HOIST if backend == "dace" else REDUCE_AXIS_HOIST, tables),
             # Directly behind it: takes only the keepdims reductions the loop lowering
             # declined (an operand whose rank the table had to forget).
             _KeepdimsToNewaxis(),
