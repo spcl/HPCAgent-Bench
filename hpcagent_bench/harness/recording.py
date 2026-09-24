@@ -150,25 +150,27 @@ CREATE TABLE IF NOT EXISTS submission_libraries (
 
 def store_submission_libraries(
     conn: sqlite3.Connection,
-    submission: Submission,
+    build: Sequence[str],
+    libraries: Sequence[str],
     benchmark: str,
     *,
     run_id: str,
     ts: int,
     build_ok: bool,
 ) -> None:
-    """Log one grade's library request, when it asked for anything -- silent for the (overwhelming)
-    common case of a plain submission with no ``build``/``libraries`` at all, the same way
-    :func:`store_source` is silent for a language nothing was delivered in.
+    """Log one grade's library request (a submission's ``build`` tokens and ``libraries`` names),
+    when it asked for anything -- silent for the (overwhelming) common case of a plain submission
+    with no ``build``/``libraries`` at all, the same way :func:`store_source` is silent for a
+    language nothing was delivered in.
 
     ``linked`` is the raw ``-l<name>`` names off ``build`` plus every ``libraries`` catalog name,
     gated on ``build_ok``: the harness builds as ONE step that succeeds or fails wholesale, so a
     failed build links nothing, and a passing one links everything that survived
     ``sandbox.catalog_refusal`` (checked before the build ever ran).
     """
-    if not submission.build and not submission.libraries:
+    if not build and not libraries:
         return
-    linked = (sandbox.requested_libraries(submission.build) + list(submission.libraries)) if build_ok else []
+    linked = (sandbox.requested_libraries(list(build)) + list(libraries)) if build_ok else []
     conn.execute(
         """INSERT INTO submission_libraries(
             run_id, ts, benchmark, requested_build, requested_libraries, linked, build_ok)
@@ -177,8 +179,8 @@ def store_submission_libraries(
             run_id,
             int(ts),
             benchmark,
-            json.dumps(submission.build),
-            json.dumps(submission.libraries),
+            json.dumps(list(build)),
+            json.dumps(list(libraries)),
             json.dumps(linked),
             int(build_ok),
         ),
@@ -1789,7 +1791,15 @@ def record(
                     language=tag,
                     store_dir=str(prompt_store_dir(path)),
                 )
-        store_submission_libraries(conn, submission, spec.short_name, run_id=run_id, ts=ts, build_ok=score.build_ok)
+        store_submission_libraries(
+            conn,
+            submission.build,
+            submission.libraries,
+            spec.short_name,
+            run_id=run_id,
+            ts=ts,
+            build_ok=score.build_ok,
+        )
         for law in curves:
             if law.curve is not None or law.dropped:
                 record_scaling(
@@ -2116,6 +2126,8 @@ def record_call(
     path: str | None = None,
     distribution: str | None = None,
     workspace_bytes: str | None = None,
+    build: Sequence[str] = (),
+    libraries: Sequence[str] = (),
 ) -> int:
     """Persist ONE served grade as a ``calls`` row; return its ``round`` (0 = not logged).
 
@@ -2143,7 +2155,11 @@ def record_call(
     ``score_error``): speedup 0, correct 0, no baseline. Gated on ``record.log_calls``.
 
     ``distribution`` / ``workspace_bytes`` are the request's MPI envelope as sent (JSON text / the
-    scratch expression), ``None`` for a request that carried none.
+    scratch expression), ``None`` for a request that carried none. ``build`` / ``libraries`` are its
+    link request, logged to ``submission_libraries`` under this row's stamp
+    (:func:`store_submission_libraries`): with the two columns they are the WHOLE envelope, so a
+    correct score can be re-sent as the submission it was (experiments/promote_unsubmitted.py) --
+    an MPI grade without its layout or its ``rccl`` is refused or does not link.
     """
     if not config.get("record.log_calls", True):
         return 0
@@ -2183,6 +2199,15 @@ def record_call(
         )
         conn.execute(row_sql("calls", call_row), row_params(call_row))
         conn.commit()
+        store_submission_libraries(
+            conn,
+            build,
+            libraries,
+            spec.short_name,
+            run_id=run_id,
+            ts=ts,
+            build_ok=bool(score is not None and score.build_ok),
+        )
         return int(prior) + 1
     finally:
         conn.close()
