@@ -39,6 +39,10 @@ HEARTBEAT_S: float = 60.0
 STALE_S: float = 600.0
 #: Past grades needed before their durations replace the default per-item estimate.
 MIN_HISTORY: int = 3
+#: ``db`` of a torch.distributed baseline point's claim (``torch_dist_curve.claim_key``): a work
+#: item that is not a submission, so it neither counts against MAX_ITEMS nor enters the per-item
+#: estimate (a point takes minutes, a submission's whole sweep up to an hour).
+BASELINE_DB: str = "torch_dist"
 
 Key = tuple[str, str, str, int]
 
@@ -73,7 +77,9 @@ def connection(path: pathlib.Path) -> Iterator[sqlite3.Connection]:
 def claimed_by_job(path: pathlib.Path, job: str) -> int:
     """How many submissions ``job`` has claimed, done ones included (the MAX_ITEMS count)."""
     with connection(path) as conn:
-        return int(conn.execute("SELECT COUNT(*) FROM claims WHERE job = ?", (job,)).fetchone()[0])
+        return int(
+            conn.execute("SELECT COUNT(*) FROM claims WHERE job = ? AND db != ?", (job, BASELINE_DB)).fetchone()[0]
+        )
 
 
 def held_keys(path: pathlib.Path, stale_s: float = STALE_S, now: float | None = None) -> set[Key]:
@@ -97,7 +103,11 @@ def claim(claimer: Claimer, keys: Sequence[Key], batch: int, max_items: int = 0,
         try:
             room = batch
             if max_items > 0:
-                used = int(conn.execute("SELECT COUNT(*) FROM claims WHERE job = ?", (claimer.job,)).fetchone()[0])
+                used = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM claims WHERE job = ? AND db != ?", (claimer.job, BASELINE_DB)
+                    ).fetchone()[0]
+                )
                 room = min(batch, max_items - used)
             for key in keys:
                 if len(taken) >= room:
@@ -153,7 +163,8 @@ def item_estimate(path: pathlib.Path, default_s: float) -> float:
         durations = sorted(
             float(row[0])
             for row in conn.execute(
-                "SELECT done_at - claimed_at FROM claims WHERE state = 'done' AND done_at IS NOT NULL"
+                "SELECT done_at - claimed_at FROM claims WHERE state = 'done' AND done_at IS NOT NULL AND db != ?",
+                (BASELINE_DB,),
             )
         )
     if len(durations) < MIN_HISTORY:

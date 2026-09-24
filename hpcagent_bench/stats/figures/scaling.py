@@ -24,6 +24,12 @@ Four figures, all in the repo's shared ink (:mod:`hpcagent_bench.stats.style`) a
 * :func:`figure_per_kernel` -- one small panel per kernel, every model overlaid.
 * :func:`figure_summary` -- the geomean eta per arm with its interval, weak beside strong.
 
+THE TORCH.DISTRIBUTED BASELINE CURVE rides in the same rows under the pseudo-arm
+:data:`TORCH_DIST_ARM`: the kernel's own ``reference_dist`` timed by the grade job at every (law, P)
+point the agents were (``hpcagent_bench.harness.torch_dist_curve``). Its points are spread over
+the grade job's per-chunk DBs, so its P=1 anchor is joined here (:func:`baseline_anchored`), and
+every overlay panel draws it as one more series in the control's grey, dashed, beside the models.
+
 ONE ENTITY VARIES on these panels -- which LLM ran -- because the track fixes the harness, the
 language and the packet, so colour AND shape are the model (``docs/plotting.md`` rule 2's
 "where only ONE entity varies the colour is that entity"). Weak against strong is never a colour:
@@ -70,6 +76,11 @@ MODES: tuple[str, ...] = ("weak", "strong")
 #: problem grew EXACTLY, r = P, which is :func:`metric.ideal_speedup`'s own ``None``), and so are
 #: ``nodes``, ``scaling_mode`` and ``scaling_note``.
 REQUIRED_COLUMNS: tuple[str, ...] = ("record", "arm", "benchmark", "ranks", "ranked_ns", "single_rank_ns")
+
+#: The pseudo-arm (and model) of the torch.distributed baseline curve's rows, and its legend label.
+TORCH_DIST_ARM: str = "torch_dist"
+TORCH_DIST_LABEL: str = "PyTorch Distributed"
+TORCH_DIST_MARKER: str = "x"
 
 #: Ranks per node on the track's machine (MI300A: 4 GPUs, 1 rank each). Used ONLY to fill a
 #: ``nodes`` a row did not record; a recorded value always wins, because how ranks were spread over
@@ -172,8 +183,8 @@ def panel_title(kernel: str, kernels: Sequence[str]) -> str:
 
 
 def label_of(model: str) -> str:
-    """The legend spelling of a model."""
-    return experiment_tags.model_name(model)
+    """The legend spelling of a model (of the torch.distributed baseline: :data:`TORCH_DIST_LABEL`)."""
+    return TORCH_DIST_LABEL if model == TORCH_DIST_ARM else experiment_tags.model_name(model)
 
 
 def mode_of(arm: str, recorded: object = "") -> str:
@@ -235,11 +246,53 @@ def scaling_rows(frame: pd.DataFrame) -> pd.DataFrame:
     rows = rows[rows["scaling_mode"].isin(MODES)]
     if rows.empty or "ts_ms" not in rows.columns:
         return rows
+    rows = baseline_anchored(rows)
     # A stamp that will not parse sorts oldest rather than dropping the row: an unstamped grade is
     # still a measurement, and it only loses to one that says it is newer.
     rows["scaling_ts"] = pd.to_numeric(rows["ts_ms"], errors="coerce").fillna(0)
     newest = rows.groupby(["arm", "benchmark", "scaling_mode"])["scaling_ts"].transform("max")
     return rows[rows["scaling_ts"] == newest].drop(columns=["scaling_ts"])
+
+
+def baseline_anchored(rows: pd.DataFrame) -> pd.DataFrame:
+    """``rows`` with each torch.distributed baseline curve made whole: one curve is one
+    (``run_id`` = stack, kernel, law) group, whose points several grade DBs may hold. Every point
+    gets the group's P=1 time as ``single_rank_ns`` (blank when P=1 was not timed: no anchor, every
+    point a hole) and the group's newest stamp as ``ts_ms``, so the latest-curve rule keeps or drops
+    the curve whole."""
+    if not (rows["arm"].astype(str) == TORCH_DIST_ARM).any():
+        return rows
+    rows = rows.copy()
+    records = rows.to_dict("records")
+    anchors: dict[tuple[str, str, str], float] = {}
+    stamps: dict[tuple[str, str, str], float] = {}
+    for record in records:
+        if str(record["arm"]) != TORCH_DIST_ARM:
+            continue
+        key = (str(record["run_id"]), str(record["benchmark"]), str(record["scaling_mode"]))
+        stamps[key] = max(stamps.get(key, 0.0), number(record["ts_ms"]))
+        time_ns = number(record["ranked_ns"])
+        if number(record["ranks"]) == 1 and time_ns > 0:
+            anchors[key] = time_ns
+    single: list[object] = []
+    stamped: list[object] = []
+    for record in records:
+        key = (str(record["run_id"]), str(record["benchmark"]), str(record["scaling_mode"]))
+        baseline = str(record["arm"]) == TORCH_DIST_ARM
+        single.append(anchors.get(key, "") if baseline else record.get("single_rank_ns", ""))
+        stamped.append(stamps[key] if baseline else record["ts_ms"])
+    rows["single_rank_ns"] = pd.Series(single, index=rows.index, dtype=object)
+    rows["ts_ms"] = pd.Series(stamped, index=rows.index, dtype=object)
+    return rows
+
+
+def number(value: object) -> float:
+    """A cell as a float; 0.0 when blank or unparseable."""
+    try:
+        parsed = float(str(value).strip())
+    except ValueError:
+        return 0.0
+    return 0.0 if math.isnan(parsed) else parsed
 
 
 def point_of(row: pd.Series, mode: str) -> Point | None:
@@ -295,7 +348,11 @@ def curves(frame: pd.DataFrame) -> list[Curve]:
                 dropped.append((int(cell(row, "ranks", 0.0)), drop_reason(row)))
             else:
                 points.append(point)
-        model = text_cell(group.iloc[0], "model") or experiment_tags.model_of(str(arm))
+        model = (
+            TORCH_DIST_ARM
+            if arm == TORCH_DIST_ARM
+            else text_cell(group.iloc[0], "model") or experiment_tags.model_of(str(arm))
+        )
         out.append(
             Curve(
                 arm=str(arm),
@@ -352,11 +409,12 @@ def common_kernels(curves_: Sequence[Curve], mode: str) -> set[str]:
 
     Overlaying two arms whose kernel sets differ compares each against its own roster, which is a
     different and always kinder number than the comparison the panel looks like it is making. The
-    callers default to this set and say how many kernels it cost.
+    callers default to this set and say how many kernels it cost. The torch.distributed baseline
+    is not an arm here: a kernel it could not time must not take the agents' curves off a panel.
     """
     per_arm: dict[str, set[str]] = {}
     for curve in drawable(curves_):
-        if curve.mode == mode:
+        if curve.mode == mode and curve.arm != TORCH_DIST_ARM:
             per_arm.setdefault(curve.arm, set()).add(curve.kernel)
     if not per_arm:
         return set()
@@ -438,13 +496,16 @@ def draw_series(
     marker: str,
     label: str,
     band: bool = True,
+    linestyle: str = "-",
 ) -> None:
     """One arm's line: the per-P geomean, its marks, and its interval as a band."""
     if not points:
         return
     xs = [float(p) for p in sorted(points)]
     ys = [points[int(p)].point for p in xs]
-    ax.plot(xs, ys, color=color, linewidth=1.6, marker=marker, markersize=6.0, label=label, zorder=5)
+    ax.plot(
+        xs, ys, color=color, linewidth=1.6, linestyle=linestyle, marker=marker, markersize=6.0, label=label, zorder=5
+    )
     if not band:
         return
     low = [points[int(p)].low for p in xs]
@@ -461,12 +522,19 @@ def panel_curves(
 ) -> list[Line2D]:
     """One panel: an ideal reference and one aggregated line per arm. Returns the legend handles."""
     handles = [ideal_mark(ax, quantity, ranks)]
-    models = palette.in_order({curve.model for curve in curves_})
+    models = palette.in_order({curve.model for curve in curves_ if curve.model != TORCH_DIST_ARM})
     hues, shapes = palette.model_colors(models), palette.model_markers(models)
     for model in models:
         part = [curve for curve in curves_ if curve.model == model]
         draw_series(ax, series(part, quantity), hues[model], shapes[model], label_of(model), band=band)
         handles.append(Line2D([], [], color=hues[model], marker=shapes[model], linewidth=1.6, label=label_of(model)))
+    baseline = [curve for curve in curves_ if curve.model == TORCH_DIST_ARM]
+    if baseline:
+        grey = palette.control_color()
+        draw_series(ax, series(baseline, quantity), grey, TORCH_DIST_MARKER, TORCH_DIST_LABEL, band, "--")
+        handles.append(
+            Line2D([], [], color=grey, marker=TORCH_DIST_MARKER, linewidth=1.6, linestyle="--", label=TORCH_DIST_LABEL)
+        )
     rank_ticks(ax, ranks)
     measured_axis(ax, quantity)
     plotstyle.despine(ax)
@@ -596,8 +664,9 @@ def figure_summary(
         return None
     present = [mode for mode in MODES if any(row[2] == mode for row in rows)]
     fig, axes = plt.subplots(1, len(present), figsize=(width, PANEL_HEIGHT_IN + CHROME_IN), squeeze=False, sharey=True)
-    models = palette.in_order({row[1] for row in rows})
+    models = palette.in_order({row[1] for row in rows if row[1] != TORCH_DIST_ARM})
     hues, shapes = palette.model_colors(models), palette.model_markers(models)
+    hues[TORCH_DIST_ARM], shapes[TORCH_DIST_ARM] = palette.control_color(), TORCH_DIST_MARKER
     # NO model key here: this figure puts the model on the X axis, and a legend repeating the tick
     # labels spends the one legend slot on the identity the axis already spells out.
     handles = [Line2D([], [], color=plotstyle.REFERENCE, linestyle=(0, (4, 3)), label="Ideal (Efficiency = 1)")]

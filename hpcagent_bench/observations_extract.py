@@ -971,6 +971,49 @@ def scaling_rows(
     return out
 
 
+#: The grade DB's baseline-curve table and the pseudo-arm its torch.distributed rows are read as
+#: (hpcagent_bench.harness.torch_dist_curve writes it; hpcagent_bench.stats.figures.scaling draws it).
+BASELINE_TABLE = "baseline_points"
+TORCH_DIST_ARM = "torch_dist"
+
+
+def baseline_rows(conn: sqlite3.Connection, db: Database, focus: frozenset[str]) -> list[dict[str, Any]]:
+    """``record = "scaling"`` rows of the torch.distributed baseline curve: one per ``baseline_points``
+    row with ``source = 'torch_dist'``, under the pseudo-arm :data:`TORCH_DIST_ARM` (no campaign
+    filter: it is no agent's arm, and one curve serves every arm of the sweep). ``run_id`` is
+    ``torch_dist:<arch>:<image>``, the stack the point is valid for; ``scaling_note`` leads with the
+    mode the point ran under (``max-autotune-no-cudagraphs`` or ``eager``). ``single_rank_ns`` is
+    blank: a curve's points may sit in several grade DBs (each chunk job writes its own), so its P=1
+    anchor is joined by the reader (``hpcagent_bench.stats.figures.scaling.baseline_anchored``)."""
+    out: list[dict[str, Any]] = []
+    for row in conn.execute(f"SELECT * FROM {BASELINE_TABLE} WHERE source = ? ORDER BY ranks", (TORCH_DIST_ARM,)):
+        bench = row["benchmark"] or ""
+        out.append(
+            {
+                "run_root": db.run_root,
+                "job": db.job,
+                "db": str(db.path),
+                "record": SCALING_RECORD,
+                "run_id": f"{TORCH_DIST_ARM}:{row['arch']}:{row['image']}",
+                "arm": TORCH_DIST_ARM,
+                "benchmark": bench,
+                "focus40": "1" if bench in focus else "0",
+                "submitted": "0",
+                "ts_ms": int(row["grade_ts"] or 0),
+                "ranks": row["ranks"],
+                "nodes": blank(row["nodes"]),
+                "scaling_mode": row["scaling_mode"],
+                "ranked_ns": blank(row["ranked_ns"]),
+                "single_rank_ns": "",
+                "work_ratio": blank(row["work_ratio"]),
+                "scaling_shape": blank(row["params"]),
+                "scaling_note": "; ".join(str(x) for x in (row["compile_mode"] or "not timed", row["note"]) if x),
+                "efficiency": "",
+            }
+        )
+    return out
+
+
 def read_db(
     db: Database,
     focus: frozenset[str],
@@ -1041,6 +1084,8 @@ def read_db(
                     (harnesses, packets),
                 )
             )
+        if BASELINE_TABLE in tables:
+            observations.extend(baseline_rows(conn, db, focus))
         store = db.path.parent / f"{db.path.stem}_prompts"
         for table in RECORD_TABLES:
             if table not in tables:
