@@ -16,6 +16,8 @@ import pathlib
 import subprocess
 import sys
 
+import pytest
+
 from hpcagent_bench import core_dumps, paths
 
 SPEC = importlib.util.spec_from_file_location("check_core_dumps", paths.ROOT / "scripts" / "check_core_dumps.py")
@@ -141,3 +143,61 @@ def test_the_opt_out_keeps_the_core_limit() -> None:
     """A debugger session that asks for the dump gets it -- the guard is a floor, not a wall."""
     soft, hard = core_limit_after_import({core_dumps.ALLOW: "1"})
     assert soft == hard, f"{core_dumps.ALLOW}=1 must leave the caller's limit alone"
+
+
+JUDGE_PROBE = """
+import resource, subprocess, sys
+from hpcagent_bench import core_dumps
+core_dumps.keep_for_judge()
+child = "import hpcagent_bench, resource; print(resource.getrlimit(resource.RLIMIT_CORE)[0])"
+grading_child = subprocess.run([sys.executable, "-c", child], capture_output=True, text=True, check=True)
+soft, hard = resource.getrlimit(resource.RLIMIT_CORE)
+print(soft, hard, grading_child.stdout.strip())
+"""
+
+
+def judge_core_limits(extra: dict[str, str]) -> tuple[int, int, int]:
+    """(judge soft, judge hard, grading child soft) for a judge that imported the package (soft 0)
+    and then called keep_for_judge, with one child started the way it starts a grading child."""
+    done = subprocess.run(
+        [sys.executable, "-c", JUDGE_PROBE], capture_output=True, text=True, env=dict(os.environ, **extra), check=True
+    )
+    soft, hard, child = (int(field) for field in done.stdout.split())
+    return soft, hard, child
+
+
+def test_the_judge_keeps_its_own_core_only_when_the_arm_asks() -> None:
+    """A crash-diagnosis arm wants the judge's core; every other arm keeps the floor."""
+    soft, hard = judge_core_limits({core_dumps.JUDGE: "1"})[:2]
+    assert hard != 0, "precondition: this shell's hard limit forbids any core, nothing to test"
+    assert soft == hard
+    assert judge_core_limits({})[0] == 0
+
+
+def test_a_grading_child_of_a_core_keeping_judge_still_dumps_nothing() -> None:
+    """The judge's children run submissions, which crash by the dozen: they re-import the package
+    and drop back to 0 although they inherit the judge's raised limit."""
+    assert judge_core_limits({core_dumps.JUDGE: "1"})[2] == 0
+
+
+FLOORED = ["scripts/cscs/enroot_srun.sh", "scripts/cscs/enroot_forward.sh", "experiments/run_cluster.sh"]
+
+
+@pytest.mark.parametrize("script", FLOORED)
+@pytest.mark.parametrize(("flag", "hard_is_zero"), [("", True), ("1", False)], ids=["floor", "judge-arm"])
+def test_the_shell_floor_leaves_the_hard_limit_only_for_a_judge_core_arm(
+    script: str, flag: str, hard_is_zero: bool
+) -> None:
+    """``ulimit -c 0`` sets BOTH limits, after which nothing below can raise its own. Every script on
+    the judge's launch path must floor the soft limit alone on a judge-core arm (enroot_forward.sh
+    is sourced INSIDE the step, so missing it there zeroes the container's hard limit)."""
+    text = (paths.ROOT / script).read_text()
+    (guard,) = [line for line in text.splitlines() if line.startswith("if [[") and "ulimit" in line]
+    done = subprocess.run(
+        ["bash", "-c", f"{guard}; ulimit -H -c"],
+        capture_output=True,
+        text=True,
+        env=dict(os.environ, **{core_dumps.JUDGE: flag}),
+        check=True,
+    )
+    assert (done.stdout.strip() == "0") == hard_is_zero, done.stdout
