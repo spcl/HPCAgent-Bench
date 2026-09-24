@@ -415,7 +415,9 @@ def test_an_offload_c_submission_is_traced_by_rocprofv3_on_the_offload_legs_buil
     assert compiled and all(languages.strip_launcher(argv)[0] == LEG_DRIVER for argv in compiled), compiled
     assert all(set(LEG_FLAGS) <= set(argv) for argv in compiled), compiled
     assert len(traced) == 1, traced
-    argv, request = traced[0]
+    sealed, request = traced[0]
+    assert pathlib.Path(sealed[2]).name == pathlib.Path(gpu_profiling.seal.__file__).name, "sealed outside the tracer"
+    argv = sealed[sealed.index("--") + 1 :]
     assert argv[:2] == ["/fake/rocm/bin/rocprofv3", "--kernel-trace"], argv
     built = [argv[argv.index("-o") + 1] for argv in compiled if "-o" in argv]
     assert pathlib.Path(str(request["lib"])).name in {pathlib.Path(name).name for name in built}, (request, built)
@@ -485,7 +487,13 @@ def test_every_amd_trace_runs_its_child_with_the_openmp_tool_interface_disabled(
     monkeypatch.setenv("OMP_TOOL", "enabled")
     monkeypatch.setattr(gpu_profiling, "run_command", record)
     gpu_profiling.rocprof_record(
-        ["child"], tmp_path / "rocprof", cwd=tmp_path, timeout=1.0, tool="rocprofv3", exe="/fake/rocm/bin/rocprofv3"
+        ["child"],
+        tmp_path / "rocprof",
+        cwd=tmp_path,
+        timeout=1.0,
+        tool="rocprofv3",
+        exe="/fake/rocm/bin/rocprofv3",
+        plan=None,
     )
     assert len(seen) == 1, seen
     assert seen[0]["OMP_TOOL"] == "disabled", seen[0].get("OMP_TOOL")

@@ -787,7 +787,7 @@ def test_rocprof_record_writes_where_the_reader_looks(tmp_path, monkeypatch) -> 
     monkeypatch.setattr(gpu_profiling.subprocess, "run", lambda cmd, **k: seen.update(cmd=cmd, kw=k))
     outdir = tmp_path / gpu_profiling.ROCPROF_OUTDIR
     gpu_profiling.rocprof_record(
-        ["./app"], outdir, cwd=tmp_path, timeout=9.0, tool="rocprofv3", exe="/opt/rocm/bin/rocprofv3"
+        ["./app"], outdir, cwd=tmp_path, timeout=9.0, tool="rocprofv3", exe="/opt/rocm/bin/rocprofv3", plan=None
     )
     assert outdir.is_dir(), "rocprofv3 does not create its --output-directory"
     assert seen["kw"]["timeout"] == 9.0 and seen["kw"]["cwd"] == str(tmp_path)
@@ -1000,7 +1000,7 @@ def test_rocprofv3_records_two_roctx_ranges_on_a_real_amd_node(tmp_path: pathlib
     compiler = os.environ.get("CC", "cc")
     subprocess.run([compiler, *compile_flags, str(source), *link_flags, "-o", str(program)], check=True)
     proc = gpu_profiling.rocprof_record(
-        [str(program)], tmp_path / "out", cwd=tmp_path, timeout=300.0, tool=profiler[0], exe=profiler[1]
+        [str(program)], tmp_path / "out", cwd=tmp_path, timeout=300.0, tool=profiler[0], exe=profiler[1], plan=None
     )
     assert proc.returncode == 0, proc.stderr
     marker = gpu_profiling.rocprof_csv(tmp_path / "out", gpu_profiling.MARKER_STATS_CSV)
@@ -1073,3 +1073,37 @@ def test_the_amd_counter_note_gives_the_papi_this_image_builds_as_the_reason() -
     note = gpu_profiling.AMD_COUNTER_NOTE
     assert "postdates" not in note, note
     assert re.search(r"rocp_sdk is not built into the PAPI installed here", note), note
+
+
+def test_a_rocprofv3_trace_is_sealed_outside_the_tracer(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rocprofv3 LD_PRELOADs rocprofiler-sdk, whose threads start at load and start again in every
+    forked child. A seal run UNDER it is therefore always multi-threaded and unshare(CLONE_NEWUSER)
+    refuses it with EINVAL: every rocprofv3 profile that built in 648827/648828 died on "seal:
+    cannot enter new namespaces" (reproduced with /usr/bin/rocprofv3 on a login node, no GPU needed).
+    The seal wraps the tracer, and the measured child inside it is not sealed a second time."""
+    seen: dict[str, list[str]] = {}
+
+    def record(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen["cmd"] = cmd
+        return _proc(1)
+
+    monkeypatch.setattr(gpu_profiling, "run_command", record)
+    request = tmp_path / "profile_request.json"
+    with pytest.raises(RuntimeError, match="traced run failed"):
+        gpu_profiling.profile_amd_once(
+            tmp_path,
+            request,
+            profiler=("rocprofv3", "/opt/rocm/bin/rocprofv3"),
+            timeout=9.0,
+            min_percent=0.0,
+        )
+    cmd = seen["cmd"]
+    wrapper = pathlib.Path(gpu_profiling.seal.__file__).name
+    assert pathlib.Path(cmd[2]).name == wrapper, cmd
+    assert f"--keep={tmp_path}" in cmd, "the sandbox root holds the reports the tracer writes"
+    inner = cmd[cmd.index("--") + 1 :]
+    assert inner[0] == "/opt/rocm/bin/rocprofv3", inner
+    assert inner[inner.index("--") + 1 :] == gpu_profiling.measured_argv(request)
+    assert wrapper not in " ".join(inner), "one seal, outside the tracer"
