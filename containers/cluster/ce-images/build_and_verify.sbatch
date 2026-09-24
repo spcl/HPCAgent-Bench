@@ -51,12 +51,18 @@ PROFILE="${PROFILE:-$(basename "${IMAGE_DIR}")}"
 source "${REPO}/containers/cluster/ce-images/build_common.sh"
 PARTITION="${SLURM_JOB_PARTITION:?build_and_verify.sbatch runs inside a Slurm allocation}"
 
+# VERIFY_ONLY=1 re-verifies the candidates an earlier build of this profile and partition wrote,
+# after a verifier fix: stage 2 below, and the .verified markers it writes, are unchanged.
+if [[ "${VERIFY_ONLY:-0}" == 1 ]]; then
+    echo "=== stage 1/2: build SKIPPED (VERIFY_ONLY=1)"
+else
 echo "=== stage 1/2: build  (${IMAGE_DIR})"
 build_out="${SCRATCH}/ce-images/logs/build-inner-${SLURM_JOB_ID}.log"
 mkdir -p "$(dirname "${build_out}")"
 # The build sbatch is a plain bash script below its #SBATCH block, so it runs directly inside the
 # allocation this job already holds -- no nested sbatch, no second queue wait.
 IMAGE_DIR="${IMAGE_DIR}" bash "${IMAGE_DIR}/build.sbatch" 2>&1 | tee "${build_out}"
+fi
 
 # EVERY target this build produced, not just the first. judge-agent-amd builds `agent judge` by
 # default, and verifying only the agent meant the JUDGE -- the image that grades every submission

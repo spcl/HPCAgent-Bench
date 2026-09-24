@@ -298,3 +298,37 @@ def test_the_e2e_smoke_takes_the_arms_judge_edf_unless_the_caller_names_one(
     done = run(["bash", "-c", f'{block.group(0)}echo "EDF=${{JUDGE_CE_ENV}} LANG=${{LANGUAGE}}"'], env)
     assert done.returncode == 0, done.stderr
     assert done.stdout.splitlines() == [f"EDF={want} LANG=hip"]
+
+
+def test_verify_only_reverifies_the_partitions_candidates_without_building(tmp_path: pathlib.Path) -> None:
+    """A verifier fix must not cost a 4 h rebuild: VERIFY_ONLY=1 re-runs stage 2 on what is there."""
+    repo, scratch = tmp_path / "repo", tmp_path / "scratch"
+    ce = repo / "containers" / "cluster" / "ce-images"
+    (ce / "judge-agent-amd").mkdir(parents=True)
+    (scratch / "ce-images").mkdir(parents=True)
+    for name in ("build_common.sh", "gpu_arch.env", "cpu_target.env"):
+        shutil.copy2(CE / name, ce / name)
+    (ce / "judge-agent-amd" / "build.sbatch").write_text(f'touch "{tmp_path}/built"\n', encoding="utf-8")
+    (ce / "verify_image.sbatch").write_text(f'echo "$PROFILE $IMAGE" >> "{tmp_path}/verified"\n', encoding="utf-8")
+    for name in MI200_CANDIDATES.values():
+        (scratch / "ce-images" / name).write_bytes(b"sqsh")
+        (scratch / "ce-images" / f"{name}.digest").write_text("sha256:abc", encoding="utf-8")
+    env = {
+        "SCRATCH": str(scratch),
+        "REPO": str(repo),
+        "IMAGE_DIR": "containers/cluster/ce-images/judge-agent-amd",
+        "SLURM_JOB_PARTITION": "mi200",
+        "SLURM_JOB_ID": "7",
+        "VERIFY_ONLY": "1",
+    }
+    done = run(["bash", str(CE / "build_and_verify.sbatch")], env)
+    assert done.returncode == 0, done.stderr
+    assert not (tmp_path / "built").exists()
+    images = {target: scratch / "ce-images" / name for target, name in MI200_CANDIDATES.items()}
+    assert (tmp_path / "verified").read_text(encoding="utf-8").splitlines() == [
+        f"judge-agent-amd {images['agent']}",
+        f"judge {images['judge']}",
+    ]
+    for target, profile in (("agent", "judge-agent-amd"), ("judge", "judge")):
+        marker = pathlib.Path(f"{images[target]}.verified").read_text(encoding="utf-8")
+        assert marker == f"verified profile={profile} job=7 digest=sha256:abc\n", target
