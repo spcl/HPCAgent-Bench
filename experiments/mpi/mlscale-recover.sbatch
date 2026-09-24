@@ -17,7 +17,7 @@
 #   JOBS="649109" sbatch mpi/mlscale-recover.sbatch
 #
 #SBATCH --job-name=mlscale-recover
-#SBATCH --account=root
+#SBATCH --account=g34
 #SBATCH --partition=mi300
 #SBATCH --nodes=1
 #SBATCH --exclusive
