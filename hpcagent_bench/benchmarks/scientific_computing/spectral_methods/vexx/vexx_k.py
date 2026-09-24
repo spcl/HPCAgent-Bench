@@ -66,6 +66,25 @@ _VEXX_SOA_ARGS = (
 )
 
 
+def g_sphere_miller(ngrid: int) -> np.ndarray:
+    """Miller indices ``(3, ngm)`` of the G-sphere ``|h|^2 <= (ngrid//2 - 1)^2``, hx outermost, hz innermost.
+
+    One boolean mask over a C-order ``ij`` meshgrid visits the cube in the same hx/hy/hz nesting
+    the scalar triple loop used, so the sphere (and every table built from it) keeps its order.
+    Returned as the transpose of an ``(ngm, 3)`` array, the Fortran-ordered layout ``g`` inherits.
+    """
+    hmax = ngrid // 2 - 1
+    r = np.arange(-hmax, hmax + 1, dtype=np.int64)
+    hx, hy, hz = np.meshgrid(r, r, r, indexing="ij")
+    keep = hx * hx + hy * hy + hz * hz <= hmax * hmax
+    return np.stack([hx[keep], hy[keep], hz[keep]], axis=1).T
+
+
+def band_pairs(m: int, nbnd: int) -> np.ndarray:
+    """``(2, m * nbnd)`` table of all 1-based (i in 1..m) x (j in 1..nbnd) pairs, i outermost."""
+    return np.stack([np.repeat(np.arange(1, m + 1), nbnd), np.tile(np.arange(1, nbnd + 1), m)])
+
+
 def initialize_soa(ngrid, nbnd, m, datatype=np.complex128, **_config):
     """Build flat-SoA inputs for the translatable vexx kernel (collinear, norm-conserving, single-k/q at Gamma, negrp=1)."""
     cdtype = {
@@ -82,23 +101,13 @@ def initialize_soa(ngrid, nbnd, m, datatype=np.complex128, **_config):
     nks = 1
 
     # G-sphere inside the non-aliasing kinetic cutoff; dfftt_nl maps each plane wave to its C-order FFT-grid cell.
-    hmax = ngrid // 2 - 1
-    cutoff2 = hmax * hmax
-    nl_list, g2_list, mill = [], [], []
-    rh = range(-hmax, hmax + 1)
-    for hx in rh:
-        for hy in rh:
-            for hz in rh:
-                if hx * hx + hy * hy + hz * hz <= cutoff2:
-                    nl_list.append(np.ravel_multi_index((hx % n1, hy % n2, hz % n3), grid))
-                    g2_list.append(hx * hx + hy * hy + hz * hz)
-                    mill.append((hx, hy, hz))
-    nl_c = np.array(nl_list, dtype=np.int64)
+    mill = g_sphere_miller(ngrid)
+    nl_c = np.ravel_multi_index((mill[0] % n1, mill[1] % n2, mill[2] % n3), grid).astype(np.int64)
     npw = len(nl_c)
     n = ngm = npw
     npwx = npw
     nrxxs = nnr
-    g2 = np.array(g2_list, dtype=rdtype)
+    g2 = np.sum(mill * mill, axis=0).astype(rdtype)
     coulomb_fac = np.where(g2 > 0, 1.0 / np.where(g2 > 0, g2, 1.0), 0.0)
 
     psi = (rng.standard_normal((npw, m)) + 1j * rng.standard_normal((npw, m))).astype(cdtype)
@@ -115,18 +124,15 @@ def initialize_soa(ngrid, nbnd, m, datatype=np.complex128, **_config):
     xk = np.zeros((3, nks), dtype=rdtype)  # Gamma
     xkq_collect = np.zeros((3, nks), dtype=rdtype)  # q-shift 0
     g = np.zeros((3, ngm), dtype=rdtype)
-    g[:, :ngm] = np.array(mill, dtype=rdtype).T
+    g[:, :ngm] = mill.astype(rdtype)
 
     ibands = np.arange(1, m + 1, dtype=np.int64).reshape(m, 1)  # (my_n, negrp)
     nibands = np.array([m], dtype=np.int64)
     all_start = np.array([1], dtype=np.int64)
     all_end = np.array([nbnd], dtype=np.int64)
-    pairs = [(ib, j) for ib in range(1, m + 1) for j in range(1, nbnd + 1)]
-    max_pairs = len(pairs)
+    max_pairs = m * nbnd
     egrp_pairs = np.zeros((2, max_pairs, 1), dtype=np.int64)
-    for ip, (ib, j) in enumerate(pairs):
-        egrp_pairs[0, ip, 0] = ib
-        egrp_pairs[1, ip, 0] = j
+    egrp_pairs[:, :, 0] = band_pairs(m, nbnd)
     iexx_istart = np.array([1], dtype=np.int64)
 
     values = {
@@ -218,23 +224,12 @@ def initialize(
     npol = 2 if noncolin else 1
 
     # G-sphere capped strictly inside the non-aliasing box so the G<->grid bijection stays exact and Fock stays Hermitian.
-    hmax = ngrid // 2 - 1
-    cutoff2 = hmax * hmax
-    mill_list, nl_list, nlm_list = [], [], []
-    rng_h = range(-hmax, hmax + 1)
-    for hx in rng_h:
-        for hy in rng_h:
-            for hz in rng_h:
-                if hx * hx + hy * hy + hz * hz <= cutoff2:
-                    mill_list.append((hx, hy, hz))
-                    nl_list.append(np.ravel_multi_index((hx % n1, hy % n2, hz % n3), grid))
-                    nlm_list.append(np.ravel_multi_index(((-hx) % n1, (-hy) % n2, (-hz) % n3), grid))
-    mill = np.array(mill_list, dtype=np.int64).T  # (3, ngm) Miller indices
+    mill = g_sphere_miller(ngrid)  # (3, ngm) Miller indices
     # 0-based, like every index array in this corpus. QE numbers these tables 1-based
     # upstream; the port carries the map, not the numbering, and a 1-based language gets
     # the +1 every subscript already gets when the reference is lowered to it.
-    nl = np.array(nl_list, dtype=np.int32)
-    nlm = np.array(nlm_list, dtype=np.int32)
+    nl = np.ravel_multi_index((mill[0] % n1, mill[1] % n2, mill[2] % n3), grid).astype(np.int32)
+    nlm = np.ravel_multi_index(((-mill[0]) % n1, (-mill[1]) % n2, (-mill[2]) % n3), grid).astype(np.int32)
     ngm = nl.shape[0]  # G-vectors on the EXX grid
     npw = ngm  # plane waves at this k (npw <= ngm)
     n = ngm  # wavefunction G count
@@ -277,12 +272,7 @@ def initialize(
     ibands[:, 0] = np.arange(1, m + 1)
     max_pairs = m * nbnd  # all (i in 1..m) x (j in 1..nbnd)
     egrp_pairs = np.zeros((2, max_pairs, max(negrp, 1)), dtype=np.int32)
-    p = 0
-    for ib in range(1, m + 1):
-        for jb in range(1, nbnd + 1):
-            egrp_pairs[0, p, 0] = ib
-            egrp_pairs[1, p, 0] = jb
-            p += 1
+    egrp_pairs[:, :, 0] = band_pairs(m, nbnd)
     # only the first egrp pass spans [1,nbnd]; the rest are empty, so negrp>1 must reproduce negrp==1 bit-for-bit (test_negrp_invariance).
     all_start = np.ones(max(negrp, 1), dtype=np.int32)
     all_end = np.zeros(max(negrp, 1), dtype=np.int32)
