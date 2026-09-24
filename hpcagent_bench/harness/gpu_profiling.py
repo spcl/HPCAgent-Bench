@@ -1163,8 +1163,8 @@ def child_argv(request_file: pathlib.Path) -> list[str]:
     The AMD tracers take the seal OUTSIDE instead (:func:`rocprof_record`,
     ``compute_profiling.amd_compute_once``): rocprofv3 LD_PRELOADs rocprofiler-sdk, whose threads
     start at load and start again in every forked child, so a seal run UNDER it is always
-    multi-threaded and ``unshare(CLONE_NEWUSER)`` refuses it with EINVAL -- every rocprofv3 profile
-    that built in 648827/648828 died on "seal: cannot enter new namespaces".
+    multi-threaded and ``unshare(CLONE_NEWUSER)`` refuses it with EINVAL ("seal: cannot enter new
+    namespaces").
     """
     return seal.wrap(request_plan(request_file), measured_argv(request_file))
 

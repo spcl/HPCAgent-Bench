@@ -1080,8 +1080,8 @@ def test_a_rocprofv3_trace_is_sealed_outside_the_tracer(
 ) -> None:
     """rocprofv3 LD_PRELOADs rocprofiler-sdk, whose threads start at load and start again in every
     forked child. A seal run UNDER it is therefore always multi-threaded and unshare(CLONE_NEWUSER)
-    refuses it with EINVAL: every rocprofv3 profile that built in 648827/648828 died on "seal:
-    cannot enter new namespaces" (reproduced with /usr/bin/rocprofv3 on a login node, no GPU needed).
+    refuses it with EINVAL ("seal: cannot enter new namespaces"; reproducible with rocprofv3 on a
+    node without a GPU).
     The seal wraps the tracer, and the measured child inside it is not sealed a second time."""
     seen: dict[str, list[str]] = {}
 
