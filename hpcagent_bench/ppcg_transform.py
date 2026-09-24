@@ -325,6 +325,42 @@ def cxx_compat(host: str, entry: str) -> str:
     return re.sub(rf"^(void\s+{re.escape(entry)}\s*\()", r'extern "C" \1', host, count=1, flags=re.MULTILINE)
 
 
+#: A translator prelude helper's definition head, ``static inline <ret> __npb_<name>(``; group 1 is
+#: the name. Its body runs to the matching close brace (see :func:`device_helpers`).
+PRELUDE_HELPER_RE = re.compile(r"^static inline [^(\n]*?\b(__npb_\w+)\(", re.MULTILINE)
+
+
+def device_helpers(prelude: str, kernel_src: str) -> str:
+    """``__device__`` copies of the translator's prelude helpers that ``kernel_src`` calls.
+
+    ppcg moves a scop statement into the device half verbatim, including a call the translator made
+    to one of its own ``static inline __npb_*`` helpers (``python_mod`` resolves to ``__npb_mod_i``).
+    That definition stays in the HOST half, so the device half does not build ("use of undeclared
+    identifier '__npb_mod_i'"). The definition is copied from the scop's own prelude, never
+    restated, and marked ``__device__`` (same spelling for CUDA and HIP); helpers it calls come too.
+    ``""`` when the kernel calls none.
+    """
+    bodies: Dict[str, str] = {}
+    for match in PRELUDE_HELPER_RE.finditer(prelude):
+        open_brace = prelude.index("{", match.end())
+        depth, end = 0, open_brace
+        for end in range(open_brace, len(prelude)):
+            depth += {"{": 1, "}": -1}.get(prelude[end], 0)
+            if depth == 0:
+                break
+        bodies[match.group(1)] = prelude[match.start() : end + 1]
+    wanted: List[str] = []
+    pending = [n for n in re.findall(r"\b(__npb_\w+)\s*\(", kernel_src) if n in bodies]
+    while pending:
+        name = pending.pop()
+        if name in wanted:
+            continue
+        wanted.append(name)
+        pending.extend(n for n in re.findall(r"\b(__npb_\w+)\s*\(", bodies[name]) if n in bodies and n != name)
+    # Callees first: a helper must be declared before a helper that calls it.
+    return "".join(f"__device__ {bodies[n]}\n" for n in reversed(wanted))
+
+
 def entry_symbol(scop: pathlib.Path) -> str:
     """The exported kernel symbol in ``scop``: its stem without the translator's ``_pluto_input`` tag."""
     return scop.stem.removesuffix("_pluto_input")
@@ -403,6 +439,14 @@ def run_ppcg(
             host_cu = pathlib.Path(scratch) / f"{scop.stem}_host.cu"
             if host_cu.is_file():
                 host_cu.write_text(cxx_compat(host_cu.read_text(), entry))
+            kernel_cu = pathlib.Path(scratch) / f"{scop.stem}_kernel.cu"
+            if kernel_cu.is_file():
+                kernel_src = kernel_cu.read_text()
+                helpers = device_helpers(readable.read_text(), kernel_src)
+                if helpers:
+                    # After ppcg's own first line, the ``#include`` of the shared header.
+                    head, rest = kernel_src.split("\n", 1)
+                    kernel_cu.write_text(f"{head}\n#include <stdint.h>\n#include <math.h>\n{helpers}{rest}")
             if vendor == "hip":
                 hipify(pathlib.Path(scratch), scop.stem)
                 host_hip = pathlib.Path(scratch) / f"{scop.stem}_host.hip"
