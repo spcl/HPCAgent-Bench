@@ -719,4 +719,4 @@ def test_an_amd_counted_run_is_sealed_outside_rocprof_compute(
     assert f"--keep={tmp_path}" in profile, "the sandbox root holds the workload the profiler writes"
     inner = profile[profile.index("--") + 1 :]
     assert inner[:2] == ["rpc", "profile"], inner
-    assert inner[inner.index("--") + 1 :] == gpu_profiling.measured_argv(tmp_path / "request.json")
+    assert inner[inner.index("--") + 1 :] == gpu_profiling.measured_argv(tmp_path / "request.json", sealed_outside=True)

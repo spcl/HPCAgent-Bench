@@ -1128,5 +1128,37 @@ def test_a_rocprofv3_trace_is_sealed_outside_the_tracer(
     assert f"--keep={tmp_path}" in cmd, "the sandbox root holds the reports the tracer writes"
     inner = cmd[cmd.index("--") + 1 :]
     assert inner[0] == "/opt/rocm/bin/rocprofv3", inner
-    assert inner[inner.index("--") + 1 :] == gpu_profiling.measured_argv(request)
+    assert inner[inner.index("--") + 1 :] == gpu_profiling.measured_argv(request, sealed_outside=True)
     assert wrapper not in " ".join(inner), "one seal, outside the tracer"
+
+
+@pytest.mark.parametrize("sealed_outside", [True, False])
+def test_a_child_sealed_around_its_tracer_enters_no_seal_of_its_own(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, sealed_outside: bool
+) -> None:
+    """Under rocprofiler-sdk no seal below the tracer can be entered (unshare EINVAL), the native
+    call's per-grade seal included, so a child launched inside the seal around its tracer grades
+    with no plan of its own; a child sealed on its own (the NVIDIA tracers) keeps its per-grade seal."""
+    from hpcagent_bench import config, seal
+
+    plans: list[object] = []
+
+    def workload(request: object) -> dict[str, object]:
+        plans.append(seal.grading_plan([str(tmp_path)]))
+        return {}
+
+    request = tmp_path / "profile_request.json"
+    request.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(profiling, "child_request", lambda text: {})
+    monkeypatch.setattr(profiling, "run_workload", workload)
+    before = config.override_snapshot()
+    try:
+        argv = gpu_profiling.measured_argv(request, sealed_outside=sealed_outside)
+        assert gpu_profiling.main(argv[argv.index(gpu_profiling.MODULE) + 1 :]) == 0
+    finally:
+        for key in set(config.override_snapshot()) - set(before):
+            config.clear_override(key)
+        for key, value in before.items():
+            config.set_override(key, value)
+    (plan,) = plans
+    assert (plan is None) is sealed_outside, plan

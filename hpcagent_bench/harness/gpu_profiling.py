@@ -1140,15 +1140,28 @@ def rocprof_launch_configs(rows: Sequence[CsvRow], lane_width: int | None) -> li
     return sorted(configs, key=lambda c: (-c["launches"], c["name"]))
 
 
-def measured_argv(request_file: pathlib.Path) -> list[str]:
+#: :func:`main`'s flag for a child that runs INSIDE a seal entered around its tracer: its native
+#: call must not seal a second time (see :func:`child_argv`).
+SEALED_OUTSIDE_FLAG = "--sealed-outside"
+
+
+def measured_argv(request_file: pathlib.Path, *, sealed_outside: bool = False) -> list[str]:
     """The measured child, identical under every profiler -- one measurement, several tracers.
     Unsealed: :func:`child_argv` and :func:`request_plan` say where the seal goes.
+    ``sealed_outside`` marks a child whose seal wraps its tracer, so its native call enters none.
 
     NOT :func:`hpcagent_bench.harness.profiling.child_argv` despite the identical shape: this one
     names THIS module, whose ``main`` forces the spawn context CUPTI and the HSA tool library need.
     Same request schema, same result protocol, different child.
     """
-    return [sys.executable, "-m", MODULE, "--request", str(request_file)]
+    return [
+        sys.executable,
+        "-m",
+        MODULE,
+        *([SEALED_OUTSIDE_FLAG] if sealed_outside else []),
+        "--request",
+        str(request_file),
+    ]
 
 
 def request_plan(request_file: pathlib.Path) -> seal.SealPlan | None:
@@ -1164,7 +1177,9 @@ def child_argv(request_file: pathlib.Path) -> list[str]:
     ``compute_profiling.amd_compute_once``): rocprofv3 LD_PRELOADs rocprofiler-sdk, whose threads
     start at load and start again in every forked child, so a seal run UNDER it is always
     multi-threaded and ``unshare(CLONE_NEWUSER)`` refuses it with EINVAL ("seal: cannot enter new
-    namespaces").
+    namespaces"). That holds for every seal below the tracer, the native call's own per-grade seal
+    included, so such a child runs with ``sealed_outside`` and its native call enters none: it is
+    already inside the seal around the tracer.
     """
     return seal.wrap(request_plan(request_file), measured_argv(request_file))
 
@@ -1248,14 +1263,15 @@ def profile_amd_once(
     """
     tool, exe = profiler
     outdir = root / ROCPROF_OUTDIR
+    plan = request_plan(request_file)
     proc = rocprof_record(
-        measured_argv(request_file),
+        measured_argv(request_file, sealed_outside=plan is not None),
         outdir,
         cwd=root,
         timeout=timeout,
         tool=tool,
         exe=exe,
-        plan=request_plan(request_file),
+        plan=plan,
     )
     result = profiling.child_result(proc.stdout)
     if result is None:  # the workload died -- report ITS failure, never an empty trace
@@ -1486,7 +1502,11 @@ def main(argv: list[str] | None = None) -> int:
     """
     ap = argparse.ArgumentParser(description="run one measured GPU workload (invoked under nsys profile / rocprofv3)")
     ap.add_argument("--request", required=True, help="path to the JSON request written by profile_gpu_submission")
+    ap.add_argument(SEALED_OUTSIDE_FLAG, action="store_true", help="already inside the seal around the tracer")
     args = ap.parse_args(argv)
+    if args.sealed_outside:
+        # Under rocprofiler-sdk no seal can be entered (child_argv); this process is already in one.
+        config.set_override("grading.seal", False)
     # CUPTI reaches a process nsys launched or exec'd, and rocprofv3's HSA tool library is loaded
     # at runtime init the same way. A bare fork() child inherits the injection but not a working
     # subscriber, so the measured worker must be spawned or the trace is empty.
