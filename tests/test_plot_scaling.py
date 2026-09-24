@@ -206,7 +206,8 @@ def test_the_efficiency_panel_draws_the_ideal_at_one_and_the_speedup_panel_at_p(
     speedup = scaling.figure_speedup(scaling.curves(frame(rows)))
     assert speedup is not None
     ideal = [line for line in speedup.axes[0].lines if list(line.get_xdata()) == list(line.get_ydata())]
-    assert ideal and [int(v) for v in ideal[0].get_xdata()] == list(RANKS)
+    # The bound runs border to border (USER 2026-09-25), not only between the measured P.
+    assert ideal and tuple(ideal[0].get_xdata()) == pytest.approx(speedup.axes[0].get_xlim())
 
 
 def test_every_figure_carries_one_legend_on_the_figure_and_none_on_an_axes() -> None:
@@ -288,3 +289,21 @@ def test_a_frame_of_grade_rows_alone_holds_no_scaling_rows() -> None:
         [{"record": "submission", "arm": "mlscale-weak-qwen38-hip", "benchmark": "dist_softmax", "speedup": 2.0}]
     )
     assert scaling.curves(grades) == []
+
+
+@pytest.mark.parametrize("builder", [scaling.figure_summary, scaling.figure_efficiency])
+def test_a_print_size_scaling_figure_keeps_every_text_on_the_print_scale(builder) -> None:
+    """The ML figure sits in a wrap beside the cost figure: both must print at the same type sizes and width."""
+    from hpcagent_bench.stats import style
+
+    arm = "mlscale-strong-qwen38-hip"
+    rows = perfect_strong(arm, "dist_softmax") + perfect_weak("mlscale-weak-qwen38-hip", "dist_softmax")
+    fig = builder(scaling.curves(frame(rows)), width=style.ICLR_WRAP_WIDTH_IN, type_=style.PRINT_SCALE)
+    assert fig is not None
+    try:
+        assert style.print_type_violations(fig) == []
+        assert float(fig.get_size_inches()[0]) == pytest.approx(style.ICLR_WRAP_WIDTH_IN)
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)

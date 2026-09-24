@@ -12,6 +12,7 @@ Neutrals carry a slight cool bias rather than being a pure grey, so they sit und
 blues without looking like a different rendering of the page.
 """
 
+import dataclasses
 import itertools
 import logging
 import math
@@ -29,7 +30,7 @@ from matplotlib.backend_bases import RendererBase
 from matplotlib.collections import LineCollection, PathCollection
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
-from matplotlib.text import Annotation
+from matplotlib.text import Annotation, Text
 from matplotlib.ticker import FuncFormatter, Locator, LogLocator, MaxNLocator, NullFormatter
 from matplotlib.transforms import Bbox, Transform
 
@@ -73,8 +74,15 @@ ANNOTATION_PT: float = 13.0
 
 #: Type sizes of a figure drawn at the width it is placed at (scale 1.0), in points: what the page
 #: prints. Every figure module's paper mode starts from these, so two figures of one page agree.
+#: Ticks, point labels and category names print at PRINT_TICK_PT, axis labels and panel names at
+#: PRINT_LABEL_PT, legends at PRINT_LEGEND_PT (a two-column key must fit a 2.5in wrap figure).
 PRINT_TICK_PT: float = 7.0
 PRINT_LABEL_PT: float = 8.0
+PRINT_LEGEND_PT: float = 6.0
+#: The floor any print-size fitting (crowded category names, a legend squeezed into its band) may
+#: shrink text to. Below it a figure changes its layout instead: text that shrinks per figure is
+#: exactly what makes two figures on one page print at different sizes.
+PRINT_MIN_PT: float = 6.0
 
 #: The dpi every figure is written at (:func:`save`'s default). FreeType hints tighter at a low dpi,
 #: so ``get_window_extent`` at matplotlib's default 100 dpi UNDERSTATES text width: a caller that
@@ -95,6 +103,52 @@ DOUBLE_COLUMN_WIDTH: float = 7.0
 ICLR_TEXT_WIDTH_IN: float = 5.5
 ACM_COLUMN_WIDTH_IN: float = 3.33
 ACM_TEXT_WIDTH_IN: float = 7.0
+
+#: A figure wrapped beside the text (``wrapfigure`` at ``0.45\textwidth``), and the height of its
+#: plot body including the axis chrome; its legend adds its own height below. Every wrap figure uses
+#: both, so two of them on one page have the same box.
+ICLR_WRAP_WIDTH_IN: float = 0.45 * ICLR_TEXT_WIDTH_IN
+PRINT_BODY_HEIGHT_IN: float = 1.9
+
+#: How far a saved paper figure's width may differ from the width it is placed at. Beyond it the
+#: ``\includegraphics`` width rescales the type set here.
+PLACED_WIDTH_RTOL: float = 0.01
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class TypeScale:
+    """One figure's type sizes (points) and the mark and line weights that go with them.
+
+    Type size and figure size are one decision: a figure drawn to be shrunk to half width needs
+    twice the type of one drawn at its placed width. :data:`AUTHOR_SCALE` is the first,
+    :data:`PRINT_SCALE` the second; a figure module picks one and never mixes them.
+    """
+
+    tick_pt: float
+    label_pt: float
+    title_pt: float
+    legend_pt: float
+    annotation_pt: float
+    line_width: float
+    marker_size: float
+
+
+AUTHOR_SCALE = TypeScale(TICK_PT, LABEL_PT, SUBTITLE_PT, TICK_PT, ANNOTATION_PT, 1.6, 6.0)
+PRINT_SCALE = TypeScale(PRINT_TICK_PT, PRINT_LABEL_PT, PRINT_LABEL_PT, PRINT_LEGEND_PT, PRINT_TICK_PT, 1.0, 4.0)
+
+
+def text_sizes(fig: Figure) -> list[tuple[str, float]]:
+    """``(text, size in points)`` of every visible, non-empty text the figure draws, legends included."""
+    return [
+        (artist.get_text(), float(artist.get_fontsize()))
+        for artist in fig.findobj(Text)
+        if artist.get_visible() and artist.get_text().strip()
+    ]
+
+
+def print_type_violations(fig: Figure) -> list[tuple[str, float]]:
+    """The texts of ``fig`` outside the print range [:data:`PRINT_MIN_PT`, :data:`PRINT_LABEL_PT`]."""
+    return [(text, size) for text, size in text_sizes(fig) if not PRINT_MIN_PT - 1e-6 <= size <= PRINT_LABEL_PT + 1e-6]
 
 
 def apply() -> None:
@@ -160,6 +214,10 @@ def title(fig: Figure, text: str) -> float:
     return max(0.5, top - TITLE_GAP_IN / height)
 
 
+#: ``columnspacing`` and ``handlelength`` of a key that must fit two columns in a wrap figure.
+COMPACT_KEY: dict[str, float] = {"columnspacing": 0.8, "handlelength": 1.2}
+
+
 def legend_below(
     fig: Figure,
     handles: Sequence[Artist],
@@ -168,6 +226,8 @@ def legend_below(
     fontsize: float = 0.0,
     markerscale: float = 1.4,
     span: tuple[float, float] | None = None,
+    columnspacing: float = 1.6,
+    handlelength: float = 2.0,
 ) -> float:
     """One legend, under the whole figure, centred, wrapped to the figure width. Never inside the
     axes. Returns the legend's height in inches, which the caller adds to its bottom margin.
@@ -190,6 +250,9 @@ def legend_below(
     against the handle's: the 1.4 default enlarges a swatch so it reads beside authoring-scale type,
     and at 6.5pt type the same 1.4 makes the swatch taller than the row it sits in.
 
+    ``columnspacing`` and ``handlelength`` (in font sizes) default to a full-width key; a wrap
+    figure passes :data:`COMPACT_KEY` to fit two columns in 2.5in.
+
     ``span``, the plot body's (left, right) in figure fractions, centres the legend on the body
     instead of the canvas and makes the BODY's width the limit: a key never runs out past the panels
     under the Y labels, it drops a column first.
@@ -207,7 +270,8 @@ def legend_below(
             fontsize=fontsize if fontsize > 0.0 else LABEL_PT,
             markerscale=markerscale,
             handletextpad=0.5,
-            columnspacing=1.6,
+            columnspacing=columnspacing,
+            handlelength=handlelength,
             borderaxespad=0.0,
         )
         box = legend.get_window_extent(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
@@ -611,8 +675,34 @@ UNDATED: dict[str, dict[str, None]] = {"pdf": {"CreationDate": None}, "svg": {"D
 SVG_HASH_SALT: str = "hpcagent-bench"
 
 
+def placed_box(fig: Figure, width_in: float) -> Bbox:
+    """The saved box of a paper figure placed at ``width_in``: the ink's own height, the canvas's width.
+
+    A tight crop sets the width from the ink, so the page rescales the figure and its type by the
+    ratio of the two. Refuses a canvas of another width, ink outside it, and text outside the print
+    range (:func:`print_type_violations`).
+    """
+    width = float(fig.get_size_inches()[0])
+    if abs(width - width_in) > PLACED_WIDTH_RTOL * width_in:
+        raise ValueError(f"figure is {width:.3f}in wide, placed at {width_in:.3f}in")
+    ink = fig.get_tightbbox(fig.canvas.get_renderer())
+    slack = PLACED_WIDTH_RTOL * width_in
+    if ink.x0 < -slack or ink.x1 > width + slack:
+        raise ValueError(f"ink spans {ink.x0:.3f}..{ink.x1:.3f}in, outside the {width:.3f}in canvas")
+    wrong = print_type_violations(fig)
+    if wrong:
+        raise ValueError(f"text outside {PRINT_MIN_PT:g}-{PRINT_LABEL_PT:g}pt: {wrong[:6]}")
+    return Bbox.from_extents(0.0, ink.y0, width, ink.y1)
+
+
 def save(
-    fig: Figure, stem: pathlib.Path, formats: Sequence[str] = ("pdf", "png"), fixed: bool = False, dpi: float = SAVE_DPI
+    fig: Figure,
+    stem: pathlib.Path,
+    formats: Sequence[str] = ("pdf", "png"),
+    fixed: bool = False,
+    dpi: float = SAVE_DPI,
+    width_in: float = 0.0,
+    print_size: bool = False,
 ) -> pathlib.Path:
     """Write ``fig`` under ``stem`` once per suffix in ``formats``, and close it. Returns ``stem``.
 
@@ -621,11 +711,16 @@ def save(
     two paired figures the same size: a tight box is sized by each figure's own legend. Closing
     matters in a loop -- matplotlib keeps every open figure alive, and a sweep that renders one per
     directory otherwise ends up holding all of them. Every file is written :data:`UNDATED`, so a
-    rerun is byte-identical.
+    rerun is byte-identical. ``width_in`` marks a paper figure placed at that width
+    (:func:`placed_box`): it is saved exactly that wide, and refused if its type is off the print scale.
+    ``print_size`` applies the same type check to a figure that sizes its own canvas (``fixed``).
     """
     stem.parent.mkdir(parents=True, exist_ok=True)
     settle_clear_labels(fig)
-    box = fig.bbox_inches if fixed else "tight"
+    wrong = print_type_violations(fig) if print_size else []
+    if wrong:
+        raise ValueError(f"text outside {PRINT_MIN_PT:g}-{PRINT_LABEL_PT:g}pt: {wrong[:6]}")
+    box = placed_box(fig, width_in) if width_in > 0.0 else fig.bbox_inches if fixed else "tight"
     with plt.rc_context({"svg.hashsalt": SVG_HASH_SALT}):
         for suffix in formats:
             fig.savefig(  # pyright: ignore[reportUnknownMemberType]

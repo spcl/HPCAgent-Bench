@@ -114,11 +114,18 @@ AUTHOR_TYPE = PanelType(
 #: Print sizes, for a figure drawn at the width it is placed at: the tick and label sizes every paper
 #: figure starts from (:data:`hpcagent_bench.stats.style.PRINT_TICK_PT`), the key at tick size.
 PRINT_TYPE = PanelType(
-    plotstyle.PRINT_TICK_PT, plotstyle.PRINT_LABEL_PT, plotstyle.PRINT_TICK_PT, plotstyle.PRINT_TICK_PT
+    plotstyle.PRINT_TICK_PT, plotstyle.PRINT_LABEL_PT, plotstyle.PRINT_TICK_PT, plotstyle.PRINT_LEGEND_PT
 )
 
 #: How far the kernel names may shrink below ``name_pt`` to fit the column pitch.
 MIN_NAME_SCALE: float = 0.6
+
+
+def min_text_pt(type_: PanelType, size: float) -> float:
+    """The smallest a fitted text of ``size`` may get: the shared print floor at print size, where
+    every figure of a page must agree, and :data:`MIN_NAME_SCALE` of it at authoring size."""
+    return plotstyle.PRINT_MIN_PT if type_ == PRINT_TYPE else size * MIN_NAME_SCALE
+
 
 #: Air between the canvas edge and the chrome :func:`fit_canvas` measures, in inches.
 CHROME_PAD_IN: float = 0.04
@@ -656,17 +663,21 @@ def draw_summary_mark(
     metric: "Metric",
     value_pt: float,
     size: float,
+    value: bool = True,
 ) -> None:
-    """One series' summary: the reducer's point with its interval, and the point's own value printed
-    above the interval in the series' colour, so the number a caption quotes is on the figure. The
-    value settles clear of the marks and inside the frame at save time
-    (:func:`~hpcagent_bench.stats.style.settle_clear_labels`)."""
+    """One series' summary: the reducer's point with its interval, and -- when ``value`` -- the
+    point's own value printed above the interval in the series' colour, so the number a caption
+    quotes is on the figure. The value settles clear of the marks and inside the frame at save time
+    (:func:`~hpcagent_bench.stats.style.settle_clear_labels`). Six or more series overprint their
+    values in the narrow summary column; such a figure gives the numbers in its caption instead."""
     point, low, high = metric.summary_reducer(cells)
     if not math.isfinite(point):
         return
     if math.isfinite(low) and math.isfinite(high) and low < high:
         ax.vlines(x, low, high, color=one.color, linewidth=1.3, alpha=0.7, zorder=INTERVAL_Z)
     plotstyle.point_mark(ax, x, point, one.color, one.marker, one.filled, size=size)
+    if not value:
+        return
     ax.annotate(
         metric.value_label(point), xy=(x, high if math.isfinite(high) else point), xytext=(0, 2),
         textcoords="offset points", rotation=90, ha="center", va="bottom", fontsize=value_pt, color=one.color,
@@ -787,9 +798,10 @@ def draw_marks(
     size: float,
     span: float = DODGE_SPAN,
     type_: PanelType = AUTHOR_TYPE,
+    summary_values: bool = True,
 ) -> None:
     """Every series' cells over ``kernels``, spread by :func:`dodge_offsets`, plus each series'
-    summary in its own slot. One series keeps the column's exact x, so a single-series panel reads
+    summary in its own slot (its value printed when ``summary_values``). One series keeps the column's exact x, so a single-series panel reads
     as the plain strip it always was. Summary marks sit alone in their slots, so they take the
     roomiest size a mark gets, never smaller than the kernel marks."""
     x_of = {kernel: i for i, kernel in enumerate(kernels)}
@@ -803,7 +815,8 @@ def draw_marks(
     summary_size = max(size, mark_size(column_pitch_in(ax), 1))
     for slot, one in enumerate(metric.series):
         cells = [cell for cell in one.cells if cell.kernel in x_of]
-        draw_summary_mark(ax, cells, summary_slot_x(len(kernels), slot), one, metric, type_.name_pt, summary_size)
+        x = summary_slot_x(len(kernels), slot)
+        draw_summary_mark(ax, cells, x, one, metric, type_.name_pt, summary_size, summary_values)
 
 
 def draw_panel(
@@ -866,11 +879,12 @@ def figure_one(
     legend: Sequence[matplotlib.artist.Artist] = (),
     panel_height_in: float | None = None,
     tick_label: Callable[[str], str] | None = None,
+    summary_values: bool = True,
 ) -> matplotlib.figure.Figure:
     """A single metric's panel as its own figure (:func:`figure_panels` with one panel)."""
     return figure_panels(
         [metric], kernels, style_, summary_column, title, width_in, legend, panel_height_in=panel_height_in,
-        tick_label=tick_label,
+        tick_label=tick_label, summary_values=summary_values,
     )  # fmt: skip
 
 
@@ -886,6 +900,7 @@ def figure_panels(
     span: float = DODGE_SPAN,
     panel_height_in: float | None = None,
     tick_label: Callable[[str], str] | None = None,
+    summary_values: bool = True,
 ) -> matplotlib.figure.Figure:
     """``metrics`` as panels stacked top to bottom on ONE kernel axis, names under the last.
 
@@ -918,7 +933,7 @@ def figure_panels(
     fit_canvas(fig, axes, title, legend, type_, panel_height_in, pitch_in)
     size = mark_size(column_pitch_in(axes[0]), slots, span)
     for ax, metric in zip(axes, metrics, strict=True):
-        draw_marks(ax, metric, kernels, style_, summary_column, size, span, type_)
+        draw_marks(ax, metric, kernels, style_, summary_column, size, span, type_, summary_values)
     return fig
 
 
@@ -932,9 +947,14 @@ def split_in_two(text: str) -> str:
     return f"{text[:cut]}\n{text[cut + 1 :]}"
 
 
-def fit_ylabels(fig: matplotlib.figure.Figure, axes: Sequence[matplotlib.axes.Axes], panel_height_in: float) -> None:
+def fit_ylabels(
+    fig: matplotlib.figure.Figure,
+    axes: Sequence[matplotlib.axes.Axes],
+    panel_height_in: float,
+    type_: PanelType = AUTHOR_TYPE,
+) -> None:
     """Keep every Y label within its own panel's height: broken onto two lines, then stepped down
-    to :data:`MIN_NAME_SCALE` of its size. A rotated label taller than its panel runs past both ends
+    to its floor (:func:`min_text_pt`). A rotated label taller than its panel runs past both ends
     of the frame, and in a stack the two panels' labels printed over each other in the gap. A label
     still too tall at the floor is reported: the caller has to shorten it."""
     renderer = fig.canvas.get_renderer()
@@ -944,7 +964,7 @@ def fit_ylabels(fig: matplotlib.figure.Figure, axes: Sequence[matplotlib.axes.Ax
             continue
         label.set_text(split_in_two(label.get_text()))
         size = float(label.get_fontsize())
-        floor = size * MIN_NAME_SCALE
+        floor = min_text_pt(type_, size)
         while label.get_window_extent(renderer).height / fig.dpi > panel_height_in and size > floor:
             size = max(floor, size - 0.25)
             label.set_fontsize(size)
@@ -992,7 +1012,7 @@ def fit_canvas(
         top=1.0 - PROBE_BAND_IN / probe, bottom=PROBE_BAND_IN / probe, hspace=STACK_GAP_IN / panel_height_in
     )
     fig.canvas.draw()
-    fit_ylabels(fig, axes, panel_height_in)
+    fit_ylabels(fig, axes, panel_height_in, type_)
     left = max(plotstyle.left_protrusion_in(fig, ax) for ax in axes) + CHROME_PAD_IN
     right = max(plotstyle.right_protrusion_in(fig, ax) for ax in axes) + CHROME_PAD_IN
     if pitch_in is not None:
@@ -1000,7 +1020,7 @@ def fit_canvas(
         fig.set_size_inches(left + (high - low) * pitch_in + right, float(fig.get_size_inches()[1]))
     width = float(fig.get_size_inches()[0])
     fig.subplots_adjust(left=left / width, right=1.0 - right / width)
-    plotstyle.shrink_crowded_ticks(fig, [axes[-1]], type_.name_pt, type_.name_pt * MIN_NAME_SCALE)
+    plotstyle.shrink_crowded_ticks(fig, [axes[-1]], type_.name_pt, min_text_pt(type_, type_.name_pt))
     names = plotstyle.below_protrusion_in(fig, axes[-1])
     above = [plotstyle.above_protrusion_in(fig, ax) for ax in axes]
     top = (plotstyle.TITLE_BAND_IN if title else 0.0) + max(above[0], 0.0) + CHROME_PAD_IN
@@ -1034,7 +1054,8 @@ def cells_table(cells: Sequence[KernelCell], metric: str) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["benchmark", "metric", "n", "median", "episodes"])
 
 
-def save(fig: matplotlib.figure.Figure, out: pathlib.Path) -> pathlib.Path:
+def save(fig: matplotlib.figure.Figure, out: pathlib.Path, print_size: bool = False) -> pathlib.Path:
     """Write ``fig`` at its own canvas (:func:`fit_canvas` measured it), so a figure drawn at a
-    ``width_in`` is placed at exactly that width rather than a tight crop of its ink."""
-    return plotstyle.save(fig, out.with_suffix(""), fixed=True)
+    ``width_in`` is placed at exactly that width rather than a tight crop of its ink; ``print_size``
+    refuses type off the print scale (:func:`~hpcagent_bench.stats.style.print_type_violations`)."""
+    return plotstyle.save(fig, out.with_suffix(""), fixed=True, print_size=print_size)

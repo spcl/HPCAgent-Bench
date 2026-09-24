@@ -887,6 +887,11 @@ def main() -> None:
             built = build_comparison(
                 spec, args.observations, args.experiment, one_repeats, args.include_incomplete, card, args.speedup_over
             )
+            if built is None and spec.get("pending"):
+                # A comparison whose arms have not run yet is a STUB: its box, its axes and a "?" per
+                # pending model, so the row keeps its final layout until the data lands.
+                title = spec.get("title", spec.get("intervention", ""))
+                built = (title, spec.get("intervention", spec.get("treatment", "")), pd.DataFrame(), pd.DataFrame())
             if built is None:
                 print(f"skipping comparison {raw!r}: empty side, or no (model, language) shared with control")
                 continue

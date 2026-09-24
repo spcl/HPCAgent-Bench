@@ -1520,7 +1520,7 @@ def test_the_dot_row_stacks_the_success_row_between_speedup_and_cost(tmp_path: p
 def drawn_dot_row(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, measures: tuple[str, ...]) -> Figure:
     """The figure :func:`figure_dot_row` hands to ``style.save``, kept open to be measured."""
     kept: list[Figure] = []
-    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False: kept.append(fig) or stem)
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False, **options: kept.append(fig) or stem)
     control, treated = solved_and_failed_pair()
     panel = ("Blind", "no-score", plot.points(control, treated), pd.concat([control, treated]))
     efficacy_figures.figure_dot_row([panel], tmp_path / "dots.pdf", measures=measures)
@@ -1558,7 +1558,7 @@ def test_a_full_roster_mark_on_the_ceiling_is_drawn_whole() -> None:
 
     fig, ax = plt.subplots()
     row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 8, 8), arm(1.0, 2.0, 8, 8))
-    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
     assert marks and not any(mark.get_clip_on() for mark in marks)
     plt.close(fig)
@@ -1569,26 +1569,27 @@ def test_the_success_row_draws_its_marks_and_no_interval() -> None:
     bar under a 10/10 mark reaching down to 7 read as seven solved."""
     fig, ax = plt.subplots()
     row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 7, 10), arm(1.0, 2.0, 10, 10))
-    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     assert [collection for collection in ax.collections if isinstance(collection, PathCollection)]
     assert not [collection for collection in ax.collections if isinstance(collection, LineCollection)]
     plt.close(fig)
 
 
 @pytest.mark.parametrize(("solved", "served", "want"), [
-    ((2, 8), 8, [(-0.16, 2.0), (0.16, 8.0)]),
-    ((10, 10), 10, [(-0.16, 10.0), (0.16, 10.0)]),
-    ((0, 31), 40, [(-0.16, 0.0), (0.16, 31.0)]),
+    ((2, 8), 8, [(-0.16, 0.25), (0.16, 1.0)]),
+    ((10, 10), 10, [(-0.16, 1.0), (0.16, 1.0)]),
+    ((0, 31), 40, [(-0.16, 0.0), (0.16, 0.775)]),
 ])  # fmt: skip
-def test_a_success_mark_sits_at_the_solved_count(
+def test_a_success_mark_sits_at_the_solved_rate(
     solved: tuple[int, int], served: int, want: list[tuple[float, float]]
 ) -> None:
-    """The mark IS the count, the control's hollow one left of the column and the treated one right;
-    a rate or an interval centre would put a 10/10 arm below the ceiling."""
+    """USER 2026-09-25: the row is the solved RATE, solved over served, so pairs with different
+    rosters share one 0-100% scale; the control's hollow mark left of the column, the treated one
+    right, and a 10/10 arm exactly on the 100% ceiling."""
     fig, ax = plt.subplots()
     control, treated = (arm(1.0, 2.0, count, served) for count in solved)
     row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", control, treated)
-    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
     drawn = sorted({(float(x), float(y)) for mark in marks for x, y in mark.get_offsets()})
     assert drawn == pytest.approx(want)
@@ -1601,7 +1602,7 @@ def test_every_value_row_of_the_dot_row_carries_a_minor_grid(
     """User, 2026-09-22: more minor ticks on the paper plots -- the speed-up, tasks-completed and
     token rows alike, each ruled by its own axis kind (log2 units, a count, a log10 count)."""
     kept: list[Figure] = []
-    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False: kept.append(fig) or stem)
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False, **options: kept.append(fig) or stem)
     rows = observation_rows(BLIND_PAIR[1], 2.0, 100.0) + observation_rows(BLIND_PAIR[0], 4.0, 1000.0)
     frame = plot.pair_frame(pd.DataFrame(rows), [BLIND_PAIR], "no-score")
     stats = plot.points(frame[~frame.skills], frame[frame.skills])
@@ -1616,7 +1617,7 @@ def test_a_key_too_tall_for_its_band_grows_the_canvas_instead_of_covering_the_na
     """A fixed band made the key the thing that gave: at text width it shrank to its floor, still did
     not fit, and was drawn over the category names."""
     kept: list[Figure] = []
-    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False: kept.append(fig) or stem)
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False, **options: kept.append(fig) or stem)
     config = dataclasses.replace(efficacy_figures.PAPER_CONFIG, legend_chrome_in=0.05, legend_min_scale=1.0)
     control, treated = solved_and_failed_pair()
     panel = ("Blind", "no-score", plot.points(control, treated), pd.concat([control, treated]))
@@ -1633,11 +1634,11 @@ def test_a_key_too_tall_for_its_band_grows_the_canvas_instead_of_covering_the_na
 @pytest.mark.parametrize("legs", [("C", "Fortran") * 3])
 def test_category_names_still_touching_on_two_lines_step_down_until_clear(legs: tuple[str, ...]) -> None:
     """Three "Fortran" placeholders two columns apart share the staggered second line and touched.
-    The column is as narrow as that gets while the step-down floor (``category_min_scale``) can still
-    clear them; any narrower is the floor's warning, not a smaller type."""
+    The column is as narrow as that gets while the step-down floor (``category_min_scale``, the
+    shared 6pt print floor) can still clear them; any narrower is the floor's warning, not a smaller type."""
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(1.2, 1.0))
+    fig, ax = plt.subplots(figsize=(1.3, 1.0))
     config = efficacy_figures.PAPER_CONFIG
     rows = [efficacy_figures.ArmRow("qwen38", leg, "#1f77b4", arm(1.0, 2.0), arm(1.0, 2.0)) for leg in legs]
     ax.set_xlim(-0.6, len(rows) - 0.4)
@@ -1710,32 +1711,31 @@ def test_a_difference_label_sits_above_both_intervals_not_on_the_treated_mark() 
     plt.close(fig)
 
 
-def test_the_success_row_counts_kernels_up_to_the_roster_and_carries_no_x_ticks() -> None:
-    """The top tick is N, the kernels served, marked by a dashed rule; the axis runs 5% past it so the
-    rule is not the frame."""
+def test_the_success_row_runs_to_100_percent_and_carries_no_x_ticks() -> None:
+    """The top tick is 100% (every served kernel solved), marked by a dashed rule; the axis runs 5%
+    past it so the rule is not the frame."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
     row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 2, 8), arm(1.0, 2.0, 8, 8))
-    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     fig.canvas.draw()
-    assert list(ax.get_yticks()) == [0, 4, 8]
-    assert ax.get_ylim() == pytest.approx((-0.4, 8.4))
+    assert list(ax.get_yticks()) == [0.0, 0.5, 1.0]
+    assert [label.get_text() for label in ax.get_yticklabels()] == ["0", "50", "100"]
+    assert ax.get_ylim() == pytest.approx((-0.05, 1.05))
     (ceiling,) = [line for line in ax.lines if line.get_linestyle() == "--"]
-    assert list(ceiling.get_ydata()) == [8, 8]
+    assert list(ceiling.get_ydata()) == [1.0, 1.0]
     assert not ax.texts
     assert all(tick.tick1line.get_markersize() == 0.0 for tick in ax.xaxis.get_major_ticks())
     plt.close(fig)
 
 
-@pytest.mark.parametrize(("kernels", "want"), [
-    (40, [0, 20, 40]),
-    (10, [0, 5, 10]),
-    (7, [0, 7]),
-    (0, []),
-])  # fmt: skip
-def test_success_ticks_end_on_the_roster_size(kernels: int, want: list[int]) -> None:
-    assert efficacy_figures.success_ticks(kernels) == want
+@pytest.mark.parametrize(("solved", "served", "want"), [(8, 8, 1.0), (0, 40, 0.0), (31, 40, 0.775), (0, 0, 0.0)])
+def test_the_success_rate_is_solved_over_served_and_zero_for_an_unserved_arm(
+    solved: int, served: int, want: float
+) -> None:
+    """An arm nobody served yet has no rate to show; it reads 0, and the row skips drawing it."""
+    assert efficacy_figures.success_rate(solved, served) == want
 
 
 def test_a_short_cost_row_labels_one_two_and_five_of_every_decade() -> None:
@@ -1779,7 +1779,7 @@ def test_a_pending_model_gets_an_empty_category_in_registry_order() -> None:
 def pending_dot_row(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, mark: bool) -> Figure:
     """A stub panel with two pending models, drawn and kept open."""
     kept: list[Figure] = []
-    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False: kept.append(fig) or stem)
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False, **options: kept.append(fig) or stem)
     config = dataclasses.replace(efficacy_figures.PAPER_CONFIG, mark_pending=mark)
     stub = ("Scientific", "cpfsrc", pd.DataFrame(), pd.DataFrame())
     efficacy_figures.figure_dot_row([stub], tmp_path / "dots.pdf", config=config, pending=["oss120b,kimi27sglang"])

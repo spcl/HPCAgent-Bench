@@ -202,6 +202,10 @@ class FigureConfig:
     max_name_lines: int = 2
     #: The widest a delivery's tick text runs before it folds.
     tick_wrap: int = 8
+    #: Put the key's text-only notes in the key: abbreviations, the few-kernels note, and one row per
+    #: significance superscript. A paper figure turns it off: the notes go to the caption and the two
+    #: superscripts share one row, so the key fits three columns (user, 2026-09-25).
+    key_notes: bool = True
 
 
 #: The default a caller draws with unless it hands a replacement in. Sized for a figure AUTHORED
@@ -218,11 +222,14 @@ DEFAULT_CONFIG = FigureConfig()
 PAPER_CONFIG = dataclasses.replace(
     DEFAULT_CONFIG,
     tick_pt=style.PRINT_TICK_PT,
-    label_pt=0.8 * style.PRINT_LABEL_PT,
+    label_pt=style.PRINT_LABEL_PT,
     subtitle_pt=style.PRINT_LABEL_PT,
-    point_pt=6.5,
-    legend_pt=7.24,
-    legend_ncol=5,
+    point_pt=style.PRINT_TICK_PT,
+    legend_pt=style.PRINT_LEGEND_PT,
+    legend_ncol=3,
+    key_notes=False,
+    legend_min_scale=1.0,
+    category_min_scale=style.PRINT_MIN_PT / style.PRINT_TICK_PT,
     legend_marker_pt=5.5,
     legend_marker_scale=1.0,
     mark_size=19.0,
@@ -561,10 +568,14 @@ def draw_arm_pair(
             [control_point.x, treated_point.x], [control_point.y, treated_point.y], color=colour,
             linewidth=config.link_width, alpha=config.link_alpha, zorder=style.CONNECTOR_Z - 0.5,
         )  # fmt: skip
-    for point, filled, mark in ((control_point, False, CONTROL_MARKER), (treated_point, True, shape)):
+    control_colour = palette.lighten(colour, palette.CONTROL_SHADE)
+    for point, filled, mark, hue in (
+        (control_point, False, CONTROL_MARKER, control_colour),
+        (treated_point, True, shape, colour),
+    ):
         bounds = (point.x_low, point.x_high, point.y_low, point.y_high)
-        draw_interval_cross(ax, point.x, point.y, bounds, colour, config)
-        style.point_mark(ax, point.x, point.y, colour, mark, filled, size=config.mark_size)
+        draw_interval_cross(ax, point.x, point.y, bounds, hue, config)
+        style.point_mark(ax, point.x, point.y, hue, mark, filled, size=config.mark_size)
 
 
 def leg_labels(frame: pd.DataFrame) -> pd.Series:
@@ -598,6 +609,8 @@ COST_SIG_MARK: str = "+"
 #: the row, not inside a sentence.
 SCORE_SIG_LABEL: str = "Speed-Up Change Significant (BH p < 0.05)"
 COST_SIG_LABEL: str = "Token Cost Change Significant (BH p < 0.05)"
+#: Both superscripts in one key row, for a key that must fit three columns.
+JOINT_SIG_LABEL: str = "Significant (BH p < 0.05): Speed-Up, Token Cost"
 
 
 def axis_significance(stats: pd.DataFrame) -> dict[tuple[str, str], tuple[bool, bool]]:
@@ -666,10 +679,11 @@ def significance_legend_marks(score_sig: bool, cost_sig: bool) -> list[Line2D]:
     ]
 
 
-#: The one shape a CONTROL mark ever wears, filled hollow. A hollow copy of the treatment's own
-#: shape reads as "the same thing, lighter" at print size; a different outline reads as a different
-#: thing, which is what it is. No packet is ever given this shape (:func:`treatment_marker`).
-CONTROL_MARKER: str = "o"
+#: The one shape a CONTROL mark ever wears, hollow: the palette's, so every figure agrees. A hollow
+#: copy of the treatment's own shape reads as "the same thing, lighter" at print size; a different
+#: outline reads as a different thing, which is what it is. No packet is ever given this shape
+#: (:func:`treatment_marker`).
+CONTROL_MARKER: str = palette.CONTROL_MARKER
 
 
 def treatment_marker(treatment: str) -> str:
@@ -761,7 +775,17 @@ def pair_legend_handles(
     return handles + legend_tail(show_cloud, symbols)
 
 
-def legend_tail(show_cloud: bool, symbols: tuple[bool, bool] = (False, False)) -> list[Line2D]:
+def joint_significance_mark(score_sig: bool, cost_sig: bool) -> list[Line2D]:
+    """The two superscripts in ONE key row, listing only the ones the figure drew."""
+    drawn = [mark for mark, shown in ((SCORE_SIG_MARK, score_sig), (COST_SIG_MARK, cost_sig)) if shown]
+    if not drawn:
+        return []
+    if len(drawn) == 1:
+        return significance_legend_marks(score_sig, cost_sig)
+    return [Line2D([], [], linestyle="none", marker="none", label=f"{', '.join(drawn)}  {JOINT_SIG_LABEL}")]
+
+
+def legend_tail(show_cloud: bool, symbols: tuple[bool, bool] = (False, False), joint: bool = False) -> list[Line2D]:
     """The rows every panel's legend ends on: the cloud's cross (only with ``show_cloud``), the two
     interval notes, and one row per significance superscript the panel actually drew
     (``symbols``, from :func:`drawn_symbols`). Every one is FIXED TEXT (:func:`interval_note`,
@@ -785,7 +809,7 @@ def legend_tail(show_cloud: bool, symbols: tuple[bool, bool] = (False, False)) -
             label=interval_note("Token Cost"),
         ),  # fmt: skip
     ]
-    return handles + significance_legend_marks(*symbols)
+    return handles + (joint_significance_mark(*symbols) if joint else significance_legend_marks(*symbols))
 
 
 def legend_handles(
@@ -869,7 +893,7 @@ def minor_grid(ax: Axes, axis: Literal["x", "y"], kind: style.MinorKind, config:
     """The shared minor ruling (:func:`~hpcagent_bench.stats.style.minor_ticks`) on ``ax``'s value
     axis ``axis`` of ``kind``, in ``config``'s own minor-grid shade and weight: unlabelled ticks
     read off the majors this module sets (:func:`x_tick_step`'s whole exponents, the token subs,
-    :func:`success_ticks`)."""
+    :data:`SUCCESS_TICKS`)."""
     target = ax.yaxis if axis == "y" else ax.xaxis
     style.minor_ticks(target, kind, config.minor_grid_color, config.minor_grid_width)
 
@@ -1246,8 +1270,8 @@ def draw_panel(
     ylabel = mode_ylabel(mode, ylabel)
     control_text = control_name or packets.control_label(list(control_over) or [treatment])
     origin_text = control_text if mark_labels else ""
-    # An absolute panel's no-packet arm is the packet's shape, drawn hollow; a paired panel's
-    # control is the circle at the origin.
+    # The no-packet arm is the hollow control circle on every panel: at its own position on an
+    # absolute panel, at the origin on a paired one.
     control_marker = CONTROL_MARKER
     if frame.empty:
         # A stub panel: the box and its axes, nothing plotted. Styling still runs so the empty
@@ -1504,7 +1528,7 @@ def figure_one(
             color=style.INK, zorder=7,
         )  # fmt: skip
     untangle_labels(ax, config)
-    return style.save(fig, out.with_suffix(""), fixed=True)
+    return style.save(fig, out.with_suffix(""), fixed=True, print_size=config == PAPER_CONFIG)
 
 
 #: One panel of a joined row: ``title`` (what the panel is CALLED) plus either the SINGLE-treatment
@@ -1669,7 +1693,7 @@ def figure_row(
         )  # fmt: skip
     for ax in axes:
         untangle_labels(ax, config)
-    return style.save(fig, out.with_suffix(""), fixed=True)
+    return style.save(fig, out.with_suffix(""), fixed=True, print_size=config == PAPER_CONFIG)
 
 
 #: The measures a dot-row figure stacks, top to bottom: what each arm REACHED over the campaign
@@ -1678,7 +1702,7 @@ def figure_row(
 MEASURES: tuple[str, ...] = ("speedup", "success", "cost")
 
 #: Each measure's default axis label.
-MEASURE_LABELS: dict[str, str] = {"speedup": "Speed-Up", "success": "Solved", "cost": ABSOLUTE_YLABEL}
+MEASURE_LABELS: dict[str, str] = {"speedup": "Speed-Up", "success": "Solved (%)", "cost": ABSOLUTE_YLABEL}
 
 #: Each measure's row height as a fraction of ``row_height_in``. A count out of N needs no ladder of
 #: ratios, so the success row is the shortest; the speed-up and cost rows are 0.7 of one and the
@@ -2152,15 +2176,17 @@ def draw_measure_row(
         for point, filled, dodge, mark in pair:
             value, low, high = measure_value(point, measure)
             x = index + dodge
+            # One model drawn twice: its control a close, lighter shade (palette.CONTROL_SHADE).
+            colour = row.colour if filled else palette.lighten(row.colour, palette.CONTROL_SHADE)
             if interval_kernels(point, measure) < config.min_interval_kernels:
                 low, high = math.nan, math.nan
             if np.isfinite(low) and np.isfinite(high):
                 low, high = draw_interval(
-                    ax, x, low, high, bounds, row.colour, config.cost_linestyle if cost else "-", config
+                    ax, x, low, high, bounds, colour, config.cost_linestyle if cost else "-", config
                 )
                 tops[index] = max(tops.get(index, -math.inf), high)
             span += [v for v in (value, low, high) if math.isfinite(v)]
-            style.point_mark(ax, x, value, row.colour, mark, filled, size=config.mark_size)
+            style.point_mark(ax, x, value, colour, mark, filled, size=config.mark_size)
         control_value = measure_value(row.control, measure)[0]
         treated_value = measure_value(row.treated, measure)[0]
         if config.link_pairs:
@@ -2227,21 +2253,22 @@ def draw_measure_row(
     thin_rules(ax, config)
 
 
-def success_ticks(kernels: int) -> list[int]:
-    """The success row's labelled ticks, 0 to ``kernels`` in equal integer steps, so the top tick IS
-    the roster size: halves when it divides by two. The row is half height (:data:`MEASURE_HEIGHT`),
-    and quarters overprint there."""
-    if kernels <= 0:
-        return []
-    parts = 2 if kernels % 2 == 0 else 1
-    return [kernels * part // parts for part in range(parts + 1)]
+#: The success row's labelled rates: none, half, all of the kernels served.
+SUCCESS_TICKS: tuple[float, ...] = (0.0, 0.5, 1.0)
+
+
+def success_rate(solved: int, served: int) -> float:
+    """The fraction of its served kernels an arm solved."""
+    return solved / served if served else 0.0
 
 
 def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: FigureConfig, ylabel: str) -> None:
-    """The success row: how many of its pair's kernels each arm solved, on an axis running 0 to N
-    (the kernels served), as a mark at the count and NOTHING around it (user, 2026-09-22). The roster
-    is fixed, so the count is a census, not a sample: there is no sampling error to draw, and an
-    interval under a 10/10 mark reaching down to 7 read as seven solved."""
+    """The success row: the RATE each arm solved its pair's kernels at, solved over served, on an axis
+    running 0 to 100% (user, 2026-09-25; a count per pair put pairs of different roster sizes on
+    different scales), as a mark and NOTHING around it (user, 2026-09-22). The roster is fixed, so
+    the rate is a census, not a sample: there is no sampling error to draw, and an interval under a
+    10/10 mark reaching down to 70% read as seven solved. The control wears its lighter shade
+    (:data:`~hpcagent_bench.stats.palette.CONTROL_SHADE`), as on every other row."""
     for index, row in enumerate(rows):
         for point, filled, dodge, mark in (
             (row.control, False, -config.dodge, CONTROL_MARKER),
@@ -2249,19 +2276,21 @@ def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: Figur
         ):
             if point.served == 0:
                 continue
-            # A full roster sits on N, and the headroom above it is thinner than a mark in a half-height row.
+            colour = row.colour if filled else palette.lighten(row.colour, palette.CONTROL_SHADE)
+            # A full roster sits on 100%, and the headroom above it is thinner than a mark in a half-height row.
             style.point_mark(
-                ax, index + dodge, point.solved, row.colour, mark, filled, size=config.mark_size, clip=False
+                ax, index + dodge, success_rate(point.solved, point.served), colour, mark, filled,
+                size=config.mark_size, clip=False,
             )  # fmt: skip
-    kernels = max((point.served for row in rows for point in (row.control, row.treated)), default=0)
-    ax.set_yticks(success_ticks(kernels))
+    ax.set_yticks(SUCCESS_TICKS)
+    # The percent sign is in the row label: "100%" on every tick widened the left chrome of the
+    # whole figure past what the speed-up row needs.
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{100.0 * value:.0f}"))
     minor_grid(ax, "y", "count", config)
-    # The dashed rule marks the ceiling N; the headroom above it keeps the rule off the frame.
-    ax.axhline(kernels, color=style.MUTED, linestyle="--", linewidth=0.6, zorder=1)
-    # A column nobody was served yet (every arm pending) has N = 0; its headroom is taken against one
-    # kernel, since a fraction of zero is a singular axis.
-    headroom = SUCCESS_HEADROOM * max(kernels, 1)
-    ax.set_ylim(-headroom, kernels + headroom)
+    ax.yaxis.set_minor_locator(MultipleLocator(0.25))
+    # The dashed rule marks 100%; the headroom above it keeps the rule off the frame.
+    ax.axhline(1.0, color=style.MUTED, linestyle="--", linewidth=0.6, zorder=1)
+    ax.set_ylim(-SUCCESS_HEADROOM, 1.0 + SUCCESS_HEADROOM)
     ax.set_xlim(-0.6, max(len(rows) - 0.4, 0.6))
     ax.set_xticks(range(len(rows)))
     group_rules(ax, rows)
@@ -2383,7 +2412,7 @@ def figure_arm_dots(
         bottom=(legend_h + category_band + MEASURE_PAD_IN) / height,
     )  # fmt: skip
     stagger_crowded_ticks(fig, axes[-1], config)
-    return style.save(fig, out.with_suffix(""), fixed=True)
+    return style.save(fig, out.with_suffix(""), fixed=True, print_size=config == PAPER_CONFIG)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -2510,10 +2539,11 @@ def dot_row_legend(columns: Sequence[DotColumn], channels: str, config: FigureCo
     )
     if config.mark_pending and any(is_pending(row) for row in rows):
         handles.append(style.pending_legend_mark(config.legend_marker_pt))
-    if few_kernel_marks(rows, config):
+    if config.key_notes and few_kernel_marks(rows, config):
         note = FEW_KERNELS_NOTE.format(config.min_interval_kernels)
         handles.append(Line2D([], [], linestyle="none", marker="none", label=note))
-    return handles + legend_tail(False, symbols) + alias_footnotes([row.leg for row in rows])
+    notes = alias_footnotes([row.leg for row in rows]) if config.key_notes else []
+    return handles + legend_tail(False, symbols, joint=not config.key_notes) + notes
 
 
 #: The narrowest a column may be, in categories. A stub column has none, and at a width ratio of
@@ -2729,7 +2759,7 @@ def figure_dot_row(
     height = data_height + top_in + bottom_in
     fig.set_size_inches(row_width_in, height)
     fig.subplots_adjust(top=1.0 - top_in / height, bottom=bottom_in / height)
-    return style.save(fig, out.with_suffix(""), fixed=True)
+    return style.save(fig, out.with_suffix(""), fixed=True, print_size=config == PAPER_CONFIG)
 
 
 #: Clearance between an inner column's widest Y tick label and the panel to its left, in inches.

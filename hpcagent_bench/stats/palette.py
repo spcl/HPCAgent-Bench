@@ -208,6 +208,11 @@ def marker(model: str) -> str:
     return shapes[zlib.crc32(str(model).encode()) % len(shapes)]
 
 
+#: The control's shape, reserved: no packet or harness is ever assigned it, and the control is drawn
+#: hollow in its model's colour, so "no packet" reads the same in every figure.
+CONTROL_MARKER: str = "o"
+
+
 def packet_marker(packet: str) -> str:
     """The one SHAPE ``packet`` wears in a figure that colours by MODEL instead: the packet
     efficacy panels (:mod:`hpcagent_bench.stats.figures.efficacy`,
@@ -216,6 +221,8 @@ def packet_marker(packet: str) -> str:
     overlapping summary marks apart far better than a faint circle-vs-square edge does. Shape is
     read off the SAME registry order :func:`color` uses for hue, wrapping at :func:`markers`'
     eight entries; harmless here since one panel never draws two packets at once."""
+    if not packets.spec_parts(packet):
+        return CONTROL_MARKER
     shapes = markers()
     known = hue_order("packets")
     resolved = canonical("packets", packet)
@@ -223,6 +230,19 @@ def packet_marker(packet: str) -> str:
         return shapes[known.index(resolved) % len(shapes)]
     LOG.warning("palette: packet %r is not in registry.yaml; using a hash marker", packet)
     return shapes[zlib.crc32(str(packet).encode()) % len(shapes)]
+
+
+def harness_marker(harness: str) -> str:
+    """The one SHAPE an agent HARNESS wears in a figure that colours by model and varies the treatment:
+    read from the BACK of :func:`markers`, past the standalone optimizers' shapes (:func:`marker`), so
+    registering a harness never repaints an optimizer and the common packets (front) stay distinct."""
+    shapes = markers()
+    known = hue_order("harnesses")
+    resolved = canonical("harnesses", harness)
+    if resolved not in known:
+        LOG.warning("palette: harness %r is not in registry.yaml; using a hash marker", harness)
+        return shapes[zlib.crc32(str(harness).encode()) % len(shapes)]
+    return shapes[-1 - ((len(order("optimizers")) + known.index(resolved)) % len(shapes))]
 
 
 def packet_markers(packets_: Iterable[str]) -> dict[str, str]:
@@ -259,6 +279,18 @@ def model_color(name: str) -> str:
     Shape identifies the model everywhere else; this exists because a figure that varies nothing
     else would otherwise draw four series in one grey."""
     return ordered_color("models", name)
+
+
+def model_shade(name: str, step: int) -> str:
+    """The ``step``-th close shade of a model's colour (0 = the colour itself): the rule for ONE
+    model drawn several times in one figure -- with and without a packet, on several devices, in
+    several pairs -- so the series stay the same model at a glance yet tell apart where their marks
+    or intervals overlap. One step is :data:`registry().lightness_step`."""
+    return lighten(model_color(name), step)
+
+
+#: The shade a model's CONTROL (no packet) wears beside its treated setups: one step lighter.
+CONTROL_SHADE: int = 1
 
 
 def model_colors(names: Iterable[str]) -> dict[str, str]:
