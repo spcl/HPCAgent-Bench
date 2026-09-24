@@ -23,7 +23,9 @@ def emit_once(args: argparse.Namespace) -> int:
     # hoister cannot see that a float64 kernel is about to become float16 -- and real BLAS has only
     # single and double gemm, so any other precision has to keep the loop nest.
     # fft_library: a whole-array 1-D np.fft.* becomes one FFTW3 call (FFT_LIBRARY_MARKER).
-    kir = lower(kir, blas=args.precision in BLAS_PRECISIONS, fft_library=True)
+    # fft_library_nd: a batched / N-D np.fft.* becomes one FFTW3 plan_many_dft (FFTN_LIBRARY_MARKER);
+    # C/C++ only -- Fortran and numba have no renderer for it and keep the naive loop.
+    kir = lower(kir, blas=args.precision in BLAS_PRECISIONS, fft_library=True, fft_library_nd=True)
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
     # Kernel name from the input stem, independent of bench_info's short_name.
