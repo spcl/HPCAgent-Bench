@@ -199,7 +199,11 @@ async def forward(request: Request, path: str, setup: str | None = None) -> http
             },
         ) from exc
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"judge upstream {UPSTREAM_URL}{path} failed: {exc}") from exc
+        # Named by type: a read timeout's message is empty, and "failed: " alone cannot tell a judge
+        # still grading past the relay's wait from one that died mid-request.
+        raise HTTPException(
+            status_code=502, detail=f"judge upstream {UPSTREAM_URL}{path} failed: {type(exc).__name__}: {exc}"
+        ) from exc
 
 
 def relay(upstream: httpx.Response) -> Response:

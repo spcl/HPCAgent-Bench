@@ -280,6 +280,22 @@ def test_unreachable_upstream_is_a_distinct_unavailable(service: ModuleType, mon
     assert response.json()["detail"]["cause"] == "judge_unreachable"
 
 
+def test_an_upstream_failure_names_its_exception_type(
+    client: "TestClient", service: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """httpx's ReadTimeout carries an empty message, so the 502 must name the type: a relay that
+    stopped waiting on a judge still grading is not a judge that died mid-request."""
+    import httpx
+
+    async def read_timeout(*args: object, **kwargs: object) -> None:
+        raise httpx.ReadTimeout("")
+
+    monkeypatch.setattr(service, "send_upstream", read_timeout)
+    response = client.post("/submit", json=SUBMISSION)
+    assert response.status_code == 502, response.text
+    assert response.json()["detail"].endswith("/submit failed: ReadTimeout: "), response.json()
+
+
 def test_search_still_runs_locally(client: "TestClient", service: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """/search is this container's own tool and is unchanged: same context join, same limit."""
     seen: Dict[str, Any] = {}
