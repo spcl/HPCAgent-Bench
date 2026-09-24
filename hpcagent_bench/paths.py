@@ -51,3 +51,10 @@ def scratch_root(name: str) -> pathlib.Path:
     scratch = os.environ.get("SCRATCH")
     base = pathlib.Path(scratch) if scratch else repo_root() / ".cache"
     return base / name
+
+
+def fast_scratch_root(name: str) -> pathlib.Path:
+    """``$FAST_SCRATCH/<name>`` (iopsstor on beverin: flash, with a p95 small-file latency a tenth
+    of the general scratch's and its own inode quota), else :func:`scratch_root`."""
+    fast = os.environ.get("FAST_SCRATCH")
+    return pathlib.Path(fast) / name if fast else scratch_root(name)
