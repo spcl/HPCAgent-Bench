@@ -20,6 +20,7 @@ import pathlib
 import re
 import sys
 import textwrap
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -78,7 +79,7 @@ from numpyto_common.frontend import (
     symbol_sign_from_bindings,
 )
 from numpyto_common.ir import ArrayDesc, KernelIR, SymbolDesc, stamp_symbol_assumptions  # noqa: E402
-from numpyto_common.numpy_desugar import expr_rank, rank_table
+from numpyto_common.numpy_desugar import desugar_for_python_backend, expr_rank, rank_table
 
 if TYPE_CHECKING:
     from dace import SDFG
@@ -99,14 +100,14 @@ def emitted_renames(src: str) -> dict:
     return {}
 
 
-def _emit(short: str) -> tuple[KernelIR, str]:
+def _emit(short: str, native_eigh: bool = True) -> tuple[KernelIR, str]:
     # Drive off the co-located YAML (bench_info/*.json is gone); emit_bridge synthesizes the
     # transient JSON the emitter reads. Through the inline fallback, exactly like autogen._emit_dace:
     # the emitter renders a kept helper as its own @dc.program now, but the fallback still exists for
     # the forms it cannot express, and the PARSE has to sit inside the retry either way.
     def render() -> tuple[KernelIR, str]:
         with bench_info_for(short) as (_, numpy_py, bi):
-            kir = parse_kernel(numpy_py, bi, open_mesh_grids=False)
+            kir = parse_kernel(numpy_py, bi, open_mesh_grids=False, native_eigh=native_eigh)
         return kir, emit_dace(kir)
 
     return emit_with_inline_fallback(render)
@@ -312,6 +313,42 @@ def test_dace_keeps_native_linalg() -> None:
     assert "np.linalg.cholesky" in chol
     _, con = _emit("contour_integral")
     assert "np.linalg.solve" in con
+
+
+@pytest.mark.parametrize(
+    ("kernel", "calls"),
+    [("largest_eigenval", 1), ("rayleigh_ritz_rotation", 1), ("eigh_test", 2), ("cegterg", 2), ("ls3df_scf", 3)],
+)
+def test_dace_keeps_native_eigh(kernel: str, calls: int) -> None:
+    """dace binds ``np.linalg.eigh`` / ``eigvalsh`` to its ``Eigh`` library node (LAPACK ``?syevd`` on the
+    CPU, rocSOLVER / cuSOLVER on the GPU), so neither the parse-time rewriter nor the desugar may replace
+    a call with the cyclic Jacobi nest -- that nest is what every one of these kernels ran before."""
+    _, src = _emit(kernel)
+    assert src.count("np.linalg.eigh(") + src.count("np.linalg.eigvalsh(") == calls, src
+    assert "np.hypot" not in src, f"{kernel}: an eigh was lowered to the Jacobi loop for dace"
+
+
+def test_only_dace_keeps_the_standard_eigh() -> None:
+    """The gate is per backend and per form: numba keeps the Jacobi lowering, and so does dace for a
+    form numpy has no counterpart of (scipy's generalized ``eigh(a, b)``)."""
+    src = (
+        "def k(a, b, w, v, g):\n"
+        "    ww, vv = np.linalg.eigh(a, UPLO='U')\n"
+        "    w[:] = ww\n"
+        "    v[:] = vv\n"
+        "    gw, gv = scipy.linalg.eigh(a, b)\n"
+        "    g[:] = gw\n"
+    )
+    arrays = {"a": ("N", "N"), "b": ("N", "N"), "w": ("N",), "v": ("N", "N"), "g": ("N",)}
+    kir = SimpleNamespace(
+        kernel_name="k",
+        input_args=list(arrays),
+        arrays=[SimpleNamespace(name=name, shape=shape, dtype="float64") for name, shape in arrays.items()],
+    )
+    dace_src = desugar_for_python_backend(src, kir, backend="dace")
+    assert "np.linalg.eigh(a, UPLO='U')" in dace_src, dace_src
+    assert "scipy.linalg.eigh" not in dace_src, dace_src
+    assert "np.linalg.eigh" not in desugar_for_python_backend(src, kir, backend="numba")
 
 
 @pytest.mark.parametrize("kernel", _FEATURE_KERNELS)
@@ -2784,13 +2821,15 @@ def eigh_accessor_lines(text: str) -> list[str]:
 
 def test_ls3df_eighs_on_real_blocks_lower_to_the_real_jacobi() -> None:
     """ls3df's operands are real only through helper parameters, helper returns and a preset scalar
-    (``half_inv_h2``). The complex Jacobi spells ``.real`` on a double, which its C++ form refuses."""
-    _, text = _emit("ls3df_scf")
+    (``half_inv_h2``). The complex Jacobi spells ``.real`` on a double, which its C++ form refuses.
+    dace itself keeps the eigh for its library node, so the Jacobi is emitted with that switched off."""
+    _, text = _emit("ls3df_scf", native_eigh=False)
     assert "__eigh" in text
     assert eigh_accessor_lines(text) == []
 
 
 def test_cegterg_complex_eigh_keeps_the_complex_jacobi() -> None:
-    """``_diaghg`` diagonalises a complex Hermitian matrix; a real Jacobi there drops its imaginary part."""
-    _, text = _emit("cegterg")
+    """``_diaghg`` diagonalises a complex Hermitian matrix; a real Jacobi there drops its imaginary part.
+    dace itself keeps the eigh for its library node, so the Jacobi is emitted with that switched off."""
+    _, text = _emit("cegterg", native_eigh=False)
     assert eigh_accessor_lines(text), "cegterg's eigh lost its complex accessors"

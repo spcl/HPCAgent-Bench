@@ -938,6 +938,7 @@ def parse_kernel(
     config: Optional[str] = None,
     precision: Optional[str] = None,
     open_mesh_grids: bool = True,
+    native_eigh: bool = False,
 ) -> KernelIR:
     """Build a :class:`KernelIR` from ``numpy_py`` + ``bench_info``.
 
@@ -954,14 +955,14 @@ def parse_kernel(
     """
     if not HELPERS_KEPT_DISABLED:
         try:
-            return build_kernel_ir(numpy_py, bench_info, config, precision, True, open_mesh_grids)
+            return build_kernel_ir(numpy_py, bench_info, config, precision, True, open_mesh_grids, native_eigh)
         except NotImplementedError:
             # ONLY a declared refusal falls back. Catching everything is what hid a guaranteed
             # NameError in _build_helper_kirs' shape-symbol branch: every kernel reaching it
             # reported success while quietly emitting the inlined form. Anything other than a
             # refusal is a bug in this path and has to be seen.
             pass
-    return build_kernel_ir(numpy_py, bench_info, config, precision, False, open_mesh_grids)
+    return build_kernel_ir(numpy_py, bench_info, config, precision, False, open_mesh_grids, native_eigh)
 
 
 #: Set while a driver is retrying with the helpers inlined; :func:`parse_kernel` reads it.
@@ -1135,6 +1136,7 @@ def build_kernel_ir(
     precision: Optional[str] = None,
     keep_helpers: bool = False,
     open_mesh_grids: bool = True,
+    native_eigh: bool = False,
 ) -> KernelIR:
     """Build a :class:`KernelIR` from ``numpy_py`` + ``bench_info``.
 
@@ -1153,6 +1155,9 @@ def build_kernel_ir(
         no standalone ABI are still spliced.
     :param open_mesh_grids: rewrite ``gx, gy = np.ix_(..)`` into one grid name for the native
         emitters. dace takes the unpacked names and refuses the packed one, so its path passes False.
+    :param native_eigh: keep the standard ``np.linalg.eigh`` / ``eigvalsh`` call for a backend that
+        compiles it (:data:`~numpyto_common.numpy_desugar.NATIVE_EIGH_BACKENDS`) instead of lowering
+        it to the cyclic Jacobi loop nest.
     :raises ValueError: when the JSON is missing required fields, or no
         function in the Python file matches ``bench_info.func_name``.
     """
@@ -1207,7 +1212,7 @@ def build_kernel_ir(
     array_kinds = {name: kind for name, dt in dtypes_raw.items() if (kind := _kind_of_dtype_str(dt)) is not None}
     declared_kinds = {**scalar_kinds, **array_kinds}
     kind_tables = module_kind_tables(tree, func_name, declared_kinds)
-    _EighLoopRewriter(_eigh_aliases, declared_kinds, kind_tables, dtypes_raw).visit(tree)
+    _EighLoopRewriter(_eigh_aliases, declared_kinds, kind_tables, dtypes_raw, keep_native=native_eigh).visit(tree)
     # Canonicalise inf/nan spellings module-wide (see _NonFiniteNormalizer) so
     # both kernel and helpers are covered.
     _NonFiniteNormalizer().visit(tree)

@@ -590,6 +590,36 @@ def _call_return_rank(value: ast.AST, call_returns: Dict[str, int]) -> Optional[
 IDENT_RE = r"[A-Za-z_][A-Za-z0-9_]*"
 
 
+def is_native_numpy_eigh(call: ast.AST) -> bool:
+    """Whether ``call`` is ``np.linalg.eigh(a)`` / ``np.linalg.eigvalsh(a)``, optionally with ``UPLO=``.
+
+    Only that form: scipy's generalized ``eigh(a, b)``, ``subset_by_index`` and ``eigvals_only`` have
+    no numpy counterpart, so they keep the loop lowering on every backend."""
+    return (
+        isinstance(call, ast.Call)
+        and np_submodule_attr(call, "linalg") in ("eigh", "eigvalsh")
+        and len(call.args) == 1
+        and all(k.arg == "UPLO" for k in call.keywords)
+    )
+
+
+def eigh_stand_ins(target: ast.expr, value: ast.expr) -> list[tuple[str, ast.expr]] | None:
+    """The bindings a kept ``w, v = np.linalg.eigh(a)`` / ``w = np.linalg.eigvalsh(a)`` makes, each as
+    an expression of the same shape: ``a[..., 0]`` for the eigenvalues, ``a`` for the eigenvectors.
+
+    A backend in :data:`NATIVE_EIGH_BACKENDS` keeps the call, so the rank and shape tables would
+    otherwise lose both outputs, and with them every extent computed from the eigenvectors."""
+    if not is_native_numpy_eigh(value):
+        return None
+    operand = value.args[0]
+    values = ast.Subscript(value=operand, slice=ast.Tuple(elts=[ast.Constant(...), ast.Constant(0)], ctx=ast.Load()))
+    if np_submodule_attr(value, "linalg") == "eigvalsh":
+        return [(target.id, values)] if isinstance(target, ast.Name) else None
+    if isinstance(target, ast.Tuple) and len(target.elts) == 2 and all(isinstance(e, ast.Name) for e in target.elts):
+        return [(target.elts[0].id, values), (target.elts[1].id, operand)]
+    return None
+
+
 def name_value_pairs(tree: ast.AST) -> Iterator[Tuple[str, ast.expr]]:
     """Every ``name = <expr>`` binding, including the elements of a parallel tuple assignment.
 
@@ -602,7 +632,10 @@ def name_value_pairs(tree: ast.AST) -> Iterator[Tuple[str, ast.expr]]:
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
             continue
         target = node.targets[0]
-        if isinstance(target, ast.Name):
+        stand_ins = eigh_stand_ins(target, node.value)
+        if stand_ins is not None:
+            yield from stand_ins
+        elif isinstance(target, ast.Name):
             yield target.id, node.value
         elif (
             isinstance(target, ast.Tuple)
@@ -871,10 +904,14 @@ def name_binding_index(tree: ast.AST) -> tuple[list[tuple[str, ast.expr]], dict[
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module, ast.ClassDef)):
             body_statements.update(id(stmt) for stmt in node.body)
-        elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            bindings.append((node.targets[0].id, node.value))
-            if id(node) in body_statements:
-                first.setdefault(node.targets[0].id, node.value)
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            bound = eigh_stand_ins(node.targets[0], node.value)
+            if bound is None and isinstance(node.targets[0], ast.Name):
+                bound = [(node.targets[0].id, node.value)]
+            for name, value in bound or ():
+                bindings.append((name, value))
+                if id(node) in body_statements:
+                    first.setdefault(name, value)
     return bindings, first
 
 
@@ -5167,8 +5204,11 @@ class _EighLoopRewriter(ast.NodeTransformer):
         dtypes: Dict[str, str],
         kind_tables: Optional[Mapping[str, Dict[str, str]]] = None,
         array_dtypes: Optional[Dict[str, str]] = None,
+        keep_native: bool = False,
     ) -> None:
         self.alias_names = alias_names
+        #: Leave :func:`is_native_numpy_eigh` calls in place (a backend in :data:`NATIVE_EIGH_BACKENDS`).
+        self.keep_native = keep_native
         self.declared = dtypes
         self.dtypes = dtypes
         #: Per-function kinds (:func:`module_kind_tables`); ``None`` applies ``dtypes`` to every function.
@@ -5177,6 +5217,18 @@ class _EighLoopRewriter(ast.NodeTransformer):
         #: operand cannot spell in emitted source (:func:`_eigh_w_dtype`).
         self.array_dtypes = array_dtypes or {}
         self._ctr = 0
+
+    def keep_call(self, node: ast.Assign):
+        """A kept call, its operand bound to a name first: the rank and shape tables size the outputs
+        from that name (:func:`eigh_stand_ins`)."""
+        call = node.value
+        if isinstance(call.args[0], ast.Name):
+            return node
+        name = f"__eigh{self._ctr}_a"
+        self._ctr += 1
+        bind = ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=call.args[0])
+        call.args[0] = ast.Name(id=name, ctx=ast.Load())
+        return [ast.copy_location(bind, node), node]
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
         """Propagate the declared kinds across this function's own assignments, then rewrite it.
@@ -5206,6 +5258,8 @@ class _EighLoopRewriter(ast.NodeTransformer):
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
+        if self.keep_native and is_native_numpy_eigh(node.value):
+            return self.keep_call(node)
         hit = _eigh_call_kind(node.value, self.alias_names)
         if hit is None:
             return node
@@ -5401,9 +5455,12 @@ class _EighInline(ast.NodeTransformer):
         alias_names: set,
         dtypes: Dict[str, str],
         array_dtypes: Optional[Dict[str, str]] = None,
+        keep_native: bool = False,
     ) -> None:
         self.ranks = ranks
         self.alias_names = alias_names
+        #: Leave :func:`is_native_numpy_eigh` calls in place (a backend in :data:`NATIVE_EIGH_BACKENDS`).
+        self.keep_native = keep_native
         self.dtypes = dtypes
         #: Declared array dtypes, for the eigenvalue width a complex operand cannot spell.
         self.array_dtypes = array_dtypes or {}
@@ -5419,7 +5476,7 @@ class _EighInline(ast.NodeTransformer):
         return "None", "None"
 
     def visit_Assign(self, node: ast.Assign):
-        if len(node.targets) != 1:
+        if len(node.targets) != 1 or (self.keep_native and is_native_numpy_eigh(node.value)):
             return node
         hit = _eigh_call_kind(node.value, self.alias_names)
         if hit is None:
@@ -5499,6 +5556,12 @@ _LOWER_SOLVE_RHS_RANKS: Dict[Optional[str], frozenset] = {"dace": frozenset({1})
 #: CPU and cuFFT/hipFFT on the GPU; the inlined loop DFT is O(N^2) per axis and never finishes at
 #: benchmark sizes (fft_1d's N ~ 7e7).
 NATIVE_FFT_BACKENDS = frozenset({"dace"})
+
+#: Backends that compile the standard ``np.linalg.eigh`` / ``eigvalsh`` NATIVELY
+#: (:func:`is_native_numpy_eigh`), so neither eigh lowering replaces it with the cyclic Jacobi nest.
+#: dace's frontend binds its ``Eigh`` library node, which lowers to LAPACK ``?syevd`` / ``?heevd`` on
+#: the CPU and cuSOLVER / rocSOLVER on the GPU.
+NATIVE_EIGH_BACKENDS = frozenset({"dace"})
 
 
 def lowers_linalg(tables: HoistTables) -> bool:
@@ -7275,7 +7338,7 @@ def desugar_for_python_backend(source: str, kir, backend: Optional[str] = None) 
             _NormalizeNegativeAxis(ranks),
             IxWriteToLoop(ranks, dtypes, fn),
             _FancySliceStoreToLoop(ranks, dtypes),
-            _EighInline(ranks, eigh_aliases, dtypes, kir_array_dtypes),
+            _EighInline(ranks, eigh_aliases, dtypes, kir_array_dtypes, keep_native=backend in NATIVE_EIGH_BACKENDS),
             ValueHoist(LINALG_HOIST, tables),
             _ReshapeMatmulInline(ranks),
             _BatchedMatmulToLoop(ranks),
