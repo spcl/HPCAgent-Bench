@@ -444,8 +444,8 @@ def test_a_grade_the_judge_never_answered_is_logged_as_a_score_error(
     client: "TestClient", calls_db: Callable[[], str], monkeypatch: pytest.MonkeyPatch, service: ModuleType
 ) -> None:
     """A relay that timed out (httpx.ReadTimeout, whose message is empty) is a 502 with no answer.
-    The 2026-09-23 owed-harness20 runs lost such /submit and /score requests from the trajectory,
-    while the judge still recorded the /submit it finished afterwards."""
+    Without a row the trajectory loses the request, while the judge may still record the /submit it
+    finishes afterwards."""
     import httpx
 
     async def read_timeout(*args: object, **kwargs: object) -> None:
