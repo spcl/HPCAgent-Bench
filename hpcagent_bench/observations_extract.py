@@ -39,6 +39,7 @@ import contextlib
 import csv
 import dataclasses
 import fnmatch
+import functools
 import glob
 import hashlib
 import json
@@ -52,7 +53,7 @@ from collections.abc import Collection, Iterable, Iterator
 from types import ModuleType
 from typing import Any, NamedTuple
 
-from hpcagent_bench import campaigns, frozen_observations, paths
+from hpcagent_bench import campaigns, frozen_observations, fused, paths
 from hpcagent_bench.experiments import DB_SKIP_NAMES, agent_indices, arm_of
 from hpcagent_bench.harness import timing
 from hpcagent_bench.stats import score_rule
@@ -272,6 +273,50 @@ class JobIdentity(NamedTuple):
 
     harnesses: dict[str, str]
     packets: dict[str, str]
+
+
+#: The launch-env keys that name an arm's recorded identity, the same ones the judge stamps on ``runs``.
+LAUNCH_IDENTITY_KEYS = ("HPCAGENT_BENCH_RECORD_HARNESS", "HPCAGENT_BENCH_RECORD_PACKET")
+
+
+def read_launch_env(path: pathlib.Path) -> dict[str, str]:
+    """``KEY=VALUE`` lines of a staged launch ``.env``; {} when the file is gone."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key.isidentifier():
+            values[key] = value
+    return values
+
+
+@functools.cache
+def launch_identities(job_dir: pathlib.Path) -> dict[str, tuple[str, str]]:
+    """``arm -> (harness, packet)`` as the job's launch env recorded them.
+
+    The ``runs`` row that carries a run's identity is written by its FIRST grade, so a worker that
+    never reached the judge -- starved behind other grades, killed at its wall, a harness that never
+    called it -- has none, and its task row (the cost of exactly the episodes that failed) lost its
+    harness. The launch env is where that identity was set: ``.agent-launch/<job>/.env``, overlaid by
+    each fused setup's ``setups/<setup>.resolved``. An arm two setups disagree on is left out.
+    """
+    launch = job_dir.parent / ".agent-launch" / job_dir.name
+    job_env: dict[str, str | None] = dict(read_launch_env(launch / ".env"))
+    envs = [job_env] + [
+        {**job_env, **fused.parse_resolved(path.read_text(encoding="utf-8"))}
+        for path in sorted((launch / "setups").glob(f"*{fused.RESOLVED_SUFFIX}"))
+    ]
+    found: dict[str, tuple[str, str]] = {}
+    conflicting: set[str] = set()
+    for env in envs:
+        arm = env.get(fused.ARM_KEY) or ""
+        pair = (env.get(LAUNCH_IDENTITY_KEYS[0]) or "", env.get(LAUNCH_IDENTITY_KEYS[1]) or "")
+        if arm and found.setdefault(arm, pair) != pair:
+            conflicting.add(arm)
+    return {arm: pair for arm, pair in found.items() if arm not in conflicting}
 
 
 class JudgeWorkers(NamedTuple):
@@ -756,7 +801,8 @@ def task_rows_for_job(
     Emitted ONCE per job rather than once per judge rank database: a job's judge rows can be
     sharded over several ``judge/rank-*/`` databases, but its worker directories under ``agents/``
     are not. ``harness`` and ``packet`` are filled from the SAME ``runs`` table lookup a judge row
-    of the same ``run_id`` would carry; every other column stays blank -- a task row measures token
+    of the same ``run_id`` would carry (the job's launch env when no grade wrote one,
+    :func:`launch_identities`); every other column stays blank -- a task row measures token
     cost, not a grade, and must carry no speed-up (R1-R2 only look at ``submission`` rows).
     ``totals`` holds precomputed :func:`task_totals_by_dir` results; without it each directory is
     folded here.
@@ -795,6 +841,7 @@ def task_rows_for_job(
         else:
             counts = {column: record.get(key, "") for column, key in RECORD_COLUMNS}
             counts["tokens_provider"] = record_provider_tokens(record, counts["tokens_provider"])
+        launched = launch_identities(job_dir).get(arm, ("", ""))
         row: dict[str, Any] = dict.fromkeys(OBSERVATION_FIELDS, "")
         row.update(
             run_root=run_root,
@@ -803,8 +850,9 @@ def task_rows_for_job(
             record="task",
             run_id=run_id,
             arm=arm,
-            harness=identity.harnesses.get(run_id, ""),
-            packet=identity.packets.get(run_id, ""),
+            harness=identity.harnesses.get(run_id) or launched[0],
+            # '' is the control packet, so a recorded '' stands; only a run the judge never saw falls back.
+            packet=identity.packets[run_id] if run_id in identity.packets else launched[1],
             node_index=node,
             problem_index=problem,
             worker_index=worker,
