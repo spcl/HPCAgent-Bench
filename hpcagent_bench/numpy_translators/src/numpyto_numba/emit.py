@@ -324,9 +324,19 @@ def _abs_offset(src: str, lineno: int, col: int) -> int:
     return sum(len(line) for line in lines[: lineno - 1]) + col
 
 
+def unit_step(call: ast.Call) -> bool:
+    """True when ``range(...)``'s step is the literal ``1`` (or omitted): numba's parfor pass lowers
+    only that prange, and raises ``UnsupportedRewriteError`` on any other step -- a negative
+    literal (``range(n - 1, -1, -1)``) or a runtime one (``range(k, n, m)``) alike."""
+    if len(call.args) < 3:
+        return True
+    step = call.args[2]
+    return isinstance(step, ast.Constant) and type(step.value) is int and step.value == 1
+
+
 def _parallelize_one_range_loop(src: str) -> str:
     """Rewrite the ``range`` identifier of the first (source-order) provably
-    independent ``range`` for-loop to ``nb.prange``. If none qualify, return
+    independent unit-step (:func:`unit_step`) ``range`` for-loop to ``nb.prange``. If none qualify, return
     ``src`` unchanged (fully serial -- correct, just not parallel)."""
     tree = ast.parse(src)
     range_fors = sorted(
@@ -340,7 +350,7 @@ def _parallelize_one_range_loop(src: str) -> str:
         ),
         key=lambda n: (n.lineno, n.col_offset),
     )
-    target = next((f for f in range_fors if loop_is_parallel_safe(f)), None)
+    target = next((f for f in range_fors if unit_step(f.iter) and loop_is_parallel_safe(f)), None)
     if target is None:
         return src
     fn = target.iter.func
