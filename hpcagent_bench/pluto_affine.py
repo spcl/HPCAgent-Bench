@@ -270,10 +270,11 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "into that cell and mints no scalar -- one corpus kernel, fft_3d (__cb7 gone). "
                 "pagerank is not in it: its sum feeds an elementwise divide, so the scalar stays. "
                 "09-24: pagerank validates once POLYCC-014's respelling hands its scalars to polycc "
-                "as pointer cells; tsvc_2_s128's induction scalars index arrays, stay local, and "
-                "still lose their writes."
+                "as pointer cells, and tsvc_2_s128 once POLYCC-017 turns its induction scalars into "
+                "closed forms. An index scalar the DATA advances (tsvc_2_s341's packing j) is "
+                "neither and still loses its writes."
             ),
-            repro="tests/test_pluto_genuine.py -- tsvc_2_s128 transforms clean and computes the wrong answer",
+            repro="tests/test_pluto_genuine.py -- tsvc_2_s341 transforms clean and computes the wrong answer",
             avoided_by="",
             upstream="not filed",
         ),
@@ -294,7 +295,10 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "invariant subscript floord to a scop-external temp and spells min/max with the "
                 "prelude's own NaN-propagating macro, which pet expands away; all 4 now compile and "
                 "3 agree with the oracle. triplet_margin_loss agrees only up to POLYCC-009, which "
-                "compiling unmasks: its __cb8 accumulator is dropped from the transformed output."
+                "compiling unmasks: its __cb8 accumulator is dropped from the transformed output. "
+                "09-24: the cases the emitter leaves (a variant floord in a subscript, a python_mod "
+                "value call) reach polycc through pluto_normalize.floord_subscripts and "
+                "opaque_helper_calls (tsvc_2_s4117, tsvc_2_s315)."
             ),
             repro=f"{_TRANS_TESTS}/test_pluto_no_helper_calls_in_scop.py",
             avoided_by="numpyto_c.emit.pluto_call_free",
@@ -393,6 +397,36 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
             repro="tests/test_pluto_normalize.py",
             avoided_by="hpcagent_bench.pluto_normalize.normalize_strided_loops",
             upstream="not filed",
+        ),
+        PolyccIssue(
+            id="POLYCC-016",
+            kind="bug",
+            component="pet",
+            severity="refusal",
+            symptom=(
+                "The emitter's file-scope C23 constexpr knob (constexpr int64_t K = 1;) is not C "
+                "pet's libclang 17 parses, and the whole unit is refused (cond_reduce_sym, "
+                "fission_dep_sym_offset). Measured 09-24."
+            ),
+            repro="tests/test_pluto_normalize.py",
+            avoided_by="hpcagent_bench.pluto_normalize.inline_pinned_constants",
+            upstream="n/a",
+        ),
+        PolyccIssue(
+            id="POLYCC-017",
+            kind="bug",
+            component="pet",
+            severity="miscompile",
+            symptom=(
+                "An integer local that carries an INDEX -- assigned once from the loop counter "
+                "(tsvc_2_s4117's j = floord(i, 2)), a literal tile width (jacobi_2d_tile_w7's W = 7) "
+                "or advanced by literals every iteration (tsvc_2_s128's j and k) -- is data to pet: "
+                "its subscripts read as indirect and its writes are dropped (POLYCC-009). "
+                "Substituting the expression or the closed form of the counter validates. Measured 09-24."
+            ),
+            repro="tests/test_pluto_normalize.py",
+            avoided_by="hpcagent_bench.pluto_normalize.substitute_induction_scalars",
+            upstream="n/a",
         ),
         PolyccIssue(
             id="C-001",
