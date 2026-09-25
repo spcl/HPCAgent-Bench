@@ -100,10 +100,10 @@ campaigns:
   mlscale-part2: {experiment: mlscale-part2, name: "ML Scaling Part 2@10, Multi-GPU", device: GPU, tag: mlscale-part2}
 
 # Arms the user took out of the experiments, as ONE regex searched against an arm name (2026-09-18:
-# union-alpha, scicomp C++ and GPU c-openmp offload; the LLR CPU Fortran arms, back in 2026-09-25; 2026-09-19: only
+# union-alpha, scicomp C++ and GPU c-openmp offload, the LLR CPU Fortran arms; 2026-09-19: only
 # cpfsrc-v2 counts, so every cpfsrc v1 arm leaves; 2026-09-21: the host-resident GPU LLR triton and
 # c-openmp arms timed their own copies, superseded by triton-device and c-openmp-device).
-dropped_arms: "unionalpha|^scicomp-dc-cpp-|^scicomp-dc-gpu-.*-c-openmp-(?!device-)|-cpfsrc(?!-v2)|^gpu-llr-focus40-[^-]+-(triton|c-openmp)(?!-device)"
+dropped_arms: "unionalpha|^scicomp-dc-cpp-|^scicomp-dc-gpu-.*-c-openmp-(?!device-)|^cpf-llr-focus40-[^-]+-fortran|-cpfsrc(?!-v2)|^gpu-llr-focus40-[^-]+-(triton|c-openmp)(?!-device)"
 
 # Arm names that are ONE arm under two spellings, as {regex: replacement} applied to an arm name with
 # re.sub (\1 = a captured group; an unmatched optional group is empty). The left spelling's rows, jobs
