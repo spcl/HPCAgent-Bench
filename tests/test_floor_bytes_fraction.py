@@ -160,7 +160,7 @@ def test_an_all_suspect_s1232_task_is_credited_again_from_its_stored_cells(tmp_p
     shard(tmp_path / "regrade-cells-0.db", [cell(index) for index in range(4)])
     (task,) = extract.load_final_regrades([str(tmp_path)]).values()
     assert (task["regrade_status"], task["n_credited"], task["floor_rederived"]) == (extract.RETIMED, 4, 4)
-    assert task["s_i"] == pytest.approx(math.prod(RATIOS) ** 0.25) == task["s_bar"]
+    assert task["s_i"] == pytest.approx(math.prod(RATIOS) ** 0.25)
 
 
 def test_the_final_grade_marks_the_rederived_submission_solved(tmp_path: pathlib.Path) -> None:

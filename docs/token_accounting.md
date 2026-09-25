@@ -60,16 +60,13 @@ attempts are reported beside it, never added:
 | column (`record = 'task'`) | holds |
 |---|---|
 | `tokens` | final attempt, `effective` card |
-| `tokens_provider` | final attempt, `billed` card (`PROVIDER_CACHE_DISCOUNT = 0.1`) |
 | `tokens_fresh_input`, `tokens_cached_input`, `tokens_output` | final attempt's components |
-| `tokens_billed` | final attempt, raw per-request usage sum (see naming note) |
-| `tokens_crashed`, `tokens_billed_crashed` | earlier attempts, `effective` and per-request sum |
-| `attempts` | transcripts the task left |
+| `tokens_crashed` | earlier attempts, `effective` card |
+| `task_attempts` | transcripts the task left |
 
-**Naming note.** The column `tokens_billed` is not the paper's billed cost. It sums per-turn usage
-fields, which report no output on these endpoints, so it is neither the `billed` nor the `total`
-card and `tokens_billed - tokens` is not the cached count. The paper's billed cost is the `billed`
-card, priced from the components (or `tokens_provider`).
+The paper's billed cost is the `billed` card (`PROVIDER_CACHE_DISCOUNT = 0.1`), priced from the
+components. The driver's `tokens.json` also keeps `tokens_billed`, a raw per-request usage sum that
+is neither the `billed` nor the `total` card; no table carries it.
 
 Components are recorded, never recovered by subtraction. A card that weights a component an older
 extraction lacks raises and asks for a re-extract; `effective` needs none.

@@ -15,7 +15,8 @@ measurable without polluting rankings.
 All times are host-measured nanoseconds (the agent cannot forge them). There is ONE
 schema -- :data:`TABLES` and :data:`INDEXES` -- and no version number: a DB's vintage is the
 set of columns it carries. :func:`connect` only ADDS to a DB (missing tables, missing nullable
-columns appended), which an older writer tolerates because every INSERT names its columns.
+columns appended), which an older writer resuming its own shard tolerates because every INSERT
+names its columns (a DB this schema created lacks the retired columns an older writer names).
 Removing what the schema retired (:data:`RETIRED_COLUMNS`, :data:`RETIRED_TABLES`) happens only
 in :func:`migrate`, on a copy. Readers open any vintage read-only and look columns up by name.
 See ``docs/results_db.md``.
@@ -37,14 +38,13 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import NamedTuple, Protocol
 
-from hpcagent_bench import config, experiment_tags, osinfo, packets, paths
+from hpcagent_bench import config, experiment_tags, osinfo, paths
 from hpcagent_bench.harness import grading
 from hpcagent_bench.harness.envelope import Submission
 from hpcagent_bench.harness.metric import LawCurve, ScalingDrop, ScalingScore
-from hpcagent_bench.harness.scoring import ML_LAWS, Score, TimedCell, VerifyResult, suspect_timing
+from hpcagent_bench.harness.scoring import Score, TimedCell, VerifyResult, suspect_timing
 from hpcagent_bench.harness.task import RecordDevice, Task, device_plausibility_row
 from hpcagent_bench.spec import BenchSpec
-from hpcagent_bench.stats import score_rule
 
 #: WHO produced a row, once per run: every result table joins it on ``run_id``. ``rep`` is the
 #: 1-based repetition of one arm (three repetitions otherwise write identical rows). ``packet`` ''
@@ -59,23 +59,7 @@ CREATE TABLE IF NOT EXISTS runs (
     packet     TEXT NOT NULL DEFAULT '',    -- skill packets, sorted and '+'-joined; '' is base
     rep        INTEGER NOT NULL DEFAULT 1,
     arm        TEXT,
-    first_seen INTEGER,                     -- epoch ms (UTC) the run first wrote a row
-    harness    TEXT,                        -- agent harness; NULL = the arm named none
-    commit_sha TEXT                         -- hpcagent_bench commit the arm ran; NULL = unknown
-);
-"""
-
-#: One row per (packet, language) ever recorded: the resolved ``fill=False`` definition as
-#: sorted-key JSON. A key's definition is immutable once recorded (``envs/registry.yaml``), so the
-#: first write wins.
-PACKETS_DDL = """
-CREATE TABLE IF NOT EXISTS packets (
-    packet          TEXT NOT NULL,
-    language        TEXT NOT NULL,
-    definition      TEXT NOT NULL,
-    registry_commit TEXT NOT NULL DEFAULT '',
-    first_seen      INTEGER NOT NULL,
-    PRIMARY KEY (packet, language)
+    harness    TEXT                         -- agent harness; NULL = the arm named none
 );
 """
 
@@ -90,13 +74,12 @@ CREATE TABLE IF NOT EXISTS sources (
     ts        INTEGER NOT NULL,
     benchmark TEXT NOT NULL,
     language  TEXT,                        -- what was DELIVERED; '<lang>:device' for a device half
-    n_bytes   INTEGER NOT NULL,
     path      TEXT NOT NULL
 );
 """
 
 #: What a grade asked to link (JSON lists of the raw ``build`` tokens and ``libraries`` names),
-#: written only when it asked for anything. Joins on ``(run_id, benchmark, ts)``.
+#: written only when it asked for anything; whether it built is the graded row's ``build_ok``. Joins on ``(run_id, benchmark, ts)``.
 _SUBMISSION_LIBS_DDL = """
 CREATE TABLE IF NOT EXISTS submission_libraries (
     id                  INTEGER PRIMARY KEY,
@@ -104,15 +87,12 @@ CREATE TABLE IF NOT EXISTS submission_libraries (
     ts                  INTEGER NOT NULL,
     benchmark           TEXT NOT NULL,
     requested_build     TEXT,
-    requested_libraries TEXT,
-    build_ok            INTEGER CHECK(build_ok IN (0,1))
+    requested_libraries TEXT
 );
 """
 
-#: One row per TIMED (config, shape) cell behind a ``submissions.speedup``. ``g_i`` / ``gsd_i`` /
-#: ``gated`` / ``score_rule`` are the submission's credit as graded, repeated on each of its cells so
-#: a reader takes the credited number rather than re-deriving it. Joins on ``(run_id, benchmark,
-#: ts)``; a DB without rows here did not record cells, it did not time zero.
+#: One row per TIMED (config, shape) cell behind a ``submissions.speedup``: the credited ratio and
+#: which references raced for its denominator. Joins on ``(run_id, benchmark, ts)``.
 _SUBMISSION_CELLS_DDL = """
 CREATE TABLE IF NOT EXISTS submission_cells (
     id          INTEGER PRIMARY KEY,
@@ -120,24 +100,10 @@ CREATE TABLE IF NOT EXISTS submission_cells (
     ts          INTEGER NOT NULL,
     benchmark   TEXT NOT NULL,
     cell        INTEGER NOT NULL,            -- 0-based index within the submission's timed set
-    label       TEXT,
     shape       TEXT,                        -- JSON: drawn size symbols + config knobs
-    timed       INTEGER CHECK(timed IN (0,1)),
-    graded      INTEGER CHECK(graded IN (0,1)),        -- 0 = INCONCLUSIVE, not a mismatch
-    correct     INTEGER CHECK(correct IN (0,1)),
-    suspect     INTEGER CHECK(suspect IN (0,1)),
-    significant INTEGER CHECK(significant IN (0,1)),   -- 0 = credited 1.0 for want of evidence
-    baseline    TEXT,                        -- the reference that supplied the denominator
-    baseline_ns REAL,
-    native_ns   REAL,
     ratio       REAL,                        -- the CREDITED r(i,j)
-    timing_reduction TEXT,
-    g_i         REAL,
-    gsd_i       REAL,
-    gated       INTEGER CHECK(gated IN (0,1)),
-    score_rule  TEXT,
     baseline_policy TEXT,
-    baseline_candidates TEXT                 -- every reference timed here, '+'-joined; `baseline` won
+    baseline_candidates TEXT                 -- every reference timed here, '+'-joined
 );
 """
 
@@ -155,26 +121,9 @@ CREATE TABLE IF NOT EXISTS scaling_points (
     single_rank_ns   INTEGER,              -- T_i(1)
     ranked_ns        INTEGER,              -- T_i(P)
     work_ratio       REAL,                 -- weak r = W(N_P)/W(N_1); NULL for strong
-    achieved_speedup REAL,
-    ideal_speedup    REAL,
     efficiency       REAL,                 -- eta_i(P), uncapped
-    shape            TEXT,                 -- JSON: the sized parameters P ran
     note             TEXT,
     PRIMARY KEY (run_id, ts, benchmark, scaling_mode, ranks)
-);
-"""
-
-#: One row per surviving curve (grade, law): ``work_exponent`` (NULL = strong-only) and the
-#: curve's score ``mean_efficiency``.
-SCALING_CURVES_DDL = """
-CREATE TABLE IF NOT EXISTS scaling_curves (
-    run_id          TEXT NOT NULL,
-    ts              INTEGER NOT NULL,
-    benchmark       TEXT NOT NULL,
-    scaling_mode    TEXT NOT NULL CHECK(scaling_mode IN ('weak', 'strong')),
-    work_exponent   INTEGER,
-    mean_efficiency REAL NOT NULL,
-    PRIMARY KEY (run_id, ts, benchmark, scaling_mode)
 );
 """
 
@@ -183,9 +132,8 @@ CREATE TABLE IF NOT EXISTS scaling_curves (
 #: pooled across values. ``node`` stays per row: a multi-node run writes one shard per rank under
 #: one run_id. ``device_runtime`` non-empty marks an anti-cheat REFUSAL (speedup 1.0, suspect 1).
 #: The ``timing_*_ns`` / ``device_index`` columns are the judge's own device-synchronization
-#: readings behind a ``suspect``; the residual columns are the public grade's worst margin (NULL =
-#: nothing graded); ``scaling_curve`` is the ML track's per-law disclosure JSON (the per-P rows
-#: are in ``scaling_points``, see :data:`SCALING_SUMMARY`); ``distribution`` / ``workspace_bytes`` are the MPI envelope as sent (NULL = none).
+#: readings behind a ``suspect``; ``distribution`` / ``workspace_bytes`` are the MPI envelope as sent
+#: (NULL = none).
 _SUBMISSIONS_DDL = """
 CREATE TABLE IF NOT EXISTS submissions (
     id          INTEGER PRIMARY KEY,
@@ -208,19 +156,12 @@ CREATE TABLE IF NOT EXISTS submissions (
     node        TEXT,
     grading_protocol TEXT,
     baseline_policy TEXT,
-    seed_nonce  INTEGER,
     request_id  TEXT,
     device_runtime TEXT,
     timing_residual_ns INTEGER,
     timing_host_ns INTEGER,
     timing_event_ns INTEGER,
     device_index INTEGER,
-    max_abs_err REAL,
-    atol_used   REAL,
-    l_used      INTEGER,
-    ref_inf_norm REAL,
-    l_rule      TEXT,
-    scaling_curve TEXT,
     distribution TEXT,
     workspace_bytes TEXT
 );
@@ -240,22 +181,11 @@ CREATE TABLE IF NOT EXISTS attempts (
     build_ok    INTEGER CHECK(build_ok IN (0,1)),
     correct     INTEGER CHECK(correct IN (0,1)),
     reason      TEXT,
-    detail      TEXT,                        -- capped at DETAIL_CAP
     cpu         TEXT,
     commit_sha  TEXT,
     execution   TEXT,
     node        TEXT,
-    grading_protocol TEXT,
-    seed_nonce  INTEGER,
-    request_id  TEXT,
-    baseline_policy TEXT,
-    max_abs_err REAL,
-    atol_used   REAL,
-    l_used      INTEGER,
-    ref_inf_norm REAL,
-    l_rule      TEXT,
-    distribution TEXT,
-    workspace_bytes TEXT
+    baseline_policy TEXT
 );
 """
 
@@ -296,12 +226,10 @@ CREATE TABLE IF NOT EXISTS calls (
 #: The schema, in creation order.
 TABLES: dict[str, str] = {
     "runs": _RUNS_DDL,
-    "packets": PACKETS_DDL,
     "sources": _SOURCES_DDL,
     "submission_libraries": _SUBMISSION_LIBS_DDL,
     "submission_cells": _SUBMISSION_CELLS_DDL,
     "scaling_points": SCALING_POINTS_DDL,
-    "scaling_curves": SCALING_CURVES_DDL,
     "submissions": _SUBMISSIONS_DDL,
     "attempts": _ATTEMPTS_DDL,
     "calls": _CALLS_DDL,
@@ -316,42 +244,82 @@ INDEXES: dict[str, str] = {
     "ix_cells_row": "submission_cells(run_id, benchmark, ts)",
 }
 
-#: The grade a ``submissions`` row belongs to, as a condition on a ``scaling_points`` alias ``p``.
-SAME_GRADE = "p.run_id = submissions.run_id AND p.ts = submissions.ts AND p.benchmark = submissions.benchmark"
-
-#: What a ``submissions`` row's ML curve summary is, read off its grade's ``scaling_points`` (SQL over
-#: a ``submissions`` row): the laws recorded in :data:`ML_LAWS` order, comma-joined, and the widest
-#: measured P. NULL on a grade with no curve. These were columns of their own until the schema
-#: stopped storing them twice.
-SCALING_SUMMARY: dict[str, str] = {
-    "mpi_mode": "NULLIF(SUBSTR("
-    + " || ".join(
-        f"COALESCE((SELECT ',{law}' FROM scaling_points p WHERE {SAME_GRADE} AND p.scaling_mode = '{law}' LIMIT 1), '')"
-        for law in ML_LAWS
-    )
-    + ", 2), '')",
-    "mpi_ranks": f"(SELECT MAX(p.ranks) FROM scaling_points p WHERE {SAME_GRADE} AND p.ranked_ns IS NOT NULL)",
-}
-
 #: ``table -> condition every row must meet`` for a table the schema dropped: :func:`migrate`
-#: removes it only where that loses nothing. ``benchmarks`` restated the kernel manifest; nothing
-#: read ``prompts`` (written only by ``hpcagent-bench --record``) or ``completions`` (no writer).
-RETIRED_TABLES: dict[str, str] = {"benchmarks": "1", "prompts": "0", "completions": "0"}
+#: removes it only where that loses nothing (``"1"``: nothing reads it, drop it whole).
+#: ``benchmarks`` restated the kernel manifest; ``packets`` restated the immutable registry
+#: definition; nothing read ``prompts`` (written only by ``hpcagent-bench --record``),
+#: ``completions`` (no writer) or ``scaling_curves`` (the mean efficiency of its points).
+RETIRED_TABLES: dict[str, str] = {
+    "benchmarks": "1",
+    "packets": "1",
+    "prompts": "0",
+    "completions": "0",
+    "scaling_curves": "1",
+}
 
 #: ``(table, column) -> condition every row must meet`` for a column the schema dropped. Never
 #: written: the two ``calls`` columns and ``scaling_efficiency``; ``prompt_hash`` pointed into the
-#: retired ``prompts``. Derived: ``linked`` (``sandbox.requested_libraries(build) + libraries`` when
-#: ``build_ok``), ``baseline_winner`` (always ``baseline``), ``mpi_mode`` / ``mpi_ranks``
-#: (:data:`SCALING_SUMMARY`).
+#: retired ``prompts``. Every other one (``"1"``) no reader looks up: derived (``linked``,
+#: ``baseline_winner``, ``mpi_mode`` / ``mpi_ranks``, ``first_seen``, ``runs.commit_sha``,
+#: ``n_bytes``, the per-cell and per-P restatements, an attempt's ``detail`` / ``grading_protocol``,
+#: which its ``calls`` row carries) or kept for no one (the tolerance residuals, ``seed_nonce``,
+#: ``scaling_curve``).
 RETIRED_COLUMNS: dict[tuple[str, str], str] = {
     ("calls", "seed_nonce"): "seed_nonce IS NULL",
     ("calls", "request_id"): "request_id IS NULL",
-    ("submission_libraries", "linked"): "1",
-    ("submission_cells", "baseline_winner"): "baseline_winner IS NULL OR baseline_winner = baseline",
     ("submissions", "scaling_efficiency"): "scaling_efficiency IS NULL",
-    ("submissions", "mpi_mode"): f"mpi_mode IS {SCALING_SUMMARY['mpi_mode']}",
-    ("submissions", "mpi_ranks"): f"mpi_ranks IS {SCALING_SUMMARY['mpi_ranks']}",
     **{(table, "prompt_hash"): "prompt_hash IS NULL" for table in ("submissions", "attempts", "calls")},
+    **{
+        (table, column): "1"
+        for table, columns in {
+            "runs": ("first_seen", "commit_sha"),
+            "sources": ("n_bytes",),
+            "submission_libraries": ("linked", "build_ok"),
+            "submission_cells": (
+                "label",
+                "timed",
+                "graded",
+                "correct",
+                "suspect",
+                "significant",
+                "baseline",
+                "baseline_ns",
+                "native_ns",
+                "timing_reduction",
+                "g_i",
+                "gsd_i",
+                "gated",
+                "score_rule",
+                "baseline_winner",
+            ),
+            "scaling_points": ("achieved_speedup", "ideal_speedup", "shape"),
+            "submissions": (
+                "seed_nonce",
+                "max_abs_err",
+                "atol_used",
+                "l_used",
+                "ref_inf_norm",
+                "l_rule",
+                "scaling_curve",
+                "mpi_mode",
+                "mpi_ranks",
+            ),
+            "attempts": (
+                "detail",
+                "grading_protocol",
+                "seed_nonce",
+                "request_id",
+                "max_abs_err",
+                "atol_used",
+                "l_used",
+                "ref_inf_norm",
+                "l_rule",
+                "distribution",
+                "workspace_bytes",
+            ),
+        }.items()
+        for column in columns
+    },
 }
 
 
@@ -363,17 +331,15 @@ def store_submission_libraries(
     *,
     run_id: str,
     ts: int,
-    build_ok: bool,
 ) -> None:
     """Log one grade's library request (a submission's ``build`` tokens and ``libraries`` names);
     silent when it asked for nothing, the common case."""
     if not build and not libraries:
         return
     conn.execute(
-        """INSERT INTO submission_libraries(
-            run_id, ts, benchmark, requested_build, requested_libraries, build_ok)
-           VALUES (?,?,?,?,?,?)""",
-        (run_id, int(ts), benchmark, json.dumps(list(build)), json.dumps(list(libraries)), int(build_ok)),
+        "INSERT INTO submission_libraries(run_id, ts, benchmark, requested_build, requested_libraries) "
+        "VALUES (?,?,?,?,?)",
+        (run_id, int(ts), benchmark, json.dumps(list(build)), json.dumps(list(libraries))),
     )
     conn.commit()
 
@@ -402,9 +368,8 @@ def credited_ratios(cells: Sequence[TimedCell]) -> list[float]:
     """The cells that earn credit: timed, graded, correct, actually measured, not suspect.
 
     The same filter :func:`hpcagent_bench.harness.metric.score_task_fuzzed` applies to its
-    ``valid_speedups`` -- written once here so the recorded ``g_i`` is the aggregate of exactly the
-    cells the live grade would have aggregated, and a post-hoc reader re-deriving it off the stored
-    rows lands on the same number."""
+    ``valid_speedups`` -- written once here so the final grade (``regrade``) credits exactly the
+    cells the live grade would have aggregated."""
     return [c.ratio for c in cells if c.timed and c.graded and c.correct and c.ratio > 0 and not c.suspect]
 
 
@@ -415,60 +380,28 @@ def store_submission_cells(
     *,
     run_id: str,
     ts: int,
-    solved: bool,
     policy: str = "",
-) -> score_rule.Credit:
-    """Log one grade's TIMED cells and return the credit they reduce to.
+) -> None:
+    """Log one grade's TIMED cells; silent for a grade that timed nothing.
 
     ``policy`` is the grade's OWN denominator stamp (:attr:`Score.baseline_policy`), which names
     the candidate set that actually ran; empty falls back to :func:`baseline_policy`, the
-    configured default, for a caller with no grade to ask.
-
-    Silent for a grade that timed nothing (no rows, as :func:`store_source` is silent for a
-    language nothing was delivered in); the returned credit is then the unmeasured one."""
-    credit = score_rule.credit(credited_ratios(cells), solved=solved)
+    configured default, for a caller with no grade to ask."""
     if not cells:
-        return credit
+        return
     policy = policy or baseline_policy()
     conn.executemany(
-        """INSERT INTO submission_cells(
-            run_id, ts, benchmark, cell, label, shape, timed, graded, correct, suspect, significant,
-            baseline, baseline_ns, native_ns, ratio, timing_reduction, g_i, gsd_i, gated, score_rule,
-            baseline_policy, baseline_candidates)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        "INSERT INTO submission_cells(run_id, ts, benchmark, cell, shape, ratio, baseline_policy, baseline_candidates) "
+        "VALUES (?,?,?,?,?,?,?,?)",
         [
-            (
-                run_id,
-                int(ts),
-                benchmark,
-                index,
-                cell.label,
-                cell.shape,
-                int(cell.timed),
-                int(cell.graded),
-                int(cell.correct),
-                int(cell.suspect),
-                int(cell.significant),
-                cell.baseline,
-                float(cell.baseline_ns),
-                float(cell.native_ns),
-                float(cell.ratio),
-                cell.timing_reduction,
-                float(credit.geomean),
-                float(credit.gsd),
-                int(credit.gated),
-                score_rule.SCORE_RULE,
-                policy,
-                realized_candidates(cell),
-            )
+            (run_id, int(ts), benchmark, index, cell.shape, float(cell.ratio), policy, realized_candidates(cell))
             for index, cell in enumerate(cells)
         ],
     )
     conn.commit()
-    return credit
 
 
-#: Longest failure text stored per row (``attempts.detail``, ``calls.detail``). Enough to carry
+#: Longest failure text stored per row (``calls.detail``). Enough to carry
 #: the first compiler diagnostics, which is what a failure is classified by; the agent is shown the
 #: whole log regardless (``harness.runner._feedback``), so nothing it needs depends on this cap.
 DETAIL_CAP = 2000
@@ -489,20 +422,6 @@ def cap_detail(text: str, cap: int = DETAIL_CAP) -> str:
     tail = cap - head
     elided = len(text) - head - tail
     return text[:head] + (marker % elided) + text[-tail:]
-
-
-def residual_or_none[ResidualT](l_used: int, value: ResidualT) -> ResidualT | None:
-    """One residual column, or ``None`` when the row was never graded.
-
-    ``l_used == 0`` is the sentinel for "no residuals were recorded" (:func:`_grade` never
-    returns ``l < 1``) -- checked here instead of Python-truthying the column itself
-    (``score.max_abs_err or None``), which silently mapped a genuinely exact match
-    (``max_abs_err == 0.0``) or an all-zero reference (``ref_inf_norm == 0.0``) to the same
-    NULL a build failure gets, making "graded exactly right" indistinguishable from
-    "never graded" in the DB. Generic over the column's own type (``float`` for the numeric
-    residuals, ``str`` for ``l_rule``) rather than three near-identical functions.
-    """
-    return None if l_used == 0 else value
 
 
 #: Rank-identity variables a launcher exports, in preference order. ``HPCAGENT_BENCH_DB_SHARD`` is
@@ -668,11 +587,10 @@ def store_source(
     The shard merge (:func:`_merge_prompt_store`) carries the files with the rows. Rows are appended, never deduped -- two kernels graded on identical text are two grades --
     but the FILE dedups, so an agent resubmitting a near-identical body costs one row, not one copy.
     """
-    digest, rel, data = store_blob(source, store_dir)
+    digest, rel = store_blob(source, store_dir)[:2]
     conn.execute(
-        """INSERT INTO sources(hash, run_id, ts, benchmark, language, n_bytes, path)
-           VALUES (?,?,?,?,?,?,?)""",
-        (digest, run_id, int(ts), benchmark, language, len(data), rel),
+        "INSERT INTO sources(hash, run_id, ts, benchmark, language, path) VALUES (?,?,?,?,?,?)",
+        (digest, run_id, int(ts), benchmark, language, rel),
     )
     conn.commit()
     return digest
@@ -817,7 +735,6 @@ class Identity(NamedTuple):
     rep: int
     arm: str | None
     harness: str | None
-    commit_sha: str | None
 
 
 def identity() -> Identity:
@@ -831,31 +748,10 @@ def identity() -> Identity:
         rep_tag(),
         arm_tag(),
         harness_tag(),
-        commit_tag(),
     )
 
 
-def record_packet_definition(conn: sqlite3.Connection, packet: str, language: str, ts: int) -> int:
-    """``INSERT OR IGNORE`` (packet, language)'s resolved (``fill=False``) DEFINITION, once.
-
-    A recorded key's definition is immutable (see ``envs/registry.yaml``'s top-of-file rules), so
-    the first write wins and later runs of the same (packet, language) are a no-op. Never raises:
-    an unresolvable spec (an unknown key, a ``lang`` page the language lacks, ...) is stored as
-    ``{"error": ..., "spec": packet}`` instead, so a bad packet can never break grading. Returns 1
-    when a new row was written, 0 when (packet, language) was already recorded."""
-    try:
-        payload: dict[str, object] = dataclasses.asdict(packets.resolve(packet, language, environ={}, fill=False))
-    except ValueError as exc:
-        payload = {"error": str(exc), "spec": packet}
-    definition = json.dumps(payload, sort_keys=True)
-    cur = conn.execute(
-        "INSERT OR IGNORE INTO packets(packet, language, definition, registry_commit, first_seen) VALUES (?,?,?,?,?)",
-        (packet, language, definition, _commit_sha() or "", ts),
-    )
-    return cur.rowcount
-
-
-def upsert_run(conn: sqlite3.Connection, run_id: str, ts: int, language: str | None = None) -> None:
+def upsert_run(conn: sqlite3.Connection, run_id: str, language: str | None = None) -> None:
     """Record WHO this run is, once.
 
     ``INSERT OR IGNORE``: the first row a run writes fixes its identity, and every later row of the
@@ -873,23 +769,10 @@ def upsert_run(conn: sqlite3.Connection, run_id: str, ts: int, language: str | N
     if who.language is None and language:
         who = who._replace(language=language)
     conn.execute(
-        "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm, "
-        "first_seen, harness, commit_sha) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            run_id,
-            who.experiment,
-            who.model,
-            who.language,
-            who.device,
-            who.packet,
-            who.rep,
-            who.arm,
-            ts,
-            who.harness,
-            who.commit_sha,
-        ),
+        "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm, harness) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (run_id, *who),
     )
-    record_packet_definition(conn, who.packet, who.language or "", ts)
 
 
 @lru_cache(maxsize=1)
@@ -952,20 +835,6 @@ def held_rows(conn: sqlite3.Connection, table: str, droppable: str, schema: str 
     return int(held)
 
 
-def label_legacy_curves(conn: sqlite3.Connection) -> None:
-    """Give each ``scaling_curves`` row recorded before the law joined its key the law of its grade's
-    points (a grade then recorded one law); raise when a row cannot be labelled."""
-    conn.execute(
-        "UPDATE scaling_curves SET scaling_mode = (SELECT MIN(p.scaling_mode) FROM scaling_points p WHERE "
-        "p.run_id = scaling_curves.run_id AND p.ts = scaling_curves.ts AND p.benchmark = scaling_curves.benchmark) "
-        "WHERE scaling_mode IS NULL AND (SELECT COUNT(DISTINCT p.scaling_mode) FROM scaling_points p WHERE "
-        "p.run_id = scaling_curves.run_id AND p.ts = scaling_curves.ts AND p.benchmark = scaling_curves.benchmark) = 1"
-    )
-    (unlabelled,) = conn.execute("SELECT COUNT(*) FROM scaling_curves WHERE scaling_mode IS NULL").fetchone()
-    if unlabelled:
-        raise ValueError(f"{unlabelled} scaling_curves rows name no law and their grade's points name several")
-
-
 def refuse_lossy_retirement(conn: sqlite3.Connection) -> None:
     """Raise when dropping a retired table or column would lose a value it holds."""
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
@@ -983,8 +852,7 @@ def upgrade(conn: sqlite3.Connection) -> None:
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     if "runs" not in tables and tables & {"submissions", "attempts", "calls"}:
         raise ValueError("a results DB without a runs table predates the run identity and cannot be migrated")
-    ensure_schema(conn)  # first: a derived column's condition reads tables an old DB may lack
-    label_legacy_curves(conn)
+    ensure_schema(conn)
     refuse_lossy_retirement(conn)
     for table in TABLES:
         rebuild_table(conn, table)
@@ -1025,10 +893,8 @@ def migrate(source: str, dest: str) -> None:
 _MERGE_VERB: dict[str, str] = {
     "prompts": "INSERT OR IGNORE",
     "runs": "INSERT OR IGNORE",
-    "packets": "INSERT OR IGNORE",
     # Keyed by the grade and P, not a synthetic id: re-recording a grade replaces its curve.
     "scaling_points": "INSERT OR REPLACE",
-    "scaling_curves": "INSERT OR REPLACE",
 }
 
 
@@ -1245,19 +1111,12 @@ class SubmissionRow:
     node: str
     grading_protocol: str | None = None
     baseline_policy: str | None = None
-    seed_nonce: int | None = None
     request_id: str | None = None
     device_runtime: str | None = None
     timing_residual_ns: int | None = None
     timing_host_ns: int | None = None
     timing_event_ns: int | None = None
     device_index: int | None = None
-    max_abs_err: float | None = None
-    atol_used: float | None = None
-    l_used: int | None = None
-    ref_inf_norm: float | None = None
-    l_rule: str | None = None
-    scaling_curve: str | None = None
     distribution: str | None = None
     workspace_bytes: str | None = None
 
@@ -1276,22 +1135,11 @@ class AttemptRow:
     build_ok: int
     correct: int
     reason: str
-    detail: str
     cpu: str
     commit_sha: str | None
     execution: str
     node: str
-    grading_protocol: str | None = None
     baseline_policy: str | None = None
-    seed_nonce: int | None = None
-    request_id: str | None = None
-    max_abs_err: float | None = None
-    atol_used: float | None = None
-    l_used: int | None = None
-    ref_inf_norm: float | None = None
-    l_rule: str | None = None
-    distribution: str | None = None
-    workspace_bytes: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1363,7 +1211,7 @@ def prepare_row(
     has no identity cannot happen when both are written from one place."""
     spec = BenchSpec.load(task.kernel)
     ts = int(time.time() * 1000)
-    upsert_run(conn, run_id, ts, arm_language)
+    upsert_run(conn, run_id, arm_language)
     return spec, ts, osinfo.cpu_model(), _commit_sha(), _execution(), osinfo.node_name()
 
 
@@ -1395,7 +1243,7 @@ def record(
 
     ``curves`` are the per-law scaling curves the same grade measured (the ML track grades every
     submission under both laws, :func:`hpcagent_bench.harness.metric.score_ml_distributed`): each
-    law's points AND holes are written to ``scaling_points`` / ``scaling_curves`` under this row's
+    law's points AND holes are written to ``scaling_points`` under this row's
     own ``ts`` and its law (:func:`record_scaling`), whichever table the row lands in -- the curve
     is a measurement of the submission, not a leaderboard credit. A law with neither a curve nor a
     hole is not recorded.
@@ -1426,7 +1274,6 @@ def record(
             spec.short_name,
             run_id=run_id,
             ts=ts,
-            build_ok=score.build_ok,
         )
         for law in curves:
             if law.curve is not None or law.dropped:
@@ -1473,21 +1320,12 @@ def record(
                 node=node,
                 grading_protocol=score.grading_protocol,
                 baseline_policy=score.baseline_policy,
-                seed_nonce=score.seed_nonce or None,
                 request_id=request_id,
                 device_runtime=score.device_runtime or None,
                 timing_residual_ns=score.timing_residual_ns,
                 timing_host_ns=score.timing_host_ns,
                 timing_event_ns=score.timing_event_ns,
                 device_index=score.device_index,
-                max_abs_err=residual_or_none(score.l_used, score.max_abs_err),
-                atol_used=residual_or_none(score.l_used, score.atol_used),
-                l_used=residual_or_none(score.l_used, score.l_used),
-                ref_inf_norm=residual_or_none(score.l_used, score.ref_inf_norm),
-                l_rule=residual_or_none(score.l_used, score.l_rule),
-                # Written whenever the sweep RAN, so a submission whose curve was refused still
-                # records which P were measured and why the others were not.
-                scaling_curve=score.scaling_curve or None,
                 distribution=None if submission.distribution is None else json.dumps(submission.distribution),
                 workspace_bytes=submission.workspace_bytes,
             )
@@ -1500,7 +1338,6 @@ def record(
                 spec.short_name,
                 run_id=run_id,
                 ts=ts,
-                solved=True,
                 policy=score.baseline_policy or "",
             )
             conn.commit()
@@ -1548,23 +1385,11 @@ def record(
             build_ok=int(score.build_ok),
             correct=int(score.correct),
             reason=reason,
-            # The verify leg's own text when IT faulted: the grade was clean, so score.detail is empty.
-            detail=cap_detail(verify.reason if verify is not None and verify_fault else score.detail or ""),
             cpu=cpu,
             commit_sha=sha,
             execution=execution,
             node=node,
-            grading_protocol=score.grading_protocol,
             baseline_policy=score.baseline_policy,
-            seed_nonce=score.seed_nonce or None,
-            request_id=request_id,
-            max_abs_err=residual_or_none(score.l_used, score.max_abs_err),
-            atol_used=residual_or_none(score.l_used, score.atol_used),
-            l_used=residual_or_none(score.l_used, score.l_used),
-            ref_inf_norm=residual_or_none(score.l_used, score.ref_inf_norm),
-            l_rule=residual_or_none(score.l_used, score.l_rule),
-            distribution=None if submission.distribution is None else json.dumps(submission.distribution),
-            workspace_bytes=submission.workspace_bytes,
         )
         conn.execute(row_sql("attempts", attempt_row), row_params(attempt_row))
         conn.commit()
@@ -1575,11 +1400,6 @@ def record(
 
 #: The two scaling laws a curve can be graded under (metric.ideal_speedup).
 SCALING_MODES: tuple[str, ...] = ("weak", "strong")
-
-
-def shape_json(shape: dict[str, int]) -> str | None:
-    """A sized problem as sorted-key JSON; None for a P that was never sized."""
-    return json.dumps(shape, sort_keys=True) if shape else None
 
 
 def record_scaling(
@@ -1623,32 +1443,19 @@ def record_scaling(
             p.single_rank_ns,
             p.ranked_ns,
             p.work_ratio,
-            p.achieved_speedup,
-            p.ideal_speedup,
             p.efficiency,
-            shape_json(p.shape),
             p.note or None,
         )
         for p in points
-    ] + [
-        (*key, h.ranks, h.nodes, mode, anchor, None, None, None, None, None, shape_json(h.shape), h.note) for h in holes
-    ]
-    where = "WHERE run_id = ? AND ts = ? AND benchmark = ? AND scaling_mode = ?"
-    conn.execute(f"DELETE FROM scaling_points {where}", law_key)
-    conn.execute(f"DELETE FROM scaling_curves {where}", law_key)
+    ] + [(*key, h.ranks, h.nodes, mode, anchor, None, None, None, h.note) for h in holes]
+    conn.execute(
+        "DELETE FROM scaling_points WHERE run_id = ? AND ts = ? AND benchmark = ? AND scaling_mode = ?", law_key
+    )
     conn.executemany(
-        """INSERT INTO scaling_points(
-            run_id, ts, benchmark, ranks, nodes, scaling_mode, single_rank_ns, ranked_ns, work_ratio,
-            achieved_speedup, ideal_speedup, efficiency, shape, note)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        "INSERT INTO scaling_points(run_id, ts, benchmark, ranks, nodes, scaling_mode, single_rank_ns, ranked_ns, "
+        "work_ratio, efficiency, note) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         sorted(rows, key=lambda row: row[3]),
     )
-    if scaling is not None:
-        conn.execute(
-            "INSERT INTO scaling_curves(run_id, ts, benchmark, scaling_mode, work_exponent, mean_efficiency) "
-            "VALUES (?,?,?,?,?,?)",
-            (*law_key, scaling.work_exponent, float(scaling.mean_efficiency)),
-        )
     conn.commit()
     return len(rows)
 
@@ -1813,7 +1620,6 @@ def record_call(
             spec.short_name,
             run_id=run_id,
             ts=ts,
-            build_ok=bool(score is not None and score.build_ok),
         )
         return int(prior) + 1
     finally:

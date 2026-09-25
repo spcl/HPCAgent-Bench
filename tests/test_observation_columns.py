@@ -11,7 +11,9 @@ from hpcagent_bench.observation_columns import COLUMN_ALIASES, OBSERVATION_FIELD
 
 RUN = "llr-arm-c.n0.p0.w0"
 
-#: One old-header submission row and its task row, as an extraction before the rename wrote them.
+#: One old-header submission row and its task row, as an extraction before the rename wrote them,
+#: with columns a later extraction dropped (``n_cells`` .. ``n_credited``, ``submitted`` ..
+#: ``scaling_mean_efficiency``): read as they are, under no current name.
 OLD_ROWS = [
     {
         "run_root": "root",
@@ -40,6 +42,11 @@ OLD_ROWS = [
         "final_attempt_start_ms": "",
         "ranks": "",
         "efficiency": "",
+        "submitted": "1",
+        "node_index": "0",
+        "tokens_billed": "",
+        "baseline_source": "run_local",
+        "scaling_mean_efficiency": "",
     },
     {
         "run_root": "root",
@@ -68,6 +75,11 @@ OLD_ROWS = [
         "final_attempt_start_ms": "150",
         "ranks": "",
         "efficiency": "",
+        "submitted": "0",
+        "node_index": "0",
+        "tokens_billed": "4800",
+        "baseline_source": "",
+        "scaling_mean_efficiency": "",
     },
 ]
 
@@ -92,8 +104,8 @@ def test_an_old_header_csv_reads_under_the_current_names_with_the_same_values(tm
     submission = frame[frame.row_kind == "submission"].iloc[0]
     assert submission["judge_db"] == OLD_ROWS[0]["db"]
     assert (submission["speedup"], submission["timing_suspect"]) == (2.5, 0)
-    assert (submission["cells_timed"], submission["cell_geomean"], submission["cell_gsd"]) == (3, 2.5, 1.2)
-    assert (submission["input_geomean"], submission["inputs_credited"]) == (2.5, 3)
+    assert (submission["n_cells"], submission["s_bar"], submission["submitted"]) == (3, 2.5, 1)
+    assert not {"cells_timed", "input_geomean", "inputs_credited"} & set(frame.columns)
     assert (submission["grade_regraded"], submission["grade_live_speedup"]) == (1, 3.0)
     assert submission["grade_final_status"] == "graded"
     task = frame[frame.row_kind == "task"].iloc[0]
