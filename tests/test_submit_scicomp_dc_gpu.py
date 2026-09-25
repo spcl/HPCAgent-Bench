@@ -46,7 +46,6 @@ def test_gpu_plain_arm_renders_the_right_prompt_and_input_mode(
     knobs = dict(
         MODELS="qwen38",
         ARMS="plain",
-        KERNELS_FILE="kernels-scicomp40.txt",
         REPEAT="1",
         JUDGE_NODES="1",
         DEVICE="gpu",
@@ -81,7 +80,6 @@ def test_gpu_arm_keeps_the_cpu_single_submission_budget_and_policy(tmp_path: pat
         root,
         MODELS="qwen38",
         ARMS="plain",
-        KERNELS_FILE="kernels-scicomp40.txt",
         REPEAT="1",
         JUDGE_NODES="1",
         DEVICE="gpu",
@@ -98,7 +96,7 @@ def test_three_gpu_languages_do_not_collide_with_each_other_or_the_cpu_arm(tmp_p
     """Three invocations of this script (hip, triton, c+openmp) share EXPERIMENT and ARMS=plain; each
     must stage its own arm/env/problems name, and none may collide with the CPU control's."""
     root = submit_tree(tmp_path)
-    common = dict(MODELS="qwen38", ARMS="plain", KERNELS_FILE="kernels-scicomp40.txt", REPEAT="1", JUDGE_NODES="1")
+    common = dict(MODELS="qwen38", ARMS="plain", REPEAT="1", JUDGE_NODES="1")
     cpu = run_submit(root, **common)
     hip = run_submit(root, DEVICE="gpu", LANGUAGE="hip", **common)
     triton = run_submit(root, DEVICE="gpu", LANGUAGE="triton", **common)
@@ -131,7 +129,6 @@ def test_offload_without_device_gpu_refuses(tmp_path: pathlib.Path) -> None:
         root,
         MODELS="qwen38",
         ARMS="plain",
-        KERNELS_FILE="kernels-scicomp40.txt",
         REPEAT="1",
         JUDGE_NODES="1",
         OFFLOAD="openmp",
@@ -150,7 +147,6 @@ def test_device_gpu_refuses_a_packet_kind(tmp_path: pathlib.Path) -> None:
         root,
         MODELS="qwen38",
         ARMS="cpf",
-        KERNELS_FILE="kernels-scicomp40.txt",
         REPEAT="1",
         JUDGE_NODES="1",
         DEVICE="gpu",
@@ -166,7 +162,6 @@ def test_an_invalid_device_refuses(tmp_path: pathlib.Path) -> None:
         root,
         MODELS="qwen38",
         ARMS="plain",
-        KERNELS_FILE="kernels-scicomp40.txt",
         REPEAT="1",
         JUDGE_NODES="1",
         DEVICE="nvidia",
@@ -179,9 +174,7 @@ def test_device_cpu_is_the_default_and_leaves_the_control_arm_unchanged(tmp_path
     """The existing scicomp-dc CPU identity (EXPERIMENT, arm name, device column) is untouched by
     this knob: jobs already queued against it must not see their env files move."""
     root = submit_tree(tmp_path)
-    result = run_submit(
-        root, MODELS="qwen38", ARMS="plain", KERNELS_FILE="kernels-scicomp40.txt", REPEAT="1", JUDGE_NODES="1"
-    )
+    result = run_submit(root, MODELS="qwen38", ARMS="plain", REPEAT="1", JUDGE_NODES="1")
     assert result.returncode == 0, result.stderr
     assert prepared_arms(result) == ["scicomp-dc-qwen38-plain"]
     env = env_dict(env_path(root / "experiments", "scicomp-dc-qwen38-plain"))

@@ -46,3 +46,5 @@ tags:
 aliases:
   # submit-mlscale.sh records its arms as experiment `mlscale`; the roster is the manifests' label.
   mlscale: mlscale10
+  # the scicomp arms record their roster tag as `scicomp40`; the roster is the manifests' label.
+  scicomp40: scicomp-focus40
