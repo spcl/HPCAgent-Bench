@@ -62,8 +62,9 @@ jobs:
       matrix:
         # The requires-python floor and the latest release.
         python: [ '3.12', '3.14' ]
-        # Three shards: two wedged on a dead xdist worker, one does not fit the budget.
-        shard: [ 0, 1, 2 ]
+        # Two shards per interpreter: each is ~25 min of tests, so the four legs land beside the
+        # longest jobs instead of adding a short one.
+        shard: [ 0, 1 ]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -109,12 +110,12 @@ jobs:
 
       - name: Phase 1 -- unit sweep (every test file no other phase claims)
         if: ${{ !cancelled() }}
-        timeout-minutes: 34
+        timeout-minutes: 38
         run: |
           excl=$(mktemp)
           grep -vE '^\s*(#|$)' .github/dedicated_tests.txt > "$excl"
           # Round-robin over the sorted list, so the shards partition it.
-          files=$(ls tests/test_*.py | grep -vxF -f "$excl" | awk 'NR % 3 == ${{ matrix.shard }}')
+          files=$(ls tests/test_*.py | grep -vxF -f "$excl" | awk 'NR % 2 == ${{ matrix.shard }}')
           test -n "$files" || { echo 'unit sweep selected no files'; exit 1; }
           echo "$files" | tr ' ' '\n' | wc -l | xargs echo "sweeping files:"
           # -v names each test as it starts: a step cap is a SIGKILL and prints no summary.
@@ -194,10 +195,10 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 30
         # test_dace_numeric_agreement.py has no integration test, but collecting it emits the whole
-        # corpus at import time; dace-numeric runs it.
+        # corpus at import time; dace-numeric runs it. tests/translators/ is the `translators` job's.
         run: |
           python -m pytest -p no:cacheprovider -rfEs --timeout=1500 --timeout-method=thread --durations=25 \
-            --ignore=tests/test_dace_numeric_agreement.py \
+            --ignore=tests/test_dace_numeric_agreement.py --ignore=tests/translators \
             -m integration tests/
 
       - name: Save the from-source OpenBLAS
@@ -481,10 +482,10 @@ jobs:
           coverage: container-image
 
   # The MPI track (OpenMPI + a source-built mpi4py), plus port fidelity, the benchmark reference
-  # validators and the torch agreement sweeps.
+  # validators, the torch agreement sweeps and the sealed grading child.
   mpi:
     if: ${{ !cancelled() && !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: mpi + references (distributed track, port fidelity)
+    name: mpi + references + seal (distributed track, port fidelity, sealed grading)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -609,68 +610,26 @@ jobs:
             --timeout=600 tests/test_kernelbench_torch_agreement.py
           python -m pytest -q -p no:cacheprovider -rfEs --timeout=600 tests/test_torch_baseline.py
 
+      # The sealed grading child needs unprivileged user, mount and pid namespaces, which the setup
+      # action's AppArmor knob grants on this runner. A host that still refuses fails here: a sealed
+      # test skips on such a host, and a phase of skips would be a vacuous green.
+      - name: Phase 9 -- the sealed grading child, and the scoring that runs through it
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          python -c "import sys; from tests.seal_capability import userns_refusal; sys.exit(userns_refusal() or None)"
+          python -m pytest -q -p no:cacheprovider -rfEs --timeout=900 -m sealed \
+            tests/test_grading_seal.py tests/test_mpi_scoring.py
+          # `-m sealed` selecting nothing would be a vacuous green too; count the collected node ids.
+          count=$(python -m pytest -q -p no:cacheprovider --collect-only -m sealed \
+            tests/test_grading_seal.py tests/test_mpi_scoring.py | grep -cE '^tests/[^ ]+::' || true)
+          echo "sealed tests collected: ${count}"
+          [ "${count}" -ge 10 ] || { echo "::error::-m sealed selected ${count} tests: the marker or the paths moved"; exit 1; }
+
       - uses: ./.github/actions/finish
         if: always()
         with:
           coverage: mpi
-
-  # The sealed grading child needs a user namespace, which a hosted runner refuses; a privileged
-  # container on the same free runner grants it. Selected by the `sealed` marker.
-  mpi-sealed:
-    if: ${{ !cancelled() && !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: mpi + seal (user namespaces, privileged container)
-    runs-on: ubuntu-latest
-    container:
-      image: ubuntu:24.04
-      options: --privileged
-    timeout-minutes: 30
-    env:
-      OMPI_MCA_pml: ob1
-      OMPI_MCA_btl: self,vader
-      OMPI_MCA_rmaps_base_oversubscribe: "1"
-      PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
-      UCX_VFS_ENABLE: "n"
-      OMPI_ALLOW_RUN_AS_ROOT: "1"
-      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: "1"
-      # Inside the seal root has no CAP_DAC_OVERRIDE and $HOME is the runner's bind mount, so
-      # ccache's default directory is unwritable.
-      HPCAGENT_BENCH_BUILD_CCACHE: "false"
-    steps:
-      # The shared setup action shells out to sudo, which the bare image lacks.
-      - name: Setup -- sudo, git and OpenMPI in a bare image
-        run: |
-          apt-get update -qq
-          apt-get install -y --no-install-recommends \
-            sudo git ca-certificates curl openmpi-bin libopenmpi-dev python3-dev
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup
-        with:
-          extras: "mpi"
-          pip-args: "--no-binary mpi4py"
-        env:
-          MPICC: mpicc
-
-      - name: The sealed grading child, and the scoring that runs through it
-        run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=900 -m sealed \
-            tests/test_grading_seal.py tests/test_mpi_scoring.py
-
-      # `-m sealed` selecting nothing would be a vacuous green; count the collected node ids.
-      - name: The sealed selection is not empty
-        run: |
-          python -m pytest -q -p no:cacheprovider --collect-only -m sealed \
-            tests/test_grading_seal.py tests/test_mpi_scoring.py > collected.txt
-          count=$(grep -cE '^tests/[^ ]+::' collected.txt || true)
-          echo "sealed tests collected: ${count}"
-          [ "${count}" -ge 10 ] || {
-            echo "::error::-m sealed selected ${count} tests: the marker or the paths moved"
-            cat collected.txt
-            exit 1; }
-
-      - uses: ./.github/actions/finish
-        if: always()
-        with:
-          coverage: mpi-sealed
 
   # The generated DaCe corpus still computes what numpy computes: a C++ build and a run per kernel.
   dace-numeric:
@@ -712,8 +671,8 @@ jobs:
         with:
           coverage: dace-numeric
 
-  # The compiled (numba) numpy reference agrees with the interpreted one for every kernel. Dealt
-  # over three, run in two containers: shard 0 carries cloudsc, whose compile alone is ~10-15 min.
+  # The compiled (numba) numpy reference agrees with the interpreted one for every kernel, dealt
+  # round-robin over two containers so each takes half of every kernel family.
   njit-oracle:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     name: njit-oracle (the compiled numpy reference vs the interpreted one)
@@ -721,11 +680,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [ "0", "1,2" ]
+        shard: [ "0", "1" ]
     timeout-minutes: 45
     env:
       # Read by tests/test_njit_reference.py::shard (an index list over a count).
-      HPCAGENT_BENCH_NJIT_SHARD: ${{ matrix.shard }}/3
+      HPCAGENT_BENCH_NJIT_SHARD: ${{ matrix.shard }}/2
     steps:
       - uses: actions/checkout@v4
         with:
@@ -782,7 +741,7 @@ jobs:
     if: ${{!cancelled()}}
     name: coverage (combined total)
     # Every job that uploads coverage data, or the total is built from a subset.
-    needs: [ unit, e2e, integration, translators, native, container-image, mpi, mpi-sealed, dace-numeric,
+    needs: [ unit, e2e, integration, translators, native, container-image, mpi, dace-numeric,
              dace-frontend, njit-oracle ]
     runs-on: ubuntu-latest
     timeout-minutes: 30

@@ -48,6 +48,21 @@ def test_every_slot_a_campaign_prompt_declares_is_one_the_driver_fills() -> None
         )
 
 
+def materialized_prompt_files() -> set[str]:
+    """The prompt files ``materialize_shared.sh`` writes: the literal names, plus one computed variant
+    per ``containers/agent/<variant>-build.md`` and per ``containers/agent/tools-<variant>.md``."""
+    script = MATERIALIZE.read_text(encoding="utf-8")
+    produced = set(re.findall(r"shared\}/(prompt[a-z0-9-]*\.md)", script))
+    computed = {"*-build.md": "-build.md", "tools-*.md": ".md"}
+    assert '"${shared}/prompt-${variant}.md"' in script, "materialize_shared.sh no longer computes variants"
+    for pattern, suffix in computed.items():
+        assert f"containers/agent/{pattern}" in script, f"materialize_shared.sh no longer globs {pattern}"
+        for page in AGENT_DIR.glob(pattern):
+            variant = page.name.removesuffix(suffix).removeprefix("tools-")
+            produced.add(f"prompt-{variant}.md")
+    return produced
+
+
 def test_every_prompt_file_an_arm_names_is_one_materialize_produces() -> None:
     """``AGENT_PROMPT_FILE`` is resolved out of the SHARED MOUNT at run time.
 
@@ -55,7 +70,7 @@ def test_every_prompt_file_an_arm_names_is_one_materialize_produces() -> None:
     track addendum wired into an ``.env`` but not into the composer, is a run that dies resolving
     its own prompt after the allocation is already up.
     """
-    produced = set(re.findall(r"shared\}/(prompt[a-z0-9-]*\.md)", MATERIALIZE.read_text(encoding="utf-8")))
+    produced = materialized_prompt_files()
     texts = [rendered(base) for base in BASES]
     texts += [path.read_text(encoding="utf-8") for path in SCRIPTS.glob("submit-*.sh")]
     texts += [path.read_text(encoding="utf-8") for path in SCRIPTS.glob(".env.*")]

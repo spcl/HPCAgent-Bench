@@ -26,8 +26,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
 from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 
 
 @dataclass
@@ -201,7 +204,7 @@ def call_serpapi(query: str, max_results: int, timeout: float) -> list[SearchRes
     return results
 
 
-def markdown_text(markdown: Any) -> str:
+def markdown_text(markdown: object) -> str:
     for attr in ("fit_markdown", "markdown_with_citations", "raw_markdown"):
         value = getattr(markdown, attr, None)
         if value:
@@ -209,11 +212,11 @@ def markdown_text(markdown: Any) -> str:
     return str(markdown or "")
 
 
-def markdown_references(markdown: Any) -> str:
+def markdown_references(markdown: object) -> str:
     return str(getattr(markdown, "references_markdown", "") or "")
 
 
-async def collect_arun_many(crawler: Any, urls: list[str], config: Any) -> list[Any]:
+async def collect_arun_many(crawler: "AsyncWebCrawler", urls: list[str], config: "CrawlerRunConfig") -> list[Any]:
     crawled = crawler.arun_many(urls, config=config)
     if inspect.isawaitable(crawled):
         crawled = await crawled

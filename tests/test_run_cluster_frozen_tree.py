@@ -35,6 +35,7 @@ REPORT = (
     'echo "ran from ${SCRIPT_DIR} repo=${HPCAGENT_BENCH_REPO:-} marker=${HPCAGENT_BENCH_FROZEN:-}'
     " commit=${HPCAGENT_BENCH_SNAPSHOT_COMMIT:-}"
     ' packs=${PACK_ROOT:-} matrices=${HPCAGENT_BENCH_CACHE_DIR:-} generated=${HPCAGENT_BENCH_GENERATED_CACHE_HOST:-}"\n'
+    'echo "site=${HPCAGENT_BENCH_SITE_ENV:-} cluster_env=${CLUSTER_ENV_FILE:-} gone=${GONE:-}"\n'
 )
 
 
@@ -155,6 +156,35 @@ def test_a_batch_step_runs_from_a_copy_beside_its_campaign_that_later_edits_cann
     assert (frozen / "hpcagent_bench" / "module.py").read_text() == "OLD = 1\n"
     assert not (frozen / ".git").exists() and not (frozen / "core_nid0001_1").exists()
     assert not runs.exists(), "nothing lands under RUN_ROOT, where extraction globs for databases"
+
+
+def test_a_variable_naming_a_path_of_the_checkout_names_it_in_the_copy(tmp_path: pathlib.Path) -> None:
+    """The judge container mounts only the copy: a site layer exported as a live path aborts
+    scripts/site_env.sh there. A path the copy holds (tracked, or an untracked arm snapshot) is
+    renamed into it; a data root the copy leaves out, and one it never had, keep their live paths."""
+    live, runs = tmp_path / "live", tmp_path / "runs" / "campaign"
+    script = checkout(live)
+    (live / "experiments" / "layers").mkdir()
+    (live / "experiments" / "layers" / "site-cscs.env").write_text('SITE="${SITE:-x}"\n')
+    git(live, "add", "-A")
+    git(live, "commit", "-q", "-m", "site layer")
+    (live / "experiments" / ".rendered").mkdir()
+    (live / "experiments" / ".rendered" / "arm.env").write_text("CAMPAIGN_ARM=a\n")
+    (live / "hpcagent_bench" / ".hpcagent_bench_cache").mkdir()
+    env = {
+        "SLURM_JOB_ID": "123",
+        "RUN_ROOT": str(runs),
+        "HPCAGENT_BENCH_SITE_ENV": f"{live}/experiments/layers/site-cscs.env",
+        "CLUSTER_ENV_FILE": f"{live}/experiments/.rendered/arm.env",
+        "HPCAGENT_BENCH_CACHE_DIR": f"{live}/hpcagent_bench/.hpcagent_bench_cache",
+        "GONE": f"{live}/never/there",
+    }
+    out = launch(script, env).stdout
+    frozen = tmp_path / "runs" / ".frozen" / "job-123"
+    assert f"site={frozen}/experiments/layers/site-cscs.env" in out, out
+    assert f"cluster_env={frozen}/experiments/.rendered/arm.env" in out, out
+    assert f"matrices={live}/hpcagent_bench/.hpcagent_bench_cache" in out, out
+    assert f"gone={live}/never/there" in out, out
 
 
 def test_a_step_that_inherits_the_frozen_tree_does_not_copy_again(tmp_path: pathlib.Path) -> None:

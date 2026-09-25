@@ -658,13 +658,16 @@ def test_a_model_mismatched_source_is_skipped_with_a_note(
 def test_a_dropped_arm_is_planned_only_while_a_rerun_list_names_it(
     owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, listed: bool
 ) -> None:
-    """The board keeps a dropped arm that rerun-lost.tsv lists (the LLR CPU Fortran arms, 09-19); a
-    planner that skipped it silently could never rerun what the board shows owed."""
+    """The board keeps a dropped arm that rerun-lost.tsv lists; a planner that skipped it silently
+    could never rerun what the board shows owed. The arm is dropped here, whatever the registry drops."""
     arm = "cpf-llr-focus40-qwen38-fortran"
+    monkeypatch.setattr(owed.wave_board, "DROPPED_ARMS", re.compile(re.escape(arm)))
     runs = model_mismatch_run(tmp_path, "700005", f"{arm}-clean", "qwen38")
     lost = tmp_path / "rerun-lost.tsv"
     lost.write_text("arm\tdeleted_jobs\treason\tstatus\n" + (f"{arm}\t639217\tdeleted\tpending\n" if listed else ""))
     monkeypatch.setattr(owed.wave_board, "RERUN_LOST", lost)
+    # Only this synthetic list names reruns: the repo's own rerun-kernels.tsv is live state.
+    monkeypatch.setattr(owed.remaining_kernels, "RERUN_KERNELS", tmp_path / "rerun-kernels.tsv")
     monkeypatch.setattr(owed, "queued_arms", set)
     monkeypatch.setattr(owed.remaining_kernels, "roster", lambda tag, opt: ["a"])
     plan = owed.gather("qwen38", runs, str(REPO), owed.Selection(), 1, 1, set())

@@ -24,7 +24,7 @@ from hpcagent_bench.harness import efficacy, metric
 from hpcagent_bench.stats import arms, signed_rank, summary
 
 #: The real paired set the published C-vs-Fortran claim rests on: ``log(c_best_su / fortran_best_su)``
-#: for every kernel in ``reproducibility/llr40/analysis/per_language_kernel.csv`` that both languages
+#: for every kernel of the llr40 campaign's per-language kernel table that both languages
 #: reached. n = 39, four exact ties (the 1% geometric ladder collides), skew +0.54, excess kurtosis
 #: +3.1. A synthetic Gaussian fixture would test a distribution this analysis never sees.
 LLR40_C_OVER_FORTRAN_LOG_DELTAS: tuple[float, ...] = (
@@ -319,7 +319,7 @@ def test_a_paired_comparison_reports_how_many_units_it_dropped() -> None:
 OBSERVATIONS = pathlib.Path(__file__).resolve().parent / "data" / "llr40"
 
 
-#: ``geomean_solved`` of ``reproducibility/llr40/analysis/per_arm_summary.csv`` as shipped, one row per
+#: ``geomean_solved`` of the llr40 campaign's published per-arm summary, one row per
 #: ``(arm, baseline)``. The three v10 arms graded against both ``c`` and ``numba`` carry two rows each.
 #: The three ``numba`` cells are the geomeans the shipped observations give; the shipped table's were
 #: not reproducible from them by any version of the reduction.
@@ -339,7 +339,7 @@ OBSERVATIONS = pathlib.Path(__file__).resolve().parent / "data" / "llr40"
 def test_the_shipped_llr40_arm_table_reproduces_from_the_shipped_observations(
     arm: str, baseline: str, published_geomean: float
 ) -> None:
-    """The tables and the figure in ``reproducibility/llr40/analysis`` are the artifact a reader
+    """The llr40 campaign's published tables and figure are the artifact a reader
     checks the campaign against; a table built by a reduction the script no longer performs ranks
     the arms by how often each agent resubmitted rather than by what it produced. Every cell is one
     denominator: a geomean over an arm's ``c`` and ``numba`` rows together is a ratio of nothing."""

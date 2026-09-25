@@ -135,8 +135,8 @@ def assert_the_installed_wheel_imports_without_the_checkout(whl: pathlib.Path, t
 
 
 def test_pyproject_declares_a_build_system() -> None:
-    """Without a [build-system], `pip install -e` falls back to legacy `setup.py develop`, which
-    ignores the package_dir remap and breaks `import numpyto_common` (what broke the judge container)."""
+    """Without a [build-system], `pip install -e` falls back to legacy `setup.py develop` instead of the
+    PEP 660 editable install the judge image relies on."""
     pyproject = _ROOT / "pyproject.toml"
     assert pyproject.is_file(), "pyproject.toml is missing; pip falls back to legacy setup.py develop"
     assert "[build-system]" in pyproject.read_text(), "pyproject.toml declares no [build-system]"
@@ -147,8 +147,8 @@ def test_pyproject_declares_a_build_system() -> None:
     reason="set HPCAGENT_BENCH_CONTAINER_BUILD_TEST=1 with apptainer to run a real build",
 )
 def test_apptainer_builds_and_imports(tmp_path) -> None:
-    """Real build: a minimal image that pip-installs hpcagent_bench and imports numpyto_common (not just
-    hpcagent_bench) -- the translator the legacy-develop fallback drops, exercising the fix end to end."""
+    """Real build: a minimal image that pip-installs hpcagent_bench and imports its translator
+    subpackage (not just hpcagent_bench), exercising the editable install end to end."""
     sif = tmp_path / "smoke.sif"
     deffile = tmp_path / "smoke.def"
     deffile.write_text(f"""Bootstrap: docker
@@ -159,14 +159,14 @@ From: python:3.12-slim
 %post
     pip install --no-cache-dir 'setuptools>=64' wheel pyyaml
     pip install --no-build-isolation --no-deps -e /opt/hpcagent_bench
-    python -c "import numpyto_common; print('import OK')"
+    python -c "import hpcagent_bench.translators.numpyto_common; print('import OK')"
 """)
     build = subprocess.run(["apptainer", "build", str(sif), str(deffile)], capture_output=True, text=True, check=False)
     if build.returncode != 0 and any(s in build.stderr for s in ("newuidmap", "fakeroot", "subuid")):
         pytest.skip(f"host cannot build unprivileged (apptainer rootless tooling missing): {build.stderr.strip()}")
     assert build.returncode == 0, build.stderr
     run = subprocess.run(
-        ["apptainer", "run", str(sif), "python", "-c", "import numpyto_common"],
+        ["apptainer", "run", str(sif), "python", "-c", "import hpcagent_bench.translators.numpyto_common"],
         capture_output=True,
         text=True,
         check=False,

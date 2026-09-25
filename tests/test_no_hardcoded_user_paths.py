@@ -24,6 +24,7 @@ are resolvers or fixtures, never flagged.
 import ast
 import pathlib
 import re
+import subprocess
 from collections.abc import Iterator
 from collections.abc import Set as AbstractSet
 
@@ -121,10 +122,13 @@ def is_candidate(rel: str) -> bool:
 
 
 def candidate_files(root: pathlib.Path) -> Iterator[tuple[pathlib.Path, str]]:
-    for p in root.rglob("*"):
+    """The files git tracks under ``root``: build products a run leaves in the checkout (``.dacecache``
+    compile databases, perf reports) carry the machine's paths and are not the repo's code."""
+    listed = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, text=True, check=True)
+    for rel in sorted(filter(None, listed.stdout.split("\0"))):
+        p = root / rel
         if not p.is_file():
             continue
-        rel = p.relative_to(root).as_posix()
         if any(part in _SKIP_DIRS for part in rel.split("/")):
             continue
         if is_candidate(rel):
@@ -241,6 +245,11 @@ def test_the_scan_catches_every_kind_of_hit(tmp_path: pathlib.Path) -> None:
         'HOST_HOME="/users/someone"\n'
     )
 
+    # An untracked build product with a machine path is not the repo's code and is not scanned.
+    (tmp_path / ".dacecache" / "k").mkdir(parents=True)
+    (tmp_path / ".dacecache" / "k" / "compile_commands.json").write_text('{"file": "/capstor/scratch/x.c"}\n')
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "--", *(p.name for p in tmp_path.iterdir() if p.is_file())], cwd=tmp_path, check=True)
     offenders = scan(tmp_path)
 
     def hit(file: str, text: str) -> bool:
@@ -255,6 +264,7 @@ def test_the_scan_catches_every_kind_of_hit(tmp_path: pathlib.Path) -> None:
     # the docstring records history; the AST carve-out must exclude it
     assert not hit("bad.py", _LEGACY_NAME), offenders
     assert not hit("good.sh", ""), offenders
+    assert not hit(".dacecache/", ""), offenders
 
 
 def test_the_storage_pattern_matches_only_real_mounts() -> None:

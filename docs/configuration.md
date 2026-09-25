@@ -137,9 +137,9 @@ Slurm partition that hardware sits in is the site layer's business.
 
 ## The guard
 
-`tests/test_no_hardcoded_user_paths.py` scans the whole tree for storage mounts, home directories,
+`tests/test_no_hardcoded_user_paths.py` scans every file git tracks for storage mounts, home directories,
 user names, site emails, Slurm accounts, `#SBATCH` partition/account/node directives, node names
 and literal `--partition=` values in live code (comments and docstrings may name a site to explain
 it). The site layer for CSCS and this page are allowlisted because showing those values is their
-job. The test also lists the areas still being cleaned (`_PENDING`); each leaves the list once
+job. The test also lists the areas still being cleaned (`PENDING`); each leaves the list once
 clean.
