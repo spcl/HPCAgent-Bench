@@ -39,9 +39,9 @@ def test_the_observation_carries_the_recorded_packet(tmp_path: pathlib.Path) -> 
     one_submission(db_path, "renamed-arm.n0.p0.w0", packet="lang-skills")
     db = extract_llr40.Database(db_path, "621383", tmp_path, "621383")
 
-    result = extract_llr40.read_db(db, frozenset(), "", frozenset(), 0)
+    result = extract_llr40.read_db(db, "", frozenset(), 0)
 
-    rows = [row for row in result.observations if row["record"] == "submission"]
+    rows = [row for row in result.observations if row["row_kind"] == "submission"]
     assert len(rows) == 1
     assert rows[0]["packet"] == "lang-skills"
 
@@ -53,9 +53,9 @@ def test_a_db_with_no_runs_table_reads_an_empty_packet(tmp_path: pathlib.Path) -
     one_submission(db_path, "arm-c-skills.n0.p0.w0", packet=None)
     db = extract_llr40.Database(db_path, "621383", tmp_path, "621383")
 
-    result = extract_llr40.read_db(db, frozenset(), "", frozenset(), 0)
+    result = extract_llr40.read_db(db, "", frozenset(), 0)
 
-    rows = [row for row in result.observations if row["record"] == "submission"]
+    rows = [row for row in result.observations if row["row_kind"] == "submission"]
     assert len(rows) == 1
     assert rows[0]["packet"] == ""
 
@@ -71,12 +71,10 @@ def test_a_db_without_the_cell_table_leaves_the_dispersion_blank(tmp_path: pathl
     conn.commit()
     conn.close()
 
-    result = extract_llr40.read_db(
-        extract_llr40.Database(db_path, "621383", tmp_path, "621383"), frozenset(), "", frozenset(), 0
-    )
+    result = extract_llr40.read_db(extract_llr40.Database(db_path, "621383", tmp_path, "621383"), "", frozenset(), 0)
 
-    row = next(row for row in result.observations if row["record"] == "submission")
-    assert (row["n_cells"], row["g_i"], row["gsd_i"]) == ("", "", "")
+    row = next(row for row in result.observations if row["row_kind"] == "submission")
+    assert (row["cells_timed"], row["cell_geomean"], row["cell_gsd"]) == ("", "", "")
 
 
 def test_the_observation_carries_the_recorded_dispersion(tmp_path: pathlib.Path) -> None:
@@ -92,9 +90,7 @@ def test_the_observation_carries_the_recorded_dispersion(tmp_path: pathlib.Path)
     conn.commit()
     conn.close()
 
-    result = extract_llr40.read_db(
-        extract_llr40.Database(db_path, "621383", tmp_path, "621383"), frozenset(), "", frozenset(), 0
-    )
+    result = extract_llr40.read_db(extract_llr40.Database(db_path, "621383", tmp_path, "621383"), "", frozenset(), 0)
 
-    row = next(row for row in result.observations if row["record"] == "submission")
-    assert (row["n_cells"], row["g_i"], row["gsd_i"]) == (3, 4.0, 2.0)
+    row = next(row for row in result.observations if row["row_kind"] == "submission")
+    assert (row["cells_timed"], row["cell_geomean"], row["cell_gsd"]) == (3, 4.0, 2.0)

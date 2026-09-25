@@ -41,13 +41,13 @@ def submission_rows(arm: str, benchmark_speedups: dict[str, float], baseline: st
                 "job": "j1",
                 "run_id": run,
                 "arm": arm,
-                "record": "submission",
+                "row_kind": "submission",
                 "benchmark": benchmark,
                 "speedup": speedup,
                 "baseline_ns": 1000.0,
                 "native_ns": 1000.0 / speedup,
                 "baseline": baseline,
-                "suspect": 0,
+                "timing_suspect": 0,
                 "ts_ms": 1,
                 "attempt_index": 1,
                 "timing_reduction": "mwd-v2",
@@ -68,7 +68,7 @@ def call_rows(arm: str, benchmark_tokens: dict[str, float]) -> list[dict[str, ob
                 "job": "j1",
                 "run_id": run,
                 "arm": arm,
-                "record": "call",
+                "row_kind": "call",
                 "benchmark": benchmark,
                 "tokens": tokens,
                 "ts_ms": 1,
@@ -81,7 +81,7 @@ def call_rows(arm: str, benchmark_tokens: dict[str, float]) -> list[dict[str, ob
 def task_rows(
     arm: str, benchmark_tokens: dict[str, float], ts_ms: int = 1, run_suffix: str = ""
 ) -> list[dict[str, object]]:
-    """One ``record=task`` row per (arm, kernel): the columns ``population.kernel_tokens`` needs
+    """One ``row_kind=task`` row per (arm, kernel): the columns ``population.kernel_tokens`` needs
     (T2-T4) -- one row per worker directory, ``tokens`` the task's own effective total.
     ``run_suffix`` distinguishes several tasks of the same kernel (a rerun or a designed repeat)."""
     rows = []
@@ -93,7 +93,7 @@ def task_rows(
                 "job": f"j1{run_suffix}",
                 "run_id": run,
                 "arm": arm,
-                "record": "task",
+                "row_kind": "task",
                 "benchmark": benchmark,
                 "tokens": tokens,
                 "ts_ms": ts_ms,
@@ -224,13 +224,13 @@ def test_a_kernel_with_no_verified_answer_is_absent_from_a_series_own_values() -
             "job": "j1",
             "run_id": "cpf-llr-focus40-qwen38-c-k3",
             "arm": "cpf-llr-focus40-qwen38-c",
-            "record": "submission",
+            "row_kind": "submission",
             "benchmark": "k3",
             "speedup": -1.0,
             "baseline_ns": 1000.0,
             "native_ns": 1000.0,
             "baseline": "numba",
-            "suspect": 0,
+            "timing_suspect": 0,
             "ts_ms": 1,
             "attempt_index": 1,
         }

@@ -30,6 +30,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from hpcagent_bench import experiment_tags, frozen_observations
+from hpcagent_bench.observation_columns import upgrade_frame
 from hpcagent_bench.spec import Track
 
 if TYPE_CHECKING:
@@ -316,6 +317,7 @@ def read_observations(path: pathlib.Path) -> "pd.DataFrame":
         frame = pd.read_csv(path, low_memory=False)
     else:
         frame = read_table(path, OBSERVATIONS_TABLE)
+    frame = upgrade_frame(frame)
     frame = fill_arm_identity(drop_adhoc_rows(frame))
     for rule in (
         fold_renamed_arms,
@@ -340,11 +342,11 @@ def task_labels(rows: "pd.DataFrame") -> "pd.Series":
 
 def task_rows(frame: "pd.DataFrame", column: str) -> "pd.DataFrame | None":
     """The frame's ``task`` rows when it can carry the per-task rule ``column``, else None."""
-    if frame.empty or "record" not in frame.columns or column not in frame.columns:
+    if frame.empty or "row_kind" not in frame.columns or column not in frame.columns:
         return None
     if not set(TASK_KEY) <= set(frame.columns):
         return None
-    tasks = frame[frame["record"] == "task"]
+    tasks = frame[frame["row_kind"] == "task"]
     return None if tasks.empty else tasks
 
 
@@ -391,7 +393,7 @@ def drop_foreign_kernel_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
         raise ValueError(f"a run names one task, but these carry task rows for several kernels: {ambiguous[:4]}")
     kernel_of = {task: names[0] for task, names in kernels.items()}
     owner = task_labels(frame).map(kernel_of)
-    foreign = (frame["record"] != "task") & owner.notna() & (owner != frame["benchmark"].astype(str))
+    foreign = (frame["row_kind"] != "task") & owner.notna() & (owner != frame["benchmark"].astype(str))
     count = int(foreign.sum())
     if count:
         warnings.warn(f"dropped {count} judge row(s) naming a kernel other than their task's (spec X6)", stacklevel=2)
@@ -404,7 +406,7 @@ def drop_pre_relaunch_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     A crashed attempt is relaunched from an empty workspace (T5), so the source behind such a row
     was deleted and the grade on it is no answer of the task that finished. Kept, it would enter the
     task's answer (R1-R2) and its start time (R3). The cut is the task row's
-    ``final_attempt_start_ms``, in the same epoch ms the judge stamps rows with; a task without one
+    ``task_final_attempt_start_ms``, in the same epoch ms the judge stamps rows with; a task without one
     (never relaunched, or extracted before the stamp) keeps its rows. The frame changes, never the
     database (N1), and the count is warned about.
     """
@@ -412,14 +414,14 @@ def drop_pre_relaunch_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
 
     import pandas as pd
 
-    tasks = task_rows(frame, "final_attempt_start_ms")
+    tasks = task_rows(frame, "task_final_attempt_start_ms")
     if tasks is None or "ts_ms" not in frame.columns:
         return frame
-    starts = pd.to_numeric(tasks["final_attempt_start_ms"], errors="coerce").fillna(0)
+    starts = pd.to_numeric(tasks["task_final_attempt_start_ms"], errors="coerce").fillna(0)
     cut = starts.groupby(task_labels(tasks)).max()
     owner = task_labels(frame).map(cut)
     stamps = pd.to_numeric(frame["ts_ms"], errors="coerce")
-    stale = (frame["record"] != "task") & owner.notna() & (owner > 0) & stamps.notna() & (stamps < owner)
+    stale = (frame["row_kind"] != "task") & owner.notna() & (owner > 0) & stamps.notna() & (stamps < owner)
     count = int(stale.sum())
     if count:
         warnings.warn(f"dropped {count} judge row(s) made before their task's final attempt (spec X7)", stacklevel=2)
@@ -439,10 +441,10 @@ def drop_cancelled_task_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
 
     import pandas as pd
 
-    tasks = task_rows(frame, "cancelled")
+    tasks = task_rows(frame, "task_cancelled")
     if tasks is None:
         return frame
-    flags = pd.to_numeric(tasks["cancelled"], errors="coerce").fillna(0)
+    flags = pd.to_numeric(tasks["task_cancelled"], errors="coerce").fillna(0)
     cancelled = set(task_labels(tasks)[flags > 0])
     if not cancelled:
         return frame
@@ -489,10 +491,10 @@ def drop_resubmissions(frame: "pd.DataFrame") -> "pd.DataFrame":
     import numpy as np
     import pandas as pd
 
-    if frame.empty or not {*TASK_KEY, "benchmark", "record", "ts_ms"} <= set(frame.columns):
+    if frame.empty or not {*TASK_KEY, "benchmark", "row_kind", "ts_ms"} <= set(frame.columns):
         return frame
     on_track = frame["benchmark"].astype(str).map(kernel_track).isin(FIRST_SUBMISSION_TRACKS)
-    mask = (on_track & frame["record"].isin(GRADED_RECORDS)).to_numpy()
+    mask = (on_track & frame["row_kind"].isin(GRADED_RECORDS)).to_numpy()
     graded = frame.loc[mask]
     if graded.empty:
         return frame

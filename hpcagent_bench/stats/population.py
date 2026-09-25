@@ -69,15 +69,15 @@ RAW_SPEEDUP_COLUMN: str = "raw_speedup"
 #: about the agent's code, so a row with this reason is not evidence of a real grade.
 HARNESS_FAULT_REASON: str = "score_error"
 
-#: The record :func:`extract_llr40.py <reproducibility.llr40.extract_llr40>` gives an ``attempts``
+#: The ``row_kind`` :mod:`hpcagent_bench.observations_extract` gives an ``attempts``
 #: row (``table[:-1]``): a real ``/submit`` the judge graded and did not accept (wrong answer, build
 #: failure, too slow, timed out, overfit) -- genuine agent work, distinct from :data:`TASK_RECORD`
 #: or a ``call`` row.
 ATTEMPT_RECORD: str = "attempt"
 
-#: The judge's implausibility flag on a graded row, as ``submissions.suspect`` spells it and as
-#: ``extract_llr40.py`` carries it into the observations CSV.
-SUSPECT_COLUMN: str = "suspect"
+#: The judge's implausibility flag on a graded row (``submissions.suspect``), as the observations
+#: table names it.
+SUSPECT_COLUMN: str = "timing_suspect"
 
 #: Arm labels that name no condition: ``adhoc`` is a grade recorded with no run id (a manual judge
 #: call), and a blank arm names no launcher at all.
@@ -381,7 +381,7 @@ def one_reduction(values: Iterable[object], label: str = "", *, allow_unstamped:
 BASELINE_POLICY_COLUMN: str = "baseline_policy"
 #: ``live-exempt`` on a submission whose live grade stands as its final grade
 #: (``observations_extract.apply_final_regrades``): its baseline policy is not checked.
-FINAL_GRADE_SOURCE_COLUMN: str = "final_grade_source"
+FINAL_GRADE_SOURCE_COLUMN: str = "grade_final_source"
 LIVE_EXEMPT: str = "live-exempt"
 
 #: What an unstamped row counts as: the one declared kind per track, so it is named rather than
@@ -511,14 +511,14 @@ def valid_submission_rows(frame: "pd.DataFrame") -> "pd.Series":
     """True for a row that is a VALID graded answer under the final rule: a submission the final
     re-timing stamped (``timing_reduction`` in :data:`FINAL_GRADE_REDUCTIONS`: v2, or its v1 row
     until v2 re-times it), or one it graded UNSOLVED (the extractor turns those into attempts with
-    ``regrade_status`` "unsolved") -- a loss is still an answer. A submission whose re-timing
+    ``grade_final_status`` "unsolved") -- a loss is still an answer. A submission whose re-timing
     errored, or that was never re-timed, is not."""
     import pandas as pd
 
     def column(name: str) -> "pd.Series":
         return frame[name].astype(str) if name in frame.columns else pd.Series("", index=frame.index)
 
-    record, reduction, status = column("record"), column("timing_reduction"), column("regrade_status")
+    record, reduction, status = column("row_kind"), column("timing_reduction"), column("grade_final_status")
     stamped = (record == "submission") & reduction.isin(FINAL_GRADE_REDUCTIONS) & (status != "error")
     return stamped | (record.isin(("submission", "attempt")) & (status == "unsolved"))
 
@@ -719,7 +719,7 @@ def arm_kernel_answers(
     """One whole row per ``(arm, benchmark)``: the arm's FINAL answer on that kernel under ``repeats``.
 
     ``frame`` should hold every record type, so ``latest`` sees a rerun that never had a submission
-    persisted (:func:`latest_runs`); a frame without ``record`` is read as graded rows only. WITHIN a
+    persisted (:func:`latest_runs`); a frame without ``row_kind`` is read as graded rows only. WITHIN a
     run the last verified submission counts (:func:`graded_episode_rows`); when the judge flagged that
     answer suspect the run answered nothing. ACROSS runs ``latest``
     keeps the latest run's answer -- none, when that run verified nothing -- and ``median`` keeps the
@@ -728,7 +728,7 @@ def arm_kernel_answers(
     """
     policy = repeat_policy(repeats)
     runs = latest_runs(frame) if policy == "latest" else frame
-    graded = runs[runs["record"] == "submission"] if "record" in runs.columns else runs
+    graded = runs[runs["row_kind"] == "submission"] if "row_kind" in runs.columns else runs
     episodes = graded_episode_rows(graded, order, allow_unstamped=allow_unstamped)
     # A final answer the judge flagged suspect solved nothing: the kernel reads as unanswered.
     episodes = episodes[episodes[SUSPECT_COLUMN].map(is_reportable).astype(bool)]
@@ -775,7 +775,7 @@ def kernel_answers(
     """
     import pandas as pd
 
-    graded = frame[frame.record == "submission"]
+    graded = frame[frame.row_kind == "submission"]
     # the stamp rides with each value: a final-grade figure may plot v1 answers beside v2 ones
     columns = [c for c in (*ANSWER_COLUMNS, REDUCTION_COLUMN) if c in frame.columns]
     if not graded.empty:
@@ -809,17 +809,17 @@ def genuinely_attempted(frame: "pd.DataFrame") -> set:
     graded and did not accept, excluding one reasoned :data:`HARNESS_FAULT_REASON` (the judge's own
     reference breaking, not a verdict about the agent's code -- see :func:`kernel_answers`).
     """
-    needed = ("record", "benchmark")
+    needed = ("row_kind", "benchmark")
     if any(column not in frame.columns for column in needed):
         return set()
-    attempts = frame[frame.record == ATTEMPT_RECORD]
+    attempts = frame[frame.row_kind == ATTEMPT_RECORD]
     if "reason" in attempts.columns:
         reasons = attempts["reason"].fillna("").astype(str)
         attempts = attempts[reasons != HARNESS_FAULT_REASON]
     return set(attempts["benchmark"].dropna().astype(str))
 
 
-#: The record a task's token total travels on (spec T3): one row per task, ``tokens`` = the effective
+#: The ``row_kind`` a task's token total travels on (spec T3): one row per task, ``tokens`` = the effective
 #: tokens of its FINAL attempt. What the attempts before it spent rides on the separate
 #: ``tokens_crashed`` column and is never added in (docs/token_accounting.md).
 TASK_RECORD: str = "task"
@@ -844,11 +844,11 @@ def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("benchmark",)) ->
     empty_columns = list(dict.fromkeys((*EPISODE_KEY, *by, "tokens")))
     if "tokens" not in frame.columns or frame.empty:
         return pd.DataFrame(columns=empty_columns)
-    tasks = frame[frame.record == TASK_RECORD]
+    tasks = frame[frame.row_kind == TASK_RECORD]
     if tasks.empty:
-        if (frame.record == "call").any():
+        if (frame.row_kind == "call").any():
             raise MixedPopulationError(
-                "no task records: a task's token cost is its final attempt's effective total (record = "
+                "no task records: a task's token cost is its final attempt's effective total (row_kind = "
                 "task); calls.tokens is not a cost -- re-extract with task rows"
             )
         return pd.DataFrame(columns=empty_columns)

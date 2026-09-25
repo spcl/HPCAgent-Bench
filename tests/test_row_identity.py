@@ -552,7 +552,7 @@ def test_the_observations_reader_reads_a_db_without_the_harness_column(tmp_path)
 
 def _extracted(db: pathlib.Path):
     database = extract.Database(db, "root", db.parent, "job")
-    result = extract.read_db(database, frozenset(), "", frozenset(), 0)
+    result = extract.read_db(database, "", frozenset(), 0)
     return [(o["run_id"], o["harness"]) for o in result.observations]
 
 

@@ -165,7 +165,7 @@ def observation(db: pathlib.Path, submitted: dict[str, Any]) -> pathlib.Path:
             (submitted["request_id"],),
         ).fetchone()
     path = db.parent.parent.parent.parent / "observations.db"
-    columns = ("run_root", "job", "db", "record", "run_id", "arm", "benchmark", "source_mode", "speedup")
+    columns = ("run_root", "job", "judge_db", "row_kind", "run_id", "arm", "benchmark", "source_mode", "speedup")
     columns += ("timing_reduction", "ts_ms")
     row = ("llr-root", JOB, str(db), "submission", RUN, ARM, KERNEL, source_mode, speedup, reduction, ts)
     with contextlib.closing(sqlite3.connect(path)) as conn, conn:
@@ -262,8 +262,10 @@ def test_the_extractor_reads_a_jobs_in_job_final_grade_exactly_as_a_regrade_wave
     shutil.rmtree(runs / "llr-root" / JOB / FINAL_GRADE_DIRNAME)
     handed = observations_extract.extract(dataclasses.replace(options, regrades=(str(wave),))).observations
     assert in_job == handed
-    submitted = [row for row in in_job if row["record"] == "submission" and row["run_id"] == RUN]
-    assert [(row["timing_reduction"], row["regraded"]) for row in submitted] == [(timing.FINAL_GRADE_REDUCTION, "1")]
+    submitted = [row for row in in_job if row["row_kind"] == "submission" and row["run_id"] == RUN]
+    assert [(row["timing_reduction"], row["grade_regraded"]) for row in submitted] == [
+        (timing.FINAL_GRADE_REDUCTION, "1")
+    ]
     assert {row["job"] for row in in_job} == {JOB}
 
 

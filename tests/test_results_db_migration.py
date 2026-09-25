@@ -91,7 +91,7 @@ def extracted(path: pathlib.Path, out: pathlib.Path) -> str:
     The CSV is the artifact every figure reads; it spells a NULL and a column the vintage lacks
     alike, as an empty cell."""
     db = observations_extract.Database(path, "root", path.parent, "job")
-    rows = [{**row, "db": ""} for row in observations_extract.read_db(db, frozenset(), "", frozenset(), 0).observations]
+    rows = [{**row, "judge_db": ""} for row in observations_extract.read_db(db, "", frozenset(), 0).observations]
     assert rows, "the fixture yielded no observations"
     observations_extract.write_csv(out, observations_extract.OBSERVATION_FIELDS, rows)
     return out.read_text()

@@ -280,8 +280,8 @@ def test_shards_merge_their_curves_without_duplicating_a_grade(tmp_path: pathlib
 
 def extracted(db: pathlib.Path) -> list[dict]:
     database = observations_extract.Database(db, "mlscale", db.parent, "700001")
-    result = observations_extract.read_db(database, frozenset(), "mlscale-", frozenset(), 0)
-    return [r for r in result.observations if r["record"] == "scaling"]
+    result = observations_extract.read_db(database, "mlscale-", frozenset(), 0)
+    return [r for r in result.observations if r["row_kind"] == "scaling"]
 
 
 def test_the_extractor_emits_one_scaling_row_per_point_and_hole(tmp_path: pathlib.Path) -> None:
@@ -289,7 +289,14 @@ def test_the_extractor_emits_one_scaling_row_per_point_and_hole(tmp_path: pathli
     curve = strong_curve()
     record(db, curve, "strong")
     got = [
-        (r["ranks"], r["nodes"], r["scaling_mode"], r["ranked_ns"], r["efficiency"], r["scaling_note"])
+        (
+            r["scaling_ranks"],
+            r["scaling_nodes"],
+            r["scaling_mode"],
+            r["scaling_ranked_ns"],
+            r["scaling_point_efficiency"],
+            r["scaling_note"],
+        )
         for r in extracted(db)
     ]
     eff = {p.ranks: p.efficiency for p in curve.points}
@@ -305,7 +312,7 @@ def test_every_extracted_scaling_row_carries_its_curves_mean_efficiency(tmp_path
     db = tmp_path / "r.db"
     curve = strong_curve()
     record(db, curve, "strong")
-    assert {r["mean_efficiency"] for r in extracted(db)} == {curve.mean_efficiency}
+    assert {r["scaling_mean_efficiency"] for r in extracted(db)} == {curve.mean_efficiency}
 
 
 def test_an_extracted_scaling_row_has_every_column_the_table_declares(tmp_path: pathlib.Path) -> None:
@@ -325,9 +332,13 @@ def test_the_extracted_efficiency_is_the_one_recomputed_from_the_times(tmp_path:
     record(db, weak_curve(), "weak")
     for row in extracted(db):
         again = metric.scaling_point(
-            "weak", row["ranks"], row["single_rank_ns"], row["ranked_ns"], work_ratio=row["work_ratio"]
+            "weak",
+            row["scaling_ranks"],
+            row["scaling_single_rank_ns"],
+            row["scaling_ranked_ns"],
+            work_ratio=row["scaling_work_ratio"],
         )
-        assert math.isclose(row["efficiency"], again.efficiency, rel_tol=1e-12), row
+        assert math.isclose(row["scaling_point_efficiency"], again.efficiency, rel_tol=1e-12), row
 
 
 @pytest.mark.parametrize("suffix", [".csv", ".db"])
@@ -381,8 +392,8 @@ def test_the_extractor_reads_a_db_written_before_the_law_joined_the_curve_key(tm
         with contextlib.closing(sqlite3.connect(path)) as conn:
             conn.row_factory = sqlite3.Row
             db = ox.Database(path, "root", tmp_path, "job")
-            got = ox.scaling_rows(conn, db, frozenset(), ("", frozenset()), ({}, {}))
-        effs = {(r["scaling_mode"], str(r["mean_efficiency"])) for r in got}
+            got = ox.scaling_rows(conn, db, ("", frozenset()), ({}, {}))
+        effs = {(r["scaling_mode"], str(r["scaling_mean_efficiency"])) for r in got}
         if want is not None:
             assert effs == want, effs
         else:

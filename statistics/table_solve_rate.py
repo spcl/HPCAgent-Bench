@@ -86,9 +86,9 @@ def first_episode(frame: pd.DataFrame) -> pd.DataFrame:
     54 episodes against exactly 40 in its packet legs, and every kernel that separates them was
     won on a rerun. The first episode is the one both sides always had.
     """
-    if "record" not in frame.columns or "run_id" not in frame.columns:
+    if "row_kind" not in frame.columns or "run_id" not in frame.columns:
         return frame
-    episodes = frame[frame.record == "task"].sort_values(["benchmark", "ts_ms"])
+    episodes = frame[frame.row_kind == "task"].sort_values(["benchmark", "ts_ms"])
     first = episodes.drop_duplicates("benchmark", keep="first")
     keys = set(zip(first.benchmark, first.run_id, strict=True))
     # A kernel with NO episode row cannot be attributed to an episode at all -- the 2026-09-19

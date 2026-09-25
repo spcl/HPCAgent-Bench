@@ -774,7 +774,14 @@ def seed_observations(path: pathlib.Path, rows: list[tuple[str, str, str, int, i
     for arm, benchmark, run_id, tokens, ts_ms in rows:
         record = dict.fromkeys(observations_extract.OBSERVATION_FIELDS, "")
         record.update(
-            record="task", arm=arm, benchmark=benchmark, run_root="rr", job=1, run_id=run_id, tokens=tokens, ts_ms=ts_ms
+            row_kind="task",
+            arm=arm,
+            benchmark=benchmark,
+            run_root="rr",
+            job=1,
+            run_id=run_id,
+            tokens=tokens,
+            ts_ms=ts_ms,
         )
         records.append(record)
     observations_extract.write_db(path, observations_extract.OBSERVATION_FIELDS, records)

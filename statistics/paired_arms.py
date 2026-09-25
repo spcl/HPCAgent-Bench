@@ -335,7 +335,7 @@ def graded_rows(observations: pd.DataFrame, arms: list[str]) -> pd.DataFrame:
     ``one_denominator`` raises rather than picking a majority: a speed-up divided by two different
     references is not one quantity, and the arms of two campaigns are exactly where that happens.
     """
-    rows = observations[(observations.record == "submission") & observations.arm.isin(arms)]
+    rows = observations[(observations.row_kind == "submission") & observations.arm.isin(arms)]
     population.one_denominator(rows.baseline.tolist(), label="graded rows")
     return rows
 
@@ -519,7 +519,7 @@ def no_submit_rate_by_arm(graded: pd.DataFrame) -> dict[str, float]:
     :func:`episode_submitted`.
 
     The denominator is every episode the arm has ANY graded row for (``graded`` is already restricted
-    to ``record == "submission"``, and the teardown harvest always leaves one such row for a worker
+    to ``row_kind == "submission"``, and the teardown harvest always leaves one such row for a worker
     that ran, so a served kernel with zero graded rows would be an extraction defect, not a silent
     zero). An arm with no episodes at all is simply absent from the returned mapping.
     """
@@ -577,17 +577,19 @@ def task_usage(observations: pd.DataFrame, repeats: population.RepeatPolicy) -> 
     key = ["arm", *population.EPISODE_KEY]
     selected = population.latest_runs(observations) if repeats == "latest" else observations
     route = selected["route"].astype(str) if "route" in selected.columns else pd.Series("", index=selected.index)
-    is_task = selected.record == population.TASK_RECORD
-    recorded = selected["attempts"] if "attempts" in selected.columns else pd.Series(math.nan, index=selected.index)
+    is_task = selected.row_kind == population.TASK_RECORD
+    recorded = (
+        selected["task_attempts"] if "task_attempts" in selected.columns else pd.Series(math.nan, index=selected.index)
+    )
     crashed = (
         selected["tokens_crashed"]
         if "tokens_crashed" in selected.columns
         else pd.Series(math.nan, index=selected.index)
     )
     flags = selected[key].assign(
-        score_calls=((selected.record == "call") & (route == "score")).astype(int),
-        submit_calls=((selected.record == "call") & (route == "submit")).astype(int),
-        accepted_submissions=(selected.record == "submission").astype(int),
+        score_calls=((selected.row_kind == "call") & (route == "score")).astype(int),
+        submit_calls=((selected.row_kind == "call") & (route == "submit")).astype(int),
+        accepted_submissions=(selected.row_kind == "submission").astype(int),
         # 1 + crash relaunches, off the task row only (spec section 9); NaN when a task has none
         attempts=pd.to_numeric(recorded, errors="coerce").where(is_task),
         # what the attempts BEFORE the final one spent (T2): reported beside the cost, never in it

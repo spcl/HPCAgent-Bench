@@ -58,24 +58,24 @@ def graded(
     """One graded submission: timings, no tokens. ``run_id`` is the rank spelling, which repeats
     across jobs exactly as a launcher writes it. ``optimizer`` carries the recovery tag when the row
     is one nobody submitted. ``suspect`` is the judge's flag, 0 on a clean graded row, as
-    ``extract_llr40.py`` copies it from ``submissions.suspect``."""
+    ``extract_llr40.py`` copies it from ``submissions.suspect`` into ``timing_suspect``."""
     return {
         "optimizer": optimizer,
         "run_root": "stamp",
         "job": job,
-        "record": "submission",
+        "row_kind": "submission",
         "run_id": f"{arm}.n0.p{kernel}.w0",
         "arm": arm,
         "benchmark": kernel,
         "speedup": speedup,
         "tokens": "",
-        "suspect": 0,
+        "timing_suspect": 0,
         "baseline": "numba",
         "ts_ms": ts,
         "attempt_index": index,
         # The judge screens every graded row and an extract carries the flag; final_answers refuses a
         # frame that cannot say which rows were screened.
-        "suspect": 0,
+        "timing_suspect": 0,
         "timing_reduction": "mwd-v2",
     }
 
@@ -87,13 +87,13 @@ def call(arm: str, kernel: str, tokens: float, job: str = "j1", ts: int = 1000, 
         "optimizer": "a-model",
         "run_root": "stamp",
         "job": job,
-        "record": "call",
+        "row_kind": "call",
         "run_id": f"{arm}.n0.p{kernel}.w0",
         "arm": arm,
         "benchmark": kernel,
         "speedup": "",
         "tokens": tokens,
-        "suspect": "",
+        "timing_suspect": "",
         "baseline": "numba",
         "ts_ms": ts,
         "attempt_index": index,
@@ -117,7 +117,7 @@ def task(arm: str, kernel: str, tokens: float, job: str = "j1", ts: int = 900) -
         "optimizer": "",
         "run_root": "stamp",
         "job": job,
-        "record": "task",
+        "row_kind": "task",
         "run_id": f"{arm}.n0.p{kernel}.w0",
         "arm": arm,
         "benchmark": kernel,
@@ -126,7 +126,7 @@ def task(arm: str, kernel: str, tokens: float, job: str = "j1", ts: int = 900) -
         "tokens_fresh_input": tokens,
         "tokens_cached_input": 0.0,
         "tokens_output": 0.0,
-        "suspect": "",
+        "timing_suspect": "",
         "baseline": "",
         "ts_ms": ts,
         "attempt_index": "",
@@ -252,8 +252,8 @@ def impact_table(paired_arms: ModuleType, tmp_path: pathlib.Path) -> pd.DataFram
     rows: list[dict[str, object]] = []
     for kernel in KERNELS:
         control, treated = episode("x-qwen38-c", kernel, 2.0, 100.0), episode("x-qwen38-c-cpf", kernel, 3.0, 50.0)
-        control[2] |= {"attempts": 1}
-        treated[2] |= {"attempts": 2}
+        control[2] |= {"task_attempts": 1}
+        treated[2] |= {"task_attempts": 2}
         rows += control + treated
     path = observations(rows, tmp_path)
     out = tmp_path / "impact.csv"
@@ -595,7 +595,7 @@ def test_usage_reports_how_many_tasks_were_relaunched_and_what_the_crashes_spent
         *episode("a", "k4", 2.0, 100.0, job="j1"),
     ]
     for task_row, attempts, crashed in zip(rows[2::3], (1, 2, 3, 1), (0, 40, 90, 0), strict=True):
-        task_row |= {"attempts": attempts, "tokens_crashed": crashed}
+        task_row |= {"task_attempts": attempts, "tokens_crashed": crashed}
     usage = paired_arms.task_usage(frame(rows), "latest").loc["a"]
     assert usage.tasks == 4
     assert usage.attempts_per_task == pytest.approx(1.75)
@@ -686,8 +686,8 @@ def test_one_baseline_keeps_the_named_reference_and_every_row_without_one(paired
         ]
     )
     kept = paired_arms.one_baseline(rows, "c-autopar")
-    assert list(kept.record) == ["submission", "task", "task"]
-    assert sorted(kept[kept.record == "task"].benchmark) == ["k1", "k2"]
+    assert list(kept.row_kind) == ["submission", "task", "task"]
+    assert sorted(kept[kept.row_kind == "task"].benchmark) == ["k1", "k2"]
 
 
 def test_a_kernel_the_arm_never_delivered_scores_one_and_still_costs_its_tokens(
