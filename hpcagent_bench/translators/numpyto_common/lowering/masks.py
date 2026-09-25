@@ -4,15 +4,10 @@ import ast
 import copy
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_
-from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
-    const_,
-    has_negative_step,
-    is_scalar_index,
-    view_offset,
-)
-from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import token_to_ast
+from hpcagent_bench.translators.numpyto_common.lowering.indexing import has_negative_step, is_scalar_index, view_offset
 from hpcagent_bench.translators.numpyto_common.lowering.slice_fusion import strided_trip_count
 from hpcagent_bench.translators.numpyto_common.lowering.subscriptify import SubscriptifyNames
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, const_or_name
 
 
 class BooleanMaskRewriter(ast.NodeTransformer):
@@ -103,7 +98,7 @@ class BooleanMaskRewriter(ast.NodeTransformer):
             out = [
                 ast.For(
                     target=ast.Name(id=var, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[token_to_ast(bound)], keywords=[]),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[const_or_name(bound)], keywords=[]),
                     body=out,
                     orelse=[],
                 )

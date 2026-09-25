@@ -5,22 +5,23 @@ import copy
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import shape_exprs_equal
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_, span_multiple_of
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import slice_step_any, step_is_negative, step_node
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
+    slice_step_any,
+    step_is_negative,
+    step_node,
+    const_,
+    const_or_name,
+)
 from hpcagent_bench.translators.numpyto_common.lowering.complex import infer_complex_dtype
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     binop,
-    const_,
     has_any_slice,
     iter_var_name,
     name_of_subscript,
     slice_dims,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import is_scalar_helper_call
-from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import (
-    is_newaxis,
-    token_to_ast,
-    negative_literal_offset,
-)
+from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis, negative_literal_offset
 from hpcagent_bench.translators.numpyto_common.lowering.slice_scalarize import SliceToScalarRewriter
 from hpcagent_bench.translators.numpyto_common.lowering.views import refuse_scalarising_a_contraction
 from hpcagent_bench.translators.numpyto_common.subscripts import has_slice_subscript
@@ -198,7 +199,7 @@ class SliceFusion(ast.NodeTransformer):
             raise NotImplementedError(
                 f"slice with omitted stop on {array_name!r} axis {axis}: shape unknown to NumpyToC"
             )
-        return token_to_ast(shape[axis])
+        return const_or_name(shape[axis])
 
     def resolve_bound(self, bound: ast.AST | None, array_name: str, axis: int, default) -> ast.AST:
         """Resolve a slice bound, expanding numpy's negative-index form.
@@ -379,7 +380,7 @@ class LiftFreshArrayFromSlices(ast.NodeTransformer):
         ext = iter_extent_of_(node.value, self.shapes)
         if ext is None:
             return node
-        shape_toks: tuple[str, ...] = tuple(self.tokenise(e) for e in ext)
+        shape_toks: tuple[str, ...] = tuple(ast.unparse(e) for e in ext)
         existing = self.shapes.get(target.id)
         # If the target already has a shape that matches the derived
         # extent, lift unconditionally (this is the
@@ -433,14 +434,6 @@ class LiftFreshArrayFromSlices(ast.NodeTransformer):
         slice_lhs = ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()), slice=slice_form, ctx=ast.Store())
         slice_assign = ast.Assign(targets=[slice_lhs], value=node.value)
         return [marker, slice_assign]
-
-    @staticmethod
-    def tokenise(node):
-        if isinstance(node, ast.Constant) and isinstance(node.value, int):
-            return str(node.value)
-        if isinstance(node, ast.Name):
-            return node.id
-        return ast.unparse(node)
 
     def is_array_binop(self, expr):
         """``True`` for a BinOp / UnaryOp whose tree contains at least

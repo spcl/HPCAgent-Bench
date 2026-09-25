@@ -166,17 +166,6 @@ def fold_subarray_aliases(tree: ast.AST, array_shapes: dict[str, list[str]]) -> 
     # statement that can execute AFTER it (its block-tail, recursively) -- else the
     # folded ``A[i, j, k]`` at the use site would read the NEW i/j, not the value the
     # alias captured. (Reassignment BEFORE the alias is fine.)
-    def child_blocks(s):
-        if isinstance(s, (ast.For, ast.While, ast.If)):
-            yield s.body
-            yield s.orelse
-        elif isinstance(s, ast.Try):
-            yield s.body
-            yield s.orelse
-            yield s.finalbody
-            for h in s.handlers:
-                yield h.body
-
     def stores_in(stmts):
         out: set = set()
         for s in stmts:
@@ -201,7 +190,7 @@ def fold_subarray_aliases(tree: ast.AST, array_shapes: dict[str, list[str]]) -> 
                 base_names = {n.id for b in base for n in ast.walk(b) if isinstance(n, ast.Name)}
                 if base_names & stores_in(stmts[i + 1 :]):
                     unsafe.add(s.targets[0].id)
-            for cb in child_blocks(s):
+            for cb in child_blocks_of(s):
                 scan(cb)
 
     scan(tree.body if isinstance(tree, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)) else [tree])

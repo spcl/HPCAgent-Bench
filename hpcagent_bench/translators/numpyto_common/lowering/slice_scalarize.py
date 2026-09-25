@@ -6,13 +6,17 @@ from typing import Any
 from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_, extent_is_scalar
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import slice_step_any, step_is_negative, step_node
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
+    slice_step_any,
+    step_is_negative,
+    step_node,
+    const_,
+)
 from hpcagent_bench.translators.numpyto_common.lowering.chains import CHAINED_VIEW, counts_from_end, index_slot
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     LOWERED_ELEMENTWISE,
     advanced_runs,
     binop,
-    const_,
     gather_slice_offset,
     is_scalar_index,
     name_of_subscript,

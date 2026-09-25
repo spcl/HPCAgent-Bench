@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 from hpcagent_bench.translators.numpyto_common.ir import tag_numpy_origin
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_hoist import CallHoister, numpy_call_key
-from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES, call_to_str
+from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
 from hpcagent_bench.translators.numpyto_common.lib_nodes.elementwise import UNARY_C_MATH
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import is_integer_expr, iter_extent_of_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
@@ -490,7 +490,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         if isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Call, ast.Subscript)):
             ext = iter_extent_of_(rhs, self.shape_table)
             if ext is not None:
-                self.shape_table[target_id] = tuple(call_to_str(e) for e in ext)
+                self.shape_table[target_id] = tuple(ast.unparse(e) for e in ext)
             # ``ngm = qgm.shape[0]`` reads a DIMENSION -- an integer regardless of
             # the array's dtype. Type it int64 and skip the complex walk below,
             # which would otherwise see complex base Name ``qgm`` and wrongly tag
@@ -761,14 +761,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             return prelude + [node]
         return node
 
-    def visit_While(self, node: ast.While) -> ast.AST:
-        node.body = self.flatten_visit_list(node.body)
-        node.orelse = self.flatten_visit_list(node.orelse)
-        node.test, prelude = self.hoist_value(node.test)
-        prelude = self.lower_prelude_calls(prelude)
-        if prelude:
-            return prelude + [node]
-        return node
+    visit_While = visit_If
 
     def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
         self.generic_visit(node)

@@ -13,16 +13,16 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     iter_extent_of_,
     extent_is_scalar,
 )
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import slice_step_any
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import slice_step_any, const_, const_or_name
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 from hpcagent_bench.translators.numpyto_common.lowering.complex import (
     ctor_complex_tag,
     dtype_carrying_operands,
     scalar_expr_complex,
 )
-from hpcagent_bench.translators.numpyto_common.lowering.indexing import const_, slice_dims
+from hpcagent_bench.translators.numpyto_common.lowering.indexing import slice_dims
 from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import is_scalar_helper_call
-from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis, token_to_ast
+from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis
 from hpcagent_bench.translators.numpyto_common.lowering.slice_scalarize import SliceToScalarRewriter
 from hpcagent_bench.translators.numpyto_common.lowering.subscriptify import SubscriptifyNames
 from hpcagent_bench.translators.numpyto_common.lowering.views import is_rank_preserving_slice_view
@@ -282,7 +282,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             out = [
                 ast.For(
                     target=ast.Name(id=var, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[token_to_ast(bound)], keywords=[]),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[const_or_name(bound)], keywords=[]),
                     body=out,
                     orelse=[],
                 )
@@ -350,7 +350,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             out = [
                 ast.For(
                     target=ast.Name(id=var, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[token_to_ast(bound)], keywords=[]),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[const_or_name(bound)], keywords=[]),
                     body=out,
                     orelse=[],
                 )
@@ -477,7 +477,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             if k in slice_axes:
                 ivar = f"__scs{n_sliced}"
                 n_sliced += 1
-                hi = e.upper if e.upper is not None else token_to_ast(self.shape_table[name][k])
+                hi = e.upper if e.upper is not None else const_or_name(self.shape_table[name][k])
                 bound = hi if e.lower is None else ast.BinOp(left=hi, op=ast.Sub(), right=copy.deepcopy(e.lower))
                 pos: ast.expr = ast.Name(id=ivar, ctx=ast.Load())
                 if e.lower is not None:
@@ -496,7 +496,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                     # those axes. An RHS that DOES carry it is the exception: the substitution
                     # above already consumed that result axis from it, so the shared iter has to
                     # lead for the axes it has left to right-align against the innermost iters.
-                    plan.insert(0 if rhs_carries_index else len(plan), (it, token_to_ast(extent)))
+                    plan.insert(0 if rhs_carries_index else len(plan), (it, const_or_name(extent)))
         iters = [i for i, unused in plan]
         bounds = [b for unused, b in plan]
         lhs_slice = new_lead[0] if len(new_lead) == 1 else ast.Tuple(elts=new_lead, ctx=ast.Load())
@@ -1216,7 +1216,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             out = [
                 ast.For(
                     target=ast.Name(id=var, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[token_to_ast(bound)], keywords=[]),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[const_or_name(bound)], keywords=[]),
                     body=out,
                     orelse=[],
                 )

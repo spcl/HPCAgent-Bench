@@ -5,6 +5,7 @@ import copy
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_, extent_is_scalar
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
 
 
 def negative_literal_offset(node: ast.AST) -> int | None:
@@ -98,7 +99,7 @@ class ShapeMidExpressionRewriter(ast.NodeTransformer):
         ):
             shape = self.arrays_shapes.get(node.value.value.id)
             if shape and 0 <= node.slice.value < len(shape):
-                return token_to_ast(shape[node.slice.value])
+                return const_or_name(shape[node.slice.value])
         # ``<array-expr>.shape[k]`` on a Subscript or CALL base (``v[..., None]``,
         # ``np.maximum(h, 0.0)``): resolve the base's static extent (newaxis / Ellipsis
         # aware) and pick axis ``k`` (negative indices allowed). Unresolvable -> left intact.
@@ -136,7 +137,7 @@ class ShapeMidExpressionRewriter(ast.NodeTransformer):
         ):
             shape = self.arrays_shapes.get(node.args[0].id)
             if shape:
-                return token_to_ast(shape[0])
+                return const_or_name(shape[0])
         return node
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
@@ -156,19 +157,19 @@ class ShapeMidExpressionRewriter(ast.NodeTransformer):
         if not shape:
             return node
         if node.attr == "shape":
-            # ``token_to_ast`` (not a bare ``Name(id=token)``) so a COMPOUND shape
+            # ``const_or_name`` (not a bare ``Name(id=token)``) so a COMPOUND shape
             # token -- a slice extent like ``"__inl2_na - 1"`` (LS3DF's Lanczos
             # ``off = betas[:na - 1]``) -- re-parses into a real BinOp rather than a
             # malformed Name whose id is source text (which the int-context / logical
             # analyses then misclassify).
-            return ast.Tuple(elts=[token_to_ast(s) for s in shape], ctx=ast.Load())
+            return ast.Tuple(elts=[const_or_name(s) for s in shape], ctx=ast.Load())
         if node.attr == "size":
             # ``arr.size`` -> product of shape symbols (each token re-parsed).
             if len(shape) == 1:
-                return token_to_ast(shape[0])
-            expr = token_to_ast(shape[0])
+                return const_or_name(shape[0])
+            expr = const_or_name(shape[0])
             for s in shape[1:]:
-                expr = ast.BinOp(left=expr, op=ast.Mult(), right=token_to_ast(s))
+                expr = ast.BinOp(left=expr, op=ast.Mult(), right=const_or_name(s))
             return expr
         if node.attr == "ndim":
             return ast.Constant(value=len(shape))
@@ -254,26 +255,6 @@ def resolve_arr_shape_subscript(node: ast.AST, shape_table: dict[str, tuple[str,
     return src[node.slice.value]
 
 
-def token_to_ast(tok: str) -> ast.expr:
-    """Render a shape token as the appropriate AST node.
-
-    Plain integer / identifier shortcuts; compound expressions
-    (``"H - K + 1"`` / ``"x.shape[3]"`` / ``"(H_out // 2)"``) re-parse
-    via :func:`ast.parse` so downstream AST walkers see real Subscript
-    / BinOp nodes rather than ``Name(id="<literal source text>")``.
-    """
-    try:
-        return ast.Constant(value=int(tok))
-    except (TypeError, ValueError):
-        pass
-    if isinstance(tok, str) and tok.isidentifier():
-        return ast.Name(id=tok, ctx=ast.Load())
-    try:
-        return ast.parse(str(tok), mode="eval").body
-    except (SyntaxError, ValueError):
-        return ast.Name(id=str(tok), ctx=ast.Load())
-
-
 class ResolveArrShape(ast.NodeTransformer):
     """Replace ``arr.shape[i]`` (where ``i`` is a constant int and
     ``arr`` is in the shape table) with the corresponding token.
@@ -328,7 +309,7 @@ class ResolveArrShape(ast.NodeTransformer):
         against the live ``self.current`` shape table. Tokens are
         re-parsed and substituted axis-wise; the returned string is
         always re-emittable (passes back through
-        :func:`token_to_ast` correctly)."""
+        :func:`const_or_name` correctly)."""
         try:
             tree = ast.parse(str(tok), mode="eval").body
         except (SyntaxError, ValueError):
@@ -351,7 +332,7 @@ class ResolveArrShape(ast.NodeTransformer):
                 src = self_inner.current.get(node.value.value.id)
                 if not src or node.slice.value >= len(src):
                     return node
-                return token_to_ast(src[node.slice.value])
+                return const_or_name(src[node.slice.value])
 
         tree = Sub_(self.current).visit(tree)
         ast.fix_missing_locations(tree)
@@ -371,17 +352,13 @@ class ResolveArrShape(ast.NodeTransformer):
         node.orelse = self.visit_stmt_list(node.orelse)
         return node
 
-    def visit_While(self, node: ast.While) -> ast.AST:
-        node.test = self.visit(node.test)
-        node.body = self.visit_stmt_list(node.body)
-        node.orelse = self.visit_stmt_list(node.orelse)
-        return node
-
     def visit_If(self, node: ast.If) -> ast.AST:
         node.test = self.visit(node.test)
         node.body = self.visit_stmt_list(node.body)
         node.orelse = self.visit_stmt_list(node.orelse)
         return node
+
+    visit_While = visit_If
 
     def visit_stmt_list(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []

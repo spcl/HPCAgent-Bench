@@ -356,22 +356,12 @@ def binary_call_expander(c_name: str) -> Callable:
         sa = scalarize_at_iters(a, iters, shape_table)
         sb = scalarize_at_iters(b, iters, shape_table)
         idx = iters[0] if len(iters) == 1 else ast.Tuple(elts=list(iters), ctx=ast.Load())
-        body = [
+        body: list[ast.stmt] = [
             ast.Assign(
                 targets=[ast.Subscript(value=name_(target.id), slice=idx, ctx=ast.Store())],
                 value=ast.Call(func=name_(c_name), args=[sa, sb], keywords=[]),
             )
         ]
-        out = body
-        for var, bound in zip(reversed([i.id for i in iters]), reversed(extent)):
-            out = [
-                ast.For(
-                    target=store_(var),
-                    iter=ast.Call(func=name_("range"), args=[bound], keywords=[]),
-                    body=out,
-                    orelse=[],
-                )
-            ]
-        return out
+        return wrap_for_loops([i.id for i in iters], list(extent), body)
 
     return expand_

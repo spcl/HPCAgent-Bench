@@ -4,7 +4,7 @@ import ast
 import copy
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes.blas import BLAS_GEMM_MARKER, BLAS_INELIGIBLE_DTYPES
-from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import call_to_str, static_shape_of, dims_agree
+from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import static_shape_of, dims_agree
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     alloc_marker,
@@ -116,7 +116,7 @@ def hoist_matmul(
             # Use the FULL extent of the RHS array as the temp shape so
             # the function-scope declaration doesn't depend on a loop
             # variable. The actual iteration uses the dynamic extent.
-            shape = (static_shape_of(matmul.right, 1, shape_table) or call_to_str(n_extent),)
+            shape = (static_shape_of(matmul.right, 1, shape_table) or ast.unparse(n_extent),)
             temp_arrays[temp] = shape
             shape_table[temp] = shape
             l_iter = name_(f"__mml{temp_counter[0]}")  # k
@@ -150,7 +150,7 @@ def hoist_matmul(
             ]
         else:  # 2-D x 1-D
             m_extent, k_extent = l_ext[0], l_ext[1]
-            shape = (static_shape_of(matmul.left, 0, shape_table) or call_to_str(m_extent),)
+            shape = (static_shape_of(matmul.left, 0, shape_table) or ast.unparse(m_extent),)
             temp_arrays[temp] = shape
             shape_table[temp] = shape
             out_iter = name_(f"__mmi{temp_counter[0]}")
@@ -198,8 +198,8 @@ def hoist_matmul(
         m_extent, k_extent = l_ext[0], l_ext[1]
         unused, n_extent = r_ext
         shape = (
-            static_shape_of(matmul.left, 0, shape_table) or call_to_str(m_extent),
-            static_shape_of(matmul.right, 1, shape_table) or call_to_str(n_extent),
+            static_shape_of(matmul.left, 0, shape_table) or ast.unparse(m_extent),
+            static_shape_of(matmul.right, 1, shape_table) or ast.unparse(n_extent),
         )
         temp_arrays[temp] = shape
         shape_table[temp] = shape
@@ -269,10 +269,10 @@ def hoist_matmul(
         # Declare the temp from STATIC axis tokens where they exist, so the function-scope
         # declaration never names a loop variable (same rule as the branches above).
         shape = tuple(
-            static_shape_of(batched, axis, shape_table) or call_to_str(ext) for axis, ext in enumerate(batch_ext)
+            static_shape_of(batched, axis, shape_table) or ast.unparse(ext) for axis, ext in enumerate(batch_ext)
         ) + (
-            static_shape_of(matmul.left, len(l_ext) - 2, shape_table) or call_to_str(m_extent),
-            static_shape_of(matmul.right, len(r_ext) - 1, shape_table) or call_to_str(n_extent),
+            static_shape_of(matmul.left, len(l_ext) - 2, shape_table) or ast.unparse(m_extent),
+            static_shape_of(matmul.right, len(r_ext) - 1, shape_table) or ast.unparse(n_extent),
         )
         temp_arrays[temp] = shape
         shape_table[temp] = shape
@@ -867,7 +867,7 @@ class MatmulHoister(ast.NodeTransformer):
                 if dt and dt.startswith("complex"):
                     self.local_dtypes[temp] = "complex128"
                     break
-        shape = tuple((static_shape_of(expr, ax, self.shape_table) or call_to_str(e)) for ax, e in enumerate(ext))
+        shape = tuple((static_shape_of(expr, ax, self.shape_table) or ast.unparse(e)) for ax, e in enumerate(ext))
         self.temp_arrays[temp] = shape
         self.shape_table[temp] = shape
         iters = [name_(f"__spvi{n}_{ax}") for ax in range(len(ext))]

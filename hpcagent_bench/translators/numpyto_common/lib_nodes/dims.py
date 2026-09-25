@@ -51,15 +51,6 @@ def static_shape_of(expr: ast.expr, axis: int, shape_table: dict[str, tuple[str,
     return None
 
 
-def call_to_str(node: ast.expr) -> str:
-    """Render an extent AST node as a shape-table token string."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, int):
-        return str(node.value)
-    if isinstance(node, ast.Name):
-        return node.id
-    return ast.unparse(node)
-
-
 #: Single identifier inside a shape-token string, matched on word boundaries so substituting ``c``
 #: never hits ``channels`` or ``__inl6_c``.
 DIM_IDENT_RE = re.compile(r"[A-Za-z_]\w*")

@@ -124,7 +124,7 @@ def arange_count(args: list[ast.expr]) -> ast.expr:
     Constant arguments fold here, so the common literal ``arange`` keeps a plain integer extent
     rather than an expression a Fortran declaration would have to be able to evaluate.
 
-    Shared with the shape inference in :func:`call_to_str` so the extent an array is
+    Shared with the shape inference in :class:`~hpcagent_bench.translators.numpyto_common.lib_nodes.call_hoist.CallHoister` so the extent an array is
     declared with and the trip count the loop runs cannot disagree -- disagreeing is what turned
     a wrong count into an out-of-bounds write."""
     if len(args) == 1:

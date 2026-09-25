@@ -9,7 +9,6 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import (
     tensordot_axes,
     parse_einsum_subscripts,
 )
-from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import call_to_str
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     alloc_marker,
@@ -98,7 +97,7 @@ def materialize_operands(
             continue
         OP_SPILL_TEMP[0] += 1
         tmp = f"{prefix}op{OP_SPILL_TEMP[0]}"
-        tmp_shape = tuple(call_to_str(e) for e in op_ext)
+        tmp_shape = tuple(ast.unparse(e) for e in op_ext)
         shape_table[tmp] = tmp_shape
         if fresh_local_allocs is not None:
             fresh_local_allocs[tmp] = tmp_shape

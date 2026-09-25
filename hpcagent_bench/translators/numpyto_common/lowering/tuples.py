@@ -4,8 +4,8 @@ import ast
 import copy
 from collections.abc import Mapping, Sequence
 
-from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import token_to_ast
 from hpcagent_bench.translators.numpyto_common.statement_desugar import Spelled, SplitTupleUnpack
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
 
 
 class TupleSubscriptFolder(ast.NodeTransformer):
@@ -187,7 +187,7 @@ class ShapeTableTupleSplit(SplitTupleUnpack):
         # every ``kir.symbols`` name int anyway. Declaring it would shadow the parameter with an
         # uninitialized local.
         self.int_locals.extend(name for name, token in zip(names, shape) if name != token)
-        return [], [token_to_ast(token) for token in shape]
+        return [], [const_or_name(token) for token in shape]
 
     def temp_name(self, position: int) -> str:
         return f"__swap{self.racing}_{position}"

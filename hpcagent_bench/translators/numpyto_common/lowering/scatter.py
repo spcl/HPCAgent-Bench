@@ -4,9 +4,8 @@ import ast
 import copy
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import broadcast_extents, iter_extent_of_
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_int
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_int, const_or_name
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
-from hpcagent_bench.translators.numpyto_common.lowering.calls import const_or_name_token
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 
 
@@ -279,9 +278,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
             body = [
                 ast.For(
                     target=ast.Name(id=it, ctx=ast.Store()),
-                    iter=ast.Call(
-                        func=ast.Name(id="range", ctx=ast.Load()), args=[const_or_name_token(ext)], keywords=[]
-                    ),
+                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[const_or_name(ext)], keywords=[]),
                     body=body,
                     orelse=[],
                 )

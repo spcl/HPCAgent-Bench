@@ -3,7 +3,6 @@
 import ast
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import kwarg_or_pos
-from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import call_to_str
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, const_int, name_, store_, wrap_for_loops
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
@@ -132,7 +131,7 @@ def expand_diag(
         k = const_int(k_node)
         if k is None:
             raise NotImplementedError("np.diag: offset k must be a constant int")
-    n_tok = call_to_str(ext[0])
+    n_tok = ast.unparse(ext[0])
     side_tok = n_tok if k == 0 else f"({n_tok}) + {abs(k)}"
     # Zero the whole (side x side) matrix.
     zero_body = [

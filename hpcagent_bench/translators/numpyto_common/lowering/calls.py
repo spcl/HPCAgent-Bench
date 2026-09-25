@@ -164,17 +164,6 @@ NP_FUNC_ALIASES: dict[str, str] = {
 }
 
 
-def const_or_name_token(tok: str) -> ast.expr:
-    """A shape-table token (``"E"`` / ``"12"``) -> a Name or int Constant node."""
-    s = str(tok)
-    if s.lstrip("-").isdigit():
-        return ast.Constant(value=int(s))
-    try:
-        return ast.parse(s, mode="eval").body
-    except SyntaxError:
-        return ast.Name(id=s, ctx=ast.Load())
-
-
 class NpAliasRewriter(ast.NodeTransformer):
     """Rename ``np.<alias>(...)`` to its canonical ``np.<name>(...)`` form so a
     single lowering path serves every spelling (e.g. ``np.permute_dims`` ->

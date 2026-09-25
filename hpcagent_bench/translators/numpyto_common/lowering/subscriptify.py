@@ -4,9 +4,14 @@ import ast
 import copy
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_, extent_is_scalar
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import slice_step_any, step_is_negative, step_node
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
+    slice_step_any,
+    step_is_negative,
+    step_node,
+    const_or_name,
+)
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import advanced_runs
-from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis, token_to_ast
+from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 
 
@@ -350,7 +355,7 @@ class SubscriptifyNames(ast.NodeTransformer):
                     n_trailing = rank - len(lead)
                     # Resolve any negative scalar index (``arr[-1]``) against its
                     # axis length -- C / Fortran have no negative indexing.
-                    res_lead = [resolve_neg_index(e, token_to_ast(shape[ax])) for ax, e in enumerate(lead)]
+                    res_lead = [resolve_neg_index(e, const_or_name(shape[ax])) for ax, e in enumerate(lead)]
                     if 0 < n_trailing <= len(self.iters):
                         offset = len(self.iters) - n_trailing
                         new_elts = list(res_lead) + [

@@ -69,7 +69,6 @@ from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import (
     fold_shape_reads_in_table,
     ResolveArrShape,
     ShapeMidExpressionRewriter,
-    token_to_ast,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.signature import (
     detect_output_and_index_arrays,
@@ -99,6 +98,7 @@ from hpcagent_bench.translators.numpyto_common.lowering.views import (
 from hpcagent_bench.translators.numpyto_common.lowering.whole_array import WholeArrayAssignRewriter
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.statement_desugar import DesugarArrayIteration, SplitChainedAssign
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
 
 #: Matches a residual inlined-scalar token (``__inl3_N``) or an unresolved
 #: ``arr.shape[`` attribute access -- the never-worse guard in the inl resolver
@@ -237,7 +237,7 @@ def lp_normalize_calls(ctx: LoweringContext) -> None:
 
     def leading_extent(array: str) -> ast.expr | None:
         shape = ash.get(array)
-        return token_to_ast(shape[0]) if shape else None
+        return const_or_name(shape[0]) if shape else None
 
     ctx.iter_rewriter = DesugarArrayIteration(leading_extent, lambda target, ordinal: f"__ai{ordinal + 1}")
     ctx.iter_rewriter.visit(tree)

@@ -20,7 +20,6 @@ from hpcagent_bench.translators.numpyto_common.lowering.chains import ChainedSub
 from hpcagent_bench.translators.numpyto_common.lowering.complex import walk_complex
 from hpcagent_bench.translators.numpyto_common.lowering.constructors import EyeToZerosDiagonal, FullCallHoister
 from hpcagent_bench.translators.numpyto_common.lowering.hoisting import MethodCallRewriter
-from hpcagent_bench.translators.numpyto_common.lowering.indexing import const_
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import MATH_INTRINSIC_NAMES, MathRewriter
 from hpcagent_bench.translators.numpyto_common.lowering.pipeline import (
     INVARIANT_ENV,
@@ -80,7 +79,6 @@ __all__ = [
     "TupleLocalPropagator",
     "WholeArrayAssignRewriter",
     "assert_lowering_invariants",
-    "const_",
     "fold_slice_view_aliases",
     "is_newaxis_result_axis",
     "promote_free_names_to_params",

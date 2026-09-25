@@ -4,7 +4,12 @@ import ast
 import copy
 from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_int, slice_step_any, step_is_negative
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
+    const_int,
+    slice_step_any,
+    step_is_negative,
+    const_,
+)
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import MATH_BUILTINS
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import const_int_index, is_newaxis
 
@@ -91,10 +96,6 @@ def np_func_name(func: ast.AST) -> str | None:
     if isinstance(func, ast.Name):
         return func.id
     return None
-
-
-def const_(value: int) -> ast.Constant:
-    return ast.Constant(value=value)
 
 
 def binop(left: ast.AST, op, right: ast.AST) -> ast.BinOp:

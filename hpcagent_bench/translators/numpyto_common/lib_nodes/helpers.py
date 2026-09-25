@@ -117,7 +117,7 @@ def const_or_name(token: str) -> ast.expr:
     """
     try:
         return const_(int(token))
-    except ValueError:
+    except (TypeError, ValueError):
         pass
     if isinstance(token, str) and token.isidentifier():
         return name_(token)
