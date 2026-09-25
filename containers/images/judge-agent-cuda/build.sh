@@ -7,7 +7,7 @@
 #   BUILD_TARGETS=agent OUTPUT_SQSH=$SCRATCH/ce-images/x.sqsh .../build.sh
 #
 # Overrides: BUILD_TARGETS, OUTPUT_SQSH (single target only), BASE_IMAGE, HPCAGENT_BENCH_DACE_REF,
-# LIBFABRIC_REF, SLURM_VERSION, SPACK_BUILDCACHE, PIP_CACHE, CE_IMAGES, CE_BUILD_CACHE, CE_PULL.
+# LIBFABRIC_REF, SLURM_VERSION, SPACK_BUILDCACHE, SPACK_BUILD_JOBS, PIP_CACHE, CE_IMAGES, CE_BUILD_CACHE, CE_PULL.
 set -euo pipefail
 
 ulimit -c 0
@@ -74,6 +74,7 @@ BUILD_ARGS=(
   --build-arg "LIBFABRIC_REF=${LIBFABRIC_REF}"
   --build-arg "LIBFABRIC_COMMIT=${LIBFABRIC_COMMIT}"
   --build-arg "SLURM_VERSION=${SLURM_VERSION}"
+  --build-arg "SPACK_BUILD_JOBS=${SPACK_BUILD_JOBS:-64}"
 )
 # OUTPUT_SQSH names the output of a single-target build only.
 target_out() {
