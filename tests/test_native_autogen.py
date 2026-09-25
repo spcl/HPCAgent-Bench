@@ -158,8 +158,8 @@ def test_wrap_kernel_matches_numpy(framework, dtype, fptype) -> None:
         pytest.skip(f"translators or {_COMPILER[framework]} absent")
     if framework == "polly" and _POLLY.verdict is not flags.AutoparVerdict.OK:
         pytest.skip(f"this host's polly is {_POLLY.verdict.value}: {_POLLY.detail}")
-    from hpcagent_bench.emit_bridge import emit_kernel
     from hpcagent_bench.benchmarks import cpp_runtime
+    from hpcagent_bench.emit_bridge import emit_kernel
 
     spec = BenchSpec.load(KERNEL)
     numpy_py = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_numpy.py"
@@ -201,9 +201,9 @@ def test_wrap_kernel_matches_numpy(framework, dtype, fptype) -> None:
 def test_sparse_layout_is_a_subbenchmark(framework, dtype, fptype) -> None:
     if not _emitter_present() or not shutil.which(_COMPILER[framework]):
         pytest.skip(f"translators or {_COMPILER[framework]} absent")
-    pytest.importorskip("scipy")
     import scipy.sparse as sp
-    from hpcagent_bench.autogen import ensure_native, _native_targets
+
+    from hpcagent_bench.autogen import _native_targets, ensure_native
     from hpcagent_bench.benchmarks import cpp_runtime
 
     spec = BenchSpec.load("spmv")
@@ -273,6 +273,7 @@ def test_pluto_emits_multidim_for_rank2_arrays() -> None:
     if not _emitter_present():
         pytest.skip("translators absent")
     import json
+
     from hpcagent_bench.emit_bridge import emit_kernel
 
     spec = BenchSpec.load("gemm")  # A, B, C are all rank-2
@@ -414,6 +415,7 @@ def test_int32_array_promoted_on_read(framework, target, compiler, ext) -> None:
                 ],
                 capture_output=True,
                 text=True,
+                check=False,
             )
             assert r.returncode == 0, r.stderr
 
@@ -440,7 +442,7 @@ def test_int32_array_promoted_on_read(framework, target, compiler, ext) -> None:
         else:
             std = languages.std_flag("cpp" if ext == "cpp" else "c")
             cmd = [compiler, "-O2", std, "-D_POSIX_C_SOURCE=199309L", "-fPIC", "-shared", str(src), "-o", str(so)]
-        rc = subprocess.run(cmd, capture_output=True, text=True)
+        rc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         assert rc.returncode == 0, rc.stderr
 
         binding = json.loads((out / f"{base}_binding.json").read_text())

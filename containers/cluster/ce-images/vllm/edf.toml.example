@@ -1,7 +1,7 @@
 # GENERATED FROM the live EDF hpcagent-bench-vllm-mi300-latest.toml, then kept in the repo so a fresh clone can
 # render its own. install_edfs.sh rewrites the `image` line; everything else here is the
 # tuning that EDF already carried and must not drift.
-# Replace both placeholders as described in README.md before registering this EDF.
+# Replace both placeholders as described in containers/README.md before registering this EDF.
 image = "${SCRATCH}/ce-images/PLACEHOLDER.sqsh"
 
 mounts = [

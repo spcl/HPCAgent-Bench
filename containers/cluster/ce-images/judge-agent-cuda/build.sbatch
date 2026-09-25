@@ -1,21 +1,12 @@
 #!/usr/bin/env bash
-# Build AND verify the GH200 judge+agent images (targets agent and judge) on one Daint node.
-#
-# NOT FOR BEVERIN: its partitions are x86_64 AMD. Submit from a GH200 cluster (Daint). No partition
-# or account is written here -- sbatch reads both from the environment (or pass -A/-p):
+# Build and verify the GH200 judge+agent candidates on one Daint node. Partition and account come
+# from the environment:
 #
 #   export SBATCH_ACCOUNT=<project> SBATCH_PARTITION=normal
 #   cd containers/cluster/ce-images && IMAGE_DIR=$PWD/judge-agent-cuda sbatch judge-agent-cuda/build.sbatch
 #
-# IMAGE_DIR, not --chdir: SLURM_SUBMIT_DIR is where sbatch was INVOKED, whatever --chdir says.
-#
-# COST: one node for up to 24 h. The spack compiler layer (gcc 16, then llvm 22) and MAGMA/PETSc
-# against CUDA are the long part; a rebuild with a warm $SCRATCH/spack-buildcache-aarch64 skips the
-# compilers. No measurement exists yet -- read the per-layer timestamps before planning around it.
-#
-# Each target goes to a CANDIDATE name, is verified inside itself under its production EDF template
-# (build_common.sh ce_verify_candidate), and gets the .verified marker promote_image.sh requires only
-# on a clean verdict. Then the half a build container cannot answer is probed on the GPUs.
+# Up to 24 h on a cold $SCRATCH/spack-buildcache-aarch64 (gcc 16, llvm 22, MAGMA, PETSc). Each
+# target is verified inside itself (ce_verify_candidate), then the agent image is probed on the GPUs.
 #
 #SBATCH --job-name=build-judge-agent-cuda
 #SBATCH --nodes=1
@@ -30,13 +21,9 @@
 
 set -Eeuo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_nid<node>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 
-# Slurm SPOOLS the batch script, so BASH_SOURCE points into /var/spool/slurmd -- the directory is
-# passed in (or is the submit directory), never derived.
+# Slurm runs a spooled copy, so the image directory is passed in (or is the submit directory).
 IMAGE_DIR="${IMAGE_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
 test -x "${IMAGE_DIR}/build.sh"
 # shellcheck source=../build_common.sh
@@ -45,13 +32,11 @@ source "${IMAGE_DIR}/../build_common.sh"
 source "${IMAGE_DIR}/../images.env"
 
 export BUILD_TARGETS="${BUILD_TARGETS:-agent judge}"
-# Candidates only: an OUTPUT_SQSH left in the environment would send a one-target build.sh
-# somewhere this job then does not look.
 unset OUTPUT_SQSH
 CE="${CE_DIR:-${SCRATCH:?}/ce-images}"
 declare -A CANDIDATE=(
-    [agent]="${CE}/${JUDGE_AGENT_CUDA_SQSH%.sqsh}-candidate.sqsh"
-    [judge]="${CE}/${JUDGE_CUDA_SQSH%.sqsh}-candidate.sqsh"
+    [agent]="${CE}/${JUDGE_AGENT_CUDA_CANDIDATE}"
+    [judge]="${CE}/${JUDGE_CUDA_CANDIDATE}"
 )
 declare -A TEMPLATE=([agent]="${JUDGE_AGENT_CUDA_TEMPLATE}" [judge]="${JUDGE_CUDA_TEMPLATE}")
 declare -A PROFILE=([agent]=judge-agent-cuda [judge]=judge-cuda)
@@ -78,12 +63,12 @@ for target in ${BUILD_TARGETS}; do
     ce_verify_candidate "${TEMPLATE[${target}]}" "${sqsh}" "${PROFILE[${target}]}" || failed=$((failed + 1))
 done
 
-# The half the BUILD cannot answer: a build container has no driver, so PAPI's cuda/nvml components
-# were only shown to be COMPILED IN, and cupy/jax only to import. Enumerating a component's events is
-# what brings a lazily-initialized PAPI 7 component up. Reported, and counted.
+# What a driverless build cannot show: devices visible to cupy/jax/torch and PAPI's cuda component
+# enumerating events.
 agent_sqsh="${CANDIDATE[agent]}"
 if [ -f "${agent_sqsh}" ]; then
     edf="${SCRATCH}/.tmp/gpu-probe-${SLURM_JOB_ID}.toml"
+    mkdir -p "$(dirname "${edf}")"
     sed -e "s|\${SCRATCH}|${SCRATCH}|g" -e "s|\"<hpcagent_bench_edf_mounts>\",||" \
         -e "s|^image = .*|image = \"${agent_sqsh}\"|" -e "s|^workdir = .*|workdir = \"/\"|" \
         "${IMAGE_DIR}/../${JUDGE_AGENT_CUDA_TEMPLATE}" > "${edf}"

@@ -170,15 +170,9 @@ hpcagent_bench/benchmarks/**/cpp_backend/build-clang/
 # INPUTS and stay; .pluto.cloog is a generated artifact -- never commit it).
 *.pluto.cloog
 
-# HuggingFace dataset export (hpcagent-bench export-hf). The dataset is a pure
-# regenerator over the manifest tree -- never cached in the repo (the CI workflow
-# rebuilds + publishes it). The default local output stays out of git.
-hpcagent_bench_hf.parquet
-hpcagent_bench_hf.jsonl
-
-# Harbor adapter: generated task directories (regenerated from the kernel suite by
-# adapters/hpcagent_bench/run_adapter.py -- never committed).
-adapters/hpcagent_bench/tasks/
+# Generated outputs: the HF dataset folder (hpcagent-bench export-hf) and Harbor tasks/runs.
+hf_dataset/
+harbor-runs/
 
 # --- Local run scratch (machine-specific; never committed) --------------------
 # Hardware/CPU dumps, agent run outputs, and SDFG/visualization scratch left by
@@ -312,3 +306,9 @@ experiments/*-[0-9]*.out
 *.ritom-orig
 .perf_reports/
 experiments/mwd-final-*/
+
+# Skill pages staged into an image build context or a job's shared dir are copies of
+# hpcagent_bench/skills (the only source): never commit them.
+/containers/agent/skills/
+/containers/**/staged-skills/
+/shared/

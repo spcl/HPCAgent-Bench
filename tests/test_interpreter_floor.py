@@ -25,12 +25,7 @@ FLOOR = (3, 12)
 
 #: Constructs newer than FLOOR, each with the version that introduced it. A plain grep, because the
 #: point is to catch them on an interpreter that CANNOT parse them.
-TOO_NEW = (
-    (re.compile(r"TypeVar\([^)]*\bdefault="), "3.13", "PEP 696 TypeVar default"),
-    (re.compile(r"^type\s+[A-Za-z_]\w*\s*=", re.MULTILINE), "3.12", "PEP 695 type alias statement"),
-    (re.compile(r"^class\s+[A-Za-z_]\w*\[", re.MULTILINE), "3.12", "PEP 695 class type parameters"),
-    (re.compile(r"^def\s+[A-Za-z_]\w*\[", re.MULTILINE), "3.12", "PEP 695 function type parameters"),
-)
+TOO_NEW = ((re.compile(r"TypeVar\([^)]*\bdefault="), "3.13", "PEP 696 TypeVar default"),)
 
 
 #: Names the typing module gained after FLOOR. Importing one parses and compiles everywhere and is
@@ -219,6 +214,13 @@ FLOOR_DEFECTS = (
     ),
     ("ConfigValue = int\n_OVERRIDES: dict[str, ConfigValue] = {}\n", eager_annotation_faults, False),
 )
+
+
+def test_the_too_new_lists_name_only_what_the_floor_cannot_run() -> None:
+    """A construct at or below FLOOR is allowed (PEP 695 once the floor reached 3.12)."""
+    at_floor = [what for _, version, what in TOO_NEW if tuple(map(int, version.split("."))) <= FLOOR]
+    at_floor += [name for name, version in TYPING_TOO_NEW.items() if tuple(map(int, version.split("."))) <= FLOOR]
+    assert not at_floor, f"listed as newer than the {FLOOR} floor but not: {at_floor}"
 
 
 @pytest.mark.parametrize("pattern, version, what", TOO_NEW, ids=[t[2] for t in TOO_NEW])

@@ -120,7 +120,7 @@ mpi = ["mpi4py", "pytest-mpi"]
 tvm = ["apache-tvm>=0.25.0rc0", "apache-tvm-ffi>=0.1.12"]
 triton = ["triton"]
 gt4py = ["gt4py"]
-# `hpcagent-bench export-hf`: parquet writer and Hub push.
+# `hpcagent-bench export-hf`: parquet writer, load-back check, Hub push.
 hf = ["pyarrow", "datasets>=2.17", "huggingface_hub"]
 # experiments/judge_service.py (FastAPI router). starlette's TestClient needs httpx2 to avoid a
 # deprecation warning.
@@ -129,7 +129,7 @@ agent-anthropic = ["anthropic"]
 agent-local = ["transformers", "huggingface-hub", "accelerate"]
 agent-aider = ["aider-chat"]
 agent-optimas = ["optimas-ai"]
-harbor = ["harbor"]
+harbor = ["harbor>=0.23"]  # the podman provider and flat numeric reward.json
 
 # PEP 735 groups: never published with the distribution. `pip install --group linting` installs
 # the formatters without the project.
@@ -214,3 +214,7 @@ exclude_also = [
 line-length = 120
 target-version = "py312"
 extend-exclude = ["*_generated.py"]
+
+# Type-check against the requires-python floor.
+[tool.pyright]
+pythonVersion = "3.12"

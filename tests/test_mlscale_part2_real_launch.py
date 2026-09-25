@@ -20,6 +20,7 @@ import json
 import os
 import pathlib
 import sys
+import types
 
 import pytest
 
@@ -37,7 +38,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 KEYS = sorted(resolve("mlscale-part2"))
 
 
-def load_generator():
+def load_generator() -> types.ModuleType:
     """experiments/mpi/mlscale_reference_worklist.py, imported by path (experiments is no package)."""
     spec = importlib.util.spec_from_file_location(
         "mlscale_reference_worklist", ROOT / "experiments" / "mpi" / "mlscale_reference_worklist.py"

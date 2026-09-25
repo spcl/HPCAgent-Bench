@@ -1,39 +1,34 @@
 #!/usr/bin/env bash
-# Shared by every <image>/build.sh. What differs between images is the base, the build-args and
-# the Dockerfile; everything around that lives here once.
-#
-# Source it, do not execute it:
+# Shared by every <image>/build.sh and build.sbatch. Source it:
 #   source "$(dirname -- "${BASH_SOURCE[0]}")/../build_common.sh"
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+# No core dumps: they land in the CWD on an inode-quota filesystem.
 ulimit -c 0
 CE_IMAGES_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# Diskless nodes: temp and runtime dirs on /dev/shm, stale per-node podman state wiped (it is only
-# a cache). DBUS_SESSION_BUS_ADDRESS is unset so podman does not try to talk to a session bus that
-# is not there.
+# Diskless nodes: podman temp/runtime dirs on /dev/shm, stale per-node store wiped (only a cache).
 ce_podman_env() {
     unset DBUS_SESSION_BUS_ADDRESS
     export TMPDIR="/dev/shm/${USER}/tmp"
     export XDG_RUNTIME_DIR="/dev/shm/${USER}/xdg"
-    # The wipe goes through `podman unshare`: an image layer under root/overlay/*/diff is owned by
-    # a SUBUID, not by this user, so a plain rm hits Permission denied and leaves a half-deleted
-    # store the next build dies on. unshare enters the user namespace where those subuids map here.
+    # Layers are owned by subuids, so the wipe runs inside `podman unshare`.
     podman unshare rm -rf "/dev/shm/${USER}/root" "/dev/shm/${USER}/runroot" 2>/dev/null || true
     rm -rf "/dev/shm/${USER}/root" "/dev/shm/${USER}/runroot" "/dev/shm/${USER}/tmp" \
            "/dev/shm/${USER}/xdg"
     mkdir -p "${TMPDIR}"
     mkdir -p -m 0700 "${XDG_RUNTIME_DIR}"
+    # An account without its own podman storage config (a fresh Daint login) gets the same tmpfs
+    # store the wipe above assumes.
+    if [[ -z "${CONTAINERS_STORAGE_CONF:-}" && ! -f "${HOME}/.config/containers/storage.conf" ]]; then
+        printf '[storage]\ndriver = "overlay"\nrunroot = "/dev/shm/%s/runroot"\ngraphroot = "/dev/shm/%s/root"\n' \
+            "${USER}" "${USER}" > "/dev/shm/${USER}/storage.conf"
+        export CONTAINERS_STORAGE_CONF="/dev/shm/${USER}/storage.conf"
+    fi
 }
 
-# A podman store of this run's own, for a node where another podman may be live -- a LOGIN node,
-# where ce_podman_env's wipe of the shared /dev/shm graphroot would destroy someone else's work.
-# Every podman call inherits it through CONTAINERS_STORAGE_CONF, including the ones enroot import
-# makes. $1 must be on tmpfs: the overlay graphroot cannot live on scratch (ce_cache_base_image),
-# and neither can TMPDIR during a build, because RUN steps create their rootfs mountpoint under it
-# and that mkdir is refused on Lustre (measured on beverin-ln001). Use "$1/tmp" for that.
+# A private podman store for a node another podman may use (a login node), inherited by every
+# podman call through CONTAINERS_STORAGE_CONF. $1 must be tmpfs: overlay and RUN-step mountpoints
+# fail on Lustre. Use "$1/tmp" as TMPDIR.
 ce_private_podman_store() {
     local store="$1"
     mkdir -p "${store}/root" "${store}/runroot" "${store}/tmp"
@@ -42,8 +37,7 @@ ce_private_podman_store() {
     export CONTAINERS_STORAGE_CONF="${store}/storage.conf"
 }
 
-# Removes a store ce_private_podman_store made: containers and images first, so no overlay mount
-# still holds it, then the tree through `podman unshare` (its layers are owned by subuids).
+# Removes a ce_private_podman_store: containers and images first, then the tree (subuid-owned).
 ce_remove_podman_store() {
     local store="$1"
     [[ -f "${store}/storage.conf" ]] || return 0
@@ -54,11 +48,8 @@ ce_remove_podman_store() {
     [[ ! -e "${store}" ]] || echo "warning: ${store} is still there; remove it with podman unshare rm -rf" >&2
 }
 
-# Sets the global MIRROR_ARGS. Every clone in the build is rewritten to the mirror (see each
-# Dockerfile), which takes GitHub off the critical path: the rate limiter answers an
-# unauthenticated clone with a 401 under load, and some callers -- spack's in-process
-# package-repo clone, vLLM's CMake FetchContent of triton -- have no retry. Refresh it
-# from a login node with mirror-repos.sh. Absent, the build still works and still uses GitHub.
+# Sets MIRROR_ARGS: mounts $GIT_MIRRORS (mirror-repos.sh) so every clone in the build avoids
+# GitHub's rate limiter. Without a mirror the build clones from GitHub.
 ce_mirror_args() {
     MIRROR_ARGS=()
     GIT_MIRRORS="${GIT_MIRRORS:-${SCRATCH:-}/git-mirrors}"
@@ -68,9 +59,7 @@ ce_mirror_args() {
     fi
 }
 
-# A commit resolved from GITHUB but cloned from the MIRROR is a sha the mirror may not have, and
-# git says so as `upload-pack: not our ref` -- two hours in, with every expensive layer already
-# paid for. Check it here, where it costs seconds.
+# Fails fast when the mirror lacks a commit resolved from GitHub (the clone would fail hours in).
 ce_require_mirror_commit() {
     local repo_path="$1" commit="$2"
     local mirror="${GIT_MIRRORS:-}/${repo_path}"
@@ -85,11 +74,8 @@ ce_require_mirror_commit() {
     }
 }
 
-# Sets the global GPU_ARGS. aiter >= 0.1.19 reads the arch from `rocminfo` at IMPORT time and
-# ignores GPU_ARCHS on purpose, and vLLM's rocm.py probes the device too -- so a device-less build
-# cannot even import them. An mi300 job with NO --gres still exposes
-# /dev/kfd, and `podman build --device` reports gfx942 inside a RUN step. Conditional, so a build
-# on a node without the device fails in the step that needs it rather than on an unusable flag.
+# Sets GPU_ARGS: hands /dev/kfd and /dev/dri to the build when present, because aiter and vLLM
+# probe the device at import time.
 ce_gpu_args() {
     GPU_ARGS=()
     if [[ -e /dev/kfd ]]; then
@@ -99,8 +85,7 @@ ce_gpu_args() {
     fi
 }
 
-# Prints the AMD GPU arch gpu_arch.env names for partition $1: the one table image builds, EDF renders
-# and runtime checks read. A partition it does not name is refused, never guessed.
+# Prints the AMD GPU arch gpu_arch.env names for partition $1; an unknown partition is refused.
 ce_partition_arch() {
     local arch
     arch="$(sed -n "s/^GPU_ARCH_${1:-}=//p" "${CE_IMAGES_DIR}/gpu_arch.env")"
@@ -111,9 +96,7 @@ ce_partition_arch() {
     printf '%s\n' "${arch}"
 }
 
-# Exports ROCM_ARCH for this job's partition, for an image build to pass as --build-arg. Device code
-# built for another arch imports and links, then fails at its first launch. ROCM_PARTITION names the
-# partition for a dry run outside Slurm.
+# Exports ROCM_ARCH and CE_PARTITION for this job's partition (ROCM_PARTITION outside Slurm).
 ce_gpu_arch() {
     local partition="${SLURM_JOB_PARTITION:-${ROCM_PARTITION:-}}" arch
     if [[ -z "${partition}" ]]; then
@@ -145,41 +128,28 @@ ce_spack_target() {
     printf 'spack target %s for partition %s\n' "${SPACK_TARGET:-<host>}" "${CE_PARTITION}"
 }
 
-# The candidate a judge-agent-amd build target writes on a partition. build.sh, build.sbatch,
-# build_and_verify.sbatch and promote_image.sh all name it through this one function.
+# ce_amd_candidate <agent|judge> <partition>: the candidate a judge-agent-amd build target writes,
+# read from the images.env row of that target and partition.
 ce_amd_candidate() {
+    local profile name
     case "$1" in
-        agent) printf 'hpcagent-bench-ce-amd-%s-candidate.sqsh' "${2:?partition}" ;;
-        judge) printf 'hpcagent-bench-ce-judge-amd-%s-candidate.sqsh' "${2:?partition}" ;;
+        agent) profile=judge-agent-amd ;;
+        judge) profile=judge ;;
         *) echo "unknown build target '$1'" >&2; return 2 ;;
     esac
+    [[ -n "${CE_IMAGE_TABLE:-}" ]] || source "${CE_IMAGES_DIR}/images.env"
+    name="$(awk -v p="${profile}" -v part="${2:?partition}" \
+        '$4 == "judge-agent-amd" && $5 == part && $6 == p {print $7}' <<<"${CE_IMAGE_TABLE}")"
+    [[ -n "${name}" ]] || { echo "images.env has no judge-agent-amd ${1} row for partition ${2}" >&2; return 2; }
+    printf '%s' "${name}"
 }
 
-# Base image cache on scratch; rewrites the global BASE_IMAGE to a local `dir:` on a hit.
-#
-# The podman LAYER store cannot live on scratch: the general scratch, iopsstor and the NFS home all reject
-# user xattrs, so `overlay` and `fuse-overlayfs` fail on lsetxattr and `vfs` fails creating its
-# pivot dir under a subuid (all three measured).
-#
-# setxattr of a user.* attribute returns ENOTSUP on all three, whatever filesystem $SCRATCH
-# points at (see scripts/cache_env.sh):
-#     scratch   rejects (ENOTSUP)
-#     iopsstor  rejects (ENOTSUP)
-#     home      rejects (ENOTSUP) The base image can, because a `dir:` tree is
-# plain files -- and it is the part worth caching, a 30-52 GB pull per job on a store that is
-# wiped every time because the nodes are diskless and it lives in RAM.
-#
-# Miss: pull over the network as before, then copy out for next time; the build still reads the
-# copy already in the store, so this costs one write and never a second pull. Staged through a
-# temp dir and renamed, so two builds racing cannot leave a half-written tree that a later job
-# would treat as a hit.
+# Caches the base image on scratch as a `dir:` tree (plain files; the podman layer store cannot live
+# on scratch, which rejects user xattrs) and rewrites BASE_IMAGE to it on a hit. A miss pulls and
+# copies out through a staging dir, so racing builds never leave a half-written cache entry.
 ce_cache_base_image() {
     BASE_CACHE="${BASE_CACHE:-${SCRATCH:?}/base-images}"
-    # The REGISTRY reference, kept before BASE_IMAGE is rewritten to a local dir: on a cache hit
-    # BASE_IMAGE becomes dir:${SCRATCH}/base-images/..., and labelling the image with that records
-    # a path on somebody's scratch instead of the digest it came from -- a host path published
-    # inside the artifact, and the reproducibility claim in base.name destroyed. Measured in the
-    # vLLM 0.23.0 archive before this existed.
+    # The registry reference for the image label, kept before BASE_IMAGE becomes a local path.
     BASE_IMAGE_REF="${BASE_IMAGE_REF:-${BASE_IMAGE}}"
     local base_dir staging
     base_dir="${BASE_CACHE}/$(printf '%s' "${BASE_IMAGE}" | tr '/:@' '___')"
@@ -207,14 +177,10 @@ ce_cache_base_image() {
     fi
 }
 
-# Verify a candidate INSIDE itself, under an EDF rendered from its production template, and write
-# the .verified marker promote_image.sh requires -- only on a clean verdict. The GH200 and CPU
-# builders call this from their build.sbatch; the AMD images go through build_and_verify.sbatch,
-# whose generated EDF carries beverin's hooks and its rocminfo arch check.
-#
-# Rendered from the TEMPLATE, not generated, so what is verified is what a job will run under. The
-# checkout's agent tree is bound where run_cluster.sh binds it, and the probes run from `/` (a CWD
-# holding a `dace` directory shadows the image's own, IMAGE_REQUIREMENTS.md).
+# Verifies a candidate inside itself, under an EDF rendered from its production template, and
+# writes the .verified marker promote_image.sh requires only on a clean verdict. Used by the GH200
+# and CPU build.sbatch; AMD images use build_and_verify.sbatch. Probes run from `/` so a `dace`
+# directory in the CWD cannot shadow the image's own.
 #
 #   ce_verify_candidate <template under ce-images/> <sqsh> <verify_image.py profile> [srun args...]
 ce_verify_candidate() {
@@ -258,29 +224,23 @@ ce_verify_candidate() {
     return "${rc}"
 }
 
-# Everything after a successful `podman build`: identity, artifact, archive, publish.
+# After a successful `podman build`: digest sidecar, squashfs, OCI archive, optional push.
 ce_export_image() {
     local image_tag="$1" output_sqsh="$2"
 
-    # The digest IS the version. Recorded next to the squashfs so a results table can name the
-    # exact image a campaign ran on without trusting a mutable tag.
+    # The digest is the build's identity; results tables cite it, never a tag.
     podman image inspect --format '{{.Digest}}' "${image_tag}" > "${output_sqsh}.digest"
     printf 'image digest %s\n' "$(cat "${output_sqsh}.digest")"
 
-    # enroot's exit code lies when cleanup fails after a good write, so gate on the ARTIFACT:
-    # listing reads the inode table at file END, which a truncated image fails. Remove the output
-    # first -- enroot refuses to overwrite, `|| true` swallows that, and `unsquashfs -l` would
-    # then validate LAST run's file.
+    # enroot's exit code is unreliable, so gate on the artifact: listing reads the inode table at
+    # the end of the file, which a truncated image fails. Remove first: enroot will not overwrite.
     rm -f "${output_sqsh}"
     enroot import -x mount -o "${output_sqsh}" "podman://${image_tag}" || true
     unsquashfs -l "${output_sqsh}" opt >/dev/null
     printf 'Wrote %s\n' "${output_sqsh}"
 
-    # An OCI archive beside the squashfs, so publishing does not have to happen during the build.
-    # The squashfs cannot stand in: it is a flattened filesystem, so reimporting one collapses the
-    # image into a single layer far past the registry's per-layer ceiling and drops the image
-    # config. The archive keeps both, which turns `push_image.sh --from-archive` into a short job
-    # rather than a multi-hour rebuild. SAVE_OCI_ARCHIVE=0 skips it and accepts that cost.
+    # The OCI archive keeps layers and config (a squashfs is flattened), so push_image.sh
+    # --from-archive can publish later without a rebuild. SAVE_OCI_ARCHIVE=0 skips it.
     if [[ "${SAVE_OCI_ARCHIVE:-1}" != "0" ]]; then
         local archive="${output_sqsh%.sqsh}.oci.tar"
         rm -f "${archive}"
@@ -292,8 +252,7 @@ ce_export_image() {
         fi
     fi
 
-    # Optional registry push, AFTER the artifacts are written, so a registry outage or a rejected
-    # layer costs the upload and never what this job exists to produce.
+    # Optional push, after the artifacts exist, so a registry failure never costs the build.
     if [[ -n "${PUSH_REPO:-}" ]]; then
         "${CE_IMAGES_DIR}/push_image.sh" "${image_tag}" ${PUSH_TAGS:-} \
           || echo "push to ${PUSH_REPO} FAILED; the local image and squashfs are unaffected" >&2

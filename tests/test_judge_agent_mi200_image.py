@@ -105,18 +105,16 @@ def test_ce_amd_candidate_refuses_an_unknown_target() -> None:
     assert done.returncode == 2 and "unknown build target 'sglang'" in done.stderr
 
 
-def test_no_script_spells_a_judge_agent_amd_candidate_name_outside_build_common() -> None:
-    """Four scripts spelled the mi300 names by hand; one that stays literal writes an mi200 build
-    over the mi300 candidate or verifies the wrong file."""
-    for rel in (
-        "judge-agent-amd/build.sh",
-        "judge-agent-amd/build.sbatch",
-        "build_and_verify.sbatch",
-        "promote_image.sh",
-    ):
-        text = (CE / rel).read_text(encoding="utf-8")
-        assert "ce_amd_candidate" in text, rel
-        assert not re.search(r"hpcagent-bench-ce-(judge-)?amd-mi[0-9]+-candidate", text), rel
+def test_no_script_spells_a_judge_agent_amd_candidate_name_outside_images_env() -> None:
+    """A script that spells a candidate by hand writes an mi200 build over the mi300 candidate or
+    verifies the wrong file: images.env is the one place the names are spelled."""
+    literal = re.compile(r"hpcagent-bench-ce-(judge-)?amd-mi[0-9]+-candidate")
+    for path in sorted(CE.rglob("*")):
+        if path.is_file() and path.suffix in {".sh", ".sbatch", ".env", ""} and path.name != "images.env":
+            assert not literal.search(path.read_text(encoding="utf-8", errors="replace")), path
+    for rel in ("judge-agent-amd/build.sh", "judge-agent-amd/build.sbatch"):
+        assert "ce_amd_candidate" in (CE / rel).read_text(encoding="utf-8"), rel
+    assert len(literal.findall((CE / "images.env").read_text(encoding="utf-8"))) == 4
 
 
 def spack_target_block(spack_target: str, tmp_path: pathlib.Path) -> str:
@@ -189,7 +187,7 @@ def test_images_env_names_the_mi200_pair_apart_from_every_mi300_name() -> None:
         "JUDGE_AGENT_AMD_MI200_EDF_LATEST",
         "JUDGE_AMD_MI200_SQSH",
         "JUDGE_AMD_MI200_EDF_LATEST",
-        "JUDGE_AMD_MI200_MLSCALE_EDF",
+        "JUDGE_AMD_MI200_MLSCALE_EDF_LATEST",
     )
     assert names == [
         MI200_LIVE["agent"],
@@ -306,7 +304,7 @@ def test_verify_only_reverifies_the_partitions_candidates_without_building(tmp_p
     ce = repo / "containers" / "cluster" / "ce-images"
     (ce / "judge-agent-amd").mkdir(parents=True)
     (scratch / "ce-images").mkdir(parents=True)
-    for name in ("build_common.sh", "gpu_arch.env", "cpu_target.env"):
+    for name in ("build_common.sh", "images.env", "gpu_arch.env", "cpu_target.env"):
         shutil.copy2(CE / name, ce / name)
     (ce / "judge-agent-amd" / "build.sbatch").write_text(f'touch "{tmp_path}/built"\n', encoding="utf-8")
     (ce / "verify_image.sbatch").write_text(f'echo "$PROFILE $IMAGE" >> "{tmp_path}/verified"\n', encoding="utf-8")

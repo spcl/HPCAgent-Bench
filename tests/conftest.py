@@ -338,7 +338,7 @@ def _restore_cpu_affinity() -> Iterator[None]:
     """Give every test back the CPU affinity it started with.
 
     ``timing.pin_threads()`` narrows the PROCESS affinity to one thread per physical core, and any
-    test that grades through ``harbor_grade`` calls it. The narrowing then outlives that test: a
+    test that grades through ``harbor.grade`` calls it. The narrowing then outlives that test: a
     later one in the same xdist worker sees a machine that looks bound, which is a different code
     path (:func:`flags.ncores` only consults ``SLURM_CPUS_PER_TASK`` when affinity still spans the
     node). That made results depend on test ORDER -- passing alone, failing in the suite."""
