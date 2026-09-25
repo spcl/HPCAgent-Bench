@@ -255,8 +255,8 @@ def test_every_job_sets_a_timeout_at_all() -> None:
 
 def test_the_unit_sweep_matrix_runs_every_slice_it_deals_into() -> None:
     """``awk 'NR % N == I'`` deals the file list; a missing I is test files nothing runs."""
-    job = workflow_jobs()["unit"]
-    indices = {int(s) for s in job["strategy"]["matrix"]["shard"]}
+    legs = workflow_jobs()["unit"]["strategy"]["matrix"]["include"]
+    indices = {int(leg["shard"]) for leg in legs if str(leg["shard"]).isdigit()}
     deals = set(re.findall(r"awk 'NR % (\d+) == \$\{\{ matrix\.shard \}\}'", WORKFLOW.read_text()))
     assert len(deals) == 1, f"the unit sweep deals {deals or 'nothing'}; it has to deal exactly one modulus"
     count = int(deals.pop())
@@ -264,12 +264,16 @@ def test_the_unit_sweep_matrix_runs_every_slice_it_deals_into() -> None:
 
 
 def test_the_unit_sweep_runs_the_python_floor_and_the_default() -> None:
-    """The sweep runs on ``requires-python``'s floor and on the interpreter every other job uses."""
+    """The full sweep's shards run on the interpreter every other job uses; the ``floor`` leg runs on
+    ``requires-python``'s floor (lint, import every module, collect every test)."""
     floor = re.search(r">=\s*(\d+\.\d+)", pyproject()["project"]["requires-python"])
     assert floor, "requires-python has no >= floor"
     default = str(yaml.safe_load(WORKFLOW.read_text())["env"]["PYTHON_VERSION"])
-    pythons = {str(p) for p in workflow_jobs()["unit"]["strategy"]["matrix"]["python"]}
-    assert {floor.group(1), default} <= pythons, f"unit runs {sorted(pythons)}"
+    legs = workflow_jobs()["unit"]["strategy"]["matrix"]["include"]
+    sharded = {str(leg["python"]) for leg in legs if str(leg["shard"]).isdigit()}
+    floors = {str(leg["python"]) for leg in legs if leg["shard"] == "floor"}
+    assert sharded == {default}, f"the sharded sweep runs {sorted(sharded)}, not {default}"
+    assert floors == {floor.group(1)}, f"the floor leg runs {sorted(floors)}, not {floor.group(1)}"
 
 
 def test_ruff_and_pyright_target_the_python_floor() -> None:
