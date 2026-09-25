@@ -4,11 +4,10 @@
 #   IMAGE=$SCRATCH/ce-images/hpcagent-bench-sglang-candidate.sqsh \
 #     sbatch containers/cluster/ce-images/inference/aiter_mla_check.sbatch
 #
-# ONE NODE, MINUTES, NO SERVER. Every previous aiter attempt here was inconclusive for a reason
-# that was never about the kernels: SGLANG_USE_AITER=1 drives the JIT into a per-module baton lock
-# that wedges serving for hours (0-for-6), and the master switch separately broke MLA prefill. So
-# the question "are the MLA kernels correct on this stack" has never actually been asked. This asks
-# it directly and cannot wedge, because it never starts a server.
+# ONE NODE, MINUTES, NO SERVER. A serving test cannot answer "are the MLA kernels correct on this
+# stack": a cold aiter JIT wedges serving behind a per-module baton lock, and the master switch
+# separately breaks MLA prefill. This asks the question directly and cannot wedge, because it
+# never starts a server.
 #
 # It is a PREREQUISITE for enabling AITER MLA in a serving config, not a substitute for measuring
 # one: a kernel that is correct here can still lose to triton end to end.
@@ -35,9 +34,9 @@ IMAGE="${IMAGE:-${SCRATCH}/ce-images/hpcagent-bench-sglang.sqsh}"
 WORK="${SCRATCH}/ce-images/logs"
 mkdir -p "${WORK}"
 
-# Generated, so this can point at a CANDIDATE no EDF names yet. The fabric annotations are the
-# production set even though this test is single-node and touches no network: an EDF that differs
-# from production is not testing the image anyone will run.
+# Generated, so this can point at a CANDIDATE no EDF names yet. The test is single-node and
+# touches no network; the annotations are host-mode netstack, not the artifact set the serving
+# EDFs pin.
 EDF="${WORK}/aiter-mla-${SLURM_JOB_ID}.toml"
 cat > "${EDF}" <<TOML
 image = "${IMAGE}"
@@ -47,28 +46,12 @@ writable = true
 
 [annotations]
 com.hooks.netstack.source = "host"
-# The hooks hardcode the artifact path at /capstor/store; that tree does not exist,
-# so no version or name resolves there.
-# The hooks do NOT fail on a missing artifact -- they point libfabric and the RCCL plugin
-# at files that are not there, the bind-mounts quietly do nothing, and RCCL drops from
-# CXI to TCP sockets. The job still finishes; it is just far slower, and it reads as a
-# slow model rather than a dead fabric.
-#
-# "host" was previously the documented OPT-OUT because it grafts 29 host libraries into
-# the image and job 629822 died that way: a host libcurl needing glibc 2.38 met an image
-# with 2.35. THAT NO LONGER APPLIES -- the base moved to Ubuntu 24.04 and the shipped
-# libc.so.6 is "Ubuntu GLIBC 2.39-0ubuntu8.8", verified by extracting it from the pulled
-# squashfs. glibc is backward compatible, so 2.39 satisfies every GLIBC_2.38 the grafted
-# libraries ask for. Re-check this if the base image is ever moved backwards.
-#
-# Fabric speed is unaffected. fi_pingpong over cxi, 1 MB, beverin 2026-09-16:
-#   host -> 2.3.1  19329 MB/s | 1.22.0  20011 MB/s | 2.3.1 explicit  19878 MB/s
-# -- within noise of each other, at 4 CXI NICs per node.
-#
-# version/name are NOT set: they only index into the dead artifact tree. The host path is
-# /opt/cray/libfabric/host, a root-owned symlink (-> 2.3.1). It cannot be pinned by
-# annotation, so scripts/cscs/netstack_preflight.sh ASSERTS what it resolves to and aborts
-# on a repoint, rather than letting one campaign straddle two fabric stacks.
+# "host" grafts host libraries built against glibc 2.38 into the image; the Ubuntu 24.04 base
+# ships glibc 2.39, which satisfies them. fi_pingpong over cxi, 1 MB: host 2.3.1 19329 MB/s against
+# 20011 and 19878 MB/s for the alternatives, within noise at 4 CXI NICs per node.
+# version/name are NOT set: they only index the artifact tree. The host path is
+# /opt/cray/libfabric/host, a root-owned symlink; scripts/cscs/netstack_preflight.sh ASSERTS what
+# it resolves to rather than letting one campaign straddle two fabric stacks.
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
 com.hooks.aws_ofi_nccl.variant = "rocm6"

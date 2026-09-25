@@ -1499,7 +1499,7 @@ WORKDIR /work
 # RPATH is searched BEFORE LD_LIBRARY_PATH and the default paths. Leave it and MPI binds to a
 # libfabric with no providers, aborting MPI_Init once FI_PROVIDER=cxi is set, because spack's
 # build carries only psm3/sockets/verbs. Delete it and the RPATH points at nothing, so the loader
-# falls through to the host's libfabric (com.hooks.netstack.source=host).
+# falls through to the libfabric the netstack hook supplies.
 #
 # No RCCL plugin is shipped either. CSCS provides one through com.hooks.aws_ofi_nccl.enabled.
 # Shipping a second copy would only make it ambiguous which one RCCL loads.
@@ -1520,7 +1520,7 @@ RUN set -eux; \
     [ -z "${found}" ] \
       || { echo "this image ships a fabric library in a prefix it controls:" >&2; \
            echo "${found}" >&2; \
-           echo "RPATH would bind to it and shadow the host's libfabric (com.hooks.netstack.source=host)" >&2; exit 1; }; \
+           echo "RPATH would bind to it and shadow the netstack hook's libfabric" >&2; exit 1; }; \
     echo "no fabric library in /opt/ofi-sdk, /opt/ofi or /opt/aws-ofi-nccl -- the artifact supplies them"
 
 # LD_PRELOAD last, after every RUN: set earlier it would preload mimalloc into the apt, pip and

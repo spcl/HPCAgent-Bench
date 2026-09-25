@@ -122,10 +122,7 @@ RUN /opt/venv/bin/python3 -c "import cupy, flydsl; \
 #
 # The gate checks only prefixes WE control, not the whole filesystem:
 # /usr/lib/x86_64-linux-gnu/libfabric.so.1.20.0 is where the CSCS hook BIND-MOUNTS the netstack
-# libfabric at run time (the EDFs select netstack.source="host", which binds
-# /opt/cray/libfabric/host/lib64/libfabric.so.1 and
-# /opt/cscs/aws-ofi-ccl-plugin/rocm6/librccl-net.so from the node), and refusing that path would
-# forbid the hook its own mount point.
+# libfabric at run time, and refusing that path would forbid the hook its own mount point.
 #
 # What must NOT ship is a fabric library in a prefix we control, because those are what RPATH can
 # bind to and RPATH is searched before everything else: an MPICH holding a providerless libfabric
