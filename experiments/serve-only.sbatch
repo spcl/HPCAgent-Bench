@@ -57,7 +57,8 @@ READY_TIMEOUT="${VLLM_READY_TIMEOUT_SECONDS:-${AGENT_READY_TIMEOUT_SECONDS:-7200
 RUN_ROOT="${RUN_ROOT:?RUN_ROOT must name a writable directory}"
 
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
-    submit=(sbatch --nodes="${INFERENCE_NODES}"
+    . "${SCRIPT_DIR}/../scripts/site_env.sh"
+    submit=(sbatch --nodes="${INFERENCE_NODES}" --nice="${NICE:-${HPCAGENT_BENCH_NICE}}"
         --export=ALL,MODEL="${MODEL}",CLUSTER_SCRIPT_DIR="${SCRIPT_DIR}"
         "${SCRIPT_DIR}/serve-only.sbatch")
     if [[ "${SUBMIT:-1}" != 1 ]]; then

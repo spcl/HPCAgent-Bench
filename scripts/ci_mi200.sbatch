@@ -38,8 +38,13 @@ if [[ $# -eq 0 ]]; then
         --skip "coverage,container-image/Phase 6a,container-image/Phase 6b"
 fi
 
+# dace: the image's /opt/dace at the job's commit (containers/images/dace_refresh.sh).
+HPCAGENT_BENCH_DACE_REF="$("${REPO}/containers/images/dace_refresh.sh" --resolve)"
+export HPCAGENT_BENCH_DACE_REF
+
 # `enroot start` does not inherit the host environment. The image's venv is the interpreter; the
 # host venv under $SCRATCH is built for the login node's OS.
 "${REPO}/scripts/cscs/enroot_srun.sh" hpcagent-bench-judge-mi200-latest --overlap --nodes=1 --ntasks=1 -- \
-    bash -c 'export TMPDIR="$1" VENV=/opt/venv PY=/opt/venv/bin/python; shift; exec "$0" "$@"' \
+    bash -c '"${0%/scripts/run_tests.sh}/containers/images/dace_refresh.sh" || exit 1
+             export TMPDIR="$1" VENV=/opt/venv PY=/opt/venv/bin/python; shift; exec "$0" "$@"' \
     "${REPO}/scripts/run_tests.sh" "${tmp}" "$@"

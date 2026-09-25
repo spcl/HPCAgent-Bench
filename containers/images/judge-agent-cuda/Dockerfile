@@ -84,7 +84,6 @@ LABEL org.opencontainers.image.title="hpcagent-bench-judge-agent-cuda" \
 ARG DEBIAN_FRONTEND=noninteractive
 # GH200 is Hopper, compute capability 9.0. The offload gate below decides whether it was honoured.
 ARG CUDA_ARCH=90
-ARG PYTHON_REQUIREMENTS=requirements/nvidia.txt
 # The known-good pairing already in service on judge-agent-amd, same full versions.
 ARG GCC_VERSION=16.2.0
 ARG LLVM_VERSION=22.1.8
@@ -687,15 +686,18 @@ RUN set -eux; \
 #
 # PIP_CONSTRAINT holds the four oracle packages for every pip install below: an install that would
 # move numpy fails to resolve instead of moving the CPU reference. The base's torch is the NGC build
-# for this architecture and is asserted unmoved. `triton` is filtered out of the requirements for
-# the reason judge-agent-amd step 11 gives: `pip install triton` is a different distribution than
-# the one the base's torch was built with, overwriting the same site-packages directory. The
-# requirements' CUDA-suffixed jax and cupy lines go too (pyproject names CUDA 13's): the next layer
-# installs both for the base's own CUDA major, and a second cupy would share the `cupy` package.
+# for this architecture and is asserted unmoved. The install is pyproject.toml's `cpu` extra (only
+# the file is copied, never the package source) plus the judge-proxy group, in ONE uv resolution
+# under the same constraints: the `nvidia` extra adds exactly the three accelerator packages this
+# image installs its own way -- `triton` (PyPI's is a different distribution than the one the base's
+# torch was built with, overwriting the same site-packages directory) and CUDA 13's jax and cupy
+# (the next layer installs both for the base's own CUDA major). uv comes from the pins.
 ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
     PIP_CONSTRAINT=/opt/image-pins.txt
-COPY requirements/ /requirements/
+COPY containers/agent/harness/pins.env containers/agent/harness/install_tools.sh /opt/harness/
+COPY pyproject.toml /opt/hpcagent-bench/pyproject.toml
 RUN set -eux; \
+    sh /opt/harness/install_tools.sh /usr/local; \
     printf '%s\n' \
       "numpy==${NUMPY_VERSION}" \
       "scipy==${SCIPY_VERSION}" \
@@ -707,14 +709,13 @@ RUN set -eux; \
       print(next((d.metadata["Name"] for d in m.distributions() \
       if d.metadata["Name"] and "triton" in d.metadata["Name"].lower()), ""))')"; \
     printf 'triton distribution before: %s\n' "${triton_before:-none}"; \
-    grep -vE '^(triton|jax\[cuda[0-9]+\]|cupy-cuda[0-9]+x)$' "/${PYTHON_REQUIREMENTS}" > /tmp/requirements-image.txt; \
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
-    MPICC=/opt/view/bin/mpicc \
-      python3 -m pip install --no-cache-dir --no-binary=mpi4py -r /tmp/requirements-image.txt; \
+    MPICC=/opt/view/bin/mpicc uv pip install --python "$(command -v python3)" --break-system-packages --no-cache \
+      --constraints /opt/image-pins.txt --no-binary mpi4py -r /opt/hpcagent-bench/pyproject.toml --extra cpu \
+      --group /opt/hpcagent-bench/pyproject.toml:judge-proxy; \
     if [ -z "${triton_before}" ]; then python3 -m pip install --no-cache-dir triton; fi; \
-    rm -f /tmp/requirements-image.txt; \
     test "$(python3 -c 'import torch; print(torch.__version__)')" = "${torch_before}" \
-      || { echo "requirements moved torch off ${torch_before}; the ML baseline changed" >&2; exit 2; }; \
+      || { echo "the install moved torch off ${torch_before}; the ML baseline changed" >&2; exit 2; }; \
     python3 -c "import torch; assert torch.version.cuda, 'torch lost its CUDA build'; \
       print('torch', torch.__version__, 'cuda', torch.version.cuda)"; \
     python3 -c "import triton; print('triton', triton.__version__, triton.__file__)"; \
@@ -734,14 +735,9 @@ RUN set -eux; \
         'jax cuda plugin is absent or does not match toolkit major ${cuda_major}'"; \
     python3 -c "import cupy; print('cupy', cupy.__version__)"
 
-# Judge-side python: the crawl/browser stack, the proxy the arms talk through, and openai-agents
-# (the optimas harness cannot start without it). judge-agent-amd step 11, one resolver pass.
-COPY containers/judge/requirements.txt /opt/harness/judge-requirements.txt
+# Judge-side python, installed in step 12: the crawl/browser stack, the proxy the arms talk through,
+# and openai-agents (the optimas harness cannot start without it). The pins are asserted here.
 RUN set -eux; \
-    python3 -m pip install --no-cache-dir \
-      -r /opt/harness/judge-requirements.txt \
-      "litellm[proxy]==1.94.0" fastapi uvicorn httpx "httpx2==2.12.0" "anyio==4.14.2" pydantic orjson tenacity rich typer \
-      openai-agents; \
     python3 -c "import importlib.metadata as m; \
 want = {'litellm': '1.94.0', 'httpx2': '2.12.0', 'anyio': '4.14.2'}; \
 got = {name: m.version(name) for name in want}; \
@@ -754,7 +750,7 @@ assert got == want, got"; \
     chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
 
 # ---------------------------------------------------------------------------------------------
-# 13. DaCe -- the TIP of spcl/dace@extended, resolved by build.sh and passed in, never a pin.
+# 13. DaCe -- the spcl/dace@extended commit build.sh resolves and passes in (the release pin).
 ARG DACE_COMMIT
 RUN set -eux; \
     test -n "${DACE_COMMIT}" || { echo "DACE_COMMIT build-arg is required (build.sh resolves it)" >&2; exit 2; }; \
@@ -770,10 +766,8 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------------------------
 # 14. The agent side: node, the claude CLI, uv and man pages, from the checked-in pins shared with
 # judge-agent-amd (the npm lock carries the linux-arm64 binaries). claude-code stays 2.1.197.
-COPY containers/agent/harness/pins.env containers/agent/harness/install_tools.sh /opt/harness/
 COPY containers/agent/harness/node/package.json containers/agent/harness/node/package-lock.json /opt/harness/node/
 RUN set -eux; \
-    sh /opt/harness/install_tools.sh /usr/local; \
     cd /opt/harness/node; \
     npm_config_cache=/tmp/npm-cache npm ci --no-audit --no-fund; \
     rm -rf /tmp/npm-cache; \
@@ -790,15 +784,14 @@ RUN set -eux; \
     man -w gcc >/dev/null || { echo "manpages missing: unminimize did not take" >&2; exit 1; }
 
 # 14a. Isolated venvs for the Python harnesses on the base's python${HARNESS_PYTHON}, kept off the
-# system pip so their deps cannot displace litellm[proxy]==1.94.0. Tool scripts are bound at launch.
-COPY containers/agent/harness/requirements-miniswe.txt containers/agent/harness/requirements-openhands.txt \
-     /opt/harness/
+# system pip so their deps cannot displace litellm[proxy]==1.94.0; each installs pyproject.toml's
+# harness-<name> group. Tool scripts are bound at launch.
 RUN set -eux; \
     . /opt/harness/pins.env; \
     for venv in miniswe openhands; do \
       uv venv --python "/usr/bin/python${HARNESS_PYTHON}" "/opt/harness/${venv}"; \
       uv pip install --python "/opt/harness/${venv}/bin/python" --no-cache \
-        -r "/opt/harness/requirements-${venv}.txt"; \
+        --group "/opt/hpcagent-bench/pyproject.toml:harness-${venv}"; \
     done
 
 # 14b. The generic BLAS/LAPACK names point at the spack OpenBLAS, not at blis and not at netlib.

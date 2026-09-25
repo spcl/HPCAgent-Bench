@@ -1,62 +1,89 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Repo-wide guard: no file hardcodes a value that belongs to one site or one person.
+"""Repo-wide guard: no tracked file hardcodes a value that belongs to one site or one person.
 
-Site values -- storage mounts, the Slurm account and partition, node names, user names -- come from
-the environment, with ONE default place each (docs/configuration.md):
+Site values -- storage mounts, home directories, the Slurm account and partition, node and host
+names, user names, the image registry, one campaign's run directories -- come from the environment,
+with ONE default place each (docs/configuration.md):
 
 * ``scripts/site_env.sh`` loads the site layer (``experiments/layers/site-<name>.env``): fast
   storage (``FAST_SCRATCH``), ``SBATCH_PARTITION``, node exclusions, vendor artefact paths;
-* ``scripts/cache_env.sh`` derives every cache path from ``SCRATCH`` / ``FAST_SCRATCH``;
+* ``scripts/cache_env.sh`` derives every cache and work path from ``SCRATCH`` / ``FAST_SCRATCH``
+  (``JIT_CACHE_ROOT``, ``HPCAGENT_BENCH_CACHE``, ``HPCAGENT_BENCH_RUNS_ROOT``);
 * ``scripts/cscs/account_env.sh`` resolves the account from the user's own Slurm associations;
+* ``containers/images/images.env`` names the image registry and every image;
 * ``hpcagent_bench/paths.py`` is the Python side of the same roots.
 
 A literal works once, for the person who wrote it, and then silently reads or writes the wrong
 user's data (or bills the wrong project) for everyone else.
 
-The scan looks at LIVE text only: for Python, non-docstring string literals (a docstring or comment
-may name a site to explain it); for shell/toml/env/yaml, lines with ``#`` comments stripped, except
-``#SBATCH`` directives, which Slurm executes; markdown and JSON verbatim, since they have no
-``#``-comment syntax. ``${USER}``, ``$USER``, ``$(id -un)`` and the placeholder ``/users/someone``
-are resolvers or fixtures, never flagged.
+The scan covers every file ``git ls-files`` lists (tracked files only: a local scratch file is not
+the release). It looks at LIVE text: for Python, non-docstring string literals (a docstring or
+comment may name a site to explain it); for shell-like files (shell, sbatch, env, toml, yaml,
+Dockerfile, rosters), lines with ``#`` comments stripped; everything else verbatim. ``RAW_PATTERNS``
+apply to comments too: a user name, an account or an ``#SBATCH`` site directive is never right.
+``${USER}``, ``$USER``, ``$(id -un)`` and the placeholder ``/users/someone`` are resolvers or
+fixtures, never flagged.
 """
 
 import ast
 import pathlib
 import re
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterable
 from collections.abc import Set as AbstractSet
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
-_SKIP_DIRS = {".git", "third_party", "__pycache__", ".cache", "hpcagent_bench.egg-info", "node_modules", "results"}
-
-_PY_EXT = ".py"
-_OTHER_EXTS = (".sh", ".sbatch", ".toml", ".yaml", ".yml", ".md", ".json", ".env", ".def", ".cfg", ".ini", ".html")
-_OTHER_SUFFIXES = (".toml.example",)
-_OTHER_NAMES = ("Dockerfile", "Makefile", "makefile")
-#: Formats with no ``#``-comment syntax: stripping after ``#`` would blind the scan on those.
-_NO_HASH_COMMENT_EXTS = (".md", ".json", ".html")
+PY_EXT = ".py"
+#: Formats whose comments start with ``#``: the scan strips them.
+HASH_COMMENT_EXTS = (
+    ".sh",
+    ".sbatch",
+    ".bash",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".env",
+    ".def",
+    ".cfg",
+    ".ini",
+    ".conf",
+    ".txt",
+    ".example",
+    ".gitignore",
+    ".dockerignore",
+)
+HASH_COMMENT_NAMES = ("Dockerfile", "Makefile", "makefile")
 
 #: The project's pre-rename name, split so this file does not itself read as a leftover.
-_LEGACY_NAME = "opt" + "arena"
+LEGACY_NAME = "opt" + "arena"
 
-_USER_RESOLVER = r"(?!\$\{USER\}|\$USER\b|\$\(id -un\))"
+#: Resolvers, the placeholder fixture, and the images' own fixed agent home.
+USER_RESOLVER = r"(?!\$\{USER\}|\$USER\b|\$\(id -un\)|someone\b|agent\b)"
 
-# name -> (pattern, fix); applied to every scanned file.
-_PATTERNS = {
-    "literal /users/<name> path": (
-        re.compile(r"/users/(?!\$\{USER\}|\$USER\b|\$\(id -un\)|someone\b)[A-Za-z][A-Za-z0-9_.-]{1,31}"),
+#: The partitions a site names; a partition CONTEXT (flag, variable, key) holding one is flagged.
+PARTITION_WORDS = r"(?:mi300a?|mi200|mi250x?|gh200|a100|normal|debug|amdgpu|gpu|cpu)"
+
+# name -> (pattern, fix); applied to the live text of every scanned file.
+PATTERNS = {
+    "literal home directory": (
+        re.compile(
+            rf"(?<![\w.-])/(?:users|home)/{USER_RESOLVER}[A-Za-z][A-Za-z0-9_.-]{{1,31}}|~[a-z][a-z0-9_-]{{2,31}}/"
+        ),
         "use ${HOME} (or EDF_PATH) instead of a literal home directory",
     ),
     "literal storage mount": (
-        re.compile(r"(?<![\w$])/(?:ritom|iopsstor)(?:/|\b)|/capstor/scratch(?:/|\b)"),
+        re.compile(r"(?<![\w$])/(?:capstor|iopsstor|ritom)(?:/|\b)"),
         "route through ${SCRATCH} / ${FAST_SCRATCH}; the site layer names the mount",
     ),
     "legacy project-name leftover": (
-        re.compile(_LEGACY_NAME, re.IGNORECASE),
-        f"the project was renamed from {_LEGACY_NAME} to hpcagent-bench",
+        re.compile(LEGACY_NAME, re.IGNORECASE),
+        f"the project was renamed from {LEGACY_NAME} to hpcagent-bench",
+    ),
+    "site image registry": (
+        re.compile(r"\b[\w-]+\.svc\.cscs\.ch\b|jfrog\.[\w.-]+"),
+        "the registry is REGISTRY_REPO (containers/images/images.env)",
     ),
 }
 
@@ -80,69 +107,82 @@ RAW_PATTERNS = {
     ),
 }
 
-#: Node and partition literals in executable code (tests may fixture node names).
+#: Node, host and partition literals in executable code (tests may fixture them).
 CODE_PATTERNS = {
-    "node name": (re.compile(r"\bnid(?:\d{6}|\[[^\]\s]*\]?)"), "node lists belong in the site layer"),
+    "node name": (
+        re.compile(r"\bnid(?:\d{4,6}|\[[^\]\s]*\]?)|(?<![\w-])beverin(?![\w.-])"),
+        "node lists and login hosts belong in the site layer",
+    ),
     "literal Slurm partition": (
-        re.compile(r"--partition[= ](?![\"'$<{])[A-Za-z]\S*"),
-        "the default partition is SBATCH_PARTITION (site layer); pass --partition only from a variable",
+        re.compile(
+            r"--partition[= ](?![\"'$<{])[A-Za-z]\S*"
+            rf"|(?<![\w-])-p[ \t]+{PARTITION_WORDS}\b"
+            rf"|\b\w*PARTITION\b[\"']?[ \t]*[:=][ \t]*[\"']?(?:\$\{{\w+:-)?{PARTITION_WORDS}\b"
+            rf"|\bpartition[\"']?[ \t]*[:=][ \t]*[\"']{PARTITION_WORDS}\b"
+        ),
+        "the partition is SBATCH_PARTITION (site layer); pass --partition only from a variable",
+    ),
+    "one campaign's run directory": (
+        re.compile(
+            r"hpcagent-bench-runs/(?![$<{*])[\w.-]*\d{6,}"
+            r"|/[\w.-]*[-_]20[2-3]\d[01]\d[0-3]\d[a-z]?(?![\w-])"
+            r"|/\d{6,7}(?=/)"
+            r"|(?<![\w.-])(?:canon|smoke|wave)-\d{6,}(?![\w-])"
+        ),
+        "a run directory is ${HPCAGENT_BENCH_RUNS_ROOT}/<kind>/<name>-<stamp>, derived by the job",
     ),
 }
 
-#: Files that legitimately carry a flagged string. Adding one requires a reason here.
-_ALLOW = {
-    "tests/test_no_hardcoded_user_paths.py",  # this file: embeds the patterns' own text
-    "experiments/layers/site-cscs.env",  # THE site layer for one real site: its values live here
-    "docs/configuration.md",  # shows that site layer's values next to the generic ones
-    "pyproject.toml",  # package author contact (PyPI metadata), not a runtime value
-    # Legacy MCP server/env keys READ from already-recorded rows and worker dirs, and fixtures of them.
-    "hpcagent_bench/observations_extract.py",
-    "experiments/owed_wave.py",
-    "tests/test_fused_owed_wave.py",
-    "tests/test_extract_llr40_task_rows.py",
-    "tests/test_ablation_stats.py",
+#: Tracked files that legitimately carry a flagged string, one reason each. A key ``path::text``
+#: exempts only the hits in ``path`` whose matched text is ``text``.
+ALLOW = {
+    "tests/test_no_hardcoded_user_paths.py": "this file: embeds the patterns' own text",
+    "experiments/layers/site-cscs.env": "THE site layer for one real site: its values live here",
+    "experiments/layers/partition-mi200.env": "names the MI250X hardware profile (docs/configuration.md)",
+    "docs/configuration.md": "shows the CSCS site layer's values next to the generic ones",
+    "pyproject.toml": "package author contact (PyPI metadata), not a runtime value",
+    "hpcagent_bench/observations_extract.py": "reads legacy MCP server/env keys of already-recorded rows",
+    "experiments/owed_wave.py": "reads legacy MCP server/env keys of already-recorded worker dirs",
+    "tests/test_fused_owed_wave.py": "fixtures of legacy recorded keys",
+    "tests/test_extract_llr40_task_rows.py": "fixtures of legacy recorded keys",
+    "tests/test_ablation_stats.py": "fixtures of legacy recorded keys",
+    "containers/inference/serve-private.sbatch::PRESET_PARTITION=mi300": (
+        "MI300A serving recipe: the preset is the hardware profile, checked against its partition"
+    ),
+    "containers/inference/serve-private.sbatch::PRESET_PARTITION=mi200": (
+        "MI200 serving recipe: the preset is the hardware profile, checked against its partition"
+    ),
+    "statistics/gate_sensitivity.py::/audit-20260918": (
+        "an error message naming where the per-cell regrade ran; statistics/ is another change set's"
+    ),
 }
 
-#: Areas another change set is cleaning; each must leave this tuple once clean.
-PENDING = (
-    "containers/images/",
-    "containers/inference/",
-    "containers/lib/git_mirror.sh",
-    "containers/lib/device_arch_gate.sh",
-)
+
+def tracked_files(root: pathlib.Path) -> list[str]:
+    """Every path ``git ls-files`` lists under ``root``: the release is what git tracks."""
+    out = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=True).stdout
+    return [rel for rel in out.decode().split("\0") if rel]
 
 
-def is_candidate(rel: str) -> bool:
+def comment_style(rel: str, text: str) -> str:
+    """``py``, ``hash`` or ``verbatim``: how ``rel``'s comments are told from its live text."""
     name = rel.rsplit("/", 1)[-1]
-    return (
-        name.endswith((_PY_EXT, *_OTHER_EXTS, *_OTHER_SUFFIXES, ".Dockerfile"))
-        or name.startswith(".env")
-        or name in _OTHER_NAMES
-    )
-
-
-def candidate_files(root: pathlib.Path) -> Iterator[tuple[pathlib.Path, str]]:
-    """The files git tracks under ``root``: build products a run leaves in the checkout (``.dacecache``
-    compile databases, perf reports) carry the machine's paths and are not the repo's code."""
-    listed = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, text=True, check=True)
-    for rel in sorted(filter(None, listed.stdout.split("\0"))):
-        p = root / rel
-        if not p.is_file():
-            continue
-        if any(part in _SKIP_DIRS for part in rel.split("/")):
-            continue
-        if is_candidate(rel):
-            yield p, rel
+    first = text.split("\n", 1)[0]
+    if name.endswith(PY_EXT) or (first.startswith("#!") and "python" in first):
+        return "py"
+    if name.endswith(HASH_COMMENT_EXTS) or name.startswith(HASH_COMMENT_NAMES) or first.startswith("#!"):
+        return "hash"
+    return "verbatim"
 
 
 #: AST nodes that carry a leading docstring (module / class / def / async def).
-_DOCSTRING_OWNERS = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+DOCSTRING_OWNERS = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 
 
-def _docstring_constant_ids(tree: ast.AST) -> set[int]:
+def docstring_constant_ids(tree: ast.AST) -> set[int]:
     ids = set()
     for node in ast.walk(tree):
-        if isinstance(node, _DOCSTRING_OWNERS):
+        if isinstance(node, DOCSTRING_OWNERS):
             body = node.body
             if (
                 body
@@ -154,7 +194,7 @@ def _docstring_constant_ids(tree: ast.AST) -> set[int]:
     return ids
 
 
-def _match(text: str, rel: str, patterns: dict, line_of: int | None = None) -> list[str]:
+def match(text: str, rel: str, patterns: dict, line_of: int | None = None) -> list[str]:
     offenders = []
     for label, (pattern, _fix) in patterns.items():
         for m in pattern.finditer(text):
@@ -163,124 +203,179 @@ def _match(text: str, rel: str, patterns: dict, line_of: int | None = None) -> l
     return offenders
 
 
-def _strip_comments(text: str, rel: str) -> str:
-    if rel.endswith(_NO_HASH_COMMENT_EXTS):
-        return text
-    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+def python_offenders(text: str, rel: str, patterns: dict) -> list[str] | None:
+    """Hits in the non-docstring string literals of ``text``, or None when it does not parse."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None
+    skip = docstring_constant_ids(tree)
+    offenders = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip:
+            offenders += match(node.value, rel, patterns, line_of=node.lineno)
+    return offenders
 
 
 def file_offenders(text: str, rel: str) -> list[str]:
     """Every hit in one file's live text."""
-    code_rules = not rel.startswith("tests/") and not rel.endswith(_NO_HASH_COMMENT_EXTS)
-    if rel.endswith(_PY_EXT):
-        try:
-            tree = ast.parse(text)
-        except SyntaxError:
-            tree = None
-        if tree is not None:
-            skip = _docstring_constant_ids(tree)
-            offenders = _match(text, rel, RAW_PATTERNS)
-            patterns = _PATTERNS | (CODE_PATTERNS if code_rules else {})
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip:
-                    offenders += _match(node.value, rel, patterns, line_of=node.lineno)
-            return offenders
-    offenders = _match(text, rel, RAW_PATTERNS)
-    live = _strip_comments(text, rel)
-    offenders += _match(live, rel, _PATTERNS | (CODE_PATTERNS if code_rules else {}))
-    return offenders
+    style = comment_style(rel, text)
+    code_rules = not rel.startswith("tests/") and style != "verbatim"
+    patterns = PATTERNS | (CODE_PATTERNS if code_rules else {})
+    offenders = match(text, rel, RAW_PATTERNS)
+    if style == "py":
+        live = python_offenders(text, rel, patterns)
+        if live is not None:
+            return offenders + live
+    if style != "verbatim":
+        text = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+    return offenders + match(text, rel, patterns)
 
 
-def scan(root: pathlib.Path, allow: AbstractSet[str] = frozenset(), pending: tuple[str, ...] = ()) -> list[str]:
+def allowed(offender: str, allow: AbstractSet[str]) -> bool:
+    """Whether ``allow`` exempts ``offender`` (``rel:line: label: 'text'``) by path or by path::text."""
+    rel, rest = offender.split(":", 1)
+    text = ast.literal_eval(rest.split(": ", 2)[2])
+    return rel in allow or f"{rel}::{text}" in allow
+
+
+def scan(root: pathlib.Path, rels: Iterable[str], allow: AbstractSet[str] = frozenset()) -> list[str]:
     offenders = []
-    for p, rel in candidate_files(root):
-        if rel in allow or rel.startswith(pending):
+    for rel in rels:
+        path = root / rel
+        if rel in allow or not path.is_file() or path.is_symlink():
             continue
-        offenders += file_offenders(p.read_text(errors="ignore"), rel)
-    return offenders
+        data = path.read_bytes()
+        if b"\0" in data[:8192]:
+            continue
+        offenders += file_offenders(data.decode(errors="ignore"), rel)
+    return [offender for offender in offenders if not allowed(offender, allow)]
 
 
 def test_no_site_or_user_values_are_hardcoded() -> None:
-    offenders = scan(REPO, _ALLOW, PENDING)
+    offenders = scan(REPO, tracked_files(REPO), ALLOW.keys())
     assert not offenders, (
         "Hardcoded site or user values found -- read them from the environment (docs/configuration.md: "
-        "scripts/site_env.sh, scripts/cache_env.sh, scripts/cscs/account_env.sh) or allowlist with a "
-        "reason in this file:\n  " + "\n  ".join(sorted(offenders))
+        "scripts/site_env.sh, scripts/cache_env.sh, scripts/cscs/account_env.sh, containers/images/images.env) "
+        "or allowlist with a reason in this file:\n  " + "\n  ".join(sorted(offenders))
     )
 
 
-def test_every_allowlisted_or_pending_path_exists() -> None:
+def test_every_allowlisted_path_is_tracked_and_has_a_reason() -> None:
     """A stale entry would silently exempt whatever later reuses the name."""
-    missing = [rel for rel in _ALLOW if not (REPO / rel).exists()]
-    missing += [prefix for prefix in PENDING if not any(REPO.glob(prefix.rstrip("/") + "*"))]
-    assert not missing, missing
+    tracked = set(tracked_files(REPO))
+    assert not [key for key in ALLOW if key.split("::", 1)[0] not in tracked], ALLOW
+    assert all(reason.strip() for reason in ALLOW.values()), ALLOW
+    for key in (key for key in ALLOW if "::" in key):
+        rel, text = key.split("::", 1)
+        assert any(allowed(hit, {key}) for hit in scan(REPO, [rel])), f"{key} no longer matches anything"
+
+
+def test_only_tracked_files_are_scanned(tmp_path: pathlib.Path) -> None:
+    """An untracked local file (a scratch note, a copied site.env) is not the release."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "tracked.sh").write_text('SCRATCH="/capstor/scratch/cscs/x"\n')
+    (tmp_path / "untracked.sh").write_text('SCRATCH="/capstor/scratch/cscs/x"\n')
+    subprocess.run(["git", "-C", str(tmp_path), "add", "tracked.sh"], check=True)
+
+    offenders = scan(tmp_path, tracked_files(tmp_path))
+
+    assert [o.split(":", 1)[0] for o in offenders] == ["tracked.sh"], offenders
 
 
 def test_the_scan_catches_every_kind_of_hit(tmp_path: pathlib.Path) -> None:
     """Proves the scan is not vacuously green: a synthetic tree with each offense must be caught."""
-    (tmp_path / "bad.sh").write_text(
-        "#!/usr/bin/env bash\n"
-        "#SBATCH --partition=gpu1\n"
-        "#SBATCH -A proj\n"
-        "# this comment mentions /users/ybudanaz and must NOT be flagged\n"
-        'CE_EDF="/users/ybudanaz/x86_64/.edf/agent.toml"\n'
-        'FAST_SCRATCH="/iopsstor/scratch/cscs/${USER}"\n'
-        'SCRATCH="/ritom/scratch/cscs/$(id -un)"\n'
-        "sbatch --account=a-g34 --partition=gpu1 --exclude=nid[001,002] bad.sh\n"
-    )
-    (tmp_path / "bad.py").write_text(
-        f'"""Historical note: the {_LEGACY_NAME} rename moved these files. Not a violation."""\n'
-        'REPO_DEFAULT = "/capstor/scratch/cscs/someone/hpcagent-bench"\n'
-        'ACCOUNT = "a-g200"\n'
-        'CONTACT = "someone@inf.ethz.ch"\n'
-    )
-    (tmp_path / "bad.md").write_text(f"# Notes\n\nDo not reintroduce {_LEGACY_NAME} anywhere in the docs.\n")
-    (tmp_path / "site.env").write_text('FAST_SCRATCH="${FAST_SCRATCH:-/iopsstor/scratch/cscs/${USER}}"\n')
-    (tmp_path / "good.sh").write_text(
-        "#!/usr/bin/env bash\n"
-        "#SBATCH --nodes=1\n"
-        '. "${HPCAGENT_BENCH_REPO}/scripts/cscs/account_env.sh"\n'
-        'FAST_SCRATCH="${FAST_SCRATCH:-${SCRATCH}}"\n'
-        'sbatch ${part:+--partition="${part}"} --partition="${PARTITION}" job.sbatch\n'
-        'HOST_HOME="/users/someone"\n'
-    )
+    files = {
+        "bad.sh": (
+            "#!/usr/bin/env bash\n"
+            "#SBATCH --partition=gpu1\n"
+            "#SBATCH -A proj\n"
+            "# this comment mentions /users/ybudanaz and must NOT be flagged as a home directory\n"
+            'CE_EDF="/users/ybudanaz/x86_64/.edf/agent.toml"\n'
+            'FAST_SCRATCH="/iopsstor/scratch/cscs/${USER}"\n'
+            'SCRATCH="/ritom/scratch/cscs/$(id -un)"\n'
+            'STORE="/capstor/store/cscs/project"\n'
+            'OLD_HOME="/home/alice/runs"\n'
+            "sbatch --account=a-g34 --partition=gpu1 --exclude=nid[001,002] bad.sh\n"
+            "srun -p debug -N 1 true\n"
+            'SBATCH_PARTITION="${SBATCH_PARTITION:-normal}"\n'
+            "ssh -J beverin nid002664\n"
+            'RUNS="${SCRATCH}/hpcagent-bench-runs/cpf-llr-focus40-20260916/639344"\n'
+            'OUT="${SCRATCH}/canon-648131"\n'
+            "IMAGE=jfrog.svc.cscs.ch/hpcagent/judge:latest\n"
+        ),
+        "bad.py": (
+            f'"""Historical note: the {LEGACY_NAME} rename moved these files. Not a violation."""\n'
+            'REPO_DEFAULT = "/capstor/scratch/cscs/someone/hpcagent-bench"\n'
+            'ACCOUNT = "a-g200"\n'
+            'CONTACT = "someone@inf.ethz.ch"\n'
+            'CMD = "srun -p mi300 true"\n'
+        ),
+        "bad.md": f"# Notes\n\nDo not reintroduce {LEGACY_NAME} anywhere in the docs.\n",
+        "bad.tsv": "job\tdb\n1\t/capstor/scratch/cscs/x/hpcagent-bench-runs/wave/1/rank-0.db\n",
+        "site.env": 'FAST_SCRATCH="${FAST_SCRATCH:-/iopsstor/scratch/cscs/${USER}}"\n',
+        "good.sh": (
+            "#!/usr/bin/env bash\n"
+            "#SBATCH --nodes=1\n"
+            '. "${HPCAGENT_BENCH_REPO}/scripts/cscs/account_env.sh"\n'
+            'FAST_SCRATCH="${FAST_SCRATCH:-${SCRATCH}}"\n'
+            'sbatch ${part:+--partition="${part}"} --partition="${PARTITION}" job.sbatch\n'
+            'HOST_HOME="/users/someone"\n'
+            'RUNS="${HPCAGENT_BENCH_RUNS_ROOT}/canon/${tag}-${stamp}"\n'
+            "EDF=hpcagent-bench-agent-mi300-latest\n"
+            "sbatch beverin.sbatch\n"
+        ),
+    }
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
 
-    # An untracked build product with a machine path is not the repo's code and is not scanned.
-    (tmp_path / ".dacecache" / "k").mkdir(parents=True)
-    (tmp_path / ".dacecache" / "k" / "compile_commands.json").write_text('{"file": "/capstor/scratch/x.c"}\n')
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "add", "--", *(p.name for p in tmp_path.iterdir() if p.is_file())], cwd=tmp_path, check=True)
-    offenders = scan(tmp_path)
+    offenders = scan(tmp_path, files)
 
     def hit(file: str, text: str) -> bool:
         return any(o.startswith(file) and text in o for o in offenders)
 
-    for text in ("/users/ybudanaz", "iopsstor", "ritom", "a-g34", "--partition=gpu1", "-A proj", "nid["):
+    for text in (
+        "/users/ybudanaz",
+        "iopsstor",
+        "ritom",
+        "/capstor/",
+        "/home/alice",
+        "a-g34",
+        "--partition=gpu1",
+        "-A proj",
+        "nid[",
+        "-p debug",
+        "PARTITION:-normal",
+        "beverin",
+        "nid002664",
+        "hpcagent-bench-runs/cpf-llr",
+        "canon-648131",
+        "jfrog.svc.cscs.ch",
+    ):
         assert hit("bad.sh", text), (text, offenders)
-    for text in ("/capstor/scratch", "a-g200", "ethz.ch"):
+    for text in ("/capstor/", "a-g200", "ethz.ch", "-p mi300"):
         assert hit("bad.py", text), (text, offenders)
-    assert hit("bad.md", _LEGACY_NAME), offenders
+    assert hit("bad.md", LEGACY_NAME), offenders
+    assert hit("bad.tsv", "/capstor/"), offenders
     assert hit("site.env", "iopsstor"), offenders
     # the docstring records history; the AST carve-out must exclude it
-    assert not hit("bad.py", _LEGACY_NAME), offenders
+    assert not hit("bad.py", LEGACY_NAME), offenders
     assert not hit("good.sh", ""), offenders
-    assert not hit(".dacecache/", ""), offenders
 
 
 def test_the_storage_pattern_matches_only_real_mounts() -> None:
-    """Fires on the mounts even behind a $USER/${VAR} suffix; quiet on lookalikes and on the vendor
-    tree under /capstor/store, which only the site layer names."""
-    pattern = _PATTERNS["literal storage mount"][0]
+    """Fires on the mounts even behind a $USER/${VAR} suffix; quiet on lookalikes."""
+    pattern = PATTERNS["literal storage mount"][0]
     positive = [
         'SCRATCH="/ritom/scratch/cscs/someone/$(uname -m)"',
         'FAST_SCRATCH="${FAST_SCRATCH:-/iopsstor/scratch/cscs/${USER}}"',
         '    echo "/capstor/scratch/cscs" >&2',
         '"/ritom:/ritom"',
+        "BASE=/capstor/store/cscs/cscs/public",
     ]
     negative = [
         'FAST_SCRATCH="${FAST_SCRATCH:-${SCRATCH}}"',
         'ALT="/iopsstorbackup/old"',
-        'ALT2="/capstor/scratchpad/tmp"',
         'NESTED="something/ritom/x"',
         'FIXTURE="/scratchfs/runs/1"',
     ]

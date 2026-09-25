@@ -15,13 +15,12 @@
 #   MODELS="zai-org/GLM-5.3" sbatch fetch_weights.sbatch
 #   AUDIT_ONLY=1 sbatch fetch_weights.sbatch        # check layout, change nothing
 #
-# On Daint (GH200) the partition and the image differ; -p overrides the directive below, and the
-# vLLM image has no venv:
+# The partition is SBATCH_PARTITION (site layer). On Daint (GH200) the partition and the image
+# differ; -p overrides it, and the vLLM image has no venv:
 #   EDF=hpcagent-bench-vllm-gh200-latest PYTHON=python3 MODELS="Qwen/Qwen3.8-27B-FP8" \
 #     sbatch -A <project> -p normal fetch_weights.sbatch
 #
 #SBATCH --job-name=fetch-weights
-#SBATCH --partition=mi300
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=96

@@ -14,7 +14,7 @@ own page, [writing_an_agent.md](../writing_an_agent.md). Commands use `python -m
 | File | Change | When |
 |---|---|---|
 | `hpcagent_bench/harness/optimizers.py` | one subclass with a `name` | required |
-| `pyproject.toml` extra, then `python scripts/sync_requirements.py` | declare the backend package | new PyPI dependency |
+| the `cpu` extra in `pyproject.toml` (nvidia/amd inherit it) | declare the backend package | new PyPI dependency |
 
 1. Pick a base class in `optimizers.py`. `LibraryOptimizer` fits a tool that produces source: its
    `_deliver` returns the source in `restricted` mode and builds and submits a `.so` in `any` mode.
@@ -69,7 +69,7 @@ measure at `XL`. Then run `pytest tests/test_optimizer_plugin.py`.
 | `hpcagent_bench/frameworks/framework.py` | one `FRAMEWORK_META` entry | required |
 | `hpcagent_bench/frameworks/<base>_framework.py` | the adapter class `<Base>Framework` | new `base` only |
 | `hpcagent_bench/envs/registry.yaml` | display name under `frameworks:`, appended | a column that appears in figures |
-| `pyproject.toml` extra, then `python scripts/sync_requirements.py` | backend package | new PyPI dependency |
+| the `cpu` extra in `pyproject.toml` | backend package | new PyPI dependency |
 
 1. Add the `FRAMEWORK_META` entry. `base` selects the adapter class; `postfix` selects the
    implementation file `<module>_<postfix>.py` beside the kernel's NumPy reference; `arch` is `cpu`
@@ -98,8 +98,8 @@ measure at `XL`. Then run `pytest tests/test_optimizer_plugin.py`.
    the entry. `sweep_deterministic: True` lets a deterministic batch job run the column.
 4. Append the display name to `frameworks:` in `envs/registry.yaml`. Key order assigns colours, so
    inserting a key in the middle repaints published figures (`tests/test_palette.py`). The judge
-   images install `requirements/<hw>.txt`, not the project, so a dependency change also means
-   regenerating those files and rebuilding the image.
+   images install their extra from `pyproject.toml`, so a dependency change also means rebuilding
+   the image.
 
 **Identity.** All four subcommands time the column through `Test.run`, which writes one `results`
 row per implementation to the results DB with `split_flavor(<key>)` as `framework` and `flavor`
@@ -120,5 +120,5 @@ DB. `tests/test_frameworks.py` runs the same check per toolchain on `gemm`.
 - [ ] Optimizer: subclass with a `name` in `optimizers.py`; unsupported cases raise `NotImplementedError`.
 - [ ] Framework: `FRAMEWORK_META` entry (and a `registry.yaml` name for figures); a new base adds
       `<base>_framework.py`; a native column declares `language`.
-- [ ] New dependency in a `pyproject.toml` extra; `python scripts/sync_requirements.py --check` is clean.
+- [ ] New dependency in the `cpu` extra of `pyproject.toml`.
 - [ ] The validation command shows a correct (optimizer) or validated (framework) row.

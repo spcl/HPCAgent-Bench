@@ -21,7 +21,7 @@
 #                                   builds against the vendor stack, so nothing downstream of it
 #                                   may invalidate it
 #   7  OpenMPI, MKL, tblis, HPTT, PAPI, Pluto
-#   8  python frameworks            moves with requirements/amd.txt
+#   8  python frameworks            moves with pyproject.toml (the `amd` extra)
 #   9  dace @ extended              moves whenever the branch moves
 #  10  node, claude-code, harness venvs, final gate (tool scripts are bound at launch)
 #
@@ -139,7 +139,6 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG ROCM_ARCH
 ARG ROCM_VERSION=7.2.0
 ARG ROCM_APT_CHANNEL=7.2
-ARG PYTHON_REQUIREMENTS=requirements/amd.txt
 
 # Toolchain pins. gcc 16 + llvm 22 is the known-good pairing. These are FULL versions rather than
 # majors because spack pins each version by sha256, so an exact version stays buildable after
@@ -971,25 +970,30 @@ RUN set -eux; \
 # numpy/scipy/pandas/astunparse must stay where the image put them: numpy computes every CPU
 # reference, so an install that quietly moves it moves the oracle too.
 #
-# requirements/amd.txt names `triton`. On this base that module comes from AMD's ROCm build, and
-# `pip install triton` is a DIFFERENT distribution that overwrites the same site-packages/triton
-# directory with the upstream NVIDIA one -- so the line is filtered out here and the ROCm triton
-# is asserted intact afterwards. The real fix belongs in pyproject.toml's `amd` extra, which is
-# a shared file this image does not edit.
-COPY requirements/ /requirements/
+# The dependencies are pyproject.toml's `amd` extra plus the judge-proxy group, in ONE uv resolution:
+# the pinned proxy stack (litellm 1.94.0, httpx2 2.12.0, anyio 4.14.2) is a constraint of the whole
+# install, not something discovered afterwards. Only pyproject.toml is copied, never the package
+# source; `-r pyproject.toml` installs the dependencies, not the project. uv comes from the pins
+# (containers/agent/harness/pins.env, sha256-checked by install_tools.sh).
+#
+# The `amd` extra names no `triton`: on this base that module comes from AMD's ROCm build, and PyPI's
+# `triton` is a DIFFERENT distribution that would overwrite the same site-packages/triton directory
+# with the upstream NVIDIA one. The ROCm triton is asserted intact afterwards.
+COPY containers/agent/harness/pins.env containers/agent/harness/install_tools.sh /opt/harness/
+COPY pyproject.toml /opt/hpcagent-bench/pyproject.toml
 RUN set -eux; \
+    sh /opt/harness/install_tools.sh /usr/local; \
     triton_before="$(python3 -c 'import importlib.metadata as m; \
       print(next((d.metadata["Name"] for d in m.distributions() \
       if d.metadata["Name"] and "triton" in d.metadata["Name"].lower()), ""))')"; \
     printf 'triton distribution before: %s\n' "${triton_before:-none}"; \
-    grep -v '^triton$' "/${PYTHON_REQUIREMENTS}" > /tmp/requirements-image.txt; \
     PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
-    PIP_BREAK_SYSTEM_PACKAGES=1 MPICC=/opt/view/bin/mpicc \
-      python3 -m pip install --no-cache-dir --no-binary=mpi4py -r /tmp/requirements-image.txt; \
+    MPICC=/opt/view/bin/mpicc uv pip install --python "$(command -v python3)" --break-system-packages --no-cache \
+      --no-binary mpi4py -r /opt/hpcagent-bench/pyproject.toml --extra amd \
+      --group /opt/hpcagent-bench/pyproject.toml:judge-proxy; \
     if [ -z "${triton_before}" ]; then \
       PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-cache-dir pytorch-triton-rocm; \
     fi; \
-    rm -f /tmp/requirements-image.txt; \
     python3 -c "import triton; print('triton', triton.__version__, triton.__file__)"; \
     python3 -c "import torch; assert torch.version.hip, 'torch lost its HIP build'; \
       print('torch', torch.__version__, 'hip', torch.version.hip)"; \
@@ -1088,27 +1092,13 @@ RUN set -eux; \
       && test "$(python3 -c 'import astunparse; print(astunparse.__version__)' 2>/dev/null || echo absent)" = "${astunparse_before}" \
       || { echo "rocprof-compute install moved the graded numpy/pandas/astunparse" >&2; exit 2; }
 
-# Judge-side python: the crawl/browser stack, the proxy the arms talk through, and the one SDK an
-# agent harness cannot start without.
-#
-# openai-agents (imported as `agents`) is NOT optional for the optimas harness, whatever its
-# guarded import suggests: harnesses.py always passes --prompt, so episode.py takes the
-# fixed_prompt branch and constructs UsageSinkToolAgent, and ToolAgent.__init__ calls
-# optimas_tools.require_agents_sdk() unconditionally. Without it every optimas episode raises
-# before its first token. requirements/agent-optimas.txt names only `optimas-ai`, which is the
-# OPT-IN upstream OPRO proposer (baselines.opro_proposer_upstream) and is deliberately NOT
-# installed: the in-repo proposer is the default and the zero-dependency control.
-#
-# RESOLVED IN THE SAME pip RUN as the pinned proxy stack, not after it, so one resolver sees
-# litellm 1.94.0, httpx2 2.12.0 and anyio 4.14.2 as constraints rather than discovering them
-# afterwards. The assertion below is what makes that a build failure instead of a campaign that
-# talks to the judge through a different httpx than the one it was tested on.
-COPY containers/judge/requirements.txt /opt/harness/judge-requirements.txt
+# Judge-side python, installed in step 11: the crawl/browser stack, the pinned proxy the arms talk
+# through, and openai-agents (imported as `agents`), which is NOT optional for the optimas harness
+# whatever its guarded import suggests: harnesses.py always passes --prompt, so episode.py
+# constructs UsageSinkToolAgent, and ToolAgent.__init__ calls optimas_tools.require_agents_sdk()
+# unconditionally. The assertion below makes a moved proxy pin a build failure instead of a
+# campaign that talks to the judge through a different httpx than the one it was tested on.
 RUN set -eux; \
-    PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --no-cache-dir \
-      -r /opt/harness/judge-requirements.txt \
-      "litellm[proxy]==1.94.0" fastapi uvicorn httpx "httpx2==2.12.0" "anyio==4.14.2" pydantic orjson tenacity rich typer \
-      openai-agents; \
     python3 -c "import importlib.metadata as m; \
 want = {'litellm': '1.94.0', 'httpx2': '2.12.0', 'anyio': '4.14.2'}; \
 got = {name: m.version(name) for name in want}; \
@@ -1124,13 +1114,11 @@ assert got == want, got"; \
     chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
 
 # ---------------------------------------------------------------------------------------------
-# 12. DaCe -- the TIP of spcl/dace@extended, never a pin.
-#
-# `git clone --branch extended` looks like it says that, but the layer cache keys on the command
-# STRING, which never changes: every later rebuild reuses the first clone and the image quietly
-# ages into a pin nothing records. One tree ended up 10,748 commits behind that way, reporting
-# frontend refusals the branch had already fixed. So the builder resolves the tip and passes it
-# in: DACE_COMMIT changes exactly when extended moves, which is what busts this layer.
+# 12. DaCe -- the spcl/dace@extended commit build.sh resolves and passes in (the release pin,
+# pyproject.toml dace-pin). Never `git clone --branch extended`: the layer cache keys on the command
+# STRING, which never changes, so every later rebuild would reuse the first clone and the image
+# would age into a pin nothing records. DACE_COMMIT is part of the key, so the layer rebuilds
+# exactly when the commit changes. Jobs move the baked dace to the latest extended at start.
 ARG DACE_COMMIT
 RUN set -eux; \
     test -n "${DACE_COMMIT}" || { echo "DACE_COMMIT build-arg is required (build.sh resolves it)" >&2; exit 2; }; \
@@ -1160,10 +1148,8 @@ RUN set -eux; \
 # in 2.1.221) and never compacts proactively on its own -- agent_driver.claude_context_env instead
 # names the served window and the trigger through CLAUDE_CODE_MAX_CONTEXT_TOKENS /
 # CLAUDE_CODE_AUTO_COMPACT_WINDOW / CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, which 2.1.197 does read.
-COPY containers/agent/harness/pins.env containers/agent/harness/install_tools.sh /opt/harness/
 COPY containers/agent/harness/node/package.json containers/agent/harness/node/package-lock.json /opt/harness/node/
 RUN set -eux; \
-    sh /opt/harness/install_tools.sh /usr/local; \
     cd /opt/harness/node; \
     npm_config_cache=/tmp/npm-cache npm ci --no-audit --no-fund; \
     rm -rf /tmp/npm-cache; \
@@ -1181,18 +1167,15 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------------------------
 # 13a. Isolated venvs for the Python harnesses (mini-SWE-agent, OpenHands) on the base's
 # python${HARNESS_PYTHON}, kept off the system pip so their deps cannot displace system
-# litellm[proxy]==1.94.0. Each installs its full freeze, requirements-<name>.txt.
-#
-# Only the requirements files are copied, not the containers/agent tree: prompts and tool scripts
-# are bound from the submitting checkout at launch, so the image carries their dependencies only.
-COPY containers/agent/harness/requirements-miniswe.txt containers/agent/harness/requirements-openhands.txt \
-     /opt/harness/
+# litellm[proxy]==1.94.0. Each installs pyproject.toml's harness-<name> group, which carries none of
+# the project's own dependencies. Prompts and tool scripts are bound from the submitting checkout at
+# launch, so the image carries their dependencies only.
 RUN set -eux; \
     . /opt/harness/pins.env; \
     for venv in miniswe openhands; do \
       uv venv --python "/usr/bin/python${HARNESS_PYTHON}" "/opt/harness/${venv}"; \
       uv pip install --python "/opt/harness/${venv}/bin/python" --no-cache \
-        -r "/opt/harness/requirements-${venv}.txt"; \
+        --group "/opt/hpcagent-bench/pyproject.toml:harness-${venv}"; \
     done
 
 # Agent and judge tool scripts are bound from the submitting checkout at launch (run_cluster.sh);

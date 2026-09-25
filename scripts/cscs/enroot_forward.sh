@@ -12,11 +12,11 @@
 #                     MASTER_ADDR/MASTER_PORT   torch.distributed rendezvous
 #                     NCCL_*/RCCL_*/FI_*/HSA_*  collective + libfabric + ROCm knobs set by the caller
 #                     OMP_*/TORCH_*             threading and torch knobs
-#                     HPCAGENT_BENCH_*, SCRATCH, HF_HOME, JIT_CACHE_ROOT, DACE_TREE   paths this
-#                                               repository resolved -- DACE_TREE is what inner mode
-#                                               prepends onto PYTHONPATH and asserts dace resolves
-#                                               inside (canon_column.sh); unforwarded, inner falls
-#                                               back to its own SCRATCH/dace guess instead.
+#                     HPCAGENT_BENCH_*, SCRATCH, HF_HOME, JIT_CACHE_ROOT, DACE_TREE   paths and
+#                                               knobs this repository resolved -- DACE_TREE is the
+#                                               dace checkout inner mode runs instead of the image's
+#                                               (canon_column.sh), HPCAGENT_BENCH_DACE_REF the commit
+#                                               the image's dace is refreshed to.
 #                     CANON_OPT_REPORTS, CANON_KERNEL_TIMEOUT_SEC, CANON_KERNEL_MEM_KB,
 #                     CANON_OMP_STACKSIZE      canon_column.sh's own switches, READ INSIDE the
 #                                               container (inner mode); everything else spelled

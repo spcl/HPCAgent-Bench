@@ -303,17 +303,18 @@ run_leg() {  # run_leg <index> <spec>: one smoke leg, server stopped at the end
 }
 
 tunnel_help() {  # tunnel_help <port>: laptop lines naming the key file, never its content
-    local node="${NODE}" key_name="${KEY_FILE##*/}"
+    local node="${NODE}" key_name="${KEY_FILE##*/}" login="${HPCAGENT_BENCH_LOGIN_HOST:-<login host>}"
+    local hops="${HPCAGENT_BENCH_SSH_JUMP:+${HPCAGENT_BENCH_SSH_JUMP},}${login}"
     local laptop_key="~/.config/hpcagent-bench/${key_name}" header_name="${key_name%.key}.header"
     cat <<EOF
 
 ===== private endpoint is live: 127.0.0.1:$1 on ${node}, job ${SLURM_JOB_ID:-dry run} =====
 On your laptop, while this job runs (docs/serving/private-endpoint.md):
   umask 077; mkdir -p ~/.config/hpcagent-bench
-  scp beverin:${KEY_FILE} ~/.config/hpcagent-bench/
+  scp ${login}:${KEY_FILE} ~/.config/hpcagent-bench/
   printf 'Authorization: Bearer %s\n' "\$(cat ${laptop_key})" \\
     > ~/.config/hpcagent-bench/${header_name}
-  ssh -N -J ela,beverin -L 127.0.0.1:$1:127.0.0.1:$1 ${USER:-$(id -un)}@${node}
+  ssh -N -J ${hops} -L 127.0.0.1:$1:127.0.0.1:$1 ${USER:-$(id -un)}@${node}
   curl -s http://127.0.0.1:$1/v1/chat/completions -H 'Content-Type: application/json' \\
     -H "@\$HOME/.config/hpcagent-bench/${header_name}" \\
     -d '{"model": "${SERVED_MODEL}", "max_tokens": 128, "messages": [{"role": "user", "content": "Say hi."}]}'

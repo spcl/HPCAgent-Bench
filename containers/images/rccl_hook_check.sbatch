@@ -2,7 +2,6 @@
 # Does the CSCS aws_ofi_nccl hook give RCCL the fabric? No MPI here: an MPI_Init failure would
 # hide the RCCL answer, and torch.distributed only needs MASTER_ADDR/PORT.
 #SBATCH --job-name=rccl-hook
-#SBATCH --partition=mi300
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=24

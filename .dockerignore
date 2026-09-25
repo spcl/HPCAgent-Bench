@@ -1,5 +1,5 @@
 # Image build contexts are the repo root; the Dockerfiles COPY named paths (containers/...,
-# requirements/, hpcagent_bench/, pyproject.toml, README.md). Nothing below belongs in an image.
+# hpcagent_bench/, pyproject.toml, README.md). Nothing below belongs in an image.
 # Patterns are anchored at the context root; `**/` reaches into subdirectories.
 # Only the trusted judge stages copy hpcagent_bench; the AGENT stages copy just the harness build inputs
 # from containers/agent/harness, and the agent tool scripts are bound at launch.

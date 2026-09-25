@@ -6,8 +6,8 @@ candidate results, Crawl4AI to crawl and query-filter those pages (`arun_many()`
 OpenAI/vLLM-compatible chat endpoint to synthesize an answer with sources.
 `experiments/judge_service.py` imports it from the installed package.
 
-This directory holds only its dependencies (`requirements.txt`, installed by the judge-agent
-images) and a configuration template (`.env.example`). The network-free test is
+Its dependencies (crawl4ai, playwright) are part of every hardware extra in `pyproject.toml`;
+this directory holds only a configuration template (`.env.example`). The network-free test is
 `tests/test_judge_web_search.py`.
 
 ## Configuration
@@ -39,6 +39,6 @@ The JSON output holds `query`, `answer`, `sources`, `search_results` and `crawle
 Outside an image:
 
 ```bash
-python3 -m pip install -r containers/judge/requirements.txt
+python3 -m pip install -e ".[cpu]"
 playwright install chromium
 ```

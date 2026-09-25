@@ -9,12 +9,10 @@ inputs:
     description: Interpreter version; defaults to the workflow's PYTHON_VERSION.
     required: false
     default: ""
-  extras:
-    description: Space-separated pyproject extras on top of `cpu`, e.g. "tvm gt4py".
-    required: false
-    default: ""
   pip-args:
-    description: Extra pip flags, e.g. "--no-binary mpi4py" to build against a local MPI.
+    description: >
+      Extra pip arguments, e.g. "--no-binary mpi4py" to build against a local MPI, or
+      "-e ./adapters/hpcagent_bench" for harbor.
     required: false
     default: ""
   ccache:
@@ -174,9 +172,7 @@ runs:
         # A checkout, not a wheel: metrics/parallelism.py imports dace's own tests/corpus, which a
         # wheel does not ship. Submodules carry the runtime headers (moodycamel).
         set -euo pipefail
-        git clone --depth 1 --recurse-submodules --shallow-submodules --branch extended \
-          https://github.com/spcl/dace "${RUNNER_TEMP}/dace"
-        python -m pip install -e "${RUNNER_TEMP}/dace"
+        PYTHON=python scripts/install_dace.sh --editable "${RUNNER_TEMP}/dace"
 
     - name: Python deps (one resolution per job)
       shell: bash
@@ -186,13 +182,10 @@ runs:
         python -m pip install --upgrade pip
         # CPU torch first: the default PyPI wheel drags ~2.5 GB of CUDA wheels.
         pip_retry --index-url https://download.pytorch.org/whl/cpu torch
-        # dace is not an extra: the editable checkout above already satisfies it.
-        extras="cpu"
-        for extra in ${{ inputs.extras }}; do
-          extras="${extras},${extra}"
-        done
+        # The `cpu` extra is the complete install (frameworks, judge, agent clients, dev tools); dace
+        # is not an extra: the editable checkout above already satisfies it.
         # shellcheck disable=SC2086 -- pip-args is a flag list
-        pip_retry --group testing -e ".[${extras}]" ${{ inputs.pip-args }}
+        pip_retry -e ".[cpu]" ${{ inputs.pip-args }}
         echo "dace @ $(git -C "${RUNNER_TEMP}/dace" rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
         # No DACE_compiler_build_mode here: a DACE_* env var outranks Config.set and would defeat
         # dace_framework.BUILD_CACHE_PINS (tests/test_dace_flavors.py).

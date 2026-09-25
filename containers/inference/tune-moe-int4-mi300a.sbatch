@@ -9,7 +9,6 @@
 #
 # The tuner parallelizes the search over every GPU ray sees, hence a full node.
 #SBATCH --job-name=tune-moe-int4
-#SBATCH --partition=mi300
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-node=4

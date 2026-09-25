@@ -4,6 +4,7 @@
 #   IMAGE_DIR=containers/images/judge-agent-amd \
 #     sbatch containers/images/build_and_verify.sbatch
 #
+# The partition is SBATCH_PARTITION (site layer) unless the command line names one.
 # judge-agent-amd builds for the partition it runs on; the mi200 pair (gfx90a, spack target zen3):
 #   REPO=$PWD IMAGE_DIR=containers/images/judge-agent-amd \
 #     sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 containers/images/build_and_verify.sbatch
@@ -17,7 +18,6 @@
 # is verified under its own profile and marked .verified for promote_image.sh.
 #
 #SBATCH --job-name=build-verify-image
-#SBATCH --partition=mi300
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 # 96 physical cores; SMT siblings add no compute.

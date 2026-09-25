@@ -44,16 +44,10 @@ canon_repo_root() {
     fi
 }
 
-#: The dace tree, siblinged next to hpcagent-bench under SCRATCH -- cache_env.sh does not know
-#: this path, so it gets the same SCRATCH-else-HPCAGENT_BENCH_REPO fallback on its own, guessing
-#: the sibling from HPCAGENT_BENCH_REPO's own parent when there is no SCRATCH to derive it from.
-canon_dace_tree() {
-    if [[ -n "${SCRATCH:-}" ]]; then
-        printf '%s\n' "${SCRATCH}/dace"
-    else
-        printf '%s\n' "$(dirname -- "${HPCAGENT_BENCH_REPO:?set SCRATCH, DACE_TREE, or HPCAGENT_BENCH_REPO}")/dace"
-    fi
-}
+#: DaCe: the image's own /opt/dace, moved to HPCAGENT_BENCH_DACE_REF (default: the tip of
+#: spcl/dace@extended) by containers/images/dace_refresh.sh when `inner` starts. DACE_TREE names a
+#: dace checkout to run INSTEAD, used exactly as it is (a fix branch under test); it is never
+#: refreshed, since other jobs may be reading it.
 
 mode=${1:?outer|inner}
 #: `outer` takes a COMMA-SEPARATED list and runs the columns one after another in one allocation.
@@ -96,6 +90,10 @@ finalize_column() {
     #: outer path already resolves to on beverin (scripts/cscs/enroot_srun.sh, run_cluster.sh,
     #: prepare_job.sh: `command -v python3.11 || command -v python3`). Same resolution here, with
     #: an explicit check: silently falling through to the 3.6 default would just move the crash.
+    #: PROVENANCE for canon.db (scripts/merge_canon_results.py's `build` column): the dace label
+    #: each rank stamped (inner writes <column>.rank<N>.dace); ranks that disagree are all named.
+    local build_label
+    build_label="$(cat -- "${out_root}/${column}".rank*.dace 2>/dev/null | sort -u | paste -sd ';' -)"
     local merge_py
     merge_py="$(command -v python3.11 || command -v python3)"
     if [[ -z "${merge_py}" ]]; then
@@ -106,7 +104,7 @@ finalize_column() {
     . "${opt}/scripts/repo_env.sh"
     if "${merge_py}" "${opt}/scripts/merge_canon_results.py" \
         --run-dir "${out_root}" --column "${column}" --run "${run_label}" --db "${db}" \
-        --expected "${expected}" --build "${build_label:-}"; then
+        --expected "${expected}" --build "${build_label}"; then
         rm -rf -- "${out_root}/db/${column}"
         shopt -s nullglob
         rm -rf -- "${out_root}/dacecache-${column}" "${out_root}/dacecache-${column}_rank"*
@@ -158,13 +156,10 @@ if [[ "${mode}" == outer ]]; then
         echo "canon_column: ${dace_tree} has no submodules; run git -C ${dace_tree} submodule update --init --recursive" >&2
         exit 2
     fi
-    #: PROVENANCE for canon.db (scripts/merge_canon_results.py's `build` column): the SAME dace
-    #: commit label `inner` stamps into HPCAGENT_BENCH_RECORD_BUILD, computed once here so every
-    #: column of this job's merge carries it -- inner's own copy lives only in the per-rank shard
-    #: DB, which finalize_column deletes once its column is merged, so this is the only place the
-    #: label survives past the job. A caller that already exported HPCAGENT_BENCH_RECORD_BUILD
-    #: (inherited by inner too) is left alone, same override rule as inner's own default.
-    build_label="${HPCAGENT_BENCH_RECORD_BUILD:-dace $(git -C "${dace_tree}" rev-parse --short HEAD 2>/dev/null || echo notree)}"
+    #: One dace commit for every rank: each rank refreshes its own container, so the branch is
+    #: resolved to a sha once, here.
+    [[ -n "${DACE_TREE:-}" ]] || HPCAGENT_BENCH_DACE_REF="$("${opt}/containers/images/dace_refresh.sh" --resolve)" || exit 2
+    export HPCAGENT_BENCH_DACE_REF
     cpt="$(cores_per_socket)"
     if [[ ! "${cpt}" =~ ^[1-9][0-9]*$ ]]; then
         echo "canon_column: could not detect cores per socket and HPCAGENT_BENCH_NCORES is unset" >&2
@@ -189,6 +184,7 @@ if [[ "${mode}" == outer ]]; then
         if [[ -n "${HPCAGENT_BENCH_RUNS_ROOT:-}" && "${out_root}" == "${HPCAGENT_BENCH_RUNS_ROOT}"/* ]]; then
             rotate_stale_shards "${one}"
         fi
+        rm -f -- "${out_root}/${one}".rank*.dace
         # Not exec: the next column has to run after this one in the same allocation.
         #: CANON_LAUNCH=enroot|pyxis. Unset, scripts/cscs/container_runtime.sh decides (enroot unless
         #: CONTAINER_RUNTIME says otherwise). enroot reads the SAME EDF, so the two launchers cannot
@@ -257,12 +253,12 @@ if [[ -n "${mine}" ]]; then
         mkdir -p "${db_dir}"
         export HPCAGENT_BENCH_RECORD_DB_PATH="${db_dir}/hpcagent_bench.db"
     fi
-    #: The container ships its OWN dace at /opt/dace as an editable install (2.0.0a7). Without this
-    #: prepend every job silently runs that copy, not the extended tree this campaign is pinned to --
-    #: measured: /opt/dace/dace/__init__.py wins, and a `git pull` of $SCRATCH/dace reaches nothing.
-    #: PYTHONPATH is ahead of site-packages, so naming the tree here is enough; no install step.
-    DACE_TREE=${DACE_TREE:-$(canon_dace_tree)}
-    [[ -n "${DACE_TREE}" ]] || { echo "canon_column: no DACE_TREE and no SCRATCH/HPCAGENT_BENCH_REPO to default it from" >&2; exit 2; }
+    #: Without DACE_TREE the column runs the image's /opt/dace, refreshed to the job's commit. With
+    #: it, the tree goes first on PYTHONPATH (repo_env.sh), ahead of the image's editable install.
+    if [[ -z "${DACE_TREE:-}" ]]; then
+        "${opt}/containers/images/dace_refresh.sh" || { echo "canon ${col} rank ${rank}: dace refresh failed" >&2; exit 1; }
+        DACE_TREE="${DACE_DIR:-/opt/dace}"
+    fi
     . "${opt}/scripts/repo_env.sh"
     #: The image ships its OWN dace at /opt/dace (editable install); without this check a run that
     #: silently resolved there would file every one of this column's rows under the wrong dace
@@ -296,6 +292,7 @@ sys.exit(0 if os.path.realpath(dace.__file__) == os.path.realpath(sys.argv[1]) e
     #: already documents (HPCAGENT_BENCH_RECORD_BUILD); a caller that already set a more specific
     #: build label is left alone.
     export HPCAGENT_BENCH_RECORD_BUILD="${HPCAGENT_BENCH_RECORD_BUILD:-dace ${dace_sha}}"
+    printf '%s\n' "${HPCAGENT_BENCH_RECORD_BUILD}" >"${out_root}/${col}.rank${rank}.dace"
     #: One log line per rank naming exactly what this row's provenance will be, next to canon.db's
     #: own `build` column (scripts/merge_canon_results.py) -- the checkout this repo itself ran
     #: from, not just the dace commit, since the same dace tree measured through two different

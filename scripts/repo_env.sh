@@ -6,8 +6,8 @@
 #   . "${checkout}/scripts/repo_env.sh"
 #
 # The checkout is the one this file sits in, so sourcing it from a tree selects that tree.
-# DACE_TREE, when set before sourcing, goes first: the images ship their own editable dace at
-# /opt/dace, which would otherwise silently win over the dace checkout a canon or CPF column pins.
+# DACE_TREE, when set before sourcing, goes first: a dace checkout run instead of the installed one
+# (the images ship their own editable dace at /opt/dace, which would otherwise silently win).
 # Sourcing twice adds nothing twice.
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the

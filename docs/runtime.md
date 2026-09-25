@@ -2,13 +2,21 @@
 
 ## Install (sudoless)
 
+`pyproject.toml` is the only dependency list. Each hardware extra is the complete install for that
+hardware (frameworks and baselines, the judge, HF export, agent clients, and the developer tools);
+pick exactly one:
+
 ```bash
-pip install -e .                                  # hpcagent_bench + the numpyto_* translators
-pip install -r requirements/cpu.txt               # numeric deps for the hardware target
-pip install -r requirements/optional.txt          # apache-tvm + mpi4py baselines (optional; see Platforms)
-pip install -r requirements/harbor.txt            # harbor / container tooling (only to run the benchmark)
-hpcagent-bench-install-apptainer                         # Apptainer, unprivileged, into ~/.local (optional)
+pip install -e ".[cpu]"       # a CPU box (install torch from the PyTorch CPU index first)
+pip install -e ".[amd]"       # ROCm
+pip install -e ".[nvidia]"    # CUDA 13
+pip install -e ".[dev]"       # tests and formatters only (pytest, ruff, pyright, pre-commit, ...)
+scripts/install_dace.sh                    # dace at the release pin (docs/configuration.md#dace)
+hpcagent-bench-install-apptainer           # Apptainer, unprivileged, into ~/.local (optional)
 ```
+
+Harbor itself lives in the adapter (`pip install -e adapters/hpcagent_bench`): its rich>=14.1 cannot
+share an environment with the judge images' LLM proxy (the `judge-proxy` dependency group).
 
 Everything is pip-installable except the container runtimes. Apptainer is a
 Go binary -- `hpcagent-bench-install-apptainer` runs Apptainer's official unprivileged
@@ -37,8 +45,7 @@ gfortran and no bundled OpenMP):
 
 ```bash
 brew install gcc libomp mpich          # real gcc/g++/gfortran, OpenMP runtime, MPI (MPI track)
-pip install -r requirements/cpu.txt    # installs clean on arm64 -- the friction deps are in optional.txt
-pip install -r requirements/optional.txt   # apache-tvm + mpi4py -- only if you want those baselines
+pip install -e ".[cpu]"                # mpi4py builds against the brew MPI
 ```
 
 A missing compiler is a scored build failure, not a crash, so a partial toolchain
