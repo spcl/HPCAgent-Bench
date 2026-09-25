@@ -243,7 +243,7 @@ def lp_normalize_calls(ctx: LoweringContext) -> None:
     ctx.iter_rewriter.visit(tree)
     EnumerateZipRewriter(leading_extent).visit(tree)
     BuiltinCastRewriter().visit(tree)
-    # The LOCAL array shapes too, exactly as the two later _MathRewriter sites do. With only
+    # The LOCAL array shapes too, exactly as the two later MathRewriter sites do. With only
     # the declared arrays, an inlined helper's temps look like scalars, and np.maximum on two
     # of them took the scalar rename: __npb_fmax(double *, double *).
     MathRewriter(set(ash.keys()) | set(ctx.lib_shape_table.keys()), defer_array_capable=True).visit(tree)
@@ -332,7 +332,7 @@ def lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
     selects, SSA-rename reassigned locals, then harvest local-array shapes."""
     tree = ctx.tree
     # Seed with signature-array dtypes so downstream passes (call hoister
-    # _infer_complex, BinOp dtype propagation, emit-time decl) consistently treat
+    # infer_complex, BinOp dtype propagation, emit-time decl) consistently treat
     # declared inputs/outputs the same way as locals. Every array goes in -- the
     # table is keyed by name so there is no cost to a uniform copy of all dtypes.
     ctx.local_dtypes = {}
@@ -692,9 +692,8 @@ def lp_scatter_at(ctx: LoweringContext) -> None:
     ``ctx.lib_shape_table`` once the harvest and LibNode expander have run, and
     whose ``np.arange`` must already be a materialised array (not the raw call)
     for the SAME index-array Name path the gather side uses. Running any
-    earlier -- as the C/Fortran ABI-normalisation phase used to -- leaves every
-    non-parameter idx/value unresolvable and forces the bare-Name-only form
-    ``ScatterAtRewriter`` no longer needs."""
+    earlier (e.g. in the C/Fortran ABI-normalisation phase) leaves every
+    non-parameter idx/value unresolvable."""
     # ``name = <base>.reshape(-1)`` / ``name = np.broadcast_to(base, shape)``
     # locals read bare inside ``.at()`` (icon_scatter's ``vals``, read twice) --
     # collect them so ``ScatterAtRewriter`` can look through the alias to the
@@ -938,7 +937,7 @@ def lp_slice_fusion_and_resolve(ctx: LoweringContext) -> None:
     ast.fix_missing_locations(tree)
     # Force index-array LOCALS to int64. A local whose VALUES index another array
     # (``delv[neigh_safe[w0]]`` -- neigh_safe = np.clip(lxim, ..) is a local, so the
-    # param-only _detect_output_and_index_arrays misses it) must be integer;
+    # param-only detect_output_and_index_arrays misses it) must be integer;
     # C/Fortran reject a float subscript. A name used as a subscript index is always
     # integral, so this is sound.
     # Ordered: the loop below inserts into ``ctx.local_dtypes``, and that dict's order is what

@@ -182,7 +182,7 @@ class MathRewriter(ast.NodeTransformer):
             mapping = {
                 "inf": "INFINITY",
                 "nan": "NAN",
-                "newaxis": None,  # handled by _NewaxisToNone
+                "newaxis": None,  # handled by NewaxisToNone
             }
             replacement = mapping.get(node.attr)
             if replacement is not None:

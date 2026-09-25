@@ -61,7 +61,7 @@ BUILTIN_NAMES: set[str] = {
 
 
 #: Binary operators whose result is an integer when both operands are. ``/`` is absent on
-#: purpose: numpy true division is float even on two ints (see _lp_promote_true_division).
+#: purpose: numpy true division is float even on two ints (see lp_promote_true_division).
 INT_PRESERVING_OPS = (
     ast.Add,
     ast.Sub,

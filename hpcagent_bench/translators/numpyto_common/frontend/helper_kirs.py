@@ -356,7 +356,7 @@ class HelperKirBuilder:
                 )
         # The parent's folded names carry over: array params reuse the parent's folded shapes.
         site.hconsts = set(self.parent.inlined_consts) | set(inline_module_constants(self.tree, site.hfn, site.pnames))
-        # The kernel body's desugars and const-list unroll; before _mark_written_outputs so a
+        # The kernel body's desugars and const-list unroll; before mark_written_outputs so a
         # ufunc-out / roll rewrite counts as a write.
         native_desugar(site.hfn)
         unroll_const_list_loops(site.hfn)
@@ -660,7 +660,7 @@ class HelperKirBuilder:
                     f"call site passes {site_a.id}{tuple(site_d.shape)}; a helper cannot serve two shapes "
                     f"while its dimensions are emitted as constants"
                 )
-        # What the caller can name at this site (see _caller_side_symbol); resolved per site.
+        # What the caller can name at this site (see caller_side_symbol); resolved per site.
         owner_held = site.held_names() | {a.arg for a in site.owner_fn.args.args} | held_before(site.owner_fn, assign)
 
         def respell(shape: Sequence[str]) -> list[str]:

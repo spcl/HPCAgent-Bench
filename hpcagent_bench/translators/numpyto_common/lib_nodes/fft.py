@@ -169,7 +169,7 @@ def expand_dftn(
     out_k = ast.Subscript(value=name_(target.id), slice=o_slot, ctx=ast.Store())
     out_k_load = ast.Subscript(value=name_(target.id), slice=o_slot, ctx=ast.Load())
     # Emit pi as a numeric literal (backend-agnostic): this expander runs after
-    # _MathRewriter, so an ``np.pi`` Attribute would reach the emitter unlowered.
+    # MathRewriter, so an ``np.pi`` Attribute would reach the emitter unlowered.
     pi = const_(3.141592653589793)
     # total phase = sum_{t in T} (2.0 * pi * o_t * n_t) / N_t
     phase = None

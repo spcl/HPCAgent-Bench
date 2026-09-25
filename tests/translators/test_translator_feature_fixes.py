@@ -1949,7 +1949,7 @@ def test_apply_precision_leaves_integers_alone_in_helpers() -> None:
 def test_fortran_wraps_a_preset_symbol_used_as_a_condition() -> None:
     """``if reflect_out:`` where reflect_out is a size-preset entry.
 
-    frontend.py routes every ``parameters:`` name to a SymbolDesc, never to ``kir.scalars``, so a
+    The frontend routes every ``parameters:`` name to a SymbolDesc, never to ``kir.scalars``, so a
     0/1 config toggle declared there was invisible to the int-flag check and emitted as a bare
     ``if (reflect_out) then`` -- gfortran rejects that with 'IF clause requires a scalar LOGICAL
     expression', making the whole kernel unbuildable.

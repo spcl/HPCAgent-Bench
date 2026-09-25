@@ -32,7 +32,7 @@ def shape_from_iter_extent(node: ast.AST, known: dict[str, str], route_calls: bo
     if not isinstance(node, accepted):
         return None
     # Build a shape_table compatible with iter_extent_of (Tuple of
-    # tokens -- they get unparsed via _const_or_name).
+    # tokens -- they get unparsed via const_or_name).
     table: dict[str, tuple[str, ...]] = {}
     for name, sstr in known.items():
         toks = parse_shape_expression(sstr)
@@ -273,10 +273,10 @@ def ctor_dtype_tag(fn: ast.FunctionDef, node: ast.expr, arr_by: dict[str, ArrayD
     so it chases ``x`` through the same alias walk :func:`resolve_array_ref` uses for
     the shape -- the dtype must FOLLOW the source array, not be guessed.
 
-    Refuses anything else. Reading the last attribute segment as the tag (what this
-    used to do) stored the literal ``"dtype"`` on the descriptor: no dtype table has
-    that key and every emitter falls back to double on a miss, so a helper built at
-    fp32 declared ``double *`` parameters the caller filled with ``float *``.
+    Refuses anything else. Reading the last attribute segment as the tag would store
+    the literal ``"dtype"`` on the descriptor: no dtype table has that key and every
+    emitter falls back to double on a miss, so a helper built at fp32 would declare
+    ``double *`` parameters the caller fills with ``float *``.
     """
     tag = dtype_from_dtype_arg(node)
     if tag is not None:

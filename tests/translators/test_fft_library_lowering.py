@@ -4,7 +4,7 @@
 whole-array 1-D ``np.fft.fft``/``ifft`` renders as one ``fftw_plan_dft_1d`` call (O(N log N))
 instead of the naive O(N^2) loop, on C, C++ and Fortran.
 
-Two bugs blocked turning this on (both fixed in ``numpyto_common/lowering.py`` and
+Two bugs blocked turning this on (both fixed in ``numpyto_common/lowering/`` and
 ``numpyto_fortran/emit.py``, see ``numpyto_c/cli.py`` / ``numpyto_fortran/cli.py`` for the history):
 
 1. The hoisted result temp (``__cb<n> = np.fft.fft(x)``, spilled out of a larger expression or a

@@ -135,7 +135,7 @@ def scalarize_at_iters(expr: ast.expr, iters: list[ast.expr], shape_table: dict[
         # and every element came from the wrong plane. Equal ranks give offset 0, which is the
         # arithmetic that was already happening.
         iter_idx = max(0, len(iters) - subscript_result_rank(axes, shape, shape_table))
-        src_axis = 0  # source-axis pointer (see _iter_extent_of).
+        src_axis = 0  # source-axis pointer (see iter_extent_of_).
         group_iters: list[ast.expr] | None = None  # shared advanced-index iters
         for ax in axes:
             if isinstance(ax, ast.Constant) and ax.value is None:

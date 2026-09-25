@@ -151,11 +151,11 @@ def caller_side_symbol(
 
     ``extra_syms`` is the helper's own vocabulary: a parameter the constant-fold pruned
     (``_maxpool1d``'s ``c``, passed ``1`` at its only site) or a local its body binds (``out_len``).
-    Emitting one by NAME put an identifier into the CALLER that nothing there declares, and
-    ``promote_free_names_to_params`` then rescued it exactly as it rescues a genuine free parameter
-    -- as a scalar int in the ABI. Four kernels shipped an emitted signature carrying ``n`` / ``c`` /
-    ``out_len`` slots the harness binding never passes, and a positional call cannot notice: every
-    argument after the first extra slot was read from the wrong register.
+    Emitting one by NAME would put an identifier into the CALLER that nothing there declares, and
+    ``promote_free_names_to_params`` would rescue it exactly as it rescues a genuine free parameter
+    -- as a scalar int in the ABI: an emitted signature carrying ``n`` / ``c`` / ``out_len`` slots
+    the harness binding never passes, which a positional call cannot notice (every argument after
+    the first extra slot is read from the wrong register).
 
     So the symbol is translated into caller vocabulary here instead. Most need no translation:
     ``infer_helper_params`` reads a helper's extents off its CALL SITE, so the majority of them are

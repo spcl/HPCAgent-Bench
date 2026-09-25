@@ -140,12 +140,11 @@ def target_names(target: ast.AST) -> OrderedSet:
     written THROUGH, e.g. ``a`` in ``a[i] = x``.
 
     Does NOT recurse into a Subscript's INDEX or an Attribute's name: those are read, not bound.
-    ``out[lo:hi:stride[0]] += tap`` (a strided-slice tap loop) walks the whole target with a bare
-    ``ast.walk`` and used to pick up ``stride`` from inside the slice STEP as if this statement
-    rebound it -- which then made ``assigned_names`` invalidate ``stride``'s compile-time tuple
-    tracking (see below) on every loop this statement sits in, so a stride that had already folded
-    to a literal outside the loop reverted to an un-foldable ``stride[0]`` the moment the SAME
-    variable was also used as a slice step somewhere inside it."""
+    A bare ``ast.walk`` over ``out[lo:hi:stride[0]] += tap`` (a strided-slice tap loop) would pick
+    up ``stride`` from inside the slice STEP as if this statement rebound it; ``assigned_names``
+    would then invalidate ``stride``'s compile-time tuple tracking (see below) on every loop the
+    statement sits in, and a stride already folded to a literal outside the loop would revert to an
+    un-foldable ``stride[0]``."""
     if isinstance(target, ast.Name):
         return OrderedSet((target.id,))
     if isinstance(target, ast.Starred):

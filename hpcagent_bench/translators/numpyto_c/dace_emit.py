@@ -300,8 +300,7 @@ def dace_dtype(tag: str) -> str:
     """Map a numpy dtype tag to its dace spelling, FAILING LOUDLY on an unknown integer tag
     rather than silently declaring a float. A declared-int array typed as ``dc_float`` reaches
     the frontend as a double, and the first bitwise op on it dies inside dace with an operand-type
-    error that names nothing in this file (``BitAnd: 'double' and 'int64_t'`` -- int4 shipped that
-    way). Sub-byte dtypes route through their STORAGE dtype: an int4 array IS an int8 buffer."""
+    error that names nothing in this file (``BitAnd: 'double' and 'int64_t'``). Sub-byte dtypes route through their STORAGE dtype: an int4 array IS an int8 buffer."""
     mapped = DTYPE_TO_DACE.get(tag) or DTYPE_TO_DACE.get(dtypes.storage_dtype(tag))
     if mapped is not None:
         return mapped
@@ -2183,7 +2182,7 @@ class ResolveShapeReads(ast.NodeTransformer):
             return
         self.alias_seen.add(name)
         # Folded on the way in: without it alias N carries alias N-1's whole expansion, so the AST
-        # deepens once per layer and resnet101's 101 layers overflow the deepcopy in _SubstituteNames.
+        # deepens once per layer and resnet101's 101 layers overflow the deepcopy in SubstituteNames_.
         self.aliases[name] = fold_expr(SubstituteNames_(self.aliases).visit(copy.deepcopy(value)))
 
     def cumulative_axis(self, node: ast.Call) -> tuple[ast.expr, int] | None:
@@ -2676,9 +2675,10 @@ def is_symbol_expr(node: ast.AST, allowed: set[str]) -> bool:
 
     A ``.shape[k]`` read is included whatever its receiver: dace's own array descriptor already
     carries a symbolic shape, so reading one axis of it is exactly as "symbol" as a name already in
-    ``allowed`` -- max_filter's ``nblocks = -(-length // w)`` feeds a reshape, and ``length`` itself
-    is one array's ``shape[0]`` plus two symbols, which used to make the WHOLE chain look
-    data-dependent and left ``nblocks`` a plain scalar reshape then auto-promoted and collided with.
+    ``allowed``. In ``nblocks = -(-length // w)`` feeding a reshape, ``length`` is one array's
+    ``shape[0]`` plus two symbols; excluding the read would make the whole chain look
+    data-dependent and leave ``nblocks`` a plain scalar the reshape then auto-promotes and collides
+    with.
     """
     if is_shape_subscript(node):
         return True
@@ -3459,7 +3459,7 @@ def spell_aranges_with_named_lengths(fn_ast: ast.FunctionDef, known: set[str]) -
     Only where the name is bound EARLIER IN THE SAME BLOCK: a binding in another branch does not
     reach this arange, and one after it is not yet the length.
     """
-    # One scan for every candidate, not one per candidate: _scan_size_assigns walks the whole
+    # One scan for every candidate, not one per candidate: scan_size_assigns walks the whole
     # function, and densenet121 ran it 879 times for 62 s of a 134 s emit. A target set only
     # filters which assigns get recorded, so the answer per name is the same either way.
     once = once_bound_locals(fn_ast, known)

@@ -35,7 +35,7 @@ def curve_fit_lm_lines(
     """
     n, m = f"{p0}.shape[0]", f"{y}.shape[0]"
     i, c, a, b, it = f"{pfx}_i", f"{pfx}_c", f"{pfx}_a", f"{pfx}_b", f"{pfx}_it"
-    # All scratch is allocated at the working precision the step size tracks (see _working_float_dtype).
+    # All scratch is allocated at the working precision the step size tracks (see working_float_dtype).
     wf = f"np.{working_float_dtype(precision)}"
     return [
         f"{popt} = np.zeros(({n},), dtype={wf})",

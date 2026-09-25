@@ -368,14 +368,14 @@ def double_kind() -> str:
 
 
 #: Calls whose Fortran result is INTEGER unconditionally (int/len/floor/ceil/round/...);
-#: the _INT_CALLS_ARGDEP subset (max/min/int helpers) is integer only when every arg is.
-#: Shared by the min/max operand typing and _expr_is_integer so the two never drift.
+#: the INT_CALLS_ARGDEP subset (max/min/int helpers) is integer only when every arg is.
+#: Shared by the min/max operand typing and expr_is_integer so the two never drift.
 #: numpy's integer dtype CONSTRUCTORS, which ``x.astype(np.int64)`` lowers to (``np.int64(x)``);
 #: ``min``/``max`` of such a cast is INTEGER.
 NUMPY_INT_CASTS = frozenset(
     {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "intp", "uintp", "intc", "longlong"}
 )
-#: ``fmax``/``fmin`` are the POST-RENAME spelling of np.maximum/np.minimum: _MathRewriter renames
+#: ``fmax``/``fmin`` are the POST-RENAME spelling of np.maximum/np.minimum: MathRewriter renames
 #: them before this check runs, so a nested min(max(...)) saw an unknown callee and read as real.
 INT_RETURNING_CALLS = {
     "int",
@@ -410,7 +410,7 @@ INT_EXTRACTING_CALLS = frozenset({"len", "int", "range"})
 #: The __hpcagent_bench_zeros__ marker, plus its leading-underscore-stripped alias.
 ZEROS_MARKER_NAMES = frozenset({"__hpcagent_bench_zeros__", "x_hpcagent_bench_zeros__"})
 
-#: FFT_LIBRARY_MARKER, plus its leading-underscore-stripped alias: _FortranRenameTemps
+#: FFT_LIBRARY_MARKER, plus its leading-underscore-stripped alias: FortranRenameTemps
 #: (visit_Name) strips a marker call's OWN func name like any other identifier before
 #: emit_stmt's marker check runs, so the raw spelling never survives to be matched.
 FFT_MARKER_NAMES = frozenset({FFT_LIBRARY_MARKER, "x_" + FFT_LIBRARY_MARKER.lstrip("_")})
@@ -454,7 +454,7 @@ def array_decl(arr: ArrayDesc) -> str:
     base = fortran_type(arr.dtype)
     # Fortran rank-N array declaration a(N), aa(N, M), with REVERSED shape so
     # column-major matches the row-major memory layout of the C-allocated data
-    # (subscripts are reversed too -- see _emit_subscript). Also // -> / (string concat).
+    # (subscripts are reversed too -- see emit_subscript). Also // -> / (string concat).
     if arr.shape:
         dims = ", ".join(to_fortran_shape_token(s) for s in reversed(arr.shape))
         return f"{base}, {intent} :: {arr.name}({dims})"
@@ -468,7 +468,7 @@ def scalar_decl(name: str, dtype: str, is_output: bool, assigned: bool = False) 
     if is_output:
         return f"{base}, intent(inout) :: {name}"
     # A value scalar the body REASSIGNS (reused as a loop local) must drop
-    # intent(in): Fortran forbids an intent(in) dummy on the LHS. Mirrors _symbol_decl.
+    # intent(in): Fortran forbids an intent(in) dummy on the LHS. Mirrors symbol_decl.
     if assigned:
         return f"{base}, value :: {name}"
     return f"{base}, value, intent(in) :: {name}"
@@ -762,9 +762,9 @@ class FortranBodyEmitter(BaseEmitter):
     def emit_stmt(self, node: ast.stmt, indent: str) -> str:
         # A bare helper-subroutine call statement (an out-param call, or a VOID helper that writes
         # only through its array dummies) emits as call h(args); a scalar helper's X = h(...) still
-        # routes through _emit_assign.
+        # routes through emit_assign.
         #
-        # _fortran_safe on the LOOKUP, not just the emitted name: _helper_out is keyed by the
+        # fortran_safe on the LOOKUP, not just the emitted name: _helper_out is keyed by the
         # gfortran-accepted spelling (``x_inner_4x4`` for the tree's ``_inner_4x4``).
         if (
             isinstance(node, ast.Expr)
@@ -837,7 +837,7 @@ class FortranBodyEmitter(BaseEmitter):
 
     def __init__(self, kir: KernelIR) -> None:
         self.kir = kir
-        #: Lazy cache of the names used in an integer context (see _int_uses).
+        #: Lazy cache of the names used in an integer context (see int_uses_).
         self._int_uses_cache: set[str] | None = None
         #: When this body IS a helper subroutine: the out-param name its return
         #: writes into (None for the kernel).
@@ -909,11 +909,11 @@ class FortranBodyEmitter(BaseEmitter):
         self._used_ieee = False
         #: Int-typed PARAMETER array names (0/1-flag use wraps with /= 0); populated by the caller.
         self._int_array_names: set[str] = set()
-        #: Lazy cache of names typed integer (symbols + int-dtype scalars); see _is_int_flag_scalar.
+        #: Lazy cache of names typed integer (symbols + int-dtype scalars); see is_int_flag_scalar.
         self._int_scalar_names: set[str] | None = None
-        #: Lazy cache of bool-typed scalar params; see _bool_scalar_names.
+        #: Lazy cache of bool-typed scalar params; see bool_scalar_names.
         self._bool_scalar_names_cache: set[str] | None = None
-        #: Local array names declared logical(c_bool); populated by the caller (see _logical_locals).
+        #: Local array names declared logical(c_bool); populated by the caller (see logical_locals_).
         self._logical_array_locals: set[str] = set()
         #: name -> resolved element dtype of a fresh local array; populated by the caller.
         self._local_elem_dtypes: dict[str, str] = {}
@@ -1008,7 +1008,7 @@ class FortranBodyEmitter(BaseEmitter):
         int_scalars = self._int_scalar_names
         if int_scalars is None:
             # Symbols too, not just scalars: a ``parameters:`` preset entry becomes a SymbolDesc
-            # (frontend.py), so a 0/1 config toggle declared there (crc16's ``reflect_out``) is an
+            # (frontend/kernel_ir.py), so a 0/1 config toggle declared there (crc16's ``reflect_out``) is an
             # integer param that never appears in ``kir.scalars``.
             int_scalars = {s.name for s in self.kir.symbols}
             int_scalars |= {
@@ -1032,8 +1032,8 @@ class FortranBodyEmitter(BaseEmitter):
         if produces_logical(node):
             return True
         # ~x and a & | ^ combine are logical iff their operands are, INCLUDING when the operand is
-        # only known logical from the side tables below (_produces_logical is module-level and
-        # cannot see them), so recurse through this method rather than through _produces_logical.
+        # only known logical from the side tables below (produces_logical is module-level and
+        # cannot see them), so recurse through this method rather than through produces_logical.
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
             return self.is_logical_node(node.operand)
         if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.BitAnd, ast.BitOr, ast.BitXor)):
@@ -1133,7 +1133,7 @@ class FortranBodyEmitter(BaseEmitter):
         # ``X = helper(args)`` where helper is emitted as a subroutine taking its result through
         # an out-param -> ``call helper(...)`` with X spliced into the result dummy's ABI slot
         # (it sorts among the pointer params, it is not pinned last).
-        # _fortran_safe on the lookup for the same reason emit_stmt does it: _helper_out is keyed by
+        # fortran_safe on the lookup for the same reason emit_stmt does it: _helper_out is keyed by
         # the gfortran-accepted spelling, which differs from the tree's for an underscore-led helper.
         if (
             isinstance(node.value, ast.Call)
@@ -1642,7 +1642,7 @@ class FortranBodyEmitter(BaseEmitter):
         if isinstance(node, ast.Call):
             return self.emit_call(node)
         if isinstance(node, ast.IfExp):
-            # Never reached: _hoist_ifexp_stmts lowers every IfExp to an if/else-over-a-temp first.
+            # Never reached: hoist_ifexp_stmts lowers every IfExp to an if/else-over-a-temp first.
             # merge(a, b, mask) evaluates BOTH branches, so it cannot stand in for a guard that
             # skips a division-by-zero / out-of-bounds branch.
             raise NotImplementedError(
@@ -1653,7 +1653,7 @@ class FortranBodyEmitter(BaseEmitter):
         raise NotImplementedError(f"expression {type(node).__name__} (line {vars(node).get('lineno', '?')})")
 
     def expr_is_real(self, e: ast.AST) -> bool:
-        """True only when e is PROVABLY real-typed; deliberately not the complement of _expr_is_integer."""
+        """True only when e is PROVABLY real-typed; deliberately not the complement of expr_is_integer."""
         if isinstance(e, ast.Constant):
             return isinstance(e.value, float)
         if isinstance(e, (ast.Name, ast.Subscript)):
@@ -2307,7 +2307,7 @@ class FortranBodyEmitter(BaseEmitter):
             if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id == "int":
                 return SYMBOL_INT_TAG
             # A SCALAR element read of a narrow int array is emitted as INT(a(i), c_int64_t) by
-            # _emit_subscript, so its kind is the ABI integer -- NOT the array's declared width. A
+            # emit_subscript, so its kind is the ABI integer -- NOT the array's declared width. A
             # SECTION read is not promoted, so it keeps the declared tag.
             if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
                 scalar_read = isinstance(sub.ctx, ast.Load) and not any(
@@ -2445,7 +2445,7 @@ class FortranBodyEmitter(BaseEmitter):
 
         all_int = all(is_int(a) for a in args)
         # Fortran MIN/MAX requires a uniform KIND under -std=f2018: suffix bare literals with the
-        # int kind of any typed operand (mirrors _emit_bitwise_pair).
+        # int kind of any typed operand (mirrors emit_bitwise_pair).
         int_kind = None
         mixed_int = False
         if all_int:
@@ -2953,7 +2953,7 @@ def emit_fortran(kir: KernelIR, fn_name: str | None = None, parallel: bool = Fal
     abi_param_order = kir.param_order()
     # Strip leading underscores from every Name (Fortran forbids them). Also handle
     # case-insensitive collisions: Fortran folds K and k to one identifier, so a symbol K and a
-    # loop iter k would clash; case_map (see _fortran_case_map) routes the offender to an
+    # loop iter k would clash; case_map (see fortran_case_map) routes the offender to an
     # f_-prefixed rewrite instead of dropping either name.
     case_map = fortran_case_map(kir)
 
@@ -3009,7 +3009,7 @@ def emit_fortran(kir: KernelIR, fn_name: str | None = None, parallel: bool = Fal
     ast.fix_missing_locations(kir_tree)
 
     # Harvested zeros/shape locals hold token strings: rename embedded __name references in each
-    # through _fortran_safe_token.
+    # through fortran_safe_token.
     def safe_full(name: str) -> str:
         """Apply leading-underscore strip + case-collision rewrite."""
         s = fortran_safe(name)
@@ -3044,7 +3044,7 @@ def emit_fortran(kir: KernelIR, fn_name: str | None = None, parallel: bool = Fal
     sym_by_name = {s.name: s for s in kir.symbols}
     arr_by_name = {a.name: a for a in kir.arrays}
     sca_by_name = {s.name: s for s in kir.scalars}
-    # Symbols the body writes to need their intent(in) relaxed -- see _symbol_decl.
+    # Symbols the body writes to need their intent(in) relaxed -- see symbol_decl.
     # Collect from the (already safe-renamed) tree so names line up with sym_by_name.
     assigned_names: set = set()
     for n in ast.walk(kir.tree):
@@ -3088,18 +3088,18 @@ def emit_fortran(kir: KernelIR, fn_name: str | None = None, parallel: bool = Fal
             pre_int_kinds[nm] = "int32"
     body_emitter._int_kinds = pre_int_kinds
     # Type the hoisted IfExp temps into local_dtypes -- the dict body_emitter shares, and the
-    # authoritative input to the SECOND _collect_implicit_locals below, which emits the decls.
-    # After _pre_int_kinds, so a branch naming an implicit integer local (``c = int(idx[i])``)
+    # authoritative input to the SECOND collect_implicit_locals below, which emits the decls.
+    # After pre_int_kinds, so a branch naming an implicit integer local (``c = int(idx[i])``)
     # reads as INTEGER; typed before that pass it would look untyped and widen the temp to real.
     record_ifexp_temp_dtypes(body_emitter, ifexp_temps, safe_full)
     # A hoisted helper-call temp is declared from the HELPER's own return kind, the same source
-    # _emit_fortran_helper declares the result dummy from (not from the temp's uses).
+    # emit_fortran_helper declares the result dummy from (not from the temp's uses).
     helper_by_name = {h.kernel_name: h for h in kir.helpers}
     for temp, helper in hcall_temps.items():
         body_emitter.kir.local_dtypes[safe_full(temp)] = (
             "int64" if helper_returns_int(helper_by_name[helper]) else "float64"
         )
-    # Pre-compute logical_array_locals so _emit_subscript can detect arr[mask] boolean-indexing
+    # Pre-compute logical_array_locals so emit_subscript can detect arr[mask] boolean-indexing
     # and emit PACK(arr, mask). Computed ONCE for both the body emitter and the declaration pass.
     logical_array_locals: set[str] = logical_locals_(kir)
     body_emitter._logical_array_locals = logical_array_locals
@@ -3188,7 +3188,7 @@ def emit_fortran(kir: KernelIR, fn_name: str | None = None, parallel: bool = Fal
     allocatable_locals: list[tuple[str, list[str], str]] = []
     inline_alloc_locals: dict[str, tuple[list[str], str]] = {}
     # RESOLVED element dtype of each local array (most fall to the kernel float default), for
-    # _expr_is_real / _name_int_kind.
+    # expr_is_real / name_int_kind.
     local_elem_dtypes: dict[str, str] = {}
     for name_, shape in body_emitter.local_arrays.items():
         if name_.lower() in seen_ci:
@@ -3203,7 +3203,7 @@ def emit_fortran(kir: KernelIR, fn_name: str | None = None, parallel: bool = Fal
                 )
             continue
         seen_ci.add(name_.lower())
-        # REVERSED shape for col-major/row-major interop -- see _array_decl.
+        # REVERSED shape for col-major/row-major interop -- see array_decl.
         rev_shape = [to_fortran_shape_token(s) for s in reversed(shape)] if shape else ["1"]
         local_dtypes = kir.local_dtypes
         # A float temp with no recorded dtype defaults to the KERNEL's float
@@ -3269,7 +3269,7 @@ def emit_fortran(kir: KernelIR, fn_name: str | None = None, parallel: bool = Fal
         lines.append("    end interface")
         libm_iface = "\n".join(lines)
 
-    # bind(C) interface block for FFTW3, one FFT_LIBRARY_MARKER call site (see _emit_fftw) needs
+    # bind(C) interface block for FFTW3, one FFT_LIBRARY_MARKER call site (see emit_fftw) needs
     # it: Fortran has no ``#include``, so the 3 C functions it calls (plan/execute/destroy) are
     # declared here explicitly, one interface trio per precision this body actually used.
     fftw_iface = ""
@@ -3376,7 +3376,7 @@ def collect_implicit_locals(kir: KernelIR) -> list[tuple[str, str]]:
     declared.update(kir.input_args)
     declared.update(kir.int_locals)
     declared.update(kir.zeros_locals.keys())
-    # Loop iter vars are declared separately via _collect_for_targets.
+    # Loop iter vars are declared separately via collect_for_targets.
     for s in ast.walk(kir.tree):
         if isinstance(s, ast.For) and isinstance(s.target, ast.Name):
             declared.add(s.target.id)
@@ -3411,7 +3411,7 @@ def collect_implicit_locals(kir: KernelIR) -> list[tuple[str, str]]:
         ):
             logical_uses.add(node.targets[0].id)
     # Bitwise-op targets/operands are int_uses (IAND/IOR/IEOR/ISHFT/NOT take INTEGER); an operand
-    # that _produces_bool is a numpy mask combine and is skipped.
+    # that produces_bool is a numpy mask combine and is skipped.
 
     def walk_bitwise_operands(rhs) -> None:
         # Walk a RHS expression and add every Name reachable through bitwise
@@ -3714,7 +3714,7 @@ def hoist_nested_helper_calls(
             for node in ast.walk(stmt.test):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in helper_names:
                     raise NotImplementedError(f"helper {node.func.id!r} is called in a while condition")
-        # These two shapes are already the statement call _emit_assign/_emit_expr_stmt rewrite;
+        # These two shapes are already the statement call emit_assign/_emit_expr_stmt rewrite;
         # only their ARGUMENTS may still hold a nested call.
         whole_stmt_call = None
         if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.value, ast.Call):
@@ -3751,7 +3751,7 @@ def rename_helper_to_fortran_safe(hkir: KernelIR) -> tuple[KernelIR, dict[str, s
     """
     case_map = fortran_case_map(hkir)
     htree = copy.deepcopy(hkir.tree)
-    # Fortran-only IfExp->if/else hoist (see _hoist_ifexp_stmts), same as the top-level kernel tree.
+    # Fortran-only IfExp->if/else hoist (see hoist_ifexp_stmts), same as the top-level kernel tree.
     htree.body, ifexp_temps = hoist_ifexp(htree.body)
     FortranRenameTemps(case_map=case_map).visit(htree)
     ast.fix_missing_locations(htree)
@@ -3787,7 +3787,7 @@ def rename_helper_to_fortran_safe(hkir: KernelIR) -> tuple[KernelIR, dict[str, s
         local_dtypes={safe(k): v for k, v in hkir.local_dtypes.items()},
     )
     # Same branch-type join as the kernel tree, on the helper's own (fresh) local_dtypes dict --
-    # _emit_fortran_helper calls _collect_implicit_locals on this KernelIR to declare its locals.
+    # emit_fortran_helper calls collect_implicit_locals on this KernelIR to declare its locals.
     record_ifexp_temp_dtypes(FortranBodyEmitter(renamed), ifexp_temps, safe)
     return renamed, case_map
 
@@ -3810,14 +3810,14 @@ def emit_fortran_helper(
     arr_by = {a.name: a for a in hkir.arrays}
     sca_by = {s.name: s for s in hkir.scalars}
     # One order for definition and call; only the SPELLING is Fortran-specific. abi_order/ret_orig
-    # are read on the PRE-rename KIR (see _helper_abi_order's docstring), so they fold through the
+    # are read on the PRE-rename KIR (see helper_abi_order's docstring), so they fold through the
     # same case_map the body and decls above were folded with -- a caller symbol N and a
     # helper-local n differ only by case, and Fortran folds the two dummies to one identifier.
     ret_name = case_safe_name(ret_orig, case_map) if ret_orig is not None else None
     param_names = [case_safe_name(p, case_map) for p in abi_order]
     ret_decl = None
     if hkir.return_kind == "scalar":
-        # A real result follows the KERNEL's float precision, exactly as _collect_implicit_locals
+        # A real result follows the KERNEL's float precision, exactly as collect_implicit_locals
         # types the caller's hoisted temp.
         ret_dtype = "int64" if helper_returns_int(hkir) else dtypes.accumulator_dtype(hkir.float_precision or "float64")
         ret_decl = f"{fortran_type(ret_dtype)}, intent(out) :: {ret_name}"
@@ -3851,7 +3851,7 @@ def emit_fortran_helper(
     if ret_decl:
         decls.append(ret_decl)
     # Local arrays harvested inside the helper need explicit fixed-shape declarations (reversed,
-    # as in _array_decl): a contained subroutine has no enclosing scope to inherit them from.
+    # as in array_decl): a contained subroutine has no enclosing scope to inherit them from.
     rk = {"float32": "c_float", "float16": "c_float"}.get(
         dtypes.compute_dtype(hkir.float_precision or "float64"), "c_double"
     )
@@ -3947,7 +3947,7 @@ WRAP_COL = 118
 
 
 def wrap_fortran_line(line: str) -> str:
-    """Continue one physical Fortran free-form CODE line so no piece exceeds _MAX_LINE_COLS columns."""
+    """Continue one physical Fortran free-form CODE line so no piece exceeds MAX_LINE_COLS columns."""
     if len(line) <= MAX_LINE_COLS:
         return line
     stripped = line.lstrip()
@@ -3972,7 +3972,7 @@ def wrap_fortran_line(line: str) -> str:
 
 
 def wrap_fortran_text(text: str) -> str:
-    """Apply _wrap_fortran_line to every physical line of text so no emitted CODE line exceeds the column budget."""
+    """Apply wrap_fortran_line to every physical line of text so no emitted CODE line exceeds the column budget."""
     return "\n".join(wrap_fortran_line(ln) for ln in text.split("\n"))
 
 

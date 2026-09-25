@@ -222,8 +222,8 @@ class EyeToZerosDiagonal(ast.NodeTransformer):
         cols = v.args[1] if rectangular else copy.deepcopy(rows)
         # ``k=`` (or eye's 3rd positional) shifts the unit diagonal: numpy writes 1.0 at
         # (i, i+k). Fill X[t + off_r, t + off_c] for t in range(min(M - off_r, N - off_c))
-        # with off_r = max(0, -k), off_c = max(0, k); k == 0 is the plain main diagonal
-        # (byte-identical to the old output). ``identity`` has no k.
+        # with off_r = max(0, -k), off_c = max(0, k); k == 0 is the plain main diagonal.
+        # ``identity`` has no k.
         k_node = None
         for kw in v.keywords:
             if kw.arg == "k":

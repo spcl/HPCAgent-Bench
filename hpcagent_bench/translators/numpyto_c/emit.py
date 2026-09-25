@@ -56,7 +56,7 @@ def c_type_(dtype: str) -> str:
         return "double"
 
 
-#: bare-name calls whose RESULT is an integer whatever the argument's dtype (see _is_int_cast).
+#: bare-name calls whose RESULT is an integer whatever the argument's dtype (see is_int_cast).
 INT_CAST_NAMES = frozenset({"int", "len"})
 
 
@@ -169,7 +169,7 @@ def is_int_cast(node: ast.AST) -> bool:
     return False
 
 
-#: libm functions with a <name>f single-precision variant, emitted in a float32 kernel (see _math_name).
+#: libm functions with a <name>f single-precision variant, emitted in a float32 kernel (see math_name).
 FLOATABLE = frozenset(
     {
         "sin",
@@ -214,13 +214,13 @@ FLOATABLE = frozenset(
 #: u?int{8,16,32}_t -- integer C types narrower than the int64 ABI integer.
 NARROW_INT_CT = re.compile(r"u?int(8|16|32)_t")
 
-#: np.flip/copy/transpose on a scalar Subscript is a no-op in the _emit_call attr path.
+#: np.flip/copy/transpose on a scalar Subscript is a no-op in the emit_call attr path.
 NOOP_UNARY_ATTRS = frozenset({"flip", "copy", "transpose"})
 
-#: math macros that are never integer-typed (see _is_int_operand).
+#: math macros that are never integer-typed (see is_int_operand).
 FLOAT_MATH_MACROS = frozenset({"M_PI", "M_E", "INFINITY", "NAN"})
 
-#: integer dtypes recognized by _all_int_locals when scanning kir.scalars.
+#: integer dtypes recognized by all_int_locals when scanning kir.scalars.
 INT_SCALAR_DTYPES = frozenset({"int", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"})
 
 
@@ -289,7 +289,7 @@ def emit_signature(kir: KernelIR, fn_name: str, order: list[str] | None = None) 
     for name in kir.param_order() if order is None else order:
         if name in sym_by_name:
             # int64_t (canonical); const per abi_contract Sec. 5 unless the body reuses the symbol
-            # as a local -- see _assigned_names.
+            # as a local -- see assigned_names.
             qual = "" if name in assigned else "const "
             parts.append(f"{qual}{dtypes.c_type('int')} {name}")
         elif name in arr_by_name:
@@ -360,7 +360,7 @@ class IsoparRef(NamedTuple):
 def isopar_elem_ok(dtype: str | None) -> bool:
     """True when an element of ``dtype`` READS as its own stored value.
 
-    A narrow int promotes to int64 and an fp8 byte decodes to float on every read (_promote_read),
+    A narrow int promotes to int64 and an fp8 byte decodes to float on every read (promote_read),
     so handing such an element to a lambda by value would compute in a different type than the loop
     body does. Complex is excluded because the ``double _Complex`` extension type is not what
     ``std::plus`` and friends are instantiated on here.
@@ -370,7 +370,7 @@ def isopar_elem_ok(dtype: str | None) -> bool:
     try:
         ct = dtypes.c_type(dtype)
     except KeyError:
-        return False  # unrecognised dtype: _c_type would silently call it double
+        return False  # unrecognised dtype: c_type_ would silently call it double
     return not (is_narrow_int(dtype) or fp8_functions(dtype, C_FP8_NAMES) is not None or "_Complex" in ct)
 
 
@@ -509,9 +509,9 @@ class CBodyEmitter(BaseEmitter):
         self._deferred_alloc_size: dict[str, str] = {}
         #: Fn-top zeros/ones local -> (size, C type, fill kind) to re-run on an in-loop reset.
         self.zeros_refill: dict[str, tuple[str, str, str]] = {}
-        #: Memoised _all_int_locals() result.
+        #: Memoised all_int_locals() result.
         self._int_locals_cache: set[str] | None = None
-        #: Memoised _float_scalar_names() result.
+        #: Memoised float_scalar_names() result.
         self._fsn_cache: set[str] | None = None
 
     # statement-level
@@ -701,7 +701,7 @@ class CBodyEmitter(BaseEmitter):
 
     def isopar_ref(self, sub: ast.Subscript, idx: str, lo: str) -> IsoparRef | None:
         """The contiguous range ``sub`` sweeps as ``idx`` runs from ``lo``, or None if it sweeps none."""
-        self.normalize_negative_indices(sub)  # a[-1] -> a[N-1], as _emit_subscript does
+        self.normalize_negative_indices(sub)  # a[-1] -> a[N-1], as emit_subscript does
         axes: list[ast.AST] = []
         cur: ast.AST = sub
         while isinstance(cur, ast.Subscript):
@@ -902,7 +902,7 @@ class CBodyEmitter(BaseEmitter):
             # That element is OUTSIDE the written range and is passed by value, so the algorithm's
             # writes cannot race it; the carried dependence itself is the algorithm's, and
             # inclusive_scan is specified over any association of the combine (unlike partial_sum).
-            # The weaker policy here is a toolchain bug, not a precondition -- see _ISOPAR_SCAN_POLICY.
+            # The weaker policy here is a toolchain bug, not a precondition -- see ISOPAR_SCAN_POLICY.
             return (
                 f"{decl}\n{indent}if ({count} > 0) {{\n"
                 f"{indent}  std::inclusive_scan({ISOPAR_SCAN_POLICY}, {src.ptr}, {src.ptr} + {count}, "
@@ -1002,7 +1002,7 @@ class CBodyEmitter(BaseEmitter):
             if isinstance(node.value, ast.Name) and node.value.id in live:
                 # Returning a heap local BY VALUE from a scalar-typed function: the C is already
                 # ill-typed (a pointer where a double is declared), and freeing it here would hand
-                # back a dangling one. An array return is supposed to reach _rewrite_returns_to_outparam
+                # back a dangling one. An array return is supposed to reach rewrite_returns_to_outparam
                 # instead, so this is a misclassified helper -- say which, rather than emit either.
                 raise NotImplementedError(
                     f"helper returns heap buffer {node.value.id!r} from a scalar "
@@ -1112,7 +1112,7 @@ class CBodyEmitter(BaseEmitter):
         return "\n".join([body] + [f"{indent}free({name});" for name in owned])
 
     def body_fill_stmt(self, name: str, size: str, c_type: str, kind: str, indent: str) -> str:
-        """A zeros/ones fill emitted INSIDE the body; pluto desugars it to a loop nest (see _fill_loop_stmt)."""
+        """A zeros/ones fill emitted INSIDE the body; pluto desugars it to a loop nest (see fill_loop_stmt)."""
         if not self.pluto:
             return zero_fill_stmt(name, size, c_type, kind, indent)
         dims = self.array_shapes.get(name, []) if name in self.multidim_arrays else []
@@ -1416,8 +1416,8 @@ class CBodyEmitter(BaseEmitter):
             # A flat C pointer cannot be multi-subscripted: `w_box[i][j]` on `double *w_box` is a
             # hard compile error, not a slower-but-correct access. Reaching here with 2+ indices
             # means the array's rank is unknown or disagrees with the index count -- almost always a
-            # missing/incorrect init.shapes declaration (conv_2d's w_box was inferred 1D but indexed
-            # 2D). Emitting the chained form silently shipped uncompilable C; fail loudly instead.
+            # missing/incorrect init.shapes declaration. The chained form would be uncompilable C,
+            # so fail loudly instead.
             raise NotImplementedError(index_rank_error(base_node.id, shape, len(indices)))
         return self.promote_read(node, f"{base}[{self.flatten_indices(shape, indices)}]")
 
@@ -1447,7 +1447,7 @@ class CBodyEmitter(BaseEmitter):
         return access
 
     def name_dtype(self, name: str):
-        """dtype of a bare Name -- a local, an array, or a scalar param (_dtype_for_name alone misses by-value scalars)."""
+        """dtype of a bare Name -- a local, an array, or a scalar param (dtype_for_name alone misses by-value scalars)."""
         dt = self.dtype_for_name(name)
         if dt is None:
             for sca in self.kir.scalars:
@@ -1568,7 +1568,7 @@ class CBodyEmitter(BaseEmitter):
             # floor(a/b) on int/int IS floor-division: route through emit_floordiv/emit_ceildiv
             # (POLYCC-008's pluto floord/ceild, else the exact int_floor/int_ceil _Generic macro)
             # instead of C's truncating int64_t / int64_t, which a forward-substituted int/int
-            # divide can reach here past _emit_true_divide (only sees a bare top-level Div).
+            # divide can reach here past emit_true_divide (only sees a bare top-level Div).
             if (
                 fn in ("floor", "ceil")
                 and len(node.args) == 1
@@ -1667,7 +1667,7 @@ class CBodyEmitter(BaseEmitter):
 
         Args (see FFT_LIBRARY_MARKER): ``(out, src, n, inverse_flag, norm_kind)``. ``out``/``src``
         are bare Names (array params/locals; the marker is only ever built that way, see
-        _expand_dft_1d_library), so their C spelling is just the identifier -- same as
+        expand_dft_1d_library), so their C spelling is just the identifier -- same as
         :meth:`emit_blas_gemm`. Both are ``double _Complex*``/``float _Complex*`` already, which
         C99 defines layout-compatible with ``fftw_complex``/``fftwf_complex`` (FFTW's own manual:
         "you should find that fftw_complex is the same as ... double complex"), so no repacking.
@@ -1959,7 +1959,7 @@ class CBodyEmitter(BaseEmitter):
         return {a.name for a in self.kir.arrays} | set(self.kir.zeros_locals)
 
     def is_complex_operand(self, node: ast.AST) -> bool:
-        """True when node's element dtype is complex; delegates to _walk_complex so a real-returning accessor stays real."""
+        """True when node's element dtype is complex; delegates to walk_complex so a real-returning accessor stays real."""
         return walk_complex(node, self.dtype_for_name) is not None
 
     def is_float_operand(self, node: ast.AST, scalars_=None) -> bool:
@@ -2518,7 +2518,7 @@ def emit_body(
         emitter.multidim_arrays = set(emitter.multidim_arrays) | md_locals
     # Default dtype for a float temp not listed in local_dtypes follows the kernel's float precision.
     default_float = default_float_dtype(kir)
-    # Register each local array's resolved dtype so _is_float_operand can prove float-ness (setdefault keeps explicit tags).
+    # Register each local array's resolved dtype so is_float_operand can prove float-ness (setdefault keeps explicit tags).
     for name in (*fn_top_locals, *deferred_malloc_locals, *inline_locals, *branch_locals):
         local_dtypes.setdefault(name, default_float)
     kir.local_dtypes = local_dtypes
@@ -2532,7 +2532,7 @@ def emit_body(
     # Names, not statements: every exit needs this list too, at whatever indent it sits on.
     heap: list[str] = []
     for name in int_locals:
-        # canonical int is int64_t everywhere else (see _c_type / the int(x) cast); a bare 32-bit
+        # canonical int is int64_t everywhere else (see c_type_ / the int(x) cast); a bare 32-bit
         # int here overflows on a literal grid unpack like nx, ny = 46341, 46341 (nx*ny > 2^31).
         decls.append(f"{indent}{c_type_('int')} {name};")
     for name, ctype in implicit:
@@ -3584,7 +3584,7 @@ def emit_pluto(kir: KernelIR, fn_name: str | None = None) -> str:
     signature = emit_pluto_signature(kir, name, multidim)
     decls, body, frees = emit_body(kir, indent="        ", multidim_arrays=multidim, pluto=True, return_parts=True)
     # Local allocations/frees live outside #pragma scop (malloc/free are non-affine); only affine loop nests stay
-    # inside, and the body already carries its own scop markers (see _CBodyEmitter.emit_block).
+    # inside, and the body already carries its own scop markers (see CBodyEmitter.emit_block).
     decl_block = (decls + "\n") if decls else ""
     free_block = (frees + "\n") if frees else ""
     return (

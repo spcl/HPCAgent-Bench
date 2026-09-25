@@ -46,7 +46,7 @@ def classify_norm_ord(node: ast.expr | None) -> str | None:
     if isinstance(node, ast.Attribute) and node.attr in ("inf", "Inf", "PINF"):
         return "inf"
     # ``np.inf`` is rewritten to the bare Name ``INFINITY`` (the lowered
-    # numeric-constant token, see lowering.py) before this expander runs.
+    # numeric-constant token, see lowering/mathfuncs.py) before this expander runs.
     if isinstance(node, ast.Name) and node.id in ("INFINITY", "inf", "Inf"):
         return "inf"
     return None
@@ -1067,7 +1067,7 @@ def expand_linalg_inv(
     # elim_inner_loop). A shared node's rename from the first loop stuck on every later occurrence,
     # so elim_outer's body kept reading pivot_scan's row and swap_loop's column -- silently wrong
     # data (not a crash) that only showed up as a numeric mismatch, and one build compiled from
-    # freed-then-realloc'd memory besides. See _FortranRenameTemps.visit_Name.
+    # freed-then-realloc'd memory besides. See FortranRenameTemps.visit_Name.
     nm = lambda tag: name_(f"__inv_{tag}")
     # Pivot search.
     pivot_init = ast.Assign(targets=[store_("__inv_p")], value=nm("k"))

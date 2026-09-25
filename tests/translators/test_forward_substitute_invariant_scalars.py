@@ -139,6 +139,6 @@ def test_scalar_laundered_indirection_becomes_literal() -> None:
 
 def test_registry_credits_the_substitution() -> None:
     """The tripwire's other half: both entries name this pass."""
-    dotted = "hpcagent_bench.translators.numpyto_common.lowering._ForwardSubstituteInvariantScalars"
+    dotted = "hpcagent_bench.translators.numpyto_common.lowering.forward_subst.ForwardSubstituteInvariantScalars"
     assert KNOWN_POLYCC_ISSUES["POLYCC-001"].avoided_by == dotted
     assert KNOWN_POLYCC_ISSUES["POLYCC-006"].avoided_by == dotted

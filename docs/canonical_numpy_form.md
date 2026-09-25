@@ -13,7 +13,7 @@ that are not ours to fix, see
 The NumpyToC translator turns `*_numpy.py` kernels into C/C++/Fortran. Arbitrary
 NumPy idioms -- chained subscripts, rank-changing reshapes, fancy indexing, whole-array
 reassignment -- go through roughly two dozen interacting AST rewriter passes in
-`lowering.py`, all sharing one fragile mutable `shape_table`. One
+`numpyto_common/lowering/`, all sharing one fragile mutable `shape_table`. One
 pass rewriting a statement another didn't anticipate leaves the table stale, and
 emission produces wrong or non-compiling code.
 
@@ -388,13 +388,13 @@ for i in range(M):
 
 ## 5. What CNF Lets the Translator Delete
 
-With CNF guaranteed, these `numpyto_common/lowering.py` mechanisms can be retired:
+With CNF guaranteed, these `numpyto_common/lowering/` mechanisms can be retired:
 
-- **`_ssa_rename_reassigned`** -- invented fresh names (`<name>__v<n>`) for variables
+- **`ssa_rename_reassigned`** -- invented fresh names (`<name>__v<n>`) for variables
   reassigned with a new broadcast extent. Invariant 1 means a name never changes
   shape, so there is nothing to rename.
-- **`_LiftFreshArrayFromSlices`** -- lifted a fresh array out of slice expressions
-  when a buffer's shape did not match its slice writes; `_ssa_rename_reassigned`'s
+- **`LiftFreshArrayFromSlices`** -- lifted a fresh array out of slice expressions
+  when a buffer's shape did not match its slice writes; `ssa_rename_reassigned`'s
   own docstring notes that without it, this lifter *"bails on the shape mismatch."*
   Declare-then-fill (Inv. 3) removes the mismatch.
 - **Rank-aware `expand_reshape` fallback** (the in-place `x = np.reshape(x, ...)`

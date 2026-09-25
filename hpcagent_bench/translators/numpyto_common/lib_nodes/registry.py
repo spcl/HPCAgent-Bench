@@ -118,7 +118,7 @@ NP_CALL_EXPANDERS: dict[tuple[str, str], Callable] = {
     ("np", "sum"): expand_sum,
     # np.maximum/minimum.accumulate: a DaCe Scan re-emits cummax/cummin as these
     # (there's no np.cummax). ufunc.reduce forms are normalized to np.sum/...
-    # upstream in native_desugar (_UfuncReduceToReducer), so they never reach here.
+    # upstream in native_desugar (UfuncReduceToReducer), so they never reach here.
     ("np", "searchsorted"): expand_searchsorted,
     ("np", "maximum.accumulate"): expand_cummax,
     ("np", "minimum.accumulate"): expand_cummin,
@@ -250,7 +250,7 @@ NP_CALL_EXPANDERS[("np", "radians")] = unary_expr_expander(
 NP_CALL_EXPANDERS[("np", "deg2rad")] = NP_CALL_EXPANDERS[("np", "radians")]
 # ``sign`` has no both-language inline form (C bool arithmetic vs Fortran
 # logicals), so emit a ``__npb_sign(x)`` marker each backend specialises in its
-# own _emit_call. Kept out of the promotion pass via the math intrinsic name set.
+# own emit_call. Kept out of the promotion pass via the math intrinsic name set.
 NP_CALL_EXPANDERS[("np", "sign")] = unary_call_expander("__npb_sign")
 
 

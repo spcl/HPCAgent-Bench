@@ -2352,7 +2352,7 @@ ALWAYS_LINKED_LIBRARIES = ("blas",)
 #: Languages whose emitted reference source can contain a whole-array 1-D ``np.fft.*``: C, C++
 #: AND Fortran (unlike BLAS, which Fortran's emitter never renders -- it has no
 #: ``_emit_blas_gemm`` equivalent, see numpyto_common.lowering.lower's docstring). The FFT_LIBRARY_
-#: MARKER lowering (numpyto_common/lib_nodes.py) renders an ``fftw_plan_dft_1d``/``fftwf_...`` call
+#: MARKER lowering (numpyto_common/lib_nodes/fft.py) renders an ``fftw_plan_dft_1d``/``fftwf_...`` call
 #: on all three, so ``<fftw3.h>``/``-lfftw3`` has to resolve on all three.
 FFT_LINKED_LANGS = (Language.C, Language.CPP, Language.FORTRAN)
 

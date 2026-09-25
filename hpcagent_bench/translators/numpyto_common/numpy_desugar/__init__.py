@@ -210,7 +210,7 @@ def desugar_for_python_backend(source: str, kir, backend: str | None = None) -> 
     kir_dtype_seed: dict[str, str] = {
         a.name: kind_of_dtype_str(vars(a).get("dtype")) for a in kir.arrays if kind_of_dtype_str(vars(a).get("dtype"))
     }
-    # Exact dtypes (not just kind) for passes that need a width, e.g. _FftInline's complex64/128 cast.
+    # Exact dtypes (not just kind) for passes that need a width, e.g. FftInline's complex64/128 cast.
     # Read through ``vars()``: rank-only callers pass KIR arrays without a dtype attribute.
     kir_array_dtypes: dict[str, str] = {a.name: vars(a)["dtype"] for a in kir.arrays if "dtype" in vars(a)}
     param_ranks = infer_param_ranks(all_funcs, kir.kernel_name, kir_seed)
@@ -274,7 +274,7 @@ def desugar_for_python_backend(source: str, kir, backend: str | None = None) -> 
             StripAstypeCopyKwarg(),
             RepeatCountsInline(ranks),
             BincountInline(ranks),
-            # After _RepeatCountsInline, which reads ``np.diff(p)`` structurally to prove its length telescopes.
+            # After RepeatCountsInline, which reads ``np.diff(p)`` structurally to prove its length telescopes.
             DiffToSliceDifference(),
             ValueHoist(HISTOGRAM_HOIST, tables),
             ValueHoist(REPEAT_AXIS_HOIST, tables),

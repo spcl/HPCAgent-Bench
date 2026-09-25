@@ -966,7 +966,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                 # the emit declares the right C dtype.
                 # By the expression's OPERANDS, not by ast.walk: walking promoted the result of
                 # ``np.abs(v)`` to complex merely because the complex ``v`` appears inside it, and
-                # a magnitude is real. _scalar_expr_complex stops at the calls that return a real.
+                # a magnitude is real. scalar_expr_complex stops at the calls that return a real.
                 if target.id not in self.local_dtypes:
                     if scalar_expr_complex(node.value, self.local_dtypes):
                         self.local_dtypes[target.id] = "complex128"
@@ -985,7 +985,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                 if expanded:
                     return expanded
             # Whole-array BinOp / UnaryOp / IfExp / Call on the RHS:
-            # lower to per-element loop. The _SubscriptifyNames walker
+            # lower to per-element loop. The SubscriptifyNames walker
             # rewrites every array reference inside the expression to
             # its subscripted form. ``Call`` covers cases like
             # ``x = fmax(x, 0)`` (relu post math-rename) or

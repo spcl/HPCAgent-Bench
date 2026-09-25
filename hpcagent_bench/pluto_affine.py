@@ -129,7 +129,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "lowering replays its RHS at the deeper use sites and deletes it."
             ),
             repro=f"{_BENCH}/structured_grids/conv_2d -- polycc --pet --tile --parallel on its pluto input",
-            avoided_by="hpcagent_bench.translators.numpyto_common.lowering.ForwardSubstituteInvariantScalars",
+            avoided_by="hpcagent_bench.translators.numpyto_common.lowering.forward_subst.ForwardSubstituteInvariantScalars",
             upstream="not filed",
         ),
         PolyccIssue(
@@ -156,7 +156,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "(constraints_isl.c:429) -- a core dump, not a refusal."
             ),
             repro=f"{_TRANS_TESTS}/test_no_self_assign_in_scop.py",
-            avoided_by="hpcagent_bench.translators.numpyto_common.lowering.SelfAssignDropper",
+            avoided_by="hpcagent_bench.translators.numpyto_common.lowering.forward_subst.SelfAssignDropper",
             upstream="not filed",
         ),
         PolyccIssue(
@@ -201,7 +201,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "subscript carries the gather literally and the detector declines the kernel."
             ),
             repro=f"{_BENCH}/n_body_methods/lavamd -- its pluto input fails scop_nonaffine_reason",
-            avoided_by="hpcagent_bench.translators.numpyto_common.lowering.ForwardSubstituteInvariantScalars",
+            avoided_by="hpcagent_bench.translators.numpyto_common.lowering.forward_subst.ForwardSubstituteInvariantScalars",
             upstream="n/a",
         ),
         PolyccIssue(

@@ -155,11 +155,10 @@ class BaseEmitter:
     def static_step_sign(step_node: ast.AST | None) -> int | None:
         """+1 / -1 when a range step's sign is decidable from the AST, else None.
 
-        None means the sign is a RUNTIME fact and the loop direction cannot be baked in. Both
-        backends used to fall back to a textual ``startswith("-")`` on the emitted step, which is
-        only ever right for a literal: with ``s = -1`` held in a variable the text is ``s``, so C
-        emitted a forward loop that ran zero times and Fortran adjusted the inclusive bound the
-        wrong way and overran it. Neither failed loudly.
+        None means the sign is a RUNTIME fact and the loop direction cannot be baked in. A textual
+        ``startswith("-")`` on the emitted step is only right for a literal: with ``s = -1`` held
+        in a variable the text is ``s``, so C would emit a forward loop that runs zero times and
+        Fortran would adjust the inclusive bound the wrong way and overrun it, neither loudly.
         """
         if step_node is None:
             return 1

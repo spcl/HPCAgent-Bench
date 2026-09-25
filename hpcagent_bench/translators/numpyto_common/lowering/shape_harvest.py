@@ -323,7 +323,7 @@ def harvest_local_shapes(
             shape_table[target.id] = (tok, tok)
         # Elementwise broadcast ops: np.maximum / minimum / add / etc.
         # The result shape is the broadcast of the args' shapes; defer
-        # to _iter_extent_of which already knows the rules.
+        # to iter_extent_of_ which already knows the rules.
         elif attr in NP_ELEMENTWISE and rhs.args:
             ext = iter_extent_of_(rhs.args[0], shape_table)
             for arg in rhs.args[1:]:

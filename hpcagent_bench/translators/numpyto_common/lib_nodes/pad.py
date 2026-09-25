@@ -133,7 +133,7 @@ def expand_pad(
     # mode-specific remap of ``q = out_iter - before`` back into ``[0, d-1]``
     # (edge = clamp, wrap = periodic, reflect/symmetric = mirror), emitted as
     # scalar ``__ps<k>`` locals so no min/max/mod sits in subscript position.
-    # edge clamps in ONE conditional expression (see _remap); the fold/mod modes
+    # edge clamps in ONE conditional expression (see remap); the fold/mod modes
     # keep their statement sequence, which reads sv back.
     out_iters = [f"__pp{k}" for k in range(rank)]
     src_idx_vars = [f"__ps{k}" for k in range(rank)]

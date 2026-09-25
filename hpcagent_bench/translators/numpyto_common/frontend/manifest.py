@@ -180,9 +180,9 @@ def declared_dtypes(init: Mapping[str, object]) -> dict[str, str]:
     The dtype half of :func:`declared_shapes`, and it has to be read the same way for the same
     reason: an ARRAY's element type is declared on its ``init.arrays`` entry, while ``init.dtypes``
     types the names that are not arrays (size symbols and plain scalars). Reading only
-    ``init["dtypes"]`` -- which is what this reader used to do -- dropped every declared array
-    dtype on the floor, so a complex128 buffer emitted as a real one (silently discarding the
-    imaginary part) and an int32 index array emitted as a double (an unemittable subscript).
+    ``init["dtypes"]`` would drop every declared array dtype, so a complex128 buffer would emit as
+    a real one (silently discarding the imaginary part) and an int32 index array as a double (an
+    unemittable subscript).
 
     One merged map, because every caller asks the same question -- "what was <name> declared as" --
     and an array name cannot also be a scalar name. The array entry wins over a same-named

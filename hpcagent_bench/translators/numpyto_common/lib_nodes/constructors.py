@@ -217,7 +217,7 @@ def expand_fromfunction(
     return wrap_for_loops(iters, shape_elts, body)
 
 
-#: Synthetic keyword the tuple-unpack in lowering.py attaches to each split
+#: Synthetic keyword the tuple-unpack in lowering/whole_array.py attaches to each split
 #: ``np.meshgrid`` call, telling this expander which output array it builds.
 #: numpy's ``meshgrid`` has no such keyword, so the name is unambiguous.
 MESHGRID_AXIS_KW = "__meshgrid_axis__"

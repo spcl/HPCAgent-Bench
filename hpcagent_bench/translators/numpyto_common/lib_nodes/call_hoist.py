@@ -80,7 +80,7 @@ class CallHoister(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         # ``np.repeat(src, np.diff(p))``: the count's telescoping sum (see
-        # expand_repeat / _diff_operand) needs the ORIGINAL ``np.diff`` call
+        # expand_repeat / diff_operand) needs the ORIGINAL ``np.diff`` call
         # form. A plain ``generic_visit`` would recurse into it first -- ``np.diff``
         # is itself a registered call, so it would get hoisted into an opaque
         # ``__cb<n>`` temp before the repeat expander ever ran, losing the one
@@ -201,15 +201,15 @@ class CallHoister(ast.NodeTransformer):
                     self.pre_stmts.append(slice_assign)
                 else:
                     # Synth: ``__cb<n> = first``. The LibNodeRewriter's
-                    # _lower_prelude_calls step then turns this into a
-                    # per-element copy via _WholeArrayAssignRewriter.
+                    # lower_prelude_calls step then turns this into a
+                    # per-element copy via WholeArrayAssignRewriter.
                     self.pre_stmts.append(ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=first))
                 node.args[0] = ast.Name(id=temp, ctx=ast.Load())
         key = numpy_call_key(node)
         if key is None or key not in NP_CALL_EXPANDERS:
             return node
         # Stash axis/keepdims kwargs for the reduction case so
-        # _derive_output_shape can compute the correct array shape.
+        # derive_output_shape can compute the correct array shape.
         if key == ("np", "linalg.norm"):
             # ``linalg.norm``'s positional layout is ``(v, ord, axis, keepdims)``,
             # unlike a reduction's 2nd-positional ``axis`` -- strip a

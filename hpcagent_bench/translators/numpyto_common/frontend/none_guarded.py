@@ -259,7 +259,7 @@ class SpliceNoneGuardedCalls:
         mid = body[:-1]
         guard_idx = find_none_guard(mid)
         if guard_idx is None:
-            return None  # re-validated defensively; _collect_none_guarded_helpers already checked
+            return None  # re-validated defensively; collect_none_guarded_helpers already checked
         ret_value = body[-1].value
         ret_elts = ret_value.elts if isinstance(ret_value, (ast.Tuple, ast.List)) else [ret_value]
         if len(final_targets) != len(ret_elts):

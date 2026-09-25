@@ -463,7 +463,7 @@ def promote_returns(
             sig.input_args.append(out)
             sig.array_args.append(out)
             sig.output_args.append(out)
-            # Parsed later by _parse_shape_expression into the ``('1',)`` dim tuple.
+            # Parsed later by parse_shape_expression into the ``('1',)`` dim tuple.
             sig.shapes_raw[out] = "(1,)"
         ast.fix_missing_locations(fn)
         return returned_shapes, returned_dtypes

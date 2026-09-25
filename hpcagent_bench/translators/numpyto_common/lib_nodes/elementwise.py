@@ -279,14 +279,14 @@ def expand_where(target: ast.expr, args: list[ast.expr], shape_table: dict[str, 
 
 
 # Elementwise transcendental/math ufuncs (ARRAY form). Mirrors the scalar
-# _TRIG/_ALG_TRANS lists in lowering.py's MATH_BUILTINS so a function usable
+# TRIG/ALG_TRANS lists in lowering/mathfuncs.py's MATH_BUILTINS so a function usable
 # scalar-side is usable array-side too.
 #
 # Functions with a libm name (sin, atan2, rint, ...) emit a plain call --
-# resolved through <math.h>/<cmath> -- via _unary_call_expander/
-# _binary_call_expander. Functions without one (square, reciprocal, sign,
+# resolved through <math.h>/<cmath> -- via unary_call_expander/
+# binary_call_expander. Functions without one (square, reciprocal, sign,
 # degrees, radians) emit an inline expr (x*x, 1.0/x, ...) via
-# _unary_expr_expander: language-agnostic, so no helper functions/macros
+# unary_expr_expander: language-agnostic, so no helper functions/macros
 # needed beyond the prelude's min/max/int_floor.
 
 

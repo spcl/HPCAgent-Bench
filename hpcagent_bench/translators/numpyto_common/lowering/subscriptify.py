@@ -165,7 +165,7 @@ class SubscriptifyNames(ast.NodeTransformer):
                     # A negative step with an UNRESOLVED start (axis length not tracked)
                     # cannot emit the reverse index ``(len-1) - iter*|step|``. Falling through
                     # to the bounded path below would emit a FORWARD ``arr[iter]`` -- a silent
-                    # un-reversed copy. Refuse loudly instead (mirrors _SliceToScalarRewriter,
+                    # un-reversed copy. Refuse loudly instead (mirrors SliceToScalarRewriter,
                     # which raises for the identical untracked-shape reverse). Positive strided
                     # slices (start None, step > 0) are fine: idx = iter*step is forward.
                     if step_is_negative(step) and start is None:

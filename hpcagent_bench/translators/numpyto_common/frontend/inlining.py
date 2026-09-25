@@ -207,7 +207,7 @@ def collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> d
     # ...AND helpers defined NESTED inside the kernel body (ICON
     # velocity_tendencies' ``def gat(A, idx, blk, n, jk): return A[...]`` gather
     # shorthand). These are stripped from the body after their calls are inlined
-    # (see _InlineHelpers.visit_FunctionDef) -- a backend can't emit a Python
+    # (see InlineHelpers.visit_FunctionDef) -- a backend can't emit a Python
     # ``def``, so the only correct lowering is full inlining.
     for node in ast.walk(kernel_fn):
         if isinstance(node, ast.FunctionDef) and node is not kernel_fn and classify(node):
@@ -538,7 +538,7 @@ class HoistMultiStmtHelpers(ast.NodeTransformer):
     def __init__(self, helpers: dict[str, ast.FunctionDef], counter: list[int] | None = None) -> None:
         self.helpers = helpers
         self.multi_stmt = {name: fn for name, fn in helpers.items() if is_multi_stmt_return_form(fn)}
-        # Shared across the inline fixpoint -- see _InlineHelpers re: prefix reuse.
+        # Shared across the inline fixpoint -- see InlineHelpers re: prefix reuse.
         self._counter = counter if counter is not None else [0]
         self._pending: list[ast.stmt] = []
         #: Names the tree ALREADY binds, so a fresh temp never lands on one. Three call sites
@@ -567,9 +567,9 @@ class HoistMultiStmtHelpers(ast.NodeTransformer):
     def visit_If(self, node: ast.If) -> ast.AST:
         node.test = self.rewrite_expr(node.test)
         # The test's hoisted ``__hcall<n> = helper(..)`` Assigns are queued in
-        # ``self._pending`` for the CALLER's _rewrite_stmt_list to place BEFORE this
+        # ``self._pending`` for the CALLER's rewrite_stmt_list to place BEFORE this
         # If. Rewriting the branches would otherwise drain that queue into the
-        # if-BODY (_rewrite_stmt_list unconditionally flushes _pending per
+        # if-BODY (rewrite_stmt_list unconditionally flushes _pending per
         # statement) -- the temp would then be assigned inside the branch its own
         # test reads, a use-before-def (distribution_search's line-search
         # ``if max(abs(residual(trial))) < cur:``). Park it across the branches.
@@ -866,7 +866,7 @@ def collect_assigned_names(stmts: list[ast.stmt]) -> OrderedSet[str]:
     stencil loop var ``m`` vs the kernel's Chebyshev-degree ``m`` (the
     inlined loop overwrote ``m`` to len(_CW), truncating the degree loop)."""
     # Ordered: a helper parameter that the body REASSIGNS is initialised from its call
-    # argument in the order this walk found it (_InlineHelpers below), so hash order here
+    # argument in the order this walk found it (InlineHelpers below), so hash order here
     # would shuffle the emitted prologue -- conv2d_relu_bias_add's stride/padding/dilation.
     out: OrderedSet[str] = OrderedSet()
 

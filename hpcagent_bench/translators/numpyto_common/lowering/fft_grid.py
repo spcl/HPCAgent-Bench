@@ -16,7 +16,7 @@ class FftGridReshapeRewriter(ast.NodeTransformer):
     on the unprovable ``d1*d2*d3 == M`` identity in symbolic form. Rewrite to::
 
         __g = np.reshape(X, (d1, d2, d3, C))     # split leading axis, keep C
-        __f = np.fft.ifftn(__g, axes=(0, 1, 2))  # _expand_dftn batches axis 3
+        __f = np.fft.ifftn(__g, axes=(0, 1, 2))  # expand_dftn batches axis 3
         __o = np.reshape(__f, (M, C))            # flatten back
         <lhs> = __o            # or __o (1-D, length M) when the chain ends [:,0]
 

@@ -98,7 +98,7 @@ def eigh_jacobi_lines(
         f"                {p}_vkq = {v}[{p}_k, {p}_qq]",
         f"                {v}[{p}_k, {p}_pp] = {p}_c * {p}_vkp - {p}_s * {ephi_h} * {p}_vkq",
         f"                {v}[{p}_k, {p}_qq] = {p}_s * {p}_ephi * {p}_vkp + {p}_c * {p}_vkq",
-        # Real half of the input dtype; see _eigh_w_dtype.
+        # Real half of the input dtype; see eigh_w_dtype.
         f"{w} = np.zeros({n}, {w_dtype or wd_default})",
         f"for {p}_i in range({n}):",
         f"    {w}[{p}_i] = {diag_re}",
@@ -352,7 +352,7 @@ class EighLoopRewriter(ast.NodeTransformer):
         self._ctr += 1
         pre, aname, bname = operand_names(p, a_node, b_node)
         lo, hi = subset_bounds(kw)
-        # Standard form only; see _eigh_c_stmts.
+        # Standard form only; see eigh_c_stmts.
         is_real = b_node is None and eigh_operand_is_real(a_node, b_node, self.dtypes)
         w_dtype = eigh_w_dtype(is_real, (aname, bname), self.array_dtypes)
         lines = pre + eigh_c_stmts(
@@ -467,7 +467,7 @@ class EighInline(ast.NodeTransformer):
         pre, aname, bname = operand_names(p, a_node, b_node)
         lo, hi = subset_bounds(kw)
         vtmp = v if v is not None else f"{p}_vdrop"
-        # Standard form only; see _eigh_stmts.
+        # Standard form only; see eigh_stmts.
         is_real = b_node is None and eigh_operand_is_real(a_node, b_node, self.dtypes)
         w_dtype = eigh_w_dtype(is_real, (aname, bname), self.array_dtypes)
         lines = pre + eigh_stmts(w, vtmp, aname, bname, lo, hi, p, is_real=is_real, w_dtype=w_dtype)

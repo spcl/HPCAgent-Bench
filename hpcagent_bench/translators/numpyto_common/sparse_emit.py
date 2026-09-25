@@ -249,13 +249,10 @@ def expand_matmul_csr_dense_vec(
 ) -> list[ast.stmt]:
     """``y = A @ x`` for CSR-A (NR x NK) and dense-x (NK,) -> dense-y (NR,)::
 
-        for i in range(NR):
-            y[i] = 0
-            for k in range(A_indptr[i], A_indptr[i + 1]):
-                y[i] += A_data[k] * x[A_indices[k]]
-
-    Replaces the old fancy-gather hack, which only worked because the
-    canonical spmv kernel happened to use ``x[cols]`` indexing.
+    for i in range(NR):
+        y[i] = 0
+        for k in range(A_indptr[i], A_indptr[i + 1]):
+            y[i] += A_data[k] * x[A_indices[k]]
     """
     yi = subscript_(target.id, name_("__i"), ctx=ast.Store())
     indptr = lhs_buffers["indptr"]
@@ -319,7 +316,7 @@ def expand_matmul_jds_dense_vec(
     col_ind = lhs_buffers["col_ind"]
     jdiag = lhs_buffers["jdiag"]
     # Scratch ``y_perm`` (sorted-order accumulator); caller lifts it to a
-    # fresh local via lowering.py's zeros_locals machinery.
+    # fresh local via the lowering's zeros_locals machinery (lowering/shape_reads.py).
     y_perm = "__jds_y_perm"
 
     # y_perm[i] = 0 for all i.
