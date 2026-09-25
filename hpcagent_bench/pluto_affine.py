@@ -221,7 +221,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "hoisting the assign above the scop makes M a SECOND pluto parameter and the "
                 "schedule comes back with 2**64-scale coefficients that divide by zero (SIGFPE); "
                 "hoisting only the malloc leaves the assign to be dropped by POLYCC-009. Removing M "
-                "by forward substitution transforms and validates, but _ForwardSubstituteInvariantScalars "
+                "by forward substitution transforms and validates, but ForwardSubstituteInvariantScalars "
                 "excludes a function-level assign by design (it would replay deriche's exp() "
                 "coefficients down a nest), so there is no fix on this entry's own ground. CLOSED "
                 "on other ground 08-10: the scop no longer spans the program, so the malloc sits "

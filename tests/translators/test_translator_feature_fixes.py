@@ -989,8 +989,8 @@ def test_max_min_propagate_nan_like_numpy(backend) -> None:
         )
         source = prelude + body
     else:
-        # _CPP_HEADER opens ``extern \"C\" {``; close it with _CPP_FOOTER.
-        prelude, footer, ext = cemit.CPP_HEADER, cemit._CPP_FOOTER, ".cpp"
+        # CPP_HEADER opens ``extern \"C\" {``; close it with CPP_FOOTER.
+        prelude, footer, ext = cemit.CPP_HEADER, cemit.CPP_FOOTER, ".cpp"
         body = (
             "\n#include <cstdio>\n#include <cmath>\n"
             "int main(){\n"
