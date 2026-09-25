@@ -67,9 +67,8 @@ def link_error(lang: str, link_tokens: tuple[str, ...]) -> str:
 def compile_error(lang: str, compile_tokens: tuple[str, ...], header: str) -> str:
     """The preprocessor's own last word on ``header``, for header-only libraries.
 
-    A header-only library has no .so, so no link probe can say anything about it: an empty link
-    line links, which is why the link diagnosis reported "linked here" for eigen-shaped entries
-    before this existed. languages.library_compiles asks the right question and returns a bool.
+    A header-only library has no .so, so a link probe says nothing about it (an empty link line
+    links); this asks the compiler, as languages.library_compiles does, but keeps the message.
     """
     _cname, block = languages._compiler_for_lang(languages._load_compilers(), lang)
     exe = languages.resolve_compiler(block["cc"]) or block["cc"]

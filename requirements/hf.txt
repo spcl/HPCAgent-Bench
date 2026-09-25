@@ -2,8 +2,8 @@
 # Every name below, and the reason it is here, is declared in pyproject.toml (extra 'hf').
 # Regenerate with: python scripts/sync_requirements.py
 #
-# HuggingFace Dataset export (hpcagent-bench export-hf). Optional: the row builder and jsonl
-# writer are pure-stdlib; these add the parquet writer and the Hub push.
+# HuggingFace Dataset export (hpcagent-bench export-hf). Optional: rows, validation and the jsonl
+# writer are stdlib; pyarrow adds parquet, datasets the load-back check, huggingface_hub the push.
 pyarrow
 datasets>=2.17
 huggingface_hub

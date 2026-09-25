@@ -44,8 +44,9 @@ import functools
 import math
 import os
 import re
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import AbstractSet, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import AbstractSet
 
 import numpy as np
 import yaml
@@ -57,13 +58,13 @@ from hpcagent_bench.precision import numpy_dtype, precision_from_datatype
 from hpcagent_bench.spec import BenchSpec, SparseLayoutVariant, module_level_constants
 
 #: The ladder, small to large. The ends are authored; the middle is derived.
-PRESETS: Tuple[str, ...] = ("S", "M", "L", "XL")
+PRESETS: tuple[str, ...] = ("S", "M", "L", "XL")
 #: The rung derived by interpolation, with its fractional position between ``M`` and ``XL``.
-DERIVED: Tuple[Tuple[str, float], ...] = (("L", 0.5),)
+DERIVED: tuple[tuple[str, float], ...] = (("L", 0.5),)
 #: The rung kept verbatim from the manifest: the tests-and-CI size, never sized for measurement.
 KEPT: str = "S"
 #: The rungs a work/depth model actually authors.
-AUTHORED: Tuple[str, str] = ("M", "XL")
+AUTHORED: tuple[str, str] = ("M", "XL")
 #: Indentation of a preset name and of a symbol inside it, in the corpus's manifest style.
 PRESET_INDENT = "  "
 SYMBOL_INDENT = "    "
@@ -84,7 +85,7 @@ XL_BYTE_CEILING = 4 << 30
 #: every script and ``tests/test_xl_ceiling.py`` asks. machine_learning holds 8 GB:
 #: the distributed bf16 operators (@mlscale10) carry 8x the element count of their source XL so that
 #: 16 GPUs still get real work per rank; every other track stays at the 4 GB default.
-TRACK_XL_CEILING: Dict[str, int] = {"machine_learning": 8 << 30}
+TRACK_XL_CEILING: dict[str, int] = {"machine_learning": 8 << 30}
 #: Element width assumed for an array the manifest declares no dtype for.
 DEFAULT_DTYPE = "float64"
 #: Fraction of a ceiling :func:`fit_to_ceiling` actually targets, so per-symbol integer rounding
@@ -130,7 +131,7 @@ def snap_power_of_two(value: float) -> int:
 
 
 def interpolate_symbol(
-    small: bool | int | float | str, large: bool | int | float | str, fraction: float
+    small: bool | float | str, large: bool | float | str, fraction: float
 ) -> bool | int | float | str:
     """One symbol's value at ``fraction`` of the way from ``small`` to ``large``, geometrically.
 
@@ -170,7 +171,7 @@ def interpolate_symbol(
     return clamped
 
 
-def interpolate(small: Mapping[str, object], large: Mapping[str, object]) -> Dict[str, Dict[str, object]]:
+def interpolate(small: Mapping[str, object], large: Mapping[str, object]) -> dict[str, dict[str, object]]:
     """The rungs in :data:`DERIVED`, interpolated between the two authored ends ``M`` and ``XL``.
 
     :raises ValueError: When the two ends declare different symbol sets. A ladder whose rungs
@@ -186,7 +187,7 @@ def interpolate(small: Mapping[str, object], large: Mapping[str, object]) -> Dic
     }
 
 
-def raise_to_floor(floor: Mapping[str, object], values: Mapping[str, object]) -> Dict[str, object]:
+def raise_to_floor(floor: Mapping[str, object], values: Mapping[str, object]) -> dict[str, object]:
     """``values`` with every numeric symbol raised to at least its ``floor`` counterpart.
 
     A handful of kernels already declare an ``S`` larger than the timed rung a work/depth model
@@ -205,10 +206,10 @@ def raise_to_floor(floor: Mapping[str, object], values: Mapping[str, object]) ->
 
 def build_ladder(
     kept: Mapping[str, object], mid: Mapping[str, object], large: Mapping[str, object]
-) -> Dict[str, Dict[str, object]]:
+) -> dict[str, dict[str, object]]:
     """The four rungs: ``S`` kept verbatim, ``M`` and ``XL`` as authored, ``L`` interpolated."""
     mid = raise_to_floor(kept, mid)
-    ladder: Dict[str, Dict[str, object]] = {KEPT: dict(kept), "M": dict(mid), "XL": dict(large)}
+    ladder: dict[str, dict[str, object]] = {KEPT: dict(kept), "M": dict(mid), "XL": dict(large)}
     ladder.update(interpolate(mid, large))
     return {preset: ladder[preset] for preset in PRESETS}
 
@@ -232,7 +233,7 @@ def fraction_probes(fraction: float) -> Iterator[float]:
 
 def constrain_derived(
     spec: BenchSpec, ladder: Mapping[str, Mapping[str, object]], mid: Mapping[str, object], large: Mapping[str, object]
-) -> Dict[str, Dict[str, object]]:
+) -> dict[str, dict[str, object]]:
     """``ladder`` with every DERIVED rung moved to the nearest position its constraints hold at.
 
     The midpoint is a DEFAULT, not a requirement: what the ladder owes is a rung between ``M`` and
@@ -258,7 +259,7 @@ def constrain_derived(
     return out
 
 
-def ladder_violations(ladder: Mapping[str, Mapping[str, object]]) -> List[str]:
+def ladder_violations(ladder: Mapping[str, Mapping[str, object]]) -> list[str]:
     """Every way ``ladder`` is not monotone, as human-readable strings (empty when it is).
 
     A rung that shrinks where its neighbours grow is the failure this catches: it makes ``M``
@@ -266,7 +267,7 @@ def ladder_violations(ladder: Mapping[str, Mapping[str, object]]) -> List[str]:
     rungs where no symbol grows is caught too: three presets at one size are one benchmark
     measured three times, not a ladder.
     """
-    out: List[str] = []
+    out: list[str] = []
     for name in sorted(ladder.get("S", {})):
         series = [(preset, ladder[preset][name]) for preset in PRESETS if preset in ladder and name in ladder[preset]]
         numeric = [
@@ -296,14 +297,14 @@ def ladder_violations(ladder: Mapping[str, Mapping[str, object]]) -> List[str]:
     return out
 
 
-def format_scalar(value: bool | int | float | str) -> str:
+def format_scalar(value: bool | float | str) -> str:
     """A YAML scalar for ``value`` in the corpus's manifest style (``true``/``false``, plain ints)."""
     if isinstance(value, bool):
         return "true" if value else "false"
     return repr(value) if isinstance(value, str) else str(value)
 
 
-def parameters_span(lines: Sequence[str]) -> Optional[Tuple[int, int]]:
+def parameters_span(lines: Sequence[str]) -> tuple[int, int] | None:
     """``(start, stop)`` line indices of the top-level ``parameters:`` block, or ``None``.
 
     ``start`` is the ``parameters:`` line itself; ``stop`` is the first line at column 0 after
@@ -319,7 +320,7 @@ def parameters_span(lines: Sequence[str]) -> Optional[Tuple[int, int]]:
     return start, len(lines)
 
 
-def preset_span(lines: Sequence[str], block: Tuple[int, int], preset: str) -> Optional[Tuple[int, int]]:
+def preset_span(lines: Sequence[str], block: tuple[int, int], preset: str) -> tuple[int, int] | None:
     """``(start, stop)`` line indices of ``preset`` inside the ``parameters:`` block, or ``None``."""
     start, stop = block
     head = f"{PRESET_INDENT}{preset}:"
@@ -385,7 +386,7 @@ def rewrite_parameters(text: str, ladder: Mapping[str, Mapping[str, object]]) ->
     return "".join(lines)
 
 
-def variant_bytes(variant: SparseLayoutVariant, namespace: Mapping[str, object]) -> Optional[int]:
+def variant_bytes(variant: SparseLayoutVariant, namespace: Mapping[str, object]) -> int | None:
     """Bytes one sparse format's physical buffers occupy, or ``None`` when a shape does not resolve.
 
     Buffer dtypes are always declared, so unlike a dense array none of them fall back to the run's
@@ -407,8 +408,8 @@ def sparse_bytes(
     spec: BenchSpec,
     namespace: Mapping[str, object],
     dense: Mapping[str, int],
-    wanted: Optional[AbstractSet[str]] = None,
-) -> Optional[int]:
+    wanted: AbstractSet[str] | None = None,
+) -> int | None:
     """``dense`` corrected for every array a ``sparse_layouts`` block gives a physical format.
 
     A logical array with a sparse layout is never materialised dense: the initializer hands the
@@ -428,7 +429,7 @@ def sparse_bytes(
     """
     if not spec.configurations:
         return None
-    totals: List[int] = []
+    totals: list[int] = []
     for configuration in spec.configurations.values():
         total = sum(dense.values())
         resolved = True
@@ -449,8 +450,8 @@ def sparse_bytes(
 
 
 def working_bytes(
-    spec: BenchSpec, values: Mapping[str, object], datatype: str = DEFAULT_DTYPE, names: Optional[Sequence[str]] = None
-) -> Optional[int]:
+    spec: BenchSpec, values: Mapping[str, object], datatype: str = DEFAULT_DTYPE, names: Sequence[str] | None = None
+) -> int | None:
     """Total declared-array bytes at ``values``, or ``None`` when the shapes are not declarative.
 
     ``names`` restricts the sum to those arrays; the judge sizes its output cache from
@@ -477,7 +478,7 @@ def working_bytes(
     undeclared = numpy_dtype(precision_from_datatype(datatype))
     wanted = None if names is None else set(names)
     namespace = shape_namespace(spec, values)
-    dense: Dict[str, int] = {}
+    dense: dict[str, int] = {}
     for array, expr in spec.init.shapes.items():
         if wanted is not None and array not in wanted:
             continue
@@ -500,7 +501,7 @@ def working_bytes(
     return sparse_bytes(spec, namespace, dense, wanted)
 
 
-def shape_namespace(spec: BenchSpec, values: Mapping[str, object]) -> Dict[str, object]:
+def shape_namespace(spec: BenchSpec, values: Mapping[str, object]) -> dict[str, object]:
     """Every name a shape or constraint expression may reference at ``values``.
 
     Four sources, and they are exactly the ones the manifest validator accepts
@@ -514,7 +515,7 @@ def shape_namespace(spec: BenchSpec, values: Mapping[str, object]) -> Dict[str, 
     validator resolves and the sizer cannot is a hole, not a conservative default; the two read one
     list. Declared values win over a module constant of the same name -- the manifest is nearer.
     """
-    names: Dict[str, object] = {
+    names: dict[str, object] = {
         name: value
         for name, value in module_level_constants(spec.relative_path, spec.module_name).items()
         if value is not None
@@ -543,8 +544,8 @@ def kernel_memory_gb(
     spec: BenchSpec,
     preset: str,
     datatype: str = DEFAULT_DTYPE,
-    workspace: Optional[str] = None,
-    params: Optional[Mapping[str, object]] = None,
+    workspace: str | None = None,
+    params: Mapping[str, object] | None = None,
 ) -> float:
     """The memory budget (GB) ONE single-node run of ``spec`` at ``preset`` may take, on top of the
     harness baseline -- the number ``native_call._call_isolated`` turns into the child's
@@ -627,7 +628,7 @@ def reference_memory_gb(kernel_gb: float) -> float:
     return max(kernel_gb, fraction * rank_memory_share_bytes() / BYTES_PER_GB)
 
 
-def footprint_symbols(spec: BenchSpec, values: Mapping[str, object]) -> List[str]:
+def footprint_symbols(spec: BenchSpec, values: Mapping[str, object]) -> list[str]:
     """The symbols of ``values`` the declared working set actually depends on, MEASURED by doubling
     each and asking whether the byte count moves.
 
@@ -649,7 +650,7 @@ def footprint_symbols(spec: BenchSpec, values: Mapping[str, object]) -> List[str
     base = working_bytes(spec, values)
     if base is None:
         return []
-    out: List[str] = []
+    out: list[str] = []
     for name, value in values.items():
         if isinstance(value, bool) or not isinstance(value, int) or value <= 1:
             continue
@@ -659,14 +660,14 @@ def footprint_symbols(spec: BenchSpec, values: Mapping[str, object]) -> List[str
     return out
 
 
-def scaled(values: Mapping[str, object], scalable: Sequence[str], factor: float) -> Dict[str, object]:
+def scaled(values: Mapping[str, object], scalable: Sequence[str], factor: float) -> dict[str, object]:
     """``values`` with every name in ``scalable`` multiplied by ``factor`` (never below 1)."""
     return {name: (max(1, int(value * factor)) if name in scalable else value) for name, value in values.items()}
 
 
 def fit_to_ceiling(
     spec: BenchSpec, values: Mapping[str, object], ceiling: int, floor: int = MIN_TIMED_BYTES
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """``values`` shrunk uniformly to the LARGEST size that still fits ``ceiling``.
 
     Every symbol the FOOTPRINT depends on is divided by the same factor, so the kernel keeps its
@@ -700,7 +701,7 @@ def fit_to_ceiling(
     # working set one byte over is refused exactly like one a gigabyte over.
     target = CEILING_MARGIN * ceiling
     lo, hi = 0.0, 1.0  # lo always fits (in the limit every symbol clamps to 1), hi never does
-    best: Optional[Dict[str, object]] = None
+    best: dict[str, object] | None = None
     for _ in range(FIT_BISECTIONS):
         mid = 0.5 * (lo + hi)
         probe = scaled(values, scalable, mid)
@@ -739,7 +740,7 @@ def problem_size(spec: BenchSpec, values: Mapping[str, object]) -> float:
     return product
 
 
-def constraint_violations(spec: BenchSpec, preset: str, values: Mapping[str, object]) -> List[str]:
+def constraint_violations(spec: BenchSpec, preset: str, values: Mapping[str, object]) -> list[str]:
     """Every ``constraints:`` expression ``values`` fails at ``preset``.
 
     An expression that cannot be evaluated counts as a failure. A constraint the checker cannot
@@ -747,7 +748,7 @@ def constraint_violations(spec: BenchSpec, preset: str, values: Mapping[str, obj
     sizes that violate the physics it documents.
     """
     names = shape_namespace(spec, values)
-    out: List[str] = []
+    out: list[str] = []
     for expr in spec.constraints:
         try:
             if not safe_eval(expr, names):
@@ -759,7 +760,7 @@ def constraint_violations(spec: BenchSpec, preset: str, values: Mapping[str, obj
 
 def derive_ladder(
     spec: BenchSpec, small: Mapping[str, object], large: Mapping[str, object]
-) -> Tuple[Dict[str, Dict[str, object]], List[str]]:
+) -> tuple[dict[str, dict[str, object]], list[str]]:
     """The validated four-rung ladder for ``spec`` from its two proposed ends.
 
     Returns ``(ladder, problems)``. A non-empty ``problems`` means the ladder must NOT be applied;
@@ -780,7 +781,7 @@ def derive_ladder(
     * every ``constraints:`` expression must hold at every rung;
     * ``S`` and ``XL`` must fit :data:`S_BYTE_CEILING` and :data:`XL_BYTE_CEILING`.
     """
-    problems: List[str] = []
+    problems: list[str] = []
     declared = set(spec.parameters.get(KEPT, {})) - set(spec.config_names)
     for label, values in zip(AUTHORED, (small, large)):
         if set(values) != declared:
@@ -922,12 +923,12 @@ def preset_cost(spec: BenchSpec, kernel: str, preset: str) -> KernelCost:
     return KernelCost(kernel, preset, nbytes, nbytes / TIME_UNIT_BYTES)
 
 
-def cost_vector(specs: Mapping[str, BenchSpec], preset: str) -> Dict[str, KernelCost]:
+def cost_vector(specs: Mapping[str, BenchSpec], preset: str) -> dict[str, KernelCost]:
     """``{kernel: cost}`` at ``preset`` for every kernel in ``specs``, in sorted kernel order."""
     return {kernel: preset_cost(specs[kernel], kernel, preset) for kernel in sorted(specs)}
 
 
-def stride_partition(names: Sequence[str], ranks: int) -> List[List[str]]:
+def stride_partition(names: Sequence[str], ranks: int) -> list[list[str]]:
     """Round-robin split: rank ``i`` keeps ``names[i::ranks]``.
 
     Kept as the fallback for when NO kernel's cost resolves. It spreads neighbours in the sorted
@@ -939,7 +940,7 @@ def stride_partition(names: Sequence[str], ranks: int) -> List[List[str]]:
     return [list(names[index::ranks]) for index in range(ranks)]
 
 
-def partition_loads(partition: Sequence[Sequence[str]], costs: Mapping[str, KernelCost]) -> List[float]:
+def partition_loads(partition: Sequence[Sequence[str]], costs: Mapping[str, KernelCost]) -> list[float]:
     """Each rank's summed :attr:`KernelCost.predicted_time`. A kernel with no prediction adds 0."""
     return [
         sum(costs[name].predicted_time for name in kernels if name in costs and costs[name].resolved)
@@ -949,7 +950,7 @@ def partition_loads(partition: Sequence[Sequence[str]], costs: Mapping[str, Kern
 
 def node_footprint_violations(
     partition: Sequence[Sequence[str]], costs: Mapping[str, KernelCost], ranks_per_node: int, node_ram_bytes: int
-) -> List[str]:
+) -> list[str]:
     """Every way ``partition`` overruns a node's RAM, as human-readable strings (empty when it fits).
 
     The harness has NO node count today -- both sbatch scripts set ``RANKS`` from
@@ -972,9 +973,9 @@ def node_footprint_violations(
         raise ValueError(f"ranks-per-node must be at least 1, got {ranks_per_node}")
     if node_ram_bytes < 1:
         raise ValueError(f"the node RAM budget must be positive, got {node_ram_bytes} bytes")
-    out: List[str] = []
+    out: list[str] = []
     share = node_ram_bytes / ranks_per_node
-    peak: List[Tuple[int, str]] = []
+    peak: list[tuple[int, str]] = []
     for rank, kernels in enumerate(partition):
         resolved = [(costs[name].working_bytes, name) for name in kernels if name in costs and costs[name].resolved]
         top, who = max(resolved, default=(0, ""))
@@ -1002,9 +1003,9 @@ def pack_lpt(
     names: Sequence[str],
     costs: Mapping[str, KernelCost],
     ranks: int,
-    ranks_per_node: Optional[int] = None,
-    node_ram_bytes: Optional[int] = None,
-) -> List[List[str]]:
+    ranks_per_node: int | None = None,
+    node_ram_bytes: int | None = None,
+) -> list[list[str]]:
     """``names`` split across ``ranks`` by longest-processing-time-first bin packing.
 
     Sort descending by predicted cost, give each kernel to the least-loaded rank. A pure function
@@ -1036,8 +1037,8 @@ def pack_lpt(
     unknown = [i for i, name in enumerate(names) if not (name in costs and costs[name].resolved)]
     # Total order, so two ranks cannot disagree: cost first, then the name, then the position.
     resolved.sort(key=lambda i: (-costs[names[i]].predicted_time, names[i], i))
-    bins: List[List[int]] = [[] for _ in range(ranks)]
-    loads: List[float] = [0.0] * ranks
+    bins: list[list[int]] = [[] for _ in range(ranks)]
+    loads: list[float] = [0.0] * ranks
     for i in resolved:
         rank = min(range(ranks), key=lambda r: (loads[r], r))
         bins[rank].append(i)

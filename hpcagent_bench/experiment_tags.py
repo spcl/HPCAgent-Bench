@@ -432,7 +432,7 @@ def split_record_language(value: str) -> tuple[str, str]:
     is dropped here, not returned. A value naming no registered language token passes through
     unchanged with no packet -- the normal unregistered-tag fallback.
     """
-    text = value[: -len(CLEAN_SUFFIX)] if value.endswith(CLEAN_SUFFIX) else value
+    text = value.removesuffix(CLEAN_SUFFIX)
     for language, spellings in language_spellings():
         for spelling in spellings:
             token = spelling.strip("-")
@@ -494,7 +494,7 @@ def manifest_names() -> tuple[Names, Names]:
     broken to parse must not stop a figure from drawing -- it falls back to its stem."""
     found: Names = {}
     short: Names = {}
-    for key in spec.KERNELS.keys():
+    for key in spec.KERNELS:
         path = spec.KERNELS[key]
         stem = key.rsplit("/", 1)[-1]
         try:
