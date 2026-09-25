@@ -3029,7 +3029,7 @@ def once_bound_locals(fn_ast: ast.FunctionDef, known: set[str]) -> set[str]:
 def constant_int_locals(fn_ast: ast.FunctionDef, known: set[str]) -> set[str]:
     """Body locals bound ONCE to a CONSTANT integer expression -- inlinable as that constant.
 
-    dace folds such a local inside arithmetic, but NOT in a slice bound: sw4_rhs4sg's ``IC = 2``
+    dace folds such a local inside arithmetic, but NOT in a slice bound: a local ``IC = 2``
     reaches ``strx[IC:N_I - 2]`` as data and the frontend mints ``__sym_IC`` for it, which it then
     cannot prove equal to the ``__sym_IM2`` minted for the ``IM2 = 0`` two lines above -- two
     windows of one array that differ by a constant come out as unrelated extents. Substituting the

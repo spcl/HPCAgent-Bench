@@ -1,4 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
+# provenance: {kind: algorithm, upstream: tsvc, detail: s2111}
 name: Wavefront 2D
 level: 1
 parameters:

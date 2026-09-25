@@ -1,4 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
+# provenance: {kind: original}
 name: Generalized Hermitian Eigh
 level: 3
 parameters:
