@@ -43,7 +43,6 @@ import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 from hpcagent_bench import flags
 from hpcagent_bench.flags import Mode
@@ -69,8 +68,8 @@ class PresetPlan:
     preset: str
     mode: Mode
     cores: int
-    env: Dict[str, str]  # threading-knob overrides layered onto os.environ for the child
-    command: List[str]  # the child argv (no taskset/numactl -- single-core is env-enforced)
+    env: dict[str, str]  # threading-knob overrides layered onto os.environ for the child
+    command: list[str]  # the child argv (no taskset/numactl -- single-core is env-enforced)
     output: pathlib.Path  # JSONL the child writes and this driver reads back
 
 
@@ -79,7 +78,7 @@ class PresetResult:
     """One measured preset: the plan plus the harness-reported wall time (ms) or a failure."""
 
     plan: PresetPlan
-    wall_ms: Optional[float] = None
+    wall_ms: float | None = None
     status: str = "ok"
 
 
@@ -90,7 +89,7 @@ def mode_for_preset(preset: str, single_core_presets) -> Mode:
     return Mode.SINGLE_CORE if preset in single_core_presets else Mode.MULTI_CORE
 
 
-def thread_env(mode: Mode) -> Dict[str, str]:
+def thread_env(mode: Mode) -> dict[str, str]:
     """The threading-knob env for ``mode`` -- the PORTABLE single-core enforcement.
 
     Starts from :func:`hpcagent_bench.flags.cpu_env` (OMP + MKL + OpenBLAS + BLIS, the same knobs
@@ -121,7 +120,7 @@ def compose_run_command(
     precision: str = "fp64",
     repeat: int = 5,
     validate: bool = False,
-) -> List[str]:
+) -> list[str]:
     """Build the child argv that runs ONE ``(kernel, preset)`` cell through the existing
     ``hpcagent-bench run`` path.
 
@@ -211,7 +210,7 @@ def plan_preset(
     )
 
 
-def parse_wall_ms(jsonl_path: pathlib.Path) -> Optional[float]:
+def parse_wall_ms(jsonl_path: pathlib.Path) -> float | None:
     """The best (min) harness-measured wall time in ms from a ``run`` JSONL row, or ``None``.
 
     Reads the last row (one is written per cell), and over its ``impls`` takes the minimum of
@@ -234,7 +233,7 @@ def parse_wall_ms(jsonl_path: pathlib.Path) -> Optional[float]:
     return best
 
 
-def run_preset(plan: PresetPlan, env_base: Dict[str, str], *, pin_affinity: bool = True) -> PresetResult:
+def run_preset(plan: PresetPlan, env_base: dict[str, str], *, pin_affinity: bool = True) -> PresetResult:
     """Execute one plan (child ``hpcagent-bench run`` subprocess with the tier's thread env),
     read the harness-measured wall time back, and return a :class:`PresetResult`.
 
@@ -300,7 +299,7 @@ srun --ntasks=1 --cpu-bind=none \\
 """
 
 
-def resolve_kernels(selector: str) -> List[str]:
+def resolve_kernels(selector: str) -> list[str]:
     """Expand a ``--kernels`` selector (``all`` / a track / a dwarf / a comma list / one
     kernel) into loadable kernel names via the registry -- the same resolver the CLI uses."""
     return KERNELS.select(selector)

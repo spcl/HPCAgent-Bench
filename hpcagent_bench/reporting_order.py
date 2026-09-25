@@ -29,15 +29,15 @@ unit-tested against a synthetic metadata table; :func:`row_meta_for` is the thin
 """
 
 import functools
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
 
 from hpcagent_bench.spec import Track
 
 #: Order-mode tokens (the CLI ``--order`` choices and the ``plot_*`` ``order`` param).
 BY_DWARF: str = "by_dwarf"
 BY_LEVEL: str = "by_level"
-ORDER_MODES: Tuple[str, ...] = (BY_DWARF, BY_LEVEL)
+ORDER_MODES: tuple[str, ...] = (BY_DWARF, BY_LEVEL)
 
 #: Section tokens. Sections render in this order; ``other`` is a trailing bucket for a DB
 #: short_name whose manifest cannot be resolved, so a stray name never crashes a plot.
@@ -73,8 +73,8 @@ class RowMeta:
 
     short_name: str
     track: str
-    group: Optional[str]
-    level: Optional[int]
+    group: str | None
+    level: int | None
 
 
 @dataclass(frozen=True)
@@ -89,10 +89,10 @@ class GroupSpan:
     start: int
     end: int
     track: str
-    level: Optional[int]
+    level: int | None
 
 
-def _foundation_label(source: Optional[str]) -> str:
+def _foundation_label(source: str | None) -> str:
     """Humanize a loop_level_reasoning ``source`` into its figure label: ``tsvc_2`` -> ``tsvc2``,
     ``tsvc_2_5`` -> ``tsvc2_5`` (the doc's spelling), else underscores -> spaces."""
     s = source or TRACK_LOOP_LEVEL_REASONING
@@ -112,7 +112,7 @@ def _group_label(rm: RowMeta) -> str:
     return rm.track  # machine_learning / other: the section name is the label
 
 
-def _sort_key(rm: RowMeta, order: str) -> Tuple:
+def _sort_key(rm: RowMeta, order: str) -> tuple:
     """Within-section sort key. HPC/loop_level_reasoning order by group then (in by_level) level;
     the level tiering differs by mode per the methods doc."""
     lvl = rm.level if rm.level is not None else _LEVEL_LAST
@@ -125,7 +125,7 @@ def _sort_key(rm: RowMeta, order: str) -> Tuple:
     return (group, lvl, name)
 
 
-def _span_key_label(rm: RowMeta, order: str) -> Tuple[Tuple, str]:
+def _span_key_label(rm: RowMeta, order: str) -> tuple[tuple, str]:
     """The (key, label) a row contributes to group-span coalescing. ML / other are one
     span per section (never split by group or level)."""
     if rm.track in (TRACK_MACHINE_LEARNING, TRACK_OTHER):
@@ -137,9 +137,9 @@ def _span_key_label(rm: RowMeta, order: str) -> Tuple[Tuple, str]:
     return (rm.track, rm.group), base
 
 
-def _spans(ordered: Sequence[RowMeta], order: str) -> List[GroupSpan]:
+def _spans(ordered: Sequence[RowMeta], order: str) -> list[GroupSpan]:
     """Coalesce consecutive rows with the same span key into :class:`GroupSpan`s."""
-    spans: List[GroupSpan] = []
+    spans: list[GroupSpan] = []
     i, n = 0, len(ordered)
     while i < n:
         key, label = _span_key_label(ordered[i], order)
@@ -152,7 +152,7 @@ def _spans(ordered: Sequence[RowMeta], order: str) -> List[GroupSpan]:
     return spans
 
 
-def order_rows(rows: Sequence[RowMeta], order: str = BY_DWARF) -> Tuple[List[str], List[GroupSpan]]:
+def order_rows(rows: Sequence[RowMeta], order: str = BY_DWARF) -> tuple[list[str], list[GroupSpan]]:
     """Order plotted rows and return ``(ordered_short_names, group_spans)``.
 
     Sections render HPC -> loop_level_reasoning -> ML -> other. HPC and loop_level_reasoning are sorted by
@@ -162,17 +162,17 @@ def order_rows(rows: Sequence[RowMeta], order: str = BY_DWARF) -> Tuple[List[str
     """
     if order not in ORDER_MODES:
         raise ValueError(f"unknown order {order!r}; choose from {ORDER_MODES}")
-    buckets: Dict[str, List[RowMeta]] = {track: [] for track in _SECTION_ORDER}
+    buckets: dict[str, list[RowMeta]] = {track: [] for track in _SECTION_ORDER}
     for rm in rows:
         buckets[rm.track if rm.track in buckets else TRACK_OTHER].append(rm)
-    ordered: List[RowMeta] = []
+    ordered: list[RowMeta] = []
     for track, bucket in buckets.items():
         ordered += sorted(bucket, key=lambda r: _sort_key(r, order)) if track in _SORTED_SECTIONS else bucket
     return [rm.short_name for rm in ordered], _spans(ordered, order)
 
 
 @functools.lru_cache(maxsize=1)
-def _short_name_index() -> Dict[str, "object"]:
+def _short_name_index() -> dict[str, "object"]:
     """``{spec.short_name: BenchSpec}`` over the whole corpus.
 
     Keyed on the manifest's ``short_name`` (the value the results ``benchmark`` column
@@ -187,7 +187,7 @@ def _short_name_index() -> Dict[str, "object"]:
     """
     from hpcagent_bench.spec import KERNELS, BenchSpec
 
-    index: Dict[str, "object"] = {}
+    index: dict[str, object] = {}
     for key in KERNELS.keys():
         try:
             spec = BenchSpec.load(key)
@@ -197,7 +197,7 @@ def _short_name_index() -> Dict[str, "object"]:
     return index
 
 
-def row_meta_for(short_names: Sequence[str]) -> List[RowMeta]:
+def row_meta_for(short_names: Sequence[str]) -> list[RowMeta]:
     """Build :class:`RowMeta` for each DB ``benchmark`` short_name from its ``BenchSpec``.
 
     The HPC group is the kernel's ``dwarf``; the loop_level_reasoning group is its
@@ -206,7 +206,7 @@ def row_meta_for(short_names: Sequence[str]) -> List[RowMeta]:
     crashes a plot.
     """
     index = _short_name_index()
-    out: List[RowMeta] = []
+    out: list[RowMeta] = []
     for sn in short_names:
         spec = index.get(sn)
         if spec is None:
@@ -217,7 +217,7 @@ def row_meta_for(short_names: Sequence[str]) -> List[RowMeta]:
     return out
 
 
-def structural_group(spec, track: Optional[str] = None) -> Optional[str]:
+def structural_group(spec, track: str | None = None) -> str | None:
     """The group a figure bands ``spec``'s row under: the dwarf for HPC, the source for
     loop_level_reasoning, ``None`` for machine_learning and anything else.
 

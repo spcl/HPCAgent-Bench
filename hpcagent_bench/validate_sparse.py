@@ -16,7 +16,7 @@ ordering is reproducible across every baseline. See
 ``hpcagent_bench/docs/sparse_abi.md`` for the full sparse ABI contract.
 """
 
-from typing import Dict, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 
 from hpcagent_bench.spec import (
     INDEX_ROLES,
@@ -122,7 +122,7 @@ def validate_sparse_config(
     # Rule 6: configuration's chosen format must be declared
     # Rule 7: no-mixing rule (at most one non-dense sparse format) -
     # Rule 10: distinct configurations must produce distinct files
-    seen_config_arrays: Dict[frozenset, str] = {}
+    seen_config_arrays: dict[frozenset, str] = {}
     for cfg_name, cfg in configurations.items():
         cfg_path = f"configurations.{cfg_name}"
         # Rule 5
@@ -183,7 +183,7 @@ def validate_sparse_config(
     # if any array_args looks like a physical buffer name (i.e. matches
     # a physical name registered in any layout variant), that's the
     # error.
-    physical_names: Dict[str, str] = {}
+    physical_names: dict[str, str] = {}
     for arr_name, layout in sparse_layouts.items():
         for variant in layout.variants.values():
             for buf in variant.buffers:
