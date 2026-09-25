@@ -29,7 +29,7 @@ source "${IMAGE_DIR}/../images.env"
 
 export BUILD_TARGETS="${BUILD_TARGETS:-agent judge}"
 unset OUTPUT_SQSH
-CE="${CE_DIR:-${SCRATCH:?}/ce-images}"
+CE="${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
 declare -A CANDIDATE=(
     [agent]="${CE}/${JUDGE_AGENT_CPU_CANDIDATE}"
     [judge]="${CE}/${JUDGE_CPU_CANDIDATE}"

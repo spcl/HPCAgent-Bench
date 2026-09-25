@@ -78,7 +78,7 @@ def test_every_cpu_target_row_names_a_partition_the_gpu_table_knows() -> None:
 
 
 def test_ce_spack_target_refuses_a_value_that_is_not_a_spack_target(tmp_path: pathlib.Path) -> None:
-    for name in ("build_common.sh", "gpu_arch.env"):
+    for name in ("build_common.sh", "images.env", "gpu_arch.env"):
         shutil.copy2(CE / name, tmp_path / name)
     (tmp_path / "cpu_target.env").write_text("SPACK_TARGET_mi200=zen3 target=zen4\n", encoding="ascii")
     done = common(
@@ -145,7 +145,7 @@ def test_the_spack_target_reaches_the_build_only_as_an_optional_build_arg() -> N
     build = (RECIPE / "build.sh").read_text(encoding="utf-8")
     assert re.search(r"^ce_spack_target$", build, re.MULTILINE)
     assert '[[ -z "${SPACK_TARGET}" ]] || SPACK_TARGET_ARGS=(--build-arg "SPACK_TARGET=${SPACK_TARGET}")' in build
-    assert '      "${SPACK_TARGET_ARGS[@]}" \\\n' in build
+    assert '\n  "${SPACK_TARGET_ARGS[@]}"\n)\n' in build, "the spack target left BUILD_ARGS"
     docker = (RECIPE / "Dockerfile").read_text(encoding="utf-8")
     assert re.findall(r"^ARG SPACK_TARGET\b.*$", docker, re.MULTILINE) == ["ARG SPACK_TARGET="]
     assert 'grep -vx -e bin -e "linux-${SPACK_TARGET}"' in docker, "the stray-target gate is gone"
@@ -153,7 +153,7 @@ def test_the_spack_target_reaches_the_build_only_as_an_optional_build_arg() -> N
 
 def test_the_pip_wheel_cache_is_per_gpu_arch() -> None:
     """pip keys a built cupy wheel by its sdist, not by HCC_AMDGPU_TARGET."""
-    assert 'PIP_CACHE="${PIP_CACHE:-${SCRATCH:?}/pip-cache/${ROCM_ARCH}}"' in (RECIPE / "build.sh").read_text(
+    assert 'ce_cache_args spack-buildcache "pip-cache/${ROCM_ARCH}"' in (RECIPE / "build.sh").read_text(
         encoding="utf-8"
     )
 

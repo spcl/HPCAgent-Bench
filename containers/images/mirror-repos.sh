@@ -5,7 +5,8 @@
 set -u
 
 ulimit -c 0
-MIRROR="${SCRATCH:?}/git-mirrors"
+# The same default build_common.sh ce_mirror_args reads.
+MIRROR="${GIT_MIRRORS:-${SCRATCH:?}/git-mirrors}"
 QUEUE="
 spack/spack
 spack/spack-packages

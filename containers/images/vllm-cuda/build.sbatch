@@ -29,7 +29,7 @@ source "${IMAGE_DIR}/../build_common.sh"
 # shellcheck source=../images.env
 source "${IMAGE_DIR}/../images.env"
 
-export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/${INFERENCE_VLLM_CUDA_CANDIDATE}}"
+export OUTPUT_SQSH="${OUTPUT_SQSH:-${CE_IMAGES:?}/${INFERENCE_VLLM_CUDA_CANDIDATE}}"
 
 ce_refuse_mounted "${OUTPUT_SQSH}" || exit 2
 

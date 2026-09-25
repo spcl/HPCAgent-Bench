@@ -48,7 +48,7 @@ fi
 echo "SCRIPT_DIR=${SCRIPT_DIR}"
 # shellcheck source=images.env
 source "${SCRIPT_DIR}/images.env"
-mkdir -p "${SCRATCH}/ce-images/logs"
+mkdir -p "${CE_IMAGES}/logs"
 
 if [ -z "${ROLES:-}" ]; then
     for role in $(ce_roles "${CE_PLATFORM:-amd}"); do

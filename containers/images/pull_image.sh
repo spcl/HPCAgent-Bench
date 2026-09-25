@@ -20,7 +20,7 @@ TAG="${2:-$(ce_image "${ROLE}" tag || true)}"
 [[ -n "${TAG}" ]] || { echo "${ROLE} has no published tag in images.env; name one or build it" >&2; exit 2; }
 
 : "${SCRATCH:?set SCRATCH}"
-CE_IMAGES="${CE_IMAGES:-${SCRATCH}/ce-images}"
+: "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
 OUT="${OUT:-${CE_IMAGES}/${sqsh}}"
 mkdir -p "${CE_IMAGES}"
 
@@ -34,7 +34,7 @@ if grep -hoE '^[[:space:]]*image[[:space:]]*=[[:space:]]*"[^"]+"' "${HOME}/.edf"
     exit 2
 fi
 
-export ENROOT_TEMP_PATH="${ENROOT_TEMP_PATH:-/dev/shm/${USER}/enroot-tmp}"
+export ENROOT_TEMP_PATH="${ENROOT_TEMP_PATH:-${CE_TMPFS}/enroot-tmp}"
 # The site enroot.conf cache path is not writable; every enroot call needs this override.
 export ENROOT_CACHE_PATH="${ENROOT_CACHE_PATH:-${SCRATCH}/.enroot}"
 mkdir -p "${ENROOT_TEMP_PATH}" "${ENROOT_CACHE_PATH}"

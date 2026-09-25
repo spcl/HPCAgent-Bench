@@ -41,12 +41,11 @@ ulimit -c 0
 IMAGE_DIR="${IMAGE_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
 test -x "${IMAGE_DIR}/build.sh"
 
-mkdir -p "${SCRATCH:?}/ce-images/logs"
-
 # shellcheck source=../build_common.sh
 source "${IMAGE_DIR}/../build_common.sh"
+mkdir -p "${CE_IMAGES:?set SCRATCH or CE_IMAGES}/logs"
 PARTITION="${SLURM_JOB_PARTITION:-${ROCM_PARTITION:?set ROCM_PARTITION outside Slurm}}"
-export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/$(ce_amd_candidate agent "${PARTITION}")}"
+export OUTPUT_SQSH="${OUTPUT_SQSH:-${CE_IMAGES}/$(ce_amd_candidate agent "${PARTITION}")}"
 export BUILD_TARGETS="${BUILD_TARGETS:-agent judge}"
 
 # WHICH FILES build.sh WILL ACTUALLY WRITE.
@@ -56,7 +55,7 @@ export BUILD_TARGETS="${BUILD_TARGETS:-agent judge}"
 target_sqsh() {
     local name
     name="$(ce_amd_candidate "$1" "${PARTITION}")" || return 2
-    printf '%s/ce-images/%s' "${SCRATCH:?}" "${name}"
+    printf '%s/%s' "${CE_IMAGES}" "${name}"
 }
 built_paths() {
     local t
