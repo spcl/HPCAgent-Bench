@@ -108,5 +108,3 @@ fuzz:
   - m >= 2
   - nscf >= 1
   - nstate >= 1
-experiment_tags:
-- scicomp-focus40

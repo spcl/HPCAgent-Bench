@@ -404,5 +404,3 @@ output_args:
   - z_w_concorr_me
   - z_kin_hor_e
   - z_vt_ie
-experiment_tags:
-- scicomp-focus40

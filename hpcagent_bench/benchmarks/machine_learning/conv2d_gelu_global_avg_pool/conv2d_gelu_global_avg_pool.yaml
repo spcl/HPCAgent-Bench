@@ -47,5 +47,3 @@ init:
     conv_groups: 1
 output_args:
 - out
-experiment_tags:
-- kernelbench

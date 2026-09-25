@@ -162,5 +162,3 @@ output_args:
 - q
 - q_x_flux
 - q_y_flux
-experiment_tags:
-- scicomp-focus40

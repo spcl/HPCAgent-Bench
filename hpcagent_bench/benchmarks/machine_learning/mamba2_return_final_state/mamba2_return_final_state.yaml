@@ -46,5 +46,3 @@ init:
     out: (batch_size, n_heads, d_head, d_state)
 output_args:
 - out
-experiment_tags:
-- kernelbench

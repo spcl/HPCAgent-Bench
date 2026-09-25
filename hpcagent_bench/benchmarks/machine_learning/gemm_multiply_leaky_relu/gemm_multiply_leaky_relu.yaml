@@ -37,5 +37,3 @@ init:
     leaky_relu_negative_slope: 0.1
 output_args:
 - out
-experiment_tags:
-- kernelbench

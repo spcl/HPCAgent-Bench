@@ -47,5 +47,3 @@ mpi:
     - N
     radius:
     - N
-experiment_tags:
-- npbench

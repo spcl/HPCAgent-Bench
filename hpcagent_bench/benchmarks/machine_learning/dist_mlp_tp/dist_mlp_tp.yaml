@@ -115,5 +115,3 @@ mpi:
   - x
   - linear2_bias
   - out
-experiment_tags:
-- mlscale10

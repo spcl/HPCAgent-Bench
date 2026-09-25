@@ -88,5 +88,3 @@ mpi:
   replicatable:
   - gemm_bias
   - bias
-experiment_tags:
-- mlscale10

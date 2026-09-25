@@ -106,5 +106,3 @@ mpi:
   - ln_weight
   - ln_bias
   - out
-experiment_tags:
-- mlscale10

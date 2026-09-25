@@ -44,5 +44,3 @@ output_args:
 fuzz:
   constraints:
   - k <= ngrid
-experiment_tags:
-- scicomp-focus40

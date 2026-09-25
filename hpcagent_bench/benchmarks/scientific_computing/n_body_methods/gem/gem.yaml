@@ -52,6 +52,3 @@ array_args:
 - phi
 output_args:
 - phi
-experiment_tags:
-- scicomp-focus40
-- mixed

@@ -125,5 +125,3 @@ mpi:
     - nhalo + ni + nhalo
     - nj
     - nk
-experiment_tags:
-- scicomp-focus40

@@ -50,5 +50,3 @@ init:
     avg_pool_kernel_size: 2
 output_args:
 - out
-experiment_tags:
-- kernelbench

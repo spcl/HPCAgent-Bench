@@ -117,7 +117,3 @@ mpi:
     - np_particles
     uz:
     - np_particles
-experiment_tags:
-- scicomp-focus40
-- harness-focus20
-- mixed

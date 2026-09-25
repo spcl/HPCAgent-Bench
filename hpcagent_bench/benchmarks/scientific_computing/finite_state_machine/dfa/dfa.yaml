@@ -50,5 +50,3 @@ array_args:
 - counts
 output_args:
 - counts
-experiment_tags:
-- harness-focus20

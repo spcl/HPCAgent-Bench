@@ -12,7 +12,7 @@ import re
 
 import pytest
 
-from hpcagent_bench import experiment_tags, paths
+from hpcagent_bench import experiment_tags, paths, tags
 from hpcagent_bench.stats import palette
 from tests.env_render import BASES, rendered
 
@@ -227,15 +227,7 @@ def test_every_short_name_fits_and_no_two_benchmarks_share_one() -> None:
 
 def test_every_llr_focus40_kernel_has_a_short_label() -> None:
     """The MPR compiler figure draws these 40 on one text-width axis."""
-    roster = [
-        kernel.rsplit("/", 1)[-1]
-        for kernel in experiment_tags.spec.KERNELS.keys()
-        if "llr-focus40"
-        in (
-            experiment_tags.spec.load_yaml(experiment_tags.spec.KERNELS[kernel].read_text()).get("experiment_tags")
-            or []
-        )
-    ]
+    roster = tags.members("llr-focus40")
     assert len(roster) == 40
     long = [
         kernel

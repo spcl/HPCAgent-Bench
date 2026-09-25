@@ -78,5 +78,3 @@ mpi:
   - x
   - rms_weight
   - out
-experiment_tags:
-- mlscale-part2

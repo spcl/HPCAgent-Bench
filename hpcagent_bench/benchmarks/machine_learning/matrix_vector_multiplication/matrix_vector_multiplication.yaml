@@ -23,5 +23,3 @@ init:
     out: (M, 1)
 output_args:
 - out
-experiment_tags:
-- kernelbench

@@ -327,5 +327,3 @@ mpi:
     axis:
     - klon
     work_exponent: 1
-experiment_tags:
-- scicomp-focus40

@@ -69,5 +69,3 @@ init:
   func_name: initialize
 output_args:
 - Sigma
-experiment_tags:
-- npbench

@@ -20,6 +20,3 @@ init:
   func_name: initialize
 output_args:
 - y
-experiment_tags:
-- npbench
-- polybench

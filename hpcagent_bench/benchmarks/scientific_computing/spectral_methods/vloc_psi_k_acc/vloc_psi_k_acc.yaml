@@ -134,6 +134,3 @@ array_args:
 - nl
 output_args:
 - hpsi
-experiment_tags:
-- qe
-- scicomp-focus40

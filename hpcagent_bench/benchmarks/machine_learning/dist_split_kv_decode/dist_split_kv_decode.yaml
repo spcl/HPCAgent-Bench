@@ -102,5 +102,3 @@ mpi:
   layout_flexible:
   - keys
   - values
-experiment_tags:
-- mlscale-part2

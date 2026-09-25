@@ -1059,7 +1059,6 @@ KNOWN_MANIFEST_KEYS = frozenset(
         "name",
         "short-name",
         "relative_path",
-        "experiment_tags",
         "module_name",
         "func_name",
         "parameters",
@@ -1673,10 +1672,6 @@ class BenchSpec:
     #: IS the dwarf, and it agreed with the declared value on 144 of 144 kernels that declared one,
     #: so declaring it was a second copy that could disagree. ``None`` for a flat track.
     dwarf: str | None = None
-    #: Labels an EXPERIMENT selects on (``llr-focus40``, ``npbench``, ...). Open vocabulary and
-    #: deliberately narrow: descriptive labels ("eigensolver", "fft") described the kernel a second
-    #: time and nothing read them, so a tag here exists to pick a roster.
-    experiment_tags: tuple[str, ...] = ()
     #: HPC scale class (``micro`` / ``proxy``); ``None`` for non-HPC kernels and
     #: for unset HPC kernels (which resolve to ``micro`` via :attr:`scale_class`).
     scale: str | None = None
@@ -1955,7 +1950,6 @@ class BenchSpec:
                 f"re-sampled as a size (it overwrites the chosen config). "
                 f"Declare {clash} in 'config' only."
             )
-        declared_tags = ext.get("experiment_tags", bench.get("experiment_tags"))
         declared_precisions = ext.get("precisions", bench.get("precisions"))
         dwarf, scale = bench.get("dwarf"), bench.get("scale")
         level, timeout_s = ext.get("level", bench.get("level")), ext.get("timeout_s", bench.get("timeout_s"))
@@ -1983,7 +1977,6 @@ class BenchSpec:
             init=init_spec,
             variants=variants,
             dwarf=None if dwarf is None else str(dwarf),
-            experiment_tags=tuple(str(t) for t in as_list(declared_tags)),
             scale=None if scale is None else str(scale),
             level=None if level is None else int_of(level, "level", source),
             timeout_s=None if timeout_s is None else number_of(timeout_s, "timeout_s", source),
@@ -2075,6 +2068,14 @@ class BenchSpec:
         validate_level(spec.level, spec.track, source)
         validate_min_precision(spec.min_precision, source)
         return spec
+
+    @property
+    def experiment_tags(self) -> tuple[str, ...]:
+        """The experiment tags whose ``hpcagent_bench/tags/<tag>.txt`` lists this kernel -- the one
+        source of tag membership (:mod:`hpcagent_bench.tags`, imported late: it imports this module)."""
+        from hpcagent_bench import tags
+
+        return tags.tags_of(self.short_name)
 
     @property
     def scale_class(self) -> str | None:
@@ -2267,7 +2268,7 @@ def _split_suffix(selector: str) -> tuple[str, int | None, str | None]:
     Two filters, one syntax, at most one per token:
 
     * ``@lvl1`` / ``@lvl2`` / ``@lvl3`` -- difficulty level (case-insensitive).
-    * ``@<tag>`` -- an experiment tag from the manifest's ``experiment_tags`` (``@npbench``).
+    * ``@<tag>`` -- an experiment tag (``@npbench``, :mod:`hpcagent_bench.tags`).
 
     No suffix -> both ``None``. A ``lvl``-prefixed suffix is still validated as a level rather than
     falling through to the open tag vocabulary, so ``@lvl4`` stays the error it always was instead
@@ -2297,19 +2298,6 @@ def _safe_level(path_key: str) -> int | None:
     except Exception:  # noqa: BLE001 -- a broken manifest just doesn't match a level filter
         return None
     return spec.resolved_level
-
-
-def _safe_labels(path_key: str) -> tuple[str, ...]:
-    """Every provenance label a kernel carries, lowercased; empty if its manifest fails to load.
-
-    Suite provenance (npbench, kernelbench, polybench) lives only in ``experiment_tags``, so a
-    selector such as ``@kernelbench`` reads this one list."""
-    try:
-        spec = BenchSpec.load(path_key)
-    except Exception:  # noqa: BLE001 -- a broken manifest just doesn't match a label filter
-        return ()
-    labels = [t.lower() for t in spec.experiment_tags]
-    return tuple(labels)
 
 
 @functools.lru_cache(maxsize=1, typed=True)
@@ -2422,11 +2410,8 @@ class KernelRegistry:
         * ``@lvl<n>`` (n in 1/2/3) -- difficulty level (e.g. ``scientific_computing@lvl3`` = every HPC
           full-app; ``loop_level_reasoning@lvl2`` = the branchy loop_level_reasoning kernels). See
           :attr:`BenchSpec.resolved_level`.
-        * ``@<label>`` -- an experiment tag from the manifest (``@npbench``, ``@kernelbench``)
-          (``all@npbench`` = every kernel that came from NPBench, across tracks;
-          ``all@kernelbench`` = the 200 KernelBench ports). See :func:`_safe_labels`. When
-          ``<label>`` (lowercased) names a ``tags:`` entry in ``experiments/tags.yaml``, it filters
-          by membership in that DYNAMIC tag's resolved set instead -- see
+        * ``@<tag>`` -- membership in an experiment tag's ``hpcagent_bench/tags/<tag>.txt``
+          (``all@npbench`` = every kernel that came from NPBench, across tracks) -- see
           :mod:`hpcagent_bench.tags`.
 
         Raises ``KeyError`` when nothing matches.
@@ -2440,19 +2425,13 @@ class KernelRegistry:
                 raise KeyError(f"no kernel in {selector!r} has level {level}")
             return keep
         if tag is not None:
-            # A dynamic tag (experiments/tags.yaml: composed from other tags/selectors via
-            # union/intersect/diff, or an alias) filters by membership in its RESOLVED set instead
-            # of a plain manifest experiment_tags label -- deferred import: hpcagent_bench.tags
-            # imports KERNELS from this module, so a module-level import here would cycle.
-            from hpcagent_bench import tags as tag_registry
+            # Deferred import: hpcagent_bench.tags imports KERNELS from this module.
+            from hpcagent_bench import tags
 
-            if tag_registry.is_registered(tag):
-                dynamic = set(tag_registry.resolve_registered(tag))
-                keep = [k for k in base if k in dynamic]
-            else:
-                keep = [k for k in base if tag in _safe_labels(k)]
+            tagged = set(tags.resolve(tag)) if tags.tag_file(tag).is_file() else set[str]()
+            keep = [k for k in base if k in tagged]
             if not keep:
-                raise KeyError(f"no kernel in {selector!r} carries the label {tag!r}")
+                raise KeyError(f"no kernel in {selector!r} carries the tag {tag!r}")
             return keep
         return base
 

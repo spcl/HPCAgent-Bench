@@ -49,5 +49,3 @@ init:
     subtract_value_2: 0.2
 output_args:
 - out
-experiment_tags:
-- kernelbench

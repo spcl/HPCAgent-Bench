@@ -47,5 +47,3 @@ array_args:
 - crc
 output_args:
 - crc
-experiment_tags:
-- npbench

@@ -42,5 +42,3 @@ init:
     bn_eps: 1.0e-05
 output_args:
 - out
-experiment_tags:
-- kernelbench

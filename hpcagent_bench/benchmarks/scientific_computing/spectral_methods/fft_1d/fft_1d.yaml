@@ -42,6 +42,3 @@ array_args:
 output_args:
 - y
 - z
-experiment_tags:
-- scicomp-focus40
-- mixed

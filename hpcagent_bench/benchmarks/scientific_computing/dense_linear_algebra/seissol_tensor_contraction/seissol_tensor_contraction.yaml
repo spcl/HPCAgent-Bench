@@ -72,6 +72,3 @@ array_args:
 - star
 output_args:
 - Q
-experiment_tags:
-- scicomp-focus40
-- mixed

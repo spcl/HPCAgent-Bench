@@ -63,5 +63,3 @@ mpi:
     - I
     - J
     - K
-experiment_tags:
-- npbench

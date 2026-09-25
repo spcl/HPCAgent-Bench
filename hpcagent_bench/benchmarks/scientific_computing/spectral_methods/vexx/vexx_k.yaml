@@ -437,6 +437,3 @@ array_args:
 - ke
 output_args:
 - hpsi
-experiment_tags:
-- qe
-- scicomp-focus40

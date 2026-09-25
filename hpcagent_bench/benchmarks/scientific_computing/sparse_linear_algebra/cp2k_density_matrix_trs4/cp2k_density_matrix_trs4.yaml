@@ -123,5 +123,3 @@ fuzz:
   - nelectron <= n_block_rows * block_size
 precisions:
 - fp64
-experiment_tags:
-- scicomp-focus40

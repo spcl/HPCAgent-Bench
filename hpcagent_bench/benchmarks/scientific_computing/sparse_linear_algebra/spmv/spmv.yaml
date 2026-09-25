@@ -200,5 +200,3 @@ distributions:
   csr_uniform:
     configuration: csr
     distribution: uniform
-experiment_tags:
-- npbench

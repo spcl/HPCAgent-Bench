@@ -111,5 +111,3 @@ output_args:
 - fshift
 precisions:
 - fp64
-experiment_tags:
-- scicomp-focus40

@@ -32,5 +32,3 @@ init:
     out: (batch_size, seq_len, n_embd)
 output_args:
 - out
-experiment_tags:
-- kernelbench
