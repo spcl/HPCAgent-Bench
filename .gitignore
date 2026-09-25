@@ -151,6 +151,8 @@ hpcagent_bench/native_runs/*
 # Documented default outputs of `hf export`, `harbor generate/run` and `regrade worklist/run`.
 hf_dataset/
 harbor-runs/
+adapters/hpcagent_bench/tasks/
+adapters/hpcagent_bench/runs/
 /tasks/
 /worklist.jsonl
 /regrades/

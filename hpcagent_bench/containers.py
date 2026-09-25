@@ -161,15 +161,10 @@ def resolve_backend(explicit: str | None = None) -> str:
     rather than a program actually wants. The return is always a concrete runtime, so every
     caller downstream keeps working with one.
 
-    The fallback is the ROOTLESS OCI runtime. The shipped artifact is an OCI image, and the
-    fallback has to be something an unprivileged user can actually invoke: docker needs a daemon
-    and a root-equivalent group, and apptainer/ce need a conversion of the image first. Use
-    :func:`detect_backend` to pick from what is installed rather than from this constant.
-
-    Note: the legacy bash-only ``$HPCAGENT_BENCH_CONTAINER_RUNTIME`` is DELIBERATELY not read
-    here -- the shell launcher still honors it locally, but wiring it into the Python
-    path would make a Harbor run crash whenever a user had set it for a local bash run.
-    Both paths share the one canonical ``$HPCAGENT_BENCH_RUNTIME_BACKEND``."""
+    The fallback is the ROOTLESS OCI runtime: the shipped artifact is an OCI image, docker needs a
+    daemon and a root-equivalent group, and apptainer/ce need the image converted first. Use
+    :func:`detect_backend` to pick from what is installed. The shell launcher's own
+    ``$HPCAGENT_BENCH_CONTAINER_RUNTIME`` is deliberately not read here."""
     backend = (
         explicit
         or os.environ.get("HPCAGENT_BENCH_RUNTIME_BACKEND")
@@ -331,33 +326,15 @@ def harbor_env_for(backend: str | None = None) -> str:
 
 
 def install_apptainer(prefix: str = "~/.local", attempts: int = 4) -> int:
-    """Install Apptainer unprivileged (no sudo) into ``prefix`` via its official
-    installer. Returns the subprocess return code.
+    """Install Apptainer unprivileged (no sudo) into ``prefix`` via its official installer;
+    returns the installer's return code.
 
-    The installer is downloaded then piped to ``bash`` over stdin, with ``prefix``
-    passed as a real argv element -- NOT interpolated into a ``shell=True`` string
-    (which would let a crafted ``prefix`` inject arbitrary commands).
-
-    Retried with backoff (as ``pip_retry`` does for the CI pip installs) because BOTH
-    fetches are live-network: the installer itself, and the EPEL package listing the
-    installer scrapes to resolve the latest apptainer RPM. That listing is served by the
-    ``download.fedoraproject.org`` REDIRECTOR, so a single bad mirror fails the install
-    outright. Upstream's own retry loop cannot absorb that -- it NEVER sleeps between
-    attempts, so a momentarily unreachable mirror burns all of its retries in under a second
-    (seen in CI: five attempts, 0.80 s total, against a listing that resolves in 0.43 s when
-    healthy). Retrying the whole script in a FRESH process is what actually helps: the
-    installer caches the fetched listing in a shell variable and skips the re-fetch when
-    it is non-empty, so only a new process re-queries the redirector and can land on a
-    different mirror.
-
-    Any partial tree a failed attempt left behind is removed before the next one. This is
-    what makes the retry work at all: the installer hard-refuses when its own
-    ``<prefix>/<arch>`` already exists (``fatal "$DEST/$ARCH is not empty"``, and it has no
-    force flag), and a mirror that dies midway has already unpacked into it -- so without
-    the clean, every retry fails INSTANTLY on that check instead of re-fetching, and the
-    real error is buried under "is not empty" (seen in CI: a bad mirror lost
-    ``fakeroot-libs``, then three retries reported only the leftover directory).
-    :func:`clean_partial_install` removes only paths this call created."""
+    The installer is piped to ``bash`` on stdin with ``prefix`` as a real argv element, never
+    interpolated into a shell string. The whole script is retried in a FRESH process with backoff:
+    it scrapes an EPEL listing behind the ``download.fedoraproject.org`` redirector, its own retry
+    loop never sleeps, and it caches the listing per process, so only a new process can land on a
+    different mirror. Each failed attempt's partial tree is removed first
+    (:func:`clean_partial_install`), because the installer refuses a non-empty ``<prefix>/<arch>``."""
     prefix = os.path.expanduser(prefix)
     preexisting = set(os.listdir(prefix)) if os.path.isdir(prefix) else set()
     returncode = 1
@@ -385,11 +362,8 @@ def install_apptainer(prefix: str = "~/.local", attempts: int = 4) -> int:
 def clean_partial_install(prefix: str, preexisting: Sequence[str]) -> None:
     """Remove what a failed :func:`install_apptainer` attempt left in ``prefix`` -- and ONLY that.
 
-    ``preexisting`` is the prefix's entries from before the first attempt; anything named there is
-    left alone. Scoping it this way is the whole point rather than a nicety: ``prefix`` defaults to
-    ``~/.local`` and is caller-supplied, so a blanket wipe of it would delete a user's unrelated
-    installs. Only the names the installer itself added (its ``<arch>`` tree and ``bin`` shims) are
-    candidates."""
+    ``preexisting`` is the prefix's entries from before the first attempt, left alone: ``prefix``
+    defaults to ``~/.local``, and a blanket wipe would delete a user's unrelated installs."""
     if not os.path.isdir(prefix):
         return
     for name in os.listdir(prefix):

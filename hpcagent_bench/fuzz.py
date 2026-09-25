@@ -48,7 +48,7 @@ import functools
 import logging
 import os
 from collections.abc import Callable, Mapping, Sequence
-from typing import Final, TypeAlias, TypeGuard
+from typing import Final, TypeGuard
 
 import numpy as np
 
@@ -63,11 +63,11 @@ NO_CONFIG_NAMES: frozenset[str] = frozenset()
 #: A manifest parameter's raw fuzz spec: a discrete-set / derive / construct mapping, a
 #: ``[lo, hi]`` range, or a scalar passed through unchanged. Recursive: a mapping's or a
 #: sequence's MEMBERS are the same vocabulary, narrowed where they are read.
-FuzzValue: TypeAlias = "Mapping[str, FuzzValue] | Sequence[FuzzValue] | int | float | str | bool"
+type FuzzValue = Mapping[str, FuzzValue] | Sequence[FuzzValue] | int | float | str | bool
 
 #: ``{preset: {symbol: value}}`` -- the manifest size table every resolver below reads. The mutable
 #: spelling is :data:`hpcagent_bench.spec.PresetTable`; nothing here writes it, so it is a mapping.
-ParameterTable: TypeAlias = "Mapping[str, Mapping[str, FuzzValue]]"
+type ParameterTable = Mapping[str, Mapping[str, FuzzValue]]
 
 
 def is_range(value: FuzzValue) -> TypeGuard[Sequence[int | float]]:
@@ -416,6 +416,11 @@ def _apply_func(name: str, args: list[FuzzValue], expr: str) -> FuzzValue:
     raise ValueError(f"disallowed call in {expr!r}")
 
 
+#: What :func:`safe_eval` raises on an expression it cannot evaluate: a parse error, an unknown name,
+#: an unsupported construct or operand, or failing arithmetic.
+EVAL_ERRORS: tuple[type[Exception], ...] = (SyntaxError, NameError, ValueError, TypeError, ArithmeticError)
+
+
 def safe_eval(expr: str, names: dict[str, FuzzValue]) -> FuzzValue:
     """Evaluate a fuzz expression against ``names`` WITHOUT Python ``eval``.
 
@@ -430,48 +435,59 @@ def safe_eval(expr: str, names: dict[str, FuzzValue]) -> FuzzValue:
     vocabulary is for -- and raise :class:`TypeError` on anything else, as the operator
     itself would; equality, ``not`` and ``bool`` read any value.
     """
-    tree = ast.parse(expr, mode="eval")
+    return eval_node(ast.parse(expr, mode="eval").body, names, expr)
 
-    def ev(node: ast.expr) -> FuzzValue:
-        if isinstance(node, ast.Constant):
-            constant = node.value
-            if isinstance(constant, (bool, int, float, str)):
-                return constant
-            raise ValueError(f"unsupported constant in {expr!r}: {constant!r}")
-        if isinstance(node, ast.Name):
-            if node.id in names:
-                return names[node.id]
-            raise NameError(node.id)
-        if isinstance(node, (ast.List, ast.Tuple)):
-            return [ev(e) for e in node.elts]
-        if isinstance(node, ast.BinOp) and type(node.op) in _BINOPS:
-            return _binop(node.op, _as_number(ev(node.left), expr), _as_number(ev(node.right), expr), expr)
-        if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARYOPS:
-            return _unaryop(node.op, ev(node.operand), expr)
-        if isinstance(node, ast.BoolOp):
-            vals = [ev(v) for v in node.values]
-            return all(vals) if isinstance(node.op, ast.And) else any(vals)
-        if isinstance(node, ast.Compare):
-            left = ev(node.left)
-            for op, comparator in zip(node.ops, node.comparators):
-                if type(op) not in _CMPOPS:
-                    raise ValueError(f"unsupported comparison in {expr!r}: {type(op).__name__}")
-                right = ev(comparator)
-                if not _compare(op, left, right, expr):
-                    return False
-                left = right
-            return True
-        if isinstance(node, ast.IfExp):
-            return ev(node.body) if ev(node.test) else ev(node.orelse)
-        if isinstance(node, ast.Call):
-            if (not isinstance(node.func, ast.Name)) or node.func.id not in _EVAL_FUNCS:
-                raise ValueError(f"disallowed call in {expr!r}")
-            if node.keywords:
-                raise ValueError(f"keyword args not allowed in {expr!r}")
-            return _apply_func(node.func.id, [ev(a) for a in node.args], expr)
-        raise ValueError(f"unsupported expression in {expr!r}: {ast.dump(node)}")
 
-    return ev(tree.body)
+def eval_node(node: ast.expr, names: dict[str, FuzzValue], expr: str) -> FuzzValue:
+    """One node of :func:`safe_eval`'s walk; ``expr`` is the whole source, for error messages."""
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, (bool, int, float, str)):
+            return node.value
+        raise ValueError(f"unsupported constant in {expr!r}: {node.value!r}")
+    if isinstance(node, ast.Name):
+        if node.id in names:
+            return names[node.id]
+        raise NameError(node.id)
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return [eval_node(e, names, expr) for e in node.elts]
+    if isinstance(node, ast.BinOp) and type(node.op) in _BINOPS:
+        left, right = eval_node(node.left, names, expr), eval_node(node.right, names, expr)
+        return _binop(node.op, _as_number(left, expr), _as_number(right, expr), expr)
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARYOPS:
+        return _unaryop(node.op, eval_node(node.operand, names, expr), expr)
+    if isinstance(node, ast.BoolOp):
+        vals = [eval_node(v, names, expr) for v in node.values]
+        return all(vals) if isinstance(node.op, ast.And) else any(vals)
+    if isinstance(node, ast.Compare):
+        return eval_compare(node, names, expr)
+    if isinstance(node, ast.IfExp):
+        branch = node.body if eval_node(node.test, names, expr) else node.orelse
+        return eval_node(branch, names, expr)
+    if isinstance(node, ast.Call):
+        return eval_call(node, names, expr)
+    raise ValueError(f"unsupported expression in {expr!r}: {ast.dump(node)}")
+
+
+def eval_compare(node: ast.Compare, names: dict[str, FuzzValue], expr: str) -> bool:
+    """A comparison chain, short-circuiting like Python's own."""
+    left = eval_node(node.left, names, expr)
+    for op, comparator in zip(node.ops, node.comparators, strict=True):
+        if type(op) not in _CMPOPS:
+            raise ValueError(f"unsupported comparison in {expr!r}: {type(op).__name__}")
+        right = eval_node(comparator, names, expr)
+        if not _compare(op, left, right, expr):
+            return False
+        left = right
+    return True
+
+
+def eval_call(node: ast.Call, names: dict[str, FuzzValue], expr: str) -> FuzzValue:
+    """A call to one of the whitelisted builtins in :data:`_EVAL_FUNCS`, positional arguments only."""
+    if (not isinstance(node.func, ast.Name)) or node.func.id not in _EVAL_FUNCS:
+        raise ValueError(f"disallowed call in {expr!r}")
+    if node.keywords:
+        raise ValueError(f"keyword args not allowed in {expr!r}")
+    return _apply_func(node.func.id, [eval_node(a, names, expr) for a in node.args], expr)
 
 
 def _sample_leaf(spec: FuzzValue, rng: np.random.Generator, distribution: str) -> FuzzValue:
