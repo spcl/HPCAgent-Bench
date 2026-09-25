@@ -47,7 +47,7 @@ import matplotlib
 import matplotlib.colors
 
 from hpcagent_bench import packets
-from hpcagent_bench.experiment_tags import canonical, order, registry
+from hpcagent_bench.experiment_tags import Registry, canonical, order, registry
 
 LOG = logging.getLogger(__name__)
 
@@ -208,21 +208,82 @@ def marker(model: str) -> str:
     return shapes[zlib.crc32(str(model).encode()) % len(shapes)]
 
 
-def packet_marker(packet: str) -> str:
-    """The one SHAPE ``packet`` wears in a figure that colours by MODEL instead: the packet
-    efficacy panels (:mod:`hpcagent_bench.stats.figures.efficacy`,
-    :mod:`hpcagent_bench.stats.figures.kernel_comparison`) already split one packet per panel, so
-    colour is free for the model -- and with few models sharing one panel, a strong hue tells two
-    overlapping summary marks apart far better than a faint circle-vs-square edge does. Shape is
-    read off the SAME registry order :func:`color` uses for hue, wrapping at :func:`markers`'
-    eight entries; harmless here since one panel never draws two packets at once."""
+def language_marker(language: str) -> str:
+    """The one SHAPE a delivery language wears in a figure whose colour is the model (the transfer
+    scatter): the registry's ``markers`` in ``languages`` order, so appending a language never
+    reshapes another."""
     shapes = markers()
-    known = hue_order("packets")
-    resolved = canonical("packets", packet)
-    if resolved in known:
-        return shapes[known.index(resolved) % len(shapes)]
-    LOG.warning("palette: packet %r is not in registry.yaml; using a hash marker", packet)
-    return shapes[zlib.crc32(str(packet).encode()) % len(shapes)]
+    languages = order("languages")
+    resolved = canonical("languages", str(language).lower())
+    if resolved in languages:
+        return shapes[languages.index(resolved) % len(shapes)]
+    LOG.warning("palette: language %r is not in registry.yaml; using a hash marker", language)
+    return shapes[zlib.crc32(str(language).encode()) % len(shapes)]
+
+
+#: The control's shape, reserved: no packet or harness is ever assigned it, and the control is drawn
+#: hollow in its model's colour, so "no packet" reads the same in every figure.
+CONTROL_MARKER: str = "o"
+
+
+@functools.lru_cache(maxsize=1, typed=True)
+def shape_table() -> dict[tuple[str, str], object]:
+    """``(kind, key) -> shape`` for every registered treatment: harnesses, then packets, each taking
+    the next free shape of the registry's pool in file order, or its packet entry's own ``marker:``.
+    The control's circle is never handed out. Registering a treatment therefore gives it a shape of
+    its own without reshaping any other; a pool too small, or two treatments on one shape, is a
+    registry error raised here rather than two treatments drawn alike."""
+    reg = registry()
+    # Harnesses first: there are few of them and each is drawn in every harness comparison, so they
+    # take the pool's clearest filled shapes; packets follow in file order.
+    entities = [("harnesses", key) for key in hue_order("harnesses")] + [
+        ("packets", key) for key in hue_order("packets")
+    ]
+    fixed = fixed_packet_markers(reg)
+    free = [shape for shape in reg.shapes if shape not in fixed.values() and shape != CONTROL_MARKER]
+    unfixed = [entity for entity in entities if entity not in fixed]
+    if len(unfixed) > len(free):
+        raise ValueError(f"registry: {len(entities)} treatments outgrow the {len(reg.shapes)}-shape pool")
+    table = dict(zip(unfixed, free)) | fixed
+    return {entity: table[entity] for entity in entities}
+
+
+def fixed_packet_markers(reg: Registry) -> dict[tuple[str, str], object]:
+    """``("packets", key) -> shape`` for every packet whose registry entry names its own ``marker:``;
+    raises when two share one or one takes the control's :data:`CONTROL_MARKER`."""
+    fixed = {("packets", key): d.marker for key, d in reg.packet_defs.items() if key and d.marker}
+    taken = list(fixed.values())
+    if CONTROL_MARKER in taken or len(set(taken)) != len(taken):
+        raise ValueError(f"registry: packet markers must be distinct and never {CONTROL_MARKER!r}: {fixed}")
+    return fixed
+
+
+def treatment_shape(kind: str, name: str) -> object:
+    """``name``'s registered shape among ``kind`` (packets, harnesses); an unregistered one warns and
+    takes a stable pool slot by CRC."""
+    resolved = canonical(kind, name)
+    table = shape_table()
+    if (kind, resolved) in table:
+        return table[(kind, resolved)]
+    LOG.warning("palette: %s %r is not in registry.yaml; using a hash marker", kind, name)
+    pool = [shape for shape in registry().shapes if shape != CONTROL_MARKER]
+    return pool[zlib.crc32(str(name).encode()) % len(pool)]
+
+
+def packet_marker(packet: str) -> object:
+    """The one SHAPE ``packet`` wears (:func:`shape_table`): its lead part's, or the control's hollow
+    circle for no packet. Colour is spent on the model (:func:`model_color`), so shape alone tells
+    treatments apart, and no two registered treatments share one."""
+    parts = packets.spec_parts(packet)
+    if not parts:
+        return CONTROL_MARKER
+    return treatment_shape("packets", packets.lead(parts))
+
+
+def harness_marker(harness: str) -> object:
+    """The one SHAPE an agent HARNESS wears (:func:`shape_table`), from the same pool as the packets,
+    so a harness and a packet in one figure never share a shape."""
+    return treatment_shape("harnesses", harness)
 
 
 def packet_markers(packets_: Iterable[str]) -> dict[str, str]:
@@ -259,6 +320,18 @@ def model_color(name: str) -> str:
     Shape identifies the model everywhere else; this exists because a figure that varies nothing
     else would otherwise draw four series in one grey."""
     return ordered_color("models", name)
+
+
+def model_shade(name: str, step: int) -> str:
+    """The ``step``-th close shade of a model's colour (0 = the colour itself): the rule for ONE
+    model drawn several times in one figure -- with and without a packet, on several devices, in
+    several pairs -- so the series stay the same model at a glance yet tell apart where their marks
+    or intervals overlap. One step is :data:`registry().lightness_step`."""
+    return lighten(model_color(name), step)
+
+
+#: The shade a model's CONTROL (no packet) wears beside its treated setups: one step lighter.
+CONTROL_SHADE: int = 1
 
 
 def model_colors(names: Iterable[str]) -> dict[str, str]:

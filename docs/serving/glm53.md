@@ -1,144 +1,99 @@
 # Serving GLM-5.3 on MI300A
 
-`zai-org/GLM-5.3`, fp8, about 755 GB of weights. Four nodes, sixteen GPUs, `tp=4` inside a node and
-`pp=4` across them. Cross-model background is in [`knobs.md`](knobs.md).
+`zai-org/GLM-5.3`, fp8, about 755 GB of weights, on SGLang across four nodes (`tp=4`, `pp=4`).
+Source of truth: `experiments/layers/model-glm53.env` plus `SGLANG_EXTRA_ARGS` in
+`experiments/.env.base-glm53`; render with `experiments/env_layers.sh render .env.base-glm53`.
+Background: [`knobs.md`](knobs.md).
 
-Authoritative source: `experiments/layers/model-glm53.env` plus `experiments/arms.yaml`
-(`glm53-serving`); render with `experiments/env_layers.sh render campaign:glm53`. If this page and
-those files disagree, the files are right.
+```bash
+cd experiments && MODEL=glm53 ./serve-only.sbatch
+```
+
+**Image prerequisite.** GLM-5.3 needs the `sglang-candidate` EDF, and that EDF currently has no
+image: `install_edfs.sh` does not render it. Rebuild the sglang role
+(`containers/cluster/ce-images/sglang/build.sbatch`, output `hpcagent-bench-sglang-candidate.sqsh`),
+then render the EDF. See "Known traps" in [`SUBMITTING.md`](../../SUBMITTING.md#known-traps).
+The image must bake in a guard keeping `torch.Tensor.format_ue8m0` false and
+`HIPCC_COMPILE_FLAGS_APPEND=-U__HIP_NO_HALF_CONVERSIONS__ -U__HIP_NO_HALF_OPERATORS__`. The other
+sglang EDFs reach that patch through a `PYTHONPATH` under `$SCRATCH`, which the inference role's
+mount policy drops, so they fail to load the model.
 
 ## Configuration
 
-| | |
-|---|---|
-| Engine | SGLang |
-| EDF | `sglang-candidate` |
-| Nodes | **4**, `tp=4`, `pp=4` |
-| Attention backend | **`dsa`**, selected by the model, no flag passed |
-| KV pool | **2,583,744 tokens** |
-| KV per rank | 27.6 to 29.3 GB |
-| Weights per rank | 156 to 206 GB, uneven across the four stages |
+`run_cluster.sh` adds `--tp-size 4 --pp-size 4 --nnodes 4 --node-rank <r> --dist-init-addr <rank0>:29500
+--host 0.0.0.0 --port 8000` and **no** `--attention-backend` (the model selects `dsa`). The env adds:
 
 ```
---tp-size 4 --pp-size 4 --nnodes 4 --node-rank <rank> --dist-init-addr <rank0>:29500
---host 0.0.0.0 --port 8000
---trust-remote-code
---watchdog-timeout 1800
---kv-cache-dtype fp8_e4m3
---page-size 64
---context-length 262144
---mem-fraction-static 0.55
---cuda-graph-max-bs-decode 64
---enable-metrics
---pre-warm-nccl
---reasoning-parser glm45
---tool-call-parser glm47
---dsa-prefill-backend tilelang
---dsa-decode-backend tilelang
---enable-cache-report
+--trust-remote-code --watchdog-timeout 1800
+--kv-cache-dtype fp8_e4m3 --page-size 64 --context-length 262144
+--mem-fraction-static 0.57 --max-total-tokens 2800000
+--chunked-prefill-size 4096 --max-running-requests 48 --cuda-graph-max-bs-decode 64
+--enable-metrics --pre-warm-nccl
+--reasoning-parser glm45 --tool-call-parser glm47
+--dsa-prefill-backend tilelang --dsa-decode-backend tilelang --enable-cache-report
 ```
 
 Environment: `SGLANG_ATTENTION_BACKEND=` (assigned empty), `SGLANG_USE_AITER=1`,
 `SGLANG_ROCM_FUSED_DECODE_MLA=0`, `SGLANG_SET_CPU_AFFINITY=0`, `NCCL_NET_GDR_LEVEL=0`,
 `AITER_LOG_TUNED_CONFIG=1`.
 
-## The memory law
+## Memory
 
-`--mem-fraction-static` is a ceiling on weights and KV together, not a KV reservation, so the pool
-is only what the fraction leaves over the weights:
+`--mem-fraction-static` is a ceiling on weights plus KV, so the pool is what the fraction leaves over
+the weights:
 
 ```
-pool(f) = 39.0M * (f - 0.4838) tokens          90470 tokens per GB per rank
+pool(f) = 39.0M * (f - 0.4838) tokens      (tp4 x pp4)
 ```
 
-| `f` | pool, tokens | outcome |
-|---|---|---|
-| below 0.486 | none | refuses to start, the weights alone exceed the budget |
-| 0.50 | 632,384 | serves |
-| **0.55** | **2,583,744** | serves, 27.6 to 29.3 GB of KV per rank |
-| 0.62 | -- | host OOM killer takes the heaviest pipeline stage |
+| `f` | Outcome |
+|---|---|
+| below 0.486 | refuses: weights alone exceed the budget |
+| 0.50 | 632,384-token pool |
+| 0.55 | 2.58 M pool; OOM-killed on a PP node at concurrency 20 |
+| **0.57 + `--max-total-tokens 2800000`** | pool pinned at 2.8 M; served concurrency 40, peak 485 of 501 GiB step cgroup |
+| 0.62 | OOM killer takes the heaviest stage |
 
-Size the pool against the ARM, not against the device. An arm runs 20 agents on one agent node, and
-the compaction trigger `agent_driver.claude_context_env` computes tracks the served 262144-token
-window. The pool-to-working-set ratio at that window has not been measured, so read the prefix-cache
-hit rate rather than assume a number.
-
-That ratio is a **threshold, not a slope**: above the crossing the prefix cache holds, below it
-every turn re-prefills, and moving within either regime buys almost nothing. The crossing is
-model specific, so read the **prefix-cache hit rate** off the run to tell which side a config sits
-on rather than carrying a ratio over from another model.
+Host memory, not the pool, is what kills a stage. `--chunked-prefill-size 4096` and
+`--max-running-requests 48` bound the prefill buffers and `req_to_token` that grow with load.
+Stage weights are uneven (172.4 / 197.2 / 203.8 / 206.1 GB): size against the heaviest and read
+`avail mem=` on every rank.
 
 ## Startup
 
-Weight load is slow, uneven across stages, and not a constant: the heaviest stage carries 206.1 GB,
-and the slowest stage observed took over 4200 s against 1521 s for the same config on a quiet
-machine. Time to a live API is the slowest stage plus about 130 s for the KV allocation plus about
-1080 s of graph capture. Size any readiness cap well above 6000 s, and size it on the slowest
-stage, never on the first stage to report.
-
-`serve-only.sbatch` polls for up to `VLLM_READY_TIMEOUT_SECONDS`, or `AGENT_READY_TIMEOUT_SECONDS`
-if that is unset, or 7200 s if neither is set. `campaign:glm53` does not set
-`VLLM_READY_TIMEOUT_SECONDS` but does set `AGENT_READY_TIMEOUT_SECONDS=10800`, comfortably above
-the slowest stage above, so no override is needed to start this model with `serve-only.sbatch`.
+Time to a live API = slowest stage's weight load (up to 5400 s) + about 130 s KV allocation + about
+1080 s graph capture. `AGENT_READY_TIMEOUT_SECONDS=10800` in the layer covers it; judge readiness by
+the slowest stage, never the first to report.
 
 ## DO
 
-- **Serve on SGLang.** There is no vLLM recipe for this model here.
-- **Use the EDF that `experiments/layers/model-glm53.env` names.** The model needs a guard keeping
-  `torch.Tensor.format_ue8m0` false plus
-  `HIPCC_COMPILE_FLAGS_APPEND=-U__HIP_NO_HALF_CONVERSIONS__ -U__HIP_NO_HALF_OPERATORS__`, and
-  `sglang-candidate` bakes both into the image. An EDF that reaches the guard through a
-  `PYTHONPATH` under `$SCRATCH` fails: the per-role mount block drops the general scratch tree for
-  inference.
-- **Assign `SGLANG_ATTENTION_BACKEND=` empty.** `run_cluster.sh` reads
-  `${SGLANG_ATTENTION_BACKEND-aiter}`, so an ABSENT key appends `--attention-backend aiter` and only
-  an assigned empty value omits it. With no flag `GlmMoeDsaForCausalLM` selects `dsa`.
-- **Allocate four nodes.** At `pp=2` each stage holds about 378 GB of the roughly 412 GB a node has
-  free, which leaves no pool at all.
-- **Size against the heaviest pipeline stage.** The stages are uneven, 172.4 / 197.2 / 203.8 /
-  206.1 GB. Read `avail mem=` on every rank, not just rank 0.
-- **Keep `SGLANG_USE_AITER=1`.** It switches aiter OPS, which is separate from the attention
-  backend. Without it the ROCm DSA path loses aiter's preshuffled paged-MQA kernel and forces
-  `page_size` to 1 whatever the flag says.
-- **Pass both parsers**, `--reasoning-parser glm45` and `--tool-call-parser glm47`. The mismatched
-  version numbers are correct.
-- **Give an accuracy gate a real token budget.** This model reasons before it answers: 2048 covers
-  it, and below about 512 the gate reports truncation as corruption.
-- **Read back what you got, every launch.**
+- **Assign `SGLANG_ATTENTION_BACKEND=` empty.** An absent key makes `run_cluster.sh` append
+  `--attention-backend aiter` ([README](README.md#6-how-configuration-becomes-flags)).
+- **Allocate four nodes.** At `pp=2` each stage holds about 378 GB of the roughly 412 GB free.
+- **Keep `SGLANG_USE_AITER=1`.** Without aiter ops the ROCm DSA path forces `page_size` 1.
+- **Pass both parsers**, `glm45` and `glm47`; the mismatched versions are correct.
+- **Give an accuracy gate 2048 tokens.** The model reasons first; below about 512 the gate reports
+  truncation as corruption.
+- **Read back every launch:**
   ```bash
   grep -aiE "attention.backend|Use dsa attention" server-0.log
   grep -a "max_total_num_tokens\|KV Cache is allocated\|Using network" server-0.log
   ```
-  Take the pool from `max_total_num_tokens`, never from the fraction. `Using network` must say
-  `AWS Libfabric`; RCCL's TCP fallback is correct and several times slower with no error.
+  `Using network` must say `AWS Libfabric`.
 
 ## DO NOT
 
-- **Do not pass `--attention-backend`, any value.** An explicit backend suppresses the model's own
-  `dsa` selection, and an explicit `aiter` also scales `--mem-fraction-static` by 0.85 above 8192
-  tokens of context, so the flag stops being the effective fraction and every number above it moves.
-  A flag of 0.588 under `aiter` reads back as an effective 0.4998.
-- **Do not template that key with `${VAR:-default}`.** `:-` substitutes on empty as well as unset,
-  so the deliberate empty value silently reverts to the default. Use `${VAR-default}`.
-- **Do not set `SGLANG_AITER_HONOR_EXPLICIT_MEM_FRACTION`** to escape that 0.85. The reserve is
-  load-bearing workspace, and skipping it OOMs long-context serving that fits with it.
-- **Do not expect a lower fraction to free host memory.** It shrinks the pool toward zero instead.
-- **Do not decide a KV knob from a cold smoke.** A probe that sends each long prompt once has a
-  working set far below the pool, so every fraction ties. Measure with per-stream distinct prefixes
-  re-sent across rounds and a working set that straddles the pool, and report the hit rate.
-- **Do not read a tie as "the knob does nothing".** Configs that score the same are usually all on
-  one side of the threshold. Say which side, from the hit rate.
-- **Do not pass `--language-only`.** It selects the vision-encoder-disaggregation receiver role and
-  this architecture is off its allowlist, so the server refuses to start. The Kimi K2.7 and Qwen3.8
-  recipes carry it because those architectures accept it: the flag is a per-model answer.
-- **Do not enable HiCache (`--enable-hierarchical-cache`, `--hicache-ratio`).** On an APU the host
-  tier is the same physical memory, so it allocates a second copy of the KV cache and the server
-  dies to the host OOM killer with no traceback.
-- **Do not carry `AITER_USE_FLYDSL_MOE_SORTING` over from Kimi K2.7.** Those weights are
-  pack-quantized int4; these are fp8.
-- **Do not change `--kv-cache-dtype` on a short accuracy check.** An fp8 checkpoint ships no
-  calibrated KV scales, so the engine quantizes at runtime against scale 1.0, and a corrupt
-  attention path still answers short prompts correctly. Gate any change on long context.
-- **Do not try to serve GLM-5.3-Flash.** `index_kpool` in its configuration forces `IndexerKPool`,
-  which raises "kpool indexer is only supported on CUDA". Plain 5.3 uses the ROCm-capable DSA
-  Indexer.
+- **Do not pass `--attention-backend`.** Any explicit value suppresses `dsa`; `aiter` also derates
+  the fraction by 0.85 (0.588 reads back as 0.4998).
+- **Do not template the key with `${VAR:-default}`**; `:-` reverts the deliberate empty value.
+- **Do not set `SGLANG_AITER_HONOR_EXPLICIT_MEM_FRACTION`** to escape the derate; that reserve is
+  workspace long-context serving needs.
+- **Do not pass `--language-only`.** It selects the vision-encoder receiver role, and this
+  architecture is off its allowlist: the server refuses to start.
+- **Do not enable HiCache** ([`knobs.md`](knobs.md#hicache-never)).
+- **Do not carry `AITER_USE_FLYDSL_MOE_SORTING` over from Kimi K2.7**; those weights are int4, these fp8.
+- **Do not change `--kv-cache-dtype` on a short accuracy check.** No calibrated KV scales ship with
+  the checkpoint; gate on long context.
+- **Do not decide a KV knob from a cold smoke**; use per-stream distinct prefixes re-sent across
+  rounds and report the hit rate ([`knobs.md`](knobs.md#the-kv-pool-threshold)).
+- **Do not serve GLM-5.3-Flash.** Its `index_kpool` forces `IndexerKPool`, which is CUDA-only.

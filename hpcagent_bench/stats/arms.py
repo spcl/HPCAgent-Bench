@@ -22,8 +22,8 @@ from hpcagent_bench.stats import population
 
 def load_observations(artifact: pathlib.Path) -> pd.DataFrame:
     """The artifact's observations recorded under a real arm (:func:`population.condition_rows`)."""
-    frame = pd.read_csv(artifact / "data" / "llr40_observations.csv", low_memory=False)
-    return population.condition_rows(upgrade_frame(frame))
+    frame = population.on_platform(upgrade_frame(pd.read_csv(artifact / "data" / "llr40_observations.csv", low_memory=False)))
+    return population.condition_rows(frame)
 
 
 def stamp_denominator(observations: pd.DataFrame) -> pd.DataFrame:

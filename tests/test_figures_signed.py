@@ -17,12 +17,11 @@ import math
 import pathlib
 
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 import pytest
 from PIL import Image
 
-from hpcagent_bench.stats import canon, palette, rules, style
+from hpcagent_bench.stats import canon, palette, rules, style, summary
 from hpcagent_bench.stats.figures import per_kernel, signed
 
 #: The sweep's column order; the fixture writes the real schema, not a convenient subset.
@@ -254,9 +253,9 @@ def test_a_sweep_with_no_overlap_draws_nothing_rather_than_failing_a_rule(tmp_pa
 
 ROSTER40: tuple[str, ...] = ("k1", "k2", "k3")
 
-#: A roster wide enough for the token median's interval (summary.MIN_INTERVAL_SAMPLES kernels): a
+#: A roster wide enough for the token geomean's interval (summary.MIN_PAIRS_FOR_INTERVAL kernels): a
 #: tokens table over fewer has no interval on any row and is refused under Rule 5.
-ROSTER_TOKENS: tuple[str, ...] = ("k1", "k2", "k3", "k4", "k5")
+ROSTER_TOKENS: tuple[str, ...] = ("k1", "k2", "k3", "k4", "k5", "k6")
 
 
 def canon_table(rows: list[tuple[str, str, float]]) -> pd.DataFrame:
@@ -317,8 +316,8 @@ def llr40_observations_fixture() -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for model in ("qwen38", "oss120b"):
         for condition, suffix, speedups in (
-            ("cpf", "c-cpf", {"k1": 2.0, "k2": 3.0, "k3": 1.5, "k4": 1.2, "k5": 4.0}),
-            ("cpfsrc", "c-cpfsrc", {"k1": 2.5, "k2": 3.5, "k3": 1.8, "k4": 1.1, "k5": 5.0}),
+            ("cpf", "c-cpf", {"k1": 2.0, "k2": 3.0, "k3": 1.5, "k4": 1.2, "k5": 4.0, "k6": 1.4}),
+            ("cpfsrc", "c-cpfsrc", {"k1": 2.5, "k2": 3.5, "k3": 1.8, "k4": 1.1, "k5": 5.0, "k6": 1.6}),
         ):
             arm = f"cpf-llr-focus40-{model}-{suffix}"
             for index, (benchmark, speedup) in enumerate(speedups.items()):
@@ -477,21 +476,21 @@ def test_token_summary_table_excludes_rows_with_no_tokens(
     assert set(frame["framework"]).isdisjoint(signed.LLR40_CANON_COLUMNS)
 
 
-def test_the_tokens_table_is_the_token_slots_median(
+def test_the_tokens_table_is_the_token_slots_geomean(
     llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame
 ) -> None:
-    """Tokens are not a ratio, so their summary is the median over the served kernels -- the value
-    and interval the figure's token slot draws, never a geomean beside a median."""
+    """Paper rule: the token summary is the geomean over the served kernels -- the value and interval
+    the figure's token slot draws."""
     rows = signed.llr40_rows(llr40_canon, llr40_observations, ROSTER_TOKENS)
     frame = signed.token_summary_table(rows).set_index("framework")
     tokens = signed.llr40_metrics(rows, ROSTER_TOKENS)[1]
     for row, one in zip(rows, tokens.series, strict=True):
         if not row.tokens:
             continue
-        point, low, high = per_kernel.summary_point_tokens(one.cells)
+        point, low, high = per_kernel.summary_geomean(one.cells)
         got = frame.loc[row.framework]
-        assert (got.median_tokens, got.median_tokens_low, got.median_tokens_high) == pytest.approx((point, low, high))
-        assert got.median_tokens == pytest.approx(float(np.median(list(row.tokens.values()))))
+        assert (got.gm_tokens, got.gm_tokens_low, got.gm_tokens_high) == pytest.approx((point, low, high))
+        assert got.gm_tokens == pytest.approx(summary.geomean(list(row.tokens.values())))
 
 
 def test_a_tokens_table_too_thin_for_any_interval_fails_rule_5(
@@ -638,7 +637,7 @@ def test_summary_column_prints_each_geomean_value(llr40_canon: pd.DataFrame) -> 
     # The spelling is the shared speller's, not restated here: the property is that every row's
     # geomean is printed.
     (speed,) = signed.llr40_metrics(rows, ROSTER40)
-    expected = [style.ratio_label(per_kernel.summary_point_speedup(one.cells)[0]) for one in speed.series]
+    expected = [style.ratio_label(per_kernel.summary_geomean(one.cells)[0]) for one in speed.series]
     assert all(value in texts for value in expected), (expected, texts)
 
 

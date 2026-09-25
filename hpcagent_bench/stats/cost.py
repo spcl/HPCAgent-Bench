@@ -8,6 +8,7 @@ A card is a linear weight on ``fresh_input``, ``cached_input`` and ``output`` (`
 task rows and every statistic downstream (:mod:`hpcagent_bench.stats.population`) is unchanged.
 """
 
+import argparse
 import dataclasses
 import functools
 import math
@@ -16,6 +17,8 @@ from collections.abc import Callable
 
 import pandas as pd  # pyright: ignore[reportMissingTypeStubs] -- pandas ships none
 import yaml
+
+from hpcagent_bench.stats.population import TASK_RECORD
 
 #: The shipped cards.
 COST_MODELS = pathlib.Path(__file__).resolve().parents[1] / "envs" / "cost_models.yaml"
@@ -101,6 +104,18 @@ def resolve(spec: str = DEFAULT_COST_MODEL, extra: pathlib.Path | None = None) -
     return cards[spec]
 
 
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    """``--cost-model`` and ``--cost-models``: the card every token number a script reports is priced
+    with, :data:`DEFAULT_COST_MODEL` unless named; pass both to :func:`resolve`."""
+    parser.add_argument(
+        "--cost-model",
+        default=DEFAULT_COST_MODEL,
+        help="cost card for every token number: a name in envs/cost_models.yaml or --cost-models, "
+        "or inline weights fresh_input=1,cached_input=0.1,output=5",
+    )
+    parser.add_argument("--cost-models", type=pathlib.Path, default=None, help="a YAML file of extra cost cards")
+
+
 def price(model: CostModel, fresh_input: float, cached_input: float, output: float) -> float:
     """One task's cost under ``model``, from its three components."""
     return model.fresh_input * fresh_input + model.cached_input * cached_input + model.output * output
@@ -141,19 +156,19 @@ def components(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
 
 
 def priced(frame: pd.DataFrame, model: CostModel) -> pd.DataFrame:
-    """``frame`` with ``tokens`` replaced by ``model``'s cost on every row that has the components.
+    """``frame`` with every task row's ``tokens`` replaced by ``model``'s cost of its components.
 
-    The shipped ``effective`` card returns the frame unchanged. A card that weights a component the
-    frame does not carry (an extraction older than ``tokens_output``) raises instead of pricing a
-    task at a wrong number; a row missing a component gets NaN, which :mod:`population` drops as no
-    measurement (R7)."""
-    if (model.fresh_input, model.cached_input, model.output) == (1.0, 0.0, 1.0):
+    The shipped ``effective`` card returns the frame unchanged, and so does a frame with no
+    ``tokens`` column (nothing to price). A card that weights a component the frame does not carry
+    (an extraction older than ``tokens_output``) raises instead of pricing a task at a wrong number;
+    a task row missing a component gets NaN, which :mod:`population` drops as no measurement (R7).
+    A non-task row (a judge call's running count) keeps its own ``tokens``: it is never a cost (T4)."""
+    if (model.fresh_input, model.cached_input, model.output) == (1.0, 0.0, 1.0) or "tokens" not in frame.columns:
         return frame
     needed = [column for column in COMPONENT_COLUMNS if column not in frame.columns]
     if needed:
         raise ValueError(f"cost model {model.key!r} needs column(s) {needed}; re-extract the observations")
     fresh, cached, output = components(frame)
     cost = model.fresh_input * fresh + model.cached_input * cached + model.output * output  # price(), per row
-    # only a row that states its components is repriced; a judge row keeps its own tokens field
-    stated = fresh.notna() & cached.notna() & output.notna()
-    return frame.assign(tokens=cost.where(stated, frame["tokens"]))
+    task = frame["row_kind"].astype(str) == TASK_RECORD if "row_kind" in frame.columns else pd.Series(True, frame.index)
+    return frame.assign(tokens=cost.where(task, frame["tokens"]))

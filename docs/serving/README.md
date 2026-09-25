@@ -1,400 +1,191 @@
 # Running an inference server on Beverin (AMD MI300A)
 
-This folder is for people who want **only a model endpoint** on these nodes: an OpenAI-compatible
-HTTP server their own client can talk to. No benchmark, no grading, no agents. You do not need to
-understand the rest of this repository to use it.
+This folder is for people who want **only a model endpoint**: an OpenAI-compatible HTTP server on
+Beverin compute nodes (AMD MI300A `gfx942` APUs, 4 GPUs per node, Slurm, CSCS Container Engine). No
+benchmark, no grading, no agents. Numbers here do not carry to discrete GPUs, and several do not
+carry to MI300X.
 
-This page is the entry point: how to start a server, find it, talk to it, and tell a healthy one
-from a sick one. Then:
+| Page | Covers |
+|---|---|
+| [`qwen38.md`](qwen38.md), [`kimi27sglang.md`](kimi27sglang.md), [`glm53.md`](glm53.md), [`oss120b.md`](oss120b.md) | one model each: configuration, DO / DO NOT, the numbers behind them |
+| [`knobs.md`](knobs.md) | cross-model: APU memory model, KV pool threshold, aiter derate, HiCache, fabric, Slurm shape |
+| [`private-endpoint.md`](private-endpoint.md) | a keyed Qwen3.8 server only you can use, from your laptop or your own Daint jobs |
+| [`extending-private-inference.md`](extending-private-inference.md) | contributors: the private launcher's security contract, new presets, access paths, engines |
 
-- **one page per model** -- [`qwen38.md`](qwen38.md), [`kimi27sglang.md`](kimi27sglang.md),
-  [`glm53.md`](glm53.md), [`oss120b.md`](oss120b.md). Each is self-contained: best known
-  configuration, what to do, what not to do, and the measurements behind both. If you only care
-  about one model, that is the only other file you need.
-- [`knobs.md`](knobs.md) -- what is genuinely cross-model: the APU memory model, the KV pool
-  threshold, the aiter derate, HiCache, the multi-node fabric and the Slurm shape.
-- [`private-endpoint.md`](private-endpoint.md) -- a Qwen3.8 server only you can use, behind an API
-  key: from your laptop through an ssh tunnel, or from your own Daint jobs. `mi300` (FP8, the campaign
-  configuration) and `mi200` (BF16).
-- [`extending-private-inference.md`](extending-private-inference.md) -- for contributors: the security
-  contract the private launcher keeps, and how to add a preset, an access path or an engine.
+The authoritative launch line per model is the rendered `experiments/.env.base-<model>`. If a page
+here and that file disagree, the file wins.
 
-A serving number ages as the engine, the ROCm build and the image move. Re-measure before you build
-a decision on a number you cannot reproduce today.
+## 1. Shortest path
 
-Everything here was measured on **Beverin**: AMD MI300A (`gfx942`) APU nodes, 4 GPUs per node,
-Slurm, CSCS Container Engine. Numbers do not carry to a discrete-GPU cluster; several of them do
-not even carry to MI300X.
-
-## 1. The shortest path
-
-**Prerequisite, once per account:** `ls ~/.edf` should list `hpcagent-bench-sglang-mi300-latest`, `sglang-candidate` and
-`hpcagent-bench-vllm-mi300-latest`. If it does not:
+Once per account, register the EDFs (container definitions) and resolve your Slurm account:
 
 ```bash
-containers/images/install_edfs.sh
+cd "$REPO"
+containers/cluster/ce-images/install_edfs.sh          # renders into ~/.edf
+sbatch containers/cluster/ce-images/pull_images.sbatch  # only if install_edfs.sh reports a missing image
+. scripts/cscs/account_env.sh                          # Beverin rejects jobs without an account
 ```
 
-If that refuses because an image is not on scratch yet, pull it first (minutes, not hours, since it
-downloads the published bytes rather than rebuilding them):
+Then, from `experiments/`:
 
 ```bash
-sbatch containers/images/pull_images.sbatch
+SUBMIT=0 ./serve-only.sbatch                  # print what would be submitted
+./serve-only.sbatch                           # Qwen3.8 (default MODEL)
+MODEL=kimi27sglang ./serve-only.sbatch        # any .env.base-<MODEL>: qwen38, kimi27sglang, glm53, oss120b
+SBATCH_TIMELIMIT=08:00:00 ./serve-only.sbatch # longer than the 4 h default
 ```
 
-```bash
-cd experiments
-SUBMIT=0 ./serve-only.sbatch        # see what it would do
-./serve-only.sbatch                 # start a Qwen3.8 server
-```
-
-`serve-only.sbatch` reads a model's configuration file, works out how many nodes that model needs,
-submits itself with that node count, starts the server, waits for it to answer, and then prints the
-endpoint URL and a ready-to-paste `curl`. Watch the job's output file for that block:
+`serve-only.sbatch` renders `.env.base-<MODEL>`, reads the node count from it, submits itself with
+that `--nodes`, starts the server, polls `/v1/models`, then prints:
 
 ```
 ===== endpoint is live =====
-base URL:   http://<node>:8000/v1
+base URL:   http://nid002968:8000/v1
 model name: hpcagent-bench-vllm
-replicas:   http://<node>:8000/v1
-health:     curl -s http://<node>:8000/v1/models
-metrics:    curl -s http://<node>:8000/metrics
-server log: $SCRATCH/inference-server/<jobid>/server-0.log
-
-curl -s http://<node>:8000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"hpcagent-bench-vllm","max_tokens":128,"messages":[{"role":"user","content":"Say hi."}]}'
-
+...
 The endpoint takes no API key. It stays up until this job ends; scancel <jobid> to stop it.
 ```
 
-That last block is printed verbatim by the job, curl command included -- copy it and run it.
+followed by a ready-to-paste `curl`. The job output is `serve-only-<jobid>.out`; server logs are
+`$SCRATCH/inference-server/<jobid>/server-<rank>.log`, and `serve.env` there is the merged env that
+actually ran.
 
-Pick another model with `MODEL=`:
+**Runtime caveat.** `serve-only.sbatch` always launches through the CE (`srun --environment=`). Under
+the CE, a single-node server (qwen38, oss120b) can fail building its tensor-parallel group with
+`Failed to initialize any NET plugin`, and pyxis needs the site `ENROOT_CACHE_PATH` to be creatable.
+The campaign launcher avoids both through `enroot`; see
+[`experiments/README.md`](../../experiments/README.md#container-runtimes).
 
-```bash
-MODEL=kimi27sglang ./serve-only.sbatch
-MODEL=oss120b      ./serve-only.sbatch
-MODEL=glm53        ./serve-only.sbatch
-```
+## 2. Images (EDFs)
 
-The name after `MODEL=` names a model layer: `MODEL=qwen38` renders `campaign:qwen38`
-(`experiments/layers/model-qwen38.env` plus `experiments/arms.yaml`). That is the same base the
-benchmark campaigns serve from, so the endpoint
-you get is the endpoint they get. The launcher layers `experiments/serve-only.env` on top, which
-does one thing: sets the judge and agent node counts to zero.
+An EDF is a TOML file in `~/.edf` naming the image, bind mounts, environment and CE hooks. The CE does
+not reliably keep the image's own `ENV`, so the EDFs re-declare `PATH`, `LD_LIBRARY_PATH` and cache
+dirs. The fabric comes from three pinned hooks (`netstack`, `cxi`, `aws_ofi_nccl`); without the RCCL
+plugin, multi-node RCCL silently falls back to TCP.
 
-The server stays up until the job's wall clock expires (4 h by default, `--time` to change it) or
-until you `scancel` it.
+| EDF | Engine | Models | Rendered by `install_edfs.sh` |
+|---|---|---|---|
+| `hpcagent-bench-sglang-mi300-latest` | SGLang 0.5.19 | Qwen3.8, Kimi K2.7 | yes |
+| `hpcagent-bench-vllm-mi300-latest` | vLLM 0.23.0 | gpt-oss-120b | yes |
+| `sglang-candidate` | SGLang | GLM-5.3 only | **no**; needs a rebuilt image, see [`glm53.md`](glm53.md) |
 
-## 2. What a container environment is here, and which one to use
+## 3. Slurm shape
 
-Beverin runs jobs through the **CSCS Container Engine (CE)**. You do not run `docker` or
-`podman`; you add `--environment=<name>` to an `srun` and Slurm starts your command inside a
-container image.
+`serve-only.sbatch` already sets all of this. Copy it if you write your own launcher.
 
-The `<name>` is an **EDF** -- an Environment Definition File, a small TOML file in `~/.edf/`. It
-names the image (a SquashFS file on scratch), the host directories to bind-mount, and a block of
-environment variables the image needs but cannot set for itself. Three things surprise people:
+| Setting | Why |
+|---|---|
+| `--partition=mi300` | default partition is `mi200`, different hardware |
+| no `-A` | `scripts/cscs/account_env.sh` exports `SBATCH_ACCOUNT`; naming one yourself splits identical jobs across accounts |
+| `--mem=0` | otherwise the step's memory cgroup follows its CPU share and the server dies in weight load |
+| `--gpus-per-node=4`, `--ntasks-per-node=1` | every recipe is `tp=4` inside a node |
+| `--cpus-per-task="${SLURM_CPUS_ON_NODE}"` on the server step | see below |
+| `ulimit -c 0` | machine-global `core_pattern` drops multi-GB core files in the CWD; `scripts/check_core_dumps.py` enforces it |
 
-- **The CE does not reliably preserve the image's own `ENV`.** That is why the EDFs here re-declare
-  `PATH`, `LD_LIBRARY_PATH` and cache directories absolutely. Do not assume a variable baked into
-  the Dockerfile arrives.
-- **The network fabric comes from "hooks", not from the image.** The `[annotations]` block enables
-  three of them: `netstack` (the pinned Slingshot software stack), `cxi` (the Cassini provider and
-  the `/dev/cxi*` devices) and `aws_ofi_nccl` (the plugin that lets RCCL use Slingshot). With the
-  plugin missing, RCCL silently falls back to TCP: numerically correct, several times slower, no
-  error message. The EDFs in this repo pin the hook version so a site-side upgrade cannot change
-  the fabric under a running job.
-- **The CE may not start on every site.** If the site's `/etc/enroot/enroot.conf` names a cache
-  path that does not exist on the node, every `srun --environment=` dies at `task_init()`.
-  `serve-only.sbatch` and `regrade.sbatch` have no fallback for this. The benchmark campaign
-  (`beverin.sbatch`/`run_cluster.sh`) works around it by launching through `enroot start` directly
-  instead of the CE -- see [`experiments/README.md`](../../experiments/README.md#container-runtimes)
-  for that path and its gotchas.
+**The CPU trap.** `--exclusive` gives the job the node, not the step its CPUs. A step without
+`--cpus-per-task` gets one core plus its SMT sibling (2 of 192). A starved server does not crash, it
+degrades with load: 147 s per decode step after half an hour, against 88-91 tok/s for the same model
+with `--cpus-per-task=32`. It can also hang in Triton JIT until the 600 s RCCL watchdog kills every
+rank. Give a client or probe running alongside one socket: `--cpus-per-task=24 --hint=nomultithread`.
 
-`ls ~/.edf` shows what is registered for you. The ones that matter:
+## 4. Talking to the endpoint
 
-| EDF | Engine | Use it for |
-|---|---|---|
-| `hpcagent-bench-sglang-mi300-latest` | SGLang | Qwen3.8, Kimi K2.7 |
-| `sglang-candidate` | SGLang | GLM-5.3 only |
-| `hpcagent-bench-vllm-mi300-latest` | vLLM | gpt-oss-120b |
-
-`sglang-candidate` is the pre-promotion staging EDF for the sglang role, and it is currently the
-only sglang EDF whose image can load GLM-5.3: the DeepSeek weight loader's `format_ue8m0` guard and
-`HIPCC_COMPILE_FLAGS_APPEND` are baked into that image. The other sglang EDFs reach the same patch
-only through a `PYTHONPATH` under `$SCRATCH`, which the inference role's mount policy drops, so
-they fail to load GLM-5.3 -- see [`glm53.md`](glm53.md).
-
-If `~/.edf` is empty, `containers/images/install_edfs.sh` registers the repo's copies
-against the images named in `containers/images/images.env`.
-
-## 3. Submitting: the Slurm flags, and why each one
-
-```
-#SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=4
-#SBATCH --mem=0
-```
-
-- **No `--partition` or `--account` in the script.** The site layer exports `SBATCH_PARTITION`
-  (an MI300A partition; other hardware is not valid for these configurations) and
-  `scripts/cscs/account_env.sh` resolves the account once, from your own Slurm associations, and
-  exports `SBATCH_ACCOUNT` (and `SLURM_ACCOUNT` / `SALLOC_ACCOUNT`) -- see
-  [`docs/configuration.md`](../configuration.md). Naming `-A` yourself is how identical jobs end up
-  split across two project accounts depending on which command line was typed.
-- **`--mem=0`.** A step's memory cgroup is sized from its share of the node's CPUs. Without
-  `--mem=0` the server is capped far below the node's memory and dies during weight load with no
-  useful message.
-- **`--gpus-per-node=4`.** All four GPUs; tensor parallelism is 4 in every recipe here.
-- **`ulimit -c 0` in the script.** Beverin's `core_pattern` is machine-global and a crash drops a
-  `core_<host>_<pid>` file into the process's working directory. It is not always a stub: a
-  segfaulting dace parse on the login node wrote 17.5 GB and 4 GB in one session. Slurm propagates
-  the limit to job steps, so setting it once at the top of the batch script is enough. Every
-  `.sbatch` AND `.sh` in this repo carries it, enforced by `scripts/checks/check_core_dumps.py`; a
-  deliberate dump needs a same-line `# core-dumps-ok: <reason>`.
-
-### The CPU trap: set `--cpus-per-task` explicitly
-
-This one is worth its own heading because it is silent and it has cost real runs.
-
-A node has 192 logical CPUs (4 sockets x 24 physical cores x 2 SMT threads). `--exclusive` gives
-the **job** the node; it does **not** give a **step** the node's CPUs. An `srun` step that does not
-say `--cpus-per-task` gets **one** core plus its SMT sibling -- two CPUs out of 192 -- and every
-process in the step shares them.
-
-An inference server does a great deal of host-side work: scheduling, KV block management,
-prefix-cache hashing, detokenization, sampling. Starved of CPU it does not crash; it **degrades
-with load**. The observed shape is a server that looks fine for ten minutes and then spends 147 s
-per decode step with nothing queued, nothing preempted, and a 99% prefix-cache hit rate. The same
-model on the same four nodes with `--cpus-per-task=32` served at 88-91 tok/s.
-
-It can also hang outright: a serving step on 2 CPUs across 2 nodes never finished JIT-compiling a
-Triton kernel, its peer blocked in a pipeline send, and the 600 s RCCL watchdog aborted every rank.
-
-So: **one task per node, and that task takes the whole node**:
+The server binds `0.0.0.0:8000` on the first node of the allocation. No gateway, **no API key**:
+every Alps user can reach it. For a private server use [`private-endpoint.md`](private-endpoint.md).
 
 ```bash
-srun --ntasks-per-node=1 --cpus-per-task="${SLURM_CPUS_ON_NODE}" ...
-```
-
-`serve-only.sbatch` does this for you. If you write your own launcher, copy that line first.
-
-The same bug class hits any step you run *alongside* the server (a benchmark client, a probe). Give
-those one socket's physical cores -- `--cpus-per-task=24 --hint=nomultithread` -- enough not to be
-the bottleneck, not so much that the measurement contends with what it is measuring.
-
-## 4. Finding the endpoint and talking to it
-
-The server binds `0.0.0.0` on port 8000 of its node. There is no gateway and no proxy: the URL is
-the compute node's hostname.
-
-```bash
-squeue -u "$USER" -n serve-only -o '%i %T %N'      # job id, state, node list
-```
-
-`serve-only.sbatch` prints the URL once the API answers. To find it by hand, the first node of the
-allocation is the one that serves:
-
-```bash
-scontrol show hostnames "$(squeue -j <jobid> -h -o '%N')" | head -1
-```
-
-There is **no API key**. Any OpenAI-compatible client works against `http://<node>:8000/v1`; pass a
-dummy key if your client insists on one.
-
-That makes this endpoint reachable by every Alps user, on any cluster: they share the network. For a
-server only you can use, from your laptop or from your own Daint jobs, follow
-[`private-endpoint.md`](private-endpoint.md) instead.
-
-```bash
-BASE=http://<node>:8000
-
+squeue -u "$USER" -n serve-only -o '%i %T %N'
+BASE=http://nid002968:8000
 curl -s "$BASE/v1/models"
-
-curl -s "$BASE/v1/chat/completions" \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"hpcagent-bench-vllm","max_tokens":128,
-       "messages":[{"role":"user","content":"Say hi."}]}'
+curl -s "$BASE/v1/chat/completions" -H 'Content-Type: application/json' \
+  -d '{"model":"hpcagent-bench-vllm","max_tokens":128,"messages":[{"role":"user","content":"Say hi."}]}'
+curl -s "$BASE/metrics"      # Prometheus: throughput, running/waiting requests, cache hits
 ```
 
-The model name in the request body is the **served name**, not the HuggingFace repo id. Every
-recipe here serves under `hpcagent-bench-vllm`; `/v1/models` tells you for certain. Change it with
-`VLLM_SERVED_MODEL` if a client hard-codes something else.
+The served name is `hpcagent-bench-vllm` for every model, not the HuggingFace id.
 
-Prometheus metrics are at `$BASE/metrics` (both engines, because every recipe passes
-`--enable-metrics`). They are the cheapest way to watch a live server: token throughput, running
-and waiting request counts, and cache hit rate.
-
-### Multi-node servers
-
-Kimi K2.7 and GLM-5.3 are split across 4 nodes with pipeline parallelism. Only **rank 0 binds the
-HTTP port**; the other three are members of its pipeline and answer nothing. Always talk to the
-first node of the allocation.
-
-Qwen3.8 and gpt-oss-120b fit in one node. If you allocate several, you get **independent replicas**
-rather than one bigger server -- each binds port 8000 on its own hostname and holds its own KV
-cache. That multiplies throughput but does not raise the ceiling for a single conversation, and a
-client must spread its requests itself.
-
-## 5. The model pages
-
-One page per model. Each leads with the best configuration we currently know, then a list of what to
-DO and a list of what NOT to do with the reason and the measurement behind each, then the data those
-instructions rest on.
+- **Multi-node (Kimi K2.7, GLM-5.3, `pp=4`):** only rank 0 binds the port; talk to the first node.
+- **Single-node models on several nodes:** independent replicas, one per hostname, each with its own
+  KV cache. The client spreads load itself.
 
 | Model | `MODEL=` | Engine | Nodes | Page |
 |---|---|---|---|---|
-| Qwen3.8 (`Qwen/Qwen3.8-27B-FP8`) | `qwen38` | SGLang | 1 | [`qwen38.md`](qwen38.md) |
-| Kimi K2.7 (`moonshotai/Kimi-K2.7-Code`) | `kimi27sglang` | SGLang | 4 (`pp=4`) | [`kimi27sglang.md`](kimi27sglang.md) |
-| GLM-5.3 (`zai-org/GLM-5.3`) | `glm53` | SGLang | 4 (`pp=4`) | [`glm53.md`](glm53.md) |
-| gpt-oss-120b (`openai/gpt-oss-120b`) | `oss120b` | vLLM | 1 | [`oss120b.md`](oss120b.md) |
+| `Qwen/Qwen3.8-27B-FP8` | `qwen38` | SGLang | 1 | [`qwen38.md`](qwen38.md) |
+| `moonshotai/Kimi-K2.7-Code` | `kimi27sglang` | SGLang | 4 (`pp=4`) | [`kimi27sglang.md`](kimi27sglang.md) |
+| `zai-org/GLM-5.3` | `glm53` | SGLang | 4 (`pp=4`) | [`glm53.md`](glm53.md) |
+| `openai/gpt-oss-120b` | `oss120b` | vLLM | 1 | [`oss120b.md`](oss120b.md) |
 
-**The engine is a per-model decision and the wrong one is expensive.** Qwen3.8 on vLLM is roughly
-19x slower than on SGLang; Kimi K2.7 on vLLM collapses above concurrency 1. gpt-oss-120b is the one
-model here served by vLLM. Each page has the numbers.
+The engine is per model: Qwen3.8 on vLLM is about 19x slower than on SGLang; Kimi K2.7 on vLLM
+collapses above concurrency 1.
 
-[`knobs.md`](knobs.md) holds only what is genuinely cross-model: the APU memory model, the KV pool
-threshold, the aiter derate, HiCache, the fabric and the Slurm shape. Anything measured on one model
-lives on that model's page, and where two models disagree, both pages say so.
+## 5. Healthy or sick
 
-## 6. Healthy or sick: what to read in the log
+**Readiness.** `serve-only.sbatch` waits `VLLM_READY_TIMEOUT_SECONDS`, else
+`AGENT_READY_TIMEOUT_SECONDS`, else 7200 s. Each `.env.base-*` sets one high enough for that model
+(GLM-5.3: 10800 s). Both keys are set inside the model file, so a value on the command line is
+overwritten when the file is sourced. To override, copy `experiments/serve-only.env`, add the key,
+and pass `SERVE_ENV_FILE=<copy>` (sourced last, so it wins). The same applies to
+`VLLM_SERVED_MODEL`.
 
-Each node writes `server-<rank>.log` in the run directory the launcher prints. Below, `grep -a`
-because these logs contain progress bars and other binary noise.
-
-**How long "still loading" lasts before it means something is wrong.** `serve-only.sbatch` polls
-for up to `VLLM_READY_TIMEOUT_SECONDS`, falling back to `AGENT_READY_TIMEOUT_SECONDS` and then to a
-7200 s default when neither is set, and reports the job failed once that runs out. Weight load
-alone can take longer than that on the larger, multi-node models -- see each model's page for its
-own number -- so on those models a long silence is normal, not wedged. Each model's layer
-(`experiments/layers/model-<m>.env` and its parents) sets one of these two variables high enough to cover its own slowest stage; check the file
-before assuming a run is wedged. Pass a bigger value on the command line for a run you expect to
-start slower than that:
+**SGLang startup, in order:**
 
 ```bash
-VLLM_READY_TIMEOUT_SECONDS=10800 MODEL=glm53 ./serve-only.sbatch
+grep -aE "Load weight (begin|end)|Cache is allocated|max_total_num_tokens|Capture|fired up" server-0.log
 ```
 
-### SGLang, a healthy startup, in order
-
-```bash
-grep -aE "Load weight (begin|end)|Cache is allocated|Memory pool end|Capture|fired up" server-0.log
-```
-
-You want to see all of these, and you want the numbers to be sane:
-
-| Line | What it tells you |
+| Line | Meaning |
 |---|---|
-| `Load weight begin. avail mem=405.02 GB` | free memory **before** the weights. On an APU this is host memory. |
-| `Load weight end. elapsed=878 s, ... mem usage=167.32 GB` | weights actually landed, and how big this rank's share is. |
-| `Mamba Cache is allocated. max_mamba_cache_size: 514, ...` | state-cache slots (Qwen3.8 only). A number **below** the concurrency you plan to run is a problem. |
-| `KV Cache is allocated. ... #tokens: 2426200, K size: 18.51 GB` | **the number that matters.** This is your whole prefix-cache budget in tokens. |
-| `max_total_num_tokens=2426200` | the same figure, restated. |
-| `Capture target decode CUDA graph begin. ... bs=[1, 2, ... 64]` | graph capture. It consumes memory *after* the KV cache is sized. |
-| `The server is fired up` | it will now answer HTTP. |
+| `Load weight begin. avail mem=...` | free memory before weights (host memory on an APU) |
+| `Load weight end. elapsed=... mem usage=...` | this rank's weight share |
+| `Mamba Cache is allocated. max_mamba_cache_size: N` | Qwen3.8 state slots; below planned concurrency is a problem |
+| `KV Cache is allocated. #tokens: N` / `max_total_num_tokens=N` | the whole prefix-cache budget: **the number that matters** |
+| `Capture ... CUDA graph` | graph capture, takes memory after KV sizing |
+| `The server is fired up` | answering HTTP |
 
-Under load, SGLang prints a running status line. Read `token usage` (fraction of the KV pool in
-use) and, with `--enable-cache-report`, the prefix-cache hit rate. A hit rate that **falls** as a
-conversation grows is the pool thrashing and is the single most useful sickness signal on this
-hardware -- see `knobs.md` section on the KV pool.
-
-### The failures you will actually hit
+Under load, a prefix-cache hit rate that **falls** as conversations grow means the KV pool is
+thrashing ([`knobs.md`](knobs.md#the-kv-pool-threshold)). For vLLM, grep
+`Loading|KV cache|Capturing|Application startup complete`; `Available KV cache memory` is the pool.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Log stops after `Load weight begin`, job exits non-zero, no traceback | host OOM. On an APU the KV cache is host memory. | lower `--mem-fraction-static`, or add nodes so each pipeline stage holds less |
-| `minimum viable = 0.75...` at startup, server refuses | `--mem-fraction-static` is below what the weights alone need at this node count | raise the **node count**, not the fraction |
-| API never answers, log ends mid-JIT | the CPU trap: step running on 2 CPUs | set `--cpus-per-task` |
-| Server answers, but tool calls come back as prose | only one of the two parsers named | pass **both** `--reasoning-parser` and `--tool-call-parser` |
-| 400 on the first request, logged upstream as success | same as above | same as above |
-| RCCL watchdog abort after ~600 s, every rank | a peer blocked; usually the CPU trap or a fabric fallback | check `--cpus-per-task`, then `NET/Plugin` below |
-| Wrong numbers across nodes, no error | GPU-direct RDMA over this fabric | `NCCL_NET_GDR_LEVEL=0` |
-| Throughput several times lower than expected on a multi-node job | RCCL fell back to TCP | `grep -a "NET/Plugin\|Using network" server-0.log`; you want `Using network AWS Libfabric`, not a "Could not find libnccl-net.so" line |
+| log stops after `Load weight begin`, no traceback | host OOM; KV cache is host memory | lower `--mem-fraction-static`, or more nodes |
+| `minimum viable = ...` at startup | weights alone exceed the fraction at this node count | more nodes, not a bigger fraction |
+| API never answers, log ends mid-JIT | CPU trap | `--cpus-per-task` |
+| tool calls arrive as prose, or a 400 logged as success | only one parser named | pass `--reasoning-parser` **and** `--tool-call-parser` |
+| RCCL watchdog abort after ~600 s | peer blocked: CPU trap or fabric fallback | check CPUs, then `Using network` |
+| wrong numbers across nodes, no error | GPU-direct RDMA on this fabric | `NCCL_NET_GDR_LEVEL=0` |
+| multi-node throughput several times low | RCCL on TCP | `grep -a "Using network" server-0.log` must say `AWS Libfabric` |
 
-### vLLM
+## 6. How configuration becomes flags
 
-`grep -aE "Loading|KV cache|Capturing|Application startup complete" server-0.log`. The same shape:
-weights, then a KV cache size, then graph capture, then the HTTP server. The `Available KV cache
-memory` line plays the role that `KV Cache is allocated` plays in SGLang.
+**Absent key vs empty key.** `run_cluster.sh` reads `${SGLANG_ATTENTION_BACKEND-aiter}` (dash, not
+colon-dash):
 
-## 7. Mechanism: how a configuration key becomes a command-line flag
-
-Three pieces of machinery here behave in ways a reader outside the project will not guess. Each has
-cost a real run.
-
-### An ABSENT key takes the default. Only an EMPTY ASSIGNED key suppresses the flag.
-
-The launcher builds some flags from shell parameter expansion, and it deliberately uses
-`${VAR-default}` rather than `${VAR:-default}`:
-
-```bash
-backend="${SGLANG_ATTENTION_BACKEND-aiter}"     # dash, not colon-dash
-[[ -n "${backend}" ]] && command+=(--attention-backend "${backend}")
-```
-
-The two forms differ only on the empty string, and that difference is the whole point:
-
-| Configuration file says | `${VAR-default}` gives | `${VAR:-default}` gives |
+| Env file says | `${VAR-default}` | `${VAR:-default}` |
 |---|---|---|
-| nothing at all (key absent) | `default` | `default` |
-| `VAR=` (assigned, empty) | **empty, so the flag is omitted** | `default` |
+| nothing | `default` | `default` |
+| `VAR=` | empty: flag omitted | `default` |
 | `VAR=x` | `x` | `x` |
 
-So **deleting a key does not turn a flag off.** It turns the default on. To omit a flag you must
-assign the key and leave it empty, which looks like a mistake and is not. A model that must choose
-its own attention backend needs `SGLANG_ATTENTION_BACKEND=` in its file; with the key simply absent
-it gets `--attention-backend aiter` appended, which is the opposite of the intent.
+Deleting a key turns the default **on**. To omit a flag, assign it empty (GLM-5.3 does this). When
+templating a flag, use the dash form.
 
-This is not hypothetical in both directions. Writing `${VAR:-default}` where `${VAR-default}` was
-meant re-enabled a flag that had just been removed, and killed two launches after the fix that was
-supposed to prevent exactly that. If you template a flag, use the dash form.
+**Layers, last assignment wins.** `layers/common.env` < `layers/model-<m>.env` < `.env.base-<m>`
+([Env layers](../../experiments/README.md#env-layers)); a layer can override a key, never unset it.
+Render one with `./env_layers.sh render .env.base-<m>`. `serve-only.sbatch` sources the render, then
+`serve-only.env` (zero judge and agent nodes, `RUN_ROOT`), under `set -a`.
 
-### Configuration files are layered, last assignment wins
+**Arm `.env.<arm>` files are renders.** Fix the layer that owns a key, never the render.
 
-The model's base is itself layered (`layers/common.env` < `arms.yaml` campaign < `layers/model-<m>.env`
-< `arms.yaml` `models.<m>`, see `experiments/README.md` "Arm envs"); a layer can override a key but
-never unset one.
-`serve-only.sbatch` sources the model's file rendered flat first and `experiments/serve-only.env`
-second, under `set -a`, so every value is exported and a later assignment overrides an earlier one. The override
-file sets the judge and agent node counts to zero and redirects the run root; everything else comes
-from the model's own file, unchanged. That is what keeps this documentation and a real deployment
-from drifting apart.
+**Mounts.** A campaign job narrows the inference container's mounts; `serve-only.sbatch` uses the
+registered EDF as-is. A model that serves here and fails in a campaign run: suspect the mounts first.
 
-The job writes the merged result to `serve.env` in its run directory. That file is the record of
-what actually ran; read it rather than re-deriving the layering by hand.
+## 7. Where the numbers live
 
-### An arm `.env` is a render, not a source
+- `experiments/serve-only.sbatch`, `experiments/serve-only.env`: the launcher on this page.
+- `experiments/layers/model-<m>.env`, `experiments/.env.base-<m>`: per-model launch lines with inline reasons.
+- `containers/cluster/ce-images/inference/`: `smoke-kimi-sglang.sbatch` (serving smoke with accuracy
+  gate and concurrency sweep), `agentlike-probe.py` (multi-stream load), `accuracy-gate.py`,
+  `verify-tools-reasoning.py`.
 
-`experiments/.env.<arm>` is written by a submit script from a layered base, and each job reads its
-own read-only snapshot under `experiments/.rendered/`. **Never fix a setting in an arm file**: the
-next submission renders over it. Fix the layer that owns the key.
-
-### The campaign launcher narrows container mounts; this one does not
-
-When a benchmark run starts a server, it rewrites the container definition to mount only what the
-server needs, because other roles in that job must not see the graded material. An inference-only
-job has no other roles, so `serve-only.sbatch` uses the registered EDF as-is, with its wider mounts.
-
-The difference is usually invisible and once was not: a model whose loader patch arrives through a
-path under `$SCRATCH` loads fine under the wide mounts and dies under the narrow ones. If a model
-serves for you here and fails inside a benchmark run, suspect the mounts before the model.
-
-## 8. Where the real numbers live
-
-- the model pages above -- per-model instructions with their evidence.
-- [`knobs.md`](knobs.md) -- the cross-model knobs, dated.
-- `experiments/serve-only.sbatch` and `experiments/serve-only.env` -- the launcher this page
-  describes. The first is the job; the second is the three-line override that removes the
-  benchmark roles from a model's own configuration.
-- `experiments/layers/model-<model>.env` and `experiments/arms.yaml` -- the authoritative launch
-  line per model (`experiments/env_spec.py render campaign:<model>`), with their own inline reasons.
-  If this folder and those files disagree, the files win.
-- `containers/inference/` -- the serving smokes and probes these numbers come
-  from: `smoke-kimi-sglang.sbatch` (a serving smoke with an accuracy gate and a concurrency sweep),
-  `agentlike-probe.py` (throughput under a realistic multi-stream load) and `accuracy-gate.py`.
-
-If you change a serving flag and want to believe the result, re-measure **on one node, back to
-back**. Node-to-node spread on this machine is about 30%, which is larger than most of the effects
-worth chasing.
+Node-to-node spread is about 30%. Re-measure a flag change **on one node, back to back**.

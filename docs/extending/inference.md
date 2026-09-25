@@ -1,138 +1,114 @@
-# Adding an inference engine or an LLM
+# Adding a model or an inference engine
 
-Two changes: (A) serving a new model on an engine the cluster path already runs (SGLang or vLLM),
-and (B) adding a third engine. Measured values (memory fraction, pool size, ready timeout) live in
-the comments of `experiments/layers/model-<tag>.env`, `experiments/arms.yaml` and
-`docs/serving/<tag>.md`. Copy them from there.
+(A) serves a new model on SGLang or vLLM, which the cluster path already runs. (B) adds a third
+engine. Measured serving values (memory fraction, pool size) live in the comments of the env files
+and in `docs/serving/<tag>.md`; copy them from there.
 
-## A. A new model on SGLang or vLLM
+## A. A new model
 
-| What you touch | Why |
-| --- | --- |
-| `experiments/layers/model-<tag>.env` | the serving recipe; every campaign renders it as `<campaign>:<tag>` |
-| `experiments/arms.yaml` `models.<tag>` | only where one campaign must differ for this model (optional) |
-| `hpcagent_bench/envs/registry.yaml` `models:` | display name, and the checkpoint the arms must serve |
+| File | Change |
+|---|---|
+| `experiments/layers/model-<tag>.env` | serving block (extends `layers/common.env`) |
+| `experiments/.env.base-<tag>` | `# extends: layers/model-<tag>.env`, plus effort, context and engine args |
+| `hpcagent_bench/envs/registry.yaml` `models:` | `<tag>: {name: <Display Name>, serves: org/Name}`, appended at the end |
 | `docs/serving/<tag>.md` | the measurements behind the recipe |
 
-**1. Fetch the weights.** `<tag>` is the model token in arm names (`llr-focus40-<tag>-c`). The job
-downloads inside the `hpcagent-bench-sglang-mi300-latest` EDF into `${HF_HOME}` (default
-`${FAST_SCRATCH}/.hpcagentbench-cache/hf`; `FAST_SCRATCH` defaults to the iopsstor scratch, see
-`scripts/cache_env.sh`),
-then restripes every blob over 1 GiB on the host; `AUDIT_ONLY=1` only checks the layout.
+`<tag>` is the model token in arm names (`llr-focus40-<tag>-c`). Env layering is described in
+`experiments/README.md` ("Env layers").
+
+**1. Fetch weights** into `${HF_HOME}` (see `scripts/cache_env.sh`); `AUDIT_ONLY=1` only checks the
+layout. Success prints `WEIGHTS READY`.
+
 ```bash
-MODELS="org/Name" sbatch containers/inference/fetch_weights.sbatch
+MODELS="org/Name" sbatch containers/cluster/ce-images/inference/fetch_weights.sbatch
 ```
 
-**2. Write `layers/model-<tag>.env`.** Extend the family layers with the same engine and node
-shape (`replicas.env` for one node, `pp.env` for a 4-node pipeline, `sglang.env` for sglang,
-`service.env` for a hosted API) and set only what is this model's own. `layers/model-qwen38.env`:
+**2. Write the env files.** Copy the pair with the same engine and node shape (`qwen38`, `oss120b`:
+one node; `kimi27sglang`, `glm53`: four nodes in `pp` mode). From `layers/model-qwen38.env` and
+`.env.base-qwen38`, trimmed:
 
 ```bash
-# extends: replicas.env
-# extends: sglang.env
+# layers/model-qwen38.env
+INFERENCE_NODES=1
+INFERENCE_MODE=replicas
 INFERENCE_CE_ENV=hpcagent-bench-sglang-mi300-latest
+INFERENCE_ENGINE=sglang
 VLLM_MODEL=Qwen/Qwen3.8-27B-FP8
+VLLM_SERVED_MODEL=hpcagent-bench-vllm
 HPCAGENT_BENCH_OPTIMIZER=Qwen/Qwen3.8-27B-FP8
+# .env.base-qwen38
+# extends: layers/model-qwen38.env
+EFFORT_LADDER="low medium xhigh"
+CONTEXT_LENGTH=262144
+SGLANG_EXTRA_ARGS="--chat-template ${SCRIPT_DIR}/chat-template-qwen38.jinja --context-length 262144 --mem-fraction-static 0.306 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-metrics"
 ```
 
-The llr40 campaign then needs its window and ladder, in `arms.yaml` under `campaign.models.<tag>`
-(`EFFORT_LADDER`, `CONTEXT_LENGTH`, `SGLANG_EXTRA_ARGS` with `--mem-fraction-static <measured>` and
-both parsers). Check the result with `experiments/env_spec.py render campaign:<tag>`.
+| Key | Meaning |
+|---|---|
+| `INFERENCE_ENGINE` | `sglang` runs `sglang.launch_server`; unset or anything else runs `vllm serve` |
+| `INFERENCE_CE_ENV` | EDF name in `~/.edf`; its image must carry that engine |
+| `VLLM_MODEL`, `VLLM_SERVED_MODEL` | HF repo id (both engines), and the name agents request |
+| `GPUS_PER_NODE`, `INFERENCE_NODES`, `INFERENCE_MODE` | TP size; `pp` splits one model over the nodes, `replicas` runs one server per node |
+| `SGLANG_EXTRA_ARGS`, `VLLM_EXTRA_ARGS` | split on whitespace (`read -r -a`), no quoting; name both parsers |
+| `SGLANG_ATTENTION_BACKEND` | unset appends `--attention-backend aiter`; set empty omits it |
+| `HPCAGENT_BENCH_OPTIMIZER` | checkpoint id; must equal `VLLM_MODEL` and the registry `serves:` |
+| `EFFORT_LADDER` | rungs this server accepts, lowest first (`experiments/effort.py`); empty for no ladder |
+| `CONTEXT_LENGTH` | served window; harnesses derive compaction from it ([token_accounting.md](../token_accounting.md#context-compaction)) |
 
-| Key | Read by | Meaning |
-| --- | --- | --- |
-| `INFERENCE_ENGINE` | `run_cluster.sh` `run_vllm_node` | `sglang` runs `sglang.launch_server`; anything else, or unset, runs `vllm serve` |
-| `INFERENCE_CE_ENV` | `run_cluster.sh` `role_srun` | EDF name in `~/.edf`; its image must carry that engine |
-| `VLLM_MODEL`, `VLLM_SERVED_MODEL` | `run_vllm_node`, `run_agent_node` | HF repo id (both engines), and the name agents request |
-| `GPUS_PER_NODE`, `INFERENCE_NODES`, `INFERENCE_MODE` | `run_vllm_node` | TP size; `pp` splits one model over the nodes, `replicas` runs one server per node |
-| `SGLANG_EXTRA_ARGS`, `VLLM_EXTRA_ARGS` | `run_vllm_node` (`read -r -a`) | split on whitespace, no quoting inside; name both parsers |
-| `SGLANG_ATTENTION_BACKEND` | `run_vllm_node` | absent appends `--attention-backend aiter`; assigned empty omits it |
-| `HPCAGENT_BENCH_OPTIMIZER` | `tests/test_display_names.py` | the checkpoint id; must equal the registry `serves:` |
-| `EFFORT_LADDER` | `effort.py`, from `run_cluster.sh` and `harnesses.py` | the rungs THIS server accepts, lowest first; empty for a model with no ladder. The launcher resolves `AGENT_EFFORT` from it (`AGENT_EFFORT_POLICY=max`: xhigh where the ladder has it, else its top rung, else no field) and a client that types fewer rungs gets the top one it can spell |
+Files such as a chat template sit in `experiments/` and are named through `${SCRIPT_DIR}`, which
+`run_cluster.sh` mounts into the inference container.
 
-Compaction needs no key of its own: `agent_driver.claude_context_env` reads `CONTEXT_LENGTH` /
-`--context-length` / `--max-model-len` off the same env (`agent_driver.served_context`) and computes
-the trigger itself, capped at 262144. See [`docs/token_accounting.md`](../token_accounting.md#context-compaction).
-
-Model files such as a chat template sit in `experiments/`, named through `${SCRIPT_DIR}`, which
-`run_cluster.sh` sets before sourcing the env and mounts into the inference container. A
-counterfactual of an existing model is its own layer extending the same family layers (see
-`experiments/README.md` "Arm envs").
-
-**3. Serve it alone.** From `experiments/`, `SUBMIT=0 MODEL=<tag> ./serve-only.sbatch` prints the
-plan and `MODEL=<tag> ./serve-only.sbatch` runs the campaign's own `--vllm-node` role with the base
-env plus `serve-only.env`, sized from `INFERENCE_NODES`, and prints a working `curl`. For the
-tool-call, reasoning and long-context accuracy gates on SGLang, submit the smoke from its own
-directory, where its log path and verifier resolve:
+**3. Serve it alone.** From `experiments/`:
 
 ```bash
-cd containers/inference
-EDF=$HOME/.edf/<edf>.toml MODEL_REPO=org/Name SERVED_MODEL=<tag> \
-TOOL_PARSER=<parser> REASONING_PARSER=<parser> LANGUAGE_ONLY=<0|1> \
-MEM_FRACTION=<measured> CONTEXT_LEN=<context> SGLANG_EXTRA_ARGS="<model flags>" \
-    sbatch --nodes=<INFERENCE_NODES> smoke-kimi-sglang.sbatch
+SUBMIT=0 MODEL=<tag> ./serve-only.sbatch   # print the plan
+MODEL=<tag> ./serve-only.sbatch            # serve; the log reaches "endpoint is live" and prints a curl
 ```
 
-The smoke hard-codes some flags of its own, so a pass shows the image serves the model and
-`serve-only.sbatch` shows the recipe does. `submit-glm53-sglang.sh` wraps it for one model; a
-vLLM model has no separate smoke, `serve-only.sbatch` is its check.
+For tool-call, reasoning and long-context accuracy gates, run the smokes in
+`containers/cluster/ce-images/inference/` from that directory: `smoke-kimi-sglang.sbatch` takes
+`MODEL_REPO`, `SERVED_MODEL`, `TOOL_PARSER`, `REASONING_PARSER`, `MEM_FRACTION`, `CONTEXT_LEN`;
+`smoke-kimi-eager-pg.sbatch` (vLLM) takes `MODEL_REPO`, `TOOL_PARSER`, `REASONING_PARSER`,
+`EXTRA_SERVE_ARGS`. A failure prints `SMOKE FAILED`.
 
-**4. Register the tag** as `<tag>: {name: <Display Name>, serves: org/Name}` at the END of `models:` in
-`registry.yaml` (key order is marker order; `tests/test_palette.py` pins it); aliases go under `aliases.models`.
+**4. Name it in launchers.** `submit-cpf-llr40.sh` and `submit-gpu-llr40.sh` read
+`.env.base-${model}`, so `MODELS=<tag>` suffices. `submit-scicomp-dc.sh`, `submit-git-scicomp.sh`
+(`BASE_ENV`) and `submit-llrblind.sh` (`MAX_TOKENS_BY_MODEL`) keep per-model maps. `make_model_arm.py --to-model <tag>`
+re-targets a rendered arm file (needs a `MODELS` entry).
 
-**5. Submit.** Every launcher renders `<campaign>:${model}`, so `MODELS=<tag>` is enough.
+**In-process models.** The Python harness ignores env files. An OpenAI-shaped endpoint is one
+`ModelSpec` in `MODELS` (`hpcagent_bench/harness/baselines.py`): `backend="openai"`, `model`,
+`base_url`, `api_key_env`, `context_tokens`, plus `accepts_sampling`/`max_tokens_field` for endpoints
+that reject sampling or rename the reply cap. A new wire protocol is an `Agent` subclass in
+`harness/agent.py` added to `BACKENDS`; see [writing_an_agent.md](../writing_an_agent.md).
 
-**In-process and API models.** The Python harness ignores these env files. An OpenAI-shaped endpoint
-is one `ModelSpec` entry in `MODELS` (`hpcagent_bench/harness/baselines.py`): `backend="openai"`,
-`model`, `base_url`, `api_key_env`, `context_tokens`, and `accepts_sampling`/`max_tokens_field` for
-an endpoint that rejects sampling or renames the reply cap (see `kimi`). `OpenAIAgent` falls back to
-`OPENAI_BASE_URL`, `VLLM_BASE_URL`, then `localhost:8000/v1`. A new wire protocol is an `Agent`
-subclass beside `ClaudeAgent` and `OllamaAgent` in `harness/agent.py`, added to `BACKENDS`
-(baselines.py), `_agent_registry` (cli.py) and `ModelSpec.agent`; see [writing_an_agent.md](../writing_an_agent.md).
-
-Checklist A:
-- [ ] `fetch_weights.sbatch` prints `WEIGHTS READY`; `INFERENCE_CE_ENV` carries `INFERENCE_ENGINE`
-- [ ] both parsers named; `HPCAGENT_BENCH_OPTIMIZER` = `VLLM_MODEL` = registry `serves:`
-- [ ] `serve-only.sbatch` reaches `endpoint is live`; the smoke ends without `SMOKE FAILED`
-- [ ] `pytest tests/test_display_names.py tests/test_palette.py tests/test_model_of.py --maxfail=10`
+```bash
+python -m pytest --maxfail=10 tests/test_display_names.py tests/test_palette.py tests/test_model_of.py
+```
 
 ## B. A new engine
 
-| What you touch | Why |
-| --- | --- |
-| `containers/images/<engine>/` | `Dockerfile`, `build.sh`, `build.sbatch`, `edf.toml.example` |
-| `containers/images/images.env` | one row: role, `INFERENCE_<ENGINE>` prefix, platform, dir, partition, profile, candidate, squashfs, EDF, template, tag |
-| `containers/images/verify_image.py`, `verify_image.sbatch` | the engine's verify profile |
-| `experiments/run_cluster.sh` `run_vllm_node` | interpreter and launch command |
+| File | Change |
+|---|---|
+| `containers/cluster/ce-images/<engine>/` | `Dockerfile`, `build.sh`, `build.sbatch`, `edf.toml.example` (copy `sglang/`) |
+| `containers/cluster/ce-images/images.env` | `INFERENCE_<ENGINE>_SQSH`, `_EDF_LATEST`, `_TEMPLATE`, `_REPO`, `_TAG` |
+| `containers/cluster/ce-images/install_edfs.sh` | render the new EDF beside the sglang one |
+| `experiments/run_cluster.sh` `run_vllm_node` | interpreter (`engine_python`) and a `command=(...)` branch |
 
-**1. Image directory.** Copy `sglang/`. `build.sh` pins the base by digest and builds from the repo
-root so the Dockerfile can COPY `inference/moe-configs/`; `build.sbatch` refuses to overwrite a
-mounted `.sqsh`. `edf.toml.example` keeps the `PLACEHOLDER.sqsh` image line, a multi-line
-`mounts = [` block (`derived_edf` exits 2 on a one-line block), absolute `PATH` and `LD_LIBRARY_PATH`
-in `[env]` (the CE drops the image's own ENV) and the three fabric hook annotations.
+`edf.toml.example` keeps the `PLACEHOLDER.sqsh` image line, a multi-line `mounts = [` block, absolute
+`PATH` and `LD_LIBRARY_PATH` under `[env]` (the CE drops the image's ENV) and the fabric hook
+annotations. The engine name also goes in the profiles of `verify_image.py` and the role lists
+of `promote_image.sh`, `pull_image.sh` and `experiments/smoke-new-images.sh` (`SMOKE`).
 
-**2. Build, verify, promote.** With the `images.env` row beside the sglang one, run
-`IMAGE_DIR=$PWD/<engine> sbatch build_and_verify.sbatch`, then `./promote_image.sh <engine>`.
-`build_and_verify.sbatch`, `install_edfs.sh`, `promote_image.sh`, `pull_image.sh`, `pull_images.sbatch` and
-`push_images.sbatch` read the row; `experiments/smoke-new-images.sh` names the engine itself.
+The `run_vllm_node` branch serves `${model_path}` as `${VLLM_SERVED_MODEL}` on
+`0.0.0.0:${VLLM_PORT}` with TP `GPUS_PER_NODE`. Under `pp` it takes size, rank and rendezvous from
+`INFERENCE_NODES`, `SLURM_PROCID` and `VLLM_MASTER_HOST:VLLM_MASTER_PORT`; only rank 0 binds the port.
+The endpoint must answer `GET /v1/models`, `POST /v1/chat/completions` and, in the default
+`AGENT_LLM_MODE=direct`, Anthropic `POST /v1/messages` (`AGENT_LLM_MODE=litellm` fronts it with a proxy).
 
-**3. Launch it in `run_vllm_node`.** `INFERENCE_ENGINE` is tested in three places: `engine_python`
-(the interpreter that resolves the snapshot), the non-SGLang default `VLLM_ROCM_USE_AITER=0`, and
-the `command=(...)` branch. Add a branch beside `sglang` that serves `${model_path}` as
-`${VLLM_SERVED_MODEL}` on `0.0.0.0:${VLLM_PORT}` with TP `GPUS_PER_NODE`; under `pp` it takes PP
-size, rank and rendezvous from `INFERENCE_NODES`, `SLURM_PROCID` and `VLLM_MASTER_HOST:VLLM_MASTER_PORT`,
-and only rank 0 binds the port. Append `<ENGINE>_EXTRA_ARGS` via `read -r -a`. The job expects
-`GET /v1/models` (readiness), `POST /v1/chat/completions` (throughput probe) and, in the default
-`AGENT_LLM_MODE=direct`, Anthropic `POST /v1/messages` at the server root (`AGENT_LLM_MODE=litellm`
-fronts the engine with a proxy). The aggregate probe in `agent_driver.py` sums only `vllm:*` metrics.
-
-**4. Smoke and tests.**
 ```bash
+REPO=$PWD IMAGE_DIR=containers/cluster/ce-images/<engine> sbatch containers/cluster/ce-images/build_and_verify.sbatch
+containers/cluster/ce-images/promote_image.sh <engine>   # after the verify job passes
 experiments/smoke-new-images.sh <engine>
-cd experiments && MODEL=<tag> ./serve-only.sbatch    # a base env with INFERENCE_ENGINE=<engine>
-pytest tests/test_vllm_pp_serve_args.py tests/test_derived_edf.py --maxfail=10
+python -m pytest --maxfail=10 tests/test_vllm_pp_serve_args.py tests/test_derived_edf.py
 ```
-Checklist B:
-- [ ] candidate carries `.verified`; `promote_image.sh <engine>` re-renders `<engine>-latest`
-- [ ] every script in step 2 names the engine; the branch handles `pp` and `replicas`
-- [ ] the endpoint answers the three routes in step 3, or the arm sets `AGENT_LLM_MODE=litellm`

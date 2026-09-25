@@ -32,7 +32,7 @@ import re
 import sys
 
 from hpcagent_bench.experiments import read_observations, read_table
-from hpcagent_bench.stats import population
+from hpcagent_bench.stats import cost, population
 from hpcagent_bench.stats.figures import kernel_comparison, signed
 
 #: The polyhedral compiler baselines (2026-09-20 decision), appended to
@@ -66,13 +66,14 @@ def run(
     mark_pending: bool = False,
     baseline_fallback: str = "",
     panel_height_in: float = signed.LLR40_PANEL_HEIGHT_IN,
+    card: cost.CostModel = cost.resolve(),
 ) -> int:
     canon_frame = read_table(canon_db, "canon")
     roster = load_roster(roster_file, canon_frame)
     if not roster:
         print("no roster kernel named: pass --roster-file or a --canon-db with rows", file=sys.stderr)
         return 1
-    observations = read_observations(observations_path) if observations_path is not None else None
+    observations = cost.priced(read_observations(observations_path), card) if observations_path is not None else None
     pattern = re.compile(arm_pattern)
     stem = signed.llr40_two_row_figure(
         canon_frame,
@@ -151,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--dpi", type=float, default=150.0)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/llr40_compilers"))
+    cost.add_arguments(ap)
     args = ap.parse_args(argv)
     return run(
         args.canon_db,
@@ -169,6 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         args.mark_pending,
         args.baseline_fallback,
         args.panel_height,
+        cost.resolve(args.cost_model, args.cost_models),
     )
 
 

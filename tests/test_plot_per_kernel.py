@@ -69,7 +69,15 @@ def episode(kernel: str, run: str, speedup: float, tokens: float) -> list[dict]:
     }
     return [
         {**common, "row_kind": "submission", "speedup": speedup, "tokens": None},
-        {**common, "row_kind": "task", "speedup": None, "tokens": tokens},
+        {
+            **common,
+            "row_kind": "task",
+            "speedup": None,
+            "tokens": tokens,
+            "tokens_fresh_input": tokens,
+            "tokens_cached_input": 0.0,
+            "tokens_output": 0.0,
+        },
     ]
 
 
@@ -173,22 +181,22 @@ def test_ci_style_never_draws_a_box_patch() -> None:
 # The --summary column.
 
 
-def test_summary_point_speedup_is_the_geomean_over_the_plotted_kernels_own_medians() -> None:
+def test_the_speedup_summary_is_the_geomean_over_the_plotted_kernels_own_medians() -> None:
     """Speed-up is a ratio, so its overall value is the GEOMETRIC MEAN over kernels -- never a
     median, which equals the geomean only when the per-kernel medians happen to be symmetric."""
     cells = [pk.KernelCell("k1", (1.0,)), pk.KernelCell("k2", (1.0,)), pk.KernelCell("k3", (1000.0,))]
-    point, _, _ = pk.summary_point_speedup(cells)
+    point, _, _ = pk.summary_geomean(cells)
     expected_geomean = (1.0 * 1.0 * 1000.0) ** (1.0 / 3.0)
     assert point == pytest.approx(expected_geomean)
     assert point != pytest.approx(1.0)  # the median of (1, 1, 1000) is 1.0 -- must not equal it
 
 
-def test_summary_point_tokens_is_the_median_over_the_plotted_kernels_own_medians() -> None:
-    """Tokens are not a ratio, so the summary column keeps the median -- the geomean rule above
-    does not apply to a count."""
+def test_the_token_summary_is_the_geomean_over_the_plotted_kernels_own_medians() -> None:
+    """Paper rule: token cost is the geometric mean over kernels, (10 * 20 * 1000)^(1/3) = 58.48,
+    not the median 20."""
     cells = [pk.KernelCell("k1", (10.0,)), pk.KernelCell("k2", (20.0,)), pk.KernelCell("k3", (1000.0,))]
-    point, _, _ = pk.summary_point_tokens(cells)
-    assert point == pytest.approx(20.0)
+    point, _, _ = pk.summary_geomean(cells)
+    assert point == pytest.approx(58.480354764)
 
 
 def test_draw_panel_labels_the_summary_column_with_its_own_statistic() -> None:
@@ -231,22 +239,17 @@ def test_a_caller_spells_the_kernel_ticks() -> None:
         plt.close(fig)
 
 
-def test_the_top_panel_of_a_stacked_figure_still_names_its_own_summary_statistic() -> None:
-    """Kernel names are hidden on every panel but the bottom (shared x axis, shown once) -- but
-    the two panels' summary columns carry DIFFERENT statistics (geomean, median), and a plain x
-    TICK label would be silently overwritten by whichever panel's axis drew second, since a
-    stacked figure's two axes share one set of tick labels (see draw_summary_column). The
-    annotation above each panel's own marker is not shared, so both survive."""
+def test_a_stacked_speedup_and_token_figure_names_its_one_summary_statistic_once() -> None:
+    """Both panels summarize by the geomean (paper rule), so the statistic is named once, as the
+    shared axis' summary tick, and no panel annotates a median."""
     speed = speed_metric([pk.KernelCell("k1", (2.0,))])
     tokens = token_metric([pk.KernelCell("k1", (100.0,))])
     fig = pk.figure_panels([speed, tokens], ["k1"], "ci", True, "demo")
     try:
         top_ax, bottom_ax = fig.axes
-        top_texts = [text.get_text() for text in top_ax.texts]
-        bottom_texts = [text.get_text() for text in bottom_ax.texts]
-        assert "Geomean" in top_texts
-        assert "Median" in bottom_texts
-        assert "Geomean" not in bottom_texts
+        texts = [text.get_text() for ax in (top_ax, bottom_ax) for text in ax.texts]
+        assert [label.get_text() for label in bottom_ax.get_xticklabels()] == ["k1", "Geomean"]
+        assert "Median" not in texts
     finally:
         plt.close(fig)
 

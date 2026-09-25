@@ -273,14 +273,25 @@ def test_no_score_is_an_alias_of_the_registered_key_and_takes_no_hue_slot_of_its
     assert "no-score" not in palette.hue_order("packets")
 
 
-def test_packet_marker_follows_the_same_registry_order_as_colour() -> None:
-    """The packet efficacy panels shape by packet instead of colouring by it
-    (:mod:`hpcagent_bench.stats.figures.efficacy`'s module docstring); shape still comes off the
-    SAME registry order :func:`color` uses for hue, so the two never disagree about which packet a
-    figure means."""
-    leads = palette.hue_order("packets")
-    assert palette.packet_marker(leads[0]) == palette.markers()[0]
-    assert palette.packet_marker("cpfsrc") != palette.packet_marker("cpf")
+def test_every_registered_treatment_wears_its_own_shape_and_none_wears_the_control_circle() -> None:
+    """USER 2026-09-25: "repository" and "perf playbook" drew the same plus. The shape of a packet or
+    a harness comes from one registry pool, one per treatment, so two treatments can never be told
+    apart by colour alone -- colour is the model's."""
+    table = palette.shape_table()
+    shapes = list(table.values())
+    assert len(shapes) == len(set(map(repr, shapes))), table
+    assert palette.CONTROL_MARKER not in shapes
+    assert palette.packet_marker("repo") != palette.packet_marker("perf-playbook-cpu")
+    assert palette.harness_marker("openhands") not in [palette.packet_marker(p) for p in palette.hue_order("packets")]
+
+
+def test_a_packets_shape_does_not_move_when_a_later_treatment_is_registered() -> None:
+    """Append-only: the pool is handed out in file order (harnesses, then packets), so the first
+    harness keeps the pool's first shape no packet pins with ``marker:``, whatever is registered after it."""
+    first = palette.hue_order("harnesses")[0]
+    pinned = {d.marker for d in palette.registry().packet_defs.values() if d.marker}
+    pool = [shape for shape in palette.registry().shapes if shape != palette.CONTROL_MARKER and shape not in pinned]
+    assert palette.harness_marker(first) == pool[0]
 
 
 def test_an_unregistered_packet_marker_is_stable_and_warns(caplog: pytest.LogCaptureFixture) -> None:
@@ -311,3 +322,28 @@ def test_a_harness_wears_a_registered_colour_of_its_own(caplog: pytest.LogCaptur
     assert "registry.yaml" not in caplog.text
     assert len(set(chosen.values())) == 4, chosen
     assert chosen["claude"] == palette.harness_color("claude")
+
+
+def test_a_control_is_the_hollow_circle_in_a_lighter_shade_of_its_models_colour_in_every_figure() -> None:
+    """USER 2026-09-25: one shape and one shade rule for "no packet" in every figure, so a reader
+    learns it once. Each figure module reads it from the palette instead of keeping its own copy."""
+    from hpcagent_bench.stats.figures import efficacy, scaling
+
+    assert efficacy.CONTROL_MARKER == palette.CONTROL_MARKER
+    style = scaling.series_style("", "qwen38")
+    assert style["marker"] == palette.CONTROL_MARKER and style["markerfacecolor"] == "none"
+    assert style["color"] == palette.model_shade("qwen38", palette.CONTROL_SHADE)
+    assert palette.packet_marker("") == palette.CONTROL_MARKER
+
+
+@pytest.mark.parametrize("step", [1, 2])
+def test_repeated_series_of_one_model_are_close_shades_of_its_colour_not_other_hues(step: int) -> None:
+    """A model drawn several times stays recognisably one model: its shades keep the hue and only
+    get lighter."""
+    import colorsys
+
+    import matplotlib.colors
+
+    base, shade = (matplotlib.colors.to_rgb(palette.model_shade("oss120b", s)) for s in (0, step))
+    (h0, l0, _), (h1, l1, _) = (colorsys.rgb_to_hls(*rgb) for rgb in (base, shade))
+    assert abs(h0 - h1) < 0.02 and l1 > l0

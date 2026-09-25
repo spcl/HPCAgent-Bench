@@ -24,11 +24,14 @@ import pandas as pd
 
 from hpcagent_bench import experiment_tags
 from hpcagent_bench.observation_columns import upgrade_frame
-from hpcagent_bench.stats import palette, population, summary
+from hpcagent_bench.stats import cost, palette, population, summary
+from hpcagent_bench.stats.figures import per_kernel
 from hpcagent_bench.stats import style as plotstyle
 
 plotstyle.apply()
 import matplotlib.pyplot as plt  # noqa: E402 -- pyplot must follow plotstyle.apply()
+
+TYPE: plotstyle.TypeScale = plotstyle.AUTHOR_SCALE
 
 
 def cells(frame: pd.DataFrame) -> pd.DataFrame:
@@ -62,7 +65,7 @@ def draw(cell_frame: pd.DataFrame, experiment: str, out: pathlib.Path, unit: str
     models = [m for m in palette.order("models") if m in set(cell_frame["model"])]
     hues = palette.model_colors(models)
     positions = {kernel: i for i, kernel in enumerate(order)}
-    offsets = np.linspace(-0.26, 0.26, len(models)) if len(models) > 1 else [0.0]
+    offsets = per_kernel.dodge_offsets(len(models), 0.52)
 
     # Kernels along X, the measured quantity up Y. The measured axis is the one a reader compares
     # across series, and comparing along a shared vertical is what every other chart in the report
@@ -83,11 +86,11 @@ def draw(cell_frame: pd.DataFrame, experiment: str, out: pathlib.Path, unit: str
         ax.scatter(
             x,
             part["kernel_tokens"].to_numpy(),
-            s=52,
+            s=TYPE.marker_size**2,
             color=hues[model],
             marker=shapes[model],
             edgecolor="white",
-            linewidth=0.6,
+            linewidth=TYPE.hairline_width,
             zorder=4,
             label=experiment_tags.model_name(model),
         )
@@ -96,7 +99,7 @@ def draw(cell_frame: pd.DataFrame, experiment: str, out: pathlib.Path, unit: str
     ax.set_ylabel(f"{unit.title()} per Kernel")
     ax.set_xlabel("")
     ax.set_xticks(range(len(order)))
-    ax.set_xticklabels(order, fontsize=plotstyle.ANNOTATION_PT, rotation=90)
+    ax.set_xticklabels(order, fontsize=TYPE.annotation_pt, rotation=90)
     ax.set_xlim(-0.8, len(order) - 0.2)
     plotstyle.value_axis(ax, "y", log_base=10.0)
     plotstyle.despine(ax)
@@ -105,10 +108,7 @@ def draw(cell_frame: pd.DataFrame, experiment: str, out: pathlib.Path, unit: str
     plotstyle.legend_below(fig, ax.get_legend_handles_labels()[0])
     top = plotstyle.title(fig, experiment)
     fig.tight_layout(rect=(0, 0, 1, top))
-    out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out)
-    fig.savefig(out.with_suffix(".png"), dpi=200)
-    plt.close(fig)
+    plotstyle.save(fig, out, formats=tuple(dict.fromkeys((out.suffix.lstrip(".") or "pdf", "png"))))
     return out
 
 
@@ -118,9 +118,11 @@ def main() -> None:
     parser.add_argument("--experiment", default="", help="arm prefix selecting one experiment; blank takes all")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/tokens_per_kernel.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/tokens_per_kernel.csv"))
+    cost.add_arguments(parser)
     args = parser.parse_args()
 
-    frame = upgrade_frame(pd.read_csv(args.observations, low_memory=False))
+    card = cost.resolve(args.cost_model, args.cost_models)
+    frame = cost.priced(population.on_platform(upgrade_frame(pd.read_csv(args.observations, low_memory=False))), card)
     if args.experiment:
         frame = frame[frame["arm"].astype(str).str.startswith(args.experiment)]
     frame = frame.assign(model=frame["arm"].astype(str).map(experiment_tags.model_of))

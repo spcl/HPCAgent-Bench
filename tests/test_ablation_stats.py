@@ -766,22 +766,17 @@ def test_the_rank_interval_matches_the_library_definition(ablation_stats) -> Non
 
 
 def seed_observations(path: pathlib.Path, rows: list[tuple[str, str, str, int, int]]) -> None:
-    """An extracted observations DB of task rows only: (arm, benchmark, run_id, tokens, ts_ms).
+    """An extracted observations DB of task rows only: (arm, benchmark, run_id, tokens, ts_ms), each
+    total stated as fresh input alone so every cost card prices it at ``tokens``.
 
     Written by the one extractor, :mod:`hpcagent_bench.observations_extract`."""
     records = []
     for arm, benchmark, run_id, tokens, ts_ms in rows:
         record = dict.fromkeys(observations_extract.OBSERVATION_FIELDS, "")
         record.update(
-            row_kind="task",
-            arm=arm,
-            benchmark=benchmark,
-            run_root="rr",
-            job=1,
-            run_id=run_id,
-            tokens=tokens,
-            ts_ms=ts_ms,
-        )
+            row_kind="task", arm=arm, benchmark=benchmark, run_root="rr", job=1, run_id=run_id, tokens=tokens, ts_ms=ts_ms,
+            tokens_fresh_input=tokens, tokens_cached_input=0, tokens_output=0,
+        )  # fmt: skip
         records.append(record)
     observations_extract.write_db(path, observations_extract.OBSERVATION_FIELDS, records)
 
@@ -789,8 +784,8 @@ def seed_observations(path: pathlib.Path, rows: list[tuple[str, str, str, int, i
 def test_with_observations_the_cost_half_is_the_task_rows_effective_total(
     ablation_stats: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """USER 2026-09-16: every published token number is EFFECTIVE (the task row, final attempt), so the
-    cost ratio here must be too, and it must come from the one shared reduction rather than from the
+    """Every published token number comes off the task row (final attempt, priced by the cost card),
+    so the cost ratio here must too, and it must come from the one shared reduction rather than from the
     results DB's cumulative billed calls.tokens. Arm ``b`` spent 3x arm ``a`` on the one kernel both
     solved, and its rerun of that kernel is reduced to the LATEST run, not summed."""
     db_a, db_b = tmp_path / "a.db", tmp_path / "b.db"
@@ -814,6 +809,35 @@ def test_with_observations_the_cost_half_is_the_task_rows_effective_total(
         rows = list(csv.DictReader(pairs))
     pair = next(row for row in rows if row["test"] == "wilcoxon_logspeedup")
     assert float(pair["rho_cost"]) == pytest.approx(3.0), pair
+
+
+@pytest.mark.parametrize(("card", "expected"), [(None, 2.0), ("effective", 1.0)])
+def test_the_cost_half_prices_the_task_rows_with_the_billed_card_by_default(
+    ablation_stats: ModuleType, tmp_path: pathlib.Path, card: str | None, expected: float
+) -> None:
+    """Both arms read 100 fresh tokens; ``b`` also re-read 1000 cached. Billed (1, 0.1, 1): 100 vs
+    200, rho_cost 2.0; effective (1, 0, 1): 100 vs 100, rho_cost 1.0."""
+    db_a, db_b = tmp_path / "a.db", tmp_path / "b.db"
+    seed_db(db_a, [("k1", 1, 2.0)])
+    seed_db(db_b, [("k1", 1, 4.0)])
+    records = []
+    for arm, cached in (("a", 0), ("b", 1000)):
+        record = dict.fromkeys(observations_extract.OBSERVATION_FIELDS, "")
+        record.update(
+            row_kind="task", arm=arm, benchmark="k1", run_root="rr", job=1, run_id=f"r-{arm}", tokens=100, ts_ms=1,
+            tokens_fresh_input=100, tokens_cached_input=cached, tokens_output=0,
+        )  # fmt: skip
+        records.append(record)
+    observations = tmp_path / "observations.db"
+    observations_extract.write_db(observations, observations_extract.OBSERVATION_FIELDS, records)
+    prefix = tmp_path / "card"
+    argv = [f"--arm=a={db_a}", f"--arm=b={db_b}", f"--observations={observations}", "--problems=1", f"--out={prefix}"]
+
+    assert ablation_stats.main(argv + ([f"--cost-model={card}"] if card else [])) == 0
+
+    with open(f"{prefix}{ablation_stats.PAIRS_SUFFIX}", newline="") as pairs:
+        pair = next(row for row in csv.DictReader(pairs) if row["test"] == "wilcoxon_logspeedup")
+    assert float(pair["rho_cost"]) == pytest.approx(expected), pair
 
 
 @pytest.mark.parametrize("server", ["optarena", "hpcagent-bench", "hpcagent_bench"])

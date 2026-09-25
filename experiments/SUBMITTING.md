@@ -1,221 +1,170 @@
 # Submitting a campaign on Beverin
 
-Node budget, arm sizing, and how to watch and cancel a running campaign. Every command below runs
-from `experiments/`.
+How to size, submit, watch and cancel a campaign arm, and how to build and promote the container
+images it runs on. Commands run from `experiments/` unless a block says otherwise.
+
+An arm is one `.env.<arm>` file: role sizes, problems list, language and treatment all come from
+it. [`experiments/README.md`](experiments/README.md) explains arms and the role split;
+[`experiments/AMD-SUBMISSION.md`](experiments/AMD-SUBMISSION.md) lists the `submit-<family>.sh`
+scripts; [`experiments/LAUNCH.md`](experiments/LAUNCH.md) covers owed work, recovery and regrades.
+
+## Binding rules
+
+- **Budget: at most 36 nodes in flight**, shared with the other team on the machine.
+- **Partition `mi300`.** `beverin.sbatch` defaults to it. Another partition needs
+  `PARTITION=<p>` and a `layers/partition-<p>.env` layer (e.g. `partition-mi200.env`).
+- **Never pass `--nodes` by hand.** `arm_nodes.sh` sums `INFERENCE_NODES + AGENT_NODES +
+  JUDGE_NODES` from the arm's `.env`; `beverin.sbatch` exits 2 when the allocation disagrees.
+- **Never pass `--account`/`-A`.** `scripts/cscs/account_env.sh` resolves the account from your
+  Slurm associations and exports `SBATCH_ACCOUNT`, so every job of a campaign bills one account.
+- **Size judges from the grading rate.** A judge rank sustains about 200 grades per hour (a grade
+  takes 16-21 s); plan with 170:
+
+      JUDGE_NODES = max(1, ceil(peak_grades_per_hour / (170 * JUDGES_PER_NODE)))
+
+## Submit
+
+Each family script stages its arms' `.env` files, renders the problem lists, and submits through
+`submit_common.sh`, which hands `beverin.sbatch` a read-only snapshot of the env and problems file.
+Read the script header for its knobs.
 
 ```bash
-cd experiments
+SUBMIT=0 ./submit-llrblind.sh     # dry run: prints each arm and node count, touches no queue
+./submit-llrblind.sh              # submit; HOLD=1 submits held, PRIORITY=<family> sets --nice
 ```
 
-An arm is one `.env.<arm>` file: role sizes, the problems list, the language and the treatment all
-come from it. See [`experiments/README.md`](README.md) for what an arm is and how the
-role split works, and [`experiments/AMD-SUBMISSION.md`](AMD-SUBMISSION.md) for the
-current `submit-<family>.sh` scripts and `run_campaign.sh`, which this page assumes.
-
-## Node budget
-
-Hard ceiling: **36 nodes in flight**, agreed with the team sharing the machine.
-
-Node counts are per arm, not per model: read `INFERENCE_NODES`, `AGENT_NODES` and `JUDGE_NODES`
-from the arm's own `.env.<arm>` file rather than assuming a fixed split.
-
-`JUDGE_NODES` is sized from the measured grading rate, not picked, and the unit is nodes, not
-judges: a node runs `JUDGES_PER_NODE` judges, one per socket.
-
-    JUDGE_NODES = ceil(peak grades-per-hour / (170 x JUDGES_PER_NODE)), minimum 1
-
-170 is one rank's measured rate with headroom: a grade compiles, runs and times a submission in
-16-21s, so a rank sustains around 200 grades per hour.
-
-**Never pass `--nodes` yourself.** `arm_nodes.sh` derives it from the arm's own `.env`, and
-`beverin.sbatch` exits 2 before the run starts if the allocation disagrees with
-`INFERENCE_NODES + AGENT_NODES + JUDGE_NODES`.
-
-**No `--account` on beverin.** Slurm now refuses to queue an accountless job at all
-(`ERROR: you must specify a project account (-A <account>)`); `scripts/cscs/account_env.sh`
-resolves the account once, from your own Slurm associations, and exports `SBATCH_ACCOUNT` /
-`SLURM_ACCOUNT` / `SALLOC_ACCOUNT` so every job already has one. A submitter naming `-A`
-themselves is still what lets jobs split across two project accounts depending on which command
-line was typed.
-
-## Submitting
-
-Each campaign family owns a `submit-<family>.sh` script in `experiments/` that builds or points at
-a problem list, picks the `.env.<arm>` files for its arms, and submits each through
-`beverin.sbatch`; `run_campaign.sh <variant> [sbatch args...]` is the generic single-arm entry
-point several of them use. Read the header comment of the script you are running for its exact
-knobs (model, language, leg) and see
-[`experiments/AMD-SUBMISSION.md`](AMD-SUBMISSION.md) for the current family list.
-
-To submit one arm directly against an existing `.env.<arm>` file:
+One arm straight from an existing env file:
 
 ```bash
-sbatch --nodes="$(. ./arm_nodes.sh; arm_nodes .env.<arm>)" \
-    --time=08:00:00 --job-name=<arm> \
+. ./arm_nodes.sh
+sbatch --nodes="$(arm_nodes .env.<arm>)" --time="$(arm_walltime .env.<arm> 40)" \
+    --partition=mi300 --job-name=<arm> \
     --export=ALL,CLUSTER_ENV_FILE="$PWD/.env.<arm>" beverin.sbatch
 ```
 
-A smoke run is the same command with the walltime cut, which answers "does a task reach an agent,
-get graded, and come back" before you commit a wave.
+`arm_walltime <env> <kernels>` covers every agent batch plus `STAGING_HOURS` (default 3). A smoke
+run is the same command with a short `--time`: it shows whether a task reaches an agent, gets
+graded, and comes back.
 
-## Before you submit
-
-**The skills packet is FROZEN INTO the problems file.** `make_problems.py` inlines the `SKILL.md`
-bodies at generation time; a running arm never re-reads the pages. The submitter refuses a stale
-list rather than grading a treatment nobody meant to run, so an edited page shows up as a refused
-submit; regenerate the problems list and re-run the arm's `submit-*.sh` when a skills page changes.
-
-Then confirm nothing is already running and the budget has room:
-
-```bash
-squeue -u "$USER" -o "%.10i %.30j %.9T %.10M %.5D"
-```
-
-## Watching a run
+Before submitting, check the queue and the budget:
 
 ```bash
 squeue -u "$USER" -o "%.10i %.30j %.9T %.10M %.5D %R"
+```
+
+## Submission modes
+
+The agent runs in one of three modes (paper names, code names in parentheses):
+
+| mode | `/score` | `/submit` | keys |
+|---|---|---|---|
+| Open (`multi`) | unlimited | unlimited, last verified one counts | `AGENT_SINGLE_SUBMISSION=0`, `AGENT_SUBMISSION_POLICY_FILE=submission-multi.md` |
+| Single (`single`) | unlimited | once | `AGENT_SINGLE_SUBMISSION=1`, `AGENT_SUBMISSION_POLICY_FILE=submission-single.md` |
+| Blind (`blind`) | none | once | Single's keys with `submission-blind.md`, plus `AGENT_SCORE_TOOL=0` and `HPCAGENT_BENCH_SERVICE_SCORE_ENABLED=0` |
+
+`layers/common.env` defaults to Single. An arm that wants Open or Blind pins both keys itself;
+Blind also needs the judge-side switch, or an agent's own HTTP call still reaches `/score`.
+[`docs/agents_and_tool_access.md`](docs/agents_and_tool_access.md) lists the tool gates.
+
+## Watch
+
+`RUN_ROOT` comes from the arm's `.env` (`$SCRATCH/hpcagent-bench-runs/<experiment>-<stamp>`); the
+run directory is `$RUN_ROOT/<jobid>`.
+
+```bash
+RUN_ROOT=... ./arm_status.sh                       # per arm: state, MCP connects, turns, tok/s
 sacct -j <jobid> -o JobID,JobName%30,State,Elapsed,ExitCode --parsable2
+scontrol show job <jobid> | grep -E 'StdOut|StdErr' # the job's own log paths
 
-# the job's own logs
-tail -f "${SCRATCH}/hpcagent-bench-runs/slurm/beverin-services-<jobid>.err"
+# engine decoding? requests but zero lines = wedged engine
+grep -c 'Avg generation throughput' <stdout-log>
 
-# is the engine actually decoding?  zero of these after requests arrive = a wedged engine
-grep -c 'Avg generation throughput' "${SCRATCH}/hpcagent-bench-runs/slurm/beverin-services-<jobid>.out"
+# agents got their tools? want one "connected" per agent, no "failed"
+grep -ho '"status":"[a-z]*"' "$RUN_ROOT/<jobid>"/agents/node-*/*/claude.log | sort | uniq -c
 
-# did the agents get their tools?  an agent whose MCP server failed at init never submits,
-# burns its whole budget in api_retry, and still exits rc=0 -- so this is not visible in sacct.
-# Want one "connected" per agent and no "failed"; a log with neither has not started yet.
-grep -ho '"status":"[a-z]*"' <RUN_ROOT>/<jobid>/agents/node-*/*/claude.log | sort | uniq -c
-
-# outcome counts, live, from the per-rank judge shards
-python3 - <<'PY'
-import glob, sqlite3, collections
+# live outcome counts from the per-rank judge shards
+python3 - "$RUN_ROOT/<jobid>" <<'PY'
+import collections, glob, sqlite3, sys
 counts = collections.Counter()
-for shard in glob.glob('<RUN_ROOT>/<jobid>/judge/rank-*/*.db'):
-    con = sqlite3.connect(f'file:{shard}?mode=ro', uri=True)
-    for route, status, n in con.execute('select route, status, count(*) from calls group by route, status'):
-        counts[(route, status)] += n
+for shard in glob.glob(f"{sys.argv[1]}/judge/rank-*/*.db"):
+    con = sqlite3.connect(f"file:{shard}?mode=ro", uri=True)
+    counts.update({(r, s): n for r, s, n in con.execute("select route, status, count(*) from calls group by 1, 2")})
     con.close()
 for key in sorted(counts):
     print(key, counts[key])
 PY
 ```
 
-`RUN_ROOT` is `$SCRATCH/hpcagent-bench-runs` (see the arm's `.env`).
-
-Completion counts matter: an arm cut off by wall clock is `COMPLETED` but did not finish its
-full kernel list. Check the counts before treating an arm as done.
-
-After the job, fold the per-rank judge DBs into one and read the balance report:
+An arm cut off by its wall clock still reads `COMPLETED`; check the counts before calling it done.
+After the job, merge the judge shards and read the balance report:
 
 ```bash
-python3 merge_results.py  <RUN_ROOT>/<jobid>
-python3 monitor_report.py <RUN_ROOT>/<jobid>/monitor
+python3 merge_results.py  "$RUN_ROOT/<jobid>"
+python3 monitor_report.py "$RUN_ROOT/<jobid>/monitor"
 ```
 
-## Cancelling
+## Cancel
 
 ```bash
 scancel <jobid> [<jobid> ...]
-scancel -u "$USER" --name=<arm>               # by arm name, since every arm is --job-name'd
+scancel -u "$USER" --name=<arm>      # every arm is --job-name'd
 ```
 
-Judge shards written before the cancel survive under `<RUN_ROOT>/<jobid>/judge/`, so a cancelled
-arm still carries partial results.
+Judge shards written before the cancel stay under `$RUN_ROOT/<jobid>/judge/`.
 
-## Known traps
+## Traps
 
-- **GLM-5.3 arms cannot be submitted (open).** All of them -- every `<campaign>:glm53`
-  base and the `llrblind-glm53-*` and `cpf-llr-focus40-glm53-*` arms -- set
-  `INFERENCE_CE_ENV=sglang-candidate`, and **there is no such image**. It is the one sglang build
-  whose image can load GLM-5.3: the DeepSeek weight loader's `format_ue8m0` reads are patched into
-  the package at BUILD time, while every other sglang EDF reaches the same patch through a
-  `PYTHONPATH` under `${SCRATCH}` that `role_mounts` drops for the inference role, so the loader
-  dies before the model is up.
+- **The skills packet is frozen into the problems file.** `make_problems.py` inlines each
+  `SKILL.md` when it renders the list; after editing a skills page, re-run the arm's
+  `submit-*.sh` so the list is rendered again.
+- **The code tree is frozen at job START, not at submit.** `run_cluster.sh` copies the checkout to
+  `.frozen/job-<id>` beside `RUN_ROOT` when the job starts; a PENDING job picks up every commit
+  that lands before then. Data roots (generated lowerings, packs) stay on the live tree.
+- **Walltime can be lowered, never raised** (`scontrol update ... TimeLimit=` is denied upward).
+  Submit with slack; a tight arm has to be cancelled and resubmitted.
+- **A dependency can be added only while the job is PENDING.**
+- **Arms compare only under identical serve config.** Changing a model layer mid-campaign splits
+  the A/B.
+- **Requests logged but zero `Avg generation throughput` means a wedged engine.** Cancel it; it
+  would burn its whole wall clock.
+- **An agent whose MCP server failed at init never submits yet exits rc=0**, so `sacct` looks
+  healthy. Check the `connected` count; `AGENT_START_CONCURRENCY` (default 8) staggers starts.
+- **Never write over a live `.sqsh`.** Promote a new image by rename (below).
 
-  It was never installer-managed, so `install_edfs.sh` has never repointed it, and the rendered
-  copy in `~/.edf` named an image a storage migration removed. That copy was taken out of
-  `~/.edf` rather than left resolving to nothing.
+## Images
 
-  **Fixing it needs a REBUILD, not a re-render** -- re-rendering would point at bytes that do not
-  exist. Build the sglang role, promote it, then render the EDF, then re-check these 11 arms. No
-  other model is affected: qwen38, oss120b and kimi27sglang all run on
-  `hpcagent-bench-sglang-mi300-latest` or the vllm EDF.
-
-- **A walltime can be lowered but never raised.** `scontrol update jobid=<id> TimeLimit=<t>`
-  answers *"Access/permission denied"* when `<t>` is longer than the current limit, so an arm
-  submitted too tight has to be cancelled and resubmitted, losing its warmup. Submit with slack.
-- **A dependency can only be added while the job is PENDING.** Once it starts,
-  `scontrol update jobid=<id> dependency=...` answers *"Job is no longer pending execution"* and
-  the two run concurrently.
-- **Never edit a file a running arm reads.** Slurm snapshots the BATCH SCRIPT at submit time, so
-  editing `beverin.sbatch` does not reach a queued job -- but `run_cluster.sh`, `agent_driver.py`,
-  the skills pages, the manifests and the problems lists are all read LIVE from
-  `HPCAGENT_BENCH_REPO`, which is the submitting worktree. A `.env.<arm>` is read when the job
-  STARTS, not when you submit it, so moving one breaks a pending arm.
-- **Arms are only comparable if the serve config is identical.** Changing an `.env.<arm>` file
-  mid-campaign splits the A/B.
-- **An arm that logs requests but zero `Avg generation throughput` is wedged, not slow.** It will
-  burn its whole wall clock. Kill it.
-- **An agent whose MCP server failed at init never submits** and still exits rc=0, so the arm
-  looks healthy in `sacct`. This has cost 22-25% of an arm's first wave. `AGENT_START_CONCURRENCY`
-  staggers the starts; check the connected count rather than assuming.
-- **Image patches rewrite the image IN PLACE**, so never let one land while arms are queued
-  against it.
-- **kimi27code is not a viable family.** At campaign context it needs ~4.1 s per forward pass;
-  its envs and probes were removed. Anything reintroducing it needs a decode gate first.
-
-## Infrastructure jobs (images, gates, weights)
-
-Not campaign arms. One to four nodes, and what you submit when the question is "can the campaign
-move", not "how did the model score".
+Infrastructure jobs, one node each, run from `containers/cluster/ce-images/`. Each role directory
+(`judge-agent-amd`, `sglang`, `sglang-mi200`, `vllm`, ...) holds a Dockerfile and `build.sbatch`.
+`build_and_verify.sbatch` builds a candidate and verifies it in one job, so a build that fails
+verification never reports success:
 
 ```bash
-cd containers/images
-
-# One Dockerfile per role, and IMAGE_DIR must be spelled: without it build.sbatch exits in
-# about a second and the job looks like it ran. Each lands as <role>-candidate.sqsh.
-#
-# The judge image pins compilers by MAJOR version only (gcc 16, LLVM 22) because the PPA serves
-# 16.0.1, not a fixed point release; the build records what it resolved to in
-# /usr/local/share/toolchain-provenance.
-sbatch --export=ALL,IMAGE_DIR=$PWD/judge-agent-amd judge-agent-amd/build.sbatch
-sbatch --export=ALL,IMAGE_DIR=$PWD/sglang         sglang/build.sbatch
-sbatch --export=ALL,IMAGE_DIR=$PWD/vllm           vllm/build.sbatch
+cd "$HPCAGENT_BENCH_REPO"
+IMAGE_DIR=containers/cluster/ce-images/judge-agent-amd \
+    sbatch containers/cluster/ce-images/build_and_verify.sbatch
+# mi200 variant
+IMAGE_DIR=containers/cluster/ce-images/sglang-mi200 \
+    sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 \
+    containers/cluster/ce-images/build_and_verify.sbatch
 ```
 
-`inference/build/` is the multi-phase chain that produced the upstream pulls these Dockerfiles
-replaced. It is kept because arms are still running on those images, not because it is how a new
-image gets built.
-
-Promotion is verify, then rename. There is ONE version per role, so the rename is what publishes.
-`promote_image.sh` does both the rename and the `.digest`/`.sha256` sidecar move, then repoints
-the EDFs:
+A cold judge build takes up to the 24 h partition limit (gcc 16 and LLVM 22 from source, cached in
+the spack buildcache on scratch afterwards). Candidates land as
+`$SCRATCH/ce-images/*-candidate.sqsh`. Re-verify one alone:
 
 ```bash
-sbatch --export=ALL,IMAGE=$SCRATCH/ce-images/hpcagent-bench-ce-amd-mi300-candidate.sqsh,\
-PROFILE=judge-agent-amd verify_image.sbatch     # 0 failures, nothing resolving outside
-./promote_image.sh judge-agent-amd              # or --all for every role with a candidate
+IMAGE=$SCRATCH/ce-images/hpcagent-bench-ce-amd-mi300-candidate.sqsh PROFILE=judge-agent-amd \
+    sbatch containers/cluster/ce-images/verify_image.sbatch
 ```
 
-A rename is safe while arms are running: a mounted squashfs is held by its inode, so a job that
-already started keeps reading the bytes it opened. What is never safe is writing over the file in
-place, which is why build.sbatch refuses to when an EDF mounts it.
-
-### Weights: iopsstor and striping (already done -- verify, do not redo)
-
-`run_cluster.sh` puts `HF_HOME` and `VLLM_CACHE_ROOT` on iopsstor (9.45 GB/s at 16 readers vs
-0.83 on the general scratch, measured on the retired Lustre mount) and sets a PFL default on the
-hub dir: narrow below 64 MiB, 16 OSTs at 4 MiB
-above. Every large blob of the served models is striped 16. Re-check with:
+Promotion renames the candidate over the live name, moves its `.digest`/`.sha256` sidecars, and
+repoints the EDFs. There is one version per role, so the rename publishes:
 
 ```bash
-lfs getstripe -c <blob> | head -1     # head, NOT tail: getstripe prints a trailing blank line
+cd containers/cluster/ce-images
+DRY_RUN=1 ./promote_image.sh --all     # show what would move
+./promote_image.sh judge-agent-amd     # one role; --all for every role with a candidate
 ```
 
-Only if that ever reports a narrow count, and only while NOTHING is reading the model:
-
-```bash
-lfs migrate -c 16 -S 4M <blob>
-```
+A rename is safe while arms run: a mounted squashfs is held by its inode, so a started job keeps
+its bytes and only new jobs see the new image.

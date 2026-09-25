@@ -39,10 +39,10 @@ def load_script() -> types.ModuleType:
 plot = load_script()
 
 #: Per-kernel speed-ups whose geomean and median disagree, at (or above) the interval floor
-#: (summary.MIN_INTERVAL_SAMPLES = 5) so ``rules.require_interval`` does not reject the whole
-#: table for being too thin to say anything either way: four kernels flat at 1.0x, one at 1000x.
-#: Median = 1.0x (log2 = 0); geomean = 1000**0.2 (log2 = 3.32...).
-ASYMMETRIC_SPEEDUPS: tuple[float, ...] = (1.0, 1.0, 1.0, 1.0, 1000.0)
+#: (summary.MIN_PAIRS_FOR_INTERVAL = 6) so ``rules.require_interval`` does not reject the whole
+#: table for being too thin to say anything either way: five kernels flat at 1.0x, one at 1000x.
+#: Median = 1.0x (log2 = 0); geomean = 1000**(1/6) (log2 = 1.66...).
+ASYMMETRIC_SPEEDUPS: tuple[float, ...] = (1.0, 1.0, 1.0, 1.0, 1.0, 1000.0)
 
 
 def arm_frame(speedups: tuple[float, ...]) -> pd.DataFrame:
@@ -83,6 +83,9 @@ def arm_frame(speedups: tuple[float, ...]) -> pd.DataFrame:
                 "speedup": None,
                 "ts_ms": 2,
                 "tokens": 100.0,
+                "tokens_fresh_input": 100.0,
+                "tokens_cached_input": 0.0,
+                "tokens_output": 0.0,
                 "baseline_ns": 0.0,
                 "native_ns": 0.0,
             }
@@ -101,10 +104,8 @@ def test_an_arm_points_speed_up_is_the_geomean_over_kernels_not_the_median() -> 
     assert row.log2_speedup != pytest.approx(median_log2)
 
 
-def test_an_arm_points_tokens_stay_the_median_over_kernels() -> None:
-    """Tokens are not a ratio, so the summary rule that moved speed-up to the geomean does not
-    apply here -- the spend axis stays the median :func:`hpcagent_bench.stats.population.kernel_medians`
-    already reported."""
+def test_an_arm_points_tokens_are_the_geomean_over_kernels() -> None:
+    """Paper rule: the spend axis is the geomean of billed tokens over kernels, 100 on every kernel here."""
     frame = arm_frame(ASYMMETRIC_SPEEDUPS)
     table = plot.arm_points(frame)
     row = table.iloc[0]

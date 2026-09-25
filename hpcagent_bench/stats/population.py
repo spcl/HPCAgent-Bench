@@ -330,6 +330,42 @@ def device_resident(frame: "pd.DataFrame", label: str = "") -> "pd.DataFrame":
     return kept
 
 
+#: The machine a row was TIMED on. Every row a campaign's own judge recorded was timed on MI300A; a
+#: second grade of the same answer on another machine (``observations_extract --platform-regrades``)
+#: is a row of its own BESIDE it, never a replacement. A blank cell, or a frame without the column,
+#: is MI300A.
+PLATFORM_COLUMN: str = "platform"
+DEFAULT_PLATFORM: str = "mi300a"
+#: The Daint regrade: Grace CPU and H100 GPU (HIP built on its CUDA backend).
+GH200_PLATFORM: str = "gh200"
+
+
+def platform_of(value: object) -> str:
+    """The platform a recorded ``platform`` cell names; :data:`DEFAULT_PLATFORM` when blank."""
+    return str(value).strip() if is_named(value) else DEFAULT_PLATFORM
+
+
+def on_platform(frame: "pd.DataFrame", platform: str = DEFAULT_PLATFORM) -> "pd.DataFrame":
+    """The rows of ``frame`` timed on ``platform``. Every observation reader selects ONE platform
+    here (:func:`hpcagent_bench.experiments.read_observations`), so a GH200 re-timing of an answer
+    never enters an MI300A statistic as a second answer."""
+    if PLATFORM_COLUMN not in frame.columns:
+        return frame if platform == DEFAULT_PLATFORM else frame.iloc[0:0]
+    return frame[frame[PLATFORM_COLUMN].map(platform_of) == platform]
+
+
+def one_platform(values: Iterable[object], label: str = "") -> str:
+    """The single platform a slice was timed on, or raise: a speed-up on GH200 and one on MI300A
+    are two measurements of one answer, and a mean over both counts it twice."""
+    found = sorted({platform_of(value) for value in values})
+    if len(found) > 1:
+        prefix = f"{label}: " if label else ""
+        raise MixedPopulationError(
+            f"{prefix}this slice mixes platforms {found}; select one with population.on_platform"
+        )
+    return found[0] if found else DEFAULT_PLATFORM
+
+
 #: The command that turns an UNSTAMPED row into a mwd-v2 one -- named in every refusal below, so
 #: the error tells a caller what to run rather than just what is wrong.
 MIGRATION_COMMAND: str = "hpcagent-bench regrade (then hpcagent-bench extract --regrades)"
@@ -645,6 +681,8 @@ def graded_episode_rows(
     # not, which is what keeps `triton` and `triton-device` rows out of one mean.
     if PROTOCOL_COLUMN in answers.columns:
         one_bracket(answers[PROTOCOL_COLUMN].tolist(), label="graded episodes")
+    if PLATFORM_COLUMN in answers.columns:
+        one_platform(answers[PLATFORM_COLUMN].tolist(), label="graded episodes")
     return scored_answers(answers)
 
 
@@ -885,25 +923,14 @@ def kernel_tokens(
 
 
 def kernel_medians(frame: "pd.DataFrame", *, repeats: RepeatPolicy = "latest") -> dict[str, float] | None:
-    """One slice's point over its KERNELS: the GEOMETRIC MEAN speed-up and the median token spend,
-    each with its own interval (SC15 Rules 5 and 7), and the two median times every speed-up is the
-    quotient of (Rule 4). ``None`` when the slice has no answer or no spend.
-
-    SPEED-UP IS THE GEOMETRIC MEAN, never a median: a ratio's overall value is its geometric mean
-    (:func:`hpcagent_bench.stats.summary.geomean_interval`, log-t from
-    :data:`~hpcagent_bench.stats.summary.LOG_T_MIN_SAMPLES` kernels up and a log-space bootstrap
-    below it --
-    the same statistic :class:`~hpcagent_bench.stats.population.ArmAggregate` reports as its
-    headline). A median of ``log2(speed-up)`` values happens to equal ``log2`` of the geometric mean
-    only when the per-kernel exponents are symmetric; in general the two disagree, and every figure
-    that reads this dict as "the arm's overall speed-up" would be reading a median wearing a
-    geomean's label. TOKENS ARE NOT A RATIO, so the median stays the median.
+    """One slice's point over its KERNELS: the GEOMETRIC MEAN speed-up and the GEOMETRIC MEAN token
+    spend, each with its 95% log-t interval (:func:`hpcagent_bench.stats.summary.geomean_interval`,
+    withheld below ``summary.MIN_PAIRS_FOR_INTERVAL`` kernels), and the two median times every
+    speed-up is the quotient of (SC15 Rule 4). ``None`` when the slice has no answer or no spend.
 
     One value per kernel on both axes (:func:`kernel_answers`, :func:`kernel_tokens`), so the two
-    numbers describe one population. A slice of fewer than
-    :data:`~hpcagent_bench.stats.summary.MIN_INTERVAL_SAMPLES` kernels gets a NaN interval on BOTH
-    axes -- the geomean's own t-interval is otherwise defined from 2 kernels on, which is thinner
-    than what the tokens bootstrap already refuses to report.
+    numbers describe one population. Tokens are whatever card the caller priced ``frame`` with
+    (:func:`hpcagent_bench.stats.cost.priced`).
     """
     answers = kernel_answers(frame, repeats=repeats)
     answers = answers[answers.speedup > 0]
@@ -911,19 +938,17 @@ def kernel_medians(frame: "pd.DataFrame", *, repeats: RepeatPolicy = "latest") -
     tokens = kernel_tokens(frame, repeats=repeats)
     if answers.empty or tokens.empty:
         return None
-    floor = summary.MIN_INTERVAL_SAMPLES
     speed = summary.geomean_interval(answers.speedup.to_numpy(dtype=float))
-    thin = speed.n < floor
-    speed_low = math.nan if thin or not speed.low > 0.0 else math.log2(speed.low)
-    speed_high = math.nan if thin or not speed.high > 0.0 else math.log2(speed.high)
-    spend = summary.median_ci(tokens.to_numpy(dtype=float), drop=False, warn=False, min_n=floor)
+    speed_low = math.log2(speed.low) if speed.low > 0.0 else math.nan
+    speed_high = math.log2(speed.high) if speed.high > 0.0 else math.nan
+    spend = summary.geomean_interval(tokens.to_numpy(dtype=float))
     return {
         "log2_speedup": math.log2(speed.point),
         "log2_speedup_low": speed_low,
         "log2_speedup_high": speed_high,
-        "tokens": spend[0],
-        "tokens_low": spend[1],
-        "tokens_high": spend[2],
+        "tokens": spend.point,
+        "tokens_low": spend.low,
+        "tokens_high": spend.high,
         # Rule 4: the costs a ratio was taken over, and only a DELIVERED kernel has any.
         "baseline_ns": float(delivered.baseline_ns.median()) if "baseline_ns" in delivered else math.nan,
         "native_ns": float(delivered.native_ns.median()) if "native_ns" in delivered else math.nan,

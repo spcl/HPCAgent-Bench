@@ -1,95 +1,58 @@
-# Local coding agents (zero-cost, sudoless)
+# Local coding agents
 
-Everything here runs **fully local** (no API key, no cloud, $0) on top of
-[Ollama](https://ollama.com), and installs **without sudo**. The canonical model
-is **`qwen2.5-coder:7b`** (chat/edit/agent) with **`qwen2.5-coder:1.5b`** for fast
-autocomplete.
+A fully local agent setup on [Ollama](https://ollama.com): no API key, no cloud, no sudo. The
+default models are `qwen2.5-coder:7b` (chat, edit, agent) and `qwen2.5-coder:1.5b` (autocomplete).
 
-## 1. Set up Ollama + the models (sudoless)
+## Set up Ollama
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh   # or a release tarball unpacked under ~/.local
-ollama serve &
-ollama pull qwen2.5-coder:7b qwen2.5-coder:1.5b
+scripts/install_ollama.sh                                      # reuse or install, start server, pull defaults
+scripts/install_ollama.sh qwen2.5-coder:32b deepseek-coder-v2:16b   # also pull these
 ```
 
-Works on **Linux, WSL, and macOS**. If Ollama is already on `PATH` it is reused;
-otherwise it is installed under `~/.local` (Linux/WSL) or via Homebrew / an
-unpacked app bundle (macOS) -- never touching system dirs.
+The script reuses an `ollama` on `PATH`, else installs under `$HPCAGENT_BENCH_OLLAMA_PREFIX`
+(default `~/.local`). It works on Linux, WSL and macOS.
 
-## 2. Three ways to use it
+## Run the benchmark agent on Ollama
 
-### a) HPCAgent-Bench benchmark agent (the in-harness auto-tuner)
-
-The benchmark loop models an agent as an auto-tuner: it hands the model a kernel
-+ the exact C-ABI signature, gets back an implementation, compiles it, and scores
-correctness + speedup. The Ollama backend needs **no Python package** (it speaks
-HTTP over the stdlib):
+The `ollama` agent talks HTTP through the standard library, so it needs no extra Python package:
 
 ```bash
-python -m hpcagent_bench.cli agent --agent ollama --kernels gemm --languages c
-# HPCAGENT_BENCH_OLLAMA_MODEL / HPCAGENT_BENCH_OLLAMA_HOST override the model / server.
+hpcagent-bench agent ollama --kernels gemm --languages c --preset S
+hpcagent-bench agent ollama --kernels gemm --repair-rounds 3   # feed compile/validation errors back
 ```
 
-### b) and c) third-party editors
+`HPCAGENT_BENCH_OLLAMA_MODEL` and `HPCAGENT_BENCH_OLLAMA_HOST` (or `OLLAMA_HOST`) override the model
+and server. The harness is the loop: it prompts, compiles, validates, and grades; `--repair-rounds`
+caps the propose, compile, validate, repair cycles (default `attempts.max_rounds` in
+`hpcagent_bench/config.yaml`).
 
-Continue.dev and Aider are general-purpose tools this repo does not ship or pin a version of.
-Point either one at the Ollama model above (`ollama/qwen2.5-coder:7b`, or the OpenAI-compatible
-endpoint at `http://localhost:11434/v1`) and follow the vendor's own install docs. What is
-repo-specific is (a) above and the sections that follow.
-
-### What to actually run
-
-On a **no-GPU laptop, Continue.dev is the better fit**: its `1.5b` autocomplete
-feels instant, while a terminal agent does multi-step loops that each cost a few
-seconds -- painful at CPU inference speeds (2-5 tok/s). Use Aider when you want
-autonomous multi-file edits and can tolerate the latency (or have a GPU).
-
-## 3. How a coding agent works (and running until completion)
-
-A coding agent is a **loop around an LLM with tools**:
-
-```
-observe (repo state, errors)  ->  think (LLM)  ->  act (edit file / run shell / run tests)
-        ^---------------------------------------------------------------|
-        repeat until a STOP condition: tests pass, task done, or budget exhausted
-```
-
-The LLM never edits files itself -- it *emits actions* (a diff, a shell command, a
-tool call), the harness executes them, feeds the result back, and loops (the
-**ReAct / tool-use loop**). "Runs until completion" means the stop condition is
-automatic (a passing test suite, or a self-declared "done").
-
-For an autonomous local coder, run a mature agent in non-interactive mode rather
-than hand-rolling the loop:
-
-- **Aider, scripted** -- the simplest turnkey option for a local repo:
-  ```bash
-  aider --model ollama/qwen2.5-coder:7b --yes-always --auto-test \
-        --test-cmd "pytest -q" --message "implement X and make the tests pass"
-  ```
-  `--yes-always` removes the confirm prompts, `--auto-test` re-runs the tests
-  after each edit and feeds failures back -- i.e. it loops until green.
-- **OpenHands / SWE-agent** -- heavier, fully-autonomous agents (sandboxed shell +
-  editor + browser) when you need more than file edits.
-- **Roll-your-own** -- point an OpenAI-style tool-use loop at Ollama's
-  OpenAI-compatible endpoint (`http://localhost:11434/v1`) and loop on a
-  `run_tests` tool until it returns 0. Only worth it for full control.
-
-For the **HPCAgent-Bench benchmark**, the harness *is* the loop: `agent --agent ollama`
-generates -> compiles -> scores, and the correctness/speedup gate is the stop
-condition. (A propose->compile->repair retry loop that feeds the compiler error
-back to the model is the natural next step here.)
-
-## 4. Sudoless containers with Apptainer
-
-The default container path is the per-hardware OCI image (`hpcagent_bench:cpu`, the `judge`
-target of `containers/images/judge-agent-cpu/Dockerfile`) run with Podman (the default -- rootless and
-daemonless) or Docker (a drop-in on a machine that already runs a daemon); see
-[docs/runtime.md](runtime.md). On a shared / HPC machine with neither, **Apptainer** still runs it
-unprivileged: build the OCI image where you can, save it, and convert the archive:
+To run the measured work in the container while the model stays on the host:
 
 ```bash
-apptainer build hpcagent_bench-cpu.sif docker-archive:hpcagent_bench-cpu.tar
+scripts/run_agent_in_container.sh cpu -- ollama --kernels gemm --preset S
+```
+
+## Third-party editors
+
+Continue.dev and Aider are not shipped or pinned by this repo. Point either at
+`ollama/qwen2.5-coder:7b` or at Ollama's OpenAI-compatible endpoint `http://localhost:11434/v1`,
+following the vendor's install docs. On a CPU-only laptop, Continue.dev with the 1.5b autocomplete
+model stays responsive; multi-step terminal agents run at 2-5 tokens/s there.
+
+A scripted Aider run loops until the tests pass:
+
+```bash
+aider --model ollama/qwen2.5-coder:7b --yes-always --auto-test \
+      --test-cmd "pytest" --message "implement X and make the tests pass"
+```
+
+## Apptainer without an OCI build
+
+On a shared machine without podman or docker, `containers/cpu.def` builds a SIF directly
+([runtime.md](runtime.md) covers the OCI path):
+
+```bash
+apptainer build hpcagent_bench-cpu.sif containers/cpu.def
 apptainer exec hpcagent_bench-cpu.sif python3 scripts/run_benchmark.py -b gemm -f numpy -p S -v
 ```

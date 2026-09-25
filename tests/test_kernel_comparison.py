@@ -14,13 +14,14 @@ itself is :mod:`hpcagent_bench.stats.figures.per_kernel`'s (tests/test_plot_per_
 asserted here is that this figure's data reaches it with the right values and statuses.
 """
 
+import math
 import pathlib
 
 import matplotlib.axes
 import pandas as pd
 import pytest
 
-from hpcagent_bench.stats import palette, population
+from hpcagent_bench.stats import cost, palette, population
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import kernel_comparison, per_kernel, results
 
@@ -96,6 +97,10 @@ def task_rows(
                 "row_kind": "task",
                 "benchmark": benchmark,
                 "tokens": tokens,
+                # the task total as fresh input alone, so every cost card prices it at ``tokens``
+                "tokens_fresh_input": tokens,
+                "tokens_cached_input": 0.0,
+                "tokens_output": 0.0,
                 "ts_ms": ts_ms,
             }
         )
@@ -103,7 +108,10 @@ def task_rows(
 
 
 def observations(rows: list[dict[str, object]]) -> pd.DataFrame:
-    return pd.DataFrame(rows)
+    """``rows`` as an extracted frame, which always carries ``tokens`` and its components (blank off a task row)."""
+    frame = pd.DataFrame(rows)
+    token_columns = ("tokens", *cost.COMPONENT_COLUMNS)
+    return frame.reindex(columns=[*frame.columns, *(c for c in token_columns if c not in frame.columns)])
 
 
 def canon_frame(rows: list[tuple[str, str, float, str]]) -> pd.DataFrame:
@@ -304,20 +312,22 @@ def test_summary_row_carries_the_geomean_of_the_plotted_per_kernel_speedups() ->
 
 def test_summary_row_carries_the_geomean_interval_the_summary_slot_draws() -> None:
     """The table is read apart from the figure, so its summary row has to be the slot's statistic
-    exactly: the geomean over the solved kernels (k3 unanswered is left out) and its 95% interval."""
+    exactly: the geomean over the solved kernels (k3 unanswered is left out); two kernels are below
+    the 6-kernel floor, so the interval is blank in both."""
     frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 8.0})])
     panels, _canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER, include_incomplete=True)
     series = panels["qwen38"][0]
     table = kernel_comparison.table_rows(panels, None, ROSTER)
     row = table[(table.row == kernel_comparison.ROW_SUMMARY) & (table.statistic == "geomean")].iloc[0]
-    point, low, high = per_kernel.summary_point_speedup(kernel_comparison.speedup_series(series, ROSTER).cells)
-    assert (row.value, row.low, row.high, row.n_kernels) == pytest.approx((point, low, high, 2))
-    assert point == pytest.approx(4.0) and low < point < high
+    point, low, high = per_kernel.summary_geomean(kernel_comparison.speedup_series(series, ROSTER).cells)
+    assert (row.value, row.n_kernels) == pytest.approx((point, 2))
+    assert point == pytest.approx(4.0) and math.isnan(low) and math.isnan(high)
+    assert (row.low, row.high) == ("", "")
 
 
-def test_summary_row_carries_the_median_of_the_plotted_per_kernel_tokens() -> None:
-    """The ``row=summary`` ``statistic=median`` row's ``value`` is the median of that series' own
-    per-kernel token totals -- never the geomean, tokens are not a ratio."""
+def test_summary_row_carries_the_geomean_of_the_plotted_per_kernel_tokens() -> None:
+    """The ``row=summary`` ``statistic=geomean_tokens`` row's ``value`` is the geometric mean of that
+    series' own per-kernel token totals (paper rule): (100 * 300 * 200)^(1/3) = 181.71, not the median 200."""
     frame = observations(
         [
             *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0}),
@@ -326,8 +336,8 @@ def test_summary_row_carries_the_median_of_the_plotted_per_kernel_tokens() -> No
     )
     panels, _canon, _dropped = kernel_comparison.build_panels(frame, ROSTER)
     table = kernel_comparison.table_rows(panels, None, ROSTER)
-    summary_row = table[(table.row == kernel_comparison.ROW_SUMMARY) & (table.statistic == "median")].iloc[0]
-    assert summary_row.value == 200.0
+    summary_row = table[(table.row == kernel_comparison.ROW_SUMMARY) & (table.statistic == "geomean_tokens")].iloc[0]
+    assert summary_row.value == pytest.approx(181.71205928)
     assert summary_row.n_kernels == 3
 
 
@@ -476,7 +486,7 @@ def test_git_scicomps_two_conditions_both_read_as_proper_names() -> None:
     Repository" off the registry, but ``kernel`` fell through to the bare arm-name token because
     nothing named it there -- the legend read "kernel" beside "Repository Formulation", one condition
     properly named and the other not."""
-    assert kernel_comparison.condition_label("repo") == "Repository Formulation"
+    assert kernel_comparison.condition_label("repo") == "Git Reformulation"  # registry display name since 2026-09-25
     assert kernel_comparison.condition_label("kernel") == "Bare Kernel"
 
 
@@ -548,8 +558,9 @@ def test_the_kernel_names_are_the_rotated_x_tick_labels_of_the_bottom_panel_only
     try:
         speedup_ax, token_ax = fig.axes
         labels = token_ax.get_xticklabels()
-        assert [label.get_text() for label in labels] == list(ROSTER)
-        assert all(label.get_rotation() == 90.0 for label in labels)
+        # both panels summarize by the geomean, so the statistic is the shared axis' last tick
+        assert [label.get_text() for label in labels] == [*ROSTER, "Geomean"]
+        assert all(label.get_rotation() == 90.0 for label in labels[: len(ROSTER)])
         assert not [label for label in speedup_ax.get_xticklabels() if label.get_text() in ROSTER]
         # and never on a VALUE axis: that one carries the measured quantity, in both panels
         for ax in fig.axes:
@@ -1093,7 +1104,7 @@ def test_llr40_model_panels_reads_the_control_arm_by_default() -> None:
     assert qwen.color == palette.model_color("qwen38")
     # Every model's mark shares ONE shape under the control/median modes -- colour alone tells
     # the series apart, the settled rule this figure shares with the efficacy panels.
-    assert qwen.marker == panels["oss120b"][0].marker == kernel_comparison.LLR40_DEFAULT_MARKER
+    assert qwen.marker == panels["oss120b"][0].marker == palette.CONTROL_MARKER
 
 
 def test_llr40_model_panels_median_mode_aggregates_the_packet_arms_one_model_has() -> None:
