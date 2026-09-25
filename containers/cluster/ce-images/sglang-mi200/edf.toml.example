@@ -48,7 +48,7 @@ NCCL_DEBUG_SUBSYS = "INIT,NET"
 # The same artifact as ../sglang/edf.toml.example, whose comments carry the history. NOT "host":
 # host mode's plugin (/opt/cscs/aws-ofi-ccl-plugin/rocm6) needs libamdhip64.so.6 and this image is
 # ROCm 7.2, so RCCL logs "NET/Plugin: libamdhip64.so.6: cannot open shared object file", finds no
-# "ofi" plugin, and with NCCL_NET pinned in [env] tp8 init dies "NCCL error: invalid usage" (649811).
+# "ofi" plugin, and with NCCL_NET pinned in [env] tp8 init dies "NCCL error: invalid usage".
 com.hooks.netstack.source = "artifact"
 com.hooks.netstack.version = "26.08.1"
 com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
