@@ -12,7 +12,9 @@ line per step plus the failing test ids, in ``<out>/summary.txt``.
 
     python scripts/ci_replay.py --list
     python scripts/ci_replay.py --out ci-out --parallel 8 --skip lint,coverage,container-image/6a
-    python scripts/ci_replay.py --jobs unit --matrix python=3.12
+    python scripts/ci_replay.py --jobs unit --matrix shard=0
+
+A leg with a ``python`` matrix value runs only on that interpreter (the one running this script).
 """
 
 import argparse
@@ -34,7 +36,7 @@ import yaml
 REPO = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOW = REPO / ".github" / "workflows" / "tests.yml"
 EXPRESSION = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
-TEST_STEP = re.compile(r"\bpython3? (-m pytest|-c)\b")
+TEST_STEP = re.compile(r"^\s*python (-m pytest|-c)\b", re.MULTILINE)
 FAILED_LINE = re.compile(r"^(FAILED|ERROR) (\S+)", re.MULTILINE)
 
 
@@ -210,7 +212,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workflow", type=pathlib.Path, default=WORKFLOW)
     ap.add_argument("--jobs", default="", help="comma-separated jobs to run (default: all)")
     ap.add_argument("--skip", default="", help="comma-separated job or job/step-name-substring to skip")
-    ap.add_argument("--matrix", action="append", default=[], help="KEY=VALUE: keep only legs whose matrix matches")
+    ap.add_argument(
+        "--matrix",
+        action="append",
+        default=[],
+        help="KEY=VALUE: keep only legs whose matrix matches (default: python=<this interpreter>)",
+    )
     ap.add_argument("--parallel", type=int, default=4, help="legs run at once")
     ap.add_argument("--timeout-factor", type=float, default=1.5, help="scale every step's timeout-minutes")
     ap.add_argument("--out", type=pathlib.Path, default=REPO / "ci-replay")
@@ -224,6 +231,8 @@ def main(argv: list[str] | None = None) -> int:
     jobs = {j for j in args.jobs.split(",") if j}
     skip = [s for s in args.skip.split(",") if s]
     wanted = [tuple(m.split("=", 1)) for m in args.matrix]
+    if not any(key == "python" for key, _ in wanted):
+        wanted.append(("python", f"{sys.version_info.major}.{sys.version_info.minor}"))
     chosen = []
     for leg in legs(workflow, scratch, args.timeout_factor):
         if (jobs and leg.job not in jobs) or selected(leg, None, skip):
