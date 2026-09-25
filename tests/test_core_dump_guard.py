@@ -38,13 +38,13 @@ def checker_rc(target: pathlib.Path) -> int:
 
 def test_every_tracked_shell_script_disables_core_dumps() -> None:
     """Every .sbatch, .sh and shell shebang: wrappers, login-node helpers and the agent's own tool."""
-    missing = [p for p in check_core_dumps.shell_scripts([]) if check_core_dumps.GUARD not in p.read_text()]
+    missing = [p for p in check_core_dumps.shell_scripts([]) if not check_core_dumps.guarded(p.read_text())]
     assert not missing, f"shell scripts without `{check_core_dumps.GUARD}`: {[str(p) for p in missing]}"
 
 
 def test_every_sbatch_emitter_disables_core_dumps() -> None:
     """A .py/.sh that writes an SBATCH header submits a job too, and the suffix check misses it."""
-    missing = [p for p in check_core_dumps.emitters([]) if check_core_dumps.GUARD not in p.read_text()]
+    missing = [p for p in check_core_dumps.emitters([]) if not check_core_dumps.guarded(p.read_text())]
     assert not missing, f"sbatch emitters without `{check_core_dumps.GUARD}`: {[str(p) for p in missing]}"
 
 

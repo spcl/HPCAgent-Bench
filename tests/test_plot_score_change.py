@@ -1573,8 +1573,8 @@ def test_the_solved_row_is_never_starred_because_the_solved_rate_is_not_tested()
 def test_the_cost_row_is_priced_with_the_billed_card_unless_told_otherwise() -> None:
     control, treated = solved_and_failed_pair()
     cached = {"tokens_cached_input": 1000.0}
-    control = control.assign(**{k: np.where(control.record == "task", v, np.nan) for k, v in cached.items()})
-    treated = treated.assign(**{k: np.where(treated.record == "task", v, np.nan) for k, v in cached.items()})
+    control = control.assign(**{k: np.where(control.row_kind == "task", v, np.nan) for k, v in cached.items()})
+    treated = treated.assign(**{k: np.where(treated.row_kind == "task", v, np.nan) for k, v in cached.items()})
     billed = efficacy_figures.paired_kernels(control, treated)
     effective = efficacy_figures.paired_kernels(control, treated, card=cost.resolve("effective"))
     # billed charges the 1000 cached tokens at a tenth; effective charges them nothing.

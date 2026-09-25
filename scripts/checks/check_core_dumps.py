@@ -45,6 +45,15 @@ import sys
 
 #: The line every shell entry point must carry, and the comment that says why it is there.
 GUARD = "ulimit -c 0"
+#: The guard as it may be spelled: ``ulimit -c 0``, or ``ulimit -S -c 0`` in a file that is SOURCED
+#: into a caller's shell -- the soft limit alone stops the dumps without taking the hard limit away
+#: from a later judge-core arm (:data:`hpcagent_bench.core_dumps.JUDGE`).
+GUARDED = re.compile(r"\bulimit\s+(?:-S\s+)?-c\s+0\b")
+
+
+def guarded(text: str) -> bool:
+    """Whether ``text`` floors the core limit (:data:`GUARDED`)."""
+    return GUARDED.search(text) is not None
 BLOCK = """# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
 # SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
@@ -172,7 +181,7 @@ def main() -> int:
             print(f"core-dumps: {display(path)} re-enables core dumps:", file=sys.stderr)
             for number, line in hits:
                 print(f"  {number}: {line}", file=sys.stderr)
-        if GUARD in text:
+        if guarded(text):
             continue
         if not args.fix:
             offenders.append(path)
@@ -184,7 +193,7 @@ def main() -> int:
         path.write_text("".join(lines), encoding="utf-8")
         print(f"core-dumps: added the guard to {display(path)}")
 
-    emitted = [p for p in emitters(args.paths) if GUARD not in p.read_text(encoding="utf-8", errors="ignore")]
+    emitted = [p for p in emitters(args.paths) if not guarded(p.read_text(encoding="utf-8", errors="ignore"))]
 
     if offenders:
         report(

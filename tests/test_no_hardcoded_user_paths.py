@@ -152,9 +152,6 @@ ALLOW = {
     "containers/inference/serve-private.sbatch::PRESET_PARTITION=mi200": (
         "MI200 serving recipe: the preset is the hardware profile, checked against its partition"
     ),
-    "statistics/gate_sensitivity.py::/audit-20260918": (
-        "an error message naming where the per-cell regrade ran; statistics/ is another change set's"
-    ),
 }
 
 
