@@ -273,6 +273,48 @@ def backfill_packets(dest: sqlite3.Connection) -> int:
     return written
 
 
+def map_arms(counts: dict[str, int]) -> tuple[dict[str, Identity], list[tuple[str, int, str]], int]:
+    """``(arm -> identity, [(arm, rows, why)] that do not parse, rows of unattributed arms)``."""
+    mapping: dict[str, Identity] = {}
+    unmapped: list[tuple[str, int, str]] = []
+    skipped = 0
+    for arm, n in sorted(counts.items()):
+        try:
+            tags = parse_arm(arm)
+        except ValueError as exc:
+            unmapped.append((arm, n, str(exc)))
+            continue
+        if tags is None:
+            skipped += n
+            continue
+        mapping[arm] = tags
+    return mapping, unmapped, skipped
+
+
+def copy_shard(
+    dest: sqlite3.Connection,
+    path: pathlib.Path,
+    identity: Callable[[str], Identity | None],
+    written: collections.Counter[str],
+) -> None:
+    """Copy one source shard into ``dest``, counting rows per table into ``written``."""
+    src = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        present = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        # `runs` FIRST: every measurement row joins to it, so a shard that fails halfway
+        # leaves identified rows rather than orphans.
+        seen: set[str] = set()
+        for table in (t for t in RUN_TABLES if t in present):
+            seen.update(str(r[0]) for r in src.execute(f"SELECT DISTINCT run_id FROM {table}"))
+        written["runs"] += write_runs(dest, seen, identity)
+        for table in TABLES:
+            if table in present:
+                n, _dropped = copy_table(dest, src, table, identity)
+                written[table] += n
+    finally:
+        src.close()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("sources", nargs="+", help="run roots or individual result DBs")
@@ -291,19 +333,7 @@ def main() -> None:
         sys.exit("no result DBs under the given sources")
     counts = read_arms(paths)
 
-    mapping: dict[str, Identity] = {}
-    unmapped: list[tuple[str, int, str]] = []
-    skipped = 0
-    for arm, n in sorted(counts.items()):
-        try:
-            tags = parse_arm(arm)
-        except ValueError as exc:
-            unmapped.append((arm, n, str(exc)))
-            continue
-        if tags is None:
-            skipped += n
-            continue
-        mapping[arm] = tags
+    mapping, unmapped, skipped = map_arms(counts)
 
     width = max((len(a) for a in mapping), default=0)
     for arm, tags in sorted(mapping.items(), key=lambda kv: kv[1]):
@@ -329,21 +359,7 @@ def main() -> None:
     try:
         dest.execute("PRAGMA foreign_keys = OFF")
         for path in paths:
-            src = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-            try:
-                present = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-                # `runs` FIRST: every measurement row joins to it, so a shard that fails halfway
-                # leaves identified rows rather than orphans.
-                seen: set[str] = set()
-                for table in (t for t in RUN_TABLES if t in present):
-                    seen.update(str(r[0]) for r in src.execute(f"SELECT DISTINCT run_id FROM {table}"))
-                written["runs"] += write_runs(dest, seen, identity)
-                for table in TABLES:
-                    if table in present:
-                        n, _dropped = copy_table(dest, src, table, identity)
-                        written[table] += n
-            finally:
-                src.close()
+            copy_shard(dest, path, identity, written)
             dest.commit()
         written["packets"] = backfill_packets(dest)
         dest.execute("PRAGMA foreign_keys = ON")
