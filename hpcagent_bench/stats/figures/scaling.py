@@ -801,7 +801,8 @@ def figure_mode_grid(
 ) -> matplotlib.figure.Figure | None:
     """One row per scaling law (weak above strong), one column per kernel of ``kernels`` (default:
     every drawable kernel) and, with ``geomean_panel``, a last column with each series' geomean
-    over ALL its kernels of that law and its 95% band. Every panel of a row shares the Y scale."""
+    over ALL its kernels of that law and its 95% band. Each panel has its own Y scale: operators differ
+    by orders of magnitude, and a shared scale flattens all but the largest."""
     drawn = drawable(curves_)
     present = modes_in({curve.mode for curve in drawn})
     if not present:
@@ -811,7 +812,7 @@ def figure_mode_grid(
     columns = len(kernels) + int(geomean_panel)
     height = GRID_PANEL_HEIGHT_IN * len(present) + PRINT_CHROME_IN
     fig, axes = plt.subplots(
-        len(present), columns, figsize=(width, height), squeeze=False, sharex=True, sharey="row"
+        len(present), columns, figsize=(width, height), squeeze=False, sharex=True
     )  # fmt: skip
     ideals: list[Line2D] = []
     for row, mode in zip(axes, present):
