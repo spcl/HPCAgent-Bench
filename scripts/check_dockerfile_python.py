@@ -5,9 +5,8 @@
 
 The image Dockerfiles end with a gate written as ``python <<'PY' ... PY``: it imports the built
 stack and asserts the versions, backends and parser flags the campaign depends on. That block runs
-LAST, so a name typed once and never bound is not a lint -- it is the whole build. 620855 spent 43
-minutes assembling vLLM 0.27.1 with aiter and died on the final line with ``NameError: name
-'triton_version' is not defined``, after every real check in the gate had already passed.
+LAST, so a name typed once and never bound is not a lint -- it fails the whole build after every
+real check in the gate has passed.
 
 Nothing else looks at these blocks: they are heredoc text to the Dockerfile, and the repo's python
 hooks match ``*.py``. Extracting them and asking ruff for its undefined-name rules costs
@@ -102,7 +101,7 @@ def main() -> int:
         print(report, file=sys.stderr)
     print(
         "\nThese blocks run at the END of a multi-hour image build, so a NameError here costs the "
-        "whole build (620855). Bind the name where it is computed.",
+        "whole build. Bind the name where it is computed.",
         file=sys.stderr,
     )
     return 1

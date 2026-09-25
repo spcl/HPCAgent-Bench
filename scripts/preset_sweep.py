@@ -281,7 +281,7 @@ def render_sbatch(kernels: str, *, framework: str, presets, single_core_presets,
 #SBATCH --exclusive                 # whole node -> full-core (L/XL) timing, no co-runners
 #SBATCH --gpus-per-node=4
 #SBATCH --time=02:00:00
-# NODE_FAIL auto-requeue reruns this job id into the same RUN_DIR and stacks rows (637040).
+# NODE_FAIL auto-requeue would rerun this job id into the same RUN_DIR and stack rows.
 #SBATCH --no-requeue
 #SBATCH --output=results/preset-sweep-%j.out
 
