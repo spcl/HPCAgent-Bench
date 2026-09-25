@@ -12,6 +12,10 @@ from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, operators, parallelism
 from numpyto_common.ordered import OrderedSet
+from numpyto_common.emit_helpers import fftw
+from numpyto_common.emit_helpers.numpy_names import CONJ_ATTRS, REAL_IMAG_ATTRS, is_numpy_module
+from numpyto_common.emit_helpers.pinned import pinned_knobs
+from numpyto_common.emit_helpers.tokens import IDENT_RE, loop_target_names, mentions_ident, mentions_word
 from numpyto_common.emit_io import write_atomic_text
 from numpyto_common.emitter import (
     BaseEmitter,
@@ -26,9 +30,6 @@ from numpyto_common.lib_nodes import BLAS_GEMM_MARKER, FFT_LIBRARY_MARKER, FFTN_
 from numpyto_common.lowering import _walk_complex, helper_returns_int, integer_valued_locals
 from numpyto_common.statement_desugar import binding_names
 from numpyto_c.pluto_predicate import if_convert
-
-#: Whole-identifier matcher for scanning a shape-token string for the names it references.
-_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 
 
 @lru_cache(maxsize=None, typed=True)
@@ -201,8 +202,6 @@ _NARROW_INT_CT = re.compile(r"u?int(8|16|32)_t")
 
 #: np.flip/copy/transpose on a scalar Subscript is a no-op in the _emit_call attr path.
 _NOOP_UNARY_ATTRS = frozenset({"flip", "copy", "transpose"})
-_CONJ_ATTRS = frozenset({"conj", "conjugate"})
-_REAL_IMAG_ATTRS = frozenset({"real", "imag"})
 
 #: math macros that are never integer-typed (see _is_int_operand).
 _FLOAT_MATH_MACROS = frozenset({"M_PI", "M_E", "INFINITY", "NAN"})
@@ -530,7 +529,7 @@ class _CBodyEmitter(BaseEmitter):
         """True when an ``if`` condition is not integer-affine: it reads an array or a float."""
         if "[" in cond or _PLUTO_FLOAT_LITERAL_RE.search(cond):
             return True
-        return any(self.scalar_ctypes.get(n, "").startswith(("double", "float")) for n in _IDENT_RE.findall(cond))
+        return any(self.scalar_ctypes.get(n, "").startswith(("double", "float")) for n in IDENT_RE.findall(cond))
 
     def emit_stmt(self, node: ast.stmt, indent: str) -> str:
         """Base dispatch, plus one override: FFT_LIBRARY_MARKER needs several C statements (plan,
@@ -1507,7 +1506,7 @@ class _CBodyEmitter(BaseEmitter):
             if fn == "__hpcagent_bench_zeros__":
                 return ""
             if fn == BLAS_GEMM_MARKER:
-                return self._emit_blas_gemm(node)
+                return self.emit_blas_gemm(node)
             # Math intrinsics on a complex operand mishandle by default; route through the c* helpers in the prelude.
             _COMPLEX_INTRINSIC = {
                 "abs": "cabs",
@@ -1601,21 +1600,11 @@ class _CBodyEmitter(BaseEmitter):
                     )
                 return self.emit_expr(node.args[0])
             # z.conjugate()/z.conj() never reaches emit (native_desugar rewrites it to np.conj(z), handled just below).
-            if (
-                isinstance(node.func.value, ast.Name)
-                and node.func.value.id in ("np", "numpy")
-                and attr in _CONJ_ATTRS
-                and len(node.args) == 1
-            ):
+            if is_numpy_module(node.func.value) and attr in CONJ_ATTRS and len(node.args) == 1:
                 self._refuse_whole_array_operand(attr, node.args[0])
                 return f"__npb_conj({self.emit_expr(node.args[0])})"
             # np.real(z)/np.imag(z): complex operand -> creal/cimag; a real operand is the value / 0.
-            if (
-                isinstance(node.func.value, ast.Name)
-                and node.func.value.id in ("np", "numpy")
-                and attr in _REAL_IMAG_ATTRS
-                and len(node.args) == 1
-            ):
+            if is_numpy_module(node.func.value) and attr in REAL_IMAG_ATTRS and len(node.args) == 1:
                 self._refuse_whole_array_operand(attr, node.args[0])
                 x = self.emit_expr(node.args[0])
                 if self._is_complex_operand(node.args[0]):
@@ -1628,20 +1617,10 @@ class _CBodyEmitter(BaseEmitter):
                 b = self.emit_expr(node.args[2])
                 return f"({c} ? {a} : {b})"
             # np.sign(x) in scalar context: same NaN-aware __npb_sign helper as the array marker.
-            if (
-                isinstance(node.func.value, ast.Name)
-                and node.func.value.id in ("np", "numpy")
-                and attr == "sign"
-                and len(node.args) == 1
-            ):
+            if is_numpy_module(node.func.value) and attr == "sign" and len(node.args) == 1:
                 return f"__npb_sign({self.emit_expr(node.args[0])})"
             # np.abs(x) in scalar context: complex -> cabs, float -> fabs, integer -> llabs (mirrors builtin abs above).
-            if (
-                isinstance(node.func.value, ast.Name)
-                and node.func.value.id in ("np", "numpy")
-                and attr in ("abs", "absolute", "fabs")
-                and len(node.args) == 1
-            ):
+            if is_numpy_module(node.func.value) and attr in ("abs", "absolute", "fabs") and len(node.args) == 1:
                 x = node.args[0]
                 if self._is_complex_operand(x):
                     return f"cabs({self.emit_expr(x)})"
@@ -1649,16 +1628,11 @@ class _CBodyEmitter(BaseEmitter):
                     return f"{self._math_name('fabs')}({self.emit_expr(x)})"
                 return f"llabs({self.emit_expr(x)})"
             # np.hypot(a, b) -> C99 hypot (both operands real).
-            if (
-                isinstance(node.func.value, ast.Name)
-                and node.func.value.id in ("np", "numpy")
-                and attr == "hypot"
-                and len(node.args) == 2
-            ):
+            if is_numpy_module(node.func.value) and attr == "hypot" and len(node.args) == 2:
                 return f"{self._math_name('hypot')}({self.emit_expr(node.args[0])}, {self.emit_expr(node.args[1])})"
         raise NotImplementedError(f"call to {ast.unparse(node.func)} not supported")
 
-    def _emit_blas_gemm(self, node: ast.Call) -> str:
+    def emit_blas_gemm(self, node: ast.Call) -> str:
         """Render the dense 2-D GEMM marker as a CBLAS call.
 
         Operands are row-major and C-contiguous by ABI, so each leading dimension is the row
@@ -1684,7 +1658,7 @@ class _CBodyEmitter(BaseEmitter):
         Args (see FFT_LIBRARY_MARKER): ``(out, src, n, inverse_flag, norm_kind)``. ``out``/``src``
         are bare Names (array params/locals; the marker is only ever built that way, see
         _expand_dft_1d_library), so their C spelling is just the identifier -- same as
-        :meth:`_emit_blas_gemm`. Both are ``double _Complex*``/``float _Complex*`` already, which
+        :meth:`emit_blas_gemm`. Both are ``double _Complex*``/``float _Complex*`` already, which
         C99 defines layout-compatible with ``fftw_complex``/``fftwf_complex`` (FFTW's own manual:
         "you should find that fftw_complex is the same as ... double complex"), so no repacking.
 
@@ -1695,25 +1669,22 @@ class _CBodyEmitter(BaseEmitter):
         non-pow2), rtol/atol 1e-9. So an explicit scale loop below applies exactly the divisor
         numpy's own ``norm=`` would (see :func:`_read_fft_norm`), covering ortho too.
         """
-        out, src = (arg.id for arg in node.args[:2])
-        n = self.emit_expr(node.args[2])
-        inverse = bool(node.args[3].value)
-        norm_kind = node.args[4].value  # 0 backward / 1 forward / 2 ortho -- _NORM_KIND's encoding
+        fft, n_node = fftw.fft_1d(node)
+        out, src = fft.out, fft.src
+        n = self.emit_expr(n_node)
         f32 = self._is_float32_kernel()
-        prefix = "fftwf" if f32 else "fftw"
+        prefix = fftw.fftw_prefix(f32)
         num = "float" if f32 else "double"
-        sign = "FFTW_BACKWARD" if inverse else "FFTW_FORWARD"
-        divides = norm_kind == 2 or (norm_kind == 0) == inverse
         lines = [
             f"{indent}{{",
             f"{indent}  int64_t __fft_n = (int64_t)({n});",
             f"{indent}  {prefix}_plan __fft_plan = {prefix}_plan_dft_1d((int)__fft_n, "
-            f"({prefix}_complex *)({src}), ({prefix}_complex *)({out}), {sign}, FFTW_ESTIMATE);",
+            f"({prefix}_complex *)({src}), ({prefix}_complex *)({out}), {fft.sign}, FFTW_ESTIMATE);",
             f"{indent}  {prefix}_execute(__fft_plan);",
             f"{indent}  {prefix}_destroy_plan(__fft_plan);",
         ]
-        if divides:
-            divisor = f"{self._math_name('sqrt')}(({num})__fft_n)" if norm_kind == 2 else f"(({num})__fft_n)"
+        if fft.divides:
+            divisor = f"{self._math_name('sqrt')}(({num})__fft_n)" if fft.ortho else f"(({num})__fft_n)"
             lines += [
                 f"{indent}  for (int64_t __fft_i = 0; __fft_i < __fft_n; ++__fft_i) {{",
                 f"{indent}    {out}[__fft_i] /= {divisor};",
@@ -1733,19 +1704,15 @@ class _CBodyEmitter(BaseEmitter):
         (``np.fft.fftn(rho - rho.mean())``) is widened into a complex scratch buffer first: FFTW's
         complex plan reads interleaved (re, im) pairs, so handing it the real buffer reads garbage.
         """
-        out, src = (arg.id for arg in node.args[:2])
-        inverse = bool(node.args[2].value)
-        norm_kind = node.args[3].value
-        n_axes = int(node.args[4].value)
-        leading = bool(node.args[5].value)
-        extents = [self.emit_expr(e) for e in node.args[6:]]
+        plan = fftw.fft_nd(node)
+        fft, n_axes, leading = plan.transform, plan.n_axes, plan.leading
+        out, src = fft.out, fft.src
+        extents = [self.emit_expr(e) for e in plan.extents]
         taxes = extents[:n_axes] if leading else extents[len(extents) - n_axes :]
         batch = extents[n_axes:] if leading else extents[: len(extents) - n_axes]
         f32 = self._is_float32_kernel()
-        prefix = "fftwf" if f32 else "fftw"
+        prefix = fftw.fftw_prefix(f32)
         num = "float" if f32 else "double"
-        sign = "FFTW_BACKWARD" if inverse else "FFTW_FORWARD"
-        divides = norm_kind == 2 or (norm_kind == 0) == inverse
         n_expr = " * ".join(f"(int64_t)({e})" for e in taxes)
         batch_expr = " * ".join(f"(int64_t)({e})" for e in batch) or "(int64_t)1"
         stride, dist = ("(int)__fft_batch", "1") if leading else ("1", "(int)__fft_n")
@@ -1776,15 +1743,15 @@ class _CBodyEmitter(BaseEmitter):
             (
                 f"{indent}    {prefix}_plan __fft_plan = {prefix}_plan_many_dft({n_axes}, __fft_dims, (int)__fft_batch, "
                 f"({prefix}_complex *)({plan_src}), NULL, {stride}, {dist}, ({prefix}_complex *)({out}), NULL, {stride}, "
-                f"{dist}, {sign}, FFTW_ESTIMATE);"
+                f"{dist}, {fft.sign}, FFTW_ESTIMATE);"
             ),
             f"{indent}    {prefix}_execute(__fft_plan);",
             f"{indent}    {prefix}_destroy_plan(__fft_plan);",
         ]
         if widen:
             lines.append(f"{indent}    free(__fft_in);")
-        if divides:
-            divisor = f"{self._math_name('sqrt')}(({num})__fft_n)" if norm_kind == 2 else f"(({num})__fft_n)"
+        if fft.divides:
+            divisor = f"{self._math_name('sqrt')}(({num})__fft_n)" if fft.ortho else f"(({num})__fft_n)"
             lines += [
                 f"{indent}    for (int64_t __fft_i = 0; __fft_i < __fft_n * __fft_batch; ++__fft_i) {{",
                 f"{indent}      {out}[__fft_i] /= {divisor};",
@@ -2504,35 +2471,9 @@ def _emit_body(
     params = set(kir.param_order())
     arr_by_name = {a.name: a for a in kir.arrays}
     # For-loop iter names: a zeros_local whose shape uses one must allocate inline at its marker (C99 VLA scoping).
-    loop_iters: Set[str] = set()
-    for node in ast.walk(kir.tree):
-        if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
-            loop_iters.add(node.target.id)
-
-    def _shape_uses_loop_iter(shape) -> bool:
-        for tok in shape:
-            for it in loop_iters:
-                # Free-token match: it must appear as a whole word.
-                t = str(tok)
-                idx = t.find(it)
-                while idx >= 0:
-                    lo = idx == 0 or not (t[idx - 1].isalnum() or t[idx - 1] == "_")
-                    hi = idx + len(it) >= len(t) or not (t[idx + len(it)].isalnum() or t[idx + len(it)] == "_")
-                    if lo and hi:
-                        return True
-                    idx = t.find(it, idx + 1)
-        return False
-
+    loop_iters = loop_target_names(kir.tree)
     # A local array whose malloc size references a body-computed scalar can't allocate at function-top; defer to the marker.
     computed_scalars: Set[str] = {n for n, _ in implicit} | set(int_locals)
-
-    def _shape_uses_computed_scalar(shape) -> bool:
-        for tok in shape:
-            t = str(tok)
-            for m in _IDENT_RE.findall(t):
-                if m in computed_scalars:
-                    return True
-        return False
 
     inline_locals: Dict[str, Tuple[str, ...]] = {}
     deferred_malloc_locals: Dict[str, Tuple[str, ...]] = {}
@@ -2541,9 +2482,9 @@ def _emit_body(
     for name, shape in zeros.items():
         if name in params:
             param_inits[name] = shape  # alias of an output buffer
-        elif _shape_uses_loop_iter(shape):
+        elif mentions_word(shape, loop_iters):
             inline_locals[name] = shape
-        elif _shape_uses_computed_scalar(shape):
+        elif mentions_ident(shape, computed_scalars):
             deferred_malloc_locals[name] = shape
         else:
             fn_top_locals[name] = shape
@@ -3336,7 +3277,7 @@ def spelled_names(kir: KernelIR, declared: OrderedSet[str]) -> OrderedSet[str]:
     spelled: OrderedSet[str] = OrderedSet(declared)
     for unit in (kir, *kir.helpers):
         spelled.update(node.id for node in ast.walk(unit.tree) if isinstance(node, ast.Name))
-        spelled.update(token for desc in unit.arrays for dim in desc.shape for token in _IDENT_RE.findall(str(dim)))
+        spelled.update(token for desc in unit.arrays for dim in desc.shape for token in IDENT_RE.findall(str(dim)))
     return spelled
 
 
@@ -3390,7 +3331,7 @@ class ReservedNameRespelling(ast.NodeTransformer):
 def respelled_shape(dims: Tuple[str, ...], respellings: Dict[str, str]) -> Tuple[str, ...]:
     """``dims`` with every identifier inside a shape token respelled; a non-string token stays as it is."""
     return tuple(
-        _IDENT_RE.sub(lambda m: respellings.get(m.group(0), m.group(0)), dim) if isinstance(dim, str) else dim
+        IDENT_RE.sub(lambda m: respellings.get(m.group(0), m.group(0)), dim) if isinstance(dim, str) else dim
         for dim in dims
     )
 
@@ -3482,13 +3423,9 @@ def pinned_const_block(kir: KernelIR) -> str:
     """
     if not kir.pinned_consts:
         return ""
-    type_of = {s.name: dtypes.c_type("int") for s in kir.symbols}
-    type_of.update({s.name: _c_type(s.dtype) for s in kir.scalars})
-    lines: List[str] = []
-    for name in sorted(kir.pinned_consts):
-        value = kir.pinned_consts[name]
-        ctype = type_of.get(name, _c_type("float64"))
-        lines.append(f"constexpr {ctype} {name} = {c_literal(value, ctype)};")
+    lines = [
+        f"constexpr {ctype} {name} = {c_literal(value, ctype)};" for name, ctype, value in pinned_knobs(kir, _c_type)
+    ]
     return "\n".join(lines) + "\n\n"
 
 
