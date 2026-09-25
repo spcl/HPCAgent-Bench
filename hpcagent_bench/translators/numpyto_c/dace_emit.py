@@ -18,7 +18,7 @@ from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, shape_dimension_symbols
 from hpcagent_bench.translators.numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.reductions import DACE_NATIVE_REDUCE_FNS
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.reductions import DACE_NATIVE_REDUCE_FNS, reduce_call_parts
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     AUG_OP_SRC,
     axis_list,
@@ -30,7 +30,6 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     expr_rank,
     name_binding_index,
     rank_table,
-    reduce_call_parts,
 )
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.statement_desugar import (
