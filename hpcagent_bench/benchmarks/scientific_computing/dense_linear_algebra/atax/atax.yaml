@@ -47,5 +47,4 @@ mpi:
     - N
 experiment_tags:
 - npbench
-- mpi-focus32
 - polybench

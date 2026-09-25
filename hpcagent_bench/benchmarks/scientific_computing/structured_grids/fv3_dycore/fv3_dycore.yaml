@@ -162,5 +162,4 @@ output_args:
 - q_x_flux
 - q_y_flux
 experiment_tags:
-- weather_stencils
 - scicomp-focus40

@@ -30,5 +30,3 @@ init:
 array_args: [forward_target, backward_target, p]
 output_args: [p]
 min_precision: fp64
-experiment_tags:
-- terminal_bench

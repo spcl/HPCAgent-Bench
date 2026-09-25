@@ -56,5 +56,3 @@ array_args:
 - z_ekinh
 output_args:
 - z_ekinh
-experiment_tags:
-- unstructured_grids

@@ -1,3 +1,5 @@
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Forbid leading-underscore names and redundant/underscore import aliases.
 
 Flags, by AST inspection:
@@ -22,8 +24,7 @@ to REF when given; the module-name rule then applies only to newly added
 files, so pre-existing ``_private`` code never blocks a commit. ``--all``
 audits whole files regardless of git history.
 
-Kept byte-identical between hpcagent-bench's tools/check_names.py and dace's
-tools/check_names.py; edit one, then copy it verbatim over the other.
+Kept in sync with dace's tools/check_names.py; port every change to the other copy.
 
 Output: ``path:line:col: NAMEnnn message``, one per violation, sorted by
 position; exit 1 when any violation is reported. Non-``.py`` arguments are

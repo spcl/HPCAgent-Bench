@@ -404,5 +404,4 @@ output_args:
   - z_kin_hor_e
   - z_vt_ie
 experiment_tags:
-- weather_stencils
 - scicomp-focus40

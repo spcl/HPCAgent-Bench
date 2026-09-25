@@ -7,9 +7,7 @@
 #   source "${REPO}/scripts/dace_branch.sh"
 #   ensure_branch "${DACE_MAIN}" main || ...
 #
-# Its own file because two samples need it (samples/npbench_dace_flavors.sbatch measures main against
-# extended; samples/npbench_dace_main_vs_pluto.sbatch measures main against a non-DaCe optimizer) and a
-# second copy is exactly how the two would drift into disagreeing about what "measured on main" means.
+# Shared by scripts/samples/npbench_dace_flavors.sbatch and scripts/samples/cscs_alps_native.sbatch.
 
 # A stage measures the branch it CLAIMS to measure, or it does not run. Getting this wrong produces
 # numbers that look perfectly normal and are attributed to the wrong DaCe -- the one failure this

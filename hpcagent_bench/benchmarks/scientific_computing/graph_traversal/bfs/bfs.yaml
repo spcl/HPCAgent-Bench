@@ -32,5 +32,3 @@ array_args:
 - level
 output_args:
 - level
-experiment_tags:
-- graph_traversal

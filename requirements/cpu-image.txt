@@ -15,7 +15,7 @@ sqlmodel
 jinja2
 cffi
 sympy
-blake3
+numba
 pygount
 jsonschema
 setuptools
@@ -24,7 +24,6 @@ psutil
 py-cpuinfo
 GPUtil
 ordered-set>=4.0.0
-numba
 pythran==0.18.1
 xgboost
 h5py

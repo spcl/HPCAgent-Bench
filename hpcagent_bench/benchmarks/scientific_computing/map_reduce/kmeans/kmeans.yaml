@@ -48,6 +48,3 @@ mpi:
     X:
     - npoints
     - dim
-experiment_tags:
-- mpi-focus32
-- kmeans

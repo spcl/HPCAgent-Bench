@@ -41,5 +41,3 @@ mpi:
     - N
 experiment_tags:
 - npbench
-- mpi-focus32
-- go_fast

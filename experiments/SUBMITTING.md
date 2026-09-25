@@ -8,8 +8,8 @@ cd experiments
 ```
 
 An arm is one `.env.<arm>` file: role sizes, the problems list, the language and the treatment all
-come from it. See [`experiments/README.md`](experiments/README.md) for what an arm is and how the
-role split works, and [`experiments/AMD-SUBMISSION.md`](experiments/AMD-SUBMISSION.md) for the
+come from it. See [`experiments/README.md`](README.md) for what an arm is and how the
+role split works, and [`experiments/AMD-SUBMISSION.md`](AMD-SUBMISSION.md) for the
 current `submit-<family>.sh` scripts and `run_campaign.sh`, which this page assumes.
 
 ## Node budget
@@ -45,7 +45,7 @@ a problem list, picks the `.env.<arm>` files for its arms, and submits each thro
 `beverin.sbatch`; `run_campaign.sh <variant> [sbatch args...]` is the generic single-arm entry
 point several of them use. Read the header comment of the script you are running for its exact
 knobs (model, language, leg) and see
-[`experiments/AMD-SUBMISSION.md`](experiments/AMD-SUBMISSION.md) for the current family list.
+[`experiments/AMD-SUBMISSION.md`](AMD-SUBMISSION.md) for the current family list.
 
 To submit one arm directly against an existing `.env.<arm>` file:
 

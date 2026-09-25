@@ -74,4 +74,3 @@ output_args:
 - PE
 experiment_tags:
 - npbench
-- nbody
