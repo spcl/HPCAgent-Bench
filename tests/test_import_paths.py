@@ -5,8 +5,8 @@
 The package is installable (``pip install -e .``). A checkout used without installing it takes its
 path from ``scripts/repo_env.sh`` (shells) or ``scripts/repo_python`` (a command that starts inside
 a container), and the suite from pyproject's pytest ``pythonpath``. Every other edit is either on
-:data:`ALLOWED` below, with the reason it has to exist, or a failure here. Markdown is not scanned:
-a document may quote the pattern it explains.
+:data:`ALLOWED` below, with the reason it has to exist, or a failure here. Markdown is scanned too,
+so an instruction to export PYTHONPATH cannot come back into the docs.
 """
 
 import pathlib
@@ -95,13 +95,17 @@ ALLOWED: dict[str, str] = {
     "tests/test_submit_scicomp_perf_playbook_clean_dryrun.py": "child submit script imports the checkout",
     "tests/translators/test_abi_param_order.py": "child emit CLI with a minimal env imports the checkout",
     "tests/test_import_paths.py": "this file spells the patterns it searches for",
+    # Documents.
+    "docs/extending/agent-harness.md": "quotes a harness runner's own-directory insert (PYTHONSAFEPATH=1)",
+    "docs/plotting.md": "plotting-owned; exports PYTHONPATH until that chat moves it to repo_env.sh",
+    "statistics/README.md": "plotting-owned; exports PYTHONPATH until that chat moves it to repo_env.sh",
 }
 
 
 def tracked_code() -> list[pathlib.Path]:
-    """Every tracked regular file except Markdown (symlinks are scanned at their target)."""
+    """Every tracked regular file (symlinks are scanned at their target)."""
     listed = subprocess.run(["git", "ls-files", "-z"], cwd=REPO, capture_output=True, text=True, check=True)
-    names = [name for name in listed.stdout.split("\0") if name and not name.endswith(".md")]
+    names = [name for name in listed.stdout.split("\0") if name]
     return [REPO / name for name in names if (REPO / name).is_file() and not (REPO / name).is_symlink()]
 
 
