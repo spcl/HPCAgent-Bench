@@ -84,11 +84,19 @@ class Selection:
     roster: tuple[str, ...]
     baseline: BaselineSpec
     root: pathlib.Path
+    #: Run-root prefixes the experiment's fused owed waves write (``owed_run_roots`` in the registry).
+    owed_prefixes: tuple[str, ...] = ()
 
     def run_globs(self) -> tuple[str, ...]:
         """One glob per campaign prefix: ``<root>/<prefix>-*``, which is how a launcher names a run
-        root (``git-scicomp-20260917``). Dated and lettered suffixes (``-20260917b``) both match."""
-        return tuple(str(self.root / f"{prefix}-*") for prefix in self.prefixes)
+        root (``git-scicomp-20260917``). Dated and lettered suffixes (``-20260917b``) both match.
+
+        Then one per owed prefix: ``<root>/<prefix>-[0-9]*``, the dated root a fused owed wave
+        writes (``owed-llr-focus40-20260922``). The digit keeps ``owed-llr-focus40`` from matching
+        ``owed-llr-focus40-blind-20260922``, another experiment's root."""
+        campaign = (str(self.root / f"{prefix}-*") for prefix in self.prefixes)
+        owed = (str(self.root / f"{prefix}-[0-9]*") for prefix in self.owed_prefixes)
+        return (*campaign, *owed)
 
     def owns(self, arm: str) -> bool:
         """Whether ``arm`` is one of this experiment's, and not retired."""
@@ -144,4 +152,5 @@ def resolve(experiment: str, root: pathlib.Path | None = None, tag: str = "") ->
         roster=tags.roster(roster_tag) if roster_tag else (),
         baseline=baseline_for(experiment),
         root=root or runs_root(),
+        owed_prefixes=registry().owed_run_roots.get(experiment, ()),
     )

@@ -99,6 +99,19 @@ campaigns:
   mlscale: {experiment: mlscale, name: "ML Scaling@10, Multi-GPU", device: GPU, tag: mlscale10}
   mlscale-part2: {experiment: mlscale-part2, name: "ML Scaling Part 2@10, Multi-GPU", device: GPU, tag: mlscale-part2}
 
+# Run roots a FUSED OWED WAVE writes (experiments/owed_wave.py plan_waves): <prefix>-<experiment>-<date>,
+# one job serving many arms of one experiment, so no campaign prefix above matches the root. The rows
+# inside carry their real arm names; only the root is named after the experiment. The glob is
+# <prefix>-<digit>*, so owed-llr-focus40 does not swallow owed-llr-focus40-blind. The wave board reads
+# every root under the runs directory; an experiment's selection reads these beside its campaigns'.
+owed_run_roots:
+  llr-focus40: [owed-llr-focus40]
+  llr-focus40-blind: [owed-llr-focus40-blind]
+  harness20: [owed-harness20]
+  harness-focus20: [owed-harness-focus20]
+  scicomp-focus40: [owed-scicomp-focus40]
+  git-scicomp: [owed-git-scicomp]
+
 # Arms the user took out of the experiments, as ONE regex searched against an arm name (2026-09-18:
 # union-alpha, scicomp C++ and GPU c-openmp offload; the LLR CPU Fortran arms, back in 2026-09-25; 2026-09-19: only
 # cpfsrc-v2 counts, so every cpfsrc v1 arm leaves; 2026-09-21: the host-resident GPU LLR triton and

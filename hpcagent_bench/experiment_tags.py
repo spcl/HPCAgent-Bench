@@ -130,6 +130,8 @@ class Registry:
     baseline_arms: dict[str, dict[str, str]] = dataclasses.field(default_factory=dict)
     #: (pattern, replacement) re.sub pairs: an arm spelling -> the ONE arm it is (:func:`aliased_arm`).
     arm_aliases: tuple[tuple[re.Pattern[str], str], ...] = ()
+    #: experiment -> the run-root prefixes its fused owed waves write (:func:`owed_run_roots_of`).
+    owed_run_roots: dict[str, tuple[str, ...]] = dataclasses.field(default_factory=dict)
 
 
 def as_block(raw: object) -> dict[object, object]:
@@ -211,6 +213,11 @@ def arm_aliases_of(raw: object) -> tuple[tuple[re.Pattern[str], str], ...]:
     return tuple((re.compile(str(pattern)), str(target)) for pattern, target in as_block(raw).items())
 
 
+def owed_run_roots_of(raw: object) -> dict[str, tuple[str, ...]]:
+    """The experiment -> owed run-root prefixes block, every value forced to text."""
+    return {str(key): tuple(str(p) for p in as_list(entry)) for key, entry in as_block(raw).items()}
+
+
 def campaigns_of(raw: object) -> dict[str, CampaignEntry]:
     """The campaigns block. A missing field falls back to the prefix itself, never to a guess."""
     out: dict[str, CampaignEntry] = {}
@@ -251,6 +258,7 @@ def registry() -> Registry:
         aliases={str(kind): names_of(block, str(kind)) for kind, block in as_block(aliases).items()},
         baseline_arms=baseline_arms_of(doc.get("baseline_arms")),
         arm_aliases=arm_aliases_of(doc.get("arm_aliases")),
+        owed_run_roots=owed_run_roots_of(doc.get("owed_run_roots")),
     )
 
 
