@@ -307,6 +307,8 @@ def legend_below(
             columnspacing=columnspacing,
             handlelength=handlelength,
             borderaxespad=0.0,
+            # matplotlib's 0.4 pads the key box and read as a blank band under the ticks.
+            borderpad=0.1,
         )
         box = legend.get_window_extent(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
         if columns <= 1 or box.width <= limit:
