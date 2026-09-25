@@ -142,7 +142,7 @@ host memory **is** the pool the KV cache and the weights already live in. `--hic
 therefore offloads nothing: it allocates a second copy of the KV cache in the same physical memory,
 so every cached token costs twice. The server dies to the host OOM killer with no traceback.
 
-None of the `.env.base-*` files in `experiments/` set it. One example launch line in
+No layer in `experiments/layers/` and no `experiments/arms.yaml` entry sets it. One example launch line in
 `containers/cluster/ce-images/IMAGE_REQUIREMENTS.md` still shows it; that line is not a
 configuration this repository runs.
 

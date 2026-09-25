@@ -126,8 +126,8 @@ arm still carries partial results.
 
 ## Known traps
 
-- **GLM-5.3 arms cannot be submitted (open, 2026-09-16).** All 11 of them -- the `base-glm53`,
-  `llrbase-glm53-*`, `llrblind-glm53-*` and `cpf-llr-focus40-glm53-*` families -- set
+- **GLM-5.3 arms cannot be submitted (open).** All of them -- every `<campaign>:glm53`
+  base and the `llrblind-glm53-*` and `cpf-llr-focus40-glm53-*` arms -- set
   `INFERENCE_CE_ENV=sglang-candidate`, and **there is no such image**. It is the one sglang build
   whose image can load GLM-5.3: the DeepSeek weight loader's `format_ue8m0` reads are patched into
   the package at BUILD time, while every other sglang EDF reaches the same patch through a

@@ -23,7 +23,7 @@ ARMS = "c:plain c:cpfsrc"
 STAGING_SECONDS = 3 * 3600
 #: submit-cpf-llr40.sh: the slack between the job's own end and the deadline.
 MARGIN_SECONDS = 300
-#: .env.base-qwen38: the episode every arm of this campaign runs, deadline or no deadline.
+#: base-qwen38: the episode every arm of this campaign runs, deadline or no deadline.
 CONFIGURED_AGENT_SECONDS = 21600
 #: How far ahead the deadline is placed. Far enough that the job limit alone would allow a LONGER
 #: episode than the campaign's, which is the case the cap exists for.

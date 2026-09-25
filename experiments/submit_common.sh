@@ -17,7 +17,7 @@
 # quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 . "${OPT:-${HPCAGENT_BENCH_REPO:-$(dirname -- "${BASH_SOURCE[0]}")/..}}/scripts/cscs/account_env.sh" || { echo "no Slurm account resolved; see scripts/cscs/account_env.sh" >&2; exit 2; }
-# render_env (a layered base env, flattened) and snapshot_env (the per-submission copy a job reads).
+# render_env (a <campaign>:<model> base, flattened) and snapshot_env (the per-submission copy a job reads).
 . "$(dirname -- "${BASH_SOURCE[0]}")/env_layers.sh"
 
 # resolve_packet_kv <packet> <language> <assoc-array-name> -- runs packet_env.py once and fills the
@@ -111,9 +111,9 @@ scale_time() {
     printf '%s\n' "${scaled}"
 }
 
-# scaled_budget_from <base-env> <KEY> -> <KEY>'s configured value in <base-env>, scaled by whichever
+# scaled_budget_from <base> <KEY> -> <KEY>'s configured value in <base>, scaled by whichever
 # of TOKEN_SCALE/TIME_SCALE applies to it (AGENT_TIMEOUT_SECONDS also clamped to time_cap_seconds).
-# Refuses when <base-env> sets no <KEY>: a scaled rerun of an arm whose base does not carry the
+# Refuses when <base> sets no <KEY>: a scaled rerun of an arm whose base does not carry the
 # value would otherwise apply no scale at all instead of failing loudly, exactly like agent_seconds
 # refuses a base with no AGENT_TIMEOUT_SECONDS.
 scaled_budget_from() {
@@ -242,19 +242,9 @@ deadline_shrink_seconds() {
     printf '%s\n' "${configured}"
 }
 
-# Every model's CPU, C, no-skills base env stem (".env.<value>"), inherited whole by a launcher
-# so serving config cannot also vary between arms. Declared once: a copy per launcher is how a
-# model ends up in one launcher's map and silently missing from another's.
-declare -A LLRBASE_ENV=(
-    [oss120b]=llrbase-oss120b-c
-    [qwen38]=llrbase-qwen38-c
-    [kimi27sglang]=llrbase-kimi27sglang-c
-    [glm53]=llrbase-glm53-c
-)
-
-# stage_base_env <base-env> <arm> <experiment> <stamp> <staged-out> [extra sed -e expr...]
-# Every arm inherits one base env whole -- serving config cannot also vary between arms -- rendered
-# flat through its layers (env_layers.sh), with CAMPAIGN_ARM and RUN_ROOT rewritten. Written to
+# stage_base_env <base> <arm> <experiment> <stamp> <staged-out> [extra sed -e expr...]
+# Every arm inherits one base (<campaign>:<model>, arms.yaml) whole -- serving config cannot also vary
+# between arms -- rendered flat (env_layers.sh render_env), with CAMPAIGN_ARM and RUN_ROOT rewritten. Written to
 # <staged-out>, NEVER the final arm env: a later gate that bails leaves no file that looks complete.
 stage_base_env() {
     local base="$1" arm="$2" experiment="$3" stamp="$4" out="$5" flat

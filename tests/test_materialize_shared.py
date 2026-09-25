@@ -381,19 +381,10 @@ def test_every_campaign_variant_declares_its_own_arm() -> None:
     ``<arm>-budget2x`` / ``<arm>-kernels-<subset>``, so a PENDING job of the arm keeps reading its
     own copy, and it records the arm's label unchanged."""
     for path in sorted(EXAMPLE.glob(".env.*")):
-        # .env.base-* are generator inputs, not arms: make_model_arm.py rewrites the model inside
-        # their CAMPAIGN_ARM (it requires exactly one carrying the from-model), so the value there
-        # is a seed the generator consumes, never a label the judge records. Blanking it would
-        # break the generator; demanding it match the filename would demand a base call itself an
-        # arm. Nothing submits a base directly -- run_campaign.sh takes a variant.
         # .env.serve-only is a LAUNCHER override layered over a base, not an arm: serve-only.sbatch
         # removes the judge and agent roles, and a CAMPAIGN_ARM key there would make audit_envs.py
         # score a run that grades nothing.
-        if (
-            path.name in (".env.example", ".env.serve-only")
-            or path.name.startswith((".env.base-", ".env.llrbase-"))
-            or path.suffix in (".bak", ".v2bak")
-        ):
+        if path.name in (".env.example", ".env.serve-only") or path.suffix in (".bak", ".v2bak"):
             continue
         variant = path.name[len(".env.") :]
         arm = re.sub(r"(-budget\d+x|-tok\d+x-time\d+x)?(-kernels-[\w.-]+)?$", "", re.sub(r"-w\d$", "", variant))

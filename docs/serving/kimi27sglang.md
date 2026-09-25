@@ -3,8 +3,8 @@
 `moonshotai/Kimi-K2.7-Code`. Four nodes, sixteen GPUs. This model does not fit in one node, so the
 four-node layout is not a throughput choice: it is the only way to serve it here.
 
-Authoritative source: `experiments/.env.base-kimi27sglang`. If this page and that file disagree, the
-file is right. Cross-model background is in [`knobs.md`](knobs.md).
+Authoritative source: `experiments/layers/model-kimi27sglang.env` (render `campaign:kimi27sglang`).
+If this page and that file disagree, the file is right. Cross-model background is in [`knobs.md`](knobs.md).
 
 ## Configuration
 

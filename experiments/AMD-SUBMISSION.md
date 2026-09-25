@@ -216,7 +216,7 @@ has to be resubmitted -- cheap in the first minutes, an entire wall clock later.
 
 ## Effort levels -- one policy over a per-model ladder
 
-A rung is not a shared dial and not a per-model preference either. Each `.env.base-*` declares the
+A rung is not a shared dial and not a per-model preference either. Each model's `campaign:<model>` base declares the
 ladder its SERVER accepts, and `experiments/effort.py` applies one campaign-wide policy to it
 (`AGENT_EFFORT_POLICY=max`): xhigh where the ladder has it, else the ladder's top rung, else no
 `reasoning_effort` field at all. The launcher exports the result as `AGENT_EFFORT`.
