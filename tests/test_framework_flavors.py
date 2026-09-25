@@ -267,4 +267,5 @@ def test_a_new_base_is_one_adapter_module_plus_its_registry_entry(
         assert frameworks.ProbeDropFramework is cls
     finally:
         sys.modules.pop(module_name, None)
-        vars(frameworks).pop("ProbeDropFramework", None)
+        if "ProbeDropFramework" in vars(frameworks):
+            delattr(frameworks, "ProbeDropFramework")

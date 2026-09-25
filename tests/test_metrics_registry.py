@@ -48,7 +48,15 @@ def test_the_shipped_metrics_are_found_and_a_library_module_is_not() -> None:
 def test_a_module_dropped_into_the_package_is_a_sweep_metric(probe_dir: pathlib.Path) -> None:
     found = dict(metrics.sweep_metrics())
     assert "zz_probe" in found
-    assert found["zz_probe"].rows({"probe": 1.0}, benchmark="k") == [("probe", {"probe": 1.0}, {"benchmark": "k"})]
+    stamp = {
+        "timestamp": 1,
+        "benchmark": "k",
+        "framework": "cc",
+        "flavor": None,
+        "impl": "default",
+        "datatype": "float64",
+    }
+    assert found["zz_probe"].rows({"probe": 1.0}, **stamp) == [("probe", {"probe": 1.0}, stamp)]
 
 
 def test_the_sweep_measures_every_enabled_metric_and_warns_on_a_failing_one(
