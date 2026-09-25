@@ -109,6 +109,24 @@ job meant for other hardware passes `--partition=` on the command line, which wi
 | `CONTAINER_RUNTIME` | `ce` | how `beverin.sbatch` starts containers: `ce`, `apptainer`, `podman` or `docker` |
 | `HPCAGENT_BENCH_HOST` | `SLURMD_NODENAME`, else the host name | the node name recorded with each result |
 
+### Container image builds
+
+`containers/images/images.env` and `build_common.sh` hold these defaults; IMAGE_REQUIREMENTS.md
+"Build defaults" says what the build knobs do.
+
+| Variable | Default | Controls |
+|---|---|---|
+| `CE_IMAGES` | `$SCRATCH/ce-images` | squashfs images, their sidecars and build logs |
+| `CE_TMPFS` | `/dev/shm/$USER` | per-user tmpfs for podman stores and enroot unpacks (Lustre cannot hold them) |
+| `CE_BUILD_CACHE` | `1` | keep the node's podman layer store and mount the spack and pip caches; `0` builds cold |
+| `CE_PULL` | `1` | pull a registry image whose build-inputs label matches instead of building; `only`, `0` |
+| `PULL_REPO` | `PUSH_REPO`, else `REGISTRY_REPO` | the registry repository pull-first reads |
+| `REGISTRY_REPO` | `docker.io/spcleth/hpcagent-bench` | the published image repository |
+| `SPACK_BUILDCACHE` | `$SCRATCH/spack-buildcache[-<arch>]` | spack binary buildcache mounted into judge/agent builds |
+| `PIP_CACHE` | `$SCRATCH/pip-cache[/<gpu arch>]` | pip wheel cache mounted into judge/agent builds |
+| `BASE_CACHE` | `$SCRATCH/base-images` | digest-pinned base images copied out of the registry |
+| `GIT_MIRRORS` | `$SCRATCH/git-mirrors` | local git mirrors the builds clone from when present |
+
 ### dace
 
 DaCe comes from the spcl/dace `extended` branch. It is not a PyPI dependency (PyPI rejects

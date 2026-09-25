@@ -16,7 +16,7 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 source "${SCRIPT_DIR}/../build_common.sh"
 
 IMAGE_TAG="${IMAGE_TAG:-hpcagent-bench-vllm:latest}"
-OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/hpcagent-bench-vllm.sqsh}"
+OUTPUT_SQSH="${OUTPUT_SQSH:-${CE_IMAGES:?set SCRATCH or CE_IMAGES}/hpcagent-bench-vllm.sqsh}"
 # Pinned by DIGEST, not by tag. rocm/pytorch has no 7.2.0-suffixed tag at all -- the 7.2.0 release
 # is published unsuffixed as rocm7.2_* -- and an unsuffixed tag is a mutable name.
 BASE_REPO="docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1"
@@ -32,26 +32,14 @@ ce_gpu_arch
 
 ce_podman_env
 
-cd "${REPO_ROOT}"
-# cgroupfs: with the systemd manager a dying logind session reaps podman mid-pull (silent rc=1).
-ce_mirror_args
-
-ce_gpu_args
-
-ce_cache_base_image
-
 # Pass-through for the ARGs a CANDIDATE image varies (VLLM_VERSION, AITER_REF). Empty by default.
 #   EXTRA_BUILD_ARGS="VLLM_VERSION=0.28.0 AITER_REF=v0.1.13.post1" ./build.sh
-EXTRA_ARGS=()
-for kv in ${EXTRA_BUILD_ARGS:-}; do EXTRA_ARGS+=(--build-arg "${kv}"); done
+BUILD_ARGS=(--build-arg "ROCM_ARCH=${ROCM_ARCH}")
+for kv in ${EXTRA_BUILD_ARGS:-}; do BUILD_ARGS+=(--build-arg "${kv}"); done
+ce_pull_first "${SCRIPT_DIR}/Dockerfile" "vllm||${IMAGE_TAG}|${OUTPUT_SQSH}" -- "${BUILD_ARGS[@]}"
+[[ "${CE_PULLED}" == 0 ]] || exit 0
 
-podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" "${GPU_ARGS[@]}" \
-  --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
-  --build-arg "BASE_IMAGE_REF=${BASE_IMAGE_REF:-${BASE_IMAGE}}" \
-  --build-arg "ROCM_ARCH=${ROCM_ARCH}" \
-  ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
-  -f "${SCRIPT_DIR}/Dockerfile" \
-  -t "${IMAGE_TAG}" \
-  .
-
-ce_export_image "${IMAGE_TAG}" "${OUTPUT_SQSH}"
+ce_mirror_args
+ce_gpu_args
+ce_cache_base_image
+ce_build "${SCRIPT_DIR}/Dockerfile" "" "${IMAGE_TAG}" "${OUTPUT_SQSH}" "${MIRROR_ARGS[@]}" "${GPU_ARGS[@]}" "${BUILD_ARGS[@]}"

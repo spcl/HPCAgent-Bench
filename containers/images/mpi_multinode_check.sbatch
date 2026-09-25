@@ -2,7 +2,7 @@
 # Cross-node MPI, proven by running across two nodes. MPI only: rccl_hook_check.sbatch already
 # covers the identical RCCL leg, so this is not duplicated here.
 #
-#   IMAGE=$SCRATCH/ce-images/hpcagent-bench-ce-amd-mi300.sqsh \
+#   IMAGE=$CE_IMAGES/<candidate>.sqsh \
 #     sbatch containers/images/mpi_multinode_check.sbatch
 #
 # Separate from mpi_gpu_check.sh (single node): intra-node collectives use XGMI/IPC and never
@@ -30,10 +30,12 @@ ulimit -c 0
 
 SCRATCH="${SCRATCH:?set SCRATCH}"
 REPO="${REPO:-${SCRATCH}/hpcagent-bench}"
-IMAGE="${IMAGE:-${SCRATCH}/ce-images/hpcagent-bench-ce-amd-mi300.sqsh}"
+# shellcheck source=images.env
+source "${REPO}/containers/images/images.env"
+IMAGE="${IMAGE:-${CE_IMAGES}/${JUDGE_AGENT_AMD_SQSH}}"
 [ -f "${IMAGE}" ] || { echo "no image at ${IMAGE}" >&2; exit 2; }
 WORK="${SCRATCH}/.tmp/mpimn-${SLURM_JOB_ID}"
-mkdir -p "${WORK}" "${SCRATCH}/ce-images/logs"
+mkdir -p "${WORK}" "${CE_IMAGES}/logs"
 
 # The cxi hook puts the host libfabric (with the CXI provider) in front of the container's
 # compile-only one; the judge-agent image ships headers and a link-only .so, no provider.
@@ -196,7 +198,7 @@ s=$(( rc_mpi + verdict ))
 
 # Preserve logs only on failure, when they are wanted for diagnosis.
 for f in "${WORK}"/*.log; do
-    if [ -e "${f}" ]; then cp -f "${f}" "${SCRATCH}/ce-images/logs/mpi-mn-${SLURM_JOB_ID}-$(basename "${f}")"; fi
+    if [ -e "${f}" ]; then cp -f "${f}" "${CE_IMAGES}/logs/mpi-mn-${SLURM_JOB_ID}-$(basename "${f}")"; fi
 done
 if [ "${s}" -eq 0 ]; then rm -rf "${WORK}"; fi
 

@@ -21,7 +21,7 @@ if [[ "${arch}" != "aarch64" ]]; then
 fi
 
 IMAGE_TAG="${IMAGE_TAG:-hpcagent-bench-vllm-cuda:latest}"
-OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/${INFERENCE_VLLM_CUDA_CANDIDATE}}"
+OUTPUT_SQSH="${OUTPUT_SQSH:-${CE_IMAGES:?set SCRATCH or CE_IMAGES}/${INFERENCE_VLLM_CUDA_CANDIDATE}}"
 # Must equal the Dockerfile's ARG default.
 BASE_IMAGE="${BASE_IMAGE:-docker.io/vllm/vllm-openai:v0.28.0-aarch64-cu129@sha256:60fa2715937e604931086a790fff2978c09995eff93439261ba09a79f02e9e68}"
 IMAGE_VERSION="${IMAGE_VERSION:-dev}"
@@ -29,21 +29,13 @@ mkdir -p "$(dirname "${OUTPUT_SQSH}")"
 
 ce_podman_env
 cd "${REPO_ROOT}"
-ce_mirror_args
-ce_cache_base_image
 
 # Bare KEY=VALUE pairs for the ARGs a candidate varies (VLLM_VERSION, TORCH_CUDA with another base).
-EXTRA_ARGS=()
-for kv in ${EXTRA_BUILD_ARGS:-}; do EXTRA_ARGS+=(--build-arg "${kv}"); done
+BUILD_ARGS=(--build-arg "IMAGE_VERSION=${IMAGE_VERSION}")
+for kv in ${EXTRA_BUILD_ARGS:-}; do BUILD_ARGS+=(--build-arg "${kv}"); done
+ce_pull_first "${SCRIPT_DIR}/Dockerfile" "vllm-cuda||${IMAGE_TAG}|${OUTPUT_SQSH}" -- "${BUILD_ARGS[@]}"
+[[ "${CE_PULLED}" == 0 ]] || exit 0
 
-# cgroupfs: with the systemd manager a dying logind session kills podman mid-pull.
-podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" \
-  --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
-  --build-arg "BASE_IMAGE_REF=${BASE_IMAGE_REF:-${BASE_IMAGE}}" \
-  --build-arg "IMAGE_VERSION=${IMAGE_VERSION}" \
-  ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
-  -f "${SCRIPT_DIR}/Dockerfile" \
-  -t "${IMAGE_TAG}" \
-  .
-
-ce_export_image "${IMAGE_TAG}" "${OUTPUT_SQSH}"
+ce_mirror_args
+ce_cache_base_image
+ce_build "${SCRIPT_DIR}/Dockerfile" "" "${IMAGE_TAG}" "${OUTPUT_SQSH}" "${MIRROR_ARGS[@]}" "${BUILD_ARGS[@]}"

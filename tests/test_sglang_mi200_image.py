@@ -200,9 +200,7 @@ def test_images_env_names_the_mi200_live_image_edf_and_template() -> None:
 
 def test_build_and_verify_maps_the_profile_to_the_candidate_its_build_writes(tmp_path: pathlib.Path) -> None:
     """VERIFY_ONLY on mi200 verifies exactly the candidate sglang-mi200/build.sbatch writes."""
-    assert "${SCRATCH:?}/ce-images/${INFERENCE_SGLANG_MI200_CANDIDATE}" in (MI200 / "build.sbatch").read_text(
-        encoding="utf-8"
-    )
+    assert "${CE_IMAGES:?}/${INFERENCE_SGLANG_MI200_CANDIDATE}" in (MI200 / "build.sbatch").read_text(encoding="utf-8")
     repo, scratch = tmp_path / "repo", tmp_path / "scratch"
     ce = repo / "containers" / "images"
     (ce / PROFILE).mkdir(parents=True)

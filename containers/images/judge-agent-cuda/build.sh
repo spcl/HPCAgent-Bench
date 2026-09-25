@@ -7,7 +7,7 @@
 #   BUILD_TARGETS=agent OUTPUT_SQSH=$SCRATCH/ce-images/x.sqsh .../build.sh
 #
 # Overrides: BUILD_TARGETS, OUTPUT_SQSH (single target only), BASE_IMAGE, HPCAGENT_BENCH_DACE_REF,
-# LIBFABRIC_REF, SLURM_VERSION, SPACK_BUILDCACHE, PIP_CACHE, CE_DIR.
+# LIBFABRIC_REF, SLURM_VERSION, SPACK_BUILDCACHE, PIP_CACHE, CE_IMAGES, CE_BUILD_CACHE, CE_PULL.
 set -euo pipefail
 
 ulimit -c 0
@@ -25,12 +25,12 @@ if [[ "${arch}" != "aarch64" ]]; then
 fi
 
 BUILD_TARGETS="${BUILD_TARGETS:-agent judge}"
-CE_DIR="${CE_DIR:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images}"
+: "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
 
 target_sqsh() {
     case "$1" in
-        agent) printf '%s/%s' "${CE_DIR}" "${JUDGE_AGENT_CUDA_CANDIDATE}" ;;
-        judge) printf '%s/%s' "${CE_DIR}" "${JUDGE_CUDA_CANDIDATE}" ;;
+        agent) printf '%s/%s' "${CE_IMAGES}" "${JUDGE_AGENT_CUDA_CANDIDATE}" ;;
+        judge) printf '%s/%s' "${CE_IMAGES}" "${JUDGE_CUDA_CANDIDATE}" ;;
         *)     echo "unknown build target $1" >&2; return 2 ;;
     esac
 }
@@ -38,7 +38,7 @@ target_sqsh() {
 # Must equal the Dockerfile's ARG default (NGC PyTorch 25.06, CUDA 12.9, arm64 manifest digest).
 BASE_IMAGE="${BASE_IMAGE:-nvcr.io/nvidia/pytorch:25.06-py3@sha256:6d46ebd64cfbc74c84e11678c0c5ae298ca97c26171c17a23fd04d23fec5123e}"
 IMAGE_VERSION="${IMAGE_VERSION:-dev}"
-mkdir -p "${CE_DIR}"
+mkdir -p "${CE_IMAGES}"
 
 # The host Slurm in spack's spelling (`slurm 25.05.8` -> 25-05-8-1): mpich +slurm must match its PMI.
 SLURM_VERSION="${SLURM_VERSION:-$(srun --version 2>/dev/null | awk '{print $2}' | tr . -)-1}"
@@ -47,11 +47,6 @@ SLURM_VERSION="${SLURM_VERSION:-$(srun --version 2>/dev/null | awk '{print $2}' 
 printf 'slurm %s\n' "${SLURM_VERSION}"
 
 ce_podman_env
-
-ce_cache_base_image
-
-PIP_CACHE="${PIP_CACHE:-${SCRATCH:?}/pip-cache}"
-mkdir -p "${PIP_CACHE}"
 
 # The release's dace pin (pyproject.toml dace-pin); HPCAGENT_BENCH_DACE_REF=extended bakes the tip.
 DACE_COMMIT="$(HPCAGENT_BENCH_DACE_REF="${HPCAGENT_BENCH_DACE_REF:-pinned}" \
@@ -72,36 +67,38 @@ LIBFABRIC_COMMIT="${LIBFABRIC_COMMIT:-$(resolve_tag https://github.com/ofiwg/lib
 printf 'libfabric     %s @ %s\n' "${LIBFABRIC_REF}" "${LIBFABRIC_COMMIT}"
 
 cd "${REPO_ROOT}"
+
+BUILD_ARGS=(
+  --build-arg "IMAGE_VERSION=${IMAGE_VERSION}"
+  --build-arg "DACE_COMMIT=${DACE_COMMIT}"
+  --build-arg "LIBFABRIC_REF=${LIBFABRIC_REF}"
+  --build-arg "LIBFABRIC_COMMIT=${LIBFABRIC_COMMIT}"
+  --build-arg "SLURM_VERSION=${SLURM_VERSION}"
+)
+# OUTPUT_SQSH names the output of a single-target build only.
+target_out() {
+    if [[ -n "${OUTPUT_SQSH:-}" && "$(printf '%s\n' ${BUILD_TARGETS} | wc -w)" -eq 1 ]]; then
+        printf '%s' "${OUTPUT_SQSH}"
+    else
+        target_sqsh "$1"
+    fi
+}
+declare -A ROLE=([agent]=judge-agent-cuda [judge]=judge-cuda)
+SPECS=()
+for target in ${BUILD_TARGETS}; do
+    SPECS+=("${ROLE[${target}]}|${target}|hpcagent-bench-ce-${target}-cuda:latest|$(target_out "${target}")")
+done
+ce_pull_first "${SCRIPT_DIR}/Dockerfile" "${SPECS[@]}" -- "${BUILD_ARGS[@]}"
+[[ "${CE_PULLED}" == 0 ]] || exit 0
+
 ce_mirror_args
 ce_require_mirror_commit "spcl/dace.git" "${DACE_COMMIT}"
 ce_require_mirror_commit "ofiwg/libfabric.git" "${LIBFABRIC_COMMIT}"
-
+ce_cache_base_image
 # The spack binary buildcache, one directory per architecture.
-SPACK_BUILDCACHE="${SPACK_BUILDCACHE:-${SCRATCH:?}/spack-buildcache-${arch}}"
-mkdir -p "${SPACK_BUILDCACHE}"
-CACHE_ARGS=(-v "${SPACK_BUILDCACHE}:/spack-buildcache:rw" -v "${PIP_CACHE}:/pip-cache:rw")
-printf 'spack buildcache %s\n' "${SPACK_BUILDCACHE}"
+ce_cache_args "spack-buildcache-${arch}" pip-cache
 
-# cgroupfs: with the systemd manager a dying logind session kills podman mid-pull.
 for target in ${BUILD_TARGETS}; do
-    tag="hpcagent-bench-ce-${target}-cuda:latest"
-    if [[ -n "${OUTPUT_SQSH:-}" && "$(printf '%s\n' ${BUILD_TARGETS} | wc -w)" -eq 1 ]]; then
-        out="${OUTPUT_SQSH}"
-    else
-        out="$(target_sqsh "${target}")"
-    fi
-    printf '\n===== building target %s -> %s =====\n' "${target}" "${out}"
-    podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" "${CACHE_ARGS[@]}" \
-      --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
-      --build-arg "BASE_IMAGE_REF=${BASE_IMAGE_REF:-${BASE_IMAGE}}" \
-      --build-arg "IMAGE_VERSION=${IMAGE_VERSION}" \
-      --build-arg "DACE_COMMIT=${DACE_COMMIT}" \
-      --build-arg "LIBFABRIC_REF=${LIBFABRIC_REF}" \
-      --build-arg "LIBFABRIC_COMMIT=${LIBFABRIC_COMMIT}" \
-      --build-arg "SLURM_VERSION=${SLURM_VERSION}" \
-      --target "${target}" \
-      -f "${SCRIPT_DIR}/Dockerfile" \
-      -t "${tag}" \
-      .
-    ce_export_image "${tag}" "${out}"
+    ce_build "${SCRIPT_DIR}/Dockerfile" "${target}" "hpcagent-bench-ce-${target}-cuda:latest" "$(target_out "${target}")" \
+        "${MIRROR_ARGS[@]}" "${CACHE_ARGS[@]}" "${BUILD_ARGS[@]}"
 done

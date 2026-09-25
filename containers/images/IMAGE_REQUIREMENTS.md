@@ -118,6 +118,30 @@ in a prefix the Dockerfile controls (a copy in the image would be found first).
 * A missing `aws_ofi_nccl` hook does not fail: NCCL/RCCL fall back to TCP sockets over `hsn*` and are
   merely slow. Multi-node checks assert `NET/OFI` in the log, never just a correct result.
 
+## Build defaults
+
+Every `build.sh` (and so every `build.sbatch` and `build_and_verify.sbatch`) sources
+`build_common.sh`, which sets two defaults, each an environment knob:
+
+* **Caches on (`CE_BUILD_CACHE=1`).** The podman layer store on the node's tmpfs (`$CE_TMPFS/root`)
+  is kept between jobs, so a failed build resubmitted to the same node (`--nodelist=<node>`, printed
+  at the start of the build) resumes from its last good layer. The spack binary buildcache
+  (`$SPACK_BUILDCACHE`, default `$SCRATCH/spack-buildcache[-<arch>]`) and the pip wheel cache
+  (`$PIP_CACHE`, default `$SCRATCH/pip-cache[/<gpu arch>]`) live on scratch and resume on any node;
+  the Dockerfiles use them when mounted. The kept store occupies node RAM (tmpfs) until the next
+  build on that node. `CE_BUILD_CACHE=0` wipes the store, builds with `--no-cache` and mounts
+  neither cache. The digest-pinned base image copy (`$BASE_CACHE`) is not a build cache and stays.
+* **Pull first (`CE_PULL=1`).** Before building, the script computes the build-inputs fingerprint
+  (`ce_build_fingerprint`: the Dockerfile through the target stage, the build args, the base
+  reference and the git blobs of every path those stages `COPY`) and reads the
+  `org.hpcagent-bench.build-inputs` label of `$PULL_REPO:<images.env tag>` from the registry
+  without pulling layers. `PULL_REPO` is `PUSH_REPO` when set, else `REGISTRY_REPO`. When every
+  target's label matches, the images are pulled and exported like a build (squashfs, `.digest`,
+  OCI archive, never pushed back); otherwise all targets build and carry the label. Uncommitted
+  edits under a copied path make the inputs unknown: no pull. `CE_PULL=only` pulls the tag whatever
+  its label (and fails when it cannot); `CE_PULL=0` always builds. A role with no tag in
+  `images.env` always builds.
+
 ## Verification
 
 `build_and_verify.sbatch` (AMD) and each GH200/CPU `build.sbatch` verify a candidate inside itself
