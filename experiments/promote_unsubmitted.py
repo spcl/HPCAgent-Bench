@@ -122,9 +122,8 @@ def submitted_pairs(
     ``cuts`` maps a run id to its worker's FINAL-attempt start (T5), as :func:`candidates` and
     :func:`swept_candidates` cut the grades. A submission older than that came from an attempt the
     relaunch wiped, and the analysis drops it (spec X7), so it does not stand for the episode and
-    must not block promoting the final attempt's own correct score: 645737's tsvc_2_s152 and
-    645712's tsvc_2_s1232 each held a correct final-attempt score behind such a submission and were
-    left with no answer at all.
+    must not block promoting the final attempt's own correct score, or the episode is left with no
+    answer at all.
     """
     where = " where run_id = ?" if only_run_id else ""
     args: tuple = (only_run_id,) if only_run_id else ()
