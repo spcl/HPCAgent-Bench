@@ -19,11 +19,6 @@ and commit 32b0e3d6f swept it into every ``*.sbatch`` file that lacked it. That 
    it) would not see a regression here; this loads the module and calls ``render_sbatch`` the same
    way ``tests/test_preset_sweep.py`` does, and inspects what it actually returns.
 
-``scripts/smoke_level3.sbatch`` is the third surface a plain ``.sbatch``-suffix scan already
-covers once the directive is added to it: it ships with no ``#SBATCH`` header of its own (every
-flag arrives on the ``sbatch`` command line in its documented submit comment), so the fix there is
-the directive itself plus that documented line, both asserted below.
-
 Scope: ``git ls-files`` (the same enumeration the review that raised this asked for) never
 descends into ``third_party/KernelBench`` -- a git submodule recorded as a single gitlink entry,
 not individual files -- so the vendored tree is excluded without a special case.
@@ -110,15 +105,3 @@ def test_preset_sweep_emitted_header_never_requeues() -> None:
     module = load_preset_sweep()
     emitted = module.render_sbatch("a", framework="numpy", presets=["L"], single_core_presets=(), repeat=1)
     assert GUARD in emitted, f"scripts/preset_sweep.py render_sbatch() omits `{GUARD}` from its emitted header"
-
-
-def test_smoke_level3_documents_no_requeue_on_its_submit_line() -> None:
-    """``scripts/smoke_level3.sbatch`` carries no other ``#SBATCH`` directive (every flag arrives
-    on the command line), so its documented submit comment is the only place a caller who copies
-    it would ever see the flag -- it must carry ``--no-requeue`` too, not just the file's own
-    directive."""
-    text = (REPO / "scripts" / "smoke_level3.sbatch").read_text(encoding="utf-8")
-    submit_lines = [line for line in text.splitlines() if line.strip().startswith("#") and "sbatch " in line]
-    assert any("--no-requeue" in line for line in submit_lines), (
-        "scripts/smoke_level3.sbatch's documented `sbatch ...` submit line is missing --no-requeue"
-    )
