@@ -46,9 +46,6 @@ def impact_frame(**overrides: object) -> pd.DataFrame:
         "token_n": 40,
         "token_p_adjusted": 0.0172,
         "token_verdict": "significant",
-        "token_total_ratio": 1.629,
-        "token_total_ci_low": 1.1759,
-        "token_total_ci_high": 2.244,
     }
     treated.update(overrides)
     control = dict.fromkeys(treated, math.nan) | {"model": "qwen38", "language": "c", "arm": "x-qwen38-c"}
@@ -63,11 +60,10 @@ def test_only_the_treatment_rows_are_rendered() -> None:
     assert len(table.splitlines()) == 3
 
 
-def test_the_row_carries_both_legs_and_the_total_token_ratio() -> None:
+def test_the_row_carries_both_legs() -> None:
     cells = impact_markdown.markdown(impact_frame()).splitlines()[2]
     assert "1.21 [0.93, 1.57]" in cells
     assert "1.61 [1.09, 2.36]" in cells
-    assert "1.63 [1.18, 2.24]" in cells
 
 
 def test_a_significant_leg_is_starred_and_carries_its_corrected_p() -> None:

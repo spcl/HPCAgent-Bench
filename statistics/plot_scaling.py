@@ -26,10 +26,18 @@ import sys
 import pandas as pd
 
 from hpcagent_bench import experiments
+from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import scaling
 
 #: ``--figure`` choices. ``all`` draws every one of them in a single pass over the frame.
-FIGURES: tuple[str, ...] = ("all", "efficiency", "speedup", "per-kernel", "summary")
+FIGURES: tuple[str, ...] = (
+    "all",
+    "efficiency",
+    "speedup",
+    "per-kernel",
+    "summary",
+    "mode-grid",
+)
 
 
 def load(path: pathlib.Path, prefix: str, arm: str, torch_dist: bool = True) -> pd.DataFrame:
@@ -70,6 +78,21 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="figure width in inches; default is the double-column paper width",
+    )
+    parser.add_argument(
+        "--print-width",
+        type=float,
+        default=0.0,
+        help="draw at PRINT size for a paper that places the figure at exactly this width in inches "
+        "(e.g. 2.475 for an ICLR wrap figure); overrides --width",
+    )
+    parser.add_argument(
+        "--kernels", nargs="+", default=[], help="per-kernel figure: the kernels that get a panel, in order"
+    )
+    parser.add_argument(
+        "--geomean-panel",
+        action="store_true",
+        help="per-kernel figure: add a last panel with each setup's geomean over all its kernels",
     )
     parser.add_argument(
         "--no-torch-dist", action="store_true", help="leave out the torch.distributed baseline curve (arm torch_dist)"
@@ -114,21 +137,27 @@ def report(curves: list[scaling.Curve]) -> None:
 
 def draw(curves: list[scaling.Curve], args: argparse.Namespace) -> list[pathlib.Path]:
     """Every requested figure, saved under ``--out``. A figure with nothing to draw is skipped."""
-    width = args.width or None
+    type_ = plotstyle.PRINT_SCALE if args.print_width else plotstyle.AUTHOR_SCALE
+    width = args.print_width or args.width or plotstyle.DOUBLE_COLUMN_WIDTH
     written: list[pathlib.Path] = []
     wanted = FIGURES[1:] if args.figure == "all" else (args.figure,)
     for name in wanted:
         if name == "per-kernel":
-            fig = scaling.figure_per_kernel(curves, args.mode, args.quantity, **({"width": width} if width else {}))
+            fig = scaling.figure_per_kernel(
+                curves, args.mode, args.quantity, width=width, type_=type_, kernels=args.kernels,
+                geomean_panel=args.geomean_panel,
+            )  # fmt: skip
             stem = args.out.with_name(f"{args.out.name}-per-kernel-{args.mode}")
+        elif name == "mode-grid":
+            fig = scaling.figure_mode_grid(curves, args.kernels, args.quantity, width=width, type_=type_)
+            stem = args.out.with_name(f"{args.out.name}-{name}")
         else:
-            builder = scaling.BUILDERS[name]
-            fig = builder(curves, **({"width": width} if width else {}))
+            fig = scaling.BUILDERS[name](curves, width=width, type_=type_)
             stem = args.out.with_name(f"{args.out.name}-{name}")
         if fig is None:
             print(f"nothing drawable for --figure {name}", file=sys.stderr)
             continue
-        written.append(scaling.save(fig, stem))
+        written.append(scaling.save(fig, stem, width_in=args.print_width))
     return written
 
 

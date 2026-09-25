@@ -1,92 +1,40 @@
-# Judge Tools
+# Judge tools
 
-No image carries this directory; the image installs only its dependencies (`requirements.txt`). It
-holds one tool, `web_search`: the judge mounts the submitting checkout, `experiments/judge_service.py`
-imports it from `containers/judge/tools`, and `experiments/run_cluster.sh` puts that directory on the
-judge's `PYTHONPATH`.
+One tool lives here: `tools/web_search.py`, the backend of the agent's `search` tool. No image
+copies this directory; the judge image installs only `requirements.txt`. On a cluster,
+`experiments/run_cluster.sh` puts `containers/judge/tools` on the judge's `PYTHONPATH` and the
+router (`experiments/judge_service.py`) serves it as `POST /search`.
 
-`web_search` is process-oriented and runs once per query:
+A query goes to SerpAPI for candidate pages, Crawl4AI crawls them and keeps only BM25-matching
+content, and an OpenAI-compatible chat endpoint writes an answer with sources.
 
-```bash
-python3 containers/judge/tools/web_search.py --query "best rocBLAS batched GEMM API"
-```
-
-It reads configuration from `.env` or environment variables, calls SerpAPI for
-candidate results, uses Crawl4AI to crawl and query-filter those pages, then asks
-an OpenAI/vLLM-compatible chat endpoint to synthesize an answer with sources.
-
-## Files
-
-```text
-judge/
-  .env.example
-  requirements.txt
-  tools/web_search.py
-```
-
-The network-free test is `tests/test_judge_web_search.py` at the repository root.
-
-## Configuration
+## Setup
 
 ```bash
-cp containers/judge/.env.example .env
+python3 -m pip install -r containers/judge/requirements.txt
+playwright install chromium
+cp containers/judge/.env.example containers/judge/.env   # then fill the three keys below
 ```
 
-Required:
-
-```bash
-SERPAPI_API_KEY=<serpapi-key>
-WEBSEARCH_LLM_BASE_URL=http://<vllm-host>:8000/v1
-WEBSEARCH_LLM_MODEL=<model-name>
-```
-
-Optional:
-
-```bash
-SERPAPI_URL=https://serpapi.com/search.json
-WEBSEARCH_LLM_API_KEY=
-WEBSEARCH_TIMEOUT_SECONDS=60
-WEBSEARCH_MAX_RESULTS=5
-WEBSEARCH_MAX_PAGES=3
-WEBSEARCH_MAX_CHARS_PER_PAGE=6000
-WEBSEARCH_CRAWL_CONCURRENCY=3
-WEBSEARCH_CHECK_ROBOTS_TXT=true
-WEBSEARCH_PAGE_TIMEOUT_MS=30000
-WEBSEARCH_BM25_THRESHOLD=1.0
-WEBSEARCH_BM25_LANGUAGE=english
-WEBSEARCH_LLM_MAX_TOKENS=4096
-WEBSEARCH_LLM_TOKEN_FIELD=max_tokens
-WEBSEARCH_LLM_TEMPERATURE=
-WEBSEARCH_LLM_REASONING_EFFORT=minimal
-WEBSEARCH_LLM_VERBOSITY=low
-WEBSEARCH_LLM_EMPTY_RETRY_MULTIPLIER=4
-# test/dev only: JSON mapping URL -> page text; when set, Crawl4AI is skipped
-WEBSEARCH_FAKE_CRAWL_JSON=
-```
+Required: `SERPAPI_API_KEY`, `WEBSEARCH_LLM_BASE_URL` (for example `http://$VLLM_HOST:8000/v1`),
+`WEBSEARCH_LLM_MODEL`. Every other key and its default is in `.env.example`. Environment
+variables win; the first existing file among `--env-file`, `./.env` and `containers/judge/.env`
+fills the unset keys.
 
 ## Run
 
 ```bash
-python3 tools/web_search.py --query "CUDA cooperative groups grid sync examples"
+python3 containers/judge/tools/web_search.py --query "rocBLAS batched GEMM API"
+python3 containers/judge/tools/web_search.py --query "CUDA grid sync" --text   # answer only
 ```
 
-JSON output includes:
+The JSON output holds `query`, `answer`, `sources`, `search_results` and `crawled_pages`. A failure
+prints `{"ok": false, "error": ...}`.
 
-- `query`
-- `answer`
-- `sources`
-- `search_results`
-- `crawled_pages`
-
-## Install Notes
-
-The tool uses Crawl4AI in production. Live mode uses `arun_many()` for multi-URL crawling,
-`DefaultMarkdownGenerator` with citations, and `BM25ContentFilter(user_query=<query>)` so each
-page is reduced to content that matches the question before it is sent to the LLM.
-
-Install:
+## Test
 
 ```bash
-python3 -m pip install -r requirements.txt
-playwright install chromium
+python -m pytest tests/test_judge_web_search.py
 ```
+
+The test is network-free: `WEBSEARCH_FAKE_CRAWL_JSON` maps URLs to page text and skips Crawl4AI.

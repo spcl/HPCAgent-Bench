@@ -69,7 +69,6 @@ def graded(
         "benchmark": kernel,
         "speedup": speedup,
         "tokens": "",
-        "suspect": 0,
         "baseline": "numba",
         "ts_ms": ts,
         "attempt_index": index,
@@ -268,27 +267,28 @@ def test_the_impact_table_has_one_row_per_arm_with_the_ratio_on_the_treatment_ro
     paired_arms: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """Spec section 10: every arm once, the control carrying no ratio, the treatment carrying
-    treatment/control on both legs -- a token ratio of 0.5 reads as half the spend."""
+    the paper's rho on both legs -- speed-up treatment/control 3/2, cost control/treated 100/50 = 2
+    (above 1: the treatment is cheaper)."""
     table = impact_table(paired_arms, tmp_path).set_index("arm")
     assert list(table.index) == ["x-qwen38-c-cpf", "x-qwen38-c"]
     assert list(table.columns) == [c for c in paired_arms.IMPACT_COLUMNS if c != "arm"]
     treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
     assert treated.control == "x-qwen38-c" and pd.isna(control.control)
-    assert treated.speedup_ratio == pytest.approx(1.5) and treated.token_ratio == pytest.approx(0.5)
+    assert treated.speedup_ratio == pytest.approx(1.5) and treated.token_ratio == pytest.approx(2.0)
     assert pd.isna(control.speedup_ratio) and pd.isna(control.token_ratio)
     assert (treated.model, treated.language, treated.packet) == ("qwen38", "c", "cpf")
 
 
 def test_the_impact_table_carries_usage_and_the_arm_aggregates(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
-    """Attempts come off the task rows, speed-up is the geomean (A1), cost the median task total with
-    its interval (A2), each over the 8 selected tasks."""
+    """Attempts come off the task rows, speed-up is the geomean (A1), cost the geomean task total with
+    its log-t interval (A2), each over the 8 selected tasks."""
     table = impact_table(paired_arms, tmp_path).set_index("arm")
     treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
     assert (treated.tasks, treated.n_solved, treated.n_token_kernels) == (8, 8, 8)
     assert (treated.attempts_per_task, control.attempts_per_task) == (2.0, 1.0)
     assert treated.accepted_submissions_per_task == pytest.approx(1.0)
-    assert treated.geomean_speedup == pytest.approx(3.0) and control.median_tokens == pytest.approx(100.0)
-    assert treated.median_tokens_ci_low == pytest.approx(50.0) == treated.median_tokens_ci_high
+    assert treated.geomean_speedup == pytest.approx(3.0) and control.gm_tokens == pytest.approx(100.0)
+    assert treated.gm_tokens_ci_low == pytest.approx(50.0) == treated.gm_tokens_ci_high
 
 
 def test_counts_are_written_as_integers_and_ratios_at_full_precision(
@@ -338,7 +338,8 @@ def test_a_pair_reports_what_the_intersection_dropped(paired_arms: ModuleType, t
     assert (speed["n_a"], speed["n_b"], speed["n_pairs"]) == (8, 8, 8)
     # delivery: b answered two that a did not, and the coverage columns still say so
     assert (speed["n_both"], speed["n_only_a"], speed["n_only_b"]) == (6, 0, 2)
-    assert speed["coverage_p"] == pytest.approx(population.mcnemar_exact(0, 2))
+    # exact McNemar on (0, 2): 2 * C(2, 0) / 2^2 = 0.5, by hand
+    assert speed["coverage_p"] == pytest.approx(0.5)
 
     solved = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
     by_default = paired_arms.pair_rows([("a", "b")], solved, paired_arms.tokens_by_arm_kernel(obs), list(KERNELS), "f")
@@ -387,6 +388,7 @@ def test_the_correction_runs_over_every_leg_of_every_pair(paired_arms: ModuleTyp
 
     assert len(reported) == 4
     assert all(row["p_adjusted"] >= row["p_value"] for row in reported)
+    # the solved rate is reported, never tested: the family is the speed-up and cost legs only
     assert {row["leg"] for row in reported} == {"speedup", "tokens"}
 
 
@@ -614,30 +616,6 @@ def test_the_impact_table_carries_the_relaunch_rate_beside_every_token_ratio(
     assert treated.share_relaunched == pytest.approx(1.0) and control.share_relaunched == pytest.approx(0.0)
 
 
-def test_the_token_leg_carries_the_total_ratio_and_the_speedup_leg_does_not(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
-) -> None:
-    """The budget over the whole roster is a token question; a total speed-up over kernels with no
-    common unit is not a quantity, so that cell stays blank."""
-    rows: list[dict[str, object]] = []
-    for index, kernel in enumerate(KERNELS):
-        spend = 100.0 * (index + 1)
-        rows += episode("x-qwen38-c", kernel, 2.0, spend) + episode("x-qwen38-c-cpf", kernel, 3.0, 2.0 * spend)
-    path = observations(rows, tmp_path)
-    out = tmp_path / "pairs.csv"
-    assert (
-        paired_arms.main(
-            ["--observations", str(path), "--pair", "x-qwen38-c-cpf,x-qwen38-c", "--family", "f", "--out", str(out)]
-        )
-        == 0
-    )
-    pairs = pd.read_csv(out).set_index("leg")
-    assert pairs.at["tokens", "total_ratio"] == pytest.approx(2.0)
-    assert pairs.at["tokens", "total_ci_low"] == pytest.approx(2.0)
-    assert pairs.at["tokens", "total_ci_high"] == pytest.approx(2.0)
-    assert pd.isna(pairs.at["speedup", "total_ratio"])
-
-
 def test_a_declared_roster_is_read_from_the_file_and_not_from_the_rows(
     paired_arms: ModuleType, tmp_path: pathlib.Path
 ) -> None:
@@ -851,3 +829,107 @@ def test_the_impact_table_carries_cpf_uptake_only_for_the_arm_it_was_given(
     table = pd.read_csv(out).set_index("arm")
     assert table.loc["x-qwen38-c-cpf", "cpf_uptake"] == pytest.approx(6 / 8)
     assert pd.isna(table.loc["x-qwen38-c", "cpf_uptake"])
+
+
+def priced_task(arm: str, kernel: str, fresh: float, cached: float) -> dict[str, object]:
+    """A task row whose three cards disagree: effective ``fresh``, billed ``fresh + 0.1 cached``,
+    total ``fresh + cached``. The raw ``tokens_billed`` column carries a decoy no card produces."""
+    return task(arm, kernel, fresh) | {"tokens_cached_input": cached, "tokens_billed": 1e9}
+
+
+def cost_fixture(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Seven kernels, both arms served all seven. Treatment solves k1-k7 at 2x/4x alternating on k1-k6
+    and 100x on k7; control solves k1-k6 at 1x and is SERVED k7 without solving it. Billed tokens:
+    treatment 100 on k1-k6 and 400 on k7; control 200 on k1-k6 (100 fresh + 1000 cached) and 100 on k7."""
+    rows: list[dict[str, object]] = []
+    for index, kernel in enumerate(KERNELS[:6]):
+        rows += [
+            graded("x-qwen38-c-cpf", kernel, 2.0 if index % 2 == 0 else 4.0),
+            priced_task("x-qwen38-c-cpf", kernel, 100.0, 0.0),
+        ]
+        rows += [graded("x-qwen38-c", kernel, 1.0), priced_task("x-qwen38-c", kernel, 100.0, 1000.0)]
+    rows += [graded("x-qwen38-c-cpf", "k7", 100.0), priced_task("x-qwen38-c-cpf", "k7", 400.0, 0.0)]
+    rows += [call("x-qwen38-c", "k7", 100.0), priced_task("x-qwen38-c", "k7", 100.0, 0.0)]
+    return observations(rows, tmp_path)
+
+
+def test_the_speedup_leg_is_over_the_kernels_both_solved_and_the_cost_leg_over_every_served_kernel(
+    paired_arms: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """Paper rho_S over B, rho_C over K. rho_S = GM(2,4,2,4,2,4) = sqrt(8): k7, solved by one arm only,
+    is out. rho_C = GM(C_control / C_treated) = GM(2 x6, 0.25) = 2^(4/7) = 1.48599 on BILLED tokens:
+    k7, unsolved by the control, still counts (over B alone it would read 2.0; on effective tokens
+    1.0 on k1-k6)."""
+    out = tmp_path / "pairs.csv"
+    arms_out = tmp_path / "arms.csv"
+    rc = paired_arms.main(
+        [
+            "--observations", str(cost_fixture(tmp_path)),
+            "--pair", "x-qwen38-c-cpf,x-qwen38-c",
+            "--family", "f",
+            "--out", str(out),
+            "--arms-out", str(arms_out),
+        ]
+    )  # fmt: skip
+    assert rc == 0
+    legs = pd.read_csv(out).set_index("leg")
+    assert legs.at["speedup", "n_pairs"] == 6
+    assert legs.at["speedup", "rho"] == pytest.approx(2.8284271247461903)
+    assert legs.at["tokens", "n_pairs"] == 7
+    assert legs.at["tokens", "rho"] == pytest.approx(1.4859942891369484)
+    assert legs.at["tokens", "cost_model"] == "billed"
+    control = pd.read_csv(arms_out).set_index("arm").loc["x-qwen38-c"]
+    # GM billed tokens over K: (200^6 * 100)^(1/7)
+    assert control.n_token_kernels == 7
+    assert control.gm_tokens == pytest.approx(181.14473285278135)
+    assert control.gm_tokens_ci_low < control.gm_tokens < control.gm_tokens_ci_high
+
+
+def test_coverage_is_an_exact_mcnemar_on_the_discordant_kernels(
+    paired_arms: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """The descriptive coverage column is exact McNemar on (g, l) = (1, 7):
+    p = 2 * (C(8,0) + C(8,1)) / 2^8 = 0.0703125."""
+    roster = [f"k{i}" for i in range(1, 11)]
+    rows: list[dict[str, object]] = []
+    for kernel in roster:
+        rows += [call("a", kernel, 100.0), task("a", kernel, 100.0), call("b", kernel, 100.0), task("b", kernel, 100.0)]
+    rows += [graded("a", kernel, 2.0) for kernel in roster[:3]]
+    rows += [graded("b", kernel, 2.0) for kernel in roster[:2] + roster[3:]]
+    obs = paired_arms.load_observations([observations(rows, tmp_path)])
+    best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a", "b"]))
+    table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
+
+    reported = paired_arms.pair_rows([("a", "b")], table, paired_arms.tokens_by_arm_kernel(obs), roster, "f")
+
+    speed = next(row for row in reported if row["leg"] == "speedup")
+    assert (speed["n_a"], speed["n_b"], speed["n_only_a"], speed["n_only_b"]) == (3, 9, 1, 7)
+    assert speed["coverage_p"] == pytest.approx(0.0703125)
+
+
+@pytest.mark.parametrize(("n", "has_interval"), [(5, False), (6, True)])
+def test_an_arm_interval_is_withheld_below_six_kernels(paired_arms: ModuleType, n: int, has_interval: bool) -> None:
+    """Spec A1/A2: the arm geomean keeps its point at any n, its interval only from 6 values up."""
+    point, low, high = paired_arms.floored_geomean([1.0, 2.0, 4.0, 1.0, 2.0, 4.0][:n])
+    assert point > 1.0
+    assert math.isfinite(low) == has_interval == math.isfinite(high)
+
+
+def test_a_served_kernel_without_a_task_token_total_is_dropped_loudly(
+    paired_arms: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """Both arms were served k1-k8; b has no task row on k7 and k8, so K is 6 of 8 and the run says so."""
+    rows = [row for kernel in KERNELS for row in episode("a", kernel, 2.0, 100.0)]
+    rows += [row for kernel in KERNELS[:6] for row in episode("b", kernel, 2.0, 100.0)]
+    rows += [row for kernel in KERNELS[6:] for row in (graded("b", kernel, 2.0), call("b", kernel, 100.0))]
+    obs = paired_arms.load_observations([observations(rows, tmp_path)])
+    best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a", "b"]))
+    served = paired_arms.served_by_arm(obs)
+    table = paired_arms.arm_aggregates(best, served, "numba")
+
+    with pytest.warns(UserWarning, match=r"served \(8\): b 2 \['k7', 'k8'\]"):
+        reported = paired_arms.pair_rows(
+            [("a", "b")], table, paired_arms.tokens_by_arm_kernel(obs), list(KERNELS), "f", served
+        )
+
+    assert next(row for row in reported if row["leg"] == "tokens")["n_pairs"] == 6

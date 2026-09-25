@@ -312,3 +312,6 @@ experiments/*-[0-9]*.out
 *.ritom-orig
 .perf_reports/
 experiments/mwd-final-*/
+
+# anonymous.4open.science replacement terms (identifying, never committed)
+.anonymize-terms.txt

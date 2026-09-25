@@ -3,6 +3,7 @@
 """The one save idiom every figure goes through."""
 
 import pathlib
+import re
 
 import matplotlib
 import pytest
@@ -83,3 +84,45 @@ def test_a_point_mark_that_never_delivered_an_answer_carries_a_cross_on_the_mode
         assert ax.collections[-1].get_zorder() > style.MARK_Z
     finally:
         plt.close(fig)
+
+
+def small_figure(width_in: float, fontsize: float = style.PRINT_TICK_PT) -> plt.Figure:
+    """A one-axes figure at ``width_in`` whose text is all ``fontsize`` and whose ink is narrower."""
+    fig, ax = plt.subplots(figsize=(width_in, 1.5))
+    ax.plot([1.0, 2.0])
+    ax.tick_params(labelsize=fontsize)
+    ax.set_xlabel("x", fontsize=fontsize)
+    fig.tight_layout(pad=1.5)
+    return fig
+
+
+def test_a_paper_figure_is_saved_exactly_as_wide_as_it_is_placed(tmp_path: pathlib.Path) -> None:
+    """A tight crop sets the width from the ink, and the page then rescales the type by placed/drawn:
+    the cost figure was drawn 2.586in wide, placed at 2.475in, and printed its 7pt ticks at 6.7pt."""
+    style.save(
+        small_figure(style.ICLR_WRAP_WIDTH_IN), tmp_path / "wrap", formats=("pdf",), width_in=style.ICLR_WRAP_WIDTH_IN
+    )
+
+    box = re.search(rb"/MediaBox\s*\[\s*0 0 ([0-9.]+)", (tmp_path / "wrap.pdf").read_bytes())
+    assert box is not None
+    assert float(box.group(1)) / 72.0 == pytest.approx(style.ICLR_WRAP_WIDTH_IN, abs=1e-3)
+
+
+@pytest.mark.parametrize("fontsize", [style.PRINT_MIN_PT - 1.0, style.PRINT_LABEL_PT + 2.0])
+def test_a_paper_figure_with_type_off_the_print_scale_is_refused(tmp_path: pathlib.Path, fontsize: float) -> None:
+    """Text that one figure shrinks to fit (or draws at authoring size) prints at a size no other
+    figure on the page uses; the save refuses it instead of writing it."""
+    with pytest.raises(ValueError, match="text outside"):
+        style.save(small_figure(3.0, fontsize), tmp_path / "f", formats=("pdf",), width_in=3.0)
+
+
+def test_a_paper_figure_drawn_at_another_width_is_refused(tmp_path: pathlib.Path) -> None:
+    """A canvas of the wrong width would be rescaled by the page, which is the defect the check exists for."""
+    with pytest.raises(ValueError, match="placed at"):
+        style.save(small_figure(3.0), tmp_path / "f", formats=("pdf",), width_in=style.ICLR_WRAP_WIDTH_IN)
+
+
+def test_a_self_sized_figure_on_the_print_scale_still_has_its_type_checked(tmp_path: pathlib.Path) -> None:
+    """``fixed`` figures (efficacy, per-kernel) size their own canvas; ``print_size`` gives them the same check."""
+    with pytest.raises(ValueError, match="text outside"):
+        style.save(small_figure(3.0, 12.0), tmp_path / "f", formats=("pdf",), fixed=True, print_size=True)

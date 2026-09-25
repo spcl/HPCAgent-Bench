@@ -147,14 +147,15 @@ def test_diagnostics_axis_labels_are_title_case(monkeypatch: pytest.MonkeyPatch,
 
 
 def test_diagnostics_colours_trace_to_named_statistic_constants() -> None:
-    """No literal hue: :func:`draw_interval_band` and the diagnostic panels draw with the module's
-    own named STATISTIC colours, never a bare hex string re-typed at each call site."""
+    """No literal hue: :func:`draw_interval_band` and the diagnostic panels draw with the shared
+    STATISTIC inks (``style.STAT_INK``), never a bare hex string re-typed at each call site."""
     import inspect
+    import re
 
     source = inspect.getsource(plotting)
-    for literal in ('color="#2a78d6"', 'color="#d64550"', 'color="#1baf7a"', 'color="#8a8a86"'):
-        assert literal not in source, f"{literal} should be a named SAMPLE_HUE/FITTED_HUE constant"
-    assert plotting.SAMPLE_HUE and plotting.FITTED_HUE and plotting.RAW_POINT_HUE and plotting.QQ_REFERENCE_HUE
+    assert re.findall(r"#[0-9a-fA-F]{6}\b", source) == []
+    for role in ("sample", "fit", "raw_point"):
+        assert f"style.STAT_INK.{role}" in source, role
 
 
 def test_diagnostics_refuses_an_empty_sample(tmp_path: pathlib.Path) -> None:

@@ -94,6 +94,10 @@ class PacketDef:
     device: str = ""
     #: Why a recorded key takes no new submissions; "" while it still does.
     frozen: str = ""
+    #: The shape this packet wears instead of the next free one from the pool ("": the pool's).
+    marker: str = ""
+    #: A figure's short spelling, for a column naming delivery and packet at once ("C-Skills").
+    short: str = ""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -106,6 +110,9 @@ class Registry:
 
     control_color: str
     markers: tuple[str, ...]
+    #: The treatments' shape pool (packets then harnesses, in file order): a marker code or a
+    #: (sides, style, angle) tuple, see :mod:`hpcagent_bench.stats.palette`.
+    shapes: tuple["Marker", ...]
     lightness_step: float
     experiments: Names
     models: dict[str, ModelEntry]
@@ -141,6 +148,18 @@ def as_block(raw: object) -> dict[object, object]:
     are ``object`` until each one is converted. This is the single place that says so; everything
     downstream reads a real type."""
     return cast("dict[object, object]", raw) if isinstance(raw, dict) else {}
+
+
+#: A matplotlib marker: a code such as ``"s"``, or ``(sides, style, angle)``.
+Marker = str | tuple[int, int, float]
+
+
+def marker_of(raw: object) -> Marker:
+    """One shape-pool entry: a list ``[sides, style, angle]`` becomes the tuple matplotlib reads."""
+    if isinstance(raw, list):
+        sides, kind, angle = raw
+        return (int(sides), int(kind), float(angle))
+    return str(raw)
 
 
 def models_of(raw: object) -> dict[str, ModelEntry]:
@@ -185,6 +204,8 @@ def packet_defs_of(raw: object) -> dict[str, PacketDef]:
                 tools=tuple(str(t) for t in as_list(fields.get("tools"))),
                 device=str(fields.get("device", "")),
                 frozen=str(fields.get("frozen", "")),
+                marker=str(fields.get("marker", "")),
+                short=str(fields.get("short", "")),
             )
         else:
             out[str(tag)] = PacketDef(name=str(entry), skills=(), packets=(), env=(), method="")
@@ -242,6 +263,7 @@ def registry() -> Registry:
     return Registry(
         control_color=str(doc.get("control_color", "#4d4d4d")),
         markers=tuple(str(m) for m in as_list(markers)),
+        shapes=tuple(marker_of(m) for m in as_list(doc.get("shapes"))),
         lightness_step=float(step) if isinstance(step, (int, float)) else 0.13,
         experiments=names_of(doc.get("experiments"), "experiments"),
         models=models_of(doc.get("models")),
@@ -339,6 +361,12 @@ def model_checkpoint(model: str) -> str:
     """
     entry = registry().models.get(canonical("models", str(model).lower()))
     return entry.serves if entry is not None else ""
+
+
+def packet_short_name(packet: str) -> str:
+    """A packet's short figure spelling (its registry ``short:``), else its display name."""
+    definition = registry().packet_defs.get(canonical("packets", str(packet)))
+    return definition.short if definition is not None and definition.short else packet_name(packet)
 
 
 def packet_name(packet: str) -> str:
