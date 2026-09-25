@@ -78,7 +78,6 @@ ALLOWED: dict[str, str] = {
     "tests/test_packaging.py": "child imports the installed wheel and nothing else",
     "tests/test_packet_wiring.py": "child mimics the image: mcp_server dir on the path, PYTHONSAFEPATH=1",
     "tests/test_perf_reports.py": "temp numba module under tmp_path, auto-reverted by monkeypatch",
-    "tests/test_pp_token_broadcast_sibling.py": "child driver imports the patch dir under test",
     "tests/test_prepare_job_generated_cache.py": "child with a minimal env imports the checkout",
     "tests/test_record_tag_version.py": "child script imports the checkout",
     "tests/test_reporting_e2e.py": "child CLI run from a tmp cwd imports the checkout",
