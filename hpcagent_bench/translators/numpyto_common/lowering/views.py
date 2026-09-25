@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     compose_kept_axis,
     has_negative_step,
@@ -21,7 +21,7 @@ class EllipsisExpander(ast.NodeTransformer):
     it stands for, using the array's rank: ``a[..., 0]`` on a 3-D array ->
     ``a[:, :, 0]``. Chained subscripts are flattened to a Name base first by
     ChainedSubscriptFlattener; a base that is an EXPRESSION is sized through
-    :func:`iter_extent_of_`, which is all the rank costs."""
+    :func:`iter_extent_of`, which is all the rank costs."""
 
     def __init__(self, array_shapes: dict[str, list[str]]) -> None:
         self.array_shapes = array_shapes
@@ -35,7 +35,7 @@ class EllipsisExpander(ast.NodeTransformer):
         if isinstance(base, ast.Name):
             shape = self.array_shapes.get(base.id)
             return len(shape) if shape else None
-        ext = iter_extent_of_(base, self.array_shapes)
+        ext = iter_extent_of(base, self.array_shapes)
         return len(ext) if ext else None
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
@@ -123,32 +123,12 @@ def fold_subarray_aliases(tree: ast.AST, array_shapes: dict[str, list[str]]) -> 
     flat offset -- instead of the chained ``A[i][j]`` a partial index otherwise emits
     on a flat C pointer (xsbench's ``low`` / ``high`` five-channel reads). Fires only
     when the alias is a basic-index sub-array of a known array, is assigned exactly
-    once, and EVERY use is a further subscript (a bare whole-array use would need the
-    row materialised, so it is left alone)."""
-
-    aliases: dict[str, tuple] = {}
-    for stmt in ast.walk(tree):
-        if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
-            continue
-        val = stmt.value
-        if not (isinstance(val, ast.Subscript) and isinstance(val.value, ast.Name)):
-            continue
-        shape = array_shapes.get(val.value.id)
-        if not shape:
-            continue
-        elts = list(val.slice.elts) if isinstance(val.slice, ast.Tuple) else [val.slice]
-        while elts and is_full_slice(elts[-1]):
-            elts.pop()  # trailing ``:`` axes are exactly what ``local[k]`` will fill
-        # remaining index axes must be plain scalars (no slice / newaxis) and leave at
-        # least one trailing source axis (a genuine sub-array, not a full element index).
-        if any(isinstance(e, ast.Slice) or (isinstance(e, ast.Constant) and e.value is None) for e in elts):
-            continue
-        if len(elts) >= len(shape):
-            continue
-        aliases[stmt.targets[0].id] = (val.value.id, elts)
+    once, its base indices are not rebound after it, and EVERY use is a further
+    subscript (a bare whole-array use would need the row materialised, so it is left
+    alone)."""
+    aliases = subarray_alias_candidates(tree, array_shapes)
     if not aliases:
         return
-
     assigns: dict[str, int] = {}
     sub_value_ids: set = set()
     load_ids: dict[str, list[int]] = {}
@@ -161,21 +141,47 @@ def fold_subarray_aliases(tree: ast.AST, array_shapes: dict[str, list[str]]) -> 
             sub_value_ids.add(id(node.value))
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in aliases:
             load_ids.setdefault(node.id, []).append(id(node))
+    unsafe = aliases_with_rebound_base(tree, aliases)
+    good = {
+        name: aliases[name]
+        for name in aliases
+        if name not in unsafe and assigns.get(name, 0) == 1 and all(i in sub_value_ids for i in load_ids.get(name, []))
+    }
+    if not good:
+        return
+    SubarrayAliasFold(good).visit(tree)
+    ast.fix_missing_locations(tree)
 
-    # Base-index stability: reject an alias whose base index name is reassigned in a
-    # statement that can execute AFTER it (its block-tail, recursively) -- else the
-    # folded ``A[i, j, k]`` at the use site would read the NEW i/j, not the value the
-    # alias captured. (Reassignment BEFORE the alias is fine.)
-    def stores_in(stmts):
-        out: set = set()
-        for s in stmts:
-            for n in ast.walk(s):
-                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
-                    out.add(n.id)
-                elif isinstance(n, ast.For) and isinstance(n.target, ast.Name):
-                    out.add(n.target.id)
-        return out
 
+def subarray_alias_candidates(tree: ast.AST, array_shapes: dict[str, list[str]]) -> dict[str, tuple]:
+    """``{alias: (array, lead indices)}`` for each ``alias = A[i, j(, :...)]``: plain scalar leading
+    indices (trailing ``:`` axes dropped -- they are what ``alias[k]`` fills) that leave at least one
+    trailing source axis (a genuine sub-array, not a full element index)."""
+    aliases: dict[str, tuple] = {}
+    for stmt in ast.walk(tree):
+        if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+            continue
+        val = stmt.value
+        if not (isinstance(val, ast.Subscript) and isinstance(val.value, ast.Name)):
+            continue
+        shape = array_shapes.get(val.value.id)
+        if not shape:
+            continue
+        elts = list(val.slice.elts) if isinstance(val.slice, ast.Tuple) else [val.slice]
+        while elts and is_full_slice(elts[-1]):
+            elts.pop()
+        if any(isinstance(e, ast.Slice) or (isinstance(e, ast.Constant) and e.value is None) for e in elts):
+            continue
+        if len(elts) >= len(shape):
+            continue
+        aliases[stmt.targets[0].id] = (val.value.id, elts)
+    return aliases
+
+
+def aliases_with_rebound_base(tree: ast.AST, aliases: dict[str, tuple]) -> set[str]:
+    """Aliases whose base index name is reassigned in a statement that can execute AFTER the alias
+    (its block-tail, recursively) -- the folded ``A[i, j, k]`` would read the NEW i/j, not the value
+    the alias captured. (Reassignment BEFORE the alias is fine.)"""
     unsafe: set = set()
 
     def scan(stmts) -> None:
@@ -188,41 +194,55 @@ def fold_subarray_aliases(tree: ast.AST, array_shapes: dict[str, list[str]]) -> 
             ):
                 unused, base = aliases[s.targets[0].id]
                 base_names = {n.id for b in base for n in ast.walk(b) if isinstance(n, ast.Name)}
-                if base_names & stores_in(stmts[i + 1 :]):
+                if base_names & names_stored_in(stmts[i + 1 :]):
                     unsafe.add(s.targets[0].id)
             for cb in child_blocks_of(s):
                 scan(cb)
 
     scan(tree.body if isinstance(tree, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)) else [tree])
-    good = {
-        name: aliases[name]
-        for name in aliases
-        if name not in unsafe and assigns.get(name, 0) == 1 and all(i in sub_value_ids for i in load_ids.get(name, []))
-    }
-    if not good:
-        return
+    return unsafe
 
-    class Fold(ast.NodeTransformer):
-        def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
-            self.generic_visit(node)
-            if isinstance(node.value, ast.Name) and node.value.id in good:
-                aname, base = good[node.value.id]
-                more = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
-                new_idx = [copy.deepcopy(b) for b in base] + more
-                sl = ast.Tuple(elts=new_idx, ctx=ast.Load()) if len(new_idx) > 1 else new_idx[0]
-                return ast.copy_location(
-                    ast.Subscript(value=ast.Name(id=aname, ctx=ast.Load()), slice=sl, ctx=node.ctx), node
-                )
-            return node
 
-        def visit_Assign(self, node: ast.Assign) -> ast.AST | None:
-            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in good:
-                return None  # drop the now-unused alias assignment
-            self.generic_visit(node)
-            return node
+def names_stored_in(stmts: list[ast.stmt]) -> set[str]:
+    """Names rebound anywhere in ``stmts``: Store-context Names and for-loop targets."""
+    out: set = set()
+    for s in stmts:
+        for n in ast.walk(s):
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                out.add(n.id)
+            elif isinstance(n, ast.For) and isinstance(n.target, ast.Name):
+                out.add(n.target.id)
+    return out
 
-    Fold().visit(tree)
-    ast.fix_missing_locations(tree)
+
+class AliasFold(ast.NodeTransformer):
+    """Fold each alias in ``good`` into its uses (``visit_Subscript``, per subclass) and drop the
+    now-unused alias assignment."""
+
+    def __init__(self, good: dict[str, tuple]) -> None:
+        self.good = good
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | None:
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in self.good:
+            return None
+        self.generic_visit(node)
+        return node
+
+
+class SubarrayAliasFold(AliasFold):
+    """``alias[k]`` -> ``A[i, j, k]``."""
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)
+        if isinstance(node.value, ast.Name) and node.value.id in self.good:
+            aname, base = self.good[node.value.id]
+            more = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+            new_idx = [copy.deepcopy(b) for b in base] + more
+            sl = ast.Tuple(elts=new_idx, ctx=ast.Load()) if len(new_idx) > 1 else new_idx[0]
+            return ast.copy_location(
+                ast.Subscript(value=ast.Name(id=aname, ctx=ast.Load()), slice=sl, ctx=node.ctx), node
+            )
+        return node
 
 
 def child_blocks_of(stmt: ast.stmt):
@@ -384,60 +404,10 @@ def fold_slice_view_aliases(tree: ast.AST, array_shapes: dict[str, list[str]]) -
     checks is left alone -- the existing "expression Slice" refusal stands rather
     than risk a silently wrong shape or offset.
     """
-    aliases: dict[str, tuple[str, list[ast.expr]]] = {}
-    for stmt in ast.walk(tree):
-        if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
-            continue
-        val = stmt.value
-        if not (isinstance(val, ast.Subscript) and isinstance(val.value, ast.Name)):
-            continue
-        base_name = val.value.id
-        shape = array_shapes.get(base_name)
-        if not shape:
-            continue
-        elts = slice_dims(val)
-        if len(elts) > len(shape) or any(is_fancy_dim(e, array_shapes) for e in elts):
-            continue
-        elts = elts + [ast.Slice(lower=None, upper=None, step=None) for unused in range(len(shape) - len(elts))]
-        if not any(isinstance(e, ast.Slice) for e in elts):
-            continue  # a fully scalar index is an element read, not a view -- nothing to fold
-        if has_negative_step(elts):
-            continue  # a numpy reverse -- the offset algebra below assumes a positive stride
-        aliases[stmt.targets[0].id] = (base_name, elts)
+    aliases = view_alias_candidates(tree, array_shapes)
     if not aliases:
         return OrderedSet()
-
-    assigns: dict[str, int] = {}
-    uses_composable: dict[str, bool] = {}
-    sub_value_ids: OrderedSet = OrderedSet()
-    load_ids: dict[str, list[int]] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for t in node.targets:
-                if isinstance(t, ast.Name) and t.id in aliases:
-                    assigns[t.id] = assigns.get(t.id, 0) + 1
-        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id in aliases:
-            name = node.value.id
-            sub_value_ids.add(id(node.value))
-            kept = sum(1 for e in aliases[name][1] if isinstance(e, ast.Slice))
-            use_elts = slice_dims(node)
-            ok = (
-                len(use_elts) <= kept
-                and not any(is_fancy_dim(e, array_shapes) for e in use_elts)
-                and not has_negative_step(use_elts)
-                and not isinstance(node.ctx, ast.Store)
-            )
-            uses_composable[name] = uses_composable.get(name, True) and ok
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in aliases:
-            load_ids.setdefault(node.id, []).append(id(node))
-
-    candidates = {
-        name: aliases[name]
-        for name in aliases
-        if assigns.get(name, 0) == 1
-        and uses_composable.get(name, True)
-        and all(i in sub_value_ids for i in load_ids.get(name, []))
-    }
+    candidates = composable_view_aliases(tree, aliases, array_shapes)
     if not candidates:
         return OrderedSet()
     unsafe = reject_view_writes_between_bind_and_use(tree, candidates)
@@ -445,33 +415,7 @@ def fold_slice_view_aliases(tree: ast.AST, array_shapes: dict[str, list[str]]) -
     if not good:
         return OrderedSet()
     good = flatten_view_chains(good)
-
-    class Fold(ast.NodeTransformer):
-        def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
-            self.generic_visit(node)
-            if not (isinstance(node.value, ast.Name) and node.value.id in good):
-                return node
-            base_name, view_elts = good[node.value.id]
-            kept_positions = [i for i, e in enumerate(view_elts) if isinstance(e, ast.Slice)]
-            use_elts = slice_dims(node)
-            use_elts = use_elts + [
-                ast.Slice(lower=None, upper=None, step=None) for unused in range(len(kept_positions) - len(use_elts))
-            ]
-            composed = [copy.deepcopy(e) for e in view_elts]
-            for pos, u in zip(kept_positions, use_elts):
-                composed[pos] = compose_kept_axis(view_elts[pos], u)
-            sl = ast.Tuple(elts=composed, ctx=ast.Load()) if len(composed) > 1 else composed[0]
-            return ast.copy_location(
-                ast.Subscript(value=ast.Name(id=base_name, ctx=ast.Load()), slice=sl, ctx=node.ctx), node
-            )
-
-        def visit_Assign(self, node: ast.Assign) -> ast.AST | None:
-            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in good:
-                return None  # drop the now-unused view-alias assignment
-            self.generic_visit(node)
-            return node
-
-    Fold().visit(tree)
+    SliceViewFold(good).visit(tree)
     ast.fix_missing_locations(tree)
     live = OrderedSet(n.id for n in ast.walk(tree) if isinstance(n, ast.Name))
     return OrderedSet(name for name in good if name not in live)
@@ -500,3 +444,88 @@ def refuse_scalarising_a_contraction(value: ast.expr) -> None:
                 f"scalarising it would drop the contraction and silently "
                 f"compute an elementwise product"
             )
+
+
+class SliceViewFold(AliasFold):
+    """``view[use]`` -> ``base[composed]``: each kept view axis composed with the use's entry
+    (:func:`compose_kept_axis`), dropped view axes passing through."""
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)
+        if not (isinstance(node.value, ast.Name) and node.value.id in self.good):
+            return node
+        base_name, view_elts = self.good[node.value.id]
+        kept_positions = [i for i, e in enumerate(view_elts) if isinstance(e, ast.Slice)]
+        use_elts = slice_dims(node)
+        use_elts = use_elts + [
+            ast.Slice(lower=None, upper=None, step=None) for unused in range(len(kept_positions) - len(use_elts))
+        ]
+        composed = [copy.deepcopy(e) for e in view_elts]
+        for pos, u in zip(kept_positions, use_elts):
+            composed[pos] = compose_kept_axis(view_elts[pos], u)
+        sl = ast.Tuple(elts=composed, ctx=ast.Load()) if len(composed) > 1 else composed[0]
+        return ast.copy_location(
+            ast.Subscript(value=ast.Name(id=base_name, ctx=ast.Load()), slice=sl, ctx=node.ctx), node
+        )
+
+
+def view_alias_candidates(tree: ast.AST, array_shapes: dict[str, list[str]]) -> dict[str, tuple[str, list[ast.expr]]]:
+    """``{alias: (base, view entries padded to the base rank)}`` for each ``alias = base[...]`` that
+    is a basic-indexed VIEW: at least one Slice (a fully scalar index is an element read), no index
+    array, no negative step (the offset algebra assumes a positive stride)."""
+    aliases: dict[str, tuple[str, list[ast.expr]]] = {}
+    for stmt in ast.walk(tree):
+        if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+            continue
+        val = stmt.value
+        if not (isinstance(val, ast.Subscript) and isinstance(val.value, ast.Name)):
+            continue
+        base_name = val.value.id
+        shape = array_shapes.get(base_name)
+        if not shape:
+            continue
+        elts = slice_dims(val)
+        if len(elts) > len(shape) or any(is_fancy_dim(e, array_shapes) for e in elts):
+            continue
+        elts = elts + [ast.Slice(lower=None, upper=None, step=None) for unused in range(len(shape) - len(elts))]
+        if not any(isinstance(e, ast.Slice) for e in elts) or has_negative_step(elts):
+            continue
+        aliases[stmt.targets[0].id] = (base_name, elts)
+    return aliases
+
+
+def composable_view_aliases(
+    tree: ast.AST, aliases: dict[str, tuple[str, list[ast.expr]]], array_shapes: dict[str, list[str]]
+) -> dict[str, tuple[str, list[ast.expr]]]:
+    """The aliases assigned exactly once whose every use is a BASIC-indexed subscript READ within the
+    view's kept rank (never bare, never gathered through an index array, never written through)."""
+    assigns: dict[str, int] = {}
+    uses_composable: dict[str, bool] = {}
+    sub_value_ids: OrderedSet = OrderedSet()
+    load_ids: dict[str, list[int]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id in aliases:
+                    assigns[t.id] = assigns.get(t.id, 0) + 1
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id in aliases:
+            name = node.value.id
+            sub_value_ids.add(id(node.value))
+            kept = sum(1 for e in aliases[name][1] if isinstance(e, ast.Slice))
+            use_elts = slice_dims(node)
+            ok = (
+                len(use_elts) <= kept
+                and not any(is_fancy_dim(e, array_shapes) for e in use_elts)
+                and not has_negative_step(use_elts)
+                and not isinstance(node.ctx, ast.Store)
+            )
+            uses_composable[name] = uses_composable.get(name, True) and ok
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in aliases:
+            load_ids.setdefault(node.id, []).append(id(node))
+    return {
+        name: aliases[name]
+        for name in aliases
+        if assigns.get(name, 0) == 1
+        and uses_composable.get(name, True)
+        and all(i in sub_value_ids for i in load_ids.get(name, []))
+    }

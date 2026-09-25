@@ -7,8 +7,8 @@ from collections.abc import Iterator, Sequence
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR
 from hpcagent_bench.translators.numpyto_common.frontend.helper_specialize import substitute_names
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import collect_assigned_names
-from hpcagent_bench.translators.numpyto_common.frontend.manifest import SHAPE_IDENT
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import literal_axis, fold_shape_expr
+from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 
 
 def value_names(node: ast.AST) -> set[str]:
@@ -318,7 +318,7 @@ def build_callsite_stmts(
             # A target the call still READS is a rebinding of a buffer that already exists
             # (``x = relu(x @ w2 + b2)``); allocating it here would clear what the call is about to
             # read. Only a target nothing reads is a first binding that needs the buffer.
-            reads = {ident for src in call_srcs for ident in SHAPE_IDENT.findall(src)}
+            reads = {ident for src in call_srcs for ident in IDENT_RE.findall(src)}
             call_srcs.append(lhs.id)
             if lhs.id not in live_buffers and lhs.id not in reads:
                 pre.append(f"{lhs.id} = np.empty(({', '.join(hret_shape)},), dtype=np.{hret_dtype})")

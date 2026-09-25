@@ -23,7 +23,7 @@ import tempfile
 
 import numpy as np
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of_, expand_tensordot
+from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of, expand_tensordot
 from tests.translators.op_oracle import run_op
 
 NATIVE = ("c", "cpp", "fortran")
@@ -54,7 +54,7 @@ def test_iter_extent_of_sliced_tensordot_uses_the_slice_bound() -> None:
         "np.tensordot(x[:, ki:ki + H_out, kj:kj + W_out, :], w[ki, kj], axes=([3], [0]))", mode="eval"
     ).body
     shape_table = {"x": ("N", "H", "W", "Cin"), "w": ("K", "K", "Cin", "Cout")}
-    ext = iter_extent_of_(call, shape_table)
+    ext = iter_extent_of(call, shape_table)
     assert ext is not None, "tensordot over a sliced/indexed operand must resolve an extent"
     assert tuple(ast.unparse(e) for e in ext) == ("N", "H_out", "W_out", "Cout")
 
@@ -150,7 +150,7 @@ def test_an_axis_past_the_resolved_rank_declines_instead_of_crashing() -> None:
     verdict -- a crash where the contract says ``None``.
     """
     call = ast.parse("np.tensordot(g, a, axes=([3], [2]))", mode="eval").body
-    assert iter_extent_of_(call, {"g": ("5", "5", "5"), "a": ("3", "3", "5")}) is None
+    assert iter_extent_of(call, {"g": ("5", "5", "5"), "a": ("3", "3", "5")}) is None
 
 
 def test_a_negative_contraction_axis_resolves_against_the_rank() -> None:
@@ -161,7 +161,7 @@ def test_a_negative_contraction_axis_resolves_against_the_rank() -> None:
     contracted axis is emitted as a free output axis.
     """
     call = ast.parse("np.tensordot(x, w, axes=([-1], [0]))", mode="eval").body
-    ext = iter_extent_of_(call, {"x": ("N", "C"), "w": ("C", "M")})
+    ext = iter_extent_of(call, {"x": ("N", "C"), "w": ("C", "M")})
     assert ext is not None and len(ext) == 2, ext
     assert [ast.unparse(e) for e in ext] == ["N", "M"], [ast.unparse(e) for e in ext]
 

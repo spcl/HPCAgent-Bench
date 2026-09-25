@@ -22,15 +22,19 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
 
 
 def reduction_source_index(
-    n_dim: int, axes: Collection[int], red_iter_map: Mapping[int, str], outer_iter_names: Sequence[str]
+    n_dim: int,
+    axes: Collection[int],
+    red_iter_map: Mapping[int, str],
+    outer_iter_names: Sequence[str],
+    reduced: Callable[[int], ast.expr] | None = None,
 ) -> list[ast.expr]:
-    """Subscript entries reading a reduced operand: a reduced axis takes its reduction iterator, the rest
-    take the outer iterators in order."""
+    """Subscript entries reading a reduced operand: a reduced axis takes its reduction iterator (or
+    ``reduced(axis)``), the rest take the outer iterators in order."""
     out: list[ast.expr] = []
     outer_pos = 0
     for k in range(n_dim):
         if k in axes:
-            out.append(name_(red_iter_map[k]))
+            out.append(name_(red_iter_map[k]) if reduced is None else reduced(k))
         else:
             out.append(name_(outer_iter_names[outer_pos]))
             outer_pos += 1
@@ -83,14 +87,7 @@ def expand_axis_reduction(
     """
     arr = args[0]
     shape = resolve_shape(arr, shape_table)
-    # Here slot 1 REALLY is the axis (``np.sum(a, 1)``), unlike the shared reader's general case, so
-    # an unreadable one is refused rather than silently becoming a reduction over every axis.
-    if len(args) >= 2 and not (isinstance(args[1], ast.Constant) and args[1].value is None):
-        if eval_axes(args[1]) is None:
-            raise NotImplementedError(
-                f"axis {ast.unparse(args[1])!r} must be a compile-time integer or tuple "
-                f"of them (it selects the loop nest)"
-            )
+    refuse_unreadable_axis(args)
     axes, keepdims = read_axis_keepdims(args, kwargs)
     n_dim = len(shape)
 
@@ -102,47 +99,10 @@ def expand_axis_reduction(
     if initial is not None:
         init = initial
 
-    # ``where=`` masks which elements take part and ``dtype=`` pins the ACCUMULATOR type (the
-    # classic case being a float64 accumulator over a float32 operand, which changes the result,
-    # not just its storage). Neither is honoured by the loop below, so neither may be ignored.
-    for dropped in ("where", "dtype", "out"):
-        if read_kwarg(kwargs, dropped) is not None:
-            raise NotImplementedError(
-                f"reduction {dropped}= is not lowered; it changes the result, so it cannot be dropped"
-            )
-
+    refuse_dropped_reduction_kwargs(kwargs)
     if axes is None:
-        # Full reduction -- scalar target.
-        iters = [make_iter_name("__r", i) for i in range(n_dim)]
-        subscript = ast.Subscript(
-            value=name_(arr.id),
-            slice=(name_(iters[0]) if n_dim == 1 else ast.Tuple(elts=[name_(i) for i in iters], ctx=ast.Load())),
-            ctx=ast.Load(),
-        )
-        target_load = ast.Name(id=target.id, ctx=ast.Load())
-        body = [
-            update_fn(target, target_load, subscript)
-            if update_fn
-            else ast.Assign(targets=[target], value=op_fn(target_load, subscript))
-        ]
-        loops = wrap_for_loops(iters, shape, body)
-        stmts = [ast.Assign(targets=[target], value=init_for(init, arr, n_dim))]
-        stmts.extend(loops)
-        if post_fn is not None:
-            stmts.append(post_fn(target, shape_total_product(shape)))
-        return stmts
-
-    # Axis-aware reduction. ``axes`` is a list of one or more axis
-    # indices to reduce. Negative axes resolve mod n_dim; duplicates
-    # are rejected.
-    axes_norm: list[int] = []
-    for a in axes:
-        na = a + n_dim if a < 0 else a
-        if na < 0 or na >= n_dim:
-            raise NotImplementedError(f"axis {a} out of range for ndim {n_dim}")
-        if na in axes_norm:
-            raise NotImplementedError(f"duplicate axis {a} in reduction tuple")
-        axes_norm.append(na)
+        return full_reduction(target, arr, shape, init, op_fn, post_fn, update_fn)
+    axes_norm = normalized_axes(axes, n_dim)
     axes_set = set(axes_norm)
     # Outer iter names walk the kept axes (those NOT in axes_set);
     # one inner iter per reduction axis.
@@ -153,31 +113,14 @@ def expand_axis_reduction(
 
     src_elts = reduction_source_index(n_dim, axes_set, red_iter_map, outer_iter_names)
     src_slot = src_elts[0] if n_dim == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
-    out_elts = reduction_output_index(n_dim, axes_set, outer_iter_names, keepdims)
-    if len(out_elts) == 0:
-        # No kept axes and no keepdims -- scalar result. Falls back to
-        # the full-reduction style.
-        out_sub = target
-        out_load = ast.Name(id=target.id, ctx=ast.Load())
-    elif len(out_elts) == 1:
-        out_sub = ast.Subscript(value=name_(target.id), slice=out_elts[0], ctx=ast.Store())
-        out_load = ast.Subscript(value=name_(target.id), slice=out_elts[0], ctx=ast.Load())
-    else:
-        out_slot = ast.Tuple(elts=out_elts, ctx=ast.Load())
-        out_sub = ast.Subscript(value=name_(target.id), slice=out_slot, ctx=ast.Store())
-        out_load = ast.Subscript(value=name_(target.id), slice=out_slot, ctx=ast.Load())
+    out_sub, out_load = reduction_output_refs(
+        target, reduction_output_index(n_dim, axes_set, outer_iter_names, keepdims)
+    )
     src_sub = ast.Subscript(value=name_(arr.id), slice=src_slot, ctx=ast.Load())
     # Init for axis-reductions: ``out[outer..] = init`` (or the
     # zero-th element of the reduction axes for max/min).
     if isinstance(init, ast.Subscript):
-        init_src_elts = []
-        outer_pos2 = 0
-        for k in range(n_dim):
-            if k in axes_set:
-                init_src_elts.append(const_(0))
-            else:
-                init_src_elts.append(name_(outer_iter_names[outer_pos2]))
-                outer_pos2 += 1
+        init_src_elts = reduction_source_index(n_dim, axes_set, {}, outer_iter_names, reduced=lambda k: const_(0))
         init_slot = init_src_elts[0] if n_dim == 1 else ast.Tuple(elts=init_src_elts, ctx=ast.Load())
         init_node = ast.Subscript(value=name_(arr.id), slice=init_slot, ctx=ast.Load())
     else:
@@ -211,6 +154,90 @@ def expand_axis_reduction(
         # No kept axes (all reduced; equivalent to full reduction).
         return body
     return wrap_for_loops(outer_iter_names, bounds, body)
+
+
+def refuse_unreadable_axis(args: list[ast.expr]) -> None:
+    """Here slot 1 REALLY is the axis (``np.sum(a, 1)``), unlike the shared reader's general case, so
+    an unreadable one is refused rather than silently becoming a reduction over every axis."""
+    if len(args) >= 2 and not (isinstance(args[1], ast.Constant) and args[1].value is None):
+        if eval_axes(args[1]) is None:
+            raise NotImplementedError(
+                f"axis {ast.unparse(args[1])!r} must be a compile-time integer or tuple "
+                f"of them (it selects the loop nest)"
+            )
+
+
+def refuse_dropped_reduction_kwargs(kwargs: list[ast.keyword] | None) -> None:
+    """``where=`` masks which elements take part and ``dtype=`` pins the ACCUMULATOR type (the
+    classic case being a float64 accumulator over a float32 operand, which changes the result, not
+    just its storage). The reduction loop honours neither, so neither may be ignored."""
+    for dropped in ("where", "dtype", "out"):
+        if read_kwarg(kwargs, dropped) is not None:
+            raise NotImplementedError(
+                f"reduction {dropped}= is not lowered; it changes the result, so it cannot be dropped"
+            )
+
+
+def full_reduction(
+    target: ast.expr,
+    arr: ast.expr,
+    shape: tuple[str, ...],
+    init: ast.expr,
+    op_fn: Callable[[ast.expr, ast.expr], ast.expr] | None,
+    post_fn: Callable[[ast.expr, ast.expr], ast.stmt] | None,
+    update_fn: Callable[[ast.expr, ast.expr, ast.expr], ast.stmt] | None,
+) -> list[ast.stmt]:
+    """``axis=None``: every axis walked, one scalar written to ``target``."""
+    n_dim = len(shape)
+    iters = [make_iter_name("__r", i) for i in range(n_dim)]
+    subscript = ast.Subscript(
+        value=name_(arr.id),
+        slice=(name_(iters[0]) if n_dim == 1 else ast.Tuple(elts=[name_(i) for i in iters], ctx=ast.Load())),
+        ctx=ast.Load(),
+    )
+    target_load = ast.Name(id=target.id, ctx=ast.Load())
+    body = [
+        update_fn(target, target_load, subscript)
+        if update_fn
+        else ast.Assign(targets=[target], value=op_fn(target_load, subscript))
+    ]
+    loops = wrap_for_loops(iters, shape, body)
+    stmts = [ast.Assign(targets=[target], value=init_for(init, arr, n_dim))]
+    stmts.extend(loops)
+    if post_fn is not None:
+        stmts.append(post_fn(target, shape_total_product(shape)))
+    return stmts
+
+
+def normalized_axes(axes: Sequence[int], n_dim: int) -> list[int]:
+    """The reduced axes with negatives resolved mod ``n_dim``; out-of-range and duplicate axes are
+    refused."""
+    axes_norm: list[int] = []
+    for a in axes:
+        na = a + n_dim if a < 0 else a
+        if na < 0 or na >= n_dim:
+            raise NotImplementedError(f"axis {a} out of range for ndim {n_dim}")
+        if na in axes_norm:
+            raise NotImplementedError(f"duplicate axis {a} in reduction tuple")
+        axes_norm.append(na)
+    return axes_norm
+
+
+def reduction_output_refs(target: ast.expr, out_elts: list[ast.expr]) -> tuple[ast.expr, ast.expr]:
+    """The (store, load) references of the reduction result: the target itself when no axis is kept
+    and keepdims is off (a scalar result), else the target subscripted at ``out_elts``."""
+    if len(out_elts) == 0:
+        return target, ast.Name(id=target.id, ctx=ast.Load())
+    if len(out_elts) == 1:
+        return (
+            ast.Subscript(value=name_(target.id), slice=out_elts[0], ctx=ast.Store()),
+            ast.Subscript(value=name_(target.id), slice=out_elts[0], ctx=ast.Load()),
+        )
+    out_slot = ast.Tuple(elts=out_elts, ctx=ast.Load())
+    return (
+        ast.Subscript(value=name_(target.id), slice=out_slot, ctx=ast.Store()),
+        ast.Subscript(value=name_(target.id), slice=out_slot, ctx=ast.Load()),
+    )
 
 
 def init_for(init: ast.expr, arr: ast.expr, n_dim: int) -> ast.expr:
@@ -488,8 +515,8 @@ def expand_argmax(
 ) -> list[ast.stmt]:
     """``i = np.argmax(A [, axis=k, keepdims=...])`` -- index of the maximum.
     Only ``axis=None`` (flat, scalar result) and ``axis=int`` are implemented;
-    axis-tuple raises ``NotImplementedError`` (caller can express it via a
-    reshape + flat argmax; TODO if needed)."""
+    an axis tuple raises ``NotImplementedError`` (a reshape + flat argmax
+    expresses it)."""
     return expand_arg_reduction(target, args, shape_table, kwargs, op="argmax")
 
 
@@ -543,34 +570,15 @@ def expand_arg_reduction(
     outer_iter_names = [make_iter_name("__aax", i) for i in range(len(kept_axes))]
     red_iter_names = [make_iter_name("__ard", i) for i in range(len(axes_norm))]
     red_iter_map = dict(zip(axes_norm, red_iter_names))
-
-    def init_src_elts_() -> list[ast.expr]:
-        # First-element init: reduction axes pinned at 0, kept axes at
-        # outer iter.
-        out = []
-        outer_pos = 0
-        for k in range(n_dim):
-            if k in axes_set:
-                out.append(const_(0))
-            else:
-                out.append(name_(outer_iter_names[outer_pos]))
-                outer_pos += 1
-        return out
-
     src_elts = reduction_source_index(n_dim, axes_set, red_iter_map, outer_iter_names)
     src_slot = src_elts[0] if n_dim == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
     src_sub = ast.Subscript(value=name_(a.id), slice=src_slot, ctx=ast.Load())
     out_elts = reduction_output_index(n_dim, axes_set, outer_iter_names, keepdims)
-    init_src_elts = init_src_elts_()
+    # First-element init: reduction axes pinned at 0, kept axes at the outer iters.
+    init_src_elts = reduction_source_index(n_dim, axes_set, {}, outer_iter_names, reduced=lambda k: const_(0))
     init_slot = init_src_elts[0] if n_dim == 1 else ast.Tuple(elts=init_src_elts, ctx=ast.Load())
     init_val = ast.Subscript(value=name_(a.id), slice=init_slot, ctx=ast.Load())
-    if not out_elts:
-        # Scalar target -- full reduction with no kept axes.
-        out_sub: ast.expr = target
-    elif len(out_elts) == 1:
-        out_sub = ast.Subscript(value=name_(target.id), slice=out_elts[0], ctx=ast.Store())
-    else:
-        out_sub = ast.Subscript(value=name_(target.id), slice=ast.Tuple(elts=out_elts, ctx=ast.Load()), ctx=ast.Store())
+    out_sub, unused = reduction_output_refs(target, out_elts)
     # The running-best temp is named after its TARGET. A fixed name collided across two argmax
     # expansions in one kernel, and when the two operands had different dtypes the second
     # expansion's temp inherited the first's declared type -- cp2k_density_matrix_trs4 compared an
@@ -581,18 +589,14 @@ def expand_arg_reduction(
         ast.Assign(targets=[out_sub], value=const_(0)),
     ]
     # Flat index across the reduction axes (in source order):
-    #   ((red_iter[0] * shape[axis1]) + red_iter[1]) * shape[axis2]
-    #     + red_iter[2] + ...
-    if len(axes_norm) == 1:
-        flat_idx: ast.expr = name_(red_iter_map[axes_norm[0]])
-    else:
-        flat_idx = name_(red_iter_map[axes_norm[0]])
-        for k in range(1, len(axes_norm)):
-            flat_idx = ast.BinOp(
-                left=ast.BinOp(left=flat_idx, op=ast.Mult(), right=const_or_name(shape[axes_norm[k]])),
-                op=ast.Add(),
-                right=name_(red_iter_map[axes_norm[k]]),
-            )
+    #   ((red_iter[0] * shape[axis1]) + red_iter[1]) * shape[axis2] + red_iter[2] + ...
+    flat_idx: ast.expr = name_(red_iter_map[axes_norm[0]])
+    for k in range(1, len(axes_norm)):
+        flat_idx = ast.BinOp(
+            left=ast.BinOp(left=flat_idx, op=ast.Mult(), right=const_or_name(shape[axes_norm[k]])),
+            op=ast.Add(),
+            right=name_(red_iter_map[axes_norm[k]]),
+        )
     # NaN semantics (numpy): argmax/argmin return the index of the FIRST NaN.
     # Update rule ``(best == best) and (src != src or src <cmp> best)``:
     # ``best == best`` goes false once ``best`` is NaN, locking the index at the

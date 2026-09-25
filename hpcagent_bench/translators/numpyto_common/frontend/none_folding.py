@@ -214,7 +214,7 @@ class PeelNoneSeededAccumulators(ast.NodeTransformer):
 
     Neither backend has a ``None`` value, so a local that reads as ``None`` on its first use and a
     real array afterward has no direct C/Fortran translation. This is NOT the same case
-    :class:`numpyto_common.lowering._ConditionalNoneAllocRewriter` handles (a buffer that is
+    :class:`numpyto_common.lowering.calls.ConditionalNoneAllocRewriter` handles (a buffer that is
     genuinely allocated under one runtime condition and never read otherwise, where forcing the
     allocated branch is sound) -- here ``X``'s ``None``-ness IS observed, every single time the loop
     runs, which is exactly the case that rewriter declines. The flag replays the SAME state machine

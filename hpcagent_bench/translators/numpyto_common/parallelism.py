@@ -294,14 +294,32 @@ def loop_reduction(node: ast.AST) -> tuple[str, str] | None:
         return None
     idx = node.target.id
     body = ast.Module(body=list(node.body), type_ignores=[])
+    accs = scalar_accumulators(body)
+    if accs is None or len(accs) != 1:
+        return None  # 0 -> not a reduction; >1 -> too complex to clause soundly
+    acc, op = next(iter(accs.items()))
+    if accumulator_observed(body, acc):
+        return None
+    written = written_arrays(body)
+    for n in ast.walk(body):
+        if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id in written:
+            if not subscript_idx_safe(n, idx):
+                return None
+    if not written_partition_consistent(body, idx, written):
+        return None  # a written array indexed by idx on two axes (in-place transpose) still races.
+    return op, acc
+
+
+def scalar_accumulators(body: ast.AST) -> dict[str, str] | None:
+    """``{name: op}`` of the scalars ``body`` combines under a reduction operator; None when a scalar
+    aug-op has no reduction form, a name is accumulated under two different ops, or a scalar is
+    self-referential without being a known reduction."""
     accs: dict = {}
     for n in ast.walk(body):
         if isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name):
             op = AUG_REDUCTION_OP.get(type(n.op))
-            if op is None:
-                return None  # a scalar aug-op we cannot express as a reduction
-            if accs.get(n.target.id, op) != op:
-                return None  # same name accumulated under two different ops
+            if op is None or accs.get(n.target.id, op) != op:
+                return None
             accs[n.target.id] = op
         elif isinstance(n, ast.Assign):
             for t in n.targets:
@@ -313,13 +331,14 @@ def loop_reduction(node: ast.AST) -> tuple[str, str] | None:
                         return None
                     accs[t.id] = op
                 elif reads_name(n.value, t.id):
-                    return None  # self-referential scalar that is not a known reduction
-    if len(accs) != 1:
-        return None  # 0 -> not a reduction; >1 -> too complex to clause soundly
-    acc, op = next(iter(accs.items()))
-    # The accumulator's LIVE value must never be observed outside its own combine. If it is
-    # captured each iteration (``s = s + a[i]; out[i] = s`` -- a prefix scan) or otherwise read,
-    # a ``reduction(op:acc)`` clause hands out racy per-thread partials, not the running value.
+                    return None
+    return accs
+
+
+def accumulator_observed(body: ast.AST, acc: str) -> bool:
+    """Whether the accumulator's LIVE value is read outside its own combine. Captured each iteration
+    (``s = s + a[i]; out[i] = s`` -- a prefix scan) or otherwise read, a ``reduction(op:acc)`` clause
+    would hand out racy per-thread partials, not the running value."""
     combine_loads: set = set()
     for n in ast.walk(body):
         combines = (isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name) and n.target.id == acc) or (
@@ -327,17 +346,10 @@ def loop_reduction(node: ast.AST) -> tuple[str, str] | None:
         )
         if combines:
             combine_loads |= {id(x) for x in ast.walk(n.value) if isinstance(x, ast.Name) and x.id == acc}
-    for n in ast.walk(body):
-        if isinstance(n, ast.Name) and n.id == acc and isinstance(n.ctx, ast.Load) and id(n) not in combine_loads:
-            return None  # acc read outside its own combine -- a scan/derived use, not a reduction.
-    written = written_arrays(body)
-    for n in ast.walk(body):
-        if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id in written:
-            if not subscript_idx_safe(n, idx):
-                return None
-    if not written_partition_consistent(body, idx, written):
-        return None  # a written array indexed by idx on two axes (in-place transpose) still races.
-    return op, acc
+    return any(
+        isinstance(n, ast.Name) and n.id == acc and isinstance(n.ctx, ast.Load) and id(n) not in combine_loads
+        for n in ast.walk(body)
+    )
 
 
 def index_is_indirect(sub: ast.Subscript) -> bool:

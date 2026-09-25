@@ -10,7 +10,7 @@ from hpcagent_bench.translators.numpyto_common.ir import tag_numpy_origin
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_hoist import CallHoister, numpy_call_key
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
 from hpcagent_bench.translators.numpyto_common.lib_nodes.elementwise import UNARY_C_MATH
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import is_integer_expr, iter_extent_of_
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import is_integer_expr, iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     alloc_marker,
     const_,
@@ -334,7 +334,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         #: Target renders a whole-array 1-D np.fft.fft/ifft/fftn/ifftn as FFT_LIBRARY_MARKER
         #: instead of the naive O(N^2) loop. SEPARATE from ``blas`` (not reused): a target that
         #: cannot render BLAS_GEMM_MARKER (numpyto_fortran/numpyto_numba's emitters have no
-        #: ``_emit_blas_gemm`` equivalent) must still be able to opt into FFT library lowering
+        #: ``emit_blas_gemm`` equivalent) must still be able to opt into FFT library lowering
         #: without also being handed an unrenderable BLAS marker on its next matmul.
         self.fft_library = fft_library
         #: Target also renders a batched / N-D np.fft.* as FFTN_LIBRARY_MARKER (numpyto_c only).
@@ -414,8 +414,8 @@ class LibNodeRewriter(ast.NodeTransformer):
         then-current shape of every reassigned local. Also propagates
         ``local_dtypes`` for complex-RHS so the next statement's hoister sees
         the up-to-date dtype tag."""
-        # Name = Name alias.
         if isinstance(rhs, ast.Name):
+            # Name = Name alias.
             src = self.shape_table.get(rhs.id)
             if src is not None:
                 self.shape_table[target_id] = tuple(src)
@@ -423,138 +423,114 @@ class LibNodeRewriter(ast.NodeTransformer):
             if rhs_dt and target_id not in self.local_dtypes:
                 self.local_dtypes[target_id] = rhs_dt
             return
-        # np.zeros / empty / etc constructor -- the ZerosRewriter owns the ALLOCATION, and it
-        # runs in a later phase. The _like forms still have to publish their EXTENT here: the
-        # source array's shape may only become known during this pass (eigh_test's ``scaled =
-        # np.zeros_like(bu)``, where ``bu`` is an eigh output this same rewriter expands), and a
-        # local with no shape declines every matmul it feeds -- which slice fusion then refuses.
-        if (
-            isinstance(rhs, ast.Call)
+        np_attr = (
+            rhs.func.attr
+            if isinstance(rhs, ast.Call)
             and isinstance(rhs.func, ast.Attribute)
             and isinstance(rhs.func.value, ast.Name)
             and rhs.func.value.id == "np"
-            and rhs.func.attr in NP_ZEROS_ALIASES
-        ):
-            if rhs.func.attr.endswith("_like") and rhs.args and isinstance(rhs.args[0], ast.Name):
+            else None
+        )
+        if np_attr in NP_ZEROS_ALIASES:
+            # The ZerosRewriter owns the ALLOCATION, in a later phase. The _like forms still publish
+            # their EXTENT here: the source array's shape may only become known during this pass
+            # (``scaled = np.zeros_like(bu)`` with ``bu`` an eigh output this rewriter expands), and a
+            # local with no shape declines every matmul it feeds.
+            if np_attr.endswith("_like") and rhs.args and isinstance(rhs.args[0], ast.Name):
                 src = self.shape_table.get(rhs.args[0].id)
                 if src is not None:
                     self.shape_table[target_id] = tuple(src)
             return
-        # Shape-CHANGING ops (reshape/repeat/transpose) aren't elementwise, but
-        # the generic ``iter_extent_of_`` Call branch would treat them as such
-        # and return the source operand's extent -- the wrong shape for the LHS.
-        if (
-            isinstance(rhs, ast.Call)
-            and isinstance(rhs.func, ast.Attribute)
-            and isinstance(rhs.func.value, ast.Name)
-            and rhs.func.value.id == "np"
-            and rhs.func.attr in {"reshape", "repeat", "transpose"}
-        ):
-            attr = rhs.func.attr
-            if attr == "reshape" and len(rhs.args) >= 2:
-                # ``yv = np.reshape(y, (R**i, R, ...))`` -- the result
-                # shape is the explicit newshape arg, not y's extent.
-                newshape = rhs.args[1]
-                toks: tuple[str, ...] | None = None
-                if isinstance(newshape, (ast.Tuple, ast.List)):
-                    toks = tuple(ast.unparse(e) for e in newshape.elts)
-                elif isinstance(newshape, ast.Name):
-                    toks = (newshape.id,)
-                elif const_int(newshape) is not None:
-                    toks = (str(const_int(newshape)),)
+        if np_attr in {"reshape", "repeat", "transpose"}:
+            # Shape-CHANGING ops: ``iter_extent_of`` would report the source operand's extent. A
+            # reshape with a readable newshape publishes it; otherwise (and for repeat/transpose)
+            # the dedicated expander plus the harvested declaration shape are authoritative --
+            # never downgrade a known shape from the source operand's extent.
+            if np_attr == "reshape" and len(rhs.args) >= 2:
+                toks = self.reshape_result_tokens(rhs)
                 if toks is not None:
-                    # Resolve a ``-1`` placeholder (``x.reshape(batch, -1)``) to the source
-                    # element count divided by the product of the other target dims.
-                    neg1 = [i for i, t in enumerate(toks) if t.strip() == "-1"]
-                    src = rhs.args[0]
-                    src_shape = self.shape_table.get(src.id) if isinstance(src, ast.Name) else None
-                    if len(neg1) == 1 and src_shape:
-                        total = " * ".join(f"({t})" for t in src_shape)
-                        others = [t for j, t in enumerate(toks) if j != neg1[0]]
-                        denom = " * ".join(f"({t})" for t in others) if others else "1"
-                        toks = tuple(f"({total}) / ({denom})" if j == neg1[0] else t for j, t in enumerate(toks))
                     self.shape_table[target_id] = toks
-            # For reshape with an unparsed newshape, and for repeat/transpose,
-            # the dedicated expander plus the harvested declaration shape
-            # (e.g. D's rank-3 ``np.empty((R, R**i, R**(K-i-1)))`` consumed by
-            # ``D[:] = np.repeat(...)``) are authoritative -- never downgrade a
-            # known shape from the source operand's extent.
             return
-        # BinOp/UnaryOp/IfExp/Call/Subscript -- broadcast extent. ``Subscript``
-        # covers ``cols = A_col[A_row[i]:A_row[i+1]]`` (dynamic-bound slice) and
-        # ``y = arr[idx]`` (fancy gather), so the next statement sees the
-        # local's shape when hoisting a matmul.
         # A by-value helper call is rank 0; see :attr:`scalar_helpers`.
         if isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Name) and rhs.func.id in self.scalar_helpers:
             return
         if isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Call, ast.Subscript)):
-            ext = iter_extent_of_(rhs, self.shape_table)
-            if ext is not None:
-                self.shape_table[target_id] = tuple(ast.unparse(e) for e in ext)
-            # ``ngm = qgm.shape[0]`` reads a DIMENSION -- an integer regardless of
-            # the array's dtype. Type it int64 and skip the complex walk below,
-            # which would otherwise see complex base Name ``qgm`` and wrongly tag
-            # the scalar bound complex (vexx_k's ``_addusxx_g``/``_newdxx_g``).
-            if is_shape_scalar(rhs):
-                if target_id not in self.local_dtypes:
-                    self.local_dtypes[target_id] = "int64"
-                return
-            # Complex-dtype propagation for BinOp/UnaryOp/Call: a subtree that
-            # reads a complex Constant or Name promotes the LHS. ``.shape``
-            # subtrees are skipped, so a dimension read off a complex array
-            # (``ngm = qgm.shape[0] - 1``) isn't mis-tagged complex.
-            if target_id not in self.local_dtypes and reads_complex(rhs, self.local_dtypes):
-                self.local_dtypes[target_id] = "complex128"
+            self.update_broadcast_result(target_id, rhs)
+
+    def reshape_result_tokens(self, rhs: ast.Call) -> tuple[str, ...] | None:
+        """``yv = np.reshape(y, (R**i, R, ...))``: the explicit newshape's tokens, a ``-1`` placeholder
+        resolved to the source element count over the product of the other target dims; None for a
+        newshape that is not a tuple, a Name or an int literal."""
+        newshape = rhs.args[1]
+        if isinstance(newshape, (ast.Tuple, ast.List)):
+            toks = tuple(ast.unparse(e) for e in newshape.elts)
+        elif isinstance(newshape, ast.Name):
+            toks = (newshape.id,)
+        elif const_int(newshape) is not None:
+            toks = (str(const_int(newshape)),)
+        else:
+            return None
+        neg1 = [i for i, t in enumerate(toks) if t.strip() == "-1"]
+        src = rhs.args[0]
+        src_shape = self.shape_table.get(src.id) if isinstance(src, ast.Name) else None
+        if len(neg1) == 1 and src_shape:
+            total = " * ".join(f"({t})" for t in src_shape)
+            others = [t for j, t in enumerate(toks) if j != neg1[0]]
+            denom = " * ".join(f"({t})" for t in others) if others else "1"
+            toks = tuple(f"({total}) / ({denom})" if j == neg1[0] else t for j, t in enumerate(toks))
+        return toks
+
+    def update_broadcast_result(self, target_id: str, rhs: ast.expr) -> None:
+        """BinOp/UnaryOp/IfExp/Call/Subscript: the broadcast extent. ``Subscript`` covers a dynamic-bound
+        slice (``cols = A_col[A_row[i]:A_row[i+1]]``) and a fancy gather (``y = arr[idx]``).
+
+        ``ngm = qgm.shape[0]`` reads a DIMENSION -- int64 whatever the array's dtype, and never tagged
+        complex off its base Name. Otherwise a subtree that reads a complex Constant or Name (``.shape``
+        subtrees skipped) promotes the LHS complex."""
+        ext = iter_extent_of(rhs, self.shape_table)
+        if ext is not None:
+            self.shape_table[target_id] = tuple(ast.unparse(e) for e in ext)
+        if is_shape_scalar(rhs):
+            if target_id not in self.local_dtypes:
+                self.local_dtypes[target_id] = "int64"
             return
+        if target_id not in self.local_dtypes and reads_complex(rhs, self.local_dtypes):
+            self.local_dtypes[target_id] = "complex128"
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         # Captured BEFORE any rewriting: once the RHS is hoisted its arguments are temps, and the
         # note is meant to read as the numpy the kernel was written in.
         numpy_text = ast.unparse(node.value)
         self.generic_visit(node)
-        # ``D[:] = np.repeat(...)``/``D[:, :] = np.transpose(...)``: canonicalise
-        # the slice-LHS-with-call form to ``D = call(...)`` so the registered
-        # call expander fires -- required for stockham_fft's ``y[:] =
-        # np.reshape(...)`` and ``D[:] = np.repeat(...)``.
-        if (
-            len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Subscript)
-            and isinstance(node.targets[0].value, ast.Name)
-            and is_full_slice_subscript(node.targets[0])
-            and isinstance(node.value, ast.Call)
-            and numpy_call_key(node.value) in NP_CALL_EXPANDERS
-        ):
-            node.targets[0] = ast.Name(id=node.targets[0].value.id, ctx=ast.Store())
-        # ``y = np.linalg.lstsq(A, b, rcond=...)[0]`` canonicalisation: strip
-        # the trailing ``[0]`` subscript on a tuple-returning call so the
-        # registered call expander fires on the bare call. Only lstsq/histogram
-        # for now; extend as other tuple-returners (svd, eig, etc.) land.
-        if (
-            len(node.targets) == 1
-            and isinstance(node.value, ast.Subscript)
-            and isinstance(node.value.value, ast.Call)
-            and isinstance(node.value.slice, ast.Constant)
-            and node.value.slice.value == 0
-        ):
-            inner = node.value.value
-            inner_key = numpy_call_key(inner)
-            if inner_key in {("np", "linalg.lstsq"), ("np", "histogram")}:
-                node.value = inner
+        canonicalize_call_assign(node)
         node.value, prelude = self.hoist_value(node.value)
         # Lower any prelude assigns that are themselves registered calls.
         prelude = self.lower_prelude_calls(prelude)
         # Reassigned local (lenet's ``x = relu(conv2d(x))`` chain): refresh shape_table[target] so
         # the NEXT statement sees the new shape. Strictly AFTER hoisting this RHS -- Python evaluates
         # the RHS against the OLD binding, and refreshing first made ``x = x @ w.T + b`` contract over
-        # the RESULT's extent: out_features instead of in_features, silently dropping terms when
-        # in > out and reading past the row when in < out.
+        # the RESULT's extent.
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             self.update_shape_for_assign(node.targets[0].id, node.value)
-        # Whole-array alias propagation: ``x = <Name>`` where the RHS is a Name
-        # with a known shape gives ``x`` the same shape, so downstream visits
-        # see ``x`` as an array. Also propagate ``local_dtypes``, else a
-        # complex temp aliased to a fresh local loses its dtype tag and the
-        # next call hoister synthesizes a non-complex temp.
+        self.propagate_alias(node)
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Call):
+            lowered = self.expand_call_assign(node, prelude, numpy_text)
+            if lowered is not None:
+                return lowered
+        expanded = self.expand_slice_target_call(node)
+        if expanded is not None:
+            return prelude + expanded
+        retargeted = retarget_scalar_accumulator(node, prelude)
+        if retargeted is not None:
+            return retargeted
+        if prelude:
+            return prelude + [node]
+        return node
+
+    def propagate_alias(self, node: ast.Assign) -> None:
+        """Whole-array alias ``x = <Name>`` of a known shape: ``x`` takes the same shape (and dtype, else
+        a complex temp aliased to a fresh local loses its tag and the next hoister synthesizes a
+        non-complex temp)."""
         if (
             len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
@@ -565,99 +541,84 @@ class LibNodeRewriter(ast.NodeTransformer):
             rhs_dt = self.local_dtypes.get(node.value.id)
             if rhs_dt and node.targets[0].id not in self.local_dtypes:
                 self.local_dtypes[node.targets[0].id] = rhs_dt
-        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            target = node.targets[0]
-            if isinstance(node.value, ast.Call):
-                key = numpy_call_key(node.value)
-                expander = NP_CALL_EXPANDERS.get(key) if key else None
-                if expander is not None and self.target_renders(key, node.value):
-                    return node
-                if expander is not None:
-                    try:
-                        expanded = call_expander(
-                            expander,
-                            target,
-                            node.value.args,
-                            node.value.keywords,
-                            self.shape_table,
-                            local_dtypes=self.local_dtypes,
-                            fresh_local_allocs=self.fresh_local_allocs,
-                            dim_aliases=self.dim_aliases,
-                            library=self.fft_library,
-                            library_nd=self.fft_library_nd,
-                        )
-                        # Linspace/arange/similar element-write expanders
-                        # consume the original Assign, leaving the target
-                        # dangling without a decl -- register a fresh-local
-                        # allocation now so the emitter sees the shape downstream.
-                        if (
-                            key in ELEMENT_WRITE_EXPANDERS
-                            and target.id in self.shape_table
-                            and target.id not in self.known_arrays
-                        ):
-                            # Not gated on the local being UNREGISTERED: a temp the call-hoister
-                            # already spilled is registered as an array temp but still carries no
-                            # allocation SITE, and the expander has just consumed the assignment
-                            # that would have carried one. max_filter's hoisted running-max scan
-                            # wrote its first element through a NULL pointer that way.
-                            self.fresh_local_allocs.setdefault(target.id, tuple(self.shape_table[target.id]))
-                            # ...and mark the allocation SITE. Registering the shape only gets the
-                            # local DECLARED; a local whose extent depends on a body-computed scalar
-                            # (histogram_equalization's ``cdf = np.cumsum(hist)``, shape ``(nbins,)``
-                            # with ``nbins`` assigned in the body) is declared NULL at fn-top and
-                            # malloc'd at its ``__hpcagent_bench_zeros__`` marker instead. The expander
-                            # consumed the Assign that would have carried that marker, so without one
-                            # the buffer stays NULL and the first store segfaults. The marker is a
-                            # no-op for a fn-top-malloc'd local, so emitting it unconditionally is
-                            # safe -- same rationale as ``prepend_alloc_markers`` for matmul temps.
-                            prelude = prelude + [alloc_marker(target.id)]
-                        # ``np.arange`` over integer bounds yields an integer
-                        # iota (numpy intp) -- declare the local int64 so a
-                        # gather index built from it (``q = j % nx``) is
-                        # integer, not the float default (fft_3d).
-                        if (
-                            key == ("np", "arange")
-                            and target.id not in self.local_dtypes
-                            and all(is_integer_expr(a, self.local_dtypes) for a in node.value.args)
-                        ):
-                            self.local_dtypes[target.id] = "int64"
-                        tag_numpy_origin(expanded, numpy_text)
-                        return prelude + expanded
-                    except NotImplementedError:
-                        pass
-        # Partial-slice assignment target for a cumulative scan (``row_offsets[1:]
-        # = np.cumsum(m_sizes)``): the full-slice case is canonicalised to a bare
-        # Name above, but a shifted slice keeps its offset, routed to the
-        # offset-aware cumulative expander.
+
+    def expand_call_assign(
+        self, node: ast.Assign, prelude: list[ast.stmt], numpy_text: str
+    ) -> ast.Assign | list[ast.stmt] | None:
+        """``name = np.<call>(...)`` through its registered expander: the node itself when the target
+        renders the call natively, the prelude plus the expansion, or None (no expander, or it
+        declined) to fall through."""
+        target = node.targets[0]
+        key = numpy_call_key(node.value)
+        expander = NP_CALL_EXPANDERS.get(key) if key else None
+        if expander is None:
+            return None
+        if self.target_renders(key, node.value):
+            return node
+        try:
+            expanded = call_expander(
+                expander,
+                target,
+                node.value.args,
+                node.value.keywords,
+                self.shape_table,
+                local_dtypes=self.local_dtypes,
+                fresh_local_allocs=self.fresh_local_allocs,
+                dim_aliases=self.dim_aliases,
+                library=self.fft_library,
+                library_nd=self.fft_library_nd,
+            )
+        except NotImplementedError:
+            return None
+        if key in ELEMENT_WRITE_EXPANDERS and target.id in self.shape_table and target.id not in self.known_arrays:
+            # Linspace/arange/similar element-write expanders consume the original Assign, leaving the
+            # target without a decl or an allocation SITE (a hoisted temp is registered as an array
+            # temp but still carries none): register a fresh-local allocation and mark its site. A
+            # local whose extent depends on a body-computed scalar is declared NULL at fn-top and
+            # malloc'd at its ``__hpcagent_bench_zeros__`` marker; the marker is a no-op for a
+            # fn-top-malloc'd local, so it is emitted unconditionally (as ``prepend_alloc_markers``
+            # does for matmul temps).
+            self.fresh_local_allocs.setdefault(target.id, tuple(self.shape_table[target.id]))
+            prelude = prelude + [alloc_marker(target.id)]
+        # ``np.arange`` over integer bounds yields an integer iota (numpy intp) -- int64, so a gather
+        # index built from it (``q = j % nx``) is integer, not the float default.
         if (
+            key == ("np", "arange")
+            and target.id not in self.local_dtypes
+            and all(is_integer_expr(a, self.local_dtypes) for a in node.value.args)
+        ):
+            self.local_dtypes[target.id] = "int64"
+        tag_numpy_origin(expanded, numpy_text)
+        return prelude + expanded
+
+    def expand_slice_target_call(self, node: ast.Assign) -> list[ast.stmt] | None:
+        """A cumulative scan into a partial-slice target (``row_offsets[1:] = np.cumsum(m_sizes)``):
+        the full-slice case is canonicalised to a bare Name, but a shifted slice keeps its offset and
+        routes to the offset-aware cumulative expander. None when it does not apply or declines."""
+        if not (
             len(node.targets) == 1
             and isinstance(node.targets[0], ast.Subscript)
             and isinstance(node.targets[0].value, ast.Name)
             and isinstance(node.value, ast.Call)
         ):
-            key = numpy_call_key(node.value)
-            if key in SLICE_TARGET_EXPANDERS:
-                try:
-                    expanded = call_expander(
-                        NP_CALL_EXPANDERS[key],
-                        node.targets[0],
-                        node.value.args,
-                        node.value.keywords,
-                        self.shape_table,
-                        local_dtypes=self.local_dtypes,
-                        fresh_local_allocs=self.fresh_local_allocs,
-                        library=self.fft_library,
-                        library_nd=self.fft_library_nd,
-                    )
-                    return prelude + expanded
-                except NotImplementedError:
-                    pass
-        retargeted = retarget_scalar_accumulator(node, prelude)
-        if retargeted is not None:
-            return retargeted
-        if prelude:
-            return prelude + [node]
-        return node
+            return None
+        key = numpy_call_key(node.value)
+        if key not in SLICE_TARGET_EXPANDERS:
+            return None
+        try:
+            return call_expander(
+                NP_CALL_EXPANDERS[key],
+                node.targets[0],
+                node.value.args,
+                node.value.keywords,
+                self.shape_table,
+                local_dtypes=self.local_dtypes,
+                fresh_local_allocs=self.fresh_local_allocs,
+                library=self.fft_library,
+                library_nd=self.fft_library_nd,
+            )
+        except NotImplementedError:
+            return None
 
     def target_renders(self, key: tuple[str, str] | None, call: ast.Call) -> bool:
         """The target claims this call as its own intrinsic, so leave it unexpanded.
@@ -775,7 +736,27 @@ class LibNodeRewriter(ast.NodeTransformer):
         return node
 
 
-#: Public name for the extent oracle. The Fortran intrinsic gate has to ask the same question
-#: lowering asks -- what rank does this operand actually have -- and a backend reaching across for a
-#: leading-underscore name would be reaching for something this module never promised to keep.
-iter_extent_of = iter_extent_of_
+def canonicalize_call_assign(node: ast.Assign) -> None:
+    """Put a registered call where its expander fires. ``D[:] = np.repeat(...)`` / ``D[:, :] =
+    np.transpose(...)`` -- a full-slice LHS with a registered call -- becomes ``D = call(...)``; and
+    ``y = np.linalg.lstsq(A, b, rcond=...)[0]`` (or ``np.histogram``'s) drops the trailing ``[0]``
+    on the tuple-returning call."""
+    if (
+        len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Subscript)
+        and isinstance(node.targets[0].value, ast.Name)
+        and is_full_slice_subscript(node.targets[0])
+        and isinstance(node.value, ast.Call)
+        and numpy_call_key(node.value) in NP_CALL_EXPANDERS
+    ):
+        node.targets[0] = ast.Name(id=node.targets[0].value.id, ctx=ast.Store())
+    if (
+        len(node.targets) == 1
+        and isinstance(node.value, ast.Subscript)
+        and isinstance(node.value.value, ast.Call)
+        and isinstance(node.value.slice, ast.Constant)
+        and node.value.slice.value == 0
+    ):
+        inner = node.value.value
+        if numpy_call_key(inner) in {("np", "linalg.lstsq"), ("np", "histogram")}:
+            node.value = inner

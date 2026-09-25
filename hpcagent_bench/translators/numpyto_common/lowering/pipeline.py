@@ -618,7 +618,7 @@ def fix_real_scalar_dtypes(ctx: LoweringContext) -> None:
     # ``writes`` walk below (it only looks at Assign/AugAssign targets). Its output
     # temp's OWN init marker (``__cb1 = __hpcagent_bench_zeros__()``) then looks like
     # its only, real-valued write and gets narrowed back to real -- undoing the
-    # unconditional complex128 tag the hoister gave it (lib_nodes._CallHoister,
+    # unconditional complex128 tag the hoister gave it (lib_nodes.call_hoist.CallHoister,
     # every np.fft.* transform returns complex regardless of operand). Every 1-D FFT
     # library call's output is complex by construction, never a narrowing candidate.
     candidates -= {
@@ -1115,6 +1115,38 @@ def assert_lowering_invariants(phase_name: str, ctx: LoweringContext) -> None:
         ) from exc
 
 
+def dtype_verdict(tag: str) -> str | None:
+    """``"complex"`` / ``"real"`` for a dtype token, ``None`` for one that names no width here.
+
+    ``np_float`` / ``np_complex`` are the framework's PRECISION GLOBALS: a reference binds them off
+    the framework module so one source runs at either precision, and they arrive as bare names the
+    dtype registry has never carried. Unknown stays unknown rather than defaulting -- such a token
+    must neither pin a name real nor widen it, and the registry RAISES on one it does not know.
+    """
+    if tag in ("np_complex", "np_float"):
+        return "complex" if tag == "np_complex" else "real"
+    try:
+        return "complex" if dtypes.canonical(tag).startswith("complex") else "real"
+    except (KeyError, TypeError):
+        return None
+
+
+def elementwise_store_base(node: ast.AST) -> str | None:
+    """``name`` written by an elementwise store, or None. AugAssign counts: a matmul temp is ZEROED by
+    a plain assign and then ACCUMULATED into, so the accumulate is the only statement that carries
+    its operands' dtype."""
+    tgt = (
+        node.targets[0]
+        if isinstance(node, ast.Assign) and len(node.targets) == 1
+        else node.target
+        if isinstance(node, ast.AugAssign)
+        else None
+    )
+    if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name):
+        return tgt.value.id
+    return None
+
+
 def tag_complex_locals(
     kir, zeros_locals: dict[str, tuple[str, ...]], dtype_src: dict[str, str], dtype_literal: dict[str, str]
 ) -> None:
@@ -1139,47 +1171,16 @@ def tag_complex_locals(
     except KeyError:
         return  # no nameable complex width at this precision -- nothing to tag
 
-    def verdict(tag):
-        """``"complex"`` / ``"real"`` for a dtype token, ``None`` for one that names no width here.
-
-        ``np_float`` / ``np_complex`` are the framework's PRECISION GLOBALS: a reference binds them
-        off the framework module so one source runs at either precision, and they arrive as bare
-        names the dtype registry has never carried. Unknown stays unknown rather than defaulting --
-        such a token must neither pin a name real nor widen it, and the registry RAISES on one it
-        does not know (cloudsc's ``np.empty(shape, dtype=np_float)`` crashed the whole emit).
-        """
-        if tag in ("np_complex", "np_float"):
-            return "complex" if tag == "np_complex" else "real"
-        try:
-            return "complex" if dtypes.canonical(tag).startswith("complex") else "real"
-        except (KeyError, TypeError):
-            return None
-
     # Two sources, run together to a fixpoint because each feeds the other: a ``zeros_like`` chain
     # (``scaled`` from ``bu`` from the eigh work matrix from the operand) resolves link by link, and
     # the assignment walk carries the answer across the matmul temps in between.
-    seed = {a.name: ("complex" if verdict(a.dtype) == "complex" else "float") for a in kir.arrays}
-    seed.update({n: "complex" for n, t in kir.local_dtypes.items() if verdict(t) == "complex"})
+    seed = {a.name: ("complex" if dtype_verdict(a.dtype) == "complex" else "float") for a in kir.arrays}
+    seed.update({n: "complex" for n, t in kir.local_dtypes.items() if dtype_verdict(t) == "complex"})
     # Names whose constructor stated a real dtype are settled; inference must not reach them.
-    pinned_real = {n for n, lit in dtype_literal.items() if verdict(lit) == "real"}
+    pinned_real = {n for n, lit in dtype_literal.items() if dtype_verdict(lit) == "real"}
     seed.update({n: "float" for n in pinned_real})
 
-    def store_target(node):
-        """``name`` written by an elementwise store, or None. AugAssign counts: a matmul temp is
-        ZEROED by a plain assign and then ACCUMULATED into, so the accumulate is the only statement
-        that carries its operands' dtype."""
-        tgt = (
-            node.targets[0]
-            if isinstance(node, ast.Assign) and len(node.targets) == 1
-            else node.target
-            if isinstance(node, ast.AugAssign)
-            else None
-        )
-        if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name):
-            return tgt.value.id
-        return None
-
-    stores = [(name, n.value) for n in ast.walk(kir.tree) for name in [store_target(n)] if name is not None]
+    stores = [(name, n.value) for n in ast.walk(kir.tree) for name in [elementwise_store_base(n)] if name is not None]
     for unused in range(8):
         # The WHOLE mapping, not its size: after the first pass propagation stops adding names and
         # only flips a name real -> complex, so a size comparison calls a fixpoint that has not been

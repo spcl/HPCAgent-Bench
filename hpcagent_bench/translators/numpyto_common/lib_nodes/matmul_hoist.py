@@ -3,9 +3,10 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ir import SparseArrayDesc
 from hpcagent_bench.translators.numpyto_common.lib_nodes.blas import BLAS_GEMM_MARKER, BLAS_INELIGIBLE_DTYPES
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import static_shape_of, dims_agree
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     alloc_marker,
     const_,
@@ -81,252 +82,23 @@ def hoist_matmul(
     accumulator loop (dot-product form) when both operands have 1-D iteration
     extent.
     """
-    # Slice-aware matmuls via iteration extent, three forms:
-    #   1-D x 1-D -> scalar dot (e.g. ``A[i, :j] @ A[:j, j]``).
-    #   1-D x 2-D -> 1-D vector ``out[j] = sum_l a[l] * b[l, j]``.
-    #   2-D x 1-D -> 1-D vector ``out[i] = sum_l a[i, l] * b[l]``.
-    l_ext = iter_extent_of_(matmul.left, shape_table)
-    r_ext = iter_extent_of_(matmul.right, shape_table)
-    if l_ext is not None and r_ext is not None and len(l_ext) == 1 and len(r_ext) == 1:
-        temp_counter[0] += 1
-        temp = f"__mm{temp_counter[0]}"
-        # Scalar temp -- caller declares it as ``double``.
-        iter_var = f"__mml{temp_counter[0]}"
-        sa = scalarize_at_iters(matmul.left, [name_(iter_var)], shape_table)
-        sb = scalarize_at_iters(matmul.right, [name_(iter_var)], shape_table)
-        stmts = [
-            ast.Assign(targets=[store_(temp)], value=const_(0.0)),
-            ast.For(
-                target=store_(iter_var),
-                iter=ast.Call(func=name_("range"), args=[l_ext[0]], keywords=[]),
-                body=[
-                    ast.AugAssign(target=store_(temp), op=ast.Add(), value=ast.BinOp(left=sa, op=ast.Mult(), right=sb))
-                ],
-                orelse=[],
-            ),
-        ]
-        return temp, stmts
-    # 1-D x 2-D / 2-D x 1-D slice-form matmul (matrix-vector).
-    if l_ext is not None and r_ext is not None and {len(l_ext), len(r_ext)} == {1, 2}:
-        temp_counter[0] += 1
-        temp = f"__mm{temp_counter[0]}"
-        # Output is 1-D; the shared K axis is the matching extent.
-        if len(l_ext) == 1:  # 1-D x 2-D: out[j] = sum_l a[l] * b[l, j]
-            k_extent, n_extent = l_ext[0], r_ext[1]
-            # Use the FULL extent of the RHS array as the temp shape so
-            # the function-scope declaration doesn't depend on a loop
-            # variable. The actual iteration uses the dynamic extent.
-            shape = (static_shape_of(matmul.right, 1, shape_table) or ast.unparse(n_extent),)
-            temp_arrays[temp] = shape
-            shape_table[temp] = shape
-            l_iter = name_(f"__mml{temp_counter[0]}")  # k
-            out_iter = name_(f"__mmj{temp_counter[0]}")  # j
-            sa = scalarize_at_iters(matmul.left, [l_iter], shape_table)
-            sb = scalarize_at_iters(matmul.right, [l_iter, out_iter], shape_table)
-            stmts = [
-                ast.For(
-                    target=store_(out_iter.id),
-                    iter=ast.Call(func=name_("range"), args=[n_extent], keywords=[]),
-                    body=[
-                        ast.Assign(
-                            targets=[ast.Subscript(value=name_(temp), slice=out_iter, ctx=ast.Store())],
-                            value=const_(0.0),
-                        ),
-                        ast.For(
-                            target=store_(l_iter.id),
-                            iter=ast.Call(func=name_("range"), args=[k_extent], keywords=[]),
-                            body=[
-                                ast.AugAssign(
-                                    target=ast.Subscript(value=name_(temp), slice=out_iter, ctx=ast.Store()),
-                                    op=ast.Add(),
-                                    value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
-                                )
-                            ],
-                            orelse=[],
-                        ),
-                    ],
-                    orelse=[],
-                )
-            ]
-        else:  # 2-D x 1-D
-            m_extent, k_extent = l_ext[0], l_ext[1]
-            shape = (static_shape_of(matmul.left, 0, shape_table) or ast.unparse(m_extent),)
-            temp_arrays[temp] = shape
-            shape_table[temp] = shape
-            out_iter = name_(f"__mmi{temp_counter[0]}")
-            l_iter = name_(f"__mml{temp_counter[0]}")
-            sa = scalarize_at_iters(matmul.left, [out_iter, l_iter], shape_table)
-            sb = scalarize_at_iters(matmul.right, [l_iter], shape_table)
-            stmts = [
-                ast.For(
-                    target=store_(out_iter.id),
-                    iter=ast.Call(func=name_("range"), args=[m_extent], keywords=[]),
-                    body=[
-                        ast.Assign(
-                            targets=[ast.Subscript(value=name_(temp), slice=out_iter, ctx=ast.Store())],
-                            value=const_(0.0),
-                        ),
-                        ast.For(
-                            target=store_(l_iter.id),
-                            iter=ast.Call(func=name_("range"), args=[k_extent], keywords=[]),
-                            body=[
-                                ast.AugAssign(
-                                    target=ast.Subscript(value=name_(temp), slice=out_iter, ctx=ast.Store()),
-                                    op=ast.Add(),
-                                    value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
-                                )
-                            ],
-                            orelse=[],
-                        ),
-                    ],
-                    orelse=[],
-                )
-            ]
-        return temp, stmts
-    # 2-D x 2-D scalarised form: either operand may be a BinOp /
-    # Subscript expression instead of a bare Name. Recover their iter
-    # extents and scalarise at the matmul loop indices (i, l) / (l, j).
-    if (
-        l_ext is not None
-        and r_ext is not None
-        and len(l_ext) == 2
-        and len(r_ext) == 2
-        and not (isinstance(matmul.left, ast.Name) and isinstance(matmul.right, ast.Name))
-    ):
-        temp_counter[0] += 1
-        temp = f"__mm{temp_counter[0]}"
-        m_extent, k_extent = l_ext[0], l_ext[1]
-        unused, n_extent = r_ext
-        shape = (
-            static_shape_of(matmul.left, 0, shape_table) or ast.unparse(m_extent),
-            static_shape_of(matmul.right, 1, shape_table) or ast.unparse(n_extent),
-        )
-        temp_arrays[temp] = shape
-        shape_table[temp] = shape
-        i_iter = name_(f"__mmi{temp_counter[0]}")
-        j_iter = name_(f"__mmj{temp_counter[0]}")
-        l_iter = name_(f"__mml{temp_counter[0]}")
-        sa = scalarize_at_iters(matmul.left, [i_iter, l_iter], shape_table)
-        sb = scalarize_at_iters(matmul.right, [l_iter, j_iter], shape_table)
-        out_sub = ast.Tuple(elts=[i_iter, j_iter], ctx=ast.Load())
-        stmts = [
-            ast.For(
-                target=store_(i_iter.id),
-                iter=ast.Call(func=name_("range"), args=[m_extent], keywords=[]),
-                body=[
-                    ast.For(
-                        target=store_(j_iter.id),
-                        iter=ast.Call(func=name_("range"), args=[n_extent], keywords=[]),
-                        body=[
-                            ast.Assign(
-                                targets=[ast.Subscript(value=name_(temp), slice=out_sub, ctx=ast.Store())],
-                                value=const_(0.0),
-                            ),
-                            ast.For(
-                                target=store_(l_iter.id),
-                                iter=ast.Call(func=name_("range"), args=[k_extent], keywords=[]),
-                                body=[
-                                    ast.AugAssign(
-                                        target=ast.Subscript(value=name_(temp), slice=out_sub, ctx=ast.Store()),
-                                        op=ast.Add(),
-                                        value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
-                                    )
-                                ],
-                                orelse=[],
-                            ),
-                        ],
-                        orelse=[],
-                    )
-                ],
-                orelse=[],
-            )
-        ]
-        return temp, stmts
-    # BATCHED scalarised form -- the batched counterpart of the 2-D x 2-D branch above. The
-    # bare-Name batched path further down reads both operands' declared shapes, so it declines the
-    # moment one is an expression: conv_transpose2d's ``xg_flat @ wg[:, :, ky, kx]`` is
-    # (n, h*w, in_per_group) @ (in_per_group, out_per_group), and declining it left the contraction
-    # to slice fusion, which refuses. Extents come from ``iter_extent_of_`` here, which reads
-    # through the slice, so the operand's spelling stops mattering.
-    if (
-        l_ext is not None
-        and r_ext is not None
-        and max(len(l_ext), len(r_ext)) >= 3
-        and min(len(l_ext), len(r_ext)) >= 2
-        and not (isinstance(matmul.left, ast.Name) and isinstance(matmul.right, ast.Name))
-    ):
-        # Both operands batched must agree on the batch RANK: numpy would broadcast a mismatch,
-        # and the bare-Name path below does not model that either. Refuse rather than guess.
-        if len(l_ext) >= 3 and len(r_ext) >= 3 and len(l_ext) != len(r_ext):
-            return None, []
-        temp_counter[0] += 1
-        temp = f"__mm{temp_counter[0]}"
-        ctr = temp_counter[0]
-        batch_ext = (l_ext if len(l_ext) >= len(r_ext) else r_ext)[:-2]
-        batched = matmul.left if len(l_ext) >= len(r_ext) else matmul.right
-        m_extent, k_extent = l_ext[-2], l_ext[-1]
-        n_extent = r_ext[-1]
-        # Declare the temp from STATIC axis tokens where they exist, so the function-scope
-        # declaration never names a loop variable (same rule as the branches above).
-        shape = tuple(
-            static_shape_of(batched, axis, shape_table) or ast.unparse(ext) for axis, ext in enumerate(batch_ext)
-        ) + (
-            static_shape_of(matmul.left, len(l_ext) - 2, shape_table) or ast.unparse(m_extent),
-            static_shape_of(matmul.right, len(r_ext) - 1, shape_table) or ast.unparse(n_extent),
-        )
-        temp_arrays[temp] = shape
-        shape_table[temp] = shape
-        batch_iters = [name_(f"__mmb{ctr}_{i}") for i in range(len(batch_ext))]
-        i_iter = name_(f"__mmi{ctr}")
-        j_iter = name_(f"__mmj{ctr}")
-        l_iter = name_(f"__mml{ctr}")
-        left_iters = ([*batch_iters] if len(l_ext) >= 3 else []) + [i_iter, l_iter]
-        right_iters = ([*batch_iters] if len(r_ext) >= 3 else []) + [l_iter, j_iter]
-        sa = scalarize_at_iters(matmul.left, left_iters, shape_table)
-        sb = scalarize_at_iters(matmul.right, right_iters, shape_table)
-        out_sub = ast.Tuple(elts=[*batch_iters, i_iter, j_iter], ctx=ast.Load())
-        out_ref = lambda ctx: ast.Subscript(value=name_(temp), slice=copy.deepcopy(out_sub), ctx=ctx)
-        body: list[ast.stmt] = [
-            ast.For(
-                target=store_(j_iter.id),
-                iter=ast.Call(func=name_("range"), args=[n_extent], keywords=[]),
-                body=[
-                    ast.Assign(targets=[out_ref(ast.Store())], value=const_(0.0)),
-                    ast.For(
-                        target=store_(l_iter.id),
-                        iter=ast.Call(func=name_("range"), args=[k_extent], keywords=[]),
-                        body=[
-                            ast.AugAssign(
-                                target=out_ref(ast.Store()),
-                                op=ast.Add(),
-                                value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
-                            )
-                        ],
-                        orelse=[],
-                    ),
-                ],
-                orelse=[],
-            )
-        ]
-        body = [
-            ast.For(
-                target=store_(i_iter.id),
-                iter=ast.Call(func=name_("range"), args=[m_extent], keywords=[]),
-                body=body,
-                orelse=[],
-            )
-        ]
-        for iter_node, ext in zip(reversed(batch_iters), reversed(batch_ext)):
-            body = [
-                ast.For(
-                    target=store_(iter_node.id),
-                    iter=ast.Call(func=name_("range"), args=[ext], keywords=[]),
-                    body=body,
-                    orelse=[],
-                )
-            ]
-        return temp, body
-    if not (isinstance(matmul.left, ast.Name) and isinstance(matmul.right, ast.Name)):
+    l_ext = iter_extent_of(matmul.left, shape_table)
+    r_ext = iter_extent_of(matmul.right, shape_table)
+    both_names = isinstance(matmul.left, ast.Name) and isinstance(matmul.right, ast.Name)
+    if l_ext is not None and r_ext is not None:
+        ranks = (len(l_ext), len(r_ext))
+        sliced = None
+        if ranks == (1, 1):
+            sliced = scalar_dot_matmul
+        elif set(ranks) == {1, 2}:
+            sliced = matvec_matmul
+        elif ranks == (2, 2) and not both_names:
+            sliced = scalarised_matmul
+        elif max(ranks) >= 3 and min(ranks) >= 2 and not both_names:
+            sliced = scalarised_batched_matmul
+        if sliced is not None:
+            return sliced(matmul, l_ext, r_ext, shape_table, temp_arrays, temp_counter)
+    if not both_names:
         return None, []
     a_name, b_name = matmul.left.id, matmul.right.id
     a_shape = shape_table.get(a_name)
@@ -351,74 +123,7 @@ def hoist_matmul(
         or (len(a_shape) == 2 and len(b_shape) >= 3)
         or (len(a_shape) >= 3 and len(b_shape) >= 3)
     ):
-        if not (isinstance(matmul.left, ast.Name) and isinstance(matmul.right, ast.Name)):
-            return None, []
-        a_name_b, b_name_b = matmul.left.id, matmul.right.id
-        ctr = temp_counter[0]
-        # Which side(s) carry the batch dims. Both-batched broadcasts the SAME
-        # batch index into both operands; one-sided indexes only that operand.
-        a_batch = len(a_shape) >= 3
-        b_batch = len(b_shape) >= 3
-        if a_batch:
-            batch_shape = a_shape[:-2]
-            m, k = a_shape[-2], a_shape[-1]
-            n = b_shape[-1]
-        else:
-            batch_shape = b_shape[:-2]
-            m, k = a_shape
-            n = b_shape[-1]
-        batch_iters = [f"__mmb{ctr}_{i}" for i in range(len(batch_shape))]
-        i_iter, j_iter, l_iter = f"__mmi{ctr}", f"__mmj{ctr}", f"__mml{ctr}"
-        batch_names = [name_(b) for b in batch_iters]
-        # Each operand's subscript is prefixed with the batch iters iff that
-        # operand is batched; the output is always batched.
-        a_sub_elts = (batch_names if a_batch else []) + [name_(i_iter), name_(l_iter)]
-        b_sub_elts = (batch_names if b_batch else []) + [name_(l_iter), name_(j_iter)]
-        out_sub_elts = batch_names + [name_(i_iter), name_(j_iter)]
-        out_sub = ast.Tuple(elts=out_sub_elts, ctx=ast.Load())
-        a_sub = ast.Tuple(elts=a_sub_elts, ctx=ast.Load()) if len(a_sub_elts) > 1 else a_sub_elts[0]
-        b_sub = ast.Tuple(elts=b_sub_elts, ctx=ast.Load()) if len(b_sub_elts) > 1 else b_sub_elts[0]
-        # Innermost: out[*batch, i, j] = 0; for l: out += a[*] * b[*].
-        zero_assign = ast.Assign(
-            targets=[ast.Subscript(value=name_(temp), slice=out_sub, ctx=ast.Store())], value=const_(0.0)
-        )
-        accum = ast.AugAssign(
-            target=ast.Subscript(value=name_(temp), slice=out_sub, ctx=ast.Store()),
-            op=ast.Add(),
-            value=ast.BinOp(
-                left=ast.Subscript(value=name_(a_name_b), slice=a_sub, ctx=ast.Load()),
-                op=ast.Mult(),
-                right=ast.Subscript(value=name_(b_name_b), slice=b_sub, ctx=ast.Load()),
-            ),
-        )
-        l_loop = ast.For(
-            target=store_(l_iter),
-            iter=ast.Call(func=name_("range"), args=[const_or_name(k)], keywords=[]),
-            body=[accum],
-            orelse=[],
-        )
-        j_loop = ast.For(
-            target=store_(j_iter),
-            iter=ast.Call(func=name_("range"), args=[const_or_name(n)], keywords=[]),
-            body=[zero_assign, l_loop],
-            orelse=[],
-        )
-        i_loop = ast.For(
-            target=store_(i_iter),
-            iter=ast.Call(func=name_("range"), args=[const_or_name(m)], keywords=[]),
-            body=[j_loop],
-            orelse=[],
-        )
-        # Wrap with the batch loops, outermost first.
-        current: ast.stmt = i_loop
-        for bi, bdim in zip(reversed(batch_iters), reversed(list(batch_shape))):
-            current = ast.For(
-                target=store_(bi),
-                iter=ast.Call(func=name_("range"), args=[const_or_name(bdim)], keywords=[]),
-                body=[current],
-                orelse=[],
-            )
-        return temp, [current]
+        return named_batched_matmul(matmul, a_shape, b_shape, temp, temp_counter[0])
 
     # Emit the matmul loop nest that fills ``temp``.
     stmts: list[ast.stmt] = []
@@ -571,6 +276,339 @@ def hoist_matmul(
     return temp, stmts
 
 
+def named_batched_matmul(
+    matmul: ast.BinOp, a_shape: tuple[str, ...], b_shape: tuple[str, ...], temp: str, ctr: int
+) -> tuple[str | None, list[ast.stmt]]:
+    """Batched ``(*batch, m, k) @ (k, n) -> (*batch, m, n)`` of two Names (and ``(m, k) @ (*batch, k, n)``,
+    and both batched): a plain 2-D matmul body in a loop nest over the batch dims, indexing each
+    batched operand by ``[*batch, ...]`` and writing the temp by ``[*batch, m, n]``."""
+    a_name_b, b_name_b = matmul.left.id, matmul.right.id
+    # Which side(s) carry the batch dims. Both-batched broadcasts the SAME
+    # batch index into both operands; one-sided indexes only that operand.
+    a_batch = len(a_shape) >= 3
+    b_batch = len(b_shape) >= 3
+    if a_batch:
+        batch_shape = a_shape[:-2]
+        m, k = a_shape[-2], a_shape[-1]
+        n = b_shape[-1]
+    else:
+        batch_shape = b_shape[:-2]
+        m, k = a_shape
+        n = b_shape[-1]
+    batch_iters = [f"__mmb{ctr}_{i}" for i in range(len(batch_shape))]
+    i_iter, j_iter, l_iter = f"__mmi{ctr}", f"__mmj{ctr}", f"__mml{ctr}"
+    batch_names = [name_(b) for b in batch_iters]
+    # Each operand's subscript is prefixed with the batch iters iff that
+    # operand is batched; the output is always batched.
+    a_sub_elts = (batch_names if a_batch else []) + [name_(i_iter), name_(l_iter)]
+    b_sub_elts = (batch_names if b_batch else []) + [name_(l_iter), name_(j_iter)]
+    out_sub_elts = batch_names + [name_(i_iter), name_(j_iter)]
+    out_sub = ast.Tuple(elts=out_sub_elts, ctx=ast.Load())
+    a_sub = ast.Tuple(elts=a_sub_elts, ctx=ast.Load()) if len(a_sub_elts) > 1 else a_sub_elts[0]
+    b_sub = ast.Tuple(elts=b_sub_elts, ctx=ast.Load()) if len(b_sub_elts) > 1 else b_sub_elts[0]
+    # Innermost: out[*batch, i, j] = 0; for l: out += a[*] * b[*].
+    zero_assign = ast.Assign(
+        targets=[ast.Subscript(value=name_(temp), slice=out_sub, ctx=ast.Store())], value=const_(0.0)
+    )
+    accum = ast.AugAssign(
+        target=ast.Subscript(value=name_(temp), slice=out_sub, ctx=ast.Store()),
+        op=ast.Add(),
+        value=ast.BinOp(
+            left=ast.Subscript(value=name_(a_name_b), slice=a_sub, ctx=ast.Load()),
+            op=ast.Mult(),
+            right=ast.Subscript(value=name_(b_name_b), slice=b_sub, ctx=ast.Load()),
+        ),
+    )
+    l_loop = ast.For(
+        target=store_(l_iter),
+        iter=ast.Call(func=name_("range"), args=[const_or_name(k)], keywords=[]),
+        body=[accum],
+        orelse=[],
+    )
+    j_loop = ast.For(
+        target=store_(j_iter),
+        iter=ast.Call(func=name_("range"), args=[const_or_name(n)], keywords=[]),
+        body=[zero_assign, l_loop],
+        orelse=[],
+    )
+    i_loop = ast.For(
+        target=store_(i_iter),
+        iter=ast.Call(func=name_("range"), args=[const_or_name(m)], keywords=[]),
+        body=[j_loop],
+        orelse=[],
+    )
+    # Wrap with the batch loops, outermost first.
+    current: ast.stmt = i_loop
+    for bi, bdim in zip(reversed(batch_iters), reversed(list(batch_shape))):
+        current = ast.For(
+            target=store_(bi),
+            iter=ast.Call(func=name_("range"), args=[const_or_name(bdim)], keywords=[]),
+            body=[current],
+            orelse=[],
+        )
+    return temp, [current]
+
+
+def scalar_dot_matmul(
+    matmul: ast.BinOp,
+    l_ext: tuple[ast.expr, ...],
+    r_ext: tuple[ast.expr, ...],
+    shape_table: dict[str, tuple[str, ...]],
+    temp_arrays: dict[str, tuple[str, ...]],
+    temp_counter: list[int],
+) -> tuple[str | None, list[ast.stmt]]:
+    """1-D x 1-D slice operands (``A[i, :j] @ A[:j, j]``): a scalar dot-product accumulator."""
+    temp_counter[0] += 1
+    temp = f"__mm{temp_counter[0]}"
+    # Scalar temp -- caller declares it as ``double``.
+    iter_var = f"__mml{temp_counter[0]}"
+    sa = scalarize_at_iters(matmul.left, [name_(iter_var)], shape_table)
+    sb = scalarize_at_iters(matmul.right, [name_(iter_var)], shape_table)
+    stmts = [
+        ast.Assign(targets=[store_(temp)], value=const_(0.0)),
+        ast.For(
+            target=store_(iter_var),
+            iter=ast.Call(func=name_("range"), args=[l_ext[0]], keywords=[]),
+            body=[ast.AugAssign(target=store_(temp), op=ast.Add(), value=ast.BinOp(left=sa, op=ast.Mult(), right=sb))],
+            orelse=[],
+        ),
+    ]
+    return temp, stmts
+
+
+def matvec_matmul(
+    matmul: ast.BinOp,
+    l_ext: tuple[ast.expr, ...],
+    r_ext: tuple[ast.expr, ...],
+    shape_table: dict[str, tuple[str, ...]],
+    temp_arrays: dict[str, tuple[str, ...]],
+    temp_counter: list[int],
+) -> tuple[str | None, list[ast.stmt]]:
+    """1-D x 2-D (``out[j] = sum_l a[l] * b[l, j]``) or 2-D x 1-D (``out[i] = sum_l a[i, l] * b[l]``)
+    over iteration extents: a 1-D temp."""
+    temp_counter[0] += 1
+    temp = f"__mm{temp_counter[0]}"
+    # Output is 1-D; the shared K axis is the matching extent.
+    if len(l_ext) == 1:  # 1-D x 2-D: out[j] = sum_l a[l] * b[l, j]
+        k_extent, n_extent = l_ext[0], r_ext[1]
+        # Use the FULL extent of the RHS array as the temp shape so
+        # the function-scope declaration doesn't depend on a loop
+        # variable. The actual iteration uses the dynamic extent.
+        shape = (static_shape_of(matmul.right, 1, shape_table) or ast.unparse(n_extent),)
+        temp_arrays[temp] = shape
+        shape_table[temp] = shape
+        l_iter = name_(f"__mml{temp_counter[0]}")  # k
+        out_iter = name_(f"__mmj{temp_counter[0]}")  # j
+        sa = scalarize_at_iters(matmul.left, [l_iter], shape_table)
+        sb = scalarize_at_iters(matmul.right, [l_iter, out_iter], shape_table)
+        stmts = [
+            ast.For(
+                target=store_(out_iter.id),
+                iter=ast.Call(func=name_("range"), args=[n_extent], keywords=[]),
+                body=[
+                    ast.Assign(
+                        targets=[ast.Subscript(value=name_(temp), slice=out_iter, ctx=ast.Store())],
+                        value=const_(0.0),
+                    ),
+                    ast.For(
+                        target=store_(l_iter.id),
+                        iter=ast.Call(func=name_("range"), args=[k_extent], keywords=[]),
+                        body=[
+                            ast.AugAssign(
+                                target=ast.Subscript(value=name_(temp), slice=out_iter, ctx=ast.Store()),
+                                op=ast.Add(),
+                                value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
+                            )
+                        ],
+                        orelse=[],
+                    ),
+                ],
+                orelse=[],
+            )
+        ]
+    else:  # 2-D x 1-D
+        m_extent, k_extent = l_ext[0], l_ext[1]
+        shape = (static_shape_of(matmul.left, 0, shape_table) or ast.unparse(m_extent),)
+        temp_arrays[temp] = shape
+        shape_table[temp] = shape
+        out_iter = name_(f"__mmi{temp_counter[0]}")
+        l_iter = name_(f"__mml{temp_counter[0]}")
+        sa = scalarize_at_iters(matmul.left, [out_iter, l_iter], shape_table)
+        sb = scalarize_at_iters(matmul.right, [l_iter], shape_table)
+        stmts = [
+            ast.For(
+                target=store_(out_iter.id),
+                iter=ast.Call(func=name_("range"), args=[m_extent], keywords=[]),
+                body=[
+                    ast.Assign(
+                        targets=[ast.Subscript(value=name_(temp), slice=out_iter, ctx=ast.Store())],
+                        value=const_(0.0),
+                    ),
+                    ast.For(
+                        target=store_(l_iter.id),
+                        iter=ast.Call(func=name_("range"), args=[k_extent], keywords=[]),
+                        body=[
+                            ast.AugAssign(
+                                target=ast.Subscript(value=name_(temp), slice=out_iter, ctx=ast.Store()),
+                                op=ast.Add(),
+                                value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
+                            )
+                        ],
+                        orelse=[],
+                    ),
+                ],
+                orelse=[],
+            )
+        ]
+    return temp, stmts
+
+
+def scalarised_matmul(
+    matmul: ast.BinOp,
+    l_ext: tuple[ast.expr, ...],
+    r_ext: tuple[ast.expr, ...],
+    shape_table: dict[str, tuple[str, ...]],
+    temp_arrays: dict[str, tuple[str, ...]],
+    temp_counter: list[int],
+) -> tuple[str | None, list[ast.stmt]]:
+    """2-D x 2-D where either operand may be a BinOp / Subscript expression instead of a bare Name:
+    both scalarised at the matmul loop indices (i, l) / (l, j)."""
+    temp_counter[0] += 1
+    temp = f"__mm{temp_counter[0]}"
+    m_extent, k_extent = l_ext[0], l_ext[1]
+    unused, n_extent = r_ext
+    shape = (
+        static_shape_of(matmul.left, 0, shape_table) or ast.unparse(m_extent),
+        static_shape_of(matmul.right, 1, shape_table) or ast.unparse(n_extent),
+    )
+    temp_arrays[temp] = shape
+    shape_table[temp] = shape
+    i_iter = name_(f"__mmi{temp_counter[0]}")
+    j_iter = name_(f"__mmj{temp_counter[0]}")
+    l_iter = name_(f"__mml{temp_counter[0]}")
+    sa = scalarize_at_iters(matmul.left, [i_iter, l_iter], shape_table)
+    sb = scalarize_at_iters(matmul.right, [l_iter, j_iter], shape_table)
+    out_sub = ast.Tuple(elts=[i_iter, j_iter], ctx=ast.Load())
+    stmts = [
+        ast.For(
+            target=store_(i_iter.id),
+            iter=ast.Call(func=name_("range"), args=[m_extent], keywords=[]),
+            body=[
+                ast.For(
+                    target=store_(j_iter.id),
+                    iter=ast.Call(func=name_("range"), args=[n_extent], keywords=[]),
+                    body=[
+                        ast.Assign(
+                            targets=[ast.Subscript(value=name_(temp), slice=out_sub, ctx=ast.Store())],
+                            value=const_(0.0),
+                        ),
+                        ast.For(
+                            target=store_(l_iter.id),
+                            iter=ast.Call(func=name_("range"), args=[k_extent], keywords=[]),
+                            body=[
+                                ast.AugAssign(
+                                    target=ast.Subscript(value=name_(temp), slice=out_sub, ctx=ast.Store()),
+                                    op=ast.Add(),
+                                    value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
+                                )
+                            ],
+                            orelse=[],
+                        ),
+                    ],
+                    orelse=[],
+                )
+            ],
+            orelse=[],
+        )
+    ]
+    return temp, stmts
+
+
+def scalarised_batched_matmul(
+    matmul: ast.BinOp,
+    l_ext: tuple[ast.expr, ...],
+    r_ext: tuple[ast.expr, ...],
+    shape_table: dict[str, tuple[str, ...]],
+    temp_arrays: dict[str, tuple[str, ...]],
+    temp_counter: list[int],
+) -> tuple[str | None, list[ast.stmt]]:
+    """The batched counterpart of :func:`scalarised_matmul`. The bare-Name batched path reads both
+    operands' declared shapes, so it declines the moment one is an expression (``xg_flat @
+    wg[:, :, ky, kx]``); extents come from ``iter_extent_of`` here, which reads through the
+    slice."""
+    # Both operands batched must agree on the batch RANK: numpy would broadcast a mismatch,
+    # and the bare-Name path below does not model that either. Refuse rather than guess.
+    if len(l_ext) >= 3 and len(r_ext) >= 3 and len(l_ext) != len(r_ext):
+        return None, []
+    temp_counter[0] += 1
+    temp = f"__mm{temp_counter[0]}"
+    ctr = temp_counter[0]
+    batch_ext = (l_ext if len(l_ext) >= len(r_ext) else r_ext)[:-2]
+    batched = matmul.left if len(l_ext) >= len(r_ext) else matmul.right
+    m_extent, k_extent = l_ext[-2], l_ext[-1]
+    n_extent = r_ext[-1]
+    # Declare the temp from STATIC axis tokens where they exist, so the function-scope
+    # declaration never names a loop variable (same rule as the branches above).
+    shape = tuple(
+        static_shape_of(batched, axis, shape_table) or ast.unparse(ext) for axis, ext in enumerate(batch_ext)
+    ) + (
+        static_shape_of(matmul.left, len(l_ext) - 2, shape_table) or ast.unparse(m_extent),
+        static_shape_of(matmul.right, len(r_ext) - 1, shape_table) or ast.unparse(n_extent),
+    )
+    temp_arrays[temp] = shape
+    shape_table[temp] = shape
+    batch_iters = [name_(f"__mmb{ctr}_{i}") for i in range(len(batch_ext))]
+    i_iter = name_(f"__mmi{ctr}")
+    j_iter = name_(f"__mmj{ctr}")
+    l_iter = name_(f"__mml{ctr}")
+    left_iters = ([*batch_iters] if len(l_ext) >= 3 else []) + [i_iter, l_iter]
+    right_iters = ([*batch_iters] if len(r_ext) >= 3 else []) + [l_iter, j_iter]
+    sa = scalarize_at_iters(matmul.left, left_iters, shape_table)
+    sb = scalarize_at_iters(matmul.right, right_iters, shape_table)
+    out_sub = ast.Tuple(elts=[*batch_iters, i_iter, j_iter], ctx=ast.Load())
+    out_ref = lambda ctx: ast.Subscript(value=name_(temp), slice=copy.deepcopy(out_sub), ctx=ctx)
+    body: list[ast.stmt] = [
+        ast.For(
+            target=store_(j_iter.id),
+            iter=ast.Call(func=name_("range"), args=[n_extent], keywords=[]),
+            body=[
+                ast.Assign(targets=[out_ref(ast.Store())], value=const_(0.0)),
+                ast.For(
+                    target=store_(l_iter.id),
+                    iter=ast.Call(func=name_("range"), args=[k_extent], keywords=[]),
+                    body=[
+                        ast.AugAssign(
+                            target=out_ref(ast.Store()),
+                            op=ast.Add(),
+                            value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
+                        )
+                    ],
+                    orelse=[],
+                ),
+            ],
+            orelse=[],
+        )
+    ]
+    body = [
+        ast.For(
+            target=store_(i_iter.id),
+            iter=ast.Call(func=name_("range"), args=[m_extent], keywords=[]),
+            body=body,
+            orelse=[],
+        )
+    ]
+    for iter_node, ext in zip(reversed(batch_iters), reversed(batch_ext)):
+        body = [
+            ast.For(
+                target=store_(iter_node.id),
+                iter=ast.Call(func=name_("range"), args=[ext], keywords=[]),
+                body=body,
+                orelse=[],
+            )
+        ]
+    return temp, body
+
+
 class MatmulHoister(ast.NodeTransformer):
     """Replace ``A @ B`` subexpressions with a fresh temp Name and record the
     matmul loop nest that fills the temp. Multiple matmuls in one expression
@@ -664,7 +702,7 @@ class MatmulHoister(ast.NodeTransformer):
         Two things are deliberately left alone, on the same principle -- do not reroute what
         already lowers. A ``Subscript`` operand has its own slice-aware path, and a RANK-1 operand
         reaches the scalar dot-product form, which reads a call operand happily via
-        ``iter_extent_of_``; spilling either would trade a working lowering for an extra temp
+        ``iter_extent_of``; spilling either would trade a working lowering for an extra temp
         array and a copy loop.
         """
         left, right = node.left, node.right
@@ -672,7 +710,7 @@ class MatmulHoister(ast.NodeTransformer):
             operand = left if side == "left" else right
             if not isinstance(operand, ast.Call):
                 continue
-            ext = iter_extent_of_(operand, self.shape_table)
+            ext = iter_extent_of(operand, self.shape_table)
             if ext is None or len(ext) < 2:
                 continue
             nm, stmts = self.materialise_dense_operand(operand)
@@ -775,31 +813,45 @@ class MatmulHoister(ast.NodeTransformer):
         ra = self.sparse.get(node.right.id)
         if la is None and ra is None:
             return None  # purely dense -- not our path
+        if la is not None and ra is not None:
+            return self.sparse_sparse_matmul(node, la, ra, pre)
+        return self.sparse_dense_matmul(node, la, ra, pre)
+
+    def sparse_sparse_matmul(
+        self, node: ast.BinOp, la: SparseArrayDesc, ra: SparseArrayDesc, pre: list[ast.stmt]
+    ) -> tuple[str, list[ast.stmt]]:
+        """``csr @ csr`` into a dense result temp; every other sparse @ sparse pairing is refused."""
         from hpcagent_bench.translators.numpyto_common import sparse_emit as se
 
-        # sparse @ sparse
-        if la is not None and ra is not None:
-            lfmt, rfmt = la.format, ra.format
-            if lfmt == "csr" and rfmt == "csr":
-                self.temp_counter[0] += 1
-                temp = f"__mm{self.temp_counter[0]}"
-                ni = la.logical_shape[0] if la.logical_shape else "0"
-                nj = (
-                    ra.logical_shape[1]
-                    if len(ra.logical_shape) > 1
-                    else (ra.logical_shape[0] if ra.logical_shape else "0")
-                )
-                self.temp_arrays[temp] = (ni, nj)
-                self.shape_table[temp] = (ni, nj)
-                stmts = se.expand_matmul_csr_csr_dense(temp, la.buffers, ra.buffers, ni, nj)
-                return temp, pre + stmts
-            raise NotImplementedError(
-                f"sparse @ sparse only supports csr @ csr; got "
-                f"{lfmt} @ {rfmt} ({node.left.id} @ {node.right.id}). "
-                "Convert operands to CSR or split the kernel."
+        lfmt, rfmt = la.format, ra.format
+        if lfmt == "csr" and rfmt == "csr":
+            self.temp_counter[0] += 1
+            temp = f"__mm{self.temp_counter[0]}"
+            ni = la.logical_shape[0] if la.logical_shape else "0"
+            nj = (
+                ra.logical_shape[1] if len(ra.logical_shape) > 1 else (ra.logical_shape[0] if ra.logical_shape else "0")
             )
+            self.temp_arrays[temp] = (ni, nj)
+            self.shape_table[temp] = (ni, nj)
+            stmts = se.expand_matmul_csr_csr_dense(temp, la.buffers, ra.buffers, ni, nj)
+            return temp, pre + stmts
+        raise NotImplementedError(
+            f"sparse @ sparse only supports csr @ csr; got "
+            f"{lfmt} @ {rfmt} ({node.left.id} @ {node.right.id}). "
+            "Convert operands to CSR or split the kernel."
+        )
 
-        # sparse @ dense / dense @ sparse -- exactly one operand is sparse.
+    def sparse_dense_matmul(
+        self,
+        node: ast.BinOp,
+        la: SparseArrayDesc | None,
+        ra: SparseArrayDesc | None,
+        pre: list[ast.stmt],
+    ) -> tuple[str, list[ast.stmt]]:
+        """Exactly one operand sparse: a sparse @ dense matvec (any format) or a CSR matmat; a 1-D dense
+        @ sparse row-vector product and every other pairing are refused."""
+        from hpcagent_bench.translators.numpyto_common import sparse_emit as se
+
         if la is not None:
             sp_desc, dense_name, sp_on_left = la, node.right.id, True
         else:
@@ -847,7 +899,7 @@ class MatmulHoister(ast.NodeTransformer):
         slice on the sparse side (SpMM with a sliced RHS) must fall through and fail loudly rather
         than emit wrong shapes.
         """
-        ext = iter_extent_of_(expr, self.shape_table)
+        ext = iter_extent_of(expr, self.shape_table)
         if not ext:
             return None, []
         if max_rank is not None and len(ext) > max_rank:
@@ -905,8 +957,6 @@ class MatmulHoister(ast.NodeTransformer):
             and operand.value.id in self.sparse
         ):
             return None
-        from hpcagent_bench.translators.numpyto_common.ir import SparseArrayDesc
-
         d = self.sparse[operand.value.id]
         ls = list(d.logical_shape) if d.logical_shape else []
         swapped = tuple(reversed(ls)) if len(ls) >= 2 else tuple(ls)

@@ -149,96 +149,147 @@ class ForwardSubstituteInvariantScalars(ast.NodeTransformer):
 
     def first_candidate(self, fn: ast.FunctionDef) -> tuple[ast.Assign, str, ast.expr] | None:
         """The first ``(assign, name, rhs-copy)`` in source order that meets every condition."""
-        store_counts: dict[str, int] = {}
-        for_targets: set[str] = set()
-        written: set[str] = set()
+        search = CandidateSearch(fn, self.array_names, self.params)
+        search.scan(fn.body, 0, (), (), frozenset())
+        return search.found
+
+
+class CandidateSearch:
+    """One search of a function for the next scalar :class:`ForwardSubstituteInvariantScalars` may
+    replay: the store / for-target / written-base census of ``fn``, the deepest depth each name is
+    read at, and the first qualifying assign found."""
+
+    def __init__(self, fn: ast.FunctionDef, array_names: set[str], params: set[str]) -> None:
+        self.array_names = array_names
+        self.params = params
+        self.store_counts: dict[str, int] = {}
+        self.for_targets: set[str] = set()
+        self.written: set[str] = set()
         for node in ast.walk(fn):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-                store_counts[node.id] = store_counts.get(node.id, 0) + 1
-                written.add(node.id)
+                self.store_counts[node.id] = self.store_counts.get(node.id, 0) + 1
+                self.written.add(node.id)
             elif isinstance(node, ast.For):
                 for tgt in ast.walk(node.target):
                     if isinstance(tgt, ast.Name):
-                        for_targets.add(tgt.id)
+                        self.for_targets.add(tgt.id)
             elif isinstance(node, (ast.Assign, ast.AugAssign)):
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 for tgt in targets:
                     base = written_name(tgt)
                     if base is not None:
-                        written.add(base)
+                        self.written.add(base)
         # One pass, so the depth test is O(1) and gates the costly liveness walk.
-        deepest: dict[str, int] = {}
+        self.deepest: dict[str, int] = {}
         for expr, depth in stmt_exprs_by_depth(fn.body, 0):
             for node in ast.walk(expr):
-                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and depth > deepest.get(node.id, -1):
-                    deepest[node.id] = depth
-        found: list[tuple[ast.Assign, str, ast.expr]] = []
+                if (
+                    isinstance(node, ast.Name)
+                    and isinstance(node.ctx, ast.Load)
+                    and depth > self.deepest.get(node.id, -1)
+                ):
+                    self.deepest[node.id] = depth
+        self.found: tuple[ast.Assign, str, ast.expr] | None = None
 
-        def qualifies(name: str, expr: ast.expr, depth: int, loop_vars: frozenset[str]) -> bool:
-            # Scalar, in a loop, single-assigned, and read deeper than it is written. A
-            # function-level assign is a whole-kernel constant, not the measured defect --
-            # replaying deriche's exp() coefficients only pushes work down a nest.
-            if not depth or name in self.array_names or name in self.params or name in for_targets:
+    def qualifies(self, name: str, expr: ast.expr, depth: int, loop_vars: frozenset[str]) -> bool:
+        """Scalar, in a loop, single-assigned, read deeper than it is written, small and pure, and
+        every operand stable between the assign and the reads. A function-level assign is a
+        whole-kernel constant, not the measured defect -- replaying it only pushes work down a
+        nest."""
+        if not depth or name in self.array_names or name in self.params or name in self.for_targets:
+            return False
+        if self.store_counts.get(name, 0) != 1 or self.deepest.get(name, -1) <= depth:
+            return False
+        nodes = [n for n in ast.walk(expr) if isinstance(n, ast.expr)]
+        subscripts = [n for n in nodes if isinstance(n, ast.Subscript)]
+        if len(subscripts) > FWD_SUBST_MAX_SUBSCRIPTS or len(nodes) > FWD_SUBST_MAX_NODES:
+            return False
+        if not fwd_subst_is_pure(expr):
+            return False
+        for sub in subscripts:  # aliasing: a replayed read must not cross its own store
+            base = written_name(sub)
+            if base is None or base in self.written:
                 return False
-            if store_counts.get(name, 0) != 1 or deepest.get(name, -1) <= depth:
-                return False
-            nodes = [n for n in ast.walk(expr) if isinstance(n, ast.expr)]
-            subscripts = [n for n in nodes if isinstance(n, ast.Subscript)]
-            if len(subscripts) > FWD_SUBST_MAX_SUBSCRIPTS or len(nodes) > FWD_SUBST_MAX_NODES:
-                return False
-            if not fwd_subst_is_pure(expr):
-                return False
-            for sub in subscripts:  # aliasing: a replayed read must not cross its own store
-                base = written_name(sub)
-                if base is None or base in written:
-                    return False
-            for node in ast.walk(expr):  # every operand stable between the assign and the reads
-                if not (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)):
-                    continue
-                count = store_counts.get(node.id, 0)
-                if count == 0 or node.id in loop_vars:
-                    continue
-                if not (count == 1 and node.id not in for_targets):
-                    return False
-            return True
+        return self.operands_stable(expr, loop_vars)
 
-        def scan(
-            stmts: list[ast.stmt],
-            depth: int,
-            after: tuple[list[ast.stmt], ...],
-            reentry: tuple[tuple[list[ast.stmt], int], ...],
-            loop_vars: frozenset[str],
-        ) -> None:
-            for i, stmt in enumerate(stmts):
-                if found:
+    def operands_stable(self, expr: ast.expr, loop_vars: frozenset[str]) -> bool:
+        """Every Name ``expr`` reads is a loop variable, never stored, or stored exactly once outside a
+        for-target."""
+        for node in ast.walk(expr):
+            if not (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)):
+                continue
+            count = self.store_counts.get(node.id, 0)
+            if count == 0 or node.id in loop_vars:
+                continue
+            if not (count == 1 and node.id not in self.for_targets):
+                return False
+        return True
+
+    def scan(
+        self,
+        stmts: list[ast.stmt],
+        depth: int,
+        after: tuple[list[ast.stmt], ...],
+        reentry: tuple[tuple[list[ast.stmt], int], ...],
+        loop_vars: frozenset[str],
+    ) -> None:
+        """Walk ``stmts`` (at loop ``depth``, ``after`` the code that runs after them, ``reentry``
+        every enclosing loop's re-entry point) until a candidate is found."""
+        for i, stmt in enumerate(stmts):
+            if self.found:
+                return
+            if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+                if self.try_candidate(stmts, i, depth, after, reentry, loop_vars):
                     return
-                if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
-                    name = stmt.targets[0].id
-                    if qualifies(name, stmt.value, depth, loop_vars):
-                        # Condition 6 last: it walks every block that runs after this one.
-                        outside = after
-                        for blk, idx in reentry:
-                            outside = outside + live_on_loop_reentry(blk, idx, name)
-                        if depth:
-                            outside = outside + live_on_loop_reentry(stmts, i, name)
-                        if not read_in(name, outside):
-                            found.append((stmt, name, copy.deepcopy(stmt.value)))
-                            return
-                if not isinstance(stmt, (ast.For, ast.While, ast.If)):
-                    continue
-                tail = (stmts[i + 1 :],) + after
-                # A block nested in a loop re-runs its own prefix on the next iteration.
-                inner_reentry = (reentry + ((stmts, i),)) if depth else reentry
-                if isinstance(stmt, ast.If):
-                    # Counting the sibling branch as "after" only declines more.
-                    scan(stmt.body, depth, (stmt.orelse,) + tail, inner_reentry, loop_vars)
-                    scan(stmt.orelse, depth, (stmt.body,) + tail, inner_reentry, loop_vars)
-                    continue
-                body_vars = loop_vars
-                if isinstance(stmt, ast.For):
-                    body_vars = loop_vars | frozenset(n.id for n in ast.walk(stmt.target) if isinstance(n, ast.Name))
-                scan(stmt.body, depth + 1, ((stmt.orelse,) + tail) if stmt.orelse else tail, inner_reentry, body_vars)
-                scan(stmt.orelse, depth, tail, inner_reentry, loop_vars)
+            if isinstance(stmt, (ast.For, ast.While, ast.If)):
+                self.scan_block(stmts, i, depth, after, reentry, loop_vars)
 
-        scan(fn.body, 0, (), (), frozenset())
-        return found[0] if found else None
+    def try_candidate(
+        self,
+        stmts: list[ast.stmt],
+        i: int,
+        depth: int,
+        after: tuple[list[ast.stmt], ...],
+        reentry: tuple[tuple[list[ast.stmt], int], ...],
+        loop_vars: frozenset[str],
+    ) -> bool:
+        """Record ``stmts[i]`` when it qualifies and its name is dead in every block that runs after it
+        (checked last: it walks every such block)."""
+        stmt = stmts[i]
+        name = stmt.targets[0].id
+        if not self.qualifies(name, stmt.value, depth, loop_vars):
+            return False
+        outside = after
+        for blk, idx in reentry:
+            outside = outside + live_on_loop_reentry(blk, idx, name)
+        if depth:
+            outside = outside + live_on_loop_reentry(stmts, i, name)
+        if read_in(name, outside):
+            return False
+        self.found = (stmt, name, copy.deepcopy(stmt.value))
+        return True
+
+    def scan_block(
+        self,
+        stmts: list[ast.stmt],
+        i: int,
+        depth: int,
+        after: tuple[list[ast.stmt], ...],
+        reentry: tuple[tuple[list[ast.stmt], int], ...],
+        loop_vars: frozenset[str],
+    ) -> None:
+        """Recurse into an If's branches (the sibling branch counted as "after", which only declines
+        more) or a loop's body one level deeper; a block nested in a loop re-runs its own prefix on
+        the next iteration."""
+        stmt = stmts[i]
+        tail = (stmts[i + 1 :],) + after
+        inner_reentry = (reentry + ((stmts, i),)) if depth else reentry
+        if isinstance(stmt, ast.If):
+            self.scan(stmt.body, depth, (stmt.orelse,) + tail, inner_reentry, loop_vars)
+            self.scan(stmt.orelse, depth, (stmt.body,) + tail, inner_reentry, loop_vars)
+            return
+        body_vars = loop_vars
+        if isinstance(stmt, ast.For):
+            body_vars = loop_vars | frozenset(n.id for n in ast.walk(stmt.target) if isinstance(n, ast.Name))
+        self.scan(stmt.body, depth + 1, ((stmt.orelse,) + tail) if stmt.orelse else tail, inner_reentry, body_vars)
+        self.scan(stmt.orelse, depth, tail, inner_reentry, loop_vars)

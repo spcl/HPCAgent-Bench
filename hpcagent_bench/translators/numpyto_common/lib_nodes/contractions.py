@@ -9,7 +9,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import (
     tensordot_axes,
     parse_einsum_subscripts,
 )
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     alloc_marker,
     attr_call,
@@ -91,7 +91,7 @@ def materialize_operands(
         if isinstance(op, ast.Name):
             out.append(op)
             continue
-        op_ext = iter_extent_of_(op, shape_table)
+        op_ext = iter_extent_of(op, shape_table)
         if op_ext is None:
             out.append(op)  # unresolved -- the caller's bare-Name check raises
             continue
@@ -149,14 +149,7 @@ def expand_einsum(
         operands, shape_table, "__es_", local_dtypes=local_dtypes, fresh_local_allocs=fresh_local_allocs
     )
     if "..." in spec:
-        # Expand ``...`` to explicit letters from each operand's rank (needs the
-        # shape table), then lower the plain form; the parser stays ellipsis-free.
-        ranks = []
-        for op in operands:
-            if not isinstance(op, ast.Name) or shape_table.get(op.id) is None:
-                raise NotImplementedError("einsum ellipsis needs bare-Name operands with known shape")
-            ranks.append(len(shape_table[op.id]))
-        spec = expand_einsum_ellipsis(spec, ranks)
+        spec = explicit_einsum_spec(spec, operands, shape_table)
     inputs, output = parse_einsum_subscripts(spec)
     if len(inputs) != len(operands):
         raise NotImplementedError("einsum operand count mismatches subscripts")
@@ -165,14 +158,7 @@ def expand_einsum(
         if not isinstance(op, ast.Name):
             raise NotImplementedError("einsum operands must be bare Names")
         operand_names.append(op.id)
-    # Map every index letter to its extent symbol (first operand that uses it).
-    letter_extent: dict[str, str] = {}
-    for spec, name in zip(inputs, operand_names):
-        shape = shape_table.get(name)
-        if shape is None or len(shape) != len(spec):
-            raise NotImplementedError(f"einsum: shape of {name!r} unknown / rank mismatch")
-        for letter, dim in zip(spec, shape):
-            letter_extent.setdefault(letter, dim)
+    letter_extent = einsum_letter_extents(inputs, operand_names, shape_table)
     out_letters = list(output)
     sum_letters = [c for c in letter_extent if c not in out_letters]
     # Per-letter loop variable.
@@ -210,6 +196,31 @@ def expand_einsum(
             [var_of[c] for c in out_letters], [letter_extent[c] for c in out_letters], inner
         )
     return prelude + inner
+
+
+def explicit_einsum_spec(spec: str, operands: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> str:
+    """``spec`` with ``...`` expanded to explicit letters from each operand's rank (the parser stays
+    ellipsis-free)."""
+    ranks = []
+    for op in operands:
+        if not isinstance(op, ast.Name) or shape_table.get(op.id) is None:
+            raise NotImplementedError("einsum ellipsis needs bare-Name operands with known shape")
+        ranks.append(len(shape_table[op.id]))
+    return expand_einsum_ellipsis(spec, ranks)
+
+
+def einsum_letter_extents(
+    inputs: list[str], operand_names: list[str], shape_table: dict[str, tuple[str, ...]]
+) -> dict[str, str]:
+    """Every index letter's extent symbol, from the first operand that uses it."""
+    letter_extent: dict[str, str] = {}
+    for spec, name in zip(inputs, operand_names):
+        shape = shape_table.get(name)
+        if shape is None or len(shape) != len(spec):
+            raise NotImplementedError(f"einsum: shape of {name!r} unknown / rank mismatch")
+        for letter, dim in zip(spec, shape):
+            letter_extent.setdefault(letter, dim)
+    return letter_extent
 
 
 def expand_tensordot(

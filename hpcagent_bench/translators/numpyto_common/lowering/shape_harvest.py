@@ -1,6 +1,7 @@
 """Harvest local array shapes from constructor assignments."""
 
 import ast
+from types import NotImplementedType
 
 from hpcagent_bench.translators.numpyto_common.frontend import collect_inlined_scalar_defs, dtype_from_constructor
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import (
@@ -11,8 +12,8 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import (
     substitute_dim_aliases,
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
-    broadcast_extents,
-    iter_extent_of_,
+    broadcast_children,
+    iter_extent_of,
     extent_is_scalar,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import NP_ELEMENTWISE
@@ -100,7 +101,7 @@ def ctor_shape_arg(call: ast.Call) -> ast.expr | None:
 def is_scalar_helper_call(node: ast.AST, scalar_helpers: set[str] | None) -> bool:
     """Whether ``node`` calls a kernel helper emitted as a by-value SCALAR function.
 
-    Such a call is rank 0 whatever its arguments are. :func:`iter_extent_of_` reads a call it does
+    Such a call is rank 0 whatever its arguments are. :func:`iter_extent_of` reads a call it does
     not recognise as ELEMENTWISE and answers with the broadcast join of the arguments, which sizes
     a reduction's scalar result like the array it reduces -- and the caller then broadcasts the
     call over that buffer, one invocation per element.
@@ -146,226 +147,12 @@ def harvest_local_shapes(
         target = stmt.targets[0]
         if not isinstance(target, ast.Name):
             continue
-        rhs = stmt.value
-        # ``X = np.zeros(.., dtype=..) if cond else None`` -- vexx_k's ``deexx``,
-        # allocated only in the ultrasoft / PAW branch. The shape + dtype live in
-        # the constructor branch of the ternary; unwrap to it so the local is
-        # typed / sized like a direct ``X = np.zeros(..)``. Without this the local
-        # falls through untyped and defaults to real though it is np.complex128 --
-        # C narrows the complex accumulation silently (safe only while the branch
-        # is dead), but C++ rejects the complex->real assignment at compile.
-        if isinstance(rhs, ast.IfExp):
-            ctor = [b for b in (rhs.body, rhs.orelse) if isinstance(b, ast.Call)]
-            none_br = [b for b in (rhs.body, rhs.orelse) if isinstance(b, ast.Constant) and b.value is None]
-            if len(ctor) == 1 and len(none_br) == 1:
-                rhs = ctor[0]
-        # Name = Name alias -- inherit shape and dtype from the source, after every allocation.
+        rhs = optional_constructor(stmt.value)
         if isinstance(rhs, ast.Name):
+            # Name = Name alias -- inherit shape and dtype from the source, after every allocation.
             aliases.append((target.id, rhs.id))
             continue
-        # ``nxt = data[partner]`` -- a gather or a slice of an array carries the BASE's dtype.
-        # Without it the temp falls to the sweep's float default, and bitonic_sort's int64
-        # comparator network round-tripped its values through a float32 temp.
-        if (
-            isinstance(rhs, ast.Subscript)
-            and isinstance(rhs.value, ast.Name)
-            and dtype_table is not None
-            and target.id not in dtype_table
-        ):
-            src_dtype = dtype_table.get(rhs.value.id)
-            if src_dtype is not None:
-                dtype_table[target.id] = src_dtype
-        # ``np.linalg.<op>`` is a TWO-level attribute, so the single-level
-        # ``np.<attr>`` gate below never matches it and the last-ditch extent
-        # guess mirrors the FIRST operand instead -- sizing ``x = np.linalg.
-        # solve(A, b)`` like the SQUARE A rather than like b. A 1-D b then has
-        # its reads padded to a phantom second dim (``x[i]`` -> ``x[i, :]``).
-        # Register what the solve / inv / cholesky expanders actually write.
-        linalg_op = np_submodule_attr(rhs, "linalg")
-        if linalg_op in ("solve", "inv", "cholesky"):
-            # ``solve`` returns x with b's shape; ``inv`` / ``cholesky`` are
-            # shape-preserving in their single operand.
-            source_arg = (
-                rhs.args[1] if linalg_op == "solve" and len(rhs.args) >= 2 else (rhs.args[0] if rhs.args else None)
-            )
-            if isinstance(source_arg, ast.Name):
-                linalg_source_shape = shape_table.get(source_arg.id)
-                if linalg_source_shape:
-                    shape_table[target.id] = tuple(linalg_source_shape)
-            continue
-        if not (
-            isinstance(rhs, ast.Call)
-            and isinstance(rhs.func, ast.Attribute)
-            and isinstance(rhs.func.value, ast.Name)
-            and rhs.func.value.id == "np"
-        ):
-            if is_scalar_helper_call(rhs, scalar_helpers):
-                continue
-            # Last-ditch: a BinOp / UnaryOp / Compare / BoolOp / Subscript
-            # whose operands have known shapes -- mirror the (broadcast /
-            # slice / gather) extent. Lets the harvest see ``x = a + b``, a
-            # boolean mask ``in_range = (rsq < c) & (rsq > 0)`` (force_lj),
-            # or a slice/gather local ``nb = neigh[:, j]`` (cfd / lavamd
-            # unstructured-grid neighbor gather) as a new shape entry so the
-            # downstream slice-fusion / boolean-mask rewriter / gather
-            # scalarizer can resolve ``arr[nb]`` to ``arr[nb[i]]`` instead of
-            # treating the index array ``nb`` as a bare scalar.
-            # ``ast.Call`` covers a method-form shape op the pre-normalise harvest
-            # sees before it becomes ``np.<fn>`` -- notably ``X = (Yf @ C).reshape(
-            # shp)`` (LS3DF Rayleigh-Ritz), whose target must be sized here or every
-            # downstream local derived from ``X`` inherits a wrong extent.
-            if (
-                isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp, ast.Subscript, ast.Call))
-                and target.id not in shape_table
-            ):
-                ext = iter_extent_of_(rhs, shape_table)
-                # An all-size-1 broadcast (``t = a[i] > x`` with ``x`` shape ``(1,)``) is a SCALAR local:
-                # numpyto reads size-1 arrays as ``x[0]``, so sizing ``t`` as ``T t[1]`` would desync its
-                # scalar declaration from the array-style writes the extent drives (see extent_is_scalar).
-                if ext is not None and not extent_is_scalar(ext):
-                    shape_table[target.id] = tuple(ast.unparse(e) for e in ext)
-            continue
-        if dtype_table is not None:
-            dt = dtype_from_constructor(rhs)
-            if dt is not None:
-                dtype_table[target.id] = dt
-        attr = rhs.func.attr
-        if attr in NP_ZEROS_ALIASES:
-            # ``np.zeros_like(other)`` -> other's shape.
-            if attr.endswith("_like") and rhs.args and isinstance(rhs.args[0], ast.Name):
-                src_shape = shape_table.get(rhs.args[0].id)
-                if src_shape:
-                    shape_table[target.id] = tuple(src_shape)
-                continue
-            # ``np.zeros((N, M))`` / ``np.ndarray(shape=(N, M))`` -- the shape
-            # is the first positional arg OR the ``shape=`` keyword (cloudsc's
-            # ``ztp1 = np.ndarray(shape=(nlev, klon))`` locals).
-            shape_arg = ctor_shape_arg(rhs)
-            if shape_arg is not None:
-                if isinstance(shape_arg, (ast.Tuple, ast.List)):
-                    parts = [resolve_shape_token(e, shape_table) for e in shape_arg.elts]
-                    shape_table[target.id] = tuple(parts)
-                elif isinstance(shape_arg, ast.Name):
-                    shape_table[target.id] = (shape_arg.id,)
-                elif isinstance(shape_arg, ast.Constant) and isinstance(shape_arg.value, int):
-                    shape_table[target.id] = (str(shape_arg.value),)
-                elif isinstance(shape_arg, ast.Attribute) and shape_arg.attr == "shape":
-                    # ``np.zeros(x.shape, ...)`` -- mirror x's shape.
-                    if isinstance(shape_arg.value, ast.Name):
-                        src = shape_table.get(shape_arg.value.id)
-                        if src is not None:
-                            shape_table[target.id] = tuple(src)
-                elif isinstance(shape_arg, (ast.Subscript, ast.BinOp)):
-                    # A scalar ``arr.shape[i]`` (or arithmetic over it) 1-D extent --
-                    # ``np.zeros(M.shape[0], np.float64)``, the eigh eigenvalue vector
-                    # over a LOCAL operand. Register it (resolving the token the same
-                    # way a shape-TUPLE element is) so the 1-D temp lands in the table
-                    # like its 2-D siblings instead of being dropped; without it the
-                    # ``w = __eigh0_wa`` alias never learns ``w`` is an array.
-                    shape_table[target.id] = (resolve_shape_token(shape_arg, shape_table),)
-        # ``np.eye(M)`` -> ``(M, M)``; ``np.eye(M, N)`` -> ``(M, N)``.
-        elif attr == "eye" and rhs.args:
-            first = rhs.args[0]
-            first_tok = (
-                str(first.value)
-                if isinstance(first, ast.Constant) and isinstance(first.value, int)
-                else first.id
-                if isinstance(first, ast.Name)
-                else ast.unparse(first)
-            )
-            second_tok = first_tok
-            if len(rhs.args) >= 2:
-                second = rhs.args[1]
-                second_tok = (
-                    str(second.value)
-                    if isinstance(second, ast.Constant) and isinstance(second.value, int)
-                    else second.id
-                    if isinstance(second, ast.Name)
-                    else ast.unparse(second)
-                )
-            shape_table[target.id] = (first_tok, second_tok)
-        # ``np.linspace(start, stop, n)`` -> ``(n,)``. The third
-        # positional arg is the sample count; numpy default 50 if
-        # omitted but the in-tree expander rejects that.
-        elif attr == "linspace" and len(rhs.args) >= 3:
-            count = rhs.args[2]
-            tok = (
-                str(count.value)
-                if isinstance(count, ast.Constant) and isinstance(count.value, int)
-                else count.id
-                if isinstance(count, ast.Name)
-                else ast.unparse(count)
-            )
-            shape_table[target.id] = (tok,)
-        # ``np.arange(stop)`` -> ``(stop,)``; ``np.arange(start, stop)`` ->
-        # ``(stop - start,)``.
-        elif attr == "arange" and rhs.args:
-            if len(rhs.args) == 1:
-                stop = rhs.args[0]
-                tok = (
-                    str(stop.value)
-                    if isinstance(stop, ast.Constant) and isinstance(stop.value, int)
-                    else stop.id
-                    if isinstance(stop, ast.Name)
-                    else ast.unparse(stop)
-                )
-                shape_table[target.id] = (tok,)
-        # ``np.identity(n)`` -> ``(n, n)``.
-        elif attr == "identity" and rhs.args:
-            first = rhs.args[0]
-            tok = (
-                str(first.value)
-                if isinstance(first, ast.Constant) and isinstance(first.value, int)
-                else first.id
-                if isinstance(first, ast.Name)
-                else ast.unparse(first)
-            )
-            shape_table[target.id] = (tok, tok)
-        # Elementwise broadcast ops: np.maximum / minimum / add / etc.
-        # The result shape is the broadcast of the args' shapes; defer
-        # to iter_extent_of_ which already knows the rules.
-        elif attr in NP_ELEMENTWISE and rhs.args:
-            ext = iter_extent_of_(rhs.args[0], shape_table)
-            for arg in rhs.args[1:]:
-                a_ext = iter_extent_of_(arg, shape_table)
-                if a_ext is not None and ext is not None:
-                    ext = broadcast_extents(ext, a_ext)
-                elif a_ext is not None:
-                    ext = a_ext
-            if ext is not None:
-                shape_table[target.id] = tuple(ast.unparse(e) for e in ext)
-        # ``np.copy(other)`` (function form) / np.transpose / np.triu /
-        # np.flip / np.asarray / np.ascontiguousarray / np.linalg.* -> share shape.
-        elif (
-            attr in {"copy", "asarray", "ascontiguousarray", "triu", "flip"}
-            and rhs.args
-            and isinstance(rhs.args[0], ast.Name)
-        ):
-            src_shape = shape_table.get(rhs.args[0].id)
-            if src_shape:
-                shape_table[target.id] = tuple(src_shape)
-        elif attr == "transpose" and rhs.args and isinstance(rhs.args[0], ast.Name):
-            src_shape = shape_table.get(rhs.args[0].id)
-            if src_shape:
-                if len(rhs.args) >= 2 and isinstance(rhs.args[1], ast.Tuple):
-                    perm = [
-                        e.value for e in rhs.args[1].elts if isinstance(e, ast.Constant) and isinstance(e.value, int)
-                    ]
-                    if len(perm) == len(src_shape):
-                        shape_table[target.id] = tuple(src_shape[p] for p in perm)
-                else:
-                    shape_table[target.id] = tuple(reversed(src_shape))
-        # Fallback for any other ``np.<func>(...)`` whose result shape
-        # ``iter_extent_of_`` can derive: axis-aware reductions
-        # (``rsq = np.sum(dpos * dpos, axis=2)`` -> ``(N, N)``) and elementwise
-        # math wrapping one (gem's ``r = np.sqrt(np.sum(d * d, axis=2))``).
-        # Registering the shape lets a downstream local (``r2inv =
-        # np.zeros_like(rsq)``), the boolean-mask rewriter, and the array
-        # declaration all resolve the reduction chain.
-        elif target.id not in shape_table:
-            ext = iter_extent_of_(rhs, shape_table)
-            if ext is not None:
-                shape_table[target.id] = tuple(ast.unparse(e) for e in ext)
+        harvest_assign(target.id, rhs, shape_table, dtype_table, scalar_helpers)
     for name, src in aliases:
         src_shape = shape_table.get(src)
         if src_shape and name not in shape_table:
@@ -374,6 +161,170 @@ def harvest_local_shapes(
             src_dt = dtype_table.get(src)
             if src_dt is not None and name not in dtype_table:
                 dtype_table[name] = src_dt
+
+
+def optional_constructor(rhs: ast.expr) -> ast.expr:
+    """``X = np.zeros(.., dtype=..) if cond else None`` (a buffer allocated only in one branch) read as
+    its constructor, so the local is typed and sized like a direct ``X = np.zeros(..)``: untyped, a
+    complex buffer would default to real, which C++ rejects at the complex accumulation."""
+    if isinstance(rhs, ast.IfExp):
+        ctor = [b for b in (rhs.body, rhs.orelse) if isinstance(b, ast.Call)]
+        none_br = [b for b in (rhs.body, rhs.orelse) if isinstance(b, ast.Constant) and b.value is None]
+        if len(ctor) == 1 and len(none_br) == 1:
+            return ctor[0]
+    return rhs
+
+
+def harvest_assign(
+    target_id: str,
+    rhs: ast.expr,
+    shape_table: dict[str, tuple[str, ...]],
+    dtype_table: dict[str, str] | None,
+    scalar_helpers: set[str] | None,
+) -> None:
+    """Seed the shape (and dtype) of ``target_id = rhs``."""
+    # ``nxt = data[partner]`` -- a gather or a slice of an array carries the BASE's dtype, not the
+    # sweep's float default (an int64 value round-tripped through a float temp).
+    if isinstance(rhs, ast.Subscript) and isinstance(rhs.value, ast.Name) and dtype_table is not None:
+        if target_id not in dtype_table:
+            src_dtype = dtype_table.get(rhs.value.id)
+            if src_dtype is not None:
+                dtype_table[target_id] = src_dtype
+    # ``np.linalg.<op>`` is a TWO-level attribute the single-level ``np.<attr>`` gate below never
+    # matches: register what the solve / inv / cholesky expanders write -- ``solve`` returns x with
+    # b's shape (not the square A's); ``inv`` / ``cholesky`` are shape-preserving.
+    linalg_op = np_submodule_attr(rhs, "linalg")
+    if linalg_op in ("solve", "inv", "cholesky"):
+        source_arg = rhs.args[1] if linalg_op == "solve" and len(rhs.args) >= 2 else (rhs.args[0] if rhs.args else None)
+        if isinstance(source_arg, ast.Name):
+            linalg_source_shape = shape_table.get(source_arg.id)
+            if linalg_source_shape:
+                shape_table[target_id] = tuple(linalg_source_shape)
+        return
+    if (
+        isinstance(rhs, ast.Call)
+        and isinstance(rhs.func, ast.Attribute)
+        and isinstance(rhs.func.value, ast.Name)
+        and rhs.func.value.id == "np"
+    ):
+        harvest_np_call(target_id, rhs, shape_table, dtype_table)
+        return
+    if is_scalar_helper_call(rhs, scalar_helpers):
+        return
+    # Last-ditch: a BinOp / UnaryOp / Compare / BoolOp / Subscript whose operands have known shapes
+    # mirrors the (broadcast / slice / gather) extent -- ``x = a + b``, a boolean mask, a gather local
+    # ``nb = neigh[:, j]`` -- so the downstream rewriters resolve ``arr[nb]`` to ``arr[nb[i]]``.
+    # ``ast.Call`` covers a method-form shape op the pre-normalise harvest sees before it becomes
+    # ``np.<fn>`` (``X = (Yf @ C).reshape(shp)``). An all-size-1 broadcast is a SCALAR local (see
+    # extent_is_scalar).
+    if (
+        isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp, ast.Subscript, ast.Call))
+        and target_id not in shape_table
+    ):
+        ext = iter_extent_of(rhs, shape_table)
+        if ext is not None and not extent_is_scalar(ext):
+            shape_table[target_id] = tuple(ast.unparse(e) for e in ext)
+
+
+def harvest_np_call(
+    target_id: str, rhs: ast.Call, shape_table: dict[str, tuple[str, ...]], dtype_table: dict[str, str] | None
+) -> None:
+    """``target = np.<attr>(...)``: its dtype from a ``dtype=`` hint, and the output shape the call
+    determines from its args."""
+    if dtype_table is not None:
+        dt = dtype_from_constructor(rhs)
+        if dt is not None:
+            dtype_table[target_id] = dt
+    attr = rhs.func.attr
+    if attr in NP_ZEROS_ALIASES:
+        harvest_zeros_like(target_id, rhs, shape_table)
+    elif (counted := counted_constructor_shape(attr, rhs.args)) is not UNHANDLED:
+        if counted is not None:
+            shape_table[target_id] = counted
+    elif attr in NP_ELEMENTWISE and rhs.args:
+        # Elementwise broadcast ops: the broadcast of the args' extents.
+        ext = broadcast_children(rhs.args, shape_table)
+        if ext is not None:
+            shape_table[target_id] = tuple(ast.unparse(e) for e in ext)
+    elif (
+        attr in {"copy", "asarray", "ascontiguousarray", "triu", "flip"}
+        and rhs.args
+        and isinstance(rhs.args[0], ast.Name)
+    ):
+        src_shape = shape_table.get(rhs.args[0].id)
+        if src_shape:
+            shape_table[target_id] = tuple(src_shape)
+    elif attr == "transpose" and rhs.args and isinstance(rhs.args[0], ast.Name):
+        harvest_transpose(target_id, rhs, shape_table)
+    elif target_id not in shape_table:
+        # Any other ``np.<func>(...)`` whose result shape ``iter_extent_of`` derives: axis-aware
+        # reductions (``rsq = np.sum(dpos * dpos, axis=2)``) and elementwise math wrapping one.
+        ext = iter_extent_of(rhs, shape_table)
+        if ext is not None:
+            shape_table[target_id] = tuple(ast.unparse(e) for e in ext)
+
+
+#: What :func:`counted_constructor_shape` returns for a call it does not size.
+UNHANDLED = NotImplemented
+
+
+def counted_constructor_shape(attr: str, args: list[ast.expr]) -> tuple[str, ...] | None | NotImplementedType:
+    """The shape a constructor states in its count arguments: ``np.eye(M[, N])`` -> ``(M, M | N)``,
+    ``np.linspace(start, stop, n)`` -> ``(n,)`` (numpy's default of 50 is refused by the expander),
+    ``np.arange(stop)`` -> ``(stop,)`` (None for the multi-argument form), ``np.identity(n)`` ->
+    ``(n, n)``; :data:`UNHANDLED` for anything else."""
+    if attr == "eye" and args:
+        first_tok = ast.unparse(args[0])
+        return (first_tok, ast.unparse(args[1]) if len(args) >= 2 else first_tok)
+    if attr == "linspace" and len(args) >= 3:
+        return (ast.unparse(args[2]),)
+    if attr == "arange" and args:
+        return (ast.unparse(args[0]),) if len(args) == 1 else None
+    if attr == "identity" and args:
+        tok = ast.unparse(args[0])
+        return (tok, tok)
+    return UNHANDLED
+
+
+def harvest_zeros_like(target_id: str, rhs: ast.Call, shape_table: dict[str, tuple[str, ...]]) -> None:
+    """``np.zeros_like(other)`` -> other's shape; ``np.zeros((N, M))`` / ``np.ndarray(shape=(N, M))`` ->
+    the first positional arg or the ``shape=`` keyword: a tuple, a Name, an int, ``x.shape``, or a
+    scalar ``arr.shape[i]`` (or arithmetic over it) resolved like a shape-tuple element."""
+    attr = rhs.func.attr
+    if attr.endswith("_like") and rhs.args and isinstance(rhs.args[0], ast.Name):
+        src_shape = shape_table.get(rhs.args[0].id)
+        if src_shape:
+            shape_table[target_id] = tuple(src_shape)
+        return
+    shape_arg = ctor_shape_arg(rhs)
+    if shape_arg is None:
+        return
+    if isinstance(shape_arg, (ast.Tuple, ast.List)):
+        shape_table[target_id] = tuple(resolve_shape_token(e, shape_table) for e in shape_arg.elts)
+    elif isinstance(shape_arg, ast.Name):
+        shape_table[target_id] = (shape_arg.id,)
+    elif isinstance(shape_arg, ast.Constant) and isinstance(shape_arg.value, int):
+        shape_table[target_id] = (str(shape_arg.value),)
+    elif isinstance(shape_arg, ast.Attribute) and shape_arg.attr == "shape":
+        if isinstance(shape_arg.value, ast.Name):
+            src = shape_table.get(shape_arg.value.id)
+            if src is not None:
+                shape_table[target_id] = tuple(src)
+    elif isinstance(shape_arg, (ast.Subscript, ast.BinOp)):
+        shape_table[target_id] = (resolve_shape_token(shape_arg, shape_table),)
+
+
+def harvest_transpose(target_id: str, rhs: ast.Call, shape_table: dict[str, tuple[str, ...]]) -> None:
+    """``np.transpose(A[, axes])``: A's shape permuted, or reversed without an axes tuple."""
+    src_shape = shape_table.get(rhs.args[0].id)
+    if not src_shape:
+        return
+    if len(rhs.args) >= 2 and isinstance(rhs.args[1], ast.Tuple):
+        perm = [e.value for e in rhs.args[1].elts if isinstance(e, ast.Constant) and isinstance(e.value, int)]
+        if len(perm) == len(src_shape):
+            shape_table[target_id] = tuple(src_shape[p] for p in perm)
+    else:
+        shape_table[target_id] = tuple(reversed(src_shape))
 
 
 def collect_dim_aliases(tree: ast.AST, array_names: set[str]) -> dict[str, str]:

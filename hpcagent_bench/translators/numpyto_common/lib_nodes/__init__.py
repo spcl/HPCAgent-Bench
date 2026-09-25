@@ -38,7 +38,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import (
 from hpcagent_bench.translators.numpyto_common.lib_nodes.elementwise import expand_divide, expand_power
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     broadcast_extents,
-    iter_extent_of_,
+    iter_extent_of,
     extent_is_scalar,
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.fft import (
@@ -73,7 +73,6 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.reshape import expand_r
 from hpcagent_bench.translators.numpyto_common.lib_nodes.rewriter import (
     reduction_misses_target,
     retarget_scalar_accumulator,
-    iter_extent_of,
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scans import expand_cumprod, expand_cumsum, expand_diff
@@ -96,7 +95,7 @@ __all__ = [
     "const_",
     "const_or_name",
     "expand_einsum_ellipsis",
-    "iter_extent_of_",
+    "iter_extent_of",
     "matmul_result_shape",
     "reads_complex",
     "reduction_misses_target",
@@ -143,7 +142,6 @@ __all__ = [
     "expand_var",
     "expand_vdot",
     "extent_is_scalar",
-    "iter_extent_of",
     "parse_einsum_subscripts",
     "read_axis_keepdims",
     "shape_exprs_differ_numerically",

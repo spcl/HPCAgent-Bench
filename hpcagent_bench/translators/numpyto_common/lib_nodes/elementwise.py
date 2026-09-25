@@ -7,7 +7,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     all_integer_operands,
     as_float64,
     broadcast_extents,
-    iter_extent_of_,
+    iter_extent_of,
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import cmp_, name_, store_, wrap_for_loops
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
@@ -36,8 +36,8 @@ def expand_elementwise(
     # so fold both extents through ``broadcast_extents``. ``scalarize_at_iters``
     # then indexes each operand against the full iter nest, reading a size-1/
     # missing leading axis with a constant 0.
-    ea = iter_extent_of_(a, shape_table)
-    eb = iter_extent_of_(b, shape_table)
+    ea = iter_extent_of(a, shape_table)
+    eb = iter_extent_of(b, shape_table)
     if ea is None and eb is None:
         raise NotImplementedError("elementwise: extent unknown for both args")
     if ea is None:
@@ -212,7 +212,7 @@ def unary_elementwise(
     if not args:
         raise NotImplementedError("unary elementwise needs an arg")
     a = args[0]
-    extent = iter_extent_of_(a, shape_table)
+    extent = iter_extent_of(a, shape_table)
     if extent is None:
         raise NotImplementedError("unary elementwise: extent unknown")
     iters = [name_(f"__r{i}") for i in range(len(extent))]
@@ -347,9 +347,9 @@ def binary_call_expander(c_name: str) -> Callable:
         if len(args) != 2:
             raise NotImplementedError(f"np.{c_name} needs 2 args")
         a, b = args
-        extent = iter_extent_of_(a, shape_table)
+        extent = iter_extent_of(a, shape_table)
         if extent is None:
-            extent = iter_extent_of_(b, shape_table)
+            extent = iter_extent_of(b, shape_table)
         if extent is None:
             raise NotImplementedError(f"np.{c_name}: extent unknown")
         iters = [name_(f"__r{i}") for i in range(len(extent))]

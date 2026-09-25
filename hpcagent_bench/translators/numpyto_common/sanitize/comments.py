@@ -162,6 +162,26 @@ def strip_python_line_scan(src: str) -> str:
     return strip_c_family(src, hashes=True, slashes=False, fortran_bang=False)
 
 
+def line_end(src: str, i: int) -> int:
+    """Index of the newline ending the line ``i`` is on (``len(src)`` on the last line)."""
+    n = len(src)
+    while i < n and src[i] != "\n":
+        i += 1
+    return i
+
+
+def block_comment_end(src: str, i: int, newlines: list[str] | None = None) -> int:
+    """Index just past the ``*/`` closing the ``/*`` comment at ``i``; each newline inside the comment
+    is appended to ``newlines`` when given."""
+    n = len(src)
+    i += 2
+    while i < n and not (src[i] == "*" and i + 1 < n and src[i + 1] == "/"):
+        if newlines is not None and src[i] == "\n":
+            newlines.append("\n")
+        i += 1
+    return i + 2
+
+
 def strip_c_family(src: str, *, slashes: bool = True, hashes: bool = False, fortran_bang: bool = False) -> str:
     """Character scanner that strips comments while respecting string and char
     literals.
@@ -199,30 +219,14 @@ def strip_c_family(src: str, *, slashes: bool = True, hashes: bool = False, fort
             i += 1
             continue
 
-        if slashes and ch == "/" and nxt == "/":
+        if (slashes and ch == "/" and nxt == "/") or (hashes and ch == "#") or (fortran_bang and ch == "!"):
             # Line comment: skip to end of line (keep the newline).
-            while i < n and src[i] != "\n":
-                i += 1
+            i = line_end(src, i)
             continue
 
         if slashes and ch == "/" and nxt == "*":
-            # Block comment: skip to closing */, preserving embedded newlines.
-            i += 2
-            while i < n and not (src[i] == "*" and i + 1 < n and src[i + 1] == "/"):
-                if src[i] == "\n":
-                    out.append("\n")
-                i += 1
-            i += 2  # consume the closing */
-            continue
-
-        if hashes and ch == "#":
-            while i < n and src[i] != "\n":
-                i += 1
-            continue
-
-        if fortran_bang and ch == "!":
-            while i < n and src[i] != "\n":
-                i += 1
+            # Block comment: skip past the closing */, preserving embedded newlines.
+            i = block_comment_end(src, i, out)
             continue
 
         out.append(ch)

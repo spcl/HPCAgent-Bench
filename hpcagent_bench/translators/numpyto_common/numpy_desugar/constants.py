@@ -311,7 +311,7 @@ def has_defaulted_parameters(fn: ast.FunctionDef) -> bool:
 
 def fold_kernel_defaults(fn: ast.FunctionDef, input_args: Sequence[str]) -> bool:
     """Fold the kernel's defaulted parameters the harness never passes into body constants, through the
-    native frontend's own :func:`numpyto_common.frontend._fold_default_args`. True when one folded.
+    native frontend's own :func:`numpyto_common.frontend.module_constants.fold_default_args`. True when one folded.
 
     numba counts a keyword-only parameter as required, so an unfolded one breaks the entry's arity."""
     # Imported here: frontend imports this module at its top.

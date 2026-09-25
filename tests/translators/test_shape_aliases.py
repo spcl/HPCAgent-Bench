@@ -5,7 +5,7 @@
 ``np.swapaxes`` / ``np.expand_dims`` / ``np.squeeze`` are NumPy sugar over transpose and
 reshape; the C / Fortran backends (which emit explicit loops, unlike numba / pythran / jax
 that run the numpy verbatim) get them for free by delegating to the existing transpose /
-reshape expanders, once ``iter_extent_of_`` learns their output shape. These validate the
+reshape expanders, once ``iter_extent_of`` learns their output shape. These validate the
 emitted code numerically against numpy for param AND intermediate-local operands (the
 ML-reshape case), across the full backend matrix (C / C++ / Fortran + numba / pythran / jax,
 skip-tolerant). The kept ``swapaxes`` negative-axes and ``expand_dims`` middle-axis (keyword

@@ -4,7 +4,7 @@ import ast
 import copy
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import kwarg_or_pos, read_axis_keepdims
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
     const_or_name,
@@ -202,7 +202,7 @@ def expand_searchsorted(
     sorted_shape = shape_table.get(args[0].id)
     if sorted_shape is None or len(sorted_shape) != 1:
         raise NotImplementedError("np.searchsorted: the sorted operand must be a 1-D array of known shape")
-    values_shape = iter_extent_of_(args[1], shape_table)
+    values_shape = iter_extent_of(args[1], shape_table)
     if values_shape is None:
         raise NotImplementedError("np.searchsorted: shape of the values operand unknown")
     side_node = kwarg_or_pos(args, kwargs or [], 2, "side")

@@ -545,9 +545,9 @@ def test_front_placed_gather_separated_by_real_slice() -> None:
 
 
 def ext_(src, table):
-    from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of_
+    from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of
 
-    e = iter_extent_of_(ast.parse(src, mode="eval").body, table)
+    e = iter_extent_of(ast.parse(src, mode="eval").body, table)
     return None if e is None else tuple(ast.unparse(x) for x in e)
 
 
@@ -989,8 +989,8 @@ def test_max_min_propagate_nan_like_numpy(backend) -> None:
         )
         source = prelude + body
     else:
-        # _CPP_HEADER opens ``extern \"C\" {``; close it with _CPP_FOOTER.
-        prelude, footer, ext = cemit.CPP_HEADER, cemit._CPP_FOOTER, ".cpp"
+        # CPP_HEADER opens ``extern \"C\" {``; close it with CPP_FOOTER.
+        prelude, footer, ext = cemit.CPP_HEADER, cemit.CPP_FOOTER, ".cpp"
         body = (
             "\n#include <cstdio>\n#include <cmath>\n"
             "int main(){\n"
@@ -1963,7 +1963,7 @@ def test_fortran_wraps_a_preset_symbol_used_as_a_condition() -> None:
 
 
 # V. Two dace-frontend desugars: unroll a comprehension over a CONSTANT         #
-#    iterable (the frontend refuses every ListComp, and _ConstComprehensionFold #
+#    iterable (the frontend refuses every ListComp, and ConstComprehensionFold #
 #    only folds the ones that are constant end to end), and SSA-rename a local  #
 #    the frontend refuses to rebind ("Cannot reassign value to variable").      #
 VEC = ("float64", ("N",))
@@ -2033,7 +2033,7 @@ def test_ssa_rename_bails_when_a_branch_rebinds_the_name() -> None:
 
 def test_ssa_rename_leaves_a_single_binding_and_a_marker_alone() -> None:
     """A name bound once is untouched (no churn in the generated corpus), and neither
-    is one bound to the lowering's allocation marker -- dace's _ResolveZeros looks that
+    is one bound to the lowering's allocation marker -- dace's ResolveZeros looks that
     target up BY NAME in ``zeros_locals`` and DROPS an allocation it cannot find."""
     src = (
         "def kernel(a, out):\n"

@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import broadcast_extents, iter_extent_of_
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import broadcast_extents, iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_int, const_or_name
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
@@ -22,7 +22,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
     arithmetic (add/subtract/multiply/divide -> compound assign) and
     maximum/minimum (no compound operator -> ``t[i] = max(t[i], v)``). ``idx``
     is either a bare index-array Name (its shape gives the trip count) or any
-    array-valued EXPRESSION whose extent :func:`iter_extent_of_` can resolve
+    array-valued EXPRESSION whose extent :func:`iter_extent_of` can resolve
     (a ``.reshape(-1)`` flatten, an offset ``ikb - 1``, ...); ``vals`` is an
     array Name / expression (subscripted per element), its unary negation, or
     a scalar constant broadcast to every iteration (azimint's counting
@@ -142,7 +142,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
             if not bound:
                 raise NotImplementedError(f"np.{op}.at: unknown extent for index '{peeled.id}'")
             return peeled, tuple(bound)
-        ext = iter_extent_of_(peeled, self.shapes)
+        ext = iter_extent_of(peeled, self.shapes)
         if ext is None:
             raise NotImplementedError(
                 f"np.{op}.at: cannot determine scatter extent for index expression {ast.unparse(idx)!r}"
@@ -157,7 +157,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
             # per-element gather (azimint's ``np.add.at(counts, bin_id, 1)``).
             return vals
         peeled = self.peel_flatten(vals)
-        if iter_extent_of_(peeled, self.shapes) is not None:
+        if iter_extent_of(peeled, self.shapes) is not None:
             return scalarize_at_iters(peeled, iters, self.shapes)
         if isinstance(peeled, ast.Name):
             # Untracked-shape Name: the original bare-Name contract -- read
@@ -246,7 +246,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
         trail: tuple[str, ...] = ()
         if isinstance(target, ast.Name):
             tshape = tuple(self.shapes.get(target.id) or ())
-            val_ext = iter_extent_of_(self.peel_flatten(vals), self.shapes)
+            val_ext = iter_extent_of(self.peel_flatten(vals), self.shapes)
             if len(tshape) > 1 and val_ext is not None and len(val_ext) == len(bound) + len(tshape) - 1:
                 trail = tuple(str(t) for t in tshape[1:])
         trail_iters = [f"__sat{self._n}_t{d}" for d in range(len(trail))]
@@ -314,7 +314,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
         idx_p = [self.peel_flatten(c) for c in idx_tuple.elts]
         ext = None
         for comp in (vals_p, *idx_p):
-            comp_ext = iter_extent_of_(comp, self.shapes)
+            comp_ext = iter_extent_of(comp, self.shapes)
             if comp_ext is None:
                 continue
             ext = comp_ext if ext is None else broadcast_extents(ext, comp_ext)
@@ -341,7 +341,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
             )
         body: list[ast.stmt] = [stmt]
         for d in reversed(range(len(ext))):
-            # ``iter_extent_of_`` already returns each extent as an AST node
+            # ``iter_extent_of`` already returns each extent as an AST node
             # (a Name like ``nproma`` or a computed length), so it is the
             # loop's ``range`` bound directly.
             body = [

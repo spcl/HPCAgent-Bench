@@ -38,7 +38,7 @@ def slice_start(ax: ast.Slice, axis_len: ast.expr | None, step: int | ast.expr |
 
 def strided_index(ivar: ast.expr, start: ast.expr | None, step: int | ast.expr | None) -> ast.expr:
     """Source index of result position ``ivar`` within a slice ``[start::step]``:
-    ``start + ivar * step``. Must stay in lockstep with :func:`iter_extent_of_`,
+    ``start + ivar * step``. Must stay in lockstep with :func:`iter_extent_of`,
     which counts ``ceil(extent / |step|)`` elements -- an index that ignored
     ``step`` would walk a DIFFERENT (contiguous) run of the same length.
 
@@ -93,120 +93,26 @@ def scalarize_at_iters(expr: ast.expr, iters: list[ast.expr], shape_table: dict[
     ``BinOp``/``UnaryOp``/``Call``/``IfExp`` recurse on children; ``Constant``
     unchanged.
     """
-    if isinstance(expr, ast.Constant):
-        return expr
     if isinstance(expr, ast.Name):
-        shape = shape_table.get(expr.id)
-        if shape is None:
-            return expr
-        if len(shape) > len(iters):
-            return expr
-        # Right-align the operand's axes against the iter nest (numpy broadcasts
-        # along the leading axes); index any size-1 axis with constant 0, since a
-        # length-1 axis broadcasts and must not consume the iter. softmax/mlp's
-        # keepdims ``tmp_max`` is (N, H, SM, 1) and must read ``tmp_max[i, j, k,
-        # 0]``, not ``tmp_max[..., r3]`` out of bounds.
-        offset = len(iters) - len(shape)
-        elts = [ast.Constant(value=0) if s == "1" else iters[offset + i] for i, s in enumerate(shape)]
-        slot = elts[0] if len(elts) == 1 else ast.Tuple(elts=list(elts), ctx=ast.Load())
-        return ast.Subscript(value=expr, slice=slot, ctx=ast.Load())
+        return scalarize_name(expr, iters, shape_table)
     if isinstance(expr, ast.Subscript):
-        name = name_id(expr.value)
-        shape = shape_table.get(name) if name else None
-        axes = slice_axes(expr)
-        # A subscript on a COMPUTED base (``(reduce_shape != 0)[:, None]``) has no name to index --
-        # the BASE is the array. When the subscript is a pure broadcast-reshape (only full slices
-        # and newaxis), render it by scalarising the base at the iters its full-slice axes map to;
-        # the newaxis axes consume an iter and contribute nothing. Left to the axis walk below the
-        # base stayed whole-array under a scalar subscript and reached C as ``(ptr != 0)[i]``, which
-        # C++ rejects outright and C compiles into a pointer read. The two sibling rewriters
-        # (``SliceToScalarRewriter.visit_Subscript``, ``SubscriptifyNames.visit_Subscript``)
-        # already apply this rule to the same spelling; np.where's cond reached neither.
-        full = [isinstance(a, ast.Slice) and a.lower is None and a.upper is None and a.step is None for a in axes]
-        newax = [isinstance(a, ast.Constant) and a.value is None for a in axes]
-        if name is None and axes and all(f or n for f, n in zip(full, newax)) and any(full) and len(axes) <= len(iters):
-            offset = len(iters) - len(axes)
-            base_iters = [iters[offset + k] for k, f in enumerate(full) if f]
-            return scalarize_at_iters(expr.value, base_iters, shape_table)
-        new_axes: list[ast.expr] = []
-        # numpy broadcasts RIGHT-aligned: an operand whose result rank is below the nest's reads
-        # the TRAILING iters. The bare-Name branch above already offsets for that; this one started
-        # at iter 0, so ``np.where(cond4d, cxyz[:a, :b, :c], 0)`` read cxyz at the OUTER three loops
-        # and every element came from the wrong plane. Equal ranks give offset 0, which is the
-        # arithmetic that was already happening.
-        iter_idx = max(0, len(iters) - subscript_result_rank(axes, shape, shape_table))
-        src_axis = 0  # source-axis pointer (see iter_extent_of_).
-        group_iters: list[ast.expr] | None = None  # shared advanced-index iters
-        for ax in axes:
-            if isinstance(ax, ast.Constant) and ax.value is None:
-                # newaxis -- consume one iter from the result-axis side but
-                # contribute no source index. The size-1 result axis maps
-                # every read to ``source[...]`` (constant).
-                if iter_idx < len(iters):
-                    iter_idx += 1
-                continue
-            if isinstance(ax, ast.Slice):
-                axis_len = const_or_name(shape[src_axis]) if shape and src_axis < len(shape) else None
-                step = slice_step_any(ax)
-                lo = slice_start(ax, axis_len, step)
-                if iter_idx >= len(iters):
-                    return expr  # not enough iters supplied
-                ivar = iters[iter_idx]
-                iter_idx += 1
-                new_axes.append(strided_index(ivar, lo, step))
-            elif isinstance(ax, ast.Name) and shape_table.get(ax.id):
-                # Fancy-index gather: ``arr[idx]`` -> ``arr[idx[k]]``. Multiple index
-                # arrays in one subscript form a numpy advanced-index GROUP that
-                # broadcasts to a single result-axis set and SHARES the iters:
-                # ``u2[q, r, s]`` -> ``u2[q[m], r[m], s[m]]`` (one iter ``m``, not
-                # three). Consumed once, at the first index-array axis, reused after.
-                idx_shape = shape_table[ax.id]
-                if group_iters is None:
-                    if iter_idx + len(idx_shape) > len(iters):
-                        return expr  # not enough iters supplied
-                    group_iters = iters[iter_idx : iter_idx + len(idx_shape)]
-                    iter_idx += len(idx_shape)
-                idx_iters = group_iters[-len(idx_shape) :]
-                if len(idx_iters) == 1:
-                    new_axes.append(ast.Subscript(value=ax, slice=idx_iters[0], ctx=ast.Load()))
-                else:
-                    new_axes.append(
-                        ast.Subscript(value=ax, slice=ast.Tuple(elts=list(idx_iters), ctx=ast.Load()), ctx=ast.Load())
-                    )
-                src_axis += 1
-                continue
-            else:
-                # Advanced-index EXPRESSION axis (``edge_idx[:, :, 0] - 1``):
-                # part of the same broadcast group as any bare-Name index, with
-                # shared iters. Recurse to scalarize its nested slices.
-                adv_rank = advanced_index_rank(ax, shape_table)
-                if adv_rank:
-                    if group_iters is None:
-                        if iter_idx + adv_rank > len(iters):
-                            return expr  # not enough iters supplied
-                        group_iters = iters[iter_idx : iter_idx + adv_rank]
-                        iter_idx += adv_rank
-                    idx_iters = group_iters[-adv_rank:]
-                    new_axes.append(scalarize_at_iters(ax, idx_iters, shape_table))
-                    src_axis += 1
-                    continue
-                # Concrete scalar index -- resolve a negative ``arr[-1]`` against
-                # the axis length (C / Fortran have no negative indexing): the
-                # stencil_*_vc ``w_dist[-1]`` last-weight read.
-                axis_len = const_or_name(shape[src_axis]) if shape and src_axis < len(shape) else None
-                new_axes.append(resolve_negative(ax, axis_len))
-            src_axis += 1
-        # If the source has more axes than the Subscript covered, the iter
-        # nest may carry additional trailing iters that map straight to
-        # the missing source axes.
-        while src_axis < (len(shape) if shape else 0) and iter_idx < len(iters):
-            new_axes.append(iters[iter_idx])
-            iter_idx += 1
-            src_axis += 1
-        if not new_axes:
-            return expr.value
-        slot = new_axes[0] if len(new_axes) == 1 else ast.Tuple(elts=new_axes, ctx=ast.Load())
-        return ast.Subscript(value=expr.value, slice=slot, ctx=ast.Load())
+        return scalarize_subscript(expr, iters, shape_table)
+    if isinstance(expr, ast.Call):
+        # An array CONSTRUCTOR is not elementwise: every element of ``np.zeros_like(a)`` is 0,
+        # whatever ``a`` is -- never a per-element call to the constructor itself.
+        fill = ctor_fill_element(expr)
+        if fill is not None:
+            return fill
+        # Math intrinsics on array values fall through; the args are
+        # array expressions to scalarize.
+        return ast.Call(
+            func=expr.func, args=[scalarize_at_iters(a, iters, shape_table) for a in expr.args], keywords=expr.keywords
+        )
+    return scalarize_children(expr, iters, shape_table)
+
+
+def scalarize_children(expr: ast.expr, iters: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> ast.expr:
+    """An operator node rebuilt over its scalarised operands; anything else (a Constant) unchanged."""
     if isinstance(expr, ast.BinOp):
         return ast.BinOp(
             left=scalarize_at_iters(expr.left, iters, shape_table),
@@ -229,16 +135,132 @@ def scalarize_at_iters(expr: ast.expr, iters: list[ast.expr], shape_table: dict[
             body=scalarize_at_iters(expr.body, iters, shape_table),
             orelse=scalarize_at_iters(expr.orelse, iters, shape_table),
         )
-    if isinstance(expr, ast.Call):
-        # An array CONSTRUCTOR is not elementwise: every element of ``np.zeros_like(a)`` is 0,
-        # whatever ``a`` is. Recursing into the args instead emitted a per-element call to the
-        # constructor itself (``__t[i, j] = np.zeros_like(...)``), which no backend can render.
-        fill = ctor_fill_element(expr)
-        if fill is not None:
-            return fill
-        # Math intrinsics on array values fall through; the args are
-        # array expressions to scalarize.
-        return ast.Call(
-            func=expr.func, args=[scalarize_at_iters(a, iters, shape_table) for a in expr.args], keywords=expr.keywords
-        )
     return expr
+
+
+def scalarize_name(expr: ast.Name, iters: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> ast.expr:
+    """``A`` -> ``A[iters]``, the operand's axes right-aligned against the iter nest (numpy broadcasts
+    along the leading axes). A size-1 axis broadcasts and is indexed with constant 0 instead of
+    consuming an iter: a keepdims ``tmp_max`` of (N, H, SM, 1) reads ``tmp_max[i, j, k, 0]``."""
+    shape = shape_table.get(expr.id)
+    if shape is None or len(shape) > len(iters):
+        return expr
+    offset = len(iters) - len(shape)
+    elts = [ast.Constant(value=0) if s == "1" else iters[offset + i] for i, s in enumerate(shape)]
+    slot = elts[0] if len(elts) == 1 else ast.Tuple(elts=list(elts), ctx=ast.Load())
+    return ast.Subscript(value=expr, slice=slot, ctx=ast.Load())
+
+
+def scalarize_subscript(
+    expr: ast.Subscript, iters: list[ast.expr], shape_table: dict[str, tuple[str, ...]]
+) -> ast.expr:
+    """``A[axes]`` at the iters: each axis indexed by :class:`SubscriptIndexer`, the source's uncovered
+    trailing axes taking the remaining iters. numpy broadcasts RIGHT-aligned, so a subscript whose
+    result rank is below the nest's reads the TRAILING iters.
+
+    A subscript on a COMPUTED base (``(reduce_shape != 0)[:, None]``) has no name to index -- the BASE
+    is the array. When it is a pure broadcast-reshape (only full slices and newaxis) the base is
+    scalarised at the iters its full-slice axes map to; the newaxis axes consume an iter and
+    contribute nothing. ``SliceToScalarRewriter.visit_Subscript`` and
+    ``SubscriptifyNames.visit_Subscript`` apply the same rule to the same spelling."""
+    name = name_id(expr.value)
+    shape = shape_table.get(name) if name else None
+    axes = slice_axes(expr)
+    full = [isinstance(a, ast.Slice) and a.lower is None and a.upper is None and a.step is None for a in axes]
+    newax = [isinstance(a, ast.Constant) and a.value is None for a in axes]
+    if name is None and axes and all(f or n for f, n in zip(full, newax)) and any(full) and len(axes) <= len(iters):
+        offset = len(iters) - len(axes)
+        base_iters = [iters[offset + k] for k, f in enumerate(full) if f]
+        return scalarize_at_iters(expr.value, base_iters, shape_table)
+    indexer = SubscriptIndexer(
+        iters, max(0, len(iters) - subscript_result_rank(axes, shape, shape_table)), shape, shape_table
+    )
+    for ax in axes:
+        if not indexer.index(ax):
+            return expr  # not enough iters supplied
+    indexer.fill_trailing()
+    if not indexer.axes:
+        return expr.value
+    slot = indexer.axes[0] if len(indexer.axes) == 1 else ast.Tuple(elts=indexer.axes, ctx=ast.Load())
+    return ast.Subscript(value=expr.value, slice=slot, ctx=ast.Load())
+
+
+class SubscriptIndexer:
+    """One subscript's axis walk: the next iter to consume, the next source axis, the index axes
+    built so far, and the iters shared by the subscript's advanced-index group.
+
+    Several integer-array indices form ONE numpy advanced-index group that broadcasts to a single
+    result-axis set and SHARES its iters: ``u2[q, r, s]`` -> ``u2[q[m], r[m], s[m]]`` (one iter
+    ``m``, not three), consumed at the first index-array axis and reused after.
+    """
+
+    def __init__(
+        self,
+        iters: list[ast.expr],
+        iter_idx: int,
+        shape: tuple[str, ...] | None,
+        shape_table: dict[str, tuple[str, ...]],
+    ) -> None:
+        self.iters = iters
+        self.iter_idx = iter_idx
+        self.shape = shape
+        self.shape_table = shape_table
+        self.src_axis = 0
+        self.group_iters: list[ast.expr] | None = None
+        self.axes: list[ast.expr] = []
+
+    def axis_len(self) -> ast.expr | None:
+        if self.shape and self.src_axis < len(self.shape):
+            return const_or_name(self.shape[self.src_axis])
+        return None
+
+    def index(self, ax: ast.expr) -> bool:
+        """Append ``ax``'s index; False when the iters run out."""
+        if isinstance(ax, ast.Constant) and ax.value is None:
+            # newaxis -- consumes one iter from the result-axis side, contributes no source index.
+            if self.iter_idx < len(self.iters):
+                self.iter_idx += 1
+            return True
+        if isinstance(ax, ast.Slice):
+            step = slice_step_any(ax)
+            lo = slice_start(ax, self.axis_len(), step)
+            if self.iter_idx >= len(self.iters):
+                return False
+            self.axes.append(strided_index(self.iters[self.iter_idx], lo, step))
+            self.iter_idx += 1
+        elif isinstance(ax, ast.Name) and self.shape_table.get(ax.id):
+            # Fancy-index gather: ``arr[idx]`` -> ``arr[idx[k]]``.
+            idx_iters = self.group(len(self.shape_table[ax.id]))
+            if idx_iters is None:
+                return False
+            slot = idx_iters[0] if len(idx_iters) == 1 else ast.Tuple(elts=list(idx_iters), ctx=ast.Load())
+            self.axes.append(ast.Subscript(value=ax, slice=slot, ctx=ast.Load()))
+        elif adv_rank := advanced_index_rank(ax, self.shape_table):
+            # Advanced-index EXPRESSION axis (``edge_idx[:, :, 0] - 1``): in the same group, its
+            # nested slices scalarised at the shared iters.
+            idx_iters = self.group(adv_rank)
+            if idx_iters is None:
+                return False
+            self.axes.append(scalarize_at_iters(ax, idx_iters, self.shape_table))
+        else:
+            # Concrete scalar index -- a negative ``arr[-1]`` resolved against the axis length
+            # (C / Fortran have no negative indexing).
+            self.axes.append(resolve_negative(ax, self.axis_len()))
+        self.src_axis += 1
+        return True
+
+    def group(self, rank: int) -> list[ast.expr] | None:
+        """The advanced-index group's trailing ``rank`` iters, taking them on first use."""
+        if self.group_iters is None:
+            if self.iter_idx + rank > len(self.iters):
+                return None
+            self.group_iters = self.iters[self.iter_idx : self.iter_idx + rank]
+            self.iter_idx += rank
+        return self.group_iters[-rank:]
+
+    def fill_trailing(self) -> None:
+        """Source axes the subscript did not cover take the nest's remaining trailing iters."""
+        while self.src_axis < (len(self.shape) if self.shape else 0) and self.iter_idx < len(self.iters):
+            self.axes.append(self.iters[self.iter_idx])
+            self.iter_idx += 1
+            self.src_axis += 1

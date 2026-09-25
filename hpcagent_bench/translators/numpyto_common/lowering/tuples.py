@@ -183,7 +183,7 @@ class ShapeTableTupleSplit(SplitTupleUnpack):
         shape = self.arrays_shapes.get(array)
         if shape is None or len(shape) != len(names):
             return None
-        # A self-copy (``H = H``) is promoted to a shape PARAMETER, and ``_integer_valued_locals`` pins
+        # A self-copy (``H = H``) is promoted to a shape PARAMETER, and ``integer_valued_locals`` pins
         # every ``kir.symbols`` name int anyway. Declaring it would shadow the parameter with an
         # uninitialized local.
         self.int_locals.extend(name for name, token in zip(names, shape) if name != token)

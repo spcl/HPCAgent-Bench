@@ -1,7 +1,6 @@
 """Static rank (and tuple-length) inference over a function body."""
 
 import ast
-import re
 from collections.abc import Callable
 from collections.abc import Iterator
 
@@ -22,6 +21,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     np_submodule_attr,
     reachable_functions,
 )
+from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 
 
 #: Tuple-shape lengths known to :func:`expr_rank` while :func:`rank_table` iterates, so ``.reshape(name)``
@@ -408,10 +408,6 @@ def call_return_rank(value: ast.AST, call_returns: dict[str, int]) -> int | None
     return None
 
 
-#: An identifier inside a shape token, so a declared extent can be told from an array name.
-IDENT_RE = r"[A-Za-z_][A-Za-z0-9_]*"
-
-
 def name_value_pairs(tree: ast.AST) -> Iterator[tuple[str, ast.expr]]:
     """Every ``name = <expr>`` binding, including the elements of a parallel tuple assignment.
 
@@ -486,7 +482,7 @@ def shape_table(tree: ast.AST, seed: dict[str, tuple[str, ...]]) -> dict[str, tu
     # size an expression costs a resolution, reporting the other operand's shape costs a wrong one. A
     # manifest symbol is a declared extent, never an array.
     ranks = rank_table(tree, {k: len(v) for k, v in seed.items()})
-    symbols = {ident for shape in seed.values() for tok in shape for ident in re.findall(IDENT_RE, str(tok))}
+    symbols = {ident for shape in seed.values() for tok in shape for ident in IDENT_RE.findall(str(tok))}
     arrays = (frozenset(n for n, unused in pairs if ranks.get(n, 1) >= 1) | frozenset(seed)) - symbols
     table: dict[str, tuple[str, ...]] = {k: tuple(v) for k, v in seed.items()}
     for unused in range(8):

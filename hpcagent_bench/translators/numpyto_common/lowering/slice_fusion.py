@@ -4,7 +4,7 @@ import ast
 import copy
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import shape_exprs_equal
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_, span_multiple_of
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of, span_multiple_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     slice_step_any,
     step_is_negative,
@@ -98,6 +98,26 @@ class SliceFusion(ast.NodeTransformer):
         self.generic_visit(node)
         return self.rewrite_(node.target, node.value, aug_op=node.op) or node
 
+    def target_axis_range(self, d: ast.AST, lhs_name: str, axis: int) -> tuple[ast.AST, ast.AST, int, ast.AST]:
+        """``(loop_lo, loop_hi, step, slice_start)`` of one LHS axis, negative bounds resolved (a scalar
+        index is its own one-point range). For a unit step the iter var IS the destination coordinate
+        (``loop_lo == slice_start``); for a strided target it is the logical position and ``loop_lo``
+        is 0."""
+        if not isinstance(d, ast.Slice):
+            return (d, d, 1, d)
+        step = 1 if d.step is None else slice_step_any(d)
+        if step is None:
+            raise NotImplementedError(
+                f"slice step {ast.unparse(d.step)!r} on an assignment target must be a compile-time integer"
+            )
+        start = self.resolve_bound(d.lower, lhs_name, axis, default=const_(0))
+        stop = self.resolve_bound(d.upper, lhs_name, axis, default=lambda: self.axis_length(lhs_name, axis))
+        if step == 1:
+            return (start, stop, 1, start)
+        if step_is_negative(step):
+            raise NotImplementedError(f"negative slice step {step} on an assignment target is not supported")
+        return (const_(0), strided_trip_count(start, stop, step), step, start)
+
     def rewrite_(self, target: ast.AST, value: ast.expr, aug_op: ast.AST | None) -> ast.AST | None:
         """Common slice-fusion path for both Assign and AugAssign.
 
@@ -123,24 +143,7 @@ class SliceFusion(ast.NodeTransformer):
         # the destination coordinate, so ``loop_lo == slice_start``; for a strided target the iter
         # var is the logical position and ``loop_lo`` is 0 -- consumers reading ``rng[0]`` as "what
         # to subtract from the iter var to get the position" stay correct in both cases.
-        ranges: list[tuple[ast.AST, ast.AST, int, ast.AST]] = []
-        for axis, d in enumerate(lhs_dims):
-            if not isinstance(d, ast.Slice):
-                ranges.append((d, d, 1, d))
-                continue
-            step = 1 if d.step is None else slice_step_any(d)
-            if step is None:
-                raise NotImplementedError(
-                    f"slice step {ast.unparse(d.step)!r} on an assignment target must be a compile-time integer"
-                )
-            start = self.resolve_bound(d.lower, lhs_name, axis, default=const_(0))
-            stop = self.resolve_bound(d.upper, lhs_name, axis, default=lambda: self.axis_length(lhs_name, axis))
-            if step == 1:
-                ranges.append((start, stop, 1, start))
-                continue
-            if step_is_negative(step):
-                raise NotImplementedError(f"negative slice step {step} on an assignment target is not supported")
-            ranges.append((const_(0), strided_trip_count(start, stop, step), step, start))
+        ranges = [self.target_axis_range(d, lhs_name, axis) for axis, d in enumerate(lhs_dims)]
         # Build the per-axis scalarisation: iter var ``i_axis`` ranging
         # ``[start, stop)``; every RHS subscript gets the iter var
         # offset by the LHS slice's start.
@@ -377,7 +380,7 @@ class LiftFreshArrayFromSlices(ast.NodeTransformer):
             return node
         if not (has_slice_subscript(node.value) or self.is_array_binop(node.value)):
             return node
-        ext = iter_extent_of_(node.value, self.shapes)
+        ext = iter_extent_of(node.value, self.shapes)
         if ext is None:
             return node
         shape_toks: tuple[str, ...] = tuple(ast.unparse(e) for e in ext)
@@ -409,7 +412,7 @@ class LiftFreshArrayFromSlices(ast.NodeTransformer):
         # the bare marker reads as a genuine ``np.zeros`` reset, so the emitters memset the buffer
         # immediately before the loop that reads it. ``_conv3d``'s ``out = out + bias.reshape(..)``
         # had its whole convolution result wiped that way. Same sentinel pair
-        # :meth:`WholeArrayAssignRewriter._expand` stamps, for the same reason -- the per-element
+        # :meth:`WholeArrayAssignRewriter.expand_` stamps, for the same reason -- the per-element
         # store below overwrites every element, so there is nothing to zero, and ``self_ref`` keeps
         # a deferred-malloc emitter from reallocating a buffer the RHS still reads.
         marker_args: list[ast.expr] = []

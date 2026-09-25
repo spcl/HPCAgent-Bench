@@ -154,36 +154,13 @@ def expand_reshape(
     tgt_shape = shape_table.get(target.id)
     if not tgt_shape:
         # Target shape unknown: flat copy (Fortran rejects a rank mismatch here).
-        total = shape_total_product(a_shape)
-        body = [
-            ast.Assign(
-                targets=[ast.Subscript(value=name_(target.id), slice=name_("__r"), ctx=ast.Store())],
-                value=ast.Subscript(value=name_(a.id), slice=name_("__r"), ctx=ast.Load()),
-            )
-        ]
-        return [
-            ast.For(
-                target=store_("__r"),
-                iter=ast.Call(func=name_("range"), args=[total], keywords=[]),
-                body=body,
-                orelse=[],
-            )
-        ]
+        return flat_copy(target.id, a.id, a_shape)
 
     # Build per-axis loop iters for the target shape.
     tgt_rank = len(tgt_shape)
     src_rank = len(a_shape)
     tgt_iters = [f"__r{i}" for i in range(tgt_rank)]
-
-    # Memory order: numpy default is C (row-major); ``order="F"`` ravels the
-    # source and fills the target column-major. Flat position k of one maps to
-    # flat position k of the other in the SAME order, so both the target flat
-    # index and the source multi-index are computed in ``order``.
-    order = "C"
-    for kw in kwargs or []:
-        if vars(kw).get("arg") == "order" and isinstance(kw.value, ast.Constant):
-            order = str(kw.value.value).upper()
-    fortran = order == "F"
+    fortran = reshape_order(kwargs) == "F"
 
     # Affine fast path: when the two shapes pair up into contiguous axis groups, iterate the finer
     # side and read the coarser index off a linear combination of its iterators. The flat-index
@@ -196,48 +173,8 @@ def expand_reshape(
             if grouped is not None:
                 return grouped
 
-    def mul(*toks: str) -> str:
-        toks = [t for t in toks if t and t != "1"]
-        if not toks:
-            return "1"
-        if len(toks) == 1:
-            return toks[0]
-        return "(" + " * ".join(f"({t})" for t in toks) + ")"
-
-    def stride_(shape: tuple[str, ...], i: int) -> str:
-        # Stride of axis ``i`` = product of the FASTER-varying axes: the trailing
-        # axes in C order, the leading axes in F order.
-        faster = list(shape[:i]) if fortran else list(shape[i + 1 :])
-        return mul(*faster) if faster else "1"
-
-    # Flat index of the current target iteration in ``order``.
-    flat_parts: list[str] = []
-    for i, it in enumerate(tgt_iters):
-        stride = stride_(tgt_shape, i)
-        # Parenthesise the STRIDE too: it is re-parsed from text, and a single compound factor came
-        # back unbracketed, so ``(i) * (w - k) / 1 + 1`` re-associated as ``(i*(w-k))/1 + 1``. Only
-        # the second-to-last axis of a reshape is ever a lone compound factor, which is why square
-        # 2-D cases were right and every conv shape gathered 75% of its elements from the wrong slot.
-        flat_parts.append(it if stride == "1" else f"({it}) * ({stride})")
-    flat_expr = " + ".join(flat_parts) if flat_parts else "0"
-
-    # Decode the source multi-index from the flat index via div/mod on the source
-    # strides (same ``order``). The MOST-major axis (largest stride: ``i == 0`` in
-    # C, ``i == src_rank - 1`` in F) needs no modulo.
-    src_axes: list[ast.expr] = []
-    for i in range(src_rank):
-        # A size-1 source axis indexes to a constant 0, avoiding a degenerate
-        # ``flat % 1``/``flat / 1`` whose bare ``1`` literal clashes with the
-        # int64 flat index under Fortran ``-std=f2018`` (GNU "Different type kinds").
-        if str(a_shape[i]) == "1":
-            src_axes.append(ast.Constant(value=0))
-            continue
-        stride = stride_(a_shape, i)
-        ax_expr = flat_expr if stride == "1" else f"(({flat_expr}) / ({stride}))"
-        is_major = (i == src_rank - 1) if fortran else (i == 0)
-        if not is_major:
-            ax_expr = f"(({ax_expr}) % ({a_shape[i]}))"
-        src_axes.append(ast.parse(ax_expr, mode="eval").body)
+    flat_expr = flat_index(tgt_iters, tgt_shape, fortran)
+    src_axes = decoded_source_axes(a_shape, flat_expr, fortran)
 
     # ``out[t0, t1, ...] = A[<computed-axes>]``.
     if tgt_rank == 1:
@@ -263,3 +200,82 @@ def expand_reshape(
             orelse=[],
         )
     return [current]
+
+
+def flat_copy(target_id: str, source_id: str, a_shape: tuple[str, ...]) -> list[ast.stmt]:
+    """``target[__r] = source[__r]`` over the source's element count."""
+    total = shape_total_product(a_shape)
+    body = [
+        ast.Assign(
+            targets=[ast.Subscript(value=name_(target_id), slice=name_("__r"), ctx=ast.Store())],
+            value=ast.Subscript(value=name_(source_id), slice=name_("__r"), ctx=ast.Load()),
+        )
+    ]
+    return [
+        ast.For(
+            target=store_("__r"),
+            iter=ast.Call(func=name_("range"), args=[total], keywords=[]),
+            body=body,
+            orelse=[],
+        )
+    ]
+
+
+def reshape_order(kwargs: list[ast.keyword] | None) -> str:
+    """The reshape's memory order: numpy's default C (row-major), or ``order="F"``, which ravels the
+    source and fills the target column-major. Flat position k of one maps to flat position k of the
+    other in the SAME order, so both the target flat index and the source multi-index use it."""
+    order = "C"
+    for kw in kwargs or []:
+        if vars(kw).get("arg") == "order" and isinstance(kw.value, ast.Constant):
+            order = str(kw.value.value).upper()
+    return order
+
+
+def token_product(*toks: str) -> str:
+    """Parenthesised product of the non-unit shape tokens (``"1"`` for none)."""
+    toks = [t for t in toks if t and t != "1"]
+    if not toks:
+        return "1"
+    if len(toks) == 1:
+        return toks[0]
+    return "(" + " * ".join(f"({t})" for t in toks) + ")"
+
+
+def axis_stride(shape: tuple[str, ...], i: int, fortran: bool) -> str:
+    """Stride of axis ``i`` = product of the FASTER-varying axes: the trailing axes in C order, the
+    leading axes in F order."""
+    faster = list(shape[:i]) if fortran else list(shape[i + 1 :])
+    return token_product(*faster) if faster else "1"
+
+
+def flat_index(tgt_iters: list[str], tgt_shape: tuple[str, ...], fortran: bool) -> str:
+    """Flat index of the current target iteration in the reshape's order.
+
+    The STRIDE is parenthesised too: it is re-parsed from text, and an unbracketed compound factor
+    re-associates (``(i) * (w - k) / 1 + 1`` as ``(i*(w-k))/1 + 1``)."""
+    flat_parts: list[str] = []
+    for i, it in enumerate(tgt_iters):
+        stride = axis_stride(tgt_shape, i, fortran)
+        flat_parts.append(it if stride == "1" else f"({it}) * ({stride})")
+    return " + ".join(flat_parts) if flat_parts else "0"
+
+
+def decoded_source_axes(a_shape: tuple[str, ...], flat_expr: str, fortran: bool) -> list[ast.expr]:
+    """The source multi-index decoded from the flat index via div/mod on the source strides (same
+    order). The MOST-major axis (``i == 0`` in C, the last in F) needs no modulo. A size-1 source
+    axis indexes to a constant 0, avoiding a degenerate ``flat % 1`` whose bare ``1`` literal clashes
+    with the int64 flat index under Fortran ``-std=f2018``."""
+    src_rank = len(a_shape)
+    src_axes: list[ast.expr] = []
+    for i in range(src_rank):
+        if str(a_shape[i]) == "1":
+            src_axes.append(ast.Constant(value=0))
+            continue
+        stride = axis_stride(a_shape, i, fortran)
+        ax_expr = flat_expr if stride == "1" else f"(({flat_expr}) / ({stride}))"
+        is_major = (i == src_rank - 1) if fortran else (i == 0)
+        if not is_major:
+            ax_expr = f"(({ax_expr}) % ({a_shape[i]}))"
+        src_axes.append(ast.parse(ax_expr, mode="eval").body)
+    return src_axes

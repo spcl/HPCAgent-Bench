@@ -233,7 +233,7 @@ def dtype_module_consts(tree: ast.Module, shadowed: set[str]) -> dict[str, str]:
 
 
 class SubstituteModuleConsts(ast.NodeTransformer):
-    def __init__(self, consts: dict[str, ModuleConst], seqs: dict[str, ast.Tuple], dtype_attrs: dict[str, str]):
+    def __init__(self, consts: dict[str, ModuleConst], seqs: dict[str, ast.Tuple], dtype_attrs: dict[str, str]) -> None:
         self.consts = consts
         self.seqs = seqs
         self.dtype_attrs = dtype_attrs

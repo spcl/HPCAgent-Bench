@@ -8,6 +8,7 @@ from typing import cast
 from collections.abc import Mapping
 
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
+from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 
 
 def declared_ranks(shapes_raw: dict[str, str]) -> dict[str, int]:
@@ -20,10 +21,6 @@ def declared_ranks(shapes_raw: dict[str, str]) -> dict[str, int]:
             continue
         ranks[name] = len(parsed.elts) if isinstance(parsed, (ast.Tuple, ast.List)) else 1
     return ranks
-
-
-#: Identifiers inside a manifest shape expression (``(out_channels, in_channels // groups, k)``).
-SHAPE_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 #: Value of a ``config:`` knob the manifest pinned to ONE value. The manifest schema admits any
@@ -89,7 +86,7 @@ def pinned_config_in_use(
     used.update(node.id for node in ast.walk(fn) if isinstance(node, ast.Name))
     for arr in arrays:
         for tok in arr.shape:
-            used.update(SHAPE_IDENT.findall(str(tok)))
+            used.update(IDENT_RE.findall(str(tok)))
     return {n: v for n, v in pinned.items() if n in used}
 
 
@@ -122,7 +119,7 @@ def shape_only_constants(
     spelled: set[str] = set()
     for arr in arrays:
         for tok in arr.shape:
-            spelled.update(SHAPE_IDENT.findall(str(tok)))
+            spelled.update(IDENT_RE.findall(str(tok)))
     named = set(input_args) | set(pinned) | {arr.name for arr in arrays}
     named.update(node.id for node in ast.walk(fn) if isinstance(node, ast.Name))
     return {

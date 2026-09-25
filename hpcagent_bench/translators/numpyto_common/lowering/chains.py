@@ -2,9 +2,10 @@
 
 import ast
 import copy
+import dataclasses
 from collections.abc import Mapping, Sequence
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     compose_kept_axis,
     is_scalar_index,
@@ -65,7 +66,7 @@ def index_rank(elt: ast.expr, shape_table: Mapping[str, Sequence[str]]) -> int |
     rank ``k``, ``None`` when a sized array feeds the entry but its result cannot be sized."""
     if not any(isinstance(n, ast.Name) and shape_table.get(n.id) for n in ast.walk(elt)):
         return 0
-    extent = iter_extent_of_(elt, shape_table)
+    extent = iter_extent_of(elt, shape_table)
     if extent:
         return len(extent)
     if isinstance(elt, ast.Subscript) and isinstance(elt.value, ast.Name):
@@ -222,17 +223,9 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
         base = inner.value
         shape = self.shape_table.get(base.id) if isinstance(base, ast.Name) else None
         rank = len(shape) if shape else None
-        inner_elts = slice_dims(inner)
-        ellipses = [pos for pos, elt in enumerate(inner_elts) if is_ellipsis(elt)]
-        if ellipses:
-            if len(ellipses) > 1 or rank is None or rank < len(inner_elts) - 1:
-                return None
-            width = rank - len(inner_elts) + 1
-            inner_elts[ellipses[0] : ellipses[0] + 1] = [ast.Slice() for axis in range(width)]
-        if any(is_newaxis(elt) for elt in inner_elts) or (rank is not None and len(inner_elts) > rank):
+        inner_elts = self.inner_entries(inner, rank)
+        if inner_elts is None:
             return None
-        if self.explicit_trailing_axes and rank is not None:
-            inner_elts.extend(ast.Slice() for axis in range(rank - len(inner_elts)))
         outer_elts = slice_dims(node)
         inner_ranks = self.entry_ranks(inner_elts)
         outer_ranks = self.entry_ranks(outer_elts)
@@ -258,17 +251,14 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
         if inner_axes is None or consuming > sum(1 for label in inner_axes if label[0] != "rest"):
             return None
 
-        slots: list[ast.expr] = list(inner_elts)
-        slot_models: list[IndexEntry] = list(inner_model)
-        slot_newaxes: list[list[int]] = [[] for elt in inner_elts]
-        tail: list[tuple[ast.expr, IndexEntry]] = []
-        adv_uses: dict[int, tuple[ast.expr, IndexEntry]] = {}
-        adv_newaxes: dict[int, list[int]] = {}
-        folded_inner: list[ast.expr] = list(inner_elts)
-        folded_tail: list[ast.expr] = []
-        folded_outer: list[ast.expr] = list(outer_elts)
-        folded = False
-        flat_ok = True
+        fold = ChainFold(
+            inner_elts=inner_elts,
+            slots=list(inner_elts),
+            slot_models=list(inner_model),
+            slot_newaxes=[[] for elt in inner_elts],
+            folded_inner=list(inner_elts),
+            folded_outer=list(outer_elts),
+        )
         outer_rank = max(outer_ranks, default=0)
         outer_model: list[IndexEntry] = []
         pending: list[int] = []
@@ -280,64 +270,62 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
                 continue
             label = inner_axes[consumed]
             consumed += 1
-            self.attach_newaxes(pending, label, slot_newaxes, adv_newaxes, tail)
+            self.attach_newaxes(pending, label, fold.slot_newaxes, fold.adv_newaxes, fold.tail)
             pending.clear()
             model = entry_model(elt, elt_rank, label, outer_rank, "outer")
             outer_model.append(model)
-            kind, index = label
-            if kind == "adv":
-                adv_uses[index] = (elt, model)
-                continue
-            if kind == "axis":
-                composed = compose_onto_view(inner_elts[index], elt, elt_rank > 0)
-                if composed is None:
-                    flat_ok = False
-                    continue
-                slots[index] = composed
-                slot_models[index] = model
-                if isinstance(elt, ast.Slice) and not is_full_slice(elt):
-                    folded_inner[index] = composed
-            else:
-                tail.append((elt, model))
-                if isinstance(elt, ast.Slice) and not is_full_slice(elt):
-                    folded_tail.extend(ast.Slice() for gap in range(index - len(folded_tail)))
-                    folded_tail.append(elt)
-            if isinstance(elt, ast.Slice) and not is_full_slice(elt):
-                folded_outer[i] = ast.Slice()
-                folded = True
+            fold.place(i, elt, elt_rank, label, model)
         if pending:
             label = inner_axes[consumed] if consumed < len(inner_axes) else ("rest", 0)
-            self.attach_newaxes(pending, label, slot_newaxes, adv_newaxes, tail)
+            self.attach_newaxes(pending, label, fold.slot_newaxes, fold.adv_newaxes, fold.tail)
         outer_model.extend(("slice", (label,)) for label in inner_axes[consumed:])
         expected = result_axes(outer_model)
-
-        arrays = [pos for pos, elt_rank in enumerate(inner_ranks) if elt_rank > 0]
-        if len(arrays) > 1 and any(not is_full_slice(use) for use, model in adv_uses.values()):
-            flat_ok = flat_ok and self.same_broadcast_extents([inner_elts[pos] for pos in arrays])
-        for pos in arrays if flat_ok else ():
-            indexed = self.index_into_array(inner_elts[pos], inner_ranks[pos], adv_rank, adv_uses, adv_newaxes)
-            if indexed is None:
-                flat_ok = False
-                break
-            slots[pos], slot_models[pos] = indexed
-        if flat_ok and expected is not None:
-            entries: list[ast.expr] = []
-            layout: list[IndexEntry] = []
-            for pos, slot in enumerate(slots):
-                entries.extend(ast.Constant(value=None) for i in slot_newaxes[pos])
-                layout.extend(("newaxis", (("new", i),)) for i in slot_newaxes[pos])
-                entries.append(slot)
-                layout.append(slot_models[pos])
-            entries.extend(entry for entry, model in tail)
-            layout.extend(model for entry, model in tail)
+        self.index_inner_arrays(fold, inner_ranks, adv_rank)
+        if fold.flat_ok and expected is not None:
             used_trails = sum(1 for label in inner_axes[:consumed] if label[0] == "trail")
-            layout.extend(("slice", (label,)) for label in tail_labels[used_trails:])
-            if result_axes(layout) == expected:
+            entries = flat_entries(
+                fold.slots, fold.slot_models, fold.slot_newaxes, fold.tail, tail_labels[used_trails:], expected
+            )
+            if entries is not None:
                 return ast.Subscript(value=base, slice=index_slot(entries), ctx=node.ctx)
-        if not folded:
+        if not fold.folded:
             return None
-        folded_base = ast.Subscript(value=base, slice=index_slot([*folded_inner, *folded_tail]), ctx=ast.Load())
-        return ast.Subscript(value=folded_base, slice=index_slot(folded_outer), ctx=node.ctx)
+        folded_base = ast.Subscript(
+            value=base, slice=index_slot([*fold.folded_inner, *fold.folded_tail]), ctx=ast.Load()
+        )
+        return ast.Subscript(value=folded_base, slice=index_slot(fold.folded_outer), ctx=node.ctx)
+
+    def index_inner_arrays(self, fold: "ChainFold", inner_ranks: list[int], adv_rank: int) -> None:
+        """Index each inner index array by the outer entries that land on its broadcast axes (several
+        arrays only when they broadcast to the same extents); a failure keeps the two-step form."""
+        arrays = [pos for pos, elt_rank in enumerate(inner_ranks) if elt_rank > 0]
+        if len(arrays) > 1 and any(not is_full_slice(use) for use, model in fold.adv_uses.values()):
+            fold.flat_ok = fold.flat_ok and self.same_broadcast_extents([fold.inner_elts[pos] for pos in arrays])
+        for pos in arrays if fold.flat_ok else ():
+            indexed = self.index_into_array(
+                fold.inner_elts[pos], inner_ranks[pos], adv_rank, fold.adv_uses, fold.adv_newaxes
+            )
+            if indexed is None:
+                fold.flat_ok = False
+                break
+            fold.slots[pos], fold.slot_models[pos] = indexed
+
+    def inner_entries(self, inner: ast.Subscript, rank: int | None) -> list[ast.expr] | None:
+        """The inner subscript's entries with a single Ellipsis expanded to full slices (and, under
+        ``explicit_trailing_axes``, the base's trailing axes spelled out); None when an Ellipsis or
+        newaxis leaves the axis count unknowable or the entries exceed the base rank."""
+        inner_elts = slice_dims(inner)
+        ellipses = [pos for pos, elt in enumerate(inner_elts) if is_ellipsis(elt)]
+        if ellipses:
+            if len(ellipses) > 1 or rank is None or rank < len(inner_elts) - 1:
+                return None
+            width = rank - len(inner_elts) + 1
+            inner_elts[ellipses[0] : ellipses[0] + 1] = [ast.Slice() for axis in range(width)]
+        if any(is_newaxis(elt) for elt in inner_elts) or (rank is not None and len(inner_elts) > rank):
+            return None
+        if self.explicit_trailing_axes and rank is not None:
+            inner_elts.extend(ast.Slice() for axis in range(rank - len(inner_elts)))
+        return inner_elts
 
     @staticmethod
     def attach_newaxes(
@@ -361,7 +349,7 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
         never indexes a length-1 axis that was only broadcast."""
         extents: list[tuple[ast.expr, ...]] = []
         for array in arrays:
-            extent = iter_extent_of_(array, self.shape_table)
+            extent = iter_extent_of(array, self.shape_table)
             if extent is None:
                 return False
             extents.append(extent)
@@ -398,3 +386,73 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
             return array, layout
         indexed = ast.Subscript(value=array, slice=index_slot(entries), ctx=ast.Load())
         return (self.visit_Subscript(indexed) if isinstance(array, ast.Subscript) else indexed), layout
+
+
+def flat_entries(
+    slots: list[ast.expr],
+    slot_models: list["IndexEntry"],
+    slot_newaxes: list[list[int]],
+    tail: list[tuple[ast.expr, "IndexEntry"]],
+    unused_trails: list["AxisLabel"],
+    expected: list["AxisLabel"],
+) -> list[ast.expr] | None:
+    """The single-subscript entries of a folded chain -- each slot preceded by the newaxes attached to
+    it, then the tail -- or None when their result axes differ from the chain's ``expected`` ones."""
+    entries: list[ast.expr] = []
+    layout: list[IndexEntry] = []
+    for pos, slot in enumerate(slots):
+        entries.extend(ast.Constant(value=None) for i in slot_newaxes[pos])
+        layout.extend(("newaxis", (("new", i),)) for i in slot_newaxes[pos])
+        entries.append(slot)
+        layout.append(slot_models[pos])
+    entries.extend(entry for entry, model in tail)
+    layout.extend(model for entry, model in tail)
+    layout.extend(("slice", (label,)) for label in unused_trails)
+    return entries if result_axes(layout) == expected else None
+
+
+@dataclasses.dataclass(slots=True)
+class ChainFold:
+    """A chain ``inner[outer]`` being folded: the single-subscript slots (and their result-axis
+    models and attached newaxes), the outer entries that land past the inner entries (``tail``) or on
+    an inner index array's axes (``adv_uses``), and the two-step fallback in which only the bounded
+    outer slices are folded into the inner subscript."""
+
+    inner_elts: list[ast.expr]
+    slots: list[ast.expr]
+    slot_models: list[IndexEntry]
+    slot_newaxes: list[list[int]]
+    folded_inner: list[ast.expr]
+    folded_outer: list[ast.expr]
+    tail: list[tuple[ast.expr, IndexEntry]] = dataclasses.field(default_factory=list)
+    adv_uses: dict[int, tuple[ast.expr, IndexEntry]] = dataclasses.field(default_factory=dict)
+    adv_newaxes: dict[int, list[int]] = dataclasses.field(default_factory=dict)
+    folded_tail: list[ast.expr] = dataclasses.field(default_factory=list)
+    folded: bool = False
+    flat_ok: bool = True
+
+    def place(self, i: int, elt: ast.expr, elt_rank: int, label: AxisLabel, model: IndexEntry) -> None:
+        """Land outer entry ``i`` on the inner result axis ``label``: composed onto an inner slice,
+        recorded against an inner index array, or appended past the inner entries."""
+        kind, index = label
+        if kind == "adv":
+            self.adv_uses[index] = (elt, model)
+            return
+        bounded = isinstance(elt, ast.Slice) and not is_full_slice(elt)
+        if kind == "axis":
+            composed = compose_onto_view(self.inner_elts[index], elt, elt_rank > 0)
+            if composed is None:
+                self.flat_ok = False
+                return
+            self.slots[index] = composed
+            self.slot_models[index] = model
+            if bounded:
+                self.folded_inner[index] = composed
+        else:
+            self.tail.append((elt, model))
+            if bounded:
+                self.folded_tail.extend(ast.Slice() for gap in range(index - len(self.folded_tail)))
+                self.folded_tail.append(elt)
+        if bounded:
+            self.folded_outer[i] = ast.Slice()
+            self.folded = True

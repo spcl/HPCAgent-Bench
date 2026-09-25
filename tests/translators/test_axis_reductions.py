@@ -185,7 +185,7 @@ def reshape_to_index(src: str, ranks: dict[str, int]) -> str:
 def test_nested_expand_dims_is_one_subscript() -> None:
     """Two ``expand_dims`` merge into ONE newaxis subscript, not ``z[:, None, :][:, None, :, :]``.
 
-    The chain is what broke the reduction over it: ``iter_extent_of_`` sizes a subscript of a
+    The chain is what broke the reduction over it: ``iter_extent_of`` sizes a subscript of a
     NAME, so a subscript of a subscript came back unsized, the reduction operand was never
     hoisted to a temp, and ``np.mean`` reached the emitter unlowered.
     """

@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     alloc_marker,
     const_,
@@ -25,12 +25,12 @@ def expand_copy(
     a bare Name (``np.copy(a)``) or an array-valued Subscript (``grid[0].copy()``
     -- a row lowered into a fresh local); for the Subscript case the iteration
     extent comes from the *result* shape (un-indexed axes) via
-    ``iter_extent_of_``, scalarized per element like the elementwise expanders.
+    ``iter_extent_of``, scalarized per element like the elementwise expanders.
     """
     if not args:
         raise NotImplementedError("np.copy needs an operand")
     src = args[0]
-    shape = iter_extent_of_(src, shape_table)
+    shape = iter_extent_of(src, shape_table)
     if not shape:
         raise NotImplementedError("np.copy: source shape unknown")
     # Register + allocate the fresh target, mirroring the matmul/linalg expanders.
@@ -256,7 +256,7 @@ def expand_meshgrid(
     # Length of each 1-D input array.
     lengths: list[ast.expr] = []
     for a in args:
-        ext = iter_extent_of_(a, shape_table)
+        ext = iter_extent_of(a, shape_table)
         if ext is None or len(ext) != 1:
             raise NotImplementedError("np.meshgrid needs 1-D inputs of known length")
         lengths.append(ext[0])

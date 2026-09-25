@@ -4,7 +4,7 @@ import ast
 import copy
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_, extent_is_scalar
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of, extent_is_scalar
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
 
 
@@ -77,7 +77,7 @@ class ShapeMidExpressionRewriter(ast.NodeTransformer):
     A ``.shape`` / ``.shape[k]`` read whose base is a rank-shifting
     SUBSCRIPT rather than a bare Name (``v[..., None].shape[-1]`` in an
     inlined ``X.reshape(-1, X.shape[-1])``) resolves via
-    :func:`iter_extent_of_`, which is Ellipsis / newaxis-aware -- so a
+    :func:`iter_extent_of`, which is Ellipsis / newaxis-aware -- so a
     broadcast subscript's static extent folds the same way a declared
     array's does. The Name-base path is unchanged.
     """
@@ -110,7 +110,7 @@ class ShapeMidExpressionRewriter(ast.NodeTransformer):
         ):
             k = const_int_index(node.slice)
             if k is not None:
-                ext = iter_extent_of_(node.value.value, self.arrays_shapes)
+                ext = iter_extent_of(node.value.value, self.arrays_shapes)
                 if ext is not None and -len(ext) <= k < len(ext):
                     return copy.deepcopy(ext[k])
                 # The base's own shape is not knowable everywhere this runs (the first pass
@@ -146,10 +146,10 @@ class ShapeMidExpressionRewriter(ast.NodeTransformer):
             # Bare ``<array-expr>.shape`` on a Subscript or CALL base (``Y.shape`` where
             # ``Y`` inlined to ``psi_frag[f]`` or to ``np.maximum(__hcall1, 0.0)``, or
             # ``v[..., None].shape``) -> the tuple of static extents from
-            # :func:`iter_extent_of_`, which sizes an elementwise call from its operands.
+            # :func:`iter_extent_of`, which sizes an elementwise call from its operands.
             # Downstream tuple-subscript / reshape folding then consumes the literal tuple.
             if node.attr == "shape" and isinstance(node.value, (ast.Subscript, ast.Call)):
-                ext = iter_extent_of_(node.value, self.arrays_shapes)
+                ext = iter_extent_of(node.value, self.arrays_shapes)
                 if ext is not None:
                     return ast.Tuple(elts=[copy.deepcopy(e) for e in ext], ctx=ast.Load())
             return node
@@ -379,7 +379,7 @@ class ResolveArrShape(ast.NodeTransformer):
         * ``Name = np.zeros((N, M), ...)`` / ``np.empty([...])`` /
           ``np.empty_like(other)`` -- shape from the constructor.
         * ``Name = BinOp/UnaryOp/IfExp`` -- shape from broadcast via
-          :func:`iter_extent_of_`.
+          :func:`iter_extent_of`.
         * ``Name = Call(...)`` -- if the call is an elementwise math
           intrinsic, propagate the first array operand's shape.
         * Anything else -- leave the existing entry alone (or unset
@@ -389,24 +389,8 @@ class ResolveArrShape(ast.NodeTransformer):
             return
         target = stmt.targets[0].id
         rhs = stmt.value
-        # ``Name = __hpcagent_bench_zeros__()`` marker -- could be from the
-        # ZerosRewriter (single shape per name in ``zeros_locals``)
-        # OR from ``WholeArrayAssignRewriter`` (one marker per
-        # reassignment, shape FIFO in ``_reassign_shapes``).
         if isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Name) and rhs.func.id == "__hpcagent_bench_zeros__":
-            if target in self._reassign_shapes and self._reassign_shapes[target]:
-                self.current[target] = self._reassign_shapes[target].pop(0)
-                return
-            if target in self.zeros_locals:
-                # Re-resolve any ``arr.shape[i]`` references inside the
-                # stored shape tokens against ``self.current`` so a
-                # reassigned source array (lenet's ``x``) contributes
-                # the correct THEN-current axis lengths. The
-                # ``self.zeros_locals`` entry is also updated so the
-                # emitter's decl block uses the fresh tokens.
-                fresh = tuple(self.reresolve_token(t) for t in self.zeros_locals[target])
-                self.current[target] = fresh
-                self.zeros_locals[target] = fresh
+            if self.update_marker_shape(target):
                 return
         if isinstance(rhs, ast.Name):
             src = self.current.get(rhs.id)
@@ -418,41 +402,58 @@ class ResolveArrShape(ast.NodeTransformer):
             and isinstance(rhs.func, ast.Attribute)
             and isinstance(rhs.func.value, ast.Name)
             and rhs.func.value.id == "np"
+            and self.update_constructor_shape(target, rhs)
         ):
-            attr = rhs.func.attr
-            if attr in NP_ZEROS_ALIASES and rhs.args:
-                if attr.endswith("_like") and isinstance(rhs.args[0], ast.Name):
-                    src = self.current.get(rhs.args[0].id)
-                    if src is not None:
-                        self.current[target] = src
-                    return
-                shape_arg = rhs.args[0]
-                if isinstance(shape_arg, (ast.Tuple, ast.List)):
-                    self.current[target] = tuple(resolve_shape_token(e, self.current) for e in shape_arg.elts)
-                    return
-                if (
-                    isinstance(shape_arg, ast.Attribute)
-                    and shape_arg.attr == "shape"
-                    and isinstance(shape_arg.value, ast.Name)
-                ):
-                    src = self.current.get(shape_arg.value.id)
-                    if src is not None:
-                        self.current[target] = tuple(src)
-                    return
-            if attr == "linspace" and len(rhs.args) >= 3:
-                tok = ast.unparse(rhs.args[2])
-                self.current[target] = (tok,)
-                return
-        # An all-size-1 result is a scalar, not a broadcast shape (see extent_is_scalar).
-        if isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.IfExp)):
-            ext = iter_extent_of_(rhs, self.current)
-            if ext is not None and not extent_is_scalar(ext):
-                self.current[target] = tuple(ast.unparse(e) for e in ext)
             return
-        if isinstance(rhs, ast.Call):
-            ext = iter_extent_of_(rhs, self.current)
+        # An all-size-1 result is a scalar, not a broadcast shape (see extent_is_scalar).
+        if isinstance(rhs, (ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Call)):
+            ext = iter_extent_of(rhs, self.current)
             if ext is not None and not extent_is_scalar(ext):
                 self.current[target] = tuple(ast.unparse(e) for e in ext)
+
+    def update_marker_shape(self, target: str) -> bool:
+        """``target = __hpcagent_bench_zeros__()``: the marker is from the WholeArrayAssignRewriter (one
+        per reassignment, shape FIFO in ``_reassign_shapes``) or the ZerosRewriter (one shape per name
+        in ``zeros_locals``, whose ``arr.shape[i]`` tokens are re-resolved against ``self.current`` so
+        a reassigned source array contributes its THEN-current axis lengths -- written back so the
+        emitter's declaration uses them). False when neither knows the name."""
+        if target in self._reassign_shapes and self._reassign_shapes[target]:
+            self.current[target] = self._reassign_shapes[target].pop(0)
+            return True
+        if target in self.zeros_locals:
+            fresh = tuple(self.reresolve_token(t) for t in self.zeros_locals[target])
+            self.current[target] = fresh
+            self.zeros_locals[target] = fresh
+            return True
+        return False
+
+    def update_constructor_shape(self, target: str, rhs: ast.Call) -> bool:
+        """``np.zeros((N, M))`` / ``np.zeros(x.shape)`` / ``np.empty_like(other)`` / ``np.linspace(a, b,
+        n)``: the shape the constructor states. False when it states none this reads."""
+        attr = rhs.func.attr
+        if attr in NP_ZEROS_ALIASES and rhs.args:
+            if attr.endswith("_like") and isinstance(rhs.args[0], ast.Name):
+                src = self.current.get(rhs.args[0].id)
+                if src is not None:
+                    self.current[target] = src
+                return True
+            shape_arg = rhs.args[0]
+            if isinstance(shape_arg, (ast.Tuple, ast.List)):
+                self.current[target] = tuple(resolve_shape_token(e, self.current) for e in shape_arg.elts)
+                return True
+            if (
+                isinstance(shape_arg, ast.Attribute)
+                and shape_arg.attr == "shape"
+                and isinstance(shape_arg.value, ast.Name)
+            ):
+                src = self.current.get(shape_arg.value.id)
+                if src is not None:
+                    self.current[target] = tuple(src)
+                return True
+        if attr == "linspace" and len(rhs.args) >= 3:
+            self.current[target] = (ast.unparse(rhs.args[2]),)
+            return True
+        return False
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         self.generic_visit(node)

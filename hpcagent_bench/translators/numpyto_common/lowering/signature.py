@@ -9,6 +9,7 @@ from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.frontend import names_used_as_int
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR, SymbolDesc
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import MATH_INTRINSIC_NAMES
+from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 
 #: Python builtins / harness identifiers that may appear in the body
 #: but are not parameter candidates.
@@ -93,6 +94,24 @@ def integer_valued_locals(kir: KernelIR) -> set[str]:
     integer); the drop rule is what keeps ``x = 0.5`` and reads of float arrays out. Names
     whose dtype is already pinned (params, arrays, ``local_dtypes``) are never candidates --
     they only feed the right-hand-side test."""
+    pinned, assigns = integer_candidates(kir)
+    candidates = {n for n in assigns if n not in pinned}
+    assumed = candidates | {n for n, is_int in pinned.items() if is_int}
+    array_dtypes = {a.name: a.dtype for a in kir.arrays}
+    changed = True
+    while changed:
+        changed = False
+        for name in sorted(candidates & assumed):
+            if not all(provably_integer(v, assumed, kir.local_dtypes, array_dtypes) for v in assigns[name]):
+                assumed.discard(name)
+                changed = True
+    return candidates & assumed
+
+
+def integer_candidates(kir: KernelIR) -> tuple[dict[str, bool], dict[str, list[ast.expr]]]:
+    """``(pinned, assigns)``: whether each name with a fixed dtype (arrays, scalars, local dtypes,
+    int locals, symbols, for-loop targets -- emitted as int64 counters) is integer, and every
+    right-hand side each assigned local takes (an AugAssign as its equivalent BinOp)."""
     pinned: dict[str, bool] = {a.name: dtypes.is_integer(a.dtype) for a in kir.arrays}
     pinned.update({s.name: dtypes.is_integer(s.dtype) for s in kir.scalars})
     pinned.update({n: dtypes.is_integer(dt) for n, dt in kir.local_dtypes.items()})
@@ -100,7 +119,6 @@ def integer_valued_locals(kir: KernelIR) -> set[str]:
         pinned[name] = True
     for sym in kir.symbols:
         pinned[sym.name] = True
-    # Assignments per candidate; a for-loop target is emitted as an int64 counter.
     assigns: dict[str, list[ast.expr]] = {}
     for node in ast.walk(kir.tree):
         if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
@@ -111,42 +129,44 @@ def integer_valued_locals(kir: KernelIR) -> set[str]:
                     assigns.setdefault(tgt.id, []).append(node.value)
         elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
             assigns.setdefault(node.target.id, []).append(ast.BinOp(left=node.target, op=node.op, right=node.value))
-    candidates = {n for n in assigns if n not in pinned}
-    assumed = candidates | {n for n, is_int in pinned.items() if is_int}
-    array_dtypes = {a.name: a.dtype for a in kir.arrays}
+    return pinned, assigns
 
-    def provable(node: ast.AST) -> bool:
-        if isinstance(node, ast.Constant):
-            return isinstance(node.value, int) and not isinstance(node.value, bool)
-        if isinstance(node, ast.Name):
-            return node.id in assumed
-        if isinstance(node, ast.Subscript):
-            base = node.value
-            while isinstance(base, ast.Subscript):
-                base = base.value
-            if not isinstance(base, ast.Name):
-                return False
-            dt = kir.local_dtypes.get(base.id) or array_dtypes.get(base.id)
-            return dt is not None and dtypes.is_integer(dt)
-        if isinstance(node, ast.BinOp):
-            return isinstance(node.op, INT_PRESERVING_OPS) and provable(node.left) and provable(node.right)
-        if isinstance(node, ast.UnaryOp):
-            return isinstance(node.op, (ast.USub, ast.UAdd, ast.Invert)) and provable(node.operand)
-        if isinstance(node, ast.IfExp):
-            return provable(node.body) and provable(node.orelse)
-        # int(x) / len(x) are integer whatever the argument is.
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            return node.func.id in ("int", "len")
-        return False
 
-    changed = True
-    while changed:
-        changed = False
-        for name in sorted(candidates & assumed):
-            if not all(provable(v) for v in assigns[name]):
-                assumed.discard(name)
-                changed = True
-    return candidates & assumed
+def provably_integer(
+    node: ast.AST, assumed: set[str], local_dtypes: dict[str, str], array_dtypes: dict[str, str]
+) -> bool:
+    """``node`` is an INTEGER value given the names ``assumed`` integer: int literals, reads of
+    integer arrays, integer-preserving operators over integers, ``int(x)`` / ``len(x)``."""
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, int) and not isinstance(node.value, bool)
+    if isinstance(node, ast.Name):
+        return node.id in assumed
+    if isinstance(node, ast.Subscript):
+        base = node.value
+        while isinstance(base, ast.Subscript):
+            base = base.value
+        if not isinstance(base, ast.Name):
+            return False
+        dt = local_dtypes.get(base.id) or array_dtypes.get(base.id)
+        return dt is not None and dtypes.is_integer(dt)
+    if isinstance(node, ast.BinOp):
+        return (
+            isinstance(node.op, INT_PRESERVING_OPS)
+            and provably_integer(node.left, assumed, local_dtypes, array_dtypes)
+            and provably_integer(node.right, assumed, local_dtypes, array_dtypes)
+        )
+    if isinstance(node, ast.UnaryOp):
+        return isinstance(node.op, (ast.USub, ast.UAdd, ast.Invert)) and provably_integer(
+            node.operand, assumed, local_dtypes, array_dtypes
+        )
+    if isinstance(node, ast.IfExp):
+        return provably_integer(node.body, assumed, local_dtypes, array_dtypes) and provably_integer(
+            node.orelse, assumed, local_dtypes, array_dtypes
+        )
+    # int(x) / len(x) are integer whatever the argument is.
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        return node.func.id in ("int", "len")
+    return False
 
 
 def integer_bindings(fn: ast.FunctionDef, name: str) -> list[ast.expr]:
@@ -274,92 +294,37 @@ def detect_output_and_index_arrays(kir: KernelIR, helpers: Sequence[KernelIR] = 
       ``double *`` -- C rejects ``double`` subscripts.
     """
     name_to_arr = {a.name: a for a in kir.arrays}
-    written: set[str] = set()
-    index_arrays: set[str] = set()
-    # Indirect-index tracking: ``k = ip[i]`` records ip as the source of
-    # scalar ``k``; if ``k`` is later used inside any subscript index,
-    # ip is an index array (its values index another array), even though
-    # the use is one hop removed from the ``A[B[i]]`` direct form.
-    scalar_src: dict[str, str] = {}  # scalar name -> source array
-    scalars_used_as_index: set[str] = set()
+    scan = ArrayUseScan(set(name_to_arr))
+    scan.visit(kir.tree)
+    settle_helper_forwarding(helpers)
+    written = scan.written | (written_through_helpers(kir.tree, helpers) & set(name_to_arr))
+    index_arrays = set(scan.index_arrays)
+    # Promote any array feeding a scalar that is itself used as an index.
+    for scalar in scan.scalars_used_as_index:
+        src = scan.scalar_src.get(scalar)
+        if src is not None:
+            index_arrays.add(src)
 
-    def walk_(node) -> None:
-        if isinstance(node, (ast.Assign, ast.AugAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for t in targets:
-                if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name):
-                    if t.value.id in name_to_arr:
-                        written.add(t.value.id)
-                # ``data -= mean`` or ``A[:] = ...`` -- whole-array writes
-                # on a bare Name target also count as output.
-                elif isinstance(t, ast.Name) and t.id in name_to_arr:
-                    written.add(t.id)
-            # ``k = arr[...]`` -- scalar takes its value from a param array.
-            if (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and isinstance(node.value, ast.Subscript)
-                and isinstance(node.value.value, ast.Name)
-                and node.value.value.id in name_to_arr
-            ):
-                scalar_src[node.targets[0].id] = node.value.value.id
-        if isinstance(node, ast.Subscript):
-            sl = node.slice
-            elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
-            for e in elts:
-                # Subscript-as-index: ``A[B[i]]`` -> B is an index array.
-                if isinstance(e, ast.Subscript) and isinstance(e.value, ast.Name):
-                    if e.value.id in name_to_arr:
-                        index_arrays.add(e.value.id)
-                # Direct array index: ``u2[q, r, s]`` where q/r/s are ARRAY
-                # Names used as integer-index arrays (fft_3d fancy gather) ->
-                # each is an index array (must be int, not the float default).
-                # A boolean-mask Name goes through the mask rewriter earlier, so
-                # any array Name still appearing as a bare index here is integer.
-                if isinstance(e, ast.Name) and e.id in name_to_arr:
-                    index_arrays.add(e.id)
-                # Any bare Name appearing in the index expression (e.g.
-                # ``c[LEN_1D - k - 1]``) is a scalar used as an index.
-                for sub in ast.walk(e):
-                    if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
-                        scalars_used_as_index.add(sub.id)
-        # ``np.take(a, idx[, axis])`` -- ``idx`` (a param array) holds gather indices, so
-        # it is an index array (must be int), even though ``take`` is not yet expanded into
-        # the ``a[idx[..]]`` subscript form the direct detection above keys on.
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in ("np", "numpy")
-            and node.func.attr == "take"
-            and len(node.args) >= 2
-            and isinstance(node.args[1], ast.Name)
-            and node.args[1].id in name_to_arr
-        ):
-            index_arrays.add(node.args[1].id)
-        # ``np.ix_(a, b, c)`` -- each operand is an open-mesh index array (used
-        # to index another array), so a param operand must be integer, even
-        # though the ``A[ix_]`` gather / scatter is not expanded yet.
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in ("np", "numpy")
-            and node.func.attr == "ix_"
-        ):
-            for arg in node.args:
-                if isinstance(arg, ast.Name) and arg.id in name_to_arr:
-                    index_arrays.add(arg.id)
-        for child in ast.iter_child_nodes(node):
-            walk_(child)
+    for name in written:
+        name_to_arr[name].is_output = True  # type: ignore[misc]
+    for name in index_arrays:
+        a = name_to_arr[name]
+        # Respect an explicit integer dtype (declared via bench_info ``init.dtypes``, the
+        # authoritative source); only an array still at a float default is promoted. A declared
+        # bool array subscripting another is a MASK, not an index set: retyping it to int64 would
+        # lose that (``collect_bool_names`` reads the array dtype) and contradict the binding,
+        # which still says bool -- a 1-byte buffer read back as int64_t*.
+        dt = str(vars(a).get("dtype") or "")
+        if dtypes.is_integer(dt) or dt in ("bool", "bool_"):
+            continue
+        a.dtype = "int64"  # type: ignore[misc]
 
-    walk_(kir.tree)
 
-    # A helper that FORWARDS one of its own array params into another helper's output slot
-    # writes it too. Settle that first, or one level of indirection hides the write from the
-    # scope that owns the buffer. Bounded by the helper count: each round marks at least one
-    # more param or stops.
+def settle_helper_forwarding(helpers: Sequence[KernelIR]) -> None:
+    """A helper that FORWARDS one of its own array params into another helper's output slot writes it
+    too. Settled before the kernel's own writes are read, or one level of indirection hides the write
+    from the scope that owns the buffer. Bounded by the helper count: each round marks at least one
+    more param or stops."""
     for unused in range(len(helpers)):
         grew = False
         for helper in helpers:
@@ -370,31 +335,82 @@ def detect_output_and_index_arrays(kir: KernelIR, helpers: Sequence[KernelIR] = 
                     grew = True
         if not grew:
             break
-    written |= written_through_helpers(kir.tree, helpers) & set(name_to_arr)
 
-    # Promote any array feeding a scalar that is itself used as an index.
-    for scalar in scalars_used_as_index:
-        src = scalar_src.get(scalar)
-        if src is not None:
-            index_arrays.add(src)
 
-    for name in written:
-        name_to_arr[name].is_output = True  # type: ignore[misc]
-    for name in index_arrays:
-        a = name_to_arr[name]
-        # Respect an explicit integer dtype (declared via bench_info
-        # ``init.dtypes`` -- the authoritative source ported from the
-        # original ``dace.int32`` annotation). Only auto-promote arrays
-        # still at a float default, so the heuristic stays a safety net
-        # for undeclared kernels without overriding a declared width.
-        dt = str(vars(a).get("dtype") or "")
-        # A declared bool array subscripting another is a MASK, not an index set. Retyping it to
-        # int64 loses that (``collect_bool_names`` reads the array dtype, so the mask rewriter
-        # would then lower ``arr[mask] = v`` as a scatter through 0/1) and contradicts the
-        # binding, which still says bool -- a 1-byte buffer read back as int64_t*.
-        if dtypes.is_integer(dt) or dt in ("bool", "bool_"):
-            continue
-        a.dtype = "int64"  # type: ignore[misc]
+class ArrayUseScan:
+    """What a kernel body does with its parameter arrays: which it writes, which index another array,
+    and -- for indirect indexing -- which scalar takes its value from which array (``k = ip[i]``
+    makes ip an index array once ``k`` is used inside a subscript index)."""
+
+    def __init__(self, arrays: set[str]) -> None:
+        self.arrays = arrays
+        self.written: set[str] = set()
+        self.index_arrays: set[str] = set()
+        self.scalar_src: dict[str, str] = {}
+        self.scalars_used_as_index: set[str] = set()
+
+    def visit(self, node: ast.AST) -> None:
+        if isinstance(node, (ast.Assign, ast.AugAssign)):
+            self.note_assign(node)
+        if isinstance(node, ast.Subscript):
+            self.note_subscript(node)
+        if isinstance(node, ast.Call):
+            self.note_index_call(node)
+        for child in ast.iter_child_nodes(node):
+            self.visit(child)
+
+    def note_assign(self, node: ast.Assign | ast.AugAssign) -> None:
+        """A write through a Subscript base or to a bare array Name (``data -= mean``) marks the array
+        an output; ``k = arr[...]`` records the scalar's source array."""
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for t in targets:
+            if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name):
+                if t.value.id in self.arrays:
+                    self.written.add(t.value.id)
+            elif isinstance(t, ast.Name) and t.id in self.arrays:
+                self.written.add(t.id)
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Subscript)
+            and isinstance(node.value.value, ast.Name)
+            and node.value.value.id in self.arrays
+        ):
+            self.scalar_src[node.targets[0].id] = node.value.value.id
+
+    def note_subscript(self, node: ast.Subscript) -> None:
+        """``A[B[i]]`` and a direct array index ``u2[q, r, s]`` make B / q / r / s index arrays (a
+        boolean-mask Name has gone through the mask rewriter by now, so an array Name still here is
+        integer); every Name read inside an index expression is a scalar used as an index."""
+        sl = node.slice
+        elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
+        for e in elts:
+            if isinstance(e, ast.Subscript) and isinstance(e.value, ast.Name):
+                if e.value.id in self.arrays:
+                    self.index_arrays.add(e.value.id)
+            if isinstance(e, ast.Name) and e.id in self.arrays:
+                self.index_arrays.add(e.id)
+            for sub in ast.walk(e):
+                if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
+                    self.scalars_used_as_index.add(sub.id)
+
+    def note_index_call(self, node: ast.Call) -> None:
+        """``np.take(a, idx[, axis])`` and ``np.ix_(a, b, c)`` take index arrays before they are
+        expanded into the subscript forms :meth:`note_subscript` keys on."""
+        if not (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in ("np", "numpy")
+        ):
+            return
+        if node.func.attr == "take" and len(node.args) >= 2:
+            if isinstance(node.args[1], ast.Name) and node.args[1].id in self.arrays:
+                self.index_arrays.add(node.args[1].id)
+        if node.func.attr == "ix_":
+            for arg in node.args:
+                if isinstance(arg, ast.Name) and arg.id in self.arrays:
+                    self.index_arrays.add(arg.id)
 
 
 def promote_free_names_to_params(kir: KernelIR) -> None:
@@ -422,58 +438,7 @@ def promote_free_names_to_params(kir: KernelIR) -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             declared.add(node.func.id)
 
-    # Names assigned anywhere in the body are local variables, not params.
-    def names_in_target(tgt: ast.AST) -> list[str]:
-        """Collect every bare Name id appearing as an assignment target,
-        including inside a Tuple / Starred unpack
-        (``i_coord, j_coord = np.mgrid[...]``) and inside a Subscript
-        base (``a[i] = ...``). Without this, mgrid-style tuple unpacks
-        leak the locals into the free-name promotion as undeclared
-        parameters."""
-        if isinstance(tgt, ast.Name):
-            return [tgt.id]
-        if isinstance(tgt, ast.Tuple):
-            out = []
-            for e in tgt.elts:
-                out.extend(names_in_target(e))
-            return out
-        if isinstance(tgt, ast.Starred):
-            return names_in_target(tgt.value)
-        if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name):
-            return [tgt.value.id]
-        return []
-
-    for node in ast.walk(kir.tree):
-        if isinstance(node, ast.Assign):
-            for tgt in node.targets:
-                for nm in names_in_target(tgt):
-                    declared.add(nm)
-        elif isinstance(node, ast.AugAssign):
-            for nm in names_in_target(node.target):
-                declared.add(nm)
-        elif isinstance(node, ast.For):
-            for nm in names_in_target(node.target):
-                declared.add(nm)
-        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
-            # Comprehension loop vars are locals scoped to the comprehension,
-            # never free params (``[f(v) for v in ...]`` must not leak ``v``).
-            for gen in node.generators:
-                for nm in names_in_target(gen.target):
-                    declared.add(nm)
-        elif isinstance(node, ast.Lambda):
-            args = node.args
-            for arg in args.posonlyargs + args.args + args.kwonlyargs:
-                declared.add(arg.arg)
-            if args.vararg is not None:
-                declared.add(args.vararg.arg)
-            if args.kwarg is not None:
-                declared.add(args.kwarg.arg)
-        elif isinstance(node, ast.NamedExpr):
-            for nm in names_in_target(node.target):
-                declared.add(nm)
-        elif isinstance(node, ast.ExceptHandler):
-            if node.name is not None:
-                declared.add(node.name)
+    declared |= bound_names(kir.tree)
 
     free: list[str] = []
     seen: set[str] = set()
@@ -512,57 +477,7 @@ def fold_shape_aliases(kir: KernelIR) -> None:
     Only a name assigned EXACTLY ONCE, to an expression built entirely from
     in-scope symbols / params (not itself, not another local), is folded -- a
     reassigned counter is left alone, so no semantics change."""
-    IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-    in_scope = {s.name for s in kir.symbols} | {s.name for s in kir.scalars} | {a.name for a in kir.arrays}
-    # Dimension symbols (``N`` in ``a: (N,)``) are not yet promoted to the
-    # symbol list when this runs, but they ARE valid scope for an alias RHS --
-    # ``M = N`` is foldable because ``N`` names ``a``/``b``'s extent. Only
-    # INPUT arrays contribute genuine dim symbols; an OUTPUT shape may itself
-    # carry the alias (``H: (M + 1, N + 1)``) -- scanning it would re-add ``M``
-    # to scope and veto its own folding.
-    for arr in kir.arrays:
-        if vars(arr).get("is_output", False):
-            continue
-        for tok in arr.shape:
-            in_scope.update(IDENT.findall(str(tok)))
-    # Only names that actually appear in an array's shape tokens are dimension
-    # aliases worth folding -- this is what makes ``M`` (in ``H: (M+1, N+1)``)
-    # a candidate while excluding array-valued temps like edge_laplacian's
-    # ``flux = w * (x[src] - x[dst])`` (never a shape token), which must NOT be
-    # inlined into the body.
-    shape_idents: set[str] = set()
-    for arr in kir.arrays:
-        for tok in arr.shape:
-            shape_idents.update(IDENT.findall(str(tok)))
-    # Count assignments per name so only single-definition aliases qualify.
-    assign_count: dict[str, int] = {}
-    for node in ast.walk(kir.tree):
-        tgts = (
-            node.targets
-            if isinstance(node, ast.Assign)
-            else [node.target]
-            if isinstance(node, (ast.AugAssign, ast.AnnAssign))
-            else []
-        )
-        for t in tgts:
-            for nm in (n.id for n in ast.walk(t) if isinstance(n, ast.Name)):
-                assign_count[nm] = assign_count.get(nm, 0) + 1
-    aliases: dict[str, ast.expr] = {}
-    for node in ast.walk(kir.tree):
-        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
-            continue
-        tgt = node.targets[0]
-        if (
-            not isinstance(tgt, ast.Name)
-            or tgt.id in in_scope
-            or tgt.id not in shape_idents
-            or assign_count.get(tgt.id, 0) != 1
-        ):
-            continue
-        rhs_names = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
-        if tgt.id in rhs_names or not rhs_names <= in_scope:
-            continue
-        aliases[tgt.id] = node.value
+    aliases = foldable_shape_aliases(kir)
     if not aliases:
         return
 
@@ -590,6 +505,69 @@ def fold_shape_aliases(kir: KernelIR) -> None:
         new_shape = tuple(sub_(str(t)) for t in arr.shape)
         if new_shape != tuple(arr.shape):
             arr.shape = new_shape  # type: ignore[misc]
+
+
+def foldable_shape_aliases(kir: KernelIR) -> dict[str, ast.expr]:
+    """Each dimension alias :func:`fold_shape_aliases` may substitute: a name that appears in an
+    array's shape tokens, assigned EXACTLY ONCE to an expression over in-scope symbols / params only
+    (not itself, not another local)."""
+    in_scope = {s.name for s in kir.symbols} | {s.name for s in kir.scalars} | {a.name for a in kir.arrays}
+    # Dimension symbols (``N`` in ``a: (N,)``) are not yet promoted to the
+    # symbol list when this runs, but they ARE valid scope for an alias RHS --
+    # ``M = N`` is foldable because ``N`` names ``a``/``b``'s extent. Only
+    # INPUT arrays contribute genuine dim symbols; an OUTPUT shape may itself
+    # carry the alias (``H: (M + 1, N + 1)``) -- scanning it would re-add ``M``
+    # to scope and veto its own folding.
+    for arr in kir.arrays:
+        if vars(arr).get("is_output", False):
+            continue
+        for tok in arr.shape:
+            in_scope.update(IDENT_RE.findall(str(tok)))
+    # Only names that actually appear in an array's shape tokens are dimension
+    # aliases worth folding -- this is what makes ``M`` (in ``H: (M+1, N+1)``)
+    # a candidate while excluding array-valued temps like edge_laplacian's
+    # ``flux = w * (x[src] - x[dst])`` (never a shape token), which must NOT be
+    # inlined into the body.
+    shape_idents: set[str] = set()
+    for arr in kir.arrays:
+        for tok in arr.shape:
+            shape_idents.update(IDENT_RE.findall(str(tok)))
+    # Count assignments per name so only single-definition aliases qualify.
+    assign_count = assignment_counts(kir.tree)
+    aliases: dict[str, ast.expr] = {}
+    for node in ast.walk(kir.tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        tgt = node.targets[0]
+        if (
+            not isinstance(tgt, ast.Name)
+            or tgt.id in in_scope
+            or tgt.id not in shape_idents
+            or assign_count.get(tgt.id, 0) != 1
+        ):
+            continue
+        rhs_names = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
+        if tgt.id in rhs_names or not rhs_names <= in_scope:
+            continue
+        aliases[tgt.id] = node.value
+    return aliases
+
+
+def assignment_counts(tree: ast.AST) -> dict[str, int]:
+    """How many assignments (plain, augmented, annotated) bind each Name."""
+    assign_count: dict[str, int] = {}
+    for node in ast.walk(tree):
+        tgts = (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else [node.target]
+            if isinstance(node, (ast.AugAssign, ast.AnnAssign))
+            else []
+        )
+        for t in tgts:
+            for nm in (n.id for n in ast.walk(t) if isinstance(n, ast.Name)):
+                assign_count[nm] = assign_count.get(nm, 0) + 1
+    return assign_count
 
 
 def body_defined_locals(tree: ast.AST) -> set[str]:
@@ -625,7 +603,6 @@ def promote_shape_symbols_to_params(kir: KernelIR) -> None:
     The order preserves declaration order of the arrays so the param
     list looks natural (``LEN_1D, M, a, b``).
     """
-    IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
     declared = {s.name for s in kir.symbols}
     # Names that are scalars / arrays already in scope must NOT be
     # re-promoted as shape symbols (e.g. a buffer whose own name appears
@@ -661,7 +638,7 @@ def promote_shape_symbols_to_params(kir: KernelIR) -> None:
             # ``indptr`` bound ``NK + 1``) are promoted -- C tolerates
             # an undeclared bound via flat pointers, but Fortran renders
             # the explicit-shape array and needs the symbol in scope.
-            ident_iter = [tok] if tok.isidentifier() else IDENT.findall(str(tok))
+            ident_iter = [tok] if tok.isidentifier() else IDENT_RE.findall(str(tok))
             for sym in ident_iter:
                 if sym in in_scope or sym in seen:
                     continue
@@ -671,3 +648,42 @@ def promote_shape_symbols_to_params(kir: KernelIR) -> None:
         kir.symbols.insert(0, SymbolDesc(name=sym))
         if sym not in kir.input_args:
             kir.input_args.insert(0, sym)
+
+
+def target_names(tgt: ast.AST) -> list[str]:
+    """Every bare Name id appearing as an assignment target, including inside a Tuple / Starred
+    unpack (``i_coord, j_coord = np.mgrid[...]``) and a Subscript base (``a[i] = ...``)."""
+    if isinstance(tgt, ast.Name):
+        return [tgt.id]
+    if isinstance(tgt, ast.Tuple):
+        out = []
+        for e in tgt.elts:
+            out.extend(target_names(e))
+        return out
+    if isinstance(tgt, ast.Starred):
+        return target_names(tgt.value)
+    if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name):
+        return [tgt.value.id]
+    return []
+
+
+def bound_names(tree: ast.AST) -> set[str]:
+    """Names the body binds anywhere -- assignment / for / comprehension / walrus targets, lambda
+    parameters, exception names: local variables, never free parameters."""
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                bound.update(target_names(tgt))
+        elif isinstance(node, (ast.AugAssign, ast.For, ast.NamedExpr)):
+            bound.update(target_names(node.target))
+        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            for gen in node.generators:
+                bound.update(target_names(gen.target))
+        elif isinstance(node, ast.Lambda):
+            args = node.args
+            bound.update(arg.arg for arg in args.posonlyargs + args.args + args.kwonlyargs)
+            bound.update(arg.arg for arg in (args.vararg, args.kwarg) if arg is not None)
+        elif isinstance(node, ast.ExceptHandler) and node.name is not None:
+            bound.add(node.name)
+    return bound

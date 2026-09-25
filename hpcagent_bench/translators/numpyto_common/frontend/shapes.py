@@ -9,8 +9,9 @@ from hpcagent_bench.translators.numpyto_common.subscripts import is_newaxis
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import extent_tokens, name_value_pairs, shape_table
 from hpcagent_bench.translators.numpyto_common.frontend.body_rewrites import FoldTupleLocals
 from hpcagent_bench.translators.numpyto_common.frontend.initialize import SHAPE_FIRST_ARG, dtype_from_dtype_arg
-from hpcagent_bench.translators.numpyto_common.frontend.manifest import SHAPE_IDENT, parse_shape_expression
+from hpcagent_bench.translators.numpyto_common.frontend.manifest import parse_shape_expression
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import const_int, literal_axis
+from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 
 
 def shape_from_iter_extent(node: ast.AST, known: dict[str, str], route_calls: bool = False) -> str | None:
@@ -666,7 +667,7 @@ def fold_extent_locals(fn: ast.FunctionDef, arr_by: dict[str, ArrayDesc]) -> Non
     the name and its definition are interchangeable at every use. Anything rebound, augmented, or
     bound by a loop or a comprehension is left alone -- it is not that.
     """
-    symbols = {ident for a in arr_by.values() for tok in a.shape for ident in SHAPE_IDENT.findall(str(tok))}
+    symbols = {ident for a in arr_by.values() for tok in a.shape for ident in IDENT_RE.findall(str(tok))}
     if not symbols:
         return
     # Store context, not "a name somewhere in a target": ``row[i % nb0] += w`` writes ``row`` and

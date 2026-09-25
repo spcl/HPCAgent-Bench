@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from types import NotImplementedType
 from typing import Any
 
 from hpcagent_bench.translators.numpyto_common import dtypes
@@ -10,7 +11,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.constructors import MES
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import shape_exprs_equal
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     is_integer_expr,
-    iter_extent_of_,
+    iter_extent_of,
     extent_is_scalar,
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import slice_step_any, const_, const_or_name
@@ -159,6 +160,15 @@ def ix_call_args(value: ast.AST) -> list[ast.expr] | None:
     """The open-mesh index arrays of an ``np.ix_(a, b, c)`` call, else ``None``."""
     call = np_func_call(value, "ix_")
     return list(call.args) if call is not None else None
+
+
+#: Returned by a :class:`WholeArrayAssignRewriter` lowering step that does not apply to the
+#: statement (``None`` would delete it).
+UNCHANGED = NotImplemented
+
+#: A lowering step's answer: the replacement statement(s), None to delete the statement, or
+#: :data:`UNCHANGED`.
+type Lowered = ast.AST | list[ast.stmt] | None | NotImplementedType
 
 
 class WholeArrayAssignRewriter(ast.NodeTransformer):
@@ -357,6 +367,86 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             ]
         return out
 
+    def buffered_scatter(
+        self,
+        name: str,
+        lhs: ast.Subscript,
+        lhs_slice: ast.expr,
+        rhs: ast.expr,
+        op: ast.operator,
+        iters: list[str],
+        bounds: list[ast.expr],
+    ) -> list[ast.stmt]:
+        """numpy fancy ``A[idx] (op)= rhs``: gather the OLD values into a snapshot, then store."""
+
+        def loop_(body_stmt: ast.stmt) -> ast.stmt:
+            return nest_at_iters(body_stmt, iters, bounds)
+
+        # numpy fancy ``A[idx] += rhs`` is BUFFERED: it reads the OLD A[idx],
+        # applies the op against rhs, and scatters back with LAST-WRITE-WINS for
+        # a repeated index -- it does NOT accumulate (that is ``np.add.at``,
+        # routed elsewhere). Snapshot the gathered old values into a temp, then
+        # store, so a duplicate index matches numpy (a single in-place ``+=``
+        # loop would over-count). The snapshot is a rank-1 local of A's dtype.
+        gname = f"__scg{self._scatter_ctr}"
+        self._scatter_ctr += 1
+        # What numpy buffers is the whole written PLANE, so the snapshot carries one axis per
+        # result iter -- a ``:`` beside the index array (lulesh's ``normal[:, corners, 0] +=``)
+        # makes that a rank-2 read, and a rank-1 vector would fold the slice axis away.
+        self.alias_locals[gname] = tuple(ast.unparse(b) for b in bounds)
+        if name in self.local_dtypes:
+            self.local_dtypes[gname] = self.local_dtypes[name]
+
+        def g_index() -> ast.expr:
+            names = [ast.Name(id=i, ctx=ast.Load()) for i in iters]
+            return names[0] if len(names) == 1 else ast.Tuple(elts=names, ctx=ast.Load())
+
+        g_store = ast.Subscript(value=ast.Name(id=gname, ctx=ast.Load()), slice=g_index(), ctx=ast.Store())
+        g_load = ast.Subscript(value=ast.Name(id=gname, ctx=ast.Load()), slice=g_index(), ctx=ast.Load())
+        a_load = ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=copy.deepcopy(lhs_slice), ctx=ast.Load())
+        gather = loop_(ast.Assign(targets=[g_store], value=a_load))
+        store = loop_(ast.Assign(targets=[copy.deepcopy(lhs)], value=ast.BinOp(left=g_load, op=op, right=rhs)))
+        out = [gather, store]
+        return out
+
+    def scatter_plan(
+        self,
+        lead: list[ast.expr],
+        name: str,
+        slice_axes: list[int],
+        carriers: list[int],
+        idx_names: OrderedSet,
+        extent: str,
+        rhs_carries_index: bool,
+    ) -> tuple[list[ast.expr], list[tuple[str, ast.expr]]]:
+        """The fancy store's LHS subscript entries, and its ``(iter, bound)`` loops in numpy
+        RESULT-axis order. A sliced axis gets its own ``__scs<n>`` loop offset by its ``lower``; the
+        index arrays share ``__sc0``, opened only by a position that actually CARRIES one (a plain
+        scalar axis contributes no result axis). A single advanced position keeps its place in
+        numpy's result, so the iters follow subscript order -- unless the RHS carries the index
+        array too: the substitution consumes that result axis from it, so the shared iter leads and
+        the RHS's remaining axes right-align against the innermost iters."""
+        it = "__sc0"
+        new_lead: list[ast.expr] = []
+        plan: list[tuple[str, ast.expr]] = []
+        n_sliced = 0
+        for k, e in enumerate(lead):
+            if k in slice_axes:
+                ivar = f"__scs{n_sliced}"
+                n_sliced += 1
+                hi = e.upper if e.upper is not None else const_or_name(self.shape_table[name][k])
+                bound = hi if e.lower is None else ast.BinOp(left=hi, op=ast.Sub(), right=copy.deepcopy(e.lower))
+                pos: ast.expr = ast.Name(id=ivar, ctx=ast.Load())
+                if e.lower is not None:
+                    pos = ast.BinOp(left=pos, op=ast.Add(), right=copy.deepcopy(e.lower))
+                new_lead.append(pos)
+                plan.append((ivar, bound))
+            else:
+                new_lead.append(IndexArraysAtIter(idx_names, it).visit(copy.deepcopy(e)))
+                if k in carriers and it not in [i for i, unused in plan]:
+                    plan.insert(0 if rhs_carries_index else len(plan), (it, const_or_name(extent)))
+        return new_lead, plan
+
     def expand_fancy_scatter_store(self, target: ast.Subscript, value: ast.expr, op) -> list[ast.stmt]:
         """Lower a fancy-index scatter store ``A[idx, c] (op)= rhs`` where one or
         more lead components CONTAIN an INDEX ARRAY (``idx``, or an expression
@@ -391,44 +481,11 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             return []
         lead = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
         slice_axes = [k for k, e in enumerate(lead) if isinstance(e, ast.Slice)]
-
-        def plain_bound(e: ast.expr) -> bool:
-            """A unit-step slice with non-negative literal bounds -- the only kind this loop sizes."""
-            if slice_step_any(e) not in (None, 1):
-                return False
-            return not any(
-                isinstance(b, ast.Constant) and isinstance(b.value, int) and b.value < 0 for b in (e.lower, e.upper)
-            )
-
-        if any(not plain_bound(lead[k]) for k in slice_axes):
+        if any(not is_plain_unit_slice(lead[k]) for k in slice_axes):
             return []
         if slice_axes and len(self.shape_table.get(name, ())) < len(lead):
             return []  # a lead longer than the target's rank is not a subscript this can size
-        # Every Name referenced in ``lead`` AS A BARE ARRAY -- a whole position
-        # (``idx``) or one buried inside a BinOp/Mod expression (``(idx + m) %
-        # n``) -- that is itself a known 1-D index array. A repeat of the SAME
-        # name counts once (OrderedSet keeps the pick below deterministic). A
-        # Name that is already the BASE of a Subscript (``src[__sat1]``) is
-        # NOT collected: that is an ALREADY-scalarised element read (this
-        # rewriter's own prior output, or any other already-lowered gather),
-        # not a raw array still needing its own iteration -- re-treating it as
-        # one double-wraps it (``src[__sc0][__sat1]``) and corrupts the loop.
-        idx_names: OrderedSet = OrderedSet()
-
-        def collect_bare_arrays(node: ast.expr, is_subscript_base: bool) -> None:
-            if isinstance(node, ast.Name):
-                if not is_subscript_base and node.id != name and len(self.shape_table.get(node.id, ())) == 1:
-                    idx_names.add(node.id)
-                return
-            if isinstance(node, ast.Subscript):
-                collect_bare_arrays(node.value, True)
-                collect_bare_arrays(node.slice, False)
-                return
-            for child in ast.iter_child_nodes(node):
-                collect_bare_arrays(child, False)
-
-        for e in lead:
-            collect_bare_arrays(e, False)
+        idx_names = bare_index_arrays(lead, name, self.shape_table)
         if not idx_names:
             return []
         carriers = [
@@ -454,49 +511,8 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                 )
         extent = self.shape_table[idx_name0][0]
         it = "__sc0"
-
-        class IndexArraysAtIter(ast.NodeTransformer):
-            """Replace every occurrence of an index-array Name with ``name[it]``,
-            wherever it sits -- a whole lead position, or buried in arithmetic."""
-
-            def visit_Name(self, node: ast.Name) -> ast.AST:
-                if node.id in idx_names:
-                    return ast.Subscript(
-                        value=ast.Name(id=node.id, ctx=ast.Load()),
-                        slice=ast.Name(id=it, ctx=ast.Load()),
-                        ctx=ast.Load(),
-                    )
-                return node
-
-        new_lead: list[ast.expr] = []
         rhs_carries_index = any(isinstance(n, ast.Name) and n.id in idx_names for n in ast.walk(value))
-        # ``(iter, bound)`` in numpy RESULT-axis order; ``new_lead`` places each at its own axis.
-        plan: list[tuple[str, ast.expr]] = []
-        n_sliced = 0
-        for k, e in enumerate(lead):
-            if k in slice_axes:
-                ivar = f"__scs{n_sliced}"
-                n_sliced += 1
-                hi = e.upper if e.upper is not None else const_or_name(self.shape_table[name][k])
-                bound = hi if e.lower is None else ast.BinOp(left=hi, op=ast.Sub(), right=copy.deepcopy(e.lower))
-                pos: ast.expr = ast.Name(id=ivar, ctx=ast.Load())
-                if e.lower is not None:
-                    pos = ast.BinOp(left=pos, op=ast.Add(), right=copy.deepcopy(e.lower))
-                new_lead.append(pos)
-                plan.append((ivar, bound))
-            else:
-                new_lead.append(IndexArraysAtIter().visit(copy.deepcopy(e)))
-                # Only a position that actually CARRIES an index array opens the shared iter; a
-                # plain scalar axis (``A[idx, 0, :]``) contributes no result axis at all, and
-                # letting it open one puts the iters out of step with the RHS.
-                if k in carriers and it not in [i for i, unused in plan]:
-                    # A single advanced position keeps its place in numpy's result, so the iters
-                    # follow subscript order -- an RHS that does not mention the index array (a
-                    # broadcast column, lulesh's ``areaX[:, None]``) right-aligns against exactly
-                    # those axes. An RHS that DOES carry it is the exception: the substitution
-                    # above already consumed that result axis from it, so the shared iter has to
-                    # lead for the axes it has left to right-align against the innermost iters.
-                    plan.insert(0 if rhs_carries_index else len(plan), (it, const_or_name(extent)))
+        new_lead, plan = self.scatter_plan(lead, name, slice_axes, carriers, idx_names, extent, rhs_carries_index)
         iters = [i for i, unused in plan]
         bounds = [b for unused, b in plan]
         lhs_slice = new_lead[0] if len(new_lead) == 1 else ast.Tuple(elts=new_lead, ctx=ast.Load())
@@ -505,51 +521,17 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         # (``src[ia - 1, :]``) reaches emit with the array name still bare otherwise, which is
         # the invalid pointer arithmetic this rewriter exists to avoid; substituting first
         # leaves ``SubscriptifyNames`` an already-scalarised element read, which it keeps.
-        rhs = SubscriptifyNames(self.shape_table, iters).visit(IndexArraysAtIter().visit(copy.deepcopy(value)))
-
-        def loop_(body_stmt: ast.stmt) -> ast.stmt:
-            for ivar, bound in zip(reversed(iters), reversed(bounds)):
-                body_stmt = ast.For(
-                    target=ast.Name(id=ivar, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[copy.deepcopy(bound)], keywords=[]),
-                    body=[body_stmt],
-                    orelse=[],
-                )
-            return body_stmt
+        rhs = SubscriptifyNames(self.shape_table, iters).visit(
+            IndexArraysAtIter(idx_names, it).visit(copy.deepcopy(value))
+        )
 
         if op is None:
             # Plain fancy store ``A[idx, c] = rhs`` -- a single per-element loop.
             # Sequential last-write-wins on a repeated index equals numpy's
             # buffered fancy assignment, so no snapshot is needed.
-            out: list[ast.stmt] = [loop_(ast.Assign(targets=[lhs], value=rhs))]
+            out: list[ast.stmt] = [nest_at_iters(ast.Assign(targets=[lhs], value=rhs), iters, bounds)]
         else:
-            # numpy fancy ``A[idx] += rhs`` is BUFFERED: it reads the OLD A[idx],
-            # applies the op against rhs, and scatters back with LAST-WRITE-WINS for
-            # a repeated index -- it does NOT accumulate (that is ``np.add.at``,
-            # routed elsewhere). Snapshot the gathered old values into a temp, then
-            # store, so a duplicate index matches numpy (a single in-place ``+=``
-            # loop would over-count). The snapshot is a rank-1 local of A's dtype.
-            gname = f"__scg{self._scatter_ctr}"
-            self._scatter_ctr += 1
-            # What numpy buffers is the whole written PLANE, so the snapshot carries one axis per
-            # result iter -- a ``:`` beside the index array (lulesh's ``normal[:, corners, 0] +=``)
-            # makes that a rank-2 read, and a rank-1 vector would fold the slice axis away.
-            self.alias_locals[gname] = tuple(ast.unparse(b) for b in bounds)
-            if name in self.local_dtypes:
-                self.local_dtypes[gname] = self.local_dtypes[name]
-
-            def g_index() -> ast.expr:
-                names = [ast.Name(id=i, ctx=ast.Load()) for i in iters]
-                return names[0] if len(names) == 1 else ast.Tuple(elts=names, ctx=ast.Load())
-
-            g_store = ast.Subscript(value=ast.Name(id=gname, ctx=ast.Load()), slice=g_index(), ctx=ast.Store())
-            g_load = ast.Subscript(value=ast.Name(id=gname, ctx=ast.Load()), slice=g_index(), ctx=ast.Load())
-            a_load = ast.Subscript(
-                value=ast.Name(id=name, ctx=ast.Load()), slice=copy.deepcopy(lhs_slice), ctx=ast.Load()
-            )
-            gather = loop_(ast.Assign(targets=[g_store], value=a_load))
-            store = loop_(ast.Assign(targets=[copy.deepcopy(lhs)], value=ast.BinOp(left=g_load, op=op, right=rhs)))
-            out = [gather, store]
+            out = self.buffered_scatter(name, lhs, lhs_slice, rhs, op, iters, bounds)
         for s in out:
             ast.fix_missing_locations(s)
         return out
@@ -569,7 +551,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         or not rank-1."""
         dims: list[ast.expr] = []
         for op in ops:
-            ext = iter_extent_of_(op, self.shape_table)
+            ext = iter_extent_of(op, self.shape_table)
             if ext is None or len(ext) != 1:
                 return None
             dims.append(ext[0])
@@ -737,6 +719,21 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             if meshed is not None:
                 return meshed
             return node
+        lowered = self.lower_indexed_forms(node, target)
+        if lowered is not UNCHANGED:
+            return lowered
+        self.refresh_reassigned_shape(node, target)
+        lowered = self.lower_subscript_stores(node, target)
+        if lowered is not UNCHANGED:
+            return lowered
+        self.track_alias_and_dtype(node, target)
+        self.infer_whole_array_result(node, target)
+        lowered = self.lower_whole_array_name(node, target)
+        return node if lowered is UNCHANGED else lowered
+
+    def lower_indexed_forms(self, node: ast.Assign, target: ast.expr) -> Lowered:
+        """Open-mesh ``np.ix_`` bindings (dropped: None), gathers and scatter stores, then fancy-index
+        scatter stores; :data:`UNCHANGED` when none applies."""
         # ``grid = np.ix_(a, b, c)`` open-mesh index binding: record the operands
         # and drop the statement (resolved at each ``A[grid]`` use site below).
         if isinstance(target, ast.Name):
@@ -769,6 +766,10 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             scattered = self.expand_fancy_scatter_store(target, node.value, None)
             if scattered:
                 return scattered
+        return UNCHANGED
+
+    def refresh_reassigned_shape(self, node: ast.Assign, target: ast.expr) -> None:
+        """Per-statement shape of a reassigned local, so a later statement sees its current shape."""
         # Per-statement shape table update for reassigned locals.
         # Without this, resnet's ``x = (padded - mean) / sqrt(std + eps)``
         # (after batchnorm inlining) sees ``x`` with its harvest-time
@@ -785,11 +786,15 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             ext = (
                 None
                 if is_scalar_helper_call(node.value, self.scalar_helpers)
-                else iter_extent_of_(node.value, self.shape_table)
+                else iter_extent_of(node.value, self.shape_table)
             )
             # All-size-1 broadcast -> a scalar local, not a ``T x[1]`` array (see extent_is_scalar).
             if ext is not None and not extent_is_scalar(ext):
                 self.shape_table[target.id] = tuple(ast.unparse(e) for e in ext)
+
+    def lower_subscript_stores(self, node: ast.Assign, target: ast.expr) -> Lowered:
+        """Whole-array (``C[:] = expr``) and partial-subscript (``A[i] = B``, ``A[b] = expr``) stores as
+        per-element loops; :data:`UNCHANGED` when none applies."""
         # ``C[:] = expr`` on a multi-D array means whole-array elementwise
         # assignment in numpy; lower to a per-element loop that walks the
         # full extent and subscripts every Name expression on the RHS.
@@ -851,11 +856,15 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                 and not any(isinstance(e, ast.Name) and self.shape_table.get(e.id) for e in lead)
             ):
                 n_trailing = len(shape) - len(lead)
-                rhs_ext = iter_extent_of_(node.value, self.shape_table)
+                rhs_ext = iter_extent_of(node.value, self.shape_table)
                 if n_trailing > 0 and rhs_ext is not None and len(rhs_ext) == n_trailing:
                     expanded = self.expand_partial_subscript(target, node.value, None)
                     if expanded:
                         return expanded
+        return UNCHANGED
+
+    def track_alias_and_dtype(self, node: ast.Assign, target: ast.expr) -> None:
+        """Name = Name aliases in source order, and the dtype a Name target inherits from its RHS."""
         # Track Name = Name aliases in source order so a reassigned ``x``
         # gets the shape of whichever RHS preceded each use. If the LHS
         # is a fresh local (not already an array), record it so the
@@ -890,6 +899,22 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             ctag = ctor_complex_tag(node.value, self.local_dtypes)
             if ctag is not None:
                 self.local_dtypes[target.id] = ctag
+        self.inherit_value_preserving_dtype(node, target)
+        # ``X = <scalar complex arithmetic>`` (``ephi = apq / m``) -- a scalar
+        # BinOp/UnaryOp over complex operands. The array-BinOp branch below only
+        # fires when the value is a whole-array expr (``iter_extent_of`` non-None);
+        # a scalar complex temp needs its own tag or the emit declares it real.
+        if (
+            isinstance(target, ast.Name)
+            and target.id not in self.local_dtypes
+            and isinstance(node.value, (ast.BinOp, ast.UnaryOp))
+            and scalar_expr_complex(node.value, self.local_dtypes)
+        ):
+            self.local_dtypes[target.id] = "complex128"
+
+    def inherit_value_preserving_dtype(self, node: ast.Assign, target: ast.expr) -> None:
+        """A complex dtype carried through a call that rearranges or selects values without changing
+        what a value IS."""
         # ``X = Y.copy()`` / ``np.copy(Y)`` / ``np.ascontiguousarray(Y)`` -- inherit
         # the source's (complex) dtype (the Jacobi copies its working matrix).
         #
@@ -921,27 +946,19 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                         break
             if dt and dt.startswith("complex"):
                 self.local_dtypes[target.id] = dt
-        # ``X = <scalar complex arithmetic>`` (``ephi = apq / m``) -- a scalar
-        # BinOp/UnaryOp over complex operands. The array-BinOp branch below only
-        # fires when the value is a whole-array expr (``iter_extent_of_`` non-None);
-        # a scalar complex temp needs its own tag or the emit declares it real.
-        if (
-            isinstance(target, ast.Name)
-            and target.id not in self.local_dtypes
-            and isinstance(node.value, (ast.BinOp, ast.UnaryOp))
-            and scalar_expr_complex(node.value, self.local_dtypes)
-        ):
-            self.local_dtypes[target.id] = "complex128"
+
+    def infer_whole_array_result(self, node: ast.Assign, target: ast.expr) -> None:
+        """Shape and dtype of a Name bound to a whole-array expression."""
         # ``x = BinOp(array, array)`` where ``x`` is a Name: infer
         # x's shape from the broadcast extent of the RHS and treat as
-        # whole-array assignment. ``iter_extent_of_`` returns ``None``
+        # whole-array assignment. ``iter_extent_of`` returns ``None``
         # for purely-scalar RHS expressions like
         # ``__inl_H_out = x.shape[1] - K + 1`` so they are not
         # misclassified as arrays.
         if isinstance(target, ast.Name) and isinstance(
             node.value, (ast.BinOp, ast.UnaryOp, ast.IfExp, ast.Compare, ast.BoolOp)
         ):
-            ext = iter_extent_of_(node.value, self.shape_table)
+            ext = iter_extent_of(node.value, self.shape_table)
             # An all-size-1 broadcast (``t = (a[i] > x)`` with ``x`` shape ``(1,)``) is a SCALAR, not a
             # ``T t[1]`` array: numpyto reads size-1 arrays element-wise as ``x[0]``, so registering ``t`` as
             # an array here desyncs its scalar declaration (from ``t = 0`` / ``if t`` / ``out[0] = t``) from
@@ -979,6 +996,10 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                             node.value, self.local_dtypes, set(self.shape_table)
                         ):
                             self.local_dtypes[target.id] = "int64"
+
+    def lower_whole_array_name(self, node: ast.Assign, target: ast.expr) -> Lowered:
+        """A Name of known shape assigned a same-shape array expression, lowered per element;
+        :data:`UNCHANGED` when it is not."""
         if isinstance(target, ast.Name) and target.id in self.shape_table:
             if isinstance(node.value, ast.Name) and self.shape_table.get(node.value.id) == self.shape_table[target.id]:
                 expanded = self.expand_(target, node.value, None)
@@ -1034,7 +1055,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                     expanded = self.expand_(target, node.value, None)
                     if expanded:
                         return expanded
-        return node
+        return UNCHANGED
 
     def refuse_boolean_gather(self, value: ast.expr) -> None:
         """Refuse ``arr[m]`` where ``m`` is a proven BOOLEAN array.
@@ -1102,17 +1123,17 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                     has_array = True
                     continue
                 return False
-        if has_array:
-            return True
-        # An expression built ONLY from SLICES (the vectorised stencils'
-        # ``padded[R-r:R+N-r, ...] + padded[R+r:R+N+r, ...]``) leaves no bare array Name to
-        # constrain -- every one is a Subscript value, skipped above -- so read the extent off the
-        # slices themselves rather than decline the whole-array assignment this rewriter exists
-        # to lower.
+        return has_array or self.slices_fill(expr, target_norm)
+
+    def slices_fill(self, expr: ast.AST, target_norm: tuple[str, ...]) -> bool:
+        """An expression built ONLY from SLICES (``padded[R-r:R+N-r, ...] + padded[R+r:R+N+r, ...]``)
+        leaves no bare array Name to constrain, so the extent is read off the slices themselves:
+        True when there is one and every one matches the target."""
+        has_array = False
         for sub in ast.walk(expr):
             if not (isinstance(sub, ast.Subscript) and any(isinstance(e, ast.Slice) for e in slice_dims(sub))):
                 continue
-            extent = iter_extent_of_(sub, self.shape_table)
+            extent = iter_extent_of(sub, self.shape_table)
             if extent is None:
                 return False
             extent_norm = self.norm_(tuple(ast.unparse(e) for e in extent))
@@ -1222,3 +1243,65 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                 )
             ]
         return out
+
+
+def is_plain_unit_slice(e: ast.Slice) -> bool:
+    """A unit-step slice with non-negative literal bounds -- the only kind a fancy-store loop sizes."""
+    if slice_step_any(e) not in (None, 1):
+        return False
+    return not any(isinstance(b, ast.Constant) and isinstance(b.value, int) and b.value < 0 for b in (e.lower, e.upper))
+
+
+def bare_index_arrays(lead: list[ast.expr], name: str, shape_table: dict[str, tuple[str, ...]]) -> OrderedSet:
+    """Every Name referenced in ``lead`` AS A BARE ARRAY -- a whole position (``idx``) or one buried
+    inside a BinOp/Mod expression (``(idx + m) % n``) -- that is itself a known 1-D index array, once
+    each. A Name that is already the BASE of a Subscript (``src[__sat1]``) is an ALREADY-scalarised
+    element read, not a raw array still needing its own iteration; re-treating it as one would
+    double-wrap it (``src[__sc0][__sat1]``)."""
+    idx_names: OrderedSet = OrderedSet()
+
+    def collect(node: ast.expr, is_subscript_base: bool) -> None:
+        if isinstance(node, ast.Name):
+            if not is_subscript_base and node.id != name and len(shape_table.get(node.id, ())) == 1:
+                idx_names.add(node.id)
+            return
+        if isinstance(node, ast.Subscript):
+            collect(node.value, True)
+            collect(node.slice, False)
+            return
+        for child in ast.iter_child_nodes(node):
+            collect(child, False)
+
+    for e in lead:
+        collect(e, False)
+    return idx_names
+
+
+class IndexArraysAtIter(ast.NodeTransformer):
+    """Replace every occurrence of an index-array Name with ``name[it]``, wherever it sits -- a whole
+    lead position, or buried in arithmetic."""
+
+    def __init__(self, idx_names: OrderedSet, it: str) -> None:
+        self.idx_names = idx_names
+        self.it = it
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        if node.id in self.idx_names:
+            return ast.Subscript(
+                value=ast.Name(id=node.id, ctx=ast.Load()),
+                slice=ast.Name(id=self.it, ctx=ast.Load()),
+                ctx=ast.Load(),
+            )
+        return node
+
+
+def nest_at_iters(body_stmt: ast.stmt, iters: list[str], bounds: list[ast.expr]) -> ast.stmt:
+    """``body_stmt`` in ``for iter in range(bound)`` loops, the first iter outermost."""
+    for ivar, bound in zip(reversed(iters), reversed(bounds)):
+        body_stmt = ast.For(
+            target=ast.Name(id=ivar, ctx=ast.Store()),
+            iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[copy.deepcopy(bound)], keywords=[]),
+            body=[body_stmt],
+            orelse=[],
+        )
+    return body_stmt

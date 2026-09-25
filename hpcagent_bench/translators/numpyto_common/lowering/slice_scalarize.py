@@ -5,7 +5,7 @@ import copy
 from typing import Any
 from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_, extent_is_scalar
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of, extent_is_scalar
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     slice_step_any,
     step_is_negative,
@@ -156,19 +156,19 @@ class SliceToScalarRewriter(ast.NodeTransformer):
             return len(self.array_shapes.get(d.id) or ())
         if isinstance(d, ast.Slice) or is_newaxis(d):
             return 0
-        ext = iter_extent_of_(d, self.array_shapes)
+        ext = iter_extent_of(d, self.array_shapes)
         return len(ext) if ext is not None and not extent_is_scalar(ext) else 0
 
     def advanced_extent(self, d: ast.AST) -> Sequence[str]:
         """The result extent an advanced-index dim contributes -- the shape :meth:`advanced_rank`
         counted, as shape TOKENS. Its axis lengths decide which of them broadcast (a size-1 axis
         pins to 0), and the caller makes that decision by comparing the token to ``"1"``.
-        ``iter_extent_of_`` hands back AST nodes, whose ``str()`` is the object repr, so no axis
+        ``iter_extent_of`` hands back AST nodes, whose ``str()`` is the object repr, so no axis
         ever compared equal to ``"1"`` and a broadcasting operand consumed a full iter instead.
         """
         if isinstance(d, ast.Name):
             return self.array_shapes.get(d.id) or ()
-        ext = iter_extent_of_(d, self.array_shapes)
+        ext = iter_extent_of(d, self.array_shapes)
         return tuple(ast.unparse(e) for e in ext) if ext else ()
 
     def bind_gather_operand(self, d: ast.AST, giters: list[ast.AST]) -> ast.AST:
@@ -248,35 +248,10 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         return binop(iv, ast.Sub(), copy.deepcopy(start))
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
-        # Pure broadcast-reshape on a NON-Name value (a BinOp / Call result):
-        # ``(q_nb[:, None, :] * fs)[:, :, :, None]`` (lavamd). The slice is only
-        # ``:`` and ``np.newaxis``; recursively scalarise the inner expression
-        # against just the iters mapped to the ``:`` axes (each newaxis adds a
-        # result axis with no source axis). Handled BEFORE generic_visit so the
-        # inner expression is scalarised with the correct (newaxis-aware) iter
-        # mapping rather than the raw right-aligned one.
         if not isinstance(node.value, ast.Name):
-            sl0 = node.slice
-            elts0 = list(sl0.elts) if isinstance(sl0, ast.Tuple) else [sl0]
-            full_ = lambda e: isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
-            newax = lambda e: isinstance(e, ast.Constant) and e.value is None
-            if elts0 and all(full_(e) or newax(e) for e in elts0) and any(full_(e) for e in elts0):
-                lhs_slice_iters = [
-                    (iv, rng[0])
-                    for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
-                    if isinstance(dim, ast.Slice) and iv is not None
-                ]
-                align = max(0, len(lhs_slice_iters) - len(elts0))
-                if len(elts0) <= len(lhs_slice_iters):
-                    sub_iters = [lhs_slice_iters[align + pos] for pos, e in enumerate(elts0) if full_(e)]
-                    sub = SliceToScalarRewriter(
-                        self.array_shapes,
-                        [iv for iv, unused in sub_iters],
-                        [(lo, lo) for unused, lo in sub_iters],
-                        None,
-                        [ast.Slice(lower=None, upper=None, step=None) for unused in sub_iters],
-                    )
-                    return sub.visit(copy.deepcopy(node.value))
+            reshaped = self.computed_base_reshape(node)
+            if reshaped is not None:
+                return reshaped
             merged = self.merge_view_gather(node)
             if merged is not None:
                 return merged
@@ -307,100 +282,156 @@ class SliceToScalarRewriter(ast.NodeTransformer):
             node.slice = restored[0] if len(restored) == 1 else ast.Tuple(elts=restored, ctx=ast.Load())
         dims = slice_dims(node)
         if not any(isinstance(d, ast.Slice) for d in dims):
-            # No explicit ``:`` slice, but a PARTIAL scalar index on a
-            # higher-rank array (``dH[a, b, j]`` on rank-5 dH) leaves the
-            # trailing axes implicit: numpy reads ``dH[a, b, j, :, :]``.
-            # Pad those residual axes with the trailing LHS slice iters so
-            # the read spans every source axis
-            # (scattering_self_energies' ``dHD[si0,si1] = dH[a,b,j]*D``).
-            # A full index (num indices == rank) needs no padding.
-            name = name_of_subscript(node)
-            source_shape = self.array_shapes.get(name) if name else None
-            # Fancy gather: a dim that is an index-array Name (its own shape is
-            # in the table) gathers along that source axis. ``momentum[nb]`` on
-            # (ncells, 3) -> ``momentum[nb[i], j]`` (cfd / lavamd). Several such
-            # index arrays adjacent to each other (no Slice divides ``dims``, or
-            # the pre-check above would have skipped this branch) BROADCAST into
-            # ONE shared block of result axes -- ``A[idx, lev, blk]`` all rank-3
-            # broadcasts to rank 3, not the sum (9); the source's remaining
-            # trailing axes consume the rest.
-            # An index array SLICED down to the gathered rank (icon_gather's
-            # ``A[nbr_idx[:, :, n], jk, nbr_blk[:, :, n]]``) is the same advanced index as a bare
-            # Name -- gating on the Name spelling alone dropped it through to the fully-scalar
-            # branch below, which left the ``:`` for the expression emitter to reject.
-            if source_shape is not None and any(self.advanced_rank(d) >= 1 for d in dims):
-                lhs_pairs = [
-                    (iv, rng[0])
-                    for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
-                    if isinstance(dim, ast.Slice) and iv is not None
-                ]
-                lhs_iters = [iv for iv, unused in lhs_pairs]
-                lhs_starts = [st for unused, st in lhs_pairs]
-                run_rank = max((self.advanced_rank(d) for d in dims), default=0)
-                kept, group_pos, result_rank, n_trailing = slice_free_gather_layout(dims, run_rank, len(source_shape))
-                if result_rank <= len(lhs_iters):
-                    group_pos += len(lhs_iters) - result_rank
-                    pos = len(lhs_iters) - n_trailing
-                    new_elts: list[ast.AST] = []
-                    for axis, d in enumerate(kept):
-                        r = self.advanced_rank(d)
-                        if r >= 1:
-                            own_shape = self.advanced_extent(d)
-                            # Right-align this operand's OWN rank within the shared
-                            # broadcast block (numpy right-alignment); a size-1 own
-                            # axis broadcasts -- pin it to 0 instead of the shared
-                            # iter, which a higher-rank sibling may run past 1.
-                            base = group_pos + (run_rank - r)
-                            # The gather INDEX is the LOCAL result position, so read
-                            # it at ``iter - lhs_start`` -- a slice assignment into a
-                            # non-zero-start destination (vexx_k noncolin
-                            # ``big_result[ip*n:ip*n+n] -= rg[nlg]``, ip=1) must read
-                            # ``nlg[si0 - ip*n]``, not ``nlg[si0]`` (which runs off
-                            # the length-n index array).
-                            giters = [
-                                const_(0)
-                                if str(own_shape[k]).strip() == "1"
-                                else self.iter_minus_start(lhs_iters[base + k], lhs_starts[base + k])
-                                for k in range(r)
-                            ]
-                            new_elts.append(self.bind_gather_operand(d, giters))
-                        else:
-                            new_elts.append(self.resolve_scalar_index(d, name, axis))
-                    for unused in range(max(0, n_trailing)):
-                        new_elts.append(self.iter_minus_start(lhs_iters[pos], lhs_starts[pos]))
-                        pos += 1
-                    slot = new_elts[0] if len(new_elts) == 1 else ast.Tuple(elts=new_elts, ctx=ast.Load())
-                    return ast.Subscript(value=node.value, slice=slot, ctx=node.ctx)
-            if (
-                source_shape is not None
-                and len(dims) < len(source_shape)
-                and not any(isinstance(d, ast.Constant) and d.value is None for d in dims)
-            ):
-                lhs_pairs = [
-                    (iv, rng[0])
-                    for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
-                    if isinstance(dim, ast.Slice) and iv is not None
-                ]
-                n_trailing = len(source_shape) - len(dims)
-                if 0 < n_trailing <= len(lhs_pairs):
-                    # The implicit trailing source axes read at the LOCAL slice
-                    # position ``iter - lhs_start`` -- a partial-scalar read
-                    # (``out[k:k+m] = dH[a, b]``) into a NON-zero-start destination
-                    # must span the source's length-``m`` trailing axis from 0, not
-                    # from ``k`` (the sibling gather branch applies the same offset).
-                    pad = [self.iter_minus_start(iv, st) for iv, st in lhs_pairs[-n_trailing:]]
-                    new_slice = ast.Tuple(elts=list(dims) + pad, ctx=ast.Load())
-                    return ast.Subscript(value=node.value, slice=new_slice, ctx=node.ctx)
-            # A FULLY scalar-indexed read (``w_dist[-1]``) is a scalar element:
-            # resolve any negative index against the axis length (C / Fortran
-            # have no negative indexing) and keep it -- the stencil_*_vc
-            # last-weight read inside a slice-fused statement.
-            if source_shape is not None and len(dims) == len(source_shape):
-                resolved = [self.resolve_scalar_index(d, name, axis) for axis, d in enumerate(dims)]
-                if any(r is not d for r, d in zip(resolved, dims)):
-                    slot = resolved[0] if len(resolved) == 1 else ast.Tuple(elts=resolved, ctx=ast.Load())
-                    return ast.Subscript(value=node.value, slice=slot, ctx=node.ctx)
-            return node
+            return self.slice_free_read(node, dims)
+        return self.sliced_read(node, dims)
+
+    def computed_base_reshape(self, node: ast.Subscript) -> ast.AST | None:
+        """Pure broadcast-reshape on a NON-Name value (a BinOp / Call result):
+        ``(q_nb[:, None, :] * fs)[:, :, :, None]``. The slice is only ``:`` and ``np.newaxis``; the
+        inner expression is scalarised against just the iters mapped to the ``:`` axes (each newaxis
+        adds a result axis with no source axis), BEFORE generic_visit, so the inner expression gets
+        the newaxis-aware iter mapping rather than the raw right-aligned one."""
+        sl0 = node.slice
+        elts0 = list(sl0.elts) if isinstance(sl0, ast.Tuple) else [sl0]
+        full_ = lambda e: isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
+        newax = lambda e: isinstance(e, ast.Constant) and e.value is None
+        if elts0 and all(full_(e) or newax(e) for e in elts0) and any(full_(e) for e in elts0):
+            lhs_slice_iters = [
+                (iv, rng[0])
+                for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
+                if isinstance(dim, ast.Slice) and iv is not None
+            ]
+            align = max(0, len(lhs_slice_iters) - len(elts0))
+            if len(elts0) <= len(lhs_slice_iters):
+                sub_iters = [lhs_slice_iters[align + pos] for pos, e in enumerate(elts0) if full_(e)]
+                sub = SliceToScalarRewriter(
+                    self.array_shapes,
+                    [iv for iv, unused in sub_iters],
+                    [(lo, lo) for unused, lo in sub_iters],
+                    None,
+                    [ast.Slice(lower=None, upper=None, step=None) for unused in sub_iters],
+                )
+                return sub.visit(copy.deepcopy(node.value))
+        return None
+
+    def slice_free_read(self, node: ast.Subscript, dims: list[ast.AST]) -> ast.AST:
+        """A subscript with no explicit ``:``: an advanced-index gather (:meth:`slice_free_gather`), a
+        PARTIAL scalar index on a higher-rank array (``dH[a, b, j]`` on rank-5 dH reads ``dH[a, b, j,
+        :, :]``, so the residual axes take the trailing LHS slice iters at the LOCAL position ``iter -
+        lhs_start``), or a FULLY scalar-indexed element read (``w_dist[-1]``) with negative indices
+        resolved (C / Fortran have none)."""
+        # No explicit ``:`` slice, but a PARTIAL scalar index on a
+        # higher-rank array (``dH[a, b, j]`` on rank-5 dH) leaves the
+        # trailing axes implicit: numpy reads ``dH[a, b, j, :, :]``.
+        # Pad those residual axes with the trailing LHS slice iters so
+        # the read spans every source axis
+        # (scattering_self_energies' ``dHD[si0,si1] = dH[a,b,j]*D``).
+        # A full index (num indices == rank) needs no padding.
+        name = name_of_subscript(node)
+        source_shape = self.array_shapes.get(name) if name else None
+        # Fancy gather: a dim that is an index-array Name (its own shape is
+        # in the table) gathers along that source axis. ``momentum[nb]`` on
+        # (ncells, 3) -> ``momentum[nb[i], j]`` (cfd / lavamd). Several such
+        # index arrays adjacent to each other (no Slice divides ``dims``, or
+        # the pre-check above would have skipped this branch) BROADCAST into
+        # ONE shared block of result axes -- ``A[idx, lev, blk]`` all rank-3
+        # broadcasts to rank 3, not the sum (9); the source's remaining
+        # trailing axes consume the rest.
+        # An index array SLICED down to the gathered rank (icon_gather's
+        # ``A[nbr_idx[:, :, n], jk, nbr_blk[:, :, n]]``) is the same advanced index as a bare
+        # Name -- gating on the Name spelling alone dropped it through to the fully-scalar
+        # branch below, which left the ``:`` for the expression emitter to reject.
+        if source_shape is not None and any(self.advanced_rank(d) >= 1 for d in dims):
+            gathered = self.slice_free_gather(node, dims, name, source_shape)
+            if gathered is not None:
+                return gathered
+        if (
+            source_shape is not None
+            and len(dims) < len(source_shape)
+            and not any(isinstance(d, ast.Constant) and d.value is None for d in dims)
+        ):
+            lhs_pairs = [
+                (iv, rng[0])
+                for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
+                if isinstance(dim, ast.Slice) and iv is not None
+            ]
+            n_trailing = len(source_shape) - len(dims)
+            if 0 < n_trailing <= len(lhs_pairs):
+                # The implicit trailing source axes read at the LOCAL slice
+                # position ``iter - lhs_start`` -- a partial-scalar read
+                # (``out[k:k+m] = dH[a, b]``) into a NON-zero-start destination
+                # must span the source's length-``m`` trailing axis from 0, not
+                # from ``k`` (the sibling gather branch applies the same offset).
+                pad = [self.iter_minus_start(iv, st) for iv, st in lhs_pairs[-n_trailing:]]
+                new_slice = ast.Tuple(elts=list(dims) + pad, ctx=ast.Load())
+                return ast.Subscript(value=node.value, slice=new_slice, ctx=node.ctx)
+        # A FULLY scalar-indexed read (``w_dist[-1]``) is a scalar element:
+        # resolve any negative index against the axis length (C / Fortran
+        # have no negative indexing) and keep it -- the stencil_*_vc
+        # last-weight read inside a slice-fused statement.
+        if source_shape is not None and len(dims) == len(source_shape):
+            resolved = [self.resolve_scalar_index(d, name, axis) for axis, d in enumerate(dims)]
+            if any(r is not d for r, d in zip(resolved, dims)):
+                slot = resolved[0] if len(resolved) == 1 else ast.Tuple(elts=resolved, ctx=ast.Load())
+                return ast.Subscript(value=node.value, slice=slot, ctx=node.ctx)
+        return node
+
+    def slice_free_gather(
+        self, node: ast.Subscript, dims: list[ast.AST], name: str, source_shape: tuple[str, ...]
+    ) -> ast.Subscript | None:
+        """Fancy gather along the source axes the index arrays sit on (``momentum[nb]`` on (ncells, 3) ->
+        ``momentum[nb[i], j]``). Adjacent index arrays BROADCAST into ONE shared block of result
+        axes (``A[idx, lev, blk]`` all rank 3 is rank 3, not 9), each right-aligning its OWN rank in
+        the block with a size-1 own axis pinned to 0; the gather index reads the LOCAL result
+        position ``iter - lhs_start`` so a non-zero-start destination stays within the index array.
+        An index array SLICED down to the gathered rank is the same advanced index as a bare Name.
+        None when the result does not fit the LHS slice iters."""
+        lhs_pairs = [
+            (iv, rng[0])
+            for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
+            if isinstance(dim, ast.Slice) and iv is not None
+        ]
+        lhs_iters = [iv for iv, unused in lhs_pairs]
+        lhs_starts = [st for unused, st in lhs_pairs]
+        run_rank = max((self.advanced_rank(d) for d in dims), default=0)
+        kept, group_pos, result_rank, n_trailing = slice_free_gather_layout(dims, run_rank, len(source_shape))
+        if result_rank <= len(lhs_iters):
+            group_pos += len(lhs_iters) - result_rank
+            pos = len(lhs_iters) - n_trailing
+            new_elts: list[ast.AST] = []
+            for axis, d in enumerate(kept):
+                r = self.advanced_rank(d)
+                if r >= 1:
+                    own_shape = self.advanced_extent(d)
+                    # Right-align this operand's OWN rank within the shared
+                    # broadcast block (numpy right-alignment); a size-1 own
+                    # axis broadcasts -- pin it to 0 instead of the shared
+                    # iter, which a higher-rank sibling may run past 1.
+                    base = group_pos + (run_rank - r)
+                    # The gather INDEX is the LOCAL result position, so read
+                    # it at ``iter - lhs_start`` -- a slice assignment into a
+                    # non-zero-start destination (vexx_k noncolin
+                    # ``big_result[ip*n:ip*n+n] -= rg[nlg]``, ip=1) must read
+                    # ``nlg[si0 - ip*n]``, not ``nlg[si0]`` (which runs off
+                    # the length-n index array).
+                    giters = [
+                        const_(0)
+                        if str(own_shape[k]).strip() == "1"
+                        else self.iter_minus_start(lhs_iters[base + k], lhs_starts[base + k])
+                        for k in range(r)
+                    ]
+                    new_elts.append(self.bind_gather_operand(d, giters))
+                else:
+                    new_elts.append(self.resolve_scalar_index(d, name, axis))
+            for unused in range(max(0, n_trailing)):
+                new_elts.append(self.iter_minus_start(lhs_iters[pos], lhs_starts[pos]))
+                pos += 1
+            slot = new_elts[0] if len(new_elts) == 1 else ast.Tuple(elts=new_elts, ctx=ast.Load())
+            return ast.Subscript(value=node.value, slice=slot, ctx=node.ctx)
+        return None
+
+    def sliced_read(self, node: ast.Subscript, dims: list[ast.AST]) -> ast.Subscript:
+        """A subscript with explicit ``:`` axes, each mapped onto the LHS slice iters."""
         rhs_name = name_of_subscript(node)
         # The LHS has N slice axes -- collect the iter vars + LHS lo
         # for those in order. RHS slice axes (which may live on
@@ -462,7 +493,6 @@ class SliceToScalarRewriter(ast.NodeTransformer):
             if not isinstance(d, ast.Slice):
                 idx_nodes.append(self.resolve_scalar_index(d, rhs_name, axis))
                 continue
-            step = slice_step_any(d)
             if align + rhs_slice_idx >= len(lhs_slice_iters):
                 # More RHS slices than LHS slice axes -- keep the slice
                 # for downstream emission to flag.
@@ -470,63 +500,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
                 continue
             ivar_node, lhs_start = lhs_slice_iters[align + rhs_slice_idx]
             rhs_slice_idx += 1
-            rhs_start = self.resolve_bound(d.lower, rhs_name, axis, default=const_(0))
-            ivar = ast.Name(id=ivar_node.id, ctx=ast.Load())
-            # numpy KEEPS an axis a slice produced even at length 1, and then BROADCASTS it: every
-            # result position along that axis reads the SAME source element. Advancing it with the
-            # iter var instead reads a whole row -- ``out[:, :] = a[:, 0:1] + b`` came out as
-            # ``a[i][j] + b[i][j]``, wrong numbers in C, C++ and Fortran alike and no diagnostic.
-            # (An INTEGER index is the other rule and is already handled: it drops the axis, so it
-            # never reaches here.) Emitting the start is right whichever extent the destination has:
-            # where the destination is also length 1 the iter var only ever takes that one value.
-            rhs_stop = self.resolve_bound(d.upper, rhs_name, axis, default=const_(0)) if d.upper is not None else None
-            src_shape = self.array_shapes.get(rhs_name)
-            axis_len = src_shape[axis] if src_shape and axis < len(src_shape) else None
-            if is_unit_extent(rhs_start, rhs_stop, axis_len):
-                idx_nodes.append(rhs_start)
-                continue
-            if step is not None and step != 1:
-                # Strided RHS slice ``a[lo:hi:k]``: the source index for the
-                # result position ``pos = ivar - lhs_start`` is ``lo + pos*k``.
-                # ``k`` may be a symbolic stride the kernel takes across the ABI.
-                # dwt2d Haar ``b[:, 0::2]`` with a full-slice LHS (lhs_start 0)
-                # -> ``b[i, 2*j]``.
-                # A NEGATIVE step with the start omitted (``a[::-1]`` / ``a[:hi:-1]``)
-                # begins at the LAST index ``axis_len - 1``, not 0 (numpy reverse), so
-                # ``a[::-1]`` reads ``a[(N - 1) - pos]`` rather than the wrong ``a[-pos]``.
-                if step_is_negative(step) and d.lower is None:
-                    ss = self.array_shapes.get(rhs_name)
-                    if ss and axis < len(ss):
-                        al_ = (
-                            const_(int(ss[axis]))
-                            if str(ss[axis]).isdigit()
-                            else ast.Name(id=str(ss[axis]), ctx=ast.Load())
-                        )
-                        rhs_start = binop(al_, ast.Sub(), const_(1))
-                    else:
-                        # Without the axis length we cannot seed the reverse start at
-                        # ``axis_len - 1``; emitting ``pos * -1`` would be a negative,
-                        # out-of-bounds read. Refuse rather than miscompile (a loud,
-                        # rare skip -- untracked-shape reverse slice).
-                        raise NotImplementedError(f"reverse slice of {rhs_name!r} needs a known axis length")
-                pos: ast.expr = ivar
-                if not (isinstance(lhs_start, ast.Constant) and lhs_start.value == 0):
-                    pos = binop(ivar, ast.Sub(), lhs_start)
-                scaled = binop(pos, ast.Mult(), step_node(step))
-                if isinstance(rhs_start, ast.Constant) and rhs_start.value == 0:
-                    idx_nodes.append(scaled)
-                else:
-                    idx_nodes.append(binop(scaled, ast.Add(), rhs_start))
-                continue
-            offset = fold_offset(rhs_start, lhs_start)
-            if offset is None:
-                idx_nodes.append(binop(ivar, ast.Add(), binop(rhs_start, ast.Sub(), lhs_start)))
-            elif offset == 0:
-                idx_nodes.append(ivar)
-            elif offset > 0:
-                idx_nodes.append(binop(ivar, ast.Add(), const_(offset)))
-            else:
-                idx_nodes.append(binop(ivar, ast.Sub(), const_(-offset)))
+            idx_nodes.append(self.slice_axis_index(d, axis, rhs_name, ivar_node, lhs_start))
         # Implicit trailing axes: ``conv1[np.newaxis, :, :, :]`` on a
         # 4-D conv1 has only 4 dim elements (1 newaxis + 3 slices) but
         # the source array has 4 axes -- the 4th axis is implicit (all
@@ -542,6 +516,68 @@ class SliceToScalarRewriter(ast.NodeTransformer):
                 idx_nodes.append(ast.Name(id=ivar_node.id, ctx=ast.Load()))
         new_slice = idx_nodes[0] if len(idx_nodes) == 1 else ast.Tuple(elts=idx_nodes, ctx=ast.Load())
         return ast.Subscript(value=node.value, slice=new_slice, ctx=node.ctx)
+
+    def slice_axis_index(
+        self, d: ast.Slice, axis: int, rhs_name: str | None, ivar_node: ast.Name, lhs_start: ast.AST
+    ) -> ast.AST:
+        """The source index an RHS slice axis reads at the LHS iter ``ivar_node`` (whose slice starts at
+        ``lhs_start``): the slice's start for a length-1 slice (numpy keeps and BROADCASTS it),
+        ``lo + (ivar - lhs_start) * k`` for a stride k (a reverse slice with the start omitted begins
+        at ``axis_len - 1``), else the iter shifted by ``rhs_start - lhs_start``."""
+        step = slice_step_any(d)
+        rhs_start = self.resolve_bound(d.lower, rhs_name, axis, default=const_(0))
+        ivar = ast.Name(id=ivar_node.id, ctx=ast.Load())
+        # numpy KEEPS an axis a slice produced even at length 1, and then BROADCASTS it: every
+        # result position along that axis reads the SAME source element. Advancing it with the
+        # iter var instead reads a whole row -- ``out[:, :] = a[:, 0:1] + b`` came out as
+        # ``a[i][j] + b[i][j]``, wrong numbers in C, C++ and Fortran alike and no diagnostic.
+        # (An INTEGER index is the other rule and is already handled: it drops the axis, so it
+        # never reaches here.) Emitting the start is right whichever extent the destination has:
+        # where the destination is also length 1 the iter var only ever takes that one value.
+        rhs_stop = self.resolve_bound(d.upper, rhs_name, axis, default=const_(0)) if d.upper is not None else None
+        src_shape = self.array_shapes.get(rhs_name)
+        axis_len = src_shape[axis] if src_shape and axis < len(src_shape) else None
+        if is_unit_extent(rhs_start, rhs_stop, axis_len):
+            return rhs_start
+        if step is not None and step != 1:
+            # Strided RHS slice ``a[lo:hi:k]``: the source index for the
+            # result position ``pos = ivar - lhs_start`` is ``lo + pos*k``.
+            # ``k`` may be a symbolic stride the kernel takes across the ABI.
+            # dwt2d Haar ``b[:, 0::2]`` with a full-slice LHS (lhs_start 0)
+            # -> ``b[i, 2*j]``.
+            # A NEGATIVE step with the start omitted (``a[::-1]`` / ``a[:hi:-1]``)
+            # begins at the LAST index ``axis_len - 1``, not 0 (numpy reverse), so
+            # ``a[::-1]`` reads ``a[(N - 1) - pos]`` rather than the wrong ``a[-pos]``.
+            if step_is_negative(step) and d.lower is None:
+                ss = self.array_shapes.get(rhs_name)
+                if ss and axis < len(ss):
+                    al_ = (
+                        const_(int(ss[axis])) if str(ss[axis]).isdigit() else ast.Name(id=str(ss[axis]), ctx=ast.Load())
+                    )
+                    rhs_start = binop(al_, ast.Sub(), const_(1))
+                else:
+                    # Without the axis length we cannot seed the reverse start at
+                    # ``axis_len - 1``; emitting ``pos * -1`` would be a negative,
+                    # out-of-bounds read. Refuse rather than miscompile (a loud,
+                    # rare skip -- untracked-shape reverse slice).
+                    raise NotImplementedError(f"reverse slice of {rhs_name!r} needs a known axis length")
+            pos: ast.expr = ivar
+            if not (isinstance(lhs_start, ast.Constant) and lhs_start.value == 0):
+                pos = binop(ivar, ast.Sub(), lhs_start)
+            scaled = binop(pos, ast.Mult(), step_node(step))
+            if isinstance(rhs_start, ast.Constant) and rhs_start.value == 0:
+                return scaled
+            else:
+                return binop(scaled, ast.Add(), rhs_start)
+        offset = fold_offset(rhs_start, lhs_start)
+        if offset is None:
+            return binop(ivar, ast.Add(), binop(rhs_start, ast.Sub(), lhs_start))
+        elif offset == 0:
+            return ivar
+        elif offset > 0:
+            return binop(ivar, ast.Add(), const_(offset))
+        else:
+            return binop(ivar, ast.Sub(), const_(-offset))
 
     def merge_view_gather(self, node: ast.Subscript) -> ast.Subscript | None:
         """``A[2, :3][:, idx]`` read as one element of ``A``, or ``None`` when ``node`` is not a gather on a
@@ -588,7 +624,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
     def view_index(self, node: ast.Subscript) -> list[ast.expr] | None:
         """One scalar index per result axis of the view under ``node`` for its outer entries, read at this
         statement's iterators, or ``None`` when they do not scalarize fully."""
-        extent = iter_extent_of_(node.value, self.array_shapes)
+        extent = iter_extent_of(node.value, self.array_shapes)
         if not extent:
             return None
         shapes = {**self.array_shapes, CHAINED_VIEW: tuple(ast.unparse(axis) for axis in extent)}
@@ -629,7 +665,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
                 return None
             if isinstance(e, ast.Name) and self.array_shapes.get(e.id):
                 return len(self.array_shapes[e.id])
-            ext = iter_extent_of_(e, self.array_shapes)
+            ext = iter_extent_of(e, self.array_shapes)
             return len(ext) if ext is not None and not extent_is_scalar(ext) else 0
 
         ranks = [own_rank(d) for d in dims]
@@ -688,7 +724,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
     def resolve_scalar_index(self, idx: ast.AST, array_name: str | None, axis: int) -> ast.AST:
         """A negative constant scalar index ``-K`` on a non-slice axis
         (``imgIn[:, -1]``) wraps to ``axis_length - K`` -- numpy
-        semantics. Mirrors :meth:`SliceFusion._resolve_scalar_index` but
+        semantics. Mirrors :meth:`SliceFusion.resolve_scalar_index` but
         reads the operand shape from ``self.array_shapes`` (RHS side)."""
         shape = self.array_shapes.get(array_name) if array_name else None
         val = negative_literal_offset(idx)
@@ -702,7 +738,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         return idx
 
     def resolve_bound(self, bound: ast.AST | None, array_name: str | None, axis: int, default: ast.AST) -> ast.AST:
-        """Mirror :meth:`SliceFusion._resolve_bound` for the RHS scalarizer.
+        """Mirror :meth:`SliceFusion.resolve_bound` for the RHS scalarizer.
 
         Resolves negative-index bounds against the operand array's shape
         (not the LHS shape). Required so a stencil read

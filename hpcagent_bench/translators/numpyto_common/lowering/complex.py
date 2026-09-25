@@ -90,38 +90,7 @@ def walk_complex(node: ast.AST, name_dtype: "Callable[[str], str | None]") -> st
     if isinstance(node, ast.IfExp):
         return walk_complex(node.body, name_dtype) or walk_complex(node.orelse, name_dtype)
     if isinstance(node, ast.Call):
-        fn = (
-            node.func.attr
-            if isinstance(node.func, ast.Attribute)
-            else node.func.id
-            if isinstance(node.func, ast.Name)
-            else None
-        )
-        if fn in REAL_FROM_COMPLEX:
-            return None
-        # An explicit complex ``dtype=`` (``np.zeros((n,), dtype=np.complex128)``)
-        # or ``.astype(np.complex128)`` PRODUCES a complex value even when no
-        # operand is complex -- the dtype lives in a KEYWORD, not node.args, so
-        # inspect it directly. Without this a complex array whose only visible
-        # write is its zero-init (vexx_k's ``deexx``) reads as real and the
-        # complex->real narrowing pass unsoundly demotes it (compiles in C by
-        # dropping the imaginary part, but C++ rejects the assignment).
-        ctor_dt = dtype_from_constructor(node)
-        if ctor_dt is not None:
-            # An explicit dtype DECIDES, both ways: ``z.astype(np.float64)`` is real however
-            # complex ``z`` is, so this must return rather than fall through to the receiver.
-            return ctor_dt if ctor_dt.startswith("complex") else None
-        for a in node.args:
-            r = walk_complex(a, name_dtype)
-            if r:
-                return r
-        # A dtype-preserving METHOD holds its value in the receiver, not in the arguments:
-        # ``exxbuff.copy()`` / ``w[:, j].reshape(p, q)`` walked to None here, so the local they
-        # bind read REAL and RealConjDropper deleted the ``np.conj`` around it -- vexx_k's
-        # exchange term, computed without its conjugate and wrong on every native backend.
-        if isinstance(node.func, ast.Attribute) and fn in DTYPE_PRESERVING_METHODS:
-            return walk_complex(node.func.value, name_dtype)
-        return None
+        return call_complex(node, name_dtype)
     # Unhandled node type -- fall back to a conservative whole-subtree scan.
     for sub in ast.walk(node):
         if isinstance(sub, ast.Constant) and isinstance(sub.value, complex):
@@ -130,6 +99,33 @@ def walk_complex(node: ast.AST, name_dtype: "Callable[[str], str | None]") -> st
             dt = name_dtype(sub.id)
             if dt and dt.startswith("complex"):
                 return dt
+    return None
+
+
+def call_complex(node: ast.Call, name_dtype: "Callable[[str], str | None]") -> str | None:
+    """:func:`walk_complex` of a call. A real-returning function is real. An explicit ``dtype=`` /
+    ``.astype(...)`` DECIDES, both ways: it produces a complex value even when no operand is complex
+    (a complex array whose only visible write is its zero-init), and ``z.astype(np.float64)`` is real
+    however complex ``z`` is. Otherwise complex iff an argument is -- or, for a dtype-preserving
+    METHOD (``x.copy()``, ``w[:, j].reshape(p, q)``), iff the receiver is."""
+    fn = (
+        node.func.attr
+        if isinstance(node.func, ast.Attribute)
+        else node.func.id
+        if isinstance(node.func, ast.Name)
+        else None
+    )
+    if fn in REAL_FROM_COMPLEX:
+        return None
+    ctor_dt = dtype_from_constructor(node)
+    if ctor_dt is not None:
+        return ctor_dt if ctor_dt.startswith("complex") else None
+    for a in node.args:
+        r = walk_complex(a, name_dtype)
+        if r:
+            return r
+    if isinstance(node.func, ast.Attribute) and fn in DTYPE_PRESERVING_METHODS:
+        return walk_complex(node.func.value, name_dtype)
     return None
 
 
@@ -143,7 +139,7 @@ def infer_complex_dtype(expr: ast.AST, local_dtypes: dict[str, str]) -> str | No
 #: The real element type underlying each complex width -- the inverse of the IR's
 #: real->complex precision map, so a ``.real`` / ``.imag`` / ``abs`` / ``hypot``
 #: scalar temp derived from a complex array is retagged to the matching real
-#: width (never hardcoded: derived from ``ir._COMPLEX_FOR_FLOAT``, first real per
+#: width (never hardcoded: derived from ``ir.COMPLEX_FOR_FLOAT``, first real per
 #: complex, so complex128->float64, complex64->float32, complex256->float128).
 REAL_FOR_COMPLEX: dict[str, str] = {}
 for flt, cplx in COMPLEX_FOR_FLOAT.items():
@@ -277,68 +273,7 @@ def seed_complex_work_dtypes(
         for s in ast.walk(tree)
         if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
     ]
-
-    def known(name: str | None) -> str | None:
-        """The recorded element dtype of ``name`` -- a local, else a declared KERNEL array.
-
-        A parameter's dtype lives outside ``local_dtypes``, so a local taken off one
-        (``exxbuff_w = exxbuff.copy()``) resolved to nothing and stayed untyped, which
-        :class:`RealConjDropper` reads as REAL."""
-        if name is None:
-            return None
-        dt = local_dtypes.get(name)
-        return dt if dt is not None else (array_dtypes or {}).get(name)
-
-    def dtype_for(value: ast.expr) -> str | None:
-        if isinstance(value, ast.Call):
-            # X = np.zeros/ones/empty/eye(shape, Y.dtype | np.complexNN)
-            ctag = ctor_complex_tag(value, local_dtypes)
-            if ctag is not None:
-                return ctag
-            # X = Y.copy() / np.copy(Y) / np.ascontiguousarray(Y) -- inherit the complex source.
-            # ``transpose`` / ``conj`` / ``conjugate`` / ``where`` sit here for the same reason:
-            # they rearrange or select values without changing what a value IS, so an operand
-            # reached through one of them is still complex. Reaching eigh through ANY of them used
-            # to leave its work matrices untyped, which is precisely the case this whole function
-            # exists to prevent -- ``np.linalg.eigh(np.transpose(m))`` lost the conj from its own
-            # rotation and returned zeros.
-            if isinstance(value.func, ast.Attribute):
-                f = value.func
-                for src in dtype_carrying_operands(value):
-                    sdt = known(src)
-                    if sdt and sdt.startswith("complex"):
-                        return sdt
-                if f.attr == "where" and len(value.args) == 3:
-                    # Either arm decides it -- numpy promotes, so one complex arm is enough.
-                    for arm in value.args[1:]:
-                        adt = known(arm.id) if isinstance(arm, ast.Name) else None
-                        if adt and adt.startswith("complex"):
-                            return adt
-            # m = np.hypot/abs/real/imag(<complex ...>) -- a real-returning magnitude of a
-            # complex operand types to the MATCHING REAL width (so ``m`` is real, not complex).
-            fn = (
-                value.func.attr
-                if isinstance(value.func, ast.Attribute)
-                else value.func.id
-                if isinstance(value.func, ast.Name)
-                else None
-            )
-            if fn in REAL_FROM_COMPLEX:
-                for sub in ast.walk(value):
-                    if isinstance(sub, ast.Name):
-                        bdt = known(sub.id)
-                        if bdt and bdt.startswith("complex"):
-                            return REAL_FOR_COMPLEX.get(bdt, "float64")
-            return None
-        # z = A[scalar-index] -- inherit a complex array's element dtype
-        if isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name):
-            sdt = known(value.value.id)
-            return sdt if sdt and sdt.startswith("complex") else None
-        # ephi = apq / m -- a scalar BinOp/UnaryOp over complex operands
-        if isinstance(value, (ast.BinOp, ast.UnaryOp)) and scalar_expr_complex(value, local_dtypes):
-            return "complex128"
-        return None
-
+    seed = ComplexWorkSeed(local_dtypes, array_dtypes or {})
     changed = True
     while changed:
         changed = False
@@ -346,10 +281,77 @@ def seed_complex_work_dtypes(
             name = s.targets[0].id
             if name in local_dtypes:
                 continue
-            dt = dtype_for(s.value)
+            dt = seed.dtype_for(s.value)
             if dt is not None:
                 local_dtypes[name] = dt
                 changed = True
+
+
+class ComplexWorkSeed:
+    """The complex (or matching real) dtype :func:`seed_complex_work_dtypes` gives a local from the
+    value it is bound to."""
+
+    def __init__(self, local_dtypes: dict[str, str], array_dtypes: dict[str, str]) -> None:
+        self.local_dtypes = local_dtypes
+        self.array_dtypes = array_dtypes
+
+    def known(self, name: str | None) -> str | None:
+        """The recorded element dtype of ``name`` -- a local, else a declared KERNEL array (a
+        parameter's dtype lives outside ``local_dtypes``, and an untyped local reads as REAL to
+        :class:`RealConjDropper`)."""
+        if name is None:
+            return None
+        dt = self.local_dtypes.get(name)
+        return dt if dt is not None else self.array_dtypes.get(name)
+
+    def known_complex(self, name: str | None) -> str | None:
+        dt = self.known(name)
+        return dt if dt and dt.startswith("complex") else None
+
+    def dtype_for(self, value: ast.expr) -> str | None:
+        if isinstance(value, ast.Call):
+            return self.call_dtype(value)
+        # z = A[scalar-index] -- inherit a complex array's element dtype
+        if isinstance(value, ast.Subscript) and isinstance(value.value, ast.Name):
+            return self.known_complex(value.value.id)
+        # ephi = apq / m -- a scalar BinOp/UnaryOp over complex operands
+        if isinstance(value, (ast.BinOp, ast.UnaryOp)) and scalar_expr_complex(value, self.local_dtypes):
+            return "complex128"
+        return None
+
+    def call_dtype(self, value: ast.Call) -> str | None:
+        """``np.zeros/ones/empty/eye(shape, Y.dtype | np.complexNN)``; a call that rearranges or selects
+        values without changing what a value IS (``copy`` / ``transpose`` / ``conj`` / ``where``,
+        either arm deciding a ``where``) inherits a complex operand's dtype; a real-returning magnitude
+        (``hypot`` / ``abs`` / ``.real`` / ``.imag``) of a complex operand takes the MATCHING REAL
+        width."""
+        ctag = ctor_complex_tag(value, self.local_dtypes)
+        if ctag is not None:
+            return ctag
+        if isinstance(value.func, ast.Attribute):
+            for src in dtype_carrying_operands(value):
+                sdt = self.known_complex(src)
+                if sdt:
+                    return sdt
+            if value.func.attr == "where" and len(value.args) == 3:
+                for arm in value.args[1:]:
+                    adt = self.known_complex(arm.id) if isinstance(arm, ast.Name) else None
+                    if adt:
+                        return adt
+        fn = (
+            value.func.attr
+            if isinstance(value.func, ast.Attribute)
+            else value.func.id
+            if isinstance(value.func, ast.Name)
+            else None
+        )
+        if fn in REAL_FROM_COMPLEX:
+            for sub in ast.walk(value):
+                if isinstance(sub, ast.Name):
+                    bdt = self.known_complex(sub.id)
+                    if bdt:
+                        return REAL_FOR_COMPLEX.get(bdt, "float64")
+        return None
 
 
 class PromoteMixedComplexIfExp(ast.NodeTransformer):

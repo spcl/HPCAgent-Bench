@@ -6,7 +6,7 @@ import copy
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import read_axis_keepdims
 from hpcagent_bench.translators.numpyto_common.lib_nodes.contractions import OP_SPILL_TEMP
 from hpcagent_bench.translators.numpyto_common.lib_nodes.elementwise import args_one_name
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of_
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     attr_call,
     const_,
@@ -88,7 +88,7 @@ def expand_linalg_norm(
     if kind == "l2":
         if axes is None:
             # Full reduction -- scalar accumulator + sqrt.
-            extent = iter_extent_of_(a, shape_table)
+            extent = iter_extent_of(a, shape_table)
             if extent is None:
                 raise NotImplementedError("np.linalg.norm: cannot derive iteration extent")
             iters = [make_iter_name("__nr", i) for i in range(len(extent))]
@@ -129,7 +129,7 @@ def expand_linalg_norm(
     # abs-sum) -- the max over per-line abs-sums.
     if axes is not None:
         raise NotImplementedError("np.linalg.norm: ord=1/inf with axis= not supported")
-    extent = iter_extent_of_(a, shape_table)
+    extent = iter_extent_of(a, shape_table)
     if extent is None:
         raise NotImplementedError("np.linalg.norm: cannot derive iteration extent")
     if len(extent) == 1:
@@ -644,49 +644,7 @@ def expand_linalg_solve(
     ``np.linalg.solve(normal + damping * np.diag(scale), -gradient)``. A must
     be 2-D and b 1-D or 2-D; x is written into target with the same shape as b.
     """
-
-    def temp_name() -> str:
-        name = f"__sol_arg{LINALG_AW[0]}"
-        LINALG_AW[0] += 1
-        return name
-
-    def infer_expr_dtype(expr: ast.expr) -> str | None:
-        if local_dtypes is None:
-            return None
-        if reads_complex(expr, local_dtypes):
-            return "complex128"
-        for node in ast.walk(expr):
-            if isinstance(node, ast.Name):
-                dt = local_dtypes.get(node.id)
-                if dt:
-                    return dt
-        return None
-
-    out: list[ast.stmt] = []
-    materialized = list(args)
-    for i, arg in enumerate(materialized):
-        if isinstance(arg, ast.Name):
-            continue
-        ext = iter_extent_of_(arg, shape_table)
-        if ext is None:
-            raise NotImplementedError("np.linalg.solve: argument shape not inferable")
-        tmp = temp_name()
-        shape_tokens = tuple(ast.unparse(e) for e in ext)
-        shape_table[tmp] = shape_tokens
-        if fresh_local_allocs is not None:
-            fresh_local_allocs[tmp] = shape_tokens
-        arg_dt = infer_expr_dtype(arg)
-        if arg_dt is not None and local_dtypes is not None:
-            local_dtypes[tmp] = arg_dt
-        out.append(
-            ast.Assign(
-                targets=[store_(tmp)], value=ast.Call(func=name_("__hpcagent_bench_zeros__"), args=[], keywords=[])
-            )
-        )
-        out.append(ast.Assign(targets=[store_(tmp)], value=arg))
-        materialized[i] = name_(tmp)
-    args = materialized
-
+    out, args = materialize_solve_operands(args, shape_table, local_dtypes, fresh_local_allocs)
     if len(args) < 2 or not isinstance(args[0], ast.Name) or not isinstance(args[1], ast.Name):
         raise NotImplementedError("np.linalg.solve needs Name args")
     a = args[0]
@@ -709,61 +667,15 @@ def expand_linalg_solve(
     aw_store = lambda r, c: ast.Subscript(
         value=name_(aw_name), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store()
     )
-    # ``b`` indexing depends on rank.
-    is_2d = len(b_shape) == 2
-
-    def b_load(r: ast.expr, c: ast.expr | None = None) -> ast.Subscript:
-        if is_2d:
-            return ast.Subscript(value=name_(target.id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load())
-        return ast.Subscript(value=name_(target.id), slice=r, ctx=ast.Load())
-
-    def b_store(r: ast.expr, c: ast.expr | None = None) -> ast.Subscript:
-        if is_2d:
-            return ast.Subscript(value=name_(target.id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store())
-        return ast.Subscript(value=name_(target.id), slice=r, ctx=ast.Store())
-
-    # Publish working-buffer shape + dtype + fresh-local alloc so the emit
-    # declares the buffer as a flat 2-D buffer of A's element dtype (same
-    # logic as ``expand_linalg_inv``).
-    shape_table[aw_name] = (n, n)
-    a_dt = None
-    if local_dtypes is not None:
-        a_dt = local_dtypes.get(a.id) or local_dtypes.get(b.id)
-        if a_dt is not None:
-            local_dtypes[aw_name] = a_dt
-            local_dtypes[target.id] = a_dt
-            for nm in ("__sol_tmp", "__sol_factor"):
-                local_dtypes.setdefault(nm, a_dt)
-    if fresh_local_allocs is not None:
-        fresh_local_allocs[aw_name] = (n, n)
+    rhs = SolveRhs(target.id, b_shape)
+    publish_solve_workspace(aw_name, n, a.id, b.id, target.id, shape_table, local_dtypes, fresh_local_allocs)
     out.append(
         ast.Assign(
             targets=[store_(aw_name)], value=ast.Call(func=name_("__hpcagent_bench_zeros__"), args=[], keywords=[])
         )
     )
     # Init: copy A into __sol_aw and b into target.
-    if is_2d:
-        m_ast = const_or_name(b_shape[1])
-        copy_inner = ast.For(
-            target=store_("__sol_j"),
-            iter=ast.Call(func=name_("range"), args=[m_ast], keywords=[]),
-            body=[
-                ast.Assign(
-                    targets=[b_store(name_("__sol_i"), name_("__sol_j"))],
-                    value=ast.Subscript(
-                        value=name_(b.id),
-                        slice=ast.Tuple(elts=[name_("__sol_i"), name_("__sol_j")], ctx=ast.Load()),
-                        ctx=ast.Load(),
-                    ),
-                )
-            ],
-            orelse=[],
-        )
-    else:
-        copy_inner = ast.Assign(
-            targets=[b_store(name_("__sol_i"))],
-            value=ast.Subscript(value=name_(b.id), slice=name_("__sol_i"), ctx=ast.Load()),
-        )
+    copy_inner = rhs.copy_row(b.id)
     out.append(
         ast.For(
             target=store_("__sol_i"),
@@ -784,7 +696,7 @@ def expand_linalg_solve(
                     ],
                     orelse=[],
                 ),
-                copy_inner if is_2d else copy_inner,
+                copy_inner,
             ],
             orelse=[],
         )
@@ -823,30 +735,7 @@ def expand_linalg_solve(
     swap_aw_loop = ast.For(
         target=store_("__sol_c"), iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]), body=swap_aw, orelse=[]
     )
-    # Swap row p and row k in target (the b-side).
-    if is_2d:
-        m_ast = const_or_name(b_shape[1])
-        swap_b = [
-            ast.Assign(targets=[store_("__sol_tmp")], value=b_load(K, C)),
-            ast.Assign(targets=[b_store(K, C)], value=b_load(P, C)),
-            ast.Assign(targets=[b_store(P, C)], value=T),
-        ]
-        swap_b_loop = ast.For(
-            target=store_("__sol_c"),
-            iter=ast.Call(func=name_("range"), args=[m_ast], keywords=[]),
-            body=swap_b,
-            orelse=[],
-        )
-    else:
-        swap_b_loop = ast.If(
-            test=ast.Compare(left=P, ops=[ast.NotEq()], comparators=[K]),
-            body=[
-                ast.Assign(targets=[store_("__sol_tmp")], value=b_load(K)),
-                ast.Assign(targets=[b_store(K)], value=b_load(P)),
-                ast.Assign(targets=[b_store(P)], value=T),
-            ],
-            orelse=[],
-        )
+    swap_b_loop = rhs.swap_rows(K, P, C, T)
     # Divide pivot row by aw[k, k]. Stash divisor.
     pivot_div_stash = ast.Assign(targets=[store_("__sol_factor")], value=aw(K, K))
     pivot_div_aw_body = [
@@ -858,18 +747,7 @@ def expand_linalg_solve(
         body=pivot_div_aw_body,
         orelse=[],
     )
-    if is_2d:
-        pivot_div_b_body = [
-            ast.Assign(targets=[b_store(K, C)], value=ast.BinOp(left=b_load(K, C), op=ast.Div(), right=F)),
-        ]
-        pivot_div_b = ast.For(
-            target=store_("__sol_c"),
-            iter=ast.Call(func=name_("range"), args=[const_or_name(b_shape[1])], keywords=[]),
-            body=pivot_div_b_body,
-            orelse=[],
-        )
-    else:
-        pivot_div_b = ast.Assign(targets=[b_store(K)], value=ast.BinOp(left=b_load(K), op=ast.Div(), right=F))
+    pivot_div_b = rhs.divide_row(K, C, F)
     # Eliminate other rows.
     elim_factor = ast.Assign(targets=[store_("__sol_factor")], value=aw(R, K))
     elim_aw_inner = ast.For(
@@ -883,25 +761,7 @@ def expand_linalg_solve(
         ],
         orelse=[],
     )
-    if is_2d:
-        elim_b_inner = ast.For(
-            target=store_("__sol_c"),
-            iter=ast.Call(func=name_("range"), args=[const_or_name(b_shape[1])], keywords=[]),
-            body=[
-                ast.Assign(
-                    targets=[b_store(R, C)],
-                    value=ast.BinOp(
-                        left=b_load(R, C), op=ast.Sub(), right=ast.BinOp(left=F, op=ast.Mult(), right=b_load(K, C))
-                    ),
-                )
-            ],
-            orelse=[],
-        )
-    else:
-        elim_b_inner = ast.Assign(
-            targets=[b_store(R)],
-            value=ast.BinOp(left=b_load(R), op=ast.Sub(), right=ast.BinOp(left=F, op=ast.Mult(), right=b_load(K))),
-        )
+    elim_b_inner = rhs.eliminate_row(R, K, C, F)
     elim_outer = ast.For(
         target=store_("__sol_r"),
         iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
@@ -924,6 +784,188 @@ def expand_linalg_solve(
         )
     )
     return out
+
+
+def materialize_solve_operands(
+    args: list[ast.expr],
+    shape_table: dict[str, tuple[str, ...]],
+    local_dtypes: dict[str, str] | None,
+    fresh_local_allocs: dict[str, tuple[str, ...]] | None,
+) -> tuple[list[ast.stmt], list[ast.expr]]:
+    """Each non-Name ``np.linalg.solve`` operand materialised into a fresh ``__sol_arg<n>`` local of
+    its extent (and dtype): the statements that fill them, and the operands as Names."""
+    out: list[ast.stmt] = []
+    materialized = list(args)
+    for i, arg in enumerate(materialized):
+        if isinstance(arg, ast.Name):
+            continue
+        ext = iter_extent_of(arg, shape_table)
+        if ext is None:
+            raise NotImplementedError("np.linalg.solve: argument shape not inferable")
+        tmp = f"__sol_arg{LINALG_AW[0]}"
+        LINALG_AW[0] += 1
+        shape_tokens = tuple(ast.unparse(e) for e in ext)
+        shape_table[tmp] = shape_tokens
+        if fresh_local_allocs is not None:
+            fresh_local_allocs[tmp] = shape_tokens
+        arg_dt = solve_operand_dtype(arg, local_dtypes)
+        if arg_dt is not None and local_dtypes is not None:
+            local_dtypes[tmp] = arg_dt
+        out.append(
+            ast.Assign(
+                targets=[store_(tmp)], value=ast.Call(func=name_("__hpcagent_bench_zeros__"), args=[], keywords=[])
+            )
+        )
+        out.append(ast.Assign(targets=[store_(tmp)], value=arg))
+        materialized[i] = name_(tmp)
+    return out, materialized
+
+
+def solve_operand_dtype(expr: ast.expr, local_dtypes: dict[str, str] | None) -> str | None:
+    """complex128 for a complex operand, else the dtype of the first typed Name it reads."""
+    if local_dtypes is None:
+        return None
+    if reads_complex(expr, local_dtypes):
+        return "complex128"
+    for node in ast.walk(expr):
+        if isinstance(node, ast.Name):
+            dt = local_dtypes.get(node.id)
+            if dt:
+                return dt
+    return None
+
+
+def publish_solve_workspace(
+    aw_name: str,
+    n: str,
+    a_id: str,
+    b_id: str,
+    target_id: str,
+    shape_table: dict[str, tuple[str, ...]],
+    local_dtypes: dict[str, str] | None,
+    fresh_local_allocs: dict[str, tuple[str, ...]] | None,
+) -> None:
+    """Publish the working buffer's shape, dtype and fresh-local alloc so the emit declares it as a
+    flat 2-D buffer of A's element dtype (same logic as ``expand_linalg_inv``)."""
+    shape_table[aw_name] = (n, n)
+    if local_dtypes is not None:
+        a_dt = local_dtypes.get(a_id) or local_dtypes.get(b_id)
+        if a_dt is not None:
+            local_dtypes[aw_name] = a_dt
+            local_dtypes[target_id] = a_dt
+            for nm in ("__sol_tmp", "__sol_factor"):
+                local_dtypes.setdefault(nm, a_dt)
+    if fresh_local_allocs is not None:
+        fresh_local_allocs[aw_name] = (n, n)
+
+
+class SolveRhs:
+    """The right-hand side ``b`` of a Gauss-Jordan solve, held in the target: its row operations,
+    over every column for a 2-D ``b`` and on the single element of a 1-D one."""
+
+    def __init__(self, target_id: str, b_shape: tuple[str, ...]) -> None:
+        self.target_id = target_id
+        self.b_shape = b_shape
+        self.is_2d = len(b_shape) == 2
+
+    def load(self, r: ast.expr, c: ast.expr | None = None) -> ast.Subscript:
+        if self.is_2d:
+            return ast.Subscript(
+                value=name_(self.target_id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load()
+            )
+        return ast.Subscript(value=name_(self.target_id), slice=r, ctx=ast.Load())
+
+    def store(self, r: ast.expr, c: ast.expr | None = None) -> ast.Subscript:
+        if self.is_2d:
+            return ast.Subscript(
+                value=name_(self.target_id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store()
+            )
+        return ast.Subscript(value=name_(self.target_id), slice=r, ctx=ast.Store())
+
+    def columns(self, body: list[ast.stmt]) -> ast.For:
+        return ast.For(
+            target=store_("__sol_c"),
+            iter=ast.Call(func=name_("range"), args=[const_or_name(self.b_shape[1])], keywords=[]),
+            body=body,
+            orelse=[],
+        )
+
+    def copy_row(self, b_id: str) -> ast.stmt:
+        """Row ``__sol_i`` of ``b`` copied into the target."""
+        if not self.is_2d:
+            return ast.Assign(
+                targets=[self.store(name_("__sol_i"))],
+                value=ast.Subscript(value=name_(b_id), slice=name_("__sol_i"), ctx=ast.Load()),
+            )
+        return ast.For(
+            target=store_("__sol_j"),
+            iter=ast.Call(func=name_("range"), args=[const_or_name(self.b_shape[1])], keywords=[]),
+            body=[
+                ast.Assign(
+                    targets=[self.store(name_("__sol_i"), name_("__sol_j"))],
+                    value=ast.Subscript(
+                        value=name_(b_id),
+                        slice=ast.Tuple(elts=[name_("__sol_i"), name_("__sol_j")], ctx=ast.Load()),
+                        ctx=ast.Load(),
+                    ),
+                )
+            ],
+            orelse=[],
+        )
+
+    def swap_rows(self, k: ast.expr, p: ast.expr, c: ast.expr, tmp: ast.expr) -> ast.stmt:
+        """Rows k and p exchanged (the 1-D element only when they differ)."""
+        if self.is_2d:
+            return self.columns(
+                [
+                    ast.Assign(targets=[store_("__sol_tmp")], value=self.load(k, c)),
+                    ast.Assign(targets=[self.store(k, c)], value=self.load(p, c)),
+                    ast.Assign(targets=[self.store(p, c)], value=tmp),
+                ]
+            )
+        return ast.If(
+            test=ast.Compare(left=p, ops=[ast.NotEq()], comparators=[k]),
+            body=[
+                ast.Assign(targets=[store_("__sol_tmp")], value=self.load(k)),
+                ast.Assign(targets=[self.store(k)], value=self.load(p)),
+                ast.Assign(targets=[self.store(p)], value=tmp),
+            ],
+            orelse=[],
+        )
+
+    def divide_row(self, k: ast.expr, c: ast.expr, factor: ast.expr) -> ast.stmt:
+        """Row k divided by the stashed pivot."""
+        if self.is_2d:
+            return self.columns(
+                [
+                    ast.Assign(
+                        targets=[self.store(k, c)], value=ast.BinOp(left=self.load(k, c), op=ast.Div(), right=factor)
+                    )
+                ]
+            )
+        return ast.Assign(targets=[self.store(k)], value=ast.BinOp(left=self.load(k), op=ast.Div(), right=factor))
+
+    def eliminate_row(self, r: ast.expr, k: ast.expr, c: ast.expr, factor: ast.expr) -> ast.stmt:
+        """Row r minus factor times row k."""
+        if self.is_2d:
+            return self.columns(
+                [
+                    ast.Assign(
+                        targets=[self.store(r, c)],
+                        value=ast.BinOp(
+                            left=self.load(r, c),
+                            op=ast.Sub(),
+                            right=ast.BinOp(left=factor, op=ast.Mult(), right=self.load(k, c)),
+                        ),
+                    )
+                ]
+            )
+        return ast.Assign(
+            targets=[self.store(r)],
+            value=ast.BinOp(
+                left=self.load(r), op=ast.Sub(), right=ast.BinOp(left=factor, op=ast.Mult(), right=self.load(k))
+            ),
+        )
 
 
 #: Monotone counter for the ``inv`` scratch working-copy buffer. A fixed name

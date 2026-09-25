@@ -201,7 +201,7 @@ def reads_complex(expr: ast.AST, local_dtypes: dict[str, str]) -> bool:
     """True iff evaluating ``expr`` reads a complex value: a ``Constant(complex)``
     or a ``Name`` tagged complex in ``local_dtypes``. ``.shape`` subtrees are
     skipped -- always integer dimensions even when the array is complex.
-    Shared predicate for the dtype-propagation passes (``CallHoister._infer_complex``,
+    Shared predicate for the dtype-propagation passes (``CallHoister.infer_complex``,
     ``LibNodeRewriter.visit_Assign``)."""
     if is_shape_scalar(expr):
         return False
