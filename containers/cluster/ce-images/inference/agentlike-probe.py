@@ -1,6 +1,6 @@
 """Sustained agent-shaped load against a served vLLM endpoint.
 
-The saturation probe in smoke-kimi-eager-pg.sbatch sends "Explain loop tiling, variation N." --
+A short-prompt saturation probe sends "Explain loop tiling, variation N." --
 about 8 tokens -- and measures one burst. It reads 294-307 tok/s where the campaign decodes at
 0.2: that probe does almost no prefill (24 of 28 samples show ZERO prompt throughput) and the
 campaign workload is prefill-bound at roughly 25 tokens in per token out.

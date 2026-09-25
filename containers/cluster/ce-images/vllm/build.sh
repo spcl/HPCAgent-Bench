@@ -4,10 +4,9 @@ set -euo pipefail
 # Build the vLLM inference image and import it to a squashfs. Run it on a COMPUTE node via
 # build.sbatch: the build pulls a ~30 GB ROCm base and compiles vLLM, flash-attn and aiter.
 #
-# The build context is the REPOSITORY ROOT, because the Dockerfile bakes in two files that live in
-# the repo: the tuned fused_moe configs and the eager-PG sitecustomize patch. Nothing is reached
-# from outside the image at RUN time, which is the property that matters -- a build input is under
-# the image digest, an out-of-image PYTHONPATH is not.
+# The build context is the REPOSITORY ROOT, because the Dockerfile bakes in the tuned fused_moe
+# configs that live in the repo. Nothing is reached from outside the image at RUN time: a build
+# input is under the image digest.
 
 # Slurm propagates the submitter's core limit and a dump lands in the CWD (an inode-quota checkout).
 ulimit -c 0

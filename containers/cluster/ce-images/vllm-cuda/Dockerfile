@@ -12,8 +12,6 @@
 #   * aiter, flash-attn's triton_amd path, the aiter JIT prebuild     -- ROCm kernels
 #   * inference/moe-configs/                                          -- tuned for AMD_Instinct_MI300A;
 #                                                                        vLLM ships its own H100 configs
-#   * inference/external-eager-pg-patch/                              -- an RCCL pipeline-bootstrap
-#                                                                        workaround, opt-in, never measured on NCCL
 # So this file pins the base by digest, labels it, and GATES what the serving configs need: the
 # engine version, a CUDA torch, and each parser name by the registry the server resolves it from --
 # a misnamed parser starts the server and fails the first request (verify-tools-reasoning.py).

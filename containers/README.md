@@ -190,7 +190,7 @@ apptainer build hpcagent_bench-judge.sif containers/judge.def    # judge (harnes
 ### Serving jobs and gates (`cluster/ce-images/inference/`)
 
 The MI300A serving recipes (these jobs, the `sglang/` and `vllm/` Dockerfiles and EDF templates,
-`moe-configs/` and the patches) carry the reasoning for each tuned value in their comments; keep it
+`moe-configs/`) carry the reasoning for each tuned value in their comments; keep it
 when editing. vLLM stays at 0.23.0 for oss120b: 0.27.1 (branch `parked/vllm-0271`) served 2405
 tok/s against 3013 on one pinned node with the same probe, dtype, quantization, MoE and attention
 backends -- 25% slower, all of it in decode (steady state 2540 vs 3187; prefill within 0.3%).
@@ -200,12 +200,9 @@ backends -- 25% slower, all of it in decode (steady state 2540 vs 3187; prefill 
 | `fetch_weights.sbatch` | downloads into `$HF_HOME` inside an image, restripes on the host, fails unless every large blob is wide-striped |
 | `serve-private.sbatch` | a private Qwen3.8 endpoint on one beverin node (`docs/serving/private-endpoint.md`) |
 | `serve-daint.sbatch`, `alps-endpoint.sh` | GH200 serving and the client-side endpoint check |
-| `smoke-kimi-sglang.sbatch`, `submit-glm53-sglang.sh`, `smoke-kimi-eager-pg.sbatch`, `smoke-kimi-replicas.sbatch` | multi-node serving smokes (SGLang; GLM-5.3 on SGLang; vLLM with the eager-PG patch; N vLLM replicas in one allocation) |
+| `smoke-kimi-sglang.sbatch`, `submit-glm53-sglang.sh` | multi-node SGLang serving smokes (GLM-5.3 through the second) |
 | `verify-tools-reasoning.py`, `accuracy-gate.py`, `agentlike-probe.py` | tool-call/reasoning, long-context accuracy and throughput gates against a live server |
-| `prebuild-aiter-jit.sbatch` | warms the aiter JIT cache (each op must be called, not imported) |
 | `tune-moe-int4-mi300a.sbatch`, `merge_moe_configs.py`, `moe-configs/` | MoE tuning; `moe-configs/` is build input for `sglang/` and `vllm/` |
-| `external-eager-pg-patch/` | `sitecustomize.py` for the vLLM pipeline bootstrap on RCCL |
-| `ue8m0-patch/` | `sitecustomize.py` giving `torch.Tensor` a `format_ue8m0` default, for an SGLang image without the build-time guard `sglang/Dockerfile` applies |
 | `aiter_mla_check.*`, `sglang_kernel_launch_check.py` | kernel-level correctness checks without a server |
 
 ## Publishing
@@ -259,7 +256,7 @@ Nothing under `containers/` changes, and no image is rebuilt. Details: `docs/ext
 ## Agent harness pins
 
 Both judge-agent images install the harnesses from `agent/harness/`: `node/package.json` +
-`package-lock.json` (claude-code 2.1.197, codex, qwen-code, opencode), `requirements-{miniswe,openhands,sweagent}.txt`
+`package-lock.json` (claude-code 2.1.197), `requirements-{miniswe,openhands}.txt`
 (one venv each under `/opt/harness/`), and `pins.env` (uv, node and their per-architecture sha256).
 To bump one, edit the pin, run `agent/harness/freeze.sh`, run `tests/test_harness_pins.py`, rebuild.
 Each image's final gate checks every version against these files.

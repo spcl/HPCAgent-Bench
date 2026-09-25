@@ -2,8 +2,8 @@
 #
 # vLLM inference on AMD MI300A (gfx942). Serves oss120b; qwen38, kimi and GLM-5.3 are on SGLang.
 #
-# Build context is the REPOSITORY ROOT, because this file bakes in two inputs that live in the
-# repo (the tuned MoE configs and the eager-PG patch):
+# Build context is the REPOSITORY ROOT, because this file bakes in the tuned MoE configs from the
+# repo:
 #   podman build -f containers/cluster/ce-images/vllm/Dockerfile -t hpcagent-bench-vllm .
 # build.sh does that with the right podman flags; build.sbatch runs build.sh on a compute node.
 # Read LIMITATION at the bottom: some gates need a serving job, not a build.
@@ -383,16 +383,6 @@ RUN set -eux; \
 COPY containers/cluster/ce-images/inference/moe-configs/ /opt/moe-configs/
 ENV VLLM_TUNED_CONFIG_FOLDER=/opt/moe-configs
 
-# The eager-PG / PP-collective-split / MLA-lse-layout patch, under the image digest.
-#
-# NOT in site-packages, deliberately. A bare sitecustomize.py there runs at interpreter startup for
-# every process in this venv -- pip included -- and imports torch unconditionally, and its patches
-# default ON (VLLM_PP_COLLECTIVE_SPLIT, VLLM_FIX_MLA_LSE_LAYOUT), so installing it that way would
-# silently apply them to arms that never asked. Its own directory keeps the opt-in that
-# VLLM_EAGER_PG_PATCH=1 expresses (run_cluster.sh puts it on PYTHONPATH only then).
-COPY containers/cluster/ce-images/inference/external-eager-pg-patch/sitecustomize.py \
-     /opt/vllm-eager-pg/sitecustomize.py
-
 # What can be checked WITHOUT a GPU. Everything here is import- and metadata-level; the real gates
 # (device_count()==4, an allreduce, which MLA backend the selector returns) need hardware and live
 # in the smoke test -- see LIMITATION.
@@ -466,10 +456,6 @@ configs = sorted(pathlib.Path("/opt/moe-configs").glob("E=*.json"))
 assert len(configs) >= 2, f"tuned MoE configs missing: {configs}"
 for c in configs:
     json.loads(c.read_text())
-patch = pathlib.Path("/opt/vllm-eager-pg/sitecustomize.py")
-assert "patch_pp_collectives" in patch.read_text(), "eager-pg patch did not land"
-assert not pathlib.Path("/opt/pytorch211/lib/python3.12/site-packages/sitecustomize.py").exists(), \
-    "the eager-pg patch is unconditionally active"
 
 print("vllm", vllm.__version__, "torch", torch.__version__, file=sys.stderr)
 PY

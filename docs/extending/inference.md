@@ -74,8 +74,8 @@ MEM_FRACTION=<measured> CONTEXT_LEN=<context> SGLANG_EXTRA_ARGS="<model flags>" 
 ```
 
 The smoke hard-codes some flags of its own, so a pass shows the image serves the model and
-`serve-only.sbatch` shows the recipe does. `submit-glm53-sglang.sh` wraps it for one model; for
-vLLM, `smoke-kimi-eager-pg.sbatch` takes `MODEL_REPO`, `TOOL_PARSER`, `REASONING_PARSER`, `EXTRA_SERVE_ARGS`.
+`serve-only.sbatch` shows the recipe does. `submit-glm53-sglang.sh` wraps it for one model; a
+vLLM model has no separate smoke, `serve-only.sbatch` is its check.
 
 **4. Register the tag** as `<tag>: {name: <Display Name>, serves: org/Name}` at the END of `models:` in
 `registry.yaml` (key order is marker order; `tests/test_palette.py` pins it); aliases go under `aliases.models`.
