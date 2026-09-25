@@ -215,7 +215,7 @@ testing = ["pytest", "pytest-timeout", "pytest-xdist", "pytest-forked", "pytest-
 # The format gate. clang-format ships its binary in the wheel, which is why it is a python dep.
 linting = ["ruff", "fprettify", "clang-format", "pre-commit"]
 dev = [{ include-group = "testing" }, { include-group = "linting" }]
-# The spcl/dace `extended` commit this tree was released against (paper-experiments-v1). Move the
+# The spcl/dace `extended` commit this tree was released against (tag paper-experiments). Move the
 # pin only together with a release; the cluster jobs pull the branch tip regardless.
 dace = ["dace @ git+https://github.com/spcl/dace.git@a22e0c09aff534a6a3612a2b72276a113e718f5b"]
 
