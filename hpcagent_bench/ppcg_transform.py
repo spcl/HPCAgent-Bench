@@ -85,7 +85,7 @@ def _ppcg_run_env(exe: str) -> dict[str, str] | None:
     loader finds the OLDER system isl first and ppcg dies at startup: ``ppcg: symbol lookup
     error: .../libpet.so.10: undefined symbol: isl_id_set_alloc``. The
     same clash exists whether ppcg lives in the shared tools cache or is baked into the image
-    (containers/cluster/ce-images/judge-agent-amd/Dockerfile's PPCG stage) -- it is a property of
+    (containers/images/judge-agent-amd/Dockerfile's PPCG stage) -- it is a property of
     the SEARCH ORDER, not of where ppcg was installed -- so this runs unconditionally rather than
     only for a cache build.
     """

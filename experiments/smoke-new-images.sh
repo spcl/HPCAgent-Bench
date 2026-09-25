@@ -16,7 +16,7 @@ SCRATCH="${SCRATCH:?}"
 . ../scripts/cache_env.sh
 IMAGES="${SCRATCH}/ce-images"
 EDF_DIR="${HOME}/.edf"
-SMOKES="../containers/cluster/ce-images/inference"
+SMOKES="../containers/inference"
 mkdir -p "${EDF_DIR}"
 
 declare -A SMOKE=(

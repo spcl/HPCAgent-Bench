@@ -809,7 +809,7 @@ def claude_supports_flag(binary: str, flag: str) -> bool:
     """Whether THIS image's ``claude`` accepts ``flag``.
 
     The agent images install the CLI with an unpinned ``npm install -g @anthropic-ai/claude-code``
-    (``containers/cluster/ce-images/judge-agent-amd/Dockerfile``), so two images built two weeks
+    (``containers/images/judge-agent-amd/Dockerfile``), so two images built two weeks
     apart carry two different CLIs. The CLI exits 1 on an unknown option BEFORE it connects
     anything, which the driver would report as "MCP did not connect" and then "agent crashed
     (rc=1)". Every optional flag goes through here for that reason.

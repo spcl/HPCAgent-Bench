@@ -71,7 +71,7 @@ _FP_ASSOC = "-fassociative-math" if config.get("flags.fp_associative", False) el
 _FP_CONTRACT = "-ffp-contract=fast"
 
 #: nvc's spelling of the same thing: ``-Mfma``, on by default at ``-O2`` and above, so this states the
-#: default. Unverified without the NVIDIA HPC SDK (INSTALL_NVHPC); ``containers/parallelizer-gate.sh``
+#: default. Unverified without the NVIDIA HPC SDK (INSTALL_NVHPC); ``containers/lib/parallelizer-gate.sh``
 #: checks it at image build.
 _FP_CONTRACT_NVHPC = "-Mfma"
 
@@ -694,7 +694,7 @@ def detect_sm() -> str:
 ROCMINFO_TIMEOUT = 30.0
 
 #: The AMD GPU arch an image was built for, one line. Every AMD image Dockerfile writes it from the
-#: partition table containers/cluster/ce-images/gpu_arch.env; a file, because the CE drops image ENV.
+#: partition table containers/images/gpu_arch.env; a file, because the CE drops image ENV.
 IMAGE_GPU_ARCH = pathlib.Path("/opt/gpu-arch")
 
 #: A GPU agent's name line in ``rocminfo`` output; CPU agents are named by their model.

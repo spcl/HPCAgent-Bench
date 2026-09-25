@@ -172,7 +172,7 @@ Not campaign arms. One to four nodes, and what you submit when the question is "
 move", not "how did the model score".
 
 ```bash
-cd containers/cluster/ce-images
+cd containers/images
 
 # One Dockerfile per role, and IMAGE_DIR must be spelled: without it build.sbatch exits in
 # about a second and the job looks like it ran. Each lands as <role>-candidate.sqsh.

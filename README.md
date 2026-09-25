@@ -85,8 +85,8 @@ AMD MI300A cluster:
 ```bash
 cp experiments/layers/site-example.env experiments/layers/site.env  # once; edit for your cluster
 scripts/bootstrap_repos.sh && scripts/rebuild_venv.sh           # once per account
-sbatch containers/cluster/ce-images/pull_images.sbatch           # once per cluster
-containers/cluster/ce-images/install_edfs.sh
+sbatch containers/images/pull_images.sbatch           # once per cluster
+containers/images/install_edfs.sh
 
 cd experiments && . .env && nodes=$((INFERENCE_NODES + AGENT_NODES + JUDGE_NODES))
 sbatch --nodes="${nodes}" beverin.sbatch      # one arm
@@ -141,7 +141,8 @@ hpcagent_bench/        the package: benchmarks/ (corpus), harness/ (optimize -> 
                        judge, prompts), frameworks/, translators/, envs/ + flags.py (compiler
                        matrix), skills/, stats/
 experiments/           submit and drive a campaign on Beverin
-containers/            OCI recipes; cluster/ce-images/ for the CE images
+containers/            images/ (one directory per image), lib/ (shared build steps), inference/
+                       (serving jobs), agent/ and judge/ (bound at launch)
 scripts/               release, format gates, setup helpers, sample sbatch jobs (scripts/samples/)
 statistics/            plot_*.py and paired-arm statistics over a finished campaign
 reproducibility/       paper artifact READMEs

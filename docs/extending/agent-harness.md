@@ -11,7 +11,7 @@ from the repo root; `python` is the campaign venv with `PYTHONPATH=$PWD`.
 |---|---|
 | `containers/agent/harness/run_<name>.py`, `requirements-<name>.txt` | the runner and its pinned venv |
 | `experiments/harnesses.py` | a command function and one `RUNNERS` entry; `HARNESSES` is `("claude", *RUNNERS)` |
-| `containers/cluster/ce-images/judge-agent-{amd,cuda,cpu}/Dockerfile`, `verify_image.py` | build `/opt/harness/<name>`, gate its import |
+| `containers/images/judge-agent-{amd,cuda,cpu}/Dockerfile`, `verify_image.py` | build `/opt/harness/<name>`, gate its import |
 | `record_identity.sh`, `registry.yaml`, the `tests/test_harness_*.py` inventories | the name in each list |
 
 A new prompt fragment is the file `containers/agent/tools-<name>.md`: `experiments/materialize_shared.sh`
@@ -128,7 +128,7 @@ match. An npm CLI goes into `containers/agent/harness/node/package.json` at an e
 for the lock and a `cli=package` entry in the gate's `for pin in` loop. The isolated venv keeps the framework's
 dependencies off the system `litellm`. The command runs `harness/run_myagent.py` from the payload bound at launch, so a
 runner edit needs no rebuild; a new pin does: `IMAGE_DIR=$PWD/judge-agent-amd sbatch build_and_verify.sbatch` in
-`containers/cluster/ce-images`.
+`containers/images`.
 The pins and the bump procedure are in "Agent harness pins" in `containers/README.md`.
 
 ## Validation

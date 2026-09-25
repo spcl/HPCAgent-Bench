@@ -15,7 +15,7 @@ import sys
 import pytest
 
 ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parents[1]
-CE_IMAGES: pathlib.Path = ROOT / "containers" / "cluster" / "ce-images"
+CE_IMAGES: pathlib.Path = ROOT / "containers" / "images"
 JUDGE_AGENT_DOCKERFILES: tuple[str, ...] = (
     "judge-agent-amd/Dockerfile",
     "judge-agent-cuda/Dockerfile",
@@ -86,7 +86,7 @@ def test_verify_image_binds_the_checkout_agent_tree_and_runs_its_checks_from_rep
     text = (CE_IMAGES / "verify_image.sbatch").read_text(encoding="utf-8")
     assert 'REPO="${REPO:-${S}/hpcagent-bench}"' in text
     assert '"${REPO}/containers/agent:/opt/hpcagent-bench-agent"' in text
-    assert 'python3 "${REPO}/containers/cluster/ce-images/tools_launch_check.py"' in text
+    assert 'python3 "${REPO}/containers/images/tools_launch_check.py"' in text
     assert "exit $(( rc + sc + tools_rc ))" in text
     hardcoded = [line for line in text.splitlines() if "${S}/hpcagent-bench" in line and not line.startswith("REPO=")]
     assert hardcoded == []
@@ -94,9 +94,7 @@ def test_verify_image_binds_the_checkout_agent_tree_and_runs_its_checks_from_rep
 
 def test_build_and_verify_hands_its_checkout_to_verify_image() -> None:
     text = (CE_IMAGES / "build_and_verify.sbatch").read_text(encoding="utf-8")
-    assert re.search(
-        r'REPO="\$\{REPO\}" \\\n\s+bash "\$\{REPO\}/containers/cluster/ce-images/verify_image\.sbatch"', text
-    )
+    assert re.search(r'REPO="\$\{REPO\}" \\\n\s+bash "\$\{REPO\}/containers/images/verify_image\.sbatch"', text)
 
 
 def launch_check(agent_dir: pathlib.Path, web_search: pathlib.Path) -> subprocess.CompletedProcess[str]:

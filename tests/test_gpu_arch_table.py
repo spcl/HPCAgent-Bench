@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """One partition table names the AMD GPU arch; builds, gates, EDF templates and the harness take it from there.
 
-containers/cluster/ce-images/gpu_arch.env maps a Slurm partition to the gfx arch of its GPUs. These pin
+containers/images/gpu_arch.env maps a Slurm partition to the gfx arch of its GPUs. These pin
 the table and its shell lookup, the absence of gfx literals wherever an arch could be spelled instead,
 the rendered EDF arch variables, the runtime three-way check on a stub srun, the device-code gate on
 stand-in binaries, and detect_gfx refusing to guess.
@@ -20,9 +20,9 @@ import pytest
 from hpcagent_bench import flags, languages
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-CE = ROOT / "containers" / "cluster" / "ce-images"
+CE = ROOT / "containers" / "images"
 TABLE = CE / "gpu_arch.env"
-GATE = CE / "device_arch_gate.sh"
+GATE = ROOT / "containers" / "lib" / "device_arch_gate.sh"
 CHECK = CE / "gpu_arch_check.sh"
 SHELL_PATH = "/usr/bin:/bin"
 #: A gfx arch spelled out.
@@ -40,7 +40,7 @@ ARCH_VARS = ("HCC_AMDGPU_TARGET", "PYTORCH_ROCM_ARCH", "GPU_ARCHS", "GPU_ARCH_LI
 #: Non-comment gfx literals that must stay, keyed by (file, stripped line), with the reason.
 LITERAL_EXCEPTIONS = {
     (
-        "containers/cluster/ce-images/sglang-mi200/Dockerfile",
+        "containers/images/sglang-mi200/Dockerfile",
         r"""ALLOW = 'if amdgpu_target not in ["gfx942", "gfx950", "gfx1250"]:\n'""",
     ): "upstream setup_rocm.py allow-list line, matched verbatim so the edit fails when upstream changes it",
 }
@@ -159,7 +159,7 @@ def test_every_amd_image_takes_rocm_arch_from_the_table_refuses_none_stamps_it_a
     for var in ARCH_VARS:
         values = {value.strip('"') for value in re.findall(rf"\b{var}=(\S+)", docker)}
         assert values == {"${ROCM_ARCH}"}, (image, var, values)
-    assert "COPY containers/cluster/ce-images/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh" in docker
+    assert "COPY containers/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh" in docker
     assert '/usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}"' in docker
 
 
@@ -179,7 +179,7 @@ def in_literal_scope(rel: str) -> bool:
     """The files where a spelled-out arch would be a second source of truth."""
     name = rel.rsplit("/", 1)[-1]
     parts = rel.split("/")
-    if rel == "containers/cluster/ce-images/gpu_arch.env" or name.endswith(".md") or {"skills", "tests"} & set(parts):
+    if rel == "containers/images/gpu_arch.env" or name.endswith(".md") or {"skills", "tests"} & set(parts):
         return False
     if name in ("Dockerfile", "build.sh") or name.endswith(".sbatch") or re.fullmatch(r"edf.*\.toml\.example", name):
         return True
@@ -318,12 +318,12 @@ def test_the_runtime_check_refuses_a_partition_the_table_does_not_name(tmp_path:
     [
         ("experiments/run_cluster.sh", "\ncheck_gpu_arch\n", 'role_srun "${INFERENCE_NODES}"'),
         (
-            "containers/cluster/ce-images/verify_image.sbatch",
+            "containers/images/verify_image.sbatch",
             'gpu_arch_check.sh" "${EDF}"',
             'srun --environment="${EDF}"',
         ),
         (
-            "containers/cluster/ce-images/inference/serve-private.sbatch",
+            "containers/inference/serve-private.sbatch",
             'gpu_arch_check.sh" "${EDF}"',
             'make_private_dir "${RUN_DIR}"',
         ),

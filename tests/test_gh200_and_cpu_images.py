@@ -19,8 +19,8 @@ from types import ModuleType
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-CE = ROOT / "containers" / "cluster" / "ce-images"
-SERVE = CE / "inference" / "serve-daint.sbatch"
+CE = ROOT / "containers" / "images"
+SERVE = ROOT / "containers" / "inference" / "serve-daint.sbatch"
 ARCH = os.uname().machine
 
 #: Platform -> (EDF name, template, image) it renders, as images.env names them.

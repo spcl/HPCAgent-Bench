@@ -220,7 +220,7 @@ results/plots/*
 
 # Image-build job stdout/stderr: the build sbatch scripts write logs/ relative to
 # the submit cwd, which lands in-tree when submitted from the repo.
-containers/cluster/ce-images/**/logs/
+/containers/**/logs/
 
 # Paper draft (working artifact, not part of the repo)
 paper/

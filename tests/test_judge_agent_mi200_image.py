@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-CE = ROOT / "containers" / "cluster" / "ce-images"
+CE = ROOT / "containers" / "images"
 RECIPE = CE / "judge-agent-amd"
 SHELL_PATH = "/usr/bin:/bin"
 #: The candidate names every mi300 build wrote before the partition became a parameter.
@@ -301,7 +301,7 @@ def test_the_e2e_smoke_takes_the_arms_judge_edf_unless_the_caller_names_one(
 def test_verify_only_reverifies_the_partitions_candidates_without_building(tmp_path: pathlib.Path) -> None:
     """A verifier fix must not cost a 4 h rebuild: VERIFY_ONLY=1 re-runs stage 2 on what is there."""
     repo, scratch = tmp_path / "repo", tmp_path / "scratch"
-    ce = repo / "containers" / "cluster" / "ce-images"
+    ce = repo / "containers" / "images"
     (ce / "judge-agent-amd").mkdir(parents=True)
     (scratch / "ce-images").mkdir(parents=True)
     for name in ("build_common.sh", "images.env", "gpu_arch.env", "cpu_target.env"):
@@ -314,7 +314,7 @@ def test_verify_only_reverifies_the_partitions_candidates_without_building(tmp_p
     env = {
         "SCRATCH": str(scratch),
         "REPO": str(repo),
-        "IMAGE_DIR": "containers/cluster/ce-images/judge-agent-amd",
+        "IMAGE_DIR": "containers/images/judge-agent-amd",
         "SLURM_JOB_PARTITION": "mi200",
         "SLURM_JOB_ID": "7",
         "VERIFY_ONLY": "1",

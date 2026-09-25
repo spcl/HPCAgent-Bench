@@ -13,8 +13,8 @@ needs a CSCS-signed ssh key (section 8).
 
 | File | Purpose |
 |---|---|
-| `containers/cluster/ce-images/inference/serve-private.sbatch` | Slurm launcher, submitted on beverin |
-| `containers/cluster/ce-images/inference/alps-endpoint.sh` | client check, sourced in your Daint job |
+| `containers/inference/serve-private.sbatch` | Slurm launcher, submitted on beverin |
+| `containers/inference/alps-endpoint.sh` | client check, sourced in your Daint job |
 | `tests/test_serve_private.py`, `tests/test_alps_endpoint.py` | tests for the properties in section 1 |
 | [`extending-private-inference.md`](extending-private-inference.md) | contributor guide: contract, new presets, access paths, engines |
 
@@ -62,7 +62,7 @@ needs a CSCS-signed ssh key (section 8).
 - `mi200`: the MI250X supports neither FP8 nor the aiter kernels, so this preset serves BF16 weights with
   triton attention, `--disable-custom-all-reduce` and `SGLANG_USE_AITER=0`. Its memory fraction applies
   to each GPU's 64 GiB, so mi300 fractions do not transfer. The image is built as described in
-  `containers/cluster/ce-images/sglang-mi200/README.md`.
+  `containers/images/sglang-mi200/README.md`.
 
 Measurements on one node. Every leg passed the 401/200 check, the tool-call and reasoning gate, and the
 load probe, which sends 16 concurrent requests that each generate exactly 256 tokens (`ignore_eos`).
@@ -135,7 +135,7 @@ partition on beverin is `mi200`, and each preset refuses to run on the other par
 
 ```bash
 cd <hpcagent-bench checkout>
-L=containers/cluster/ce-images/inference/serve-private.sbatch
+L=containers/inference/serve-private.sbatch
 
 # Smoke test: every LEGS entry is started, checked and stopped.
 PRESET=mi200 sbatch --partition=mi200 --gpus-per-node=8 "$L"
@@ -216,13 +216,13 @@ print(reply.choices[0].message.content)
    ===== alps endpoint is live: http://172.28.9.16:30000/v1 on <node>, job 123456 =====
    endpoint.json: {"url": "http://172.28.9.16:30000/v1", "served_model": "hpcagent-bench-vllm", "key_file": "...", ...}
    In your job on Daint (or another Alps cluster), while this job runs (docs/serving/private-endpoint.md):
-     source <checkout>/containers/cluster/ce-images/inference/alps-endpoint.sh <run dir>/endpoint.json
+     source <checkout>/containers/inference/alps-endpoint.sh <run dir>/endpoint.json
    ```
 
 2. In your Daint job script, run that `source` line before the agent starts:
 
    ```bash
-   source <checkout>/containers/cluster/ce-images/inference/alps-endpoint.sh <run dir>/endpoint.json || exit 1
+   source <checkout>/containers/inference/alps-endpoint.sh <run dir>/endpoint.json || exit 1
    ```
 
 `alps-endpoint.sh` runs these steps in order and stops at the first failure:

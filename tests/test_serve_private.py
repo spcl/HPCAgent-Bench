@@ -18,7 +18,7 @@ import pytest
 from tests.env_render import rendered
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-LAUNCHER = ROOT / "containers" / "cluster" / "ce-images" / "inference" / "serve-private.sbatch"
+LAUNCHER = ROOT / "containers" / "inference" / "serve-private.sbatch"
 #: The qwen38 campaign base whose serving flags the mi300 preset mirrors.
 CAMPAIGN_BASE = "llrbase-c:qwen38"
 KEY = "0123456789abcdef" * 4
@@ -300,9 +300,7 @@ def test_alps_serve_mode_publishes_the_url_model_and_key_path_but_never_the_key(
         "job_id": "dry-run",
     }
     (run_dir,) = (tmp_path / "runs").iterdir()
-    assert (
-        f"source {ROOT}/containers/cluster/ce-images/inference/alps-endpoint.sh {run_dir}/endpoint.json" in done.stdout
-    )
+    assert f"source {ROOT}/containers/inference/alps-endpoint.sh {run_dir}/endpoint.json" in done.stdout
     assert "ssh -N -J" not in done.stdout
     assert KEY not in done.stdout + done.stderr
 
