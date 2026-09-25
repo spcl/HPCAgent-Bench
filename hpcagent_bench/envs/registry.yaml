@@ -41,9 +41,37 @@ markers: ["o", "s", "^", "D", "v", "P", "X", "*"]
 # entry names a `marker:`. The circle is the control's and never in the pool. A matplotlib marker:
 # a one-character code, or [sides, style, angle] (style 0 polygon, 1 star, 2 asterisk). More
 # treatments than shapes is a registry error, not a silent repeat.
-shapes: ["s", "^", "D", "v", "P", "X", "*", "p", "h", "<", ">", "d", "8", "H",
-         [4, 1, 0], [6, 1, 0], [5, 1, 180], [7, 0, 0], [5, 0, 180], [8, 1, 0], [4, 1, 45],
-         [3, 1, 0], [6, 2, 0], [5, 2, 0], "+", "x", "1", "2", "3", "4"]
+shapes:
+  - "s"
+  - "^"
+  - "D"
+  - "v"
+  - "P"
+  - "X"
+  - "*"
+  - "p"
+  - "h"
+  - "<"
+  - ">"
+  - "d"
+  - "8"
+  - "H"
+  - [4, 1, 0]
+  - [6, 1, 0]
+  - [5, 1, 180]
+  - [7, 0, 0]
+  - [5, 0, 180]
+  - [8, 1, 0]
+  - [4, 1, 45]
+  - [3, 1, 0]
+  - [6, 2, 0]
+  - [5, 2, 0]
+  - "+"
+  - "x"
+  - "1"
+  - "2"
+  - "3"
+  - "4"
 
 # How much lighter each packet BEYOND the lead makes the colour, so `cpfsrc` and
 # `cpfsrc+lang-skills` read as one treatment family at two strengths. Large enough to read as a
