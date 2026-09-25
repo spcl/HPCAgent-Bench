@@ -49,5 +49,3 @@ fuzz:
   constraints:
   - nproj <= ngrid
   - nstate <= ngrid
-experiment_tags:
-- ls3df

@@ -327,6 +327,4 @@ mpi:
     - klon
     work_exponent: 1
 experiment_tags:
-- mpi-focus32
-- weather_stencils
 - scicomp-focus40

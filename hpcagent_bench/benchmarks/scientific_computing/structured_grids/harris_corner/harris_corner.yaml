@@ -59,6 +59,3 @@ mpi:
     R:
     - H
     - W
-experiment_tags:
-- mpi-focus32
-- halide

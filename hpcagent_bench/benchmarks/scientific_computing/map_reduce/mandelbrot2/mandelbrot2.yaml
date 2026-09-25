@@ -87,5 +87,3 @@ mpi:
 min_precision: fp64
 experiment_tags:
 - npbench
-- mpi-focus32
-- mandelbrot2

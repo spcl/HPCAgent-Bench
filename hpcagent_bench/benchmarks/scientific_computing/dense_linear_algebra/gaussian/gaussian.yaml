@@ -28,5 +28,3 @@ array_args:
 output_args:
 - A
 - b
-experiment_tags:
-- gaussian
