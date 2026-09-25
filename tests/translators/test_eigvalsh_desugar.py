@@ -22,6 +22,7 @@ import numpy as np
 
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import eigh_alias_names, EighLoopRewriter
 from tests.translators.op_oracle import run_op
+from tests.translators.source_module import run_source
 
 EIGVALSH_SRC = "def f(A):\n    w = np.linalg.eigvalsh(A)\n"
 
@@ -49,7 +50,8 @@ def desugar_body(src: str, dtypes: dict | None = None) -> list:
 def exec_desugared(src: str, scope: dict, dtypes: dict | None = None) -> dict:
     mod = ast.Module(body=desugar_body(src, dtypes), type_ignores=[])
     ast.fix_missing_locations(mod)
-    exec(compile(mod, "<eigvalsh>", "exec"), {"np": np, "range": range, "abs": abs}, scope)
+    scope.update({"np": np, "range": range, "abs": abs})
+    run_source(mod, scope, "<eigvalsh>")
     return scope
 
 

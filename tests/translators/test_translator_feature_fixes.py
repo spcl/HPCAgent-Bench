@@ -34,6 +34,7 @@ from hpcagent_bench.translators.numpyto_common.lowering import (
     SliceToScalarRewriter,
     SubscriptifyNames,
 )
+from tests.translators.source_module import run_source
 
 
 def expr_(src):
@@ -1134,7 +1135,7 @@ def test_fft_desugar_fires_when_the_transform_is_one_operand_of_the_expression()
     assert "np.exp(" in lowered and "* nnr" in lowered, f"scaling lost by the hoist:\n{lowered}"
 
     ns = {"np": np}
-    exec(compile(ast.parse(lowered), "<fftwrapped>", "exec"), ns)  # noqa: S102
+    run_source(lowered, ns, "<fftwrapped>")
     rng = np.random.default_rng(0)
     g = rng.standard_normal((4, 4, 4)) + 1j * rng.standard_normal((4, 4, 4))
     out = np.zeros_like(g)
@@ -1541,7 +1542,7 @@ def test_repeat_negative_axis_lowers_to_the_numpy_result() -> None:
 
     got = desugar_for_python_backend(src, kir, backend="numba")
     namespace = {"np": np}
-    exec(compile(got, "<desugared>", "exec"), namespace)
+    run_source(got, namespace, "<desugared>")
     namespace["k"](x, out)
 
     assert "np.repeat" not in got and "x[__rp0_i0, __rp0_i1 // 3]" in got
@@ -1608,7 +1609,7 @@ def exec_desugared(src, arrays, input_args, scope, backend: str = "pythran"):
     out = desugar_for_python_backend(src, py_kir("kernel", src, arrays, [], input_args), backend=backend)
     fn = next(n for n in ast.parse(out).body if isinstance(n, ast.FunctionDef))
     ns = {"np": np}
-    exec(compile(ast.Module(body=[fn], type_ignores=[]), "<lin>", "exec"), ns)
+    run_source(ast.Module(body=[fn], type_ignores=[]), ns, "<lin>")
     ns["kernel"](*[scope[a] for a in input_args])
     return scope
 
@@ -2061,7 +2062,7 @@ def exec_source(src, args) -> None:
     """Run a kernel source VERBATIM under numpy -- the original side of an
     original-vs-desugared equivalence check."""
     ns = {"np": np}
-    exec(compile(ast.parse(src), "<verbatim>", "exec"), ns)
+    run_source(src, ns, "<verbatim>")
     ns["kernel"](*args)
 
 
@@ -2229,7 +2230,7 @@ def test_boolop_preserves_short_circuit_and_evaluation_order() -> None:
         buffers = [[np.zeros(2, np.int64), dim, np.zeros(1)] for unused in range(2)]
         for source, args in zip((src, out), buffers):
             ns = {"np": np, "bump": bump}
-            exec(compile(ast.parse(source), "<sc>", "exec"), ns)
+            run_source(source, ns, "<sc>")
             ns["kernel"](*args)
         assert list(buffers[0][0]) == evals, f"the fixture's own short-circuit changed at dim={dim}"
         assert np.array_equal(buffers[0][0], buffers[1][0]), f"operand evaluated a different number of times, dim={dim}"

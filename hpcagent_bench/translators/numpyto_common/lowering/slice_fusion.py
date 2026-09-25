@@ -147,10 +147,10 @@ class SliceFusion(ast.NodeTransformer):
         # Build the per-axis scalarisation: iter var ``i_axis`` ranging
         # ``[start, stop)``; every RHS subscript gets the iter var
         # offset by the LHS slice's start.
-        iter_vars: list[ast.Name] = []
+        iter_vars: list[ast.Name | None] = []
         for axis in range(len(ranges)):
             if not isinstance(lhs_dims[axis], ast.Slice):
-                iter_vars.append(None)  # type: ignore[arg-type]
+                iter_vars.append(None)
                 continue
             iter_vars.append(ast.Name(id=iter_var_name(axis), ctx=ast.Load()))
 

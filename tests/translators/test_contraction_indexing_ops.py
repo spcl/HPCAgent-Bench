@@ -9,7 +9,6 @@ covered by ``test_contraction_indexing_ops_e2e`` via the standalone oracle.
 """
 
 import ast
-import sys
 import types
 from types import SimpleNamespace
 
@@ -46,6 +45,7 @@ from hpcagent_bench.translators.numpyto_common.lowering import (
     ReshapeMethodRewriter,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import desugar_for_python_backend
+from tests.translators import op_oracle
 
 
 def name_(n: str) -> ast.Name:
@@ -554,22 +554,6 @@ def oracle() -> types.ModuleType:
 
     if not (shutil.which("gcc") and shutil.which("gfortran") and shutil.which("g++")):
         pytest.skip("gcc/g++/gfortran needed for the native numerical check")
-    import numpy as np  # noqa: F401
-
-    try:
-        from tests.translators import op_oracle  # tests/ is on sys.path under pytest's rootdir
-    except ImportError:
-        import importlib.util
-        import pathlib
-
-        spec = importlib.util.spec_from_file_location(
-            "op_oracle", pathlib.Path(__file__).resolve().parent / "op_oracle.py"
-        )
-        op_oracle = importlib.util.module_from_spec(spec)
-        # Registered BEFORE exec: dataclasses resolves a string annotation through
-        # sys.modules[cls.__module__], which is None for a module loaded by path alone.
-        sys.modules[spec.name] = op_oracle
-        spec.loader.exec_module(op_oracle)
     return op_oracle
 
 

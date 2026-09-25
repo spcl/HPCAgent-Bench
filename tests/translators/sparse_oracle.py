@@ -35,16 +35,14 @@ from typing import Any
 from collections.abc import Callable
 
 import numpy as np
+import scipy.sparse as sp
 
 from hpcagent_bench import languages
-
-try:
-    import scipy.sparse as sp
-except ImportError:  # pragma: no cover - scipy gated by the caller
-    sp = None  # type: ignore
+from hpcagent_bench.translators.numpyto_common.dtypes import SCALAR_KINDS, ctype_for_scalar_kind
+from hpcagent_bench.translators.numpyto_common.frontend import declared_shapes
+from tests.translators.source_module import evaluate, run_source
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-SRC = REPO / "hpcagent_bench" / "translators"
 
 # discovery
 
@@ -242,7 +240,7 @@ def shape_val(tok: str, env: dict[str, int]) -> int:
     """Resolve a shape token (``"N"``, ``"NI + 1"``) against ``env``."""
     if is_dim(tok) and tok in env:
         return env[tok]
-    return int(eval(tok, {"__builtins__": {}}, env))  # noqa: S307 - trusted bench_info
+    return int(evaluate(tok, {"__builtins__": {}, **env}))
 
 
 # end-to-end run
@@ -260,11 +258,12 @@ def load_numpy_fn(numpy_py: pathlib.Path, func_name: str) -> Callable:
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(numpy_py.stem, numpy_py)
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     # Registered BEFORE exec: dataclasses resolves a string annotation through
     # sys.modules[cls.__module__], which is None for a module loaded by path alone.
     sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)  # type: ignore
+    spec.loader.exec_module(mod)
     return vars(mod)[func_name]
 
 
@@ -282,15 +281,6 @@ def emit_c_(short: str, numpy_py: pathlib.Path, out: pathlib.Path, config_name: 
     rc = emit_kernel(BenchSpec.load(short), numpy_py, out, target="c", config=config_name)
     if rc != 0:
         raise RuntimeError(f"emit failed for {short} (config={config_name})")
-
-
-from hpcagent_bench.translators.numpyto_common.dtypes import SCALAR_KINDS, ctype_for_scalar_kind
-
-# The ONE reader of a manifest's declared arrays, shared with the translator front end: an
-# ``init`` block spells them under ``arrays`` (bare shape string or ``{"shape": ...}`` mapping),
-# and reading ``init["shapes"]`` here instead is what silently emptied ``dense_inputs`` -- every
-# solver's ``b``/``x`` then fell through to the scalar filler and scipy rejected ``A @ 2.0``.
-from hpcagent_bench.translators.numpyto_common.frontend import declared_shapes
 
 
 def run_kernel(
@@ -604,7 +594,7 @@ def run_module_backend(
     try:
         jax_src = emit_jax(k.numpy_py.read_text(), info["func_name"])
         ns: dict[str, Any] = {}
-        exec(compile(jax_src, "<jax>", "exec"), ns)
+        run_source(jax_src, ns, "<jax>")
         fn = ns[info["func_name"]]
     except Exception as exc:  # noqa: BLE001
         return OracleResult(k.short, False, float("nan"), f"jax emit/import failed: {type(exc).__name__}: {exc}")
@@ -747,7 +737,7 @@ def run_dace(
     # symbol the emitter cannot pass as an argument -- the caller binds it by evaluating
     # the recorded closed-form recipe, in dependency order, over the already-known values.
     for name, expr in vars(mod).get("__hpcagent_bench_symbol_defs__", []):
-        sym_vals[name] = int(eval(expr, {"__builtins__": {}}, {"min": min, "max": max, **sym_vals}))
+        sym_vals[name] = int(evaluate(expr, {"__builtins__": {}, "min": min, "max": max, **sym_vals}))
     syms = {s: int(sym_vals[s]) for s in free_syms if s in sym_vals}
     try:
         ret = compiled(**call, **syms)

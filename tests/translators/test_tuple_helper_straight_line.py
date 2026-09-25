@@ -23,6 +23,7 @@ import itertools
 import pytest
 
 from hpcagent_bench.translators.numpyto_common.frontend import folded_straight_line, return_expression, tuple_leaves
+from tests.translators.source_module import evaluate, run_source
 
 #: ``_tap_span``'s exact shape: locals INTERLEAVED with guarded returns, and a docstring first.
 TAP_SPAN = (
@@ -91,9 +92,12 @@ def test_the_folded_expression_computes_what_the_helper_computes(stride) -> None
     slice, so agreement is checked rather than assumed."""
     fn = parse(TAP_SPAN)
     scope: dict = {}
-    exec(compile(ast.Module(body=[fn], type_ignores=[]), "<tap>", "exec"), {"min": min}, scope)  # noqa: S102
+    scope.update({"min": min})
+    run_source(ast.Module(body=[fn], type_ignores=[]), scope, "<tap>")
     original = scope["_tap_span"]
     folded = ast.unparse(return_expression(folded_straight_line(fn.body)))
     for in_size, out_size, padding, k in itertools.product(range(1, 7), range(1, 9), range(0, 3), range(0, 4)):
         env = {"in_size": in_size, "out_size": out_size, "stride": stride, "padding": padding, "k": k}
-        assert tuple(original(in_size, out_size, stride, padding, k)) == tuple(eval(folded, {"min": min}, env)), env
+        assert tuple(original(in_size, out_size, stride, padding, k)) == tuple(evaluate(folded, {"min": min, **env})), (
+            env
+        )

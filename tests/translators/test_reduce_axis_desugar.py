@@ -24,6 +24,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     reduce_axis_stmts,
     desugar_for_python_backend,
 )
+from tests.translators.source_module import run_source
 
 
 def kir_(kernel_name, **arrays):
@@ -121,7 +122,7 @@ def test_non_literal_ddof_leaves_the_reduction_and_its_operand_verbatim() -> Non
 
     got = desugar_for_python_backend(src, kir, backend="numba")
     namespace = {"np": np}
-    exec(compile(got, "<desugared>", "exec"), namespace)
+    run_source(got, namespace, "<desugared>")
     namespace["k"](a, b, out, 1)
 
     assert got.startswith("def k(a, b, out, d):\n    out[:] = np.var(a + b, axis=0, ddof=d)\n    __rsrc0 = a + b\n")

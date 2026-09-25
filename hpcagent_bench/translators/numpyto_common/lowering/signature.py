@@ -306,7 +306,7 @@ def detect_output_and_index_arrays(kir: KernelIR, helpers: Sequence[KernelIR] = 
             index_arrays.add(src)
 
     for name in written:
-        name_to_arr[name].is_output = True  # type: ignore[misc]
+        name_to_arr[name].is_output = True
     for name in index_arrays:
         a = name_to_arr[name]
         # Respect an explicit integer dtype (declared via bench_info ``init.dtypes``, the
@@ -317,7 +317,7 @@ def detect_output_and_index_arrays(kir: KernelIR, helpers: Sequence[KernelIR] = 
         dt = str(vars(a).get("dtype") or "")
         if dtypes.is_integer(dt) or dt in ("bool", "bool_"):
             continue
-        a.dtype = "int64"  # type: ignore[misc]
+        a.dtype = "int64"
 
 
 def settle_helper_forwarding(helpers: Sequence[KernelIR]) -> None:
@@ -504,7 +504,7 @@ def fold_shape_aliases(kir: KernelIR) -> None:
     for arr in kir.arrays:
         new_shape = tuple(sub_(str(t)) for t in arr.shape)
         if new_shape != tuple(arr.shape):
-            arr.shape = new_shape  # type: ignore[misc]
+            arr.shape = new_shape
 
 
 def foldable_shape_aliases(kir: KernelIR) -> dict[str, ast.expr]:

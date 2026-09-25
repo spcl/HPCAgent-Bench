@@ -3922,10 +3922,8 @@ def sympy_reserved(name: str) -> bool:
     The probe has to be a COMPOUND expression: ``pystr_to_symbolic`` short-circuits a bare name
     straight to ``symbol()`` and would call every name safe.
     """
-    try:
-        from dace.symbolic import pystr_to_symbolic  # deferred: dace is not a translator dependency
-    except ImportError:
-        return False  # no dace, no sympy namespace to collide with
+    from dace.symbolic import pystr_to_symbolic  # deferred: only the dace emitter needs dace
+
     try:
         expr = pystr_to_symbolic(f"{name} + 1")
     except Exception:  # noqa: BLE001 -- any sympify failure means the name is unusable as a symbol

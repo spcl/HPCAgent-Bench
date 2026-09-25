@@ -14,6 +14,7 @@ import ast
 import numpy as np
 
 from hpcagent_bench.translators.numpyto_common.lowering import EyeToZerosDiagonal, ssa_rename_reassigned
+from tests.translators.source_module import run_source
 
 
 def test_ssa_rename_rewrites_plain_subscript_fill_target() -> None:
@@ -33,7 +34,7 @@ def apply_eye(expr: str) -> np.ndarray:
     EyeToZerosDiagonal().visit(mod)
     ast.fix_missing_locations(mod)
     ns = {"np": np}
-    exec(compile(mod, "<eye>", "exec"), ns)  # noqa: S102 - fixed local AST, test only
+    run_source(mod, ns, "<eye>")
     return ns["X"]
 
 

@@ -3,7 +3,8 @@
 import ast
 import copy
 import math
-from collections.abc import Sequence
+import operator
+from collections.abc import Callable, Iterator, Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import const_int, name_store_counts
@@ -179,13 +180,8 @@ class ConstComprehensionFold(ast.NodeTransformer):
     def fold_(self, node: ast.expr) -> ast.AST:
         if not self.foldable(node):
             return node
-        expr = ast.Expression(body=copy.deepcopy(node))
-        ast.fix_missing_locations(expr)
-        # A comprehension body runs in its own scope and resolves free names through
-        # GLOBALS, so the constant table goes in as globals, not as locals.
-        env = {"__builtins__": {}, **CONST_BUILTINS, **self.consts}
         try:
-            value = eval(compile(expr, "<desugar>", "eval"), env)  # noqa: S307 -- every name is a proven constant
+            value = ConstEvaluator({**CONST_BUILTINS, **self.consts}).value(node, {})
         except Exception:  # noqa: BLE001 -- any failure to evaluate just means "not foldable"
             return node
         if isinstance(node, ast.GeneratorExp):
@@ -211,6 +207,159 @@ class ConstComprehensionFold(ast.NodeTransformer):
     def visit_GeneratorExp(self, node: ast.GeneratorExp) -> ast.AST:
         self.generic_visit(node)
         return self.fold_(node)
+
+
+BINARY_OPS: dict[type[ast.operator], Callable[[object, object], object]] = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.MatMult: operator.matmul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+    ast.LShift: operator.lshift,
+    ast.RShift: operator.rshift,
+    ast.BitOr: operator.or_,
+    ast.BitXor: operator.xor,
+    ast.BitAnd: operator.and_,
+}
+UNARY_OPS: dict[type[ast.unaryop], Callable[[object], object]] = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+    ast.Not: operator.not_,
+    ast.Invert: operator.invert,
+}
+COMPARE_OPS: dict[type[ast.cmpop], Callable[[object, object], object]] = {
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
+    ast.Is: operator.is_,
+    ast.IsNot: operator.is_not,
+    ast.In: lambda a, b: a in b,
+    ast.NotIn: lambda a, b: a not in b,
+}
+
+
+class ConstEvaluator:
+    """Python's own semantics for the expressions :meth:`ConstComprehensionFold.foldable` admits:
+    literals, displays, operators, conditionals, calls to ``CONST_BUILTINS`` and comprehensions,
+    over names bound in ``names``. A comprehension runs in its own scope, a generator expression
+    stays lazy, and any other node raises, which the caller reads as "not foldable"."""
+
+    def __init__(self, names: dict[str, object]) -> None:
+        self.names = names
+
+    def value(self, node: ast.AST, scope: dict[str, object]) -> object:
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Name):
+            return scope[node.id] if node.id in scope else self.names[node.id]
+        if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            items = [self.value(e, scope) for e in node.elts]
+            return {ast.Tuple: tuple, ast.List: list, ast.Set: set}[type(node)](items)
+        if isinstance(node, ast.Dict):
+            return self.display_dict(node, scope)
+        if isinstance(node, ast.BinOp):
+            return BINARY_OPS[type(node.op)](self.value(node.left, scope), self.value(node.right, scope))
+        if isinstance(node, ast.UnaryOp):
+            return UNARY_OPS[type(node.op)](self.value(node.operand, scope))
+        if isinstance(node, ast.BoolOp):
+            return self.boolop(node, scope)
+        if isinstance(node, ast.Compare):
+            return self.compare(node, scope)
+        if isinstance(node, ast.IfExp):
+            chosen = node.body if self.value(node.test, scope) else node.orelse
+            return self.value(chosen, scope)
+        if isinstance(node, ast.Call):
+            return self.call(node, scope)
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            return self.comprehension(node, scope)
+        raise NotImplementedError(type(node).__name__)
+
+    def display_dict(self, node: ast.Dict, scope: dict[str, object]) -> dict:
+        result: dict = {}
+        for key, item in zip(node.keys, node.values):
+            if key is None:
+                result.update(self.value(item, scope))
+            else:
+                result[self.value(key, scope)] = self.value(item, scope)
+        return result
+
+    def boolop(self, node: ast.BoolOp, scope: dict[str, object]) -> object:
+        result: object = None
+        for operand in node.values:
+            result = self.value(operand, scope)
+            if bool(result) != isinstance(node.op, ast.And):
+                return result
+        return result
+
+    def compare(self, node: ast.Compare, scope: dict[str, object]) -> object:
+        left = self.value(node.left, scope)
+        result: object = True
+        for op, comparator in zip(node.ops, node.comparators):
+            right = self.value(comparator, scope)
+            result = COMPARE_OPS[type(op)](left, right)
+            if not result:
+                return result
+            left = right
+        return result
+
+    def call(self, node: ast.Call, scope: dict[str, object]) -> object:
+        func = self.value(node.func, scope)
+        args = [self.value(a, scope) for a in node.args]
+        kwargs: dict[str, object] = {}
+        for kw in node.keywords:
+            if kw.arg is None:
+                kwargs.update(self.value(kw.value, scope))
+            else:
+                kwargs[kw.arg] = self.value(kw.value, scope)
+        return func(*args, **kwargs)
+
+    def comprehension(
+        self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp, scope: dict[str, object]
+    ) -> object:
+        # The first iterable is evaluated in the enclosing scope, before the comprehension runs.
+        first = iter(self.value(node.generators[0].iter, scope))
+        if isinstance(node, ast.DictComp):
+            pairs = self.generate(node.generators, 0, first, scope)
+            return {self.value(node.key, inner): self.value(node.value, inner) for inner in pairs}
+        elements = (self.value(node.elt, inner) for inner in self.generate(node.generators, 0, first, scope))
+        if isinstance(node, ast.GeneratorExp):
+            return elements
+        return list(elements) if isinstance(node, ast.ListComp) else set(elements)
+
+    def generate(
+        self, generators: list[ast.comprehension], index: int, iterable: Iterator, scope: dict[str, object]
+    ) -> Iterator[dict[str, object]]:
+        """Each scope the comprehension's element is evaluated in, in iteration order."""
+        gen = generators[index]
+        for item in iterable:
+            inner = dict(scope)
+            self.bind(gen.target, item, inner)
+            if not all(self.value(cond, inner) for cond in gen.ifs):
+                continue
+            if index + 1 == len(generators):
+                yield inner
+            else:
+                yield from self.generate(
+                    generators, index + 1, iter(self.value(generators[index + 1].iter, inner)), inner
+                )
+
+    def bind(self, target: ast.expr, item: object, scope: dict[str, object]) -> None:
+        if isinstance(target, ast.Name):
+            scope[target.id] = item
+            return
+        if not isinstance(target, (ast.Tuple, ast.List)):
+            raise NotImplementedError(type(target).__name__)
+        values = list(item)
+        if len(values) != len(target.elts):
+            raise ValueError("unpack length mismatch")
+        for elt, value in zip(target.elts, values):
+            self.bind(elt, value, scope)
 
 
 #: An unrolled comprehension copies its body once per element; this caps the source (and SDFG) blow-up.

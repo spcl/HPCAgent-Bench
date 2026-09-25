@@ -19,6 +19,7 @@ import numpy as np
 
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import IxWriteToLoop, rank_table
 from tests.translators.op_oracle import run_op
+from tests.translators.source_module import run_source
 
 BACKENDS = ("c", "fortran")
 
@@ -212,7 +213,7 @@ def test_a_store_through_unpacked_ix_grids_becomes_the_open_mesh_loop() -> None:
     outputs = []
     for text in (src, rewritten):
         scope = {"np": np}
-        exec(text, scope)  # noqa: S102 -- the source is a literal in this test
+        run_source(text, scope)
         rho = np.zeros((5, 5, 5))
         scope["k"](rho, np.arange(24.0).reshape(3, 2, 2, 2), np.array([0, 3, 4]), 3)
         outputs.append(rho)

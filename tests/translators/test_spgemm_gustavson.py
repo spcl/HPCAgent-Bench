@@ -22,6 +22,7 @@ import pytest
 import scipy.sparse as sp
 
 from hpcagent_bench.translators.numpyto_common.sparse_emit import expand_matmul_csr_csr
+from tests.translators.source_module import run_source
 
 BUFS = ("indptr", "indices", "data")
 
@@ -44,7 +45,7 @@ def build_fn(n_rows_sym: str = "NR", n_cols_sym: str = "NK") -> Callable[..., No
     )
     mod = ast.fix_missing_locations(ast.Module(body=[fn], type_ignores=[]))
     ns = {}
-    exec(compile(mod, "<spgemm>", "exec"), ns)  # noqa: S102 -- executing our own emitted AST is the point
+    run_source(mod, ns, "<spgemm>")
     return ns["spgemm"]
 
 

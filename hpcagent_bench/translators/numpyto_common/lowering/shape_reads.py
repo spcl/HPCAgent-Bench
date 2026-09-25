@@ -343,7 +343,7 @@ class ResolveArrShape(ast.NodeTransformer):
         # After walking the body, write the resolver's updated
         # zeros_locals back to the tree-attribute the emitter reads.
         if "zeros_locals" in vars(node):
-            node.zeros_locals.update(self.zeros_locals)  # type: ignore[attr-defined]
+            vars(node)["zeros_locals"].update(self.zeros_locals)
         return node
 
     def visit_For(self, node: ast.For) -> ast.AST:

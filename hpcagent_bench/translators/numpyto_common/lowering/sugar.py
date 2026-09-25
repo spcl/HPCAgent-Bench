@@ -93,9 +93,9 @@ class DaceMapRewriter(ast.NodeTransformer):
         self.generic_visit(node)
         # Detect ``for i, in dace.map[a:b:c]:`` (single-element tuple target,
         # subscript of attribute ``dace.map``).
-        target = node.target
+        target: ast.expr = node.target
         if isinstance(target, ast.Tuple) and len(target.elts) == 1 and isinstance(target.elts[0], ast.Name):
-            target = target.elts[0]  # type: ignore[assignment]
+            target = target.elts[0]
             node.target = target
         if (
             isinstance(node.iter, ast.Subscript)
