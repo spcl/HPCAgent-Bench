@@ -3,7 +3,7 @@
 
 """A matmul operand allocated by ``np.zeros_like`` whose SOURCE is produced in the same pass.
 
-``LibNodeRewriter._update_shape_for_assign`` skipped every ``np.zeros``-family constructor -- the
+``LibNodeRewriter.update_shape_for_assign`` skipped every ``np.zeros``-family constructor -- the
 ``ZerosRewriter`` owns the allocation, and it runs in a later phase. That is fine for a source
 whose extent was already in the seeded shape table, and wrong for one the SAME pass produces:
 ``eigh_test`` writes ``bw, bu = np.linalg.eigh(bfull)`` and then ``scaled = np.zeros_like(bu)``,

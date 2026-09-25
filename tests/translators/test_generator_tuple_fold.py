@@ -11,8 +11,8 @@ KernelBench's conv/pool ports normalise a stride/padding/dilation knob with a ti
 
 ``dims`` is a compile-time constant at every call site (``_as_tuple(stride, 2)``), but the helper
 has an early ``return`` in its guard, so it never qualifies for the ordinary single-return-expr
-inliner (:func:`frontend._collect_inlinable_helpers`) and survives as its own :class:`KernelIR`
-(:func:`frontend._build_helper_kirs`). There it folded the ``isinstance`` guard away (the argument's
+inliner (:func:`frontend.inlining.collect_inlinable_helpers`) and survives as its own :class:`KernelIR`
+(:func:`frontend.helper_kirs.build_helper_kirs`). There it folded the ``isinstance`` guard away (the argument's
 kind is known) but left ``dims`` an unsubstituted parameter Name, so the generator's trip count
 never resolved and the emitter refused with ``NotImplementedError: expression GeneratorExp``.
 Once ``dims`` folds, the return is a bare tuple literal -- which has no C/Fortran ABI either, so

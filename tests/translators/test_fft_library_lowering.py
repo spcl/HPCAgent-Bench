@@ -46,7 +46,7 @@ NATIVE = ("c", "cpp", "fortran")
 
 #: The fft_1d canon kernel's own idiom: forward transform into y, inverse of y back into z (must
 #: recover x). ``y[:] = np.fft.fft(x)`` canonicalises to a bare-Name RHS the hoister still spills
-#: to a __cb<n> temp (LibNodeRewriter.visit_Assign, _CallHoister.visit_Call), which is exactly the
+#: to a __cb<n> temp (LibNodeRewriter.visit_Assign, CallHoister.visit_Call), which is exactly the
 #: path both bugs above sit on.
 FFT_1D_SRC = "import numpy as np\ndef fft_op(x, y, z):\n    y[:] = np.fft.fft(x)\n    z[:] = np.fft.ifft(y)\n"
 
@@ -94,7 +94,7 @@ def test_fortran_emit_renders_the_fftw_block_not_a_bare_call() -> None:
     assert "fftw_plan_dft_1d" in src
     assert "complex(c_double_complex) :: x_cb" in src
     # The bug this guards: the marker's renamed spelling (x_fft_1d_library) falling through to a
-    # bare, uncalled expression statement instead of _emit_fftw's plan/execute/destroy block.
+    # bare, uncalled expression statement instead of emit_fftw's plan/execute/destroy block.
     assert "x_fft_1d_library(" not in src
 
 

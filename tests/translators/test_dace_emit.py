@@ -72,13 +72,13 @@ from hpcagent_bench.translators.numpyto_c.dace_emit import (
     version_reallocations,
     version_rebound_names,
     version_rebound_views,
-)  # noqa: E402
+)
 from hpcagent_bench.translators.numpyto_common.frontend import (
     emit_with_inline_fallback,
-    parse_kernel,  # noqa: E402
+    parse_kernel,
     symbol_sign_from_bindings,
 )
-from hpcagent_bench.translators.numpyto_common.ir import (  # noqa: E402
+from hpcagent_bench.translators.numpyto_common.ir import (
     ArrayDesc,
     KernelIR,
     SymbolDesc,
@@ -381,7 +381,7 @@ def test_dace_keeps_every_np_fft_call_for_its_library_node(body: str) -> None:
     assert "np.fft" not in desugar_for_python_backend(src, kir, backend="numba")
 
 
-# _ResolveZeros: the LOWERED-kir ``__hpcagent_bench_zeros__`` marker resolver. The    #
+# ResolveZeros: the LOWERED-kir ``__hpcagent_bench_zeros__`` marker resolver. The    #
 # sparse oracle exercises the common paths (a first-seen accumulator allocates, #
 # a repeated same-shape ``__reassign__`` drops); these unit-test the edges the   #
 # five shipped Krylov/spmm kernels never hit, so a regression there is caught    #
@@ -487,7 +487,7 @@ def test_resolvezeros_marker_on_unregistered_name_is_dropped() -> None:
     assert body == ["y = C + 1"]  # the C marker vanished, the real use survives
 
 
-# _AnnotateEmptyDtype: dace's ``_numpy_empty`` (array_creation_dace.py) has NO   #
+# AnnotateEmptyDtype: dace's ``_numpy_empty`` (array_creation_dace.py) has NO   #
 # dtype default, unlike its zeros/ones/full siblings which fall back to        #
 # float64 like real numpy -- an asymmetry in dace itself. A bare source call    #
 # IS real numpy's own float64 default, so a missing dtype is filled with the    #

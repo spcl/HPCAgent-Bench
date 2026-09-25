@@ -12,7 +12,7 @@ not), so only the numbers say whether the lowering kept the kernel's meaning.
   result immediately before the loop that reads it, and the bias-add saw zeros.
 * A strided slice whose span is a MULTIPLE of its stride got the extent
   ``(out * stride + stride - 1) // stride``. That is the same number as ``out``, spelled so that
-  the token comparison in ``_rhs_is_whole_array`` could not see it, so ``out = np.maximum(out,
+  the token comparison in ``rhs_is_whole_array`` could not see it, so ``out = np.maximum(out,
   window)`` was declined as a shape mismatch and never expanded to a per-element nest -- the
   emitters rendered a scalar ``max`` of two POINTERS.
 

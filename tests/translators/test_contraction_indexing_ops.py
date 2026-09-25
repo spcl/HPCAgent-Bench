@@ -11,6 +11,7 @@ covered by ``test_contraction_indexing_ops_e2e`` via the standalone oracle.
 import ast
 import sys
 import types
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,6 +45,7 @@ from hpcagent_bench.translators.numpyto_common.lowering import (
     MatmulCallRewriter,
     ReshapeMethodRewriter,
 )
+from hpcagent_bench.translators.numpyto_common.numpy_desugar import desugar_for_python_backend
 
 
 def name_(n: str) -> ast.Name:
@@ -235,9 +237,6 @@ def test_parse_einsum_ellipsis_unsupported() -> None:
 
 # A.4  batched (>=3-D) matmul desugaring for the verbatim Python backends      #
 #      (numba / pythran cannot type stacked ``@``; lower to a loop of GEMMs)   #
-from types import SimpleNamespace  # noqa: E402
-
-from hpcagent_bench.translators.numpyto_common.numpy_desugar import desugar_for_python_backend  # noqa: E402
 
 
 def kir_(kernel_name: str, **arrays: tuple[str, ...]) -> SimpleNamespace:

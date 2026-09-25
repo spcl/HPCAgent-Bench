@@ -3,7 +3,7 @@
 """The lowered generalized Hermitian ``eigh(a, b)`` agrees with scipy under numba.
 
 The desugar reduces ``a x = w b x`` by Cholesky to a standard Hermitian problem and solves that by
-inline cyclic Jacobi (:func:`numpyto_common.numpy_desugar._eigh_stmts`); no LAPACK eigensolver reaches
+inline cyclic Jacobi (:func:`numpyto_common.numpy_desugar.eigh.eigh_stmts`); no LAPACK eigensolver reaches
 the emitted module. Eigenvectors are unique only up to a phase, so they are checked through what defines
 them -- ``a v = b v diag(w)`` and ``v^H b v = I`` -- elementwise, beside the eigenvalues themselves.
 """

@@ -41,7 +41,7 @@ Status legend: **landed** = merged + unit-tested; **in-progress** = agent buildi
 | `.ravel()`/`.flatten()` -> `np.reshape(x,(-1,))` | poisson_cg_3d (`r.ravel()@r.ravel()`) | method rewriter | `numpyto_common/lowering/hoisting.py` `MethodCallRewriter` | landed |
 | `enumerate(seq, start=s)` + literal-tuple unroll | laplacian_stencil_3d | `EnumerateZipRewriter` start= handling + unroll | `numpyto_common/lowering/calls.py` | landed |
 | inline-hoist output shape for `roll`/`cholesky`/`tril`/`triu`/`reshape(-1)` | poisson, laplacian | `CallHoister.derive_output_shape` branches | `numpyto_common/lib_nodes/call_hoist.py` | landed |
-| `np.diag` (1-D->matrix w/ k offset; 2-D->delegate `expand_diagonal`) | ls3df_scf (Lanczos tridiagonal) | `expand_diag` zero-then-write; shape via `iter_extent_of_` | `numpyto_common/lib_nodes/triangular.py` | landed |
+| `np.diag` (1-D->matrix w/ k offset; 2-D->delegate `expand_diagonal`) | ls3df_scf (Lanczos tridiagonal) | `expand_diag` zero-then-write; shape via `iter_extent_of` | `numpyto_common/lib_nodes/triangular.py` | landed |
 | `np.fft.fftfreq(N, d=)` | ls3df_scf | `expand_fftfreq`; even/odd neg-freq wrap; real output | `numpyto_common/lib_nodes/fft.py` | landed |
 | `np.einsum` with non-Name operand (`psi_frag[f]`) | fragment_patch_density, ls3df_scf | materialize operand to fresh scratch buffer, then expand | `numpyto_common/lib_nodes/contractions.py` `expand_einsum` | landed (caveat: Subscript operand nested *inside a BinOp* still will not hoist) |
 | `np.linalg.eigvalsh(A)` (eigenvalues-only) | ls3df_scf (`_upper_bound`) | extend eigh cyclic-Jacobi, eigenvalues-only single-Name target | `numpyto_common/numpy_desugar/eigh.py` | landed |
@@ -99,9 +99,9 @@ wraps each *scopable run* of statements in its own region.
 | Piece | What it does | Location |
 |---|---|---|
 | region splitting | maximal runs of scopable statements, split at each unscopable one; region spans first loop to last loop, so a loop-less statement at either end stays outside where POLYCC-009 cannot drop it | `numpyto_c/emit.py` `pluto_scop_regions` |
-| per-nest, every depth | called from `emit_block`, so a malloc before an *inner* nest scopes that inner nest rather than losing the whole outer one; an enclosing run subsumes what its children marked (scops do not nest) | `numpyto_c/emit.py` `_CBodyEmitter.emit_block` |
-| unscopable set | `malloc`/`calloc`/`realloc`/`free`/`memset`/`memcpy`/`memmove`/`while`, plus an `if` whose condition reads an array or a float (POLYCC-013) | `_PLUTO_UNSCOPABLE_RE`, `_pluto_unscopable` |
-| memset desugar | a zero/one fill emitted **in the body** becomes the affine loop nest it is, so it can stay inside a region instead of splitting it; the fill in the pre-scop declaration block keeps `memset` | `numpyto_c/emit.py` `_fill_loop_stmt`, `_body_fill_stmt` |
+| per-nest, every depth | called from `emit_block`, so a malloc before an *inner* nest scopes that inner nest rather than losing the whole outer one; an enclosing run subsumes what its children marked (scops do not nest) | `numpyto_c/emit.py` `CBodyEmitter.emit_block` |
+| unscopable set | `malloc`/`calloc`/`realloc`/`free`/`memset`/`memcpy`/`memmove`/`while`, plus an `if` whose condition reads an array or a float (POLYCC-013) | `PLUTO_UNSCOPABLE_RE`, `pluto_unscopable` |
+| memset desugar | a zero/one fill emitted **in the body** becomes the affine loop nest it is, so it can stay inside a region instead of splitting it; the fill in the pre-scop declaration block keeps `memset` | `numpyto_c/emit.py` `fill_loop_stmt`, `body_fill_stmt` |
 | multi-scop detector | `scop_nonaffine_reason` scans **every** region, not just the first, so a gather in a later region is not missed | `hpcagent_bench/pluto_affine.py` |
 | no-region decline | a TU that marks no region is not a scop input -- polycc would hand it straight back and the column would time untransformed C | `pluto_affine.has_scop`, `pluto_transform.scop_inputs`, `numerical_oracle._run_pluto` |
 | pet re-parse `omp.h` | polycc re-parses its own output per additional scop; the stub header makes multi-region TUs transform (POLYCC-011) | `pluto_transform.PET_OMP_SHIM` |
@@ -114,15 +114,15 @@ polycc's own re-parse of that output fails mid-run, is documented and not worked
 
 ### 1d. JAX compile-time heuristics (help XLA emit faster) (planned)
 
-Root cause: the oracle exercises the **eager** path (`numpyto_jax/core.py` `_emit_eager_body`),
+Root cause: the oracle exercises the **eager** path (`numpyto_jax/functions.py` `emit_eager_body`),
 which copies Python control flow *verbatim* -- every static loop unrolls to trip-count distinct
 XLA primitives (first-call compile cost) and trip-count sequential dispatches (per-call cost).
-A mature loop classifier (`_classify_for` -> VECTORIZE/FORI/WHILE) already exists but is only
+A mature loop classifier (`classify_for` -> VECTORIZE/FORI/WHILE) already exists but is only
 reached on the dormant jit path. Route eager emission through it.
 
 | Heuristic | Trigger | Emit | Win | Status |
 |---|---|---|---|---|
-| **H1** vectorize independent elementwise/stencil loops | `_classify_for==VECTORIZE` (write-once `a[i]=f(...)`) | whole-array op via existing `_devectorize_index` | removes recurring `.at[i].set` dispatch; kills large-preset `skip:too-long` | planned (first PR) |
+| **H1** vectorize independent elementwise/stencil loops | `classify_for==VECTORIZE` (write-once `a[i]=f(...)`) | whole-array op via existing `devectorize_index` | removes recurring `.at[i].set` dispatch; kills large-preset `skip:too-long` | planned (first PR) |
 | H2 re-roll large static carry loops | static `range`, trip>=8, FORI | `lax.fori_loop` (body compiled once) | O(trip)->O(1) first-call compiles | planned |
 | H3 `lax.scan` for stacked carry-recurrence | FORI + monotone `out[i]=` slot | `lax.scan` | fewer scatters, better fusion | planned |
 | H4 cap unroll to small (<8) static loops | complement of H2 | keep verbatim unroll | guard rail (small loops fuse cheaply) | policy |
@@ -141,7 +141,7 @@ backend. All **landed**.
   tolerated the implicit complex->real narrow (imag~=0); C++ `-std=c++20` refused it. Extends the
   `fix_real_scalar_dtypes` / `walk_complex` / `REAL_FOR_COMPLEX` machinery to arrays
   (`numpyto_common/lowering/`).
-- **`.shape` / `.size` on a newaxis / subscript base** folded via `iter_extent_of_` (so
+- **`.shape` / `.size` on a newaxis / subscript base** folded via `iter_extent_of` (so
   `x[:, None].shape` / `A[f].size` resolve without a Name base).
 - **`np.fft.fftfreq` / `fftn` two-level attribute shapes** resolved for the `fft.*` result temps.
 - **tuple-local propagation** (`shp = Y.shape` then `shp[0]`) -- the shape tuple flows through the

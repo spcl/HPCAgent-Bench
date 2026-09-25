@@ -4,7 +4,7 @@
 eigensolve) lowering.
 
 ``np.linalg.eigvalsh`` reuses the same self-contained cyclic-Jacobi sweep as
-``np.linalg.eigh`` (``numpyto_common.numpy_desugar._eigh_c_stmts``), but binds
+``np.linalg.eigh`` (``numpyto_common.numpy_desugar.eigh.eigh_c_stmts``), but binds
 only the ascending eigenvalue vector into a SINGLE Name target -- the eigenvector
 back-transform / ``U`` output is dropped. The kernel ``ls3df_scf`` uses it as
 ``theta_max = np.linalg.eigvalsh(T).max()``; a standalone ``w = np.linalg.eigvalsh(A)``

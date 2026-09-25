@@ -72,7 +72,7 @@ print(ast.unparse(ast.fix_missing_locations(body)))
 ```
 
 To support a new numpy call, add its expander to the family module and register it in
-`registry.py`; if its result shape is not the first operand's, add its case to `iter_extent_of_`
+`registry.py`; if its result shape is not the first operand's, add its case to `iter_extent_of`
 in `lib_nodes/extents.py`.
 
 ## Output shape (C family)

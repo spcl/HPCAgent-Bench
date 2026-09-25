@@ -99,7 +99,7 @@ for n in range(slab_per_bc + 1):
     Tz += zz * Ham[n]            # Ham[n] is a 2-D slab of a 3-D array
 ```
 
-`_emit_subscript` would have to *infer* that `Ham[n]` is a `[n, :, :]` slab and
+`emit_subscript` would have to *infer* that `Ham[n]` is a `[n, :, :]` slab and
 re-expand it; the C/C++/Fortran emitter refuses a rank mismatch like this one with
 `NotImplementedError` rather than guess at it (Sec. 5).
 
@@ -402,12 +402,12 @@ With CNF guaranteed, these `numpyto_common/lowering/` mechanisms can be retired:
   buffer of a declared shape (Inv. 1 / cookbook 4.2, 4.4), so the rank-changing
   in-place reshape path disappears.
 
-`numpyto_c/emit.py`'s `_emit_subscript` already takes this step: a rank-mismatched
+`numpyto_c/emit.py`'s `emit_subscript` already takes this step: a rank-mismatched
 subscript on a flat C pointer raises `NotImplementedError` instead of emitting an
 uncompilable chained `w[i][j]` access. Full-rank
 indexing (Inv. 2) means that error never fires on a CNF kernel.
 
-The `shape_table`/`_harvest_local_shapes` machinery can then be a single up-front
+The `shape_table`/`harvest_local_shapes` machinery can then be a single up-front
 declaration scan instead of a mutable structure threaded through ~22 passes.
 
 ---

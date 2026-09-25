@@ -534,7 +534,7 @@ def test_reads_complex_still_detects_a_genuine_complex_value_read() -> None:
 
 
 def pad_trailing(rhs_expr: str, start, source_shape):
-    # Drive _SliceToScalarRewriter for a single-slice LHS assignment whose slice
+    # Drive SliceToScalarRewriter for a single-slice LHS assignment whose slice
     # starts at ``start``, on a partial-scalar RHS of a higher-rank source.
     iv = ast.Name(id="si", ctx=ast.Load())
     lhs_slice = ast.Slice(lower=(None if start == 0 else ast.Constant(start)), upper=None, step=None)
