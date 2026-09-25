@@ -310,7 +310,7 @@ def shared_source(path: pathlib.Path) -> pathlib.Path:
 
     numba's ``cache=True`` writes its compiled index next to the file it compiles, keyed by that
     file's absolute path and stamp. A job's frozen tree is a new path every time, so a reference
-    that compiles for minutes (sw4_rhs4sg, cloudsc) paid that in every job and every rank. Imported
+    that compiles for minutes (cloudsc) paid that in every job and every rank. Imported
     from here instead, the same bytes under the same image resolve to one path with one stamp, so the
     first compile serves every later one; changed bytes (an edited or re-emitted reference) or another
     image land in another directory and compile afresh. numba itself keys each entry on its own

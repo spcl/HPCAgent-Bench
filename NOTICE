@@ -375,18 +375,17 @@ License: LicenseRef-OSU-PolyBench
 Copyright (c) 2010-2016, Ohio State University. All rights reserved.
 Covers: adi, atax, bicg, cholesky, cholesky2, correlation, covariance, covariance2, deriche, doitgen, durbin, fdtd_2d, floyd_warshall, gemm, gemm_long_k, gemm_tall_skinny, gemver, gesummv, gramschmidt, heat_3d, jacobi_1d, jacobi_2d, k2mm, k3mm, lu, ludcmp, mvt, nussinov, seidel_2d, symm, syr2k, syrk, trisolv, trmm
 L.-N. Pouchet and T. Yuki, PolyBench/C 4.2.1, http://polybench.sourceforge.net
+The OSU license makes every user of the software indemnify, defend and hold harmless Ohio State University against claims arising from its use; the verbatim `*_reference.c` transcriptions carry that term with them.
 
 ====================================================================================================
 pyFAI (Jerome Kieffer and Giannis Ashiotis, ESRF)
 ====================================================================================================
 
 Project: https://github.com/silx-kit/pyFAI
-License: CC-BY-3.0
-Copyright 2014 Jerome Kieffer et al.
-License text: https://spdx.org/licenses/CC-BY-3.0.html
+License: MIT
+Copyright 2011-2017 European Synchrotron Radiation Facility
 Covers: azimint_hist, azimint_naive
 J. Kieffer and G. Ashiotis, "PyFAI: a Python library for high performance azimuthal integration on GPU", EuroSciPy 2014.
-The excerpt is published under CC BY 3.0; the pyFAI project as a whole is MIT.
 
 ====================================================================================================
 PyFV3 (NOAA-GFDL FV3 dynamical core in GT4Py)
@@ -447,16 +446,6 @@ Copyright (c) 2001-2002 Enthought, Inc. 2003-2024, SciPy Developers.
 Covers: edge_laplacian
 
 ====================================================================================================
-SW4Lite (SW4 -- Seismic Waves, 4th order)
-====================================================================================================
-
-Project: https://github.com/geodynamics/sw4lite
-License: GPL-2.0-only
-Copyright (c) 2013, Lawrence Livermore National Security, LLC. LLNL-CODE-643337.
-License text: https://spdx.org/licenses/GPL-2.0-only.html
-Covers: sw4_rhs4sg
-
-====================================================================================================
 Terminal-Bench 2.0
 ====================================================================================================
 
@@ -473,7 +462,7 @@ TSVC_2 (Test Suite for Vectorizing Compilers)
 Project: https://github.com/UoB-HPC/TSVC_2
 License: NCSA
 Copyright (c) 2011 University of Illinois at Urbana-Champaign. All rights reserved.
-Covers 224 kernels, listed in CONTRIBUTORS.md.
+Covers 150 kernels, listed in CONTRIBUTORS.md.
 S. Maleki, Y. Gao, M. J. Garzaran, T. Wong and D. A. Padua, "An Evaluation of Vectorizing Compilers", PACT 2011.
 
 ====================================================================================================
@@ -938,7 +927,7 @@ following papers:
   General Purpose Applications on Graphics Processors using CUDA" Journal of Parallel and
   Distributed Computing, Elsevier, June 2008.
 
---- MIT (applies to: cuBool, driven by the SpBench benchmark, GraphAIBench, KernelBench, Piotr Skalski, ILearnDeepLearning.py (numpy convolutional neural net), QUEST (MIT HAN Lab), VASim (Virtual Automata Simulator) and the ANMLZoo benchmark suite, XSBench (Argonne National Laboratory), timeout decorator (Aaron Hall), caveman agent packet, AutoKernel agent packet (RightNow AI))
+--- MIT (applies to: cuBool, driven by the SpBench benchmark, GraphAIBench, KernelBench, Piotr Skalski, ILearnDeepLearning.py (numpy convolutional neural net), pyFAI (Jerome Kieffer and Giannis Ashiotis, ESRF), QUEST (MIT HAN Lab), VASim (Virtual Automata Simulator) and the ANMLZoo benchmark suite, XSBench (Argonne National Laboratory), timeout decorator (Aaron Hall), caveman agent packet, AutoKernel agent packet (RightNow AI))
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
