@@ -27,12 +27,13 @@
 #       --output=release-smoke-%j.out --wrap "PATH=<gcc14-bin>:\$PATH scripts/do_release.sh"
 #
 # Env:
-#   HPCAGENT_BENCH_PYTHON   interpreter the temp venvs are created from (default: python3, >= 3.12)
+#   HPCAGENT_BENCH_HOST_PYTHON   interpreter the temp venvs are created from (scripts/host_python.sh; >= 3.12)
 set -euo pipefail
 ulimit -c 0
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PY="${HPCAGENT_BENCH_PYTHON:-python3}"
+. "${REPO_ROOT}/scripts/host_python.sh"
+PY="${HPCAGENT_BENCH_HOST_PYTHON}"
 OUTDIR="${REPO_ROOT}/dist"
 UPLOAD=""
 SMOKE=1
@@ -132,7 +133,7 @@ if [ "${SMOKE}" -eq 1 ]; then
   "${SPY}" -m pip install --quiet --upgrade pip
   "${SPY}" -m pip install --quiet "${WHEEL}" pytest
   # dace the one documented way, so the smoke runs what a user installs next to the wheel.
-  PYTHON="${SPY}" "${REPO_ROOT}/scripts/install_dace.sh"
+  HPCAGENT_BENCH_HOST_PYTHON="${SPY}" "${REPO_ROOT}/scripts/install_dace.sh"
   mkdir -p "${WORK}/smoke-tests"
   # Pure tests that need the installed package data (every manifest) and nothing from the repo.
   for t in test_output_args.py test_perf_protocol.py test_distributions.py; do

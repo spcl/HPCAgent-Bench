@@ -5,35 +5,35 @@ values come from environment variables, each with one default place:
 
 | Where | What it resolves |
 |---|---|
-| `experiments/layers/site-<name>.env`, loaded by `scripts/site_env.sh` | this cluster's values: fast storage, partition, node exclusions, vendor paths |
+| `experiments/layers/site-<name>.env`, loaded by `scripts/site_env.sh` | this cluster's values: account, partition, fast storage, node exclusions, the host interpreter |
 | `scripts/cache_env.sh` | every cache and work directory, derived from `SCRATCH` and `FAST_SCRATCH` |
-| `scripts/cscs/account_env.sh` | the Slurm account, read from your own Slurm associations |
-| `experiments/env.sh` | the checkout and the venv; sources `scripts/repo_env.sh` and the two scripts above |
-| `scripts/repo_env.sh` | the import path: the checkout (and `DACE_TREE` ahead of it), `PYTHONHASHSEED=0` |
+| `scripts/host_python.sh` | the interpreter of every host-side step (`HPCAGENT_BENCH_HOST_PYTHON`), checked to be Python >= 3.10 |
+| each image's EDF | the interpreter of every step inside that image (`HPCAGENT_BENCH_IMAGE_PYTHON`) and `PYTHONHASHSEED=0` |
+| `experiments/env.sh` | the checkout; sources `cache_env.sh` and `host_python.sh` |
 | `pyproject.toml` (`[tool.hpcagent-bench] dace-pin`) | the dace commit a release installs and bakes into its images; jobs refresh to the latest extended ([below](#dace)) |
 | `hpcagent_bench/paths.py` | the Python side of the same roots (`scratch_root`, `fast_scratch_root`) |
 
-`cache_env.sh` and `account_env.sh` both load the site layer, so every submitter and every job sees
-it. Campaign knobs (models, agents, judges, budgets) are not site values; they live in
+`cache_env.sh` loads the site layer, so every submitter and every job sees it. Campaign knobs (models, agents, judges, budgets) are not site values; they live in
 `experiments/layers/common.env` and the model layers and are described in
 [launch.md](launch.md) and [`experiments/LAUNCH.md`](../experiments/LAUNCH.md).
 
-## Import path
+## Interpreters and the import path
 
-An installed package (`pip install -e .`) needs nothing else. A checkout used without installing it
-gets its import path from exactly one place:
+The package is installed: `pip install -e .` in the host interpreter's environment, and baked into
+the images. Every command runs `<python> -m hpcagent_bench...` or `<python> script.py` with one of two
+interpreters, never a PATH lookup:
 
-| Who | How |
+| Where | Interpreter |
 |---|---|
-| a shell or job script | `. <checkout>/scripts/repo_env.sh`: the checkout on `PYTHONPATH`, `DACE_TREE` ahead of it when set, `PYTHONHASHSEED=0` |
-| a command that starts inside a container | `<checkout>/scripts/repo_python script.py ...` (python3 after sourcing `repo_env.sh`; `REPO_PYTHON` picks another interpreter) |
-| the test suite | `[tool.pytest.ini_options] pythonpath` in `pyproject.toml` |
+| a submitter, a job's batch shell, a hook, release tooling | `HPCAGENT_BENCH_HOST_PYTHON` (site layer; unset: `python3` on PATH), resolved and checked once by `scripts/host_python.sh` |
+| a step inside a container | `HPCAGENT_BENCH_IMAGE_PYTHON`, which the image's EDF names; a non-CE runtime sets it in the arm env |
+| the test suite | the interpreter running pytest, with pyproject's `[tool.pytest.ini_options] pythonpath` |
 
 Never set `PYTHONPATH` by hand and never edit `sys.path` in code. The one exception is a script that
 runs inside the agent or judge image beside its sibling modules (the agent tools and harness
-runners, `experiments/agent_driver.py` and its siblings, the `experiments/mpi` smokes): the images
-set `PYTHONSAFEPATH=1`, which drops the script's own directory, so such a script puts that one
-directory back. `tests/test_import_paths.py` fails on any other edit.
+runners, `experiments/agent_driver.py` and its siblings): the images set `PYTHONSAFEPATH=1`, which
+drops the script's own directory, so such a script puts that one directory back.
+`tests/test_import_paths.py` fails on any other edit.
 
 ## Set up on your system
 
@@ -42,7 +42,7 @@ cd hpcagent-bench
 cp experiments/layers/site-example.env experiments/layers/site.env   # gitignored
 $EDITOR experiments/layers/site.env                                  # fill in your cluster's values
 export SCRATCH=/path/to/your/scratch                                 # most HPC sites already set it
-. experiments/env.sh                                                 # loads the layer, account, caches
+. experiments/env.sh                                                 # loads the layer, caches, interpreter
 echo "$FAST_SCRATCH $SBATCH_PARTITION $SBATCH_ACCOUNT $HF_HOME"
 ```
 
@@ -103,8 +103,8 @@ job meant for other hardware passes `--partition=` on the command line, which wi
 | Variable | Default | Controls |
 |---|---|---|
 | `HPCAGENT_BENCH_REPO` | the checkout `experiments/env.sh` lives in | the tree scripts and jobs run from |
-| `VENV` | `$SCRATCH/venv-hpcagent-bench-314` | the Python environment `env.sh` puts on `PATH` |
-| `PY` | `$VENV/bin/python`, else the image's `python3` | the interpreter submitters call |
+| `HPCAGENT_BENCH_HOST_PYTHON` | `python3` on PATH | the interpreter of every host-side step, with the package installed (site layer) |
+| `HPCAGENT_BENCH_IMAGE_PYTHON` | the image's EDF | the interpreter of every step inside a container |
 | `EDF_PATH` | `$HOME/.edf` | where registered container EDFs are looked up (Container Engine convention) |
 | `CONTAINER_RUNTIME` | `ce` | how `beverin.sbatch` starts containers: `ce`, `apptainer`, `podman` or `docker` |
 | `HPCAGENT_BENCH_HOST` | `SLURMD_NODENAME`, else the host name | the node name recorded with each result |
@@ -118,7 +118,6 @@ direct-URL requirements) and `pyproject.toml` names no version of it.
 |---|---|---|
 | `dace-pin` (`pyproject.toml`, `[tool.hpcagent-bench]`) | the one place it is written | the extended commit a release is tested with |
 | `HPCAGENT_BENCH_DACE_REF` | installs and image builds: `pinned`; jobs: `extended` | which dace: `pinned` (the pin), a branch (its tip) or a full 40-character commit sha |
-| `DACE_TREE` | unset | a dace checkout to run instead, exactly as it is (a fix branch under test); `scripts/repo_env.sh` puts it ahead of the installed dace and nothing refreshes it |
 | `DACE_DIR` | `/opt/dace` | the image's editable dace checkout that `dace_refresh.sh` moves |
 
 - **Install**: `scripts/install_dace.sh` installs the pin (`pip install "dace @
@@ -135,15 +134,12 @@ direct-URL requirements) and `pyproject.toml` names no version of it.
   `/opt/dace.commit`; canon columns stamp `dace <sha>` into `record.build` and `canon.db`'s `build`
   column; CPF prerender keys carry the dace commit.
 
-To stay on the pin: `HPCAGENT_BENCH_DACE_REF=pinned sbatch ...`. To test a dace fix:
-`DACE_TREE=<worktree> sbatch ...` (canon columns, CPF prerender).
+To stay on the pin: `HPCAGENT_BENCH_DACE_REF=pinned sbatch ...`.
 
 ### Submitting nicely
 
 Every submitter passes `--nice`, so a batch of jobs yields to other users' work by default:
-`NICE=<n>` for one submission, else `HPCAGENT_BENCH_NICE` (site layer; default `100`). The
-campaign submitters also take `PRIORITY=<family>`, which picks the family's band
-(`experiments/submit_common.sh`, `PRIORITY_NICE`) so waves start in the planned order. Slurm has no
+`NICE=<n>` for one submission, else `HPCAGENT_BENCH_NICE` (site layer; default `100`). Slurm has no
 environment variable for `--nice`, so a job script submitted by hand with a bare `sbatch` runs at
 nice 0 unless the command line says `--nice="${HPCAGENT_BENCH_NICE}"`.
 
@@ -151,12 +147,11 @@ nice 0 unless the command line says `--nice="${HPCAGENT_BENCH_NICE}"`.
 
 | Variable | Default | Controls |
 |---|---|---|
-| `HPCAGENT_BENCH_ACCOUNT` | the single non-`root` association of `$USER` | the project account; required when you have several |
-| `SBATCH_ACCOUNT`, `SLURM_ACCOUNT`, `SALLOC_ACCOUNT` | exported from `HPCAGENT_BENCH_ACCOUNT` | what `sbatch`, `srun` and `salloc` bill |
+| `SBATCH_ACCOUNT` | empty (site layer or your shell) | the project account every `sbatch` bills; `experiments/submit.sh` refuses to submit without one, and `root` |
+| `SLURM_ACCOUNT`, `SALLOC_ACCOUNT` | `SBATCH_ACCOUNT` (`scripts/site_env.sh`) | what `srun` and `salloc` bill |
 
 No script passes `-A`: a submitter naming its own account is how one campaign ends up billed to
-two projects. With several associations and no `HPCAGENT_BENCH_ACCOUNT`, `account_env.sh` refuses
-to pick one.
+two projects.
 
 ## Hardware profiles are not site values
 

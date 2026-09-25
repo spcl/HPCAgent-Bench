@@ -21,9 +21,9 @@ scripts/install_dace.sh                    # dace: the pinned spcl/dace@extended
 pre-commit install
 ```
 
-On the CSCS cluster, source `experiments/env.sh` instead: it puts the shared venv on `PATH` and
-sources `scripts/repo_env.sh`, which puts the checkout on the import path and sets
-`PYTHONHASHSEED=0` (see [docs/configuration.md](docs/configuration.md#import-path)).
+On the CSCS cluster, source `experiments/env.sh`: it names the host interpreter
+(`HPCAGENT_BENCH_HOST_PYTHON`) and sets `PYTHONHASHSEED=0` (see
+[docs/configuration.md](docs/configuration.md)).
 
 ## Lint and format
 

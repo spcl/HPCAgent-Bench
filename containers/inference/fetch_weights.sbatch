@@ -16,8 +16,8 @@
 #   AUDIT_ONLY=1 sbatch fetch_weights.sbatch        # check layout, change nothing
 #
 # The partition is SBATCH_PARTITION (site layer). On Daint (GH200) the partition and the image
-# differ; -p overrides it, and the vLLM image has no venv:
-#   EDF=hpcagent-bench-vllm-gh200-latest PYTHON=python3 MODELS="Qwen/Qwen3.8-27B-FP8" \
+# differ; -p overrides it:
+#   EDF=hpcagent-bench-vllm-gh200-latest MODELS="Qwen/Qwen3.8-27B-FP8" \
 #     sbatch -A <project> -p normal fetch_weights.sbatch
 #
 #SBATCH --job-name=fetch-weights
@@ -40,8 +40,6 @@ REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2
 . "${REPO}/scripts/cache_env.sh"
 EDF="${EDF:-${HOME}/.edf/hpcagent-bench-sglang-mi300-latest.toml}"
 AUDIT_ONLY="${AUDIT_ONLY:-0}"
-# The interpreter inside EDF that has huggingface_hub: the SGLang image keeps it in its venv.
-PYTHON="${PYTHON:-/opt/venv/bin/python3}"
 
 # Every model the campaign serves. Weights are ~1.5 TB in total, so the default is the full set
 # only because a partial one is the thing that bites six hours into a campaign.
@@ -74,7 +72,7 @@ if [ "${AUDIT_ONLY}" != 1 ]; then
     for repo in ${MODELS}; do
         echo "=== downloading ${repo}"
         MODEL_REPO="${repo}" srun --environment="${EDF}" --cpus-per-task="${SLURM_CPUS_ON_NODE:-96}" \
-            "${PYTHON}" - <<'PY'
+            bash -c 'exec "${HPCAGENT_BENCH_IMAGE_PYTHON:?the EDF names its interpreter}" -' <<'PY'
 import os
 from huggingface_hub import snapshot_download
 

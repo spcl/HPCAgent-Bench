@@ -22,6 +22,8 @@ name: CI
 
 env:
   PYTHON_VERSION: '3.14'
+  # dace hashes iteration order into generated code: every process runs under one seed.
+  PYTHONHASHSEED: "0"
   # Every pytest collects coverage; the `coverage` job renders the only report.
   PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
 
@@ -736,7 +738,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[${{ inputs.gpu_vendor }}]"
-          PYTHON=python scripts/install_dace.sh
+          HPCAGENT_BENCH_HOST_PYTHON=python scripts/install_dace.sh
       - name: Hardware groups (GPU device, profilers, ROCm/CUDA toolchain)
         if: ${{ !cancelled() }}
         timeout-minutes: 30

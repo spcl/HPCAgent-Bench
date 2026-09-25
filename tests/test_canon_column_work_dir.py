@@ -28,6 +28,7 @@ import subprocess
 import pytest
 
 from hpcagent_bench import paths
+from tests.dace_checkout import pinned_dace
 
 CANON_COLUMN = paths.ROOT / "experiments" / "canon_column.sh"
 REAL_PYTHON3 = shutil.which("python3")
@@ -85,41 +86,8 @@ def _fake_bin_dir(tmp_path: pathlib.Path) -> pathlib.Path:
     return bindir
 
 
-def _fake_bin_dir_with_incompatible_system_python3(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Like :func:`_fake_bin_dir`, but its ``python3`` additionally stands in for the batch host's
-    real /usr/bin/python3 (SLES 3.6): it crashes outright when asked to run
-    merge_canon_results.py, the same way the real one does (no ``dict[str, object]``-style
-    annotations, no ``contextlib.closing`` type hints). A working ``python3.11`` sits beside it, so
-    a finalize_column that resolves the wrong one for the merge is caught even when the machine
-    actually running this test happens to have a working system python3.11 of its own on PATH."""
-    bindir = _fake_bin_dir(tmp_path)
-    python3 = bindir / "python3"
-    body = python3.read_text()
-    python3.write_text(
-        body.replace(
-            f'exec "{REAL_PYTHON3}" "$@"\n',
-            'case "$*" in\n'
-            "    *merge_canon_results.py*)\n"
-            '        echo "SyntaxError: invalid syntax (this stands in for SLES 3.6\'s /usr/bin/python3)" >&2\n'
-            "        exit 1 ;;\n"
-            "esac\n"
-            f'exec "{REAL_PYTHON3}" "$@"\n',
-        )
-    )
-    _write_executable(bindir / "python3.11", f'#!/usr/bin/env bash\nexec "{REAL_PYTHON3}" "$@"\n')
-    return bindir
-
-
 def _base_env(tmp_path: pathlib.Path, bindir: pathlib.Path) -> dict:
     cache_root = tmp_path / "jitcache"
-    dace_stub = tmp_path / "dace-stub"
-    (dace_stub / "dace" / "external" / "moodycamel").mkdir(parents=True)
-    (dace_stub / "dace" / "external" / "moodycamel" / "blockingconcurrentqueue.h").write_text("")
-    # A real __init__.py, not just the directory: inner mode asserts `dace.__file__` resolves
-    # inside DACE_TREE (canon_column.sh, mirroring prerender_cpf.sbatch) before running anything,
-    # and a namespace package (no __init__.py) has no __file__ at all, which would fail that
-    # assert for every test here regardless of DACE_TREE being set correctly.
-    (dace_stub / "dace" / "__init__.py").write_text("")
     env = dict(os.environ)
     env["PATH"] = f"{bindir}:{env['PATH']}"
     # Isolate the cache root the real scripts/cache_env.sh derives everything from, so this test
@@ -129,7 +97,10 @@ def _base_env(tmp_path: pathlib.Path, bindir: pathlib.Path) -> dict:
     env.pop("HPCAGENT_BENCH_RUNS_ROOT", None)
     env.pop("HPCAGENT_BENCH_RESULTS_DIR", None)
     env.pop("HPCAGENT_BENCH_RECORD_DB_PATH", None)
-    env["DACE_TREE"] = str(dace_stub)
+    # canon_column.sh runs the image's interpreter for the column and the host's for the merge.
+    env["HPCAGENT_BENCH_IMAGE_PYTHON"] = str(bindir / "python3")
+    env["HPCAGENT_BENCH_HOST_PYTHON"] = REAL_PYTHON3
+    env.update(pinned_dace(tmp_path))
     env["CANON_RANKS"] = "1"
     env["CANON_OPT_REPORTS"] = "0"
     return env
@@ -297,10 +268,10 @@ def test_a_column_stamps_the_dace_commit_into_record_build(tmp_path: pathlib.Pat
     )
 
     assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
-    # The stub DACE_TREE (_base_env) is not a git checkout, so dace_sha falls back to "notree" --
-    # this proves the STAMPING wiring, not the git plumbing (already exercised by canon_column.sh's
-    # existing PCH-cache-key comment/behaviour).
-    assert (out_root / "fakecol.rank0.csv.record_build").read_text().strip() == "dace notree"
+    # The stand-in dace checkout (_base_env) is at its pinned commit.
+    assert (
+        out_root / "fakecol.rank0.csv.record_build"
+    ).read_text().strip() == f"dace {env['HPCAGENT_BENCH_DACE_REF'][:7]}"
 
 
 def test_a_caller_supplied_record_build_is_left_alone(tmp_path: pathlib.Path) -> None:
@@ -323,28 +294,3 @@ def test_a_caller_supplied_record_build_is_left_alone(tmp_path: pathlib.Path) ->
 
     assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
     assert (out_root / "fakecol.rank0.csv.record_build").read_text().strip() == "extended-fork"
-
-
-def test_the_merge_step_uses_python311_when_the_batch_hosts_python3_is_too_old(tmp_path: pathlib.Path) -> None:
-    """The batch host's bare /usr/bin/python3 is SLES 3.6 and crashes merge_canon_results.py
-    outright; finalize_column must resolve python3.11 first, as the rest of the outer path does,
-    rather than reaching that crash and losing the merge."""
-    bindir = _fake_bin_dir_with_incompatible_system_python3(tmp_path)
-    env = _base_env(tmp_path, bindir)
-    runs_root = pathlib.Path(env["JIT_CACHE_ROOT"]) / "runs"
-    out_root = runs_root / "canon" / "unit-test"
-    out_root.mkdir(parents=True)
-
-    result = subprocess.run(
-        ["bash", str(CANON_COLUMN), "outer", "fakecol", str(out_root), "fakekernel", "fuzzed", str(paths.ROOT)],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-
-    assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
-    assert "merged 1 row(s)" in result.stdout, f"stdout={result.stdout!r} stderr={result.stderr!r}"
-    assert "SyntaxError" not in result.stderr, (
-        f"finalize_column ran the merge under the wrong python3: {result.stderr!r}"
-    )

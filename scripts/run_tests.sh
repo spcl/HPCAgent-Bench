@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Run pytest (or the CI replay) in the environment the suite needs: the venv's bin on PATH (the
-# pythran console script), PYTHONPATH, spack OpenBLAS/FFTW on PKG_CONFIG_PATH and CPATH (dace's own
-# CMake never reads pkg-config), and the MPI knobs. Without it most native-build failures are the
-# shell, not the tree.
+# Run pytest (or the CI replay) under experiments/env.sh (import path, site layer, host interpreter)
+# with the MPI knobs the suite needs.
 #
 #   scripts/run_tests.sh [pytest args...]            pytest (default: -q --maxfail=20 tests/)
 #   scripts/run_tests.sh --ci [ci_replay args...]    the jobs of .github/workflows/tests.yml
@@ -25,21 +23,8 @@ if [[ "${1:-}" == --container ]]; then
         ${HPCAGENT_BENCH_CI_PARTITION:+--partition="${HPCAGENT_BENCH_CI_PARTITION}"} \
         --job-name=ci-mi200 "${REPO}/scripts/ci_mi200.sbatch" "$@"
 fi
-# PATH, PYTHONPATH, PYTHONHASHSEED and ulimit -c 0.
+# The site layer, the interpreter, PYTHONHASHSEED and ulimit -c 0.
 . "${REPO}/experiments/env.sh"
-
-# Append only when nothing answers, so an image's own OpenBLAS/FFTW wins over a host build.
-for lib in openblas fftw; do
-    module="${lib/fftw/fftw3}"
-    pkg-config --exists "${module}" 2>/dev/null && continue
-    for prefix in "${SCRATCH}"/spack/opt/spack/*/"${lib}"-*; do
-        [[ -d "${prefix}/lib/pkgconfig" ]] || continue
-        export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:+${PKG_CONFIG_PATH}:}${prefix}/lib/pkgconfig"
-        export CPATH="${CPATH:+${CPATH}:}${prefix}/include"
-        export LIBRARY_PATH="${LIBRARY_PATH:+${LIBRARY_PATH}:}${prefix}/lib"
-        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}${prefix}/lib"
-    done
-done
 
 # The dace MPI prefix minus OMP_NUM_THREADS=1, which would serialize the threaded and timed tests.
 export OMPI_MCA_pml=ob1 OMPI_MCA_btl=self,vader,tcp PMIX_MCA_gds=hash
@@ -52,7 +37,7 @@ pkg-config --exists fftw3 || echo "WARNING: no fftw3 found -- every FFT-library-
 cd -- "${REPO}"
 if [[ "${1:-}" == --ci ]]; then
     shift
-    exec "${PY}" scripts/ci_replay.py "$@"
+    exec "${HPCAGENT_BENCH_HOST_PYTHON}" scripts/ci_replay.py "$@"
 fi
 [[ $# -gt 0 ]] || set -- -q --maxfail=20 tests/
-exec "${PY}" -m pytest "$@"
+exec "${HPCAGENT_BENCH_HOST_PYTHON}" -m pytest "$@"

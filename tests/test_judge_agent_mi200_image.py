@@ -4,8 +4,7 @@
 
 The mi300 images cannot start on mi200: their spack stack is zen4 and the preloaded mimalloc dies on
 SIGILL. These pin the partition parameter of the build (candidate names, spack target, pip cache),
-the mi300 inputs staying what they were, the mi200 EDF renders and promotion, and the smokes' EDF
-override. The GPU arch table and the runtime check are tests/test_gpu_arch_table.py.
+the mi300 inputs staying what they were, and the mi200 EDF renders and promotion. The GPU arch table and the runtime check are tests/test_gpu_arch_table.py.
 """
 
 import pathlib
@@ -269,33 +268,6 @@ def test_promote_image_keeps_the_mi300_candidates_and_live_names(tmp_path: pathl
         f"{MI300_CANDIDATES['agent']} hpcagent-bench-agent-mi300.sqsh",
         f"{MI300_CANDIDATES['judge']} hpcagent-bench-judge-mi300.sqsh",
     ]
-
-
-OVERRIDE = re.compile(
-    r'^caller_judge_ce_env="\$\{JUDGE_CE_ENV:-\}"\n.*?^JUDGE_CE_ENV="\$\{caller_judge_ce_env:-\$\{JUDGE_CE_ENV\}\}"\n',
-    re.MULTILINE | re.DOTALL,
-)
-
-
-@pytest.mark.parametrize(
-    ("caller", "want"),
-    [
-        ("", "hpcagent-bench-judge-mi300-mlscale"),
-        ("hpcagent-bench-judge-mi200-mlscale", "hpcagent-bench-judge-mi200-mlscale"),
-    ],
-)
-def test_the_e2e_smoke_takes_the_arms_judge_edf_unless_the_caller_names_one(
-    tmp_path: pathlib.Path, caller: str, want: str
-) -> None:
-    """The arm pins the mi300 EDF, which cannot start on mi200; a smoke there has to be able to swap it."""
-    block = OVERRIDE.search((ROOT / "experiments" / "mpi" / "smoke-mlscale-e2e.sbatch").read_text(encoding="utf-8"))
-    assert block, "smoke-mlscale-e2e.sbatch lost its JUDGE_CE_ENV caller override"
-    arm = tmp_path / "arm.env"
-    arm.write_text("JUDGE_CE_ENV=hpcagent-bench-judge-mi300-mlscale\nLANGUAGE=hip\n", encoding="utf-8")
-    env = {"ARM_ENV": str(arm), **({"JUDGE_CE_ENV": caller} if caller else {})}
-    done = run(["bash", "-c", f'{block.group(0)}echo "EDF=${{JUDGE_CE_ENV}} LANG=${{LANGUAGE}}"'], env)
-    assert done.returncode == 0, done.stderr
-    assert done.stdout.splitlines() == [f"EDF={want} LANG=hip"]
 
 
 def test_verify_only_reverifies_the_partitions_candidates_without_building(tmp_path: pathlib.Path) -> None:

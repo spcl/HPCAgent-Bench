@@ -3,18 +3,19 @@
 # requirements); a release runs the spcl/dace@extended commit pyproject.toml pins (dace-pin), so every
 # install path -- README, CI, rebuild_venv.sh, the release smoke -- runs this:
 #
-#   scripts/install_dace.sh                             # into python3: pip install "dace @ git+<url>@<pin>"
+#   scripts/install_dace.sh                             # pip install "dace @ git+<url>@<pin>"
 #   scripts/install_dace.sh testing,fastgraph           # with dace extras
 #   scripts/install_dace.sh --editable DIR [EXTRAS]     # a git checkout at DIR, moved to the commit, installed -e
 #
-# PYTHON picks the interpreter (default python3). HPCAGENT_BENCH_DACE_REF (default here: `pinned`)
+# HPCAGENT_BENCH_HOST_PYTHON picks the interpreter (scripts/host_python.sh). HPCAGENT_BENCH_DACE_REF (default here: `pinned`)
 # names another branch or commit, `extended` for its tip -- the same knob jobs read, where the
 # default is the tip (containers/images/dace_refresh.sh).
 set -euo pipefail
 ulimit -c 0
-PY="${PYTHON:-python3}"
-REF="$(HPCAGENT_BENCH_DACE_REF="${HPCAGENT_BENCH_DACE_REF:-pinned}" \
-    "$(dirname -- "${BASH_SOURCE[0]}")/../containers/images/dace_refresh.sh" --resolve)"
+HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+. "${HERE}/host_python.sh"
+PY="${HPCAGENT_BENCH_HOST_PYTHON}"
+REF="$(HPCAGENT_BENCH_DACE_REF="${HPCAGENT_BENCH_DACE_REF:-pinned}" "${HERE}/../containers/images/dace_refresh.sh" --resolve)"
 URL="https://github.com/spcl/dace.git"
 
 editable=""

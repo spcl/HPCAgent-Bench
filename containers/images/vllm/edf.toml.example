@@ -45,6 +45,8 @@ com.hooks.aws_ofi_nccl.enabled = "true"
 # EDF still says what it would need if source ever moves back to "host".
 com.hooks.aws_ofi_nccl.variant = "rocm6"
 [env]
+# The interpreter every hpcagent-bench step in this image runs (run_cluster.sh).
+HPCAGENT_BENCH_IMAGE_PYTHON = "/opt/pytorch211/bin/python3"
 # quark_online_quant is registered as a vllm general plugin, and load_general_plugins() runs it
 # from `python -m vllm.model_executor.models.registry` -- a subprocess where vllm/__init__ is
 # still executing. The plugin does `from vllm.engine.arg_utils import EngineArgs`, which reaches

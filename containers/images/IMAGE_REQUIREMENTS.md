@@ -146,7 +146,7 @@ it got.
 Each rebuilt inference image is smoked against the campaign's serving arguments (the
 `experiments/layers/model-*.env` layers) before promotion, not just "the server started".
 
-* **SGLang (beverin):** `/opt/venv/bin/python3` (named by `SGLANG_PYTHON`), aiter with its JIT
+* **SGLang (beverin):** `/opt/venv/bin/python3` (named by the EDF's `HPCAGENT_BENCH_IMAGE_PYTHON`), aiter with its JIT
   prebuilt into `/opt/aiter-jit` (each op called, not imported), the ROCm triton attention backend,
   the tuned `moe-configs/`, and both `--reasoning-parser` and `--tool-call-parser` for kimi (with only
   one, turn 1 returns 400).

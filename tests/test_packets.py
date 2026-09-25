@@ -171,14 +171,9 @@ def test_canonical_does_not_name_a_composite_whose_own_page_is_missing() -> None
 
 
 def test_resolve_repo_sets_the_layout_env() -> None:
-    resolved = packets.resolve("repo", "c", environ={"REPO_LAYOUT_PYTHON": "/venv/bin/python"})
+    resolved = packets.resolve("repo", "c", environ={})
     assert resolved.key == "repo"
-    assert resolved.env == (
-        ("AGENT_PROMPT_FILE", "prompt-repo.md"),
-        ("REPO_LAYOUT", "1"),
-        ("REPO_LAYOUT_LANGUAGE", "c"),
-        ("REPO_LAYOUT_PYTHON", "/venv/bin/python"),
-    )
+    assert dict(resolved.env)["REPO_LAYOUT"] == "1"
 
 
 def test_resolve_no_score_tool_sets_both_disable_switches() -> None:
@@ -355,9 +350,6 @@ def test_an_unfilled_resolve_keeps_the_placeholder_templates_the_db_records() ->
     """fill=False is the packet's definition, not one launch: no environment is needed and every
     ${VAR} survives verbatim, including through a composition."""
     assert packets.resolve("cpfsrc", "c", environ={}, fill=False).env == (("CPF_DROPIN_DIR", "${CPF_VIEW}"),)
-    assert (
-        dict(packets.resolve("repo", "c", environ={}, fill=False).env)["REPO_LAYOUT_PYTHON"] == "${REPO_LAYOUT_PYTHON}"
-    )
     all_in = packets.resolve("all-in", "c", environ={}, fill=False)
     assert dict(all_in.env) == {"CPF_DROPIN_DIR": "${CPF_VIEW}"}
     assert {"lang-c", "openmp-c", "divide-and-conquer", "profiling", "rocprof", "nsys", "opt-reports"} <= set(

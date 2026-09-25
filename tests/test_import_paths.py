@@ -1,12 +1,10 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Code gets its import path from ONE place, so no tracked file edits ``sys.path`` or ``PYTHONPATH``.
-
-The package is installable (``pip install -e .``). A checkout used without installing it takes its
-path from ``scripts/repo_env.sh`` (shells) or ``scripts/repo_python`` (a command that starts inside
-a container), and the suite from pyproject's pytest ``pythonpath``. Every other edit is either on
-:data:`ALLOWED` below, with the reason it has to exist, or a failure here. Markdown is scanned too,
-so an instruction to export PYTHONPATH cannot come back into the docs.
+"""No tracked file edits ``sys.path`` or ``PYTHONPATH``: the package is installed (``pip install -e .``
+on a host, baked into the images), and the suite takes its path from pyproject's pytest
+``pythonpath``. Every other edit is either on :data:`ALLOWED` below, with the reason it has to
+exist, or a failure here. Markdown is scanned too, so an instruction to export PYTHONPATH cannot come
+back into the docs.
 """
 
 import pathlib
@@ -31,8 +29,6 @@ EDIT = re.compile(
 
 #: Repo-relative path -> why that file may edit the import path.
 ALLOWED: dict[str, str] = {
-    # The one mechanism.
-    "scripts/repo_env.sh": "the one place a shell puts the checkout (and DACE_TREE) on PYTHONPATH",
     # Scripts that run inside the agent/judge images, beside sibling modules they import by bare
     # name. The images set PYTHONSAFEPATH=1, which drops the script's own directory from sys.path.
     "containers/agent/harness/run_miniswe.py": "image script: own-directory insert (PYTHONSAFEPATH=1)",
@@ -42,16 +38,12 @@ ALLOWED: dict[str, str] = {
     "experiments/agent_driver.py": "agent-image script: own-directory insert for its staged siblings",
     "experiments/harnesses.py": "agent-image module: own-directory insert; optimas_env builds the "
     "optimas runner's PYTHONPATH (mounted checkout + vendored SDK) inside the judge image",
-    "experiments/mpi/smoke_gang_rccl.py": "judge-image smoke: own-directory insert (PYTHONSAFEPATH=1)",
     "containers/images/selfcontained_check.py": "REMOVES its own directory from sys.path to "
     "prove the image imports without the checkout",
     # Third-party runtimes, not this repository's code.
     "containers/images/judge-agent-amd/Dockerfile": "rocprof-compute's wrapper names its "
     "own install dir, which PYTHONSAFEPATH=1 would otherwise hide",
     "containers/inference/tune-moe-int4-mi300a.sbatch": "vendored deps (pydeps) of the MoE tuning script",
-    # Forwarding or resetting the value repo_env.sh built.
-    "scripts/release_smoke_mi200.sbatch": "forwards repo_env.sh's PYTHONPATH into the harbor verifier "
-    "container, which mounts the checkout",
     # Tests: a child process or a temp module, given its own path.
     "tests/test_dace_helper_programs.py": "temp module written under tmp_path",
     "tests/test_disk_cache.py": "child processes racing the store import the checkout",
@@ -105,8 +97,8 @@ def test_no_file_edits_the_import_path_outside_the_allowlist() -> None:
         if rel not in ALLOWED:
             offenders.extend(f"{rel}:{number}" for number in edits(path))
     assert not offenders, (
-        "import-path edits outside tests/test_import_paths.py's ALLOWED (source scripts/repo_env.sh, run "
-        "scripts/repo_python, or rely on pytest's pythonpath instead):\n" + "\n".join(offenders)
+        "import-path edits outside tests/test_import_paths.py's ALLOWED (install the package, or rely "
+        "on pytest's pythonpath instead):\n" + "\n".join(offenders)
     )
 
 

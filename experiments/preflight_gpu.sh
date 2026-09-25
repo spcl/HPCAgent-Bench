@@ -16,8 +16,7 @@ ulimit -c 0
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 OPT=${OPT:-$(dirname "${PWD}")}
-PY=${SCRATCH:?}/venv-hpcagent-bench-314/bin/python
-. "${OPT}/scripts/repo_env.sh"
+. "${OPT}/experiments/env.sh"
 CE_ENV=${CE_ENV:-hpcagent-bench-agent-mi300-latest}
 source ./roster.sh
 TAG=${TAG:-llr-focus40}
@@ -54,7 +53,7 @@ else
 fi
 
 echo "== build flags (from the judge config, never spelled here) =="
-"${PY}" - <<'PY'
+"${HPCAGENT_BENCH_HOST_PYTHON}" - <<'PY'
 import sys
 from hpcagent_bench import languages
 name, blk = languages._compiler_for_lang(languages._load_compilers(), "hip")
@@ -96,7 +95,7 @@ echo "== skill packets (one variable per arm) =="
 # The control must carry NO packet and the treated arm EXACTLY the page under test. An arm that
 # ships lang-<language> beside the page measures three treatments against a control carrying none,
 # which is the confound this campaign exists to avoid.
-"${PY}" ./preflight_packets.py
+"${HPCAGENT_BENCH_HOST_PYTHON}" ./preflight_packets.py
 [[ $? -ne 0 ]] && fails=$((fails + 1))
 
 echo
