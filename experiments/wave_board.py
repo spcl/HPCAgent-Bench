@@ -496,10 +496,8 @@ def arm_rows(
     opt: str,
     models: tuple[str, ...],
     frozen_dir: pathlib.Path | None = None,
-    scratch: pathlib.Path | None = None,
 ) -> list[dict]:
-    """One row per arm identity. With ``scratch``, an experiment in :data:`BOARD_ROSTERS` is counted
-    over that roster listing instead of its campaign tag's."""
+    """One row per arm identity, its coverage counted over its campaign tag's roster."""
     dirs = job_dirs(runs)
     frozen = frozen_jobs(runs, frozen_dir, dirs)
     # A lost SETUP's status wins over a kernel count: it is the stronger statement about the arm.
@@ -533,8 +531,7 @@ def arm_rows(
     rows = []
     for arm, jobs in sorted(by_arm.items()):
         spec = CAMPAIGNS[campaign_of(arm)]
-        listing = BOARD_ROSTERS.get(spec.experiment, "") if scratch else ""
-        roster = roster_listing(scratch, listing) if scratch and listing else rosters.get(spec.tag, [])
+        roster = rosters.get(spec.tag, [])
         fused = {job.id: served[(job.id, arm)] for job in jobs if (job.id, arm) in served}
         rows.append(arm_row(arm, jobs, dirs, roster, models, opt, fused, frozen, reruns.get(arm, "")))
     return rows
@@ -768,10 +765,6 @@ def canon_rows(scratch: pathlib.Path, opt: str) -> list[dict]:
             rows.append(canon_column_row(tag, col, dirs, roster, jobs, db))
     return rows
 
-
-#: Experiment -> the ``$SCRATCH/kernels-<tag>.txt`` roster the board counts it over, when that is not
-#: its campaign tag's: the paper's SciComp set is scicomp35 (2026-09-24 user: srad and xsbench out).
-BOARD_ROSTERS = {"scicomp-focus40": "scicomp35"}
 
 #: Arms the paper does not report, left off the board: voided (Optimas, gpusmoke5, bout_hw),
 #: superseded (harness-focus20 by harness20) or out of scope (GLM-5.3, CPF on SciComp).
@@ -1058,7 +1051,7 @@ def main() -> int:
     models = tuple(yaml.safe_load(REGISTRY.read_text())["models"])
     scratch = pathlib.Path(args.scratch)
     runs = pathlib.Path(args.runs)
-    arms = arm_rows(runs, args.opt, models, frozen_observations.resolve(args.frozen_observations), scratch)
+    arms = arm_rows(runs, args.opt, models, frozen_observations.resolve(args.frozen_observations))
     # the ML scaling grade jobs read as mlscale arms by name; they are the grade panel's, not rows
     grade_jobs = {
         job["id"]: Job(**job)
