@@ -20,8 +20,9 @@ pip install --group dev -e ".[cpu]"        # .[nvidia] / .[amd] on a GPU host
 pre-commit install
 ```
 
-On the CSCS cluster, source `experiments/env.sh` instead: it puts the shared venv on `PATH`, sets
-`PYTHONPATH=<repo>` and `PYTHONHASHSEED=0`.
+On the CSCS cluster, source `experiments/env.sh` instead: it puts the shared venv on `PATH` and
+sources `scripts/repo_env.sh`, which puts the checkout on the import path and sets
+`PYTHONHASHSEED=0` (see [docs/configuration.md](docs/configuration.md#import-path)).
 
 ## Lint and format
 

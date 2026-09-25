@@ -8,13 +8,31 @@ values come from environment variables, each with one default place:
 | `experiments/layers/site-<name>.env`, loaded by `scripts/site_env.sh` | this cluster's values: fast storage, partition, node exclusions, vendor paths |
 | `scripts/cache_env.sh` | every cache and work directory, derived from `SCRATCH` and `FAST_SCRATCH` |
 | `scripts/cscs/account_env.sh` | the Slurm account, read from your own Slurm associations |
-| `experiments/env.sh` | the checkout, the venv and `PYTHONPATH`; sources the two scripts above |
+| `experiments/env.sh` | the checkout and the venv; sources `scripts/repo_env.sh` and the two scripts above |
+| `scripts/repo_env.sh` | the import path: the checkout (and `DACE_TREE` ahead of it), `PYTHONHASHSEED=0` |
 | `hpcagent_bench/paths.py` | the Python side of the same roots (`scratch_root`, `fast_scratch_root`) |
 
 `cache_env.sh` and `account_env.sh` both load the site layer, so every submitter and every job sees
 it. Campaign knobs (models, agents, judges, budgets) are not site values; they live in
 `experiments/layers/common.env` and the model layers and are described in
 [launch.md](launch.md) and [`experiments/LAUNCH.md`](../experiments/LAUNCH.md).
+
+## Import path
+
+An installed package (`pip install -e .`) needs nothing else. A checkout used without installing it
+gets its import path from exactly one place:
+
+| Who | How |
+|---|---|
+| a shell or job script | `. <checkout>/scripts/repo_env.sh`: the checkout on `PYTHONPATH`, `DACE_TREE` ahead of it when set, `PYTHONHASHSEED=0` |
+| a command that starts inside a container | `<checkout>/scripts/repo_python script.py ...` (python3 after sourcing `repo_env.sh`; `REPO_PYTHON` picks another interpreter) |
+| the test suite | `[tool.pytest.ini_options] pythonpath` in `pyproject.toml` |
+
+Never set `PYTHONPATH` by hand and never edit `sys.path` in code. The one exception is a script that
+runs inside the agent or judge image beside its sibling modules (the agent tools and harness
+runners, `experiments/agent_driver.py` and its siblings, the `experiments/mpi` smokes): the images
+set `PYTHONSAFEPATH=1`, which drops the script's own directory, so such a script puts that one
+directory back. `tests/test_import_paths.py` fails on any other edit.
 
 ## Set up on your system
 
