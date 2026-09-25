@@ -38,6 +38,7 @@ import subprocess
 import tempfile
 import textwrap
 import types
+from enum import StrEnum
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 import yaml
@@ -51,26 +52,35 @@ COMPILERS_YAML: pathlib.Path = paths.ROOT / "hpcagent_bench" / "envs" / "compile
 #: Requestable numerical libraries; see :func:`library_tokens`.
 LIBRARIES_YAML: pathlib.Path = paths.ROOT / "hpcagent_bench" / "envs" / "libraries.yaml"
 
-#: Language token -> source-file extension (no leading dot). The second of the two
-#: edits that add a language. Mirrors the per-language rendering in
-#: ``abi_contract.md`` Sec. 7.
+
+class Language(StrEnum):
+    """A native submission language: c/cpp/fortran run on the host, cuda/hip on the GPU."""
+
+    C = "c"
+    CPP = "cpp"
+    FORTRAN = "fortran"
+    CUDA = "cuda"
+    HIP = "hip"
+
+
+#: Language -> source-file extension (no leading dot). Mirrors ``abi_contract.md`` Sec. 7.
 LANG_EXT: Dict[str, str] = {
-    "c": "c",
-    "cpp": "cpp",
-    "fortran": "f90",
-    # GPU implementation targets (host-pointer C-ABI entry; agent owns device
-    # transfers + launch). nvcc/hipcc already in compilers.yaml.
-    "cuda": "cu",
-    "hip": "hip",
+    Language.C: "c",
+    Language.CPP: "cpp",
+    Language.FORTRAN: "f90",
+    Language.CUDA: "cu",
+    Language.HIP: "hip",
 }
 
-#: GPU language -> the host language its C-ABI entry is written in. A GPU submission is TWO
-#: translation units: the host half holds the entry point the harness dlopens and the launch
-#: configuration, the device half the kernels. Both are compiled by the GPU compiler (nvcc/hipcc
-#: drive a C++ host TU perfectly well), so this map is about which FILE the agent writes what in,
-#: not about which compiler runs. Membership also answers "is this a GPU language" -- the one
-#: place that is stated, so adding a GPU target is still the two edits this module documents.
-GPU_HOST_LANG: Dict[str, str] = {"cuda": "cpp", "hip": "cpp"}
+#: GPU language -> the host language its C-ABI entry is written in. A GPU submission is two
+#: translation units (host entry + device kernels), both compiled by the GPU compiler; membership
+#: here is what makes a language a GPU language.
+GPU_HOST_LANG: Dict[str, str] = {Language.CUDA: Language.CPP, Language.HIP: Language.CPP}
+
+
+def unknown_language(language: str) -> KeyError:
+    """The error for a language outside :data:`LANG_EXT`."""
+    return KeyError(f"unknown language {language!r}; expected one of {sorted(map(str, LANG_EXT))}")
 
 
 def source_units(language: str, stem: str) -> Tuple[Tuple[str, str], ...]:
@@ -81,18 +91,15 @@ def source_units(language: str, stem: str) -> Tuple[Tuple[str, str], ...]:
     prompt tells the agent exactly what the sandbox writes and what the judge compiles.
     """
     if language not in LANG_EXT:
-        raise KeyError(f"unknown language {language!r}; expected one of {sorted(LANG_EXT)}")
+        raise unknown_language(language)
     device = (language, f"{stem}.{LANG_EXT[language]}")
     host = GPU_HOST_LANG.get(language)
     return ((host, f"{stem}.{LANG_EXT[host]}"), device) if host else (device,)
 
 
-#: Language token -> the TRANSLATOR target that emits its reference. C and C++ share one emitter
-#: (the C ABI is the contract, not the source dialect), so this is not the identity map and is not
-#: derivable from :data:`LANG_EXT`. Lives here because the emitter choice is a property of the
-#: language, and two copies of it -- one in ``autogen`` and one in ``harness.agent`` -- meant adding
-#: a language could teach the generator about it while leaving the agent path silently unaware.
-LANG_TARGET: Dict[str, str] = {"c": "c", "cpp": "c", "fortran": "fortran"}
+#: Language -> the translator target that emits its reference. C and C++ share one emitter (the C
+#: ABI is the contract, not the dialect), so this is not derivable from :data:`LANG_EXT`.
+LANG_TARGET: Dict[str, str] = {Language.C: "c", Language.CPP: "c", Language.FORTRAN: "fortran"}
 
 
 @functools.lru_cache(maxsize=1)
@@ -702,7 +709,7 @@ def offload_build_driver(model: str, vendor: str, lang: str) -> str:
     """
     family = offload_family(model)
     pinned = os.environ.get(OFFLOAD_CC_ENV.format(family=family.upper(), vendor=vendor.upper()))
-    if pinned and lang == "c":
+    if pinned and lang == Language.C:
         return pinned if os.access(pinned, os.X_OK) else ""
     name = OFFLOAD_BUILD_DRIVER.get((family, vendor, lang))
     if not name:
@@ -740,7 +747,7 @@ def gpu_backend() -> str:
     with no hipcc (or hipcc with no card). ``cuda`` is the answer when neither is found, because a
     column that names a language nothing installed still has to name one.
     """
-    return "hip" if shutil.which("hipcc") else "cuda"
+    return Language.HIP if shutil.which("hipcc") else Language.CUDA
 
 
 def offload_probe(model: str, vendor: str, arch: str, *, run: bool) -> bool:
@@ -972,7 +979,7 @@ def _compiler_for_lang(compilers: Dict[str, dict], lang: str, *, mpi: bool = Fal
 #: narrow: ccache does not officially support Fortran (a cache hit skips the ``.mod``
 #: side-effect) and the CUDA/HIP drivers need their own configuration, so those keep
 #: compiling directly. C and C++ are where the harness spends its build time anyway.
-_CACHEABLE_LANGS = ("c", "cpp")
+_CACHEABLE_LANGS = (Language.C, Language.CPP)
 
 
 @functools.lru_cache(maxsize=1, typed=True)
@@ -1205,7 +1212,7 @@ def subst_map(
 #: Link-driver priority: the first language present wins, because its driver is the one that
 #: pulls in the runtime the others do not (nvcc/hipcc their device runtime, gfortran libgfortran,
 #: g++ libstdc++). A C driver links none of them, so it is the fallback.
-LINK_LANG_ORDER = ("cuda", "hip", "fortran", "cpp", "c")
+LINK_LANG_ORDER = (Language.CUDA, Language.HIP, Language.FORTRAN, Language.CPP, Language.C)
 
 
 def link_lang_for(langs: set[str]) -> str:
@@ -1213,7 +1220,7 @@ def link_lang_for(langs: set[str]) -> str:
     for lang in LINK_LANG_ORDER:
         if lang in langs:
             return lang
-    return "c"
+    return Language.C
 
 
 def baseline_flags(lang: str) -> str:
@@ -1382,9 +1389,9 @@ def openmp_link_for_block(block: Dict[str, Any], mode: Mode, cc: Optional[str] =
 
 #: Probe sources per compiler-block language: the smallest translation unit each front end accepts.
 _VECLIB_PROBE: Dict[str, Tuple[str, str]] = {
-    "fortran": (".f90", "end\n"),
-    "c": (".c", "int main(void){return 0;}\n"),
-    "cpp": (".cpp", "int main(){return 0;}\n"),
+    Language.FORTRAN: (".f90", "end\n"),
+    Language.C: (".c", "int main(void){return 0;}\n"),
+    Language.CPP: (".cpp", "int main(){return 0;}\n"),
 }
 
 
@@ -1519,7 +1526,7 @@ LIBRARY_LINK_PREFIXES = ("-L", "-l")
 
 #: What ``-x`` to hand the block's compiler when trial-linking a library. The gcc drivers
 #: (gfortran included) all accept ``c``; nvcc names its input language ``cu``, and rejects ``c``.
-PROBE_INPUT_LANG: Dict[str, str] = {"cpp": "c++", "hip": "c++", "cuda": "cu"}
+PROBE_INPUT_LANG: Dict[str, str] = {Language.CPP: "c++", Language.HIP: "c++", Language.CUDA: "cu"}
 
 #: Where the GPU math libraries are already described (soname + header): the discovery table.
 TOOLSET_YAML: pathlib.Path = paths.ROOT / "hpcagent_bench" / "envs" / "toolset.yaml"
@@ -1770,7 +1777,7 @@ def isopar_capability() -> flags.AutoparProbe:
     this module rather than beside :func:`flags.polly_capability` because the cpp block's compiler
     is nameable only here, and :func:`stdpar_link_flags` (which must AGREE with it) is right above.
     """
-    _cname, block = _compiler_for_lang(_load_compilers(), "cpp")
+    _cname, block = _compiler_for_lang(_load_compilers(), Language.CPP)
     composed = f"{baseline_flags('cpp')} {std_flag('cpp')}"
     return flags.probe_autopar(
         block["cc"],
@@ -1933,7 +1940,7 @@ def executable_version(path: str) -> str:
 CLANG_FORMAT_STYLE: pathlib.Path = paths.ROOT / ".clang-format"
 
 #: Languages the LLVM source tools can read. CUDA/HIP are included because clang parses both.
-CLANG_LANGS: Tuple[str, ...] = ("c", "cpp", "cuda", "hip")
+CLANG_LANGS: Tuple[str, ...] = (Language.C, Language.CPP, Language.CUDA, Language.HIP)
 
 
 @functools.lru_cache(maxsize=1, typed=True)
@@ -2053,7 +2060,7 @@ def compile_variant(
     :raises FileNotFoundError: when no source can be resolved.
     """
     if lang not in LANG_EXT:
-        raise KeyError(f"unknown language {lang!r}; expected one of {sorted(LANG_EXT)}")
+        raise unknown_language(lang)
 
     compilers = _load_compilers()
     if compiler is not None:
@@ -2131,7 +2138,7 @@ wrap_kernel` dlopens. Flags resolve from :mod:`hpcagent_bench.flags` via
     langs_present = set()
     for lang, src in sources:
         if lang not in LANG_EXT:
-            raise KeyError(f"unknown language {lang!r}; expected one of {sorted(LANG_EXT)}")
+            raise unknown_language(lang)
         block = forced if forced is not None else _compiler_for_lang(compilers, lang)[1]
         src = pathlib.Path(src)
         obj = build_dir / f"{src.name}.o"
@@ -2179,10 +2186,16 @@ wrap_kernel` dlopens. Flags resolve from :mod:`hpcagent_bench.flags` via
     # default --as-needed drops a -l that precedes the object needing it, which linked a clean
     # .so that then failed dlopen with ``undefined symbol: cblas_sgemm``.
     if langs_present & set(ALWAYS_LINKED_LANGS):
-        lang = "cpp" if "cpp" in langs_present else "c"
+        lang = Language.CPP if Language.CPP in langs_present else Language.C
         link_argv.extend(f for f in library_build_flags(lang, ALWAYS_LINKED_LIBRARIES)[1] if f not in link_argv)
     if langs_present & set(FFT_LINKED_LANGS):
-        lang = "cpp" if "cpp" in langs_present else "c" if "c" in langs_present else "fortran"
+        lang = (
+            Language.CPP
+            if Language.CPP in langs_present
+            else Language.C
+            if Language.C in langs_present
+            else Language.FORTRAN
+        )
         link_argv.extend(f for f in library_build_flags(lang, FFT_LINKED_LIBRARIES)[1] if f not in link_argv)
     cmds.append(link_argv)
     return cmds
@@ -2331,7 +2344,7 @@ PIC_FLAG_CUDA = "-Xcompiler=-fPIC"
 
 #: Languages whose emitted reference source can contain a BLAS call, so the tokens are linked
 #: whether or not anyone asked. C++ shares the C translator target, hence both.
-ALWAYS_LINKED_LANGS = ("c", "cpp")
+ALWAYS_LINKED_LANGS = (Language.C, Language.CPP)
 
 #: Libraries every C/C++ build links. ``blas`` resolves to openblas via envs/libraries.yaml.
 ALWAYS_LINKED_LIBRARIES = ("blas",)
@@ -2341,7 +2354,7 @@ ALWAYS_LINKED_LIBRARIES = ("blas",)
 #: ``_emit_blas_gemm`` equivalent, see numpyto_common.lowering.lower's docstring). The FFT_LIBRARY_
 #: MARKER lowering (numpyto_common/lib_nodes.py) renders an ``fftw_plan_dft_1d``/``fftwf_...`` call
 #: on all three, so ``<fftw3.h>``/``-lfftw3`` has to resolve on all three.
-FFT_LINKED_LANGS = ("c", "cpp", "fortran")
+FFT_LINKED_LANGS = (Language.C, Language.CPP, Language.FORTRAN)
 
 #: Libraries every C/C++/Fortran build links. ``fftw`` resolves to fftw3 via envs/libraries.yaml.
 FFT_LINKED_LIBRARIES = ("fftw",)
@@ -2402,7 +2415,7 @@ def build_shared_lib_commands(
     :returns: a list of argv lists to run in order; the last produces ``out_so``.
     """
     if lang not in LANG_EXT:
-        raise KeyError(f"unknown language {lang!r}; expected one of {sorted(LANG_EXT)}")
+        raise unknown_language(lang)
     if lang in ALWAYS_LINKED_LANGS:
         always_compile, always_link = library_build_flags(lang, ALWAYS_LINKED_LIBRARIES)
         extra_compile = [*extra_compile, *always_compile]
