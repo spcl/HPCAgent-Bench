@@ -313,7 +313,7 @@ def test_roster_tag_reads_the_wave_boards_own_campaign_table() -> None:
     """The tag lookup must be the SAME table the wave board scores arms under, not a second copy
     that can drift from it."""
     assert crash_audit.roster_tag("cpf-llr-focus40-oss120b-c") == "llr-focus40"
-    assert crash_audit.roster_tag("scicomp-dc-cpp-oss120b-plain") == "scicomp40"
+    assert crash_audit.roster_tag("scicomp-dc-cpp-oss120b-plain") == "scicomp35"
 
 
 def test_roster_tag_raises_for_an_arm_no_campaign_owns() -> None:

@@ -270,7 +270,8 @@ def test_the_job_gets_the_snapshot_not_the_arm_env(tmp_path: pathlib.Path) -> No
     """submit_arm_job hands sbatch the snapshot as CLUSTER_ENV_FILE."""
     stub_dir = tmp_path / "bin"
     stub_dir.mkdir()
-    (stub_dir / "sbatch").write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > sbatch.args\necho 4242\n")
+    # appends: the agent job's sbatch is followed by its chained finalize-grade job's
+    (stub_dir / "sbatch").write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" >> sbatch.args\necho 4242\n")
     (stub_dir / "sbatch").chmod(0o755)
     # one association, so account_env.sh (sourced by submit_common.sh) resolves without asking
     (stub_dir / "sacctmgr").write_text("#!/bin/sh\necho test-account\n")

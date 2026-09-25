@@ -85,6 +85,7 @@ from hpcagent_bench.support.bindings.contract import Binding, graded_datatype
 from hpcagent_bench.spec import KERNELS, PRESET_CHOICES, BenchSpec, resolve_preset
 
 if TYPE_CHECKING:
+    from hpcagent_bench.harness.final_grade import FinalGrader
     from hpcagent_bench.harness.prompts import PromptConfig
 
 #: Top-level template for the judge-driven (HTTP) agent prompt.
@@ -104,7 +105,8 @@ OPT_REPORT_TOOL = "opt-report"
 #: Device-slot priority by route, lowest first: a submission never waits behind exploration.
 SLOT_PRIORITY = {"submit": 0, "oracle": 0}
 
-#: The slot priority of every route :data:`SLOT_PRIORITY` does not name.
+#: The slot priority of every route :data:`SLOT_PRIORITY` does not name. An in-job final grade
+#: (:data:`hpcagent_bench.harness.final_grade.PRIORITY`) waits behind both.
 EXPLORATION_PRIORITY = 1
 
 #: Routes whose work stops when the client leaves (nothing they grade is recorded).
@@ -764,6 +766,8 @@ class JudgeHandler(BaseHTTPRequestHandler):
     cfg: RunConfig = ServiceConfig()
     #: Shared free-slot pool bounding concurrent grades to one-per-device (set by make_server).
     device_pool: SlotPool | None = None
+    #: The in-job final grades this judge owes (set by make_server; see :meth:`owe_final_grade`).
+    final_grader: "FinalGrader | None" = None
     #: This judge's index in the deployment (set by make_server from ``serve --rank``).
     judge_rank: int = DEFAULT_RANK
     protocol_version = "HTTP/1.1"
@@ -1181,6 +1185,8 @@ class JudgeHandler(BaseHTTPRequestHandler):
             curves=curves,
         )
         print(f"judge: /submit {request_id} {kernel} recorded={recorded}", file=sys.stderr, flush=True)
+        if recorded.get("table") == "submission":
+            self.owe_final_grade(request_id, task)
         if config.get_str("service.submit_feedback", "verdict") != "full":
             return self._send(200, submit_verdict(result, request_id))
         payload: dict[str, object] = dataclasses.asdict(result)
@@ -1193,6 +1199,28 @@ class JudgeHandler(BaseHTTPRequestHandler):
             request_id=request_id,
         )
         return self._send(200, payload)
+
+    def owe_final_grade(self, request_id: str, task: Task) -> None:
+        """Queue the FINAL grade of the correct submission just recorded under ``request_id``, when
+        this request's configuration asks for it (:mod:`hpcagent_bench.harness.final_grade`). Never
+        for a distributed (ML scaling) task, whose grade is the scaling grade. Queued before the
+        answer goes out, run after it; a failure here is logged and never touches the answer."""
+        from hpcagent_bench.harness import final_grade, recording
+
+        if self.final_grader is None or task.residency == "distributed" or not final_grade.enabled():
+            return
+        try:
+            environment = config.environment()
+            item = final_grade.submitted_item(pathlib.Path(recording.db_path()), request_id, environment)
+            if item is None:
+                print(f"judge: /submit {request_id}: no stored submission to final-grade", file=sys.stderr, flush=True)
+                return
+            pending = self.final_grader.enqueue(item, environment)
+            print(f"judge: /submit {request_id} owes its final grade: {pending}", file=sys.stderr, flush=True)
+        except Exception:  # noqa: BLE001 -- the regrade loop still grades what this could not queue
+            print(
+                f"judge: final grade of {request_id} not queued\n{traceback.format_exc()}", file=sys.stderr, flush=True
+            )
 
     def _profile(self, submission: Submission, task: Task, body: RequestBody, preset: str) -> None:
         """``POST /profile``: the diagnostic route; ``tool`` picks the instrument. Nothing is graded or
@@ -1420,14 +1448,24 @@ def make_server(
     """A threading HTTP server on ``(host, port)`` serving the judge API, grades pinned to a device-slot
     pool (``slots`` overrides it, e.g. in tests). ``rank`` is set only here. Both suspect thresholds
     are read before binding, so an unreadable one refuses to serve."""
+    from hpcagent_bench.harness.final_grade import FinalGrader
+
     suspect_threshold(device=False)
     suspect_threshold(device=True)
+    pool = build_device_pool(slots)
+
+    def acquire(priority: int) -> DeviceSlot:
+        slot = pool.acquire(priority, threading.Event())  # an event nobody sets: never abandoned
+        assert slot is not None
+        return slot
+
     handler = type(
         "BoundJudgeHandler",
         (JudgeHandler,),
         {
             "cfg": cfg,
-            "device_pool": build_device_pool(slots),
+            "device_pool": pool,
+            "final_grader": FinalGrader(acquire, pool.release, rank, workers=len(pool.free)),
             "judge_rank": rank,
         },
     )

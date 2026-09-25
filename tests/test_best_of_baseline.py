@@ -252,7 +252,8 @@ def test_a_frame_mixing_policies_is_refused_rather_than_pooled() -> None:
 def test_a_frame_under_one_policy_reduces_normally() -> None:
     rows = population.graded_episode_rows(_frame(["best-of-v1:c-autopar+c+numba"] * 3), order=("ts_ms",), tainted=())
     assert len(rows) == 3
-    assert population.one_baseline_policy(rows["baseline_policy"].tolist()) == "best-of-v1:c-autopar+c+numba"
+    assert population.one_baseline_policy(rows["baseline_policy"].tolist()) == "best-of-v2:c+numba"  # its family
+    assert rows["baseline_policy"].tolist() == ["best-of-v1:c-autopar+c+numba"] * 3  # each row keeps its stamp
 
 
 def test_a_frame_without_the_column_still_reduces_as_legacy() -> None:
