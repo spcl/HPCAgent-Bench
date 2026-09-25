@@ -9,6 +9,7 @@ first.
 
 import os
 import pathlib
+import sys
 
 
 def pin_per_worker_dace_build_folder() -> None:
@@ -24,9 +25,9 @@ def pin_per_worker_dace_build_folder() -> None:
     ``Fatal Python error: Segfault`` / ``Aborted`` with no failing assertion, and a block of
     consecutive ``F``s from one worker while the others stay green.
 
-    An ENV VAR rather than ``dace.Config.set``: dace resolves ``DACE_*`` at every ``get``, so this
-    binds however late dace is first imported, and no suite has to import dace to be protected.
-    A pin the caller already made is EXTENDED rather than replaced, so pointing the build at a
+    The env var binds a dace imported later (dace folds ``DACE_*`` into its configuration when it
+    loads), and a dace already imported gets the same folder through ``Config.set``, so no suite
+    has to import dace to be protected. A pin the caller already made is EXTENDED rather than replaced, so pointing the build at a
     fast disk keeps working and still splits per worker.
 
     ``sdfg.build_folder`` set explicitly on an SDFG still wins over this, which is what the sparse
@@ -36,5 +37,9 @@ def pin_per_worker_dace_build_folder() -> None:
     if worker is None:
         return  # a serial run has nothing to race with
     base = pathlib.Path(os.environ.get("DACE_default_build_folder", ".dacecache"))
-    if base.name != worker:
-        os.environ["DACE_default_build_folder"] = str(base / worker)
+    if base.name == worker:
+        return
+    os.environ["DACE_default_build_folder"] = str(base / worker)
+    loaded = sys.modules.get("dace.config")
+    if loaded is not None:
+        loaded.Config.set("default_build_folder", value=str(base / worker))

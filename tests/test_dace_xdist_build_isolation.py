@@ -57,18 +57,14 @@ def test_the_split_does_not_nest_on_a_second_call(clean_env: pytest.MonkeyPatch)
     assert os.environ[BUILD_FOLDER_ENV] == str(pathlib.Path(".dacecache/gw2"))
 
 
-def test_dace_resolves_the_env_var_at_get_time(clean_env: pytest.MonkeyPatch) -> None:
-    """The claim the whole fix rests on: the pin binds however late dace was first imported.
-
-    And its converse, which is why the pin is an env var and not ``Config.set``: an env override
-    WINS over a later ``Config.set``, so nothing downstream can quietly put a worker back into the
-    shared folder.
-    """
+def test_an_already_imported_dace_gets_the_pin_too(clean_env: pytest.MonkeyPatch) -> None:
+    """dace reads ``DACE_*`` once, when its configuration loads; this module imported it before the
+    pin, so the pin must reach the loaded configuration as well as the environment."""
     shipped = dace.Config.get("default_build_folder")
+    clean_env.setenv("PYTEST_XDIST_WORKER", "gw5")
     clean_env.setenv(BUILD_FOLDER_ENV, "/scratch/pinned")
-    assert dace.Config.get("default_build_folder") == "/scratch/pinned"
     try:
-        dace.Config.set("default_build_folder", value="/scratch/elsewhere")
-        assert dace.Config.get("default_build_folder") == "/scratch/pinned"
+        pin_per_worker_dace_build_folder()
+        assert dace.Config.get("default_build_folder") == str(pathlib.Path("/scratch/pinned/gw5"))
     finally:
         dace.Config.set("default_build_folder", value=shipped)

@@ -60,11 +60,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The requires-python floor and the latest release.
-        python: [ '3.12', '3.14' ]
-        # Two shards per interpreter: each is ~25 min of tests, so the four legs land beside the
-        # longest jobs instead of adding a short one.
-        shard: [ 0, 1 ]
+        # The full sweep on the latest release, in two ~25 min shards; the requires-python floor
+        # (the images' interpreter) gets the short `floor` leg: lint, import every module, collect.
+        include:
+          - { python: '3.14', shard: 0 }
+          - { python: '3.14', shard: 1 }
+          - { python: '3.12', shard: floor }
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -79,21 +80,39 @@ jobs:
           # harbor: test_harbor.py checks task.toml against Harbor's own model.
           pip-args: "-e ./adapters/hpcagent_bench"
           ccache: unit-${{ matrix.python }}-${{ matrix.shard }}
-          # Only shard 0 carries an nvc++ case (test_parallelism_dispatch.py).
-          vendor-compilers: ${{ matrix.shard == 0 && 'all' || 'oneapi' }}
+          # Only shard 0 carries an nvc++ case (test_parallelism_dispatch.py); the floor leg runs none.
+          vendor-compilers: ${{ matrix.shard == 0 && 'all' || matrix.shard == 1 && 'oneapi' || '' }}
 
       # Format (ruff / clang-format / fprettify) and ruff's pyupgrade rules at the py312 floor, on
       # the files the change touches. Once, on the floor interpreter.
       - name: Phase 0 -- lint (format + pyupgrade py312, changed files)
-        if: ${{ matrix.python == '3.12' && matrix.shard == 0 }}
+        if: ${{ matrix.shard == 'floor' }}
         run: |
           base="${{ github.event.pull_request.base.ref || 'main' }}"
           git fetch --no-tags origin "$base"
           python scripts/checks/check_format.py --base "origin/$base"
 
+      # The floor interpreter evaluates module-level annotations eagerly: importing every module
+      # and collecting every test is what catches a 3.13+-only construct.
+      - name: Phase 0b -- floor interpreter (import every module, collect every test)
+        if: ${{ matrix.shard == 'floor' && !cancelled() }}
+        run: |
+          python - <<'PY'
+          import importlib, pkgutil, hpcagent_bench
+          names = [m.name for m in pkgutil.walk_packages(hpcagent_bench.__path__, "hpcagent_bench.")
+                   if ".benchmarks." not in m.name]
+          for name in names:
+              importlib.import_module(name)
+          print(f"imported {len(names)} modules")
+          PY
+          python -m pytest -p no:cacheprovider -q --collect-only tests > collected.txt
+          tail -1 collected.txt
+          python -m pytest -p no:cacheprovider -q tests/test_interpreter_floor.py
+
       # The papi group (test_papi_counters.py) needs libpapi; a hosted runner may still expose no
       # PMU, so the tests can skip for that reason alone.
       - name: Setup -- PAPI
+        if: ${{ matrix.shard != 'floor' }}
         run: |
           sudo apt-get install -y --no-install-recommends libpapi-dev
           sudo sysctl -w kernel.perf_event_paranoid=1 >/dev/null 2>&1 || true
@@ -101,13 +120,14 @@ jobs:
 
       # test_optimas_tools.py drives the vendored openai-agents SDK (vendor/ is gitignored).
       - name: Setup -- vendored openai-agents SDK
+        if: ${{ matrix.shard != 'floor' }}
         run: |
           target="${RUNNER_TEMP}/agent-optimas-test"
           python -m pip install --target "${target}" openai-agents
           echo "HPCAGENT_BENCH_OPTIMAS_VENDOR_DIR=${target}" >> "$GITHUB_ENV"
 
       - name: Phase 1 -- unit sweep (every test file no other phase claims)
-        if: ${{ !cancelled() }}
+        if: ${{ matrix.shard != 'floor' && !cancelled() }}
         timeout-minutes: 38
         run: |
           excl=$(mktemp)
