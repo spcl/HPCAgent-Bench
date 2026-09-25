@@ -2,3 +2,21 @@
 # job reads its own read-only snapshot under .rendered/. None of them is a source.
 /.env.*
 /.rendered/
+# The per-user site layer, copied from layers/site-*.env.
+/layers/site.env
+
+# Problem lists and kernel rosters the submit scripts resolve for one submission (make_problems).
+/problems-*.jsonl
+/problems-*.kernels.resolved.txt
+/*.jsonl.tmp
+# Owed/rerun lists and timing tables a coordinator writes for KERNELS_FILE=owed/<list>.
+/owed/
+
+# Job output beside the launchers (%x-%j.out/.err), and per-run logs and scratch.
+/*-[0-9]*.out
+/*.err
+/logs/
+/results/
+/mwd-final-*/
+# check_offload_claims.py's default --workdir: compiled probes and their .c sources.
+/work/
