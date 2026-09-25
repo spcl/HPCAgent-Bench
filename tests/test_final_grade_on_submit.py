@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The judge's in-job FINAL grade (``grading.final_grade_on_submit``, hpcagent_bench/harness/final_grade.py).
 
-An LLR arm's submissions reach the paper only through their final grade (mw4x5-final-v2). The judge
-that recorded a correct /submit runs ``regrade cells --migrate`` on it itself, so the rows it writes
+An LLR arm's submissions reach the paper only through their final grade (mw4x5). The judge
+that recorded a correct /submit runs ``regrade finalize`` on it itself, so the rows it writes
 must be the rows a regrade wave writes for the same stored source, must count wherever a regrade
 wave's rows count (the extractor, the regrade loop's globs), and the job must not end before they
 are written. A flag that leaks to another experiment, or grades an incorrect submission, spends a
 judge's device slots on grades nobody reads.
 
 The judge here is the real service (``make_server``) grading a real C kernel on this host, and the
-final grade is the real ``regrade cells --migrate`` child; the reference it is compared against is
+final grade is the real ``regrade finalize`` child; the reference it is compared against is
 the same command run the way a regrade wave runs it, from the extracted row.
 """
 
@@ -177,18 +177,18 @@ def observation(db: pathlib.Path, submitted: dict[str, Any]) -> pathlib.Path:
 @pytest.fixture(name="graded", scope="module")
 def graded_fixture(judge: Judge) -> Graded:
     """One correct /submit final-graded by the judge, and the SAME row graded as a regrade wave does:
-    ``regrade worklist --scope all`` over its extracted row, then ``regrade cells --migrate``."""
+    ``regrade worklist`` over its extracted row, then ``regrade finalize``."""
     submitted = judge.submit(correct_source(), RUN)
     assert submitted["recorded"]["table"] == "submission", submitted["recorded"]
     queued = judge.pending(RUN)
     wait_for(lambda: not judge.pending(RUN), "the judge's final grade")
     db = next((judge.job / "judge" / "rank-0").glob("hpcagent_bench*.db"))
-    items, problems = regrade.build_worklist([observation(db, submitted)], [], scope=regrade.ALL)
+    items, problems = regrade.build_worklist([observation(db, submitted)], [])
     assert not problems and len(items) == 1, problems
     worklist = judge.job.parent.parent / "worklist.jsonl"
     worklist.write_text(json.dumps(dataclasses.asdict(items[0])) + "\n", encoding="utf-8")
     wave = judge.job.parent.parent / "mwd-final-regrades-test"
-    command = [sys.executable, "-m", "hpcagent_bench.harness.regrade", "cells", "--migrate"]
+    command = [sys.executable, "-m", "hpcagent_bench.harness.regrade", "finalize"]
     command += ["--worklist", str(worklist), "--shard", "0", "--shards", "1", "--out-dir", str(wave)]
     subprocess.run(command, check=True, env=dict(os.environ), timeout=GRADE_DEADLINE_S)
     return Graded(judge, submitted, queued, judge.final_dir / "regrade-cells-0.db", wave / "regrade-cells-0.db")
@@ -210,7 +210,7 @@ def test_a_correct_submit_owes_its_final_grade_before_the_answer_goes_out(graded
     assert [path.parent for path in graded.queued] == [graded.judge.final_dir / final_grade.PENDING_DIRNAME]
 
 
-def test_the_in_job_final_grade_is_the_row_regrade_cells_migrate_writes_for_the_same_source(graded: Graded) -> None:
+def test_the_in_job_final_grade_is_the_row_regrade_finalize_writes_for_the_same_source(graded: Graded) -> None:
     """The paper pools in-job rows with regrade-wave rows: any difference in what was graded, or
     under which rule, stamp and protocol, would be pooled as if it were one measurement."""
     in_job = rows(graded.in_job, regrade.TASK_TABLE, TASK_IDENTITY)
@@ -268,7 +268,7 @@ def test_the_extractor_reads_a_jobs_in_job_final_grade_exactly_as_a_regrade_wave
 
 
 def test_the_regrade_loops_default_globs_count_an_in_job_final_grade(graded: Graded, tmp_path: pathlib.Path) -> None:
-    """regrade_rest.py and wave_board.py plan and report from these globs: a job's own final grade
+    """finalize_grade_owed.py and wave_board.py plan and report from these globs: a job's own final grade
     missing from them is re-graded by a wave for nothing and shown as owed."""
     wave_board = load("wave_board")
     patterns = wave_board.default_regrade_patterns(tmp_path, graded.judge.runs)

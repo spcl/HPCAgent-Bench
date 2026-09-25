@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The FINAL grade of a submission, run by the judge that recorded it (``grading.final_grade_on_submit``).
 
-The final grade (mw4x5-final-v2) is ``hpcagent-bench regrade cells --migrate``: m inputs x n runs a
-side, each input credited by its Mann-Whitney test, the task by their geomean
-(:func:`hpcagent_bench.harness.regrade.grade_cells`). A campaign otherwise waits for a separate
-regrade wave to put its submissions on it. With the key on, the judge runs THAT command for every
+The final grade (mw4x5) is ``hpcagent-bench regrade finalize``: m inputs x n runs a side, each
+input credited by its Mann-Whitney test, the task by their geomean
+(:func:`hpcagent_bench.harness.regrade.grade_cells`). This is the slow-submit mode; in the fast mode
+the job's chained finalize-grade job (``experiments/finalize_grade.sbatch``) grades its submissions
+after it ends. With the key on, the judge runs THAT command for every
 correct ``/submit`` it records, after answering the submit:
 
 * the submission becomes a one-line worklist, ``<job>/final-grade/pending/<rank>-<request id>.json``,
@@ -14,11 +15,12 @@ correct ``/submit`` it records, after answering the submit:
   (:func:`regrade.grading_env`, the filter ``regrade worklist`` applies to the arm's env file);
 * a worker thread takes a device slot from the judge's own pool at :data:`PRIORITY`, after every
   submission and exploration request waiting, so no grade the agents are waiting for is timed
-  beside it, and runs ``regrade cells --migrate`` on that one line in a child pinned the way
+  beside it, and runs ``regrade finalize`` on that one line in a child pinned the way
   ``experiments/regrade.sbatch`` pins a shard (one visible device, the slot's cores);
-* the child writes ``<job>/final-grade/regrade-cells-<rank>.db``, the rows a regrade wave writes, and
-  the pending file is removed. ``experiments/run_cluster.sh`` waits (bounded) for the pending files
-  before the job ends and lists the ones it abandons; the regrade loop grades those as before.
+* the child writes ``<job>/final-grade/regrade-cells-<rank>.db``, the rows a finalize-grade job
+  writes, and the pending file is removed. ``experiments/run_cluster.sh`` waits (bounded) for the
+  pending files before the job ends and lists the ones it abandons;
+  ``experiments/finalize_grade_owed.py`` plans those like any other owed final grade.
 
 A newer correct submit of the same episode and kernel replaces one still queued: only the newest
 submission is owed a final grade. Off by default; the LLR submitters and the owed-wave planner turn
@@ -138,13 +140,12 @@ def child_environment(environment: Mapping[str, str], slot: DeviceSlot) -> dict[
 
 
 def command(worklist: pathlib.Path, directory: pathlib.Path, rank: int) -> list[str]:
-    """``regrade cells --migrate`` over the one-line ``worklist``, into this rank's shard."""
+    """``regrade finalize`` over the one-line ``worklist``, into this rank's shard."""
     return [
         sys.executable,
         "-m",
         "hpcagent_bench.harness.regrade",
-        "cells",
-        "--migrate",
+        "finalize",
         "--worklist",
         str(worklist),
         "--shard",
@@ -213,7 +214,7 @@ class FinalGrader:
                 owed.worklist.unlink(missing_ok=True)
 
     def grade(self, owed: Pending, slot: DeviceSlot) -> int:
-        """Run ``regrade cells --migrate`` on ``owed`` in a child pinned to ``slot``; its exit status."""
+        """Run ``regrade finalize`` on ``owed`` in a child pinned to ``slot``; its exit status."""
         directory = out_dir(pathlib.Path(owed.item.db))
         logs = directory / LOG_DIRNAME
         logs.mkdir(parents=True, exist_ok=True)

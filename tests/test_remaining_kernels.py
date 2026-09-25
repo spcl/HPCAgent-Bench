@@ -1068,7 +1068,7 @@ def test_roster_resolves_with_this_interpreter_whatever_python3_the_path_names(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, stale_py: str | None
 ) -> None:
     """A systemd service or cron job has no venv on PATH and maybe no (or a stale) ``PY``: its
-    ``python3`` lacks yaml and the bench, and roster.sh raised there (regrade_rest.py died in a
+    ``python3`` lacks yaml and the bench, and roster.sh raised there (finalize_grade_owed.py died in a
     systemd unit, 2026-09-25). The roster must come from the interpreter running the caller."""
     bad = tmp_path / "bin"
     bad.mkdir()

@@ -33,7 +33,7 @@ Hand-kept lists override the databases, which are never edited to force a rerun:
 |---|---|---|
 | `experiments/rerun-kernels.tsv` | (arm, kernel, jobs, reason, status, class) | kernel owed whatever its rows say (a judge rank died mid-run) |
 | `experiments/rerun-lost.tsv` | (arm, deleted_jobs, reason, status) | a setup whose job dirs were deleted; `RERUN_LOST=1` plans it over its whole roster |
-| `experiments/final-grade-exempt.tsv` | a submission whose source is gone | keeps its live grade as final (written by `regrade_rest.py --exempt-out`) |
+| `experiments/final-grade-exempt.tsv` | a submission whose source is gone | keeps its live grade as final (written by `finalize_grade_owed.py --exempt-out`) |
 
 A rerun's rows supersede the old ones under the latest-run rule; the old rows stay.
 
@@ -99,12 +99,18 @@ pairs become owed, and the owed wave is the resume path.
 - **Final attempt only.** Only rows graded inside an episode's final attempt deliver a kernel; the
   analysis keeps the latest valid submission per (arm, kernel) (`population.latest_runs`), so a
   rerun replaces only the kernels it ran.
-- **Regrade shards resume.** `hpcagent-bench regrade run` writes `regrade-<shard>.db` and skips
-  every (db, run id, benchmark, ts) it already holds; `cells` writes `regrade-cells-<shard>.db` and,
-  under `--migrate`, re-times every row not yet graded under the final rule. Resubmit the same
-  `regrade.sbatch` call with the SAME node count (items are dealt `items[shard::shards]`) and it
-  continues where it stopped. A regrade row links to its submission by that key.
-  `scripts/collect/regrade_loop.sh` re-plans what no shard graded yet.
+- **Final grades.** Every submission is reported under ONE rule, mw4x5 (docs/measurement_statistics.md).
+  An arm reaches it in one of two modes: *fast submit* (the default) chains
+  `experiments/finalize_grade.sbatch` on each agent job (`afterany`), which plans and grades that
+  job's owed answers when it starts; *slow submit* (`grading.final_grade_on_submit`, the LLR arms)
+  grades each correct `/submit` inside the job, after answering it. Whatever neither reaches stays
+  owed until `experiments/finalize_grade_owed.py` (on a timer: `scripts/collect/finalize_grade_loop.sh`)
+  plans it into regrade jobs.
+- **Regrade shards resume.** `hpcagent-bench regrade finalize` writes `regrade-cells-<shard>.db` and
+  re-times every row not yet graded under the final rule; `regrade run` writes `regrade-<shard>.db`
+  and skips every (db, run id, benchmark, ts) it already holds. Resubmit the same `regrade.sbatch`
+  call with the SAME node count (items are dealt `items[shard::shards]`) and it continues where it
+  stopped. A regrade row links to its submission by that key.
 - **mlscale grade claims.** Auto-mode grade jobs claim submissions in `<out>/scaling-claims.db`
   under `BEGIN IMMEDIATE`, heartbeat every 60 s, and take over a claim whose heartbeat is older
   than 600 s, so chunk jobs run side by side without grading one item twice and a dead job's items
@@ -114,7 +120,7 @@ pairs become owed, and the owed wave is the resume path.
 
 ```bash
 # resume a killed regrade shard: the same call, the same --nodes
-sbatch --no-requeue --nodes=2 --time=07:00:00 regrade.sbatch "$WORK/final.jsonl" "$WORK/final-out" cells 1
+sbatch --no-requeue --nodes=2 --time=07:00:00 regrade.sbatch "$WORK/final.jsonl" "$WORK/final-out" finalize
 
 # how much mlscale grading is left
 python -m hpcagent_bench.harness.scaling_grade pending --runs "$RUNS"/mlscale-<stamp> \
