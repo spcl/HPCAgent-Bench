@@ -191,7 +191,7 @@ def test_the_canon_series_reads_the_column_over_the_chosen_baseline() -> None:
             ("dace_cpu_canonicalize", "k3", 100.0, "True"),
         ]
     )
-    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER, canon_frame=canon)
+    _panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER, canon_frame=canon)
     assert canon_mark is not None
     assert canon_mark.values == {"k1": 4.0, "k2": 2.0, "k3": 1.0}
 
@@ -306,7 +306,7 @@ def test_summary_row_carries_the_geomean_interval_the_summary_slot_draws() -> No
     """The table is read apart from the figure, so its summary row has to be the slot's statistic
     exactly: the geomean over the solved kernels (k3 unanswered is left out) and its 95% interval."""
     frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 8.0})])
-    panels, canon_mark, dropped = kernel_comparison.build_panels(frame, ROSTER, include_incomplete=True)
+    panels, _canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER, include_incomplete=True)
     series = panels["qwen38"][0]
     table = kernel_comparison.table_rows(panels, None, ROSTER)
     row = table[(table.row == kernel_comparison.ROW_SUMMARY) & (table.statistic == "geomean")].iloc[0]
@@ -484,7 +484,7 @@ def figure_key(frame: pd.DataFrame) -> list[str]:
     """The labels of the one key :func:`kernel_comparison.figure` draws for ``frame``."""
     import matplotlib.pyplot as plt
 
-    panels, canon_mark, dropped = kernel_comparison.build_panels(frame, ROSTER, include_incomplete=True)
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER, include_incomplete=True)
     fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
     try:
         (legend,) = fig.legends
@@ -848,7 +848,7 @@ def test_both_panels_rule_the_value_axis_and_leave_the_kernel_axis_bare() -> Non
             *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0, "k2": 200.0, "k3": 300.0}),
         ]
     )
-    panels, canon_mark, dropped = kernel_comparison.build_panels(frame, ROSTER)
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER)
     fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
     try:
         for ax in fig.axes:
@@ -903,7 +903,7 @@ def test_an_arm_sits_at_the_same_x_in_both_panels_although_canon_has_no_tokens()
         [("numba", k, 100.0, "True") for k in ROSTER]
         + [(kernel_comparison.CANON_COLUMN, k, 50.0, "True") for k in ROSTER]
     )
-    panels, canon_mark, dropped = kernel_comparison.build_panels(frame, ROSTER, canon_frame=canon)
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER, canon_frame=canon)
     fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
     try:
         colour = panels["qwen38"][0].color
@@ -936,7 +936,7 @@ def test_a_double_column_render_is_the_page_width_and_a_standalone_one_follows_i
 
     roster = [f"k{i}" for i in range(40)]
     frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {k: 2.0 for k in roster})])
-    panels, canon_mark, dropped = kernel_comparison.build_panels(frame, roster)
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, roster)
     insert = kernel_comparison.figure(panels, canon_mark, roster, True, "title")
     standalone = kernel_comparison.figure(panels, canon_mark, roster, False, "title")
     try:
@@ -988,7 +988,7 @@ def test_the_speedup_axis_names_the_denominator_the_judge_recorded() -> None:
             *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 10.0, "k2": 10.0, "k3": 10.0}),
         ]
     )
-    panels, canon_mark, dropped = kernel_comparison.build_panels(frame, ROSTER)
+    panels, canon_mark, _dropped = kernel_comparison.build_panels(frame, ROSTER)
     fig = kernel_comparison.figure(
         panels,
         canon_mark,
@@ -1140,7 +1140,8 @@ def test_llr40_model_figure_draws_one_mark_per_kernel_per_model_plus_a_summary_c
         assert fig._suptitle is None
         assert speedup_ax.get_title() == ""
     finally:
-        plt = pytest.importorskip("matplotlib.pyplot")
+        import matplotlib.pyplot as plt
+
         plt.close(fig)
 
 
