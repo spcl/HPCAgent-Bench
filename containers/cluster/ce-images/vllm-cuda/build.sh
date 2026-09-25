@@ -1,17 +1,11 @@
 #!/usr/bin/env bash
-# Build the GH200 vLLM inference image and import it to a squashfs. Run it on a Daint GH200 node via
-# build.sbatch: the base is ~14 GB compressed and arm64-only, so an x86_64 host would emulate it.
-#
-# Build context is the repository root, like every image in ce-images, so a later COPY of a repo
-# file needs no change here.
+# Build the GH200 vLLM image (arm64-only base) into its candidate squashfs, on a Daint node via
+# build.sbatch. Build context is the repository root.
 #
 #   containers/cluster/ce-images/vllm-cuda/build.sh
 #   BASE_IMAGE=docker.io/vllm/vllm-openai:<tag>@sha256:<digest> EXTRA_BUILD_ARGS="VLLM_VERSION=<x.y.z> TORCH_CUDA=<12.9>" .../build.sh
 set -euo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../../.." && pwd)"
@@ -27,8 +21,8 @@ if [[ "${arch}" != "aarch64" ]]; then
 fi
 
 IMAGE_TAG="${IMAGE_TAG:-hpcagent-bench-vllm-cuda:latest}"
-OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/${INFERENCE_VLLM_CUDA_SQSH%.sqsh}-candidate.sqsh}"
-# MUST track the Dockerfile's ARG default: passing it here overrides that default.
+OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/${INFERENCE_VLLM_CUDA_CANDIDATE}}"
+# Must equal the Dockerfile's ARG default.
 BASE_IMAGE="${BASE_IMAGE:-docker.io/vllm/vllm-openai:v0.30.0-aarch64-cu129@sha256:d2f87fcd67d8c80c7c68d2faf3e97f6e6facb688d04734d906f7ee2f70e6a311}"
 IMAGE_VERSION="${IMAGE_VERSION:-dev}"
 mkdir -p "$(dirname "${OUTPUT_SQSH}")"
@@ -42,7 +36,7 @@ ce_cache_base_image
 EXTRA_ARGS=()
 for kv in ${EXTRA_BUILD_ARGS:-}; do EXTRA_ARGS+=(--build-arg "${kv}"); done
 
-# cgroupfs: with the systemd manager a dying logind session reaps podman mid-pull (silent rc=1).
+# cgroupfs: with the systemd manager a dying logind session kills podman mid-pull.
 podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" \
   --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
   --build-arg "BASE_IMAGE_REF=${BASE_IMAGE_REF:-${BASE_IMAGE}}" \

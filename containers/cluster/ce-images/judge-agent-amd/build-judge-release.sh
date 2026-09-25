@@ -27,17 +27,15 @@
 #
 # Login-node safe: a PRIVATE podman store on /dev/shm (the shared graphroot is never touched, see
 # ce_private_podman_store), archive unpack and save spooled to scratch, mksquashfs capped at
-# ENROOT_MAX_PROCESSORS threads. Measured on beverin-ln001: 28 min (agent load 8.5, judge stage
-# 10.5, squashfs 2.5, OCI save 6.5), peak /dev/shm 69 GB (the unpacked agent image).
+# ENROOT_MAX_PROCESSORS threads.
 #
 #   CE_IMAGES         image directory (default ${SCRATCH}/ce-images)
 #   AGENT_ARCHIVE     agent OCI archive (default <CE_IMAGES>/<JUDGE_AGENT_AMD_SQSH>.oci.tar)
 #   OUTPUT_SQSH       output squashfs (default <CE_IMAGES>/<JUDGE_AMD_RELEASE_SQSH>)
 set -Eeuo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+# The cluster's core_pattern dumps into the crashing process's CWD; Slurm propagates the
+# submitter's core limit, so the floor has to be set here to avoid littering the checkout.
 ulimit -c 0
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../images.env

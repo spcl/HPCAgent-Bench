@@ -5,29 +5,28 @@
 #
 #   containers/cluster/ce-images/judge-agent-cpu/build.sh
 #
-# TWO targets from ONE file, the same firewall as judge-agent-amd: `agent` carries NO hpcagent_bench,
+# TWO targets from ONE file, same firewall as judge-agent-amd: `agent` carries NO hpcagent_bench,
 # `judge` is `FROM agent` plus the library.
 #
 # LIGHTWEIGHT means minutes, not hours: every compiler and numerical library is a BINARY package.
-#   compilers  gcc/g++/gfortran 16 (a pinned snapshot from the ubuntu-toolchain-r PPA: the major
-#              judge-agent-amd builds with spack) and clang/flang ${LLVM_MAJOR} with Polly (apt.llvm.org,
-#              the same LLVM 22.1.x judge-agent-amd builds). HOST OpenMP only.
+#   compilers  gcc/g++/gfortran 16 (ubuntu-toolchain-r PPA) and clang/flang ${LLVM_MAJOR} with Polly
+#              (apt.llvm.org). HOST OpenMP only.
 #   numerics   OpenBLAS (openmp flavour) + LAPACKE, BLIS, FFTW, ScaLAPACK, HDF5, SuiteSparse,
 #              SuperLU, METIS, Scotch, ARPACK, MUMPS (sequential), GSL, TBB, Eigen, mimalloc
-#   MPI        the distro MPICH (single-node grading; it is not GPU-aware and nothing here needs it)
-#   built      tblis and HPTT (repo scripts, ~2 min each) and Pluto (polycc, the `pluto` column)
+#   MPI        the distro MPICH (single-node grading; not GPU-aware and nothing here needs it)
+#   built      tblis and HPTT (repo scripts) and Pluto (polycc, the `pluto` column)
 #   absent     ROCm, CUDA, GPU libraries, spack, GPU-aware MPI, PETSc/SLEPc/hypre/MAGMA and the
 #              other distributed solvers, NVHPC, ppcg (GPU-only), cupy, triton
 #
-# The CPU baselines are gcc 16's, the major judge-agent-amd grades with -- but a pre-release snapshot
-# against its 16.2.0 release, on another machine: compare within one image, not across the two.
+# CPU baselines are this image's own gcc 16, not judge-agent-amd's: different snapshot, different
+# machine, do not compare across images.
 #
 # Pinned by digest: ubuntu:24.04's multi-arch index, so each architecture resolves its own manifest.
 ARG BASE_IMAGE=docker.io/library/ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
 FROM ${BASE_IMAGE} AS agent
 
 ARG BASE_IMAGE
-# The registry reference, not a base-image cache dir: path (build_common.sh ce_cache_base_image).
+# The registry reference, not a base-image cache path (build_common.sh ce_cache_base_image).
 ARG BASE_IMAGE_REF="${BASE_IMAGE}"
 ARG IMAGE_VERSION=dev
 LABEL org.opencontainers.image.title="hpcagent-bench-judge-agent-cpu" \
@@ -38,24 +37,22 @@ LABEL org.opencontainers.image.title="hpcagent-bench-judge-agent-cpu" \
       org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
 
 ARG DEBIAN_FRONTEND=noninteractive
-# The build platform's architecture, set by podman; only likwid and msr-tools (x86) depend on it.
+# Set by podman; only likwid and msr-tools (x86) depend on it.
 ARG TARGETARCH
-# gcc 16, the major beverin grades with, as the ubuntu-toolchain-r PPA's binary snapshot -- the only
-# gcc 16 packaged for noble. Pinned to the exact package version, so a PPA that moves on fails the
-# build instead of quietly changing the compiler; bump GCC_PPA_VERSION on purpose. The distro gcc 13
-# (build-essential) stays for Pluto's clang 17 only: judge-agent-amd records its auto-vectorizer
-# mislowering a masked select, so no bare name may resolve to it.
+# gcc 16 from the ubuntu-toolchain-r PPA, the only gcc 16 packaged for noble. Pinned to the exact
+# package version so a PPA that moves on fails the build instead of silently changing the compiler;
+# bump GCC_PPA_VERSION on purpose. Distro gcc 13 (build-essential) stays only for Pluto's clang 17:
+# its auto-vectorizer mislowers a masked select on gcc 16 headers, so no bare name may resolve to it.
 ARG GCC_MAJOR=16
 ARG GCC_PPA_VERSION=16-20260315-1ubuntu1~24~ppa1
-# The PPA's signing key (Launchpad, rsa4096, 2024-05-02), fetched by fingerprint and checked.
+# PPA signing key, fetched by fingerprint and checked.
 ARG GCC_PPA_KEY=C8EC952E2A0E1FBDC5090F6A2C277A0A352154E5
 ARG LLVM_MAJOR=22
 ARG PYTHON_REQUIREMENTS=requirements/cpu-image.txt
 
-# /opt/venv is the image's interpreter, as on judge-agent-amd; the harness venvs sit beside it on the
-# same /usr/bin/python3.12. /usr/lib/llvm-${LLVM_MAJOR}/bin puts clang, flang and llvm-objdump on PATH
-# under their bare names, which is what languages.resolve_compiler probes; the bare gcc names are
-# symlinked into /usr/local/bin, ahead of the distro's gcc-13 ones.
+# /usr/lib/llvm-${LLVM_MAJOR}/bin puts clang, flang and llvm-objdump on PATH under their bare names,
+# which is what languages.resolve_compiler probes; bare gcc names are symlinked into /usr/local/bin,
+# ahead of the distro's gcc-13 ones.
 ENV LC_ALL=C \
     PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \
     VIRTUAL_ENV=/opt/venv \
@@ -68,8 +65,8 @@ ENV LC_ALL=C \
     HPTT_ROOT=/usr/local \
     TBLIS_ROOT=/usr/local
 
-# Every network git call goes through this retry wrapper, and where a mirror is mounted none of
-# them reaches GitHub at all. See judge-agent-amd for the 401-under-load history.
+# Every network git call goes through this retry wrapper; where a mirror is mounted none of them
+# reaches GitHub at all.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates git; \
@@ -102,10 +99,10 @@ RUN set -eux; \
 # 1. Everything from the distribution, in one layer.
 #
 # MPICH-flavoured packages ONLY (libscalapack-mpich-dev, libhdf5-mpich-dev), never the -mpi- ones:
-# Debian's default MPI is Open MPI, and a second MPI puts an Open MPI mpicc beside an MPICH mpiexec --
-# P ranks each their own COMM_WORLD of size 1 (IMAGE_REQUIREMENTS.md, v5). Asserted below.
+# Debian's default MPI is Open MPI, and a second MPI puts an Open MPI mpicc beside an MPICH mpiexec,
+# giving each rank its own COMM_WORLD of size 1. Asserted below.
 # linux-perf is a Debian name; Ubuntu's perf resolves through the HOST kernel's uname -r, so the
-# versioned binary is symlinked onto PATH, exactly as on judge-agent-amd.
+# versioned binary is symlinked onto PATH.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -147,8 +144,8 @@ RUN set -eux; \
 # 1b. gcc 16 from the ubuntu-toolchain-r PPA, pinned to one package version, bare names onto it.
 #
 # The PPA source is REMOVED again once gcc is in: every later apt step resolves against noble and
-# apt.llvm.org alone, so nothing else in the image quietly comes from a snapshot archive. gcc 16's
-# runtime libraries (libstdc++6, libgomp1, libgfortran5) do come from it, as its packages require.
+# apt.llvm.org alone, so nothing else quietly comes from a snapshot archive. gcc 16's runtime
+# libraries (libstdc++6, libgomp1, libgfortran5) still come from it, via its own dependencies.
 RUN set -eux; \
     curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${GCC_PPA_KEY}" -o /tmp/ppa.asc; \
     got="$(gpg --show-keys --with-colons /tmp/ppa.asc | awk -F: '/^fpr/ {print $10; exit}')"; \
@@ -175,10 +172,10 @@ RUN set -eux; \
     done
 
 # ---------------------------------------------------------------------------------------------
-# 2. clang, flang and libomp from apt.llvm.org -- binary packages of the LLVM release judge-agent-amd
-# builds from source. Ubuntu's own llvm-18 is too old for the Fortran column: flang lowers
-# `do concurrent` to OpenMP only from LLVM 20 (flags.DO_CONCURRENT_FLANG). Polly is linked into this
-# libLLVM, which is what makes the `polly` column real; parallelizer-gate.sh proves it outlines.
+# 2. clang, flang and libomp from apt.llvm.org. Ubuntu's own llvm-18 is too old for the Fortran
+# column: flang lowers `do concurrent` to OpenMP only from LLVM 20 (flags.DO_CONCURRENT_FLANG).
+# Polly is linked into this libLLVM, which is what makes the `polly` column real;
+# parallelizer-gate.sh proves it outlines.
 RUN set -eux; \
     wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor > /etc/apt/trusted.gpg.d/apt.llvm.org.gpg; \
     codename="$(. /etc/os-release; echo "${VERSION_CODENAME}")"; \
@@ -227,10 +224,9 @@ RUN set -eux; \
     rm -rf "${work}"
 
 # ---------------------------------------------------------------------------------------------
-# 3. The source-built pieces: tblis and HPTT from the repo's scripts, and Pluto (polycc) against the
-# distro clang 17 its recipe is verified with (judge-agent-amd step 10). /opt/pluto is KEPT: polycc
-# bakes build-tree paths that `make install` does not relocate. clang 17 is pointed at gcc 13's
-# libstdc++, the pairing that recipe was verified with: left alone it takes the NEWEST installed gcc,
+# 3. The source-built pieces: tblis and HPTT from the repo's scripts, and Pluto (polycc) against
+# distro clang 17. /opt/pluto is KEPT: polycc bakes build-tree paths that `make install` does not
+# relocate. clang 17 is pointed at gcc 13's libstdc++: left alone it takes the newest installed gcc,
 # 16, whose headers a clang that old is not guaranteed to parse.
 COPY containers/build-hptt.sh /build-hptt.sh
 COPY containers/build-tblis.sh /build-tblis.sh
@@ -282,11 +278,10 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------------------------
 # 4. The python framework stack, in /opt/venv.
 #
-# torch from the CPU wheel index FIRST: the requirements' bare `torch` is then already satisfied, and
-# pip never pulls PyPI's x86_64 wheel with its CUDA libraries (gigabytes this image has no use for).
-# mpi4py is built against the image's MPICH, never a wheel's bundled MPI. optional.txt (apache-tvm)
-# goes in a SECOND call: its --pre is global to a pip run, and here nothing is installed yet, so in the
-# first call it would let numpy or scipy resolve to a pre-release.
+# torch from the CPU wheel index FIRST: the requirements' bare `torch` is then already satisfied, so
+# pip never pulls PyPI's x86_64 wheel with its CUDA libraries. mpi4py is built against the image's
+# MPICH, never a wheel's bundled MPI. optional.txt (apache-tvm) goes in a SECOND call: its --pre is
+# global to a pip run, and it would otherwise let numpy or scipy resolve to a pre-release.
 COPY requirements/ /requirements/
 RUN set -eux; \
     python3 -m venv /opt/venv; \
@@ -299,7 +294,7 @@ RUN set -eux; \
     python3 -c "import mpi4py.MPI as M; v = M.Get_library_version(); assert 'MPICH' in v, v; print(v.splitlines()[0])"
 
 # Judge-side python: the crawl/browser stack, the proxy the arms talk through, and openai-agents.
-# judge-agent-amd step 11, one resolver pass.
+# One resolver pass.
 COPY containers/judge/requirements.txt /opt/harness/judge-requirements.txt
 RUN set -eux; \
     python3 -m pip install --no-cache-dir \
@@ -336,7 +331,7 @@ RUN set -eux; \
 
 # ---------------------------------------------------------------------------------------------
 # 6. The agent side: node, the agent CLIs, uv and man pages, from the checked-in pins shared with
-# the other judge-agent images (the npm lock carries both architectures). claude-code stays 2.1.197.
+# the other judge-agent images (the npm lock carries both architectures).
 COPY containers/agent/harness/pins.env containers/agent/harness/install_tools.sh /opt/harness/
 COPY containers/agent/harness/node/package.json containers/agent/harness/node/package-lock.json /opt/harness/node/
 RUN set -eux; \
@@ -357,8 +352,8 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     man -w gcc >/dev/null || { echo "manpages missing: unminimize did not take" >&2; exit 1; }
 
-# 6a. Isolated venvs for the Python harnesses on /usr/bin/python${HARNESS_PYTHON}, kept off /opt/venv
-# so their deps cannot displace litellm[proxy]==1.94.0. Tool scripts are bound at launch.
+# 6a. Isolated venvs for the Python harnesses, kept off /opt/venv so their deps cannot displace
+# litellm[proxy]==1.94.0. Tool scripts are bound at launch.
 COPY containers/agent/harness/requirements-miniswe.txt containers/agent/harness/requirements-openhands.txt \
      containers/agent/harness/requirements-sweagent.txt /opt/harness/
 RUN set -eux; \
@@ -379,11 +374,11 @@ ENV SWE_AGENT_CONFIG_DIR=/opt/harness/sweagent/share/config \
     SWE_AGENT_TOOLS_DIR=/opt/harness/sweagent/share/tools \
     SWE_AGENT_TRAJECTORY_DIR=/opt/harness/sweagent/share/trajectories
 
-# 6b. Which BLAS a build gets. Debian's openblas-openmp wins the generic libblas.so.3/liblapack.so.3
-# names over blis (priority) -- the defect judge-agent-amd step 13b fixes is blis winning them, and
-# it is ASSERTED here rather than assumed. LAPACKE is netlib's interface layer over that LAPACK.
-# Then the DaCe probe from judge-agent-amd: what DaCe's OpenBLAS environment would link must map
-# only OpenBLAS (its generic-named wrappers live under an openblas-openmp directory).
+# 6b. Which BLAS a build gets. Debian's openblas-openmp must win the generic libblas.so.3/
+# liblapack.so.3 names over blis (priority) -- ASSERTED here rather than assumed. LAPACKE is
+# netlib's interface layer over that LAPACK. Then a DaCe probe: what DaCe's OpenBLAS environment
+# would link must map only OpenBLAS (its generic-named wrappers live under an openblas-openmp
+# directory).
 RUN set -eux; \
     multiarch="$(uname -m)-linux-gnu"; \
     for group in libblas.so.3 liblapack.so.3; do \
@@ -425,7 +420,7 @@ sys.exit('DaCe would link a BLAS that is not OpenBLAS: %s' % (bad or 'nothing at
 # 7. The final gate.
 #
 # LLVM's OpenMP runtime first: ONE symlink, never the directory, because that libdir also ships
-# LLVM's libgomp.so.1 SHIM (judge-agent-amd step 14).
+# LLVM's libgomp.so.1 SHIM.
 RUN set -eux; \
     omp_so="$(clang -print-file-name=libomp.so)"; \
     test -f "${omp_so}"; \
@@ -518,7 +513,7 @@ RUN set -eux; \
     } > /usr/local/share/image-provenance; \
     cat /usr/local/share/image-provenance
 
-# Drop the build-time mirror rewrite from the SHIPPED image (judge-agent-amd, same step).
+# Drop the build-time mirror rewrite from the SHIPPED image.
 RUN set -eux; \
     git config --global --name-only --get-regexp '^url\..*\.insteadof$' 2>/dev/null \
       | sort -u | while read -r k; do git config --global --unset-all "${k}" || true; done; \
@@ -526,7 +521,7 @@ RUN set -eux; \
 
 WORKDIR /work
 
-# LD_PRELOAD and PYTHONSAFEPATH last, after every RUN, for the reasons judge-agent-amd gives.
+# LD_PRELOAD and PYTHONSAFEPATH set last, after every RUN, so no build step runs under them.
 ENV LD_PRELOAD=/usr/local/lib/libmimalloc.so
 ENV PYTHONSAFEPATH=1
 
@@ -534,16 +529,15 @@ ENV PYTHONSAFEPATH=1
 # ============================== judge stage ==============================
 # hpcagent_bench-firewall: trusted-judge-image
 #
-# The marker above is the AUDITABLE exemption scripts/check_no_hidden_in_image.py defines: this
-# image is never handed to an agent. The `agent` stage must never acquire it. Identical to
-# judge-agent-amd's judge stage.
+# Marker scripts/check_no_hidden_in_image.py checks for: this image is never handed to an agent.
+# The `agent` stage must never acquire it.
 FROM agent AS judge
 
 COPY hpcagent_bench /opt/hpcagent-bench-src/hpcagent_bench
 COPY pyproject.toml /opt/hpcagent-bench-src/pyproject.toml
 COPY README.md /opt/hpcagent-bench-src/README.md
 
-# --no-deps, and the rm is safe only while this path is the COPY above (judge-agent-amd).
+# --no-deps, and the rm is safe only while this path is the COPY above.
 RUN set -eux; \
     if mountpoint -q /opt/hpcagent-bench-src; then echo "the source is a mount, not the COPY" >&2; exit 1; fi; \
     python3 -m pip install --no-cache-dir --no-deps /opt/hpcagent-bench-src; \

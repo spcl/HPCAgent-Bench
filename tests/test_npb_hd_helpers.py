@@ -62,7 +62,7 @@ def test_every_prelude_helper_definition_is_marked_host_and_device(lang: str) ->
 
 
 @pytest.mark.parametrize("lang", sorted(PRELUDES))
-def test_a_host_build_preprocesses_to_the_bytes_it_did_before_the_marker(lang: str, tmp_path) -> None:
+def test_a_host_build_preprocesses_to_the_bytes_it_did_before_the_marker(lang: str, tmp_path: pathlib.Path) -> None:
     """``NPB_HD`` expands to nothing off the GPU, so no CPU column's compiled code can change."""
     if shutil.which({"c": "gcc", "cpp": "g++"}[lang]) is None:
         pytest.fail(f"no {lang} compiler on PATH; run inside the judge image")
@@ -72,7 +72,7 @@ def test_a_host_build_preprocesses_to_the_bytes_it_did_before_the_marker(lang: s
 
 
 @pytest.mark.parametrize("macro", ["__HIPCC__", "__CUDACC__"])
-def test_a_gpu_compiler_sees_every_helper_as_host_and_device(macro: str, tmp_path) -> None:
+def test_a_gpu_compiler_sees_every_helper_as_host_and_device(macro: str, tmp_path: pathlib.Path) -> None:
     """Under either GPU driver the marker is the full ``__host__ __device__`` pair, not just one half."""
     if shutil.which("gcc") is None:
         pytest.fail("no gcc on PATH; run inside the judge image")
@@ -129,7 +129,7 @@ def hipcc_compile(src: str, tmp_path: pathlib.Path, name: str) -> subprocess.Com
 
 
 @pytest.mark.rocm
-def test_ppcgs_device_half_builds_against_the_copied_c_prelude_helpers(tmp_path) -> None:
+def test_ppcgs_device_half_builds_against_the_copied_c_prelude_helpers(tmp_path: pathlib.Path) -> None:
     """The copy is verbatim, so it builds on the device only because the translator marked it."""
     src = ppcg_transform.with_device_helpers(C_PRELUDE, DEVICE_KERNEL)
     assert src != DEVICE_KERNEL
@@ -138,7 +138,7 @@ def test_ppcgs_device_half_builds_against_the_copied_c_prelude_helpers(tmp_path)
 
 
 @pytest.mark.rocm
-def test_the_cpp_prelude_templates_build_in_device_code(tmp_path) -> None:
+def test_the_cpp_prelude_templates_build_in_device_code(tmp_path: pathlib.Path) -> None:
     """``python_mod``/``int_floor``/``max`` over device operands: the C++ prelude is GPU-callable too."""
     proc = hipcc_compile(CPP_DEVICE_TU, tmp_path, "cpp_helpers")
     assert proc.returncode == 0, proc.stderr[-3000:]

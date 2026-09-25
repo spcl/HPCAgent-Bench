@@ -29,7 +29,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from collections.abc import Callable, Sequence
 
 from numpyto_c.emit import NPB_HD_GUARD
 
@@ -44,7 +44,7 @@ FRAMEWORK = "ppcg"
 #: How ``ppcg`` is invoked. ``--target=cuda`` is the whole point of the column; the two tile-size
 #: knobs are ppcg's own defaults spelled out, so a host that changes them cannot silently change
 #: what this column measures.
-PPCG_ARGS: Tuple[str, ...] = ("--target=cuda", "--tile", "--tile-size=32")
+PPCG_ARGS: tuple[str, ...] = ("--target=cuda", "--tile", "--tile-size=32")
 
 #: ROCm's CUDA-to-HIP source translator, run on ppcg's output on an AMD host (see the module
 #: docstring). Named once so the decline message and the call cannot disagree about the tool.
@@ -62,7 +62,7 @@ PPCG_HOME_ENV = "HPCAGENT_BENCH_PPCG_HOME"
 TOOLS_DIR_ENV = "HPCAGENT_BENCH_TOOLS_DIR"
 
 
-def _exe_under_prefix(prefix: Optional[str], name: str) -> Optional[str]:
+def _exe_under_prefix(prefix: str | None, name: str) -> str | None:
     """``<prefix>/bin/<name>`` if that file exists and is executable, else ``None``."""
     if not prefix:
         return None
@@ -70,7 +70,7 @@ def _exe_under_prefix(prefix: Optional[str], name: str) -> Optional[str]:
     return str(candidate) if os.access(candidate, os.X_OK) else None
 
 
-def _ppcg_run_env(exe: str) -> Optional[Dict[str, str]]:
+def _ppcg_run_env(exe: str) -> dict[str, str] | None:
     """The environment ``ppcg`` must run under: its OWN ``lib`` dir prepended to
     ``LD_LIBRARY_PATH``, or ``None`` when that directory does not exist (an ordinary system
     install, where the default environment is already correct and this would be a no-op anyway).
@@ -98,7 +98,7 @@ def _ppcg_run_env(exe: str) -> Optional[Dict[str, str]]:
     return env
 
 
-def ppcg_lookup() -> Tuple[Optional[str], str]:
+def ppcg_lookup() -> tuple[str | None, str]:
     """The ``ppcg`` this host will actually run, as ``(exe, "")`` -- or ``(None, why not)``.
 
     Candidates in order: :data:`PPCG_HOME_ENV`, ``<tools dir>/ppcg/bin/ppcg``, PATH. The first two
@@ -122,12 +122,12 @@ def ppcg_lookup() -> Tuple[Optional[str], str]:
     # Each candidate is a THUNK, so a source further down the order is never even consulted once an
     # earlier one answers: an explicit override exists precisely to stop the host's own PATH being
     # searched, and building the tuple eagerly searched it anyway.
-    sources: Tuple[Callable[[], Optional[str]], ...] = (
+    sources: tuple[Callable[[], str | None], ...] = (
         lambda: _exe_under_prefix(os.environ.get(PPCG_HOME_ENV), "ppcg"),
         lambda: _exe_under_prefix(f"{tools_dir}/ppcg" if tools_dir else None, "ppcg"),
         lambda: shutil.which("ppcg"),
     )
-    refused: List[str] = []
+    refused: list[str] = []
     for source in sources:
         exe = source()
         if exe is None:
@@ -147,7 +147,7 @@ def ppcg_lookup() -> Tuple[Optional[str], str]:
     )
 
 
-def ppcg_exe() -> Optional[str]:
+def ppcg_exe() -> str | None:
     """The ``ppcg`` binary this host runs, or ``None``. See :func:`ppcg_lookup` for the order."""
     return ppcg_lookup()[0]
 
@@ -157,7 +157,7 @@ def ppcg_problem() -> str:
     return ppcg_lookup()[1]
 
 
-def hipify_exe() -> Optional[str]:
+def hipify_exe() -> str | None:
     """``hipify-perl`` on PATH, or under ``$ROCM_PATH/bin`` when PATH omits it, or ``None`` when
     this host has neither. The image already ships ``hipify-perl`` under ``$ROCM_PATH/bin`` and
     puts that directory on PATH, so the fallback exists for a host or launch mode where PATH does
@@ -169,7 +169,7 @@ def hipify_exe() -> Optional[str]:
     return _exe_under_prefix(os.environ.get("ROCM_PATH"), HIPIFY)
 
 
-def missing_tool(backend: Optional[str] = None) -> str:
+def missing_tool(backend: str | None = None) -> str:
     """``""`` when this host can build the ppcg column for ``backend``, else why not.
 
     The ONE answer to "is this column's compiler here", asked per kernel by
@@ -185,7 +185,7 @@ def missing_tool(backend: Optional[str] = None) -> str:
     return ""
 
 
-def resolve_backend(backend: Optional[str]) -> str:
+def resolve_backend(backend: str | None) -> str:
     """The GPU vendor a ppcg column builds for: the one it NAMES, or the local toolchain's.
 
     The ``ppcg_cuda`` / ``ppcg_hip`` columns name theirs, so they measure the vendor they are
@@ -199,7 +199,7 @@ def resolve_backend(backend: Optional[str]) -> str:
     return backend
 
 
-def transformed_paths(scop: pathlib.Path, backend: Optional[str] = None) -> List[pathlib.Path]:
+def transformed_paths(scop: pathlib.Path, backend: str | None = None) -> list[pathlib.Path]:
     """The two GPU sources ppcg's transform of ``scop`` compiles to, in compile order.
 
     ``.hip`` for a ROCm build rather than the ``.cu`` ppcg wrote: the extension is what makes hipcc
@@ -235,7 +235,7 @@ HIP_MIRROR_CALL = r"^([ \t]*)(?:cudaCheckReturn\()?hip(?:Malloc|Memcpy|Free)\([^
 DEV_DECL_RE = re.compile(r"^([ \t]*)([A-Za-z_][\w \t]*?)\s*\*\s*dev_(\w+)\s*;[ \t]*$", re.MULTILINE)
 
 
-def entry_params(host: str, entry: str) -> List[str]:
+def entry_params(host: str, entry: str) -> list[str]:
     """The parameter NAMES of ``entry``'s definition in ``host``, in order; ``[]`` if it is not there.
 
     A name is the last identifier before any ``[``: a rank>=2 array arrives as a VLA parameter
@@ -277,7 +277,7 @@ def device_resident_host(host: str, entry: str) -> str:
     mirror by construction and is declined by the offload gate instead.
     """
     params = set(entry_params(host, entry))
-    aliased: List[str] = []
+    aliased: list[str] = []
 
     def alias(match: "re.Match[str]") -> str:
         indent, ctype, name = match.group(1), match.group(2).strip(), match.group(3)
@@ -345,7 +345,7 @@ def device_helpers(prelude: str, kernel_src: str) -> str:
     only gap, so the definitions are copied verbatim from the scop's own prelude, callees first, behind
     the same ``NPB_HD`` guard. ``""`` when the kernel calls none.
     """
-    bodies: Dict[str, str] = {}
+    bodies: dict[str, str] = {}
     for match in PRELUDE_HELPER_RE.finditer(prelude):
         open_brace = prelude.index("{", match.end())
         depth, end = 0, open_brace
@@ -354,7 +354,7 @@ def device_helpers(prelude: str, kernel_src: str) -> str:
             if depth == 0:
                 break
         bodies[match.group(1)] = prelude[match.start() : end + 1]
-    wanted: List[str] = []
+    wanted: list[str] = []
     pending = [n for n in re.findall(r"\b(\w+)\s*\(", kernel_src) if n in bodies]
     while pending:
         name = pending.pop()
@@ -419,8 +419,8 @@ def offloaded(kernel_src: str) -> bool:
 
 
 def run_ppcg(
-    scop: pathlib.Path, backend: Optional[str] = None, args: Sequence[str] = PPCG_ARGS, timeout: Optional[float] = None
-) -> Tuple[List[str], subprocess.CompletedProcess]:
+    scop: pathlib.Path, backend: str | None = None, args: Sequence[str] = PPCG_ARGS, timeout: float | None = None
+) -> tuple[list[str], subprocess.CompletedProcess]:
     """Transform one scop with ``ppcg``. Returns ``(argv, result)``.
 
     ppcg names its outputs after the INPUT and writes them into the current directory, with no
@@ -483,7 +483,7 @@ def run_ppcg(
     return argv, proc
 
 
-def transformed_sources(cpp_backend: pathlib.Path, base: str, backend: Optional[str] = None) -> List[pathlib.Path]:
+def transformed_sources(cpp_backend: pathlib.Path, base: str, backend: str | None = None) -> list[pathlib.Path]:
     """The ppcg-transformed CUDA the ``ppcg`` column compiles, generated on demand.
 
     Mirrors :func:`pluto_transform.transformed_sources`: regenerate when stale, reuse when fresh,
@@ -499,7 +499,7 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str, backend: Optional[
     scops = scop_inputs(cpp_backend, base)
     if not scops:
         raise NotSupportedByFramework(FRAMEWORK, base, "the translator emitted no #pragma scop for this kernel")
-    out: List[pathlib.Path] = []
+    out: list[pathlib.Path] = []
     for scop in scops:
         assert_affine(scop, base)
         produced = transformed_paths(scop, vendor)

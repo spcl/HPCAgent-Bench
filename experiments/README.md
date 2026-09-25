@@ -586,8 +586,8 @@ from the same `CONTAINER_MOUNTS` list, one `--volume <mount>:<mount>` per entry.
 Each role builds from its own directory under `containers/cluster/ce-images/` (`judge-agent-amd/`,
 `judge-agent-cuda/`, `sglang/`, `vllm/`), each with a `build.sh` and `build.sbatch`, orchestrated
 through `containers/cluster/ce-images/build_and_verify.sbatch`. See
-[`containers/cluster/ce-images/README.md`](../containers/cluster/ce-images/README.md) for the
-build and EDF-install steps; this file does not repeat them.
+[`containers/README.md`](../containers/README.md) for the build and EDF-install steps; this file
+does not repeat them.
 
 ### Known traps
 
@@ -597,8 +597,7 @@ build and EDF-install steps; this file does not repeat them.
 - Compute nodes are diskless: point podman's storage (`runroot`/`graphroot`) and `TMPDIR` at
   `/dev/shm` and clear the graphroot before the job runs, or a multi-GB pull dies mid-transfer
   and a stale graphroot breaks the next job on that node. `run_cluster.sh` does not do this for
-  you; see [`containers/cluster/ce-images/README.md`](../containers/cluster/ce-images/README.md)
-  for the current podman storage setup.
+  you; the image builds do it in `containers/cluster/ce-images/build_common.sh` (`ce_podman_env`).
 
 ## Env layers
 

@@ -4,12 +4,15 @@ import ast
 import copy
 import dataclasses
 import math
-import re
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from numpyto_fortran.intrinsics import literal_axis, reshape_dims
 from numpyto_common.ir import ArrayDesc, KernelIR, _is_alloc_marker
 from numpyto_common import dtypes, operators, parallelism
+from numpyto_common.emit_helpers import fftw
+from numpyto_common.emit_helpers.numpy_names import CONJ_ATTRS, REAL_IMAG_ATTRS, is_numpy_module
+from numpyto_common.emit_helpers.pinned import pinned_knobs
+from numpyto_common.emit_helpers.tokens import IDENT_RE, loop_target_names, mentions_ident, mentions_word
 from numpyto_common.lib_nodes import FFT_LIBRARY_MARKER
 from numpyto_common.emitter import (
     BaseEmitter,
@@ -25,9 +28,6 @@ from numpyto_common.lowering import (
     helper_returns_int,
     integer_valued_locals,
 )
-
-#: Whole-identifier matcher for scanning a shape-token string for the names it references.
-_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 
 # Fortran intrinsic / fn-expr tables live in numpyto_common.operators, aliased here
 # so existing call sites (and the public FORTRAN_INTRINSICS name) are unchanged.
@@ -433,11 +433,6 @@ _DIM_REDUCTION_INTRINSICS = {
 }
 
 _ABS_ATTRS = frozenset({"absolute", "fabs"})
-_CONJ_ATTRS = frozenset({"conj", "conjugate"})
-_REAL_IMAG_ATTRS = frozenset({"real", "imag"})
-
-#: Identifier occurrences inside a shape token, for the case-collision rewrite.
-_SHAPE_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z_0-9]*")
 
 #: Fortran intrinsics allowed to appear (unresolved) inside a shape-token expression.
 _SHAPE_TOKEN_INTRINSICS = frozenset({"min", "max", "abs"})
@@ -480,15 +475,10 @@ def pinned_const_decls(kir: KernelIR, safe) -> List[str]:
     a ``parameter`` may size an array bound, and Fortran requires it to be declared before the
     declaration that uses it.
     """
-    decls: List[str] = []
-    type_of = {s.name: _fortran_type("int") for s in kir.symbols}
-    type_of.update({s.name: _fortran_type(s.dtype) for s in kir.scalars})
-    for name in sorted(kir.pinned_consts):
-        value = kir.pinned_consts[name]
-        decls.append(
-            f"{type_of.get(name, _fortran_type('float64'))}, parameter :: {safe(name)} = {fortran_literal(value)}"
-        )
-    return decls
+    return [
+        f"{ftype}, parameter :: {safe(name)} = {fortran_literal(value)}"
+        for name, ftype, value in pinned_knobs(kir, _fortran_type)
+    ]
 
 
 def fortran_literal(value) -> str:
@@ -654,11 +644,7 @@ def _pure_index_root(node: ast.AST, tainted: Set[str]) -> Optional[str]:
             if isinstance(fn, ast.Attribute) and fn.attr in (_PURE_VIEW_FNS | _PURE_INT_CASTS):
                 # Method form -- ``x.astype(...)`` / ``x.item()`` -- or the numpy function form,
                 # ``np.asarray(x)`` / ``np.intp(x)``, where the value is the ARGUMENT not the receiver.
-                node = (
-                    node.args[0]
-                    if (isinstance(fn.value, ast.Name) and fn.value.id in ("np", "numpy") and node.args)
-                    else fn.value
-                )
+                node = node.args[0] if (is_numpy_module(fn.value) and node.args) else fn.value
                 continue
         return None
 
@@ -676,17 +662,13 @@ def _peel_int_casts(node: ast.AST) -> ast.AST:
             node = node.args[0]
             continue
         if isinstance(fn, ast.Attribute) and fn.attr in _PURE_INT_CASTS:
-            node = (
-                node.args[0]
-                if (isinstance(fn.value, ast.Name) and fn.value.id in ("np", "numpy") and node.args)
-                else fn.value
-            )
+            node = node.args[0] if (is_numpy_module(fn.value) and node.args) else fn.value
             continue
         return node
     return node
 
 
-def _supplies_no_values(node: Optional[ast.AST]) -> bool:
+def supplies_no_values(node: Optional[ast.AST]) -> bool:
     """``node`` allocates a buffer without putting anything in it.
 
     Two spellings reach here, and only these two: ``np.empty(...)``, and the lowering's
@@ -698,12 +680,7 @@ def _supplies_no_values(node: Optional[ast.AST]) -> bool:
     if not isinstance(node, ast.Call):
         return False
     fn = node.func
-    if (
-        isinstance(fn, ast.Attribute)
-        and isinstance(fn.value, ast.Name)
-        and fn.value.id in ("np", "numpy")
-        and fn.attr == "empty"
-    ):
+    if isinstance(fn, ast.Attribute) and is_numpy_module(fn.value) and fn.attr == "empty":
         return True
     return (
         isinstance(fn, ast.Name)
@@ -733,7 +710,7 @@ def _index_aliases(kir: KernelIR, seeds: Set[str]) -> Set[str]:
     assigns: Dict[str, List[ast.AST]] = {}
 
     def record(name: str, value: Optional[ast.AST]) -> None:
-        if _supplies_no_values(value):
+        if supplies_no_values(value):
             return  # an allocation, not a value
         # ``None`` (a bare annotation) and an AugAssign both land as the node itself, which
         # ``_pure_index_root`` rejects -- an arithmetic update is never value-preserving.
@@ -821,27 +798,24 @@ class _FortranBodyEmitter(BaseEmitter):
 
         Args (see FFT_LIBRARY_MARKER): ``(out, src, n, inverse_flag, norm_kind)``.
         """
-        out, src = (a.id for a in node.args[:2])
-        n = self.emit_expr(node.args[2])
-        inverse = bool(node.args[3].value)
-        norm_kind = node.args[4].value  # 0 backward / 1 forward / 2 ortho
+        fft, n_node = fftw.fft_1d(node)
+        out, src = fft.out, fft.src
+        n = self.emit_expr(n_node)
         rk = self._rk  # "c_double" or "c_float", already resolved for this kernel's precision
         self._used_fftw.add(rk)
-        prefix = "fftw" if rk == "c_double" else "fftwf"
-        sign = "FFTW_BACKWARD" if inverse else "FFTW_FORWARD"
-        divides = norm_kind == 2 or (norm_kind == 0) == inverse
+        prefix = fftw.fftw_prefix(rk != "c_double")
         lines = [
             f"{indent}block",
             f"{indent}    integer(c_int), parameter :: FFTW_FORWARD = -1, FFTW_BACKWARD = 1, FFTW_ESTIMATE = 64",
             f"{indent}    integer(c_int) :: fft_n",
             f"{indent}    type(c_ptr) :: fft_plan",
             f"{indent}    fft_n = int({n}, c_int)",
-            f"{indent}    fft_plan = {prefix}_plan_dft_1d(fft_n, {src}, {out}, {sign}, FFTW_ESTIMATE)",
+            f"{indent}    fft_plan = {prefix}_plan_dft_1d(fft_n, {src}, {out}, {fft.sign}, FFTW_ESTIMATE)",
             f"{indent}    call {prefix}_execute(fft_plan)",
             f"{indent}    call {prefix}_destroy_plan(fft_plan)",
         ]
-        if divides:
-            divisor = f"sqrt(real(fft_n, {rk}))" if norm_kind == 2 else f"real(fft_n, {rk})"
+        if fft.divides:
+            divisor = f"sqrt(real(fft_n, {rk}))" if fft.ortho else f"real(fft_n, {rk})"
             lines += [
                 f"{indent}    block",
                 f"{indent}        integer(c_int64_t) :: fft_i",
@@ -2197,8 +2171,7 @@ class _FortranBodyEmitter(BaseEmitter):
                     if (
                         isinstance(a, ast.Call)
                         and isinstance(a.func, ast.Attribute)
-                        and isinstance(a.func.value, ast.Name)
-                        and a.func.value.id in ("np", "numpy")
+                        and is_numpy_module(a.func.value)
                         and a.func.attr.rstrip("_").startswith("int")
                     ):
                         return a.args[0] if a.args else None
@@ -2210,7 +2183,7 @@ class _FortranBodyEmitter(BaseEmitter):
                 int2 = lit2 is not None or cast2 is not None
                 both_int = int1 and int2
 
-                def _real_promote(arg_emit, lit, cast):
+                def real_promote(arg_emit, lit, cast):
                     if lit is not None:
                         return f"{lit}.0_{self._rk}"
                     if cast is not None:
@@ -2220,8 +2193,8 @@ class _FortranBodyEmitter(BaseEmitter):
                 if both_int:
                     tsrc, fsrc = args_e[1], args_e[2]
                 else:
-                    tsrc = _real_promote(args_e[1], lit1, cast1)
-                    fsrc = _real_promote(args_e[2], lit2, cast2)
+                    tsrc = real_promote(args_e[1], lit1, cast1)
+                    fsrc = real_promote(args_e[2], lit2, cast2)
                 return f"MERGE({tsrc}, {fsrc}, {args_e[0]})"
             if attr == "where" and len(args_e) == 1:
                 # np.where(cond) returns indices where True; no direct Fortran
@@ -2240,11 +2213,11 @@ class _FortranBodyEmitter(BaseEmitter):
                 return f"{attr.upper()}({args_e[0]})"
             if attr in _ABS_ATTRS and args_e:
                 return f"ABS({args_e[0]})"
-            if attr in _CONJ_ATTRS and len(args_e) == 1:
+            if attr in CONJ_ATTRS and len(args_e) == 1:
                 return f"CONJG({args_e[0]})"
             # np.real(z)/np.imag(z): real(z, kind) is the real part. aimag REQUIRES a complex operand,
             # so a real operand's imaginary part is 0, matching numpy np.imag(real).
-            if attr in _REAL_IMAG_ATTRS and len(args_e) == 1:
+            if attr in REAL_IMAG_ATTRS and len(args_e) == 1:
                 if attr == "real":
                     return f"real({args_e[0]}, {self._rk})"
                 arr_dt = {a.name: a.dtype for a in self.kir.arrays}
@@ -2541,9 +2514,6 @@ def _fortran_safe(name: str) -> str:
     return "x_" + stripped
 
 
-_FORTRAN_TOKEN_RE = __import__("re").compile(r"[A-Za-z_][A-Za-z0-9_]*")
-
-
 def _to_fortran_shape_token(tok: str) -> str:
     """Translate a shape token from Python idioms to Fortran syntax (``arr[i]`` -> ``arr(i + 1)``).
 
@@ -2639,7 +2609,7 @@ def _shape_token_uses_unknown(tok: str, allowed: Set[str]) -> bool:
     """True if tok references any identifier not in allowed -- forces the array to allocatable."""
     if not isinstance(tok, str):
         return False
-    for m in _FORTRAN_TOKEN_RE.finditer(tok):
+    for m in IDENT_RE.finditer(tok):
         ident = m.group(0)
         # Skip Fortran intrinsics that may appear in shape expressions.
         if ident in _SHAPE_TOKEN_INTRINSICS:
@@ -2660,8 +2630,8 @@ def _fortran_safe_token(tok: str, case_map: Optional[Dict[str, str]] = None) -> 
     if not isinstance(tok, str):
         return tok
     if case_map is None:
-        return _FORTRAN_TOKEN_RE.sub(lambda m: _fortran_safe(m.group(0)), tok)
-    return _FORTRAN_TOKEN_RE.sub(lambda m: _case_safe_name(m.group(0), case_map), tok)
+        return IDENT_RE.sub(lambda m: _fortran_safe(m.group(0)), tok)
+    return IDENT_RE.sub(lambda m: _case_safe_name(m.group(0), case_map), tok)
 
 
 def rebind_loop_tokens(tok: str, scope: Optional[List[Tuple[str, str]]]) -> str:
@@ -2677,7 +2647,7 @@ def rebind_loop_tokens(tok: str, scope: Optional[List[Tuple[str, str]]]) -> str:
     if not isinstance(tok, str) or not scope:
         return tok
     binding = dict(scope)
-    return _FORTRAN_TOKEN_RE.sub(lambda m: binding.get(m.group(0), m.group(0)), tok)
+    return IDENT_RE.sub(lambda m: binding.get(m.group(0), m.group(0)), tok)
 
 
 class _HoistIfExpVisitor(ast.NodeTransformer):
@@ -2998,7 +2968,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
         """
         if not isinstance(tok, str):
             return tok
-        return _SHAPE_IDENT_RE.sub(lambda m: _safe_with_case(m.group(0)), tok)
+        return IDENT_RE.sub(lambda m: _safe_with_case(m.group(0)), tok)
 
     def _rename_shapes(shape) -> Tuple[str, ...]:
         return tuple(_rename_shape_token(t) for t in shape)
@@ -3193,23 +3163,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
                     inferred_local_dtypes[tgt] = array_dtype_map[src]
     # Collect for-loop iter names; a local whose shape uses one must be
     # allocated inside the loop body (the iter isn't in scope at function start).
-    loop_iter_names: Set[str] = set()
-    for node in ast.walk(kir.tree):
-        if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
-            loop_iter_names.add(node.target.id)
-
-    def _shape_uses_loop_iter(rev_shape):
-        for tok in rev_shape:
-            t = str(tok)
-            for it in loop_iter_names:
-                idx = t.find(it)
-                while idx >= 0:
-                    lo_ok = idx == 0 or not (t[idx - 1].isalnum() or t[idx - 1] == "_")
-                    hi_ok = idx + len(it) >= len(t) or not (t[idx + len(it)].isalnum() or t[idx + len(it)] == "_")
-                    if lo_ok and hi_ok:
-                        return True
-                    idx = t.find(it, idx + 1)
-        return False
+    loop_iter_names = loop_target_names(kir.tree)
 
     # Scalar locals COMPUTED in the body: every Name assigned that isn't itself a
     # local array or loop iter. An array whose ALLOCATE bound references one of
@@ -3222,13 +3176,6 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
             nm = node.targets[0].id
             if nm not in _array_local_names and nm not in loop_iter_names:
                 computed_scalars.add(nm)
-
-    def _shape_uses_computed_scalar(rev_shape):
-        for tok in rev_shape:
-            for m in _IDENT_RE.findall(str(tok)):
-                if m in computed_scalars:
-                    return True
-        return False
 
     # Allocatable locals; inline_alloc_locals is the subset allocated at the marker site (inside
     # the for-loop scope).
@@ -3271,7 +3218,7 @@ def emit_fortran(kir: KernelIR, fn_name: Optional[str] = None, parallel: bool = 
         if needs_alloc:
             colons = ", ".join(":" for _ in rev_shape)
             locals_block.append(f"    {ftype}, allocatable :: {name_}({colons})")
-            if _shape_uses_loop_iter(rev_shape) or _shape_uses_computed_scalar(rev_shape):
+            if mentions_word(rev_shape, loop_iter_names) or mentions_ident(rev_shape, computed_scalars):
                 inline_alloc_locals[name_] = (rev_shape, ftype)
             else:
                 allocatable_locals.append((name_, rev_shape, ftype))

@@ -1,19 +1,14 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""scripts/run_tests.sh --container: the one entry point for running the suite inside the judge
-EDF instead of the login/compute-node toolchain (see that script's own header for why -- the
-cluster's gcc has no -std=c23 and about 720 translator cases fail there as a false regression).
-
-Runs the real script against a stub `sbatch` on PATH that records its argv and never touches
-Slurm, mirroring tests/test_submit_llrblind.py's pattern for the submit-*.sh scripts.
-"""
+"""scripts/run_tests.sh --container submits scripts/ci_mi200.sbatch (the suite or the CI replay
+inside the judge image). Runs the real script against a stub `sbatch` that records its argv."""
 
 import pathlib
 import subprocess
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 RUN_TESTS = REPO / "scripts" / "run_tests.sh"
-CONTAINER_SBATCH = REPO / "scripts" / "run_tests_container.sbatch"
+CONTAINER_SBATCH = REPO / "scripts" / "ci_mi200.sbatch"
 
 
 def stub(directory: pathlib.Path, name: str, body: str) -> None:
@@ -41,7 +36,12 @@ def run_container(
     marker = tmp_path / "sbatch-argv.txt"
     stub_sbatch(bin_dir, marker)
     stub_account(bin_dir)
-    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path / "home"), "USER": "tester"}
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "HOME": str(tmp_path / "home"),
+        "USER": "tester",
+        "HPCAGENT_BENCH_CI_PARTITION": "ci-part",
+    }
     if scratch is not None:
         env["SCRATCH"] = scratch
     proc = subprocess.run(
@@ -63,7 +63,7 @@ def test_container_flag_submits_with_the_partition_and_sbatch_script(tmp_path: p
     argv = marker.read_text().splitlines()
     assert "--wait" in argv
     assert "-A" not in argv
-    assert not any(word.startswith("--partition") for word in argv), "the site layer's SBATCH_PARTITION picks it"
+    assert "--partition=ci-part" in argv, "the site layer's HPCAGENT_BENCH_CI_PARTITION picks it"
     assert str(CONTAINER_SBATCH) in argv
 
 
@@ -82,11 +82,12 @@ def test_container_flag_without_scratch_fails_before_touching_sbatch(tmp_path: p
     assert not marker.exists(), "sbatch was invoked despite SCRATCH being unset"
 
 
-def test_run_tests_container_sbatch_has_the_single_node_directives() -> None:
-    """The directives baked into the companion .sbatch file itself, so a direct `sbatch
-    scripts/run_tests_container.sbatch` (bypassing the wrapper) still lands on one whole node; the
-    partition comes from the site layer (SBATCH_PARTITION), never a directive."""
+def test_ci_sbatch_has_the_single_node_directives() -> None:
+    """A direct `sbatch scripts/ci_mi200.sbatch` (bypassing the wrapper) lands on one whole node and
+    never requeues; the partition comes from the command line or SBATCH_PARTITION, never a
+    directive (SBATCH_PARTITION would silently override one)."""
     text = CONTAINER_SBATCH.read_text()
     assert "#SBATCH --partition" not in text
+    assert "#SBATCH --no-requeue" in text
     assert "#SBATCH --nodes=1" in text
     assert "#SBATCH --mem=0" in text

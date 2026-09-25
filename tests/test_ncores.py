@@ -115,7 +115,7 @@ def test_an_unbound_rank_falls_back_to_the_slurm_allocation(monkeypatch) -> None
     total = os.cpu_count() or 1
     smt = max(1, total // max(1, flags.physical_cores(set(range(total)))))
     # State the precondition rather than inheriting it: "unbound" means affinity spans the whole
-    # node, and a co-resident test that pinned threads (harbor_grade does) leaves this process
+    # node, and a co-resident test that pinned threads (harbor.grade does) leaves this process
     # bound, which is the other branch entirely.
     monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(total)))
     monkeypatch.setenv("SLURM_CPUS_PER_TASK", str(smt))  # exactly one core's worth

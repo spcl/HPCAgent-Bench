@@ -23,23 +23,17 @@ import re
 import sqlite3
 import sys
 
-#: Conflict rule for the NATURAL-key tables, mirroring hpcagent_bench/harness/recording.py: a
-#: kernel's taxonomy, a content-addressed prompt and a recorded packet definition are the same fact
-#: whichever rank observed them, so they dedup on their primary key instead of multiplying. ``runs``
-#: joins them -- a run's identity is one fact per ``run_id`` and every rank of that run writes it, so
-#: the second copy is the same row and not a conflict; under a plain INSERT that duplicate raises
-#: UNIQUE and takes the whole merge down, every table with it. Every other table is a row log whose
-#: synthetic ``id`` collides across shards; its ids are dropped and reassigned by the destination.
+#: Conflict rule for the natural-key tables, mirroring hpcagent_bench/harness/recording.py: a
+#: prompt, a run's identity and a packet definition are the same fact whichever rank observed them
+#: (every rank of a run writes its ``runs`` row), so they dedup on their primary key. ``benchmarks``
+#: is the same kind of table in shards written before the schema retired it. Every other table is a
+#: row log whose synthetic ``id`` collides across shards; the destination reassigns it.
 MERGE_VERB: dict[str, str] = {
     "benchmarks": "INSERT OR REPLACE",
     "prompts": "INSERT OR IGNORE",
     "runs": "INSERT OR IGNORE",
     "packets": "INSERT OR IGNORE",
 }
-
-#: ``benchmarks`` before anything that foreign-keys to it, ``prompts`` next for the same reason; the
-#: rest sorted, so a merge is reproducible rather than dependent on sqlite_master order.
-MERGE_FIRST: tuple[str, ...] = ("benchmarks", "prompts")
 
 #: ``.../judge/rank-<k>/`` -- the per-rank directory run_cluster.sh creates.
 RANK_DIR: re.Pattern[str] = re.compile(r"^rank-(\d+)$")
@@ -66,7 +60,7 @@ def shard_paths(run_dir: pathlib.Path) -> list[pathlib.Path]:
 
 
 def shard_tables(conn: sqlite3.Connection) -> list[tuple[str, str]]:
-    """The attached shard's tables and their DDL, in merge order.
+    """The attached shard's tables and their DDL, sorted so a merge is reproducible.
 
     Discovered from the shard rather than listed here, so the framework ``results`` table -- a
     different module's schema living in the same file -- and any table added later are merged
@@ -74,10 +68,7 @@ def shard_tables(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     rows = conn.execute(
         "SELECT name, sql FROM shard.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
     ).fetchall()
-    by_name: dict[str, str] = {str(name): str(sql) for name, sql in rows if sql}
-    ordered = [name for name in MERGE_FIRST if name in by_name]
-    ordered += sorted(set(by_name) - set(MERGE_FIRST))
-    return [(name, by_name[name]) for name in ordered]
+    return sorted((str(name), str(sql)) for name, sql in rows if sql)
 
 
 def shared_columns(conn: sqlite3.Connection, table: str, skip_id: bool) -> list[str]:
@@ -226,9 +217,7 @@ def merge(run_dir: pathlib.Path, out: pathlib.Path) -> int:
     total = 0
     conn = sqlite3.connect(str(out))
     try:
-        # Off for the merge only: each shard was written under an enforced foreign key, and
-        # re-checking every copied row against a table being filled in the same transaction buys
-        # nothing except an ordering constraint between tables.
+        # Shards written before the schema dropped `benchmarks` declare a foreign key to it.
         conn.execute("PRAGMA foreign_keys = OFF")
         for shard in shards:
             try:

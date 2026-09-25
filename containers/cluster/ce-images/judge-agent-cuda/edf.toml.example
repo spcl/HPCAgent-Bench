@@ -51,7 +51,7 @@ PMIX_MCA_psec = "native"
 # The hwloc GPU probe hangs a containerized MPI launcher.
 HWLOC_COMPONENTS = "-opencl,-levelzero,-gl"
 # CSCS's libfabric settings for GH200. FI_PROVIDER is deliberately NOT set: this image runs MPICH,
-# which inherits it (629966).
+# which inherits it and aborts MPI_Init.
 FI_CXI_RX_MATCH_MODE = "software"
 FI_MR_CACHE_MONITOR = "userfaultfd"
 LD_PRELOAD = "/usr/local/lib/libmimalloc.so"
@@ -60,9 +60,9 @@ LD_PRELOAD = "/usr/local/lib/libmimalloc.so"
 # The Slingshot NIC (libfabric cxi provider, /dev/cxi*), for MPICH across nodes.
 com.hooks.cxi.enabled = "true"
 # NCCL over libfabric/CXI instead of TCP sockets. Without it NCCL does not fail, it falls back to
-# sockets over hsn* and is merely slow (the beverin 629800 lesson). The image is CUDA 12.9 so that
-# this cuda12 plugin matches its runtime major -- on beverin a plugin one major behind (rocm6 against
+# sockets over hsn* and is merely slow. The image is CUDA 12.9 so that
+# this cuda12 plugin matches its runtime major -- a plugin one major behind (rocm6 against
 # ROCm 7) failed to load and fell back silently. The check is still an NCCL_DEBUG=INFO log naming
-# "NET/OFI" and not "NET/Socket" (README.md, Daint section).
+# "NET/OFI" and not "NET/Socket" (inference/serve-daint.sbatch MODE=smoke).
 com.hooks.aws_ofi_nccl.enabled = "true"
 com.hooks.aws_ofi_nccl.variant = "cuda12"

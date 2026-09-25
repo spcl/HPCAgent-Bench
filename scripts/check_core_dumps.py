@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Every shell entry point in this repo must disable core dumps before it runs anything.
 
-A core dump lands in the CRASHING PROCESS'S CWD -- which for a campaign arm is the repository checkout. A segfaulting agent kernel,
+Beverin's ``core_pattern`` is the machine-global ``core_%h_%p`` and a dump lands in the CRASHING
+PROCESS'S CWD -- which for a campaign arm is the repository checkout. A segfaulting agent kernel,
 a wedged engine, an OOM-killed rank: each leaves a ``core_<host>_<pid>`` file behind, and the inode
 cost is paid on a filesystem whose quota is inodes rather than bytes.
 
@@ -18,15 +19,11 @@ that genuinely wants its own dump.
 Three rules, because each one alone has been escaped:
 
 1. EVERY shell entry point carries the guard -- ``*.sbatch``, ``*.sh``, and any tracked file whose
-   shebang names a shell. Keying on ``.sbatch`` was the original scope and it let 52 shell scripts
-   through -- container launch wrappers (``scripts/cscs/enroot_srun.sh``), login-node helpers
-   (``experiments/arm_status.sh``), image builds, and the ``source``d env layers every one of them
-   starts from. Widening to ``.sh`` alone still missed two: the agent's own
-   ``containers/agent/bin/hpcagent-bench-tool`` and the OpenHands shell ``bash-norc`` carry no
-   suffix, and those are the scripts closest to the compiler that crashes. A sourced library counts
-   too: setting the limit there is what carries the floor into the caller's shell.
-2. No script RE-ENABLES them. The rule used to be "the text contains ``ulimit -c 0``", which a
-   later ``ulimit -c unlimited`` satisfies while still dumping. A non-zero ``ulimit -c`` now needs
+   shebang names a shell (``containers/agent/bin/hpcagent-bench-tool`` and the OpenHands shell
+   ``bash-norc`` carry no suffix and sit closest to the compiler that crashes). A sourced library
+   counts too: setting the limit there is what carries the floor into the caller's shell.
+2. No script RE-ENABLES them: "the text contains ``ulimit -c 0``" would accept a later
+   ``ulimit -c unlimited`` that still dumps, so a non-zero ``ulimit -c`` needs
    a same-line ``# core-dumps-ok: <reason>`` marker, so a deliberate one (a probe that gdbs its own
    core in a container's /tmp and deletes it) is reviewed rather than silent.
 3. A script that EMITS a batch script counts as one. ``scripts/preset_sweep.py --emit-sbatch``
@@ -49,8 +46,9 @@ import sys
 
 #: The line every shell entry point must carry, and the comment that says why it is there.
 GUARD = "ulimit -c 0"
-BLOCK = """# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
-# SUBMITTER's core limit, so the floor has to be set here.
+BLOCK = """# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
+# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
+# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 """
 
@@ -140,9 +138,8 @@ def reenabled(path: pathlib.Path) -> list[tuple[int, str]]:
 def insertion_point(lines: list[str]) -> int:
     """After the shebang, the leading comment block, the ``#SBATCH`` header and a leading ``set -``.
 
-    Scanning stops at the first line of real work. The previous version took the LAST ``set -``
-    line in the file, which for a script with ``set -x`` inside a quoted inner shell spliced the
-    guard into the middle of that string. Placed after ``set -euo pipefail`` rather than before so
+    Scanning stops at the first line of real work, so a ``set -x`` inside a quoted inner shell
+    later in the file never receives the guard. Placed after ``set -euo pipefail`` rather than before so
     a script that has one keeps its failure semantics on the very first command.
     """
     at = 0

@@ -34,7 +34,7 @@ import pytest
 
 from numpyto_cupy.emit import emit_cupy
 from numpyto_numba.emit import emit_numba
-from numpyto_pythran.emit import _pythran_scalar_type
+from numpyto_pythran.export import pythran_scalar_type
 
 
 # Shared oracle loader (mirrors test_jax_semantics_fixes).                     #
@@ -157,16 +157,16 @@ def test_numba_parallel_scan_stays_correct() -> None:
 # 2. pythran: dtype fail-loud + NaN-propagating max/min/sign.                  #
 def test_pythran_scalar_type_resolves_int_bool() -> None:
     # Known non-float dtypes map to their pythran spelling (not float64).
-    assert _pythran_scalar_type("int", "x") == "int"
-    assert _pythran_scalar_type("int32", "x") == "int32"
-    assert _pythran_scalar_type("bool", "x") == "bool"
+    assert pythran_scalar_type("int", "x") == "int"
+    assert pythran_scalar_type("int32", "x") == "int32"
+    assert pythran_scalar_type("bool", "x") == "bool"
 
 
 def test_pythran_scalar_type_unknown_fails_loud() -> None:
     # An unmappable dtype must raise, NOT silently become float64 (a wrong
     # element type type-puns the oracle's positional call).
     with pytest.raises(ValueError, match="cannot map dtype"):
-        _pythran_scalar_type("float128", "array 'q'")
+        pythran_scalar_type("float128", "array 'q'")
 
 
 def test_pythran_int_param_roundtrips() -> None:

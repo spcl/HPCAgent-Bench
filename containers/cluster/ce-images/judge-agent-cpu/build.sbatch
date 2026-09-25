@@ -1,17 +1,9 @@
 #!/usr/bin/env bash
-# Build AND verify the CPU-only judge+agent images (targets agent and judge) on one node of either
-# architecture: the image is built for the node it runs on.
-#
-# No partition or account is written here; sbatch reads both from the environment (or pass -A/-p):
+# Build and verify the CPU-only judge+agent candidates for the architecture of the node it runs on
+# (about an hour). Partition and account come from the environment:
 #
 #   export SBATCH_ACCOUNT=<project> SBATCH_PARTITION=normal     # Daint: aarch64
 #   cd containers/cluster/ce-images && IMAGE_DIR=$PWD/judge-agent-cpu sbatch judge-agent-cpu/build.sbatch
-#   (beverin, x86_64: the same with -p mi300)
-#
-# IMAGE_DIR, not --chdir: SLURM_SUBMIT_DIR is where sbatch was INVOKED, whatever --chdir says.
-#
-# COST: one node, about an hour -- binary packages throughout; tblis, HPTT and Pluto are the only
-# compiles, and the playwright/harness downloads the longest waits. No measurement exists yet.
 #
 #SBATCH --job-name=build-judge-agent-cpu
 #SBATCH --nodes=1
@@ -25,12 +17,9 @@
 
 set -Eeuo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_nid<node>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 
-# Slurm SPOOLS the batch script; the directory is passed in or is the submit directory.
+# Slurm runs a spooled copy, so the image directory is passed in (or is the submit directory).
 IMAGE_DIR="${IMAGE_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
 test -x "${IMAGE_DIR}/build.sh"
 # shellcheck source=../build_common.sh
@@ -39,13 +28,11 @@ source "${IMAGE_DIR}/../build_common.sh"
 source "${IMAGE_DIR}/../images.env"
 
 export BUILD_TARGETS="${BUILD_TARGETS:-agent judge}"
-# Candidates only: an OUTPUT_SQSH left in the environment would send a one-target build.sh
-# somewhere this job then does not look.
 unset OUTPUT_SQSH
 CE="${CE_DIR:-${SCRATCH:?}/ce-images}"
 declare -A CANDIDATE=(
-    [agent]="${CE}/${JUDGE_AGENT_CPU_SQSH%.sqsh}-candidate.sqsh"
-    [judge]="${CE}/${JUDGE_CPU_SQSH%.sqsh}-candidate.sqsh"
+    [agent]="${CE}/${JUDGE_AGENT_CPU_CANDIDATE}"
+    [judge]="${CE}/${JUDGE_CPU_CANDIDATE}"
 )
 declare -A TEMPLATE=([agent]="${JUDGE_AGENT_CPU_TEMPLATE}" [judge]="${JUDGE_CPU_TEMPLATE}")
 declare -A PROFILE=([agent]=judge-agent-cpu [judge]=judge-cpu)

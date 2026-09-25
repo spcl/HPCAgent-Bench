@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 #
-# hpcagent-bench-judge-agent-amd -- ONE image serving BOTH the judge and the agent role on MI300A.
-# run_cluster.sh:814,817 already hand the same AMD_CE_ENV to both role_srun calls, so there is
-# one image here, not two. Build context is the repository root:
+# hpcagent-bench-judge-agent-amd -- ONE image serving BOTH the judge and the agent role on
+# MI300A: run_cluster.sh hands the same AMD_CE_ENV to both role_srun calls. Build context is the
+# repository root:
 #
 #   containers/cluster/ce-images/judge-agent-amd/build.sh
 #
@@ -25,16 +25,12 @@
 #   9  dace @ extended              moves whenever the branch moves
 #  10  node, claude-code, harness venvs, final gate (tool scripts are bound at launch)
 #
-# ROCm 7.2.0 is the GLOBAL pin (IMAGE_REQUIREMENTS.md): SGLang consumes a vendor prebuilt already
-# tagged rocm720, so everything else matches it. AMD tags the .0 release without a patch digit --
-# `rocm7.2_*` IS 7.2.0, confirmed against repo.radeon.com/rocm/apt/7.2, whose rocm-libs is
-# 7.2.0.70200-43~24.04. The `rocm723` names elsewhere in this tree are the retired pin.
-# Pinned by DIGEST, not by the tag alone. rocm/pytorch:rocm7.2_... is a mutable tag, so two
-# v-numbered builds could sit on different bases with nothing recording which -- the same
-# attribution problem a version suffix in a name causes. The three inference images have always
-# pinned it; this one was the exception. The tag has NOT moved: resolved live on 2026-09-07 it
-# gives the digest below, the same one vllm and vllm-0271 already pin, and the same base v7 is
-# building on. So this records where we already are rather than changing it.
+# ROCm 7.2.0 is the GLOBAL pin: SGLang consumes a vendor prebuilt already tagged rocm720, so
+# everything else matches it. AMD tags the .0 release without a patch digit -- `rocm7.2_*` IS
+# 7.2.0.
+#
+# Pinned by DIGEST, not by the tag alone: rocm/pytorch:rocm7.2_... is a mutable tag, and the same
+# digest is what vllm and vllm-0271 already pin.
 ARG BASE_IMAGE=docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1\
 @sha256:a3b65813621095e3389269417e963725b59310184588c9d2490d44e6e83fa01c
 # Two targets from ONE file. `agent` is everything below and is what the AGENT arms run: it
@@ -52,44 +48,32 @@ ARG AGENT_BASE=agent
 # ------------------------------------------------------------------------------------------------
 # Stage 0: a compile-only libfabric, and nothing else.
 #
-# This image does NOT build an RCCL network plugin. CSCS ships one, matched to the host driver, and
-# the enroot hook installs it when the EDF sets com.hooks.aws_ofi_nccl.enabled -- measured in job
-# 629967 on an unmodified image:
-#
-#     plugin:    /opt/cscs/netstack/librccl-net.so
-#     transport: NET/OFI, "Using network AWS Libfabric"
-#     NET/AWS Libfabric : GPU Direct RDMA Enabled for HCA 0 'cxi0' .. 'cxi2'
+# This image does NOT build an RCCL network plugin. CSCS ships one, matched to the host driver,
+# installed by the enroot hook when the EDF sets com.hooks.aws_ofi_nccl.enabled.
 #
 # So the only thing left to build here is a libfabric to LINK against, because spack's MPICH needs
 # one at build time and the artifact does not exist then. Providers are disabled: this .so is a
-# link target and is DELETED from the shipped image, so MPI resolves at run time to the artifact's
-# libfabric 2.6.0 instead. Job 629966 is why that deletion matters -- MPICH binds by RPATH, RPATH
-# is searched before everything else, and with the stub present FI_PROVIDER=cxi aborted MPI_Init
-# with "OFI call getinfo failed" against a libfabric that has only psm3/sockets/verbs.
+# link target and is DELETED from the shipped image, so MPI resolves at run time to the host's
+# libfabric instead -- MPICH binds by RPATH, RPATH is searched before everything else, and a stub
+# left in place would make FI_PROVIDER=cxi abort MPI_Init against a libfabric with only
+# psm3/sockets/verbs.
 # ------------------------------------------------------------------------------------------------
 FROM ${BASE_IMAGE} AS ofi-builder
 ARG BASE_IMAGE
 ARG LIBFABRIC_REF=v2.6.0
 # The SHA each tag resolved to, passed in by build.sh. A tag is a mutable pointer, and podman's
-# layer cache keys on the command string -- so `--branch v1.20.0` alone would be reused forever
-# and this image would age into a pin nothing recorded. Resolving outside makes the sha part of
-# the cache key, and the assertions below turn a moved tag into a BUILD FAILURE rather than
-# different source that silently builds. Same shape as DACE_COMMIT.
+# layer cache keys on the command string, so resolving the sha outside the build makes it part
+# of the cache key and turns a moved tag into a BUILD FAILURE rather than silently different
+# source. Same shape as DACE_COMMIT.
 ARG LIBFABRIC_COMMIT=
 USER root
 
-# Every network git call goes through this, and where a mirror is mounted none of them
-# reaches GitHub at all. The `insteadOf` rewrite is what covers the callers the wrapper
-# cannot: spack clones its package repo in-process and vLLM's CMake FetchContent clones
-# triton itself, and both died on the same rate limiting with no retry of their own.
-# Conditional, so a build with no mirror mounted behaves exactly as it did before.
-# `protocol.file.allow` goes with it: git has refused local-path submodule clones since the
-# CVE-2022-39253 fix, and the rewrite turns every submodule URL into exactly that, so
-# `submodule update` aborts with `transport 'file' not allowed` before it looks for the repo.
-# Every network git call goes through this. An unauthenticated clone or fetch from a busy egress
-# IP gets a 401, which git reports as `could not read Username for https://github.com`: it looks
-# like a credentials failure and is a transient one. GIT_TERMINAL_PROMPT=0 makes it fail instead
-# of blocking on a prompt no build has a terminal for; the backoff is what actually fixes it.
+# Every network git call goes through this retry wrapper, and where a mirror is mounted none of
+# them reaches GitHub at all. The `insteadOf` rewrite covers callers the wrapper cannot: some
+# tools clone in-process with no retry of their own. `protocol.file.allow` goes with it: git
+# refuses local-path submodule clones since CVE-2022-39253, and the rewrite turns every submodule
+# URL into exactly that. GIT_TERMINAL_PROMPT=0 makes an unauthenticated 401 fail instead of
+# blocking on a prompt no build has a terminal for; the backoff is what actually fixes it.
 RUN set -eux; \
     printf '%s\n' \
       '#!/bin/sh' \
@@ -125,19 +109,11 @@ RUN apt-get update \
 #
 # Compile-only on purpose. Building our own PROVIDER would pin a userspace against a kernel
 # driver CSCS upgrades without us; a stub keeps the link correct at build time and leaves the
-# implementation correct at run time. LIBFABRIC_REF is v2.6.0. Until 2026-09-16 that matched the
-# netstack artifact (gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0) whose libfabric is what actually
-# loaded. The netstack artifact under /capstor/store is gone, and every EDF now sets
-# com.hooks.netstack.source=host, so what actually loads is the node's own
-# /opt/cray/libfabric/host/lib64/libfabric.so.1 -- a root-owned symlink, currently -> 2.3.1.
-# LIBFABRIC_REF stays v2.6.0 as the compile-time header/link target; it no longer matches the
-# runtime library. It was v2.3.1 until 2026-09-09, when a probe showed HEADER 2.3 against RUNTIME
-# 2.6 (superseded 2026-09-16 by the move to host mode). That mismatch was NOT the cause of the
-# multi-node MPI assert -- libfabric reports a valid PCI BDF at API 2.3, 2.6 and 1.20 alike -- but
-# building against headers older than the library you load is not a thing to leave standing.
-# libfabric, compile-only. --disable-verbs and friends keep it to the sockets/tcp core: the plugin
-# needs the headers and the .so to link against, never a provider, because at run time the host
-# hook's libfabric (with cxi) is what gets loaded.
+# implementation correct at run time. LIBFABRIC_REF stays as the compile-time header/link target
+# even where it no longer matches the runtime library that the host or netstack artifact actually
+# loads -- building against headers older than the library you load is not a thing to leave
+# standing, but --disable-verbs and friends keep this build to the sockets/tcp core regardless,
+# since at run time the host hook's libfabric (with cxi) is what gets loaded.
 WORKDIR /tmp/build
 RUN set -eux; \
     gitretry clone --branch "${LIBFABRIC_REF}" --depth 1 https://github.com/ofiwg/libfabric.git libfabric; \
@@ -167,10 +143,9 @@ RUN { \
 
 FROM ${BASE_IMAGE} AS agent
 
-# OCI metadata, because these are published as OCI artifacts and a registry shows nothing about
-# where an image came from unless the image says so. base.name is the reproducibility claim in
-# one label, readable without unpacking the image. BASE_IMAGE is re-declared because an ARG from
-# before the first FROM is not in scope inside a stage.
+# base.name is the reproducibility claim in one label, readable without unpacking the image.
+# BASE_IMAGE is re-declared because an ARG from before the first FROM is out of scope inside a
+# stage.
 ARG BASE_IMAGE
 # The REGISTRY reference, not whatever FROM resolved to: a base-image cache hit rewrites
 # BASE_IMAGE to a local dir: path, and that must not become the published base.name.
@@ -283,25 +258,22 @@ RUN set -eux; \
 # Deliberately NOT installed: the distro BLAS/LAPACK/solver stack. Those come from spack, so the
 # OpenBLAS the generated code links is the threads=openmp build and nothing else.
 # The ONE exception is blis, and it is here rather than in the spack list because spack builds it
-# from source and gcc 16 rejects its haswell sup kernels -- "bp cannot be used in `asm` here"
-# (621068, and again with -fomit-frame-pointer in 621321). The distro ships a BINARY, so no
-# compiler of ours ever sees that asm. libblis-openmp-dev is the OPENMP flavor by name, the same
-# choice made for OpenBLAS; it registers /usr/include/x86_64-linux-gnu/blis.h and
-# /usr/lib/x86_64-linux-gnu/libblis.so through update-alternatives, which is what makes the
-# `-lblis` and `#include <blis.h>` that libraries.yaml declares resolve without any -I of its own.
-# blis ships no blis.pc, so that entry resolves through its `link: [-lblis]` fallback.
+# from source and gcc 16 rejects its haswell sup kernels ("bp cannot be used in `asm` here"). The
+# distro ships a BINARY, so no compiler of ours ever sees that asm. libblis-openmp-dev is the
+# OPENMP flavor by name, the same choice made for OpenBLAS; it registers
+# /usr/include/x86_64-linux-gnu/blis.h and /usr/lib/x86_64-linux-gnu/libblis.so through
+# update-alternatives, which is what makes the `-lblis` and `#include <blis.h>` that
+# libraries.yaml declares resolve without any -I of its own. blis ships no blis.pc, so that entry
+# resolves through its `link: [-lblis]` fallback.
 #
-# IT ALSO WINS /usr/lib/x86_64-linux-gnu/libblas.so.3 (priority 80, over netlib's 10), and the
-# claim that used to stand here -- that the generated code never asks for that name -- IS FALSE.
-# DaCe's OpenBLAS environment asks for exactly it: `_system_blas_libs()` is
+# IT ALSO WINS /usr/lib/x86_64-linux-gnu/libblas.so.3 (priority 80, over netlib's 10). DaCe's
+# OpenBLAS environment asks for exactly that name: `_system_blas_libs()` is
 # ctypes.util.find_library('lapacke'/'cblas'/'blas'), so `libblas.so.3` resolving puts `_mode()`
 # in find_package and `cmake_libraries()` then returns THAT alternative instead of the spack
-# OpenBLAS beside it. BLIS has CBLAS and NO LAPACK, so gemm linked and computed the right numbers
-# while every factorization died at link -- job 644702, 7 kernels, all FAIL:compile_fail on
-# undefined reference to LAPACKE_dpotrf/dgetrf/dgetri/dgetrs/zgetrf/zgetri/zgetrs/zpotrf
-# (cholesky2, contour_integral, rayleigh_ritz_rotation, quatrex_rgf, cegterg, ls3df_scf,
-# raman_fitting). Step 13b below takes those alternatives back for OpenBLAS; blis keeps its own
-# names. Removing blis is NOT the fix: libraries.yaml offers it to agents by name.
+# OpenBLAS beside it. BLIS has CBLAS and NO LAPACK, so gemm links and computes the right numbers
+# while every factorization dies at link, undefined reference to LAPACKE_dpotrf/dgetrf/etc. Step
+# 13b below takes those alternatives back for OpenBLAS; blis keeps its own names. Removing blis is
+# NOT the fix: libraries.yaml offers it to agents by name.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -933,11 +905,10 @@ RUN set -eux; \
 # tblis and HPTT are packaged nowhere, so both CE images build them with the repo's own scripts.
 # TBLIS_REF is the v1.3.0 tag, restated here so the image records the version it built rather than
 # inheriting a default. The 2.0-beta line that master carries vendors BLIS and does not compile
-# under gcc 16 (621401); v1.3.0 does, in two minutes, verified in 621508 -- build-tblis.sh holds
-# the detail.
-# The library is asserted alongside the header: header-only success is how a half-install ships
-# (v5 carried libhptt.so and no tblis library at all). Comment here, not inside the RUN -- one
-# between line continuations is passed to the shell and comments out the rest.
+# under gcc 16; v1.3.0 does -- build-tblis.sh holds the detail.
+# The library is asserted alongside the header: header-only success is how a half-install ships.
+# Comment here, not inside the RUN -- one between line continuations is passed to the shell and
+# comments out the rest.
 COPY containers/build-hptt.sh /build-hptt.sh
 COPY containers/build-tblis.sh /build-tblis.sh
 ARG TBLIS_REF=v1.3.0
@@ -963,10 +934,10 @@ RUN set -eux; \
 # reading of --with-components -- additive, or replacing the default list.
 #
 # --allow-multiple-definition, because sysdetect puts linux_cpu_utils.c and x86_cpu_utils.c on the
-# libpapi.so link line TWICE and every symbol in them collides with itself (621528). The duplicate
-# is the SAME object built from the SAME source, so first-definition-wins is the correct
-# resolution and not a papering-over; what changed is only that binutils 2.47 refuses by default
-# where the linkers PAPI 7.2 was released against did not.
+# libpapi.so link line TWICE and every symbol in them collides with itself. The duplicate is the
+# SAME object built from the SAME source, so first-definition-wins is the correct resolution and
+# not a papering-over; what changed is only that newer binutils refuses by default where the
+# linkers PAPI 7.2 was released against did not.
 ARG PAPI_REF=papi-7-2-0-t
 RUN set -eux; \
     git init -q /tmp/papi; \
@@ -1047,11 +1018,8 @@ RUN set -eux; \
 # ``#pragma scop`` front end), CUDA out instead of tiled OpenMP C, so it is built with the exact
 # same recipe and the exact same distro clang already installed for step 10 -- no new apt package.
 #
-# Before this stage the image had NO ppcg at all: ppcg_exe() returned None and every ppcg/
-# ppcg_cuda/ppcg_hip run declined with "ppcg is not installed on this host" (smoke, 2026-09-17).
-# hipify-perl was NEVER the gap -- ROCm's own apt channel (step 2) already installs it at
-# $ROCM_PATH/bin/hipify-perl, which is on PATH here (see the EDF template's PATH line); confirmed
-# by probing the then-current image on a compute node.
+# hipify-perl is NOT the gap here: ROCm's own apt channel (step 2) already installs it at
+# $ROCM_PATH/bin/hipify-perl, which is on PATH (see the EDF template's PATH line).
 #
 # INSTALLED TO ITS OWN PREFIX (/opt/ppcg-install), NOT bare `make install` into /usr/local like
 # Pluto above. ppcg clones its OWN isl+pet submodules and a bare install would overwrite Pluto's
@@ -1060,22 +1028,18 @@ RUN set -eux; \
 # on PATH (below) keeps the two builds from ever touching the same file.
 #
 # THE ISL CLASH THAT MATTERS EVEN SO: ppcg's own binaries carry a correct RPATH into
-# /opt/ppcg-install/lib (verified with `readelf -d`), but RPATH/RUNPATH is the THIRD place the
-# dynamic linker looks, after LD_LIBRARY_PATH -- and the agent EDF's LD_LIBRARY_PATH includes
-# /usr/lib/x86_64-linux-gnu, where Ubuntu packages `libisl23` as a build dependency of gcc's
-# Graphite pass. That copy shares ppcg's isl's SONAME (libisl.so.23) but predates
-# `isl_id_set_alloc`, so at RUN time (under the EDF, not here at build time) ppcg would die with
-# "symbol lookup error: .../libpet.so.10: undefined symbol: isl_id_set_alloc" (measured, job
-# 640113) unless something puts /opt/ppcg-install/lib ahead of LD_LIBRARY_PATH. That "something"
-# is hpcagent_bench.ppcg_transform._ppcg_run_env, which every ppcg invocation goes through --
-# the smoke test below exercises the SAME fix, not a build-time-only workaround, so a green
-# image build is actually evidence the run-time path works too.
+# /opt/ppcg-install/lib, but RPATH/RUNPATH is the THIRD place the dynamic linker looks, after
+# LD_LIBRARY_PATH -- and the agent EDF's LD_LIBRARY_PATH includes /usr/lib/x86_64-linux-gnu, where
+# Ubuntu packages `libisl23` as a build dependency of gcc's Graphite pass. That copy shares ppcg's
+# isl's SONAME but predates `isl_id_set_alloc`, so at RUN time ppcg would die with a symbol lookup
+# error unless something puts /opt/ppcg-install/lib ahead of LD_LIBRARY_PATH. That "something" is
+# hpcagent_bench.ppcg_transform._ppcg_run_env, which every ppcg invocation goes through -- the
+# smoke test below exercises the SAME fix, not a build-time-only workaround, so a green image
+# build is actually evidence the run-time path works too.
 #
 # PIN THE COMMIT once a build has been verified end-to-end -- ppcg has no tagged releases, so
 # `master` is a moving target and an unpinned clone here would make two builds of "the same" image
-# silently measure two different transforms. Verified working on 2026-09-17's live build into
-# $HPCAGENT_BENCH_TOOLS_DIR (scripts/cache_env.sh): isl 6c2b19a0405759f4d31bf48b73492be4a2b1d813,
-# pet e841cf3f94c302c17e58af95b0d39ffb993b13e4.
+# silently measure two different transforms.
 ARG PPCG_COMMIT=7cbf785210cdc1bd68fd277d2ecf7dd824da874a
 RUN set -eux; \
     gitretry clone --recursive https://repo.or.cz/ppcg.git /opt/ppcg; \
@@ -1198,16 +1162,16 @@ RUN set -eux; \
 #
 # The wrapper also names PYTHONPATH. PYTHONSAFEPATH=1 -- set further down and in the EDF, so the
 # image's own dace wins over a CWD that holds one -- drops the script's directory from sys.path,
-# and the launcher imports rocprof_compute_base from beside itself. 628218 failed exactly there
-# with `No module named 'rocprof_compute_base'` while every other profiler passed. The version
-# check below therefore runs UNDER PYTHONSAFEPATH=1: without that it passes at build time, because
-# the ENV that breaks it is set later in this file, and the breakage only appears in a job.
+# and the launcher imports rocprof_compute_base from beside itself, which fails with `No module
+# named 'rocprof_compute_base'` unless PYTHONPATH names it explicitly. The version check below
+# therefore runs UNDER PYTHONSAFEPATH=1: without that it passes at build time only, because the
+# ENV that breaks it is set later in this file, and the breakage only appears in a job.
 #
 # astunparse is read TOLERANTLY, because at this point in the file it is not installed yet: it
 # arrives as a dependency of the editable dace install further down, so a bare `import astunparse`
 # exits non-zero, and under `set -e` an assignment whose only command is that substitution takes
-# the build down with it (621615). The guard asks whether the version CHANGED, and "absent both
-# times" is a truthful answer to that; the ordering is what makes a hard import wrong here.
+# the build down with it. The guard asks whether the version CHANGED, and "absent both times" is
+# a truthful answer to that; the ordering is what makes a hard import wrong here.
 ARG ROCPROF_COMPUTE_PANDAS=2.2.3
 RUN set -eux; \
     rc=/opt/rocm/libexec/rocprofiler-compute; \
@@ -1238,11 +1202,9 @@ RUN set -eux; \
 # guarded import suggests: harnesses.py always passes --prompt, so episode.py takes the
 # fixed_prompt branch and constructs UsageSinkToolAgent, and ToolAgent.__init__ calls
 # optimas_tools.require_agents_sdk() unconditionally. Without it every optimas episode raises
-# before its first token -- the same shape as the 2026-09-17 miniswe/openhands venv failure that
-# emptied four arms, and the reason HARNESS_RUNTIMES is checked at all. requirements/
-# agent-optimas.txt names only `optimas-ai`, which is the OPT-IN upstream OPRO proposer
-# (baselines.opro_proposer_upstream) and is deliberately NOT installed: the in-repo proposer is
-# the default and the zero-dependency control.
+# before its first token. requirements/agent-optimas.txt names only `optimas-ai`, which is the
+# OPT-IN upstream OPRO proposer (baselines.opro_proposer_upstream) and is deliberately NOT
+# installed: the in-repo proposer is the default and the zero-dependency control.
 #
 # RESOLVED IN THE SAME pip RUN as the pinned proxy stack, not after it, so one resolver sees
 # litellm 1.94.0, httpx2 2.12.0 and anyio 4.14.2 as constraints rather than discovering them
@@ -1363,8 +1325,7 @@ ENV SWE_AGENT_CONFIG_DIR=/opt/harness/sweagent/share/config \
 # THE DEFECT THIS FIXES is described in full at step 1 (the libblis-openmp-dev note): a generic
 # `libblas.so.3` resolving to something that is not OpenBLAS silently retargets every DaCe BLAS
 # build, because DaCe locates BLAS through ctypes.util.find_library and links whatever answers.
-# As shipped by apt this image had THREE BLAS-family providers and OpenBLAS was none of them
-# (measured in job 644731 on the 2026-09-18 image):
+# As shipped by apt this image had THREE BLAS-family providers and OpenBLAS was none of them:
 #
 #   libblas.so.3   -> blis-openmp/libblas.so.3   priority 80   CBLAS, no LAPACK  <- what linked
 #   libblas.so.3   -> blas/libblas.so.3          priority 10   netlib reference
@@ -1489,10 +1450,8 @@ RUN set -eux; \
 # LLVM 17+ moved libomp.so into a per-target libdir, lib/x86_64-unknown-linux-gnu/, which is on no
 # loader path. clang links it by absolute path -- it knows its own layout -- and writes no RUNPATH,
 # so a `clang -fopenmp=libomp -shared` builds clean and then dies at dlopen with `libomp.so: cannot
-# open shared object file`. That killed the REFERENCE build of every OpenMP-offload arm: 0 correct
-# out of 324 graded calls, because a missing baseline means no ratio and every call scores
-# score_error whatever the agent wrote. Latent since v6; it only bites once an arm pins the llvm
-# family, which the offload arms started doing on 2026-09-06.
+# open shared object file`, which kills the REFERENCE build of every OpenMP-offload arm: a missing
+# baseline means no ratio and every call scores score_error whatever the agent wrote.
 #
 # ONE SYMLINK, not the directory, and that distinction is the whole point: that same libdir ships
 # LLVM's libgomp.so.1 SHIM, so putting the directory on the loader path -- via ld.so.conf.d, or via
@@ -1604,32 +1563,21 @@ WORKDIR /work
 # The RCCL network plugin, placed after every expensive layer so it never invalidates them.
 # THE STUB MUST NOT SHIP. MPICH was linked against /opt/ofi-sdk with an RPATH pointing there, and
 # RPATH is searched BEFORE LD_LIBRARY_PATH and the default paths. Leave it and MPI binds to a
-# libfabric with no providers: job 629966 set FI_PROVIDER=cxi and MPI_Init aborted with "OFI call
-# getinfo failed", because spack's build carries only psm3/sockets/verbs. Delete it and the RPATH
-# points at nothing, so the loader falls through to the host's libfabric: as of 2026-09-16,
-# com.hooks.netstack.source=host binds /opt/cray/libfabric/host/lib64/libfabric.so.1 -> 2.3.1.
+# libfabric with no providers, aborting MPI_Init once FI_PROVIDER=cxi is set, because spack's
+# build carries only psm3/sockets/verbs. Delete it and the RPATH points at nothing, so the loader
+# falls through to the host's libfabric (com.hooks.netstack.source=host).
 #
-# No RCCL plugin is shipped either. CSCS provides one through com.hooks.aws_ofi_nccl.enabled, and
-# job 629967 measured it working on an unmodified image: /opt/cscs/netstack/librccl-net.so,
-# "Using network AWS Libfabric", GPU Direct RDMA on cxi0-2. Shipping a second copy would only make
-# it ambiguous which one RCCL loads.
-# Ship no fabric library OF OUR OWN. The distinction matters and job 629985 is why: the gate used
-# to refuse ANY libfabric anywhere on the filesystem, and it killed the build on
-# /usr/lib/x86_64-linux-gnu/libfabric.so.1.20.0 -- which is not this image's file at all. That path
-# is where the CSCS hook BIND-MOUNTS the artifact's libfabric at run time, verified by mounting the
-# image with no annotations: the file that appears there is dated Aug 18 15:39 nobody:nogroup, the
-# artifact's own stamp, and lsof/mountinfo show it as a lustre bind from
-# a CSCS-managed artifact store. CONFIRMED 2026-09-16 by reading the hooks: the prefix was
-# /capstor/store/cscs/cscs/public/containers/netstack/$(uname -m)/<ver>/<name>, hardcoded in
-# 10-netstack.sh, 89-libfabric-cxi.sh and 90-aws-ofi-nccl.sh alike. That store no longer exists,
-# so the EDFs select netstack.source="host" instead,
-# which binds /opt/cray/libfabric/host/lib64/libfabric.so.1 and
-# /opt/cscs/aws-ofi-ccl-plugin/rocm6/librccl-net.so from the node. Refusing it forbade the
-# hook its own mount point.
+# No RCCL plugin is shipped either. CSCS provides one through com.hooks.aws_ofi_nccl.enabled.
+# Shipping a second copy would only make it ambiguous which one RCCL loads.
+#
+# Ship no fabric library OF OUR OWN, but the gate below checks only paths this image controls: the
+# hook bind-mounts (or, in host mode, binds from the node) its own libfabric/RCCL plugin at run
+# time, and refusing any libfabric anywhere on the filesystem would forbid the hook its own mount
+# point.
 #
 # What must NOT ship is a fabric library in a prefix WE control, because those are what RPATH can
-# bind to and RPATH is searched before everything else -- the 629966 failure, where MPICH held a
-# providerless libfabric and neither the hook nor LD_LIBRARY_PATH could displace it.
+# bind to, and RPATH is searched before everything else: a providerless libfabric there would
+# shadow the hook's and neither it nor LD_LIBRARY_PATH could displace it.
 RUN set -eux; \
     rm -f /opt/ofi-sdk/lib/libfabric.so*; \
     found="$(find /opt/ofi-sdk /opt/ofi /opt/aws-ofi-nccl \
@@ -1661,10 +1609,9 @@ ENV PYTHONSAFEPATH=1
 # ============================== judge stage ==============================
 # hpcagent_bench-firewall: trusted-judge-image
 #
-# The marker above is the AUDITABLE exemption scripts/check_no_hidden_in_image.py defines: this
-# image is never handed to an agent, so it may legitimately hold grading material. Every other
-# target stays default-deny. Nothing else in this file carries it, and the `agent` stage must
-# never acquire it.
+# Marker scripts/check_no_hidden_in_image.py checks for: this image is never handed to an agent,
+# so it may legitimately hold grading material. Every other target stays default-deny. The
+# `agent` stage must never acquire it.
 #
 # WHY A STAGE AND NOT A SECOND DOCKERFILE: the judge needs the whole toolchain the agent needs --
 # compilers, MPI, ROCm, dace, the solvers -- and duplicating that is a second 2 h build that can
@@ -1675,9 +1622,9 @@ FROM ${AGENT_BASE} AS judge
 
 # The allocator this stage's RUN steps load. The agent image preloads mimalloc, which is built for
 # the MI300A's Zen 4 and dies on SIGILL on a CPU without AVX-512 -- /bin/sh included, so on a Zen 3
-# LOGIN node every RUN exits before running anything ("container exited on illegal instruction",
-# measured on beverin-ln001). build-judge-release.sh passes JUDGE_RUN_LD_PRELOAD= (empty) to build
-# this stage there; the full build keeps the default and runs exactly as before. The ENV at the end
+# login node every RUN exits before running anything. build-judge-release.sh passes
+# JUDGE_RUN_LD_PRELOAD= (empty) to build this stage there; the full build keeps the default and
+# runs exactly as before. The ENV at the end
 # of the stage restores the agent's value either way, so the shipped image preloads mimalloc
 # whichever CPU built it, and build-judge-release.sh fails unless its Env equals the agent's.
 ARG JUDGE_RUN_LD_PRELOAD=/usr/local/lib/libmimalloc.so

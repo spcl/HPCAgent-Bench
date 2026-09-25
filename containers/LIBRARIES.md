@@ -36,7 +36,7 @@ installed by default.
 | Eigen | `libeigen3-dev` | header-only C++ linear algebra | **[have]** |
 | OpenBLAS ILP64 | `libopenblas64-dev` | 64-bit-int BLAS (arrays > 2^31) | **[opt]** -- symbols are `_64`-suffixed; only for very large problems |
 
-`cblas` (the user's "cblas for cpu") is covered by `libopenblas-dev`, which ships
+`cblas` is covered by `libopenblas-dev`, which ships
 `cblas.h` and the `cblas_*` symbols; `liblapacke-dev` adds the LAPACK C API. The
 `libblas.so.3`/`liblapack.so.3` runtime slot is served by OpenBLAS via update-alternatives.
 
@@ -136,29 +136,9 @@ in-container, all from apt on the same shared install line.
 
 ---
 
-## Concrete change to the images
+## Where the list is installed
 
-Applied to the unified **`hpcagent_bench.Dockerfile`** -- one apt install line shared by every
-`HW=cpu|nvidia|amd` variant -- and the kept **`cpu.def`** Apptainer recipe (`judge.def`
-inherits `cpu.sif`). Added to the single apt install line:
-
-```
-liblapacke-dev libomp-dev libtbb-dev libsleef-dev libxsimd-dev libhwy-dev
-libnuma-dev libhwloc-dev libarmadillo-dev libfftw3-mpi-dev
-make cmake pkg-config           # build tools -- needed for the HPTT source build (and any -lX from source)
-```
-
-Then HPTT is built from source in a post-apt step (`sh /build-hptt.sh`, the copied
-`containers/build-hptt.sh`) -- the `scalar` target with the image's default `-march=native`
-(each image is built for the machine it runs on).
-
-## Notes / follow-ups
-
-- **Deduplicate**: DONE (see "Concrete change to the images" above) -- the apt list now lives
-  in exactly one place. This file remains the human-readable rationale for that list.
-- **Advertise to the agent**: DONE for the libraries with a request tool -- each entry in
-  `libraries.yaml` carries the summary the tool description shows, and `languages.available_libraries`
-  is what may be advertised, so a library absent from an image is never promised. The rest of this
-  list is installed but not yet requestable; add an entry there to expose one.
-- **Optional/heavy** (`[opt]`): `libopenblas64-dev` (ILP64), `kokkos`/`libkokkos-dev`.
-  Enable per need; not default-installed.
+`hpcagent_bench.Dockerfile` (one apt line shared by every `HW=cpu|nvidia|amd` variant) and
+`cpu.def` install the packages above; HPTT (both) and tblis (the Dockerfile) are built from source
+by `build-hptt.sh` and `build-tblis.sh`. A library becomes requestable by an agent only with an entry in
+`hpcagent_bench/envs/libraries.yaml`. `[opt]` entries are not installed by default.

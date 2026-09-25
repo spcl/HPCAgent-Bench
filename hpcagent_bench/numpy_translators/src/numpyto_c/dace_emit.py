@@ -12,6 +12,8 @@ from typing import Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence
 from numpyto_common import dtypes
 from numpyto_common import frontend as common_frontend
 from numpyto_common.frontend import PinnedValue, field_nodes, fold_shape_expr
+from numpyto_common.emit_helpers.numpy_names import is_numpy_module
+from numpyto_common.emit_helpers.tokens import IDENT_RE
 from numpyto_common.ir import ArrayDesc, KernelIR, shape_dimension_symbols
 from numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
 from numpyto_common.lowering import lower
@@ -35,7 +37,6 @@ from numpyto_common.statement_desugar import (
     is_scalar_literal,
 )
 
-_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 #: A decimal point or an exponent -- what makes a shape token a float rather than an extent.
 _FLOAT_LITERAL_RE = re.compile(r"\d*\.\d|\d[eE][-+]?\d")
 
@@ -213,10 +214,7 @@ class _AnnotateEmptyDtype(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
         if not (
-            isinstance(node.func, ast.Attribute)
-            and node.func.attr == "empty"
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in ("np", "numpy")
+            isinstance(node.func, ast.Attribute) and node.func.attr == "empty" and is_numpy_module(node.func.value)
         ):
             return node
         if len(node.args) != 1 or any(kw.arg == "dtype" for kw in node.keywords):
@@ -264,12 +262,7 @@ class _FillOutputParamRealloc(ast.NodeTransformer):
         if want is None or not isinstance(node.value, ast.Call):
             return node
         func = node.value.func
-        if not (
-            isinstance(func, ast.Attribute)
-            and func.attr in _REALLOC_FILL
-            and isinstance(func.value, ast.Name)
-            and func.value.id in ("np", "numpy")
-        ):
+        if not (isinstance(func, ast.Attribute) and func.attr in _REALLOC_FILL and is_numpy_module(func.value)):
             return node
         if _alloc_shape_tokens(node.value) != want:
             return node
@@ -352,7 +345,7 @@ def extent_without_dead_symbols(text: str) -> str:
     floor/ceiling: an extent this cannot simplify keeps the exact spelling the rest of the emitter
     matches on, and ``//`` never round-trips through sympy's ``floor``.
     """
-    named = {i for i in _IDENT_RE.findall(text)}
+    named = {i for i in IDENT_RE.findall(text)}
     if not named:
         return text
     folded = sympify_shape(text)
@@ -667,8 +660,7 @@ class DropIdentityAsarray(ast.NodeTransformer):
         if not (
             isinstance(node.func, ast.Attribute)
             and node.func.attr in _ASARRAY_IDENTITY
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in ("np", "numpy")
+            and is_numpy_module(node.func.value)
         ):
             return node
         if len(node.args) != 1 or node.keywords:
@@ -716,7 +708,7 @@ def _reshape_target(node: ast.Call) -> Tuple[Optional[str], List[ast.expr]]:
     """``(name, shape_args)`` for a reshape call on a plain name, else ``(None, [])``."""
     if not isinstance(node.func, ast.Attribute) or node.func.attr != "reshape":
         return None, []
-    if isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy"):
+    if is_numpy_module(node.func.value):
         return (node.args[0].id, node.args[1:]) if node.args and isinstance(node.args[0], ast.Name) else (None, [])
     return (node.func.value.id, node.args) if isinstance(node.func.value, ast.Name) else (None, [])
 
@@ -774,7 +766,7 @@ class NormalizeReshape(ast.NodeTransformer):
         # A resolved base already proves the callee is ``<receiver>.reshape``.
         if base is None or len(args) == 0 or not isinstance(node.func, ast.Attribute):
             return node
-        numpy_form = isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "numpy")
+        numpy_form = is_numpy_module(node.func.value)
         dims = args[0].elts if len(args) == 1 and isinstance(args[0], (ast.Tuple, ast.List)) else list(args)
         if len(dims) == 1 and _is_negative_one(dims[0]):
             receiver = node.args[0] if numpy_form else node.func.value
@@ -803,7 +795,7 @@ def ordered_reshape_source(value: ast.expr) -> Optional[str]:
     order = next((keyword.value for keyword in value.keywords if keyword.arg == "order"), None)
     if not (isinstance(order, ast.Constant) and order.value != "C"):
         return None
-    numpy_form = isinstance(value.func.value, ast.Name) and value.func.value.id in ("np", "numpy")
+    numpy_form = is_numpy_module(value.func.value)
     source = (value.args[0] if value.args else None) if numpy_form else value.func.value
     return source.id if isinstance(source, ast.Name) else None
 
@@ -891,12 +883,7 @@ class _DesugarUnreplacedCalls(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
-        if not (
-            isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in ("np", "numpy")
-            and not node.keywords
-        ):
+        if not (isinstance(node.func, ast.Attribute) and is_numpy_module(node.func.value) and not node.keywords):
             return node
         if node.func.attr == "outer" and len(node.args) == 2:
             a, b = ast.unparse(node.args[0]), ast.unparse(node.args[1])
@@ -937,8 +924,7 @@ class DesugarContractionFreeEinsum(ast.NodeTransformer):
         if not (
             isinstance(node.func, ast.Attribute)
             and node.func.attr == "einsum"
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in ("np", "numpy")
+            and is_numpy_module(node.func.value)
             and len(node.args) == 3
         ):
             return node
@@ -1185,8 +1171,7 @@ class _MaterializeDynamicFlip(ast.NodeTransformer):
         if not (
             isinstance(node.func, ast.Attribute)
             and node.func.attr == "flip"
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in ("np", "numpy")
+            and is_numpy_module(node.func.value)
             and len(node.args) == 1
         ):
             return None
@@ -2219,11 +2204,7 @@ class ResolveShapeReads(ast.NodeTransformer):
         -> the same scan on the last axis between two transposes. Both need the operand RANK, and
         this table is the emitter's only flow-SENSITIVE one -- netvlad rebinds a name across ranks."""
         self.generic_visit(node)
-        if not (
-            isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in ("np", "numpy")
-        ):
+        if not (isinstance(node.func, ast.Attribute) and is_numpy_module(node.func.value)):
             return node
         if node.func.attr == "swapaxes" and len(node.args) == 3 and not node.keywords:
             shape = self.infer(node.args[0])
@@ -2520,8 +2501,7 @@ class BroadcastScalarWhere(ResolveShapeReads):
         if not (
             isinstance(node.func, ast.Attribute)
             and node.func.attr == "where"
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in ("np", "numpy")
+            and is_numpy_module(node.func.value)
             and len(node.args) == 3
             and not node.keywords
         ):
@@ -2919,7 +2899,7 @@ def freeze_pinned_extent_scalars(kir: KernelIR) -> KernelIR:
     declared = {a.name for a in kir.arrays}
     for array in kir.arrays:
         for token in array.shape:
-            declared.update(_IDENT_RE.findall(str(token)))
+            declared.update(IDENT_RE.findall(str(token)))
     probe = NormalizeReshape().visit(copy.deepcopy(kir.tree))
     seeds: Set[str] = set()
     for node in ast.walk(probe):
@@ -2973,7 +2953,7 @@ def freeze_shape_only_parameters(kir: KernelIR) -> KernelIR:
 def _frozen_extent(dim: str, values: Dict[str, int]) -> str:
     """One declared extent with every ``values`` name replaced by its literal; unchanged if unparsable."""
     text = str(dim)
-    if not any(ident in values for ident in _IDENT_RE.findall(text)):
+    if not any(ident in values for ident in IDENT_RE.findall(text)):
         return text
     try:
         tree = SubstituteScalarValues(values).visit(ast.parse(text, mode="eval"))
@@ -3180,9 +3160,9 @@ def np_call_name(node: ast.AST) -> Optional[str]:
     if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
         return None
     base = node.func.value
-    if isinstance(base, ast.Name) and base.id in ("np", "numpy"):
+    if is_numpy_module(base):
         return node.func.attr
-    if isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name) and base.value.id in ("np", "numpy"):
+    if isinstance(base, ast.Attribute) and is_numpy_module(base.value):
         return f"{base.attr}.{node.func.attr}"
     return None
 
@@ -3288,7 +3268,7 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
         if not (isinstance(func, ast.Attribute) and func.attr == "at" and isinstance(func.value, ast.Attribute)):
             return None
         base = func.value
-        if not (isinstance(base.value, ast.Name) and base.value.id in ("np", "numpy") and base.attr == "add"):
+        if not (is_numpy_module(base.value) and base.attr == "add"):
             return None
         if len(call.args) != 3:
             return None
@@ -4106,7 +4086,7 @@ def materialize_strided_helper_args(
                 if not isinstance(arg.value, ast.Name) or arg.value.id not in dtype_of:
                     continue
                 tokens = sliced_extents(arg, shapes, known)
-                if not tokens or any(i not in known for t in tokens for i in _IDENT_RE.findall(t)):
+                if not tokens or any(i not in known for t in tokens for i in IDENT_RE.findall(t)):
                     continue
                 name = f"__hslice_{next(counter)}"
                 dtype = dtype_of[arg.value.id]
@@ -4223,14 +4203,14 @@ def render_program(
     symbol_names = [s.name for s in kir.symbols]
     # Sparse kirs carry size symbols only in array shapes; collect free idents so each is declared as a dc.symbol.
     arr_shapes = {a.name: [str(s) for s in a.shape] for a in kir.arrays}
-    _known = set(arrays) | set(scalars)
+    known = set(arrays) | set(scalars)
     shape_idents: Set[str] = set()
-    for _toks in arr_shapes.values():
-        for _tok in _toks:
-            for _ident in _IDENT_RE.findall(_tok):
-                shape_idents.add(_ident)
-                if _ident not in _known and _ident not in symbol_names:
-                    symbol_names.append(_ident)
+    for toks in arr_shapes.values():
+        for tok in toks:
+            for ident in IDENT_RE.findall(tok):
+                shape_idents.add(ident)
+                if ident not in known and ident not in symbol_names:
+                    symbol_names.append(ident)
     # A scalar param used as an array shape (e.g. ``Nt`` sizing ``KE[Nt + 1]``) must be a dc.symbol:
     # a dace shape annotation cannot reference a runtime scalar, and a name cannot be both. Promote it
     # to a module-level symbol and drop it from the scalar params below (the caller binds it as a symbol).
@@ -4494,7 +4474,7 @@ def render_program(
     if hret:
         resolvable = set(arrays) | set(scalars) | set(symbol_names)
         allocated = body_allocated_shape(body, hret, set(scalars) | set(symbol_names))
-        if allocated and all(i in resolvable for d in allocated for i in _IDENT_RE.findall(d)):
+        if allocated and all(i in resolvable for d in allocated for i in IDENT_RE.findall(d)):
             if nested:
                 # Only a NESTED program: the kernel's own symbols are bound by recipe from the
                 # harness (``symbol_defs``), and a name minted here would have none.
@@ -4509,11 +4489,11 @@ def render_program(
         # solve OR accept: passing a keyword the callee does not take is a DaceSyntaxError. A
         # reassigned size seeded from its recipe retires its own symbol the same way.
         prunable = set(symbol_names) if kir.return_kind else set(reassigned)
-        used = {i for param in params for i in _IDENT_RE.findall(param.split(":", 1)[1])}
+        used = {i for param in params for i in IDENT_RE.findall(param.split(":", 1)[1])}
         used |= {n.id for n in ast.walk(ast.Module(body=body, type_ignores=[])) if isinstance(n, ast.Name)}
         while True:  # a kept recipe reads its operands, so they stay bound
             kept = {n for n, _ in symbol_defs if n in used or n not in prunable}
-            reached = {i for n, e in symbol_defs if n in kept for i in _IDENT_RE.findall(e)} - used
+            reached = {i for n, e in symbol_defs if n in kept for i in IDENT_RE.findall(e)} - used
             if not reached:
                 break
             used |= reached
@@ -4554,7 +4534,7 @@ def render_program(
         # and appears nowhere else, so a body-only scan dropped both its symbol declaration and its
         # constant, leaving the annotation reading a name the module never binds.
         named = {node.id for stmt in body for node in ast.walk(stmt) if isinstance(node, ast.Name)}
-        named |= {ident for param in params for ident in _IDENT_RE.findall(param)}
+        named |= {ident for param in params for ident in IDENT_RE.findall(param)}
         pinned = {n: v for n, v in pinned.items() if n in named}
 
     return RenderedProgram(
@@ -4581,7 +4561,7 @@ def folded_with_constants(text: str, pinned: Dict[str, PinnedValue]) -> str:
     ``kernel_size + output_padding`` -- and a key that is not canonical answers for nothing. The
     result is never emitted, only compared, so ``floor`` appearing in it costs nothing.
     """
-    substituted = _IDENT_RE.sub(lambda m: str(pinned[m.group()]) if m.group() in pinned else m.group(), text)
+    substituted = IDENT_RE.sub(lambda m: str(pinned[m.group()]) if m.group() in pinned else m.group(), text)
     canonical = sympify_shape(substituted)
     return str(canonical) if canonical is not None else fold_shape_expr(substituted)
 
@@ -4639,7 +4619,7 @@ def captured_parameter_names(hkir: KernelIR, abi: List[str], args: List[ast.expr
     parameter handed the caller's identically-named symbol is the same quantity twice.
     """
     extents = {s.name for s in hkir.symbols} | {d.name for d in hkir.scalars}
-    spelled = {ident for arr in hkir.arrays for dim in arr.shape for ident in _IDENT_RE.findall(str(dim))}
+    spelled = {ident for arr in hkir.arrays for dim in arr.shape for ident in IDENT_RE.findall(str(dim))}
     return sorted(
         pname
         for pname, arg in zip(abi, args)
@@ -4763,7 +4743,7 @@ def helper_call_bindings(owner: ast.FunctionDef, hkir: KernelIR, pinned: Dict[st
             # ``groups`` pinned to 1, ``c_out_per_group = out_channels // groups`` IS
             # ``out_channels``, and keeping both leaves the body writing ``c_out_per_group``
             # columns into a ``bias`` declared ``out_channels`` long.
-            if _IDENT_RE.fullmatch(recipe) and recipe in own and recipe != pname:
+            if IDENT_RE.fullmatch(recipe) and recipe in own and recipe != pname:
                 binding.collapse[pname] = recipe
             elif recipe in binding.expressions:
                 # TWO parameters computed the same way. Picking either respells an extent with a
@@ -4823,11 +4803,11 @@ def with_helper_vocabulary(hkir: KernelIR, binding: HelperBinding) -> KernelIR:
         # a COMPOUND extent: a bare symbol is a name the helper already has, and rewriting it to a
         # parameter that happens to equal it at this call site renames the wrong axis --
         # ``x``'s own ``c_in`` became the group width ``c_in // groups`` reaches when groups is 1.
-        if len(_IDENT_RE.findall(str(token))) > 1 or not _IDENT_RE.fullmatch(str(token).strip()):
+        if len(IDENT_RE.findall(str(token))) > 1 or not IDENT_RE.fullmatch(str(token).strip()):
             named = binding.expressions.get(folded_with_constants(str(token), binding.pinned))
             if named is not None:
                 return named
-        return _IDENT_RE.sub(lambda m: respelling.get(m.group(), m.group()), str(token))
+        return IDENT_RE.sub(lambda m: respelling.get(m.group(), m.group()), str(token))
 
     tree = hkir.tree
     if binding.collapse:
@@ -4863,7 +4843,7 @@ def with_solvable_extents(hkir: KernelIR) -> KernelIR:
     name the body or a sibling extent still needs.
     """
     body_names = {n.id for n in ast.walk(hkir.tree) if isinstance(n, ast.Name)}
-    bare = {str(d).strip() for a in hkir.arrays for d in a.shape if _IDENT_RE.fullmatch(str(d).strip())}
+    bare = {str(d).strip() for a in hkir.arrays for d in a.shape if IDENT_RE.fullmatch(str(d).strip())}
     supplied = body_names | bare | set(hkir.pinned_consts) | set(hkir.inlined_consts)
     taken = {a.name for a in hkir.arrays} | {s.name for s in hkir.scalars} | {s.name for s in hkir.symbols}
     taken |= body_names | supplied
@@ -4872,7 +4852,7 @@ def with_solvable_extents(hkir: KernelIR) -> KernelIR:
     for arr in hkir.arrays:
         dims: List[str] = []
         for dim in arr.shape:
-            idents = _IDENT_RE.findall(str(dim))
+            idents = IDENT_RE.findall(str(dim))
             if not idents or all(i in supplied for i in idents):
                 dims.append(str(dim))
                 continue
@@ -4890,7 +4870,7 @@ def with_solvable_extents(hkir: KernelIR) -> KernelIR:
         return hkir
     # A symbol the rewrite left in no shape is one dace can neither solve nor accept: passing a
     # keyword the callee does not take is a DaceSyntaxError, so retire it here.
-    standing = {i for a in arrays for d in a.shape for i in _IDENT_RE.findall(str(d))} | body_names
+    standing = {i for a in arrays for d in a.shape for i in IDENT_RE.findall(str(d))} | body_names
     return dataclasses.replace(hkir, arrays=arrays, symbols=[s for s in hkir.symbols if s.name in standing])
 
 
@@ -4903,8 +4883,8 @@ def inferred_symbols(rendered: RenderedProgram) -> Set[str]:
     """
     named: Set[str] = set()
     for param in rendered.params:
-        _, _, annotation = param.partition(":")
-        named.update(_IDENT_RE.findall(annotation))
+        annotation = param.partition(":")[2]
+        named.update(IDENT_RE.findall(annotation))
     return {s for s in rendered.symbol_names if s in named}
 
 
@@ -4944,7 +4924,7 @@ def extent_pins(extent: str, symbol: str) -> bool:
     annotation and constrains nothing, so dace has no equation to solve and reports the argument as
     missing. Folded rather than compared verbatim, because the cancellation is what has to be seen.
     """
-    substituted = [_IDENT_RE.sub(lambda m: value if m.group() == symbol else m.group(), extent) for value in ("1", "2")]
+    substituted = [IDENT_RE.sub(lambda m: value if m.group() == symbol else m.group(), extent) for value in ("1", "2")]
     return fold_shape_expr(substituted[0]) != fold_shape_expr(substituted[1])
 
 
@@ -4959,7 +4939,7 @@ def unsolvable_signature_symbols(rendered: RenderedProgram) -> List[str]:
     """
     inferred = inferred_symbols(rendered)
     extents = declared_extents(rendered)
-    idents = [(extent, {s for s in inferred if s in set(_IDENT_RE.findall(extent))}) for extent in extents]
+    idents = [(extent, {s for s in inferred if s in set(IDENT_RE.findall(extent))}) for extent in extents]
     pinned: Set[str] = set()
     while True:
         found = {
@@ -5223,7 +5203,7 @@ def substituted_extent(token: object, substitutions: Dict[str, str]) -> str:
     """``token`` with every substituted symbol spelled as the expression its call site binds it to."""
     if not substitutions:
         return str(token)
-    return _IDENT_RE.sub(
+    return IDENT_RE.sub(
         lambda m: f"({substitutions[m.group()]})" if m.group() in substitutions else m.group(), str(token)
     )
 
