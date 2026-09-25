@@ -29,7 +29,7 @@ the submitter and the launcher cannot disagree; always size with it rather than 
 
 One judge NODE is four ranks, one per socket (`GRADE_CPUS` = cores-per-socket, from
 `run_cluster.sh:88`). `JUDGE_NODES` is set per arm from the grading-rate formula in
-[`SUBMITTING.md`](../SUBMITTING.md); current arms use 1, 2 or 3 depending on their agent count.
+[`SUBMITTING.md`](SUBMITTING.md); current arms use 1, 2 or 3 depending on their agent count.
 
 ## Submitting one arm
 
