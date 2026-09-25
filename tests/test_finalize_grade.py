@@ -102,10 +102,11 @@ def plan(
     env = {
         **os.environ,
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-        "PYTHONPATH": f"{REPO}",
+        "REPO_PYTHON": sys.executable,
         "SLURM_JOB_ID": own_job,
     }
-    argv = [sys.executable, str(EXPERIMENTS / "regrade_rest.py"), "--job", job, "--worklist-out", str(out)]
+    argv = [str(REPO / "scripts" / "repo_python"), str(EXPERIMENTS / "regrade_rest.py"), "--job", job]
+    argv += ["--worklist-out", str(out)]
     argv += ["--runs", str(tmp_path / "runs"), "--regrades", str(tmp_path / "regrades" / "mwd-final-regrades-*")]
     argv += ["--sbatch-dir", str(tmp_path), "--exempt", str(exempt or tmp_path / "no-exempt.tsv")]
     done = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=300, check=False)
