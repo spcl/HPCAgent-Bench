@@ -141,15 +141,6 @@ deadline_setup "${DEADLINE}" "${DEADLINE_MARGIN_SECONDS}" || exit 2
 BEGIN=${BEGIN:-${DEADLINE:+now}}
 [[ "${BEGIN}" == now ]] && BEGIN=""
 
-# agent_seconds <base-env> -- the wall clock ONE agent gets. The models' own budgets already carry
-# the 1.5x the campaign grants a long arm (qwen38/oss120b 21600, kimi27sglang 43200): read, never
-# multiplied here, so an arm cannot silently measure a different episode length than the .env says.
-agent_seconds() {
-    local base="$1" configured
-    configured=$(scaled_budget_from "${base}" AGENT_TIMEOUT_SECONDS) || return 2
-    deadline_shrink_seconds "${configured}" "${base}"
-}
-
 submit_arm() {  # submit_arm <model>
     local model="$1"
     # The packet is IN the arm key: the two treatments of one model are two arms, and one key
@@ -193,9 +184,9 @@ submit_arm() {  # submit_arm <model>
         --repeat "$(model_repeat "${model}")" >"${problems}.tmp"
     mv -f "${problems}.tmp" "${problems}"
 
-    local agent; agent=$(agent_seconds ".env.base-${model}") || exit 2
-    local tokens; tokens=$(scaled_budget_from ".env.base-${model}" AGENT_MAX_TOKENS) || exit 2
-    stage_base_env ".env.base-${model}" "${arm}" "${EXPERIMENT}" "${STAMP}" "${staged}" \
+    local agent; agent=$(agent_seconds "campaign:${model}") || exit 2
+    local tokens; tokens=$(scaled_budget_from "campaign:${model}" AGENT_MAX_TOKENS) || exit 2
+    stage_base_env "campaign:${model}" "${arm}" "${EXPERIMENT}" "${STAMP}" "${staged}" \
         -e "s|^PROBLEMS_FILE=.*|PROBLEMS_FILE=${problems}|" \
         -e "s|^LANGUAGE=.*|LANGUAGE=${LANGUAGE}|" \
         -e "s|^AGENT_PROMPT_FILE=.*|AGENT_PROMPT_FILE=${PROMPT}|" \
@@ -205,7 +196,7 @@ submit_arm() {  # submit_arm <model>
     # Serving config is inherited whole from the model layer and must not vary between arms; an
     # absent INFERENCE_NODES would still submit, because arm_nodes falls back to 2.
     grep -q '^INFERENCE_NODES=[0-9]' "${staged}" \
-        || { echo "${staged}: .env.base-${model} renders no INFERENCE_NODES" >&2; rm -f "${staged}"; exit 2; }
+        || { echo "${staged}: campaign:${model} renders no INFERENCE_NODES" >&2; rm -f "${staged}"; exit 2; }
 
     # The topology: one development node per arm, JUDGE_GANG_COUNT one-node gang judges.
     pin_env_kv "${staged}" "AGENT_NODES=1"

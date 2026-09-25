@@ -14,15 +14,13 @@ import shutil
 import subprocess
 import sys
 
+from tests.env_render import SPEC_INPUTS
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
 
 SUBMIT_INPUTS = (
-    # the layered bases' parents and their renderer (experiments/README.md "Env layers")
-    "env_layers.sh",
-    "layers/common.env",
-    "layers/model-qwen38.env",
-    "layers/model-kimi27sglang.env",
+    *SPEC_INPUTS,
     "submit-git-scicomp.sh",
     "check_problems.sh",
     "arm_nodes.sh",
@@ -32,8 +30,6 @@ SUBMIT_INPUTS = (
     "make_problems.py",
     "packet_env.py",
     "kernels-git-scicomp.txt",
-    ".env.llrbase-qwen38-c",
-    ".env.llrbase-kimi27sglang-c",
 )
 
 #: The full roster kernels-git-scicomp.txt names today; a change there would need this updated too.

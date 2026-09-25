@@ -3,8 +3,8 @@
 `Qwen/Qwen3.8-27B-FP8`. One node, four GPUs. The cheapest useful endpoint on this machine and the
 one to start from.
 
-Authoritative source: `experiments/.env.base-qwen38`. If this page and that file disagree, the file
-is right. Cross-model background is in [`knobs.md`](knobs.md).
+Authoritative source: `experiments/layers/model-qwen38.env` and `experiments/arms.yaml` (render
+`campaign:qwen38`). If this page and those files disagree, the files are right. Cross-model background is in [`knobs.md`](knobs.md).
 
 ## Configuration
 

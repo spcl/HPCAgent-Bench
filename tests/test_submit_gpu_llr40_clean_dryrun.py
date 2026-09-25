@@ -19,16 +19,14 @@ import sys
 
 import pytest
 
+from tests.env_render import SPEC_INPUTS, set_base
 from tests.test_submit_scicomp_dc_cpfsrc import env_dict, stub
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
 
 SUBMIT_INPUTS = (
-    # the layered bases' parents and their renderer (experiments/README.md "Env layers")
-    "env_layers.sh",
-    "layers/common.env",
-    "layers/model-qwen38.env",
+    *SPEC_INPUTS,
     "submit-gpu-llr40.sh",
     "arm_nodes.sh",
     "record_identity.sh",
@@ -36,7 +34,6 @@ SUBMIT_INPUTS = (
     "pin_env_kv.sh",
     "make_problems.py",
     "packet_env.py",
-    ".env.base-qwen38",
 )
 
 #: Real llr-focus40 kernels (shared with tests/test_submit_cpf_llr40.py), so make_problems.py's
@@ -47,7 +44,7 @@ ROSTER_KERNELS = ("fuse_diamond", "tsvc_2_s115")
 STAGING_SECONDS = 3 * 3600
 #: submit-gpu-llr40.sh: the slack between the job's own end and the deadline.
 MARGIN_SECONDS = 300
-#: .env.base-qwen38's own AGENT_TIMEOUT_SECONDS: the episode every hip arm runs, deadline or no.
+#: base-qwen38's own AGENT_TIMEOUT_SECONDS: the episode every hip arm runs, deadline or no.
 CONFIGURED_AGENT_SECONDS = 21600
 #: How far ahead the deadline is placed. Far enough that the job limit alone would allow a LONGER
 #: episode than the base env's, which is the case the cap exists for.
@@ -288,11 +285,7 @@ def test_walltime_scales_with_the_subsets_own_kernel_count(tmp_path: pathlib.Pat
     AGENTS_PER_NODE down to 1 worker to force one batch PER kernel and prove a 3-kernel subset needs
     more wall clock than the 2-kernel one (test_a_wave_without_clean_or_a_deadline_is_unchanged)."""
     root = submit_tree(tmp_path)
-    # The key lives in the model layer the base extends (experiments/layers), not in the base itself.
-    layer = root / "experiments" / "layers" / "model-qwen38.env"
-    text, pinned = re.subn(r"^AGENTS_PER_NODE=\d+$", "AGENTS_PER_NODE=1", layer.read_text(), flags=re.MULTILINE)
-    assert pinned == 1, "the fixture no longer pins AGENTS_PER_NODE: the premise below would not hold"
-    layer.write_text(text)
+    set_base(root / "experiments", "campaign:qwen38", AGENTS_PER_NODE=1)
     three_kf = root / "experiments" / "three.txt"
     three_kf.write_text("fuse_diamond\ntsvc_2_s115\nargmax_with_index\n")
     result = run_submit(root, MODELS="qwen38", LANGUAGES="hip", LEGS="0", KERNELS_FILE="three.txt")

@@ -15,15 +15,14 @@ import sys
 
 import pytest
 
+from tests.env_render import SPEC_INPUTS, copy_base
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
 LAUNCHER = "submit-scicomp-perf-playbook.sh"
 
 SUBMIT_INPUTS = (
-    # the layered bases' parents and their renderer (experiments/README.md "Env layers")
-    "env_layers.sh",
-    "layers/common.env",
-    "layers/model-qwen38.env",
+    *SPEC_INPUTS,
     LAUNCHER,
     "check_problems.sh",
     "arm_nodes.sh",
@@ -32,7 +31,6 @@ SUBMIT_INPUTS = (
     "submit_common.sh",
     "make_problems.py",
     "packet_env.py",
-    ".env.llrbase-qwen38-c",
 )
 
 #: Real scientific_computing kernels, so make_problems.py resolves them without a fabricated manifest.
@@ -153,7 +151,7 @@ def test_a_second_models_complement_leaves_a_queued_arms_problems_untouched(tmp_
     ".env.scicomp-perf-playbook-oss120b-plain" a later full-roster submission of that model would read."""
     root = submit_tree(tmp_path)
     experiments = root / "experiments"
-    (experiments / ".env.llrbase-oss120b-c").write_text((experiments / ".env.llrbase-qwen38-c").read_text())
+    copy_base(experiments, "llrbase-c:qwen38", "llrbase-c:oss120b")
     (experiments / "owed-oss120b.txt").write_text("dfa\n")
     first = run_submit(root, ARMS="plain")
     second = run_submit(root, ARMS="plain", MODELS="oss120b", KERNELS_FILE="owed-oss120b.txt")

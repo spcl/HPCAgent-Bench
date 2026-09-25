@@ -15,9 +15,12 @@ import subprocess
 
 import pytest
 
+from tests.env_render import rendered
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "containers" / "cluster" / "ce-images" / "inference" / "serve-private.sbatch"
-CAMPAIGN_ENV = ROOT / "experiments" / ".env.llrbase-qwen38-c"
+#: The qwen38 campaign base whose serving flags the mi300 preset mirrors.
+CAMPAIGN_BASE = "llrbase-c:qwen38"
 KEY = "0123456789abcdef" * 4
 PRESETS = ("mi300", "mi200")
 #: The partition each preset must refuse.
@@ -82,8 +85,8 @@ def flags(words: list[str]) -> dict[str, str]:
 
 def campaign_sglang_flags() -> dict[str, str]:
     """SGLANG_EXTRA_ARGS of the qwen38 campaign, with ${SCRIPT_DIR} expanded as sourcing does."""
-    found = re.findall(r'^SGLANG_EXTRA_ARGS="([^"]*)"$', CAMPAIGN_ENV.read_text(encoding="utf-8"), re.MULTILINE)
-    assert len(found) == 1, CAMPAIGN_ENV
+    found = re.findall(r'^SGLANG_EXTRA_ARGS="([^"]*)"$', rendered(CAMPAIGN_BASE), re.MULTILINE)
+    assert len(found) == 1, CAMPAIGN_BASE
     return flags(found[0].replace("${SCRIPT_DIR}", str(ROOT / "experiments")).split())
 
 

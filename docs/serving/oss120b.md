@@ -3,7 +3,7 @@
 `openai/gpt-oss-120b`. One node, four GPUs. The only model here served by **vLLM** rather than
 SGLang.
 
-Authoritative source: `experiments/.env.base-oss120b` plus the `hpcagent-bench-vllm-mi300-latest` EDF, which owns
+Authoritative source: `experiments/layers/model-oss120b.env` (render `campaign:oss120b`) plus the `hpcagent-bench-vllm-mi300-latest` EDF, which owns
 `VLLM_PLUGINS`. If this page and those disagree, they are right. Cross-model background is in
 [`knobs.md`](knobs.md).
 

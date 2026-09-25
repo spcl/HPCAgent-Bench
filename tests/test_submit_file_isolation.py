@@ -30,6 +30,7 @@ ask for more tokens without asking sbatch for a --time no partition will grant.
 import pathlib
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -301,13 +302,19 @@ def test_scaled_budget_from_reports_the_same_capped_value_it_writes(tmp_path: pa
     """The provenance RECORD_AGENT_TIMEOUT_SECONDS/RECORD_AGENT_MAX_TOKENS lines a submit-*.sh
     appends are exactly scaled_budget_from's own return value -- if that value were not already
     the capped one, a rerun's rows would record a budget the job never actually ran under."""
-    base = tmp_path / ".env.base-kimi27sglang"
+    base = tmp_path / "base.env"
     base.write_text("AGENT_TIMEOUT_SECONDS=28800\nAGENT_MAX_TOKENS=12000000\n")
     result = run_common(
         tmp_path,
         f'echo "[$(scaled_budget_from "{base}" AGENT_TIMEOUT_SECONDS)]'
         f'[$(scaled_budget_from "{base}" AGENT_MAX_TOKENS)]"',
-        {"TOKEN_SCALE": "4", "TIME_SCALE": "4", "STAGING_HOURS": "3", "PARTITION_TIME_LIMIT_HOURS": "23"},
+        {
+            "PY": sys.executable,
+            "TOKEN_SCALE": "4",
+            "TIME_SCALE": "4",
+            "STAGING_HOURS": "3",
+            "PARTITION_TIME_LIMIT_HOURS": "23",
+        },
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "[72000][48000000]"  # 20h capped, 48M uncapped

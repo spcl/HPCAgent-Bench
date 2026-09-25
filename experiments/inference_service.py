@@ -70,7 +70,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 #: What the run records about its inference, beside the judge databases.
 RECORD_NAME = "inference.json"
 
-#: The example service arms that ship with the repo, as ``.env.base-<name>`` and a models.py block.
+#: The example service models that ship with the repo, as ``layers/model-<name>.env``.
 EXAMPLE_ARMS = ("musespark", "fable51", "gpt6astra")
 
 #: Every variable through which the claude CLI picks a model on its own: the small/fast model for

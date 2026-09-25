@@ -250,12 +250,12 @@ agent and judge files copied by its container build.
 
 ## Configure the run
 
-No template ships in this directory. Render one of the layered bases (see "Env layers" below) or
-write `experiments/.env` from the variable tables below, then restrict its permissions before
-adding secrets:
+No template ships in this directory. Render a base (see "Arm envs" below) or write
+`experiments/.env` from the variable tables below, then restrict its permissions before adding
+secrets:
 
 ```bash
-experiments/env_layers.sh render experiments/.env.base-qwen38 >experiments/.env
+experiments/env_layers.sh render campaign:qwen38 >experiments/.env
 chmod 600 experiments/.env
 ```
 
@@ -337,15 +337,13 @@ incomplete block, and a service arm that still claims an inference node.
 
 #### The three examples
 
-| Arm env | Service | Model id | Harness | Notes |
+| Model layer | Service | Model id | Harness | Notes |
 | --- | --- | --- | --- | --- |
-| `.env.base-musespark` | Meta Model API, `https://api.meta.ai/v1` | `muse-spark-1.3-contributor` | claude | Messages surface, bearer auth, 1,048,576-token window. |
-| `.env.base-fable51` | Anthropic, `https://api.anthropic.com/v1` | `claude-fable-5-1` | claude | Messages surface, `x-api-key` auth. |
-| `.env.base-gpt6astra` | OpenAI, `https://api.openai.com/v1` | `gpt-6-astra` | openhands | Chat completions, bearer auth. |
+| `layers/model-musespark.env` | Meta Model API, `https://api.meta.ai/v1` | `muse-spark-1.3-contributor` | claude | Messages surface, bearer auth, 1,048,576-token window. |
+| `layers/model-fable51.env` | Anthropic, `https://api.anthropic.com/v1` | `claude-fable-5-1` | claude | Messages surface, `x-api-key` auth. |
+| `layers/model-gpt6astra.env` | OpenAI, `https://api.openai.com/v1` | `gpt-6-astra` | openhands | Chat completions, bearer auth. |
 
-Each block lives in `experiments/models.py` beside the served models, and a test asserts the `.env`
-files still match it -- a block edited in one place and not the other is the drift that table
-exists to prevent.
+The keys all hosted models share live in `layers/service.env`.
 
 **The contributor tier trains on your traffic.** Meta's contributor tier buys its discount (about
 92% off input and 95% off output) with permission to train future Meta models on the prompts and
@@ -411,7 +409,7 @@ export META_MODEL_API_KEY=...
 cd experiments && ./run_campaign.sh smoke-llr4-cpp --partition=mi300
 ```
 
-with `CAMPAIGN_ARM`, `PROBLEMS_FILE` and the service block copied from `.env.base-musespark`.
+with `CAMPAIGN_ARM`, `PROBLEMS_FILE` and the service block from `env_spec.py render campaign:musespark`.
 
 #### Provenance and token accounting
 
@@ -599,26 +597,52 @@ does not repeat them.
   and a stale graphroot breaks the next job on that node. `run_cluster.sh` does not do this for
   you; the image builds do it in `containers/cluster/ce-images/build_common.sh` (`ce_podman_env`).
 
-## Env layers
+## Arm envs: layers, arms.yaml, rendered env
 
-Hand-edited sources, each naming its parent on a `# extends: <path>` line (later key wins):
+Every job sources ONE flat `KEY=VALUE` file. Nobody writes that file by hand and git holds none of
+them: a submit script renders it at submit time from two sources.
 
-| Layer | Holds |
-| --- | --- |
-| `layers/common.env` | defaults every model and campaign shares: judge sizing, images, budgets, paths |
-| `layers/model-<m>.env` | one model's serving config (extends `common.env`) |
-| `.env.base-<m>` | llr40 campaign base (extends the model layer, or `common.env` for a hosted model) |
-| `.env.llrbase-<m>-<lang>[-skills]` | llrblind/scicomp base; `-c` extends the model layer, siblings extend `-c` |
+| Source | Holds | Add one when |
+| --- | --- | --- |
+| `layers/common.env` | what every arm shares: judge sizing, images, default budgets, submission mode | never, edit it |
+| `layers/served.env`, `sglang.env`, `replicas.env`, `pp.env`, `service.env` | what a family of models shares (endpoint ports, sglang, one-node replicas, 4-node pipeline, hosted API) | a new family |
+| `layers/model-<m>.env` | one model: image, checkpoint, engine args; `# extends:` the family layers it needs | a new model |
+| `arms.yaml` | per campaign: the keys it sets on every model (`env`) and per model (`models.<m>`) | a new campaign |
+| `layers/partition-<p>[-<m>].env` | a non-mi300 partition, pinned by `apply_partition` (smokes only) | a new partition |
 
-`./env_layers.sh render <file>` prints the flat `KEY=VALUE` env a layer stands for. Values are
-copied verbatim, so `${SCRATCH:?}` still resolves where the job sources the result.
+A layer names its parents on `# extends: <path>` lines (several are merged in order).
+`env_spec.py` renders `<campaign>:<model>`, lowest precedence first: `common.env`, the campaign's
+`env`, the rest of the model's layer chain, the campaign's `models.<model>`. So a campaign default
+(`AGENT_TIMEOUT_SECONDS: 21600`) yields to a model that needs more (`pp.env`'s 43200), and a
+`models` entry is the explicit exception to both. Every key-value is stated once.
 
-A submitter renders a base, applies the arm's own keys (name, packet, language, device, budget,
-problems file) and writes `.env.<arm>`: the arm's LATEST render, untracked, rewritten by every
-staging or `SUBMIT=0` dry run of that arm. The job never reads it. `submit_arm_job` (and
-`submit-harness-focus20.sh`) snapshot it first: `.rendered/<arm>-<UTC time>-<hash>.env` plus a copy
-of its problems file, both read-only, never overwritten, kept as provenance, and passed as
-`CLUSTER_ENV_FILE`. A queued job cannot see a later submission of the same arm.
+```bash
+cd experiments
+PY=$SCRATCH/venv-hpcagent-bench-314/bin/python
+$PY env_spec.py list                         # every <campaign>:<model> that renders
+$PY env_spec.py render campaign:qwen38       # the flat base the llr40 submitters stage
+./env_layers.sh render llrbase-c:kimi27sglang
+```
+
+A submitter stages the base, pins the arm's own keys (name, packet, language, device, budget,
+problems file) and writes `.env.<arm>`: the arm's latest render, untracked, rewritten by every
+staging or `SUBMIT=0` dry run. The job never reads it. `submit_arm_job` snapshots it first to
+`.rendered/<arm>-<UTC time>-<hash>.env` plus a copy of its problems file, both read-only, and passes
+that as `CLUSTER_ENV_FILE`, so a queued job cannot see a later submission of the same arm.
+
+One arm, end to end (dry run, then submit):
+
+```bash
+cd experiments
+SUBMIT=0 MODELS=qwen38 LANGS=c SKILLS=plain ./submit-llrblind.sh   # renders llrbase-c:qwen38
+cat .env.llrblind-qwen38-c                                          # the staged arm env
+SUBMIT=1 MODELS=qwen38 LANGS=c SKILLS=plain ./submit-llrblind.sh   # snapshots and sbatches it
+```
+
+To add a model: write `layers/model-<m>.env` extending the family layers it needs. It then renders
+in every campaign; add a `models.<m>` entry in `arms.yaml` only for a campaign where it must
+differ. To add a campaign: add an `arms.yaml` entry and have its submit script stage
+`<campaign>:${model}` with `stage_base_env`.
 
 ## Campaign arms
 
@@ -693,8 +717,8 @@ path segment plus the language's one extension.
 
 Commands with a worked example are in `LAUNCH.md` section 1. This is what happens underneath.
 
-**1. What is owed.** `remaining_kernels.py` reads every run root under `$SCRATCH/hpcagent-bench-runs`
-and, per arm identity (`X` and `X-clean` are one identity), marks a roster kernel delivered when a
+**1. What is owed.** `remaining_kernels.py` reads the run roots it is given (`--run-root`, repeatable;
+`owed_wave.py` passes the experiment's roots under `$SCRATCH/hpcagent-bench-runs`) and, per arm identity (`X` and `X-clean` are one identity), marks a roster kernel delivered when a
 job of that identity holds a real grade for it (a `submissions` row, or a genuine `attempts` row
 graded after the kernel's manifest last changed). Every other kernel is owed, classed by how its
 latest episode ended:
@@ -711,7 +735,7 @@ arm ran with more. The arm's own is its newest launch no owed rule scaled -- a f
 
 | Experiment | Policy 1x |
 | --- | --- |
-| `llr-focus40`, `llr-focus40-blind` | the model base `.env.base-<model>`: 24M tokens, 21600 s qwen38/oss120b, 43200 s kimi |
+| `llr-focus40`, `llr-focus40-blind` | the model base `campaign:<model>`: 24M tokens, 21600 s qwen38/oss120b, 43200 s kimi |
 | `harness20`, `harness-focus20` | 24M tokens, 21600 s (the harness20 claude arms ran 28800 s, so theirs is 28800 s) |
 | `scicomp-focus40`, `git-scicomp` | 120M tokens, 72000 s |
 
@@ -808,7 +832,7 @@ jobs. The figure reader strips `-clean` (`experiments.fold_clean_arms`, spec X9)
 `population.latest_runs` keeps the latest run per (arm, kernel): a rerun replaces only the kernels
 it ran. After the waves end, the same dry run must print `no owed kernels for <model>`.
 
-## Frozen observations and setups to rerun (2026-09-19)
+## Frozen observations and setups to rerun
 
 The reducer's dropped mode deleted 147 job directories, judge DBs included. Their rows survive in a
 read-only extraction: `$HPCAGENT_BENCH_FROZEN_OBSERVATIONS`, default
@@ -818,7 +842,8 @@ and read a job from its frozen rows only when its live directory is gone (the li
 job; a row purged from a live DB stays purged). The extractor also takes the frozen `task` (token) row
 of a worker whose `tokens.json` a reducer removed from a live job, or cut down to `tokens.json` after the
 snapshot (the snapshot row keeps the prompt-time start). Extracted rows carry `frozen=1`. A frozen job has no `tokens.json`, so an owed kernel whose
-only episode was in it classifies as `infra`. `owed_wave.py` does not read frozen rows.
+only episode was in it classifies as `infra`. `owed_wave.py` reads them the same way, so a frozen
+kernel is not replanned.
 
 `rerun-lost.tsv` tracks the 19 setups those jobs belonged to (`arm`, `deleted_jobs`, `reason`,
 `status` = `pending` | `rerun-submitted` | `done`). The board shows each as `rerun` (yellow) with its
@@ -1173,4 +1198,7 @@ EDF availability, distributed vLLM startup, inter-node networking, and GPU use.
 - Agents are distributed over judge replicas by `problem_index % len(judges)` (see
   [Rank](#tasks-per-node) above); there is no failover if the judge a given agent was assigned
   goes down mid-run.
-- Runs do not yet provide checkpointing, resume, or problem-level retry policy.
+- There is no in-job checkpoint of an agent's workspace. Recovery is at three other levels: a crashed
+  agent is relaunched from an empty workspace up to `AGENT_CRASH_ATTEMPTS` (3) times, a regrade
+  resumes from its per-shard DBs, and every missing (arm, kernel) is replanned as an owed wave; see
+  [`docs/owed_and_checkpointing.md`](../docs/owed_and_checkpointing.md).

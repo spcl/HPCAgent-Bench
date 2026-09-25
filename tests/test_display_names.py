@@ -14,7 +14,7 @@ import pytest
 
 from hpcagent_bench import experiment_tags, paths
 from hpcagent_bench.stats import palette
-from tests.env_render import rendered
+from tests.env_render import BASES, rendered
 
 ENVS = paths.ROOT / "experiments"
 
@@ -27,15 +27,9 @@ OPTIMIZER = re.compile(r"^HPCAGENT_BENCH_OPTIMIZER=(.+)$", re.MULTILINE)
 RECORD_MODEL = re.compile(r"^HPCAGENT_BENCH_RECORD_MODEL=(.+)$", re.MULTILINE)
 
 
-#: Generator SEEDS, not arms. `.env.base-<model>` and `.env.llrbase-<model>-<lang>` are the
-#: templates a launcher copies and then stamps; they describe no run and record no identity.
-SEED = re.compile(r"^\.env\.(base|llrbase)-")
-
-
 def arm_envs() -> list[pathlib.Path]:
-    return sorted(
-        p for p in ENVS.glob(".env.*") if p.is_file() and not p.name.endswith(".example") and not SEED.match(p.name)
-    )
+    """The arm envs submitters have staged in this checkout (none in a fresh clone)."""
+    return sorted(p for p in ENVS.glob(".env.*") if p.is_file() and not p.name.endswith(".example"))
 
 
 def test_the_registry_parses_and_every_section_a_figure_reads_is_populated() -> None:
@@ -67,13 +61,13 @@ def test_the_registered_checkpoint_is_what_the_arms_served() -> None:
     generated .env files, which is what the runner actually hands the endpoint.
     """
     served: dict[str, set[str]] = {}
-    # the sources: every arm of model <m> is rendered from .env.base-<m> or .env.llrbase-<m>-*
-    # (a hosted base the registry does not list yet has served no arm)
+    # the sources: every arm of model <m> is rendered from some <campaign>:<m>
+    # (a hosted model the registry does not list yet has served no arm)
     registered = set(experiment_tags.registry().models)
-    for base in sorted(ENVS.glob(".env.*base-*")):
+    for base in BASES:
         optimizer = OPTIMIZER.search(rendered(base))
         if optimizer:
-            model = SEED.sub("", base.name).split("-")[0]
+            model = base.split(":", 1)[1]
             if model in registered:
                 served.setdefault(model, set()).add(optimizer.group(1).strip())
     for env in arm_envs():

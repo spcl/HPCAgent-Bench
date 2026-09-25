@@ -273,7 +273,7 @@ class RecordingHandler(http.server.BaseHTTPRequestHandler):
     required: ClassVar[tuple[str, ...]] = ()
     path_wanted: ClassVar[str] = "/"
 
-    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler's spelling
+    def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length") or 0)
         payload = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
         headers = {name.lower(): value for name, value in self.headers.items()}
@@ -290,7 +290,7 @@ class RecordingHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - the base class's name
+    def log_message(self, format: str, *args: object) -> None:
         return
 
 
@@ -457,23 +457,11 @@ def test_a_service_arm_writes_no_key_into_the_usage_file(
         assert SECRET not in (tmp_path / name).read_text(encoding="utf-8")
 
 
-def test_the_example_arms_match_the_model_table(service: types.ModuleType) -> None:
-    """models.py is the one source of a model's block; an example env edited without it is exactly
-    the drift the table exists to prevent."""
-    if str(EXPERIMENTS) not in sys.path:
-        sys.path.insert(0, str(EXPERIMENTS))
-    models = load("models", EXPERIMENTS / "models.py")
-    for name in service.EXAMPLE_ARMS:
-        text = rendered(EXPERIMENTS / f".env.base-{name}")
-        for key, value in models.MODELS[name].items():
-            assert f"{key}={value}" in text, f"{key} in models.py no longer matches .env.base-{name}"
-
-
 @pytest.mark.parametrize("name", ["musespark", "fable51", "gpt6astra", "unionalpha"])
 def test_every_example_arm_resolves_when_its_key_is_set(service: types.ModuleType, name: str) -> None:
     """Each shipped example must be a WORKING arm, not a template: reading its env plus the one
     variable it names has to produce a resolved service."""
-    text = rendered(EXPERIMENTS / f".env.base-{name}")
+    text = rendered(f"campaign:{name}")
     arm = dict(line.split("=", 1) for line in text.splitlines() if line and not line.startswith("#") and "=" in line)
     arm = {key: value.strip('"') for key, value in arm.items()}
     arm[arm["INFERENCE_SERVICE_KEY_ENV"]] = SECRET
@@ -485,7 +473,7 @@ def test_every_example_arm_resolves_when_its_key_is_set(service: types.ModuleTyp
 def test_a_service_arm_never_leaks_its_key_into_the_staged_arm_env() -> None:
     """The arm env is copied into the run tree and read by every role; the key is named there, not
     written there, so rotating it never means editing a committed file."""
-    text = rendered(EXPERIMENTS / ".env.base-musespark")
+    text = rendered("campaign:musespark")
     assert "META_MODEL_API_KEY=" not in text.replace("INFERENCE_SERVICE_KEY_ENV=META_MODEL_API_KEY", "")
 
 
@@ -548,7 +536,7 @@ def test_a_free_only_arm_refuses_any_listing_that_does_not_prove_the_model_free(
 def test_every_model_the_claude_cli_picks_itself_is_pinned_to_the_arm_model(service: types.ModuleType) -> None:
     """Unpinned, the CLI's side requests name a Claude model; a router answers that with a model the
     arm never declared, which on OpenRouter is billed."""
-    text = rendered(EXPERIMENTS / ".env.base-unionalpha")
+    text = rendered("campaign:unionalpha")
     arm = dict(line.split("=", 1) for line in text.splitlines() if line and not line.startswith("#") and "=" in line)
     arm = {key: value.strip('"') for key, value in arm.items()}
     arm["OPENROUTER_API_KEY"] = SECRET
@@ -571,5 +559,5 @@ def test_the_launcher_exports_every_pinned_model_variable_after_the_free_check(s
 
 
 def test_the_free_only_example_arm_declares_the_check(service: types.ModuleType) -> None:
-    text = rendered(EXPERIMENTS / ".env.base-unionalpha")
+    text = rendered("campaign:unionalpha")
     assert f"{service.FREE_ONLY_KEY}=1" in text.splitlines()

@@ -23,6 +23,8 @@ import pathlib
 import re
 import subprocess
 
+from tests.env_render import BASES, rendered
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 IMAGES_ENV = REPO / "containers" / "cluster" / "ce-images" / "images.env"
 
@@ -66,14 +68,16 @@ def test_every_arm_names_an_installed_container_environment() -> None:
     assert installed, "images.env defined no *_EDF_LATEST names at all"
 
     offenders: list[str] = []
-    for env_file in sorted((REPO / "experiments").glob(".env.*")):
-        for line in env_file.read_text().splitlines():
+    sources = {base: rendered(base) for base in BASES}
+    sources |= {path.name: path.read_text() for path in sorted((REPO / "experiments").glob(".env.*"))}
+    for source, text in sources.items():
+        for line in text.splitlines():
             m = re.match(r"\s*(" + "|".join(CE_ENV_KEYS) + r")=(\S+)", line)
             if not m:
                 continue
             name = m.group(2).strip().strip("\"'")
             if name and name not in installed and name not in KNOWN_ONE_OFFS:
-                offenders.append(f"{env_file.name}: {m.group(1)}={name}")
+                offenders.append(f"{source}: {m.group(1)}={name}")
 
     assert not offenders, (
         "arms name container environments that images.env does not install, so the job dies "

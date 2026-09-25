@@ -18,10 +18,9 @@ from types import ModuleType
 
 import pytest
 
-from tests.env_render import rendered
+from tests.env_render import BASES, rendered
 
 EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "experiments"
-ARM_ENVS = sorted(EXPERIMENTS.glob(".env.*"))
 
 #: (served window, launcher reply cap) -> (L, R, T).
 POLICY = {
@@ -51,8 +50,8 @@ def harnesses_fixture() -> ModuleType:
     return load("harnesses")
 
 
-def env_values(path: pathlib.Path) -> dict[str, str]:
-    """The flat KEY=VALUE environment a job sources for ``path``, quotes stripped, with the launcher's
+def env_values(path: str) -> dict[str, str]:
+    """The flat KEY=VALUE environment a job sources for base ``path``, quotes stripped, with the launcher's
     reply cap (run_cluster.sh exports it)."""
     values = {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32768"}
     for line in rendered(path).splitlines():
@@ -78,9 +77,9 @@ def test_the_policy_leaves_the_reply_and_one_turn_under_the_capped_window(
     assert tuple(harnesses.context_policy(environment)) == POLICY[served, configured]
 
 
-@pytest.mark.parametrize("path", ARM_ENVS, ids=lambda path: path.name)
+@pytest.mark.parametrize("path", BASES)
 def test_every_arm_gives_every_harness_claudes_window_reply_and_trigger(
-    driver: ModuleType, harnesses: ModuleType, path: pathlib.Path
+    driver: ModuleType, harnesses: ModuleType, path: str
 ) -> None:
     """The window is read from the same keys; claude's percentage is truncated to 4 decimals, so its
     trigger may land a token or two before the runners', never after."""
