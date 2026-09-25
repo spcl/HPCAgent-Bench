@@ -10,12 +10,10 @@ nothing that cleans that tree -- and accounted for 35k of the 1.67M inodes that 
 """
 
 import pathlib
-import sys
 
 import pytest
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-import numerical_oracle as no  # noqa: E402
+from tests import numerical_oracle as no
 
 #: Every env var dace_build_root reads, cleared before each test so one test's setenv cannot leak
 #: into the next and so a developer's real shell (SCRATCH set on a login node) cannot change the

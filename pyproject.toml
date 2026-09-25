@@ -180,8 +180,9 @@ hpcagent_bench = [
 
 # Third-party warnings only (zero-warning policy for our own code).
 [tool.pytest.ini_options]
-# The checkout under test, not whatever tree an editable install points at.
-pythonpath = ["."]
+# The ONE place tests get their import path: the checkout under test (not whatever tree an editable
+# install points at), plus the script directories whose modules run as scripts beside each other.
+pythonpath = [".", "experiments", "experiments/mpi", "scripts", "containers/agent/tools", "containers/agent/harness"]
 filterwarnings = [
     # starlette's TestClient portal teardown, inside anyio/starlette.
     "ignore:.*BlockingPortal.*:DeprecationWarning:anyio",

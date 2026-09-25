@@ -5,7 +5,6 @@ worklist whose ``items[shard::4]`` is not the slot the planner sized would run a
 
 import importlib.util
 import pathlib
-import sys
 import types
 
 import pytest
@@ -17,7 +16,6 @@ SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "experiments" / "regrade_
 
 @pytest.fixture(scope="module")
 def planner() -> types.ModuleType:
-    sys.path.insert(0, str(SCRIPT.parent))
     spec = importlib.util.spec_from_file_location("regrade_rest", SCRIPT)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

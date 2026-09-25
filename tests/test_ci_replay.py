@@ -9,10 +9,10 @@ import sys
 import pytest
 import yaml
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "scripts"))
 
 import ci_replay  # pyright: ignore[reportMissingImports]
+
+REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize(

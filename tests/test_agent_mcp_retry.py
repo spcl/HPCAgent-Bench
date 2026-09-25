@@ -11,7 +11,6 @@ records rc=0 and the data point is simply gone, so the driver has to notice and 
 import importlib
 import json
 import pathlib
-import sys
 import threading
 import time
 
@@ -23,11 +22,7 @@ EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
 def load_driver(monkeypatch, **env):
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    sys.path.insert(0, str(EXAMPLE))
-    try:
-        return importlib.reload(importlib.import_module("agent_driver"))
-    finally:
-        sys.path.remove(str(EXAMPLE))
+    return importlib.reload(importlib.import_module("agent_driver"))
 
 
 def init_line(status):

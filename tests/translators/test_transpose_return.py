@@ -144,7 +144,7 @@ def validate_native(src, x, expected, out_shape, shapes, syms) -> None:
     oo.emit_native(npy, d / "bi.json", d, "f")
     binding = json.loads((d / "f_binding.json").read_text())
     by = {"x": x, "ret_arr0": np.zeros(out_shape, dtype=np.float64)}
-    exp = {"ret_arr0": no._norm(expected)}
+    exp = {"ret_arr0": no.comparison_array(expected)}
     for b, ext in (("c", ".c"), ("cpp", ".cpp"), ("fortran", ".f90")):
         so = d / f"l_{b}.so"
         cc = subprocess.run(no.native_build_command(b, d / f"f{ext}", so), capture_output=True, text=True)

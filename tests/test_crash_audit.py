@@ -13,7 +13,6 @@ import sys
 
 import pytest
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "experiments"))
 
 import crash_audit  # noqa: E402  -- path insert above must run first
 

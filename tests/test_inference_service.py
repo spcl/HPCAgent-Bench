@@ -50,14 +50,11 @@ def load(name: str, path: pathlib.Path) -> types.ModuleType:
 
 @pytest.fixture(name="service")
 def service_fixture() -> types.ModuleType:
-    if str(EXPERIMENTS) not in sys.path:
-        sys.path.insert(0, str(EXPERIMENTS))
     return load("inference_service", EXPERIMENTS / "inference_service.py")
 
 
 @pytest.fixture(name="runner_common")
 def runner_common_fixture(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
-    monkeypatch.syspath_prepend(str(AGENT_HARNESS))
     return load("runner_common", AGENT_HARNESS / "runner_common.py")
 
 

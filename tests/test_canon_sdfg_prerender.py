@@ -8,11 +8,9 @@ docstring's Usage), not by a unit test that would need a working DaCe install to
 
 import json
 import pathlib
-import sys
 
 import pytest
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 
 import canon_sdfg_prerender as csp  # noqa: E402
 
