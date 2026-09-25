@@ -225,7 +225,7 @@ jobs:
           - id: tree
             shard: "0/1"
             select: >-
-              hpcagent_bench/numpy_translators/tests/
+              tests/translators/
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -240,8 +240,8 @@ jobs:
         timeout-minutes: 20
         run: |
           python -m pytest -p no:cacheprovider -rfsxX -n auto --durations=25 --timeout=1500 \
-            --ignore=hpcagent_bench/numpy_translators/tests/test_pluto_no_helper_calls_in_scop.py \
-            -m "not integration" hpcagent_bench/numpy_translators/tests/
+            --ignore=tests/translators/test_pluto_no_helper_calls_in_scop.py \
+            -m "not integration" tests/translators/
       - name: Phase 6t -- integration-marked tests under the translator tree
         if: ${{ !cancelled() }}
         timeout-minutes: 22
@@ -395,7 +395,7 @@ jobs:
             tests/test_pluto_affine_detect.py \
             tests/test_pluto_genuine.py \
             tests/test_pluto_override.py \
-            hpcagent_bench/numpy_translators/tests/test_pluto_no_helper_calls_in_scop.py
+            tests/translators/test_pluto_no_helper_calls_in_scop.py
 
       - name: Phase 5 -- e2e numerical sweep [pluto] @ S
         if: ${{ !cancelled() }}

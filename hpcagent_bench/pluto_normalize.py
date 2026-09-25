@@ -34,7 +34,7 @@ _SCALAR_DECL_RE = re.compile(
 #: The emitted entry point: ``void <symbol>(<params>) {`` on one line, closed by ``}`` in column 0.
 _FUNC_RE = re.compile(r"^void (?P<name>\w+)\((?P<params>[^\n]*)\) \{\n(?P<body>.*?)^\}\n", re.MULTILINE | re.DOTALL)
 
-#: A for header the emitter writes for a literal step other than +1 (``_CBodyEmitter._emit_for``):
+#: A for header the emitter writes for a literal step other than +1 (``CBodyEmitter.emit_for``):
 #: ``i += s`` or the reverse ``--i``.
 _STRIDED_FOR_RE = re.compile(
     r"^(?P<indent>[ \t]*)for \(int64_t (?P<var>\w+) = (?P<lo>[^;\n]+); (?P=var) (?P<op>[<>]) (?P<hi>[^;\n]+); "

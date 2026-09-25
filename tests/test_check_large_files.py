@@ -78,5 +78,5 @@ def test_a_path_that_is_not_a_regular_file_is_skipped(tmp_path: pathlib.Path) ->
 def test_the_module_that_motivated_this_fits_under_the_text_limit(name: str) -> None:
     """A guard nobody can satisfy is a guard that gets bypassed. If this fails, the limit is not
     the answer any more -- split the module."""
-    path = paths.ROOT / "hpcagent_bench" / "numpy_translators" / "src" / "numpyto_common" / name
+    path = paths.ROOT / "hpcagent_bench" / "translators" / "numpyto_common" / name
     assert check_large_files.main([str(path)]) == 0, f"{name} outgrew the text limit; split it"

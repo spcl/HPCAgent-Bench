@@ -63,12 +63,12 @@ Changelog = "https://github.com/spcl/HPCAgent-Bench/blob/main/CHANGELOG.md"
 [project.scripts]
 hpcagent-bench = "hpcagent_bench.cli:main"
 hpcagent-bench-install-apptainer = "hpcagent_bench.containers:install_apptainer_main"
-numpyto = "numpyto_common.cli:main"
-numpyto_c = "numpyto_c.cli:main"
-numpyto_fortran = "numpyto_fortran.cli:main"
-numpyto_cupy = "numpyto_cupy.cli:main"
-numpyto_numba = "numpyto_numba.cli:main"
-numpyto_pythran = "numpyto_pythran.cli:main"
+numpyto = "hpcagent_bench.translators.numpyto_common.cli:main"
+numpyto_c = "hpcagent_bench.translators.numpyto_c.cli:main"
+numpyto_fortran = "hpcagent_bench.translators.numpyto_fortran.cli:main"
+numpyto_cupy = "hpcagent_bench.translators.numpyto_cupy.cli:main"
+numpyto_numba = "hpcagent_bench.translators.numpyto_numba.cli:main"
+numpyto_pythran = "hpcagent_bench.translators.numpyto_pythran.cli:main"
 
 # A platform installs exactly one of cpu / nvidia / amd: they carry different builds of torch.
 [project.optional-dependencies]
@@ -141,14 +141,10 @@ linting = ["ruff", "fprettify", "clang-format", "pre-commit"]
 dev = [{ include-group = "testing" }, { include-group = "linting" }]
 
 [tool.setuptools]
-# The numpyto_* translators ship in this distribution under their own top-level import names.
-package-dir = { "" = ".", numpyto_c = "hpcagent_bench/numpy_translators/src/numpyto_c", numpyto_common = "hpcagent_bench/numpy_translators/src/numpyto_common", numpyto_cupy = "hpcagent_bench/numpy_translators/src/numpyto_cupy", numpyto_fortran = "hpcagent_bench/numpy_translators/src/numpyto_fortran", numpyto_jax = "hpcagent_bench/numpy_translators/src/numpyto_jax", numpyto_numba = "hpcagent_bench/numpy_translators/src/numpyto_numba", numpyto_pythran = "hpcagent_bench/numpy_translators/src/numpyto_pythran" }
 include-package-data = true
 
 [tool.setuptools.packages.find]
-where = [".", "hpcagent_bench/numpy_translators/src"]
-include = ["hpcagent_bench*", "numpyto_*"]
-exclude = ["hpcagent_bench.numpy_translators*"]
+include = ["hpcagent_bench*"]
 
 # Listed explicitly: the judge image builds the wheel from hpcagent_bench/ and pyproject.toml alone
 # (no MANIFEST.in, no VCS file finder).
@@ -184,6 +180,8 @@ hpcagent_bench = [
 
 # Third-party warnings only (zero-warning policy for our own code).
 [tool.pytest.ini_options]
+# The checkout under test, not whatever tree an editable install points at.
+pythonpath = ["."]
 filterwarnings = [
     # starlette's TestClient portal teardown, inside anyio/starlette.
     "ignore:.*BlockingPortal.*:DeprecationWarning:anyio",

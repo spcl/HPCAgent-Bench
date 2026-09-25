@@ -22,7 +22,7 @@ repos:
         # Extensions check_format can route; the skip policy lives in that script.
         files: '\.([cC]|cc|cpp|cxx|hpp|hh|hxx|[hH]|py|[fF]|[fF]90|[fF]03|[fF]08|[fF]95|[fF]or)$'
       # Copyright / SPDX header on the CORE package (scope + skip policy live in the
-      # script: hpcagent_bench/ minus benchmarks/ + numpy_translators/, plus scripts/ tests/).
+      # script: hpcagent_bench/ minus benchmarks/ + translators/, plus scripts/ tests/).
       - id: hpcagent_bench-headers
         name: copyright / SPDX header (core package)
         # --fix ADDS the header (as the first content line, after any shebang) rather than only

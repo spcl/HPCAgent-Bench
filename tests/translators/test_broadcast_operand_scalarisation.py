@@ -1,0 +1,82 @@
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""Scalarising an operand that carries its own broadcast reshape.
+
+Three defects, all in the same place: how a rewriter binds an operand to the iters of the loop nest
+it is being read under. Each one compiled cleanly and produced a WRONG element (or a C literal
+``None``), so the assertions here are on the lowered form, not on a status code -- a numeric check
+alone would have said "wrong answer" without saying which operand.
+
+* A subscript on a COMPUTED base (``(mask != 0)[:, None]``) had the base left whole-array under a
+  scalar subscript: ``(ptr != 0)[i]``, which C++ rejects outright and C compiles as a pointer read.
+* A subscript operand was LEFT-aligned against the nest where numpy right-aligns, so
+  ``np.where(cond4d, cxyz3d, 0)`` read ``cxyz`` at the OUTER three loops.
+* An advanced index carrying newaxis reshapes (``gather_z[:, None, None]``) was aligned by its
+  slice axes alone, so it read the INNERMOST iter and kept the ``None``s in the emitted subscript.
+"""
+
+import ast
+
+import pytest
+
+from hpcagent_bench.translators.numpyto_common.lib_nodes import scalarize_at_iters
+from hpcagent_bench.translators.numpyto_common.lowering import const_, SliceToScalarRewriter
+
+
+def iters(n: int) -> list[ast.expr]:
+    return [ast.Name(id=f"__w{i}", ctx=ast.Load()) for i in range(n)]
+
+
+def scalarised(src: str, shapes: dict[str, tuple[str, ...]], n: int) -> str:
+    """``src`` rendered at an ``n``-deep nest by the np.* expanders' scalariser."""
+    return ast.unparse(scalarize_at_iters(ast.parse(src, mode="eval").body, iters(n), shapes))
+
+
+def fused(src: str, shapes: dict[str, tuple[str, ...]], n: int) -> str:
+    """``src`` rendered at an ``n``-deep nest by the slice-fusion rewriter (the whole-array path)."""
+    full = [ast.Slice(lower=None, upper=None, step=None) for unused in range(n)]
+    zero = [(const_(0), const_(0)) for unused in range(n)]
+    rewriter = SliceToScalarRewriter(shapes, iters(n), zero, "out", full)
+    return ast.unparse(rewriter.visit(ast.parse(src, mode="eval").body))
+
+
+def test_computed_base_is_scalarised_not_subscripted() -> None:
+    # The base IS the array; the ``[:, None]`` only says which nest axis it varies along.
+    got = scalarised("(mask != 0)[:, None]", {"mask": ("np",)}, 2)
+    assert got == "mask[__w0] != 0", got
+    assert "None" not in got, "a literal newaxis reached the emitter"
+
+
+def test_a_lower_rank_subscript_operand_right_aligns() -> None:
+    # numpy broadcasts right-aligned: under a 4-deep nest a rank-3 read takes the LAST three iters.
+    got = scalarised("cxyz[:a, :b, :c]", {"cxyz": ("A", "B", "C")}, 4)
+    assert got == "cxyz[__w1, __w2, __w3]", got
+
+
+def test_an_equal_rank_subscript_operand_is_unchanged() -> None:
+    # The offset is zero when the ranks already agree -- the arithmetic that was there before.
+    got = scalarised("cxyz[:a, :b, :c]", {"cxyz": ("A", "B", "C")}, 3)
+    assert got == "cxyz[__w0, __w1, __w2]", got
+
+
+@pytest.mark.parametrize(
+    "src,nest,want",
+    [
+        ("grid[gz[:, None, None], gy[None, :, None], gx[None, None, :]]", 3, "grid[gz[__w0], gy[__w1], gx[__w2]]"),
+        # Two vectors and a scalar axis: a rank-2 result, so under a 3-deep nest it right-aligns.
+        ("grid[gz[:, None], gy[None, :], 0]", 2, "grid[gz[__w0], gy[__w1], 0]"),
+        ("grid[gz[:, None], gy[None, :], 0]", 3, "grid[gz[__w1], gy[__w2], 0]"),
+    ],
+)
+def test_open_mesh_gather_binds_each_vector_to_its_own_axis(src: str, nest: int, want: str) -> None:
+    # ``A[a[:, None, None], b[None, :, None], c[None, None, :]]`` is the open mesh np.ix_ spells:
+    # each vector varies along ITS OWN result axis, so each takes its own iter.
+    shapes = {"grid": ("N", "N", "N"), "gz": ("nz",), "gy": ("ny",), "gx": ("nx",)}
+    got = fused(src, shapes, nest)
+    assert got == want, got
+    assert "None" not in got, "a literal newaxis reached the emitter"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-v"]))

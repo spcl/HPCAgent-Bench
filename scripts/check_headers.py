@@ -16,7 +16,7 @@ second notice on top of an existing one. ``--fix`` inserts the canonical 2021
 header only into files that have no such block at all.
 
 Scope -- the CORE package only: ``hpcagent_bench/`` (EXCLUDING ``benchmarks/`` and
-the ``numpy_translators/`` distribution), plus ``scripts/`` and ``tests/``. Ported
+the ``translators/`` packages), plus ``scripts/`` and ``tests/``. Ported
 kernels under ``benchmarks/`` and the translator's generated sources carry their
 own provenance and are a separate, deferred header pass -- the same dirs the format
 hook skips.
@@ -51,7 +51,7 @@ COPYRIGHT_RE = re.compile(r"^# Copyright \d{4} ETH Zurich and the [\w.-]+ author
 
 # Included roots and the sub-prefixes carved back out (their headers are deferred).
 SCOPE_PREFIXES = ("hpcagent_bench/", "scripts/", "tests/")
-EXCLUDE_PREFIXES = ("hpcagent_bench/benchmarks/", "hpcagent_bench/numpy_translators/")
+EXCLUDE_PREFIXES = ("hpcagent_bench/benchmarks/", "hpcagent_bench/translators/")
 
 CODING_RE = re.compile(r"^[ \t\f]*#.*?coding[:=]")
 

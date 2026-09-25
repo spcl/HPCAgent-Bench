@@ -42,7 +42,7 @@ FRAMEWORK = "pluto"
 #:
 #: * ``--pet``      -- the emitted scop uses ``int64_t`` counters, which the default clan
 #:                     extractor rejects.
-#: * ``--tile``     -- the repo's documented Pluto invocation (``numpy_translators/README.md``).
+#: * ``--tile``     -- the repo's documented Pluto invocation (``translators/README.md``).
 #:                     Tiling is off by default in polycc, and an untiled Pluto column is a
 #:                     column that measures almost nothing Pluto is for.
 #: * ``--parallel`` -- also off by default. Without it polycc marks no loop parallel and emits

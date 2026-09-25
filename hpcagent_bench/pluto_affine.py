@@ -109,7 +109,7 @@ class PolyccIssue:
 
 
 _BENCH = "hpcagent_bench/benchmarks/scientific_computing"
-_TRANS_TESTS = "hpcagent_bench/numpy_translators/tests"
+_TRANS_TESTS = "tests/translators"
 
 #: Insertion-ordered registry of measured polycc/pet/Pluto defects (``POLYCC-nnn``) followed by the
 #: standing caveats (``C-nnn``). Keyed by id. Every entry states what was OBSERVED; an entry with an
@@ -129,7 +129,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "lowering replays its RHS at the deeper use sites and deletes it."
             ),
             repro=f"{_BENCH}/structured_grids/conv_2d -- polycc --pet --tile --parallel on its pluto input",
-            avoided_by="numpyto_common.lowering._ForwardSubstituteInvariantScalars",
+            avoided_by="hpcagent_bench.translators.numpyto_common.lowering.ForwardSubstituteInvariantScalars",
             upstream="not filed",
         ),
         PolyccIssue(
@@ -142,7 +142,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "and stays SHARED across threads under --parallel (symm, trmm)."
             ),
             repro=f"{_TRANS_TESTS}/test_scalar_accumulator_retarget.py",
-            avoided_by="numpyto_common.lib_nodes._retarget_scalar_accumulator",
+            avoided_by="hpcagent_bench.translators.numpyto_common.lib_nodes.retarget_scalar_accumulator",
             upstream="not filed",
         ),
         PolyccIssue(
@@ -156,7 +156,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "(constraints_isl.c:429) -- a core dump, not a refusal."
             ),
             repro=f"{_TRANS_TESTS}/test_no_self_assign_in_scop.py",
-            avoided_by="numpyto_common.lowering._SelfAssignDropper",
+            avoided_by="hpcagent_bench.translators.numpyto_common.lowering.SelfAssignDropper",
             upstream="not filed",
         ),
         PolyccIssue(
@@ -186,7 +186,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "it is closed rather than filed."
             ),
             repro=f"{_BENCH}/dense_linear_algebra/trmm -- polycc --pet --tile --parallel on its pluto input",
-            avoided_by="numpyto_common.lib_nodes._retarget_scalar_accumulator",
+            avoided_by="hpcagent_bench.translators.numpyto_common.lib_nodes.retarget_scalar_accumulator",
             upstream="n/a",
         ),
         PolyccIssue(
@@ -201,7 +201,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "subscript carries the gather literally and the detector declines the kernel."
             ),
             repro=f"{_BENCH}/n_body_methods/lavamd -- its pluto input fails scop_nonaffine_reason",
-            avoided_by="numpyto_common.lowering._ForwardSubstituteInvariantScalars",
+            avoided_by="hpcagent_bench.translators.numpyto_common.lowering.ForwardSubstituteInvariantScalars",
             upstream="n/a",
         ),
         PolyccIssue(
@@ -229,7 +229,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
             ),
             repro=f"{_BENCH}/dynamic_programming/needleman_wunsch -- polycc --pet extracts no scop from "
             "its pluto input; invariant stated in numpyto_c.emit.emit_pluto",
-            avoided_by="numpyto_c.emit.pluto_scop_regions",
+            avoided_by="hpcagent_bench.translators.numpyto_c.emit.pluto_scop_regions",
             upstream="n/a",
         ),
         PolyccIssue(
@@ -248,7 +248,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "clean 08-07, and int_floor there would abort pet the same way."
             ),
             repro=f"{_TRANS_TESTS}/test_pluto_named_div_builtins.py",
-            avoided_by="numpyto_c.emit.pluto_floordiv",
+            avoided_by="hpcagent_bench.translators.numpyto_c.emit.pluto_floordiv",
             upstream="n/a",
         ),
         PolyccIssue(
@@ -300,7 +300,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "opaque_helper_calls (tsvc_2_s4117, tsvc_2_s315)."
             ),
             repro=f"{_TRANS_TESTS}/test_pluto_no_helper_calls_in_scop.py",
-            avoided_by="numpyto_c.emit.pluto_call_free",
+            avoided_by="hpcagent_bench.translators.numpyto_c.emit.pluto_call_free",
             upstream="not filed",
         ),
         PolyccIssue(
@@ -362,7 +362,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
             ),
             repro=f"{_TRANS_TESTS}/test_pluto_scope_aware_regions.py -- "
             "test_an_unmodellable_nest_does_not_cost_its_scopable_neighbours",
-            avoided_by="numpyto_c.emit.pluto_scop_regions",
+            avoided_by="hpcagent_bench.translators.numpyto_c.emit.pluto_scop_regions",
             upstream="not filed",
         ),
         PolyccIssue(

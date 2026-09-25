@@ -16,7 +16,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOW = REPO / ".github" / "workflows" / "tests.yml"
 DEDICATED = REPO / ".github" / "dedicated_tests.txt"
 ACTIONS = sorted((REPO / ".github" / "actions").glob("*/action.yml"))
-TRANSLATOR_TESTS = REPO / "hpcagent_bench" / "numpy_translators" / "tests"
+TRANSLATOR_TESTS = REPO / "tests" / "translators"
 
 #: The per-container budget in minutes; a job over it becomes the run's critical path.
 CONTAINER_BUDGET_MINUTES = 45
@@ -206,7 +206,7 @@ def test_the_translator_integration_legs_partition_the_tree() -> None:
                 roots.add(token)
             else:
                 named.add(token)
-    assert roots == {"hpcagent_bench/numpy_translators/tests/"}, f"the legs sweep {sorted(roots)}"
+    assert roots == {"tests/translators/"}, f"the legs sweep {sorted(roots)}"
     assert named == ignored, f"legs name {sorted(named)} but the sweeping leg ignores {sorted(ignored)}"
     missing = [path for path in sorted(named | ignored) if not (REPO / path).is_file()]
     assert not missing, f"the matrix names files that do not exist: {missing}"
@@ -231,7 +231,7 @@ def test_every_integration_marked_translator_file_reaches_a_leg() -> None:
     }
     named = {token for leg in translator_legs() for token in str(leg["select"]).split() if token.endswith(".py")}
     marked = {
-        f"hpcagent_bench/numpy_translators/tests/{p.name}"
+        f"tests/translators/{p.name}"
         for p in sorted(TRANSLATOR_TESTS.glob("test_*.py"))
         if "pytest.mark.integration" in p.read_text()
     }
