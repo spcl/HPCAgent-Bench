@@ -1,23 +1,3 @@
-# Ship the library's data files inside the wheel. pyproject.toml sets
-# include_package_data=True, which -- WITHOUT this manifest -- only picks up data
-# files when setuptools' VCS file-finder happens to be active (true in a local git
-# checkout with an egg-info cache, FALSE in CI's `pip wheel --no-build-isolation`).
-# That gap silently dropped hpcagent_bench/config.yaml (loaded at import by config.py) and
-# every schema/taxonomy/env spec from the wheel. Listing them here makes inclusion
-# deterministic across environments.
-recursive-include hpcagent_bench *.yaml
-recursive-include hpcagent_bench *.schema.yaml
-include hpcagent_bench/container_backends.txt
-# envs/vecmath.h is a BUILD INPUT, not documentation: flags.py puts it on every gcc/g++
-# compile line via -include (CPU_BASELINE_GCC). Dropped from the wheel, every native C/C++
-# kernel fails to compile with "vecmath.h: No such file or directory".
-include hpcagent_bench/envs/vecmath.h
-# envs/papi_ranges.h is the header the profile tool:"none" build puts on the include path.
-include hpcagent_bench/envs/papi_ranges.h
-# Skills + tool fragments the agent prompt is built from (harness/prompts.py); dropped from
-# the wheel, an installed hpcagent_bench ships a prompt with no optimization guidance.
-recursive-include hpcagent_bench/skills *.md
-# Scripts a skill page tells the reader to run (opt-reports/loop_report.py); without them the
-# page documents a command that is not installed.
-recursive-include hpcagent_bench/skills *.py
-recursive-include hpcagent_bench/tools *.md
+# The sdist carries the packages and the package-data pyproject.toml lists; this adds the rest.
+include CHANGELOG.md
+global-exclude __pycache__ *.py[cod] *.so *.o

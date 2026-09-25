@@ -19,7 +19,7 @@
 # is not actually on that branch.
 #
 #   DACE_MAIN=~/src/dace-main DACE_EXTENDED=~/src/dace-extended \
-#       sbatch -A <account> -N 8 samples/npbench_dace_flavors.sbatch
+#       sbatch -A <account> -N 8 scripts/samples/npbench_dace_flavors.sbatch
 #
 # DACE_MAIN and DACE_EXTENDED may be the SAME clone: with DACE_CHECKOUT=1 the script switches its
 # branch between the stages. Two clones are better (no switching, no rebuild churn), and either way
@@ -52,9 +52,9 @@ set -euo pipefail
 # quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 
-REPO="${HPCAGENT_BENCH_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+REPO="${HPCAGENT_BENCH_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "${REPO}"
-# ensure_branch: shared with samples/npbench_dace_main_vs_pluto.sbatch, so the two cannot drift into
+# ensure_branch: shared with scripts/samples/npbench_dace_main_vs_pluto.sbatch, so the two cannot drift into
 # disagreeing about what "measured on this branch" means.
 source "${REPO}/scripts/dace_branch.sh"
 

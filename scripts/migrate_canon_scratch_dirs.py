@@ -58,7 +58,7 @@ import shutil
 import subprocess
 import sys
 
-from hpcagent_bench import paths
+from hpcagent_bench import data_guard, paths
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 JOBFILE_RE = re.compile(r"-(\d+)\.(?:out|err)$")
@@ -172,8 +172,21 @@ def archive_and_remove(run_dir: pathlib.Path, archive_dir: pathlib.Path, *, appl
     reports = run_dir / "reports"
     if reports.is_dir():
         shutil.copytree(reports, dest / "reports", dirs_exist_ok=True)
-    shutil.rmtree(run_dir)
+    unarchived = [p.name for p in run_dir.glob("*.rank*.csv") if not same_file(p, dest / p.name)]
+    if unarchived:
+        print(f"  archive of {run_dir} does not match its CSVs ({', '.join(unarchived)}); keeping it", file=sys.stderr)
+        return
+    try:
+        data_guard.safe_rmtree(run_dir)
+    except data_guard.ProtectedPathError as exc:
+        print(f"  {exc}; keeping it", file=sys.stderr)
+        return
     print(f"  archived CSVs + reports/ to {dest} and removed {run_dir}")
+
+
+def same_file(src: pathlib.Path, copy: pathlib.Path) -> bool:
+    """Whether ``copy`` exists with ``src``'s bytes."""
+    return copy.is_file() and copy.read_bytes() == src.read_bytes()
 
 
 def default_dirs() -> list[pathlib.Path]:

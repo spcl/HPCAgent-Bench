@@ -74,5 +74,3 @@ array_args:
 - dst
 output_args:
 - dst
-experiment_tags:
-- unstructured_grids

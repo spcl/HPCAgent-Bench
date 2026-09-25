@@ -1,13 +1,10 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Per-xdist-worker DaCe build folder, in a module BOTH test trees can name.
+"""Per-xdist-worker DaCe build folder, shared by both test trees.
 
-Lives at the repo root rather than under ``hpcagent_bench`` because the translator suite
-deliberately imports nothing from that package, and rather than inside ``conftest.py`` because
-each tree has a ``conftest`` of its own: collecting ``tests/`` and
-``hpcagent_bench/numpy_translators/tests/`` in one run makes a bare ``from conftest import ...``
-resolve to whichever one was imported first, which is a COLLECTION error that kills the whole job
-before a single test runs. A uniquely named module has no such ambiguity.
+A uniquely named module rather than ``conftest.py``: each tree has its own ``conftest``, and
+collecting both in one run makes ``from conftest import ...`` resolve to whichever was imported
+first.
 """
 
 import os

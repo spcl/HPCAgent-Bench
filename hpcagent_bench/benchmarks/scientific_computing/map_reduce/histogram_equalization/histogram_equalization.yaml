@@ -56,5 +56,3 @@ mpi:
     out:
     - H
     - W
-experiment_tags:
-- histogram_equalization

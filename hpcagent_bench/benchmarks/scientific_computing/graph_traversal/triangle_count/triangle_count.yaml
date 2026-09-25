@@ -47,5 +47,3 @@ array_args:
 - total
 output_args:
 - total
-experiment_tags:
-- graph_traversal

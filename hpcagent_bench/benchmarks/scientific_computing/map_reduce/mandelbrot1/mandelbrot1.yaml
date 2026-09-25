@@ -91,4 +91,3 @@ mpi:
 min_precision: fp64
 experiment_tags:
 - npbench
-- mandelbrot1

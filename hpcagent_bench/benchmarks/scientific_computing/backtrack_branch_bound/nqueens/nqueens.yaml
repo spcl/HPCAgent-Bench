@@ -23,5 +23,3 @@ init:
       dtype: int64
 output_args:
 - count
-experiment_tags:
-- backtrack_branch_bound

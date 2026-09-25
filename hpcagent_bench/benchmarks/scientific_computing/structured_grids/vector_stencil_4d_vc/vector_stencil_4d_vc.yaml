@@ -66,5 +66,3 @@ mpi:
     - N
     - N
     - B
-experiment_tags:
-- mpi-focus32

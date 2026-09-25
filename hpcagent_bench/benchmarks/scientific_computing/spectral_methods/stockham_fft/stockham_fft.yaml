@@ -38,4 +38,3 @@ output_args:
 - y
 experiment_tags:
 - npbench
-- stockham_fft

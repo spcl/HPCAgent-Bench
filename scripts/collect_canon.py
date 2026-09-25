@@ -22,6 +22,8 @@ import pathlib
 import sqlite3
 import sys
 
+from hpcagent_bench import data_guard
+
 #: The canon-llr40 sweep's columns, in their historical figure order. cc is the baseline the
 #: others are divided by with --baseline cc, and it stays in the table (as a constant 1.0 there)
 #: so a reader can see it was measured rather than assumed. Only membership in this set matters
@@ -128,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{args.run_dir} holds no <column>.rank*.csv shards", file=sys.stderr)
         return 1
 
+    data_guard.check_output(args.db, [args.run_dir])
     write_db(rows, args.db)
     per = {c: sum(1 for row in rows if row["column"] == c) for c in columns}
     print(f"{args.db}: {len(rows)} rows  " + "  ".join(f"{c}={n}" for c, n in per.items() if n))
