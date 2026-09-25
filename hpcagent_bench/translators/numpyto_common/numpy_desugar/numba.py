@@ -5,6 +5,8 @@ import copy
 
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice, is_newaxis
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
+    RankedRewritePass,
+    RewritePass,
     const_int,
     expr_of,
     np_attr,
@@ -21,8 +23,8 @@ ONE = "1"
 def bcast_tokens(a: list[str], b: list[str]) -> list[str]:
     """numpy's right-aligned broadcast over two extent-token vectors.
 
-    Two non-``1`` tokens spelled differently (``pos.shape[1]`` vs ``apos.shape[1]``) name the SAME
-    extent under numpy's rules -- the source would not run otherwise -- so either one answers."""
+    Two differently spelled non-``1`` tokens name the same extent (the source would not run
+    otherwise), so either one answers."""
     n = max(len(a), len(b))
     a = [ONE] * (n - len(a)) + list(a)
     b = [ONE] * (n - len(b)) + list(b)
@@ -45,17 +47,17 @@ def slice_extent_token(e: ast.Slice, base: str | None) -> str | None:
 
 
 def one_slice_index(e: ast.Slice) -> ast.expr | None:
-    """A constant 1-long slice's single index -- ``a[..., 0:1, ...]`` IS that element. numba's
-    parfor analysis equates a length-1 axis with a length-N one instead of broadcasting it, so a
-    leading singleton has to disappear entirely rather than merely shrink."""
+    """A constant 1-long slice's single index (``a[..., 0:1, ...]`` -> ``0``). numba's parfor
+    analysis equates a length-1 axis with a length-N one instead of broadcasting it, so a leading
+    singleton must disappear, not shrink."""
     if e.step is not None or slice_extent_token(e, None) != ONE:
         return None
     return copy.deepcopy(e.lower) if e.lower is not None else ast.Constant(value=0)
 
 
 def without_leading_newaxis(e: ast.expr) -> ast.expr | None:
-    """``x[None, :]`` -> ``x``, or None when there is no LEADING newaxis to drop. numpy prepends
-    the singleton back when the operand broadcasts, so the two spell one value."""
+    """``x[None, :]`` -> ``x``, or None without a leading newaxis. Broadcasting prepends the
+    singleton back, so both spell one value."""
     if not isinstance(e, ast.Subscript):
         return None
     if is_newaxis(e.slice):
@@ -78,36 +80,23 @@ def without_leading_newaxis(e: ast.expr) -> ast.expr | None:
 
 
 def scalar_index(e: ast.AST, ranks: dict[str, int]) -> bool:
-    """A subscript entry that CONSUMES its base axis and contributes none. An unknown-rank Name
-    reads as a scalar -- the same reading :func:`expr_rank` already gives an index it cannot rank."""
+    """A subscript entry that consumes its base axis and contributes none. An unknown-rank Name
+    reads as a scalar, as in :func:`expr_rank`."""
     if isinstance(e, ast.Constant):
         return isinstance(e.value, int) and not isinstance(e.value, bool)
     return isinstance(e, ast.Name) and ranks.get(e.id, 0) == 0
 
 
-class OuterBroadcastPeel(ast.NodeTransformer):
+class OuterBroadcastPeel(RankedRewritePass):
     """Peel an OUTER-PRODUCT broadcast's outermost axis into an explicit loop (numba only).
 
-    numba's parfor array analysis equates the operands of an elementwise expression and asserts
-    ``Sizes of $a, $b do not match`` when two of them put a non-1 extent in DIFFERENT axes --
-    floyd's ``path[:, k][:, None] + path[k, :][None, :]`` ((N,1) with (1,N)), gem's
-    ``pos[:, None, :] - apos[None, :, :]``. It fires only under ``parallel=True``, which is the one
-    numba build the benchmark measures, so the kernels cannot answer it by going serial.
+    Under ``parallel=True`` (the build the benchmark measures) numba's parfor analysis asserts
+    ``Sizes of $a, $b do not match`` when two operands put non-1 extents in different axes, as in
+    ``a[:, None] + b[None, :]``. Each peeled row is an ordinary broadcast the analysis accepts and
+    still a parallelisable array expression; reshapes and ``np.add.outer`` hit the same assert.
 
-    Indexing the outermost axis explicitly leaves every row an ordinary broadcast the analysis
-    accepts, and the row is still an array expression the parfor pass parallelises. Reshaping the
-    operands, ``np.add.outer`` and hoisting the two halves into locals were each measured to keep
-    failing, so the loop peel is the only form that both compiles and stays parallel.
-
-    Extents are read off the SOURCE TEXT as ``<name>.shape[k]`` tokens over the rank table: a kir
-    shape symbol (gem's atom count) is not a name the kernel signature binds, so it cannot be
-    emitted. An operand whose axes cannot be placed that way declines the whole statement -- a
-    wrong rewrite changes numbers silently, a declined one only leaves the bug in place."""
-
-    def __init__(self, ranks: dict[str, int]) -> None:
-        self.ranks = ranks
-        self.changed = False
-        self._ctr = 0
+    Extents are ``<name>.shape[k]`` tokens from the rank table, since manifest shape symbols are
+    not bound in the kernel. An operand whose axes cannot be placed declines the whole statement."""
 
     def operands_(self, node: ast.AST) -> list[ast.expr] | None:
         """The operands an elementwise node broadcasts together, or None when it is not one."""
@@ -149,7 +138,7 @@ class OuterBroadcastPeel(ast.NodeTransformer):
     def axes_(self, sub: ast.Subscript):
         """``(entry index or None, kind, extent token)`` per OUTPUT axis of a subscript."""
         if not isinstance(sub.value, (ast.Name, ast.Subscript)):
-            return None  # a computed base would have to be peeled THROUGH, which this pass does not do
+            return None  # a computed base would need peeling through
         base = self.extents_(sub.value)
         if base is None:
             return None
@@ -176,10 +165,10 @@ class OuterBroadcastPeel(ast.NodeTransformer):
         return axes
 
     def outer_product(self, value: ast.AST, rank: int) -> bool:
-        """True when some elementwise node of THIS rank broadcasts a singleton axis in a shape numba's
-        analysis asserts on and peeling axis 0 dissolves: two operands' non-1 extents in different
-        axes, one of them axis 0 (floyd's outer product), or two full-rank operands that share a non-1
-        axis 0 and split on a later axis (cegterg's column-vector ``g2[:, None] * X_b``)."""
+        """True when some elementwise node of this rank has a shape numba's analysis asserts on and
+        peeling axis 0 dissolves: non-1 extents in different axes with one on axis 0 (an outer
+        product), or two full-rank operands sharing a non-1 axis 0 that split on a later axis
+        (``g[:, None] * X``)."""
         for node in ast.walk(value):
             ops = self.operands_(node)
             if ops is None:
@@ -203,7 +192,7 @@ class OuterBroadcastPeel(ast.NodeTransformer):
         if ext is None or len(ext) > rank:
             return None
         if len(ext) < rank:
-            return expr  # a lower-rank operand broadcasts along the peeled axis untouched
+            return expr  # lower rank: broadcasts along the peeled axis
         if isinstance(expr, ast.UnaryOp):
             operand = self.peel(expr.operand, idx, rank)
             return None if operand is None else ast.UnaryOp(op=expr.op, operand=operand)
@@ -252,9 +241,8 @@ class OuterBroadcastPeel(ast.NodeTransformer):
         return self.tidy(sub.value, entries)
 
     def tidy(self, base: ast.expr, entries: list[ast.expr]) -> ast.expr:
-        """Drop the entries the peel made redundant: every LEADING singleton out-axis (numpy
-        prepends those back when the row broadcasts, and numba's analysis chokes on them) and
-        every TRAILING full slice (``a[i, :]`` IS ``a[i]``)."""
+        """Drop entries the peel made redundant: leading singleton out-axes (see
+        :func:`one_slice_index`) and trailing full slices (``a[i, :]`` is ``a[i]``)."""
         kept: list[ast.expr] = []
         for i, e in enumerate(entries):
             if is_newaxis(e):
@@ -284,12 +272,10 @@ class OuterBroadcastPeel(ast.NodeTransformer):
         return target.value.id if self.ranks.get(target.value.id) == rank else None
 
     def drop_newaxes(self, value: ast.AST) -> None:
-        """Drop every LEADING newaxis the enclosing broadcast makes redundant.
+        """Drop every leading newaxis the enclosing broadcast makes redundant.
 
-        gem's ``charge[np.newaxis, :] * np.exp(-kappa * r)`` is the second half of the same numba
-        defect: the analysis equates the (1, natoms) operand with the (npoints, natoms) one instead
-        of broadcasting the singleton. ``charge`` alone broadcasts identically -- but only while the
-        node's rank does not move, which is what :func:`expr_rank` is asked here."""
+        numba's analysis equates a (1, n) operand with an (m, n) one instead of broadcasting it;
+        ``x[None, :]`` -> ``x`` is exact only while the node's rank does not change."""
         for node in ast.walk(value):
             ops = self.operands_(node)
             rank = None if ops is None else expr_rank(node, self.ranks)
@@ -308,10 +294,10 @@ class OuterBroadcastPeel(ast.NodeTransformer):
                 if expr_rank(self.rebuild(node, trial), self.ranks) != rank:
                     continue
                 ops[i] = bare
-                self.replace_operand(node, i, bare)
+                self.replace(node, i, bare)
                 self.changed = True
 
-    def replace_operand(self, node: ast.AST, i: int, operand: ast.expr) -> None:
+    def replace(self, node: ast.AST, i: int, operand: ast.expr) -> None:
         if isinstance(node, ast.BinOp):
             node.left, node.right = (operand, node.right) if i == 0 else (node.left, operand)
         elif isinstance(node, ast.Compare):
@@ -334,9 +320,8 @@ class OuterBroadcastPeel(ast.NodeTransformer):
         rank = len(ext)
         target = node.targets[0]
         base = target.id if isinstance(target, ast.Name) else self.store_base(target, rank)
-        # A target the value also READS is a whole-array update: row i would see the rows the loop
-        # already rewrote, which numpy's all-at-once semantics never do. That store, and one that is not
-        # a whole-array slice (``H[lo:hi, :]``), fills a fresh temp and is assigned from it afterwards.
+        # A target the value also reads would see rows the loop already rewrote; it, and a store that
+        # is not a whole-array slice (``H[lo:hi, :]``), fills a fresh temp assigned afterwards.
         direct = base is not None and not any(isinstance(n, ast.Name) and n.id == base for n in ast.walk(node.value))
         if not direct and not isinstance(target, (ast.Name, ast.Subscript)):
             return node
@@ -351,13 +336,12 @@ class OuterBroadcastPeel(ast.NodeTransformer):
         dest = base if direct and base is not None else f"{temp}_o"
         shape = ", ".join(ext)
         if isinstance(target, ast.Name):
-            # A bare Name is a BINDING, so the loop alone would leave it unbound. The probe row
-            # carries the promoted dtype (mandelbrot's ``X + Y[:, None] * 1j`` is complex, which
-            # neither operand is); only its dtype is read, never its values.
+            # A bare Name is a binding, so allocate it. The probe row carries the promoted dtype
+            # (``X + Y[:, None] * 1j`` is complex though neither operand is); only its dtype is read.
             out.append(ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=probe))
             out.append(ast.parse(f"{dest} = np.empty(({shape},), {temp}.dtype)").body[0])
         elif not direct and isinstance(target, ast.Subscript):
-            # The store casts into the target's own dtype, so the temp takes that dtype directly.
+            # The store casts into the target's dtype, so the temp takes it.
             out.append(ast.parse(f"{dest} = np.empty(({shape},), ({ast.unparse(target.value)}).dtype)").body[0])
         store = ast.parse(f"{dest}[{ivar}] = 0").body[0]
         store.value = row
@@ -375,10 +359,9 @@ class OuterBroadcastPeel(ast.NodeTransformer):
 class SliceObjectInline(ast.NodeTransformer):
     """``b = slice(lo, hi)`` read back as ``X[b, :]`` -> ``X[lo:hi, :]`` (numba only).
 
-    A Name index reads as a SCALAR to :func:`expr_rank`, so ``X[b, :]`` ranked 1 where it is 2, and a
-    broadcast built on it was placed on the wrong axes. Substituting the slice is exact when the binding
-    is the name's only store and every name ``lo``/``hi`` read is bound at most once: then no store can
-    fall between the binding and a use. Runs before the rank table is built."""
+    :func:`expr_rank` reads a Name index as a scalar, so ``X[b, :]`` would rank 1, not 2. The
+    substitution is exact when the binding is the name's only store and every name ``lo``/``hi``
+    read is bound at most once. Runs before the rank table is built."""
 
     def __init__(self, fn: ast.FunctionDef) -> None:
         self.changed = False
@@ -425,17 +408,12 @@ class SliceObjectInline(ast.NodeTransformer):
         return node
 
 
-class ReshapeFortranOrderInline(ast.NodeTransformer):
+class ReshapeFortranOrderInline(RewritePass):
     """``x.reshape(d0, ..., dk, order="F")`` -> ``np.ascontiguousarray(x.T).reshape((dk, ..., d0)).T``
     (numba only).
 
-    numba's ``reshape`` takes no keyword at all (``assert not kws`` in its typing template). Reading and
-    filling in Fortran order is reading and filling the axis-reversed array in C order, so the transposed
-    spelling puts every element where numpy does. A shape passed as one name cannot be reversed here and
-    stays verbatim."""
-
-    def __init__(self) -> None:
-        self.changed = False
+    numba's ``reshape`` takes no keyword. Fortran order is C order on the axis-reversed array, so
+    the transposed spelling is exact. A shape passed as one name cannot be reversed and stays verbatim."""
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -443,7 +421,7 @@ class ReshapeFortranOrderInline(ast.NodeTransformer):
         if not (isinstance(f, ast.Attribute) and f.attr == "reshape" and node.args and len(node.keywords) == 1):
             return node
         if isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy"):
-            return node  # ``np.reshape(x, shape, order=...)`` is the function form, not this method
+            return node  # function form ``np.reshape(x, shape, order=...)``
         kw = node.keywords[0]
         if kw.arg != "order" or not (isinstance(kw.value, ast.Constant) and kw.value.value == "F"):
             return node
@@ -465,13 +443,10 @@ class ReshapeFortranOrderInline(ast.NodeTransformer):
 class NumbaDtypeFixups(ast.NodeTransformer):
     """Two spellings numba's dtype-strict typing refuses where numpy accepts them (numba only).
 
-    * ``np.zeros(n, dtype=bool)``: numba reads the builtin ``bool`` as no dtype at all
-      (``Cannot parse input types to function np.empty(int64, Function(<class 'bool'>))``).
-      ``np.bool_`` is the same dtype.
-    * ``A @ B`` over one real and one complex operand: ``'@' arguments must all have the same dtype``.
-      numpy promotes the real side, and casting it to the complex operand's own ``.dtype`` is that
-      promotion, width included. Only a matmul whose two kinds are both KNOWN is touched, and only when
-      the complex side is a name, so reading its dtype evaluates nothing twice."""
+    * ``dtype=bool``: numba does not accept the builtin ``bool`` as a dtype; ``np.bool_`` is the same.
+    * real ``@`` complex: numba requires equal dtypes. Casting the real side to the complex name's
+      ``.dtype`` is numpy's promotion. Only fires when both kinds are known and the complex side is a
+      Name, so reading its dtype evaluates nothing twice."""
 
     def __init__(self, kinds: dict[str, str]) -> None:
         self.kinds = kinds
@@ -515,10 +490,9 @@ def cast_like(operand: ast.expr, like: str) -> ast.expr:
 
 
 class NdimFold(ast.NodeTransformer):
-    """``x.ndim`` for a parameter bound once with an agreed rank -> that rank, then ``K == K'`` and
-    ``a if <bool constant> else b`` folded (numba only). cegterg's ``vrs2 = vrs if vrs.ndim == 2 else
-    vrs[:, None]`` has two branch ranks, so the rank table forgot ``vrs2`` and every broadcast built on it;
-    the fold keeps the branch that runs."""
+    """``x.ndim`` for a parameter bound once with an agreed rank -> that rank, then fold ``K == K'`` and
+    ``a if <bool constant> else b`` (numba only). ``y = x if x.ndim == 2 else x[:, None]`` has two
+    branch ranks the rank table cannot join; the fold keeps the branch that runs."""
 
     def __init__(self, fn: ast.FunctionDef, agreed: dict[str, int]) -> None:
         stores = name_store_counts(fn)

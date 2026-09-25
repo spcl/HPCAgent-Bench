@@ -4,10 +4,26 @@ import ast
 
 
 class DesugarError(NotImplementedError):
-    """A desugar pass matched a construct it OWNS but hit a variant it cannot
-    lower correctly. Raised (never swallowed) so the emit fails loudly instead of
-    producing a silently-wrong kernel -- a construct we do NOT own is left
-    verbatim (a clean backend skip), only an owned-but-unhandled shape raises."""
+    """A pass matched a construct it owns but cannot lower this variant of it.
+
+    Never swallowed, so the emit fails instead of producing a wrong kernel. A construct no pass owns is left
+    verbatim (a clean backend skip)."""
+
+
+class RewritePass(ast.NodeTransformer):
+    """A desugar pass: ``changed`` turns True once it rewrites anything, ``_ctr`` numbers the temps it mints."""
+
+    def __init__(self) -> None:
+        self.changed = False
+        self._ctr = 0
+
+
+class RankedRewritePass(RewritePass):
+    """A :class:`RewritePass` that reads the scope's name -> rank table."""
+
+    def __init__(self, ranks: dict[str, int]) -> None:
+        super().__init__()
+        self.ranks = ranks
 
 
 # Constructors whose first arg is a shape tuple -> result rank = len(shape).
@@ -30,9 +46,7 @@ def np_attr(node: ast.AST) -> str | None:
 
 
 def np_submodule_attr(node: ast.AST, submodule: str) -> str | None:
-    """``np.<submodule>.<attr>(...)`` / ``numpy.<submodule>.<attr>(...)`` call (``np.fft.fft``,
-    ``np.linalg.solve``) -> ``attr``, else None. The call func is a two-level Attribute, so the
-    single-level ``np_attr`` misses it."""
+    """``np.<submodule>.<attr>(...)`` call (``np.fft.fft``, ``np.linalg.solve``) -> ``attr``, else None."""
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
@@ -86,9 +100,8 @@ def as_stmts(res) -> list[ast.stmt]:
 
 
 def eigh_alias_names(tree: ast.AST) -> set:
-    """Names that refer to ``scipy.linalg.eigh`` via ``from scipy.linalg import
-    eigh [as X]`` (cegterg's ``_sci_eigh``). ``np.linalg.eigh`` / ``scipy.linalg.
-    eigh`` attribute calls are recognised separately."""
+    """Names bound to ``scipy.linalg.eigh`` by ``from scipy.linalg import eigh [as X]``; attribute calls
+    (``np.linalg.eigh``, ``scipy.linalg.eigh``) are recognised separately."""
     out = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module in ("scipy.linalg", "scipy"):
@@ -100,12 +113,11 @@ def eigh_alias_names(tree: ast.AST) -> set:
 
 
 def eigh_call_kind(node: ast.AST, alias_names: set):
-    """``eigh(a[, b], ...)`` / ``eigvalsh(a, ...)`` -> ``(kind, a_node,
-    b_node_or_None, kwargs)`` for a matching call (``np.linalg`` / ``scipy.linalg``
-    / an imported ``eigh`` alias), else None. ``kind`` is ``"eigh"`` (returns an
-    eigenpair ``(w, U)``) or ``"eigvalsh"`` (returns only the eigenvalue vector).
-    numpy has no generalized ``eigvalsh``, so an ``eigvalsh`` call carries no metric
-    ``b`` -- its second positional argument, if any, is ``UPLO`` not an operand."""
+    """``eigh(a[, b], ...)`` / ``eigvalsh(a, ...)`` -> ``(kind, a_node, b_node_or_None, kwargs)``, else None.
+
+    Matches ``np.linalg``, ``scipy.linalg`` and an imported ``eigh`` alias. ``kind`` is ``"eigh"`` (an
+    eigenpair ``(w, U)``) or ``"eigvalsh"`` (eigenvalues only). numpy has no generalized ``eigvalsh``, so
+    its second positional argument is ``UPLO``, never a metric ``b``."""
     if not isinstance(node, ast.Call) or not node.args:
         return None
     f = node.func
@@ -132,18 +144,14 @@ def eigh_call_kind(node: ast.AST, alias_names: set):
 
 
 def eigh_call_ab(node: ast.AST, alias_names: set):
-    """``eigh(a[, b], ...)`` -> ``(a_node, b_node_or_None, kwargs)`` for a matching
-    eigh/eigvalsh call, else None. A thin :func:`eigh_call_kind` wrapper for callers
-    that only need the operands (the jax rewriter, which lowers eigenpairs only)."""
+    """:func:`eigh_call_kind` without the kind: ``(a_node, b_node_or_None, kwargs)``, else None."""
     hit = eigh_call_kind(node, alias_names)
     return None if hit is None else hit[1:]
 
 
 def is_eigh_assign_target(node: ast.AST, alias_names: set) -> bool:
-    """``True`` when ``node`` is an assignment :class:`EighLoopRewriter` lowers
-    directly -- ``w, v = eigh(...)`` (eigenpair) or ``w = eigvalsh(...)`` (a single
-    Name target). Such an assign must NOT have its RHS call hoisted out first, or the
-    rewriter would no longer see the eigh/eigvalsh call as the statement's RHS."""
+    """True for an assignment :class:`EighLoopRewriter` lowers directly: ``w, v = eigh(...)`` or
+    ``w = eigvalsh(...)``. Its RHS must not be hoisted first, or the rewriter no longer sees the call."""
     if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
         return False
     hit = eigh_call_kind(node.value, alias_names)

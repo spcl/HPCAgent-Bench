@@ -10,41 +10,25 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import const
 
 
 def fd_step(precision: str | None = None) -> str:
-    """``sqrt(machine epsilon)`` of the WORKING float type, as a source literal.
+    """``sqrt(machine epsilon)`` of the working float type, as a source literal.
 
-    MINPACK's ``fdjac2`` forward-difference step (``h = sqrt(epsfcn) * |p_j|``,
-    ``epsfcn`` defaulting to the working type's machine epsilon).
-    :func:`curve_fit_lm_lines` reuses this rule so the emitted fit shares
-    scipy's Jacobian truncation error and converges to the same stationary
-    point. sqrt(eps) balances truncation against round-off -- a merely
-    representable step would still be swamped by it.
+    MINPACK's ``fdjac2`` forward-difference step (``h = sqrt(eps) * |p_j|``); :func:`curve_fit_lm_lines`
+    shares it so the emitted fit has scipy's Jacobian truncation error and stationary point.
 
-    MUST track ``precision``: this is emitted as source text (the desugar is
-    an AST rewrite; ``apply_precision`` only remaps dtype tables, never body
-    literals), so an fp64 literal ``sqrt(DBL_EPSILON) = 1.49e-08`` surviving
-    into an fp32 kernel underflows -- raman_fitting fits an amplitude of ~1580,
-    and ``1580 + 1.49e-08*1580`` rounds to exactly ``1580`` in fp32 (ulp
-    ~1.9e-04), zeroing every Jacobian column so the fit never moves off its
-    initial guess.
-
-    Read off the registry, not hardcoded: a storage-only float (fp8) has no
-    numpy finfo and falls back to the fp64 rule -- curve_fit at fp8 isn't
-    emitted, so a wrong-but-fp64 step is the status quo, not a regression.
+    Must track ``precision``: the literal is emitted into the body, which ``apply_precision`` never
+    rewrites, and an fp64 step added to an fp32 parameter rounds away, zeroing the Jacobian. A float
+    with no numpy finfo (fp8 storage) gets the fp64 step.
     """
     return repr(math.sqrt(dtypes.float_eps(working_float_dtype(precision))))
 
 
 class FinfoEpsFold(ast.NodeTransformer):
-    """``np.finfo(<anything>).eps`` -> the machine epsilon of the WORKING float dtype, as a literal.
+    """``np.finfo(<anything>).eps`` -> the machine epsilon of the working float dtype, as a literal.
 
-    A round-off BOUND (MINPACK's ftol/xtol at sqrt(eps), a finite-difference step) states "no better
-    than round-off is possible", so it has to follow the precision the kernel is lowered to. An
-    accuracy REQUIREMENT (a solver's ``tol=1e-6``) states what the solve must achieve and is a fixed
-    number at every width -- it must NOT go through here.
-
-    Folded rather than lowered because the emitters write source text: there is no ``finfo`` at
-    native run time, and the value is known once the precision is. Same reasoning and same registry
-    as :func:`fd_step`.
+    A round-off bound (MINPACK's ftol/xtol, a finite-difference step) must follow the precision the
+    kernel is lowered to; an accuracy requirement (a solver's ``tol=1e-6``) is fixed at every width
+    and must not go through here. Folded because the emitters write source text: there is no
+    ``finfo`` at native run time.
     """
 
     def __init__(self, precision: str | None = None) -> None:
@@ -71,12 +55,10 @@ def fold_finfo_eps(tree: ast.Module, precision: str | None = None) -> None:
 
 
 def working_float_dtype(precision: str | None = None) -> str:
-    """The WORKING float dtype a lowering emits its own scratch in, from ``precision``.
+    """The float dtype a lowering allocates its own scratch in: ``precision``, else ``float64``.
 
-    Same rule :func:`fd_step` reads its epsilon off, and for the same reason: these are
-    source-text emissions, so a lowering that hardcodes ``float64`` both runs an fp32 kernel's
-    scratch at double width and makes the store back into its fp32 target a narrowing copy.
-    ``None`` (no declared precision) keeps fp64, which is the status quo for an unannotated port.
+    A hardcoded ``float64`` would run an fp32 kernel's scratch at double width and narrow on the
+    store back into its fp32 target.
     """
     return dtypes.canonical(precision) if precision else "float64"
 
@@ -157,15 +139,12 @@ def const_literal_ast(value: object) -> ast.expr | None:
 
 class ConstComprehensionFold(ast.NodeTransformer):
     """``[int(round(fr * 4)) for fr in (0.5, 1.0)]`` -> the literal ``[2, 4]``. The
-    DaCe frontend refuses every comprehension (``Keyword "ListComp" disallowed``),
-    and a comprehension reading only constants has no runtime part to keep.
+    DaCe frontend refuses every comprehension.
 
-    A comprehension touching ANY value the runtime supplies (a parameter, an array
-    element, a symbol) is left ALONE -- unrolling it would pin a trip count only the
-    runtime knows, and a loud refusal downstream beats a wrong unroll. Attribute and
-    subscript reads, lambdas, and calls to anything but a whitelisted pure builtin
-    all count as runtime. Inner comprehensions fold first, so a nested one is a
-    literal by the time the outer is tested."""
+    A comprehension touching any runtime value (a parameter, an array element, a
+    symbol) is left alone: unrolling it would pin a trip count only the runtime
+    knows. Attribute and subscript reads, lambdas, and calls to anything but a
+    whitelisted pure builtin count as runtime. Inner comprehensions fold first."""
 
     def __init__(self, consts: dict[str, object]) -> None:
         self.consts = consts
@@ -234,8 +213,7 @@ class ConstComprehensionFold(ast.NodeTransformer):
         return self.fold_(node)
 
 
-#: An unrolled comprehension copies its body once per element, so a long iterable trades one
-#: frontend refusal for a source blow-up (and a matching SDFG); no constant grid comes close.
+#: An unrolled comprehension copies its body once per element; this caps the source (and SDFG) blow-up.
 UNROLL_MAX = 64
 
 
@@ -282,17 +260,13 @@ class SubstConstName(ast.NodeTransformer):
 class ListCompUnroll(ast.NodeTransformer):
     """``[f(x, i) for i in range(3)]`` -> ``[f(x, 0), f(x, 1), f(x, 2)]``.
 
-    The DaCe frontend refuses every comprehension. ``ConstComprehensionFold`` already
-    folds the ones that are constant END TO END; this takes the next case -- a CONSTANT
-    iterable driving a RUNTIME body (distribution_search's ``a_grid`` row). Only the loop
-    goes away, the body stays verbatim, so nothing runtime is evaluated early.
+    A constant iterable driving a runtime body (a comprehension constant end to end is
+    :class:`ConstComprehensionFold`'s). Only the loop goes away; the body stays verbatim.
 
-    Left alone: a non-constant iterable (its trip count is a runtime value), ANY ``if``
-    guard (a runtime guard has no unrolled form, and folding a constant one buys a case
-    no kernel has), more than one ``for`` clause, a non-Name target, an element the
-    literal spelling cannot express, and a body that REBINDS the target -- a lambda
-    parameter or an inner comprehension of the same name would capture the substituted
-    literal instead of shadowing it."""
+    Left alone: a non-constant iterable, any ``if`` guard, more than one ``for`` clause,
+    a non-Name target, an element with no literal spelling, and a body holding a lambda
+    or rebinding the target -- either would capture the substituted literal instead of
+    shadowing it."""
 
     def __init__(self, consts: dict[str, object]) -> None:
         self.consts = consts
@@ -339,9 +313,7 @@ def fold_kernel_defaults(fn: ast.FunctionDef, input_args: Sequence[str]) -> bool
     """Fold the kernel's defaulted parameters the harness never passes into body constants, through the
     native frontend's own :func:`numpyto_common.frontend._fold_default_args`. True when one folded.
 
-    numba counts a keyword-only parameter as required, so cegterg's 17 QE flags
-    (``*, noncolin=False, deeq_nc=None, ...``) made its njit entry expect 42 arguments for the 25 the
-    harness passes."""
+    numba counts a keyword-only parameter as required, so an unfolded one breaks the entry's arity."""
     # Imported here: frontend imports this module at its top.
     from hpcagent_bench.translators.numpyto_common.frontend import fold_default_args
 
@@ -354,11 +326,25 @@ def fold_constant_helper_arguments(tree: ast.Module, kernel_name: str) -> bool:
     """Substitute a helper parameter that EVERY call site passes the same ``True``/``False``/``None``
     literal into that helper's body (numba only). True when one was substituted.
 
-    numba types both arms of ``if lda_plus_u:`` even when every caller passes ``False``, so a ``None``
-    buffer read under the dead arm (cegterg's ``np.asarray(wfcu)``) fails typing. The substituted
-    literal is what lets :class:`DeadBranchElim` drop that arm first. A helper whose name escapes as a
-    value, a call with keywords or a starred argument, or a parameter the body rebinds is left alone."""
+    numba types both arms of ``if flag:`` even when every caller passes ``False``, so a ``None`` buffer
+    read under the dead arm fails typing; the substituted literal lets :class:`DeadBranchElim` drop that
+    arm first. A helper whose name escapes as a value, a call with keywords or a starred argument, or a
+    parameter the body rebinds is left alone."""
     helpers = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name != kernel_name}
+    sites, escaped = helper_call_sites(tree, helpers)
+    changed = False
+    for name, fn in helpers.items():
+        calls = sites.get(name, [])
+        if not calls or name in escaped or not substitutable_helper(fn, calls):
+            continue
+        changed = substitute_loads(fn, constant_parameters(fn, calls)) or changed
+    return changed
+
+
+def helper_call_sites(
+    tree: ast.Module, helpers: dict[str, ast.FunctionDef]
+) -> tuple[dict[str, list[ast.Call]], set[str]]:
+    """Every call of a helper by name, and the helpers whose name is read any other way."""
     sites: dict[str, list[ast.Call]] = {}
     callee_names: set[int] = set()
     for node in ast.walk(tree):
@@ -368,42 +354,53 @@ def fold_constant_helper_arguments(tree: ast.Module, kernel_name: str) -> bool:
     escaped = {
         n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id in helpers and id(n) not in callee_names
     }
+    return sites, escaped
+
+
+def substitutable_helper(fn: ast.FunctionDef, calls: list[ast.Call]) -> bool:
+    """True when every parameter of ``fn`` binds positionally at every call and ``fn`` nests no scope."""
+    if fn.args.vararg or fn.args.kwarg or fn.args.posonlyargs:
+        return False
+    if any(c.keywords or any(isinstance(a, ast.Starred) for a in c.args) for c in calls):
+        return False
+    return not any(isinstance(n, (ast.Lambda, ast.FunctionDef)) and n is not fn for n in ast.walk(fn))
+
+
+def constant_parameters(fn: ast.FunctionDef, calls: list[ast.Call]) -> dict[str, object]:
+    """Parameters of ``fn`` every call passes the same ``True``/``False``/``None`` -> that value."""
+    stores = name_store_counts(fn)
+    # A literal spelled as a subscript base, attribute owner or callee (``None[:, 0]``) is a
+    # SyntaxWarning at compile time even under a dead arm, so such a parameter stays a name.
+    structural: set[str] = set()
+    for n in ast.walk(fn):
+        if isinstance(n, (ast.Subscript, ast.Attribute)) and isinstance(n.value, ast.Name):
+            structural.add(n.value.id)
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+            structural.add(n.func.id)
+    subst: dict[str, object] = {}
+    for i, param in enumerate(fn.args.args):
+        if stores.get(param.arg, 0) != 1 or param.arg in structural:
+            continue
+        passed = [c.args[i] if i < len(c.args) else None for c in calls]
+        if not all(isinstance(p, ast.Constant) and (p.value is None or isinstance(p.value, bool)) for p in passed):
+            continue
+        values = {repr(p.value) for p in passed if isinstance(p, ast.Constant)}
+        if len(values) == 1 and isinstance(passed[0], ast.Constant):
+            subst[param.arg] = passed[0].value
+    return subst
+
+
+def substitute_loads(fn: ast.FunctionDef, subst: dict[str, object]) -> bool:
+    """Replace every load of a name in ``subst`` inside ``fn`` by its literal. True when one was replaced."""
     changed = False
-    for name, fn in helpers.items():
-        calls = sites.get(name, [])
-        if not calls or name in escaped or fn.args.vararg or fn.args.kwarg or fn.args.posonlyargs:
-            continue
-        if any(c.keywords or any(isinstance(a, ast.Starred) for a in c.args) for c in calls):
-            continue
-        if any(isinstance(n, (ast.Lambda, ast.FunctionDef)) and n is not fn for n in ast.walk(fn)):
-            continue
-        stores = name_store_counts(fn)
-        # A literal spelled as a subscript base, attribute owner or callee (``None[:, 0]``) is a
-        # SyntaxWarning at compile time even under a dead arm, so such a parameter stays a name.
-        structural: set[str] = set()
-        for n in ast.walk(fn):
-            if isinstance(n, (ast.Subscript, ast.Attribute)) and isinstance(n.value, ast.Name):
-                structural.add(n.value.id)
-            elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
-                structural.add(n.func.id)
-        subst: dict[str, object] = {}
-        for i, param in enumerate(fn.args.args):
-            if stores.get(param.arg, 0) != 1 or param.arg in structural:
-                continue
-            passed = [c.args[i] if i < len(c.args) else None for c in calls]
-            if not all(isinstance(p, ast.Constant) and (p.value is None or isinstance(p.value, bool)) for p in passed):
-                continue
-            values = {repr(p.value) for p in passed if isinstance(p, ast.Constant)}
-            if len(values) == 1 and isinstance(passed[0], ast.Constant):
-                subst[param.arg] = passed[0].value
-        for node in ast.walk(fn):
-            for field, value in ast.iter_fields(node):
-                if isinstance(value, ast.Name) and isinstance(value.ctx, ast.Load) and value.id in subst:
-                    setattr(node, field, ast.copy_location(ast.Constant(value=subst[value.id]), value))
-                    changed = True
-                elif isinstance(value, list):
-                    for k, item in enumerate(value):
-                        if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Load) and item.id in subst:
-                            value[k] = ast.copy_location(ast.Constant(value=subst[item.id]), item)
-                            changed = True
+    for node in ast.walk(fn):
+        for field, value in ast.iter_fields(node):
+            if isinstance(value, ast.Name) and isinstance(value.ctx, ast.Load) and value.id in subst:
+                setattr(node, field, ast.copy_location(ast.Constant(value=subst[value.id]), value))
+                changed = True
+            elif isinstance(value, list):
+                for k, item in enumerate(value):
+                    if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Load) and item.id in subst:
+                        value[k] = ast.copy_location(ast.Constant(value=subst[item.id]), item)
+                        changed = True
     return changed

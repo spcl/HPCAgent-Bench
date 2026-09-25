@@ -120,42 +120,42 @@ def shape_from_linspace_or_arange(node: ast.AST) -> str | None:
     return None
 
 
-def shape_from_transpose(node: ast.AST, known: dict[str, str]) -> str | None:
-    """``x.T`` / ``np.transpose(x[, axes])`` / ``x.transpose([axes])`` -> the base
-    array's shape with its axes reversed (no axes) or permuted (explicit axes).
-    A returned transposed VIEW must materialize into a fresh output buffer;
-    ``iter_extent_of`` bails on transpose, so it needs its own deriver. The base's
-    shape comes from ``known`` (a Name) or ``iter_extent_of`` (a compound base)."""
-    axes_node: ast.AST | None = None
-    base: ast.AST | None = None
+def transpose_operands(node: ast.AST) -> tuple[ast.AST | None, ast.AST | None]:
+    """``(base, axes)`` of ``x.T`` / ``np.transpose(x[, axes])`` / ``x.transpose([axes])``; ``base`` is
+    ``None`` for anything else and ``axes`` is ``None`` when the axes are reversed."""
     if isinstance(node, ast.Attribute) and node.attr == "T":
-        base = node.value
-    elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-        f = node.func
-        if f.attr == "transpose" and isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy") and node.args:
-            base = node.args[0]  # np.transpose(x[, axes])
-            axes_node = node.args[1] if len(node.args) > 1 else None
-        elif f.attr == "transpose":  # x.transpose([axes]) -- tuple arg or varargs ints
-            base = f.value
-            if len(node.args) == 1 and isinstance(node.args[0], (ast.Tuple, ast.List)):
-                axes_node = node.args[0]
-            elif node.args:
-                axes_node = ast.Tuple(elts=list(node.args), ctx=ast.Load())
-    if base is None:
-        return None
-    # Resolve the base's dim tokens AS STRINGS (``parse_shape_expression`` yields
-    # string tokens; ``iter_extent_of`` yields AST nodes to unparse).
+        return node.value, None
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "transpose"):
+        return None, None
+    f = node.func
+    if isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy") and node.args:
+        return node.args[0], node.args[1] if len(node.args) > 1 else None
+    if len(node.args) == 1 and isinstance(node.args[0], (ast.Tuple, ast.List)):
+        return f.value, node.args[0]
+    return f.value, ast.Tuple(elts=list(node.args), ctx=ast.Load()) if node.args else None
+
+
+def base_shape_tokens(base: ast.AST, known: dict[str, str]) -> list[str] | None:
+    """The base array's extents as strings: from ``known`` for a Name, else :func:`iter_extent_of`."""
     if isinstance(base, ast.Name):
         sstr = known.get(base.id)
-        toks = [str(t) for t in parse_shape_expression(sstr)] if sstr else None
-    else:
-        table: dict[str, tuple[str, ...]] = {}
-        for name, sstr in known.items():
-            tk = parse_shape_expression(sstr)
-            if tk:
-                table[name] = tk
-        ext = iter_extent_of(base, table)
-        toks = [ast.unparse(e) for e in ext] if ext else None
+        return [str(t) for t in parse_shape_expression(sstr)] if sstr else None
+    table: dict[str, tuple[str, ...]] = {}
+    for name, sstr in known.items():
+        tk = parse_shape_expression(sstr)
+        if tk:
+            table[name] = tk
+    ext = iter_extent_of(base, table)
+    return [ast.unparse(e) for e in ext] if ext else None
+
+
+def shape_from_transpose(node: ast.AST, known: dict[str, str]) -> str | None:
+    """The shape of a transposed view (materialised into a fresh buffer when returned): the base
+    shape reversed, or permuted by explicit literal axes."""
+    base, axes_node = transpose_operands(node)
+    if base is None:
+        return None
+    toks = base_shape_tokens(base, known)
     if not toks:
         return None
     if axes_node is None:

@@ -5,6 +5,8 @@ import copy
 
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     DesugarError,
+    RankedRewritePass,
+    RewritePass,
     const_int,
     np_attr,
     replace_call_with_name,
@@ -17,17 +19,13 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.ufuncs import ufunc
 AT_OPS = {"add": "+=", "subtract": "-=", "multiply": "*="}
 
 
-class DiffToSliceDifference(ast.NodeTransformer):
+class DiffToSliceDifference(RewritePass):
     """``np.diff(p)`` -> ``p[1:] - p[:-1]``.
 
-    The identity numpy documents, and every python backend traces the slice form natively -- dace
-    otherwise falls back to a Python callback for the whole enclosing program, which is not a
-    lowering at all. Only the single-argument form: an ``n``/``axis``/``prepend`` argument is a
-    different computation, left standing for the caller to see.
+    Every python backend traces the slice form natively; dace otherwise falls back to a Python
+    callback for the whole program. Only the single-argument form: ``n``/``axis``/``prepend`` compute
+    something else and are left standing.
     """
-
-    def __init__(self) -> None:
-        self.changed = False
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -48,16 +46,12 @@ class DiffToSliceDifference(ast.NodeTransformer):
         return ast.copy_location(ast.BinOp(left=tail, op=ast.Sub(), right=head), node)
 
 
-class StripAstypeCopyKwarg(ast.NodeTransformer):
+class StripAstypeCopyKwarg(RewritePass):
     """``x.astype(dt, copy=False)`` -> ``x.astype(dt)``.
 
-    ``copy`` is a hint about whether numpy may return the input unchanged when the dtype already
-    matches; the VALUE is the same either way. dace's astype replacement takes no such argument and
-    fails the build outright (``_ndarray_astype() got an unexpected keyword argument 'copy'``).
+    ``copy`` only decides whether numpy may return the input itself when the dtype already matches;
+    the value is the same. dace's astype replacement rejects the keyword.
     """
-
-    def __init__(self) -> None:
-        self.changed = False
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -71,22 +65,14 @@ class StripAstypeCopyKwarg(ast.NodeTransformer):
         return node
 
 
-class RepeatCountsInline(ast.NodeTransformer):
+class RepeatCountsInline(RankedRewritePass):
     """``np.repeat(src, np.diff(p))`` -> a prefix-sum fill loop.
 
-    A PER-ELEMENT repeat count is a different computation from the scalar one: the destination
-    offset is the running sum of the counts, not ``i * K``. numba and dace have no array-count
-    repeat, so the CSR row-index idiom fell back to a callback.
-
-    The output length is ``sum(counts)``, which is data -- except for a first difference, where it
-    TELESCOPES to ``p[-1] - p[0]``. That is the only form claimed here; any other per-element count
-    is left standing rather than sized by a guess.
+    numba and dace have no array-count repeat. The destination offset is the running sum of the
+    counts, and the output length ``sum(counts)`` is data -- except for a first difference, where it
+    telescopes to ``p[-1] - p[0]``. That is the only form claimed; any other per-element count is
+    left standing.
     """
-
-    def __init__(self, ranks: dict[str, int]) -> None:
-        self.ranks = ranks
-        self.changed = False
-        self._ctr = 0
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
@@ -123,22 +109,16 @@ class RepeatCountsInline(ast.NodeTransformer):
         return out
 
 
-class BincountInline(ast.NodeTransformer):
+class BincountInline(RankedRewritePass):
     """``np.bincount(idx, weights=w, minlength=M)`` -> zero M slots, then a scatter-add loop.
 
-    No python backend implements it: numba has no bincount at all, and dace routes it to a Python
-    callback that drags the whole program back into the interpreter. The loop is the definition --
-    duplicate indices ACCUMULATE, which is why it is ``+=`` and not a store.
+    numba has no bincount and dace routes it to a Python callback. Duplicate indices accumulate,
+    hence ``+=`` and not a store.
 
-    ``minlength`` is required. numpy sizes the result ``max(minlength, idx.max() + 1)`` and the
-    second term is data; every corpus caller assigns the result into a buffer of exactly M, so an
-    index at or past M would make numpy return a LONGER array and the assignment itself would raise.
+    ``minlength`` is required: numpy sizes the result ``max(minlength, idx.max() + 1)``, and the second
+    term is data. Sizing it M agrees with numpy whenever every index is below M, which a caller storing
+    the result into an M-sized buffer already requires.
     """
-
-    def __init__(self, ranks: dict[str, int]) -> None:
-        self.ranks = ranks
-        self.changed = False
-        self._ctr = 0
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
@@ -173,18 +153,11 @@ class BincountInline(ast.NodeTransformer):
         return out
 
 
-class AddAtInline(ast.NodeTransformer):
-    """``np.add.at(A, idx, vals)`` -> an explicit scatter loop. numba has no
-    ufunc.at; a sequential ``+=`` loop reproduces its defining property --
-    duplicate indices accumulate (unlike ``A[idx] += vals``). Handles a single
-    1-D index (edge_laplacian's ``np.add.at(Lx, src, flux)``) and a tuple of
-    index arrays + scalar axes (icon_scatter's ``np.add.at(out, (i2d, jk, j2d),
-    val)``); the driver is the first index array, scalars ride each iteration."""
-
-    def __init__(self, ranks: dict[str, int]) -> None:
-        self.ranks = ranks
-        self.changed = False
-        self._ctr = 0
+class AddAtInline(RankedRewritePass):
+    """``np.add.at(A, idx, vals)`` (also subtract/multiply) -> an explicit scatter loop. numba has
+    no ufunc.at; a sequential ``+=`` loop keeps its defining property -- duplicate indices accumulate
+    (unlike ``A[idx] += vals``). ``idx`` is one index array or a tuple of index arrays and scalar
+    indices; the first index array drives the loop, scalars ride each iteration."""
 
     def visit_Expr(self, node: ast.Expr):
         self.generic_visit(node)
@@ -202,10 +175,8 @@ class AddAtInline(ast.NodeTransformer):
         self._ctr += 1
         iters = [f"{p}_i{k}" for k in range(driver_rank)]
         it = ", ".join(iters)
-        # ``np.ascontiguousarray`` materialises each hoisted index / value array:
-        # pythran keeps ``nbr_idx[:, :, n] - 1`` as a lazy numpy_expr that cannot
-        # be indexed by a tuple in the scatter loop (icon_scatter); it is a no-op
-        # for an already-contiguous array under numba.
+        # ``np.ascontiguousarray`` materialises each hoisted index / value array: pythran cannot
+        # tuple-index a lazy numpy_expr. A no-op on an already-contiguous array.
         pre, idx_exprs, first_arr = [], [], None
         for j, e in enumerate(elts):
             if (expr_rank(e, self.ranks) or 0) >= 1:
@@ -222,21 +193,18 @@ class AddAtInline(ast.NodeTransformer):
             tv = f"{p}_v"
             vr = expr_rank(vals, self.ranks)
             if vr == 0:
-                # A SCALAR value stays a scalar: ``np.ascontiguousarray(1)`` is a 0-d ARRAY, and
-                # pythran then has no ``double += 0-d array``. The materialisation exists for a lazy
-                # numpy_expr operand, which a scalar is not.
+                # A scalar stays a scalar: ``np.ascontiguousarray(1)`` is a 0-d array, and pythran has
+                # no ``double += 0-d array``.
                 tv = ast.unparse(vals)
             else:
                 pre.append(f"{tv} = np.ascontiguousarray({ast.unparse(vals)})")
-            # ``A[idx]`` keeps the axes the index tuple does NOT address, so a rank-1 index into a
-            # rank-3 A selects rank-2 blocks and vals is legitimately rank 3 (cp2k_density_matrix_trs4's
-            # ``np.add.at(c_blocks, flat_c_pos, alpha * flat_prod)``). Those trailing axes get their
-            # own loops rather than a subarray ``+=``: scalar accumulation is what every backend
-            # supports, and it keeps the unbuffered duplicate-index order this lowering exists for.
+            # ``A[idx]`` keeps the axes the index tuple does not address, so vals may carry trailing
+            # block axes. Those get their own loops rather than a subarray ``+=``: scalar accumulation
+            # is what every backend supports, and it keeps the unbuffered duplicate-index order.
             trailing = vr - driver_rank if vr else 0
             a_rank = self.ranks.get(A)
             if vr and trailing and (trailing < 0 or a_rank is None or a_rank - len(elts) != trailing):
-                # Anything else would need numpy broadcast alignment we do not model -> fail loudly.
+                # Anything else needs numpy broadcast alignment, which is not modelled.
                 raise DesugarError(
                     f"np.add.at values ndim {vr} != index ndim {driver_rank} "
                     f"plus the {'unknown' if a_rank is None else a_rank - len(elts)} "
@@ -258,19 +226,13 @@ class AddAtInline(ast.NodeTransformer):
         return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body]
 
 
-class SearchsortedMaterialize(ast.NodeTransformer):
+class SearchsortedMaterialize(RewritePass):
     """``np.searchsorted(<expr>, v)`` -> ``np.searchsorted(np.ascontiguousarray(<expr>), v)``.
 
-    pythran keeps ``rmax * np.arange(npt + 1) / npt`` as a lazy ``numpy_expr`` whose iterator is
-    forward-only, and searchsorted needs to walk it backwards -- the g++ error is a missing
-    ``operator--`` on a numpy_expr_iterator, several template layers deep and nowhere near the line
-    that caused it. Materialising the sorted operand is a no-op for an array that is already
-    contiguous, which is what the other backends see.
+    pythran keeps an array expression as a lazy ``numpy_expr`` whose iterator is forward-only, and
+    searchsorted walks it backwards (g++: no ``operator--`` on a numpy_expr_iterator). Materialising
+    is a no-op for an already-contiguous array.
     """
-
-    def __init__(self) -> None:
-        self.changed = False
-        self._ctr = 0
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
@@ -279,8 +241,7 @@ class SearchsortedMaterialize(ast.NodeTransformer):
             return node
         pre: list[ast.stmt] = []
         for call in calls:
-            # A NAME is not enough: pythran binds a name to the lazy expression itself, so
-            # ``edges = rmax * np.arange(n) / npt`` stays an unmaterialised numpy_expr at the use.
+            # Even a name is materialised: pythran binds a name to the lazy expression itself.
             tmp = f"__ss{self._ctr}"
             self._ctr += 1
             pre.append(
@@ -305,12 +266,11 @@ class SearchsortedMaterialize(ast.NodeTransformer):
 
 
 def hoist_histogram(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
-    """``np.histogram(a, bins[, lo, hi][, weights=w])[0]`` -> the temp its binning loop fills (azimint's ``histw =
-    np.histogram(r, n, weights=d)[0]``): a min/max scan
-    for the default range, the ``np.linspace(lo, hi, bins + 1)`` edge array, then per-element
-    binning ``b = int((a-lo)*bins/(hi-lo))`` clamped to ``[0, bins-1]``, walked one step against
-    those edges (numpy's own correction) and accumulating ``1`` (or ``w[i]``). numba has no
-    np.histogram; this is the same loop the C/Fortran backends lower (azimint_hist)."""
+    """``np.histogram(a, bins[, lo, hi][, weights=w])[0]`` -> the temp its binning loop fills.
+
+    A min/max scan for the default range, the bin edges, then per-element binning
+    ``b = int((a-lo)*bins/(hi-lo))`` clamped to ``[0, bins-1]`` and walked one step against the edges
+    (numpy's own correction), accumulating ``1`` (or ``w[i]``). numba has no np.histogram."""
     if not (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant) and node.slice.value == 0):
         return None
     call = node.value
@@ -341,10 +301,8 @@ def hoist_histogram(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
     else:
         lo_s, hi_s = f"({ast.unparse(lo)})", f"({ast.unparse(hi)})"
     temp = f"{p}_o"
-    # numpy's histogram is int64 COUNTS when unweighted and the weights' own dtype when
-    # weighted -- never an unconditional float64, which both lies about the unweighted
-    # result and narrows a float32 weighted one. A non-Name weights expression is hoisted
-    # so the dtype can be read off a name rather than re-evaluating the expression.
+    # int64 counts when unweighted, the weights' own dtype when weighted. A non-Name weights
+    # expression is hoisted so its dtype is read off a name, not re-evaluated.
     if weights is None:
         wdtype, add = "np.int64", "1"
     else:
@@ -352,12 +310,10 @@ def hoist_histogram(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
         if not isinstance(weights, ast.Name):
             lines.append(f"{wname} = {ast.unparse(weights)}")
         wdtype, add = f"{wname}.dtype", f"{wname}[{p}_i]"
-    # numpy's bin is defined by its EDGE ARRAY, not by the closed form below: it truncates
-    # the same index and then walks it one step against linspace's edges. The two round
-    # apart, and without the walk 6 of azimint_hist's 400000 fp32 samples land one bin over
-    # -- 0.2% on a bin ratio, past the fp32 band. So the edges are rebuilt with linspace's
-    # own arithmetic and, crucially, in the SAMPLE dtype, one rounding per statement: half
-    # an ulp of edge is worth ~20 misbinned samples at this count. Only edges 0..bins-1 are
+    # numpy's bin is defined by its edge array, not the closed form: it truncates the same
+    # index, then walks it one step against linspace's edges, and the two round apart. The
+    # edges are rebuilt with linspace's arithmetic in the sample dtype, one rounding per
+    # statement, since half an ulp of edge already misbins samples. Only edges 0..bins-1 are
     # read (the walk up stops at bins-1), hence ``bins`` entries and no top edge.
     edges = f"{p}_e"
     lines += [
@@ -368,9 +324,8 @@ def hoist_histogram(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
         f"    {edges}[{p}_j] = {p}_j * {p}_st",
         f"    {edges}[{p}_j] = {edges}[{p}_j] + {lo_s}",
     ]
-    # numpy drops samples outside [lo, hi] (only the last bin is closed); the clamp alone
-    # would fold them into bin 0 / bin-1 instead. Guard the increment. For an auto lo/hi
-    # (a.min()/a.max()) every element is in range, so the guard is a no-op there.
+    # numpy drops samples outside [lo, hi] (only the last bin is closed); the clamp alone would
+    # fold them into the end bins. The guard is a no-op for the auto range.
     lines += [
         f"{temp} = np.zeros({bins}, {wdtype})",
         f"for {p}_i in range({a}.shape[0]):",
@@ -391,20 +346,19 @@ HISTOGRAM_HOIST = HoistForm(frozenset({"histogram"}), (), hoist_histogram)
 
 def hoist_repeat_axis(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
     """``np.repeat(x, m, axis=k)`` (literal axis, scalar count) -> the temp its gather loop ``out[..., j, ...] =
-    x[..., j // m, ...]`` fills (numpy repeats each slice ``m`` times consecutively along ``axis``). numba rejects the
-    ``axis=`` kwarg on np.repeat (stockham's ``np.repeat(reshape(tmp, (R, R**i, 1)), R**(K-i-1), axis=2)``)."""
+    x[..., j // m, ...]`` fills. numba rejects ``axis=`` on np.repeat."""
     if not isinstance(node, ast.Call) or np_attr(node) != "repeat" or len(node.args) < 2:
         return None
     kw = {k.arg: k.value for k in node.keywords}
     ax = kw.get("axis") or (node.args[2] if len(node.args) > 2 else None)
     axis = None if ax is None else const_int(ax)
     if axis is None:
-        return None  # no axis / non-literal -> leave verbatim (a clean skip)
+        return None  # no axis or a non-literal one: leave verbatim
     x, m = node.args[0], node.args[1]
     rank = expr_rank(x, hoist.tables.ranks)
     if rank is None or not -rank <= axis < rank:
-        # An axis outside the rank means the rank estimate is wrong; wrapping it into range
-        # would repeat along a different axis, so leave the call verbatim (as :func:`axis_list`).
+        # An axis outside the rank means the rank estimate is wrong; wrapping it would repeat
+        # along a different axis.
         return None
     k = axis % rank
     p = f"__rp{hoist.ctr}"

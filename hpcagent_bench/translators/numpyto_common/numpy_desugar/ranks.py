@@ -24,25 +24,18 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
 )
 
 
-#: Tuple-shape lengths currently known to :func:`expr_rank`. Set by
-# :func:`rank_table` while it is iterating so ``.reshape(name)`` can report the
-# tuple's actual rank instead of the rank-1 guess a bare Name gets.
+#: Tuple-shape lengths known to :func:`expr_rank` while :func:`rank_table` iterates, so ``.reshape(name)``
+#: reports the tuple's length instead of the rank-1 guess a bare Name gets.
 active_tuple_lengths: dict[str, int | None] | None = None
 
 
 def newaxis_singletons(value: ast.AST, rank: int) -> frozenset:
     """Axes of ``value`` a literal ``None`` in its own subscript pins to extent 1.
 
-    Index arrays in one gather BROADCAST against each other, so an open mesh
-    (``g_z[:, None, None]``, ``g_y[None, :, None]``, ``g_x[None, None, :]``) names three
-    DIFFERENT shapes of the same rank and the gather runs over their broadcast. Reading every
-    one of them at the full iterator tuple walks off the end of the two singleton axes -- and
-    reads whatever follows the allocation rather than raising, which is how cp2k_grid_integrate
-    graded on garbage. A ``None`` entry is the one extent this pass can read off the source
-    text, which is enough for the open-mesh spelling every kernel here uses.
-
-    An expression whose axes cannot be placed (an ellipsis, an advanced index, or anything but
-    a subscript) reports NO singleton, so it is indexed the way it always was.
+    Index arrays in one gather broadcast against each other, so an open mesh (``g_z[:, None, None]``,
+    ``g_y[None, :, None]``) names different shapes of one rank; indexing each at the full iterator tuple
+    reads past its singleton axes without raising. An expression whose axes cannot be placed (an ellipsis,
+    an advanced index, not a subscript) reports no singleton.
     """
     if not isinstance(value, ast.Subscript):
         return frozenset()
@@ -90,9 +83,7 @@ def constant_rank(value: ast.Constant, ranks: dict[str, int]) -> int | None:
 
 
 def attribute_rank(value: ast.Attribute, ranks: dict[str, int]) -> int | None:
-    # ``A.T`` reverses the axes, keeping the rank. Leaving it unknown silently mis-ranked every
-    # ``x = x @ w.T + b``: the matmul went undecided, and the enclosing ``+ b`` then reported the
-    # BIAS vector's rank 1 for a rank-2 result.
+    # ``A.T`` reverses the axes, keeping the rank.
     return expr_rank(value.value, ranks) if value.attr == "T" else None
 
 
@@ -113,8 +104,7 @@ def unaryop_rank(value: ast.UnaryOp, ranks: dict[str, int]) -> int | None:
 
 
 def list_rank(value: ast.List, ranks: dict[str, int]) -> int | None:
-    # ``np.array([a, b])`` -- a list literal's rank is its nesting depth. Left unknown, the
-    # index vector fv3 builds this way was untracked, and every pass keyed on rank skipped it.
+    # ``np.array([a, b])``: a list literal adds one axis over its elements' rank.
     return 1 + max((expr_rank(e, ranks) or 0) for e in value.elts) if value.elts else 1
 
 
@@ -132,18 +122,10 @@ def boolop_rank(value: ast.BoolOp, ranks: dict[str, int]) -> int | None:
 def tuple_index_drop(elts: list[ast.expr], ranks: dict[str, int]) -> int:
     """Axes a tuple index removes from its base.
 
-    Slices keep a dim, newaxis adds one, a SCALAR index removes one, and an ellipsis (``a[..., i]``)
-    expands to full slices over all otherwise-unindexed axes -- it drops NOTHING. A 1-D fancy index
-    amid slices is neither: it consumes the base axis and reinserts its own (``suffix[:, idx]`` with
-    ``idx = np.arange(W)`` stays rank 2, one axis in, one out), so its net drop is ``1 - its own
-    rank``, not the flat ``1`` a scalar loop index costs. Unknown-rank index defaults to the scalar
-    reading, same as every kernel that reached this line before a fancy index needed distinguishing.
-    Advanced indices BROADCAST against each other rather than each contributing their own axes:
-    ``A[ia, ib]`` with both rank 2 is rank 2, not 4. Summing them per index made field_gather's
-    ``ey_arr[:, :, 0, 0][ia_b, ib_b]`` rank 4, the product it feeds rank 4 too, and the reduction
-    over it emitted a nest reading ``.shape[5]`` off it. So the whole advanced block consumes one
-    base axis per index and gives back ONE broadcast shape -- ``n_adv - max(rank)``. An integer index
-    is the rank-0 case of the same formula, and an unknown rank keeps reading as one, exactly as before.
+    A slice or an ellipsis drops nothing and a newaxis adds one. The advanced indices (scalars and index
+    arrays) broadcast against each other: the block consumes one base axis per index and gives back ONE
+    broadcast shape, a drop of ``n_adv - max(rank)``. So ``a[i, j]`` drops 2, ``A[ia, ib]`` with both rank 2
+    drops 0, and ``x[:, idx]`` with a 1-D ``idx`` drops 0. An index of unknown rank counts as a scalar.
     """
     drop = 0
     adv_ranks = []
@@ -168,12 +150,9 @@ def is_tuple_call(node: ast.expr) -> bool:
 def name_index_rank(base: int, index: ast.Name, ranks: dict[str, int]) -> int | None:
     """Rank of ``a[name]``.
 
-    A single Name index is USUALLY a scalar (a loop iterator), which drops one axis. But it may be
-    an index ARRAY or a boolean MASK -- azimint's ``bin_id = bin_id[valid]`` -- and calling that rank
-    0 made the scatter desugar see no driver axis and leave ``np.add.at`` standing. A gather adds
-    ``rank - 1`` axes and a mask removes them, so the two readings AGREE only for a rank-1 index;
-    anywhere else say nothing rather than invent a rank (see _drop_rank_conflicts for what a wrong
-    rank costs).
+    A Name of unknown or zero rank is a scalar (a loop iterator) and drops one axis. An array index may be
+    a gather (adds ``rank - 1`` axes) or a boolean mask (removes them); the two readings agree only for a
+    rank-1 index, so any higher rank is unknown rather than guessed.
     """
     idx_rank = ranks.get(index.id)
     if idx_rank is None or idx_rank < 1:
@@ -193,9 +172,8 @@ def subscript_rank(value: ast.Subscript, ranks: dict[str, int]) -> int | None:
     if isinstance(sl, ast.Tuple):
         return base - tuple_index_drop(sl.elts, ranks)
     if is_tuple_call(sl):
-        # ``A[tuple(axes)]`` is the WHOLE index, one entry per axis -- not the single scalar
-        # index the fall-through below assumes. How many axes it drops depends on what the
-        # sequence holds, which is not visible here; reporting ``base - 1`` invented a rank.
+        # ``A[tuple(axes)]`` is the WHOLE index, one entry per axis; what it drops depends on what the
+        # sequence holds, which is not visible here.
         return None
     if isinstance(sl, ast.Name):
         return name_index_rank(base, sl, ranks)
@@ -250,12 +228,10 @@ def method_call_rank(value: ast.Call, ranks: dict[str, int]) -> int | None:
 def reshape_args_rank(value: ast.Call, undecided: Callable[[], int | None]) -> int | None:
     """``x.reshape((a, b))`` method form; ``undecided`` answers a shape argument this cannot count.
 
-    Multi-arg spelling: ONE positional argument per dimension, so the rank is the argument count
-    whatever each dimension expression looks like -- ``X.reshape(-1, X.shape[-1])`` (ls3df_scf) is
-    rank 2, and neither ``-1`` (a UnaryOp) nor ``X.shape[-1]`` (a Subscript) is a bare Name.
-    Requiring Name/Constant there read every such reshape as "rank unknown", which then reached
-    np.linalg.cholesky as ndim 0. The single-arg spelling stays restricted: a lone Name may hold the
-    whole shape TUPLE, which is a rank this cannot count.
+    The multi-arg spelling has one positional argument per dimension, so the rank is the argument count
+    whatever each expression is (``X.reshape(-1, X.shape[-1])`` is rank 2). A lone argument counts as one
+    axis only when it is a literal or a Name not bound to a tuple: any other expression may be a
+    whole shape tuple.
     """
     a0 = value.args[0]
     n = tuple_len(a0)
@@ -280,9 +256,7 @@ def reduce_call_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int |
     if base is None:
         return None
     kw = {k.arg: k.value for k in value.keywords}
-    # keepdims=True keeps every reduced axis at extent 1, so the rank is unchanged. Ignoring
-    # it under-counted by one and made the following ``np.squeeze(y, axis=-1)`` resolve -1
-    # against the WRONG rank -- it squeezed a different axis.
+    # keepdims=True keeps every reduced axis at extent 1, so the rank is unchanged.
     keep = kw.get("keepdims")
     if isinstance(keep, ast.Constant) and keep.value is True:
         return base
@@ -303,7 +277,7 @@ def shape_ctor_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | 
         if isinstance(a0, ast.Attribute) and a0.attr == "shape":
             return expr_rank(a0.value, ranks)  # np.zeros(C.shape, ...) keeps C's rank
         if isinstance(a0, (ast.Name, ast.Constant)) or expr_rank(a0, ranks) == 0:
-            return 1  # 1-D length, including a scalar expression such as cp2k's n_block_rows * block_size
+            return 1  # 1-D length, including a scalar expression such as ``n_rows * block``
     return np_fallthrough_rank(value, attr, ranks)
 
 
@@ -320,20 +294,14 @@ def np_reshape_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | 
 
 
 def diag_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
-    # The one numpy call whose rank moves in BOTH directions: 2-D in extracts the diagonal
-    # (1-D out), 1-D in builds the matrix (2-D out). The elementwise fallback reports
-    # the operand's rank, so raman_fitting's ``scale = np.diag(normal).copy()`` came back
-    # rank 2 and ``scale[scale <= 0] = 1.0`` was lowered as a two-deep nest reading
-    # ``scale.shape[1]`` off a vector.
+    # 2-D in extracts the diagonal (1-D out), 1-D in builds the matrix (2-D out).
     if not value.args:
         return np_fallthrough_rank(value, attr, ranks)
     return {1: 2, 2: 1}.get(expr_rank(value.args[0], ranks))
 
 
 def take_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
-    # ``np.take(a, idx, axis=k)`` replaces axis k by the INDEX's own rank, so a scalar
-    # index drops it. The elementwise fallback reported a's rank, which made the
-    # enclosing ``np.expand_dims`` place its newaxis in a nest one dimension too deep.
+    # ``np.take(a, idx, axis=k)`` replaces axis k by the INDEX's own rank, so a scalar index drops it.
     if len(value.args) < 2:
         return np_fallthrough_rank(value, attr, ranks)
     base = expr_rank(value.args[0], ranks)
@@ -363,9 +331,7 @@ def matmul_call_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int |
 
 
 def tensordot_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
-    # A contraction, not a broadcast: the fallback reported ``max(operand ranks)``,
-    # which read ls3df's ``tensordot(row, X)`` (2 and 4, one axis contracted) as rank 2 and
-    # built a 2-entry ``moveaxis`` permutation for a rank-4 result. Unknown stays unknown.
+    # A contraction, not a broadcast: each operand loses its contracted axes.
     if len(value.args) < 2:
         return np_fallthrough_rank(value, attr, ranks)
     la, lb = expr_rank(value.args[0], ranks), expr_rank(value.args[1], ranks)
@@ -376,9 +342,7 @@ def tensordot_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | N
 def einsum_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
     """``np.einsum('gai,ai->ga', ...)`` has its OUTPUT subscripts' rank, not its largest operand's.
 
-    The elementwise fallback read vexx_k's ``'gai,ai->ga'`` as rank 3, and the axis-1 sum over its
-    product with a matrix then read ``.shape[2]`` off a matrix. A spec that is not a literal string,
-    or that holds an ellipsis, does not show how many axes it keeps, so it stays unranked.
+    A spec that is not a literal string, or that holds an ellipsis, stays unranked.
     """
     spec = value.args[0] if value.args else None
     if not (isinstance(spec, ast.Constant) and isinstance(spec.value, str)) or "..." in spec.value:
@@ -438,9 +402,7 @@ def tensordot_contracted(value: ast.Call) -> int | None:
 
 
 def call_return_rank(value: ast.AST, call_returns: dict[str, int]) -> int | None:
-    """Rank of ``helper(...)`` when ``helper`` is a local function with a known
-    return rank -- ``expr_rank`` alone returns None for a call to a non-numpy
-    Name, so ``x = relu(a @ b)`` would leave ``x`` untracked."""
+    """Rank of ``helper(...)`` for a local function with a known return rank, which ``expr_rank`` cannot see."""
     if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
         return call_returns.get(value.func.id)
     return None
@@ -453,10 +415,7 @@ IDENT_RE = r"[A-Za-z_][A-Za-z0-9_]*"
 def name_value_pairs(tree: ast.AST) -> Iterator[tuple[str, ast.expr]]:
     """Every ``name = <expr>`` binding, including the elements of a parallel tuple assignment.
 
-    ``X, Y, sigma = Y, Ynew, sigma_new`` is three bindings, not none. Skipping it left ls3df_scf's
-    CheFSI recurrence with no forward edge from ``Y`` back to ``X``, so the loop-carried block never
-    took an extent and every shape read against it fell through to a backward walk that answers a
-    rebound name from whichever definition it reaches first.
+    ``X, Y, sigma = Y, Ynew, sigma_new`` is three bindings; a loop-carried swap needs them as forward edges.
     """
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
@@ -487,16 +446,12 @@ def extent_tokens(
     the two bindings of one local look like a disagreement and drop the local entirely. The joint
     fixpoint in :func:`resolve_shape_reads` re-reads it once the read has been rewritten.
 
-    ``tuple_locals`` names the locals bound to a tuple. A shape argument spelled as a bare name --
-    ``x.reshape(shp)`` -- is read as a single dimension, which is right for a scalar and a whole
-    rank off for a tuple, and a rank-1 answer here is worse than no answer: it propagates. The
-    fold inlines those tuples, so this only catches one that could not be.
+    ``tuple_locals`` names the locals bound to a tuple: ``x.reshape(shp)`` reads ``shp`` as one dimension,
+    a whole rank off for a tuple, and a wrong answer propagates where no answer does not.
     """
-    # An operand this round cannot size makes the whole expression unsized. The oracle does not say
-    # so: a broadcast with one unknown side reports the KNOWN side's extent, which is right for
-    # ``x * 2.0`` and a whole wrong shape for ``vloc[..., None] * X`` while ``X`` is still unknown.
-    # Only ARRAY operands count -- a scalar contributes no axis and is unknown to the table by
-    # nature, so requiring it here would refuse every array-scalar expression in the corpus.
+    # An unsized ARRAY operand makes the whole expression unsized: ``iter_extent_of`` reports a broadcast's
+    # known side, which is wrong for ``v[..., None] * X`` while ``X`` is unknown. Scalars contribute no axis
+    # and are never in the table, so only arrays count.
     if any(n.id in arrays and n.id not in table for n in ast.walk(value) if isinstance(n, ast.Name)):
         return None
     ext = iter_extent_of(value, table)
@@ -511,17 +466,12 @@ def extent_tokens(
 def shape_table(tree: ast.AST, seed: dict[str, tuple[str, ...]]) -> dict[str, tuple[str, ...]]:
     """Propagate full shapes across straight-line assignments to a fixpoint.
 
-    The rank table's twin, and the reason it exists: resolving a shape by walking BACKWARD from the
-    read to the definition cannot answer a name that is rebound, and cannot answer a cycle at all.
-    ls3df_scf's CheFSI loop carries ``X, Y, sigma = Y, Ynew, sigma_new``, so ``X`` is defined in
-    terms of ``Y`` and ``Y`` in terms of ``X``; a backward walk hits its own visit guard and reports
-    nothing, while a forward pass takes the extent in from the call site and closes the cycle on the
-    next round.
+    The rank table's twin. A backward walk from a read to its definition cannot answer a rebound name or a
+    cycle (``X, Y = Y, Ynew`` in a loop); a forward pass takes the extent in from the seed and closes the
+    cycle on the next round.
 
-    A name whose bindings do not AGREE is dropped, the same discipline as
-    :func:`drop_rank_conflicts` -- the table is flow-insensitive, so keeping the last writer would
-    hand every consumer one shape at every program point. A declared array keeps its declared shape
-    whatever a rebinding makes it.
+    A name whose bindings do not AGREE is dropped, as in :func:`drop_rank_conflicts`. A declared array
+    keeps its declared shape whatever a rebinding makes it.
     """
     tuple_locals = frozenset(
         node.targets[0].id
@@ -532,16 +482,10 @@ def shape_table(tree: ast.AST, seed: dict[str, tuple[str, ...]]) -> dict[str, tu
         and isinstance(node.value, (ast.Tuple, ast.List))
     )
     pairs = list(name_value_pairs(tree))
-    # Which names are ARRAYS, from the rank table -- the only question asked of it here, and the one
-    # it answers without needing an extent. A name it cannot rank counts as an array: refusing to
-    # size an expression that reads it costs a resolution, reporting the other operand's shape for
-    # it costs a wrong one.
+    # The rank table only says which names are ARRAYS. A name it cannot rank counts as one: refusing to
+    # size an expression costs a resolution, reporting the other operand's shape costs a wrong one. A
+    # manifest symbol is a declared extent, never an array.
     ranks = rank_table(tree, {k: len(v) for k, v in seed.items()})
-    # A name the rank table cannot rank counts as an array -- refusing to size an expression that
-    # reads it costs a resolution, reporting the other operand's shape for it costs a wrong one, and
-    # the names that matter here are exactly the ones the rank table DROPPED for disagreeing.
-    # Manifest symbols are the exception: ``Lb`` is a declared extent, never an array, and treating
-    # it as one refused every allocation spelled with it.
     symbols = {ident for shape in seed.values() for tok in shape for ident in re.findall(IDENT_RE, str(tok))}
     arrays = (frozenset(n for n, unused in pairs if ranks.get(n, 1) >= 1) | frozenset(seed)) - symbols
     table: dict[str, tuple[str, ...]] = {k: tuple(v) for k, v in seed.items()}
@@ -568,10 +512,8 @@ def shape_table(tree: ast.AST, seed: dict[str, tuple[str, ...]]) -> dict[str, tu
 
 
 def rank_table(tree: ast.AST, seed: dict[str, int], call_returns: dict[str, int] | None = None) -> dict[str, int]:
-    """Propagate ndim across straight-line assignments to a fixpoint. ``call_returns``
-    (a ``{helper: return_ndim}`` map) lets a local bound to a helper call inherit
-    that helper's return rank (the ML kernels thread arrays through relu/conv2d
-    helpers, which ``expr_rank`` cannot see into)."""
+    """Propagate ndim across straight-line assignments to a fixpoint. ``call_returns`` (``{helper:
+    return_ndim}``) gives a local bound to a helper call that helper's return rank."""
     global active_tuple_lengths
     ranks = dict(seed)
     # The tree does not change while the table converges: index its bindings once, not every round.
@@ -597,11 +539,8 @@ def rank_table(tree: ast.AST, seed: dict[str, int], call_returns: dict[str, int]
 def drop_rank_conflicts(tree: ast.AST, ranks: dict[str, int], seed: dict[str, int]) -> None:
     """Forget any name whose assignments do not AGREE on a rank.
 
-    The table is flow-insensitive, so a name reassigned to a differently-shaped value converges to
-    whichever assignment ran last -- and every consumer then reads that one rank at every program
-    point. ``x = x @ w.T + b`` followed by ``x = x + bias3d`` reported rank 3 for the rank-2 value at
-    the top, so ``x.shape`` expanded to three axes. One rank per name or none; a caller that needs
-    the value AT a statement has to track it itself.
+    The table is flow-insensitive: keeping the last writer would hand every consumer one rank at every
+    program point. One rank per name or none; a caller that needs the rank AT a statement tracks it itself.
     """
     per_name: dict[str, OrderedSet] = {}
     for node in ast.walk(tree):
@@ -619,16 +558,11 @@ def drop_rank_conflicts(tree: ast.AST, ranks: dict[str, int], seed: dict[str, in
 
 
 def int_expr(value: ast.AST, ranks: dict[str, int], seed_ranks: dict[str, int] | None = None) -> int | None:
-    """Evaluate a small integer expression used as a tuple length or repeat
-    count. Supports constants, names (array rank), ``arr.ndim``, and the four
-    basic integer operations. Used to size tuple-shaped locals without running
-    the full numpy interpreter.
+    """Evaluate a small integer expression used as a tuple length or repeat count: constants, names (array
+    rank), ``arr.ndim``, unary minus and ``+ - * / //``.
 
-    ``seed_ranks`` is the immutable rank seed (declared array ranks / helper
-    param evidence). It is used for ``arr.ndim`` queries so a circular
-    flow-insensitive inference cannot inflate a local's rank through its own
-    tuple-shape expression (gemm_group_norm_min_bias_add's
-    ``shape = (1, c) + (1,) * (x.ndim - 2)``).
+    ``arr.ndim`` reads ``seed_ranks`` (the immutable seed) first, so a local cannot inflate its own rank
+    through its own tuple-shape expression (``shape = (1, c) + (1,) * (x.ndim - 2)``).
     """
     if isinstance(value, ast.Constant) and isinstance(value.value, int):
         return value.value
@@ -666,10 +600,8 @@ def tuple_expr_len(
 ) -> int | None:
     """Length of a tuple-valued expression, if statically known.
 
-    Covers tuple/list literals, ``arr.shape``, tuple concatenation ``A + B``,
-    and repetition ``(1,) * n``. This is intentionally narrower than full
-    constant folding; it only needs to answer the cases that reach
-    ``.reshape(name)`` in the corpus.
+    Covers tuple/list literals, ``arr.shape``, a name bound to one, concatenation ``A + B`` and repetition
+    ``(1,) * n``.
     """
     if visited is None:
         visited = set()
@@ -706,13 +638,7 @@ def tuple_expr_len(
 def build_tuple_lengths(
     tree: ast.AST, ranks: dict[str, int], seed_ranks: dict[str, int] | None = None
 ) -> dict[str, int | None]:
-    """Map each local bound to a statically-known tuple shape to its length.
-
-    Used by :func:`expr_rank` while ``rank_table`` is iterating, so
-    ``.reshape(name)`` reports the tuple's rank rather than guessing 1.
-    """
-    # Indexed ONCE: a per-Name re-walk recurses, so a chain of tuple locals would cost
-    # assigns x depth x nodes (densenet121). setdefault keeps the first-in-body binding.
+    """Map each local bound to a tuple form to its length (``None`` when not yet known)."""
     bindings, first_values = name_binding_index(tree)
     return tuple_lengths(bindings, first_values, ranks, seed_ranks)
 
@@ -755,10 +681,7 @@ def tuple_lengths(
 
 def tuple_valued(value: ast.AST, assigns: dict[str, ast.expr], visited: frozenset[str] = frozenset()) -> bool:
     """True iff ``value`` is one of the tuple forms :func:`tuple_expr_len` sizes, whether or not its
-    length is known yet.
-
-    ls3df_scf's ``shp = Y.shape`` is a tuple before ``Y`` has a rank. Counted as one dimension,
-    ``reshape(shp)`` made ``Y`` rank 1 through the CheFSI cycle, and ``X.shape[-1]`` became ``X.shape[0]``.
+    length is known yet: ``shp = Y.shape`` is a tuple before ``Y`` has a rank, never one dimension.
     """
     if isinstance(value, (ast.Tuple, ast.List)):
         return True
@@ -773,13 +696,9 @@ def tuple_valued(value: ast.AST, assigns: dict[str, ast.expr], visited: frozense
 
 
 def param_body_rank_evidence(fn: ast.FunctionDef) -> dict[str, int]:
-    """Lower bounds on a helper's param ranks from how the BODY uses each param,
-    independent of call sites: ``p.shape[k]`` implies rank >= k+1, and a
-    multi-axis subscript ``p[:, a:b, c:d, :]`` implies rank >= (non-newaxis index
-    count). This is flow-insensitive-proof -- a call site that passes a local
-    which was later reshaped to a smaller rank poisons the call-site inference
-    (lenet reshapes ``x`` from 4-D to 2-D), but the body's own ``x.shape[3]`` /
-    4-slice index pins the true rank."""
+    """Lower bounds on a helper's param ranks from how its BODY uses each param: ``p.shape[k]`` implies
+    rank >= k+1, a tuple subscript ``p[:, a:b, c]`` rank >= its non-newaxis entry count. Unlike call-site
+    ranks, these cannot be poisoned by a flow-insensitive table passing a later-reshaped local."""
     params = {a.arg for a in fn.args.args}
     ev: dict[str, int] = {}
 
@@ -816,15 +735,11 @@ def return_rank(fn: ast.FunctionDef, ranks: dict[str, int], seed_ranks: dict[str
 def infer_param_ranks(
     funcs: list[ast.FunctionDef], kernel_name: str, kir_seed: dict[str, int]
 ) -> dict[str, dict[str, int]]:
-    """Per-function ``{param: ndim}`` seeds. The kernel's array params come from
-    ``kir_seed``; a HELPER function's param ranks are inferred from its call sites
-    -- ``getAcc(pos, ...)`` in the kernel tells ``getAcc`` that ``pos`` has the
-    kernel's rank for ``pos`` -- unified with body-usage lower bounds
-    (:func:`param_body_rank_evidence`). Ranks merge by MAX: a param used at rank
-    R somewhere is at least rank R, and a conflicting smaller value only ever comes
-    from a flow-insensitive rank-table mix-up (a reshaped local passed to a
-    helper), never from the param's real dimensionality. Iterated to a fixpoint so
-    a helper calling another helper also resolves."""
+    """Per-function ``{param: ndim}`` seeds, iterated to a fixpoint so helper-to-helper calls resolve.
+
+    The kernel's params come from ``kir_seed``; a helper's from its positional call sites and the body
+    lower bounds of :func:`param_body_rank_evidence`, merged by MAX: a smaller conflicting value only
+    comes from a flow-insensitive mix-up (a reshaped local passed on), never from the param's real rank."""
     by_name = {fn.name: fn for fn in funcs}
     params = {fn.name: [a.arg for a in fn.args.args] for fn in funcs}
     seeds: dict[str, dict[str, int]] = {fn.name: dict(param_body_rank_evidence(fn)) for fn in funcs}
@@ -862,8 +777,7 @@ def helper_return_ranks(
     funcs: list[ast.FunctionDef], param_ranks: dict[str, dict[str, int]], kernel_name: str, kernel_seed: dict[str, int]
 ) -> dict[str, int]:
     """``{function: rank of what it returns}`` over the call-site parameter ranks, two rounds so a helper
-    returning another helper's result resolves (numba only). Without it a name bound to a helper call has
-    no rank, and a broadcast over it is not peeled -- cegterg's ``r = _fft_g2r(...)``."""
+    returning another helper's result resolves; gives a name bound to a helper call a rank."""
     returns: dict[str, int] = {}
     for unused in range(2):
         for fn in funcs:

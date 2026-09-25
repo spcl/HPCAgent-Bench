@@ -22,6 +22,57 @@ DescEntry = ArrayDesc | ScalarDesc | SymbolDesc
 DescKey = tuple[tuple[str, str], ...]
 
 
+ParamKind = Literal["array", "scalar", "symbol"]
+
+
+def resolved_array_param(
+    fn: ast.FunctionDef | None, arg: ast.AST, pname: str, arr_by: dict[str, ArrayDesc]
+) -> tuple[ParamKind, DescEntry] | None:
+    res = resolve_array_ref(fn, arg, arr_by) if fn is not None else None
+    if res is None:
+        return None
+    shape, dtype = res
+    return ("array", ArrayDesc(name=pname, dtype=dtype, shape=shape, is_output=False))
+
+
+def name_param(
+    arg: ast.Name,
+    pname: str,
+    arr_by: dict[str, ArrayDesc],
+    sca_by: dict[str, ScalarDesc],
+    sym_by: dict[str, SymbolDesc],
+    fn: ast.FunctionDef | None,
+) -> tuple[ParamKind, DescEntry] | None:
+    if arg.id in arr_by:
+        a = arr_by[arg.id]
+        return ("array", ArrayDesc(name=pname, dtype=a.dtype, shape=a.shape, is_output=False, is_index=a.is_index))
+    if arg.id in sca_by:
+        return ("scalar", ScalarDesc(name=pname, dtype=sca_by[arg.id].dtype))
+    if arg.id in sym_by:
+        return ("symbol", SymbolDesc(name=pname))
+    return resolved_array_param(fn, arg, pname, arr_by)
+
+
+def subscript_param(
+    arg: ast.Subscript, base: str, pname: str, arr_by: dict[str, ArrayDesc], fn: ast.FunctionDef | None
+) -> tuple[ParamKind, DescEntry] | None:
+    resolved = resolved_array_param(fn, arg, pname, arr_by)
+    if resolved is not None:
+        return resolved
+    if base in arr_by:
+        # Every axis indexed: a scalar element of the array.
+        return ("scalar", ScalarDesc(name=pname, dtype=arr_by[base].dtype))
+    return None
+
+
+def constant_param(arg: ast.Constant, pname: str) -> tuple[ParamKind, DescEntry]:
+    if isinstance(arg.value, bool):
+        return ("scalar", ScalarDesc(name=pname, dtype="bool"))
+    if isinstance(arg.value, int):
+        return ("scalar", ScalarDesc(name=pname, dtype="int"))
+    return ("scalar", ScalarDesc(name=pname, dtype="float64"))
+
+
 def infer_param_desc(
     arg: ast.AST,
     pname: str,
@@ -29,53 +80,25 @@ def infer_param_desc(
     sca_by: dict[str, ScalarDesc],
     sym_by: dict[str, SymbolDesc],
     fn: ast.FunctionDef | None = None,
-) -> tuple[Literal["array", "scalar", "symbol"], DescEntry]:
-    """Infer a helper parameter's descriptor from the CALL-SITE argument.
-    Returns ``("array"|"scalar"|"symbol", desc)``."""
+) -> tuple[ParamKind, DescEntry]:
+    """A helper parameter's descriptor, read off the call-site argument: ``(kind, desc)``."""
+    found: tuple[ParamKind, DescEntry] | None = None
     if isinstance(arg, ast.Name):
-        if arg.id in arr_by:
-            a = arr_by[arg.id]
-            return ("array", ArrayDesc(name=pname, dtype=a.dtype, shape=a.shape, is_output=False, is_index=a.is_index))
-        if arg.id in sca_by:
-            return ("scalar", ScalarDesc(name=pname, dtype=sca_by[arg.id].dtype))
-        if arg.id in sym_by:
-            return ("symbol", SymbolDesc(name=pname))
-        if fn is not None:
-            res = resolve_array_ref(fn, arg, arr_by)
-            if res is not None:
-                shape, dtype = res
-                return ("array", ArrayDesc(name=pname, dtype=dtype, shape=shape, is_output=False))
-    if isinstance(arg, ast.Subscript) and isinstance(arg.value, ast.Name):
-        res = resolve_array_ref(fn, arg, arr_by) if fn is not None else None
-        if res is not None:
-            shape, dtype = res
-            return ("array", ArrayDesc(name=pname, dtype=dtype, shape=shape, is_output=False))
-        if arg.value.id in arr_by:
-            # A fully-indexed read (``arr[i]`` / ``arr[i, j]``) drops every axis -- a scalar element,
-            # not an unresolvable array (``resolve_array_ref`` returning ``None`` for a subscript
-            # with no KEPT axis is exactly that case, not a failure to resolve).
-            return ("scalar", ScalarDesc(name=pname, dtype=arr_by[arg.value.id].dtype))
-    if isinstance(arg, ast.Constant):
-        if isinstance(arg.value, bool):
-            return ("scalar", ScalarDesc(name=pname, dtype="bool"))
-        if isinstance(arg.value, int):
-            return ("scalar", ScalarDesc(name=pname, dtype="int"))
-        return ("scalar", ScalarDesc(name=pname, dtype="float64"))
-    if fn is not None:
-        # An array-valued EXPRESSION argument (mlp's ``relu(x @ w2 + b2)``). Only Name and
-        # Subscript reached the resolver above, so every other node fell to the scalar default
-        # below and the helper declared a by-value double where the call passes a buffer --
-        # ``Rank mismatch in argument 'v' (scalar and rank-2)``, and in C a pointer added to a
-        # double. :func:`shape_from_expression` behind the resolver already derives this.
-        res = resolve_array_ref(fn, arg, arr_by)
-        if res is not None:
-            shape, dtype = res
-            return ("array", ArrayDesc(name=pname, dtype=dtype, shape=shape, is_output=False))
+        found = name_param(arg, pname, arr_by, sca_by, sym_by, fn)
+    elif isinstance(arg, ast.Subscript) and isinstance(arg.value, ast.Name):
+        found = subscript_param(arg, arg.value.id, pname, arr_by, fn)
+    elif isinstance(arg, ast.Constant):
+        return constant_param(arg, pname)
+    if found is not None:
+        return found
+    # An array-valued expression argument (``relu(x @ w2 + b2)``).
+    found = resolved_array_param(fn, arg, pname, arr_by)
+    if found is not None:
+        return found
     if boolean_valued_argument(arg, fn, sca_by):
         return ("scalar", ScalarDesc(name=pname, dtype="bool"))
     if integer_valued_argument(arg, fn, sca_by, sym_by):
         return ("scalar", ScalarDesc(name=pname, dtype="int"))
-    # A negated / arithmetic scalar expression -- default to double.
     return ("scalar", ScalarDesc(name=pname, dtype="float64"))
 
 

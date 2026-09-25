@@ -3,14 +3,12 @@
 import ast
 
 
-#: The lowering's allocation-site marker. Its dace expansion is keyed BY NAME
-#: (``zeros_locals``) and DROPS an allocation whose target it cannot find there, so a
-#: marker-bound name has to keep the name the lowering recorded.
+#: The lowering's allocation-site marker. Its dace expansion looks targets up by name
+#: (``zeros_locals``) and drops unknown ones, so a marker-bound name must not be renamed.
 ZEROS_MARKER = "__hpcagent_bench_zeros__"
 
 
-#: Version suffix. Distinct from the lowering pass's ``__v<n>`` (that one renames the
-#: C/Fortran IR tree), so a name that went through both carries two readable versions.
+#: Version suffix, distinct from the C/Fortran lowering's ``__v<n>``.
 SSA_SUFFIX = "__ssa"
 
 
@@ -21,20 +19,9 @@ def store_root(target: ast.expr) -> str | None:
     return target.id if isinstance(target, ast.Name) else None
 
 
-def ssa_versionable(fn: ast.AST, pinned: set[str]) -> set[str]:
-    """Names a straight-line SSA rename may re-version: bound MORE THAN ONCE by a plain
-    ``name = ...`` at the TOP level of ``fn``, and touched no other way.
-
-    Every other binding or escape blocks the name outright. Merging two versions across
-    an ``if`` / loop body needs a phi this pass does not build; an element write
-    (``x[i] = ...``) mutates the buffer the CURRENT version is bound to; and a parameter,
-    a ``return``, a ``global``/``nonlocal``, a closure read or a ``pinned`` kir name is
-    read by something outside this body, which would still spell the original name."""
-    if not isinstance(fn, ast.FunctionDef):
-        return set()  # module scope: these are globals, and a rename escapes the scope
-    args = fn.args
-    blocked = {p.arg for p in args.posonlyargs + args.args + args.kwonlyargs} | pinned
-    blocked.update(v.arg for v in (args.vararg, args.kwarg) if v is not None)
+def top_level_plain_bindings(fn: ast.FunctionDef, blocked: set[str]) -> tuple[dict[str, int], set[int]]:
+    """How often each name is bound by a top-level ``name = ...`` of ``fn``, and the ids of those target
+    nodes. A name bound to the zeros marker is added to ``blocked``."""
     counts: dict[str, int] = {}
     plain: set[int] = set()
     for stmt in fn.body:
@@ -47,6 +34,21 @@ def ssa_versionable(fn: ast.AST, pinned: set[str]) -> set[str]:
                 and stmt.value.func.id == ZEROS_MARKER
             ):
                 blocked.add(stmt.targets[0].id)
+    return counts, plain
+
+
+def ssa_versionable(fn: ast.AST, pinned: set[str]) -> set[str]:
+    """Names bound more than once by a plain top-level ``name = ...`` of ``fn`` and touched no other way.
+
+    Any other binding blocks the name: a branch/loop binding would need a phi; an element write
+    mutates the current version's buffer; a parameter, ``return``, ``global``/``nonlocal``, closure
+    read or ``pinned`` kir name is read from outside under the original spelling."""
+    if not isinstance(fn, ast.FunctionDef):
+        return set()  # module scope: a rename would escape
+    args = fn.args
+    blocked = {p.arg for p in args.posonlyargs + args.args + args.kwonlyargs} | pinned
+    blocked.update(v.arg for v in (args.vararg, args.kwarg) if v is not None)
+    counts, plain = top_level_plain_bindings(fn, blocked)
     used: set[str] = set()
     for node in ast.walk(fn):
         if isinstance(node, ast.Name):
@@ -73,14 +75,10 @@ def ssa_versionable(fn: ast.AST, pinned: set[str]) -> set[str]:
 
 
 class SsaRename(ast.NodeTransformer):
-    """``x = a`` ... ``x = b`` -> ``x = a`` ... ``x__ssa1 = b``, with every read up to the
-    next rebinding following the new name.
+    """``x = a`` ... ``x = b`` -> ``x = a`` ... ``x__ssa1 = b``, later reads following the new name.
 
-    DaCe refuses a second ``x = <array>`` whose shape/dtype differs from the first
-    (``Cannot reassign value to variable "x"``); one name per value removes the refusal
-    without changing what the program computes. Only a name :func:`ssa_versionable`
-    cleared is touched, so a version never has to be merged across a branch, and a name
-    bound once keeps its spelling (no churn in the generated corpus)."""
+    DaCe refuses rebinding a name to a different shape/dtype. Only names :func:`ssa_versionable`
+    clears are touched, so no version is merged across a branch."""
 
     def __init__(self, fn: ast.AST, pinned: set[str]) -> None:
         self.fn = fn
@@ -98,10 +96,9 @@ class SsaRename(ast.NodeTransformer):
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         if self.versionable is None:
-            # The driver rebinds ``fn.body`` after EVERY pass, so the scan has to see the body
-            # this pass is walking -- not the one that existed when the pass list was built.
+            # Scanned lazily: the driver replaces ``fn.body`` after every earlier pass.
             self.versionable = ssa_versionable(self.fn, self.pinned)
-        self.generic_visit(node)  # the rhs (and any x[i] base) reads the CURRENT version
+        self.generic_visit(node)  # the rhs reads the current version, before the rebinding
         target = node.targets[0] if len(node.targets) == 1 else None
         if not isinstance(target, ast.Name) or target.id not in self.versionable:
             return node

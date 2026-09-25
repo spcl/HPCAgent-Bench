@@ -10,17 +10,10 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_r
 
 
 def cholesky_lines(temp: str, a: str, n: str, p: str, hermitian: bool = False) -> list[str]:
-    """Source lines computing ``np.linalg.cholesky(a)`` into a freshly zeroed
-    ``temp`` via the Cholesky-Banachiewicz triple loop (same O(n^3) form the
-    C/Fortran backends use in :func:`lib_nodes.expand_cholesky`). ``temp`` is
-    fresh, so the strict-upper-triangle of zeros (numpy's convention) comes
-    free from the ``np.zeros`` init.
+    """Lines computing ``np.linalg.cholesky(a)`` into a fresh ``temp`` (Cholesky-Banachiewicz).
 
-    ``hermitian`` (complex-Hermitian positive-definite ``a``, e.g. the metric
-    ``b`` in a generalized eigenproblem) conjugates the second factor of every
-    inner product (``a = L L^H``) and takes the real part before ``sqrt``
-    (Hermitian diagonals are real up to roundoff); a real ``a`` reduces to the
-    plain form."""
+    The ``np.zeros`` init supplies numpy's zero strict upper triangle. ``hermitian`` (complex ``a``)
+    conjugates the second inner-product factor (``a = L L^H``) and takes the real part before ``sqrt``."""
     cj = "np.conj({0})" if hermitian else "{0}"
     diag = f"np.sqrt({p}_s.real)" if hermitian else f"np.sqrt({p}_s)"
     jk, ik = f"{temp}[{p}_j, {p}_k]", f"{temp}[{p}_i, {p}_k]"
@@ -40,19 +33,12 @@ def cholesky_lines(temp: str, a: str, n: str, p: str, hermitian: bool = False) -
 
 
 def gauss_jordan_lines(aw: str, o: str, n: str, m: str | None, p: str) -> list[str]:
-    """Source lines for Gauss-Jordan elimination with partial pivoting, reducing
-    ``(aw | o)`` in place so ``aw`` -> identity and ``o`` -> ``aw^-1 @ o``. ``m``
-    marks a 2-D ``o`` (whole-row ops) vs ``None`` for a 1-D ``o`` (scalar ops).
-    Shared core of both ``np.linalg.solve`` (``o`` = copy of ``b``) and
-    ``np.linalg.inv`` (``o`` = identity).
+    """Lines for in-place Gauss-Jordan with partial pivoting on ``(aw | o)``: ``o`` -> ``aw^-1 @ o``.
 
-    Row-vectorized (``aw[r] -= g * aw[k]``) rather than an inner column loop:
-    the per-element form is arithmetically identical but leaves a scalar temp
-    aliasing an array element, which pythran mis-types as an ndarray in a
-    larger function. Whole-row ops match numpy's LU-with-partial-pivot
-    solve/inv to rounding for well-conditioned systems (validated ~1e-17)."""
+    ``m`` is non-None for a 2-D ``o``, ``None`` for 1-D. Core of ``solve`` (``o`` = copy of ``b``) and
+    ``inv`` (``o`` = identity). Row-vectorized: a per-element loop's scalar temp aliasing an array
+    element is mis-typed as an ndarray by pythran."""
     k, r = f"{p}_k", f"{p}_r"
-    # A 2-D ``o`` swaps whole rows (a fresh row .copy()); a 1-D ``o`` swaps a scalar.
     o_swap = [f"        {p}_to = {o}[{k}].copy()"] if m is not None else [f"        {p}_to = {o}[{k}]"]
     o_swap += [f"        {o}[{k}] = {o}[{p}_pv]", f"        {o}[{p}_pv] = {p}_to"]
     return (
@@ -82,8 +68,7 @@ def gauss_jordan_lines(aw: str, o: str, n: str, m: str | None, p: str) -> list[s
 
 
 def linalg_operand(node: ast.expr, p: str, tag: str, hoist: ValueHoist) -> str:
-    """A Name operand is used directly; an expression is materialised to a
-    contiguous temp (so the loop body can index it repeatedly)."""
+    """A Name operand as is; any other expression materialised to a contiguous temp the loops can index."""
     if isinstance(node, ast.Name):
         return node.id
     nm = f"{p}_{tag}"
@@ -95,7 +80,7 @@ def hoist_cholesky(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
     a = node.args[0]
     ra = expr_rank(a, hoist.tables.ranks)
     if ra is None:
-        return None  # unknown rank -> verbatim (inference gap, not a raise)
+        return None
     if ra != 2:
         raise DesugarError(f"np.linalg.cholesky: only a 2-D operand is lowered (got ndim {ra})")
     p = f"__chol{hoist.ctr}"
@@ -115,8 +100,8 @@ def hoist_solve(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
     ra, rb = expr_rank(a, tables.ranks), expr_rank(b, tables.ranks)
     if ra is None or rb is None:
         return None
-    # Gated here rather than in ``hoist_linalg`` because ownership depends on the rhs RANK, and
-    # because the raises below must stay silent for a call this backend handles natively.
+    # Gated here, not in ``hoist_linalg``: ownership depends on the rhs rank, and the raises
+    # below must not fire for a call the backend handles natively.
     if "solve" not in tables.lower_ops and rb not in tables.solve_rhs_ranks:
         return None
     if ra != 2:
@@ -164,31 +149,26 @@ LINALG_LOWERINGS: dict[str, Callable[[ast.Call, ValueHoist], ast.expr | None]] =
 
 
 def hoist_linalg(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
-    """A lowerable ``np.linalg.cholesky/solve/inv(...)`` -> the temp its loop nest fills (cholesky2's ``A[:] =
-    np.linalg.cholesky(A) + np.triu(A, k=1)`` -- the cholesky is computed into a fresh temp BEFORE ``A`` is
-    overwritten, so the in-place read is safe; contour_integral's ``X = np.linalg.solve(Tz, Y)`` nested in a
-    for-loop). Only ops in ``lower_ops`` are touched (a backend whose native ``np.linalg`` handles an op leaves it
-    verbatim), plus the ``solve`` right-hand-side ranks in ``solve_rhs_ranks`` that a nominally-native backend does
-    not really support (see :data:`LOWER_SOLVE_RHS_RANKS`). Owned-but-unhandled variants (a >2-D operand) raise
-    :class:`DesugarError`; an unknown-rank operand is left verbatim (an inference gap, a clean backend skip). A
-    non-Name operand is materialised to a temp first so the loop body can index it."""
+    """A lowerable ``np.linalg.cholesky/solve/inv(...)`` -> the temp its loop nest fills.
+
+    The temp is filled before the statement runs, so ``A[:] = np.linalg.cholesky(A) + ...`` stays safe.
+    Only ops in ``lower_ops`` and ``solve`` rhs ranks in ``solve_rhs_ranks`` are touched. A >2-D operand
+    raises :class:`DesugarError`; an unknown-rank operand is left verbatim."""
     if not isinstance(node, ast.Call) or not node.args:
         return None
     op = np_submodule_attr(node, "linalg")
     if op == "solve":
-        return hoist_solve(node, hoist)  # gates itself: ownership is rank-dependent
+        return hoist_solve(node, hoist)
     if op is None or op not in hoist.tables.lower_ops:
         return None
     return LINALG_LOWERINGS[op](node, hoist)
 
 
-#: numpy.linalg ops each verbatim-body backend compiles NATIVELY (left in place);
-#: any op NOT listed for the target backend is lowered to explicit loops by the
-#: desugar. numba (numba.np.linalg) and dace (dace.libraries.linalg replacements)
-#: implement cholesky/solve/inv directly; pythran has no numpy.linalg at all.
+#: numpy.linalg ops the desugar can lower to loops.
 LINALG_LOWERABLE = {"cholesky", "solve", "inv"}
 
 
+#: numpy.linalg ops each backend compiles natively (left in place); pythran has no numpy.linalg.
 NATIVE_LINALG: dict[str | None, set] = {
     "numba": {"cholesky", "solve", "inv"},
     "dace": {"cholesky", "solve", "inv"},
@@ -196,14 +176,9 @@ NATIVE_LINALG: dict[str | None, set] = {
 }
 
 
-#: Right-hand-side RANKS whose ``np.linalg.solve`` is lowered anyway, per backend, even though
-#: :data:`NATIVE_LINALG` lists ``solve`` as native. A capability is not all-or-nothing: DaCe's
-#: ``Solve`` library node reads ``shape_out[1]`` unconditionally
-#: (``dace/libraries/linalg/nodes/solve.py``), so a VECTOR right-hand side -- ``np.linalg.solve(A, b)``
-#: with 1-D ``b``, which numpy accepts and raman_fitting's Levenberg-Marquardt step emits -- raises
-#: ``IndexError: list index out of range`` inside the EXPANSION. That is compile time, not parse time,
-#: so the frontend accepts the program and the failure surfaces only once a library node expands.
-#: Lowering just that variant keeps the native matrix solve (contour_integral's 2-D rhs) intact.
+#: ``solve`` right-hand-side ranks lowered per backend even though :data:`NATIVE_LINALG` lists ``solve``.
+#: DaCe's ``Solve`` library node reads ``shape_out[1]`` unconditionally, so a 1-D ``b`` fails at expansion
+#: (after the frontend accepted it); the 2-D rhs keeps the native node.
 LOWER_SOLVE_RHS_RANKS: dict[str | None, frozenset] = {"dace": frozenset({1})}
 
 

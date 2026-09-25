@@ -4,17 +4,16 @@ import ast
 import copy
 
 from hpcagent_bench.translators.numpyto_common.subscripts import is_ellipsis, is_newaxis
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import AUG_OP_SRC, np_attr
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import AUG_OP_SRC, RewritePass, np_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import newaxis_singletons, expr_rank
 
 
 def mgrid_inline_stmts(tnames: list[str], slices: list[ast.AST]) -> list[ast.stmt] | None:
-    """``i, j = np.mgrid[a0:b0, a1:b1]`` -> per-axis ``arange`` reshaped onto its
-    own axis and broadcast-added to a full-shape int zeros. numba and pythran
-    support neither ``np.mgrid``; both support ``arange`` + ``reshape`` +
-    broadcasting. ``None`` when a slice has a step / open upper bound."""
+    """``i, j = np.mgrid[a0:b0, a1:b1]`` -> per-axis ``arange`` reshaped onto its axis and
+    broadcast-added to full-shape int zeros (numba and pythran lack ``np.mgrid``).
+    ``None`` when a slice has a step or an open upper bound."""
     k = len(slices)
     if len(tnames) != k:
         return None
@@ -29,17 +28,13 @@ def mgrid_inline_stmts(tnames: list[str], slices: list[ast.AST]) -> list[ast.stm
     lines = []
     for m in range(k):
         rshape = ", ".join(exts[mm] if mm == m else "1" for mm in range(k))
-        # int64 is numpy's OWN mgrid dtype (integer slice bounds -> the platform int), not a
-        # choice this lowering makes -- the broadcast zeros must not widen or narrow it.
+        # int64 is numpy's mgrid dtype for integer bounds; the zeros must not change it.
         lines.append(f"{tnames[m]} = np.arange({los[m]}, {his[m]}).reshape({rshape}) + np.zeros(({full},), np.int64)")
     return ast.parse("\n".join(lines)).body
 
 
-class MgridInline(ast.NodeTransformer):
+class MgridInline(RewritePass):
     """Replace ``i, j = np.mgrid[s0, s1]`` with explicit ``arange`` broadcasts."""
-
-    def __init__(self) -> None:
-        self.changed = False
 
     def visit_Assign(self, node: ast.Assign):
         self.generic_visit(node)
@@ -71,8 +66,7 @@ def fancy_gather_lines(
     """Source lines gathering ``arr[elts]`` point-wise into ``<p>_o``, one loop per driver axis."""
     iters = [f"{p}_i{k}" for k in range(driver_rank)]
     it = ", ".join(iters)
-    # Which array entries pin which axes to extent 1 -- a pinned axis is read at 0 rather
-    # than at the iterator, because the entry has one plane there and the gather has many.
+    # An axis an entry pins to extent 1 is read at 0 in that entry, not at the iterator.
     idx_j = [j for j, r in enumerate(elt_ranks) if (r or 0) >= 1]
     singles = {j: newaxis_singletons(elts[j], driver_rank) for j in idx_j}
     pre: list[str] = []
@@ -84,9 +78,8 @@ def fancy_gather_lines(
         t = f"{p}_x{j}"
         pre.append(f"{t} = {ast.unparse(e)}")
         idx_exprs.append(f"{t}[{', '.join('0' if k in singles[j] else iters[k] for k in range(driver_rank))}]")
-    # The result's shape is spelled by BROADCASTING the entries, never by naming their
-    # extents: an extent read back per axis re-spells a shape the rest of the statement
-    # already carries, which a symbolic-shape backend cannot prove equal.
+    # Shape by broadcasting the entries, not by naming extents: a symbolic-shape backend
+    # cannot prove a re-spelled extent equal to the one the statement already carries.
     driver = f"{p}_x{idx_j[0]}"
     if any(singles.values()):
         driver = f"{p}_b"
@@ -103,16 +96,12 @@ def fancy_gather_lines(
 
 
 def hoist_fancy_gather(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
-    """A multi-index fancy gather ``A[idx0, idx1, ...]`` (a Tuple index, one entry per axis, with >=1 index ARRAY entry)
-    -> the temp its gather loop fills (handles ``chk[i] = np.sum(u2[q, r, s])``). numba
-    supports a single advanced index ``A[idx]`` but not the multi-index
-    (``UniTuple``) point-wise gather -- neither all-1-D (fft_3d's ``u2[q,r,s]``)
-    nor mixed 2-D-array + scalar (icon_gather's ``A[nbr[:,:,n]-1, jk,
-    blk[:,:,n]-1]``). Array index entries (possibly expressions) are hoisted to
-    temps; the driver is the first array entry, scalar axes ride each iteration.
-    All array entries must share the driver rank, and they BROADCAST against each other over
-    it: an axis a ``None`` pins to extent 1 in one entry takes its extent from another entry
-    and is read at 0, not at the loop iterator (see :func:`newaxis_singletons`)."""
+    """A point-wise fancy gather ``A[e0, e1, ...]`` (one entry per axis, >=1 index array) -> the
+    temp its gather loop fills. numba supports a single advanced index but not this multi-index form.
+
+    Array entries are hoisted to temps and must share one rank; scalar entries ride each
+    iteration. Entries broadcast against each other: an axis a ``None`` pins to extent 1 in one
+    entry is read at 0 there (see :func:`newaxis_singletons`)."""
     if not (
         isinstance(node, ast.Subscript)
         and isinstance(node.value, ast.Name)
@@ -127,8 +116,7 @@ def hoist_fancy_gather(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
     if not arank or len(elts) != arank:
         return None
     if any(isinstance(e, ast.Slice) or is_newaxis(e) or is_ellipsis(e) for e in elts):
-        # Point-wise only. A ``:`` axis survives into the RESULT, so the rank-1 temp this
-        # allocates could not hold it -- the loop would store a plane into a scalar slot.
+        # Point-wise only: a ``:`` axis survives into the result, which the temp cannot hold.
         return None
     elt_ranks = [expr_rank(e, ranks) for e in elts]
     arrs = [r for r in elt_ranks if r and r >= 1]
@@ -144,11 +132,8 @@ FANCY_GATHER_HOIST = HoistForm(frozenset(), (ast.Tuple,), hoist_fancy_gather)
 
 
 class ScalarizeMask(ast.NodeTransformer):
-    """Index every same-shape array reference by the loop iterators ``idx_slice``:
-    a masked read ``X[<mask>]`` -> ``X[i, j]`` and a bare full-shape array Name
-    ``Z`` -> ``Z[i, j]``. Lower-rank operands / scalars (``horizon``) are left
-    alone (they broadcast). Turns a whole-array masked expression into the
-    per-element body of a guarded loop."""
+    """Index every full-rank array reference by the loop iterators: ``X[<mask>]`` -> ``X[i, j]``
+    and a bare full-rank ``Z`` -> ``Z[i, j]``. Lower-rank operands and scalars broadcast as is."""
 
     def __init__(self, maskdump: str, idx_slice: ast.AST, arank: int, ranks: dict[str, int]) -> None:
         self.maskdump = maskdump
@@ -172,18 +157,14 @@ class ScalarizeMask(ast.NodeTransformer):
 
 
 class MaskedAssignToLoop(ast.NodeTransformer):
-    """``T[mask] = rhs`` -> a guarded loop ``for i,j: if mask[i,j]: T[i,j] =
-    rhs[i,j]``. numba rejects multi-dimensional boolean-mask indexing
-    (``r2inv[in_range]``, mandelbrot's ``Z[abs(Z) < h]``).
+    """``T[mask] = rhs`` -> ``for i, j: if mask[i, j]: T[i, j] = rhs[i, j]``; numba rejects
+    multi-dimensional boolean-mask indexing.
 
-    A loop, NOT ``np.where``: the masked form computes RHS only on selected
-    elements (mandelbrot freezes diverged points so the squared term never
-    overflows; force_lj divides only where ``rsq > 0``) -- ``np.where`` would
-    evaluate RHS everywhere, changing the result.
+    A loop, not ``np.where``: the masked form evaluates ``rhs`` only on selected elements, so
+    guarded overflow or division by zero stays out of the result.
 
-    Restricted to a >=2-D mask: a bool-array Name of the target's rank, or an
-    inline Compare/``& | ^ ~`` combo of that rank. A same-rank INTEGER index
-    Name is a fancy index, not a mask -- left verbatim (clean skip)."""
+    The mask is >=2-D and of the target's rank: a non-numeric-kind Name, or an inline
+    Compare / ``& | ^ ~`` expression. An integer index Name is a fancy index and stays verbatim."""
 
     def __init__(self, ranks: dict[str, int], dtypes: dict[str, str]) -> None:
         self.ranks = ranks
@@ -208,8 +189,7 @@ class MaskedAssignToLoop(ast.NodeTransformer):
             or (isinstance(idx, ast.UnaryOp) and isinstance(idx.op, ast.Invert))
         )
         if isinstance(idx, ast.Name):
-            # A full-shape index Name is a mask ONLY if boolean-kind; a same-rank
-            # integer array is a fancy index (different semantics) -> leave verbatim.
+            # A numeric-kind index array is not a mask (an integer one is a fancy index).
             if self.ranks.get(idx.id) != arank or dtype_kind(idx, self.dtypes) in ("int", "float", "complex"):
                 return node
         elif struct_mask:
@@ -236,12 +216,9 @@ class MaskedAssignToLoop(ast.NodeTransformer):
 
 
 class DecomposeRollSlice(ast.NodeTransformer):
-    """``T = np.roll(O, shift, axis)`` where the operand ``O`` or target ``T`` is a
-    SLICE / subscript (not a bare array name) -- decompose into bare-name temps so
-    the native ``expand_roll`` (which needs a bare Name) applies, and a sliced
-    self-roll ``X[..] = np.roll(X[..], ..)`` reads a SNAPSHOT (the temp) so the
-    in-place write is safe. numpy and the Python backends roll a slice verbatim, so
-    this is native-only (the band-group circular shift in QE vexx negrp>1)."""
+    """``T = np.roll(O, shift, axis)`` with a subscripted ``O`` or ``T`` -> bare-name temps, since
+    the native ``expand_roll`` needs bare Names. A sliced self-roll then reads a snapshot, so the
+    in-place write is safe. Native-only: numpy and the Python backends roll a slice verbatim."""
 
     def __init__(self) -> None:
         self.changed = False
@@ -254,10 +231,8 @@ class DecomposeRollSlice(ast.NodeTransformer):
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
         v = node.value
-        # Require a POSITIONAL shift (args[0]=array, args[1]=shift): the native
-        # ``expand_roll`` reads the shift from args[1], so a keyword ``shift=`` roll
-        # is not lowerable -- don't decompose it into a dead snapshot temp, leave it
-        # to fail loudly unchanged.
+        # ``expand_roll`` reads a positional shift from args[1]; a keyword ``shift=`` roll is
+        # not lowerable, so leave it unchanged to fail loudly.
         if not (
             isinstance(v, ast.Call)
             and isinstance(v.func, ast.Attribute)
@@ -301,10 +276,9 @@ def ix_unpack_scatters(fn: ast.AST) -> dict[int, list[ast.expr]]:
     """``id`` of each store target ``A[g0, g1, ..]`` whose indices are, in order, the names one
     ``g0, g1, .. = np.ix_(v0, v1, ..)`` bound earlier in the same block -> that call's vectors.
 
-    The unpacked grids select the same open mesh as ``A[np.ix_(v0, v1, ..)]``; ls3df_scf scatters its
-    fragment density through them, and dace refuses a store through rank-3 index arrays. The vectors
-    read at the store are that selection only while nothing in between rebinds a grid or a name a
-    vector reads, so the first statement storing one ends the search.
+    The unpacked grids select the same open mesh as ``A[np.ix_(v0, v1, ..)]``, and dace refuses a
+    store through rank-3 index arrays. The vectors stay that selection only until a grid or a name
+    a vector reads is rebound, so the first statement storing one ends the search.
     """
     found: dict[int, list[ast.expr]] = {}
     for parent in ast.walk(fn):
@@ -345,15 +319,12 @@ def ix_unpack_scatters(fn: ast.AST) -> dict[int, list[ast.expr]]:
 class FancySliceStoreToLoop(ast.NodeTransformer):
     """``A[idx, :, :] (op)= rhs`` (one index array, the other axes sliced) -> a loop over ``idx``.
 
-    pythran compiles this store to the WRONG elements and says nothing: measured on a 3-D write
-    through a length-2 index array, every written plane disagreed with numpy. The read form
-    (``q[idx - 1, :, :]``) is correct there, so only the store is lowered.
+    pythran silently compiles this store to the wrong elements; its read form is correct, so only
+    the store is lowered.
 
-    A LONE advanced index keeps its own axis position: ``q[:, ja, :nk]`` is ``[dim0, len(ja), nk]``,
-    not ``[len(ja), dim0, nk]``. Only two or more advanced indices split by a slice move to the
-    front, and those broadcast together and are left alone here. So the hoisted right-hand side is
-    indexed at the CARRIER's axis, with a full slice for every axis before it; reading axis 0
-    unconditionally took the wrong plane and, where the extents differed, failed to broadcast.
+    A lone advanced index keeps its axis position (``q[:, ja, :nk]`` is ``[dim0, len(ja), nk]``),
+    so the hoisted right-hand side is indexed at the carrier's axis, with a full slice for every
+    axis before it.
     """
 
     def __init__(self, ranks: dict[str, int], dtypes: dict[str, str]) -> None:
@@ -413,7 +384,7 @@ class FancySliceStoreToLoop(ast.NodeTransformer):
 
 
 class SubstituteName(ast.NodeTransformer):
-    """Replace bare ``name`` with the parsed ``text`` (used to index a gather array at a loop iter)."""
+    """Replace bare ``name`` with the parsed ``text``."""
 
     def __init__(self, name: str, text: str) -> None:
         self.name = name
@@ -424,21 +395,14 @@ class SubstituteName(ast.NodeTransformer):
 
 
 class IxWriteToLoop(ast.NodeTransformer):
-    """``A[np.ix_(i, j, k)] = / += rhs`` -> an explicit loop nest over the index
-    vectors. ``np.ix_`` selects the OUTER PRODUCT of its vectors -- element
-    ``(p, q, r)`` of the selection is ``A[i[p], j[q], k[r]]``, never the zip-style
-    point-wise gather -- so one loop per vector, each vector read by its OWN
-    iterator, is the exact lowering. The DaCe frontend otherwise lowers ``np.ix_``
-    to a CALLBACK, which is opaque to the SDFG; numba and pythran have no
-    ``np.ix_`` at all.
+    """``A[np.ix_(i, j, k)] (op)= rhs`` -> one loop per index vector, each read by its own
+    iterator: ``np.ix_`` selects the outer product ``A[i[p], j[q], k[r]]``. DaCe lowers ``np.ix_``
+    to an opaque callback; numba and pythran lack it.
 
-    Only the WRITE form with one vector per array axis is lowered. Left verbatim:
-    a partial ``np.ix_`` (fewer vectors than axes -- it whole-slices the trailing
-    ones), a boolean vector (it selects through ``nonzero``, so its extent is not
-    its length), and a read-position ``np.ix_`` (a gather, needing its own
-    allocation). A repeated value inside one index vector ACCUMULATES here where
-    numpy's gather-add-scatter applies the update once -- undetectable statically,
-    and no kernel builds an ``ix_`` grid with duplicates."""
+    Only the write form with one vector per axis is lowered. Left verbatim: a partial ``np.ix_``,
+    a boolean vector (its extent is not its length) and a read-position ``np.ix_``. Soundness
+    assumes no duplicates within a vector: a repeated value accumulates here where numpy's
+    ``+=`` applies the update once."""
 
     def __init__(self, ranks: dict[str, int], dtypes: dict[str, str], fn: ast.AST) -> None:
         self.ranks = ranks
@@ -451,7 +415,7 @@ class IxWriteToLoop(ast.NodeTransformer):
     def lower_(self, node: ast.stmt, target: ast.expr, op: str) -> ast.AST:
         if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
             return node
-        # Built on first use: every pass ahead of this one has already rewritten the whole body.
+        # Built lazily, after every earlier pass has rewritten the whole body.
         if self.unpacked is None:
             self.unpacked = ix_unpack_scatters(self.fn)
         vecs = ix_vectors(target.slice) or self.unpacked.get(id(target))
@@ -464,10 +428,7 @@ class IxWriteToLoop(ast.NodeTransformer):
         lines: list[str] = []
 
         def hoist(e: ast.expr, tmp: str) -> str:
-            """Bind ``e`` to ``tmp`` once, before the nest; a bare Name is already
-            a binding. numpy evaluates the whole right-hand side before the
-            scattered store, and an in-loop array expression would materialise
-            once per element."""
+            """Bind ``e`` to ``tmp`` before the nest (numpy evaluates it once, before the store)."""
             if isinstance(e, ast.Name):
                 return e.id
             lines.append(f"{tmp} = {ast.unparse(e)}")
@@ -480,9 +441,8 @@ class IxWriteToLoop(ast.NodeTransformer):
         for k in range(len(vecs)):
             lines.append(f"{indent}for {iters[k]} in range({xs[k]}.shape[0]):")
             indent += "    "
-        # A rank-0 rhs is that same scalar at every grid point; anything else carries one
-        # element per point. The rhs rank itself is NOT trusted for the split (expr_rank
-        # over-counts an np.einsum result), so a genuinely broadcasting rhs fails loudly.
+        # Rank-0 rhs is broadcast; any other rhs is indexed per grid point without trusting its
+        # rank further (expr_rank over-counts np.einsum), so a broadcasting rhs fails loudly.
         rhs = val if expr_rank(node.value, self.ranks) == 0 else f"{val}[{', '.join(iters)}]"
         idx = ", ".join(f"{xs[k]}[{iters[k]}]" for k in range(len(vecs)))
         lines.append(f"{indent}{target.value.id}[{idx}] {op} {rhs}")

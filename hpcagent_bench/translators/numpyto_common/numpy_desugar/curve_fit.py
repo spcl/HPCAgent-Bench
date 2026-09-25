@@ -12,44 +12,30 @@ def curve_fit_lm_lines(
 ) -> list[str]:
     """Source lines for a naive Levenberg-Marquardt fit replacing ``curve_fit``.
 
-    ``scipy.optimize.curve_fit(f, x, y, p0=...)`` with no bounds/sigma is an
-    unconstrained nonlinear least-squares fit; MINPACK's ``lmdif`` (what scipy
-    calls) is a trust-region LM over a forward-difference Jacobian. Emits the
-    textbook damped-normal-equations form::
+    ``curve_fit`` with no bounds/sigma is an unconstrained nonlinear least-squares
+    fit, which MINPACK's ``lmdif`` solves by LM over a forward-difference Jacobian.
+    Emits the damped-normal-equations form::
 
-        r = f(x, p) - y                       # residual
-        J[:, c] = (f(x, p + h e_c) - f(x, p)) / h   # forward-difference Jacobian
+        r = f(x, p) - y
+        J[:, c] = (f(x, p + h e_c) - f(x, p)) / h
         (J^T J + lam * diag(J^T J)) dp = -J^T r
         accept dp if it lowers ||r||^2 (lam /= 10), else keep p (lam *= 10)
 
-    A rejected step isn't retried within the trip -- the next trip re-solves at
-    the same p with a larger lam, keeping the nest a flat fixed-trip loop with
-    no inner convergence search.
+    A rejected step is not retried within the trip; the next trip re-solves with a
+    larger lam, so the nest stays a flat fixed-trip loop (static backends want a
+    static trip count; surplus trips are rejected steps at the ``lam`` ceiling).
 
-    Two choices make the result agree with scipy's to the harness's 1e-9, not
-    just the same optimum to fitting accuracy:
+    The step ``h`` is MINPACK's own (:func:`fd_step`): a finite-difference
+    Jacobian shifts the stationary point, and sharing the step makes both solvers
+    inherit the same shift, so the result agrees with scipy's to 1e-9.
 
-    * Step ``h = sqrt(eps) * |p_j|`` is MINPACK's own (:func:`fd_step`, over
-      the WORKING precision -- an fp64 step vanishes at fp32). A
-      finite-difference Jacobian shifts the stationary point from ``J^T r=0``
-      to ``J~^T r=0``; sharing the step makes both solvers inherit the SAME
-      shift.
-    * A fixed trip count well past convergence, not a dynamic break -- static
-      backends want a static trip count, and surplus trips are no-ops once the
-      step is rejected at the ``lam`` ceiling.
-
-    ``np.linalg.solve`` is left to the existing Gauss-Jordan expander; the
-    damping keeps the system positive definite, so pivoting never meets a
-    singular column in practice.
-
-    Generated names differ by more than case: Fortran identifiers are
-    case-insensitive, so ``_J`` beside ``_j`` would collide into one symbol.
+    ``np.linalg.solve`` is left to the Gauss-Jordan expander; the damping keeps the
+    system positive definite. Generated names differ by more than case, since
+    Fortran identifiers are case-insensitive.
     """
     n, m = f"{p0}.shape[0]", f"{y}.shape[0]"
     i, c, a, b, it = f"{pfx}_i", f"{pfx}_c", f"{pfx}_a", f"{pfx}_b", f"{pfx}_it"
-    # Every array below is this fit's own scratch, so it is allocated at the WORKING precision
-    # the step size already tracks -- not a hardcoded fp64, which would run an fp32 fit at
-    # double width and then narrow on the store into popt's fp32 target.
+    # All scratch is allocated at the working precision the step size tracks (see _working_float_dtype).
     wf = f"np.{working_float_dtype(precision)}"
     return [
         f"{popt} = np.zeros(({n},), dtype={wf})",
@@ -111,25 +97,21 @@ def curve_fit_lm_lines(
         f"        {pfx}_lam = {pfx}_lam * 0.1",
         f"        if {pfx}_lam < 1e-14:",
         f"            {pfx}_lam = 1e-14",
-        f"    else:",
+        "    else:",
         f"        {pfx}_lam = {pfx}_lam * 10.0",
         f"        if {pfx}_lam > 10000000000.0:",
         f"            {pfx}_lam = 10000000000.0",
     ]
 
 
-#: ``curve_fit`` keywords the LM lowering reproduces exactly. ``maxfev`` bounds
-#: MINPACK's eval budget; the fixed trip count converges far inside it, so
-#: honouring the number is meaningless. A keyword that CHANGES the objective
-#: (bounds/sigma/absolute_sigma) or derivative (jac) is refused instead of
-#: silently fitting something else.
+#: ``curve_fit`` keywords that leave the fit unchanged (``maxfev`` bounds an eval
+#: budget the fixed trip count stays far inside). Any other keyword, one that
+#: changes the objective (bounds/sigma) or derivative (jac), is refused.
 CURVE_FIT_IGNORED_KW = frozenset({"maxfev", "p0", "method", "full_output"})
 
 
-#: Fixed LM trip count. The fit converges well inside it -- 200 trips reproduce
-#: the 100-trip parameters bit-for-bit, each surplus trip a rejected step (lambda
-#: at ceiling) -- so the margin costs time, not accuracy, and buys insensitivity
-#: to the starting guess.
+#: Fixed LM trip count, well past convergence: surplus trips are rejected steps
+#: at the lambda ceiling, so the margin costs time, not accuracy.
 CURVE_FIT_ITERS = 100
 
 
@@ -157,22 +139,16 @@ def curve_fit_guess(call: ast.Call) -> ast.expr | None:
 class CurveFitRewriter(ast.NodeTransformer):
     """``popt, pcov = curve_fit(f, x, y, p0=g)`` -> a naive LM loop nest.
 
-    Static backends have no scipy; the fit is an unconstrained nonlinear
-    least-squares problem over a smooth analytic model, so it lowers to plain
-    loops + arithmetic (:func:`curve_fit_lm_lines`), leaving the linear solve
-    to the existing ``np.linalg.solve`` expander.
+    Static backends have no scipy, so the fit lowers to plain loops
+    (:func:`curve_fit_lm_lines`).
 
-    Model ``f`` is a nested/module-level ``def f(grid, *p)``: curve_fit calls
-    it as ``f(x, *popt)``, so its varargs tuple IS the parameter vector.
-    Rebinding ``*p`` to a single ndarray parameter matches curve_fit's own
-    contract, turning ``f`` into an ordinary one-array-in-one-array-out helper
-    the inliner already handles (``npeaks`` resolves free in the inlined-into
-    scope). Negative constant indices into ``p`` (``p[-1]``, the shared
-    baseline) are rewritten against the now-known parameter count, which the
-    emitters cannot fold themselves.
+    Model ``f`` is a nested/module-level ``def f(grid, *p)``: curve_fit calls it
+    as ``f(x, *popt)``, so its varargs tuple is the parameter vector. Rebinding
+    ``*p`` to one ndarray parameter makes ``f`` an ordinary array-in-array-out
+    helper the inliner handles. Negative constant indices into ``p`` are rewritten
+    against the parameter count, which the emitters cannot fold themselves.
 
-    ``pcov`` is NOT computed: the corpus kernel binds it to ``_`` and never
-    reads it. A live ``pcov`` raises rather than silently emitting nothing.
+    ``pcov`` is not computed; a target binding it to anything but ``_`` raises.
     """
 
     def __init__(self, tree: ast.Module, kernel: ast.FunctionDef, precision: str | None = None) -> None:
@@ -180,7 +156,6 @@ class CurveFitRewriter(ast.NodeTransformer):
         self.kernel = kernel
         self.ctr = 0
         self.changed = False
-        #: Working float precision, for the LM's finite-difference step (:func:`fd_step`).
         self.precision = precision
         #: ``(popt_name, parameter-count expression)`` per lowered fit.
         self.fitted: list[tuple[str, str]] = []
@@ -258,9 +233,8 @@ class CurveFitRewriter(ast.NodeTransformer):
 class NegParamIndexFold(ast.NodeTransformer):
     """``popt[-k]`` -> ``popt[<len> - k]`` for a fitted parameter vector.
 
-    The kernel reads the fitted baseline as ``offset[0] = popt[-1]``. ``popt``
-    is created by the LM lowering with a symbolic length, so the emitters (which
-    fold a negative index only against a STATIC extent) cannot resolve it.
+    ``popt`` has a symbolic length, and the emitters fold a negative index only
+    against a static extent.
     """
 
     def __init__(self, name: str, nexpr: str) -> None:
@@ -284,14 +258,11 @@ class NegParamIndexFold(ast.NodeTransformer):
 def rewrite_curve_fit(tree: ast.Module, kernel: ast.FunctionDef, precision: str | None = None) -> None:
     """Lower every ``curve_fit`` in ``kernel`` to a naive LM loop nest, in place.
 
-    Runs BEFORE helper inlining (like the eigh rewriter) so the model ``def``
-    is still distinct to rebind; the LM's calls to it are inlined afterwards by
-    the ordinary helper machinery.
+    Runs before helper inlining so the model ``def`` is still distinct to rebind;
+    the LM's calls to it are inlined afterwards.
 
-    ``precision`` is the working float type, needed HERE at the source rewrite
-    because the LM's finite-difference step is a numerical constant baked into
-    the emitted body -- ``apply_precision`` later remaps dtype tables only and
-    cannot reach a literal (see :func:`fd_step`). ``None`` keeps the fp64 rule.
+    ``precision`` is the working float type, needed here because the step is a
+    literal in the emitted body (see :func:`fd_step`); ``None`` keeps fp64.
     """
     fits = [n for n in ast.walk(kernel) if isinstance(n, ast.Call) and curve_fit_call(n) is not None]
     if not fits:
@@ -303,8 +274,6 @@ def rewrite_curve_fit(tree: ast.Module, kernel: ast.FunctionDef, precision: str 
     kernel.body = [s for stmt in kernel.body for s in as_stmts(rw.visit(stmt))]
     if not rw.changed:
         return
-    # ``offset[0] = popt[-1]`` reads the fitted vector's tail; resolve it against
-    # the parameter count now that the vector is an array of known length.
     for popt, nexpr in rw.fitted:
         NegParamIndexFold(popt, nexpr).visit(kernel)
     ast.fix_missing_locations(kernel)

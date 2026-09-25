@@ -25,6 +25,27 @@ def resolve_shape_attr_tokens(tokens: tuple[str, ...], parsed_seed: dict[str, tu
 IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 
 
+def binding_counts(fn: ast.FunctionDef) -> dict[str, int]:
+    """How often each name is bound in ``fn`` (tuple targets unpacked); an augmented assignment
+    counts twice, so an updated name is never single-assignment."""
+    counts: dict[str, int] = {}
+
+    def count(tgt: ast.AST, inc: int) -> None:
+        if isinstance(tgt, ast.Name):
+            counts[tgt.id] = counts.get(tgt.id, 0) + inc
+        elif isinstance(tgt, (ast.Tuple, ast.List)):
+            for e in tgt.elts:
+                count(e, inc)
+
+    for stmt in ast.walk(fn):
+        if isinstance(stmt, ast.AugAssign):
+            count(stmt.target, 2)
+        elif isinstance(stmt, ast.Assign):
+            for t in stmt.targets:
+                count(t, 1)
+    return counts
+
+
 def collect_inlined_scalar_defs(fn: ast.FunctionDef, prefix: str | None = "__inl") -> dict[str, str]:
     """Map each SCALAR-dimension local under ``fn`` to its RHS.
 
@@ -46,27 +67,8 @@ def collect_inlined_scalar_defs(fn: ast.FunctionDef, prefix: str | None = "__inl
     collected -- an array-valued RHS is the inlined local array itself, not
     a dimension. Returns ``{name: ast.unparse(rhs)}`` for first assignments.
     """
-    # Names REASSIGNED anywhere (``+=`` / a second ``=`` / tuple-unpack) are
-    # mutable runtime values (a step counter ``na = 0; ...; na += 1``), not a
-    # fixed inlined dimension. Freezing one at its FIRST value inside a shape
-    # token (``off = betas[:na - 1]`` -> ``betas[:0 - 1]``) allocates a
-    # NEGATIVE size -- the eigh's ``na x na`` tridiagonal collapsing to
-    # ``0 x 0`` -- so collect only single-assignment scalars.
-    rebind_counts: dict[str, int] = {}
-
-    def count_target(tgt: ast.AST, inc: int) -> None:
-        if isinstance(tgt, ast.Name):
-            rebind_counts[tgt.id] = rebind_counts.get(tgt.id, 0) + inc
-        elif isinstance(tgt, (ast.Tuple, ast.List)):
-            for e in tgt.elts:
-                count_target(e, inc)
-
-    for stmt in ast.walk(fn):
-        if isinstance(stmt, ast.AugAssign):
-            count_target(stmt.target, 2)  # in-place update -- always mutable
-        elif isinstance(stmt, ast.Assign):
-            for t in stmt.targets:
-                count_target(t, 1)
+    # A rebound name is a runtime value (a step counter), not a fixed dimension.
+    rebind_counts = binding_counts(fn)
     defs: dict[str, str] = {}
     for stmt in ast.walk(fn):
         if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):

@@ -8,9 +8,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_r
 
 
 def const_pair_widths(pad_width: ast.AST, rank: int):
-    """Parse ``pad_width`` into a list of ``(lo, hi)`` AST exprs per axis, or
-    None if the form is unsupported. Accepts a scalar ``R`` (symmetric, every
-    axis) or a per-axis tuple ``((lo, hi), ...)``."""
+    """Per-axis ``(lo, hi)`` exprs from a scalar ``R`` or a ``((lo, hi), ...)`` ``pad_width``, else None."""
     if isinstance(pad_width, (ast.Name, ast.Constant)):
         return [(pad_width, copy.deepcopy(pad_width)) for unused in range(rank)]
     if isinstance(pad_width, (ast.Tuple, ast.List)) and len(pad_width.elts) == rank:
@@ -25,11 +23,9 @@ def const_pair_widths(pad_width: ast.AST, rank: int):
 
 
 def pad_inline_stmts(target: str, arr: ast.AST, widths, rank: int, ctr: int) -> list[ast.stmt]:
-    """Inline ``<target> = np.pad(arr, ..., mode="edge")`` as a clamped-index
-    copy loop nest (numba / pythran compile this; neither supports np.pad).
-    Inlining -- rather than a helper call -- sidesteps numba's rule that an
-    ``@njit`` body may only call other ``@njit`` functions (pythran wants the
-    opposite, plain defs), so one expansion serves both backends."""
+    """``<target> = np.pad(arr, ..., mode="edge")`` as a clamped-index copy loop nest.
+
+    Inlined rather than a helper call: numba needs an ``@njit`` callee, pythran a plain def."""
     p = f"__pd{ctr}"
     xv = f"{p}_x"
     src = [f"{xv} = {ast.unparse(arr)}"]
@@ -47,19 +43,15 @@ def pad_inline_stmts(target: str, arr: ast.AST, widths, rank: int, ctr: int) -> 
 
 
 def widths_all_literal(widths) -> bool:
-    """True iff every (lo, hi) pair is a compile-time int -- the form dace's own ``np.pad``
-    replacement already lowers natively."""
+    """True iff every (lo, hi) pair is a compile-time int (dace's own ``np.pad`` handles those)."""
     return all(const_int(lo) is not None and const_int(hi) is not None for lo, hi in widths)
 
 
 def pad_constant_inline_stmts(target: str, arr: ast.AST, widths, fill: ast.AST, ctr: int) -> list[ast.stmt]:
-    """Inline ``<target> = np.pad(arr, ..., mode="constant")`` as allocate-then-copy, for a
-    SYMBOLIC pad width dace's own replacement cannot take: it casts every width through
-    ``int()`` before using it in an f-string that would have accepted a symbolic expression just
-    as well, so a runtime-only width (this kernel's padded-out-to-a-block-boundary tail) raises
-    ``TypeError: Cannot convert symbols to int`` instead of compiling. ``np.full`` and a slice
-    assignment both already take symbolic extents (dace compiles the edge-mode loop nest above
-    with the same kind of bound), so this performs the identical fill-then-copy with no cast."""
+    """``<target> = np.pad(arr, ..., mode="constant")`` as ``np.full`` plus an interior slice copy.
+
+    For symbolic widths: dace's own ``np.pad`` casts every width through ``int()`` and fails, while
+    ``np.full`` and slice assignment take symbolic extents."""
     p = f"__pdc{ctr}"
     xv = f"{p}_x"
     src = [f"{xv} = {ast.unparse(arr)}"]
@@ -73,14 +65,10 @@ def pad_constant_inline_stmts(target: str, arr: ast.AST, widths, fill: ast.AST, 
 
 
 class PadInline(ast.NodeTransformer):
-    """Replace ``name = np.pad(x, pad_width=..., mode="edge")`` with an inline
-    edge-pad loop nest. Only the bare-assign form is handled; np.pad nested in a
-    larger expression is left verbatim (no misfire).
+    """``name = np.pad(x, pad_width=..., mode="edge")`` -> an inline edge-pad loop nest.
 
-    ``mode="constant"`` is left to the backend's own ``np.pad`` EXCEPT for dace with a
-    non-literal width (:data:`lower_symbolic_constant`): numba/pythran/dace all compile a
-    literal-width constant pad already, and dace compiles a symbolic-width one everywhere except
-    its own ``np.pad`` -- see :func:`pad_constant_inline_stmts`.
+    Only the bare-assign form is matched. ``mode="constant"`` is lowered only with
+    ``lower_symbolic_constant`` (dace) and a non-literal width; see :func:`pad_constant_inline_stmts`.
     """
 
     def __init__(self, ranks: dict[str, int], lower_symbolic_constant: bool = False) -> None:
@@ -98,7 +86,7 @@ class PadInline(ast.NodeTransformer):
         mode = kw.get("mode")
         mode_value = mode.value if isinstance(mode, ast.Constant) else None
         if mode_value not in ("edge", "constant") or not call.args:
-            return node  # array as first positional, mode this pass knows how to lower
+            return node
         arr = call.args[0]
         rank = expr_rank(arr, self.ranks)
         if rank is None or rank < 1:
@@ -113,7 +101,7 @@ class PadInline(ast.NodeTransformer):
             self._ctr += 1
             return stmts
         if not self.lower_symbolic_constant or widths_all_literal(widths):
-            return node  # a literal-width constant pad compiles through dace's own np.pad
+            return node
         self.changed = True
         fill = kw.get("constant_values", ast.Constant(value=0))
         stmts = pad_constant_inline_stmts(node.targets[0].id, arr, widths, fill, self._ctr)

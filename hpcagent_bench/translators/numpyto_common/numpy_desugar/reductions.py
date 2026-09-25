@@ -3,24 +3,26 @@
 import ast
 
 from hpcagent_bench.translators.numpyto_common.subscripts import is_newaxis
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import REDUCE_FNS, const_int, np_attr
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
+    REDUCE_FNS,
+    RankedRewritePass,
+    RewritePass,
+    const_int,
+    np_attr,
+)
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, HoistTables, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 
 
 def axis_list(ax: ast.AST | None, rank: int) -> list[int] | None:
-    """Normalize an ``axis=`` node to a sorted list of non-negative axis indices,
-    or None when it is not an all-constant int / tuple of ints. Handles the single
-    ``axis=k`` / ``axis=-1`` form and the tuple ``axis=(1, 2, 3)`` form (pooling /
-    conv reductions)."""
+    """An ``axis=k`` / ``axis=(1, 2)`` node -> sorted non-negative axis indices, or None when it is not all
+    constant ints in range."""
     if ax is None:
         return None
 
     def in_range(v: int | None) -> bool:
-        # A valid numpy program's axis is in [-rank, rank); an out-of-range value
-        # means our rank estimate is wrong, so bail (leave verbatim) rather than
-        # wrap it into an over-reduction.
+        # An axis outside [-rank, rank) means the rank estimate is wrong: bail rather than wrap it.
         return v is not None and -rank <= v < rank
 
     if isinstance(ax, (ast.Tuple, ast.List)):
@@ -44,30 +46,21 @@ def reduce_axis_stmts(
     ddof: int = 0,
     elem_kind: str | None = None,
 ) -> list[ast.stmt]:
-    """Source statements reducing ``sname`` over ``axes`` (a sorted list of one or
-    more axis indices) into a freshly allocated ``tname`` via an explicit loop nest
-    -- the numba/pythran-compatible form of ``np.sum/prod/mean/min/max/argmin/
-    argmax(x, axis=..., keepdims=...)`` (numba rejects ``keepdims`` and a tuple
-    axis over a >4-D array; pythran rejects ``keepdims``). Output indices iterate
-    every non-reduced axis; the reduction iterators run over ``axes`` (nested).
-    ``keepdims`` keeps each reduced axis as a size-1 output dim (so the result
-    broadcasts back against the input, as softmax's ``x - max`` needs). Mean/var
-    divide by the reduced-element count; min/max/arg* compare against a seed."""
+    """Statements reducing ``sname`` over the sorted ``axes`` into a new ``tname`` with an explicit loop nest.
+
+    The numba/pythran form of ``np.<op>(x, axis=..., keepdims=...)``: numba rejects ``keepdims`` and a tuple
+    axis over a >4-D array, pythran rejects ``keepdims``. ``keepdims`` keeps each reduced axis as a size-1
+    output dim."""
     p = f"__rd{ctr}"
     axset = set(axes)
     out_axes = [i for i in range(rank) if i not in axset]
     d = [f"{p}_d{i}" for i in range(rank)]
     lines: list[str] = [f"{d[i]} = {sname}.shape[{i}]" for i in range(rank)]
     is_arg = op in ("argmin", "argmax")
-    # ``mean``/``std``/``var`` preserve a FLOAT input's dtype (float32 stays
-    # float32); an integer / bool / unknown input upcasts to float64 (numpy's
-    # rule). ``{sname}.dtype`` resolves the concrete width at compile time and is
-    # numba/pythran-safe (already used by the sum/prod/min/max branch).
+    # ``mean``/``std``/``var`` keep a FLOAT input's dtype; an integer / bool / unknown input gives float64.
     float_res = f"{sname}.dtype" if elem_is_float else "np.float64"
-    # ``sum``/``prod`` over a bool or NARROW integer input accumulate in int64 -- numpy
-    # upcasts an integer accumulator to the platform int, so keeping the input width here
-    # wraps instead: int32 columns summing past 2^31 came back negative on numba.
-    # min/max/argmin/argmax pick an ELEMENT, so they keep the input dtype.
+    # ``sum``/``prod`` over bool or integer input accumulate in int64, as numpy upcasts to the platform
+    # int; the input width would wrap. min/max pick an ELEMENT, so they keep the input dtype.
     acc_res = "np.int64" if (op in ("sum", "prod") and elem_kind in ("int", "bool")) else f"{sname}.dtype"
     dtype = (
         "np.int64"
@@ -91,7 +84,7 @@ def reduce_axis_stmts(
     count = " * ".join(d[ax] for ax in axes)
 
     def elem(seed: bool = False):
-        # index reduced axes with their loop var (or 0 for the comparison seed).
+        # Reduced axes take their loop var, or 0 for the comparison seed.
         return f"{sname}[{', '.join(('0' if seed else jv[i]) if i in axset else o[i] for i in range(rank))}]"
 
     def reduce_loops(base_ind: str, body: list[str]) -> None:
@@ -119,9 +112,7 @@ def reduce_axis_stmts(
         reduce_loops(ind, [f"{tgt} += {elem()}"])
         lines.append(f"{ind}{tgt} = {tgt} / ({count})")
     elif op in ("var", "std"):
-        # two-pass: mean (always / N), then sum of squared deviations / (N - ddof)
-        # -- matches numpy's np.var/np.std and the C/Fortran sequential lowering.
-        # ``ddof`` defaults to 0; np.std(x, axis=k, ddof=1) divides by N-1.
+        # Two passes: the mean (/ N), then the squared deviations / (N - ddof), as numpy.
         var_denom = f"({count}) - {ddof}" if ddof else f"({count})"
         m, dv = f"{p}_m", f"{p}_dv"
         lines.append(f"{ind}{m} = 0.0")
@@ -134,10 +125,8 @@ def reduce_axis_stmts(
             lines.append(f"{ind}{tgt} = np.sqrt({tgt})")
     elif op in ("min", "amin", "max", "amax"):
         cmp = "<" if op in ("min", "amin") else ">"
-        # numpy np.min/np.max PROPAGATE NaN (result is NaN if any element is NaN);
-        # a plain `elem cmp tgt` drops it. `elem != elem` captures a NaN element
-        # into tgt, and once tgt is NaN no finite element can displace it (every
-        # NaN comparison is False), so NaN sticks -- matching the imperative path.
+        # numpy min/max PROPAGATE NaN. `elem != elem` captures a NaN element into tgt, and once tgt is NaN
+        # every comparison is False, so no finite element displaces it.
         e = elem()
         lines.append(f"{ind}{tgt} = {elem(seed=True)}")
         reduce_loops(ind, [f"if {e} != {e} or {e} {cmp} {tgt}:", f"    {tgt} = {e}"])
@@ -149,9 +138,8 @@ def reduce_axis_stmts(
         lines.append(f"{ind}{best} = {elem(seed=True)}")
         lines.append(f"{ind}{tgt} = 0")
         lines.append(f"{ind}for {jv[ax]} in range(1, {d[ax]}):")
-        # numpy argmin/argmax return the index of the FIRST NaN when one is
-        # present. `best == best` is False once best is NaN, locking in that first
-        # index; `elem != elem` lets a NaN element win over a finite running best.
+        # numpy argmin/argmax return the index of the FIRST NaN. `best == best` is False once best is NaN,
+        # locking that index in; `elem != elem` lets a NaN win over a finite running best.
         lines.append(f"{ind}    if {best} == {best} and ({e} != {e} or {e} {cmp} {best}):")
         lines.append(f"{ind}        {best} = {e}")
         lines.append(f"{ind}        {tgt} = {jv[ax]}")
@@ -183,10 +171,10 @@ def reduce_ddof(op: str, ddof: ast.expr | None) -> int | None:
 
 
 def hoist_reduce_axis(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
-    """``np.mean/min/max/argmin/argmax/any/all(x, axis=<int>)`` -- OR the method form ``x.mean(axis=<int>)``
-    (velocity's ``levmask.any(axis=0)``) -- -> the temp its reduction loop fills (``V = np.max(s, axis=0) + e``). A
-    non-Name ``x`` (bellman_ford's ``dist[:, None] + graph``) is hoisted to a temp first; a non-constant axis or
-    ddof, or a rank<2 (scalar-result) reduction is left verbatim (numba's no-axis scalar form)."""
+    """``np.<reduce>(x, axis=k)`` or ``x.<reduce>(axis=k)`` -> the temp its reduction loop fills.
+
+    A non-Name ``x`` is hoisted to a temp first. Left verbatim: a non-constant axis or ddof, a rank<2 operand,
+    and a reduction over every axis without keepdims (the backend's scalar form)."""
     if not isinstance(node, ast.Call):
         return None
     kw = {k.arg: k.value for k in node.keywords}
@@ -208,8 +196,7 @@ def hoist_reduce_axis(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
         return None  # numpy itself rejects a tuple axis for argmin/argmax
     ddof = reduce_ddof(op, kw.get("ddof"))
     if ddof is None:
-        # Non-constant ddof: the divisor cannot fold. Refused before the operand is hoisted, whose
-        # temp would otherwise stay behind unread and collide with the next reduction's.
+        # Refused before the operand is hoisted, whose temp would otherwise stay unread and collide.
         return None
     if isinstance(arg, ast.Name):
         sname = arg.id
@@ -251,18 +238,11 @@ DACE_REDUCE_AXIS_HOIST = HoistForm(frozenset(REDUCE_FNS), (), hoist_reduce_axis_
 
 
 def keepdims_index(axes: list[int]) -> list[ast.expr] | None:
-    """Subscript entries putting a length-1 axis back at each of ``axes`` -- the shape
-    ``keepdims=True`` produces -- WITHOUT knowing the operand's rank.
+    """Subscript entries putting a length-1 axis back at each of ``axes`` WITHOUT knowing the operand's rank.
 
-    An ``...`` absorbs every axis the reduction left alone, so only the entries out to the
-    outermost reduced axis have to be spelled: all-non-negative axes anchor at the FRONT
-    (``axis=1`` -> ``[:, None, ...]``), all-negative ones at the BACK (``axis=-1`` ->
-    ``[..., None]``, ``axis=-2`` -> ``[..., None, :]``). Mixed signs place two axes against
-    opposite ends and only the rank says how they interleave, so those get ``None``.
-
-    An index DROPS an axis, a slice KEEPS it and a ``None`` INSERTS one, so every entry
-    here is a slice or a ``None``: the reduced axis comes back AT ITS OWN position, not
-    appended -- ``np.sum(x, axis=1, keepdims=True)`` on ``(N, M, K)`` is ``(N, 1, K)``.
+    An ``...`` absorbs the untouched axes: non-negative axes anchor at the FRONT (``axis=1`` ->
+    ``[:, None, ...]``), negative ones at the BACK (``axis=-2`` -> ``[..., None, :]``). Mixed signs need the
+    rank to interleave, so they get ``None``.
     """
     if all(a >= 0 for a in axes):
         entries: list[ast.expr] = [ast.Constant(value=None) if i in axes else ast.Slice() for i in range(max(axes) + 1)]
@@ -274,27 +254,15 @@ def keepdims_index(axes: list[int]) -> list[ast.expr] | None:
     return None
 
 
-class KeepdimsToNewaxis(ast.NodeTransformer):
+class KeepdimsToNewaxis(RewritePass):
     """``np.sum(x, axis=1, keepdims=True)`` -> ``np.sum(x, axis=1)[:, None, ...]``.
 
-    dace's reductions declare no ``keepdims`` parameter at all (``_sum(pv, sdfg, state, a,
-    axis=None)`` in ``dace/frontend/python/replacements/reduction.py``), so the kwarg
-    refuses the whole program with ``_sum() got an unexpected keyword argument
-    'keepdims'``. The newaxis subscript restores exactly what the kwarg asked for.
+    dace's reductions take no ``keepdims`` argument, so the kwarg rejects the whole program. Runs after
+    :func:`hoist_reduce_axis`, which loop-lowers every call whose operand rank it knows; this takes the
+    rest, hence the rank-free :func:`keepdims_index`.
 
-    Second in line behind :func:`hoist_reduce_axis`, which lowers the same call to an
-    explicit loop nest whenever it knows the operand's rank; this takes only what that
-    declined -- a reduction over a name the flow-insensitive rank table had to forget
-    (every ML port rebinds one ``x`` through differently-shaped stages). Hence the
-    rank-free spelling in :func:`keepdims_index`.
-
-    Left alone: ``axis=None`` or no axis at all (numpy then keeps EVERY axis, and how many
-    that is is exactly the rank this does not have), a non-constant or mixed-sign axis, the
-    ``x.sum(...)`` method form, and any ``keepdims`` that is not a literal ``True`` -- a
-    literal ``False`` is numpy's own default and the frontend drops it before this runs."""
-
-    def __init__(self) -> None:
-        self.changed = False
+    Left alone: no axis (every axis kept needs the rank), a non-constant or mixed-sign axis, the
+    ``x.sum(...)`` method form, and a ``keepdims`` that is not a literal ``True``."""
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -319,15 +287,12 @@ class KeepdimsToNewaxis(ast.NodeTransformer):
         return ast.copy_location(ast.Subscript(value=node, slice=index, ctx=ast.Load()), node)
 
 
-#: masked-gather reductions this lowers (a boolean-mask select feeding a full
-#: reduction). ``mean`` matches numpy's mean-of-empty -> nan; extend as needed.
+#: Full reductions of a boolean-mask select this lowers.
 MASKED_REDUCE_OPS = {"mean"}
 
 
 def masked_reduce_of(node: ast.AST, gathers: dict[str, tuple]):
-    """A supported reduction of a masked-gather name in ``gathers`` -> ``(op,
-    name)``, else None. Handles the method form ``v.mean()`` and the function
-    form ``np.mean(v)`` (v the whole operand -- a full reduction, no axis)."""
+    """``v.mean()`` / ``np.mean(v)`` (a full reduction of a name in ``gathers``) -> ``(op, name)``, else None."""
     if not isinstance(node, ast.Call) or node.keywords:
         return None
     f = node.func
@@ -350,11 +315,8 @@ def masked_reduce_of(node: ast.AST, gathers: dict[str, tuple]):
 
 
 def masked_reduce_lines(temp: str, a: str, mask: str, rank: int, op: str, p: str) -> list[str]:
-    """Source lines reducing the boolean-masked selection ``a[mask]`` into scalar
-    ``temp`` via an accumulate loop -- the numba/pythran/dace-compatible form of
-    ``a[mask].mean()`` (the masked select alone is a dynamic-length array pythran
-    cannot type and dace cannot shape). ``mean`` divides sum by the masked count
-    and yields ``np.nan`` for an empty selection (numpy's mean-of-empty)."""
+    """Source lines reducing ``a[mask]`` into scalar ``temp`` with an accumulate loop; an empty selection
+    gives ``np.nan``, as numpy's mean-of-empty."""
     idx = ", ".join(f"{p}_i{d}" for d in range(rank))
     lines = [f"{p}_s = 0.0", f"{p}_n = 0"]
     deep = ""
@@ -362,15 +324,13 @@ def masked_reduce_lines(temp: str, a: str, mask: str, rank: int, op: str, p: str
         lines.append(f"{deep}for {p}_i{d} in range({a}.shape[{d}]):")
         deep += "    "
     lines += [f"{deep}if {mask}[{idx}]:", f"{deep}    {p}_s += {a}[{idx}]", f"{deep}    {p}_n += 1"]
-    # op == "mean" (the only supported reduction). Empty selection -> nan (numpy).
+    # ``mean`` is the only supported op.
     lines += [f"if {p}_n > 0:", f"    {temp} = {p}_s / {p}_n", "else:", f"    {temp} = np.nan"]
     return lines
 
 
 def is_bool_mask(mask: ast.AST, a: ast.AST, ranks: dict[str, int], dtypes: dict[str, str]) -> bool:
-    """True iff ``mask`` is a boolean array of ``a``'s rank -- a bool-kind Name or
-    an inline Compare / BoolOp / logical_* combo -- i.e. ``a[mask]`` is a boolean
-    select (not an integer fancy index or a scalar/slice index)."""
+    """True iff ``mask`` is a bool-kind array of ``a``'s rank, i.e. ``a[mask]`` is a boolean select."""
     if isinstance(mask, (ast.Tuple, ast.Slice)) or is_newaxis(mask):
         return False
     ar = expr_rank(a, ranks)
@@ -380,10 +340,8 @@ def is_bool_mask(mask: ast.AST, a: ast.AST, ranks: dict[str, int], dtypes: dict[
 
 
 def masked_reduce_map(fn: ast.AST, ranks: dict[str, int], dtypes: dict[str, str]) -> dict[str, tuple]:
-    """``{name: (a_Name, mask_ast)}`` for every ``name = a[mask]`` boolean-select
-    whose EVERY load-use is a supported masked reduction -- so the select can be
-    dropped and each reduction inlined as an accumulate loop. A name used any other
-    way (indexed, returned, passed on) is excluded and left verbatim."""
+    """``{name: (a_Name, mask_ast)}`` for every ``name = a[mask]`` boolean select whose EVERY load is a
+    supported masked reduction, so the select can be dropped and each reduction inlined."""
     gathers: dict[str, tuple] = {}
     for node in ast.walk(fn):
         if (
@@ -405,9 +363,9 @@ def masked_reduce_map(fn: ast.AST, ranks: dict[str, int], dtypes: dict[str, str]
 
 
 def hoist_masked_reduce(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
-    """``v.mean()`` / ``np.mean(v)`` (v a lowerable masked-gather name) -> the temp its accumulate loop fills --
-    azimint_naive's ``values = data[mask]; res[i] = values.mean()``. The masked select is a dynamic-length array
-    pythran cannot type (auto-before-deduction) and dace cannot shape; numba would DCE the now-unused select anyway."""
+    """``v.mean()`` / ``np.mean(v)`` over a vetted ``v = a[mask]`` -> the temp its accumulate loop fills.
+
+    The select is a dynamic-length array pythran cannot type and dace cannot shape."""
     gathers = hoist.tables.gathers
     hit = masked_reduce_of(node, gathers)
     if hit is None:
@@ -427,8 +385,7 @@ def has_masked_selects(tables: HoistTables) -> bool:
 
 
 def drops_masked_select(stmt: ast.stmt, tables: HoistTables) -> bool:
-    """A vetted ``v = a[mask]`` select: ``gathers`` is pre-vetted so every use of ``v`` is a reduction that inlines
-    its own loop, making the drop safe."""
+    """A vetted ``v = a[mask]`` select; every use of ``v`` inlines its own loop, so the drop is safe."""
     return (
         isinstance(stmt, ast.Assign)
         and len(stmt.targets) == 1
@@ -443,9 +400,7 @@ MASKED_REDUCE_HOIST = HoistForm(
 )
 
 
-#: numpy ops whose RESULT keeps the operand's dimensionality, so a negative
-#: ``axis=`` counts back from the operand's own rank (``flip``/``roll``/``cumsum``
-#: /``concatenate``/... are all axis-preserving).
+#: numpy ops whose result keeps the operand's rank, so a negative ``axis=`` counts back from it.
 AXIS_PRESERVING_OPS = {
     "flip",
     "roll",
@@ -466,28 +421,15 @@ AXIS_PRESERVING_OPS = {
 AXIS_ADDING_OPS = {"stack", "expand_dims"}
 
 
-class NormalizeNegativeAxis(ast.NodeTransformer):
-    """Rewrite a NEGATIVE ``axis=`` literal to the positive index it denotes --
-    ``np.flip(a, axis=-1)`` -> ``np.flip(a, axis=1)`` for a rank-2 ``a``.
+class NormalizeNegativeAxis(RankedRewritePass):
+    """``np.flip(a, axis=-1)`` -> ``np.flip(a, axis=1)`` for a rank-2 ``a``.
 
-    numpy counts a negative axis from the last (``-1`` == ``rank - 1``), but
-    pythran's ``np.flip``/``np.stack`` with ``axis=-1`` silently return the
-    wrong result. C/Fortran and the reduction desugar already normalize the
-    axis, so only the verbatim-body python backends need this rewrite.
-
-    Axis-space rank is the first operand's rank for an axis-preserving op, or
-    that rank + 1 for an axis-ADDING op (``stack``/``expand_dims``). A negative
-    axis whose rank cannot be determined is left verbatim (never guessed).
-    Only the ``axis=`` keyword form is normalized -- positional axis position
-    differs per op (``np.roll``'s 2nd positional arg is the shift, not axis)."""
-
-    def __init__(self, ranks: dict[str, int]) -> None:
-        self.ranks = ranks
-        self.changed = False
+    pythran's ``np.flip``/``np.stack`` with ``axis=-1`` silently return the wrong result. The axis space is
+    the first operand's rank, plus one for an axis-ADDING op; an unknown rank is left verbatim. Only the
+    ``axis=`` keyword is normalized: the positional slot differs per op (``np.roll``'s second is the shift)."""
 
     def operand_rank(self, node: ast.Call) -> int | None:
-        # The first positional operand carries the rank; for stack/expand_dims it
-        # is the SEQUENCE being stacked (a tuple/list), so take its first element.
+        # A sequence operand (``np.stack((a, b))``) takes its first element's rank.
         if not node.args:
             return None
         a0 = node.args[0]
@@ -531,16 +473,11 @@ UFUNC_REDUCE_TO_CALL = {
 }
 
 
-class UfuncReduceToReducer(ast.NodeTransformer):
-    """``np.add.reduce(x, axis=k)`` -> ``np.sum(x, axis=k)`` (and prod/max/min/
-    all/any). ``ufunc.reduce`` defaults to ``axis=0``, the reducer to
-    ``axis=None`` (full reduction) -- inject an explicit ``axis=0`` when the
-    call gave none, preserving ufunc semantics. Runs before the
-    elementwise-ufunc desugars so ``np.add`` inside ``np.add.reduce`` is never
-    mistaken for an elementwise add."""
+class UfuncReduceToReducer(RewritePass):
+    """``np.add.reduce(x, axis=k)`` -> ``np.sum(x, axis=k)`` (and prod/max/min/all/any).
 
-    def __init__(self) -> None:
-        self.changed = False
+    ``ufunc.reduce`` defaults to ``axis=0``, the reducer to a full reduction, so a missing axis becomes an
+    explicit ``axis=0``. Runs before the elementwise-ufunc desugars, which would read ``np.add`` as an add."""
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)

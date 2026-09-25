@@ -6,11 +6,9 @@ array shapes and dtypes, presets and sparse layouts. Entry point: :func:`parse_k
 
 import contextlib
 import pathlib
-from typing import TypeVar
 from collections.abc import Callable, Iterator
 
-from hpcagent_bench.translators.numpyto_common.ir import KernelIR
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR
 from hpcagent_bench.translators.numpyto_common.frontend.axes import AxisReshapeToIndexing, FoldConstantSymbols
 from hpcagent_bench.translators.numpyto_common.frontend.body_rewrites import (
     FoldSliceLocals,
@@ -108,6 +106,10 @@ __all__ = [
 ]
 
 
+#: Set while a driver retries with helpers inlined (:func:`without_kept_helpers`).
+HELPERS_KEPT_DISABLED = False
+
+
 def parse_kernel(
     numpy_py: pathlib.Path,
     bench_info: pathlib.Path,
@@ -117,43 +119,22 @@ def parse_kernel(
 ) -> KernelIR:
     """Build a :class:`KernelIR` from ``numpy_py`` + ``bench_info``.
 
-    Flattening helpers into one body loses exactly what the reference spells out: the emitted code
-    becomes a single enormous function, and a profile of it reports one symbol instead of the
-    convolution / pooling / solve the source names. The emitted structure should follow the
-    reference's, so EVERY kernel is built with its helpers KEPT as their own static functions,
-    whatever its level.
-
-    Inlining stays as the fallback, not the default: some helper forms have no standalone ABI --
-    a tuple return, a ``None`` early-exit sentinel, a closure over caller locals -- and still have
-    to be spliced into the caller. A kernel whose kept-helper form refuses is built inlined rather
-    than failing, so this is a change of default and not a narrowing of what lowers.
+    Helpers are kept as their own functions so the emitted code follows the reference's structure.
+    A kernel whose kept-helper form refuses (``NotImplementedError``: a tuple return, a ``None``
+    sentinel, ...) is rebuilt with its helpers inlined; any other error propagates.
     """
     if not HELPERS_KEPT_DISABLED:
         try:
             return build_kernel_ir(numpy_py, bench_info, config, precision, True, open_mesh_grids)
         except NotImplementedError:
-            # ONLY a declared refusal falls back. Catching everything is what hid a guaranteed
-            # NameError in _build_helper_kirs' shape-symbol branch: every kernel reaching it
-            # reported success while quietly emitting the inlined form. Anything other than a
-            # refusal is a bug in this path and has to be seen.
             pass
     return build_kernel_ir(numpy_py, bench_info, config, precision, False, open_mesh_grids)
 
 
-#: Set while a driver is retrying with the helpers inlined; :func:`parse_kernel` reads it.
-HELPERS_KEPT_DISABLED = False
-
-
 @contextlib.contextmanager
 def without_kept_helpers() -> Iterator[None]:
-    """Force the inlined form for the duration of the block.
-
-    :func:`parse_kernel` can only retry what fails while PARSING. A helper that parses but has no
-    emittable form (a parameter the descriptor lists do not cover, a matmul the helper body's own
-    lowering declines) fails later, in an emitter, where nothing retries -- and the kernel that
-    emitted fine when everything was flattened now refuses. A driver therefore wraps its whole
-    parse-lower-emit run in this and repeats it once.
-    """
+    """Force the inlined form for the duration of the block. A kept helper can also fail later, in
+    an emitter, where :func:`parse_kernel` cannot retry; drivers wrap the whole run in this."""
     global HELPERS_KEPT_DISABLED
     previous = HELPERS_KEPT_DISABLED
     HELPERS_KEPT_DISABLED = True
@@ -163,13 +144,9 @@ def without_kept_helpers() -> Iterator[None]:
         HELPERS_KEPT_DISABLED = previous
 
 
-def emit_with_inline_fallback(run: "Callable[[], Emitted]") -> "Emitted":
-    """Call ``run()``; on ANY failure repeat it once with helper inlining forced back on.
-
-    The second failure is the one reported -- if the flattened form cannot be emitted either, that
-    is the kernel's real refusal, and it is the same error the emitter gave before helpers were
-    kept. Costs one repeated attempt per genuinely-refusing level-3 kernel.
-    """
+def emit_with_inline_fallback[Emitted](run: Callable[[], Emitted]) -> Emitted:
+    """Call ``run()``; on any failure repeat it once with helpers inlined. The second failure is
+    the kernel's real refusal and propagates."""
     try:
         return run()
     except Exception:  # noqa: BLE001 -- retried below; the retry's own failure propagates
@@ -177,7 +154,3 @@ def emit_with_inline_fallback(run: "Callable[[], Emitted]") -> "Emitted":
             raise
     with without_kept_helpers():
         return run()
-
-
-#: What one emit attempt answers with; :func:`emit_with_inline_fallback` only relays it.
-Emitted = TypeVar("Emitted")

@@ -442,16 +442,8 @@ class LoopVarSubst(ast.NodeTransformer):
         return node
 
 
-def unroll_const_list_loops(fn: ast.FunctionDef) -> None:
-    """Unroll ``for x in <const list of tuples/values>: body`` at compile time --
-    a backend has no Python list iteration (lulesh's face-node loops). The
-    iterable is a list literal directly, or a local bound exactly once to one;
-    the consumed binding is dropped so no list literal reaches emit.
-
-    A body carrying its own ``break``/``continue`` is NOT unrolled -- cloning it per
-    element would rebind those to the enclosing loop (or, once every enclosing list
-    loop is unrolled too, to no loop at all). Such a loop is left alone and its list
-    literal reaches emit, which rejects it."""
+def single_list_bindings(fn: ast.FunctionDef) -> dict[str, list[ast.expr]]:
+    """Locals bound exactly once, to a list or tuple literal: ``name -> elements``."""
     binds_count: dict[str, int] = {}
     for s in ast.walk(fn):
         if isinstance(s, ast.Assign):
@@ -468,48 +460,65 @@ def unroll_const_list_loops(fn: ast.FunctionDef) -> None:
             and binds_count.get(s.targets[0].id) == 1
         ):
             list_binds[s.targets[0].id] = s.value.elts
-    consumed: set[str] = set()
+    return list_binds
 
-    class U(ast.NodeTransformer):
-        def visit_For(self, node: ast.For) -> ast.stmt | list[ast.stmt]:
-            self.generic_visit(node)
-            if node.orelse or has_loop_control(node.body):
-                return node
-            seq: list[ast.expr] | None = None
-            src: str | None = None
-            if is_const_list_literal(node.iter) and isinstance(node.iter, (ast.List, ast.Tuple)):
-                seq = list(node.iter.elts)
-            elif isinstance(node.iter, ast.Name) and node.iter.id in list_binds:
-                seq = list_binds[node.iter.id]
-                src = node.iter.id
-            if seq is None:
-                return node
-            out: list[ast.stmt] = []
-            for elt in seq:
-                for st in node.body:
-                    cloned = ast.parse(ast.unparse(st)).body[0]
-                    cloned = LoopVarSubst(node.target, elt).visit(cloned)
-                    ast.fix_missing_locations(cloned)
-                    out.append(cloned)
-            if src is not None:
-                consumed.add(src)
-            return out
 
-    U().visit(fn)
-    if consumed:
+class ConstListLoopUnroller(ast.NodeTransformer):
+    """Clone a ``for`` body once per element of its literal (or once-bound literal) iterable."""
 
-        class DropBind(ast.NodeTransformer):
-            def visit_Assign(self, node: ast.Assign) -> ast.stmt | None:
-                if (
-                    len(node.targets) == 1
-                    and isinstance(node.targets[0], ast.Name)
-                    and node.targets[0].id in consumed
-                    and is_const_list_literal(node.value)
-                ):
-                    return None
-                return node
+    def __init__(self, list_binds: dict[str, list[ast.expr]]) -> None:
+        self.list_binds = list_binds
+        #: Bound list names whose loops were unrolled; their bindings are dead afterwards.
+        self.consumed: set[str] = set()
 
-        DropBind().visit(fn)
+    def visit_For(self, node: ast.For) -> ast.stmt | list[ast.stmt]:
+        self.generic_visit(node)
+        if node.orelse or has_loop_control(node.body):
+            return node
+        seq: list[ast.expr] | None = None
+        src: str | None = None
+        if is_const_list_literal(node.iter) and isinstance(node.iter, (ast.List, ast.Tuple)):
+            seq = list(node.iter.elts)
+        elif isinstance(node.iter, ast.Name) and node.iter.id in self.list_binds:
+            seq = self.list_binds[node.iter.id]
+            src = node.iter.id
+        if seq is None:
+            return node
+        out: list[ast.stmt] = []
+        for elt in seq:
+            for st in node.body:
+                cloned = ast.parse(ast.unparse(st)).body[0]
+                cloned = LoopVarSubst(node.target, elt).visit(cloned)
+                ast.fix_missing_locations(cloned)
+                out.append(cloned)
+        if src is not None:
+            self.consumed.add(src)
+        return out
+
+
+class DropListBindings(ast.NodeTransformer):
+    def __init__(self, names: set[str]) -> None:
+        self.names = names
+
+    def visit_Assign(self, node: ast.Assign) -> ast.stmt | None:
+        if (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in self.names
+            and is_const_list_literal(node.value)
+        ):
+            return None
+        return node
+
+
+def unroll_const_list_loops(fn: ast.FunctionDef) -> None:
+    """Unroll ``for x in <literal list>`` (or a local bound once to one): no backend iterates a
+    Python list. The consumed binding is dropped. A body with its own ``break``/``continue`` is left
+    alone -- cloning would rebind those to the enclosing loop -- and emit rejects its literal."""
+    unroller = ConstListLoopUnroller(single_list_bindings(fn))
+    unroller.visit(fn)
+    if unroller.consumed:
+        DropListBindings(unroller.consumed).visit(fn)
     ast.fix_missing_locations(fn)
 
 

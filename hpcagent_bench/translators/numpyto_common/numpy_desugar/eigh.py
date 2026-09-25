@@ -11,15 +11,11 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_r
 
 
 def eigh_w_dtype(is_real: bool, names, array_dtypes: dict[str, str]) -> str | None:
-    """Eigenvalue dtype for an ``eigh`` lowering, or ``None`` to let the loop use the input's
-    own ``.dtype``.
+    """Eigenvalue dtype for an ``eigh`` lowering, or ``None`` to use the input's own ``.dtype``.
 
-    numpy's eigenvalues carry the REAL half of the operand dtype. A real operand says that
-    itself (``c.dtype``), so this returns ``None`` and the lowering emits the runtime form.
-    A COMPLEX operand cannot: ``.real.dtype`` is not something the DaCe frontend parses, so
-    the width is resolved HERE from the declared array dtypes -- the same rule and the same
-    fp64-when-unresolvable fallback :func:`fft_real_dtype` uses, which matters because a
-    precision sweep remaps the dtype tables but never the literals in an emitted body.
+    Eigenvalues carry the real half of the operand dtype. A real operand spells that as
+    ``c.dtype``; for a complex one the DaCe frontend cannot parse ``.real.dtype``, so the width
+    comes from the declared array dtypes, falling back to fp64 like :func:`fft_real_dtype`.
     """
     if is_real:
         return None
@@ -37,30 +33,19 @@ def eigh_w_dtype(is_real: bool, names, array_dtypes: dict[str, str]) -> str | No
 def eigh_jacobi_lines(
     w: str, y: str, c: str, n: str, p: str, is_real: bool = False, w_dtype: str | None = None
 ) -> list[str]:
-    """Source lines diagonalising Hermitian ``n``x``n`` matrix ``c`` by cyclic
-    complex Jacobi into eigenvalues ``w`` (ascending real, shape ``(n,)``) and
-    eigenvectors ``y`` (unitary columns). Each sweep rotates every off-diagonal
-    pair ``(pp, qq)`` to zero with a unitary ``J`` (phase ``apq/|apq|`` then a
-    real symmetric Jacobi angle); the two-sided update ``A = J^H A J`` runs as
-    explicit column/row loops. Selection-sort ascending at the end (matches
-    numpy.linalg.eigh's order). ``n`` is explicit (not ``c.shape[0]``) so
-    C/Fortran see the resolved dimension symbol, not a temp's ``.shape``.
-    Validated against numpy to ~5e-15.
+    """Source lines diagonalising Hermitian ``n``x``n`` matrix ``c`` by cyclic complex Jacobi
+    into ascending eigenvalues ``w`` and unitary eigenvector columns ``y``.
 
-    ``is_real`` marks a PROVABLY non-complex ``c`` (the caller's own dtype
-    table, not a runtime check): the ``.real``/``.imag`` accessors below are
-    then never emitted -- ``np.real(x)`` on a real ``x`` is ``x`` and
-    ``np.imag(x)`` is exactly ``0.0`` -- instead of leaving an accessor for
-    DaCe to lower into an ADL-unreachable, unqualified ``real()``/``imag()``
-    C++ call (a complex operand resolves through ``std::real`` by ADL; a bare
-    ``double`` reaches no namespace at all)."""
-    # Diagonalise ``c`` IN PLACE -- the caller always passes a fresh, disposable
-    # matrix (the reduced ``L^-1 a L^-H`` or an ``ascontiguousarray`` copy), so no
-    # extra working copy is needed (and the C/Fortran backends need not infer a
-    # copy-temp's complex dtype).
+    Each sweep zeroes every off-diagonal pair ``(pp, qq)`` with a unitary ``J`` (phase
+    ``apq/|apq|``, then a real Jacobi angle) applied as ``A = J^H A J``; a final selection sort
+    gives numpy's ascending order. ``n`` is explicit so C/Fortran see the dimension symbol, not
+    a temp's ``.shape``.
+
+    ``is_real`` marks a provably non-complex ``c``: the ``.real``/``.imag`` accessors are then
+    not emitted, since DaCe lowers them to unqualified ``real()``/``imag()`` C++ calls that ADL
+    cannot resolve for a plain ``double``."""
+    # In place: the caller always passes a fresh, disposable matrix.
     a, v = c, f"{p}_jv"
-    # A real input's eigenvalues are its own dtype; a complex one's real half is not spellable
-    # in emitted source, so the caller resolves it and passes w_dtype.
     wd_default = f"{c}.dtype"
     off_ap, app_ap, aqq_ap = f"{a}[{p}_pp, {p}_qq]", f"{a}[{p}_pp, {p}_pp]", f"{a}[{p}_qq, {p}_qq]"
     apq_ap, diag_ap = f"{p}_apq", f"{a}[{p}_i, {p}_i]"
@@ -73,9 +58,7 @@ def eigh_jacobi_lines(
     diag_re = diag_ap if is_real else f"{diag_ap}.real"
     ephi_h = f"{p}_ephi" if is_real else f"np.conj({p}_ephi)"  # a real phase is +-1, its own conjugate
     return [
-        # eigenvector accumulator V = I, as zeros + a diagonal loop (``np.eye``'s
-        # C/Fortran expansion does not carry the complex dtype the way ``np.zeros``
-        # does, so the accumulator would otherwise declare real).
+        # V = I as zeros + diagonal loop: ``np.eye``'s C/Fortran expansion drops the complex dtype.
         f"{v} = np.zeros(({n}, {n}), {c}.dtype)",
         f"for {p}_di in range({n}):",
         f"    {v}[{p}_di, {p}_di] = 1",
@@ -85,13 +68,13 @@ def eigh_jacobi_lines(
         f"        for {p}_qq in range({p}_pp + 1, {n}):",
         f"            {p}_off += {off_re} * {off_re} + {off_im} * {off_im}",
         f"    if {p}_off <= 1e-30:",
-        f"        break",
+        "        break",
         f"    for {p}_pp in range({n}):",
         f"        for {p}_qq in range({p}_pp + 1, {n}):",
         f"            {p}_apq = {a}[{p}_pp, {p}_qq]",
         f"            {p}_m = np.hypot({apq_re}, {apq_im})",
         f"            if {p}_m == 0.0:",
-        f"                continue",
+        "                continue",
         f"            {p}_app = {app_re}",
         f"            {p}_aqq = {aqq_re}",
         f"            {p}_ephi = {p}_apq / {p}_m",
@@ -115,9 +98,7 @@ def eigh_jacobi_lines(
         f"                {p}_vkq = {v}[{p}_k, {p}_qq]",
         f"                {v}[{p}_k, {p}_pp] = {p}_c * {p}_vkp - {p}_s * {ephi_h} * {p}_vkq",
         f"                {v}[{p}_k, {p}_qq] = {p}_s * {p}_ephi * {p}_vkp + {p}_c * {p}_vkq",
-        # Eigenvalues carry the REAL half of the input dtype (numpy: eigh(complex64) -> float32,
-        # eigh(float32) -> float32). A real input spells that as its own .dtype; a complex one
-        # is resolved by the caller (:func:`eigh_w_dtype`), never assumed fp64 here.
+        # Real half of the input dtype; see _eigh_w_dtype.
         f"{w} = np.zeros({n}, {w_dtype or wd_default})",
         f"for {p}_i in range({n}):",
         f"    {w}[{p}_i] = {diag_re}",
@@ -152,19 +133,14 @@ def eigh_stmts(
 ) -> list[str]:
     """Source lines for ``w, v = eigh(a[, b])[subset lo:hi]`` (ascending).
 
-    The generalized Hermitian problem ``a x = w b x`` reduces to standard form
-    via the Cholesky factor of ``b`` (``b = L L^H``): ``C = L^-1 a L^-H`` is
-    Hermitian with the same eigenvalues, and its eigenvectors back-transform
-    as ``x = L^-H y``. ``cholesky``/``inv``/``@`` stay ``np.linalg``/matmul for
-    native backends (numba/dace) and are lowered by :data:`LINALG_HOIST` for
-    pythran. The standard eigh is the self-contained Jacobi above, unless
-    ``native_std`` (backends whose ``np.linalg.eigh`` handles standard
-    complex-Hermitian natively -- jax), which emits a single
-    ``np.linalg.eigh`` call instead. Validated vs scipy ~1e-15.
+    The generalized problem ``a x = w b x`` reduces via ``b = L L^H`` to the Hermitian
+    ``C = L^-1 a L^-H`` (same eigenvalues), back-transformed as ``x = L^-H y``.
+    ``cholesky``/``inv``/``@`` stay ``np.linalg``/matmul; :data:`LINALG_HOIST` lowers them for
+    pythran. The standard solve is the Jacobi loop nest, or one ``np.linalg.eigh`` call with
+    ``native_std`` (backends whose eigh handles complex-Hermitian natively).
 
-    ``is_real`` -- see :func:`eigh_jacobi_lines` -- is only meaningful when
-    ``b`` is None: a generalized problem's reduced ``C`` is complex the moment
-    either operand is, so the caller must not set it with ``b`` present."""
+    ``is_real`` (see :func:`eigh_jacobi_lines`) must not be set with ``b``: the reduced ``C``
+    is complex whenever either operand is."""
     if b is not None:
         pre = [
             f"{p}_L = np.linalg.cholesky({b})",
@@ -203,26 +179,15 @@ def eigh_c_stmts(
     is_real: bool = False,
     w_dtype: str | None = None,
 ) -> list[str]:
-    """Fully self-contained loop lowering of standard/generalized complex-
-    Hermitian ``eigh`` for the C/Fortran backends, which have no ``np.linalg``
-    and no matmul lowering for the ``L^-H`` conjugate-transpose operand. Emits
-    explicit loops only: complex-Hermitian Cholesky ``b = L L^H``, the lower-
-    triangular inverse ``L^-1`` by forward substitution, the two matmuls
-    ``C = L^-1 a L^-H``, the cyclic complex Jacobi, and the back-transform
-    ``x = L^-H y``. Matmul outputs are pre-zeroed and ``+=``-accumulated; a
-    complex zero is ``z - z``. Validated vs scipy ~1e-15.
+    """Explicit-loop lowering of standard/generalized Hermitian ``eigh`` for C/Fortran, which
+    have no ``np.linalg`` and no matmul lowering for the ``L^-H`` operand.
 
-    ``eigenvalues_only`` (``np.linalg.eigvalsh``) binds only the ascending
-    eigenvalue vector ``w``: the same Jacobi sweep runs, but the ``L^-H``
-    back-transform and eigenvector output ``v`` are dropped (``v`` is
-    ``None``). numpy has no generalized eigvalsh, so this path always has
-    ``b`` None.
+    Emits Cholesky ``b = L L^H``, ``L^-1`` by forward substitution, ``C = L^-1 a L^-H``, the
+    Jacobi solve and the back-transform ``x = L^-H y``. Matmul outputs are pre-zeroed and
+    ``+=``-accumulated; a typed complex zero is spelled ``z - z``.
 
-    ``is_real`` -- see :func:`eigh_jacobi_lines` -- only applies to the
-    standard (``b`` is None) form: the generalized branch's ``Cm`` is always
-    built to a complex-capable ``.dtype`` (``a.dtype``/``b.dtype`` propagate
-    through the Cholesky/matmul lines unconditionally), so the caller must not
-    set it with ``b`` present."""
+    ``eigenvalues_only`` (eigvalsh) binds only ``w`` and skips the back-transform; ``v`` is
+    ``None``. ``is_real`` must not be set with ``b``: the generalized ``Cm`` takes ``b.dtype``."""
     n = f"{a}.shape[0]"
     lines: list[str] = []
     if b is not None:
@@ -238,10 +203,8 @@ def eigh_c_stmts(
             f"            {p}_acc += {L}[{p}_ii, {p}_ik] * {Li}[{p}_ik, {p}_ij]",
             f"        {Li}[{p}_ii, {p}_ij] = -{p}_acc / {L}[{p}_ii, {p}_ii]",
         ]
-        # ``Tm`` / ``Cm`` (not ``T`` / ``C``): Fortran is case-insensitive, so a
-        # matrix named ``T`` would collide with the Jacobi rotation scalar ``t``
-        # (tangent) and ``C`` with ``c`` (cosine) -- the emitter would silently
-        # drop one declaration and the body would index a scalar.
+        # ``Tm`` / ``Cm``, not ``T`` / ``C``: Fortran is case-insensitive, and the Jacobi
+        # scalars ``t`` / ``c`` would collide with them.
         T, C = f"{p}_Tm", f"{p}_Cm"
         lines += [  # Tm = Li @ a
             f"{T} = np.zeros(({n}, {n}), {b}.dtype)",
@@ -259,14 +222,9 @@ def eigh_c_stmts(
         ]
         cname = C
     else:
-        # ``Cm`` (not ``C``): Fortran is case-insensitive, so a matrix named ``C``
-        # collides with the Jacobi cosine scalar ``c`` -- the emitter would reject
-        # the second declaration. (The generalized branch above uses ``Cm`` too.)
-        cname = f"{p}_Cm"
-        # Explicit ``np.zeros`` allocation + element copy (NOT ``np.ascontiguousarray``,
-        # whose copy-loop lowering leaves the fresh RUNTIME-shaped target unallocated --
-        # a NULL write in the Jacobi). Mirrors the generalized branch's ``np.zeros``
-        # temps. The Jacobi mutates ``Cm`` in place, so the input ``a`` must not alias it.
+        cname = f"{p}_Cm"  # ``Cm``: see the Fortran case note above
+        # The Jacobi mutates ``Cm`` in place, so copy ``a`` into an explicit ``np.zeros`` temp;
+        # ``np.ascontiguousarray``'s copy lowering leaves a runtime-shaped target unallocated.
         lines += [
             f"{cname} = np.zeros(({n}, {n}), {a}.dtype)",
             f"for {p}_ci in range({n}):",
@@ -274,7 +232,7 @@ def eigh_c_stmts(
             f"        {cname}[{p}_ci, {p}_cj] = {a}[{p}_ci, {p}_cj]",
         ]
     lines += eigh_jacobi_lines(f"{p}_wa", f"{p}_ya", cname, n, p, is_real=is_real, w_dtype=w_dtype)
-    if eigenvalues_only:  # eigvalsh: only the eigenvalue vector, no back-transform / U output
+    if eigenvalues_only:
         lines.append(f"{w} = {p}_wa" if lo == "None" else f"{w} = {p}_wa[{lo}:{hi}]")
         return lines
     if b is not None:
@@ -297,11 +255,8 @@ def eigh_c_stmts(
 
 
 def eigh_operand_is_real(a_node: ast.AST, b_node: ast.AST | None, dtypes: dict[str, str]) -> bool:
-    """True iff every eigh operand present is PROVABLY non-complex per ``dtypes``
-    (a name -> dtype-KIND table, :func:`dtype_kind`'s convention), so
-    :func:`eigh_jacobi_lines` can drop its ``.real``/``.imag`` accessors. An
-    UNKNOWN kind is not proof of real -- it keeps the historic, always-correct
-    complex path, matching every other dtype-gated desugar in this module."""
+    """True iff every present eigh operand is provably non-complex per the kind table ``dtypes``.
+    An unknown kind is not proof of real: it keeps the always-correct complex path."""
 
     def known_real(node: ast.AST) -> bool:
         kind = dtype_kind(node, dtypes)
@@ -310,17 +265,37 @@ def eigh_operand_is_real(a_node: ast.AST, b_node: ast.AST | None, dtypes: dict[s
     return known_real(a_node) and (b_node is None or known_real(b_node))
 
 
-class EighLoopRewriter(ast.NodeTransformer):
-    """Rewrite ``w, v = eigh(a[, b], subset_by_index=[lo, hi])`` (np.linalg /
-    scipy.linalg / an imported alias) to the fully self-contained loop lowering
-    (:func:`eigh_c_stmts`) for the C/Fortran frontend, which has no ``np.linalg``.
-    Applied to the whole module tree (helpers included) BEFORE kernel inlining, so
-    the ``_sci_eigh`` alias import is still in scope. A non-Name operand is
-    materialised first.
+def operand_names(p: str, a_node: ast.AST, b_node: ast.AST | None) -> tuple[list[str], str, str | None]:
+    """Names of the eigh operands, and the lines materialising a non-Name one as ``<p>_a`` / ``<p>_b``."""
+    pre: list[str] = []
 
-    ``dtypes`` is the declared KIND table (manifest arrays and preset scalars). This runs before
-    helper inlining, so a helper's names are known only through ``kind_tables``
-    (:func:`module_kind_tables`); everything else stays the safe unknown."""
+    def name_of(nd: ast.AST, tag: str) -> str:
+        if isinstance(nd, ast.Name):
+            return nd.id
+        pre.append(f"{p}_{tag} = np.ascontiguousarray({ast.unparse(nd)})")
+        return f"{p}_{tag}"
+
+    aname = name_of(a_node, "a")
+    bname = name_of(b_node, "b") if b_node is not None else None
+    return pre, aname, bname
+
+
+def subset_bounds(kw: Mapping[str | None, ast.expr]) -> tuple[str, str]:
+    """``subset_by_index=[lo, hi]`` (inclusive) -> slice bounds ``(lo, hi+1)`` strings; whole spectrum ->
+    ``('None', 'None')``."""
+    s = kw.get("subset_by_index")
+    if isinstance(s, (ast.List, ast.Tuple)) and len(s.elts) == 2:
+        return ast.unparse(s.elts[0]), f"({ast.unparse(s.elts[1])}) + 1"
+    return "None", "None"
+
+
+class EighLoopRewriter(ast.NodeTransformer):
+    """Rewrite ``w, v = eigh(a[, b], subset_by_index=[lo, hi])`` (np.linalg / scipy.linalg /
+    an alias) and ``w = eigvalsh(a)`` to :func:`eigh_c_stmts` for the C/Fortran frontend.
+
+    Runs on the whole module before kernel inlining, so alias imports are still in scope and a
+    helper's names are known only through ``kind_tables`` (:func:`module_kind_tables`).
+    ``dtypes`` is the declared kind table (manifest arrays and preset scalars)."""
 
     def __init__(
         self,
@@ -334,24 +309,18 @@ class EighLoopRewriter(ast.NodeTransformer):
         self.dtypes = dtypes
         #: Per-function kinds (:func:`module_kind_tables`); ``None`` applies ``dtypes`` to every function.
         self.kind_tables = kind_tables
-        #: Declared RAW array dtypes (widths, not kinds), for the eigenvalue dtype a complex
-        #: operand cannot spell in emitted source (:func:`eigh_w_dtype`).
+        #: Declared raw array dtypes (widths, not kinds), for :func:`eigh_w_dtype`.
         self.array_dtypes = array_dtypes or {}
         self._ctr = 0
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
         """Propagate the declared kinds across this function's own assignments, then rewrite it.
 
-        The manifest names only the kernel's arrays, and an ``eigh`` operand is routinely a LOCAL
-        built from them -- rayleigh_ritz_rotation's is ``M = Linv @ h_sub @ Linv.T``, three
-        assignments and two factorisations away from anything declared. A table that stops at the
-        declared names reads every such operand as unknown, so the real branch was unreachable for
-        exactly the kernels that need it.
-
-        With ``kind_tables`` a helper sees only what :func:`module_kind_tables` proved across its call
-        sites: a helper parameter sharing a kernel array's name is a different value, and being wrong
-        in the "real" direction DROPS an imaginary part. A function the tables miss starts from nothing.
-        Without them the caller named no kernel, so the declared table applies everywhere."""
+        An ``eigh`` operand is usually a local built from declared arrays, so the table must follow
+        assignments. With ``kind_tables`` a function sees only what :func:`module_kind_tables`
+        proved at its call sites (a helper parameter sharing a kernel array's name is a different
+        value, and a wrong "real" drops an imaginary part); a function it misses starts empty.
+        Without ``kind_tables`` the declared table applies everywhere."""
         outer = self.dtypes
         if self.kind_tables is None:
             self.dtypes = dtype_table_(node, self.declared)
@@ -372,8 +341,7 @@ class EighLoopRewriter(ast.NodeTransformer):
             return node
         kind, a_node, b_node, kw = hit
         tgt = node.targets[0]
-        # ``w, v = eigh(...)`` (eigenpair) or ``w = eigvalsh(...)`` (a single Name
-        # target -- eigenvalues only, no eigenvector back-transform / U output).
+        # ``w, v = eigh(...)`` or eigenvalues-only ``w = eigvalsh(...)``.
         if isinstance(tgt, ast.Tuple) and len(tgt.elts) == 2 and all(isinstance(e, ast.Name) for e in tgt.elts):
             w, v = tgt.elts[0].id, tgt.elts[1].id
         elif kind == "eigvalsh" and isinstance(tgt, ast.Name):
@@ -382,23 +350,9 @@ class EighLoopRewriter(ast.NodeTransformer):
             return node
         p = f"__eigh{self._ctr}"
         self._ctr += 1
-        pre: list[str] = []
-
-        def name_of(nd, tag):
-            if isinstance(nd, ast.Name):
-                return nd.id
-            pre.append(f"{p}_{tag} = np.ascontiguousarray({ast.unparse(nd)})")
-            return f"{p}_{tag}"
-
-        aname = name_of(a_node, "a")
-        bname = name_of(b_node, "b") if b_node is not None else None
-        s = kw.get("subset_by_index")
-        if isinstance(s, (ast.List, ast.Tuple)) and len(s.elts) == 2:
-            lo, hi = ast.unparse(s.elts[0]), f"({ast.unparse(s.elts[1])}) + 1"
-        else:
-            lo, hi = "None", "None"
-        # Standard form only (b_node None): a generalized C is complex-capable regardless of a/b's
-        # own dtype (see _eigh_c_stmts).
+        pre, aname, bname = operand_names(p, a_node, b_node)
+        lo, hi = subset_bounds(kw)
+        # Standard form only; see _eigh_c_stmts.
         is_real = b_node is None and eigh_operand_is_real(a_node, b_node, self.dtypes)
         w_dtype = eigh_w_dtype(is_real, (aname, bname), self.array_dtypes)
         lines = pre + eigh_c_stmts(
@@ -408,12 +362,9 @@ class EighLoopRewriter(ast.NodeTransformer):
 
 
 class EighCallHoister(ast.NodeTransformer):
-    """Materialise an ``eigh`` / ``eigvalsh`` call that appears NESTED in an
-    expression -- ``float(np.linalg.eigvalsh(T).max()) + beta`` in LS3DF's Lanczos
-    upper-bound -- into its own ``__eigv<k> = <call>`` statement, so the direct-assign
-    :class:`EighLoopRewriter` can lower it. A call that is already the RHS of an
-    eligible eigh-assign (:func:`is_eigh_assign_target`) is left in place. Runs on the
-    whole module (helpers included) BEFORE the loop rewriter, mirroring its scope."""
+    """Hoist an ``eigh`` / ``eigvalsh`` call nested in an expression (``float(eigvalsh(T).max())``)
+    into its own ``__eigv<k> = <call>`` statement so :class:`EighLoopRewriter` can lower it.
+    Runs on the whole module before the loop rewriter; an eligible eigh-assign stays whole."""
 
     def __init__(self, alias_names: set) -> None:
         self.alias_names = alias_names
@@ -430,8 +381,7 @@ class EighCallHoister(ast.NodeTransformer):
         return ast.Name(id=name, ctx=ast.Load())
 
     def flush(self, node: ast.stmt):
-        # An eligible direct eigh-assign stays whole -- descending would hoist its own
-        # RHS call and hide it from the loop rewriter.
+        # Descending into a direct eigh-assign would hoist its own RHS and hide it from the rewriter.
         if is_eigh_assign_target(node, self.alias_names):
             return node
         saved = self.pre
@@ -456,10 +406,8 @@ class EighCallHoister(ast.NodeTransformer):
         return out
 
     def visit_While(self, node: ast.While) -> ast.AST:
-        # Do NOT hoist an eigh call out of the loop CONDITION: a ``__eigv`` temp
-        # emitted before the loop would freeze a value the ``while`` test must
-        # recompute each iteration (``while eigvalsh(A).max() > tol: A = update(A)``).
-        # Leave ``node.test`` unvisited; only the body / else statements hoist locally.
+        # ``node.test`` stays unvisited: a temp hoisted before the loop would freeze a value
+        # the condition recomputes each iteration.
         node.body = self.visit_stmts(node.body)
         node.orelse = self.visit_stmts(node.orelse)
         return node
@@ -473,18 +421,11 @@ class EighCallHoister(ast.NodeTransformer):
 
 
 class EighInline(ast.NodeTransformer):
-    """Lower ``w, v = eigh(a[, b], subset_by_index=[lo, hi])`` -- standard or
-    generalized complex-Hermitian ``eigh`` (numpy or scipy, incl. an imported
-    alias) -- to a Cholesky-reduced complex Jacobi loop nest (see
-    :func:`eigh_stmts`). Handles the tuple-target eigenpair form and the
-    eigenvalues-only single-target form (``np.linalg.eigvalsh`` or
-    ``eigh(..., eigvals_only=True)``); a non-``Name`` operand is materialised first.
-    Runs BEFORE :data:`LINALG_HOIST` so the cholesky/inv it emits are themselves
-    lowered for pythran.
+    """Lower ``w, v = eigh(a[, b], subset_by_index=[lo, hi])`` (numpy / scipy / an alias) and the
+    eigenvalues-only forms (``eigvalsh``, ``eigvals_only=True``) via :func:`eigh_stmts`.
 
-    ``dtypes`` is the per-function dtype-KIND table (:func:`dtype_table_`),
-    consulted the same way :func:`hoist_cholesky` consults it for its ``hermitian``
-    flag -- see :func:`eigh_operand_is_real`."""
+    Runs before :data:`LINALG_HOIST` so the cholesky/inv it emits are lowered for pythran.
+    ``dtypes`` is the per-function kind table (:func:`dtype_table_`)."""
 
     def __init__(
         self,
@@ -501,14 +442,6 @@ class EighInline(ast.NodeTransformer):
         self.changed = False
         self._ctr = 0
 
-    def subset(self, kw) -> tuple:
-        """``subset_by_index=[lo, hi]`` (inclusive) -> slice bounds ``(lo, hi+1)``
-        strings; whole spectrum -> ``('None', 'None')`` (a full ``[:]`` slice)."""
-        s = kw.get("subset_by_index")
-        if isinstance(s, (ast.List, ast.Tuple)) and len(s.elts) == 2:
-            return ast.unparse(s.elts[0]), f"({ast.unparse(s.elts[1])}) + 1"
-        return "None", "None"
-
     def visit_Assign(self, node: ast.Assign):
         if len(node.targets) != 1:
             return node
@@ -518,10 +451,7 @@ class EighInline(ast.NodeTransformer):
         kind, a_node, b_node, kw = hit
         tgt = node.targets[0]
         evo = kw.get("eigvals_only")
-        # ``eigvalsh`` (a distinct eigenvalues-only op) and ``eigh(..., eigvals_only=True)``
-        # (scipy's flag) both bind a single eigenvalue vector -- no eigenvectors.
         eigvals_only = kind == "eigvalsh" or (isinstance(evo, ast.Constant) and evo.value is True)
-        # Target: ``w, v = eigh(...)`` (tuple) or ``w = eigvalsh(...)`` / ``w = eigh(..., eigvals_only=True)``.
         if isinstance(tgt, ast.Tuple) and len(tgt.elts) == 2 and all(isinstance(e, ast.Name) for e in tgt.elts):
             w, v = tgt.elts[0].id, tgt.elts[1].id
         elif isinstance(tgt, ast.Name) and eigvals_only:
@@ -534,20 +464,10 @@ class EighInline(ast.NodeTransformer):
             return node
         p = f"__eigh{self._ctr}"
         self._ctr += 1
-        pre: list[str] = []
-
-        def name_of(nd, tag):
-            if isinstance(nd, ast.Name):
-                return nd.id
-            pre.append(f"{p}_{tag} = np.ascontiguousarray({ast.unparse(nd)})")
-            return f"{p}_{tag}"
-
-        aname = name_of(a_node, "a")
-        bname = name_of(b_node, "b") if b_node is not None else None
-        lo, hi = self.subset(kw)
+        pre, aname, bname = operand_names(p, a_node, b_node)
+        lo, hi = subset_bounds(kw)
         vtmp = v if v is not None else f"{p}_vdrop"
-        # Standard form only (b_node None): a generalized C is complex-capable regardless of a/b's
-        # own dtype (see _eigh_stmts).
+        # Standard form only; see _eigh_stmts.
         is_real = b_node is None and eigh_operand_is_real(a_node, b_node, self.dtypes)
         w_dtype = eigh_w_dtype(is_real, (aname, bname), self.array_dtypes)
         lines = pre + eigh_stmts(w, vtmp, aname, bname, lo, hi, p, is_real=is_real, w_dtype=w_dtype)

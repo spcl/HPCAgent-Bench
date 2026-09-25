@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError, np_attr
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError, RankedRewritePass, np_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
@@ -27,9 +27,8 @@ def matmul_operands(mm: ast.AST):
 
 
 class IndexLeadingAxis(ast.NodeTransformer):
-    """Subscript every rank > 2 ``Name`` by ``[bv]`` (its leading/batch axis),
-    dropping it to a 2-D operand. Names of rank <= 2 are left untouched (a
-    shared 2-D right operand broadcasts across the batch)."""
+    """Subscript every rank > 2 ``Name`` by ``[bv]`` (its batch axis); rank <= 2 names
+    stay whole, so a shared 2-D operand broadcasts across the batch."""
 
     def __init__(self, bv: str, ranks: dict[str, int]) -> None:
         self.bv = bv
@@ -48,20 +47,12 @@ class IndexLeadingAxis(ast.NodeTransformer):
         return node
 
 
-class BatchedMatmulToLoop(ast.NodeTransformer):
-    """``Q[:] = Q + I @ star`` (I rank-3) -> a loop over the batch axis doing a
-    2-D GEMM per element. numba / pythran support 2-D ``@`` but not the stacked
-    (>=3-D) form -- and Fortran has no matmul-broadcast either, so this is the
-    universal "batched GEMM = for-loop over GEMMs" lowering."""
-
-    def __init__(self, ranks: dict[str, int]) -> None:
-        self.ranks = ranks
-        self._ctr = 0
-        self.changed = False
+class BatchedMatmulToLoop(RankedRewritePass):
+    """``Q[:] = Q + I @ S`` (I rank-3) -> a loop over the batch axis doing a 2-D GEMM per
+    element. numba / pythran / Fortran have 2-D matmul but no stacked (>=3-D) form."""
 
     def batch_source(self, value: ast.AST) -> ast.Name | None:
-        """First rank > 2 Name feeding a batched matmul -- its leading axis is
-        the batch extent."""
+        """First rank > 2 Name feeding a batched matmul; its leading axis is the batch extent."""
         for mm in matmul_pairs(value):
             for op in matmul_operands(mm):
                 for n in ast.walk(op):
@@ -70,12 +61,9 @@ class BatchedMatmulToLoop(ast.NodeTransformer):
         return None
 
     def is_batched(self, value: ast.AST) -> bool:
-        """True iff the statement carries a CLEANLY batched matmul: at least one
-        operand has rank > 2 AND every operand is a bare ``Name``. The bare-Name
-        guard is load-bearing -- a ``reshape`` / ``transpose`` wrapping the
-        operand restructures axes, so indexing its leading axis (doitgen's
-        ``np.reshape(A, (NR, NQ, 1, NP)) @ C4``) would be a miscompile, not a
-        batched GEMM. Those stay verbatim (and skip on numba/pythran)."""
+        """True iff some matmul has a rank > 2 operand and every matmul operand is a bare ``Name``.
+        A ``reshape`` / ``transpose`` operand restructures axes, so indexing its leading axis
+        would miscompile; such statements stay verbatim."""
         for mm in matmul_pairs(value):
             a, b = matmul_operands(mm)
             if not (isinstance(a, ast.Name) and isinstance(b, ast.Name)):
@@ -106,12 +94,12 @@ class BatchedMatmulToLoop(ast.NodeTransformer):
         return None
 
     def allocation(self, name: str, value: ast.AST) -> ast.stmt | None:
-        """The ``np.empty`` that BINDS a bare-Name target, or None when its extents are not exact:
-        the loop form only WRITES the target, so nothing would bind it (dace: "ctx used before
-        definition"). Exact means equal-rank operands -- ``A``'s extents with ``B``'s last."""
+        """The ``np.empty`` that binds a bare-Name target, or None when its extents are not exact.
+        The loop only writes into the target, so a binding target needs this allocation first.
+        Exact means equal-rank operands: ``A``'s extents with ``B``'s last."""
         pairs = matmul_pairs(value)
         if len(pairs) != 1 or pairs[0] is not value:
-            return None  # the matmul is nested in a larger expression: its result extents are not this one's
+            return None  # nested matmul: its extents are not the statement's
         a, b = matmul_operands(value)
         rank = expr_rank(a, self.ranks)
         if not (isinstance(a, ast.Name) and isinstance(b, ast.Name)) or rank != expr_rank(b, self.ranks):
@@ -131,8 +119,7 @@ class BatchedMatmulToLoop(ast.NodeTransformer):
         new_target = self.index_target(node.targets[0], "")  # probe form first
         if new_target is None:
             return node  # target not a recognised batched whole-array write
-        # A bare-Name target is a BINDING, not a write into an existing array: it needs its own
-        # allocation, and without an exact shape for it the statement stays verbatim.
+        # A bare-Name target is a binding: without an exact shape to allocate, stay verbatim.
         alloc = None
         if isinstance(node.targets[0], ast.Name):
             alloc = self.allocation(node.targets[0].id, node.value)
@@ -159,22 +146,17 @@ class BatchedMatmulToLoop(ast.NodeTransformer):
 
 
 def int_matmul_acc_dtype(aid: str, bid: str, ka: str, kb: str) -> str:
-    """Accumulator dtype for an integer ``a @ b``, as source the emitted program evaluates.
+    """Accumulator dtype source for an integer ``a @ b``: an operand's ``.dtype``.
 
-    numpy's ``@`` returns ``result_type(a, b)``, so the accumulator must too. A hardcoded
-    ``np.int64`` stored every int32 port's result through a NARROWING copy, which DaCe
-    cannot emit at all (comet_int4_gemm died on ``dace::CopyNDDynamic<int, 1, 0, 2>::
-    Dynamic::Copy(int64_t*, int*, ...)``). ``np.result_type``/``np.promote_types`` do not
-    survive the DaCe frontend, and this pass knows operand KINDS but never widths, so the
-    promotion is spelled as an operand's ``.dtype`` -- the form the lowerings here already
-    emit. A bool operand never decides it: ``bool @ int32`` is int32 in numpy."""
+    Matches numpy's ``result_type(a, b)`` so the store is not a narrowing copy (DaCe cannot
+    emit one). ``np.result_type`` does not survive the DaCe frontend and only operand kinds
+    are known here, not widths. A bool operand never decides it (``bool @ int32`` is int32)."""
     return f"{bid}.dtype" if (ka == "bool" and kb != "bool") else f"{aid}.dtype"
 
 
 def int_matmul_stmts(temp: str, a: str, b: str, ra: int, rb: int, ctr: int, acc: str) -> list[str]:
-    """Source lines for an INTEGER matmul (``a @ b``) as an explicit loop, accumulating in
-    ``acc`` (:func:`int_matmul_acc_dtype`). numba's BLAS-backed ``@`` is float-only, so the
-    loop is the lowering. Raises for ranks numba could not express even after batching."""
+    """Source lines for an integer ``a @ b`` as an explicit loop accumulating in ``acc``.
+    Raises DesugarError for operands above 2-D."""
     p = f"__mm{ctr}"
     if ra == 1 and rb == 1:  # dot -> scalar
         return [f"{temp} = 0", f"for {p}_k in range({a}.shape[0]):", f"    {temp} += {a}[{p}_k] * {b}[{p}_k]"]
@@ -213,8 +195,7 @@ def int_matmul_temp(a: ast.expr, b: ast.expr, hoist: ValueHoist) -> ast.expr | N
         return None  # not (definitely) an integer matmul -> leave for numba's float @
     ra, rb = expr_rank(a, ranks), expr_rank(b, ranks)
     if ra is None or rb is None:
-        return None  # can't determine the shape -> leave verbatim (a clean skip),
-        # NOT a raise: an unknown rank is an inference gap, not a known-unsupported shape.
+        return None  # unknown rank is an inference gap, not an unsupported shape: leave verbatim
     p = f"__mmi{hoist.ctr}"
     pre = []
     aid = a.id if isinstance(a, ast.Name) else f"{p}_a"
@@ -231,9 +212,8 @@ def int_matmul_temp(a: ast.expr, b: ast.expr, hoist: ValueHoist) -> ast.expr | N
 
 
 def hoist_int_matmul(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
-    """An INTEGER ``a @ b`` / ``np.matmul`` / ``np.dot`` (both operands integer/bool kind) -> the temp its explicit
-    loop fills (bfs's ``reach = frontier @ graph``). numba's ``@`` is BLAS-backed and float-only, so int matmul fails
-    to type; float matmul is LEFT for numba's fast path. Owned-but-unhandled shapes (>2-D) raise DesugarError."""
+    """An integer/bool ``a @ b`` / ``np.matmul`` / ``np.dot`` -> the temp its explicit loop fills.
+    numba's ``@`` is BLAS-backed and float-only; float matmul is left for it. >2-D operands raise DesugarError."""
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
         return int_matmul_temp(node.left, node.right, hoist)
     if isinstance(node, ast.Call) and np_attr(node) in ("matmul", "dot") and len(node.args) == 2:
@@ -245,8 +225,7 @@ INT_MATMUL_HOIST = HoistForm(frozenset({"matmul", "dot"}), (ast.MatMult,), hoist
 
 
 def is_transpose_expr(v: ast.AST) -> bool:
-    """``np.transpose(x, ...)`` / ``x.transpose(...)`` / ``x.T`` -- these produce a
-    non-contiguous view."""
+    """``np.transpose(x, ...)`` / ``x.transpose(...)`` / ``x.T``: a non-contiguous view."""
     return (
         np_attr(v) == "transpose"
         or (isinstance(v, ast.Attribute) and v.attr == "T")
@@ -255,8 +234,7 @@ def is_transpose_expr(v: ast.AST) -> bool:
 
 
 def noncontig_names(tree: ast.AST) -> set:
-    """Names bound to a non-contiguous view (a transpose, or a transpose chained
-    through another such name) -- to a fixpoint."""
+    """Names bound to a transpose, directly or through another such name (bounded fixpoint)."""
     nc: set = set()
     for unused in range(6):
         grew = False
@@ -273,10 +251,8 @@ def noncontig_names(tree: ast.AST) -> set:
 
 
 class ReshapeContiguousInline(ast.NodeTransformer):
-    """Wrap a reshape's array operand in ``np.ascontiguousarray`` when it is
-    non-contiguous (a transpose or a transpose-derived name) -- numba's reshape
-    requires a contiguous array (stockham's ``np.reshape(tmp_perm, (N,))`` where
-    ``tmp_perm = np.transpose(yv, ...)``). A no-op for already-contiguous inputs."""
+    """Wrap a reshape's operand in ``np.ascontiguousarray`` when it is a transpose or
+    transpose-derived name: numba's reshape requires a contiguous array."""
 
     def __init__(self, noncontig: set) -> None:
         self.noncontig = noncontig
@@ -323,20 +299,13 @@ def as_reshape(node: ast.AST):
     return None
 
 
-class ReshapeMatmulInline(ast.NodeTransformer):
-    """``T[:] = np.reshape(np.reshape(X, (*batch, 1, K)) @ Y, (*batch, N))`` -> a
-    contraction loop ``r[*b, n] = sum_k X[*b, k] * Y[k, n]`` into a fresh full
-    temp (so the ``A = f(A)`` WAR in doitgen is safe). numba cannot type the
-    reshape-wrapped batched ``@`` (the existing batched-matmul pass deliberately
-    refuses reshape-wrapped operands as a miscompile risk). Fires ONLY on the
-    unit-dim-insertion form (``mid[-2] == 1``, ``len(mid) == X.ndim + 1``, Y 2-D);
-    a genuinely different reshape is left verbatim. A matched-but-inconsistent
-    shape (Y not 2-D) raises DesugarError rather than miscompiling."""
+class ReshapeMatmulInline(RankedRewritePass):
+    """``T[:] = np.reshape(np.reshape(X, (*batch, 1, K)) @ Y, (*batch, N))`` -> a contraction
+    loop ``r[*b, n] = sum_k X[*b, k] * Y[k, n]`` into a fresh temp, so ``A = f(A)`` is WAR-safe.
 
-    def __init__(self, ranks: dict[str, int]) -> None:
-        self.ranks = ranks
-        self.changed = False
-        self._ctr = 0
+    numba cannot type the reshape-wrapped batched ``@``. Fires only on the unit-dim insertion
+    (``mid[-2] == 1``, ``len(mid) == X.ndim + 1``); other reshapes stay verbatim. A matched
+    form with Y not 2-D or X below 2-D raises DesugarError rather than miscompiling."""
 
     def visit_Assign(self, node: ast.Assign):
         self.generic_visit(node)
@@ -359,7 +328,6 @@ class ReshapeMatmulInline(ast.NodeTransformer):
             return node
         X, Y, mid = inner[0], mm[1], inner[1]
         rX = expr_rank(X, self.ranks)
-        # Fire only on the unit-dim-insertion batched form; other reshapes -> verbatim.
         if not (
             isinstance(mid, ast.Tuple)
             and rX

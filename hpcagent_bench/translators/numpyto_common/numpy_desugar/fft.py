@@ -10,11 +10,10 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_r
 
 
 def fft_axes(fattr: str, call: ast.Call, rank: int):
-    """``(transform_axes, inverse)`` for an ``np.fft.<fattr>`` call, or
-    ``(None, inverse)`` when the axis spec is non-constant (caller bails, leaving
-    the call verbatim). ``fft``/``ifft`` take one ``axis`` (default last);
-    ``fftn``/``ifftn`` an ``axes`` sequence (default ALL); ``fft2``/``ifft2`` the
-    last two axes. Negative axes wrap modulo ``rank``."""
+    """``(transform_axes, inverse)`` for an ``np.fft.<fattr>`` call; axes are ``None`` when non-constant.
+
+    ``fft``: one ``axis`` (default last); ``fftn``: ``axes`` (default all); ``fft2``: last two.
+    Negative axes wrap modulo ``rank``."""
     kwargs = {k.arg: k.value for k in call.keywords}
     inverse = fattr.startswith("i")
     base = fattr[1:] if inverse else fattr
@@ -42,33 +41,23 @@ def fft_axes(fattr: str, call: ast.Call, rank: int):
 def fft_inline_stmts(
     tname: str, sname: str, taxes: list[int], rank: int, inverse: bool, ctr: int, alloc: bool, real_dtype: str
 ) -> list[ast.stmt]:
-    """Source statements computing ``np.fft.*`` into ``tname`` (shape == source)
-    as a naive DFT loop nest -- the same O(prod(N_t)^2) transform the C/Fortran
-    backends lower, but as plain numpy (``np.exp`` of a complex phase, complex
-    ``+=``) that numba njit-compiles and pythran template-instantiates. Output
-    indices iterate every axis; summation iterators only the transform axes
-    ``taxes`` (batch axes ride the output iterator). Inverse uses ``+1j`` and
-    divides by ``prod(N_t)``. ``alloc`` allocates ``tname`` (bare-Name target);
-    a ``tname[:]`` slice target writes the existing buffer in place.
+    """Statements computing ``np.fft.*`` of ``sname`` into ``tname`` as a naive DFT loop nest.
 
-    ``real_dtype`` (the transform's complex dtype's real half, e.g. ``float64`` for
-    ``complex128``) casts the phase divisor: dace constant-folds the phase's leading
-    ``1j`` into the product chain and codegens a raw ``complex/int64`` division, which
-    dace/runtime/include/dace/complex.h has no ``operator/`` for; a same-precision REAL
-    divisor resolves to the native ``std::complex`` ``operator/`` instead. Must track the
-    transform's actual precision -- this is emitted as source text, so a hardcoded fp64
-    cast would silently double the working precision of an fp32 build."""
+    Output indices iterate every axis, summation indices only ``taxes``; inverse uses ``+1j`` and
+    divides by ``prod(N_t)``. ``alloc`` allocates ``tname``; otherwise the existing buffer is written.
+
+    ``real_dtype`` (real half of the transform's complex dtype) casts the phase divisor: dace folds the
+    leading ``1j`` into the product and emits a ``complex/int64`` division that its complex.h has no
+    ``operator/`` for, while a same-precision real divisor resolves. It must match the transform's
+    precision, or an fp32 build silently computes in fp64."""
     p = f"__ft{ctr}"
     sign = "1j" if inverse else "-1j"
-    # Bind each axis size to an int local first. pythran otherwise forward-
-    # substitutes ``sname.shape[i]`` into ``range(...)`` over a lazy numpy_expr
-    # source and fails template type inference; an int local pins it to ``long``.
+    # Int locals for the extents: pythran otherwise forward-substitutes ``sname.shape[i]`` of a lazy
+    # numpy_expr into ``range(...)`` and fails type inference.
     d = [f"{p}_d{i}" for i in range(rank)]
     lines: list[str] = [f"{d[i]} = {sname}.shape[{i}]" for i in range(rank)]
     if alloc:
-        # The transform's OWN complex width, from the same real_dtype the phase divisor uses --
-        # a hardcoded complex128 doubles an fp32 port's working precision and turns the store
-        # back into its complex64 target into a narrowing copy.
+        # The transform's own complex width; complex128 here would widen an fp32 port.
         lines.append(f"{tname} = np.zeros(({', '.join(d)},), np.{dtypes.complex_dtype_for(real_dtype)})")
     o = [f"{p}_k{i}" for i in range(rank)]
     ind = ""
@@ -93,11 +82,7 @@ def fft_inline_stmts(
 
 
 def fft_real_dtype(sname: str, tname: str, array_dtypes: dict[str, str]) -> str:
-    """Real dtype backing the FFT phase divisor's cast (:func:`fft_inline_stmts`): the
-    REAL half of the transform's OWN complex dtype, read off whichever of the source /
-    target array names is in ``array_dtypes``. Falls back to float64 only when neither
-    resolves (a hoisted, non-Name transform argument) -- the same fp64-when-unknown rule
-    :func:`fd_step` uses, not a default the normal (Name-argument) path takes."""
+    """Real half of the source's or target's complex dtype; float64 when neither is known."""
     dtype = array_dtypes.get(sname) or array_dtypes.get(tname)
     if dtype is not None:
         try:
@@ -108,19 +93,11 @@ def fft_real_dtype(sname: str, tname: str, array_dtypes: dict[str, str]) -> str:
 
 
 class FftInline(ast.NodeTransformer):
-    """Replace ``out = np.fft.fft/ifft/fftn/ifftn/fft2/ifft2(x)`` (and the
-    ``out[:] =`` slice-assign form) with a naive-DFT loop nest. numba supports no
-    ``np.fft`` at all; pythran supports 1-D ``fft``/``ifft`` but not N-D
-    ``fftn``/``ifftn`` -- lowering all variants uniformly keeps one code path
-    (the loop DFT matches numpy to ~1e-15 at any realistic size). A non-Name
-    argument (``ifftn(u1 * np.exp(...))``) is hoisted to a temp first so the loop
-    body can index it; a non-constant axis spec leaves the call verbatim.
+    """``out = np.fft.fft/ifft/fftn/ifftn/fft2/ifft2(x)`` (or ``out[:] = ...``) -> a naive-DFT loop nest.
 
-    A transform that is one OPERAND of a larger right-hand side
-    (``np.fft.ifftn(g) * nnr``, QE's unscaled backward transform) is hoisted the
-    same way and then lowered, because the whole point is that no ``np.fft`` call
-    survives into the emitted program. dace is not lowered at all
-    (:data:`NATIVE_FFT_BACKENDS`): its FFT library nodes are the real transform."""
+    numba has no ``np.fft``; pythran lacks N-D ``fftn``, so all variants take one code path. A non-Name
+    argument, or a transform nested in a larger expression or a ``return``, is bound to a temp first;
+    a non-constant axis spec leaves the call verbatim. Not applied to :data:`NATIVE_FFT_BACKENDS`."""
 
     def __init__(self, ranks: dict[str, int], array_dtypes: dict[str, str]) -> None:
         self.ranks = ranks
@@ -168,13 +145,7 @@ class FftInline(ast.NodeTransformer):
         return pre + stmts
 
     def hoist_operand_transform(self, node: ast.Assign) -> ast.Assign | list[ast.stmt]:
-        """``out = <expr with np.fft.X(a) inside>`` -> bind each transform to its own temp first.
-
-        :meth:`visit_Assign` matches a BARE transform call, so the emitted program kept the call
-        whenever the reference wrapped it -- the QE normalization ``np.fft.ifftn(g) * nnr`` is one.
-        Each hoisted binding is re-fed through :meth:`visit_Assign`, which lowers it to the loop
-        DFT, so the statement list this returns carries no ``np.fft`` call either.
-        """
+        """``out = f(np.fft.X(a))`` -> ``__fth = np.fft.X(a); out = f(__fth)``, lowering each binding."""
         found: list[tuple[str, ast.Call]] = []
 
         def bind(call: ast.Call) -> ast.Name | None:
@@ -204,11 +175,9 @@ class FftInline(ast.NodeTransformer):
         return out
 
     def visit_Return(self, node: ast.Return) -> ast.Return | list[ast.stmt]:
-        """``return <expr carrying np.fft.X(a)>`` -> bind the value, lower the binding, return the name.
+        """``return <expr with np.fft.X(a)>`` -> bind the value, lower the binding, return the name.
 
-        The Assign forms above are where the loop DFT is built, so a transform the reference returns
-        directly (cegterg's ``return np.fft.ifftn(...).reshape(...)``) survived into a numba body, which
-        has no ``np.fft`` at all. A binding the Assign lowering declines leaves the return untouched."""
+        Left untouched when the lowering leaves any ``np.fft`` call in the binding."""
         if node.value is None or not any(np_submodule_attr(n, "fft") is not None for n in ast.walk(node.value)):
             return node
         name = f"__fret{self._ctr}"
@@ -233,8 +202,6 @@ class SubstituteFftCalls(ast.NodeTransformer):
         return self.visitor(node) or node
 
 
-#: Backends that compile ``np.fft.*`` NATIVELY, so :class:`FftInline` leaves the call in place. dace's
-#: frontend binds its FFT/IFFT library nodes, which the canonicalize finalize lowers to FFTW3 on the
-#: CPU and cuFFT/hipFFT on the GPU; the inlined loop DFT is O(N^2) per axis and never finishes at
-#: benchmark sizes (fft_1d's N ~ 7e7).
+#: Backends that compile ``np.fft.*`` natively, so :class:`FftInline` leaves the call in place. dace binds
+#: FFT library nodes (FFTW3 / cuFFT / hipFFT); the O(N^2) loop DFT would not finish at benchmark sizes.
 NATIVE_FFT_BACKENDS = frozenset({"dace"})

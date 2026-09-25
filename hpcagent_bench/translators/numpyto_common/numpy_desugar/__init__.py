@@ -177,25 +177,21 @@ __all__ = [
 
 
 def desugar_for_python_backend(source: str, kir, backend: str | None = None) -> str:
-    """Rewrite ``source`` so numba/pythran/dace can compile it: expand numpy
-    ops they don't support (batched ``@``/``np.matmul``, ``np.pad``,
-    ``np.einsum``, ``np.fft.*``, ``np.mgrid``, axis reductions, ufunc.outer,
-    multi-array fancy gather, ``np.ix_`` writes, 2-D boolean-mask assignment,
-    ``np.ndarray``/``np.linspace(dtype=)``/``abs(array)``) into plain loops/
-    broadcasts/``np.where``, fold constant comprehensions to literals, unroll a
-    comprehension over a constant iterable, and SSA-rename a reassigned local
-    (dace refuses both). EVERY function in the module is processed (helpers too --
-    nbody's masked updates live in getAcc/getEnergy), each with its own rank
-    table seeded from the kernel arrays (kir) or inferred call-site param
-    ranks. Every pass is pattern-guarded; ``source`` returns byte-for-byte
-    unchanged when none fire.
+    """Rewrite ``source`` so numba/pythran/dace can compile it.
 
-    ``backend`` selects the target's native-``np.linalg`` capability: an op it
-    implements natively (numba/dace do cholesky/solve/inv) is left verbatim;
-    one it lacks (pythran has no np.linalg) is lowered to explicit loops.
-    ``None`` (default) lowers no linalg -- the safe backwards-compatible base.
-    A capability can also be PARTIAL: :data:`LOWER_SOLVE_RHS_RANKS` lowers the
-    ``solve`` right-hand-side ranks a nominally-native backend cannot expand."""
+    Expands numpy ops they don't support (batched ``@``/``np.matmul``, ``np.pad``, ``np.einsum``,
+    ``np.fft.*``, ``np.mgrid``, axis reductions, ufunc.outer, multi-array fancy gather, ``np.ix_``
+    writes, 2-D boolean-mask assignment, ...) into plain loops/broadcasts/``np.where``, folds and
+    unrolls constant comprehensions, and SSA-renames reassigned locals. Every function in the module
+    is processed, each with its own rank table seeded from the kernel arrays (kir) or from inferred
+    call-site param ranks. Every pass is pattern-guarded; ``source`` returns byte-for-byte unchanged
+    when none fire.
+
+    ``backend`` selects the target's native-``np.linalg`` capability: an op it implements natively
+    (numba/dace do cholesky/solve/inv) is left verbatim; one it lacks (pythran has no np.linalg) is
+    lowered to explicit loops. ``None`` lowers no linalg. A capability can be partial:
+    :data:`LOWER_SOLVE_RHS_RANKS` lowers the ``solve`` right-hand-side ranks a nominally-native
+    backend cannot expand."""
     lower_linalg = LINALG_LOWERABLE - NATIVE_LINALG.get(backend, LINALG_LOWERABLE)
     lower_solve_rhs_ranks = LOWER_SOLVE_RHS_RANKS.get(backend, frozenset())
     tree = ast.parse(source)
@@ -214,10 +210,8 @@ def desugar_for_python_backend(source: str, kir, backend: str | None = None) -> 
     kir_dtype_seed: dict[str, str] = {
         a.name: kind_of_dtype_str(vars(a).get("dtype")) for a in kir.arrays if kind_of_dtype_str(vars(a).get("dtype"))
     }
-    # Concrete (not just KIND) dtypes, for passes that need an exact width -- e.g. _FftInline's
-    # phase-divisor cast, which must match complex64 vs complex128, not just "is complex".
-    # Read through ``vars()`` like the kind seed above: a KIR array carries no dtype at all in the
-    # rank-only callers, and a direct attribute read makes the whole desugar raise for every backend.
+    # Exact dtypes (not just kind) for passes that need a width, e.g. _FftInline's complex64/128 cast.
+    # Read through ``vars()``: rank-only callers pass KIR arrays without a dtype attribute.
     kir_array_dtypes: dict[str, str] = {a.name: vars(a)["dtype"] for a in kir.arrays if "dtype" in vars(a)}
     param_ranks = infer_param_ranks(all_funcs, kir.kernel_name, kir_seed)
     param_kinds = infer_param_kinds(all_funcs, kir.kernel_name, kir_dtype_seed) if backend == "numba" else {}
@@ -247,14 +241,12 @@ def desugar_for_python_backend(source: str, kir, backend: str | None = None) -> 
         tables = HoistTables(ranks, dtypes, masked_gathers, lower_linalg, lower_solve_rhs_ranks)
         passes = [
             DropGuards(),
-            # First: it splices statements OUT of a ``with`` body, and every pass below walks only
-            # this scope's top-level statements.
+            # First: splices statements out of a ``with`` body; every pass below walks only top-level statements.
             SpliceErrstate(),
             ConstComprehensionFold(consts),
             ListCompUnroll(consts),
-            # Before every temp-minting pass below: an ``or`` clones its if-body, and two
-            # clones sharing one hoisted temp name would redeclare it per branch. After the
-            # const folds, whose "bound exactly once" table the clones would otherwise stale.
+            # Before every temp-minting pass: an ``or`` clones its if-body, and clones sharing a hoisted
+            # temp would redeclare it per branch. After the const folds, whose bound-once table clones stale.
             BoolOpIfToChain(),
             NormalizeNegativeAxis(ranks),
             IxWriteToLoop(ranks, dtypes, fn),
@@ -269,8 +261,7 @@ def desugar_for_python_backend(source: str, kir, backend: str | None = None) -> 
             MgridInline(),
             ValueHoist(FANCY_GATHER_HOIST, tables),
             ValueHoist(DACE_REDUCE_AXIS_HOIST if backend == "dace" else REDUCE_AXIS_HOIST, tables),
-            # Directly behind it: takes only the keepdims reductions the loop lowering
-            # declined (an operand whose rank the table had to forget).
+            # Directly after it: takes only the keepdims reductions the loop lowering declined (unknown rank).
             KeepdimsToNewaxis(),
             ValueHoist(MASKED_REDUCE_HOIST, tables),
             CallFixups(ranks),
@@ -280,13 +271,10 @@ def desugar_for_python_backend(source: str, kir, backend: str | None = None) -> 
             MaskedAssignToLoop(ranks, dtypes),
             AddAtInline(ranks),
             SearchsortedMaterialize(),
-            # Bincount BEFORE the diff rewrite: the repeat lowering below reads ``np.diff(p)``
-            # structurally to prove its output length telescopes.
             StripAstypeCopyKwarg(),
             RepeatCountsInline(ranks),
             BincountInline(ranks),
-            # LAST of the three: the repeat lowering above reads ``np.diff(p)`` structurally, so the
-            # slice rewrite has to come after it.
+            # After _RepeatCountsInline, which reads ``np.diff(p)`` structurally to prove its length telescopes.
             DiffToSliceDifference(),
             ValueHoist(HISTOGRAM_HOIST, tables),
             ValueHoist(REPEAT_AXIS_HOIST, tables),
@@ -303,18 +291,14 @@ def desugar_for_python_backend(source: str, kir, backend: str | None = None) -> 
             ValueHoist(INT_MATMUL_HOIST, tables),
             ComplexAccessorToFunc(conjugate_only=True),
             ElementalUfuncToPrimitive(),
-            # numba only, and LAST of the rewrites: it peels an outer-product broadcast into a
-            # loop, and a pass running after it would have to see through the loop to match.
+            # numba only, last rewrite: it peels an outer-product broadcast into a loop later passes can't see through.
             *([OuterBroadcastPeel(ranks)] if backend == "numba" else []),
-            # LAST: every pass above matches BY NAME through a table built before the loop
-            # (ranks / dtypes / consts / noncontig / masked_gathers), so a rename ahead of
-            # them turns every lookup into a miss and silently switches those passes off.
+            # Last: every pass above looks names up in tables built before the loop (ranks / dtypes /
+            # consts / noncontig / masked_gathers); renaming earlier would silently turn them all off.
             SsaRename(fn, set(kir_seed)),
         ]
         for p in passes:
-            # Process THIS scope's own statements only; a nested def is its own
-            # scope (its params carry different ranks) and is handled as its own
-            # entry in ``all_funcs``, so skip it here to avoid a wrong-rank pass.
+            # A nested def is its own ``all_funcs`` entry with its own ranks; skip it here.
             new_body = []
             for stmt in fn.body:
                 if isinstance(stmt, ast.FunctionDef):
@@ -327,6 +311,6 @@ def desugar_for_python_backend(source: str, kir, backend: str | None = None) -> 
             fn.body = new_body
         changed = changed or any(p.changed for p in passes)
     if not changed:
-        return source  # nothing matched -> leave the body verbatim
+        return source
     ast.fix_missing_locations(tree)
     return ast.unparse(tree)

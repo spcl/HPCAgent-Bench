@@ -333,11 +333,10 @@ def statement_blocks(node: ast.AST) -> list[list[ast.stmt]]:
 def fold_list_accumulators(fn: ast.FunctionDef, vectors: frozenset[str] = frozenset()) -> None:
     """Rewrite a Python list built by growth into an array plus indexed stores, in every block of ``fn``.
 
-    No emitter has a list type, and ``len`` of one is not a symbol: left as a list, lowering reads
-    ``len(centre)`` as the ARRAY extent, the growth guard becomes ``npeaks < npeaks`` and the kernel
-    computes the wrong values. See :func:`plan_list_build` for the recognized builds. A name mutated
-    anywhere the build does not account for is left alone, and so is a bare display unless the
-    caller names it in ``vectors`` (``curve_fit``'s ``p0``, which the LM lowering indexes).
+    No emitter has a list type, and ``len`` of one is not a symbol, so a list left standing lowers
+    with wrong extents. See :func:`plan_list_build` for the recognized builds. A name mutated anywhere
+    the build does not account for is left alone, and so is a bare display unless the caller names it
+    in ``vectors`` (``curve_fit``'s ``p0``, which the LM lowering indexes).
     """
     taken = OrderedSet(sub.id for sub in ast.walk(fn) if isinstance(sub, ast.Name))
     for block in statement_blocks(fn):

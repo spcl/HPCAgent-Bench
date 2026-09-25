@@ -4,22 +4,18 @@ import ast
 import copy
 
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import np_attr
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import RankedRewritePass, RewritePass, np_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 
 
-class CallFixups(ast.NodeTransformer):
-    """Small call-form fixups for numba's narrower numpy surface:
+class CallFixups(RankedRewritePass):
+    """Small call-form fixups for the narrower numba/pythran numpy surface, among them
     ``np.ndarray(shape, dtype=D)`` -> ``np.empty(shape, D)`` (numba has no
     ``np.ndarray`` constructor); ``np.linspace(a, b, n, dtype=D)`` ->
     ``np.linspace(a, b, n).astype(D)`` (numba's linspace takes no dtype kwarg);
     builtin ``abs(<array>)`` -> ``np.abs(<array>)`` (numba's builtin ``abs``
-    types scalars only, not arrays -- mandelbrot's ``abs(Z)`` on complex grids)."""
-
-    def __init__(self, ranks: dict[str, int]) -> None:
-        self.ranks = ranks
-        self.changed = False
+    types scalars only)."""
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
@@ -34,18 +30,13 @@ class CallFixups(ast.NodeTransformer):
             npabs = ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="abs", ctx=ast.Load())
             return ast.copy_location(ast.Call(func=npabs, args=node.args, keywords=[]), node)
         if isinstance(node.func, ast.Attribute) and node.func.attr == "issparse":
-            # ``scipy.sparse.issparse(x)`` -> ``False``: the C/Fortran/dace ABI
-            # only ever passes DENSE numpy arrays, so the sparse branch is dead
-            # (banded_mmt's own comment: "the static dense backends prune this
-            # branch"). numba/pythran cannot type scipy.sparse; folding to False
-            # lets them dead-code-eliminate it and compile the dense path.
+            # ``scipy.sparse.issparse(x)`` -> ``False``: the kernel ABI only passes dense numpy
+            # arrays, and numba/pythran cannot type scipy.sparse, so the sparse branch must go.
             self.changed = True
             return ast.copy_location(ast.Constant(value=False), node)
         attr = np_attr(node)
-        # numba/pythran want a TUPLE shape, not a list literal: ``np.empty([a, b],
-        # ...)`` (a common ML-port idiom, lenet's maxpool) fails to type. Rewrite
-        # the shape-carrying list argument to a tuple (data lists -- ``np.array([
-        # ...])`` -- are not shape args, so ``array`` is not in this set).
+        # numba/pythran want a tuple shape, not a list literal. ``array`` is not in this set: its
+        # list is data, not a shape.
         shape_pos = {"zeros": 0, "ones": 0, "empty": 0, "full": 0, "reshape": 1}.get(attr)
         if shape_pos is not None and len(node.args) > shape_pos and isinstance(node.args[shape_pos], ast.List):
             lst = node.args[shape_pos]
@@ -73,7 +64,7 @@ class CallFixups(ast.NodeTransformer):
                 return ast.copy_location(ast.Call(func=cast, args=[kw["dtype"]], keywords=[]), node)
         if attr == "flip" and node.args:
             # np.flip(x[, axis]) -> a reverse-step slice (pythran's np.flip fails
-            # type deduction -- durbin); no axis reverses every axis.
+            # type deduction); no axis reverses every axis.
             x = node.args[0]
             kw = {k.arg: k.value for k in node.keywords}
             ax = kw.get("axis") or (node.args[1] if len(node.args) > 1 else None)
@@ -124,9 +115,8 @@ def ufunc_method_op(node: ast.AST, method: str) -> str | None:
 
 
 def hoist_ufunc_outer(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
-    """``np.add.outer(a, b)`` (1-D operands) -> a reshape+broadcast temp (numba has no ufunc.outer): ``a[:,None] op
-    b[None,:]`` as a (len_a, len_b) grid (floyd_warshall's ``np.minimum(path, np.add.outer(path[:,k], path[k,:]))``).
-    Non-Name operands are unparsed inline into hoisted temps first."""
+    """``np.add.outer(a, b)`` (1-D operands) -> a reshape+broadcast temp ``a[:, None] op b[None, :]``
+    (numba has no ufunc.outer). Both operands are copied into hoisted temps first."""
     if not isinstance(node, ast.Call):
         return None
     op = ufunc_method_op(node, "outer")
@@ -139,8 +129,7 @@ def hoist_ufunc_outer(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
     p = f"__ao{hoist.ctr}"
     hoist.ctr += 1
     na, nb, sym = f"{p}_a", f"{p}_b", OUTER_OPS[op]
-    # ``.copy()`` -- a strided slice (floyd's ``path[:, k]`` column) is
-    # non-contiguous, and numba's reshape requires a contiguous array.
+    # ``.copy()``: a strided slice (a column) is non-contiguous, and numba's reshape needs a contiguous array.
     hoist.queue(
         [
             f"{na} = ({ast.unparse(a)}).copy()",
@@ -168,10 +157,8 @@ UFUNC_OUT_OPS = {
 }
 
 
-#: binary ufuncs with no Python operator (``max``/``min`` are statements, not BinOps) whose ``out=``
-#: form keeps the call and only drops the keyword -- the plain (no ``out=``) call already lowers
-#: through the generic elementwise-Call path (densenet's pooling cores, once their ``acc = None``
-#: seed is peeled, reduce to exactly this shape).
+#: binary ufuncs with no Python operator whose ``out=`` form keeps the call and only drops the
+#: keyword -- the plain call already lowers through the generic elementwise-Call path.
 UFUNC_OUT_CALLS = OrderedSet(("maximum", "minimum", "fmax", "fmin"))
 
 
@@ -231,15 +218,13 @@ class UfuncOutInline(ast.NodeTransformer):
     """``np.multiply(a, b, out=c)`` (the binary arithmetic ufuncs) -> the explicit assignment
     ``c = a <op> b``; ``np.maximum(a, b, out=c)`` (and the other ``UFUNC_OUT_CALLS`` members, which
     have no BinOp form) -> ``c = np.maximum(a, b)``. The C/Fortran backends have no ufunc dispatch,
-    so the ``out=`` form must be lowered to a store (minife's axpby). ``c`` may be a slice
-    (``wcoefs[:n]``) -- the assignment target is that slice."""
+    so the ``out=`` form must become a store. ``c`` may be a slice; the target is that slice."""
 
     def rewrite_(self, call: ast.AST):
         if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and len(call.args) == 2):
             return None
-        # ``np.<ufunc>.outer(a, b, out=c)`` is the same store with a two-level name. There is no
-        # BinOp spelling for an outer product, so the call is kept and only the ``out=`` becomes a
-        # target -- floyd_warshall writes its whole relaxation step this way.
+        # ``np.<ufunc>.outer(a, b, out=c)``: an outer product has no BinOp spelling, so the call is
+        # kept and only the ``out=`` becomes a target.
         outer_form = (
             isinstance(call.func.value, ast.Attribute)
             and isinstance(call.func.value.value, ast.Name)
@@ -274,17 +259,11 @@ class UfuncOutInline(ast.NodeTransformer):
 
 
 class ComplexAccessorToFunc(ast.NodeTransformer):
-    """Canonicalise every complex-accessor spelling to its ``np.*`` function
-    form: ``z.real`` -> ``np.real(z)``, ``z.imag`` -> ``np.imag(z)``,
-    ``z.conjugate()``/``z.conj()`` -> ``np.conj(z)``. One canonical spelling
-    means one native emit handler per op (``creal``/``cimag``/``conj``)
-    instead of parallel attribute/method/function paths, and the Python
-    backends run the standard ``np.*`` ufuncs. Only these three accessors are
-    rewritten -- ``.shape``/``.size``/``.T``/``.dtype`` pass through untouched.
+    """``z.real`` -> ``np.real(z)``, ``z.imag`` -> ``np.imag(z)``, ``z.conjugate()``/``z.conj()`` ->
+    ``np.conj(z)``: one canonical spelling means one native emit handler per op.
 
-    ``conjugate_only`` restricts the rewrite to ``.conjugate()``/``.conj()``
-    (for Python backends that already run ``.real``/``.imag`` verbatim, but
-    whose pythran path lacks the ``.conjugate()`` method)."""
+    ``conjugate_only`` restricts the rewrite to ``.conjugate()``/``.conj()``, for Python backends that
+    run ``.real``/``.imag`` verbatim but whose pythran path lacks the ``.conjugate()`` method."""
 
     def __init__(self, conjugate_only: bool = False) -> None:
         self.changed = False
@@ -302,9 +281,8 @@ class ComplexAccessorToFunc(ast.NodeTransformer):
         )
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
-        # ``x.conjugate()`` / ``x.conj()`` (no args) -> ``np.conj(x)``. Handled at
-        # the Call so ``.conjugate`` is not first mistaken for an accessor below;
-        # ``np.conj(x)`` (a real call with args) is left as-is.
+        # Handled at the Call so ``.conjugate`` is not first mistaken for an accessor below;
+        # ``np.conj(x)`` (a call with args) is left as-is.
         if (
             isinstance(node.func, ast.Attribute)
             and not node.args
@@ -317,9 +295,7 @@ class ComplexAccessorToFunc(ast.NodeTransformer):
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         self.generic_visit(node)
-        # ``x.real`` / ``x.imag`` accessor -> function form; but NOT the ``np.real``
-        # / ``np.imag`` module attribute (that IS the function -- rewriting it would
-        # nest ``np.real(np)``).
+        # Not the ``np.real`` / ``np.imag`` module attribute: that is the function itself.
         if (
             not self.conjugate_only
             and isinstance(node.ctx, ast.Load)
@@ -331,40 +307,31 @@ class ComplexAccessorToFunc(ast.NodeTransformer):
 
 
 def np_multi_call(fn: str, args: list[ast.expr]) -> ast.Call:
-    """Build ``np.<fn>(*args)`` (the multi-argument sibling of
-    ``ComplexAccessorToFunc._np_call``)."""
+    """Build ``np.<fn>(*args)``."""
     return ast.Call(
         func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=fn, ctx=ast.Load()), args=args, keywords=[]
     )
 
 
 def cmp_zero(x: ast.expr, op: ast.cmpop) -> ast.Compare:
-    """Build ``x <op> 0`` (heaviside's sign test against zero)."""
+    """Build ``x <op> 0``."""
     return ast.Compare(left=x, ops=[op], comparators=[ast.Constant(value=0)])
 
 
-class ElementalUfuncToPrimitive(ast.NodeTransformer):
+class ElementalUfuncToPrimitive(RewritePass):
     """Rewrite two-argument elemental numpy ufuncs with no direct native/JIT
-    lowering into equivalent expressions over already-supported primitives, so
-    every backend (C/C++/Fortran + numba/pythran/jax) lowers them uniformly
-    through the normal elementwise expander:
+    lowering (numba has no ``np.heaviside``, pythran no ``np.logaddexp``) into
+    already-supported primitives, which every backend lowers through the normal
+    elementwise expander:
 
       * ``np.mod(a, b)``/``np.remainder(a, b)`` -> ``a % b`` -- numpy's floored
         modulo is exactly the ``%`` operator (sign of the divisor).
       * ``np.logaddexp(a, b)`` -> ``np.maximum(a, b) + np.log(1.0 + np.exp(-np.abs(a - b)))``
-        -- numpy's stable log-sum-exp. ``log1p`` would be the exact spelling but
-        has no Fortran intrinsic; ``exp(-|a-b|)`` is in ``(0, 1]`` so
-        ``log(1 + .)`` is well-conditioned, agreeing with numpy to a few ulp.
-      * ``np.heaviside(a, b)`` -> ``np.where(a < 0, 0.0, np.where(a == 0, b, 1.0))``
-        -- 0 below zero, ``b`` exactly at zero, 1 above.
+        -- ``log1p`` has no Fortran intrinsic; ``exp(-|a-b|)`` is in ``(0, 1]``
+        so ``log(1 + .)`` is well-conditioned, agreeing with numpy to a few ulp.
+      * ``np.heaviside(a, b)`` -> ``np.where(a < 0, 0.0, np.where(a == 0, b, 1.0))``.
 
-    numba has no ``np.heaviside``, pythran no ``np.logaddexp``; expanding to
-    shared primitives is one uniform lowering with no per-backend special-
-    casing. Reused operands are deep-copied so no AST node is shared between
-    two positions."""
-
-    def __init__(self) -> None:
-        self.changed = False
+    Reused operands are deep-copied so no AST node is shared between two positions."""
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)

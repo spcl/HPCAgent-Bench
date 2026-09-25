@@ -9,19 +9,16 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import KIND_R
 
 
 def einsum_inline_stmts(subs: str, operands: list[str], ctr: int, dtype_of: str):
-    """Source statements computing ``np.einsum(subs, *operands)`` into a fresh
-    temp via an explicit contraction loop nest (output indices outer, contracted
-    indices inner-accumulate). Returns ``(stmts, temp_name)`` or ``(None, None)``
-    when the form is unsupported (ellipsis / scalar output). numba and pythran
-    compile this; neither supports ``np.einsum`` on these shapes. The temp takes
-    ``dtype_of``'s dtype: the operand holding numpy's result type of them all."""
+    """``(stmts, temp)`` computing ``np.einsum(subs, *operands)`` as a contraction loop nest.
+
+    ``(None, None)`` for ellipsis or scalar output. The temp takes ``dtype_of``'s dtype."""
     try:
         in_subs, out_sub = parse_einsum_subscripts(subs)
-    except Exception:  # noqa: BLE001 -- ellipsis / malformed -> caller bails
+    except Exception:  # noqa: BLE001 -- ellipsis / malformed
         return None, None
     if not out_sub or len(in_subs) != len(operands):
-        return None, None  # scalar full-contraction not handled here
-    # index char -> (operand index, axis): first operand carrying it.
+        return None, None
+    # index char -> (operand index, axis) of the first operand carrying it.
     char_src: dict[str, tuple] = {}
     for oi, sub in enumerate(in_subs):
         for ax, ch in enumerate(sub):
@@ -54,8 +51,7 @@ def einsum_inline_stmts(subs: str, operands: list[str], ctr: int, dtype_of: str)
 
 
 def hoist_einsum(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
-    """``np.einsum("<subs>", *names)`` -> the temp its contraction loop nest fills; handles einsum nested in
-    arithmetic (seissol's ``Q[:] = Q + np.einsum(...)``)."""
+    """``np.einsum("<subs>", *names)`` -> the temp its contraction loop nest fills, also inside larger expressions."""
     if not isinstance(node, ast.Call) or np_attr(node) != "einsum" or not node.args:
         return None
     subs, operands = node.args[0], node.args[1:]
@@ -63,9 +59,9 @@ def hoist_einsum(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
         return None
     names = [o.id for o in operands if isinstance(o, ast.Name)]
     if not operands or len(names) != len(operands):
-        return None  # only bare-array operands -> else leave verbatim
-    # numpy's result type is the widest operand kind. An unknown kind may be the widest one, so it
-    # yields to the first operand unless a known operand is already complex, the widest there is.
+        return None
+    # numpy's result type is the widest operand kind. An unknown kind might be wider, so fall back to
+    # the first operand unless a known operand is already complex.
     kinds = [dtype_kind(operand, hoist.tables.dtypes) for operand in operands]
     widest = max(range(len(kinds)), key=lambda at: KIND_RANK.get(kinds[at] or "", -1))
     dtype_of = names[widest] if None not in kinds or kinds[widest] == "complex" else names[0]
