@@ -242,9 +242,9 @@ def test_no_image_recipe_fetches_a_tool_version_chosen_on_build_day(dockerfile: 
         ("curl -fsSL https://deb.nodesource.com/setup_20.x | bash -", [r"setup_\d+\.x"]),
         ("wget -qO uv.tgz https://github.com/astral-sh/uv/releases/latest/download/uv.tar.gz", ["releases/latest"]),
         ('npm install -g "@anthropic-ai/claude-code"; claude --version', ["@anthropic-ai/claude-code"]),
-        ("npm i --global opencode-ai@latest", ["opencode-ai@latest"]),
+        ("npm i --global example-cli@latest", ["example-cli@latest"]),
         ('npm install -g "@anthropic-ai/claude-code@${v}"', ["@anthropic-ai/claude-code@${v}"]),
-        ('npm install -g "@openai/codex@0.154.0" opencode-ai@1.18.30', []),
+        ('npm install -g "@anthropic-ai/claude-code@2.1.197" example-cli@1.18.30', []),
     ],
 )
 def test_the_unpinned_install_scan_flags_each_floating_fetch(text: str, flagged: list[str]) -> None:
