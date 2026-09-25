@@ -757,7 +757,11 @@ TREATMENT_NAMES: dict[str, str] = {"harness": "Other Harness (Column)"}
 
 #: Panel treatments whose columns each change a DIFFERENT registered treatment (a harness, or a
 #: packet on the control's harness): every column wears that treatment's own registered shape.
-PER_COLUMN_TREATMENTS: frozenset[str] = frozenset({"harness"})
+PER_COLUMN_TREATMENTS: frozenset[str] = frozenset({"harness", "packets"})
+
+#: Of those, the panels whose columns sit under their DELIVERY's tick ("C-CPF" under "C"): the packet
+#: is an intervention, told by shape and key, not a category of its own on the axis.
+GROUPED_BY_DELIVERY: frozenset[str] = frozenset({"packets"})
 
 
 def column_treatment_shape(leg: str) -> str:
@@ -766,10 +770,23 @@ def column_treatment_shape(leg: str) -> str:
     for harness in experiment_tags.order("harnesses"):
         if harness and experiment_tags.harness_name(harness) == leg:
             return palette.harness_marker(harness)
+    suffix = leg.rsplit("-", 1)[-1]
     for packet in experiment_tags.order("packets"):
-        if packet and experiment_tags.packet_name(packet) == leg:
+        if packet and leg in (experiment_tags.packet_name(packet), experiment_tags.packet_short_name(packet)):
+            return palette.packet_marker(packet)
+    for packet in experiment_tags.order("packets"):
+        if packet and suffix == experiment_tags.packet_short_name(packet):
             return palette.packet_marker(packet)
     return ""
+
+
+def column_treatment_name(leg: str) -> str:
+    """The key text of a per-column treatment: a "<delivery>-<packet>" column's packet, else the leg."""
+    suffix = leg.rsplit("-", 1)[-1]
+    for packet in experiment_tags.order("packets"):
+        if packet and suffix == experiment_tags.packet_short_name(packet):
+            return experiment_tags.packet_name(packet)
+    return leg
 
 
 def pair_legend_handles(
@@ -1758,6 +1775,14 @@ class ArmRow:
     #: The treated mark's own shape where a column's treatment is not the panel's one packet (a
     #: harness comparison: each column a different harness); "" wears the panel's shape.
     shape: str = ""
+    #: The axis group the column sits in when that is not its leg: a several-packet panel's
+    #: "C-CPF" column sits under the "C" tick, its packet told by its shape and the key.
+    group: str = ""
+
+    @property
+    def axis_group(self) -> str:
+        """The tick this column sits under: :attr:`group`, else its leg."""
+        return self.group or self.leg
 
     @property
     def label(self) -> str:
@@ -1802,7 +1827,7 @@ def leg_rank(leg: str) -> tuple[int, str]:
 def column_order(rows: Sequence[ArmRow]) -> list[ArmRow]:
     """``rows`` in axis order: delivery first (:func:`leg_rank`), then model in registry order."""
     order = {name: index for index, name in enumerate(palette.in_order([row.model for row in rows]))}
-    return sorted(rows, key=lambda row: (leg_rank(row.leg), order.get(row.model, len(order))))
+    return sorted(rows, key=lambda row: (leg_rank(row.axis_group), row.leg, order.get(row.model, len(order))))
 
 
 #: The spacing of two columns of ONE delivery (its models side by side), against 1.0 between two
@@ -1814,7 +1839,8 @@ def column_x(rows: Sequence[ArmRow]) -> list[float]:
     """Each column's x: :data:`GROUP_STEP` apart within a delivery, a whole step between deliveries."""
     xs: list[float] = []
     for index, row in enumerate(rows):
-        xs.append(0.0 if index == 0 else xs[-1] + (GROUP_STEP if row.leg == rows[index - 1].leg else 1.0))
+        same = row.axis_group == rows[index - 1].axis_group if index else False
+        xs.append(0.0 if index == 0 else xs[-1] + (GROUP_STEP if same else 1.0))
     return xs
 
 
@@ -1822,10 +1848,10 @@ def leg_runs(rows: Sequence[ArmRow]) -> list[tuple[str, int, int]]:
     """Each contiguous run of one delivery as ``(leg, first index, last index)``."""
     runs: list[tuple[str, int, int]] = []
     for index, row in enumerate(rows):
-        if runs and runs[-1][0] == row.leg:
-            runs[-1] = (row.leg, runs[-1][1], index)
+        if runs and runs[-1][0] == row.axis_group:
+            runs[-1] = (row.axis_group, runs[-1][1], index)
         else:
-            runs.append((row.leg, index, index))
+            runs.append((row.axis_group, index, index))
     return runs
 
 
@@ -2597,7 +2623,14 @@ def dot_columns(
         waiting = [m.strip() for m in str(pending[index] if index < len(pending) else "").split(",") if m.strip()]
         rows = pending_rows(rows, waiting, channels, stub_leg)
         if str(key) in PER_COLUMN_TREATMENTS:
-            rows = [dataclasses.replace(row, shape=column_treatment_shape(row.leg)) for row in rows]
+            rows = [
+                dataclasses.replace(
+                    row, shape=column_treatment_shape(row.leg),
+                    group=row.leg.rsplit("-", 1)[0] if str(key) in GROUPED_BY_DELIVERY else "",
+                )
+                for row in rows
+            ]  # fmt: skip
+            rows = column_order(rows)
         columns.append(
             DotColumn(
                 title=str(title),
@@ -2636,14 +2669,20 @@ def dot_row_legend(columns: Sequence[DotColumn], channels: str, config: FigureCo
     drawn = [column for column in columns if column.rows]
     for treatment in dict.fromkeys(column.treatment for column in drawn):
         if treatment in PER_COLUMN_TREATMENTS:
-            shapes = {row.leg: row.shape for column in drawn if column.treatment == treatment for row in column.rows}
+            shapes = {
+                column_treatment_name(row.leg): row.shape
+                for column in drawn if column.treatment == treatment for row in column.rows if row.shape
+            }  # fmt: skip
             handles += [
                 Line2D([], [], marker=shape, linestyle="none", color=style.MUTED,
-                       markersize=config.legend_marker_pt, label=leg)
-                for leg, shape in shapes.items() if shape
+                       markersize=config.legend_marker_pt, label=name)
+                for name, shape in shapes.items()
             ]  # fmt: skip
             continue
         handles.append(packet_legend_mark(treatment, config))
+    # A packet drawn in two panels (a mixed panel's column and a one-packet panel) keeps one row.
+    seen: set[str] = set()
+    handles = [h for h in handles if not (h.get_label() in seen or seen.add(h.get_label()))]
     # Every panel's control wears the one control circle, so the key spends ONE row on it and names
     # each panel's control there; a circle per panel repeated the same swatch three times.
     names = list(dict.fromkeys(column.control or packets.control_label([column.treatment]) for column in drawn))

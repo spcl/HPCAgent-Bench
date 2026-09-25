@@ -287,9 +287,10 @@ def test_every_registered_treatment_wears_its_own_shape_and_none_wears_the_contr
 
 def test_a_packets_shape_does_not_move_when_a_later_treatment_is_registered() -> None:
     """Append-only: the pool is handed out in file order (harnesses, then packets), so the first
-    harness keeps the pool's first free shape whatever is registered after it."""
+    harness keeps the pool's first shape no packet pins with ``marker:``, whatever is registered after it."""
     first = palette.hue_order("harnesses")[0]
-    pool = [shape for shape in palette.registry().shapes if shape != palette.CONTROL_MARKER]
+    pinned = {d.marker for d in palette.registry().packet_defs.values() if d.marker}
+    pool = [shape for shape in palette.registry().shapes if shape != palette.CONTROL_MARKER and shape not in pinned]
     assert palette.harness_marker(first) == pool[0]
 
 

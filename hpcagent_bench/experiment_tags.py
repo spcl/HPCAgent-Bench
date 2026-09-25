@@ -96,6 +96,8 @@ class PacketDef:
     frozen: str = ""
     #: The shape this packet wears instead of the next free one from the pool ("": the pool's).
     marker: str = ""
+    #: A figure's short spelling, for a column naming delivery and packet at once ("C-Skills").
+    short: str = ""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -201,6 +203,7 @@ def packet_defs_of(raw: object) -> dict[str, PacketDef]:
                 device=str(fields.get("device", "")),
                 frozen=str(fields.get("frozen", "")),
                 marker=str(fields.get("marker", "")),
+                short=str(fields.get("short", "")),
             )
         else:
             out[str(tag)] = PacketDef(name=str(entry), skills=(), packets=(), env=(), method="")
@@ -350,6 +353,12 @@ def model_checkpoint(model: str) -> str:
     """
     entry = registry().models.get(canonical("models", str(model).lower()))
     return entry.serves if entry is not None else ""
+
+
+def packet_short_name(packet: str) -> str:
+    """A packet's short figure spelling (its registry ``short:``), else its display name."""
+    definition = registry().packet_defs.get(canonical("packets", str(packet)))
+    return definition.short if definition is not None and definition.short else packet_name(packet)
 
 
 def packet_name(packet: str) -> str:

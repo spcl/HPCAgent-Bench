@@ -277,6 +277,8 @@ packets:
     # line and its file on disk only, never as text in the main prompt. The hints-and-triggers.md
     # routing table it used to put there summarized two pages' contents ahead of the index.
     name: Language Skill Packet
+    marker: "D"
+    short: Skills
     skills:
       - "*"
   divide-and-conquer:
@@ -294,6 +296,7 @@ packets:
       - opt-reports
   repo:
     name: Git
+    marker: "X"
     env:
       REPO_LAYOUT: "1"
       REPO_LAYOUT_PYTHON: "${REPO_LAYOUT_PYTHON}"
@@ -389,6 +392,8 @@ packets:
     # rides in the main prompt. Up to then it sat verbatim in the hints slot on every turn (the
     # llr-caveman20 wave). The page is `applies: {explicit: true}`, so `*` never stages it.
     name: Terse
+    marker: "v"
+    short: Terse
     skills:
       - caveman
   cpfsrc-v2:
@@ -401,7 +406,9 @@ packets:
     # launcher PARAMETER (${CPF_VIEW} at resolve time, the cpfsrc-v2 arm kind in
     # submit-cpf-llr40.sh, which refuses a TAG-derived default for it), filled with a NEW
     # dace-rendered view once one exists. 2026-09-19: no arm has submitted against this key yet.
-    name: Canonical Parallel Form as Source (v2)
+    name: CPF as Source
+    marker: "s"
+    short: CPF
     packets:
       - cpfsrc
   distributed-amd:
