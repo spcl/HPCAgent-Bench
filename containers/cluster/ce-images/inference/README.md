@@ -3,7 +3,7 @@
 vLLM and SGLang are each built from a single Dockerfile -- `../vllm/Dockerfile` and
 `../sglang/Dockerfile` -- and promoted under one unversioned name per role, which `../images.env`
 records and `../install_edfs.sh` registers as `hpcagent-bench-vllm-mi300-latest` and `hpcagent-bench-sglang-mi300-latest`.
-Build and promotion are documented in `../../../../SUBMITTING.md`.
+Build and promotion are documented in `../../../../experiments/SUBMITTING.md`.
 
 vLLM 0.27.1 is parked on the `parked/vllm-0271` branch. On one pinned node, same probe and parsers,
 it served oss120b at 2405 tok/s against 0.23.0's 3013 -- 25% slower, entirely in decode

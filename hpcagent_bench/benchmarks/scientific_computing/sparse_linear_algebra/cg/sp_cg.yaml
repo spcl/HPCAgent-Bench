@@ -193,5 +193,3 @@ distributions:
   csr_suitesparse_orsreg_1:
     configuration: csr
     distribution: suitesparse
-experiment_tags:
-- sparse

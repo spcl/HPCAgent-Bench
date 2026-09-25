@@ -43,14 +43,13 @@ class Rendered:
 
     ``core`` pulls in ``[project] dependencies``; the hardware stacks need them because nothing else
     installs the project's own deps into the CE image. ``groups`` names PEP 735 dependency groups,
-    ``includes`` emits ``-r`` lines, and ``options`` are pip option lines that cannot be spelled as a
-    PEP 508 requirement and so have no home in pyproject.
+    and ``options`` are pip option lines that cannot be spelled as a PEP 508 requirement and so have
+    no home in pyproject.
     """
 
     extras: tuple[str, ...]
     core: bool
     groups: tuple[str, ...] = ()
-    includes: tuple[str, ...] = ()
     options: tuple[str, ...] = ()
     note: str = ""
 
@@ -59,16 +58,6 @@ class Rendered:
 #: :func:`check` says so rather than deleting it: ``optional.txt`` is a two-package convenience split
 #: that matches no single extra.
 GENERATED: dict[str, Rendered] = {
-    "requirements.txt": Rendered(
-        (),
-        core=False,
-        groups=("linting",),
-        includes=("requirements/cpu.txt",),
-        note="The CPU runtime stack plus the DEV-ONLY formatters the format-check job and "
-        "scripts/check_format.py drive. Equivalent to `pip install -e '.[cpu]' --group linting`, "
-        "kept because a bare `pip install -r requirements.txt` is what a first-time reader reaches "
-        "for.",
-    ),
     "requirements/cpu.txt": Rendered(
         ("cpu",),
         core=True,
@@ -182,7 +171,6 @@ def render(spec: Rendered, core: Sequence[str], extras: dict[str, list[str]], gr
     if spec.note:
         lines.append("#\n" + "\n".join(f"# {line}" for line in wrap(spec.note)) + "\n")
     lines.extend(f"{option}\n" for option in spec.options)
-    lines.extend(f"-r {include}\n" for include in spec.includes)
 
     emitted: set[str] = set()
     for name in names:

@@ -7,7 +7,7 @@ this directory in CI, so a root conftest is the one place a process-wide pin can
 being written twice -- the translator suite deliberately imports nothing from ``hpcagent_bench``,
 so it cannot share a helper module with the other one.
 
-The pin itself lives in :mod:`dace_build_isolation`, not here: each tree has a ``conftest`` of its
+The pin itself lives in :mod:`tests.dace_build_isolation`, not here: each tree has a ``conftest`` of its
 own, so a test importing ``conftest`` by name gets whichever was imported first.
 """
 
@@ -16,7 +16,7 @@ import socket
 
 import pytest
 
-from dace_build_isolation import pin_per_worker_dace_build_folder
+from tests.dace_build_isolation import pin_per_worker_dace_build_folder
 
 pin_per_worker_dace_build_folder()
 

@@ -1,77 +1,68 @@
-# Project metadata. setup.py is GONE: metadata split across both files is metadata setuptools
-# refuses ("cannot be declared in both"), and everything setup.py computed at import -- the
-# translator package_dir remap included -- is spelled statically below, so a resolver can read it
-# without executing code.
-#
-# There is NO lockfile, deliberately. A lock demands one resolution valid across every extra at
-# once, and two things here make that impossible: agent-aider hard-pins numpy==1.26.x against this
-# project's numpy>=2, and dace must track a moving branch tip rather than a commit. Installs
-# therefore resolve fresh (`pip install -e ".[<hw>]" "dace @ git+https://github.com/spcl/dace.git@extended"`),
-# which is also what keeps dace current.
-# This file is the whole of the dependency metadata; pip is the installer.
-#
-# Why package-dir matters: the numpyto_* translators live under
-# hpcagent_bench/numpy_translators/src but keep their top-level import names, so each is mapped to
-# its src location. Without the mapping (the legacy `setup.py develop` path, which ignores it)
-# `import numpyto_common` raises ModuleNotFoundError -- which is exactly what broke the judge
-# container once already.
+# The single source of the package metadata, version and dependencies. requirements/*.txt are
+# rendered from this file by scripts/sync_requirements.py (the container images install those).
+# There is no lockfile: agent-aider pins numpy 1.26 against numpy>=2 here, and dace tracks a branch
+# tip, so no single resolution covers every extra.
 [build-system]
-requires = ["setuptools>=64", "wheel"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hpcagent_bench"
+name = "hpcagent-bench"
 version = "0.1.0"
-description = "HPCAgent-Bench"
+description = "A benchmark for AI agents that optimize numerical code: NumPy kernels, a judge, and speedup scoring."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "GPL-3.0-or-later"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "SPCL @ ETH Zurich", email = "yakupkoray.budanaz@inf.ethz.ch" }]
+keywords = ["benchmark", "hpc", "llm-agents", "code-optimization", "numpy", "compilers"]
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: C",
+    "Programming Language :: C++",
+    "Programming Language :: Fortran",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: System :: Benchmark",
 ]
 
-# What the LIBRARY itself needs to import -- every module-level third-party import under
-# hpcagent_bench/ outside benchmarks/ and tests/. The FRAMEWORK MATRIX (torch/jax/tvm/triton/
-# numba/pythran/xgboost + the hdf5/netcdf bindings) is hardware-dependent and chosen per platform,
-# so it lives in the extras below rather than here.
-#
-# Without this, an install of hpcagent_bench yields an unimportable package: it resolves ZERO
-# dependencies. That was survivable only because every in-repo consumer installed a platform
-# extra first; a downstream consumer doing the plain install gets ModuleNotFoundError one dep at
-# a time (sqlmodel, via hpcagent_bench/frameworks/schema.py, is how this surfaced).
-#
-# dace is deliberately ABSENT here and is not an extra either (see the note above `mpi` below): the
-# PyPI wheel is an old release that imports the numpy-2-removed ``np.int``, so it is sourced from
-# spcl/dace@extended.
+# What the library imports at module level (hpcagent_bench/ outside benchmarks/ and tests/). The
+# framework matrix (torch/jax/tvm/triton/...) is per platform and lives in the extras; numba is core
+# because it is the default LLR/SciComp baseline.
+# dace is not declared anywhere: PyPI rejects direct-URL requirements and the suite grades through
+# the spcl/dace `extended` branch tip, so it is installed separately (README).
 dependencies = [
-    "numpy>=2,<3",  # the array type of every benchmark + translator signature
-    "scipy",  # hpcagent_bench/support/helpers/sparse/generators.py, plotting
-    "pandas",  # hpcagent_bench/stats/figures/results.py
-    "matplotlib",  # hpcagent_bench/stats/figures/results.py
-    "ml_dtypes",  # hpcagent_bench/precision.py -- the low-precision dtypes
-    "pyyaml",  # hpcagent_bench/config.py + languages.py, read at import
-    "sqlmodel",  # hpcagent_bench/frameworks/schema.py -- the typed results-DB schema
-    "jinja2",  # hpcagent_bench/harness/prompts.py
-    "cffi",  # hpcagent_bench/harness/native_call.py
-    "sympy",  # numpyto_common/lowering.py -- symbolic shape lowering
-    # The judge's reference digests. Keyed (the secret an agent must not hold), and its chunk tree
-    # parallelises on CPU and maps onto a GPU kernel -- measured 8.4 GB/s over 16 threads against
-    # stdlib blake2s's 0.29, because hashlib's blake2 is the plain-C reference. Pure-CPU with
-    # wheels on every platform, unlike cupy.
-    "blake3",
+    "numpy>=2,<3",
+    "scipy",
+    "pandas",
+    "matplotlib",
+    "ml_dtypes",
+    "pyyaml",
+    "sqlmodel",
+    "jinja2",
+    "cffi",
+    "sympy",
+    "numba",
 ]
 
 [project.urls]
 Homepage = "https://github.com/spcl/HPCAgent-Bench"
+Repository = "https://github.com/spcl/HPCAgent-Bench"
+Documentation = "https://github.com/spcl/HPCAgent-Bench/tree/main/docs"
+Issues = "https://github.com/spcl/HPCAgent-Bench/issues"
+Changelog = "https://github.com/spcl/HPCAgent-Bench/blob/main/CHANGELOG.md"
 
 [project.scripts]
-# The main CLI (serve / run / agent / ...). Without this the documented `hpcagent-bench
-# <subcommand>` is unreachable after an install.
 hpcagent-bench = "hpcagent_bench.cli:main"
 hpcagent-bench-install-apptainer = "hpcagent_bench.containers:install_apptainer_main"
-# The numpyto_* translator CLIs (folded in from the former standalone dist).
 numpyto = "numpyto_common.cli:main"
 numpyto_c = "numpyto_c.cli:main"
 numpyto_fortran = "numpyto_fortran.cli:main"
@@ -79,21 +70,9 @@ numpyto_cupy = "numpyto_cupy.cli:main"
 numpyto_numba = "numpyto_numba.cli:main"
 numpyto_pythran = "numpyto_pythran.cli:main"
 
-# ---------------------------------------------------------------------------------------------
-# Extras. These WERE requirements/<hw>.txt, and they still say the same thing: the framework
-# matrix is hardware-dependent, so a platform picks one of cpu/nvidia/amd and never two. Stating
-# them here rather than in a requirements file is what makes them installable as ONE resolution
-# per job -- a resolver cannot see a constraint it is handed in a second, later `pip install`.
-#
-# cpu / nvidia / amd are mutually exclusive by construction: they carry different builds of the
-# same torch. Nothing enforces that mechanically now that there is no lock, so a job asks for
-# exactly one.
-# ---------------------------------------------------------------------------------------------
+# A platform installs exactly one of cpu / nvidia / amd: they carry different builds of torch.
 [project.optional-dependencies]
-# The shared stack every platform grades through, with NOTHING whose build differs per accelerator.
-# torch, cupy, tvm and triton are deliberately absent: those are what make cpu/nvidia/amd different
-# from one another, and factoring them out is what lets the three extras below share one resolution
-# of everything else.
+# The grading stack shared by every platform (nothing whose build differs per accelerator).
 frameworks = [
     "pygount",
     "jsonschema",
@@ -102,56 +81,26 @@ frameworks = [
     "psutil",
     "py-cpuinfo",
     "GPUtil",
-    # A dace runtime import (dace/sdfg/graph.py et al). dace@extended added the import before
-    # declaring it in install_requires, so a fresh editable clone briefly shipped without it and
-    # every dace-importing job died on ModuleNotFoundError. Declared here too, so a gap in dace's
-    # own dep list can never silently drop it again.
+    # dace@extended imports it at runtime.
     "ordered-set>=4.0.0",
-    "numba",
-    # pythran IS pinned, unlike dace: it is a third-party compiler this suite GRADES kernels
-    # through, and it moved under the gate. 0.19.0 landed between run 31842426040 (08-14) and
-    # 32065774711 (08-17) and turned subset_sum from green into a >600 s hang, then a SIG11 -- the
-    # kernel itself unchanged and still green on 0.18.1. Bump this in its own commit, and expect
-    # the e2e statuses to move with it.
+    # 0.19.0 turns subset_sum into a >600 s hang, then a SIGSEGV. Bump in its own commit.
     "pythran==0.18.1",
     "xgboost",
-    # HDF5 / netCDF bindings for the apt libhdf5-dev + libnetcdf-dev the images install. Declared
-    # EXPLICITLY: they used to arrive only as a transitive dep of the stock PyPI dace, so pinning
-    # dace to the fork (which does not depend on them) silently dropped them and the image smoke
-    # test -- which imports both -- broke. A dep the smoke test asserts must be a dep this file
-    # states.
+    # Python bindings for the libhdf5 / libnetcdf the images install; the image smoke imports both.
     "h5py",
     "netCDF4",
-    # The solver backends dace's analyses gate on. Both ARE declared in dace@extended's pyproject,
-    # so a fresh editable clone resolves them; an image built from an older clone, or a tree used
-    # off PYTHONPATH, does not. Declared here so neither depends on the clone's vintage. The
-    # failure mode is silent and one-directional -- every gate fails closed: without islpy
-    # ``WavefrontSkew.apply_pass`` returns None on its first line, and without z3
-    # ``smt_dependence.has_z3()`` is False so LoopToMap, BreakAntiDependence and LoopFission all
-    # answer "cannot prove". Canonicalization then just emits sequential loops, with no
-    # diagnostic anywhere. Measured 2026-08-31: islpy turns wavefront2d, wf_triangular and
-    # wf_north_west from ``maps=0 loops=2`` into a skewed parallel Map, all three still exact.
+    # dace's analyses fail closed without them (sequential loops, no diagnostic).
     "islpy",
     "z3-solver",
-    # The KernelBench models the machine_learning ports were ported FROM import it (mamba2's
-    # rearrange/einsum). Without it those two models cannot be built at all, so the port cannot be
-    # compared to its original -- tests/test_kernelbench_torch_agreement.py pins
-    # mamba2_return_final_state and mamba2_return_y as UNALIGNED for reason missing_dependency,
-    # which is the oracle going unchecked rather than a test being skipped. Declared here with the
-    # rest of the framework stack because it is a torch-side helper, not a platform difference.
+    # The upstream KernelBench models the machine_learning ports are compared against import it.
     "einops",
 ]
-# A CPU box. torch must come from PyTorch's CPU index -- the default PyPI wheel is the CUDA build
-# and drags ~2.5 GB of nvidia-* wheels onto a runner with no GPU to use them on. An index cannot be
-# expressed in a PEP 508 requirement, so CPU jobs install torch from that index FIRST and this
-# extra then finds it already satisfied (see .github/actions/setup/action.yml).
+# CPU jobs install torch from PyTorch's CPU index first (the PyPI wheel is the CUDA build); an index
+# cannot be named in a PEP 508 requirement (see .github/actions/setup/action.yml).
 cpu = ["hpcagent_bench[frameworks]", "torch", "jax"]
 nvidia = [
     "hpcagent_bench[frameworks]",
     "torch",
-    # cuda13, matching cupy-cuda13x above and the CUDA 13 base image. These two used to
-    # disagree, and the image papered over it by reinstalling the plugin for the major it
-    # detected -- so the file was wrong while the image was right.
     "jax[cuda13]",
     "cupy-cuda13x",
     "apache-tvm>=0.25.0rc0",
@@ -161,90 +110,58 @@ nvidia = [
 amd = [
     "hpcagent_bench[frameworks]",
     "torch",
-    # Bare jax is CPU-only here. The ROCm build is jax + jaxlib + jax-rocm7-plugin from
-    # repo.radeon.com, which is not on PyPI under any name pip can resolve, so the image installs
-    # it explicitly and this extra deliberately does not try.
+    # The ROCm jax plugin and AMD's triton come from the ROCm base image, not PyPI (the PyPI
+    # triton is the NVIDIA build and would overwrite it).
     "jax",
     "apache-tvm>=0.25.0rc0",
-    # NO triton. The PyPI "triton" distribution is the NVIDIA build: installing it on a ROCm base
-    # overwrites site-packages/triton with the upstream one and the ROCm kernels disappear. AMD's
-    # triton ships in the ROCm base image, so the correct action here is to install nothing and let
-    # it stand. The image asserts it survived.
     "mpi4py",
 ]
-# DaCe is NOT an extra here. PyPI rejects a published Requires-Dist with a direct URL
-# (PEP 508 direct reference), and this suite grades kernels through the BRANCH tip, never the
-# PyPI wheel (that release imports the numpy-2-removed ``np.int``) and never a pinned commit, so
-# there is no version string that could stand in for it anyway. Install it separately:
-# `pip install "dace @ git+https://github.com/spcl/dace.git@extended"` (README has the one-liner).
-# CI installs it from a checkout for the same reason plus one more -- see
-# .github/actions/setup/action.yml's "DaCe checkout" step.
-# The distributed track: the descriptor/driver codegen tests and their launcher.
 mpi = ["mpi4py", "pytest-mpi"]
-# Backends only the one job that grades that column wants.
 tvm = ["apache-tvm>=0.25.0rc0", "apache-tvm-ffi>=0.1.12"]
 triton = ["triton"]
 gt4py = ["gt4py"]
-# The HF dataset export.
-hf = [
-    "pyarrow",
-    "datasets>=2.17",  # config_name= on push_to_hub, i.e. multi-config datasets
-    "huggingface_hub",
-]
-# The example cluster judge router (experiments/judge_service.py) is a
-# FastAPI app that forwards with httpx. fastapi.testclient.TestClient is starlette's, which imports
-# httpx2 and falls back to httpx only with a deprecation warning (an error under -W error).
+# `hpcagent-bench export-hf`: parquet writer and Hub push.
+hf = ["pyarrow", "datasets>=2.17", "huggingface_hub"]
+# experiments/judge_service.py (FastAPI router). starlette's TestClient needs httpx2 to avoid a
+# deprecation warning.
 judge-proxy = ["fastapi", "httpx", "httpx2==2.12.0"]
-# Agent backends. One per provider, so a run only installs the one it drives.
 agent-anthropic = ["anthropic"]
 agent-local = ["transformers", "huggingface-hub", "accelerate"]
 agent-aider = ["aider-chat"]
 agent-optimas = ["optimas-ai"]
 harbor = ["harbor"]
 
-# ---------------------------------------------------------------------------------------------
-# Dependency groups (PEP 735). Not extras: nothing that INSTALLS hpcagent_bench needs a test
-# runner, and a group is never published with the distribution. `pip install --group linting`
-# installs one WITHOUT the project, which is what keeps the format gate from resolving torch.
-# ---------------------------------------------------------------------------------------------
+# PEP 735 groups: never published with the distribution. `pip install --group linting` installs
+# the formatters without the project.
 [dependency-groups]
-# pytest-forked: tests/ports/ runs each test in its own process. A port oracle is hand-written
-# C/C++/Fortran reached through ctypes, so a bad index aborts the INTERPRETER, not the test --
-# one vexx abort truncated the job and hid 221 tests for over a week.
+# pytest-forked: tests/ports/ runs each test in its own process (a bad ctypes index aborts the
+# interpreter).
 testing = ["pytest", "pytest-timeout", "pytest-xdist", "pytest-forked", "pytest-cov", "coverage"]
-# The format gate. clang-format ships its binary in the wheel, which is why it is a python dep.
 linting = ["ruff", "fprettify", "clang-format", "pre-commit"]
 dev = [{ include-group = "testing" }, { include-group = "linting" }]
 
 [tool.setuptools]
-# The translators ship as part of THIS distribution (not a separate project) and keep their
-# top-level import names, so each maps to its location under numpy_translators/src.
+# The numpyto_* translators ship in this distribution under their own top-level import names.
 package-dir = { "" = ".", numpyto_c = "hpcagent_bench/numpy_translators/src/numpyto_c", numpyto_common = "hpcagent_bench/numpy_translators/src/numpyto_common", numpyto_cupy = "hpcagent_bench/numpy_translators/src/numpyto_cupy", numpyto_fortran = "hpcagent_bench/numpy_translators/src/numpyto_fortran", numpyto_jax = "hpcagent_bench/numpy_translators/src/numpyto_jax", numpyto_numba = "hpcagent_bench/numpy_translators/src/numpyto_numba", numpyto_pythran = "hpcagent_bench/numpy_translators/src/numpyto_pythran" }
 include-package-data = true
 
 [tool.setuptools.packages.find]
-# TWO roots: the repo itself and the translator src tree. setup.py called find_packages twice for
-# exactly this and concatenated the results.
 where = [".", "hpcagent_bench/numpy_translators/src"]
 include = ["hpcagent_bench*", "numpyto_*"]
 exclude = ["hpcagent_bench.numpy_translators*"]
 
+# Listed explicitly: the judge image builds the wheel from hpcagent_bench/ and pyproject.toml alone
+# (no MANIFEST.in, no VCS file finder).
 [tool.setuptools.package-data]
-# Ship the library's data files. include-package-data alone is not enough for a wheel build:
-# without an active VCS file-finder it silently drops these (config.yaml is loaded at import by
-# config.py; the schema/taxonomy/env specs by spec.py / languages.py).
 hpcagent_bench = [
     "config.yaml",
     "container_backends.txt",
     "envs/*.yaml",
-    # A build input, not data: CPU_BASELINE_GCC -include's it on every gcc/g++ compile, so without
-    # it native C/C++ kernels do not compile from a wheel.
+    # -include'd on every gcc/g++ compile (CPU_BASELINE_GCC).
     "envs/vecmath.h",
-    # The PAPI range wrapper the profile tool:"none" build puts on the include path.
     "envs/papi_ranges.h",
-    # Kernel manifests (spec.py) and the sources beside each _numpy.py (prompts.py offers the references).
-    # MANIFEST.in reaches a wheel only when it is in the build, and the judge image build copies
-    # hpcagent_bench/ and pyproject.toml alone: its installed package could not load a spec (634867).
+    # Kernel manifests, references in every language, and the numpy reference read as text. Kernel
+    # dirs are not packages, so their .py files ship only through this list.
     "benchmarks/**/*.yaml",
     "benchmarks/**/*.c",
     "benchmarks/**/*.cpp",
@@ -255,64 +172,33 @@ hpcagent_bench = [
     "benchmarks/**/*.j2",
     "benchmarks/**/*.md",
     "benchmarks/**/*.npz",
-    # The numpy REFERENCE source (<module>_numpy.py, hf_export.py / prompts.py read it as text,
-    # never import it) plus the sibling framework references (_triton.py, _reference.py, ...) each
-    # kernel dir carries. Most kernel dirs under benchmarks/ have no __init__.py (only the three
-    # track dirs do), so setuptools' package discovery never treats them as packages and never
-    # picks up their .py files on its own -- without this line the wheel ships every kernel's YAML
-    # manifest but not the numpy_reference the export and the judge read from it.
     "benchmarks/**/*.py",
-    # Prompt templates and fragments harness/prompts.py renders.
+    # Prompt templates, skill pages and tool fragments (harness/prompts.py).
     "harness/**/*.j2",
     "harness/**/*.md",
-    # The ML kernel -> upstream KernelBench model table the torch-* denominator binds from
-    # (harness/kernelbench_adapter.py).
     "harness/kernelbench_map.tsv",
-    # Skills + tool fragments injected into the agent prompt (harness/prompts.py load_skills /
-    # tool_fragments). Top-level package data, not source.
     "skills/*/SKILL.md",
-    # Scripts a skill page tells the reader to RUN (opt-reports/loop_report.py). Data from the
-    # package's point of view; without them the page documents a missing command.
     "skills/*/*.py",
     "tools/*.md",
 ]
 
-# ---------------------------------------------------------------------------------------------
-# Warnings this repo does not own. Narrow ignores only -- anything raised by OUR code stays visible
-# (zero-warning policy: fix at the source, never blanket-suppress). Each entry names the exact
-# third-party origin so a future warning from the SAME category/module is not silently swallowed
-# too.
-# ---------------------------------------------------------------------------------------------
+# Third-party warnings only (zero-warning policy for our own code).
 [tool.pytest.ini_options]
 filterwarnings = [
-    # starlette's TestClient opens an anyio BlockingPortal (a background thread running an event
-    # loop) per `with TestClient(app) as client:`; on repeated short-lived clients (the judge
-    # router tests build one per test) anyio/starlette warn about portal teardown timing that is
-    # entirely inside their own thread-handoff code, not anything this repo's routes do.
+    # starlette's TestClient portal teardown, inside anyio/starlette.
     "ignore:.*BlockingPortal.*:DeprecationWarning:anyio",
     "ignore:.*BlockingPortal.*:DeprecationWarning:starlette",
 ]
 
-# ---------------------------------------------------------------------------------------------
-# Coverage. Collected in CI by setting PYTEST_ADDOPTS at the JOB level rather than editing each of
-# the 21 pytest invocations -- so an invocation added later is covered without anyone remembering.
-#
-# `relative_files` is not optional here: the jobs do not share a filesystem layout (one runs inside
-# a container, the rest on the runner), and `coverage combine` discards data whose paths do not
-# match. `parallel` + the multiprocessing/thread concurrency set are needed because the suite runs
-# under xdist AND forks children (tests/numerical_oracle.py runs kernels behind os.fork).
-# ---------------------------------------------------------------------------------------------
+# CI sets PYTEST_ADDOPTS per job. relative_files: jobs run in different filesystem layouts;
+# parallel + concurrency: the suite runs under xdist and forks (tests/numerical_oracle.py).
 [tool.coverage.run]
 source = ["hpcagent_bench"]
 branch = true
 parallel = true
 relative_files = true
 concurrency = ["multiprocessing", "thread"]
-omit = [
-    # Corpus, not library: 581 kernels' numpy/dace/jax siblings would swamp the signal, and their
-    # correctness is asserted by the e2e oracle rather than by reaching a line.
-    "hpcagent_bench/benchmarks/*",
-]
+omit = ["hpcagent_bench/benchmarks/*"]
 
 [tool.coverage.report]
 show_missing = true
@@ -323,16 +209,7 @@ exclude_also = [
     "if __name__ == .__main__.:",
 ]
 
-# ---------------------------------------------------------------------------------------------
-# ruff formats every hand-written .py in the repo, the kernels included; scripts/check_format.py
-# routes to it and the pre-commit hook and CI Phase 0 both call that script. One invocation covers
-# the whole file list, which is why Phase 0 costs under a second rather than the ~105s a
-# process-per-file formatter took.
-#
-# Only the generated sources are excluded. The C / C++ / Fortran references under
-# hpcagent_bench/benchmarks are transcriptions and stay unformatted, but they are not Python, so
-# ruff never sees them -- that skip lives in check_format.py where the routing is.
-# ---------------------------------------------------------------------------------------------
+# scripts/check_format.py routes every .py to ruff (pre-commit and CI call it).
 [tool.ruff]
 line-length = 120
 target-version = "py312"

@@ -51,5 +51,3 @@ array_args:
 - Lx
 output_args:
 - Lx
-experiment_tags:
-- unstructured_grids

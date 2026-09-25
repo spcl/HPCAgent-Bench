@@ -155,6 +155,4 @@ mpi:
     - BS
     - BS
 experiment_tags:
-- mpi-focus32
-- quatrex
 - scicomp-focus40

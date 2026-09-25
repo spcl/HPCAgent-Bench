@@ -42,6 +42,5 @@ output_args:
 - y
 - z
 experiment_tags:
-- fft_1d
 - scicomp-focus40
 - mixed

@@ -142,6 +142,25 @@ def test_a_fully_completed_directory_is_archived_then_removed(
     assert sorted(read_canon_rows(db)) == [("cc", "wf_triangular"), ("numba", "wf_triangular")]
 
 
+def test_a_completed_directory_still_holding_a_database_is_archived_but_kept(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A DB the merge does not own (here a stray results DB) makes the wholesale removal refuse:
+    the CSVs are archived, the directory and its DB stay."""
+    run_dir = tmp_path / "canon-llr-cpu-old"
+    run_dir.mkdir()
+    write_column(run_dir, "numba", jobid="1")
+    with contextlib.closing(sqlite3.connect(run_dir / "results.db")) as conn:
+        conn.execute("create table t (x)")
+    monkeypatch.setattr(migrate, "sacct_lookup", lambda ids: ({"1": "COMPLETED"}, {"1": "canon-llr-numba"}))
+    archive = tmp_path / "archive"
+
+    migrate.migrate_one(run_dir, tmp_path / "canon.db", archive, apply=True)
+
+    assert (run_dir / "results.db").is_file()
+    assert (archive / "canon-llr-cpu-old" / "numba.rank0.csv").exists()
+
+
 def test_a_column_with_no_matching_job_name_is_left_alone(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1,10 +1,7 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The release guard flags a published direct-URL requirement and nothing else.
-
-Written when the first version of the guard grepped pyproject.toml for ``@ git+``: the comment
-that tells a reader to ``pip install "dace @ git+..."`` separately matched it, so
-``scripts/release_pypi.sh --upload`` refused every release of a pyproject that published no URL.
+"""The release guard (scripts/do_release.sh) flags a published direct-URL requirement and nothing
+else: a comment telling the reader to ``pip install "dace @ git+..."`` is not a requirement.
 """
 
 import importlib.util

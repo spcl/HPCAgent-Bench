@@ -83,5 +83,3 @@ mpi:
     - NB
     - NLEV
     - NPROMA
-experiment_tags:
-- mpi-focus32
