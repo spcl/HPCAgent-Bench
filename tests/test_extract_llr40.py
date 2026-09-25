@@ -17,7 +17,6 @@ def one_submission(db_path: pathlib.Path, run_id: str, packet: str | None) -> No
     """``packet=None`` drops the ``runs`` table entirely -- the shape of a DB written before the
     identity columns landed -- instead of merely leaving the run's own row out of it."""
     conn = recording.connect(str(db_path))
-    conn.execute("INSERT OR IGNORE INTO benchmarks (name) VALUES ('k')")
     if packet is None:
         conn.execute("DROP TABLE runs")
     else:
