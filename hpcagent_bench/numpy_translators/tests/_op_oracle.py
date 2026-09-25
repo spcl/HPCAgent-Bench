@@ -80,6 +80,7 @@ def _emit_native(
     base: str,
     isopar: bool = False,
     fft_library: bool = False,
+    fft_library_nd: bool = False,
 ) -> bool:
     from numpyto_common.frontend import parse_kernel
     from numpyto_common.lowering import lower
@@ -89,7 +90,7 @@ def _emit_native(
     from numpyto_fortran.intrinsics import renders_natively as fortran_renders_natively
 
     out.mkdir(parents=True, exist_ok=True)
-    kir = lower(parse_kernel(npy, bi), fft_library=fft_library)
+    kir = lower(parse_kernel(npy, bi), fft_library=fft_library, fft_library_nd=fft_library_nd)
     (out / f"{base}.c").write_text(emit_c(kir, fn_name=base))
     (out / f"{base}.cpp").write_text(emit_cpp(kir, fn_name=base))
     emit_binding(kir, out / f"{base}_binding.json", base_name=base)
@@ -113,6 +114,7 @@ def run_op(
     skip_backends: Dict[str, str] = None,
     dtypes: Dict[str, str] = None,
     fft_library: bool = False,
+    fft_library_nd: bool = False,
 ) -> Dict[str, str]:
     """Emit ``src``'s ``func`` for each backend, run it, compare to numpy.
 
@@ -120,6 +122,8 @@ def run_op(
         legs only (numba/pythran/jax each build their own ``kir`` below, untouched): a whole-array
         1-D ``np.fft.fft``/``ifft`` renders as FFT_LIBRARY_MARKER (an fftw_plan_dft_1d call)
         instead of the naive O(N^2) loop.
+    :param fft_library_nd: forwarded the same way to the c/cpp lowering ONLY (numpyto_c's own
+        setting): a batched / N-D transform renders as one fftw_plan_many_dft.
 
     :param inputs: name -> concrete numpy array / scalar (kernel call order is
         ``list(inputs) + list(outputs)``).
@@ -203,7 +207,15 @@ def run_op(
         bi.write_text(json.dumps(bi_dict))
         base = func
         try:
-            _emit_native(npy, bi, tdp, base, isopar=_no.ISOPAR in backends, fft_library=fft_library)
+            _emit_native(
+                npy,
+                bi,
+                tdp,
+                base,
+                isopar=_no.ISOPAR in backends,
+                fft_library=fft_library,
+                fft_library_nd=fft_library_nd,
+            )
         except Exception as exc:  # noqa: BLE001
             return {b: f"FAIL:emit:{type(exc).__name__}:{exc}" for b in backends}
         binding = json.loads((tdp / f"{base}_binding.json").read_text())

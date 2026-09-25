@@ -118,3 +118,10 @@ def test_reading_the_rows_closes_every_connection(tmp_path: pathlib.Path) -> Non
     write(tmp_path / "out", [row(), row(ts_ms=2)])
     assert len(report.task_rows([tmp_path / "out"])) == 2
     gc.collect()
+
+
+def test_best_of_v2_and_v3_rows_carry_one_measurement_stamp() -> None:
+    """USER 2026-09-24: v2 and v3 are one baseline family, so their rows pool in the shift report."""
+    v2 = report.measurement_stamp(row(baseline_policy="best-of-v2:c+numba"))
+    assert report.measurement_stamp(row(baseline_policy="best-of-v3:numba+c")) == v2
+    assert report.measurement_stamp(row(baseline_policy="best-of-v1:c-autopar+c+numba")) != v2

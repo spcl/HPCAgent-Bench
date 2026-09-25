@@ -13,6 +13,7 @@ refreshes it but never clobbers an override. To turn a generated file into
 an override, delete the marker line (or replace the file).
 """
 
+import os
 import pathlib
 from typing import Union
 
@@ -69,6 +70,18 @@ def is_override(out_path: Union[str, pathlib.Path]) -> bool:
     return p.exists() and not is_generated(p)
 
 
+def write_atomic_text(path: str | pathlib.Path, text: str) -> None:
+    """Replace ``path`` with ``text`` through a temp file and a rename, never by writing into it.
+
+    A job's frozen tree hard-links its files to ONE store inode that every other frozen tree shares
+    (scripts/cscs/frozen_store.py); writing into that inode would rewrite the file under all of them.
+    The rename gives the path a fresh inode instead, and a reader never sees a half-written file."""
+    p = pathlib.Path(path)
+    tmp = p.with_name(f".{p.name}.tmp{os.getpid()}")
+    tmp.write_text(text)
+    os.replace(tmp, p)
+
+
 def write_generated(out_path: Union[str, pathlib.Path], src: str, *, line_comment: str = "# ", source: str = "") -> str:
     """Write ``src`` to ``out_path`` with the auto marker prepended, unless
     a hand-written override already occupies that name.
@@ -88,7 +101,7 @@ def write_generated(out_path: Union[str, pathlib.Path], src: str, *, line_commen
         f"local edits as a hand override.\n"
     )
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(note + src)
+    write_atomic_text(p, note + src)
     return "ok"
 
 

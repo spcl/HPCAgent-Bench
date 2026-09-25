@@ -106,18 +106,11 @@ def generate_fcc_lattice(
     lattice_spacing = (4.0 / float(density)) ** (1.0 / 3.0)
     box = np.asarray(cells, dtype=FLOAT_DTYPE) * lattice_spacing
     n_atoms = 4 * cells[0] * cells[1] * cells[2]
-    x = np.empty((n_atoms, 3), dtype=FLOAT_DTYPE, order="C")
+    # Cell origins in (ix, iy, iz) C order, then the four basis sites per cell.
+    origins = np.indices(cells, dtype=FLOAT_DTYPE).reshape(3, -1).T
+    x = ((origins[:, None, :] + _FCC_BASIS[None, :, :]) * lattice_spacing).reshape(n_atoms, 3)
 
-    index = 0
-    for ix in range(cells[0]):
-        for iy in range(cells[1]):
-            for iz in range(cells[2]):
-                cell_origin = np.array((ix, iy, iz), dtype=FLOAT_DTYPE)
-                for basis in _FCC_BASIS:
-                    x[index] = (cell_origin + basis) * lattice_spacing
-                    index += 1
-
-    return x, np.ascontiguousarray(box, dtype=FLOAT_DTYPE)
+    return np.ascontiguousarray(x), np.ascontiguousarray(box, dtype=FLOAT_DTYPE)
 
 
 def build_full_neighbor_list(
@@ -143,33 +136,31 @@ def build_full_neighbor_list(
         raise ValueError("n_local must be in the range [1, n_atoms]")
 
     neigh_cut_sq = float(neighbor_cutoff) * float(neighbor_cutoff)
-    rows: list[list[int]] = []
-    max_neighs = 0
-    for i in range(n_local):
-        xi0 = x[i, 0]
-        xi1 = x[i, 1]
-        xi2 = x[i, 2]
-        row: list[int] = []
-        for j in range(n_atoms):
-            if i == j:
-                continue
-            dx = xi0 - x[j, 0]
-            dy = xi1 - x[j, 1]
-            dz = xi2 - x[j, 2]
-            rsq = dx * dx + dy * dy + dz * dz
-            if rsq <= neigh_cut_sq:
-                row.append(j)
-        rows.append(row)
-        if len(row) > max_neighs:
-            max_neighs = len(row)
+    # Blocks of rows against all atoms; rsq keeps the scalar ((dx*dx + dy*dy) + dz*dz) order, and
+    # np.nonzero walks each row in ascending j, so the rows come out sorted as before.
+    block = max(1, (1 << 24) // n_atoms)
+    xs, ys, zs = x[:, 0], x[:, 1], x[:, 2]
+    rows_at: list[np.ndarray] = []
+    cols_at: list[np.ndarray] = []
+    for start in range(0, n_local, block):
+        stop = min(start + block, n_local)
+        dx = xs[start:stop, None] - xs[None, :]
+        dy = ys[start:stop, None] - ys[None, :]
+        dz = zs[start:stop, None] - zs[None, :]
+        within = dx * dx + dy * dy + dz * dz <= neigh_cut_sq
+        own = np.arange(stop - start)
+        within[own, own + start] = False
+        row, col = np.nonzero(within)
+        rows_at.append(row + start)
+        cols_at.append(col)
+    pair_row = np.concatenate(rows_at)
+    pair_col = np.concatenate(cols_at)
 
-    max_neighs = max(max_neighs, 1)
-    neigh_counts = np.empty(n_local, dtype=INDEX_DTYPE)
+    neigh_counts = np.bincount(pair_row, minlength=n_local).astype(INDEX_DTYPE)
+    max_neighs = max(int(neigh_counts.max()), 1)
     neigh_list = np.full((n_local, max_neighs), -1, dtype=INDEX_DTYPE, order="C")
-    for i, nbrs in enumerate(rows):
-        neigh_counts[i] = len(nbrs)
-        if nbrs:
-            neigh_list[i, : len(nbrs)] = np.asarray(nbrs, dtype=INDEX_DTYPE)
+    first = np.cumsum(neigh_counts, dtype=np.int64) - neigh_counts
+    neigh_list[pair_row, np.arange(pair_row.size) - first[pair_row]] = pair_col
 
     return neigh_counts, neigh_list
 
@@ -332,18 +323,24 @@ def validate_examinimd_inputs(
     if np.any(neigh_counts < 0) or np.any(neigh_counts > neigh_list.shape[1]):
         raise ValueError("neigh_counts contains invalid row lengths")
 
+    # Per-row checks on all rows at once; the error names the first bad row and, within it, the
+    # first failing check, as a row-by-row scan would.
     n_atoms = x.shape[0]
-    for i in range(n_local):
-        count = int(neigh_counts[i])
-        row = neigh_list[i, :count]
-        if np.any(row < 0) or np.any(row >= n_atoms):
-            raise ValueError(f"neighbor row {i} contains out-of-bounds indices")
-        if np.any(row == i):
-            raise ValueError(f"neighbor row {i} contains a self-neighbor")
-        if count > 1 and np.any(row[1:] <= row[:-1]):
-            raise ValueError(f"neighbor row {i} must be strictly increasing")
-        if count < neigh_list.shape[1] and np.any(neigh_list[i, count:] != -1):
-            raise ValueError(f"neighbor row {i} has non-sentinel entries after count")
+    rows = neigh_list[:n_local]
+    slot = np.arange(rows.shape[1])
+    live = slot[None, :] < neigh_counts[:n_local, None]
+    pair_live = live[:, 1:]
+    checks = (
+        (np.any(live & ((rows < 0) | (rows >= n_atoms)), axis=1), "contains out-of-bounds indices"),
+        (np.any(live & (rows == np.arange(n_local)[:, None]), axis=1), "contains a self-neighbor"),
+        (np.any(pair_live & (rows[:, 1:] <= rows[:, :-1]), axis=1), "must be strictly increasing"),
+        (np.any(~live & (rows != -1), axis=1), "has non-sentinel entries after count"),
+    )
+    bad = np.flatnonzero(np.logical_or.reduce([mask for mask, _ in checks]))
+    if bad.size:
+        i = int(bad[0])
+        reason = next(text for mask, text in checks if mask[i])
+        raise ValueError(f"neighbor row {i} {reason}")
 
     return True
 

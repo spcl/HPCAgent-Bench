@@ -14,6 +14,9 @@ Usage::
     python statistics/plot_scaling.py obs.csv --experiment mlscale --figure efficiency
     python statistics/plot_scaling.py obs.csv --experiment mlscale --figure per-kernel --mode weak
     python statistics/plot_scaling.py obs.csv --arm 'mlscale-(weak|strong)-qwen38-hip'
+
+The torch.distributed baseline curve (arm ``torch_dist``, read off the grade job's
+``baseline_points`` rows) is drawn beside the selected arms; ``--no-torch-dist`` leaves it out.
 """
 
 import argparse
@@ -39,14 +42,19 @@ FIGURES: tuple[str, ...] = (
 )
 
 
-def load(path: pathlib.Path, prefix: str, arm: str) -> pd.DataFrame:
-    """The observations frame, narrowed to one experiment prefix and one arm regex."""
+def load(path: pathlib.Path, prefix: str, arm: str, torch_dist: bool = True) -> pd.DataFrame:
+    """The observations frame, narrowed to one experiment prefix and one arm regex. The
+    torch.distributed baseline curve's rows (arm ``torch_dist``: no experiment's arm) are kept
+    beside the selection unless ``torch_dist`` is False."""
     frame = experiments.read_observations(path)
+    names = frame["arm"].astype(str)
+    keep = pd.Series(True, index=frame.index)
     if prefix:
-        frame = frame[frame["arm"].astype(str).str.startswith(prefix)]
+        keep &= names.str.startswith(prefix)
     if arm:
-        frame = frame[frame["arm"].astype(str).str.fullmatch(arm)]
-    return frame
+        keep &= names.str.fullmatch(arm)
+    baseline = names == scaling.TORCH_DIST_ARM
+    return frame.loc[(keep & ~baseline) | (baseline & torch_dist)]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -87,6 +95,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--geomean-panel",
         action="store_true",
         help="per-kernel figure: add a last panel with each setup's geomean over all its kernels",
+    )
+    parser.add_argument(
+        "--no-torch-dist", action="store_true", help="leave out the torch.distributed baseline curve (arm torch_dist)"
     )
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/scaling"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/scaling.csv"))
@@ -155,7 +166,7 @@ def draw(curves: list[scaling.Curve], args: argparse.Namespace, roster: list[str
 
 def main() -> None:
     args = build_parser().parse_args()
-    frame = load(args.observations, args.experiment, args.arm)
+    frame = load(args.observations, args.experiment, args.arm, not args.no_torch_dist)
     curves = scaling.curves(frame)
     if not curves:
         raise SystemExit(f"no scaling rows for experiment={args.experiment!r} arm={args.arm!r}")

@@ -59,6 +59,12 @@ h1 { font: 600 30px/1.1 var(--display); letter-spacing: 0.01em; margin: 0; text-
 .chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .chip:focus-visible, .jobs a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 section.exp { display: grid; gap: 10px; }
+section.top-section { display: grid; gap: 18px; border-top: 2px solid var(--ink); padding-top: 14px; }
+section.top-section > h2 { font: 600 26px/1.1 var(--display); margin: 0; }
+.exp-head h3 { font: 600 17px/1.2 var(--display); margin: 0; }
+.note { font-size: 13px; color: var(--muted); margin: 0; }
+td.num .regrade-done { color: var(--complete); }
+td.num .regrade-part { color: var(--incomplete); }
 .exp-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
 .exp-head h2 { font: 600 20px/1.2 var(--display); margin: 0; text-wrap: balance; }
 .exp-head .key { font: 12px var(--mono); color: var(--muted); }
@@ -98,7 +104,7 @@ td.num .owed { color: var(--incomplete); }
   <header class="top">
     <div>
       <h1>Beverin Wave Board</h1>
-      <p class="sub">Every HPCAgent-Bench experiment arm on beverin: how many roster kernels already carry a judge row, which slurm jobs ran it, and what the next wave still owes.</p>
+      <p class="sub">Every experiment arm the paper reports, in paper order: roster kernels done (a real grade), owed kernels a running or queued job holds, owed kernels no job holds, the slurm jobs, and how many credited submissions the final 4x5 regrade (mw4x5-final-v2) has re-timed.</p>
     </div>
     <div class="stamp">snapshot <b id="stamp"></b><br><span id="cluster"></span></div>
   </header>
@@ -119,6 +125,8 @@ td.num .owed { color: var(--incomplete); }
     <div>A <b>placeholder</b> is a roster kernel the agent never delivered an answer for (self-exit or context overflow): scored 1x, and OWED -- it gets one rerun at normal budget (2026-09-20). It counts inside the "N owed" breakdown, never as a separate "complete" kernel.</div>
     <div><span class="pill rerun">rerun</span> the setup's job directories were deleted (2026-09-19, <code>experiments/rerun-lost.tsv</code>); its coverage is read from the frozen observations (dashed job chips) until the rerun is done.</div>
     <div>Rows that measured a broken treatment are deleted with their run directories, so an arm rerun from scratch starts at 0.</div>
+    <div><b>Final regrade</b> "a/b v2": of the b roster kernels whose newest episode holds a credited /submit, a were re-timed under mw4x5-final-v2 (a v1-only re-time is named separately); regrade jobs whose worklist names the arm are listed after it. Canon and ML scaling rows have no final regrade.</div>
+    <div><b>Running / Queued / Owed</b>: owed kernels a RUNNING job grades, only a PENDING job will grade, or no job holds.</div>
     <div>Job chips: green COMPLETED, amber FAILED or TIMEOUT, struck-through CANCELLED. A kimi arm labelled FAILED with every agent finished is the rc 123-125 teardown, not a crash. Smoke arms have no roster.</div>
   </div>
 </div>
@@ -140,23 +148,19 @@ function el(tag, attrs = {}, ...children) {
 }
 
 function owed(arm) { return arm.roster ? arm.roster - arm.done : 0; }
+function unheld(arm) { return arm.owed === undefined ? owed(arm) : arm.owed; }
+function sum(list, f) { return list.reduce((s, a) => s + (f(a) || 0), 0); }
 
 // Display only (arm.variant itself is untouched, the analysis keys off it): the no-packet control's
-// kind is named "plain" everywhere it is recorded, but reads as "baseline" on the board, with any
-// language prefix a campaign folds in ahead of it kept ("fortran-plain" -> "fortran-baseline").
+// kind is named "plain" everywhere it is recorded, but reads as "baseline" on the board.
 function displayVariant(variant) {
   if (variant === "plain") return "baseline";
   if (variant.endsWith("-plain")) return variant.slice(0, -"plain".length) + "baseline";
-  return variant || "base";
+  return variant || "baseline";
 }
 
-//: Known packet suffixes a treatment variant carries after its language, if any ("hip-perf-playbook-
-//: amd", "perf-playbook-cpu" with no language). Used only to sort a baseline next to its treatment;
-//: arm.variant itself is untouched.
 const PACKET_SUFFIXES = ["perf-playbook-cpu", "perf-playbook-amd"];
 
-// The language a variant names, "" for a bare baseline/treatment with none. Falls back to the whole
-// variant for a shape this does not recognise, so an unmatched variant still sorts (just alone).
 function variantLanguage(variant) {
   if (variant === "plain") return "";
   if (variant.endsWith("-plain")) return variant.slice(0, -"-plain".length);
@@ -171,9 +175,7 @@ function variantIsBaseline(variant) {
   return variant === "plain" || variant.endsWith("-plain");
 }
 
-// model -> language -> baseline before its treatment, so a pair reads side by side; a variant shape
-// this does not recognise (variantLanguage falls back to the whole string) sorts exactly as the
-// plain model/variant compare did before this rule existed.
+// model -> language -> baseline before its treatment, so a pair reads side by side.
 function armSort(x, y) {
   return x.model.localeCompare(y.model)
     || variantLanguage(x.variant).localeCompare(variantLanguage(y.variant))
@@ -182,39 +184,30 @@ function armSort(x, y) {
 }
 
 function experimentStatus(arms) {
+  if (!arms.length) return "none";
   if (arms.some(a => a.status === "running")) return "running";
   if (arms.some(a => a.status === "rerun")) return "rerun";
   if (arms.every(a => a.status === "complete")) return "complete";
   return "incomplete";
 }
 
-function groups(arms) {
-  const byKey = new Map();
-  for (const arm of arms) {
-    const key = arm.experiment + "|" + arm.device;
-    if (!byKey.has(key)) byKey.set(key, []);
-    byKey.get(key).push(arm);
-  }
-  const order = [...byKey.entries()].map(([key, list]) => ({ key, list, status: experimentStatus(list) }));
-  const rank = { running: 0, rerun: 1, incomplete: 2, complete: 3 };
-  return order.sort((x, y) => rank[x.status] - rank[y.status] || x.key.localeCompare(y.key));
-}
-
 function renderTally() {
   const tally = document.getElementById("tally");
-  const exps = groups(DATA.arms);
   for (const status of STATUSES) {
     const arms = DATA.arms.filter(a => a.status === status);
-    const expCount = exps.filter(g => g.status === status).length;
-    const kernels = arms.reduce((sum, a) => sum + owed(a), 0);
-    const detail = status === "complete" ? `${expCount} experiment groups fully done`
-      : status === "running" ? `${arms.reduce((s, a) => s + a.jobs.filter(j => j.state === "RUNNING" || j.state === "PENDING").length, 0)} jobs running or queued`
-      : status === "rerun" ? `to rerun, job dirs deleted (frozen coverage shown)`
-      : `${kernels} roster kernels owed`;
+    const detail = status === "complete" ? "every roster kernel done"
+      : status === "running" ? `${sum(arms, a => a.running)} kernels running, ${sum(arms, a => a.queued)} queued`
+      : status === "rerun" ? "to rerun, job dirs deleted (frozen coverage shown)"
+      : `${sum(arms, unheld)} kernels owed, no job holds them`;
     tally.append(el("div", { class: "tile " + status },
       el("span", { class: "l" }, status), el("span", { class: "n" }, String(arms.length)),
       el("span", { class: "d" }, `arms, ${detail}`)));
   }
+  const graded = DATA.arms.filter(a => a.regrade_needed !== undefined);
+  const need = sum(graded, a => a.regrade_needed), v2 = sum(graded, a => a.regrade_v2);
+  tally.append(el("div", { class: "tile " + (v2 >= need ? "complete" : "incomplete") },
+    el("span", { class: "l" }, "final regrade v2"), el("span", { class: "n" }, `${v2}/${need}`),
+    el("span", { class: "d" }, `credited kernels re-timed, ${sum(graded, a => a.regrade_v1)} v1 only, ${DATA.regrade_jobs.length} regrade jobs active`)));
 }
 
 function renderFilters() {
@@ -245,15 +238,15 @@ function strip(arm) {
   return box;
 }
 
-function jobChips(arm) {
+function chips(jobs, frozenIds = []) {
   const box = el("div", { class: "jobs" });
-  for (const job of arm.jobs) {
-    const title = `${job.state}, ${job.nodes} node${job.nodes === 1 ? "" : "s"}, ${job.start} to ${job.end}`;
-    const frozen = (arm.frozen_jobs || []).includes(job.id);
+  for (const job of jobs) {
+    const title = `${job.name}: ${job.state}, ${job.nodes} node${job.nodes === 1 ? "" : "s"}, ${job.start} to ${job.end}`;
+    const frozen = frozenIds.includes(job.id);
     const chipTitle = frozen ? title + " (directory deleted; rows from the frozen observations)" : title;
     box.append(el("a", { class: "s-" + job.state + (frozen ? " frozen" : ""), title: chipTitle, tabindex: "0" }, `${job.id} ${job.state.slice(0, 4).toLowerCase()}`));
   }
-  if (!arm.jobs.length) box.append(el("span", { class: "empty" }, "no job found"));
+  if (!jobs.length) box.append(el("span", { class: "empty" }, "no job found"));
   return box;
 }
 
@@ -263,54 +256,107 @@ function visible(arm) {
     && (!filters.device.size || filters.device.has(arm.device));
 }
 
+function regradeText(list) {
+  const graded = list.filter(a => a.regrade_needed !== undefined);
+  if (!graded.length) return "";
+  const need = sum(graded, a => a.regrade_needed), v2 = sum(graded, a => a.regrade_v2), v1 = sum(graded, a => a.regrade_v1);
+  const jobs = new Set(graded.flatMap(a => (a.regrade_jobs || []).map(j => j.id)));
+  if (!need) return "final regrade: no credited /submit to re-time";
+  const state = v2 >= need ? "done" : v2 + v1 >= need ? "done (v1 fallback on some)" : "not done";
+  return `final regrade ${state}: ${v2}/${need} v2${v1 ? `, ${v1} v1 only` : ""}${jobs.size ? `, ${jobs.size} regrade jobs active` : ""}`;
+}
+
+function countsText(list) {
+  const roster = sum(list, a => a.roster);
+  if (!roster) return `${list.length} arms`;
+  return `${list.length} arms: ${sum(list, a => a.done)}/${roster} done, ${sum(list, a => a.running)} running, ${sum(list, a => a.queued)} queued, ${sum(list, unheld)} owed`;
+}
+
+function regradeCell(arm) {
+  const cell = el("td", { class: "num" });
+  if (arm.regrade_needed === undefined) { cell.append(el("span", { class: "empty" }, "n/a")); return cell; }
+  const complete = arm.regrade_v2 >= arm.regrade_needed;
+  cell.append(el("span", { class: complete ? "regrade-done" : "regrade-part" }, `${arm.regrade_v2}/${arm.regrade_needed} v2`));
+  if (arm.regrade_v1) cell.append(" ", el("span", { class: "owed" }, `+${arm.regrade_v1} v1`));
+  if ((arm.regrade_jobs || []).length) cell.append(chips(arm.regrade_jobs));
+  return cell;
+}
+
+function armTable(arms) {
+  const tbody = el("tbody");
+  for (const arm of arms.sort(armSort)) {
+    const armCell = el("td", { class: "arm", title: arm.arm },
+      el("span", { class: "variant" }, displayVariant(arm.variant)), " ", el("span", { class: "model" }, MODEL_NAMES[arm.model] || arm.model));
+    const done = el("td", { class: "num" }, arm.roster ? `${arm.done}/${arm.roster}` : "n/a");
+    if (arm.placeholder) done.append(" ", el("span", { class: "owed", title: "self-exit or context overflow, owed at normal budget" }, `(${arm.placeholder} placeholder)`));
+    const owedCell = el("td", { class: "num" }, String(unheld(arm)));
+    if (arm.owed_budget || arm.owed_infra) owedCell.title = `of all ${owed(arm)} not done: ${arm.owed_budget} budget, ${arm.owed_infra} infra, ${arm.placeholder} placeholder`;
+    const rowAttrs = { class: arm.status };
+    if (arm.failed && arm.failed.length) rowAttrs.title = "failed: " + arm.failed.join(", ");
+    tbody.append(el("tr", rowAttrs,
+      armCell, el("td", {}, arm.roster ? strip(arm) : el("span", { class: "empty" }, "no roster")),
+      done, el("td", { class: "num" }, String(arm.running || 0)), el("td", { class: "num" }, String(arm.queued || 0)), owedCell,
+      regradeCell(arm),
+      el("td", {}, el("span", { class: "pill " + arm.status, title: arm.rerun ? "rerun-lost.tsv: " + arm.rerun : "" }, arm.status)),
+      el("td", {}, chips(arm.jobs, arm.frozen_jobs || []))));
+  }
+  const head = ["Arm", "Kernel coverage", "Done", "Running", "Queued", "Owed", "Final regrade", "Status", "Slurm jobs"];
+  return el("div", { class: "table-wrap" }, el("table", {}, el("thead", {}, el("tr", {}, ...head.map(h => el("th", {}, h)))), tbody));
+}
+
+function statusText(counts) {
+  const parts = Object.entries(counts || {}).map(([k, v]) => `${v} ${k}`);
+  return parts.length ? parts.join(", ") : "not graded";
+}
+
+function mlscaleGrades(section) {
+  const ml = DATA.mlscale || { arms: {}, torch_dist: {}, jobs: [] };
+  const tbody = el("tbody");
+  const agentArms = DATA.arms.filter(a => a.section === "MLScale").map(a => a.arm);
+  const names = [...new Set([...agentArms, ...Object.keys(ml.arms)])].sort();
+  for (const name of names) {
+    const laws = ml.arms[name] || {};
+    tbody.append(el("tr", {}, el("td", { class: "arm" }, name),
+      el("td", { class: "num" }, statusText(laws.strong)), el("td", { class: "num" }, statusText(laws.weak))));
+  }
+  const table = el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "Arm"), el("th", {}, "Strong law (kernels, newest grade)"), el("th", {}, "Weak law"))), tbody);
+  const td = Object.entries(ml.torch_dist || {});
+  const tdText = td.length ? td.map(([src, v]) => `${src}: ${v.curves} kernel-law curves, ${v.points} points`).join("; ")
+    : "torch_dist baseline curve: not present in any grade DB yet";
+  section.append(el("section", { class: "exp" },
+    el("div", { class: "exp-head" }, el("h3", {}, "Scaling grade"), el("span", { class: "facts" }, "grade DBs: $SCRATCH/mlscale-grade/*/scaling-grade-*.db")),
+    el("div", { class: "table-wrap" }, table),
+    el("p", { class: "note" }, tdText),
+    el("div", { class: "exp-head" }, el("span", { class: "key" }, "grade / torch_dist jobs"), chips(ml.jobs || []))));
+}
+
 function renderBoard() {
   const board = document.getElementById("board");
   board.replaceChildren();
-  for (const group of groups(DATA.arms)) {
-    const arms = group.list.filter(visible);
-    if (!arms.length) continue;
-    const first = group.list[0];
-    const done = group.list.reduce((s, a) => s + a.done, 0);
-    const roster = group.list.reduce((s, a) => s + a.roster, 0);
-    const owedTotal = group.list.reduce((s, a) => s + owed(a), 0);
-    const head = el("div", { class: "exp-head" },
-      el("h2", {}, first.experiment_name),
-      el("span", { class: "key" }, `${first.experiment} / ${first.device.toLowerCase()}`),
-      el("span", { class: "pill " + group.status }, group.status),
-      el("span", { class: "facts" }, roster ? `${group.list.length} arms, ${done}/${roster} kernel rows, ${owedTotal} owed` : `${group.list.length} arms, smoke (no roster)`));
-    const tbody = el("tbody");
-    for (const arm of arms.sort(armSort)) {
-      const armCell = el("td", { class: "arm" },
-        el("span", { class: "variant" }, displayVariant(arm.variant)), " ", el("span", { class: "model" }, MODEL_NAMES[arm.model] || arm.model));
-      const counts = el("td", { class: "num" }, arm.roster ? `${arm.done}/${arm.roster}` : "n/a");
-      const badges = [];
-      // A forced-1x placeholder (self-exit or context overflow, never submitted) is OWED like a
-      // budget/infra kernel (2026-09-20: superseded the 2026-09-18 "never rerun" rule) -- one
-      // shape, everywhere: "(N owed: P placeholder, B budget, I infra)", only the nonzero shares
-      // named, so the headline "N owed" and the row breakdown can never disagree.
-      if (owed(arm)) {
-        const share = [];
-        if (arm.placeholder) share.push(`${arm.placeholder} placeholder`);
-        if (arm.owed_budget) share.push(`${arm.owed_budget} budget`);
-        if (arm.owed_infra) share.push(`${arm.owed_infra} infra`);
-        const label = share.length ? `${owed(arm)} owed: ${share.join(", ")}` : `${owed(arm)} owed`;
-        badges.push(el("span", { class: "owed" }, `(${label})`));
-        const active = arm.jobs.some(j => j.state === "RUNNING" || j.state === "PENDING");
-        if (active && arm.unqueued) badges.push(el("span", { class: "owed" }, `(${arm.unqueued} not queued)`));
-      }
-      for (const badge of badges) counts.append(" ", badge);
-      const rowAttrs = { class: arm.status };
-      if (arm.failed && arm.failed.length) rowAttrs.title = "failed: " + arm.failed.join(", ");
-      tbody.append(el("tr", rowAttrs,
-        armCell, el("td", {}, arm.roster ? strip(arm) : el("span", { class: "empty" }, "no roster")),
-        counts, el("td", {}, el("span", { class: "pill " + arm.status, title: arm.rerun ? "rerun-lost.tsv: " + arm.rerun : "" }, arm.status)), el("td", {}, jobChips(arm))));
+  for (const sec of DATA.sections) {
+    const all = DATA.arms.filter(a => a.section === sec.name);
+    const top = el("section", { class: "top-section" },
+      el("div", { class: "exp-head" }, el("h2", {}, sec.name), el("span", { class: "pill " + experimentStatus(all) }, experimentStatus(all)),
+        el("span", { class: "facts" }, [countsText(all), regradeText(all)].filter(Boolean).join(" | "))));
+    for (const sub of sec.subsections) {
+      const list = all.filter(a => a.subsection === sub);
+      const shown = list.filter(visible);
+      const status = experimentStatus(list);
+      const head = el("div", { class: "exp-head" }, el("h3", {}, sub), el("span", { class: "pill " + status }, status),
+        el("span", { class: "facts" }, list.length ? [countsText(list), regradeText(list)].filter(Boolean).join(" | ") : ""));
+      const box = el("section", { class: "exp" }, head);
+      const note = DATA.prepared[`${sec.name}/${sub}`];
+      if (note) box.append(el("p", { class: "note" }, note));
+      const noteJobs = (DATA.prepared_jobs || {})[`${sec.name}/${sub}`] || [];
+      if (noteJobs.length) box.append(el("div", { class: "exp-head" }, el("span", { class: "key" }, "verification jobs"), chips(noteJobs)));
+      if (!list.length && !note) box.append(el("p", { class: "empty" }, "none"));
+      else if (!shown.length) box.append(el("p", { class: "empty" }, "no arm matches these filters"));
+      else box.append(armTable(shown));
+      top.append(box);
     }
-    const table = el("table", {},
-      el("thead", {}, el("tr", {}, el("th", {}, "Arm"), el("th", {}, "Kernel coverage"), el("th", {}, "Rows"), el("th", {}, "Status"), el("th", {}, "Slurm jobs"))),
-      tbody);
-    board.append(el("section", { class: "exp" }, head, el("div", { class: "table-wrap" }, table)));
+    if (sec.name === "MLScale") mlscaleGrades(top);
+    board.append(top);
   }
-  if (!board.children.length) board.append(el("p", { class: "empty" }, "No arm matches these filters."));
 }
 
 document.getElementById("stamp").textContent = DATA.generated;

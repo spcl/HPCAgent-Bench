@@ -189,8 +189,13 @@ def save_sdfg(cache_dir: pathlib.Path, module_name: str, device_tag: str, finger
     matching sidecar) is a MISS on the next load. A failed save is swallowed and its partial file
     removed -- caching is a pure speed optimization and must never break a run."""
     path = sdfg_cache_path(cache_dir, module_name, device_tag)
+    # Saved beside and renamed over, as write_atomic: the old .sdfgz can be an inode another frozen
+    # tree shares (scripts/cscs/frozen_store.py), which a save into it would rewrite under that tree.
+    tmp = path.with_name(f"{path.name}.tmp{os.getpid()}")
     try:
-        sdfg.save(str(path), compress=True)
+        sdfg.save(str(tmp), compress=True)
+        os.replace(tmp, path)
         write_atomic(sidecar_path(path), fingerprint.encode())
     except Exception:  # noqa: BLE001 -- never let a cache write fail a run
+        tmp.unlink(missing_ok=True)
         path.unlink(missing_ok=True)

@@ -59,6 +59,7 @@ from numpyto_common.lib_nodes import (
     ArrayMethodRewriter,
     DIM_IDENT_RE,
     FFT_LIBRARY_MARKER,
+    FFTN_LIBRARY_MARKER,
     SHAPE_READ_RE,
     LibNodeRewriter,
     MESHGRID_AXIS_KW,
@@ -8853,6 +8854,8 @@ class LoweringContext:
         self.blas: bool = False
         #: Target renders a whole-array 1-D np.fft.* as an FFT_LIBRARY_MARKER call; see :func:`lower`.
         self.fft_library: bool = False
+        #: Target renders a batched / N-D np.fft.* as FFTN_LIBRARY_MARKER; see :func:`lower`.
+        self.fft_library_nd: bool = False
         #: By-value scalar helpers this IR can call but does not itself list -- a HELPER body's
         #: own IR carries no helper list, so its siblings are handed down by :func:`lower`.
         self.sibling_scalar_helpers: Set[str] = set()
@@ -9303,6 +9306,7 @@ def _lp_libnode_expand(ctx: LoweringContext) -> None:
         native_dtypes={**{arr.name: arr.dtype for arr in ctx.kir.arrays}, **ctx.local_dtypes},
         blas=ctx.blas,
         fft_library=ctx.fft_library,
+        fft_library_nd=ctx.fft_library_nd,
     )
     ctx.lib_rewriter.visit(tree)
     # Second math rename: an intrinsic whose argument only becomes a SCALAR once the library
@@ -9376,7 +9380,7 @@ def _fix_real_scalar_dtypes(ctx: LoweringContext) -> None:
         for call in ast.walk(tree)
         if isinstance(call, ast.Call)
         and isinstance(call.func, ast.Name)
-        and call.func.id == FFT_LIBRARY_MARKER
+        and call.func.id in (FFT_LIBRARY_MARKER, FFTN_LIBRARY_MARKER)
         and call.args
         and isinstance(call.args[0], ast.Name)
     }
@@ -9962,6 +9966,7 @@ def lower(
     blas: bool = False,
     fft_library: bool = False,
     scalar_helpers: Optional[Set[str]] = None,
+    fft_library_nd: bool = False,
 ) -> KernelIR:
     """Return a lowered copy of ``kir`` ready for backend emission.
 
@@ -9992,6 +9997,8 @@ def lower(
     :data:`lib_nodes.FFT_LIBRARY_MARKER` call, which C/C++/Fortran render as an FFTW3 call and
     numba renders as an ``objmode`` call into ``numpy.fft``. SEPARATE from ``blas`` -- a target
     with no BLAS_GEMM_MARKER renderer (Fortran, numba) can still opt into this one.
+    ``fft_library_nd`` (numpyto_c only) also renders a batched / N-D transform as
+    :data:`lib_nodes.FFTN_LIBRARY_MARKER` -- one ``fftw_plan_many_dft`` -- instead of the naive loop.
 
     Set :data:`_INVARIANT_ENV` in the environment to run
     :func:`_assert_lowering_invariants` after every phase.
@@ -10004,6 +10011,7 @@ def lower(
     ctx.native_call = native_call
     ctx.blas = blas
     ctx.fft_library = fft_library
+    ctx.fft_library_nd = fft_library_nd
     ctx.sibling_scalar_helpers = set(scalar_helpers or ())
     for _name, _phase in _LOWER_PHASES:
         _phase(ctx)

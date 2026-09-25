@@ -14,11 +14,10 @@ sibling column pays for OUTSIDE its sample.
 The fix has two independently-testable halves:
 
 1. :func:`hpcagent_bench.ppcg_transform.device_resident_host` -- a textual rewrite of ppcg's
-   hipified host code that strips the mirror and makes the entry point use its own parameters as
-   device pointers. ppcg is not installed on this host (see ``tests/conftest.py``'s ``ppcg``
-   hardware group), so this is proven against a HAND-WRITTEN string in ppcg's own output shape --
-   the shape :func:`hpcagent_bench.ppcg_transform.hipify` produces after running ``hipify-perl``
-   on ppcg's CUDA, not a real ppcg run.
+   hipified host code that aliases each PARAMETER's mirror to the parameter itself and drops its
+   malloc/copy/free. ppcg is not installed on this host (see ``tests/conftest.py``'s ``ppcg``
+   hardware group), so this is proven against strings in ppcg's own output shape -- the first two
+   hand-written, ``PPCG_VLA_TRANSIENT_HOST`` trimmed from a real ppcg 0.09.3 + ``hipify-perl`` run.
 2. The .so that rewritten code compiles to now needs a DEVICE pointer, not a host array --
    :func:`hpcagent_bench.benchmarks.cpp_runtime._is_device_array` / ``_to_ctypes`` recognize a
    cupy argument and hand the .so its raw ``.data.ptr`` instead of ``.ctypes.data_as``. Proven with
@@ -38,8 +37,10 @@ import textwrap
 import numpy as np
 import pytest
 
+from hpcagent_bench import ppcg_transform
 from hpcagent_bench.benchmarks import cpp_runtime
 from hpcagent_bench.frameworks import pluto_framework
+from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.ppcg_transform import device_resident_host
 
 # --------------------------------------------------------------------------------------- fixture
@@ -73,13 +74,15 @@ PPCG_HIPIFIED_HOST = textwrap.dedent("""\
     """)
 
 
-def test_device_resident_host_strips_the_mirror_and_keeps_the_launch() -> None:
-    rewritten = device_resident_host(PPCG_HIPIFIED_HOST)
-    for gone in ("dev_A", "dev_B", "hipMalloc", "hipMemcpy", "hipFree"):
+def test_device_resident_host_aliases_the_mirror_and_keeps_the_launch() -> None:
+    rewritten = device_resident_host(PPCG_HIPIFIED_HOST, "kernel")
+    for gone in ("hipMalloc", "hipMemcpy", "hipFree"):
         assert gone not in rewritten, f"{gone!r} survived the rewrite:\n{rewritten}"
-    # The kernel launch now reads the PARAMETERS directly -- this is the whole point, the .so's
-    # entry uses what the harness handed it instead of a copy it made itself.
-    assert "kernel0<<<k0_dimGrid, k0_dimBlock>>>(alpha, A, B, n);" in rewritten, rewritten
+    # Each mirror now IS the caller's pointer: the .so's entry uses what the harness handed it
+    # instead of a copy it made itself, and the launch that reads the mirror is untouched.
+    assert "float *dev_A = (float *) A;" in rewritten, rewritten
+    assert "float *dev_B = (float *) B;" in rewritten, rewritten
+    assert "kernel0<<<k0_dimGrid, k0_dimBlock>>>(alpha, dev_A, dev_B, n);" in rewritten, rewritten
     # The signature itself is untouched: A/B are still device pointers by the CALLER's contract
     # (cp_copy_func stages them before the call), not by anything this rewrite adds to the type.
     assert "void kernel(float alpha, float *A, float *B, int n)" in rewritten, rewritten
@@ -107,13 +110,82 @@ PPCG_CHECKED_HOST = textwrap.dedent("""\
 
 
 def test_device_resident_host_strips_mirror_calls_inside_ppcgs_check_macro() -> None:
-    """Left in place, ``hipMalloc(&A)`` overwrites the caller's device pointer with a fresh buffer:
-    the kernel reads garbage and writes into memory that is then freed."""
-    rewritten = device_resident_host(PPCG_CHECKED_HOST)
-    for gone in ("dev_", "hipMalloc", "hipMemcpy", "hipFree"):
+    """Left in place, ``hipMalloc(&dev_A)`` overwrites the alias with a fresh buffer: the kernel
+    reads garbage and writes into memory that is then freed."""
+    rewritten = device_resident_host(PPCG_CHECKED_HOST, "kernel")
+    for gone in ("hipMalloc", "hipMemcpy", "hipFree"):
         assert gone not in rewritten, f"{gone!r} survived the rewrite:\n{rewritten}"
-    assert "kernel0 <<<k0_dimGrid, k0_dimBlock>>> (A, B, C, N);" in rewritten, rewritten
+    assert "kernel0 <<<k0_dimGrid, k0_dimBlock>>> (dev_A, B, dev_C, N);" in rewritten, rewritten
     assert "cudaCheckKernel();" in rewritten, rewritten
+
+
+#: ppcg 0.09.3's real host output for a rank-2 VLA parameter plus a translator-LOCAL transient,
+#: hipified and trimmed to the entry (``tsvc_2_s235`` + ``fuse_stencil_through_transient`` shapes):
+#: a brace-less ``if`` guarding a copy, a mirror of a VLA parameter whose type is ``T (*)[N]``, and a
+#: mirror of a host ``malloc`` the translator made inside the entry.
+PPCG_VLA_TRANSIENT_HOST = textwrap.dedent("""\
+    extern "C" void s_fp64(int64_t N, double *restrict a, double aa[restrict N][N]) {
+            double *tmp = (double *)malloc((size_t)((N)) * sizeof(double));
+            if (N >= 1) {
+              double *dev_a;
+              double *dev_aa;
+              double *dev_tmp;
+
+              cudaCheckReturn(hipMalloc((void **) &dev_a, (N) * sizeof(double)));
+              cudaCheckReturn(hipMalloc((void **) &dev_aa, (N) * (N) * sizeof(double)));
+              cudaCheckReturn(hipMalloc((void **) &dev_tmp, (N) * sizeof(double)));
+
+              if (N >= 2)
+                cudaCheckReturn(hipMemcpy(dev_aa, aa, (N) * (N) * sizeof(double), hipMemcpyHostToDevice));
+              {
+                kernel0 <<<k0_dimGrid, k0_dimBlock>>> (dev_a, dev_aa, dev_tmp, N);
+                cudaCheckKernel();
+              }
+
+              if (N >= 2)
+                cudaCheckReturn(hipMemcpy(aa, dev_aa, (N) * (N) * sizeof(double), hipMemcpyDeviceToHost));
+              cudaCheckReturn(hipMemcpy(tmp, dev_tmp, (N) * sizeof(double), hipMemcpyDeviceToHost));
+              cudaCheckReturn(hipFree(dev_a));
+              cudaCheckReturn(hipFree(dev_aa));
+              cudaCheckReturn(hipFree(dev_tmp));
+            }
+            free(tmp);
+    }
+    """)
+
+
+def test_device_resident_host_casts_a_vla_parameter_to_the_kernels_flat_pointer() -> None:
+    """Renaming ``dev_aa`` to ``aa`` handed ``double (*)[N]`` to the kernel's ``double *``, which
+    hipcc refuses ("cannot initialize a parameter of type 'double *'"): every rank>=2 kernel failed
+    to build. The alias casts once, at the declaration, to the flat view ppcg's mirror had."""
+    rewritten = device_resident_host(PPCG_VLA_TRANSIENT_HOST, "s_fp64")
+    assert "double *dev_aa = (double *) aa;" in rewritten, rewritten
+    assert "double *dev_a = (double *) a;" in rewritten, rewritten
+    assert "kernel0 <<<k0_dimGrid, k0_dimBlock>>> (dev_a, dev_aa, dev_tmp, N);" in rewritten, rewritten
+    assert "&dev_a," not in rewritten and "&dev_aa," not in rewritten, rewritten
+    assert "hipMemcpy(dev_aa" not in rewritten and "hipMemcpy(aa" not in rewritten, rewritten
+
+
+def test_device_resident_host_keeps_the_mirror_of_a_local_host_transient() -> None:
+    """``tmp`` is a host ``malloc`` inside the entry, not a staged argument: aliasing it handed the
+    kernel a HOST pointer and the run crashed. Its mirror keeps ppcg's own malloc/copy/free."""
+    rewritten = device_resident_host(PPCG_VLA_TRANSIENT_HOST, "s_fp64")
+    assert "double *dev_tmp;" in rewritten, rewritten
+    for kept in ("hipMalloc((void **) &dev_tmp,", "hipMemcpy(tmp, dev_tmp,", "hipFree(dev_tmp)"):
+        assert kept in rewritten, f"{kept!r} was stripped:\n{rewritten}"
+    assert "(double *) tmp" not in rewritten, rewritten
+
+
+def test_device_resident_host_leaves_a_braceless_if_a_statement_to_guard() -> None:
+    """ppcg guards a copy with a brace-less ``if (N >= 2)``. Deleting the copy line made the NEXT
+    statement the guarded one (the kernel launch block ran only when ``N >= 2``) or, before a ``}``,
+    broke the build ("expected statement"). The copy becomes an empty statement instead."""
+    rewritten = device_resident_host(PPCG_VLA_TRANSIENT_HOST, "s_fp64")
+    lines = rewritten.splitlines()
+    guards = [i for i, line in enumerate(lines) if line.strip() == "if (N >= 2)"]
+    assert len(guards) == 2, rewritten
+    for i in guards:
+        assert lines[i + 1].strip() == ";", rewritten
 
 
 def test_device_resident_host_declines_a_source_with_no_mirror_to_strip() -> None:
@@ -121,15 +193,64 @@ def test_device_resident_host_declines_a_source_with_no_mirror_to_strip() -> Non
     ppcg version with a different codegen) must fail LOUD, not silently emit ppcg's own text back
     out as if it had been made device-resident."""
     with pytest.raises(ValueError, match="dev_"):
-        device_resident_host("void kernel(float *A) { A[0] = 1.0f; }\n")
+        device_resident_host("void kernel(float *A) { A[0] = 1.0f; }\n", "kernel")
+
+
+def test_device_resident_host_declines_when_only_a_local_is_mirrored() -> None:
+    """A mirror that belongs to no parameter is not the shape this rewrite exists for."""
+    host = "void kernel(int n) {\n  double *t = 0;\n  double *dev_t;\n  hipFree(dev_t);\n}\n"
+    with pytest.raises(ValueError, match="dev_"):
+        device_resident_host(host, "kernel")
 
 
 def test_device_resident_host_is_idempotent_on_its_own_output() -> None:
     """Re-running the rewrite on already-rewritten code must decline (there is nothing left to
-    strip) rather than mangling a parameter that merely happens to be named like a leftover."""
-    once = device_resident_host(PPCG_HIPIFIED_HOST)
+    strip) rather than aliasing an alias."""
+    once = device_resident_host(PPCG_HIPIFIED_HOST, "kernel")
     with pytest.raises(ValueError):
-        device_resident_host(once)
+        device_resident_host(once, "kernel")
+
+
+def test_entry_params_reads_vla_and_restrict_parameters() -> None:
+    assert ppcg_transform.entry_params(PPCG_VLA_TRANSIENT_HOST, "s_fp64") == ["N", "a", "aa"]
+    assert ppcg_transform.entry_params(PPCG_VLA_TRANSIENT_HOST, "other") == []
+
+
+def test_a_passthrough_is_published_and_declined_not_crashed_on(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ppcg copies a scop it cannot parallelize (a reduction, a carried scalar) through unchanged,
+    with no ``__global__`` and so no ``dev_`` mirror. The device-residency rewrite ran on it anyway
+    and raised, so 20 of llr-focus40's kernels were recorded as a RUNTIME ERROR instead of the
+    decline the offload gate gives them."""
+    stem = "red_fp64_pluto_input"
+    cpp_backend = tmp_path / "cpp_backend"
+    cpp_backend.mkdir()
+    scop = cpp_backend / f"{stem}.c"
+    scop.write_text(
+        "void red_fp64(int64_t N, double *restrict a, double *restrict s) {\n#pragma scop\n#pragma endscop\n}\n"
+    )
+    fake_ppcg = tmp_path / "ppcg"
+    fake_ppcg.write_text(
+        "#!/bin/sh\n"
+        f'cp "$(basename "$4")" {stem}_host.cu\n'
+        f"printf '#include \"{stem}_kernel.hu\"\\n' > {stem}_kernel.cu\n"
+        f"printf '#include \"cuda.h\"\\n' > {stem}_kernel.hu\n"
+    )
+    fake_hipify = tmp_path / "hipify-perl"
+    fake_hipify.write_text('#!/bin/sh\n[ "$1" = -inplace ] && exit 0\ncat "$1"\n')
+    for exe in (fake_ppcg, fake_hipify):
+        exe.chmod(0o755)
+    monkeypatch.setattr(ppcg_transform, "ppcg_lookup", lambda: (str(fake_ppcg), ""))
+    monkeypatch.setattr(ppcg_transform, "hipify_exe", lambda: str(fake_hipify))
+    monkeypatch.setattr(ppcg_transform, "assert_affine", lambda *a, **k: None)
+    monkeypatch.setattr(ppcg_transform, "scop_inputs", lambda *a, **k: [scop])
+
+    proc = ppcg_transform.run_ppcg(scop, "hip")[1]
+    assert proc.returncode == 0, proc.stderr
+    assert all(p.is_file() for p in ppcg_transform.transformed_paths(scop, "hip"))
+    with pytest.raises(NotSupportedByFramework, match="offloaded nothing"):
+        ppcg_transform.transformed_sources(cpp_backend, "red", "hip")
 
 
 # ------------------------------------------------------------------------- ctypes device pointers

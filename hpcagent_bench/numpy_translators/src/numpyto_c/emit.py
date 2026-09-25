@@ -12,6 +12,7 @@ from typing import Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 from numpyto_common.ir import ArrayDesc, KernelIR
 from numpyto_common import dtypes, operators, parallelism
 from numpyto_common.ordered import OrderedSet
+from numpyto_common.emit_io import write_atomic_text
 from numpyto_common.emitter import (
     BaseEmitter,
     TupleTargetSplitter,
@@ -21,7 +22,7 @@ from numpyto_common.emitter import (
     index_rank_error,
 )
 from numpyto_common.frontend import _names_used_as_int
-from numpyto_common.lib_nodes import BLAS_GEMM_MARKER, FFT_LIBRARY_MARKER
+from numpyto_common.lib_nodes import BLAS_GEMM_MARKER, FFT_LIBRARY_MARKER, FFTN_LIBRARY_MARKER
 from numpyto_common.lowering import _walk_complex, helper_returns_int, integer_valued_locals
 from numpyto_common.statement_desugar import binding_names
 from numpyto_c.pluto_predicate import if_convert
@@ -540,8 +541,10 @@ class _CBodyEmitter(BaseEmitter):
             isinstance(node, ast.Expr)
             and isinstance(node.value, ast.Call)
             and isinstance(node.value.func, ast.Name)
-            and node.value.func.id == FFT_LIBRARY_MARKER
+            and node.value.func.id in (FFT_LIBRARY_MARKER, FFTN_LIBRARY_MARKER)
         ):
+            if node.value.func.id == FFTN_LIBRARY_MARKER:
+                return self._emit_fftn_library(node.value, indent)
             return self._emit_fft_library(node.value, indent)
         return super().emit_stmt(node, indent)
 
@@ -1717,6 +1720,77 @@ class _CBodyEmitter(BaseEmitter):
                 f"{indent}  }}",
             ]
         lines.append(f"{indent}}}")
+        return "\n".join(lines)
+
+    def _emit_fftn_library(self, node: ast.Call, indent: str) -> str:
+        """Render the N-D FFT marker as ONE FFTW3 ``plan_many_dft`` -- O(P log P) per transform.
+
+        Args (see FFTN_LIBRARY_MARKER): ``(out, src, inverse_flag, norm_kind, n_transform_axes,
+        leading_flag, *extents)``. The operand is C-order, so a LEADING run of transform axes has
+        the batch axes innermost (stride = batch count, distance 1) and a TRAILING run has them
+        outermost (stride 1, distance = transform size). Normalization is the same explicit loop
+        :meth:`_emit_fft_library` applies (FFTW is unnormalized both ways). A REAL operand
+        (``np.fft.fftn(rho - rho.mean())``) is widened into a complex scratch buffer first: FFTW's
+        complex plan reads interleaved (re, im) pairs, so handing it the real buffer reads garbage.
+        """
+        out, src = (arg.id for arg in node.args[:2])
+        inverse = bool(node.args[2].value)
+        norm_kind = node.args[3].value
+        n_axes = int(node.args[4].value)
+        leading = bool(node.args[5].value)
+        extents = [self.emit_expr(e) for e in node.args[6:]]
+        taxes = extents[:n_axes] if leading else extents[len(extents) - n_axes :]
+        batch = extents[n_axes:] if leading else extents[: len(extents) - n_axes]
+        f32 = self._is_float32_kernel()
+        prefix = "fftwf" if f32 else "fftw"
+        num = "float" if f32 else "double"
+        sign = "FFTW_BACKWARD" if inverse else "FFTW_FORWARD"
+        divides = norm_kind == 2 or (norm_kind == 0) == inverse
+        n_expr = " * ".join(f"(int64_t)({e})" for e in taxes)
+        batch_expr = " * ".join(f"(int64_t)({e})" for e in batch) or "(int64_t)1"
+        stride, dist = ("(int)__fft_batch", "1") if leading else ("1", "(int)__fft_n")
+        dims = ", ".join(f"(int)({e})" for e in taxes)
+        src_dtype = self._dtype_for_name(src) or ""
+        if not src_dtype.startswith(("complex", "float", "int", "uint", "bool")):
+            raise NotImplementedError(f"np.fft.* library plan: element dtype of {src!r} is unknown")
+        widen = not src_dtype.startswith("complex")
+        plan_src = "__fft_in" if widen else src
+        lines = [
+            f"{indent}{{",
+            f"{indent}  int64_t __fft_n = {n_expr};",
+            f"{indent}  int64_t __fft_batch = {batch_expr};",
+            f"{indent}  if (__fft_n > 0 && __fft_batch > 0) {{",
+            f"{indent}    int __fft_dims[{n_axes}] = {{{dims}}};",
+        ]
+        if widen:
+            lines += [
+                (
+                    f"{indent}    {num} _Complex *__fft_in = ({num} _Complex *)malloc((size_t)(__fft_n * __fft_batch) "
+                    f"* sizeof({num} _Complex));"
+                ),
+                f"{indent}    for (int64_t __fft_i = 0; __fft_i < __fft_n * __fft_batch; ++__fft_i) {{",
+                f"{indent}      __fft_in[__fft_i] = ({num} _Complex)({src}[__fft_i]);",
+                f"{indent}    }}",
+            ]
+        lines += [
+            (
+                f"{indent}    {prefix}_plan __fft_plan = {prefix}_plan_many_dft({n_axes}, __fft_dims, (int)__fft_batch, "
+                f"({prefix}_complex *)({plan_src}), NULL, {stride}, {dist}, ({prefix}_complex *)({out}), NULL, {stride}, "
+                f"{dist}, {sign}, FFTW_ESTIMATE);"
+            ),
+            f"{indent}    {prefix}_execute(__fft_plan);",
+            f"{indent}    {prefix}_destroy_plan(__fft_plan);",
+        ]
+        if widen:
+            lines.append(f"{indent}    free(__fft_in);")
+        if divides:
+            divisor = f"{self._math_name('sqrt')}(({num})__fft_n)" if norm_kind == 2 else f"(({num})__fft_n)"
+            lines += [
+                f"{indent}    for (int64_t __fft_i = 0; __fft_i < __fft_n * __fft_batch; ++__fft_i) {{",
+                f"{indent}      {out}[__fft_i] /= {divisor};",
+                f"{indent}    }}",
+            ]
+        lines += [f"{indent}  }}", f"{indent}}}"]
         return "\n".join(lines)
 
     def _emit_true_divide(self, node: ast.BinOp) -> str:
@@ -2932,12 +3006,12 @@ def _blas_include(body: str) -> str:
 
 
 def _fftw_include(body: str) -> str:
-    """``#include <fftw3.h>`` when this body calls fftw(f)_plan_dft_1d, else nothing.
+    """``#include <fftw3.h>`` when this body calls fftw(f)_plan_dft_1d / _plan_many_dft, else nothing.
 
     FFTW3's header carries its own ``extern "C"`` guard (same convention as cblas.h), so C++
     needs no wrapper either.
     """
-    return "#include <fftw3.h>\n" if "_plan_dft_1d(" in body else ""
+    return "#include <fftw3.h>\n" if "_plan_dft_1d(" in body or "_plan_many_dft(" in body else ""
 
 
 _CPP_HEADER = _CPP_ARITH + '\nextern "C" {\n'
@@ -3001,7 +3075,7 @@ def write_arith_header(out_dir, lang: str) -> pathlib.Path:
     """Write :func:`arith_header_source` into ``out_dir`` and return the path."""
     path = pathlib.Path(out_dir) / ARITH_HEADER_NAME[lang]
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(arith_header_source(lang))
+    write_atomic_text(path, arith_header_source(lang))
     return path
 
 
