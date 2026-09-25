@@ -21,6 +21,7 @@ from collections.abc import Callable, Iterable, Sequence
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from hpcagent_bench import data_guard
 from hpcagent_bench.harness import recording
 
 #: What sqlite hands back and takes. Named so a row is a typed mapping rather than a bag.
@@ -279,13 +280,12 @@ def main() -> None:
     ap.add_argument("--report", action="store_true", help="print the arm mapping and write nothing")
     args = ap.parse_args()
 
-    # the output must not sit under a source root: a second run would read it back in and double
-    # every row, and an archived campaign DB is itself a legitimate aggregate, so nothing in the
-    # file can distinguish the two
-    out = pathlib.Path(args.out).resolve() if args.out else None
-    roots = [pathlib.Path(s).resolve() for s in args.sources]
-    if out is not None and any(root in out.parents for root in roots):
-        sys.exit(f"--out {out} is under a source root; write it outside the run roots")
+    # an output under a source root would be read back in by the next run and double every row
+    if args.out:
+        try:
+            data_guard.check_output(args.out, args.sources)
+        except data_guard.ProtectedPathError as exc:
+            sys.exit(str(exc))
     paths = shard_paths(args.sources)
     if not paths:
         sys.exit("no result DBs under the given sources")
