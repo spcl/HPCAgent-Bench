@@ -200,7 +200,7 @@ def test_collect_arms_names_a_deleted_job_under_its_frozen_arm(
     assert kernels.covered(arms[ARM], str(REPO)) == set()  # without the frozen dir nothing is known
 
 
-# --- extract_llr40.py -------------------------------------------------------------------------
+# --- hpcagent_bench.observations_extract -------------------------------------------------------------------------
 
 
 def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: pathlib.Path) -> None:

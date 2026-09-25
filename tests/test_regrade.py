@@ -426,7 +426,7 @@ def test_refusal_message_names_the_count_and_the_migration_command() -> None:
 def test_main_refuses_unstamped_submissions_without_regrades_or_allow_unstamped(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """extract_llr40.main() exits non-zero, naming the count and the migration command, when the
+    """observations_extract.main() exits non-zero, naming the count and the migration command, when the
     extract holds an unstamped timed submission and --regrades was not given."""
     fake_db = extract.Database(path=tmp_path / "d.db", run_root="root", job_dir=tmp_path, job="j1")
     result = extract.DbResult(observations=[obs(1, 3.0, "")], sources=[], undated_c=0, harnesses={}, packets={})

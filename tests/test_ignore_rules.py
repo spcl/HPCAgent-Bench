@@ -70,7 +70,6 @@ GIT_IGNORED = [
     "experiments/beverin-services-645720.out",
     "experiments/beverin-services-645720.err",
     "experiments/mwd-final-regrades-tol0925/x.db",
-    "reproducibility/llr40/data/rows.csv",
 ]
 
 #: Sources that live next to generated files and must stay trackable.

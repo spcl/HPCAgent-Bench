@@ -23,7 +23,7 @@ THE RULES this figure is built to keep, from Hoefler and Belli (SC15), checked b
 
 Usage::
 
-    python -m hpcagent_bench.stats.figures.signed <sweep-directory> [--out DIR]
+    python -m hpcagent_bench.stats.figures.signed <sweep-directory> --out DIR
 """
 
 import argparse
@@ -845,12 +845,12 @@ def write_tables(rows: Sequence[Row], stem: pathlib.Path) -> tuple[pathlib.Path,
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Signed-change TSVC figures for one sweep directory.")
     parser.add_argument("sweep", type=pathlib.Path, help="directory of <framework>[.rank<N>].csv files")
-    parser.add_argument("--out", type=pathlib.Path, default=None, help="directory for the figures and tables")
+    parser.add_argument("--out", type=pathlib.Path, required=True, help="directory for the figures and tables")
     args = parser.parse_args(argv)
     # The source directory is in the file name: two sweeps of the same three arms are two
     # measurements, and one silently overwriting the other is how a stale figure reaches a paper.
     name = args.sweep.resolve().name
-    out = args.out if args.out is not None else pathlib.Path("reproducibility/canon/figures")
+    out = args.out
     print(arms_figure(args.sweep, out / f"tsvc_signed_speedup_{name}"))
     print(paired_figure(args.sweep, out / f"tsvc_canon_paired_{name}"))
     return 0

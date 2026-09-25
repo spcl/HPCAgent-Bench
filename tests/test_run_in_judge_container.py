@@ -4,7 +4,7 @@
 
 Every job that reached the "freezing token record" step used to pick its extractor interpreter
 with ``command -v python3.11 || command -v python3`` -- the BATCH HOST's bare interpreter, outside
-any container. extract_llr40.py imports hpcagent_bench (-> experiment_tags -> spec -> fuzz ->
+any container. hpcagent_bench.observations_extract imports hpcagent_bench (-> experiment_tags -> spec -> fuzz ->
 numpy), and the host interpreter has never carried numpy. 644320 (extraction before the import
 chain grew this dependency) froze fine; 644322 and 643373 (after) both died with
 ``ModuleNotFoundError: No module named 'numpy'`` on the SAME nodes, same interpreter, and left

@@ -768,8 +768,7 @@ def test_the_rank_interval_matches_the_library_definition(ablation_stats) -> Non
 def seed_observations(path: pathlib.Path, rows: list[tuple[str, str, str, int, int]]) -> None:
     """An extracted observations DB of task rows only: (arm, benchmark, run_id, tokens, ts_ms).
 
-    Written by the one extractor, :mod:`hpcagent_bench.observations_extract` (reproducibility/llr40's
-    extract_llr40.py is now only a shim that calls its ``main``)."""
+    Written by the one extractor, :mod:`hpcagent_bench.observations_extract`."""
     records = []
     for arm, benchmark, run_id, tokens, ts_ms in rows:
         record = dict.fromkeys(observations_extract.OBSERVATION_FIELDS, "")

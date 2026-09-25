@@ -146,7 +146,6 @@ containers/            images/ (one directory per image), lib/ (shared build ste
                        (serving jobs), agent/ and judge/ (bound at launch)
 scripts/               release, format gates, setup helpers, sample sbatch jobs (scripts/samples/)
 statistics/            plot_*.py and paired-arm statistics over a finished campaign
-reproducibility/       paper artifact READMEs
 tests/                 the test suite (pytest)
 ```
 
