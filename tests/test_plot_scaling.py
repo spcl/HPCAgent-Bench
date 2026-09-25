@@ -355,3 +355,24 @@ def test_the_band_at_a_rank_count_is_the_log_t_interval_of_the_kernels_geomean()
 
     assert (band.point, band.low, band.high) == pytest.approx((0.5, 0.2608615520422396, 0.958362771526864))
     assert band.method == "log-t"
+
+
+def test_each_mode_grid_panel_scales_its_own_y_axis() -> None:
+    """Operators sit orders of magnitude apart: a row-shared scale flattened every operator but the
+    fastest into the bottom of its panel, so no two panels may share a Y axis."""
+    import matplotlib.pyplot as plt
+
+    rows = perfect_strong("mlscale-strong-qwen38-hip", "dist_softmax")
+    # dist_sdpa runs 1024 times slower than its baseline at every P.
+    rows += [
+        row("mlscale-strong-qwen38-hip", "dist_sdpa", "strong", p, 4096.0 * 1024 / p, single_rank_ns=4096.0)
+        for p in RANKS
+    ]
+    fig = scaling.figure_mode_grid(scaling.curves(frame(rows)), ["dist_sdpa", "dist_softmax"], geomean_panel=False)
+    assert fig is not None
+    try:
+        first, second = fig.axes[:2]
+        assert not first.get_shared_y_axes().joined(first, second)
+        assert first.get_ylim() != second.get_ylim(), (first.get_ylim(), second.get_ylim())
+    finally:
+        plt.close(fig)
