@@ -13,7 +13,7 @@ from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
 )
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis, negative_literal_offset
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
-from hpcagent_bench.translators.numpyto_common.subscripts import is_ellipsis, is_full_slice
+from hpcagent_bench.translators.numpyto_common.subscripts import index_slot, is_ellipsis, is_full_slice
 
 #: Base name a chained view's own axes are scalarized under before they compose onto the real base.
 CHAINED_VIEW = "__chained_view__"
@@ -116,11 +116,6 @@ def entry_model(elt: ast.expr, rank: int, label: AxisLabel, broadcast_rank: int,
     if rank == 0:
         return ("scalar", ())
     return ("array", tuple((family, broadcast_rank - rank + axis) for axis in range(rank)))
-
-
-def index_slot(entries: list[ast.expr]) -> ast.expr:
-    """The ``slice`` field for a subscript with ``entries``."""
-    return entries[0] if len(entries) == 1 else ast.Tuple(elts=entries, ctx=ast.Load())
 
 
 #: Field values that can hold no subscript, so a chain scan never descends into them.

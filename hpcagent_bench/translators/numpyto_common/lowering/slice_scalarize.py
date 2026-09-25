@@ -12,7 +12,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     step_node,
     const_,
 )
-from hpcagent_bench.translators.numpyto_common.lowering.chains import CHAINED_VIEW, counts_from_end, index_slot
+from hpcagent_bench.translators.numpyto_common.lowering.chains import CHAINED_VIEW, counts_from_end
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     LOWERED_ELEMENTWISE,
     advanced_runs,
@@ -28,7 +28,7 @@ from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
 )
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import NP_ELEMENTWISE
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis, negative_literal_offset
-from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
+from hpcagent_bench.translators.numpyto_common.subscripts import index_slot, is_full_slice
 
 
 class SliceToScalarRewriter(ast.NodeTransformer):

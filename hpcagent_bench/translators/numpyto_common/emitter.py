@@ -151,24 +151,6 @@ class BaseEmitter:
     fp8_names: Mapping[str, Fp8Fns]
     kir: KernelIR
 
-    @staticmethod
-    def static_step_sign(step_node: ast.AST | None) -> int | None:
-        """+1 / -1 when a range step's sign is decidable from the AST, else None.
-
-        None means the sign is a RUNTIME fact and the loop direction cannot be baked in. A textual
-        ``startswith("-")`` on the emitted step is only right for a literal: with ``s = -1`` held
-        in a variable the text is ``s``, so C would emit a forward loop that runs zero times and
-        Fortran would adjust the inclusive bound the wrong way and overrun it, neither loudly.
-        """
-        if step_node is None:
-            return 1
-        if isinstance(step_node, ast.UnaryOp) and isinstance(step_node.op, ast.USub):
-            inner = BaseEmitter.static_step_sign(step_node.operand)
-            return None if inner is None else -inner
-        if isinstance(step_node, ast.Constant) and isinstance(step_node.value, (int, float)):
-            return -1 if step_node.value < 0 else 1
-        return None
-
     def numpy_note(self, node: ast.stmt, indent: str) -> str:
         """The comment line naming the numpy expression ``node`` was lowered from, or ``""``.
 

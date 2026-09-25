@@ -967,7 +967,7 @@ class FortranBodyEmitter(BaseEmitter):
         # Fortran's DO already honours a runtime step sign, so only the bound
         # adjustment has to be chosen at runtime when the sign is not decidable.
         step_node = args[2] if len(args) == 3 else None
-        sign = self.static_step_sign(step_node)
+        sign = parallelism.range_step_sign(step_node)
         if sign is None:
             upper = f"({hi}) + merge(1, -1, ({step}) < 0)"
         else:

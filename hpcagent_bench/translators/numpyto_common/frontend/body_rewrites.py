@@ -20,6 +20,7 @@ from hpcagent_bench.translators.numpyto_common.frontend.manifest import field_no
 from hpcagent_bench.translators.numpyto_common.frontend.none_folding import (
     FoldStaticNoneBranches,
     PeelNoneSeededAccumulators,
+    none_compare,
 )
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import const_int, literal_axis
 
@@ -646,17 +647,10 @@ class FoldParamNoneGuard(ast.NodeTransformer):
     def verdict(self, test: ast.expr) -> bool | None:
         """``True`` / ``False`` for a decidable ``<param> is[ not] None``, else
         ``None`` (not foldable)."""
-        if not (isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], (ast.Is, ast.IsNot))):
+        decoded = none_compare(test)
+        if decoded is None or decoded[0] not in self.params:
             return None
-        left, right = test.left, test.comparators[0]
-        none_left = isinstance(left, ast.Constant) and left.value is None
-        none_right = isinstance(right, ast.Constant) and right.value is None
-        if none_left == none_right:  # neither or both -> undecidable
-            return None
-        name = right if none_left else left
-        if not (isinstance(name, ast.Name) and name.id in self.params):
-            return None
-        return isinstance(test.ops[0], ast.IsNot)  # IsNot -> True, Is -> False
+        return not decoded[1]  # IsNot -> True, Is -> False
 
     def visit_If(self, node: ast.If) -> ast.stmt | list[ast.stmt]:
         self.generic_visit(node)

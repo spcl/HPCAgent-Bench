@@ -370,12 +370,13 @@ def any_parallelizable_loop(tree: ast.AST) -> bool:
 
 
 def range_step_sign(step_node: ast.AST | None) -> int | None:
-    """+1 / -1 when a ``range()`` step's sign is decidable from the AST alone, else ``None``
-    (a runtime-only sign -- the emitted C/Fortran loop then needs a ternary-guarded direction,
-    which is not a canonical OpenMP loop form). Mirrors
-    :meth:`numpyto_common.emitter.BaseEmitter.static_step_sign` -- duplicated rather than
-    imported so this module stays a standalone AST-predicate library with no emitter dependency
-    (this file has none today; the backends import FROM here, never the reverse)."""
+    """+1 / -1 when a ``range()`` step's sign is decidable from the AST alone, else ``None``.
+
+    ``None`` means the sign is a RUNTIME fact: the emitted C/Fortran loop then needs a
+    ternary-guarded direction (not a canonical OpenMP loop form), and the direction cannot be
+    baked in. A textual ``startswith("-")`` on the emitted step is only right for a literal: with
+    ``s = -1`` held in a variable the text is ``s``, so C would emit a forward loop that runs zero
+    times and Fortran would adjust the inclusive bound the wrong way and overrun it."""
     if step_node is None:
         return 1
     if isinstance(step_node, ast.UnaryOp) and isinstance(step_node.op, ast.USub):

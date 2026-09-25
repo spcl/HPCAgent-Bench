@@ -86,21 +86,30 @@ def bare_none_assign_target(stmt: ast.stmt) -> str | None:
     return None
 
 
-def none_toggle_op(test: ast.expr, name: str) -> bool | None:
-    """``True``/``False`` for a decidable ``<name> is[ not] None`` compare naming ``name`` on either
-    side, else ``None``. ``True`` for ``is`` (the branch taken while ``name`` is still ``None``),
-    ``False`` for ``is not``."""
+def none_compare(test: ast.expr) -> tuple[str, bool] | None:
+    """``(name, is_op)`` for a decidable ``<name> is[ not] None`` compare with the Name on either
+    side (``is_op`` True for ``is``, False for ``is not``), else ``None``."""
     if not (isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], (ast.Is, ast.IsNot))):
         return None
     left, right = test.left, test.comparators[0]
     none_left = isinstance(left, ast.Constant) and left.value is None
     none_right = isinstance(right, ast.Constant) and right.value is None
-    if none_left == none_right:
+    if none_left == none_right:  # neither or both -> undecidable
         return None
     target = right if none_left else left
-    if not (isinstance(target, ast.Name) and target.id == name):
+    if not isinstance(target, ast.Name):
         return None
-    return isinstance(test.ops[0], ast.Is)
+    return target.id, isinstance(test.ops[0], ast.Is)
+
+
+def none_toggle_op(test: ast.expr, name: str) -> bool | None:
+    """``True``/``False`` for a decidable ``<name> is[ not] None`` compare naming ``name``, else
+    ``None``. ``True`` for ``is`` (the branch taken while ``name`` is still ``None``), ``False`` for
+    ``is not``."""
+    decoded = none_compare(test)
+    if decoded is None or decoded[0] != name:
+        return None
+    return decoded[1]
 
 
 def assigns_name(stmts: list[ast.stmt], name: str) -> bool:

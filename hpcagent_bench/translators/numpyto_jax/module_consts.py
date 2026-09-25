@@ -28,44 +28,37 @@ def carried_imports(tree: ast.Module) -> tuple[list[str], list[str]]:
     return future, other
 
 
+def constant_assignments(tree: ast.Module, func_name: str) -> list[tuple[ast.Assign, list[str]]]:
+    """Each top-level single-target assignment to a Name or a tuple of Names, with the names it
+    binds, skipping one that binds ``func_name``."""
+    out: list[tuple[ast.Assign, list[str]]] = []
+    for s in tree.body:
+        if not (isinstance(s, ast.Assign) and len(s.targets) == 1):
+            continue
+        tgt = s.targets[0]
+        if isinstance(tgt, ast.Name):
+            names = [tgt.id]
+        elif isinstance(tgt, ast.Tuple) and all(isinstance(e, ast.Name) for e in tgt.elts):
+            names = [e.id for e in tgt.elts]
+        else:
+            continue
+        if func_name not in names:
+            out.append((s, names))
+    return out
+
+
 def module_constants(tree: ast.Module, func_name: str) -> list[str]:
     """Top-level ``NAME = <literal expr>`` assignments the kernel closes over
     (weather-stencil ``BET_M``/``BET_P``), carried verbatim (np->jnp) so the
     emitted module is self-contained. A tuple-unpack constant (lda_xc_
     potential's Perdew-Zunger coefficients) is carried too."""
-    out: list[str] = []
-    for s in tree.body:
-        if not (isinstance(s, ast.Assign) and len(s.targets) == 1):
-            continue
-        tgt = s.targets[0]
-        if isinstance(tgt, ast.Name):
-            names = [tgt.id]
-        elif isinstance(tgt, ast.Tuple) and all(isinstance(e, ast.Name) for e in tgt.elts):
-            names = [e.id for e in tgt.elts]
-        else:
-            continue
-        if func_name not in names:
-            out.append(unparse_jnp(s))
-    return out
+    return [unparse_jnp(s) for s, unused in constant_assignments(tree, func_name)]
 
 
 def module_constant_names(tree: ast.Module, func_name: str) -> set[str]:
     """The names bound by the module-level constant assignments carried by
     :func:`module_constants` (single-Name or tuple-of-Names targets)."""
-    out: set[str] = set()
-    for s in tree.body:
-        if not (isinstance(s, ast.Assign) and len(s.targets) == 1):
-            continue
-        tgt = s.targets[0]
-        if isinstance(tgt, ast.Name):
-            names = [tgt.id]
-        elif isinstance(tgt, ast.Tuple) and all(isinstance(e, ast.Name) for e in tgt.elts):
-            names = [e.id for e in tgt.elts]
-        else:
-            continue
-        if func_name not in names:
-            out.update(names)
-    return out
+    return {name for unused, names in constant_assignments(tree, func_name) for name in names}
 
 
 def module_const_values(tree: ast.Module, func_name: str) -> dict:

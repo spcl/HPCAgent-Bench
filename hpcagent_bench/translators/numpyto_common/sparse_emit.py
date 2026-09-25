@@ -503,36 +503,7 @@ def expand_matmul_dia_dense_vec(
     Reference: `scipy.sparse.dia_matrix
     <https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.dia_matrix.html>`_.
     """
-    data = lhs_buffers["data"]
-    offsets = lhs_buffers["offsets"]
-    init_loop = zero_init_loop(target.id, "__i", n_rows_sym)
-    j_expr = add(name_("__i"), name_("__o"))
-    accum = ast.AugAssign(
-        target=subscript_(target.id, name_("__i"), ctx=ast.Store()),
-        op=ast.Add(),
-        value=mul(subscript_(data, name_("__d"), name_("__j")), subscript_(rhs_name, name_("__j"))),
-    )
-    guard = ast.If(
-        test=ast.Compare(left=const_(0), ops=[ast.LtE(), ast.Lt()], comparators=[name_("__j"), name_(n_cols_sym)]),
-        body=[accum],
-        orelse=[],
-    )
-    row_loop = ast.For(
-        target=store_("__i"),
-        iter=range_call(None, name_(n_rows_sym)),
-        body=[ast.Assign(targets=[store_("__j")], value=j_expr), guard],
-        orelse=[],
-    )
-    diag_loop = ast.For(
-        target=store_("__d"),
-        iter=range_call(None, name_(n_diags_sym)),
-        body=[
-            ast.Assign(targets=[store_("__o")], value=subscript_(offsets, name_("__d"))),
-            row_loop,
-        ],
-        orelse=[],
-    )
-    return [init_loop, diag_loop]
+    return dia_spmv(target, lhs_buffers, rhs_name, n_rows_sym, n_cols_sym, n_diags_sym, transposed=False)
 
 
 def expand_matmul_dia_t_dense_vec(
@@ -561,13 +532,29 @@ def expand_matmul_dia_t_dense_vec(
     ``A_data[d, j]`` is unchanged: scipy keys the data column by the destination
     column ``j`` either way.
     """
+    return dia_spmv(target, lhs_buffers, rhs_name, n_rows_sym, n_cols_sym, n_diags_sym, transposed=True)
+
+
+def dia_spmv(
+    target: ast.Name,
+    lhs_buffers: dict[str, str],
+    rhs_name: str,
+    n_rows_sym: str,
+    n_cols_sym: str,
+    n_diags_sym: str,
+    *,
+    transposed: bool,
+) -> list[ast.stmt]:
+    """The ``(d, i)`` walk both DIA products share: ``y[i] += A_data[d, j] * x[j]`` forward,
+    ``y[j] += A_data[d, j] * x[i]`` for ``A.T`` (``j = i + A_offsets[d]``, guarded to ``[0, NK)``)."""
     data = lhs_buffers["data"]
     offsets = lhs_buffers["offsets"]
-    init_loop = zero_init_loop(target.id, "__j", n_cols_sym)
+    out_index, x_index = ("__j", "__i") if transposed else ("__i", "__j")
+    init_loop = zero_init_loop(target.id, out_index, n_cols_sym if transposed else n_rows_sym)
     accum = ast.AugAssign(
-        target=subscript_(target.id, name_("__j"), ctx=ast.Store()),
+        target=subscript_(target.id, name_(out_index), ctx=ast.Store()),
         op=ast.Add(),
-        value=mul(subscript_(data, name_("__d"), name_("__j")), subscript_(rhs_name, name_("__i"))),
+        value=mul(subscript_(data, name_("__d"), name_("__j")), subscript_(rhs_name, name_(x_index))),
     )
     guard = ast.If(
         test=ast.Compare(left=const_(0), ops=[ast.LtE(), ast.Lt()], comparators=[name_("__j"), name_(n_cols_sym)]),
@@ -620,35 +607,9 @@ def expand_matmul_bcsr_dense_vec(
     Reference: `scipy.sparse.bsr_matrix
     <https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.bsr_matrix.html>`_.
     """
-    indptr = lhs_buffers["indptr"]
-    indices = lhs_buffers["indices"]
-    data = lhs_buffers["data"]
-    init_loop = ast.For(
-        target=store_("__i"),
-        iter=range_call(None, name_(n_rows_sym)),
-        body=[ast.Assign(targets=[subscript_(target.id, name_("__i"), ctx=ast.Store())], value=const_(0.0))],
-        orelse=[],
+    return bcsr_spmv(
+        target, lhs_buffers, rhs_name, n_block_rows_sym, block_r_sym, block_c_sym, n_rows_sym, transposed=False
     )
-    out_row = add(mul(name_("__bi"), name_(block_r_sym)), name_("__r"))
-    x_col = add(mul(name_("__bj"), name_(block_c_sym)), name_("__c"))
-    accum = ast.AugAssign(
-        target=subscript_(target.id, out_row, ctx=ast.Store()),
-        op=ast.Add(),
-        value=mul(subscript_(data, name_("__k"), name_("__r"), name_("__c")), subscript_(rhs_name, x_col)),
-    )
-    c_loop = ast.For(target=store_("__c"), iter=range_call(None, name_(block_c_sym)), body=[accum], orelse=[])
-    r_loop = ast.For(target=store_("__r"), iter=range_call(None, name_(block_r_sym)), body=[c_loop], orelse=[])
-    k_loop = ast.For(
-        target=store_("__k"),
-        iter=range_call(subscript_(indptr, name_("__bi")), subscript_(indptr, add(name_("__bi"), const_(1)))),
-        body=[
-            ast.Assign(targets=[store_("__bj")], value=subscript_(indices, name_("__k"))),
-            r_loop,
-        ],
-        orelse=[],
-    )
-    brow_loop = ast.For(target=store_("__bi"), iter=range_call(None, name_(n_block_rows_sym)), body=[k_loop], orelse=[])
-    return [init_loop, brow_loop]
 
 
 def expand_matmul_bcsr_t_dense_vec(
@@ -676,16 +637,35 @@ def expand_matmul_bcsr_t_dense_vec(
     and column roles exchanged on the two vectors. Note ``A_data[k, r, c]`` keeps
     its forward index order; it is the vector subscripts that swap.
     """
+    return bcsr_spmv(
+        target, lhs_buffers, rhs_name, n_block_rows_sym, block_r_sym, block_c_sym, n_cols_sym, transposed=True
+    )
+
+
+def bcsr_spmv(
+    target: ast.Name,
+    lhs_buffers: dict[str, str],
+    rhs_name: str,
+    n_block_rows_sym: str,
+    block_r_sym: str,
+    block_c_sym: str,
+    n_out_sym: str,
+    *,
+    transposed: bool,
+) -> list[ast.stmt]:
+    """The block traversal both BCSR products share; ``A.T`` swaps the block row / column roles on
+    the two vectors (``y[bj*C + c] += A_data[k, r, c] * x[bi*R + r]``), never the data index."""
     indptr = lhs_buffers["indptr"]
     indices = lhs_buffers["indices"]
     data = lhs_buffers["data"]
-    init_loop = zero_init_loop(target.id, "__i", n_cols_sym)
-    out_col = add(mul(name_("__bj"), name_(block_c_sym)), name_("__c"))
-    x_row = add(mul(name_("__bi"), name_(block_r_sym)), name_("__r"))
+    init_loop = zero_init_loop(target.id, "__i", n_out_sym)
+    block_row = add(mul(name_("__bi"), name_(block_r_sym)), name_("__r"))
+    block_col = add(mul(name_("__bj"), name_(block_c_sym)), name_("__c"))
+    out_index, x_index = (block_col, block_row) if transposed else (block_row, block_col)
     accum = ast.AugAssign(
-        target=subscript_(target.id, out_col, ctx=ast.Store()),
+        target=subscript_(target.id, out_index, ctx=ast.Store()),
         op=ast.Add(),
-        value=mul(subscript_(data, name_("__k"), name_("__r"), name_("__c")), subscript_(rhs_name, x_row)),
+        value=mul(subscript_(data, name_("__k"), name_("__r"), name_("__c")), subscript_(rhs_name, x_index)),
     )
     c_loop = ast.For(target=store_("__c"), iter=range_call(None, name_(block_c_sym)), body=[accum], orelse=[])
     r_loop = ast.For(target=store_("__r"), iter=range_call(None, name_(block_r_sym)), body=[c_loop], orelse=[])

@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes import slice_axes
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
-from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice, is_newaxis
+from hpcagent_bench.translators.numpyto_common.subscripts import index_slot, is_full_slice, is_newaxis
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import REDUCE_FNS, expr_rank
 from hpcagent_bench.translators.numpyto_common.frontend.manifest import preset_constant_symbols
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import const_int
@@ -170,7 +170,7 @@ class AxisReshapeToIndexing(ast.NodeTransformer):
         merged = self.merge_index(operand, entries)
         subscript = ast.Subscript(
             value=operand if merged is None else operand.value,
-            slice=self.slot_(entries if merged is None else merged),
+            slice=index_slot(entries if merged is None else merged),
             ctx=ast.Load(),
         )
         return ast.fix_missing_locations(ast.copy_location(subscript, node))
@@ -210,10 +210,6 @@ class AxisReshapeToIndexing(ast.NodeTransformer):
                 merged.append(outer)  # ``x[None][0]`` drops the inserted axis instead
         merged.extend(entries[pos:])
         return merged
-
-    @staticmethod
-    def slot_(entries: list[ast.expr]) -> ast.expr:
-        return entries[0] if len(entries) == 1 else ast.Tuple(elts=entries, ctx=ast.Load())
 
     def rewrite_(self, source: str, node: ast.Call) -> ast.AST:
         return ast.copy_location(ast.parse(source, mode="eval").body, node)
