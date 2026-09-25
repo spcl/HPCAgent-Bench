@@ -8,6 +8,18 @@ def is_full_slice(e: ast.AST) -> bool:
     return isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None
 
 
+def base_name(node: ast.AST) -> str | None:
+    """The variable an assignment target or a read names: ``x`` for ``x`` and for ``x[i, j]``."""
+    while isinstance(node, ast.Subscript):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def index_slot(entries: list[ast.expr]) -> ast.expr:
+    """The ``slice`` field for a subscript with ``entries``."""
+    return entries[0] if len(entries) == 1 else ast.Tuple(elts=entries, ctx=ast.Load())
+
+
 def is_ellipsis(e: ast.AST) -> bool:
     """A ``...`` entry (``ast.Constant(Ellipsis)``). It expands to full slices over every otherwise-unindexed
     axis, so it drops no axis."""

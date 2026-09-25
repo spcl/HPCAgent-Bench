@@ -2,17 +2,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Two ways a whole-array REBIND used to compile clean and return wrong numbers.
 
-Both live in ``numpyto_common/lowering.py`` and both are invisible to every compile gate: the
+Both live in ``numpyto_common/lowering/`` and both are invisible to every compile gate: the
 emitted C built without a diagnostic (or, for the second, with one C rejected but Fortran did
 not), so only the numbers say whether the lowering kept the kernel's meaning.
 
-* ``_LiftFreshArrayFromSlices`` stamped a BARE ``__hpcagent_bench_zeros__()`` marker even when the
+* ``LiftFreshArrayFromSlices`` stamped a BARE ``__hpcagent_bench_zeros__()`` marker even when the
   target was a LIVE buffer being rebound. The emitters read a bare marker as a genuine
   ``np.zeros`` reset, so ``_conv3d``'s ``out = out + bias.reshape(..)`` memset the convolution
   result immediately before the loop that reads it, and the bias-add saw zeros.
 * A strided slice whose span is a MULTIPLE of its stride got the extent
   ``(out * stride + stride - 1) // stride``. That is the same number as ``out``, spelled so that
-  the token comparison in ``_rhs_is_whole_array`` could not see it, so ``out = np.maximum(out,
+  the token comparison in ``rhs_is_whole_array`` could not see it, so ``out = np.maximum(out,
   window)`` was declined as a shape mismatch and never expanded to a per-element nest -- the
   emitters rendered a scalar ``max`` of two POINTERS.
 

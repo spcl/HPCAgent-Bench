@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A kept helper reaches dace with no valueless ``return`` left in it.
 
-:func:`numpyto_common.frontend._rewrite_returns_to_outparam` closes a promoted-return helper with
+:func:`numpyto_common.frontend.helper_specialize.rewrite_returns_to_outparam` closes a promoted-return helper with
 ``hret[:] = expr`` plus a bare ``return``. That is the right shape for C and Fortran, which emit the
 helper as a ``void`` out-param procedure. It is a MISCOMPILE for dace: the frontend lowers any
 ``return`` into a ReturnBlock, and codegen emits a nested program's blocks inline in the CALLER's

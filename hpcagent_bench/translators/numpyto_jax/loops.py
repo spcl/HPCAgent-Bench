@@ -615,7 +615,7 @@ def emit_vectorized(node: ast.For, i: str, indent: str) -> list[str]:
 
 def emit_fori(node: ast.For, carried: list[str], rng: tuple[str, str, bool, str], i: str, indent: str) -> list[str]:
     """``lax.fori_loop`` carrying ``carried``. A unit forward step drives the index directly; a
-    backward (-1) or forward-strided (tiled ``range(1, N-1, W)``) range drives a counter ``k_`` over
+    backward (-1) or forward-strided (tiled ``range(1, N-1, W)``) range drives a counter ``_k`` over
     ``[0, trip)`` and recovers the real index (``lo - _k`` / ``lo + _k*s``)."""
     lo, hi, backward, stride = rng
     inner = indent + "    "

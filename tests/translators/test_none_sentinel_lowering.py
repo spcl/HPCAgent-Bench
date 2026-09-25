@@ -7,22 +7,22 @@ Three related-but-distinct idioms, all unlowerable as written (neither C nor For
 
 * (a) a helper that returns ``None`` OR a tuple (``_tap_range``-style conv/pool tap-range
   helpers): an early ``if <empty range>: return None`` disqualifies it from the ordinary
-  single/multi-return inliner (:func:`frontend._collect_inlinable_helpers`), so it used to survive
-  as its own un-emittable :class:`KernelIR`. :func:`frontend._collect_none_guarded_helpers` +
-  :class:`frontend._SpliceNoneGuardedCalls` splice the helper INTO each call site together with the
+  single/multi-return inliner (:func:`frontend.inlining.collect_inlinable_helpers`), so it used to survive
+  as its own un-emittable :class:`KernelIR`. :func:`frontend.none_guarded.collect_none_guarded_helpers` +
+  :class:`frontend.none_guarded.SpliceNoneGuardedCalls` splice the helper INTO each call site together with the
   caller's own ``if tap is None: continue`` guard and tuple unpack, so no ``None``-or-tuple value
   ever exists at all.
 * (b) a first-iteration accumulator (``acc = None`` before a loop, ``acc = tap if acc is None else
-  combiner(acc, tap)`` or the ``if/else`` spelling inside it): :class:`frontend.
-  _PeelNoneSeededAccumulators` replaces the ``None`` check with an explicit ``__acc_seen`` flag --
+  combiner(acc, tap)`` or the ``if/else`` spelling inside it): :class:`frontend.none_folding.
+  PeelNoneSeededAccumulators` replaces the ``None`` check with an explicit ``__acc_seen`` flag --
   sound for ANY combiner, since it replays the exact state machine the ``None`` check already was
   rather than guessing a reduction identity.
 * (c) a default-argument sentinel resolved once, straight-line (``if stride is None: stride =
   kernel_size``) where the call-site argument is a compile-time ``None`` literal: already partly
   handled by :mod:`tuple_desugar`'s own ``x is None`` kind-tracking, which folds the guard away --
-  but the now-dead ``stride = None`` init that DOMINATES it (from :class:`frontend._InlineHelpers`'s
+  but the now-dead ``stride = None`` init that DOMINATES it (from :class:`frontend.inlining.InlineHelpers`'s
   ``reassigned_params`` handling) survived because it is READ again later, through the SECOND write,
-  not the dead one. :func:`tuple_desugar._drop_dead_none_bindings`'s adjacency check drops it.
+  not the dead one. :func:`tuple_desugar.drop_dead_none_bindings`'s adjacency check drops it.
 
 Each test asserts on the lowered AST (or emitted text) directly, not merely that nothing raised,
 plus a numeric check through the real C/C++/Fortran backends via the existing oracle harness

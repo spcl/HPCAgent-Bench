@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Directive #4 sanitize pass: strip comments/docstrings (+ optional mangle)
 for the Python-emitting backends before container handoff. Pure-logic unit
-test; imports resolve through pytest's ``pythonpath``."""
+test."""
 
 import ast
 

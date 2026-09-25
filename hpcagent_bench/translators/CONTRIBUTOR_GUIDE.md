@@ -18,6 +18,7 @@
   def kernel(A, B, C, alpha, beta):
       C[...] = alpha * A @ B + beta * C
 
+
   # BAD -- return value, would need tuple-unpack support
   def kernel(A, B):
       return A @ B

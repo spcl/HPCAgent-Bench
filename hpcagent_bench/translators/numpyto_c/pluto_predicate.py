@@ -27,15 +27,10 @@ import copy
 import itertools
 from collections.abc import Callable, Iterable
 
+from hpcagent_bench.translators.numpyto_common.subscripts import base_name
+
 #: Prefix of the flag locals the FLAGGED form introduces; a counter makes each name unique.
 FLAG_PREFIX = "pluto_pred"
-
-
-def base_name(node: ast.AST) -> str | None:
-    """The variable an assignment target or a read names: ``x`` for ``x`` and for ``x[i, j]``."""
-    while isinstance(node, ast.Subscript):
-        node = node.value
-    return node.id if isinstance(node, ast.Name) else None
 
 
 def names_read(expr: ast.AST) -> set[str]:

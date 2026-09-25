@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 
 from tests.translators.op_oracle import run_op
+from tests.translators.source_module import evaluate
 
 NATIVE = ("c", "cpp", "fortran")
 
@@ -44,7 +45,7 @@ def run_(expr, n) -> None:
     ],
 )
 def test_negative_step_arange_matches_numpy(expr, n) -> None:
-    assert len(eval(expr)) == n, "test's own expectation disagrees with numpy"  # noqa: S307
+    assert len(evaluate(expr, {"np": np})) == n, "test's own expectation disagrees with numpy"
     run_(expr, n)
 
 
@@ -58,7 +59,7 @@ def test_negative_step_arange_matches_numpy(expr, n) -> None:
     ],
 )
 def test_positive_step_arange_still_matches_numpy(expr, n) -> None:
-    assert len(eval(expr)) == n, "test's own expectation disagrees with numpy"  # noqa: S307
+    assert len(evaluate(expr, {"np": np})) == n, "test's own expectation disagrees with numpy"
     run_(expr, n)
 
 
@@ -82,7 +83,7 @@ def test_count_is_folded_for_literal_bounds() -> None:
         node = count(text)
         assert isinstance(node, ast.Constant), (text, ast.unparse(node))
         assert node.value == want, (text, node.value, want)
-        assert node.value == len(eval(text))  # noqa: S307 -- numpy is the definition
+        assert node.value == len(evaluate(text, {"np": np}))  # numpy is the definition
 
 
 def test_symbolic_bounds_keep_a_sign_correct_expression() -> None:
@@ -96,5 +97,5 @@ def test_symbolic_bounds_keep_a_sign_correct_expression() -> None:
     text = ast.unparse(node)
     assert "//" in text and text.startswith("-"), text
     for a, b, s in [(10, 0, -1), (0, 10, 2), (0, 10, 1), (3, 3, 1), (0, 10, -1)]:
-        got = eval(text, {"a": a, "b": b, "s": s})  # noqa: S307
+        got = evaluate(text, {"a": a, "b": b, "s": s})
         assert got == len(np.arange(a, b, s)) or (got < 0 and len(np.arange(a, b, s)) == 0), (a, b, s, got)

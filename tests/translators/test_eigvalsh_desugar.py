@@ -4,7 +4,7 @@
 eigensolve) lowering.
 
 ``np.linalg.eigvalsh`` reuses the same self-contained cyclic-Jacobi sweep as
-``np.linalg.eigh`` (``numpyto_common.numpy_desugar._eigh_c_stmts``), but binds
+``np.linalg.eigh`` (``numpyto_common.numpy_desugar.eigh.eigh_c_stmts``), but binds
 only the ascending eigenvalue vector into a SINGLE Name target -- the eigenvector
 back-transform / ``U`` output is dropped. The kernel ``ls3df_scf`` uses it as
 ``theta_max = np.linalg.eigvalsh(T).max()``; a standalone ``w = np.linalg.eigvalsh(A)``
@@ -22,6 +22,7 @@ import numpy as np
 
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import eigh_alias_names, EighLoopRewriter
 from tests.translators.op_oracle import run_op
+from tests.translators.source_module import run_source
 
 EIGVALSH_SRC = "def f(A):\n    w = np.linalg.eigvalsh(A)\n"
 
@@ -49,7 +50,8 @@ def desugar_body(src: str, dtypes: dict | None = None) -> list:
 def exec_desugared(src: str, scope: dict, dtypes: dict | None = None) -> dict:
     mod = ast.Module(body=desugar_body(src, dtypes), type_ignores=[])
     ast.fix_missing_locations(mod)
-    exec(compile(mod, "<eigvalsh>", "exec"), {"np": np, "range": range, "abs": abs}, scope)
+    scope.update({"np": np, "range": range, "abs": abs})
+    run_source(mod, scope, "<eigvalsh>")
     return scope
 
 

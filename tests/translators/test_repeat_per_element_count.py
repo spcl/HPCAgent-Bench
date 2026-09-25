@@ -87,7 +87,7 @@ def test_non_diff_per_element_count_refused() -> None:
 
 def test_scalar_count_still_uses_the_multiply_form() -> None:
     """Regression guard: a SCALAR repeat count must keep using ``outer * K`` (unaffected by the
-    per-element branch, since ``iter_extent_of_`` on a bare int constant is None)."""
+    per-element branch, since ``iter_extent_of`` on a bare int constant is None)."""
     got = expand_("out = np.repeat(a, 3)", {"a": ("M",)})
     assert "__rep_pos0" not in got
     assert "* 3" in got or "3 *" in got

@@ -13,7 +13,7 @@ that are not ours to fix, see
 The NumpyToC translator turns `*_numpy.py` kernels into C/C++/Fortran. Arbitrary
 NumPy idioms -- chained subscripts, rank-changing reshapes, fancy indexing, whole-array
 reassignment -- go through roughly two dozen interacting AST rewriter passes in
-`lowering.py`, all sharing one fragile mutable `shape_table`. One
+`numpyto_common/lowering/`, all sharing one fragile mutable `shape_table`. One
 pass rewriting a statement another didn't anticipate leaves the table stale, and
 emission produces wrong or non-compiling code.
 
@@ -99,7 +99,7 @@ for n in range(slab_per_bc + 1):
     Tz += zz * Ham[n]            # Ham[n] is a 2-D slab of a 3-D array
 ```
 
-`_emit_subscript` would have to *infer* that `Ham[n]` is a `[n, :, :]` slab and
+`emit_subscript` would have to *infer* that `Ham[n]` is a `[n, :, :]` slab and
 re-expand it; the C/C++/Fortran emitter refuses a rank mismatch like this one with
 `NotImplementedError` rather than guess at it (Sec. 5).
 
@@ -388,13 +388,13 @@ for i in range(M):
 
 ## 5. What CNF Lets the Translator Delete
 
-With CNF guaranteed, these `numpyto_common/lowering.py` mechanisms can be retired:
+With CNF guaranteed, these `numpyto_common/lowering/` mechanisms can be retired:
 
-- **`_ssa_rename_reassigned`** -- invented fresh names (`<name>__v<n>`) for variables
+- **`ssa_rename_reassigned`** -- invented fresh names (`<name>__v<n>`) for variables
   reassigned with a new broadcast extent. Invariant 1 means a name never changes
   shape, so there is nothing to rename.
-- **`_LiftFreshArrayFromSlices`** -- lifted a fresh array out of slice expressions
-  when a buffer's shape did not match its slice writes; `_ssa_rename_reassigned`'s
+- **`LiftFreshArrayFromSlices`** -- lifted a fresh array out of slice expressions
+  when a buffer's shape did not match its slice writes; `ssa_rename_reassigned`'s
   own docstring notes that without it, this lifter *"bails on the shape mismatch."*
   Declare-then-fill (Inv. 3) removes the mismatch.
 - **Rank-aware `expand_reshape` fallback** (the in-place `x = np.reshape(x, ...)`
@@ -402,12 +402,12 @@ With CNF guaranteed, these `numpyto_common/lowering.py` mechanisms can be retire
   buffer of a declared shape (Inv. 1 / cookbook 4.2, 4.4), so the rank-changing
   in-place reshape path disappears.
 
-`numpyto_c/emit.py`'s `_emit_subscript` already takes this step: a rank-mismatched
+`numpyto_c/emit.py`'s `emit_subscript` already takes this step: a rank-mismatched
 subscript on a flat C pointer raises `NotImplementedError` instead of emitting an
 uncompilable chained `w[i][j]` access. Full-rank
 indexing (Inv. 2) means that error never fires on a CNF kernel.
 
-The `shape_table`/`_harvest_local_shapes` machinery can then be a single up-front
+The `shape_table`/`harvest_local_shapes` machinery can then be a single up-front
 declaration scan instead of a mutable structure threaded through ~22 passes.
 
 ---

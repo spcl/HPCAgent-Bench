@@ -33,8 +33,8 @@ from pathlib import Path
 DEFAULT_MAX_KB = 500
 #: Hand-written text gets its own, larger ceiling. What the hook is for is a BINARY blob -- a
 #: dataset, a model dump, a compiled artifact -- and 500 KiB of those is already pathological,
-#: while ``lowering.py`` is legitimately half a megabyte of source and grows by a few hundred
-#: bytes per fix. Capping both at one number means a routine source edit fails the commit for a
+#: while a hand-written translator module can legitimately run to several hundred KiB and grows
+#: by a few hundred bytes per fix. Capping both at one number means a routine source edit fails the commit for a
 #: reason that has nothing to do with the file it is guarding against; a generated .py table is
 #: still caught, just at a threshold no hand-written module reaches by accident.
 DEFAULT_MAX_TEXT_KB = 1024

@@ -140,12 +140,11 @@ def target_names(target: ast.AST) -> OrderedSet:
     written THROUGH, e.g. ``a`` in ``a[i] = x``.
 
     Does NOT recurse into a Subscript's INDEX or an Attribute's name: those are read, not bound.
-    ``out[lo:hi:stride[0]] += tap`` (a strided-slice tap loop) walks the whole target with a bare
-    ``ast.walk`` and used to pick up ``stride`` from inside the slice STEP as if this statement
-    rebound it -- which then made ``assigned_names`` invalidate ``stride``'s compile-time tuple
-    tracking (see below) on every loop this statement sits in, so a stride that had already folded
-    to a literal outside the loop reverted to an un-foldable ``stride[0]`` the moment the SAME
-    variable was also used as a slice step somewhere inside it."""
+    A bare ``ast.walk`` over ``out[lo:hi:stride[0]] += tap`` (a strided-slice tap loop) would pick
+    up ``stride`` from inside the slice STEP as if this statement rebound it; ``assigned_names``
+    would then invalidate ``stride``'s compile-time tuple tracking (see below) on every loop the
+    statement sits in, and a stride already folded to a literal outside the loop would revert to an
+    un-foldable ``stride[0]``."""
     if isinstance(target, ast.Name):
         return OrderedSet((target.id,))
     if isinstance(target, ast.Starred):
@@ -887,45 +886,49 @@ def collapse_capture_aliases(fn: ast.FunctionDef, captured: list[tuple[str, str]
     minted: dict[str, int] = {}
     for unused, name in captured:
         minted[name] = minted.get(name, 0) + 1
-
-    def is_bind(stmt: ast.stmt, alias: str, name: str) -> bool:
-        return (
-            isinstance(stmt, ast.Assign)
-            and len(stmt.targets) == 1
-            and isinstance(stmt.targets[0], ast.Name)
-            and stmt.targets[0].id == alias
-            and isinstance(stmt.value, ast.Name)
-            and stmt.value.id == name
-        )
-
-    def written_from(alias: str, name: str) -> bool:
-        state = {"seen": False, "written": False}
-
-        def walk(stmts: list[ast.stmt], in_loop: bool) -> None:
-            for stmt in stmts:
-                if is_bind(stmt, alias, name):
-                    state["seen"] = True
-                    continue
-                if name in own_targets(stmt) and (state["seen"] or in_loop):
-                    state["written"] = True
-                for field, value in ast.iter_fields(stmt):
-                    if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value):
-                        walk(value, in_loop or isinstance(stmt, (ast.For, ast.While)))
-
-        walk(fn.body, False)
-        return state["written"] or not state["seen"]
-
     for alias, name in captured:
         # Two captures of one name would chain through each other; leave both alone.
-        if minted[name] != 1 or written_from(alias, name):
+        if minted[name] != 1 or written_after_capture(fn, alias, name):
             continue
         for node in ast.walk(fn):
             for field, value in ast.iter_fields(node):
                 if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value):
-                    setattr(node, field, [s for s in value if not is_bind(s, alias, name)])
+                    setattr(node, field, [s for s in value if not is_capture_bind(s, alias, name)])
         for node in ast.walk(fn):
             if isinstance(node, ast.Name) and node.id == alias:
                 node.id = name
+
+
+def is_capture_bind(stmt: ast.stmt, alias: str, name: str) -> bool:
+    """``stmt`` is the capture ``alias = name``."""
+    return (
+        isinstance(stmt, ast.Assign)
+        and len(stmt.targets) == 1
+        and isinstance(stmt.targets[0], ast.Name)
+        and stmt.targets[0].id == alias
+        and isinstance(stmt.value, ast.Name)
+        and stmt.value.id == name
+    )
+
+
+def written_after_capture(fn: ast.FunctionDef, alias: str, name: str) -> bool:
+    """Whether ``name`` is written after its capture ``alias = name`` (or anywhere inside a loop the
+    capture sits in, whose body runs again), or the capture is not found at all."""
+    state = {"seen": False, "written": False}
+
+    def walk(stmts: list[ast.stmt], in_loop: bool) -> None:
+        for stmt in stmts:
+            if is_capture_bind(stmt, alias, name):
+                state["seen"] = True
+                continue
+            if name in own_targets(stmt) and (state["seen"] or in_loop):
+                state["written"] = True
+            for field, value in ast.iter_fields(stmt):
+                if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value):
+                    walk(value, in_loop or isinstance(stmt, (ast.For, ast.While)))
+
+    walk(fn.body, False)
+    return state["written"] or not state["seen"]
 
 
 def drop_dead_none_bindings(fn: ast.FunctionDef) -> None:
@@ -951,44 +954,12 @@ def drop_dead_none_bindings(fn: ast.FunctionDef) -> None:
     alone: there the sentinel IS the value being read.
     """
     read = OrderedSet(n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load))
-    tested: OrderedSet = OrderedSet()
-    for cmp in ast.walk(fn):
-        if isinstance(cmp, ast.Compare) and any(
-            isinstance(c, ast.Constant) and c.value is None for c in cmp.comparators
-        ):
-            tested.update(n.id for n in ast.walk(cmp) if isinstance(n, ast.Name))
-    rebound: OrderedSet = OrderedSet()
-    for node in ast.walk(fn):
-        if not isinstance(node, ast.Assign) or (isinstance(node.value, ast.Constant) and node.value.value is None):
-            continue
-        for tgt in node.targets:
-            elts = tgt.elts if isinstance(tgt, (ast.Tuple, ast.List)) else [tgt]
-            rebound.update(e.id for e in elts if isinstance(e, ast.Name))
-
-    def none_bind_targets(stmt: ast.stmt) -> list[str]:
-        # ``a = b = None`` declares a whole run of sentinels at once (warpx spells all six shape
-        # buffers that way), so a chained bind is the same statement, not a different idiom.
-        if (
-            isinstance(stmt, ast.Assign)
-            and isinstance(stmt.value, ast.Constant)
-            and stmt.value.value is None
-            and all(isinstance(t, ast.Name) for t in stmt.targets)
-        ):
-            return [t.id for t in stmt.targets]
-        return []
-
-    def rebinds(stmt: ast.stmt, name: str) -> bool:
-        return (
-            isinstance(stmt, ast.Assign)
-            and len(stmt.targets) == 1
-            and isinstance(stmt.targets[0], ast.Name)
-            and stmt.targets[0].id == name
-        )
+    tested, rebound = none_sentinel_uses(fn)
 
     def dead(name: str, i: int, stmts: list[ast.stmt]) -> bool:
         return (
             name not in read
-            or (i + 1 < len(stmts) and rebinds(stmts[i + 1], name))
+            or (i + 1 < len(stmts) and rebinds_name(stmts[i + 1], name))
             or (name in rebound and name not in tested)
         )
 
@@ -1005,3 +976,45 @@ def drop_dead_none_bindings(fn: ast.FunctionDef) -> None:
         for field, value in ast.iter_fields(node):
             if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value):
                 setattr(node, field, prune(value))
+
+
+def none_sentinel_uses(fn: ast.FunctionDef) -> tuple[OrderedSet, OrderedSet]:
+    """``(tested, rebound)``: the names some comparison tests against ``None``, and the names some
+    assignment binds to a value other than ``None``."""
+    tested: OrderedSet = OrderedSet()
+    for cmp in ast.walk(fn):
+        if isinstance(cmp, ast.Compare) and any(
+            isinstance(c, ast.Constant) and c.value is None for c in cmp.comparators
+        ):
+            tested.update(n.id for n in ast.walk(cmp) if isinstance(n, ast.Name))
+    rebound: OrderedSet = OrderedSet()
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Assign) or (isinstance(node.value, ast.Constant) and node.value.value is None):
+            continue
+        for tgt in node.targets:
+            elts = tgt.elts if isinstance(tgt, (ast.Tuple, ast.List)) else [tgt]
+            rebound.update(e.id for e in elts if isinstance(e, ast.Name))
+    return tested, rebound
+
+
+def none_bind_targets(stmt: ast.stmt) -> list[str]:
+    """The names ``stmt`` binds to ``None`` -- ``a = b = None`` declares a whole run of sentinels at
+    once, so a chained bind is the same statement."""
+    if (
+        isinstance(stmt, ast.Assign)
+        and isinstance(stmt.value, ast.Constant)
+        and stmt.value.value is None
+        and all(isinstance(t, ast.Name) for t in stmt.targets)
+    ):
+        return [t.id for t in stmt.targets]
+    return []
+
+
+def rebinds_name(stmt: ast.stmt, name: str) -> bool:
+    """``stmt`` is a plain ``name = ...``."""
+    return (
+        isinstance(stmt, ast.Assign)
+        and len(stmt.targets) == 1
+        and isinstance(stmt.targets[0], ast.Name)
+        and stmt.targets[0].id == name
+    )

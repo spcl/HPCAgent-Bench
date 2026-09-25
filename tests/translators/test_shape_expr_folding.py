@@ -18,6 +18,7 @@ import itertools
 import pytest
 
 from hpcagent_bench.translators.numpyto_common.frontend import fold_shape_expr
+from tests.translators.source_module import evaluate
 
 #: (expression, expected folded form). Each is a real extent shape produced by the inliner.
 CASES = [
@@ -79,7 +80,7 @@ def test_folding_preserves_value(expr: str, expected: str) -> None:
     folded = fold_shape_expr(expr)
     for combo in itertools.product(range(1, 12), repeat=len(names)):
         env = dict(zip(names, combo))
-        assert eval(folded, {}, env) == eval(expr, {}, env), (expr, folded, env)
+        assert evaluate(folded, env) == evaluate(expr, env), (expr, folded, env)
 
 
 @pytest.mark.parametrize("expr,reason", NOT_EXACT)
@@ -100,7 +101,7 @@ def test_folding_preserves_value_for_negative_operands_too(expr: str, expected: 
     folded = fold_shape_expr(expr)
     for combo in itertools.product(range(-9, 3), repeat=len(names)):
         env = dict(zip(names, combo))
-        assert eval(folded, {}, env) == eval(expr, {}, env), (expr, folded, env)
+        assert evaluate(folded, env) == evaluate(expr, env), (expr, folded, env)
 
 
 def test_a_chain_that_cancels_completely_is_left_alone() -> None:

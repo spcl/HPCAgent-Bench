@@ -123,7 +123,7 @@ def test_computed_index_call_in_subscript() -> None:
 
 # (b') argmax / argmin OVER a computed operand: idx = np.argmax(np.abs(v))     #
 # The sibling of (b): there the argmax is a subscript INDEX (hoisted by
-# _ComputedIndexCallHoister); here it is the assignment RHS whose OPERAND is a
+# ComputedIndexCallHoister); here it is the assignment RHS whose OPERAND is a
 # non-Name expression. The reduction-operand hoist must spill ``np.abs(v)`` into a
 # fresh ``__cb`` temp before the arg-reduction scaffold (which needs a Name operand)
 # runs -- argmax / argmin were previously excluded from that hoist set, so this

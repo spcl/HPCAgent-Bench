@@ -141,7 +141,7 @@ def test_helper_emitted_as_c_function() -> None:
 
 # AF1: a helper's OWN ``tuple(range(2, x.ndim))`` (the KernelBench instance-norm idiom) never
 # folded when the helper survives inlining -- an early ``if weight is None: return y`` disqualifies
-# Form-3 inlining (frontend.py's ``collect_inlinable_helpers``), so ``_instance_norm`` here is
+# Form-3 inlining (frontend/inlining.py's ``collect_inlinable_helpers``), so ``_instance_norm`` here is
 # built as its own KernelIR by ``build_helper_kirs``, which never ran ``desugar_tuples`` on it.
 # ``axes`` reached ``reject_symbolic_axis`` as an unfolded runtime ``tuple(range(...))`` call and
 # NotImplementedError'd -- exactly the shape of ``conv2d_instance_norm_divide`` and

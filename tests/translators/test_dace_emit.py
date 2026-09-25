@@ -72,13 +72,13 @@ from hpcagent_bench.translators.numpyto_c.dace_emit import (
     version_reallocations,
     version_rebound_names,
     version_rebound_views,
-)  # noqa: E402
+)
 from hpcagent_bench.translators.numpyto_common.frontend import (
     emit_with_inline_fallback,
-    parse_kernel,  # noqa: E402
+    parse_kernel,
     symbol_sign_from_bindings,
 )
-from hpcagent_bench.translators.numpyto_common.ir import (  # noqa: E402
+from hpcagent_bench.translators.numpyto_common.ir import (
     ArrayDesc,
     KernelIR,
     SymbolDesc,
@@ -86,6 +86,7 @@ from hpcagent_bench.translators.numpyto_common.ir import (  # noqa: E402
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank, rank_table
 from tests.translators.bench_yaml import bench_info_for, foundation_kernels, kir_for
+from tests.translators.source_module import evaluate, run_source
 
 if TYPE_CHECKING:
     from dace import SDFG
@@ -255,10 +256,10 @@ def test_a_declared_extent_spells_floor_division_the_way_the_frontend_does() -> 
         "L": dc.symbol("L", dtype=dc.int64, positive=True),
         "K": dc.symbol("K", dtype=dc.int64, positive=True),
     }
-    extent = eval(emitted[len("dc_float[") : -1], scope)  # noqa: S307 -- the annotation, as python runs it
+    extent = evaluate(emitted[len("dc_float[") : -1], scope)
     assert extent.atoms(symbolic.int_floor) and not extent.atoms(sympy.floor)
     # premise: the `//` this replaced is the sympy head the body's spelling never carries
-    assert eval(text, scope).atoms(sympy.floor)  # noqa: S307
+    assert evaluate(text, scope).atoms(sympy.floor)
 
 
 def test_a_declared_extent_whose_divisor_is_one_still_folds_to_the_dividend() -> None:
@@ -269,7 +270,7 @@ def test_a_declared_extent_whose_divisor_is_one_still_folds_to_the_dividend() ->
 
     emitted = array_annotation(ArrayDesc(name="w", dtype="float64", shape=("C // 1",)))
     scope = {"dc": dc, "C": dc.symbol("C", dtype=dc.int64, positive=True)}
-    assert eval(emitted[len("dc_float[") : -1], scope) == scope["C"]  # noqa: S307
+    assert evaluate(emitted[len("dc_float[") : -1], scope) == scope["C"]
 
 
 def test_known_kernels_discovered() -> None:
@@ -381,7 +382,7 @@ def test_dace_keeps_every_np_fft_call_for_its_library_node(body: str) -> None:
     assert "np.fft" not in desugar_for_python_backend(src, kir, backend="numba")
 
 
-# _ResolveZeros: the LOWERED-kir ``__hpcagent_bench_zeros__`` marker resolver. The    #
+# ResolveZeros: the LOWERED-kir ``__hpcagent_bench_zeros__`` marker resolver. The    #
 # sparse oracle exercises the common paths (a first-seen accumulator allocates, #
 # a repeated same-shape ``__reassign__`` drops); these unit-test the edges the   #
 # five shipped Krylov/spmm kernels never hit, so a regression there is caught    #
@@ -487,7 +488,7 @@ def test_resolvezeros_marker_on_unregistered_name_is_dropped() -> None:
     assert body == ["y = C + 1"]  # the C marker vanished, the real use survives
 
 
-# _AnnotateEmptyDtype: dace's ``_numpy_empty`` (array_creation_dace.py) has NO   #
+# AnnotateEmptyDtype: dace's ``_numpy_empty`` (array_creation_dace.py) has NO   #
 # dtype default, unlike its zeros/ones/full siblings which fall back to        #
 # float64 like real numpy -- an asymmetry in dace itself. A bare source call    #
 # IS real numpy's own float64 default, so a missing dtype is filled with the    #
@@ -1127,7 +1128,7 @@ def test_a_bare_alias_rebound_inside_a_loop_is_copied_rather_than_left_a_view() 
     outputs = []
     for text in (src, rewritten):
         scope = {"np": np}
-        exec(text, scope)  # noqa: S102 -- the source is a literal in this test
+        run_source(text, scope)
         out = np.zeros((6, 4))
         scope["k"](np.arange(24, dtype=np.float64), out)
         outputs.append(out)
@@ -1493,7 +1494,7 @@ def test_a_view_rebound_to_a_value_before_a_loop_carried_update_gets_a_name_per_
     outputs = []
     for text in (src, rewritten):
         scope = {"np": np}
-        exec(text, scope)  # noqa: S102 -- the source is a literal in this test
+        run_source(text, scope)
         out = np.zeros((2, 4))
         scope["k"](np.arange(24, dtype=np.float64).reshape(6, 4), out)
         outputs.append(out)
@@ -1526,7 +1527,7 @@ def agrees_with_numpy(src: str) -> str:
     outputs = []
     for text in (src, rewritten):
         scope = {"np": np}
-        exec(text, scope)  # noqa: S102 -- the source is a literal in this test
+        run_source(text, scope)
         a = np.arange(24, dtype=np.float64).reshape(6, 4)
         out = np.zeros((2, 4))
         scope["k"](a, out)
@@ -1553,7 +1554,7 @@ def value_versioned(src: str) -> str:
     outputs = []
     for text in (src, rewritten):
         scope = {"np": np}
-        exec(text, scope)  # noqa: S102 -- the source is a literal in this test
+        run_source(text, scope)
         out = np.zeros((2, 4))
         scope["k"](np.arange(24, dtype=np.float64).reshape(6, 4), out)
         outputs.append(out)
@@ -1780,7 +1781,7 @@ def test_a_store_through_a_reshaped_name_never_writes_through_a_view_dace_cannot
     program = transform(MaterializeWrittenReshape(), src)
     assert "flat = np.copy(out.reshape((6,), order='F'))" in program, program
     scope = {"np": np}
-    exec(program, scope)  # noqa: S102
+    run_source(program, scope)
     x, idx, v = np.arange(6.0).reshape(2, 3), np.array([0, 4]), np.array([10.0, 20.0])
     want = np.zeros((2, 3))
     want[:, :] = x
@@ -1805,7 +1806,7 @@ def test_a_store_through_a_reshaped_fft_result_writes_a_copy() -> None:
     program = transform(MaterializeWrittenReshape(), src)
     assert "flat = np.copy(out.reshape((6,), order='F'))" in program, program
     scope = {"np": np}
-    exec(program, scope)  # noqa: S102
+    run_source(program, scope)
     x, idx, v = np.arange(6.0).reshape(2, 3), np.array([0, 4]), np.array([10.0, 20.0])
     want = np.fft.fftn(x, axes=(0, 1)).reshape((6,), order="F")
     want[idx] += v
@@ -1819,7 +1820,7 @@ def test_a_minus_one_flatten_keeps_its_order_when_it_becomes_ravel() -> None:
     out = transform(NormalizeReshape(), src)
     assert out.count("reshape") == 0, out
     scope = {"np": np}
-    exec(out, scope)  # noqa: S102
+    run_source(out, scope)
     x = np.arange(24.0).reshape(2, 3, 4)
     got_a, got_b = scope["k"](x)
     want = x.reshape((-1,), order="F")
@@ -1834,7 +1835,7 @@ def test_a_ternary_between_a_real_and_a_complex_array_binds_both_branches_at_the
     program = transform(DesugarTernary({"d": "complex"}, {"d": 1}), src)
     assert "np.real(d).astype(d.dtype)" in program, program
     scope = {"np": np}
-    exec(program, scope)  # noqa: S102
+    run_source(program, scope)
     d = np.array([0.5 + 2.0j, -3.0 + 1.0j, 2.0 - 0.5j])
     for g in (True, False):
         assert np.array_equal(scope["k"](d, g), np.where(np.abs(d) > 1.0, d.real if g else d, 0.0)), g
@@ -1874,8 +1875,8 @@ def test_a_point_wise_fancy_write_becomes_a_loop_that_numpy_agrees_with() -> Non
     # The compound index is bound ONCE, before the loop: numpy evaluates it before the store.
     assert "__hpcagent_bench_scatter1_x1 = (idx + m) % 8" in out
     scope_src, scope_out = {"np": np}, {"np": np}
-    exec(src, scope_src)  # noqa: S102 -- the source is a literal in this test
-    exec(out, scope_out)  # noqa: S102
+    run_source(src, scope_src)
+    run_source(out, scope_out)
     a, b = np.zeros((8, 8)), np.zeros((8, 8))
     scope_src["k"](a, np.arange(8), 3, 1.6)
     scope_out["k"](b, np.arange(8), 3, 1.6)
@@ -2061,7 +2062,7 @@ def run_lowered(src: str, ranks: dict, complex_arrays: set = frozenset(), **bind
     fn.body.append(ast.parse("return __probe__").body[0])
     module = ast.fix_missing_locations(ast.Module(body=[fn], type_ignores=[]))
     scope = {"np": np}
-    exec(compile(module, "<lowered>", "exec"), scope)  # noqa: S102
+    run_source(module, scope, "<lowered>")
     return scope["k"](**binds)
 
 
@@ -2188,7 +2189,7 @@ def test_a_flatten_is_one_axis_and_a_conjugate_keeps_every_axis_of_its_receiver(
     ).body[0]
     ranks = rank_table(fn, {"a": 3, "z": 2})
     scope = {"np": np, "a": np.zeros((2, 3, 4)), "z": np.ones((2, 5), dtype=complex)}
-    want = {stmt.targets[0].id: eval(ast.unparse(stmt.value), scope).ndim for stmt in fn.body}  # noqa: S307
+    want = {stmt.targets[0].id: evaluate(ast.unparse(stmt.value), scope).ndim for stmt in fn.body}
     assert want == {"f": 1, "c": 2, "d": 2, "e": 2}
     assert {name: ranks[name] for name in want} == want
 
@@ -2204,7 +2205,7 @@ def test_a_minus_one_reshape_is_one_axis_so_a_gather_through_it_keeps_its_axis()
     scope = {"np": np, "a": np.array([[0, 1], [2, 0]]), "deexx": np.ones((3, 2)), "ii": 1}
     want = {}
     for stmt in fn.body:
-        scope[stmt.targets[0].id] = eval(ast.unparse(stmt.value), scope)  # noqa: S307
+        scope[stmt.targets[0].id] = evaluate(ast.unparse(stmt.value), scope)
         want[stmt.targets[0].id] = np.ndim(scope[stmt.targets[0].id])
     assert want == {"f": 1, "g": 1, "d": 1}
     assert {name: ranks.get(name) for name in want} == want
@@ -2228,7 +2229,7 @@ def test_an_inlined_einsum_takes_the_result_dtype_of_all_its_operands() -> None:
     program = desugar_for_python_backend(src, kir, backend="dace")
     assert "np.einsum" not in program and "vcb.dtype)" in program, program
     scope = {"np": np}
-    exec(program, scope)  # noqa: S102
+    run_source(program, scope)
     rng = np.random.default_rng(0)
     qr, vc = rng.random((2, 3, 4)), rng.random(6) + 1j * rng.random(6)
     out = np.zeros((2, 4), dtype=np.complex128)
@@ -2263,7 +2264,7 @@ def test_an_einsum_has_the_rank_of_its_output_subscripts() -> None:
     scope["f"] = np.ones((2, 3))
     want = {}
     for stmt in fn.body:
-        scope[stmt.targets[0].id] = eval(ast.unparse(stmt.value), scope)  # noqa: S307
+        scope[stmt.targets[0].id] = evaluate(ast.unparse(stmt.value), scope)
         want[stmt.targets[0].id] = np.ndim(scope[stmt.targets[0].id])
     assert want == {"x": 2, "y": 2, "z": 2, "s": 0, "p": 2}
     assert {name: ranks.get(name) for name in want} == want
@@ -2390,8 +2391,8 @@ def test_the_spliced_program_computes_what_the_named_one_did() -> None:
     assert "d = hi - lo" not in after, "the pass did not fire, so this proves nothing"
     before_ns: dict = {}
     after_ns: dict = {}
-    exec(compile(tree, "<before>", "exec"), before_ns)  # noqa: S102 -- the source is built above
-    exec(compile(ast.parse(after), "<after>", "exec"), after_ns)  # noqa: S102
+    run_source(tree, before_ns, "<before>")
+    run_source(ast.parse(after), after_ns, "<after>")
     for st in range(1, 5):
         for lo in range(0, 5):
             for hi in range(lo, lo + 6):
@@ -2622,7 +2623,7 @@ def test_the_frozen_declared_extent_is_the_one_the_body_computes() -> None:
             for n in ("batch_size", "out_channels", "height", "width", "kernel_size")
         },
     }
-    extents = eval(f"({annotation[len('dc_float[') : -1]},)", scope)  # noqa: S307 -- as python runs it
+    extents = evaluate(f"({annotation[len('dc_float[') : -1]},)", scope)
     assert extents[2] == scope["height"] - scope["kernel_size"] + 1
     assert extents[3] == scope["width"] - scope["kernel_size"] + 1
 
@@ -2757,7 +2758,7 @@ def test_an_augmented_store_computes_what_numpy_computes(form: str, tmp_path: pa
     body = AUG_FORMS[form]
     want = augmented_arrays()
     scope: dict[str, Any] = {}
-    exec(compile(augmented_kernel(body), "aug_numpy", "exec"), scope)  # noqa: S102 -- the kernel is built above
+    run_source(augmented_kernel(body), scope, "aug_numpy")
     scope["aug"](**want)
     sdfg = parsed_augmented_program(tmp_path, body)
     sdfg.build_folder = str(tmp_path / "build")

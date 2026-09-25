@@ -37,28 +37,28 @@ Status legend: **landed** = merged + unit-tested; **in-progress** = agent buildi
 
 | Op / pattern | Kernels needing it | Mechanism | Location | Status |
 |---|---|---|---|---|
-| module-level numeric tuple/list const inline (`_CW=(...)`) | laplacian_stencil_3d | fold to literal tuple (`seq_consts`) so `enumerate` unrolls to compile-time weights | `numpyto_common/frontend.py` `_inline_module_constants` | landed |
-| `.ravel()`/`.flatten()` -> `np.reshape(x,(-1,))` | poisson_cg_3d (`r.ravel()@r.ravel()`) | method rewriter | `numpyto_common/lowering.py` `_MethodCallRewriter` | landed |
-| `enumerate(seq, start=s)` + literal-tuple unroll | laplacian_stencil_3d | `_EnumerateZipRewriter` start= handling + unroll | `numpyto_common/lowering.py` | landed |
-| inline-hoist output shape for `roll`/`cholesky`/`tril`/`triu`/`reshape(-1)` | poisson, laplacian | `_CallHoister._derive_output_shape` branches | `numpyto_common/lib_nodes.py` | landed |
-| `np.diag` (1-D->matrix w/ k offset; 2-D->delegate `expand_diagonal`) | ls3df_scf (Lanczos tridiagonal) | `expand_diag` zero-then-write; shape via `_iter_extent_of` | `numpyto_common/lib_nodes.py` | landed |
-| `np.fft.fftfreq(N, d=)` | ls3df_scf | `expand_fftfreq`; even/odd neg-freq wrap; real output | `numpyto_common/lib_nodes.py` | landed |
-| `np.einsum` with non-Name operand (`psi_frag[f]`) | fragment_patch_density, ls3df_scf | materialize operand to fresh scratch buffer, then expand | `numpyto_common/lib_nodes.py` `expand_einsum` | landed (caveat: Subscript operand nested *inside a BinOp* still will not hoist) |
-| `np.linalg.eigvalsh(A)` (eigenvalues-only) | ls3df_scf (`_upper_bound`) | extend eigh cyclic-Jacobi, eigenvalues-only single-Name target | `numpyto_common/numpy_desugar.py` | landed |
-| reduction method on a Call receiver (`np.abs(...).sum()`) | ls3df_scf | hoist Call receiver into temp before method rewrite | `numpyto_common/lowering.py` | landed |
-| computed index in subscript (`U[np.argmax(...), j]`) | rayleigh_ritz_rotation | hoist non-trivial Call index into temp Name | `numpyto_common/lowering.py` | landed |
-| arg-reduction over a computed operand (`idx = np.argmax(np.abs(v))`) | native capability (assignment-RHS sibling of the subscript-index form) | add `argmax`/`argmin` to the reduction-operand hoist set so the non-Name operand spills to a `__cb` temp before the arg-reduction scaffold (which requires a Name) runs | `numpyto_common/lib_nodes.py` `LibNodeRewriter.visit_Call` | landed |
-| whole-array simultaneous rebind (`X,Y,sigma = Y,Ynew,sigma_new`) | chebyshev_filter_subspace, ls3df_scf | `ShapeTableTupleSplit` copy-through temp buffers (not pointer-swap) | `numpyto_common/lowering.py` | landed |
-| **index normalization** -- chained / ellipsis / trailing subscript -> canonical Name-base full-`Tuple` (`A[f][...,0]` -> `A[f,...,0]`) | ls3df_scf, fragment_patch_density | normalize the index BEFORE libnode-expand so one code path handles every subscript form | `numpyto_common/lowering.py` `_lp_normalize_index_access` | landed |
+| module-level numeric tuple/list const inline (`_CW=(...)`) | laplacian_stencil_3d | fold to literal tuple (`seq_consts`) so `enumerate` unrolls to compile-time weights | `numpyto_common/frontend/module_constants.py` `inline_module_constants` | landed |
+| `.ravel()`/`.flatten()` -> `np.reshape(x,(-1,))` | poisson_cg_3d (`r.ravel()@r.ravel()`) | method rewriter | `numpyto_common/lowering/hoisting.py` `MethodCallRewriter` | landed |
+| `enumerate(seq, start=s)` + literal-tuple unroll | laplacian_stencil_3d | `EnumerateZipRewriter` start= handling + unroll | `numpyto_common/lowering/calls.py` | landed |
+| inline-hoist output shape for `roll`/`cholesky`/`tril`/`triu`/`reshape(-1)` | poisson, laplacian | `CallHoister.derive_output_shape` branches | `numpyto_common/lib_nodes/call_hoist.py` | landed |
+| `np.diag` (1-D->matrix w/ k offset; 2-D->delegate `expand_diagonal`) | ls3df_scf (Lanczos tridiagonal) | `expand_diag` zero-then-write; shape via `iter_extent_of` | `numpyto_common/lib_nodes/triangular.py` | landed |
+| `np.fft.fftfreq(N, d=)` | ls3df_scf | `expand_fftfreq`; even/odd neg-freq wrap; real output | `numpyto_common/lib_nodes/fft.py` | landed |
+| `np.einsum` with non-Name operand (`psi_frag[f]`) | fragment_patch_density, ls3df_scf | materialize operand to fresh scratch buffer, then expand | `numpyto_common/lib_nodes/contractions.py` `expand_einsum` | landed (caveat: Subscript operand nested *inside a BinOp* still will not hoist) |
+| `np.linalg.eigvalsh(A)` (eigenvalues-only) | ls3df_scf (`_upper_bound`) | extend eigh cyclic-Jacobi, eigenvalues-only single-Name target | `numpyto_common/numpy_desugar/eigh.py` | landed |
+| reduction method on a Call receiver (`np.abs(...).sum()`) | ls3df_scf | hoist Call receiver into temp before method rewrite | `numpyto_common/lowering/hoisting.py` | landed |
+| computed index in subscript (`U[np.argmax(...), j]`) | rayleigh_ritz_rotation | hoist non-trivial Call index into temp Name | `numpyto_common/lowering/hoisting.py` | landed |
+| arg-reduction over a computed operand (`idx = np.argmax(np.abs(v))`) | native capability (assignment-RHS sibling of the subscript-index form) | add `argmax`/`argmin` to the reduction-operand hoist set so the non-Name operand spills to a `__cb` temp before the arg-reduction scaffold (which requires a Name) runs | `numpyto_common/lib_nodes/call_hoist.py` `CallHoister.visit_Call` | landed |
+| whole-array simultaneous rebind (`X,Y,sigma = Y,Ynew,sigma_new`) | chebyshev_filter_subspace, ls3df_scf | `ShapeTableTupleSplit` copy-through temp buffers (not pointer-swap) | `numpyto_common/lowering/tuples.py` | landed |
+| **index normalization** -- chained / ellipsis / trailing subscript -> canonical Name-base full-`Tuple` (`A[f][...,0]` -> `A[f,...,0]`) | ls3df_scf, fragment_patch_density | normalize the index BEFORE libnode-expand so one code path handles every subscript form | `numpyto_common/lowering/pipeline.py` `lp_normalize_index_access` | landed |
 | `np.meshgrid(..., indexing=)` multi-output | ls3df_scf | `expand_meshgrid` + multi-output tuple-unpack hoist | lib_nodes + lowering | planned |
 | `np.ix_` open-mesh gather / scatter-add | fragment_patch_density, ls3df_scf | new advanced-index lowering to nested loops | lowering (+lib_nodes) | planned |
-| keyword-only config flags the harness never passes (`*, noncolin=False, deeq_nc=None`) | cegterg (numba: `expected 42, got 25`) | fold through the native frontend's own `_fold_default_args`, numba + pythran | `numpyto_common/numpy_desugar.py` `fold_kernel_defaults` | landed |
-| `np.fft.*` spelled inside a `return` | cegterg (`_fft_g2r`) | bind the value, lower the binding to the loop DFT, return the name | `numpyto_common/numpy_desugar.py` `_FftInline.visit_Return` | landed |
-| `x.reshape(..., order="F")` (numba: `assert not kws`) | cegterg | `np.ascontiguousarray(x.T).reshape(reversed).T` | `numpyto_common/numpy_desugar.py` `ReshapeFortranOrderInline` | landed |
-| `dtype=bool`; real `@` complex (numba dtype-strict typing) | cegterg (`conv`, `deeq @ ps`) | `np.bool_`; cast the real operand to the complex one's `.dtype`, kinds read from REACHABLE call sites | `numpyto_common/numpy_desugar.py` `NumbaDtypeFixups`, `infer_param_kinds` | landed |
-| helper flag every caller passes as one literal (numba types both arms) | cegterg (`lda_plus_u=False, wfcu=None`) | substitute the literal, then `_DeadBranchElim`; never where it would be subscripted/called | `numpyto_common/numpy_desugar.py` `fold_constant_helper_arguments` | landed |
-| rank of `X[b, :]` with `b = slice(lo, hi)`, of `x if x.ndim == 2 else ...`, of a helper's result (numba) | cegterg (`X_b`, `vrs2`, `r`) | `SliceObjectInline`; `NdimFold` over ranks every reachable call site agrees on; `helper_return_ranks` into the rank table | `numpyto_common/numpy_desugar.py` | landed |
-| `(n,1)` against `(n,m)` broadcast, into a partial slice or a name the value reads; `-x[None, :]` (numba parfor `Sizes ... do not match`) | cegterg (`g2[:, None] * X_b`, `r * vrs2[:, ip][:, None]`, `-ew[..][None, :] * ritz_s`) | `_OuterBroadcastPeel` fills a temp then stores it; `_drop_newaxes` sees through a unary op | `numpyto_common/numpy_desugar.py` | landed |
+| keyword-only config flags the harness never passes (`*, noncolin=False, deeq_nc=None`) | cegterg (numba: `expected 42, got 25`) | fold through the native frontend's own `fold_default_args`, numba + pythran | `numpyto_common/numpy_desugar/constants.py` `fold_kernel_defaults` | landed |
+| `np.fft.*` spelled inside a `return` | cegterg (`_fft_g2r`) | bind the value, lower the binding to the loop DFT, return the name | `numpyto_common/numpy_desugar/fft.py` `FftInline.visit_Return` | landed |
+| `x.reshape(..., order="F")` (numba: `assert not kws`) | cegterg | `np.ascontiguousarray(x.T).reshape(reversed).T` | `numpyto_common/numpy_desugar/numba.py` `ReshapeFortranOrderInline` | landed |
+| `dtype=bool`; real `@` complex (numba dtype-strict typing) | cegterg (`conv`, `deeq @ ps`) | `np.bool_`; cast the real operand to the complex one's `.dtype`, kinds read from REACHABLE call sites | `numpyto_common/numpy_desugar/numba.py` `NumbaDtypeFixups`, `numpy_desugar/kinds.py` `infer_param_kinds` | landed |
+| helper flag every caller passes as one literal (numba types both arms) | cegterg (`lda_plus_u=False, wfcu=None`) | substitute the literal, then `DeadBranchElim`; never where it would be subscripted/called | `numpyto_common/numpy_desugar/constants.py` `fold_constant_helper_arguments` | landed |
+| rank of `X[b, :]` with `b = slice(lo, hi)`, of `x if x.ndim == 2 else ...`, of a helper's result (numba) | cegterg (`X_b`, `vrs2`, `r`) | `SliceObjectInline`; `NdimFold` over ranks every reachable call site agrees on; `helper_return_ranks` into the rank table | `numpyto_common/numpy_desugar/{numba,ranks}.py` | landed |
+| `(n,1)` against `(n,m)` broadcast, into a partial slice or a name the value reads; `-x[None, :]` (numba parfor `Sizes ... do not match`) | cegterg (`g2[:, None] * X_b`, `r * vrs2[:, ip][:, None]`, `-ew[..][None, :] * ritz_s`) | `OuterBroadcastPeel` fills a temp then stores it; `drop_newaxes` sees through a unary op | `numpyto_common/numpy_desugar/numba.py` | landed |
 
 ### 1b. Kernel-side faithful refactors (when the construct is genuinely un-static)
 
@@ -82,8 +82,8 @@ of the scop so `pet`/`pluto` stops miscompiling it. Gated on the pluto backend w
 
 | Fix | Clears | Mechanism | Location | Status |
 |---|---|---|---|---|
-| #1 `np.pad` edge-clamp -> `max(0, min(d-1, s))` | stencil_3d, stencil_4d, stencil_4d_vc, vector_stencil_4d, vector_stencil_4d_vc | replace two guard-`if`s (pet: "data dependent conditions not supported" -> 159 empty stmts -> out_grid all-zeros) with a single min/max clamp keeping the subscript a bare name | `numpyto_common/lib_nodes.py` `_remap` edge branch | planned |
-| #2 non-unit-stride loop -> unit counter + affine induction | tsvc_2_s116 (+probe unrolled_dense, reroll_saxpy7, strided tsvc) | when `self.pluto` and `abs(step)!=1` constant, emit `int64 v=lo+step*__piv;` over a unit `__piv` (pet models `i+=4` as unit stride -> wrong indices) | `numpyto_c/emit.py` `_emit_for` | planned |
+| #1 `np.pad` edge-clamp -> `max(0, min(d-1, s))` | stencil_3d, stencil_4d, stencil_4d_vc, vector_stencil_4d, vector_stencil_4d_vc | replace two guard-`if`s (pet: "data dependent conditions not supported" -> 159 empty stmts -> out_grid all-zeros) with a single min/max clamp keeping the subscript a bare name | `numpyto_common/lib_nodes/pad.py` `remap` edge branch | planned |
+| #2 non-unit-stride loop -> unit counter + affine induction | tsvc_2_s116 (+probe unrolled_dense, reroll_saxpy7, strided tsvc) | when `self.pluto` and `abs(step)!=1` constant, emit `int64 v=lo+step*__piv;` over a unit `__piv` (pet models `i+=4` as unit stride -> wrong indices) | `numpyto_c/emit.py` `emit_for` | planned |
 | #3 scalar full-reduction -> accumulate into destination element | lda_xc_potential (+likely ecrad_clamped_reduction, quasi_affine_reduce_*, atax-class) | retarget `float(np.sum(...))` temp to `out[0]` when it has a single downstream array-element store (pet drops the scalar `__cb=0` init+accum -> uninit read) | lib_nodes / numpy_desugar | planned |
 
 ### 1c-2. Scope-aware scop emission (landed)
@@ -92,16 +92,16 @@ pet rejects the **entire** region a construct it cannot model lands in, so brack
 function in one `#pragma scop` costs every loop nest in it the moment a single `memset` or
 `malloc` appears anywhere in the kernel -- that pattern put 8 corpus kernels in a
 "pet-unsupported" bucket for no reason but scope size. The emit is per-NEST instead:
-`numpyto_c.emit.pluto_scop_regions` runs at every block depth from `_CBodyEmitter.emit_block` and
+`numpyto_c.emit.pluto_scop_regions` runs at every block depth from `CBodyEmitter.emit_block` and
 wraps each *scopable run* of statements in its own region.
 **Several scops per translation unit is the normal output, not a fallback.**
 
 | Piece | What it does | Location |
 |---|---|---|
 | region splitting | maximal runs of scopable statements, split at each unscopable one; region spans first loop to last loop, so a loop-less statement at either end stays outside where POLYCC-009 cannot drop it | `numpyto_c/emit.py` `pluto_scop_regions` |
-| per-nest, every depth | called from `emit_block`, so a malloc before an *inner* nest scopes that inner nest rather than losing the whole outer one; an enclosing run subsumes what its children marked (scops do not nest) | `numpyto_c/emit.py` `_CBodyEmitter.emit_block` |
-| unscopable set | `malloc`/`calloc`/`realloc`/`free`/`memset`/`memcpy`/`memmove`/`while`, plus an `if` whose condition reads an array or a float (POLYCC-013) | `_PLUTO_UNSCOPABLE_RE`, `_pluto_unscopable` |
-| memset desugar | a zero/one fill emitted **in the body** becomes the affine loop nest it is, so it can stay inside a region instead of splitting it; the fill in the pre-scop declaration block keeps `memset` | `numpyto_c/emit.py` `_fill_loop_stmt`, `_body_fill_stmt` |
+| per-nest, every depth | called from `emit_block`, so a malloc before an *inner* nest scopes that inner nest rather than losing the whole outer one; an enclosing run subsumes what its children marked (scops do not nest) | `numpyto_c/emit.py` `CBodyEmitter.emit_block` |
+| unscopable set | `malloc`/`calloc`/`realloc`/`free`/`memset`/`memcpy`/`memmove`/`while`, plus an `if` whose condition reads an array or a float (POLYCC-013) | `PLUTO_UNSCOPABLE_RE`, `pluto_unscopable` |
+| memset desugar | a zero/one fill emitted **in the body** becomes the affine loop nest it is, so it can stay inside a region instead of splitting it; the fill in the pre-scop declaration block keeps `memset` | `numpyto_c/emit.py` `fill_loop_stmt`, `body_fill_stmt` |
 | multi-scop detector | `scop_nonaffine_reason` scans **every** region, not just the first, so a gather in a later region is not missed | `hpcagent_bench/pluto_affine.py` |
 | no-region decline | a TU that marks no region is not a scop input -- polycc would hand it straight back and the column would time untransformed C | `pluto_affine.has_scop`, `pluto_transform.scop_inputs`, `numerical_oracle._run_pluto` |
 | pet re-parse `omp.h` | polycc re-parses its own output per additional scop; the stub header makes multi-region TUs transform (POLYCC-011) | `pluto_transform.PET_OMP_SHIM` |
@@ -114,15 +114,15 @@ polycc's own re-parse of that output fails mid-run, is documented and not worked
 
 ### 1d. JAX compile-time heuristics (help XLA emit faster) (planned)
 
-Root cause: the oracle exercises the **eager** path (`numpyto_jax/core.py` `_emit_eager_body`),
+Root cause: the oracle exercises the **eager** path (`numpyto_jax/functions.py` `emit_eager_body`),
 which copies Python control flow *verbatim* -- every static loop unrolls to trip-count distinct
 XLA primitives (first-call compile cost) and trip-count sequential dispatches (per-call cost).
-A mature loop classifier (`_classify_for` -> VECTORIZE/FORI/WHILE) already exists but is only
+A mature loop classifier (`classify_for` -> VECTORIZE/FORI/WHILE) already exists but is only
 reached on the dormant jit path. Route eager emission through it.
 
 | Heuristic | Trigger | Emit | Win | Status |
 |---|---|---|---|---|
-| **H1** vectorize independent elementwise/stencil loops | `_classify_for==VECTORIZE` (write-once `a[i]=f(...)`) | whole-array op via existing `_devectorize_index` | removes recurring `.at[i].set` dispatch; kills large-preset `skip:too-long` | planned (first PR) |
+| **H1** vectorize independent elementwise/stencil loops | `classify_for==VECTORIZE` (write-once `a[i]=f(...)`) | whole-array op via existing `devectorize_index` | removes recurring `.at[i].set` dispatch; kills large-preset `skip:too-long` | planned (first PR) |
 | H2 re-roll large static carry loops | static `range`, trip>=8, FORI | `lax.fori_loop` (body compiled once) | O(trip)->O(1) first-call compiles | planned |
 | H3 `lax.scan` for stacked carry-recurrence | FORI + monotone `out[i]=` slot | `lax.scan` | fewer scatters, better fusion | planned |
 | H4 cap unroll to small (<8) static loops | complement of H2 | keep verbatim unroll | guard rail (small loops fuse cheaply) | policy |
@@ -139,9 +139,9 @@ backend. All **landed**.
 - **array-level `.real` / `.imag` / `creal` dtype narrowing** -- an array result of `ifftn(...).real`
   narrows the *array* dtype to real (`double*`, not `double _Complex*`), not just scalars. C
   tolerated the implicit complex->real narrow (imag~=0); C++ `-std=c++20` refused it. Extends the
-  `_fix_real_scalar_dtypes` / `_walk_complex` / `_REAL_FOR_COMPLEX` machinery to arrays
-  (`numpyto_common/lowering.py`).
-- **`.shape` / `.size` on a newaxis / subscript base** folded via `_iter_extent_of` (so
+  `fix_real_scalar_dtypes` / `walk_complex` / `REAL_FOR_COMPLEX` machinery to arrays
+  (`numpyto_common/lowering/`).
+- **`.shape` / `.size` on a newaxis / subscript base** folded via `iter_extent_of` (so
   `x[:, None].shape` / `A[f].size` resolve without a Name base).
 - **`np.fft.fftfreq` / `fftn` two-level attribute shapes** resolved for the `fft.*` result temps.
 - **tuple-local propagation** (`shp = Y.shape` then `shp[0]`) -- the shape tuple flows through the

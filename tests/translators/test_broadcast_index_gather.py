@@ -23,6 +23,7 @@ import ast
 import numpy as np
 
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import desugar_for_python_backend
+from tests.translators.source_module import run_source
 
 SYMS = {"NZ": 2, "NY": 3, "NX": 4, "NG": 5}
 
@@ -74,7 +75,7 @@ def gather_store(src: str) -> str:
 def run_(source: str) -> np.ndarray:
     """Execute ``source``'s kernel under plain numpy and return ``out``."""
     ns: dict = {}
-    exec(compile(source, "<gather>", "exec"), ns)  # noqa: S102 -- the source is built above
+    run_source(source, ns, "<gather>")
     out = np.zeros((SYMS["NZ"], SYMS["NY"], SYMS["NX"]))
     ns["mesh"](G.copy(), IZ.copy(), IY.copy(), IX.copy(), out)
     return out

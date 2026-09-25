@@ -22,6 +22,8 @@ from typing import Any
 from collections.abc import Iterable
 
 from .comments import (
+    block_comment_end,
+    line_end,
     C_FAMILY,
     TS_GRAMMAR,
     normalize_lang,
@@ -165,33 +167,15 @@ def segment_code_spans(src: str, lang: str) -> list[tuple[int, int]]:
             i += 1
             continue
 
-        if has_slashes and ch == "/" and nxt == "/":
+        if (has_slashes and ch == "/" and nxt == "/") or (has_hash and ch == "#") or (has_bang and ch == "!"):
             close(i)
-            while i < n and src[i] != "\n":
-                i += 1
+            i = line_end(src, i)
             code_start = i
             continue
 
         if has_slashes and ch == "/" and nxt == "*":
             close(i)
-            i += 2
-            while i < n and not (src[i] == "*" and i + 1 < n and src[i + 1] == "/"):
-                i += 1
-            i += 2
-            code_start = i
-            continue
-
-        if has_hash and ch == "#":
-            close(i)
-            while i < n and src[i] != "\n":
-                i += 1
-            code_start = i
-            continue
-
-        if has_bang and ch == "!":
-            close(i)
-            while i < n and src[i] != "\n":
-                i += 1
+            i = block_comment_end(src, i)
             code_start = i
             continue
 

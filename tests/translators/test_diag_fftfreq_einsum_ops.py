@@ -7,9 +7,6 @@ extract a diagonal), ``np.fft.fftfreq`` (DFT sample frequencies) and
 The AST tests assert each expander emits the expected loop structure so a
 regression points straight at the cause; ``test_*_e2e`` emit + compile + run the
 kernel on c / cpp / fortran and compare against numpy via the standalone oracle.
-Importing ``run_op`` first puts the translator ``src`` tree on ``sys.path`` (the
-oracle does the insertion), so the subsequent ``numpyto_common`` import resolves;
-this file itself performs no path manipulation.
 """
 
 import ast

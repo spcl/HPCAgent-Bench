@@ -3,7 +3,7 @@
 """Unit tests for newaxis insertion + broadcasting + reductions in
 NumpyToC's lowering machinery.
 
-These cover the *structural* behaviour of ``iter_extent_of_`` and
+These cover the *structural* behaviour of ``iter_extent_of`` and
 ``scalarize_at_iters`` -- the two helpers everything in
 ``lib_nodes`` builds on. The goal is the contract: given a source AST
 and a shape table, the extent / scalarisation come out matching the
@@ -15,7 +15,7 @@ points straight at the failing rule.
 
 import ast
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of_, scalarize_at_iters
+from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of, scalarize_at_iters
 
 
 def expr_(src: str) -> ast.expr:
@@ -35,12 +35,12 @@ def ivar(name: str) -> ast.Name:
 
 def test_bare_name_returns_full_shape() -> None:
     """``A`` with shape (N, M) -> extent (N, M)."""
-    ext = iter_extent_of_(expr_("A"), {"A": ("N", "M")})
+    ext = iter_extent_of(expr_("A"), {"A": ("N", "M")})
     assert unparse_ext(ext) == ("N", "M")
 
 
 def test_unknown_name_returns_none() -> None:
-    assert iter_extent_of_(expr_("A"), {}) is None
+    assert iter_extent_of(expr_("A"), {}) is None
 
 
 # B. Slicing                                                                   #
@@ -48,19 +48,19 @@ def test_unknown_name_returns_none() -> None:
 
 def test_full_slice_yields_full_extent() -> None:
     # Zero-lower-bound is folded -- ``A[:]`` yields the raw upper bound.
-    ext = iter_extent_of_(expr_("A[:]"), {"A": ("N",)})
+    ext = iter_extent_of(expr_("A[:]"), {"A": ("N",)})
     assert unparse_ext(ext) == ("N",)
 
 
 def test_subscript_partial_indexing_preserves_trailing_extent() -> None:
     """``A[i, :]`` on (N, M) -> extent (M,) (scalar axis 0, slice 1)."""
-    ext = iter_extent_of_(expr_("A[i, :]"), {"A": ("N", "M")})
+    ext = iter_extent_of(expr_("A[i, :]"), {"A": ("N", "M")})
     assert unparse_ext(ext) == ("M",)
 
 
 def test_subscript_negative_upper_resolves_against_axis_len() -> None:
     """``A[1:-1]`` on (N,) -> extent (N - 1 - 1,)."""
-    ext = iter_extent_of_(expr_("A[1:-1]"), {"A": ("N",)})
+    ext = iter_extent_of(expr_("A[1:-1]"), {"A": ("N",)})
     # hi = N - 1, lo = 1, extent = N - 1 - 1.
     (s,) = ext
     assert ast.unparse(s) == "N - 1 - 1"
@@ -68,7 +68,7 @@ def test_subscript_negative_upper_resolves_against_axis_len() -> None:
 
 def test_subscript_omitted_trailing_axes_filled_in() -> None:
     """``A[1:N-1]`` on (N, M) -> extent (N-1-1, M)."""
-    ext = iter_extent_of_(expr_("A[1:N - 1]"), {"A": ("N", "M")})
+    ext = iter_extent_of(expr_("A[1:N - 1]"), {"A": ("N", "M")})
     assert len(ext) == 2
     assert ast.unparse(ext[0]) == "N - 1 - 1"
     assert ast.unparse(ext[1]) == "M"
@@ -81,19 +81,19 @@ def test_newaxis_trailing_inserts_length_1() -> None:
     """``Y[:, None]`` on (N,) -> extent (N, 1). The classic
     column-vector pattern used by mandelbrot's
     ``X + Y[:, None] * 1j``."""
-    ext = iter_extent_of_(expr_("Y[:, None]"), {"Y": ("N",)})
+    ext = iter_extent_of(expr_("Y[:, None]"), {"Y": ("N",)})
     assert unparse_ext(ext) == ("N", "1")
 
 
 def test_newaxis_leading_inserts_length_1_at_front() -> None:
     """``Y[None, :]`` on (N,) -> extent (1, N) (row-vector form)."""
-    ext = iter_extent_of_(expr_("Y[None, :]"), {"Y": ("N",)})
+    ext = iter_extent_of(expr_("Y[None, :]"), {"Y": ("N",)})
     assert unparse_ext(ext) == ("1", "N")
 
 
 def test_newaxis_both_sides_keeps_middle_axis() -> None:
     """``A[None, :, None]`` on (N,) -> extent (1, N, 1)."""
-    ext = iter_extent_of_(expr_("A[None, :, None]"), {"A": ("N",)})
+    ext = iter_extent_of(expr_("A[None, :, None]"), {"A": ("N",)})
     assert unparse_ext(ext) == ("1", "N", "1")
 
 
@@ -101,7 +101,7 @@ def test_newaxis_between_existing_axes_on_2d() -> None:
     """``A[:, None, :]`` on (N, M) -> extent (N, 1, M) (the
     conv2d ``input[:, i:i+K, j:j+K, :, np.newaxis]`` shape after
     indexing the slice axes scalar)."""
-    ext = iter_extent_of_(expr_("A[:, None, :]"), {"A": ("N", "M")})
+    ext = iter_extent_of(expr_("A[:, None, :]"), {"A": ("N", "M")})
     assert unparse_ext(ext) == ("N", "1", "M")
 
 
@@ -110,7 +110,7 @@ def test_newaxis_between_existing_axes_on_2d() -> None:
 
 def test_binop_extent_picks_wider_operand() -> None:
     """``A + b`` where A:(N, M) and b:(M,) reports A's 2-D extent."""
-    ext = iter_extent_of_(expr_("A + b"), {"A": ("N", "M"), "b": ("M",)})
+    ext = iter_extent_of(expr_("A + b"), {"A": ("N", "M"), "b": ("M",)})
     assert unparse_ext(ext) == ("N", "M")
 
 
@@ -119,20 +119,20 @@ def test_binop_extent_broadcasts_newaxis_against_vector() -> None:
     extent (N, M). The trailing-1 axis on Y[:, None] stretches
     to M; the leading axis on X is implicit-1 and stretches to
     N. This is the mandelbrot per-pixel grid."""
-    ext = iter_extent_of_(expr_("X + Y[:, None]"), {"X": ("M",), "Y": ("N",)})
+    ext = iter_extent_of(expr_("X + Y[:, None]"), {"X": ("M",), "Y": ("N",)})
     assert unparse_ext(ext) == ("N", "M")
 
 
 def test_binop_broadcast_equal_rank() -> None:
     """``A + B`` with both (N, M) -> (N, M); no stretching needed."""
-    ext = iter_extent_of_(expr_("A + B"), {"A": ("N", "M"), "B": ("N", "M")})
+    ext = iter_extent_of(expr_("A + B"), {"A": ("N", "M"), "B": ("N", "M")})
     assert unparse_ext(ext) == ("N", "M")
 
 
 def test_binop_broadcast_short_against_2d() -> None:
     """``A + b`` with A:(N, M) and b:(M,) -> (N, M)
     (rank-aligned broadcast pads b's leading axis)."""
-    ext = iter_extent_of_(expr_("A + b"), {"A": ("N", "M"), "b": ("M",)})
+    ext = iter_extent_of(expr_("A + b"), {"A": ("N", "M"), "b": ("M",)})
     assert unparse_ext(ext) == ("N", "M")
 
 
@@ -207,7 +207,7 @@ def test_extent_of_reduction_argument_drops_axis() -> None:
     """``np.sum(A, axis=0)`` is handled by the reduction expander;
     here we just verify that ``A`` is still pickable as a 2-D
     extent so the expander can compute the result rank."""
-    ext = iter_extent_of_(expr_("A"), {"A": ("N", "M")})
+    ext = iter_extent_of(expr_("A"), {"A": ("N", "M")})
     assert unparse_ext(ext) == ("N", "M")
 
 
@@ -228,13 +228,13 @@ GATHER_SHAPES = {
 def test_chained_gather_keeps_its_axis_under_a_newaxis() -> None:
     """``x[aj][:, None, :, :]``: the gather KEEPS an axis per index dim, so the residual
     base is (pairs, UNROLLJ, 3) and the newaxis inserts a unit axis into it."""
-    ext = iter_extent_of_(expr_("x[aj][:, None, :, :]"), GATHER_SHAPES)
+    ext = iter_extent_of(expr_("x[aj][:, None, :, :]"), GATHER_SHAPES)
     assert unparse_ext(ext) == ("pairs", "1", "UNROLLJ", "3")
 
 
 def test_chained_scalar_index_still_drops_its_axis() -> None:
     """The scalar-chain case the gather rule must not break: ``psi[f]`` drops axis 0."""
-    ext = iter_extent_of_(expr_("psi[f][..., 0]"), GATHER_SHAPES)
+    ext = iter_extent_of(expr_("psi[f][..., 0]"), GATHER_SHAPES)
     assert unparse_ext(ext) == ("X", "Y")
 
 
@@ -244,11 +244,11 @@ def test_multiple_index_arrays_broadcast_rather_than_take_the_longest() -> None:
     Taking the longest is only right when the ranks differ; on a tie it silently kept the
     first operand's size-1 axes.
     """
-    ext = iter_extent_of_(expr_("nbfp[type_i[None, :, None], type_j[:, None, :], 0]"), GATHER_SHAPES)
+    ext = iter_extent_of(expr_("nbfp[type_i[None, :, None], type_j[:, None, :], 0]"), GATHER_SHAPES)
     assert unparse_ext(ext) == ("pairs", "UNROLLI", "UNROLLJ")
 
 
 def test_gather_index_may_be_an_expression_not_only_a_name() -> None:
     """``table[ri + 1]`` is a gather: its extent is the INDEX's, not the table's."""
-    ext = iter_extent_of_(expr_("table[ri + 1]"), GATHER_SHAPES)
+    ext = iter_extent_of(expr_("table[ri + 1]"), GATHER_SHAPES)
     assert unparse_ext(ext) == ("pairs", "UNROLLI", "UNROLLJ")

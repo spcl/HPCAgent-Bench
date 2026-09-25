@@ -12,8 +12,8 @@ passed straight through to that backend's ``emit`` sub-command. So
     numpyto --target pythran  --kernel ... --bench-info ... --out ... [--precision ...]
     numpyto --target cpp_isopar --kernel ... --bench-info ... --out ...
 
-are equivalent to invoking each per-package CLI directly. The per-package CLIs
-remain (the regen scripts call them); this is the single front door over them.
+are equivalent to invoking each per-package CLI directly (the regen scripts call
+those); this is the single front door over them.
 
 ``cpp_isopar`` is the C++ backend spelled over ``<algorithm>``/``<numeric>``: a
 map is a ``std::transform``, a reduction a ``std::reduce``, a prefix recurrence
@@ -28,9 +28,7 @@ schedule.
 one backend. ``polly`` reuses the same C/C++ source (Polly is a compile-flag
 variant -- nothing changes in emission); ``pluto`` is the polycc input that
 emit produces. They are distinct front-door names because the runtime exposes
-them (Polly/Pluto were separate file tracks; now flag presets).
-
-The backends are subpackages of ``hpcagent_bench.translators``; the driver only resolves the module.
+them as flag presets.
 """
 
 import argparse

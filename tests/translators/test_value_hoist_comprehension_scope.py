@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import desugar_for_python_backend
+from tests.translators.source_module import run_source
 
 
 def kernel_ir(**arrays: tuple[str, ...]) -> SimpleNamespace:
@@ -20,7 +21,7 @@ def kernel_ir(**arrays: tuple[str, ...]) -> SimpleNamespace:
 
 def run_kernel(src: str, *args: object) -> None:
     namespace: dict[str, object] = {"np": np}
-    exec(compile(src, "<desugared>", "exec"), namespace)
+    run_source(src, namespace, "<desugared>")
     namespace["k"](*args)
 
 

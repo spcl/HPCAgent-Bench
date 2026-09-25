@@ -18,6 +18,7 @@ from hpcagent_bench.translators.numpyto_c.dace_emit import SplitTupleAssign
 from hpcagent_bench.translators.numpyto_common.emitter import TupleTargetSplitter
 from hpcagent_bench.translators.numpyto_common.lowering import ShapeTableTupleSplit
 from hpcagent_bench.translators.numpyto_common.statement_desugar import SplitTupleUnpack
+from tests.translators.source_module import run_source
 
 EVERY_BACKEND = [
     pytest.param(SplitTupleAssign, id="dace"),
@@ -40,7 +41,7 @@ def unchanged(source: str) -> str:
 def bound(source: str, **values: object) -> dict[str, object]:
     """The names ``source`` leaves bound, starting from ``values``; minted ``__`` temps are dropped."""
     scope: dict[str, object] = {"np": np, **values}
-    exec(source, scope)  # noqa: S102 -- the source is a literal in this test
+    run_source(source, scope)
     return {name: value for name, value in scope.items() if not name.startswith("__")}
 
 

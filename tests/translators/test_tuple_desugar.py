@@ -15,6 +15,7 @@ import pytest
 
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import fold_list_accumulators, rewrite_curve_fit
 from hpcagent_bench.translators.numpyto_common.tuple_desugar import desugar_tuples
+from tests.translators.source_module import run_source
 
 SCALARS = frozenset({"p", "s", "k"})
 ARRAYS = frozenset({"x", "out"})
@@ -338,9 +339,9 @@ def test_a_cut_to_a_different_length_is_left_alone() -> None:
 def as_written_and_folded(source: str, *args: object) -> tuple[np.ndarray, np.ndarray]:
     """``f(*args)`` from ``source`` as Python runs it, and from its folded form."""
     written: dict[str, object] = {"np": np}
-    exec(textwrap.dedent(source), written)
+    run_source(textwrap.dedent(source), written)
     folded: dict[str, object] = {"np": np}
-    exec(folded_lists(source), folded)
+    run_source(folded_lists(source), folded)
     return np.asarray(written["f"](*args)), np.asarray(folded["f"](*args))
 
 

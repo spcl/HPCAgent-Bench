@@ -89,5 +89,5 @@ def test_emitted_fortran_never_calls_aint_on_an_integer_operand() -> None:
     oo.emit_native(npy, bi, d, "f")
     text = (d / "f.f90").read_text()
     # A division feeding aint() must be wrapped in REAL(..., c_double) on any operand
-    # _expr_is_integer would call integer -- the same guard the Div BinOp path applies.
+    # expr_is_integer would call integer -- the same guard the Div BinOp path applies.
     assert "aint((INT(" not in text, f"aint() reached an unpromoted integer divide:\n{text}"

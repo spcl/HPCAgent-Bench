@@ -8,7 +8,7 @@ Fortran has no ternary operator, so the emitter used to lower ``b if t else c`` 
 before it selects one. That is exactly backwards for the guard an ``IfExp`` is usually written
 for -- ``y = a / x if x != 0.0 else 0.0`` divides by zero on the excluded value anyway, and
 ``a[idx[i]] if idx[i] < n else 0.0`` reads out of bounds anyway. C's ``?:`` short-circuits, so
-this was Fortran-only. ``numpyto_fortran.emit._hoist_ifexp`` now lowers every ``IfExp`` to an
+this was Fortran-only. ``numpyto_fortran.emit.hoist_ifexp`` now lowers every ``IfExp`` to an
 explicit ``if/else`` over a fresh temp on the Fortran-only tree copy.
 
 Both probes run the compiled kernel from a generated Fortran PROGRAM, in a subprocess:
@@ -39,6 +39,7 @@ import pytest
 
 from hpcagent_bench.translators.numpyto_common import dtypes
 from tests.translators import op_oracle as oo
+from tests.translators.source_module import run_source
 
 #: Deliberately NOT the shared oracle's flags -- see the module docstring for why -O0.
 FORTRAN_O0 = ["gfortran", "-O0", "-ffree-form", "-ffree-line-length-none"]
@@ -76,7 +77,7 @@ def python_reference(src: str, func: str, args: Sequence[np.ndarray], out: np.nd
     excluded branch is never evaluated -- no divide-by-zero warning and no out-of-range index, and
     no hand-derived vectorized stand-in that could silently drift from the source under test."""
     ns: dict[str, Any] = {}
-    exec(compile(src, "<ref>", "exec"), ns)  # noqa: S102 -- the kernel source is a module constant
+    run_source(src, ns, "<ref>")
     ns[func](*args, out)
     return out
 
