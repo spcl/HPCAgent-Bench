@@ -39,7 +39,7 @@ runs:
       shell: bash
       run: |
         # ubuntu-24.04 restricts unprivileged userns via AppArmor, which breaks seal.py's id-map
-        # (actions/runner-images#10443). Written through /proc: the bare mpi-sealed image has no procps.
+        # (actions/runner-images#10443). The mpi job's sealed phase needs it.
         set -euo pipefail
         knob=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
         if [ -e "$knob" ] && [ "$(cat "$knob")" != 0 ]; then
