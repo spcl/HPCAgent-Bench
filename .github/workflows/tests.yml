@@ -807,7 +807,6 @@ jobs:
 
       - uses: ./.github/actions/setup
         if: ${{ !cancelled() }}
-        with:
       - name: Phase 7 -- export (+ publish on a main push) the HuggingFace dataset
         # The parquet artifact is always built; publishing needs a push to main, the HF secrets and
         # a green unit, integration and translators.
