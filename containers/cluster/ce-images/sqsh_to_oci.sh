@@ -4,32 +4,16 @@
 #   containers/cluster/ce-images/sqsh_to_oci.sh $SCRATCH/ce-images/hpcagent-bench-sglang-mi300.sqsh
 #   -> $SCRATCH/ce-images/hpcagent-bench-sglang-mi300.oci.tar and .oci.tar.sha256
 #
-# WHY. An image built before build.sh saved OCI archives exists only as the .sqsh the runs mounted;
-# its build graphroot died with the build job. Rebuilding it gives a DIFFERENT image (apt and PyPI
-# moved underneath the Dockerfile), so to publish what the runs actually used, the squashfs itself
-# is the source. The file content of the result is the squashfs, byte for byte.
+# The squashfs is the source of truth (rebuilding gives a different image), so its byte content
+# becomes the archive content, cut into LAYER_BYTES slices of disjoint files (a single layer would
+# exceed the registry's 10 GB limit) since a squashfs carries no original layer structure.
 #
-# LAYERS. A squashfs is flat, so the original layer structure is gone. One layer would do, except
-# that the registry refuses a layer over 10 GB (push_image.sh) and these images are 55-67 GB
-# uncompressed. So the tree is cut into LAYER_BYTES slices of DISJOINT files, in find order; every
-# slice also carries the directory entries above its first file, identical in every slice. Stacked,
-# the slices are the squashfs. Ownership is all-root because `enroot import` squashes with
-# -all-root, so that is what the runs saw.
+# Image config is read back from what `enroot import` wrote into the rootfs (/etc/environment,
+# /etc/rc, /etc/fstab), not guessed from the Dockerfile at HEAD, so it matches what the runs
+# actually used. enroot records no User/ExposedPorts/StopSignal/Healthcheck; left unset.
 #
-# IMAGE CONFIG. Not a guess from the Dockerfile at HEAD, which may no longer be what built the
-# image: it is read back from what `enroot import` wrote into the rootfs from the ORIGINAL image
-# config (/usr/lib/enroot/docker.sh, docker::configure), which is also exactly what the runs used:
-#     /etc/environment   config.Env, one entry per line, in order
-#     /etc/rc            config.Labels as `# key value` comments, WorkingDir as `cd "<dir>"`,
-#                        Entrypoint and Cmd as the two bash-quoted `exec` lines
-#     /etc/fstab         config.Volumes
-# enroot records no User, ExposedPorts, StopSignal or Healthcheck; they are left unset (User
-# unset is root, which is what every Dockerfile here sets). Label values that held a newline were
-# flattened to one line by enroot. The enroot-written files stay in the rootfs, as the runs saw them.
-#
-# Streams from a squashfuse mount: no unsquash. The mountpoint is an empty directory under
-# /dev/shm because FUSE refuses to mount over Lustre; nothing is written there. Temporary layer
-# blobs go under WORK_DIR on scratch and are deleted at exit.
+# Streams from a squashfuse mount (no unsquash); the mountpoint sits under /dev/shm since FUSE
+# refuses to mount over Lustre. Temporary layer blobs go under WORK_DIR and are deleted at exit.
 #
 #   LAYER_BYTES      uncompressed bytes per layer before a new one starts (default 4 GiB)
 #   MAX_LAYER_GB     refuse a compressed layer above this, as push_image.sh does (default 10)
@@ -84,16 +68,14 @@ source_sha256() {
     printf '%s' "${sum}"
 }
 
-# `exec <words>` from /etc/rc to a JSON array. enroot writes the words with bash's ${x[@]@Q},
-# which quotes every word in single quotes; anything else is refused before the eval, so the eval
-# only ever sees literal single-quoted strings.
+# `exec <words>` from /etc/rc to a JSON array. enroot writes the words single-quoted via ${x[@]@Q};
+# anything else is refused before the eval below runs.
 exec_words_json() {
     local words="$1" quoted="^([[:space:]]*'[^']*')*[[:space:]]*\$"
     local -a parsed=()
     [[ "${words}" =~ ${quoted} ]] || die "unexpected /etc/rc exec line: ${words}"
     eval "parsed=(${words})"
-    # One word per line into jq, not `jq --args`, which parses a word like -c as its own option.
-    # A word cannot hold a newline: the exec line was read from /etc/rc as a single line.
+    # One word per line into jq, not `jq --args`, which would parse a word like -c as its own flag.
     if (( ${#parsed[@]} == 0 )); then
         printf '[]'
     else
@@ -141,12 +123,9 @@ recorded_config() {
         + (if ($vols | length) > 0 then {Volumes: $vols} else {} end)'
 }
 
-# Cut the tree into NUL-separated file lists, one per layer, in find order (squashfs directories
-# are sorted, so the order is stable). A list starts with the ancestors of its first entry: every
-# other entry's parent is either in the same list or one of those ancestors, because find walks
-# pre-order. A hard-link group stays in ONE layer, the one its first link lands in, so it is still
-# a hard link when stacked: a later link is appended to that layer's list after its ancestors.
-# tar stores the data at the first link and a link entry after it, so the data counts once.
+# Cut the tree into NUL-separated file lists, one per layer, in stable find/pre-order. Each list
+# starts with the ancestors of its first entry. A hard-link group stays in one layer (the one its
+# first link lands in) so it is still a hard link when stacked, and tar stores its data once.
 plan_layers() {
     (cd "${MNT}" && find . -mindepth 1 -printf '%y %s %n %i %P\0') \
     | gawk -v RS='\0' -v max="${LAYER_BYTES}" -v dir="${WORK_DIR}/lists" '
@@ -287,7 +266,7 @@ jq -cn --arg md "${manifest_digest}" --argjson ms "${manifest_size}" --arg ref "
 printf '{"imageLayoutVersion":"1.0.0"}' > "${LAYOUT}/oci-layout"
 
 fusermount -u "${MNT}"
-# Sorted, fixed owner and mtime: the same squashfs gives the same archive bytes on every run.
+# Sorted, fixed owner/mtime: same squashfs gives the same archive bytes every run.
 tar --create --file="${OUT}.partial" --directory="${LAYOUT}" --format=gnu --numeric-owner --owner=0 --group=0 \
     --sort=name --mtime="${CREATED}" oci-layout index.json blobs
 mv -n -T "${OUT}.partial" "${OUT}"

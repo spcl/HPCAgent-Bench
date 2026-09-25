@@ -1,13 +1,9 @@
 """Prove a served endpoint actually round-trips tool calls and reasoning content.
 
-The concurrency sweep in the smoke scripts SENDS tools, but it only counts tokens: a server whose
-tool-call parser is missing or misnamed returns prose describing the call and the sweep scores it
-as a healthy response. SGLang in particular starts fine with an unnamed or wrong --tool-call-parser
-and fails at the FIRST request, which reads as a serving bug rather than a launch one, so the
-failure has to be asserted rather than eyeballed.
-
-Reasoning is the same shape: an engine that drops reasoning_effort still answers, just without the
-thinking budget the arm was configured for, and nothing in a tok/s number shows it.
+The concurrency sweep in the smoke scripts sends tools but only counts tokens, so a server whose
+tool-call parser is missing or misnamed can return prose describing the call and still score as
+healthy. Reasoning is the same shape: an engine that drops reasoning_effort still answers, just
+without the configured thinking budget, invisible in a tok/s number.
 
 --api-key-file names a file holding the endpoint's key, sent as ``Authorization: Bearer``; the key
 never appears in argv. Without it no Authorization header is sent.

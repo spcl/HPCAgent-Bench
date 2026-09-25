@@ -1,30 +1,27 @@
 #!/usr/bin/env bash
 # Private SGLang serving of Qwen3.8-27B on one beverin node. PRESET picks the hardware:
 #
-#   PRESET  partition  GPUs       EDF                  weights               attention  default LEGS
-#   mi300   mi300      4x MI300A  hpcagent-bench-sglang-mi300-latest        Qwen3.8-27B-FP8       aiter      tp4:0.306
-#   mi200   mi200      8x MI250X  hpcagent-bench-sglang-mi200-latest  Qwen3.8-27B (BF16)    triton     tp4:0.80 tp4:0.88 tp8:0.80
+#   PRESET  partition  GPUs       weights            attention  default LEGS
+#   mi300   mi300      4x MI300A  Qwen3.8-27B-FP8    aiter      tp4:0.306
+#   mi200   mi200      8x MI250X  Qwen3.8-27B (BF16) triton     tp4:0.80 tp4:0.88 tp8:0.80
 #
-# MODE=smoke (default): one fresh server per LEGS spec "tp<N>:<mem-fraction-static>". Per leg: wait on
-#   /health (auth-exempt), record the KV/Mamba allocator lines, assert 401 without the key and 200 with
-#   it, run verify-tools-reasoning.py and a concurrent load probe with the key, stop.
-# MODE=serve: the first LEGS spec only. Wait, record, assert 401/200, print how to connect, then hold
-#   the server until the job ends or is cancelled.
+# MODE=smoke (default): one fresh server per LEGS spec "tp<N>:<mem-fraction-static>". Per leg: wait
+#   on /health, record KV/Mamba allocator lines, assert 401/200, run verify-tools-reasoning.py and a
+#   concurrent load probe, stop.
+# MODE=serve: the first LEGS spec only, held until the job ends or is cancelled.
 #
 # ACCESS picks the bind address; the key is required either way:
-#   tunnel (default): --host 127.0.0.1. Only an ssh -L through ela reaches it: your laptop.
-#   alps: --host <this node's hsn0 address>, no --enable-metrics. Your own jobs on other Alps clusters
-#     (Daint) connect with the key; MODE=serve writes endpoint.json for alps-endpoint.sh.
+#   tunnel (default): --host 127.0.0.1, reachable only via ssh -L through ela.
+#   alps: --host <this node's hsn0 address>, no --enable-metrics. MODE=serve writes endpoint.json
+#     for alps-endpoint.sh so your own jobs on other Alps clusters (Daint) can connect.
 #
-# PRIVATE BY CONSTRUCTION, both presets, both ACCESS values:
-#   * Never the wildcard address. --host is last on the command line.
-#   * sglang checks the key on every path except /health* and /metrics*, and only with one tokenizer
-#     worker: EXTRA_ARGS may not set --tokenizer-worker-num or --enable-metrics.
-#   * The API key comes from KEY_FILE (default ~/.config/hpcagent-bench/<preset>-endpoint.key), refused unless
-#     mode 600 and owned by you. It reaches sglang only through --config <yaml>, never argv.
-#   * The run dir is mode 700 with scratch's default ACLs stripped. It holds the yaml, the curl header
-#     file, the in-container key file and sglang's server log, which prints server_args incl. api_key.
-#   * The key is never printed; the three secret files are deleted when the script exits.
+# Private by construction, both presets, both ACCESS values:
+#   * Never the wildcard address; sglang checks the key on every path except /health*, /metrics*.
+#   * EXTRA_ARGS may not set --tokenizer-worker-num or --enable-metrics (both bypass the key check).
+#   * The key comes from KEY_FILE (default ~/.config/hpcagent-bench/<preset>-endpoint.key), refused
+#     unless mode 600 and owned by you; reaches sglang only through --config <yaml>, never argv.
+#   * The run dir is mode 700, ACLs stripped. Its secret files and the key are never printed and are
+#     deleted when the script exits.
 #
 #   umask 077; mkdir -p ~/.config/hpcagent-bench; openssl rand -hex 32 > ~/.config/hpcagent-bench/mi300-endpoint.key
 #   cd <hpcagent-bench checkout or worktree>
@@ -34,8 +31,8 @@
 #   PRESET=mi200 ACCESS=alps MODE=serve sbatch --partition=mi200 --gpus-per-node=8 --time=08:00:00 <same path>
 #   PRESET=mi300 MODE=serve DRY_RUN=1 bash containers/cluster/ce-images/inference/serve-private.sbatch
 #
-# The header names no partition or GPU count; pass both, the preset refuses a wrong partition.
-# Connecting from the laptop or from Daint: docs/serving/private-endpoint.md.
+# The header names no partition or GPU count; pass both. Connecting from the laptop or from
+# Daint: docs/serving/private-endpoint.md.
 #SBATCH --job-name=serve-private
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -56,7 +53,7 @@ refuse() {
 
 use_preset() {  # sets the PRESET_* values; key file, triton cache and run root derive from the name
     case "${PRESET:-}" in
-        mi300)  # the qwen38 campaign line (experiments/.env.llrbase-qwen38-c); 0.306 is node-wide on the APU
+        mi300)  # the qwen38 campaign line; 0.306 is node-wide on the APU
             PRESET_PARTITION=mi300 PRESET_GPUS=4 PRESET_EDF=hpcagent-bench-sglang-mi300-latest PRESET_MODEL=Qwen/Qwen3.8-27B-FP8
             PRESET_LEGS="tp4:0.306" PRESET_AITER=1
             PRESET_FLAGS=(--attention-backend aiter)
@@ -81,7 +78,6 @@ ACCESS="${ACCESS:-tunnel}"
 [[ -z "${SLURM_JOB_ID:-}" || "${SLURM_JOB_PARTITION:-}" == "${PRESET_PARTITION}" ]] \
     || refuse "PRESET=${PRESET} runs on partition ${PRESET_PARTITION}, not '${SLURM_JOB_PARTITION:-}'"
 
-# Under sbatch BASH_SOURCE is the spooled copy; the checkout is where the job was submitted from.
 REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2>/dev/null || true)}"
 GATE="${REPO}/containers/cluster/ce-images/inference/verify-tools-reasoning.py"
 [[ -n "${REPO}" && -f "${GATE}" ]] || refuse "no checkout: set REPO or submit from inside one"

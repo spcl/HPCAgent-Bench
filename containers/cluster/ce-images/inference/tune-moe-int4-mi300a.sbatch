@@ -1,13 +1,7 @@
 #!/usr/bin/env bash
-# Tune the fused_moe Triton config kimi K2.7 is missing on MI300A.
-#
-# Serving decodes at ~90-100 tok/s aggregate at 64 concurrent and warns
-# "Using default MoE config ... E=384,N=512,device_name=AMD_Instinct_MI300A,dtype=int4_w4a16.json
-# not found". aiter does not cover the int4 W4A16 expert path, so the fix is vLLM's own tuner:
-# benchmark_moe.py --tune derives the expert shape from the model config and emits exactly that JSON. Serving picks it up via
-# VLLM_TUNED_CONFIG_FOLDER -- no image change.
-#
-# The tuner parallelizes the search over every GPU ray sees, hence a full node.
+# Tune the fused_moe Triton config kimi K2.7 is missing on MI300A (aiter has no int4 W4A16 expert
+# path, so this uses vLLM's own tuner logic). Serving picks up the emitted JSON via
+# VLLM_TUNED_CONFIG_FOLDER, no image change. Full node: the search is parallelized over every GPU.
 #SBATCH --job-name=tune-moe-int4
 #SBATCH --partition=mi300
 #SBATCH --nodes=1
@@ -36,14 +30,9 @@ EXPECTED_JSON="${EXPECTED_JSON:-E=384,N=512,device_name=AMD_Instinct_MI300A,dtyp
 
 mkdir -p "${RUN_DIR}"
 
-# 192 logical CPUs per node = 4 sockets x 24 physical cores x 2 SMT threads. --exclusive gives the
-# JOB the node, not a STEP its CPUs: a step without --cpus-per-task claims ONE, and a serving step
-# on too few CPUs hangs (Triton JIT never finishes, the peer's PP SEND hits the NCCL watchdog).
-# Allocate the way the campaign does (run_cluster.sh).
+# --exclusive gives the JOB the node, not a STEP its CPUs: a step without --cpus-per-task claims
+# ONE, and a serving step on too few CPUs hangs. Allocate the way run_cluster.sh does.
 SERVE_CPUS="${SERVE_CPUS:-${SLURM_CPUS_ON_NODE:-192}}"
-# Clients and gates run --overlap ALONGSIDE the server, so they take one socket's PHYSICAL cores
-# (--hint=nomultithread) rather than the node -- enough not to be the bottleneck, not so much that
-# the measurement contends with what it is measuring.
 CLIENT_CPUS="${CLIENT_CPUS:-24}"
 
 srun --nodes=1 --ntasks=1 --exclusive --export=ALL --cpus-per-task="${SERVE_CPUS}" \

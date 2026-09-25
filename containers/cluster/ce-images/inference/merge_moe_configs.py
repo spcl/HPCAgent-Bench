@@ -1,17 +1,11 @@
 """Merge the per-batch-size fused_moe tuner outputs into the ONE file vLLM loads.
 
-Each tuning job (tune-moe-int4-mi300a.sbatch) writes its own copy of the target JSON holding
-only the sizes it tuned, so the campaign config is their union. vLLM picks the nearest tuned
-size at run time, which is why merging rather than replacing matters: a partial re-tune must
-not drop sizes an earlier job won.
+Each tuning job writes its own copy of the target JSON holding only the sizes it tuned, so the
+campaign config is their union; a partial re-tune must not drop sizes an earlier job won.
 
-ONLY RUN THIS ONCE EVERY SOURCE JOB HAS COMPLETED. The tuner checkpoints its best-so-far to
-the same filename it writes at the end, so a partial result is byte-indistinguishable from a
-final one -- and a later job id sorts after an earlier one, so an in-flight job silently
-overrides a finished one. Check squeue first.
-
-N=512 only. Job 595206 emitted an N=4608 file from the DENSE intermediate_size (the multimodal
-wrapper defeats benchmark_moe's model-params helper); serving never looks that shape up.
+Only run this once every source job has completed: the tuner checkpoints its best-so-far to the
+same filename it writes at the end, so a partial result is byte-indistinguishable from a final
+one, and an in-flight job can silently override a finished one. Check squeue first.
 """
 
 import argparse
@@ -47,10 +41,8 @@ def main() -> None:
         if version is not None:
             versions.add(version)
         for size, cfg in data.items():
-            # SPLIT_K > 1 needs a reduction workspace the serving path may not allocate, and the
-            # failure mode is silent zeros rather than an error. Exploratory TUNE_SPLIT_K runs
-            # land in the same glob and sort late, so without this guard they would quietly
-            # overwrite a servable size. Ship one only after a correctness run.
+            # SPLIT_K > 1 needs a reduction workspace the serving path may not allocate (silent
+            # zeros, not an error); ship one only after a correctness run.
             if cfg.get("SPLIT_K", 1) != 1:
                 print(
                     f"  SKIP bs={size} from {Path(path).parent.name}: "

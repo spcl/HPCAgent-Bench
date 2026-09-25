@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
 # Download the serving weights AND leave them with a Lustre layout that loads fast.
 #
-# WHY THIS EXISTS. The two halves cannot be done in one place: `hf download` runs inside the CE
-# container (that is where huggingface_hub lives), and `lfs` exists only on the HOST. So a plain
-# download leaves the layout unfixed and nothing notices -- iopsstor delivers 9.45 GB/s at 16
-# readers, but only if the blobs are actually striped.
-#
-# The PFL default on the hub dir is NOT sufficient: run_cluster.sh sets
-# `lfs setstripe -E 64M -c 1 -E -1 -c 16 -S 4M` on ${HF_HOME}/hub, yet GLM-5.3, downloaded into
-# that same directory, came down with all 141 blobs at stripe_count 1 / 1 MiB. Inheritance is not
-# a property of hf download. RESTRIPE EVERY NEW MODEL AND VERIFY; never assume.
+# The download (`hf download`, inside the CE container) and the restripe (`lfs`, host only)
+# cannot happen in one place, so a plain download leaves the layout unfixed and nothing notices.
+# The hub dir's PFL default is not sufficient in practice: restripe every new model and verify.
 #
 #   sbatch fetch_weights.sbatch                     # the four models the campaign serves
 #   MODELS="zai-org/GLM-5.3" sbatch fetch_weights.sbatch
@@ -44,8 +38,8 @@ AUDIT_ONLY="${AUDIT_ONLY:-0}"
 # The interpreter inside EDF that has huggingface_hub: the SGLang image keeps it in its venv.
 PYTHON="${PYTHON:-/opt/venv/bin/python3}"
 
-# Every model the campaign serves. Weights are ~1.5 TB in total, so the default is the full set
-# only because a partial one is the thing that bites six hours into a campaign.
+# Every model the campaign serves; ~1.5 TB total, default to the full set to avoid a partial
+# download biting hours into a campaign.
 MODELS="${MODELS:-moonshotai/Kimi-K2.7-Code zai-org/GLM-5.3 Qwen/Qwen3.8-27B-FP8 openai/gpt-oss-120b}"
 
 STRIPE_COUNT="${STRIPE_COUNT:-16}"
@@ -59,8 +53,7 @@ echo "models:  ${MODELS}"
 echo "mode:    $([ "${AUDIT_ONLY}" = 1 ] && echo 'AUDIT ONLY' || echo 'download + restripe')"
 echo
 
-# The PFL default. Harmless when it does not take (see the header) and correct for anything that
-# does honour it, so it stays -- it is just not TRUSTED.
+# The PFL default: harmless when it does not take, correct when it does; not trusted alone.
 if command -v lfs >/dev/null 2>&1; then
     lfs setstripe -E 64M -c 1 -E -1 -c "${STRIPE_COUNT}" -S "${STRIPE_SIZE}" "${HF_HOME}/hub" 2>/dev/null \
         && echo "PFL default set on ${HF_HOME}/hub" \
@@ -103,21 +96,17 @@ for repo in ${MODELS}; do
     echo "=== ${repo}"
     total=0; narrow=0; fixed=0; still=0
 
-    # `while read` fed by process substitution, NOT xargs: xargs takes its file list from stdin,
-    # so the </dev/null that lfs needs would feed xargs an empty list -- it then migrates nothing,
-    # prints done in the same second, and exits 0.
+    # `while read` via process substitution, not xargs: the </dev/null lfs needs would feed
+    # xargs an empty list, which migrates nothing and exits 0.
     while read -r blob; do
         total=$((total + 1))
-        # head -1, never tail -1: lfs getstripe -c prints the count then a TRAILING BLANK LINE,
-        # and tail -1 yields "" which every numeric guard reads as narrow. That single mistake
-        # produced two entirely wrong audit tables in one session.
+        # head -1, never tail -1: getstripe -c prints a trailing blank line tail -1 would return.
         sc="$(lfs getstripe -c "${blob}" </dev/null 2>/dev/null | head -1)"
         case "${sc}" in ''|*[!0-9]*) sc=0 ;; esac
         [ "${sc}" -ge "${STRIPE_COUNT}" ] && continue
         narrow=$((narrow + 1))
         if [ "${AUDIT_ONLY}" = 1 ]; then continue; fi
-        # Safe ONLY because nothing is serving this model right now. A migrate under a running
-        # server is what the "while nothing reads them" warning in run_cluster.sh is about.
+        # Safe only because nothing is serving this model right now.
         lfs migrate -c "${STRIPE_COUNT}" -S "${STRIPE_SIZE}" "${blob}" </dev/null >/dev/null 2>&1 || true
         sc2="$(lfs getstripe -c "${blob}" </dev/null 2>/dev/null | head -1)"
         case "${sc2}" in ''|*[!0-9]*) sc2=0 ;; esac
@@ -126,7 +115,7 @@ for repo in ${MODELS}; do
 
     printf '  blobs>1G=%s  narrow=%s  restriped=%s  STILL NARROW=%s\n' \
            "${total}" "${narrow}" "${fixed}" "${still}"
-    # VERIFY rather than trust the migrate exit code, which is 0 even when it moved nothing.
+    # Verify rather than trust the migrate exit code, which is 0 even when it moved nothing.
     if [ "${still}" -gt 0 ]; then
         echo "  FAIL: ${still} blob(s) did not reach stripe_count ${STRIPE_COUNT}" >&2
         rc=1
