@@ -34,7 +34,13 @@ def judge_shard(runs: pathlib.Path, job: str, rows: list[tuple[str, str, int, fl
     for run_id, kernel, ts, speedup in rows:
         benchmark = f"scientific_computing/{kernel}"
         recording.store_source(
-            conn, f"/* {run_id} {ts} */", benchmark, run_id=run_id, ts=ts, language="c", store_dir=str(db.parent / "hpcagent_bench0_prompts")
+            conn,
+            f"/* {run_id} {ts} */",
+            benchmark,
+            run_id=run_id,
+            ts=ts,
+            language="c",
+            store_dir=str(db.parent / "hpcagent_bench0_prompts"),
         )
         conn.execute(
             "INSERT INTO submissions (run_id, ts, benchmark, preset, datatype, source_mode, baseline, speedup, timing_reduction)"
@@ -76,11 +82,17 @@ def queue(tmp_path: pathlib.Path, squeue: str = "", sacct: dict[str, str] | None
     stub(bin_dir, "squeue", f'cat "{tmp_path / "squeue.txt"}"')
     for job, line in (sacct or {}).items():
         (tmp_path / f"sacct-{job}.txt").write_text(line + "\n")
-    stub(bin_dir, "sacct", f'j=""; while [ $# -gt 0 ]; do [ "$1" = -j ] && j=$2; shift; done; cat "{tmp_path}/sacct-$j.txt" 2>/dev/null || true')
+    stub(
+        bin_dir,
+        "sacct",
+        f'j=""; while [ $# -gt 0 ]; do [ "$1" = -j ] && j=$2; shift; done; cat "{tmp_path}/sacct-$j.txt" 2>/dev/null || true',
+    )
     return bin_dir
 
 
-def plan(tmp_path: pathlib.Path, job: str = JOB, own_job: str = "", exempt: pathlib.Path | None = None) -> list[tuple[str, str, int]]:
+def plan(
+    tmp_path: pathlib.Path, job: str = JOB, own_job: str = "", exempt: pathlib.Path | None = None
+) -> list[tuple[str, str, int]]:
     """(run id, kernel, ts) of every item ``regrade_rest.py --job`` plans, in worklist order."""
     bin_dir = tmp_path / "bin"
     if not bin_dir.exists():
@@ -122,7 +134,9 @@ def test_a_superseded_submission_is_not_planned(tmp_path: pathlib.Path) -> None:
     """The final grade belongs to the arm's NEWEST credited answer: an older one in the same episode,
     or one a later job of the same arm (its -clean rerun included) answered again, needs none."""
     runs = tmp_path / "runs"
-    judge_shard(runs, JOB, [(run_id(1), "lulesh", 100, 2.0), (run_id(1), "lulesh", 150, 2.5), (run_id(2), "hpccg", 100, 3.0)])
+    judge_shard(
+        runs, JOB, [(run_id(1), "lulesh", 100, 2.0), (run_id(1), "lulesh", 150, 2.5), (run_id(2), "hpccg", 100, 3.0)]
+    )
     judge_shard(runs, "700300", [(run_id(7, f"{ARM}-clean"), "hpccg", 200, 1.5)])
     assert plan(tmp_path) == [(run_id(1), "lulesh", 150)]
 
@@ -132,7 +146,14 @@ def test_an_item_a_live_regrade_job_holds_is_not_planned(tmp_path: pathlib.Path)
     runs = tmp_path / "runs"
     db = judge_shard(runs, JOB, [(run_id(1), "lulesh", 100, 2.0), (run_id(2), "hpccg", 100, 3.0)])
     held = {"db": str(db), "run_id": run_id(1), "benchmark": "scientific_computing/lulesh", "ts_ms": 100, "arm": ARM}
-    held |= {"language": "c", "source_mode": "restricted", "source": "s.c", "device_source": "", "final": True, "env": {}}
+    held |= {
+        "language": "c",
+        "source_mode": "restricted",
+        "source": "s.c",
+        "device_source": "",
+        "final": True,
+        "env": {},
+    }
     (tmp_path / "held.jsonl").write_text(json.dumps(held) + "\n")
     queue(
         tmp_path,
@@ -187,14 +208,18 @@ def finalize_tree(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     """A checkout whose experiments/ is a copy (regrade.sbatch replaced by a recorder) and whose
     package is this one: finalize_grade.sbatch run as Slurm runs it, from experiments/."""
     repo = tmp_path / "repo"
-    shutil.copytree(EXPERIMENTS, repo / "experiments", ignore=shutil.ignore_patterns("mwd-final-*", "*.out", "*.err", "owed", ".rendered", "__pycache__"))
+    shutil.copytree(
+        EXPERIMENTS,
+        repo / "experiments",
+        ignore=shutil.ignore_patterns("mwd-final-*", "*.out", "*.err", "owed", ".rendered", "__pycache__"),
+    )
     (repo / "hpcagent_bench").symlink_to(REPO / "hpcagent_bench")
     (repo / "experiments" / "regrade.sbatch").write_text('printf "%s\\n" "$@" > "${STUB_MARKERS}/regrade-argv.txt"\n')
     return repo, repo / "experiments"
 
 
 def run_finalize(tmp_path: pathlib.Path) -> subprocess.CompletedProcess[str]:
-    repo, experiments = finalize_tree(tmp_path)
+    _, experiments = finalize_tree(tmp_path)
     bin_dir = queue(tmp_path)
     env = {
         **os.environ,
