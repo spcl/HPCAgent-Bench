@@ -1,0 +1,215 @@
+"""``np.linalg`` cholesky / solve / inv lowered to loops for backends without them."""
+
+import ast
+from collections.abc import Callable
+
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError, np_submodule_attr
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, HoistTables, ValueHoist
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
+
+
+def cholesky_lines(temp: str, a: str, n: str, p: str, hermitian: bool = False) -> list[str]:
+    """Source lines computing ``np.linalg.cholesky(a)`` into a freshly zeroed
+    ``temp`` via the Cholesky-Banachiewicz triple loop (same O(n^3) form the
+    C/Fortran backends use in :func:`lib_nodes.expand_cholesky`). ``temp`` is
+    fresh, so the strict-upper-triangle of zeros (numpy's convention) comes
+    free from the ``np.zeros`` init.
+
+    ``hermitian`` (complex-Hermitian positive-definite ``a``, e.g. the metric
+    ``b`` in a generalized eigenproblem) conjugates the second factor of every
+    inner product (``a = L L^H``) and takes the real part before ``sqrt``
+    (Hermitian diagonals are real up to roundoff); a real ``a`` reduces to the
+    plain form."""
+    cj = "np.conj({0})" if hermitian else "{0}"
+    diag = f"np.sqrt({p}_s.real)" if hermitian else f"np.sqrt({p}_s)"
+    jk, ik = f"{temp}[{p}_j, {p}_k]", f"{temp}[{p}_i, {p}_k]"
+    return [
+        f"{temp} = np.zeros(({n}, {n}), {a}.dtype)",
+        f"for {p}_j in range({n}):",
+        f"    {p}_s = {a}[{p}_j, {p}_j]",
+        f"    for {p}_k in range({p}_j):",
+        f"        {p}_s -= {jk} * {cj.format(jk)}",
+        f"    {temp}[{p}_j, {p}_j] = {diag}",
+        f"    for {p}_i in range({p}_j + 1, {n}):",
+        f"        {p}_t = {a}[{p}_i, {p}_j]",
+        f"        for {p}_k in range({p}_j):",
+        f"            {p}_t -= {ik} * {cj.format(jk)}",
+        f"        {temp}[{p}_i, {p}_j] = {p}_t / {temp}[{p}_j, {p}_j]",
+    ]
+
+
+def gauss_jordan_lines(aw: str, o: str, n: str, m: str | None, p: str) -> list[str]:
+    """Source lines for Gauss-Jordan elimination with partial pivoting, reducing
+    ``(aw | o)`` in place so ``aw`` -> identity and ``o`` -> ``aw^-1 @ o``. ``m``
+    marks a 2-D ``o`` (whole-row ops) vs ``None`` for a 1-D ``o`` (scalar ops).
+    Shared core of both ``np.linalg.solve`` (``o`` = copy of ``b``) and
+    ``np.linalg.inv`` (``o`` = identity).
+
+    Row-vectorized (``aw[r] -= g * aw[k]``) rather than an inner column loop:
+    the per-element form is arithmetically identical but leaves a scalar temp
+    aliasing an array element, which pythran mis-types as an ndarray in a
+    larger function. Whole-row ops match numpy's LU-with-partial-pivot
+    solve/inv to rounding for well-conditioned systems (validated ~1e-17)."""
+    k, r = f"{p}_k", f"{p}_r"
+    # A 2-D ``o`` swaps whole rows (a fresh row .copy()); a 1-D ``o`` swaps a scalar.
+    o_swap = [f"        {p}_to = {o}[{k}].copy()"] if m is not None else [f"        {p}_to = {o}[{k}]"]
+    o_swap += [f"        {o}[{k}] = {o}[{p}_pv]", f"        {o}[{p}_pv] = {p}_to"]
+    return (
+        [
+            f"for {k} in range({n}):",
+            f"    {p}_pv = {k}",
+            f"    for {r} in range({k} + 1, {n}):",
+            f"        if np.abs({aw}[{r}, {k}]) > np.abs({aw}[{p}_pv, {k}]):",
+            f"            {p}_pv = {r}",
+            f"    if {p}_pv != {k}:",
+            f"        {p}_tr = {aw}[{k}].copy()",
+            f"        {aw}[{k}] = {aw}[{p}_pv]",
+            f"        {aw}[{p}_pv] = {p}_tr",
+        ]
+        + o_swap
+        + [
+            f"    {p}_f = {aw}[{k}, {k}]",
+            f"    {aw}[{k}] = {aw}[{k}] / {p}_f",
+            f"    {o}[{k}] = {o}[{k}] / {p}_f",
+            f"    for {r} in range({n}):",
+            f"        if {r} != {k}:",
+            f"            {p}_g = {aw}[{r}, {k}]",
+            f"            {aw}[{r}] -= {p}_g * {aw}[{k}]",
+            f"            {o}[{r}] -= {p}_g * {o}[{k}]",
+        ]
+    )
+
+
+def linalg_operand(node: ast.expr, p: str, tag: str, hoist: ValueHoist) -> str:
+    """A Name operand is used directly; an expression is materialised to a
+    contiguous temp (so the loop body can index it repeatedly)."""
+    if isinstance(node, ast.Name):
+        return node.id
+    nm = f"{p}_{tag}"
+    hoist.queue([f"{nm} = np.ascontiguousarray({ast.unparse(node)})"])
+    return nm
+
+
+def hoist_cholesky(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
+    a = node.args[0]
+    ra = expr_rank(a, hoist.tables.ranks)
+    if ra is None:
+        return None  # unknown rank -> verbatim (inference gap, not a raise)
+    if ra != 2:
+        raise DesugarError(f"np.linalg.cholesky: only a 2-D operand is lowered (got ndim {ra})")
+    p = f"__chol{hoist.ctr}"
+    hoist.ctr += 1
+    an = linalg_operand(a, p, "a", hoist)
+    temp = f"{p}_o"
+    hermitian = dtype_kind(a, hoist.tables.dtypes) == "complex"
+    hoist.queue(cholesky_lines(temp, an, f"{an}.shape[0]", p, hermitian=hermitian))
+    return ast.Name(id=temp, ctx=ast.Load())
+
+
+def hoist_solve(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
+    if len(node.args) < 2:
+        return None
+    a, b = node.args[0], node.args[1]
+    tables = hoist.tables
+    ra, rb = expr_rank(a, tables.ranks), expr_rank(b, tables.ranks)
+    if ra is None or rb is None:
+        return None
+    # Gated here rather than in ``hoist_linalg`` because ownership depends on the rhs RANK, and
+    # because the raises below must stay silent for a call this backend handles natively.
+    if "solve" not in tables.lower_ops and rb not in tables.solve_rhs_ranks:
+        return None
+    if ra != 2:
+        raise DesugarError(f"np.linalg.solve: A must be 2-D (got ndim {ra})")
+    if rb not in (1, 2):
+        raise DesugarError(f"np.linalg.solve: b must be 1-D or 2-D (got ndim {rb})")
+    p = f"__solv{hoist.ctr}"
+    hoist.ctr += 1
+    an, bn = linalg_operand(a, p, "a", hoist), linalg_operand(b, p, "b", hoist)
+    temp = f"{p}_o"
+    hoist.queue(
+        [f"{p}_aw = {an}.copy()", f"{temp} = {bn}.copy()"]
+        + gauss_jordan_lines(f"{p}_aw", temp, f"{an}.shape[0]", (f"{bn}.shape[1]" if rb == 2 else None), p)
+    )
+    return ast.Name(id=temp, ctx=ast.Load())
+
+
+def hoist_inv(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
+    a = node.args[0]
+    ra = expr_rank(a, hoist.tables.ranks)
+    if ra is None:
+        return None
+    if ra != 2:
+        raise DesugarError(f"np.linalg.inv: only a 2-D operand is lowered (got ndim {ra})")
+    p = f"__inv{hoist.ctr}"
+    hoist.ctr += 1
+    an = linalg_operand(a, p, "a", hoist)
+    temp, n = f"{p}_o", f"{an}.shape[0]"
+    hoist.queue(
+        [
+            f"{p}_aw = {an}.copy()",
+            f"{temp} = np.zeros(({n}, {n}), {an}.dtype)",
+            f"for {p}_d in range({n}):",
+            f"    {temp}[{p}_d, {p}_d] = 1",
+        ]
+        + gauss_jordan_lines(f"{p}_aw", temp, n, n, p)
+    )
+    return ast.Name(id=temp, ctx=ast.Load())
+
+
+LINALG_LOWERINGS: dict[str, Callable[[ast.Call, ValueHoist], ast.expr | None]] = {
+    "cholesky": hoist_cholesky,
+    "inv": hoist_inv,
+}
+
+
+def hoist_linalg(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+    """A lowerable ``np.linalg.cholesky/solve/inv(...)`` -> the temp its loop nest fills (cholesky2's ``A[:] =
+    np.linalg.cholesky(A) + np.triu(A, k=1)`` -- the cholesky is computed into a fresh temp BEFORE ``A`` is
+    overwritten, so the in-place read is safe; contour_integral's ``X = np.linalg.solve(Tz, Y)`` nested in a
+    for-loop). Only ops in ``lower_ops`` are touched (a backend whose native ``np.linalg`` handles an op leaves it
+    verbatim), plus the ``solve`` right-hand-side ranks in ``solve_rhs_ranks`` that a nominally-native backend does
+    not really support (see :data:`LOWER_SOLVE_RHS_RANKS`). Owned-but-unhandled variants (a >2-D operand) raise
+    :class:`DesugarError`; an unknown-rank operand is left verbatim (an inference gap, a clean backend skip). A
+    non-Name operand is materialised to a temp first so the loop body can index it."""
+    if not isinstance(node, ast.Call) or not node.args:
+        return None
+    op = np_submodule_attr(node, "linalg")
+    if op == "solve":
+        return hoist_solve(node, hoist)  # gates itself: ownership is rank-dependent
+    if op is None or op not in hoist.tables.lower_ops:
+        return None
+    return LINALG_LOWERINGS[op](node, hoist)
+
+
+#: numpy.linalg ops each verbatim-body backend compiles NATIVELY (left in place);
+#: any op NOT listed for the target backend is lowered to explicit loops by the
+#: desugar. numba (numba.np.linalg) and dace (dace.libraries.linalg replacements)
+#: implement cholesky/solve/inv directly; pythran has no numpy.linalg at all.
+LINALG_LOWERABLE = {"cholesky", "solve", "inv"}
+
+
+NATIVE_LINALG: dict[str | None, set] = {
+    "numba": {"cholesky", "solve", "inv"},
+    "dace": {"cholesky", "solve", "inv"},
+    "pythran": set(),
+}
+
+
+#: Right-hand-side RANKS whose ``np.linalg.solve`` is lowered anyway, per backend, even though
+#: :data:`NATIVE_LINALG` lists ``solve`` as native. A capability is not all-or-nothing: DaCe's
+#: ``Solve`` library node reads ``shape_out[1]`` unconditionally
+#: (``dace/libraries/linalg/nodes/solve.py``), so a VECTOR right-hand side -- ``np.linalg.solve(A, b)``
+#: with 1-D ``b``, which numpy accepts and raman_fitting's Levenberg-Marquardt step emits -- raises
+#: ``IndexError: list index out of range`` inside the EXPANSION. That is compile time, not parse time,
+#: so the frontend accepts the program and the failure surfaces only once a library node expands.
+#: Lowering just that variant keeps the native matrix solve (contour_integral's 2-D rhs) intact.
+LOWER_SOLVE_RHS_RANKS: dict[str | None, frozenset] = {"dace": frozenset({1})}
+
+
+def lowers_linalg(tables: HoistTables) -> bool:
+    """Whether the backend lowers any ``np.linalg`` call at all (pythran every op, dace a ``solve`` rhs rank)."""
+    return bool(tables.lower_ops or tables.solve_rhs_ranks)
+
+
+LINALG_HOIST = HoistForm(frozenset(LINALG_LOWERABLE), (), hoist_linalg, lowers_linalg)
