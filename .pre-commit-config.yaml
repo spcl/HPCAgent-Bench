@@ -11,6 +11,8 @@
 # hpcagent_bench/benchmarks/, which are transcriptions). check_format owns the skip logic,
 # so any skipped file pre-commit happens to pass through is left untouched -- the hook is
 # safe to run repo-wide.
+# Agent submissions and skill snapshots in the paper artifact are verbatim evidence: never rewritten.
+exclude: ^reproducibility/paper/(case-studies|skill_histories/v[0-9]+)/
 repos:
   - repo: local
     hooks:

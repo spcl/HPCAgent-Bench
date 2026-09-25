@@ -1,0 +1,17 @@
+data/*.db-journal
+__pycache__/
+.venv/
+hpcagent-bench/
+tools/cluster.env
+
+# anonymous.4open.science replacement terms (identifying, never committed)
+.anonymize-terms.txt
+
+# Local run mirror (tools/pull.sh); data, never committed.
+/mirror/
+
+# Downloaded or extracted data (download.sh) and derived working copies; never committed.
+/data/
+/work/
+*.db-shm
+*.db-wal
