@@ -1,828 +1,173 @@
-# What every consolidated image must carry
+# What every image must carry
 
-Four images, one Dockerfile each, everything baked IN -- no out-of-image `PYTHONPATH`, because
-anything reached that way is invisible to the image digest and two runs of "the same image" can
-then differ by it.
-
-| image | base | notes |
-|---|---|---|
-
-## FOUR images. ROCm 7.2.0 everywhere. Nothing else in this directory.
+The specification the Dockerfiles in this directory implement. Build commands are in
+[`containers/README.md`](../../README.md). Each image is built by one Dockerfile with everything
+baked in: nothing is reached through an out-of-image `PYTHONPATH` or a post-build step, because
+anything outside the image is invisible to its digest.
 
 | image | base | serves |
 |---|---|---|
-| judge + agent, AMD | ROCm 7.2.0, x86_64 | both roles -- `run_cluster.sh:814,817` already pass one `AMD_CE_ENV` to both `role_srun` calls |
-| judge + agent, CUDA | public NGC PyTorch 25.06 by digest (CUDA 12.9.1, py3.12), aarch64 / GH200 | same roles, other vendor: two targets, `agent` and `judge` |
-| vLLM | ROCm 7.2.0 | oss120b |
-| SGLang | ROCm 7.2.0 | qwen38, kimi -- 12 of 18 v9 arms |
-| vLLM, GH200 | `vllm/vllm-openai:v0.30.0-aarch64-cu129` by digest (CUDA 12.9.1) | qwen38, kimi and oss120b on Daint |
-| judge + agent, CPU only | `ubuntu:24.04` by digest, x86_64 or aarch64 | both roles on a host with no GPU toolchain; binary packages only |
+| `judge-agent-amd` (targets `agent`, `judge`) | `rocm/pytorch` ROCm 7.2, py3.12, x86_64 | judge and agent on MI300A (and MI250X) |
+| `judge-agent-cuda` (targets `agent`, `judge`) | NGC PyTorch 25.06 (CUDA 12.9.1, py3.12), aarch64 | judge and agent on GH200 |
+| `judge-agent-cpu` (targets `agent`, `judge`) | `ubuntu:24.04`, x86_64 or aarch64 | judge and agent on any CPU node |
+| `sglang`, `sglang-mi200` | vendor SGLang ROCm 7.2 | qwen38, kimi, GLM-5.3 on beverin |
+| `vllm` | ROCm 7.2 | oss120b on beverin |
+| `vllm-cuda` | `vllm/vllm-openai:v0.30.0-aarch64-cu129` | qwen38, kimi, oss120b on Daint |
 
-The last three are built on Daint (or any node, for the CPU one), not on beverin; what they carry and
-why is [GH200 and CPU-only images](#gh200-and-cpu-only-images) at the end of this file.
+The `agent` target never contains `hpcagent_bench` (it ships the references agents are graded
+against); `judge` is `agent` plus the installed package and carries the
+`hpcagent_bench-firewall: trusted-judge-image` marker. Held-out tests are in no image.
 
-**ROCm 7.2.0 is the global pin.** SGLang consumes a vendor prebuilt already tagged `rocm720`, so it
-stays a straight pull; the vLLM images are ours and change one base line in a Dockerfile we are
-writing anyway. The reverse (7.2.3 global) would mean building SGLang from source -- the expensive
-direction, for no recorded benefit. NOTE before locking this in: the vLLM EDFs were deliberately
-named `rocm723-*` and no rationale for 7.2.3 over 7.2.0 was ever recorded. Check the build chain's
-history once; if 7.2.3 fixed something, that decision has to be revisited.
+AMD and CUDA stay separate images: different base, architecture, compiler (`hipcc` vs `nvcc`), cupy
+build and library backends. Every judge/agent image uses its base's Python 3.12 (no second
+interpreter) and pins numpy, scipy, pandas and astunparse to the versions the judge grades with,
+asserted in the final gate and recorded in `/usr/local/share/image-provenance`. The host venv and CI
+run a newer Python: a result that differs between host and container can be the interpreter.
 
-**The AMD/CUDA split stays.** "One image for judge and agent" means one per PLATFORM serving both
-ROLES. It does not mean one across vendors: different base, architecture (x86_64 vs aarch64),
-`hipcc` vs `nvcc`, cupy HIP source build vs wheel, HIP vs CUDA backends throughout. Merging them is
-how a HIP build ends up seeing NVIDIA cub.
+## Toolchain (every judge/agent image)
 
-**Python 3.12 is the pin -- whatever the base already ships.** The AMD base
-(`rocm/pytorch:rocm7.2_...py3.12_...`) ships 3.12, and installing 3.14 on top means rebuilding the
-framework stack against a Python the vendor images do not target, for no measured benefit. So take
-the base's interpreter and do NOT add another.
-
-Two consequences to handle rather than discover:
-
-* **The graded venv is 3.14.7 and `hpcagent-canon-ci.yml` runs 3.14**, so the container will grade
-  on a different Python minor from CI and from local sweeps. dace declares
-  `requires-python = ">=3.10, <3.15"`, so both are supported and this is a deliberate split, not a
-  break -- but it must be WRITTEN DOWN, because a result that reproduces locally and not in the
-  container will otherwise cost someone a day. (`ml-ci.yml` runs 3.13, so there are three.)
-* **Both judge/agent bases must agree on the minor.** The AMD base is py3.12, and so is the CUDA
-  base: NGC PyTorch 25.06 is Ubuntu 24.04 with `/usr/bin/python3.12` -- read off the published arm64
-  image config, whose `LD_LIBRARY_PATH` names `/usr/local/lib/python3.12/dist-packages`. The CPU-only image is Ubuntu 24.04's python3.12 too. Two judge
-  images grading on different Pythons is the one version split with no upside at all.
-
-The final gate should assert the interpreter is the base's, pin numpy / scipy / pandas / astunparse
-to the versions the judge grades with, and record the Python version in the provenance file so a
-result can be attributed to it.
-
-### The directory contains ONLY this
-
-    <image>/Dockerfile        x4
-    <image>/build.sh          x4
-    <image>/build.sbatch      x4
-
-No other folder, no stray `.py`, no probe scripts, no logs, no EDF tomls. **Anything currently kept
-here because something references it must move INTO the image instead** -- that is what "everything
-inside the image" means, and it is what makes these files deletable:
-
-* `moe-configs/` + `merge_moe_configs.py` -- referenced by `run_cluster.sh:181`. Bake the tuned MoE
-  configs into the inference images; losing them once voided a whole set of throughput numbers, so
-  bake, do not drop.
-* `external-eager-pg-patch/sitecustomize.py` -- referenced by `run_cluster.sh:168`. Belongs in the
-  image's site-packages.
-* `prebuild-aiter-jit.sbatch` -- aiter's JIT-on-first-request baton lock is an IMAGE problem; prebuild
-  during the build, not as a separate job.
-* `beverin-rocm723-host-ofi-phase1/`, `accuracy-gate.py`, the `smoke-kimi-*` and `gate-0271-*`
-  scripts -- either fold into `build.sbatch` as a post-build gate, or delete.
-
-`run_cluster.sh` must be updated in the same change, or deleting these breaks the launcher.
-
-This document itself belongs in `docs/`, not here.
-
-## Load-bearing, do not drop when rewriting a Dockerfile
-
-**islpy and z3 are not optional, and importing them is not the check.** They back
-`WavefrontSkew` and the dependence proof behind `LoopToMap` / `BreakAntiDependence` /
-`LoopFission`, and **both gates fail closed and silent**: with the module absent the pass returns
-on its first line, nothing raises, and the run reports numbers for a weaker pipeline than the
-column it is named for. An image that carries the wheels can still have a closed gate, so the
-build asserts what the passes themselves read:
-
-```
-python3 -c "from dace.sdfg.analysis.polyhedral_isl import HAVE_ISL; \
-  from dace.transformation.passes.analysis import smt_dependence; \
-  assert HAVE_ISL; assert smt_dependence.has_z3()"
-```
-
-`verify_image.py` carries the same two as `dace-gate` checks. Measured on
-`hpcagent-bench-agent-mi300-latest`: islpy 2026.2.1, z3 5.1.0, `HAVE_ISL` true and `has_z3()` true.
-Both gates are OPEN.
-
-**Measure it from a CWD with no `dace` directory in it, or the answer is meaningless.** The image
-installs dace editable, so `import dace` is resolved through a finder -- but a plain DIRECTORY
-named `dace` on `sys.path` beats that finder and imports as an empty namespace package instead.
-`sys.path` starts with the CWD, and two of the directories a job actually runs in contain one:
-`${SCRATCH}` holds the live extended checkout, and `/opt` holds the image's own `/opt/dace`. From
-either, `import dace` SUCCEEDS and yields a module with `__file__` None and no `SDFG`, so the
-failure surfaces later as an AttributeError or a circular-import traceback that reads like a
-packaging bug rather than a shadowing one. From `/tmp` the same image gives dace 2.0.0a8 out of
-`/opt/dace`.
-
-This is why `verify_image.py` runs every probe with `cwd="/"` and `verify_image.sbatch` sets
-`workdir = "/"`. The consequence worth stating plainly: **the verifier passing does not mean a
-job importing dace will work**, because the judge+agent EDF sets `workdir = "${SCRATCH}"`, which
-is one of the shadowed directories. Campaign arms avoid it by pointing PYTHONPATH at the extended
-tree, which resolves `dace` to `${SCRATCH}/dace/dace` deliberately; an arm that sets neither
-PYTHONPATH nor a clean CWD gets the broken namespace package silently.
-
-**rocprof-compute needs its OWN interpreter.** ROCm installs the tool but not its Python deps.
-Installing `/opt/rocm/libexec/rocprofiler-compute/requirements.txt` into the image environment is
-WORSE than the breakage: it pins `astunparse==1.6.2`, and **dace declares astunparse as a
-dependency** (`dace/pyproject.toml:71`), so it downgrades a package every CPU reference number is
-computed with -- and it still produces nothing, because rocprof-compute 3.4.0's v3->v2 CSV
-converter dies on pandas 3 (`merge on str and int64 for key 'Agent_Id'`): all 13 counter passes
-run and all 13 rows are dropped, ending at "No profiling data found".
-
-The fix that works: `python3 -m venv /opt/rocprof-compute-venv`, install `pandas==2.2.3`,
-`numpy<2.3` and that requirements.txt into it, move `/opt/rocm/bin/rocprof-compute` aside and
-replace it with a two-line `sh` wrapper exec'ing the venv's python on the libexec entry point.
-A wrapper rather than a PATH entry, so it survives whatever PATH order a caller has. Guard the
-build: fail if the venv cannot import pandas/tabulate/plotext/dash with pandas major == 2, if
-`rocprof-compute --version` is non-zero, or if the image's own numpy/pandas/astunparse move.
-
-**PAPI: rebuild it IN the Dockerfile, and do not expect AMD device counters from it.**
-`rocm` and `rocm_smi` are not shipped components. Build them in a Dockerfile layer -- the exact
-configure lines live in `harness/papi.py:1480 COMPONENT_BUILD`:
-
-    ./configure --with-components=rocm       # PAPI_ROCM_ROOT -> the ROCm install
-    ./configure --with-components=rocm_smi   # PAPI_ROCMSMI_ROOT -> the ROCm install
-
-Two things to get right when verifying the result:
-
-* **PAPI 7 initializes a component LAZILY** (`papi.py:151`). An untouched component reports itself
-  disabled with "Not initialized. Access component events to initialize it.", so a build check that
-  reads the status flag and stops will call a WORKING component broken. Enumerate its events first
-  -- `component_reason()` already does exactly that, and separates "not built" from "built but
-  would not come up". Use it rather than a flag read.
-* Even rebuilt, `rocm_smi` was measured failing at "Error while initializing device tables" with
-  `PAPI_ROCMSMI_ROOT` set -- the second category, a driver/device/permission problem the rebuild
-  cannot fix.
-
-So: AMD device counters come from `rocprofv3 --pmc`. Build the components anyway so
-`component_reason()` reports the honest reason instead of "not built", but do not treat their
-presence as a working path, and keep PAPI's CPU `perf_event` story intact -- that one works and is
-what the profiling skill relies on.
-
-**`rocprof-sys-sample`, never `rocprof-sys-run`.** `-run` executes the program, exits 0 and writes
-nothing -- a silent no-op that reads as success.
-
-**Also bake in:** flydsl (currently reached via an out-of-image `PYTHONPATH`) and aiter (0.27.1
-needs it or it dies in `profile_run`; leave its master switch OFF -- it breaks MLA prefill on
-gfx942).
-
-### AT THE NEXT REBUILD: make the aiter prebuild composable with a mount
-
-Not a defect in the shipped images -- a simplification that cannot be made without rebuilding, so
-it is recorded here rather than done.
-
-The sglang image ships /opt/aiter-jit with 4968 entries and 20 .so (135 MB), and the EDF pins
-`AITER_JIT_DIR` to it so that prebuild is used (job 628077 measured a bare host directory winning
-instead, leaving the prebuild unused). Two consequences follow, and they pull in opposite
-directions:
-
-* Bind-mounting a host directory onto /opt/aiter-jit **hides** the prebuild. aiter then builds on
-  the first request, behind a baton lock, and the build outlives the engine's RPC deadline --
-  610251/610252, `RPC call to sample_tokens timed out` at step_counter=0.
-* Anything aiter compiles at run time beyond the prebuild is written into the ephemeral rootfs,
-  so the next launch recompiles it.
-
-`run_cluster.sh` resolves this from the HOST side: it copies the prebuild once into
-`${SCRATCH}/.hpcagentbench-cache/.aiter/<image-sha256>` and points `AITER_JIT_DIR` at the copy, so
-the cache is a superset of the image, nothing is shadowed, and later launches inherit what earlier
-ones compiled. That works against the PUBLISHED bytes, which is why it was done that way.
-
-The image-side version is simpler and should replace it whenever these images are next rebuilt:
-
-```dockerfile
-# Prebuild lives beside the mount point, not ON it.
-RUN mv /opt/aiter-jit /opt/aiter-jit-prebuilt && mkdir -p /opt/aiter-jit
-# entrypoint, before the engine starts:
-#   cp -an /opt/aiter-jit-prebuilt/. /opt/aiter-jit/
-```
-
-/opt/aiter-jit is then an empty directory in the image, so an EDF may bind a host directory onto
-it with nothing to shadow, and the entrypoint seeds whatever is missing. The host-side block in
-run_cluster.sh becomes dead code and should be deleted in the same change -- leaving both would
-seed twice into different places.
-
-Do NOT make this change on its own: it alters image bytes and therefore the digest, and a digest
-is what a results table cites.
-
-### The fabric comes from CSCS, and no image builds any of it
-
-**No image builds or ships libfabric, libcxi or an RCCL net plugin.** All three arrive as ONE
-pinned artifact -- the CSCS **netstack** bundle -- installed by three enroot hooks the EDF turns
-on. Every image carries a build gate that FAILS if a `libfabric.so*`, `libcxi.so*` or
-`librccl-net.so*` survives into the shipped layers, because a copy inside the image is found first
-and shadows the artifact.
-
-```toml
-[annotations]
-com.hooks.netstack.source = "host"         # artifact is DEAD -- see below
-com.hooks.cxi.enabled = "true"             # the cxi provider and /dev/cxi*
-com.hooks.aws_ofi_nccl.enabled = "true"    # exits(0) unless this is exactly "true"
-com.hooks.aws_ofi_nccl.variant = "rocm6"   # REQUIRED in host mode; hard error if unset
-```
-
-**The artifact bundle does not exist.** All three hooks hardcode
-`/capstor/store/cscs/cscs/public/containers/netstack/` as a literal, so no `version` or `name` can
-resolve there; both are omitted rather than pinned.
-
-A missing artifact does not fail the job. The hooks set `libfabric_host_path` and
-`plugin_host_path` to files that are not there, the bind-mounts silently do nothing, and RCCL
-falls back from CXI to **TCP sockets** -- the same invisible degradation described below for the
-unset `aws_ofi_nccl.enabled`, and the most expensive way for this to fail, because the run
-completes and merely looks like a slow model.
-
-**Why `host` is safe.** Host mode grafts 29 host libraries into the image, and job **629822**
-died that way -- a host `libcurl` needing glibc 2.38 reached an image with 2.35. The base image is
-Ubuntu 24.04 and the shipped `libc.so.6` reports `Ubuntu GLIBC 2.39-0ubuntu8.8` (verified by
-extracting it from the pulled squashfs, not read off the tag). glibc is backward compatible, so 2.39 satisfies every
-`GLIBC_2.38` the grafted libraries require. **Re-check this if the base image is ever moved
-backwards**; the gate is `container glibc >= 2.38`, and it is a `>=`, never a match.
-
-**Fabric performance is unaffected.** `fi_pingpong` over `cxi`, 1 MB payload, beverin 2026-09-16:
-
-| libfabric | 1 MB | latency |
-|---|---|---|
-| `host` -> 2.3.1 | 19329 MB/s | 54.3 us |
-| 1.22.0 | 20011 MB/s | 52.4 us |
-| 2.3.1 explicit | 19878 MB/s | 52.8 us |
-
-Within noise of one another, at 4 CXI NICs per node.
-
-**Pinning without version/name.** `host` resolves through
-`/opt/cray/libfabric/host`, a root-owned symlink (currently `-> 2.3.1`) that no annotation can
-redirect. Pinning therefore means *asserting* what it resolved to:
-`scripts/cscs/netstack_preflight.sh` checks the version, the plugin variant and the CXI device
-count, prints citable provenance, and **aborts** on a repoint -- so a CSCS-side bump cannot change
-the fabric under a running campaign.
-
-No image ships a self-built `aws-ofi-nccl` plugin. Two measurements settled it:
-
-* **629967** -- with all three hooks on an *unmodified* image, RCCL selects
-  `/opt/cscs/netstack/librccl-net.so`, logs `NET/OFI` / "Using network AWS Libfabric", and reports
-  GPU Direct RDMA on `cxi0-2`: 8 ranks over 2 nodes, correct. The self-built plugin bought nothing.
-* **629822** -- `netstack.source = "host"` grafts host paths in, which is how a host `libcurl`
-  needing glibc 2.38 reached an image with 2.35 and killed its whole OFI stack. The artifact is
-  internally consistent (its own libc, libcurl, libcxi, libfabric); a graft is not. With the base
-  at glibc 2.39 the graft is safe; this is the failure mode if the base ever moves backwards.
-
-Why a missing `com.hooks.aws_ofi_nccl.enabled` is invisible: that hook `exit(0)`s, RCCL finds no
-plugin and falls back to its **TCP sockets** transport. A cross-node collective rides the IP stack
-over `hsn*` and nothing reports it, because the fallback *works* -- it is merely slow. Single-node
-grading does not notice either: four ranks on one node use XGMI/IPC and load no net plugin at all.
-
-`judge-agent-amd` still has an `ofi-builder` stage, and it is **not** a plugin build. It compiles a
-providerless libfabric for one purpose -- spack's MPICH needs something to link against at build
-time, and the artifact does not exist then -- and the shipped image **deletes** it. That deletion
-is load-bearing: MPICH binds its libfabric by RPATH, RPATH is searched before `LD_LIBRARY_PATH`, so
-while the stub was present neither the hook nor the environment could override it and
-`FI_PROVIDER=cxi` aborted `MPI_Init` with "OFI call getinfo failed" (**629966**). With the stub
-gone the loader falls through to the artifact. `sglang/` and `vllm/` build nothing at all: they
-reach the fabric through RCCL rather than MPI, so they have no link target to produce.
-
-**`FI_PROVIDER = "cxi"` goes on the INFERENCE EDFs only.** The judge-agent EDFs omit it
-deliberately -- that image also runs MPI, MPICH inherits the variable, and 629966 is what that
-costs.
-
-## Verifying an image
-
-`scripts/smoke_gpu_profilers.sh` (+ `submit_gpu_profiler_smoke.sbatch`) runs on one node in ~3
-minutes and reads ARTIFACTS rather than exit codes -- it reconciles `SQ_WAVES` against the launch
-geometry (20 x 2^22 / 64 = 1,310,720) and fails rocprof-compute specifically when the passes run
-and the rows are dropped. Point it at any image before it goes live.
-
-`build_and_verify.sbatch` builds and verifies in ONE job, so an image that cannot pass verification
-never reports success. Verification is three stages: `verify_image.py` (the declarative library
-table), `selfcontained_check.py` (nothing may resolve outside the image), and `mpi_gpu_check.sh`.
-
-**`mpi_gpu_check.sh` exists because presence is not capability.** The declarative table can ask
-whether `mpicc` is on `PATH` and whether `libmpi.so` exists, and both were true of the distro MPICH
-whose wrapper and launcher came from different MPIs -- four ranks each came up as their own
-`COMM_WORLD` of size 1, every rank solved the whole problem, the answer verified, and nothing
-failed. The same lesson as the aiter prebuild, where importing a module built nothing while logging
-success. So the script RUNS the things that can actually be false.
-
-The transport rows are the ones to read first: **a correct allreduce proves correctness, never
-transport.** The same sum comes back over the `tcp` provider, several times slower, with every
-other assertion still green -- an error made here once and reported as "MPI is already reaching
-Slingshot".
-
-| check | what it proves | how it fails silently otherwise |
-|---|---|---|
-| multi-rank | `mpiexec -n 4` forms ONE communicator of size 4 and an allreduce is right | wrapper/launcher mismatch reads as size 1, not as an error |
-| GPU-aware | `MPIX_GPU_query_support(MPIX_GPU_SUPPORT_HIP)` says yes AND a **device pointer** survives a real allreduce | the query alone is a claim; a non-GPU-aware MPI stages through host memory |
-| libfabric | WHICH libfabric the live process mapped, read from `/proc/self/maps` | `ldd` predicts a different answer than the loader gives; RPATH is why (629966) |
-| provider | WHICH provider MPI selected -- `cxi`, not merely "OFI" | OFI is the API, CXI is the provider inside it; having OFI is not having Slingshot |
-| RCCL plugin | the artifact's `librccl-net.so` is loaded and **selected** -- `NET/OFI`, not `NET/Socket` | without it RCCL falls back to TCP -- works, and is slow |
-| PETSc GPU | `PETSC_HAVE_HIP` in `petscconf.h`, not merely `libpetsc.so` on disk | `+rocm` silently not taking leaves a PETSc with no device solvers |
-
-GPU checks degrade to SKIP with no visible device and say so, so the script is runnable on a build
-node; it never reports a pass for something it could not test.
-
-
-## Toolchain both judge+agent images must carry
-
-Same set on the AMD and the CUDA image; only the offload target differs.
-
-| what | notes |
+| what | requirement |
 |---|---|
-| `perf` | the CPU profiling path the skills teach; PAPI's `perf_event` component depends on it |
-| tblis, OpenBLAS, LAPACK | see the OpenBLAS trap below |
-| MPI | **mpich, GPU-aware for the platform** -- see "GPU-aware MPI" below. `hpcagent-bench-agent-mi300-latest` SATISFIES this (verified to 32 nodes) |
-| RCCL | `librccl.so` plus the `libnccl.so` alias. The NET PLUGIN is not built here -- as of 2026-09-16 it comes from the host via the enroot hooks (`com.hooks.netstack.source=host`, `com.hooks.aws_ofi_nccl.variant=rocm6`), not the decommissioned CSCS netstack artifact (see above) |
-| PETSc / SLEPc | `+rocm`, asserted as `PETSC_HAVE_HIP` -- available to agents and the judge as a GPU-capable solver library, alongside hypre, MUMPS, SuperLU-dist, STRUMPACK and MAGMA |
-| polyhedral source-to-source | `polycc` (Pluto, pinned `dc46216`) and `ppcg` (pinned `7cbf785`, its own prefix `/opt/ppcg-install` so its isl cannot overwrite Pluto's). The `pluto` and `ppcg*` columns shell out to these; ppcg has **no AMD target**, so the HIP column is ppcg's CUDA through ROCm's `hipify-perl`. Verified present in both mi300 images (digest `ad2c3503`, 2026-09-18) |
-| GCC + Graphite | loop transforms; **OpenACC offload lives here**, not on LLVM |
-| LLVM + MLIR + Polly | **OpenMP offload lives here**, not on GCC |
-| vendor compiler | `amdclang` on AMD; **NVHPC** on CUDA -- and NVHPC is the ONLY OpenACC path |
-| vendor profilers | AMD: rocprofv3 / rocprof-sys / rocprof-compute. CUDA: **ncu** + **Nsight Systems** |
-| agent harnesses | Claude Code **2.1.197**, Codex CLI, Qwen Code, OpenCode, mini-SWE-agent, OpenHands, SWE-agent, each pinned in `containers/agent/harness/` -- see "Agent harnesses" in README.md |
+| compilers | gcc 16 with Graphite (host C/C++/Fortran; not an offload compiler), LLVM 22 with MLIR, Polly, flang and OpenMP offload; `CC`/`CXX`/`FC` set explicitly (a stale configure cache beats `PATH`) |
+| vendor compiler | `amdclang` on AMD; NVHPC (`nvc`, `nvc++`, `nvfortran`) on CUDA, the only OpenACC path |
+| BLAS | spack OpenBLAS `threads=openmp` owns `libblas.so.3`/`liblapack.so.3`/`libcblas`/`liblapacke`, asserted by a real link (the scipy wheel's renamed symbols never resolve; BLIS on the generic names breaks LAPACKE) |
+| MPI | spack MPICH, GPU-aware for the platform, `device=ch4 netmod=ofi +slurm`, wrappers in `/opt/view/bin` ahead of every other MPI; Open MPI 5 beside it under `OPENMPI_ROOT`, not on `PATH` |
+| collectives | RCCL (`librccl.so` + `libnccl.so` alias) on AMD, NCCL on CUDA; no net plugin (see Fabric) |
+| polyhedral | `polycc` (Pluto `dc46216`, clang 17) and `ppcg` (`7cbf785`, own prefix `/opt/ppcg-install` so its isl never replaces Pluto's `libisl.so.23`); ppcg emits CUDA only, so AMD also needs `hipify-perl` |
+| profilers | `perf`; PAPI with `perf_event` (+ `cuda`/`nvml` on CUDA, `rocm`/`rocm_smi` on AMD); AMD `rocprofv3`, `rocprof-sys`, `rocprof-compute`; CUDA `ncu`, `nsys` |
+| harnesses | the pins in `containers/agent/harness/` (see "Agent harness pins" in `containers/README.md`); none of the harness venvs may import `hpcagent_bench` |
 
-### GPU-aware MPI: what the running image actually has
+Offload matrix:
 
-The requirement row above is not yet met by the image in service, and it fails in the quiet way.
-`hpcagent-bench-amd-mi300-v5` resolves `mpicc` / `mpiexec` to the **Ubuntu distro** MPICH 4.2.0, built
-`--with-device=ch4:ucx` against a UCX with no ROCm transport. Probed inside the image:
-
-```
-mpichversion | head -5                      # MPICH 4.2.0, ch4:ucx, no --with-hip / --with-rocm
-ls /usr/lib/x86_64-linux-gnu/ucx/ | grep -i rocm   # only libucx_perftest_rocm.*, no libuct_rocm.so
-ldd /usr/lib/x86_64-linux-gnu/mpich/lib/libmpi.so | grep -ciE 'hip|hsa'   # 0
-```
-
-So a device pointer handed to `MPI_Send` has no GPU path at all. That is why the `gpuaware-mpi-c`
-skill stays gated: an agent told to pass device pointers to MPI would be told to do something the
-image cannot execute.
-
-`judge-agent-amd/Dockerfile` already installs the right thing -- `mpich@4 +rocm
-amdgpu_target=gfx942 +fortran +hwloc` into `/opt/view`, with `/opt/view/bin` ahead of `/usr/bin` on
-the image `PATH`. v5 does not have it because v5 is built from a different file --
-`ce-images/amd/Dockerfile`, which exists only on the `build-v5` branch -- and carries no spack tree
-at all: `/opt` on v5 holds `rocm`, `venv`, `dace` and the agent/judge trees, with no `gcc` and no
-`view`, so its `mpicc` is whatever `/usr/bin` provides.
-
-**Why "we tested device pointers and it worked" is not evidence here.** Measured on v5, job
-626782 (`experiments/mpi/gpu-aware-mpi.sbatch`):
-
-```
-GPU-support query: no GPU-support query in this MPI -> UNKNOWN
-device-pointer MPI_Sendrecv: transferred correctly (0/8192 elements wrong)
-VERDICT: INCONCLUSIVE
-```
-
-The exchange SUCCEEDED, elementwise, on an image whose MPI links no ROCm runtime at all (the `ldd`
-count above is 0). MI300A is an APU: host memory is device-addressable, so a `hipMalloc`'d buffer
-handed to a host-side transport is read correctly anyway. The obvious test -- pass a device pointer,
-check the data -- therefore passes on an image that has no GPU-aware MPI, and a discrete-GPU
-intuition about what such a test proves does not transfer to this machine. What settles v5 is the
-`ldd` result, not the probe.
-
-**Ask the right MPI the right question.** The two families spell the query differently, and asking
-the wrong one returns a false negative rather than an error:
-
-| MPI | query | header |
+|  | AMD (gfx942, gfx90a) | NVIDIA (sm_90) |
 |---|---|---|
-| MPICH >= 4.1 | `MPIX_GPU_query_support(MPIX_GPU_SUPPORT_HIP, &flag)` | `mpi.h` -- MPICH ships **no** `mpi-ext.h` |
-| Open MPI >= 5.0 | `MPIX_Query_rocm_support()` | `mpi-ext.h`, behind `MPIX_GPU_SUPPORT_ROCM` |
+| OpenMP offload | LLVM `amdgcn` | LLVM `nvptx` |
+| OpenACC | not supported | NVHPC only |
 
-An earlier probe tested only the Open MPI spelling. Under MPICH the `#ifdef` was simply false, the
-query compiled out, and the "no answer" sentinel printed as `NO` -- so it reported NOT GPU-AWARE for
-every MPICH, GPU-aware or not, and both its v5 and v6 verdicts were void. v5 now returns UNKNOWN
-honestly, because its `mpicc` is the `/usr/bin` alternatives symlink to **Open MPI 4.1.6**, which
-predates `MPIX_Query_rocm_support` (added in Open MPI 5.0).
+Each is hard-gated by linking a binary that carries a device image (`nvc -acc` must report GPU code).
 
-The rule the probe now follows: a missing query API is UNKNOWN and exits 2, never NO. Absent
-evidence and negative evidence are different, and collapsing them is what made a broken test look
-like a passing one.
+## Libraries (what DaCe codegen and agents can link)
 
-**Measured on v6, job 626776** -- the same probe, the image built from `judge-agent-amd/Dockerfile`:
+Missing libraries become link errors at grading time. Source of truth for DaCe:
+`dace/libraries/*/environments/`; for agents: `hpcagent_bench/envs/libraries.yaml`.
 
-```
-GPU-support query: MPIX_GPU_query_support(MPIX_GPU_SUPPORT_HIP) -> YES
-device-pointer MPI_Sendrecv: transferred correctly (0/8192 elements wrong)
-VERDICT: GPU-AWARE
-```
+* **All images:** OpenBLAS, LAPACK, ScaLAPACK, tblis, HPTT, FFTW3, MPI, TBB, mimalloc, libmvec,
+  ska_sort, Eigen, HDF5, PyTorch.
+* **GPU judge/agent images:** MAGMA, SuiteSparse, SuperLU and SuperLU_DIST, MUMPS, STRUMPACK, PETSc
+  and SLEPc (GPU-enabled, asserted `PETSC_HAVE_HIP`/`PETSC_HAVE_CUDA` and not MPIUNI), hypre,
+  ARPACK-NG, METIS, ParMETIS, Scotch. PETSc builds in its own layer.
+* **AMD:** rocBLAS, hipBLAS, rocSOLVER, rocFFT, hipFFT, hipSPARSE, hipTENSOR, hipCUB + rocPRIM,
+  rocThrust, rocRAND; Intel MKL present but never the selected BLAS.
+* **CUDA:** cuBLAS, cuFFT, cuSOLVER, cuSPARSE, cuTENSOR, CUB, Thrust, cuRAND. No MKL (x86 only).
+* **CPU:** the sequential solvers from the distribution (UMFPACK, SuperLU, MUMPS-seq, ARPACK, METIS,
+  Scotch) and MPICH-flavoured ScaLAPACK/HDF5; no distributed or GPU solvers.
 
-**The launcher half, measured on v5 (2026-09-07).** Which MPI an image ships is only half the
-question; the other half is whether a launcher can start ranks *inside* the container at all, and
-on v5 two of the three obvious answers fail silently:
+A HIP build must never see vendored NVIDIA CUB; `gpucub.cuh` alone chooses the backend.
 
-| launcher | result in a CE container step |
+## Frameworks (judge/agent images)
+
+Every adapter in `hpcagent_bench/frameworks/*_framework.py` must import: cupy, dace, jax, numba,
+pluto, pythran, triton, tvm, plus numpy, scipy and torch as baselines. The final gate imports each
+and re-checks the pinned numpy/scipy/pandas/astunparse versions.
+
+* cupy: the wheel on CUDA, a HIP source build on AMD; jax: the plugin for the base's CUDA major.
+* triton: the build the base's torch was compiled with, never PyPI's over it.
+* dace: `spcl/dace@extended` at the commit `build.sh` resolves, never a release pin.
+* islpy and z3 back `WavefrontSkew` and the `LoopToMap` dependence proof, and both gates fail
+  closed and silent. The build asserts `polyhedral_isl.HAVE_ISL` and `smt_dependence.has_z3()`, not
+  merely the imports.
+
+## Load-bearing details
+
+* **No `dace` directory in the CWD.** A plain `dace/` directory on `sys.path` shadows the editable
+  install as an empty namespace package. `verify_image.py` probes from `/`; jobs whose workdir holds
+  a `dace/` checkout must put the intended tree on `PYTHONPATH`.
+* **rocprof-compute runs in its own venv.** ROCm installs the tool without its Python dependencies,
+  and installing its `requirements.txt` into the image environment pins `astunparse==1.6.2` (moving
+  the graded stack) and still fails on pandas 3. `/opt/rocprof-compute-venv` carries pandas 2 and
+  that `requirements.txt`; `/opt/rocm/bin/rocprof-compute` is a wrapper exec'ing it. The build fails
+  if the venv cannot import its stack or the image's pinned packages moved.
+* **`rocprof-sys-sample`, never `rocprof-sys-run`:** `-run` exits 0 and writes nothing.
+* **PAPI initializes components lazily.** An untouched component reports "Not initialized"; check it
+  by enumerating its events (`papi.component_reason()`), never by reading the status flag. AMD device
+  counters come from `rocprofv3`, not PAPI's `rocm_smi`, which fails to initialize device tables.
+* **libomp is one symlink**, `/usr/local/lib/libomp.so`, never the LLVM libdir: that libdir also
+  holds LLVM's `libgomp.so.1` shim, which would replace GNU libgomp under every gcc OpenMP binary.
+* **LD_PRELOAD (mimalloc) and `PYTHONSAFEPATH=1` are set last**, after every `RUN`.
+* **The EDF restates `PATH` and `LD_LIBRARY_PATH` absolutely** (the Container Engine drops the image
+  `ENV`): `/opt/gcc/bin` and `/opt/view/bin` ahead of `/usr/bin`, and on AMD `/opt/venv/bin` (the base
+  venv every `pip install` lands in). A prefix missing there is missing at run time.
+* **The build mirror rewrite is removed** from the shipped image's git config.
+
+## Fabric
+
+No image builds or ships libfabric, libcxi or a NCCL/RCCL net plugin: they come from the node
+through the Container Engine hooks the EDF enables, and a build gate fails if any of them survives
+in a prefix the Dockerfile controls (a copy in the image would be found first).
+
+* AMD EDFs: `com.hooks.netstack.source = "host"`, `com.hooks.cxi.enabled`,
+  `com.hooks.aws_ofi_nccl.enabled = "true"` and `variant = "rocm6"` (required in host mode). Host
+  mode grafts host libraries built against glibc 2.38; the images must keep glibc >= 2.38.
+  `scripts/cscs/netstack_preflight.sh` asserts the resolved libfabric version and plugin.
+* GH200 EDFs: `com.hooks.cxi.enabled`, `com.hooks.aws_ofi_nccl.enabled`, `variant = "cuda12"`,
+  which is why both GPU images are CUDA 12.9.
+* `judge-agent-*` build a providerless libfabric only for MPICH to link against, and delete it
+  before the image ships: bound by RPATH it would win over the node's and abort `MPI_Init`.
+* `FI_PROVIDER=cxi` goes on inference EDFs only; MPICH inherits it and aborts.
+* A missing `aws_ofi_nccl` hook does not fail: NCCL/RCCL fall back to TCP sockets over `hsn*` and are
+  merely slow. Multi-node checks assert `NET/OFI` in the log, never just a correct result.
+
+## Verification
+
+`build_and_verify.sbatch` (AMD) and each GH200/CPU `build.sbatch` verify a candidate inside itself
+before writing the `.verified` marker `promote_image.sh` requires: `verify_image.py` (the declared
+toolchain, libraries and frameworks), `selfcontained_check.py` (nothing resolves outside the image)
+and, for judge profiles, `tools_launch_check.py`. `mpi_gpu_check.sh` runs what the table can only
+look for:
+
+| check | proves |
 |---|---|
-| `srun` | ranks start OUTSIDE the container -- `execve(): /tmp/.../bench: No such file or directory`, which reads like a build failure |
-| `mpiexec.mpich` | Hydra auto-detects Slurm (`--rmk slurm --launcher slurm`) and launches `hydra_pmi_proxy` via srun, escaping identically. `-launcher fork -rmk user` keeps it inside, and then every rank reports `rank 0/1` -- P singletons, nothing failing |
-| `mpirun.openmpi` | correct `COMM_WORLD` at 1, 4 and 8 ranks |
-
-**On v6 that table inverts, which is why no launcher may be hardcoded.** v6 carries no
-`mpirun.openmpi` at all (there is no Open MPI in it), and its spack MPICH answers correctly to
-`mpiexec -launcher fork -rmk user` -- the exact row that fails on v5. Measured on v6, jobs 626776
-and 626769. So both `gpu-aware-mpi.sbatch` and `smoke-mpi-judge.sbatch` SELECT the launcher by
-experiment: compile `mpi_worldsize.c` with the image's own `mpicc`, try each candidate, and accept
-only one that reports `WORLD=2`. A hardcoded launcher is a v5-ism that fails on v6 for reasons
-unrelated to what the test is measuring.
-
-**Across nodes the launcher changes again, and the wrong one lies.** Hydra's `-launcher fork`
-keeps ranks inside the container but cannot leave the node, so cross-node ranks have to come from
-Slurm's own PMI. Measured on v6 at 2, 4, 8, 16 and 32 nodes, one rank per node
-(`experiments/mpi/multinode-mpi.sbatch`):
-
-| `srun --mpi=` | result |
-|---|---|
-| `pmi2` | correct `COMM_WORLD` at every node count tried |
-| `cray_shasta` | **`WORLD=1` at every node count** -- the singleton failure, silently |
-| `pmix` | no output at all |
-
-`cray_shasta` is the plausible guess on this machine and it is the one that produces confident
-wrong numbers: N ranks each their own `COMM_WORLD`, each solving the whole problem, nothing
-reporting an error. This is why the launcher is selected by experiment rather than named.
-
-GPU-aware MPI holds across the fabric: the device-pointer ring verified elementwise with 0 wrong
-out of 131072 at 32 nodes (job 627002), one rank per node so every exchange crosses Slingshot
-rather than being served by shared memory.
-
-The singleton case is the dangerous one: P processes each solving the whole problem, at P times the
-cost, with a plausible number at the end. Any MPI job here must assert the size it actually got --
-`experiments/mpi/smoke-mpi-judge.sbatch` does, which is why it is a gate and not a demo.
-
-Note also that `/usr/bin/mpicc` on v5 is an alternatives symlink to **Open MPI**, not MPICH. A
-wrapper and a launcher from different MPIs is the singleton failure again, so `mpi.compilers` and
-`mpi.launcher` must be set together and from the same stack. On an image built from
-`judge-agent-amd/Dockerfile` the spack MPICH in `/opt/view/bin` is ahead of both -- provided the
-EDF `PATH` names it.
-
-**What the Dockerfiles now do about it.** `judge-agent-amd` installs `rccl`/`rccl-dev` explicitly
-and asserts `rccl.h` (it was previously declared to spack as an external at `/opt/rocm` with
-nothing installing it), pins MPICH to `device=ch4 netmod=ofi` to match the CUDA image and target
-libfabric/Slingshot rather than spack's default UCX, and carries a HARD gate that fails the build
-unless: the `mpicc`/`mpicxx`/`mpifort`/`mpiexec` on `PATH` resolve into `/opt/view`, `mpichversion`
-names ROCm in its configure line, and `libmpi.so` actually links `libamdhip64`/`libhsa-runtime64`.
-The third is the one the other two cannot fake.
-
-Runtime confirmation on the built image, job 626776:
-`MPIX_GPU_query_support(MPIX_GPU_SUPPORT_HIP) -> YES`.
-
-**The EDF is part of the image contract.** The build gate above asserts `/opt/view/bin` is ahead of
-`/usr/bin` on the image's own `PATH`, but the CE does not reliably preserve that, so the EDF
-restates `PATH` absolutely -- and anything the EDF omits is silently gone at run time no matter what
-the build proved. `/opt/venv/bin` is the trap: the `rocm/pytorch` base ships a venv and puts it on
-`PATH`, so every `python3 -m pip install` in the Dockerfile -- torch, cupy, and the editable dace --
-lands in `/opt/venv/lib`, not the system python. `PIP_BREAK_SYSTEM_PACKAGES=1` on those lines only
-defeats PEP 668; it does not redirect the install. Drop `/opt/venv/bin` from the EDF and `python3`
-resolves to `/usr/bin/python3`, which imports none of them: the judge dies at `import dace` having
-never reached a kernel. `judge-agent-amd/edf.toml.example` is the reference copy.
-**The CUDA side, since 2026-09-22.** `judge-agent-cuda` builds CUDA-aware MPICH
-(`mpich +cuda cuda_arch=90 device=ch4 netmod=ofi +slurm`) with the same MPI gate as the AMD image --
-wrappers in `/opt/view`, CUDA in `mpichversion`, `libmpi` linking the CUDA runtime -- and against the
-same compile-only libfabric stub, deleted before the image ships. NCCL is the NGC base's (the one its
-torch was built with), asserted by header and a real link rather than rebuilt beside it. The NGC base
-also ships HPC-X Open MPI in `/usr/local/mpi/bin`; the image and its EDFs keep that behind `/opt/view`,
-for the wrapper/launcher split described above. None of this has been built yet -- it is written, and
-parse-checked, but the first Daint build is its first verification.
-
-**Two things this pins down for the next image.**
-
-1. Build it from `judge-agent-amd/Dockerfile` via its `build.sh`, not as another layer on top of a
-   shipped squashfs. One Dockerfile is what makes the layer order (most expensive first) and the
-   spack binary buildcache on `$SCRATCH/spack-buildcache` do their job -- a derived image reuses
-   neither, and its contents stop being a function of anything in git.
-2. **The EDF `PATH` is load-bearing and currently wrong for this.** v5's EDF sets `PATH` absolutely
-   to `/opt/venv/bin:/opt/rocm/bin:/usr/local/sbin:...:/usr/bin:...` -- no `/opt/view/bin`, no
-   `/opt/gcc/bin`. Copy that into the next EDF and the distro MPICH wins again on a correct image,
-   with nothing failing to say so. Name `/opt/view/bin` (and `/opt/gcc/bin`) ahead of `/usr/bin`,
-   then re-run the three probes above before believing the row.
-
-### The offload matrix, corrected
-
-|            | AMD (gfx942)                 | NVIDIA (GH200)          |
-|------------|------------------------------|-------------------------|
-| **OpenMP offload** | **LLVM** -- `amdgcn` | **LLVM** -- `nvptx`     |
-| **OpenACC**        | **not supported**    | **NVHPC only**          |
-
-OpenMP offload on LLVM is the portable path and is supported on both vendors -- hard-gate it on
-both images. OpenACC is NVIDIA-only and comes from **NVHPC**, not from GCC: spack's `gcc` exposes
-`+nvptx` and has no amdgcn variant at all, and a hand-rolled `--enable-offload-targets=amdgcn-amdhsa`
-build (amdgcn newlib plus LLVM's assembler and linker) is not expressible as a spack spec. So an
-AMD image simply has no OpenACC, and that is a property of the platform rather than a gap to close.
-
-**Consequence worth acting on: GCC is not an offload compiler here.** It is wanted for **Graphite**
-and as a host C/C++/Fortran compiler, nothing more. Do not spend build time or gate complexity on
-GCC's nvptx offload on either image -- the `sm_90`/`sm_89` alias check matters only if something
-actually routes offload through GCC, and nothing should.
-
-### Traps this project has already paid for
-
-* **Build GCC and LLVM through spack, and name `CC` / `CXX` / `FC` explicitly.** A stale configure
-  cache beats `PATH` -- a toolchain that looks selected can still be ignored.
-* **GCC's nvptx offload has NO `sm_90`.** It silently means `sm_89` against CUDA 13; the CSCS
-  overlay patch is what fixes it. Do not assume a GH200 target is honoured because the build
-  succeeded.
-* **OpenBLAS must be the spack `threads=openmp` build, selected by GLOB.** The scipy wheel renames
-  every symbol (`scipy_cblas_dgemm`), so linking against it NEVER resolves.
-* **flang's `dc-to-openmp` needs LLVM >= 20.**
-* **Do not let a HIP build see vendored NVIDIA cub** -- it dies. The backend is chosen only in
-  `gpucub.cuh`.
-* Known-good pairing already in service: **gcc 16 + llvm 22** (both stable releases); the
-  unsuffixed image carries clang/flang 23.
-
-## HPC libraries: ship them all
-
-The list is not a wishlist -- it is what DaCe codegen can emit a call to, so a missing one turns a
-valid lowering into a link error at grading time. Source: `dace/libraries/*/environments/`.
-
-**Both images:** OpenBLAS, LAPACK, ScaLAPACK (the `pblas` nodes, plus its `thread_level` env),
-tblis, HPTT (`tiled_transpose` / `tile_backends`), FFTW3, MPI (mpich GPU-aware; OpenMPI too, since
-`ref_openmpi` and `intel_mkl_openmpi` environments exist), TBB, mimalloc, libmvec, ska_sort,
-Eigen, HDF5, **PyTorch** (the `torch` and `onnx` library nodes need `pytorch_env`).
-
-**AMD image (x86_64):** rocBLAS + hipBLAS, rocSOLVER, rocFFT + hipFFT, hipSPARSE, hipTENSOR,
-hipCUB + rocPRIM (hipCUB does not build without rocPRIM), rocThrust, rocRAND.
-Intel MKL is possible here (`intel_mkl`, `intel_mkl_mpich`, `intel_mkl_openmpi` environments) --
-ship it, but OpenBLAS stays the selected BLAS.
-
-**CUDA image (aarch64 / GH200):** cuBLAS, cuFFT, cuSOLVER (`cusolverdn`), cuSPARSE, cuTENSOR,
-NVIDIA CUB, Thrust, cuRAND.
-**Intel MKL is impossible on this image** -- it is x86_64-only and GH200 is aarch64. Any recipe
-copied from the AMD image must drop it rather than fail the build.
-
-### Solvers
-
-Both images. The `scientific_computing` track is dense linear algebra, dynamic programming and
-structured grids, so a solver an agent reaches for and does not find is a link error at grading
-time exactly like a missing BLAS.
-
-* **Dense / GPU-accelerated:** MAGMA -- it has both a CUDA and a HIP backend, so it belongs on both
-  images, built against the matching vendor stack.
-* **Sparse direct:** SuiteSparse (UMFPACK, CHOLMOD, SPQR), SuperLU and SuperLU_DIST, MUMPS,
-  STRUMPACK.
-* **Iterative / frameworks:** PETSc and Hypre. SLEPc and ARPACK-NG for eigenproblems.
-* **Partitioners:** METIS, ParMETIS, Scotch -- not optional extras. PETSc, MUMPS and SuperLU_DIST
-  all want them, and omitting them silently drops solver features rather than failing the build.
-
-Vendor solvers are already listed above and are NOT a substitute: `rocSOLVER` / `cuSOLVER` cover
-dense factorizations on device, nothing sparse-direct and nothing iterative.
-
-Build-cost warning, since this is one Dockerfile end to end: **PETSc is the expensive node in this
-graph.** It pulls hypre, METIS, ParMETIS and Scotch, and building it with GPU support against the
-vendor stack dominates image build time. Build it in its own layer so a change elsewhere does not
-invalidate it, and pin its version -- a PETSc that silently reconfigures its dependency set between
-builds is the same attribution problem as a mutable image tag.
-
-Two notes carried from measurement:
-
-* **OpenBLAS must be the spack `threads=openmp` build, selected by glob** -- the scipy wheel renames
-  every symbol (`scipy_cblas_dgemm`), so linking against the wheel NEVER resolves.
-* **Keep vendored NVIDIA cub away from the HIP build.** The backend is chosen only in `gpucub.cuh`;
-  a HIP build that sees NVIDIA cub dies.
-
-## Build GCC and LLVM with spack, INSIDE the container
-
-Use spack in the Dockerfile for the compilers, their GPU offload targets, and the polyhedral
-optimizers -- GCC + **Graphite**, LLVM + **Polly** (plus MLIR). Spack is what makes the offload
-variants and the polyhedral options selectable rather than hoping a distro package carries them.
-
-Note this supersedes the earlier standing preference for running spack OUTSIDE containers: that
-preference is about doing WORK on the host, and does not apply to constructing an image, where the
-whole point is that the toolchain is baked in and reproducible from the Dockerfile alone.
-
-Still applies when doing it: **name `CC` / `CXX` / `FC` explicitly**, because a stale configure
-cache beats `PATH` and a toolchain that looks selected can still be ignored.
-
-## One Dockerfile per image, end to end
-
-Each image is built by exactly one Dockerfile that installs and builds everything it needs. No
-out-of-image `PYTHONPATH`, no post-build install step, no "run this script first". If something is
-reached from outside the image it is invisible to the image digest, and two runs of "the same
-image" can then differ by it -- which is precisely the attribution problem the version suffixes
-were compensating for.
-
-## Baselines and frameworks (judge + agent images)
-
-Every framework the harness can dispatch to must be importable, or an arm silently cannot run.
-The set is defined by `hpcagent_bench/frameworks/*_framework.py`, not by taste:
-
-**cupy, dace, jax, native, numba, pluto, pythran, triton, tvm.**
-
-Plus the baseline layer: **numpy** (the default baseline -- `speedup = baseline_ns / native_ns`
-resolves to it unless a track overrides), **scipy**, and **PyTorch**, which is the ML track's base
-reference as well as what the `torch` / `onnx` DaCe library nodes need.
-
-Platform notes that decide how each is installed:
-
-* **cupy differs per image.** CUDA gets the wheel; AMD needs a **HIP source build** -- there is no
-  ROCm wheel, and this is already the reason the two judge/agent images cannot be one Dockerfile.
-* **JAX on ROCm is a separate build** from the CUDA one; do not assume the CUDA install recipe
-  transfers.
-* **triton**: the vendor build. On AMD note the inference images carry AMD's ROCm
-  `triton_kernels 1.0.0+amd.rocm7.2.0`, which is NOT upstream PyPI `triton_kernels 0.1.0` and lacks
-  `matmul_ogs` -- that difference is what pins vLLM to 0.23.0. Keep the judge/agent triton distinct
-  from that and do not "fix" one with the other.
-* **tvm** and **pythran** need building; pythran is a C++ transpiler so it needs the same compiler
-  the rest of the image standardises on.
-* **pluto** is a polyhedral source-to-source tool, not a Python package -- it needs isl, clan and
-  candl. It pairs with the Graphite/Polly story above rather than with the Python stack.
-* **ppcg** is pluto's GPU sibling and the same kind of thing: a BINARY the `ppcg`/`ppcg_cuda`/
-  `ppcg_hip` columns shell out to, pinned at `7cbf785210cdc1bd68fd277d2ecf7dd824da874a` (ppcg has no
-  tagged releases). It builds its OWN isl+pet submodules, so it installs to `/opt/ppcg-install` with
-  one symlink on PATH -- a bare `make install` would overwrite Pluto's `libisl.so.23` with a
-  different isl under the same SONAME and silently change what polycc links against. It emits CUDA
-  and nothing else, so the AMD column also needs `hipify-perl` from the ROCm channel. An image
-  without it is not a slow ppcg column, it is 248 rows that all say the column declined -- which is
-  what job 640520 published; `hpcagent_bench.harness.preflight`'s `--tools-only` gate now refuses to
-  start such a column at all.
-* **dace** is installed from the extended branch, never pinned to a release -- see the standing
-  rule that the venv tracks `origin/extended`.
-
-Guard this the way the rocprof-compute layer is guarded: after installing, assert every adapter
-imports, and assert numpy / scipy / pandas / astunparse are the versions the image intends. A
-framework install that silently moves numpy changes every CPU reference number the judge computes.
-
-## Open experiment: can the vLLM 0.23 pin be retired?
-
-If it can, the target drops from five images to four. The pin exists for exactly one reason:
-vLLM 0.27.1 routes gpt-oss through its mxfp4 path in `process_weights_after_loading` regardless of
-`--dtype bfloat16`, and that path imports `triton_kernels.matmul_ogs`
-(`fused_moe/oracle/mxfp4.py:1137`). AMD's `triton_kernels` has no `matmul_ogs` submodule; upstream
-PyPI `triton_kernels 0.1.0` does. Jobs 601854-601857 died there in ~7 minutes; 600516 is the last
-oss120b that served, on 0.23.
-
-**Do not assume a ROCm-version bump fixes it.** Measured: BOTH vLLM images are already on ROCm
-**7.2.3** (`rocm723-vllm-0.23.0-...sqsh`, `rocm723-vllm-0.27.1-...sqsh`), and the 0.27.1 image still
-ships `triton_kernels 1.0.0+amd.rocm7.2.0`. The build tag does NOT track the image's ROCm, so
-`+amd.rocm7.2.3` is a different build of the same AMD source tree, not upstream's. The question is
-whether ANY AMD build exposes `matmul_ogs`, not which ROCm it was built against.
-
-The experiment, in order, cheapest first:
-1. In the existing 0.27.1 image: `python -c "import triton_kernels.matmul_ogs"`. If it imports, the
-   premise is already stale and 0.27.1 is usable today.
-2. If not, install `triton_kernels 1.0.0+amd.rocm7.2.3` (or newer) and re-check the same import.
-3. Only if that also fails is the upstream-PyPI swap the remaining option -- and that is the
-   unvalidated-on-gfx942 path the original note warns about, so it needs an accuracy gate, not just
-   a successful serve.
-
-**Global ROCm 7.2.3 pin.** Judge/agent and both vLLM images are already there. The only holdout is
-SGLang at **7.2.0**, which is what every measured kimi/qwen38 throughput number ran on. Re-pinning
-it to 7.2.3 is acceptable -- CPU results do not depend on the ROCm version -- but it invalidates
-those serving-throughput figures, not the graded speedups. Re-measure tok/s after, do not carry the
-7.2.0 numbers forward against a 7.2.3 image.
-
-## Prefer apt for the standard numerical libraries, and make them REQUESTABLE
-
-Two facts decide this together:
-
-* `languages.library_tokens()` resolves a requestable library through **pkg-config**, not a path,
-  "because prefixes are per-machine spack hashes". apt packages ship `.pc` files as a matter of
-  course; a spack build lands in a per-hash prefix that pkg-config will not find unless the image
-  also manages `PKG_CONFIG_PATH`. So an apt-installed library is requestable for free.
-* `library_tokens` returning empty means "this host cannot build against it", and every caller
-  treats that as NOT ON OFFER rather than an error -- because advertising a library the container
-  lacks turns into a build failure recorded against the AGENT. That misattribution is the whole
-  reason the path exists, so a library present in the image but absent from pkg-config is worse
-  than useless: it is invisible.
-
-**So: install LAPACK, ScaLAPACK, FFTW, HDF5, GSL, SuiteSparse, SuperLU, MUMPS, METIS/ParMETIS/Scotch
-and friends from apt** where a distribution package exists, and reserve spack for what apt cannot
-give: the compilers, and anything needing a variant apt does not build (GPU-enabled PETSc/MAGMA,
-`threads=openmp` OpenBLAS).
-
-**The netlib-LAPACK / OpenBLAS collision is a solved problem on Debian, not a reason to omit one.**
-`libblas.so.3` and `liblapack.so.3` are `update-alternatives` slots: install both and SELECT which
-implementation the soname resolves to. Set OpenBLAS as the alternative so everything still links one
-implementation, and netlib remains present for anything that asks for it by name. Assert the
-selection in the build gate -- an image where the alternative silently points at reference LAPACK
-would make every BLAS-heavy reference number slower for no visible reason.
-
-### libraries.yaml is the agent-facing surface and is far too short
-
-Today it offers **nine**: `blas lapack fftw tbb hiptensor cutensor blis tblis hptt`. **ScaLAPACK is
-absent**, as are MPI, SuiteSparse, SuperLU, MUMPS, STRUMPACK, PETSc, Hypre, SLEPc, ARPACK, MAGMA,
-METIS/ParMETIS/Scotch, HDF5, Eigen, GSL, and every vendor BLAS/FFT/SPARSE/SOLVER
-(cuBLAS/rocBLAS, cuFFT/rocFFT, cuSPARSE/hipSPARSE, cuSOLVER/rocSOLVER, CUB/hipCUB, Thrust/rocThrust).
-
-Every library the image installs must have an entry, or the agent cannot reach it. Adding an entry
-is cheap -- the resolution is pkg-config and the empty-means-unavailable rule already makes a
-per-host gap safe -- but it must be done deliberately, because an entry whose `.pc` file is missing
-degrades silently to "not on offer" and nobody notices the library was meant to be there.
-
-**Gate it from the image side:** for every name in `libraries.yaml`, assert `pkg-config --exists`
-succeeds in the built image. That turns "the agent could not link ScaLAPACK" from a silent
-non-offer into a build failure, which is the correct place to find out.
-
-### The agent needs a way to ask
-
-`libraries.yaml` is requestable in principle, but the agent toolset is `score`, `submit`, `profile`,
-`search`, `syntax_check` -- there is no surface for "what can I link, and give me the flags". Add
-one, in the same shape as `profile`: a tool that lists what this host actually offers (the
-pkg-config answer, not the yaml) and returns the compile and link tokens for a requested name. The
-skills should then teach ASKING rather than listing library names, for the same reason the
-profiling pages now teach the `/profile` route rather than command lines: a list in a page goes
-stale against the image, while a tool answers for the image that is actually running.
-
-## The serving configs the new images must stay compatible with
-
-Read out of the live v9 env files, not from memory. A rebuilt image that cannot run these has
-regressed, however clean its Dockerfile is.
-
-### SGLang -- qwen38 and kimi, 72 env files
-
-    INFERENCE_NODES=4   INFERENCE_MODE=pp
-    SGLANG_PYTHON=/opt/venv/bin/python3
-    SGLANG_USE_AITER=1
-    SGLANG_ROCM_FUSED_DECODE_MLA=0
-    SGLANG_SET_CPU_AFFINITY=0
-    SGLANG_EXTRA_ARGS="--trust-remote-code --attention-backend triton --language-only
-      --watchdog-timeout 1800 --kv-cache-dtype fp8_e4m3 --page-size 64 --context-length 262144
-      --mem-fraction-static 0.42 --cuda-graph-max-bs-decode 64 --enable-metrics
-      --enable-hierarchical-cache --pre-warm-nccl --reasoning-parser kimi_k2 --tool-call-parser kimi_k2"
-
-What the image must therefore provide, each with the reason it is not negotiable:
-
-* **`/opt/venv/bin/python3` must exist at that exact path** -- `SGLANG_PYTHON` names it literally.
-  Relocating the venv silently breaks every SGLang arm.
-* **aiter ON.** `SGLANG_USE_AITER=1` is set by every live kimi and qwen38 arm. The "master switch
-  off" rule is a vLLM/gfx942 MLA-prefill fact and does NOT transfer here -- so the JIT prebuild
-  matters more on this image, not less, since the baton lock is on the path every arm takes.
-* **triton attention backend** must work (`--attention-backend triton`), which is the ROCm triton
-  from the vendor base -- not PyPI's.
-* `--page-size 64` and `--kv-cache-dtype fp8_e4m3` are the gfx942 recipe; `--cuda-graph-max-bs-decode 64`
-  is the fix that recovered 4.7x KV (the KV shortfall was graph-capture residual, not mem-fraction).
-* `--mem-fraction-static 0.42` is LOW on purpose: MI300A reports `is_integrated`, so SGLang sizes KV
-  against node-wide RAM per rank and the fraction runs backwards. The VLM path also derates it by
-  0.85 at parse time. Do not "fix" this upward.
-* Both `--reasoning-parser kimi_k2` AND `--tool-call-parser kimi_k2`. With only one, turn 1 returns
-  400 and is logged as SUCCESS.
-
-### vLLM -- oss120b
-
-    INFERENCE_NODES=1   INFERENCE_MODE=replicas
-    VLLM_EXTRA_ARGS="--dtype bfloat16 --load-format safetensors --safetensors-load-strategy prefetch
-      --generation-config auto --enable-auto-tool-choice --tool-call-parser openai
-      --reasoning-parser openai_gptoss --max-model-len 131072 --gpu-memory-utilization 0.70
-      --max-num-seqs 128"
-
-`--generation-config auto`, never `vllm`: the `vllm` value DISCARDS the model's own
-`generation_config.json`, which silently changed sampling in twenty env files once already.
-`INFERENCE_MODE=replicas` is one standalone TP4 server per inference node behind LiteLLM
-round-robin -- PP=4 lost 42% of engine time to 30 s stalls while PP=1 arms lost none.
-
-**Smoke every rebuilt image against these arguments before promoting it**, not just against
-"the server started". A tuned-MoE config that fails to load is the failure that voided a whole set
-of throughput numbers, and it does not announce itself.
-
-## GH200 and CPU-only images
-
-### judge-agent-cuda (Daint GH200)
-
-The AMD recipe with CUDA in place of ROCm; every AMD layer's fix carries over. What is specific:
-
-* **CUDA 12.9, on a public base.** `nvcr.io/nvidia/pytorch:25.06-py3`, pinned by its arm64 manifest
-  digest, is the newest NGC PyTorch on CUDA 12.9 (12.9.1; 25.08 onward is CUDA 13). 12.9 because its
-  runtime runs on any driver >= 525 through minor-version compatibility, where CUDA 13 needs >= 580 on
-  every node, and because the CE's NCCL plugin variant is `cuda12` -- the beverin RCCL failure was a
-  plugin one runtime major behind its image. The vLLM image is the same release's `-cu129` build, and
-  `NVHPC_CUDA_HOME` keeps nvc/nvfortran on the base's CUDA rather than the SDK's bundled newer one.
-
-* **GCC is built without `+nvptx`**, as the offload matrix above says: the OpenACC path is NVHPC,
-  hard-gated on `nvc -acc -gpu=cc90` reporting GPU code, and OpenMP offload is LLVM's, hard-gated on a
-  LINKED binary carrying an `sm_90` image. The CSCS gcc overlay patch the old recipe carried for gcc's
-  nvptx multilib is gone with it.
-* **CUDA is a spack external with `+allow-unsupported-compilers`.** Spack's `CudaPackage` declares
-  `conflicts("%gcc@16:", when="%cuda@:13.3")` unless the cuda node carries that variant, so no `+cuda`
-  spec concretizes with gcc 16 otherwise. `NVCC_PREPEND_FLAGS=-allow-unsupported-compiler` is the same
-  waiver at nvcc's end, set before the spack layers so MAGMA and PETSc build under it.
-* **`SLURM_VERSION` is the build host's**, read by `build.sh` off `srun --version` in spack's spelling
-  (`25-05-8-1`); the spack bootstrap refuses a version the pinned spack-packages does not list, in
-  seconds rather than after the compiler build.
-* **NVHPC, cuTENSOR and Nsight** come from NVIDIA's arm64/sbsa apt repos at pinned versions, Nsight
-  of the CUDA 12.9 generation (ncu 2025.2.1, nsys 2025.3.2); the `ncu`/`nsys` symlinks name the pinned
-  version directories rather than whichever the base also ships.
-* **No MKL** (x86_64 only), no rocprof, no PAPI rocm components; PAPI carries `cuda` and `nvml`.
-
-### vllm-cuda (Daint GH200)
-
-The official arm64 image, pinned by digest, and nothing ROCm-shaped: aiter, flash-attn's triton_amd
-path, the MI300A MoE configs and the RCCL eager-PG patch do not transfer. Its one build step asserts
-the engine version, a CUDA torch built for `sm_90`, every parser name the serving configs use (resolved
-through vLLM's own registries), and that no NCCL net plugin ships in the image. It is the CUDA 12.9
-build (`v0.30.0-aarch64-cu129`) for the reasons above; the release's CUDA 13 build is recorded in the
-Dockerfile as a comment.
-
-Serving on Daint is `inference/serve-daint.sbatch`, one model per job, the beverin served name and
-windows (262144 for qwen38 and kimi, 131072 for oss120b) and parsers. kimi is PP across 4 nodes by
-default (2 allowed): its ~595 GB of INT4 weights do not fit one node's 4 x 96 GB.
-
-### judge-agent-cpu
-
-Binary packages only, so a build is about an hour rather than a day, on either architecture:
-
-* **gcc 16, like beverin: the CPU-image baselines are gcc 16's.** The only gcc 16 packaged for noble
-  is the ubuntu-toolchain-r PPA's snapshot, pinned to `16-20260315-1ubuntu1~24~ppa1` (a pre-release of
-  the 16 series beverin runs as 16.2.0), key checked by fingerprint, the PPA source removed after the
-  install. The distro gcc 13 stays only for Pluto's clang 17 (the masked-select mis-vectorization the
-  AMD EDF records rules it out as a bare name). **clang/flang 22 from apt.llvm.org**, the LLVM release
-  the AMD image builds, with Polly linked into its libLLVM (the `polly` column) and flang new enough
-  for `do concurrent`.
-* **MPICH only.** Debian's default MPI is Open MPI, so only the `-mpich` flavours of ScaLAPACK and
-  HDF5 are installed, and the build fails if any Open MPI package arrives. The distro MPICH is for
-  single-node grading; no fabric hook is enabled.
-* **Debian's OpenBLAS (openmp)** wins the generic `libblas.so.3`/`liblapack.so.3` names over BLIS,
-  asserted. Its generic-named files are thin wrappers inside `openblas-openmp/` that NEED
-  `libopenblas.so.0`, and LAPACKE is netlib's interface over that LAPACK -- which is why
-  `verify_image.py`'s link-closure check counts a path under an OpenBLAS directory, and `liblapacke`,
-  as OpenBLAS rather than as a foreign BLAS. BLIS and reference BLAS still fail it.
-* **torch is the CPU wheel**, installed before the requirements so PyPI's x86_64 CUDA wheel never is.
-* Absent by design: ROCm, CUDA, spack, the distributed and GPU solvers (PETSc, SLEPc, hypre, MAGMA,
-  SuperLU_DIST, STRUMPACK, ParMETIS), NVHPC, ppcg, cupy, triton. A column that needs one declines.
-
-Its CPU baselines use gcc 16 like beverin's, but a snapshot on another machine: compare numbers within
-one image, never across the two.
+| multi-rank | `mpiexec -n 4` forms one communicator of size 4 with a correct allreduce (a wrapper/launcher mismatch gives four singletons) |
+| GPU-aware | `MPIX_GPU_query_support(MPIX_GPU_SUPPORT_HIP)` says yes and a device pointer survives an allreduce |
+| libfabric, provider | which libfabric the process mapped (`/proc/self/maps`) and that the provider is `cxi` |
+| RCCL plugin | the hook's plugin is selected (`NET/OFI`, not `NET/Socket`) |
+| PETSc GPU | `PETSC_HAVE_HIP` in `petscconf.h` |
+
+On MI300A (an APU) a device-pointer exchange succeeds even without GPU-aware MPI, so the verdict
+comes from the query and the libraries `libmpi.so` links, not from the data. The GPU-aware query is
+`MPIX_GPU_query_support` in MPICH's `mpi.h`; Open MPI's is `MPIX_Query_rocm_support` in
+`mpi-ext.h`, and a missing query is UNKNOWN, never NO. Across nodes, ranks come from
+`srun --mpi=pmi2` (`cray_shasta` silently yields singletons); every MPI job asserts the world size
+it got.
+
+## Serving images
+
+Each rebuilt inference image is smoked against the campaign's serving arguments (the
+`experiments/layers/model-*.env` layers) before promotion, not just "the server started".
+
+* **SGLang (beverin):** `/opt/venv/bin/python3` (named by `SGLANG_PYTHON`), aiter with its JIT
+  prebuilt into `/opt/aiter-jit` (each op called, not imported), the ROCm triton attention backend,
+  the tuned `moe-configs/`, and both `--reasoning-parser` and `--tool-call-parser` for kimi (with only
+  one, turn 1 returns 400).
+* **vLLM (beverin):** vLLM 0.23.0 for oss120b; later releases route gpt-oss through
+  `triton_kernels.matmul_ogs`, which AMD's `triton_kernels` build lacks. `--generation-config auto`,
+  never `vllm` (which discards the model's sampling defaults).
+* **vLLM (GH200):** the official arm64 image; its build asserts the engine version, a CUDA 12.9 torch
+  built for `sm_90`, every parser name the serving configs use, and that no NCCL net plugin ships.
+
+## Platform notes
+
+**judge-agent-cuda.** CUDA is a spack external with `+allow-unsupported-compilers` (spack otherwise
+refuses gcc 16 with CUDA 12.9) and `NVCC_PREPEND_FLAGS=-allow-unsupported-compiler` is set before the
+spack layers. `SLURM_VERSION` is read from the build host (`srun --version`, spack spelling
+`25-05-8-1`) because MPICH's PMI must match; the build stops early if the pinned spack-packages lacks
+it. NVHPC, cuTENSOR and Nsight (ncu 2025.2.1, nsys 2025.3.2) come from NVIDIA's arm64/sbsa apt repos;
+`NVHPC_CUDA_HOME` keeps nvc on the base's CUDA. The NGC base's HPC-X Open MPI stays off `PATH`. No
+MKL, likwid or msr-tools (x86 only).
+
+**judge-agent-cpu.** Binary packages only (about an hour). gcc 16 from the ubuntu-toolchain-r PPA
+snapshot `16-20260315-1ubuntu1~24~ppa1`; clang/flang 22 from apt.llvm.org with Polly; Debian's
+OpenBLAS (openmp) owns the generic BLAS/LAPACK names; MPICH only (the build fails if Open MPI
+arrives); torch is the CPU wheel. Absent by design: ROCm, CUDA, spack, the distributed and GPU
+solvers, NVHPC, ppcg, cupy, triton; a column that needs one declines. Its gcc 16 is a different
+build from beverin's: compare numbers within one image, never across the two.

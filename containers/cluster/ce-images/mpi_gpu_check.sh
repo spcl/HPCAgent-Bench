@@ -1,37 +1,22 @@
 #!/usr/bin/env bash
-# Prove the image's MPI actually WORKS, at three levels, inside the container.
+# Prove the image's MPI actually works, at three levels, inside the container: presence
+# (mpicc/libmpi.so on PATH) is not capability, so this runs what can actually be false:
 #
-# The declarative table in verify_image.py can only ask "is mpicc on PATH" and "does libmpi.so
-# exist". Both were true of the distro MPICH that started every rank as its own COMM_WORLD of
-# size 1: each rank solved the whole problem, the answer verified, and nothing failed. Presence
-# is not capability -- the same lesson the aiter prebuild taught, where importing a module built
-# nothing while logging success. So this runs the three things that can actually be false:
+#   1. multi-rank   mpiexec -n 4 forms ONE communicator of size 4; a launcher mismatch shows up
+#                   as size 1, not an error.
+#   2. gpu-aware    MPIX_GPU_query_support says yes AND a device pointer survives a real
+#                   allreduce (the MPICH spelling; OpenMPI's reports a false NO on this stack).
+#   3. transport    which libfabric/provider the live process mapped, and whether RCCL selects
+#                   OFI over its TCP fallback -- a correct allreduce proves correctness, not
+#                   transport.
 #
-#   1. multi-rank      mpiexec -n 4 forms ONE communicator of size 4, and an allreduce is right.
-#                      A wrapper/launcher mismatch shows up here as size 1, not as an error.
-#   2. gpu-aware       MPIX_GPU_query_support(MPIX_GPU_SUPPORT_HIP) says yes AND a device pointer
-#                      survives a real allreduce. The query alone is a claim; the transfer is the
-#                      evidence. Note the MPICH spelling: it lives in mpi.h, there is no
-#                      mpi-ext.h, and the OpenMPI spelling reports a false NO on this stack.
-#   3. transport       WHICH libfabric the live process mapped and WHICH provider it chose, and
-#                      whether RCCL selects the OFI plugin rather than its TCP fallback. A
-#                      correct allreduce proves CORRECTNESS, never TRANSPORT: the same sum comes
-#                      back over tcp, slower.
+# libfabric/libcxi/librccl-net all come from the host via the enroot hooks; the image ships none
+# of them, so a missing EDF annotation shows up as an unresolvable libmpi.so, not silence.
 #
-# All of libfabric, libcxi and librccl-net come from the HOST (com.hooks.netstack.
-# source=host, com.hooks.aws_ofi_nccl.variant=rocm6; the pinned CSCS netstack artifact under
-# /capstor/store is gone), installed by the enroot hooks the EDF enables. The image ships NONE
-# of them -- a build gate fails if any survives -- so a missing annotation shows up here as an
-# unresolvable libmpi.so, not as silence.
-#
-# Exits non-zero on the first hard failure. GPU checks degrade to SKIP with no visible device,
-# so this is runnable on a build node without GPUs; it reports what it could not test. Inside a
-# batch job on mi300 a missing GPU is a FAILURE, not a skip -- that is a broken EDF.
+# Exits non-zero on the first hard failure. GPU checks degrade to SKIP with no visible device
+# (runnable on a build node); inside an mi300 batch job a missing GPU is a FAILURE (broken EDF).
 set -Eeuo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
@@ -79,7 +64,7 @@ int main(int argc, char **argv) {
 }
 C
 if ! mpicc -O0 -o "${work}/world" "${work}/world.c" 2>"${work}/world.log"; then
-    # Whole log: its last line is collect2's summary, the reason is the ld line above it.
+    # Whole log: collect2's summary is the last line, the reason is the ld line above it.
     say multirank FAIL "compile failed, see log below"
     sed 's/^/    /' "${work}/world.log"
     exit 1
@@ -99,14 +84,9 @@ else
 fi
 
 # ------------------------------------------------- 1b. WHICH libfabric, and WHICH provider
-# A correct allreduce proves CORRECTNESS, not TRANSPORT -- the same sum comes back over
-# libfabric's tcp provider, several times slower, with every assertion above still green.
-#
-# Read what the LIVE process mapped, not what ldd predicts. The two disagree exactly where it
-# matters: MPICH binds its libfabric by RPATH, RPATH is searched before LD_LIBRARY_PATH, and that
-# can pin it to a providerless /opt/spack-install libfabric while ldd against a different search
-# order looks fine. The compile-only stub is deleted from the image so the
-# loader falls through to the artifact; this is the check that proves the fall-through happened.
+# Reads what the LIVE process mapped, not what ldd predicts: MPICH binds libfabric by RPATH
+# (searched before LD_LIBRARY_PATH), which can pin it to a providerless spack libfabric while
+# ldd looks fine under a different search order.
 cat >"${work}/prov.c" <<'C'
 #include <mpi.h>
 #include <stdio.h>
@@ -133,8 +113,8 @@ int main(int argc, char **argv) {
 }
 C
 if mpicc -O0 -o "${work}/prov" "${work}/prov.c" 2>"${work}/prov.log"; then
-    # MPIR_CVAR_CH4_OFI_CAPABILITY_SETS_DEBUG makes MPICH print the provider it settled on.
-    # FI_LOG_LEVEL is the fallback for a build with that CVAR compiled out.
+    # MPIR_CVAR_CH4_OFI_CAPABILITY_SETS_DEBUG prints the chosen provider; FI_LOG_LEVEL is the
+    # fallback for a build with that CVAR compiled out.
     MPIR_CVAR_CH4_OFI_CAPABILITY_SETS_DEBUG=1 FI_LOG_LEVEL=warn FI_LOG_PROV=core \
         mpiexec -launcher fork -n 1 "${work}/prov" >"${work}/prov.out" 2>&1 || true
     lf="$(grep -m1 '^libfabric=' "${work}/prov.out" | cut -d= -f2- || true)"
@@ -148,15 +128,12 @@ if mpicc -O0 -o "${work}/prov" "${work}/prov.c" 2>"${work}/prov.log"; then
         /opt/cscs/*)           say libfabric OK "${lf} -> $(readlink -f "${lf}" 2>/dev/null || echo "${lf}")" ;;
         *)                     say libfabric INCONCL "${lf} -- not the netstack artifact and not a known stub" ;;
     esac
-    # The provider is what decides Slingshot versus tcp. cxi is the Cassini provider; OFI is only
-    # the API around it, so "we have OFI" is not the same claim and must not be read as one.
+    # cxi is the Cassini provider; OFI is only the API around it, so "we have OFI" is not enough.
     prov="$(grep -oiE 'provider: *[a-z0-9_;()]+' "${work}/prov.out" | head -1 || true)"
     [[ -z "${prov}" ]] && prov="$(grep -oiE '\b(cxi|verbs|tcp|sockets|shm|psm3)\b' "${work}/prov.out" | sort -u | tr '\n' ' ' || true)"
-    # A non-cxi provider is a FAILURE only where cxi was actually available. On a node with no
-    # /dev/cxi* there is no Slingshot to select and failing would reject a good image for the
-    # node's shape -- the exact error the three-outcome rule elsewhere in this file exists to
-    # avoid. Note this is a ONE-NODE probe: it proves which provider MPI initialised, not that a
-    # cross-node transfer rode it. mpi_multinode_check.sbatch is what proves the latter.
+    # Non-cxi fails only where cxi was actually available (no /dev/cxi* means nothing to select).
+    # One-node probe only: proves MPI initialised the provider, not that a cross-node transfer
+    # rode it -- that is mpi_multinode_check.sbatch.
     have_cxi=0
     compgen -G '/dev/cxi*' >/dev/null 2>&1 && have_cxi=1
     case "${prov}" in
@@ -171,8 +148,7 @@ if mpicc -O0 -o "${work}/prov" "${work}/prov.c" 2>"${work}/prov.log"; then
                            skipped+=("MPI provider selection (no cxi device)")
                        fi ;;
     esac
-    # Keep the evidence when the caller asks for it: this is the one output worth reading by hand
-    # when a verdict surprises, and ${work} is deleted on exit.
+    # ${work} is deleted on exit; keep the raw evidence only when the caller asks for it.
     [[ -n "${MPI_CHECK_EVIDENCE:-}" ]] && cp -f "${work}/prov.out" "${MPI_CHECK_EVIDENCE}" 2>/dev/null
     true
 else
@@ -185,8 +161,7 @@ have_gpu=0
 if command -v rocm-smi >/dev/null 2>&1 && rocm-smi --showid >/dev/null 2>&1; then
     have_gpu=1
 fi
-# No GPU is a SKIP on a build node; inside an mi300 allocation it means the EDF or the --gres is
-# broken.
+# No GPU: SKIP on a build node, but a broken EDF/--gres inside an mi300 allocation.
 if (( ! have_gpu )) && [[ -n "${SLURM_JOB_ID:-}" ]]; then
     say gpu FAIL "no visible GPU inside job ${SLURM_JOB_ID} on mi300 -- broken EDF or missing gres"
     fail=1
@@ -256,11 +231,9 @@ else
 fi
 
 # ---------------------------------------------------------------- 3. RCCL network plugin
-# The plugin is the ARTIFACT's, not one this image built. The self-built copy under
-# /opt/aws-ofi-nccl is gone and a build gate refuses to ship any replacement, because a shipped
-# copy is found first and shadows the artifact -- whose libfabric, libcxi and libc are matched to
-# each other and to the host driver in a way a graft is not. Either install name is accepted:
-# RCCL looks for libnccl-net.so and the artifact may ship only the rccl spelling.
+# The plugin must come from the netstack artifact, not a self-built copy shipped in the image
+# (a build gate refuses that, since a shipped copy would shadow the artifact and its matched
+# libfabric/libcxi/libc). Either install name is accepted: the artifact may ship only "rccl".
 plugin=""
 for cand in /opt/cscs/netstack/librccl-net.so /opt/cscs/netstack/lib/librccl-net.so \
             /opt/cscs/netstack/libnccl-net.so /opt/cscs/netstack/lib/libnccl-net.so; do
@@ -273,18 +246,10 @@ if [[ -n "${plugin}" ]]; then
         say rccl-plugin FAIL "plugin no longer links libfabric -- it would load and do nothing"
         fail=1
     fi
-    # A MISSING SONAME is a defect; a symbol-version complaint under ldd is not. ldd resolves this
-    # library in ISOLATION, and /opt/cscs/netstack comes early in the search path, so the artifact's
-    # own libc (2.35) gets asked to satisfy GLIBC_2.38 references from /opt/rocm -- and cannot.
-    # At run time nothing of the sort happens: libc is already mapped by the program interpreter
-    # before any dlopen, and the image's 2.39 satisfies them all.
-    #
-    # A run can report "rccl-deps FAIL, GLIBC_2.38 not found" and "rccl-net OK, Using network AWS
-    # Libfabric" on a plugin that drives a correct cross-node collective; failing on the first
-    # rejects a working stack for an artefact of the diagnostic.
-    #
-    # So: "=> not found" (an absent library) FAILS. "version `GLIBC_x' not found" is REPORTED and
-    # does not fail, because rccl-net below tests the thing that actually matters -- selection.
+    # A missing SONAME is a real defect; a symbol-version complaint under ldd is not -- ldd
+    # resolves this library in isolation against the artifact's own (older) libc, which at run
+    # time is never actually asked to satisfy those symbols. rccl-net below tests what actually
+    # matters (selection), so only "=> not found" fails here.
     missing="$(ldd "${plugin}" 2>/dev/null | grep '=> not found' | tr '\n' ' ' || true)"
     symver="$(ldd "${plugin}" 2>&1 | grep -c "version .* not found" || true)"
     if [[ -n "${missing}" ]]; then
@@ -301,10 +266,8 @@ else
 fi
 
 # ------------------------------------------------- 3b. RCCL actually RUNS a collective
-# Loadable is not working. This runs ncclAllReduce over every visible device and checks the
-# NUMBERS, because a collective that silently returns the input is the failure that reads as
-# success -- the same shape as the agent-written cupy whose timer returned 0.0 and voided a
-# campaign's GPU numbers.
+# Loadable is not working: this runs ncclAllReduce over every visible device and checks the
+# NUMBERS, since a collective that silently returns the input reads as success otherwise.
 cat >"${work}/rccl.c" <<'C'
 #include <rccl/rccl.h>
 #include <hip/hip_runtime.h>
@@ -366,17 +329,15 @@ int main(void) {
     return bad ? 4 : 0;
 }
 C
-# NOT hipcc. There is no device code here -- only host-side runtime and collective calls -- and
-# hipcc's driver puts a .c file through `--driver-mode=g++ --hip-link -x c` and fails. The plain
-# compiler with __HIP_PLATFORM_AMD__ and -lamdhip64 is the recipe the GPU-aware MPI leg above
-# already uses successfully, so use the same one rather than fighting the wrapper.
+# Not hipcc: no device code here, only host-side calls, and hipcc's driver mishandles a .c file.
+# Same plain-compiler recipe as the GPU-aware MPI leg above.
 if ${CC:-gcc} -O0 -o "${work}/rccl" "${work}/rccl.c" \
         -D__HIP_PLATFORM_AMD__ -I/opt/rocm/include \
         -L/opt/rocm/lib -lrccl -lamdhip64 2>"${work}/rcclcc.log"; then
     say rccl-cc OK "compiled against rccl.h"
     if (( have_gpu )); then
-        # rc captured explicitly: `$?` inside an elif reads the status of whatever ran last, which
-        # is a good way to test the wrong thing. 9 is the program's own "not enough devices".
+        # rc captured explicitly since `$?` inside an elif would read the wrong command's status.
+        # 9 is the program's own "not enough devices".
         rccl_rc=0
         out="$("${work}/rccl" 2>"${work}/rcclrun.log")" || rccl_rc=$?
         if (( rccl_rc == 0 )); then
@@ -389,18 +350,11 @@ if ${CC:-gcc} -O0 -o "${work}/rccl" "${work}/rccl.c" \
             fail=1
         fi
 
-        # Force the NET transport. On one node RCCL would use XGMI/IPC and never touch the net
-        # plugin, so this is the only way to prove the plugin is SELECTED rather than merely
-        # present -- selection is what decides whether a cross-node collective rides Slingshot
-        # or the TCP fallback.
-        #
-        # THREE outcomes, not two. A plugin that is present and chosen prints NET/OFI; the
-        # built-in fallback prints NET/Socket. But if RCCL prints NO transport line at all --
-        # a debug-format change, a build with INIT tracing compiled out -- then treating that
-        # as failure would REJECT A GOOD IMAGE on the strength of a missing log line. That is a
-        # worse error than the one this leg exists to catch, so absence of evidence is reported
-        # as INCONCL with the evidence attached, and the verdict falls back to rccl-plugin,
-        # which inspects the file itself and cannot be fooled by logging.
+        # Force the NET transport: on one node RCCL would otherwise use XGMI/IPC and never touch
+        # the plugin, so this is the only way to prove SELECTION, not mere presence. Three
+        # outcomes: NET/OFI (chosen), NET/Socket (fallback), or no transport line at all -- the
+        # last is reported INCONCL rather than failed, since a missing log line should not reject
+        # a good image; rccl-plugin above already covers that case by inspecting the file itself.
         NCCL_P2P_DISABLE=1 NCCL_SHM_DISABLE=1 NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET \
             "${work}/rccl" >"${work}/net.log" 2>&1 || true
         net_line="$(grep -oiE '(Using network [A-Za-z ]+|NET/[A-Za-z]+)' "${work}/net.log" \

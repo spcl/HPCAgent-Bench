@@ -20,11 +20,10 @@ entrypoint = false
 # The fabric comes from the node, never from the image (IMAGE_REQUIREMENTS.md):
 #   cxi           the Slingshot NIC for libfabric
 #   aws_ofi_nccl  the NCCL net plugin over libfabric/CXI. Without it NCCL does not fail -- it falls
-#                 back to TCP sockets over hsn* and multi-node serving is merely slow (beverin
-#                 629800/629802). Single-node serving never loads a net plugin at all.
-# The image is CUDA 12.9 so that this cuda12 plugin matches its runtime major -- on beverin a plugin
-# one major behind (rocm6 against ROCm 7) failed to load. serve-daint.sbatch still forces NCCL_NET for
-# a multi-node serve, so a plugin that does not load is a loud init failure there, never a slow serve.
+#                 back to TCP sockets over hsn* and multi-node serving is merely slow.
+#                 Single-node serving never loads a net plugin.
+# The image is CUDA 12.9 so this cuda12 plugin matches its runtime major; serve-daint.sbatch forces
+# NCCL_NET for a multi-node serve, so a plugin that does not load fails init loudly.
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
 com.hooks.aws_ofi_nccl.variant = "cuda12"

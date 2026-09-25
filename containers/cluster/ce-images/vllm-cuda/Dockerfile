@@ -46,10 +46,11 @@ LABEL org.opencontainers.image.title="hpcagent-bench-vllm-cuda" \
       org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
 
 # What can be checked WITHOUT a GPU. The device half (NCCL over CXI, a real serve) is the smoke in
-# README.md's Daint section; build.sbatch runs verify_image.py --profile vllm-cuda inside the image.
+# inference/serve-daint.sbatch MODE=smoke; build.sbatch runs verify_image.py --profile vllm-cuda inside the image.
 RUN python3 - <<'PY'
 import importlib
 import importlib.metadata as md
+import importlib.util
 import os
 import pathlib
 
@@ -60,8 +61,11 @@ want = os.environ["VLLM_VERSION"]
 assert vllm.__version__.split("+")[0] == want, f"vllm {vllm.__version__}, image declares {want}"
 assert (torch.version.cuda or "").startswith(os.environ["TORCH_CUDA"]), f"torch CUDA {torch.version.cuda}"
 assert "9.0" in os.environ.get("TORCH_CUDA_ARCH_LIST", ""), "the base was not built for sm_90 (GH200)"
-for mod in ("vllm._C", "triton", "huggingface_hub", "vllm.entrypoints.anthropic.api_router"):
+for mod in ("triton", "huggingface_hub", "vllm.entrypoints.anthropic.api_router"):
     importlib.import_module(mod)
+# The compiled ops load libcuda.so.1, which only the CE hook provides at run time: located, not loaded.
+for ext in ("vllm._C_stable_libtorch", "vllm._moe_C_stable_libtorch"):
+    assert importlib.util.find_spec(ext) is not None, f"{ext} missing from the vllm build"
 
 # Every parser a serving config in this repo names, resolved the way `vllm serve` resolves it.
 from vllm.reasoning import ReasoningParserManager

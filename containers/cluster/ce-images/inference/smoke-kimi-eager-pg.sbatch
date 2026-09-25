@@ -61,7 +61,7 @@ for cand in "${PG_PATCH_DIR:-}" "${SUBMIT_DIR}/external-eager-pg-patch" "${SUBMI
     fi
 done
 
-# 0.23.0: 0.27.1 is 25% slower on oss120b, all of it decode (inference/README.md); it is parked
+# 0.23.0: 0.27.1 is 25% slower on oss120b, all of it decode (containers/README.md); it is parked
 # on the parked/vllm-0271 branch.
 INFERENCE_EDF="${INFERENCE_EDF:-hpcagent-bench-vllm-mi300-latest}"
 export MODEL_REPO="${MODEL_REPO:-moonshotai/Kimi-K2.7-Code}"

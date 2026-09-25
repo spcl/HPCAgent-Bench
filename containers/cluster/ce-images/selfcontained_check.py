@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
 """Fail if anything the image needs to FUNCTION comes from outside the image.
 
-Run it inside a container. Mounted host filesystems are fine as DATA -- benchmarks are read and
-results are written there -- but nothing the software stack needs to run may resolve to one, and
-an image that quietly picks up a host tree is not reproducible: its behaviour then depends on the
-state of somebody's scratch directory rather than on its digest.
-
-This has happened twice. flydsl used to arrive through PYTHONPATH=${SCRATCH}/pyprefix/..., an
-upgrade invisible to the image digest, which is what the sglang consolidation exists to kill; and
-${SCRATCH}/dace shadowed the image's own /opt/dace because sys.path starts with the CWD, handing
-back an empty namespace package that looked like a packaging fault.
+Run inside a container. Mounted host filesystems are fine as DATA, but nothing the software stack
+needs to run may resolve to one: that makes the image's behaviour depend on a host scratch
+directory instead of its digest.
 
   python3 selfcontained_check.py [--modules numpy,torch,...]
 
@@ -41,11 +35,9 @@ DEFAULT_MODULES = "numpy,scipy,pandas,sympy,networkx,torch,cupy,dace,mpi4py,islp
 def drop_own_directory_from_path() -> None:
     """Take this script's own directory off sys.path before importing anything.
 
-    THE CHECKER FOUND THIS ON ITSELF. Python puts the script's directory at sys.path[0], and this
-    script lives beside directories named `sglang` and `vllm` -- so `import sglang`
-    resolved to the ce-images source tree as a namespace package and the gate reported an image
-    that ships SGLang as depending on the host. Exactly the shadowing it exists to detect, which
-    is precisely why it must not do it itself.
+    Python puts the script's directory at sys.path[0], and it lives beside directories named
+    `sglang` and `vllm` -- without this, `import sglang` would shadow to a namespace package here,
+    exactly the failure mode this check exists to detect.
     """
     own = str(pathlib.Path(__file__).resolve().parent)
     sys.path[:] = [p for p in sys.path if p not in ("", ".", own)]

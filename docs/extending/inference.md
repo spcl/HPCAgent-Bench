@@ -106,8 +106,8 @@ Checklist A:
 | What you touch | Why |
 | --- | --- |
 | `containers/cluster/ce-images/<engine>/` | `Dockerfile`, `build.sh`, `build.sbatch`, `edf.toml.example` |
-| `containers/cluster/ce-images/images.env` | `INFERENCE_<ENGINE>_SQSH`, `_EDF_LATEST`, `_TEMPLATE`, `_REPO`, `_TAG` |
-| `containers/cluster/ce-images/install_edfs.sh` | `try_render` for `INFERENCE_<ENGINE>_*` |
+| `containers/cluster/ce-images/images.env` | one row: role, `INFERENCE_<ENGINE>` prefix, platform, dir, partition, profile, candidate, squashfs, EDF, template, tag |
+| `containers/cluster/ce-images/verify_image.py`, `verify_image.sbatch` | the engine's verify profile |
 | `experiments/run_cluster.sh` `run_vllm_node` | interpreter and launch command |
 
 **1. Image directory.** Copy `sglang/`. `build.sh` pins the base by digest and builds from the repo
@@ -116,11 +116,10 @@ mounted `.sqsh`. `edf.toml.example` keeps the `PLACEHOLDER.sqsh` image line, a m
 `mounts = [` block (`derived_edf` exits 2 on a one-line block), absolute `PATH` and `LD_LIBRARY_PATH`
 in `[env]` (the CE drops the image's own ENV) and the three fabric hook annotations.
 
-**2. Build, verify, promote.** After the `images.env` and `install_edfs.sh` lines beside the sglang ones, run
-`IMAGE_DIR=$PWD/<engine> sbatch build_and_verify.sbatch`, then `./promote_image.sh <engine>`. Beyond the table,
-the engine name must appear in `build_and_verify.sbatch` (`BUILD_TARGETS_OF`, `TARGET_SQSH`), `verify_image.py`
-and `verify_image.sbatch` (profile), the role lists of `promote_image.sh`, `pull_image.sh`, `pull_images.sbatch`,
-`push_images.sbatch` and `push_candidates.sbatch`, and `experiments/smoke-new-images.sh`.
+**2. Build, verify, promote.** With the `images.env` row beside the sglang one, run
+`IMAGE_DIR=$PWD/<engine> sbatch build_and_verify.sbatch`, then `./promote_image.sh <engine>`.
+`build_and_verify.sbatch`, `install_edfs.sh`, `promote_image.sh`, `pull_image.sh`, `pull_images.sbatch` and
+`push_images.sbatch` read the row; `experiments/smoke-new-images.sh` names the engine itself.
 
 **3. Launch it in `run_vllm_node`.** `INFERENCE_ENGINE` is tested in three places: `engine_python`
 (the interpreter that resolves the snapshot), the non-SGLang default `VLLM_ROCM_USE_AITER=0`, and

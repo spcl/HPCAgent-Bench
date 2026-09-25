@@ -129,7 +129,7 @@ for the lock and a `cli=package` entry in the gate's `for pin in` loop. The isol
 dependencies off the system `litellm`. The command runs `harness/run_myagent.py` from the payload bound at launch, so a
 runner edit needs no rebuild; a new pin does: `IMAGE_DIR=$PWD/judge-agent-amd sbatch build_and_verify.sbatch` in
 `containers/cluster/ce-images`.
-The pins and the bump procedure are in "Agent harnesses" in `containers/cluster/ce-images/README.md`.
+The pins and the bump procedure are in "Agent harness pins" in `containers/README.md`.
 
 ## Validation
 

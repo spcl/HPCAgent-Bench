@@ -1,51 +1,37 @@
 # syntax=docker/dockerfile:1
 #
-# hpcagent-bench-judge-agent-cuda -- the judge and agent images for NVIDIA GH200 (aarch64 Grace +
-# H100 96 GB, 4 per node; CSCS Daint). The CUDA counterpart of judge-agent-amd, built the same way:
+# hpcagent-bench-judge-agent-cuda: the judge and agent images for NVIDIA GH200 (aarch64 Grace +
+# H100, CSCS Daint). Context is the repository root; build with judge-agent-cuda/build.sh.
 #
-#   containers/cluster/ce-images/judge-agent-cuda/build.sh        (context = repository root)
+# Two targets: `agent` is the toolchain without hpcagent_bench, so an agent cannot read the
+# references it is graded against; `judge` is `agent` plus the installed package.
 #
-# TWO targets from ONE file, exactly as judge-agent-amd. `agent` is the whole toolchain and carries
-# NO hpcagent_bench, so an agent cannot reach the references it is graded against. `judge` at the
-# end of this file is `agent` PLUS the graded tree, one extra layer.
+#   base        NGC PyTorch 25.06 (CUDA 12.9.1, Ubuntu 24.04, python 3.12, NCCL 2.27.3)
+#   vendor      CUDA toolkit, cuTENSOR, NCCL, Nsight Compute/Systems, NVHPC (the only OpenACC path)
+#   offload     LLVM OpenMP -> nvptx sm_90; GCC is built without +nvptx
+#   GPU-aware   mpich/superlu-dist/strumpack/magma/petsc/sundials +cuda cuda_arch=${CUDA_ARCH}
+#   python      the base's torch, the cupy wheel, jax, all for the base's CUDA major
+#   absent      Intel MKL, likwid, msr-tools (x86 only), rocprof, PAPI rocm components
 #
-# WHAT DIFFERS FROM judge-agent-amd, and nothing else should. Every other layer is the AMD recipe
-# with its measured fixes; the reasons are written there once and referenced here, not repeated.
-#   base          public NGC PyTorch 25.06 (CUDA 12.9.1, Ubuntu 24.04, python 3.12, NCCL 2.27.3)
-#   vendor stack  CUDA toolkit, cuTENSOR, NCCL, Nsight Compute/Systems, NVHPC (the ONLY OpenACC path)
-#   offload       LLVM OpenMP -> nvptx sm_90. No amdclang, no hipify, and GCC is built without
-#                 +nvptx: IMAGE_REQUIREMENTS.md "GCC is not an offload compiler here"
-#   GPU-aware     mpich/superlu-dist/strumpack/magma/petsc/sundials +cuda cuda_arch=${CUDA_ARCH}
-#   python        the base's NGC torch, the cupy WHEEL, jax -- both for the base's CUDA major
-#   absent        Intel MKL (x86_64 only), the rocprof tools, PAPI's rocm components
-#
-# CUDA 12.9 ON PURPOSE, not the newest NGC. Its runtime runs on any driver >= 525 through minor-
-# version compatibility, where CUDA 13 needs >= 580 on every node; and the CE's NCCL net plugin
-# (com.hooks.aws_ofi_nccl.variant = "cuda12") is built for this major -- the beverin failure was a
-# plugin one runtime major behind its image. 25.06 is the newest NGC PyTorch release on CUDA 12.9
-# (25.08 onward is CUDA 13). Pinned by its ARM64 manifest digest, resolved from nvcr.io without a
-# pull; the multi-arch index is sha256:025d9b102b5436d4af8af58f12c6a46b7e5d16f19543b1d2cc4446bf2650b4f1.
-#
-# LAYER ORDER is build cost, most expensive first -- see judge-agent-amd for the full table.
+# CUDA 12.9, not 13: it runs on any driver >= 525, and the CE's NCCL net plugin
+# (com.hooks.aws_ofi_nccl.variant = "cuda12") must match the runtime major. Pinned by the arm64
+# manifest digest (multi-arch index sha256:025d9b102b5436d4af8af58f12c6a46b7e5d16f19543b1d2cc4446bf2650b4f1).
+# Layers are ordered most expensive first.
 ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:25.06-py3@sha256:6d46ebd64cfbc74c84e11678c0c5ae298ca97c26171c17a23fd04d23fec5123e
 
 # ------------------------------------------------------------------------------------------------
-# Stage 0: a compile-only libfabric, and nothing else. Identical to judge-agent-amd stage 0.
-#
-# spack's MPICH (netmod=ofi) needs a libfabric to LINK against at build time; the one that LOADS at
-# run time is the node's, injected by the CE cxi hook. Providers are disabled and the .so is DELETED
-# from the shipped image (job 629966: an RPATH-bound providerless libfabric made FI_PROVIDER=cxi
-# abort MPI_Init with "OFI call getinfo failed").
+# Stage 0: a compile-only libfabric. MPICH (netmod=ofi) links against it at build time; at run time
+# the node's libfabric, injected by the CE cxi hook, loads instead. The .so is deleted from the
+# shipped image: an RPATH-bound providerless copy makes MPI_Init abort.
 # ------------------------------------------------------------------------------------------------
 FROM ${BASE_IMAGE} AS ofi-builder
 ARG BASE_IMAGE
 ARG LIBFABRIC_REF=v2.6.0
-# The SHA the tag resolved to, passed in by build.sh; a moved tag fails the build (see AMD stage 0).
+# The commit the tag resolved to, passed in by build.sh; a moved tag fails the build.
 ARG LIBFABRIC_COMMIT=
 USER root
 
-# Every network git call goes through this retry wrapper, and where a mirror is mounted none of
-# them reaches GitHub at all. See judge-agent-amd for the 401-under-load history.
+# Every git network call retries, and a mounted mirror (/git-mirrors) replaces GitHub.
 RUN set -eux; \
     printf '%s\n' \
       '#!/bin/sh' \
@@ -198,13 +184,13 @@ RUN set -eux; \
 #
 # libfabric1 is the RUNTIME package only: it is the file the CE cxi hook bind-mounts the node's
 # libfabric onto, as the ROCm base's copy is on beverin. Its headers must not exist -- MPICH links
-# the compile-only stub from stage 0. likwid is absent: Ubuntu does not build it for arm64.
+# the compile-only stub from stage 0. likwid and msr-tools are absent: Ubuntu builds them for amd64 only.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv python3-dev \
       build-essential gcc g++ gfortran \
-      gdb valgrind util-linux hwloc msr-tools numactl heaptrack strace ltrace binutils patch \
+      gdb valgrind util-linux hwloc numactl heaptrack strace ltrace binutils patch \
       libgoogle-perftools-dev libmimalloc-dev libtbb-dev libeigen3-dev \
       ca-certificates git curl wget openssh-client gnupg ripgrep fd-find jq less tree htop \
       unzip vim nano file bzip2 xz-utils zstd diffutils gzip gawk \
@@ -238,10 +224,8 @@ RUN set -eux; \
 # default search paths so a bare `#include <cutensor.h>` / `-lcutensor` resolves, and asserted by a
 # real link here rather than at the end of the build.
 #
-# NCCL is the device-collective library a submission links (IMAGE_REQUIREMENTS.md recorded the old
-# recipe as shipping none). The NGC base carries it, and the base's torch was built against that
-# copy, so it is ASSERTED and installed from the repo only if absent -- a repo libnccl2 over the
-# base's would move the NCCL torch runs on.
+# NCCL is the device-collective library a submission links. The base's torch was built against the
+# base's copy, so it is asserted and installed from the repo only if absent.
 RUN set -eux; \
     cuda_major="$(nvcc --version | sed -n 's/.*release \([0-9]*\).*/\1/p')"; \
     test -n "${cuda_major}" || { echo "could not read the CUDA major out of nvcc" >&2; exit 2; }; \
@@ -255,7 +239,9 @@ RUN set -eux; \
       "libcutensor2-dev-cuda-${cuda_major}=${CUTENSOR_VERSION}" \
       "${NSIGHT_COMPUTE_PKG}" "${NSIGHT_SYSTEMS_PKG}"; \
     if [ ! -f /usr/include/nccl.h ]; then \
-      apt-get install -y --no-install-recommends libnccl2 libnccl-dev; \
+      nccl_version="$(apt-cache madison libnccl2 | awk -v m="+cuda${cuda_major}." 'index($3, m) {print $3; exit}')"; \
+      test -n "${nccl_version}" || { echo "no libnccl2 build for CUDA ${cuda_major}" >&2; exit 1; }; \
+      apt-get install -y --no-install-recommends "libnccl2=${nccl_version}" "libnccl-dev=${nccl_version}"; \
     fi; \
     for drv in "/opt/nvidia/nsight-compute/${NSIGHT_COMPUTE_PKG#nsight-compute-}/ncu" \
                "/opt/nvidia/nsight-systems/${NSIGHT_SYSTEMS_PKG#nsight-systems-}/target-linux-sbsa-armv8/nsys"; do \
@@ -317,8 +303,8 @@ RUN set -eux; \
 # that variant, so without it no +cuda spec concretizes with gcc 16. NVCC_PREPEND_FLAGS above is the
 # same waiver at nvcc's end.
 #
-# libfabric is OURS (the stage-0 stub), external AND required in the environment below -- the two
-# mechanisms judge-agent-amd step 4 records (630049, 630267) both have to be closed here too.
+# libfabric is the stage-0 stub, declared external and required in the environment too, so spack
+# never builds or links its own.
 COPY --from=ofi-builder /opt/ofi-sdk /opt/ofi-sdk
 RUN set -eux; \
     "/opt/ofi-sdk/bin/fi_info" --version 2>/dev/null | head -1 \
@@ -591,7 +577,7 @@ RUN set -eux; \
 # GPU-aware MPI gate, judge-agent-amd step 5 with CUDA in place of ROCm. The three questions two
 # of which a wrong MPI can pass: wrappers resolve into /opt/view (not the distro MPICH, not the
 # base's HPC-X Open MPI), mpichversion names CUDA in its configure line, and libmpi LINKS the CUDA
-# runtime. Plus which libfabric it links (never spack's own, 629812) and the Slurm/hydra variants.
+# runtime. Plus which libfabric it links (never spack's own) and the Slurm/hydra variants.
 RUN set -eux; \
     for wrapper in mpicc mpicxx mpifort mpiexec; do \
       case "$(command -v "${wrapper}")" in \
@@ -680,7 +666,7 @@ RUN set -eux; \
 # LAZILY (harness/papi.py), so a status-flag read calls a working component broken. Whether it comes
 # up needs a driver and a device; build.sbatch asks that on the node after the import. Only
 # ENUMERATED counter names resolve (`cuda:::dram__bytes_read`, not ncu's `.sum` spelling).
-# --allow-multiple-definition: see judge-agent-amd step 9 (621528).
+# --allow-multiple-definition: the cuda and nvml components define the same helper symbols.
 ARG PAPI_REF=papi-7-2-0-t
 RUN set -eux; \
     git init -q /tmp/papi; \
@@ -902,8 +888,7 @@ ENV SWE_AGENT_CONFIG_DIR=/opt/harness/sweagent/share/config \
     SWE_AGENT_TRAJECTORY_DIR=/opt/harness/sweagent/share/trajectories
 
 # 14b. The generic BLAS/LAPACK names point at the spack OpenBLAS, not at blis and not at netlib.
-# judge-agent-amd step 13b (job 644702: blis won libblas.so.3 and every LAPACKE factorization died
-# at link), with the multiarch directory of whichever architecture this is.
+# If blis owns libblas.so.3, every LAPACKE factorization fails to link.
 RUN set -eux; \
     multiarch="$(uname -m)-linux-gnu"; \
     openblas_so="$(readlink -f /opt/view/lib/libopenblas.so)"; \
@@ -978,7 +963,7 @@ RUN set -eux; \
 # 15. The final gate.
 #
 # LLVM's OpenMP runtime first: ONE symlink, never the directory, because that libdir also ships
-# LLVM's libgomp.so.1 SHIM (judge-agent-amd step 14; 0/324 offload arms before it).
+# LLVM's libgomp.so.1 shim, which would shadow GNU libgomp for every gcc -fopenmp binary.
 RUN set -eux; \
     omp_so="$(/opt/view/bin/clang -print-file-name=libomp.so)"; \
     test -f "${omp_so}"; \
@@ -1102,7 +1087,7 @@ RUN set -eux; \
 WORKDIR /work
 
 # THE STUB MUST NOT SHIP, and no fabric library may sit in a prefix this recipe controls: RPATH would
-# bind to it ahead of the node's libfabric the cxi hook injects (629966). judge-agent-amd, same step.
+# bind to it ahead of the node's libfabric the cxi hook injects.
 RUN set -eux; \
     rm -f /opt/ofi-sdk/lib/libfabric.so*; \
     found="$(find /opt/ofi-sdk /opt/ofi /opt/aws-ofi-nccl \

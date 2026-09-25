@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# Does the CSCS aws_ofi_nccl hook give RCCL the fabric? NO MPI ANYWHERE IN THIS TEST.
-#
-# Bootstrapping RCCL over MPI would let an MPI_Init failure (FI_PROVIDER=cxi against MPICH's
-# providerless spack libfabric: "OFI call getinfo failed") hide the RCCL answer. torch.distributed
-# needs only MASTER_ADDR/PORT, so this isolates RCCL from MPI entirely.
-#
+# Does the CSCS aws_ofi_nccl hook give RCCL the fabric? No MPI here: an MPI_Init failure would
+# hide the RCCL answer, and torch.distributed only needs MASTER_ADDR/PORT.
 #SBATCH --job-name=rccl-hook
 #SBATCH --partition=mi300
 #SBATCH --nodes=2
@@ -19,17 +15,11 @@
 
 set -Eeuo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_nid<node>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+# No core dumps: they land in the CWD on an inode-quota filesystem.
 ulimit -c 0
 SCRATCH="${SCRATCH:?set SCRATCH}"
-# ANY image, not just the judge-agent one. No image ships a fabric library; the hooks supply it:
-#
+# Any image: none ships a fabric library, the hooks supply it.
 #   IMAGE=${SCRATCH}/ce-images/hpcagent-bench-sglang-mi300.sqsh sbatch rccl_hook_check.sbatch
-#
-# The PATH below ends in /opt/venv/bin, which is where the inference images keep their python, so
-# one EDF serves every role.
 IMAGE="${IMAGE:-${SCRATCH}/ce-images/hpcagent-bench-agent-mi300.sqsh}"
 WORK="${SCRATCH}/.tmp/rcclhook-${SLURM_JOB_ID}"
 mkdir -p "${WORK}" "${SCRATCH}/ce-images/logs"
@@ -41,42 +31,25 @@ mounts = ["${WORK}:${WORK}"]
 workdir = "${WORK}"
 
 [annotations]
-# "host" (variant=rocm6) is ABI-dead on this image: /opt/cscs/aws-ofi-ccl-plugin/rocm6/
-# librccl-net.so needs libamdhip64.so.6 (`ldd`, confirmed 2026-09-18), and the image ships ROCm
-# 7.2 (libamdhip64.so.7 only). Every job that reached RCCL init under host+rocm6 logged the same
-# two lines regardless of launcher (CE 640910, enroot 640950/641057/641172):
-#   NET/Plugin: libamdhip64.so.6: cannot open shared object file: No such file or directory
-#   NET/Plugin: Could not find: ofi.
-# /capstor/store is reachable again (confirmed 2026-09-18), so back to "artifact": its bundle
-# carries its own libamdhip64.so.7 (RUNPATH points at /opt/cscs/netstack, where 10-netstack.sh
-# mounts the whole bundle), matching this image. This is also the config job 629967 actually
-# proved ("/opt/cscs/netstack/librccl-net.so", NET/OFI, correct result) -- "host" was a
-# migration-era substitute for when /capstor/store was unreachable, and 629967's citation was
-# kept without re-running it against the substitute.
+# "host" variant=rocm6 is ABI-dead here: its librccl-net.so needs libamdhip64.so.6, but the image
+# ships ROCm 7.2 (.so.7 only). "artifact" carries its own matching libamdhip64.so.7.
 com.hooks.netstack.source = "artifact"
 com.hooks.netstack.version = "26.08.1"
 com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
-# 90-aws-ofi-nccl.sh's case statement has no `set -u` guard on its own *) branch message, so an
-# unset variant is a hard "unbound variable" crash even though artifact mode never reads the
-# value (measured 641224: line 74, before this was restored). Keep it set regardless of source.
+# Must stay set even in artifact mode: the hook's case statement has no `set -u` guard on its
+# *) branch message, so an unset variant is a hard crash regardless of whether it is read.
 com.hooks.aws_ofi_nccl.variant = "rocm6"
 
 [env]
 PATH = "/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/rocm/bin:/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-# LD_LIBRARY_PATH is REQUIRED, not optional. The aws_ofi_nccl hook mounts the RCCL net plugin and
-# sets NCCL_NET_PLUGIN=ofi, but the plugin is dlopen()ed and has no RPATH: it needs
-# libamdhip64.so.6 from /opt/rocm/lib. Without this line RCCL logged
-#   NET/Plugin: libamdhip64.so.6: cannot open shared object file
-#   NET/Plugin: Could not find: ofi.
-# and, because the hook also forces NCCL_NET='AWS Libfabric', ranks aborted instead of falling back
-# (job 640046). torch itself still worked, since it carries its own RPATH to ROCm -- which is why a
-# single-node GPU check passes while the cross-node collective fails. Same value as the agent EDF.
+# Required: the RCCL net plugin is dlopen()ed with no RPATH and needs libamdhip64.so.6 from here.
+# torch carries its own RPATH to ROCm, so a single-node check can pass while this is missing and
+# the cross-node collective still fails.
 LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/x86_64-linux-gnu"
-# FI_PROVIDER is deliberately NOT set here. Setting it globally is what killed 629966: MPI picked
-# it up and aborted on a libfabric with no cxi. RCCL reaches libfabric through the plugin, which
-# the hook installs already pointed at the artifact's own libfabric.
+# FI_PROVIDER deliberately unset: MPI would pick it up and abort on a libfabric with no cxi.
+# RCCL reaches libfabric through the plugin instead.
 HWLOC_COMPONENTS = "-gl"
 FI_CXI_RX_MATCH_MODE = "software"
 FI_MR_CACHE_MONITOR = "disabled"
@@ -84,11 +57,8 @@ NCCL_DEBUG = "INFO"
 NCCL_DEBUG_SUBSYS = "INIT,NET"
 TOML
 
-# LAUNCH=pyxis (default) | enroot. pyxis is the supported path; enroot routes around it while the
-# the site enroot.conf default does not work here, and every `srun --environment=`
-# dies at task_init(). Both read the SAME ${EDF} written above, so they test the same container.
-# Comm hooks are forced ON for enroot: this job exists to test them, and enroot_srun.sh would
-# otherwise turn them off (it derives them from INFERENCE_NODES, which is unset here).
+# LAUNCH=pyxis (default) | enroot; both read the same EDF. Comm hooks are forced on for enroot
+# since this job exists to test them and enroot_srun.sh would otherwise default them off.
 LAUNCH="${LAUNCH:-pyxis}"
 REPO="${HPCAGENT_BENCH_REPO:-${SCRATCH}/hpcagent-bench}"
 in_image() {
@@ -116,8 +86,8 @@ dist.all_reduce(t, op=dist.ReduceOp.SUM)
 expect = world * (world + 1) / 2
 ok = bool(torch.all(t == expect).item())
 if rank == 0:
-    # After the collective, so the plugin and its libfabric are already dlopened. The listing
-    # further up only says which files EXIST; these lines say which ones RCCL actually loaded.
+    # After the collective so the plugin is already dlopened: this says what RCCL actually loaded,
+    # not just what files exist.
     with open("/proc/self/maps") as fh:
         mapped = sorted({l.split()[-1] for l in fh if "libfabric" in l or "ccl-net" in l})
     for path in mapped:
@@ -148,9 +118,8 @@ in_image -N2 --ntasks-per-node=4 -c24 \
 
 echo
 echo "--- transport"
-# THE VERDICT HAS TO REACH THE EXIT CODE. A TCP allreduce is numerically correct, so rc alone is
-# 0 on exactly the failure this job exists to catch: right answer, wrong fabric. Inconclusive
-# counts as a failure too -- no transport line means the run proved nothing either way.
+# The verdict must reach the exit code: a TCP allreduce is numerically correct, so rc alone misses
+# the failure this job exists to catch (right answer, wrong fabric). Inconclusive also fails.
 tv=0
 if grep -qiE 'NET/OFI|AWS Libfabric' "${WORK}/r.log"; then
     sel="$(grep -oiE 'Using network [A-Za-z ]+|NET/OFI[^ ]*' "${WORK}/r.log" | sort -u | tr '\n' ' ' || true)"
@@ -167,7 +136,7 @@ fi
 grep -E "^MAPPED|^RESULT" "${WORK}/r.log" || true
 
 s=$(( rc + tv ))
-# The logs are wanted precisely when this fails; the old unconditional rm threw them away.
+# Preserve logs only on failure, when they are wanted for diagnosis.
 for f in "${WORK}"/*.log; do
     if [ -e "${f}" ]; then cp -f "${f}" "${SCRATCH}/ce-images/logs/rccl-hook-${SLURM_JOB_ID}-$(basename "${f}")"; fi
 done
