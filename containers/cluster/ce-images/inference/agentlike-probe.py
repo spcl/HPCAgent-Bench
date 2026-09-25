@@ -1,14 +1,13 @@
 """Sustained agent-shaped load against a served vLLM endpoint.
 
 The saturation probe in smoke-kimi-eager-pg.sbatch sends "Explain loop tiling, variation N." --
-about 8 tokens -- and measures one burst. Every kimi figure we have came from it, which is why
-601653 read 294-307 tok/s while the campaign decoded at 0.2: that probe did almost no prefill
-(24 of its 28 samples showed ZERO prompt throughput) and this workload is prefill-bound at
-roughly 25 tokens in per token out.
+about 8 tokens -- and measures one burst. It reads 294-307 tok/s where the campaign decodes at
+0.2: that probe does almost no prefill (24 of 28 samples show ZERO prompt throughput) and the
+campaign workload is prefill-bound at roughly 25 tokens in per token out.
 
 This sends what an agent turn actually looks like -- a long prefix shared by every stream, as the
 skills packet and system prompt are, plus a unique tail -- and keeps sending for a set duration,
-because the EngineCore death we are chasing arrives at ~90 minutes, not inside a 6-minute burst.
+because an EngineCore death can arrive at ~90 minutes, not inside a 6-minute burst.
 """
 
 import argparse

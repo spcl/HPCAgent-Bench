@@ -131,10 +131,9 @@ rank="${SLURM_PROCID:-0}"
 
 export TOKENIZERS_PARALLELISM=false
 export VLLM_ENGINE_READY_TIMEOUT_S="${VLLM_ENGINE_READY_TIMEOUT_S:-7200}"
-# Overridable so a run can tell a DEADLOCK from mere slowness. 602296 hung in a gloo
-# recv_object on the pp pair; gloo's pair timeout and this RPC timeout are both 1800 s, so
-# one 30-minute stall trips both at once and we cannot see whether the engine would have
-# recovered. Raise both and the answer is direct: recovery means backpressure, continued
+# Overridable so a run can tell a DEADLOCK from mere slowness. A hang in a gloo recv_object on
+# the pp pair hits gloo's pair timeout and this RPC timeout, both 1800 s, at once, so a 30-minute
+# stall cannot show whether the engine would have recovered. Raise both and the answer is direct: recovery means backpressure, continued
 # silence means a true deadlock.
 export VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS="${VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS:-1800}"
 export NCCL_DEBUG="${NCCL_DEBUG:-INFO}"
@@ -144,9 +143,9 @@ export NCCL_DEBUG_FILE="${RUN_DIR}/nccl.%h.%p.log"
 # for every entry on sys.path, so putting the patch dir on PYTHONPATH reaches every vLLM worker
 # process without touching the image or the launcher.
 export PYTHONPATH="${PG_PATCH_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
-# NOT set: VLLM_DISABLE_PYNCCL. It is the superseded workaround that costs ~20x and blocks
-# graph capture; run_cluster.sh deliberately stopped defaulting it on 2026-08-13.
-# vLLM reads env VLLM_PORT as the BASE for internal ZMQ ports, not the HTTP port (589170).
+# NOT set: VLLM_DISABLE_PYNCCL. It costs ~20x and blocks graph capture; run_cluster.sh does not
+# default it either.
+# vLLM reads env VLLM_PORT as the BASE for internal ZMQ ports, not the HTTP port.
 unset VLLM_PORT
 
 MODEL_PATH="$(python3 - <<'PY' | tail -n 1
@@ -297,7 +296,7 @@ else
     exit 1
 fi
 
-stage "gate 2: unbatched-P2P warnings (594541 had 24; expect 0)"
+stage "gate 2: unbatched-P2P warnings (expect 0)"
 # Zero matches is the PASS here, and grep exits nonzero on it -- which pipefail propagates
 # through wc -l, so the bare pipeline kills the job at the moment it succeeds.
 # The || true must sit on grep itself, inside the pipe.

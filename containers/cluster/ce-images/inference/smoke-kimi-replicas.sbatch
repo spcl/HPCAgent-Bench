@@ -103,7 +103,7 @@ export VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS=1800
 export NCCL_DEBUG="${NCCL_DEBUG:-INFO}"
 export NCCL_DEBUG_FILE="${RUN_DIR}/nccl.%h.%p.log"
 export PYTHONPATH="${PG_PATCH_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
-# vLLM reads env VLLM_PORT as the BASE for internal ZMQ ports, not the HTTP port (589170).
+# vLLM reads env VLLM_PORT as the BASE for internal ZMQ ports, not the HTTP port.
 unset VLLM_PORT
 
 MODEL_PATH="$(python3 - <<'PY' | tail -n 1
