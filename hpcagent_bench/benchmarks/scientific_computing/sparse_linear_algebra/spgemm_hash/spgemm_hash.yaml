@@ -74,5 +74,3 @@ init:
 output_args:
 - C_indptr
 - C_indices
-experiment_tags:
-- sparse

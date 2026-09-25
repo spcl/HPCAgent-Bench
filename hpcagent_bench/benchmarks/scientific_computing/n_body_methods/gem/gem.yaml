@@ -52,6 +52,5 @@ array_args:
 output_args:
 - phi
 experiment_tags:
-- gem
 - scicomp-focus40
 - mixed

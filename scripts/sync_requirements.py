@@ -8,11 +8,6 @@ runs from a repo MOUNTED into the image, so a baked-in install would be a second
 no way to install "the extras of a local project, without the project", so those files have to exist
 -- but they do not have to be a second hand-maintained list. They are derived here instead.
 
-That divergence was not hypothetical. Before this script, amd.txt and nvidia.txt carried a bare
-``pythran`` against pyproject's ``pythran==0.18.1`` -- the pin that exists because 0.19.0 turns
-subset_sum into a >600 s hang, then a SIG11 -- and neither declared ``ordered-set`` at all, which
-every dace import needs. The CE images installed exactly what those files said.
-
 ``--check`` re-renders in memory and diffs; :mod:`tests.test_requirements_cover_project_deps` runs it
 so drift fails a test run rather than a container build.
 """
@@ -43,14 +38,13 @@ class Rendered:
 
     ``core`` pulls in ``[project] dependencies``; the hardware stacks need them because nothing else
     installs the project's own deps into the CE image. ``groups`` names PEP 735 dependency groups,
-    ``includes`` emits ``-r`` lines, and ``options`` are pip option lines that cannot be spelled as a
-    PEP 508 requirement and so have no home in pyproject.
+    and ``options`` are pip option lines that cannot be spelled as a PEP 508 requirement and so have
+    no home in pyproject.
     """
 
     extras: tuple[str, ...]
     core: bool
     groups: tuple[str, ...] = ()
-    includes: tuple[str, ...] = ()
     options: tuple[str, ...] = ()
     note: str = ""
 
@@ -59,16 +53,6 @@ class Rendered:
 #: :func:`check` says so rather than deleting it: ``optional.txt`` is a two-package convenience split
 #: that matches no single extra.
 GENERATED: dict[str, Rendered] = {
-    "requirements.txt": Rendered(
-        (),
-        core=False,
-        groups=("linting",),
-        includes=("requirements/cpu.txt",),
-        note="The CPU runtime stack plus the DEV-ONLY formatters the format-check job and "
-        "scripts/check_format.py drive. Equivalent to `pip install -e '.[cpu]' --group linting`, "
-        "kept because a bare `pip install -r requirements.txt` is what a first-time reader reaches "
-        "for.",
-    ),
     "requirements/cpu.txt": Rendered(
         ("cpu",),
         core=True,
@@ -114,15 +98,16 @@ GENERATED: dict[str, Rendered] = {
     "requirements/hf.txt": Rendered(
         ("hf",),
         core=False,
-        note="HuggingFace Dataset export (hpcagent-bench export-hf). Optional: the row builder "
-        "and jsonl writer are pure-stdlib; these add the parquet writer and the Hub push.",
+        note="HuggingFace Dataset export (hpcagent-bench export-hf). Optional: rows, validation and "
+        "the jsonl writer are stdlib; pyarrow adds parquet, datasets the load-back check, "
+        "huggingface_hub the push.",
     ),
     "requirements/harbor.txt": Rendered(
         ("harbor",),
         core=False,
-        note="Harbor integration (adapters/hpcagent_bench). Only needed to RUN the benchmark "
-        "under Harbor, or to validate a generated task.toml against Harbor's schema. The task "
-        "generator and the in-container grader carry no harbor dependency.",
+        note="Harbor integration (hpcagent_bench/harbor.py). Only needed to RUN the benchmark "
+        "under Harbor, or to check a generated task.toml against Harbor's own model. Task "
+        "generation, validation and the verifier's grader carry no harbor dependency.",
     ),
     "requirements/agent-anthropic.txt": Rendered(
         ("agent-anthropic",), core=False, note="Agent backend: the Anthropic API."
@@ -182,7 +167,6 @@ def render(spec: Rendered, core: Sequence[str], extras: dict[str, list[str]], gr
     if spec.note:
         lines.append("#\n" + "\n".join(f"# {line}" for line in wrap(spec.note)) + "\n")
     lines.extend(f"{option}\n" for option in spec.options)
-    lines.extend(f"-r {include}\n" for include in spec.includes)
 
     emitted: set[str] = set()
     for name in names:

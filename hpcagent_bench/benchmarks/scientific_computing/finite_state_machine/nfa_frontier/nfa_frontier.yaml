@@ -78,5 +78,3 @@ init:
 output_args:
 - activation_counts
 - report_counts
-experiment_tags:
-- finite_state_machine

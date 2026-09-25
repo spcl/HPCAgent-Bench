@@ -21,6 +21,7 @@ from collections.abc import Callable, Iterable, Sequence
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from hpcagent_bench import data_guard
 from hpcagent_bench.harness import recording
 
 #: What sqlite hands back and takes. Named so a row is a typed mapping rather than a bag.
@@ -101,7 +102,7 @@ UNATTRIBUTED: tuple[str, ...] = (
     "gpusmoke5-hip-cpf",
 )
 
-TABLES: tuple[str, ...] = ("benchmarks", "submissions", "attempts", "calls", "sources")
+TABLES: tuple[str, ...] = ("submissions", "attempts", "calls", "sources")
 
 #: Tables carrying a run_id, so the set of runs to write into `runs` can be collected from them.
 RUN_TABLES: tuple[str, ...] = ("submissions", "attempts", "calls", "sources", "completions")
@@ -218,16 +219,13 @@ def copy_table(
     dropped = 0
     for row in src.execute(f"SELECT {', '.join(read)} FROM {table}"):
         record: Row = dict(zip(read, row))
-        if table != "benchmarks":
-            run_id = str(record.get("run_id") or "")
-            if identity(run_id) is None:
-                dropped += 1
-                continue
+        if identity(str(record.get("run_id") or "")) is None:
+            dropped += 1
+            continue
         cols = [c for c in want if c in record]
         rows.append((cols, tuple(record[c] for c in cols)))
-    verb = "INSERT OR REPLACE" if table == "benchmarks" else "INSERT"
     for cols, values in rows:
-        dest.execute(f"{verb} INTO {table}({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", values)
+        dest.execute(f"INSERT INTO {table}({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", values)
     return len(rows), dropped
 
 
@@ -272,25 +270,8 @@ def backfill_packets(dest: sqlite3.Connection) -> int:
     return written
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("sources", nargs="+", help="run roots or individual result DBs")
-    ap.add_argument("--out", help="destination DB; rebuilt from scratch")
-    ap.add_argument("--report", action="store_true", help="print the arm mapping and write nothing")
-    args = ap.parse_args()
-
-    # the output must not sit under a source root: a second run would read it back in and double
-    # every row, and an archived campaign DB is itself a legitimate aggregate, so nothing in the
-    # file can distinguish the two
-    out = pathlib.Path(args.out).resolve() if args.out else None
-    roots = [pathlib.Path(s).resolve() for s in args.sources]
-    if out is not None and any(root in out.parents for root in roots):
-        sys.exit(f"--out {out} is under a source root; write it outside the run roots")
-    paths = shard_paths(args.sources)
-    if not paths:
-        sys.exit("no result DBs under the given sources")
-    counts = read_arms(paths)
-
+def map_arms(counts: collections.Counter[str]) -> tuple[dict[str, Identity], list[tuple[str, int, str]], int]:
+    """``(arm -> identity, unmapped (arm, rows, why), unattributed row count)`` over ``counts``."""
     mapping: dict[str, Identity] = {}
     unmapped: list[tuple[str, int, str]] = []
     skipped = 0
@@ -302,8 +283,63 @@ def main() -> None:
             continue
         if tags is None:
             skipped += n
-            continue
-        mapping[arm] = tags
+        else:
+            mapping[arm] = tags
+    return mapping, unmapped, skipped
+
+
+def write_migration(paths: Sequence[pathlib.Path], out: str, mapping: dict[str, Identity]) -> collections.Counter[str]:
+    """Rebuild ``out`` from the shards under ``mapping``; return rows written per table."""
+    for suffix in ("", "-wal", "-shm"):
+        pathlib.Path(out + suffix).unlink(missing_ok=True)
+    dest = recording.connect(out)
+
+    def identity(run_id: str) -> Identity | None:
+        return mapping.get(arm_of(run_id))
+
+    written: collections.Counter[str] = collections.Counter()
+    try:
+        for path in paths:
+            src = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            try:
+                present = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                # `runs` FIRST: every measurement row joins to it, so a shard that fails halfway
+                # leaves identified rows rather than orphans.
+                seen: set[str] = set()
+                for table in (t for t in RUN_TABLES if t in present):
+                    seen.update(str(r[0]) for r in src.execute(f"SELECT DISTINCT run_id FROM {table}"))
+                written["runs"] += write_runs(dest, seen, identity)
+                for table in (t for t in TABLES if t in present):
+                    written[table] += copy_table(dest, src, table, identity)[0]
+            finally:
+                src.close()
+            dest.commit()
+        written["packets"] = backfill_packets(dest)
+        dest.execute(f"PRAGMA user_version = {recording.DERIVED_MARK}")
+        dest.commit()
+    finally:
+        dest.close()
+    return written
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("sources", nargs="+", help="run roots or individual result DBs")
+    ap.add_argument("--out", help="destination DB; rebuilt from scratch")
+    ap.add_argument("--report", action="store_true", help="print the arm mapping and write nothing")
+    args = ap.parse_args()
+
+    # an output under a source root would be read back in by the next run and double every row
+    if args.out:
+        try:
+            data_guard.check_output(args.out, args.sources)
+        except data_guard.ProtectedPathError as exc:
+            sys.exit(str(exc))
+    paths = shard_paths(args.sources)
+    if not paths:
+        sys.exit("no result DBs under the given sources")
+    counts = read_arms(paths)
+    mapping, unmapped, skipped = map_arms(counts)
 
     width = max((len(a) for a in mapping), default=0)
     for arm, tags in sorted(mapping.items(), key=lambda kv: kv[1]):
@@ -315,43 +351,9 @@ def main() -> None:
         sys.exit("refusing to migrate: every arm must map to exactly one identity")
     if args.report:
         return
-
     if not args.out:
         sys.exit("--out is required unless --report")
-    for suffix in ("", "-wal", "-shm"):
-        pathlib.Path(args.out + suffix).unlink(missing_ok=True)
-    dest = recording.connect(args.out)
-
-    def identity(run_id: str) -> Identity | None:
-        return mapping.get(arm_of(run_id))
-
-    written: collections.Counter[str] = collections.Counter()
-    try:
-        dest.execute("PRAGMA foreign_keys = OFF")
-        for path in paths:
-            src = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-            try:
-                present = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-                # `runs` FIRST: every measurement row joins to it, so a shard that fails halfway
-                # leaves identified rows rather than orphans.
-                seen: set[str] = set()
-                for table in (t for t in RUN_TABLES if t in present):
-                    seen.update(str(r[0]) for r in src.execute(f"SELECT DISTINCT run_id FROM {table}"))
-                written["runs"] += write_runs(dest, seen, identity)
-                for table in TABLES:
-                    if table in present:
-                        n, _dropped = copy_table(dest, src, table, identity)
-                        written[table] += n
-            finally:
-                src.close()
-            dest.commit()
-        written["packets"] = backfill_packets(dest)
-        dest.execute("PRAGMA foreign_keys = ON")
-        dest.execute(f"PRAGMA user_version = {recording.DERIVED_MARK}")
-        dest.commit()
-    finally:
-        dest.close()
-    for table, n in sorted(written.items()):
+    for table, n in sorted(write_migration(paths, args.out, mapping).items()):
         print(f"{table}: {n} rows")
 
 

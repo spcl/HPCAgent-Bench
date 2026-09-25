@@ -17,7 +17,7 @@ from hpcagent_bench.frameworks.errors import decline_kind, NotSupportedByFramewo
 from hpcagent_bench.frameworks.framework import ArgValue, BenchData, KernelImpl, KernelResult, OutputValue, split_flavor
 from hpcagent_bench.frameworks.schema import Result, results_engine
 from hpcagent_bench.harness import recording
-from hpcagent_bench.metrics import autovec, parallelism
+from hpcagent_bench.metrics import SweepMetric, sweep_metrics
 from hpcagent_bench.precision import Precision, TOLERANCE_MATRIX, numpy_dtype, precision_from_datatype, tolerance_band
 from typing import NotRequired, TypedDict
 
@@ -277,36 +277,26 @@ class Test(object):
                 print(f"{kind}: {path}")
         return texts
 
-    def _autovec_counts(
+    def _measure_metrics(
         self, frmwrk: Framework, impl: KernelImpl | None, reports: dict[str, str | None], datatype: str
-    ) -> autovec.Measured | None:
-        """The measured artifact's auto-vectorization counts when ``metrics.autovec`` is on (default off), read
-        off the opt report written above or, with that report off, one asked for here. A count that fails is a
-        warning: like a report, it never sinks the measurement already in hand."""
-        if impl is None or not autovec.enabled():
-            return None
-        try:
-            report = reports["opt_report"] if "opt_report" in reports else frmwrk.opt_report(impl, self.bench)
-            return None if report is None else autovec.count(report, datatype)
-        except Exception as e:  # noqa: BLE001 -- a diagnostic must not sink a measured run
-            print(f"WARNING: autovec for {frmwrk.fname} failed: {e}")
-            return None
-
-    def parallelism_record(self, frmwrk: Framework, impl: KernelImpl | None) -> parallelism.ParallelismRecord | None:
-        """The measured artifact's SDFG parallelism taxonomy when ``metrics.parallelism`` is on (default off)
-        and ``frmwrk``'s typed seam (:meth:`Framework.measured_sdfg`) gives an SDFG -- the SDFG the framework's
-        own pipeline actually built, not a second, separately-measured one. A classify failure is a warning,
-        like autovec's: it never sinks the measurement already in hand."""
-        if not parallelism.enabled() or impl is None:
-            return None
-        sdfg = frmwrk.measured_sdfg(impl)
-        if sdfg is None:
-            return None
-        try:
-            return parallelism.classify(sdfg)
-        except Exception as e:  # noqa: BLE001 -- a diagnostic must not sink a measured run
-            print(f"WARNING: parallelism for {frmwrk.fname} failed: {e}")
-            return None
+    ) -> list[tuple[SweepMetric, object]]:
+        """``(metric, value)`` for every switched-on sweep metric (:func:`hpcagent_bench.metrics.sweep_metrics`)
+        that measured the implementation. A metric that fails is a warning: like a report, it never sinks the
+        measurement already in hand."""
+        if impl is None:
+            return []
+        measured: list[tuple[SweepMetric, object]] = []
+        for name, metric in sweep_metrics():
+            if not metric.enabled():
+                continue
+            try:
+                value = metric.measure_sweep(frmwrk, impl, self.bench, reports, datatype)
+            except Exception as e:  # noqa: BLE001 -- a diagnostic must not sink a measured run
+                print(f"WARNING: {name} for {frmwrk.fname} failed: {e}")
+                continue
+            if value is not None:
+                measured.append((metric, value))
+        return measured
 
     def _execute(
         self,
@@ -502,10 +492,8 @@ class Test(object):
         bvalues: list[Sample] = []
         # Per-implementation timing series; consumed by the CLI for JSONL.
         per_impl_timings: dict[str, ImplTiming] = {}
-        # Auto-vectorization counts per implementation (metrics.autovec), stored beside the results.
-        autovec_counts: dict[str, autovec.Measured] = {}
-        # SDFG parallelism taxonomy per implementation (metrics.parallelism), stored beside the results.
-        parallelism_records: dict[str, parallelism.ParallelismRecord] = {}
+        # Sweep metrics per implementation (the switched-on metrics.<name>), stored beside the results.
+        metric_values: list[tuple[str, SweepMetric, object]] = []
         context: BenchData = {**bdata, **self.frmwrk.imports()}
         for impl, impl_name in self.frmwrk.implementations(self.bench):
             self._last_failure = None
@@ -560,12 +548,12 @@ class Test(object):
             # The MEASURED handle, not the loop's -- see _execute; for a framework whose optimize()
             # returns a compiled artifact (DaCe) they are different objects.
             reports = self._write_perf_reports(self.frmwrk, self._measured_impl, impl_name)
-            counted = self._autovec_counts(self.frmwrk, self._measured_impl, reports, datatype or "float64")
-            if counted is not None:
-                autovec_counts[impl_name] = counted
-            classified = self.parallelism_record(self.frmwrk, self._measured_impl)
-            if classified is not None:
-                parallelism_records[impl_name] = classified
+            metric_values.extend(
+                (impl_name, metric, value)
+                for metric, value in self._measure_metrics(
+                    self.frmwrk, self._measured_impl, reports, datatype or "float64"
+                )
+            )
             if timelist:
                 natives = native_times if native_times else [None] * len(timelist)
                 for t, nt in zip(timelist, natives):
@@ -614,22 +602,10 @@ class Test(object):
                         node=osinfo.node_name(),
                     )
                 )
-            for impl_name, counted in autovec_counts.items():
+            for impl_name, metric, value in metric_values:
                 session.add_all(
-                    autovec.rows(
-                        counted,
-                        timestamp=timestamp,
-                        benchmark=self.bench.info["short_name"],
-                        framework=column,
-                        flavor=flavor,
-                        impl=impl_name,
-                        datatype=datatype or "float64",
-                    )
-                )
-            for impl_name, classified in parallelism_records.items():
-                session.add_all(
-                    parallelism.rows(
-                        classified,
+                    metric.rows(
+                        value,
                         timestamp=timestamp,
                         benchmark=self.bench.info["short_name"],
                         framework=column,

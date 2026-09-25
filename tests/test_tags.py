@@ -229,3 +229,71 @@ def test_cli_resolve_prints_sorted_stems_and_refuses_with_a_clear_message(
     monkeypatch.setattr("sys.argv", ["tags.py", "resolve", "no-such-tag"])
     assert tags.main() == 2
     assert "no-such-tag" in capsys.readouterr().err
+
+
+def test_a_plain_list_entry_names_kernels_directly(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    write_registry(monkeypatch, tmp_path, "tags:\n  mytag: [kmp, dfa]\n")
+    assert tags.registry().tags["mytag"].op == tags.TagOp.KERNELS
+    assert {k.rsplit("/", 1)[-1] for k in tags.resolve_registered("mytag")} == {"kmp", "dfa"}
+
+
+def test_a_plain_list_entry_is_read_by_the_at_tag_filter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    write_registry(monkeypatch, tmp_path, "tags:\n  mytag: [kmp, dfa]\n")
+    assert {k.rsplit("/", 1)[-1] for k in tags.KERNELS.select_keys("all@mytag")} == {"kmp", "dfa"}
+
+
+def test_a_plain_list_entry_refuses_a_selector_that_is_not_a_kernel_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """Names only: a track in the list is an unknown kernel name, not a whole track."""
+    write_registry(monkeypatch, tmp_path, "tags:\n  mytag: [kmp, scientific_computing]\n")
+    with pytest.raises(KeyError, match="unknown kernel name 'scientific_computing'"):
+        tags.resolve_registered("mytag")
+
+
+def test_an_unknown_kernel_name_lists_every_miss_with_close_matches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    write_registry(monkeypatch, tmp_path, "tags:\n  mytag: [kmp, argmax_valu, dfaa]\n")
+    with pytest.raises(KeyError) as exc:
+        tags.resolve_registered("mytag")
+    message = exc.value.args[0]
+    assert "'mytag'" in message
+    assert "'argmax_valu'" in message and "argmax_value" in message
+    assert "'dfaa'" in message and "dfa" in message
+
+
+def test_an_empty_plain_list_entry_is_refused_at_load(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    write_registry(monkeypatch, tmp_path, "tags:\n  mytag: []\n")
+    with pytest.raises(ValueError, match="at least one kernel name"):
+        tags.registry()
+
+
+def test_cli_resolve_takes_kernel_names_directly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write_registry(monkeypatch, tmp_path, "tags: {}\n")
+    monkeypatch.setattr("sys.argv", ["tags.py", "resolve", "--kernels", "kmp,dfa"])
+    assert tags.main() == 0
+    assert capsys.readouterr().out.strip() == "dfa,kmp"
+
+    listing = tmp_path / "mine.txt"
+    listing.write_text("# my subset\nkmp  # a note\nloop_level_reasoning/argmax_value/argmax_value\n")
+    monkeypatch.setattr("sys.argv", ["tags.py", "roster", "--kernels-file", str(listing)])
+    assert tags.main() == 0
+    assert capsys.readouterr().out.strip() == "argmax_value,kmp"
+
+
+def test_cli_refuses_an_unknown_kernel_name_and_an_ambiguous_selection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write_registry(monkeypatch, tmp_path, "tags: {}\n")
+    monkeypatch.setattr("sys.argv", ["tags.py", "resolve", "--kernels", "kmp,argmax_valu"])
+    assert tags.main() == 2
+    assert "did you mean: argmax_value" in capsys.readouterr().err
+
+    monkeypatch.setattr("sys.argv", ["tags.py", "resolve", "llr-focus40", "--kernels", "kmp"])
+    assert tags.main() == 2
+    assert "exactly one of" in capsys.readouterr().err

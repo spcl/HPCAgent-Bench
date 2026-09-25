@@ -50,5 +50,3 @@ fuzz:
   constraints:
   - m >= 2
   - N >= 12
-experiment_tags:
-- ls3df

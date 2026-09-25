@@ -24,5 +24,3 @@ array_args:
 - data
 output_args:
 - data
-experiment_tags:
-- combinational_logic

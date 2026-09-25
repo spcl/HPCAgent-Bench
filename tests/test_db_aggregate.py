@@ -34,10 +34,6 @@ def _seed(path: str, *, run: str, kernels: list[str], with_results: bool = True,
         )
         for kernel in kernels:
             conn.execute(
-                "INSERT OR REPLACE INTO benchmarks(name, track, dwarf, source) VALUES (?,?,?,?)",
-                (kernel, "scientific_computing", "dense_la", None),
-            )
-            conn.execute(
                 "INSERT INTO submissions(run_id, ts, benchmark, preset, datatype, "
                 "source_mode, optimizer, baseline, speedup) VALUES (?,?,?,?,?,?,?,?,?)",
                 (run, 1, kernel, "S", "float64", "restricted", "noop", "c", 1.5),
@@ -97,11 +93,11 @@ def test_aggregate_merges_every_table_and_reassigns_ids(tmp_path) -> None:
 
     recording.aggregate(base)
 
-    # Row logs concatenate; the dimension table dedups on its natural key (gemm seen by both shards).
+    # Row logs concatenate; the natural-key tables keep one row per key.
     assert _count(base, "submissions") == 4
     assert _count(base, "attempts") == 4
     assert _count(base, "results") == 4
-    assert _count(base, "benchmarks") == 3
+    assert _count(base, "runs") == 2
 
     conn = sqlite3.connect(base)
     try:

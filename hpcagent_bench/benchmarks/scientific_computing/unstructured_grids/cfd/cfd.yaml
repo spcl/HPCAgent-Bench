@@ -65,5 +65,3 @@ output_args:
 - res_density
 - res_momentum
 - res_energy
-experiment_tags:
-- cfd

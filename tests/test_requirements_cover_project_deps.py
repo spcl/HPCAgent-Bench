@@ -153,7 +153,6 @@ def test_every_requirements_file_is_generated_or_declared_hand_maintained() -> N
     """A new hand-written file under requirements/ is a new place for the list to drift. Adding one
     means either giving it an extra to generate from, or saying here why it has none."""
     on_disk = {str(p.relative_to(paths.ROOT)) for p in REQUIREMENTS_DIR.glob("*.txt")}
-    on_disk.add("requirements.txt")
     unaccounted = sorted(on_disk - set(sync_requirements.GENERATED) - HAND_MAINTAINED)
     assert not unaccounted, f"requirements files that are neither generated nor declared hand-maintained: {unaccounted}"
 

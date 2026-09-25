@@ -475,7 +475,7 @@ def pin_build_caching() -> None:
         # on the fork, so pinning it unconditionally made every dace column raise KeyError on
         # upstream main -- which is the tree the `parallel` and `autoopt` columns are meant to run
         # on, and whose numbers are the control the fork's canonicalize column is read against
-        # (samples/npbench_dace_flavors.sbatch). Reported rather than passed over in silence: a
+        # (scripts/samples/npbench_dace_flavors.sbatch). Reported rather than passed over in silence: a
         # missing pin means this build is NOT configured the way a graded one is supposed to be,
         # which is exactly the kind of difference a reader of the numbers has to know about.
         try:

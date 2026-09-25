@@ -56,6 +56,3 @@ mpi:
     - N
     - N
     - N
-experiment_tags:
-- mpi-focus32
-- ls3df

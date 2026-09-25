@@ -50,5 +50,3 @@ output_args: [params, offset]
 precisions:
 - fp64
 - fp32
-experiment_tags:
-- terminal_bench

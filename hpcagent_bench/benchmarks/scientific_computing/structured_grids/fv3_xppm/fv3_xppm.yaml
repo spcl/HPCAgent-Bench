@@ -125,5 +125,4 @@ mpi:
     - nj
     - nk
 experiment_tags:
-- weather_stencils
 - scicomp-focus40

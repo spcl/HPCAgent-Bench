@@ -49,7 +49,6 @@ mpi:
     - N
 experiment_tags:
 - npbench
-- mpi-focus32
 - polybench
 - scicomp-focus40
 - harness-focus20

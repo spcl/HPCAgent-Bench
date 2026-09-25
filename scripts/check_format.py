@@ -27,14 +27,14 @@ error (a needed formatter is missing). ``--fix`` reformats in place instead.
 """
 
 import argparse
-import json
 import concurrent.futures
+import json
 import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

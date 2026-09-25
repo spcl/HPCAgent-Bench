@@ -46,7 +46,7 @@ tests/test_agent_bench.py
 tests/test_agent_service.py
 tests/test_agent_tools.py
 tests/test_blas_optimizer.py
-tests/test_harbor_adapter.py
+tests/test_harbor.py
 tests/test_noop_optimizer.py
 tests/test_optimizer_plugin.py
 tests/test_packaging.py

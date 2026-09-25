@@ -4,7 +4,7 @@
 
 CI runs both suites under ``pytest -n auto`` and DaCe's build folder is keyed by SDFG NAME, so two
 workers compiling the same kernel share a directory that is not written atomically.
-:mod:`dace_build_isolation`, called from the root conftest, splits it per worker; what is under
+:mod:`tests.dace_build_isolation`, called from the root conftest, splits it per worker; what is under
 test here is that the split happens and that DaCe actually reads the channel it is written
 through. Imported from that module and NOT from ``conftest``: both test trees have a ``conftest``
 and CI collects them together, so the bare name resolves to whichever was imported first -- a
@@ -17,7 +17,7 @@ import pathlib
 import dace
 import pytest
 
-from dace_build_isolation import pin_per_worker_dace_build_folder
+from tests.dace_build_isolation import pin_per_worker_dace_build_folder
 
 BUILD_FOLDER_ENV = "DACE_default_build_folder"
 

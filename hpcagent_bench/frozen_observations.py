@@ -10,8 +10,8 @@ Every reader that walks judge DBs joins these rows the same way: a job is read f
 directory when that directory exists, and from the frozen rows only when it does not (the live DB
 wins on conflict, job by job). Frozen rows carry ``frozen=1``.
 
-The directory is ``$HPCAGENT_BENCH_FROZEN_OBSERVATIONS``, else :data:`DEFAULT_SUBPATH` under
-``$SCRATCH`` when that exists, else none. Set the variable to the empty string to read no frozen
+The directory is ``$HPCAGENT_BENCH_FROZEN_OBSERVATIONS``, else
+``paths.scratch_root(DEFAULT_SUBPATH)`` when that exists, else none. Set the variable to the empty string to read no frozen
 rows at all. Standard library only: the extractor imports this with a bare interpreter.
 """
 
@@ -22,11 +22,13 @@ import os
 import pathlib
 from collections.abc import Callable, Iterable, Mapping
 
+from hpcagent_bench import paths
+
 #: The one environment variable naming the frozen directory.
 ENV = "HPCAGENT_BENCH_FROZEN_OBSERVATIONS"
 
-#: The default, under ``$SCRATCH`` (a second copy: /iopsstor/scratch/cscs/<user>/hpcagent-bench-frozen).
-DEFAULT_SUBPATH = "audit-20260918/frozen-observations-0919/extract-v2"
+#: The default directory name, under :func:`hpcagent_bench.paths.scratch_root`.
+DEFAULT_SUBPATH = "frozen-observations"
 
 #: The file name every frozen group holds (``extract_llr40.py``'s observations CSV).
 CSV_NAME = "llr40_observations.csv"
@@ -95,9 +97,8 @@ def default_dir() -> pathlib.Path | None:
     stated = os.environ.get(ENV)
     if stated is not None:
         return pathlib.Path(stated) if stated else None
-    scratch = os.environ.get("SCRATCH")
-    candidate = pathlib.Path(scratch) / DEFAULT_SUBPATH if scratch else None
-    return candidate if candidate is not None and candidate.is_dir() else None
+    candidate = paths.scratch_root(DEFAULT_SUBPATH)
+    return candidate if candidate.is_dir() else None
 
 
 def resolve(arg: str | None) -> pathlib.Path | None:

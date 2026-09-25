@@ -119,6 +119,6 @@ repos:
       # needed) checks only lines this commit adds, so pre-existing `_private` code is untouched.
       - id: hpcagent_bench-no-leading-underscore-names
         name: no leading-underscore names / redundant import aliases (added lines)
-        entry: python tools/check_names.py
+        entry: python scripts/check_names.py
         language: system
         files: '\.py$'

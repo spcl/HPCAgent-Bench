@@ -184,5 +184,3 @@ distributions:
   csr_diagonal:
     configuration: csr
     distribution: diagonal
-experiment_tags:
-- sparse

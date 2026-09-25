@@ -222,14 +222,14 @@ def test_local_run_command_docker_nvidia_uses_the_docker_gpu_spelling() -> None:
     assert argv[-2:] == ["hpcagent_bench:nvidia", "run"]
 
 
-def test_harbor_provider_names_docker_and_singularity() -> None:
-    """Harbor drives docker and singularity. podman and ce have no provider, so they must raise
+def test_harbor_provider_names_docker_podman_and_singularity() -> None:
+    """Harbor (>= 0.23) drives docker, podman and singularity. ce has no provider, so it must raise
     rather than emit one Harbor would reject."""
     assert containers.harbor_env_for("docker") == "docker"
+    assert containers.harbor_env_for("podman") == "podman"
     assert containers.harbor_env_for("apptainer") == "singularity"
-    for without in ("podman", "ce"):
-        with pytest.raises(ValueError, match="Harbor"):
-            containers.harbor_env_for(without)
+    with pytest.raises(ValueError, match="Harbor"):
+        containers.harbor_env_for("ce")
 
 
 def test_default_image_sif_tag_and_overrides(monkeypatch) -> None:
@@ -262,7 +262,7 @@ def test_collect_env_rejects_a_newline_value(monkeypatch) -> None:
 def test_harbor_env_for_maps_and_raises() -> None:
     assert containers.harbor_env_for("apptainer") == "singularity"
     with pytest.raises(ValueError):
-        containers.harbor_env_for("podman")  # podman is launched directly, not via Harbor
+        containers.harbor_env_for("ce")  # the CSCS container engine is launched directly, not via Harbor
 
 
 # install_apptainer retry: both fetches are live-network; subprocess/sleep stubbed, stays pure-unit

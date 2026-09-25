@@ -19,7 +19,6 @@ looks. Both are consumed the same way: import from here, never restate.
 
 import re
 from dataclasses import dataclass
-from typing import Dict, Optional
 
 
 def has_scop(scop_c: str) -> bool:
@@ -33,7 +32,7 @@ def has_scop(scop_c: str) -> bool:
     return "#pragma scop" in scop_c
 
 
-def scop_nonaffine_reason(scop_c: str) -> Optional[str]:
+def scop_nonaffine_reason(scop_c: str) -> str | None:
     """Return the first non-affine array-subscript pattern across EVERY ``#pragma scop`` body in
     ``scop_c``, or ``None`` when every subscript index in every region is affine.
 
@@ -44,7 +43,7 @@ def scop_nonaffine_reason(scop_c: str) -> Optional[str]:
     scops (``numpyto_c.emit.pluto_scop_regions``) and what sits between them is plain C polycc never
     models. When no ``#pragma scop``/``#pragma endscop`` pair is present the whole string is scanned
     (an already-extracted scop body)."""
-    bodies = re.findall(r"#pragma scop(.*?)#pragma endscop", scop_c, re.S) or [scop_c]
+    bodies = re.findall(r"#pragma scop(.*?)#pragma endscop", scop_c, re.DOTALL) or [scop_c]
     for body in bodies:
         reason = body_nonaffine_reason(body)
         if reason is not None:
@@ -52,7 +51,7 @@ def scop_nonaffine_reason(scop_c: str) -> Optional[str]:
     return None
 
 
-def body_nonaffine_reason(body: str) -> Optional[str]:
+def body_nonaffine_reason(body: str) -> str | None:
     """:func:`scop_nonaffine_reason` for ONE already-delimited scop body."""
     i, n = 0, len(body)
     while i < n:
@@ -115,7 +114,7 @@ _TRANS_TESTS = "hpcagent_bench/numpy_translators/tests"
 #: Insertion-ordered registry of measured polycc/pet/Pluto defects (``POLYCC-nnn``) followed by the
 #: standing caveats (``C-nnn``). Keyed by id. Every entry states what was OBSERVED; an entry with an
 #: empty ``avoided_by`` is a bug we currently ship into polycc's input.
-KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
+KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
     i.id: i
     for i in (
         PolyccIssue(
