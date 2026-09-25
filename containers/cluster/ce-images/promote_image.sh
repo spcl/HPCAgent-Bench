@@ -1,23 +1,13 @@
 #!/usr/bin/env bash
-# Promote a verified CANDIDATE image to the live name its EDFs resolve to.
+# Promote a verified candidate (images.env `candidate`) to its live name (`sqsh`), carry the
+# .digest/.sha256/.oci.tar sidecars with it, repoint every EDF that named the candidate, and re-run
+# install_edfs.sh. Safe while jobs run: a mounted squashfs is held by its inode.
 #
 #   ./promote_image.sh judge-agent-amd            # one role
-#   ./promote_image.sh --all                      # every role that has a candidate
+#   ./promote_image.sh --all                      # every role of CE_PLATFORM (amd, gh200, cpu)
 #   DRY_RUN=1 ./promote_image.sh --all            # say what would move, touch nothing
-#
-# Promotion was prose in images.env: "rename it over the live name, then re-run install_edfs.sh
-# with ALLOW_REPOINT=1". Four roles times four files each is not a thing to do by hand, and the
-# sidecars are the part that gets forgotten -- with one version per role the .digest is the ONLY
-# record of which build a name currently holds, so a rename that leaves it behind makes the live
-# image unattributable.
-#
-# The rename is safe while arms are running: a mounted squashfs is held by its inode, so a job
-# that already started keeps reading the bytes it opened and only new jobs see the new image.
 set -Eeuo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=images.env
@@ -27,77 +17,35 @@ source "${SCRIPT_DIR}/build_common.sh"
 CE="${CE_IMAGES:-${SCRATCH:?set SCRATCH}/ce-images}"
 DRY_RUN="${DRY_RUN:-0}"
 
-# The candidate each role builds to, matching build.sbatch's OUTPUT_SQSH defaults.
 role_candidate() {
-    case "$1" in
-        judge-agent-amd) ce_amd_candidate agent mi300 ;;
-        judge)           ce_amd_candidate judge mi300 ;;
-        judge-agent-amd-mi200) ce_amd_candidate agent mi200 ;;
-        judge-mi200)     ce_amd_candidate judge mi200 ;;
-        sglang)          printf 'hpcagent-bench-sglang-candidate.sqsh' ;;
-        sglang-mi200)    printf 'hpcagent-bench-sglang-mi200-candidate.sqsh' ;;
-        vllm)            printf 'hpcagent-bench-vllm-candidate.sqsh' ;;
-        # The GH200 and CPU builders name their candidate after the live name.
-        judge-agent-cuda|judge-cuda|vllm-cuda|judge-agent-cpu|judge-cpu)
-                         printf '%s' "$(role_live "$1" | sed 's/\.sqsh$/-candidate.sqsh/')" ;;
-        *) return 2 ;;
-    esac
+    ce_image "$1" candidate
 }
 role_live() {
-    case "$1" in
-        judge-agent-amd) printf '%s' "${JUDGE_AGENT_AMD_SQSH}" ;;
-        judge)           printf '%s' "${JUDGE_AMD_SQSH}" ;;
-        judge-agent-amd-mi200) printf '%s' "${JUDGE_AGENT_AMD_MI200_SQSH}" ;;
-        judge-mi200)     printf '%s' "${JUDGE_AMD_MI200_SQSH}" ;;
-        sglang)          printf '%s' "${INFERENCE_SGLANG_SQSH}" ;;
-        sglang-mi200)    printf '%s' "${INFERENCE_SGLANG_MI200_SQSH}" ;;
-        vllm)            printf '%s' "${INFERENCE_VLLM_SQSH}" ;;
-        judge-agent-cuda) printf '%s' "${JUDGE_AGENT_CUDA_SQSH}" ;;
-        judge-cuda)      printf '%s' "${JUDGE_CUDA_SQSH}" ;;
-        vllm-cuda)       printf '%s' "${INFERENCE_VLLM_CUDA_SQSH}" ;;
-        judge-agent-cpu) printf '%s' "${JUDGE_AGENT_CPU_SQSH}" ;;
-        judge-cpu)       printf '%s' "${JUDGE_CPU_SQSH}" ;;
-        *) return 2 ;;
-    esac
+    ce_image "$1" sqsh
 }
 
-# --all means the roles of ONE platform, the same CE_PLATFORM install_edfs.sh renders at the end.
-case "${CE_PLATFORM:-amd}" in
-    gh200) ALL_ROLES="judge-agent-cuda judge-cuda vllm-cuda" ;;
-    cpu)   ALL_ROLES="judge-agent-cpu judge-cpu" ;;
-    *)     ALL_ROLES="judge-agent-amd judge judge-agent-amd-mi200 judge-mi200 sglang sglang-mi200 vllm" ;;
-esac
+ALL_ROLES=""
+for role in $(ce_roles "${CE_PLATFORM:-amd}"); do
+    role_candidate "${role}" >/dev/null 2>&1 && ALL_ROLES="${ALL_ROLES:+${ALL_ROLES} }${role}"
+done
 case "${1:-}" in
     --all) roles="${ALL_ROLES}" ;;
     "")    echo "usage: $0 <role>... | --all   (roles: ${ALL_ROLES})" >&2; exit 2 ;;
     *)     roles="$*" ;;
 esac
 
-# A candidate is promotable only if it was VERIFIED. build_and_verify.sbatch is the only path that
-# runs the verifier, and it writes this marker next to the image on a clean verdict; a bare
-# build.sbatch run does not. Without the marker this refuses, because "built" and "works" have
-# been different things often enough here to cost whole campaigns.
+# Only a clean verify writes this marker, recording the digest it verified.
 verified_marker() { printf '%s.verified' "$1"; }
 
 EDF_DIR="${EDF_DIR:-${HOME}/.edf}"
 
-# Repoint every EDF that named the image we just renamed.
-#
-# install_edfs.sh (run at the end) re-renders the four MANAGED names from their templates, which
-# is not all of ~/.edf. An EDF written by hand is managed by nothing, so a promotion renames the
-# image out from under it and leaves it pointing at a path that
-# no longer exists -- the arm then dies at container start with nothing but "image does not exist",
-# a long way from the rename that caused it. sglang-glm-halfconv is one such file and there is no
-# reason to believe it is the last, so this keys off the RENAME rather than off a list of names:
-# whatever pointed at the old path is what has to move.
+# Repoint every EDF (hand-written ones included) whose image line names the renamed candidate.
 repoint_edfs() {
     local from="$1" to="$2" edf current n=0
     for edf in "${EDF_DIR}"/*.toml; do
         [ -f "${edf}" ] || continue
         current="$(sed -nE 's/^[[:space:]]*image[[:space:]]*=[[:space:]]*"(.*)"/\1/p' "${edf}" | head -1)"
         [ "${current}" = "${from}" ] || continue
-        # Anchored on the image line only; an EDF is mostly comments and env, and a looser
-        # substitution would rewrite prose that happens to quote the path.
         [ "${DRY_RUN}" = "1" ] || sed -i -E "s|^([[:space:]]*image[[:space:]]*=[[:space:]]*)\".*\"|\1\"${to}\"|" "${edf}"
         printf '    repoint %s\n' "${edf##*/}"
         n=$((n + 1))
@@ -115,23 +63,16 @@ for role in ${roles}; do
         continue
     fi
     if [ ! -f "$(verified_marker "${cand}")" ]; then
-        # The judge is a second TARGET of the judge-agent-amd build, not a directory of its own.
-        dir="${role}"; case "${role}" in judge|judge-*mi200) dir="judge-agent-amd" ;; esac
+        dir="$(ce_image "${role}" dir)"
         echo "${role}: REFUSING -- ${cand##*/} carries no .verified marker" >&2
-        case "${role}" in
-            *-cuda|*-cpu)
-                # These verify inside their own build.sbatch; the judge is the agent build's 2nd target.
-                dir="${role/#judge-c/judge-agent-c}"
-                echo "  run: sbatch ${SCRIPT_DIR}/${dir}/build.sbatch" >&2 ;;
-            *)  echo "  run: IMAGE_DIR=${SCRIPT_DIR}/${dir} sbatch build_and_verify.sbatch" >&2 ;;
+        case "$(ce_image "${role}" platform)" in
+            amd) echo "  run: IMAGE_DIR=${SCRIPT_DIR}/${dir} sbatch build_and_verify.sbatch" >&2 ;;
+            *)   echo "  run: IMAGE_DIR=${SCRIPT_DIR}/${dir} sbatch ${SCRIPT_DIR}/${dir}/build.sbatch" >&2 ;;
         esac
         failed=$((failed + 1))
         continue
     fi
-    # A marker records the DIGEST it verified. Existence alone is not enough: a build that
-    # overwrites an image in place leaves the OLD marker beside NEW bytes, and promoting on that
-    # is promoting something nothing ever verified. build.sbatch (unlike build_and_verify.sbatch)
-    # does exactly that. Compare, and refuse when they disagree.
+    # A rebuild in place leaves the old marker beside new bytes: compare the verified digest.
     marker_digest="$(grep -oE 'digest=[^[:space:]]+' "$(verified_marker "${cand}")" | cut -d= -f2)"
     image_digest="$(cat "${cand}.digest" 2>/dev/null || true)"
     if [ -n "${image_digest}" ] && [ "${marker_digest}" != "${image_digest}" ]; then
@@ -143,9 +84,7 @@ for role in ${roles}; do
         continue
     fi
     printf '%s\n  %s\n  -> %s\n' "${role}" "${cand##*/}" "${live##*/}"
-    # The sidecars move WITH the image, or the live name loses its provenance. .oci.tar is the
-    # only publishable form -- a squashfs reimports as one layer past the registry ceiling -- so
-    # a promotion that drops it makes the role unpublishable without a rebuild.
+    # The sidecars are the live name's provenance; .oci.tar is its only publishable form.
     for ext in "" .digest .sha256; do
         [ -e "${cand}${ext}" ] || continue
         [ "${DRY_RUN}" = "1" ] || mv -f -- "${cand}${ext}" "${live}${ext}"
@@ -159,8 +98,7 @@ for role in ${roles}; do
     else
         echo "    WARNING: no ${cand_tar##*/} -- this role cannot be PUBLISHED without a rebuild" >&2
     fi
-    # The marker does not follow: it describes a candidate that was verified, and the live name
-    # having one would make the next promotion's refusal check meaningless.
+    # The marker stays behind: it certifies a candidate, never a live name.
     [ "${DRY_RUN}" = "1" ] || rm -f -- "$(verified_marker "${cand}")"
     repoint_edfs "${cand}" "${live}"
     moved=$((moved + 1))

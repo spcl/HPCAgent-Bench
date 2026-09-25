@@ -12,25 +12,15 @@
 #   REPO=$PWD IMAGE_DIR=containers/cluster/ce-images/sglang-mi200 \
 #     sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 containers/cluster/ce-images/build_and_verify.sbatch
 #
-# WHY ONE JOB. A build verified separately can be promoted without the verifier ever running.
-# Chaining the two here means a build that cannot pass verification does not report success, and
-# the artifact keeps its CANDIDATE name until a human promotes it.
-#
-# The build itself is unchanged: same build.sbatch body, same Dockerfile, same spack binary
-# buildcache on scratch, so a rebuild reuses gcc 16 and llvm 22 rather than recompiling them. This
-# script adds no patching step of its own -- an image that needs one is a Dockerfile that needs
-# fixing.
+# One job builds and verifies, so a build that cannot pass verification never reports success.
+# Every target of IMAGE_DIR built on this partition (images.env rows with that dir and partition)
+# is verified under its own profile and marked .verified for promote_image.sh.
 #
 #SBATCH --job-name=build-verify-image
 #SBATCH --partition=mi300
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-# 96, not 192, and --hint=nomultithread with it. The node is Sockets=4 CoresPerSocket=24
-# ThreadsPerCore=2 -- 96 PHYSICAL cores behind 192 logical CPUs. Asking for 192 hands out SMT
-# siblings, which on this system are not extra compute: two threads share one core's execution
-# units, so a compile or a rank pinned across a sibling pair runs at core speed while the count
-# says it has two. Every campaign shape here is physical-core based (4 ranks x 24), and the judge
-# already spells it --cpus-per-task=24 --hint=nomultithread.
+# 96 physical cores; SMT siblings add no compute.
 #SBATCH --cpus-per-task=96
 #SBATCH --hint=nomultithread
 #SBATCH --mem=0
@@ -51,48 +41,37 @@ PROFILE="${PROFILE:-$(basename "${IMAGE_DIR}")}"
 source "${REPO}/containers/cluster/ce-images/build_common.sh"
 PARTITION="${SLURM_JOB_PARTITION:?build_and_verify.sbatch runs inside a Slurm allocation}"
 
-# VERIFY_ONLY=1 re-verifies the candidates an earlier build of this profile and partition wrote,
-# after a verifier fix: stage 2 below, and the .verified markers it writes, are unchanged.
+# VERIFY_ONLY=1 re-verifies the candidates an earlier build wrote (after a verifier fix).
 if [[ "${VERIFY_ONLY:-0}" == 1 ]]; then
     echo "=== stage 1/2: build SKIPPED (VERIFY_ONLY=1)"
 else
 echo "=== stage 1/2: build  (${IMAGE_DIR})"
 build_out="${SCRATCH}/ce-images/logs/build-inner-${SLURM_JOB_ID}.log"
 mkdir -p "$(dirname "${build_out}")"
-# The build sbatch is a plain bash script below its #SBATCH block, so it runs directly inside the
-# allocation this job already holds -- no nested sbatch, no second queue wait.
+# build.sbatch is plain bash below its #SBATCH block: run it inside this allocation.
 IMAGE_DIR="${IMAGE_DIR}" bash "${IMAGE_DIR}/build.sbatch" 2>&1 | tee "${build_out}"
 fi
 
-# EVERY target this build produced, not just the first. judge-agent-amd builds `agent judge` by
-# default, and verifying only the agent meant the JUDGE -- the image that grades every submission
-# -- shipped unverified. Each is verified under its own profile so the judge's extra layer (the
-# installed hpcagent_bench and the firewall assertion) is actually exercised.
-# Keyed by IMAGE_DIR. An unknown profile is an error, not a skip: a skip would report SUCCESS
-# having verified nothing.
-declare -A BUILD_TARGETS_OF=(
-    [judge-agent-amd]="judge-agent-amd judge"
-    [sglang]="sglang"
-    [sglang-mi200]="sglang-mi200"
-    [vllm]="vllm"
-)
-declare -A TARGET_SQSH=(
-    [judge-agent-amd]="${SCRATCH}/ce-images/$(ce_amd_candidate agent "${PARTITION}")"
-    [judge]="${SCRATCH}/ce-images/$(ce_amd_candidate judge "${PARTITION}")"
-    [sglang]="${SCRATCH}/ce-images/hpcagent-bench-sglang-candidate.sqsh"
-    [sglang-mi200]="${SCRATCH}/ce-images/hpcagent-bench-sglang-mi200-candidate.sqsh"
-    [vllm]="${SCRATCH}/ce-images/hpcagent-bench-vllm-candidate.sqsh"
-)
-targets="${BUILD_TARGETS_OF[${PROFILE}]:-}"
-[ -n "${targets}" ] || { echo "no verify targets known for profile ${PROFILE}" >&2; exit 1; }
+# shellcheck source=images.env
+source "${REPO}/containers/cluster/ce-images/images.env"
+declare -A TARGET_SQSH=()
+targets=""
+for role in $(ce_roles); do
+    [[ "$(ce_image "${role}" dir 2>/dev/null)" == "${PROFILE}" ]] || continue
+    [[ "$(ce_image "${role}" partition 2>/dev/null)" == "${PARTITION}" ]] || continue
+    candidate="$(ce_image "${role}" candidate 2>/dev/null)" || continue
+    prof="$(ce_image "${role}" profile)"
+    TARGET_SQSH[${prof}]="${SCRATCH}/ce-images/${candidate}"
+    targets="${targets:+${targets} }${prof}"
+done
+# An unknown profile is an error: a skip would report success having verified nothing.
+[ -n "${targets}" ] || { echo "images.env has no ${PROFILE} target for partition ${PARTITION}" >&2; exit 1; }
 
-# The image this job's own build wrote, which is the first target unless OUTPUT_SQSH overrode it.
+# The image this job's own build wrote: the first target unless OUTPUT_SQSH overrode it.
 sqsh="${OUTPUT_SQSH:-${TARGET_SQSH[${targets%% *}]}}"
 [ -f "${sqsh}" ] || { echo "build reported success but ${sqsh} is not there" >&2; exit 1; }
 
 echo "=== stage 2/2: verify (${sqsh})"
-# verify_image.sbatch generates its own EDF for a candidate; run its body here for the same reason
-# the build runs here -- one allocation, one verdict.
 verify_rc=0
 for prof in ${targets}; do
     img="${TARGET_SQSH[${prof}]}"
@@ -102,9 +81,7 @@ for prof in ${targets}; do
         continue
     fi
     echo "=== verifying target ${prof} -> ${img}"
-    # The marker is what promote_image.sh requires before it will move a candidate over a live
-    # name. Removed FIRST, so a re-verification that fails cannot leave a stale pass behind and
-    # let a broken image be promoted on the strength of an earlier run.
+    # Removed first, so a failed re-verification cannot leave a stale pass behind.
     rm -f "${img}.verified"
     if IMAGE="${img}" PROFILE="${prof}" REPO="${REPO}" \
         bash "${REPO}/containers/cluster/ce-images/verify_image.sbatch"; then

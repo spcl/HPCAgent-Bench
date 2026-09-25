@@ -1,23 +1,10 @@
 #!/usr/bin/env bash
-# Publish every role from its OCI archive, under ONE repository, with per-role tags.
+# Publish images from their OCI archives to REGISTRY_REPO, each under its images.env tag.
+# DRY_RUN=1 (the default) runs every gate push_image.sh has and sends nothing.
 #
-#   sbatch containers/cluster/ce-images/push_images.sbatch          # all four roles
-#   ROLES="judge" sbatch containers/cluster/ce-images/push_images.sbatch
-#   DRY_RUN=1 sbatch ...                                            # every gate, no bytes out
-#
-#   # the release judge (judge-agent-amd/build-judge-release.sh), tagged with its git sha:
-#   ROLES=judge-release JUDGE_AMD_RELEASE_TAG=judge-mi300-<sha12> sbatch ...
-#
-# NOTHING IS PUBLISHED WITHOUT DRY_RUN=0 AND AN EXPLICIT ROLES/ALL. Publishing is one-way: a tag
-# that reaches a public registry has been fetched and cached before anyone notices it was wrong.
-#
-# WHY THIS EXISTS. push_image.sh takes a local tag and a PUSH_REPO and knows nothing about roles,
-# so publishing was four hand-typed invocations with a per-image repository -- which contradicts
-# images.env, where every role shares REGISTRY_REPO and the TAG names the role. Four hand-typed
-# commands is also how one gets forgotten: the judge role was added and nothing enumerated it.
-#
-# The archive, not the squashfs: a squashfs is a flattened filesystem, so reimporting one collapses
-# the image into a single layer past the registry's per-layer ceiling and drops the image config.
+#   DRY_RUN=1 sbatch containers/cluster/ce-images/push_images.sbatch            # default roles
+#   REGISTRY_USER=<user> REGISTRY_TOKEN=<token> DRY_RUN=0 ROLES="sglang vllm" sbatch ...
+#   ROLES=judge-release JUDGE_AMD_RELEASE_TAG=judge-mi300-<sha12> DRY_RUN=0 sbatch ...
 #
 #SBATCH --job-name=push-images
 #SBATCH --partition=mi300
@@ -35,38 +22,20 @@ set -Eeuo pipefail
 ulimit -c 0
 
 SCRATCH="${SCRATCH:?set SCRATCH}"
-SCRIPT_DIR="${SCRIPT_DIR:-${SCRATCH}/hpcagent-bench/containers/cluster/ce-images}"
+SCRIPT_DIR="${SCRIPT_DIR:-${HPCAGENT_BENCH_REPO:-${SCRATCH}/hpcagent-bench}/containers/cluster/ce-images}"
 # shellcheck source=images.env
 source "${SCRIPT_DIR}/images.env"
 CE="${CE_IMAGES:-${SCRATCH}/ce-images}"
 mkdir -p "${SCRATCH}/ce-images/logs"
 
-# DRY_RUN defaults to 1. Turning it off is a deliberate act, not the default path.
 DRY_RUN="${DRY_RUN:-1}"
-ROLES="${ROLES:-judge-agent-amd judge sglang vllm}"
-
-role_sqsh() {
-    case "$1" in
-        judge-agent-amd) printf '%s' "${JUDGE_AGENT_AMD_SQSH}" ;;
-        judge)           printf '%s' "${JUDGE_AMD_SQSH}" ;;
-        judge-release)   printf '%s' "${JUDGE_AMD_RELEASE_SQSH}" ;;
-        sglang)          printf '%s' "${INFERENCE_SGLANG_SQSH}" ;;
-        vllm)            printf '%s' "${INFERENCE_VLLM_SQSH}" ;;
-        *) return 2 ;;
-    esac
-}
-
-# The tag each role publishes, from the explicit map in images.env.
-role_tag() {
-    case "$1" in
-        judge-agent-amd) printf '%s' "${JUDGE_AGENT_AMD_TAG}" ;;
-        judge)           printf '%s' "${JUDGE_AMD_TAG}" ;;
-        judge-release)   printf '%s' "${JUDGE_AMD_RELEASE_TAG}" ;;
-        sglang)          printf '%s' "${INFERENCE_SGLANG_TAG}" ;;
-        vllm)            printf '%s' "${INFERENCE_VLLM_TAG}" ;;
-        *) return 2 ;;
-    esac
-}
+if [ -z "${ROLES:-}" ]; then
+    for role in $(ce_roles "${CE_PLATFORM:-amd}"); do
+        ce_image "${role}" tag >/dev/null 2>&1 || continue
+        [[ ",$(ce_image "${role}" flags 2>/dev/null)," == *,opt,* ]] && continue
+        ROLES="${ROLES:+${ROLES} }${role}"
+    done
+fi
 
 echo "repository: ${REGISTRY_REPO}"
 echo "roles:      ${ROLES}"
@@ -75,13 +44,12 @@ echo
 
 failed=""
 for role in ${ROLES}; do
-    sqsh="$(role_sqsh "${role}")" || { echo "unknown role ${role}" >&2; failed="${failed} ${role}"; continue; }
-    tag="$(role_tag "${role}")"
-    if [ -z "${tag}" ]; then
-        echo "=== ${role}: no tag; set JUDGE_AMD_RELEASE_TAG=judge-mi300-<sha12> (build-judge-release.sh prints it)" >&2
+    sqsh="$(ce_image "${role}" sqsh)" || { failed="${failed} ${role}"; continue; }
+    tag="$(ce_image "${role}" tag 2>/dev/null)" || {
+        echo "=== ${role}: no tag; set <PREFIX>_TAG (build-judge-release.sh prints the release one)" >&2
         failed="${failed} ${role}"
         continue
-    fi
+    }
     archive="${CE}/${sqsh%.sqsh}.oci.tar"
     echo "=== ${role}  ->  ${REGISTRY_REPO}:${tag}"
     echo "    archive ${archive}"
@@ -90,8 +58,6 @@ for role in ${ROLES}; do
         failed="${failed} ${role}"
         continue
     fi
-    # --check-only runs every gate that can reject an upload -- layer sizes against the registry
-    # ceiling, config sanity, archive load -- and sends no bytes and does no login.
     if [ "${DRY_RUN}" != "0" ]; then
         "${SCRIPT_DIR}/push_image.sh" --check-only --from-archive "${archive}" \
             || { echo "    PREFLIGHT FAILED" >&2; failed="${failed} ${role}"; }
