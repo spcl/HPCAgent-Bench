@@ -413,7 +413,6 @@ def _strip_harness(db):
     the column appended after it."""
     conn = sqlite3.connect(db)
     try:
-        conn.execute("DROP INDEX ix_runs_ident")
         conn.execute("ALTER TABLE runs DROP COLUMN harness")
         conn.execute("ALTER TABLE runs DROP COLUMN commit_sha")
         conn.execute("CREATE INDEX ix_runs_ident ON runs(experiment, model, language, device, packet)")

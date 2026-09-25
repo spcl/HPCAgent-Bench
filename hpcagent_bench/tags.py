@@ -8,7 +8,10 @@ A tag resolves, in this order, to:
 2. An ``experiments/tags.yaml`` entry: a plain list of kernel names (``mytag: [kmp, dfa]``), or a
    set expression (``union`` / ``intersect`` / ``diff`` / ``list``) over selectors, or a seeded
    ``sample``.
-3. (:func:`roster` only) the manifests listing the tag in ``experiment_tags``, then a track name.
+3. The manifests listing the tag in ``experiment_tags`` (the suite and campaign labels).
+4. (:func:`roster` only) a track name.
+
+Each tag has exactly one source: tags.yaml never redefines a manifest ``experiment_tags`` value.
 
 A KERNEL NAME is a manifest stem (``argmax_value``); names are unique across the corpus. An unknown
 name is a hard error that lists the closest names.
@@ -272,16 +275,23 @@ def resolve_registered(tag: str) -> list[str]:
 
 def resolve(tag: str) -> list[str]:
     """Sorted path-keys ``tag`` names: its kernels-<tag>.txt file if one exists, else its tags.yaml
-    entry.
+    entry, else the manifests listing it in ``experiment_tags``.
 
-    :raises KeyError: ``tag`` names neither, or its definition names an unknown kernel.
+    :raises KeyError: ``tag`` names none of them, or its definition names an unknown kernel.
     :raises ValueError: a circular tags.yaml reference or an empty result.
     """
     tag = canonical(tag)
     path = kernels_file(tag)
     if path.is_file():
         return read_kernels_file(path)
-    return resolve_registered(tag)
+    if is_registered(tag):
+        return resolve_registered(tag)
+    try:
+        return KERNELS.select_keys(f"all@{tag}")
+    except KeyError:
+        raise KeyError(
+            f"tag {tag!r} is not a kernels-<tag>.txt, a tags.yaml entry or an experiment_tags value"
+        ) from None
 
 
 def read_kernels_file(path: pathlib.Path) -> list[str]:
@@ -356,20 +366,6 @@ TRACK_ALIASES: dict[str, str] = {
 }
 
 
-def manifest_roster(tag: str) -> list[str]:
-    """Kernel names whose manifest lists ``tag`` in ``experiment_tags``."""
-    root = paths.ROOT / "hpcagent_bench" / "benchmarks"
-    names = []
-    for path in root.rglob("*.yaml"):
-        try:
-            manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError):  # a manifest that will not parse is in no roster
-            continue
-        if isinstance(manifest, dict) and tag in (manifest.get("experiment_tags") or []):
-            names.append(path.stem)
-    return sorted(names)
-
-
 def track_roster(tag: str) -> list[str]:
     """Every kernel of the track ``tag`` names, however that track is spelled."""
     track = TRACK_ALIASES.get(tag.lower())
@@ -388,23 +384,24 @@ def stems(keys: Iterable[str]) -> list[str]:
 
 @functools.lru_cache(maxsize=32)
 def roster(tag: str) -> tuple[str, ...]:
-    """Sorted kernel names ``tag`` selects: its kernels-<tag>.txt or tags.yaml entry, else the
-    manifests carrying ``tag`` in ``experiment_tags``, else the track ``tag`` names. Never empty.
+    """Sorted kernel names ``tag`` selects (:func:`resolve`), else the track ``tag`` names. Never
+    empty.
 
     :raises KeyError: nothing matches, or the tag's definition names an unknown kernel.
     :raises ValueError: a circular tags.yaml reference or an empty definition.
     """
-    if kernels_file(tag).is_file() or is_registered(tag):
-        names = stems(resolve(tag))
-    else:
-        names = manifest_roster(tag) or track_roster(tag)
-    if not names:
+    try:
+        return tuple(stems(resolve(tag)))
+    except KeyError as exc:
+        if names := track_roster(tag):
+            return tuple(names)
+        if kernels_file(tag).is_file() or is_registered(tag):
+            raise  # defined, but names an unknown kernel
         tracks = ", ".join(sorted(set(TRACK_ALIASES.values())))
         raise KeyError(
             f"tag {tag!r} matched no kernels: not a kernels-<tag>.txt, not a tags.yaml entry, "
             f"not an experiment_tags value, and not a track ({tracks})"
-        )
-    return tuple(names)
+        ) from exc
 
 
 def version(tag: str) -> str:
@@ -417,14 +414,24 @@ def version(tag: str) -> str:
     return digest[:12]
 
 
+def exists(tag: str) -> bool:
+    """Whether :func:`resolve` finds ``tag`` anywhere."""
+    try:
+        resolve(tag)
+    except KeyError:
+        return False
+    return True
+
+
 def save_frozen(name: str, keys: Sequence[str], note: str) -> None:
     """Append ``name`` to tags.yaml as an explicit ``list:`` of ``keys`` (full path-keys, so a
     later stem collision cannot widen it), headed by a ``note`` comment. Text-level, not a YAML
     dump: a dump would drop every comment in the file.
 
-    :raises ValueError: ``name`` is already a tag, an alias or a kernels-<name>.txt file.
+    :raises ValueError: ``name`` is already a tag, an alias, a kernels-<name>.txt file or a manifest
+        ``experiment_tags`` value.
     """
-    if name in registry().tags or name in registry().aliases or kernels_file(name).is_file():
+    if name in registry().aliases or exists(name):
         raise ValueError(f"tag {name!r} already exists; refusing to overwrite it")
     entry = [f"  # {note}", f"  {name}:", "    list:", *(f"      - {key}" for key in keys)]
     lines = REGISTRY.read_text(encoding="utf-8").splitlines() if REGISTRY.is_file() else []

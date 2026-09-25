@@ -773,7 +773,7 @@ def test_an_exact_match_or_an_all_zero_reference_is_not_recorded_as_null(tmp_pat
 
 
 def test_the_database_carries_columns_for_the_residuals() -> None:
-    """Declaration check (mirrors the baseline_policy stamp's own): the migration table and the row
+    """Declaration check (mirrors the baseline_policy stamp's own): the schema and the row
     dataclasses both know about the five columns (the four numeric residuals plus ``l_rule``), so a
     column added here reaches every writer."""
     import dataclasses
@@ -785,15 +785,14 @@ def test_the_database_carries_columns_for_the_residuals() -> None:
         ("ref_inf_norm", "REAL"),
         ("l_rule", "TEXT"),
     ):
-        assert ("submissions", column, kind) in recording.ADDED_COLUMNS
-        assert ("attempts", column, kind) in recording.ADDED_COLUMNS
+        assert (column, kind) in recording.canonical_columns()["submissions"]
+        assert (column, kind) in recording.canonical_columns()["attempts"]
         assert column in {f.name for f in dataclasses.fields(recording.SubmissionRow)}
         assert column in {f.name for f in dataclasses.fields(recording.AttemptRow)}
 
 
 def _db_without_residual_columns(tmp_path) -> str:
-    """A DB written before this decision: no residual columns at all, dropped off a fresh one --
-    the same technique ``test_recording.py``'s ``legacy_host_only_db`` uses for the ``node`` column."""
+    """A DB written before this decision: no residual columns at all, dropped off a fresh one."""
     db = str(tmp_path / "r.db")
     task = Task("tsvc_2_s212", "restricted", "c")
     recording.record(_correct_score_with_residuals(), _sub(), task, verify=_ok_verify(), path=db)
