@@ -76,7 +76,7 @@ def _rows(db, table):
         conn.close()
 
 
-def test_connect_creates_the_current_schema(tmp_path) -> None:
+def test_connect_creates_the_current_schema(tmp_path: pathlib.Path) -> None:
     """One schema, created idempotently on connect (no versioning): exactly the schema's tables
     exist and every perf table carries the execution-provenance column."""
     db = str(tmp_path / "r.db")
@@ -180,7 +180,7 @@ def test_a_db_carrying_both_columns_keeps_its_own_node_value(tmp_path: pathlib.P
     assert [(r["host"], r["node"]) for r in _rows(out, "submissions")] == [("nid001234", "real-node")]
 
 
-def test_connect_creates_a_missing_table(tmp_path) -> None:
+def test_connect_creates_a_missing_table(tmp_path: pathlib.Path) -> None:
     """A DB predating a whole table still gets it created (CREATE IF NOT EXISTS runs
     every connect)."""
     db = str(tmp_path / "r.db")
@@ -196,7 +196,7 @@ def test_connect_creates_a_missing_table(tmp_path) -> None:
         conn.close()
 
 
-def test_correct_and_verified_writes_a_leaderboard_row(tmp_path) -> None:
+def test_correct_and_verified_writes_a_leaderboard_row(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     table, detail = recording.record(
         _correct_score(),
@@ -215,7 +215,7 @@ def test_correct_and_verified_writes_a_leaderboard_row(tmp_path) -> None:
     # the kernel's taxonomy was captured in the dimension table
 
 
-def test_suspect_speedup_is_recorded_but_flagged(tmp_path) -> None:
+def test_suspect_speedup_is_recorded_but_flagged(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     table, detail = recording.record(
         _correct_score(speedup=1e9), _sub(), Task(KERNEL, "restricted", "c"), verify=_ok_verify(suspect=True), path=db
@@ -295,7 +295,7 @@ def test_the_largest_real_device_win_is_not_flagged(tmp_path: pathlib.Path) -> N
     assert _rows(db, "submissions")[0]["suspect"] == 0
 
 
-def test_failed_independent_verify_goes_to_attempts_not_leaderboard(tmp_path) -> None:
+def test_failed_independent_verify_goes_to_attempts_not_leaderboard(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     # The judge scored it correct, but the independent re-verify caught nondeterminism.
     table, detail = recording.record(
@@ -309,7 +309,7 @@ def test_failed_independent_verify_goes_to_attempts_not_leaderboard(tmp_path) ->
     assert _count(db, "submissions") == 0 and _count(db, "attempts") == 1
 
 
-def test_a_judge_fault_in_the_verify_leg_is_recorded_as_score_error_not_as_the_submissions(tmp_path) -> None:
+def test_a_judge_fault_in_the_verify_leg_is_recorded_as_score_error_not_as_the_submissions(tmp_path: pathlib.Path) -> None:
     """Every reader of ``attempts`` (frozen_observations, stats.population, the owed rule) tells a
     judge fault from a genuine grade by reason == "score_error". A verify leg whose OWN reference
     died (job 639239: tsvc_2_s252, 63x, a stale file handle) wrote "harden: ..." instead and was
@@ -329,7 +329,7 @@ def test_a_judge_fault_in_the_verify_leg_is_recorded_as_score_error_not_as_the_s
     assert _count(db, "submissions") == 0
 
 
-def test_a_later_rejection_does_not_disturb_the_verified_submission(tmp_path) -> None:
+def test_a_later_rejection_does_not_disturb_the_verified_submission(tmp_path: pathlib.Path) -> None:
     """An agent resubmits after it has already landed a verified row.
 
     The second attempt fails the independent re-verify, so it belongs in ``attempts`` -- and
@@ -360,7 +360,7 @@ def test_a_later_rejection_does_not_disturb_the_verified_submission(tmp_path) ->
     assert _rows(db, "submissions")[0]["speedup"] == 3.0
 
 
-def test_incorrect_submission_never_reaches_leaderboard(tmp_path) -> None:
+def test_incorrect_submission_never_reaches_leaderboard(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     bad = Score(
         correct=False,
@@ -377,7 +377,7 @@ def test_incorrect_submission_never_reaches_leaderboard(tmp_path) -> None:
     assert _rows(db, "attempts")[0]["build_ok"] == 0
 
 
-def test_overfit_submission_records_overfit_not_incorrect(tmp_path) -> None:
+def test_overfit_submission_records_overfit_not_incorrect(tmp_path: pathlib.Path) -> None:
     """Public-correct but held-out-failing must be distinguishable from a plain numeric
     miss in attempts.reason (it used to collapse into 'incorrect')."""
     db = str(tmp_path / "r.db")
@@ -398,7 +398,7 @@ def test_overfit_submission_records_overfit_not_incorrect(tmp_path) -> None:
     assert _rows(db, "attempts")[0]["reason"] == "overfit"
 
 
-def test_harden_off_records_on_score_verdict_alone(tmp_path) -> None:
+def test_harden_off_records_on_score_verdict_alone(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     # verify=None means hardening was disabled; the score verdict alone gates.
     table, _ = recording.record(_correct_score(), _sub(), Task(KERNEL, "restricted", "c"), verify=None, path=db)
@@ -414,7 +414,7 @@ def _stored_sources(db):
     return [(r, (root / r["path"]).read_text()) for r in _rows(db, "sources")]
 
 
-def test_a_graded_source_is_persisted_beside_the_row_that_graded_it(tmp_path) -> None:
+def test_a_graded_source_is_persisted_beside_the_row_that_graded_it(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     recording.record(
         _correct_score(),
@@ -433,7 +433,7 @@ def test_a_graded_source_is_persisted_beside_the_row_that_graded_it(tmp_path) ->
     assert row["language"] == "c"
 
 
-def test_a_gpu_submission_persists_both_translation_units(tmp_path) -> None:
+def test_a_gpu_submission_persists_both_translation_units(tmp_path: pathlib.Path) -> None:
     """A hip/cuda body is TWO units and the archive kept only the host one.
 
     The host half of a graded tsvc_2_s255 was 251 bytes of `extern "C"` shim naming a launcher
@@ -459,7 +459,7 @@ def test_a_gpu_submission_persists_both_translation_units(tmp_path) -> None:
         assert (row["run_id"], row["benchmark"], row["ts"]) == (sub["run_id"], sub["benchmark"], sub["ts"])
 
 
-def test_a_source_that_failed_grading_is_persisted_too(tmp_path) -> None:
+def test_a_source_that_failed_grading_is_persisted_too(tmp_path: pathlib.Path) -> None:
     """The triage case: an arm's failures are only classifiable afterwards if their bytes survive."""
     db = str(tmp_path / "r.db")
     recording.record(
@@ -476,7 +476,7 @@ def test_a_source_that_failed_grading_is_persisted_too(tmp_path) -> None:
     )
 
 
-def test_identical_sources_share_one_file_but_stay_two_rows(tmp_path) -> None:
+def test_identical_sources_share_one_file_but_stay_two_rows(tmp_path: pathlib.Path) -> None:
     """Content-addressed: an agent resubmitting a near-identical body costs a row, not a copy."""
     db = str(tmp_path / "r.db")
     for _ in range(2):
@@ -486,7 +486,7 @@ def test_identical_sources_share_one_file_but_stay_two_rows(tmp_path) -> None:
     assert len({r["path"] for r in rows}) == 1
 
 
-def test_record_trajectory_writes_one_row_per_call(tmp_path) -> None:
+def test_record_trajectory_writes_one_row_per_call(tmp_path: pathlib.Path) -> None:
     """Every CallPoint -- passes AND failures -- is persisted (not verify-gated), with
     the cumulative tokens + score + status of each agent call."""
     from hpcagent_bench.harness.runner import CallPoint
@@ -509,7 +509,7 @@ def test_record_trajectory_writes_one_row_per_call(tmp_path) -> None:
     # the kernel taxonomy was captured in the dimension table too
 
 
-def test_record_trajectory_empty_is_noop(tmp_path) -> None:
+def test_record_trajectory_empty_is_noop(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     assert recording.record_trajectory(Task(KERNEL, "restricted", "c"), (), path=db) == 0
 
@@ -536,7 +536,7 @@ def _call(db, status, *, route: str = "score", run_id: str = "t", score=None, ke
     )
 
 
-def test_a_scored_call_carries_its_grading_protocol_and_baseline_policy(tmp_path) -> None:
+def test_a_scored_call_carries_its_grading_protocol_and_baseline_policy(tmp_path: pathlib.Path) -> None:
     """check_job reads a /score row's timing bracket off ``grading_protocol``; an unstamped row
     cannot be checked at all."""
     db = str(tmp_path / "r.db")
@@ -547,7 +547,7 @@ def test_a_scored_call_carries_its_grading_protocol_and_baseline_policy(tmp_path
     assert got == [("sealed-nonce-v1+host-monotonic", "single-v1:c"), (None, None)]
 
 
-def test_a_failed_score_grade_is_logged_as_a_call(tmp_path) -> None:
+def test_a_failed_score_grade_is_logged_as_a_call(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     broken = Score(correct=False, max_rel_error=float("inf"), native_ns=0, build_ok=False, detail="build failed")
     assert _call(db, "build_error", score=broken) == 1
@@ -559,7 +559,7 @@ def test_a_failed_score_grade_is_logged_as_a_call(tmp_path) -> None:
     assert _count(db, "submissions") == 0 and _count(db, "attempts") == 0
 
 
-def test_a_failed_grade_records_why_it_failed(tmp_path) -> None:
+def test_a_failed_grade_records_why_it_failed(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     # Without this the compiler log is thrown away and a campaign's build failures cannot be
     # classified afterwards -- which is exactly what happened to jobs 594529-594538.
@@ -569,7 +569,7 @@ def test_a_failed_grade_records_why_it_failed(tmp_path) -> None:
     assert _rows(db, "calls")[0]["detail"] == log
 
 
-def test_recorded_failure_text_is_capped(tmp_path) -> None:
+def test_recorded_failure_text_is_capped(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     huge = Score(correct=False, max_rel_error=float("inf"), native_ns=0, build_ok=False, detail="x" * 9000)
     assert _call(db, "build_error", score=huge) == 1
@@ -579,7 +579,7 @@ def test_recorded_failure_text_is_capped(tmp_path) -> None:
     assert "elided" in stored
 
 
-def test_a_grade_records_the_agents_cumulative_token_spend(tmp_path) -> None:
+def test_a_grade_records_the_agents_cumulative_token_spend(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     # The agent reports its running total with every grade, so the cost of solving a kernel is the
     # value on its LAST row and a per-round cost is the difference between consecutive rows.
@@ -599,7 +599,7 @@ def test_a_grade_records_the_agents_cumulative_token_spend(tmp_path) -> None:
     assert [row["tokens"] for row in rows] == [120000, 185000]
 
 
-def test_a_correct_submit_grade_is_logged_beside_its_leaderboard_row(tmp_path) -> None:
+def test_a_correct_submit_grade_is_logged_beside_its_leaderboard_row(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     recording.record(_correct_score(), _sub(), Task(KERNEL, "restricted", "c"), verify=_ok_verify(), path=db)
     assert _call(db, "ok", route="submit", score=_correct_score()) == 1
@@ -609,7 +609,7 @@ def test_a_correct_submit_grade_is_logged_beside_its_leaderboard_row(tmp_path) -
     assert _count(db, "submissions") == 1
 
 
-def test_calls_carries_a_nullable_compiler_column(tmp_path) -> None:
+def test_calls_carries_a_nullable_compiler_column(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     conn = recording.connect(db)
     try:
@@ -620,27 +620,27 @@ def test_calls_carries_a_nullable_compiler_column(tmp_path) -> None:
     assert _rows(db, "calls")[0]["compiler"] is None
 
 
-def test_the_effective_compiler_is_recorded_on_the_call(tmp_path) -> None:
+def test_the_effective_compiler_is_recorded_on_the_call(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     assert _call(db, "ok", compiler="llvm") == 1
     assert _rows(db, "calls")[0]["compiler"] == "llvm"
 
 
-def test_a_grade_that_never_scored_is_a_score_error(tmp_path) -> None:
+def test_a_grade_that_never_scored_is_a_score_error(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     assert _call(db, "score_error") == 1
     row = _rows(db, "calls")[0]
     assert row["status"] == "score_error" and row["correct"] == 0 and row["baseline"] is None
 
 
-def test_round_counts_up_per_run_and_benchmark(tmp_path) -> None:
+def test_round_counts_up_per_run_and_benchmark(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     assert [_call(db, "build_error"), _call(db, "incorrect"), _call(db, "ok", route="submit")] == [1, 2, 3]
     assert _call(db, "ok", run_id="other") == 1
     assert _call(db, "ok", kernel="gemm") == 1
 
 
-def test_log_calls_disabled_writes_nothing(tmp_path, _reset_log_calls) -> None:
+def test_log_calls_disabled_writes_nothing(tmp_path: pathlib.Path, _reset_log_calls) -> None:
     db = str(tmp_path / "r.db")
     recording.connect(db).close()  # the schema exists; the row is what must not
     config.set_override("record.log_calls", False)
@@ -655,7 +655,7 @@ def _emitter_and_gcc():
     return importlib.util.find_spec("hpcagent_bench.translators.numpyto_c") is not None and shutil.which("gcc")
 
 
-def test_end_to_end_score_verify_record(tmp_path) -> None:
+def test_end_to_end_score_verify_record(tmp_path: pathlib.Path) -> None:
     if not _emitter_and_gcc():
         pytest.skip("NumpyToC emitter or gcc absent")
     from hpcagent_bench.harness.agent import reference_source
@@ -716,14 +716,14 @@ def _reset_execution():
     config.clear_override("record.execution")
 
 
-def test_execution_defaults_to_native(tmp_path, _reset_execution) -> None:
+def test_execution_defaults_to_native(tmp_path: pathlib.Path, _reset_execution) -> None:
     db = str(tmp_path / "r.db")
     config.clear_override("record.execution")  # no override => the config default
     recording.record(_correct_score(), _sub(), Task(KERNEL, "restricted", "c"), verify=_ok_verify(), path=db)
     assert _rows(db, "submissions")[0]["execution"] == "native"
 
 
-def test_execution_override_is_recorded_on_submissions_and_attempts(tmp_path, _reset_execution) -> None:
+def test_execution_override_is_recorded_on_submissions_and_attempts(tmp_path: pathlib.Path, _reset_execution) -> None:
     db = str(tmp_path / "r.db")
     config.set_override("record.execution", "container")
     # a verified row -> submissions
@@ -734,7 +734,7 @@ def test_execution_override_is_recorded_on_submissions_and_attempts(tmp_path, _r
     assert _rows(db, "attempts")[0]["execution"] == "container"
 
 
-def test_trajectory_records_execution(tmp_path, _reset_execution) -> None:
+def test_trajectory_records_execution(tmp_path: pathlib.Path, _reset_execution) -> None:
     from types import SimpleNamespace
 
     db = str(tmp_path / "r.db")
@@ -762,7 +762,7 @@ def test_a_short_detail_is_recorded_verbatim() -> None:
     assert recording.cap_detail("") == ""
 
 
-def test_recorded_detail_survives_a_long_traceback(tmp_path) -> None:
+def test_recorded_detail_survives_a_long_traceback(tmp_path: pathlib.Path) -> None:
     db = str(tmp_path / "r.db")
     tail = "MemoryError: out of memory"
     score = _correct_score(correct=False, build_ok=True, detail="head\n" + ("filler\n" * 900) + tail)
@@ -902,7 +902,7 @@ def _cell(label, ratio, **kw):
     return TimedCell(**base)
 
 
-def test_a_recorded_submission_keeps_the_ratio_of_every_timed_cell(tmp_path) -> None:
+def test_a_recorded_submission_keeps_the_ratio_of_every_timed_cell(tmp_path: pathlib.Path) -> None:
     """The one ``submissions.speedup`` is a reduction over cells; without the cells behind it a
     reader cannot tell a 3x measured three times from a 3x measured once."""
     db = str(tmp_path / "r.db")
@@ -913,7 +913,7 @@ def test_a_recorded_submission_keeps_the_ratio_of_every_timed_cell(tmp_path) -> 
     assert [r["ratio"] for r in rows] == [2.0, 3.0, 4.0], rows
 
 
-def test_the_recorded_dispersion_is_the_credit_the_grader_took(tmp_path) -> None:
+def test_the_recorded_dispersion_is_the_credit_the_grader_took(tmp_path: pathlib.Path) -> None:
     """g_i and gsd_i are stored as CREDITED, over the same cells the live grade aggregates -- a
     suspect cell is excluded there, so a reader re-deriving them off every stored row would get a
     different number from the one that was scored."""
@@ -928,7 +928,7 @@ def test_the_recorded_dispersion_is_the_credit_the_grader_took(tmp_path) -> None
     assert want.gsd > 1.0, want  # two unequal ratios disperse; one ratio cannot
 
 
-def test_every_cell_names_the_policy_that_chose_its_denominator(tmp_path) -> None:
+def test_every_cell_names_the_policy_that_chose_its_denominator(tmp_path: pathlib.Path) -> None:
     """A ratio over one declared reference and a ratio over the best of several answer different
     questions. The realized denominator is on the cell; without the POLICY beside it, a table
     cannot tell the two apart and pools them."""
@@ -944,7 +944,7 @@ def test_every_cell_names_the_policy_that_chose_its_denominator(tmp_path) -> Non
     assert [r["baseline_policy"] for r in _rows(db, "submission_cells")] == ["best-of-v1"]
 
 
-def test_a_grade_under_no_declared_policy_is_stamped_the_legacy_one(tmp_path) -> None:
+def test_a_grade_under_no_declared_policy_is_stamped_the_legacy_one(tmp_path: pathlib.Path) -> None:
     """An unstamped row would read as "policy unknown" for every row ever recorded, which is worse
     than naming the one policy they all actually ran under."""
     db = str(tmp_path / "r.db")
@@ -958,7 +958,7 @@ def test_a_grade_under_no_declared_policy_is_stamped_the_legacy_one(tmp_path) ->
     assert [r["baseline_policy"] for r in _rows(db, "submission_cells")] == [recording.LEGACY_BASELINE_POLICY]
 
 
-def test_a_submission_that_timed_nothing_records_no_cells(tmp_path) -> None:
+def test_a_submission_that_timed_nothing_records_no_cells(tmp_path: pathlib.Path) -> None:
     """An empty cell list is an absence, not a cell: a zero-ratio row would read as a measured
     slowdown to anything that averages the column."""
     db = str(tmp_path / "r.db")
@@ -966,7 +966,7 @@ def test_a_submission_that_timed_nothing_records_no_cells(tmp_path) -> None:
     assert _count(db, "submission_cells") == 0
 
 
-def test_a_database_written_before_the_cell_table_still_opens_and_gains_it(tmp_path) -> None:
+def test_a_database_written_before_the_cell_table_still_opens_and_gains_it(tmp_path: pathlib.Path) -> None:
     """The judge DBs of the campaign predate this table. Opening one must add it without touching
     a row that is already there -- an additive table, never a rebuild of the recorded tables."""
     db = str(tmp_path / "old.db")
@@ -989,7 +989,7 @@ def test_a_database_written_before_the_cell_table_still_opens_and_gains_it(tmp_p
         reopened.close()
 
 
-def test_a_cell_records_which_references_were_timed_and_which_one_won(tmp_path) -> None:
+def test_a_cell_records_which_references_were_timed_and_which_one_won(tmp_path: pathlib.Path) -> None:
     """Under a best-of denominator the winner (``baseline``) IS the reported result, and the set it
     was chosen from is what makes the choice checkable."""
     db = str(tmp_path / "r.db")
@@ -1001,7 +1001,7 @@ def test_a_cell_records_which_references_were_timed_and_which_one_won(tmp_path) 
     assert (candidates, winner) == ("c+numba+numpy", "numba")
 
 
-def test_a_cell_that_timed_one_reference_reads_as_its_own_winner(tmp_path) -> None:
+def test_a_cell_that_timed_one_reference_reads_as_its_own_winner(tmp_path: pathlib.Path) -> None:
     """Every row recorded before the set was disclosed timed exactly one reference. Reading its
     blanks as "unknown" would drop those rows out of a which-baseline-won table that they answer."""
     db = str(tmp_path / "r.db")
@@ -1017,7 +1017,7 @@ def test_a_cell_that_timed_one_reference_reads_as_its_own_winner(tmp_path) -> No
     assert recording.realized_candidates(_cell("x", 1.0, baseline="numpy")) == "numpy"
 
 
-def test_a_real_grade_names_the_references_it_timed(tmp_path) -> None:
+def test_a_real_grade_names_the_references_it_timed(tmp_path: pathlib.Path) -> None:
     """The keep-alive for the fill: the winner (``baseline``) and the candidate set are read off the SAME
     `baselines` map the scalar speed-up divides, so a change to how references are timed shows up
     here rather than as a column of blanks in a which-baseline-won table."""
