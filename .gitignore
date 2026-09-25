@@ -229,7 +229,7 @@ results/plots/*
 containers/cluster/ce-images/**/logs/
 
 # Paper draft (working artifact, not part of the repo)
-/paper/
+paper/
 
 # Transient handover / handoff notes (local-only scratch, not part of the repo)
 HANDOFF_ISSUES/
@@ -315,7 +315,3 @@ experiments/mwd-final-*/
 
 # anonymous.4open.science replacement terms (identifying, never committed)
 .anonymize-terms.txt
-
-# The paper's reproducibility folder ships its own helpers and result tables.
-!/reproducibility/paper/lib/
-!/reproducibility/paper/**/*.csv
