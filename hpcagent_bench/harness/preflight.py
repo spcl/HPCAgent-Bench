@@ -88,7 +88,7 @@ def check_polycc() -> str:
     if pluto_transform.polycc_exe() is None:
         return (
             "polycc is not on PATH; the pluto column compiles polycc's output and has nothing to "
-            "build without it (Pluto is built from source -- see containers/pluto.Dockerfile)"
+            "build without it (Pluto is built from source -- see containers/lib/build-pluto.sh)"
         )
     return ""
 

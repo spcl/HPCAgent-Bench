@@ -318,9 +318,6 @@ jobs:
     name: native (frameworks + pluto + e2e[c,cpp,fortran,pluto] + integration sweep)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      # bondhugula/pluto @ 0.12.0-33-gdc46216 (containers/pluto.Dockerfile pins the same).
-      PLUTO_COMMIT: dc462163c8b4fc97d378a4d245d1a64741cb4111
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -330,50 +327,13 @@ jobs:
           ccache: native
 
       - name: Setup -- build Pluto against LLVM/clang 17
-        # The same recipe as containers/pluto.Dockerfile.
+        # The judge-agent images' recipe. clang 17 cannot read GCC 15+ libstdc++ headers, so it is
+        # pinned to the runner's GCC 14; kernels are compiled by the normal toolchain.
         run: |
           set -euo pipefail
-          sudo apt-get install -y --no-install-recommends \
-            clang-17 llvm-17 llvm-17-dev libclang-17-dev libstdc++-14-dev \
-            autoconf automake libtool pkg-config libgmp-dev libyaml-dev flex bison texinfo libltdl-dev
-          # Ubuntu ships only the versioned libclang-cpp.so.17; pet needs the unversioned name.
-          sudo ln -sf /usr/lib/llvm-17/lib/libclang-cpp.so.17 /usr/lib/llvm-17/lib/libclang-cpp.so
-          # cloog builds its PDF manual via texi2dvi; a no-op that creates the -o target.
-          printf '%s\n' '#!/bin/sh' \
-            'out=; while [ $# -gt 0 ]; do [ "$1" = "-o" ] && { out=$2; shift; }; shift; done' \
-            '[ -n "$out" ] && : > "$out"; exit 0' | sudo tee /usr/local/bin/texi2dvi >/dev/null
-          sudo chmod +x /usr/local/bin/texi2dvi
-          git clone --recursive https://github.com/bondhugula/pluto.git "$RUNNER_TEMP/pluto"
-          cd "$RUNNER_TEMP/pluto"
-          git checkout "$PLUTO_COMMIT"
-          git submodule update --init --recursive
-          ./autogen.sh
-          # pet only builds against clang 17, which cannot read GCC 15+ libstdc++ headers: pin it
-          # to GCC 14. The pin rides on CC/CXX because pet's configure overwrites CXXFLAGS. It
-          # covers pet's own build only; kernels are compiled by the normal toolchain.
-          gccdir=$(ls -d /usr/lib/gcc/x86_64-linux-gnu/14 2>/dev/null || true)
-          test -n "$gccdir" || { echo "::error::no GCC 14 install for clang-17 to sit on"; exit 1; }
-          clangxx="clang++-17 --gcc-install-dir=$gccdir"
-          printf '%s\n' '#include <cstdint>' '#include <string>' \
-            'int main() { return (int)std::string("x").size() - 1; }' \
-            | $clangxx -std=c++17 -x c++ - -o "$RUNNER_TEMP/cxx-smoke" && "$RUNNER_TEMP/cxx-smoke"
-          ./configure --with-clang-prefix=/usr/lib/llvm-17 \
-            CC="clang-17 --gcc-install-dir=$gccdir" CXX="$clangxx" \
-            CXXFLAGS="-std=c++17 -include cstdint" \
-            || { echo "::group::pet/config.log"; grep -B5 -A15 -iE '\berror\b' pet/config.log 2>/dev/null | tail -150; echo "::endgroup::"; exit 1; }
-          make -j"$(nproc)"
-          sudo make install
-          sudo ldconfig
-          # polycc must transform a scop, not only install.
-          printf '%s\n' \
-            '#include <stdint.h>' \
-            'void mm(const int64_t N, double (*restrict A)[N], double (*restrict B)[N], double (*restrict C)[N]) {' \
-            '#pragma scop' \
-            '  for (int64_t i=0;i<N;i++) for (int64_t j=0;j<N;j++) for (int64_t k=0;k<N;k++) C[i][j]+=A[i][k]*B[k][j];' \
-            '#pragma endscop' \
-            '}' > "$RUNNER_TEMP/smoke.c"
-          ( cd "$RUNNER_TEMP" && polycc --pet smoke.c -o smoke_out.c && test -s smoke_out.c )
-          echo "pluto OK: $(command -v polycc)"
+          sudo apt-get install -y --no-install-recommends libstdc++-14-dev
+          sudo env PLUTO_SRC="$RUNNER_TEMP/pluto" PLUTO_GCC_INSTALL_DIR=/usr/lib/gcc/x86_64-linux-gnu/14 \
+            sh containers/lib/build-pluto.sh
 
       - name: Phase 4 -- codegen frameworks + fp16 (build + run + validate a kernel)
         if: ${{ !cancelled() }}

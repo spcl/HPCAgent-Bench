@@ -202,15 +202,13 @@ RUN set -eux; \
     rm -rf "${work}"
 
 # ---------------------------------------------------------------------------------------------
-# 3. The source-built pieces: tblis and HPTT from the repo's scripts, and Pluto (polycc) against
-# distro clang 17. /opt/pluto is KEPT: polycc bakes build-tree paths that `make install` does not
-# relocate. clang 17 is pointed at gcc 13's libstdc++: left alone it takes the newest installed gcc,
-# 16, whose headers a clang that old is not guaranteed to parse.
+# 3. The source-built pieces: tblis, HPTT and Pluto (polycc) from the repo's scripts. clang 17 is
+# pointed at gcc 13's libstdc++: left alone it takes the newest installed gcc, 16, whose headers a
+# clang that old is not guaranteed to parse.
 COPY containers/build-hptt.sh /build-hptt.sh
 COPY containers/build-tblis.sh /build-tblis.sh
+COPY containers/lib/build-pluto.sh /build-pluto.sh
 ARG TBLIS_REF=v1.3.0
-ARG PLUTO_COMMIT=dc462163c8b4fc97d378a4d245d1a64741cb4111
-ARG PLUTO_CLANG_MAJOR=17
 RUN set -eux; \
     sh /build-hptt.sh; \
     TBLIS_REF="${TBLIS_REF}" sh /build-tblis.sh; \
@@ -218,40 +216,8 @@ RUN set -eux; \
     test -f /usr/local/include/hptt.h; \
     test -f /usr/local/include/tblis/tblis.h; \
     { test -f /usr/local/lib/libtblis.so || test -f /usr/local/lib/libtblis.a; }; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-      "clang-${PLUTO_CLANG_MAJOR}" "llvm-${PLUTO_CLANG_MAJOR}" "llvm-${PLUTO_CLANG_MAJOR}-dev" \
-      "libclang-${PLUTO_CLANG_MAJOR}-dev" libltdl-dev; \
-    rm -rf /var/lib/apt/lists/*; \
-    ln -sf "/usr/lib/llvm-${PLUTO_CLANG_MAJOR}/lib/libclang-cpp.so.${PLUTO_CLANG_MAJOR}" \
-           "/usr/lib/llvm-${PLUTO_CLANG_MAJOR}/lib/libclang-cpp.so"; \
-    printf '%s\n' '#!/bin/sh' \
-      'out=; while [ $# -gt 0 ]; do [ "$1" = "-o" ] && { out=$2; shift; }; shift; done' \
-      '[ -n "$out" ] && : > "$out"; exit 0' > /usr/local/bin/texi2dvi; \
-    chmod +x /usr/local/bin/texi2dvi; \
-    gitretry clone --recursive https://github.com/bondhugula/pluto.git /opt/pluto; \
-    git -C /opt/pluto checkout "${PLUTO_COMMIT}"; \
-    gitretry -C /opt/pluto submodule update --init --recursive; \
-    cd /opt/pluto; \
-    ./autogen.sh; \
-    gcc13="--gcc-install-dir=/usr/lib/gcc/$(uname -m)-linux-gnu/13"; \
-    ./configure --with-clang-prefix="/usr/lib/llvm-${PLUTO_CLANG_MAJOR}" \
-      CC="clang-${PLUTO_CLANG_MAJOR} ${gcc13}" CXX="clang++-${PLUTO_CLANG_MAJOR} ${gcc13}" \
-      CXXFLAGS='-std=c++17 -include cstdint'; \
-    make -j"$(nproc)"; \
-    make install; \
-    ldconfig; \
-    printf '%s\n' \
-      '#include <stdint.h>' \
-      'void mm(const int64_t N, double (*restrict A)[N], double (*restrict B)[N], double (*restrict C)[N]) {' \
-      '#pragma scop' \
-      '  for (int64_t i=0;i<N;i++) for (int64_t j=0;j<N;j++) for (int64_t k=0;k<N;k++) C[i][j]+=A[i][k]*B[k][j];' \
-      '#pragma endscop' \
-      '}' > /tmp/smoke.c; \
-    cd /tmp; \
-    polycc --pet smoke.c -o smoke_out.c; \
-    test -s smoke_out.c; \
-    rm -f /tmp/smoke.c /tmp/smoke_out.c
+    PLUTO_GCC_INSTALL_DIR="/usr/lib/gcc/$(uname -m)-linux-gnu/13" sh /build-pluto.sh; \
+    rm -rf /build-pluto.sh /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------------------------
 # 4. The python framework stack, in /opt/venv.

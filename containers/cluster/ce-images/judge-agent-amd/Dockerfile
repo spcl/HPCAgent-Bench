@@ -899,55 +899,11 @@ RUN set -eux; \
     done
 
 # ---------------------------------------------------------------------------------------------
-# 10. Pluto -- polycc, the polyhedral source-to-source tool the `pluto` framework shells out to.
-#
-# NOT a pip package: it needs isl, clan, candl and pet. pet is built against a DISTRO clang, not
-# this image's LLVM 22, because pet tracks clang's C++ API closely and the recipe verified in
-# containers/pluto.Dockerfile is a clang-17 one. polycc is a standalone transformer whose output
-# the graded toolchain compiles afterwards, so which clang parsed the scop is not a property of
-# any graded number.
-#
-# pet prefers the monolithic -lclang-cpp and Ubuntu ships only the versioned .so.NN, so the
-# symlink below is what stops configure falling back to enumerating -lclang* and missing
-# -lclangASTMatchers.
-ARG PLUTO_COMMIT=dc462163c8b4fc97d378a4d245d1a64741cb4111
+# 10. Pluto -- polycc, the polyhedral source-to-source tool the `pluto` framework shells out to,
+# built against distro clang 17 by containers/lib/build-pluto.sh (which says why).
 ARG PLUTO_CLANG_MAJOR=17
-RUN set -eux; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-      "clang-${PLUTO_CLANG_MAJOR}" "llvm-${PLUTO_CLANG_MAJOR}" "llvm-${PLUTO_CLANG_MAJOR}-dev" \
-      "libclang-${PLUTO_CLANG_MAJOR}-dev" libltdl-dev; \
-    rm -rf /var/lib/apt/lists/*; \
-    ln -sf "/usr/lib/llvm-${PLUTO_CLANG_MAJOR}/lib/libclang-cpp.so.${PLUTO_CLANG_MAJOR}" \
-           "/usr/lib/llvm-${PLUTO_CLANG_MAJOR}/lib/libclang-cpp.so"; \
-    printf '%s\n' '#!/bin/sh' \
-      'out=; while [ $# -gt 0 ]; do [ "$1" = "-o" ] && { out=$2; shift; }; shift; done' \
-      '[ -n "$out" ] && : > "$out"; exit 0' > /usr/local/bin/texi2dvi; \
-    chmod +x /usr/local/bin/texi2dvi; \
-    gitretry clone --recursive https://github.com/bondhugula/pluto.git /opt/pluto; \
-    git -C /opt/pluto checkout "${PLUTO_COMMIT}"; \
-    gitretry -C /opt/pluto submodule update --init --recursive; \
-    cd /opt/pluto; \
-    ./autogen.sh; \
-    ./configure --with-clang-prefix="/usr/lib/llvm-${PLUTO_CLANG_MAJOR}" \
-      CC="clang-${PLUTO_CLANG_MAJOR}" CXX="clang++-${PLUTO_CLANG_MAJOR}" \
-      CXXFLAGS='-std=c++17 -include cstdint'; \
-    make -j"$(nproc)"; \
-    make install; \
-    ldconfig; \
-    printf '%s\n' \
-      '#include <stdint.h>' \
-      'void mm(const int64_t N, double (*restrict A)[N], double (*restrict B)[N], double (*restrict C)[N]) {' \
-      '#pragma scop' \
-      '  for (int64_t i=0;i<N;i++) for (int64_t j=0;j<N;j++) for (int64_t k=0;k<N;k++) C[i][j]+=A[i][k]*B[k][j];' \
-      '#pragma endscop' \
-      '}' > /tmp/smoke.c; \
-    cd /tmp; \
-    polycc --pet smoke.c -o smoke_out.c; \
-    test -s smoke_out.c; \
-    rm -f /tmp/smoke.c /tmp/smoke_out.c
-# The /opt/pluto build tree is KEPT on purpose: polycc bakes absolute build-tree paths -- its
-# pluto binary, inscop, and getversion's .git -- that `make install` does not relocate.
+COPY containers/lib/build-pluto.sh /build-pluto.sh
+RUN PLUTO_CLANG_MAJOR="${PLUTO_CLANG_MAJOR}" sh /build-pluto.sh && rm -rf /build-pluto.sh /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------------------------
 # 10b. PPCG -- the `ppcg` binary the ppcg/ppcg_cuda/ppcg_hip columns shell out to

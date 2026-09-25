@@ -651,42 +651,9 @@ RUN set -eux; \
 # 11. Pluto (polycc) and PPCG (ppcg), both against a DISTRO clang, exactly judge-agent-amd steps 10
 # and 10b. ppcg emits CUDA, so on this image the ppcg_cuda column needs no hipify step; ppcg stays
 # in its own prefix so its isl cannot overwrite Pluto's libisl.so.23.
-ARG PLUTO_COMMIT=dc462163c8b4fc97d378a4d245d1a64741cb4111
 ARG PLUTO_CLANG_MAJOR=17
-RUN set -eux; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-      "clang-${PLUTO_CLANG_MAJOR}" "llvm-${PLUTO_CLANG_MAJOR}" "llvm-${PLUTO_CLANG_MAJOR}-dev" \
-      "libclang-${PLUTO_CLANG_MAJOR}-dev" libltdl-dev; \
-    rm -rf /var/lib/apt/lists/*; \
-    ln -sf "/usr/lib/llvm-${PLUTO_CLANG_MAJOR}/lib/libclang-cpp.so.${PLUTO_CLANG_MAJOR}" \
-           "/usr/lib/llvm-${PLUTO_CLANG_MAJOR}/lib/libclang-cpp.so"; \
-    printf '%s\n' '#!/bin/sh' \
-      'out=; while [ $# -gt 0 ]; do [ "$1" = "-o" ] && { out=$2; shift; }; shift; done' \
-      '[ -n "$out" ] && : > "$out"; exit 0' > /usr/local/bin/texi2dvi; \
-    chmod +x /usr/local/bin/texi2dvi; \
-    gitretry clone --recursive https://github.com/bondhugula/pluto.git /opt/pluto; \
-    git -C /opt/pluto checkout "${PLUTO_COMMIT}"; \
-    gitretry -C /opt/pluto submodule update --init --recursive; \
-    cd /opt/pluto; \
-    ./autogen.sh; \
-    ./configure --with-clang-prefix="/usr/lib/llvm-${PLUTO_CLANG_MAJOR}" \
-      CC="clang-${PLUTO_CLANG_MAJOR}" CXX="clang++-${PLUTO_CLANG_MAJOR}" \
-      CXXFLAGS='-std=c++17 -include cstdint'; \
-    make -j"$(nproc)"; \
-    make install; \
-    ldconfig; \
-    printf '%s\n' \
-      '#include <stdint.h>' \
-      'void mm(const int64_t N, double (*restrict A)[N], double (*restrict B)[N], double (*restrict C)[N]) {' \
-      '#pragma scop' \
-      '  for (int64_t i=0;i<N;i++) for (int64_t j=0;j<N;j++) for (int64_t k=0;k<N;k++) C[i][j]+=A[i][k]*B[k][j];' \
-      '#pragma endscop' \
-      '}' > /tmp/smoke.c; \
-    cd /tmp; \
-    polycc --pet smoke.c -o smoke_out.c; \
-    test -s smoke_out.c; \
-    rm -f /tmp/smoke.c /tmp/smoke_out.c
+COPY containers/lib/build-pluto.sh /build-pluto.sh
+RUN PLUTO_CLANG_MAJOR="${PLUTO_CLANG_MAJOR}" sh /build-pluto.sh && rm -rf /build-pluto.sh /var/lib/apt/lists/*
 
 ARG PPCG_COMMIT=7cbf785210cdc1bd68fd277d2ecf7dd824da874a
 RUN set -eux; \
