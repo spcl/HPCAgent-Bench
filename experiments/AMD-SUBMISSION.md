@@ -267,41 +267,14 @@ head -20 problems-llr-focus40-c.jsonl > problems-llr-focus40-kimi-c-a.jsonl
 tail -20 problems-llr-focus40-c.jsonl > problems-llr-focus40-kimi-c-b.jsonl
 ```
 
-`hints-and-triggers.md` is legacy: `materialize_shared.sh` still builds it (from
-`containers/agent/hints.md` plus `skill-triggers.md`) for the old llr5/llr6 arms that point
-`AGENT_HINTS_FILE` straight at it, but no packet in `hpcagent_bench/envs/registry.yaml` sets that
-variable any more -- from 2026-09-17 a skill reaches the agent as its trigger line and file on
-disk only, never as text stuffed into the main prompt. Every current `.env.*` leaves
-`AGENT_HINTS_FILE` empty. Do not point a new arm at it.
+A skill reaches the agent as its trigger line and its file on disk only, never as text in the main
+prompt: every arm leaves `AGENT_HINTS_FILE` empty.
 
-## Lost setups (experiments/rerun-lost.tsv)
+## Lost setups and kernels
 
-On 2026-09-19 a cleanup deleted the job dirs, judge DBs included, of 19 setups (Kimi GPU LLR, Kimi
-llrblind and llrblind-cmp, Kimi scicomp perf-playbook, and qwen38/oss120b LLR CPU Fortran). Their
-extracted rows survive read-only in the frozen observations (`hpcagent_bench/frozen_observations.py`,
-default `$SCRATCH/audit-20260918/frozen-observations-0919/extract-v2`). The extractor,
-`remaining_kernels.py` and `wave_board.py` count them as existing coverage; the board shows these
-setups yellow ("rerun") until their `status` in `rerun-lost.tsv` is `done`.
-
-Rerun in two phases:
-
-1. Now: rerun only their missing entries, the owed kernels computed with the frozen rows as
-   coverage, inside the normal fused owed waves. Plot and discuss from frozen plus new rows.
-2. Only after every other experiment is done: rerun each setup in full (the explicit opt-in of
-   `submit-owed-wave.sh`), replace the frozen rows, and set `status` to `done`.
-
-## Lost kernels (experiments/rerun-kernels.tsv)
-
-Job 641799 lost two of its eight judge upstreams -- rank 4 to the OOM killer at 10:44 on a node that
-had walked to its memory ceiling, rank 0 at 21:46 with no OOM and no log line -- and the router in
-front of each kept answering `/health` while every grade behind it returned 502. Nine kernels of
-`scicomp-perf-playbook-kimi27sglang-plain` are listed in `rerun-kernels.tsv` as owed whatever their
-rows say: `xsbench`, `minife`, `bout_elm_pb`, `jacobi_2d` (rank 4, which recorded nothing at all) and
-`rayleigh_ritz_rotation`, `lavamd`, `ls3df_scf`, `fdtd_2d`, `lulesh` (rank 0, whose work up to 21:26
-is real). The owed waves rerun them as class `infra`; set `status` to `done` once they land.
-
-`experiments/judge_upstream.py` supervises every judge upstream from now on, so this failure costs
-one grade instead of a rank.
+`rerun-lost.tsv` (setups whose job directories are gone) and `rerun-kernels.tsv` (kernels owed
+whatever their rows say) are described in README.md, "Frozen observations and setups to rerun" and
+"Kernels to rerun".
 
 ## Results and watching
 
