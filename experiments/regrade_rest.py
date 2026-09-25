@@ -71,12 +71,12 @@ class Latest:
     benchmark: str
 
 
-def paper_arms(runs: pathlib.Path, opt: str, scratch: pathlib.Path) -> dict[str, tuple[str, str]]:
+def paper_arms(runs: pathlib.Path, opt: str) -> dict[str, tuple[str, str]]:
     """arm identity -> (section, sub-section) of every board row the final regrade covers."""
     models = tuple(yaml.safe_load(wave_board.REGISTRY.read_text())["models"])
     frozen = frozen_observations.resolve(None)
     placed = {}
-    for row in wave_board.arm_rows(runs, opt, models, frozen, scratch):
+    for row in wave_board.arm_rows(runs, opt, models, frozen):
         where = wave_board.placement(row)
         if where and where[0] != "MLScale":
             placed[row["arm"]] = where
@@ -348,7 +348,7 @@ def main() -> int:
         str(scratch / "owed-waves" / "promote-*" / "cells"),
     ]
     env_dirs = args.env_dir or [args.sbatch_dir]
-    arms = paper_arms(pathlib.Path(args.runs), args.opt, scratch)
+    arms = paper_arms(pathlib.Path(args.runs), args.opt)
     latest = latest_submissions(wave_board.job_dirs(pathlib.Path(args.runs)))
     measured = measured_minutes(patterns)
     active, notes = active_regrade_keys(measured)
