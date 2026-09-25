@@ -273,14 +273,24 @@ def test_no_score_is_an_alias_of_the_registered_key_and_takes_no_hue_slot_of_its
     assert "no-score" not in palette.hue_order("packets")
 
 
-def test_packet_marker_follows_the_same_registry_order_as_colour() -> None:
-    """The packet efficacy panels shape by packet instead of colouring by it
-    (:mod:`hpcagent_bench.stats.figures.efficacy`'s module docstring); shape still comes off the
-    SAME registry order :func:`color` uses for hue, so the two never disagree about which packet a
-    figure means."""
-    leads = palette.hue_order("packets")
-    assert palette.packet_marker(leads[0]) == palette.markers()[0]
-    assert palette.packet_marker("cpfsrc") != palette.packet_marker("cpf")
+def test_every_registered_treatment_wears_its_own_shape_and_none_wears_the_control_circle() -> None:
+    """USER 2026-09-25: "repository" and "perf playbook" drew the same plus. The shape of a packet or
+    a harness comes from one registry pool, one per treatment, so two treatments can never be told
+    apart by colour alone -- colour is the model's."""
+    table = palette.shape_table()
+    shapes = list(table.values())
+    assert len(shapes) == len(set(map(repr, shapes))), table
+    assert palette.CONTROL_MARKER not in shapes
+    assert palette.packet_marker("repo") != palette.packet_marker("perf-playbook-cpu")
+    assert palette.harness_marker("openhands") not in [palette.packet_marker(p) for p in palette.hue_order("packets")]
+
+
+def test_a_packets_shape_does_not_move_when_a_later_treatment_is_registered() -> None:
+    """Append-only: the pool is handed out in file order, so the first packet keeps the pool's first
+    free shape whatever is registered after it."""
+    first = palette.hue_order("packets")[0]
+    pool = [shape for shape in palette.registry().shapes if shape != palette.CONTROL_MARKER]
+    assert palette.packet_marker(first) == pool[0]
 
 
 def test_an_unregistered_packet_marker_is_stable_and_warns(caplog: pytest.LogCaptureFixture) -> None:

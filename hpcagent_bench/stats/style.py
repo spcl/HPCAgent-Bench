@@ -82,7 +82,7 @@ PRINT_LEGEND_PT: float = 6.0
 #: The floor any print-size fitting (crowded category names, a legend squeezed into its band) may
 #: shrink text to. Below it a figure changes its layout instead: text that shrinks per figure is
 #: exactly what makes two figures on one page print at different sizes.
-PRINT_MIN_PT: float = 6.0
+PRINT_MIN_PT: float = 5.5
 
 #: The dpi every figure is written at (:func:`save`'s default). FreeType hints tighter at a low dpi,
 #: so ``get_window_extent`` at matplotlib's default 100 dpi UNDERSTATES text width: a caller that

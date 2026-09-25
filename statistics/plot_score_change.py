@@ -261,12 +261,33 @@ def arm_languages(frame: pd.DataFrame) -> dict[str, str]:
     return dict(zip(known["arm"], known["language"], strict=True))
 
 
+#: The ``intervention=`` of a panel whose pairs differ in the agent harness rather than a packet.
+HARNESS_INTERVENTION: str = "harness"
+
+
+def treated_harness(arm: str) -> str:
+    """What a harness comparison's treated arm changed: its packet when it has one (AutoKernel on
+    Claude Code), else its harness's display name."""
+    packet = experiment_tags.packet_of(arm)
+    if packet:
+        return experiment_tags.packet_name(packet)
+    tokens = arm.split("-")
+    for harness in experiment_tags.order("harnesses"):
+        if harness and harness in tokens:
+            return experiment_tags.harness_name(harness)
+    return arm
+
+
 def pair_leg_label(pair: tuple[str, str], intervention: str, recorded_language: str = "") -> str:
     """One pair's LEG: what it DELIVERED, plus every packet BOTH its arms carried -- never the
     intervention the two sides differ in, which the title and the legend already say once.
 
-    ``recorded_language`` is :func:`arm_languages`' answer, used when the arm name has none.
+    ``recorded_language`` is :func:`arm_languages`' answer, used when the arm name has none. A
+    HARNESS comparison names each column by the treated arm's harness (or its packet, AutoKernel on
+    Claude Code): every arm delivers C, and the harness is what the columns compare.
     """
+    if intervention == HARNESS_INTERVENTION:
+        return treated_harness(pair[0])
     language = experiment_tags.arm_delivery_name(pair[0]) or experiment_tags.language_name(recorded_language)
     resolved = packets.canonical(intervention)
     extra = [shared_spelling(pair, key) for key in experiment_tags.order("packets") if key and key != resolved]

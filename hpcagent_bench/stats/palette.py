@@ -213,36 +213,60 @@ def marker(model: str) -> str:
 CONTROL_MARKER: str = "o"
 
 
-def packet_marker(packet: str) -> str:
-    """The one SHAPE ``packet`` wears in a figure that colours by MODEL instead: the packet
-    efficacy panels (:mod:`hpcagent_bench.stats.figures.efficacy`,
-    :mod:`hpcagent_bench.stats.figures.kernel_comparison`) already split one packet per panel, so
-    colour is free for the model -- and with few models sharing one panel, a strong hue tells two
-    overlapping summary marks apart far better than a faint circle-vs-square edge does. Shape is
-    read off the SAME registry order :func:`color` uses for hue, wrapping at :func:`markers`'
-    eight entries; harmless here since one panel never draws two packets at once."""
-    if not packets.spec_parts(packet):
+@functools.lru_cache(maxsize=1, typed=True)
+def shape_table() -> dict[tuple[str, str], object]:
+    """``(kind, key) -> shape`` for every registered treatment: packets, then harnesses, each taking
+    the next free shape of the registry's pool in file order, or its packet entry's own ``marker:``.
+    The control's circle is never handed out. Registering a treatment therefore gives it a shape of
+    its own without reshaping any other; a pool too small, or two treatments on one shape, is a
+    registry error raised here rather than two treatments drawn alike."""
+    reg = registry()
+    entities = [("packets", key) for key in hue_order("packets")] + [
+        ("harnesses", key) for key in hue_order("harnesses")
+    ]
+    fixed = {("packets", key): d.marker for key, d in reg.packet_defs.items() if key and d.marker}
+    taken = list(fixed.values())
+    if CONTROL_MARKER in taken or len(set(taken)) != len(taken):
+        raise ValueError(f"registry: packet markers must be distinct and never {CONTROL_MARKER!r}: {fixed}")
+    free = iter(shape for shape in reg.shapes if shape not in taken and shape != CONTROL_MARKER)
+    table: dict[tuple[str, str], object] = {}
+    for entity in entities:
+        if entity in fixed:
+            table[entity] = fixed[entity]
+            continue
+        shape = next(free, None)
+        if shape is None:
+            raise ValueError(f"registry: {len(entities)} treatments outgrow the {len(reg.shapes)}-shape pool")
+        table[entity] = shape
+    return table
+
+
+def treatment_shape(kind: str, name: str) -> object:
+    """``name``'s registered shape among ``kind`` (packets, harnesses); an unregistered one warns and
+    takes a stable pool slot by CRC."""
+    resolved = canonical(kind, name)
+    table = shape_table()
+    if (kind, resolved) in table:
+        return table[(kind, resolved)]
+    LOG.warning("palette: %s %r is not in registry.yaml; using a hash marker", kind, name)
+    pool = [shape for shape in registry().shapes if shape != CONTROL_MARKER]
+    return pool[zlib.crc32(str(name).encode()) % len(pool)]
+
+
+def packet_marker(packet: str) -> object:
+    """The one SHAPE ``packet`` wears (:func:`shape_table`): its lead part's, or the control's hollow
+    circle for no packet. Colour is spent on the model (:func:`model_color`), so shape alone tells
+    treatments apart, and no two registered treatments share one."""
+    parts = packets.spec_parts(packet)
+    if not parts:
         return CONTROL_MARKER
-    shapes = markers()
-    known = hue_order("packets")
-    resolved = canonical("packets", packet)
-    if resolved in known:
-        return shapes[known.index(resolved) % len(shapes)]
-    LOG.warning("palette: packet %r is not in registry.yaml; using a hash marker", packet)
-    return shapes[zlib.crc32(str(packet).encode()) % len(shapes)]
+    return treatment_shape("packets", packets.lead(parts))
 
 
-def harness_marker(harness: str) -> str:
-    """The one SHAPE an agent HARNESS wears in a figure that colours by model and varies the treatment:
-    read from the BACK of :func:`markers`, past the standalone optimizers' shapes (:func:`marker`), so
-    registering a harness never repaints an optimizer and the common packets (front) stay distinct."""
-    shapes = markers()
-    known = hue_order("harnesses")
-    resolved = canonical("harnesses", harness)
-    if resolved not in known:
-        LOG.warning("palette: harness %r is not in registry.yaml; using a hash marker", harness)
-        return shapes[zlib.crc32(str(harness).encode()) % len(shapes)]
-    return shapes[-1 - ((len(order("optimizers")) + known.index(resolved)) % len(shapes))]
+def harness_marker(harness: str) -> object:
+    """The one SHAPE an agent HARNESS wears (:func:`shape_table`), from the same pool as the packets,
+    so a harness and a packet in one figure never share a shape."""
+    return treatment_shape("harnesses", harness)
 
 
 def packet_markers(packets_: Iterable[str]) -> dict[str, str]:

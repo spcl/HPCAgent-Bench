@@ -1800,7 +1800,10 @@ def test_without_mark_pending_a_pending_category_stays_empty(
 ) -> None:
     fig = pending_dot_row(tmp_path, monkeypatch, mark=False)
     assert not any(t.get_gid() == plotstyle.PENDING_GID for ax in fig.axes for t in ax.texts)
-    assert len(fig.axes[0].get_xticks()) == 2  # the slots are kept either way
+    # The slots are kept either way: two models of one language share one tick (user, 2026-09-25)
+    # and the pending one still holds its column's width.
+    assert len(fig.axes[0].get_xticks()) == 1
+    assert fig.axes[0].get_xlim() == pytest.approx((-0.6, efficacy_figures.GROUP_STEP + 0.6))
 
 
 def test_the_key_is_never_wider_than_the_plot_body(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:

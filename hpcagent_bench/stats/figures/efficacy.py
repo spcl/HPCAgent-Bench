@@ -202,6 +202,9 @@ class FigureConfig:
     max_name_lines: int = 2
     #: The widest a delivery's tick text runs before it folds.
     tick_wrap: int = 8
+    #: The category names' size against :attr:`tick_pt`: under nine columns of a text-width row the
+    #: names are the densest text on the figure (user, 2026-09-25: 20% smaller than the ticks).
+    category_scale: float = 1.0
     #: Put the key's text-only notes in the key: abbreviations, the few-kernels note, and one row per
     #: significance superscript. A paper figure turns it off: the notes go to the caption and the two
     #: superscripts share one row, so the key fits three columns (user, 2026-09-25).
@@ -228,6 +231,7 @@ PAPER_CONFIG = dataclasses.replace(
     legend_pt=style.PRINT_LEGEND_PT,
     legend_ncol=3,
     key_notes=False,
+    category_scale=0.8,
     legend_min_scale=1.0,
     category_min_scale=style.PRINT_MIN_PT / style.PRINT_TICK_PT,
     legend_marker_pt=5.5,
@@ -743,8 +747,29 @@ def packet_legend_mark(treatment: str, config: FigureConfig = DEFAULT_CONFIG) ->
     carries only the shape."""
     return Line2D(
         [], [], marker=treatment_marker(treatment), linestyle="none", color=style.MUTED,
-        markersize=config.legend_marker_pt, label=experiment_tags.packet_name(treatment),
+        markersize=config.legend_marker_pt, label=TREATMENT_NAMES.get(treatment, experiment_tags.packet_name(treatment)),
     )  # fmt: skip
+
+
+#: Key text of a panel whose treated side is not one packet: a harness comparison's columns each name
+#: their own harness, so its one treated shape is "the other harness", whichever the column says.
+TREATMENT_NAMES: dict[str, str] = {"harness": "Other Harness (Column)"}
+
+#: Panel treatments whose columns each change a DIFFERENT registered treatment (a harness, or a
+#: packet on the control's harness): every column wears that treatment's own registered shape.
+PER_COLUMN_TREATMENTS: frozenset[str] = frozenset({"harness"})
+
+
+def column_treatment_shape(leg: str) -> str:
+    """The registered shape of the treatment a column is named after: a harness by its display name,
+    else a packet by its display name; "" when neither registry names it."""
+    for harness in experiment_tags.order("harnesses"):
+        if harness and experiment_tags.harness_name(harness) == leg:
+            return palette.harness_marker(harness)
+    for packet in experiment_tags.order("packets"):
+        if packet and experiment_tags.packet_name(packet) == leg:
+            return palette.packet_marker(packet)
+    return ""
 
 
 def pair_legend_handles(
@@ -1730,6 +1755,9 @@ class ArmRow:
     colour: str
     control: ArmPoint
     treated: ArmPoint
+    #: The treated mark's own shape where a column's treatment is not the panel's one packet (a
+    #: harness comparison: each column a different harness); "" wears the panel's shape.
+    shape: str = ""
 
     @property
     def label(self) -> str:
@@ -1749,8 +1777,10 @@ def arm_rows(
 ) -> list[ArmRow]:
     """Every (model, leg) of ``frame`` as a category, in the order the categorical axis draws them.
 
-    Sorted by MODEL first, then delivery, so one model's languages stand together and a reader
-    comparing models reads a block rather than hunting a colour across the axis.
+    Sorted by DELIVERY first, then model (user, 2026-09-25): one tick names a language once, its
+    models stand side by side in their colours, and a light rule separates the languages
+    (:func:`column_x`, :func:`leg_runs`). The model is the colour; repeating "C, Fortran" under every
+    model named the same thing three times.
     """
     rows: list[ArmRow] = []
     for (model, leg), pair in frame.assign(leg=leg_labels(frame)).groupby(["model", "leg"]):
@@ -1760,15 +1790,62 @@ def arm_rows(
         rows.append(
             ArmRow(str(model), str(leg), series_colour(str(model), str(leg), channels), points[0], points[1])
         )  # fmt: skip
+    return column_order(rows)
+
+
+def leg_rank(leg: str) -> tuple[int, str]:
+    """A delivery's place on the axis: :func:`delivery_order`, unregistered ones last, alphabetical."""
+    order = delivery_order()
+    return (order.index(leg), "") if leg in order else (len(order), leg)
+
+
+def column_order(rows: Sequence[ArmRow]) -> list[ArmRow]:
+    """``rows`` in axis order: delivery first (:func:`leg_rank`), then model in registry order."""
     order = {name: index for index, name in enumerate(palette.in_order([row.model for row in rows]))}
-    return sorted(rows, key=lambda row: (order.get(row.model, len(order)), row.leg))
+    return sorted(rows, key=lambda row: (leg_rank(row.leg), order.get(row.model, len(order))))
+
+
+#: The spacing of two columns of ONE delivery (its models side by side), against 1.0 between two
+#: deliveries: the models of a language read as one group.
+GROUP_STEP: float = 0.6
+
+
+def column_x(rows: Sequence[ArmRow]) -> list[float]:
+    """Each column's x: :data:`GROUP_STEP` apart within a delivery, a whole step between deliveries."""
+    xs: list[float] = []
+    for index, row in enumerate(rows):
+        xs.append(0.0 if index == 0 else xs[-1] + (GROUP_STEP if row.leg == rows[index - 1].leg else 1.0))
+    return xs
+
+
+def leg_runs(rows: Sequence[ArmRow]) -> list[tuple[str, int, int]]:
+    """Each contiguous run of one delivery as ``(leg, first index, last index)``."""
+    runs: list[tuple[str, int, int]] = []
+    for index, row in enumerate(rows):
+        if runs and runs[-1][0] == row.leg:
+            runs[-1] = (row.leg, runs[-1][1], index)
+        else:
+            runs.append((row.leg, index, index))
+    return runs
+
+
+def leg_centres(rows: Sequence[ArmRow]) -> list[float]:
+    """The x of each delivery's tick: the middle of its run of columns."""
+    xs = column_x(rows)
+    return [(xs[first] + xs[last]) / 2.0 for _, first, last in leg_runs(rows)]
+
+
+def column_limits(rows: Sequence[ArmRow]) -> tuple[float, float]:
+    """The X limits of a row of columns: 0.6 past the outer columns, never a degenerate axis."""
+    xs = column_x(rows) or [0.0]
+    return -0.6, max(xs[-1] + 0.6, 0.6)
 
 
 #: Short tick spellings for deliveries whose display name does not fit a column of a joined row,
 #: with the footnote the key carries for each. The tick is the abbreviation, so the column stays
 #: readable; the key is where the reader finds out what it stands for.
 TICK_ALIASES: dict[str, tuple[str, str]] = {
-    experiment_tags.OFFLOAD_DELIVERY_NAME: ("OMP", "OMP = OpenMP Offloading"),
+    experiment_tags.OFFLOAD_DELIVERY_NAME: ("OpenMP", "OpenMP = OpenMP offload"),
 }
 
 
@@ -1799,16 +1876,11 @@ def text_band(points: float, lines: int = 1) -> float:
     return points / 72.0 * LINE_BAND * lines
 
 
-def model_runs(rows: Sequence[ArmRow]) -> list[tuple[str, int, int]]:
-    """Each CONTIGUOUS run of one model as ``(model, first index, last index)``. Contiguous because
-    :func:`arm_rows` already sorts by model, so a run is the model's whole block."""
-    runs: list[tuple[str, int, int]] = []
-    for index, row in enumerate(rows):
-        if runs and runs[-1][0] == row.model:
-            runs[-1] = (row.model, runs[-1][1], index)
-        else:
-            runs.append((row.model, index, index))
-    return runs
+#: The length of a category tick mark, points.
+CATEGORY_TICK_PT: float = 2.5
+
+#: How much of a staggered name's drop its tick mark grows by.
+STAGGER_TICK_SHARE: float = 0.25
 
 
 def draw_category_axis(ax: Axes, rows: Sequence[ArmRow], config: FigureConfig) -> None:
@@ -1819,11 +1891,15 @@ def draw_category_axis(ax: Axes, rows: Sequence[ArmRow], config: FigureConfig) -
     under three columns of a text-width row print on top of one another whatever they are folded
     to, and the reader was being told the same thing twice.
     """
-    ax.set_xticks(range(len(rows)))
+    ax.set_xticks(leg_centres(rows))
     ax.set_xticklabels(
-        [wrapped_label(tick_alias(row.label), config.tick_wrap) for row in rows], fontsize=config.tick_pt,
+        [wrapped_label(tick_alias(leg or row_label(rows, first)), config.tick_wrap) for leg, first, _ in leg_runs(rows)],
+        fontsize=config.tick_pt * config.category_scale,
         color=style.INK,
     )  # fmt: skip
+    # Every category gets a tick mark (user, 2026-09-25): the row above draws its columns without
+    # them, and a name set one line lower by the stagger needs a mark to its column.
+    ax.tick_params(axis="x", length=CATEGORY_TICK_PT, width=config.spine_width, color=style.MUTED)
 
 
 def stagger_crowded_ticks(fig: Figure, axes: Sequence[Axes], config: FigureConfig) -> None:
@@ -1834,21 +1910,32 @@ def stagger_crowded_ticks(fig: Figure, axes: Sequence[Axes], config: FigureConfi
     the category band already reserves two (:func:`figure_dot_row`)."""
     renderer = fig.canvas.get_renderer()
     # Two labels closer than a third of the type size read as one word ("OMPTriton").
-    gap = config.tick_pt / 3.0 * fig.dpi / 72.0
+    name_pt = config.tick_pt * config.category_scale
+    gap = name_pt / 3.0 * fig.dpi / 72.0
     for ax in axes:
         if style.crowded_ticks(ax, renderer, gap):
             for tick in ax.xaxis.get_major_ticks()[1::2]:
-                tick.set_pad(tick.get_pad() + config.tick_pt * 1.15)
+                # The name drops one line and its tick mark grows by half the drop: long enough to
+                # point at its name, short enough to stay clear of the names on the first line.
+                drop = name_pt * 1.15
+                tick.set_pad(tick.get_pad() + drop)
+                tick.tick1line.set_markersize(tick.tick1line.get_markersize() + STAGGER_TICK_SHARE * drop)
     # Two lines are not always enough: three "Fortran" placeholders two columns apart still touch on
     # their shared line, so their type steps down, the same in every column.
-    style.shrink_crowded_ticks(fig, axes, config.tick_pt, config.tick_pt * config.category_min_scale)
+    style.shrink_crowded_ticks(fig, axes, name_pt, max(style.PRINT_MIN_PT, name_pt * config.category_min_scale))
+
+
+def row_label(rows: Sequence[ArmRow], index: int) -> str:
+    """A column's label when its delivery is blank (a stub's pending model): the row's own label."""
+    return rows[index].label
 
 
 def group_rules(ax: Axes, rows: Sequence[ArmRow]) -> None:
-    """A light rule between one model's block of columns and the next, on every row of the figure,
-    so the blocks read as blocks without a box around each."""
-    for _, first, _ in model_runs(rows)[1:]:
-        ax.axvline(first - 0.5, color=style.RULE, linewidth=0.8, zorder=0)
+    """A light rule between one delivery's group of columns and the next, on every row of the figure,
+    so the groups read as groups without a box around each."""
+    xs = column_x(rows)
+    for _, first, _ in leg_runs(rows)[1:]:
+        ax.axvline((xs[first - 1] + xs[first]) / 2.0, color=style.RULE, linewidth=0.8, zorder=0)
 
 
 def label_wrap(config: FigureConfig) -> int:
@@ -2130,10 +2217,11 @@ def draw_pending(ax: Axes, rows: Sequence[ArmRow], config: FigureConfig) -> None
     if not config.mark_pending:
         return
     across = blended_transform_factory(ax.transData, ax.transAxes)
+    xs = column_x(rows)
     for index, row in enumerate(rows):
         if is_pending(row):
             ax.text(
-                index, 0.5, "?", transform=across, ha="center", va="center", color=row.colour,
+                xs[index], 0.5, "?", transform=across, ha="center", va="center", color=row.colour,
                 fontsize=config.point_pt * 1.4, fontweight="bold", zorder=style.MARK_Z, gid=style.PENDING_GID,
             )  # fmt: skip
 
@@ -2168,6 +2256,7 @@ def draw_measure_row(
         [measure_value(point, measure)[0] for row in rows for point in (row.control, row.treated)], cost, config
     )
     tops: dict[int, float] = {}
+    xs = column_x(rows)
     for index, row in enumerate(rows):
         pair = (
             (row.control, False, -config.dodge, CONTROL_MARKER),
@@ -2175,7 +2264,8 @@ def draw_measure_row(
         )
         for point, filled, dodge, mark in pair:
             value, low, high = measure_value(point, measure)
-            x = index + dodge
+            x = xs[index] + dodge
+            mark = row.shape or mark if filled else mark
             # One model drawn twice: its control a close, lighter shade (palette.CONTROL_SHADE).
             colour = row.colour if filled else palette.lighten(row.colour, palette.CONTROL_SHADE)
             if interval_kernels(point, measure) < config.min_interval_kernels:
@@ -2191,17 +2281,18 @@ def draw_measure_row(
         treated_value = measure_value(row.treated, measure)[0]
         if config.link_pairs:
             ax.plot(
-                [index - config.dodge, index + config.dodge], [control_value, treated_value], color=row.colour,
+                [xs[index] - config.dodge, xs[index] + config.dodge], [control_value, treated_value], color=row.colour,
                 linewidth=config.link_width, alpha=config.link_alpha, zorder=style.CONNECTOR_Z - 0.5,
             )  # fmt: skip
         if (row.model, row.leg) in differences:
             top = tops.get(index, math.nan)
-            draw_difference_arrow(ax, index, control_value, treated_value, row.colour, measure, config, top)
+            draw_difference_arrow(ax, xs[index], control_value, treated_value, row.colour, measure, config, top)
         # Each row carries only ITS OWN verdict: a star on the cost row would test the speed-up.
         score_sig, cost_sig = significance.get((row.model, row.leg), (False, False))
         if cost_sig if cost else score_sig:
             ax.annotate(
-                COST_SIG_MARK if cost else SCORE_SIG_MARK, (index + config.dodge, measure_value(row.treated, measure)[0]),
+                COST_SIG_MARK if cost else SCORE_SIG_MARK,
+                (xs[index] + config.dodge, measure_value(row.treated, measure)[0]),
                 textcoords="offset points", xytext=(config.symbol_offset_pt, 0.0), fontsize=config.point_pt,
                 color=style.INK, va="center", zorder=style.MARK_Z + 2.0,
             )  # fmt: skip
@@ -2229,8 +2320,8 @@ def draw_measure_row(
         style.value_axis(ax, "y")
         ax.yaxis.set_major_formatter(FuncFormatter(style.log2_ratio_tick))
         minor_grid(ax, "y", "log2", config)
-    ax.set_xlim(-0.6, max(len(rows) - 0.4, 0.6))
-    ax.set_xticks(range(len(rows)))
+    ax.set_xlim(*column_limits(rows))
+    ax.set_xticks(leg_centres(rows))
     group_rules(ax, rows)
     ax.margins(y=config.margin)
     if not cost:
@@ -2269,6 +2360,7 @@ def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: Figur
     the rate is a census, not a sample: there is no sampling error to draw, and an interval under a
     10/10 mark reaching down to 70% read as seven solved. The control wears its lighter shade
     (:data:`~hpcagent_bench.stats.palette.CONTROL_SHADE`), as on every other row."""
+    xs = column_x(rows)
     for index, row in enumerate(rows):
         for point, filled, dodge, mark in (
             (row.control, False, -config.dodge, CONTROL_MARKER),
@@ -2276,10 +2368,11 @@ def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: Figur
         ):
             if point.served == 0:
                 continue
+            mark = row.shape or mark if filled else mark
             colour = row.colour if filled else palette.lighten(row.colour, palette.CONTROL_SHADE)
             # A full roster sits on 100%, and the headroom above it is thinner than a mark in a half-height row.
             style.point_mark(
-                ax, index + dodge, success_rate(point.solved, point.served), colour, mark, filled,
+                ax, xs[index] + dodge, success_rate(point.solved, point.served), colour, mark, filled,
                 size=config.mark_size, clip=False,
             )  # fmt: skip
     ax.set_yticks(SUCCESS_TICKS)
@@ -2291,8 +2384,8 @@ def draw_success_row(ax: Axes, rows: Sequence[ArmRow], shape: str, config: Figur
     # The dashed rule marks 100%; the headroom above it keeps the rule off the frame.
     ax.axhline(1.0, color=style.MUTED, linestyle="--", linewidth=0.6, zorder=1)
     ax.set_ylim(-SUCCESS_HEADROOM, 1.0 + SUCCESS_HEADROOM)
-    ax.set_xlim(-0.6, max(len(rows) - 0.4, 0.6))
-    ax.set_xticks(range(len(rows)))
+    ax.set_xlim(*column_limits(rows))
+    ax.set_xticks(leg_centres(rows))
     group_rules(ax, rows)
     if ylabel:
         ax.set_ylabel(wrapped_label(ylabel, fold_width(ylabel, label_wrap(config), config.max_name_lines)),
@@ -2447,15 +2540,16 @@ def placeholder_rows(rows: Sequence[ArmRow], deliveries: Sequence[str], channels
         for leg in deliveries
         if (model, leg) not in {(r.model, r.leg) for r in rows}
     ]
-    order = {name: index for index, name in enumerate(palette.in_order([row.model for row in (*rows, *extra)]))}
-    return sorted([*rows, *extra], key=lambda row: (order.get(row.model, len(order)), row.leg))
+    return column_order([*rows, *extra])
 
 
-def pending_rows(rows: Sequence[ArmRow], models: Sequence[str], channels: str) -> list[ArmRow]:
+def pending_rows(rows: Sequence[ArmRow], models: Sequence[str], channels: str, leg: str = "") -> list[ArmRow]:
     """``rows`` plus one empty category per model of ``models`` not drawn yet, under the delivery the
-    drawn models use (none in a stub panel), in the registry's model order."""
+    drawn models use, or ``leg`` in a stub panel (its placeholder delivery), in the registry's model
+    order. A stub category with no delivery would be named by its model, which the colour already
+    says and which overprints at a stub's column width."""
     drawn = {row.model for row in rows}
-    leg = rows[0].leg if rows else ""
+    leg = rows[0].leg if rows else leg
     extra = [
         ArmRow(model, leg, series_colour(model, leg, channels), EMPTY_POINT, EMPTY_POINT)
         for model in dict.fromkeys(models)
@@ -2463,8 +2557,7 @@ def pending_rows(rows: Sequence[ArmRow], models: Sequence[str], channels: str) -
     ]
     if not extra:
         return list(rows)
-    order = {name: index for index, name in enumerate(palette.in_order([row.model for row in (*rows, *extra)]))}
-    return sorted([*rows, *extra], key=lambda row: (order.get(row.model, len(order)), row.leg))
+    return column_order([*rows, *extra])
 
 
 def dot_columns(
@@ -2490,9 +2583,13 @@ def dot_columns(
             else []
         )
         empty = [leg.strip() for leg in str(placeholders[index] if index < len(placeholders) else "").split(",")]
-        rows = placeholder_rows(rows, [leg for leg in empty if leg], channels)
+        named = [leg for leg in empty if leg]
+        stub_leg = named[0] if named and not rows else ""
+        rows = placeholder_rows(rows, named, channels) if rows else rows
         waiting = [m.strip() for m in str(pending[index] if index < len(pending) else "").split(",") if m.strip()]
-        rows = pending_rows(rows, waiting, channels)
+        rows = pending_rows(rows, waiting, channels, stub_leg)
+        if str(key) in PER_COLUMN_TREATMENTS:
+            rows = [dataclasses.replace(row, shape=column_treatment_shape(row.leg)) for row in rows]
         columns.append(
             DotColumn(
                 title=str(title),
@@ -2528,11 +2625,23 @@ def dot_row_legend(columns: Sequence[DotColumn], channels: str, config: FigureCo
         ]
     else:
         handles = model_legend_marks(sorted({row.model for row in rows}), config)
-    for treatment, control in dict.fromkeys(
-        (column.treatment, column.control) for column in columns if column.rows
-    ):  # fmt: skip
+    drawn = [column for column in columns if column.rows]
+    for treatment in dict.fromkeys(column.treatment for column in drawn):
+        if treatment in PER_COLUMN_TREATMENTS:
+            shapes = {row.leg: row.shape for column in drawn if column.treatment == treatment for row in column.rows}
+            handles += [
+                Line2D([], [], marker=shape, linestyle="none", color=style.MUTED,
+                       markersize=config.legend_marker_pt, label=leg)
+                for leg, shape in shapes.items() if shape
+            ]  # fmt: skip
+            continue
         handles.append(packet_legend_mark(treatment, config))
-        handles.append(control_legend_mark([treatment], control, CONTROL_MARKER, config))
+    # Every panel's control wears the one control circle, so the key spends ONE row on it and names
+    # each panel's control there; a circle per panel repeated the same swatch three times.
+    names = list(dict.fromkeys(column.control or packets.control_label([column.treatment]) for column in drawn))
+    if names:
+        label = names[0] if len(names) == 1 else f"Control: {', '.join(names)}"
+        handles.append(control_legend_mark([drawn[0].treatment], label, CONTROL_MARKER, config))
     symbols = (
         any(column.symbols[0] for column in columns),
         any(column.symbols[1] for column in columns),
