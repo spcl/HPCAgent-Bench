@@ -55,6 +55,8 @@ class Provenance:
     arms: tuple[str, ...]
     frozen_jobs: tuple[str, ...]
     extracted_at: str
+    #: Rows on a kernel outside the selection's roster (a wave that served more than the tag).
+    dropped_off_roster: int = 0
 
     def report(self) -> str:
         """One block naming every count, for a caller to print beside the file it just wrote."""
@@ -63,7 +65,8 @@ class Provenance:
             f"extracted_at   {self.extracted_at}",
             f"live rows      {self.live_rows}",
             f"frozen rows    {self.frozen_rows} from {len(self.frozen_jobs)} job(s) whose directory is gone",
-            f"dropped        {self.dropped_retired} retired, {self.dropped_foreign} not this experiment's",
+            f"dropped        {self.dropped_retired} retired, {self.dropped_foreign} not this experiment's, "
+            f"{self.dropped_off_roster} off its roster",
             f"arms ({len(self.arms)})      {', '.join(self.arms)}",
         ]
         return "\n".join(lines)
@@ -85,6 +88,20 @@ def keep_owned(frame: "pd.DataFrame", selection: campaigns.Selection) -> tuple["
     mine = arms.map(lambda arm: campaigns.prefix_of(arm) in selection.prefixes)
     retired = arms.map(campaigns.dropped)
     return frame[mine & ~retired], int((mine & retired).sum()), int((~mine).sum())
+
+
+def keep_roster(frame: "pd.DataFrame", selection: campaigns.Selection) -> tuple["pd.DataFrame", int]:
+    """``frame`` cut to the kernels of the selection's roster, with the drop count.
+
+    A wave may serve more kernels than the tag its campaign names (the SciComp waves served
+    scicomp40 plus the 09-13 kernels; the campaigns name scicomp35), and every figure counts an arm
+    over the kernels its rows touch, so an off-roster row would enter every aggregate. A row with no
+    benchmark, or a selection with no roster, is kept."""
+    if frame.empty or not selection.roster or "benchmark" not in frame.columns:
+        return frame, 0
+    names = frame["benchmark"].fillna("").astype(str)
+    off = names.ne("") & ~names.isin(selection.roster)
+    return frame[~off], int(off.sum())
 
 
 def extract(selection: campaigns.Selection, frozen: pathlib.Path | None = None, **options: object) -> "pd.DataFrame":
@@ -136,6 +153,7 @@ def fuse(
     frozen, frozen_retired, frozen_foreign = keep_owned(frozen, selection)
     parts = [part for part in (live, frozen) if not part.empty]
     frame = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    frame, off_roster = keep_roster(frame, selection)
     # Stamped HERE, on the result, not on the way in: a caller that built its own frame still gets
     # provenance, and re-stamping an already-stamped frame is the same value.
     if not frame.empty:
@@ -157,6 +175,7 @@ def fuse(
         arms=arms,
         frozen_jobs=jobs,
         extracted_at=extracted_at,
+        dropped_off_roster=off_roster,
     )
 
 

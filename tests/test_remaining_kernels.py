@@ -1061,3 +1061,27 @@ def test_a_row_at_or_after_the_manifest_change_is_coverage(
     assert module.main() == 0
     owed = {path.stem: path.read_text(encoding="utf-8").split() for path in sorted((tmp_path / "owed").glob("*.txt"))}
     assert owed == {}
+
+
+@pytest.mark.parametrize("stale_py", [None, "python3"])
+def test_roster_resolves_with_this_interpreter_whatever_python3_the_path_names(
+    module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, stale_py: str | None
+) -> None:
+    """A systemd service or cron job has no venv on PATH and maybe no (or a stale) ``PY``: its
+    ``python3`` lacks yaml and the bench, and roster.sh raised there (regrade_rest.py died in a
+    systemd unit, 2026-09-25). The roster must come from the interpreter running the caller."""
+    bad = tmp_path / "bin"
+    bad.mkdir()
+    (bad / "python3").write_text("#!/bin/sh\necho 'No module named ml_dtypes' >&2\nexit 1\n")
+    (bad / "python3").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bad}{os.pathsep}{os.environ['PATH']}")
+    if stale_py is None:
+        monkeypatch.delenv("PY", raising=False)
+    else:
+        monkeypatch.setenv("PY", stale_py)
+    monkeypatch.delenv("PYTHON", raising=False)
+    module.roster.cache_clear()
+    names = module.roster("llr-focus40", str(SCRIPT.parents[1]))
+    module.roster.cache_clear()
+    assert len(names) == 40
+    assert "tsvc_2_s3112" in names

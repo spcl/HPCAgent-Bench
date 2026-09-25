@@ -48,8 +48,6 @@ ALLOWED: dict[str, str] = {
     # Third-party runtimes, not this repository's code.
     "containers/images/judge-agent-amd/Dockerfile": "rocprof-compute's wrapper names its "
     "own install dir, which PYTHONSAFEPATH=1 would otherwise hide",
-    "experiments/run_cluster.sh": "vLLM eager-PG sitecustomize patch dir: the branch is being deleted "
-    "(user decision); drop this entry with it",
     "containers/inference/tune-moe-int4-mi300a.sbatch": "vendored deps (pydeps) of "
     "the MoE tuning script",
     # Forwarding or resetting the value repo_env.sh built.
@@ -59,9 +57,6 @@ ALLOWED: dict[str, str] = {
     "repo_env.sh with the next stage's DACE_TREE",
     "scripts/samples/npbench_dace_flavors.sbatch": "resets PYTHONPATH to its saved base before "
     "re-sourcing repo_env.sh with the next stage's DACE_TREE",
-    # Pending: main-touched, switches to `from hpcagent_bench import token_cost`.
-    "hpcagent_bench/observations_extract.py": "loads experiments/token_cost.py by inserting "
-    "experiments/; the package module hpcagent_bench.token_cost replaces it",
     # Tests: a child process or a temp module, given its own path.
     "tests/test_dace_helper_programs.py": "temp module written under tmp_path",
     "tests/test_disk_cache.py": "child processes racing the store import the checkout",

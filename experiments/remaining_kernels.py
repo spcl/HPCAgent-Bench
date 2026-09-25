@@ -652,9 +652,11 @@ def recorded_arms(job_dir: str) -> set:
 def roster(tag: str, opt: str) -> list:
     """A pure read of ``opt``'s checkout, so callers safely share one cached result per (tag, opt):
     several CAMPAIGNS entries can name the same tag, and each uncached call re-runs roster.sh's
-    recursive manifest glob (~450 ms)."""
+    recursive manifest glob (~450 ms). roster.sh runs ``$PY``, set to THIS interpreter: the one whose
+    packages (yaml, the bench) the caller already imports, whatever ``python3`` the PATH names."""
     script = f'OPT="{opt}"; . "$OPT/experiments/roster.sh"; roster_for "{tag}"'
-    out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+    env = {**os.environ, "PY": sys.executable}
+    out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True, env=env)
     return sorted(name for name in out.stdout.strip().split(",") if name)
 
 
