@@ -146,14 +146,14 @@ def test_an_uncommitted_edit_to_a_copied_file_makes_the_inputs_unknown(repo: pat
         ("1", "", "judge-agent-amd", 1),
         ("0", "abc", "judge-agent-amd", 1),
         ("only", "other", "judge-agent-amd", 0),
-        ("1", "abc", "sglang-mi200", 1),
-        ("only", "abc", "sglang-mi200", 2),
+        ("1", "abc", "vllm-cuda", 1),
+        ("only", "abc", "vllm-cuda", 2),
     ],
 )
 def test_ce_pull_wanted_pulls_only_a_matching_or_explicitly_requested_image(
     repo: pathlib.Path, mode: str, registry_label: str, role: str, want_rc: int
 ) -> None:
-    """sglang-mi200 has no registry tag in images.env: nothing to pull, and pull-only must fail."""
+    """vllm-cuda has no registry tag in images.env: nothing to pull, and pull-only must fail."""
     stub = f"ce_registry_label() {{ printf '%s' {registry_label!r}; }}"
     done = bash(f"{stub}; ce_pull_wanted {role} abc", repo, {"CE_PULL": mode})
     assert done.returncode == want_rc, done.stdout + done.stderr
