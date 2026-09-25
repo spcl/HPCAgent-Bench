@@ -239,7 +239,9 @@ RUN set -eux; \
       "libcutensor2-dev-cuda-${cuda_major}=${CUTENSOR_VERSION}" \
       "${NSIGHT_COMPUTE_PKG}" "${NSIGHT_SYSTEMS_PKG}"; \
     if [ ! -f /usr/include/nccl.h ]; then \
-      apt-get install -y --no-install-recommends libnccl2 libnccl-dev; \
+      nccl_version="$(apt-cache madison libnccl2 | awk -v m="+cuda${cuda_major}." 'index($3, m) {print $3; exit}')"; \
+      test -n "${nccl_version}" || { echo "no libnccl2 build for CUDA ${cuda_major}" >&2; exit 1; }; \
+      apt-get install -y --no-install-recommends "libnccl2=${nccl_version}" "libnccl-dev=${nccl_version}"; \
     fi; \
     for drv in "/opt/nvidia/nsight-compute/${NSIGHT_COMPUTE_PKG#nsight-compute-}/ncu" \
                "/opt/nvidia/nsight-systems/${NSIGHT_SYSTEMS_PKG#nsight-systems-}/target-linux-sbsa-armv8/nsys"; do \
