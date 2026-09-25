@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Median speed-up over the track baseline, one bar per framework, from one canon sweep.
+"""Median speedup over the track baseline, one bar per framework, from one canon sweep.
 
 Ported from the reproducibility artifact's ``plot_canon_speedup.py``, reading the ``canon`` table
 scripts/collect_canon.py writes instead of a CSV, and drawn with :mod:`hpcagent_bench.stats.style`
@@ -12,9 +12,9 @@ median while helping a lot on a few kernels and not at all on most, which is exa
 geometric mean would show instead. The geomean is therefore drawn as a second mark rather than
 left to a caption.
 
-The x axis is base-2 logarithmic: a 2x slow-down and a 2x speed-up are then equally far from the
+The x axis is base-2 logarithmic: a 2x slow-down and a 2x speedup are then equally far from the
 1x line, where a linear axis crushes every slow-down into the 0..1 sliver next to an unbounded
-speed-up tail.
+speedup tail.
 
 Usage:  python3 statistics/plot_canon_speedup.py --db canon.db --out figures [--baseline cc]
 """
@@ -105,7 +105,7 @@ def figure_size(rows: list[Row], double_column: bool) -> tuple[float, float, flo
     left_in = 0.75
     width = style.DOUBLE_COLUMN_WIDTH if double_column else max(4.2, 0.85 * len(rows) + 2.2)
     # The y label is rotated too, and a tight bbox does not rescue one longer than the axes are
-    # tall -- 4.6in comfortably fits "Speed-up over <name> (Log2 Scale)" at ANNOTATION_PT.
+    # tall -- 4.6in comfortably fits "Speedup over <name> (Log2 Scale)" at ANNOTATION_PT.
     height = 4.6 + bottom_in
     return width, height, left_in, bottom_in
 
@@ -168,7 +168,7 @@ def draw(
     ax.set_xticks(xs)
     ax.set_xticklabels([tick_label(row) for row in rows], fontsize=TYPE.tick_pt * scale, color=style.INK, rotation=90)
     ax.set_ylabel(
-        f"Speed-up over {framework_name(baseline)} (Log2 Scale)",
+        f"Speedup over {framework_name(baseline)} (Log2 Scale)",
         fontsize=TYPE.annotation_pt * scale,
         color=style.MUTED,
     )
@@ -185,7 +185,7 @@ def draw(
     geomean_key = matplotlib.lines.Line2D(
         [], [], color=style.STAT_INK.geomean, linewidth=TYPE.line_width, marker="none", label="Geometric Mean"
     )
-    median_key = matplotlib.patches.Patch(facecolor=style.STAT_INK.median, linewidth=0.0, label="Median Speed-up")
+    median_key = matplotlib.patches.Patch(facecolor=style.STAT_INK.median, linewidth=0.0, label="Median Speedup")
     style.legend_below(fig, [median_key, geomean_key], ncol=2, y=0.02, fontsize=TYPE.legend_pt * scale)
     if not double_column:
         ax.set_title(title, loc="left", fontsize=TYPE.title_pt, fontweight="bold", color=style.INK, pad=9.0)
@@ -195,7 +195,7 @@ def draw(
 def draw_distribution(
     times: dict[str, dict[str, float]], baseline: str, columns: Sequence[str], double_column: bool
 ) -> "tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]":
-    """Sorted per-kernel speed-up curves, one line per column: readable at any kernel count, where
+    """Sorted per-kernel speedup curves, one line per column: readable at any kernel count, where
     a per-kernel bar chart (one row per kernel) stops being readable past a few dozen. Framework
     colour (:mod:`hpcagent_bench.stats.palette`) identifies a DaCe column; a compiler baseline
     column (cc, cc_autopar, ...) drawn alongside them gets a neutral grey instead -- the palette's
@@ -228,8 +228,8 @@ def draw_distribution(
         ax.plot(xs, sp, color=color, linewidth=TYPE.line_width, label=label, zorder=3)
         ax.axhline(gm, color=color, linewidth=TYPE.hairline_width, linestyle="--", alpha=0.6, zorder=2)
     ax.axhline(1.0, color=style.RULE, linewidth=TYPE.hairline_width, zorder=0)
-    ax.set_xlabel("Kernels, Sorted by Speed-up (Fraction of the Sweep)", color=style.MUTED, fontsize=TYPE.label_pt)
-    ax.set_ylabel(f"Speed-up over {framework_name(baseline)} (Log2)", color=style.MUTED, fontsize=TYPE.label_pt)
+    ax.set_xlabel("Kernels, Sorted by Speedup (Fraction of the Sweep)", color=style.MUTED, fontsize=TYPE.label_pt)
+    ax.set_ylabel(f"Speedup over {framework_name(baseline)} (Log2)", color=style.MUTED, fontsize=TYPE.label_pt)
     ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _pos: f"{v:g}x"))
     ax.grid(axis="y", which="major", alpha=0.7, zorder=0)
     style.minor_ticks(ax.yaxis, "ratio")
@@ -267,7 +267,7 @@ def write_per_kernel_table(
     columns: Sequence[str],
     path: pathlib.Path,
 ) -> None:
-    """One row per kernel any drawn column attempted, one value per column: a numeric speed-up over
+    """One row per kernel any drawn column attempted, one value per column: a numeric speedup over
     ``baseline``, ``failed`` (this column did not validate the kernel), or ``no-baseline`` (the
     kernel has no validated baseline time to divide by, whatever this column did). Nothing is
     dropped silently -- every attempted kernel gets a row and every column a value.

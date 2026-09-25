@@ -1,7 +1,7 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """``hpcagent_bench.stats.figures.per_kernel`` and ``statistics/plot_per_kernel.py`` -- the per-kernel
-speed-up and tokens figure: ci/box style, the log2 speed-up axis, the summary column and the
+speedup and tokens figure: ci/box style, the log2 speedup axis, the summary column and the
 separate/stacked layout.
 """
 
@@ -44,8 +44,8 @@ plot = load_script()
 
 
 def speed_metric(cells: list[pk.KernelCell], color: str = "#1155cc") -> pk.Metric:
-    """A one-series speed-up panel, the shape ``statistics/plot_per_kernel.py`` builds."""
-    return pk.speedup_series_metric([pk.Series("", tuple(cells), color)], "Speed-Up")
+    """A one-series speedup panel, the shape ``statistics/plot_per_kernel.py`` builds."""
+    return pk.speedup_series_metric([pk.Series("", tuple(cells), color)], "Speedup")
 
 
 def token_metric(cells: list[pk.KernelCell], color: str = "#cc5511") -> pk.Metric:
@@ -111,7 +111,7 @@ def test_token_cells_keeps_every_episodes_own_total_not_the_kernel_sum() -> None
 
 
 # ---------------------------------------------------------------------------
-# The log2 speed-up axis.
+# The log2 speedup axis.
 
 
 @pytest.mark.parametrize(
@@ -131,7 +131,7 @@ def test_speedup_tick_label_reads_a_log2_ratio_back_as_a_ratio(ratio: float, lab
 
 def test_speedup_yticks_always_spans_at_least_a_quarter_to_four_x() -> None:
     """A panel of narrow-range wins (1.1x .. 1.8x) must still show the 1x line inside a band wide
-    enough to read a slow-down and a speed-up the same distance from it."""
+    enough to read a slow-down and a speedup the same distance from it."""
     cells = [pk.KernelCell("k1", (1.1,)), pk.KernelCell("k2", (1.8,))]
     ticks = pk.speedup_yticks(cells)
     assert 0.25 in ticks and 4.0 in ticks and 1.0 in ticks
@@ -182,7 +182,7 @@ def test_ci_style_never_draws_a_box_patch() -> None:
 
 
 def test_the_speedup_summary_is_the_geomean_over_the_plotted_kernels_own_medians() -> None:
-    """Speed-up is a ratio, so its overall value is the GEOMETRIC MEAN over kernels -- never a
+    """Speedup is a ratio, so its overall value is the GEOMETRIC MEAN over kernels -- never a
     median, which equals the geomean only when the per-kernel medians happen to be symmetric."""
     cells = [pk.KernelCell("k1", (1.0,)), pk.KernelCell("k2", (1.0,)), pk.KernelCell("k3", (1000.0,))]
     point, _, _ = pk.summary_geomean(cells)
@@ -201,7 +201,7 @@ def test_the_token_summary_is_the_geomean_over_the_plotted_kernels_own_medians()
 
 def test_draw_panel_labels_the_summary_column_with_its_own_statistic() -> None:
     """The annotation above the summary marker names the statistic it draws (Geomean for
-    speed-up, Median for tokens), so a reader is not left to assume it matches the per-kernel
+    speedup, Median for tokens), so a reader is not left to assume it matches the per-kernel
     style."""
     speed = speed_metric([pk.KernelCell("k1", (2.0,))])
     fig, ax = plt.subplots()
@@ -300,7 +300,7 @@ def test_stacked_layouts_two_panels_share_the_kernel_axis() -> None:
     speed_cells = [pk.KernelCell("a", (2.0,)), pk.KernelCell("b", (1.0,))]
     token_cells = [pk.KernelCell("b", (50.0,)), pk.KernelCell("c", (80.0,))]
     kernels = pk.shared_kernel_order(speed_cells, token_cells)
-    assert kernels == ["b", "a", "c"]  # speed-up's own order (b before a), then tokens-only "c"
+    assert kernels == ["b", "a", "c"]  # speedup's own order (b before a), then tokens-only "c"
 
     speed = speed_metric(speed_cells)
     tokens = token_metric(token_cells)
@@ -533,7 +533,7 @@ def three_series_metric() -> pk.Metric:
             pk.Series("b", (pk.KernelCell("k1", (3.0,)), pk.KernelCell("k2", (1.0,), delivered=False)), "#cc5511"),
             pk.Series("c", (pk.KernelCell("k1", (0.5,)),), "#11cc55", "^"),
         ],
-        "Speed-Up",
+        "Speedup",
     )
 
 
@@ -683,7 +683,7 @@ def test_a_wide_interval_never_stretches_the_value_axis() -> None:
 def test_a_y_label_taller_than_its_panel_is_fitted_to_the_panel() -> None:
     """A rotated label taller than its panel runs past both ends of the frame, and in a stack the
     two panels' labels printed over each other in the gap."""
-    long = "Speed-Up Ratio (Repository Formulation / Bare Kernel)"
+    long = "Speedup Ratio (Repository Formulation / Bare Kernel)"
     metric = pk.speedup_series_metric([pk.Series("", (pk.KernelCell("k1", (2.0,)),), "#1155cc")], long)
     fig = pk.figure_panels([metric, metric], ["k1"], "ci", True, "")
     try:

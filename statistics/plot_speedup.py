@@ -1,13 +1,13 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Median speed-up per kernel as SIGNED RELATIVE CHANGE, split into independent
-order-of-magnitude bands. The figure that replaces the NPBench-style speed-up table as the one a
+"""Median speedup per kernel as SIGNED RELATIVE CHANGE, split into independent
+order-of-magnitude bands. The figure that replaces the NPBench-style speedup table as the one a
 run plots by default (``hpcagent-bench plot`` still renders that table, but nothing runs it for you).
 
 Two things are wrong with a raw ratio axis, and this figure exists to fix both:
 
 * **The scale lies about direction.** Every slow-down is crushed into the 0..1 sliver while every
-  speed-up gets an unbounded tail, so the eye reads a 0.5x regression as SMALLER than a 1.5x win
+  speedup gets an unbounded tail, so the eye reads a 0.5x regression as SMALLER than a 1.5x win
   when they are the same magnitude. Here the y axis is the signed relative change
   (:func:`hpcagent_bench.stats.summary.signed_change`): 1.0x sits at 0, 2x at +1, 3x at +2, and a 2x slow-down at -1 -- the same
   distance from 0 as the 2x win.
@@ -39,7 +39,7 @@ Usage::
 
 ``--boxplot`` replaces each cell's median marker with its run-to-run spread. The divisor stays the
 baseline's cleaned MEDIAN rather than a per-repetition partner, because the samples are not paired
--- so a box is the CANDIDATE's spread in speed-up units, never a manufactured ratio distribution.
+-- so a box is the CANDIDATE's spread in speedup units, never a manufactured ratio distribution.
 A cell with too few cleaned repetitions keeps its marker and is counted in a warning.
 """
 
@@ -75,7 +75,7 @@ SQUARE: style.TypeScale = style.AUTHOR_SCALE
 #: larger share of the shared scale than the dense multi-panel figure above does.
 EMBED_SCALE: float = 0.85
 
-#: Band edges as speed-up MAGNITUDES (``max(r, 1/r)``, always >= 1). The signed-change edges are
+#: Band edges as speedup MAGNITUDES (``max(r, 1/r)``, always >= 1). The signed-change edges are
 #: these minus one, since ``|signed_change(r)| == max(r, 1/r) - 1``.
 BAND_EDGES: Tuple[float, float] = (2.0, 10.0)
 
@@ -88,7 +88,7 @@ BANDS: Tuple[str, str, str] = (BAND_HIGH, BAND_MID, BAND_LOW)
 
 
 class Point(NamedTuple):
-    """One (kernel, framework) cell: its median speed-up and where that lands.
+    """One (kernel, framework) cell: its median speedup and where that lands.
 
     ``samples`` carries the cell's PER-REPETITION signed changes when they are known, so the same
     point can be drawn as a median marker or as a box. It is empty when the caller summarised
@@ -119,7 +119,7 @@ MIN_BOX_SAMPLES: int = 4
 def band_of(change: float) -> Optional[str]:
     """Which panel a signed change belongs in; ``None`` when it is not plottable (NaN).
 
-    Keyed on ``|change|``, which is the speed-up magnitude minus one. The band NAMED for an edge
+    Keyed on ``|change|``, which is the speedup magnitude minus one. The band NAMED for an edge
     owns it: exactly 2x and exactly 10x are ``2x .. 10x``, and ``> 10x`` is strictly greater --
     otherwise the two closed bands would both claim 10x and the assignment would depend on the
     order the tests happen to be written in.
@@ -141,7 +141,7 @@ def cell_changes(samples: Sequence[float], base_time: float, label: str = "") ->
     are not paired: repetition *i* of a candidate and repetition *i* of the baseline are two
     independent timings of different code, and dividing them elementwise would manufacture a
     spread out of two unrelated ones. Holding the divisor fixed makes the box exactly what it
-    claims to be -- the CANDIDATE's run-to-run spread, expressed in speed-up units.
+    claims to be -- the CANDIDATE's run-to-run spread, expressed in speedup units.
 
     Cleaned with the same :func:`hpcagent_bench.stats.summary.drop_outliers` the median goes through, so the
     box and the marker describe one set of numbers. Warning is suppressed here: ``cell_summary``
@@ -157,7 +157,7 @@ def cell_changes(samples: Sequence[float], base_time: float, label: str = "") ->
 def speedup_points(
     summary: pd.DataFrame, baseline: str = plotting.DEFAULT_BASELINE, data: Optional[pd.DataFrame] = None
 ) -> List[Point]:
-    """Per (kernel, framework) median speed-up over ``baseline``, as plottable points.
+    """Per (kernel, framework) median speedup over ``baseline``, as plottable points.
 
     ``summary`` is a :func:`hpcagent_bench.stats.figures.results.cell_summary` frame -- one row per
     (benchmark, domain, framework) whose ``time`` is the OUTLIER-CLEANED median. The baseline's own
@@ -220,7 +220,7 @@ def warn_unplotted(crashed: Sequence[str], unusable: Sequence[str]) -> None:
         warnings.warn(f"{len(crashed)} cell(s) produced no usable time and are drawn as X at 0: {', '.join(crashed)}")
     if unusable:
         warnings.warn(
-            f"dropped {len(unusable)} cell(s) with no usable speed-up "
+            f"dropped {len(unusable)} cell(s) with no usable speedup "
             f"(missing baseline, or a non-positive / non-finite median): {', '.join(unusable)}"
         )
 
@@ -233,9 +233,9 @@ def data_table(summary: pd.DataFrame, points: Sequence[Point], baseline: str) ->
     numbers the figure draws, and then running the checks on it. A figure that could not supply a
     cost or an interval fails here rather than shipping a bare ratio.
 
-    The interval is the CANDIDATE's cleaned median bootstrap CI, mapped onto the speed-up scale by
+    The interval is the CANDIDATE's cleaned median bootstrap CI, mapped onto the speedup scale by
     the same fixed baseline the point uses; the ends swap, because a slower candidate time is a
-    smaller speed-up.
+    smaller speedup.
     """
     times = {
         (str(row.benchmark), str(row.framework)): (float(row.time), float(row.ci_low), float(row.ci_high))
@@ -664,7 +664,7 @@ def square_kernels(points: Sequence[Point], cells: int = SQUARE_CELLS) -> Tuple[
     ships only if every plotted framework has a cell for it, and the kernel count is whatever fits
     ``cells`` boxes at that group size.
 
-    Selection then ALTERNATES between speed-ups and slow-downs, so a two-kernel figure cannot show
+    Selection then ALTERNATES between speedups and slow-downs, so a two-kernel figure cannot show
     only wins while the band it came from also holds losses. At this size the figure is the summary
     somebody actually reads, and one that quietly drops the regressions is the wrong summary.
     """
@@ -689,8 +689,8 @@ def complete_kernels(points: Sequence[Point], frameworks: Set[str]) -> List[str]
 
 
 def alternate_signs(points: Sequence[Point], kernels: Sequence[str], want: int) -> List[str]:
-    """Up to ``want`` of ``kernels``, a speed-up and a slow-down (:func:`group_change`) in turn, a
-    speed-up first; once one side runs dry the rest come from the other."""
+    """Up to ``want`` of ``kernels``, a speedup and a slow-down (:func:`group_change`) in turn, a
+    speedup first; once one side runs dry the rest come from the other."""
     wins = [k for k in kernels if group_change(points, k) > 0.0]
     losses = [k for k in kernels if group_change(points, k) <= 0.0]
     picked: List[str] = []
@@ -815,7 +815,7 @@ def plot_signed_speedup(
     ``output`` names a FAMILY, not a file: each machine's files carry its label
     (``<stem>.<cpu>[-<gpu>].pdf``, ``<stem>-simple.<cpu>[-<gpu>].svg``,
     ``<stem>-mini.<cpu>[-<gpu>].svg``), because rows from two nodes may never share a figure. A
-    machine with no plottable speed-up is skipped with a warning; ALL of them being skipped is an
+    machine with no plottable speedup is skipped with a warning; ALL of them being skipped is an
     error, not an empty success.
 
     :param benchmark: selector (kernel / track / dwarf / ``@lvl<n>``); ``all`` keeps every row.
@@ -826,7 +826,7 @@ def plot_signed_speedup(
     :param db: SQLite results DB path; ``None`` uses the configured ``record.db_path``.
     :param output: PDF path family for the banded figure.
     :param usetex: render text with LaTeX (default); ``False`` for a LaTeX-free box.
-    :param baseline: the speed-up denominator. Defaults to the campaign default (``numba``); an
+    :param baseline: the speedup denominator. Defaults to the campaign default (``numba``); an
         npbench-shaped corpus wants ``numpy``, and a v9/v10 llr corpus wants ``c``. Which
         framework divides is a property of the DATA being plotted, so it is named by the caller
         rather than assumed here.
@@ -837,11 +837,11 @@ def plot_signed_speedup(
     for label, rows in plotting.machine_groups(everything):
         points = speedup_points(plotting.cell_summary(rows), baseline=baseline, data=rows if boxes else None)
         if not points:
-            # Name what IS there. "no speed-up over 'numba'" on a DB whose frameworks are numpy
+            # Name what IS there. "no speedup over 'numba'" on a DB whose frameworks are numpy
             # and dace_cpu reads as missing data when the real answer is a wrong denominator.
             present = ", ".join(sorted(set(rows["framework"].astype(str)))) or "(none)"
             warnings.warn(
-                f"machine {label}: no kernel has a plottable speed-up over "
+                f"machine {label}: no kernel has a plottable speedup over "
                 f"{baseline!r}; frameworks present: {present}. No figure written for it"
             )
             continue
@@ -869,7 +869,7 @@ def plot_signed_speedup(
     # file is the failure that looks like a clean run (the guard plot_heatmap grew for the same).
     if not written:
         raise RuntimeError(
-            f"no speed-up to plot: benchmark={benchmark!r} preset={preset!r} "
+            f"no speedup to plot: benchmark={benchmark!r} preset={preset!r} "
             f"datatype={datatype!r} variant={variant!r} db={db!r}. The DB has no "
             f"validated, domained rows pairing a candidate framework with the "
             f"{baseline!r} baseline on one machine."
@@ -883,7 +883,7 @@ DEMO_SEED: int = 20260804
 
 #: The demo's synthetic layout: ``(kernel, magnitude low, magnitude high, sign)``, three kernels per
 #: band with a mirrored SLOW-DOWN in each -- the mirroring is the claim, so it is drawn, not stated.
-#: Magnitudes are speed-up magnitudes (``max(r, 1/r)``); ``sign`` -1 makes the kernel a slow-down.
+#: Magnitudes are speedup magnitudes (``max(r, 1/r)``); ``sign`` -1 makes the kernel a slow-down.
 #: Kernels are named generically for the same reason the frameworks below are: the numbers come out
 #: of a seeded generator, and a real short_name on synthetic data is an invitation to quote it.
 #: ``reporting_order`` groups unknown names under ``other``, which is the honest bucket for them.
@@ -978,7 +978,7 @@ def plot_demo(
 def build_parser() -> argparse.ArgumentParser:
     """CLI mirroring ``hpcagent-bench plot``'s selection flags, so one habit drives both figures."""
     p = argparse.ArgumentParser(
-        description="median speed-up per kernel as signed relative change, banded by order of magnitude"
+        description="median speedup per kernel as signed relative change, banded by order of magnitude"
     )
     p.add_argument(
         "-b",

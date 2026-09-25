@@ -46,7 +46,7 @@ def test_a_log2_axis_tick_reads_back_as_the_ratio() -> None:
 def test_a_longer_y_label_widens_the_measured_left_protrusion() -> None:
     """The left margin is measured from the Y labels; a fixed fraction clipped a long one."""
     widths = []
-    for label in ("Speed-Up", "Token Cost, Billed\n(1, 0.1, 1)\n(lower is better)"):
+    for label in ("Speedup", "Token Cost, Billed\n(1, 0.1, 1)\n(lower is better)"):
         fig, ax = plt.subplots()
         ax.set_ylabel(label)
         ax.set_yticks([1, 10, 100], ["1x", "10x", "0.00391x"])

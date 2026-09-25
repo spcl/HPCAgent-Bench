@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """How many kernels each arm actually answered, as the table that goes beside the efficacy figure.
 
-THE FIGURE CANNOT SAY THIS. Every speed-up it draws is a geomean over the kernels an arm was
+THE FIGURE CANNOT SAY THIS. Every speedup it draws is a geomean over the kernels an arm was
 SERVED, with an unanswered kernel held at 1x (the 2026-09-16 rule), so two arms can sit at the same
 height having solved twelve kernels and thirty. A reader without the solve rate reads the first as
 the second.

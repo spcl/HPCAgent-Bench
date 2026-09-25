@@ -130,7 +130,7 @@ def extract(selection: campaigns.Selection, frozen: pathlib.Path | None = None, 
 def check_columns(live: "pd.DataFrame", frozen: "pd.DataFrame") -> None:
     """Raise when the frozen rows do not carry the columns the live ones do.
 
-    Concatenating mismatched frames silently fills the gap with NaN, and a NaN speed-up reads as a
+    Concatenating mismatched frames silently fills the gap with NaN, and a NaN speedup reads as a
     kernel nobody ran rather than as a column that was never extracted."""
     if live.empty or frozen.empty:
         return
@@ -187,7 +187,7 @@ def write_db(frame: "pd.DataFrame", path: pathlib.Path) -> pathlib.Path:
     """``frame`` as the ``observations`` table of a fresh SQLite file at ``path``.
 
     Written through the extractor's own TYPED schema, not ``to_sql``: pandas gives an object column
-    the TEXT affinity, so a speed-up read back out of such a file is a string and the first
+    the TEXT affinity, so a speedup read back out of such a file is a string and the first
     comparison against a number raises. The extractor already declares each column's type, and a
     file written here has to be indistinguishable from one it wrote.
     """

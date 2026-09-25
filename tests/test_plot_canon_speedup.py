@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The canon speed-up figure: baseline selection, missing-kernel reporting, and reproducibility."""
+"""The canon speedup figure: baseline selection, missing-kernel reporting, and reproducibility."""
 
 import contextlib
 import csv
@@ -75,7 +75,7 @@ def test_a_kernel_the_baseline_measured_but_the_column_missed_is_warned_about_an
 
 def test_an_unvalidated_row_is_excluded_from_every_statistic() -> None:
     """A row that did not validate is not a slow result, it is not a result -- crediting it would
-    let a wrong answer count as a speed-up."""
+    let a wrong answer count as a speedup."""
     frame = pd.DataFrame([row("numba", "k1", 100.0), row("cc", "k1", 50.0, validated="False")], columns=CANON_FIELDS)
 
     times = plot_canon_speedup.read_times(frame)
@@ -232,9 +232,9 @@ def test_a_custom_title_replaces_the_default() -> None:
     with a different kernel count or sweep name can say so."""
     rows = plot_canon_speedup.rows_for({"numba": {"k1": 1.0}, "cc": {"k1": 2.0}}, "numba", ["cc"])
 
-    fig, ax = plot_canon_speedup.draw(rows, "numba", False, title="Speed-up over Numba, llr-full (248 kernels)")
+    fig, ax = plot_canon_speedup.draw(rows, "numba", False, title="Speedup over Numba, llr-full (248 kernels)")
 
-    assert ax.get_title(loc="left") == "Speed-up over Numba, llr-full (248 kernels)"
+    assert ax.get_title(loc="left") == "Speedup over Numba, llr-full (248 kernels)"
     plt.close(fig)
 
 
@@ -273,7 +273,7 @@ def test_columns_option_draws_dace_gpu_with_its_own_label(tmp_path: pathlib.Path
 
 
 def test_the_measured_speedup_is_on_the_y_axis_not_the_x_axis() -> None:
-    """Rule one: a speed-up is a measured quantity and stays on Y, log-scaled. X carries the
+    """Rule one: a speedup is a measured quantity and stays on Y, log-scaled. X carries the
     CATEGORY (the compiler/framework column), which is why it is linear and ticked with names."""
     rows = plot_canon_speedup.rows_for({"numba": {"k1": 1.0, "k2": 1.0}, "cc": {"k1": 2.0, "k2": 0.5}}, "numba", ["cc"])
 
@@ -289,7 +289,7 @@ def test_the_measured_speedup_is_on_the_y_axis_not_the_x_axis() -> None:
 
 
 def test_both_figures_draw_one_figure_legend_and_the_shared_minor_grid() -> None:
-    """One legend on the FIGURE, never ``ax.legend`` (rule five); the log2 speed-up axis carries the
+    """One legend on the FIGURE, never ``ax.legend`` (rule five); the log2 speedup axis carries the
     shared minor ruling (rule four) like every other ratio axis, although this script draws it outside
     ``style.value_axis``."""
     rows = plot_canon_speedup.rows_for({"numba": {"k1": 1.0}, "cc": {"k1": 2.0}}, "numba", ["cc"])

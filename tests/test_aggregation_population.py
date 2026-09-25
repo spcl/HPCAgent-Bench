@@ -94,7 +94,7 @@ def test_a_grade_with_no_arm_never_becomes_a_table_arm(tmp_path: pathlib.Path, p
 
 
 def test_an_aggregate_refuses_a_slice_that_mixes_denominators() -> None:
-    """A speed-up over a single-core reference and one over a parallel reference are ratios of
+    """A speedup over a single-core reference and one over a parallel reference are ratios of
     different quantities, so their mean has no denominator. ``figures/results.baseline_of`` takes
     the majority and warns, which an aggregate may not do: on llr40v10 the same agent work reads
     95.3x under one reference and 1.82x under the other."""
@@ -371,7 +371,7 @@ def test_the_final_answer_is_the_last_of_its_episode_and_the_best_across_episode
 
 def test_graded_episode_rows_keeps_every_episodes_own_final_answer() -> None:
     """``final_answers`` collapses to the best answer ACROSS episodes; a per-episode figure (a
-    box of per-episode speed-ups) needs every episode's own last answer, which is the reduction
+    box of per-episode speedups) needs every episode's own last answer, which is the reduction
     this stops short of -- and the one ``final_answers`` is built on."""
     rows = submissions(
         [
@@ -386,7 +386,7 @@ def test_graded_episode_rows_keeps_every_episodes_own_final_answer() -> None:
 
 def test_a_final_answer_carries_the_whole_row_that_won() -> None:
     """A caller needs the timings, the source path and the denominator OF the winning row; a bare
-    speed-up sends it back to the frame to guess which row produced the number."""
+    speedup sends it back to the frame to guess which row produced the number."""
     rows = submissions(
         [
             {"run_id": "w0", "speedup": 9.0, "ts_ms": 1, "source_path": "loser"},
@@ -620,7 +620,7 @@ def test_picking_the_latest_run_without_timestamps_refuses_to_guess() -> None:
 def test_designed_repeats_answer_with_the_median_and_carry_one_real_runs_row(
     speedups: tuple[float, ...], median: float, carrier: str
 ) -> None:
-    """git-scicomp gives each kernel three agents by design: the kernel's speed-up is their median, and
+    """git-scicomp gives each kernel three agents by design: the kernel's speedup is their median, and
     the row it travels on is one run's own, so its source and timings are not a blend of runs."""
     rows = submissions(
         [
@@ -691,7 +691,7 @@ def test_a_frame_with_no_reduction_column_is_refused_by_default() -> None:
 
 
 def test_an_untimed_row_carries_no_reduction_and_does_not_mix_with_a_timed_one() -> None:
-    """A grade that never scored has speed-up 0 and no stamp; it never enters the answer, so it must
+    """A grade that never scored has speedup 0 and no stamp; it never enters the answer, so it must
     not be counted as a second reduction beside the timed rows."""
     rows = submissions(
         [
@@ -717,7 +717,7 @@ def test_a_ratio_over_rows_from_one_node_names_that_node(nodes: list[object], ex
 
 def test_a_ratio_over_rows_from_two_nodes_is_refused() -> None:
     """The node-to-node spread on one homogeneous cluster is about 30%, larger than most claimed
-    effects, so a candidate from one node over a baseline from another is not a speed-up."""
+    effects, so a candidate from one node over a baseline from another is not a speedup."""
     with pytest.raises(population.MixedPopulationError, match=r"different nodes \['nid001', 'nid002'\]"):
         population.one_node(["nid001", "nid002", None], label="gemm")
 
@@ -790,7 +790,7 @@ def test_the_campaign_table_and_the_artifact_table_reduce_the_same_way(analyze, 
 
 
 def test_the_ablation_reduction_and_the_artifact_reduction_publish_one_number(analyze, ablation, tmp_path) -> None:
-    """``ablation_stats.py`` and the llr40 artifact both publish a per-arm speed-up and reduced
+    """``ablation_stats.py`` and the llr40 artifact both publish a per-arm speedup and reduced
     differently: ``--dedup last`` folds per kernel across ALL agents and returns whichever agent
     submitted last, which was documented as "the agent's own final answer" and is not. ``final`` is
     that reduction, and it must be the one mode that lands on the artifact's number."""
@@ -932,9 +932,9 @@ def test_an_arm_point_carries_its_interval_and_the_costs_behind_its_speed_up() -
 
 
 def test_an_arm_point_reports_the_geometric_mean_speed_up_not_the_median() -> None:
-    """An "overall speed-up" is a ratio statistic, and the geometric mean is the one this repo
+    """An "overall speedup" is a ratio statistic, and the geometric mean is the one this repo
     reports under that name everywhere else (:class:`population.ArmAggregate`); a median of
-    per-kernel speed-ups equals it only when the values are symmetric, which three kernels stuck at
+    per-kernel speedups equals it only when the values are symmetric, which three kernels stuck at
     1.0x and one at 1000x are not."""
     rows = submissions(
         [
@@ -947,7 +947,7 @@ def test_an_arm_point_reports_the_geometric_mean_speed_up_not_the_median() -> No
     assert point is not None
     expected_geomean = (1.0 * 1.0 * 1.0 * 1000.0) ** 0.25
     assert point["log2_speedup"] == pytest.approx(math.log2(expected_geomean))
-    median_log2 = math.log2(1.0)  # the median speed-up here is 1.0x; the geomean must not equal it
+    median_log2 = math.log2(1.0)  # the median speedup here is 1.0x; the geomean must not equal it
     assert point["log2_speedup"] != pytest.approx(median_log2)
 
 

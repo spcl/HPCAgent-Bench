@@ -12,7 +12,7 @@ then machine_learning.
 
 * :func:`plot_heatmap` -- the NPBench-style ``RdYlGn_r`` speedup table, now OPT-IN: no default
   flow emits it, because its ratio axis reads a 0.5x regression as a smaller event than a 1.5x
-  win (``statistics/plot_speedup.py`` is the speed-up figure a run plots). The per-cell median
+  win (``statistics/plot_speedup.py`` is the speedup figure a run plots). The per-cell median
   used for best-selection AND the bootstrap-CI superscript both come from OUTLIER-CLEANED
   samples via :func:`hpcagent_bench.stats.summary.median_ci` (which warns, naming the cell, on every
   dropped sample); NumPy's own column shows absolute runtimes.
@@ -78,7 +78,7 @@ FloatArray = npt.NDArray[np.float64]
 
 
 class NoBaselineRows(ValueError):
-    """A slice of the data holds no rows for the speed-up denominator, so it has no ratios."""
+    """A slice of the data holds no rows for the speedup denominator, so it has no ratios."""
 
 
 #: Seed for every per-cell bootstrap so the same DB yields the same published figure.
@@ -88,7 +88,7 @@ CI_SEED: int = 0
 #: at paper size, so their type and strokes are the shared print scale.
 TYPE: style.TypeScale = style.PRINT_SCALE
 
-#: The speed-up denominator. Named here because it is not just another series: every ratio in the
+#: The speedup denominator. Named here because it is not just another series: every ratio in the
 #: heatmap divides by it, so it has to survive :func:`load_results` under its own name.
 #:
 #: Overridable because numpy is not always AVAILABLE as one: a reference with a loop-carried
@@ -336,7 +336,7 @@ def one_node_per_kernel(data: pd.DataFrame) -> None:
     """Refuse a kernel whose candidate and baseline rows name two different nodes.
 
     :func:`machine_groups` partitions on ``(cpu, gpu)``, which cannot separate two nodes of one
-    homogeneous cluster; every speed-up here divides one kernel's framework cells by its baseline
+    homogeneous cluster; every speedup here divides one kernel's framework cells by its baseline
     cell, so all of a kernel's rows must come from one node (:func:`population.one_node`). A frame
     without the column predates it and is not checked."""
     if "node" not in data.columns:

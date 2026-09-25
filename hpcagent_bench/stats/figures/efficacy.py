@@ -1,12 +1,12 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The efficacy figure: did an intervention buy speed-up, and what did it cost in tokens?
+"""The efficacy figure: did an intervention buy speedup, and what did it cost in tokens?
 
-STACKED 1-D ROWS, one per measure (:data:`MEASURES`: speed-up, solved rate, token cost), over one
+STACKED 1-D ROWS, one per measure (:data:`MEASURES`: speedup, solved rate, token cost), over one
 shared categorical X of (LLM, delivery) columns (:func:`figure_arm_dots` for one comparison,
 :func:`figure_dot_row` for several side by side). Each column carries TWO marks, the no-packet arm
 HOLLOW and the packet arm FILLED, each over the kernels the two arms share (:func:`paired_kernels`;
-SC15 Rule 4: a ratio ships with the costs it was taken over). The speed-up row holds
+SC15 Rule 4: a ratio ships with the costs it was taken over). The speedup row holds
 ``log2(ratio)`` over the campaign baseline (:func:`hpcagent_bench.stats.summary.log2_change` of
 :func:`~hpcagent_bench.stats.summary.geomean_ci`), ticks read back in ratios
 (:func:`~hpcagent_bench.stats.style.log2_ratio_tick`); the cost row a per-kernel token count on a
@@ -18,7 +18,7 @@ has the reasoning): :func:`hpcagent_bench.stats.palette.model_color` for the mar
 :func:`~hpcagent_bench.stats.palette.packet_marker` for the treated shape. The control wears the one
 hollow :data:`CONTROL_MARKER`, so hollow always means "no packet".
 
-SIGNIFICANCE IS A SUPERSCRIPT, not fill: ``*`` beside a speed-up mark means that axis cleared the
+SIGNIFICANCE IS A SUPERSCRIPT, not fill: ``*`` beside a speedup mark means that axis cleared the
 Benjamini-Hochberg-adjusted 5% threshold for that (model, leg), ``+`` the same on the token-cost
 row, over the figure's own family of tests. The key spells each symbol once.
 
@@ -87,8 +87,8 @@ class FigureConfig:
     #: offset it floated between two columns.
     symbol_offset_pt: float = 4.0
     #: The TOKEN-COST interval's line style. Dashed, so the two axes' intervals cannot be read as
-    #: one quantity: they are a speed-up and a spend, on their own scales (SC15 Rule 4). The
-    #: speed-up interval stays solid.
+    #: one quantity: they are a speedup and a spend, on their own scales (SC15 Rule 4). The
+    #: speedup interval stays solid.
     cost_linestyle: str = "--"
     #: Most labelled ticks an axis may carry. Raising it thins the spacing between whole ratios.
     max_ticks: int = 13
@@ -229,17 +229,17 @@ PAIRED_COLUMNS: tuple[str, ...] = (
     "treated_solved",
 )
 
-#: What a speed-up aggregate is taken over. ``solved``: the kernels BOTH arms answered
-#: correctly -- a wrong answer is no speed-up at all, so it is counted by the success rate and not
+#: What a speedup aggregate is taken over. ``solved``: the kernels BOTH arms answered
+#: correctly -- a wrong answer is no speedup at all, so it is counted by the success rate and not
 #: scored as the baseline, and both arms are timed on the same kernels, so solving only the easy
-#: ones buys no speed-up. ``served``: every kernel, a failure at 1x (the fallback reading: what a
+#: ones buys no speedup. ``served``: every kernel, a failure at 1x (the fallback reading: what a
 #: user who keeps the baseline on a wrong answer gets). Token cost is over every served kernel
 #: either way -- a failed episode still spent them.
 SPEEDUP_OVER: population.KernelPolicy = "solved"
 
 
 def speedup_mask(paired: pd.DataFrame, over: population.KernelPolicy = SPEEDUP_OVER) -> "np.ndarray":
-    """The rows of :func:`paired_kernels`' frame a speed-up aggregate is taken over."""
+    """The rows of :func:`paired_kernels`' frame a speedup aggregate is taken over."""
     if over == "served":
         return np.ones(len(paired), dtype=bool)
     return (paired.control_solved.astype(bool) & paired.treated_solved.astype(bool)).to_numpy(dtype=bool)
@@ -259,12 +259,12 @@ def paired_kernels(
     repeats: population.RepeatPolicy = "latest",
     card: cost_models.CostModel | None = None,
 ) -> pd.DataFrame:
-    """One row per kernel BOTH sides cover on speed-up; its tokens are NaN where either side has no
+    """One row per kernel BOTH sides cover on speedup; its tokens are NaN where either side has no
     task total.
 
-    The speed-up leg is paired over every such kernel, the same population ``paired_arms.py``'s
+    The speedup leg is paired over every such kernel, the same population ``paired_arms.py``'s
     score leg (and so the family's corrected test) is taken over; the token leg over the subset
-    with a total on both sides (:func:`reduce_pair`). Intersecting the two would move the speed-up
+    with a total on both sides (:func:`reduce_pair`). Intersecting the two would move the speedup
     coordinate off the table's value whenever a token record is missing. ``delivered`` is True only
     when BOTH sides verified an answer there; a kernel either side only served
     (:data:`~hpcagent_bench.stats.population.NOT_DELIVERED`) is a placeholder ratio, not a
@@ -320,7 +320,7 @@ def paired_kernels(
 @dataclasses.dataclass(frozen=True, slots=True)
 class Series:
     """One arm's paired-per-kernel comparison against its control, as :func:`pairs_table` records
-    it: ``x`` the speed-up change as ``log2(ratio)``, ``y`` the token-cost ratio (treated over
+    it: ``x`` the speedup change as ``log2(ratio)``, ``y`` the token-cost ratio (treated over
     control), each a geomean with its 95% log-t interval ``*_low``/``*_high``.
     """
 
@@ -382,7 +382,7 @@ def reduce_pair(
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class ArmPoint:
-    """ONE ARM's own position on a dot row: its geomean speed-up over the campaign's
+    """ONE ARM's own position on a dot row: its geomean speedup over the campaign's
     BASELINE as ``log2(ratio)``, its geomean token cost as a COUNT, each with its 95% log-t
     interval."""
 
@@ -415,7 +415,7 @@ def per_kernel_ci(values: "np.ndarray") -> tuple[float, float, float]:
 def arm_point(
     speedup: "pd.Series", tokens: "pd.Series", priced: "np.ndarray", timed: "np.ndarray", solved: "pd.Series | bool"
 ) -> ArmPoint:
-    """One arm's geomean speed-up over the ``timed`` kernels, its PER-KERNEL token spend over the
+    """One arm's geomean speedup over the ``timed`` kernels, its PER-KERNEL token spend over the
     ``priced`` ones (a token total on BOTH sides, so the two arms of a pair are costed over one
     population), and how many of the pair's kernels it solved."""
     values = speedup.to_numpy(dtype=float)[timed]
@@ -446,7 +446,7 @@ def arm_points(
     the CAMPAIGN BASELINE, not where one sits against the other.
 
     Both are taken over the kernels the two arms SHARE (:func:`paired_kernels`), so the pair is
-    comparable and the displacement between the two speed-ups is EXACTLY :func:`reduce_pair`'s
+    comparable and the displacement between the two speedups is EXACTLY :func:`reduce_pair`'s
     ``x`` -- a geomean of ratios is the ratio of the geomeans. That is the reading "HIP reached
     3.2x" needs and a ratio alone cannot give.
     """
@@ -481,7 +481,7 @@ def leg_labels(frame: pd.DataFrame) -> pd.Series:
     return frame["language"].astype(str).map(experiment_tags.language_name)
 
 
-#: One mark's significance superscript, per axis -- ``*`` for the SPEED-UP axis, ``+`` for the
+#: One mark's significance superscript, per axis -- ``*`` for the SPEEDUP axis, ``+`` for the
 #: TOKEN-COST one. Concatenated onto the mark's own label, never onto the mark itself: a symbol
 #: drawn on top of a small shape is easy to miss, one beside a label a reader is already reading is
 #: not. ``+`` rather than a dagger: the dagger is a footnote mark in running text and half the
@@ -489,7 +489,7 @@ def leg_labels(frame: pd.DataFrame) -> pd.Series:
 SCORE_SIG_MARK: str = "*"
 COST_SIG_MARK: str = "+"
 
-#: Per (model, leg): whether the speed-up and the token cost each cleared BH.
+#: Per (model, leg): whether the speedup and the token cost each cleared BH.
 Significance = tuple[bool, bool]
 NO_SIGNIFICANCE: Significance = (False, False)
 
@@ -498,13 +498,13 @@ NO_SIGNIFICANCE: Significance = (False, False)
 #: no-packet twin -- and never on the arm's distance from the campaign's baseline, which nothing
 #: here tests. One row each, symbol first: a reader looking a symbol up wants it at the start of
 #: the row, not inside a sentence.
-SCORE_SIG_LABEL: str = "Speed-Up Significant"
+SCORE_SIG_LABEL: str = "Speedup Significant"
 COST_SIG_LABEL: str = "Cost Significant"
 #: Every drawn superscript in one key row, for a key that must fit four columns: this, then the
 #: measures in :data:`SIG_MEASURE_NAMES` order.
 JOINT_SIG_LABEL: str = "Significant"
 #: Each superscript's measure, as the joint key row names it.
-SIG_MEASURE_NAMES: tuple[str, ...] = ("Speed-Up", "Cost")
+SIG_MEASURE_NAMES: tuple[str, ...] = ("Speedup", "Cost")
 
 
 def axis_significance(stats: pd.DataFrame) -> dict[tuple[str, str], Significance]:
@@ -698,7 +698,7 @@ def legend_tail(symbols: Significance = NO_SIGNIFICANCE) -> list[Line2D]:
     the figure actually drew (``symbols``, from :func:`drawn_symbols`). Every one is FIXED TEXT
     (:func:`interval_note`, :func:`significance_legend_marks`)."""
     handles = [
-        Line2D([], [], linestyle="-", linewidth=1.3, color=style.MUTED, label=interval_note("Speed-Up")),
+        Line2D([], [], linestyle="-", linewidth=1.3, color=style.MUTED, label=interval_note("Speedup")),
         Line2D(
             [],
             [],
@@ -897,23 +897,23 @@ def resolve_row_repeats(
 MEASURES: tuple[str, ...] = ("speedup", "success", "cost")
 
 #: Each measure's default axis label.
-MEASURE_LABELS: dict[str, str] = {"speedup": "Speed-Up", "success": "Solved (%)", "cost": "Token Cost"}
+MEASURE_LABELS: dict[str, str] = {"speedup": "Speedup", "success": "Solved (%)", "cost": "Token Cost"}
 
 #: Each measure's row height as a fraction of ``row_height_in``. A count out of N needs no ladder of
-#: ratios, so the success row is the shortest; the speed-up and cost rows are 0.7 of one and the
-#: success row 0.45 (user, 2026-09-22: 15% and 10% below the earlier 0.82 and 0.5); the speed-up row
-#: 25% taller, 0.875 (user, 2026-09-25: speed-up differences were hard to see).
+#: ratios, so the success row is the shortest; the speedup and cost rows are 0.7 of one and the
+#: success row 0.45 (user, 2026-09-22: 15% and 10% below the earlier 0.82 and 0.5); the speedup row
+#: 25% taller, 0.875 (user, 2026-09-25: speedup differences were hard to see).
 MEASURE_HEIGHT: dict[str, float] = {"speedup": 0.875, "success": 0.45, "cost": 0.7}
 
 #: Headroom above N on the success row, as a fraction of N, so the dashed ceiling at N is not the frame.
 SUCCESS_HEADROOM: float = 0.05
 
-#: The speed-up row's label when failures enter at 1x instead of being left out.
-SERVED_SPEEDUP_LABEL: str = "Speed-Up (1x Fallback)"
+#: The speedup row's label when failures enter at 1x instead of being left out.
+SERVED_SPEEDUP_LABEL: str = "Speedup (1x Fallback)"
 
 
 def speedup_row_label(over: population.KernelPolicy) -> str:
-    """The speed-up row's Y label under ``over``."""
+    """The speedup row's Y label under ``over``."""
     return SERVED_SPEEDUP_LABEL if over == "served" else MEASURE_LABELS["speedup"]
 
 
@@ -933,7 +933,7 @@ class ArmRow:
     #: "C-CPF" column sits under the "C" tick, its packet told by its shape and the key.
     group: str = ""
     #: A compiler or framework COMPARATOR (:class:`Comparator`), not an LLM pair: ``model`` is its
-    #: comparator key, ``treated`` its one mark, ``control`` empty. Drawn on the speed-up and solved
+    #: comparator key, ``treated`` its one mark, ``control`` empty. Drawn on the speedup and solved
     #: rows only, after the models of its group.
     comparator: bool = False
 
@@ -1140,7 +1140,7 @@ def label_wrap(config: FigureConfig) -> int:
 
 def wrapped_label(text: str, width: int = 18, hyphens: bool = False) -> str:
     """A label folded onto as many lines as it needs, never INSIDE a word. A dot-row panel is about
-    two inches tall and its Y label is rotated, so "Geomean Speed-Up Over Numba" on one line runs
+    two inches tall and its Y label is rotated, so "Geomean Speedup Over Numba" on one line runs
     off both ends of the row -- but a fold at the hyphen gives "Geomean Speed-" over "Up", which is
     worse than the overflow.
 
@@ -1275,7 +1275,7 @@ def parse_differences(spec: str) -> frozenset[DifferenceKey]:
 
 
 def difference_factor(control_value: float, treated_value: float, measure: str) -> float:
-    """The factor between one comparison's two marks, in the measure's own units: the speed-up row
+    """The factor between one comparison's two marks, in the measure's own units: the speedup row
     holds ``log2(ratio)``, so its factor is a power of two, while the cost row holds counts."""
     if measure == "cost":
         return treated_value / control_value if control_value > 0.0 else math.nan
@@ -1284,7 +1284,7 @@ def difference_factor(control_value: float, treated_value: float, measure: str) 
 
 def difference_middle(control_value: float, treated_value: float, measure: str) -> float:
     """Where the arrow's label sits: halfway along the arrow AS DRAWN, which is the geometric
-    middle on the cost row's log axis and the arithmetic one on the log2 speed-up row."""
+    middle on the cost row's log axis and the arithmetic one on the log2 speedup row."""
     if measure == "cost":
         return math.sqrt(control_value * treated_value) if control_value > 0.0 else math.nan
     return (control_value + treated_value) / 2.0
@@ -1322,7 +1322,7 @@ def draw_difference_arrow(
 
 def interval_bounds(values: Sequence[float], cost: bool, config: FigureConfig) -> tuple[float, float]:
     """How far a panel's intervals are drawn: :data:`FigureConfig.interval_reach` past its lowest and
-    highest mark, in the row's own units (tokens on the cost row, ``log2(ratio)`` on the speed-up
+    highest mark, in the row's own units (tokens on the cost row, ``log2(ratio)`` on the speedup
     row). No finite mark leaves nothing to cut against."""
     marks = [value for value in values if math.isfinite(value)]
     if not marks:
@@ -1330,7 +1330,7 @@ def interval_bounds(values: Sequence[float], cost: bool, config: FigureConfig) -
     if cost:
         return min(marks) / config.interval_reach, max(marks) * config.interval_reach
     reach = math.log2(config.interval_reach)
-    # A speed-up row whose marks all sit at or above 1x is floored there: an interval reaching below
+    # A speedup row whose marks all sit at or above 1x is floored there: an interval reaching below
     # is cut at 1x with an arrowhead, so the axis never opens below the baseline (user, 2026-09-25).
     low = max(min(marks) - reach, 0.0) if min(marks) >= 0.0 else min(marks) - reach
     return low, max(marks) + reach
@@ -1354,7 +1354,7 @@ def draw_interval(
 
 def interval_kernels(point: ArmPoint, measure: str) -> int:
     """How many kernels one arm's interval on ``measure`` is taken over: every served kernel for cost,
-    the kernels both arms solved for speed-up."""
+    the kernels both arms solved for speedup."""
     return point.token_kernels if measure == "cost" else point.kernels
 
 
@@ -1363,7 +1363,7 @@ FEW_KERNELS_NOTE: str = "No interval: fewer than {} kernels"
 
 
 def few_kernel_marks(rows: Sequence[ArmRow], config: FigureConfig) -> bool:
-    """Whether any drawn speed-up or cost mark has too few kernels for its interval."""
+    """Whether any drawn speedup or cost mark has too few kernels for its interval."""
     return any(
         0 < interval_kernels(point, measure) < config.min_interval_kernels
         for row in rows
@@ -1373,7 +1373,7 @@ def few_kernel_marks(rows: Sequence[ArmRow], config: FigureConfig) -> bool:
 
 
 def measure_value(point: ArmPoint, measure: str) -> tuple[float, float, float]:
-    """``(value, low, high)`` of one arm on one measure: the speed-up in ``log2(ratio)``, or the
+    """``(value, low, high)`` of one arm on one measure: the speedup in ``log2(ratio)``, or the
     token count as a count. The success row draws its count alone (:func:`draw_success_row`)."""
     if measure == "cost":
         return point.y, point.y_low, point.y_high
@@ -1466,7 +1466,7 @@ def draw_measure_row(
     The two marks are dodged either side of the category's own position so they never sit on top of
     one another, and the pair is read vertically: how far the filled mark is ABOVE the hollow one is
     the packet's effect, in the measure's own units, against a reference a reader already knows
-    (1x over the campaign baseline on the speed-up row).
+    (1x over the campaign baseline on the speedup row).
     """
     cost = measure == "cost"
     draw_pending(ax, rows, config)
@@ -1526,12 +1526,12 @@ def draw_arm(
 
 def row_verdict(row: ArmRow, measure: str, significance: dict[tuple[str, str], Significance]) -> bool:
     """Whether ``row`` is starred on ``measure``'s row. Each row carries only ITS OWN verdict: a star
-    on the cost row would test the speed-up."""
+    on the cost row would test the speedup."""
     score_sig, cost_sig = significance.get((row.model, row.leg), NO_SIGNIFICANCE)
     return {"cost": cost_sig, "success": False}.get(measure, score_sig)
 
 
-#: Each measure's superscript (:func:`draw_verdict`); anything else is the speed-up's.
+#: Each measure's superscript (:func:`draw_verdict`); anything else is the speedup's.
 VERDICT_MARKS: dict[str, str] = {"cost": COST_SIG_MARK}
 
 
@@ -1602,7 +1602,7 @@ def token_axis(ax: Axes, rows: Sequence[ArmRow], config: FigureConfig) -> None:
 
 
 def ratio_axis(ax: Axes, reference_name: str, config: FigureConfig) -> None:
-    """The speed-up row's log2 axis and its 1x reference line, named by ``reference_name``."""
+    """The speedup row's log2 axis and its 1x reference line, named by ``reference_name``."""
     ax.axhline(0.0, color=style.REFERENCE, linewidth=1.0, zorder=1)
     if reference_name:
         # The denominator, ON the 1x line at its right end, in the chart's own light ink. It
@@ -1620,7 +1620,7 @@ def ratio_axis(ax: Axes, reference_name: str, config: FigureConfig) -> None:
 
 
 def ratio_ticks(ax: Axes, span: Sequence[float], config: FigureConfig) -> None:
-    """Widen the speed-up row to its minimum span and space its ticks by the DATA's own ``span``, not
+    """Widen the speedup row to its minimum span and space its ticks by the DATA's own ``span``, not
     the autoscaled window: sized against the padded window and then snapped outward, a six-octave
     panel came back spanning fourteen."""
     widen_y_axis_linear(ax, config)
@@ -1681,7 +1681,7 @@ def draw_success_row(
             draw_verdict(ax, x + config.dodge, rate, "success", config)
     ax.set_yticks(SUCCESS_TICKS)
     # The percent sign is in the row label: "100%" on every tick widened the left chrome of the
-    # whole figure past what the speed-up row needs.
+    # whole figure past what the speedup row needs.
     ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{100.0 * value:.0f}"))
     minor_grid(ax, "y", "count", config)
     ax.yaxis.set_minor_locator(MultipleLocator(0.25))
@@ -1697,7 +1697,7 @@ def draw_success_row(
 
 def widen_y_axis_linear(ax: Axes, config: FigureConfig) -> None:
     """Pad ``ax``'s Y limits to at least :attr:`FigureConfig.min_span`, centred where they already
-    are, on a LINEAR log2 Y (the speed-up row of a dot-row figure)."""
+    are, on a LINEAR log2 Y (the speedup row of a dot-row figure)."""
     low, high = ax.get_ylim()
     if high - low < config.min_span:
         centre = (low + high) / 2.0
@@ -2009,7 +2009,7 @@ class Comparator:
 
 
 def comparator_point(comparator: Comparator) -> ArmPoint:
-    """The comparator's one mark: the geomean of its valid kernels' speed-ups with its 95% log-t
+    """The comparator's one mark: the geomean of its valid kernels' speedups with its 95% log-t
     interval (:func:`~hpcagent_bench.stats.summary.geomean_interval`, none below
     :data:`~hpcagent_bench.stats.summary.MIN_PAIRS_FOR_INTERVAL` kernels), and its solved share."""
     values = np.asarray(comparator.speedups, dtype=float)
@@ -2040,7 +2040,7 @@ def comparators_from_table(table: pd.DataFrame, entries: Sequence[tuple[str, str
 
 
 def comparator_table(comparators: Sequence[Comparator]) -> pd.DataFrame:
-    """One row per drawn comparator: its geomean speed-up, interval and solved share (SC15 Rule 4)."""
+    """One row per drawn comparator: its geomean speedup, interval and solved share (SC15 Rule 4)."""
     rows = []
     for comparator in comparators:
         point = comparator_point(comparator)
@@ -2437,7 +2437,7 @@ TICK_LABEL_CLEARANCE_IN: float = 0.05
 
 def fit_column_gaps(fig: Figure, axes: np.ndarray) -> None:
     """Widen each spacer column of :func:`figure_dot_row` until the Y tick labels of the panel to
-    its right clear the panel to its left. Each column has its own speed-up scale, so one wide
+    its right clear the panel to its left. Each column has its own speedup scale, so one wide
     ladder ("0.00391x") would otherwise print over its neighbour."""
     grid = axes[0][0].get_subplotspec().get_gridspec()
     ratios = list(grid.get_width_ratios())

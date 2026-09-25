@@ -283,7 +283,7 @@ def test_a_cell_below_the_interval_floor_reports_its_median_without_an_interval(
 
 
 def test_a_bootstrap_over_log_ratios_keeps_the_negative_values() -> None:
-    """A log speed-up below zero is a slow-down, not a broken timer reading; cleaning it away would move
+    """A log speedup below zero is a slow-down, not a broken timer reading; cleaning it away would move
     every interval of a regressing arm toward zero."""
     logs = [-1.0, -0.8, -0.6, -0.5, -0.4, -0.2, 0.1, 0.3]
     interval = summary.bootstrap_ci(logs, np.median, "median", n_resamples=999, method="percentile")

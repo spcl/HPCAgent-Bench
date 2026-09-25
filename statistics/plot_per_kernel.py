@@ -1,9 +1,9 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Per-kernel speed-up and per-kernel tokens, compact enough for a paper column.
+"""Per-kernel speedup and per-kernel tokens, compact enough for a paper column.
 
 Reads one selection of observations (``--experiment`` for an arm prefix, ``--arm`` for a further
-regex) and draws its per-kernel speed-up and its per-kernel tokens
+regex) and draws its per-kernel speedup and its per-kernel tokens
 (:mod:`hpcagent_bench.stats.figures.per_kernel`). Every episode matching the selection is pooled
 into one series per kernel -- this script draws ONE condition at a time; compare two conditions
 (a model, a packet) by rendering it once per ``--arm`` selection.
@@ -44,13 +44,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--summary",
         action="store_true",
         default=False,
-        help="append a summary column over the solved kernels: geomean speed-up, median tokens",
+        help="append a summary column over the solved kernels: geomean speedup, median tokens",
     )
     parser.add_argument(
         "--layout",
         choices=("separate", "stacked"),
         default="separate",
-        help="two files (default) or one figure with speed-up over tokens, sharing the kernel axis",
+        help="two files (default) or one figure with speedup over tokens, sharing the kernel axis",
     )
     parser.add_argument("--label", default="", help="draw this title above the figure; default: no title")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/per_kernel.pdf"))
@@ -85,14 +85,14 @@ def render(
     written: list[pathlib.Path] = []
     if args.layout == "stacked":
         if not (speed_cells and token_cells):
-            raise SystemExit("--layout stacked needs both a speed-up and a tokens cell to share the kernel axis")
+            raise SystemExit("--layout stacked needs both a speedup and a tokens cell to share the kernel axis")
         kernels = per_kernel.shared_kernel_order(speed_cells, token_cells)
         fig = per_kernel.figure_panels([speed, tokens], kernels, args.style, args.summary, label)
         written.append(per_kernel.save(fig, args.out))
         return written
     if speed_cells:
         kernels = per_kernel.ordered_kernels(speed_cells)
-        fig = per_kernel.figure_one(speed, kernels, args.style, args.summary, f"{label}: Speed-Up" if label else "")
+        fig = per_kernel.figure_one(speed, kernels, args.style, args.summary, f"{label}: Speedup" if label else "")
         written.append(per_kernel.save(fig, args.out.with_name(f"{stem}-speedup{suffix}")))
     if token_cells:
         kernels = per_kernel.ordered_kernels(token_cells)
@@ -107,19 +107,19 @@ def main() -> None:
     speed_cells = per_kernel.speedup_cells(frame)
     token_cells = per_kernel.token_cells(frame)
     if not speed_cells and not token_cells:
-        raise SystemExit(f"no per-kernel speed-up or tokens for experiment={args.experiment!r} arm={args.arm!r}")
+        raise SystemExit(f"no per-kernel speedup or tokens for experiment={args.experiment!r} arm={args.arm!r}")
 
     # NO TITLE by default: a paper's caption is the title, and "all arms" over a panel naming one
     # arm's kernels was a caption that said nothing. --label draws one for a standalone render.
     label = args.label
     hues = palette.hues()
-    speed = per_kernel.speedup_series_metric([per_kernel.Series("", tuple(speed_cells), hues[0])], "Speed-Up")
+    speed = per_kernel.speedup_series_metric([per_kernel.Series("", tuple(speed_cells), hues[0])], "Speedup")
     tokens = per_kernel.token_series_metric([per_kernel.Series("", tuple(token_cells), hues[1])], "Tokens per Episode")
 
     write_tables(speed_cells, token_cells, args.table)
     written = render(speed, tokens, speed_cells, token_cells, args, label)
 
-    print(f"{len(speed_cells)} speed-up kernel(s), {len(token_cells)} token kernel(s)")
+    print(f"{len(speed_cells)} speedup kernel(s), {len(token_cells)} token kernel(s)")
     for path in written:
         print(f"figure -> {path} (+ .png)")
 
