@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Pack data/ into the release archive download.sh fetches, anonymized, with DATA_SHA256SUMS.
 #   tools/make_archive.sh [out.tar.zst]
-# The databases are rewritten by tools/anonymize_dbs.py into a copy; data/ itself is never modified.
+# The databases are rewritten by tools/anonymize.py into a copy; data/ itself is never modified.
 set -euo pipefail
 
 # Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
@@ -13,9 +13,9 @@ out=${1:-$root/work/data.tar.zst}
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 cp -a "$root/data/." "$stage/"
-find "$stage" -name '*.db' -delete
-(cd "$root" && python3 tools/anonymize_dbs.py --out "$stage/.anon" data)
-(cd "$stage/.anon/data" && find . -name '*.db' -exec cp --parents {} "$stage/" \;)
+(cd "$root" && python3 tools/anonymize.py --out "$stage/.anon" data)
+(cd "$stage/.anon/data" && find . -type f -exec cp --parents {} "$stage/" \;)
+find "$stage" \( -name '*.db-shm' -o -name '*.db-wal' \) -delete
 rm -rf "$stage/.anon"
 (cd "$stage" && find . -type f | LC_ALL=C sort | xargs sha256sum) >"$root/DATA_SHA256SUMS"
 tar --zstd -cf "$out" -C "$stage" .
