@@ -19,9 +19,6 @@ env_spec() {
 # render_env <entry|file> -- the flat KEY=VALUE env an arms.yaml entry or a layered env file stands for.
 render_env() { env_spec render "$1"; }
 
-# base_exists <entry> -- true when arms.yaml declares <entry>.
-base_exists() { env_spec list | grep -qxF -- "$1"; }
-
 # publish_readonly <tmp> <dest> -- makes <tmp> read-only and hard-links it to <dest>, which must not
 # exist or must already hold the same bytes; <tmp> is removed either way. ln never replaces a file.
 publish_readonly() {

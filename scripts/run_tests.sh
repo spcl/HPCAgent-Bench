@@ -18,9 +18,8 @@ REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ "${1:-}" == --container ]]; then
     shift
     : "${SCRATCH:?run_tests.sh --container needs SCRATCH set (sbatch propagates it to the job)}"
-    # The account comes from account_env.sh through SBATCH_ACCOUNT, never a literal -A; the MI250X
-    # partition is the site layer's HPCAGENT_BENCH_CI_PARTITION (unset: SBATCH_PARTITION).
-    . "${REPO}/scripts/cscs/account_env.sh"
+    # Account and MI250X partition come from the site layer (SBATCH_ACCOUNT, HPCAGENT_BENCH_CI_PARTITION).
+    . "${REPO}/scripts/site_env.sh"
     echo "run_tests.sh: submitting to the judge image (mi200, 1 node)..." >&2
     exec sbatch --wait --nice="${NICE:-${HPCAGENT_BENCH_NICE}}" \
         ${HPCAGENT_BENCH_CI_PARTITION:+--partition="${HPCAGENT_BENCH_CI_PARTITION}"} \

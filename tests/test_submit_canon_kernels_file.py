@@ -1,18 +1,8 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""experiments/submit-canon-llr40.sh's KERNELS_FILE support.
-
-Every other family submitter narrows its roster with KERNELS_FILE (submit_common.sh's
-kernels_file_list); this compiler-baseline launcher read the whole ${TAG} roster off roster_for and
-had no KERNELS_FILE branch at all -- an operator handing it the same owed-kernels file that narrows
-every agent arm was silently ignored, running the FULL roster instead of the subset. Fixed by giving
-it the same KERNELS_FILE contract (one kernel name per line, comments/blanks dropped, unknown name
-refused) as every other submit-*.sh.
-
-Runs from a temp copy of the launcher's inputs, SUBMIT unset (prepare-only): no sbatch is ever
-reached (COLUMNS defaults to seven, each such call is a distinct assertion point, so the test never
-lets one through).
-"""
+"""experiments/submit-canon.sh's KERNELS_FILE: one kernel name per line (comments and blanks dropped)
+replaces the tag's roster, and an unknown name is refused. Runs from a temp copy with SUBMIT=0, so no
+sbatch is reached."""
 
 import pathlib
 import shutil
@@ -35,20 +25,10 @@ def stub(directory: pathlib.Path, name: str, body: str) -> None:
 
 
 def submit_tree(root: pathlib.Path) -> pathlib.Path:
-    """A temp experiments/submit-canon-llr40.sh + roster.sh; account_env.sh resolves off a stub
-    sacctmgr (one association), the same way test_submit_file_isolation.py's stub_account does.
-
-    The launcher sources account_env.sh by a path RELATIVE to its own location
-    (``$(dirname BASH_SOURCE)/../scripts/cscs/account_env.sh``), not through OPT/HPCAGENT_BENCH_REPO
-    like every other family submitter -- so the temp tree needs a real copy one level above
-    experiments/, not just the stub sacctmgr on PATH."""
+    """A temp experiments/submit-canon.sh + roster.sh and a stub sbatch that marks a call."""
     (root / "experiments").mkdir(parents=True)
-    for name in ("submit-canon-llr40.sh", "roster.sh"):
+    for name in ("submit-canon.sh", "roster.sh"):
         shutil.copy2(EXPERIMENTS / name, root / "experiments" / name)
-    (root / "scripts" / "cscs").mkdir(parents=True)
-    shutil.copy2(REPO / "scripts" / "cscs" / "account_env.sh", root / "scripts" / "cscs" / "account_env.sh")
-    shutil.copy2(REPO / "scripts" / "site_env.sh", root / "scripts" / "site_env.sh")
-    stub(root / "bin", "sacctmgr", "printf 'project-a\n'")
     stub(root / "bin", "sbatch", 'touch "${STUB_MARKERS}/sbatch-called"; exit 1')
     return root
 
@@ -67,7 +47,7 @@ def run_submit(root: pathlib.Path, **knobs: str) -> subprocess.CompletedProcess[
         **knobs,
     }
     return subprocess.run(
-        ["bash", str(root / "experiments" / "submit-canon-llr40.sh")],
+        ["bash", str(root / "experiments" / "submit-canon.sh")],
         env=env,
         capture_output=True,
         text=True,

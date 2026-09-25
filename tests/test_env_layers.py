@@ -95,17 +95,6 @@ def test_the_shell_and_the_module_render_every_base_identically() -> None:
         assert layers("render", name) == rendered(name), name
 
 
-def test_base_exists_answers_from_the_spec_and_the_layers() -> None:
-    """submit-llrblind.sh skips an arm whose base does not render (e.g. llrbase-hip)."""
-    script = (
-        f". {LAYERS}\nbase_exists llrbase-c:qwen38 && ! base_exists llrbase-hip:qwen38 && ! base_exists llrbase-c:nope"
-    )
-    run = subprocess.run(
-        [bash(), "-c", script], env={**os.environ, "PY": sys.executable}, capture_output=True, text=True, check=False
-    )
-    assert run.returncode == 0, run.stderr
-
-
 @pytest.mark.parametrize("name", BASES)
 def test_every_base_renders_to_a_complete_flat_env(name: str) -> None:
     """Each base carries every launcher placeholder and assigns no key twice."""
@@ -187,7 +176,10 @@ def test_the_release_track_budgets() -> None:
         "mlscale": ("43200", "24000000"),
         "llrbase-c": ("28800", "24000000"),
         "llrbase-fortran": ("28800", "24000000"),
+        "llrblind": ("28800", "24000000"),
+        "harness": ("28800", "24000000"),
         "scicomp": ("72000", "120000000"),
+        "git-scicomp": ("72000", "120000000"),
     }
 
 
@@ -273,16 +265,13 @@ def test_the_job_gets_the_snapshot_not_the_arm_env(tmp_path: pathlib.Path) -> No
     # appends: the agent job's sbatch is followed by its chained finalize-grade job's
     (stub_dir / "sbatch").write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" >> sbatch.args\necho 4242\n")
     (stub_dir / "sbatch").chmod(0o755)
-    # one association, so account_env.sh (sourced by submit_common.sh) resolves without asking
-    (stub_dir / "sacctmgr").write_text("#!/bin/sh\necho test-account\n")
-    (stub_dir / "sacctmgr").chmod(0o755)
     (tmp_path / "problems-a.jsonl").write_text('{"kernel": "k1"}\n')
     (tmp_path / "arm.env").write_text("CAMPAIGN_ARM=a\nPROBLEMS_FILE=problems-a.jsonl\n")
     probe = tmp_path / "probe.sh"
     probe.write_text(
         f"set -eu\n. {EXPERIMENTS / 'submit_common.sh'}\narm_nodes() {{ echo 1; }}\nsubmit_arm_job arm.env a 00:10:00\n"
     )
-    env = {"PATH": f"{stub_dir}:/usr/bin:/bin", "SUBMIT": "1"}
+    env = {"PATH": f"{stub_dir}:/usr/bin:/bin", "SUBMIT": "1", "SBATCH_ACCOUNT": "project"}
     subprocess.run([bash(), str(probe)], env=env, cwd=tmp_path, capture_output=True, text=True, check=True)
     exported = [arg for arg in (tmp_path / "sbatch.args").read_text().splitlines() if "CLUSTER_ENV_FILE=" in arg]
     assert len(exported) == 1

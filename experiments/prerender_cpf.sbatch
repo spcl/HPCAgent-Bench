@@ -100,9 +100,8 @@ if [[ -z "${DACE_TREE}" ]]; then
     HPCAGENT_BENCH_DACE_REF="$("${OPT}/containers/images/dace_refresh.sh" --resolve)"
     export HPCAGENT_BENCH_DACE_REF
 fi
-# scripts/cache_env.sh is the one place HPCAGENT_BENCH_CPF_PRERENDER_DIR is defined, so a submitter
-# that never sources it still lands the cache under the same root every submit script's VIEW default
-# points into (experiments/submit-cpf-llr40.sh, submit-scicomp-dc.sh).
+# scripts/cache_env.sh is the one place HPCAGENT_BENCH_CPF_PRERENDER_DIR is defined, so the cache
+# lands under the root submit.sh's CPF_VIEW default points into.
 . "${OPT}/scripts/cache_env.sh"
 CPF_CACHE=${CPF_CACHE:-${HPCAGENT_BENCH_CPF_PRERENDER_DIR}/cache}
 TARGET=${TARGET:-cpu}

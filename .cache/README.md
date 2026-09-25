@@ -93,12 +93,12 @@ under `${HPCAGENT_BENCH_CPF_PRERENDER_DIR}/cache`, and an arm reads one through 
 ## Job work dirs (deterministic-framework submitters)
 
 `${HPCAGENT_BENCH_RUNS_ROOT}` (default `${JIT_CACHE_ROOT}/runs`, `scripts/cache_env.sh`) is the root
-a deterministic-framework submitter -- `experiments/submit-canon-llr40.sh` today, any canon/smoke/
+a deterministic-framework submitter -- `experiments/submit-canon.sh` today, any canon/smoke/
 opt-report submitter going forward -- derives its OWN job work dir under, as
 `${HPCAGENT_BENCH_RUNS_ROOT}/<job-kind>/<name>-<stamp>` (canon: `<job-kind>` is `canon`, `<name>` is
 the roster tag, `<stamp>` is the submit date). Same shape as `jit/` -- small-ish, many, WRITTEN by
 the job -- so it lives beside it under `${JIT_CACHE_ROOT}`, never spelled out as a bare
-`${SCRATCH}/<name>` path: before this, `submit-canon-llr40.sh` defaulted `OUT_ROOT` straight to
+`${SCRATCH}/<name>` path: before this, `submit-canon.sh` defaulted `OUT_ROOT` straight to
 `${SCRATCH}/canon-llr40-<stamp>`, a directory nothing ever swept, and a compiler-baseline sweep
 leaves one DaCe build tree (`dacecache-<column>[_rank<N>]`) per column in it -- routinely the bulk
 of the directory's size.

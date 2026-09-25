@@ -460,7 +460,7 @@ def test_the_submitting_commit_comes_from_the_launcher_env(
 def test_the_job_code_snapshot_commit_wins_over_the_planned_one(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A queued job runs the checkout as it stands when the job STARTS (scripts/cscs/code_snapshot.sh),
+    """A queued job runs the checkout as it stands when the job STARTS (experiments/code_snapshot.sh),
     so the arm env's stamp names the commit it was planned at and the snapshot names the code that
     ran. The snapshot is read raw: an all-digit short sha must not come back as an int."""
     db = str(tmp_path / "r.db")

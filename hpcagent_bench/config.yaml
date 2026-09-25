@@ -627,7 +627,7 @@ mpi:
                                   # `--time` follows it (mpi_gang.srun_argv), so it bounds a leaked
                                   # step too. The defaults here are the legacy MPI arms' contract:
                                   # an ML-scaling arm pins device residency and a longer cap in its
-                                  # own env (experiments/submit-mlscale.sh, mlscale-grade.sbatch),
+                                  # own env (experiments/arms.yaml mlscale, mlscale-grade.sbatch),
                                   # since RCCL init across nodes plus an XL torch baseline does not
                                   # fit 2 minutes. A global change here would silently re-grade the
                                   # legacy arms under a different contract.

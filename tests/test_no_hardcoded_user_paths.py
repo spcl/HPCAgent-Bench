@@ -7,10 +7,9 @@ names, user names, the image registry, one campaign's run directories -- come fr
 with ONE default place each (docs/configuration.md):
 
 * ``scripts/site_env.sh`` loads the site layer (``experiments/layers/site-<name>.env``): fast
-  storage (``FAST_SCRATCH``), ``SBATCH_PARTITION``, node exclusions, vendor artefact paths;
+  storage (``FAST_SCRATCH``), ``SBATCH_ACCOUNT``, ``SBATCH_PARTITION``, node exclusions;
 * ``scripts/cache_env.sh`` derives every cache and work path from ``SCRATCH`` / ``FAST_SCRATCH``
   (``JIT_CACHE_ROOT``, ``HPCAGENT_BENCH_CACHE``, ``HPCAGENT_BENCH_RUNS_ROOT``);
-* ``scripts/cscs/account_env.sh`` resolves the account from the user's own Slurm associations;
 * ``containers/images/images.env`` names the image registry and every image;
 * ``hpcagent_bench/paths.py`` is the Python side of the same roots.
 
@@ -97,7 +96,7 @@ RAW_PATTERNS = {
     ),
     "hardcoded Slurm account": (
         re.compile(r"(?<![\w-])(?:a-g34|a-g200|g34|g200)(?![\w-])"),
-        "the account comes from SBATCH_ACCOUNT (scripts/cscs/account_env.sh)",
+        "the account comes from SBATCH_ACCOUNT (site layer)",
     ),
     "site value in an #SBATCH directive": (
         re.compile(
@@ -253,7 +252,7 @@ def test_no_site_or_user_values_are_hardcoded() -> None:
     offenders = scan(REPO, tracked_files(REPO), ALLOW.keys())
     assert not offenders, (
         "Hardcoded site or user values found -- read them from the environment (docs/configuration.md: "
-        "scripts/site_env.sh, scripts/cache_env.sh, scripts/cscs/account_env.sh, containers/images/images.env) "
+        "scripts/site_env.sh, scripts/cache_env.sh, containers/images/images.env) "
         "or allowlist with a reason in this file:\n  " + "\n  ".join(sorted(offenders))
     )
 
@@ -314,7 +313,7 @@ def test_the_scan_catches_every_kind_of_hit(tmp_path: pathlib.Path) -> None:
         "good.sh": (
             "#!/usr/bin/env bash\n"
             "#SBATCH --nodes=1\n"
-            '. "${HPCAGENT_BENCH_REPO}/scripts/cscs/account_env.sh"\n'
+            '. "${HPCAGENT_BENCH_REPO}/scripts/site_env.sh"\n'
             'FAST_SCRATCH="${FAST_SCRATCH:-${SCRATCH}}"\n'
             'sbatch ${part:+--partition="${part}"} --partition="${PARTITION}" job.sbatch\n'
             'HOST_HOME="/users/someone"\n'

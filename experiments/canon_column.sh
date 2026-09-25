@@ -2,7 +2,7 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# One canon column over the roster. Split out of submit-canon-llr40.sh because the body has to
+# One canon column over the roster. Split out of submit-canon.sh because the body has to
 # detect the NODE's own topology before it can bind a step, and then loop over kernels -- and both
 # of those inside an sbatch --wrap "srun ... bash -lc '...'" is three levels of quoting deep.
 #

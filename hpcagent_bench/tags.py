@@ -38,7 +38,7 @@ TAGS_DIR = pathlib.Path(
 
 #: An alternate spelling -> the tag whose file it reads.
 ALIASES: dict[str, str] = {
-    # submit-mlscale.sh records its arms as experiment `mlscale`.
+    # the mlscale10 arms recorded their experiment as `mlscale`.
     "mlscale": "mlscale10",
     # the scicomp arms record their roster tag as `scicomp40`.
     "scicomp40": "scicomp-focus40",

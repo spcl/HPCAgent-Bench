@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``scripts/cscs/code_snapshot.sh``: the copy of the checkout a cluster job runs from. The live
+"""``experiments/code_snapshot.sh``: the copy of the checkout a cluster job runs from. The live
 checkout is fast-forwarded while jobs queue and run, so the copy must hold ONE commit's tracked
 files (never a working tree caught mid-checkout or carrying a hand edit), plus the untracked inputs
 a job reads from the tree, and none of the caches, run output or dumps. Run on real throwaway git
@@ -12,7 +12,7 @@ import subprocess
 
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-SNAPSHOT = REPO / "scripts" / "cscs" / "code_snapshot.sh"
+SNAPSHOT = REPO / "experiments" / "code_snapshot.sh"
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "t",
     "GIT_AUTHOR_EMAIL": "t@t",

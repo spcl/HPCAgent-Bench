@@ -175,7 +175,7 @@ A running job keeps the image it opened.
 ## 5. Rerun one canon column for a few kernels
 
 `canon_column.sh outer <column[,column]> <out_root> <k1,k2,...> [preset] [opt]` is the per-node body
-`submit-canon-llr40.sh` wraps. `DACE_TREE` and `opt` take worktrees, so a fix under test never
+`submit-canon.sh` wraps. `DACE_TREE` and `opt` take worktrees, so a fix under test never
 touches the live sweep:
 
 ```bash

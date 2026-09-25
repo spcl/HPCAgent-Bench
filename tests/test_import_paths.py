@@ -48,8 +48,7 @@ ALLOWED: dict[str, str] = {
     # Third-party runtimes, not this repository's code.
     "containers/images/judge-agent-amd/Dockerfile": "rocprof-compute's wrapper names its "
     "own install dir, which PYTHONSAFEPATH=1 would otherwise hide",
-    "containers/inference/tune-moe-int4-mi300a.sbatch": "vendored deps (pydeps) of "
-    "the MoE tuning script",
+    "containers/inference/tune-moe-int4-mi300a.sbatch": "vendored deps (pydeps) of the MoE tuning script",
     # Forwarding or resetting the value repo_env.sh built.
     "scripts/release_smoke_mi200.sbatch": "forwards repo_env.sh's PYTHONPATH into the harbor verifier "
     "container, which mounts the checkout",
@@ -73,12 +72,6 @@ ALLOWED: dict[str, str] = {
     "tests/test_record_tag_version.py": "child script imports the checkout",
     "tests/test_reporting_e2e.py": "child CLI run from a tmp cwd imports the checkout",
     "tests/test_skill_isolation_matrix.py": "child materialize_shared.sh imports the checkout",
-    "tests/test_submit_git_scicomp.py": "child submit script imports the checkout",
-    "tests/test_submit_gpu_llr40_clean_dryrun.py": "child submit script imports the checkout",
-    "tests/test_submit_llrblind.py": "child submit script imports the checkout",
-    "tests/test_submit_scicomp_dc_cpfsrc.py": "child submit script imports the checkout",
-    "tests/test_submit_scicomp_perf_playbook.py": "child submit script imports the checkout",
-    "tests/test_submit_scicomp_perf_playbook_clean_dryrun.py": "child submit script imports the checkout",
     "tests/test_import_paths.py": "this file spells the patterns it searches for",
     # Documents.
     "docs/extending/agent-harness.md": "quotes a harness runner's own-directory insert (PYTHONSAFEPATH=1)",
