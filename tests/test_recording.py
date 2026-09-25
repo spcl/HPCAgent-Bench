@@ -11,6 +11,7 @@ Two layers:
   run the independent re-verify, and confirm it lands in ``submissions``.
 """
 
+import contextlib
 import pathlib
 import sqlite3
 from collections.abc import Callable
@@ -76,13 +77,13 @@ def _rows(db, table):
 
 
 def test_connect_creates_the_current_schema(tmp_path) -> None:
-    """One schema, created idempotently on connect (no versioning): the five tables
+    """One schema, created idempotently on connect (no versioning): exactly the schema's tables
     exist and every perf table carries the execution-provenance column."""
     db = str(tmp_path / "r.db")
     conn = recording.connect(db)
     try:
         names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert {"benchmarks", "prompts", "submissions", "attempts", "calls"} <= names
+        assert names == set(recording.TABLES)
         for table in ("submissions", "attempts", "calls"):
             assert "execution" in [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
     finally:
@@ -153,13 +154,14 @@ def legacy_host_only_db(tmp_path: pathlib.Path) -> str:
     return db
 
 
-def test_a_db_with_only_the_legacy_host_column_still_reads_the_node(tmp_path: pathlib.Path) -> None:
-    """Opening an archive that predates the ``node`` merge must not lose the machine identity even
-    though every future write goes to ``node``."""
+def test_a_migrated_copy_keeps_the_legacy_host_column(tmp_path: pathlib.Path) -> None:
+    """An archive that predates the ``node`` merge names its machine only in ``host``; migration
+    keeps that column and leaves ``node`` unrecorded rather than inferring it."""
     db = legacy_host_only_db(tmp_path)
-    recording.connect(db).close()
+    out = str(tmp_path / "migrated.db")
+    recording.migrate(db, out)
     for table in ("submissions", "attempts", "calls"):
-        assert [row["node"] for row in _rows(db, table)] == ["nid001234"], f"{table} did not backfill node"
+        assert [(row["host"], row["node"]) for row in _rows(out, table)] == [("nid001234", None)], table
 
 
 def test_a_db_carrying_both_columns_keeps_its_own_node_value(tmp_path: pathlib.Path) -> None:
@@ -173,17 +175,17 @@ def test_a_db_carrying_both_columns_keeps_its_own_node_value(tmp_path: pathlib.P
         conn.commit()
     finally:
         conn.close()
-    recording.connect(db).close()
-    assert _rows(db, "submissions")[0]["node"] == "real-node"
+    out = str(tmp_path / "migrated.db")
+    recording.migrate(db, out)
+    assert [(r["host"], r["node"]) for r in _rows(out, "submissions")] == [("nid001234", "real-node")]
 
 
 def test_connect_creates_a_missing_table(tmp_path) -> None:
     """A DB predating a whole table still gets it created (CREATE IF NOT EXISTS runs
-    every connect). A table missing a COLUMN is migrated by ALTER in the same pass --
-    see tests/test_experiment_tag.py, which owns that case."""
+    every connect)."""
     db = str(tmp_path / "r.db")
     conn = sqlite3.connect(db)
-    conn.executescript(recording._BENCHMARKS_DDL + recording._SUBMISSIONS_DDL + recording._ATTEMPTS_DDL)
+    conn.executescript(recording.TABLES["submissions"] + recording.TABLES["attempts"])
     conn.commit()
     conn.close()
     conn = recording.connect(db)
@@ -211,7 +213,6 @@ def test_correct_and_verified_writes_a_leaderboard_row(tmp_path) -> None:
     assert row["benchmark"] == KERNEL and row["optimizer"] == "noop"
     assert row["speedup"] == 2.0 and row["suspect"] == 0
     # the kernel's taxonomy was captured in the dimension table
-    assert _rows(db, "benchmarks")[0]["track"] == "loop_level_reasoning"
 
 
 def test_suspect_speedup_is_recorded_but_flagged(tmp_path) -> None:
@@ -506,7 +507,6 @@ def test_record_trajectory_writes_one_row_per_call(tmp_path) -> None:
     assert rows[0]["optimizer"] == "claude" and rows[0]["baseline"] == "c"
     assert rows[0]["benchmark"] == KERNEL
     # the kernel taxonomy was captured in the dimension table too
-    assert _rows(db, "benchmarks")[0]["track"] == "loop_level_reasoning"
 
 
 def test_record_trajectory_empty_is_noop(tmp_path) -> None:
@@ -613,31 +613,6 @@ def test_the_effective_compiler_is_recorded_on_the_call(tmp_path) -> None:
     db = str(tmp_path / "r.db")
     assert _call(db, "ok", compiler="llvm") == 1
     assert _rows(db, "calls")[0]["compiler"] == "llvm"
-
-
-def test_a_null_compiler_reads_as_the_default_family(tmp_path) -> None:
-    db = str(tmp_path / "r.db")
-    _call(db, "ok")
-    conn = recording.connect(db)
-    try:
-        expr = recording.compiler_expr(conn)
-        assert [r[0] for r in conn.execute(f"SELECT {expr} FROM calls")] == ["gcc"]
-    finally:
-        conn.close()
-
-
-def test_a_pre_compiler_column_database_still_reads_as_the_default(tmp_path) -> None:
-    db = str(tmp_path / "old.db")
-    conn = sqlite3.connect(db)
-    try:
-        conn.execute("CREATE TABLE calls (id INTEGER PRIMARY KEY, run_id TEXT, speedup REAL)")
-        conn.execute("INSERT INTO calls(run_id, speedup) VALUES ('old', 2.0)")
-        conn.commit()
-        assert not recording.column_exists(conn, "calls", "compiler")
-        expr = recording.compiler_expr(conn)
-        assert [tuple(r) for r in conn.execute(f"SELECT speedup, {expr} FROM calls")] == [(2.0, "gcc")]
-    finally:
-        conn.close()
 
 
 def test_a_grade_that_never_scored_is_a_score_error(tmp_path) -> None:
@@ -880,8 +855,9 @@ def test_a_grade_that_was_never_timed_records_no_reduction(tmp_path: pathlib.Pat
 def test_a_shard_recorded_before_a_column_existed_opens_into_the_fresh_schema(
     tmp_path: pathlib.Path, table: str, missing: tuple[str, ...]
 ) -> None:
-    """A judge on new code reopens the shards of a running campaign; they must gain the column at the
-    same position a fresh DB has it, and the rows already there must read NULL rather than a guess."""
+    """A judge on new code reopens the shards of a running campaign: they gain the column (appended)
+    and the rows already there read NULL rather than a guess. A migrated copy has exactly a fresh
+    DB's columns, in a fresh DB's order."""
     old = str(tmp_path / "old.db")
     recording.record(_correct_score(correct=False, build_ok=False), _sub(), Task(KERNEL, "restricted", "c"), path=old)
     _call(old, "ok", score=_correct_score())
@@ -894,20 +870,19 @@ def test_a_shard_recorded_before_a_column_existed_opens_into_the_fresh_schema(
     finally:
         conn.close()
 
+    recording.migrate(old, str(tmp_path / "migrated.db"))
     recording.connect(old).close()
-    fresh = recording.connect(str(tmp_path / "fresh.db"))
-    migrated = sqlite3.connect(old)
-    try:
-        assert list(migrated.execute(f"PRAGMA table_info({table})")) == list(
-            fresh.execute(f"PRAGMA table_info({table})")
-        )
-        (row,) = [
-            dict(zip(missing, values)) for values in migrated.execute(f"SELECT {', '.join(missing)} FROM {table}")
-        ]
-        assert row == dict.fromkeys(missing)
-    finally:
-        fresh.close()
-        migrated.close()
+    with (
+        contextlib.closing(recording.connect(str(tmp_path / "fresh.db"))) as fresh,
+        contextlib.closing(sqlite3.connect(old)) as reopened,
+        contextlib.closing(sqlite3.connect(tmp_path / "migrated.db")) as migrated,
+    ):
+        want = list(fresh.execute(f"PRAGMA table_info({table})"))
+        assert list(migrated.execute(f"PRAGMA table_info({table})")) == want
+        assert {r[1] for r in reopened.execute(f"PRAGMA table_info({table})")} == {r[1] for r in want}
+        for db in (reopened, migrated):
+            (row,) = [dict(zip(missing, values)) for values in db.execute(f"SELECT {', '.join(missing)} FROM {table}")]
+            assert row == dict.fromkeys(missing)
 
 
 def _cell(label, ratio, **kw):
@@ -985,7 +960,6 @@ def test_a_database_written_before_the_cell_table_still_opens_and_gains_it(tmp_p
     a row that is already there -- an additive table, never a rebuild of the recorded tables."""
     db = str(tmp_path / "old.db")
     conn = recording.connect(db)
-    conn.execute("INSERT INTO benchmarks(name) VALUES ('k')")  # submissions REFERENCES it
     conn.execute(
         "INSERT INTO submissions(run_id, ts, benchmark, preset, datatype, source_mode, baseline, speedup)"
         " VALUES ('r', 1, 'k', 'XL', 'float64', 'restricted', 'numpy', 3.5)"
