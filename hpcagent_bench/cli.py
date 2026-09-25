@@ -26,17 +26,18 @@ import sys
 import tempfile
 import time
 import weakref
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 import hpcagent_bench
 from hpcagent_bench import osinfo
 from hpcagent_bench.flags import Mode
 from hpcagent_bench.paths import PLOTS_DIR, RESULTS_DIR
 from hpcagent_bench.precision import DATATYPE_CHOICES, Precision
-from hpcagent_bench.spec import BenchSpec, KERNELS, PRESET_CHOICES, preset_arg, resolve_preset, selector_slug
+from hpcagent_bench.spec import KERNELS, PRESET_CHOICES, BenchSpec, preset_arg, resolve_preset, selector_slug
 
 
-def _resolve_frameworks(arg: str) -> List[str]:
+def _resolve_frameworks(arg: str) -> list[str]:
     """Resolve the ``--framework`` argument against the descriptor table:
     ``all`` -> every known framework; a comma-list (``dace,pluto,polly``) ->
     those frameworks, in the given order, in one run; else the single named one.
@@ -54,7 +55,7 @@ def _resolve_frameworks(arg: str) -> List[str]:
     return names
 
 
-def _resolve_precisions(arg: str, spec: BenchSpec) -> List[Precision]:
+def _resolve_precisions(arg: str, spec: BenchSpec) -> list[Precision]:
     """Resolve ``--precision``. ``all`` expands to the kernel's declared precisions; an
     explicit request (e.g. ``fp16``) is taken as given -- it OVERRIDES the declared set,
     not intersects it (the framework-level precision-skip in ``_run_cell`` still gates
@@ -63,7 +64,7 @@ def _resolve_precisions(arg: str, spec: BenchSpec) -> List[Precision]:
     return [Precision.from_str(p) for p in sources]
 
 
-def _resolve_variants(arg: str, spec: BenchSpec) -> List[str]:
+def _resolve_variants(arg: str, spec: BenchSpec) -> list[str]:
     """Resolve the ``--variant`` argument against the kernel's variants."""
     return sorted(spec.variants) if arg == "all" else [arg]
 
@@ -77,7 +78,7 @@ def _run_cell(
     repeat: int,
     timeout: float,
     validate: bool,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run one ``(kernel, framework, precision, variant)`` cell.
 
     Delegates to the legacy :class:`hpcagent_bench.frameworks.Test` for
@@ -96,20 +97,20 @@ def _run_cell(
     # report as a graceful load error (not a KeyError here).
     meta = FRAMEWORK_META.get(framework_name)
     if meta is not None and precision not in meta["precisions"]:
-        return dict(status="skip", reason=f"precision {precision.value} not supported")
+        return {"status": "skip", "reason": f"precision {precision.value} not supported"}
     try:
         legacy_fw = generate_framework(framework_name)
-    except Exception as exc:
-        return dict(status="error", reason=f"framework load failed: {exc}")
+    except Exception as exc:  # noqa: BLE001 -- the sweep records any failure as a row
+        return {"status": "error", "reason": f"framework load failed: {exc}"}
     try:
         np_fw = generate_framework("numpy")
-    except Exception as exc:
-        return dict(status="error", reason=f"numpy reference load failed: {exc}")
+    except Exception as exc:  # noqa: BLE001 -- the sweep records any failure as a row
+        return {"status": "error", "reason": f"numpy reference load failed: {exc}"}
 
     try:
         bench = Benchmark(short_name)
-    except Exception as exc:
-        return dict(status="error", reason=f"benchmark load failed: {exc}")
+    except Exception as exc:  # noqa: BLE001 -- the sweep records any failure as a row
+        return {"status": "error", "reason": f"benchmark load failed: {exc}"}
 
     # Pass the precision's canonical name through to the harness. get_data's
     # datatype table and Test.run's _TOL tolerance table both key on the
@@ -130,7 +131,7 @@ def _run_cell(
             from hpcagent_bench import fuzz
 
             n_iter = fuzz.iterations()
-            merged: Dict[str, Dict[str, Any]] = {}
+            merged: dict[str, dict[str, Any]] = {}
             for it in range(n_iter):
                 timings = test.run(
                     preset, validate, repeat, timeout=timeout, datatype=legacy_datatype, variant=var, fuzz_iteration=it
@@ -143,13 +144,13 @@ def _run_cell(
             for m in merged.values():
                 if not m["time_native"]:  # native is all-or-nothing
                     m["time_native"] = None
-            return dict(status="ok", fuzz_iterations=n_iter, impls=merged)
+            return {"status": "ok", "fuzz_iterations": n_iter, "impls": merged}
 
         timings = test.run(preset, validate, repeat, timeout=timeout, datatype=legacy_datatype, variant=var)
         # ``timings`` is per-impl; emit one row per (impl, series) so the
         # JSONL stays flat and downstream tools can group as they wish.
         if not timings:
-            return dict(status="ok")
+            return {"status": "ok"}
         impls = {
             impl_name: {
                 "time_python": t.get("python"),
@@ -158,9 +159,9 @@ def _run_cell(
             }
             for impl_name, t in timings.items()
         }
-        return dict(status="ok", impls=impls)
-    except Exception as exc:
-        return dict(status="error", reason=str(exc))
+        return {"status": "ok", "impls": impls}
+    except Exception as exc:  # noqa: BLE001 -- the sweep records any failure as a row
+        return {"status": "error", "reason": str(exc)}
 
 
 def cmd_run(args) -> int:
@@ -179,10 +180,13 @@ def cmd_run(args) -> int:
         for bench_name in benchmarks:
             try:
                 spec = BenchSpec.load(bench_name)
-            except Exception as exc:
-                row = dict(
-                    timestamp=int(time.time()), benchmark=bench_name, status="error", reason=f"spec load failed: {exc}"
-                )
+            except Exception as exc:  # noqa: BLE001 -- the sweep records any failure as a row
+                row = {
+                    "timestamp": int(time.time()),
+                    "benchmark": bench_name,
+                    "status": "error",
+                    "reason": f"spec load failed: {exc}",
+                }
                 f.write(json.dumps(row) + "\n")
                 rows += 1
                 continue
@@ -218,7 +222,7 @@ def cmd_run(args) -> int:
     return 0
 
 
-def _agent_registry() -> Dict[str, Any]:
+def _agent_registry() -> dict[str, Any]:
     """Available agents for the ``agent`` subcommand (auto-tuner implementations).
 
     An "agent" is any optimizer: an LLM backend OR a non-AI optimizer, all sharing the
@@ -241,7 +245,7 @@ def _csv_or_none(value: str):
     return None if value == "all" else [v for v in value.split(",") if v]
 
 
-def _resolve_prompt_variants(value: Optional[str]) -> List[Optional[str]]:
+def _resolve_prompt_variants(value: str | None) -> list[str | None]:
     """``--prompt-variant`` -> the list of variants to run, one run each.
 
     Variants are OPTIONAL. Unset -> ``[None]``: one run on the plain ``task.j2``, with no
@@ -279,7 +283,7 @@ def _residencies(value: str):
     return tokens
 
 
-def _agent_summary(rows) -> Tuple[int, float]:
+def _agent_summary(rows) -> tuple[int, float]:
     """Correct-count + geomean speedup for a finished agent run.
 
     Correctness is counted by ``row.correct`` -- the judge's numeric verdict -- NOT by
@@ -307,7 +311,7 @@ def write_agent_row(f, row) -> None:
     f.write(json.dumps(dumped) + "\n")
 
 
-def make_agent_builder(registry: Dict[str, Any], agent_name: str) -> Callable[[Optional[str]], Any]:
+def make_agent_builder(registry: dict[str, Any], agent_name: str) -> Callable[[str | None], Any]:
     """A ``base_url -> agent`` factory: OpenAI/vLLM agents take the endpoint URL, others ignore it.
     Shared by the plain (`hpcagent-bench agent`) and cluster (`hpcagent-bench launch`) static paths so both bind
     agents to endpoints identically.
@@ -331,7 +335,7 @@ def make_agent_builder(registry: Dict[str, Any], agent_name: str) -> Callable[[O
         else None
     )
 
-    def agent_builder(base_url: Optional[str]) -> Any:
+    def agent_builder(base_url: str | None) -> Any:
         if agent_name in ("openai", "vllm"):
             return cls(base_url=base_url)
         if builds is None:
@@ -348,7 +352,7 @@ def make_agent_builder(registry: Dict[str, Any], agent_name: str) -> Callable[[O
 
 
 def run_static_and_write(
-    agent_builder: Callable[[Optional[str]], Any],
+    agent_builder: Callable[[str | None], Any],
     tasks,
     out: pathlib.Path,
     vllm_urls,
@@ -416,14 +420,14 @@ def cmd_agent(args) -> int:
     args.preset = resolve_preset(args.preset)
     # One grading-param set, splatted into BOTH the pipeline and the serial path so the two
     # can never drift on which knobs the grade sees.
-    grade_params = dict(
-        preset=args.preset,
-        datatype=args.datatype,
-        repeat=args.repeat,
-        oracle=args.oracle,
-        baseline=args.baseline,
-        max_rounds=args.repair_rounds,
-    )
+    grade_params = {
+        "preset": args.preset,
+        "datatype": args.datatype,
+        "repeat": args.repeat,
+        "oracle": args.oracle,
+        "baseline": args.baseline,
+        "max_rounds": args.repair_rounds,
+    }
     tasks = expand_tasks(
         kernels=_csv_or_none(args.kernels),
         source_modes=(args.source_mode,),
@@ -580,14 +584,14 @@ def cmd_launch(args) -> int:
         raise SystemExit(f"unknown agent {args.agent!r}; choices: {sorted(registry)}")
     raw_preset = args.preset  # keep the 'fuzzed:<seed>' token so the judge re-applies the SAME seed
     args.preset = resolve_preset(args.preset)
-    grade_params = dict(
-        preset=args.preset,
-        datatype=args.datatype,
-        repeat=args.repeat,
-        oracle=args.oracle,
-        baseline=args.baseline,
-        max_rounds=args.repair_rounds,
-    )
+    grade_params = {
+        "preset": args.preset,
+        "datatype": args.datatype,
+        "repeat": args.repeat,
+        "oracle": args.oracle,
+        "baseline": args.baseline,
+        "max_rounds": args.repair_rounds,
+    }
     tasks = expand_tasks(
         kernels=_csv_or_none(args.kernels),
         source_modes=(args.source_mode,),
@@ -706,7 +710,7 @@ def _print_hint_chain(kernel: str, filename: str) -> int:
         print("hints are disabled (prompt.hints is empty)")
         return 0
     spec = BenchSpec.load(kernel)
-    found: Dict[pathlib.Path, List[str]] = {}
+    found: dict[pathlib.Path, list[str]] = {}
     for path in collect_hints(spec, filename):
         found.setdefault(path.parent, []).append(path.name)  # a dir can give both hints.j2 and hints_lvlN.j2
     for directory in hint_dirs(spec):
@@ -823,6 +827,7 @@ def cmd_export_hf(args) -> int:
     """
     import os
     import sys
+
     from hpcagent_bench import hf_export
 
     try:
@@ -888,7 +893,7 @@ def cmd_run_benchmark(args) -> int:
     return 1 if failed else 0
 
 
-def parse_shard(spec: str) -> Tuple[int, int]:
+def parse_shard(spec: str) -> tuple[int, int]:
     """Parse a ``"i/n"`` ``--shard`` token into ``(index, count)``."""
     index_str, total_str = spec.split("/")
     return int(index_str), int(total_str)
@@ -906,8 +911,8 @@ def cmd_run_framework(args) -> int:
     produced nothing and a caller must never tolerate that as if it were case 1.
     """
     if args.summarize:
-        from hpcagent_bench.support.collect.sweep import summarize_csv, NO_ROWS
         from hpcagent_bench.harness import recording
+        from hpcagent_bench.support.collect.sweep import NO_ROWS, summarize_csv
 
         # The rollup invocation is the end of the distributed run, so merge the per-rank DBs here
         # too: the CSVs and the DB would otherwise disagree about what the run measured.

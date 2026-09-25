@@ -27,8 +27,8 @@ exceed it (each offender and its size are printed).
 import argparse
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 DEFAULT_MAX_KB = 500
 #: Hand-written text gets its own, larger ceiling. What the hook is for is a BINARY blob -- a
