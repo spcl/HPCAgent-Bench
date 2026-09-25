@@ -273,6 +273,33 @@ def event_pair(timer: Timer) -> tuple[CudaEvent, CudaEvent]:
     return events
 
 
+def start_event_timer(timer: Timer) -> None:
+    """Stamp the host clock and record the start event of an event-timed measurement."""
+    timer.t0 = time.perf_counter()
+    event_pair(timer)[0].record()
+
+
+def cupy_event_timer(program: KernelImpl) -> Timer:
+    """A timer carrying a start/stop CuPy event pair for device-side timing."""
+    import cupy
+
+    timer = Timer(program)
+    timer.state = (cupy.cuda.Event(), cupy.cuda.Event())
+    return timer
+
+
+def stop_cupy_event_timer(timer: Timer) -> TimingResult:
+    """Record + sync the stop event; native = device-only kernel time, python = host wall-clock."""
+    import cupy
+
+    start_ev, stop_ev = event_pair(timer)
+    stop_ev.record()
+    stop_ev.synchronize()
+    python_t = (time.perf_counter() - timer.t0) * 1.0e3  # s -> ms
+    native_t = cupy.cuda.get_elapsed_time(start_ev, stop_ev)  # already ms
+    return TimingResult(python=python_t, native=native_t)
+
+
 class TorchCudaEventTiming:
     """Device-only GPU timing via torch CUDA events (Triton): overrides only the timer methods."""
 
@@ -285,8 +312,7 @@ class TorchCudaEventTiming:
         return timer
 
     def start_timer(self, timer: Timer) -> None:
-        timer.t0 = time.perf_counter()
-        event_pair(timer)[0].record()
+        start_event_timer(timer)
 
     def stop_timer(self, timer: Timer) -> TimingResult:
         """Record + sync the stop event; native = device-measured ms, python = host wall-clock."""
@@ -303,27 +329,24 @@ class TorchCudaEventTiming:
 #: One flavor's descriptor. A TypedDict rather than a dataclass because these entries are read by
 #: SUBSCRIPT across the repo (the CLI, preflight, the flavor tests) and :attr:`Framework.info` is one
 #: of them with ``simple_name`` added, so a record type here would rewrite every reader.
-FrameworkMeta = TypedDict(
-    "FrameworkMeta",
-    {
-        "base": str,
-        "sweep_deterministic": bool,
-        "full_name": str,
-        "postfix": str,
-        "arch": str,
-        "precisions": frozenset[Precision],
-        "pipelines": NotRequired[tuple[str, ...]],
-        "column": NotRequired[str],
-        "flavor": NotRequired[str],
-        "language": NotRequired[str],
-        "emit_language": NotRequired[str],
-        "compiler": NotRequired[str],
-        "flags": NotRequired[str],
-        "autopar_gate": NotRequired[str],
-        "transform": NotRequired[str],
-        "simple_name": NotRequired[str],
-    },
-)
+class FrameworkMeta(TypedDict):
+    base: str
+    sweep_deterministic: bool
+    full_name: str
+    postfix: str
+    arch: str
+    precisions: frozenset[Precision]
+    pipelines: NotRequired[tuple[str, ...]]
+    column: NotRequired[str]
+    flavor: NotRequired[str]
+    language: NotRequired[str]
+    emit_language: NotRequired[str]
+    compiler: NotRequired[str]
+    flags: NotRequired[str]
+    autopar_gate: NotRequired[str]
+    transform: NotRequired[str]
+    simple_name: NotRequired[str]
+
 
 #: Per-framework descriptors, in code (not data files). Each entry is one FLAVOR of a ``base`` backend
 #: (dace_cpu/dace_gpu share base "dace", cc/llvm/fortran/polly share "native"); the base selects the
@@ -349,7 +372,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "numba",
         "sweep_deterministic": False,
         "full_name": "Numba",
-        "postfix": "numba",
+        "postfix": "numba_np",
         "arch": "cpu",
         "precisions": IEEE_PRECISIONS,
     },
@@ -686,7 +709,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
             }
         ),
     },
-    # TVM: one base, two hardware flavors (distinct impl files -> distinct postfix).
+    # TVM: one base, two hardware flavors sharing the unified <kernel>_tvm.py (tvm_build.active_kernel).
     "tvm": {
         "base": "tvm",
         "sweep_deterministic": False,
@@ -699,7 +722,7 @@ FRAMEWORK_META: dict[str, FrameworkMeta] = {
         "base": "tvm",
         "sweep_deterministic": False,
         "full_name": "TVM (CPU)",
-        "postfix": "tvm_cpu",
+        "postfix": "tvm",
         "arch": "cpu",
         "precisions": ALL_PRECISIONS,
     },
@@ -782,6 +805,15 @@ def framework_class(fname: str) -> "type[Framework]":
     return base_framework_class(FRAMEWORK_META[fname]["base"])
 
 
+def load_impl(bench: Benchmark, postfix: str) -> KernelImpl:
+    """The kernel entry point ``func_name`` of ``bench``'s ``<module_name>_<postfix>.py``."""
+    module_str = bench.impl_module(postfix)
+    impl: KernelImpl | None = vars(importlib.import_module(module_str)).get(bench.info["func_name"])
+    if impl is None:
+        raise AttributeError(f"{module_str} defines no {bench.info['func_name']}")
+    return impl
+
+
 class Framework:
     """Base per-backend adapter with default implementations()/call_args()/timing hooks; used directly
     for the numpy flavor (:data:`FRAMEWORK_META`)."""
@@ -838,20 +870,7 @@ class Framework:
         """Returns the framework's implementations for ``bench``."""
 
         self.ensure_impls(bench)
-        relative = bench.info["relative_path"].replace("/", ".")
-        module_pypath = f"hpcagent_bench.benchmarks.{relative}.{bench.info['module_name']}"
-        postfix = self.info["postfix"]
-        module_str = f"{module_pypath}_{postfix}"
-        func_str = bench.info["func_name"]
-
-        try:
-            module = importlib.import_module(module_str)
-            impl: KernelImpl = vars(module)[func_str]
-        except Exception as e:
-            print("Failed to load the {r} {f} implementation.".format(r=self.info["full_name"], f=func_str))
-            raise e
-
-        return [(impl, "default")]
+        return [(load_impl(bench, self.info["postfix"]), "default")]
 
     # Frameworks customize behaviour by overriding the methods below.
 
@@ -997,18 +1016,9 @@ class Framework:
         return {"python": python_series, "native": native_series}
 
 
-def generate_framework(fname: str, save_strict: bool = False, load_strict: bool = False) -> Framework:
-    """Generates a framework object with the correct class (save/load_strict: dace_cpu/dace_gpu only)."""
-
-    cls = framework_class(fname)
-    if fname.startswith("dace"):
-        from hpcagent_bench.frameworks.dace_framework import DaceFramework
-
-        # Only DaceFramework takes the two strict flags, and only the dace flavors resolve to it.
-        if not issubclass(cls, DaceFramework):
-            raise TypeError(f"framework {fname!r} is named for dace but resolves to {cls.__name__}")
-        return cls(fname, save_strict, load_strict)
-    return cls(fname)
+def generate_framework(fname: str) -> Framework:
+    """The adapter object of the framework named ``fname``."""
+    return framework_class(fname)(fname)
 
 
 def native_column_languages() -> dict[str, tuple[str, str]]:

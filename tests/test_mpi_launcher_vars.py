@@ -83,8 +83,8 @@ def test_the_distributed_residency_keeps_its_launcher_variables(
     monkeypatch.setattr(sweep, "Benchmark", lambda *a, **k: None)
     monkeypatch.setattr(sweep, "Test", lambda *a, **k: type("T", (), {"run": lambda *_, **__: {}})())
 
-    sweep.run_one("k", [], "S", False, 1, 1.0, True, False, False, None, distributed=True)
+    sweep.run_one("k", [], "S", False, 1, 1.0, True, None, distributed=True)
     assert called == [], "an MPI rank had its launcher variables stripped"
 
-    sweep.run_one("k", [], "S", False, 1, 1.0, True, False, False, None)
+    sweep.run_one("k", [], "S", False, 1, 1.0, True, None)
     assert called == [True], "the single-node default did not strip"

@@ -43,8 +43,6 @@ _LAZY_EXPORTS: dict[str, str] = {
     "DACE_PIPELINES": "dace_framework",
     "DEFAULT_PIPELINES": "dace_framework",
     "PIPELINES_BY_NAME": "dace_framework",
-    "needed_pipelines": "dace_framework",
-    "SCORE_REPEAT": "dace_framework",
     "SdfgPipeline": "dace_framework",
     "TimedCompiledSDFG": "dace_framework",
     "TorchCudaEventTiming": "triton_framework",

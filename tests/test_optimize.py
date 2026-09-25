@@ -85,35 +85,6 @@ def test_tvm_and_triton_are_optimizers() -> None:
     assert TritonFramework.is_optimizer is True
 
 
-def test_dace_score_empty_series_raises_descriptive() -> None:
-    # An empty timing series (all reps failed / no samples) must surface as an
-    # explicit, descriptive failure -- select_fastest catches it and logs
-    # "scoring failed: <msg>" before dropping the variant -- not a cryptic
-    # IndexError from sorted([])[len//2] that gets silently swallowed.
-    from hpcagent_bench.frameworks.dace_framework import DaceFramework
-
-    class EmptyMeasureFramework(DaceFramework):
-        def __init__(self) -> None:
-            pass
-
-        def build_call(self, bench: object, variant: object, bdata: object) -> object:
-
-            class Plan:
-                run = staticmethod(lambda: None)
-                before_each = staticmethod(lambda: None)
-
-            return Plan()
-
-        def measure(self, **kw: object) -> dict[str, list[float] | None]:
-            return {"native": None, "python": []}
-
-    class Variant:
-        name = "autoopt"
-
-    with pytest.raises(RuntimeError, match="no timing samples"):
-        EmptyMeasureFramework().score(Variant(), None, None)
-
-
 def test_metaschedule_trials_delegates_to_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     from hpcagent_bench.frameworks.tvm_framework import metaschedule_trials
 
@@ -152,7 +123,7 @@ def one_variant_framework(
         def _build_sdfgs(self, program: object, ctx: object, bench: object) -> dict[str, object]:
             return {"canon_cpu": object()}
 
-        def compile_variants(self, sdfgs: dict[str, object], ctx: object) -> dict[str, object]:
+        def compile_variants(self, sdfgs: dict[str, object]) -> dict[str, object]:
             return {"canon_cpu": only}
 
         def reference_outputs(self, bench: object, bdata: object) -> list:
@@ -167,10 +138,6 @@ def one_variant_framework(
             ran.append(f"strict {name}")
             return rebuilt
 
-        def select_fastest(self, *a: object) -> object:
-            ran.append("select")
-            return only
-
     def kernel(a: dace.float64[4]) -> None:
         a[:] = 0.0
 
@@ -178,7 +145,7 @@ def one_variant_framework(
 
 
 def test_dace_optimize_verifies_a_single_variant_once_and_never_scores_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    """One compiled variant: nothing to select, so no SCORE_REPEAT timed runs -- one verify run, whose
+    """One compiled variant: nothing to select, so no timed scoring runs -- one verify run, whose
     only job is to say whether the strict-FP rebuild is needed."""
     ran: list[str] = []
     framework, program, only, _rebuilt = one_variant_framework(monkeypatch, True, ran)
