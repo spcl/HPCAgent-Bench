@@ -112,3 +112,14 @@ def test_writing_a_db_twice_replaces_it_rather_than_appending(
     dataset.write_db(frame, tmp_path / "x.db")
     dataset.write_db(frame, tmp_path / "x.db")
     assert len(dataset.load(tmp_path / "x.db")) == 1
+
+
+def test_a_row_on_a_kernel_outside_the_roster_is_dropped_and_counted(tmp_path: pathlib.Path) -> None:
+    """The SciComp waves served scicomp40 plus the 09-13 kernels; the campaigns name scicomp35, and a
+    figure counts an arm over every kernel its rows touch, so an atax row must not reach it."""
+    selection = campaigns.resolve("scicomp-focus40", root=tmp_path)
+    arm = "scicomp-perf-playbook-qwen38-plain"
+    live = pd.DataFrame([row("100", "gemm", arm=arm), row("101", "atax", arm=arm)])
+    frame, provenance = dataset.fuse(selection, live, pd.DataFrame())
+    assert list(frame["benchmark"]) == ["gemm"]
+    assert provenance.dropped_off_roster == 1

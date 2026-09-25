@@ -335,16 +335,20 @@ def test_budget_env_suffix_names_both_scales_when_they_diverge(
     assert result.stdout.strip() == f"[{want}]"
 
 
-def run_submit_arm_job_probe(tmp_path: pathlib.Path, extra_env: dict[str, str]) -> tuple[str, str]:
+def run_submit_arm_job_probe(
+    tmp_path: pathlib.Path, extra_env: dict[str, str], env_text: str = ""
+) -> tuple[str, str, list[str]]:
     """Source arm_nodes.sh + submit_common.sh, call submit_arm_job against a stub sbatch that
-    records its own argv, and return (sbatch's captured argv, submit_arm_job's own stdout)."""
+    records every call's argv, and return (the agent job's argv, submit_arm_job's own stdout line
+    for it, the argv of every other sbatch call)."""
     env_file = tmp_path / ".env.some-arm"
-    env_file.write_text("INFERENCE_NODES=2\nAGENT_NODES=1\nJUDGE_NODES=1\n")
-    captured = tmp_path / "sbatch_argv.txt"
+    env_file.write_text("INFERENCE_NODES=2\nAGENT_NODES=1\nJUDGE_NODES=1\n" + env_text)
+    calls = tmp_path / "sbatch-calls"
+    calls.mkdir()
     stub(
         tmp_path / "bin",
         "sbatch",
-        f'printf "%s\\n" "$@" > "{captured}"\nprintf "999000\\n"\n',
+        f'n=$(ls "{calls}" | wc -l); printf "%s\\n" "$@" > "{calls}/$n"\nprintf "99900$n\\n"\n',
     )
     stub_account(tmp_path / "bin")
     probe = tmp_path / "probe.sh"
@@ -360,7 +364,11 @@ def run_submit_arm_job_probe(tmp_path: pathlib.Path, extra_env: dict[str, str]) 
         [BASH, str(probe)], env=env, cwd=tmp_path, capture_output=True, text=True, timeout=10, check=False
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    return captured.read_text(), result.stdout
+    argvs = [(calls / str(n)).read_text() for n in range(len(list(calls.iterdir())))]
+    agent = [argv for argv in argvs if "beverin.sbatch" in argv.splitlines()]
+    assert len(agent) == 1, argvs
+    line = next(text for text in result.stdout.splitlines() if text.startswith("submitted some-arm"))
+    return agent[0], line, [argv for argv in argvs if argv not in agent]
 
 
 def test_hold_1_asks_sbatch_for_hold(tmp_path: pathlib.Path) -> None:
@@ -368,7 +376,7 @@ def test_hold_1_asks_sbatch_for_hold(tmp_path: pathlib.Path) -> None:
     lose to the scheduler if a node is free that instant -- both started RUNNING before the hold
     call reached them, on a live checkout the anti-cheat merge gate had not yet cleared. HOLD=1
     passes --hold to the SAME sbatch call that submits the job, so there is no gap to race."""
-    argv, stdout = run_submit_arm_job_probe(tmp_path, {"HOLD": "1"})
+    argv, stdout, _ = run_submit_arm_job_probe(tmp_path, {"HOLD": "1"})
     assert "--hold" in argv.splitlines()
     assert "HELD" in stdout
 
@@ -376,7 +384,7 @@ def test_hold_1_asks_sbatch_for_hold(tmp_path: pathlib.Path) -> None:
 def test_hold_unset_does_not_ask_sbatch_for_hold(tmp_path: pathlib.Path) -> None:
     """The default: every submit-*.sh call before 2026-09-19 never held, and must not start
     holding just because the knob now exists."""
-    argv, stdout = run_submit_arm_job_probe(tmp_path, {})
+    argv, stdout, _ = run_submit_arm_job_probe(tmp_path, {})
     assert "--hold" not in argv.splitlines()
     assert "HELD" not in stdout
 
@@ -386,13 +394,37 @@ def test_nice_asks_sbatch_for_that_nice_value(tmp_path: pathlib.Path) -> None:
     NICE=<n> must reach the SAME sbatch call as --nice=<n>. Before this, every family submitter that
     ends on submit_arm_job ignored NICE, so the only way to lower an arm's priority was a follow-up
     `scontrol update` racing the scheduler exactly as a follow-up hold did."""
-    argv, stdout = run_submit_arm_job_probe(tmp_path, {"NICE": "1000"})
+    argv, stdout, _ = run_submit_arm_job_probe(tmp_path, {"NICE": "1000"})
     assert "--nice=1000" in argv.splitlines()
     assert "nice 1000" in stdout
 
 
 def test_nice_unset_does_not_ask_sbatch_for_a_nice_value(tmp_path: pathlib.Path) -> None:
     """The default keeps every existing caller's ordinary priority."""
-    argv, stdout = run_submit_arm_job_probe(tmp_path, {})
+    argv, stdout, _ = run_submit_arm_job_probe(tmp_path, {})
     assert not any(arg.startswith("--nice") for arg in argv.splitlines())
     assert "nice" not in stdout
+
+
+def test_a_fast_grade_arm_chains_its_finalize_grade_on_the_agent_job(tmp_path: pathlib.Path) -> None:
+    """Finalize grading is a core step of fast-submit grading (2026-09-25 USER): every agent job an
+    arm submits gets its finalize_grade.sbatch job, afterany on it, at the regrade band's nice 0."""
+    _, _, others = run_submit_arm_job_probe(tmp_path, {"NICE": "1000"})
+    (finalize,) = [argv.splitlines() for argv in others]
+    assert finalize[-2:] == ["finalize_grade.sbatch", "999000"], finalize
+    assert "--dependency=afterany:999000" in finalize
+    assert "--nice=0" in finalize
+
+
+@pytest.mark.parametrize("value", ["1", "true", "on"])
+def test_an_arm_graded_final_in_the_job_chains_no_finalize_grade(tmp_path: pathlib.Path, value: str) -> None:
+    """grading.final_grade_on_submit: the slow-submit mode grades the final grade after /submit in
+    the job itself, so a finalize job would only grade it twice."""
+    _, _, others = run_submit_arm_job_probe(tmp_path, {}, f"HPCAGENT_BENCH_GRADING_FINAL_GRADE_ON_SUBMIT={value}\n")
+    assert others == []
+
+
+def test_finalize_grade_0_chains_no_finalize_grade(tmp_path: pathlib.Path) -> None:
+    """The ML scaling track's finalize grade is mlscale-grade.sbatch, not the per-cell one."""
+    _, _, others = run_submit_arm_job_probe(tmp_path, {"FINALIZE_GRADE": "0"})
+    assert others == []

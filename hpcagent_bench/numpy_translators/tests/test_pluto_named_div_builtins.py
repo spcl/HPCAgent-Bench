@@ -99,7 +99,7 @@ def test_prelude_defines_the_named_builtins_over_the_existing_helpers(name: str,
     """Guarded, because polycc prepends its own ``#define floord``/``ceild`` (POLYCC-004), and
     delegating rather than restating keeps one definition of the semantics."""
     assert (
-        f"#ifndef {name}\nstatic inline int64_t {name}(int64_t a, int64_t b) {{\n    return {helper}(a, b);"
+        f"#ifndef {name}\nstatic inline NPB_HD int64_t {name}(int64_t a, int64_t b) {{\n    return {helper}(a, b);"
         in _C_HEADER
     )
 

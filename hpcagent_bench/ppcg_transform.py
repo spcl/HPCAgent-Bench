@@ -31,6 +31,8 @@ import subprocess
 import tempfile
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+from numpyto_c.emit import NPB_HD_GUARD
+
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework, ToolMissing
 from hpcagent_bench.languages import LANG_EXT, gpu_backend
 from hpcagent_bench.pluto_normalize import normalize_ppcg_input
@@ -326,20 +328,22 @@ def cxx_compat(host: str, entry: str) -> str:
     return re.sub(rf"^(void\s+{re.escape(entry)}\s*\()", r'extern "C" \1', host, count=1, flags=re.MULTILINE)
 
 
-#: A translator prelude helper's definition head, ``static inline <ret> __npb_<name>(``; group 1 is
-#: the name. Its body runs to the matching close brace (see :func:`device_helpers`).
-PRELUDE_HELPER_RE = re.compile(r"^static inline [^(\n]*?\b(__npb_\w+)\(", re.MULTILINE)
+#: A translator prelude helper's definition head, ``static inline NPB_HD <ret> <name>(``: exactly the
+#: helpers the translator marked host+device (``__npb_mod_i``, ``python_fmod``, ...); group 1 is the
+#: name. Its body runs to the matching close brace (see :func:`device_helpers`).
+PRELUDE_HELPER_RE = re.compile(r"^static inline NPB_HD [^(\n]*?\b(\w+)\(", re.MULTILINE)
 
 
 def device_helpers(prelude: str, kernel_src: str) -> str:
-    """``__device__`` copies of the translator's prelude helpers that ``kernel_src`` calls.
+    """The translator's prelude helpers that ``kernel_src`` calls, for ppcg's device half.
 
     ppcg moves a scop statement into the device half verbatim, including a call the translator made
-    to one of its own ``static inline __npb_*`` helpers (``python_mod`` resolves to ``__npb_mod_i``).
-    That definition stays in the HOST half, so the device half does not build ("use of undeclared
-    identifier '__npb_mod_i'"). The definition is copied from the scop's own prelude, never
-    restated, and marked ``__device__`` (same spelling for CUDA and HIP); helpers it calls come too.
-    ``""`` when the kernel calls none.
+    to one of its own ``static inline NPB_HD`` helpers (``python_mod`` resolves to ``__npb_mod_i``).
+    The prelude stays in the HOST half, so the device half has no definition to call ("use of
+    undeclared identifier '__npb_mod_i'"). The translator already declares every helper host+device
+    (``NPB_HD``, see ``numpyto_c.emit.NPB_HD_GUARD``); ppcg's split into two translation units is the
+    only gap, so the definitions are copied verbatim from the scop's own prelude, callees first, behind
+    the same ``NPB_HD`` guard. ``""`` when the kernel calls none.
     """
     bodies: Dict[str, str] = {}
     for match in PRELUDE_HELPER_RE.finditer(prelude):
@@ -351,15 +355,31 @@ def device_helpers(prelude: str, kernel_src: str) -> str:
                 break
         bodies[match.group(1)] = prelude[match.start() : end + 1]
     wanted: List[str] = []
-    pending = [n for n in re.findall(r"\b(__npb_\w+)\s*\(", kernel_src) if n in bodies]
+    pending = [n for n in re.findall(r"\b(\w+)\s*\(", kernel_src) if n in bodies]
     while pending:
         name = pending.pop()
         if name in wanted:
             continue
         wanted.append(name)
-        pending.extend(n for n in re.findall(r"\b(__npb_\w+)\s*\(", bodies[name]) if n in bodies and n != name)
+        pending.extend(n for n in re.findall(r"\b(\w+)\s*\(", bodies[name]) if n in bodies and n != name)
+    if not wanted:
+        return ""
     # Callees first: a helper must be declared before a helper that calls it.
-    return "".join(f"__device__ {bodies[n]}\n" for n in reversed(wanted))
+    return NPB_HD_GUARD + "".join(f"{bodies[n]}\n" for n in reversed(wanted))
+
+
+def with_device_helpers(prelude: str, kernel_src: str) -> str:
+    """ppcg's device half with the :func:`device_helpers` it calls, unchanged when it calls none.
+
+    Inserted after ppcg's own first line, the ``#include`` of the shared ``_kernel.hu`` (which pulls
+    in the GPU runtime that defines ``__host__``/``__device__``), with the two system headers the
+    helpers' types and libm calls need.
+    """
+    helpers = device_helpers(prelude, kernel_src)
+    if not helpers:
+        return kernel_src
+    head, rest = kernel_src.split("\n", 1)
+    return f"{head}\n#include <stdint.h>\n#include <math.h>\n{helpers}{rest}"
 
 
 def entry_symbol(scop: pathlib.Path) -> str:
@@ -444,12 +464,7 @@ def run_ppcg(
                 host_cu.write_text(cxx_compat(host_cu.read_text(), entry))
             kernel_cu = pathlib.Path(scratch) / f"{scop.stem}_kernel.cu"
             if kernel_cu.is_file():
-                kernel_src = kernel_cu.read_text()
-                helpers = device_helpers(readable.read_text(), kernel_src)
-                if helpers:
-                    # After ppcg's own first line, the ``#include`` of the shared header.
-                    head, rest = kernel_src.split("\n", 1)
-                    kernel_cu.write_text(f"{head}\n#include <stdint.h>\n#include <math.h>\n{helpers}{rest}")
+                kernel_cu.write_text(with_device_helpers(readable.read_text(), kernel_cu.read_text()))
             if vendor == "hip":
                 hipify(pathlib.Path(scratch), scop.stem)
                 host_hip = pathlib.Path(scratch) / f"{scop.stem}_host.hip"

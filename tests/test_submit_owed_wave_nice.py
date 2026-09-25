@@ -31,7 +31,7 @@ if "--preflight" in sys.argv:
 out = pathlib.Path(sys.argv[sys.argv.index("--out") + 1])
 out.parent.joinpath("planner-call.json").write_text(json.dumps({"argv": sys.argv[1:], "pythonpath": os.environ.get("PYTHONPATH", "")}))
 env = out / ".env.owed-harness20-qwen38-openhands-w1"
-env.write_text("CAMPAIGN_ARM=owed\\n")
+env.write_text("CAMPAIGN_ARM=owed\\n" + os.environ.get("STUB_WAVE_ENV", ""))
 pathlib.Path(sys.argv[sys.argv.index("--plan") + 1]).write_text(f"owed-harness20-qwen38-openhands-w1\\t{env}\\t3\\t11:00:00\\n")
 """
 
@@ -50,8 +50,8 @@ def submit(
     associations: str = "a-stub",
     **knobs: str,
 ) -> list[str]:
-    """The sbatch argv one SUBMIT=1 run of the launcher sends, with ``knobs`` in its environment and
-    ``associations`` (one per line) as sacctmgr's answer."""
+    """The wave's sbatch argv one SUBMIT=1 run of the launcher sends (its first sbatch call), with
+    ``knobs`` in its environment and ``associations`` (one per line) as sacctmgr's answer."""
     experiments = tmp_path / "experiments"
     experiments.mkdir(exist_ok=True)
     for name in ("submit-owed-wave.sh", "submit_common.sh", "arm_nodes.sh", "env_layers.sh"):
@@ -60,7 +60,11 @@ def submit(
     (tmp_path / "scripts" / "cscs").mkdir(parents=True, exist_ok=True)
     shutil.copy2(REPO / "scripts" / "cscs" / "account_env.sh", tmp_path / "scripts" / "cscs" / "account_env.sh")
     stub(tmp_path / "bin", "sacctmgr", f"printf '{associations}'")  # a made-up name
-    stub(tmp_path / "bin", "sbatch", 'printf \'%s\\n\' "$@" > "${STUB_MARKERS}/sbatch-argv.txt"; echo 999999')
+    stub(
+        tmp_path / "bin",
+        "sbatch",
+        'n=$(ls "${STUB_MARKERS}" | grep -c "^sbatch-argv"); printf \'%s\\n\' "$@" > "${STUB_MARKERS}/sbatch-argv-$n.txt"; echo 99999$n',
+    )
     env = {
         "PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin",
         "USER": "tester",
@@ -80,8 +84,14 @@ def submit(
         check=False,
     )
     assert done.returncode == expect_rc, done.stderr
-    argv = tmp_path / "sbatch-argv.txt"
+    argv = tmp_path / "sbatch-argv-0.txt"
     return argv.read_text(encoding="utf-8").splitlines() if argv.exists() else []
+
+
+def later_calls(tmp_path: pathlib.Path) -> list[list[str]]:
+    """The argv of every sbatch call after the wave's own."""
+    calls = sorted(tmp_path.glob("sbatch-argv-*.txt"), key=lambda path: int(path.stem.rsplit("-", 1)[1]))
+    return [path.read_text(encoding="utf-8").splitlines() for path in calls[1:]]
 
 
 def planner_call(tmp_path: pathlib.Path) -> dict[str, object]:
@@ -162,3 +172,22 @@ def test_a_submission_with_no_account_resolved_submits_nothing(tmp_path: pathlib
     dry = tmp_path / "dry"
     dry.mkdir()
     submit(dry, submit_flag="0", associations="")
+
+
+def test_each_wave_chains_its_finalize_grade(tmp_path: pathlib.Path) -> None:
+    """An owed wave grades fast at /submit; its final grade is the finalize job chained on it."""
+    submit(tmp_path, PRIORITY="scicomp")
+    (finalize,) = later_calls(tmp_path)
+    assert finalize[-2:] == ["finalize_grade.sbatch", "999990"], finalize
+    assert "--dependency=afterany:999990" in finalize
+    assert "--nice=0" in finalize, "the final grade queues ahead of every agent family"
+
+
+def test_a_wave_graded_final_in_the_job_chains_no_finalize_grade(tmp_path: pathlib.Path) -> None:
+    submit(tmp_path, STUB_WAVE_ENV="HPCAGENT_BENCH_GRADING_FINAL_GRADE_ON_SUBMIT=1\n")
+    assert later_calls(tmp_path) == []
+
+
+def test_a_dry_run_submits_no_finalize_grade(tmp_path: pathlib.Path) -> None:
+    submit(tmp_path, submit_flag="0")
+    assert list(tmp_path.glob("sbatch-argv-*.txt")) == []
