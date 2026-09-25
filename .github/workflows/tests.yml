@@ -194,10 +194,10 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 30
         # test_dace_numeric_agreement.py has no integration test, but collecting it emits the whole
-        # corpus at import time; dace-numeric runs it.
+        # corpus at import time; dace-numeric runs it. tests/translators/ is the `translators` job's.
         run: |
           python -m pytest -p no:cacheprovider -rfEs --timeout=1500 --timeout-method=thread --durations=25 \
-            --ignore=tests/test_dace_numeric_agreement.py \
+            --ignore=tests/test_dace_numeric_agreement.py --ignore=tests/translators \
             -m integration tests/
 
       - name: Save the from-source OpenBLAS
