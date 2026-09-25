@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Shared pytest fixtures for the agent-bench tests."""
+"""Shared pytest fixtures and hooks for the whole suite (tests/ and tests/translators/)."""
 
 import dataclasses
 import importlib.util
@@ -14,6 +14,11 @@ from http.server import ThreadingHTTPServer
 from types import MappingProxyType
 
 import pytest
+
+from tests.dace_build_isolation import pin_per_worker_dace_build_folder
+
+# Before any module that imports dace: the per-worker build folder is a process-wide pin.
+pin_per_worker_dace_build_folder()
 
 #: Where a standalone script may live. Scripts move between these (plot_score_change.py and
 #: ablation_stats.py both landed in statistics/), and a test that PINS one directory does not fail
@@ -180,7 +185,13 @@ def named_groups(markexpr: str) -> frozenset[str]:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Deselect every hardware test whose group the ``-m`` expression does not name."""
+    """Deselect every hardware test whose group the ``-m`` expression does not name, and skip every
+    ``site`` test unless HPCAGENT_BENCH_SITE_TESTS=1."""
+    if os.environ.get("HPCAGENT_BENCH_SITE_TESTS") != "1":
+        off_site = pytest.mark.skip(reason="site: HPCAGENT_BENCH_SITE_TESTS is not 1")
+        for item in items:
+            if item.get_closest_marker("site") is not None:
+                item.add_marker(off_site)
     named = named_groups(str(config.getoption("markexpr") or ""))
     dropped = [
         item
@@ -214,6 +225,11 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "site: needs the cluster's own login node (its registered EDFs, Slurm); runs only with "
+        "HPCAGENT_BENCH_SITE_TESTS=1 (set by the site layer, docs/configuration.md).",
+    )
     for group, hardware in HARDWARE_GROUPS.items():
         config.addinivalue_line(
             "markers",
