@@ -50,7 +50,9 @@ answers (`PROMOTING=`).
 fused jobs, one per (experiment, model, harness), and is a dry run unless `SUBMIT=1`. Each owed arm
 is rebuilt from its newest launch env with the `-clean` arm name and the class budget; a plan that
 would change an arm's contract (any key but budget, identity, images and the model's serving keys)
-is refused. Arms with a queued or running job are skipped, so planning twice never double-submits;
+is refused. Every rerun, a budget repeat included, runs in its arm's own submission mode
+(`AGENT_SINGLE_SUBMISSION`, `AGENT_SUBMISSION_POLICY_FILE` as the arm's own submitter launched it),
+so an open-mode arm's repeat stays open and its rows pool with the arm's under one mode. Arms with a queued or running job are skipped, so planning twice never double-submits;
 when `squeue` does not answer, the dry run still plans and `SUBMIT=1` refuses.
 
 ```bash
