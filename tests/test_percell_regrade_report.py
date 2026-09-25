@@ -121,11 +121,10 @@ def test_reading_the_rows_closes_every_connection(tmp_path: pathlib.Path) -> Non
 
 
 def test_best_of_v2_and_v3_rows_carry_one_measurement_stamp() -> None:
-    """USER 2026-09-24: v2 and v3 are one baseline family, so their rows pool in the shift report;
-    USER 2026-09-25: so do best-of-v1 over c-autopar+c+numba and single-v1:vendored. Any other rule
-    stays apart."""
+    """v2 and v3 are one baseline family, so their rows pool in the shift report, and so does a
+    vendored reference; best-of-v1's c-autopar denominator and any other rule stay apart."""
     v2 = report.measurement_stamp(row(baseline_policy="best-of-v2:c+numba"))
     assert report.measurement_stamp(row(baseline_policy="best-of-v3:numba+c")) == v2
-    assert report.measurement_stamp(row(baseline_policy="best-of-v1:c-autopar+c+numba")) == v2
+    assert report.measurement_stamp(row(baseline_policy="best-of-v1:c-autopar+c+numba")) != v2
     assert report.measurement_stamp(row(baseline_policy="single-v1:vendored")) == v2
     assert report.measurement_stamp(row(baseline_policy="best-of-v1:c-autopar+c")) != v2
