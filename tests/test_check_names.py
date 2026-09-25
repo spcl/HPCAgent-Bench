@@ -14,7 +14,7 @@ import pytest
 
 from hpcagent_bench import paths
 
-SPEC = importlib.util.spec_from_file_location("check_names", paths.ROOT / "scripts" / "check_names.py")
+SPEC = importlib.util.spec_from_file_location("check_names", paths.ROOT / "scripts" / "checks" / "check_names.py")
 check_names = importlib.util.module_from_spec(SPEC)
 sys.modules["check_names"] = check_names
 SPEC.loader.exec_module(check_names)
@@ -140,7 +140,7 @@ def test_diff_mode_flags_only_the_newly_added_leading_underscore_line(git_repo: 
     )
     run_git(["add", "mod.py"], git_repo)
     result = subprocess.run(
-        [sys.executable, str(paths.ROOT / "scripts" / "check_names.py"), "mod.py"],
+        [sys.executable, str(paths.ROOT / "scripts" / "checks" / "check_names.py"), "mod.py"],
         cwd=git_repo,
         capture_output=True,
         text=True,
@@ -155,7 +155,7 @@ def test_diff_mode_flags_the_module_name_only_for_a_newly_added_file(git_repo: p
     (git_repo / "_brand_new.py").write_text("x = 1\n")
     run_git(["add", "_brand_new.py"], git_repo)
     result = subprocess.run(
-        [sys.executable, str(paths.ROOT / "scripts" / "check_names.py"), "_brand_new.py"],
+        [sys.executable, str(paths.ROOT / "scripts" / "checks" / "check_names.py"), "_brand_new.py"],
         cwd=git_repo,
         capture_output=True,
         text=True,
@@ -167,7 +167,7 @@ def test_diff_mode_flags_the_module_name_only_for_a_newly_added_file(git_repo: p
 
 def test_diff_mode_passes_on_a_no_op_commit(git_repo: pathlib.Path) -> None:
     result = subprocess.run(
-        [sys.executable, str(paths.ROOT / "scripts" / "check_names.py"), "mod.py"],
+        [sys.executable, str(paths.ROOT / "scripts" / "checks" / "check_names.py"), "mod.py"],
         cwd=git_repo,
         capture_output=True,
         text=True,
@@ -179,7 +179,7 @@ def test_diff_mode_passes_on_a_no_op_commit(git_repo: pathlib.Path) -> None:
 
 def test_all_mode_catches_the_preexisting_leading_underscore_name(git_repo: pathlib.Path) -> None:
     result = subprocess.run(
-        [sys.executable, str(paths.ROOT / "scripts" / "check_names.py"), "--all", "mod.py"],
+        [sys.executable, str(paths.ROOT / "scripts" / "checks" / "check_names.py"), "--all", "mod.py"],
         cwd=git_repo,
         capture_output=True,
         text=True,

@@ -37,7 +37,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: ``[tool.ruff] line-length`` -- passed explicitly so a run from another directory cannot pick up
 #: a different project's configuration.
@@ -256,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"format-check: {len(offenders)} of {n_checked} changed source file(s) need formatting:\n")
     for rel, tool in offenders:
         print(f"  [{tool}] {rel}")
-    print("\nFix with:  python scripts/check_format.py --fix")
+    print("\nFix with:  python scripts/checks/check_format.py --fix")
     return 1
 
 

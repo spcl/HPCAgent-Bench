@@ -43,7 +43,7 @@ GUARD = "#SBATCH --no-requeue"
 DIRECTIVE = re.compile(r"^#SBATCH\s+--")
 
 #: A shebang naming a shell -- narrows the whole-tree scan to files that are actually RUN, the same
-#: signal ``scripts/check_core_dumps.py`` (``SHELL_SHEBANG``) uses for the identical question.
+#: signal ``scripts/checks/check_core_dumps.py`` (``SHELL_SHEBANG``) uses for the identical question.
 SHEBANG = re.compile(rb"^#!.*\b(?:ba|da|k|z|a)?sh\b")
 
 PRESET_SWEEP = REPO / "scripts" / "preset_sweep.py"
@@ -51,7 +51,7 @@ PRESET_SWEEP = REPO / "scripts" / "preset_sweep.py"
 
 def tracked(*globs: str) -> list[pathlib.Path]:
     """Tracked repo paths matching ``globs`` (all tracked files with none given), as absolute
-    paths -- mirrors ``scripts/check_core_dumps.py``'s helper of the same name and purpose."""
+    paths -- mirrors ``scripts/checks/check_core_dumps.py``'s helper of the same name and purpose."""
     out = subprocess.run(
         ["git", "-C", str(REPO), "ls-files", *globs], capture_output=True, text=True, check=True
     ).stdout.split()

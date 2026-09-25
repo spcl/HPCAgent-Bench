@@ -34,7 +34,7 @@ Three rules, because each one alone has been escaped:
 Python processes are covered from the other side by :mod:`hpcagent_bench.core_dumps`, which drops
 the limit at package import -- that is what catches an ad-hoc script outside the repo.
 
-    python scripts/check_core_dumps.py [--fix] [paths...]
+    python scripts/checks/check_core_dumps.py [--fix] [paths...]
 """
 
 import argparse
@@ -70,7 +70,7 @@ MARKER = "# core-dumps-ok:"
 
 
 def repo_root() -> pathlib.Path:
-    return pathlib.Path(__file__).resolve().parents[1]
+    return pathlib.Path(__file__).resolve().parents[2]
 
 
 def display(path: pathlib.Path) -> str:
@@ -187,7 +187,11 @@ def main() -> int:
     emitted = [p for p in emitters(args.paths) if GUARD not in p.read_text(encoding="utf-8", errors="ignore")]
 
     if offenders:
-        report("shell script(s) do not disable core dumps", offenders, "Run: python scripts/check_core_dumps.py --fix")
+        report(
+            "shell script(s) do not disable core dumps",
+            offenders,
+            "Run: python scripts/checks/check_core_dumps.py --fix",
+        )
     if rearmed:
         report(
             "script(s) re-enable core dumps",

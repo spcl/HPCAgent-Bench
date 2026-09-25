@@ -208,7 +208,7 @@ exclude_also = [
     "if __name__ == .__main__.:",
 ]
 
-# scripts/check_format.py routes every .py to ruff (pre-commit and CI call it).
+# scripts/checks/check_format.py routes every .py to ruff (pre-commit and CI call it).
 [tool.ruff]
 line-length = 120
 target-version = "py312"

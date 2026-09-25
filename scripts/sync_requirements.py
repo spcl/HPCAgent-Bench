@@ -21,7 +21,7 @@ import sys
 import tomllib
 from collections.abc import Sequence
 
-#: This script's OWN checkout, like scripts/check_format.py. Anchoring on the installed
+#: This script's OWN checkout, like scripts/checks/check_format.py. Anchoring on the installed
 #: ``hpcagent_bench`` instead read pyproject from -- and WROTE the generated files into -- whichever
 #: tree pip has an editable install of, which is a different checkout the moment there are two.
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]

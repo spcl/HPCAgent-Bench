@@ -152,7 +152,7 @@ against the images named in `containers/cluster/ce-images/images.env`.
   `core_<host>_<pid>` file into the process's working directory. It is not always a stub: a
   segfaulting dace parse on the login node wrote 17.5 GB and 4 GB in one session. Slurm propagates
   the limit to job steps, so setting it once at the top of the batch script is enough. Every
-  `.sbatch` AND `.sh` in this repo carries it, enforced by `scripts/check_core_dumps.py`; a
+  `.sbatch` AND `.sh` in this repo carries it, enforced by `scripts/checks/check_core_dumps.py`; a
   deliberate dump needs a same-line `# core-dumps-ok: <reason>`.
 
 ### The CPU trap: set `--cpus-per-task` explicitly

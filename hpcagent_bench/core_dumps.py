@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Drop this process's core-dump limit -- the python-side half of the ``ulimit -c 0`` rule.
 
-``scripts/check_core_dumps.py`` puts ``ulimit -c 0`` in every shell entry point this repo owns,
+``scripts/checks/check_core_dumps.py`` puts ``ulimit -c 0`` in every shell entry point this repo owns,
 and anything those launch inherits it. Nothing reaches a script a human writes by hand outside the
 checkout, and a segfaulting interpreter there dumps its whole address space.
 

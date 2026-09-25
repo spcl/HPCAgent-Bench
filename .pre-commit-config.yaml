@@ -1,10 +1,10 @@
 # Pre-commit formatting for HPCAgent-Bench (column limit 120).
 #
 #   one-time:   pip install pre-commit && pre-commit install
-#   all files:  pre-commit run --all-files   (== python scripts/check_format.py --fix --all)
+#   all files:  pre-commit run --all-files   (== python scripts/checks/check_format.py --fix --all)
 #   on commit:  runs automatically over staged files
 #
-# The single hook delegates to scripts/check_format.py --fix -- the SAME script
+# The single hook delegates to scripts/checks/check_format.py --fix -- the SAME script
 # the CI `format-check` job runs in check mode -- so local and CI share one
 # routing table (ruff format for .py, clang-format for C/C++, fprettify for Fortran,
 # all at 120 cols) and one skip policy (*_generated.*, plus the NATIVE references under
@@ -16,7 +16,7 @@ repos:
     hooks:
       - id: hpcagent_bench-format
         name: format (ruff / clang-format / fprettify @ 120 cols)
-        entry: python scripts/check_format.py --fix
+        entry: python scripts/checks/check_format.py --fix
         language: system
         require_serial: true
         # Extensions check_format can route; the skip policy lives in that script.
@@ -28,41 +28,41 @@ repos:
         # --fix ADDS the header (as the first content line, after any shebang) rather than only
         # failing -- the same auto-fix contract as the format hook. ruff leaves the header
         # byte-for-byte (locked by tests/test_header_hook.py), so the two fixers never fight.
-        entry: bash scripts/run_hook.sh scripts/check_headers.py --fix
+        entry: bash scripts/checks/run_hook.sh scripts/checks/check_headers.py --fix
         language: system
         require_serial: true
         files: '\.py$'
       # Reject an oversized staged file: 500 KiB for a binary blob (datasets / dumps), 1 MiB for source.
       - id: hpcagent_bench-large-files
         name: block oversized files (500 KiB binary / 1 MiB text)
-        entry: python scripts/check_large_files.py
+        entry: python scripts/checks/check_large_files.py
         language: system
       # The gate at the end of an image Dockerfile is python in a heredoc, so no python hook sees
       # it and a name typed once and never bound costs the whole build (620855, 43 minutes).
       - id: hpcagent_bench-dockerfile-python
         name: no unbound names in embedded Dockerfile python
-        entry: python scripts/check_dockerfile_python.py
+        entry: python scripts/checks/check_dockerfile_python.py
         language: system
         files: '^containers/cluster/ce-images/[^/]+/Dockerfile$'
       # A kernel may not write through numpy's out= keyword: numba rejects it, pythran accepts
       # it and silently does nothing. Write the store as a store -- X[:] = np.f(a, b).
       - id: hpcagent_bench-no-out-kwarg
         name: no numpy out= in kernel sources
-        entry: bash scripts/run_hook.sh scripts/check_no_out_kwarg.py
+        entry: bash scripts/checks/run_hook.sh scripts/checks/check_no_out_kwarg.py
         language: system
         files: '^hpcagent_bench/benchmarks/.*\.py$'
       # ``.astype(dt, copy=False)`` may return the operand ITSELF when the dtype already
       # matches; every backend materialises instead, so the two disagree on aliasing.
       - id: hpcagent_bench-no-astype-copy
         name: no astype(copy=) in kernel sources
-        entry: bash scripts/run_hook.sh scripts/check_no_astype_copy.py
+        entry: bash scripts/checks/run_hook.sh scripts/checks/check_no_astype_copy.py
         language: system
         files: '^hpcagent_bench/benchmarks/.*_numpy\.py$'
       # Co-located kernel reference sources must be canonically named <stem>_reference.<ext>
       # (the prompt glob + test_<stem>_reference.py both key on it); ban _original/_orig/_golden/...
       - id: hpcagent_bench-reference-naming
         name: canonical <stem>_reference.<ext> reference sources
-        entry: bash scripts/run_hook.sh scripts/check_reference_naming.py
+        entry: bash scripts/checks/run_hook.sh scripts/checks/check_reference_naming.py
         language: system
         files: '^hpcagent_bench/benchmarks/.*\.([cC]|cc|cpp|cxx|hpp|[hH]|py|[fF]|[fF]90|cu)$'
       # Repo-wide YAML house style (CONTRIBUTING.md "YAML house style"): '#' header, 2-space
@@ -85,7 +85,7 @@ repos:
       # unless the line says why with `# core-dumps-ok: <reason>`.
       - id: hpcagent_bench-core-dumps
         name: shell entry points disable core dumps (ulimit -c 0)
-        entry: python scripts/check_core_dumps.py --fix
+        entry: python scripts/checks/check_core_dumps.py --fix
         language: system
         require_serial: true
         # NO `files` filter on purpose: the script owns the scope, because the scope is not a
@@ -100,7 +100,7 @@ repos:
       # "matmul_gelu_softmax" by accident).
       - id: hpcagent_bench-no-corpus-leak
         name: no benchmark kernel names in prompt material
-        entry: python scripts/check_no_corpus_leak.py
+        entry: python scripts/checks/check_no_corpus_leak.py
         language: system
         files: '^(hpcagent_bench/skills/.*/SKILL\.md|hpcagent_bench/benchmarks/hints.*\.j2|hpcagent_bench/harness/prompts/.*\.j2|containers/agent/.*\.md)$'
       # Every co-located kernel manifest must satisfy the schema hpcagent_bench.spec.BenchSpec
@@ -109,7 +109,7 @@ repos:
       # re-declared here), so a broken manifest fails the commit instead.
       - id: hpcagent_bench-manifest-structure
         name: benchmark manifest structure (hpcagent_bench.spec.BenchSpec schema)
-        entry: bash scripts/run_hook.sh scripts/check_manifest_structure.py
+        entry: bash scripts/checks/run_hook.sh scripts/checks/check_manifest_structure.py
         language: system
         files: '^hpcagent_bench/benchmarks/.*\.yaml$'
       # No leading-underscore module/variable/parameter names, no `import x as x` (redundant
@@ -117,6 +117,6 @@ repos:
       # needed) checks only lines this commit adds, so pre-existing `_private` code is untouched.
       - id: hpcagent_bench-no-leading-underscore-names
         name: no leading-underscore names / redundant import aliases (added lines)
-        entry: python scripts/check_names.py
+        entry: python scripts/checks/check_names.py
         language: system
         files: '\.py$'

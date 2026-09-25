@@ -82,7 +82,7 @@ def main() -> int:
     parser.add_argument("files", nargs="*", help="Dockerfiles to check; default is every image Dockerfile")
     args = parser.parse_args()
 
-    root = pathlib.Path(__file__).resolve().parents[1]
+    root = pathlib.Path(__file__).resolve().parents[2]
     paths = [pathlib.Path(f) for f in args.files] or sorted(root.glob("containers/cluster/ce-images/*/Dockerfile"))
     paths = [p for p in paths if p.name == "Dockerfile"]
     if not paths:

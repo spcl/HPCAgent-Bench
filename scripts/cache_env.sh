@@ -46,7 +46,7 @@ fi
 # fires when HPCAGENT_BENCH_REPO is itself set: a bare `. cache_env.sh` with neither var configured
 # still aborts here rather than landing caches under $HOME or /tmp where no later job would look --
 # a container-run pytest suite (scripts/run_tests.sh --container) is the case this exists for. A
-# caller with no scratch AND no repo (the pre-commit hooks, via scripts/run_hook.sh) passes
+# caller with no scratch AND no repo (the pre-commit hooks, via scripts/checks/run_hook.sh) passes
 # JIT_CACHE_ROOT directly instead.
 if [[ -z "${JIT_CACHE_ROOT:-}" ]]; then
     if [[ -n "${SCRATCH:-}" ]]; then

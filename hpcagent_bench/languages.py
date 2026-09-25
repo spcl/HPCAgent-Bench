@@ -1158,7 +1158,7 @@ def resolve_library_dir(soname: str) -> str | None:
                 return directory
     # ldconfig lives in /sbin, which is NOT on a non-root user's PATH on every distro -- the
     # beverin login node raises FileNotFoundError here, and an unguarded spawn turns "one more
-    # place to look" into a crash that takes down every caller (scripts/verify_toolchain.py could
+    # place to look" into a crash that takes down every caller (scripts/checks/verify_toolchain.py could
     # not report a single library row). Absent ldconfig means no cache to consult, not an error.
     for ldconfig in ("ldconfig", "/sbin/ldconfig", "/usr/sbin/ldconfig"):
         try:
