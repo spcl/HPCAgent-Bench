@@ -31,12 +31,7 @@ source "${IMAGE_DIR}/../images.env"
 
 export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/${INFERENCE_VLLM_CUDA_CANDIDATE}}"
 
-# Refuse to write over an image an EDF mounts: a running server would read a half-written squashfs.
-if grep -hoE '^[[:space:]]*image[[:space:]]*=[[:space:]]*"[^"]+"' "${HOME}/.edf"/*.toml 2>/dev/null \
-    | sed -E 's/.*"(.*)"/\1/' | grep -qxF "${OUTPUT_SQSH}"; then
-    echo "refusing to overwrite ${OUTPUT_SQSH}: an EDF in ${HOME}/.edf mounts it" >&2
-    exit 2
-fi
+ce_refuse_mounted "${OUTPUT_SQSH}" || exit 2
 
 "${IMAGE_DIR}/build.sh"
 

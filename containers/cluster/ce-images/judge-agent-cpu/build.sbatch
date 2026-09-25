@@ -37,13 +37,8 @@ declare -A CANDIDATE=(
 declare -A TEMPLATE=([agent]="${JUDGE_AGENT_CPU_TEMPLATE}" [judge]="${JUDGE_CPU_TEMPLATE}")
 declare -A PROFILE=([agent]=judge-agent-cpu [judge]=judge-cpu)
 
-# Refuse to write over an image an EDF mounts: a running arm would read a half-written squashfs.
 for target in ${BUILD_TARGETS}; do
-    if grep -hoE '^[[:space:]]*image[[:space:]]*=[[:space:]]*"[^"]+"' "${HOME}/.edf"/*.toml 2>/dev/null \
-        | sed -E 's/.*"(.*)"/\1/' | grep -qxF "${CANDIDATE[${target}]}"; then
-        echo "refusing to overwrite ${CANDIDATE[${target}]}: an EDF in ${HOME}/.edf mounts it" >&2
-        exit 2
-    fi
+    ce_refuse_mounted "${CANDIDATE[${target}]}" || exit 2
 done
 
 "${IMAGE_DIR}/build.sh"
