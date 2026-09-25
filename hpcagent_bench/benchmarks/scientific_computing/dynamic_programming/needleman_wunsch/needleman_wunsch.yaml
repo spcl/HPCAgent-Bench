@@ -43,5 +43,3 @@ array_args:
 - H
 output_args:
 - H
-experiment_tags:
-- needleman_wunsch

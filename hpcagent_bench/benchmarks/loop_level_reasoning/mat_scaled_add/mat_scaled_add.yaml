@@ -41,5 +41,3 @@ mpi:
     grid_ndim: 2
     block_size: 2
     work_exponent: 2
-experiment_tags:
-- mpi-focus32

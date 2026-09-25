@@ -46,6 +46,3 @@ mpi:
     force:
     - N
     - 3
-experiment_tags:
-- mpi-focus32
-- force_lj

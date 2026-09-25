@@ -61,5 +61,3 @@ array_args:
 # (hotspot_openmp.cpp:321), which is `T`.
 output_args:
 - T
-experiment_tags:
-- hotspot_rodinia

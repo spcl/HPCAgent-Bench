@@ -29,5 +29,3 @@ mpi:
     axis:
     - LEN_1D
     work_exponent: 1
-experiment_tags:
-- mpi-focus32

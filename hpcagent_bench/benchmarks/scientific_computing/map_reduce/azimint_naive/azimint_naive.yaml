@@ -48,4 +48,3 @@ mpi:
     - N
 experiment_tags:
 - npbench
-- azimint_naive

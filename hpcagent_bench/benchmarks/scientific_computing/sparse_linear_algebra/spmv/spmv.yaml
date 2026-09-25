@@ -201,4 +201,3 @@ distributions:
     distribution: uniform
 experiment_tags:
 - npbench
-- spmv

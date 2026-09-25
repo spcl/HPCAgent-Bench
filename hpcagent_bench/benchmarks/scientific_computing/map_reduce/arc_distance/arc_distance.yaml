@@ -57,4 +57,3 @@ mpi:
     - N
 experiment_tags:
 - npbench
-- pythran

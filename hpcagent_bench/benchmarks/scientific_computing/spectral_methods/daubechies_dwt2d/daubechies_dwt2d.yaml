@@ -47,5 +47,3 @@ output_args:
 fuzz:
   constraints:
   - N >= 2**(nlevels + 1)
-experiment_tags:
-- daubechies_dwt2d

@@ -55,5 +55,3 @@ array_args:
 - loglik
 output_args:
 - loglik
-experiment_tags:
-- graphical_models

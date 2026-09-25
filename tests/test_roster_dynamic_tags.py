@@ -9,6 +9,7 @@ them touch the checkout -- roster_for is invoked for real, subprocess and all, t
 tests/test_roster.py's own roster_for() helper is.
 """
 
+import functools
 import os
 import pathlib
 import subprocess
@@ -83,3 +84,19 @@ def test_a_circular_tags_yaml_reference_is_refused_with_a_clear_message(tmp_path
     result = roster_for("a", "tags:\n  a:\n    union:\n      - 'all@b'\n  b:\n    union:\n      - 'all@a'\n", tmp_path)
     assert result.returncode == 2
     assert "circular" in result.stderr
+
+
+def test_roster_for_takes_kernel_names_directly(tmp_path: pathlib.Path) -> None:
+    env = {**os.environ, "OPT": str(REPO), "PY": sys.executable}
+    run = functools.partial(subprocess.run, capture_output=True, text=True, env=env, timeout=60, check=False)
+    result = run(["bash", "-c", '. "$OPT/experiments/roster.sh"; roster_for --kernels kmp,dfa'])
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "dfa,kmp"
+
+    listing = tmp_path / "mine.txt"
+    listing.write_text("kmp\nargmax_valu\n")
+    result = run(
+        ["bash", "-c", '. "$OPT/experiments/roster.sh"; roster_for --kernels-file "$1"', "roster", str(listing)]
+    )
+    assert result.returncode == 2
+    assert "did you mean: argmax_value" in result.stderr

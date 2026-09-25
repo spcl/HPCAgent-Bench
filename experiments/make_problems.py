@@ -363,8 +363,8 @@ def main() -> int:
     parser.add_argument(
         "--tag",
         default="",
-        help="only kernels carrying this taxonomy tag "
-        "(llr-focus40, mpi-focus32, par-regression, wavefront, interchange, licm, scalar-rotation)",
+        help="only kernels the tag selects as all@<tag>: a manifest experiment_tags value or an "
+        "experiments/tags.yaml entry (llr-focus40, mpi-focus32, mlscale10, ...)",
     )
     parser.add_argument("--kernel", default="", help="exactly this one kernel (smoke tests)")
     parser.add_argument(
@@ -492,6 +492,7 @@ def main() -> int:
     if tokens and not wanted:
         raise SystemExit("the kernel selection named no kernels")
 
+    tagged = selected_keys([f"all@{args.tag}"]) if args.tag else set()
     written = 0
     dropped: list[str] = []
     for name in sorted(wanted or KERNELS):
@@ -503,9 +504,7 @@ def main() -> int:
             continue
         if args.track and spec.track != args.track:
             continue
-        # Taxonomy tag, the same vocabulary the `<selector>@<tag>` spelling uses, so a curated
-        # subset is addressed by the fact stamped on the manifest rather than a checked-in list.
-        if args.tag and args.tag.lower() not in {x.lower() for x in spec.experiment_tags}:
+        if args.tag and name not in tagged:
             continue
         if args.kernel and name != args.kernel:
             continue
