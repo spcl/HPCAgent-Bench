@@ -1,4 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
+# provenance: {kind: derived, upstream: tsvc, detail: s121}
 name: TSVC s121
 level: 1
 parameters:
