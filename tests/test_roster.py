@@ -54,7 +54,7 @@ def test_a_kernels_file_named_by_a_path_is_not_a_campaign_roster() -> None:
     tag ``scicomp37``, which no roster names, and failed the check below. A bare name in any
     position a script hands it on -- default, assignment, parenthesis -- still counts."""
     assert tags_named("KERNELS_FILE=<file> (e.g. $SCRATCH/kernels-scicomp37.txt)") == set()
-    assert tags_named("KERNELS_FILE=${KERNELS_FILE:-kernels-scicomp40.txt}") == {"scicomp40"}
+    assert tags_named("KERNELS_FILE=${KERNELS_FILE:-kernels-git-scicomp.txt}") == {"git-scicomp"}
     assert tags_named("#   KERNELS_FILE=kernels-harness20-caveman-smoke2.txt") == {"harness20-caveman-smoke2"}
     assert tags_named("# default (kernels-harness20.txt)") == {"harness20"}
 
