@@ -4,7 +4,8 @@
 """Enforce the repo formatters on changed source files (column limit 120).
 
 Routing by extension:
-  * Python  (.py)            -> ruff format ([tool.ruff] line-length = 120)
+  * Python  (.py)            -> ruff format ([tool.ruff] line-length = 120), plus ruff's
+                                pyupgrade rules (UP) at the py312 floor
   * C / C++ (.c .cc .cpp ...) -> clang-format (.clang-format, ColumnLimit 120)
   * Fortran (.f90 .F90 ...)   -> fprettify  (.fprettify.rc, line-length 120)
 
@@ -27,20 +28,23 @@ error (a needed formatter is missing). ``--fix`` reformats in place instead.
 """
 
 import argparse
-import json
 import concurrent.futures
+import json
 import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 #: ``[tool.ruff] line-length`` -- passed explicitly so a run from another directory cannot pick up
 #: a different project's configuration.
 PY_LINE_LENGTH = 120
+
+#: The ``requires-python`` floor the pyupgrade (UP) rules target.
+PY_TARGET = "py312"
 
 PY_EXT = {".py"}
 CPP_EXT = {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh", ".hxx"}
@@ -56,7 +60,7 @@ SKIP_NAME_MARKERS = ("_generated.",)
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+    return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, check=False)
 
 
 def _git_lines(args: list[str]) -> list[str]:
@@ -163,6 +167,20 @@ def ruff_offenders(rels: list[str], fix: bool) -> list[str]:
     return offenders
 
 
+def pyupgrade_offenders(rels: list[str], fix: bool) -> list[str]:
+    """Files with a ruff UP (pyupgrade) finding at :data:`PY_TARGET`, after ``--fix`` when ``fix``.
+
+    What ``--fix`` cannot rewrite (e.g. UP042 str-enum) stays an offender in both modes.
+    """
+    if not rels:
+        return []
+    cmd = ["ruff", "check", "--select", "UP", "--target-version", PY_TARGET, "--output-format", "json"]
+    if fix:
+        _run([*cmd, "--fix", *rels])
+    out = _run([*cmd, *rels])
+    return sorted({os.path.relpath(entry["filename"], REPO_ROOT) for entry in json.loads(out.stdout or "[]")})
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base", default="origin/main", help="git ref to diff against (default: origin/main)")
@@ -207,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     # and keeps the offender list in one address space. Each file is independent: the formatters
     # read and rewrite one path, so concurrent workers never touch the same file.
     offenders = [(rel, "ruff") for rel in ruff_offenders(by_lang["py"], args.fix)]
+    upgrades = [(rel, "ruff UP") for rel in pyupgrade_offenders(by_lang["py"], args.fix)]
     work = [(lang, rel) for lang in ("cpp", "fortran") for rel in by_lang[lang]]
     if work:
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
@@ -219,12 +238,20 @@ def main(argv: list[str] | None = None) -> int:
         offenders += [(rel, CHECKERS[lang][1]) for lang, rel in work if (lang, rel) in hits]
 
     n_checked = sum(len(f) for f in by_lang.values())
+    if upgrades:
+        print(f"pyupgrade ({PY_TARGET}): {len(upgrades)} file(s) with ruff UP findings:\n")
+        for rel, tool in upgrades:
+            print(f"  [{tool}] {rel}")
+        print(f"\nSee:  ruff check --select UP --target-version {PY_TARGET} <file>  (--fix rewrites most)\n")
     if not offenders:
-        print(f"format-check: {n_checked} changed source file(s) OK" + (" (reformatted in place)" if args.fix else ""))
-        return 0
+        if not upgrades:
+            print(
+                f"format-check: {n_checked} changed source file(s) OK" + (" (reformatted in place)" if args.fix else "")
+            )
+        return 1 if upgrades else 0
     if args.fix:
         print(f"format-check: reformatted {len(offenders)} file(s) in place")
-        return 0
+        return 1 if upgrades else 0
 
     print(f"format-check: {len(offenders)} of {n_checked} changed source file(s) need formatting:\n")
     for rel, tool in offenders:

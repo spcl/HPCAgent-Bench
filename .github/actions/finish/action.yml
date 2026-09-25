@@ -1,0 +1,33 @@
+name: "HPCAgent-Bench CI finish"
+description: >
+  End-of-job bookkeeping, called with `if: always()`: ccache statistics and save (when setup
+  restored one) and the raw coverage upload the `coverage` job combines.
+
+inputs:
+  coverage:
+    description: Artifact suffix (coverage-<suffix>), unique per job and matrix leg; empty skips the upload.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: ccache statistics
+      if: ${{ always() && env.CCACHE_KEY != '' }}
+      shell: bash
+      run: ccache --show-stats
+    # Saved from a red job too: its objects are what make the next run warm.
+    - name: ccache save
+      if: ${{ always() && env.CCACHE_KEY != '' }}
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.ccache
+        key: ${{ env.CCACHE_KEY }}-${{ github.run_id }}
+    - name: Upload coverage data
+      if: ${{ always() && inputs.coverage != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-${{ inputs.coverage }}
+        path: .coverage*
+        include-hidden-files: true
+        if-no-files-found: ignore

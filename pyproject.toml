@@ -335,4 +335,9 @@ exclude_also = [
 # ---------------------------------------------------------------------------------------------
 [tool.ruff]
 line-length = 120
+target-version = "py312"
 extend-exclude = ["*_generated.py"]
+
+# Type-check against the requires-python floor.
+[tool.pyright]
+pythonVersion = "3.12"
