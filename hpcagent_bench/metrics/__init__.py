@@ -4,8 +4,8 @@
 
 A module in this package is a SWEEP METRIC when it defines the three functions of
 :class:`SweepMetric`; :func:`sweep_metrics` finds every such module by scanning the package, so a
-new metric is one file here plus its ``metrics.<module name>`` switch in ``config.yaml``. Modules
-without that interface (``source_text``) are libraries the scan skips.
+new metric is one file here plus its ``metrics.<module name>`` switch in ``config.yaml``. A module
+without that interface is a library the scan skips.
 """
 
 import importlib

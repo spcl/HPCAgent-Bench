@@ -19,7 +19,6 @@ import statistics
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
-from typing import TypeVar
 
 from hpcagent_bench import config
 
@@ -196,7 +195,7 @@ def warmup_count() -> int:
 
 def measurement_repeat() -> int:
     """Timed repeats per ranked measurement (``measurement.repeat``, default 50), read by every scoring
-    path. Distinct from ``mpi.k_repeats`` and ``SCORE_REPEAT``."""
+    path. Distinct from ``mpi.k_repeats``."""
     return max(1, config.get_int("measurement.repeat", 50))
 
 
@@ -213,11 +212,7 @@ def measurement_baseline() -> str:
     return config.get_str("measurement.baseline", "auto")
 
 
-#: What one timed rep hands back beside its nanoseconds; every rep of one collection agrees on it.
-PayloadT = TypeVar("PayloadT")
-
-
-def sampled_reps(
+def sampled_reps[PayloadT](
     run_once: Callable[[bool], tuple[PayloadT, float]], repeat: int, warmup: int = 0
 ) -> tuple[PayloadT | None, list[int]]:
     """Run ``run_once(warming)`` ``warmup + max(1, repeat)`` times and return ``(last_payload, [kept ns

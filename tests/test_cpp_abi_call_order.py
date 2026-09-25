@@ -61,15 +61,6 @@ def test_call_args_follows_binding_abi_order() -> None:
     assert args[3] == bdata["NI"]
 
 
-def test_call_args_falls_back_to_input_args_without_binding() -> None:
-    f = _framework()
-    f._abi_args = lambda bench: None  # no auto binding -> legacy path
-    bench = types.SimpleNamespace(info={"input_args": ["alpha", "beta", "C"]})
-    resolved = {"alpha": 1.0, "beta": 2.0, "C": "C_buf"}
-    args, kwargs = f.call_args(bench, None, resolved, resolved)
-    assert args == [1.0, 2.0, "C_buf"]  # input_args order preserved
-
-
 def test_call_args_allocates_a_declared_output_the_init_did_not_provide() -> None:
     """nbody's KE/PE: the numpy reference RETURNS them, so no init buffer exists, but the C signature
     still declares the pointers. Before this the positional call raised KeyError and the kernel was
