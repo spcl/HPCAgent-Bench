@@ -50,5 +50,4 @@ array_args:
 output_args:
 - counts
 experiment_tags:
-- finite_state_machine
 - harness-focus20

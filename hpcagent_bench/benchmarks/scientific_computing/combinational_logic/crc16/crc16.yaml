@@ -48,4 +48,3 @@ output_args:
 - crc
 experiment_tags:
 - npbench
-- crc16

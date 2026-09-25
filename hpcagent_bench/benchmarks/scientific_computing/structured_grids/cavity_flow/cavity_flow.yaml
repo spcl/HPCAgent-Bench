@@ -74,4 +74,3 @@ mpi:
     - nx
 experiment_tags:
 - npbench
-- cavity_flow

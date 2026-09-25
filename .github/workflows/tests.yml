@@ -733,7 +733,7 @@ jobs:
         # marked -- but only if it lives in it. The translators tree is the OTHER half of this
         # marker and has its own job below; between them the two paths are the same set the one
         # step used to name, so nothing is dropped by the split.
-        # `make test` excludes this marker for a fast local loop; CI is where they must run.
+        # The local fast loop (CONTRIBUTING.md) excludes this marker; CI is where they must run.
         #
         # --ignore=tests/test_dace_numeric_agreement.py: this file carries no @pytest.mark.integration
         # test at all (only dace_numeric, which the mpi job selects), so -m integration keeps none of

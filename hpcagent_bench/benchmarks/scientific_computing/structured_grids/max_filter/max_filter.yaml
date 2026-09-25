@@ -48,6 +48,3 @@ mpi:
     out:
     - H
     - W
-experiment_tags:
-- mpi-focus32
-- max_filter

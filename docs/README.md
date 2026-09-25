@@ -18,8 +18,8 @@ Two doc roots, one rule:
   confused with `hpcagent_bench/skills/<name>/SKILL.md`, which is DATA shipped into a graded
   agent's prompt, about optimizing a kernel it was already handed, not adding one.
 
-Filenames are `lowercase_snake.md`, except the `DESIGN_` prefix, which is kept because it carries
-meaning: it marks a plan or decision record, not a description of what already exists.
+Filenames are `lowercase_snake.md`. The `DESIGN_` prefix marks a specification that states rules
+together with the reasons behind them.
 
 This file states the split; it does not duplicate the index. For the full doc list, see the
 root [README.md](../README.md#documentation).

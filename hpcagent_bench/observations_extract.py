@@ -53,7 +53,7 @@ from collections.abc import Collection, Iterable, Iterator
 from types import ModuleType
 from typing import Any, NamedTuple
 
-from hpcagent_bench import campaigns, frozen_observations, fused, paths
+from hpcagent_bench import campaigns, data_guard, frozen_observations, fused, paths
 from hpcagent_bench.experiments import DB_SKIP_NAMES, agent_indices, arm_of
 from hpcagent_bench.harness import timing
 from hpcagent_bench.stats import population, score_rule
@@ -2074,8 +2074,23 @@ def extract(options: Options) -> Extracted:
     return Extracted(observations, sources, corpus, focus, job_dirs, assets)
 
 
+def source_roots(args: argparse.Namespace) -> list[pathlib.Path]:
+    """Everything the extraction reads: the protected roots, the run roots, the regrade shards, the frozen rows."""
+    frozen = frozen_observations.resolve(args.frozen_observations)
+    globbed = [pathlib.Path(p) for pattern in (*args.runs, *args.regrades) for p in glob.glob(pattern)]
+    return [*data_guard.protected_roots(), *globbed, *([frozen] if frozen else [])]
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    try:
+        sources = source_roots(args)
+        for dest in (args.out, args.db):
+            if dest is not None:
+                data_guard.check_output(dest, sources)
+    except data_guard.ProtectedPathError as exc:
+        print(exc, file=sys.stderr)
+        return 1
     try:
         got = extract(
             Options(

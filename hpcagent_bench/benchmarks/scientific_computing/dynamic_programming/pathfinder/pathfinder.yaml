@@ -35,5 +35,3 @@ array_args:
 - dp
 output_args:
 - dp
-experiment_tags:
-- pathfinder

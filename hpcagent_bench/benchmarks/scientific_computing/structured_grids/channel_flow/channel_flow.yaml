@@ -74,6 +74,4 @@ mpi:
     - nx
 experiment_tags:
 - npbench
-- mpi-focus32
-- channel_flow
 - scicomp-focus40

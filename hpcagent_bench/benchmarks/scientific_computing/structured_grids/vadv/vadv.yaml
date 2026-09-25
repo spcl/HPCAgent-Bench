@@ -64,5 +64,3 @@ mpi:
     - K
 experiment_tags:
 - npbench
-- mpi-focus32
-- weather_stencils

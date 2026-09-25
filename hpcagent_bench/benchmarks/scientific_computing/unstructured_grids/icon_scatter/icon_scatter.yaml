@@ -62,5 +62,3 @@ array_args:
 output_args:
 - out
 - out_semi
-experiment_tags:
-- unstructured_grids
