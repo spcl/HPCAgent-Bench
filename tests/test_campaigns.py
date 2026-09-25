@@ -113,7 +113,7 @@ def test_an_owed_wave_root_is_read_under_its_arms_real_key(
         )
     selection = campaigns.resolve("llr-focus40", root=tmp_path)
     frame = dataset.extract(selection)
-    graded = frame[frame["record"] == "submission"]
+    graded = frame[frame["row_kind"] == "submission"]
     assert graded["arm"].tolist() == ["cpf-llr-focus40-qwen38-c"]
     assert set(frame["run_root"]) == {"owed-llr-focus40-20260922"}
 

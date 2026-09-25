@@ -161,9 +161,10 @@ allowed under commit-single; more than one ACCEPTED submission is not.
 
 ## 2. Extraction invariants
 
-`reproducibility/llr40/extract_llr40.py --db` writes one `observations` table per experiment.
+`reproducibility/llr40/extract_llr40.py --db` writes one `observations` table per experiment
+(columns: `docs/observations.md`).
 
-- X1. One row per judge row, `record` in {`call`, `submission`, `attempt`}, plus one `task` row per
+- X1. One row per judge row, `row_kind` in {`call`, `submission`, `attempt`}, plus one `task` row per
   task found in the run directories (T3).
 - X2. `attempt_index`: for `call` rows the judge's `round`; for `submission` and `attempt` rows the
   1-based ordinal of that row among the task's rows of the same table, ordered by `(ts, id)`.
@@ -180,11 +181,11 @@ allowed under commit-single; more than one ACCEPTED submission is not.
   Runs without a task row are kept unchanged. The database is not modified (N1).
 - X7. A judge row stamped before its task's final attempt started is dropped when the observations
   are read (`experiments.drop_pre_relaunch_rows`, with a warning giving the count). The cut is the
-  task row's `final_attempt_start_ms`, in the epoch ms the judge stamps `ts` with; a task without one
+  task row's `task_final_attempt_start_ms`, in the epoch ms the judge stamps `ts` with; a task without one
   (never relaunched, or extracted before the stamp) keeps every row. A fresh relaunch deleted what
   such a row was graded on (T5), so it is no answer of the task that finished. R3 reads `ts_ms` off
   the frame `read_observations` returns, so a task's start is the start of its KEPT rows.
-- X8. Every row of a task whose task row carries `cancelled = 1` is dropped at read
+- X8. Every row of a task whose task row carries `task_cancelled = 1` is dropped at read
   (`experiments.drop_cancelled_task_rows`, with a warning giving the count), the task row included:
   the job ended the agent mid-task (T6), so the rows report part of an episode and the token total
   prices part of one.
@@ -196,7 +197,7 @@ allowed under commit-single; more than one ACCEPTED submission is not.
 
 ## 3. Per-task answer
 
-- R1. Only `submission` rows are candidates for a task's answer. A row with `suspect` not 0 is not a
+- R1. Only `submission` rows are candidates for a task's answer. A row with `timing_suspect` not 0 is not a
   candidate. A row with `speedup <= 0` is not a candidate.
 - R2. The task's answer is the LAST candidate in lexicographic `(ts_ms, attempt_index)` order. A task
   with no candidate has no answer.
@@ -284,11 +285,11 @@ allowed under commit-single; more than one ACCEPTED submission is not.
   `claude.log` (or the per-attempt usage files of a non-Claude harness), in the task's worker
   directory `agents/node-<n>/problem-<id>-worker-<w>/`. The task token total is the LAST of them;
   the earlier ones are summed into `tokens_crashed`.
-- T3. Extraction writes one `record = task` row per worker directory: `run_id` from its `mcp.json`
+- T3. Extraction writes one `row_kind = task` row per worker directory: `run_id` from its `mcp.json`
   (`HPCAGENT_BENCH_RUN_ID`), `benchmark` from its `prompt.txt`, `tokens` = task token total (effective),
-  `tokens_billed`, `attempts` (number of attempt transcripts), `tokens_crashed`,
-  `final_attempt_start_ms`, `cancelled`, and `ts_ms` = the modification time of `prompt.txt` in ms
-  (written when the task starts). `final_attempt_start_ms` is the last `attempts.jsonl` line's
+  `tokens_billed`, `task_attempts` (number of attempt transcripts), `tokens_crashed`,
+  `task_final_attempt_start_ms`, `task_cancelled`, and `ts_ms` = the modification time of `prompt.txt` in ms
+  (written when the task starts). `task_final_attempt_start_ms` is the last `attempts.jsonl` line's
   `start_ms`; a run predating that file falls back to the modification time of its newest
   `*.attemptN.*` transcript, which is when the crash was moved aside, and reports 0 when the task
   never relaunched. The driver writes the same numbers into `tokens.json` at task end, plus
@@ -324,7 +325,8 @@ allowed under commit-single; more than one ACCEPTED submission is not.
   The runner's split is left exactly as written; only the fold sums it. Billed is the same sum with
   the cached prompt put back: `fresh + cached + output`.
 - T9. The per-turn `assistant` events report `output_tokens: 0` on these endpoints, so an attempt's
-  output comes from the first of these tiers that has it, and `output_source` names the one used:
+  output comes from the first of these tiers that has it, and `output_source` (column
+  `tokens_output_source`) names the one used:
 
   | `output_source` | what it is | when it is reached |
   |---|---|---|
@@ -345,7 +347,7 @@ allowed under commit-single; more than one ACCEPTED submission is not.
   role, channel and tool-call markers the server also bills. Measured against transcripts that do
   have a result record: gpt-oss-120b 0.961 [0.901-0.981] n=20, Kimi-K2.7-Code 0.977 [0.960-0.989]
   n=10, Qwen3.8-27B-FP8 1.034 [0.973-4.730] n=20 (the tail is F9). NO correction constant is applied.
-- T12. `output_suspect` is 1 when an attempt has both a result record and a retokenized count and
+- T12. `output_suspect` (column `tokens_output_suspect`) is 1 when an attempt has both a result record and a retokenized count and
   the second exceeds the first by more than 1.15x. The result record still stands as the answer; the
   flag only says it is not believable as an episode total (F9).
 
@@ -384,7 +386,7 @@ Per task selected by R4/R5:
 
 | metric | definition |
 |---|---|
-| attempts | the task row's `attempts`: 1 + crash relaunches (T3); missing without a task row |
+| attempts | the task row's `task_attempts`: 1 + crash relaunches (T3); missing without a task row |
 | score_calls | `calls` rows with route `score`, any status |
 | submit_calls | `calls` rows with route `submit`, any status |
 | accepted_submissions | `submissions` rows |
@@ -452,7 +454,7 @@ family; the table states the pairs it kept.
 | T1-T4 | `agent_driver` (tokens.json), `token_cost` (attempt totals), `extract_llr40.py` (task rows), `population.episode_tokens` | driver, token_cost and extractor tests; call rows never costed |
 | T13, T14 | `stats.cost` (cards, `priced`, the three proxies), `envs/cost_models.yaml`, `--cost-model` in `paired_arms.py` and `plot_score_change.py`, `extract_llr40.record_provider_tokens` | `test_cost_models.py`: card weights, proxies, fold-card agreement, refusal without components; `test_token_cost.py`: components on task totals; `test_extract_llr40_task_rows.py`: components and provider from a record |
 | T5 | `agent_driver.clear_for_relaunch`, `append_attempt` (run_agent's loop), `token_cost.task_totals`, `final_attempt_start` | `test_agent_driver_fresh_relaunch.py`: both folders emptied, inputs and ledger kept, two ledger lines, the cut in tokens.json; `test_token_cost.py`: final attempt only, crashed spend beside it |
-| T6 | `agent_driver.cancelled_by_the_job`, `mark_cancelled`, `watch_for_job_cancellation`; `extract_llr40` (`cancelled` column) | `test_agent_driver_cancellation.py`: signal and allocation end cancel, own caps and a finished episode do not; `test_extract_llr40_task_rows.py`: the flag reaches the row |
+| T6 | `agent_driver.cancelled_by_the_job`, `mark_cancelled`, `watch_for_job_cancellation`; `extract_llr40` (`task_cancelled` column) | `test_agent_driver_cancellation.py`: signal and allocation end cancel, own caps and a finished episode do not; `test_extract_llr40_task_rows.py`: the flag reaches the row |
 | section 9 | `paired_arms.task_usage`, `arm_rows` | `test_paired_arms.py`: usage over selected tasks |
 | section 10 | `paired_arms.impact_rows`, `--impact-out` | `test_paired_arms.py`: impact table rows and orientation |
 | N1-N4 | no write path to the databases in `stats/`, `paired_arms.py` or the plot scripts; `summary` casts to float64; `paired_arms.with_integer_counts`; no rounding before a table write (`paired_arms.py`) | `test_paired_arms.py`: counts as integers, ratios at full precision |

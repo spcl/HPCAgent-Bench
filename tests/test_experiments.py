@@ -63,12 +63,12 @@ def foreign_kernel_frame() -> pd.DataFrame:
     common = {"run_root": "r", "job": "636537", "arm": "a"}
     return pd.DataFrame(
         [
-            {**common, "run_id": "a.n0.p38.w38", "record": "task", "benchmark": "wf_diff_skew"},
-            {**common, "run_id": "a.n0.p38.w38", "record": "call", "benchmark": "wf_diff_skew"},
-            {**common, "run_id": "a.n0.p38.w38", "record": "call", "benchmark": "wf_triangular"},
-            {**common, "run_id": "a.n0.p39.w39", "record": "task", "benchmark": "wf_triangular"},
-            {**common, "run_id": "a.n0.p39.w39", "record": "submission", "benchmark": "wf_triangular"},
-            {**common, "run_id": "a.n0.p40.w40", "record": "call", "benchmark": "tsvc_2_s115"},
+            {**common, "run_id": "a.n0.p38.w38", "row_kind": "task", "benchmark": "wf_diff_skew"},
+            {**common, "run_id": "a.n0.p38.w38", "row_kind": "call", "benchmark": "wf_diff_skew"},
+            {**common, "run_id": "a.n0.p38.w38", "row_kind": "call", "benchmark": "wf_triangular"},
+            {**common, "run_id": "a.n0.p39.w39", "row_kind": "task", "benchmark": "wf_triangular"},
+            {**common, "run_id": "a.n0.p39.w39", "row_kind": "submission", "benchmark": "wf_triangular"},
+            {**common, "run_id": "a.n0.p40.w40", "row_kind": "call", "benchmark": "tsvc_2_s115"},
         ]
     )
 
@@ -86,7 +86,7 @@ def test_a_run_without_a_task_row_keeps_its_judge_rows() -> None:
     """A run extracted before task records has no kernel of record to compare against, so its rows
     are left as they are rather than guessed foreign."""
     frame = foreign_kernel_frame()
-    frame = frame[frame.record != "task"]
+    frame = frame[frame.row_kind != "task"]
     kept = experiments.drop_foreign_kernel_rows(frame)
     assert len(kept) == len(frame)
 
@@ -97,12 +97,24 @@ def relaunched_frame() -> pd.DataFrame:
     common = {"run_root": "r", "job": "636537", "arm": "a", "benchmark": "gemm"}
     return pd.DataFrame(
         [
-            {**common, "run_id": "a.n0.p38.w38", "record": "task", "ts_ms": 100, "final_attempt_start_ms": 1000},
-            {**common, "run_id": "a.n0.p38.w38", "record": "call", "ts_ms": 200, "final_attempt_start_ms": ""},
-            {**common, "run_id": "a.n0.p38.w38", "record": "submission", "ts_ms": 700, "final_attempt_start_ms": ""},
-            {**common, "run_id": "a.n0.p38.w38", "record": "submission", "ts_ms": 1200, "final_attempt_start_ms": ""},
-            {**common, "run_id": "a.n0.p39.w39", "record": "task", "ts_ms": 100, "final_attempt_start_ms": 0},
-            {**common, "run_id": "a.n0.p39.w39", "record": "call", "ts_ms": 200, "final_attempt_start_ms": ""},
+            {**common, "run_id": "a.n0.p38.w38", "row_kind": "task", "ts_ms": 100, "task_final_attempt_start_ms": 1000},
+            {**common, "run_id": "a.n0.p38.w38", "row_kind": "call", "ts_ms": 200, "task_final_attempt_start_ms": ""},
+            {
+                **common,
+                "run_id": "a.n0.p38.w38",
+                "row_kind": "submission",
+                "ts_ms": 700,
+                "task_final_attempt_start_ms": "",
+            },
+            {
+                **common,
+                "run_id": "a.n0.p38.w38",
+                "row_kind": "submission",
+                "ts_ms": 1200,
+                "task_final_attempt_start_ms": "",
+            },
+            {**common, "run_id": "a.n0.p39.w39", "row_kind": "task", "ts_ms": 100, "task_final_attempt_start_ms": 0},
+            {**common, "run_id": "a.n0.p39.w39", "row_kind": "call", "ts_ms": 200, "task_final_attempt_start_ms": ""},
         ]
     )
 
@@ -137,10 +149,10 @@ def cancelled_frame() -> pd.DataFrame:
     common = {"run_root": "r", "job": "636537", "arm": "a", "benchmark": "gemm"}
     return pd.DataFrame(
         [
-            {**common, "run_id": "a.n0.p38.w38", "record": "task", "cancelled": "1", "tokens": 900},
-            {**common, "run_id": "a.n0.p38.w38", "record": "call", "cancelled": "", "tokens": 400},
-            {**common, "run_id": "a.n0.p39.w39", "record": "task", "cancelled": "0", "tokens": 800},
-            {**common, "run_id": "a.n0.p39.w39", "record": "submission", "cancelled": "", "tokens": 700},
+            {**common, "run_id": "a.n0.p38.w38", "row_kind": "task", "task_cancelled": "1", "tokens": 900},
+            {**common, "run_id": "a.n0.p38.w38", "row_kind": "call", "task_cancelled": "", "tokens": 400},
+            {**common, "run_id": "a.n0.p39.w39", "row_kind": "task", "task_cancelled": "0", "tokens": 800},
+            {**common, "run_id": "a.n0.p39.w39", "row_kind": "submission", "task_cancelled": "", "tokens": 700},
         ]
     )
 
@@ -156,7 +168,7 @@ def test_every_row_of_a_cancelled_task_is_dropped_with_a_warning() -> None:
 
 def test_a_frame_without_a_cancelled_column_is_left_alone() -> None:
     """Extractions predating the flag say nothing about cancellation, and a guess is not a record."""
-    frame = cancelled_frame().drop(columns=["cancelled"])
+    frame = cancelled_frame().drop(columns=["task_cancelled"])
     assert len(experiments.drop_cancelled_task_rows(frame)) == len(frame)
 
 
@@ -164,7 +176,7 @@ def adhoc_frame() -> pd.DataFrame:
     """Job 640078's shape: worker w4 graded under its own run id, a curl without one filed two
     ``tsvc_2_s323`` grades under the judge's ``adhoc`` default, and a ``--retags`` extraction moved
     a third adhoc grade onto worker w5."""
-    common = {"run_root": "r", "job": "640078", "record": "submission"}
+    common = {"run_root": "r", "job": "640078", "row_kind": "submission"}
     return pd.DataFrame(
         [
             {**common, "run_id": "a.n0.p4.w4", "arm": "a", "benchmark": "tsvc_2_s1113", "retagged": ""},
@@ -209,12 +221,12 @@ def clean_frame() -> pd.DataFrame:
     src = {**common, "packet": "cpfsrc"}
     return pd.DataFrame(
         [
-            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf", "run_id": "a.p1.w1", "record": "task"},
-            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf", "run_id": "a.p1.w1", "record": "submission"},
-            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf-clean", "run_id": "b.p1.w1", "record": "task"},
-            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf-clean", "run_id": "b.p1.w1", "record": "submission"},
-            {**src, "arm": "cpf-llr-focus40-qwen38-c-cpfsrc", "run_id": "c.p1.w1", "record": "task"},
-            {**src, "arm": "cpf-llr-focus40-qwen38-c-cpfsrc", "run_id": "c.p1.w1", "record": "submission"},
+            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf", "run_id": "a.p1.w1", "row_kind": "task"},
+            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf", "run_id": "a.p1.w1", "row_kind": "submission"},
+            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf-clean", "run_id": "b.p1.w1", "row_kind": "task"},
+            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf-clean", "run_id": "b.p1.w1", "row_kind": "submission"},
+            {**src, "arm": "cpf-llr-focus40-qwen38-c-cpfsrc", "run_id": "c.p1.w1", "row_kind": "task"},
+            {**src, "arm": "cpf-llr-focus40-qwen38-c-cpfsrc", "run_id": "c.p1.w1", "row_kind": "submission"},
         ]
     )
 
@@ -237,7 +249,7 @@ def test_a_clean_rerun_folds_into_the_arm_it_re_ran_and_keeps_every_row() -> Non
 def test_a_one_kernel_owed_rerun_keeps_the_arms_other_kernels_and_wins_its_own() -> None:
     """The bug: an owed rerun is named -clean and covers a few kernels, and X9 used to drop every row
     of the wave it topped up -- 40 kernels became the rerun's one."""
-    common = {"record": "task", "run_root": "r", "language": "c", "packet": "", "harness": "claude"}
+    common = {"row_kind": "task", "run_root": "r", "language": "c", "packet": "", "harness": "claude"}
     rows = [
         {**common, "arm": "x-qwen38-c", "job": "1", "run_id": f"a{i}", "benchmark": f"k{i}", "ts_ms": 1}
         for i in range(3)
@@ -249,7 +261,7 @@ def test_a_one_kernel_owed_rerun_keeps_the_arms_other_kernels_and_wins_its_own()
 
 
 def test_a_blank_arm_stays_blank_through_the_fold() -> None:
-    frame = pd.DataFrame({"arm": [math.nan, "x-c-clean"], "record": ["call", "task"]})
+    frame = pd.DataFrame({"arm": [math.nan, "x-c-clean"], "row_kind": ["call", "task"]})
     kept = experiments.fold_clean_arms(frame)
     assert experiments.is_blank(kept.arm.iloc[0]) and kept.arm.iloc[1] == "x-c"
 
@@ -386,9 +398,9 @@ def graded_episode(benchmark: str, graded: list[tuple[str, str]]) -> pd.DataFram
     """One episode's task row, a call, and its graded ``/submit`` rows as ``(record, reason)`` in the
     order the agent sent them (ts 200, 300, ...)."""
     common = {"run_root": "r", "job": "648827", "run_id": "a.n0.p2.w2", "arm": "a", "benchmark": benchmark}
-    rows = [{**common, "record": "task", "ts_ms": 100, "reason": ""}, {**common, "record": "call", "ts_ms": 150}]
+    rows = [{**common, "row_kind": "task", "ts_ms": 100, "reason": ""}, {**common, "row_kind": "call", "ts_ms": 150}]
     rows += [
-        {**common, "record": record, "ts_ms": 200 + 100 * index, "attempt_index": index + 1, "reason": reason}
+        {**common, "row_kind": record, "ts_ms": 200 + 100 * index, "attempt_index": index + 1, "reason": reason}
         for index, (record, reason) in enumerate(graded)
     ]
     return pd.DataFrame(rows)
@@ -396,7 +408,7 @@ def graded_episode(benchmark: str, graded: list[tuple[str, str]]) -> pd.DataFram
 
 def graded_stamps(frame: pd.DataFrame) -> list[int]:
     """The ``ts_ms`` of every graded row left, in order."""
-    return frame[frame.record.isin(("submission", "attempt"))].ts_ms.tolist()
+    return frame[frame.row_kind.isin(("submission", "attempt"))].ts_ms.tolist()
 
 
 @pytest.mark.parametrize(
@@ -435,7 +447,7 @@ def test_a_scicomp_episode_is_answered_by_its_first_real_submit(graded: list[tup
     else:
         left = experiments.drop_resubmissions(frame)
     assert graded_stamps(left) == kept
-    assert left[~left.record.isin(("submission", "attempt"))].ts_ms.tolist() == [100, 150]
+    assert left[~left.row_kind.isin(("submission", "attempt"))].ts_ms.tolist() == [100, 150]
 
 
 @pytest.mark.parametrize("benchmark", ["tsvc_2_s252", "argmax_over_a_dimension", "no_such_kernel"])

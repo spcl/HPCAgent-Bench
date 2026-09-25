@@ -23,6 +23,7 @@ import pathlib
 from collections.abc import Callable, Iterable, Mapping
 
 from hpcagent_bench import paths
+from hpcagent_bench.observation_columns import upgrade_row
 
 #: The one environment variable naming the frozen directory.
 ENV = "HPCAGENT_BENCH_FROZEN_OBSERVATIONS"
@@ -49,9 +50,8 @@ JobKey = tuple[str, str]
 #: answered is owed a rerun instead. The databases keep the row; only its readers skip it.
 ADHOC_RUN_ID = "adhoc"
 
-#: The observations column holding the evidence an ``adhoc`` row was re-attributed on. Older
-#: extractions carry it: non-blank means the row was STORED under :data:`ADHOC_RUN_ID`, whatever
-#: run id that extraction then gave it.
+#: A column only older extractions carry: non-blank means the row was STORED under
+#: :data:`ADHOC_RUN_ID`, whatever run id that extraction then gave it.
 RETAGGED_COLUMN = "retagged"
 
 
@@ -110,14 +110,15 @@ def resolve(arg: str | None) -> pathlib.Path | None:
 
 @functools.lru_cache(maxsize=4, typed=True)
 def by_job(root: str) -> dict[JobKey, tuple[dict[str, str], ...]]:
-    """Every frozen row under ``root``, grouped by job. Empty for an empty ``root``."""
+    """Every frozen row under ``root``, grouped by job, under the current column names. Empty for an
+    empty ``root``."""
     if not root:
         return {}
     csv.field_size_limit(1 << 30)
     grouped: dict[JobKey, list[dict[str, str]]] = {}
     for path in sorted(pathlib.Path(root).rglob(CSV_NAME)):
         with path.open(newline="", encoding="utf-8") as handle:
-            for row in csv.DictReader(handle):
+            for row in map(upgrade_row, csv.DictReader(handle)):
                 grouped.setdefault((row["run_root"], row["job"]), []).append(row)
     return {key: tuple(rows) for key, rows in grouped.items()}
 
@@ -145,8 +146,8 @@ def final_attempt_cuts(rows: Iterable[dict[str, str]]) -> dict[str, int]:
     """run id -> the epoch ms its episode's final attempt started, from the job's ``task`` rows."""
     cuts: dict[str, int] = {}
     for row in rows:
-        if row["record"] == "task" and cell_text(row.get("final_attempt_start_ms")):
-            start = int(float(row["final_attempt_start_ms"]))
+        if row["row_kind"] == "task" and cell_text(row.get("task_final_attempt_start_ms")):
+            start = int(float(row["task_final_attempt_start_ms"]))
             cuts[row["run_id"]] = max(start, cuts.get(row["run_id"], 0))
     return cuts
 
@@ -165,8 +166,8 @@ def delivered(rows: Iterable[dict[str, str]], since_ms: Callable[[str], int], ar
             continue
         if stored_adhoc(row.get("run_id"), row.get(RETAGGED_COLUMN)):
             continue
-        genuine = row["record"] == "submission" or (
-            row["record"] == "attempt" and row.get("reason") != HARNESS_FAULT_REASON
+        genuine = row["row_kind"] == "submission" or (
+            row["row_kind"] == "attempt" and row.get("reason") != HARNESS_FAULT_REASON
         )
         if not genuine or not row.get("ts_ms"):
             continue

@@ -21,7 +21,7 @@ unsharded file beside them is a merged cache (`recording.aggregate`). The schema
 
 `ts` is the grade's epoch-ms stamp; every table written for one grade carries the same one. An ML
 grade's laws and widest measured P are read off its `scaling_points`
-(`recording.SCALING_SUMMARY`; the extractor's `mpi_mode` / `mpi_ranks` columns).
+(`recording.SCALING_SUMMARY`; the extractor's `scaling_laws` / `scaling_max_ranks` columns).
 
 ## Protocol tags
 

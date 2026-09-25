@@ -6,13 +6,14 @@ The judge grades a distributed submission at several rank counts P and turns eac
 :class:`~hpcagent_bench.harness.metric.ScalingPoint`. This module draws those points. It reads the
 EXTRACTED observations table (:func:`hpcagent_bench.experiments.read_observations`), the same file
 every other figure reads, never a judge database: one row per (arm, kernel, P) under
-``record == "scaling"``, carrying ``ranks``, ``ranked_ns`` (T(P)), ``single_rank_ns`` (T(1)) and --
-for weak scaling -- ``work_ratio`` (r = W(N_P)/W(N_1)). ``docs/plotting.md`` lists the columns.
+``row_kind == "scaling"``, carrying ``scaling_ranks``, ``scaling_ranked_ns`` (T(P)),
+``scaling_single_rank_ns`` (T(1)) and -- for weak scaling -- ``scaling_work_ratio``
+(r = W(N_P)/W(N_1)). ``docs/observations.md`` lists the columns.
 
 ETA IS NOT REDEFINED HERE. Every point goes through
 :func:`hpcagent_bench.harness.metric.scaling_point`, the function the grader itself scores with, so
 a figure and a leaderboard number cannot drift apart; this module only chooses what to draw. A row
-that also carries a recorded ``efficiency`` is checked against it rather than trusted
+that also carries a recorded ``scaling_point_efficiency`` is checked against it rather than trusted
 (:func:`disagreements`).
 
 Four figures, all in the repo's shared ink (:mod:`hpcagent_bench.stats.style`) and colour
@@ -64,18 +65,25 @@ from hpcagent_bench.harness import metric
 from hpcagent_bench.stats import palette, summary
 from hpcagent_bench.stats import style as plotstyle
 
-#: ``record`` value of a per-P scaling row in the observations table. A judge grade row keeps its
-#: own ``record`` ("submission" / "attempt"), so the two never mix in one selection.
+#: ``row_kind`` value of a per-P scaling row in the observations table. A judge grade row keeps its
+#: own ``row_kind`` ("submission" / "attempt"), so the two never mix in one selection.
 SCALING_RECORD: str = "scaling"
 
 #: The two scaling laws, in panel order. Weak first: it is the one the track's ideal (eta = 1 at
 #: every P) is stated for, and a reader meets the harder claim second.
 MODES: tuple[str, ...] = ("weak", "strong")
 
-#: Columns a scaling row cannot be read without. ``work_ratio`` is optional (absent means the weak
-#: problem grew EXACTLY, r = P, which is :func:`metric.ideal_speedup`'s own ``None``), and so are
-#: ``nodes``, ``scaling_mode`` and ``scaling_note``.
-REQUIRED_COLUMNS: tuple[str, ...] = ("record", "arm", "benchmark", "ranks", "ranked_ns", "single_rank_ns")
+#: Columns a scaling row cannot be read without. ``scaling_work_ratio`` is optional (absent means the
+#: weak problem grew EXACTLY, r = P, which is :func:`metric.ideal_speedup`'s own ``None``), and so
+#: are ``scaling_nodes``, ``scaling_mode`` and ``scaling_note``.
+REQUIRED_COLUMNS: tuple[str, ...] = (
+    "row_kind",
+    "arm",
+    "benchmark",
+    "scaling_ranks",
+    "scaling_ranked_ns",
+    "scaling_single_rank_ns",
+)
 
 #: The pseudo-arm (and model) of the torch.distributed baseline curve's rows, and its legend label.
 TORCH_DIST_ARM: str = "torch_dist"
@@ -83,7 +91,7 @@ TORCH_DIST_LABEL: str = "PyTorch Distributed"
 TORCH_DIST_MARKER: str = "x"
 
 #: Ranks per node on the track's machine (MI300A: 4 GPUs, 1 rank each). Used ONLY to fill a
-#: ``nodes`` a row did not record; a recorded value always wins, because how ranks were spread over
+#: ``scaling_nodes`` a row did not record; a recorded value always wins, because how ranks were spread over
 #: machines is the allocation's decision and not arithmetic anyone may redo.
 RANKS_PER_NODE: int = 4
 
@@ -104,7 +112,7 @@ SMALL_MULTIPLE_COLUMNS: int = 5
 #: neighbouring kernel names overprint each other.
 SMALL_MULTIPLE_TITLE_PT: float = 9.0
 
-#: How close a recorded ``efficiency`` must sit to the one :func:`metric.scaling_point` computes
+#: How close a recorded ``scaling_point_efficiency`` must sit to the one :func:`metric.scaling_point` computes
 #: before :func:`disagreements` reports the row. A relative tolerance, because eta is a ratio.
 EFFICIENCY_RTOL: float = 1e-6
 
@@ -237,7 +245,7 @@ def scaling_rows(frame: pd.DataFrame) -> pd.DataFrame:
     """
     if frame.empty or not set(REQUIRED_COLUMNS) <= set(frame.columns):
         return frame.iloc[0:0]
-    rows = frame[frame["record"].astype(str) == SCALING_RECORD].copy()
+    rows = frame[frame["row_kind"].astype(str) == SCALING_RECORD].copy()
     if rows.empty:
         return rows
     arms = [str(arm) for arm in rows["arm"].tolist()]
@@ -257,7 +265,7 @@ def scaling_rows(frame: pd.DataFrame) -> pd.DataFrame:
 def baseline_anchored(rows: pd.DataFrame) -> pd.DataFrame:
     """``rows`` with each torch.distributed baseline curve made whole: one curve is one
     (``run_id`` = stack, kernel, law) group, whose points several grade DBs may hold. Every point
-    gets the group's P=1 time as ``single_rank_ns`` (blank when P=1 was not timed: no anchor, every
+    gets the group's P=1 time as ``scaling_single_rank_ns`` (blank when P=1 was not timed: no anchor, every
     point a hole) and the group's newest stamp as ``ts_ms``, so the latest-curve rule keeps or drops
     the curve whole."""
     if not (rows["arm"].astype(str) == TORCH_DIST_ARM).any():
@@ -271,17 +279,17 @@ def baseline_anchored(rows: pd.DataFrame) -> pd.DataFrame:
             continue
         key = (str(record["run_id"]), str(record["benchmark"]), str(record["scaling_mode"]))
         stamps[key] = max(stamps.get(key, 0.0), number(record["ts_ms"]))
-        time_ns = number(record["ranked_ns"])
-        if number(record["ranks"]) == 1 and time_ns > 0:
+        time_ns = number(record["scaling_ranked_ns"])
+        if number(record["scaling_ranks"]) == 1 and time_ns > 0:
             anchors[key] = time_ns
     single: list[object] = []
     stamped: list[object] = []
     for record in records:
         key = (str(record["run_id"]), str(record["benchmark"]), str(record["scaling_mode"]))
         baseline = str(record["arm"]) == TORCH_DIST_ARM
-        single.append(anchors.get(key, "") if baseline else record.get("single_rank_ns", ""))
+        single.append(anchors.get(key, "") if baseline else record.get("scaling_single_rank_ns", ""))
         stamped.append(stamps[key] if baseline else record["ts_ms"])
-    rows["single_rank_ns"] = pd.Series(single, index=rows.index, dtype=object)
+    rows["scaling_single_rank_ns"] = pd.Series(single, index=rows.index, dtype=object)
     rows["ts_ms"] = pd.Series(stamped, index=rows.index, dtype=object)
     return rows
 
@@ -301,14 +309,14 @@ def point_of(row: pd.Series, mode: str) -> Point | None:
     The arithmetic is :func:`metric.scaling_point`'s and not this module's, so the number a figure
     plots is the number the grade was scored on.
     """
-    ranks = int(cell(row, "ranks", 0.0))
-    t1, tp = cell(row, "single_rank_ns", 0.0), cell(row, "ranked_ns", 0.0)
+    ranks = int(cell(row, "scaling_ranks", 0.0))
+    t1, tp = cell(row, "scaling_single_rank_ns", 0.0), cell(row, "scaling_ranked_ns", 0.0)
     if ranks < 1 or not (t1 > 0 and tp > 0):
         return None
-    ratio = cell(row, "work_ratio")
+    ratio = cell(row, "scaling_work_ratio")
     work_ratio = None if math.isnan(ratio) or ratio <= 0 else ratio
     graded = metric.scaling_point(mode, ranks, int(t1), int(tp), work_ratio=work_ratio)
-    nodes = int(cell(row, "nodes", 0.0)) or -(-ranks // RANKS_PER_NODE)
+    nodes = int(cell(row, "scaling_nodes", 0.0)) or -(-ranks // RANKS_PER_NODE)
     return Point(
         ranks=graded.ranks,
         nodes=nodes,
@@ -345,7 +353,7 @@ def curves(frame: pd.DataFrame) -> list[Curve]:
             row = group.iloc[index]
             point = point_of(row, str(mode))
             if point is None:
-                dropped.append((int(cell(row, "ranks", 0.0)), drop_reason(row)))
+                dropped.append((int(cell(row, "scaling_ranks", 0.0)), drop_reason(row)))
             else:
                 points.append(point)
         model = (
@@ -382,7 +390,7 @@ def dropped_points(curves_: Sequence[Curve]) -> list[tuple[str, str, str, int, s
 
 
 def disagreements(frame: pd.DataFrame, tolerance: float = EFFICIENCY_RTOL) -> list[tuple[str, str, int, float, float]]:
-    """``(arm, kernel, P, recorded, recomputed)`` wherever a recorded ``efficiency`` is not the one
+    """``(arm, kernel, P, recorded, recomputed)`` wherever a recorded ``scaling_point_efficiency`` is not the one
     :func:`metric.scaling_point` gives for the same row's times.
 
     A disclosure column and the formula behind it must agree; where they do not, the extractor or
@@ -390,12 +398,12 @@ def disagreements(frame: pd.DataFrame, tolerance: float = EFFICIENCY_RTOL) -> li
     absent, which is the normal case today.
     """
     rows = scaling_rows(frame)
-    if rows.empty or "efficiency" not in rows.columns:
+    if rows.empty or "scaling_point_efficiency" not in rows.columns:
         return []
     out: list[tuple[str, str, int, float, float]] = []
     for index in range(len(rows)):
         row = rows.iloc[index]
-        recorded = cell(row, "efficiency")
+        recorded = cell(row, "scaling_point_efficiency")
         point = point_of(row, str(row["scaling_mode"]))
         if point is None or math.isnan(recorded):
             continue

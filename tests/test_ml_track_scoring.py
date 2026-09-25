@@ -264,15 +264,10 @@ def test_the_curve_reaches_the_recorded_row_and_the_extractor(tmp_path) -> None:
         conn.commit()
     assert json.loads(stored)["weak"]["notes"] == ["P=8: mpi build failed"]
     found = observations_extract.read_db(
-        observations_extract.Database(db, "root", tmp_path, "job"), frozenset(), "", frozenset(), 0
+        observations_extract.Database(db, "root", tmp_path, "job"), "", frozenset(), 0
     ).observations
-    (row,) = [r for r in found if r["record"] == "submission"]
-    assert (row["mpi_mode"], row["mpi_ranks"], row["scaling_efficiency"], row["scaling_curve"]) == (
-        "strong,weak",
-        16,
-        None,
-        stored,
-    )
+    (row,) = [r for r in found if r["row_kind"] == "submission"]
+    assert (row["scaling_laws"], row["scaling_max_ranks"], row["scaling_curve"]) == ("strong,weak", 16, stored)
 
 
 def test_a_non_ml_grade_records_no_curve(tmp_path) -> None:
