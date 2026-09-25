@@ -21,7 +21,7 @@ import dataclasses
 import pathlib
 import sys
 from collections.abc import Iterable
-from enum import StrEnum
+from enum import Enum
 
 import yaml
 
@@ -41,7 +41,7 @@ NOTICE_LIST_LIMIT = 40
 RULE = "=" * 100
 
 
-class Kind(StrEnum):
+class Kind(Enum):
     """How a kernel relates to its upstream."""
 
     DERIVED = "derived"
@@ -120,7 +120,7 @@ def problems(entries: list[Provenance], registry: dict[str, dict[str, dict[str, 
             out.append(f"{entry.kernel}: unknown contributor {entry.contributor!r}")
         if (entry.kind is Kind.ORIGINAL) == bool(entry.upstreams):
             out.append(
-                f"{entry.kernel}: kind {entry.kind} {'must not' if entry.upstreams else 'must'} name an upstream"
+                f"{entry.kernel}: kind {entry.kind.value} {'must not' if entry.upstreams else 'must'} name an upstream"
             )
     out.extend(f"registry: upstream {key!r} is named by no kernel" for key in sorted(set(upstreams) - used))
     return out

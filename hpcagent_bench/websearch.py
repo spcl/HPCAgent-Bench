@@ -46,11 +46,11 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import StrEnum
-from typing import TypeAlias, cast
+from enum import Enum
+from typing import cast
 
 
-class Provider(StrEnum):
+class Provider(Enum):
     """A web-search backend. Declaration order is the auto-detect priority."""
 
     TAVILY = "tavily"
@@ -127,16 +127,16 @@ class SearchResponse:
 # JSON boundary
 #: What a JSON request body may hold. ``json.dumps`` accepts exactly this, so a value it would
 #: refuse cannot reach the wire.
-JsonValue: TypeAlias = "str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]"
+type JsonValue = str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]
 
 #: One decoded JSON object, straight off the wire. Its members are ``object`` until converted; the
 #: accessors below are the single place that says what each one really is.
-JsonObject: TypeAlias = "dict[str, object]"
+type JsonObject = dict[str, object]
 
 #: What a query string may carry. ``cse_id`` is ``None`` for every provider but google_cse, and
 #: urlencode spells that as the literal "None" -- which is what the unconfigured request already
 #: sent, so it stays a value the type admits rather than a case hidden behind a cast.
-QueryValue: TypeAlias = "str | int | None"
+type QueryValue = str | int | None
 
 
 def json_object(raw: object) -> JsonObject:
@@ -340,7 +340,7 @@ _REQUEST: dict[Provider, Callable[[str, str, str | None, WebSearchConfig], urlli
 
 # per-provider parsers
 #: What every parser hands back: the normalized hits, plus the provider's answer when it has one.
-Parsed: TypeAlias = "tuple[list[SearchResult], str | None]"
+type Parsed = tuple[list[SearchResult], str | None]
 
 
 def _hit(item: JsonObject, title_key: str, url_key: str, content_key: str) -> SearchResult:

@@ -134,7 +134,7 @@ def test_every_model_layer_is_listed_in_every_campaign() -> None:
 def test_a_fortran_base_extends_its_c_base_and_keeps_every_key() -> None:
     """llrbase-fortran extends llrbase-c: it may override keys but never lose one."""
     assert env_spec.load_spec()["llrbase-fortran"].extends == "llrbase-c"
-    for model in env_spec.Model:
+    for model in (member.value for member in env_spec.Model):
         c_values, fortran_values = flat(rendered(f"llrbase-c:{model}")), flat(rendered(f"llrbase-fortran:{model}"))
         assert set(c_values) <= set(fortran_values)
         assert fortran_values["LANGUAGE"] == "fortran"
@@ -165,7 +165,7 @@ def test_a_campaigns_budget_is_the_same_for_every_model(campaign: str) -> None:
     equals every campaign:model render on both budget keys."""
     track = env_spec.render(campaign)
     assert all(track.get(key, "").isdigit() for key in BUDGET_KEYS), track
-    for model in env_spec.Model:
+    for model in (member.value for member in env_spec.Model):
         values = env_spec.render(f"{campaign}:{model}")
         assert {key: values[key] for key in BUDGET_KEYS} == {key: track[key] for key in BUDGET_KEYS}, model
 

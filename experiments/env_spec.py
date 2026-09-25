@@ -34,7 +34,7 @@ EXTENDS = re.compile(r"^# extends: (.+)$", re.MULTILINE)
 MODEL_LAYER = re.compile(r"^model-([a-z0-9]+)\.env$")
 
 #: One member per ``layers/model-<model>.env``: adding a model is adding its layer.
-Model = enum.StrEnum(
+Model = enum.Enum(
     "Model", sorted((m[1], m[1]) for path in LAYERS.glob("model-*.env") if (m := MODEL_LAYER.match(path.name)))
 )
 
@@ -113,9 +113,9 @@ def render_campaign(name: str, model: str, spec: dict[str, Campaign]) -> dict[st
     except ValueError:
         raise SystemExit(f"env_spec: no model {model}: no layers/model-{model}.env") from None
     campaigns = campaign_chain(name, spec)
-    chain = layer_chain(LAYERS / f"model-{member}.env")
+    chain = layer_chain(LAYERS / f"model-{member.value}.env")
     if COMMON.resolve() not in chain:
-        raise SystemExit(f"env_spec: layers/model-{member}.env does not extend common.env")
+        raise SystemExit(f"env_spec: layers/model-{member.value}.env does not extend common.env")
     env: dict[str, str] = {}
     for layer in chain:
         env.update(assignments(layer))
@@ -152,7 +152,7 @@ def render(target: str, spec: dict[str, Campaign] | None = None) -> dict[str, st
 
 def targets(spec: dict[str, Campaign] | None = None) -> list[str]:
     """Every ``<campaign>:<model>`` that renders."""
-    return [f"{name}:{model}" for name in (load_spec() if spec is None else spec) for model in Model]
+    return [f"{name}:{model.value}" for name in (load_spec() if spec is None else spec) for model in Model]
 
 
 def as_text(env: dict[str, str]) -> str:

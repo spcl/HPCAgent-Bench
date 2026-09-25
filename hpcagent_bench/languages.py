@@ -66,8 +66,8 @@ LANG_EXT: dict[str, str] = {
     "hip": "hip",
 }
 
-#: A submission language, one member per :data:`LANG_EXT` entry (``Language.CUDA == "cuda"``).
-Language = enum.StrEnum("Language", [(name.upper(), name) for name in LANG_EXT])
+#: A submission language, one member per :data:`LANG_EXT` entry (``Language.CUDA.value == "cuda"``).
+Language = enum.Enum("Language", [(name.upper(), name) for name in LANG_EXT])
 
 #: GPU language -> the host language its C-ABI entry is written in. A GPU submission is TWO
 #: translation units: the host half holds the entry point the harness dlopens and the launch
@@ -99,7 +99,7 @@ def source_units(language: str, stem: str) -> tuple[tuple[str, str], ...]:
 
 #: Language -> the translator target that emits its reference. C and C++ share one emitter (the C
 #: ABI is the contract, not the dialect), so this is not derivable from :data:`LANG_EXT`.
-LANG_TARGET: dict[str, str] = {Language.C: "c", Language.CPP: "c", Language.FORTRAN: "fortran"}
+LANG_TARGET: dict[str, str] = {Language.C.value: "c", Language.CPP.value: "c", Language.FORTRAN.value: "fortran"}
 
 
 @functools.lru_cache(maxsize=1)
@@ -662,7 +662,7 @@ def offload_arch_spelling(family: str, arch: str) -> str:
 
 def offload_driver(model: str, vendor: str) -> str:
     """Absolute path to this leg's C driver, the one :func:`offload_probe` runs; ``""`` when absent."""
-    return offload_build_driver(model, vendor, Language.C)
+    return offload_build_driver(model, vendor, Language.C.value)
 
 
 def offload_build_driver(model: str, vendor: str, lang: str) -> str:
@@ -673,7 +673,7 @@ def offload_build_driver(model: str, vendor: str, lang: str) -> str:
     """
     family = offload_family(model)
     pinned = os.environ.get(OFFLOAD_CC_ENV.format(family=family.upper(), vendor=vendor.upper()))
-    if pinned and lang == Language.C:
+    if pinned and lang == Language.C.value:
         return pinned if os.access(pinned, os.X_OK) else ""
     name = OFFLOAD_BUILD_DRIVER.get((family, vendor, lang))
     if not name:
@@ -711,7 +711,7 @@ def gpu_backend() -> str:
     with no hipcc (or hipcc with no card). ``cuda`` is the answer when neither is found, because a
     column that names a language nothing installed still has to name one.
     """
-    return Language.HIP if shutil.which("hipcc") else Language.CUDA
+    return Language.HIP.value if shutil.which("hipcc") else Language.CUDA.value
 
 
 def offload_probe(model: str, vendor: str, arch: str, *, run: bool) -> bool:
@@ -943,7 +943,7 @@ def _compiler_for_lang(compilers: dict[str, dict], lang: str, *, mpi: bool = Fal
 #: narrow: ccache does not officially support Fortran (a cache hit skips the ``.mod``
 #: side-effect) and the CUDA/HIP drivers need their own configuration, so those keep
 #: compiling directly. C and C++ are where the harness spends its build time anyway.
-_CACHEABLE_LANGS = (Language.C, Language.CPP)
+CACHEABLE_LANGS = (Language.C.value, Language.CPP.value)
 
 
 @functools.lru_cache(maxsize=1, typed=True)
@@ -995,7 +995,7 @@ def _render_argv(tokens: list[str], subst: dict[str, str], *, cacheable_lang: st
     ``cacheable_lang`` marks this as a COMPILE step in that language, so a detected
     :func:`compiler_launcher` prefixes the argv when the language supports it."""
     out: list[str] = []
-    if cacheable_lang in _CACHEABLE_LANGS:
+    if cacheable_lang in CACHEABLE_LANGS:
         out.extend(compiler_launcher())
     for tok in tokens:
         rendered = tok.format(**subst)
@@ -1177,7 +1177,13 @@ def subst_map(
 #: Link-driver priority: the first language present wins, because its driver is the one that
 #: pulls in the runtime the others do not (nvcc/hipcc their device runtime, gfortran libgfortran,
 #: g++ libstdc++). A C driver links none of them, so it is the fallback.
-LINK_LANG_ORDER = (Language.CUDA, Language.HIP, Language.FORTRAN, Language.CPP, Language.C)
+LINK_LANG_ORDER = (
+    Language.CUDA.value,
+    Language.HIP.value,
+    Language.FORTRAN.value,
+    Language.CPP.value,
+    Language.C.value,
+)
 
 
 def link_lang_for(langs: set[str]) -> str:
@@ -1185,7 +1191,7 @@ def link_lang_for(langs: set[str]) -> str:
     for lang in LINK_LANG_ORDER:
         if lang in langs:
             return lang
-    return Language.C
+    return Language.C.value
 
 
 def baseline_flags(lang: str) -> str:
@@ -1370,9 +1376,9 @@ def probe_succeeds(argv: Sequence[str], source: str | None = None, env: dict[str
 
 #: Probe sources per compiler-block language: the smallest translation unit each front end accepts.
 _VECLIB_PROBE: dict[str, tuple[str, str]] = {
-    Language.FORTRAN: (".f90", "end\n"),
-    Language.C: (".c", "int main(void){return 0;}\n"),
-    Language.CPP: (".cpp", "int main(){return 0;}\n"),
+    Language.FORTRAN.value: (".f90", "end\n"),
+    Language.C.value: (".c", "int main(void){return 0;}\n"),
+    Language.CPP.value: (".cpp", "int main(){return 0;}\n"),
 }
 
 
@@ -1476,7 +1482,7 @@ LIBRARY_LINK_PREFIXES = ("-L", "-l")
 
 #: What ``-x`` to hand the block's compiler when trial-linking a library. The gcc drivers
 #: (gfortran included) all accept ``c``; nvcc names its input language ``cu``, and rejects ``c``.
-PROBE_INPUT_LANG: dict[str, str] = {Language.CPP: "c++", Language.HIP: "c++", Language.CUDA: "cu"}
+PROBE_INPUT_LANG: dict[str, str] = {Language.CPP.value: "c++", Language.HIP.value: "c++", Language.CUDA.value: "cu"}
 
 #: Where the GPU math libraries are already described (soname + header): the discovery table.
 TOOLSET_YAML: pathlib.Path = paths.ROOT / "hpcagent_bench" / "envs" / "toolset.yaml"
@@ -1719,7 +1725,7 @@ def isopar_capability() -> flags.AutoparProbe:
     this module rather than beside :func:`flags.polly_capability` because the cpp block's compiler
     is nameable only here, and :func:`stdpar_link_flags` (which must AGREE with it) is right above.
     """
-    _cname, block = _compiler_for_lang(_load_compilers(), Language.CPP)
+    block = _compiler_for_lang(_load_compilers(), Language.CPP.value)[1]
     composed = f"{baseline_flags('cpp')} {std_flag('cpp')}"
     return flags.probe_autopar(
         block["cc"],
@@ -1882,7 +1888,7 @@ def executable_version(path: str) -> str:
 CLANG_FORMAT_STYLE: pathlib.Path = paths.ROOT / ".clang-format"
 
 #: Languages the LLVM source tools can read. CUDA/HIP are included because clang parses both.
-CLANG_LANGS: tuple[str, ...] = (Language.C, Language.CPP, Language.CUDA, Language.HIP)
+CLANG_LANGS: tuple[str, ...] = (Language.C.value, Language.CPP.value, Language.CUDA.value, Language.HIP.value)
 
 
 @functools.lru_cache(maxsize=1, typed=True)
@@ -2124,15 +2130,15 @@ def build_kernel_lib_commands(
     # default --as-needed drops a -l that precedes the object needing it, which linked a clean
     # .so that then failed dlopen with ``undefined symbol: cblas_sgemm``.
     if langs_present & set(ALWAYS_LINKED_LANGS):
-        lang = Language.CPP if Language.CPP in langs_present else Language.C
+        lang = Language.CPP.value if Language.CPP.value in langs_present else Language.C.value
         link_argv.extend(f for f in library_build_flags(lang, ALWAYS_LINKED_LIBRARIES)[1] if f not in link_argv)
     if langs_present & set(FFT_LINKED_LANGS):
         lang = (
-            Language.CPP
-            if Language.CPP in langs_present
-            else Language.C
-            if Language.C in langs_present
-            else Language.FORTRAN
+            Language.CPP.value
+            if Language.CPP.value in langs_present
+            else Language.C.value
+            if Language.C.value in langs_present
+            else Language.FORTRAN.value
         )
         link_argv.extend(f for f in library_build_flags(lang, FFT_LINKED_LIBRARIES)[1] if f not in link_argv)
     cmds.append(link_argv)
@@ -2282,7 +2288,7 @@ PIC_FLAG_CUDA = "-Xcompiler=-fPIC"
 
 #: Languages whose emitted reference source can contain a BLAS call, so the tokens are linked
 #: whether or not anyone asked. C++ shares the C translator target, hence both.
-ALWAYS_LINKED_LANGS = (Language.C, Language.CPP)
+ALWAYS_LINKED_LANGS = (Language.C.value, Language.CPP.value)
 
 #: Libraries every C/C++ build links. ``blas`` resolves to openblas via envs/libraries.yaml.
 ALWAYS_LINKED_LIBRARIES = ("blas",)
@@ -2292,7 +2298,7 @@ ALWAYS_LINKED_LIBRARIES = ("blas",)
 #: ``_emit_blas_gemm`` equivalent, see numpyto_common.lowering.lower's docstring). The FFT_LIBRARY_
 #: MARKER lowering (numpyto_common/lib_nodes/fft.py) renders an ``fftw_plan_dft_1d``/``fftwf_...`` call
 #: on all three, so ``<fftw3.h>``/``-lfftw3`` has to resolve on all three.
-FFT_LINKED_LANGS = (Language.C, Language.CPP, Language.FORTRAN)
+FFT_LINKED_LANGS = (Language.C.value, Language.CPP.value, Language.FORTRAN.value)
 
 #: Libraries every C/C++/Fortran build links. ``fftw`` resolves to fftw3 via envs/libraries.yaml.
 FFT_LINKED_LIBRARIES = ("fftw",)
