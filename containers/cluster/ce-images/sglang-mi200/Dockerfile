@@ -60,7 +60,7 @@ RUN set -eux; \
     /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" "${d}"
 
 # No fabric library in a prefix this image controls: RPATH would bind to it and shadow the CSCS
-# netstack artifact the EDF hooks install (../sglang/Dockerfile carries the job history).
+# netstack artifact the EDF hooks install (../sglang/Dockerfile carries the reasoning).
 RUN set -eux; \
     rm -f /opt/ofi-sdk/lib/libfabric.so*; \
     found="$(find /opt/ofi-sdk /opt/ofi /opt/aws-ofi-nccl \

@@ -99,42 +99,9 @@ ENV FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
 # which is the intended way to retry aiter.
 ENV VLLM_ROCM_USE_AITER=0
 
-# Every network git call goes through this, and where a mirror is mounted none of them
-# reaches GitHub at all. The `insteadOf` rewrite is what covers the callers the wrapper
-# cannot: spack clones its package repo in-process and vLLM's CMake FetchContent clones
-# triton itself, and neither retries on GitHub's rate limiting. Conditional: a build with no
-# mirror mounted clones from GitHub.
-# `protocol.file.allow` goes with it: git has refused local-path submodule clones since the
-# CVE-2022-39253 fix, and the rewrite turns every submodule URL into exactly that, so
-# `submodule update` aborts with `transport 'file' not allowed` before it looks for the repo.
-# An unauthenticated clone or fetch from a busy egress
-# IP gets a 401, which git reports as `could not read Username for https://github.com`: it looks
-# like a credentials failure and is a transient one. GIT_TERMINAL_PROMPT=0 makes it fail instead
-# of blocking on a prompt no build has a terminal for; the backoff is what actually fixes it.
-RUN set -eux; \
-    printf '%s\n' \
-      '#!/bin/sh' \
-      'set -eu' \
-      'export GIT_TERMINAL_PROMPT=0' \
-      'n=1' \
-      'while :; do' \
-      '  git "$@" && exit 0' \
-      '  [ "${n}" -ge 10 ] && exit 1' \
-      '  d=$((n * n * 10)); if [ "${d}" -gt 300 ]; then d=300; fi' \
-      '  sleep "${d}"' \
-      '  n=$((n + 1))' \
-      'done' \
-      > /usr/local/bin/gitretry; \
-    chmod 0755 /usr/local/bin/gitretry; \
-    if [ -d /git-mirrors ]; then \
-      for m in /git-mirrors/*/*.git; do \
-        r="${m#/git-mirrors/}"; r="${r%.git}"; \
-        git config --global "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}.git"; \
-        git config --global --add "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}"; \
-      done; \
-      git config --global --add safe.directory '*'; \
-      git config --global protocol.file.allow always; \
-    fi
+# gitretry and the /git-mirrors rewrite for every clone below (git_mirror.sh says why).
+COPY containers/cluster/ce-images/git_mirror.sh /tmp/git_mirror.sh
+RUN sh /tmp/git_mirror.sh setup && rm -f /tmp/git_mirror.sh
 
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -507,13 +474,9 @@ assert not pathlib.Path("/opt/pytorch211/lib/python3.12/site-packages/sitecustom
 print("vllm", vllm.__version__, "torch", torch.__version__, file=sys.stderr)
 PY
 
-# Drop the mirror rewrite from the SHIPPED image. It is a build-time convenience pointing at a
-# path that exists only while the mirror is mounted; left in /root/.gitconfig, every git clone a
-# user runs inside this container would silently rewrite to a directory that is not there.
-RUN set -eux; \
-    git config --global --name-only --get-regexp '^url\..*\.insteadof$' 2>/dev/null \
-      | sort -u | while read -r k; do git config --global --unset-all "${k}" || true; done; \
-    git config --global --unset-all protocol.file.allow || true
+# Drop the build-time mirror rewrite from the SHIPPED image.
+COPY containers/cluster/ce-images/git_mirror.sh /tmp/git_mirror.sh
+RUN sh /tmp/git_mirror.sh drop && rm -f /tmp/git_mirror.sh
 
 # No fabric library ships. All three -- libfabric, libcxi and the RCCL net plugin -- arrive from
 # the pinned CSCS netstack artifact via the enroot hooks, and that artifact carries its own libc
