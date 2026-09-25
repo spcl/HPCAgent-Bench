@@ -286,7 +286,9 @@ def test_delete_rows_matches_each_jobs_own_arm_not_the_callers_folded_identity(t
     conn = make_shard(root, "100")
     with conn:
         conn.execute("insert into runs values (?, ?)", ("base-arm.n0.p0.w0", "base-arm"))
-        conn.execute("insert into submissions values (?, ?, ?, ?)", ("base-arm.n0.p0.w0", "a", "qwen38", FAR_FUTURE_TS_MS))
+        conn.execute(
+            "insert into submissions values (?, ?, ?, ?)", ("base-arm.n0.p0.w0", "a", "qwen38", FAR_FUTURE_TS_MS)
+        )
     conn.close()
     write_problems(root, "100", [(0, "a")])
     write_log(log_dir, "100", [exit_line(0, 1)])  # crashed: "a" is DROP
@@ -312,7 +314,7 @@ def test_roster_tag_reads_the_wave_boards_own_campaign_table() -> None:
     """The tag lookup must be the SAME table the wave board scores arms under, not a second copy
     that can drift from it."""
     assert crash_audit.roster_tag("cpf-llr-focus40-oss120b-c") == "llr-focus40"
-    assert crash_audit.roster_tag("scicomp-dc-cpp-oss120b-plain") == "scicomp40"
+    assert crash_audit.roster_tag("scicomp-dc-cpp-oss120b-plain") == "scicomp35"
 
 
 def test_roster_tag_raises_for_an_arm_no_campaign_owns() -> None:

@@ -40,7 +40,7 @@ def whole_bytes(spec: BenchSpec) -> BenchSpec:
     return dataclasses.replace(spec, floor_bytes_fraction=1.0)
 
 
-def cell(index: int = 0, **changes: Any) -> dict[str, Any]:
+def cell(index: int = 0, **changes: object) -> dict[str, Any]:
     """One device ``regrade_cells`` row of s1232 as the final pass writes it, flagged suspect by
     the old floor; its synchronization readings are those of an honest mi300 grade."""
     row: dict[str, Any] = dict.fromkeys(regrade.CELL_COLUMNS)
@@ -171,7 +171,7 @@ def test_the_final_grade_marks_the_rederived_submission_solved(tmp_path: pathlib
     assert (graded["suspect"], graded["speedup"]) == (0, pytest.approx(math.prod(RATIOS) ** 0.25))
 
 
-def live_row(**changes: Any) -> sqlite3.Row:
+def live_row(**changes: object) -> sqlite3.Row:
     """One live ``submissions`` row of s1232 on a GPU arm, as sqlite hands it to ``read_db``."""
     values: dict[str, Any] = {
         "benchmark": KERNEL,

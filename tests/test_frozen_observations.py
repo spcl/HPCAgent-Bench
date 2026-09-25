@@ -33,6 +33,8 @@ from hpcagent_bench import frozen_observations  # noqa: E402
 
 MODELS = ("kimi27sglang", "oss120b", "qwen38", "glm53")
 ARM = "cpf-llr-focus40-qwen38-fortran"
+#: An arm the registry's dropped_arms still names (cpfsrc v1, out since 2026-09-19).
+DROPPED_ARM = "cpf-llr-focus40-qwen38-c-cpfsrc"
 ROOT = "cpf-llr-focus40-20260917"
 #: After any real manifest commit, so comparable_since_ms never gates these fake kernels out.
 FAR_FUTURE_TS_MS = 10**13
@@ -308,25 +310,30 @@ def test_the_tracked_rerun_list_names_every_lost_setup_pending(board: types.Modu
 def test_a_setup_listed_for_rerun_is_yellow_with_its_frozen_coverage(
     board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A dropped arm family (LLR CPU Fortran) listed for rerun stays on the board as ``rerun``; its
-    deleted job (no sacct record, no directory) still contributes its frozen coverage."""
+    """A dropped arm family (cpfsrc v1; the LLR CPU Fortran arms are back in since 2026-09-25) listed
+    for rerun stays on the board as ``rerun``; its deleted job (no sacct record, no directory) still
+    contributes its frozen coverage."""
     runs = tmp_path / "runs"
-    live_job(runs / ROOT, "200", ["b"], arm=ARM)
-    frozen = write_frozen(tmp_path, [frozen_row("100", "submission", "a")])
+    live_job(runs / ROOT, "200", ["b"], arm=DROPPED_ARM)
+    frozen = write_frozen(tmp_path, [frozen_row("100", "submission", "a", arm=DROPPED_ARM)])
     listing = tmp_path / "rerun-lost.tsv"
-    listing.write_text(f"arm\tdeleted_jobs\treason\tstatus\n{ARM}\t100\tDBs deleted\tpending\n", encoding="utf-8")
+    listing.write_text(
+        f"arm\tdeleted_jobs\treason\tstatus\n{DROPPED_ARM}\t100\tDBs deleted\tpending\n", encoding="utf-8"
+    )
     monkeypatch.setattr(board, "RERUN_LOST", listing)
-    monkeypatch.setattr(board, "slurm_jobs", lambda ids: [board.Job("200", ARM, "COMPLETED", 1, "", "")])
+    monkeypatch.setattr(board, "slurm_jobs", lambda ids: [board.Job("200", DROPPED_ARM, "COMPLETED", 1, "", "")])
     monkeypatch.setattr(board, "queued_ids", list)
     monkeypatch.setattr(board.remaining_kernels, "roster", lambda tag, opt: ["a", "b", "c"])
 
     rows = board.arm_rows(runs, str(REPO), MODELS, frozen)
 
-    assert [(row["arm"], row["status"], row["rerun"], row["done"]) for row in rows] == [(ARM, "rerun", "pending", 2)]
+    assert [(row["arm"], row["status"], row["rerun"], row["done"]) for row in rows] == [
+        (DROPPED_ARM, "rerun", "pending", 2)
+    ]
     assert rows[0]["frozen_jobs"] == ["100"]
     assert {job["id"]: job["state"] for job in rows[0]["jobs"]} == {"100": board.DELETED_STATE, "200": "COMPLETED"}
 
-    listing.write_text(f"arm\tdeleted_jobs\treason\tstatus\n{ARM}\t100\tDBs deleted\tdone\n", encoding="utf-8")
+    listing.write_text(f"arm\tdeleted_jobs\treason\tstatus\n{DROPPED_ARM}\t100\tDBs deleted\tdone\n", encoding="utf-8")
     assert board.arm_rows(runs, str(REPO), MODELS, frozen) == []  # rerun done: the drop rule applies again
 
 

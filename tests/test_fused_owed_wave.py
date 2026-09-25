@@ -653,9 +653,10 @@ def test_a_model_mismatched_source_is_skipped_with_a_note(
 def test_a_dropped_arm_is_planned_only_while_a_rerun_list_names_it(
     owed: ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, listed: bool
 ) -> None:
-    """The board keeps a dropped arm that rerun-lost.tsv lists (the LLR CPU Fortran arms, 09-19); a
-    planner that skipped it silently could never rerun what the board shows owed."""
-    arm = "cpf-llr-focus40-qwen38-fortran"
+    """The board keeps a dropped arm that rerun-lost.tsv lists (cpfsrc v1 here; the LLR CPU Fortran
+    arms of 09-19 are back in since 2026-09-25); a planner that skipped it silently could never rerun
+    what the board shows owed."""
+    arm = "cpf-llr-focus40-qwen38-c-cpfsrc"
     runs = model_mismatch_run(tmp_path, "700005", f"{arm}-clean", "qwen38")
     lost = tmp_path / "rerun-lost.tsv"
     lost.write_text("arm\tdeleted_jobs\treason\tstatus\n" + (f"{arm}\t639217\tdeleted\tpending\n" if listed else ""))
@@ -1030,6 +1031,7 @@ def test_an_experiment_without_a_budget_policy_is_refused(owed: ModuleType) -> N
         ("scicomp-focus40", ("24000000", "21600"), ("120000000", "72000")),
         ("git-scicomp", ("24000000", "43200"), ("120000000", "72000")),
         ("mlscale", ("24000000", "43200"), ("24000000", "43200")),
+        ("mlscale-part2", ("24000000", "21600"), ("24000000", "21600")),
     ],
 )
 def test_every_plannable_experiment_has_a_budget_policy(

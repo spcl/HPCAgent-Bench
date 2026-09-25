@@ -5,6 +5,8 @@
 The mapping used to live in three unsynchronised copies (wave_board, migrate_db, kernel_comparison),
 so a prefix added to one was absent from the others with nothing to catch it."""
 
+import pathlib
+
 import pytest
 
 from hpcagent_bench import campaigns, dataset
@@ -73,14 +75,16 @@ def test_one_experiment_collects_every_campaign_that_feeds_it() -> None:
     assert set(selection.devices) == {"CPU", "GPU"}
 
 
-def test_a_run_glob_is_the_prefix_under_the_runs_root(tmp_path) -> None:
+def test_a_run_glob_is_the_prefix_under_the_runs_root(tmp_path: pathlib.Path) -> None:
     """A launcher names its run root ``<prefix>-<date>``, and dated and lettered suffixes
     (``git-scicomp-20260917b``) both have to match or a wave goes missing."""
     selection = campaigns.resolve("git-scicomp", root=tmp_path)
     assert selection.run_globs() == (str(tmp_path / "git-scicomp-*"), str(tmp_path / "owed-git-scicomp-[0-9]*"))
 
 
-def test_an_owed_wave_root_is_read_under_its_arms_real_key(tmp_path, monkeypatch) -> None:
+def test_an_owed_wave_root_is_read_under_its_arms_real_key(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A fused owed wave writes ``owed-<experiment>-<date>``, which no campaign prefix matches; its
     rows must still reach the experiment, under the arm that ran them. The blind experiment's owed
     root shares the stem and must not be read as llr-focus40's."""
