@@ -43,7 +43,7 @@ import math
 import random
 import statistics
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from collections.abc import Mapping, Sequence
 
 from hpcagent_bench.stats import inference
 from hpcagent_bench.stats import summary
@@ -130,7 +130,7 @@ def bootstrap_interval(
     resamples: int = BOOTSTRAP_RESAMPLES,
     confidence: float = CONFIDENCE,
     seed: int = BOOTSTRAP_SEED,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     """Symmetric studentized bootstrap interval for ``mean(deltas)``, in LOG space.
 
     Bounds the MEAN, and therefore ``rho``, and carries no verdict; the significance statement is
@@ -179,7 +179,7 @@ class Verdict:
     label: str
 
 
-def correct_family(pvalues: Sequence[float], *, alpha: float = ALPHA) -> List[Verdict]:
+def correct_family(pvalues: Sequence[float], *, alpha: float = ALPHA) -> list[Verdict]:
     """Benjamini-Hochberg verdicts for ONE declared family of tests, in the input order.
 
     A non-finite p is a test that was never performed -- too few pairs to reach any alpha -- so it
@@ -243,7 +243,7 @@ class Ratio:
         return 100.0 * (self.rho - 1.0)
 
     @property
-    def ci_pct(self) -> Tuple[float, float]:
+    def ci_pct(self) -> tuple[float, float]:
         """The bootstrap interval AROUND ``rho``, as a percentage change."""
         return (log_to_pct(self.ci_low), log_to_pct(self.ci_high))
 
@@ -253,7 +253,7 @@ class Ratio:
         return 100.0 * (math.exp(self.change.estimate) - 1.0)
 
     @property
-    def hl_ci_pct(self) -> Tuple[float, float]:
+    def hl_ci_pct(self) -> tuple[float, float]:
         """The distribution-free interval around the tested parameter, NaN when it was withheld."""
         return (100.0 * (math.exp(self.change.low) - 1.0), 100.0 * (math.exp(self.change.high) - 1.0))
 
@@ -288,7 +288,7 @@ class Efficacy:
     q: float
     score_weight: float
     cost_weight: float
-    tasks: Tuple[str, ...]
+    tasks: tuple[str, ...]
     unmatched: tuple[str, ...] = ()
 
     @property
@@ -297,7 +297,7 @@ class Efficacy:
         return math.exp(self.q)
 
     @property
-    def point(self) -> Tuple[float, float]:
+    def point(self) -> tuple[float, float]:
         """``(rho_S, rho_C)`` -- the pair Pareto dominance is decided on, not ``Q``."""
         return (self.score.rho, self.cost.rho)
 
@@ -314,7 +314,7 @@ def dominates(a: Efficacy, b: Efficacy) -> bool:
     return better_or_equal and strictly_better
 
 
-def pareto_front(efficacies: Mapping[str, Efficacy]) -> Tuple[str, ...]:
+def pareto_front(efficacies: Mapping[str, Efficacy]) -> tuple[str, ...]:
     """The names in ``efficacies`` that nothing else dominates, in the input's own order."""
     return tuple(
         name
@@ -365,7 +365,7 @@ def efficacy(
     after_costs: Mapping[str, float],
     *,
     score_weight: float = DEFAULT_SCORE_WEIGHT,
-    cost_weight: Optional[float] = None,
+    cost_weight: float | None = None,
     resamples: int = BOOTSTRAP_RESAMPLES,
     confidence: float = CONFIDENCE,
     seed: int = BOOTSTRAP_SEED,
@@ -419,7 +419,7 @@ def efficacy(
     )
 
 
-def axis_columns(prefix: str, item: Ratio, adjusted: Verdict, family: str) -> Dict[str, object]:
+def axis_columns(prefix: str, item: Ratio, adjusted: Verdict, family: str) -> dict[str, object]:
     """One axis of one intervention, as columns that never invite reading across two parameters.
 
     The geometric-mean block comes first and ends at its own interval; the tested block follows,
@@ -443,7 +443,7 @@ def axis_columns(prefix: str, item: Ratio, adjusted: Verdict, family: str) -> Di
     }
 
 
-def as_row(name: str, item: Efficacy) -> Dict[str, object]:
+def as_row(name: str, item: Efficacy) -> dict[str, object]:
     """One flat record per intervention, for a CSV or a table, with NO corrected verdict.
 
     A row on its own belongs to no family, so its verdict column reads :data:`UNCORRECTED` and its
@@ -467,9 +467,9 @@ def family_rows(
     members: Mapping[str, Efficacy],
     *,
     family: str = "efficacy",
-    dependent: Optional[Mapping[str, Efficacy]] = None,
+    dependent: Mapping[str, Efficacy] | None = None,
     alpha: float = ALPHA,
-) -> List[Dict[str, object]]:
+) -> list[dict[str, object]]:
     """Rows for ONE declared family of interventions, corrected across it.
 
     The family is every test the table lets a reader read as a finding: both axes of every member,

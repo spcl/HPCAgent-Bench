@@ -18,7 +18,8 @@ import posixpath
 import re
 import shlex
 from collections.abc import MutableMapping
-from typing import Callable, Protocol, Sequence, TypedDict, cast
+from typing import Protocol, TypedDict, cast
+from collections.abc import Callable, Sequence
 
 import jinja2
 import yaml

@@ -234,7 +234,7 @@ def njit_reference(
     return guarded
 
 
-class Test(object):
+class Test:
     """A class for testing a framework on a benchmark."""
 
     def __init__(self, bench: Benchmark, frmwrk: Framework, npfrmwrk: Framework | None = None) -> None:
@@ -337,13 +337,13 @@ class Test(object):
         except NotSupportedByFramework as e:
             # A decline records no row; errors.decline_kind separates ``unsupported`` (the kernel)
             # from ``tool_missing`` (the host lacks the column's compiler).
-            print("UNSUPPORTED: {}".format(e))
+            print(f"UNSUPPORTED: {e}")
             self._last_failure = decline_kind(e)
             if not ignore_errors:
                 raise
             return None, None, None
         except Exception as e:
-            print("Failed to load the {} implementation.".format(report_str))
+            print(f"Failed to load the {report_str} implementation.")
             traceback.print_exception(e)
             self._last_failure = "load_error"
             if not ignore_errors:
@@ -364,13 +364,13 @@ class Test(object):
                 plan.run()
         except NotSupportedByFramework as e:
             # A deliberate, correct decline (no traceback), not an unexpected error.
-            print("UNSUPPORTED: {}".format(e))
+            print(f"UNSUPPORTED: {e}")
             self._last_failure = decline_kind(e)
             if not ignore_errors:
                 raise
             return None, None, None
         except Exception as e:
-            print("Failed to execute the {} implementation.".format(report_str))
+            print(f"Failed to execute the {report_str} implementation.")
             traceback.print_exception(e)
             self._last_failure = "runtime_error"
             if not ignore_errors:
@@ -512,7 +512,7 @@ class Test(object):
             try:
                 frmwrk_out, _, _ = first_execution(impl, impl_name)
             except KeyboardInterrupt:
-                print('Implementation "{}" timed out.'.format(impl_name), flush=True)
+                print(f'Implementation "{impl_name}" timed out.', flush=True)
                 per_impl_timings[impl_name] = {"python": None, "native": None, "validated": False, "failure": "timeout"}
                 continue
             except Exception:

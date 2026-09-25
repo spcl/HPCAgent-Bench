@@ -5,7 +5,8 @@
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -22,7 +23,7 @@ AXIS_SCHEMES = ("block", "block_cyclic", "cyclic")
 class AxisDist:
     """How ONE array axis is laid out: replicated (grid_dim=None) or split by scheme; no ghost cells."""
 
-    grid_dim: Optional[int] = None
+    grid_dim: int | None = None
     scheme: str = "block"
     block_size: int = 1
 
@@ -31,7 +32,7 @@ class AxisDist:
 class ArrayDist:
     """One logical array's distribution: one AxisDist per dimension, or replicated=True for the whole array."""
 
-    axes: Tuple[AxisDist, ...] = ()
+    axes: tuple[AxisDist, ...] = ()
     replicated: bool = False
 
 
@@ -39,27 +40,27 @@ class ArrayDist:
 class Grid:
     """The processor grid (math.prod(dims) == rank count); N-D generalization of ScaLAPACK's BLACS grid."""
 
-    dims: Tuple[int, ...]
+    dims: tuple[int, ...]
 
     @property
     def nranks(self) -> int:
         return math.prod(self.dims)
 
-    def coords_of(self, rank: int) -> Tuple[int, ...]:
+    def coords_of(self, rank: int) -> tuple[int, ...]:
         """Row-major rank -> grid coordinates."""
         return tuple((rank // stride) % self.dims[i] for i, stride in enumerate(self._strides()))
 
     def rank_of(self, coords: Sequence[int]) -> int:
         return int(sum(c * s for c, s in zip(coords, self._strides())))
 
-    def _strides(self) -> List[int]:
+    def _strides(self) -> list[int]:
         strides = [1] * len(self.dims)
         for i in range(len(self.dims) - 2, -1, -1):
             strides[i] = strides[i + 1] * self.dims[i + 1]
         return strides
 
 
-def _block_bounds(n: int, parts: int, coord: int) -> Tuple[int, int]:
+def _block_bounds(n: int, parts: int, coord: int) -> tuple[int, int]:
     """Load-balanced contiguous block [lo, hi) of range(n) for coord of parts."""
     base, rem = divmod(n, parts)
     lo = coord * base + min(coord, rem)
@@ -91,13 +92,13 @@ def owned_indices(n: int, axis: AxisDist, grid: Grid, coords: Sequence[int]) -> 
     )
 
 
-def _axis_index_lists(shape: Sequence[int], dist: ArrayDist, grid: Grid, coords: Sequence[int]) -> List[np.ndarray]:
+def _axis_index_lists(shape: Sequence[int], dist: ArrayDist, grid: Grid, coords: Sequence[int]) -> list[np.ndarray]:
     if len(dist.axes) != len(shape):
         raise ValueError(f"ArrayDist has {len(dist.axes)} axes but the array has {len(shape)} dimension(s)")
     return [owned_indices(n, ax, grid, coords) for n, ax in zip(shape, dist.axes)]
 
 
-def local_shape(shape: Sequence[int], dist: ArrayDist, grid: Grid, rank: int) -> Tuple[int, ...]:
+def local_shape(shape: Sequence[int], dist: ArrayDist, grid: Grid, rank: int) -> tuple[int, ...]:
     """The shape of ``rank``'s local (owned-interior) tile."""
     if dist.replicated:
         return tuple(shape)
@@ -105,11 +106,11 @@ def local_shape(shape: Sequence[int], dist: ArrayDist, grid: Grid, rank: int) ->
     return tuple(len(ix) for ix in _axis_index_lists(shape, dist, grid, coords))
 
 
-def scatter(a: np.ndarray, dist: ArrayDist, grid: Grid) -> List[np.ndarray]:
+def scatter(a: np.ndarray, dist: ArrayDist, grid: Grid) -> list[np.ndarray]:
     """Partition a into one contiguous local tile per rank; the reference the drivers' Scatterv reproduces."""
     if dist.replicated:
         return [a.copy() for _ in range(grid.nranks)]
-    tiles: List[np.ndarray] = []
+    tiles: list[np.ndarray] = []
     for rank in range(grid.nranks):
         coords = grid.coords_of(rank)
         tiles.append(a[np.ix_(*_axis_index_lists(a.shape, dist, grid, coords))].copy())
@@ -180,7 +181,7 @@ def default_distribution(shape: Sequence[int], grid: Grid, block_size: int = 1) 
                 f"{len(shape)} axes; use a grid with <= {len(shape)} split dims "
                 f"(e.g. factor_grid(nranks, {len(shape)}))"
             )
-    axes: List[AxisDist] = []
+    axes: list[AxisDist] = []
     for d in range(len(shape)):
         if d < len(grid.dims) and grid.dims[d] > 1:
             axes.append(AxisDist(grid_dim=d, scheme="block_cyclic", block_size=max(1, block_size)))
@@ -199,8 +200,8 @@ def split_axis_entry(scheme: str, block_size: int) -> dict:
 
 
 def distribution_from_split(
-    array_shapes: Dict[str, Sequence[str]],
-    split: Dict[str, Optional[str]],
+    array_shapes: dict[str, Sequence[str]],
+    split: dict[str, str | None],
     ranks: int,
     *,
     scheme: str = "block",
@@ -211,7 +212,7 @@ def distribution_from_split(
     explicitly as ``{"replicated": true}``). Unlike
     :func:`distribution_from_shapes` the symbol is per array, so ``out`` of a K-split matmul can be
     split on ``M`` (a reduce-scatter's row blocks) while ``A``/``B`` split on ``K``."""
-    arrays: Dict[str, dict] = {}
+    arrays: dict[str, dict] = {}
     for name, sym in split.items():
         if sym is None:
             # Listed, not omitted: every array of the kernel appears in the layout, the replicated
@@ -233,7 +234,7 @@ def distribution_from_split(
 
 
 def distribution_from_shapes(
-    array_shapes: Dict[str, Sequence[str]],
+    array_shapes: dict[str, Sequence[str]],
     axis_symbols: Sequence[str],
     ranks: int,
     *,
@@ -242,7 +243,7 @@ def distribution_from_shapes(
 ) -> dict:
     """A submission-style distribution dict: over a 1-D grid, split the first axis named by axis_symbols."""
     wanted = set(axis_symbols)
-    arrays: Dict[str, dict] = {}
+    arrays: dict[str, dict] = {}
     for name, shape in array_shapes.items():
         split = next((d for d, tok in enumerate(shape) if tok in wanted), None)
         if split is None:
@@ -279,11 +280,11 @@ def array_dist_from_dict(layout: dict) -> ArrayDist:
 
 
 def blockcyclic_distribution_from_shapes(
-    array_shapes: Dict[str, Sequence[str]], ranks: int, *, grid_ndim: int, block_size: int = 1
+    array_shapes: dict[str, Sequence[str]], ranks: int, *, grid_ndim: int, block_size: int = 1
 ) -> dict:
     """A submission-style distribution dict: leading grid_ndim axes block-cyclic over an equal-edge hypercube."""
     grid = hypercube_grid(int(ranks), int(grid_ndim))
-    arrays: Dict[str, dict] = {}
+    arrays: dict[str, dict] = {}
     for name, shape in array_shapes.items():
         if len(shape) < grid_ndim:
             continue  # too few axes to bind every split grid dim; the descriptor replicates it
@@ -298,7 +299,7 @@ def blockcyclic_distribution_from_shapes(
     return {"grid": list(grid.dims), "arrays": arrays}
 
 
-def binding_shapes(binding: "Binding") -> Dict[str, Sequence[str]]:
+def binding_shapes(binding: "Binding") -> dict[str, Sequence[str]]:
     """The declarative shape of every pointer that has one -- the array_shapes map the
     distribution builders take."""
     return {p.name: p.shape for p in binding.pointers if p.shape is not None}
@@ -311,7 +312,7 @@ def distribution_over_symbol(
     return distribution_from_shapes(binding_shapes(binding), axis_symbols, ranks, scheme=scheme, block_size=block_size)
 
 
-def replicatable_allowlist(spec: "BenchSpec") -> Optional[List[str]]:
+def replicatable_allowlist(spec: "BenchSpec") -> list[str] | None:
     """The arrays a distributed submission may hold whole on every rank (``mpi.replicatable``), or
     ``None`` when the manifest declares no list and the rule does not apply (the legacy mpi kernels).
 
@@ -326,9 +327,7 @@ def replicatable_allowlist(spec: "BenchSpec") -> Optional[List[str]]:
     return sorted(str(name) for name in declared)
 
 
-def distribution_for_kernel(
-    mpi_block: Optional[dict], binding: "Binding", ranks: int, *, scheme: str = "block"
-) -> dict:
+def distribution_for_kernel(mpi_block: dict | None, binding: "Binding", ranks: int, *, scheme: str = "block") -> dict:
     """The kernel's default distribution from its mpi: decomposition block; the ONE builder every caller shares."""
     mpi = mpi_block or {}
     decomp = mpi.get("decomposition", {})
@@ -361,7 +360,7 @@ def _array_dist_from_layout(layout: dict) -> ArrayDist:
     """Resolve one array's {replicated | axes:[...]} layout dict into an ArrayDist."""
     if layout.get("replicated"):
         return ArrayDist(replicated=True)
-    axes: List[AxisDist] = []
+    axes: list[AxisDist] = []
     for ax in layout["axes"]:
         axes.append(
             AxisDist(
@@ -371,10 +370,10 @@ def _array_dist_from_layout(layout: dict) -> ArrayDist:
     return ArrayDist(axes=tuple(axes))
 
 
-def _symbol_axes_from_binding(binding: "Binding") -> Dict[str, List[Tuple[str, int]]]:
+def _symbol_axes_from_binding(binding: "Binding") -> dict[str, list[tuple[str, int]]]:
     """Derive {size_symbol: [(array, axis), ...]} from the binding's declarative array shapes."""
     symbols = {a.name for a in binding.scalars if a.role == "symbol"}
-    out: Dict[str, List[Tuple[str, int]]] = {}
+    out: dict[str, list[tuple[str, int]]] = {}
     for p in binding.pointers:
         if p.shape is None:
             continue
@@ -389,10 +388,10 @@ class Descriptor:
     """The resolved MPI distribution for one (submission, binding) pair: an N-D, per-array ScaLAPACK DESCA analog."""
 
     grid: Grid
-    arrays: Dict[str, ArrayDist]
-    symbol_axes: Dict[str, List[Tuple[str, int]]] = field(default_factory=dict)
+    arrays: dict[str, ArrayDist]
+    symbol_axes: dict[str, list[tuple[str, int]]] = field(default_factory=dict)
     #: Per-array residency ("host" default or "device"); harness scatters on host then moves device tiles (untimed).
-    locations: Dict[str, str] = field(default_factory=dict)
+    locations: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_submission(
@@ -401,7 +400,7 @@ class Descriptor:
         binding: "Binding",
         ranks: int,
         *,
-        symbol_axes: Optional[Dict[str, Tuple[str, int]]] = None,
+        symbol_axes: dict[str, tuple[str, int]] | None = None,
         default_location: str = "host",
     ) -> "Descriptor":
         """Resolve + semantically validate submission.distribution against binding and the fixed ranks."""
@@ -418,7 +417,7 @@ class Descriptor:
         binding: "Binding",
         ranks: int,
         *,
-        symbol_axes: Optional[Dict[str, Tuple[str, int]]] = None,
+        symbol_axes: dict[str, tuple[str, int]] | None = None,
         default_location: str = "host",
     ) -> "Descriptor":
         """Resolve + semantically validate a distribution dict against binding and the fixed ranks."""
@@ -432,7 +431,7 @@ class Descriptor:
         scalar_names = {a.name for a in binding.scalars}
         ndims = {name: len(a.shape) for name, a in ptrs.items() if a.shape is not None}
 
-        resolved: Dict[str, ArrayDist] = {}
+        resolved: dict[str, ArrayDist] = {}
         for name, layout in dist["arrays"].items():
             if name in scalar_names:
                 raise ValueError(
@@ -464,7 +463,7 @@ class Descriptor:
             derived[sym] = [tuple(pair)]  # manifest mapping wins for this symbol
         return cls(grid=grid, arrays=resolved, symbol_axes=derived, locations=locations)
 
-    def dist_for(self, name: str, global_shape: Optional[Sequence[int]] = None) -> ArrayDist:
+    def dist_for(self, name: str, global_shape: Sequence[int] | None = None) -> ArrayDist:
         """The :class:`ArrayDist` used to scatter/gather ``name``. A ``global_shape`` with <= 1
         element is a wrapped scalar (length-1 reduction output or 0-d value): forced to
         ``replicated`` so it is broadcast to every rank and gathered from rank 0."""
@@ -472,11 +471,11 @@ class Descriptor:
             return ArrayDist(replicated=True)
         return self.arrays[name]
 
-    def local_shape(self, name: str, global_shape: Sequence[int], rank: int) -> Tuple[int, ...]:
+    def local_shape(self, name: str, global_shape: Sequence[int], rank: int) -> tuple[int, ...]:
         """Shape of ``rank``'s owned-interior tile of array ``name``."""
         return local_shape(global_shape, self.dist_for(name, global_shape), self.grid, rank)
 
-    def scatter(self, name: str, a: np.ndarray) -> List[np.ndarray]:
+    def scatter(self, name: str, a: np.ndarray) -> list[np.ndarray]:
         """Partition array name into one owned-interior tile per rank (the driver's Scatterv reference)."""
         return scatter(a, self.dist_for(name, a.shape), self.grid)
 
@@ -486,7 +485,7 @@ class Descriptor:
         """Reconstruct global array name from per-rank owned-interior tiles, the exact inverse of scatter."""
         return gather(tiles, self.dist_for(name, global_shape), self.grid, global_shape, dtype)
 
-    def local_size_scalars(self, global_scalars: Dict[str, int], rank: int) -> Dict[str, int]:
+    def local_size_scalars(self, global_scalars: dict[str, int], rank: int) -> dict[str, int]:
         """Each size symbol -> value at rank: the local extent only when EVERY axis it sizes is decomposed
         the same way, the global value otherwise; raises when the decompositions themselves conflict.
 
@@ -502,7 +501,7 @@ class Descriptor:
             # key each decomposed axis by what sets its per-coord count; >1 distinct key => no single value
             schemes = set()
             sizes_replicated_axis = False
-            local_val: Optional[int] = None
+            local_val: int | None = None
             for arr, axis in candidates:
                 ad = self.arrays.get(arr)
                 if ad is None or ad.replicated or axis >= len(ad.axes) or ad.axes[axis].grid_dim is None:
@@ -546,7 +545,7 @@ class Descriptor:
                 local.add(sym)
         return frozenset(local)
 
-    def device_pointer_indices(self, binding: "Binding") -> Tuple[int, ...]:
+    def device_pointer_indices(self, binding: "Binding") -> tuple[int, ...]:
         """Indices (in binding.pointers order) of the arrays the agent placed on the GPU; empty = all-host."""
         return tuple(i for i, p in enumerate(binding.pointers) if self.locations.get(p.name, "host") == "device")
 
@@ -572,7 +571,7 @@ def degenerates_to_block(n: int, parts: int, axis: AxisDist) -> bool:
     return n % parts == 0 and _effective_block_size(axis) == n // parts
 
 
-def block_partition_mismatch(descriptor: "Descriptor", shapes: Mapping[str, Sequence[int]]) -> Optional[str]:
+def block_partition_mismatch(descriptor: "Descriptor", shapes: Mapping[str, Sequence[int]]) -> str | None:
     """The first declared split axis whose scheme does not realize the tiles the run materializes,
     or ``None`` when every one of them does.
 
@@ -608,7 +607,7 @@ def block_partition_mismatch(descriptor: "Descriptor", shapes: Mapping[str, Sequ
 
 def replication_refusal(
     descriptor: "Descriptor", shapes: Mapping[str, Sequence[int]], allowed: Sequence[str]
-) -> Optional[str]:
+) -> str | None:
     """The first array the distribution replicates that the manifest's ``mpi.replicatable`` does
     not allow, or ``None``.
 
@@ -637,7 +636,7 @@ def replication_refusal(
     return None
 
 
-def layout_flexible_allowlist(spec: "BenchSpec") -> List[str]:
+def layout_flexible_allowlist(spec: "BenchSpec") -> list[str]:
     """The ML-track arrays a kernel's ``make_inputs``/``reference_dist`` can realize under ANY
     scheme (``block`` / ``cyclic`` / ``block_cyclic``, any ``block_size``) on their manifest
     ``mpi.split`` axis -- ``mpi.layout_flexible``, sorted, ``[]`` when the manifest declares none.
@@ -661,7 +660,7 @@ def layout_flexible_allowlist(spec: "BenchSpec") -> List[str]:
 
 def layout_divisibility_refusal(
     descriptor: "Descriptor", flexible: Sequence[str], shapes: Mapping[str, Sequence[int]], graded_ranks: Sequence[int]
-) -> Optional[str]:
+) -> str | None:
     """The '64-rule': the first flexible array whose declared split axis does not divide evenly
     by EVERY rank count the kernel is graded at (``graded_ranks``, capped at 16), or ``None``.
 
@@ -703,7 +702,7 @@ def default_layout_refusal(
     *,
     flexible: Sequence[str] = (),
     graded_ranks: Sequence[int] = (),
-) -> Optional[str]:
+) -> str | None:
     """The first array whose declared layout is neither the kernel's default (``default``, the
     manifest ``mpi.split`` layout), a flexible re-scheming of it, nor held whole on every rank, or
     ``None``.

@@ -15,7 +15,7 @@ runs. What is at stake is how to read the numbers, because a serial ``-O3`` run 
 an autopar name is a wrong measurement wearing a right label.
 """
 
-from typing import Dict, List, Sequence, Tuple
+from collections.abc import Sequence
 
 from hpcagent_bench import flags, languages, pluto_transform, ppcg_transform
 from hpcagent_bench.flags import AutoparVerdict, Mode
@@ -26,7 +26,7 @@ from hpcagent_bench.frameworks.framework import FRAMEWORK_META
 #: allocation for, so naming one here is a submission error, not a runtime one. Derived from
 #: :data:`hpcagent_bench.frameworks.framework.FRAMEWORK_META`'s ``sweep_deterministic`` flag, the
 #: single source of truth, rather than a second hand-kept list that can silently drift from it.
-DETERMINISTIC_FRAMEWORKS: Tuple[str, ...] = tuple(
+DETERMINISTIC_FRAMEWORKS: tuple[str, ...] = tuple(
     name for name, meta in FRAMEWORK_META.items() if meta["sweep_deterministic"]
 )
 
@@ -45,19 +45,19 @@ AUTOPAR_PROBES = {
 }
 
 
-def check_deterministic(frameworks: Sequence[str]) -> List[str]:
+def check_deterministic(frameworks: Sequence[str]) -> list[str]:
     """The entries of ``frameworks`` that a deterministic sweep cannot run."""
     return [name for name in frameworks if name not in DETERMINISTIC_FRAMEWORKS]
 
 
-def needs_canonicalize(frameworks: Sequence[str]) -> List[str]:
+def needs_canonicalize(frameworks: Sequence[str]) -> list[str]:
     """The requested columns whose SDFG pipelines include ``canonicalize``, so they need the fork.
 
     Derived from the flavor's own ``pipelines``, never from a second list here: a new flavor is one
     FRAMEWORK_META entry, and whether it needs spcl/dace@extended follows from what it runs."""
     from hpcagent_bench.frameworks.dace_framework import DEFAULT_PIPELINES
 
-    out: List[str] = []
+    out: list[str] = []
     for name in frameworks:
         meta = FRAMEWORK_META.get(name, {})
         if meta.get("base") != "dace":
@@ -68,7 +68,7 @@ def needs_canonicalize(frameworks: Sequence[str]) -> List[str]:
     return out
 
 
-def needs_polycc(frameworks: Sequence[str]) -> List[str]:
+def needs_polycc(frameworks: Sequence[str]) -> list[str]:
     """The requested columns whose TIMED build runs ``polycc``.
 
     Pluto is source-to-source: its library is compiled from what polycc wrote, not from what the
@@ -95,7 +95,7 @@ def check_polycc() -> str:
     return ""
 
 
-def needs_ppcg(frameworks: Sequence[str]) -> List[str]:
+def needs_ppcg(frameworks: Sequence[str]) -> list[str]:
     """The requested columns whose TIMED build runs ``ppcg``.
 
     The GPU half of the polyhedral pair, and the same argument as :func:`needs_polycc`: ppcg is
@@ -123,14 +123,14 @@ def check_ppcg(frameworks: Sequence[str]) -> str:
     return ""
 
 
-def missing_tools(frameworks: Sequence[str]) -> List[Tuple[str, str]]:
+def missing_tools(frameworks: Sequence[str]) -> list[tuple[str, str]]:
     """``(column, why)`` for every requested column whose own COMPILER this host does not have.
 
     The source-to-source columns are the only ones that shell out to a tool the image may not
     carry, and a job that runs one without it produces a full set of rows that all say the column
     declined -- indistinguishable, in a results table, from a corpus the compiler genuinely cannot
     handle. Called at job startup so the answer is one loud line instead of one silent row per kernel."""
-    out: List[Tuple[str, str]] = []
+    out: list[tuple[str, str]] = []
     for name in needs_polycc(frameworks):
         problem = check_polycc()
         if problem:
@@ -158,9 +158,9 @@ def check_dace_pipeline() -> str:
     return ""
 
 
-def check_autopar(frameworks: Sequence[str]) -> List[Tuple[str, str, str]]:
+def check_autopar(frameworks: Sequence[str]) -> list[tuple[str, str, str]]:
     """``(framework, verdict, detail)`` for each requested autopar column, measured on THIS node."""
-    out: List[Tuple[str, str, str]] = []
+    out: list[tuple[str, str, str]] = []
     for name in frameworks:
         probe = AUTOPAR_PROBES.get(name)
         if probe is None:
@@ -170,7 +170,7 @@ def check_autopar(frameworks: Sequence[str]) -> List[Tuple[str, str, str]]:
     return out
 
 
-def thread_env(mode: Mode = Mode.MULTI_CORE, ranks_per_node: int = 1) -> Dict[str, str]:
+def thread_env(mode: Mode = Mode.MULTI_CORE, ranks_per_node: int = 1) -> dict[str, str]:
     """The thread-count environment a timed run needs, from the one source the harness documents.
 
     ``ranks_per_node`` > 1 splits the node between co-resident ranks. Without it every rank claims
@@ -190,7 +190,7 @@ def thread_env(mode: Mode = Mode.MULTI_CORE, ranks_per_node: int = 1) -> Dict[st
 
 def run(
     frameworks: Sequence[str], print_env: bool = False, ranks_per_node: int = 1, tools_only: bool = False
-) -> Tuple[int, List[str], List[str]]:
+) -> tuple[int, list[str], list[str]]:
     """Every preflight check, as ``(exit_code, report_lines, env_lines)``.
 
     The two line lists are separate because a caller EVALS the second one: a submission script
@@ -202,7 +202,7 @@ def run(
     missing polycc, which leaves the Pluto column with nothing to compile. A vacuous autopar probe
     only warns, because the run is still valid; its LABEL is what misleads.
     """
-    report: List[str] = []
+    report: list[str] = []
     if tools_only:
         #: TOOL PRESENCE ONLY, for a runner that has already settled which columns it may run:
         #: ``experiments/canon_column.sh`` submits columns (numba, the ppcg family) that

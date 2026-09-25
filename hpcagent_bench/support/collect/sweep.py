@@ -22,7 +22,8 @@ import sqlite3
 import statistics
 import sys
 import time
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
+from collections.abc import Sequence
 
 from hpcagent_bench import sizing
 from hpcagent_bench.frameworks import Benchmark, generate_framework, Test
@@ -51,7 +52,7 @@ MPI_LAUNCHER_VARS = (
 )
 
 
-def drop_mpi_launcher_vars() -> List[str]:
+def drop_mpi_launcher_vars() -> list[str]:
     """Unset the MPI launcher variables in THIS process; returns the names removed.
 
     ``dace/frontend/python/parser.py`` calls ``ensure_mpi_initialized()`` at import time, which
@@ -82,10 +83,10 @@ def run_one(
     ignore_errors: bool,
     save_strict: bool,
     load_strict: bool,
-    datatype: Optional[str],
-    variant: Optional[str] = None,
+    datatype: str | None,
+    variant: str | None = None,
     distributed: bool = False,
-) -> Dict[str, Dict[str, Any]]:
+) -> dict[str, dict[str, Any]]:
     """Run ``benchname`` under each framework in ``framework_names`` (against NumPy); the unit of work
     forked per-kernel by the framework/sparse sweeps.
 
@@ -101,7 +102,7 @@ def run_one(
     # BEFORE the first framework import, which is what pulls DaCe in. See drop_mpi_launcher_vars.
     if not distributed:
         drop_mpi_launcher_vars()
-    results: Dict[str, Dict[str, Any]] = {}
+    results: dict[str, dict[str, Any]] = {}
     for name in framework_names:
         frmwrk = generate_framework(name, save_strict, load_strict)
         numpy = generate_framework("numpy")
@@ -120,8 +121,8 @@ def run_benchmark_sweep(
     timeout: float,
     save_strict: bool,
     load_strict: bool,
-    datatype: Optional[str],
-    variant: Optional[str] = None,
+    datatype: str | None,
+    variant: str | None = None,
 ) -> list[str]:
     """Sequentially run the ``benchmark`` selection (kernel, track, dwarf, prefix, or "all") under a
     single ``framework``, forking EACH kernel; returns the kernels whose child failed.
@@ -167,9 +168,9 @@ def filter_out_completed_benchmarks(
     preset: str,
     repeat: int,
     datatype: str,
-    all_benchmarks: List[str],
-    benchname_to_shortname_mapping: Dict[str, str],
-) -> List[str]:
+    all_benchmarks: list[str],
+    benchname_to_shortname_mapping: dict[str, str],
+) -> list[str]:
     """Drop benchmarks already fully recorded in ``hpcagent_bench.db``: "complete" means some single
     run (grouped by timestamp) recorded >= ``repeat`` rows for the requested precision -- partial runs
     (e.g. timeout-killed at 5/10 reps) don't count and are re-executed."""
@@ -253,12 +254,12 @@ def filter_out_completed_benchmarks(
 
 
 def shard_names(
-    names: List[str],
-    shard: Tuple[int, int],
-    preset: Optional[str] = None,
-    ranks_per_node: Optional[int] = None,
-    node_ram_bytes: Optional[int] = None,
-) -> List[str]:
+    names: list[str],
+    shard: tuple[int, int],
+    preset: str | None = None,
+    ranks_per_node: int | None = None,
+    node_ram_bytes: int | None = None,
+) -> list[str]:
     """This rank's slice of ``names`` for ``shard=(index, count)``.
 
     With a ``preset``, the split is a cost-aware LPT bin-pack (:func:`sizing.pack_lpt`): every
@@ -299,14 +300,14 @@ def run_framework_sweep(
     ignore_errors: bool,
     save_strict: bool,
     load_strict: bool,
-    datatype: Optional[str],
-    variant: Optional[str] = None,
+    datatype: str | None,
+    variant: str | None = None,
     skip_existing: bool = False,
-    shard: Tuple[int, int] = (0, 1),
-    csv_path: Optional[str] = None,
+    shard: tuple[int, int] = (0, 1),
+    csv_path: str | None = None,
     distributed: bool = False,
-    opt_reports_dir: Optional[str] = None,
-) -> List[str]:
+    opt_reports_dir: str | None = None,
+) -> list[str]:
     """Run the ``benchmark`` selection under ``framework``, forking EACH kernel; returns the list of
     kernels whose child failed. ``skip_existing`` drops kernels already fully recorded in the DB.
 
@@ -415,7 +416,7 @@ CSV_FIELDS = (
 NO_ROWS = -1
 
 
-def best_ms(native: Optional[Sequence[float]], python: Optional[Sequence[float]]) -> Optional[float]:
+def best_ms(native: Sequence[float] | None, python: Sequence[float] | None) -> float | None:
     """The MEDIAN timed sample in ms, which is what the ``median_ms`` column it fills says it holds:
     the compiled ``native`` series when present, else ``python``. ``None`` when neither series has a
     positive sample."""
@@ -426,7 +427,7 @@ def best_ms(native: Optional[Sequence[float]], python: Optional[Sequence[float]]
 
 def sweep_rows(
     benchname: str, framework_names: Sequence[str], preset: str, datatype: str, result: RunResult
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """CSV rows for one ``run_forked(run_one, ...)`` outcome: a crash/timeout/exception the child
     never recovered from yields one ``status=crash`` row per requested framework (no impl -- the
     child never got far enough to report one); otherwise one row per (framework, impl) the child
@@ -448,8 +449,8 @@ def sweep_rows(
             )
             for name in framework_names
         ]
-    rows: List[Dict[str, str]] = []
-    per_framework: Dict[str, Dict[str, Any]] = result.result or {}
+    rows: list[dict[str, str]] = []
+    per_framework: dict[str, dict[str, Any]] = result.result or {}
     for name in framework_names:
         per_impl = per_framework.get(name) or {}
         if not per_impl:
@@ -487,7 +488,7 @@ def sweep_rows(
     return rows
 
 
-def write_csv_rows(rows: List[Dict[str, str]], path: str) -> None:
+def write_csv_rows(rows: list[dict[str, str]], path: str) -> None:
     """Append ``rows`` to ``path`` (writing the header first if the file is new/empty)."""
     if not rows:
         return
@@ -529,7 +530,7 @@ def summarize_csv(paths: Sequence[str]) -> int:
             "summarize: a rank writes its CSV as it finishes, so an absent one means that rank "
             "produced nothing -- check its log before reading anything below as a result."
         )
-    rows: List[Dict[str, str]] = []
+    rows: list[dict[str, str]] = []
     for path in paths:
         if path in missing:
             continue
@@ -542,18 +543,18 @@ def summarize_csv(paths: Sequence[str]) -> int:
         print("summarize: no rows in any shard CSV -- the sweep produced nothing.")
         return NO_ROWS
 
-    def is_crash(row: Dict[str, str]) -> bool:
+    def is_crash(row: dict[str, str]) -> bool:
         return row["status"] == "crash"
 
-    def is_failed(row: Dict[str, str]) -> bool:
+    def is_failed(row: dict[str, str]) -> bool:
         return row["status"] == "ok" and bool(row["failure"])
 
-    def is_wrong(row: Dict[str, str]) -> bool:
+    def is_wrong(row: dict[str, str]) -> bool:
         # Only a run that actually validated fills this in with a real comparison; ``failure``
         # set means Test.run never got that far, so exclude it here (see is_failed).
         return row["status"] == "ok" and not row["failure"] and row["validated"] == "False"
 
-    groups: Dict[str, List[Dict[str, str]]] = {}
+    groups: dict[str, list[dict[str, str]]] = {}
     for row in rows:
         groups.setdefault(row["framework"], []).append(row)
 
@@ -655,9 +656,9 @@ def run_sparse_sweep(
     validate: bool,
     repeat: int,
     timeout: float,
-    datatype: Optional[str],
-    benchmark_filter: Optional[Sequence[str]],
-    variant_filter: Optional[Sequence[str]],
+    datatype: str | None,
+    benchmark_filter: Sequence[str] | None,
+    variant_filter: Sequence[str] | None,
     ignore_errors: bool,
 ) -> int:
     """Sweep every (sparse kernel, declared variant), each in a forked child; ``benchmark_filter``/
