@@ -1,32 +1,25 @@
 # syntax=docker/dockerfile:1
 #
-# SGLang inference on AMD MI300A (gfx942). This is the DOMINANT engine, not the niche one: it
-# serves qwen38 and kimi, which is 12 of the 18 llr40v9 arms. Only oss120b stays on vLLM.
+# SGLang inference on AMD MI300A (gfx942). It serves qwen38, kimi and GLM-5.3; oss120b is on vLLM.
 #
 # Build context is the REPOSITORY ROOT, because the tuned fused_moe configs are baked in from
 # there:
 #   podman build -f containers/cluster/ce-images/sglang/Dockerfile -t hpcagent-bench-sglang .
 # build.sh does that with the right podman flags; build.sbatch runs build.sh on a compute node.
 #
-# NOT YET BUILT. The deployed artifact was a straight PULL and never had a Dockerfile:
-# ~/.edf/sglang-rocm-mi30x.toml names the base below, pulled as job 604787 (52.3 GB). Everything
-# here is derived from that toml, from run_cluster.sh's sglang branch, and from the
-# SGLANG_EXTRA_ARGS of the live .env.llr40v9-{kimi27sglang,qwen38}-* files.
-#
-# UBUNTU 24.04, and that is why this tag rather than the newest 7.2.0 one.
+# UBUNTU 24.04, and that is why this tag rather than a 7.2.0 one.
 #
 # glibc decides everything here. The CE cxi hook injects the host Slingshot stack -- libfabric
 # 2.3.1, libcxi 1.0.2, SHS 13.1.0 -- built against glibc 2.38. Ubuntu 24.04 is glibc 2.39, so
 # that stack loads and this image takes libfabric and libcxi from the host like the other two.
-# On the previous 22.04 base (glibc 2.35) it could not, and every workaround failed: building a
-# libfabric of our own linked libcurl, which resolved to the host's and needed 2.38 anyway
-# (629822, "Failed to initialize any NET plugin").
+# A 22.04 base (glibc 2.35) cannot load it, and a libfabric of our own does not help: it links
+# libcurl, which resolves to the host's and needs 2.38 anyway ("Failed to initialize any NET
+# plugin").
 #
 # THE COST: this line is ROCm 7.2.4 / torch 2.10.0 against the 7.2.0 / 2.9.1 the judge and vllm
 # images pin -- lmsysorg publishes exactly one 24.04 line and it is 7.2.4. Inference runs in its
-# own container and shares no library with the judge, so a newer ROCm is contained. But every
-# recorded kimi and qwen38 serving number was taken on 7.2.0 / 2.9.1 / aiter 0.1.19, and this
-# moves all three at once. Re-measure before comparing against any of them.
+# own container and shares no library with the judge, so a newer ROCm is contained. A serving
+# number taken on 7.2.0 / 2.9.1 / aiter 0.1.19 is not comparable with one from this image.
 #
 # Pinned by DIGEST because a date-stamped tag is still a tag.
 ARG BASE_IMAGE=docker.io/lmsysorg/sglang-rocm:v0.5.19-rocm724-mi30x-20260908\
@@ -36,7 +29,7 @@ ARG BASE_IMAGE=docker.io/lmsysorg/sglang-rocm:v0.5.19-rocm724-mi30x-20260908\
 # One stage. This image builds NO fabric software at all -- no libfabric, no libcxi, no RCCL net
 # plugin. CSCS ships all three as one internally consistent artifact, matched to the host driver,
 # and the enroot hooks install it when the EDF sets com.hooks.netstack / .cxi / .aws_ofi_nccl.
-# Measured on an unmodified image in job 629967:
+# Measured on an unmodified image:
 #
 #     plugin:    /opt/cscs/netstack/librccl-net.so
 #     transport: NET/OFI, "Using network AWS Libfabric"
@@ -78,13 +71,8 @@ ENV HCC_AMDGPU_TARGET=${ROCM_ARCH} \
     GPU_ARCH_LIST=${ROCM_ARCH}
 COPY containers/cluster/ce-images/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
 
-# flydsl, PINNED and INSIDE the image.
-#
-# The base already carries 0.3.1; what the arms actually load is 0.3.2, installed by
-# install-flydsl.sbatch into ${SCRATCH}/pyprefix/sglang-rocm-mi30x and reached through PYTHONPATH
-# in .env.llr40v9-kimi27sglang-*. So the out-of-image prefix was an UPGRADE shadowing the image's
-# copy, not a missing package -- and an upgrade reached that way is invisible to the image digest,
-# which is exactly the attribution problem this consolidation exists to kill.
+# flydsl, PINNED and INSIDE the image. The base carries 0.3.1; the arms run 0.3.2, and a package
+# reached through an out-of-image PYTHONPATH would be invisible to the image digest.
 #
 # It matters because kimi's int4 MoE dispatches through it: AMD measure fused_moe at 87.8-89.7% of
 # GPU time on this shape, and their W4A16 FlyDSL kernel at +162% throughput / -47% TTFT. aiter
@@ -98,13 +86,7 @@ RUN set -eux; \
     /opt/venv/bin/python3 -m pip install --no-cache-dir "flydsl==${FLYDSL_VERSION}"; \
     /opt/venv/bin/python3 -c 'import flydsl; assert flydsl.__version__ == "'"${FLYDSL_VERSION}"'", flydsl.__version__'
 
-# cupy, IN the image, for the same reason flydsl is.
-#
-# It was reaching the sglang arms through PYTHONPATH=${SCRATCH}/pyprefix/sglang-rocm-mi30x, a host
-# directory supplying cupy and flydsl 0.3.2. Measured: with that prefix injected both resolve
-# under the mounted host prefix, so what an arm actually ran was invisible to the image digest -- the attribution
-# hole this image exists to close. It survived because the base ships flydsl 0.3.1 and no cupy at
-# all, so the prefix was genuinely load-bearing. With both baked it has nothing left to add.
+# cupy, IN the image, for the same reason flydsl is: the base ships none.
 #
 # From SOURCE: there is no ROCm wheel, the cupy-rocm-* names are dead and PyPI carries only the
 # sdist. Same recipe as judge-agent-amd, which builds cupy 14.2.0 this way.
@@ -128,35 +110,26 @@ RUN set -eux; \
     d="$(/opt/venv/bin/python3 -P -c 'import importlib.util as u; print(u.find_spec("cupy").submodule_search_locations[0])')"; \
     /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" "${d}"
 
-# Gate: both must resolve INSIDE the image. This is what lets the PYTHONPATH be deleted from the
-# campaign .env files rather than quietly remaining load-bearing.
+# Gate: both must resolve INSIDE the image, so no host prefix can supply them.
 RUN /opt/venv/bin/python3 -c "import cupy, flydsl; \
     assert cupy.__file__.startswith('/opt/'), cupy.__file__; \
     assert flydsl.__file__.startswith('/opt/'), flydsl.__file__; \
     print('self-contained: cupy', cupy.__version__, '| flydsl', flydsl.__version__)"
 
-# No RCCL plugin is shipped. CSCS provides one through com.hooks.aws_ofi_nccl.enabled and job
-# 629967 measured it working: /opt/cscs/netstack/librccl-net.so, "Using network AWS Libfabric",
-# GPU Direct RDMA on cxi0-2. This image ships no libfabric, libcxi or plugin -- all three come
-# from the pinned netstack artifact, which also carries its own libc and libcurl and is therefore
-# internally consistent, unlike the host graft that broke this image before (629822).
-# Ship no fabric library OF OUR OWN. The distinction matters and job 629985 is why: the gate used
-# to refuse ANY libfabric anywhere on the filesystem, and it killed the build on
-# /usr/lib/x86_64-linux-gnu/libfabric.so.1.20.0 -- which is not this image's file at all. That path
-# is where the CSCS hook BIND-MOUNTS the artifact's libfabric at run time, verified by mounting the
-# image with no annotations: the file that appears there is dated Aug 18 15:39 nobody:nogroup, the
-# artifact's own stamp, and lsof/mountinfo show it as a lustre bind from
-# a CSCS-managed artifact store. CONFIRMED 2026-09-16 by reading the hooks: the prefix was
-# /capstor/store/cscs/cscs/public/containers/netstack/$(uname -m)/<ver>/<name>, hardcoded in
-# 10-netstack.sh, 89-libfabric-cxi.sh and 90-aws-ofi-nccl.sh alike. That store no longer exists,
-# so the EDFs select netstack.source="host" instead,
-# which binds /opt/cray/libfabric/host/lib64/libfabric.so.1 and
-# /opt/cscs/aws-ofi-ccl-plugin/rocm6/librccl-net.so from the node. Refusing it forbade the
-# hook its own mount point.
+# No RCCL plugin is shipped. CSCS provides one through com.hooks.aws_ofi_nccl.enabled (measured:
+# /opt/cscs/netstack/librccl-net.so, "Using network AWS Libfabric", GPU Direct RDMA on cxi0-2).
+# This image ships no libfabric, libcxi or plugin of its own.
 #
-# What must NOT ship is a fabric library in a prefix WE control, because those are what RPATH can
-# bind to and RPATH is searched before everything else -- the 629966 failure, where MPICH held a
-# providerless libfabric and neither the hook nor LD_LIBRARY_PATH could displace it.
+# The gate checks only prefixes WE control, not the whole filesystem:
+# /usr/lib/x86_64-linux-gnu/libfabric.so.1.20.0 is where the CSCS hook BIND-MOUNTS the netstack
+# libfabric at run time (the EDFs select netstack.source="host", which binds
+# /opt/cray/libfabric/host/lib64/libfabric.so.1 and
+# /opt/cscs/aws-ofi-ccl-plugin/rocm6/librccl-net.so from the node), and refusing that path would
+# forbid the hook its own mount point.
+#
+# What must NOT ship is a fabric library in a prefix we control, because those are what RPATH can
+# bind to and RPATH is searched before everything else: an MPICH holding a providerless libfabric
+# that way cannot be displaced by the hook or by LD_LIBRARY_PATH.
 RUN set -eux; \
     rm -f /opt/ofi-sdk/lib/libfabric.so*; \
     found="$(find /opt/ofi-sdk /opt/ofi /opt/aws-ofi-nccl \
@@ -168,9 +141,8 @@ RUN set -eux; \
            echo "RPATH would bind to it and shadow the CSCS netstack artifact" >&2; exit 1; }; \
     echo "no fabric library in /opt/ofi-sdk, /opt/ofi or /opt/aws-ofi-nccl -- the artifact supplies them"
 
-# Tuned fused_moe Triton configs. Losing these once voided a whole set of throughput numbers, so
-# they are baked rather than dropped: without them kimi served on the default MoE config at ~90
-# tok/s aggregate, ~11x off the reference for its shape (595040/595049).
+# Tuned fused_moe Triton configs, baked so they cannot go missing: without them kimi serves on the
+# default MoE config at ~90 tok/s aggregate, ~11x off the reference for its shape.
 #
 # TWO destinations, deliberately. /opt/moe-configs is the canonical copy, in the same place the
 # vLLM image keeps it, so one path finds them in either image. The second is SGLang's OWN lookup:
@@ -193,23 +165,21 @@ RUN set -eux; \
 
 # aiter's JIT, built HERE instead of on the first request.
 #
-# SGLANG_USE_AITER=1 is set by every live kimi and qwen38 arm, so unlike the vLLM image this engine
+# SGLANG_USE_AITER=1 is set by every kimi and qwen38 arm, so unlike the vLLM image this engine
 # runs aiter ON -- and aiter ships no prebuilt .so. It JIT-builds module_aiter_core on import and
-# each op module on FIRST USE, behind a baton lock that outlives the deadline: 610164 blew the
-# 300 s watchdog that way, and smoke-kimi-sglang.sbatch works around it by pointing AITER_JIT_DIR
-# at persistent scratch. The wedge is a property of the image, so it is fixed in the image.
+# each op module on FIRST USE, behind a baton lock that outlives the deadline, so a cold cache can
+# blow the 300 s watchdog. The wedge is a property of the image, so it is fixed in the image.
 #
-# A GPU IS needed, since aiter 0.1.19: `import aiter` runs utility/dtypes.py at module level, which
-# calls get_gfx_runtime(), which shells out to rocminfo and ignores GPU_ARCHS by design (its own
-# docstring says so). v0.1.13 used get_gfx() and read the env, which is why this step used to run
-# device-less. build.sh hands podman /dev/kfd; without it this step dies on `rocminfo returned
-# non-zero exit status 1`. The op calls below DO issue launches, which is what builds the op
+# A GPU IS needed: `import aiter` (>= 0.1.19) runs utility/dtypes.py at module level, which calls
+# get_gfx_runtime(), which shells out to rocminfo and ignores GPU_ARCHS by design (its own
+# docstring says so). build.sh hands podman /dev/kfd; without it this step dies on `rocminfo
+# returned non-zero exit status 1`. The op calls below DO issue launches, which is what builds the op
 # modules at all -- /dev/dri and the seccomp/keep-groups flags in build_common.sh are what
 # make that work, and the gate below fails the build if they ever stop working.
 #
 # AITER_JIT_DIR points INSIDE the image so a hit is a read off the squashfs. A miss still writes,
-# into the per-job CE overlay, so an op this prebuild did not cover degrades to today's cold-cache
-# behaviour rather than failing. run_cluster.sh reads it as ${AITER_JIT_DIR:-...}, so this value
+# into the per-job CE overlay, so an op this prebuild did not cover degrades to a cold-cache
+# build rather than failing. run_cluster.sh reads it as ${AITER_JIT_DIR:-...}, so this value
 # wins over its scratch default without a launcher change.
 ENV AITER_JIT_DIR=/opt/aiter-jit \
     AITER_ROOT_DIR=/opt/aiter-root
@@ -230,11 +200,10 @@ for name in ("aiter.ops.rmsnorm", "aiter.ops.norm", "aiter.ops.gemm_op_a8w8", "a
         print(f"skip {name}: {type(exc).__name__}: {exc}", flush=True)
 
 # Importing an op family does NOT build its kernel module. @compile_ops is lazy and builds on the
-# first CALL, so the loop above only ever produced module_aiter_core.so -- read back off the
-# deployed image, which carried exactly that one file. Every other module was still built at serve
-# time: module_rmsnorm_quant cost 74 s in 628158 and the sampling template ops another 77 s.
-# Measured in 628179, these calls build them here in 78 s total, and the sampling artefact hashes
-# match the ones the server asks for, so a serve is a cache hit rather than a near-miss.
+# first CALL, so the loop above produces only module_aiter_core.so. Built at serve time instead,
+# module_rmsnorm_quant costs 74 s and the sampling template ops another 77 s; these calls build
+# them here in 78 s total, and the sampling artefact hashes match the ones the server asks for, so
+# a serve is a cache hit rather than a near-miss.
 import os
 import pathlib
 
@@ -245,9 +214,8 @@ _jit = pathlib.Path(os.environ["AITER_JIT_DIR"])
 
 
 def _prebuild(label, fn):
-    # Report the module each call produced. 628185 built four .so and still failed a gate that
-    # asked for module_rmsnorm_quant.so by name: the three images here carry different aiter
-    # builds and the names do not match across them.
+    # Report the module each call produced rather than gate on a name: the three images here
+    # carry different aiter builds and the module names do not match across them.
     before = {p.name for p in _jit.rglob("*.so")}
     try:
         fn()
@@ -292,9 +260,9 @@ _prebuild("rms_norm", _rms_norm)
 _prebuild("top_k_top_p_sampling_from_probs", _top_k_top_p)
 _prebuild("top_p_sampling_from_probs", _top_p)
 _prebuild("top_k_renorm_probs", _top_k_renorm)
-# The serving path calls far more than sampling. These eight were read off what GLM-5.3 and kimi
-# actually JIT-built at serve time (628603 built module_custom_all_reduce during startup), so the
-# image ships them instead of paying for them behind a baton lock inside the RPC deadline.
+# The serving path calls far more than sampling. These eight are what GLM-5.3 and kimi JIT-build
+# at serve time, so the image ships them instead of paying for them behind a baton lock inside the
+# RPC deadline.
 _bf16, _fp8 = torch.bfloat16, torch.float8_e4m3fnuz
 
 
@@ -372,7 +340,7 @@ RUN set -eux; \
 # stamps that attribute onto a scale tensor, but on gfx942 the fp8-fnuz branch runs
 # normalize_e4m3fn_to_e4m3fnuz first, which returns a FRESH tensor carrying no such attribute, so
 # the loader raises AttributeError before the model is up. The branch is AMD-only, which is why it
-# ships broken; 0.5.19 and the 20260909 nightly both still carry it.
+# ships broken; 0.5.19 carries it.
 #
 # The fix is the guard the SAME TREE already uses in fp8_utils.py, and False is correct rather than
 # merely safe: the branch it guards leads to should_deepgemm_weight_requant_ue8m0, and deepgemm is
@@ -380,8 +348,8 @@ RUN set -eux; \
 #
 # In the source, not monkeypatched onto torch.Tensor by a host sitecustomize on PYTHONPATH: a host
 # path is invisible to the image digest, and the per-role mount policy does not carry it into the
-# inference container, so the patch silently did not apply. The build FAILS when the pattern is
-# absent, so a release that fixes this upstream is reported here instead of being patched twice.
+# inference container. The build FAILS when the pattern is absent, so a release that fixes this
+# upstream is reported here instead of being patched twice.
 RUN /opt/venv/bin/python3 <<'PY'
 import pathlib
 import re
@@ -419,12 +387,11 @@ ENV HIPCC_COMPILE_FLAGS_APPEND="-U__HIP_NO_HALF_CONVERSIONS__ -U__HIP_NO_HALF_OP
 
 # The EDF's env, restated in the image so it is under the digest rather than only in ~/.edf.
 #
-# TRANSPORT, named in the image so it is under the digest and not only in somebody's ~/.edf.
 # NO transport variables here. libfabric, libcxi and the RCCL plugin all arrive from the CSCS
 # netstack artifact via the EDF's hooks, and the plugin the hook installs already knows where its
 # libfabric is -- naming NCCL_NET_PLUGIN or FI_PROVIDER in the image would only let a stale value
 # outlive the hook. FI_PROVIDER in particular is not free: set globally it reaches MPI too, and
-# job 629966 aborted MPI_Init with "OFI call getinfo failed" that way.
+# MPI_Init aborts with "OFI call getinfo failed".
 ENV HSA_ENABLE_IPC_MODE_LEGACY=1 \
     SAFETENSORS_FAST_GPU=1 \
     HIP_FORCE_DEV_KERNARG=1 \
@@ -456,11 +423,9 @@ import triton
 print("torch", torch.__version__, "triton", triton.__version__, file=sys.stderr)
 print("flydsl", flydsl.__version__, "hf_hub", huggingface_hub.__version__, file=sys.stderr)
 assert torch.version.hip is not None, "not a ROCm torch"
-# __path__, not __file__: sglang imports as a namespace/editable package here, so __file__ is None
-# and the old check died on NoneType rather than on a wrong location (job 619990). __path__ answers
-# the question that was actually being asked -- which tree this import resolves to -- for a regular
-# package, a namespace package and a PEP 660 editable install alike. Printed as well as asserted,
-# so a future move shows the path instead of only the failure.
+# __path__, not __file__: sglang imports as a namespace/editable package here, so __file__ is None.
+# __path__ answers which tree this import resolves to for a regular package, a namespace package
+# and a PEP 660 editable install alike. Printed as well as asserted, so a move shows the path.
 sglang_paths = [str(p) for p in sglang.__path__]
 print("sglang", sglang_paths, file=sys.stderr)
 SGLANG_TREE = "/sgl-workspace/sglang"
@@ -469,7 +434,7 @@ subprocess.run([sys.executable, "-m", "sglang.launch_server", "--help"], check=T
                stdout=subprocess.DEVNULL)
 
 # The baked-in inputs, asserted rather than assumed: a COPY that silently landed nothing is how a
-# tuned-MoE folder goes missing again.
+# tuned-MoE folder goes missing.
 configs = sorted(pathlib.Path("/opt/moe-configs").glob("E=*.json"))
 assert len(configs) >= 2, f"tuned MoE configs missing: {configs}"
 for c in configs:
@@ -480,11 +445,8 @@ assert sorted(p.name for p in (vendor / "triton_3_7_0").glob("E=*.json")) == \
     sorted(c.name for c in configs), "tuned configs did not reach SGLang's lookup path"
 assert (vendor / "triton_3_2_0").is_dir(), "the vendor config set was displaced"
 
-# The plugin only. libfabric and libcxi are deliberately NOT here -- they are the two things this
-# image takes from the host, through com.hooks.cxi.enabled, because they must match the kernel
-# driver. Asserting their presence would assert the bug this image was just moved off.
 # No fabric libraries here on purpose: the netstack artifact supplies libfabric, libcxi and the
-# RCCL plugin at run time. Asserting ours exist would assert the design this image moved off.
+# RCCL plugin at run time, matched to the kernel driver.
 for stray in ("libfabric.so.1", "libcxi.so.1", "librccl-net.so"):
     assert not list(pathlib.Path("/opt").rglob(stray)), f"{stray} ships and would shadow the artifact"
 PY
@@ -497,10 +459,8 @@ WORKDIR /workspace
 # an unconfined seccomp profile, so the aiter prebuild above launches kernels and the gate fails
 # the build if that ever stops working. What the build has no access to is a Slingshot NIC:
 #
-#   * the plugin has not yet been shown to select OFI on this base. /dev/cxi0-3 do reach the
-#     container and the image loads under the hook (629822), but the transport that a cross-node
-#     collective actually chooses is only visible in an NCCL_DEBUG=INFO log from a real two-node
-#     run: NET/OFI is the goal, NET/Socket is the silent fallback.
-#     is the highest-risk stage in the file.
+#   * the transport a cross-node collective chooses is only visible in an NCCL_DEBUG=INFO log from
+#     a real two-node run (rccl_hook_check.sbatch): NET/OFI is the goal, NET/Socket is the silent
+#     fallback.
 #   * whether SGLang SERVES is a separate question from whether it imports. Run
 #     inference/smoke-kimi-sglang.sbatch before promoting a rebuild.
