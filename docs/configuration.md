@@ -10,7 +10,7 @@ values come from environment variables, each with one default place:
 | `scripts/cscs/account_env.sh` | the Slurm account, read from your own Slurm associations |
 | `experiments/env.sh` | the checkout and the venv; sources `scripts/repo_env.sh` and the two scripts above |
 | `scripts/repo_env.sh` | the import path: the checkout (and `DACE_TREE` ahead of it), `PYTHONHASHSEED=0` |
-| `pyproject.toml` (`[tool.hpcagent-bench] dace-pin`) | the dace commit a release installs and bakes into its images; jobs refresh to the latest extended ([below](#dace)) |
+| `pyproject.toml` (`[tool.hpcagent-bench] dace-pin`) | the dace commit a release installs, bakes into its images and runs in every job ([below](#dace)) |
 | `hpcagent_bench/paths.py` | the Python side of the same roots (`scratch_root`, `fast_scratch_root`) |
 
 `cache_env.sh` and `account_env.sh` both load the site layer, so every submitter and every job sees
@@ -117,7 +117,7 @@ direct-URL requirements) and `pyproject.toml` names no version of it.
 | Variable | Default | Controls |
 |---|---|---|
 | `dace-pin` (`pyproject.toml`, `[tool.hpcagent-bench]`) | the one place it is written | the extended commit a release is tested with |
-| `HPCAGENT_BENCH_DACE_REF` | installs and image builds: `pinned`; jobs: `extended` | which dace: `pinned` (the pin), a branch (its tip) or a full 40-character commit sha |
+| `HPCAGENT_BENCH_DACE_REF` | `pinned` | which dace: `pinned` (the pin), a branch (its tip) or a full 40-character commit sha |
 | `DACE_TREE` | unset | a dace checkout to run instead, exactly as it is (a fix branch under test); `scripts/repo_env.sh` puts it ahead of the installed dace and nothing refreshes it |
 | `DACE_DIR` | `/opt/dace` | the image's editable dace checkout that `dace_refresh.sh` moves |
 
@@ -126,8 +126,8 @@ direct-URL requirements) and `pyproject.toml` names no version of it.
   CONTRIBUTING, CI, `scripts/rebuild_venv.sh` and the release smoke all use it, and the judge/agent
   image builds bake the pin, so a release install is reproducible.
 - **Every job**: `containers/images/dace_refresh.sh` moves the image's `/opt/dace` to
-  `HPCAGENT_BENCH_DACE_REF` before anything imports dace: by default the latest extended, with
-  `HPCAGENT_BENCH_DACE_REF=pinned` to stay on the pin. A job that spans several containers
+  `HPCAGENT_BENCH_DACE_REF` before anything imports dace: the pin by default, so a failure
+  reproduces from run to run; `HPCAGENT_BENCH_DACE_REF=extended` tries the latest extended. A job that spans several containers
   resolves the ref to one sha on the batch host first (`dace_refresh.sh --resolve`), so every rank
   runs the same commit. A branch that cannot be fetched keeps the baked commit; a commit that
   cannot be reached fails the job. Bare metal (no `/opt/dace` checkout) runs the installed dace.
@@ -135,7 +135,8 @@ direct-URL requirements) and `pyproject.toml` names no version of it.
   `/opt/dace.commit`; canon columns stamp `dace <sha>` into `record.build` and `canon.db`'s `build`
   column; CPF prerender keys carry the dace commit.
 
-To stay on the pin: `HPCAGENT_BENCH_DACE_REF=pinned sbatch ...`. To test a dace fix:
+To try the latest extended: `HPCAGENT_BENCH_DACE_REF=extended sbatch ...`. Move the pin (one line in
+`pyproject.toml`) only to an extended commit whose CI is green. To test a dace fix:
 `DACE_TREE=<worktree> sbatch ...` (canon columns, CPF prerender).
 
 ### Submitting nicely
