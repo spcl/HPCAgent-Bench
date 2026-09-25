@@ -49,7 +49,8 @@ def test_docs_name_no_prompt_key_that_does_not_exist() -> None:
     fields = {f.name for f in dataclasses.fields(PromptConfig)} | NON_FIELD_PROMPT_KEYS
     stale = []
     for path, text in doc_text():
-        for m in re.finditer(r"`prompt\.([a-z_]+)`", text):
+        # `prompt.md` is the template file, not a key.
+        for m in re.finditer(r"`prompt\.(?!md`)([a-z_]+)`", text):
             if m.group(1) not in fields:
                 stale.append(f"{path}: prompt.{m.group(1)}")
     assert not stale, f"documented prompt.* keys that no longer exist: {stale}"

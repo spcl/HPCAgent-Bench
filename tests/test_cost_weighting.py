@@ -3,6 +3,7 @@
 """The cost-weighting wrap figure: drawn at its placed width, on the shared print type scale."""
 
 import math
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.transforms
@@ -92,7 +93,7 @@ def test_the_axes_ink_fills_the_placed_width() -> None:
         plt.close(fig)
 
 
-def test_the_usd_slot_is_drawn_only_when_every_model_has_a_price_card(tmp_path) -> None:
+def test_the_usd_slot_is_drawn_only_when_every_model_has_a_price_card(tmp_path: Path) -> None:
     """USER 2026-09-25: four slots when every model in the figure has a ``usd-<model>`` card,
     three otherwise -- a dollar slot for some models only would compare a subset of the marks."""
     priced = [cost_weighting.Pair(*PAIRS[0]), cost_weighting.Pair(*PAIRS[1])]
@@ -118,7 +119,7 @@ def test_a_three_slot_figure_has_no_usd_tick() -> None:
         plt.close(fig)
 
 
-def test_pairs_come_from_a_toml_file_and_the_command_line(tmp_path) -> None:
+def test_pairs_come_from_a_toml_file_and_the_command_line(tmp_path: Path) -> None:
     """A list of model + intervention pairs is data, not a command line: the script reads [[pair]] tables."""
     import importlib.util
     import pathlib

@@ -9,9 +9,11 @@ have a second definition of eta, and these tests fail if it grows one.
 """
 
 import math
+from collections.abc import Callable
 
 import pandas as pd
 import pytest
+from matplotlib.figure import Figure
 
 # hpcagent_bench.stats.figures selects the headless backend in its own __init__, before any
 # submodule binds pyplot, so this import needs no matplotlib.use of its own.
@@ -293,7 +295,7 @@ def test_a_frame_of_grade_rows_alone_holds_no_scaling_rows() -> None:
 
 
 @pytest.mark.parametrize("builder", [scaling.figure_summary, scaling.figure_efficiency])
-def test_a_print_size_scaling_figure_keeps_every_text_on_the_print_scale(builder) -> None:
+def test_a_print_size_scaling_figure_keeps_every_text_on_the_print_scale(builder: Callable[..., Figure]) -> None:
     """The ML figure sits in a wrap beside the cost figure: both must print at the same type sizes and width."""
     from hpcagent_bench.stats import style
 

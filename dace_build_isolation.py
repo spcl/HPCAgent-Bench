@@ -12,6 +12,7 @@ before a single test runs. A uniquely named module has no such ambiguity.
 
 import os
 import pathlib
+import sys
 
 
 def pin_per_worker_dace_build_folder() -> None:
@@ -27,8 +28,9 @@ def pin_per_worker_dace_build_folder() -> None:
     ``Fatal Python error: Segfault`` / ``Aborted`` with no failing assertion, and a block of
     consecutive ``F``s from one worker while the others stay green.
 
-    An ENV VAR rather than ``dace.Config.set``: dace resolves ``DACE_*`` at every ``get``, so this
-    binds however late dace is first imported, and no suite has to import dace to be protected.
+    An ENV VAR, so no suite has to import dace to be protected: dace applies ``DACE_*`` when its
+    configuration loads (spcl/dace#2602). A worker that loaded dace before this call has already
+    read the environment, so there the pin also goes through ``dace.Config.set``.
     A pin the caller already made is EXTENDED rather than replaced, so pointing the build at a
     fast disk keeps working and still splits per worker.
 
@@ -41,3 +43,6 @@ def pin_per_worker_dace_build_folder() -> None:
     base = pathlib.Path(os.environ.get("DACE_default_build_folder", ".dacecache"))
     if base.name != worker:
         os.environ["DACE_default_build_folder"] = str(base / worker)
+    dace = sys.modules.get("dace")
+    if dace is not None:
+        dace.Config.set("default_build_folder", value=os.environ["DACE_default_build_folder"])

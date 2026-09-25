@@ -5,6 +5,11 @@
 # this package's absolute paths. Unpack the package on scratch (e.g. /iopsstor/scratch/cscs/$USER):
 # the venv is several GB and many files. Override with UENV=..., VENV=... .
 set -euo pipefail
+
+# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
+# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
+# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+ulimit -c 0
 ROOT=${LLR40_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
 UENV=${UENV:-prgenv-gnu/25.11:v1}
 VENV=${VENV:-$ROOT/venv}
