@@ -12,7 +12,6 @@ own, so a test importing ``conftest`` by name gets whichever was imported first.
 """
 
 import os
-import socket
 
 import pytest
 
@@ -24,18 +23,18 @@ pin_per_worker_dace_build_folder()
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
-        "beverin: needs the Beverin login node itself (its ~/.edf, Slurm, /capstor); skipped on any host "
-        "whose name does not contain 'beverin'.",
+        "site: needs the cluster's own login node (its registered EDFs, Slurm); runs only with "
+        "HPCAGENT_BENCH_SITE_TESTS=1 (set by the site layer, docs/configuration.md).",
     )
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip every ``beverin`` test unless this host's name says it is Beverin."""
-    if "beverin" in socket.gethostname():
+    """Skip every ``site`` test unless HPCAGENT_BENCH_SITE_TESTS=1."""
+    if os.environ.get("HPCAGENT_BENCH_SITE_TESTS") == "1":
         return
-    off_site = pytest.mark.skip(reason="beverin: not a Beverin host")
+    off_site = pytest.mark.skip(reason="site: HPCAGENT_BENCH_SITE_TESTS is not 1")
     for item in items:
-        if item.get_closest_marker("beverin") is not None:
+        if item.get_closest_marker("site") is not None:
             item.add_marker(off_site)
 
 

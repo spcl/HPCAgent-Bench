@@ -109,7 +109,7 @@ for col in ${COLUMNS}; do
     #: but ahead of a background scicomp sweep without touching either queue's own submitter.
     #: Unset (the default) keeps the ordinary priority.
     nice=(); [[ -n "${NICE:-}" ]] && nice=(--nice="${NICE}")
-    jid=$(sbatch --parsable --no-requeue --partition=mi300 --nodes=1 --exclusive --mem=0 \
+    jid=$(sbatch --parsable --no-requeue --nodes=1 --exclusive --mem=0 \
         "${gres[@]}" --time="${TIME_LIMIT}" --job-name="${JOB_PREFIX}-${JOB_TAG:-${col%%,*}}" \
         "${dep[@]}" "${nice[@]}" ${BEGIN:+--begin="${BEGIN}"} \
         --output="${OUT_ROOT}/%x-%j.out" --error="${OUT_ROOT}/%x-%j.err" \

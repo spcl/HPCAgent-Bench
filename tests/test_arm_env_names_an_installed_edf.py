@@ -35,8 +35,8 @@ KNOWN_ONE_OFFS = {
     # time, while every other sglang EDF reaches the same patch through a PYTHONPATH under
     # $SCRATCH that role_mounts drops for the inference role, so the loader dies before the model
     # is up. It is not installer-managed, so install_edfs.sh never repoints it, and its rendered
-    # copy pointed at a /capstor image that the Sep 2026 migration removed; it was taken out of
-    # ~/.edf on 2026-09-16 rather than left there resolving to nothing.
+    # copy pointed at an image a storage migration removed; it was taken out of ~/.edf rather
+    # than left there resolving to nothing.
     #
     # CONSEQUENCE: the 11 arms that set INFERENCE_CE_ENV=sglang-candidate -- the glm53 baseline,
     # llr40/focus40 and llrblind families -- CANNOT RUN until that image is rebuilt and the EDF

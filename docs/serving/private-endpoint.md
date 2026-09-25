@@ -147,7 +147,7 @@ PRESET=mi200 MODE=serve LEGS=tp8:0.80 sbatch --partition=mi200 --gpus-per-node=8
 PRESET=mi200 MODE=serve LEGS=tp8:0.80 ACCESS=alps sbatch --partition=mi200 --gpus-per-node=8 --time=08:00:00 "$L"
 
 # mi300 with the campaign configuration.
-PRESET=mi300 MODE=serve sbatch --partition=mi300 --gpus-per-node=4 --time=08:00:00 "$L"
+PRESET=mi300 MODE=serve sbatch --gpus-per-node=4 --time=08:00:00 "$L"
 
 # Run every check and print the server command line without starting anything.
 PRESET=mi200 MODE=serve DRY_RUN=1 bash "$L"
@@ -213,7 +213,7 @@ print(reply.choices[0].message.content)
 1. On beverin, start the server with `ACCESS=alps` (section 3). After the 401/200 check the job prints:
 
    ```text
-   ===== alps endpoint is live: http://172.28.9.16:30000/v1 on nid002536, job 123456 =====
+   ===== alps endpoint is live: http://172.28.9.16:30000/v1 on <node>, job 123456 =====
    endpoint.json: {"url": "http://172.28.9.16:30000/v1", "served_model": "hpcagent-bench-vllm", "key_file": "...", ...}
    In your job on Daint (or another Alps cluster), while this job runs (docs/serving/private-endpoint.md):
      source <checkout>/containers/cluster/ce-images/inference/alps-endpoint.sh <run dir>/endpoint.json

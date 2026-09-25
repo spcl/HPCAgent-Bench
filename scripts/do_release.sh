@@ -22,7 +22,7 @@
 # TWINE_PASSWORD=<api token>) or ~/.pypirc; this script never asks for or stores one.
 #
 # On a Beverin mi200 node (the login gcc is 7.5; point PATH at a gcc >= 14 first):
-#   sbatch -A g34 --partition=mi200 -N1 --time=00:30:00 --no-requeue \
+#   sbatch --partition=mi200 -N1 --time=00:30:00 --no-requeue \
 #       --output=release-smoke-%j.out --wrap "PATH=<gcc14-bin>:\$PATH scripts/do_release.sh"
 #
 # Env:

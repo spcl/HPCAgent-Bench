@@ -6,7 +6,6 @@
 # gcc has no -std=c23, the judge image does).
 #
 #SBATCH --job-name=run-tests-container
-#SBATCH --partition=mi300
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --mem=0

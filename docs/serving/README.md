@@ -54,14 +54,14 @@ endpoint URL and a ready-to-paste `curl`. Watch the job's output file for that b
 
 ```
 ===== endpoint is live =====
-base URL:   http://nid002968:8000/v1
+base URL:   http://<node>:8000/v1
 model name: hpcagent-bench-vllm
-replicas:   http://nid002968:8000/v1
-health:     curl -s http://nid002968:8000/v1/models
-metrics:    curl -s http://nid002968:8000/metrics
+replicas:   http://<node>:8000/v1
+health:     curl -s http://<node>:8000/v1/models
+metrics:    curl -s http://<node>:8000/metrics
 server log: $SCRATCH/inference-server/<jobid>/server-0.log
 
-curl -s http://nid002968:8000/v1/chat/completions \
+curl -s http://<node>:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"hpcagent-bench-vllm","max_tokens":128,"messages":[{"role":"user","content":"Say hi."}]}'
 
@@ -105,10 +105,9 @@ environment variables the image needs but cannot set for itself. Three things su
   plugin missing, RCCL silently falls back to TCP: numerically correct, several times slower, no
   error message. The EDFs in this repo pin the hook version so a site-side upgrade cannot change
   the fabric under a running job.
-- **This currently does not start on Beverin.** Since the Sep 2026 scratch migration the site's
-  `/etc/enroot/enroot.conf` names a cache path under the decommissioned `/capstor`, and every
-  `srun --environment=` dies at `task_init()`. `serve-only.sbatch` and `regrade.sbatch` have no
-  fallback for this and are unusable until CSCS fixes it. The benchmark campaign
+- **The CE may not start on every site.** If the site's `/etc/enroot/enroot.conf` names a cache
+  path that does not exist on the node, every `srun --environment=` dies at `task_init()`.
+  `serve-only.sbatch` and `regrade.sbatch` have no fallback for this. The benchmark campaign
   (`beverin.sbatch`/`run_cluster.sh`) works around it by launching through `enroot start` directly
   instead of the CE -- see [`experiments/README.md`](../../experiments/README.md#container-runtimes)
   for that path and its gotchas.
@@ -133,20 +132,17 @@ against the images named in `containers/cluster/ce-images/images.env`.
 ## 3. Submitting: the Slurm flags, and why each one
 
 ```
-#SBATCH --partition=mi300
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
 ```
 
-- **`--partition=mi300` always.** The default partition is `mi200`. That is different hardware and
-  the configurations here are not valid on it.
-- **Do not pass `--account` yourself.** Beverin now rejects any job without one
-  (`ERROR: you must specify a project account (-A <account>)`); `scripts/cscs/account_env.sh`
-  resolves it once, from your own Slurm associations, and exports `SBATCH_ACCOUNT` (and
-  `SLURM_ACCOUNT` / `SALLOC_ACCOUNT`), so every directive here already has one. Naming `-A`
-  yourself is still how identical jobs end up split across two project accounts depending on
-  which command line was typed.
+- **No `--partition` or `--account` in the script.** The site layer exports `SBATCH_PARTITION`
+  (an MI300A partition; other hardware is not valid for these configurations) and
+  `scripts/cscs/account_env.sh` resolves the account once, from your own Slurm associations, and
+  exports `SBATCH_ACCOUNT` (and `SLURM_ACCOUNT` / `SALLOC_ACCOUNT`) -- see
+  [`docs/configuration.md`](../configuration.md). Naming `-A` yourself is how identical jobs end up
+  split across two project accounts depending on which command line was typed.
 - **`--mem=0`.** A step's memory cgroup is sized from its share of the node's CPUs. Without
   `--mem=0` the server is capped far below the node's memory and dies during weight load with no
   useful message.
@@ -212,7 +208,7 @@ server only you can use, from your laptop or from your own Daint jobs, follow
 [`private-endpoint.md`](private-endpoint.md) instead.
 
 ```bash
-BASE=http://nid002968:8000
+BASE=http://<node>:8000
 
 curl -s "$BASE/v1/models"
 

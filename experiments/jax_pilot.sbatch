@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-#SBATCH --account=g34
-#SBATCH --partition=mi200
 #SBATCH --nodes=1
 #SBATCH --exclusive
 #SBATCH --mem=0
@@ -15,7 +13,7 @@
 # JAX columns on the XLA CPU backend) and two GPU lanes (the JAX columns on ROCm, one GCD each).
 # Kernels are dealt round-robin over the two lanes of each device.
 #
-#   PILOT_TREE=<worktree> PILOT_OUT=<cells dir> sbatch --export=ALL experiments/jax_pilot.sbatch roster.txt
+#   PILOT_TREE=<worktree> PILOT_OUT=<cells dir> sbatch --partition=<mi200 partition> --export=ALL experiments/jax_pilot.sbatch roster.txt
 set -euo pipefail
 ulimit -c 0
 

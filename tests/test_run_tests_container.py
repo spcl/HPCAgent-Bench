@@ -63,7 +63,7 @@ def test_container_flag_submits_with_the_partition_and_sbatch_script(tmp_path: p
     argv = marker.read_text().splitlines()
     assert "--wait" in argv
     assert "-A" not in argv
-    assert "--partition=mi300" in argv
+    assert not any(word.startswith("--partition") for word in argv), "the site layer's SBATCH_PARTITION picks it"
     assert str(CONTAINER_SBATCH) in argv
 
 
@@ -82,10 +82,11 @@ def test_container_flag_without_scratch_fails_before_touching_sbatch(tmp_path: p
     assert not marker.exists(), "sbatch was invoked despite SCRATCH being unset"
 
 
-def test_run_tests_container_sbatch_has_the_mi300_single_node_directives() -> None:
+def test_run_tests_container_sbatch_has_the_single_node_directives() -> None:
     """The directives baked into the companion .sbatch file itself, so a direct `sbatch
-    scripts/run_tests_container.sbatch` (bypassing the wrapper) still lands on one mi300 node."""
+    scripts/run_tests_container.sbatch` (bypassing the wrapper) still lands on one whole node; the
+    partition comes from the site layer (SBATCH_PARTITION), never a directive."""
     text = CONTAINER_SBATCH.read_text()
-    assert "#SBATCH --partition=mi300" in text
+    assert "#SBATCH --partition" not in text
     assert "#SBATCH --nodes=1" in text
     assert "#SBATCH --mem=0" in text

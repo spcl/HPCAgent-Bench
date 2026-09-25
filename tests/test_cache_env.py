@@ -6,7 +6,7 @@ tests exercise the real script through bash, with a throwaway ``SCRATCH``, rathe
 reimplementing its arithmetic in Python -- the property under test is what the shell actually
 resolves, not what this file assumes it resolves to.
 
-Two roots exist on purpose (see the script's own header): ``FAST_SCRATCH`` (iopsstor, weights) and
+Two roots exist on purpose (see the script's own header): ``FAST_SCRATCH`` (the site's fast tier, weights) and
 ``SCRATCH`` (general scratch, JIT build output). The tests below hold both apart, and hold the
 second one to what ``.cache/README.md`` documents as the default layout -- a script and a doc that
 drift apart is a submitter silently landing on the wrong path.
@@ -36,7 +36,7 @@ def run(script: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
 
 @pytest.mark.parametrize("var", ["JIT_CACHE_ROOT", "HPCAGENT_BENCH_CPF_PRERENDER_DIR", "HPCAGENT_BENCH_TOOLS_DIR"])
 def test_every_jit_side_cache_var_lives_under_scratch(tmp_path: pathlib.Path, var: str) -> None:
-    """None of these may drift onto ``/capstor``, ``$HOME`` or a hardcoded user path: they must all
+    """None of these may drift onto a site mount, ``$HOME`` or a hardcoded user path: they must all
     resolve somewhere under the ``SCRATCH`` this test hands them, and nowhere else."""
     scratch = tmp_path / "scratch"
     proc = run(f'echo "${var}"', {"SCRATCH": str(scratch), "USER": "tester"})
@@ -46,7 +46,7 @@ def test_every_jit_side_cache_var_lives_under_scratch(tmp_path: pathlib.Path, va
 
 
 def test_hf_home_lives_under_fast_scratch_not_under_the_jit_cache_root(tmp_path: pathlib.Path) -> None:
-    """The two roots are split on purpose (weights on iopsstor, JIT build output on the general
+    """The two roots are split on purpose (weights on FAST_SCRATCH, JIT build output on the general
     scratch): a change that folds HF_HOME under JIT_CACHE_ROOT would serve model weights off the
     slower filesystem the script's own header says this split exists to avoid."""
     fast, scratch = tmp_path / "fast", tmp_path / "scratch"
@@ -146,12 +146,15 @@ def test_the_cpf_prerender_dir_default_matches_the_cache_readme(tmp_path: pathli
     assert proc.stdout.strip() == f"{scratch}/.hpcagentbench-cache{documented}"
 
 
-def test_two_users_on_the_same_host_resolve_to_distinct_fast_scratch_roots() -> None:
-    """FAST_SCRATCH's own unconditional default is keyed by $USER; two accounts must never be handed
-    the same weights directory, which would let one user's job load (or evict) another's checkpoint."""
-    first = run('echo "$FAST_SCRATCH"', {"USER": "alice", "SCRATCH": "/nonexistent-a"})
-    second = run('echo "$FAST_SCRATCH"', {"USER": "bob", "SCRATCH": "/nonexistent-b"})
-    assert first.returncode == 0 and second.returncode == 0
+@pytest.mark.parametrize("layer", sorted((REPO / "experiments" / "layers").glob("site-*.env")), ids=lambda p: p.stem)
+def test_two_users_on_the_same_host_resolve_to_distinct_fast_scratch_roots(layer: pathlib.Path) -> None:
+    """Every shipped site layer keys FAST_SCRATCH by user (directly or through $SCRATCH); two
+    accounts must never be handed the same weights directory, which would let one user's job load
+    (or evict) another's checkpoint."""
+    site = {"HPCAGENT_BENCH_SITE_ENV": str(layer)}
+    first = run('echo "$FAST_SCRATCH"', {"USER": "alice", "SCRATCH": "/nonexistent/alice", **site})
+    second = run('echo "$FAST_SCRATCH"', {"USER": "bob", "SCRATCH": "/nonexistent/bob", **site})
+    assert first.returncode == 0 and second.returncode == 0, first.stderr + second.stderr
     assert first.stdout.strip() != second.stdout.strip()
     assert "alice" in first.stdout
     assert "bob" in second.stdout
@@ -173,3 +176,38 @@ def test_edf_mounts_follow_scratch_and_fast_scratch_instead_of_naming_a_filesyst
     )
     assert same.returncode == 0, same.stderr
     assert same.stdout.strip() == '"/fsa/:/fsa/"'
+
+
+def site_layer(tmp_path: pathlib.Path, text: str) -> str:
+    """A site layer file (experiments/layers/site-*.env shape) for HPCAGENT_BENCH_SITE_ENV."""
+    layer = tmp_path / "site.env"
+    layer.write_text(text)
+    return str(layer)
+
+
+def test_fast_scratch_defaults_to_scratch_without_a_site_layer(tmp_path: pathlib.Path) -> None:
+    """A generic site has no fast tier: weights land under $SCRATCH, not under a site mount."""
+    scratch = tmp_path / "scratch"
+    env = {"SCRATCH": str(scratch), "USER": "tester", "HPCAGENT_BENCH_SITE_ENV": site_layer(tmp_path, "")}
+    proc = run('echo "$FAST_SCRATCH"; echo "$HF_HOME"', env)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.split() == [str(scratch), str(scratch / ".hpcagentbench-cache" / "hf")]
+
+
+def test_the_site_layer_names_the_fast_tier_and_the_environment_still_wins(tmp_path: pathlib.Path) -> None:
+    fast, mine = tmp_path / "fast", tmp_path / "mine"
+    layer = site_layer(
+        tmp_path, f'FAST_SCRATCH="${{FAST_SCRATCH:-{fast}}}"\nSBATCH_PARTITION="${{SBATCH_PARTITION:-p1}}"\n'
+    )
+    base = {"SCRATCH": str(tmp_path / "scratch"), "USER": "tester", "HPCAGENT_BENCH_SITE_ENV": layer}
+    proc = run('echo "$FAST_SCRATCH $SBATCH_PARTITION"; env | grep -c "^SBATCH_PARTITION=p1$"', base)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.split() == [str(fast), "p1", "1"], "site values are loaded AND exported"
+    proc = run('echo "$FAST_SCRATCH"', {**base, "FAST_SCRATCH": str(mine)})
+    assert proc.stdout.strip() == str(mine)
+
+
+def test_a_missing_named_site_layer_is_an_error(tmp_path: pathlib.Path) -> None:
+    proc = run("true", {"SCRATCH": str(tmp_path), "HPCAGENT_BENCH_SITE_ENV": str(tmp_path / "nope.env")})
+    assert proc.returncode != 0
+    assert "no such file" in proc.stderr

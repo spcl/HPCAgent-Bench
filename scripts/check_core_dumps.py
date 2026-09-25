@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Every shell entry point in this repo must disable core dumps before it runs anything.
 
-Beverin's ``core_pattern`` is the machine-global ``core_%h_%p`` and a dump lands in the CRASHING
-PROCESS'S CWD -- which for a campaign arm is the repository checkout. A segfaulting agent kernel,
+A core dump lands in the CRASHING PROCESS'S CWD -- which for a campaign arm is the repository checkout. A segfaulting agent kernel,
 a wedged engine, an OOM-killed rank: each leaves a ``core_<host>_<pid>`` file behind, and the inode
 cost is paid on a filesystem whose quota is inodes rather than bytes.
 
@@ -22,8 +21,7 @@ Three rules, because each one alone has been escaped:
    shebang names a shell. Keying on ``.sbatch`` was the original scope and it let 52 shell scripts
    through -- container launch wrappers (``scripts/cscs/enroot_srun.sh``), login-node helpers
    (``experiments/arm_status.sh``), image builds, and the ``source``d env layers every one of them
-   starts from. A login-node repro run under one of those left 21.6 GB of ``core_beverin-ln001_*``
-   on 2026-09-20. Widening to ``.sh`` alone still missed two: the agent's own
+   starts from. Widening to ``.sh`` alone still missed two: the agent's own
    ``containers/agent/bin/hpcagent-bench-tool`` and the OpenHands shell ``bash-norc`` carry no
    suffix, and those are the scripts closest to the compiler that crashes. A sourced library counts
    too: setting the limit there is what carries the floor into the caller's shell.
@@ -51,9 +49,8 @@ import sys
 
 #: The line every shell entry point must carry, and the comment that says why it is there.
 GUARD = "ulimit -c 0"
-BLOCK = """# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+BLOCK = """# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
+# SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 """
 

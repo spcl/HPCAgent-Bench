@@ -232,7 +232,7 @@ for arm in "${arms[@]}"; do
     fi
     # the job reads a read-only per-submission copy, never the re-stageable .env.<arm>
     snapshot=$(snapshot_env "${env}" "${arm}") || exit 2
-    part=(--partition=mi300)
+    part=()
     partition_is_default || mapfile -t part < <(partition_sbatch_args)
     jid=$(sbatch --parsable --no-requeue "${part[@]}" --mem=0 --nodes="${nodes}" --time="${limit}" \
         --job-name="${arm}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" beverin.sbatch)

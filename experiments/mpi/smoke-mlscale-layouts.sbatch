@@ -20,12 +20,11 @@
 # (mlscale-layouts does not support these yet -- must cleanly REFUSE pre-build, which counts as a
 # PASS for the smoke; an unexpected crash or a silently wrong grade does not).
 #
-#   export SBATCH_ACCOUNT=a-g34   # or pass --account=... on the sbatch command line
+#   . scripts/cscs/account_env.sh   # exports SBATCH_ACCOUNT
 #   sbatch --test-only experiments/mpi/smoke-mlscale-layouts.sbatch   # validate before submitting
 #   sbatch experiments/mpi/smoke-mlscale-layouts.sbatch
 #
 #SBATCH --job-name=smoke-mlscale-layouts
-#SBATCH --partition=mi300
 #SBATCH --nodes=2
 #SBATCH --exclusive
 #SBATCH --mem=0

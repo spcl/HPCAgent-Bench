@@ -12,7 +12,7 @@
 # other on the node; each is "<roster>:<cpu|rocm>:<pilot columns>". At the end every cell is filed
 # into canon.db as jax_<cpu|gpu>_<eager|jit|emit> under run "<run label>-<roster stem>".
 #
-#   JAX_TREE=<frozen tree> JAX_OUT=<work dir> JAX_RUN=jax-20260924 sbatch -A g34 --partition=mi300 \
+#   JAX_TREE=<frozen tree> JAX_OUT=<work dir> JAX_RUN=jax-20260924 sbatch \
 #       --no-requeue --time=... experiments/jax_canon.sbatch \
 #       llr40.txt:cpu:jax_eager_jit,jax_emit_jit llr40.txt:rocm:jax_eager_jit,jax_emit_jit ...
 set -uo pipefail

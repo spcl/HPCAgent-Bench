@@ -312,3 +312,6 @@ experiments/*-[0-9]*.out
 *.ritom-orig
 .perf_reports/
 experiments/mwd-final-*/
+
+# per-user site layer, copied from experiments/layers/site-*.env
+experiments/layers/site.env
