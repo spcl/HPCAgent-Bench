@@ -43,6 +43,7 @@ test -x "${IMAGE_DIR}/build.sh" || { echo "no build.sh under IMAGE_DIR=${IMAGE_D
 
 # shellcheck source=../images.env
 source "${IMAGE_DIR}/../images.env"
+ce_require_partition sglang || exit 2
 export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/${INFERENCE_SGLANG_CANDIDATE}}"
 
 # Refuse to write over an image some EDF points a running job at: overwriting a mounted squashfs is
