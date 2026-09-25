@@ -21,21 +21,20 @@ The first two are the agentic/sweep deployment described below; the third is
 MPI *between* containers, and it does not change the one-container-per-rank invariant: Slurm places
 the containers and the MPI inside them connects the processes.
 
-The role deployment has three roles, all from the ONE universal OCI image
-(`containers/images/generic/Dockerfile`):
+The role deployment has three roles; the images are listed in
+[`containers/README.md`](../containers/README.md):
 
 | Role | What runs in the container | Image | How many |
 |------|----------------------------|-------|----------|
-| **inference** | a vLLM server (one URL) | `containers/images/generic/inference.def` (a SEPARATE vLLM image; a site may substitute its own) | one per model replica |
-| **judge** | `hpcagent-bench serve` (the HTTP oracle: builds, times, grades) | `containers/images/generic/Dockerfile` (Apptainer conversion: `cpu.def` + `judge.def`) | one per judge node |
-| **agent** | `hpcagent-bench agent openai ...` -- the optimizer workers that "think" | `containers/images/generic/Dockerfile` (Apptainer conversion: `cpu.def`) | one process, `W` workers |
+| **inference** | a vLLM or SGLang server (one URL) | `containers/images/{vllm,vllm-cuda,sglang}` (a SEPARATE serving image; a site may substitute its own) | one per model replica |
+| **judge** | `hpcagent-bench serve` (the HTTP oracle: builds, times, grades) | `containers/images/judge-agent-<cpu,cuda,amd>`, target `judge` | one per judge node |
+| **agent** | `hpcagent-bench agent openai ...` -- the optimizer workers that "think" | the same Dockerfile, target `agent` | one process, `W` workers |
 
-**Agent and judge share** the one hpcagent_bench image (identical toolchain, for
-apples-to-apples timing); **inference** is deliberately separate -- it ships vLLM but no
-harness, so the model port can never leak the hidden tests. `containers/images/generic/inference.def` is
-an in-repo reference recipe (bootstrapped from the upstream vLLM OpenAI image); on a site
-with its own vLLM deployment (e.g. CSCS Alps below) you point the agents at that URL
-instead and never build this image.
+**Agent and judge share** one toolchain (the `judge` target is the `agent` target plus the
+installed package, for apples-to-apples timing); **inference** is deliberately separate -- it
+ships the serving engine but no harness, so the model port can never leak the hidden tests. On a
+site with its own vLLM deployment (e.g. CSCS Alps below) you point the agents at that URL
+instead and never build a serving image.
 
 An **agent worker** is bound, once and statically, to **one vLLM endpoint** (for the LLM)
 and **one judge endpoint** (for the authoritative timed grade). Worker `w` uses
@@ -49,19 +48,16 @@ by the wrong live judge. See
 
 ## Backends
 
-Four backends run the one OCI image; preference order, what each needs, and how to build the
+Four backends run the OCI images; preference order, what each needs, and how to build an
 image are covered in
 [docs/runtime.md#container-backends-runtimebackend](runtime.md#container-backends-runtimebackend).
 Select one with `HPCAGENT_BENCH_RUNTIME_BACKEND=podman|docker|apptainer|ce` (default `podman`;
 `ce` is instead selected by the `srun --environment=<edf>` flag -- see the Foundation track and
 Quickstart below).
 
-The **inference** role's image is a separate build (it ships vLLM but no harness, so the model
-port can never leak the hidden tests), only needed when you are not using a site-provided vLLM:
-
-```
-apptainer build hpcagent_bench-inference.sif containers/images/generic/inference.def
-```
+The **inference** role's image is a separate build (it ships the serving engine but no harness,
+so the model port can never leak the hidden tests), only needed when you are not using a
+site-provided vLLM.
 
 ## Endpoints (the contract the job submission wires)
 
@@ -146,9 +142,9 @@ is [scripts/submit_launch.sbatch](../scripts/submit_launch.sbatch).
 ## CSCS Alps (aarch64 GH200)
 
 Alps compute nodes are **4xGH200** (aarch64, GPU stack preinstalled). The **judge** and **agent**
-roles run the same `containers/images/generic/Dockerfile` image; the **inference** role is a *separate,
-site-provided vLLM deployment* (the hpcagent_bench image ships no vLLM -- the agents only ever see its
-URL). All roles launch as single-node containers under `srun`; node allocation and the `srun`
+roles run the `judge-agent-cuda` image (targets `judge` and `agent`); the **inference** role is a
+*separate vLLM deployment* (`vllm-cuda`, or the site's own -- the judge/agent image ships no vLLM,
+and the agents only ever see its URL). All roles launch as single-node containers under `srun`; node allocation and the `srun`
 submission itself are **external** (owned by the site's submission scripts --
 not this repo). `ce` (the Container Engine) is the native backend on Alps; where it is
 unavailable, **apptainer** and **podman** are the rootless fallbacks (no root, no docker daemon
@@ -167,20 +163,11 @@ cp scripts/cscs/loop_level_reasoning.toml.example $SCRATCH/loop_level_reasoning.
 EDF=$SCRATCH/loop_level_reasoning.toml sbatch -A <account> scripts/cscs/submit_loop_level_reasoning_alps.sbatch
 ```
 
-The Container Engine is a **second conversion target** for the same OCI image (Apptainer is the
-first): instead of a SIF, it imports the image to **SquashFS** via `enroot import`, a one-time
-step off the batch path:
-
-```bash
-docker buildx build --platform linux/arm64 -f containers/images/generic/Dockerfile \
-    --build-arg HW=cpu -t hpcagent_bench:cpu-aarch64 .
-docker save hpcagent_bench:cpu-aarch64 -o hpcagent_bench-aarch64.tar
-enroot import -o $SCRATCH/ce-images/hpcagent_bench-aarch64.sqsh dockerd://hpcagent_bench:cpu-aarch64
-```
-
-As with the SIF built for the Quickstart below, the imported image must be **linux/arm64** --
-an x86_64 image will not run on a GH200 node, and the failure shows up as an exec-format error
-inside the first step rather than at submission.
+The Container Engine runs a **SquashFS** of the OCI image (Apptainer runs a SIF of the same
+image). `containers/images/<image>/build.sh` builds a target and exports that SquashFS; build,
+promotion and EDF rendering are in [`containers/README.md`](../containers/README.md). On a GH200
+node the image must be **linux/arm64** -- an x86_64 image fails with an exec-format error inside
+the first step rather than at submission.
 
 ### Quickstart -- submit a run
 
@@ -223,20 +210,15 @@ recipe below fills in the SIF build, the Slingshot fabric hook, and multi-endpoi
 
 ### Worked recipe
 
-**1. Build the arm64 SIF (on a build box, then copy it over).** Unprivileged image builds are
-unreliable on HPC (see the HPC notes in [docs/runtime.md](runtime.md)). Build for `linux/arm64`
-on the CSCS public GPU base:
+**1. Build the arm64 SIF.** Unprivileged image builds are unreliable on HPC (see the HPC notes in
+[docs/runtime.md](runtime.md)). `containers/images/judge-agent-cuda/build.sh` builds the aarch64
+image on a Daint node ([`containers/README.md`](../containers/README.md)) and writes an OCI
+archive beside the squashfs; Apptainer converts that archive:
 
 ```
-podman build --platform linux/arm64 --build-arg HW=nvidia \
-    --build-arg BASE_IMAGE=<cscs-public-gpu-base> \
-    -f containers/images/generic/Dockerfile -t hpcagent_bench:nvidia .
-podman save hpcagent_bench:nvidia -o hpcagent_bench-nvidia.tar                     # daemon-agnostic hand-off
-apptainer build hpcagent_bench-nvidia.sif docker-archive:hpcagent_bench-nvidia.tar # SIF from the SAME OCI
+BUILD_TARGETS=judge containers/images/judge-agent-cuda/build.sh
+apptainer build hpcagent_bench-nvidia.sif oci-archive:$SCRATCH/ce-images/<judge candidate>.oci.tar
 ```
-
-On the CSCS GPU base the CUDA/NCCL stack is preinstalled, so the image's own nvidia apt packages
-may be redundant -- drop or version-pin them if they conflict (see the Dockerfile pre-merge checklist).
 
 **2. Fabric (Slingshot/CXI).** The site provides the interconnect hook -- on Alps the CSCS
 Container Engine's EDF carries `com.hooks.cxi.enabled = "true"`, consumed by

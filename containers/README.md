@@ -9,9 +9,7 @@ containers/
     images.env         the image registry: one row per image; every script here reads it
     build_common.sh    sourced by every build.sh / build.sbatch
     <image>/           Dockerfile, build.sh, build.sbatch, edf.toml.example (CSCS Container Engine)
-    generic/           Dockerfile, cpu.def, judge.def, inference.def, compose.yml (docker/podman/Apptainer)
-  lib/               build steps the Dockerfiles COPY (HPTT, tblis, Pluto, git retry, image gates);
-                     install-extra-toolchains.sh is the CI runners' oneAPI/NVHPC install
+  lib/               build steps the Dockerfiles COPY (HPTT, tblis, Pluto, git retry, image gates)
   inference/         serving jobs, weight fetch, serving smokes and gates, tuned MoE configs
   agent/             prompt fragments, MCP tools, method packets and harness pins, bound read-only into
                      the agent container at launch, never copied into an image
@@ -19,9 +17,11 @@ containers/
                      (the tool is hpcagent_bench/harness/judge_web_search.py)
 ```
 
-The CE images (`images/<image>/`) serve AMD MI300A/MI250X (beverin), NVIDIA GH200 (daint) and
-CPU-only nodes. `images/generic/` builds the same agent and judge roles on a workstation or a
-non-CSCS cluster (`docs/launch.md`, `docs/hf_dataset_and_harbor.md`); CI builds its Dockerfile.
+The images (`images/<image>/`) serve AMD MI300A/MI250X (beverin), NVIDIA GH200 (daint) and
+CPU-only nodes. Off CSCS the same Dockerfiles build with plain podman or docker
+([Without the Container Engine](#without-the-container-engine)). CI builds no image: each build
+gates itself (`build_and_verify.sbatch`), and the unit tests hold the recipes to their contract.
+The CI runners' oneAPI/NVHPC install is `.github/scripts/install-extra-toolchains.sh`.
 
 ## Where skills come from
 
@@ -102,6 +102,14 @@ REPO=$PWD/../.. IMAGE_DIR=$PWD/sglang-mi200 \
 DRY_RUN=1 ./promote_image.sh --all      # what would move
 ./promote_image.sh --all                # rename + sidecars + EDFs
 ```
+
+Build gates prove that an engine imports, not that it serves, so a serving candidate is smoked
+before promotion. `experiments/smoke-new-images.sh` runs the SGLang candidate through
+`inference/smoke-kimi-sglang.sbatch`. A vLLM candidate is smoked with `experiments/serve-only.sbatch`,
+which serves what a campaign serves: copy `~/.edf/hpcagent-bench-vllm-mi300-latest.toml` to
+`~/.edf/candidate-vllm.toml` with `image` pointing at `hpcagent-bench-vllm-candidate.sqsh`, then
+run `SERVE_ENV_FILE=<copy of serve-only.env plus INFERENCE_CE_ENV=candidate-vllm> MODEL=oss120b
+./serve-only.sbatch` from `experiments/` and query the endpoint it prints.
 
 Engine versions are build args: `EXTRA_BUILD_ARGS="VLLM_VERSION=0.28.0 AITER_REF=..." sbatch vllm/build.sbatch`.
 Re-verify a candidate without rebuilding with `VERIFY_ONLY=1` on `build_and_verify.sbatch`, or:
@@ -188,13 +196,28 @@ CE_PLATFORM=cpu ./promote_image.sh --all
 srun -N1 --environment=hpcagent-bench-judge-cpu-$(uname -m)-latest python3 -c 'import hpcagent_bench, dace'
 ```
 
-Without the Container Engine, the generic recipes build the same roles with docker/podman or Apptainer:
+#### Without the Container Engine
+
+`build.sh` is podman plus the CSCS export; any other host builds each target directly from the
+repository root (`docker` is a drop-in for `podman`), and Apptainer converts the result:
 
 ```bash
-docker build -f containers/images/generic/Dockerfile --build-arg HW=cpu -t hpcagent_bench:cpu .
-apptainer build hpcagent_bench-cpu.sif   containers/images/generic/cpu.def      # agent
-apptainer build hpcagent_bench-judge.sif containers/images/generic/judge.def    # judge (harness baked in)
+DACE_COMMIT=$(git ls-remote https://github.com/spcl/dace.git refs/heads/extended | cut -f1)
+podman build -f containers/images/judge-agent-cpu/Dockerfile --target agent \
+    --build-arg DACE_COMMIT=${DACE_COMMIT} -t hpcagent_bench:cpu .
+podman build -f containers/images/judge-agent-cpu/Dockerfile --target judge \
+    --build-arg DACE_COMMIT=${DACE_COMMIT} -t hpcagent_bench:judge .
+podman save hpcagent_bench:judge -o hpcagent_bench-judge.tar
+apptainer build hpcagent_bench-judge.sif docker-archive:hpcagent_bench-judge.tar
 ```
+
+The tags are the ones `images:` in `hpcagent_bench/config.yaml` names for the Harbor adapter:
+agent `hpcagent_bench:<cpu|nvidia|amd>`, judge `hpcagent_bench:judge[-nvidia|-amd]`. `nvidia` is
+`judge-agent-cuda` (aarch64) and `amd` is `judge-agent-amd`; their `build.sh` shows the further
+build args they take (`LIBFABRIC_COMMIT`, `SLURM_VERSION`, `ROCM_ARCH`).
+`scripts/run_agent_in_container.sh` runs the harness itself inside `hpcagent_bench:<hw>`, so a
+host that uses it tags a judge target that way (or names it with `HPCAGENT_BENCH_DOCKER_IMAGE` /
+`HPCAGENT_BENCH_SIF`).
 
 ### Serving jobs and gates (`inference/`)
 
@@ -235,8 +258,7 @@ image from `hpcagent_bench/envs/libraries.yaml` (`hpcagent_bench/docs/library_re
 why); a library is requestable only with an entry there. GPU math libraries ship with the CUDA and
 ROCm toolkits and are listed in `hpcagent_bench/envs/toolset.yaml`.
 
-The generic images install the CPU set from one apt line (`images/generic/Dockerfile`, shared by
-every `HW` variant, and `cpu.def`); the CE images from apt and, on `judge-agent-amd`, spack. Three
+The judge-agent images install the CPU set from apt and, on `judge-agent-amd`, spack. Three
 pieces are built from source by `lib/` scripts, each pinned and cloned with retries (GitHub throttles
 anonymous CI egress with a 403 that reads as a missing repository):
 
@@ -247,9 +269,8 @@ anonymous CI egress with a 403 that reads as a missing repository):
 | Pluto | `lib/build-pluto.sh` | `polycc` against distro clang 17 (judge-agent images and CI only) |
 
 BLIS comes from apt for the same gcc 16 reason. OpenBLAS holds the `libblas.so.3`/`liblapack.so.3`
-alternatives. `perf` comes from `linux-perf`: `linux-tools-*` ship no perf binary on this base.
-Ubuntu 26.04 dropped gperftools' `pprof` CLI (the libraries remain); read profiles with heaptrack or
-perf.
+alternatives. `perf` comes from `linux-perf` where the base packages it, else from the
+`linux-tools-*` binary directly.
 
 ## Adding a container
 

@@ -10,8 +10,7 @@ cost a day of hunting a regression that did not exist.
 
 So a Dockerfile takes the commit as a build-arg (the builder resolves the tip, and the sha is what
 busts the layer), and every recipe writes the resolved sha to /opt/dace.commit so a run can say
-which dace graded it. A .def file has no layer cache and may clone the branch, but it still has to
-record what it got.
+which dace graded it.
 """
 
 import pathlib
@@ -22,14 +21,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 #: Recipes whose dace layer is CACHED, so the commit has to enter through a build-arg.
 DOCKERFILES = [
-    "containers/images/generic/Dockerfile",
     "containers/images/judge-agent-amd/Dockerfile",
     "containers/images/judge-agent-cuda/Dockerfile",
     "containers/images/judge-agent-cpu/Dockerfile",
 ]
-
-#: Recipes with no layer cache: the branch is fine, the record is still required.
-DEFINITIONS = ["containers/images/generic/cpu.def"]
 
 #: Wrappers that must resolve the tip themselves and hand it to the build.
 BUILDERS = [
@@ -51,7 +46,7 @@ def test_a_cached_recipe_takes_the_dace_commit_as_a_build_arg(recipe: str) -> No
     )
 
 
-@pytest.mark.parametrize("recipe", DOCKERFILES + DEFINITIONS)
+@pytest.mark.parametrize("recipe", DOCKERFILES)
 def test_every_recipe_records_the_dace_commit_it_installed(recipe: str) -> None:
     text = (ROOT / recipe).read_text()
     assert "/opt/dace.commit" in text, (

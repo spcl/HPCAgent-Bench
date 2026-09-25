@@ -46,17 +46,17 @@ degrades gracefully rather than taking down the sweep.
 
 ## Container backends (`runtime.backend`)
 
-**One OCI image** (`containers/images/generic/Dockerfile`), built once per hardware variant;
-four backends consume it, in preference order (podman and docker run the OCI tag directly,
-apptainer converts it to a SIF, `ce` imports it to SquashFS -- the OCI image is the one
-artifact, a laptop / cloud VM / HPC site all start from it):
+**One OCI image per hardware variant** (`containers/images/judge-agent-<cpu|cuda|amd>/Dockerfile`,
+tagged `hpcagent_bench:<cpu|nvidia|amd>`); four backends consume it, in preference order (podman
+and docker run the OCI tag directly, apptainer converts it to a SIF, `ce` runs a SquashFS of it --
+the OCI image is the one artifact, a laptop / cloud VM / HPC site all start from it):
 
 | backend | runs the image via | rootless | Harbor provider | notes |
 |---------|--------------------|----------|------------------|-------|
 | `podman` (default) | the OCI tag directly | yes, daemonless | none | the only one of the four that runs unprivileged on both a laptop and an HPC login node; the wrapper script probes this first |
 | `docker` | the OCI tag directly | no (daemon) | `docker` | needs dockerd and a root-equivalent group, so it is the laptop / cloud-VM path, never the HPC one |
 | `apptainer` | a SIF built FROM the OCI image | yes | `singularity` | `hpcagent-bench-install-apptainer`; a **conversion target**, not an independent build -- for shared/HPC sites that need a SIF |
-| `ce` | a SquashFS import of the OCI image (`enroot import`) | n/a -- selected by an `srun` flag, not invoked directly | none | CSCS Alps' Container Engine; NOT an exec wrapper -- there is no wrapper command and no local launch form, the image is chosen by `srun --environment=<edf>` |
+| `ce` | a SquashFS of the OCI image (`containers/images/<image>/build.sh` exports it) | n/a -- selected by an `srun` flag, not invoked directly | none | CSCS Alps' Container Engine; NOT an exec wrapper -- there is no wrapper command and no local launch form, the image is chosen by `srun --environment=<edf>` |
 
 Select with `$HPCAGENT_BENCH_RUNTIME_BACKEND=podman|docker|apptainer|ce`. The exec backends
 (`podman`/`docker`/`apptainer`) run an image via `hpcagent_bench.containers.local_run_command` /
@@ -67,9 +67,13 @@ orchestrator, >= 0.23) drives `docker`, `podman` and `singularity` (`harbor_env_
 `apptainer -> singularity` and raises for `ce`, which Harbor cannot drive); see
 [hf_dataset_and_harbor.md](hf_dataset_and_harbor.md).
 
-**Build the image (one OCI recipe, `--build-arg HW=cpu|nvidia|amd`):**
+**Build the image** ([`containers/README.md`](../containers/README.md), "Without the Container
+Engine", has the `nvidia`/`amd` build args):
 ```
-podman build -f containers/images/generic/Dockerfile --build-arg HW=cpu -t hpcagent_bench:cpu .
+# the judge target: this wrapper runs the harness inside the image (--target agent is toolchain only)
+podman build -f containers/images/judge-agent-cpu/Dockerfile --target judge \
+    --build-arg DACE_COMMIT=$(git ls-remote https://github.com/spcl/dace.git refs/heads/extended | cut -f1) \
+    -t hpcagent_bench:cpu .
 # docker is a drop-in substitute for podman above on a machine with a daemon (same flags, same
 # OCI tag, except the NVIDIA GPU flag: `--device nvidia.com/gpu=all` for podman, `--gpus all`
 # for docker -- see hpcagent_bench/container_backends.txt).
@@ -78,7 +82,7 @@ podman save hpcagent_bench:cpu -o hpcagent_bench-cpu.tar && apptainer build hpca
 ```
 Then `scripts/run_agent_in_container.sh <hw> -- <agent args>` runs it with the device passed
 through automatically: `--nv` (nvidia), `--rocm` + kfd/dri (amd), nothing for cpu. The cpu
-image pins CPU-only torch; nvidia/amd pull the CUDA/ROCm wheels.
+image pins CPU-only torch; nvidia/amd carry their base's CUDA/ROCm torch.
 
 ## HPC notes
 
@@ -98,8 +102,8 @@ The norm on clusters is **build off-cluster, run on-cluster**:
 ## MPI / multi-node
 
 The images ship **MPICH** (not OpenMPI) as the MPI-track default -- `mpich` +
-`libmpich-dev` + `libscalapack-mpich-dev`, with `mpi4py` built against it (the defs pin
-`MPICC=mpicc.mpich` so the generated C driver and the mpi4py SPMD driver share one MPI
+`libmpich-dev` + `libscalapack-mpich-dev`, with `mpi4py` built against it (the Dockerfiles build
+it with `MPICC=mpicc.mpich` so the generated C driver and the mpi4py SPMD driver share one MPI
 ABI). MPICH is chosen for **ABI compatibility**: it drops in for cray-mpich on Ault (host
 MPI replacement) and slots under the Slingshot/CXI libfabric layer on Alps, so one image
 runs single-node here and multi-node on the cluster with no rebuild. The MPICH-in-image +
