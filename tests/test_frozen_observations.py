@@ -9,6 +9,7 @@ import csv
 import importlib.util
 import json
 import pathlib
+import re
 import sqlite3
 import sys
 import types
@@ -307,14 +308,18 @@ def test_the_tracked_rerun_list_names_every_lost_setup_pending(board: types.Modu
 def test_a_setup_listed_for_rerun_is_yellow_with_its_frozen_coverage(
     board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A dropped arm family (LLR CPU Fortran) listed for rerun stays on the board as ``rerun``; its
-    deleted job (no sacct record, no directory) still contributes its frozen coverage."""
+    """A dropped arm listed for rerun stays on the board as ``rerun``; its deleted job (no sacct
+    record, no directory) still contributes its frozen coverage. The arm is dropped here, whatever
+    the registry drops."""
+    monkeypatch.setattr(board, "DROPPED_ARMS", re.compile(re.escape(ARM)))
     runs = tmp_path / "runs"
     live_job(runs / ROOT, "200", ["b"], arm=ARM)
     frozen = write_frozen(tmp_path, [frozen_row("100", "submission", "a")])
     listing = tmp_path / "rerun-lost.tsv"
     listing.write_text(f"arm\tdeleted_jobs\treason\tstatus\n{ARM}\t100\tDBs deleted\tpending\n", encoding="utf-8")
     monkeypatch.setattr(board, "RERUN_LOST", listing)
+    # Only this synthetic list names reruns: the repo's own rerun-kernels.tsv is live state.
+    monkeypatch.setattr(board.remaining_kernels, "RERUN_KERNELS", tmp_path / "rerun-kernels.tsv")
     monkeypatch.setattr(board, "slurm_jobs", lambda ids: [board.Job("200", ARM, "COMPLETED", 1, "", "")])
     monkeypatch.setattr(board, "queued_ids", list)
     monkeypatch.setattr(board.remaining_kernels, "roster", lambda tag, opt: ["a", "b", "c"])
