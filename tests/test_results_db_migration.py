@@ -4,8 +4,9 @@
 
 ``tests/data/results_db_vintages.json`` holds the DDL each vintage of ``recording.py`` created,
 rebuilt from git (comments stripped): a DB from before the ``runs`` table, one before ``packets``
-(with the legacy ``host`` column), one before the per-cell tables, and release-v0.1's own. Every
-fixture is synthetic rows on that DDL.
+(with the legacy ``host`` column), one before the per-cell tables, one whose ``scaling_curves``
+carry no law, release-v0.1's own and the one after the first schema cleanup. Every fixture is
+synthetic rows on that DDL, written the way the writers of the time wrote them.
 """
 
 import contextlib
@@ -25,21 +26,35 @@ VINTAGES: dict[str, list[str]] = json.loads(
 )
 PRE_RUNS = next(name for name in VINTAGES if name.startswith("pre-runs"))
 MIGRATABLE = [name for name in VINTAGES if name != PRE_RUNS]
+#: The richest vintage: every column any retirement has a condition on.
+RELEASE = next(name for name in VINTAGES if name.startswith("release-v0.1"))
 RUN_ID = "llr-focus40-qwen38-c.n0.p1.w2"
 TS = 1_790_000_000_000
-#: Columns that were in the DDL but that no version of the writer ever filled (git history of
-#: ``recording.CallRow`` and every ``INSERT INTO calls``).
-NEVER_WRITTEN = frozenset({("calls", "seed_nonce"), ("calls", "request_id")})
-#: Synthetic values for columns whose type alone does not give a valid one.
-SPECIAL: dict[str, Any] = {"run_id": RUN_ID, "ts": TS, "benchmark": "gemm", "ranks": 2}
+#: Columns no campaign writer filled: ``seed_nonce`` / ``request_id`` on ``calls`` and
+#: ``scaling_efficiency`` never (git history of the writers), ``prompt_hash`` only under
+#: ``hpcagent-bench --record``.
+NEVER_WRITTEN = frozenset(
+    {("calls", "seed_nonce"), ("calls", "request_id"), ("submissions", "scaling_efficiency")}
+    | {(table, "prompt_hash") for table in ("submissions", "attempts", "calls")}
+)
+#: Tables no campaign writer filled (``completions`` had no writer; ``prompts`` only ``--record``).
+EMPTY_TABLES = frozenset({"prompts", "completions"})
+#: Synthetic values for columns whose type alone does not give a valid one. Row ``i`` is grade
+#: ``TS + i``, whose curve is one law: ``LAWS[i]``, measured at P = 1 and P = 2.
+LAWS = ("strong", "weak")
+SPECIAL: dict[str, Any] = {"run_id": RUN_ID, "benchmark": "gemm", "ranks": 2, "mpi_ranks": 2}
 
 
 def value(table: str, column: str, kind: str, row: int) -> Any:
     """A deterministic synthetic value; NULL for a column no writer ever filled."""
     if (table, column) in NEVER_WRITTEN:
         return None
-    if column == "scaling_mode":
-        return ("strong", "weak")[row]
+    if column == "ts":
+        return TS + row
+    if column in ("scaling_mode", "mpi_mode"):
+        return LAWS[row]
+    if (table, column) == ("submission_cells", "baseline_winner"):
+        return value(table, "baseline", kind, row)
     if column in SPECIAL:
         return SPECIAL[column]
     match kind.upper():
@@ -57,7 +72,7 @@ def build(path: pathlib.Path, vintage: str) -> None:
         for ddl in VINTAGES[vintage]:
             conn.execute(ddl)
         tables = [row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")]
-        for table in tables:
+        for table in (t for t in tables if t not in EMPTY_TABLES):
             columns = [(r[1], r[2]) for r in conn.execute(f"PRAGMA table_info({table})") if r[1] != "id"]
             for row in range(2):
                 values = [value(table, name, kind, row) for name, kind in columns]
@@ -155,19 +170,24 @@ def test_the_extractor_writes_the_same_csv_off_a_migrated_copy(tmp_path: pathlib
 
 @pytest.mark.parametrize("vintage", MIGRATABLE)
 def test_the_identity_reader_loses_only_retired_columns(tmp_path: pathlib.Path, vintage: str) -> None:
-    """Every value :func:`experiments.read_database` returned survives; a column only the copy has
-    reads NULL."""
+    """Every value :func:`experiments.read_database` returned survives, or is derivable
+    (:data:`recording.SCALING_SUMMARY`); a column only the copy has reads NULL."""
     old, out = tmp_path / "old.db", tmp_path / "out.db"
     build(old, vintage)
     recording.migrate(str(old), str(out))
     before, after = identity_rows(old), identity_rows(out)
     assert len(after) == len(before) > 0
     retired = {column for _table, column in recording.RETIRED_COLUMNS}
-    for old_row, new_row in zip(before, after, strict=True):
-        dropped = set(old_row) - set(new_row)
-        assert dropped <= retired and all(old_row[c] is None for c in dropped), dropped
-        assert {k: new_row[k] for k in old_row if k in new_row} == {k: old_row[k] for k in old_row if k in new_row}
-        assert all(new_row[k] is None for k in set(new_row) - set(old_row))
+    with contextlib.closing(sqlite3.connect(out)) as conn:
+        summary = f"SELECT {', '.join(recording.SCALING_SUMMARY.values())} FROM submissions WHERE id = ?"
+        for old_row, new_row in zip(before, after, strict=True):
+            dropped = set(old_row) - set(new_row)
+            assert dropped <= retired, dropped
+            derived = dict(zip(recording.SCALING_SUMMARY, conn.execute(summary, (new_row["id"],)).fetchone()))
+            lost = {c: old_row[c] for c in dropped if old_row[c] is not None}
+            assert not lost or (new_row["record"] == "submissions" and lost == {c: derived[c] for c in lost}), lost
+            assert {k: new_row[k] for k in old_row if k in new_row} == {k: old_row[k] for k in old_row if k in new_row}
+            assert all(new_row[k] is None for k in set(new_row) - set(old_row))
 
 
 def test_the_legacy_host_column_is_kept(tmp_path: pathlib.Path) -> None:
@@ -190,20 +210,54 @@ def test_a_db_from_before_the_runs_table_is_refused_and_nothing_is_written(tmp_p
     assert not out.exists()
 
 
-def test_a_retired_column_holding_data_is_refused_and_nothing_is_written(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    ("change", "refusal"),
+    [
+        ("UPDATE calls SET seed_nonce = 7", r"calls\.seed_nonce"),
+        ("UPDATE calls SET prompt_hash = 'abc'", r"calls\.prompt_hash"),
+        ("UPDATE submission_cells SET baseline_winner = 'numba'", r"submission_cells\.baseline_winner"),
+        ("UPDATE submissions SET mpi_mode = 'weak'", r"submissions\.mpi_mode"),
+        ("UPDATE submissions SET mpi_ranks = 64", r"submissions\.mpi_ranks"),
+        ("UPDATE submissions SET scaling_efficiency = 0.9", r"submissions\.scaling_efficiency"),
+        (
+            "INSERT INTO prompts (hash, n_bytes, path, first_seen) VALUES ('h', 1, 'h.txt', 1)",
+            r"prompts holds data",
+        ),
+        (
+            "INSERT INTO completions (hash, run_id, ts, benchmark, round, n_bytes, path) VALUES ('h','r',1,'k',1,1,'p')",
+            r"completions holds data",
+        ),
+    ],
+)
+def test_a_retired_value_that_is_not_recoverable_is_refused_and_nothing_is_written(
+    tmp_path: pathlib.Path, change: str, refusal: str
+) -> None:
+    """Retiring a column is only lossless while it holds nothing, or only what the schema derives."""
     old, out = tmp_path / "old.db", tmp_path / "out.db"
-    build(old, MIGRATABLE[-1])
+    build(old, RELEASE)
     with contextlib.closing(sqlite3.connect(old)) as conn:
-        conn.execute("UPDATE calls SET seed_nonce = 7")
+        conn.execute(change)
         conn.commit()
-    with pytest.raises(ValueError, match=r"calls\.seed_nonce"):
+    with pytest.raises(ValueError, match=refusal):
         recording.migrate(str(old), str(out))
     assert not out.exists()
 
 
+def test_a_curve_without_a_law_takes_its_grades_one_law(tmp_path: pathlib.Path) -> None:
+    vintage = next(name for name in MIGRATABLE if name.startswith("law-less"))
+    old, out = tmp_path / "old.db", tmp_path / "out.db"
+    build(old, vintage)
+    recording.migrate(str(old), str(out))
+    with contextlib.closing(sqlite3.connect(out)) as conn:
+        assert conn.execute("SELECT ts - ?, scaling_mode FROM scaling_curves ORDER BY ts", (TS,)).fetchall() == [
+            (0, "strong"),
+            (1, "weak"),
+        ]
+
+
 def test_migrate_never_overwrites_its_destination(tmp_path: pathlib.Path) -> None:
     old, out = tmp_path / "old.db", tmp_path / "out.db"
-    build(old, MIGRATABLE[-1])
+    build(old, RELEASE)
     out.write_bytes(b"keep")
     with pytest.raises(FileExistsError):
         recording.migrate(str(old), str(out))
@@ -212,7 +266,7 @@ def test_migrate_never_overwrites_its_destination(tmp_path: pathlib.Path) -> Non
 
 def test_migrating_a_migrated_db_changes_nothing(tmp_path: pathlib.Path) -> None:
     old, once, twice = tmp_path / "old.db", tmp_path / "once.db", tmp_path / "twice.db"
-    build(old, MIGRATABLE[-1])
+    build(old, RELEASE)
     recording.migrate(str(old), str(once))
     recording.migrate(str(once), str(twice))
     assert extracted(twice, tmp_path / "twice.csv") == extracted(once, tmp_path / "once.csv")
@@ -222,24 +276,37 @@ def test_migrating_a_migrated_db_changes_nothing(tmp_path: pathlib.Path) -> None
 
 @pytest.mark.parametrize("vintage", MIGRATABLE)
 def test_a_judge_resuming_an_old_shard_still_records(tmp_path: pathlib.Path, vintage: str) -> None:
-    """connect() only adds: the retired table and columns stay, and an old ``submissions`` that
+    """connect() only adds: the retired tables and columns stay, and an old ``submissions`` that
     foreign-keys to ``benchmarks`` takes a row for a kernel ``benchmarks`` never saw."""
     old = tmp_path / "old.db"
     build(old, vintage)
+    tables = names(old, "table")
     with contextlib.closing(recording.connect(str(old))) as conn:
         conn.execute(
             "INSERT INTO submissions (run_id, ts, benchmark, preset, datatype, source_mode, baseline, speedup)"
             " VALUES ('new.n0.p0.w0', 1, 'kernel-not-in-benchmarks', 'XL', 'float64', 'restricted', 'c', 2.0)"
         )
         conn.commit()
-    assert "benchmarks" in names(old, "table")
+    assert tables <= names(old, "table")
     assert {c for c, _ in recording.canonical_columns()["calls"]} <= {r[1] for r in table_info(old, "calls")}
 
 
 def test_aggregating_an_old_shard_leaves_the_retired_table_behind(tmp_path: pathlib.Path) -> None:
     base = tmp_path / "hpcagent_bench.db"
-    build(pathlib.Path(recording.shard_db_path(0, str(base))), MIGRATABLE[-1])
+    build(pathlib.Path(recording.shard_db_path(0, str(base))), RELEASE)
     recording.aggregate(str(base))
     assert names(base, "table") == set(recording.TABLES)
     with contextlib.closing(sqlite3.connect(base)) as conn:
         assert conn.execute("SELECT COUNT(*) FROM submissions").fetchone() == (2,)
+
+
+def test_aggregating_keeps_a_retired_table_that_holds_rows(tmp_path: pathlib.Path) -> None:
+    """The aggregate is rebuilt from the shards; a ``--record`` shard's prompts must not vanish from it."""
+    base = tmp_path / "hpcagent_bench.db"
+    shard = pathlib.Path(recording.shard_db_path(0, str(base)))
+    build(shard, RELEASE)
+    with contextlib.closing(sqlite3.connect(shard)) as conn:
+        conn.execute("INSERT INTO prompts (hash, n_bytes, path, first_seen) VALUES ('h', 1, 'h.txt', 1)")
+        conn.commit()
+    recording.aggregate(str(base))
+    assert names(base, "table") == set(recording.TABLES) | {"prompts"}

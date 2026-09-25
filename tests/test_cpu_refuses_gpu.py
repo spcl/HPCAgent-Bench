@@ -96,7 +96,6 @@ FROZEN_SCORE_ROUTE_CELL_KEYS = frozenset(
         "baseline",
         "timing_reduction",
         "baseline_candidates",
-        "baseline_winner",
     }
 )
 
