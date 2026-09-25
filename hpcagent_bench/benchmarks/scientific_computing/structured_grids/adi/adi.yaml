@@ -35,6 +35,3 @@ output_args:
 - u
 chain_length:
   u: 2 * TSTEPS * N
-experiment_tags:
-- npbench
-- polybench

@@ -43,6 +43,3 @@ mpi:
     - N
     B:
     - N
-experiment_tags:
-- npbench
-- polybench

@@ -73,5 +73,3 @@ mpi:
     p:
     - ny
     - nx
-experiment_tags:
-- npbench

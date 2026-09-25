@@ -103,5 +103,3 @@ output_args:
 - f
 precisions:
 - fp64
-experiment_tags:
-- scicomp-focus40

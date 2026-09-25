@@ -23,6 +23,7 @@ from tests.env_render import SPEC_INPUTS, rendered
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
+TAGS = REPO / "hpcagent_bench" / "tags"
 TAG = "harness-focus20"
 HARNESSES = ("claude", "miniswe", "openhands", "optimas")
 #: Every arm of the default wave: the four harnesses, plus claude with the AutoKernel method packet.
@@ -60,7 +61,7 @@ SUBMIT_INPUTS = (
     "arm_nodes.sh",
     "pin_env_kv.sh",
     "record_identity.sh",
-    f"kernels-{TAG}.txt",
+    f"../hpcagent_bench/tags/{TAG}.txt",
 )
 
 #: Knobs a developer shell may export. Cleared, so each run sees only what its test sets.
@@ -210,7 +211,7 @@ def test_the_problems_file_holds_each_of_the_twenty_kernels_once_with_continuous
 def test_the_resolved_kernel_list_names_the_roster_by_stem(full: pathlib.Path) -> None:
     """judge_nodes.py sizes the judges from this file and looks kernels up by stem."""
     resolved = (full / "experiments" / f"problems-{TAG}.kernels.resolved.txt").read_text().split()
-    roster = [ln.split("#", 1)[0].strip() for ln in (EXPERIMENTS / f"kernels-{TAG}.txt").read_text().splitlines()]
+    roster = [ln.split("#", 1)[0].strip() for ln in (TAGS / f"{TAG}.txt").read_text().splitlines()]
     assert resolved == sorted(name for name in roster if name)
 
 
@@ -286,7 +287,9 @@ def test_every_arm_carries_the_shared_budget_and_sizing(full: pathlib.Path) -> N
     assert "COLOCATE" not in env
 
 
-@pytest.mark.parametrize("selection", [{"KERNELS": "tsvc_2_s2233"}, {"KERNELS_FILE": f"kernels-{TAG}.txt"}])
+@pytest.mark.parametrize(
+    "selection", [{"KERNELS": "tsvc_2_s2233"}, {"KERNELS_FILE": f"../hpcagent_bench/tags/{TAG}.txt"}]
+)
 def test_a_kernel_selection_without_an_experiment_name_is_refused(
     tmp_path: pathlib.Path, selection: dict[str, str]
 ) -> None:
@@ -407,16 +410,15 @@ def test_smoke_is_one_problem_on_one_colocated_node(
 
 
 def test_a_roster_file_tag_renders_its_whole_roster_under_its_own_name(tmp_path: pathlib.Path) -> None:
-    """harness20's kernels carry no manifest label; its roster is kernels-harness20.txt alone, so the
-    canonical path selects from the tag's roster file (a label selector resolved nothing and the
-    whole wave was refused). The arms keep the tag's names: harness20-<model>-<harness>-clean."""
+    """The canonical path selects from the tag's own file, so harness20 renders its whole roster.
+    The arms keep the tag's names: harness20-<model>-<harness>-clean."""
     root = submit_tree(tmp_path)
-    shutil.copy2(EXPERIMENTS / "kernels-harness20.txt", root / "experiments" / "kernels-harness20.txt")
+    shutil.copy2(TAGS / "harness20.txt", root / "hpcagent_bench" / "tags" / "harness20.txt")
     result = run_submit(root, TAG="harness20", CLEAN="1", HARNESSES="claude optimas")
     assert result.returncode == 0, result.stderr
     roster = [
         line.strip()
-        for line in (EXPERIMENTS / "kernels-harness20.txt").read_text().splitlines()
+        for line in (TAGS / "harness20.txt").read_text().splitlines()
         if line.strip() and not line.startswith("#")
     ]
     stems = [str(problem["kernel"]).rsplit("/", 1)[-1] for problem in problems(root, "harness20")]

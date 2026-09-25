@@ -51,5 +51,3 @@ init:
     multiplier: 0.5
 output_args:
 - out
-experiment_tags:
-- kernelbench

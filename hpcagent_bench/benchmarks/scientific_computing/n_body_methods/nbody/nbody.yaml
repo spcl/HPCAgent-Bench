@@ -73,5 +73,3 @@ output_args:
 - vel
 - KE
 - PE
-experiment_tags:
-- npbench

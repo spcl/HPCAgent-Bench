@@ -76,8 +76,6 @@ array_args:
 - x
 output_args:
 - x
-experiment_tags:
-- solvers
 precisions:
 - fp64
 # Concurrency: The two triangular solves inside the symmetric Gauss-Seidel preconditioner are

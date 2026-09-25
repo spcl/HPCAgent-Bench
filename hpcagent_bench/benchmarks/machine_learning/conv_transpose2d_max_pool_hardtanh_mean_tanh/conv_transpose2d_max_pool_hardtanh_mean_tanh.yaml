@@ -76,5 +76,3 @@ init:
     hardtanh_max_val: 1
 output_args:
 - out
-experiment_tags:
-- kernelbench

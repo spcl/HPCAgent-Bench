@@ -33,5 +33,3 @@ init:
     vout: {shape: "(N, N)", dtype: complex128}
 array_args: [a, b, wout, vout]
 output_args: [wout, vout]
-experiment_tags:
-- polybench

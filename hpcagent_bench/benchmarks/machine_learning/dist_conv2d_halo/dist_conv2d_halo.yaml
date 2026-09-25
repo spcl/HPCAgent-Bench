@@ -101,5 +101,3 @@ mpi:
   replicatable:
   - conv_weight
   - conv_bias
-experiment_tags:
-- mlscale-part2

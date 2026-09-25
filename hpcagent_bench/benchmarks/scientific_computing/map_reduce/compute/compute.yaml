@@ -69,5 +69,3 @@ mpi:
     out:
     - M
     - N
-experiment_tags:
-- npbench

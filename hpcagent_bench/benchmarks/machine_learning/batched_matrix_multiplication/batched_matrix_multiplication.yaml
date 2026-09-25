@@ -31,5 +31,3 @@ init:
     out: (batch_size, m, n)
 output_args:
 - out
-experiment_tags:
-- kernelbench

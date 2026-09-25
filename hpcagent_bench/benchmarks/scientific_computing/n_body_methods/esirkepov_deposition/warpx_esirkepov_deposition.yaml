@@ -139,5 +139,3 @@ mpi:
     - np_particles
     ion_lev:
     - np_particles
-experiment_tags:
-- scicomp-focus40

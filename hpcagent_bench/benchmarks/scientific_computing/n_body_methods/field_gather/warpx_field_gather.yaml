@@ -180,5 +180,3 @@ mpi:
     - np_particles
     zp:
     - np_particles
-experiment_tags:
-- scicomp-focus40

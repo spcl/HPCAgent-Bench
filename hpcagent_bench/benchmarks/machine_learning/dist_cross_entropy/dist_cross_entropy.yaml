@@ -72,5 +72,3 @@ mpi:
   replicatable:
   - targets
   - out
-experiment_tags:
-- mlscale10

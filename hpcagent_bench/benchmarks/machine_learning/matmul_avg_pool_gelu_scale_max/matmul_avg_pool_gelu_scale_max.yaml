@@ -34,5 +34,3 @@ init:
     scale_factor: 2.0
 output_args:
 - out
-experiment_tags:
-- kernelbench

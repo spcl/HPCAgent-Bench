@@ -1,10 +1,10 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""hpcagent_bench.tags.sample: a seeded, reproducible kernel draw from (selector, count) rules, its
-tags.yaml ``sample:`` entry, and the ``tags sample --save`` CLI that freezes a draw into tags.yaml.
+"""hpcagent_bench.tags.sample: a seeded, reproducible kernel draw from (selector, count) rules, and
+the ``tags sample --save`` CLI that saves a draw as a tag file.
 
-Every test that touches tags.yaml points ``tags.REGISTRY`` at its own temp file and clears the
-registry cache, so none reads or writes the real experiments/tags.yaml.
+Every test points ``tags.TAGS_DIR`` at its own temp folder holding one tag, ``three``, so none reads
+or writes the real tag folder.
 """
 
 import argparse
@@ -14,29 +14,26 @@ from collections.abc import Iterator
 
 import pytest
 
-from hpcagent_bench import config, tags
+from hpcagent_bench import tags
+from hpcagent_bench.spec import KERNELS
 
-#: Real kernels with known levels (shared with tests/test_tags.py): kmp=2, dfa=2, heat_3d=2.
-THREE = "explicit:kmp,dfa,heat_3d"
+#: A temp tag of three real kernels.
+THREE = "three"
 ML_RULES = (("machine_learning@lvl1", 5), ("machine_learning@lvl2", 5))
 
 
 @pytest.fixture(autouse=True)
-def fresh_registry_cache() -> Iterator[None]:
-    """monkeypatch restores ``tags.REGISTRY`` after a test but not the lru_cache built from the
-    temp file, so a later test would read a registry that no longer exists."""
-    tags.registry.cache_clear()
-    yield
-    tags.registry.cache_clear()
+def temp_tags(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> Iterator[pathlib.Path]:
+    """A temp tag folder holding ``three`` (kmp, dfa, heat_3d); the index cache cleared around it."""
+    (tmp_path / f"{THREE}.txt").write_text("kmp\ndfa\nheat_3d\n")
+    monkeypatch.setattr(tags, "TAGS_DIR", tmp_path)
+    tags.index.cache_clear()
+    yield tmp_path
+    tags.index.cache_clear()
 
 
-def write_registry(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, text: str) -> pathlib.Path:
-    path = tmp_path / "tags.yaml"
-    path.write_text(text)
-    monkeypatch.setattr(tags, "REGISTRY", path)
-    tags.registry.cache_clear()
-    tags.RESOLVING.clear()
-    return path
+def keys(*names: str) -> set[str]:
+    return set(tags.kernel_keys(names, "test"))
 
 
 def run_cli(monkeypatch: pytest.MonkeyPatch, *argv: str) -> int:
@@ -54,8 +51,8 @@ def test_a_different_seed_draws_a_different_list() -> None:
 
 def test_each_rule_contributes_exactly_its_count_in_rule_order() -> None:
     picked = tags.sample(ML_RULES, 0)
-    lvl1 = set(tags.rule_candidates("machine_learning@lvl1"))
-    lvl2 = set(tags.rule_candidates("machine_learning@lvl2"))
+    lvl1 = set(KERNELS.select_keys("machine_learning@lvl1"))
+    lvl2 = set(KERNELS.select_keys("machine_learning@lvl2"))
     assert len(picked) == 10
     assert set(picked[:5]) <= lvl1
     assert set(picked[5:]) <= lvl2
@@ -79,89 +76,28 @@ def test_appending_a_rule_leaves_the_earlier_picks_unchanged() -> None:
 
 
 def test_a_count_above_the_candidates_raises_naming_the_selector_count_and_size() -> None:
-    with pytest.raises(ValueError, match=r"'explicit:kmp,dfa,heat_3d' asks for 4 kernels but only 3"):
+    with pytest.raises(ValueError, match=r"'three' asks for 4 kernels but only 3"):
         tags.sample(((THREE, 4),), 0)
 
 
 def test_a_pool_restricts_every_rules_candidates() -> None:
-    pool = tags.operand_keys("explicit:kmp,dfa")
+    pool = keys("kmp", "dfa")
     assert set(tags.sample(((THREE, 2),), 0, sorted(pool))) == pool
 
 
 def test_a_count_above_the_pool_intersection_raises() -> None:
-    pool = sorted(tags.operand_keys("explicit:kmp"))
+    pool = sorted(keys("kmp"))
     with pytest.raises(ValueError, match="only 1 are available"):
         tags.sample(((THREE, 2),), 0, pool)
 
 
-def test_a_registered_tag_is_a_valid_rule_selector(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-    write_registry(monkeypatch, tmp_path, "tags:\n  three:\n    list:\n      - explicit:kmp,dfa,heat_3d\n")
-    assert set(tags.sample((("three", 3),), 0)) == tags.operand_keys(THREE)
+def test_a_tag_and_a_selector_are_both_valid_rule_selectors() -> None:
+    assert set(tags.sample(((THREE, 3),), 0)) == keys("kmp", "dfa", "heat_3d")
+    assert set(tags.sample((("kmp", 1),), 0)) == keys("kmp")
 
 
-def test_a_sample_entry_resolves_to_the_same_draw_as_the_library(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    write_registry(
-        monkeypatch,
-        tmp_path,
-        "tags:\n  mlq:\n    sample:\n      seed: 5\n      rules:\n"
-        "        - {select: machine_learning@lvl1, count: 5}\n"
-        "        - {select: machine_learning@lvl2, count: 5}\n",
-    )
-    assert tags.resolve("mlq") == sorted(tags.sample(ML_RULES, 5))
-
-
-def test_a_sample_entry_without_a_seed_uses_the_configured_seed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    write_registry(
-        monkeypatch,
-        tmp_path,
-        "tags:\n  mlq:\n    sample:\n      rules:\n        - {select: machine_learning, count: 6}\n",
-    )
-    with config.overridden("seeds.kernel_sample", 11):
-        assert tags.resolve("mlq") == sorted(tags.sample((("machine_learning", 6),), 11))
-
-
-def test_a_sample_entry_from_file_restricts_the_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-    listing = tmp_path / "kernels-pool.txt"
-    listing.write_text("# pool\nkmp\ndfa  # trailing comment\n")
-    write_registry(
-        monkeypatch,
-        tmp_path,
-        f"tags:\n  pooled:\n    sample:\n      from_file: {listing}\n      rules:\n"
-        "        - {select: 'explicit:kmp,dfa,heat_3d', count: 2}\n",
-    )
-    assert set(tags.resolve("pooled")) == tags.operand_keys("explicit:kmp,dfa")
-
-
-@pytest.mark.parametrize(
-    "block",
-    [
-        "sample: {rules: []}",
-        "sample: {rules: [{select: kmp}]}",
-        "sample: {rules: [{select: kmp, count: 0}]}",
-        "sample: {seed: x, rules: [{select: kmp, count: 1}]}",
-    ],
-)
-def test_a_malformed_sample_block_fails_when_tags_yaml_is_read(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, block: str
-) -> None:
-    write_registry(monkeypatch, tmp_path, f"tags:\n  bad:\n    {block}\n")
-    with pytest.raises(ValueError, match="'bad'"):
-        tags.registry()
-
-
-@pytest.mark.parametrize(
-    ("text", "rule"),
-    [
-        ("machine_learning@lvl1:5", ("machine_learning@lvl1", 5)),
-        ("explicit:kmp,dfa:2", ("explicit:kmp,dfa", 2)),
-    ],
-)
-def test_a_cli_rule_splits_on_its_last_colon(text: str, rule: tuple[str, int]) -> None:
-    assert tags.parse_rule(text) == rule
+def test_a_cli_rule_is_a_selector_and_a_count() -> None:
+    assert tags.parse_rule("machine_learning@lvl1:5") == ("machine_learning@lvl1", 5)
 
 
 @pytest.mark.parametrize("text", ["kmp", "kmp:0", "kmp:x", ":3"])
@@ -177,31 +113,28 @@ def test_the_cli_prints_the_draw_one_kernel_per_line(
     assert capsys.readouterr().out.splitlines() == tags.sample(ML_RULES, 0)
 
 
-def test_save_writes_an_explicit_entry_that_resolves_to_the_same_draw(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+def test_save_writes_a_tag_file_that_resolves_to_the_same_draw(
+    monkeypatch: pytest.MonkeyPatch, temp_tags: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    write_registry(monkeypatch, tmp_path, "# header kept\ntags: {}\naliases: {}\n")
     assert run_cli(monkeypatch, "sample", "machine_learning:6", "--seed", "2", "--save", "frozen") == 0
     printed = capsys.readouterr().out.splitlines()
-    assert tags.registry().tags["frozen"].op == "list"
     assert tags.resolve("frozen") == sorted(printed)
-
-
-def test_save_records_the_rules_and_seed_and_keeps_existing_comments(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    path = write_registry(monkeypatch, tmp_path, "# header kept\ntags: {}\naliases: {}\n")
-    assert run_cli(monkeypatch, "sample", "machine_learning:6", "--seed", "2", "--save", "frozen") == 0
-    text = path.read_text()
-    assert "# header kept" in text
-    assert "tags sample machine_learning:6 seed=2 on " in text
+    assert "# tags sample machine_learning:6 seed=2 on " in (temp_tags / "frozen.txt").read_text()
 
 
 def test_save_refuses_an_existing_tag_name(
+    monkeypatch: pytest.MonkeyPatch, temp_tags: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    original = (temp_tags / f"{THREE}.txt").read_text()
+    assert run_cli(monkeypatch, "sample", "machine_learning:3", "--save", THREE) == 2
+    assert "already exists" in capsys.readouterr().err
+    assert (temp_tags / f"{THREE}.txt").read_text() == original
+
+
+def test_from_file_restricts_the_pool(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    original = "tags:\n  taken:\n    list:\n      - kmp\n"
-    path = write_registry(monkeypatch, tmp_path, original)
-    assert run_cli(monkeypatch, "sample", "machine_learning:3", "--save", "taken") == 2
-    assert "already exists" in capsys.readouterr().err
-    assert path.read_text() == original
+    listing = tmp_path / "pool.list"
+    listing.write_text("# pool\nkmp\ndfa  # trailing comment\n")
+    assert run_cli(monkeypatch, "sample", f"{THREE}:2", "--from-file", str(listing)) == 0
+    assert set(capsys.readouterr().out.splitlines()) == keys("kmp", "dfa")

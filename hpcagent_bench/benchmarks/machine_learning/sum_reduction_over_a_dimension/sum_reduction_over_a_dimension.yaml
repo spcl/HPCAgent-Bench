@@ -26,5 +26,3 @@ init:
     out: (batch_size, 1, dim2)
 output_args:
 - out
-experiment_tags:
-- kernelbench

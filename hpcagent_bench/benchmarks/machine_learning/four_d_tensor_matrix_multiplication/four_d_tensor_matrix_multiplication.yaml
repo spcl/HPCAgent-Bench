@@ -35,5 +35,3 @@ init:
     out: (nb, ni, nj, nk)
 output_args:
 - out
-experiment_tags:
-- kernelbench

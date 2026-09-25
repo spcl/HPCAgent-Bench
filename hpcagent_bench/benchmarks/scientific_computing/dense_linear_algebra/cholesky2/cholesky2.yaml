@@ -24,6 +24,3 @@ array_args:
 - A
 output_args:
 - A
-experiment_tags:
-- npbench
-- polybench

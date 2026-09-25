@@ -52,5 +52,3 @@ init:
     out: (batch_size, out_channels, (height - 1)*stride + kernel_size, (width - 1)*stride + kernel_size)
 output_args:
 - out
-experiment_tags:
-- kernelbench

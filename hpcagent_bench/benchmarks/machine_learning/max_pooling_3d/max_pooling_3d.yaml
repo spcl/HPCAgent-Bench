@@ -59,5 +59,3 @@ init:
     out: (batch_size, channels, dim1, dim2, dim3)
 output_args:
 - out
-experiment_tags:
-- kernelbench

@@ -194,5 +194,3 @@ init:
     out: (batch_size, out_channels, height, width)
 output_args:
 - out
-experiment_tags:
-- kernelbench

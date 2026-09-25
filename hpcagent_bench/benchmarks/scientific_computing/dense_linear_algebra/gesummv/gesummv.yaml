@@ -52,6 +52,3 @@ mpi:
     - N
     out:
     - N
-experiment_tags:
-- npbench
-- polybench

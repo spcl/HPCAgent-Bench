@@ -28,5 +28,3 @@ output_args:
 - out
 chain_length:
   out: dim1
-experiment_tags:
-- kernelbench

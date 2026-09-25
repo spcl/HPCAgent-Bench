@@ -48,5 +48,3 @@ init:
     out: (batch_size, expand1x1_channels + expand3x3_channels, height, width)
 output_args:
 - out
-experiment_tags:
-- kernelbench

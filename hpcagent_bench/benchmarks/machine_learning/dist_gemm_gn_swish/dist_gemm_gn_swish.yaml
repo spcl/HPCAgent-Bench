@@ -120,5 +120,3 @@ mpi:
   # the GroupNorm moments are an allreduce over the ranks sharing a group.
   replicatable:
   - x
-experiment_tags:
-- mlscale10

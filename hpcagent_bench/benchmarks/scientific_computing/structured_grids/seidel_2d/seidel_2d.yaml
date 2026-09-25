@@ -30,8 +30,3 @@ output_args:
 - A
 chain_length:
   A: 2 * TSTEPS * N
-experiment_tags:
-- npbench
-- polybench
-- scicomp-focus40
-- mixed

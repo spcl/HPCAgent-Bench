@@ -56,5 +56,3 @@ mpi:
     - N
     distance_matrix:
     - N
-experiment_tags:
-- npbench

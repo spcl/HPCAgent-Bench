@@ -70,8 +70,6 @@ output_args:
 - Q
 - R
 - x
-experiment_tags:
-- solvers
 precisions:
 - fp64
 # Concurrency: The k loop over columns is a genuine recurrence: reflector k acts on the trailing

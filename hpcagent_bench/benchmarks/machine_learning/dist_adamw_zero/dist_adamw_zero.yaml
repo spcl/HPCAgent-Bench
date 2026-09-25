@@ -95,5 +95,3 @@ mpi:
   - exp_avg
   - exp_avg_sq
   - out
-experiment_tags:
-- mlscale-part2

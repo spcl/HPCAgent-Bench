@@ -48,8 +48,6 @@ array_args:
 - u
 output_args:
 - u
-experiment_tags:
-- solvers
 precisions:
 - fp64
 # Concurrency: Grade this kernel against a red-black reference only, never against

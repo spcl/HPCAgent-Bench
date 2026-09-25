@@ -44,5 +44,3 @@ init:
     out: (num_layers, batch_size, hidden_size)
 output_args:
 - out
-experiment_tags:
-- kernelbench
