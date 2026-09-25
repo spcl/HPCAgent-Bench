@@ -7,7 +7,7 @@
 #   podman build -f containers/cluster/ce-images/sglang-mi200/Dockerfile -t hpcagent-bench-sglang-mi200 .
 # build.sh does that with the right podman flags; build.sbatch runs build.sh on an mi200 node.
 
-# Same digest as ../sglang/Dockerfile and both build.sh files; tests/test_sglang_mi200_image.py pins it.
+# Same digest as ../sglang/Dockerfile; tests/test_sglang_mi200_image.py pins it.
 ARG BASE_IMAGE=docker.io/lmsysorg/sglang-rocm:v0.5.19-rocm724-mi30x-20260908\
 @sha256:0405baaf36945fa8164c57d4f1b6b178bae5804fae606ff2db3816a6cab6dafc
 
@@ -15,12 +15,12 @@ FROM ${BASE_IMAGE} AS final
 USER root
 
 # BASE_IMAGE is re-declared because an ARG before FROM is out of scope in a stage. BASE_IMAGE_REF is
-# the registry reference, not the dir: path a base-cache hit rewrites BASE_IMAGE to.
+# the registry reference, not the base-cache path BASE_IMAGE gets rewritten to.
 ARG BASE_IMAGE
 ARG BASE_IMAGE_REF="${BASE_IMAGE}"
 # The one GPU arch every AOT device build below targets. Named, never detected: setup_rocm.py and
-# cupy otherwise take the GPU visible at build time, and on an mi300 node that is gfx942. build.sh
-# passes it from ../gpu_arch.env for the build job's partition; there is no default.
+# cupy otherwise take the GPU visible at build time. build.sh passes it from ../gpu_arch.env for
+# the build job's partition; there is no default.
 ARG ROCM_ARCH
 LABEL org.opencontainers.image.title="hpcagent-bench-sglang-mi200" \
       org.opencontainers.image.description="SGLang inference for MI250X (${ROCM_ARCH}): ROCm 7.2.4, sgl_kernel rebuilt for ${ROCM_ARCH}, aiter off" \
@@ -60,7 +60,7 @@ RUN set -eux; \
     /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" "${d}"
 
 # No fabric library in a prefix this image controls: RPATH would bind to it and shadow the CSCS
-# netstack artifact the EDF hooks install (../sglang/Dockerfile carries the job history).
+# netstack artifact the EDF hooks install.
 RUN set -eux; \
     rm -f /opt/ofi-sdk/lib/libfabric.so*; \
     found="$(find /opt/ofi-sdk /opt/ofi /opt/aws-ofi-nccl \
@@ -70,20 +70,17 @@ RUN set -eux; \
       || { echo "this image ships a fabric library in a prefix it controls:" >&2; \
            echo "${found}" >&2; exit 1; }
 
-# sgl_kernel common_ops, REBUILT for ROCM_ARCH. The base's copy is gfx942-only (its build.ninja says
-# --amdgpu-target=gfx942; 28 strings name gfx942, none gfx90a) and it is on the serve path:
-# SiluAndMul on HIP imports sgl_kernel.silu_and_mul.
+# sgl_kernel common_ops, REBUILT for ROCM_ARCH. The base's copy is built for another arch only, and
+# it is on the serve path: SiluAndMul on HIP imports sgl_kernel.silu_and_mul.
 #
 # Three asserted edits to setup_rocm.py; a pattern that is not there exactly once fails the build.
-#   * AMDGPU_TARGET wins over the visible GPU (stock :70-72 overwrite it with gcnArchName).
-#   * ROCM_ARCH joins the allow-list (stock :78-82 sys.exit(1) for anything but gfx942/gfx950/gfx1250).
+#   * AMDGPU_TARGET wins over the visible GPU (stock code overwrites it with gcnArchName).
+#   * ROCM_ARCH joins the allow-list (stock sys.exit(1) for anything but its hardcoded archs).
 #   * -DENABLE_FP8 goes: no file under kernels/aot reads it, and MI250X has no FP8 types.
-# The FP8 TYPE macro stays: setup picks -DHIP_FP8_TYPE_E4M3 for non-gfx942 (:84-86), and
-# include/utils.h:381-388 #errors without one in every TU that includes it. It only names a host-side
-# c10 alias there. The one FP8-writing source in the list, elementwise/dsv4_norm_rope.cu (DeepSeek-V4
-# ops), takes its software uint8 packer on gfx90a: HIP defines FNUZ=OCP=1 outside its FP8 arch list
-# (amd_hip_fp8.h:33-51), so the native-OCP branch (:132) is skipped. Dropping that source instead
-# would leave its three m.impl registrations in common_extension_rocm.cc:56-67 unresolved.
+# The FP8 TYPE macro stays: other TUs #error without one. It only names a host-side c10 alias there.
+# The one FP8-writing source, elementwise/dsv4_norm_rope.cu, takes its software uint8 packer on
+# gfx90a instead, so the native-OCP branch is simply skipped rather than dropping the source (which
+# would leave its m.impl registrations in common_extension_rocm.cc unresolved).
 RUN /opt/venv/bin/python3 <<'PY'
 import os
 import pathlib
@@ -131,7 +128,7 @@ RUN set -eux; \
     /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" "${so}"
 
 # The EDF restates these (the CE does not reliably keep image ENV); here they are under the digest.
-# SGLANG_USE_AITER=0: aiter ships no gfx90a kernels, and this image carries no aiter JIT prebuild.
+# SGLANG_USE_AITER=0: aiter ships no kernels for this arch, and this image carries no aiter JIT prebuild.
 ENV SGLANG_USE_AITER=0 \
     HSA_ENABLE_IPC_MODE_LEGACY=1 \
     SAFETENSORS_FAST_GPU=1 \
@@ -170,4 +167,4 @@ PY
 WORKDIR /workspace
 
 # LIMITATION: the build proves compile targets and imports, not a launch. verify_image.sbatch runs
-# inference/sglang_kernel_launch_check.py on an mi200 GPU; serving is inference/serve-private.sbatch.
+# the launch check on an mi200 GPU; serving is inference/serve-private.sbatch.

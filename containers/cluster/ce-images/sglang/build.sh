@@ -8,9 +8,8 @@ set -euo pipefail
 # configs from there. Nothing is reached from outside the image at RUN time: a package reached
 # through PYTHONPATH is invisible to the image digest.
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+# The cluster's core_pattern dumps into the crashing process's CWD; Slurm propagates the
+# submitter's core limit, so the floor has to be set here to avoid littering the checkout.
 ulimit -c 0
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../../.." && pwd)"
@@ -25,7 +24,7 @@ BASE_DIGEST="sha256:0405baaf36945fa8164c57d4f1b6b178bae5804fae606ff2db3816a6cab6
 BASE_IMAGE="${BASE_IMAGE:-${BASE_REPO}@${BASE_DIGEST}}"
 # This value MUST track the Dockerfile's ARG BASE_IMAGE default: passing it here OVERRIDES that
 # default, so a stale line at this spot silently builds the wrong base while the Dockerfile reads
-# correct. It is the reason a "rebuild" once produced ROCm 7.2.0 from a file that said 7.2.4.
+# correct.
 
 mkdir -p "$(dirname "${OUTPUT_SQSH}")"
 
