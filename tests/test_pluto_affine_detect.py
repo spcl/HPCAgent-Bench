@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from hpcagent_bench.pluto_affine import KNOWN_POLYCC_ISSUES
-from tests.numerical_oracle import _emit, _scop_nonaffine_reason
+from hpcagent_bench import numerical_oracle
 
 _SCOP = "#pragma scop\n{body}\n#pragma endscop\n"
 
@@ -30,15 +30,17 @@ def _scop(body):
 
 
 def test_affine_subscripts_are_not_flagged() -> None:
-    assert _scop_nonaffine_reason(_scop("a[i] = (a[(i + 1)] * a[i]);")) is None
+    assert numerical_oracle._scop_nonaffine_reason(_scop("a[i] = (a[(i + 1)] * a[i]);")) is None
     # A stride and an offset are still affine.
-    assert _scop_nonaffine_reason(_scop("for (i = 0; i < N; i += 2) c[i] = a[i] + b[(i - 3)];")) is None
+    assert (
+        numerical_oracle._scop_nonaffine_reason(_scop("for (i = 0; i < N; i += 2) c[i] = a[i] + b[(i - 3)];")) is None
+    )
 
 
 def test_indirection_is_flagged() -> None:
-    assert _scop_nonaffine_reason(_scop("a[i] = (a[i] + (b[ip[i]] * 2.0));")) == "indirection"
+    assert numerical_oracle._scop_nonaffine_reason(_scop("a[i] = (a[i] + (b[ip[i]] * 2.0));")) == "indirection"
     # Indirection nested one level deeper is still caught.
-    assert _scop_nonaffine_reason(_scop("out[idx[k]] = v[k];")) == "indirection"
+    assert numerical_oracle._scop_nonaffine_reason(_scop("out[idx[k]] = v[k];")) == "indirection"
 
 
 @pytest.mark.parametrize(
@@ -54,13 +56,13 @@ def test_indirection_is_flagged() -> None:
     ids=["multidim-subscripts-stay-affine", "value-side-division-not-flagged", "modulo-flagged", "int-div-flagged"],
 )
 def test_a_non_affine_subscript_kind_is_named_and_an_affine_one_is_not(code, expected_reason) -> None:
-    assert _scop_nonaffine_reason(_scop(code)) == expected_reason
+    assert numerical_oracle._scop_nonaffine_reason(_scop(code)) == expected_reason
 
 
 def test_no_pragma_falls_back_to_scanning_whole_text() -> None:
     # Robust when the scop markers are absent -- still scans the subscripts.
-    assert _scop_nonaffine_reason("x[y[i]] = 1;") == "indirection"
-    assert _scop_nonaffine_reason("x[i] = y[i];") is None
+    assert numerical_oracle._scop_nonaffine_reason("x[y[i]] = 1;") == "indirection"
+    assert numerical_oracle._scop_nonaffine_reason("x[i] = y[i];") is None
 
 
 _KINDS = ("bug", "caveat")
@@ -125,8 +127,8 @@ def test_gather_kernel_scop_is_detected_nonaffine() -> None:
 
     info = legacy_bench_info_dict(BenchSpec.load("reroll_gather"))["benchmark"]
     td = Path(tempfile.mkdtemp())
-    ok, diag = _emit("reroll_gather", info, td, precision="float64")
+    ok, diag = numerical_oracle._emit("reroll_gather", info, td, precision="float64")
     assert ok, f"reroll_gather emit failed{diag}"
     scops = sorted(td.glob("*_pluto_input.c"))
     assert scops, "expected a pluto scop for reroll_gather"
-    assert _scop_nonaffine_reason(scops[0].read_text()) == "indirection"
+    assert numerical_oracle._scop_nonaffine_reason(scops[0].read_text()) == "indirection"
