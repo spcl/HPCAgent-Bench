@@ -194,11 +194,12 @@ apptainer build hpcagent_bench-judge.sif containers/judge.def    # judge (harnes
 | `fetch_weights.sbatch` | downloads into `$HF_HOME` inside an image, restripes on the host, fails unless every large blob is wide-striped |
 | `serve-private.sbatch` | a private Qwen3.8 endpoint on one beverin node (`docs/serving/private-endpoint.md`) |
 | `serve-daint.sbatch`, `alps-endpoint.sh` | GH200 serving and the client-side endpoint check |
-| `smoke-kimi-sglang.sbatch`, `submit-glm53-sglang.sh`, `smoke-kimi-eager-pg.sbatch` | multi-node serving smokes (SGLang; GLM-5.3 on SGLang; vLLM with the eager-PG patch) |
+| `smoke-kimi-sglang.sbatch`, `submit-glm53-sglang.sh`, `smoke-kimi-eager-pg.sbatch`, `smoke-kimi-replicas.sbatch` | multi-node serving smokes (SGLang; GLM-5.3 on SGLang; vLLM with the eager-PG patch; N vLLM replicas in one allocation) |
 | `verify-tools-reasoning.py`, `accuracy-gate.py`, `agentlike-probe.py` | tool-call/reasoning, long-context accuracy and throughput gates against a live server |
 | `prebuild-aiter-jit.sbatch` | warms the aiter JIT cache (each op must be called, not imported) |
 | `tune-moe-int4-mi300a.sbatch`, `merge_moe_configs.py`, `moe-configs/` | MoE tuning; `moe-configs/` is build input for `sglang/` and `vllm/` |
 | `external-eager-pg-patch/` | `sitecustomize.py` for the vLLM pipeline bootstrap on RCCL |
+| `ue8m0-patch/` | `sitecustomize.py` giving `torch.Tensor` a `format_ue8m0` default, for an SGLang image without the build-time guard `sglang/Dockerfile` applies |
 | `aiter_mla_check.*`, `sglang_kernel_launch_check.py` | kernel-level correctness checks without a server |
 
 ## Publishing
