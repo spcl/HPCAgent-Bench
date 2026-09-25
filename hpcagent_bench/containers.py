@@ -26,7 +26,7 @@ directory), read here by Python and by ``scripts/run_agent_in_container.sh`` in 
 one source of truth for both the Python callers and the python-less HPC login host.
 
 Harbor is an orchestrator, not a wrapper; :func:`harbor_env_for` only supplies its provider
-name (apptainer -> singularity, docker -> docker; podman and ce have no Harbor provider).
+name (apptainer -> singularity, docker -> docker, podman -> podman; ce has no Harbor provider).
 
 Apptainer itself is a Go binary (not pip-installable); :func:`install_apptainer` runs its
 official unprivileged install into a user prefix, exposed as the ``hpcagent-bench-install-apptainer``
@@ -318,14 +318,13 @@ def local_run_command(
 
 
 def harbor_env_for(backend: str | None = None) -> str:
-    """Harbor's ``--env`` provider name for the resolved backend (``docker -> docker``,
-    ``apptainer -> singularity``). Raises for ``podman``, which Harbor has no provider for, so
-    the caller never emits an invalid one -- a podman run is launched directly instead."""
+    """Harbor's ``--env`` provider name for the resolved backend (``docker``, ``podman``,
+    ``apptainer -> singularity``). Raises for ``ce`` and ``native``, which Harbor cannot drive."""
     chosen = resolve_backend(backend)
     name = SPELLINGS[chosen].harbor_env
     if not name:
         raise ValueError(
-            f"{chosen!r} is not a Harbor backend (Harbor provides singularity + docker); "
+            f"{chosen!r} is not a Harbor backend (Harbor provides docker, podman, singularity); "
             "run it directly via local_run_command / scripts/run_agent_in_container.sh"
         )
     return name
