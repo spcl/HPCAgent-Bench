@@ -248,8 +248,9 @@ class AgentBaseline:
 #   * Hyperparameter search   -> the baseline's Sampling field (a grid is dataclasses.replace).
 #   * Weight tuning / router  -> not implemented (upstream's PPO needs trl<1.0's PPOTrainer).
 #
-# Upstream is the PyPI ``optimas-ai`` (not ``optimas``); its transformers pin is spurious, and only
-# its PPO surface is unusable on trl>=1.0. Every hardware extra of pyproject.toml installs it.
+# Upstream is the PyPI ``optimas-ai`` (not ``optimas``); only its PPO surface is unusable on trl>=1.0.
+# No extra installs it: its transformers==4.46.1 pin drags tokenizers 0.20, which has no Python 3.14
+# wheel. Opting in means ``pip install optimas-ai`` on Python <= 3.13.
 # The in-repo implementation is the default and the control.
 
 #: Hard cap on a proposed instruction, in characters.
