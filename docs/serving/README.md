@@ -32,14 +32,14 @@ not even carry to MI300X.
 `hpcagent-bench-vllm-mi300-latest`. If it does not:
 
 ```bash
-containers/cluster/ce-images/install_edfs.sh
+containers/images/install_edfs.sh
 ```
 
 If that refuses because an image is not on scratch yet, pull it first (minutes, not hours, since it
 downloads the published bytes rather than rebuilding them):
 
 ```bash
-sbatch containers/cluster/ce-images/pull_images.sbatch
+sbatch containers/images/pull_images.sbatch
 ```
 
 ```bash
@@ -127,8 +127,8 @@ only sglang EDF whose image can load GLM-5.3: the DeepSeek weight loader's `form
 only through a `PYTHONPATH` under `$SCRATCH`, which the inference role's mount policy drops, so
 they fail to load GLM-5.3 -- see [`glm53.md`](glm53.md).
 
-If `~/.edf` is empty, `containers/cluster/ce-images/install_edfs.sh` registers the repo's copies
-against the images named in `containers/cluster/ce-images/images.env`.
+If `~/.edf` is empty, `containers/images/install_edfs.sh` registers the repo's copies
+against the images named in `containers/images/images.env`.
 
 ## 3. Submitting: the Slurm flags, and why each one
 
@@ -391,7 +391,7 @@ serves for you here and fails inside a benchmark run, suspect the mounts before 
 - `experiments/layers/model-<model>.env` and `experiments/arms.yaml` -- the authoritative launch
   line per model (`experiments/env_spec.py render campaign:<model>`), with their own inline reasons.
   If this folder and those files disagree, the files win.
-- `containers/cluster/ce-images/inference/` -- the serving smokes and probes these numbers come
+- `containers/inference/` -- the serving smokes and probes these numbers come
   from: `smoke-kimi-sglang.sbatch` (a serving smoke with an accuracy gate and a concurrency sweep),
   `agentlike-probe.py` (throughput under a realistic multi-stream load) and `accuracy-gate.py`.
 

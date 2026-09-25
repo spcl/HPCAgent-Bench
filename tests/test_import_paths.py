@@ -43,17 +43,14 @@ ALLOWED: dict[str, str] = {
     "experiments/harnesses.py": "agent-image module: own-directory insert; optimas_env builds the "
     "optimas runner's PYTHONPATH (mounted checkout + vendored SDK) inside the judge image",
     "experiments/mpi/smoke_gang_rccl.py": "judge-image smoke: own-directory insert (PYTHONSAFEPATH=1)",
-    "containers/cluster/ce-images/selfcontained_check.py": "REMOVES its own directory from sys.path to "
+    "containers/images/selfcontained_check.py": "REMOVES its own directory from sys.path to "
     "prove the image imports without the checkout",
     # Third-party runtimes, not this repository's code.
-    "containers/cluster/ce-images/judge-agent-amd/Dockerfile": "rocprof-compute's wrapper names its "
+    "containers/images/judge-agent-amd/Dockerfile": "rocprof-compute's wrapper names its "
     "own install dir, which PYTHONSAFEPATH=1 would otherwise hide",
-    "containers/cluster/ce-images/inference/smoke-kimi-eager-pg.sbatch": "vLLM eager-PG sitecustomize "
-    "patch dir (a separate decision)",
-    "containers/cluster/ce-images/inference/smoke-kimi-replicas.sbatch": "vLLM eager-PG sitecustomize "
-    "patch dir (a separate decision)",
-    "experiments/run_cluster.sh": "vLLM eager-PG sitecustomize patch dir (a separate decision)",
-    "containers/cluster/ce-images/inference/tune-moe-int4-mi300a.sbatch": "vendored deps (pydeps) of "
+    "experiments/run_cluster.sh": "vLLM eager-PG sitecustomize patch dir: the branch is being deleted "
+    "(user decision); drop this entry with it",
+    "containers/inference/tune-moe-int4-mi300a.sbatch": "vendored deps (pydeps) of "
     "the MoE tuning script",
     # Forwarding or resetting the value repo_env.sh built.
     "scripts/release_smoke_mi200.sbatch": "forwards repo_env.sh's PYTHONPATH into the harbor verifier "

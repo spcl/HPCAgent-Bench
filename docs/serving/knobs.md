@@ -143,7 +143,7 @@ therefore offloads nothing: it allocates a second copy of the KV cache in the sa
 so every cached token costs twice. The server dies to the host OOM killer with no traceback.
 
 No layer in `experiments/layers/` and no `experiments/arms.yaml` entry sets it. One example launch line in
-`containers/cluster/ce-images/IMAGE_REQUIREMENTS.md` still shows it; that line is not a
+`containers/images/IMAGE_REQUIREMENTS.md` still shows it; that line is not a
 configuration this repository runs.
 
 ## Both parsers, always
@@ -159,7 +159,7 @@ Nothing in the server log says "parser". Observed repeatedly.
 **Verify rather than assume.** Send one request carrying a tool schema and assert that
 `choices[0].message.tool_calls[0]` exists and that `reasoning_content` is non-empty. A server that
 answers with prose *about* the call passes every throughput check ever written.
-`containers/cluster/ce-images/inference/verify-tools-reasoning.py` does exactly this.
+`containers/inference/verify-tools-reasoning.py` does exactly this.
 
 The parser names are per model and are listed on each model's page.
 

@@ -311,7 +311,7 @@ $SCRATCH/venv-hpcagent-bench-314/bin/python $R/reproducibility/llr40/extract_llr
 ## 4. Images
 
 ```bash
-cd $SCRATCH/hpcagent-bench/containers/cluster/ce-images
+cd $SCRATCH/hpcagent-bench/containers/images
 DRY_RUN=1 ./promote_image.sh --all     # what would move
 ./promote_image.sh --all               # candidate -> live name; pending jobs pick it up at start
 DRY_RUN=1 sbatch push_images.sbatch   # registry gates only; publish with DRY_RUN=0 (containers/README.md)

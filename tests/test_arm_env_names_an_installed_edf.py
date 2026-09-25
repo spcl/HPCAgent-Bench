@@ -26,7 +26,7 @@ import subprocess
 from tests.env_render import BASES, rendered
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-IMAGES_ENV = REPO / "containers" / "cluster" / "ce-images" / "images.env"
+IMAGES_ENV = REPO / "containers" / "images" / "images.env"
 
 #: Hand-rendered EDFs that exist outside images.env, and why. An entry here is an EXEMPTION, so
 #: each one states what it is and what state it is in -- an allowlist that merely lists names

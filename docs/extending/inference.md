@@ -20,7 +20,7 @@ downloads inside the `hpcagent-bench-sglang-mi300-latest` EDF into `${HF_HOME}` 
 `scripts/cache_env.sh`),
 then restripes every blob over 1 GiB on the host; `AUDIT_ONLY=1` only checks the layout.
 ```bash
-MODELS="org/Name" sbatch containers/cluster/ce-images/inference/fetch_weights.sbatch
+MODELS="org/Name" sbatch containers/inference/fetch_weights.sbatch
 ```
 
 **2. Write `layers/model-<tag>.env`.** Extend the family layers with the same engine and node
@@ -66,7 +66,7 @@ tool-call, reasoning and long-context accuracy gates on SGLang, submit the smoke
 directory, where its log path and verifier resolve:
 
 ```bash
-cd containers/cluster/ce-images/inference
+cd containers/inference
 EDF=$HOME/.edf/<edf>.toml MODEL_REPO=org/Name SERVED_MODEL=<tag> \
 TOOL_PARSER=<parser> REASONING_PARSER=<parser> LANGUAGE_ONLY=<0|1> \
 MEM_FRACTION=<measured> CONTEXT_LEN=<context> SGLANG_EXTRA_ARGS="<model flags>" \
@@ -74,8 +74,8 @@ MEM_FRACTION=<measured> CONTEXT_LEN=<context> SGLANG_EXTRA_ARGS="<model flags>" 
 ```
 
 The smoke hard-codes some flags of its own, so a pass shows the image serves the model and
-`serve-only.sbatch` shows the recipe does. `submit-glm53-sglang.sh` wraps it for one model; for
-vLLM, `smoke-kimi-eager-pg.sbatch` takes `MODEL_REPO`, `TOOL_PARSER`, `REASONING_PARSER`, `EXTRA_SERVE_ARGS`.
+`serve-only.sbatch` shows the recipe does. `submit-glm53-sglang.sh` wraps it for one model; a
+vLLM model has no separate smoke, `serve-only.sbatch` is its check.
 
 **4. Register the tag** as `<tag>: {name: <Display Name>, serves: org/Name}` at the END of `models:` in
 `registry.yaml` (key order is marker order; `tests/test_palette.py` pins it); aliases go under `aliases.models`.
@@ -100,9 +100,9 @@ Checklist A:
 
 | What you touch | Why |
 | --- | --- |
-| `containers/cluster/ce-images/<engine>/` | `Dockerfile`, `build.sh`, `build.sbatch`, `edf.toml.example` |
-| `containers/cluster/ce-images/images.env` | one row: role, `INFERENCE_<ENGINE>` prefix, platform, dir, partition, profile, candidate, squashfs, EDF, template, tag |
-| `containers/cluster/ce-images/verify_image.py`, `verify_image.sbatch` | the engine's verify profile |
+| `containers/images/<engine>/` | `Dockerfile`, `build.sh`, `build.sbatch`, `edf.toml.example` |
+| `containers/images/images.env` | one row: role, `INFERENCE_<ENGINE>` prefix, platform, dir, partition, profile, candidate, squashfs, EDF, template, tag |
+| `containers/images/verify_image.py`, `verify_image.sbatch` | the engine's verify profile |
 | `experiments/run_cluster.sh` `run_vllm_node` | interpreter and launch command |
 
 **1. Image directory.** Copy `sglang/`. `build.sh` pins the base by digest and builds from the repo

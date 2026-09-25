@@ -230,9 +230,9 @@ Before submitting the example, verify that:
 - the Beverin `mi300` Slurm partition and Container Engine integration are
   available;
 - the inference EDF has been built and registered from one of
-  `containers/cluster/ce-images/{vllm,sglang}`;
+  `containers/images/{vllm,sglang}`;
 - the judge+agent EDF has been built and registered from
-  `containers/cluster/ce-images/judge-agent-amd`;
+  `containers/images/judge-agent-amd`;
 - this repository and all configured input paths are mounted at the same path on
   every allocated node;
 - the model is accessible from the compute nodes, including any required model
@@ -357,7 +357,7 @@ requests-per-minute ceiling; the examples ship 8 rather than the 40 an owned ser
 
 The key is **named** in the arm env and **valued** in the launching shell. Nothing commits it,
 nothing writes it into the run tree, and rotating it is an export rather than an edit. This is the
-same shape `containers/cluster/ce-images/inference/alps-endpoint.sh` already uses for an endpoint
+same shape `containers/inference/alps-endpoint.sh` already uses for an endpoint
 the job did not start: it exports `VLLM_API_KEY` into the submitting shell and the job inherits it.
 
 1. **The launching shell.** `export META_MODEL_API_KEY=...` (or `ANTHROPIC_API_KEY`,
@@ -581,9 +581,9 @@ from the same `CONTAINER_MOUNTS` list, one `--volume <mount>:<mount>` per entry.
 
 ### Images
 
-Each role builds from its own directory under `containers/cluster/ce-images/` (`judge-agent-amd/`,
+Each role builds from its own directory under `containers/images/` (`judge-agent-amd/`,
 `judge-agent-cuda/`, `sglang/`, `vllm/`), each with a `build.sh` and `build.sbatch`, orchestrated
-through `containers/cluster/ce-images/build_and_verify.sbatch`. See
+through `containers/images/build_and_verify.sbatch`. See
 [`containers/README.md`](../containers/README.md) for the build and EDF-install steps; this file
 does not repeat them.
 
@@ -595,7 +595,7 @@ does not repeat them.
 - Compute nodes are diskless: point podman's storage (`runroot`/`graphroot`) and `TMPDIR` at
   `/dev/shm` and clear the graphroot before the job runs, or a multi-GB pull dies mid-transfer
   and a stale graphroot breaks the next job on that node. `run_cluster.sh` does not do this for
-  you; the image builds do it in `containers/cluster/ce-images/build_common.sh` (`ce_podman_env`).
+  you; the image builds do it in `containers/images/build_common.sh` (`ce_podman_env`).
 
 ## Arm envs: layers, arms.yaml, rendered env
 
@@ -1130,7 +1130,7 @@ The script intentionally refuses extra or missing nodes.
 
 Confirm that `INFERENCE_CE_ENV` and `AMD_CE_ENV` are registered EDF environment
 names on Beverin and that the images were built from the corresponding
-`ce-images` directories.
+`containers/images/` directories.
 
 ### Repository, input, or model path is missing
 

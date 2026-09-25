@@ -163,7 +163,7 @@ slurm-*.out
 core_*
 core.[0-9]*
 !core_*.py
-containers/cluster/ce-images/**/logs/
+/containers/**/logs/
 scratchpad/
 
 # --- Container images and staged copies (enroot export, materialize_shared.sh, image contexts) ---

@@ -1,7 +1,7 @@
 # Extending private inference
 
-Contributor guide for `containers/cluster/ce-images/inference/serve-private.sbatch` and
-`containers/cluster/ce-images/inference/alps-endpoint.sh`. How to use them:
+Contributor guide for `containers/inference/serve-private.sbatch` and
+`containers/inference/alps-endpoint.sh`. How to use them:
 [`private-endpoint.md`](private-endpoint.md).
 
 ## 1. Contract
@@ -43,10 +43,10 @@ A preset is one partition, image and weights combination.
    `--mamba-full-memory-ratio 0.5`, `--context-length 262144` and `--language-only`. A different model
    family needs these moved into `PRESET_FLAGS`. The mi300 test compares against the campaign's
    `SGLANG_EXTRA_ARGS` and must still pass.
-3. A new partition needs a `GPU_ARCH_<partition>` line in `containers/cluster/ce-images/gpu_arch.env`.
+3. A new partition needs a `GPU_ARCH_<partition>` line in `containers/images/gpu_arch.env`.
    Build its image on that partition: SGLang's `setup_rocm.py` and cupy compile for the GPU visible at
-   build time ([`sglang-mi200/README.md`](../../containers/cluster/ce-images/sglang-mi200/README.md)).
-4. Download weights with `containers/cluster/ce-images/inference/fetch_weights.sbatch` (`MODELS=...`) and
+   build time ([`sglang-mi200/README.md`](../../containers/images/sglang-mi200/README.md)).
+4. Download weights with `containers/inference/fetch_weights.sbatch` (`MODELS=...`) and
    verify the Lustre striping it reports. New downloads do not reliably inherit the directory layout.
 5. Tests: add the preset to `PRESETS`, `OTHER_PARTITION` and `DEFAULT_LEG_COUNT`, add its weights
    repository to the loop in `launch()`, and add a flags test modelled on the mi200 one.

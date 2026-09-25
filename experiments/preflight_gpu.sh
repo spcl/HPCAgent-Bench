@@ -44,7 +44,7 @@ else
     img=$(awk -F'"' '/^image *=/{print $2; exit}' "${edf}")
     if [[ -f "${img}" ]]; then
         # An image OLDER than the newest Dockerfile is one built before the current fixes.
-        newer=$(find "${OPT}/containers/cluster/ce-images/judge-agent-amd" -name Dockerfile -newer "${img}" | wc -l)
+        newer=$(find "${OPT}/containers/images/judge-agent-amd" -name Dockerfile -newer "${img}" | wc -l)
         [[ "${newer}" == 0 ]] \
             && check "image freshness" PASS "$(basename "${img}") newer than its Dockerfile" \
             || check "image freshness" FAIL "$(basename "${img}") is OLDER than judge-agent-amd/Dockerfile -- rebuild"

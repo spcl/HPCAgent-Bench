@@ -25,7 +25,7 @@ import urllib.request
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-CE = ROOT / "containers" / "cluster" / "ce-images"
+CE = ROOT / "containers" / "images"
 MI200 = CE / "sglang-mi200"
 PROFILE = "sglang-mi200"
 CANDIDATE = "hpcagent-bench-sglang-mi200-candidate.sqsh"
@@ -124,7 +124,7 @@ def test_the_mi200_build_fails_unless_cupy_and_common_ops_carry_device_code_for_
     code = code_lines(MI200 / "Dockerfile")
     gated = re.findall(r'/usr/local/bin/device_arch_gate\.sh --exact "\$\{ROCM_ARCH\}" "\$\{(\w+)\}"', code)
     assert gated == ["d", "so"], gated
-    assert "COPY containers/cluster/ce-images/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh" in code
+    assert "COPY containers/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh" in code
 
 
 def test_the_mi200_image_ships_no_aiter_prebuild_and_serves_with_aiter_off() -> None:
@@ -202,7 +202,7 @@ def test_build_and_verify_maps_the_profile_to_the_candidate_its_build_writes(tmp
         encoding="utf-8"
     )
     repo, scratch = tmp_path / "repo", tmp_path / "scratch"
-    ce = repo / "containers" / "cluster" / "ce-images"
+    ce = repo / "containers" / "images"
     (ce / PROFILE).mkdir(parents=True)
     (scratch / "ce-images").mkdir(parents=True)
     for name in ("build_common.sh", "images.env", "gpu_arch.env", "cpu_target.env"):
@@ -213,7 +213,7 @@ def test_build_and_verify_maps_the_profile_to_the_candidate_its_build_writes(tmp
         "PATH": "/usr/bin:/bin",
         "SCRATCH": str(scratch),
         "REPO": str(repo),
-        "IMAGE_DIR": f"containers/cluster/ce-images/{PROFILE}",
+        "IMAGE_DIR": f"containers/images/{PROFILE}",
         "SLURM_JOB_PARTITION": "mi200",
         "SLURM_JOB_ID": "7",
         "VERIFY_ONLY": "1",
@@ -246,7 +246,7 @@ def test_verify_image_sbatch_gives_mi200_the_venv_path_its_modules_and_a_counted
     modules = re.search(r'^\s+sglang-mi200\)\s+sc_modules="([^"]+)" ;;$', text, re.MULTILINE)
     assert modules and "sgl_kernel" in modules.group(1) and "flydsl" not in modules.group(1)
     assert "inference/sglang_kernel_launch_check.py" in text
-    assert (CE / "inference" / "sglang_kernel_launch_check.py").is_file()
+    assert (ROOT / "containers" / "inference" / "sglang_kernel_launch_check.py").is_file()
     assert 'if [ "${launch_rc}" -ne 0 ]; then' in text
 
 
@@ -311,7 +311,7 @@ def test_a_missing_mi200_image_does_not_fail_install_edfs_for_the_other_roles(tm
     assert not (edf_dir / "hpcagent-bench-sglang-mi200-latest.toml").exists()
 
 
-GATE = load_module(CE / "inference" / "verify-tools-reasoning.py", "verify_tools_reasoning")
+GATE = load_module(ROOT / "containers" / "inference" / "verify-tools-reasoning.py", "verify_tools_reasoning")
 #: One response that satisfies both the tool-call and the reasoning check.
 RESPONSE = {
     "choices": [
