@@ -805,22 +805,37 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
+def arm_language(observations: pd.DataFrame, arm: str) -> str:
+    """``arm``'s language: its name's language token, else the language its rows recorded.
+
+    An arm named by harness alone (``harness20-qwen38-claude``) carries no language token, while
+    its rows record one; reading the name alone would call it a different language from the
+    ``-c`` arm it is the control of.
+    """
+    named = experiment_tags.language_of(arm)
+    if named or "language" not in observations.columns:
+        return named
+    recorded = observations.loc[observations.arm == arm, "language"].dropna().astype(str)
+    recorded = recorded[recorded != ""]
+    return str(recorded.mode().iloc[0]) if not recorded.empty else ""
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     pairs = [parse_pair(spec) for spec in args.pair]
+    arms = sorted({arm for pair in pairs for arm in pair})
+
+    card = cost.resolve(args.cost_model, args.cost_models)
+    observations = load_observations(args.observations, card)
     # spec P1: a pair compares one model on one language; anything else is two questions at once
     unlike = [
         pair
         for pair in pairs
         if experiment_tags.model_of(pair[0]) != experiment_tags.model_of(pair[1])
-        or experiment_tags.language_of(pair[0]) != experiment_tags.language_of(pair[1])
+        or arm_language(observations, pair[0]) != arm_language(observations, pair[1])
     ]
     if unlike:
         raise SystemExit(f"a pair must share model and language: {unlike}")
-    arms = sorted({arm for pair in pairs for arm in pair})
-
-    card = cost.resolve(args.cost_model, args.cost_models)
-    observations = load_observations(args.observations, card)
     if args.baseline:
         observations = one_baseline(observations, args.baseline)
     missing = [arm for arm in arms if arm not in set(observations.arm)]
