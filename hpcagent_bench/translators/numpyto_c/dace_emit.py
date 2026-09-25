@@ -3148,14 +3148,6 @@ def fold_expr(node: ast.AST) -> ast.AST:
         return node
 
 
-#: Calls the DaCe frontend has no replacement for. Reaching one makes it a CALLBACK -- an opaque
-#: Python call whose return type it cannot infer ("Trying to operate on a callback return value with
-#: an undefined type"), so the parse fails and, where it does not, the kernel is no longer a kernel.
-#: Every entry here is lowered by :class:`LowerCallsDaceCannotReplace` into forms dace does have:
-#: its ufuncs, its BLAS ``Dot`` node, plain subscripts, or an explicit loop.
-CALLS_WITHOUT_A_DACE_REPLACEMENT = ("take", "round", "searchsorted", "linalg.norm", "fft.fftfreq", "ufunc.at")
-
-
 def np_call_name(node: ast.AST) -> str | None:
     """``np.take`` -> ``"take"``, ``np.linalg.norm`` -> ``"linalg.norm"``, else None."""
     if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
@@ -3182,7 +3174,7 @@ def parse_expr(text: str) -> ast.expr:
 
 
 class LowerCallsDaceCannotReplace(ast.NodeTransformer):
-    """Rewrite every call in :data:`CALLS_WITHOUT_A_DACE_REPLACEMENT` into something dace replaces.
+    """Rewrite the calls the DaCe frontend has no replacement for into something dace replaces.
 
     dace covers 90 numpy ufuncs and ~150 named functions; what it does not cover it turns into a
     callback, and a callback is not a kernel -- it is a Python call the code generator cannot see

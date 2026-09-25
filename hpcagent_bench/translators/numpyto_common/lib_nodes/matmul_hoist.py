@@ -726,11 +726,7 @@ class MatmulHoister(ast.NodeTransformer):
         (A@B) + beta * C`` densifies it anyway, matching scipy's ``sparse @
         sparse + dense``; a CSR-output Gustavson form exists separately for
         pure-SpGEMM kernels); every other ``sparse @ sparse`` combo errors.
-
-        This is the C/Fortran realisation of
-        :func:`numpyto_common.sparse_emit.result_layout`: every supported case
-        here densifies, matching ``result_layout(..., target="c") == DENSE`` --
-        the hoister runs in the dense-accumulation context, so it always
+        The hoister runs in the dense-accumulation context, so it always
         densifies rather than emitting a CSR-output SpGEMM.
         """
         if not self.sparse:

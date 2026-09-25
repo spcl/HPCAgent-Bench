@@ -1,4 +1,4 @@
-"""Per-format sparse-matmul dispatchers (Workstream 0).
+"""Per-format sparse-matmul dispatchers.
 
 Each function takes an AST snippet for one sparse-matmul op and returns the
 lowered loop nest (incl. output zero-init). Routed from
@@ -18,61 +18,7 @@ hoister falls back to the dense path or reports an actionable error.
 import ast
 from collections.abc import Callable
 
-#: Result-layout sentinel.
-DENSE = "dense"
-
-#: Per-target: can a sparse-x-sparse op (SpGEMM) produce a *sparse* result?
-#: False densifies. Keyed by target name.
-#:
-#: * C/Fortran CAN emit CSR-output Gustavson SpGEMM, but the matmul hoister
-#:   always densifies sparse-x-sparse inside ``alpha*(A@B)+beta*C`` (feeds a
-#:   dense buffer) -- so here the answer is "dense". CSR-output is reached
-#:   only via a dedicated pure-SpGEMM path, not the hoister.
-#: * JAX has no sparse-x-sparse -> sparse (``BCOO @ BCOO`` densifies) -- why
-#:   ``spmm`` (CSR @ CSR) is a documented skip, not an ad-hoc refusal.
-FRAMEWORK_SPARSE_CAPS: dict[str, bool] = {
-    "c": False,
-    "fortran": False,
-    "jax": False,
-    "numba": True,  # follows the numpy/scipy source (scipy CSR@CSR -> CSR)
-    "pythran": True,
-    "cupy": True,
-}
-
-
-def result_layout(lhs_layout: str | None, rhs_layout: str | None, target: str = "c") -> str:
-    """Layout of ``lhs @ rhs``'s result given the operand layouts.
-
-    ``lhs_layout``/``rhs_layout``: sparse format name or ``None`` (dense).
-    Returns the result's sparse format, or :data:`DENSE`.
-
-    Rule: ``sparse @ dense``/``dense @ sparse`` -> always
-    **dense** (matches scipy). ``sparse @ sparse`` -> lhs's layout iff the
-    target can produce a sparse result (:data:`FRAMEWORK_SPARSE_CAPS`), else
-    **dense**.
-
-    Single source of truth for the layout algebra; backends may still apply a
-    context-specific override (e.g. C/Fortran always densifies inside
-    ``alpha*(A@B)+beta*C`` regardless of caps).
-    """
-    if lhs_layout is None or rhs_layout is None:
-        return DENSE  # sparse x dense / dense x sparse -> dense, always
-    # both sparse
-    if FRAMEWORK_SPARSE_CAPS.get(target, False):
-        return lhs_layout  # SpGEMM into the lhs layout
-    return DENSE
-
-
-def name_(s: str) -> ast.Name:
-    return ast.Name(id=s, ctx=ast.Load())
-
-
-def store_(s: str) -> ast.Name:
-    return ast.Name(id=s, ctx=ast.Store())
-
-
-def const_(v: int | float) -> ast.Constant:
-    return ast.Constant(value=v)
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, name_, store_
 
 
 def range_call(start: ast.expr | None, stop: ast.expr) -> ast.Call:
