@@ -34,6 +34,7 @@ import os
 import pathlib
 import re
 import sys
+from collections.abc import Callable
 
 #: Rank counts to weak-size to, per work_exponent. ``weak()`` accepts any rank count (it rounds
 #: per axis symbol), but a CLEAN k-th power keeps this check's growth factor exact -- no rounding
@@ -300,9 +301,6 @@ def measure_kernel(
     kernel's work, so a wrong manifest gets told what k should have been instead of only that it
     was wrong.
     """
-    import math
-
-    from hpcagent_bench.harness import mpi_sizing
     from hpcagent_bench.harness.agent import emit_reference_source
     from hpcagent_bench.harness.envelope import Submission
     from hpcagent_bench.harness.grading import _data_seeded
@@ -319,61 +317,30 @@ def measure_kernel(
     if not ladder:
         return {**row, "ok": False, "reason": f"no single-node rank ladder for work_exponent={work_exp}"}
 
-    base = dict(spec.parameters[preset])
-    sizes = [(1, base)]
-    for ranks in ladder:
-        try:
-            grown = mpi_sizing.weak(base, axis, ranks, work_exp)
-        except ValueError as exc:
-            return {**row, "ok": False, "reason": str(exc)}
-        if grown == base:
-            return {**row, "ok": False, "reason": f"axis {axis} names no symbol in preset {preset}"}
-        sizes.append((ranks, grown))
+    sizes, reason = ladder_sizes(spec.parameters, preset, axis, ladder, work_exp)
+    if reason:
+        return {**row, "ok": False, "reason": reason}
 
     binding = binding_from_spec(spec)
-    budget_bytes = int(memory_gb * (1024**3))
     try:
         source = emit_reference_source(key, "c")
     except Exception as exc:  # noqa: BLE001 -- a non-emittable kernel is a skip, not a crash
         return {**row, "ok": False, "reason": f"no C reference: {type(exc).__name__}: {exc}"}
 
-    points = []
-    metric = FP_METRIC
     with Sandbox(binding) as sb:
         built = sb.build(Submission(language="c", source=source))
         if not built.ok:
             return {**row, "ok": False, "reason": f"reference build failed: {built.log[-400:]}"}
-        for ranks, params in sizes:
-            # Budget check first: generating the inputs happens in THIS process, so an oversized
-            # point that is merely counted-and-failed in the child would still have killed the
-            # sweep here. Named and skipped instead, and the fit uses whatever fits.
-            # Declared arrays PLUS whatever the reference allocates for itself; the second term
-            # dominates for a vectorized numpy kernel and is what the earlier segfaults were.
-            declared = size_bytes(binding, params)
-            internal = emitted_bytes(source, params)
-            need = None if declared is None or internal is None else declared + internal
-            if need is not None and need > budget_bytes:
-                points.append(
-                    {
-                        "ranks": ranks,
-                        "params": params,
-                        "reason": f"needs {need / 2**30:.1f} GiB > the {memory_gb:.0f} GiB budget",
-                        "over_budget": True,
-                    }
-                )
-                continue
-            try:
-                data = _data_seeded(key, preset, datatype, seed, params_override=params)
-                counted = count_flops(built.lib, binding, data, "c", reps, timeout, memory_gb, metric)
-                if not points and not counted.get("count"):
-                    # Nothing counted at the base size: either this host cannot count the metric,
-                    # or the kernel genuinely has no floating-point work. One retry tells them
-                    # apart, and buys the exponent for the second case.
-                    metric = FALLBACK_METRIC
-                    counted = count_flops(built.lib, binding, data, "c", reps, timeout, memory_gb, metric)
-            except MemoryError as exc:
-                counted = {"reason": f"input generation ran out of memory: {exc}"}
-            points.append({"ranks": ranks, "params": params, **counted})
+        points, metric = count_ladder(
+            built.lib,
+            binding,
+            source,
+            sizes,
+            lambda params: _data_seeded(key, preset, datatype, seed, params_override=params),
+            reps=reps,
+            timeout=timeout,
+            memory_gb=memory_gb,
+        )
     row["points"] = points
     row["metric"] = metric
 
@@ -424,6 +391,81 @@ def measure_kernel(
         row["skipped"] = [{"ranks": p["ranks"], "reason": p.get("reason", "")} for p in skipped]
     if not usable:
         return {**row, "ok": False, "reason": "; ".join(p.get("reason", "") for p in points[1:])}
+    return fit_exponent(row, usable, work_exp)
+
+
+def ladder_sizes(
+    parameters: dict, preset: str, axis: list, ladder: tuple, work_exp: int
+) -> tuple[list[tuple[int, dict]], str]:
+    """The weak-scaled sizes of the rank ladder from ``preset``, ``(1, base)`` first, or the reason
+    there are none."""
+    from hpcagent_bench.harness import mpi_sizing
+
+    base = dict(parameters[preset])
+    sizes = [(1, base)]
+    for ranks in ladder:
+        try:
+            grown = mpi_sizing.weak(base, axis, ranks, work_exp)
+        except ValueError as exc:
+            return [], str(exc)
+        if grown == base:
+            return [], f"axis {axis} names no symbol in preset {preset}"
+        sizes.append((ranks, grown))
+    return sizes, ""
+
+
+def over_budget(binding, source: str, params: dict, memory_gb: float) -> str:
+    """Why the point at ``params`` would not fit in ``memory_gb``, or "" when it fits (or cannot
+    be sized): the declared arrays PLUS whatever the reference allocates for itself; the second
+    term dominates for a vectorized numpy kernel."""
+    declared = size_bytes(binding, params)
+    internal = emitted_bytes(source, params)
+    if declared is None or internal is None or declared + internal <= int(memory_gb * (1024**3)):
+        return ""
+    return f"needs {(declared + internal) / 2**30:.1f} GiB > the {memory_gb:.0f} GiB budget"
+
+
+def count_ladder(
+    lib,
+    binding,
+    source: str,
+    sizes: list[tuple[int, dict]],
+    data_for: Callable[[dict], object],
+    *,
+    reps: int,
+    timeout: float,
+    memory_gb: float,
+) -> tuple[list[dict], str]:
+    """Count every rung of ``sizes`` on the inputs ``data_for(params)`` generates; the points and
+    the metric they were counted in."""
+    points: list[dict] = []
+    metric = FP_METRIC
+    for ranks, params in sizes:
+        # Budget check first: generating the inputs happens in THIS process, so an oversized point
+        # that is merely counted-and-failed in the child would still have killed the sweep here.
+        # Named and skipped instead, and the fit uses whatever fits.
+        if reason := over_budget(binding, source, params, memory_gb):
+            points.append({"ranks": ranks, "params": params, "reason": reason, "over_budget": True})
+            continue
+        try:
+            data = data_for(params)
+            counted = count_flops(lib, binding, data, "c", reps, timeout, memory_gb, metric)
+            if not points and not counted.get("count"):
+                # Nothing counted at the base size: either this host cannot count the metric, or
+                # the kernel genuinely has no floating-point work. One retry tells them apart, and
+                # buys the exponent for the second case.
+                metric = FALLBACK_METRIC
+                counted = count_flops(lib, binding, data, "c", reps, timeout, memory_gb, metric)
+        except MemoryError as exc:
+            counted = {"reason": f"input generation ran out of memory: {exc}"}
+        points.append({"ranks": ranks, "params": params, **counted})
+    return points, metric
+
+
+def fit_exponent(row: dict, usable: list[dict], work_exp: int) -> dict:
+    """``row`` with the exponent fitted from the ``usable`` rungs and its verdict against ``work_exp``."""
+    import math
+
     # Slope through the origin: log(flops/flops_1) = k * log(factor), least squares with no
     # intercept because the k=3 ladder has a single point and a two-parameter fit would be exact
     # by construction there and say nothing.
