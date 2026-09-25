@@ -48,7 +48,8 @@ import itertools
 import math
 import pathlib
 import warnings
-from typing import Dict, List, NamedTuple, Optional, Sequence, Set, Tuple
+from typing import NamedTuple
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
@@ -77,14 +78,14 @@ EMBED_SCALE: float = 0.85
 
 #: Band edges as speedup MAGNITUDES (``max(r, 1/r)``, always >= 1). The signed-change edges are
 #: these minus one, since ``|signed_change(r)| == max(r, 1/r) - 1``.
-BAND_EDGES: Tuple[float, float] = (2.0, 10.0)
+BAND_EDGES: tuple[float, float] = (2.0, 10.0)
 
 #: Panel labels, top to bottom. A point lands in EXACTLY one -- by the magnitude of its change,
 #: never by its sign, so a 3x win and a 3x regression are read on the same axis.
 BAND_HIGH: str = "> 10x"
 BAND_MID: str = "2x .. 10x"
 BAND_LOW: str = "-2x .. 2x"
-BANDS: Tuple[str, str, str] = (BAND_HIGH, BAND_MID, BAND_LOW)
+BANDS: tuple[str, str, str] = (BAND_HIGH, BAND_MID, BAND_LOW)
 
 
 class Point(NamedTuple):
@@ -101,7 +102,7 @@ class Point(NamedTuple):
     ratio: float  # t_baseline / t_candidate -- > 1 is faster than the baseline
     change: float  # the plotted value: signed_change(ratio)
     band: str
-    samples: Tuple[float, ...] = ()
+    samples: tuple[float, ...] = ()
     #: The framework was ASKED for this kernel and produced no usable time (a crash, a build
     #: failure, a kernel it cannot lower). Drawn as an X on the zero line in the framework's colour
     #: -- a POSITION, not a value: it carries no ``ratio`` and is excluded from every limit and
@@ -116,7 +117,7 @@ class Point(NamedTuple):
 MIN_BOX_SAMPLES: int = 4
 
 
-def band_of(change: float) -> Optional[str]:
+def band_of(change: float) -> str | None:
     """Which panel a signed change belongs in; ``None`` when it is not plottable (NaN).
 
     Keyed on ``|change|``, which is the speedup magnitude minus one. The band NAMED for an edge
@@ -134,7 +135,7 @@ def band_of(change: float) -> Optional[str]:
     return BAND_HIGH
 
 
-def cell_changes(samples: Sequence[float], base_time: float, label: str = "") -> Tuple[float, ...]:
+def cell_changes(samples: Sequence[float], base_time: float, label: str = "") -> tuple[float, ...]:
     """One cell's per-repetition signed changes against a FIXED baseline time.
 
     The divisor is the baseline's cleaned MEDIAN, not a per-repetition partner, because the samples
@@ -155,8 +156,8 @@ def cell_changes(samples: Sequence[float], base_time: float, label: str = "") ->
 
 
 def speedup_points(
-    summary: pd.DataFrame, baseline: str = plotting.DEFAULT_BASELINE, data: Optional[pd.DataFrame] = None
-) -> List[Point]:
+    summary: pd.DataFrame, baseline: str = plotting.DEFAULT_BASELINE, data: pd.DataFrame | None = None
+) -> list[Point]:
     """Per (kernel, framework) median speedup over ``baseline``, as plottable points.
 
     ``summary`` is a :func:`hpcagent_bench.stats.figures.results.cell_summary` frame -- one row per
@@ -172,9 +173,9 @@ def speedup_points(
     warned about (naming ``<kernel>@<framework>``). It must never reach the figure as 0.
     """
     per_cell = samples_by_cell(data)
-    points: List[Point] = []
-    unusable: List[str] = []
-    crashed: List[str] = []
+    points: list[Point] = []
+    unusable: list[str] = []
+    crashed: list[str] = []
     for kernel, rows in summary.groupby("benchmark", sort=False):
         base_time = baseline_time(rows, baseline)
         for row in rows.itertuples(index=False):
@@ -201,7 +202,7 @@ def speedup_points(
     return points
 
 
-def samples_by_cell(data: Optional[pd.DataFrame]) -> Dict[Tuple[str, str], Sequence[float]]:
+def samples_by_cell(data: pd.DataFrame | None) -> dict[tuple[str, str], Sequence[float]]:
     """``(kernel, framework) -> per-repetition times`` of the per-sample frame; empty without one."""
     if data is None:
         return {}
@@ -241,7 +242,7 @@ def data_table(summary: pd.DataFrame, points: Sequence[Point], baseline: str) ->
         (str(row.benchmark), str(row.framework)): (float(row.time), float(row.ci_low), float(row.ci_high))
         for row in summary.itertuples(index=False)
     }
-    records: List[Dict[str, object]] = []
+    records: list[dict[str, object]] = []
     for point in points:
         base = times.get((point.kernel, baseline))
         cell = times.get((point.kernel, point.framework))
@@ -268,7 +269,7 @@ def data_table(summary: pd.DataFrame, points: Sequence[Point], baseline: str) ->
 
 
 #: Column order of the emitted data table, so two runs diff like with like.
-TABLE_COLUMNS: Tuple[str, ...] = (
+TABLE_COLUMNS: tuple[str, ...] = (
     "kernel",
     "framework",
     "speedup",
@@ -283,7 +284,7 @@ TABLE_COLUMNS: Tuple[str, ...] = (
 )
 
 
-def plotted_kernels(points: Sequence[Point], order: str = BY_DWARF) -> List[str]:
+def plotted_kernels(points: Sequence[Point], order: str = BY_DWARF) -> list[str]:
     """The x axis: every kernel that has at least one plottable point, in the shared report order.
 
     A kernel with no point is left out rather than drawn as an empty column -- the cells behind it
@@ -294,7 +295,7 @@ def plotted_kernels(points: Sequence[Point], order: str = BY_DWARF) -> List[str]
     return ordered
 
 
-def framework_colors(points: Sequence[Point]) -> Dict[str, str]:
+def framework_colors(points: Sequence[Point]) -> dict[str, str]:
     """One stable hue per framework, from the palette every other report figure uses, so a
     framework keeps its colour across the whole report."""
     names = sorted({point.framework for point in points})
@@ -302,7 +303,7 @@ def framework_colors(points: Sequence[Point]) -> Dict[str, str]:
     return palette.framework_colors(names)
 
 
-def band_limits(band: str, changes: Sequence[float]) -> Tuple[float, float]:
+def band_limits(band: str, changes: Sequence[float]) -> tuple[float, float]:
     """The y limits for a band's panel, given the changes it holds (never empty).
 
     Every panel is ANCHORED at its band's inner edge and closed at the band's outer edge, so a
@@ -339,7 +340,7 @@ def box_span(count: int, slot: float = 0.8) -> float:
     return slot - slot / max(count, 1)
 
 
-def draw_boxes(ax, points: Sequence[Point], x_of: Dict[str, int], colors: Dict[str, str]) -> List[Point]:
+def draw_boxes(ax, points: Sequence[Point], x_of: dict[str, int], colors: dict[str, str]) -> list[Point]:
     """Draw every box-worthy cell as a dodged box; return the cells that were NOT drawn.
 
     A cell with fewer than :data:`MIN_BOX_SAMPLES` cleaned repetitions is returned rather than
@@ -370,12 +371,12 @@ def draw_boxes(ax, points: Sequence[Point], x_of: Dict[str, int], colors: Dict[s
     return [p for p in points if len(p.samples) < MIN_BOX_SAMPLES]
 
 
-def framework_offsets(frameworks: Sequence[str], slot: float) -> Dict[str, float]:
+def framework_offsets(frameworks: Sequence[str], slot: float) -> dict[str, float]:
     """Each framework's x offset from its kernel, so their boxes tile ``slot`` of the kernel's unit."""
     return dict(zip(frameworks, per_kernel.dodge_offsets(len(frameworks), box_span(len(frameworks), slot))))
 
 
-def paint_boxes(artists: Dict[str, list], color: str, alpha: float, width: float) -> None:
+def paint_boxes(artists: dict[str, list], color: str, alpha: float, width: float) -> None:
     """Colour one framework's boxplot ``artists``: the box filled at ``alpha``, whiskers and caps solid."""
     for box in artists["boxes"]:
         box.set(facecolor=color, edgecolor=color, alpha=alpha, linewidth=width)
@@ -383,7 +384,7 @@ def paint_boxes(artists: Dict[str, list], color: str, alpha: float, width: float
         line.set(color=color, linewidth=width)
 
 
-def box_handles(colors: Dict[str, str], alpha: float) -> list:
+def box_handles(colors: dict[str, str], alpha: float) -> list:
     """Legend keys for a box figure: one filled patch per framework, at the boxes' own alpha."""
     return [
         plt.Rectangle((0, 0), 1, 1, facecolor=color, edgecolor=color, alpha=alpha, label=name)
@@ -392,7 +393,7 @@ def box_handles(colors: Dict[str, str], alpha: float) -> list:
 
 
 def draw_band(
-    ax, band: str, points: Sequence[Point], x_of: Dict[str, int], colors: Dict[str, str], boxes: bool = False
+    ax, band: str, points: Sequence[Point], x_of: dict[str, int], colors: dict[str, str], boxes: bool = False
 ) -> None:
     """One panel: its band's points at their kernel's shared x position, on the band's own y scale.
 
@@ -419,7 +420,7 @@ def draw_band(
 
 
 def plot_per_framework(
-    ax, points: Sequence[Point], x_of: Dict[str, int], colors: Dict[str, str], **marker: object
+    ax, points: Sequence[Point], x_of: dict[str, int], colors: dict[str, str], **marker: object
 ) -> None:
     """One marker series per framework at each point's kernel: its change, or 0 for a crash.
 
@@ -440,7 +441,7 @@ def plot_per_framework(
         )
 
 
-def close_band(ax, band: str, points: Sequence[Point], boxes: bool) -> Tuple[float, float]:
+def close_band(ax, band: str, points: Sequence[Point], boxes: bool) -> tuple[float, float]:
     """Set the panel's y limits (:func:`band_limits`) and, where 0 is in view, its zero line.
 
     The box reaches past its cell's median, so the panel is closed on the whiskers too -- limits
@@ -454,7 +455,7 @@ def close_band(ax, band: str, points: Sequence[Point], boxes: bool) -> Tuple[flo
     return limits
 
 
-def figure_legend(fig, colors: Dict[str, str], boxes: bool = False) -> None:
+def figure_legend(fig, colors: dict[str, str], boxes: bool = False) -> None:
     """One shared framework legend above the panels (colour -> framework), as on the grid figure.
 
     The handle matches what was actually drawn: a circle for the median-marker figure, a filled
@@ -477,7 +478,7 @@ def label_kernels(ax, kernels: Sequence[str]) -> None:
     ax.set_xlim(-0.6, len(kernels) - 0.4)
 
 
-def panel_heights(points: Sequence[Point], present: Sequence[str], compact: bool) -> Optional[List[float]]:
+def panel_heights(points: Sequence[Point], present: Sequence[str], compact: bool) -> list[float] | None:
     """Relative panel heights, or ``None`` for the equal split.
 
     ``compact`` weights each panel by how many cells it holds, within a floor and a ceiling. Equal
@@ -652,7 +653,7 @@ SQUARE_SIDE: float = 3.3
 SQUARE_BORDER: float = 1.8
 
 
-def square_kernels(points: Sequence[Point], cells: int = SQUARE_CELLS) -> Tuple[List[str], List[str]]:
+def square_kernels(points: Sequence[Point], cells: int = SQUARE_CELLS) -> tuple[list[str], list[str]]:
     """The kernels and frameworks the square figure shows: one band, complete groups.
 
     Two constraints. **One band**, because a single ``> 10x`` cell sets a y range in which every
@@ -680,20 +681,20 @@ def square_kernels(points: Sequence[Point], cells: int = SQUARE_CELLS) -> Tuple[
     return [], frameworks
 
 
-def complete_kernels(points: Sequence[Point], frameworks: Set[str]) -> List[str]:
+def complete_kernels(points: Sequence[Point], frameworks: set[str]) -> list[str]:
     """The kernels, in first-seen order, that hold a cell for every one of ``frameworks``."""
-    by_kernel: Dict[str, Set[str]] = {}
+    by_kernel: dict[str, set[str]] = {}
     for point in points:
         by_kernel.setdefault(point.kernel, set()).add(point.framework)
     return [kernel for kernel, present in by_kernel.items() if present == frameworks]
 
 
-def alternate_signs(points: Sequence[Point], kernels: Sequence[str], want: int) -> List[str]:
+def alternate_signs(points: Sequence[Point], kernels: Sequence[str], want: int) -> list[str]:
     """Up to ``want`` of ``kernels``, a speedup and a slow-down (:func:`group_change`) in turn, a
     speedup first; once one side runs dry the rest come from the other."""
     wins = [k for k in kernels if group_change(points, k) > 0.0]
     losses = [k for k in kernels if group_change(points, k) <= 0.0]
-    picked: List[str] = []
+    picked: list[str] = []
     for pair in itertools.zip_longest(wins, losses):
         picked.extend(kernel for kernel in pair if kernel is not None)
     return picked[:want]
@@ -711,7 +712,7 @@ def group_change(points: Sequence[Point], kernel: str) -> float:
     return sum(changes) / len(changes) if changes else 0.0
 
 
-def square_ticks(low: float, high: float) -> List[float]:
+def square_ticks(low: float, high: float) -> list[float]:
     """Y ticks for the square panel: the axis's LANDMARKS, plus the extremes they do not reach.
 
     ``-1``, ``0`` and ``+1`` are not arbitrary round numbers on this axis -- they are 2x slower,
@@ -801,15 +802,15 @@ def plot_signed_speedup(
     benchmark: str = "all",
     preset: str = "S",
     datatype: str = "float64",
-    variant: Optional[str] = None,
+    variant: str | None = None,
     order: str = BY_DWARF,
-    db: Optional[str] = None,
+    db: str | None = None,
     output: str = PLOTS_DIR + "/speedup.pdf",
     usetex: bool = True,
     boxes: bool = False,
     compact: bool = False,
     baseline: str = plotting.DEFAULT_BASELINE,
-) -> List[str]:
+) -> list[str]:
     """Read ``db`` and emit the banded figure + both SVG variants PER MACHINE; returns the paths.
 
     ``output`` names a FAMILY, not a file: each machine's files carry its label
@@ -833,7 +834,7 @@ def plot_signed_speedup(
     """
     plotting.set_usetex(usetex)
     everything = plotting.load_results(db, benchmark, preset, datatype, variant)
-    written: List[str] = []
+    written: list[str] = []
     for label, rows in plotting.machine_groups(everything):
         points = speedup_points(plotting.cell_summary(rows), baseline=baseline, data=rows if boxes else None)
         if not points:
@@ -890,7 +891,7 @@ DEMO_SEED: int = 20260804
 #: Ordered so the two the SQUARE figure selects -- the first mid-band win and the first mid-band
 #: slow-down -- are the ones named "kernel one" and "kernel two". A small embed labelled with
 #: "kernel four" and "kernel six" reads as an excerpt of something larger that is not shown.
-DEMO_CELLS: Tuple[Tuple[str, float, float, int], ...] = (
+DEMO_CELLS: tuple[tuple[str, float, float, int], ...] = (
     ("kernel one", 2.2, 3.2, +1),
     # Kept just past the 2x edge so the mirrored slow-down lands near -1 rather than deep in the
     # band: the square figure shows these two together, and a loss of -7 would set a range in which
@@ -908,7 +909,7 @@ DEMO_CELLS: Tuple[Tuple[str, float, float, int], ...] = (
 #: The demo's two candidate columns -- two, so the shared palette and the legend are exercised.
 #: Named generically rather than after real frameworks: these numbers were drawn from a generator,
 #: and a legend reading ``dace_cpu`` on synthetic data invites someone to quote it as a measurement.
-DEMO_FRAMEWORKS: Tuple[str, str] = ("Agent A", "Agent B")
+DEMO_FRAMEWORKS: tuple[str, str] = ("Agent A", "Agent B")
 
 #: Repetitions the demo draws per cell, and their run-to-run scatter as a fraction of the cell's
 #: own time. 12 is enough for a box to be a box; 8% is a plausible timing jitter for a warm CPU
@@ -917,7 +918,7 @@ DEMO_REPEATS: int = 12
 DEMO_JITTER: float = 0.08
 
 
-def demo_points(seed: int = DEMO_SEED, repeats: int = DEMO_REPEATS) -> List[Point]:
+def demo_points(seed: int = DEMO_SEED, repeats: int = DEMO_REPEATS) -> list[Point]:
     """Synthetic points from a SEEDED draw: three kernels in every band, both signs, two frameworks.
 
     For judging the figure without a results DB. Each (kernel, framework) magnitude is drawn inside
@@ -931,7 +932,7 @@ def demo_points(seed: int = DEMO_SEED, repeats: int = DEMO_REPEATS) -> List[Poin
     demo's band populations remain the ones declared.
     """
     rng = np.random.default_rng(seed)
-    points: List[Point] = []
+    points: list[Point] = []
     for kernel, low, high, sign in DEMO_CELLS:
         for framework in DEMO_FRAMEWORKS:
             magnitude = float(rng.uniform(low, high))
@@ -956,7 +957,7 @@ def plot_demo(
     compact: bool = False,
     square: bool = False,
     bare: bool = False,
-) -> List[str]:
+) -> list[str]:
     """Render the three figures from :func:`demo_points`; returns the paths written.
 
     No machine label in the names: synthetic data was measured on no machine, and a label that
@@ -1048,7 +1049,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point: print every path written."""
     args = build_parser().parse_args(argv)
     if args.demo:

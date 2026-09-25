@@ -81,7 +81,9 @@ def rows_for(times: dict[str, dict[str, float]], baseline: str, columns: Sequenc
         label = framework_name(column)
         if column == baseline:
             label = f"{label} (baseline)"
-        rows.append(Row(column, label, statistics.median(sp), summary.geomean(sp, unusable="drop"), len(sp)))
+        rows.append(
+            Row(column, label, statistics.median(sp), summary.geomean(sp, unusable=summary.Unusable.DROP), len(sp))
+        )
     return rows
 
 
@@ -176,7 +178,7 @@ def draw(
     ax.yaxis.set_major_locator(matplotlib.ticker.LogLocator(base=2.0, subs=(1.0,), numticks=12))
     ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, position: f"{v:g}x"))
     ax.grid(axis="y", which="major", alpha=0.7, zorder=0)
-    style.minor_ticks(ax.yaxis, "ratio")
+    style.minor_ticks(ax.yaxis, style.MinorKind.RATIO)
     ax.set_axisbelow(True)
     style.despine(ax, keep=("left",))
     ax.tick_params(axis="x", length=0, colors=style.MUTED)
@@ -223,7 +225,7 @@ def draw_distribution(
             continue
         color = palette.framework_color(column) if column.startswith("dace_") else style.MUTED
         xs = [i / (len(sp) - 1) for i in range(len(sp))] if len(sp) > 1 else [0.0]
-        gm = summary.geomean(sp, unusable="drop")
+        gm = summary.geomean(sp, unusable=summary.Unusable.DROP)
         label = f"{framework_name(column)}  (n={len(sp)}, geomean {gm:.2f}x)"
         ax.plot(xs, sp, color=color, linewidth=TYPE.line_width, label=label, zorder=3)
         ax.axhline(gm, color=color, linewidth=TYPE.hairline_width, linestyle="--", alpha=0.6, zorder=2)
@@ -232,7 +234,7 @@ def draw_distribution(
     ax.set_ylabel(f"Speedup over {framework_name(baseline)} (Log2)", color=style.MUTED, fontsize=TYPE.label_pt)
     ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _pos: f"{v:g}x"))
     ax.grid(axis="y", which="major", alpha=0.7, zorder=0)
-    style.minor_ticks(ax.yaxis, "ratio")
+    style.minor_ticks(ax.yaxis, style.MinorKind.RATIO)
     ax.set_axisbelow(True)
     style.despine(ax, keep=("bottom", "left"))
     ax.tick_params(colors=style.MUTED, labelsize=TYPE.tick_pt)

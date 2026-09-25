@@ -14,14 +14,53 @@ import importlib.util
 import itertools
 import math
 import pathlib
-from typing import List, Tuple
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from hpcagent_bench.stats import summary
 from hpcagent_bench.stats.figures import per_kernel
 from hpcagent_bench.stats.figures import results as plotting
+
+#: The synthetic DB uses REAL short_names so the shared report ordering resolves them.
+KERNELS: tuple[tuple[str, str], ...] = (("heat_3d", "Physics"), ("jacobi_2d", "Physics"))
+
+
+def build_results_db(db: pathlib.Path, shift: float = 0.0) -> None:
+    """A small results DB with the real schema. ``shift`` scales dace_cpu's runtime so a corpus
+    sweep can be pointed at either an all-null corpus or one with a planted win."""
+    from sqlmodel import Session
+
+    from hpcagent_bench.frameworks.schema import Result, results_engine
+
+    rng = np.random.default_rng(0)
+    engine = results_engine(str(db))
+    with Session(engine) as session:
+        for kernel, domain in KERNELS:
+            for framework, base in (("numpy", 10.0), ("dace_cpu", 10.0 * (1.0 - shift))):
+                for value in base * rng.lognormal(0.0, 0.05, 40):
+                    session.add(
+                        Result(
+                            timestamp=1_700_000_000,
+                            benchmark=kernel,
+                            domain=domain,
+                            preset="S",
+                            framework=framework,
+                            agent=None,
+                            validated=True,
+                            time=float(value),
+                            native_time=None,
+                            datatype="float64",
+                            variant=None,
+                            prompt_hash=None,
+                            execution="native",
+                            cpu="test-cpu",
+                        )
+                    )
+        session.commit()
+    engine.dispose()
+
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -128,7 +167,7 @@ def test_band_limits_are_anchored_at_the_band_edge_and_open_only_at_the_top() ->
 
 def test_points_carry_the_median_speedup_over_the_baseline() -> None:
     frame = summary_for([("heat_3d", plotting.DEFAULT_BASELINE, 10.0), ("heat_3d", "dace_cpu", 5.0)])
-    points: List[speedup.Point] = speedup.speedup_points(frame)
+    points: list[speedup.Point] = speedup.speedup_points(frame)
     assert len(points) == 1, "the baseline is the divisor, not a series"
     assert points[0].framework == "dace_cpu"
     assert points[0].ratio == pytest.approx(2.0)
@@ -193,7 +232,7 @@ def test_a_crash_is_kept_out_of_the_limits_that_measured_points_set() -> None:
 
 def rendered_panels(monkeypatch: pytest.MonkeyPatch, points, kernels, output: str) -> int:
     """Render the banded figure and count the panels ON THE FIGURE, not in the code path."""
-    seen: List[int] = []
+    seen: list[int] = []
     original = plotting.save_figure
 
     def spy(path: str, fig) -> str:
@@ -266,7 +305,7 @@ def test_the_mini_variant_prunes_the_ticks_that_do_not_survive_embed_size(
     """At 3.4in wide a real kernel name and a y-tick number are both an unreadable smear, so the x
     ticks are ``K1..Kn`` and the y numbers are gone -- the band title carries the order of magnitude
     instead. What is left still has to say which axis it is."""
-    seen: List[Tuple[List[str], List[str], List[str]]] = []
+    seen: list[tuple[list[str], list[str], list[str]]] = []
     original = plotting.save_figure
 
     def spy(path: str, fig) -> str:
@@ -289,8 +328,6 @@ def test_the_mini_variant_prunes_the_ticks_that_do_not_survive_embed_size(
 def test_every_output_is_written_per_machine(tmp_path: pathlib.Path) -> None:
     """End to end over a real results DB, through the shipped reader: the banded PDF plus the two
     SVG variants, each carrying the machine label (two nodes may never share a figure)."""
-    from tests.test_inference_plots import build_results_db
-
     db = tmp_path / "results.db"
     build_results_db(db, shift=0.5)  # dace_cpu at half the numpy runtime -> a clean 2x
     # This fixture is npbench-shaped -- numpy is the reference and dace_cpu the candidate -- so it
@@ -313,8 +350,6 @@ def test_the_figure_writes_the_costs_and_the_interval_behind_every_ratio(tmp_pat
     carries the milliseconds each ratio was taken over and the interval around it, and it is what a
     rerun is diffed on -- the image moves whenever the frame does."""
     import pandas as pd
-
-    from tests.test_inference_plots import build_results_db
 
     db = tmp_path / "results.db"
     build_results_db(db, shift=0.5)
@@ -607,7 +642,7 @@ def test_neither_the_square_nor_the_banded_figure_draws_an_axes_legend(
     import matplotlib.pyplot as plt
     from matplotlib.figure import Figure
 
-    captured: List[Figure] = []
+    captured: list[Figure] = []
 
     def spy(path: str, fig: Figure) -> str:
         captured.append(fig)

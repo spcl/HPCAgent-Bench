@@ -10,7 +10,6 @@ interval columns, its x values.
 
 from collections.abc import Sequence
 
-import numpy as np
 import pandas as pd  # pyright: ignore[reportMissingTypeStubs] -- pandas ships none
 
 #: Paper and rule text this module enforces, for a caption or an error message.
@@ -92,47 +91,3 @@ def require_interval(table: pd.DataFrame, point: str, low: str, high: str, deter
     if len(inverted):
         raise RuleViolation(5, f"interval ends are the wrong way round on rows {list(inverted)[:5]}")
     return table
-
-
-def separated(low_a: float, high_a: float, low_b: float, high_b: float) -> bool:
-    """Rule 7. Do two intervals fail to overlap -- the weakest sound statement a figure can make.
-
-    Non-overlap implies a difference at the stated level; OVERLAP IMPLIES NOTHING, which is the
-    half readers get wrong. A figure that needs to claim a difference from overlapping intervals
-    needs a paired test instead (:func:`hpcagent_bench.stats.summary.paired_change`), not a
-    narrower-looking pair of bars.
-    """
-    if not all(np.isfinite([low_a, high_a, low_b, high_b])):
-        return False
-    return high_a < low_b or high_b < low_a
-
-
-def require_ordered_x(values: Sequence[float], connected: bool) -> None:
-    """Rule 12. Points may be joined by a line only where the x axis has a meaningful order.
-
-    ``connected`` is what the figure intends to draw. A line asserts two things -- that the order
-    is real and that the space between the points is interpolable -- so an axis of CONDITIONS
-    (control, treatment) or of NAMES (kernels) may never carry one: the line would read as a trend
-    across a gap that does not exist. Draw the difference instead, which is what
-    :func:`difference_segment` builds.
-    """
-    if not connected:
-        return
-    x = np.asarray(values, dtype=np.float64)
-    if x.size < 2:
-        raise RuleViolation(12, "a line through fewer than two points indicates no trend")
-    if not np.all(np.diff(x) > 0):
-        raise RuleViolation(12, f"x values {x.tolist()[:6]} are not strictly increasing, so a line is not a trend")
-
-
-def difference_segment(before: float, after: float, at: float) -> tuple[tuple[float, float], tuple[float, float]]:
-    """Rule 12. The control-to-treatment link as a DIFFERENCE: one vertical segment at one x.
-
-    Two conditions are not a trend and their axis has no interpolable interior, so the pair is
-    drawn at a single x position with the segment spanning the two values. The length of the
-    segment IS the effect, read against the value axis, and there is no horizontal run for the eye
-    to extrapolate along.
-
-    Returns ``((x0, x1), (y0, y1))``, ready for ``ax.plot``.
-    """
-    return (at, at), (before, after)

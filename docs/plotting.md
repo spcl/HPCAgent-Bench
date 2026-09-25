@@ -10,8 +10,8 @@ distribution grid): [measurement_statistics.md](measurement_statistics.md). Toke
 Every figure in the HPCAgent-Bench papers follows these rules. A figure that breaks one is wrong.
 
 1. **Library, not script.** Every figure is a function in `hpcagent_bench.stats` (`figures.efficacy`,
-   `figures.per_kernel`, `figures.signed`, `figures.optimizers`, `figures.scaling`,
-   `figures.kernel_comparison`, `summary`, `palette`, `style`). `statistics/plot_*.py` only parse
+   `figures.per_kernel`, `figures.signed`, `figures.scaling`, `figures.transfer`,
+   `figures.cost_weighting`, `summary`, `palette`, `style`). `statistics/plot_*.py` only parse
    arguments. A missing capability goes into the library with a test, never into a script or a paper
    repository.
 2. **Speedup axis = log2 of the ratio** (`summary.log2_change`): 2x at +1, 0.5x at -1, 0 = no change,
@@ -38,7 +38,7 @@ Every figure in the HPCAgent-Bench papers follows these rules. A figure that bre
    - **Statistics** (a median line, a fit, a reference) are not entities: they use `style`'s neutral
      inks and statistic inks, never a model or treatment colour. No figure carries a hex literal.
    - Standalone optimizers (DaCe, CPF as a compiler, Pluto, PPCG) keep `palette.marker` shapes in
-     optimizer-row figures, where the optimizer is the entity.
+     the compiler figures, where the optimizer is the entity.
 5. **Efficacy figure** (`plot_score_change.py`, dot rows only). One row of panels, each an
    intervention against its control; rows: speedup (log2, over each kernel's own baseline), solved
    rate (%, no interval: a census), billed token cost. The x axis groups by delivery (C | Fortran,
@@ -137,18 +137,11 @@ tokens). A predicate over both columns at once keeps neither record type.
 | script | figure | library |
 |---|---|---|
 | `plot_score_change.py` | efficacy: speedup, tasks completed and token cost per comparison | `figures.efficacy.figure_dot_row` |
-| `plot_optimizer_row.py` | one row of 1-D panels, speedup only, LLM arms beside compilers over one roster | `figures.optimizers.figure_optimizer_row` |
 | `plot_llr40_compilers.py` | llr-focus40 per kernel: canon columns, Pluto, PPCG-HIP, optional CPF arms | `figures.signed.llr40_two_row_figure` |
-| `plot_kernel_comparison.py` | llr-focus40 per kernel: DaCe canon CPU and every complete agent arm | `figures.kernel_comparison` + `per_kernel` |
-| `plot_per_kernel.py` | one selection's per-kernel speedup and tokens (`--style ci\|box`, `--layout separate\|stacked`) | `figures.per_kernel.figure_panels` |
-| `plot_repo_vs_kernel.py` | one pair's per-kernel ratio, speedup over tokens | `figures.per_kernel` |
 | `plot_arm_summary.py` | per-arm geomean speedup and median spend, one slot per language | `stats.summary`, `palette` |
-| `plot_tokens.py` | tokens per kernel, per model | `population.kernel_tokens` |
-| `plot_single_shot_score.py` | blind arm funnel: reached, correct, faster | `palette`, `style` |
 | `plot_scaling.py` | distributed track: eta(P), sigma(P), per-kernel, per-arm summary | `figures.scaling` |
 | `plot_transfer.py` | MI300A -> GH200 transfer: geomean strips and per-answer scatter, CPU over GPU | `figures.transfer` |
 | `plot_canon_speedup.py` | median speedup per framework from one canon sweep (`--db`) | `stats.canon` |
-| `plot_parallelism.py` | SDFG parallelism taxonomy per DaCe column (`--db`) | `metrics.parallelism` |
 | `plot_speedup.py`, `plot_results.py` | corpus figures from the results DB | see [measurement_statistics.md](measurement_statistics.md) |
 
 `table_solve_rate.py` writes the solve-rate LaTeX table that goes beside the efficacy figure.
@@ -159,10 +152,6 @@ Quick looks at one campaign:
 ```bash
 python statistics/plot_arm_summary.py data/observations.csv --experiment llr40v11 \
     --out figures/arm.pdf --table data/arm.csv
-python statistics/plot_tokens.py data/observations.csv --experiment llr40v11 \
-    --out figures/tokens.pdf --table data/tokens.csv
-python statistics/plot_per_kernel.py data/observations.csv --experiment llr40v11 \
-    --style ci --layout stacked --out figures/per-kernel.pdf --table data/per-kernel.csv
 ```
 
 ## The paper figures, end to end
@@ -227,38 +216,7 @@ python3 statistics/plot_llr40_compilers.py \
 - When both DaCe device columns appear, each falls back to its `frameworks` name, which carries the
   device (`signed.distinct_canon_labels`).
 
-### 2. Optimizer row, speedup only
-
-![optimizer row](figures/example-optimizer-row.png)
-
-```bash
-python3 statistics/plot_optimizer_row.py --canon-db "$CANON_DB" \
-    --panel "title=Loop Reasoning CPU (LLR);observations=$AR/experiments/llr-cpu/data/llr-cpu.csv;arms=cpf-llr-focus40-{model}-c;compilers=dace_cpu_canonicalize,pluto;baseline=numba;roster=roster-llr-focus40.txt" \
-    --panel "title=Loop Reasoning GPU (LLR);observations=$AR/experiments/llr-gpu/data/llr-gpu.csv;arms=gpu-llr-focus40-{model}-hip;compilers=dace_gpu_canonicalize,ppcg_hip;baseline=numba;roster=roster-llr-focus40.txt" \
-    --panel "title=Repository Formulation;observations=$AR/experiments/git-scicomp/data/git-scicomp.csv;arms=git-scicomp-{model}-repo;baseline=c-autopar;repeats=median" \
-    --out figures/optimizer-row.pdf
-```
-
-| `--panel` key | meaning |
-|---|---|
-| `title` | panel subtitle (required) |
-| `observations` | observations file with the LLM arms; omit for a compilers-only panel |
-| `arms` | arm template with `{model}` |
-| `models` | comma list of model tags; default `--models` |
-| `compilers` | canon columns; needs `--canon-db` and `roster` |
-| `baseline` | denominator column (`numba`, `c-autopar`), printed as "1x = ..." |
-| `baseline_name` | override that note's text |
-| `repeats` | `latest` (default) or `median` (designed repeats) |
-| `roster` | roster file; without it an arm is scored over the kernels it was served |
-
-One mark per optimizer: geomean speedup over the panel's baseline with its 95% log-t interval. LLM
-arms and compilers are scored over the same roster, an unanswered kernel at 1x for both; the script
-prints and the CSV carries `solved` and `kernels` per mark. Panels share one log2 axis but not one
-denominator, so each names its own baseline. To add an optimizer, give it a `SHORT_NAMES` entry in
-`stats/figures/optimizers.py` and register it under `optimizers` (shape) and `frameworks` (colour,
-name) in `registry.yaml`.
-
-### 3. Efficacy figure (`efficacy-packets-and-scope`)
+### 2. Efficacy figure (`efficacy-packets-and-scope`)
 
 ![efficacy packets and scope](figures/example-efficacy-packets-and-scope.png)
 
@@ -418,7 +376,8 @@ plotstyle.apply()                       # before importing pyplot
 import matplotlib.pyplot as plt
 
 models = sorted(frame.model.unique())
-hues, shapes = palette.model_colors(models), palette.model_markers(models)
+hues = {model: palette.model_color(model) for model in models}
+shapes = palette.model_markers(models)
 fig, ax = plt.subplots(figsize=(8.4, 5.2))
 for model in models:
     part = frame[frame.model == model]

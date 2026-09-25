@@ -211,10 +211,6 @@ def retyped(config: FigureConfig, **sizes: float) -> FigureConfig:
     return dataclasses.replace(config, type_=dataclasses.replace(config.type_, **sizes))
 
 
-#: Both axes here are always a log-space Student-t interval (SC15 Rules 5/7); named once so the
-#: emitted table's own column names agree with it.
-GEOMEAN_METHOD: str = "log-t"
-
 #: Columns of :func:`paired_kernels`' frame: everything a drawn interval or a significance test on
 #: one comparison needs, and the raw costs Rule 4 requires travel with it.
 PAIRED_COLUMNS: tuple[str, ...] = (
@@ -235,7 +231,7 @@ PAIRED_COLUMNS: tuple[str, ...] = (
 #: ones buys no speedup. ``served``: every kernel, a failure at 1x (the fallback reading: what a
 #: user who keeps the baseline on a wrong answer gets). Token cost is over every served kernel
 #: either way -- a failed episode still spent them.
-SPEEDUP_OVER: population.KernelPolicy = "solved"
+SPEEDUP_OVER: population.KernelPolicy = population.KernelPolicy.SOLVED
 
 
 def speedup_mask(paired: pd.DataFrame, over: population.KernelPolicy = SPEEDUP_OVER) -> "np.ndarray":
@@ -256,7 +252,7 @@ def solved_flags(answers: pd.DataFrame, kernels: pd.Index) -> "pd.Series | bool"
 def paired_kernels(
     control: pd.DataFrame,
     treated: pd.DataFrame,
-    repeats: population.RepeatPolicy = "latest",
+    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     card: cost_models.CostModel | None = None,
 ) -> pd.DataFrame:
     """One row per kernel BOTH sides cover on speedup; its tokens are NaN where either side has no
@@ -343,7 +339,7 @@ class Series:
 def reduce_pair(
     control: pd.DataFrame,
     treated: pd.DataFrame,
-    repeats: population.RepeatPolicy = "latest",
+    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     over: population.KernelPolicy = SPEEDUP_OVER,
     card: cost_models.CostModel | None = None,
 ) -> Series | None:
@@ -438,7 +434,7 @@ def arm_point(
 def arm_points(
     control: pd.DataFrame,
     treated: pd.DataFrame,
-    repeats: population.RepeatPolicy = "latest",
+    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     over: population.KernelPolicy = SPEEDUP_OVER,
     card: cost_models.CostModel | None = None,
 ) -> tuple[ArmPoint, ArmPoint] | None:
@@ -954,7 +950,7 @@ class ArmRow:
 
 def arm_rows(
     frame: pd.DataFrame,
-    repeats: population.RepeatPolicy = "latest",
+    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     channels: str = "pair-packet",
     over: population.KernelPolicy = SPEEDUP_OVER,
     card: cost_models.CostModel | None = None,
@@ -1598,7 +1594,7 @@ def token_axis(ax: Axes, rows: Sequence[ArmRow], config: FigureConfig) -> None:
     style.value_axis(ax, "y", log_base=10.0)
     ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=config.token_subs, numticks=40))
     ax.yaxis.set_major_formatter(FuncFormatter(style.decade_label))
-    minor_grid(ax, "y", "token", config)
+    minor_grid(ax, "y", style.MinorKind.TOKEN, config)
 
 
 def ratio_axis(ax: Axes, reference_name: str, config: FigureConfig) -> None:
@@ -1616,7 +1612,7 @@ def ratio_axis(ax: Axes, reference_name: str, config: FigureConfig) -> None:
         )  # fmt: skip
     style.value_axis(ax, "y")
     ax.yaxis.set_major_formatter(FuncFormatter(style.log2_ratio_tick))
-    minor_grid(ax, "y", "log2", config)
+    minor_grid(ax, "y", style.MinorKind.LOG2, config)
 
 
 def ratio_ticks(ax: Axes, span: Sequence[float], config: FigureConfig) -> None:
@@ -1683,7 +1679,7 @@ def draw_success_row(
     # The percent sign is in the row label: "100%" on every tick widened the left chrome of the
     # whole figure past what the speedup row needs.
     ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{100.0 * value:.0f}"))
-    minor_grid(ax, "y", "count", config)
+    minor_grid(ax, "y", style.MinorKind.COUNT, config)
     ax.yaxis.set_minor_locator(MultipleLocator(0.25))
     # The dashed rule marks 100%; the headroom above it keeps the rule off the frame.
     ax.axhline(1.0, color=style.MUTED, linestyle="--", linewidth=0.6, zorder=1)
@@ -1747,7 +1743,7 @@ def figure_arm_dots(
     treatment: str,
     out: pathlib.Path,
     control_name: str = "",
-    repeats: population.RepeatPolicy = "latest",
+    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     config: FigureConfig = DEFAULT_CONFIG,
     channels: str = "pair-packet",
     measures: Sequence[str] = MEASURES,
@@ -2106,18 +2102,31 @@ def with_comparators(columns: Sequence[DotColumn], comparators: Sequence[Sequenc
     return placed
 
 
+#: Short category names for the X ticks. The legend carries the full name; a tick has about 30pt at
+#: five categories across a column, and "Qwen3.8" beside "GPT-OSS" already overprinted there.
+SHORT_NAMES: dict[str, str] = {
+    "qwen38": "Qwen",
+    "oss120b": "OSS",
+    "kimi27sglang": "Kimi",
+    "glm53": "GLM",
+    "dace_cpu_canonicalize": "DaCe",
+    "dace_gpu_canonicalize": "DaCe",
+    "dace_cpu": "DaCe",
+    "pluto": "Pluto",
+    "ppcg_hip": "PPCG",
+}
+
+
 def nth_list(values: Sequence[Sequence[Comparator]], index: int) -> Sequence[Comparator]:
     """``values[index]``, or none past the end: the comparator list may stop short of the row."""
     return values[index] if index < len(values) else ()
 
 
 def comparator_short_name(name: str) -> str:
-    """A comparator's key text: the optimizer row's short name where it has one (``PPCG``; the
-    caption says it is CUDA through hipify), else its ``frameworks`` name."""
-    from hpcagent_bench.stats.figures import optimizers  # optimizers imports this module
-
+    """A comparator's key text: its short name where it has one (``PPCG``; the caption says it is
+    CUDA through hipify), else its ``frameworks`` name."""
     resolved = experiment_tags.canonical("frameworks", name)
-    return optimizers.SHORT_NAMES.get(resolved, experiment_tags.framework_name(resolved))
+    return SHORT_NAMES.get(resolved, experiment_tags.framework_name(resolved))
 
 
 def comparator_legend_marks(rows: Sequence[ArmRow], config: FigureConfig) -> list[Line2D]:
@@ -2269,7 +2278,7 @@ def fit_legend(
 def figure_dot_row(
     panels: Sequence[Panel],
     out: pathlib.Path,
-    repeats: population.RepeatPolicy | Sequence[population.RepeatPolicy] = "latest",
+    repeats: population.RepeatPolicy | Sequence[population.RepeatPolicy] = population.RepeatPolicy.LATEST,
     config: FigureConfig = PAPER_CONFIG,
     channels: str = "model-packet",
     measures: Sequence[str] = MEASURES,
@@ -2471,7 +2480,7 @@ def fit_column_gaps(fig: Figure, axes: np.ndarray) -> None:
 
 def pairs_table(
     frame: pd.DataFrame,
-    repeats: population.RepeatPolicy = "latest",
+    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     over: population.KernelPolicy = SPEEDUP_OVER,
     card: cost_models.CostModel | None = None,
 ) -> pd.DataFrame:

@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``model_of`` is a CONSUMED function, and deleting it breaks four figures at import time.
+"""``model_of`` is a CONSUMED function, and deleting it breaks two figures at import time.
 
 THE FAILURE THIS PREVENTS. A consolidation commit deleted this function while
 ``statistics/plot_tokens.py``, ``plot_score_change.py``, ``plot_arm_summary.py`` and
@@ -20,10 +20,8 @@ from hpcagent_bench import experiment_tags
 
 #: The scripts that call it. A figure that cannot resolve its model draws every arm as one series.
 CALLERS = (
-    "statistics/plot_tokens.py",
     "statistics/plot_score_change.py",
     "statistics/plot_arm_summary.py",
-    "statistics/plot_single_shot_score.py",
 )
 
 
