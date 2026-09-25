@@ -21,7 +21,9 @@
 #   VIEW=<dir> TAG=llr-focus40 TARGET=gpu sbatch prerender_cpf.sbatch
 #   VIEW=<dir> TAG=llr-focus40 CPF_POOL=1 sbatch prerender_cpf.sbatch   # one rank, per-core kernel pool
 #
-# DACE_TREE must be a dace git checkout: every key holds its HEAD commit, and a commit that moves
+# dace is the image's /opt/dace, moved to HPCAGENT_BENCH_DACE_REF (default: the tip of
+# spcl/dace@extended) by containers/images/dace_refresh.sh; DACE_TREE names a dace git checkout to
+# render with instead, used as it is. Every key holds the dace HEAD commit, and a commit that moves
 # during the run withdraws what the run rendered. OPT may name a frozen snapshot.
 #
 # CONTAINER, NOT HOST: nothing runs outside a container. The render step runs INSIDE the agent
@@ -60,8 +62,14 @@ if [[ "${1:-}" == inner || "${1:-}" == inner-pool ]]; then
     MODE=$1
     shift
     CACHE=${1:?inner: cache}; VIEW_ARG=${2:?inner: view}; KERNELS_ARG=${3:?inner: kernels}
-    TARGET_ARG=${4:?inner: target}; DACE_TREE_ARG=${5:?inner: dace tree}; OPT_ARG=${6:?inner: opt}
+    TARGET_ARG=${4:?inner: target}; DACE_TREE_ARG=${5-}; OPT_ARG=${6:?inner: opt}
     WORKERS_ARG=${7:-1}
+    # An empty dace tree is the image's own dace at the job's commit (HPCAGENT_BENCH_DACE_REF, which
+    # enroot_forward.sh carries in).
+    if [[ -z "${DACE_TREE_ARG}" ]]; then
+        "${OPT_ARG}/containers/images/dace_refresh.sh" || { echo "prerender: dace refresh failed" >&2; exit 1; }
+        DACE_TREE_ARG="${DACE_DIR:-/opt/dace}"
+    fi
     export DACE_TREE="${DACE_TREE_ARG}"
     . "${OPT_ARG}/scripts/repo_env.sh"
     export PYTHONHASHSEED=0  # dace codegen is iteration-order sensitive; an unpinned seed moves text
@@ -94,7 +102,13 @@ fi
 # --- outer: the batch host, never inside a container -------------------------------------------
 SCRATCH_ROOT="${SCRATCH:?set SCRATCH}"
 OPT=${OPT:-${SCRATCH_ROOT}/hpcagent-bench}
-export DACE_TREE=${DACE_TREE:-${SCRATCH_ROOT}/dace}
+DACE_TREE=${DACE_TREE:-}
+# One dace commit for every rank: each rank refreshes its own container, so the branch is resolved
+# to a sha once, here.
+if [[ -z "${DACE_TREE}" ]]; then
+    HPCAGENT_BENCH_DACE_REF="$("${OPT}/containers/images/dace_refresh.sh" --resolve)"
+    export HPCAGENT_BENCH_DACE_REF
+fi
 # scripts/cache_env.sh is the one place HPCAGENT_BENCH_CPF_PRERENDER_DIR is defined, so a submitter
 # that never sources it still lands the cache under the same root every submit script's VIEW default
 # points into (experiments/submit-cpf-llr40.sh, submit-scicomp-dc.sh).
@@ -145,7 +159,11 @@ fi
 echo "prerender ${TARGET}: ${#ordered[@]} kernels, ${ranks} ranks x ${cores} cores, ${inner_mode} x ${workers}"
 echo "  cache ${CPF_CACHE}"
 echo "  view  ${VIEW}"
-echo "  dace  ${DACE_TREE} ($(git -C "${DACE_TREE}" rev-parse HEAD 2>/dev/null || echo 'no checkout'))"
+if [[ -n "${DACE_TREE}" ]]; then
+    echo "  dace  ${DACE_TREE} ($(git -C "${DACE_TREE}" rev-parse HEAD 2>/dev/null || echo 'no checkout'))"
+else
+    echo "  dace  the image's, at ${HPCAGENT_BENCH_DACE_REF}"
+fi
 
 #: Unset, scripts/cscs/container_runtime.sh decides, so this returns to pyxis by itself the day
 #: CSCS's enroot.conf is fixed -- same rule as canon_column.sh's CANON_LAUNCH.

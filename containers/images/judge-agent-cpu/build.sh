@@ -5,8 +5,9 @@
 #   containers/images/judge-agent-cpu/build.sh
 #   BUILD_TARGETS=agent .../build.sh
 #
-# Overrides: BUILD_TARGETS, OUTPUT_SQSH (single target only), BASE_IMAGE, DACE_COMMIT, CE_DIR,
-# BASE_CACHE, EXTRA_BUILD_ARGS (bare KEY=VALUE pairs, e.g. "GCC_PPA_VERSION=<newer snapshot>").
+# Overrides: BUILD_TARGETS, OUTPUT_SQSH (single target only), BASE_IMAGE, HPCAGENT_BENCH_DACE_REF,
+# CE_DIR, BASE_CACHE, EXTRA_BUILD_ARGS (bare KEY=VALUE pairs, e.g.
+# "GCC_PPA_VERSION=<newer snapshot>").
 set -euo pipefail
 
 ulimit -c 0
@@ -37,8 +38,10 @@ ce_podman_env
 BASE_CACHE="${BASE_CACHE:-${SCRATCH:?}/base-images-$(uname -m)}"
 ce_cache_base_image
 
-DACE_COMMIT="${DACE_COMMIT:-$(git ls-remote https://github.com/spcl/dace.git refs/heads/extended | cut -f1)}"
-[[ -n "${DACE_COMMIT}" ]] || { echo "could not resolve spcl/dace@extended" >&2; exit 2; }
+# The release's dace pin (scripts/dace_pin.env); HPCAGENT_BENCH_DACE_REF=extended bakes the tip.
+DACE_COMMIT="$(HPCAGENT_BENCH_DACE_REF="${HPCAGENT_BENCH_DACE_REF:-pinned}" \
+    "${SCRIPT_DIR}/../dace_refresh.sh" --resolve)"
+[[ "${DACE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo "could not resolve spcl/dace@${DACE_COMMIT}" >&2; exit 2; }
 printf 'dace @ %s\n' "${DACE_COMMIT}"
 
 cd "${REPO_ROOT}"

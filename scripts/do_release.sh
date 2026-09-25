@@ -16,7 +16,8 @@
 # The build input is `git archive HEAD` (tracked, committed files only), exported to a local temp
 # dir, so untracked build products never reach the wheel. build/twine and the smoke venv are fresh
 # venvs under that temp dir; the shared repo venv is never touched. The smoke installs the wheel
-# with its dependencies from PyPI, so it needs network access.
+# with its dependencies from PyPI and dace from GitHub (scripts/install_dace.sh), so it needs
+# network access.
 #
 # Credentials for --upload come from the environment (TWINE_USERNAME=__token__ plus
 # TWINE_PASSWORD=<api token>) or ~/.pypirc; this script never asks for or stores one.
@@ -133,6 +134,8 @@ if [ "${SMOKE}" -eq 1 ]; then
   SPY="${WORK}/smoke/bin/python"
   "${SPY}" -m pip install --quiet --upgrade pip
   "${SPY}" -m pip install --quiet "${WHEEL}" pytest
+  # dace the one documented way, so the smoke runs what a user installs next to the wheel.
+  PYTHON="${SPY}" "${REPO_ROOT}/scripts/install_dace.sh"
   mkdir -p "${WORK}/smoke-tests"
   # Pure tests that need the installed package data (every manifest) and nothing from the repo.
   for t in test_output_args.py test_perf_protocol.py test_distributions.py; do
@@ -150,6 +153,8 @@ version, venv = sys.argv[1], sys.argv[2]
 for mod in (hpcagent_bench, numpyto_c, numpyto_common):
     assert mod.__file__.startswith(venv), f"{mod.__name__} imported from {mod.__file__}, not the wheel"
 assert hpcagent_bench.__version__ == version, (hpcagent_bench.__version__, version)
+from hpcagent_bench.harness import preflight
+assert not preflight.check_dace_pipeline(), preflight.check_dace_pipeline()
 
 SOURCE = """#include <stdint.h>
 void scaled_add_fp64(const double *restrict x, double *restrict y, const int64_t LEN_1D, const double alpha,

@@ -1124,13 +1124,11 @@ assert got == want, got"; \
     chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
 
 # ---------------------------------------------------------------------------------------------
-# 12. DaCe -- the TIP of spcl/dace@extended, never a pin.
-#
-# `git clone --branch extended` looks like it says that, but the layer cache keys on the command
-# STRING, which never changes: every later rebuild reuses the first clone and the image quietly
-# ages into a pin nothing records. One tree ended up 10,748 commits behind that way, reporting
-# frontend refusals the branch had already fixed. So the builder resolves the tip and passes it
-# in: DACE_COMMIT changes exactly when extended moves, which is what busts this layer.
+# 12. DaCe -- the spcl/dace@extended commit build.sh resolves and passes in (the release pin,
+# scripts/dace_pin.env). Never `git clone --branch extended`: the layer cache keys on the command
+# STRING, which never changes, so every later rebuild would reuse the first clone and the image
+# would age into a pin nothing records. DACE_COMMIT is part of the key, so the layer rebuilds
+# exactly when the commit changes. Jobs move the baked dace to the latest extended at start.
 ARG DACE_COMMIT
 RUN set -eux; \
     test -n "${DACE_COMMIT}" || { echo "DACE_COMMIT build-arg is required (build.sh resolves it)" >&2; exit 2; }; \

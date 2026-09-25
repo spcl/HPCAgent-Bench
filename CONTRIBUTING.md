@@ -17,6 +17,7 @@ Python 3.12 or newer. Dev dependencies are the PEP 735 group `dev` (pip 25.1 or 
 python -m venv .venv && . .venv/bin/activate
 pip install --upgrade "pip>=25.1"
 pip install --group dev -e ".[cpu]"        # .[nvidia] / .[amd] on a GPU host
+scripts/install_dace.sh                    # dace: the pinned spcl/dace@extended commit
 pre-commit install
 ```
 

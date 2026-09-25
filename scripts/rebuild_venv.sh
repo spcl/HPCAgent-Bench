@@ -37,21 +37,18 @@ CORE=(numpy scipy pandas matplotlib ml_dtypes pyyaml jsonschema sympy blake3 sql
 echo "=== tier 1: core + format gates ==="
 "${VENV}/bin/python3" -m pip install "${CORE[@]}"
 
-# Tier 1b -- dace itself, EDITABLE, with the two extras this box can satisfy.
-# dace was never pip-installed here (it resolved off PYTHONPATH), so nothing ever resolved its
-# dependency list and the venv silently lacked fparser, dill and pytest-xdist -- which loses the
-# Fortran frontend and makes a sharded suite run die at argument parsing. An editable install lets
-# pip read the pyproject that already declares them, instead of a copy here that drifts. It does not
-# pin or shadow the tree: dace has no build step, and setuptools appends its finder AFTER PathFinder
-# in sys.meta_path, so PYTHONPATH still wins and this only supplies a fallback and the metadata.
-# Two extras are excluded on purpose: gpu names CUDA wheels and this box is AMD, and mpi installs an
-# mpi4py with no MPI to load here -- which turns 12 honest skips into 12 failures about nothing.
-DACE_TREE="${DACE_TREE:-${SCRATCH}/dace}"
-if [[ -f "${DACE_TREE}/pyproject.toml" ]]; then
-    echo "=== tier 1b: dace editable (testing + fastgraph extras) ==="
+# Tier 1b -- dace, with the two extras this box can satisfy: the tip of spcl/dace@extended through
+# scripts/install_dace.sh (HPCAGENT_BENCH_DACE_REF pins another ref), or, when DACE_TREE names a
+# checkout, that tree editable and exactly as it is. Installed rather than put on PYTHONPATH so pip
+# resolves dace's own dependency list (fparser, dill, pytest-xdist). Two extras are excluded on
+# purpose: gpu names CUDA wheels and this box is AMD, and mpi installs an mpi4py with no MPI to load
+# here -- which turns 12 honest skips into 12 failures about nothing.
+if [[ -n "${DACE_TREE:-}" ]]; then
+    echo "=== tier 1b: dace editable from ${DACE_TREE} (testing + fastgraph extras) ==="
     "${VENV}/bin/python3" -m pip install -e "${DACE_TREE}[testing,fastgraph]"
 else
-    echo "=== tier 1b SKIPPED: no dace tree at ${DACE_TREE} ==="
+    echo "=== tier 1b: dace, spcl/dace@${HPCAGENT_BENCH_DACE_REF:-extended} (testing + fastgraph extras) ==="
+    PYTHON="${VENV}/bin/python3" "${REPO}/scripts/install_dace.sh" testing,fastgraph
 fi
 
 # Tier 2 -- heavy/optional. Installed one at a time so one missing 3.14 wheel does not abort

@@ -98,13 +98,19 @@ mkdir -p "${DACE_default_build_folder}"
 RUNDIR="${REPO}/results/loop_level_reasoning-alps-${SLURM_JOB_ID:-local}"
 mkdir -p "${RUNDIR}"
 
+# dace: every step refreshes the image's /opt/dace to ONE commit, resolved here
+# (containers/images/dace_refresh.sh; a no-op on bare metal). Its log goes to stderr.
+DACE_REFRESH="${REPO}/containers/images/dace_refresh.sh"
+HPCAGENT_BENCH_DACE_REF="$("${DACE_REFRESH}" --resolve)"
+export HPCAGENT_BENCH_DACE_REF
+
 # Columns, dace pipeline and autopar capability, checked in the LIBRARY
 # (hpcagent_bench/harness/preflight.py) -- the SAME call scripts/submit_deterministic.sbatch
 # makes, so the two cannot drift. Run INSIDE the image: the login node's python is not the one
 # that will run the sweep, and the core count that matters is the compute node's. Report goes to
 # stderr, the thread-count exports to stdout, which is what is eval'd here. Sound only because
 # every rank is --exclusive on its own node, so the srun steps below inherit that affinity.
-eval "$(srun "${CE[@]}" --nodes=1 --ntasks=1 \
+eval "$(srun "${CE[@]}" --nodes=1 --ntasks=1 bash -c '"$0" >&2 && exec "$@"' "${DACE_REFRESH}" \
     hpcagent-bench preflight --frameworks "${FRAMEWORKS}" --print-env)"
 
 echo "ranks=${RANKS} frameworks=${FRAMEWORKS} bench=${BENCH} preset=${PRESET} cores=${OMP_NUM_THREADS}"
@@ -117,9 +123,10 @@ echo "edf=${EDF} rundir=${RUNDIR}"
 # run-framework forks EACH kernel, which is what contains a crashing or hanging kernel.
 srun "${CE[@]}" --ntasks="${RANKS}" --ntasks-per-node=1 --cpu-bind=none bash -c '
 set -euo pipefail
+"'"${DACE_REFRESH}"'" >&2
 
-# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
-# SUBMITTER's core limit, so the floor has to be set here.
+# A core dump lands in the CWD of the crashing process (the checkout) and Slurm propagates the
+# core limit of the SUBMITTER, so the floor has to be set here.
 ulimit -c 0
 rank="${SLURM_PROCID:-0}"
 IFS="," read -r -a fws <<< "'"${FRAMEWORKS}"'"

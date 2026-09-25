@@ -130,6 +130,12 @@ export PYTHONHASHSEED=0
 export DACE_default_build_folder="${DACE_BUILD_ROOT:-${SCRATCH:-${REPO}}}/dacecache/${SLURM_JOB_ID:-local}"
 mkdir -p "${DACE_default_build_folder}"
 
+# dace: every step refreshes the image's /opt/dace to ONE commit, resolved here
+# (containers/images/dace_refresh.sh; a no-op on bare metal). Its log goes to stderr.
+DACE_REFRESH="${REPO}/containers/images/dace_refresh.sh"
+HPCAGENT_BENCH_DACE_REF="$("${DACE_REFRESH}" --resolve)"
+export HPCAGENT_BENCH_DACE_REF
+
 # Columns, dace pipeline and autopar capability -- all three checked in the LIBRARY
 # (hpcagent_bench/harness/preflight.py), so this script and its Alps sibling cannot drift and
 # neither hand-rolls a weaker copy of flags.probe_autopar. A column this job cannot run, or a
@@ -139,7 +145,7 @@ mkdir -p "${DACE_default_build_folder}"
 # bare login-side environment, so a preflight there would clear a toolchain that is not the one the
 # sweep uses. Sound only because the allocation is --exclusive and every node carries the same
 # RANKS_PER_NODE, so the sweep step inherits the identical affinity.
-eval "$(srun "${CE[@]}" --nodes=1 --ntasks=1 \
+eval "$(srun "${CE[@]}" --nodes=1 --ntasks=1 bash -c '"$0" >&2 && exec "$@"' "${DACE_REFRESH}" \
     "${HARNESS[@]}" preflight --frameworks "${FRAMEWORKS}" --ranks-per-node "${RANKS_PER_NODE}" --print-env)"
 
 # Results live in the REPO, never node-local or memory-backed: the DB must outlive the allocation
@@ -161,6 +167,7 @@ echo "ranks=${RANKS} (${RANKS_PER_NODE}/node) frameworks=${FRAMEWORKS} bench=${B
 BIND=$([[ "${RANKS_PER_NODE}" -gt 1 ]] && echo "--cpu-bind=cores" || echo "--cpu-bind=none")
 srun "${CE[@]}" --ntasks="${RANKS}" --ntasks-per-node="${RANKS_PER_NODE}" "${BIND}" bash -c '
 set -euo pipefail
+"'"${DACE_REFRESH}"'" >&2
 
 # The Beverin core_pattern is the machine-global core_%h_%p and a dump lands in the CWD of the
 # crashing process, littering the checkout with core_nid<node>_<pid> files on a filesystem whose

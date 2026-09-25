@@ -257,7 +257,7 @@ assert got == want, got"; \
     chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
 
 # ---------------------------------------------------------------------------------------------
-# 5. DaCe -- the TIP of spcl/dace@extended, resolved by build.sh and passed in, never a pin.
+# 5. DaCe -- the spcl/dace@extended commit build.sh resolves and passes in (the release pin).
 ARG DACE_COMMIT
 RUN set -eux; \
     test -n "${DACE_COMMIT}" || { echo "DACE_COMMIT build-arg is required (build.sh resolves it)" >&2; exit 2; }; \

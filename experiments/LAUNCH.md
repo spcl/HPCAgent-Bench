@@ -324,13 +324,14 @@ those files point at the promoted `.sqsh`.
 
 `canon_column.sh outer <column[,column2]> <out_root> <kernel1,kernel2,...> [preset] [opt]` is the
 per-node body `submit-canon-llr40.sh` wraps in `sbatch --wrap`; run it the same way for a narrow,
-ad-hoc rerun instead of resubmitting the whole sweep. `DACE_TREE` (default `$SCRATCH/dace`, or --
-with no `$SCRATCH` -- the `dace` checkout sibling to `HPCAGENT_BENCH_REPO`) and `opt` (the checkout
-`scripts/repo_env.sh` puts on the import path) both take a worktree, so a fix under test never touches the live sweep:
+ad-hoc rerun instead of resubmitting the whole sweep. Unset, `DACE_TREE` means the image's dace at
+the job's commit (`HPCAGENT_BENCH_DACE_REF`, [docs/configuration.md](../docs/configuration.md#dace));
+set, it names a dace worktree run as it is. `opt` (the checkout `scripts/repo_env.sh` puts on the
+import path) takes a worktree too, so a fix under test never touches the live sweep:
 
 ```bash
 cd $SCRATCH/hpcagent-bench/experiments
-OUT=$HPCAGENT_BENCH_RUNS_ROOT/canon/llr-focus40-rerun-20260922   # never a bare $SCRATCH path
+OUT=$HPCAGENT_BENCH_RUNS_ROOT/canon/llr-focus40-rerun-$(date +%Y%m%d)   # never a bare $SCRATCH path
 mkdir -p "$OUT"
 sbatch --parsable --no-requeue --nodes=1 --exclusive --mem=0 --gres=gpu:4 \
     --time=02:00:00 --job-name=canon-dace_gpu-rerun \

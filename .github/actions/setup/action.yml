@@ -174,9 +174,7 @@ runs:
         # A checkout, not a wheel: metrics/parallelism.py imports dace's own tests/corpus, which a
         # wheel does not ship. Submodules carry the runtime headers (moodycamel).
         set -euo pipefail
-        git clone --depth 1 --recurse-submodules --shallow-submodules --branch extended \
-          https://github.com/spcl/dace "${RUNNER_TEMP}/dace"
-        python -m pip install -e "${RUNNER_TEMP}/dace"
+        PYTHON=python scripts/install_dace.sh --editable "${RUNNER_TEMP}/dace"
 
     - name: Python deps (one resolution per job)
       shell: bash

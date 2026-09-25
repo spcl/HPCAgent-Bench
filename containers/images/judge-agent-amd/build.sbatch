@@ -12,12 +12,11 @@
 #
 #   IMAGE_DIR=containers/images/judge-agent-amd sbatch "${IMAGE_DIR}/build.sbatch"
 #
-# The PARTITION is a parameter: the directive below builds the mi300 images, and
+# The PARTITION is a parameter: SBATCH_PARTITION (site layer) builds the mi300 images, and
 # `sbatch --partition=mi200 --cpus-per-task=64 ...` builds the mi200 ones (gfx90a from
 # gpu_arch.env, spack target zen3 from cpu_target.env) to their own candidate names.
 #
 #SBATCH --job-name=build-judge-agent-amd
-#SBATCH --partition=mi300
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 # 96 PHYSICAL cores, not 192 logical: the node is Sockets=4 CoresPerSocket=24
