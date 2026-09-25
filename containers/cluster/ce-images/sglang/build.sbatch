@@ -28,14 +28,16 @@
 
 set -Eeuxo pipefail
 
-# The cluster's core_pattern dumps into the crashing process's CWD; Slurm propagates the
-# submitter's core limit, so the floor has to be set here to avoid littering the checkout.
+# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
+# process's CWD, littering the checkout with core_nid<node>_<pid> files on a filesystem whose
+# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 
 # Slurm SPOOLS the batch script, so BASH_SOURCE points at /var/spool/slurmd -- pass the directory
-# rather than deriving it. $PWD is right either way: --chdir sets the job's cwd, and without it
-# the cwd IS the submit dir. SLURM_SUBMIT_DIR is NOT -- it is where sbatch was RUN, which --chdir
-# does not change.
+# rather than deriving it. $PWD is right either way: --chdir sets the job's cwd, and without it the
+# cwd IS the submit dir. SLURM_SUBMIT_DIR is NOT -- it is where sbatch was RUN, which --chdir does
+# not change, so a --chdir invocation resolved to the wrong tree and died on the test below.
+# IMAGE_DIR, the same name all five builders take.
 IMAGE_DIR="${IMAGE_DIR:-$PWD}"
 test -x "${IMAGE_DIR}/build.sh" || { echo "no build.sh under IMAGE_DIR=${IMAGE_DIR}" >&2; exit 2; }
 
@@ -44,8 +46,9 @@ source "${IMAGE_DIR}/../images.env"
 export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/${INFERENCE_SGLANG_CANDIDATE}}"
 
 # Refuse to write over an image some EDF points a running job at: overwriting a mounted squashfs is
-# how a live arm starts reading a half-written inode table. Ask the EDFs rather than a hard-coded
-# name, since they are what a job actually resolves.
+# how a live arm starts reading a half-written inode table. This matters more here than anywhere --
+# 12 of the 18 v9 arms mount the SGLang image. Ask the EDFs rather than a hard-coded name, since
+# they are what a job actually resolves.
 edf_images() {
     grep -hoE '^[[:space:]]*image[[:space:]]*=[[:space:]]*"[^"]+"' "${HOME}/.edf"/*.toml 2>/dev/null \
       | sed -E 's/.*"(.*)"/\1/' | sed -E "s|\\\$\\{SCRATCH\\}|${SCRATCH:-}|g; s|\\\$SCRATCH|${SCRATCH:-}|g"

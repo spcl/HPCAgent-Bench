@@ -189,6 +189,12 @@ apptainer build hpcagent_bench-judge.sif containers/judge.def    # judge (harnes
 
 ### Serving jobs and gates (`cluster/ce-images/inference/`)
 
+The MI300A serving recipes (these jobs, the `sglang/` and `vllm/` Dockerfiles and EDF templates,
+`moe-configs/` and the patches) carry the reasoning for each tuned value in their comments; keep it
+when editing. vLLM stays at 0.23.0 for oss120b: 0.27.1 (branch `parked/vllm-0271`) served 2405
+tok/s against 3013 on one pinned node with the same probe, dtype, quantization, MoE and attention
+backends -- 25% slower, all of it in decode (steady state 2540 vs 3187; prefill within 0.3%).
+
 | file | does |
 |---|---|
 | `fetch_weights.sbatch` | downloads into `$HF_HOME` inside an image, restripes on the host, fails unless every large blob is wide-striped |

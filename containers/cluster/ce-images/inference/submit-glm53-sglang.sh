@@ -1,27 +1,39 @@
 #!/usr/bin/env bash
 # GLM-5.3 on MI300A via SGLang: the proven config, as a file rather than a shell line.
 #
-# Deviations from the kimi defaults in smoke-kimi-sglang.sbatch worth flagging:
-#   LANGUAGE_ONLY=0  --language-only selects the VLM encoder-disaggregation RECEIVER role here,
-#                    not "text only"; GlmMoeDsaForCausalLM is off its allowlist and raises at launch.
-#   MEM_FRACTION     a ceiling on weights+KV together on MI300A, not a KV reservation. 0.55 keeps
-#                    the heaviest (uneven) PP stage under the host OOM killer.
+# Everything here is a deviation from the kimi defaults in smoke-kimi-sglang.sbatch. The two that
+# are not obvious:
+#   LANGUAGE_ONLY=0  --language-only selects the VLM encoder-disaggregation RECEIVER role in this
+#                    SGLang, not "text only". GlmMoeDsaForCausalLM is off its allowlist and the
+#                    server raises at launch.
+#   MEM_FRACTION     a CEILING on weights+KV together on MI300A, not a KV reservation. The pool is
+#                    KV(f) = 443.4 * (f - 0.486) GB/rank at tp=4 pp=4; below 0.486 sglang refuses
+#                    outright, and 0.62 let the heaviest PP stage (node3, 206.1 GB -- the stages
+#                    are UNEVEN, size against the max) reach the host OOM killer. 0.55 measured
+#                    within 1.5% of the law.
 #
-# GLM-5.3-Flash cannot run here: its index_kpool forces IndexerKPool, CUDA-only. Plain 5.3 uses
-# the ROCm-capable DSA Indexer.
+# GLM-5.3-Flash cannot run here at all: its config.json carries index_kpool, which forces
+# IndexerKPool, which raises "kpool indexer is only supported on CUDA". Plain 5.3 uses the DSA
+# Indexer, which is ROCm-capable. Do not re-derive this.
 set -Eeuo pipefail
 
+# Slurm propagates the submitting shell's limits into the job, so one line here keeps a crashed
+# worker from dropping a core_nid<node>_<pid> file beside this script.
 ulimit -c 0
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-# DSA backend, overridable via SGLANG_EXTRA_ARGS: GlmMoeDsaForCausalLM ignores --attention-backend.
-# On gfx942 the option set is {tilelang, aiter}; tilelang is the proven default.
+# DSA backend, overridable via SGLANG_EXTRA_ARGS. GlmMoeDsaForCausalLM routes attention through
+# DeepSeek Sparse Attention, so --attention-backend never reaches it -- these two do. Of the nine
+# values SGLang accepts, seven are NVIDIA (flashmla*, flashinfer_*, fa3, trtllm); on gfx942 the
+# whole option set is {tilelang, aiter}. tilelang is the proven default.
 #
-# Nothing may be inserted between the assignments below and the sbatch they prefix: this is one
-# backslash-continued command, and a comment line in the middle would end it at the '#', silently
-# dropping every variable after it.
-# EDF pinned: an image whose sglang still reads weight_scale.format_ue8m0 as a plain attribute
-# dies ~31 min in loading GLM, after the weights are already on the nodes.
+# NOTHING may be inserted between the assignments below and the sbatch they prefix. They are one
+# backslash-continued command: a comment line in the middle ends it at the '#', and every variable
+# after that point is silently dropped (a lost MODEL_REPO serves KIMI under a GLM job name).
+# EDF, PINNED. smoke-kimi-sglang.sbatch defaults to hpcagent-bench-sglang-mi300-latest, and an image whose sglang
+# still reads weight_scale.format_ue8m0 as a plain attribute cannot load GLM at all: it dies
+# ~31 min in with AttributeError, after the weights are on the nodes. Overridable for testing a
+# candidate image.
 EDF="${EDF:-${HOME}/.edf/hpcagent-bench-sglang-mi300-latest.toml}" \
 MODEL_REPO=zai-org/GLM-5.3 \
 SERVED_MODEL=glm-5.3 \

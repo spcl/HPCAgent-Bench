@@ -3,14 +3,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Launch the kernels an SGLang serve reaches on the visible GPU and compare them with torch.
 
-verify_image.py only imports; importing sgl_kernel loads common_ops.so without launching a kernel,
-so an image built for another gfx arch would pass it and fail at the first forward. Run inside the
-image on a GPU node:
+verify_image.py only imports, and importing sgl_kernel loads common_ops.so without launching a
+kernel: an image whose device code targets another gfx arch passes it and fails at the first forward.
+Run inside the image on a GPU node:
 
     python3 sglang_kernel_launch_check.py
 
-Checks sgl_kernel.silu_and_mul and, when importable, the triton causal_conv1d_fn the GDN backend
-uses, each at bf16 and fp32 against an fp32 torch reference. Exit status is the failed-check count.
+Checks sgl_kernel.silu_and_mul and, when importable, the triton causal_conv1d_fn the GDN backend uses,
+each at bf16 and fp32 against an fp32 torch reference. Exit status is the number of failed checks;
+every failure names its op.
 """
 
 import dataclasses

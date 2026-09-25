@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# SGLang smoke for Kimi-K2.7 on gfx942: the official SGLang recipe (SGLANG_USE_AITER=1, fused
-# decode MLA off, TP=4 in-node x PP=2 across nodes, fp8_e4m3 KV, page 64), gated on long-context
-# accuracy before any throughput number counts -- short-context accuracy passes on broken kernels.
+# SGLang leg of the Kimi-on-gfx942 decision tree. vLLM 0.27.1 is exhausted: TRITON_MLA is
+# correct but prefills at ~300 tok/s (starves the campaign), aiter master-on prefills 3x and
+# runs the campaign shape at 78 tok/s but silently corrupts output past ~9k context. This runs
+# the official SGLang K2.7 gfx942 recipe -- SGLANG_USE_AITER=1,
+# fused decode MLA off, TP=4 in-node (AITER MLA needs heads%16==0) x PP=2 across 2 nodes,
+# fp8_e4m3 KV, page 64 -- and gates on the SAME long-context accuracy questions before any
+# throughput number counts. Short-context accuracy passes on broken kernels; only the long leg
+# discriminates.
 #SBATCH --job-name=smoke-kimi-sglang
 #SBATCH --partition=mi300
-# PP spans the allocation, so the node count decides what --mem-fraction-static can mean. 4 is
-# the campaign's own topology and what MEM_FRACTION below is sized for.
+# PP spans the allocation, so the node count decides how much of the model each stage holds and
+# therefore what --mem-fraction-static can mean. 4 is the campaign's own topology and the one
+# MEM_FRACTION below is sized for; -N2 is the 2-node recipe and needs MEM_FRACTION >= 0.76.
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
@@ -30,44 +36,64 @@ export SERVED_MODEL="${SERVED_MODEL:-kimi-k27}"
 export API_PORT="${API_PORT:-8000}"
 export READY_TIMEOUT="${READY_TIMEOUT:-5400}"
 export EDF="${EDF:-${HOME}/.edf/hpcagent-bench-sglang-mi300-latest.toml}"
-# 0.42, not the 0.8-0.9 this knob takes elsewhere: MI300A reports is_integrated, so SGLang sizes
-# the static budget against NODE-WIDE memory and every rank claims all of it. Meaningful only
-# with the node count above: the fraction applies to pre-weight-load node-wide free memory, so
-# raising NODES (not this number) is how a higher floor gets satisfied at a given PP. Also needs
-# --cuda-graph-max-bs-decode set below, or sglang captures graphs for its default decode batch
-# and eats the residual out of KV.
+# 0.42, not the 0.8-0.9 this knob takes anywhere else: MI300A reports is_integrated, so SGLang
+# sizes the static budget against NODE-WIDE memory and every rank claims all of it. 0.93 read
+# as ~0.79 after the VLM derate and the serving step was OOM-killed at 58.5 GB RSS after 68
+# minutes of load and capture. 0.42 is the fraction the campaign serves.
+#
+# It is only meaningful WITH the node count above. The fraction applies to pre-weight-load
+# node-wide free memory, so the floor is 1 - available/pre and PP decides the numerator: at pp=4
+# the campaign loads 171 GB of compressed-tensors weights per stage against 412 GB pre, a floor
+# of 0.415 that 0.42 just clears. At pp=2 each stage holds twice that and sglang refuses on the
+# spot -- "minimum viable = 0.7525". Raise the NODES, not this number.
+# 0.42 needs --cuda-graph-max-bs-decode in the launch args below to mean what it means in the
+# campaign. Without it sglang captures graphs for its default decode batch and the residual comes
+# out of KV: an effective 0.357 against a 0.3988 floor, at the campaign's own 4 nodes and pp=4.
+# The cap is in every kimi SGLANG_EXTRA_ARGS; without it the smoke measures a topology the
+# campaign never serves.
 export MEM_FRACTION="${MEM_FRACTION:-0.42}"
 export CONTEXT_LEN="${CONTEXT_LEN:-65536}"
 export SWEEP_CONCURRENCY="${SWEEP_CONCURRENCY:-1 8 16}"
 # Trusted operator-controlled word list, the same contract as run_cluster.sh's SGLANG_EXTRA_ARGS.
+# Acceptance runs pass the campaign's own knobs through here so a pass means the image serves what
+# the campaign serves, not what this recipe defaults to.
 export SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:-}"
-# Defaults ARE the kimi recipe. Both parsers must be named for any model: SGLang starts fine
-# without them and then fails at the FIRST request with a parser error.
+# Model-specific knobs. Defaults ARE the kimi recipe, so this file still serves kimi unchanged.
+# Both parsers must be named for any model: SGLang starts fine without them and then fails at the
+# FIRST request with a parser error, which reads as a serving bug rather than a launch one.
 export TOOL_PARSER="${TOOL_PARSER:-kimi_k2}"
 export REASONING_PARSER="${REASONING_PARSER:-kimi_k2}"
-# TP is per node; PP spans the allocation.
+# TP is per node; PP spans the allocation. GLM-5.3 (GlmMoeDsaForCausalLM, 755.7 GB of fp8 weights)
+# needs tp=4 x pp=4 over 4 nodes: at pp=2 the weights alone are 378 GB of the ~412 GB a node has
+# free pre-load, a 0.917 floor that leaves no KV pool at all.
 export TP_SIZE="${TP_SIZE:-4}"
-# PP is the allocation by default, which is what the campaign serves. A VARIABLE because it is
-# not obviously the right lever: SGLang's own K2.7 recipe uses no pipeline stage at all
-# (--tp 8 --dp 8 --enable-dp-attention). PP_SIZE=1 with TP_SIZE=8 over two nodes is that recipe.
+# PP is the allocation by default, which is what the campaign serves. It is a VARIABLE because it
+# is not obviously the right lever: SGLang's own K2.7 recipe uses no pipeline stage at all
+# (--tp 8 --dp 8 --enable-dp-attention), and our own sweep measured pp=4 costing 42% to engine
+# stalls. Setting PP_SIZE=1 with TP_SIZE=8 over two nodes is that recipe on 4-GPU parts.
 export PP_SIZE="${PP_SIZE:-${SLURM_NNODES}}"
 # --language-only is NOT a generic "text only" switch in this SGLang: it selects the VLM
-# ENCODER-DISAGGREGATION receiver role, and raises outright for any architecture off its
-# allowlist. A 0/1 knob, NOT a string default: ${VAR:-default} substitutes on EMPTY as well as
-# unset, so an empty LANGUAGE_ONLY_ARG would silently revert to --language-only. 1 for
-# VLM-capable models, 0 for text-only ones.
+# ENCODER-DISAGGREGATION receiver role, and server_args._handle_encoder_disaggregation raises
+# outright for any architecture off its allowlist. GLM-5.3 (GlmMoeDsaForCausalLM) is text-only
+# to begin with, so it must pass EMPTY here.
+# A 0/1 knob, NOT a string default: ${VAR:-default} substitutes on EMPTY as well as unset, so an
+# empty LANGUAGE_ONLY_ARG would silently revert to --language-only. 1 for VLM-capable models
+# (kimi), 0 for text-only ones (GLM-5.3).
 export LANGUAGE_ONLY="${LANGUAGE_ONLY:-1}"
 LANGUAGE_ONLY_ARG=""
 [ "${LANGUAGE_ONLY}" = "1" ] && LANGUAGE_ONLY_ARG="--language-only"
 export LANGUAGE_ONLY_ARG
-# fp8_e4m3 KV is NOT free: an fp8 checkpoint ships no calibrated KV scales, so the engine
-# quantizes at runtime against scale 1.0. The accuracy gate below exists to catch that damage,
-# so the dtype is a knob and the fp8-vs-bf16 A/B is a rerun, not an edit.
+# fp8_e4m3 KV is the default because it is what every arm serves, but it is NOT free: an fp8
+# checkpoint ships no calibrated KV scales, so the engine quantizes at runtime against scale 1.0.
+# That is exactly the kind of damage the accuracy gate below exists to catch, so the dtype is a
+# knob and the fp8-vs-bf16 A/B is a rerun, not an edit.
 export KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"
 # The gate asks over /v1/chat/completions, so a reasoning model spends its budget thinking before
-# it answers. Below ~512 it answers nothing and the gate reports a corruption that is really a
-# truncation.
+# it answers at all. 2048 covers GLM-5.3 at effort=max on the long legs; below ~512 it answers
+# nothing and the gate reports a corruption that is really a truncation.
 export GATE_MAX_TOKENS="${GATE_MAX_TOKENS:-2048}"
+# Empty omits the field entirely, which is what kimi wants. GLM-5.3 maps every unrecognised value
+# to max in its own chat template, so naming max here is a statement of intent, not a switch.
 export REASONING_EFFORT="${REASONING_EFFORT:-}"
 # Structured tool_calls and reasoning_content are contract, not throughput: the sweep SENDS tools
 # but only counts tokens, so a server answering with prose ABOUT the call scores as healthy.
@@ -82,11 +108,14 @@ echo "logs:   ${RUN_DIR}"
 
 stage() { printf '\n===== stage: %s =====\n' "$*"; }
 
-# --exclusive gives the JOB the node, not a STEP its CPUs: a step without --cpus-per-task claims
-# ONE, and a serving step on too few CPUs hangs (Triton JIT never finishes).
+# 192 logical CPUs per node = 4 sockets x 24 physical cores x 2 SMT threads. --exclusive gives the
+# JOB the node, not a STEP its CPUs: a step without --cpus-per-task claims ONE, and a serving step
+# on too few CPUs hangs (Triton JIT never finishes, the peer's PP SEND hits the NCCL watchdog).
+# Allocate the way the campaign does (run_cluster.sh).
 SERVE_CPUS="${SERVE_CPUS:-${SLURM_CPUS_ON_NODE:-192}}"
 # Clients and gates run --overlap ALONGSIDE the server, so they take one socket's PHYSICAL cores
-# (--hint=nomultithread) rather than the node, so the measurement does not contend with itself.
+# (--hint=nomultithread) rather than the node -- enough not to be the bottleneck, not so much that
+# the measurement contends with what it is measuring.
 CLIENT_CPUS="${CLIENT_CPUS:-24}"
 
 stage "serving tp=${TP_SIZE} pp=${PP_SIZE} across ${SLURM_NNODES} nodes via sglang"

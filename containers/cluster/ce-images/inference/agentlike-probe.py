@@ -1,10 +1,14 @@
 """Sustained agent-shaped load against a served vLLM endpoint.
 
-The short saturation probe in smoke-kimi-eager-pg.sbatch measures one burst with almost no
-prefill, which does not match a real agent turn (prefill-bound, roughly 25 tokens in per token
-out). This sends a long shared prefix (as a skills packet and system prompt would be) plus a
-unique tail, and keeps sending for a set duration since the failure this chases arrives around
-90 minutes in, not inside a 6-minute burst.
+The saturation probe in smoke-kimi-eager-pg.sbatch sends "Explain loop tiling, variation N." --
+about 8 tokens -- and measures one burst. Every kimi figure we have came from it, which is why
+601653 read 294-307 tok/s while the campaign decoded at 0.2: that probe did almost no prefill
+(24 of its 28 samples showed ZERO prompt throughput) and this workload is prefill-bound at
+roughly 25 tokens in per token out.
+
+This sends what an agent turn actually looks like -- a long prefix shared by every stream, as the
+skills packet and system prompt are, plus a unique tail -- and keeps sending for a set duration,
+because the EngineCore death we are chasing arrives at ~90 minutes, not inside a 6-minute burst.
 """
 
 import argparse
@@ -21,7 +25,7 @@ STATS = {"ok": 0, "err": 0, "out_tokens": 0, "first_err": ""}
 
 
 def build_prompt(shared_words: int, stream: int) -> str:
-    # One prefix per stream, so the prefix cache behaves as it does under real agents.
+    # One prefix for every stream, so the prefix cache behaves as it does under real agents.
     shared = "loop tiling and unrolling analysis for a stencil kernel on a cache hierarchy. " * shared_words
     return f"{shared}\nStream {stream} unique tail. Summarise the tradeoffs."
 
@@ -60,7 +64,7 @@ def main() -> int:
     ap.add_argument("--base", required=True)
     ap.add_argument("--model", required=True)
     ap.add_argument("--streams", type=int, default=64)
-    ap.add_argument("--shared-words", type=int, default=2000)  # ~25k tokens
+    ap.add_argument("--shared-words", type=int, default=2000)  # ~25k tokens at ~12 tok/repeat
     ap.add_argument("--max-tokens", type=int, default=512)
     ap.add_argument("--duration", type=int, default=7200)
     ap.add_argument("--timeout", type=int, default=1800)

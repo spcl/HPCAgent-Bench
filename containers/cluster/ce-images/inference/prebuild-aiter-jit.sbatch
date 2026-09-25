@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Populate a shared AITER JIT cache so serving nodes never build kernels at startup.
 #
-# aiter ships no prebuilt .so: it JIT-builds each op module lazily on first use, long enough for a
-# server to time out waiting for it. Point every run at the same AITER_JIT_DIR for a cache hit.
-# Do NOT let several nodes populate a cold shared dir concurrently: aiter writes the .so in place,
-# so parallel builds race and a rank can load a half-written module (gate with --dependency=afterok).
+# aiter ships no prebuilt .so: every process JIT-builds module_aiter_core (21-58s measured) and
+# then each op module lazily on first use, long enough for a kimi server to die on
+# "API not ready in 5400s".
+#
+# Building once here and pointing every later run at the same AITER_JIT_DIR turns that into a
+# cache hit. Do NOT let several nodes populate a cold shared dir concurrently: aiter writes the
+# .so in place, so parallel builds race on the same path and a rank can load a half-written
+# module. One node fills it, later jobs only read it (gate any user with --dependency=afterok).
 #SBATCH --job-name=prebuild-aiter
 #SBATCH --partition=mi300
 #SBATCH --nodes=1
@@ -24,12 +28,15 @@ REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2
 [[ -n "${REPO}" && -f "${REPO}/scripts/cache_env.sh" ]] || { echo "FAIL: no checkout: set REPO or submit from inside one" >&2; exit 1; }
 . "${REPO}/scripts/cache_env.sh"
 INFERENCE_EDF="${INFERENCE_EDF:-hpcagent-bench-vllm-mi300-latest}"
-# The interpreter that HAS torch: differs per image (sglang keeps it at /opt/venv/bin/python3,
-# leaving bare `python3` without torch).
+# The interpreter that HAS torch, which differs per image: the vLLM image puts it on PATH, the
+# sglang image keeps it at /opt/venv/bin/python3 and leaves bare `python3` as the system one with
+# no torch. Pointing this script at an sglang EDF without setting this fails on line 2 of the
+# heredoc with ModuleNotFoundError.
 PREBUILD_PYTHON="${PREBUILD_PYTHON:-python3}"
-# One subtree per image: these .so files are built against one aiter/ROCm build, and a rank that
-# loads a mismatched one fails late or silently. HOME goes with it: aiter falls back to
-# expanduser("~")/.aiter regardless of AITER_JIT_DIR.
+# Same root and the same image key run_cluster.sh uses: the general scratch ($SCRATCH) for build artefacts, and one
+# subtree per image because these .so files are built against one aiter/ROCm build and a rank
+# that loads a mismatched one fails late or silently. HOME goes with it -- aiter falls back to
+# expanduser("~")/.aiter for template ops whatever AITER_JIT_DIR says.
 CACHE_ROOT="${JIT_CACHE_ROOT:-${SCRATCH}/.jit-cache}/${INFERENCE_EDF}"
 export AITER_JIT_DIR="${AITER_JIT_DIR:-${CACHE_ROOT}/aiter}"
 export HOME="${CACHE_ROOT}/home"
@@ -42,9 +49,14 @@ export SERVED_MODEL="${SERVED_MODEL:-hpcagent-bench-vllm}"
 mkdir -p "${AITER_JIT_DIR}"
 printf 'job:   %s\ncache: %s\n\n' "${SLURM_JOB_ID}" "${AITER_JIT_DIR}"
 
-# --exclusive gives the JOB the node, not a STEP its CPUs: a step without --cpus-per-task claims
-# ONE, and a serving step on too few CPUs hangs. Allocate the way run_cluster.sh does.
+# 192 logical CPUs per node = 4 sockets x 24 physical cores x 2 SMT threads. --exclusive gives the
+# JOB the node, not a STEP its CPUs: a step without --cpus-per-task claims ONE, and a serving step
+# on too few CPUs hangs (Triton JIT never finishes, the peer's PP SEND hits the NCCL watchdog).
+# Allocate the way the campaign does (run_cluster.sh).
 SERVE_CPUS="${SERVE_CPUS:-${SLURM_CPUS_ON_NODE:-192}}"
+# Clients and gates run --overlap ALONGSIDE the server, so they take one socket's PHYSICAL cores
+# (--hint=nomultithread) rather than the node -- enough not to be the bottleneck, not so much that
+# the measurement contends with what it is measuring.
 CLIENT_CPUS="${CLIENT_CPUS:-24}"
 
 srun --nodes=1 --ntasks=1 --exclusive --export=ALL --cpus-per-task="${SERVE_CPUS}" \
@@ -55,6 +67,7 @@ srun --nodes=1 --ntasks=1 --exclusive --export=ALL --cpus-per-task="${SERVE_CPUS
         export HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-${ROCR_VISIBLE_DEVICES}}"
         unset ROCR_VISIBLE_DEVICES
     fi
+    # Every aiter path vLLM can dispatch to, so the cache covers whatever the server picks.
     export VLLM_ROCM_USE_AITER=1
 
     echo "=== before ==="; ls -1 "${AITER_JIT_DIR}" 2>/dev/null | wc -l

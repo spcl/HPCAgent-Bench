@@ -2,11 +2,17 @@
 # Does Kimi K2.7 at tp=4 pp=4 actually DECODE, with eager process-group init?
 #
 # The failure mode: a live API that produces nothing -- engine up, /v1/models answering, requests
-# accepted, GPUs pegged, generation_tokens_total frozen. On PP ranks only, torch logs an unbatched
-# P2P op minting a fresh lazy-init NCCL communicator; gpt-oss (pp=1) never does this, so the split
-# is pipeline parallelism exhausting a CXI resource one 2-rank communicator at a time.
-# external-eager-pg-patch/sitecustomize.py injects device_id= into init_process_group/new_group so
-# the PGs initialise EAGERLY instead ("eager" here is eager PG INIT, not --enforce-eager).
+# accepted, GPUs pegged at 100%, generation_tokens_total frozen. The signature, on PP ranks only:
+#
+#   ProcessGroupNCCL.cpp:4094] An unbatched P2P op (send/recv) was called on this ProcessGroup
+#   with size 4. In lazy initialization mode, this will result in a new 2-rank NCCL communicator
+#   to be created.
+#
+# gpt-oss (pp=1) logs ZERO of them and serves fine, so the split is pipeline parallelism: every
+# unbatched pipeline send/recv mints a fresh 2-rank communicator, and that is the CXI resource
+# exhaustion. external-eager-pg-patch/sitecustomize.py injects device_id= into
+# init_process_group/new_group so the PGs initialise EAGERLY and the per-pair communicators are
+# never minted. ("eager" here is eager PG INIT -- the opposite knob from --enforce-eager.)
 #
 # A wedged engine still answers the API, so this gates on DECODE PROGRESS and nothing else, then
 # measures the saturated ceiling.
@@ -33,14 +39,16 @@ export RUN_DIR="${SCRATCH}/kimi-smoke/${SLURM_JOB_ID}"
 # Under sbatch BASH_SOURCE is the spooled copy; the checkout is where the job was submitted from.
 REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2>/dev/null || true)}"
 [[ -n "${REPO}" && -f "${REPO}/scripts/cache_env.sh" ]] || { echo "FAIL: no checkout: set REPO or submit from inside one" >&2; exit 1; }
+# iopsstor reads faster than the general scratch; $SCRATCH keeps the durable copy.
 . "${REPO}/scripts/cache_env.sh"
-# Unset, this defaults under ~/.cache, which is unmounted here, so every smoke would re-run
-# Inductor codegen from scratch before the API could bind.
+# Unset, this defaults under ~/.cache, which is unmounted here, so every smoke re-ran Inductor
+# codegen from scratch before the API could bind.
 export VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT:-${FAST_SCRATCH}/vllm-cache}"
 SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
 # Tuned fused_moe Triton configs, the folder run_cluster.sh points the campaign at. Unset, vLLM
-# falls back to its default MoE config for this shape, which is much slower and not a topology
-# result. Set TUNED_MOE_DIR= to run untuned deliberately.
+# falls back to its default MoE config for this shape: 69 ms per kernel at bs=64 against 4.4 ms
+# tuned, on a kernel that is ~88% of decode time for a W4A16 MoE. ~90-96 tok/s aggregate is the
+# untuned signature, not a topology result. Set TUNED_MOE_DIR= to run untuned.
 export TUNED_MOE_DIR="${TUNED_MOE_DIR-${SUBMIT_DIR}/moe-configs}"
 # Slurm spools this script to /var/spool/slurmd, so BASH_SOURCE cannot locate the patch and
 # SLURM_SUBMIT_DIR is all there is. The job may be submitted from the repo root or from here, so
@@ -53,21 +61,28 @@ for cand in "${PG_PATCH_DIR:-}" "${SUBMIT_DIR}/external-eager-pg-patch" "${SUBMI
     fi
 done
 
-# Pinned below 0.27.1, which decodes noticeably slower on this shape.
+# 0.23.0: 0.27.1 is 25% slower on oss120b, all of it decode (containers/README.md); it is parked
+# on the parked/vllm-0271 branch.
 INFERENCE_EDF="${INFERENCE_EDF:-hpcagent-bench-vllm-mi300-latest}"
 export MODEL_REPO="${MODEL_REPO:-moonshotai/Kimi-K2.7-Code}"
 export SERVED_MODEL="${SERVED_MODEL:-hpcagent-bench-vllm}"
 export API_PORT="${API_PORT:-8000}"
 export MASTER_PORT="${MASTER_PORT:-$((20000 + SLURM_JOB_ID % 20000))}"
 READY_TIMEOUT="${READY_TIMEOUT:-5400}"
-# How long the workers may go completely silent before we call it wedged. A healthy start is
-# SLOW but never INDEFINITELY quiet; a wedged one stops all ranks at the same NCCL bootstrap line
-# and writes nothing. Silence separates the two cases; elapsed time does not.
+# How long the workers may go completely silent before we call it wedged. A healthy start
+# is SLOW but never INDEFINITELY quiet; a wedged one stops all ranks at the same NCCL bootstrap
+# line and writes nothing. Silence separates the two cases; elapsed time does not, which is why
+# READY_TIMEOUT stays where it is (a healthy start measured 73 of its 90 minutes).
+#
+# 2700 clears every healthy observation with room to spare. Longest quiet stretch in a
+# run that went on to serve: 1768 s (others 651-898). Slowest NCCL bootstrap: 1335 s (tp2pp8;
+# others 235-558). 1200 would kill healthy starts.
 STALL_LIMIT="${STALL_LIMIT:-2700}"
 PROBE_STREAMS="${PROBE_STREAMS:-64}"
 PROBE_MAX_TOKENS="${PROBE_MAX_TOKENS:-512}"
-# Gate 6, agent-shaped load, is not part of accepting an image, so it is OFF unless a run asks
-# for it.
+# Gate 5 is the 90-minute EngineCore hunt, not part of accepting an image, so it is OFF
+# unless a run asks for it. These three were read but never assigned, and under set -u an
+# unset name in (( )) aborts the job -- the gate has been unreachable since it landed.
 AGENTLIKE_DURATION_S="${AGENTLIKE_DURATION_S:-0}"
 AGENTLIKE_STREAMS="${AGENTLIKE_STREAMS:-64}"
 AGENTLIKE_SHARED_WORDS="${AGENTLIKE_SHARED_WORDS:-2000}"
@@ -81,14 +96,15 @@ mkdir -p "${RUN_DIR}"
 
 mapfile -t NODES < <(scontrol show hostnames "${SLURM_JOB_NODELIST}")
 export NODE0="${NODES[0]}"
-# Topology follows the ALLOCATION, so the same script also serves a pp=1 control on one node
-# (sbatch --nodes=1 MODEL_REPO=openai/gpt-oss-120b), which tells us whether a low tok/s number is
-# the stack or just the offered load.
+# Topology follows the ALLOCATION, so the same script measures the kimi config (4 nodes, pp=4)
+# and a pp=1 control on one node: `MODEL_REPO=openai/gpt-oss-120b`. sbatch --nodes=1
+# The control is what tells us whether a low tok/s number is the stack or just the offered load.
 export NNODES="${#NODES[@]}"
 export TP_SIZE="${TP_SIZE:-4}"
 export PP_SIZE="${PP_SIZE:-${NNODES}}"
 # Parsers are MODEL-specific (gpt-oss has no kimi think tokens; the API server dies on them).
-# Defaults fit kimi; the control passes its own (e.g. TOOL_PARSER=openai).
+# Defaults fit kimi; the control passes its own, e.g. TOOL_PARSER=openai
+# REASONING_PARSER=openai_gptoss EXTRA_SERVE_ARGS="--dtype bfloat16".
 export TOOL_PARSER="${TOOL_PARSER:-kimi_k2}"
 export REASONING_PARSER="${REASONING_PARSER:-kimi_k2}"
 export EXTRA_SERVE_ARGS="${EXTRA_SERVE_ARGS:-}"
@@ -204,11 +220,14 @@ SERVE
 chmod +x "${SERVE_SCRIPT}"
 rm -f "${SMOKE_DONE}"
 
-# --exclusive gives the JOB the node, not a STEP its CPUs: a step without --cpus-per-task claims
-# ONE, and a serving step on too few CPUs hangs (Triton JIT never finishes).
+# 192 logical CPUs per node = 4 sockets x 24 physical cores x 2 SMT threads. --exclusive gives the
+# JOB the node, not a STEP its CPUs: a step without --cpus-per-task claims ONE, and a serving step
+# on too few CPUs hangs (Triton JIT never finishes, the peer's PP SEND hits the NCCL watchdog).
+# Allocate the way the campaign does (run_cluster.sh).
 SERVE_CPUS="${SERVE_CPUS:-${SLURM_CPUS_ON_NODE:-192}}"
 # Clients and gates run --overlap ALONGSIDE the server, so they take one socket's PHYSICAL cores
-# (--hint=nomultithread) rather than the node, so the measurement does not contend with itself.
+# (--hint=nomultithread) rather than the node -- enough not to be the bottleneck, not so much that
+# the measurement contends with what it is measuring.
 CLIENT_CPUS="${CLIENT_CPUS:-24}"
 
 stage "serving ${MODEL_REPO} tp=${TP_SIZE} pp=${PP_SIZE} on ${NNODES} node(s) with the eager-PG patch"
@@ -224,10 +243,11 @@ cleanup_steps() {
 trap cleanup_steps EXIT INT TERM
 
 # The || true matters twice under set -eo pipefail: a dead server must read as an empty
-# metric the gates can act on, not a silent script abort.
+# metric the gates can act on, not a silent script abort inside a command substitution.
 metric() { { curl -fsS --max-time 10 "http://${NODE0}:${API_PORT}/metrics" 2>/dev/null || true; } |
     awk -v k="vllm:$1" '$0 ~ "^"k {print $2; exit}'; }
 
+# Newest mtime across every worker log, or 0 before the first one appears.
 newest_log_write() {
     local newest=0 mtime
     for log in "${RUN_DIR}"/vllm-rank*.log "${RUN_DIR}"/nccl.*.log; do
@@ -238,6 +258,8 @@ newest_log_write() {
     echo "${newest}"
 }
 
+# What a wedged bootstrap looks like, printed once so the failure explains itself instead of
+# needing a log dig: nobody reaches "Init COMPLETE" and every rank stops on the same line.
 report_stall() {
     echo "--- rank progress at the stall ---" >&2
     local done_count
@@ -283,8 +305,9 @@ p2p=$({ grep -h "unbatched P2P op" "${RUN_DIR}"/vllm-rank*.log 2>/dev/null || tr
 echo "unbatched P2P warnings: ${p2p}"
 
 stage "gate 3: DOES IT DECODE -- the gate every previous smoke skipped"
-# aiter JIT-compiles kernels on FIRST use, so a cold cache can blow a 300 s budget and read as
-# "wedged" for a server that is merely compiling. Raise it whenever AITER_JIT_DIR starts empty.
+# aiter JIT-compiles kernels on FIRST use (one MHA kernel measured at 924 s), so a
+# cold cache blows a 300 s budget and the smoke reports "wedged" for a server that is merely
+# compiling. Raise it whenever AITER_JIT_DIR starts empty; 300 s is right for a warm cache.
 before=$(metric generation_tokens_total)
 curl -fsS --max-time "${FIRST_TOKEN_TIMEOUT:-300}" "http://${NODE0}:${API_PORT}/v1/completions" \
     -H 'Content-Type: application/json' \
@@ -299,9 +322,10 @@ awk -v a="${before:-0}" -v b="${after:-0}" 'BEGIN{ if (b-a <= 0) exit 1 }' || {
 
 stage "gate 4: saturation probe, ${PROBE_STREAMS} concurrent x ${PROBE_MAX_TOKENS} tokens"
 # max_tokens is a floor on how long each stream lives, and ignore_eos keeps it from finishing
-# early -- otherwise short answers drain the batch and the "saturated" number is measured against
-# a half-empty engine. Bracket the burst instead of timing a fixed window after a fill sleep: a
-# burst can finish INSIDE the fill sleep, and a fixed window would then measure an idle engine.
+# early -- otherwise short answers drain the batch and the "saturated" number is measured
+# against a half-empty engine, which is the same mistake as reading 92 tok/s off idle arms.
+# Bracket the burst instead of timing a fixed window after a fill sleep: a burst can finish
+# INSIDE the fill sleep, and the window then measures an idle engine and reports 0.
 g0=$(metric generation_tokens_total); t0=$SECONDS
 PROBE_PIDS=()
 for i in $(seq 1 "${PROBE_STREAMS}"); do
@@ -314,7 +338,8 @@ done
 : >"${RUN_DIR}/probe-conc.txt"
 # Three columns per sample -- elapsed, cumulative generated tokens, resident requests. The token
 # column is what makes a steady-state read possible: the aggregate below divides by the WHOLE
-# burst, ramp included, so the headline number can read well under the engine's saturated rate.
+# burst, ramp included (~170s of a 359s run measured), so the headline number can read half the
+# rate the engine's own counter reports while saturated.
 ( while :; do printf '%s %s %s\n' "${SECONDS}" "$(metric generation_tokens_total)" \
     "$(metric num_requests_running)" >>"${RUN_DIR}/probe-conc.txt"; sleep 5; done ) &
 SAMPLER_PID=$!
@@ -352,8 +377,9 @@ awk -v a="${g0:-0}" -v b="${g1:-0}" -v dt="$((t1-t0))" -v span="${STEADY_SPAN_S:
     }' "${RUN_DIR}/probe-conc.txt" || exit 1
 
 stage "gate 5: long-context accuracy -- throughput alone never said whether a change was SAFE"
-# A backend can serve a high tok/s while silently corrupting output (echoing filler, or worse);
-# grading decode progress alone would promote that backend on its rate.
+# The sglang smoke has graded this since it was written; this one graded decode and stopped, which
+# is how a backend that reads 78.5 tok/s while echoing filler would have been promoted on
+# its rate. aiter #1455 took kimi from 94.2% to 0.9% on gsm8k with no error anywhere.
 srun --nodes=1 --ntasks=1 --overlap --nodelist="${NODE0}" --environment="${INFERENCE_EDF}" \
     --cpus-per-task="${CLIENT_CPUS}" --hint=nomultithread \
     /opt/pytorch211/bin/python "$(dirname "${PG_PATCH_DIR}")/accuracy-gate.py" \
@@ -362,9 +388,10 @@ srun --nodes=1 --ntasks=1 --overlap --nodelist="${NODE0}" --environment="${INFER
 
 if (( AGENTLIKE_DURATION_S > 0 )); then
     stage "gate 6: agent-shaped load, ${AGENTLIKE_STREAMS} streams x long shared prefix for ${AGENTLIKE_DURATION_S}s"
-    # Probe resolved beside the patch dir, not the SUBMIT dir, so a driver submitting from
-    # elsewhere still finds it. Keep this comment here: one between the line continuations below
-    # would end the command early and run the probe on the batch node instead.
+    # Probe resolved beside the patch dir, not beside the SUBMIT dir: a driver that submits
+    # this from elsewhere (smoke-new-images.sh does) would not find it otherwise. The comment
+    # lives HERE because one placed between the line continuations below ends the command, which
+    # left this srun with no program to run and ran the probe on the batch node instead.
     srun --nodes=1 --ntasks=1 --overlap --nodelist="${NODE0}" --environment="${INFERENCE_EDF}" \
         --cpus-per-task="${CLIENT_CPUS}" --hint=nomultithread \
         /opt/pytorch211/bin/python "$(dirname "${PG_PATCH_DIR}")/agentlike-probe.py" \
