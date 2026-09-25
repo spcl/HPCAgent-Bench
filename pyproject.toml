@@ -5,9 +5,9 @@
 #
 # There is NO lockfile, deliberately. A lock demands one resolution valid across every extra at
 # once, and two things here make that impossible: agent-aider hard-pins numpy==1.26.x against this
-# project's numpy>=2, and dace must track a moving branch tip rather than a commit. Installs
-# therefore resolve fresh (`pip install -e ".[<hw>]" "dace @ git+https://github.com/spcl/dace.git@extended"`),
-# which is also what keeps dace current.
+# project's numpy>=2, and the cluster jobs track the dace `extended` branch tip rather than a commit.
+# Installs therefore resolve fresh: `pip install -e ".[<hw>]" --group dace` installs the dace
+# commit this tree was released against (the `dace` dependency group below); the jobs pull the tip.
 # This file is the whole of the dependency metadata; pip is the installer.
 #
 # Why package-dir matters: the numpyto_* translators live under
@@ -173,10 +173,10 @@ amd = [
     "mpi4py",
 ]
 # DaCe is NOT an extra here. PyPI rejects a published Requires-Dist with a direct URL
-# (PEP 508 direct reference), and this suite grades kernels through the BRANCH tip, never the
-# PyPI wheel (that release imports the numpy-2-removed ``np.int``) and never a pinned commit, so
-# there is no version string that could stand in for it anyway. Install it separately:
-# `pip install "dace @ git+https://github.com/spcl/dace.git@extended"` (README has the one-liner).
+# (PEP 508 direct reference), and the PyPI wheel imports the numpy-2-removed ``np.int``, so no
+# version string can stand in for it. It is the `dace` DEPENDENCY GROUP instead (groups never reach
+# the wheel's metadata): `pip install -e ".[<hw>]" --group dace` pins the spcl/dace `extended`
+# commit this tree was released against; the cluster jobs pull the branch tip.
 # CI installs it from a checkout for the same reason plus one more -- see
 # .github/actions/setup/action.yml's "DaCe checkout" step.
 # The distributed track: the descriptor/driver codegen tests and their launcher.
@@ -215,6 +215,9 @@ testing = ["pytest", "pytest-timeout", "pytest-xdist", "pytest-forked", "pytest-
 # The format gate. clang-format ships its binary in the wheel, which is why it is a python dep.
 linting = ["ruff", "fprettify", "clang-format", "pre-commit"]
 dev = [{ include-group = "testing" }, { include-group = "linting" }]
+# The spcl/dace `extended` commit this tree was released against (paper-experiments-v1). Move the
+# pin only together with a release; the cluster jobs pull the branch tip regardless.
+dace = ["dace @ git+https://github.com/spcl/dace.git@a22e0c09aff534a6a3612a2b72276a113e718f5b"]
 
 [tool.setuptools]
 # The translators ship as part of THIS distribution (not a separate project) and keep their
