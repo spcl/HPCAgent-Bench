@@ -56,7 +56,7 @@ headroom left.
 - **Read `avail mem=` on every rank.** Stages are unequal; a change that fits rank 0 can OOM rank 3.
 - **Gate a `--kv-cache-dtype` change on long context.** fp8 checkpoints ship no calibrated KV scales
   (runtime scale 1.0), and a broken attention path still answers short prompts.
-  `containers/cluster/ce-images/inference/accuracy-gate.py` asks at about 10k tokens of varied filler;
+  `containers/inference/accuracy-gate.py` asks at about 10k tokens of varied filler;
   repeated filler causes an echo attractor at temperature 0.
 
 ## DO NOT

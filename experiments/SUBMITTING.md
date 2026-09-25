@@ -133,19 +133,19 @@ Judge shards written before the cancel stay under `$RUN_ROOT/<jobid>/judge/`.
 
 ## Images
 
-Infrastructure jobs, one node each, run from `containers/cluster/ce-images/`. Each role directory
+Infrastructure jobs, one node each, run from `containers/images/`. Each role directory
 (`judge-agent-amd`, `sglang`, `sglang-mi200`, `vllm`, ...) holds a Dockerfile and `build.sbatch`.
 `build_and_verify.sbatch` builds a candidate and verifies it in one job, so a build that fails
 verification never reports success:
 
 ```bash
 cd "$HPCAGENT_BENCH_REPO"
-IMAGE_DIR=containers/cluster/ce-images/judge-agent-amd \
-    sbatch containers/cluster/ce-images/build_and_verify.sbatch
+IMAGE_DIR=containers/images/judge-agent-amd \
+    sbatch containers/images/build_and_verify.sbatch
 # mi200 variant
-IMAGE_DIR=containers/cluster/ce-images/sglang-mi200 \
+IMAGE_DIR=containers/images/sglang-mi200 \
     sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 \
-    containers/cluster/ce-images/build_and_verify.sbatch
+    containers/images/build_and_verify.sbatch
 ```
 
 A cold judge build takes up to the 24 h partition limit (gcc 16 and LLVM 22 from source, cached in
@@ -154,14 +154,14 @@ the spack buildcache on scratch afterwards). Candidates land as
 
 ```bash
 IMAGE=$SCRATCH/ce-images/hpcagent-bench-ce-amd-mi300-candidate.sqsh PROFILE=judge-agent-amd \
-    sbatch containers/cluster/ce-images/verify_image.sbatch
+    sbatch containers/images/verify_image.sbatch
 ```
 
 Promotion renames the candidate over the live name, moves its `.digest`/`.sha256` sidecars, and
 repoints the EDFs. There is one version per role, so the rename publishes:
 
 ```bash
-cd containers/cluster/ce-images
+cd containers/images
 DRY_RUN=1 ./promote_image.sh --all     # show what would move
 ./promote_image.sh judge-agent-amd     # one role; --all for every role with a candidate
 ```

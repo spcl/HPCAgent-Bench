@@ -110,8 +110,8 @@ the paths).
 ## Prerequisites
 
 Before submitting: the `mi300` Slurm partition and Container Engine integration are available; the
-inference EDF is built and registered from `containers/cluster/ce-images/{vllm,sglang}`; the
-judge+agent EDF is built and registered from `containers/cluster/ce-images/judge-agent-amd`; the
+inference EDF is built and registered from `containers/images/{vllm,sglang}`; the
+judge+agent EDF is built and registered from `containers/images/judge-agent-amd`; the
 repository and every configured input path mount at the same location on every allocated node; the
 model (or its registry credentials/cached weights) is reachable from the compute nodes; the service
 ports are free between nodes in the allocation; `SERPAPI_API_KEY` is set if agents use web search;
@@ -197,7 +197,7 @@ Enroot notes: read-only binds need the full fstab form
 (`src:dst:none:x-create=dir|file,bind,ro,nosuid,nodev,private`); forwarded variables pass as
 `HBFWD_<name>` (`scripts/cscs/enroot_forward.sh`); `enroot start` mounts the squashfs, never call
 `create`. Apptainer and Podman/Docker take `INFERENCE_IMAGE`, `BENCH_IMAGE` and
-`CONTAINER_GPU_FLAGS`. Images: [`containers/cluster/ce-images/README.md`](../containers/cluster/ce-images/README.md).
+`CONTAINER_GPU_FLAGS`. Images: [`containers/README.md`](../containers/README.md).
 
 ## Owed kernels
 

@@ -1,7 +1,7 @@
 # Extending private inference
 
-Contributor guide for `containers/cluster/ce-images/inference/serve-private.sbatch` (launcher) and
-`containers/cluster/ce-images/inference/alps-endpoint.sh` (client). Usage:
+Contributor guide for `containers/inference/serve-private.sbatch` (launcher) and
+`containers/inference/alps-endpoint.sh` (client). Usage:
 [`private-endpoint.md`](private-endpoint.md).
 
 ## 1. Contract
@@ -40,10 +40,10 @@ A preset is one partition + image + weights combination.
    `--tool-call-parser qwen3_coder`, `--mamba-full-memory-ratio 0.5`, `--context-length 262144`,
    `--language-only`). Another model family moves these into `PRESET_FLAGS`; the mi300 test against
    `.env.llrbase-qwen38-c` must still pass.
-3. A new partition needs `GPU_ARCH_<partition>` in `containers/cluster/ce-images/gpu_arch.env`, and
+3. A new partition needs `GPU_ARCH_<partition>` in `containers/images/gpu_arch.env`, and
    its image built on that partition (SGLang's `setup_rocm.py` and cupy compile for the visible GPU;
-   [`sglang-mi200/README.md`](../../containers/cluster/ce-images/sglang-mi200/README.md)).
-4. Fetch weights with `MODELS=<repo> sbatch containers/cluster/ce-images/inference/fetch_weights.sbatch`
+   [`sglang-mi200/README.md`](../../containers/images/sglang-mi200/README.md)).
+4. Fetch weights with `MODELS=<repo> sbatch containers/inference/fetch_weights.sbatch`
    and check the Lustre striping it reports.
 5. Tests: add the preset to `PRESETS`, `OTHER_PARTITION`, `DEFAULT_LEG_COUNT`, its weights repo to the
    loop in `launch()`, and a flags test modeled on the mi200 one.

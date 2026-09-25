@@ -61,8 +61,8 @@ inference, agent and judge node counts; the allocation must equal their sum.
 ```bash
 scripts/bootstrap_repos.sh                                   # once per account
 scripts/rebuild_venv.sh
-sbatch containers/cluster/ce-images/pull_images.sbatch       # once per cluster
-containers/cluster/ce-images/install_edfs.sh
+sbatch containers/images/pull_images.sbatch       # once per cluster
+containers/images/install_edfs.sh
 
 cd experiments
 arm=.env.<arm>
@@ -125,14 +125,13 @@ hpcagent_bench/
   benchmarks/          corpus: kernel + manifest, path is the ID
   harness/             optimize -> compile -> score loop, judge, prompts
   frameworks/          per-framework bindings (dace, tvm, triton, numba, ...)
-  numpy_translators/   NumPy -> C / Fortran / JAX / ... emitters
+  translators/         NumPy -> C / Fortran / JAX / ... emitters
   envs/  flags.py      compiler flag matrix, cost cards
   experiments.py       judge databases -> one observations CSV
   stats/               score rule, cost, statistics, figures
 containers/            OCI recipes; cluster/ce-images/ for CSCS images
 experiments/           campaign submission and drivers
 statistics/            plot_*.py and paired-arm statistics
-reproducibility/       paper artifact READMEs
 ```
 
 ## Documentation
