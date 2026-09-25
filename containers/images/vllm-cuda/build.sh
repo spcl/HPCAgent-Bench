@@ -23,7 +23,7 @@ fi
 IMAGE_TAG="${IMAGE_TAG:-hpcagent-bench-vllm-cuda:latest}"
 OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/${INFERENCE_VLLM_CUDA_CANDIDATE}}"
 # Must equal the Dockerfile's ARG default.
-BASE_IMAGE="${BASE_IMAGE:-docker.io/vllm/vllm-openai:v0.30.0-aarch64-cu129@sha256:d2f87fcd67d8c80c7c68d2faf3e97f6e6facb688d04734d906f7ee2f70e6a311}"
+BASE_IMAGE="${BASE_IMAGE:-docker.io/vllm/vllm-openai:v0.28.0-aarch64-cu129@sha256:60fa2715937e604931086a790fff2978c09995eff93439261ba09a79f02e9e68}"
 IMAGE_VERSION="${IMAGE_VERSION:-dev}"
 mkdir -p "$(dirname "${OUTPUT_SQSH}")"
 
