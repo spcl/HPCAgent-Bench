@@ -90,6 +90,10 @@ ARG LLVM_VERSION=22.1.8
 # spack and its package repository, pinned to the pair judge-agent-amd builds with.
 ARG SPACK_REF=66ff2229e4ff1fbae9006dddd067e45120a5cba8
 ARG SPACK_PACKAGES_REF=3936d6c1796a095cd29f24f3082a5f32f4b5f938
+# spack's global job budget (the new installer shares it across concurrent packages). 64 keeps
+# llvm's and petsc's link steps clear of the OOM killer (judge-agent-amd step 3); build.sh passes
+# SPACK_BUILD_JOBS to raise it on a node with the memory for it.
+ARG SPACK_BUILD_JOBS=64
 # Must equal the HOST Slurm exactly: PMI is a versioned wire protocol. No default -- build.sh reads
 # it off the build node's `srun --version`, and the spack bootstrap below refuses a version the
 # pinned spack-packages does not carry, in seconds rather than after the compiler build.
@@ -276,7 +280,7 @@ RUN set -eux; \
     git -C "${SPACK_ROOT}" checkout -q FETCH_HEAD; \
     mkdir -p "${SPACK_ROOT}/etc/spack" /var/spack-stage "${SPACK_USER_CACHE_PATH}"; \
     build_jobs="$(nproc)"; \
-    if [ "${build_jobs}" -gt 64 ]; then build_jobs=64; fi; \
+    if [ "${build_jobs}" -gt "${SPACK_BUILD_JOBS}" ]; then build_jobs="${SPACK_BUILD_JOBS}"; fi; \
     git init -q /opt/spack-packages; \
     git -C /opt/spack-packages remote add origin https://github.com/spack/spack-packages.git; \
     gitretry -C /opt/spack-packages fetch -q --depth 1 origin "${SPACK_PACKAGES_REF}"; \

@@ -7,7 +7,7 @@
 #   BUILD_TARGETS=agent OUTPUT_SQSH=$SCRATCH/ce-images/x.sqsh .../build.sh
 #
 # Overrides: BUILD_TARGETS, OUTPUT_SQSH (single target only), BASE_IMAGE, HPCAGENT_BENCH_DACE_REF,
-# LIBFABRIC_REF, SLURM_VERSION, SPACK_BUILDCACHE, PIP_CACHE, CE_DIR.
+# LIBFABRIC_REF, SLURM_VERSION, SPACK_BUILDCACHE, SPACK_BUILD_JOBS, PIP_CACHE, CE_DIR.
 set -euo pipefail
 
 ulimit -c 0
@@ -99,6 +99,7 @@ for target in ${BUILD_TARGETS}; do
       --build-arg "LIBFABRIC_REF=${LIBFABRIC_REF}" \
       --build-arg "LIBFABRIC_COMMIT=${LIBFABRIC_COMMIT}" \
       --build-arg "SLURM_VERSION=${SLURM_VERSION}" \
+      --build-arg "SPACK_BUILD_JOBS=${SPACK_BUILD_JOBS:-64}" \
       --target "${target}" \
       -f "${SCRIPT_DIR}/Dockerfile" \
       -t "${tag}" \
