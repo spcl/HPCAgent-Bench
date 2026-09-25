@@ -130,7 +130,6 @@ def _base_env(tmp_path: pathlib.Path, bindir: pathlib.Path) -> dict:
     env.pop("HPCAGENT_BENCH_RESULTS_DIR", None)
     env.pop("HPCAGENT_BENCH_RECORD_DB_PATH", None)
     env["DACE_TREE"] = str(dace_stub)
-    env["CANON_LAUNCH"] = "test-stub"  # anything but "enroot": takes the (faked) srun branch
     env["CANON_RANKS"] = "1"
     env["CANON_OPT_REPORTS"] = "0"
     return env
@@ -328,9 +327,8 @@ def test_a_caller_supplied_record_build_is_left_alone(tmp_path: pathlib.Path) ->
 
 def test_the_merge_step_uses_python311_when_the_batch_hosts_python3_is_too_old(tmp_path: pathlib.Path) -> None:
     """The batch host's bare /usr/bin/python3 is SLES 3.6 and crashes merge_canon_results.py
-    outright; finalize_column must resolve python3.11 first, the same way
-    scripts/cscs/enroot_srun.sh and the rest of the outer path already do, rather than reaching
-    that crash and losing the merge."""
+    outright; finalize_column must resolve python3.11 first, as the rest of the outer path does,
+    rather than reaching that crash and losing the merge."""
     bindir = _fake_bin_dir_with_incompatible_system_python3(tmp_path)
     env = _base_env(tmp_path, bindir)
     runs_root = pathlib.Path(env["JIT_CACHE_ROOT"]) / "runs"

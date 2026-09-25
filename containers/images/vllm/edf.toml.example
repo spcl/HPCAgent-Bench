@@ -35,8 +35,7 @@ writable = true
 #
 # The artifact plugin's RUNPATH is /opt/cscs/netstack, and the bundle carries its OWN
 # libamdhip64.so.7 alongside librccl-net.so, so it needs nothing from the image's /opt/rocm.
-# version/name are PINNED so a CSCS-side bump is a loud failure (scripts/cscs/netstack_preflight.sh),
-# not a campaign that silently straddles two fabric stacks.
+# version/name are PINNED so a campaign never silently straddles two fabric stacks.
 com.hooks.netstack.source = "artifact"
 com.hooks.netstack.version = "26.08.1"
 com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"

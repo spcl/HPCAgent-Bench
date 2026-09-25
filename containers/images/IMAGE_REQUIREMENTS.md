@@ -108,10 +108,8 @@ in a prefix the Dockerfile controls (a copy in the image would be found first).
 
 * AMD EDF templates: `com.hooks.netstack.source = "artifact"` with a pinned `version` and `name`,
   `com.hooks.cxi.enabled`, `com.hooks.aws_ofi_nccl.enabled = "true"` and `variant = "rocm6"`
-  (read only in host mode). Host mode (the enroot launcher's fallback when an EDF names no source,
-  and the MPI/aiter check scripts) grafts host libraries built against glibc 2.38, so the images
-  must keep glibc >= 2.38. `scripts/cscs/netstack_preflight.sh` asserts the resolved libfabric
-  version and plugin.
+  (read only in host mode). Host mode (the MPI/aiter check scripts) grafts host libraries built
+  against glibc 2.38, so the images must keep glibc >= 2.38.
 * GH200 EDFs: `com.hooks.cxi.enabled`, `com.hooks.aws_ofi_nccl.enabled`, `variant = "cuda12"`,
   which is why both GPU images are CUDA 12.9.
 * `judge-agent-*` build a providerless libfabric only for MPICH to link against, and delete it

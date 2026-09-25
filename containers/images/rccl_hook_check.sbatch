@@ -56,20 +56,11 @@ NCCL_DEBUG = "INFO"
 NCCL_DEBUG_SUBSYS = "INIT,NET"
 TOML
 
-# LAUNCH=pyxis (default) | enroot; both read the same EDF. Comm hooks are forced on for enroot
-# since this job exists to test them and enroot_srun.sh would otherwise default them off.
-LAUNCH="${LAUNCH:-pyxis}"
-REPO="${HPCAGENT_BENCH_REPO:-${SCRATCH}/hpcagent-bench}"
 in_image() {
-    if [ "${LAUNCH}" = "enroot" ]; then
-        EDF_DIR="${WORK}" HPCAGENT_BENCH_COMM_HOOKS=on "${REPO}/scripts/cscs/enroot_srun.sh" e "$@"
-    else
-        local srun_args=() ; while [ $# -gt 0 ] && [ "$1" != "--" ]; do srun_args+=("$1"); shift; done
-        shift
-        srun "${srun_args[@]}" --environment="${EDF}" "$@"
-    fi
+    local srun_args=() ; while [ $# -gt 0 ] && [ "$1" != "--" ]; do srun_args+=("$1"); shift; done
+    shift
+    srun "${srun_args[@]}" --environment="${EDF}" "$@"
 }
-echo "=== launch: ${LAUNCH}"
 
 cat > "${WORK}/t.py" <<'PY'
 import os, sys, torch, torch.distributed as dist

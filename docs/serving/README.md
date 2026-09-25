@@ -50,11 +50,10 @@ followed by a ready-to-paste `curl`. The job output is `serve-only-<jobid>.out`;
 `$SCRATCH/inference-server/<jobid>/server-<rank>.log`, and `serve.env` there is the merged env that
 actually ran.
 
-**Runtime caveat.** `serve-only.sbatch` always launches through the CE (`srun --environment=`). Under
-the CE, a single-node server (qwen38, oss120b) can fail building its tensor-parallel group with
-`Failed to initialize any NET plugin`, and pyxis needs the site `ENROOT_CACHE_PATH` to be creatable.
-The campaign launcher avoids both through `enroot`; see
-[`experiments/README.md`](../../experiments/README.md#container-runtimes).
+**Runtime caveat.** `serve-only.sbatch` launches the registered EDF as is. A single-node server
+(qwen38, oss120b) can fail building its tensor-parallel group with `Failed to initialize any NET
+plugin` when the EDF forces the fabric plugin; the campaign launcher switches the hooks off for a
+single-node server, see [`experiments/README.md`](../../experiments/README.md#container-runtimes).
 
 ## 2. Images (EDFs)
 

@@ -40,8 +40,7 @@ workdir = "${REPO}"
 com.hooks.netstack.source = "host"
 # "host" grafts host libraries into the image; requires the base's glibc >= what they need
 # (currently true). A missing artifact would silently drop RCCL to TCP instead of failing loud.
-# version/name are omitted: they only index the artifact tree. netstack_preflight.sh asserts the
-# resolved host libfabric path so one campaign cannot straddle two fabric stacks unnoticed.
+# version/name are omitted: they only index the artifact tree.
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
 com.hooks.aws_ofi_nccl.variant = "rocm6"

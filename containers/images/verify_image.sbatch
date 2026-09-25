@@ -85,8 +85,7 @@ workdir = "/"
 # Matches judge-agent-amd/edf.toml.example. "host" mode does not work here: libcxi wants versioned
 # libnl_3 symbols the base image's libnl-3.so.200 lacks, and host+rocm6 needs libamdhip64.so.6
 # which this image (ROCm 7.2) does not ship. "artifact" carries a matching, self-consistent bundle.
-# version/name are pinned so a CSCS-side bump is a loud failure (netstack_preflight.sh), not a
-# campaign silently straddling two fabric stacks.
+# version/name are pinned so a campaign never silently straddles two fabric stacks.
 com.hooks.netstack.source = "artifact"
 com.hooks.netstack.version = "26.08.1"
 com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"

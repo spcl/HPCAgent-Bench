@@ -13,13 +13,6 @@ ulimit -c 0
 source "$(dirname -- "${BASH_SOURCE[0]}")/build_common.sh"
 
 in_image() {  # in_image <edf> <command...>: one task on one node of this allocation
-    # CONTAINER_RUNTIME=enroot is run_cluster.sh's route around a broken pyxis: the same EDF,
-    # started by scripts/cscs/enroot_srun.sh instead of srun --environment.
-    if [[ "${CONTAINER_RUNTIME:-ce}" == enroot ]]; then
-        "$(dirname -- "${BASH_SOURCE[0]}")/../../scripts/cscs/enroot_srun.sh" "$1" \
-            --overlap --nodes=1 --ntasks=1 -- "${@:2}"
-        return
-    fi
     srun --overlap --nodes=1 --ntasks=1 --environment="$1" "${@:2}"
 }
 

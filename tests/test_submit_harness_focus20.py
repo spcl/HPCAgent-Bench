@@ -533,8 +533,7 @@ def test_colocate_runs_three_overlapping_steps_on_one_node_with_disjoint_cpus(tm
     assert not (tmp_path / "prepare-called").exists()
     assert not (tmp_path / "srun-called").exists()
     assert "judges:     nid000001 (http://nid000001:7800)" in result.stdout
-    # Under ce the agent and single-node inference steps launch through enroot_srun.sh (no forced comm
-    # hooks, d1515d221), the judge through srun --environment; the role flag ends every launch line.
+    # Every role launches through srun --environment; the role flag ends every launch line.
     roles = ("--agent-node", "--judge-node", "--vllm-node")
     lines = {
         line.rsplit(" ", 1)[-1]: line
@@ -542,8 +541,7 @@ def test_colocate_runs_three_overlapping_steps_on_one_node_with_disjoint_cpus(tm
         if line.startswith("DRY_RUN: ") and line.endswith(roles)
     }
     assert sorted(lines) == list(roles)
-    assert lines["--judge-node"].startswith("DRY_RUN: srun ")
-    assert all("/scripts/cscs/enroot_srun.sh " in lines[role] for role in ("--agent-node", "--vllm-node"))
+    assert all(line.startswith("DRY_RUN: srun ") and " --environment=" in line for line in lines.values())
     masks = {}
     for role, line in lines.items():
         assert "--nodelist=nid000001" in line and "--overlap" in line and "--mem=0" in line, line

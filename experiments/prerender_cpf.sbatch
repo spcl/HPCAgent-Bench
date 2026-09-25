@@ -28,21 +28,13 @@
 #
 # CONTAINER, NOT HOST: nothing runs outside a container. The render step runs INSIDE the agent
 # image, which carries a toolchain (/opt/gcc, /opt/view, its own spack install) -- this
-# script stays the ORCHESTRATOR on the batch host (roster, sharding, the launcher choice, the
-# post-shard verdict table) and only the one `python3 -m hpcagent_bench.cpf_prerender` per rank
+# script stays the ORCHESTRATOR on the batch host (roster, sharding, the post-shard verdict table) and only the one `python3 -m hpcagent_bench.cpf_prerender` per rank
 # crosses into the container, via the `outer`/`inner` split below (the pattern
 # experiments/canon_column.sh already uses for exactly this problem).
 #
-# `enroot start` does not inherit the submitting shell's environment, so nothing here is passed to
-# `inner` through an exported variable -- CACHE/VIEW/KERNELS/TARGET/DACE_TREE/OPT are all POSITIONAL
-# ARGUMENTS instead, baked into the command line the container actually runs, the same reason
-# canon_column.sh's inner mode takes them that way. Whichever launcher runs it, `inner` derives its
-# whole environment (PYTHONPATH, PYTHONHASHSEED, OPENBLAS_DIR) itself rather than trusting anything
-# to have crossed the container boundary on its own.
-#
-# CONTAINER_RUNTIME is picked by scripts/cscs/container_runtime.sh: scripts/cscs/enroot_srun.sh's
-# direct `enroot start` unless CONTAINER_RUNTIME=ce asks for `srun --environment=` (pyxis).
-# CPF_LAUNCH overrides either way, for tests and for a forced fallback.
+# CACHE/VIEW/KERNELS/TARGET/DACE_TREE/OPT reach `inner` as POSITIONAL ARGUMENTS, never through the
+# environment, and `inner` derives its own environment (PYTHONPATH, PYTHONHASHSEED, OPENBLAS_DIR)
+# rather than trusting anything to cross the container boundary.
 set -euo pipefail
 ulimit -c 0
 
@@ -64,8 +56,7 @@ if [[ "${1:-}" == inner || "${1:-}" == inner-pool ]]; then
     CACHE=${1:?inner: cache}; VIEW_ARG=${2:?inner: view}; KERNELS_ARG=${3:?inner: kernels}
     TARGET_ARG=${4:?inner: target}; DACE_TREE_ARG=${5-}; OPT_ARG=${6:?inner: opt}
     WORKERS_ARG=${7:-1}
-    # An empty dace tree is the image's own dace at the job's commit (HPCAGENT_BENCH_DACE_REF, which
-    # enroot_forward.sh carries in).
+    # An empty dace tree is the image's own dace at the job's commit (HPCAGENT_BENCH_DACE_REF).
     if [[ -z "${DACE_TREE_ARG}" ]]; then
         "${OPT_ARG}/containers/images/dace_refresh.sh" || { echo "prerender: dace refresh failed" >&2; exit 1; }
         DACE_TREE_ARG="${DACE_DIR:-/opt/dace}"
@@ -165,12 +156,6 @@ else
     echo "  dace  the image's, at ${HPCAGENT_BENCH_DACE_REF}"
 fi
 
-#: Unset, scripts/cscs/container_runtime.sh decides, so this returns to pyxis by itself the day
-#: CSCS's enroot.conf is fixed -- same rule as canon_column.sh's CANON_LAUNCH.
-launch="${CPF_LAUNCH:-}"
-if [[ -z "${launch}" ]]; then
-    [[ "$("${OPT}/scripts/cscs/container_runtime.sh")" == enroot ]] && launch=enroot || launch=pyxis
-fi
 CPF_CE_ENV=${CPF_CE_ENV:-hpcagent-bench-agent-mi300-latest}
 SELF="$(self_path)"
 [[ -f "${SELF}" ]] || { echo "prerender: cannot find myself at ${SELF} (check OPT)" >&2; exit 2; }
@@ -179,24 +164,16 @@ SELF="$(self_path)"
 # only for an internal error (broken toolchain, unwritable cache, dace edited mid-run), and only
 # then should this status stay nonzero.
 status=0
-if [[ "${launch}" == enroot ]]; then
-    "${OPT}/scripts/cscs/enroot_srun.sh" "${CPF_CE_ENV}" \
-        --ntasks="${ranks}" --cpus-per-task="${cores}" --hint=nomultithread --mem=0 --kill-on-bad-exit=0 \
-        -- bash "${SELF}" "${inner_mode}" "${CPF_CACHE}" "${VIEW}" "${KERNEL_LIST}" "${TARGET}" "${DACE_TREE}" \
-        "${OPT}" "${workers}" || status=$?
-else
-    srun --environment="${CPF_CE_ENV}" --ntasks="${ranks}" --cpus-per-task="${cores}" --hint=nomultithread \
-        --mem=0 --kill-on-bad-exit=0 \
-        bash "${SELF}" "${inner_mode}" "${CPF_CACHE}" "${VIEW}" "${KERNEL_LIST}" "${TARGET}" "${DACE_TREE}" \
-        "${OPT}" "${workers}" || status=$?
-fi
+srun --environment="${CPF_CE_ENV}" --ntasks="${ranks}" --cpus-per-task="${cores}" --hint=nomultithread \
+    --mem=0 --kill-on-bad-exit=0 \
+    bash "${SELF}" "${inner_mode}" "${CPF_CACHE}" "${VIEW}" "${KERNEL_LIST}" "${TARGET}" "${DACE_TREE}" \
+    "${OPT}" "${workers}" || status=$?
 
 # The roster-wide verdict table: every shard has finished (or failed hard) by the time this runs, so
 # a miss here is a real gap, never a sibling rank still rendering. hpcagent_bench.cpf_cache is
 # STANDARD LIBRARY ONLY (its own docstring), so this reads the cache from the BATCH HOST directly --
 # no container, no DACE_TREE -- but it still needs python3.11+ for `dict[str, object]`-style
-# generics, and the bare `python3` this host resolves is SLES's 3.6 (same reason
-# scripts/cscs/enroot_srun.sh picks python3.11 first for its own TOML parse).
+# generics, and the bare `python3` this host resolves is SLES's 3.6.
 CHECK_PY="$(command -v python3.11 || command -v python3)"
 langs="c c++"
 [[ "${TARGET}" == gpu ]] && langs=hip

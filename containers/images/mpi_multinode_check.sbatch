@@ -50,7 +50,7 @@ workdir = "${WORK}"
 # bundle, not just cxi: also carries libc.so.6, libcurl.so.4, libcxi.so.1, libfabric.so.1.
 com.hooks.netstack.source = "host"
 # version/name are omitted: they only index the artifact tree, unused in host mode. The host path
-# is a root-owned symlink; scripts/cscs/netstack_preflight.sh asserts what it resolves to.
+# is a root-owned symlink.
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
 com.hooks.aws_ofi_nccl.variant = "rocm6"

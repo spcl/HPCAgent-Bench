@@ -63,7 +63,7 @@ opt=${6:-$(canon_repo_root)}
 #: and a confusing failure many lines later. Checked here instead.
 [[ -n "${opt}" ]] || { echo "canon_column: no opt (arg 6) and no SCRATCH/HPCAGENT_BENCH_REPO to default it from" >&2; exit 2; }
 
-#: After a column's srun/enroot step returns, fold its CSV rows into the persistent, cross-run
+#: After a column's srun step returns, fold its CSV rows into the persistent, cross-run
 #: canon DB (scripts/merge_canon_results.py) and delete the column's own DaCe build tree + per-rank
 #: shard DB -- the two things that make a canon work dir grow without bound -- but ONLY once that
 #: merge is INDEPENDENTLY verified: this function's own `wc -l` over the CSVs is checked against
@@ -87,8 +87,8 @@ finalize_column() {
     shopt -u nullglob
     #: The batch host's /usr/bin/python3 is SLES 3.6 (no `dict[str, object]`-style annotations,
     #: no tomllib) and crashes merge_canon_results.py outright; python3.11 is what the rest of the
-    #: outer path already resolves to on beverin (scripts/cscs/enroot_srun.sh, run_cluster.sh,
-    #: prepare_job.sh: `command -v python3.11 || command -v python3`). Same resolution here, with
+    #: outer path already resolves to on beverin (run_cluster.sh, prepare_job.sh:
+    #: `command -v python3.11 || command -v python3`). Same resolution here, with
     #: an explicit check: silently falling through to the 3.6 default would just move the crash.
     #: PROVENANCE for canon.db (scripts/merge_canon_results.py's `build` column): the dace label
     #: each rank stamped (inner writes <column>.rank<N>.dace); ranks that disagree are all named.
@@ -186,23 +186,9 @@ if [[ "${mode}" == outer ]]; then
         fi
         rm -f -- "${out_root}/${one}".rank*.dace
         # Not exec: the next column has to run after this one in the same allocation.
-        #: CANON_LAUNCH=enroot|pyxis. Unset, scripts/cscs/container_runtime.sh decides (enroot unless
-        #: CONTAINER_RUNTIME says otherwise). enroot reads the SAME EDF, so the two launchers cannot
-        #: describe different runs; `enroot start` MOUNTS the squashfs (8 s, no tmpfs), and a framework
-        #: column needs no comm hooks.
-        launch="${CANON_LAUNCH:-}"
-        if [[ -z "${launch}" ]]; then
-            [[ "$("${opt}/scripts/cscs/container_runtime.sh")" == enroot ]] && launch=enroot || launch=pyxis
-        fi
-        if [[ "${launch}" == "enroot" ]]; then
-            "${opt}/scripts/cscs/enroot_srun.sh" "${CANON_CE_ENV:-hpcagent-bench-agent-mi300-latest}" \
-                --ntasks="${ranks}" --cpus-per-task="${cpt}" --hint=nomultithread --mem=0 \
-                -- bash "${SELF}" inner "${one}" "${out_root}" "${kernels}" "${preset}" "${opt}" || rc=1
-        else
-            srun --environment="${CANON_CE_ENV:-hpcagent-bench-agent-mi300-latest}" --ntasks="${ranks}" \
-                --cpus-per-task="${cpt}" --hint=nomultithread --mem=0 \
-                bash "${SELF}" inner "${one}" "${out_root}" "${kernels}" "${preset}" "${opt}" || rc=1
-        fi
+        srun --environment="${CANON_CE_ENV:-hpcagent-bench-agent-mi300-latest}" --ntasks="${ranks}" \
+            --cpus-per-task="${cpt}" --hint=nomultithread --mem=0 \
+            bash "${SELF}" inner "${one}" "${out_root}" "${kernels}" "${preset}" "${opt}" || rc=1
         #: Merge-then-delete, but ONLY for a work dir this script's own convention created (see
         #: .cache/README.md's "Job work dirs" section). An out_root outside HPCAGENT_BENCH_RUNS_ROOT
         #: -- every pre-existing $SCRATCH/canon-*/smoke-* directory, and any caller that has not

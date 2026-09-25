@@ -165,7 +165,7 @@ core.[0-9]*
 /containers/**/logs/
 scratchpad/
 
-# --- Container images and staged copies (enroot export, materialize_shared.sh, image contexts) ---
+# --- Container images and staged copies (squashfs exports, materialize_shared.sh, image contexts) ---
 *.sqsh
 /containers/agent/skills/
 /containers/**/staged-skills/

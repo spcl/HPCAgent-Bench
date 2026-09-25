@@ -10,6 +10,16 @@
 #SBATCH --output=beverin-services-%j.out
 #SBATCH --error=beverin-services-%j.err
 
+# The three-role job (inference, agent, judge). Site specifics (partition, account, GPU count) come
+# from the site layer or the sbatch command line:
+#
+#   sbatch --partition=<p> --account=<a> --gpus-per-node=4 --nodes=<sum> experiments/beverin.sbatch
+#
+# CONTAINER_RUNTIME (.env or environment): ce (default; srun --environment=<EDF>), apptainer, podman,
+# docker. Non-CE runtimes need INFERENCE_IMAGE and BENCH_IMAGE plus CONTAINER_GPU_FLAGS ("--rocm" or
+# "--nv" for apptainer, "--device /dev/kfd --device /dev/dri" for podman on AMD, "--gpus all" for
+# docker on NVIDIA). Every runtime keeps host networking; the roles talk over node hostnames.
+
 set -euo pipefail
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
@@ -27,24 +37,6 @@ if [[ ! -f "${ENV_FILE}" ]]; then
     echo "missing ${ENV_FILE}; copy ${SCRIPT_DIR}/.env.example to ${SCRIPT_DIR}/.env" >&2
     exit 2
 fi
-
-# FABRIC GATE. Fails the allocation now rather than producing a slow, valid-looking result.
-#
-# The container network hooks default to netstack.source="artifact", whose tree is on the host
-# (HPCAGENT_BENCH_NETSTACK_BASE, site layer). When it is missing the hooks do not error: they bind-mount files that
-# are not there and RCCL silently drops from CXI to TCP sockets. The arm still completes, the
-# numbers are still produced, and nothing in the log says the fabric was never used -- which is
-# why this is checked up front instead of being left to look like a slow model afterwards.
-#
-# It also asserts the libfabric the host symlink resolves to, because that symlink is root-owned
-# and the site can repoint it between two arms of one campaign.
-_preflight="${HPCAGENT_BENCH_REPO:-${SCRIPT_DIR}/..}/scripts/cscs/netstack_preflight.sh"
-if [[ -x "${_preflight}" ]]; then
-    "${_preflight}" || { echo "netstack preflight failed; refusing to spend the allocation" >&2; exit 2; }
-else
-    echo "WARNING: ${_preflight} not found -- fabric is UNVERIFIED for this run" >&2
-fi
-unset _preflight
 
 set -a
 # shellcheck disable=SC1090
@@ -65,12 +57,5 @@ fi
 
 export CLUSTER_ENV_FILE="${ENV_FILE}"
 export HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
-
-# Container launcher: `enroot` unless CONTAINER_RUNTIME is set (submit environment or the arm's .env,
-# sourced above). Under `ce` the EDF comm hooks break single-node inference; see
-# scripts/cscs/container_runtime.sh and experiments/README.md "Container runtimes".
-CONTAINER_RUNTIME="$("${HPCAGENT_BENCH_REPO}/scripts/cscs/container_runtime.sh")" || exit 2
-export CONTAINER_RUNTIME
-echo "container runtime: ${CONTAINER_RUNTIME}"
 
 exec bash "${SCRIPT_DIR}/run_cluster.sh"

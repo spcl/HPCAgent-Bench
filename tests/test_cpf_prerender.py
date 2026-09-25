@@ -139,17 +139,11 @@ def test_a_gpu_prerender_records_hip_entries_the_launch_gates_accept(
     assert cpf_cache.main(check) == 0, capsys.readouterr().out
 
 
-def test_every_launch_path_carries_kill_on_bad_exit_0() -> None:
-    """A rank exiting nonzero (an internal error) must never take the other shards down with it,
-    whichever container launcher (enroot directly, or `srun --environment=` once pyxis is fixed)
-    scripts/cscs/container_runtime.sh picked for this job."""
+def test_the_launch_carries_kill_on_bad_exit_0() -> None:
+    """A rank exiting nonzero (an internal error) must never take the other shards down with it."""
     text = SBATCH.read_text()
-    enroot_at = text.index('"${OPT}/scripts/cscs/enroot_srun.sh"')
     ce_at = text.index('srun --environment="${CPF_CE_ENV}"')
-    assert ce_at > enroot_at, "the enroot branch is tried first, the ce branch is the else"
-    fi_at = text.index("\nfi\n", ce_at)
-    assert "--kill-on-bad-exit=0" in text[enroot_at - 200 : ce_at], "enroot branch"
-    assert "--kill-on-bad-exit=0" in text[ce_at:fi_at], "ce branch"
+    assert "--kill-on-bad-exit=0" in text[ce_at : text.index("|| status=$?", ce_at)]
 
 
 def test_the_roster_check_runs_once_after_the_render_launch_not_inside_a_rank() -> None:
@@ -303,7 +297,6 @@ def test_the_kernels_whose_render_never_finishes_are_started_first(tmp_path: pat
         "VIEW": str(tmp_path / "view"),
         "KERNELS": roster,
         "CPF_POOL": "1",
-        "CPF_LAUNCH": "pyxis",
     }
     run = subprocess.run(["bash", str(SBATCH)], env=env, capture_output=True, text=True, check=False)
     assert run.returncode == 0, run.stdout + run.stderr
@@ -333,7 +326,6 @@ def test_cpf_pool_launches_one_rank_over_every_core_and_keeps_the_roster_check(t
         "VIEW": str(tmp_path / "view"),
         "KERNELS": "k1,k2",
         "CPF_POOL": "1",
-        "CPF_LAUNCH": "pyxis",
     }
     run = subprocess.run(["bash", str(SBATCH)], env=env, capture_output=True, text=True, check=False)
     assert run.returncode == 0, run.stdout + run.stderr

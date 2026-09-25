@@ -49,8 +49,7 @@ com.hooks.netstack.source = "host"
 # ships glibc 2.39, which satisfies them. fi_pingpong over cxi, 1 MB: host 2.3.1 19329 MB/s against
 # 20011 and 19878 MB/s for the alternatives, within noise at 4 CXI NICs per node.
 # version/name are NOT set: they only index the artifact tree. The host path is
-# /opt/cray/libfabric/host, a root-owned symlink; scripts/cscs/netstack_preflight.sh ASSERTS what
-# it resolves to rather than letting one campaign straddle two fabric stacks.
+# /opt/cray/libfabric/host, a root-owned symlink.
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"
 com.hooks.aws_ofi_nccl.variant = "rocm6"

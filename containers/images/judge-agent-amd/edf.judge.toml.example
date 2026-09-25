@@ -95,8 +95,7 @@ LD_PRELOAD = "/usr/local/lib/libmimalloc.so"
 # ships its own libc.so.6, which shadows the host's when a hook tool picks it up. It is therefore
 # left out of LD_LIBRARY_PATH above; MPI still selects provider=cxi without it.
 #
-# version/name are PINNED so a CSCS-side bump is a loud failure (scripts/cscs/netstack_preflight.sh),
-# not a campaign that silently straddles two fabric stacks.
+# version/name are PINNED so a campaign never silently straddles two fabric stacks.
 com.hooks.netstack.source = "artifact"
 com.hooks.netstack.version = "26.08.1"
 com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
