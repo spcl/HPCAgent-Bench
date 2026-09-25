@@ -168,6 +168,25 @@ def test_the_gpu_prompt_is_the_base_prompt_plus_the_build_contract(tmp_path, rep
     assert composed.index("## GPU languages (hip, cuda)") < composed.index("{{HINTS}}")
 
 
+def test_a_dropped_in_addendum_or_tools_paragraph_is_a_new_prompt_variant(tmp_path, repo) -> None:
+    """``<variant>-build.md`` composes ``prompt-<variant>.md`` and ``tools-<name>.md`` swaps the file-tools
+    paragraph into ``prompt-<name>.md``; no list in the stager names either file."""
+    agent = repo / "containers/agent"
+    (agent / "prompt.md").write_text("base rules\n{{TOOLS}}\nYour file tools are `Read` and `Edit`.\n\n{{HINTS}}\n")
+    (agent / "probe-build.md").write_text("## Probe track\n")
+    (agent / "tools-probetool.md").write_text("Your tools are a probe.\n")
+    (agent / "tools-cli.md").write_text("Your tools are a shell.\n")
+    shared = tmp_path / "shared"
+    materialize(repo, shared)
+    assert not (shared / "prompt-probe-build.md").exists()
+    composed = (shared / "prompt-probe.md").read_text()
+    assert composed.index("## Probe track") < composed.index("{{HINTS}}")
+    tools = (shared / "prompt-probetool.md").read_text()
+    assert "Your tools are a probe." in tools and "`Read`" not in tools and "{{TOOLS}}" in tools
+    cli = (shared / "prompt-cli.md").read_text()
+    assert "Your tools are a shell." in cli and "{{TOOLS_CLI}}" in cli and "`Read`" not in cli
+
+
 def test_the_base_prompt_is_untouched_by_the_repo_variant(tmp_path, repo) -> None:
     """The kernel arm is the control: what it reads must be byte-identical to the repo file."""
     shared = tmp_path / "shared"
