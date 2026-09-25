@@ -13,15 +13,11 @@ Every source database is opened READ-ONLY (``mode=ro``): the run roots are the o
 campaign and a reader must never be able to damage them by re-running the extraction. The run
 globs and the output directory are arguments, so the same script serves any campaign.
 
-Two provenance columns carry the honesty of the artifact and are never inferred away:
-
-``baseline_source``   run_local     the run's own copy of the task the agent was served
-                      corpus_today  today's corpus file, a RECONSTRUCTION, filename-marked
-                      missing       nothing to show
-``candidate_source``  graded_attempt  the exact text of that graded attempt, from ``sources``
-                      last_saved      the last file left in the agent workspace, which is NOT
-                                      necessarily the text that was submitted
-                      missing         the submitted text is not recoverable
+The index's ``provenance`` column carries the honesty of the artifact and is never inferred away:
+a baseline is ``run_local`` (the run's own copy of the task the agent was served) or
+``corpus_today`` (today's corpus file, a RECONSTRUCTION, filename-marked); a candidate is
+``graded_attempt`` (the exact text of that graded attempt, from ``sources``) or ``last_saved`` (the
+last file left in the agent workspace, which is NOT necessarily the text that was submitted).
 
 Re-running over unchanged inputs reproduces byte-identical output.
 
@@ -57,7 +53,6 @@ from hpcagent_bench import campaigns, config, data_guard, frozen_observations, f
 from hpcagent_bench.experiments import FINAL_GRADE_DIRNAME, agent_indices, arm_of, judge_database
 from hpcagent_bench.harness import scoring, timing
 from hpcagent_bench.harness.native_call import TimingProbe
-from hpcagent_bench.harness.recording import SCALING_SUMMARY
 from hpcagent_bench.observation_columns import CANON_FIELDS, NUMERIC_COLUMNS, OBSERVATION_FIELDS, SOURCE_FIELDS
 from hpcagent_bench.spec import BenchSpec, load_spec
 from hpcagent_bench.stats import population, score_rule
@@ -583,35 +578,13 @@ MIN_RECORD_FOLD = 2
 #: attempt's total (T2, T5); the crashed attempts' spend and the final attempt's start ride beside it.
 RECORD_COLUMNS: tuple[tuple[str, str], ...] = (
     ("tokens", "tokens_effective"),
-    ("tokens_billed", "tokens_billed"),
-    ("tokens_provider", "tokens_provider"),
     ("tokens_fresh_input", "fresh_input"),
     ("tokens_cached_input", "cached_input"),
     ("tokens_output", "output"),
     ("task_attempts", "attempts"),
     ("tokens_crashed", "tokens_effective_crashed"),
-    # The BILLED counterpart of tokens_crashed (token_cost.TaskTotals): what the task cost
-    # including the attempts that crashed.
-    ("tokens_billed_crashed", "tokens_billed_crashed"),
     ("task_final_attempt_start_ms", "final_attempt_start_ms"),
-    ("tokens_output_source", "output_source"),
-    ("tokens_output_suspect", "output_suspect"),
 )
-
-
-def record_provider_tokens(record: dict[str, Any], stated: object) -> object:
-    """A record's provider-priced total: the one it states, else priced from its own components.
-
-    The driver's ``tokens.json`` has never written ``tokens_provider``, so every fold-2+ record
-    extracted a blank; its ``fresh_input``/``cached_input``/``output`` are the final attempt's, and the
-    fold's own ``PROVIDER_CACHE_DISCOUNT`` prices them exactly as ``task_totals`` would."""
-    if stated not in ("", None):
-        return stated
-    parts = [record.get(key) for key in ("fresh_input", "cached_input", "output")]
-    if not all(isinstance(part, (int, float)) and not isinstance(part, bool) for part in parts):
-        return ""
-    fresh, cached, output = (float(part) for part in parts)
-    return int(fresh + token_cost.PROVIDER_CACHE_DISCOUNT * cached + output)
 
 
 def cost_record(worker_dir: pathlib.Path) -> dict[str, Any] | None:
@@ -672,7 +645,7 @@ def task_rows_for_job(
         arm = arm_of(run_id)
         if not arm.startswith(arm_prefix) or not excluded.isdisjoint(arm.split("-")):
             continue
-        node, problem, worker = agent_indices(run_id)
+        worker = agent_indices(run_id)[2]
         record = cost_record(worker_dir)
         if record is None and not names_its_run(worker_dir):
             tally["tokens.json below fold 2 and no transcript left (row, no token total)"] += 1
@@ -681,21 +654,17 @@ def task_rows_for_job(
             task = totals[worker_dir] if totals is not None else token_cost.task_totals(worker_dir)
             counts = {
                 "tokens": task.tokens_effective if task.tokens_effective is not None else "",
-                "tokens_billed": task.tokens_billed if task.tokens_billed is not None else "",
-                "tokens_provider": task.tokens_provider if task.tokens_provider is not None else "",
                 "tokens_fresh_input": task.tokens_fresh_input if task.tokens_fresh_input is not None else "",
                 "tokens_cached_input": task.tokens_cached_input if task.tokens_cached_input is not None else "",
                 "tokens_output": task.tokens_output if task.tokens_output is not None else "",
                 "task_attempts": task.attempts,
                 "tokens_crashed": task.tokens_effective_crashed,
-                "tokens_billed_crashed": task.tokens_billed_crashed,
                 "task_final_attempt_start_ms": task.final_attempt_start_ms,
             }
             if task.tokens_effective is None:
                 tally["no fold-2+ tokens.json and the transcript fold found no usage (row, no token total)"] += 1
         else:
             counts = {column: record.get(key, "") for column, key in RECORD_COLUMNS}
-            counts["tokens_provider"] = record_provider_tokens(record, counts["tokens_provider"])
         launched = launch_identities(job_dir).get(arm, ("", ""))
         row: dict[str, Any] = dict.fromkeys(OBSERVATION_FIELDS, "")
         row.update(
@@ -708,8 +677,6 @@ def task_rows_for_job(
             harness=identity.harnesses.get(run_id) or launched[0],
             # '' is the control packet, so a recorded '' stands; only a run the judge never saw falls back.
             packet=identity.packets[run_id] if run_id in identity.packets else launched[1],
-            node_index=node,
-            problem_index=problem,
             worker_index=worker,
             benchmark=who.benchmark,
             language=who.language,
@@ -749,33 +716,6 @@ def column(row: sqlite3.Row, keys: frozenset[str], name: str) -> Any:
     return row[name] if name in keys else ""
 
 
-#: A grade's ``(scaling_laws, scaling_max_ranks)``, keyed ``(run_id, benchmark, ts)``.
-MlCurves = dict[tuple[str, str, int], tuple[Any, Any]]
-
-
-def ml_curve_summaries(conn: sqlite3.Connection, tables: frozenset[str]) -> MlCurves | None:
-    """Every ``submissions`` row's curve summary read off ``scaling_points``
-    (:data:`recording.SCALING_SUMMARY`), or None where the DB still stores it as columns (or has no
-    points to derive it from)."""
-    if not {"submissions", "scaling_points"} <= tables:
-        return None
-    if any(r[1] == "mpi_mode" for r in conn.execute("PRAGMA table_info(submissions)")):
-        return None
-    query = (
-        f"SELECT run_id, benchmark, ts, {SCALING_SUMMARY['mpi_mode']}, {SCALING_SUMMARY['mpi_ranks']} FROM submissions"
-    )
-    return {(r[0] or "", r[1] or "", int(r[2] or 0)): (r[3], r[4]) for r in conn.execute(query)}
-
-
-def ml_curve_columns(row: sqlite3.Row, keys: frozenset[str], table: str, derived: MlCurves | None) -> dict[str, Any]:
-    """The ML curve summary columns of one observation: stored on the row by an older DB (as
-    ``mpi_mode`` / ``mpi_ranks``), derived from ``scaling_points`` on a current one."""
-    if derived is None or table != "submissions":
-        return {"scaling_laws": column(row, keys, "mpi_mode"), "scaling_max_ranks": column(row, keys, "mpi_ranks")}
-    laws, ranks = derived.get((row["run_id"] or "", row["benchmark"] or "", int(row["ts"] or 0)), (None, None))
-    return {"scaling_laws": laws, "scaling_max_ranks": ranks}
-
-
 def arm_admitted(arm: str, arm_prefix: str, excluded: frozenset[str]) -> bool:
     """Whether ``arm`` belongs to the campaign: its label starts with ``arm_prefix`` and none of its
     hyphen-separated tokens is ``excluded`` (see :func:`read_db`)."""
@@ -798,25 +738,16 @@ def scaling_rows(
     identity: tuple[dict[str, str], dict[str, str]],
 ) -> list[dict[str, Any]]:
     """``row_kind = "scaling"`` rows: one per ``scaling_points`` row whose arm the ``campaign``
-    (arm prefix, excluded tokens) admits (:func:`arm_admitted`), with
-    its curve's ``scaling_mean_efficiency`` joined on the grade (blank when no curve survived). The caller
-    checks the table exists; ``identity`` is the ``runs`` table's (harnesses, packets) maps."""
+    (arm prefix, excluded tokens) admits (:func:`arm_admitted`). The caller checks the table exists;
+    ``identity`` is the ``runs`` table's (harnesses, packets) maps."""
     harnesses, packets = identity
-    # A curve is keyed by its law since both laws of an ML grade share one stamp; a DB written
-    # before scaling_curves carried the law holds one curve per grade, read here under law NULL.
-    columns = {str(r[1]) for r in conn.execute("PRAGMA table_info(scaling_curves)")}
-    law = "scaling_mode" if "scaling_mode" in columns else "NULL AS scaling_mode"
-    curves = {
-        (r["run_id"], r["benchmark"], int(r["ts"]), r["scaling_mode"]): r["mean_efficiency"]
-        for r in conn.execute(f"SELECT run_id, benchmark, ts, {law}, mean_efficiency FROM scaling_curves")
-    }
     out: list[dict[str, Any]] = []
     for row in conn.execute("SELECT * FROM scaling_points ORDER BY run_id, benchmark, ts, ranks"):
         run_id, bench, ts = row["run_id"] or "", row["benchmark"] or "", int(row["ts"])
         arm = arm_of(run_id)
         if not arm_admitted(arm, *campaign):
             continue
-        node, problem, worker = agent_indices(run_id)
+        worker = agent_indices(run_id)[2]
         out.append(
             {
                 "run_root": db.run_root,
@@ -828,11 +759,8 @@ def scaling_rows(
                 "harness": harnesses.get(run_id, ""),
                 "packet": packets.get(run_id, ""),
                 "skills": uses_skills(arm),
-                "node_index": node,
-                "problem_index": problem,
                 "worker_index": worker,
                 "benchmark": bench,
-                "submitted": "0",
                 "ts_ms": ts,
                 "scaling_ranks": row["ranks"],
                 "scaling_nodes": blank(row["nodes"]),
@@ -840,12 +768,8 @@ def scaling_rows(
                 "scaling_ranked_ns": blank(row["ranked_ns"]),
                 "scaling_single_rank_ns": blank(row["single_rank_ns"]),
                 "scaling_work_ratio": blank(row["work_ratio"]),
-                "scaling_shape": blank(row["shape"]),
                 "scaling_note": blank(row["note"]),
                 "scaling_point_efficiency": blank(row["efficiency"]),
-                "scaling_mean_efficiency": blank(
-                    curves.get((run_id, bench, ts, row["scaling_mode"]), curves.get((run_id, bench, ts, None)))
-                ),
             }
         )
     return out
@@ -877,7 +801,6 @@ def baseline_rows(conn: sqlite3.Connection, db: Database) -> list[dict[str, Any]
                 "run_id": f"{TORCH_DIST_ARM}:{row['arch']}:{row['image']}",
                 "arm": TORCH_DIST_ARM,
                 "benchmark": bench,
-                "submitted": "0",
                 "ts_ms": int(row["grade_ts"] or 0),
                 "scaling_ranks": row["ranks"],
                 "scaling_nodes": blank(row["nodes"]),
@@ -885,7 +808,6 @@ def baseline_rows(conn: sqlite3.Connection, db: Database) -> list[dict[str, Any]
                 "scaling_ranked_ns": blank(row["ranked_ns"]),
                 "scaling_single_rank_ns": "",
                 "scaling_work_ratio": blank(row["work_ratio"]),
-                "scaling_shape": blank(row["params"]),
                 "scaling_note": "; ".join(str(x) for x in (row["compile_mode"] or "not timed", row["note"]) if x),
                 "scaling_point_efficiency": "",
             }
@@ -899,11 +821,10 @@ def run_lookups(
     dict[str, str],
     dict[str, str],
     dict[tuple[str, str, int], sqlite3.Row],
-    dict[tuple[str, str, int], tuple[int, Any, Any]],
     dict[tuple[str, str, int], str],
 ]:
     """Per-DB side tables: ``(harness by run_id, packet by run_id, source blob by (run_id, benchmark,
-    ts), (n cells, g_i, gsd_i) by (run_id, benchmark, ts), cell-0 shape of a floor-override kernel
+    ts), cell-0 shape of a floor-override kernel
     by (run_id, benchmark, ts))``. A table or column a DB predates reads as empty."""
     # runs.harness is absent from a DB written before the column; its rows get "".
     harnesses: dict[str, str] = {}
@@ -923,22 +844,14 @@ def run_lookups(
     if "sources" in tables:
         for row in conn.execute("SELECT * FROM sources ORDER BY id"):
             blobs[(row["run_id"] or "", row["benchmark"] or "", int(row["ts"] or 0))] = row
-    # The per-cell disclosure behind a recorded speed-up, keyed the same way. Absent on any DB
-    # written before the table existed, which every reader must treat as "not recorded".
-    cells: dict[tuple[str, str, int], tuple[int, Any, Any]] = {}
+    # The drawn shape a floor-override kernel's live suspect is re-derived at (rederived_row_suspect),
+    # keyed the same way. Absent on any DB written before the table existed.
     shapes: dict[tuple[str, str, int], str] = {}
     if "submission_cells" in tables:
-        for row in conn.execute(
-            "SELECT run_id, benchmark, ts, COUNT(*) AS n, MAX(g_i) AS g_i, MAX(gsd_i) AS gsd_i "
-            "FROM submission_cells GROUP BY run_id, benchmark, ts"
-        ):
-            key = (row["run_id"] or "", row["benchmark"] or "", int(row["ts"] or 0))
-            cells[key] = (int(row["n"]), row["g_i"], row["gsd_i"])
-        # the drawn shape a floor-override kernel's live suspect is re-derived at (rederived_row_suspect)
         for row in conn.execute("SELECT run_id, benchmark, ts, shape FROM submission_cells WHERE cell = 0"):
             if floor_override(str(row["benchmark"] or "")) is not None:
                 shapes[(row["run_id"] or "", row["benchmark"] or "", int(row["ts"] or 0))] = row["shape"] or ""
-    return harnesses, packets, blobs, cells, shapes
+    return harnesses, packets, blobs, shapes
 
 
 def read_db(
@@ -972,9 +885,8 @@ def read_db(
     # ``with conn:`` alone only commits; it never closes the connection.
     with contextlib.closing(conn):
         tables = frozenset(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"))
-        harnesses, packets, blobs, cells, shapes = run_lookups(conn, tables)
-        ml_curves = ml_curve_summaries(conn, tables)
-        if "scaling_points" in tables and "scaling_curves" in tables:
+        harnesses, packets, blobs, shapes = run_lookups(conn, tables)
+        if "scaling_points" in tables:
             observations.extend(
                 scaling_rows(
                     conn,
@@ -1005,16 +917,13 @@ def read_db(
                         continue
                     if stamp < c_fix_ms:
                         continue
-                node, problem, worker = agent_indices(run_id)
+                worker = agent_indices(run_id)[2]
                 if table == "calls":
                     index: Any = row["round"]
                 else:
                     ordinals[(run_id, bench)] = ordinals.get((run_id, bench), 0) + 1
                     index = ordinals[(run_id, bench)]
                 blob = blobs.get((stored, bench, int(row["ts"] or 0)))
-                # g_i / gsd_i are stored per cell and are constant within a submission, so MAX()
-                # above reads the value the grader credited rather than re-deriving one.
-                n_cells, g_i, gsd_i = cells.get((stored, bench, int(row["ts"] or 0)), (0, None, None))
                 record = table[:-1]
                 observations.append(
                     {
@@ -1027,8 +936,6 @@ def read_db(
                         "harness": harnesses.get(run_id, ""),
                         "packet": packets.get(run_id, ""),
                         "skills": uses_skills(arm),
-                        "node_index": node,
-                        "problem_index": problem,
                         "worker_index": worker,
                         "benchmark": bench,
                         "language": column(row, keys, "language"),
@@ -1037,7 +944,6 @@ def read_db(
                         "datatype": column(row, keys, "datatype"),
                         "source_mode": column(row, keys, "source_mode"),
                         "attempt_index": index,
-                        "submitted": "1" if table == "submissions" else "0",
                         "status": column(row, keys, "status"),
                         "correct": column(row, keys, "correct"),
                         "build_ok": column(row, keys, "build_ok"),
@@ -1062,11 +968,6 @@ def read_db(
                         "commit_sha": column(row, keys, "commit_sha"),
                         "ts_ms": row["ts"],
                         "source_blob": blob["path"] if blob is not None else "",
-                        "cells_timed": n_cells or "",
-                        "cell_geomean": "" if g_i is None else g_i,
-                        "cell_gsd": "" if gsd_i is None else gsd_i,
-                        **ml_curve_columns(row, keys, table, ml_curves),
-                        "scaling_curve": column(row, keys, "scaling_curve"),
                     }
                 )
                 if blob is not None:
@@ -1142,7 +1043,6 @@ def export_agent(
                     **stem,
                     "kind": "baseline",
                     "provenance": "run_local",
-                    "n_bytes": stat[0],
                     "sha256": stat[1],
                     "rel_path": str(rel),
                     "origin": str(origin),
@@ -1158,7 +1058,6 @@ def export_agent(
                         **stem,
                         "kind": "baseline",
                         "provenance": "corpus_today",
-                        "n_bytes": stat[0],
                         "sha256": stat[1],
                         "rel_path": str(rel),
                         "origin": str(origin),
@@ -1170,7 +1069,7 @@ def export_agent(
         rel = rel_dir / f"candidate_{order:02d}_{row['row_kind']}{suffix}"
         stat = copy_into(origin, out / rel)
         if stat is not None:
-            yield {**row, "seq": order, "n_bytes": stat[0], "sha256": stat[1], "rel_path": str(rel)}
+            yield {**row, "seq": order, "sha256": stat[1], "rel_path": str(rel)}
 
     workspace = job_dir / "shared" / f"agent-{agent.worker_index}" if agent.worker_index else None
     if workspace is not None and workspace.is_dir():
@@ -1182,7 +1081,6 @@ def export_agent(
                     **stem,
                     "kind": "candidate",
                     "provenance": "last_saved",
-                    "n_bytes": stat[0],
                     "sha256": stat[1],
                     "rel_path": str(rel),
                     "origin": str(origin),
@@ -1207,8 +1105,6 @@ def canon_rows(log: pathlib.Path) -> list[dict[str, Any]]:
                 "benchmark": name,
                 "target": entry.get("target", ""),
                 "preset": entry.get("preset", ""),
-                "base_ms": entry.get("base_ms", ""),
-                "canon_ms": entry.get("canon_ms", ""),
                 "canon_speedup": entry.get("speedup", ""),
                 "error": entry.get("error", ""),
             }
@@ -1308,15 +1204,6 @@ FINAL_RULES: dict[str, str] = {
 #: The per-cell pass's two tables (``harness.regrade.TASK_TABLE`` / ``CELL_TABLE``).
 TASK_TABLE: str = "regrade_tasks"
 CELL_TABLE: str = "regrade_cells"
-#: The final grade's own numbers a re-timed row carries beside S_i: ``regrade.TASK_COLUMNS`` name ->
-#: observation column.
-FINAL_COLUMNS: dict[str, str] = {
-    "n_cells": "cells_timed",
-    "n_credited": "inputs_credited",
-    "g_i": "cell_geomean",
-    "gsd_i": "cell_gsd",
-    "s_bar": "input_geomean",
-}
 #: ``grade_final_status`` of a submission the final grade re-timed: credited by the rule, left
 #: unsolved by it, or not graded at all because the JUDGE faulted (never the submission's verdict).
 RETIMED: str = "graded"
@@ -1492,8 +1379,7 @@ def rederived_row_suspect(row: sqlite3.Row, shape: str) -> object:
 
 def rederived_task(task: dict[str, Any], cells: list[dict[str, Any]], status: str) -> dict[str, Any]:
     """``task`` with its credit recomputed from ``cells`` when re-deriving their ``suspect``
-    (:func:`rederived_cell_suspect`) changed any: ``n_credited`` and the geomean behind ``s_i`` /
-    ``s_bar`` are taken over the credited cells again (``recording.credited_ratios``' filter), under
+    (:func:`rederived_cell_suspect`) changed any: ``n_credited`` and the geomean behind ``s_i`` are taken over the credited cells again (``recording.credited_ratios``' filter), under
     the rule the task was graded by. ``floor_rederived`` counts the cells that cleared; a task
     where none did is returned as it was."""
     flags = [rederived_cell_suspect(cell) for cell in cells]
@@ -1517,10 +1403,7 @@ def rederived_task(task: dict[str, Any], cells: list[dict[str, Any]], status: st
     return {
         **task,
         "n_credited": len(ratios),
-        "g_i": float(credit.geomean),
-        "gsd_i": float(credit.gsd),
         "s_i": float(credit.score),
-        "s_bar": score_rule.final_s_bar(ratios, solved=solved),
         "floor_rederived": cleared,
     }
 
@@ -1667,7 +1550,7 @@ def apply_regrades(
             )
             counts["replaced"] += 1
         else:
-            changed.update(row_kind="attempt", submitted="0", speedup="", reason=new["reason"])
+            changed.update(row_kind="attempt", speedup="", reason=new["reason"])
             counts["demoted"] += 1
         kept.append(changed)
     return kept, counts
@@ -1730,7 +1613,6 @@ def apply_promotions(
                 "ts_ms": key[3],
                 "row_kind": "submission" if verified else "attempt",
                 "optimizer": PROMOTED_OPTIMIZER,
-                "submitted": "1" if verified else "0",
                 "correct": new.get("correct", ""),
                 "build_ok": new.get("build_ok", ""),
                 "reason": "" if verified else new.get("reason", ""),
@@ -1780,15 +1662,15 @@ def apply_final_regrades(
     stamp beside the outcomes, the v1 share). A submission
     the rule credits takes S_i as ``speedup`` with its stamp and cells, ``timing_suspect`` set when no
     input entered the geomean (every one suspect); one the rule leaves unsolved becomes an attempt with no
-    speed-up (and no ``input_geomean``), as a run-mode regrade that no longer verifies does. One whose re-timing the JUDGE
+    speed-up, as a run-mode regrade that no longer verifies does. One whose re-timing the JUDGE
     failed keeps its recorded row under its OLD stamp, flagged ``grade_final_status`` error and counted
     -- read neither as unsolved nor as re-timed, and refused if pooled with final-grade rows
     (``population.one_reduction``). A submission the pass never re-timed is kept and counted, and
     so is a re-timed key no submission row matched. No row is dropped.
 
     A submission in ``exempt`` (:func:`exempt_keys`) the pass never re-timed takes the final stamp
-    on its LIVE grade, ``grade_final_source`` :data:`LIVE_EXEMPT` and its recorded stamp in
-    ``grade_live_timing_reduction`` -- counted, pooled with the re-timed rows. No other row does. One
+    on its LIVE grade and ``grade_final_source`` :data:`LIVE_EXEMPT` -- counted, pooled with the
+    re-timed rows. No other row does. One
     submission read twice (a live row beside the frozen copy of it) is exempted once: the stamped
     copy stands (a run-mode regrade's, where the live one is unstamped), else the first, and the
     other copy is left out and counted (``exempt_duplicate``).
@@ -1826,13 +1708,11 @@ def apply_final_regrades(
             if standing[row_key(row)] != index:
                 counts["exempt_duplicate"] += 1
                 continue
-            live = str(row.get("timing_reduction") or "")
             kept.append(
                 {
                     **row,
                     "timing_reduction": timing.FINAL_GRADE_REDUCTION,
                     "grade_final_source": LIVE_EXEMPT,
-                    "grade_live_timing_reduction": live,
                 }
             )
             counts[LIVE_EXEMPT] += 1
@@ -1859,22 +1739,13 @@ def apply_final_regrades(
             # an every-input-unmeasured task has no measured cell to stamp it, yet its final rule decided it
             "timing_reduction": new["timing_reduction"],
             "baseline_policy": new.get("baseline_policy") or "",
-            **{column: new.get(name) for name, column in FINAL_COLUMNS.items()},
         }
         counts[new["timing_reduction"]] += 1
         if status == RETIMED:
             changed.update(speedup=new["s_i"], timing_suspect=int(not new.get("n_credited")))
             counts["replaced"] += 1
         else:
-            # s_bar / g_i hold the geomean of an UNSOLVED task too: never left where it reads as a score
-            changed.update(
-                row_kind="attempt",
-                submitted="0",
-                speedup="",
-                input_geomean="",
-                cell_geomean="",
-                reason=new["regrade_reason"],
-            )
+            changed.update(row_kind="attempt", speedup="", reason=new["regrade_reason"])
             counts["unsolved"] += 1
         kept.append(changed)
     counts["unmatched"] = len(final.keys() - matched)
@@ -1934,29 +1805,6 @@ def write_db(path: pathlib.Path, fields: Iterable[str], rows: Iterable[dict[str,
         conn.executemany(f"INSERT INTO observations VALUES ({', '.join('?' * len(names))})", values)
         conn.commit()
     return len(values)
-
-
-def annotate_provenance(
-    observations: list[dict[str, Any]], assets: dict[tuple[str, str], JobAssets], corpus: dict[str, pathlib.Path]
-) -> None:
-    """Stamp every observation with where its baseline and candidate text can be had, if anywhere."""
-    for row in observations:
-        job_key = (str(row.get("run_root")), str(row.get("job")))
-        held = assets.get(job_key, JobAssets(frozenset(), frozenset()))
-        bench = str(row.get("benchmark") or "")
-        saved = (str(row.get("worker_index") or ""), bench) in held.saved
-        if row.get("source_blob"):
-            row["candidate_source"] = "graded_attempt"
-        elif saved:
-            row["candidate_source"] = "last_saved"
-        else:
-            row["candidate_source"] = "missing"
-        if bench in held.baselines:
-            row["baseline_source"] = "run_local"
-        elif (row["candidate_source"] != "missing") and bench in corpus:
-            row["baseline_source"] = "corpus_today"
-        else:
-            row["baseline_source"] = "missing"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -2048,7 +1896,6 @@ def extract(options: Options) -> Extracted:
 
     in_scope = {(str(r["run_root"]), str(r["job"])) for r in observations if r.get("run_id")}
     assets = {key: job_assets(job_dirs[key], corpus) for key in sorted(in_scope)}
-    annotate_provenance(observations, assets, corpus)
 
     task_rows: list[dict[str, Any]] = []
     totals = task_totals_by_dir(sorted(set(job_dirs.values())), args.task_workers)

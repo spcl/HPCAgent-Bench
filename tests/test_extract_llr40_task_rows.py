@@ -111,15 +111,12 @@ def test_task_rows_for_job_has_one_row_per_worker_directory(tmp_path: pathlib.Pa
     assert row["language"] == "c"
     assert row["harness"] == "claude"
     assert row["packet"] == "cpf"
-    assert row["node_index"] == "0"
-    assert row["problem_index"] == "0"
     assert row["worker_index"] == "0"
     assert row["judge_db"] == str(tmp_path / "agents" / "node-0" / "problem-0-worker-0")
     assert row["run_root"] == "621383"
     assert row["job"] == "621383"
     # T1-T2: token total over the one attempt this worker dir holds.
     assert row["tokens"] == 400 + 40  # effective: fresh input + the result event's output
-    assert row["tokens_billed"] == 400  # billed: the assistant turn's own usage (output_tokens: 0)
     assert row["task_attempts"] == 1
     assert row["tokens_crashed"] == 0  # nothing crashed, so nothing was thrown away
     assert row["task_final_attempt_start_ms"] == 0  # never relaunched: no cut for X7 to apply
@@ -138,7 +135,6 @@ def test_a_worker_dir_with_no_transcript_reports_no_token_total(tmp_path: pathli
     assert len(rows) == 1
     assert rows[0]["task_attempts"] == 0
     assert rows[0]["tokens"] == ""
-    assert rows[0]["tokens_billed"] == ""
 
 
 def test_a_relaunched_task_row_reports_the_crashed_spend_and_the_cut(tmp_path: pathlib.Path) -> None:
@@ -253,7 +249,6 @@ def test_task_rows_for_job_attributes_a_legacy_worker_to_its_real_arm(tmp_path: 
     assert len(rows) == 1
     assert rows[0]["arm"] == "cpf-llr-focus40-oss120b-c-cpf"
     assert rows[0]["tokens"] == 400 + 40
-    assert rows[0]["tokens_billed"] == 400
 
 
 def test_an_excluded_arm_yields_no_task_rows(tmp_path: pathlib.Path) -> None:
@@ -329,7 +324,6 @@ def test_the_task_rows_db_reads_back_through_read_observations_with_the_new_colu
         language="c",
         ts_ms=1700000000000,
         tokens=440,
-        tokens_billed=400,
         task_attempts=1,
     )
     db_path = tmp_path / "obs.db"
@@ -337,9 +331,8 @@ def test_the_task_rows_db_reads_back_through_read_observations_with_the_new_colu
 
     frame = experiments.read_observations(db_path)
 
-    assert "tokens_billed" in frame.columns
     assert "task_attempts" in frame.columns
-    assert frame["tokens_billed"].tolist() == [400]
+    assert frame["tokens"].tolist() == [440]
     assert frame["task_attempts"].tolist() == [1]
     assert frame["row_kind"].tolist() == ["task"]
 
@@ -372,8 +365,7 @@ def test_a_fold_3_record_is_read_instead_of_refolding_the_transcript(tmp_path: p
 
     row = extract_llr40.task_rows_for_job(tmp_path, "r", "j", "", frozenset(), identity)[0]
 
-    assert (row["tokens"], row["tokens_billed"], row["task_attempts"]) == (99_001, 99_002, 3)
-    assert (row["tokens_output_source"], row["tokens_output_suspect"]) == ("retokenized", 1.0)
+    assert (row["tokens"], row["task_attempts"]) == (99_001, 3)
 
 
 def test_a_fold_2_record_is_still_read_not_refolded(tmp_path: pathlib.Path) -> None:
@@ -387,14 +379,11 @@ def test_a_fold_2_record_is_still_read_not_refolded(tmp_path: pathlib.Path) -> N
 
     row = extract_llr40.task_rows_for_job(tmp_path, "r", "j", "", frozenset(), identity)[0]
 
-    assert (row["tokens"], row["tokens_billed"], row["task_attempts"]) == (99_001, 99_002, 3), "read, not refolded"
+    assert (row["tokens"], row["task_attempts"]) == (99_001, 3), "read, not refolded"
 
 
-def test_a_fold_3_record_carries_its_components_and_prices_the_provider_total_from_them(
-    tmp_path: pathlib.Path,
-) -> None:
-    """The driver's record never wrote ``tokens_provider``, so it extracted blank; the components the
-    record does carry price it, and they ride along for the cost cards."""
+def test_a_fold_3_record_carries_its_components(tmp_path: pathlib.Path) -> None:
+    """The components the record carries ride along for the cost cards (``stats.cost``)."""
     worker_dir = tmp_path / "agents" / "node-0" / "problem-0-worker-0"
     write_worker(worker_dir, "arm-a.n0.p0.w0")
     write_record(
@@ -412,7 +401,6 @@ def test_a_fold_3_record_carries_its_components_and_prices_the_provider_total_fr
     row = extract_llr40.task_rows_for_job(tmp_path, "r", "j", "", frozenset(), identity)[0]
 
     assert (row["tokens_fresh_input"], row["tokens_cached_input"], row["tokens_output"]) == (1_000, 20_000, 300)
-    assert row["tokens_provider"] == 1_000 + 2_000 + 300
 
 
 def test_a_worker_without_a_record_is_still_folded_from_its_transcript(tmp_path: pathlib.Path) -> None:
@@ -423,8 +411,7 @@ def test_a_worker_without_a_record_is_still_folded_from_its_transcript(tmp_path:
 
     row = extract_llr40.task_rows_for_job(tmp_path, "r", "j", "", frozenset(), identity)[0]
 
-    assert (row["tokens"], row["tokens_billed"], row["task_attempts"]) == (440, 400, 1)
-    assert row["tokens_output_source"] == "", "the transcript fold here reports no tier of its own"
+    assert (row["tokens"], row["task_attempts"]) == (440, 1)
 
 
 def test_a_record_from_the_double_counting_fold_is_ignored(tmp_path: pathlib.Path) -> None:
@@ -440,53 +427,34 @@ def test_a_record_from_the_double_counting_fold_is_ignored(tmp_path: pathlib.Pat
     assert (row["tokens"], row["task_attempts"]) == (440, 1), "folded from the transcript, not read"
 
 
-def test_output_source_output_suspect_and_tokens_billed_crashed_round_trip_through_sqlite(
-    tmp_path: pathlib.Path,
-) -> None:
-    """C4: the two output-tier columns and the billed-crashed column reach the ROW dict, but a row
-    is only worth anything once it has gone through :func:`extract_llr40.write_db` and back --
-    ``NUMERIC_COLUMNS``/``sql_value`` retype a column on the way in, and a column dropped from
-    ``OBSERVATION_FIELDS`` would silently vanish from the CREATE TABLE and every INSERT, with the
-    in-memory row dict (what ``test_a_fold_3_record_is_read_instead_of_refolding_the_transcript``
-    checks) never showing the difference. This is the gap: those three columns had never been
-    pushed through SQLite and read back before.
-    """
+def test_the_token_columns_round_trip_through_sqlite(tmp_path: pathlib.Path) -> None:
+    """A task row is only worth anything once it has gone through :func:`extract_llr40.write_db` and
+    back: ``NUMERIC_COLUMNS``/``sql_value`` retype a column on the way in, and a column dropped from
+    ``OBSERVATION_FIELDS`` would silently vanish from the CREATE TABLE and every INSERT."""
     worker_dir = tmp_path / "agents" / "node-0" / "problem-0-worker-0"
     write_worker(worker_dir, "arm-a.n0.p0.w0")
     write_record(
         worker_dir,
         3,
         tokens_effective=99_001,
-        tokens_billed=99_002,
         attempts=3,
-        tokens_billed_crashed=54_321,
-        output_source="retokenized",
-        output_suspect=1.0,
+        tokens_effective_crashed=54_321,
+        fresh_input=1_000,
+        cached_input=20_000,
+        output=300,
     )
     identity = extract_llr40.JobIdentity({}, {})
     rows = extract_llr40.task_rows_for_job(tmp_path, "r", "j", "", frozenset(), identity)
     assert len(rows) == 1
-    # Sanity on the in-memory row first, so a failure below is clearly about the DB round trip.
-    assert rows[0]["tokens_output_source"] == "retokenized"
-    assert rows[0]["tokens_output_suspect"] == 1.0
-    assert rows[0]["tokens_billed_crashed"] == 54_321
 
     db_path = tmp_path / "obs.db"
     assert extract_llr40.write_db(db_path, extract_llr40.OBSERVATION_FIELDS, rows) == 1
     frame = experiments.read_observations(db_path)
 
-    assert frame["tokens_output_source"].tolist() == ["retokenized"]
-    assert frame["tokens_output_suspect"].tolist() == [1.0]
-    assert frame["tokens_billed_crashed"].tolist() == [54_321]
-
-
-def test_a_judge_row_carries_no_output_tier_of_its_own(tmp_path: pathlib.Path) -> None:
-    """The two new columns belong to task rows. A judge row measures a grade, not a token cost, and
-    every column it does not fill stays empty so the table reads the same as before they existed."""
-    assert "tokens_output_source" in extract_llr40.OBSERVATION_FIELDS
-    assert "tokens_output_suspect" in extract_llr40.OBSERVATION_FIELDS
-    blank = dict.fromkeys(extract_llr40.OBSERVATION_FIELDS, "")
-    assert blank["tokens_output_source"] == "" and blank["tokens_output_suspect"] == ""
+    assert frame["tokens_crashed"].tolist() == [54_321]
+    assert frame[["tokens_fresh_input", "tokens_cached_input", "tokens_output"]].values.tolist() == [
+        [1_000, 20_000, 300]
+    ]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -535,8 +503,8 @@ def test_a_worker_dir_cut_to_tokens_json_still_yields_its_task_row(tmp_path: pat
     assert len(rows) == 1
     row = rows[0]
     assert (row["run_id"], row["arm"], row["benchmark"], row["language"]) == ("arm-a.n0.p3.w3", "arm-a", KERNEL, "c")
-    assert (row["node_index"], row["problem_index"], row["worker_index"]) == ("0", "3", "3")
-    assert (row["tokens"], row["tokens_billed"]) == (5_000, 60_000)
+    assert row["worker_index"] == "3"
+    assert row["tokens"] == 5_000
     assert (row["tokens_fresh_input"], row["tokens_cached_input"], row["tokens_output"]) == (4_000, 50_000, 1_000)
     assert row["ts_ms"] == 1_789_000_000_000
     assert row["judge_db"] == str(worker_dir)
@@ -585,7 +553,7 @@ def test_a_reduced_worker_with_a_pre_fold_2_record_keeps_its_row_without_a_total
     )  # fmt: skip
 
     assert len(rows) == 1
-    assert (rows[0]["tokens"], rows[0]["tokens_billed"], rows[0]["task_attempts"]) == ("", "", "")
+    assert (rows[0]["tokens"], rows[0]["task_attempts"]) == ("", "")
     assert any("below fold 2" in piece for piece in missing)
 
 

@@ -1,11 +1,9 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""A weak/strong scaling curve persists to the results DB (``scaling_points`` + ``scaling_curves``)
-and comes back out of the extractor as ``record = "scaling"`` rows, so every scaling figure can be
+"""A weak/strong scaling curve persists to the results DB (``scaling_points``) and comes back out of the extractor as ``record = "scaling"`` rows, so every scaling figure can be
 rebuilt from stored rows instead of from a grade that lived only in memory."""
 
 import contextlib
-import json
 import math
 import pathlib
 import sqlite3
@@ -83,12 +81,7 @@ def test_a_dropped_point_has_no_time_and_no_efficiency_only_its_reason(tmp_path:
     db = tmp_path / "r.db"
     record(db, strong_curve(), "strong")
     (hole,) = rows(db, "SELECT * FROM scaling_points WHERE ranks = 8")
-    assert (hole["ranked_ns"], hole["achieved_speedup"], hole["ideal_speedup"], hole["efficiency"]) == (
-        None,
-        None,
-        None,
-        None,
-    ), hole
+    assert (hole["ranked_ns"], hole["efficiency"]) == (None, None), hole
     assert hole["note"] == "mpi build failed"
     assert hole["nodes"] == 2  # the launch was placed before the build failed
     assert hole["single_rank_ns"] == 8000  # the curve's anchor, so the row still says what it would divide
@@ -99,10 +92,9 @@ def test_a_measured_point_stores_the_graders_own_numbers(tmp_path: pathlib.Path)
     record(db, strong_curve(), "strong")
     (row,) = rows(db, "SELECT * FROM scaling_points WHERE ranks = 4")
     want = metric.scaling_point("strong", 4, 8000, 2500)
-    got = (row["single_rank_ns"], row["ranked_ns"], row["achieved_speedup"], row["ideal_speedup"], row["efficiency"])
-    assert got == (8000, 2500, want.achieved_speedup, want.ideal_speedup, want.efficiency), row
+    got = (row["single_rank_ns"], row["ranked_ns"], row["efficiency"])
+    assert got == (8000, 2500, want.efficiency), row
     assert row["scaling_mode"] == "strong" and row["work_ratio"] is None and row["note"] is None
-    assert json.loads(row["shape"]) == {"N": 64}
 
 
 @pytest.mark.parametrize(("ranks", "nodes"), [(1, 1), (4, 1), (8, 2), (16, 4)])
@@ -130,23 +122,6 @@ def test_a_weak_point_keeps_its_work_ratio_and_its_rounding_note(tmp_path: pathl
     assert row["efficiency"] == metric.scaling_point("weak", 2, 4000, 4400, work_ratio=2.0164).efficiency
 
 
-def test_mean_efficiency_and_work_exponent_live_once_per_curve(tmp_path: pathlib.Path) -> None:
-    db = tmp_path / "r.db"
-    curve = weak_curve()
-    record(db, curve, "weak")
-    got = rows(db, "SELECT * FROM scaling_curves")
-    assert got == [
-        {
-            "run_id": RUN_ID,
-            "ts": TS,
-            "benchmark": KERNEL,
-            "scaling_mode": "weak",
-            "work_exponent": 2,
-            "mean_efficiency": curve.mean_efficiency,
-        }
-    ], got
-
-
 def test_both_laws_of_one_grade_are_two_curves_side_by_side(tmp_path: pathlib.Path) -> None:
     """An ML grade records BOTH laws under its one stamp: the law is part of the key, so recording
     the weak curve neither replaces nor collides with the strong one, and re-recording one law
@@ -157,8 +132,6 @@ def test_both_laws_of_one_grade_are_two_curves_side_by_side(tmp_path: pathlib.Pa
     record(db, strong_curve(), "strong")
     points = rows(db, "SELECT scaling_mode, COUNT(*) AS n FROM scaling_points GROUP BY scaling_mode ORDER BY 1")
     assert [(r["scaling_mode"], r["n"]) for r in points] == [("strong", 4), ("weak", len(weak_curve().points))]
-    curves = rows(db, "SELECT scaling_mode FROM scaling_curves ORDER BY scaling_mode")
-    assert [r["scaling_mode"] for r in curves] == ["strong", "weak"]
 
 
 def test_re_recording_a_grade_replaces_it_instead_of_duplicating(tmp_path: pathlib.Path) -> None:
@@ -166,17 +139,15 @@ def test_re_recording_a_grade_replaces_it_instead_of_duplicating(tmp_path: pathl
     record(db, strong_curve(), "strong")
     assert record(db, strong_curve(), "strong") == 4
     assert rows(db, "SELECT COUNT(*) AS n FROM scaling_points") == [{"n": 4}]
-    assert rows(db, "SELECT COUNT(*) AS n FROM scaling_curves") == [{"n": 1}]
 
 
 def test_a_curve_whose_every_point_dropped_is_still_on_record(tmp_path: pathlib.Path) -> None:
-    """No curve survives (scaling None), yet each requested P gets its hole row and no curve row."""
+    """No curve survives (scaling None), yet each requested P gets its hole row."""
     db = tmp_path / "r.db"
     holes = metric.scaling_drops({}, {2: "unsizable (strong-only)", 4: "unsizable (strong-only)"})
     assert record(db, None, "weak", dropped=holes) == 2
     got = [(r["ranks"], r["note"], r["efficiency"]) for r in rows(db, "SELECT * FROM scaling_points ORDER BY ranks")]
     assert got == [(2, "unsizable (strong-only)", None), (4, "unsizable (strong-only)", None)], got
-    assert rows(db, "SELECT COUNT(*) AS n FROM scaling_curves") == [{"n": 0}]
 
 
 @pytest.mark.parametrize("mode", ["", "Strong", "amdahl"])
@@ -275,7 +246,6 @@ def test_shards_merge_their_curves_without_duplicating_a_grade(tmp_path: pathlib
     record(b, strong_curve(), "strong")  # the same grade seen by two shards
     recording.aggregate(str(dest), [str(a), str(b)])
     assert rows(dest, "SELECT COUNT(*) AS n FROM scaling_points") == [{"n": 4}]
-    assert rows(dest, "SELECT COUNT(*) AS n FROM scaling_curves") == [{"n": 1}]
 
 
 def extracted(db: pathlib.Path) -> list[dict]:
@@ -308,13 +278,6 @@ def test_the_extractor_emits_one_scaling_row_per_point_and_hole(tmp_path: pathli
     ], got
 
 
-def test_every_extracted_scaling_row_carries_its_curves_mean_efficiency(tmp_path: pathlib.Path) -> None:
-    db = tmp_path / "r.db"
-    curve = strong_curve()
-    record(db, curve, "strong")
-    assert {r["scaling_mean_efficiency"] for r in extracted(db)} == {curve.mean_efficiency}
-
-
 def test_an_extracted_scaling_row_has_every_column_the_table_declares(tmp_path: pathlib.Path) -> None:
     """A key outside OBSERVATION_FIELDS is dropped silently by the CSV writer."""
     db = tmp_path / "r.db"
@@ -323,7 +286,7 @@ def test_an_extracted_scaling_row_has_every_column_the_table_declares(tmp_path: 
     assert set(row) <= set(observations_extract.OBSERVATION_FIELDS), set(row) - set(
         observations_extract.OBSERVATION_FIELDS
     )
-    assert json.loads(row["scaling_shape"]) == {"N": 64} and row["ts_ms"] == TS and row["arm"]
+    assert row["ts_ms"] == TS and row["arm"]
 
 
 def test_the_extracted_efficiency_is_the_one_recomputed_from_the_times(tmp_path: pathlib.Path) -> None:
@@ -367,35 +330,35 @@ def test_the_scaling_figures_rebuild_the_recorded_curve_from_the_extracted_table
     assert scaling.disagreements(frame) == []
 
 
-def test_the_extractor_reads_a_db_written_before_the_law_joined_the_curve_key(tmp_path: pathlib.Path) -> None:
-    """Every results DB since the scaling tables landed holds them in the old shape (no law in
-    scaling_curves); the extractor must still read those rows, and a new DB's curves per law."""
+def test_the_extractor_reads_a_db_written_before_the_law_joined_the_point_key(tmp_path: pathlib.Path) -> None:
+    """A results DB from before the law joined the point key still carries the retired
+    ``scaling_curves`` table (no law in it) and the retired per-point columns; the extractor reads its
+    points, ignores the rest, and reads a new DB's points of both laws."""
     from hpcagent_bench import observations_extract as ox
 
     old = tmp_path / "old.db"
     with contextlib.closing(sqlite3.connect(old)) as conn:
         conn.execute(recording.SCALING_POINTS_DDL.replace("scaling_mode, ranks)", "ranks)"))
+        conn.execute("ALTER TABLE scaling_points ADD COLUMN achieved_speedup REAL")
+        conn.execute("ALTER TABLE scaling_points ADD COLUMN shape TEXT")
         conn.execute(
             "CREATE TABLE scaling_curves (run_id TEXT, ts INTEGER, benchmark TEXT, work_exponent INTEGER,"
             " mean_efficiency REAL NOT NULL, PRIMARY KEY (run_id, ts, benchmark))"
         )
         conn.execute(
-            "INSERT INTO scaling_points(run_id, ts, benchmark, ranks, scaling_mode) VALUES (?,?,?,?,?)",
-            (RUN_ID, TS, KERNEL, 1, "strong"),
+            "INSERT INTO scaling_points(run_id, ts, benchmark, ranks, scaling_mode, achieved_speedup, shape) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (RUN_ID, TS, KERNEL, 1, "strong", 1.0, '{"N": 64}'),
         )
         conn.execute("INSERT INTO scaling_curves VALUES (?,?,?,?,?)", (RUN_ID, TS, KERNEL, None, 0.5))
         conn.commit()
     new = tmp_path / "new.db"
     record(new, strong_curve(), "strong")
     record(new, weak_curve(), "weak")
-    for path, want in ((old, {("strong", "0.5")}), (new, None)):
+    both_laws = {("strong", 1), ("strong", 4), ("strong", 8), ("strong", 16), ("weak", 1), ("weak", 2), ("weak", 4)}
+    for path, want in ((old, {("strong", 1)}), (new, both_laws)):
         with contextlib.closing(sqlite3.connect(path)) as conn:
             conn.row_factory = sqlite3.Row
             db = ox.Database(path, "root", tmp_path, "job")
             got = ox.scaling_rows(conn, db, ("", frozenset()), ({}, {}))
-        effs = {(r["scaling_mode"], str(r["scaling_mean_efficiency"])) for r in got}
-        if want is not None:
-            assert effs == want, effs
-        else:
-            assert {mode for mode, _ in effs} == {"strong", "weak"}
-            assert all(eff not in ("", "None") for _, eff in effs), effs
+        assert {(r["scaling_mode"], r["scaling_ranks"]) for r in got} == want

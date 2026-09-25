@@ -18,7 +18,7 @@ from hpcagent_bench import experiments
 #: writer invented in the test body agrees with nothing.
 from hpcagent_bench import observations_extract as extract_llr40
 
-FIELDS = ("run_root", "job", "row_kind", "arm", "benchmark", "speedup", "tokens", "tokens_billed", "packet")
+FIELDS = ("run_root", "job", "row_kind", "arm", "benchmark", "speedup", "tokens", "tokens_crashed", "packet")
 ROWS = [
     {
         "run_root": "r1",
@@ -28,7 +28,7 @@ ROWS = [
         "benchmark": "k2",
         "speedup": 3.5,
         "tokens": "",
-        "tokens_billed": "",
+        "tokens_crashed": "",
         "packet": "",
     },
     {
@@ -39,7 +39,7 @@ ROWS = [
         "benchmark": "k1",
         "speedup": "",
         "tokens": 1200,
-        "tokens_billed": 48_000,
+        "tokens_crashed": 48_000,
         "packet": "cpf",
     },
 ]
@@ -74,7 +74,7 @@ def test_the_token_columns_have_the_same_dtype_from_either_file(tmp_path: pathli
     csv_path, db_path = write_pair(tmp_path)
     from_csv = experiments.read_observations(csv_path)
     from_db = experiments.read_observations(db_path)
-    for column in ("tokens", "tokens_billed", "speedup"):
+    for column in ("tokens", "tokens_crashed", "speedup"):
         assert from_db[column].dtype == from_csv[column].dtype, column
         pd.testing.assert_series_equal(from_db[column], from_csv[column])
         # The arithmetic every cost table starts from, on BOTH paths.

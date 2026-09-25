@@ -5,8 +5,9 @@
 ``tests/data/results_db_vintages.json`` holds the DDL each vintage of ``recording.py`` created,
 rebuilt from git (comments stripped): a DB from before the ``runs`` table, one before ``packets``
 (with the legacy ``host`` column), one before the per-cell tables, one whose ``scaling_curves``
-carry no law, release-v0.1's own and the one after the first schema cleanup. Every fixture is
-synthetic rows on that DDL, written the way the writers of the time wrote them.
+carry no law, release-v0.1's own, the one after the first schema cleanup and the one before the
+cleanup that dropped every column no reader looks up. Every fixture is synthetic rows on that DDL,
+written the way the writers of the time wrote them.
 """
 
 import contextlib
@@ -170,24 +171,18 @@ def test_the_extractor_writes_the_same_csv_off_a_migrated_copy(tmp_path: pathlib
 
 @pytest.mark.parametrize("vintage", MIGRATABLE)
 def test_the_identity_reader_loses_only_retired_columns(tmp_path: pathlib.Path, vintage: str) -> None:
-    """Every value :func:`experiments.read_database` returned survives, or is derivable
-    (:data:`recording.SCALING_SUMMARY`); a column only the copy has reads NULL."""
+    """Every value :func:`experiments.read_database` returned survives unless its column is retired;
+    a column only the copy has reads NULL."""
     old, out = tmp_path / "old.db", tmp_path / "out.db"
     build(old, vintage)
     recording.migrate(str(old), str(out))
     before, after = identity_rows(old), identity_rows(out)
     assert len(after) == len(before) > 0
     retired = {column for _table, column in recording.RETIRED_COLUMNS}
-    with contextlib.closing(sqlite3.connect(out)) as conn:
-        summary = f"SELECT {', '.join(recording.SCALING_SUMMARY.values())} FROM submissions WHERE id = ?"
-        for old_row, new_row in zip(before, after, strict=True):
-            dropped = set(old_row) - set(new_row)
-            assert dropped <= retired, dropped
-            derived = dict(zip(recording.SCALING_SUMMARY, conn.execute(summary, (new_row["id"],)).fetchone()))
-            lost = {c: old_row[c] for c in dropped if old_row[c] is not None}
-            assert not lost or (new_row["record"] == "submissions" and lost == {c: derived[c] for c in lost}), lost
-            assert {k: new_row[k] for k in old_row if k in new_row} == {k: old_row[k] for k in old_row if k in new_row}
-            assert all(new_row[k] is None for k in set(new_row) - set(old_row))
+    for old_row, new_row in zip(before, after, strict=True):
+        assert set(old_row) - set(new_row) <= retired, set(old_row) - set(new_row)
+        assert {k: new_row[k] for k in old_row if k in new_row} == {k: old_row[k] for k in old_row if k in new_row}
+        assert all(new_row[k] is None for k in set(new_row) - set(old_row))
 
 
 def test_the_legacy_host_column_is_kept(tmp_path: pathlib.Path) -> None:
@@ -215,9 +210,6 @@ def test_a_db_from_before_the_runs_table_is_refused_and_nothing_is_written(tmp_p
     [
         ("UPDATE calls SET seed_nonce = 7", r"calls\.seed_nonce"),
         ("UPDATE calls SET prompt_hash = 'abc'", r"calls\.prompt_hash"),
-        ("UPDATE submission_cells SET baseline_winner = 'numba'", r"submission_cells\.baseline_winner"),
-        ("UPDATE submissions SET mpi_mode = 'weak'", r"submissions\.mpi_mode"),
-        ("UPDATE submissions SET mpi_ranks = 64", r"submissions\.mpi_ranks"),
         ("UPDATE submissions SET scaling_efficiency = 0.9", r"submissions\.scaling_efficiency"),
         (
             "INSERT INTO prompts (hash, n_bytes, path, first_seen) VALUES ('h', 1, 'h.txt', 1)",
@@ -241,18 +233,6 @@ def test_a_retired_value_that_is_not_recoverable_is_refused_and_nothing_is_writt
     with pytest.raises(ValueError, match=refusal):
         recording.migrate(str(old), str(out))
     assert not out.exists()
-
-
-def test_a_curve_without_a_law_takes_its_grades_one_law(tmp_path: pathlib.Path) -> None:
-    vintage = next(name for name in MIGRATABLE if name.startswith("law-less"))
-    old, out = tmp_path / "old.db", tmp_path / "out.db"
-    build(old, vintage)
-    recording.migrate(str(old), str(out))
-    with contextlib.closing(sqlite3.connect(out)) as conn:
-        assert conn.execute("SELECT ts - ?, scaling_mode FROM scaling_curves ORDER BY ts", (TS,)).fetchall() == [
-            (0, "strong"),
-            (1, "weak"),
-        ]
 
 
 def test_migrate_never_overwrites_its_destination(tmp_path: pathlib.Path) -> None:
