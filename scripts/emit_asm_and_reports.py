@@ -24,14 +24,13 @@ import dataclasses
 import hashlib
 import pathlib
 import subprocess
-from typing import Dict, List, Optional, Tuple
 
 from hpcagent_bench import languages, paths
 
 #: Source extension -> (language token, compilers.yaml block). One toolchain FAMILY across the
 #: three, because a report is only comparable across languages when one vendor's vectorizer wrote
 #: all of them; clang's -Rpass remarks and gcc's -fopt-info lines are not the same measurement.
-EXT_LANG_BLOCK: Dict[str, Tuple[str, str]] = {
+EXT_LANG_BLOCK: dict[str, tuple[str, str]] = {
     ".c": ("c", "gcc"),
     ".cpp": ("cpp", "gpp"),
     ".f90": ("fortran", "gfortran"),
@@ -40,7 +39,7 @@ EXT_LANG_BLOCK: Dict[str, Tuple[str, str]] = {
 #: Generated siblings that are NOT a graded lowering: pluto's pre-transform input, and the OpenMP
 #: variant, which is a different compile (it needs -fopenmp) and would report on a source no
 #: sequential column builds.
-SKIP_SUFFIXES: Tuple[str, ...] = ("_pluto_input.c", "_omp.f90", "_omp.c", "_omp.cpp")
+SKIP_SUFFIXES: tuple[str, ...] = ("_pluto_input.c", "_omp.f90", "_omp.c", "_omp.cpp")
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -59,8 +58,8 @@ class Result:
     """Outcome for one lowering; ``error`` is empty exactly when both artifacts landed."""
 
     lowering: Lowering
-    asm_path: Optional[pathlib.Path]
-    report_path: Optional[pathlib.Path]
+    asm_path: pathlib.Path | None
+    report_path: pathlib.Path | None
     remarks: int
     error: str
 
@@ -69,13 +68,13 @@ def sha256(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def discover(selection: str) -> List[Lowering]:
+def discover(selection: str) -> list[Lowering]:
     """Every graded lowering under ``selection`` (a track name, or ``all``), sorted.
 
     Sorted, not glob order: the manifest is a diffable artifact and glob order is filesystem order.
     """
     root = paths.BENCHMARKS if selection == "all" else paths.BENCHMARKS / selection
-    found: List[Lowering] = []
+    found: list[Lowering] = []
     for source in sorted(root.rglob("cpp_backend/*")):
         if source.suffix not in EXT_LANG_BLOCK:
             continue
@@ -88,7 +87,7 @@ def discover(selection: str) -> List[Lowering]:
     return found
 
 
-def compile_argv(low: Lowering, asm_out: pathlib.Path) -> List[str]:
+def compile_argv(low: Lowering, asm_out: pathlib.Path) -> list[str]:
     """The one compile that writes the assembly and prints the remarks.
 
     Built from the graded compile argv with ``-c`` swapped for ``-S``, so every other flag -- the
@@ -102,7 +101,7 @@ def compile_argv(low: Lowering, asm_out: pathlib.Path) -> List[str]:
     compile_argv_graded = languages.build_shared_lib_commands(
         low.language, low.source, asm_out.with_suffix(".so"), compiler=low.block
     )[0]
-    argv: List[str] = []
+    argv: list[str] = []
     skip_next = False
     for token in compile_argv_graded:
         if skip_next:
@@ -152,7 +151,7 @@ def main() -> int:
     lowerings = discover(args.selection)
     print(f"{len(lowerings)} lowerings under {args.selection}")
 
-    results: List[Result] = []
+    results: list[Result] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         for done in concurrent.futures.as_completed(pool.submit(run_one, low, out_root) for low in lowerings):
             results.append(done.result())

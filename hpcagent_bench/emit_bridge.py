@@ -29,10 +29,11 @@ from typing import NotRequired, TypedDict
 from hpcagent_bench import reporting_order
 from hpcagent_bench.fuzz import FuzzValue
 from hpcagent_bench.spec import (
+    DEFAULT_FUZZ,
     ArrayEntry,
     BenchSpec,
     ConfigRow,
-    DEFAULT_FUZZ,
+    InitSpec,
     LayoutChoice,
     PresetTable,
     SparseLayout,
@@ -206,15 +207,8 @@ def _flatten_buffer_style_sparse(bench: RawBench, spec: BenchSpec, config: str) 
     bench.pop("distributions", None)
 
 
-def legacy_bench_info_dict(spec: BenchSpec, config: str | None = None) -> RawBenchInfo:
-    """Reproduce the legacy ``{"benchmark": {...}, ...}`` dict the emitter
-    reads. Falsy/optional blocks are omitted so a dense kernel matches the
-    original byte-for-byte on the emitter-relevant subset.
-
-    When ``config`` names a sparse configuration, a buffer-style kernel is
-    flattened to that layout's physical buffers (see
-    :func:`_flatten_buffer_style_sparse`) so the native emitter does not emit
-    duplicate parameters."""
+def _bench_head(spec: BenchSpec) -> RawBenchHead:
+    """The optional emitter-steering keys: level, pinned config, config values, dwarf."""
     # The difficulty level steers helper INLINING: a level-3 microapp is meant to be read as the
     # application it is ported from, so its helpers are emitted as their own static functions
     # rather than flattened into one body a profiler reports as a single symbol.
@@ -238,6 +232,45 @@ def legacy_bench_info_dict(spec: BenchSpec, config: str | None = None) -> RawBen
         head["config_values"] = values
     if spec.dwarf is not None:
         head["dwarf"] = spec.dwarf
+    return head
+
+
+def _init_raw(init: InitSpec) -> RawInit:
+    """The ``init`` block in manifest spelling."""
+    init_raw: RawInit = {
+        "func_name": init.func_name,
+        "input_args": list(init.input_args),
+        "output_args": list(init.output_args),
+    }
+    # The round-trip spelling is the SAME one a manifest uses: an array is declared once,
+    # under ``init.arrays``. Exporting the parser's internal per-property maps (shapes,
+    # dists) as top-level keys would emit exactly the legacy surface ``BenchSpec.from_dict``
+    # refuses, so ``Benchmark.get_data`` -- which re-parses this dict -- would fail to load
+    # every declaratively-initialised kernel.
+    arrays = init_arrays_raw(init)
+    if arrays:
+        init_raw["arrays"] = arrays
+    if init.scalars:
+        init_raw["scalars"] = init.scalars
+    # ``init.dtypes`` types SYMBOLS. The parser merges per-array dtypes into the same map,
+    # so an entry naming a declared array is that array's element type and has already gone
+    # out on its ``arrays`` entry -- re-emitting it here would be the second home again.
+    symbol_dtypes = {name: dt for name, dt in init.dtypes.items() if name not in init.shapes}
+    if symbol_dtypes:
+        init_raw["dtypes"] = symbol_dtypes
+    return init_raw
+
+
+def legacy_bench_info_dict(spec: BenchSpec, config: str | None = None) -> RawBenchInfo:
+    """Reproduce the legacy ``{"benchmark": {...}, ...}`` dict the emitter
+    reads. Falsy/optional blocks are omitted so a dense kernel matches the
+    original byte-for-byte on the emitter-relevant subset.
+
+    When ``config`` names a sparse configuration, a buffer-style kernel is
+    flattened to that layout's physical buffers (see
+    :func:`_flatten_buffer_style_sparse`) so the native emitter does not emit
+    duplicate parameters."""
+    head = _bench_head(spec)
     # ``domain`` is the results table's grouping column. Falls back to the track, because a results
     # row must group somewhere and machine_learning has no structural group of its own.
     bench: RawBench = {
@@ -254,28 +287,7 @@ def legacy_bench_info_dict(spec: BenchSpec, config: str | None = None) -> RawBen
         "domain": reporting_order.structural_group(spec) or spec.track,
     }
     if spec.init is not None:
-        init: RawInit = {
-            "func_name": spec.init.func_name,
-            "input_args": list(spec.init.input_args),
-            "output_args": list(spec.init.output_args),
-        }
-        # The round-trip spelling is the SAME one a manifest uses: an array is declared once,
-        # under ``init.arrays``. Exporting the parser's internal per-property maps (shapes,
-        # dists) as top-level keys would emit exactly the legacy surface ``BenchSpec.from_dict``
-        # refuses, so ``Benchmark.get_data`` -- which re-parses this dict -- would fail to load
-        # every declaratively-initialised kernel.
-        arrays = init_arrays_raw(spec.init)
-        if arrays:
-            init["arrays"] = arrays
-        if spec.init.scalars:
-            init["scalars"] = spec.init.scalars
-        # ``init.dtypes`` types SYMBOLS. The parser merges per-array dtypes into the same map,
-        # so an entry naming a declared array is that array's element type and has already gone
-        # out on its ``arrays`` entry -- re-emitting it here would be the second home again.
-        symbol_dtypes = {name: dt for name, dt in spec.init.dtypes.items() if name not in spec.init.shapes}
-        if symbol_dtypes:
-            init["dtypes"] = symbol_dtypes
-        bench["init"] = init
+        bench["init"] = _init_raw(spec.init)
     if spec.variants and spec.variants != {"default": {}}:
         bench["variants"] = spec.variants
     # The ``fuzz`` block (config space + residual constraints + data distributions)

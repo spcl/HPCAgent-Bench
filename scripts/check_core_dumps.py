@@ -19,16 +19,11 @@ that genuinely wants its own dump.
 Three rules, because each one alone has been escaped:
 
 1. EVERY shell entry point carries the guard -- ``*.sbatch``, ``*.sh``, and any tracked file whose
-   shebang names a shell. Keying on ``.sbatch`` was the original scope and it let 52 shell scripts
-   through -- container launch wrappers (``scripts/cscs/enroot_srun.sh``), login-node helpers
-   (``experiments/arm_status.sh``), image builds, and the ``source``d env layers every one of them
-   starts from. A login-node repro run under one of those left 21.6 GB of ``core_beverin-ln001_*``
-   on 2026-09-20. Widening to ``.sh`` alone still missed two: the agent's own
-   ``containers/agent/bin/hpcagent-bench-tool`` and the OpenHands shell ``bash-norc`` carry no
-   suffix, and those are the scripts closest to the compiler that crashes. A sourced library counts
-   too: setting the limit there is what carries the floor into the caller's shell.
-2. No script RE-ENABLES them. The rule used to be "the text contains ``ulimit -c 0``", which a
-   later ``ulimit -c unlimited`` satisfies while still dumping. A non-zero ``ulimit -c`` now needs
+   shebang names a shell (``containers/agent/bin/hpcagent-bench-tool`` and the OpenHands shell
+   ``bash-norc`` carry no suffix and sit closest to the compiler that crashes). A sourced library
+   counts too: setting the limit there is what carries the floor into the caller's shell.
+2. No script RE-ENABLES them: "the text contains ``ulimit -c 0``" would accept a later
+   ``ulimit -c unlimited`` that still dumps, so a non-zero ``ulimit -c`` needs
    a same-line ``# core-dumps-ok: <reason>`` marker, so a deliberate one (a probe that gdbs its own
    core in a container's /tmp and deletes it) is reviewed rather than silent.
 3. A script that EMITS a batch script counts as one. ``scripts/preset_sweep.py --emit-sbatch``
@@ -143,9 +138,8 @@ def reenabled(path: pathlib.Path) -> list[tuple[int, str]]:
 def insertion_point(lines: list[str]) -> int:
     """After the shebang, the leading comment block, the ``#SBATCH`` header and a leading ``set -``.
 
-    Scanning stops at the first line of real work. The previous version took the LAST ``set -``
-    line in the file, which for a script with ``set -x`` inside a quoted inner shell spliced the
-    guard into the middle of that string. Placed after ``set -euo pipefail`` rather than before so
+    Scanning stops at the first line of real work, so a ``set -x`` inside a quoted inner shell
+    later in the file never receives the guard. Placed after ``set -euo pipefail`` rather than before so
     a script that has one keeps its failure semantics on the very first command.
     """
     at = 0

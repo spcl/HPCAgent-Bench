@@ -3,11 +3,8 @@
 """hpcagent_bench.paths: the one Python-side fallback for "no $SCRATCH" (repo_root,
 scratch_or_repo, scratch_root's own fallback branch).
 
-Before this, three scripts (experiments/campaign_status.py, scripts/canon_sdfg_prerender.py,
-scripts/migrate_canon_scratch_dirs.py) each guessed their own answer to "what if SCRATCH is
-unset" -- a repo-parent, a bare __file__ walk, and a plain ~/.cache -- three different answers to
-the same question. These tests pin the one answer now shared: $HPCAGENT_BENCH_REPO if a caller
-resolved one, else this checkout's own root (paths.ROOT).
+When $SCRATCH is unset the answer is $HPCAGENT_BENCH_REPO if a caller resolved one, else this
+checkout's own root (paths.ROOT).
 """
 
 import pathlib

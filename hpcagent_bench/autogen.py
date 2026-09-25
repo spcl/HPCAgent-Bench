@@ -3,7 +3,7 @@
 """Auto-generate framework sibling files from the numpy reference.
 
 ONE canonical file per (kernel, framework): ``<module>_<fw>.py``
-``fw`` in :data:`TARGETS` (``dace`` / ``cupy`` / ``numba_np`` /
+``fw`` in :data:`EMITTERS` (``dace`` / ``cupy`` / ``numba_np`` /
 ``pythran`` / ``jax``). A file already present that does NOT carry the
 ``hpcagent_bench-autogen`` marker is a hand-written OVERRIDE and is never overwritten
 (so the committed microbench ``*_jax.py`` overrides win over autogen).
@@ -25,28 +25,27 @@ import json
 import pathlib
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from hpcagent_bench import framework_cache, paths
 from hpcagent_bench.emit_bridge import bench_info_tempfile
 from hpcagent_bench.frameworks.framework import native_column_languages
-from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.languages import LANG_TARGET
+from hpcagent_bench.spec import BenchSpec
 
-#: Auto-generatable Python targets and the canonical filename each produces
-#: (``{m}`` = the kernel's module_name). dace and jax are generated in-process;
-#: the rest shell out to their per-package CLI (which writes the canonical name).
-TARGETS = ("dace", "cupy", "numba_np", "pythran", "jax")
+#: ``(numpy_py, kernel_dir, bench_info) -> status`` (``ok`` / ``override`` / ``fail: ...``).
+type Emitter = Callable[[pathlib.Path, pathlib.Path, pathlib.Path], str]
 
 
 def _file_for(module_name: str, target: str) -> str:
     return f"{module_name}_{target}.py"
 
 
-def _emit_dace(numpy_py: pathlib.Path, bench_info: pathlib.Path, out: pathlib.Path) -> str:
-    from numpyto_common.frontend import emit_with_inline_fallback, parse_kernel
+def _emit_dace(numpy_py: pathlib.Path, kdir: pathlib.Path, bench_info: pathlib.Path) -> str:
+    out = kdir / _file_for(numpy_py.stem.removesuffix("_numpy"), "dace")
     from numpyto_c.dace_emit import emit_dace
     from numpyto_common.emit_io import write_generated
+    from numpyto_common.frontend import emit_with_inline_fallback, parse_kernel
 
     def render() -> str:
         rendered = emit_dace(parse_kernel(numpy_py, bench_info, open_mesh_grids=False))
@@ -58,14 +57,15 @@ def _emit_dace(numpy_py: pathlib.Path, bench_info: pathlib.Path, out: pathlib.Pa
     return write_generated(out, emit_with_inline_fallback(render), source=numpy_py.name)
 
 
-def _emit_jax(numpy_py: pathlib.Path, bench_info: pathlib.Path, out: pathlib.Path) -> str:
+def _emit_jax(numpy_py: pathlib.Path, kdir: pathlib.Path, bench_info: pathlib.Path) -> str:
+    out = kdir / _file_for(numpy_py.stem.removesuffix("_numpy"), "jax")
     # In-process like _emit_dace: numpyto_jax.emit_jax is a pure-AST np->jnp
     # translation (it imports no jax), emitted in EAGER mode -- the faithful 1:1
     # form that covers the widest kernel set. write_generated's marker guard
     # leaves a hand-written *_jax.py override (the committed microbench ones)
     # untouched.
-    from numpyto_jax import emit_jax
     from numpyto_common.emit_io import write_generated
+    from numpyto_jax import emit_jax
 
     func = json.loads(bench_info.read_text())["benchmark"]["func_name"]
     src = emit_jax(numpy_py.read_text(), func)
@@ -73,8 +73,19 @@ def _emit_jax(numpy_py: pathlib.Path, bench_info: pathlib.Path, out: pathlib.Pat
     return write_generated(out, src, source=numpy_py.name)
 
 
-def _emit_cli(module: str, numpy_py: pathlib.Path, out_dir: pathlib.Path, extra: list[str]) -> str:
-    cmd = [sys.executable, "-m", module, "emit", "--kernel", str(numpy_py), "--out", str(out_dir), *extra]
+def _emit_cli(module: str, *, pass_bench_info: bool) -> Emitter:
+    """An emitter that shells out to ``python -m <module> emit`` (it writes the canonical name itself)."""
+
+    def emit(numpy_py: pathlib.Path, kdir: pathlib.Path, bench_info: pathlib.Path) -> str:
+        extra = ["--bench-info", str(bench_info)] if pass_bench_info else []
+        return _run_emit_cli(
+            [sys.executable, "-m", module, "emit", "--kernel", str(numpy_py), "--out", str(kdir), *extra]
+        )
+
+    return emit
+
+
+def _run_emit_cli(cmd: list[str]) -> str:
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         tail = (r.stderr.strip().splitlines() or ["unknown error"])[-1]
@@ -83,18 +94,23 @@ def _emit_cli(module: str, numpy_py: pathlib.Path, out_dir: pathlib.Path, extra:
     return "override" if " override " in f" {last} " else "ok"
 
 
+#: Auto-generatable Python target -> its emitter ``(numpy_py, kernel_dir, bench_info) -> status``, which
+#: writes ``<module>_<target>.py`` beside the reference. dace and jax emit in-process; the rest shell out
+#: to their translator package's CLI. A new target is one entry here plus a ``Framework.autogen_targets``.
+EMITTERS: dict[str, Emitter] = {
+    "dace": _emit_dace,
+    "cupy": _emit_cli("numpyto_cupy.cli", pass_bench_info=False),
+    "numba_np": _emit_cli("numpyto_numba.cli", pass_bench_info=True),
+    "pythran": _emit_cli("numpyto_pythran.cli", pass_bench_info=True),
+    "jax": _emit_jax,
+}
+
+
 def _emit_target(target: str, numpy_py: pathlib.Path, kdir: pathlib.Path, bench_info: pathlib.Path) -> str:
-    if target == "dace":
-        return _emit_dace(numpy_py, bench_info, kdir / _file_for(numpy_py.stem.removesuffix("_numpy"), "dace"))
-    if target == "jax":
-        return _emit_jax(numpy_py, bench_info, kdir / _file_for(numpy_py.stem.removesuffix("_numpy"), "jax"))
-    if target == "cupy":
-        return _emit_cli("numpyto_cupy.cli", numpy_py, kdir, [])
-    if target == "numba_np":
-        return _emit_cli("numpyto_numba.cli", numpy_py, kdir, ["--bench-info", str(bench_info)])
-    if target == "pythran":
-        return _emit_cli("numpyto_pythran.cli", numpy_py, kdir, ["--bench-info", str(bench_info)])
-    raise ValueError(f"unknown auto-gen target {target!r}; known: {TARGETS}")
+    emitter = EMITTERS.get(target)
+    if emitter is None:
+        raise ValueError(f"unknown auto-gen target {target!r}; known: {tuple(EMITTERS)}")
+    return emitter(numpy_py, kdir, bench_info)
 
 
 def emit_targets(spec: BenchSpec, targets: Iterable[str]) -> dict[str, str]:
@@ -252,8 +268,9 @@ def emit_native(spec: BenchSpec, langs: Iterable[str]) -> dict[str, str]:
     For a sparse kernel one source set is emitted per configuration (passed as
     ``--config`` so the emitter unpacks the logical array to that layout's member
     buffers); the file/symbol stem is ``<short>_<config>[_<fptype>]``."""
-    from hpcagent_bench.emit_bridge import emit_kernel
     from numpyto_common.emit_io import write_generated
+
+    from hpcagent_bench.emit_bridge import emit_kernel
 
     kdir = paths.BENCHMARKS / spec.relative_path
     numpy_py = kdir / f"{spec.module_name}_numpy.py"

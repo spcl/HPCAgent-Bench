@@ -27,8 +27,8 @@ import subprocess
 import sys
 import tempfile
 import types
+from collections.abc import Sequence
 from functools import lru_cache
-from typing import Dict, List, Optional, Sequence, Tuple
 
 from hpcagent_bench import paths
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
@@ -48,7 +48,7 @@ FRAMEWORK = "pluto"
 #: * ``--parallel`` -- also off by default. Without it polycc marks no loop parallel and emits
 #:                     no ``#pragma omp parallel for``. The compile has to genuinely honour that
 #:                     pragma, which is not automatic -- see ``flags.PLUTO_PAR``.
-POLYCC_ARGS: Tuple[str, ...] = ("--pet", "--tile", "--parallel")
+POLYCC_ARGS: tuple[str, ...] = ("--pet", "--tile", "--parallel")
 
 #: The report's invocation: :data:`POLYCC_ARGS` plus verbosity, never a different transform.
 #: ``--debug`` promotes the band/parallel decisions to stdout -- at default verbosity polycc
@@ -59,10 +59,10 @@ POLYCC_ARGS: Tuple[str, ...] = ("--pet", "--tile", "--parallel")
 #:
 #: Defined as an EXTENSION of the build args, not as its own list, so the report is
 #: structurally incapable of describing a transform other than the one that was compiled.
-POLYCC_REPORT_ARGS: Tuple[str, ...] = POLYCC_ARGS + ("--debug",)
+POLYCC_REPORT_ARGS: tuple[str, ...] = POLYCC_ARGS + ("--debug",)
 
 
-def polycc_exe() -> Optional[str]:
+def polycc_exe() -> str | None:
     """``polycc`` on PATH, or ``None`` when Pluto is not installed."""
     return shutil.which("polycc")
 
@@ -97,7 +97,7 @@ PET_OMP_SHIM = (
 )
 
 
-def pet_parse_env(scratch: pathlib.Path) -> Dict[str, str]:
+def pet_parse_env(scratch: pathlib.Path) -> dict[str, str]:
     """The environment a ``polycc --pet`` subprocess needs to PARSE the emitted scop on aarch64.
 
     pet extracts the scop with a flag-less libclang whose default aarch64 target carries no ``neon``
@@ -127,7 +127,7 @@ def pet_parse_env(scratch: pathlib.Path) -> Dict[str, str]:
     return env
 
 
-def override_source(bench_dir: pathlib.Path, base: str) -> Optional[pathlib.Path]:
+def override_source(bench_dir: pathlib.Path, base: str) -> pathlib.Path | None:
     """The tracked ORIGINAL-PolyBench scop for ``base`` under the kernel's source dir, if any.
 
     A sibling of ``cpp_backend`` (which is gitignored and regenerated), so this is the one
@@ -140,7 +140,7 @@ def override_source(bench_dir: pathlib.Path, base: str) -> Optional[pathlib.Path
 #: "whatever the translator emitted": ``cpp_runtime``'s ctypes dispatch resolves exactly
 #: ``<base>_fp64`` and ``<base>_fp32`` and nothing else, so these two are what a library has to
 #: export for every datatype the harness can ask a kernel to run at.
-OVERRIDE_PRECISIONS: Tuple[str, ...] = ("fp64", "fp32")
+OVERRIDE_PRECISIONS: tuple[str, ...] = ("fp64", "fp32")
 
 #: Suffix of an override-derived scop input. Distinct from the translator's ``_pluto_input.c`` so
 #: the two families cannot overwrite each other in one ``cpp_backend`` -- an override REPLACES the
@@ -154,7 +154,7 @@ OVERRIDE_OUTPUT_SUFFIX = "_pluto_override.c"
 #: Double-precision libm spellings and their float counterparts, for the fp32 specialization. Every
 #: libm call in the tracked overrides sits inside the preamble's ``#define <NAME>_FUN(...)`` lines,
 #: none in a kernel body, so the rewrite below only touches those lines.
-_FP32_LIBM: Dict[str, str] = {"sqrt": "sqrtf", "exp": "expf", "pow": "powf"}
+_FP32_LIBM: dict[str, str] = {"sqrt": "sqrtf", "exp": "expf", "pow": "powf"}
 
 
 def specialize_override(text: str, base: str, fptype: str) -> str:
@@ -228,7 +228,7 @@ def publish_text(dst: pathlib.Path, text: str) -> bool:
     return True
 
 
-def override_scop_inputs(cpp_backend: pathlib.Path, override: pathlib.Path, base: str) -> List[pathlib.Path]:
+def override_scop_inputs(cpp_backend: pathlib.Path, override: pathlib.Path, base: str) -> list[pathlib.Path]:
     """The per-precision scops derived from one tracked override, materialized under ``cpp_backend``.
 
     Derived from the OVERRIDE, never from the translator's generated scop: an override-backed
@@ -238,7 +238,7 @@ def override_scop_inputs(cpp_backend: pathlib.Path, override: pathlib.Path, base
     """
     cpp_backend.mkdir(parents=True, exist_ok=True)
     text = override.read_text()
-    out: List[pathlib.Path] = []
+    out: list[pathlib.Path] = []
     for fptype in OVERRIDE_PRECISIONS:
         dst = cpp_backend / f"{base}_{fptype}{OVERRIDE_INPUT_SUFFIX}"
         publish_text(dst, specialize_override(text, base, fptype))
@@ -246,7 +246,7 @@ def override_scop_inputs(cpp_backend: pathlib.Path, override: pathlib.Path, base
     return sorted(out)
 
 
-def scop_inputs(cpp_backend: pathlib.Path, base: str, bench_dir: Optional[pathlib.Path] = None) -> List[pathlib.Path]:
+def scop_inputs(cpp_backend: pathlib.Path, base: str, bench_dir: pathlib.Path | None = None) -> list[pathlib.Path]:
     """The scops ``base``'s Pluto column transforms, sorted; ``[]`` when none were emitted.
 
     An :func:`override_source` under ``bench_dir`` (default ``cpp_backend``'s parent -- true for
@@ -303,7 +303,7 @@ def drop_core_dumps() -> None:  # pragma: no cover -- runs in the forked child
 
 
 def run_bounded(
-    cmd: Sequence[str], cwd: Optional[str] = None, timeout: Optional[float] = None, env: Optional[Dict[str, str]] = None
+    cmd: Sequence[str], cwd: str | None = None, timeout: float | None = None, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess:
     """``subprocess.run`` whose timeout ``killpg``s the child's WHOLE process group.
 
@@ -349,8 +349,8 @@ def dedupe_scratch_declarations(transformed_c: str) -> str:
     Repairing the output here rather than at a call site keeps the timed build, the report and the
     oracle compiling the same thing.
     """
-    scopes: List[set] = [set()]
-    out: List[str] = []
+    scopes: list[set] = [set()]
+    out: list[str] = []
     for line in transformed_c.split("\n"):
         m = SCRATCH_DECL_RE.match(line)
         if m is not None:
@@ -370,8 +370,8 @@ def dedupe_scratch_declarations(transformed_c: str) -> str:
 
 
 def run_polycc(
-    scop: pathlib.Path, out: pathlib.Path, args: Sequence[str] = POLYCC_ARGS, timeout: Optional[float] = None
-) -> Tuple[List[str], subprocess.CompletedProcess]:
+    scop: pathlib.Path, out: pathlib.Path, args: Sequence[str] = POLYCC_ARGS, timeout: float | None = None
+) -> tuple[list[str], subprocess.CompletedProcess]:
     """Transform one scop with ``polycc``, writing ``out``. Returns ``(argv, result)``.
 
     Runs in a throwaway cwd because polycc drops a ``<stem>.pluto.cloog`` intermediate beside
@@ -527,7 +527,7 @@ def assert_numeric_agreement(kernel: str) -> None:
         )
 
 
-def transformed_sources(cpp_backend: pathlib.Path, base: str) -> List[pathlib.Path]:
+def transformed_sources(cpp_backend: pathlib.Path, base: str) -> list[pathlib.Path]:
     """The polycc-transformed C that the ``pluto`` column compiles, generated on demand.
 
     Regenerates a stale or missing output and reuses a fresh one (polycc costs seconds per
@@ -539,7 +539,7 @@ def transformed_sources(cpp_backend: pathlib.Path, base: str) -> List[pathlib.Pa
         raise NotSupportedByFramework(FRAMEWORK, base, "the translator emitted no #pragma scop for this kernel")
     if polycc_exe() is None:
         raise NotSupportedByFramework(FRAMEWORK, base, "polycc is not installed on this host")
-    out: List[pathlib.Path] = []
+    out: list[pathlib.Path] = []
     for scop in scops:
         assert_affine(scop, base)
         dst = transformed_path(scop)

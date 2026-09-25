@@ -46,11 +46,11 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import TypeAlias, cast
 
 
-class Provider(str, Enum):
+class Provider(StrEnum):
     """A web-search backend. Declaration order is the auto-detect priority."""
 
     TAVILY = "tavily"

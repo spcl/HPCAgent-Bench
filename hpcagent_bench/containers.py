@@ -39,8 +39,8 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import List, Mapping, Optional, Sequence, Tuple
 
 from hpcagent_bench import config
 
@@ -77,7 +77,7 @@ DEFAULT_BACKEND = "podman"
 EXEC_BACKENDS = ("docker", "podman", "apptainer")
 
 
-def family_members(family: str) -> Tuple[str, ...]:
+def family_members(family: str) -> tuple[str, ...]:
     """The runtimes implementing ``family``, in :data:`KNOWN_BACKENDS` preference order."""
     return tuple(name for name in KNOWN_BACKENDS if SPELLINGS[name].family == family)
 
@@ -96,24 +96,24 @@ class WrapperSpelling:
     family: str  # "oci" (the shipped image, unconverted) | "sif" | "ce" (conversions of it)
     rootless: bool  # invocable unprivileged, with no daemon and no root-equivalent group
     kind: str  # "exec" (wraps the command) | "srun_env" (selected by an srun flag)
-    verb: Tuple[str, ...]  # ("exec",) | ("run", "--rm", "--network", "host") | ()
+    verb: tuple[str, ...]  # ("exec",) | ("run", "--rm", "--network", "host") | ()
     bind_flag: str  # "--bind" | "-v" | "" for srun_env (the EDF declares its own mounts)
     workdir_flag: str  # "--pwd" | "-w" | "" for srun_env (the EDF declares its own workdir)
     env_flag: str  # "--env" | "-e" | "" for srun_env (the EDF declares its own [env])
-    gpu: Mapping[str, Tuple[str, ...]]  # {"nvidia": (...), "amd": (...)}; a cpu run adds nothing
+    gpu: Mapping[str, tuple[str, ...]]  # {"nvidia": (...), "amd": (...)}; a cpu run adds nothing
     image_form: str  # "sif" | "tag" | "edf"
     image_default: str  # "hpcagent_bench-{hw}.sif" | "hpcagent_bench:{hw}" | "" (EDF is supplied)
     harbor_env: str  # "singularity" | "docker" | "" (empty = not a Harbor backend)
     srun_flag: str  # "--environment" for srun_env; "" for an exec wrapper
 
 
-def load_backends(path: pathlib.Path = BACKENDS_PATH) -> Tuple[dict, Tuple[str, ...]]:
+def load_backends(path: pathlib.Path = BACKENDS_PATH) -> tuple[dict, tuple[str, ...]]:
     """Parse the spelling file into ``({backend: WrapperSpelling}, passthrough_env)``.
 
     Both the Python fold and the bash fold read this one file, so the launch argv is
     byte-identical across the language boundary."""
     rows: dict = {}
-    passthrough: Tuple[str, ...] = ()
+    passthrough: tuple[str, ...] = ()
     for line in path.read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
@@ -152,7 +152,7 @@ def load_backends(path: pathlib.Path = BACKENDS_PATH) -> Tuple[dict, Tuple[str, 
 SPELLINGS, PASSTHROUGH_ENV = load_backends()
 
 
-def resolve_backend(explicit: Optional[str] = None) -> str:
+def resolve_backend(explicit: str | None = None) -> str:
     """The active container RUNTIME: ``explicit`` arg > ``$HPCAGENT_BENCH_RUNTIME_BACKEND`` >
     ``config.get("runtime.backend")`` > :data:`DEFAULT_BACKEND`.
 
@@ -187,7 +187,7 @@ def resolve_backend(explicit: Optional[str] = None) -> str:
     return backend
 
 
-def detect_backend(candidates: Sequence[str] = KNOWN_BACKENDS) -> Optional[str]:
+def detect_backend(candidates: Sequence[str] = KNOWN_BACKENDS) -> str | None:
     """The first backend in ``candidates`` whose launcher is actually on PATH, or ``None``.
 
     Probing beats assuming: a login node has podman and no dockerd, a laptop usually has the
@@ -204,7 +204,7 @@ def detect_backend(candidates: Sequence[str] = KNOWN_BACKENDS) -> Optional[str]:
     return None
 
 
-def srun_container_flags(backend: Optional[str] = None, edf: Optional[str] = None) -> List[str]:
+def srun_container_flags(backend: str | None = None, edf: str | None = None) -> list[str]:
     """The flags to add to an ``srun`` line so the step runs inside the image, for backends that
     select their container that way; ``[]`` for an exec wrapper, which needs none.
 
@@ -230,7 +230,7 @@ def srun_container_flags(backend: Optional[str] = None, edf: Optional[str] = Non
     return [f"{spelling.srun_flag}={path}"]
 
 
-def default_image(backend: str, hardware: str = "cpu", repo_root: Optional[str] = None) -> str:
+def default_image(backend: str, hardware: str = "cpu", repo_root: str | None = None) -> str:
     """The image reference for ``backend`` on ``hardware`` -- an ``$HPCAGENT_BENCH_SIF`` /
     ``$HPCAGENT_BENCH_DOCKER_IMAGE`` override, else the file's default (a sif path under
     ``repo_root``, or an ``hpcagent_bench:<hw>`` tag)."""
@@ -253,14 +253,14 @@ def default_image(backend: str, hardware: str = "cpu", repo_root: Optional[str] 
     return os.environ.get("HPCAGENT_BENCH_DOCKER_IMAGE") or spelling.image_default.format(hw=hardware)
 
 
-def collect_env(hardware: str) -> List[Tuple[str, str]]:
+def collect_env(hardware: str) -> list[tuple[str, str]]:
     """The ``(key, value)`` env pairs to forward into the image, in a PINNED order so the
     bash fold matches byte-for-byte: ``HPCAGENT_BENCH_IMAGE=<hw>`` first, then
     :data:`PASSTHROUGH_ENV` (present, in file order), then every other ``HPCAGENT_BENCH_*`` var
     sorted (Python's str sort == ``LC_ALL=C sort``). Reads only the environment -- there is no
     caller-supplied extra, because the bash fold has no such channel and any divergence would
     silently break the byte-for-byte parity."""
-    pairs: List[Tuple[str, str]] = [("HPCAGENT_BENCH_IMAGE", hardware)]
+    pairs: list[tuple[str, str]] = [("HPCAGENT_BENCH_IMAGE", hardware)]
     seen = {"HPCAGENT_BENCH_IMAGE"}
     for key in PASSTHROUGH_ENV:
         value = os.environ.get(key)
@@ -287,11 +287,11 @@ def collect_env(hardware: str) -> List[Tuple[str, str]]:
 def local_run_command(
     inner: Sequence[str],
     *,
-    backend: Optional[str] = None,
+    backend: str | None = None,
     hardware: str = "cpu",
-    image: Optional[str] = None,
-    repo_root: Optional[str] = None,
-) -> List[str]:
+    image: str | None = None,
+    repo_root: str | None = None,
+) -> list[str]:
     """THE factory: the full launch argv for running ``inner`` inside the image under an
     exec-wrapper backend -- ``prefix + [image] + inner`` in the fixed fold order the bash
     launcher mirrors. ``backend`` defaults to :func:`resolve_backend`.
@@ -308,7 +308,7 @@ def local_run_command(
     if spelling.kind in ("srun_env", "none"):
         return list(inner)
     repo = repo_root or os.getcwd()
-    argv: List[str] = [chosen, *spelling.verb, *spelling.gpu.get(hardware, ())]
+    argv: list[str] = [chosen, *spelling.verb, *spelling.gpu.get(hardware, ())]
     for key, value in collect_env(hardware):
         argv += [spelling.env_flag, f"{key}={value}"]
     argv += [spelling.bind_flag, f"{repo}:{repo}", spelling.workdir_flag, repo]
@@ -317,7 +317,7 @@ def local_run_command(
     return argv
 
 
-def harbor_env_for(backend: Optional[str] = None) -> str:
+def harbor_env_for(backend: str | None = None) -> str:
     """Harbor's ``--env`` provider name for the resolved backend (``docker -> docker``,
     ``apptainer -> singularity``). Raises for ``podman``, which Harbor has no provider for, so
     the caller never emits an invalid one -- a podman run is launched directly instead."""
