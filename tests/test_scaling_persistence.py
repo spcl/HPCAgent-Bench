@@ -197,11 +197,23 @@ def test_record_scaling_is_exported_from_recording() -> None:
     assert record_scaling is recording.record_scaling
 
 
+#: A results DB from before the scaling tables, with the retired ``benchmarks`` table that its
+#: ``submissions`` foreign-keys to.
+LEGACY_DDL = """
+CREATE TABLE benchmarks (name TEXT PRIMARY KEY, track TEXT, dwarf TEXT, source TEXT);
+CREATE TABLE submissions (
+    id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, ts INTEGER NOT NULL,
+    benchmark TEXT NOT NULL REFERENCES benchmarks(name), preset TEXT NOT NULL, datatype TEXT NOT NULL,
+    source_mode TEXT NOT NULL, optimizer TEXT, baseline TEXT NOT NULL, baseline_ns REAL, native_ns REAL,
+    speedup REAL, suspect INTEGER CHECK(suspect IN (0,1)));
+"""
+
+
 def test_a_db_from_before_the_scaling_tables_gains_them_on_connect(tmp_path: pathlib.Path) -> None:
-    """An old results DB opened by new code must be migrated, not broken, and keep its rows."""
+    """An old results DB opened by new code must be extended, not broken, and keep its rows."""
     db = tmp_path / "old.db"
     conn = sqlite3.connect(db)
-    conn.executescript(recording._BENCHMARKS_DDL + recording._SUBMISSIONS_DDL + recording._ATTEMPTS_DDL)
+    conn.executescript(LEGACY_DDL)
     conn.execute("INSERT INTO benchmarks(name) VALUES (?)", (KERNEL,))
     conn.commit()
     conn.close()
