@@ -416,6 +416,11 @@ def _apply_func(name: str, args: list[FuzzValue], expr: str) -> FuzzValue:
     raise ValueError(f"disallowed call in {expr!r}")
 
 
+#: What :func:`safe_eval` raises on an expression it cannot evaluate: a parse error, an unknown name,
+#: an unsupported construct or operand, or failing arithmetic.
+EVAL_ERRORS: tuple[type[Exception], ...] = (SyntaxError, NameError, ValueError, TypeError, ArithmeticError)
+
+
 def safe_eval(expr: str, names: dict[str, FuzzValue]) -> FuzzValue:
     """Evaluate a fuzz expression against ``names`` WITHOUT Python ``eval``.
 
