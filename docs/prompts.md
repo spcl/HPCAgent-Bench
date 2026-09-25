@@ -407,8 +407,8 @@ prompt.
 
 The prompt body is assembled **once per run** and reused byte-for-byte by every attempt;
 only the per-attempt feedback (the previous attempt's error, or its speedup when it was
-already correct) is appended, by `RunPrompt.attempt`. So a run has one prompt identity -- one
-`prompt_hash`, one entry in the prompt store -- instead of one per repair round.
+already correct) is appended, by `RunPrompt.attempt`. So a run has one prompt identity instead
+of one per repair round.
 
 `build_run_prompt(task, ...)` renders that body and returns the `RunPrompt`; every attempt
 goes through the same `finish_prompt` as a one-shot, so a repair round cannot skip the
@@ -443,7 +443,7 @@ open them directly, and no host layout appears in the output (a user root outsid
 has no relative spelling, so it shows absolute).
 
 With several roots layered this is the only way to see which copy won. The markers are in
-the prompt text itself, so they survive into the prompt store and any saved transcript
+the prompt text itself, so they survive into any saved transcript
 rather than only reaching a terminal.
 
 ## Host paths never reach the prompt

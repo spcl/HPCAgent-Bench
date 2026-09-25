@@ -105,7 +105,7 @@ UNATTRIBUTED: tuple[str, ...] = (
 TABLES: tuple[str, ...] = ("submissions", "attempts", "calls", "sources")
 
 #: Tables carrying a run_id, so the set of runs to write into `runs` can be collected from them.
-RUN_TABLES: tuple[str, ...] = ("submissions", "attempts", "calls", "sources", "completions")
+RUN_TABLES: tuple[str, ...] = ("submissions", "attempts", "calls", "sources")
 
 
 def parse_arm(arm: str) -> Identity | None:

@@ -195,19 +195,21 @@ def test_aggregate_is_idempotent(tmp_path) -> None:
     assert _count(base, "submissions") == first == 2
 
 
-def test_aggregate_merges_the_prompt_store(tmp_path) -> None:
-    """A copied ``prompts`` row whose file stayed beside the shard would be a dangling pointer."""
+def test_aggregate_merges_the_blob_store(tmp_path) -> None:
+    """A copied ``sources`` row whose file stayed beside the shard would be a dangling pointer."""
     base = str(tmp_path / "hpcagent_bench.db")
     shard = recording.shard_db_path(0, base)
     conn = recording.connect(shard)
     try:
-        digest = recording.store_prompt(conn, "optimize this", "gemm", store_dir=str(recording.prompt_store_dir(shard)))
+        digest = recording.store_source(
+            conn, "optimize this", "gemm", run_id="r0", ts=1, store_dir=str(recording.prompt_store_dir(shard))
+        )
     finally:
         conn.close()
 
     recording.aggregate(base)
 
-    assert _count(base, "prompts") == 1
+    assert _count(base, "sources") == 1
     stored = recording.prompt_store_dir(base) / f"{digest[:2]}/{digest}.txt"
     assert stored.read_text() == "optimize this"
 
@@ -294,20 +296,22 @@ def test_adoption_happens_once(tmp_path) -> None:
     assert recording.user_version(base) == recording.DERIVED_MARK
 
 
-def test_adoption_carries_the_prompt_store(tmp_path) -> None:
+def test_adoption_carries_the_blob_store(tmp_path) -> None:
     """The store is named after the DB beside it, so a base adopted under a new name leaves its
-    prompt rows pointing at files that are no longer there."""
+    sources rows pointing at files that are no longer there."""
     base = str(tmp_path / "hpcagent_bench.db")
     conn = recording.connect(base)
     try:
-        digest = recording.store_prompt(conn, "legacy prompt", "gemm", store_dir=str(recording.prompt_store_dir(base)))
+        digest = recording.store_source(
+            conn, "legacy prompt", "gemm", run_id="old", ts=1, store_dir=str(recording.prompt_store_dir(base))
+        )
     finally:
         conn.close()
     _seed(recording.shard_db_path(0, base), run="r0", kernels=["spmv"])
 
     recording.aggregate(base)
 
-    assert _count(base, "prompts") == 1
+    assert _count(base, "sources") == 1
     assert (recording.prompt_store_dir(base) / f"{digest[:2]}/{digest}.txt").read_text() == "legacy prompt"
 
 
