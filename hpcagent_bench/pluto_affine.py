@@ -43,7 +43,7 @@ def scop_nonaffine_reason(scop_c: str) -> str | None:
     scops (``numpyto_c.emit.pluto_scop_regions``) and what sits between them is plain C polycc never
     models. When no ``#pragma scop``/``#pragma endscop`` pair is present the whole string is scanned
     (an already-extracted scop body)."""
-    bodies = re.findall(r"#pragma scop(.*?)#pragma endscop", scop_c, re.S) or [scop_c]
+    bodies = re.findall(r"#pragma scop(.*?)#pragma endscop", scop_c, re.DOTALL) or [scop_c]
     for body in bodies:
         reason = body_nonaffine_reason(body)
         if reason is not None:

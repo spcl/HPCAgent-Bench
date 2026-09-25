@@ -131,7 +131,7 @@ def snap_power_of_two(value: float) -> int:
 
 
 def interpolate_symbol(
-    small: bool | int | float | str, large: bool | int | float | str, fraction: float
+    small: bool | float | str, large: bool | float | str, fraction: float
 ) -> bool | int | float | str:
     """One symbol's value at ``fraction`` of the way from ``small`` to ``large``, geometrically.
 
@@ -297,7 +297,7 @@ def ladder_violations(ladder: Mapping[str, Mapping[str, object]]) -> list[str]:
     return out
 
 
-def format_scalar(value: bool | int | float | str) -> str:
+def format_scalar(value: bool | float | str) -> str:
     """A YAML scalar for ``value`` in the corpus's manifest style (``true``/``false``, plain ints)."""
     if isinstance(value, bool):
         return "true" if value else "false"

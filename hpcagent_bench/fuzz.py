@@ -339,7 +339,7 @@ _UNARYOPS: tuple[type[ast.unaryop], ...] = (ast.USub, ast.UAdd, ast.Not)
 _CMPOPS: tuple[type[ast.cmpop], ...] = (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE)
 
 
-def _binop(op: ast.operator, left: int | float, right: int | float, expr: str) -> int | float:
+def _binop(op: ast.operator, left: float, right: float, expr: str) -> int | float:
     """Apply one permitted arithmetic operator. Operands are numbers: every arithmetic expression
     in the corpus is over sizes, and a mapping or a sequence has no arithmetic here."""
     if isinstance(op, ast.Add):
@@ -676,7 +676,7 @@ EDGE_VALUES = {"one": 1, "odd": 3, "prime": 7, "nonpow2": 6, "nonaligned": 5}
 EDGE_KINDS = tuple(EDGE_VALUES)
 
 
-def _edge_value(hi: int | float, kind: str) -> int:
+def _edge_value(hi: float, kind: str) -> int:
     """The small structural probe value for ``kind`` (:data:`EDGE_VALUES`), capped
     only at ``hi`` -- the one bound that must hold (a size cannot exceed its declared
     maximum). It is NOT raised to the fuzz range's lower bound: edges stay small so
