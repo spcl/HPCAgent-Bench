@@ -3,8 +3,8 @@
 # NVIDIA HPC SDK, for the CI runners (.github/actions/setup, input vendor-compilers). No image runs
 # it: judge-agent-cuda installs NVHPC in its own step.
 #
-# Vendor apt repos, not spack: the images are apt-based throughout, and a spack bootstrap would
-# add a build toolchain and hours of source builds to a layer that is just a vendor binary drop.
+# Vendor apt repos, not spack: a spack bootstrap would add a build toolchain and hours of source
+# builds for what is a vendor binary drop.
 #
 # oneAPI installs the COMPILERS ONLY (icx/icpx/ifx + tbb-devel), not the full Base+HPC kit.
 # NVIDIA HPC SDK is gated on $INSTALL_NVHPC so an arm that does not grade nvhpc does not pay for it.
@@ -44,7 +44,7 @@ done
 # icpx ships an empty icpx.cfg and cannot resolve <vector> without --gcc-toolchain. Written into
 # the driver's own cfg so it fixes icpx everywhere it is invoked, with no per-call-site flag.
 # /usr, not a pinned gcc version dir: icpx picks the newest libstdc++ under the prefix.
-# containers/lib/parallelizer-gate.sh fails the build if this stops working.
+# containers/lib/parallelizer-gate.sh runs the same <vector> check in an image that carries icpx.
 for cfg in /opt/intel/oneapi/compiler/latest/bin/icpx.cfg; do
     [ -e "${cfg}" ] || continue
     grep -q -- '--gcc-toolchain' "${cfg}" || echo '--gcc-toolchain=/usr' >> "${cfg}"

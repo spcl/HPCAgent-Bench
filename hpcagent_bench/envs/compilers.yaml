@@ -165,10 +165,10 @@ flang:
   link:    ["{cc}", "-shared", "{objs}", "-o", "{lib}"]
 
 # --- Intel oneAPI ---------------------------------------------------------------
-# icx / icpx were INSTALLED by containers/lib/install-extra-toolchains.sh and reachable by nothing:
-# only the ifx block existed, so Intel C and C++ had no block to select. Placed AFTER gcc/clang
-# for the same reason the NVHPC blocks are: the single-node lookup takes the FIRST block per lang,
-# so Intel is selected only by an explicit `build.compiler.<lang>: oneapi` pin, never by default.
+# icx / icpx / ifx are installed on the CI runners by .github/scripts/install-extra-toolchains.sh.
+# Placed AFTER gcc/clang for the same reason the NVHPC blocks are: the single-node lookup takes the
+# FIRST block per lang, so Intel is selected only by an explicit `build.compiler.<lang>: oneapi`
+# pin, never by default.
 #
 # No autopar_ref on either, and that is measured rather than forgotten. icc-classic's `-parallel`
 # does not exist in the LLVM-based icx: on icx 2026.1.1 it is accepted with `command line warning
@@ -176,10 +176,9 @@ flang:
 # OpenMP runtime references from a plain parallelizable nest. See the note in flags.py where
 # ICX_AUTOPAR would otherwise live.
 #
-# icpx additionally needs the image to point it at a libstdc++: a bare `icpx` cannot
-# resolve `<vector>` (measured), because the oneAPI layer ships an EMPTY icpx.cfg. The image writes
-# `--gcc-toolchain=/usr` into that file, so nothing is needed on the compile line here -- see
-# containers/lib/install-extra-toolchains.sh.
+# icpx additionally needs a libstdc++: a bare `icpx` cannot resolve `<vector>` (measured), because
+# oneAPI ships an EMPTY icpx.cfg. The install script writes `--gcc-toolchain=/usr` into that file,
+# so nothing is needed on the compile line here -- see .github/scripts/install-extra-toolchains.sh.
 icx:
   lang: c
   install: {apt: null, spack: intel-oneapi-compilers}

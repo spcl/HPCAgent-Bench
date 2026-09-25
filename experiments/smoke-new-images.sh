@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Container acceptance: points the EXISTING inference smoke at a candidate .sqsh (per-candidate
 # EDF, smoke unchanged) instead of the deployed image, since build gates prove import not serving.
-# Only SGLang has a serving smoke; a vLLM candidate is checked with serve-only.sbatch.
+# Only SGLang has a serving smoke here. A vLLM candidate is smoked with experiments/serve-only.sbatch
+# (the campaign's own serving path) pointed at a candidate EDF; containers/README.md, "Build, verify,
+# promote", has the recipe.
 #   ./smoke-new-images.sh
 set -euo pipefail
 

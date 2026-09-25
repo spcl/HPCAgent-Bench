@@ -132,7 +132,7 @@ runs:
         # test_compile_flags.py and test_parallelism_dispatch.py need icpx (and nvc++ for 'all').
         set -euo pipefail
         for attempt in 1 2 3; do
-          sudo env "INSTALL_NVHPC=${INSTALL_NVHPC}" sh containers/lib/install-extra-toolchains.sh && break
+          sudo env "INSTALL_NVHPC=${INSTALL_NVHPC}" sh .github/scripts/install-extra-toolchains.sh && break
           if [ "$attempt" = 3 ]; then
             echo "::error::vendor compiler install failed 3 times (oneAPI/NVHPC apt endpoint down)"
             exit 1
