@@ -37,9 +37,9 @@ def pin_per_worker_dace_build_folder() -> None:
     if worker is None:
         return  # a serial run has nothing to race with
     base = pathlib.Path(os.environ.get("DACE_default_build_folder", ".dacecache"))
-    if base.name == worker:
-        return
-    os.environ["DACE_default_build_folder"] = str(base / worker)
+    if base.name != worker:
+        os.environ["DACE_default_build_folder"] = str(base / worker)
+    # Even when the env var was already pinned: a dace loaded before the pin read the unpinned value.
     loaded = sys.modules.get("dace.config")
     if loaded is not None:
-        loaded.Config.set("default_build_folder", value=str(base / worker))
+        loaded.Config.set("default_build_folder", value=os.environ["DACE_default_build_folder"])

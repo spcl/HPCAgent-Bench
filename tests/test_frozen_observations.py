@@ -34,6 +34,8 @@ from hpcagent_bench import frozen_observations  # noqa: E402
 
 MODELS = ("kimi27sglang", "oss120b", "qwen38", "glm53")
 ARM = "cpf-llr-focus40-qwen38-fortran"
+#: An arm the registry's dropped_arms still names (cpfsrc v1, out since 2026-09-19).
+DROPPED_ARM = "cpf-llr-focus40-qwen38-c-cpfsrc"
 ROOT = "cpf-llr-focus40-20260917"
 #: After any real manifest commit, so comparable_since_ms never gates these fake kernels out.
 FAR_FUTURE_TS_MS = 10**13
@@ -330,10 +332,12 @@ def test_a_setup_listed_for_rerun_is_yellow_with_its_frozen_coverage(
     the registry drops."""
     monkeypatch.setattr(board, "DROPPED_ARMS", re.compile(re.escape(ARM)))
     runs = tmp_path / "runs"
-    live_job(runs / ROOT, "200", ["b"], arm=ARM)
-    frozen = write_frozen(tmp_path, [frozen_row("100", "submission", "a")])
+    live_job(runs / ROOT, "200", ["b"], arm=DROPPED_ARM)
+    frozen = write_frozen(tmp_path, [frozen_row("100", "submission", "a", arm=DROPPED_ARM)])
     listing = tmp_path / "rerun-lost.tsv"
-    listing.write_text(f"arm\tdeleted_jobs\treason\tstatus\n{ARM}\t100\tDBs deleted\tpending\n", encoding="utf-8")
+    listing.write_text(
+        f"arm\tdeleted_jobs\treason\tstatus\n{DROPPED_ARM}\t100\tDBs deleted\tpending\n", encoding="utf-8"
+    )
     monkeypatch.setattr(board, "RERUN_LOST", listing)
     # Only this synthetic list names reruns: the repo's own rerun-kernels.tsv is live state.
     monkeypatch.setattr(board.remaining_kernels, "RERUN_KERNELS", tmp_path / "rerun-kernels.tsv")
@@ -343,11 +347,13 @@ def test_a_setup_listed_for_rerun_is_yellow_with_its_frozen_coverage(
 
     rows = board.arm_rows(runs, str(REPO), MODELS, frozen)
 
-    assert [(row["arm"], row["status"], row["rerun"], row["done"]) for row in rows] == [(ARM, "rerun", "pending", 2)]
+    assert [(row["arm"], row["status"], row["rerun"], row["done"]) for row in rows] == [
+        (DROPPED_ARM, "rerun", "pending", 2)
+    ]
     assert rows[0]["frozen_jobs"] == ["100"]
     assert {job["id"]: job["state"] for job in rows[0]["jobs"]} == {"100": board.DELETED_STATE, "200": "COMPLETED"}
 
-    listing.write_text(f"arm\tdeleted_jobs\treason\tstatus\n{ARM}\t100\tDBs deleted\tdone\n", encoding="utf-8")
+    listing.write_text(f"arm\tdeleted_jobs\treason\tstatus\n{DROPPED_ARM}\t100\tDBs deleted\tdone\n", encoding="utf-8")
     assert board.arm_rows(runs, str(REPO), MODELS, frozen) == []  # rerun done: the drop rule applies again
 
 
