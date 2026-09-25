@@ -2419,7 +2419,11 @@ DACE_NATIVE_REDUCE_FNS = frozenset({"sum", "prod", "mean", "min", "max", "amin",
 
 
 def hoist_reduce_axis_unless_native(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
-    """:func:`hoist_reduce_axis`, declining a float reduction the DaCe frontend lowers itself."""
+    """:func:`hoist_reduce_axis`, keeping a float reduction the DaCe frontend lowers itself.
+
+    A kept METHOD form is respelled ``np.<op>(x, axis=k)``: DaCe's ``ndarray.max``/``min``
+    methods take no ``axis`` (vgg16's ``x.max(axis=(3, 5))`` is a TypeError), its functions do.
+    """
     if isinstance(node, ast.Call) and not any(k.arg == "keepdims" for k in node.keywords):
         parts = reduce_call_parts(node, {k.arg: k.value for k in node.keywords})
         if (
@@ -2427,7 +2431,18 @@ def hoist_reduce_axis_unless_native(node: ast.AST, hoist: ValueHoist) -> ast.exp
             and parts[0] in DACE_NATIVE_REDUCE_FNS
             and _dtype_kind(parts[1], hoist.tables.dtypes) == "float"
         ):
-            return None
+            op, operand, axis = parts
+            if _np_attr(node) is not None or axis is None:
+                return None
+            if len(node.args) <= 1:
+                others = [k for k in node.keywords if k.arg != "axis"]
+                call = ast.Call(
+                    func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=op, ctx=ast.Load()),
+                    args=[operand],
+                    keywords=[ast.keyword(arg="axis", value=axis), *others],
+                )
+                hoist.changed = True
+                return ast.fix_missing_locations(ast.copy_location(call, node))
     return hoist_reduce_axis(node, hoist)
 
 

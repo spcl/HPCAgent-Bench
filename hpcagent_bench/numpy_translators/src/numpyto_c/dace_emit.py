@@ -17,6 +17,8 @@ from numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
 from numpyto_common.lowering import lower
 from numpyto_common.numpy_desugar import (
     _AUG_OP_SRC,
+    DACE_NATIVE_REDUCE_FNS,
+    _axis_list,
     _dtype_kind,
     _dtype_table,
     _kind_of_dtype_str,
@@ -25,13 +27,14 @@ from numpyto_common.numpy_desugar import (
     expr_rank,
     name_binding_index,
     rank_table,
+    reduce_call_parts,
 )
 from numpyto_common.ordered import OrderedSet
 from numpyto_common.statement_desugar import (
     DesugarArrayIteration,
+    Spelled,
     SplitChainedAssign,
     SplitTupleUnpack,
-    Spelled,
     is_scalar_literal,
 )
 
@@ -3676,10 +3679,20 @@ def body_allocated_shape(body: List[ast.stmt], hret: str, values: Set[str]) -> O
     ]
     if len(stores) != 1:
         return None  # two writers spell two extents; neither is THE shape
+    # A kept axis reduction (lenet's ``np.max(split, axis=(2, 4))``) writes its operand's shape
+    # with the reduced axes dropped, so the operand's allocation sizes the store.
+    value = stores[0].value
+    reduced: Optional[ast.expr] = None
+    if isinstance(value, ast.Call) and not any(k.arg == "keepdims" for k in value.keywords):
+        parts = reduce_call_parts(value, {k.arg: k.value for k in value.keywords})
+        if parts is not None and parts[0] in DACE_NATIVE_REDUCE_FNS and isinstance(parts[1], ast.Name):
+            if parts[2] is None:
+                return None  # a scalar result has no extent to declare
+            value, reduced = parts[1], parts[2]
     # ``acc / kernel_size`` is ``acc``'s shape: ``values`` names what carries a VALUE rather than
     # an extent, so peeling those leaves the one array the store is shaped by. Two of them left is
     # a broadcast this cannot size, and it declines rather than pick one.
-    written = list({n.id for n in ast.walk(stores[0].value) if isinstance(n, ast.Name) and n.id not in values})
+    written = list({n.id for n in ast.walk(value) if isinstance(n, ast.Name) and n.id not in values})
     if len(written) != 1:
         return None
     allocations = [
@@ -3693,7 +3706,13 @@ def body_allocated_shape(body: List[ast.stmt], hret: str, values: Set[str]) -> O
     ]
     if len(allocations) != 1 or not isinstance(allocations[0], (ast.Tuple, ast.List)):
         return None
-    return [ast.unparse(dim) for dim in allocations[0].elts]
+    dims = allocations[0].elts
+    if reduced is not None:
+        axes = _axis_list(reduced, len(dims))
+        if axes is None:
+            return None
+        dims = [dim for i, dim in enumerate(dims) if i not in axes]
+    return [ast.unparse(dim) for dim in dims]
 
 
 class NameExtentExpression(ast.NodeTransformer):
