@@ -60,9 +60,11 @@ class Check:
     required: bool = True
 
 
-def run(cmd: list[str], timeout: float = 120.0, cwd: str | None = None) -> tuple[int, str]:
+def run(
+    cmd: list[str], timeout: float = 120.0, cwd: str | None = None, env: dict[str, str] | None = None
+) -> tuple[int, str]:
     try:
-        done = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False, cwd=cwd)
+        done = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False, cwd=cwd, env=env)
     except (OSError, subprocess.SubprocessError) as exc:
         return 127, str(exc)
     return done.returncode, (done.stdout + done.stderr).strip()
@@ -451,15 +453,11 @@ REGISTRY_OFFERED: dict[str, tuple[str, ...]] = {
     ),
 }
 
-#: Asks the harness's OWN resolver, from the repository this script lives in. Not a reimplementation
-#: of it: a second copy of the resolution rules is exactly the drift this check exists to close.
+#: Asks the harness's OWN resolver, from the repository this script lives in (run through its
+#: scripts/repo_python). Not a reimplementation of it: a second copy of the resolution rules is
+#: exactly the drift this check exists to close.
 REGISTRY_PROBE = r"""
 import json
-import pathlib
-import sys
-
-repo = pathlib.Path(sys.argv[1])
-sys.path.insert(0, str(repo))
 
 from hpcagent_bench import languages
 
@@ -476,12 +474,12 @@ REGISTRY_RECORDS: dict[str, dict[str, tuple[str, ...]]] = {"amd": REGISTRY_OFFER
 
 def library_registry(platform: str) -> tuple[bool, str]:
     """Every library ``libraries.yaml`` declares, resolved and trial-linked, against the record."""
-    repo = pathlib.Path(__file__).resolve().parents[3]
-    flags = [sys.executable, "-P"] if sys.version_info >= (3, 11) else [sys.executable]
+    repo_python = pathlib.Path(__file__).resolve().parents[3] / "scripts" / "repo_python"
+    env = {**os.environ, "REPO_PYTHON": sys.executable}
     with tempfile.TemporaryDirectory() as tmp:
         script = pathlib.Path(tmp) / "library_registry_probe.py"
         script.write_text(REGISTRY_PROBE)
-        code, out = run([*flags, str(script), str(repo)], timeout=1800.0, cwd="/")
+        code, out = run([str(repo_python), "-P", str(script)], timeout=1800.0, cwd="/", env=env)
     line = next((ln for ln in reversed(out.splitlines()) if ln.startswith("REGISTRY ")), "")
     if not line:
         return False, f"probe did not finish (rc={code}): {(out.splitlines() or ['no output'])[-1][:110]}"

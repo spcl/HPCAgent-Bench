@@ -57,7 +57,7 @@ when `squeue` does not answer, the dry run still plans and `SUBMIT=1` refuses.
 
 ```bash
 cd experiments
-export PYTHONPATH=$PWD/..
+. ../scripts/repo_env.sh
 RUNS=$SCRATCH/hpcagent-bench-runs WORK=$SCRATCH/owed/llr-focus40-qwen38
 
 # 1. the owed list, one <arm>.txt per arm that owes anything

@@ -10,27 +10,23 @@ Pluto column a BUILD PATH and not a flag preset.
 
 Every consumer goes through here, so the timed build (``benchmarks.cpp_runtime``, via
 :func:`transformed_sources`), the transformation report (``frameworks.pluto_framework``, via
-:data:`POLYCC_REPORT_ARGS`) and the numerical oracle (``tests.numerical_oracle._run_pluto``, via
+:data:`POLYCC_REPORT_ARGS`) and the numerical oracle (``hpcagent_bench.numerical_oracle._run_pluto``, via
 :func:`run_polycc`) cannot describe, time and validate different transforms.
 
 There is no ``plutocc``: this Pluto installs ``clan``, ``pet``, ``pluto`` and ``polycc``,
 and ``polycc`` is the driver.
 """
 
-import importlib.util
 import os
 import pathlib
 import re
 import shutil
 import signal
 import subprocess
-import sys
 import tempfile
-import types
 from collections.abc import Sequence
 from functools import lru_cache
 
-from hpcagent_bench import paths
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.pluto_affine import has_scop, scop_nonaffine_reason
 from hpcagent_bench.pluto_normalize import normalize_scop_input, restore_output
@@ -447,41 +443,19 @@ def assert_affine(scop: pathlib.Path, kernel: str) -> None:
 
 def polycc_report_timeout_s() -> float:
     """The bound :meth:`frameworks.pluto_framework.PlutoFramework.polycc_report` runs ``polycc``
-    under -- the SAME knob the numerical oracle already bounds its own :func:`run_polycc` call
-    with (``tests.numerical_oracle``'s ``oracle.polycc_timeout_s``, 360s by default: Pluto's
-    schedule search is not a compiler hang and some kernels legitimately need minutes there, where
-    the shorter general compile timeout would only ever catch a wedged build).
+    under -- the SAME knob the numerical oracle bounds its own :func:`run_polycc` call with
+    (``oracle.polycc_timeout_s``, 360s by default: Pluto's schedule search is not a compiler hang
+    and some kernels legitimately need minutes there, where the shorter general compile timeout
+    would only ever catch a wedged build).
 
-    Read through the oracle's own config accessor -- via the same lazy ``sys.path``/import
-    :func:`oracle_pluto_status` already uses to reach ``tests.numerical_oracle`` from here, since a
-    module-level import would be circular (``tests.numerical_oracle`` imports this module) -- rather
-    than a second constant, so a ``config.yaml`` or per-kernel override change is honoured on both
-    the report path and the oracle's own without two numbers to keep in step by hand.
+    Read through the oracle's own config accessor rather than a second constant, so a
+    ``config.yaml`` or per-kernel override change is honoured on both the report path and the
+    oracle's own. Imported here, not at module level: :mod:`hpcagent_bench.numerical_oracle`
+    imports this module.
     """
-    return _oracle()._cfg("polycc_timeout_s")
+    from hpcagent_bench import numerical_oracle
 
-
-def _oracle() -> types.ModuleType:
-    """THIS checkout's ``tests/numerical_oracle.py``, loaded by PATH, never as ``tests.numerical_oracle``.
-
-    ``tests`` is a top-level name every Python project ships, and whichever one is imported first
-    owns it for the whole process. The canon columns put the DaCe tree ahead of this repository on
-    PYTHONPATH, DaCe ships its own ``tests`` package, and ``from tests.numerical_oracle import``
-    then raises ModuleNotFoundError. A path cannot be shadowed by what else is on sys.path.
-
-    Reuses the module when the oracle is already loaded under its package name from this same file
-    (the oracle imports this module, and a second copy would carry a second config cache).
-    """
-    path = paths.ROOT / "tests" / "numerical_oracle.py"
-    for name in ("tests.numerical_oracle", "_hpcagent_bench_numerical_oracle"):
-        loaded = sys.modules.get(name)
-        if loaded is not None and pathlib.Path(getattr(loaded, "__file__", "") or "").resolve() == path.resolve():
-            return loaded
-    spec = importlib.util.spec_from_file_location("_hpcagent_bench_numerical_oracle", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return numerical_oracle._cfg("polycc_timeout_s")
 
 
 @lru_cache(maxsize=None, typed=True)
@@ -489,7 +463,7 @@ def oracle_pluto_status(kernel: str) -> str:
     """The numerical oracle's verdict on the polycc-transformed ``kernel``: ``ok``/``skip:``/``FAIL:``.
 
     Asked of the SAME oracle every other native column is graded by
-    (:func:`tests.numerical_oracle.run_kernel`, narrowed to its pluto backend), so this owns no
+    (:func:`hpcagent_bench.numerical_oracle.run_kernel`, narrowed to its pluto backend), so this owns no
     comparison machinery: the oracle transforms the emitted scop with :data:`POLYCC_ARGS`, compiles
     it, calls the transformed symbol through polycc's own binding and checks the outputs against the
     numpy reference -- and classifies a disagreement its ``c`` column does NOT share as
@@ -499,8 +473,11 @@ def oracle_pluto_status(kernel: str) -> str:
     Memoized per process. The oracle re-emits and rebuilds at a reduced preset, which costs seconds:
     affordable once before a column's first measurement, not once per repeat.
     """
-    oracle = _oracle()
-    return oracle.run_kernel(kernel, only_backends={oracle.PLUTO}).get(oracle.PLUTO, "skip:no-verdict")
+    from hpcagent_bench import numerical_oracle
+
+    return numerical_oracle.run_kernel(kernel, only_backends={numerical_oracle.PLUTO}).get(
+        numerical_oracle.PLUTO, "skip:no-verdict"
+    )
 
 
 def assert_numeric_agreement(kernel: str) -> None:

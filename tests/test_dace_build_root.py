@@ -13,7 +13,7 @@ import pathlib
 
 import pytest
 
-from tests import numerical_oracle as no
+from hpcagent_bench import numerical_oracle as no
 
 #: Every env var dace_build_root reads, cleared before each test so one test's setenv cannot leak
 #: into the next and so a developer's real shell (SCRATCH set on a login node) cannot change the

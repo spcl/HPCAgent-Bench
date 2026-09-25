@@ -17,7 +17,7 @@ import os
 
 import pytest
 
-from tests import numerical_oracle as no
+from hpcagent_bench import numerical_oracle as no
 
 _KERNELS = no.foundation_kernels()
 

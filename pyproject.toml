@@ -190,7 +190,7 @@ filterwarnings = [
 ]
 
 # CI sets PYTEST_ADDOPTS per job. relative_files: jobs run in different filesystem layouts;
-# parallel + concurrency: the suite runs under xdist and forks (tests/numerical_oracle.py).
+# parallel + concurrency: the suite runs under xdist and forks (hpcagent_bench/numerical_oracle.py).
 [tool.coverage.run]
 source = ["hpcagent_bench"]
 branch = true
