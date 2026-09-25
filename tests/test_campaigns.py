@@ -43,7 +43,9 @@ def test_a_campaign_prefix_only_matches_on_a_hyphen_boundary() -> None:
         ("cpf-llr-focus40-qwen38-c-cpfsrc", True),
         # Only cpfsrc-v2 counts (user 2026-09-19), so the v2 arm must survive the same regex.
         ("cpf-llr-focus40-qwen38-c-cpfsrc-v2", False),
-        ("cpf-llr-focus40-qwen38-fortran", True),
+        # The LLR CPU Fortran arms are back in the LLR plots (user 2026-09-25).
+        ("cpf-llr-focus40-qwen38-fortran", False),
+        ("cpf-llr-focus40-oss120b-fortran-skills", False),
         ("cpf-llr-focus40-qwen38-c", False),
         ("git-scicomp-qwen38-repo", False),
     ],
