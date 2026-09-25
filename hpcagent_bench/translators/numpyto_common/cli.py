@@ -30,8 +30,7 @@ variant -- nothing changes in emission); ``pluto`` is the polycc input that
 emit produces. They are distinct front-door names because the runtime exposes
 them (Polly/Pluto were separate file tracks; now flag presets).
 
-Importing a backend requires its ``src`` on ``PYTHONPATH`` (the same wiring the
-per-package CLIs already need); the driver itself only resolves the module.
+The backends are subpackages of ``hpcagent_bench.translators``; the driver only resolves the module.
 """
 
 import argparse

@@ -103,7 +103,12 @@ _ALLOW = {
 }
 
 #: Areas another change set is cleaning; each must leave this tuple once clean.
-_PENDING = ("containers/cluster/ce-images/",)
+PENDING = (
+    "containers/images/",
+    "containers/inference/",
+    "containers/lib/git_mirror.sh",
+    "containers/lib/device_arch_gate.sh",
+)
 
 
 def is_candidate(rel: str) -> bool:
@@ -192,7 +197,7 @@ def scan(root: pathlib.Path, allow: AbstractSet[str] = frozenset(), pending: tup
 
 
 def test_no_site_or_user_values_are_hardcoded() -> None:
-    offenders = scan(REPO, _ALLOW, _PENDING)
+    offenders = scan(REPO, _ALLOW, PENDING)
     assert not offenders, (
         "Hardcoded site or user values found -- read them from the environment (docs/configuration.md: "
         "scripts/site_env.sh, scripts/cache_env.sh, scripts/cscs/account_env.sh) or allowlist with a "
@@ -203,7 +208,7 @@ def test_no_site_or_user_values_are_hardcoded() -> None:
 def test_every_allowlisted_or_pending_path_exists() -> None:
     """A stale entry would silently exempt whatever later reuses the name."""
     missing = [rel for rel in _ALLOW if not (REPO / rel).exists()]
-    missing += [prefix for prefix in _PENDING if not any(REPO.glob(prefix.rstrip("/") + "*"))]
+    missing += [prefix for prefix in PENDING if not any(REPO.glob(prefix.rstrip("/") + "*"))]
     assert not missing, missing
 
 

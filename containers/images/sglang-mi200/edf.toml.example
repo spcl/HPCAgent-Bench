@@ -1,0 +1,62 @@
+# EDF template for the MI250X (gfx90a) SGLang image on partition mi200. install_edfs.sh renders it as
+# hpcagent-bench-sglang-mi200-latest and rewrites the `image` line. Fabric settings match ../sglang/edf.toml.example,
+# whose comments carry the reason behind each one.
+image = "${SCRATCH}/ce-images/hpcagent-bench-sglang-mi200.sqsh"
+
+mounts = [
+  # install_edfs.sh replaces this item with hpcagent_bench_edf_mounts (scripts/cache_env.sh):
+  # the filesystems of $SCRATCH and $FAST_SCRATCH.
+  "<hpcagent_bench_edf_mounts>"
+]
+
+workdir = "${SCRATCH}"
+# Triton JIT cache misses and sglang temp files land in the per-job overlay, not the read-only squashfs.
+writable = true
+
+[env]
+# aiter ships no gfx90a kernels; the image carries no aiter JIT prebuild.
+SGLANG_USE_AITER = "0"
+# CSCS documents this one against a hang at NCCL initialisation time.
+HWLOC_COMPONENTS = "-gl"
+FI_CXI_RX_MATCH_MODE = "software"
+FI_MR_CACHE_MONITOR = "disabled"
+HSA_ENABLE_IPC_MODE_LEGACY = "1"
+SAFETENSORS_FAST_GPU = "1"
+HIP_FORCE_DEV_KERNARG = "1"
+TOKENIZERS_PARALLELISM = "false"
+# Declared, not inherited: the CE does not preserve the image's own ENV.
+LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64"
+
+# RCCL over Slingshot through the plugin the aws_ofi_nccl hook installs; naming it makes RCCL fail
+# instead of silently falling back to TCP. No MPI in this image, so FI_PROVIDER is safe here.
+NCCL_NET_PLUGIN = "ofi"
+NCCL_NET = "AWS Libfabric"
+FI_PROVIDER = "cxi"
+NCCL_SOCKET_IFNAME = "hsn0,hsn1,hsn2,hsn3"
+GLOO_SOCKET_IFNAME = "hsn0"
+
+# Beverin's current kernel lacks the DMA-BUF options needed by this stack.
+NCCL_DMABUF_ENABLE = "0"
+OFI_NCCL_DISABLE_DMABUF = "1"
+
+NCCL_DEBUG = "INFO"
+NCCL_DEBUG_SUBSYS = "INIT,NET"
+
+[annotations]
+# netstack: the CSCS artifact (libfabric, libcxi, RCCL plugin); cxi: provider and /dev/cxi*;
+# aws_ofi_nccl: the RCCL net plugin. Version and name pinned so a CSCS bump cannot move the fabric.
+# The same artifact as ../sglang/edf.toml.example, whose comments carry the reasons. NOT "host":
+# host mode's plugin (/opt/cscs/aws-ofi-ccl-plugin/rocm6) needs libamdhip64.so.6 and this image is
+# ROCm 7.2, so RCCL logs "NET/Plugin: libamdhip64.so.6: cannot open shared object file", finds no
+# "ofi" plugin, and with NCCL_NET pinned in [env] tp8 init dies "NCCL error: invalid usage".
+com.hooks.netstack.source = "artifact"
+com.hooks.netstack.version = "26.08.1"
+com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"
+com.hooks.cxi.enabled = "true"
+com.hooks.aws_ofi_nccl.enabled = "true"
+com.hooks.aws_ofi_nccl.variant = "rocm6"
+# REQUIRED in host mode and ignored in artifact mode: the hook selects the plugin by a
+# case on this value and calls common::err on an unrecognised one, so leaving it unset
+# makes the hook a hard error rather than a silent fallback. rocm6 is the only variant
+# installed on beverin (/opt/cscs/aws-ofi-ccl-plugin/). VERIFY on mi200 before using an
+# mi200 image -- gfx90a may carry a different one.

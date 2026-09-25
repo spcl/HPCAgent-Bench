@@ -167,7 +167,7 @@ jobs sacct reports ended, then the store entries no copy links any more (a dry r
 | role | mounts | why |
 | --- | --- | --- |
 | agent | `/shared`, `RUN_DIR`, and read-only: `containers/agent` at `/opt/hpcagent-bench-agent`, the job's launch directory | Its material is staged into `/shared`. It runs `run_cluster.sh`, `node_monitor.sh`, `agent_driver.py` and the driver's standard-library siblings from a per-job copy (`stage_agent_launch`). **No repository and no `experiments/`**, so it cannot read the references it is graded against or another arm's `.env` and problems file. |
-| judge | `/shared`, `/opt/generated`, `HPCAGENT_BENCH_REPO`, `RUN_ROOT`, `HPCAGENT_BENCH_CACHE_DIR` | Needs the tree: `hidden_tests` is deliberately absent from the judge image (it would be published with it) and `containers/judge/tools` is on its `PYTHONPATH`. The library itself now comes from the image. |
+| judge | `/shared`, `/opt/generated`, `HPCAGENT_BENCH_REPO`, `RUN_ROOT`, `HPCAGENT_BENCH_CACHE_DIR` | Needs the tree: `hidden_tests` is deliberately absent from the judge image (it would be published with it). The library, including the web-search tool, comes from the image. |
 | inference | `/shared`, `HF_HOME`, the seven JIT category dirs under `JIT_CACHE_ROOT` (`.home .xdg .aiter .vllm .triton .inductor .torch-ext`), `RUN_ROOT`, `SCRIPT_DIR` | Reads weights, writes JIT artefacts. It never touches the graded tree, and never the rest of `JIT_CACHE_ROOT` (`.cpf-prerender`, `results/canon.db`), which a serving stack must not be able to rewrite. |
 
 Two consequences worth knowing:
@@ -230,9 +230,9 @@ Before submitting the example, verify that:
 - the Beverin `mi300` Slurm partition and Container Engine integration are
   available;
 - the inference EDF has been built and registered from one of
-  `containers/cluster/ce-images/{vllm,sglang}`;
+  `containers/images/{vllm,sglang}`;
 - the judge+agent EDF has been built and registered from
-  `containers/cluster/ce-images/judge-agent-amd`;
+  `containers/images/judge-agent-amd`;
 - this repository and all configured input paths are mounted at the same path on
   every allocated node;
 - the model is accessible from the compute nodes, including any required model
@@ -357,7 +357,7 @@ requests-per-minute ceiling; the examples ship 8 rather than the 40 an owned ser
 
 The key is **named** in the arm env and **valued** in the launching shell. Nothing commits it,
 nothing writes it into the run tree, and rotating it is an export rather than an edit. This is the
-same shape `containers/cluster/ce-images/inference/alps-endpoint.sh` already uses for an endpoint
+same shape `containers/inference/alps-endpoint.sh` already uses for an endpoint
 the job did not start: it exports `VLLM_API_KEY` into the submitting shell and the job inherits it.
 
 1. **The launching shell.** `export META_MODEL_API_KEY=...` (or `ANTHROPIC_API_KEY`,
@@ -581,9 +581,9 @@ from the same `CONTAINER_MOUNTS` list, one `--volume <mount>:<mount>` per entry.
 
 ### Images
 
-Each role builds from its own directory under `containers/cluster/ce-images/` (`judge-agent-amd/`,
+Each role builds from its own directory under `containers/images/` (`judge-agent-amd/`,
 `judge-agent-cuda/`, `sglang/`, `vllm/`), each with a `build.sh` and `build.sbatch`, orchestrated
-through `containers/cluster/ce-images/build_and_verify.sbatch`. See
+through `containers/images/build_and_verify.sbatch`. See
 [`containers/README.md`](../containers/README.md) for the build and EDF-install steps; this file
 does not repeat them.
 
@@ -595,7 +595,7 @@ does not repeat them.
 - Compute nodes are diskless: point podman's storage (`runroot`/`graphroot`) and `TMPDIR` at
   `/dev/shm` and clear the graphroot before the job runs, or a multi-GB pull dies mid-transfer
   and a stale graphroot breaks the next job on that node. `run_cluster.sh` does not do this for
-  you; the image builds do it in `containers/cluster/ce-images/build_common.sh` (`ce_podman_env`).
+  you; the image builds do it in `containers/images/build_common.sh` (`ce_podman_env`).
 
 ## Arm envs: layers, arms.yaml, rendered env
 
@@ -1130,7 +1130,7 @@ The script intentionally refuses extra or missing nodes.
 
 Confirm that `INFERENCE_CE_ENV` and `AMD_CE_ENV` are registered EDF environment
 names on Beverin and that the images were built from the corresponding
-`ce-images` directories.
+`containers/images/` directories.
 
 ### Repository, input, or model path is missing
 

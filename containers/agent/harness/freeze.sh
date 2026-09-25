@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regenerate every harness lock file in one command, with the uv and node the images install:
-#   requirements-{miniswe,openhands,sweagent}.txt  uv pip freeze of a clean /usr/bin/python${HARNESS_PYTHON} venv
+#   requirements-{miniswe,openhands}.txt  uv pip freeze of a clean /usr/bin/python${HARNESS_PYTHON} venv
 #   node/package-lock.json                         npm install --package-lock-only from node/package.json
 # The top-level Python harness pins are the freeze calls below; the CLI pins are node/package.json.
 # Both start from the current lock, so a regeneration moves only what a changed pin forces. Delete a
@@ -40,8 +40,6 @@ freeze() {
 
 freeze miniswe 'mini-swe-agent==2.4.6'
 freeze openhands 'openhands-sdk==1.47.0' 'openhands-tools==1.47.0'
-# SWE-agent is not on PyPI: the commit tag v1.1.0 points at.
-freeze sweagent 'sweagent @ git+https://github.com/SWE-agent/SWE-agent@0f3acafacabc0def8cc76b4e48acb4b6cf302cb9'
 
 cd "${HERE}/node"
 npm install --package-lock-only --ignore-scripts --no-audit --no-fund

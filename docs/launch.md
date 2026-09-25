@@ -22,17 +22,17 @@ MPI *between* containers, and it does not change the one-container-per-rank inva
 the containers and the MPI inside them connects the processes.
 
 The role deployment has three roles, all from the ONE universal OCI image
-(`containers/hpcagent_bench.Dockerfile`):
+(`containers/images/generic/Dockerfile`):
 
 | Role | What runs in the container | Image | How many |
 |------|----------------------------|-------|----------|
-| **inference** | a vLLM server (one URL) | `containers/inference.def` (a SEPARATE vLLM image; a site may substitute its own) | one per model replica |
-| **judge** | `hpcagent-bench serve` (the HTTP oracle: builds, times, grades) | `containers/hpcagent_bench.Dockerfile` (Apptainer conversion: `cpu.def` + `judge.def`) | one per judge node |
-| **agent** | `hpcagent-bench agent openai ...` -- the optimizer workers that "think" | `containers/hpcagent_bench.Dockerfile` (Apptainer conversion: `cpu.def`) | one process, `W` workers |
+| **inference** | a vLLM server (one URL) | `containers/images/generic/inference.def` (a SEPARATE vLLM image; a site may substitute its own) | one per model replica |
+| **judge** | `hpcagent-bench serve` (the HTTP oracle: builds, times, grades) | `containers/images/generic/Dockerfile` (Apptainer conversion: `cpu.def` + `judge.def`) | one per judge node |
+| **agent** | `hpcagent-bench agent openai ...` -- the optimizer workers that "think" | `containers/images/generic/Dockerfile` (Apptainer conversion: `cpu.def`) | one process, `W` workers |
 
 **Agent and judge share** the one hpcagent_bench image (identical toolchain, for
 apples-to-apples timing); **inference** is deliberately separate -- it ships vLLM but no
-harness, so the model port can never leak the hidden tests. `containers/inference.def` is
+harness, so the model port can never leak the hidden tests. `containers/images/generic/inference.def` is
 an in-repo reference recipe (bootstrapped from the upstream vLLM OpenAI image); on a site
 with its own vLLM deployment (e.g. CSCS Alps below) you point the agents at that URL
 instead and never build this image.
@@ -60,7 +60,7 @@ The **inference** role's image is a separate build (it ships vLLM but no harness
 port can never leak the hidden tests), only needed when you are not using a site-provided vLLM:
 
 ```
-apptainer build hpcagent_bench-inference.sif containers/inference.def
+apptainer build hpcagent_bench-inference.sif containers/images/generic/inference.def
 ```
 
 ## Endpoints (the contract the job submission wires)
@@ -146,7 +146,7 @@ is [scripts/submit_launch.sbatch](../scripts/submit_launch.sbatch).
 ## CSCS Alps (aarch64 GH200)
 
 Alps compute nodes are **4xGH200** (aarch64, GPU stack preinstalled). The **judge** and **agent**
-roles run the same `containers/hpcagent_bench.Dockerfile` image; the **inference** role is a *separate,
+roles run the same `containers/images/generic/Dockerfile` image; the **inference** role is a *separate,
 site-provided vLLM deployment* (the hpcagent_bench image ships no vLLM -- the agents only ever see its
 URL). All roles launch as single-node containers under `srun`; node allocation and the `srun`
 submission itself are **external** (owned by the site's submission scripts --
@@ -172,7 +172,7 @@ first): instead of a SIF, it imports the image to **SquashFS** via `enroot impor
 step off the batch path:
 
 ```bash
-docker buildx build --platform linux/arm64 -f containers/hpcagent_bench.Dockerfile \
+docker buildx build --platform linux/arm64 -f containers/images/generic/Dockerfile \
     --build-arg HW=cpu -t hpcagent_bench:cpu-aarch64 .
 docker save hpcagent_bench:cpu-aarch64 -o hpcagent_bench-aarch64.tar
 enroot import -o $SCRATCH/ce-images/hpcagent_bench-aarch64.sqsh dockerd://hpcagent_bench:cpu-aarch64
@@ -230,7 +230,7 @@ on the CSCS public GPU base:
 ```
 podman build --platform linux/arm64 --build-arg HW=nvidia \
     --build-arg BASE_IMAGE=<cscs-public-gpu-base> \
-    -f containers/hpcagent_bench.Dockerfile -t hpcagent_bench:nvidia .
+    -f containers/images/generic/Dockerfile -t hpcagent_bench:nvidia .
 podman save hpcagent_bench:nvidia -o hpcagent_bench-nvidia.tar                     # daemon-agnostic hand-off
 apptainer build hpcagent_bench-nvidia.sif docker-archive:hpcagent_bench-nvidia.tar # SIF from the SAME OCI
 ```

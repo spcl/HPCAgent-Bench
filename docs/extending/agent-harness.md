@@ -3,7 +3,8 @@
 An agent harness runs the model's tool loop for one campaign agent; this page adds one to
 `experiments/agent_driver.py` next to `claude`, `miniswe`, `openhands` and `optimas`. The in-process `Agent` API
 (`hpcagent_bench/harness/agent.py`) is the other route: [writing_an_agent.md](../writing_an_agent.md). Run commands
-from the repo root; `python` is the campaign venv with `PYTHONPATH=$PWD`.
+from the repo root, with the package installed (`pip install -e .`) or the checkout's
+`scripts/repo_env.sh` sourced.
 
 ## What you touch
 
@@ -11,7 +12,7 @@ from the repo root; `python` is the campaign venv with `PYTHONPATH=$PWD`.
 |---|---|
 | `containers/agent/harness/run_<name>.py`, `requirements-<name>.txt` | the runner and its pinned venv |
 | `experiments/harnesses.py` | a command function and one `RUNNERS` entry; `HARNESSES` is `("claude", *RUNNERS)` |
-| `containers/cluster/ce-images/judge-agent-{amd,cuda,cpu}/Dockerfile`, `verify_image.py` | build `/opt/harness/<name>`, gate its import |
+| `containers/images/judge-agent-{amd,cuda,cpu}/Dockerfile`, `verify_image.py` | build `/opt/harness/<name>`, gate its import |
 | `record_identity.sh`, `registry.yaml`, the `tests/test_harness_*.py` inventories | the name in each list |
 
 A new prompt fragment is the file `containers/agent/tools-<name>.md`: `experiments/materialize_shared.sh`
@@ -128,7 +129,7 @@ match. An npm CLI goes into `containers/agent/harness/node/package.json` at an e
 for the lock and a `cli=package` entry in the gate's `for pin in` loop. The isolated venv keeps the framework's
 dependencies off the system `litellm`. The command runs `harness/run_myagent.py` from the payload bound at launch, so a
 runner edit needs no rebuild; a new pin does: `IMAGE_DIR=$PWD/judge-agent-amd sbatch build_and_verify.sbatch` in
-`containers/cluster/ce-images`.
+`containers/images`.
 The pins and the bump procedure are in "Agent harness pins" in `containers/README.md`.
 
 ## Validation
@@ -136,8 +137,8 @@ The pins and the bump procedure are in "Agent harness pins" in `containers/READM
 ```bash
 python -m pytest -q --maxfail=10 tests/test_harness_dispatch.py tests/test_harness_runners.py \
   tests/test_harness_episode.py tests/test_harness_identity.py
-PYTHONPATH=experiments python -c 'import harnesses; print(harnesses.HARNESSES, sorted(harnesses.RUNNERS))'
-PYTHONSAFEPATH=1 PYTHONPATH=containers/agent/harness python -c 'import run_myagent'
+(cd experiments && python -c 'import harnesses; print(harnesses.HARNESSES, sorted(harnesses.RUNNERS))')
+PYTHONSAFEPATH=1 python containers/agent/harness/run_myagent.py --help  # as the image runs it
 containers/agent/bin/hpcagent-bench-tool --list
 ```
 

@@ -10,27 +10,24 @@ Pluto column a BUILD PATH and not a flag preset.
 
 Every consumer goes through here, so the timed build (``benchmarks.cpp_runtime``, via
 :func:`transformed_sources`), the transformation report (``frameworks.pluto_framework``, via
-:data:`POLYCC_REPORT_ARGS`) and the numerical oracle (``tests.numerical_oracle._run_pluto``, via
+:data:`POLYCC_REPORT_ARGS`) and the numerical oracle (``hpcagent_bench.numerical_oracle._run_pluto``, via
 :func:`run_polycc`) cannot describe, time and validate different transforms.
 
 There is no ``plutocc``: this Pluto installs ``clan``, ``pet``, ``pluto`` and ``polycc``,
 and ``polycc`` is the driver.
 """
 
-import importlib.util
 import os
 import pathlib
 import re
 import shutil
 import signal
 import subprocess
-import sys
 import tempfile
-import types
 from collections.abc import Sequence
 from functools import lru_cache
 
-from hpcagent_bench import paths
+from hpcagent_bench import core_dumps
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.pluto_affine import has_scop, scop_nonaffine_reason
 from hpcagent_bench.pluto_normalize import normalize_scop_input, restore_output
@@ -101,21 +98,12 @@ def pet_parse_env(scratch: pathlib.Path) -> dict[str, str]:
     """The environment a ``polycc --pet`` subprocess needs to PARSE the emitted scop on aarch64.
 
     pet extracts the scop with a flag-less libclang whose default aarch64 target carries no ``neon``
-    feature, so glibc's ``<bits/math-vector.h>`` -- pulled in by ``<math.h>``, which the emitted
-    preamble includes -- fails on its ``__neon_vector_type__`` SIMD typedefs and the whole
-    translation unit is rejected before any scop is seen. It is an aarch64-only breakage, which is
-    why x86_64 CI never showed it and why it surfaced on Grace.
-
-    The fix is scoped as narrowly as it can be: ONE header is shadowed on ``C_INCLUDE_PATH``, with
-    glibc's own empty SIMD stubs (see :data:`PET_MATH_VECTOR_SHIM`), and only for the polycc
-    subprocess. polycc is source-to-source and invokes no compiler, so nothing that is measured is
-    built under this environment -- the timed clang compile of the transformed C still sees the real
-    headers at ``-march=native``. The shim lives in the caller's throwaway ``scratch`` so it lasts
-    exactly as long as the parse and leaves nothing behind for a later build to pick up.
-
-    A stub ``<omp.h>`` rides along on the same path for the same reasons -- see :data:`PET_OMP_SHIM`,
-    which is what makes a translation unit with SEVERAL scops transform rather than lose all but the
-    first.
+    feature, so glibc's ``<bits/math-vector.h>`` (pulled in by ``<math.h>``) fails on its
+    ``__neon_vector_type__`` typedefs and the whole translation unit is rejected. ONE header is
+    shadowed on ``C_INCLUDE_PATH`` with glibc's own empty SIMD stubs (:data:`PET_MATH_VECTOR_SHIM`),
+    plus a stub ``<omp.h>`` (:data:`PET_OMP_SHIM`) so a multi-scop unit keeps every scop. Only the
+    polycc subprocess sees it: polycc compiles nothing, so the timed build still sees the real
+    headers, and the shim lives in the caller's throwaway ``scratch``.
     """
     shim = scratch / "pet-include"
     (shim / "bits").mkdir(parents=True, exist_ok=True)
@@ -161,17 +149,9 @@ def specialize_override(text: str, base: str, fptype: str) -> str:
     """The canonical override retyped for ``fptype``. ``fp64`` is the override VERBATIM.
 
     PolyBench/C ships one ``DATA_TYPE`` per kernel and the tracked overrides fix it to ``double``,
-    so the file answers an fp64 request and nothing else. The benchmarks it backs default to
-    ``float32`` (``initialize(..., datatype=np.float32)``), so the timed column asks for
-    ``<base>_fp32``, the library exports only ``<base>_fp64``, and the measurement dies with
-    ``no symbol for fp32``.
-
-    The specialization is a RETYPE of the canonical scop, never a reinterpretation of its memory:
-    the fp32 unit declares ``float`` parameters, so float32 buffers are read as float32 by a
-    genuinely float-typed kernel, and polycc transforms that unit itself rather than being handed
-    an fp64 one whose result is cast afterwards.
-
-    Three rewrites, all anchored to the uniform shape every tracked override has:
+    while the benchmarks they back default to ``float32``, so the timed column needs a
+    ``<base>_fp32`` too. The fp32 unit is a RETYPE of the canonical scop that polycc then transforms
+    itself. Three rewrites, anchored to the uniform shape every tracked override has:
 
     * the exported symbol ``<base>_fp64`` -> ``<base>_fp32``;
     * every ``double`` token -> ``float``, which also retypes ``#define DATA_TYPE double``. Integer
@@ -203,16 +183,9 @@ def specialize_override(text: str, base: str, fptype: str) -> str:
 def publish_text(dst: pathlib.Path, text: str) -> bool:
     """Atomically place ``text`` at ``dst``; no-op when it is already there. True if written.
 
-    Unchanged content is left strictly alone rather than rewritten with identical bytes, because
-    :func:`transformed_sources` decides whether to re-run polycc by comparing mtimes: a rewrite
-    per build would bump the input's mtime past its own transform and re-transform every kernel,
-    every time.
-
-    Same publish discipline as :func:`run_polycc` -- write a unique temporary in the destination's
-    own directory, then one :func:`os.replace` -- so a reader never sees a half-written scop and
-    two ranks materializing the same file cannot interleave. It does NOT need that function's
-    reserve-the-name-then-unlink step: the writer here is this process, not a subprocess that has
-    to create the file itself.
+    Unchanged content is not rewritten: :func:`transformed_sources` re-runs polycc when the input's
+    mtime is newer than its transform. A unique temporary in the destination's directory plus one
+    :func:`os.replace` means a reader never sees a half-written scop.
     """
     if dst.is_file() and dst.read_text() == text:
         return False
@@ -292,16 +265,6 @@ def transformed_path(scop: pathlib.Path) -> pathlib.Path:
     return build_dir / f"{base}_fp64{OVERRIDE_OUTPUT_SUFFIX}"
 
 
-def drop_core_dumps() -> None:  # pragma: no cover -- runs in the forked child
-    """Child preexec: disable core dumps, so a legitimate polycc/pluto SIGABRT leaves no litter."""
-    import resource
-
-    try:
-        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    except (ValueError, OSError):
-        pass
-
-
 def run_bounded(
     cmd: Sequence[str], cwd: str | None = None, timeout: float | None = None, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess:
@@ -309,7 +272,8 @@ def run_bounded(
 
     polycc forks grandchildren (pet, the pluto binary, clang-format) and a plain SIGKILL orphans
     them; the pipes they keep open then wedge the parent's own read, so the bound would not bind.
-    Raises :class:`subprocess.TimeoutExpired` on expiry, like ``subprocess.run``.
+    Raises :class:`subprocess.TimeoutExpired` on expiry, like ``subprocess.run``. The child drops
+    core dumps (:func:`hpcagent_bench.core_dumps.disable`), so a polycc SIGABRT leaves no litter.
     """
     proc = subprocess.Popen(
         cmd,
@@ -318,7 +282,7 @@ def run_bounded(
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
-        preexec_fn=drop_core_dumps,
+        preexec_fn=core_dumps.disable,
         env=env,
     )
     try:
@@ -374,28 +338,12 @@ def run_polycc(
 ) -> tuple[list[str], subprocess.CompletedProcess]:
     """Transform one scop with ``polycc``, writing ``out``. Returns ``(argv, result)``.
 
-    Runs in a throwaway cwd because polycc drops a ``<stem>.pluto.cloog`` intermediate beside
-    the working directory; ``out`` is absolute, so only the litter is confined.
-
-    polycc writes a UNIQUE ``-o`` path next to ``out`` (a name ``tempfile.mkstemp`` reserved) and a
-    success is published with one atomic ``os.replace``, so concurrent callers sharing ``out`` (the
-    timed build and the numerical oracle, or two test workers) only ever observe a complete file.
-
-    A FAILED run leaves ``out`` untouched, so a complete previous transform survives a transient
-    failure.
-
-    The argv is RETURNED rather than reconstructed by the caller: the transformation report echoes
-    the command it ran, and a second copy built from a second ``shutil.which`` can print something
-    that was never executed. It names ``out`` as the ``-o`` target (what the caller asked for and
-    what now sits there on success), not the internal scratch name polycc actually wrote to.
-
-    Runs under :func:`pet_parse_env`, so the timed build and the report get the aarch64 pet-parse
-    shim from the same place they get everything else about this invocation. Wiring it here rather
-    than at each call site is the same rule the rest of this module follows: a report that parsed
-    the scop differently from the build could describe a transform the build never managed to run.
-
-    ``timeout`` (seconds, ``None`` = unbounded) bounds a WEDGED polycc through :func:`run_bounded`;
-    the expiry raises :class:`subprocess.TimeoutExpired`, having deleted only the scratch output.
+    Runs in a throwaway cwd (polycc drops a ``.cloog`` intermediate there) under
+    :func:`pet_parse_env`. polycc writes a unique scratch ``-o`` next to ``out`` and a success is
+    published with one atomic ``os.replace``, so concurrent callers only ever see a complete file
+    and a FAILED run leaves a previous ``out`` untouched. The returned argv names ``out`` as the
+    ``-o`` target, so the report echoes the command without rebuilding it. ``timeout`` (seconds,
+    ``None`` = unbounded) bounds a wedged polycc through :func:`run_bounded`.
     """
     exe = polycc_exe()
     if exe is None:
@@ -429,12 +377,9 @@ def run_polycc(
 def assert_affine(scop: pathlib.Path, kernel: str) -> None:
     """Decline the Pluto column for a scop outside Pluto's affine model.
 
-    This is the safety property, not a nicety: ``polycc`` may silently MISCOMPILE a non-affine
-    scop rather than reject it, so "polycc exited 0" is not evidence the transform was sound.
-    Declining through :class:`NotSupportedByFramework` -- the tree's existing "framework cannot
-    do this kernel" mechanism -- is deliberately NOT a fallback to the untransformed source: a
-    silent fallback is exactly the bug this column was rebuilt to remove, and reintroducing it
-    one layer down would be the same lie with a better hiding place."""
+    ``polycc`` may silently MISCOMPILE a non-affine scop rather than reject it, so "polycc exited
+    0" is no evidence of a sound transform. Declined through :class:`NotSupportedByFramework`,
+    never by falling back to the untransformed source."""
     reason = scop_nonaffine_reason(scop.read_text())
     if reason is not None:
         raise NotSupportedByFramework(
@@ -447,41 +392,19 @@ def assert_affine(scop: pathlib.Path, kernel: str) -> None:
 
 def polycc_report_timeout_s() -> float:
     """The bound :meth:`frameworks.pluto_framework.PlutoFramework.polycc_report` runs ``polycc``
-    under -- the SAME knob the numerical oracle already bounds its own :func:`run_polycc` call
-    with (``tests.numerical_oracle``'s ``oracle.polycc_timeout_s``, 360s by default: Pluto's
-    schedule search is not a compiler hang and some kernels legitimately need minutes there, where
-    the shorter general compile timeout would only ever catch a wedged build).
+    under -- the SAME knob the numerical oracle bounds its own :func:`run_polycc` call with
+    (``oracle.polycc_timeout_s``, 360s by default: Pluto's schedule search is not a compiler hang
+    and some kernels legitimately need minutes there, where the shorter general compile timeout
+    would only ever catch a wedged build).
 
-    Read through the oracle's own config accessor -- via the same lazy ``sys.path``/import
-    :func:`oracle_pluto_status` already uses to reach ``tests.numerical_oracle`` from here, since a
-    module-level import would be circular (``tests.numerical_oracle`` imports this module) -- rather
-    than a second constant, so a ``config.yaml`` or per-kernel override change is honoured on both
-    the report path and the oracle's own without two numbers to keep in step by hand.
+    Read through the oracle's own config accessor rather than a second constant, so a
+    ``config.yaml`` or per-kernel override change is honoured on both the report path and the
+    oracle's own. Imported here, not at module level: :mod:`hpcagent_bench.numerical_oracle`
+    imports this module.
     """
-    return _oracle()._cfg("polycc_timeout_s")
+    from hpcagent_bench import numerical_oracle
 
-
-def _oracle() -> types.ModuleType:
-    """THIS checkout's ``tests/numerical_oracle.py``, loaded by PATH, never as ``tests.numerical_oracle``.
-
-    ``tests`` is a top-level name every Python project ships, and whichever one is imported first
-    owns it for the whole process. The canon columns put the DaCe tree ahead of this repository on
-    PYTHONPATH, DaCe ships its own ``tests`` package, and ``from tests.numerical_oracle import``
-    then raises ModuleNotFoundError. A path cannot be shadowed by what else is on sys.path.
-
-    Reuses the module when the oracle is already loaded under its package name from this same file
-    (the oracle imports this module, and a second copy would carry a second config cache).
-    """
-    path = paths.ROOT / "tests" / "numerical_oracle.py"
-    for name in ("tests.numerical_oracle", "_hpcagent_bench_numerical_oracle"):
-        loaded = sys.modules.get(name)
-        if loaded is not None and pathlib.Path(getattr(loaded, "__file__", "") or "").resolve() == path.resolve():
-            return loaded
-    spec = importlib.util.spec_from_file_location("_hpcagent_bench_numerical_oracle", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return numerical_oracle._cfg("polycc_timeout_s")
 
 
 @lru_cache(maxsize=None, typed=True)
@@ -489,7 +412,7 @@ def oracle_pluto_status(kernel: str) -> str:
     """The numerical oracle's verdict on the polycc-transformed ``kernel``: ``ok``/``skip:``/``FAIL:``.
 
     Asked of the SAME oracle every other native column is graded by
-    (:func:`tests.numerical_oracle.run_kernel`, narrowed to its pluto backend), so this owns no
+    (:func:`hpcagent_bench.numerical_oracle.run_kernel`, narrowed to its pluto backend), so this owns no
     comparison machinery: the oracle transforms the emitted scop with :data:`POLYCC_ARGS`, compiles
     it, calls the transformed symbol through polycc's own binding and checks the outputs against the
     numpy reference -- and classifies a disagreement its ``c`` column does NOT share as
@@ -499,8 +422,11 @@ def oracle_pluto_status(kernel: str) -> str:
     Memoized per process. The oracle re-emits and rebuilds at a reduced preset, which costs seconds:
     affordable once before a column's first measurement, not once per repeat.
     """
-    oracle = _oracle()
-    return oracle.run_kernel(kernel, only_backends={oracle.PLUTO}).get(oracle.PLUTO, "skip:no-verdict")
+    from hpcagent_bench import numerical_oracle
+
+    return numerical_oracle.run_kernel(kernel, only_backends={numerical_oracle.PLUTO}).get(
+        numerical_oracle.PLUTO, "skip:no-verdict"
+    )
 
 
 def assert_numeric_agreement(kernel: str) -> None:

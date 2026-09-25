@@ -115,7 +115,7 @@ rate is falling, the lever is fewer concurrent conversations, not a bigger fract
 - **Do not change `--kv-cache-dtype` on the strength of a short accuracy check.** An fp8 checkpoint
   ships **no calibrated KV scales**, so the engine quantizes at runtime against scale 1.0. A corrupt
   attention path answers short prompts correctly. Gate any change on long context:
-  `containers/cluster/ce-images/inference/accuracy-gate.py` asks at about 10k tokens of **varied**
+  `containers/inference/accuracy-gate.py` asks at about 10k tokens of **varied**
   filler for exactly this reason. Varied, not repeated: literal repetition creates an echo
   attractor at temperature 0 that even a correct backend falls into.
 - **Do not enable HiCache (`--enable-hierarchical-cache`, `--hicache-ratio`).** On an APU the host

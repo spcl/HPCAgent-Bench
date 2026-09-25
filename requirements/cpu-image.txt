@@ -2,9 +2,9 @@
 # Every name below, and the reason it is here, is declared in pyproject.toml ([project] dependencies, extra 'cpu', extra 'mpi', dependency-group 'linting', dependency-group 'testing').
 # Regenerate with: python scripts/sync_requirements.py
 #
-# The CPU-only judge-agent image (containers/cluster/ce-images/judge-agent-cpu): the cpu extra
-# plus mpi4py/pytest-mpi and the formatters and test runner, so the suite runs in-container.
-# apache-tvm is installed from optional.txt in a separate pip call.
+# The CPU-only judge-agent image (containers/images/judge-agent-cpu): the cpu extra plus
+# mpi4py/pytest-mpi and the formatters and test runner, so the suite runs in-container. apache-tvm
+# is installed from optional.txt in a separate pip call.
 numpy>=2,<3
 scipy
 pandas

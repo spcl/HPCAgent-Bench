@@ -1,234 +1,182 @@
+# Every group below is output of a tool, never source. tests/test_ignore_rules.py pins one
+# representative path per group, and that no tracked file matches a rule.
 
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-# Byte-compiled / optimized / DLL files
-# C extensions
-# Celery stuff
-# Distribution / packaging
-# Django stuff:
-# Environments
-# Flask stuff:
-# IPython
-# Installer logs
-# Jupyter Notebook
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow
-# PyBuilder
-# PyInstaller
-# Pyre type checker
-# Rope project settings
-# SageMath parsed files
-# Scrapy stuff:
-# Sphinx documentation
-# Spyder project settings
-# Translations
-# Unit test / coverage reports
-# dace
-# mkdocs documentation
-# mypy
-# hpcagent_bench hardware_info downloads (HPL tarball, stream.c, extracted trees)
-# pipenv
-# pyenv
-#Pipfile.lock
+# --- Python bytecode, packaging and build trees (pip, build, setuptools, scripts/do_release.sh) ---
+__pycache__/
+*.py[cod]
 *$py.class
-*.cover
-*.csv
-*.dacecache/
-*.egg
+*.so
+.Python
+build/
+dist/
 *.egg-info/
-*.log
+*.egg
+.eggs/
+.installed.cfg
+MANIFEST
 *.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+pip-wheel-metadata/
+__pypackages__/
+/develop-eggs/
+/downloads/
+/eggs/
+/lib/
+/lib64/
+/parts/
+/sdist/
+/var/
+/wheels/
+/share/python-wheels/
+/target/
+/instance/
+
+# --- Virtual environments and local interpreter pins ---
+.venv
+venv/
+ENV/
+/env/
+env.bak/
+venv.bak/
+.python-version
+
+# --- Test, lint and type-check caches (pytest, ruff, mypy, pyre, hypothesis, tox, nox, coverage) ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+*.cover
+*.py,cover
+coverage.xml
+htmlcov/
+nosetests.xml
+.cache/
+# CI replay of the MPI/grading-seal collection step (.github/workflows/tests.yml).
+/collected.txt
+# OpenBLAS built by CI and the login-node test replay ($HPCAGENT_BENCH_BLAS_CACHE).
+/.openblas-cache/
+
+# --- Other Python tooling left behind by editors and frameworks ---
+.ipynb_checkpoints
+profile_default/
+ipython_config.py
+.ropeproject
+.spyderproject
+.spyproject
+.scrapy
+.webassets-cache
+celerybeat-schedule
+celerybeat.pid
+*.sage.py
 *.mo
 *.pot
-*.py,cover
-*.py[cod]
-*.sage.py
-*.sdfg
-*.so
-*.spec
-.Python
-# Cache dirs anywhere in the tree, EXCEPT the repo-root one's README. A bare `.cache/*` is
-# anchored to this file's directory, which un-ignored 658 per-kernel .cache dirs.
-**/.cache/
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+/site
+docs/_build/
+
+# --- Repo-root .cache/: only its README is source (per-kernel .cache/ dirs are covered above) ---
 !/.cache/
 /.cache/*
 !/.cache/README.md
-.coverage
-.coverage.*
-.dacecache/
-.dacecache_rank*/
-.dmypy.json
-.eggs/
-.env
-.hypothesis/
-.installed.cfg
-.ipynb_checkpoints
-.mypy_cache/
-.nox/
-.hpcagent_bench_cache/
-.pyre/
-.pytest_cache/
-.python-version
-.ropeproject
-.scrapy
-.spyderproject
-.spyproject
-.tox/
-.venv
-.webassets-cache
-/site
-BACKLOG*.md
-ENV/
-MANIFEST
-__pycache__/
-__pypackages__/
-_dacegraphs/
-build/
-# The bare rule above is Python boilerplate and matches a directory named `build` at ANY depth --
-# including the CE image's build scripts, which are sources, not artifacts. Without this negation
-# `git add` skips all 7 of them in silence. Re-included as a DIRECTORY: git never descends into an
-# excluded directory, so a pattern matching only the files inside it would never be consulted.
-!containers/cluster/ce-images/inference/build/
-celerybeat-schedule
-celerybeat.pid
-coverage.xml
-db.sqlite3
-db.sqlite3-journal
-develop-eggs/
-dist/
-dmypy.json
-docs/_build/
-downloads/
-eggs/
-env.bak/
-env/
-htmlcov/
-instance/
-ipython_config.py
-lib/
-lib64/
-local_settings.py
-nosetests.xml
-hpcagent_bench*.db
-parts/
-pip-delete-this-directory.txt
-pip-log.txt
-pip-wheel-metadata/
-profile_default/
-sdfg.sdfg
-sdist/
-share/python-wheels/
-target/
-var/
-venv.bak/
-venv/
-wheels/
 
-# --- Generated benchmark artifacts (NOT committed) ---------------------------
-# A kernel's framework siblings are regenerated from <kernel>_numpy.py (the
-# source of truth) -- lazily by the framework loaders (run_benchmark.py emits a
-# missing sibling on demand) or in bulk via scripts/emit_all_siblings.py. They
-# are deterministic, so the repo keeps only the numpy reference + manifest +
-# hand-written overrides. A HAND override at one of these canonical names is
-# committed explicitly with `git add -f <file>`.
+# --- DaCe build folders, SDFG dumps and viewers ---
+.dacecache/
+*.dacecache/
+.dacecache_rank*/
+_dacegraphs/
+*.sdfg
+sdfg.sdfg
+
+# --- Package-local caches: sparse generators, GT4Py, compiled Fortran modules ---
+.hpcagent_bench_cache/
+.gt_cache/
+*.mod
+
+# --- Framework siblings emitted from <kernel>_numpy.py (framework loaders, scripts/emit_all_siblings.py) ---
+# Deterministic, so only the numpy reference, manifest and hand overrides are committed. A hand
+# override at one of these names gets a `!` line in the last group of this file. TVM and Triton
+# have no translator, so their committed hand siblings are not matched here.
 hpcagent_bench/benchmarks/**/*_dace.py
 hpcagent_bench/benchmarks/**/*_cupy.py
 hpcagent_bench/benchmarks/**/*_numba_n.py
 hpcagent_bench/benchmarks/**/*_numba_np.py
 hpcagent_bench/benchmarks/**/*_pythran.py
-# JAX is auto-generated for ALL kernels (numpyto_jax); the only committed
-# *_jax.py are hand overrides for legacy (microbench) kernels, force-added.
-# (TVM/Triton have NO auto-translator, so they are NOT ignored -- their
-# committed hand siblings, microbench only, are the sole source.)
 hpcagent_bench/benchmarks/**/*_jax.py
 hpcagent_bench/benchmarks/**/*_auto.py
-# Native (C/C++/Fortran) siblings: <short>[_<sparse>]_<fptype>.<ext> + the
-# <module>_cpp.py wrapper + the per-precision binding JSON, all generated on
-# demand from <short>_numpy.py. The repo commits none; a HAND override at one of
-# these names is committed with `git add -f`.
 hpcagent_bench/benchmarks/**/*_cpp.py
+
+# --- Native siblings, Pluto/PPCG output and their builds, all under a kernel's cpp_backend/ ---
 hpcagent_bench/benchmarks/**/cpp_backend/*.c
 hpcagent_bench/benchmarks/**/cpp_backend/*.cpp
 hpcagent_bench/benchmarks/**/cpp_backend/*.f90
 hpcagent_bench/benchmarks/**/cpp_backend/*_binding.json
 hpcagent_bench/benchmarks/**/cpp_backend/*.so
-# ppcg's output, the GPU half of the same story: <stem>_pluto_input_{host,kernel}.{cu,hip} plus
-# the <stem>_kernel.hu they share, written by hpcagent_bench.ppcg_transform from the committed
-# *_pluto_input.c. These extensions were simply missing from the list above, so 145 of them had
-# been committed by the time anyone noticed -- and a published pair is REUSED while it is newer
-# than its scop, so a checkout's worth of stale ones is a column timing last month's transform.
 hpcagent_bench/benchmarks/**/cpp_backend/*.cu
 hpcagent_bench/benchmarks/**/cpp_backend/*.hip
 hpcagent_bench/benchmarks/**/cpp_backend/*.hu
 hpcagent_bench/benchmarks/**/cpp_backend/build/
 hpcagent_bench/benchmarks/**/cpp_backend/build-clang/
-
-# Pluto polyhedral-optimizer intermediates (the committed *_pluto_input.c are the
-# INPUTS and stay; .pluto.cloog is a generated artifact -- never commit it).
+# hpcagent_bench.ppcg_transform's scratch dir, left behind when a transform is killed.
+hpcagent_bench/benchmarks/**/cpp_backend/.ppcg_transform_*/
 *.pluto.cloog
 
-# Generated outputs: the HF dataset folder (hpcagent-bench export-hf) and Harbor tasks/runs.
-hf_dataset/
-harbor-runs/
-
-# --- Local run scratch (machine-specific; never committed) --------------------
-# Hardware/CPU dumps, agent run outputs, and SDFG/visualization scratch left by
-# local runs. A fresh clone should not carry any of these.
-dmidecode_output
-agent_out/
-_dacegraphs/
-_session_scratch/
-
-# Local-only dev tools (kept on disk, not published)
-scripts/infer_output_args.py
-scripts/verify_tvm.py
-tools/pluto_affine_survey_results.txt
-
-# The filled-in Alps EDF: account-, image- and scratch-specific. Only the template is tracked.
-scripts/cscs/env.toml
-
-# Per-checkout agent / IDE config (Claude Code, etc.) -- machine-local, never committed.
-.claude/
-
-# Native (no-container) run scratch -- keep the folder, ignore its contents.
-hpcagent_bench/native_runs/*
-!hpcagent_bench/native_runs/.gitkeep
-
-# Run outputs -- results DB + its per-rank shards, JSONL logs, job stdout, figures. Both folders are
-# kept so a fresh clone can be written to without a mkdir; everything IN them is machine-generated.
+# --- Run outputs: results DB and shards, figures, native-mode submissions, compiler reports ---
+# The .gitkeep files keep each root present in a fresh clone.
 results/*
 !results/.gitkeep
 !results/plots/
 results/plots/*
 !results/plots/.gitkeep
+hpcagent_bench*.db
+hpcagent_bench.db-*
+*.csv
+!tests/data/llr40/data/*.csv
+hpcagent_bench/native_runs/*
+!hpcagent_bench/native_runs/.gitkeep
+.perf_reports/**
+!.perf_reports/.gitkeep
+/opt_reports/
+# Documented default outputs of `hf export`, `harbor generate/run` and `regrade worklist/run`.
+hf_dataset/
+harbor-runs/
+adapters/hpcagent_bench/tasks/
+adapters/hpcagent_bench/runs/
+/tasks/
+/worklist.jsonl
+/regrades/
 
-# --- Build / cache artifacts (machine-generated; never committed) -------------
-# GT4Py kernel cache, compiled Fortran modules, ruff cache.
-.gt_cache/
-*.mod
-.ruff_cache/
+# --- Job output and crash dumps that land wherever sbatch was run ---
+slurm-*.out
+/*.out
+core_*
+core.[0-9]*
+!core_*.py
+/containers/**/logs/
+scratchpad/
 
-# Enroot squashfs container images: multi-GB build output. The amd/ and nvidia/
-# builders write them to ${SCRATCH}/ce-images/, but the inference/ build root
-# defaults to the script's own directory, so `enroot export` lands them inside
-# the tree. The .sqsh.sha256 provenance records next to them stay tracked --
-# this pattern only matches names ending in .sqsh.
+# --- Container images and staged copies (enroot export, materialize_shared.sh, image contexts) ---
 *.sqsh
+/containers/agent/skills/
+/containers/**/staged-skills/
+/shared/
+/vendor/
 
-# Image-build job stdout/stderr: the build sbatch scripts write logs/ relative to
-# the submit cwd, which lands in-tree when submitted from the repo.
-containers/cluster/ce-images/**/logs/
-
-# Paper draft (working artifact, not part of the repo)
-paper/
-
-# Transient handover / handoff notes (local-only scratch, not part of the repo)
-HANDOFF_ISSUES/
-
-# Never commit key / secret material anywhere in this repo.
+# --- Machine-local config and secrets: never committed ---
+.env
+.claude/
+scripts/cscs/env.toml
 *.pem
 *.key
 *_key
@@ -240,77 +188,49 @@ id_ecdsa*
 *.p12
 *.pfx
 
-# Optional compiler diagnostics (hpcagent_bench/perf_reports.py): vectorization reports +
-# objdump disassembly, produced only when $HPCAGENT_BENCH_PERF_REPORTS_* is switched on.
-# Build OUTPUT of a local run mirroring the benchmark tree -- regenerable from the
-# sources, host-specific (-march=native decides which loops vectorize and at what
-# width, so a committed report would describe someone else's CPU), and the tree is
-# created on demand per kernel. The directory itself is kept (.gitkeep) so an
-# enabled run has a root to write under without the first one having to mkdir it.
-.perf_reports/**
-!.perf_reports/.gitkeep
-
-# Per-kernel framework-autogen + DaCe SDFG cache (hpcagent_bench.framework_cache) lives in each
-# kernel's `.cache/` and is already covered by the bare `.cache` rule near the top of this file --
-# deliberately, contents AND the .gitkeep. The tree is machine-generated and fingerprint-invalidated
-# (regenerated from <kernel>_numpy.py whenever it changes), and `kernel_cache_dir` mkdirs on demand,
-# so nothing has to be tracked to keep a directory alive. Re-including the .gitkeep instead would
-# put 356 empty files in the repo (one per kernel) and leave an untracked `.cache/` in `git status`
-# for every kernel ever run -- the same reason .perf_reports/ is one root dir, not one per kernel.
-experiments/problems-*.jsonl
-
-# loop_report.py's own --report-dir default (opt-reports skill packet), unrelated to
-# hpcagent_bench/perf_reports.py's perf_reports.opt_report kind -- distinct dir, same-ish name.
-/opt_reports/
-
-# Crash dumps from cluster jobs (ROCm/vLLM workers drop multi-GB cores next to the sbatch)
-core_*
-core.[0-9]*
-# A dump is `core_<host>_<pid>` and never a source file, but `core_*` hides one anyway -- it
-# swallowed hpcagent_bench/core_dumps.py, the module that turns the dumps OFF, and `git add`
-# said nothing.
-!core_*.py
-
-# Per-run job logs written beside the launcher, one pair per SLURM id
-experiments/results/
-# Job stdout the launchers used to write beside themselves. The directives now point at
-# scratch; this keeps a stale or hand-run log from being committed again (db2027bd did).
-experiments/logs/
-experiments/*.err
-
-# check_offload_claims.py's default --workdir: compiled probes and their .c sources
-experiments/work/
-
-# SQLite sidecars of the repo-root results DB (a run-benchmark invoked from here leaves them).
-hpcagent_bench.db-*
-
-# Job output and scratch that lands in the checkout because that is where sbatch was run.
-slurm-*.out
-scratchpad/
-
-# make_problems writes this beside its output and renames it away
-experiments/*.jsonl.tmp
-
-# The trimmed llr40 rows tests/test_inference_audit.py reduces over; the artifact's own data/ is regenerated.
-!tests/data/llr40/data/*.csv
-# Slurm job logs written beside the submitters (%x-%j.out): run output, not source
-experiments/*-[0-9]*.out
-
-# Vendored openai-agents SDK for the optimas harness (hpcagent_bench.harness.optimas_tools):
-# pip-installed --target here at launch time, never committed (see experiments/harnesses.py).
-/vendor/
-
-# scratch that escaped the experiments/ rules (2026-09-22 cleanup)
-/out.txt
-/*.out
+# --- Local-only notes, drafts and scratch ---
+paper/
+HANDOFF_ISSUES/
+BACKLOG*.md
+dmidecode_output
+agent_out/
+_session_scratch/
 *.ritom-orig
-.perf_reports/
-experiments/mwd-final-*/
+scripts/infer_output_args.py
+scripts/verify_tvm.py
+tools/pluto_affine_survey_results.txt
 
-# per-user site layer, copied from experiments/layers/site-*.env
-experiments/layers/site.env
-# Skill pages staged into an image build context or a job's shared dir are copies of
-# hpcagent_bench/skills (the only source): never commit them.
-/containers/agent/skills/
-/containers/**/staged-skills/
-/shared/
+# --- Hand overrides at generated names: committed on purpose, the regenerator leaves them alone ---
+!/hpcagent_bench/benchmarks/scientific_computing/dense_linear_algebra/gemm/gemm_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/dense_linear_algebra/rayleigh_ritz_rotation/rayleigh_ritz_rotation_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/dense_linear_algebra/seissol_tensor_contraction/seissol_tensor_contraction_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/dynamic_programming/nussinov/nussinov_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/map_reduce/arc_distance/arc_distance_jax.py
+!/hpcagent_bench/benchmarks/scientific_computing/map_reduce/xsbench/xsbench_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/n_body_methods/esirkepov_deposition/warpx_esirkepov_deposition_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/n_body_methods/examinimd/examinimd_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/n_body_methods/gem/gem_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/n_body_methods/gromacs/nbnxm/gromacs_nbnxm_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/n_body_methods/lavamd/lavamd_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/sparse_linear_algebra/cp2k_density_matrix_trs4/cp2k_density_matrix_trs4_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/sparse_linear_algebra/minife/minife_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/sparse_linear_algebra/quatrex_rgf/quatrex_rgf_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/spectral_methods/cegterg/cegterg_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/spectral_methods/fft_1d/fft_1d_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/spectral_methods/ls3df_scf/ls3df_scf_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/spectral_methods/vexx/vexx_k_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/spectral_methods/vloc_psi_k_acc/vloc_psi_k_acc_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/structured_grids/bout_elm_pb/bout_elm_pb_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/structured_grids/channel_flow/channel_flow_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/structured_grids/cloudsc/cloudsc_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/structured_grids/cp2k_grid_integrate/cp2k_grid_integrate_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/structured_grids/fdtd_2d/fdtd_2d_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/structured_grids/fv3_dycore/fv3_dycore_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/structured_grids/fv3_xppm/fv3_xppm_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/structured_grids/heat_3d/heat_3d_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/structured_grids/jacobi_2d/jacobi_2d_jax.py
+!/hpcagent_bench/benchmarks/scientific_computing/structured_grids/jacobi_2d/jacobi_2d_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/structured_grids/seidel_2d/seidel_2d_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/structured_grids/srad/srad_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/unstructured_grids/lulesh/lulesh_numba_np.py
+!/hpcagent_bench/benchmarks/scientific_computing/unstructured_grids/velocity_tendencies/velocity_tendencies_numba_np.py

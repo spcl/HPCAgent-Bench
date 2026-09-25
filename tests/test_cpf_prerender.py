@@ -245,9 +245,9 @@ def test_shard_assigns_by_position_deterministically() -> None:
     """A rerun (a job that lost a rank and resubmits) must land each kernel on the SAME rank as the
     first run, so a partially-published cache from the first attempt is a hit for the second one
     rather than being re-rendered by a different rank under the same key."""
-    kernels = ["cloudsc", "sw4_rhs4sg", "lulesh", "dbcsr", "minres"]
+    kernels = ["cloudsc", "fv3_dycore", "lulesh", "dbcsr", "minres"]
     assert cpf_prerender.shard(kernels, 0, 2) == ["cloudsc", "lulesh", "minres"]
-    assert cpf_prerender.shard(kernels, 1, 2) == ["sw4_rhs4sg", "dbcsr"]
+    assert cpf_prerender.shard(kernels, 1, 2) == ["fv3_dycore", "dbcsr"]
 
 
 def stub(path: pathlib.Path, body: str) -> None:
@@ -292,7 +292,7 @@ def test_the_kernels_whose_render_never_finishes_are_started_first(tmp_path: pat
     stub(bin_dir / "python3.11", "exit 0")
     stub(bin_dir / "lscpu", 'printf "# CORE\\n0\\n1\\n"')
     repo = SBATCH.parent.parent
-    roster = "atax,warpx_field_gather,lulesh,gromacs_nbnxm,cloudsc,sw4_rhs4sg"
+    roster = "atax,warpx_field_gather,lulesh,gromacs_nbnxm,cloudsc,fv3_dycore"
     env = {
         "PATH": f"{bin_dir}:/usr/bin:/bin",
         "SCRATCH": str(tmp_path),

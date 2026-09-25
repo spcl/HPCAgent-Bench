@@ -1,4 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
+# provenance: {kind: original}
 name: Daubechies-4 DWT 2D (db2)
 level: 3
 parameters:
