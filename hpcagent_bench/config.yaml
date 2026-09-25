@@ -436,8 +436,8 @@ record:
                                   # table, so an arm's whole trajectory -- the failures before the
                                   # success, the speedup over time -- survives the run
   execution: native               # where a runtime was measured: `native` (no container) or `container`
-                                  # (a containerized run). Stamped on every results/submissions/calls
-                                  # row so a container-measured number is never compared against a
+                                  # (a containerized run). Stamped on every framework-results row
+                                  # (frameworks/test.py) so a container-measured number is never compared against a
                                   # native one unknowingly. Containers set HPCAGENT_BENCH_RECORD_EXECUTION.
   build: ""                       # which BUILD produced the numbers, when one framework flavor is run
                                   # against more than one (dace `main` vs `extended`, a different BLAS,

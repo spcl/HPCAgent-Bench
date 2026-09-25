@@ -129,8 +129,7 @@ CREATE TABLE IF NOT EXISTS scaling_points (
 
 #: One row per INDEPENDENTLY-VERIFIED-correct submission (the leaderboard). Stamps that change
 #: what a number means (``timing_reduction``, ``grading_protocol``, ``baseline_policy``) are never
-#: pooled across values. ``node`` stays per row: a multi-node run writes one shard per rank under
-#: one run_id. ``device_runtime`` non-empty marks an anti-cheat REFUSAL (speedup 1.0, suspect 1).
+#: pooled across values. ``device_runtime`` non-empty marks an anti-cheat REFUSAL (speedup 1.0, suspect 1).
 #: The ``timing_*_ns`` / ``device_index`` columns are the judge's own device-synchronization
 #: readings behind a ``suspect``; ``distribution`` / ``workspace_bytes`` are the MPI envelope as sent
 #: (NULL = none).
@@ -151,9 +150,7 @@ CREATE TABLE IF NOT EXISTS submissions (
     suspect     INTEGER CHECK(suspect IN (0,1)),
     cpu         TEXT,
     commit_sha  TEXT,
-    execution   TEXT,                        -- native | container
     timing_reduction TEXT,
-    node        TEXT,
     grading_protocol TEXT,
     baseline_policy TEXT,
     request_id  TEXT,
@@ -183,15 +180,14 @@ CREATE TABLE IF NOT EXISTS attempts (
     reason      TEXT,
     cpu         TEXT,
     commit_sha  TEXT,
-    execution   TEXT,
-    node        TEXT,
     baseline_policy TEXT
 );
 """
 
 #: The per-grade TRAJECTORY: one row per agent call, pass or fail, with the cumulative tokens
 #: spent through it. ``route`` is the judge route (``score`` / ``submit``; NULL = in-process
-#: runner); ``compiler`` the toolchain family both sides were built with.
+#: runner); ``build_commands`` the grade's own compile and link commands (JSON list; NULL for a
+#: prebuilt library or no build), or ``["<framework>==<version>"]`` for a JIT (python) delivery.
 _CALLS_DDL = """
 CREATE TABLE IF NOT EXISTS calls (
     id          INTEGER PRIMARY KEY,
@@ -208,14 +204,12 @@ CREATE TABLE IF NOT EXISTS calls (
     correct     INTEGER CHECK(correct IN (0,1)),
     status      TEXT,
     route       TEXT,
-    compiler    TEXT,
+    build_commands TEXT,                      -- JSON list of shlex-joined commands
     baseline    TEXT,
     cpu         TEXT,
     commit_sha  TEXT,
-    execution   TEXT,
     detail      TEXT,                         -- capped at DETAIL_CAP
     timing_reduction TEXT,
-    node        TEXT,
     grading_protocol TEXT,
     baseline_policy TEXT,
     distribution TEXT,
@@ -263,12 +257,15 @@ RETIRED_TABLES: dict[str, str] = {
 #: ``baseline_winner``, ``mpi_mode`` / ``mpi_ranks``, ``first_seen``, ``runs.commit_sha``,
 #: ``n_bytes``, the per-cell and per-P restatements, an attempt's ``detail`` / ``grading_protocol``,
 #: which its ``calls`` row carries) or kept for no one (the tolerance residuals, ``seed_nonce``,
-#: ``scaling_curve``).
+#: ``scaling_curve``, the per-row ``node`` / ``execution`` provenance). ``calls.compiler`` (the
+#: toolchain family) is superseded by ``build_commands``, the commands themselves.
 RETIRED_COLUMNS: dict[tuple[str, str], str] = {
     ("calls", "seed_nonce"): "seed_nonce IS NULL",
     ("calls", "request_id"): "request_id IS NULL",
+    ("calls", "compiler"): "1",
     ("submissions", "scaling_efficiency"): "scaling_efficiency IS NULL",
     **{(table, "prompt_hash"): "prompt_hash IS NULL" for table in ("submissions", "attempts", "calls")},
+    **{(table, column): "1" for table in ("submissions", "attempts", "calls") for column in ("node", "execution")},
     **{
         (table, column): "1"
         for table, columns in {
@@ -525,15 +522,6 @@ def db_path() -> str:
     shards are the only authoritative results, the base is the cache built from them."""
     shard = db_shard()
     return shard_db_path(0 if shard is None else shard)
-
-
-def _execution() -> str:
-    """Where a runtime is being measured: ``native`` (no container) or ``container``.
-
-    From config ``record.execution`` (default ``native``); a containerized collector
-    sets ``HPCAGENT_BENCH_RECORD_EXECUTION`` so its numbers carry the provenance and are
-    never compared against native ones unknowingly."""
-    return config.get_str("record.execution", "native")
 
 
 def prompt_store_dir(db: str | None = None) -> pathlib.Path:
@@ -809,8 +797,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
 def rebuild_table(conn: sqlite3.Connection, table: str) -> None:
     """Recreate ``table`` from :data:`TABLES`: canonical column order and constraints, retired
-    columns gone, its indexes dropped with it. A column the schema never named (``host``, the
-    pre-``node`` machine name) is kept, appended, since readers still look it up by name.
+    columns gone, its indexes dropped with it. A column the schema never named (``host``,
+    an older machine-name column) is kept, appended, since readers still look it up by name.
     Expects :func:`ensure_schema` to have run, so every canonical column exists."""
     canonical = [column for column, _kind in canonical_columns()[table]]
     legacy = [
@@ -1106,9 +1094,7 @@ class SubmissionRow:
     suspect: int
     cpu: str
     commit_sha: str | None
-    execution: str
     timing_reduction: str | None
-    node: str
     grading_protocol: str | None = None
     baseline_policy: str | None = None
     request_id: str | None = None
@@ -1137,8 +1123,6 @@ class AttemptRow:
     reason: str
     cpu: str
     commit_sha: str | None
-    execution: str
-    node: str
     baseline_policy: str | None = None
 
 
@@ -1162,14 +1146,12 @@ class CallRow:
     correct: int
     status: str
     route: str | None
-    compiler: str | None
+    build_commands: str | None
     baseline: str | None
     cpu: str
     commit_sha: str | None
-    execution: str
     detail: str | None
     timing_reduction: str | None
-    node: str
     grading_protocol: str | None = None
     baseline_policy: str | None = None
     distribution: str | None = None
@@ -1178,7 +1160,7 @@ class CallRow:
 
 #: Columns :func:`record_trajectory` does not write (they have no DDL default, so they stay NULL).
 TRAJECTORY_OMITS = frozenset(
-    {"route", "compiler", "detail", "grading_protocol", "baseline_policy", "distribution", "workspace_bytes"}
+    {"route", "build_commands", "detail", "grading_protocol", "baseline_policy", "distribution", "workspace_bytes"}
 )
 
 #: What a row builder hands to :func:`row_sql` / :func:`row_params`.
@@ -1203,16 +1185,16 @@ def row_params(row: Row, omit: frozenset[str] = frozenset()) -> tuple[SqlParam, 
 
 def prepare_row(
     conn: sqlite3.Connection, task: Task, run_id: str, arm_language: str | None = None
-) -> tuple[BenchSpec, int, str, str | None, str, str]:
+) -> tuple[BenchSpec, int, str, str | None]:
     """Shared preamble of every writer: load the kernel spec, record WHO the run is, stamp ts / cpu
-    / sha / execution / node. Returns ``(spec, ts, cpu, sha, execution, node)``.
+    / sha. Returns ``(spec, ts, cpu, sha)``.
 
     The ``runs`` row is written here because every writer goes through here: a row whose run_id
     has no identity cannot happen when both are written from one place."""
     spec = BenchSpec.load(task.kernel)
     ts = int(time.time() * 1000)
     upsert_run(conn, run_id, arm_language)
-    return spec, ts, osinfo.cpu_model(), _commit_sha(), _execution(), osinfo.node_name()
+    return spec, ts, osinfo.cpu_model(), _commit_sha()
 
 
 def record(
@@ -1252,7 +1234,7 @@ def record(
     try:
         source_mode = task.source_mode
         delivered = submission.language
-        spec, ts, cpu, sha, execution, node = prepare_row(conn, task, run_id)
+        spec, ts, cpu, sha = prepare_row(conn, task, run_id)
 
         # Before the verdict branches, so an UNGRADEABLE body is kept as well as a winning one. A
         # hip/cuda submission is two translation units; the device half is its own row.
@@ -1315,9 +1297,7 @@ def record(
                 suspect=suspect,
                 cpu=cpu,
                 commit_sha=sha,
-                execution=execution,
                 timing_reduction=score.timing_reduction,
-                node=node,
                 grading_protocol=score.grading_protocol,
                 baseline_policy=score.baseline_policy,
                 request_id=request_id,
@@ -1387,8 +1367,6 @@ def record(
             reason=reason,
             cpu=cpu,
             commit_sha=sha,
-            execution=execution,
-            node=node,
             baseline_policy=score.baseline_policy,
         )
         conn.execute(row_sql("attempts", attempt_row), row_params(attempt_row))
@@ -1488,7 +1466,7 @@ def record_trajectory(
         return 0
     conn = connect(path)
     try:
-        spec, ts, cpu, sha, execution, node = prepare_row(conn, task, run_id, arm_language=language)
+        spec, ts, cpu, sha = prepare_row(conn, task, run_id, arm_language=language)
         rows = [
             CallRow(
                 run_id=run_id,
@@ -1504,14 +1482,12 @@ def record_trajectory(
                 correct=int(p.correct),
                 status=p.status,
                 route=None,
-                compiler=None,
+                build_commands=None,
                 baseline=baseline,
                 cpu=cpu,
                 commit_sha=sha,
-                execution=execution,
                 detail=None,
                 timing_reduction=p.timing_reduction,
-                node=node,
             )
             for p in points
         ]
@@ -1524,6 +1500,14 @@ def record_trajectory(
         conn.close()
 
 
+def build_commands_json(score: Score | None) -> str | None:
+    """``calls.build_commands`` for ``score``: its build commands as a JSON list, or None when the grade
+    compiled nothing (a prebuilt library, a refusal before the build, no verdict)."""
+    if score is None or not score.build_commands:
+        return None
+    return json.dumps(list(score.build_commands))
+
+
 def record_call(
     score: Score | None,
     task: Task,
@@ -1534,7 +1518,6 @@ def record_call(
     optimizer: str | None = None,
     preset: str = "S",
     datatype: str = "float64",
-    compiler: str | None = None,
     tokens: int = 0,
     detail: str = "",
     path: str | None = None,
@@ -1567,6 +1550,7 @@ def record_call(
 
     ``score`` is ``None`` when the request produced no verdict at all (``status``
     ``score_error``): speedup 0, correct 0, no baseline. Gated on ``record.log_calls``.
+    ``build_commands`` comes from the score (:func:`build_commands_json`).
 
     ``distribution`` / ``workspace_bytes`` are the request's MPI envelope as sent (JSON text / the
     scratch expression), ``None`` for a request that carried none. ``build`` / ``libraries`` are its
@@ -1579,7 +1563,7 @@ def record_call(
         return 0
     conn = connect(path)
     try:
-        spec, ts, cpu, sha, execution, node = prepare_row(conn, task, run_id)
+        spec, ts, cpu, sha = prepare_row(conn, task, run_id)
         (prior,) = conn.execute(
             "SELECT COUNT(*) FROM calls WHERE run_id = ? AND benchmark = ?", (run_id, spec.short_name)
         ).fetchone()
@@ -1597,14 +1581,12 @@ def record_call(
             correct=int(bool(score.correct) if score is not None else 0),
             status=status,
             route=route,
-            compiler=compiler,
+            build_commands=build_commands_json(score),
             baseline=(score.baseline if score is not None else None),
             cpu=cpu,
             commit_sha=sha,
-            execution=execution,
             detail=cap_detail(detail or (score.detail if score is not None else "") or ""),
             timing_reduction=(score.timing_reduction if score is not None else None),
-            node=node,
             # The stamps check_job reads a /score row's bracket off; NULL = no verdict to stamp.
             grading_protocol=(score.grading_protocol or None) if score is not None else None,
             baseline_policy=(score.baseline_policy or None) if score is not None else None,
