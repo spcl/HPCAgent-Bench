@@ -718,8 +718,8 @@ path segment plus the language's one extension.
 
 Commands with a worked example are in `LAUNCH.md` section 1. This is what happens underneath.
 
-**1. What is owed.** `remaining_kernels.py` reads every run root under `$SCRATCH/hpcagent-bench-runs`
-and, per arm identity (`X` and `X-clean` are one identity), marks a roster kernel delivered when a
+**1. What is owed.** `remaining_kernels.py` reads the run roots it is given (`--run-root`, repeatable;
+`owed_wave.py` passes the experiment's roots under `$SCRATCH/hpcagent-bench-runs`) and, per arm identity (`X` and `X-clean` are one identity), marks a roster kernel delivered when a
 job of that identity holds a real grade for it (a `submissions` row, or a genuine `attempts` row
 graded after the kernel's manifest last changed). Every other kernel is owed, classed by how its
 latest episode ended:
@@ -833,7 +833,7 @@ jobs. The figure reader strips `-clean` (`experiments.fold_clean_arms`, spec X9)
 `population.latest_runs` keeps the latest run per (arm, kernel): a rerun replaces only the kernels
 it ran. After the waves end, the same dry run must print `no owed kernels for <model>`.
 
-## Frozen observations and setups to rerun (2026-09-19)
+## Frozen observations and setups to rerun
 
 The reducer's dropped mode deleted 147 job directories, judge DBs included. Their rows survive in a
 read-only extraction: `$HPCAGENT_BENCH_FROZEN_OBSERVATIONS`, default
@@ -843,7 +843,8 @@ and read a job from its frozen rows only when its live directory is gone (the li
 job; a row purged from a live DB stays purged). The extractor also takes the frozen `task` (token) row
 of a worker whose `tokens.json` a reducer removed from a live job, or cut down to `tokens.json` after the
 snapshot (the snapshot row keeps the prompt-time start). Extracted rows carry `frozen=1`. A frozen job has no `tokens.json`, so an owed kernel whose
-only episode was in it classifies as `infra`. `owed_wave.py` does not read frozen rows.
+only episode was in it classifies as `infra`. `owed_wave.py` reads them the same way, so a frozen
+kernel is not replanned.
 
 `rerun-lost.tsv` tracks the 19 setups those jobs belonged to (`arm`, `deleted_jobs`, `reason`,
 `status` = `pending` | `rerun-submitted` | `done`). The board shows each as `rerun` (yellow) with its
@@ -1198,4 +1199,7 @@ EDF availability, distributed vLLM startup, inter-node networking, and GPU use.
 - Agents are distributed over judge replicas by `problem_index % len(judges)` (see
   [Rank](#tasks-per-node) above); there is no failover if the judge a given agent was assigned
   goes down mid-run.
-- Runs do not yet provide checkpointing, resume, or problem-level retry policy.
+- There is no in-job checkpoint of an agent's workspace. Recovery is at three other levels: a crashed
+  agent is relaunched from an empty workspace up to `AGENT_CRASH_ATTEMPTS` (3) times, a regrade
+  resumes from its per-shard DBs, and every missing (arm, kernel) is replanned as an owed wave; see
+  [`docs/owed_and_checkpointing.md`](../docs/owed_and_checkpointing.md).

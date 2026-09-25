@@ -242,6 +242,25 @@ deadline_shrink_seconds() {
     printf '%s\n' "${configured}"
 }
 
+# agent_seconds <base> -- the wall clock ONE agent gets on an arm of <base>: its AGENT_TIMEOUT_SECONDS
+# scaled (TIME_SCALE), then only ever SHORTENED by a deadline: an arm given a longer episode than the
+# arms it is compared with measures a different condition. Refuses when too little is left.
+agent_seconds() {
+    local base="$1" configured
+    configured=$(scaled_budget_from "${base}" AGENT_TIMEOUT_SECONDS) || return 2
+    deadline_shrink_seconds "${configured}" "${base}"
+}
+
+# forms_missing <view> <language> <mode:form|dropin> <target> <kernel,...> -- one line per kernel the
+# CPF cache view cannot serve, naming the missing key (a missing form reads as HTTP 200
+# "unavailable", not an error), or one line for a view of the other target or a failed check, so
+# the caller refuses on any output. A drop-in must also have graded correct.
+forms_missing() {
+    local verified=(); [[ "$3" == dropin ]] && verified=(--verified)
+    "${PY}" -m hpcagent_bench.cpf_cache check --view "$1" --language "$2" --mode "$3" --target "$4" \
+        --kernels "$5" "${verified[@]}" || [[ $? == 1 ]] || echo "cpf_cache check failed for view $1"
+}
+
 # stage_base_env <base> <arm> <experiment> <stamp> <staged-out> [extra sed -e expr...]
 # Every arm inherits one base (<campaign>:<model>, arms.yaml) whole -- serving config cannot also vary
 # between arms -- rendered flat (env_layers.sh render_env), with CAMPAIGN_ARM and RUN_ROOT rewritten. Written to

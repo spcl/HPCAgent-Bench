@@ -142,15 +142,6 @@ deadline_setup "${DEADLINE}" "${DEADLINE_MARGIN_SECONDS}" || exit 2
 BEGIN=${BEGIN:-${DEADLINE:+now}}
 [[ "${BEGIN}" == now ]] && BEGIN=""
 
-# agent_seconds <base-env> -- the wall clock ONE agent gets. The models' own budgets already carry
-# the 1.5x the campaign grants a long arm (qwen38/oss120b 21600, kimi27sglang 43200): read, never
-# multiplied here, so an arm cannot silently measure a different episode length than the .env says.
-agent_seconds() {
-    local base="$1" configured
-    configured=$(scaled_budget_from "${base}" AGENT_TIMEOUT_SECONDS) || return 2
-    deadline_shrink_seconds "${configured}" "${base}"
-}
-
 submit_arm() {  # submit_arm <model>
     local model="$1"
     # The packet is IN the arm key: the two treatments of one model are two arms, and one key

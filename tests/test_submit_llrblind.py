@@ -66,7 +66,7 @@ KNOBS = frozenset(
 
 #: A minimal base-<model> stand-in: only the fields submit-llrblind.sh's BASE=campaign path
 #: reads or overwrites. The real file's AGENT_TIMEOUT_SECONDS (14400) is deliberately HALF the
-#: llrbase stand-in's (28800, set on the real llrbase-qwen38-c) -- the two are supposed to
+#: llrbase stand-in's (28800, set on the real llrbase-c:qwen38) -- the two are supposed to
 #: disagree, so a test asserting 14400 survives proves the override was skipped, not that nobody
 #: bothered to make the fixtures differ.
 CAMPAIGN_BASE_TEXT = (
@@ -304,7 +304,7 @@ def test_base_campaign_explicit_agent_timeout_seconds_still_overrides(tmp_path: 
 
 def test_base_llrbase_default_still_pins_27000_regardless_of_the_base_file(tmp_path: pathlib.Path) -> None:
     """Old use, unaffected: BASE defaults to llrbase and AGENT_TIMEOUT_SECONDS is still pinned to
-    27000 even though llrbase-qwen38-c itself carries 28800 -- byte-for-byte the pre-existing
+    27000 even though llrbase-c:qwen38 itself carries 28800 -- byte-for-byte the pre-existing
     behavior, not a side effect of adding the campaign path."""
     root = submit_tree(tmp_path)
     result = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain")

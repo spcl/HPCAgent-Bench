@@ -40,7 +40,7 @@ def resolved_opt(tmp_path: pathlib.Path, launcher: str, env: dict[str, str]) -> 
 
 def test_every_launcher_that_names_a_tree_is_checked() -> None:
     assert "submit-cpf-llr40.sh" in LAUNCHERS
-    assert "submit-next-wave.sh" in LAUNCHERS
+    assert "submit-owed-wave.sh" in LAUNCHERS
 
 
 @pytest.mark.parametrize("launcher", LAUNCHERS)
@@ -52,6 +52,6 @@ def test_a_launcher_reads_its_own_tree(tmp_path: pathlib.Path, launcher: str) ->
 
 @pytest.mark.parametrize("launcher", LAUNCHERS)
 def test_an_exported_opt_still_wins(tmp_path: pathlib.Path, launcher: str) -> None:
-    """submit-next-wave.sh exports OPT to the launchers it calls, so an explicit tree is kept."""
+    """A caller that exports OPT (a pinned worktree) keeps its explicit tree."""
     env = {"PATH": "/usr/bin:/bin", "SCRATCH": str(tmp_path / "scratch"), "OPT": "/pinned/tree"}
     assert resolved_opt(tmp_path, launcher, env) == "/pinned/tree"
