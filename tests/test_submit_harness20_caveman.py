@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import sys
 
-from tests.env_render import SPEC_INPUTS
+from tests.env_render import SPEC_INPUTS, set_base
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
@@ -179,13 +179,14 @@ def test_walltime_scales_with_the_subsets_own_kernel_count(tmp_path: pathlib.Pat
     script.write_text(
         text.replace('"AGENTS_PER_NODE=30"', '"AGENTS_PER_NODE=1"').replace('"AGENT_NODES=2"', '"AGENT_NODES=1"')
     )
+    set_base(root / "experiments", "llrbase-c:qwen38", AGENT_TIMEOUT_SECONDS=21600)
     three = root / "experiments" / "three.txt"
     three.write_text("tsvc_2_s235\nheat_3d\nkmp\n")
     result = run_submit(root, KERNELS_FILE="three.txt")
     assert result.returncode == 0, result.stderr
     match = re.search(r"^prepared \S+ \(\d+ nodes, (\d\d:\d\d:\d\d)\)", result.stdout, re.MULTILINE)
     assert match, result.stdout
-    # 1 worker, 3 kernels -> 3 batches of AGENT_TIMEOUT_SECONDS (21600s = 6h) + 3h staging = 21h
+    # 1 worker, 3 kernels -> 3 batches of the fixture's AGENT_TIMEOUT_SECONDS (21600s = 6h) + 3h staging = 21h
     assert match.group(1) == "21:00:00", result.stdout
 
 

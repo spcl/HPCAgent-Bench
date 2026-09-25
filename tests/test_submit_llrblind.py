@@ -65,10 +65,9 @@ KNOBS = frozenset(
 )
 
 #: A minimal base-<model> stand-in: only the fields submit-llrblind.sh's BASE=campaign path
-#: reads or overwrites. The real file's AGENT_TIMEOUT_SECONDS (14400) is deliberately HALF the
-#: llrbase stand-in's (28800, set on the real llrbase-c:qwen38) -- the two are supposed to
-#: disagree, so a test asserting 14400 survives proves the override was skipped, not that nobody
-#: bothered to make the fixtures differ.
+#: reads or overwrites. Its AGENT_TIMEOUT_SECONDS (14400) is a model-level budget the release never
+#: has; the arm still runs at the campaign track's 28800, so a test asserting 28800 proves the
+#: budget comes from the track, not from the model.
 CAMPAIGN_BASE_TEXT = (
     "CAMPAIGN_ARM=SET-BY-LAUNCHER\n"
     "RUN_ROOT=${SCRATCH:?}/hpcagent-bench-runs/SET-BY-LAUNCHER\n"
@@ -251,8 +250,8 @@ def test_a_kernels_file_naming_a_kernel_outside_the_problems_file_is_refused(tmp
 def test_base_campaign_gpu_inherits_the_baselines_own_budget_and_gpu_prompt(tmp_path: pathlib.Path) -> None:
     """DEVICE=gpu BASE=campaign: the arm's base is base-<model> (the SAME base
     submit-cpf-llr40.sh/submit-gpu-llr40.sh stage for the plain baselines), not
-    llrbase-<model>-hip -- there is no such base. Comparability means AGENT_TIMEOUT_SECONDS
-    (14400 here) is inherited untouched rather than pinned to this script's own 27000 default, and
+    llrbase-<model>-hip -- there is no such base. AGENT_TIMEOUT_SECONDS is the campaign track's,
+    the same budget the plain baselines run on, and
     LANGUAGE/AGENT_PROMPT_FILE/device follow DEVICE=gpu the same way submit-gpu-llr40.sh sets them."""
     root = submit_tree(tmp_path)
     experiments = root / "experiments"
@@ -265,7 +264,7 @@ def test_base_campaign_gpu_inherits_the_baselines_own_budget_and_gpu_prompt(tmp_
     assert env["PROBLEMS_FILE"] == "problems-llrblind-hip.jsonl"
     assert env["LANGUAGE"] == "hip"
     assert env["AGENT_PROMPT_FILE"] == "prompt-gpu.md"
-    assert env["AGENT_TIMEOUT_SECONDS"] == "14400", "must inherit the baseline's own budget, not 27000"
+    assert env["AGENT_TIMEOUT_SECONDS"] == "28800", "the campaign track budget, never a model's"
     assert env["CAMPAIGN_ARM"] == "llrblind-qwen38-hip"
     assert env["HPCAGENT_BENCH_RECORD_DEVICE"] == "gpu"
     assert env["HPCAGENT_BENCH_RECORD_PACKET"] == "no-score-tool"
@@ -277,7 +276,7 @@ def test_base_campaign_gpu_inherits_the_baselines_own_budget_and_gpu_prompt(tmp_
 
 def test_base_campaign_cpu_leaves_language_and_prompt_alone(tmp_path: pathlib.Path) -> None:
     """DEVICE=cpu (the default) BASE=campaign: no GPU prompt swap, LANGUAGE stays c, and the
-    baseline's own AGENT_TIMEOUT_SECONDS is still inherited untouched."""
+    AGENT_TIMEOUT_SECONDS is the campaign track's."""
     root = submit_tree(tmp_path)
     experiments = root / "experiments"
     stand_in_base(experiments, "campaign:qwen38", CAMPAIGN_BASE_TEXT)
@@ -286,13 +285,13 @@ def test_base_campaign_cpu_leaves_language_and_prompt_alone(tmp_path: pathlib.Pa
     env = env_dict(experiments / ".env.llrblind-qwen38-c")
     assert env["LANGUAGE"] == "c"
     assert env["AGENT_PROMPT_FILE"] == "prompt.md"
-    assert env["AGENT_TIMEOUT_SECONDS"] == "14400"
+    assert env["AGENT_TIMEOUT_SECONDS"] == "28800"
     assert env["HPCAGENT_BENCH_RECORD_DEVICE"] == "cpu"
 
 
 def test_base_campaign_explicit_agent_timeout_seconds_still_overrides(tmp_path: pathlib.Path) -> None:
     """An operator naming AGENT_TIMEOUT_SECONDS explicitly must still win under BASE=campaign --
-    the skip only applies to the script's own unrequested 27000 default."""
+    an explicit value is used as typed."""
     root = submit_tree(tmp_path)
     experiments = root / "experiments"
     stand_in_base(experiments, "campaign:qwen38", CAMPAIGN_BASE_TEXT)
@@ -302,15 +301,13 @@ def test_base_campaign_explicit_agent_timeout_seconds_still_overrides(tmp_path: 
     assert env["AGENT_TIMEOUT_SECONDS"] == "9999"
 
 
-def test_base_llrbase_default_still_pins_27000_regardless_of_the_base_file(tmp_path: pathlib.Path) -> None:
-    """Old use, unaffected: BASE defaults to llrbase and AGENT_TIMEOUT_SECONDS is still pinned to
-    27000 even though llrbase-c:qwen38 itself carries 28800 -- byte-for-byte the pre-existing
-    behavior, not a side effect of adding the campaign path."""
+def test_base_llrbase_default_pins_the_llrbase_track_budget(tmp_path: pathlib.Path) -> None:
+    """BASE defaults to llrbase and AGENT_TIMEOUT_SECONDS is the llrbase-c track budget (arms.yaml)."""
     root = submit_tree(tmp_path)
     result = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain")
     assert result.returncode == 0, result.stderr
     env = env_dict(root / "experiments" / ".env.llrblind-qwen38-c")
-    assert env["AGENT_TIMEOUT_SECONDS"] == "27000"
+    assert env["AGENT_TIMEOUT_SECONDS"] == "28800"
 
 
 def test_token_scale_grows_max_tokens_uncapped(tmp_path: pathlib.Path) -> None:
@@ -325,13 +322,13 @@ def test_token_scale_grows_max_tokens_uncapped(tmp_path: pathlib.Path) -> None:
 
 
 def test_time_scale_grows_agent_timeout_seconds_but_clamps_to_the_partition_cap(tmp_path: pathlib.Path) -> None:
-    """TIME_SCALE=6 on the 27000s llrbase default asks for 45h -- clamped to (23 - 3)h = 20h
+    """TIME_SCALE=6 on the 28800s llrbase track budget asks for 48h -- clamped to (23 - 3)h = 20h
     (PARTITION_TIME_LIMIT_HOURS - STAGING_HOURS), not left to overrun the partition's real MaxTime."""
     root = submit_tree(tmp_path)
     result = run_submit(root, MODELS="qwen38", LANGS="c", SKILLS="plain", TIME_SCALE="6")
     assert result.returncode == 0, result.stderr
     env = env_dict(root / "experiments" / ".env.llrblind-qwen38-c-tok1x-time6x")
-    assert env["AGENT_TIMEOUT_SECONDS"] == "72000"  # 20h, not 162000 (45h)
+    assert env["AGENT_TIMEOUT_SECONDS"] == "72000"  # 20h, not 172800 (48h)
 
 
 def test_wallclock_floor_rises_to_cover_a_capped_time_scale(tmp_path: pathlib.Path) -> None:

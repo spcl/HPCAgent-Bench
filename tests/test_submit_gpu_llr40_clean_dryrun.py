@@ -44,8 +44,8 @@ ROSTER_KERNELS = ("fuse_diamond", "tsvc_2_s115")
 STAGING_SECONDS = 3 * 3600
 #: submit-gpu-llr40.sh: the slack between the job's own end and the deadline.
 MARGIN_SECONDS = 300
-#: base-qwen38's own AGENT_TIMEOUT_SECONDS: the episode every hip arm runs, deadline or no.
-CONFIGURED_AGENT_SECONDS = 21600
+#: campaign's track budget (AGENT_TIMEOUT_SECONDS): the episode every hip arm runs, deadline or no.
+CONFIGURED_AGENT_SECONDS = 28800
 #: How far ahead the deadline is placed. Far enough that the job limit alone would allow a LONGER
 #: episode than the base env's, which is the case the cap exists for.
 HOURS_AHEAD = 30
@@ -285,13 +285,13 @@ def test_walltime_scales_with_the_subsets_own_kernel_count(tmp_path: pathlib.Pat
     AGENTS_PER_NODE down to 1 worker to force one batch PER kernel and prove a 3-kernel subset needs
     more wall clock than the 2-kernel one (test_a_wave_without_clean_or_a_deadline_is_unchanged)."""
     root = submit_tree(tmp_path)
-    set_base(root / "experiments", "campaign:qwen38", AGENTS_PER_NODE=1)
+    set_base(root / "experiments", "campaign:qwen38", AGENTS_PER_NODE=1, AGENT_TIMEOUT_SECONDS=21600)
     three_kf = root / "experiments" / "three.txt"
     three_kf.write_text("fuse_diamond\ntsvc_2_s115\nargmax_with_index\n")
     result = run_submit(root, MODELS="qwen38", LANGUAGES="hip", LEGS="0", KERNELS_FILE="three.txt")
     assert result.returncode == 0, result.stderr
     walltime = next(iter(prepared(result).values()))
-    # 1 worker, 3 kernels -> 3 batches of AGENT_TIMEOUT_SECONDS (21600s = 6h) + 3h staging = 21h
+    # 1 worker, 3 kernels -> 3 batches of the fixture's AGENT_TIMEOUT_SECONDS (21600s = 6h) + 3h staging = 21h
     assert walltime == "21:00:00", walltime
 
 
@@ -308,6 +308,6 @@ def test_a_wave_without_clean_or_a_deadline_is_unchanged(tmp_path: pathlib.Path)
     assert result.returncode == 0, result.stderr
     assert sorted(prepared(result)) == ["gpu-llr-focus40-qwen38-hip"]
     # arm_walltime: 2 kernels in 1 batch (AGENTS_PER_NODE=40, AGENT_NODES=1) of AGENT_TIMEOUT_SECONDS
-    # (21600/3600=6h) plus the staging allowance (3h).
-    assert set(prepared(result).values()) == {"09:00:00"}
+    # (28800/3600=8h) plus the staging allowance (3h).
+    assert set(prepared(result).values()) == {"11:00:00"}
     assert " begin " not in built_lines(result)[0]

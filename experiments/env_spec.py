@@ -4,6 +4,7 @@
 """Render a base env flat from ``layers/*.env`` and ``arms.yaml``: ``KEY=VALUE`` lines.
 
     env_spec.py render campaign:qwen38          # campaign "campaign" for model qwen38
+    env_spec.py render scicomp                  # campaign "scicomp", no model: its budget keys
     env_spec.py render layers/model-qwen38.env  # an env file and its "# extends:" parents
     env_spec.py list                            # every campaign:model a submitter can render
 
@@ -126,11 +127,24 @@ def render_campaign(name: str, model: str, spec: dict[str, Campaign]) -> dict[st
     return env
 
 
+def render_track(name: str, spec: dict[str, Campaign]) -> dict[str, str]:
+    """Campaign ``name`` without a model: ``layers/common.env`` and the campaign chain's ``env``.
+
+    Budgets are per track, never per model, so this is where a submitter reads them."""
+    env = assignments(COMMON)
+    for campaign in campaign_chain(name, spec):
+        env.update((key, str(value)) for key, value in campaign.env.items())
+    return env
+
+
 def render(target: str, spec: dict[str, Campaign] | None = None) -> dict[str, str]:
-    """``target`` rendered flat: ``<campaign>:<model>``, else a path to an env file."""
+    """``target`` rendered flat: ``<campaign>:<model>``, a bare ``<campaign>``, else an env file."""
+    spec = load_spec() if spec is None else spec
     if ":" in target:
         name, model = target.split(":", 1)
-        return render_campaign(name, model, load_spec() if spec is None else spec)
+        return render_campaign(name, model, spec)
+    if target in spec:
+        return render_track(target, spec)
     if not pathlib.Path(target).is_file():
         raise SystemExit(f"env_spec: {target} is neither <campaign>:<model> nor an env file")
     return render_file(pathlib.Path(target))

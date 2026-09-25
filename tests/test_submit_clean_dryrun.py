@@ -23,11 +23,11 @@ ARMS = "c:plain c:cpfsrc"
 STAGING_SECONDS = 3 * 3600
 #: submit-cpf-llr40.sh: the slack between the job's own end and the deadline.
 MARGIN_SECONDS = 300
-#: base-qwen38: the episode every arm of this campaign runs, deadline or no deadline.
-CONFIGURED_AGENT_SECONDS = 21600
+#: campaign's track budget: the episode every arm of this campaign runs, deadline or no deadline.
+CONFIGURED_AGENT_SECONDS = 28800
 #: How far ahead the deadline is placed. Far enough that the job limit alone would allow a LONGER
 #: episode than the campaign's, which is the case the cap exists for.
-HOURS_AHEAD = 10
+HOURS_AHEAD = 13
 #: Close enough that the deadline, not the campaign, decides the episode.
 HOURS_TIGHT = 6
 
@@ -132,6 +132,6 @@ def test_a_wave_without_clean_or_a_deadline_is_unchanged(tmp_path: pathlib.Path)
     built = launch(tmp_path, ARMS, ROSTER_KERNELS, "cpu")
     assert built.result.returncode == 0, built.result.stderr
     assert sorted(prepared(built)) == ["cpf-llr-focus40-qwen38-c", "cpf-llr-focus40-qwen38-c-cpfsrc"]
-    # arm_walltime: one batch of AGENT_TIMEOUT_SECONDS (21600) plus the staging allowance.
-    assert set(prepared(built).values()) == {("09:00:00", CONFIGURED_AGENT_SECONDS)}
+    # arm_walltime: one batch of AGENT_TIMEOUT_SECONDS (28800) plus the staging allowance.
+    assert set(prepared(built).values()) == {("11:00:00", CONFIGURED_AGENT_SECONDS)}
     assert " begin 2026-09-05T08:00:00 " in built_line(built)

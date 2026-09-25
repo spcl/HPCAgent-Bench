@@ -279,7 +279,7 @@ def test_cpfsrc_v2_refuses_without_an_explicit_view(tmp_path: pathlib.Path) -> N
 
 def test_budget_scale_doubles_the_agent_timeout_and_tokens(tmp_path: pathlib.Path) -> None:
     """BUDGET_SCALE=2 (2026-09-18 owed-classification decision: a "budget"-class rerun) must double
-    BOTH base-qwen38's AGENT_TIMEOUT_SECONDS (21600) and AGENT_MAX_TOKENS (24000000), not just
+    BOTH the campaign track's AGENT_TIMEOUT_SECONDS (28800) and AGENT_MAX_TOKENS (24000000), not just
     one of them -- a kernel that hit either cap needs headroom on both. It lands in the scaled
     submission's OWN "-budget2x" env, not the arm's canonical .env (see the byte-identical test
     below)."""
@@ -288,7 +288,7 @@ def test_budget_scale_doubles_the_agent_timeout_and_tokens(tmp_path: pathlib.Pat
     # arm_file_suffix order: budget_env_suffix then kernels_file_suffix (FILE_SFX, launch()'s own
     # KERNELS_FILE="kernels.txt") -- "-budget2x-kernels", not just "-budget2x".
     env = env_dict(built.experiments / f".env.cpf-llr-focus40-qwen38-c-budget2x{FILE_SFX}")
-    assert (env["AGENT_TIMEOUT_SECONDS"], env["AGENT_MAX_TOKENS"]) == ("43200", "48000000")
+    assert (env["AGENT_TIMEOUT_SECONDS"], env["AGENT_MAX_TOKENS"]) == ("57600", "48000000")
 
 
 def test_scaled_submit_leaves_canonical_env_byte_identical(tmp_path: pathlib.Path) -> None:
@@ -306,7 +306,7 @@ def test_scaled_submit_leaves_canonical_env_byte_identical(tmp_path: pathlib.Pat
 
     assert canonical.read_bytes() == before
     scaled_env = env_dict(normal.experiments / f".env.cpf-llr-focus40-qwen38-c-budget2x{FILE_SFX}")
-    assert (scaled_env["AGENT_TIMEOUT_SECONDS"], scaled_env["AGENT_MAX_TOKENS"]) == ("43200", "48000000")
+    assert (scaled_env["AGENT_TIMEOUT_SECONDS"], scaled_env["AGENT_MAX_TOKENS"]) == ("57600", "48000000")
 
 
 @pytest.mark.parametrize(
@@ -429,7 +429,7 @@ def test_walltime_scales_with_the_subsets_own_kernel_count(tmp_path: pathlib.Pat
     for name in SUBMIT_INPUTS:
         (experiments / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(EXPERIMENTS / name, experiments / name)
-    set_base(experiments, "campaign:qwen38", AGENTS_PER_NODE=1)
+    set_base(experiments, "campaign:qwen38", AGENTS_PER_NODE=1, AGENT_TIMEOUT_SECONDS=21600)
     (experiments / "kfile.txt").write_text("fuse_diamond\ntsvc_2_s115\nargmax_with_index\n")
     stub(root / "bin", "sbatch", 'touch "${STUB_MARKERS}/sbatch-called"; exit 1')
     stub(root / "scratch" / "venv-hpcagent-bench-314" / "bin", "python", f'exec "{sys.executable}" "$@"')
@@ -456,5 +456,5 @@ def test_walltime_scales_with_the_subsets_own_kernel_count(tmp_path: pathlib.Pat
     assert result.returncode == 0, result.stderr
     match = re.search(r"^prepared cpf-llr-focus40-qwen38-c \(\d+ nodes, (\d\d:\d\d:\d\d),", result.stdout, re.MULTILINE)
     assert match, result.stdout
-    # 1 worker, 3 kernels -> 3 batches of AGENT_TIMEOUT_SECONDS (21600s = 6h) + 3h staging = 21h
+    # 1 worker, 3 kernels -> 3 batches of the fixture's AGENT_TIMEOUT_SECONDS (21600s = 6h) + 3h staging = 21h
     assert match.group(1) == "21:00:00", result.stdout

@@ -197,17 +197,17 @@ finisher launches the next. It is not a barrier.
 
 | model | agents | kernels | passes | `AGENT_TIMEOUT_SECONDS` | worst case | `--time` |
 |---|---|---|---|---|---|---|
-| oss120b | 40 | 40 | 1 | 14400 (4h) | 4h | 08:00:00 |
-| qwen3.8 | 20 | 40 | 2 | 14400 (4h) | 8h | 14:00:00 |
-| Kimi K2.7 | 12 | 20 per half | 1 per half | 28800 (8h) | 8h | 14:00:00 |
+| oss120b | 40 | 40 | 1 | 28800 (8h) | 8h | 12:00:00 |
+| qwen3.8 | 20 | 40 | 2 | 28800 (8h) | 16h | 23:00:00 |
+| Kimi K2.7 | 12 | 20 per half | 1 per half | 28800 (8h) | 8h | 12:00:00 |
 
 Kimi cannot hold 40 kernels in one arm at 12 agents, which is why C is split into `-a` / `-b`.
 
 **Size `--time` from passes, not from the per-agent cap.** A pass is `ceil(kernels / agents)`, and
 the pool runs them back to back, so the floor is `passes x AGENT_TIMEOUT_SECONDS`, and the arm
 still has to bring the server up before it and drain the judge after it. qwen3.8's two passes give
-it an 8h floor: submitting it at exactly that limit leaves no room for staging and the judge drain,
-and Slurm cancels it partway through. Give every arm at least its floor plus half again, passed to
+it a 16h floor: submitting it at exactly that limit leaves no room for staging and the judge drain,
+and Slurm cancels it partway through. Give every arm at least its floor plus half again, capped at the partition limit (23 h), passed to
 whichever submit script or `sbatch` invocation you are using.
 
 A limit can be LOWERED with `scontrol` after the fact and never raised, so an arm submitted short

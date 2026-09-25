@@ -13,10 +13,7 @@ RECORD_EXPERIMENT=${RECORD_EXPERIMENT:-git-scicomp}
 STAMP=${STAMP:-$(date +%Y%m%d)}
 # partition maximum: one wave (AGENTS_PER_NODE = problem count), wall must cover the slowest agent
 TIME_LIMIT=${TIME_LIMIT:-24:00:00}
-# high on purpose: a SINGLE-SUBMISSION arm's budget buys evidence gathered before that one shot
-AGENT_TIMEOUT_SECONDS=${AGENT_TIMEOUT_SECONDS:-72000}
 AGENT_MAX_TOKENS_EXPLICIT=${AGENT_MAX_TOKENS+1}
-AGENT_MAX_TOKENS=${AGENT_MAX_TOKENS:-120000000}
 # sized to the problem count (arm_nodes reads AGENT_NODES=1, so this alone sets wave width)
 AGENTS_PER_NODE=${AGENTS_PER_NODE:-30}
 JUDGE_NODES=${JUDGE_NODES:-2}
@@ -26,7 +23,10 @@ JUDGE_NODES=${JUDGE_NODES:-2}
 # the token budget scales with TOKEN_SCALE (an owed-budget rerun) unless the caller typed a value
 # explicitly. AGENT_TIMEOUT_SECONDS does NOT scale: TIME_LIMIT is already the partition maximum, so
 # stretching it has nowhere to go -- only the token cap grows for a "budget" rerun.
-[[ -n "${AGENT_MAX_TOKENS_EXPLICIT}" ]] || AGENT_MAX_TOKENS=$(scale_tokens "${AGENT_MAX_TOKENS}")
+# The scicomp track budget (arms.yaml) unless the caller set one.
+[[ -n "${AGENT_TIMEOUT_SECONDS:-}" ]] || AGENT_TIMEOUT_SECONDS=$(track_budget scicomp AGENT_TIMEOUT_SECONDS) || exit 2
+[[ -n "${AGENT_MAX_TOKENS_EXPLICIT}" ]] \
+    || AGENT_MAX_TOKENS=$(scale_tokens "$(track_budget scicomp AGENT_MAX_TOKENS)") || exit 2
 # empty (default) = the full roster, one file every model/layout shares; a complement wave
 # narrows it and writes to its own problems file so a later full run is not confused.
 KERNELS_FILE=${KERNELS_FILE:-kernels-git-scicomp.txt}
@@ -72,7 +72,7 @@ submit_arm() {
     # an arm env is written key by key, so a gate that bails midway leaves a file that looks
     # complete and silently lacks a key: build under a staging name, rename once gates pass
     local staged="${env}.staging"
-    stage_base_env "llrbase-c:${model}" "${arm}" "${EXPERIMENT}" "${STAMP}" "${staged}" \
+    stage_base_env "scicomp:${model}" "${arm}" "${EXPERIMENT}" "${STAMP}" "${staged}" \
         -e "s|^PROBLEMS_FILE=.*|PROBLEMS_FILE=${PROBLEMS}|"
     local packet=""; [[ "${layout}" == repo ]] && packet=repo
     record_identity "${staged}" "${RECORD_EXPERIMENT}" "${model}" "${lang}" cpu "${packet}" "${arm}"

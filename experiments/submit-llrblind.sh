@@ -44,18 +44,15 @@ case "${BASE}" in
     llrbase|campaign) ;;
     *) echo "BASE must be llrbase or campaign, not ${BASE}" >&2; exit 2 ;;
 esac
-# llrbase arms have ALWAYS pinned 18000s here regardless of what their own base env carried (a
-# campaign-wide budget of this script's, independent of any one model's llrbase file); that stays
-# exactly as it was. A campaign-base arm must NOT repeat the override: campaign:<model> already
-# carries the very budget its baseline runs on, and pinning a second number here would itself be
-# the confound BASE=campaign exists to avoid. So the override applies when the caller named a value
-# explicitly (either BASE) or when BASE=llrbase (its longstanding default); a campaign-base arm left
-# at its own default inherits AGENT_TIMEOUT_SECONDS from campaign:<model> untouched.
-AGENT_TIMEOUT_SECONDS_EXPLICIT=${AGENT_TIMEOUT_SECONDS+1}
-# the default scales with TIME_SCALE, capped at time_cap_seconds (submit_common.sh: a plain
-# BUDGET_SCALE=4 would ask for 32h, over the mi300 partition's 24h MaxTime); a caller-typed
-# value is left exactly as typed, same convention submit-cpf-llr40.sh's agent_seconds applies.
-AGENT_TIMEOUT_SECONDS=${AGENT_TIMEOUT_SECONDS:-$(scale_time 27000)}
+# the base's track budget (arms.yaml), scaled with TIME_SCALE and capped at time_cap_seconds
+# (submit_common.sh: a plain BUDGET_SCALE=4 would ask for 32h, over the partition's 24h MaxTime); a
+# caller-typed value is left exactly as typed, as submit-cpf-llr40.sh's agent_seconds does.
+if [[ -z "${AGENT_TIMEOUT_SECONDS:-}" ]]; then
+    base_track=llrbase-c
+    [[ "${BASE}" == campaign ]] && base_track=campaign
+    AGENT_TIMEOUT_SECONDS=$(track_budget "${base_track}" AGENT_TIMEOUT_SECONDS) || exit 2
+    AGENT_TIMEOUT_SECONDS=$(scale_time "${AGENT_TIMEOUT_SECONDS}") || exit 2
+fi
 # raised from run_cluster.sh's default 1800000: a long single request must not be cut mid-transport
 API_TIMEOUT_MS=${API_TIMEOUT_MS:-3600000}
 WALLCLOCK=${WALLCLOCK:-06:30:00}
@@ -125,7 +122,7 @@ submit_arm() {
     fi
     base_exists "${base}" || { echo "no base ${base} (arms.yaml, layers/); skipped" >&2; return 0; }
     local arm="${EXPERIMENT}-${model}-${lang}${suffix}"
-    # the base's own token cap (layers/common.env), scaled; a caller-typed value is used as typed
+    # the base's track token cap (arms.yaml), scaled; a caller-typed value is used as typed
     local max_tokens; max_tokens="${AGENT_MAX_TOKENS:-$(scaled_budget_from "${base}" AGENT_MAX_TOKENS)}" || exit 2
     # file_sfx (budget + KERNELS_FILE) keeps a subset/scaled submission off the canonical env name,
     # so it can never collide with a PENDING job of the same arm still reading its own copy.
@@ -175,11 +172,7 @@ submit_arm() {
         "AGENT_SCORE_TOOL=${packet_kv[AGENT_SCORE_TOOL]}"
         "HPCAGENT_BENCH_SERVICE_SCORE_ENABLED=${packet_kv[HPCAGENT_BENCH_SERVICE_SCORE_ENABLED]}"
     )
-    # see AGENT_TIMEOUT_SECONDS_EXPLICIT above: a campaign-base arm left at its default inherits the
-    # baseline's own budget from campaign:<model> instead of this script's 18000s
-    if [[ "${BASE}" == llrbase || -n "${AGENT_TIMEOUT_SECONDS_EXPLICIT}" ]]; then
-        kvs+=("AGENT_TIMEOUT_SECONDS=${AGENT_TIMEOUT_SECONDS}")
-    fi
+    kvs+=("AGENT_TIMEOUT_SECONDS=${AGENT_TIMEOUT_SECONDS}")
     local kv
     for kv in "${kvs[@]}"; do
         pin_env_kv "${staged}" "${kv}"
