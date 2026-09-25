@@ -6,7 +6,7 @@ that verdict, and significance / equivalence tests between two systems.
 
 Built on :mod:`hpcagent_bench.stats.summary`, which owns the bootstrap interval, the Mann-Whitney
 and the signed-rank tests; this module chooses among them for a timing sample. It answers the
-question a reviewer asks of a speed-up table: *is this above measurement noise?*
+question a reviewer asks of a speedup table: *is this above measurement noise?*
 
 WHAT THE HARNESS MEASURES (the facts these choices rest on)
 ---------------------------------------------------------
@@ -121,7 +121,7 @@ class Comparison:
     pvalue: float
     effect: float  # Cliff's delta / rank-biserial in [-1, 1]; <0 means `a` is smaller (faster)
     effect_name: str
-    ratio: float  # median(b) / median(a) -- the speed-up on the median scale
+    ratio: float  # median(b) / median(a) -- the speedup on the median scale
     n_a: int
     n_b: int
     significant: bool  # pvalue < alpha (UNADJUSTED; see adjust_pvalues for the corpus level)
@@ -416,7 +416,7 @@ def speedup_ci(
     n_resamples: int = DEFAULT_RESAMPLES,
     seed: int = DEFAULT_SEED,
 ) -> Interval:
-    """Interval for the SPEED-UP ``stat(baseline) / stat(candidate)`` -- the ratio itself.
+    """Interval for the SPEEDUP ``stat(baseline) / stat(candidate)`` -- the ratio itself.
 
     WARNING: An interval on the numerator and one on the denominator do not compose into an interval on
     the ratio -- dividing endpoint by endpoint gives a strictly and needlessly wider band. This
@@ -433,7 +433,7 @@ def speedup_ci(
     Each side draws from its OWN spawned stream, so adding samples to one side does not perturb
     the other side's replicates -- a published interval then moves only for the reason it should.
 
-    Pass ``statistic=np.min`` to interval the min-of-k speed-up the default backend credits;
+    Pass ``statistic=np.min`` to interval the min-of-k speedup the default backend credits;
     ``np.median`` is the default because the minimum's bootstrap is only a reproducibility band
     (see :func:`min_of_k_ci`).
     """

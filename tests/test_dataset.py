@@ -62,7 +62,7 @@ def test_a_frozen_row_keeps_its_flag_through_the_fuse(selection: campaigns.Selec
 def test_frozen_rows_missing_a_live_column_raise_instead_of_filling_nan(
     selection: campaigns.Selection,
 ) -> None:
-    """pandas fills an absent column with NaN, and a NaN speed-up reads downstream as a kernel
+    """pandas fills an absent column with NaN, and a NaN speedup reads downstream as a kernel
     nobody ran rather than as a column that was never extracted."""
     live = pd.DataFrame([row("100", "dfa", tokens=10)])
     frozen = pd.DataFrame([row("200", "kmp", frozen="1")])

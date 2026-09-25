@@ -1,7 +1,7 @@
 # Plotting
 
 How a campaign's run directories become a paper figure: extract once, then draw every figure from
-the extracted observations. Statistics behind the corpus figures (speed-up heatmap, per-kernel
+the extracted observations. Statistics behind the corpus figures (speedup heatmap, per-kernel
 distribution grid): [measurement_statistics.md](measurement_statistics.md). Token cost and cards:
 [token_accounting.md](token_accounting.md).
 
@@ -14,13 +14,13 @@ Every figure in the HPCAgent-Bench papers follows these rules. A figure that bre
    `figures.kernel_comparison`, `summary`, `palette`, `style`). `statistics/plot_*.py` only parse
    arguments. A missing capability goes into the library with a test, never into a script or a paper
    repository.
-2. **Speed-up axis = log2 of the ratio** (`summary.log2_change`): 2x at +1, 0.5x at -1, 0 = no change,
+2. **Speedup axis = log2 of the ratio** (`summary.log2_change`): 2x at +1, 0.5x at -1, 0 = no change,
    ticks labeled back in ratios (`style.ratio_tick_label`). Never `signed_change` (ratio - 1), never a
    bare ratio axis.
 3. **Statistics per Hoefler and Belli (SC15)**, as `stats.rules` encodes them: paired per kernel, the
-   geomean of per-kernel ratios with the log-space t 95% interval (`summary.geomean_ci`) for speed-up
+   geomean of per-kernel ratios with the log-space t 95% interval (`summary.geomean_ci`) for speedup
    and cost. Nothing is joined by a trend line (rule 12); the emitted table carries raw milliseconds
-   and token counts (rule 4). Speed-up and token cost never share one axis.
+   and token counts (rule 4). Speedup and token cost never share one axis.
 4. **Colour = model, shape = treatment.** One registry, one lookup per channel, the same answer in
    every figure:
    - **Colour** is the LLM: `palette.model_color`. A model drawn several times in one figure (with and
@@ -40,19 +40,19 @@ Every figure in the HPCAgent-Bench papers follows these rules. A figure that bre
    - Standalone optimizers (DaCe, CPF as a compiler, Pluto, PPCG) keep `palette.marker` shapes in
      optimizer-row figures, where the optimizer is the entity.
 5. **Efficacy figure** (`plot_score_change.py`, dot rows only). One row of panels, each an
-   intervention against its control; rows: speed-up (log2, over each kernel's own baseline), solved
+   intervention against its control; rows: speedup (log2, over each kernel's own baseline), solved
    rate (%, no interval: a census), billed token cost. The x axis groups by delivery (C | Fortran,
    HIP | Triton | OpenMP): one tick per language, its models side by side in their colours, a light
    rule between languages. Several packets in one panel (`intervention=packets`) sit under their
    language's tick in their own shapes; a harness panel (`intervention=harness`) gives each harness
-   its own group and shape. Speed-up and cost are geometric means over kernels with 95% log-t
+   its own group and shape. Speedup and cost are geometric means over kernels with 95% log-t
    intervals from five kernels. Compiler/framework comparators (`comparators=`) sit after the
-   models of their delivery on the speed-up and solved rows only, in `palette.framework_color` and
+   models of their delivery on the speedup and solved rows only, in `palette.framework_color` and
    an optimizer shape no packet wears (`figures.efficacy.comparator_shapes`). The paper key has four
    columns (`PAPER_CONFIG.legend_ncol`, compact spacing).
-6. **Per-kernel figure** (MPR/CPF): wide, two rows on one kernel axis: log2 speed-up per kernel with
+6. **Per-kernel figure** (MPR/CPF): wide, two rows on one kernel axis: log2 speedup per kernel with
    its interval on top, tokens per kernel below. Past a dashed separator, one summary slot per
-   series: speed-up = geomean with 95% log-t interval over the SOLVED kernels, tokens = median over
+   series: speedup = geomean with 95% log-t interval over the SOLVED kernels, tokens = median over
    the served kernels. The tokens row is omitted when no series carries tokens.
 7. **Missing value = hollow cross.** A kernel without a verified answer enters at 1x
    (`population.NOT_DELIVERED`), is drawn crossed, named `style.NOT_DELIVERED_LABEL` in the key, and
@@ -128,7 +128,7 @@ An answer scored correct but never submitted counts once promoted: `hpcagent-ben
 --scope unpromoted`, then `regrade run`, then `regrade promote-apply` (or extraction with
 `--regrades`) adds it as a `promoted-unsubmitted` submission.
 
-Speed-up comes from `submission` rows, cost from `task` rows, both reduced by
+Speedup comes from `submission` rows, cost from `task` rows, both reduced by
 `hpcagent_bench.stats.population` (latest valid submission per kernel; the task's final-attempt
 tokens). A predicate over both columns at once keeps neither record type.
 
@@ -136,18 +136,18 @@ tokens). A predicate over both columns at once keeps neither record type.
 
 | script | figure | library |
 |---|---|---|
-| `plot_score_change.py` | efficacy: speed-up, tasks completed and token cost per comparison | `figures.efficacy.figure_dot_row` |
-| `plot_optimizer_row.py` | one row of 1-D panels, speed-up only, LLM arms beside compilers over one roster | `figures.optimizers.figure_optimizer_row` |
+| `plot_score_change.py` | efficacy: speedup, tasks completed and token cost per comparison | `figures.efficacy.figure_dot_row` |
+| `plot_optimizer_row.py` | one row of 1-D panels, speedup only, LLM arms beside compilers over one roster | `figures.optimizers.figure_optimizer_row` |
 | `plot_llr40_compilers.py` | llr-focus40 per kernel: canon columns, Pluto, PPCG-HIP, optional CPF arms | `figures.signed.llr40_two_row_figure` |
 | `plot_kernel_comparison.py` | llr-focus40 per kernel: DaCe canon CPU and every complete agent arm | `figures.kernel_comparison` + `per_kernel` |
-| `plot_per_kernel.py` | one selection's per-kernel speed-up and tokens (`--style ci\|box`, `--layout separate\|stacked`) | `figures.per_kernel.figure_panels` |
-| `plot_repo_vs_kernel.py` | one pair's per-kernel ratio, speed-up over tokens | `figures.per_kernel` |
-| `plot_arm_summary.py` | per-arm geomean speed-up and median spend, one slot per language | `stats.summary`, `palette` |
+| `plot_per_kernel.py` | one selection's per-kernel speedup and tokens (`--style ci\|box`, `--layout separate\|stacked`) | `figures.per_kernel.figure_panels` |
+| `plot_repo_vs_kernel.py` | one pair's per-kernel ratio, speedup over tokens | `figures.per_kernel` |
+| `plot_arm_summary.py` | per-arm geomean speedup and median spend, one slot per language | `stats.summary`, `palette` |
 | `plot_tokens.py` | tokens per kernel, per model | `population.kernel_tokens` |
 | `plot_single_shot_score.py` | blind arm funnel: reached, correct, faster | `palette`, `style` |
 | `plot_scaling.py` | distributed track: eta(P), sigma(P), per-kernel, per-arm summary | `figures.scaling` |
 | `plot_transfer.py` | MI300A -> GH200 transfer: geomean strips and per-answer scatter, CPU over GPU | `figures.transfer` |
-| `plot_canon_speedup.py` | median speed-up per framework from one canon sweep (`--db`) | `stats.canon` |
+| `plot_canon_speedup.py` | median speedup per framework from one canon sweep (`--db`) | `stats.canon` |
 | `plot_parallelism.py` | SDFG parallelism taxonomy per DaCe column (`--db`) | `metrics.parallelism` |
 | `plot_speedup.py`, `plot_results.py` | corpus figures from the results DB | see [measurement_statistics.md](measurement_statistics.md) |
 
@@ -227,7 +227,7 @@ python3 statistics/plot_llr40_compilers.py \
 - When both DaCe device columns appear, each falls back to its `frameworks` name, which carries the
   device (`signed.distinct_canon_labels`).
 
-### 2. Optimizer row, speed-up only
+### 2. Optimizer row, speedup only
 
 ![optimizer row](figures/example-optimizer-row.png)
 
@@ -251,7 +251,7 @@ python3 statistics/plot_optimizer_row.py --canon-db "$CANON_DB" \
 | `repeats` | `latest` (default) or `median` (designed repeats) |
 | `roster` | roster file; without it an arm is scored over the kernels it was served |
 
-One mark per optimizer: geomean speed-up over the panel's baseline with its 95% log-t interval. LLM
+One mark per optimizer: geomean speedup over the panel's baseline with its 95% log-t interval. LLM
 arms and compilers are scored over the same roster, an unanswered kernel at 1x for both; the script
 prints and the CSV carries `solved` and `kernels` per mark. Panels share one log2 axis but not one
 denominator, so each names its own baseline. To add an optimizer, give it a `SHORT_NAMES` entry in
@@ -275,14 +275,14 @@ python3 statistics/plot_score_change.py "$AR/experiments/llr-gpu/data/llr-gpu.db
 Drawn by `figures.efficacy.figure_dot_row`. Each column is one model and delivery: control = hollow
 circle, treated = the packet's shape. Rows:
 
-- **Speed-up**: geomean over the kernels both arms solved; a wrong answer is left out, a correct
+- **Speedup**: geomean over the kernels both arms solved; a wrong answer is left out, a correct
   slower answer keeps its sub-1 ratio. `--speedup-over served` draws every kernel with a failure at 1x.
 - **Tasks completed**: kernels solved per arm on a 0..N axis, no interval (census).
   `--no-success-row` drops it.
 - **Token cost**: every served kernel, failed ones included, priced with `--cost-model` (the
   library prices with the `billed` card when called without one: `figures.efficacy.paired_kernels`).
 
-`*` marks a significant speed-up change and `+` a significant token-cost change after
+`*` marks a significant speedup change and `+` a significant token-cost change after
 Benjamini-Hochberg correction within the panel's family: one family per panel, exactly the tests it draws. An interval is cut at
 `FigureConfig.interval_reach` past the outermost mark with an arrowhead; a mark over fewer than
 `FigureConfig.min_interval_kernels` kernels has none.
@@ -344,7 +344,7 @@ mixes platforms (`population.one_platform`).
 registry-dropped arms left out:
 
 - `<out>-geomean`: 1-D strips, one slot per model inside each language (the efficacy rows' spacing,
-  `efficacy.GROUP_STEP`); per slot the geomean speed-up over the answers solved on BOTH machines,
+  `efficacy.GROUP_STEP`); per slot the geomean speedup over the answers solved on BOTH machines,
   MI300A filled beside GH200 hollow, each with its 95% log-t interval (`summary.geomean_interval`,
   none below six answers), and the answer count under the slot; a model with none solved on both
   in a language takes no slot there.
@@ -356,7 +356,7 @@ A GH200 judge error counts as failed there (user, 2026-09-25); an answer not por
 never graded and is counted apart. Panels with nothing to draw are pending stubs. Input is the paired
 frame (`transfer.PAIRED_COLUMNS`), from the observations or from the Daint join table
 (`collect.py`); there an answer with no MI300A final grade falls back to its live grade
-(`mi300a_grade = live`), and one the MI300A final grade left unsolved has no MI300A speed-up.
+(`mi300a_grade = live`), and one the MI300A final grade left unsolved has no MI300A speedup.
 
 ```bash
 python statistics/plot_transfer.py --paired-csv data/transfer.csv --out figures/transfer --table tables/transfer.csv
@@ -365,7 +365,7 @@ python statistics/plot_transfer.py --observations data/llr40.db --out figures/tr
 
 `--table` is the per-answer CSV; beside it `<table>-summary.csv` (per panel: correct, failed, judge
 errors among them, correct share, Spearman rho, not portable per language, live-grade fallbacks,
-answers with no MI300A speed-up) and `<table>-geomean.csv` (per language and model: n, each machine's
+answers with no MI300A speedup) and `<table>-geomean.csv` (per language and model: n, each machine's
 geomean and interval). Width: `--width`, default `style.ICLR_WRAP_WIDTH_IN` (the paper's wrap
 figure), `5.5` for text width; print type (`style.PRINT_SCALE`), checked by `style.save(width_in=...)`.
 

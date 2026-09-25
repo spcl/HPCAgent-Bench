@@ -8,7 +8,7 @@ written by ``experiments/canon_column.sh``) because two ranks appending to one f
 partial lines. The shards of one column are disjoint kernel sets, so concatenating them is the
 whole merge.
 
-Every row of the output names the run it came from. A speed-up is only meaningful against a
+Every row of the output names the run it came from. A speedup is only meaningful against a
 baseline measured on the SAME node under the SAME configuration -- the columns of one sweep share
 a job, a node and a preset, and columns from two sweeps do not.
 

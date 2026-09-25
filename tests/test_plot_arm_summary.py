@@ -1,11 +1,11 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``statistics/plot_arm_summary.py`` -- where an arm's point lands on the speed-up axis.
+"""``statistics/plot_arm_summary.py`` -- where an arm's point lands on the speedup axis.
 
-Speed-up is a ratio, so its "overall" value is the GEOMETRIC MEAN over kernels
+Speedup is a ratio, so its "overall" value is the GEOMETRIC MEAN over kernels
 (:func:`hpcagent_bench.stats.population.kernel_medians`), the same rule every other "overall
-speed-up" in this repo follows (:class:`~hpcagent_bench.stats.population.ArmAggregate`). A median
-of per-kernel speed-ups equals the geomean only when the per-kernel values happen to be symmetric,
+speedup" in this repo follows (:class:`~hpcagent_bench.stats.population.ArmAggregate`). A median
+of per-kernel speedups equals the geomean only when the per-kernel values happen to be symmetric,
 so the two statistics have to be told apart by an asymmetric fixture, not merely computed and
 compared against each other.
 """
@@ -38,7 +38,7 @@ def load_script() -> types.ModuleType:
 
 plot = load_script()
 
-#: Per-kernel speed-ups whose geomean and median disagree, at (or above) the interval floor
+#: Per-kernel speedups whose geomean and median disagree, at (or above) the interval floor
 #: (summary.MIN_PAIRS_FOR_INTERVAL = 6) so ``rules.require_interval`` does not reject the whole
 #: table for being too thin to say anything either way: five kernels flat at 1.0x, one at 1000x.
 #: Median = 1.0x (log2 = 0); geomean = 1000**(1/6) (log2 = 1.66...).
@@ -46,7 +46,7 @@ ASYMMETRIC_SPEEDUPS: tuple[float, ...] = (1.0, 1.0, 1.0, 1.0, 1.0, 1000.0)
 
 
 def arm_frame(speedups: tuple[float, ...]) -> pd.DataFrame:
-    """One arm, one kernel per speed-up, one episode each -- the shape ``arm_points`` groups over."""
+    """One arm, one kernel per speedup, one episode each -- the shape ``arm_points`` groups over."""
     rows = []
     for index, value in enumerate(speedups):
         kernel = f"k{index}"
@@ -141,7 +141,7 @@ def two_condition_points() -> pd.DataFrame:
 
 
 def test_the_measured_value_is_on_the_y_axis_and_the_language_is_the_x_category() -> None:
-    """A speed-up is a measured quantity and never sits on X; the x slots are LANGUAGES, which are
+    """A speedup is a measured quantity and never sits on X; the x slots are LANGUAGES, which are
     names, so they carry no scale and no grid of their own."""
     import matplotlib.pyplot as plt
 

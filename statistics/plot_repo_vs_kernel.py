@@ -5,7 +5,7 @@
 ONE PANEL PER QUANTITY, THE MEASURED VALUE ON Y, THE KERNEL NAMES ON X, drawn by
 :mod:`hpcagent_bench.stats.figures.per_kernel` like every per-kernel figure. Each mark is the RATIO of
 the two scopes on one kernel -- the treated arm over the control arm -- so the null reads off the
-1x line instead of off two similar heights. Speed-up and token spend are different measurements
+1x line instead of off two similar heights. Speedup and token spend are different measurements
 (SC15 Rule 4), so they are two panels sharing one kernel axis and never one scale.
 
 COLOUR IS THE MODEL AND SHAPE IS THE INTERVENTION (``palette.model_color`` / ``palette.
@@ -58,7 +58,7 @@ DEFAULT_CONTROL: str = "kernel"
 #: The campaign whose display name titles the figure when the caller names none.
 DEFAULT_EXPERIMENT: str = "git-scicomp"
 
-#: The two panels, top to bottom, as the table names them. The speed-up panel fills a
+#: The two panels, top to bottom, as the table names them. The speedup panel fills a
 #: non-delivery at 1x; the token panel cannot, since no token count is a neutral cost.
 SPEEDUP_PANEL: str = "speedup"
 TOKENS_PANEL: str = "tokens"
@@ -210,7 +210,7 @@ def figure(
     control: str,
     double_column: bool = False,
 ) -> matplotlib.figure.Figure:
-    """The whole figure: the speed-up ratio panel above the token ratio panel, one kernel axis, both
+    """The whole figure: the speedup ratio panel above the token ratio panel, one kernel axis, both
     ratio axes (log2, geomean summary) on :func:`per_kernel.figure_panels` -- a page insert under
     ``double_column``, otherwise as wide as the dodged marks want."""
     if not series_list:
@@ -218,7 +218,7 @@ def figure(
     plotstyle.apply()
     speed = per_kernel.speedup_series_metric(
         [kernel_comparison.speedup_series(series, kernels) for series in series_list],
-        ratio_label(treatment, control, "Speed-Up"),
+        ratio_label(treatment, control, "Speedup"),
     )
     tokens = per_kernel.speedup_series_metric(
         [kernel_comparison.token_series(series, kernels) for series in series_list],

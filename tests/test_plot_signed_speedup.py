@@ -1,10 +1,10 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``statistics/plot_speedup.py`` -- the signed-change speed-up chart.
+"""``statistics/plot_speedup.py`` -- the signed-change speedup chart.
 
-The load-bearing assertions are about the AXIS, not the drawing. A 2x speed-up and a 2x
+The load-bearing assertions are about the AXIS, not the drawing. A 2x speedup and a 2x
 slow-down must be the same distance from 0 (the whole reason the figure replaces a ratio axis),
-and a cell that cannot be turned into a speed-up must not be able to land on 0, which is the exact
+and a cell that cannot be turned into a speedup must not be able to land on 0, which is the exact
 value of "measured, and nothing changed". Both are pure functions, so both are tested without
 rendering anything.
 """
@@ -14,7 +14,6 @@ import importlib.util
 import itertools
 import math
 import pathlib
-from typing import List, Tuple
 
 import pandas as pd
 import pytest
@@ -128,7 +127,7 @@ def test_band_limits_are_anchored_at_the_band_edge_and_open_only_at_the_top() ->
 
 def test_points_carry_the_median_speedup_over_the_baseline() -> None:
     frame = summary_for([("heat_3d", plotting.DEFAULT_BASELINE, 10.0), ("heat_3d", "dace_cpu", 5.0)])
-    points: List[speedup.Point] = speedup.speedup_points(frame)
+    points: list[speedup.Point] = speedup.speedup_points(frame)
     assert len(points) == 1, "the baseline is the divisor, not a series"
     assert points[0].framework == "dace_cpu"
     assert points[0].ratio == pytest.approx(2.0)
@@ -162,7 +161,7 @@ def test_a_non_positive_median_is_marked_a_crash_and_never_claims_a_speedup() ->
     assert len(points) == 1
     crash = points[0]
     assert crash.crashed, "a cell with no usable time has to be distinguishable from a measured one"
-    assert math.isnan(crash.ratio), "a crash has no speed-up; a real 1.0x cell would carry ratio 1.0"
+    assert math.isnan(crash.ratio), "a crash has no speedup; a real 1.0x cell would carry ratio 1.0"
     assert crash.change == 0.0, "drawn on the zero line"
     assert crash.samples == (), "nothing was measured, so there is nothing to draw a box from"
 
@@ -193,7 +192,7 @@ def test_a_crash_is_kept_out_of_the_limits_that_measured_points_set() -> None:
 
 def rendered_panels(monkeypatch: pytest.MonkeyPatch, points, kernels, output: str) -> int:
     """Render the banded figure and count the panels ON THE FIGURE, not in the code path."""
-    seen: List[int] = []
+    seen: list[int] = []
     original = plotting.save_figure
 
     def spy(path: str, fig) -> str:
@@ -266,7 +265,7 @@ def test_the_mini_variant_prunes_the_ticks_that_do_not_survive_embed_size(
     """At 3.4in wide a real kernel name and a y-tick number are both an unreadable smear, so the x
     ticks are ``K1..Kn`` and the y numbers are gone -- the band title carries the order of magnitude
     instead. What is left still has to say which axis it is."""
-    seen: List[Tuple[List[str], List[str], List[str]]] = []
+    seen: list[tuple[list[str], list[str], list[str]]] = []
     original = plotting.save_figure
 
     def spy(path: str, fig) -> str:
@@ -372,12 +371,12 @@ def test_the_demo_populates_every_band_with_both_signs() -> None:
 
 
 def test_a_db_with_only_the_baseline_fails_loudly(tmp_path: pathlib.Path) -> None:
-    """No candidate framework means no speed-up exists. Writing no file while exiting 0 is the
+    """No candidate framework means no speedup exists. Writing no file while exiting 0 is the
     failure that reads as a clean run."""
     db = tmp_path / "baseline_only.db"
     baseline_only_db(db)
-    with pytest.warns(UserWarning, match="no kernel has a plottable speed-up"):
-        with pytest.raises(RuntimeError, match="no speed-up to plot"):
+    with pytest.warns(UserWarning, match="no kernel has a plottable speedup"):
+        with pytest.raises(RuntimeError, match="no speedup to plot"):
             speedup.plot_signed_speedup(db=str(db), preset="S", output=str(tmp_path / "speedup.pdf"), usetex=False)
 
 
@@ -402,7 +401,7 @@ def test_a_boxs_samples_are_divided_by_a_fixed_baseline_not_paired_elementwise()
 
 
 def test_a_cell_whose_baseline_is_unusable_yields_no_samples() -> None:
-    """No divisor means no speed-up, and a box drawn at 0 would claim 'measured, nothing changed'."""
+    """No divisor means no speedup, and a box drawn at 0 would claim 'measured, nothing changed'."""
     assert speedup.cell_changes([1.0, 2.0, 3.0], base_time=0.0) == ()
     assert speedup.cell_changes([1.0, 2.0, 3.0], base_time=math.nan) == ()
 
@@ -596,7 +595,7 @@ def test_the_square_figure_shows_a_slow_down_when_its_band_has_one() -> None:
     points = {(p.kernel, p.framework): p for p in speedup.demo_points()}
     changes = [points[(k, f)].change for k in kernels for f in speedup.DEMO_FRAMEWORKS]
     assert any(change < 0.0 for change in changes), "no regression is shown"
-    assert any(change > 0.0 for change in changes), "no speed-up is shown"
+    assert any(change > 0.0 for change in changes), "no speedup is shown"
 
 
 def test_neither_the_square_nor_the_banded_figure_draws_an_axes_legend(
@@ -607,7 +606,7 @@ def test_neither_the_square_nor_the_banded_figure_draws_an_axes_legend(
     import matplotlib.pyplot as plt
     from matplotlib.figure import Figure
 
-    captured: List[Figure] = []
+    captured: list[Figure] = []
 
     def spy(path: str, fig: Figure) -> str:
         captured.append(fig)

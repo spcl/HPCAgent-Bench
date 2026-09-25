@@ -13,7 +13,7 @@ predates both the ``packet`` and ``timing_reduction`` columns -- it carries only
 flag -- so there is no real row to cut that already carries ``packet="perf-playbook-cpu"``. This
 fixture is instead hand-built to the shape a fresher extraction produces: the real column names,
 the real arm-naming convention (``cpf-llr-focus40-<model>-<language>[-<packet suffix>]``), real
-kernel short-names and plausible speed-up/token magnitudes, covering the four packets this
+kernel short-names and plausible speedup/token magnitudes, covering the four packets this
 session's multi-treatment work needs -- the no-packet control, ``skills``, ``cpfsrc`` and
 ``perf-playbook-cpu`` -- across two models and a handful of kernels.
 
@@ -69,7 +69,7 @@ def arm_name(model: str, packet: str) -> str:
 
 
 def episode_rows(run_root: str, arm: str, packet: str, kernel: str, index: int, ts: int) -> list[tuple[object, ...]]:
-    """One episode's submission + call + task row, in :data:`COLUMNS` order: a plausible speed-up
+    """One episode's submission + call + task row, in :data:`COLUMNS` order: a plausible speedup
     and token spend, distinct per (arm, kernel) so no two cells in the fixture are accidentally
     identical. The task's effective total equals the call's running count: this fixture gives every
     episode exactly one attempt, so the two happen to agree (a relaunch would not). The task row

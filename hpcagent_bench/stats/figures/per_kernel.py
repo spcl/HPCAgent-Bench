@@ -33,8 +33,8 @@ Every mark carries a white halo and is sized to the column pitch (:func:`mark_si
 column shrinks its marks rather than merging them into one blot, down to the size at which the
 undelivered cross still reads.
 
-THE SPEED-UP AXIS IS LOG2. A ratio axis on a linear scale reads a 2x slow-down as a small event and
-a 2x speed-up as a large one; log2 puts them the same distance from the 1x line, and the ticks are
+THE SPEEDUP AXIS IS LOG2. A ratio axis on a linear scale reads a 2x slow-down as a small event and
+a 2x speedup as a large one; log2 puts them the same distance from the 1x line, and the ticks are
 labelled back into ratios (:func:`~hpcagent_bench.stats.style.ratio_tick_label`) at powers of two,
 thinned to at most :data:`MAX_SPEEDUP_TICKS` (:func:`speedup_yticks`). Tokens are a magnitude, so
 their axis is log10 with 1-2-5 majors (:func:`token_limits`). Both limits come from the cells, not
@@ -45,7 +45,7 @@ summaries that agree to a few percent, drawn in one column, hid all but the top 
 carries the series' overall value with its interval and prints the value (tagged
 :data:`~hpcagent_bench.stats.style.CLEAR_GID`, settled clear of the marks at save), over the
 SOLVED kernels only (:func:`kernel_medians`): an undelivered placeholder's 1x and a disowned claim
-are drawn, but neither is a measured speed-up. Speed-up is a ratio, so its overall
+are drawn, but neither is a measured speedup. Speedup is a ratio, so its overall
 value is the GEOMETRIC MEAN (:func:`summary_geomean`) -- never a median, which equals the
 geomean only when the values happen to be symmetric; tokens take the same geomean (paper rule). The statistic is named ABOVE the panel, never as an x tick,
 which a stacked figure's shared axis would hand to the wrong panel (:func:`draw_summary_column`).
@@ -137,7 +137,7 @@ class KernelCell:
 
     ``delivered`` False: a kernel the arm was SERVED and never verified an
     answer for still scores 1x and its tokens are still spent. Dropping it instead would report the
-    arm's speed-up over the kernels it happened to solve, which is a different and always kinder
+    arm's speedup over the kernels it happened to solve, which is a different and always kinder
     number -- a 28-of-40 arm would read like a 40-of-40 one. Such a cell carries the value its
     failure left (the 1x placeholder, or a ratio one side of which is that placeholder) and draws
     hollow and crossed; it never enters a summary (:func:`kernel_medians`).
@@ -188,7 +188,7 @@ def kernel_cells(
     """One single-value cell per kernel of ``kernels`` from a caller's own ``kernel -> value`` map.
 
     A kernel with no usable value is FILLED at :data:`~hpcagent_bench.stats.population.NOT_DELIVERED`
-    as an undelivered cell under ``fill`` -- a speed-up, where "no verified answer" has a natural
+    as an undelivered cell under ``fill`` -- a speedup, where "no verified answer" has a natural
     place -- and left out otherwise: no token count is a neutral cost, and a mark at the axis edge
     would read as the smallest spend. ``delivered`` marks the PRESENT values that are placeholders
     all the same (a ratio whose one side never delivered is a number, not a measurement). ``low``
@@ -211,7 +211,7 @@ def kernel_cells(
 
 
 def speedup_cells(frame: pd.DataFrame, served: bool = True) -> list[KernelCell]:
-    """One cell per kernel: every episode's own final speed-up
+    """One cell per kernel: every episode's own final speedup
     (:func:`population.graded_episode_rows`), plus -- under ``served`` -- one placeholder cell at
     :data:`~hpcagent_bench.stats.population.NOT_DELIVERED` for every kernel the frame was served and
     never answered.
@@ -275,8 +275,8 @@ def ordered_kernels(cells: Sequence[KernelCell]) -> list[str]:
 
 
 def shared_kernel_order(speed: Sequence[KernelCell], tokens: Sequence[KernelCell]) -> list[str]:
-    """One kernel order for BOTH panels of a stacked figure: speed-up's order, then any kernel
-    tokens has and speed-up does not, appended -- so column ``i`` names one kernel in both panels."""
+    """One kernel order for BOTH panels of a stacked figure: speedup's order, then any kernel
+    tokens has and speedup does not, appended -- so column ``i`` names one kernel in both panels."""
     primary = ordered_kernels(speed)
     seen = set(primary)
     extra = [kernel for kernel in ordered_kernels(tokens) if kernel not in seen]
@@ -318,7 +318,7 @@ def kernel_medians(cells: Sequence[KernelCell]) -> np.ndarray:
 
 
 def summary_geomean(cells: Sequence[KernelCell]) -> tuple[float, float, float]:
-    """``(geomean, low, high)`` over the plotted kernels' own medians, speed-up and tokens alike: the
+    """``(geomean, low, high)`` over the plotted kernels' own medians, speedup and tokens alike: the
     geometric mean with its 95% log-t interval (:func:`hpcagent_bench.stats.summary.geomean_interval`),
     as :func:`hpcagent_bench.stats.population.kernel_medians` reports an arm."""
     interval = summary.geomean_interval(kernel_medians(cells))
@@ -337,11 +337,11 @@ def drawn_values(cells: Sequence[KernelCell]) -> list[float]:
     return [v for cell in cells for v in cell.episodes if usable(v)]
 
 
-#: The most labelled powers of two a speed-up axis carries. A wider range labels every second (or
+#: The most labelled powers of two a speedup axis carries. A wider range labels every second (or
 #: third) octave instead: twelve octaves on a 1.8in panel printed their labels on top of each other.
 MAX_SPEEDUP_TICKS: int = 7
 
-#: Octaves of air past the outermost speed-up ticks, so a mark sitting on one is never cut by the
+#: Octaves of air past the outermost speedup ticks, so a mark sitting on one is never cut by the
 #: frame.
 VALUE_PAD_OCTAVES: float = 0.35
 

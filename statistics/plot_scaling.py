@@ -4,7 +4,7 @@
 
 Reads one selection of observations (``--experiment`` for an arm prefix, ``--arm`` for a further
 regex) and draws its scaling curves (:mod:`hpcagent_bench.stats.figures.scaling`): parallel
-efficiency eta(P), speed-up sigma(P), the per-kernel small multiples, and the per-arm geomean eta
+efficiency eta(P), speedup sigma(P), the per-kernel small multiples, and the per-arm geomean eta
 with its interval. Every figure writes a PDF, a PNG and the CSV behind the marks, plus a second CSV
 naming every point the sweep did not measure and every curve too short to draw.
 

@@ -224,7 +224,7 @@ models:
 optimizers:
   dace: DaCe
   cpf: Canonical Parallel Form
-  # Polyhedral compiler baselines the llr-focus40 speed-up figure compares against (2026-09-20),
+  # Polyhedral compiler baselines the llr-focus40 speedup figure compares against (2026-09-20),
   # APPENDED so neither repaints dace/cpf's shapes. Their colour stays framework_color's own
   # `frameworks:` slot (pluto, ppcg_hip below); this only gives each its own marker shape.
   pluto: Pluto

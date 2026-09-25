@@ -54,7 +54,7 @@ class ModelEntry:
 class BaselineSpec:
     """The canon-sweep columns an experiment is drawn against.
 
-    ``denominator`` is the column every speed-up ratio is divided by -- one per experiment, so two
+    ``denominator`` is the column every speedup ratio is divided by -- one per experiment, so two
     figures of the same experiment cannot quietly use different references. ``comparators`` are the
     other toolchain columns drawn as their own series beside the agents; they are never the
     denominator."""

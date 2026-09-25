@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A table that ships beside a figure must compile, and must carry the numbers the figure cannot.
 
-The solve rate is the case: every speed-up the efficacy figure draws is a geomean over the kernels
+The solve rate is the case: every speedup the efficacy figure draws is a geomean over the kernels
 an arm was SERVED, with an unanswered kernel held at 1x, so two arms sit at the same height having
 solved twelve kernels and thirty. The table is the only place that difference is visible, which
 makes "it compiles and it says what the frame said" a property worth pinning.

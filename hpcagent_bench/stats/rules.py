@@ -47,7 +47,7 @@ class RuleViolation(ValueError):
 def require_costs(table: pd.DataFrame, ratio: str, costs: Sequence[str]) -> pd.DataFrame:
     """Rule 4. A table carrying a ratio column must carry the costs the ratio was taken over.
 
-    A speed-up alone is uninterpretable: 1.4x on a kernel that runs for 3 ms and 1.4x on one that
+    A speedup alone is uninterpretable: 1.4x on a kernel that runs for 3 ms and 1.4x on one that
     runs for 3 s are different results, and the reader cannot tell them apart from the ratio. So
     the numerator and denominator travel with it, in the SAME table the figure emits, and a figure
     that cannot supply them has to say so rather than ship the ratio on its own.

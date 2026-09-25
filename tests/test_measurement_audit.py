@@ -3,7 +3,7 @@
 """Properties the measurement path must hold for a published number to mean what it says.
 
 Written as an ADVERSARIAL AUDIT of everything upstream of the plots: the reduction over
-repeats, how a speed-up is formed, what a disclosed timing column is, and whether a ratio is
+repeats, how a speedup is formed, what a disclosed timing column is, and whether a ratio is
 paired. Each test states ONE property in its name, documents the failure it prevents, and
 asserts on the observable contract rather than on an implementation detail.
 
@@ -21,12 +21,12 @@ from hpcagent_bench.harness import metric, recording, timing
 from hpcagent_bench.support.collect import sweep
 
 
-# 1. The disclosed timings must reproduce the credited speed-up.
+# 1. The disclosed timings must reproduce the credited speedup.
 @pytest.mark.parametrize("backend", ["min_of_k", "mannwhitney_delta"])
 def test_a_credited_speedup_is_reproducible_from_the_timings_it_discloses(backend: str) -> None:
     """``ReducedTiming`` publishes ``native_ns``, ``baseline_ns`` and ``speedup`` side by side,
     and ``submissions`` stores all three in one row. A reader who divides the two nanosecond
-    columns must land on the credited speed-up, or the row carries two incompatible answers to
+    columns must land on the credited speedup, or the row carries two incompatible answers to
     one question and nothing in it says which is authoritative.
 
     Prevents: the llr40 artifact README having to warn readers off its own columns. On the 780
@@ -49,7 +49,7 @@ def test_a_timing_backend_reports_a_measured_slowdown_below_one(backend: str) ->
     every arm's distribution is supported on [1, inf) whatever the code did, so "no arm regressed"
     is a property of the estimator and not an observation about the campaign.
 
-    Prevents: reading the llr40 artifact's "all 780 submissions carry a speed-up of 1.0x or more"
+    Prevents: reading the llr40 artifact's "all 780 submissions carry a speedup of 1.0x or more"
     as evidence. Under ``mannwhitney_delta`` -- the configured production backend -- it is a
     tautology, and the 45 rows sitting at exactly 1.0 cannot be told from real regressions.
 
@@ -98,7 +98,7 @@ def test_a_recorded_measurement_names_the_node_it_ran_on(table: str) -> None:
     and a candidate timed on one node can be divided by a baseline timed on another with nothing
     downstream able to notice.
 
-    Prevents: a figure presenting a cross-node hardware comparison as a software speed-up. The
+    Prevents: a figure presenting a cross-node hardware comparison as a software speedup. The
     measured node-to-node spread on this machine is about 30%, larger than most effects claimed.
     """
     columns = {column for column, _kind in recording.canonical_columns()[table]}
@@ -108,8 +108,8 @@ def test_a_recorded_measurement_names_the_node_it_ran_on(table: str) -> None:
 # 5. Ratios over different denominators do not aggregate.
 def test_speedups_over_different_denominators_do_not_silently_aggregate() -> None:
     """``harbor.grade`` stamps each per-kernel reward with the reference it was divided by,
-    and ``combine`` then takes a geomean over them without looking at that field. A speed-up over a
-    single-core C reference and a speed-up over a parallel numba reference are ratios of different
+    and ``combine`` then takes a geomean over them without looking at that field. A speedup over a
+    single-core C reference and a speedup over a parallel numba reference are ratios of different
     quantities; a mean over both is a number with no denominator.
 
     Prevents: the llr40v10 campaign, where the denominator is a per-JOB property (jobs 618217-621385
@@ -134,7 +134,7 @@ def test_aggregating_a_set_of_ratios_uses_a_geometric_mean() -> None:
     The arithmetic mean of a ratio and its inverse is not 1, so a kernel that halves memory and
     one that doubles it do not cancel: they report 1.25, a 25% regression that did not happen.
 
-    ``metric.geomean`` (the speed-up path) gets this right; this is the one aggregate in the
+    ``metric.geomean`` (the speedup path) gets this right; this is the one aggregate in the
     module that does not. Latent rather than published -- NMU is a disclosure field and never
     enters the ranked score -- but it is reported as if it were a ratio.
     """
@@ -163,7 +163,7 @@ def test_warmup_reps_are_run_and_then_discarded_from_the_kept_samples(warmup: in
 
 
 def test_the_credited_speedup_and_the_dispersion_gate_read_the_same_per_cell_ratios() -> None:
-    """``s_i`` is 1.0 when the geometric standard deviation of the per-cell speed-ups says the
+    """``s_i`` is 1.0 when the geometric standard deviation of the per-cell speedups says the
     result sits inside the timing noise. The gate and the score must be computed over the SAME set
     of cells, or a win can be credited from one sample and gated on another: one
     ``score_rule.credit`` call over ``valid_speedups`` yields S_i, g_i and gsd_i together.
