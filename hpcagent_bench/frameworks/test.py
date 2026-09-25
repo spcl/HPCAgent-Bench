@@ -163,21 +163,27 @@ def njit_reference(
         return impl
     if data is not None and any(is_float16_array(v) for v in data.values()):
         return impl
-    try:
-        from numba import njit  # Deferred: numba is optional, and only these few kernels need it.
-        from numba.core.errors import LoweringError, NumbaPerformanceWarning, TypingError, UnsupportedError
+    # Deferred: importing numba costs seconds, and only an oracle run needs it.
+    from numba import njit
+    from numba.core.errors import LoweringError, NumbaError, NumbaPerformanceWarning, TypingError, UnsupportedError
 
+    if not isinstance(impl, types.FunctionType):
+        logging.getLogger(__name__).warning(
+            "the %s reference is a %s, which has no globals to rebind; using the interpreter",
+            module,
+            type(impl).__name__,
+        )
+        return impl
+    try:
         # Every same-module helper is compiled against one shared globals dict, mutated in place, so helper
         # chains and mutual recursion resolve.
-        if not isinstance(impl, types.FunctionType):
-            raise TypeError(f"the {module} reference is a {type(impl).__name__}, which has no globals to rebind")
         shared: dict[str, object] = dict(impl.__globals__)
         for name, value in list(shared.items()):
             if isinstance(value, types.FunctionType) and value.__module__ == impl.__module__:
                 helper: object = njit(cache=True, parallel=parallel)(rebind(value, shared))
                 shared[name] = helper
         compiled: KernelImpl = njit(cache=True, parallel=parallel)(rebind(impl, shared))
-    except Exception as exc:  # noqa: BLE001 -- any numba failure is a fallback, never fatal
+    except (NumbaError, RuntimeError) as exc:  # numba's own refusal, or a function it cannot cache
         logging.getLogger(__name__).warning(
             "njit reference unavailable for %s (%s); using the interpreter", module, exc
         )

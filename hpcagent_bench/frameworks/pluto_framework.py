@@ -155,7 +155,7 @@ class PlutoFramework(NativeFramework):
                 "symbols/arrays/scalars and a positional call cannot detect the "
                 "difference, so there is no safe default to fall back to",
             )
-        declared = {a.name: a for a in (self._abi_args(bench) or [])}
+        declared = {a.name: a for a in self._abi_args(bench)}
         out: list[ArgValue] = []
         for name in order:
             if name in resolved:
