@@ -10,6 +10,7 @@ values come from environment variables, each with one default place:
 | `scripts/cscs/account_env.sh` | the Slurm account, read from your own Slurm associations |
 | `experiments/env.sh` | the checkout and the venv; sources `scripts/repo_env.sh` and the two scripts above |
 | `scripts/repo_env.sh` | the import path: the checkout (and `DACE_TREE` ahead of it), `PYTHONHASHSEED=0` |
+| `scripts/dace_pin.env` | the dace commit a release installs and bakes into its images; jobs refresh to the latest extended ([below](#dace)) |
 | `hpcagent_bench/paths.py` | the Python side of the same roots (`scratch_root`, `fast_scratch_root`) |
 
 `cache_env.sh` and `account_env.sh` both load the site layer, so every submitter and every job sees
@@ -76,6 +77,8 @@ setup the campaigns in this repository ran on. Use it there with
 | `HPCAGENT_BENCH_NETSTACK_VERSION`, `_NAME`, `_SOURCE` | the pinned bundle, `artifact` | which bundle under that base must exist | defaults |
 | `HPCAGENT_BENCH_CI_PARTITION` | empty: `SBATCH_PARTITION` | partition of the CI replay, `scripts/run_tests.sh --container` (an MI250X node) | `mi200` |
 | `HPCAGENT_BENCH_SITE_TESTS` | `0` | `1` runs the tests marked `site` (they need the cluster's Slurm and registered EDFs) | `1` |
+| `HPCAGENT_BENCH_LOGIN_HOST`, `HPCAGENT_BENCH_SSH_JUMP` | empty: a placeholder | the login host and ssh jump chain in the laptop tunnel commands `containers/inference/serve-private.sbatch` prints | the Alps login and jump hosts |
+| `HPCAGENT_BENCH_NICE` | `100` (`scripts/site_env.sh`) | the Slurm `--nice` every submitter passes when `NICE` is unset ([below](#submitting-nicely)) | default |
 
 `SBATCH_PARTITION` is read by Slurm itself and overrides every `#SBATCH --partition` directive. A
 job meant for other hardware passes `--partition=` on the command line, which wins over it;
@@ -108,6 +111,44 @@ job meant for other hardware passes `--partition=` on the command line, which wi
 | `CONTAINER_RUNTIME` | `enroot` | how `beverin.sbatch` starts containers: `enroot` or `ce` |
 | `HPCAGENT_BENCH_HOST` | `SLURMD_NODENAME`, else the host name | the node name recorded with each result |
 
+### dace
+
+DaCe comes from the spcl/dace `extended` branch. It is not a PyPI dependency (PyPI rejects
+direct-URL requirements) and `pyproject.toml` names no version of it.
+
+| Variable | Default | Controls |
+|---|---|---|
+| `HPCAGENT_BENCH_DACE_PIN` | set in `scripts/dace_pin.env`, the one place it is written | the extended commit a release is tested with |
+| `HPCAGENT_BENCH_DACE_REF` | installs and image builds: `pinned`; jobs: `extended` | which dace: `pinned` (the pin), a branch (its tip) or a full 40-character commit sha |
+| `DACE_TREE` | unset | a dace checkout to run instead, exactly as it is (a fix branch under test); `scripts/repo_env.sh` puts it ahead of the installed dace and nothing refreshes it |
+| `DACE_DIR` | `/opt/dace` | the image's editable dace checkout that `dace_refresh.sh` moves |
+
+- **Install**: `scripts/install_dace.sh` installs the pin (`pip install "dace @
+  git+https://github.com/spcl/dace.git@<pin>"`; `--editable DIR` for a checkout). README,
+  CONTRIBUTING, CI, `scripts/rebuild_venv.sh` and the release smoke all use it, and the judge/agent
+  image builds bake the pin, so a release install is reproducible.
+- **Every job**: `containers/images/dace_refresh.sh` moves the image's `/opt/dace` to
+  `HPCAGENT_BENCH_DACE_REF` before anything imports dace: by default the latest extended, with
+  `HPCAGENT_BENCH_DACE_REF=pinned` to stay on the pin. A job that spans several containers
+  resolves the ref to one sha on the batch host first (`dace_refresh.sh --resolve`), so every rank
+  runs the same commit. A branch that cannot be fetched keeps the baked commit; a commit that
+  cannot be reached fails the job. Bare metal (no `/opt/dace` checkout) runs the installed dace.
+- **Provenance**: the refresh prints `dace-refresh: live commit <sha>` into the job log and writes
+  `/opt/dace.commit`; canon columns stamp `dace <sha>` into `record.build` and `canon.db`'s `build`
+  column; CPF prerender keys carry the dace commit.
+
+To stay on the pin: `HPCAGENT_BENCH_DACE_REF=pinned sbatch ...`. To test a dace fix:
+`DACE_TREE=<worktree> sbatch ...` (canon columns, CPF prerender).
+
+### Submitting nicely
+
+Every submitter passes `--nice`, so a batch of jobs yields to other users' work by default:
+`NICE=<n>` for one submission, else `HPCAGENT_BENCH_NICE` (site layer; default `100`). The
+campaign submitters also take `PRIORITY=<family>`, which picks the family's band
+(`experiments/submit_common.sh`, `PRIORITY_NICE`) so waves start in the planned order. Slurm has no
+environment variable for `--nice`, so a job script submitted by hand with a bare `sbatch` runs at
+nice 0 unless the command line says `--nice="${HPCAGENT_BENCH_NICE}"`.
+
 ### Slurm account
 
 | Variable | Default | Controls |
@@ -137,9 +178,11 @@ Slurm partition that hardware sits in is the site layer's business.
 
 ## The guard
 
-`tests/test_no_hardcoded_user_paths.py` scans the whole tree for storage mounts, home directories,
-user names, site emails, Slurm accounts, `#SBATCH` partition/account/node directives, node names
-and literal `--partition=` values in live code (comments and docstrings may name a site to explain
-it). The site layer for CSCS and this page are allowlisted because showing those values is their
-job. The test also lists the areas still being cleaned (`_PENDING`); each leaves the list once
-clean.
+`tests/test_no_hardcoded_user_paths.py` scans every file `git ls-files` lists (tracked files only)
+for storage mounts (`/capstor`, `/iopsstor`, ...), home directories, user names, site emails, Slurm
+accounts, `#SBATCH` partition/account/node directives, node and login host names, literal
+partitions (`--partition=`, `-p`, `*PARTITION=`), one campaign's run directories (dated or job-id
+paths) and the site image registry, in live code (comments and docstrings may name a site to
+explain it). Files, or single hits in a file, that legitimately carry such a value are allowlisted
+in the test with one reason each: the CSCS site layer, the hardware-profile layer, this page, and
+the MI300A/MI200 serving recipe's partition check.

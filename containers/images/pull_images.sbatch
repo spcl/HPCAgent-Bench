@@ -8,7 +8,6 @@
 #   TAG=sha-<digest> ROLES=judge sbatch containers/images/pull_images.sbatch
 #
 #SBATCH --job-name=pull-images
-#SBATCH --partition=mi300
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=192

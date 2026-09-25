@@ -13,8 +13,8 @@
 # (scaling_grade JOB_DB_GLOB) and the extractor read it as part of the job. Every row is the
 # episode's own run_id, optimizer `promoted-unsubmitted`, commit_sha of this tree.
 #
-#   cd hpcagent-bench-wt/<tree>/experiments && sbatch mpi/mlscale-recover.sbatch
-#   JOBS="649109" sbatch mpi/mlscale-recover.sbatch
+#   cd <checkout>/experiments
+#   RUNS_ROOT=$SCRATCH/hpcagent-bench-runs/<campaign> JOBS="<job id> ..." sbatch mpi/mlscale-recover.sbatch
 #
 #SBATCH --job-name=mlscale-recover
 #SBATCH --nodes=1
@@ -29,9 +29,9 @@ ulimit -c 0
 
 SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
 REPO="$(cd -- "${SUBMIT_DIR}" && git rev-parse --show-toplevel)"
-RUNS_ROOT="${RUNS_ROOT:-${SCRATCH:?}/hpcagent-bench-runs/mlscale-20260924}"
-FROZEN_ROOT="${FROZEN_ROOT:-${SCRATCH}/hpcagent-bench-runs/.frozen}"
-JOBS="${JOBS:-649795 649109 649110 649111}"
+RUNS_ROOT="${RUNS_ROOT:?set RUNS_ROOT to the mlscale campaign run root holding the jobs}"
+FROZEN_ROOT="${FROZEN_ROOT:-${SCRATCH:?}/hpcagent-bench-runs/.frozen}"
+JOBS="${JOBS:?set JOBS to the job ids whose promotion lost scores}"
 # The link request the jobs' router never logged (it recorded no libraries row per call).
 LIBRARIES="${LIBRARIES:-mpi,rccl}"
 LOG_DIR="${SCRATCH}/hpcagent-bench-logs/mlscale-recover-${SLURM_JOB_ID:-local}"

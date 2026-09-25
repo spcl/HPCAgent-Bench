@@ -235,13 +235,21 @@ def test_the_mi200_preset_serves_bf16_weights_with_triton_attention_aiter_off_an
 def test_serve_mode_starts_one_server_and_prints_a_loopback_tunnel_but_never_the_key(
     tmp_path: pathlib.Path, preset: str
 ) -> None:
-    done = launch(tmp_path, preset, MODE="serve", API_PORT="30123")
+    done = launch(
+        tmp_path,
+        preset,
+        MODE="serve",
+        API_PORT="30123",
+        HPCAGENT_BENCH_SSH_JUMP="jumphost",
+        HPCAGENT_BENCH_LOGIN_HOST="loginhost",
+    )
     assert done.returncode == 0, done.stderr
     assert len(argv_lines(done.stdout)) == 1
-    tunnels = [line.strip() for line in done.stdout.splitlines() if "ssh -N -J ela,beverin" in line]
+    # The hosts come from the site layer (experiments/layers/site-*.env), never from the script.
+    tunnels = [line.strip() for line in done.stdout.splitlines() if "ssh -N -J jumphost,loginhost" in line]
     assert len(tunnels) == 1
     assert "-L 127.0.0.1:30123:127.0.0.1:30123 serve-private-test-user@" in tunnels[0]
-    assert f"scp beverin:{tmp_path}/endpoint.key " in done.stdout
+    assert f"scp loginhost:{tmp_path}/endpoint.key " in done.stdout
     assert "Authorization: Bearer %s" in done.stdout
     assert KEY not in done.stdout + done.stderr
     (run_dir,) = (tmp_path / "runs").iterdir()

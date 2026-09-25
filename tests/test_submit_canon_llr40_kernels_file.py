@@ -128,10 +128,10 @@ def test_a_missing_kernels_file_is_refused(tmp_path: pathlib.Path) -> None:
     assert "missing or empty" in result.stderr
 
 
-def test_nice_is_passed_through_when_set_and_omitted_when_not(tmp_path: pathlib.Path) -> None:
-    """NICE=300 (2026-09-20: a gap-filling canon run sits behind the priority LLR/cpfsrc waves but
-    ahead of a background scicomp sweep) reaches sbatch as ``--nice=300``; unset, no such flag is
-    added -- every caller that never sets it keeps its ordinary priority."""
+def test_nice_is_passed_through_when_set_and_defaults_to_the_site_nice(tmp_path: pathlib.Path) -> None:
+    """NICE=300 (a gap-filling canon run sits behind the priority LLR/cpfsrc waves but ahead of a
+    background scicomp sweep) reaches sbatch as ``--nice=300``; unset, the job still starts nicely,
+    at the site layer's HPCAGENT_BENCH_NICE (scripts/site_env.sh)."""
     root = submit_tree(tmp_path)
     stub(
         root / "bin",
@@ -148,10 +148,15 @@ def test_nice_is_passed_through_when_set_and_omitted_when_not(tmp_path: pathlib.
         "sbatch",
         'printf \'%s\\n\' "$@" > "${STUB_MARKERS}/sbatch-argv-no-nice.txt"; echo 999999; exit 0',
     )
+    result = run_submit(root, TAG="llr-focus40", COLUMNS="numba", SUBMIT="1", HPCAGENT_BENCH_NICE="77")
+    assert result.returncode == 0, result.stderr
+    argv = (root / "sbatch-argv-no-nice.txt").read_text().splitlines()
+    assert [flag for flag in argv if flag.startswith("--nice")] == ["--nice=77"]
+
     result = run_submit(root, TAG="llr-focus40", COLUMNS="numba", SUBMIT="1")
     assert result.returncode == 0, result.stderr
     argv = (root / "sbatch-argv-no-nice.txt").read_text().splitlines()
-    assert not any(flag.startswith("--nice") for flag in argv)
+    assert [flag for flag in argv if flag.startswith("--nice")] == ["--nice=100"]
 
 
 def test_kernels_file_unset_still_uses_the_whole_tag_roster(tmp_path: pathlib.Path) -> None:

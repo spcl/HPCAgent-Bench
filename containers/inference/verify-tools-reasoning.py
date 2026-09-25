@@ -129,7 +129,7 @@ def check_reasoning(base: str, model: str, effort: str, timeout: int, api_key: s
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", required=True, help="e.g. http://nid002664:8000")
+    ap.add_argument("--base", required=True, help="e.g. http://<node>:8000")
     ap.add_argument("--model", required=True)
     ap.add_argument("--reasoning-effort", default="max", help="empty string to omit the field")
     ap.add_argument("--timeout", type=int, default=900)

@@ -108,8 +108,8 @@ for col in ${COLUMNS}; do
     dep=(); [[ -n "${DEPEND_ON:-}" ]] && dep=(--dependency="afterany:${DEPEND_ON}")
     #: NICE=300, e.g., puts a gap-filling canon run behind the priority queue's LLR/cpfsrc waves
     #: but ahead of a background scicomp sweep without touching either queue's own submitter.
-    #: Unset (the default) keeps the ordinary priority.
-    nice=(); [[ -n "${NICE:-}" ]] && nice=(--nice="${NICE}")
+    #: Unset, the site's default nice (HPCAGENT_BENCH_NICE, scripts/site_env.sh).
+    nice=(--nice="${NICE:-${HPCAGENT_BENCH_NICE}}")
     jid=$(sbatch --parsable --no-requeue --nodes=1 --exclusive --mem=0 \
         "${gres[@]}" --time="${TIME_LIMIT}" --job-name="${JOB_PREFIX}-${JOB_TAG:-${col%%,*}}" \
         "${dep[@]}" "${nice[@]}" ${BEGIN:+--begin="${BEGIN}"} \

@@ -85,9 +85,12 @@ def table() -> dict[str, str]:
 
 
 def build_partitions(image: str) -> list[str]:
-    """Every ``#SBATCH --partition`` directive in an image directory's build.sbatch."""
-    text = (CE / image / "build.sbatch").read_text(encoding="utf-8")
-    return re.findall(r"^#SBATCH --partition=(\S+)$", text, re.M)
+    """The partition column of the images.env row named after an image directory: the hardware its
+    build.sbatch builds for (the Slurm partition itself comes from the site layer)."""
+    done = run(["bash", "-c", 'source "$1"; printf "%s\\n" "${CE_IMAGE_TABLE}"', "bash", str(CE / "images.env")], {})
+    assert done.returncode == 0, done.stderr
+    rows = [line.split() for line in done.stdout.splitlines() if line.strip()]
+    return [row[4] for row in rows if row[0] == image and row[4] != "-"]
 
 
 def run(argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:

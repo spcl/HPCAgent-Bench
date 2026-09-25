@@ -7,7 +7,6 @@
 #   ROLES=judge-release JUDGE_AMD_RELEASE_TAG=judge-mi300-<sha12> DRY_RUN=0 sbatch ...
 #
 #SBATCH --job-name=push-images
-#SBATCH --partition=mi300
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=96

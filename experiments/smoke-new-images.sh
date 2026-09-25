@@ -62,7 +62,7 @@ for name in "${candidates[@]}"; do
   [[ -n "${DEPEND_ON:-}" ]] && dep=(--dependency="afterany:${DEPEND_ON}")
   env "${sgl[@]}" \
   EDF="${edf}" INFERENCE_EDF="${edf}" sbatch --job-name="smoke-candidate-${name}" \
-    "${dep[@]}" \
+    "${dep[@]}" --nice="${NICE:-${HPCAGENT_BENCH_NICE}}" \
     --nodes="${NODES[${name}]}" \
     --output="${SCRATCH}/ce-images/logs/smoke-candidate-${name}-%j.out" \
     --error="${SCRATCH}/ce-images/logs/smoke-candidate-${name}-%j.out" "${smoke}"
