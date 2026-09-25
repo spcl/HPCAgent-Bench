@@ -488,7 +488,7 @@ def rocprof_check() -> tuple[str, str]:
     return name, exe
 
 
-def rocm_agents(timeout: float = ROCMINFO_TIMEOUT) -> list[str]:
+def rocm_agents() -> list[str]:
     """The AMD GPU ISA names ``rocminfo`` reports (``['gfx942']`` on MI300), in its order; proves the
     user-space runtime and a GPU agent."""
     exe = shutil.which(ROCM_INFO)
@@ -499,10 +499,10 @@ def rocm_agents(timeout: float = ROCMINFO_TIMEOUT) -> list[str]:
             "binary alone does not bring it). Install rocminfo/rocm-smi and put /opt/rocm/bin on PATH",
         )
     try:
-        proc = subprocess.run([exe], capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run([exe], capture_output=True, text=True, timeout=ROCMINFO_TIMEOUT)
     except subprocess.TimeoutExpired as wedged:
         raise GpuProfilerUnavailable(
-            "timed_out", f"{ROCM_INFO} wedged past {timeout:g}s and was killed: {wedged.cmd}"
+            "timed_out", f"{ROCM_INFO} wedged past {ROCMINFO_TIMEOUT:g}s and was killed: {wedged.cmd}"
         ) from wedged
     agents: list[str] = []
     for name in GFX_AGENT.findall(proc.stdout or ""):

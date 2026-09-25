@@ -25,10 +25,8 @@ reference as ``/shared/tasks/<kernel>/`` and the write folder as ``/shared/agent
 worker's sealed view shows it exactly those (``experiments/seal_worker.py``). Anything else -- a
 relative name, a path outside the mount -- lives in memory only, so this agent still reads nothing
 of the image or the mounted checkout it runs beside (``experiments/run_cluster.sh``
-``agent_ro_binds``). Added after smoke 641802 proved the gap: the prompt names ``Read``/``Edit`` as
-this agent's file tools, and a model that calls either without them registered crashed the WHOLE
-run (``agents.exceptions.ModelBehaviorError: Tool Read not found``). No shell tool: nothing here
-needs one, since ``Edit`` both creates and rewrites.
+``agent_ro_binds``). The prompt names ``Read``/``Edit`` as this agent's file tools, so both are
+registered. No shell tool: nothing here needs one, since ``Edit`` both creates and rewrites.
 
 Every model call is booked the moment it returns (:class:`agents.RunHooks` ``on_llm_end``), so the
 driver's token cap sees a round's spend while it runs and a round that ends on an exception still
