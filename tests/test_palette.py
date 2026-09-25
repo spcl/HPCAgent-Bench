@@ -198,23 +198,6 @@ def test_offload_is_a_device_and_a_language_not_a_packet():
     assert palette.color("openmp-offload+lang-skills") == palette.color("lang-skills")
 
 
-def test_a_language_wears_the_same_registered_colour_whatever_else_the_figure_holds(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
-        alone = palette.language_colors(["c"])
-        together = palette.language_colors(["fortran", "cpp", "c"])
-    assert alone["c"] == together["c"]
-    assert len(set(together.values())) == 3, together
-    assert "registry.yaml" not in caplog.text
-
-
-def test_an_unregistered_language_draws_but_warns(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
-        palette.language_colors(["a-language-nobody-registered"])
-    assert "a-language-nobody-registered" in caplog.text
-
-
 #: The interventions the PAPER's figures draw, each named with the figure it appears in. A reader
 #: carries a colour from one figure to the next, so these must be pairwise distinct GLOBALLY -- the
 #: six-hue ramp wraps at seven packets and `warn_on_collision` only ever sees one figure at a time.
@@ -301,27 +284,11 @@ def test_an_unregistered_packet_marker_is_stable_and_warns(caplog: pytest.LogCap
     assert "not in registry.yaml" in caplog.text
 
 
-def test_packet_markers_is_the_per_figure_dict_form() -> None:
-    chosen = palette.packet_markers(["cpf", "cpfsrc", "cpf"])
-    assert set(chosen) == {"cpf", "cpfsrc"}
-    assert chosen["cpf"] == palette.packet_marker("cpf")
-
-
 def test_model_colour_is_reused_by_the_packet_efficacy_panels() -> None:
     """``model_color`` used to serve only a figure whose sole axis was the model; the packet
     efficacy panels now read colour off it too, so a model's hue is the same one everywhere."""
     assert palette.model_color("qwen38") == palette.ordered_color("models", "qwen38")
     assert len({palette.model_color(m) for m in ("qwen38", "oss120b", "kimi27sglang")}) == 3
-
-
-def test_a_harness_wears_a_registered_colour_of_its_own(caplog: pytest.LogCaptureFixture) -> None:
-    """The harness comparison varies the harness and the model, so the harness takes the colour
-    channel a packet figure spends on the packet, out of the same registry."""
-    with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
-        chosen = palette.harness_colors(["claude", "miniswe", "openhands", "optimas"])
-    assert "registry.yaml" not in caplog.text
-    assert len(set(chosen.values())) == 4, chosen
-    assert chosen["claude"] == palette.harness_color("claude")
 
 
 def test_a_control_is_the_hollow_circle_in_a_lighter_shade_of_its_models_colour_in_every_figure() -> None:

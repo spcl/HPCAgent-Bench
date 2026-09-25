@@ -10,7 +10,7 @@ dropping a series must not repaint the survivors.
 panels, which invert this.** There are a few models and there will be many packets, and colour
 separates more values than shape does, so the model takes the shape and keeps it everywhere, EXCEPT
 in :mod:`hpcagent_bench.stats.figures.efficacy` and
-:mod:`hpcagent_bench.stats.figures.kernel_comparison`: those panels already split one packet per
+:mod:`hpcagent_bench.stats.figures.signed`: those panels already split one packet per
 panel (or per pair), so colour is spent there for nothing, while the few models sharing that one
 panel need telling apart at a glance when their summary marks overlap -- checked by rendering both
 orders on the same llr40 figure; a shared hue with only a circle-vs-square edge to tell two
@@ -286,11 +286,6 @@ def harness_marker(harness: str) -> object:
     return treatment_shape("harnesses", harness)
 
 
-def packet_markers(packets_: Iterable[str]) -> dict[str, str]:
-    """``{packet: marker}`` for one figure."""
-    return {p: packet_marker(p) for p in dict.fromkeys(packets_)}
-
-
 def model_markers(models: Iterable[str]) -> dict[str, str]:
     """``{model: marker}`` for one figure."""
     chosen = {m: marker(m) for m in dict.fromkeys(models)}
@@ -332,11 +327,6 @@ def model_shade(name: str, step: int) -> str:
 
 #: The shade a model's CONTROL (no packet) wears beside its treated setups: one step lighter.
 CONTROL_SHADE: int = 1
-
-
-def model_colors(names: Iterable[str]) -> dict[str, str]:
-    """``{model: colour}`` for one figure."""
-    return warn_on_collision({n: model_color(n) for n in dict.fromkeys(names)}, "model")
 
 
 #: How many (model, language) pairs the combined ramp is generated for: every registered model
@@ -439,19 +429,3 @@ def combined_slot(model: str, language: str) -> int:
 def model_language_color(model: str, language: str) -> str:
     """The colour a (model, language) pair wears, everywhere it is drawn."""
     return combined_ramp()[combined_slot(model, language)]
-
-
-def harness_color(name: str) -> str:
-    """The one colour an agent HARNESS wears. A harness figure varies the harness and the model,
-    so the harness takes the colour channel a packet figure spends on the packet."""
-    return ordered_color("harnesses", name)
-
-
-def harness_colors(names: Iterable[str]) -> dict[str, str]:
-    """``{harness: colour}`` for one figure."""
-    return warn_on_collision({n: harness_color(n) for n in dict.fromkeys(names)}, "harness")
-
-
-def language_colors(names: Iterable[str]) -> dict[str, str]:
-    """``{language: colour}`` for a figure whose ONLY axis is which language an arm asked for."""
-    return warn_on_collision({n: ordered_color("languages", n) for n in dict.fromkeys(names)}, "language")

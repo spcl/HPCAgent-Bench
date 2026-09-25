@@ -934,3 +934,19 @@ def test_a_served_kernel_without_a_task_token_total_is_dropped_loudly(
         )
 
     assert next(row for row in reported if row["leg"] == "tokens")["n_pairs"] == 6
+
+
+@pytest.mark.parametrize(
+    ("arm", "recorded", "want"),
+    [
+        ("harness20-qwen38-claude", ["", "c", "c"], "c"),
+        ("harness20-caveman-qwen38-c", ["", "fortran"], "c"),
+        ("harness20-qwen38-claude", ["", ""], ""),
+    ],
+)
+def test_an_arm_named_without_a_language_takes_the_language_its_rows_recorded(
+    paired_arms: ModuleType, arm: str, recorded: list[str], want: str
+) -> None:
+    """A harness arm's name carries no language token; its rows do, so it pairs with its ``-c`` treatment."""
+    observations = pd.DataFrame({"arm": [arm] * len(recorded), "language": recorded})
+    assert paired_arms.arm_language(observations, arm) == want

@@ -61,7 +61,7 @@ def compare_slice(
     leg: str,
     control: pd.DataFrame,
     treated: pd.DataFrame,
-    repeats: population.RepeatPolicy = "latest",
+    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     over: population.KernelPolicy = efficacy_figures.SPEEDUP_OVER,
     card: cost.CostModel | None = None,
 ) -> dict[str, float | str | int] | None:  # fmt: skip
@@ -103,7 +103,7 @@ def compare_slice(
 def points(
     control: pd.DataFrame,
     treated: pd.DataFrame,
-    repeats: population.RepeatPolicy = "latest",
+    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     over: population.KernelPolicy = efficacy_figures.SPEEDUP_OVER,
     card: cost.CostModel | None = None,
 ) -> pd.DataFrame:
@@ -220,7 +220,7 @@ def one_treatment_panel(
     treatment: str,
     roster: Sequence[str],
     include_incomplete: bool = False,
-    repeats: population.RepeatPolicy = "latest",
+    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     over: population.KernelPolicy = efficacy_figures.SPEEDUP_OVER,
     card: cost.CostModel | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame] | None:

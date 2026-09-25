@@ -188,7 +188,7 @@ id_ecdsa*
 *.pfx
 
 # --- Local-only notes, drafts and scratch ---
-paper/
+/paper/
 HANDOFF_ISSUES/
 BACKLOG*.md
 dmidecode_output
@@ -237,3 +237,7 @@ experiments/mwd-final-*/
 
 # anonymous.4open.science replacement terms (identifying, never committed)
 .anonymize-terms.txt
+
+# The paper's reproducibility folder ships its own helpers and result tables.
+!/reproducibility/paper/lib/
+!/reproducibility/paper/**/*.csv

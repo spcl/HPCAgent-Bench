@@ -12,6 +12,7 @@ Neutrals carry a slight cool bias rather than being a pure grey, so they sit und
 blues without looking like a different rendering of the page.
 """
 
+import enum
 import dataclasses
 import itertools
 import logging
@@ -65,17 +66,6 @@ class StatInk:
 
     median: str = "#3b6fd4"  # median bar; blue so the geomean tick reads against it
     geomean: str = "#d4772a"  # geomean tick; orange, far from the median blue
-    sample: str = "#2a78d6"  # one sample's own histogram / ECDF / violin
-    fit: str = "#d64550"  # a fitted curve drawn over that sample
-    raw_point: str = "#1baf7a"  # jittered raw samples, apart from the sample fill
-    no_gain: str = "#7a5cc0"  # correct but not faster; no model wears this purple
-    wrong: str = "#d64550"  # an incorrect answer
-    ungraded: str = "#9a9aa0"  # a grade that never ran; grey, blames nobody
-    track: str = "#eeeef1"  # roster surface a bar fills; pale so it is no series
-    parallel: str = "#2f8f55"  # parallelism bucket: parallel loops
-    scan: str = "#8a6fd4"  # parallelism bucket: scans
-    timestep: str = "#c9a227"  # parallelism bucket: time-step loops
-    residual: str = "#c0392b"  # parallelism bucket: sequential residue
 
 
 STAT_INK = StatInk()
@@ -153,8 +143,6 @@ class TypeScale:
     annotation_pt: float
     line_width: float
     marker_size: float
-    #: A legend swatch's marker size, in points.
-    legend_mark_pt: float
 
     @property
     def hairline_width(self) -> float:
@@ -167,8 +155,8 @@ class TypeScale:
         return self.marker_size / 2.0
 
 
-AUTHOR_SCALE = TypeScale(TICK_PT, LABEL_PT, SUBTITLE_PT, TICK_PT, ANNOTATION_PT, 1.6, 6.0, 5.0)
-PRINT_SCALE = TypeScale(PRINT_TICK_PT, PRINT_LABEL_PT, PRINT_LABEL_PT, PRINT_LEGEND_PT, PRINT_TICK_PT, 1.0, 4.0, 5.0)
+AUTHOR_SCALE = TypeScale(TICK_PT, LABEL_PT, SUBTITLE_PT, TICK_PT, ANNOTATION_PT, 1.6, 6.0)
+PRINT_SCALE = TypeScale(PRINT_TICK_PT, PRINT_LABEL_PT, PRINT_LABEL_PT, PRINT_LEGEND_PT, PRINT_TICK_PT, 1.0, 4.0)
 
 
 def text_sizes(fig: Figure) -> list[tuple[str, float]]:
@@ -382,7 +370,12 @@ def ratio_label(value: float) -> str:
 #: axis in ratio units, majors at powers of two. ``log2``: a LINEAR axis holding ``log2(ratio)``
 #: (the efficacy speedup axes), majors at whole exponents. ``token``: a log10 token axis.
 #: ``count``: a linear count from 0 to N (the efficacy success row).
-MinorKind = Literal["ratio", "log2", "token", "count"]
+class MinorKind(enum.StrEnum):
+    RATIO = "ratio"
+    LOG2 = "log2"
+    TOKEN = "token"
+    COUNT = "count"
+
 
 #: Where the minors of a ONE-octave ratio axis sit inside each octave, as multiples of its lower
 #: major: the quarters, i.e. the integers 5x, 6x, 7x between 4x and 8x.
@@ -462,11 +455,11 @@ def minor_positions(kind: MinorKind, majors: Sequence[float], low: float, high: 
     units: :func:`ratio_minor_exponents` on the exponents of a ``ratio`` axis (mapped back to
     ratios) or directly on a ``log2`` one, :func:`token_minor_values` on a ``token`` one,
     :func:`count_minor_values` on a ``count`` one."""
-    if kind == "count":
+    if kind == MinorKind.COUNT:
         return count_minor_values(majors, low, high)
-    if kind == "token":
+    if kind == MinorKind.TOKEN:
         return token_minor_values(majors, low, high)
-    if kind == "log2":
+    if kind == MinorKind.LOG2:
         return ratio_minor_exponents(majors, low, high)
     if low <= 0.0:
         return []
@@ -558,7 +551,7 @@ def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, 
             # NOT LogFormatterSciNotation: it returns "" for a 5x10^n tick even with
             # labelOnlyBase=False. This labels every major it is given.
             target.set_major_formatter(FuncFormatter(decade_label))
-        minor_ticks(target, "ratio" if log_base == 2.0 else "token")
+        minor_ticks(target, MinorKind.RATIO if log_base == 2.0 else MinorKind.TOKEN)
     else:
         target.set_major_locator(MaxNLocator(nbins=8, steps=[1, 2, 2.5, 5, 10]))
         target.grid(False, which="minor")  # pyright: ignore[reportUnknownMemberType]
