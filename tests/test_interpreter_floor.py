@@ -165,10 +165,12 @@ def scope_faults(body: list[ast.stmt], bound: set[str], starred: bool, aliases: 
     """Walk one scope in execution order, checking each eager annotation against what is bound."""
     faults: list[str] = []
     for stmt in body:
+        # PEP 695: a generic def/class binds its type parameters for its own annotations and body
+        params = {param.name for param in getattr(stmt, "type_params", ())}
         for annotation in annotations_of(stmt):
-            faults.extend(annotation_faults(annotation, bound, starred, aliases))
+            faults.extend(annotation_faults(annotation, bound | params, starred, aliases))
         if isinstance(stmt, ast.ClassDef):
-            faults.extend(scope_faults(stmt.body, set(bound), starred, aliases))
+            faults.extend(scope_faults(stmt.body, bound | params, starred, aliases))
         for block in blocks(stmt):
             faults.extend(scope_faults(block, set(bound), starred, aliases))
         bound.update(bindings(stmt))
@@ -192,6 +194,14 @@ FLOOR_DEFECTS = (
     ),
     ("_OVERRIDES: dict[str, ConfigValue] = {}\nConfigValue = bool | int | str | None\n", eager_annotation_faults, True),
     ("def lookup(key: str) -> 'Entry' | None:\n    return None\n", eager_annotation_faults, True),
+    # a PEP 695 alias is lazy and unions at runtime; a PEP 695 parameter is bound in its own scope
+    (
+        "type Entry = dict[str, 'Later']\ndef lookup(key: str) -> Entry | None:\n    return None\n",
+        eager_annotation_faults,
+        False,
+    ),
+    ("class Box[T]:\n    def get(self) -> T | None:\n        return None\n", eager_annotation_faults, False),
+    ("def first[T](items: list[T]) -> T | None:\n    return None\n", eager_annotation_faults, False),
     (
         "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import pandas as pd\ndef rows(f: pd.DataFrame) -> None: ...\n",
         eager_annotation_faults,
@@ -299,6 +309,9 @@ def test_no_module_postpones_annotations() -> None:
         "typeis-guarded",
         "forward-name",
         "string-union",
+        "pep695-alias-union",
+        "pep695-generic-class",
+        "pep695-generic-def",
         "type-checking-only",
         "type-checking-quoted",
         "string-alias-union",

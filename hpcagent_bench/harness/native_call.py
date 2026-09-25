@@ -128,33 +128,31 @@ GUILLOTINE_RETRIES = 1
 SPILL_BYTES = 64 * 1024**2
 
 #: One kernel argument value: an array for a pointer argument, a Python or numpy number for a scalar.
-KernelValue: TypeAlias = "np.ndarray | np.generic | int | float"
+type KernelValue = np.ndarray | np.generic | int | float
 #: One call's inputs, by ABI argument name.
-KernelData: TypeAlias = "dict[str, KernelValue]"
+type KernelData = dict[str, KernelValue]
 #: One call's outputs, by ABI argument name. Always host arrays, whatever the residency.
-OutputMap: TypeAlias = "dict[str, np.ndarray]"
+type OutputMap = dict[str, np.ndarray]
 #: A value on its way across the fork boundary: an array at or above SPILL_BYTES is a file ref.
-SpilledValue: TypeAlias = "KernelValue | SpilledArray"
+type SpilledValue = KernelValue | SpilledArray
 #: An output map in that form.
-SpilledMap: TypeAlias = "Mapping[str, SpilledValue]"
+type SpilledMap = Mapping[str, SpilledValue]
 #: One followup's raw outputs, spilled to files. Never a verdict: the expected outputs never enter
 #: the process running agent code.
-FollowupResult: TypeAlias = "SpilledMap"
+type FollowupResult = SpilledMap
 #: The same, as it crosses back from the child.
-SpilledFollowupResult: TypeAlias = "SpilledMap"
+type SpilledFollowupResult = SpilledMap
 #: What the measurement child hands back: outputs, ns samples, peak and per-call ru_maxrss, the
 #: followup results, device bytes, the GPU runtimes it loaded, and the timing probes.
-ChildPayload: TypeAlias = (
-    "tuple[SpilledMap, list[int], int, int, Sequence[SpilledFollowupResult], int, str, TimingProbe]"
-)
+type ChildPayload = tuple[SpilledMap, list[int], int, int, Sequence[SpilledFollowupResult], int, str, TimingProbe]
 #: An array buffer in whichever module the call path uses: numpy on the host, cupy on the device.
-ArrayBuffer: TypeAlias = "np.ndarray | DeviceBuffer"
+type ArrayBuffer = np.ndarray | DeviceBuffer
 #: One argument of a marshalled C-ABI call: a cffi pointer, or a scalar passed by value.
-CArgument: TypeAlias = "FFI.CData | int | float"
+type CArgument = FFI.CData | int | float
 #: The kernel entry point cffi hands back. The ABI declares it ``void``, so it answers nothing.
-CKernel: TypeAlias = "Callable[..., None]"
+type CKernel = Callable[..., None]
 #: ``(func_name, input_args, output_args)`` for a python delivery -- picklable, so it survives spawn.
-PythonMeta: TypeAlias = "tuple[str, tuple[str, ...], tuple[str, ...]]"
+type PythonMeta = tuple[str, tuple[str, ...], tuple[str, ...]]
 
 
 class DevicePointer(Protocol):
