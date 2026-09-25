@@ -1,239 +1,106 @@
-# Translator Desugarings & Backend Tool Bugs
+# Translator desugarings and backend tool limits
 
-Living ledger for the numpy->{C, C++, Fortran, numba, pythran, jax, pluto} translators
-(`hpcagent_bench/numpy_translators/`). Companion to
-[canonical_numpy_form.md](canonical_numpy_form.md) (the subset a kernel must already be in) --
-this doc is what still has to happen *after* a kernel is in that form. Two intertwined things
-are tracked here:
+The numpy-to-X translators live in `hpcagent_bench/numpy_translators/src/`: `numpyto_common`
+(frontend, lowering, library-node expansion, desugarings) and one emitter per target (`numpyto_c`
+for C, C++ and pluto input, `numpyto_fortran`, `numpyto_numba`, `numpyto_pythran`, `numpyto_jax`,
+`numpyto_cupy`). This page lists what they rewrite for a kernel already in
+[canonical NumPy form](canonical_numpy_form.md), and what they still cannot do.
 
-1. **Desugarings / emit-helpers we add** so a backend can express a kernel it otherwise
-   rejects, or so an external tool (pluto, XLA) emits *correct / faster* code.
-2. **Backend tool bugs** -- defects in external tools (`polycc`/`pluto`/`pet`/CLooG, XLA)
-   that we cannot fix in our lowering, with the representative kernels and the sanctioned
-   disposition (auto reclassify-skip, or an emit-shape fix that makes the tool emit correct code).
+## Emit one kernel
 
-The e2e gate (`tests/test_e2e_numerical.py`) translates each kernel to every backend and
-compares against the kernel's own numpy. It is **strict-green**: `ok` passes, `skip:*` skips,
-`FAIL:*` reds the build. There is **no** xfail-tolerance file. A pair that legitimately cannot
-pass must therefore be classified as a
-`skip:*` (a backend/tool that genuinely cannot express the kernel), never left as a `FAIL:*`. This
-doc is the *why* behind each such disposition.
+`numpyto --target {c,c_omp,cpp_isopar,cpp_omp,cupy,fortran,fortran_omp,numba,pluto,polly,pythran}`
+is the console entry; it takes a bench-info JSON that the harness synthesizes from the manifest.
+From Python:
 
-> Rule of thumb: **we never paper over a tool miscompile with a tuning flag** (see
-> `tests/numerical_oracle.py` `_run_pluto`). If our emitted C/Fortran is bit-exact vs numpy and the
-> tool still produces wrong output, that is a tool bug -- reclassify it as a skip, do not mutate emit
-> just to placate the tool unless the change is a legitimately better shape. For pluto this is
-> **automatic**: a post-transform `FAIL:*` whose sibling `c` backend is `ok` is recorded as
-> `skip:unsupported:pluto-miscompile:*` (see Sec. 2).
+```python
+from hpcagent_bench import paths
+from hpcagent_bench.spec import BenchSpec
+from hpcagent_bench.emit_bridge import emit_kernel
 
----
+spec = BenchSpec.load("gemm")
+src = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_numpy.py"
+emit_kernel(spec, src, "out/", target="c")  # out/gemm_fp64.{c,cpp}, pluto input, binding JSON
+```
 
-## 1. Desugarings & emit-helpers we own
+## The gate
 
-Status legend: **landed** = merged + unit-tested; **in-progress** = agent building;
-**planned** = designed, not yet built.
+`tests/test_e2e_numerical.py` translates each kernel to `c`, `cpp`, `fortran`, `numba`, `pythran`,
+`jax` and `pluto`, runs it, and compares against the NumPy reference within the precision's
+tolerance. `tests/numerical_oracle.py` gives each `(kernel, backend)` pair one status:
 
-### 1a. Op-support desugarings (make a kernel translatable at all)
+- `ok` passes.
+- `skip:*` skips: `skip:not-installed`, `skip:unsupported:*` (the backend cannot express the
+  kernel), `skip:too-long` (jax past `HPCAGENT_BENCH_JAX_FORK_TIMEOUT_S`, default 180 s),
+  `skip:unsupported:pluto-miscompile:*` (see below), `skip:min-precision:*`, `skip:sparse` (sparse
+  kernels run in `hpcagent_bench/numpy_translators/tests/test_sparse_oracle.py`).
+- `FAIL:*` fails the build. There is no xfail list; a pair that cannot pass needs a `skip:*`
+  reason in `numerical_oracle.py`.
 
-| Op / pattern | Kernels needing it | Mechanism | Location | Status |
-|---|---|---|---|---|
-| module-level numeric tuple/list const inline (`_CW=(...)`) | laplacian_stencil_3d | fold to literal tuple (`seq_consts`) so `enumerate` unrolls to compile-time weights | `numpyto_common/frontend.py` `_inline_module_constants` | landed |
-| `.ravel()`/`.flatten()` -> `np.reshape(x,(-1,))` | poisson_cg_3d (`r.ravel()@r.ravel()`) | method rewriter | `numpyto_common/lowering.py` `_MethodCallRewriter` | landed |
-| `enumerate(seq, start=s)` + literal-tuple unroll | laplacian_stencil_3d | `_EnumerateZipRewriter` start= handling + unroll | `numpyto_common/lowering.py` | landed |
-| inline-hoist output shape for `roll`/`cholesky`/`tril`/`triu`/`reshape(-1)` | poisson, laplacian | `_CallHoister._derive_output_shape` branches | `numpyto_common/lib_nodes.py` | landed |
-| `np.diag` (1-D->matrix w/ k offset; 2-D->delegate `expand_diagonal`) | ls3df_scf (Lanczos tridiagonal) | `expand_diag` zero-then-write; shape via `_iter_extent_of` | `numpyto_common/lib_nodes.py` | landed |
-| `np.fft.fftfreq(N, d=)` | ls3df_scf | `expand_fftfreq`; even/odd neg-freq wrap; real output | `numpyto_common/lib_nodes.py` | landed |
-| `np.einsum` with non-Name operand (`psi_frag[f]`) | fragment_patch_density, ls3df_scf | materialize operand to fresh scratch buffer, then expand | `numpyto_common/lib_nodes.py` `expand_einsum` | landed (caveat: Subscript operand nested *inside a BinOp* still will not hoist) |
-| `np.linalg.eigvalsh(A)` (eigenvalues-only) | ls3df_scf (`_upper_bound`) | extend eigh cyclic-Jacobi, eigenvalues-only single-Name target | `numpyto_common/numpy_desugar.py` | landed |
-| reduction method on a Call receiver (`np.abs(...).sum()`) | ls3df_scf | hoist Call receiver into temp before method rewrite | `numpyto_common/lowering.py` | landed |
-| computed index in subscript (`U[np.argmax(...), j]`) | rayleigh_ritz_rotation | hoist non-trivial Call index into temp Name | `numpyto_common/lowering.py` | landed |
-| arg-reduction over a computed operand (`idx = np.argmax(np.abs(v))`) | native capability (assignment-RHS sibling of the subscript-index form) | add `argmax`/`argmin` to the reduction-operand hoist set so the non-Name operand spills to a `__cb` temp before the arg-reduction scaffold (which requires a Name) runs | `numpyto_common/lib_nodes.py` `LibNodeRewriter.visit_Call` | landed |
-| whole-array simultaneous rebind (`X,Y,sigma = Y,Ynew,sigma_new`) | chebyshev_filter_subspace, ls3df_scf | `ShapeTableTupleSplit` copy-through temp buffers (not pointer-swap) | `numpyto_common/lowering.py` | landed |
-| **index normalization** -- chained / ellipsis / trailing subscript -> canonical Name-base full-`Tuple` (`A[f][...,0]` -> `A[f,...,0]`) | ls3df_scf, fragment_patch_density | normalize the index BEFORE libnode-expand so one code path handles every subscript form | `numpyto_common/lowering.py` `_lp_normalize_index_access` | landed |
-| `np.meshgrid(..., indexing=)` multi-output | ls3df_scf | `expand_meshgrid` + multi-output tuple-unpack hoist | lib_nodes + lowering | planned |
-| `np.ix_` open-mesh gather / scatter-add | fragment_patch_density, ls3df_scf | new advanced-index lowering to nested loops | lowering (+lib_nodes) | planned |
-| keyword-only config flags the harness never passes (`*, noncolin=False, deeq_nc=None`) | cegterg (numba: `expected 42, got 25`) | fold through the native frontend's own `_fold_default_args`, numba + pythran | `numpyto_common/numpy_desugar.py` `fold_kernel_defaults` | landed |
-| `np.fft.*` spelled inside a `return` | cegterg (`_fft_g2r`) | bind the value, lower the binding to the loop DFT, return the name | `numpyto_common/numpy_desugar.py` `_FftInline.visit_Return` | landed |
-| `x.reshape(..., order="F")` (numba: `assert not kws`) | cegterg | `np.ascontiguousarray(x.T).reshape(reversed).T` | `numpyto_common/numpy_desugar.py` `ReshapeFortranOrderInline` | landed |
-| `dtype=bool`; real `@` complex (numba dtype-strict typing) | cegterg (`conv`, `deeq @ ps`) | `np.bool_`; cast the real operand to the complex one's `.dtype`, kinds read from REACHABLE call sites | `numpyto_common/numpy_desugar.py` `NumbaDtypeFixups`, `infer_param_kinds` | landed |
-| helper flag every caller passes as one literal (numba types both arms) | cegterg (`lda_plus_u=False, wfcu=None`) | substitute the literal, then `_DeadBranchElim`; never where it would be subscripted/called | `numpyto_common/numpy_desugar.py` `fold_constant_helper_arguments` | landed |
-| rank of `X[b, :]` with `b = slice(lo, hi)`, of `x if x.ndim == 2 else ...`, of a helper's result (numba) | cegterg (`X_b`, `vrs2`, `r`) | `SliceObjectInline`; `NdimFold` over ranks every reachable call site agrees on; `helper_return_ranks` into the rank table | `numpyto_common/numpy_desugar.py` | landed |
-| `(n,1)` against `(n,m)` broadcast, into a partial slice or a name the value reads; `-x[None, :]` (numba parfor `Sizes ... do not match`) | cegterg (`g2[:, None] * X_b`, `r * vrs2[:, ip][:, None]`, `-ew[..][None, :] * ritz_s`) | `_OuterBroadcastPeel` fills a temp then stores it; `_drop_newaxes` sees through a unary op | `numpyto_common/numpy_desugar.py` | landed |
+```sh
+HPCAGENT_BENCH_E2E_BACKENDS=c,pluto pytest tests/test_e2e_numerical.py -k "adi-" -rs --maxfail=10
+```
 
-### 1b. Kernel-side faithful refactors (when the construct is genuinely un-static)
+`HPCAGENT_BENCH_E2E_PRECISION=fp32` sweeps another precision; `HPCAGENT_BENCH_E2E_SUBSET=1` runs
+the per-push slice. jax runs a second time at sizes capped to 12, since the eager path is slow.
 
-Some constructs are not a general translator capability worth adding; we instead rewrite the
-kernel to a **bit-identical** translator-friendly form (verified `max|Delta|=0`).
+## Desugarings
 
-| Kernel | Construct removed | Replacement | Status |
-|---|---|---|---|
-| ls3df_scf | Python-list Lanczos accumulators (`alphas=[]`/`.append`) | preallocated `np.zeros(_NLANC)` + integer counters | landed (bit-identical S+M) |
-| ls3df_scf | `b_frag=[None]*n` None-cache | `np.zeros(n)` + boolean valid-mask (preserves freeze-on-first-iter; NOT eager recompute -- the bound is intentionally frozen while V_tot drifts) | landed |
+All in `numpyto_common` unless noted. Each keeps the NumPy result.
 
-> Open follow-up: `np.diag(alphas[:na])` uses a runtime-counter slice (early break on
-> `beta<1e-12`). If the runtime-length slice will not lower to static C/Fortran, switch to
-> always running the full `_NLANC` steps -> static `_NLANCx_NLANC` tridiagonal; the zero
-> tail decouples so `eigvalsh(...).max()` is numerically identical.
-
-### 1c. Emit-shape desugarings that help *pluto* emit correct code (planned)
-
-These do **not** change our C's correctness (plain-C stays bit-exact); they change the *shape*
-of the scop so `pet`/`pluto` stops miscompiling it. Gated on the pluto backend where noted.
-
-| Fix | Clears | Mechanism | Location | Status |
-|---|---|---|---|---|
-| #1 `np.pad` edge-clamp -> `max(0, min(d-1, s))` | stencil_3d, stencil_4d, stencil_4d_vc, vector_stencil_4d, vector_stencil_4d_vc | replace two guard-`if`s (pet: "data dependent conditions not supported" -> 159 empty stmts -> out_grid all-zeros) with a single min/max clamp keeping the subscript a bare name | `numpyto_common/lib_nodes.py` `_remap` edge branch | planned |
-| #2 non-unit-stride loop -> unit counter + affine induction | tsvc_2_s116 (+probe unrolled_dense, reroll_saxpy7, strided tsvc) | when `self.pluto` and `abs(step)!=1` constant, emit `int64 v=lo+step*__piv;` over a unit `__piv` (pet models `i+=4` as unit stride -> wrong indices) | `numpyto_c/emit.py` `_emit_for` | planned |
-| #3 scalar full-reduction -> accumulate into destination element | lda_xc_potential (+likely ecrad_clamped_reduction, quasi_affine_reduce_*, atax-class) | retarget `float(np.sum(...))` temp to `out[0]` when it has a single downstream array-element store (pet drops the scalar `__cb=0` init+accum -> uninit read) | lib_nodes / numpy_desugar | planned |
-
-### 1c-2. Scope-aware scop emission (landed)
-
-pet rejects the **entire** region a construct it cannot model lands in, so bracketing a whole
-function in one `#pragma scop` costs every loop nest in it the moment a single `memset` or
-`malloc` appears anywhere in the kernel -- that pattern put 8 corpus kernels in a
-"pet-unsupported" bucket for no reason but scope size. The emit is per-NEST instead:
-`numpyto_c.emit.pluto_scop_regions` runs at every block depth from `_CBodyEmitter.emit_block` and
-wraps each *scopable run* of statements in its own region.
-**Several scops per translation unit is the normal output, not a fallback.**
-
-| Piece | What it does | Location |
+| Pattern | Rewrite | Where |
 |---|---|---|
-| region splitting | maximal runs of scopable statements, split at each unscopable one; region spans first loop to last loop, so a loop-less statement at either end stays outside where POLYCC-009 cannot drop it | `numpyto_c/emit.py` `pluto_scop_regions` |
-| per-nest, every depth | called from `emit_block`, so a malloc before an *inner* nest scopes that inner nest rather than losing the whole outer one; an enclosing run subsumes what its children marked (scops do not nest) | `numpyto_c/emit.py` `_CBodyEmitter.emit_block` |
-| unscopable set | `malloc`/`calloc`/`realloc`/`free`/`memset`/`memcpy`/`memmove`/`while`, plus an `if` whose condition reads an array or a float (POLYCC-013) | `_PLUTO_UNSCOPABLE_RE`, `_pluto_unscopable` |
-| memset desugar | a zero/one fill emitted **in the body** becomes the affine loop nest it is, so it can stay inside a region instead of splitting it; the fill in the pre-scop declaration block keeps `memset` | `numpyto_c/emit.py` `_fill_loop_stmt`, `_body_fill_stmt` |
-| multi-scop detector | `scop_nonaffine_reason` scans **every** region, not just the first, so a gather in a later region is not missed | `hpcagent_bench/pluto_affine.py` |
-| no-region decline | a TU that marks no region is not a scop input -- polycc would hand it straight back and the column would time untransformed C | `pluto_affine.has_scop`, `pluto_transform.scop_inputs`, `numerical_oracle._run_pluto` |
-| pet re-parse `omp.h` | polycc re-parses its own output per additional scop; the stub header makes multi-region TUs transform (POLYCC-011) | `pluto_transform.PET_OMP_SHIM` |
+| module-level numeric tuple (`_CW = (...)`) | folded to a literal so `enumerate` unrolls | `frontend._inline_module_constants` |
+| `enumerate(seq, start=s)` over a literal | unrolled | `lowering._EnumerateZipRewriter` |
+| `.ravel()`, `.flatten()` | `np.reshape(x, (-1,))` | `lowering._MethodCallRewriter` |
+| chained, ellipsis or trailing subscript, `A[f][..., 0]` | one full index, `A[f, ..., 0]` | `lowering._lp_normalize_index_access` |
+| call in an index or a reduction operand, `U[np.argmax(v), j]` | hoisted into a temporary | `lowering`, `lib_nodes.LibNodeRewriter` |
+| simultaneous rebind, `X, Y = Y, Ynew` | copy through temporaries | `lowering.ShapeTableTupleSplit` |
+| `np.diag`, `np.fft.fftfreq`, `np.meshgrid`, `np.einsum` with a subscript operand | loop nests | `lib_nodes.expand_diag`, `expand_fftfreq`, `expand_meshgrid`, `expand_einsum` |
+| `np.linalg.eigvalsh` | eigenvalue-only cyclic Jacobi | `numpy_desugar` |
+| `A[np.ix_(i, j, k)] = / += rhs` | loop nest over the index vectors | `numpy_desugar` |
+| `np.pad(mode="edge")` | one clamped index expression, no guard `if` | `lib_nodes` (`_remap`) |
+| `s = 0; for k: s += f(k); T[idx] (+)= s` | reduce into `T[idx]` directly | `lib_nodes._retarget_scalar_accumulator` |
+| keyword-only flags the harness never passes | defaults folded | `numpy_desugar.fold_kernel_defaults` |
+| helper flag every caller passes as one literal | substituted, dead branch dropped | `numpy_desugar.fold_constant_helper_arguments` |
+| `x.reshape(..., order="F")` | `np.ascontiguousarray(x.T).reshape(reversed).T` | `numpy_desugar.ReshapeFortranOrderInline` |
+| `dtype=bool`; real `@` complex (numba) | `np.bool_`; real operand cast to complex | `numpy_desugar.NumbaDtypeFixups` |
+| `b = slice(lo, hi)`; `x if x.ndim == 2 else ...` (numba) | inlined slice; branch folded by rank | `numpy_desugar.SliceObjectInline`, `NdimFold` |
+| `(n, 1)` against `(n, m)` broadcast into a partial slice (numba) | fill a temporary, then store | `numpy_desugar._OuterBroadcastPeel` |
+| `.real` / `.imag` of a complex array | array dtype narrowed to real | `lowering._fix_real_scalar_dtypes` |
 
-**POLYCC-012** -- polycc's own scratch declarations collide at function scope between two
-transformed scops. Bracketing each region in `{ }` does not help (the `--pet` path regenerates the
-function from pet's AST rather than splicing text), so the *output* half is repaired by merging the
-duplicate declarations in `pluto_transform.dedupe_scratch_declarations`. The other half, where
-polycc's own re-parse of that output fails mid-run, is documented and not worked around.
+## Pluto input
 
-### 1d. JAX compile-time heuristics (help XLA emit faster) (planned)
+`numpyto_c.emit.pluto_scop_regions` wraps each maximal run of scopable statements in its own
+`#pragma scop`, at every block depth, so one `malloc` or `memset` does not cost the whole
+function. Unscopable: `malloc`, `calloc`, `realloc`, `free`, `memset`, `memcpy`, `memmove`,
+`while`, and an `if` whose condition reads an array or a float. A zero or one fill inside the body
+is emitted as a loop nest so it stays scopable. A translation unit with no region is not pluto
+input. `hpcagent_bench/pluto_transform.py` runs `polycc --pet --tile --parallel` (`POLYCC_ARGS`)
+and merges duplicate scratch declarations across scops.
 
-Root cause: the oracle exercises the **eager** path (`numpyto_jax/core.py` `_emit_eager_body`),
-which copies Python control flow *verbatim* -- every static loop unrolls to trip-count distinct
-XLA primitives (first-call compile cost) and trip-count sequential dispatches (per-call cost).
-A mature loop classifier (`_classify_for` -> VECTORIZE/FORI/WHILE) already exists but is only
-reached on the dormant jit path. Route eager emission through it.
+Measured polycc, pet and Pluto defects live in one registry, with the translator change that
+avoids each one:
 
-| Heuristic | Trigger | Emit | Win | Status |
-|---|---|---|---|---|
-| **H1** vectorize independent elementwise/stencil loops | `_classify_for==VECTORIZE` (write-once `a[i]=f(...)`) | whole-array op via existing `_devectorize_index` | removes recurring `.at[i].set` dispatch; kills large-preset `skip:too-long` | planned (first PR) |
-| H2 re-roll large static carry loops | static `range`, trip>=8, FORI | `lax.fori_loop` (body compiled once) | O(trip)->O(1) first-call compiles | planned |
-| H3 `lax.scan` for stacked carry-recurrence | FORI + monotone `out[i]=` slot | `lax.scan` | fewer scatters, better fusion | planned |
-| H4 cap unroll to small (<8) static loops | complement of H2 | keep verbatim unroll | guard rail (small loops fuse cheaply) | policy |
+```sh
+python -c "from hpcagent_bench.pluto_affine import KNOWN_POLYCC_ISSUES as K
+for i in K.values(): print(i.id, i.severity, i.avoided_by or 'OPEN')"
+```
 
-`skip:too-long` = jax fork exceeds `JAX_FORK_TIMEOUT_S=180` (`numerical_oracle.py:50`); e2e retries
-once at reduced `_JAX_E2E_MAX_SIZE`. It is a **perf** signal, not a correctness FAIL -- jax is
-verified correct at small size. (The concrete list of currently-skipped kernels is being swept.)
+A pluto result that fails while the same kernel's `c` backend is `ok` becomes
+`skip:unsupported:pluto-miscompile:*`: our C proves the scop correct, so the fault is polycc's.
+If `c` also fails, the pluto pair stays `FAIL:*`.
 
-### 1e. LS3DF driver landed micro-fixes (dtype + shape folding)
+## Open limitations
 
-Small shared-frontend fixes the LS3DF family forced out; each is bit-exact and helps every native
-backend. All **landed**.
-
-- **array-level `.real` / `.imag` / `creal` dtype narrowing** -- an array result of `ifftn(...).real`
-  narrows the *array* dtype to real (`double*`, not `double _Complex*`), not just scalars. C
-  tolerated the implicit complex->real narrow (imag~=0); C++ `-std=c++20` refused it. Extends the
-  `_fix_real_scalar_dtypes` / `_walk_complex` / `_REAL_FOR_COMPLEX` machinery to arrays
-  (`numpyto_common/lowering.py`).
-- **`.shape` / `.size` on a newaxis / subscript base** folded via `_iter_extent_of` (so
-  `x[:, None].shape` / `A[f].size` resolve without a Name base).
-- **`np.fft.fftfreq` / `fftn` two-level attribute shapes** resolved for the `fft.*` result temps.
-- **tuple-local propagation** (`shp = Y.shape` then `shp[0]`) -- the shape tuple flows through the
-  local so later subscripts of it fold.
-- **method-form `.reshape` / `.T` on a non-Name base** (`A[f].T`, `expr.reshape(...)`).
-- **`np.eye` inline hoist** (identity materialized as a fresh local).
-- **per-call-unique `linalg.inv` buffer** -- each `inv(...)` gets its own scratch so two live
-  inverses do not alias.
-- **`expand_copy` allocation marker** -- a whole-array copy target auto-declares its local.
-- **mutated-`__inl*`-counter exclusion** -- an inlined-call counter that is mutated is not treated
-  as a foldable constant.
-- **compound-token `.size` -> BinOp** -- a `.size` over a multi-axis base lowers to the product BinOp.
-
----
-
-## 2. Backend tool bugs (external, not our lowering)
-
-**Pluto verdict (root-caused live):** for every `::pluto` failure our emitted C is **bit-exact vs
-numpy** (`run_kernel(..., only_backends={'c'})` -> `ok`). `polycc` accepts the affine scop (RC=0)
-then silently miscompiles. Of 45 pairs: 3 are correct non-affine skips, ~8-12 are sidesteppable by
-an emit-shape change (Sec. 1c), and the rest are irreducible tool defects that auto-classify as
-`skip:unsupported:pluto-miscompile` (c-ok guarded).
-
-| Signature | Representative kernels | Root cause | Verdict | Disposition |
-|---|---|---|---|---|
-| non-affine indirection | edge_laplacian, unrolled_indirect, reroll_gather | data-dependent index; outside polyhedral model | correct-skip (not a fail) | `skip:unsupported` |
-| pad edge guard-`if` rejected -> out_grid all-zeros | stencil_3d/4d/4d_vc, vector_stencil_4d/_vc | `pet_to_pluto.cpp:565` "data dependent conditions not supported" | **ours (emit-shape)** | fix #1 -> `ok` |
-| non-unit stride mismodeled | tsvc_2_s116 (+probe) | pet models `i+=4` as unit stride | **ours (emit-shape)** | fix #2 -> `ok` |
-| scalar full-reduction init+accum dropped | lda_xc_potential (+likely ecrad, quasi_affine_reduce_*) | pet drops `__cb=0` init + accumulation -> uninit read | **mixed (emit-sidesteppable)** | fix #3 -> `ok` |
-| reverse-loop double-negation OOB crash (SIG6/11) | adi, thomas_solve | pluto schedules on `-j`, emits subscript `- -t`=-j -> heap OOB; textbook `for(j=N-2;j>=1;j--)` breaks identically | **pluto bug** | auto-skip (pluto-miscompile) |
-| skew hyperplane int64 overflow | hotspot | 32-bit tile bound with ~2^6^2 literal; "numerator too large" | **pluto bug** | auto-skip (pluto-miscompile) |
-| smartfuse INT64_MAX-sentinel x symbolic bound | **kleinman_bylander_nonlocal** | CLooG emits `floord(nstate+9223372036854775807*ngrid-1,32)` -> int64 overflow -> band-0 loop `for(t3=0;t3<=-128)` never runs -> output all-zeros; `--nofuse` bit-exact (2e-11) | **pluto bug** | auto-skip (pluto-miscompile; irreducible) |
-| statement-drop / double-free (SIG6) | deriche, nussinov | pet/pluto codegen defect on valid affine input | **pluto bug** | auto-skip (pluto-miscompile) |
-| transformed-C fails to compile | durbin | pluto emits invalid C | **pluto bug** | auto-skip (pluto-miscompile) |
-| loop-carried tsvc (not individually root-caused) | ~14 tsvc_2_* | provisional pluto miscompile | **pluto (provisional)** | auto-skip (pluto-miscompile); probe for stride/reduction shape (Sec. 1c) to recover `ok` |
-
-**Pluto's irreducible set cannot shrink via any lowering change, and does not have to.**
-`_run_pluto` auto-classifies every post-transform `FAIL:*` whose sibling `c` backend is `ok` as
-`skip:unsupported:pluto-miscompile:*` (our own C proves the affine scop bit-exact, so the fault is
-polycc's schedule). The "pluto bug" **Disposition** column above collapses to that one automatic
-skip -- the table stays as the root-cause record, no per-kernel list to maintain. A genuine emit
-regression also reds `c`, so that pluto pair stays a real `FAIL:*` -- the guard keeps it honest.
-`*::pluto` rows still worth an emit-shape fix (Sec. 1c) remain flagged there; landing one turns the
-skip back into an `ok`.
-
----
-
-## 3. Gate semantics (strict-green)
-
-Each `(kernel, backend)` pair resolves to exactly one of:
-
-- **`ok`** -- translated + bit-exact vs the kernel's numpy -> passes.
-- **`skip:*`** -- the backend/tool legitimately cannot express this kernel -> skipped, not counted
-  against the gate. Sub-reasons: `skip:not-installed` (tool absent), `skip:unsupported:*` (an op /
-  scop the backend cannot express), `skip:too-long` (jax compile-time perf, Sec. 1d), and
-  `skip:unsupported:pluto-miscompile:*` (polycc miscompiled an affine scop our `c` proves correct --
-  Sec. 2).
-- **`FAIL:*`** -- a real codegen/correctness gap -> **reds the build**.
-
-All 8 LS3DF stems (chebyshev_filter_subspace, fragment_patch_density, rayleigh_ritz_rotation,
-ls3df_scf) are `ok` on c / cpp / fortran (Sec. 1a/1b/1e). Their pluto pairs auto-skip:
-`lda_xc_potential::pluto` is `skip:unsupported:pluto-miscompile:exc:*` (emit-shape fix #3, Sec. 1c,
-would restore `ok`), `kleinman_bylander_nonlocal::pluto` is
-`skip:unsupported:pluto-miscompile:hpsi:*` (irreducible pluto bug, Sec. 2).
-
-### 3a. Documented per-kernel skips
-
-**cegterg / pythran -- `skip:unsupported:compile`.** The export declares 9 arrays of rank >= 2; pythran's
-automatic C/F layout variants make 2^9 = 512 overloads against `max_export_overloads = 128`
-(`pythran.cfg`): `Too many overloads for function 'cegterg'`. With `order(C)` forced by hand the next
-three follow. `np.linalg.inv(chol)` / `np.linalg.solve(chol_h, ys)` survive the desugar because
-`LinalgInline` cannot rank the Cholesky temp or a helper's return (`Attribute 'solve' unknown`). pythran
-rejects `reshape(..., order='F')`. With those two patched by hand as well, the compile was still running at
-727 s against the oracle's 75 s `compile_timeout_s`. Decision: documented skip, no pythran desugar work. The
-standalone generalized `eigh(a, b)` kernel stops at the same rank gap (`Unsupported attribute 'inv'`), so
-pythran carries no eigh test either.
-
-**cegterg / jax -- `skip:too-long`.** Run time, not tracing: emit 0.15 s, exec 0.01 s, then one eager call
-of `_matmul_ctA_B` at the S extents (k=1419, m=4) takes 8.0 s, because every scalar `.at[].set` dispatches
-its own primitive. The whole kernel had not returned after 900 s against `JAX_FORK_TIMEOUT_S = 180`. The
-remedy is the eager-path vectorization of Sec. 1d (H1), not a cegterg change.
-
-**cegterg / numba -- `ok`** under the `parallel=True` njit, through the Sec. 1a rows above
-(`tests/test_cegterg_numba.py`).
-
----
-
-## 4. How to extend this doc
-
-When you add a desugaring: add a Sec. 1 row (op, kernels, mechanism, file:line, status). When you
-root-cause a backend miscompile: add a Sec. 2 row with the decisive evidence (the tool error string
-or the diverging output) and the verdict (ours vs tool). When a pair's classification changes
-(`FAIL:*` -> `ok`, or `FAIL:*` -> `skip:*`): update the summary in Sec. 3 so the gate and this doc
-stay in step -- the classification lives in `tests/numerical_oracle.py`, not in a separate
-xfail file.
+- C and C++ emit refuses list, dict and set comprehensions, dict and set literals, and a
+  boolean-mask gather inside an expression (`np.sum(b[b > 0.5])`). Recursive helpers emit an
+  infinite recursion. A tuple of arrays rebound through a helper (`st = step(st)`) does not
+  compile. [canonical_numpy_form.md](canonical_numpy_form.md) gives the rewrites.
+- Pluto miscompiles and auto-skips `adi`, `hotspot`, `kleinman_bylander_nonlocal`,
+  `lda_xc_potential` and `tsvc_2_s116`. A constant non-unit step reaches polycc as `i += s`.
+- The jax eager path (`numpyto_jax/core.py`, `_emit_eager_body`) copies Python loops verbatim, so
+  every static loop unrolls into separate XLA dispatches and large kernels end in
+  `skip:too-long`. The loop classifier `_classify_for` (vectorize, `fori_loop`, `while_loop`) is
+  only reached on the jit path.
+- pythran exports one overload per C/F layout combination of each rank>=2 array, so a kernel with
+  many such arguments exceeds pythran's overload limit and ends in `skip:unsupported:compile`.

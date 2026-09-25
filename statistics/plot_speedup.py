@@ -44,6 +44,7 @@ A cell with too few cleaned repetitions keeps its marker and is counted in a war
 """
 
 import argparse
+import itertools
 import math
 import pathlib
 import warnings
@@ -63,10 +64,12 @@ from hpcagent_bench.stats.figures import results as plotting  # also selects the
 
 import matplotlib.pyplot as plt  # noqa: E402 -- must follow plotting's backend setup
 
-#: This figure is dense (many kernels, three stacked panels), where print-scale type would crowd
-#: it -- its annotations and ticks trace to the same :mod:`style` constants at this named fraction,
-#: rather than each being its own bare literal.
-DENSE_SCALE: float = 0.5
+#: This figure is dense (many kernels, three stacked panels) and drawn at paper size, so its type
+#: and strokes are the shared print scale.
+DENSE: style.TypeScale = style.PRINT_SCALE
+
+#: The square embed is placed at a fraction of its natural size, so it keeps the author scale.
+SQUARE: style.TypeScale = style.AUTHOR_SCALE
 
 #: The bare/mini/square embed variants are read at a fraction of their natural size, so they keep a
 #: larger share of the shared scale than the dense multi-panel figure above does.
@@ -168,15 +171,12 @@ def speedup_points(
     A cell with no baseline, a non-positive or non-finite median on either side, is DROPPED and
     warned about (naming ``<kernel>@<framework>``). It must never reach the figure as 0.
     """
-    per_cell: Dict[Tuple[str, str], Sequence[float]] = {}
-    if data is not None:
-        per_cell = {(str(k), str(f)): g["time"].to_numpy() for (k, f), g in data.groupby(["benchmark", "framework"])}
+    per_cell = samples_by_cell(data)
     points: List[Point] = []
     unusable: List[str] = []
     crashed: List[str] = []
     for kernel, rows in summary.groupby("benchmark", sort=False):
-        base = rows[rows["framework"] == baseline]["time"]
-        base_time = float(base.iloc[0]) if len(base) else math.nan
+        base_time = baseline_time(rows, baseline)
         for row in rows.itertuples(index=False):
             if row.framework == baseline:
                 continue
@@ -184,18 +184,38 @@ def speedup_points(
             ratio = (base_time / candidate) if candidate > 0.0 else math.nan
             change = signed_change(ratio)
             band = band_of(change)
+            label = f"{kernel}@{row.framework}"
             if band is None:
                 # A cell with no BASELINE cannot be placed at all -- there is no ratio to fail to
                 # have. A cell whose own time is unusable is a FAILURE, and the figure says so.
                 if math.isfinite(base_time) and base_time > 0.0:
                     points.append(Point(str(kernel), str(row.framework), math.nan, 0.0, BAND_LOW, (), True))
-                    crashed.append(f"{kernel}@{row.framework}")
+                    crashed.append(label)
                 else:
-                    unusable.append(f"{kernel}@{row.framework}")
+                    unusable.append(label)
                 continue
             key = (str(kernel), str(row.framework))
-            samples = cell_changes(per_cell[key], base_time, f"{kernel}@{row.framework}") if key in per_cell else ()
+            samples = cell_changes(per_cell[key], base_time, label) if key in per_cell else ()
             points.append(Point(str(kernel), str(row.framework), ratio, change, band, samples))
+    warn_unplotted(crashed, unusable)
+    return points
+
+
+def samples_by_cell(data: Optional[pd.DataFrame]) -> Dict[Tuple[str, str], Sequence[float]]:
+    """``(kernel, framework) -> per-repetition times`` of the per-sample frame; empty without one."""
+    if data is None:
+        return {}
+    return {(str(k), str(f)): g["time"].to_numpy() for (k, f), g in data.groupby(["benchmark", "framework"])}
+
+
+def baseline_time(rows: pd.DataFrame, baseline: str) -> float:
+    """The baseline's median time among one kernel's summary ``rows``; NaN when it has none."""
+    base = rows[rows["framework"] == baseline]["time"]
+    return float(base.iloc[0]) if len(base) else math.nan
+
+
+def warn_unplotted(crashed: Sequence[str], unusable: Sequence[str]) -> None:
+    """Name the cells drawn as a crash X, and the cells dropped for want of a baseline."""
     if crashed:
         warnings.warn(f"{len(crashed)} cell(s) produced no usable time and are drawn as X at 0: {', '.join(crashed)}")
     if unusable:
@@ -203,7 +223,6 @@ def speedup_points(
             f"dropped {len(unusable)} cell(s) with no usable speed-up "
             f"(missing baseline, or a non-positive / non-finite median): {', '.join(unusable)}"
         )
-    return points
 
 
 def data_table(summary: pd.DataFrame, points: Sequence[Point], baseline: str) -> pd.DataFrame:
@@ -329,32 +348,47 @@ def draw_boxes(ax, points: Sequence[Point], x_of: Dict[str, int], colors: Dict[s
     figure's population, and drawing them as boxes would show quartiles nobody measured.
     """
     frameworks = sorted({point.framework for point in points})
-    offsets = dict(zip(frameworks, per_kernel.dodge_offsets(len(frameworks), box_span(len(frameworks)))))
+    offsets = framework_offsets(frameworks, 0.8)
     width = 0.8 / max(len(frameworks), 1)
-    unboxed: List[Point] = []
+    boxed = [p for p in points if len(p.samples) >= MIN_BOX_SAMPLES]
     for framework in frameworks:
-        mine = [p for p in points if p.framework == framework]
-        boxed = [p for p in mine if len(p.samples) >= MIN_BOX_SAMPLES]
-        unboxed.extend(p for p in mine if len(p.samples) < MIN_BOX_SAMPLES)
-        if not boxed:
+        mine = [p for p in boxed if p.framework == framework]
+        if not mine:
             continue
         color = colors[framework]
         artists = ax.boxplot(
-            [list(p.samples) for p in boxed],
-            positions=[x_of[p.kernel] + offsets[framework] for p in boxed],
+            [list(p.samples) for p in mine],
+            positions=[x_of[p.kernel] + offsets[framework] for p in mine],
             widths=width * 0.85,
             patch_artist=True,
             manage_ticks=False,
             showfliers=True,
-            flierprops=dict(marker=".", markersize=1.6, markerfacecolor=color, markeredgecolor="none"),
-            medianprops=dict(color="0.1", linewidth=0.7),
+            flierprops=dict(marker=".", markersize=DENSE.point_size, markerfacecolor=color, markeredgecolor="none"),
+            medianprops=dict(color=style.INK, linewidth=DENSE.hairline_width),
         )
-        for box in artists["boxes"]:
-            box.set(facecolor=color, edgecolor=color, alpha=0.55, linewidth=0.5)
-        for part in ("whiskers", "caps"):
-            for line in artists[part]:
-                line.set(color=color, linewidth=0.5)
-    return unboxed
+        paint_boxes(artists, color, 0.55, DENSE.hairline_width)
+    return [p for p in points if len(p.samples) < MIN_BOX_SAMPLES]
+
+
+def framework_offsets(frameworks: Sequence[str], slot: float) -> Dict[str, float]:
+    """Each framework's x offset from its kernel, so their boxes tile ``slot`` of the kernel's unit."""
+    return dict(zip(frameworks, per_kernel.dodge_offsets(len(frameworks), box_span(len(frameworks), slot))))
+
+
+def paint_boxes(artists: Dict[str, list], color: str, alpha: float, width: float) -> None:
+    """Colour one framework's boxplot ``artists``: the box filled at ``alpha``, whiskers and caps solid."""
+    for box in artists["boxes"]:
+        box.set(facecolor=color, edgecolor=color, alpha=alpha, linewidth=width)
+    for line in artists["whiskers"] + artists["caps"]:
+        line.set(color=color, linewidth=width)
+
+
+def box_handles(colors: Dict[str, str], alpha: float) -> list:
+    """Legend keys for a box figure: one filled patch per framework, at the boxes' own alpha."""
+    return [
+        plt.Rectangle((0, 0), 1, 1, facecolor=color, edgecolor=color, alpha=alpha, label=name)
+        for name, color in colors.items()
+    ]
 
 
 def draw_band(
@@ -369,51 +403,55 @@ def draw_band(
     # of the y limits and of every statistic, and only ever reach the axes as a glyph.
     crashed = [point for point in points if point.crashed]
     points = [point for point in points if not point.crashed]
-    drawn_as_marker: Sequence[Point] = points
-    if boxes:
-        drawn_as_marker = draw_boxes(ax, points, x_of, colors)
-    for framework in sorted({point.framework for point in drawn_as_marker}):
-        mine = [point for point in drawn_as_marker if point.framework == framework]
-        # clip_on=False: the limits below close exactly on the extreme point, so a clipped marker is
-        # drawn as a half-disc at the axis edge -- worst in the ``> 10x`` band, whose whole job is to
-        # show the outlier. The point is inside the axes; only its radius is not.
-        ax.plot(
-            [x_of[point.kernel] for point in mine],
-            [point.change for point in mine],
-            linestyle="none",
-            marker="o",
-            markersize=3.0,
-            clip_on=False,
-            color=colors[framework],
-        )
-    # The box reaches past its cell's median, so the panel is closed on the whiskers too -- limits
-    # taken from the medians alone would clip the very spread the boxes were added to show.
-    spread = [value for point in points for value in (point.samples if boxes else ())]
-    limits = band_limits(band, [point.change for point in points] + spread)
-    ax.set_ylim(*limits)
-    if limits[0] < 0.0 < limits[1]:
-        ax.axhline(0.0, color=style.REFERENCE, linewidth=0.8)  # only where 0 is in view -- not, in a one-sided band
+    drawn_as_marker = draw_boxes(ax, points, x_of, colors) if boxes else points
+    plot_per_framework(ax, drawn_as_marker, x_of, colors, marker="o")
+    limits = close_band(ax, band, points, boxes)
     # On the zero line, in the framework's own colour, and ONLY in the band that contains zero:
     # a one-sided band does not show 0, so an X drawn there would sit at a y it does not mean.
     # The X is a different glyph from every measured marker, so it cannot be read as 1.0x.
     if limits[0] <= 0.0 <= limits[1]:
-        for framework in sorted({point.framework for point in crashed}):
-            mine = [point for point in crashed if point.framework == framework]
-            ax.plot(
-                [x_of[point.kernel] for point in mine if point.kernel in x_of],
-                [0.0] * sum(1 for point in mine if point.kernel in x_of),
-                linestyle="none",
-                marker="x",
-                markersize=4.0,
-                markeredgewidth=1.1,
-                clip_on=False,
-                color=colors[framework],
-            )
-    ax.set_title(band, fontsize=style.ANNOTATION_PT * DENSE_SCALE, loc="left")
-    ax.tick_params(axis="y", labelsize=style.TICK_PT * DENSE_SCALE)
+        plot_per_framework(ax, crashed, x_of, colors, marker="x", markeredgewidth=DENSE.line_width)
+    ax.set_title(band, fontsize=DENSE.annotation_pt, loc="left")
+    ax.tick_params(axis="y", labelsize=DENSE.tick_pt)
     # x grid too: a point sits three panels above its kernel's label, and the vertical rule is what
     # carries the eye down to it.
-    ax.grid(color=style.RULE, linewidth=0.5)
+    ax.grid(True)
+
+
+def plot_per_framework(
+    ax, points: Sequence[Point], x_of: Dict[str, int], colors: Dict[str, str], **marker: object
+) -> None:
+    """One marker series per framework at each point's kernel: its change, or 0 for a crash.
+
+    clip_on=False: the band limits close exactly on the extreme point, so a clipped marker is drawn
+    as a half-disc at the axis edge -- worst in the ``> 10x`` band, whose whole job is to show the
+    outlier. The point is inside the axes; only its radius is not.
+    """
+    for framework in sorted({point.framework for point in points}):
+        mine = [point for point in points if point.framework == framework and point.kernel in x_of]
+        ax.plot(
+            [x_of[point.kernel] for point in mine],
+            [0.0 if point.crashed else point.change for point in mine],
+            linestyle="none",
+            markersize=DENSE.marker_size,
+            clip_on=False,
+            color=colors[framework],
+            **marker,
+        )
+
+
+def close_band(ax, band: str, points: Sequence[Point], boxes: bool) -> Tuple[float, float]:
+    """Set the panel's y limits (:func:`band_limits`) and, where 0 is in view, its zero line.
+
+    The box reaches past its cell's median, so the panel is closed on the whiskers too -- limits
+    taken from the medians alone would clip the very spread the boxes were added to show.
+    """
+    spread = [value for point in points for value in point.samples] if boxes else []
+    limits = band_limits(band, [point.change for point in points] + spread)
+    ax.set_ylim(*limits)
+    if limits[0] < 0.0 < limits[1]:
+        ax.axhline(0.0, color=style.REFERENCE, linewidth=DENSE.line_width)
+    return limits
 
 
 def figure_legend(fig, colors: Dict[str, str], boxes: bool = False) -> None:
@@ -424,26 +462,18 @@ def figure_legend(fig, colors: Dict[str, str], boxes: bool = False) -> None:
     nowhere on the axes sends a reader looking for it.
     """
     if boxes:
-        handles = [
-            plt.Rectangle((0, 0), 1, 1, facecolor=color, edgecolor=color, alpha=0.55) for color in colors.values()
-        ]
+        handles = box_handles(colors, 0.55)
     else:
-        handles = [plt.Line2D([], [], linestyle="none", marker="o", color=color) for color in colors.values()]
-    fig.legend(
-        handles,
-        list(colors),
-        loc="upper center",
-        ncol=min(len(colors), 6),
-        bbox_to_anchor=(0.5, 1.02),
-        fontsize=style.ANNOTATION_PT * DENSE_SCALE,
-        frameon=False,
-    )
+        handles = [
+            plt.Line2D([], [], linestyle="none", marker="o", color=color, label=name) for name, color in colors.items()
+        ]
+    style.legend_below(fig, handles, ncol=min(len(colors), 6), y=1.02, fontsize=DENSE.legend_pt, markerscale=1.0)
 
 
 def label_kernels(ax, kernels: Sequence[str]) -> None:
     """The shared x axis: one tick per kernel, on the bottom panel only."""
     ax.set_xticks(range(len(kernels)))
-    ax.set_xticklabels(kernels, rotation=90, fontsize=style.TICK_PT * DENSE_SCALE)
+    ax.set_xticklabels(kernels, rotation=90, fontsize=DENSE.tick_pt)
     ax.set_xlim(-0.6, len(kernels) - 0.4)
 
 
@@ -493,7 +523,7 @@ def banded_figure(
     for row, band in zip(axes, present):
         draw_band(row[0], band, [point for point in points if point.band == band], x_of, colors, boxes=boxes)
     label_kernels(axes[-1][0], kernels)
-    fig.supylabel("Signed Relative Change (+1 = 2x Faster, -1 = 2x Slower)", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
+    fig.supylabel("Signed Relative Change (+1 = 2x Faster, -1 = 2x Slower)", fontsize=DENSE.annotation_pt)
     figure_legend(fig, colors, boxes)
     plt.tight_layout()
     return plotting.save_figure(output, fig)
@@ -535,35 +565,40 @@ def simple_figure(
     fig, ax = plt.subplots(figsize=(min(20.0, max(6.8, 0.16 * len(columns))), 2.2 if bare else 2.6))
     draw_band(ax, band, shown, {kernel: i for i, kernel in enumerate(columns)}, colors, boxes=boxes)
     if bare:
-        # loc="left" is a DIFFERENT artist from the centre title, and draw_band sets that one --
-        # clearing only the centre leaves the band label sitting on the figure.
-        ax.set_title("", loc="left")
-        ax.set_xticks([])
-        ax.set_xlim(-0.6, len(columns) - 0.4)
-        ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=3))
-        ax.tick_params(axis="y", labelsize=style.TICK_PT * EMBED_SCALE, length=2, pad=1.5)
-        # draw_band turned BOTH grids on -- the x rules exist to carry the eye down to a kernel
-        # name, and there are no names here. Off first, because grid(axis="y") leaves them.
-        ax.grid(False)
-        ax.grid(axis="y", color=style.RULE, linewidth=0.9)
-        for side in ("top", "right", "bottom"):
-            ax.spines[side].set_visible(False)
-        # Nothing but the boxes, the zero line and the y numbers survives bare -- no title, no
-        # legend, no x ticks -- so a fixed margin (rule: fixed subplots_adjust, not tight_layout)
-        # needs only a sliver on each side.
-        fig.subplots_adjust(left=0.055, right=0.995, top=0.98, bottom=0.03)
+        strip_to_bare(fig, ax, len(columns))
         return plotting.save_figure(output, fig)
     label_kernels(ax, columns)
-    ax.set_ylabel("Signed Relative Change", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
+    ax.set_ylabel("Signed Relative Change", fontsize=DENSE.annotation_pt)
     if hidden:
         ax.set_title(
             f"{band} -- {hidden} point(s) outside this band not shown",
-            fontsize=style.ANNOTATION_PT * DENSE_SCALE,
+            fontsize=DENSE.annotation_pt,
             loc="left",
         )
     figure_legend(fig, colors, boxes)
     plt.tight_layout()
     return plotting.save_figure(output, fig)
+
+
+def strip_to_bare(fig, ax, columns: int) -> None:
+    """Strip the simple figure to its boxes, zero line and y numbers, for an embed."""
+    # loc="left" is a DIFFERENT artist from the centre title, and draw_band sets that one --
+    # clearing only the centre leaves the band label sitting on the figure.
+    ax.set_title("", loc="left")
+    ax.set_xticks([])
+    ax.set_xlim(-0.6, columns - 0.4)
+    ax.yaxis.set_major_locator(plt.MaxNLocator(nbins=3))
+    ax.tick_params(axis="y", labelsize=style.TICK_PT * EMBED_SCALE, length=2, pad=1.5)
+    # draw_band turned BOTH grids on -- the x rules exist to carry the eye down to a kernel
+    # name, and there are no names here. Off first, because grid(axis="y") leaves them.
+    ax.grid(False)
+    ax.grid(axis="y")
+    for side in ("top", "right", "bottom"):
+        ax.spines[side].set_visible(False)
+    # Nothing but the boxes, the zero line and the y numbers survives bare -- no title, no
+    # legend, no x ticks -- so a fixed margin (rule: fixed subplots_adjust, not tight_layout)
+    # needs only a sliver on each side.
+    fig.subplots_adjust(left=0.055, right=0.995, top=0.98, bottom=0.03)
 
 
 def mini_figure(points: Sequence[Point], kernels: Sequence[str], output: str, boxes: bool = False) -> str:
@@ -585,7 +620,7 @@ def mini_figure(points: Sequence[Point], kernels: Sequence[str], output: str, bo
     for row, band in zip(axes, present):
         ax = row[0]
         draw_band(ax, band, [point for point in points if point.band == band], x_of, colors, boxes=boxes)
-        ax.title.set_fontsize(style.ANNOTATION_PT * DENSE_SCALE)
+        ax.title.set_fontsize(DENSE.annotation_pt)
         ax.set_yticks([])  # takes the numbers, their marks and their gridlines with it
         # band_limits closes ON the extreme point. Here a marker is 3pt on a panel ~40pt tall, so
         # that point straddles the spine and reads as a clipped half-disc; pad the panel off it.
@@ -594,9 +629,9 @@ def mini_figure(points: Sequence[Point], kernels: Sequence[str], output: str, bo
         ax.set_ylim(low - pad, high + pad)
     bottom = axes[-1][0]
     bottom.set_xticks(range(len(kernels)))
-    bottom.set_xticklabels([f"K{i + 1}" for i in range(len(kernels))], fontsize=style.TICK_PT * DENSE_SCALE)
+    bottom.set_xticklabels([f"K{i + 1}" for i in range(len(kernels))], fontsize=DENSE.tick_pt)
     bottom.set_xlim(-0.6, len(kernels) - 0.4)
-    fig.supylabel("Speedup", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
+    fig.supylabel("Speedup", fontsize=DENSE.annotation_pt)
     plt.tight_layout()
     return plotting.save_figure(output, fig)
 
@@ -639,23 +674,29 @@ def square_kernels(points: Sequence[Point], cells: int = SQUARE_CELLS) -> Tuple[
     want = max(1, cells // len(frameworks))
     for band in (BAND_MID, BAND_LOW, BAND_HIGH):
         inside = [point for point in points if point.band == band]
-        by_kernel: Dict[str, Set[str]] = {}
-        for point in inside:
-            by_kernel.setdefault(point.kernel, set()).add(point.framework)
-        complete = [
-            kernel for kernel in dict.fromkeys(p.kernel for p in inside) if by_kernel[kernel] == set(frameworks)
-        ]
-        if not complete:
-            continue
-        wins = [k for k in complete if group_change(inside, k) > 0.0]
-        losses = [k for k in complete if group_change(inside, k) <= 0.0]
-        picked: List[str] = []
-        while len(picked) < want and (wins or losses):
-            for pool in (wins, losses):
-                if pool and len(picked) < want:
-                    picked.append(pool.pop(0))
-        return picked, frameworks
+        complete = complete_kernels(inside, set(frameworks))
+        if complete:
+            return alternate_signs(inside, complete, want), frameworks
     return [], frameworks
+
+
+def complete_kernels(points: Sequence[Point], frameworks: Set[str]) -> List[str]:
+    """The kernels, in first-seen order, that hold a cell for every one of ``frameworks``."""
+    by_kernel: Dict[str, Set[str]] = {}
+    for point in points:
+        by_kernel.setdefault(point.kernel, set()).add(point.framework)
+    return [kernel for kernel, present in by_kernel.items() if present == frameworks]
+
+
+def alternate_signs(points: Sequence[Point], kernels: Sequence[str], want: int) -> List[str]:
+    """Up to ``want`` of ``kernels``, a speed-up and a slow-down (:func:`group_change`) in turn, a
+    speed-up first; once one side runs dry the rest come from the other."""
+    wins = [k for k in kernels if group_change(points, k) > 0.0]
+    losses = [k for k in kernels if group_change(points, k) <= 0.0]
+    picked: List[str] = []
+    for pair in itertools.zip_longest(wins, losses):
+        picked.extend(kernel for kernel in pair if kernel is not None)
+    return picked[:want]
 
 
 def group_change(points: Sequence[Point], kernel: str) -> float:
@@ -709,14 +750,13 @@ def square_figure(points: Sequence[Point], output: str, cells: int = SQUARE_CELL
     if not kernels:
         raise RuntimeError("the square figure needs at least one kernel with a cell for every framework")
     colors = framework_colors(points)
-    offsets = dict(zip(frameworks, per_kernel.dodge_offsets(len(frameworks), box_span(len(frameworks), slot=0.78))))
+    offsets = framework_offsets(frameworks, 0.78)
     width = 0.78 / len(frameworks)
     x_of = {kernel: i for i, kernel in enumerate(kernels)}
     style.apply()
     fig, ax = plt.subplots(figsize=(SQUARE_SIDE, SQUARE_SIDE))
     for framework in frameworks:
         mine = [p for p in points if p.framework == framework and p.kernel in x_of]
-        color = colors[framework]
         artists = ax.boxplot(
             [list(p.samples) or [p.change] for p in mine],
             positions=[x_of[p.kernel] + offsets[framework] for p in mine],
@@ -724,32 +764,30 @@ def square_figure(points: Sequence[Point], output: str, cells: int = SQUARE_CELL
             patch_artist=True,
             manage_ticks=False,
             showfliers=False,
-            medianprops=dict(color=style.INK, linewidth=1.8),
+            medianprops=dict(color=style.INK, linewidth=SQUARE.line_width),
         )
-        for box in artists["boxes"]:
-            box.set(facecolor=color, edgecolor=color, alpha=0.7, linewidth=1.5)
-        for part in ("whiskers", "caps"):
-            for line in artists[part]:
-                line.set(color=color, linewidth=1.5)
-    ax.axhline(0.0, color=style.REFERENCE, linewidth=1.6)
+        paint_boxes(artists, colors[framework], 0.7, SQUARE.line_width)
+    square_axes(ax, kernels)
+    style.legend_below(fig, box_handles(colors, 0.7), ncol=len(frameworks), y=-0.02, fontsize=SQUARE.legend_pt)
+    return plotting.save_figure(output, fig)
+
+
+def square_axes(ax, kernels: Sequence[str]) -> None:
+    """The square panel's chrome: zero line, kernel names, ``Speedup`` label, landmark y ticks, frame."""
+    ax.axhline(0.0, color=style.REFERENCE, linewidth=SQUARE.line_width)
     ax.set_xticks(range(len(kernels)))
-    ax.set_xticklabels(kernels, fontsize=style.TICK_PT)
+    ax.set_xticklabels(kernels, fontsize=SQUARE.tick_pt)
     ax.set_xlim(-0.55, len(kernels) - 0.45)
-    ax.set_ylabel("Speedup", fontsize=style.LABEL_PT, labelpad=-1.0)
+    ax.set_ylabel("Speedup", fontsize=SQUARE.label_pt, labelpad=-1.0)
     ax.set_yticks(square_ticks(*ax.get_ylim()))
-    ax.tick_params(axis="y", labelsize=style.TICK_PT, length=3, width=1.6, pad=1.0)
+    ax.tick_params(axis="y", labelsize=SQUARE.tick_pt, length=3, width=SQUARE.line_width, pad=1.0)
     ax.tick_params(axis="x", length=0, pad=2.0)
-    ax.grid(axis="y", color=style.RULE, linewidth=0.9)
+    ax.grid(axis="y")
     # All four spines kept, matching the violin panel this figure sits beside in the overview
     # diagram -- the two are read together, so a frame on one and none on the other reads as two
     # unrelated charts. Heavy, because at embed size a hairline frame disappears before the boxes do.
     for spine in ax.spines.values():
         spine.set_linewidth(SQUARE_BORDER)
-    handles = [
-        plt.Rectangle((0, 0), 1, 1, facecolor=colors[f], edgecolor=colors[f], alpha=0.7, label=f) for f in frameworks
-    ]
-    style.legend_below(fig, handles, ncol=len(frameworks), y=-0.02, fontsize=style.ANNOTATION_PT)
-    return plotting.save_figure(output, fig)
 
 
 def variant_output(output: str, variant: str) -> str:

@@ -206,7 +206,8 @@ def test_the_efficiency_panel_draws_the_ideal_at_one_and_the_speedup_panel_at_p(
     speedup = scaling.figure_speedup(scaling.curves(frame(rows)))
     assert speedup is not None
     ideal = [line for line in speedup.axes[0].lines if list(line.get_xdata()) == list(line.get_ydata())]
-    assert ideal and [int(v) for v in ideal[0].get_xdata()] == list(RANKS)
+    # The bound runs border to border (USER 2026-09-25), not only between the measured P.
+    assert ideal and tuple(ideal[0].get_xdata()) == pytest.approx(speedup.axes[0].get_xlim())
 
 
 def test_every_figure_carries_one_legend_on_the_figure_and_none_on_an_axes() -> None:
@@ -225,8 +226,9 @@ def test_every_figure_carries_one_legend_on_the_figure_and_none_on_an_axes() -> 
         assert all(ax.get_legend() is None for ax in figure.axes)
 
 
-def test_the_summary_panel_is_the_geomean_over_kernels_with_an_interval() -> None:
-    """One mark per arm per mode, at the geomean of its per-kernel geomean eta, n on the label."""
+def test_the_summary_panel_is_the_geomean_over_kernels_and_withholds_a_two_kernel_interval() -> None:
+    """One mark per arm per mode, at the geomean of its per-kernel geomean eta, n on the label; two
+    kernels are below the 6-kernel floor, so the mark carries no interval."""
     arm = "mlscale-strong-qwen38-hip"
     rows = perfect_strong(arm, "dist_softmax")  # eta = 1 everywhere
     rows += [row(arm, "dist_sdpa", "strong", p, 1000.0 / p * 2.0, single_rank_ns=1000.0) for p in RANKS]  # eta = 0.5
@@ -237,7 +239,7 @@ def test_the_summary_panel_is_the_geomean_over_kernels_with_an_interval() -> Non
     assert mode == "strong"
     assert n_kernels == 2
     assert interval.point == pytest.approx(math.sqrt(1.0 * 0.5))
-    assert interval.low <= interval.point <= interval.high
+    assert math.isnan(interval.low) and math.isnan(interval.high)
 
 
 def test_only_the_latest_grade_of_a_kernel_enters_a_curve() -> None:
@@ -288,3 +290,66 @@ def test_a_frame_of_grade_rows_alone_holds_no_scaling_rows() -> None:
         [{"record": "submission", "arm": "mlscale-weak-qwen38-hip", "benchmark": "dist_softmax", "speedup": 2.0}]
     )
     assert scaling.curves(grades) == []
+
+
+@pytest.mark.parametrize("builder", [scaling.figure_summary, scaling.figure_efficiency])
+def test_a_print_size_scaling_figure_keeps_every_text_on_the_print_scale(builder) -> None:
+    """The ML figure sits in a wrap beside the cost figure: both must print at the same type sizes and width."""
+    from hpcagent_bench.stats import style
+
+    arm = "mlscale-strong-qwen38-hip"
+    rows = perfect_strong(arm, "dist_softmax") + perfect_weak("mlscale-weak-qwen38-hip", "dist_softmax")
+    fig = builder(scaling.curves(frame(rows)), width=style.ICLR_WRAP_WIDTH_IN, type_=style.PRINT_SCALE)
+    assert fig is not None
+    try:
+        assert style.print_type_violations(fig) == []
+        assert float(fig.get_size_inches()[0]) == pytest.approx(style.ICLR_WRAP_WIDTH_IN)
+    finally:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+
+
+@pytest.mark.parametrize("geomean_panel", [True, False])
+def test_the_mode_grid_is_one_row_per_law_one_column_per_picked_kernel_and_the_geomean(geomean_panel: bool) -> None:
+    """The paper's scaling figure: weak above strong, the picked kernels in the picked order, the
+    geomean column last only when asked, one key under the figure and one shared Y label."""
+    import matplotlib.pyplot as plt
+
+    from hpcagent_bench import experiment_tags
+
+    rows = []
+    for kernel in ("dist_softmax", "dist_sdpa", "dist_matmul"):
+        rows += perfect_strong("mlscale-strong-qwen38-hip", kernel) + perfect_weak("mlscale-weak-qwen38-hip", kernel)
+    fig = scaling.figure_mode_grid(
+        scaling.curves(frame(rows)), ["dist_sdpa", "dist_softmax"], geomean_panel=geomean_panel
+    )
+    assert fig is not None
+    try:
+        columns = 2 + int(geomean_panel)
+        assert len(fig.axes) == 2 * columns
+        top, bottom = fig.axes[:columns], fig.axes[columns:]
+        assert [ax.get_ylabel() for ax in (top[0], bottom[0])] == ["Weak Scaling", "Strong Scaling"]
+        names = [experiment_tags.kernel_short_display_name(k) for k in ("dist_sdpa", "dist_softmax")]
+        assert [ax.get_title() for ax in top] == names + [scaling.GEOMEAN_LABEL] * geomean_panel
+        assert len(fig.legends) == 1 and all(ax.get_legend() is None for ax in fig.axes)
+        assert [text.get_text() for text in fig.texts].count(scaling.SPEEDUP_LABEL) == 1
+    finally:
+        plt.close(fig)
+
+
+def test_the_band_at_a_rank_count_is_the_log_t_interval_of_the_kernels_geomean() -> None:
+    """Six kernels at P = 2 with efficiency 1, 0.5, 0.25 twice: GM = 0.5, log2 sd = sqrt(0.8),
+    t(0.975, 5) = 2.5706, so the band is 0.5 * 2^(-/+ 0.93865) = 0.26086 .. 0.95836 (scipy t quantile, worked by hand)."""
+    arm = "mlscale-strong-qwen38-hip"
+    t1 = 4096.0
+    rows = [
+        row(arm, f"k{index}", "strong", p, t1 / p / (eta if p == 2 else 1.0), single_rank_ns=t1)
+        for index, eta in enumerate((1.0, 0.5, 0.25, 1.0, 0.5, 0.25))
+        for p in RANKS
+    ]
+
+    band = scaling.series(scaling.curves(frame(rows)), "efficiency")[2]
+
+    assert (band.point, band.low, band.high) == pytest.approx((0.5, 0.2608615520422396, 0.958362771526864))
+    assert band.method == "log-t"

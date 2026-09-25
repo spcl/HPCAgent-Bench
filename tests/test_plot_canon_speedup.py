@@ -16,7 +16,7 @@ import pytest
 matplotlib.use("Agg")  # before any pyplot import -- a headless test must never touch a display
 import matplotlib.pyplot as plt  # noqa: E402
 
-from hpcagent_bench import paths
+from hpcagent_bench import experiment_tags, paths
 
 SPEC = importlib.util.spec_from_file_location("plot_canon_speedup", paths.ROOT / "statistics" / "plot_canon_speedup.py")
 plot_canon_speedup = importlib.util.module_from_spec(SPEC)
@@ -258,7 +258,7 @@ def test_distribution_gives_a_compiler_baseline_a_different_color_than_a_dace_co
 
 
 def test_columns_option_draws_dace_gpu_with_its_own_label(tmp_path: pathlib.Path) -> None:
-    """``--columns dace_gpu`` must both draw and label the column -- EXTRA_LABELS silently falling
+    """``--columns dace_gpu`` must both draw and label the column -- a label lookup silently falling
     back to the raw column name would print ``dace_gpu`` instead of a readable framework name."""
     db_path = tmp_path / "canon.db"
     make_db(db_path, [row("numba", "k1", 100.0), row("dace_gpu", "k1", 10.0)])
@@ -266,9 +266,10 @@ def test_columns_option_draws_dace_gpu_with_its_own_label(tmp_path: pathlib.Path
     rc = plot_canon_speedup.run(db_path, tmp_path / "out", "numba", False, columns=["dace_gpu"])
 
     assert rc == 0
-    assert plot_canon_speedup.COLUMN_LABELS["dace_gpu"] == "DaCe parallel GPU"
+    label = experiment_tags.framework_name("dace_gpu")
+    assert label != "dace_gpu"
     table = (tmp_path / "out" / "canon_speedup.csv").read_text()
-    assert "DaCe parallel GPU" in table
+    assert label in table
 
 
 def test_the_measured_speedup_is_on_the_y_axis_not_the_x_axis() -> None:
@@ -282,7 +283,7 @@ def test_the_measured_speedup_is_on_the_y_axis_not_the_x_axis() -> None:
         assert ax.get_yscale() == "log"
         assert ax.get_xscale() == "linear"
         labels = [tick.get_text() for tick in ax.get_xticklabels()]
-        assert labels == ["sequential C, one thread  (n=2)"]
+        assert labels == [f"{experiment_tags.framework_name('cc')}  (n=2)"]
     finally:
         plt.close(fig)
 

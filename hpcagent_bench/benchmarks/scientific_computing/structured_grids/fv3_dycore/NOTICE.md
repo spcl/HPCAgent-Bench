@@ -167,7 +167,7 @@ Ported and validated (per-stencil, bit-exact vs GT4Py):
   kord<9) is ported but NOT bit-exact at the bottom-edge layers (xfail) -- so
   `map_single` and the `_lagrangian_to_eulerian_dry` driver are ASSEMBLED but the
   remap step is NOT bit-exact-validated. `saturation_adjustment` + the moist remap
-  energetics (do_sat_adj=True) are NOT ported (deferred, as instructed).
+  energetics (do_sat_adj=True) are NOT ported.
 - **tracer_2d_1l (gt==4)**: `tracer_advection_gt4` composed (flux_compute ->
   divide -> loop[apply_mass_flux -> fvtp2d -> apply_tracer_flux]) from
   individually-GT4Py-validated leaves + the validated `_fv_tp_2d`, and
@@ -197,15 +197,12 @@ Three distinct levels are used; each row of the table above is one of these:
    buffer/return routing, gz<->zh copy logic, n_split iteration) is checked
    against an independent hand-wired reference calling the same (level-1-validated)
    sub-solvers. This validates the COMPOSITION, not a fresh physics oracle.
-3. **Physical end-to-end vs real pyFV3 -- NOT achieved.** Attempted: install
-   ndsl+pyfv3 from the clone and instantiate the real `AcousticDynamics`. BLOCKED:
-   importing `pyfv3` alone exceeds 400 s in this sandbox (gt4py/dace cold-start
-   compilation), so the real object cannot be constructed in practical time; the
-   clone also ships no serialized savepoint data (only an `eta79.nc` grid file),
-   so the upstream translate-tests cannot run either. dyn_core/fv_dynamics
-   therefore have NO physical-E2E-vs-real-pyFV3 validation. (Installing ndsl also
-   replaced the env's gt4py 1.1.11 -> 1.1.9.post27 and dace 2.0.0a4 -> 1.0.0; the
-   fv3_dycore tests + HPCAgent-Bench spec loader still pass under the swap.)
+3. **Physical end-to-end vs real pyFV3 -- NOT achieved.** Constructing the real
+   `AcousticDynamics` needs ndsl+pyfv3, whose import pays a long gt4py/dace
+   cold-start compilation, and the upstream clone ships no serialized savepoint
+   data (only an `eta79.nc` grid file), so the upstream translate-tests cannot
+   run. dyn_core/fv_dynamics therefore have NO physical-E2E-vs-real-pyFV3
+   validation.
 
 ## What is NOT ported (remaining gaps toward the full dycore)
 

@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 from hpcagent_bench.experiments import read_table
 from hpcagent_bench.metrics import parallelism
 from hpcagent_bench.stats import palette, style
+from hpcagent_bench.stats.figures.helpers.axes import rotated_labels_in
 
 if TYPE_CHECKING:
     import matplotlib.axes
@@ -36,15 +37,17 @@ if TYPE_CHECKING:
 #: The table scripts/collect_parallelism.py writes.
 TABLE: str = "kernel_metrics"
 
-#: Stack segments, bottom to top, and their colour. Not a palette.py ENTITY (framework/model/
-#: language) -- a fixed categorical scheme for the taxonomy's own groups, the same precedent as
-#: plot_canon_speedup.py's MEDIAN_HUE/GEOMEAN_HUE for a statistic rather than an entity.
+#: Stack segments, bottom to top, and their colour: the taxonomy's own groups, drawn in
+#: ``style.STAT_INK`` because none of them is a palette.py entity.
 SEGMENTS: tuple[tuple[str, str], ...] = (
-    ("parallel", "#2f8f55"),
-    ("scan", "#8a6fd4"),
-    ("timestep", "#c9a227"),
-    ("residual", "#c0392b"),
+    ("parallel", style.STAT_INK.parallel),
+    ("scan", style.STAT_INK.scan),
+    ("timestep", style.STAT_INK.timestep),
+    ("residual", style.STAT_INK.residual),
 )
+
+#: Author-size type: a standalone report figure.
+TYPE: style.TypeScale = style.AUTHOR_SCALE
 
 #: Columns drawn when --columns is not given: canonicalized first (the paper's headline pipeline).
 DEFAULT_COLUMNS: tuple[str, ...] = ("dace_cpu_canonicalize", "dace_cpu")
@@ -89,9 +92,8 @@ def draw(
     # Rotated column names are the only thing below the axis (rule one puts the value on Y), so
     # the bottom margin has to grow with the longest one, not with a fixed guess -- and the axes
     # need enough of their OWN height for the equally rotated y label, or it prints truncated.
-    longest = max((len(c) for c in columns), default=8)
     left_in, top_in, axes_min_in = 0.85, 0.25, 4.4
-    bottom_in = longest * style.TICK_PT * 0.6 / 72.0 + 0.9
+    bottom_in = rotated_labels_in(columns, TYPE.tick_pt) + 0.9
     width = style.DOUBLE_COLUMN_WIDTH if double_column else max(4.4, 2.2 * len(columns) + 1.8)
     height = axes_min_in + bottom_in + top_in
     fig, ax = plt.subplots(figsize=(width, height))
@@ -115,7 +117,7 @@ def draw(
                     str(seg[name]),
                     ha="center",
                     va="center",
-                    fontsize=style.ANNOTATION_PT,
+                    fontsize=TYPE.annotation_pt,
                     color="white",
                     zorder=3,
                 )
@@ -128,17 +130,17 @@ def draw(
         )
         # Above the bar, never below: the column NAME is the only thing below the axis, so its
         # rotated tick label never collides with this three-line caption.
-        ax.text(x, 1.04, caption, va="bottom", ha="center", fontsize=style.ANNOTATION_PT, color=style.MUTED)
+        ax.text(x, 1.04, caption, va="bottom", ha="center", fontsize=TYPE.annotation_pt, color=style.MUTED)
 
     ax.set_xticks(xs)
-    ax.set_xticklabels(columns, fontsize=style.TICK_PT, rotation=90)
+    ax.set_xticklabels(columns, fontsize=TYPE.tick_pt, rotation=90)
     for tick, column in zip(ax.get_xticklabels(), columns, strict=True):
         tick.set_color(palette.framework_color(column))
     ax.set_xlim(-0.7, len(columns) - 0.3)
     ax.set_ylim(0.0, 1.62)
     style.value_axis(ax, "y", major=True)
     ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(xmax=1.0))
-    ax.set_ylabel("Share of Loop-Level Constructs", color=style.MUTED, fontsize=style.ANNOTATION_PT)
+    ax.set_ylabel("Share of Loop-Level Constructs", color=style.MUTED, fontsize=TYPE.annotation_pt)
     style.despine(ax, keep=("left",))
     ax.tick_params(axis="x", length=0, colors=style.MUTED)
 

@@ -3,10 +3,9 @@
 """``statistics/plot_score_change.py`` -- the efficacy figure and the stars on it.
 
 The load-bearing assertions are about MULTIPLICITY (a raw threshold does not survive the BH
-correction, a real effect does) and about the 2D CONTRACT: X is log2 of the speed-up geomean, Y the
-paired token-cost ratio, one mark per arm against its own control, nothing joined by a line, colour
-the model, shape the packet, and the drawing itself lives in
-:mod:`hpcagent_bench.stats.figures.efficacy` -- this script only wires the data.
+correction, a real effect does) and about the DOT-ROW CONTRACT: one column per (LLM, delivery), the
+control hollow beside the packet arm, each row carrying only its own axis's star, and the drawing
+itself lives in :mod:`hpcagent_bench.stats.figures.efficacy` -- this script only wires the data.
 """
 
 import argparse
@@ -19,7 +18,6 @@ import tempfile
 import warnings
 
 import matplotlib.colors
-import matplotlib.markers
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -27,9 +25,7 @@ import pytest
 from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection, PathCollection
 from matplotlib.figure import Figure
-from PIL import Image
 
-from hpcagent_bench import experiment_tags, packets
 from hpcagent_bench.harness import efficacy
 from hpcagent_bench.stats import cost, palette, score_rule
 from hpcagent_bench.stats import style as plotstyle
@@ -137,7 +133,7 @@ def one_arm_raw(
     kernels: int = KERNELS,
 ) -> pd.DataFrame:  # fmt: skip
     """One arm's RAW tagged rows (``skills`` True/False), the shape
-    :func:`~hpcagent_bench.stats.figures.efficacy.draw_panel` reads its per-kernel cloud from.
+    :func:`~hpcagent_bench.stats.figures.efficacy.reduce_pair` pairs per kernel.
 
     A small alternating per-kernel jitter, never zero: every kernel at exactly the same ratio has no
     spread for :func:`~hpcagent_bench.stats.summary.geomean_ci` to draw an interval around, which a
@@ -283,7 +279,7 @@ def test_a_perf_playbook_arm_never_enters_the_control_side(tmp_path: pathlib.Pat
 
 
 def test_treatment_frame_tags_the_control_false_and_the_treatment_true() -> None:
-    """``draw_panel`` reads an on/off ``skills`` flag; ``treatment_frame`` builds it from the packet
+    """The figure reads an on/off ``skills`` flag; ``treatment_frame`` builds it from the packet
     split rather than the historical column name."""
     frame_all = pd.DataFrame(
         [
@@ -391,41 +387,7 @@ def test_include_incomplete_keeps_a_short_arm_and_prints_nothing(capsys: pytest.
 
 
 # ---------------------------------------------------------------------------
-# The 2D contract: X the log2 speed-up, Y the paired token-cost ratio, one mark per arm, colour
-# the intervention, shape the model, one legend on the figure, an undelivered kernel a cross.
-
-
-def test_x_is_log2_of_the_speed_up_and_zero_is_the_no_change_line() -> None:
-    """Never a bare ratio axis: the axis holds ``log2(ratio)`` -- a 4x speed-up sits at +2, a 2x
-    slow-down at -1 -- and the reference line sits at the change that means nothing happened. The
-    ticks read back in ratios, never as raw exponents."""
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots()
-    try:
-        efficacy_figures.draw_panel(ax, one_arm_raw(on_speedup=4.0), one_arm_stats(), "skills")
-        assert "Speed-Up" in ax.get_xlabel()
-        assert ax.get_xscale() == "linear"
-        assert any(line.get_xdata()[0] == pytest.approx(0.0) for line in ax.lines if len(set(line.get_xdata())) == 1)
-        assert plotstyle.log2_ratio_tick(2.0) == "4x"
-        assert plotstyle.log2_ratio_tick(-1.0) == "0.5x"
-    finally:
-        plt.close(fig)
-
-
-def test_y_is_the_paired_token_cost_ratio_with_one_at_the_control() -> None:
-    """The other axis is a cost, never shares a scale with the speed-up (SC15 Rule 4), and its own
-    no-change value is a ratio of 1, not 0."""
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots()
-    try:
-        efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), "skills")
-        assert "Token Cost" in ax.get_ylabel()
-        assert ax.get_yscale() == "log"
-        assert any(line.get_ydata()[0] == pytest.approx(1.0) for line in ax.lines if len(set(line.get_ydata())) == 1)
-    finally:
-        plt.close(fig)
+# The paired interval, the stars, the tick budget, the left margin and the key.
 
 
 def test_error_bars_are_drawn_on_both_axes_from_the_paired_geomean() -> None:
@@ -438,202 +400,32 @@ def test_error_bars_are_drawn_on_both_axes_from_the_paired_geomean() -> None:
     assert series.y_low < series.y < series.y_high
 
 
-def test_nothing_is_joined_by_a_line() -> None:
-    """SC15 Rule 12: an arm's mark is one measurement, not a trend, so the panel draws no connector
-    between a control and a treated position."""
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots()
-    try:
-        efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), "skills")
-        # Only the zero/one reference lines and the crossed-interval whiskers are ``Line2D``/
-        # ``LineCollection`` objects; none of them connect two DIFFERENT (x, y) mark positions.
-        for line in ax.lines:
-            xdata, ydata = line.get_xdata(), line.get_ydata()
-            assert len(set(xdata)) == 1 or len(set(ydata)) == 1, "a connector between two marks was drawn"
-    finally:
-        plt.close(fig)
-
-
 def test_a_marks_significance_superscript_reads_off_the_corrected_verdict_per_axis() -> None:
     """The gate is the VERDICT, per axis: a raw p that was never corrected, and a pairing too small
-    for any test, both draw NO superscript. Every mark is filled regardless -- only the control is
-    ever hollow (:mod:`hpcagent_bench.stats.figures.efficacy`'s own module docstring); significance
-    is the label's own ``*``/``+`` suffix instead."""
+    for any test, both draw NO superscript. Each row carries only its own axis's symbol: ``*`` on
+    the speed-up row, ``+`` on the cost row."""
     import matplotlib.pyplot as plt
 
-    def leg_labels_of(stats: pd.DataFrame) -> list[str]:
-        fig, ax = plt.subplots()
-        try:
-            efficacy_figures.draw_panel(ax, one_arm_raw(), stats, "skills")
-            # The origin's own "No Skill Packet" is a label too; it names the reference, not a mark.
-            control = packets.control_label(["skills"])
-            return [text.get_text() for text in ax.texts if text.get_text() != control]
-        finally:
-            plt.close(fig)
+    def symbols_of(stats: pd.DataFrame) -> dict[str, list[str]]:
+        significance = efficacy_figures.axis_significance(stats)
+        row = dataclasses.replace(arrow_row(), leg="C")
+        drawn: dict[str, list[str]] = {}
+        for measure in ("speedup", "cost"):
+            fig, ax = plt.subplots()
+            try:
+                efficacy_figures.draw_measure_row(ax, [row], measure, "^", significance)
+                drawn[measure] = [text.get_text() for text in ax.texts]
+            finally:
+                plt.close(fig)
+        return drawn
 
-    neither = leg_labels_of(one_arm_stats())
-    both = leg_labels_of(one_arm_stats(score_verdict=efficacy.SIGNIFICANT, cost_verdict=efficacy.SIGNIFICANT))
-    assert neither == ["C"], neither
-    assert both == [f"C {efficacy_figures.SCORE_SIG_MARK}{efficacy_figures.COST_SIG_MARK}"], both
-
-
-def test_every_drawn_mark_is_filled_and_only_the_control_is_hollow() -> None:
-    """Fill no longer carries significance (superscripts do); it is now a constant so a treated mark
-    is never mistaken for a second control reference."""
-    import matplotlib.pyplot as plt
-    from matplotlib.collections import PathCollection
-
-    fig, ax = plt.subplots()
-    try:
-        efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), "cpf")
-        summary_marks = [
-            c for c in ax.collections
-            if isinstance(c, PathCollection) and c.get_sizes().size
-            and c.get_sizes().max() == pytest.approx(efficacy_figures.DEFAULT_CONFIG.mark_size)
-        ]  # fmt: skip
-        hollow = [c for c in summary_marks if not any(rgba[3] > 0.0 for rgba in c.get_facecolor())]
-    finally:
-        plt.close(fig)
-    assert len(summary_marks) >= 2, "expected the control reference plus at least one treated mark"
-    assert len(hollow) == 1, "exactly the control reference should be hollow"
-
-
-def test_the_filled_mark_wears_the_model_colour_and_the_hollow_control_wears_the_control_colour() -> None:
-    """The inverted rule (module docstring): colour is the MODEL's registry hue -- the same hue in
-    every figure -- and the control reference is still ``palette.control_color``, never a model hue.
-    Colouring by PACKET instead would spend the model's channel on the entity the shape now carries."""
-    import matplotlib.pyplot as plt
-    from matplotlib.collections import PathCollection
-
-    treatment = "cpf"
-    assert palette.model_color("qwen38") != palette.color(treatment)
-    fig, ax = plt.subplots()
-    try:
-        efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), treatment)
-        edges, faces = set(), set()
-        for collection in (c for c in ax.collections if isinstance(c, PathCollection)):
-            for rgba in collection.get_edgecolor():
-                edges.add(matplotlib.colors.to_hex(rgba))
-            for rgba in collection.get_facecolor():
-                faces.add(matplotlib.colors.to_hex(rgba))
-        assert palette.model_color("qwen38") in faces | edges
-        assert palette.control_color() in edges
-        assert palette.color(treatment) not in faces | edges
-    finally:
-        plt.close(fig)
-
-
-def test_the_marker_shape_is_the_packet_and_nothing_else() -> None:
-    """Shape is the one packet the whole panel wears, so identity survives greyscale and a
-    column-width shrink even when colour (the model, here) does not fit its own legend swatch."""
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots()
-    try:
-        efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), "cpfsrc")
-        drawn = {collection.get_paths()[0] for collection in ax.collections if collection.get_paths()}
-        style = matplotlib.markers.MarkerStyle(palette.packet_marker("cpfsrc"))
-        expected = style.get_path().transformed(style.get_transform())
-        assert any(path.vertices.shape == expected.vertices.shape for path in drawn)
-    finally:
-        plt.close(fig)
-
-
-def test_a_light_minor_grid_sits_between_the_major_lines() -> None:
-    """A minor grid is drawn between the majors (user, 2026-09-22), but lighter and thinner so it
-    reads as a finer ruling under the marks rather than a second reference the major line already
-    is."""
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots()
-    try:
-        efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), "cpfsrc")
-        major = [line for line in ax.yaxis.get_gridlines() if line.get_visible()]
-        minor = [tick.gridline for tick in ax.yaxis.get_minor_ticks() if tick.gridline.get_visible()]
-        assert major, "the major grid should still be there"
-        assert minor, "a minor grid should now be drawn too"
-        assert minor[0].get_linewidth() < major[0].get_linewidth()
-        assert not ax.yaxis.get_minor_ticks()[0].label1.get_text(), "minor ticks carry no text"
-    finally:
-        plt.close(fig)
-
-
-def test_the_legend_is_drawn_once_on_the_figure_and_never_on_an_axes() -> None:
-    """One key for the whole figure: several panels draw the same models in the same colours, and a
-    key on each axes invites reading them as different sets of series."""
-    out = pathlib.Path(tempfile.mkdtemp()) / "fig.pdf"
-    written = efficacy_figures.figure_one(one_arm_raw(), one_arm_stats(), "cpfsrc", out)
-    assert written.with_suffix(".pdf").exists()
-
-    panels = [("CPF", "cpf", one_arm_stats(), one_arm_raw()), ("CPFSRC", "cpfsrc", one_arm_stats(), one_arm_raw())]
-    written_row = efficacy_figures.figure_row(panels, pathlib.Path(tempfile.mkdtemp()) / "row.pdf")
-    assert written_row.with_suffix(".pdf").exists()
-
-
-def test_a_joined_row_has_exactly_one_legend_with_deduplicated_unique_labels() -> None:
-    """A 1x3 figure draws one intervention hue, one model shape, one control mark and the interval
-    notes ONCE each, never once per panel: every panel repeats the same channels (all fixed text, so
-    identical across panels), so a key on each would invite reading them as different sets of
-    series, and a naive concatenation of three panels' handles would repeat every one of them three
-    times."""
-    import matplotlib.pyplot as plt
-
-    n = 3
-    fig, axes = plt.subplots(1, n, squeeze=False)
-    try:
-        treatments = ["cpf", "cpfsrc", "lang-skills"]
-        handles_by_label: dict[str, object] = {}
-        for ax, treatment in zip(axes[0], treatments, strict=True):
-            for handle in efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), treatment, treatments):
-                handles_by_label.setdefault(handle.get_label(), handle)
-        plotstyle.legend_below(fig, list(handles_by_label.values()))
-        assert len(fig.legends) == 1
-        assert all(ax.get_legend() is None for ax in fig.axes)
-        labels = [text.get_text() for text in fig.legends[0].get_texts()]
-        assert len(labels) == len(set(labels)), labels
-    finally:
-        plt.close(fig)
-
-
-def test_the_joined_figure_names_its_one_control_once_over_every_treatment() -> None:
-    """One control, one entry. Named per panel instead, a joined figure grew one hollow-mark entry
-    per row ("No Packet" beside "No Skill Packet") for the one set of control arms."""
-    import matplotlib.pyplot as plt
-
-    n = 2
-    side = efficacy_figures.panel_side(n)
-    fig, axes = plt.subplots(1, n, squeeze=False)
-    try:
-        treatments = ["cpf", "lang-skills"]
-        labels: list[str] = []
-        for ax, treatment in zip(axes[0], treatments, strict=True):
-            labels += [
-                h.get_label()
-                for h in efficacy_figures.draw_panel(ax, one_arm_raw(), one_arm_stats(), treatment, treatments)
-            ]
-    finally:
-        plt.close(fig)
-    assert side > 0.0
-    assert labels.count("No Packet") + labels.count("No Skill Packet") == 2, labels
-
-
-@pytest.mark.parametrize("n", [1, 2, 3])
-def test_n_comparisons_draw_one_row_of_n_square_panels(n: int) -> None:
-    """Several comparisons join as ONE ROW of square panels, never stacked: they are alternatives
-    against one control, not a sequence."""
-    panels = [(f"Comparison {i}", "skills", one_arm_stats(), one_arm_raw()) for i in range(n)]
-    written = efficacy_figures.figure_row(panels, pathlib.Path(tempfile.mkdtemp()) / "row.pdf")
-    assert written.with_suffix(".pdf").exists()
-
-
-def test_a_paper_row_width_derives_the_panel_side_from_the_text_width() -> None:
-    """A row drawn for a paper spans the venue's own text width at scale 1.0, never a fixed natural
-    size that then has to be shrunk by ``\\includegraphics``."""
-    natural = efficacy_figures.panel_side(3)
-    iclr = efficacy_figures.panel_side(3, plotstyle.ICLR_TEXT_WIDTH_IN)
-    assert iclr != natural
-    assert 3 * iclr + 2 * efficacy_figures.ROW_PANEL_GAP <= plotstyle.ICLR_TEXT_WIDTH_IN + 1e-9
+    neither = symbols_of(one_arm_stats())
+    both = symbols_of(one_arm_stats(score_verdict=efficacy.SIGNIFICANT, cost_verdict=efficacy.SIGNIFICANT))
+    assert neither == {"speedup": [], "cost": []}, neither
+    assert both == {
+        "speedup": [efficacy_figures.SCORE_SIG_MARK],
+        "cost": [efficacy_figures.COST_SIG_MARK],
+    }, both
 
 
 @pytest.mark.parametrize(
@@ -647,64 +439,6 @@ def test_x_tick_step_widens_before_the_tick_budget_is_crossed(span: float, expec
     landing on an arbitrary 'nice number' spacing, so every tick still names a clean ratio."""
     assert efficacy_figures.x_tick_step(span) == expected_step
     assert span / efficacy_figures.x_tick_step(span) <= efficacy_figures.MAX_X_TICKS - 1
-
-
-def test_a_wide_ranging_panel_never_crosses_the_x_tick_budget() -> None:
-    """The end-to-end path: a treated arm landing two orders of magnitude from its control (the
-    autoscaled window then spans 0 to that log2 exponent, since the control mark sits at x=0)
-    still draws under the budget. The budget is the CONFIG's, not the module constant: tick density
-    is a knob a caller turns, and the property that survives a turn of it is that the axis never
-    exceeds whatever budget is in force."""
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots()
-    try:
-        efficacy_figures.draw_panel(ax, one_arm_raw(on_speedup=1e5), one_arm_stats(), "cpf")
-        fig.canvas.draw()
-        ticks = [t for t in ax.xaxis.get_major_ticks() if t.label1.get_visible()]
-        assert 0 < len(ticks) <= efficacy_figures.DEFAULT_CONFIG.max_ticks
-    finally:
-        plt.close(fig)
-
-
-def png_ink_columns(path: pathlib.Path, row_lo: int, row_hi: int) -> tuple[int, int]:
-    """The leftmost and rightmost non-white pixel column PNG ``path`` carries within
-    ``[row_lo, row_hi)`` -- how a rendered title or axis label is checked for clipping: matplotlib's
-    own measured 'it fits' is a claim about a font metrics table, this is a claim about the file."""
-    with Image.open(path) as image:
-        band = np.array(image.convert("L"))[row_lo:row_hi, :]
-    cols = np.where((band < 240).any(axis=0))[0]
-    return (int(cols.min()), int(cols.max())) if cols.size else (-1, -1)
-
-
-def test_neither_figure_one_nor_figure_row_calls_style_title(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The new contract: a paper's caption is the title, so neither function ever draws a
-    whole-figure one (:func:`~hpcagent_bench.stats.style.title`) -- only each panel's own small
-    subtitle, drawn with ``ax.text`` INSIDE its box, ever runs."""
-
-    def refuse(*args: object, **kwargs: object) -> float:
-        raise AssertionError("style.title must never be called")
-
-    monkeypatch.setattr(plotstyle, "title", refuse)
-    efficacy_figures.figure_one(one_arm_raw(), one_arm_stats(), "cpf", pathlib.Path(tempfile.mkdtemp()) / "one.pdf")
-    panels = [("Comparison", "cpf", one_arm_stats(), one_arm_raw())]
-    efficacy_figures.figure_row(panels, pathlib.Path(tempfile.mkdtemp()) / "row.pdf")
-
-
-def test_a_panels_own_subtitle_never_touches_the_saved_canvas_edge(tmp_path: pathlib.Path) -> None:
-    """A long per-panel ``title`` (:func:`figure_row`'s own small in-box text) is measured against
-    the SAVED file, not the same measurement that used to miss a whole-figure title's clipping at a
-    different dpi (:func:`~hpcagent_bench.stats.style.save`'s own docstring)."""
-    long_title = "A panel subtitle long enough that it could, in principle, run off either edge"
-    panels = [(long_title, "cpf", one_arm_stats(), one_arm_raw())]
-    out = tmp_path / "row.pdf"
-    efficacy_figures.figure_row(panels, out)
-    with Image.open(out.with_suffix(".png")) as image:
-        width = image.size[0]
-        rows = np.where((np.array(image.convert("L")) < 240).any(axis=1))[0]
-    left, right = png_ink_columns(out.with_suffix(".png"), int(rows.min()), int(rows.min()) + 20)
-    assert 0 < left, "the subtitle's own ink starts at the canvas edge"
-    assert right < width - 1, "the subtitle's own ink runs to the canvas edge"
 
 
 def y_axis_left_margin(low: float, high: float) -> float:
@@ -731,7 +465,7 @@ def y_axis_left_margin(low: float, high: float) -> float:
 def test_required_left_margin_grows_with_the_widest_tick_the_range_draws() -> None:
     """A direct measurement: a wide-ranging axis's own tick labels (``1/128x`` .. ``128x``) beside
     the panel's Y label need more room than a narrow range's short ones (``1x``) -- a flat fraction
-    of the row's width, which :func:`figure_row` used to reserve regardless of content, cannot tell
+    of the row's width, reserved regardless of content, cannot tell
     the two apart and ran a real outlier kernel's label off the canvas before this measured it."""
     wide = y_axis_left_margin(2.0**-7, 2.0**7)  # 1/128x .. 128x, the dynamic range a real outlier kernel gave
     narrow = y_axis_left_margin(0.5, 2.0)  # 1/2x .. 2x
@@ -739,7 +473,7 @@ def test_required_left_margin_grows_with_the_widest_tick_the_range_draws() -> No
 
 
 def test_the_interval_note_is_fixed_text_and_does_not_name_the_estimator() -> None:
-    """Fixed text so a joined row's per-panel copies dedupe into one shared entry
+    """Fixed text, so the key carries it once
     (:func:`~hpcagent_bench.stats.figures.efficacy.legend_tail`). The estimator is NOT named: "95%
     log-t CI" on two of five rows was the densest text in the figure, and which interval it is
     belongs in the caption beside the test it came from (user, 2026-09-20)."""
@@ -750,7 +484,7 @@ def test_the_interval_note_is_fixed_text_and_does_not_name_the_estimator() -> No
 
 def test_the_figure_key_carries_one_interval_note_per_axis() -> None:
     """Both intervals reach the reader in the figure's ONE key."""
-    handles = efficacy_figures.legend_handles("cpfsrc", ["qwen38"], ["cpfsrc"])
+    handles = efficacy_figures.legend_tail()
     labels = [h.get_label() for h in handles]
     assert efficacy_figures.interval_note("Speed-Up") in labels, labels
     assert efficacy_figures.interval_note("Token Cost") in labels, labels
@@ -770,7 +504,7 @@ def test_the_key_explains_a_superscript_exactly_when_the_panel_drew_one(
 ) -> None:
     """A reader meeting ``*`` beside a mark has to be able to look it up (user, 2026-09-20). A row
     for a symbol NO mark wears is the opposite problem: a lookup made for nothing."""
-    labels = [h.get_label() for h in efficacy_figures.legend_handles("cpfsrc", ["qwen38"], ["cpfsrc"], symbols=symbols)]
+    labels = [h.get_label() for h in efficacy_figures.legend_tail(symbols)]
     explained = [line for line in labels if "Significant" in line]
     assert explained == [
         f"{mark}  {text}"
@@ -783,11 +517,10 @@ def test_the_key_explains_a_superscript_exactly_when_the_panel_drew_one(
     ], explained
 
 
-def test_an_undelivered_kernel_still_counts_but_its_cross_only_draws_behind_show_cloud() -> None:
+def test_an_undelivered_kernel_still_counts_in_the_served_geomean() -> None:
     """A kernel the arm was served and never verified is a placeholder, not a measurement
-    (``population.DELIVERED_COLUMN``) -- it still scores 1x and still counts its tokens in the
-    geomean either way, but its own dot or cross is part of the per-kernel CLOUD, which draws (and
-    the key names it) only when a caller opts in; the default panel draws summary marks alone."""
+    (``population.DELIVERED_COLUMN``) -- under ``served`` it still scores 1x and still counts its
+    tokens in the geomean, and the pair records it as not delivered."""
     control_rows_list = [
         ep for kernel in range(KERNELS) for ep in episode("a-c", "qwen38", "c", kernel, f"c{kernel}", 2.0, 1000.0)
     ]
@@ -822,65 +555,12 @@ def test_an_undelivered_kernel_still_counts_but_its_cross_only_draws_behind_show
 
     assert series is not None
     assert series.delivered < series.kernels
-    assert not series.cloud[~series.cloud.delivered].empty
-
-    default_handles = efficacy_figures.legend_handles("skills", ["qwen38"], ["skills"])
-    assert not any(h.get_label() == plotstyle.NOT_DELIVERED_LABEL for h in default_handles), default_handles
-
-    cloud_handles = efficacy_figures.legend_handles("skills", ["qwen38"], ["skills"], show_cloud=True)
-    assert any(h.get_label() == plotstyle.NOT_DELIVERED_LABEL for h in cloud_handles)
-
-
-def crowded_frame() -> pd.DataFrame:
-    """Six arms of one comparison, three of them landing within a few percent of each other on
-    BOTH axes -- the fixture a ring of candidate label places has to solve."""
-    parts = []
-    close = ((1.34, 350e3, 1.36, 340e3), (1.36, 245e3, 1.35, 255e3), (1.35, 178e3, 1.37, 165e3))
-    spread = ((1.10, 50e3, 1.30, 40e3), (1.45, 72e3, 1.20, 65e3), (1.60, 165e3, 1.90, 120e3))
-    for (model, language), (off_s, off_t, on_s, on_t) in zip(
-        ((m, lang) for m in MODELS for lang in LANGUAGES), close + spread, strict=True
-    ):
-        parts.append(one_arm_raw(model, language, off_s, on_s, off_t, on_t))
-    return pd.concat(parts, ignore_index=True)
-
-
-def crowded_stats() -> pd.DataFrame:
-    return pd.DataFrame([{
-        "model": m,
-        "language": lang,
-        "score_verdict": efficacy.NOT_SIGNIFICANT,
-        "cost_verdict": efficacy.NOT_SIGNIFICANT,
-        "family_size": 12
-    } for m in MODELS for lang in LANGUAGES])  # fmt: skip
-
-
-def test_no_two_arm_labels_overprint_each_other_however_close_the_arms_land() -> None:
-    """The bug this guards: six arms share one square panel and three land within a few percent, so
-    a label placed at a fixed offset prints on top of its neighbour."""
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=efficacy_figures.PANEL_SIZE)
-    try:
-        efficacy_figures.draw_panel(ax, crowded_frame(), crowded_stats(), "skills")
-        fig.subplots_adjust(**efficacy_figures.PANEL_MARGINS)
-        efficacy_figures.untangle_labels(ax)
-        renderer = fig.canvas.get_renderer()
-        from matplotlib.text import Annotation
-
-        notes = [text for text in ax.texts if isinstance(text, Annotation)]
-        boxes = [tuple(note.get_window_extent(renderer).extents) for note in notes]
-        # Six arms, plus the origin's own "No Skill Packet", which has to clear them too.
-        assert len(boxes) == 7
-        for index, box in enumerate(boxes):
-            for other in boxes[index + 1 :]:
-                assert not efficacy_figures.boxes_touch(box, other), notes[index].get_text()
-    finally:
-        plt.close(fig)
+    assert not efficacy_figures.paired_kernels(control, treated).delivered.all()
 
 
 # ---------------------------------------------------------------------------
 # The EXPLICIT-PAIR entry point: a comparison whose two sides are two campaigns, or whose condition
-# is not a packet suffix at all, drawn through the same panel.
+# is not a packet suffix at all, drawn through the same figure.
 
 BLIND_PAIR: tuple[str, str] = ("llrblind-qwen38-c-skills", "cpf-llr-focus40-qwen38-c-skills")
 SCICOMP_PAIR: tuple[str, str] = ("git-scicomp-qwen38-c-repo", "git-scicomp-qwen38-c-kernel")
@@ -992,29 +672,6 @@ def test_pair_frame_tags_each_arm_by_name_and_which_side_of_the_pair_it_is() -> 
     assert series.y == pytest.approx(150e3 / 200e3)
 
 
-def test_a_pair_figure_wears_the_intervention_hue_and_names_a_control_that_is_not_a_missing_packet() -> None:
-    """git-scicomp's control is the BARE KERNEL and llrblind's kept its score tool; "No Packet"
-    names neither, so the hollow mark's text is the caller's."""
-    import matplotlib.pyplot as plt
-
-    frame_all = pd.DataFrame(
-        observation_rows(SCICOMP_PAIR[0], 1.1, 1.4e6) + observation_rows(SCICOMP_PAIR[1], 0.6, 900e3)
-    )
-    tagged = plot.pair_frame(frame_all, [SCICOMP_PAIR], "repo")
-    stats = plot.family_stats(family_csv([SCICOMP_PAIR], efficacy.SIGNIFICANT, ""), "repo")
-    fig, ax = plt.subplots()
-    try:
-        labels = [
-            h.get_label() for h in efficacy_figures.draw_panel(
-                ax, tagged, stats, "repo", control_name="Bare Kernel")
-        ]  # fmt: skip
-    finally:
-        plt.close(fig)
-    assert "Bare Kernel" in labels, labels
-    assert "No Packet" not in labels
-    assert experiment_tags.packet_name("repo") in labels, labels
-
-
 def test_resolve_row_repeats_broadcasts_a_bare_policy_and_checks_a_sequences_length() -> None:
     """A joined row's comparisons need not share ONE repeat policy: git-scicomp's designed-3x-repeats
     median and llr-focus40's reruns-take-latest sit in the same row."""
@@ -1024,18 +681,12 @@ def test_resolve_row_repeats_broadcasts_a_bare_policy_and_checks_a_sequences_len
         efficacy_figures.resolve_row_repeats(["latest"], 3)
 
 
-@pytest.mark.parametrize(
-    ("mode", "builder"), [("dots", "figure_dot_row"), ("paired", "figure_row")], ids=["dots", "paired"]
-)
 def test_a_comparison_specs_own_repeats_overrides_the_row_default(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, mode: str, builder: str
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``repeats=`` on one ``--comparison`` spec reaches ONLY that panel; a spec without it keeps
-    ``--repeats``.
-
-    Both row builders, because the default one changed: a joined row is drawn as stacked 1-D rows
-    unless ``--mode`` asks for the 2-D panels, and a policy forwarded by one route and dropped by
-    the other is the same bug the ``--pairs-csv`` route already shipped once."""
+    ``--repeats``. A policy dropped on the way to the row builder is the same bug the
+    ``--pairs-csv`` route already shipped once."""
     obs = tmp_path / "obs.csv"
     pd.DataFrame(observation_rows(SCICOMP_PAIR[0], 1.1, 1.4e6) + observation_rows(SCICOMP_PAIR[1], 0.6, 900e3)).to_csv(
         obs, index=False
@@ -1044,18 +695,18 @@ def test_a_comparison_specs_own_repeats_overrides_the_row_default(
     family_csv([SCICOMP_PAIR], efficacy.NOT_SIGNIFICANT, efficacy.NOT_SIGNIFICANT).to_csv(table, index=False)
 
     seen_repeats: list[object] = []
-    real = {"figure_dot_row": efficacy_figures.figure_dot_row, "figure_row": efficacy_figures.figure_row}[builder]
+    real = efficacy_figures.figure_dot_row
 
     def record(*args: object, **kwargs: object) -> object:
         seen_repeats.append(kwargs["repeats"])
         return real(*args, **kwargs)  # pyright: ignore[reportArgumentType, reportCallIssue]
 
-    monkeypatch.setattr(plot.efficacy_figures, builder, record)
+    monkeypatch.setattr(plot.efficacy_figures, "figure_dot_row", record)
     old_argv = sys.argv
     sys.argv = [
         "plot_score_change.py", str(obs), "--comparison",
         f"title=Kernel Formulation;intervention=repo;pairs={table};repeats=median",
-        "--mode", mode, "--out", str(tmp_path / "fig.pdf"), "--table", str(tmp_path / "table.csv"),
+        "--out", str(tmp_path / "fig.pdf"), "--table", str(tmp_path / "table.csv"),
     ]  # fmt: skip
     try:
         plot.main()
@@ -1120,25 +771,24 @@ def test_only_a_named_comparison_gets_an_arrow_and_it_carries_the_factor(measure
 
 
 @pytest.mark.parametrize("measure", ["speedup", "cost"])
-def test_a_measure_row_puts_a_labelled_tick_on_each_of_its_borders(measure: str) -> None:
-    """A fractional margin leaves the top and bottom in dead space, so a mark has no labelled edge
-    to be read against (user, 2026-09-20).
-
-    The bug this guards: the snap asked the locator for ticks over the DATA's own range, which is
-    the one range whose answer omits the tick either side of it. A token axis whose arms all sit
-    inside one decade fell through and kept the padded window, drawing no labelled tick on either
-    border.
-    """
+def test_a_measure_row_border_never_opens_an_empty_tick_step(measure: str) -> None:
+    """A border snaps to the next tick only when the data reaches within half a step of it; a 0.94x
+    interval end opened the speed-up axis down to 0.5x, a whole empty step (user, 2026-09-25).
+    Earlier (2026-09-20) every border snapped to a tick."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
     try:
         efficacy_figures.draw_measure_row(ax, [arrow_row()], measure, "^", {}, efficacy_figures.PAPER_CONFIG)
         low, high = ax.get_ylim()
-        ticks = [tick for tick in ax.get_yticks() if low <= tick <= high]
-        assert ticks, (low, high)
-        assert ticks[0] == pytest.approx(low), (ticks, low)
-        assert ticks[-1] == pytest.approx(high), (ticks, high)
+        data_low, data_high = ax.dataLim.y0, ax.dataLim.y1
+        ticks = sorted(ax.get_yticks())
+        log = ax.get_yscale() == "log"
+        span = (lambda a, b: math.log(b / a)) if log else (lambda a, b: b - a)
+        step = min(span(a, b) for a, b in zip(ticks, ticks[1:]))
+        reach = efficacy_figures.SNAP_REACH * step + 1e-9
+        assert span(low, data_low) <= reach, (low, data_low, step)
+        assert span(data_high, high) <= reach, (high, data_high, step)
     finally:
         plt.close(fig)
 
@@ -1168,61 +818,7 @@ def test_parse_spec_reads_semicolon_separated_key_value_pairs() -> None:
 
 
 # ---------------------------------------------------------------------------
-# No per-kernel cloud by default: a panel draws summary marks alone unless a caller opts in.
-
-
-def test_the_per_kernel_cloud_is_off_by_default_and_only_draws_behind_show_cloud() -> None:
-    import matplotlib.pyplot as plt
-    from matplotlib.collections import PathCollection
-
-    def cloud_sized_collections(show_cloud: bool) -> int:
-        fig, ax = plt.subplots()
-        try:
-            efficacy_figures.draw_panel(ax, one_arm_raw(kernels=KERNELS), one_arm_stats(), "cpf", show_cloud=show_cloud)
-            return sum(
-                1
-                for collection in ax.collections
-                if isinstance(collection, PathCollection)
-                and collection.get_sizes().size
-                and collection.get_sizes().max() == pytest.approx(efficacy_figures.CLOUD_SIZE)
-            )
-        finally:
-            plt.close(fig)
-
-    assert cloud_sized_collections(show_cloud=False) == 0
-    assert cloud_sized_collections(show_cloud=True) > 0
-
-
-# ---------------------------------------------------------------------------
-# No title: a paper's caption is the title now (supersedes the earlier derived-default-title
-# contract). ``--title`` is an optional, blank-by-default in-panel SUBTITLE, never a whole-figure
-# title, and it is threaded straight through -- there is no more derivation logic to test.
-
-
-def test_cli_title_flag_produces_no_whole_figure_title(tmp_path: pathlib.Path) -> None:
-    """The CLI route: even a caller who asks for a subtitle gets a small one INSIDE the panel, never
-    a whole-figure title (:func:`~hpcagent_bench.stats.figures.efficacy.figure_one` draws it with
-    ``ax.text``, not :func:`~hpcagent_bench.stats.style.title`)."""
-    obs = one_arm_observations_csv(tmp_path)
-    out = tmp_path / "fig.pdf"
-    argv = [
-        str(obs), "--experiment", "exp", "--treatment", "skills", "--title", "A Subtitle", "--out", str(out),
-        "--table", str(tmp_path / "table.csv"),
-    ]  # fmt: skip
-    import sys
-
-    old_argv = sys.argv
-    sys.argv = ["plot_score_change.py", *argv]
-    try:
-        plot.main()
-    finally:
-        sys.argv = old_argv
-    assert out.with_suffix(".pdf").exists()
-
-
-# ---------------------------------------------------------------------------
-# Fraction tick labels: a ratio below 1 reads as "1/Nx" on both axes, never a decimal, and the Y
-# axis' log2 locator only ever lands on a power of two.
+# Ratio tick labels: a ratio below 1 is spelled in full, never rounded to 0x.
 
 
 def test_the_token_cost_axis_formatter_spells_a_ratio_below_one_as_a_fraction() -> None:
@@ -1231,86 +827,8 @@ def test_the_token_cost_axis_formatter_spells_a_ratio_below_one_as_a_fraction() 
     assert plotstyle.ratio_tick(8.0) == "8x"
 
 
-def test_a_drawn_panels_y_axis_never_labels_a_non_power_of_two_tick() -> None:
-    """The bug this guards: a base-2 ``LogLocator`` with a 1.5 sub used to label 1.5x, 3x, 0.75x --
-    ticks :func:`~hpcagent_bench.stats.style.ratio_tick_label` cannot spell as a
-    clean fraction and a reader cannot place on a log2 grid by eye."""
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots()
-    try:
-        efficacy_figures.draw_panel(ax, one_arm_raw(on_tokens=333.0), one_arm_stats(), "cpf")
-        fig.canvas.draw()
-        labels = [tick.get_text() for tick in ax.yaxis.get_majorticklabels() if tick.get_text()]
-    finally:
-        plt.close(fig)
-    assert labels, "no Y ticks were drawn to check"
-    for text in labels:
-        ratio = float(text.rstrip("x").split("/")[-1]) if "/" in text else float(text.rstrip("x"))
-        exponent = math.log2(ratio)
-        assert exponent == pytest.approx(round(exponent)), text
-
-
 # ---------------------------------------------------------------------------
-# Several packets sharing ONE panel (draw_multi_panel): each its own shape, every model still its
-# own colour, one packet with nothing drawn silently absent rather than a shape nothing wears.
-
-
-def test_draw_multi_panel_gives_each_packet_its_own_shape_and_each_model_its_own_colour() -> None:
-    import matplotlib.markers
-    import matplotlib.pyplot as plt
-    from matplotlib.collections import PathCollection
-
-    frames = {"cpf": one_arm_raw(model="qwen38"), "cpfsrc": one_arm_raw(model="oss120b")}
-    stats = {"cpf": one_arm_stats(model="qwen38"), "cpfsrc": one_arm_stats(model="oss120b")}
-    fig, ax = plt.subplots()
-    try:
-        handles = efficacy_figures.draw_multi_panel(ax, frames, stats)
-        labels = [h.get_label() for h in handles]
-        drawn_shapes = {
-            path.vertices.shape for collection in ax.collections if isinstance(collection, PathCollection)
-            for path in collection.get_paths()
-        }  # fmt: skip
-    finally:
-        plt.close(fig)
-    assert experiment_tags.packet_name("cpf") in labels, labels
-    assert experiment_tags.packet_name("cpfsrc") in labels, labels
-    assert experiment_tags.model_name("qwen38") in labels, labels
-    assert experiment_tags.model_name("oss120b") in labels, labels
-    for packet in ("cpf", "cpfsrc"):
-        shape = matplotlib.markers.MarkerStyle(palette.packet_marker(packet)).get_path().vertices.shape
-        assert shape in drawn_shapes, (packet, drawn_shapes)
-
-
-def test_draw_multi_panel_drops_a_packet_with_nothing_to_draw_from_its_own_legend() -> None:
-    """A packet whose frame is empty (no arm ever ran it in this figure's slice) is silently absent
-    from the legend -- drawing its shape with nothing under it would be a key for a mark that is not
-    on the panel."""
-    import matplotlib.pyplot as plt
-
-    frames = {"cpf": one_arm_raw(model="qwen38"), "cpfsrc": one_arm_raw(model="qwen38").iloc[0:0]}
-    stats = {"cpf": one_arm_stats(model="qwen38"), "cpfsrc": one_arm_stats(model="qwen38")}
-    fig, ax = plt.subplots()
-    try:
-        labels = [h.get_label() for h in efficacy_figures.draw_multi_panel(ax, frames, stats)]
-    finally:
-        plt.close(fig)
-    assert experiment_tags.packet_name("cpf") in labels, labels
-    assert experiment_tags.packet_name("cpfsrc") not in labels, labels
-
-
-def test_a_multi_treatment_panel_joins_a_row_beside_a_single_treatment_one() -> None:
-    """:data:`efficacy_figures.Panel` covers both shapes at once: :func:`figure_row` dispatches on
-    whether a panel's treatment is one key or several."""
-    single = ("Skills Only", "skills", one_arm_stats(), one_arm_raw())
-    multi = (
-        "CPU",
-        ["skills", "cpf"],
-        {"skills": one_arm_stats(), "cpf": one_arm_stats()},
-        {"skills": one_arm_raw(), "cpf": one_arm_raw()},
-    )
-    written = efficacy_figures.figure_row([single, multi], pathlib.Path(tempfile.mkdtemp()) / "row.pdf")
-    assert written.with_suffix(".pdf").exists()
+# Several packets sharing ONE panel (``treatments=``): read and recorded per packet.
 
 
 def one_arm_observations_csv(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -1344,6 +862,33 @@ def test_build_multi_comparison_reads_treatments_as_a_comma_list() -> None:
     assert set(frame["skills"].model.unique()) == {"qwen38", "oss120b"}
 
 
+def test_several_treatments_of_one_campaign_draw_one_dot_row(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two ``--treatment`` flags join as columns of ONE row, each against the same control."""
+    drawn: list[list[str]] = []
+    real = efficacy_figures.figure_dot_row
+
+    def record(panels, *args: object, **kwargs: object) -> object:
+        drawn.append([treatment for _, treatment, _, _ in panels])
+        return real(panels, *args, **kwargs)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(plot.efficacy_figures, "figure_dot_row", record)
+    obs = one_arm_observations_csv(tmp_path)
+    out = tmp_path / "fig.pdf"
+    old_argv = sys.argv
+    sys.argv = [
+        "plot_score_change.py", str(obs), "--experiment", "exp", "--treatment", "skills", "--treatment", "cpf",
+        "--out", str(out), "--table", str(tmp_path / "table.csv"),
+    ]  # fmt: skip
+    try:
+        plot.main()
+    finally:
+        sys.argv = old_argv
+    assert drawn == [["skills", "cpf"]]
+    assert out.exists()
+
+
 def test_write_panel_tables_merges_a_multi_treatment_panel_into_one_packet_tagged_csv(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -1361,13 +906,11 @@ def test_write_panel_tables_merges_a_multi_treatment_panel_into_one_packet_tagge
     assert set(absolute.packet) == {"skills", "cpf"}
 
 
-def test_a_kernel_without_a_token_total_keeps_its_speed_up_and_the_mark_says_n() -> None:
+def test_a_kernel_without_a_token_total_keeps_its_speed_up_and_the_table_says_n() -> None:
     """A treated kernel whose task row was lost still has a verified answer: the speed-up
     coordinate is the geomean over EVERY paired kernel (the family CSV's own score leg), the token
-    coordinate over the kernels priced on both sides, and the mark's label names that n. Intersecting
+    coordinate over the kernels priced on both sides, and the table records that n. Intersecting
     the two moved Kimi's C skill-pages point from 0.83x (38 kernels) to 1.01x (19)."""
-    import matplotlib.pyplot as plt
-
     frame = one_arm_raw(on_speedup=2.0, on_tokens=500.0)
     unpriced = {f"k{kernel}" for kernel in range(0, KERNELS, 2)}
     frame = frame[~(frame.skills & (frame.record == "task") & frame.benchmark.isin(unpriced))]
@@ -1380,31 +923,16 @@ def test_a_kernel_without_a_token_total_keeps_its_speed_up_and_the_mark_says_n()
     assert 2.0**series.x == pytest.approx(math.exp(np.mean(np.log(ratios))))
     priced = [0.5 / (1.03 if kernel % 2 == 0 else 0.97) for kernel in range(KERNELS) if f"k{kernel}" not in unpriced]
     assert series.y == pytest.approx(math.exp(np.mean(np.log(priced))))
-    fig, ax = plt.subplots()
-    try:
-        efficacy_figures.draw_panel(ax, frame, one_arm_stats(), "skills")
-        labels = [text.get_text() for text in ax.texts]
-        assert any(f"(tokens n={series.token_kernels}/{KERNELS})" in label for label in labels), labels
-    finally:
-        plt.close(fig)
     table = efficacy_figures.pairs_table(frame.assign(baseline_ns=2.0e6, native_ns=1.0e6))
     assert table.token_kernels.tolist() == [series.token_kernels]
     assert table.kernels.tolist() == [KERNELS]
 
 
-def test_a_fully_priced_mark_carries_no_token_note() -> None:
-    """Both legs over the same kernels: nothing to say, so the label is the leg alone."""
-    series = efficacy_figures.reduce_pair(*(lambda f: (f[~f.skills], f[f.skills]))(one_arm_raw()))
-    assert series is not None
-    assert series.token_kernels == series.kernels
-    assert efficacy_figures.token_note(series) == ""
-
-
 def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_asked_for(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``figure_from_pairs`` passed neither ``--repeats`` nor the figure config on to
-    ``figure_one``, so its marks were drawn under the default ``latest`` while the table written
+    """``figure_from_pairs`` once passed neither ``--repeats`` nor the figure config on to the
+    figure, so its marks were drawn under the default ``latest`` while the table written
     one line above used the policy the caller asked for. On git-scicomp, whose campaign rule is the
     median of three repeats, that put Kimi-K2.7-Code at 3.57x where its own CSV said 0.67x -- the
     difference between the repository helping and hurting."""
@@ -1438,20 +966,24 @@ def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_aske
     ).to_csv(pairs_csv, index=False)
 
     frame = plot.pair_frame(plot.load_all([observations_csv]), [("git-repo", "git-kernel")], "repo")
-    by_policy = {
-        policy: efficacy_figures.reduce_pair(frame[~frame.skills], frame[frame.skills], policy).x
-        for policy in ("median", "latest")
-    }
+
+    def treated_x(policy: str) -> float:
+        points = efficacy_figures.arm_points(frame[~frame.skills], frame[frame.skills], policy)
+        assert points is not None
+        return points[1].x
+
+    by_policy = {policy: treated_x(policy) for policy in ("median", "latest")}
     assert by_policy["median"] != pytest.approx(by_policy["latest"]), by_policy
 
     drawn: list[float] = []
-    real = efficacy_figures.draw_series
+    real = efficacy_figures.arm_points
 
-    def spy(ax, series, *args, **kwargs):
-        drawn.append(series.x)
-        return real(ax, series, *args, **kwargs)
+    def spy(*args, **kwargs):
+        points = real(*args, **kwargs)
+        drawn.append(points[1].x)
+        return points
 
-    monkeypatch.setattr(efficacy_figures, "draw_series", spy)
+    monkeypatch.setattr(efficacy_figures, "arm_points", spy)
     args = argparse.Namespace(
         speedup_over=efficacy_figures.SPEEDUP_OVER,
         pairs_csv=pairs_csv,
@@ -1461,17 +993,17 @@ def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_aske
         cost_model="effective",
         cost_models=None,
         repeats="median",
-        show_cloud=False,
-        title="",
         out=tmp_path / "f.pdf",
         table=tmp_path / "f.csv",
         channels="model-packet",
-        mode="paired",
-        dots=None,
+        dots_panel_labels="outside",
+        difference="",
+        success_row=True,
         dots_row_height=2.3,
     )
     plot.figure_from_pairs(args, efficacy_figures.DEFAULT_CONFIG)
-    assert drawn == pytest.approx([by_policy["median"]]), (drawn, by_policy)
+    # The figure and the -absolute table beside it: both under the requested policy.
+    assert drawn and drawn == pytest.approx([by_policy["median"]] * len(drawn)), (drawn, by_policy)
 
 
 def solved_and_failed_pair() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -1520,7 +1052,7 @@ def test_the_dot_row_stacks_the_success_row_between_speedup_and_cost(tmp_path: p
 def drawn_dot_row(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, measures: tuple[str, ...]) -> Figure:
     """The figure :func:`figure_dot_row` hands to ``style.save``, kept open to be measured."""
     kept: list[Figure] = []
-    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False: kept.append(fig) or stem)
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False, **options: kept.append(fig) or stem)
     control, treated = solved_and_failed_pair()
     panel = ("Blind", "no-score", plot.points(control, treated), pd.concat([control, treated]))
     efficacy_figures.figure_dot_row([panel], tmp_path / "dots.pdf", measures=measures)
@@ -1539,7 +1071,8 @@ def test_dropping_the_success_row_keeps_the_width_and_every_other_box(
     """The success row is optional: turning it off may only shorten the canvas. A figure with and
     one without it sit in one paper, so the speed-up and cost boxes must be the same size in both.
     The success row is 0.45 of a row and the speed-up and cost rows 0.7 of one (user, 2026-09-22),
-    so the success row is 0.45/0.7 of a speed-up row."""
+    so the success row is its MEASURE_HEIGHT share of a speed-up row (0.45/0.875 since the speed-up
+    row grew 25%, user 2026-09-25)."""
     full = drawn_dot_row(tmp_path, monkeypatch, efficacy_figures.MEASURES)
     short = drawn_dot_row(tmp_path, monkeypatch, ("speedup", "cost"))
     assert full.get_size_inches()[0] == pytest.approx(short.get_size_inches()[0])
@@ -1548,7 +1081,8 @@ def test_dropping_the_success_row_keeps_the_width_and_every_other_box(
     assert box_inches(full, speedup) == pytest.approx(box_inches(short, short.axes[0]), abs=1e-3)
     assert box_inches(full, cost) == pytest.approx(box_inches(short, short.axes[1]), abs=1e-3)
     width, height = box_inches(full, speedup)
-    assert box_inches(full, success) == pytest.approx((width, height * 0.45 / 0.7), abs=1e-3), "the success row's share"
+    share = efficacy_figures.MEASURE_HEIGHT["success"] / efficacy_figures.MEASURE_HEIGHT["speedup"]
+    assert box_inches(full, success) == pytest.approx((width, height * share), abs=1e-3), "the success row's share"
 
 
 def test_a_full_roster_mark_on_the_ceiling_is_drawn_whole() -> None:
@@ -1558,7 +1092,7 @@ def test_a_full_roster_mark_on_the_ceiling_is_drawn_whole() -> None:
 
     fig, ax = plt.subplots()
     row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 8, 8), arm(1.0, 2.0, 8, 8))
-    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
     assert marks and not any(mark.get_clip_on() for mark in marks)
     plt.close(fig)
@@ -1569,26 +1103,27 @@ def test_the_success_row_draws_its_marks_and_no_interval() -> None:
     bar under a 10/10 mark reaching down to 7 read as seven solved."""
     fig, ax = plt.subplots()
     row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 7, 10), arm(1.0, 2.0, 10, 10))
-    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     assert [collection for collection in ax.collections if isinstance(collection, PathCollection)]
     assert not [collection for collection in ax.collections if isinstance(collection, LineCollection)]
     plt.close(fig)
 
 
 @pytest.mark.parametrize(("solved", "served", "want"), [
-    ((2, 8), 8, [(-0.16, 2.0), (0.16, 8.0)]),
-    ((10, 10), 10, [(-0.16, 10.0), (0.16, 10.0)]),
-    ((0, 31), 40, [(-0.16, 0.0), (0.16, 31.0)]),
+    ((2, 8), 8, [(-0.16, 0.25), (0.16, 1.0)]),
+    ((10, 10), 10, [(-0.16, 1.0), (0.16, 1.0)]),
+    ((0, 31), 40, [(-0.16, 0.0), (0.16, 0.775)]),
 ])  # fmt: skip
-def test_a_success_mark_sits_at_the_solved_count(
+def test_a_success_mark_sits_at_the_solved_rate(
     solved: tuple[int, int], served: int, want: list[tuple[float, float]]
 ) -> None:
-    """The mark IS the count, the control's hollow one left of the column and the treated one right;
-    a rate or an interval centre would put a 10/10 arm below the ceiling."""
+    """USER 2026-09-25: the row is the solved RATE, solved over served, so pairs with different
+    rosters share one 0-100% scale; the control's hollow mark left of the column, the treated one
+    right, and a 10/10 arm exactly on the 100% ceiling."""
     fig, ax = plt.subplots()
     control, treated = (arm(1.0, 2.0, count, served) for count in solved)
     row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", control, treated)
-    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
     drawn = sorted({(float(x), float(y)) for mark in marks for x, y in mark.get_offsets()})
     assert drawn == pytest.approx(want)
@@ -1601,7 +1136,7 @@ def test_every_value_row_of_the_dot_row_carries_a_minor_grid(
     """User, 2026-09-22: more minor ticks on the paper plots -- the speed-up, tasks-completed and
     token rows alike, each ruled by its own axis kind (log2 units, a count, a log10 count)."""
     kept: list[Figure] = []
-    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False: kept.append(fig) or stem)
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False, **options: kept.append(fig) or stem)
     rows = observation_rows(BLIND_PAIR[1], 2.0, 100.0) + observation_rows(BLIND_PAIR[0], 4.0, 1000.0)
     frame = plot.pair_frame(pd.DataFrame(rows), [BLIND_PAIR], "no-score")
     stats = plot.points(frame[~frame.skills], frame[frame.skills])
@@ -1616,7 +1151,7 @@ def test_a_key_too_tall_for_its_band_grows_the_canvas_instead_of_covering_the_na
     """A fixed band made the key the thing that gave: at text width it shrank to its floor, still did
     not fit, and was drawn over the category names."""
     kept: list[Figure] = []
-    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False: kept.append(fig) or stem)
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False, **options: kept.append(fig) or stem)
     config = dataclasses.replace(efficacy_figures.PAPER_CONFIG, legend_chrome_in=0.05, legend_min_scale=1.0)
     control, treated = solved_and_failed_pair()
     panel = ("Blind", "no-score", plot.points(control, treated), pd.concat([control, treated]))
@@ -1633,11 +1168,11 @@ def test_a_key_too_tall_for_its_band_grows_the_canvas_instead_of_covering_the_na
 @pytest.mark.parametrize("legs", [("C", "Fortran") * 3])
 def test_category_names_still_touching_on_two_lines_step_down_until_clear(legs: tuple[str, ...]) -> None:
     """Three "Fortran" placeholders two columns apart share the staggered second line and touched.
-    The column is as narrow as that gets while the step-down floor (``category_min_scale``) can still
-    clear them; any narrower is the floor's warning, not a smaller type."""
+    The column is as narrow as that gets while the step-down floor (``category_min_scale``, the
+    shared 6pt print floor) can still clear them; any narrower is the floor's warning, not a smaller type."""
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(1.2, 1.0))
+    fig, ax = plt.subplots(figsize=(1.3, 1.0))
     config = efficacy_figures.PAPER_CONFIG
     rows = [efficacy_figures.ArmRow("qwen38", leg, "#1f77b4", arm(1.0, 2.0), arm(1.0, 2.0)) for leg in legs]
     ax.set_xlim(-0.6, len(rows) - 0.4)
@@ -1645,7 +1180,7 @@ def test_category_names_still_touching_on_two_lines_step_down_until_clear(legs: 
     efficacy_figures.stagger_crowded_ticks(fig, [ax], config)
     renderer = fig.canvas.get_renderer()
     size = ax.get_xticklabels()[0].get_fontsize()
-    assert size < config.tick_pt
+    assert size < config.type_.tick_pt
     assert not plotstyle.crowded_ticks(ax, renderer, size / 3.0 * fig.dpi / 72.0)
     plt.close(fig)
 
@@ -1676,7 +1211,7 @@ def test_without_the_success_row_speedup_and_cost_keep_their_order(success_row: 
     assert plot.dot_measures(argparse.Namespace(success_row=success_row)) == want
 
 
-def arm(x: float, high: float, solved: int = 4, served: int = 5) -> efficacy_figures.ArmPoint:
+def arm(x: float, high: float, solved: int = 4, served: int = 6) -> efficacy_figures.ArmPoint:
     """An arm at ``log2`` speed-up ``x`` whose interval tops out at ``high``."""
     return efficacy_figures.ArmPoint(x, x - 1.0, high, 1e5, 5e4, 2e5, served, served, solved, served)
 
@@ -1710,32 +1245,31 @@ def test_a_difference_label_sits_above_both_intervals_not_on_the_treated_mark() 
     plt.close(fig)
 
 
-def test_the_success_row_counts_kernels_up_to_the_roster_and_carries_no_x_ticks() -> None:
-    """The top tick is N, the kernels served, marked by a dashed rule; the axis runs 5% past it so the
-    rule is not the frame."""
+def test_the_success_row_runs_to_100_percent_and_carries_no_x_ticks() -> None:
+    """The top tick is 100% (every served kernel solved), marked by a dashed rule; the axis runs 5%
+    past it so the rule is not the frame."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
     row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 2, 8), arm(1.0, 2.0, 8, 8))
-    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Tasks Completed")
+    efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     fig.canvas.draw()
-    assert list(ax.get_yticks()) == [0, 4, 8]
-    assert ax.get_ylim() == pytest.approx((-0.4, 8.4))
+    assert list(ax.get_yticks()) == [0.0, 0.5, 1.0]
+    assert [label.get_text() for label in ax.get_yticklabels()] == ["0", "50", "100"]
+    assert ax.get_ylim() == pytest.approx((-0.05, 1.05))
     (ceiling,) = [line for line in ax.lines if line.get_linestyle() == "--"]
-    assert list(ceiling.get_ydata()) == [8, 8]
+    assert list(ceiling.get_ydata()) == [1.0, 1.0]
     assert not ax.texts
     assert all(tick.tick1line.get_markersize() == 0.0 for tick in ax.xaxis.get_major_ticks())
     plt.close(fig)
 
 
-@pytest.mark.parametrize(("kernels", "want"), [
-    (40, [0, 20, 40]),
-    (10, [0, 5, 10]),
-    (7, [0, 7]),
-    (0, []),
-])  # fmt: skip
-def test_success_ticks_end_on_the_roster_size(kernels: int, want: list[int]) -> None:
-    assert efficacy_figures.success_ticks(kernels) == want
+@pytest.mark.parametrize(("solved", "served", "want"), [(8, 8, 1.0), (0, 40, 0.0), (31, 40, 0.775), (0, 0, 0.0)])
+def test_the_success_rate_is_solved_over_served_and_zero_for_an_unserved_arm(
+    solved: int, served: int, want: float
+) -> None:
+    """An arm nobody served yet has no rate to show; it reads 0, and the row skips drawing it."""
+    assert efficacy_figures.success_rate(solved, served) == want
 
 
 def test_a_short_cost_row_labels_one_two_and_five_of_every_decade() -> None:
@@ -1766,6 +1300,38 @@ def test_crowded_category_ticks_alternate_two_lines_and_sparse_ones_do_not(
     plt.close(fig)
 
 
+@pytest.mark.parametrize(
+    ("intervention", "leg", "shape"),
+    [
+        pytest.param("packets", "C-Terse", palette.packet_marker("caveman"), id="packets"),
+        pytest.param("harness", "OpenHands", palette.harness_marker("openhands"), id="harness"),
+    ],
+)
+def test_a_per_column_panel_never_asks_the_registry_for_its_pseudo_intervention(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    intervention: str,
+    leg: str,
+    shape: str,
+) -> None:
+    """``intervention=packets``/``harness`` names no registered treatment: each column wears its own
+    packet's or harness's shape, and drawing the panel logs no palette fallback."""
+    kept: list[Figure] = []
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False, **options: kept.append(fig) or stem)
+    stub = ("Per Column", intervention, pd.DataFrame(), pd.DataFrame())
+    config = dataclasses.replace(efficacy_figures.PAPER_CONFIG, mark_pending=True)
+    with caplog.at_level("WARNING", logger=palette.__name__):
+        (column,) = efficacy_figures.dot_columns([stub], ["latest"], "model-packet", [], placeholders=[leg],
+                                                 pending=["qwen38"])  # fmt: skip
+        efficacy_figures.figure_dot_row([stub], tmp_path / "dots.pdf", config=config, placeholders=[leg],
+                                        pending=["qwen38"])  # fmt: skip
+    plt.close(kept[0])
+    assert [record.getMessage() for record in caplog.records] == []
+    assert column.shape == ""
+    assert [(row.leg, row.shape) for row in column.rows] == [(leg, shape)]
+
+
 def test_a_pending_model_gets_an_empty_category_in_registry_order() -> None:
     drawn = efficacy_figures.ArmRow(
         "qwen38", "C", "#000000", efficacy_figures.EMPTY_POINT, efficacy_figures.EMPTY_POINT
@@ -1779,7 +1345,7 @@ def test_a_pending_model_gets_an_empty_category_in_registry_order() -> None:
 def pending_dot_row(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, mark: bool) -> Figure:
     """A stub panel with two pending models, drawn and kept open."""
     kept: list[Figure] = []
-    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False: kept.append(fig) or stem)
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False, **options: kept.append(fig) or stem)
     config = dataclasses.replace(efficacy_figures.PAPER_CONFIG, mark_pending=mark)
     stub = ("Scientific", "cpfsrc", pd.DataFrame(), pd.DataFrame())
     efficacy_figures.figure_dot_row([stub], tmp_path / "dots.pdf", config=config, pending=["oss120b,kimi27sglang"])
@@ -1800,18 +1366,24 @@ def test_without_mark_pending_a_pending_category_stays_empty(
 ) -> None:
     fig = pending_dot_row(tmp_path, monkeypatch, mark=False)
     assert not any(t.get_gid() == plotstyle.PENDING_GID for ax in fig.axes for t in ax.texts)
-    assert len(fig.axes[0].get_xticks()) == 2  # the slots are kept either way
+    # The slots are kept either way: two models of one language share one tick (user, 2026-09-25)
+    # and the pending one still holds its column's width.
+    assert len(fig.axes[0].get_xticks()) == 1
+    assert fig.axes[0].get_xlim() == pytest.approx((-0.6, efficacy_figures.GROUP_STEP + 0.6))
 
 
-def test_the_key_is_never_wider_than_the_plot_body(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A single-column figure's key drops columns before it runs out past the panels."""
+def test_the_key_is_centred_on_the_canvas_and_never_wider(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The key is centred on the whole canvas, Y-label strip included, so it sits on the page's
+    centre (user, 2026-09-25; before, it was centred on the panels alone), and it drops columns
+    before it runs past the canvas."""
     fig = pending_dot_row(tmp_path, monkeypatch, mark=True)
     renderer = fig.canvas.get_renderer()
-    body_left, body_right = fig.axes[0].get_position().x0, fig.axes[-1].get_position().x1
     (legend,) = fig.legends
     box = legend.get_window_extent(renderer).transformed(fig.transFigure.inverted())
-    assert box.width <= body_right - body_left + 1e-6
-    assert (box.x0 + box.x1) / 2.0 == pytest.approx((body_left + body_right) / 2.0, abs=0.01)
+    assert box.width <= 1.0 + 1e-6
+    assert (box.x0 + box.x1) / 2.0 == pytest.approx(0.5, abs=0.01)
 
 
 def test_a_single_value_axis_is_left_unsnapped() -> None:
@@ -1830,7 +1402,9 @@ def test_a_single_value_axis_is_left_unsnapped() -> None:
 @pytest.mark.parametrize(
     ("marks", "cost", "want"),
     [
-        pytest.param([0.0, 3.0], False, (-2.0, 5.0), id="speedup-two-octaves-past-the-marks"),
+        # 2026-09-25: marks at or above 1x floor the row at 1x (log2 0), the interval cut there.
+        pytest.param([0.0, 3.0], False, (0.0, 5.0), id="speedup-floored-at-1x"),
+        pytest.param([-1.0, 3.0], False, (-3.0, 5.0), id="speedup-mark-below-1x-keeps-two-octaves"),
         pytest.param([1e5, 4e5], True, (2.5e4, 1.6e6), id="cost-a-factor-four-past-the-marks"),
         pytest.param([math.nan], False, (-math.inf, math.inf), id="no-mark-cuts-nothing"),
     ],
@@ -1839,14 +1413,16 @@ def test_intervals_reach_a_factor_four_past_the_outermost_marks(
     marks: list[float], cost: bool, want: tuple[float, float]
 ) -> None:
     """User, 2026-09-22: a few-kernel interval down to 0.004x stretched the GPU panel over twenty
-    octaves and its ticks read 0.00391x; the panel now spans its marks and a bounded reach."""
+    octaves and its ticks read 0.00391x; the panel now spans its marks and a bounded reach. User,
+    2026-09-25: only an interval that runs that far past the marks is cut, with an arrowhead, and a
+    speed-up row whose marks are all at or above 1x is cut at 1x."""
     assert efficacy_figures.interval_bounds(marks, cost, efficacy_figures.PAPER_CONFIG) == pytest.approx(want)
 
 
 def test_an_interval_past_the_reach_is_cut_at_it_with_an_arrowhead() -> None:
     """The axis must not follow the interval out, and the cut end has to say the interval goes on."""
     fig, ax = plt.subplots()
-    wide = efficacy_figures.ArmPoint(0.0, -9.0, 12.0, 1e5, 5e4, 2e5, 5, 5, 5, 5)
+    wide = efficacy_figures.ArmPoint(0.0, -9.0, 12.0, 1e5, 5e4, 2e5, 6, 6, 6, 6)
     row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0), wide)
     efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {})
     low, high = ax.get_ylim()
@@ -1861,12 +1437,13 @@ def few_kernel_arm(x: float, kernels: int) -> efficacy_figures.ArmPoint:
     return efficacy_figures.ArmPoint(x, x - 10.0, x + 10.0, 1e5, 5e4, 2e5, kernels, 40, kernels, 40)
 
 
-def test_a_mark_from_fewer_than_five_kernels_draws_no_interval_and_does_not_stretch_the_axis() -> None:
+def test_a_mark_from_fewer_than_six_kernels_draws_no_interval_and_does_not_stretch_the_axis() -> None:
     """User, 2026-09-22: Qwen's GPU OpenMP control solved three kernels, its interval ran 0.19x to
-    302x and was the only one in the figure cut at both ends; below five kernels the mark stands alone."""
+    302x and was the only one in the figure cut at both ends; below six kernels (the paper's rule,
+    summary.MIN_PAIRS_FOR_INTERVAL) the mark stands alone."""
     lines = {}
     limits = {}
-    for kernels in (3, 5):
+    for kernels in (5, 6):
         fig, ax = plt.subplots()
         point = few_kernel_arm(2.0, kernels)
         row = efficacy_figures.ArmRow("qwen38", "OpenMP Offload", "#1f77b4", point, point)
@@ -1874,15 +1451,16 @@ def test_a_mark_from_fewer_than_five_kernels_draws_no_interval_and_does_not_stre
         lines[kernels] = len(ax.lines)
         limits[kernels] = ax.get_ylim()
         plt.close(fig)
-    assert lines[3] < lines[5], lines
-    assert limits[3][1] - limits[3][0] < limits[5][1] - limits[5][0], limits
+    assert lines[5] < lines[6], lines
+    assert limits[5][1] - limits[5][0] < limits[6][1] - limits[6][0], limits
 
 
 @pytest.mark.parametrize(
     ("kernels", "want"),
     [
         pytest.param(3, True, id="three-kernels-needs-the-note"),
-        pytest.param(5, False, id="five-kernels-draws-its-interval"),
+        pytest.param(5, True, id="five-kernels-needs-the-note"),
+        pytest.param(6, False, id="six-kernels-draws-its-interval"),
         pytest.param(0, False, id="an-unmeasured-slot-is-not-a-few-kernel-mark"),
     ],
 )
@@ -1890,3 +1468,114 @@ def test_the_key_notes_a_missing_interval_only_when_a_few_kernel_mark_is_drawn(k
     point = few_kernel_arm(1.0, kernels)
     row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", point, point)
     assert efficacy_figures.few_kernel_marks([row], efficacy_figures.PAPER_CONFIG) is want
+
+
+def comparator_csv(speedups: dict[str, list[float | None]]) -> pd.DataFrame:
+    """A ``comparators.py`` table: one row per (kernel, comparator), ``speedup`` None where the
+    comparator has no valid run on that kernel."""
+    return pd.DataFrame([
+        {"kernel": f"k{index}", "comparator": name, "device": "cpu", "numba_ms": 1.0,
+         "ms": None if value is None else 1.0 / value, "speedup": value}
+        for name, values in speedups.items() for index, value in enumerate(values)
+    ])  # fmt: skip
+
+
+def test_a_comparators_mark_is_the_geomean_over_its_valid_kernels_and_its_solved_share() -> None:
+    table = comparator_csv({"pluto": [2.0, 8.0, None, None]})
+    (pluto,) = efficacy_figures.comparators_from_table(table, [("pluto", "C")])
+    point = efficacy_figures.comparator_point(pluto)
+    assert 2.0**point.x == pytest.approx(4.0)
+    assert (point.solved, point.served) == (2, 4)
+    assert math.isnan(point.y)  # a comparator spends no tokens
+
+
+@pytest.mark.parametrize(("kernels", "interval"), [(5, False), (6, True)])
+def test_a_comparator_gets_no_interval_below_min_pairs_for_interval(kernels: int, interval: bool) -> None:
+    assert efficacy_figures.summary.MIN_PAIRS_FOR_INTERVAL == 6
+    values = [1.5, 2.0, 3.0, 2.5, 4.0, 1.2][:kernels]
+    point = efficacy_figures.comparator_point(efficacy_figures.Comparator("pluto", "C", tuple(values), 40))
+    assert math.isfinite(point.x_low) is interval and math.isfinite(point.x_high) is interval
+    if interval:
+        want = efficacy_figures.summary.geomean_ci(values)
+        assert (2.0**point.x_low, 2.0**point.x_high) == pytest.approx((want.low, want.high))
+
+
+def comparator_dot_row(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Figure:
+    """The blind pair plus Pluto under its C tick, drawn at paper size and kept open."""
+    kept: list[Figure] = []
+    monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False, **options: kept.append(fig) or stem)
+    control, treated = solved_and_failed_pair()
+    panel = ("Blind", "no-score", plot.points(control, treated), pd.concat([control, treated]))
+    pluto = efficacy_figures.Comparator("pluto", "", (2.0, 3.0, 4.0, 1.5, 2.5, 3.5), 10)
+    efficacy_figures.figure_dot_row([panel], tmp_path / "dots.pdf", row_width_in=plotstyle.ICLR_TEXT_WIDTH_IN,
+                                    comparators=[[pluto]])  # fmt: skip
+    return kept[0]
+
+
+def marks_in(ax: Axes, colour: str) -> int:
+    """Filled marks of ``colour`` on ``ax``."""
+    return sum(
+        1
+        for collection in ax.collections
+        if isinstance(collection, PathCollection)
+        and len(collection.get_facecolors())
+        and matplotlib.colors.to_hex(collection.get_facecolors()[0]) == colour
+    )
+
+
+def test_a_comparator_is_drawn_on_the_speedup_and_solved_rows_and_never_on_cost(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fig = comparator_dot_row(tmp_path, monkeypatch)
+    colour = palette.framework_color("pluto")
+    speedup, solved, spend = fig.axes[:3]
+    assert (marks_in(speedup, colour), marks_in(solved, colour), marks_in(spend, colour)) == (1, 1, 0)
+    # It sits beside the models under their one delivery tick, and the key names it.
+    assert len(speedup.get_xticks()) == 1
+    assert "Pluto" in [text.get_text() for legend in fig.legends for text in legend.get_texts()]
+
+
+def test_a_comparator_never_wears_a_packets_shape_or_shares_one() -> None:
+    shapes = efficacy_figures.comparator_shapes(["ppcg_hip", "jax_gpu", "pluto", "jax_cpu"])
+    packets_worn = {palette.packet_marker(key) for key in palette.hue_order("packets")}
+    assert set(shapes) == {"pluto", "ppcg_hip", "jax"}  # jax_cpu and jax_gpu are one JAX
+    assert len(set(shapes.values())) == 3
+    assert not set(shapes.values()) & (packets_worn | {efficacy_figures.CONTROL_MARKER})
+
+
+def test_the_paper_key_sets_five_columns(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """USER 2026-09-25: five columns, so the paper key takes two lines instead of three."""
+    assert efficacy_figures.PAPER_CONFIG.legend_ncol == 5
+    fig = comparator_dot_row(tmp_path, monkeypatch)
+    renderer = fig.canvas.get_renderer()
+    (legend,) = fig.legends
+    columns = {round(text.get_window_extent(renderer).x0) for text in legend.get_texts()}
+    assert len(columns) == min(5, len(legend.get_texts())), len(columns)
+
+
+def test_the_solved_row_is_never_starred_because_the_solved_rate_is_not_tested() -> None:
+    """Only the speed-up and cost legs are in the family: a speed-up verdict must not leak onto the
+    solved row as if the solved rate had been tested."""
+    stats = pd.DataFrame([{"model": "qwen38", "leg": "C", "score_verdict": efficacy.SIGNIFICANT,
+                           "cost_verdict": efficacy.SIGNIFICANT}])  # fmt: skip
+    significance = efficacy_figures.axis_significance(stats)
+    row = efficacy_figures.ArmRow("qwen38", "C", "#000000", arm(1.0, 1.5), arm(2.0, 2.5))
+    texts = {}
+    for measure in ("speedup", "success"):
+        fig, ax = plt.subplots()
+        efficacy_figures.draw_measure_row(ax, [row], measure, "D", significance)
+        texts[measure] = [text.get_text() for text in ax.texts]
+        plt.close(fig)
+    assert efficacy_figures.SCORE_SIG_MARK in texts["speedup"]
+    assert texts["success"] == [], texts["success"]
+
+
+def test_the_cost_row_is_priced_with_the_billed_card_unless_told_otherwise() -> None:
+    control, treated = solved_and_failed_pair()
+    cached = {"tokens_cached_input": 1000.0}
+    control = control.assign(**{k: np.where(control.record == "task", v, np.nan) for k, v in cached.items()})
+    treated = treated.assign(**{k: np.where(treated.record == "task", v, np.nan) for k, v in cached.items()})
+    billed = efficacy_figures.paired_kernels(control, treated)
+    effective = efficacy_figures.paired_kernels(control, treated, card=cost.resolve("effective"))
+    # billed charges the 1000 cached tokens at a tenth; effective charges them nothing.
+    assert (billed.control_tokens - effective.control_tokens).to_numpy() == pytest.approx(100.0)

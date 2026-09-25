@@ -96,6 +96,31 @@ def test_the_geomean_interval_is_asymmetric_on_the_ratio_scale() -> None:
     )
 
 
+def test_the_geomean_interval_is_the_95_percent_log_t_interval() -> None:
+    """Ratios 1,2,4,1,2,4: log2 values 0,1,2,0,1,2, mean 1, sd sqrt(0.8), t(0.975, 5) = 2.5706.
+    The ends are 2^(1 -/+ 2.5706 * sqrt(0.8/6)) = 1.04345 and 3.83345, by hand."""
+    interval = summary.geomean_ci([1.0, 2.0, 4.0, 1.0, 2.0, 4.0])
+    assert (interval.point, interval.low, interval.high) == pytest.approx((2.0, 1.0434462081689584, 3.833451086107456))
+
+
+@pytest.mark.parametrize(("n", "has_interval"), [(5, False), (6, True)])
+def test_a_figure_geomean_draws_its_log_t_interval_only_from_six_values(n: int, has_interval: bool) -> None:
+    """Below 6 values the point stays and the interval is withheld; from 6 it is the log-t interval."""
+    interval = summary.geomean_interval([1.0, 2.0, 4.0, 1.0, 2.0, 4.0][:n])
+    assert interval.method == ("log-t" if has_interval else "underpowered")
+    assert math.isfinite(interval.low) == has_interval == math.isfinite(interval.high)
+
+
+def test_the_paired_geomean_is_a_paired_t_test_with_a_log_t_interval() -> None:
+    """The same six log ratios as a paired leg: the same interval, and the paired t p at
+    t = 1 / sqrt(0.8/6) = 2.7386 on 5 degrees of freedom, 0.04086."""
+    change = summary.paired_geomean([math.log(2.0) * value for value in (0, 1, 2, 0, 1, 2)])
+    assert change.method == "paired-t"
+    assert math.exp(change.low) == pytest.approx(1.0434462081689584)
+    assert math.exp(change.high) == pytest.approx(3.833451086107456)
+    assert change.pvalue == pytest.approx(0.040859403859295894)
+
+
 def test_the_interval_names_what_it_is_for() -> None:
     assert summary.geomean_ci([2.0, 4.0]).label() == "95% log-t CI for geomean"
 
@@ -221,6 +246,14 @@ def test_paired_geomean_without_spread_reports_no_test() -> None:
     change = summary.paired_geomean([0.2] * 8)
     assert change.method == "degenerate"
     assert change.estimate == pytest.approx(0.2) and math.isnan(change.pvalue)
+    assert math.isnan(change.low) and math.isnan(change.high)
+
+
+def test_paired_geomean_over_no_pairs_has_no_estimate() -> None:
+    """An empty leg is not a 1x ratio: exp(0) would plot as no change."""
+    change = summary.paired_geomean([])
+    assert (change.n, change.method) == (0, "degenerate")
+    assert math.isnan(change.estimate)
 
 
 def test_a_timing_comparison_and_a_paired_change_report_one_signed_rank_p() -> None:
@@ -261,50 +294,3 @@ def test_a_bootstrap_over_log_ratios_keeps_the_negative_values() -> None:
 
 def test_a_rank_sum_over_two_identical_samples_finds_no_difference() -> None:
     assert summary.rank_sum_test([3.0, 3.0, 3.0], [3.0, 3.0, 3.0])[1] == pytest.approx(1.0)
-
-
-def test_the_total_ratio_is_the_quotient_of_the_two_sums() -> None:
-    """Not the mean of the per-kernel ratios: one expensive kernel is most of a budget, and the
-    total is the number that says so."""
-    interval = summary.paired_total_ratio([100.0, 10.0, 10.0], [10.0, 10.0, 10.0])
-    assert interval.point == pytest.approx(120.0 / 30.0)
-
-
-def test_the_total_ratio_differs_from_the_geomean_of_the_same_pairs() -> None:
-    """The two answer different questions, so a table that carries both must not get one twice."""
-    a, b = [100.0, 10.0, 10.0, 10.0, 10.0, 10.0], [10.0] * 6
-    total = summary.paired_total_ratio(a, b).point
-    geomean = math.exp(summary.paired_geomean([math.log(x / y) for x, y in zip(a, b, strict=True)]).estimate)
-    assert total == pytest.approx(150.0 / 60.0)
-    assert geomean == pytest.approx(10.0 ** (1.0 / 6.0))
-    assert total != pytest.approx(geomean)
-
-
-def test_the_total_ratio_interval_brackets_its_point() -> None:
-    values_a = [120.0, 90.0, 140.0, 80.0, 110.0, 95.0, 130.0, 105.0]
-    values_b = [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
-    interval = summary.paired_total_ratio(values_a, values_b)
-    assert interval.low < interval.point < interval.high
-    assert interval.n == 8
-    assert "bootstrap-percentile" in interval.method
-
-
-def test_the_total_ratio_is_the_same_number_on_a_second_run() -> None:
-    """A published end point may not move because a resample was drawn again."""
-    a = [3.0, 9.0, 2.0, 11.0, 7.0, 5.0, 13.0]
-    b = [2.0, 8.0, 3.0, 9.0, 6.0, 6.0, 10.0]
-    first, second = summary.paired_total_ratio(a, b), summary.paired_total_ratio(a, b)
-    assert (first.low, first.point, first.high) == (second.low, second.point, second.high)
-
-
-def test_the_total_ratio_resamples_kernels_and_not_the_two_sides_apart() -> None:
-    """Identical sides are the same kernel drawn twice, so every resample is exactly 1 and the
-    interval has no width. Resampling the sums independently would give it one."""
-    values = [5.0, 50.0, 500.0, 2.0, 80.0, 7.0, 900.0]
-    interval = summary.paired_total_ratio(values, values)
-    assert (interval.low, interval.point, interval.high) == pytest.approx((1.0, 1.0, 1.0))
-
-
-def test_the_total_ratio_refuses_sides_of_different_length() -> None:
-    with pytest.raises(ValueError, match="one denominator per numerator"):
-        summary.paired_total_ratio([1.0, 2.0], [1.0])

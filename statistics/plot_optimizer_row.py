@@ -56,27 +56,43 @@ def roster_of(path: str) -> list[str] | None:
     return [line.strip() for line in pathlib.Path(path).read_text().splitlines() if line.strip()]
 
 
+def arm_marks(
+    fields: dict[str, str], models: str, roster: list[str] | None, repeats: population.RepeatPolicy
+) -> list[optimizers.OptimizerMark]:
+    """One mark per model whose ``arms=`` arm has rows in ``observations=``; a missing arm is named."""
+    if not (fields.get("observations") and fields.get("arms")):
+        return []
+    frame = read_observations(pathlib.Path(fields["observations"]))
+    marks: list[optimizers.OptimizerMark] = []
+    for model in fields.get("models", models).split(","):
+        arm = fields["arms"].format(model=model)
+        if (frame["arm"].astype(str) == arm).any():
+            marks.append(optimizers.arm_mark(frame, arm, model, roster, repeats))
+        else:
+            print(f"  {fields['title']}: no rows for arm {arm}", file=sys.stderr)
+    return marks
+
+
+def compiler_marks(
+    fields: dict[str, str], canon_db: pathlib.Path | None, roster: list[str] | None, baseline: str
+) -> list[optimizers.OptimizerMark]:
+    """One mark per ``compilers=`` canon column, over ``baseline``."""
+    columns = [c for c in fields.get("compilers", "").split(",") if c]
+    if not columns:
+        return []
+    if canon_db is None or roster is None:
+        raise SystemExit(f"{fields['title']}: compilers= needs --canon-db and roster=")
+    canon_frame = read_table(canon_db, "canon")
+    return [optimizers.compiler_mark(canon_frame, column, roster, baseline) for column in columns]
+
+
 def build_panel(fields: dict[str, str], canon_db: pathlib.Path | None, models: str) -> optimizers.OptimizerPanel:
     if "title" not in fields:
         raise SystemExit(f"--panel needs title=: {fields}")
     roster = roster_of(fields.get("roster", ""))
     baseline = fields.get("baseline", "numba")
     repeats: population.RepeatPolicy = "median" if fields.get("repeats") == "median" else "latest"
-    marks: list[optimizers.OptimizerMark] = []
-    if fields.get("observations") and fields.get("arms"):
-        frame = read_observations(pathlib.Path(fields["observations"]))
-        for model in fields.get("models", models).split(","):
-            arm = fields["arms"].format(model=model)
-            if (frame["arm"].astype(str) == arm).any():
-                marks.append(optimizers.arm_mark(frame, arm, model, roster, repeats))
-            else:
-                print(f"  {fields['title']}: no rows for arm {arm}", file=sys.stderr)
-    columns = [c for c in fields.get("compilers", "").split(",") if c]
-    if columns:
-        if canon_db is None or roster is None:
-            raise SystemExit(f"{fields['title']}: compilers= needs --canon-db and roster=")
-        canon_frame = read_table(canon_db, "canon")
-        marks += [optimizers.compiler_mark(canon_frame, column, roster, baseline) for column in columns]
+    marks = arm_marks(fields, models, roster, repeats) + compiler_marks(fields, canon_db, roster, baseline)
     name = fields.get("baseline_name") or experiment_tags.framework_name(baseline)
     return optimizers.OptimizerPanel(fields["title"], name, tuple(marks))
 

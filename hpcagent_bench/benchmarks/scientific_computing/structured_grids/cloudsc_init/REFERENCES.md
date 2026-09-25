@@ -9,7 +9,7 @@ compiles it and compares bit for bit.
 The DaCe vectorization suite carries the same two nests as
 `cloudsc_init_affine` and `cloudsc_species_init`
 (`tests/passes/vectorization/cloudsc/test_cloudsc_loopnests.py`). They are one
-initialisation block in the Fortran and one kernel here; splitting them would give
+initialization block in the Fortran and one kernel here; splitting them would give
 two benchmarks computing `field + PTSPHY * tendency` at two ranks.
 
 The upstream nests also write `ZQX0` and `ZAORIG`, start-of-scheme copies carrying

@@ -76,10 +76,13 @@ def test_a_user_file_adds_cards_and_a_bad_weight_is_refused(tmp_path: pathlib.Pa
 
 
 def test_a_missing_component_prices_the_task_as_no_measurement() -> None:
+    """R7: a task row that does not state a component cannot be priced; NaN, never its raw
+    ``tokens`` passed off as a billed total. The judge row keeps its own count."""
     frame = task_rows(fresh=1.0, cached=1.0, output=1.0)
     frame.loc[0, "tokens_output"] = math.nan
     priced = cost.priced(frame, cost.resolve("billed"))
-    assert priced["tokens"].iloc[0] == pytest.approx(2.0)  # unstated components keep the extracted total
+    assert math.isnan(priced["tokens"].iloc[0])
+    assert priced["tokens"].iloc[1] == pytest.approx(5.0)
 
 
 def test_the_three_proxies_price_one_episode_as_the_paper_defines_them() -> None:

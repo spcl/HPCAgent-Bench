@@ -36,7 +36,6 @@ written beside it as ``<out>.csv`` -- a figure nobody can check is a claim.
 """
 
 import argparse
-import math
 import pathlib
 import sys
 from collections.abc import Sequence
@@ -47,7 +46,7 @@ import matplotlib.lines
 import pandas as pd
 
 from hpcagent_bench import experiment_tags, experiments
-from hpcagent_bench.stats import palette, population, summary
+from hpcagent_bench.stats import cost, palette, population, summary
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import kernel_comparison, per_kernel
 
@@ -85,9 +84,9 @@ def arm_answers(frame: pd.DataFrame, arm: str, repeats: population.RepeatPolicy)
 
 
 def arm_tokens(frame: pd.DataFrame, arm: str, repeats: population.RepeatPolicy) -> dict[str, float]:
-    """``arm``'s per-kernel token total: the task row's EFFECTIVE total over every attempt
-    (:func:`hpcagent_bench.stats.population.kernel_tokens`, spec T1-T4), never the per-turn billed
-    count, which charges a 173-turn episode for its prompt 173 times."""
+    """``arm``'s per-kernel token total: the task row's total, priced by the caller's cost card
+    (:func:`hpcagent_bench.stats.population.kernel_tokens`, spec T1-T4), never the raw per-turn
+    usage sum, which charges a 173-turn episode for its prompt 173 times."""
     totals = population.kernel_tokens(frame[frame["arm"].astype(str) == arm], repeats=repeats)
     return {str(kernel): float(value) for kernel, value in totals.items() if value > 0}
 
@@ -190,7 +189,13 @@ def legend_handles(
     ]  # fmt: skip
     handles += [
         matplotlib.lines.Line2D(
-            [], [], marker="o", linestyle="none", color=series.color, markersize=mark, label=series.label
+            [],
+            [],
+            marker=palette.CONTROL_MARKER,
+            linestyle="none",
+            color=series.color,
+            markersize=mark,
+            label=series.label,
         )
         for series in series_list
     ]
@@ -237,8 +242,9 @@ TABLE_NOTE: str = (
     "# ratio: the treated arm's value over the control arm's, per kernel. speedup is "
     "population.kernel_answers under the served policy (a served kernel the arm never delivered "
     "enters at 1.0 and delivered=False); tokens is population.kernel_tokens, the task row's "
-    "effective total, over the kernels BOTH arms have one for -- never filled. The GEOMEAN row is "
-    "the figure's summary slot: the geometric mean with its 95% log-t interval (summary.geomean_ci) "
+    "total priced with --cost-model (default billed), over the kernels BOTH arms have one for -- never "
+    "filled. The GEOMEAN row is the figure's summary slot: the geometric mean with its 95% log-t "
+    "interval (summary.geomean_interval, blank under 6 kernels) "
     "over the kernels BOTH arms delivered (speedup; n counts them) or both have a task total for "
     "(tokens)."
 )
@@ -272,18 +278,18 @@ def geomean_row(series: kernel_comparison.SeriesValues, panel: str) -> dict[str,
     drawn = kernel_comparison.speedup_series if panel == SPEEDUP_PANEL else kernel_comparison.token_series
     values = series.values if panel == SPEEDUP_PANEL else series.tokens
     measured = per_kernel.kernel_medians(drawn(series, sorted(values)).cells)
-    interval = summary.geomean_ci(measured) if measured.size else None
+    interval = summary.geomean_interval(measured)
     return {
         "panel": panel,
         "arm": series.key,
         "model": series.model,
         "kernel": "GEOMEAN",
-        "ratio": interval.point if interval is not None else math.nan,
+        "ratio": interval.point,
         "delivered": "",
         "n": int(measured.size),
-        "low": interval.low if interval is not None else math.nan,
-        "high": interval.high if interval is not None else math.nan,
-        "method": interval.method if interval is not None else "",
+        "low": interval.low,
+        "high": interval.high,
+        "method": interval.method,
     }
 
 
@@ -306,8 +312,11 @@ def run(
     out: pathlib.Path,
     double_column: bool = False,
     repeats: population.RepeatPolicy = "latest",
+    card: cost.CostModel = cost.resolve(),
 ) -> int:
-    frame = pd.concat([experiments.read_observations(path) for path in observations], ignore_index=True)
+    frame = cost.priced(
+        pd.concat([experiments.read_observations(path) for path in observations], ignore_index=True), card
+    )
     series_list = build_series(frame, pairs, treatment, repeats)
     if not series_list:
         print("no pair produced a series; nothing to draw", file=sys.stderr)
@@ -351,6 +360,7 @@ def main(argv: list[str] | None = None) -> int:
         help="a kernel run more than once: median over runs (git-scicomp repeats by design, the "
         "default here) or the latest run (reruns)",
     )
+    cost.add_arguments(ap)
     args = ap.parse_args(argv)
     return run(
         args.observations,
@@ -361,6 +371,7 @@ def main(argv: list[str] | None = None) -> int:
         args.out,
         args.double_column,
         args.repeats,
+        cost.resolve(args.cost_model, args.cost_models),
     )
 
 

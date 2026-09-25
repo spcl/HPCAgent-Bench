@@ -27,9 +27,11 @@ import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from hpcagent_bench.experiment_tags import framework_name
 from hpcagent_bench.experiments import read_table
 from hpcagent_bench.stats import style, summary
 from hpcagent_bench.stats.canon import read_status, read_times, speedups
+from hpcagent_bench.stats.figures.helpers.axes import rotated_labels_in
 
 if TYPE_CHECKING:
     import matplotlib.axes
@@ -42,30 +44,16 @@ TABLE: str = "canon"
 #: ``loop_level_reasoning`` and therefore what every agent submission on this track is graded
 #: against; ``cc`` answers the separate question of what canonicalization buys over sequential C.
 BASELINES: tuple[str, ...] = ("numba", "cc")
-LABEL: dict[str, str] = {"numba": "Numba", "cc": "sequential C"}
 
-#: Columns on the figure, in axis order, with the label each carries absent the baseline
-#: (dynamically appended below). dace_cpu / dace_gpu -- the non-canonicalized DaCe columns -- are
-#: collected by scripts/collect_canon.py but not drawn here: this figure answers what
+#: Columns on the figure, in axis order; each is labelled by :func:`experiment_tags.framework_name`.
+#: dace_cpu / dace_gpu -- the non-canonicalized DaCe columns -- are collected by
+#: scripts/collect_canon.py but drawn only on --columns request: this figure answers what
 #: canonicalization is worth against the compilers, not what DaCe is worth against itself.
-DRAW: tuple[tuple[str, str], ...] = (
-    ("cc", "sequential C, one thread"),
-    ("cc_autopar", "C -O3 + autopar"),
-    ("numba", "Numba"),
-    ("dace_cpu_canonicalize", "DaCe canon CPU"),
-    ("dace_gpu_canonicalize", "DaCe canon GPU"),
-)
+DRAW: tuple[str, ...] = ("cc", "cc_autopar", "numba", "dace_cpu_canonicalize", "dace_gpu_canonicalize")
 
-#: Labels for columns a caller may ask for with --columns but that DRAW does not draw by default
-#: (dace_cpu: DaCe's own parallelizer, without canonicalization -- drawn on request by a sweep that
-#: wants it, e.g. llr-full-speedup's "what does canon buy over DaCe's own parallel output").
-EXTRA_LABELS: dict[str, str] = {"dace_cpu": "DaCe parallel CPU", "dace_gpu": "DaCe parallel GPU"}
-COLUMN_LABELS: dict[str, str] = dict(DRAW) | EXTRA_LABELS
-
-#: STATISTIC colours (median vs. geomean), not entity colours -- palette.py reserves colour for a
-#: packet, a framework or a model, and neither mark here is one of those.
-MEDIAN_HUE: str = "#3b6fd4"
-GEOMEAN_HUE: str = "#d4772a"
+#: Author-size type: a standalone report figure (``--double-column`` shrinks it by
+#: :data:`DOUBLE_COLUMN_SCALE`).
+TYPE: style.TypeScale = style.AUTHOR_SCALE
 
 #: Printed / written table columns.
 TABLE_FIELDS: tuple[str, ...] = ("column", "label", "median_speedup", "geomean_speedup", "n")
@@ -90,11 +78,16 @@ def rows_for(times: dict[str, dict[str, float]], baseline: str, columns: Sequenc
         sp = speedups(times, baseline, column)
         if not sp:
             continue
-        label = COLUMN_LABELS.get(column, column)
+        label = framework_name(column)
         if column == baseline:
             label = f"{label} (baseline)"
         rows.append(Row(column, label, statistics.median(sp), summary.geomean(sp, unusable="drop"), len(sp)))
     return rows
+
+
+def tick_label(row: Row) -> str:
+    """A bar's x label: the framework and how many kernels its statistics are over."""
+    return f"{row.label}  (n={row.n})"
 
 
 #: Compact A4-insert mode shrinks every label by this fraction of its normal :mod:`style` size --
@@ -108,8 +101,7 @@ def figure_size(rows: list[Row], double_column: bool) -> tuple[float, float, flo
     it is the only thing below the axis (rule one puts the value on Y) -- so a caller with long
     framework names never collides its own tick labels with the legend under them."""
     scale = DOUBLE_COLUMN_SCALE if double_column else 1.0
-    longest = max((len(f"{row.label}  (n={row.n})") for row in rows), default=8)
-    bottom_in = longest * style.TICK_PT * scale * 0.6 / 72.0 + 0.85
+    bottom_in = rotated_labels_in((tick_label(row) for row in rows), TYPE.tick_pt * scale) + 0.85
     left_in = 0.75
     width = style.DOUBLE_COLUMN_WIDTH if double_column else max(4.2, 0.85 * len(rows) + 2.2)
     # The y label is rotated too, and a tight bbox does not rescue one longer than the axes are
@@ -149,10 +141,17 @@ def draw(
     bottom = ax.get_ylim()[0]
 
     for x, row in zip(xs, rows, strict=True):
-        ax.bar(x, row.median - bottom, bottom=bottom, width=bar_width, color=MEDIAN_HUE, zorder=2)
+        ax.bar(x, row.median - bottom, bottom=bottom, width=bar_width, color=style.STAT_INK.median, zorder=2)
         # A tick spanning the bar's width rather than a dot on it -- the geomean can fall either
         # side of the median, and a dot landing just inside the bar sits on top of its value label.
-        ax.hlines(row.geomean, x - bar_width * 0.62, x + bar_width * 0.62, color=GEOMEAN_HUE, linewidth=2.0, zorder=6)
+        ax.hlines(
+            row.geomean,
+            x - bar_width * 0.62,
+            x + bar_width * 0.62,
+            color=style.STAT_INK.geomean,
+            linewidth=TYPE.line_width,
+            zorder=6,
+        )
         ax.text(
             x,
             row.median * 1.09,
@@ -160,38 +159,36 @@ def draw(
             va="bottom",
             ha="center",
             zorder=7,
-            fontsize=style.ANNOTATION_PT * scale,
+            fontsize=TYPE.annotation_pt * scale,
             color=style.INK,
             family="monospace",
-            path_effects=[matplotlib.patheffects.withStroke(linewidth=2.6, foreground="white")],
+            path_effects=[matplotlib.patheffects.withStroke(linewidth=2 * TYPE.line_width, foreground="white")],
         )
 
     ax.set_xticks(xs)
-    ax.set_xticklabels(
-        [f"{row.label}  (n={row.n})" for row in rows], fontsize=style.TICK_PT * scale, color=style.INK, rotation=90
-    )
+    ax.set_xticklabels([tick_label(row) for row in rows], fontsize=TYPE.tick_pt * scale, color=style.INK, rotation=90)
     ax.set_ylabel(
-        f"Speed-up over {LABEL.get(baseline, baseline)} (Log2 Scale)",
-        fontsize=style.ANNOTATION_PT * scale,
+        f"Speed-up over {framework_name(baseline)} (Log2 Scale)",
+        fontsize=TYPE.annotation_pt * scale,
         color=style.MUTED,
     )
-    ax.axhline(1.0, color=style.RULE, linewidth=1.0, zorder=0)
+    ax.axhline(1.0, color=style.RULE, linewidth=TYPE.hairline_width, zorder=0)
     ax.yaxis.set_major_locator(matplotlib.ticker.LogLocator(base=2.0, subs=(1.0,), numticks=12))
     ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, position: f"{v:g}x"))
-    ax.grid(axis="y", which="major", color=style.RULE, linewidth=0.6, alpha=0.7, zorder=0)
+    ax.grid(axis="y", which="major", alpha=0.7, zorder=0)
     style.minor_ticks(ax.yaxis, "ratio")
     ax.set_axisbelow(True)
     style.despine(ax, keep=("left",))
     ax.tick_params(axis="x", length=0, colors=style.MUTED)
-    ax.tick_params(axis="y", length=0, colors=style.MUTED, labelsize=style.TICK_PT * scale)
+    ax.tick_params(axis="y", length=0, colors=style.MUTED, labelsize=TYPE.tick_pt * scale)
 
     geomean_key = matplotlib.lines.Line2D(
-        [], [], color=GEOMEAN_HUE, linewidth=2.0, marker="none", label="Geometric Mean"
+        [], [], color=style.STAT_INK.geomean, linewidth=TYPE.line_width, marker="none", label="Geometric Mean"
     )
-    median_key = matplotlib.patches.Patch(facecolor=MEDIAN_HUE, linewidth=0.0, label="Median Speed-up")
-    style.legend_below(fig, [median_key, geomean_key], ncol=2, y=0.02, fontsize=style.ANNOTATION_PT * scale)
+    median_key = matplotlib.patches.Patch(facecolor=style.STAT_INK.median, linewidth=0.0, label="Median Speed-up")
+    style.legend_below(fig, [median_key, geomean_key], ncol=2, y=0.02, fontsize=TYPE.legend_pt * scale)
     if not double_column:
-        ax.set_title(title, loc="left", fontsize=style.SUBTITLE_PT, fontweight="bold", color=style.INK, pad=9.0)
+        ax.set_title(title, loc="left", fontsize=TYPE.title_pt, fontweight="bold", color=style.INK, pad=9.0)
     return fig, ax
 
 
@@ -227,20 +224,20 @@ def draw_distribution(
         color = palette.framework_color(column) if column.startswith("dace_") else style.MUTED
         xs = [i / (len(sp) - 1) for i in range(len(sp))] if len(sp) > 1 else [0.0]
         gm = summary.geomean(sp, unusable="drop")
-        label = f"{COLUMN_LABELS.get(column, column)}  (n={len(sp)}, geomean {gm:.2f}x)"
-        ax.plot(xs, sp, color=color, linewidth=1.6, label=label, zorder=3)
-        ax.axhline(gm, color=color, linewidth=1.0, linestyle="--", alpha=0.6, zorder=2)
-    ax.axhline(1.0, color=style.RULE, linewidth=1.0, zorder=0)
-    ax.set_xlabel("Kernels, Sorted by Speed-up (Fraction of the Sweep)", color=style.MUTED, fontsize=style.LABEL_PT)
-    ax.set_ylabel(f"Speed-up over {LABEL.get(baseline, baseline)} (Log2)", color=style.MUTED, fontsize=style.LABEL_PT)
+        label = f"{framework_name(column)}  (n={len(sp)}, geomean {gm:.2f}x)"
+        ax.plot(xs, sp, color=color, linewidth=TYPE.line_width, label=label, zorder=3)
+        ax.axhline(gm, color=color, linewidth=TYPE.hairline_width, linestyle="--", alpha=0.6, zorder=2)
+    ax.axhline(1.0, color=style.RULE, linewidth=TYPE.hairline_width, zorder=0)
+    ax.set_xlabel("Kernels, Sorted by Speed-up (Fraction of the Sweep)", color=style.MUTED, fontsize=TYPE.label_pt)
+    ax.set_ylabel(f"Speed-up over {framework_name(baseline)} (Log2)", color=style.MUTED, fontsize=TYPE.label_pt)
     ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _pos: f"{v:g}x"))
-    ax.grid(axis="y", which="major", color=style.RULE, linewidth=0.6, alpha=0.7, zorder=0)
+    ax.grid(axis="y", which="major", alpha=0.7, zorder=0)
     style.minor_ticks(ax.yaxis, "ratio")
     ax.set_axisbelow(True)
     style.despine(ax, keep=("bottom", "left"))
-    ax.tick_params(colors=style.MUTED, labelsize=style.TICK_PT)
+    ax.tick_params(colors=style.MUTED, labelsize=TYPE.tick_pt)
     handles = ax.get_legend_handles_labels()[0]
-    style.legend_below(fig, handles, ncol=1, y=-0.02, fontsize=style.ANNOTATION_PT)
+    style.legend_below(fig, handles, ncol=1, y=-0.02, fontsize=TYPE.legend_pt)
     return fig, ax
 
 
@@ -310,7 +307,7 @@ def run(
         print(f"{db} has no {baseline!r} column to divide by", file=sys.stderr)
         return 1
 
-    draw_columns = list(columns) if columns is not None else [column for column, _label in DRAW]
+    draw_columns = list(columns) if columns is not None else list(DRAW)
     rows = rows_for(times, baseline, draw_columns)
     if not rows:
         print(f"{db} holds none of the drawn columns", file=sys.stderr)
