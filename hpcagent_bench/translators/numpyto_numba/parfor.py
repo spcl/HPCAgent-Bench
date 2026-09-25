@@ -140,33 +140,89 @@ def unit_step(call: ast.Call) -> bool:
     return isinstance(step, ast.Constant) and type(step.value) is int and step.value == 1
 
 
-def written_parameters(tree: ast.Module) -> dict[str, frozenset[int]]:
-    """Module-level function name -> the positions of the parameters its body writes into
-    (``p[...] = ...`` or ``p[...] += ...``): the arrays a call to it mutates."""
-    found: dict[str, frozenset[int]] = {}
-    for fn in tree.body:
-        if not isinstance(fn, ast.FunctionDef):
-            continue
-        params = [a.arg for a in fn.args.args]
-        stored = {
-            t.value.id
-            for n in ast.walk(fn)
-            if isinstance(n, (ast.Assign, ast.AugAssign))
-            for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
-            if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name)
-        }
-        found[fn.name] = frozenset(i for i, name in enumerate(params) if name in stored)
-    return found
+#: Array methods that write into the array they are called on (``a.fill(0.0)``).
+MUTATING_METHODS = frozenset({"fill", "sort", "put", "partition", "itemset"})
 
 
-def calls_a_mutating_helper(loop: ast.For, mutates: dict[str, frozenset[int]]) -> bool:
+def root_name(node: ast.AST) -> str | None:
+    """The array ``node`` names or views: ``a`` for ``a``, ``a[i]``, ``a[i][:, j]``; else ``None``."""
+    while isinstance(node, ast.Subscript):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def handed_to_written_params(call: ast.Call, params: list[str], written: frozenset[str]) -> set[str]:
+    """Names of the arrays ``call`` hands to a helper parameter in ``written``, positionally or by
+    keyword."""
+    handed = [(params[i], a) for i, a in enumerate(call.args) if i < len(params)]
+    handed += [(k.arg, k.value) for k in call.keywords if k.arg is not None]
+    return {name for p, a in handed if p in written and (name := root_name(a)) is not None}
+
+
+def names_written_by_call(call: ast.Call, mutates: dict[str, frozenset[str]], params: dict[str, list[str]]) -> set[str]:
+    """Names of the arrays ``call`` writes into: through a helper in ``mutates``, an ``out=``
+    argument, or a :data:`MUTATING_METHODS` method."""
+    fn = call.func
+    if isinstance(fn, ast.Name) and fn.id in mutates:
+        return handed_to_written_params(call, params[fn.id], mutates[fn.id])
+    names = {name for k in call.keywords if k.arg == "out" and (name := root_name(k.value)) is not None}
+    if isinstance(fn, ast.Attribute) and fn.attr in MUTATING_METHODS and (name := root_name(fn.value)) is not None:
+        names.add(name)
+    return names
+
+
+def names_written_in(fn: ast.FunctionDef, mutates: dict[str, frozenset[str]], params: dict[str, list[str]]) -> set[str]:
+    """Names of the arrays ``fn`` writes into, closed over views: ``row = p[i]; row[j] = 0.0``
+    writes ``p``."""
+    stored = {
+        name
+        for n in ast.walk(fn)
+        if isinstance(n, (ast.Assign, ast.AugAssign))
+        for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
+        if isinstance(t, ast.Subscript) and (name := root_name(t)) is not None
+    }
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Call):
+            stored |= names_written_by_call(n, mutates, params)
+    views = [
+        (t.id, base)
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Assign) and (base := root_name(n.value)) is not None
+        for t in n.targets
+        if isinstance(t, ast.Name)
+    ]
+    while grown := {base for view, base in views if view in stored and base not in stored}:
+        stored |= grown
+    return stored
+
+
+def written_parameters(tree: ast.Module) -> tuple[dict[str, frozenset[str]], dict[str, list[str]]]:
+    """Module-level function name -> the names of the parameters a call to it writes into, and
+    name -> its parameter list.
+
+    A write counts through a subscript store (``p[...] = ...``, ``p[...] += ...``), a view of the
+    parameter (``row = p[i]; row[j] = ...``), an ``out=`` argument or a mutating method, and a call
+    to another helper that writes the parameter it is handed -- iterated to a fixed point, so a
+    wrapper around a writing helper writes too."""
+    fns = [fn for fn in tree.body if isinstance(fn, ast.FunctionDef)]
+    params = {fn.name: [a.arg for a in fn.args.args] for fn in fns}
+    mutates: dict[str, frozenset[str]] = {fn.name: frozenset() for fn in fns}
+    while True:
+        grown = {fn.name: frozenset(params[fn.name]) & names_written_in(fn, mutates, params) for fn in fns}
+        if grown == mutates:
+            return mutates, params
+        mutates = grown
+
+
+def calls_a_mutating_helper(loop: ast.For, mutates: dict[str, frozenset[str]], params: dict[str, list[str]]) -> bool:
     """True if ``loop``'s body hands an array to a module helper that writes into it: the write
     happens in the callee, where the loop's own dependence check cannot see it (rb_sor's time loop
     calls its half-sweep, which updates ``u`` in place for the next step to read)."""
     return any(
         isinstance(n, ast.Call)
         and isinstance(n.func, ast.Name)
-        and any(i < len(n.args) for i in mutates.get(n.func.id, frozenset()))
+        and n.func.id in mutates
+        and handed_to_written_params(n, params[n.func.id], mutates[n.func.id])
         for n in ast.walk(ast.Module(body=list(loop.body), type_ignores=[]))
     )
 
@@ -187,12 +243,12 @@ def parallelize_one_range_loop(src: str) -> str:
         ),
         key=lambda n: (n.lineno, n.col_offset),
     )
-    mutates = written_parameters(tree)
+    mutates, params = written_parameters(tree)
     target = next(
         (
             f
             for f in range_fors
-            if unit_step(f.iter) and loop_is_parallel_safe(f) and not calls_a_mutating_helper(f, mutates)
+            if unit_step(f.iter) and loop_is_parallel_safe(f) and not calls_a_mutating_helper(f, mutates, params)
         ),
         None,
     )
@@ -203,3 +259,77 @@ def parallelize_one_range_loop(src: str) -> str:
     if src[off : off + 5] != "range":
         return src  # position drift (should not happen); leave serial rather than corrupt.
     return src[:off] + "nb.prange" + src[off + 5 :]
+
+
+def is_reshape_call(node: ast.AST) -> bool:
+    """``np.reshape(b, s)`` or ``b.reshape(s)``."""
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "reshape"
+
+
+def reshape_operand(node: ast.AST, reshaped: set[str]) -> bool:
+    """True if the elementwise expression ``node`` has a reshape as one of its OPERANDS: the call
+    itself or a name in ``reshaped``, reached through arithmetic only. A reshape inside a call's
+    arguments (``np.sum(b.reshape(...))``) or an index is not an operand of the store."""
+    if isinstance(node, ast.BinOp):
+        return reshape_operand(node.left, reshaped) or reshape_operand(node.right, reshaped)
+    if isinstance(node, ast.UnaryOp):
+        return reshape_operand(node.operand, reshaped)
+    return is_reshape_call(node) or (isinstance(node, ast.Name) and node.id in reshaped)
+
+
+def reshape_bound_names(fn: ast.FunctionDef) -> set[str]:
+    """Names ``fn`` binds, anywhere, directly to a reshape (``t = np.reshape(b, s)``)."""
+    return {
+        t.id
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Assign) and is_reshape_call(n.value)
+        for t in n.targets
+        if isinstance(t, ast.Name)
+    }
+
+
+def spelled_out_augassign(stmt: ast.AugAssign) -> ast.Assign:
+    """``t op= v`` as the plain store numba lowers correctly: ``t[...] = t op v`` for a whole array
+    (the store must land in the caller's buffer, not rebind the name), ``s = s op v`` for a
+    subscript target -- numpy's own meaning of an augmented store through an index."""
+    target = stmt.target
+    load = ast.Name(id=target.id, ctx=ast.Load()) if isinstance(target, ast.Name) else target
+    value = ast.BinOp(left=load, op=stmt.op, right=stmt.value)
+    if isinstance(target, ast.Name):
+        store = ast.Subscript(
+            value=ast.Name(id=target.id, ctx=ast.Load()), slice=ast.Constant(Ellipsis), ctx=ast.Store()
+        )
+    else:
+        store = target
+    return ast.Assign(targets=[store], value=value, lineno=stmt.lineno)
+
+
+def spell_out_reshape_augassigns(src: str) -> str:
+    """Rewrite each augmented assignment with a reshape as a right-hand operand into its plain form
+    (:func:`spelled_out_augassign`).
+
+    Under ``parallel=True`` numba 0.65-0.67 lowers ``out += np.reshape(bias, (1, c, 1))`` -- and
+    ``out[0] += b.reshape(c, 1)``, and the same through a name bound to the reshape -- as if the
+    right-hand side had ``out``'s full shape: it reads the broadcast operand's flat buffer past its
+    end, and the result is garbage or NaN with no error (every conv kernel's closing bias add). The
+    plain store ``out[...] = out + np.reshape(...)`` broadcasts correctly and still runs as a parfor.
+    A broadcast whose size-1 axes are known only at run time does not reach this: numba raises
+    its own AssertionError there, a clean decline. Statements are spliced in place, so the rest of
+    the body stays verbatim."""
+    tree = ast.parse(src)
+    edits: list[tuple[int, int, str]] = []
+    for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)):
+        reshaped = reshape_bound_names(fn)
+        for stmt in ast.walk(fn):
+            if (
+                isinstance(stmt, ast.AugAssign)
+                and isinstance(stmt.target, (ast.Name, ast.Subscript))
+                and not isinstance(stmt.op, ast.MatMult)
+                and reshape_operand(stmt.value, reshaped)
+            ):
+                start = abs_offset(src, stmt.lineno, stmt.col_offset)
+                end = abs_offset(src, stmt.end_lineno, stmt.end_col_offset)
+                edits.append((start, end, ast.unparse(spelled_out_augassign(stmt))))
+    for start, end, text in sorted(set(edits), reverse=True):
+        src = src[:start] + text + src[end:]
+    return src
