@@ -527,6 +527,14 @@ def test_a_runner_without_a_replica_key_sends_empty(driver, monkeypatch, tmp_pat
     assert launches[0]["env"]["OPENAI_API_KEY"] == "EMPTY"
 
 
+def test_a_runner_entry_is_the_whole_harness_registration() -> None:
+    """The launchable set is claude plus the RUNNERS keys, so a new runner is selectable by adding
+    its one entry; nothing keeps a second list of names."""
+    harnesses = load(EXAMPLE / "harnesses.py", "harnesses")
+    assert harnesses.HARNESSES == (harnesses.CLAUDE, *harnesses.RUNNERS)
+    assert harnesses.HARNESSES == ("claude", *RUNNERS)
+
+
 def test_an_unknown_harness_stops_the_driver_before_it_waits_on_anything(driver, monkeypatch) -> None:
     """A typo in an arm's .env must not launch that arm as claude, nor hold nodes waiting on
     services first. With no replica configured, reaching the service wait would raise KeyError."""
