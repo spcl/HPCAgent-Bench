@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# SGLang leg of the Kimi-on-gfx942 decision tree. vLLM 0.27.1 is exhausted: TRITON_MLA is
-# correct but prefills at ~300 tok/s (starves the campaign), aiter master-on prefills 3x and
-# runs the campaign shape at 78 tok/s but silently corrupts output past ~9k context. This runs
-# the official SGLang K2.7 gfx942 recipe -- SGLANG_USE_AITER=1,
+# Multi-node SGLang serving smoke for Kimi on gfx942. On vLLM, TRITON_MLA is correct but prefills
+# at ~300 tok/s (starves the campaign), and aiter master-on prefills 3x and runs the campaign shape
+# at 78 tok/s but silently corrupts output past ~9k context. This runs the official SGLang K2.7
+# gfx942 recipe -- SGLANG_USE_AITER=1,
 # fused decode MLA off, TP=4 in-node (AITER MLA needs heads%16==0) x PP=2 across 2 nodes,
 # fp8_e4m3 KV, page 64 -- and gates on the SAME long-context accuracy questions before any
 # throughput number counts. Short-context accuracy passes on broken kernels; only the long leg
@@ -219,8 +219,7 @@ REASONING_EFFORT = os.environ.get('REASONING_EFFORT', '')
 
 # The gate has to ask the way the campaign asks. /v1/completions bypasses the chat template, so a
 # reasoning model never gets its thinking tags, and a 48-token budget then truncates mid-thought:
-# every ACC line GLM-5.3 produced (628603/628619) was a fragment of deliberation being scored as
-# an answer. Chat plus a real budget is the only shape that tells a corrupt kernel apart from a
+# GLM-5.3's answers come back as fragments of deliberation scored as answers. Chat plus a real budget is the only shape that tells a corrupt kernel apart from a
 # truncated one.
 def chat_answer(prompt, max_tokens):
     body = {'model': MODEL, 'temperature': 0, 'max_tokens': max_tokens,
@@ -237,13 +236,13 @@ def last_int(text):
     nums = re.findall(r'-?\d+', text)
     return nums[-1] if nums else None
 
-# --- accuracy gate: long context is the only leg that discriminates (probe 604789 passed short)
+# --- accuracy gate: long context is the only leg that discriminates (a broken backend passes short)
 # varied long context: literal repetition creates an echo attractor at temp 0 that even a
-# correct backend falls into (604790 long-reason); varied text isolates real corruption
+# correct backend falls into; varied text isolates real corruption
 LONG = ''.join(f'Step {i}: the kernel processes block {i} and accumulates partial sums '
                f'into buffer {i % 7}. ' for i in range(650))
-# Third field is the expected answer. A gate that only PRINTS is not a gate: 628603 served four
-# truncated fragments and still exited 0, so the wrong answer has to fail the job.
+# Third field is the expected answer. A gate that only PRINTS is not a gate: truncated fragments
+# would still exit 0, so the wrong answer has to fail the job.
 gate = [
     ('short-math', 'What is 17 * 23? Answer with only the number.', '391'),
     ('long-math', LONG + '\n\nIgnore the text above. What is 17 * 23? Answer with only the number.',
@@ -253,8 +252,8 @@ gate = [
     ('long-code', LONG + '\n\nIgnore the text above. Write a C function that sums a float array. '
                   'Code only.', None),
 ]
-# A request that raised is the engine failing, not a datum. 620806 OOM-killed its server mid-sweep
-# and this script still exited 0, so slurm recorded the job COMPLETED while nothing was served.
+# A request that raised is the engine failing, not a datum: a server OOM-killed mid-sweep must not
+# let slurm record the job COMPLETED while nothing was served.
 FAILURES = []
 
 print('===== accuracy gate =====', flush=True)

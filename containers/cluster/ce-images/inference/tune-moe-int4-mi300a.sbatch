@@ -100,10 +100,10 @@ sizes = [int(s) for s in os.environ["TUNE_BATCH_SIZES"].split()]
 
 config = bm.get_config(model=model, trust_remote_code=True)
 # NOT bm.get_model_params: KimiK25ForConditionalGeneration is a multimodal wrapper it does not
-# know, so it falls into the Mixtral default and grabs the DENSE intermediate_size 18432 --
-# 595206 tuned N=4608 while serving wants N=512. The MoE fields live on the text sub-config.
+# know, so it falls into the Mixtral default and grabs the DENSE intermediate_size 18432 -- that
+# tunes N=4608 while serving wants N=512. The MoE fields live on the text sub-config.
 # NOT get_text_config().to_dict(): this transformers build prunes model-specific keys from
-# to_dict (num_experts vanished, 598780). config.json raw is the one authority both models obey;
+# to_dict (num_experts vanishes). config.json raw is the one authority both models obey;
 # kimi nests the MoE fields under text_config, qwen keeps them top-level.
 raw = json.load(open(os.path.join(model, "config.json")))
 tc = raw.get("text_config") or raw
@@ -129,22 +129,21 @@ else:
 print(f"E={E} topk={topk} shard_intermediate={shard_intermediate_size} hidden={hidden_size} "
       f"group_size={group_size} dtype={dtype} sizes={sizes}", flush=True)
 
-# benchmark_config allocates device-less; BenchmarkWorker relied on this too (595203).
+# benchmark_config allocates device-less; BenchmarkWorker relies on this too.
 torch.set_default_device("cuda")
 best_by_size = {}
 for bs in sizes:
     space = bm.get_configs_compute_bound(False, None)
     space = bm.prune_rocm_search_space(bs, shard_intermediate_size, hidden_size, space, False, topk)
-    # SPLIT_K splits the K reduction across workgroups. It was pinned to 1, which is the one
-    # dimension the space never explored -- and the decode regime (small M, K=hidden 7168) is
-    # exactly where splitting K pays. TUNE_SPLIT_K="1 2 4 8" opens it; the default keeps the
-    # pinned behaviour so every earlier run stays reproducible.
+    # SPLIT_K splits the K reduction across workgroups; the decode regime (small M, K=hidden 7168)
+    # is exactly where splitting K pays. TUNE_SPLIT_K="1 2 4 8" opens it; the default 1 is the
+    # search space the shipped moe-configs were tuned over.
     # A SPLIT_K > 1 winner is NOT servable on the tuner verdict alone: split-K variants need a
     # reduction workspace, and a serving path that does not allocate one returns silent zeros
     # rather than an error. Gate any such config on a correctness run before shipping it.
     split_k_values = [int(v) for v in os.environ.get("TUNE_SPLIT_K", "1").split()]
     space = [{**cfg, "SPLIT_K": k} for cfg in space for k in split_k_values]
-    # ~18s per config, compile-dominated (595205): the full 4496-config space is a 23h job.
+    # ~18s per config, compile-dominated: the full 4496-config space is a 23h job.
     # A seeded random sample lands near-optimal with high probability and fits the wall limit.
     max_configs = int(os.environ.get("TUNE_MAX_CONFIGS", "800"))
     if len(space) > max_configs:

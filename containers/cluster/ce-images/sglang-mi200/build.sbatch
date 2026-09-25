@@ -32,20 +32,14 @@ fi
 IMAGE_DIR="${IMAGE_DIR:-$PWD}"
 test -x "${IMAGE_DIR}/build.sh" || { echo "no build.sh under IMAGE_DIR=${IMAGE_DIR}" >&2; exit 2; }
 
+# shellcheck source=../build_common.sh
+source "${IMAGE_DIR}/../build_common.sh"
 # shellcheck source=../images.env
 source "${IMAGE_DIR}/../images.env"
 ce_require_partition sglang-mi200 || exit 2
 export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/${INFERENCE_SGLANG_MI200_CANDIDATE}}"
 
-# Refuse to overwrite an image an EDF mounts: a running job would read a half-written squashfs.
-edf_images() {
-    grep -hoE '^[[:space:]]*image[[:space:]]*=[[:space:]]*"[^"]+"' "${HOME}/.edf"/*.toml 2>/dev/null \
-      | sed -E 's/.*"(.*)"/\1/' | sed -E "s|\\\$\\{SCRATCH\\}|${SCRATCH:-}|g; s|\\\$SCRATCH|${SCRATCH:-}|g"
-}
-if edf_images | grep -qxF "${OUTPUT_SQSH}"; then
-    echo "refusing to overwrite ${OUTPUT_SQSH}: an EDF in ${HOME}/.edf mounts it" >&2
-    exit 2
-fi
+ce_refuse_mounted "${OUTPUT_SQSH}" || exit 2
 
 "${IMAGE_DIR}/build.sh"
 

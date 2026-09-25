@@ -224,6 +224,23 @@ ce_verify_candidate() {
     return "${rc}"
 }
 
+# ce_refuse_mounted <sqsh>...: return 2 when an EDF in ~/.edf mounts one of the paths. Overwriting a
+# mounted squashfs is how a running job starts reading a half-written inode table; the EDFs, not a
+# hard-coded name, are what a job resolves. Build to a candidate name and promote by rename.
+ce_refuse_mounted() {
+    local mounted sqsh
+    mounted="$(grep -hoE '^[[:space:]]*image[[:space:]]*=[[:space:]]*"[^"]+"' "${HOME}/.edf"/*.toml 2>/dev/null \
+        | sed -E 's/.*"(.*)"/\1/' | sed -E "s|\\\$\\{SCRATCH\\}|${SCRATCH:-}|g; s|\\\$SCRATCH|${SCRATCH:-}|g")" || true
+    for sqsh in "$@"; do
+        [[ -n "${sqsh}" ]] || continue
+        if grep -qxF -- "${sqsh}" <<<"${mounted}"; then
+            echo "refusing to overwrite ${sqsh}: an EDF in ${HOME}/.edf mounts it, so a running job" >&2
+            echo "would read a half-written squashfs. Build to a candidate name and promote by rename." >&2
+            return 2
+        fi
+    done
+}
+
 # After a successful `podman build`: digest sidecar, squashfs, OCI archive, optional push.
 ce_export_image() {
     local image_tag="$1" output_sqsh="$2"

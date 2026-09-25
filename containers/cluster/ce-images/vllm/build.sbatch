@@ -26,39 +26,27 @@
 
 set -Eeuxo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_nid<node>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+# Slurm propagates the submitter's core limit and a dump lands in the CWD (an inode-quota checkout).
 ulimit -c 0
 
 # Slurm SPOOLS the batch script, so BASH_SOURCE points at /var/spool/slurmd -- pass the directory
-# rather than deriving it. --chdir sets it for free. IMAGE_DIR, the same name all five builders take.
+# rather than deriving it.
 IMAGE_DIR="${IMAGE_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
 test -x "${IMAGE_DIR}/build.sh"
 
+# shellcheck source=../build_common.sh
+source "${IMAGE_DIR}/../build_common.sh"
 # shellcheck source=../images.env
 source "${IMAGE_DIR}/../images.env"
 ce_require_partition vllm || exit 2
 export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/${INFERENCE_VLLM_CANDIDATE}}"
 
-# Refuse to write over an image some EDF points a running job at: overwriting a mounted squashfs is
-# how a live arm starts reading a half-written inode table. Ask the EDFs rather than a hard-coded
-# name, since they are what a job actually resolves. Build to a candidate, verify, promote by
-# rename when nothing is using it.
-edf_images() {
-    grep -hoE '^[[:space:]]*image[[:space:]]*=[[:space:]]*"[^"]+"' "${HOME}/.edf"/*.toml 2>/dev/null \
-      | sed -E 's/.*"(.*)"/\1/' | sed -E "s|\\\$\\{SCRATCH\\}|${SCRATCH:-}|g; s|\\\$SCRATCH|${SCRATCH:-}|g"
-}
-if edf_images | grep -qxF "${OUTPUT_SQSH}"; then
-    echo "refusing to overwrite ${OUTPUT_SQSH}: an EDF in ${HOME}/.edf mounts it, so a running" >&2
-    echo "arm would read a half-written squashfs. Build to a candidate name and promote by rename." >&2
-    exit 2
-fi
+ce_refuse_mounted "${OUTPUT_SQSH}" || exit 2
 
 "${IMAGE_DIR}/build.sh"
 
 ls -lh "${OUTPUT_SQSH}"
 sha256sum "${OUTPUT_SQSH}" | tee "${OUTPUT_SQSH}.sha256"
 echo "VLLM IMAGE READY: ${OUTPUT_SQSH}"
-echo "NOT VERIFIED: the GPU gates the six-job chain ran (device_count, allreduce, one-rank RCCL"
-echo "over CXI, MLA prefill selector) need hardware. Smoke-test before promoting."
+echo "NOT VERIFIED: the GPU gates (device_count, allreduce, one-rank RCCL over CXI, MLA prefill"
+echo "selector) need a serving job. Smoke-test before promoting."

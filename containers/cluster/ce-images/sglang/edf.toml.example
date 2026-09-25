@@ -1,13 +1,8 @@
-# GENERATED FROM the live EDF hpcagent-bench-sglang-mi300-latest.toml, then kept in the repo so a fresh clone can
-# render its own. install_edfs.sh rewrites the `image` line; everything else here is the
-# tuning that EDF already carried and must not drift.
-# Stock lmsysorg/sglang-rocm:v0.5.18-rocm720-mi30x-20260822 pulled by pull-vllm-kimi-k3.sbatch
-# (job 604787, 52.3 GB). Purpose: the official SGLang Kimi-K2.7-Code gfx942 recipe --
-# SGLANG_USE_AITER=1 SGLANG_ROCM_FUSED_DECODE_MLA=0, TP<=4 (AITER MLA needs heads%16==0),
-# --kv-cache-dtype fp8_e4m3, page_size 64 (skips the gfx942 page_size=1 decode faults).
-# Same stock-image rules as vllm-kimi-k3.toml: no cxi/netstack hooks (host glibc graft kills the
-# image's loader, 595217) and no aws-ofi-nccl, so cross-node RCCL rides TCP over hsn*. PP
-# microbatch traffic tolerated that on the kimi-k3 image; measure before grafting the plugin.
+# EDF template for hpcagent-bench-sglang-mi300-latest; install_edfs.sh renders it into ~/.edf and
+# rewrites the `image` line. Everything else is serving tuning that must not drift.
+# The image follows the official SGLang Kimi-K2.7-Code gfx942 recipe: SGLANG_USE_AITER=1
+# SGLANG_ROCM_FUSED_DECODE_MLA=0, TP<=4 (AITER MLA needs heads%16==0), --kv-cache-dtype fp8_e4m3,
+# page_size 64 (skips the gfx942 page_size=1 decode faults).
 image = "${SCRATCH}/ce-images/PLACEHOLDER.sqsh"
 
 mounts = [
@@ -34,31 +29,26 @@ TOKENIZERS_PARALLELISM = "false"
 # DECLARED, not inherited, for the same reason PATH is: the CE does not preserve the image's
 # own ENV, so the Dockerfile's ENV AITER_JIT_DIR=/opt/aiter-jit never arrives and
 # run_cluster.sh's ${AITER_JIT_DIR:-<scratch>} default wins -- which loads module_aiter_core
-# from a HOST directory and leaves the image's prebuilt copy unused (measured, job 628077).
+# from a HOST directory and leaves the image's prebuilt copy unused (measured).
 AITER_JIT_DIR = "/opt/aiter-jit"
-# aiter's TEMPLATE ops ignore AITER_JIT_DIR and default to $HOME/.aiter -- the one host path
-# the prebuild never closed. 628158 built three of them there at 77 s per serve. Pinned into
-# the image, 628179 confirms nothing lands in HOME and the artefact hashes match.
+# aiter's TEMPLATE ops ignore AITER_JIT_DIR and default to $HOME/.aiter, where they build at 77 s
+# per serve. Pinned into the image, nothing lands in HOME and the artefact hashes match.
 AITER_ROOT_DIR = "/opt/aiter-root"
 
-# UBUNTU 24.04 (glibc 2.39) as of 2026-09-09, so the host Slingshot stack finally loads here and
-# this image takes it like the others. Before that it was Ubuntu 22.04 / glibc 2.35 against a host
-# stack built on 2.38, so no hook could be enabled and cross-node RCCL rode TCP over hsn*.
-#
-# /opt/aws-ofi-nccl/lib is the plugin. libfabric and libcxi are NOT in the image -- the cxi hook
-# supplies both, plus /dev/cxi*. Declaring LD_LIBRARY_PATH here is not optional: the CE does not
-# preserve the image's own ENV, so this file re-declares it absolutely, and omitting the plugin
-# path silently returns RCCL to the TCP fallback.
+# The image is Ubuntu 24.04 (glibc 2.39), so the host Slingshot stack (built on 2.38) loads.
+# libfabric, libcxi and the RCCL plugin are NOT in the image -- the netstack/cxi hooks supply them,
+# plus /dev/cxi*. Declaring LD_LIBRARY_PATH here is not optional: the CE does not preserve the
+# image's own ENV, so this file re-declares it absolutely.
 LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64"
 
-# The three that make RCCL take Slingshot rather than answer correctly over TCP, matching what the
-# vLLM EDF already declared. NCCL_NET_PLUGIN/NCCL_NET name the plugin the aws_ofi_nccl hook
-# installs, so RCCL ERRORS when it is not loadable instead of silently falling back -- a fallback
-# is numerically correct and several times slower, which is the failure mode that hides.
+# The three that make RCCL take Slingshot rather than answer correctly over TCP, as in the vLLM
+# EDF. NCCL_NET_PLUGIN/NCCL_NET name the plugin the aws_ofi_nccl hook installs, so RCCL ERRORS
+# when it is not loadable instead of silently falling back -- a fallback is numerically correct
+# and several times slower, which is the failure mode that hides.
 #
 # FI_PROVIDER is safe HERE and is deliberately absent from the judge-agent EDFs: this image has no
-# MPI, and what 629966 killed was MPI_Init, where MPICH inherits the variable and aborts with "OFI
-# call getinfo failed" against a libfabric that cannot offer cxi.
+# MPI, while MPICH inherits the variable and aborts MPI_Init with "OFI call getinfo failed"
+# against a libfabric that cannot offer cxi.
 NCCL_NET_PLUGIN = "ofi"
 NCCL_NET = "AWS Libfabric"
 FI_PROVIDER = "cxi"
@@ -73,38 +63,28 @@ NCCL_DEBUG = "INFO"
 NCCL_DEBUG_SUBSYS = "INIT,NET"
 
 [annotations]
-# The CSCS-documented set. Three hooks, and we previously enabled only the middle one:
-#   10-netstack.sh    source defaults to "artifact"; setting "host" makes it exit(0) and fall back
-#                     to a raw filesystem graft -- which is how a host libcurl needing glibc 2.38
-#                     reached an image with 2.35 and killed its whole OFI stack (629822).
+# The CSCS-documented set; all three hooks are needed:
+#   10-netstack.sh    source "artifact" mounts the netstack bundle at /opt/cscs/netstack. "host"
+#                     makes it exit(0) and fall back to a raw filesystem graft of host libraries.
 #   89-libfabric-cxi  the cxi provider and /dev/cxi*.
-#   90-aws-ofi-nccl   exits(0) unless enabled == "true". Never set until now, which is exactly why
-#                     RCCL logged "NET/Plugin: Could not find: libnccl-net.so" and fell back to TCP
-#                     over hsn* (629800/629802).
+#   90-aws-ofi-nccl   exits(0) unless enabled == "true"; without it RCCL logs "NET/Plugin: Could
+#                     not find: libnccl-net.so" and falls back to TCP over hsn*.
 #
-# With all three, job 629967 measured on an UNMODIFIED image: /opt/cscs/netstack/librccl-net.so,
-# "Using network AWS Libfabric", GPU Direct RDMA on cxi0-2, 8 ranks over 2 nodes, correct result --
-# that mount path is ARTIFACT mode's (container_netstack_path=/opt/cscs/netstack), not host mode's
-# (/opt/cscs/aws-ofi-ccl-plugin/<variant>/lib*-net.so). "host" below was substituted for the
-# 2026-09-17 /ritom migration, when /capstor/store did not exist, and 629967's proof line was kept
-# without anyone re-running it against the substitute -- so host+rocm6 was never actually proven.
+# With all three, measured on an UNMODIFIED image: /opt/cscs/netstack/librccl-net.so, "Using
+# network AWS Libfabric", GPU Direct RDMA on cxi0-2, 8 ranks over 2 nodes, correct result.
 #
-# It also cannot work on this image: variant=rocm6's plugin (/opt/cscs/aws-ofi-ccl-plugin/rocm6/
-# librccl-net.so) needs libamdhip64.so.6 (`ldd`, confirmed 2026-09-18), and this image ships ROCm
-# 7.2 (libamdhip64.so.7 only, no compat symlink -- major ROCm versions are not ABI-compatible).
-# Every job that reached RCCL init under host+rocm6 logged the same two lines regardless of
-# launcher (CE 640910, enroot 640950/641057/641172):
+# ARTIFACT, not host: host mode's variant=rocm6 plugin (/opt/cscs/aws-ofi-ccl-plugin/rocm6/
+# librccl-net.so) needs libamdhip64.so.6, and this image ships ROCm 7.2 (libamdhip64.so.7 only,
+# no compat symlink -- major ROCm versions are not ABI-compatible). Under host+rocm6 RCCL logs
 #   NET/Plugin: libamdhip64.so.6: cannot open shared object file: No such file or directory
 #   NET/Plugin: Could not find: ofi.
-# and fell back to Socket, or (with NCCL_NET forced below) hard-failed with "NCCL error: invalid
+# and falls back to Socket, or (with NCCL_NET forced above) hard-fails with "NCCL error: invalid
 # usage ... Failed to initialize any NET plugin".
 #
-# /capstor/store/cscs/cscs/public/containers/netstack/x86_64/26.08.1/ is reachable again as of
-# 2026-09-17 (confirmed 2026-09-18: contains the exact name below). Its plugin's RUNPATH is
-# /opt/cscs/netstack -- the directory 10-netstack.sh mounts the whole bundle to in artifact mode --
-# and the bundle carries its OWN libamdhip64.so.7 alongside librccl-net.so, so it needs nothing
-# from the image's /opt/rocm at all. version/name are PINNED so a CSCS-side bump is a loud failure
-# (scripts/cscs/netstack_preflight.sh), not a campaign that silently straddles two fabric stacks.
+# The artifact plugin's RUNPATH is /opt/cscs/netstack, and the bundle carries its OWN
+# libamdhip64.so.7 alongside librccl-net.so, so it needs nothing from the image's /opt/rocm.
+# version/name are PINNED so a CSCS-side bump is a loud failure (scripts/cscs/netstack_preflight.sh),
+# not a campaign that silently straddles two fabric stacks.
 com.hooks.netstack.source = "artifact"
 com.hooks.netstack.version = "26.08.1"
 com.hooks.netstack.name = "gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0"

@@ -5,9 +5,8 @@
 # so a RUN step sees gfx942. It still proves less than a serve: an import and a JIT build are not a
 # kernel launch. See LIMITATION in the Dockerfile.
 #
-# Cost: one mi300 node. The 52 GB base pull dominates; after it, the Slingshot stack (libcxi,
-# libfabric, aws-ofi-nccl) and the aiter JIT prebuild are each minutes. 4 h is the safe request and
-# roughly 1-2 h the expectation, most of it network.
+# Cost: one mi300 node. The 52 GB base pull dominates; after it, cupy and the aiter JIT prebuild
+# are each minutes. 4 h is the safe request and roughly 1-2 h the expectation, most of it network.
 #
 #   sbatch --chdir=containers/cluster/ce-images/sglang build.sbatch
 #   OUTPUT_SQSH=$SCRATCH/ce-images/hpcagent-bench-sglang-candidate.sqsh sbatch ... build.sbatch
@@ -28,44 +27,29 @@
 
 set -Eeuxo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_nid<node>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+# Slurm propagates the submitter's core limit and a dump lands in the CWD (an inode-quota checkout).
 ulimit -c 0
 
 # Slurm SPOOLS the batch script, so BASH_SOURCE points at /var/spool/slurmd -- pass the directory
-# rather than deriving it. $PWD is right either way: --chdir sets the job's cwd, and without it the
-# cwd IS the submit dir. SLURM_SUBMIT_DIR is NOT -- it is where sbatch was RUN, which --chdir does
-# not change, so a --chdir invocation resolved to the wrong tree and died on the test below.
-# IMAGE_DIR, the same name all five builders take.
+# rather than deriving it. $PWD, not SLURM_SUBMIT_DIR: --chdir sets the job's cwd but not
+# SLURM_SUBMIT_DIR, which stays where sbatch was run.
 IMAGE_DIR="${IMAGE_DIR:-$PWD}"
 test -x "${IMAGE_DIR}/build.sh" || { echo "no build.sh under IMAGE_DIR=${IMAGE_DIR}" >&2; exit 2; }
 
+# shellcheck source=../build_common.sh
+source "${IMAGE_DIR}/../build_common.sh"
 # shellcheck source=../images.env
 source "${IMAGE_DIR}/../images.env"
 ce_require_partition sglang || exit 2
 export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/${INFERENCE_SGLANG_CANDIDATE}}"
 
-# Refuse to write over an image some EDF points a running job at: overwriting a mounted squashfs is
-# how a live arm starts reading a half-written inode table. This matters more here than anywhere --
-# 12 of the 18 v9 arms mount the SGLang image. Ask the EDFs rather than a hard-coded name, since
-# they are what a job actually resolves.
-edf_images() {
-    grep -hoE '^[[:space:]]*image[[:space:]]*=[[:space:]]*"[^"]+"' "${HOME}/.edf"/*.toml 2>/dev/null \
-      | sed -E 's/.*"(.*)"/\1/' | sed -E "s|\\\$\\{SCRATCH\\}|${SCRATCH:-}|g; s|\\\$SCRATCH|${SCRATCH:-}|g"
-}
-if edf_images | grep -qxF "${OUTPUT_SQSH}"; then
-    echo "refusing to overwrite ${OUTPUT_SQSH}: an EDF in ${HOME}/.edf mounts it, so a running" >&2
-    echo "arm would read a half-written squashfs. Build to a candidate name and promote by rename." >&2
-    exit 2
-fi
+ce_refuse_mounted "${OUTPUT_SQSH}" || exit 2
 
 "${IMAGE_DIR}/build.sh"
 
 ls -lh "${OUTPUT_SQSH}"
 sha256sum "${OUTPUT_SQSH}" | tee "${OUTPUT_SQSH}.sha256"
 echo "SGLANG IMAGE READY: ${OUTPUT_SQSH}"
-echo "NOT VERIFIED: the self-contained CXI stack has never opened a /dev/cxi. The aiter prebuild"
-echo "does launch kernels -- the build gets /dev/kfd and /dev/dri -- but serving is a separate"
-echo "question: smoke-test with inference/smoke-kimi-sglang.sbatch before promoting, and measure"
-echo "tok/s before enabling the OFI plugin in any EDF."
+echo "NOT VERIFIED: the build has no Slingshot NIC. The aiter prebuild does launch kernels -- the"
+echo "build gets /dev/kfd and /dev/dri -- but serving is a separate question: smoke-test with"
+echo "inference/smoke-kimi-sglang.sbatch before promoting."

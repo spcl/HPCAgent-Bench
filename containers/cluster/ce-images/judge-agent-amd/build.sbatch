@@ -68,33 +68,15 @@ built_paths() {
     for t in ${BUILD_TARGETS}; do target_sqsh "${t}"; printf '\n'; done
 }
 
-# Refuse to write over an image some EDF points a running job at: overwriting a mounted squashfs
-# is how a live arm starts reading a half-written inode table. Ask the EDFs rather than hard-code
-# one filename, since an EDF is what a job actually resolves. The cost is that images nothing
-# currently mounts are protected too, which is the safe direction to be wrong in.
-edf_images() {
-    grep -hoE '^[[:space:]]*image[[:space:]]*=[[:space:]]*"[^"]+"' "${HOME}/.edf"/*.toml 2>/dev/null \
-      | sed -E 's/.*"(.*)"/\1/' | sed -E "s|\$\{SCRATCH\}|${SCRATCH}|g; s|\$SCRATCH|${SCRATCH}|g"
-}
 # Check EVERY path this build will write, not just OUTPUT_SQSH: on a two-target build the agent
 # and judge candidates are what land on disk, and neither of them is OUTPUT_SQSH.
-while read -r sqsh; do
-    [ -n "${sqsh}" ] || continue
-    if edf_images | grep -qxF "${sqsh}"; then
-        echo "refusing to overwrite ${sqsh}: an EDF in ${HOME}/.edf mounts it, so a running" >&2
-        echo "arm would read a half-written squashfs. Build to a candidate name and promote by" >&2
-        echo "rename once nothing is using it." >&2
-        exit 2
-    fi
-done <<EOF
-$(built_paths)
-EOF
+mapfile -t built < <(built_paths)
+ce_refuse_mounted "${built[@]}" || exit 2
 
 "${IMAGE_DIR}/build.sh"
 
-# Report every image the build wrote. Missing one is a real failure -- the judge is the image
-# that grades every submission and it once shipped with no .sha256 and nothing saying it existed
-# -- but it has to be the path build.sh USED, or a successful build fails on a name nobody wrote.
+# Report every image the build wrote. A missing one is a failure, checked at the path build.sh
+# USED, so a successful build never fails on a name nobody wrote.
 missing=0
 while read -r sqsh; do
     [ -n "${sqsh}" ] || continue

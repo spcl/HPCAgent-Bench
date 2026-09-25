@@ -68,36 +68,9 @@ ARG LIBFABRIC_REF=v2.6.0
 ARG LIBFABRIC_COMMIT=
 USER root
 
-# Every network git call goes through this retry wrapper, and where a mirror is mounted none of
-# them reaches GitHub at all. The `insteadOf` rewrite covers callers the wrapper cannot: some
-# tools clone in-process with no retry of their own. `protocol.file.allow` goes with it: git
-# refuses local-path submodule clones since CVE-2022-39253, and the rewrite turns every submodule
-# URL into exactly that. GIT_TERMINAL_PROMPT=0 makes an unauthenticated 401 fail instead of
-# blocking on a prompt no build has a terminal for; the backoff is what actually fixes it.
-RUN set -eux; \
-    printf '%s\n' \
-      '#!/bin/sh' \
-      'set -eu' \
-      'export GIT_TERMINAL_PROMPT=0' \
-      'n=1' \
-      'while :; do' \
-      '  git "$@" && exit 0' \
-      '  [ "${n}" -ge 10 ] && exit 1' \
-      '  d=$((n * n * 10)); if [ "${d}" -gt 300 ]; then d=300; fi' \
-      '  sleep "${d}"' \
-      '  n=$((n + 1))' \
-      'done' \
-      > /usr/local/bin/gitretry; \
-    chmod 0755 /usr/local/bin/gitretry; \
-    if [ -d /git-mirrors ]; then \
-      for m in /git-mirrors/*/*.git; do \
-        r="${m#/git-mirrors/}"; r="${r%.git}"; \
-        git config --global "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}.git"; \
-        git config --global --add "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}"; \
-      done; \
-      git config --global --add safe.directory '*'; \
-      git config --global protocol.file.allow always; \
-    fi
+# gitretry and the /git-mirrors rewrite for every clone below (git_mirror.sh says why).
+COPY containers/cluster/ce-images/git_mirror.sh /tmp/git_mirror.sh
+RUN sh /tmp/git_mirror.sh setup && rm -f /tmp/git_mirror.sh
 
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -168,10 +141,9 @@ ARG ROCM_VERSION=7.2.0
 ARG ROCM_APT_CHANNEL=7.2
 ARG PYTHON_REQUIREMENTS=requirements/amd.txt
 
-# Toolchain pins. gcc 16 + llvm 22 is the known-good pairing already in service. These are FULL
-# versions rather than majors because spack pins each version by sha256, so an exact version
-# stays buildable after upstream rolls a point release -- which was the reason the apt-based
-# image this replaces could only pin majors.
+# Toolchain pins. gcc 16 + llvm 22 is the known-good pairing. These are FULL versions rather than
+# majors because spack pins each version by sha256, so an exact version stays buildable after
+# upstream rolls a point release (apt can only pin majors).
 ARG GCC_VERSION=16.2.0
 ARG LLVM_VERSION=22.1.8
 
@@ -206,42 +178,9 @@ RUN set -eu; \
     printf '%s\n' "${ROCM_ARCH}" > /opt/gpu-arch
 COPY containers/cluster/ce-images/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
 
-# Every network git call goes through this, and where a mirror is mounted none of them
-# reaches GitHub at all. The `insteadOf` rewrite is what covers the callers the wrapper
-# cannot: spack clones its package repo in-process and vLLM's CMake FetchContent clones
-# triton itself, and both died on the same rate limiting with no retry of their own.
-# Conditional, so a build with no mirror mounted behaves exactly as it did before.
-# `protocol.file.allow` goes with it: git has refused local-path submodule clones since the
-# CVE-2022-39253 fix, and the rewrite turns every submodule URL into exactly that, so
-# `submodule update` aborts with `transport 'file' not allowed` before it looks for the repo.
-# Every network git call goes through this. An unauthenticated clone or fetch from a busy egress
-# IP gets a 401, which git reports as `could not read Username for https://github.com`: it looks
-# like a credentials failure and is a transient one. GIT_TERMINAL_PROMPT=0 makes it fail instead
-# of blocking on a prompt no build has a terminal for; the backoff is what actually fixes it.
-RUN set -eux; \
-    printf '%s\n' \
-      '#!/bin/sh' \
-      'set -eu' \
-      'export GIT_TERMINAL_PROMPT=0' \
-      'n=1' \
-      'while :; do' \
-      '  git "$@" && exit 0' \
-      '  [ "${n}" -ge 10 ] && exit 1' \
-      '  d=$((n * n * 10)); if [ "${d}" -gt 300 ]; then d=300; fi' \
-      '  sleep "${d}"' \
-      '  n=$((n + 1))' \
-      'done' \
-      > /usr/local/bin/gitretry; \
-    chmod 0755 /usr/local/bin/gitretry; \
-    if [ -d /git-mirrors ]; then \
-      for m in /git-mirrors/*/*.git; do \
-        r="${m#/git-mirrors/}"; r="${r%.git}"; \
-        git config --global "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}.git"; \
-        git config --global --add "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}"; \
-      done; \
-      git config --global --add safe.directory '*'; \
-      git config --global protocol.file.allow always; \
-    fi
+# gitretry and the /git-mirrors rewrite for every clone below (git_mirror.sh says why).
+COPY containers/cluster/ce-images/git_mirror.sh /tmp/git_mirror.sh
+RUN sh /tmp/git_mirror.sh setup && rm -f /tmp/git_mirror.sh
 
 # ---------------------------------------------------------------------------------------------
 # 1. Base system packages.
@@ -312,9 +251,8 @@ RUN set -eux; \
 #
 # rccl/rccl-dev are named for the same reason and matter more than the others: RCCL IS the NCCL
 # API on AMD (`rccl.h` provides ncclAllReduce and friends, and libnccl.so is an alias), so a
-# submission written against NCCL builds against it unchanged. It was previously declared to spack
-# as an external at /opt/rocm without anything installing or asserting it, which works only for as
-# long as some other metapackage keeps pulling it in.
+# submission written against NCCL builds against it unchanged. Declared to spack only as an
+# external at /opt/rocm, it would be there only for as long as some other metapackage pulls it in.
 #
 # Every result is asserted afterwards: a metapackage install succeeding says nothing about which
 # of its members actually landed.
@@ -467,13 +405,13 @@ RUN set -eux; \
     "${SPACK_ROOT}/bin/spack" compiler list
 
 # Binary buildcache on scratch, so a rebuild does not recompile gcc 16 and llvm 22 -- 60-80 minutes
-# that this image paid three times in one evening, every time to fail at a gate AFTER it. The
-# podman LAYER cache cannot do this job: the nodes are diskless and no persistent filesystem here
+# paid again on every rebuild that fails at a gate AFTER them. The podman LAYER cache cannot do
+# this job: the nodes are diskless and no persistent filesystem here
 # supports the xattrs its storage drivers need, so the store lives in RAM and dies with the job.
 # A spack buildcache is plain tarballs, so it survives on Lustre.
 #
-# Both halves are no-ops when build.sh mounted nothing, which keeps a cacheless build identical to
-# today's. The mirror is registered only when the cache is non-empty, because an empty one has no
+# Both halves are no-ops when build.sh mounted nothing, so a cacheless build compiles everything.
+# The mirror is registered only when the cache is non-empty, because an empty one has no
 # index to fetch; pushing needs no registered mirror, it takes the path.
 RUN set -eux; \
     if [ -d /spack-buildcache ] && [ -n "$(ls -A /spack-buildcache 2>/dev/null)" ]; then \
@@ -722,11 +660,10 @@ RUN set -eux; \
     clang -fopenmp --offload-arch="${ROCM_ARCH}" -c "${work}/off.c" -o "${work}/off.o"; \
     llvm-objdump --offloading "${work}/off.o" | grep -q amdgcn \
       || { echo "clang emitted no amdgcn offload bundle: OpenMP offload is not in this LLVM" >&2; exit 1; }; \
-    # COMPILING an offload object is not the same claim as LINKING one, and the gate used to stop
-    # at the object. MEASURED on this image: spack llvm 22.1.8 emits the amdgcn bundle above and
-    # then fails the link with "unable to find library -lompdevice" -- its +offload build ships no
-    # amdgcn device runtime (no libompdevice.a, no amdgcn-amd-amdhsa dir), while ROCm's does. The
-    # provenance line said offload was fine the whole time. So the gate links too, and records
+    # COMPILING an offload object is not the same claim as LINKING one. MEASURED on this image:
+    # spack llvm 22.1.8 emits the amdgcn bundle above and then fails the link with "unable to find
+    # library -lompdevice" -- its +offload build ships no amdgcn device runtime (no
+    # libompdevice.a, no amdgcn-amd-amdhsa dir), while ROCm's does. So the gate links too, and records
     # WHICH driver can actually produce an offload binary rather than asserting that both can.
     llvm_links_offload=no; \
     clang -fopenmp --offload-arch="${ROCM_ARCH}" "${work}/off.c" -o "${work}/off.llvm" \
@@ -1413,8 +1350,9 @@ sys.exit('DaCe would link a BLAS that is not OpenBLAS: %s' % (bad or 'nothing at
 # `mpifort.mpich` -- the Debian alternatives spelling, because that is what the apt images had --
 # and languages.resolve_compiler carries no alias for it: it tries the name, then `<name>-<major>`,
 # then gives up and hands back the literal string, which execs nothing. The spack MPICH here
-# installs the UNSUFFIXED wrappers only, so every MPI C/C++/Fortran build in this image ran a
-# command that is not on PATH. harness/sandbox.py:575 defaults to the same spelling.
+# installs the UNSUFFIXED wrappers only, so without these links every MPI C/C++/Fortran build in
+# this image would run a command that is not on PATH. envs/libraries.yaml's `mpi_wrapper` names
+# the same spelling first.
 #
 # Symlinks rather than a repo-side alias: this is the image making the name it is asked for mean
 # the MPI it ships, and both halves then agree without a code change reaching every consumer. The
@@ -1550,13 +1488,9 @@ RUN set -eux; \
     } > /usr/local/share/image-provenance; \
     cat /usr/local/share/image-provenance
 
-# Drop the mirror rewrite from the SHIPPED image. It is a build-time convenience pointing at a
-# path that exists only while the mirror is mounted; left in /root/.gitconfig, every git clone a
-# user runs inside this container would silently rewrite to a directory that is not there.
-RUN set -eux; \
-    git config --global --name-only --get-regexp '^url\..*\.insteadof$' 2>/dev/null \
-      | sort -u | while read -r k; do git config --global --unset-all "${k}" || true; done; \
-    git config --global --unset-all protocol.file.allow || true
+# Drop the build-time mirror rewrite from the SHIPPED image.
+COPY containers/cluster/ce-images/git_mirror.sh /tmp/git_mirror.sh
+RUN sh /tmp/git_mirror.sh drop && rm -f /tmp/git_mirror.sh
 
 WORKDIR /work
 
@@ -1565,7 +1499,7 @@ WORKDIR /work
 # RPATH is searched BEFORE LD_LIBRARY_PATH and the default paths. Leave it and MPI binds to a
 # libfabric with no providers, aborting MPI_Init once FI_PROVIDER=cxi is set, because spack's
 # build carries only psm3/sockets/verbs. Delete it and the RPATH points at nothing, so the loader
-# falls through to the host's libfabric (com.hooks.netstack.source=host).
+# falls through to the libfabric the netstack hook supplies.
 #
 # No RCCL plugin is shipped either. CSCS provides one through com.hooks.aws_ofi_nccl.enabled.
 # Shipping a second copy would only make it ambiguous which one RCCL loads.
@@ -1586,7 +1520,7 @@ RUN set -eux; \
     [ -z "${found}" ] \
       || { echo "this image ships a fabric library in a prefix it controls:" >&2; \
            echo "${found}" >&2; \
-           echo "RPATH would bind to it and shadow the host's libfabric (com.hooks.netstack.source=host)" >&2; exit 1; }; \
+           echo "RPATH would bind to it and shadow the netstack hook's libfabric" >&2; exit 1; }; \
     echo "no fabric library in /opt/ofi-sdk, /opt/ofi or /opt/aws-ofi-nccl -- the artifact supplies them"
 
 # LD_PRELOAD last, after every RUN: set earlier it would preload mimalloc into the apt, pip and

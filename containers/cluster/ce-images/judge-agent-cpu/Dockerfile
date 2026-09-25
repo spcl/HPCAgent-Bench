@@ -65,35 +65,13 @@ ENV LC_ALL=C \
     HPTT_ROOT=/usr/local \
     TBLIS_ROOT=/usr/local
 
-# Every network git call goes through this retry wrapper; where a mirror is mounted none of them
-# reaches GitHub at all.
+# git, then gitretry and the /git-mirrors rewrite for every clone below (git_mirror.sh says why).
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates git; \
-    rm -rf /var/lib/apt/lists/*; \
-    printf '%s\n' \
-      '#!/bin/sh' \
-      'set -eu' \
-      'export GIT_TERMINAL_PROMPT=0' \
-      'n=1' \
-      'while :; do' \
-      '  git "$@" && exit 0' \
-      '  [ "${n}" -ge 10 ] && exit 1' \
-      '  d=$((n * n * 10)); if [ "${d}" -gt 300 ]; then d=300; fi' \
-      '  sleep "${d}"' \
-      '  n=$((n + 1))' \
-      'done' \
-      > /usr/local/bin/gitretry; \
-    chmod 0755 /usr/local/bin/gitretry; \
-    if [ -d /git-mirrors ]; then \
-      for m in /git-mirrors/*/*.git; do \
-        r="${m#/git-mirrors/}"; r="${r%.git}"; \
-        git config --global "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}.git"; \
-        git config --global --add "url./git-mirrors/${r}.git.insteadOf" "https://github.com/${r}"; \
-      done; \
-      git config --global --add safe.directory '*'; \
-      git config --global protocol.file.allow always; \
-    fi
+    rm -rf /var/lib/apt/lists/*
+COPY containers/cluster/ce-images/git_mirror.sh /tmp/git_mirror.sh
+RUN sh /tmp/git_mirror.sh setup && rm -f /tmp/git_mirror.sh
 
 # ---------------------------------------------------------------------------------------------
 # 1. Everything from the distribution, in one layer.
@@ -514,10 +492,8 @@ RUN set -eux; \
     cat /usr/local/share/image-provenance
 
 # Drop the build-time mirror rewrite from the SHIPPED image.
-RUN set -eux; \
-    git config --global --name-only --get-regexp '^url\..*\.insteadof$' 2>/dev/null \
-      | sort -u | while read -r k; do git config --global --unset-all "${k}" || true; done; \
-    git config --global --unset-all protocol.file.allow || true
+COPY containers/cluster/ce-images/git_mirror.sh /tmp/git_mirror.sh
+RUN sh /tmp/git_mirror.sh drop && rm -f /tmp/git_mirror.sh
 
 WORKDIR /work
 

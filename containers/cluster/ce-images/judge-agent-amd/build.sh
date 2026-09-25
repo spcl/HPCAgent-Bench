@@ -89,11 +89,9 @@ printf 'dace @ %s\n' "${DACE_COMMIT}"
 # taking different source.
 #
 # This is a COMPILE-TIME link target for spack's MPICH and nothing else -- it is deleted from the
-# shipped image so MPI resolves at run time to the host's libfabric instead: every
-# EDF sets com.hooks.netstack.source=host, which binds /opt/cray/libfabric/host/lib64/libfabric.so.1
-# (currently -> 2.3.1), not the decommissioned netstack artifact's 2.6.0. No RCCL net plugin is
-# built here either; the host supplies one via com.hooks.aws_ofi_nccl.variant=rocm6 (required in
-# host mode), matched to the host driver.
+# shipped image so MPI resolves at run time to the libfabric the netstack hook supplies (the pinned
+# artifact bundle in the EDF templates, /opt/cray/libfabric/host in host mode). No RCCL net plugin
+# is built here either; the hook supplies one, matched to the host driver.
 LIBFABRIC_REF="${LIBFABRIC_REF:-v2.6.0}"
 resolve_tag() {
     # ^{} dereferences an annotated tag to the commit it points at; without it a tag object's own

@@ -10,7 +10,7 @@ it CANNOT wedge because it never starts a server.
 WHAT IT PROVES, in order, so a failure names its own stage:
   1. import        aiter imports at all on this ROCm/torch pair
   2. build         the MLA op is a BUILT module, not merely importable -- importing builds nothing,
-                   which is how a prebuild step once "succeeded" having compiled zero kernels
+                   so a prebuild step can "succeed" having compiled zero kernels
   3. launch        it runs on a device without raising
   4. correctness   its output matches a reference attention within tolerance. This is the point:
                    a kernel that runs and returns wrong numbers is the failure mode that reached
