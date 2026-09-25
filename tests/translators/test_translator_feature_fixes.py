@@ -167,16 +167,17 @@ def test_variadic_minmax_folds_to_nested_2arg(fn) -> None:
 # E. np.var classified as a scalar reduction (can nest in an expression)       #
 
 
-def test_var_is_scalar_reduction() -> None:
-    """``np.var`` must be hoistable as a SCALAR temp (srad nests it in a
-    division). Mirrors ``np.std`` -- both go through ``expand_var_or_std``."""
-    import inspect
-
+@pytest.mark.parametrize("fn", ["var", "std"])
+def test_var_is_scalar_reduction(fn: str) -> None:
+    """``np.var`` must be hoistable as a SCALAR temp (srad nests it in a division), exactly as
+    ``np.std`` is: the call leaves the expression as a scalar local, not an array temp."""
     from hpcagent_bench.translators.numpyto_common.lib_nodes import CallHoister
 
-    src = inspect.getsource(CallHoister.visit_Call)
-    # The scalar-classification set lists var alongside std/mean/sum.
-    assert '"var"' in src and '"std"' in src
+    scalars: dict[str, bool] = {}
+    arrays: dict[str, tuple[str, ...]] = {}
+    tree = CallHoister({"a": ("N",)}, scalars, arrays, [0]).visit(ast.parse(f"x = a[0] / np.{fn}(a)"))
+    assert ast.unparse(tree) == "x = a[0] / __cb1"
+    assert scalars == {"__cb1": True} and not arrays
 
 
 # F. np.permute_dims / np.amax aliases -> canonical names                       #
