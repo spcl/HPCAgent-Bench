@@ -9,8 +9,8 @@ the checkout's arm envs or problems file. run_cluster.sh runs from a temp copy a
 """
 
 import json
-import os
 import math
+import os
 import pathlib
 import re
 import shutil
@@ -18,7 +18,8 @@ import subprocess
 import sys
 
 import pytest
-from tests.env_render import rendered
+
+from tests.env_render import SPEC_INPUTS, rendered
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
@@ -50,12 +51,7 @@ ARM_KEYS = frozenset(
 
 #: What submit-harness-focus20.sh reads from experiments/.
 SUBMIT_INPUTS = (
-    # the layered bases' parents and their renderer (experiments/README.md "Env layers")
-    "env_layers.sh",
-    "layers/common.env",
-    "layers/model-qwen38.env",
-    "layers/partition-mi200.env",
-    "layers/partition-mi200-qwen38.env",
+    *SPEC_INPUTS,
     "submit-harness-focus20.sh",
     "submit_common.sh",
     "make_problems.py",
@@ -64,7 +60,6 @@ SUBMIT_INPUTS = (
     "arm_nodes.sh",
     "pin_env_kv.sh",
     "record_identity.sh",
-    ".env.llrbase-qwen38-c",
     f"kernels-{TAG}.txt",
 )
 
@@ -274,7 +269,7 @@ def test_an_unknown_packet_is_refused_before_any_file_is_written(tmp_path: pathl
 def test_every_arm_carries_the_shared_budget_and_sizing(full: pathlib.Path) -> None:
     """Multi submission with its policy text, a 4 h episode, the base token cap, 2x30 agents and
     judges sized by judge_nodes.py (one rank per 5 agents), on the tag's problems file and record experiment."""
-    base = dict(line.split("=", 1) for line in rendered(EXPERIMENTS / ".env.llrbase-qwen38-c").splitlines())
+    base = dict(line.split("=", 1) for line in rendered("llrbase-c:qwen38").splitlines())
     env = env_dict(full / "experiments" / f".env.{TAG}-qwen38-claude")
     assert env["AGENT_SINGLE_SUBMISSION"] == "0"
     assert env["AGENT_SUBMISSION_POLICY_FILE"] == "submission-multi.md"

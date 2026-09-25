@@ -36,7 +36,7 @@ byte.
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Sequence, Tuple
+from collections.abc import Sequence
 
 from hpcagent_bench import config
 from hpcagent_bench.sizing import working_bytes
@@ -99,7 +99,7 @@ class KernelDemand:
 class Judge:
     """One judge rank's precompute list and the digests it will hold."""
 
-    kernels: List[str] = field(default_factory=list)
+    kernels: list[str] = field(default_factory=list)
     cache_bytes: int = 0  # variants x sum of assigned digest (or output) bytes
 
 
@@ -107,9 +107,9 @@ class Judge:
 class JudgePlan:
     """The planned judges, the memory each one reserves, and what could not be sized."""
 
-    judges: List[Judge]
-    infeasible: List[Tuple[str, str]]  # (kernel, why)
-    unresolved: List[Tuple[str, str]]  # (kernel, why nothing could be predicted)
+    judges: list[Judge]
+    infeasible: list[tuple[str, str]]  # (kernel, why)
+    unresolved: list[tuple[str, str]]  # (kernel, why nothing could be predicted)
     usable_bytes: int
     workspace_bytes: int
     variants: int
@@ -132,7 +132,7 @@ class JudgePlan:
         return self.pool_bytes + self.workspace_bytes
 
     @property
-    def assignment(self) -> Dict[str, int]:
+    def assignment(self) -> dict[str, int]:
         """``{kernel: judge rank}`` -- which rank PRECOMPUTES which kernel's baseline.
 
         Not a routing constraint: every judge is sized for the largest kernel in the selection, so
@@ -201,8 +201,8 @@ def plan_judges(
     bigger device, not a different packing.
     """
     usable = int(capacity_bytes * (1.0 - margin))
-    resolved: List[KernelDemand] = []
-    infeasible: List[Tuple[str, str]] = []
+    resolved: list[KernelDemand] = []
+    infeasible: list[tuple[str, str]] = []
     for d in sorted((d for d in demands if d.resolved), key=lambda d: (-d.array_bytes, d.kernel)):
         alone = int(math.ceil(factor * d.array_bytes)) + workspace_bytes
         if alone > usable:
@@ -234,8 +234,8 @@ def plan_judges(
 
 
 def pool_bytes_for(
-    specs: Dict[str, BenchSpec], preset: str, datatype: str, factor: float = RUN_POOL_FACTOR
-) -> Tuple[int, List[str]]:
+    specs: dict[str, BenchSpec], preset: str, datatype: str, factor: float = RUN_POOL_FACTOR
+) -> tuple[int, list[str]]:
     """``(run pool bytes, kernels with no predictable footprint)`` for a selection.
 
     The reservation an orchestrator hands each judge, computed from the kernels it is ABOUT TO RUN

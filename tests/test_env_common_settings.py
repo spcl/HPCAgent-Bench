@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""What is COMMON to every model lives in the launcher, and what is per-model lives in its .env.
+"""What is COMMON to every model lives in the launcher, and what is per-model lives in its base (arms.yaml).
 
 The client timeouts were duplicated per model and drifted: kimi and glm53 set them, qwen38 and
 oss120b set neither and silently ran on the CLI's 15-minute idle default, which ended healthy Qwen
@@ -17,7 +17,8 @@ import sys
 import types
 
 import pytest
-from tests.env_render import rendered
+
+from tests.env_render import BASES, rendered
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
@@ -79,7 +80,8 @@ RESOLVED = {
     "unionalpha": "",
 }
 
-BASE_ENVS = sorted(EXPERIMENTS.glob(".env.base-*"))
+#: The campaign base of every model (arms.yaml ``campaign:<model>``).
+BASE_ENVS = [name for name in BASES if name.startswith("campaign:")]
 
 
 def load_effort() -> types.ModuleType:
@@ -95,10 +97,10 @@ def load_effort() -> types.ModuleType:
 effort = load_effort()
 
 
-def env_values(path: pathlib.Path) -> dict[str, str]:
-    """``KEY=VALUE`` lines of the rendered env file, quotes stripped."""
+def env_values(name: str) -> dict[str, str]:
+    """``KEY=VALUE`` lines of the rendered base, quotes stripped."""
     values: dict[str, str] = {}
-    for line in rendered(path).splitlines():
+    for line in rendered(name).splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or "=" not in stripped:
             continue
@@ -107,26 +109,26 @@ def env_values(path: pathlib.Path) -> dict[str, str]:
     return values
 
 
-def is_inference_service_env(path: pathlib.Path) -> bool:
+def is_inference_service_env(name: str) -> bool:
     """True for a base env that runs its model behind a hosted provider API (INFERENCE_SOURCE=service)
     rather than an SGLang/vLLM job the launcher starts on a node."""
-    return env_values(path).get("INFERENCE_SOURCE", "node") == "service"
+    return env_values(name).get("INFERENCE_SOURCE", "node") == "service"
 
 
 #: Base envs whose model is served by an engine the launcher starts on a node. A hosted service env
 #: has no such engine to name a context window for.
-ENGINE_BASE_ENVS = [path for path in BASE_ENVS if not is_inference_service_env(path)]
+ENGINE_BASE_ENVS = [name for name in BASE_ENVS if not is_inference_service_env(name)]
 
 
 def test_the_launcher_carries_every_base_env() -> None:
     """A model whose .env is not in this parametrisation is a model these rules never checked."""
-    assert {path.name.removeprefix(".env.base-") for path in BASE_ENVS} == set(LADDERS)
+    assert {name.removeprefix("campaign:") for name in BASE_ENVS} == set(LADDERS)
 
 
-@pytest.mark.parametrize("path", BASE_ENVS, ids=lambda path: path.name)
+@pytest.mark.parametrize("path", BASE_ENVS)
 @pytest.mark.parametrize("name", COMMON_VARS)
-def test_a_base_env_sets_none_of_the_common_client_settings(path: pathlib.Path, name: str) -> None:
-    assert name not in env_values(path), f"{path.name} repeats the launcher's {name}"
+def test_a_base_env_sets_none_of_the_common_client_settings(path: str, name: str) -> None:
+    assert name not in env_values(path), f"{path} repeats the launcher's {name}"
 
 
 @pytest.mark.parametrize("name", COMMON_VARS)
@@ -136,34 +138,34 @@ def test_the_launcher_exports_each_common_setting_with_its_default(name: str) ->
     assert f'export {name}="${{{name}:-{default}}}"' in LAUNCHER.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("path", ENGINE_BASE_ENVS, ids=lambda path: path.name)
-def test_a_base_env_names_the_context_window_its_server_is_started_with(path: pathlib.Path) -> None:
+@pytest.mark.parametrize("path", ENGINE_BASE_ENVS)
+def test_a_base_env_names_the_context_window_its_server_is_started_with(path: str) -> None:
     """The harnesses size their prompt budget off CONTEXT_LENGTH; an engine started with a different
     window makes every one of them wrong in the same invisible way. Scoped to envs that start an
     engine: a hosted-service env (INFERENCE_SOURCE=service) serves through a provider API and starts
     no engine to name a window for."""
     values = env_values(path)
     served = re.findall(r"(?:--context-length|--max-model-len)[= ](\d+)", rendered(path))
-    assert served, f"{path.name} starts no engine with a context window"
-    assert len(set(served)) == 1, f"{path.name} names several context windows: {served}"
+    assert served, f"{path} starts no engine with a context window"
+    assert len(set(served)) == 1, f"{path} names several context windows: {served}"
     assert values.get("CONTEXT_LENGTH") == served[0]
 
 
-@pytest.mark.parametrize("path", BASE_ENVS, ids=lambda path: path.name)
-def test_a_base_env_declares_the_ladder_its_server_accepts_and_no_rung(path: pathlib.Path) -> None:
+@pytest.mark.parametrize("path", BASE_ENVS)
+def test_a_base_env_declares_the_ladder_its_server_accepts_and_no_rung(path: str) -> None:
     """The .env states what the SERVER accepts; the launcher states which rung of it to take. A .env
     that also spelled the rung is how oss120b and qwen38 came to be compared at rungs nobody had
     written down together. A model with no ladder declares an empty one rather than omitting the key,
     because a MISSING AGENT_EFFORT still defaults to xhigh in agent_driver.py."""
     values = env_values(path)
-    assert "AGENT_EFFORT" not in values, f"{path.name} spells a rung the launcher resolves"
-    assert values.get("EFFORT_LADDER") == LADDERS[path.name.removeprefix(".env.base-")]
+    assert "AGENT_EFFORT" not in values, f"{path} spells a rung the launcher resolves"
+    assert values.get("EFFORT_LADDER") == LADDERS[path.removeprefix("campaign:")]
 
 
-@pytest.mark.parametrize("path", BASE_ENVS, ids=lambda path: path.name)
-def test_the_policy_resolves_each_declared_ladder_to_the_rung_that_model_runs_at(path: pathlib.Path) -> None:
+@pytest.mark.parametrize("path", BASE_ENVS)
+def test_the_policy_resolves_each_declared_ladder_to_the_rung_that_model_runs_at(path: str) -> None:
     """The ladders are only right if the rung they resolve to is the one the campaign meant to run."""
-    model = path.name.removeprefix(".env.base-")
+    model = path.removeprefix("campaign:")
     assert effort.resolve(env_values(path)["EFFORT_LADDER"]) == RESOLVED[model]
 
 

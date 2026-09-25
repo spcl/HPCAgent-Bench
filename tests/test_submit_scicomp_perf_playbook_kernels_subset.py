@@ -65,7 +65,7 @@ def test_agent_nodes_and_walltime_scale_with_the_subsets_own_kernel_count(tmp_pa
     arms = prepared(result)
     # the "prepared" report names the ARM, never the file-suffixed env/problems names -- the same
     # convention test_submit_gpu_llr40_clean_dryrun.py's own KERNELS_FILE="kernels.txt" runs rely on.
-    # arm_nodes() totals INFERENCE_NODES(1, inherited unchanged from .env.llrbase-qwen38-c) +
+    # arm_nodes() totals INFERENCE_NODES(1, inherited unchanged from llrbase-c:qwen38) +
     # AGENT_NODES(1, held at the override) + JUDGE_NODES(1, pinned) = 3.
     nodes, walltime = arms["scicomp-perf-playbook-qwen38-plain"]
     assert nodes == "3"

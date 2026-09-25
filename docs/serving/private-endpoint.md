@@ -55,7 +55,7 @@ needs a CSCS-signed ssh key (section 8).
 - Both presets pass `--context-length 262144 --max-running-requests 128 --mamba-full-memory-ratio 0.5
   --reasoning-parser qwen3 --tool-call-parser qwen3_coder` with the chat template
   `experiments/chat-template-qwen38.jinja`, and serve the model as `hpcagent-bench-vllm`.
-- `mi300` uses the qwen38 campaign flags from `SGLANG_EXTRA_ARGS` in `experiments/.env.llrbase-qwen38-c`;
+- `mi300` uses the qwen38 campaign flags from `SGLANG_EXTRA_ARGS` of `llrbase-c:qwen38` (`experiments/arms.yaml`);
   `tests/test_serve_private.py` fails if the two diverge. `--mem-fraction-static 0.306` is a fraction of
   the whole APU node's memory, and the aiter backend multiplies it by 0.85, which gives 0.26. Change it
   only together with `--attention-backend` and `--mamba-full-memory-ratio` ([`qwen38.md`](qwen38.md)).

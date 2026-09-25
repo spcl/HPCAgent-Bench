@@ -3,8 +3,8 @@
 `zai-org/GLM-5.3`, fp8, about 755 GB of weights. Four nodes, sixteen GPUs, `tp=4` inside a node and
 `pp=4` across them. Cross-model background is in [`knobs.md`](knobs.md).
 
-Authoritative source: `experiments/layers/model-glm53.env` (serving block) under
-`experiments/.env.base-glm53`; render with `experiments/env_layers.sh render`. If this page and
+Authoritative source: `experiments/layers/model-glm53.env` plus `experiments/arms.yaml`
+(`glm53-serving`); render with `experiments/env_layers.sh render campaign:glm53`. If this page and
 those files disagree, the files are right.
 
 ## Configuration
@@ -77,14 +77,14 @@ machine. Time to a live API is the slowest stage plus about 130 s for the KV all
 stage, never on the first stage to report.
 
 `serve-only.sbatch` polls for up to `VLLM_READY_TIMEOUT_SECONDS`, or `AGENT_READY_TIMEOUT_SECONDS`
-if that is unset, or 7200 s if neither is set. `.env.base-glm53` does not set
+if that is unset, or 7200 s if neither is set. `campaign:glm53` does not set
 `VLLM_READY_TIMEOUT_SECONDS` but does set `AGENT_READY_TIMEOUT_SECONDS=10800`, comfortably above
 the slowest stage above, so no override is needed to start this model with `serve-only.sbatch`.
 
 ## DO
 
 - **Serve on SGLang.** There is no vLLM recipe for this model here.
-- **Use the EDF that `experiments/.env.base-glm53` names.** The model needs a guard keeping
+- **Use the EDF that `experiments/layers/model-glm53.env` names.** The model needs a guard keeping
   `torch.Tensor.format_ue8m0` false plus
   `HIPCC_COMPILE_FLAGS_APPEND=-U__HIP_NO_HALF_CONVERSIONS__ -U__HIP_NO_HALF_OPERATORS__`, and
   `sglang-candidate` bakes both into the image. An EDF that reaches the guard through a

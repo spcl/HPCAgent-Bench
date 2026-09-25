@@ -25,16 +25,13 @@ import sys
 
 import pytest
 
+from tests.env_render import SPEC_INPUTS
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
 
 SUBMIT_INPUTS = (
-    "env_layers.sh",
-    "layers/common.env",
-    "layers/model-qwen38.env",
-    "layers/model-oss120b.env",
-    ".env.base-qwen38",
-    ".env.base-oss120b",
+    *SPEC_INPUTS,
     "submit-mlscale.sh",
     "arm_nodes.sh",
     "record_identity.sh",

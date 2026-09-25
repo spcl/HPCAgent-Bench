@@ -24,16 +24,14 @@ from collections.abc import Callable, Mapping
 import pytest
 
 from hpcagent_bench import cpf_cache, packets
+from tests.env_render import SPEC_INPUTS, set_base
 from tests.test_submit_scicomp_dc_cpfsrc import env_dict, stub
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
 
 SUBMIT_INPUTS = (
-    # the layered bases' parents and their renderer (experiments/README.md "Env layers")
-    "env_layers.sh",
-    "layers/common.env",
-    "layers/model-qwen38.env",
+    *SPEC_INPUTS,
     "submit-cpf-llr40.sh",
     "arm_nodes.sh",
     "roster.sh",
@@ -42,7 +40,6 @@ SUBMIT_INPUTS = (
     "pin_env_kv.sh",
     "make_problems.py",
     "packet_env.py",
-    ".env.base-qwen38",
 )
 
 #: Two llr-focus40 kernels, so the roster and coverage gates resolve them without a fabricated manifest.
@@ -282,7 +279,7 @@ def test_cpfsrc_v2_refuses_without_an_explicit_view(tmp_path: pathlib.Path) -> N
 
 def test_budget_scale_doubles_the_agent_timeout_and_tokens(tmp_path: pathlib.Path) -> None:
     """BUDGET_SCALE=2 (2026-09-18 owed-classification decision: a "budget"-class rerun) must double
-    BOTH .env.base-qwen38's AGENT_TIMEOUT_SECONDS (21600) and AGENT_MAX_TOKENS (24000000), not just
+    BOTH base-qwen38's AGENT_TIMEOUT_SECONDS (21600) and AGENT_MAX_TOKENS (24000000), not just
     one of them -- a kernel that hit either cap needs headroom on both. It lands in the scaled
     submission's OWN "-budget2x" env, not the arm's canonical .env (see the byte-identical test
     below)."""
@@ -432,11 +429,7 @@ def test_walltime_scales_with_the_subsets_own_kernel_count(tmp_path: pathlib.Pat
     for name in SUBMIT_INPUTS:
         (experiments / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(EXPERIMENTS / name, experiments / name)
-    # The key lives in the model layer the base extends (experiments/layers), not in the base itself.
-    layer = experiments / "layers" / "model-qwen38.env"
-    text, pinned = re.subn(r"^AGENTS_PER_NODE=\d+$", "AGENTS_PER_NODE=1", layer.read_text(), flags=re.MULTILINE)
-    assert pinned == 1, "the fixture no longer pins AGENTS_PER_NODE: the premise below would not hold"
-    layer.write_text(text)
+    set_base(experiments, "campaign:qwen38", AGENTS_PER_NODE=1)
     (experiments / "kfile.txt").write_text("fuse_diamond\ntsvc_2_s115\nargmax_with_index\n")
     stub(root / "bin", "sbatch", 'touch "${STUB_MARKERS}/sbatch-called"; exit 1')
     stub(root / "scratch" / "venv-hpcagent-bench-314" / "bin", "python", f'exec "{sys.executable}" "$@"')
@@ -461,7 +454,7 @@ def test_walltime_scales_with_the_subsets_own_kernel_count(tmp_path: pathlib.Pat
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    match = re.search(r"^prepared cpf-llr-focus40-qwen38-c \(\d+ nodes, (\d\d:\d\d:\d\d),", result.stdout, re.M)
+    match = re.search(r"^prepared cpf-llr-focus40-qwen38-c \(\d+ nodes, (\d\d:\d\d:\d\d),", result.stdout, re.MULTILINE)
     assert match, result.stdout
     # 1 worker, 3 kernels -> 3 batches of AGENT_TIMEOUT_SECONDS (21600s = 6h) + 3h staging = 21h
     assert match.group(1) == "21:00:00", result.stdout

@@ -20,6 +20,8 @@ These tests pin the campaign path's own contract so the next reader does not hav
 import pathlib
 import re
 
+from tests.env_render import BASES, rendered
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 AGENT_DIR = REPO / "containers" / "agent"
 SCRIPTS = REPO / "experiments"
@@ -54,9 +56,10 @@ def test_every_prompt_file_an_arm_names_is_one_materialize_produces() -> None:
     its own prompt after the allocation is already up.
     """
     produced = set(re.findall(r"shared\}/(prompt[a-z0-9-]*\.md)", MATERIALIZE.read_text(encoding="utf-8")))
-    named = set()
-    for env in SCRIPTS.glob(".env.*"):
-        named |= set(re.findall(r"^AGENT_PROMPT_FILE=(\S+)$", env.read_text(encoding="utf-8"), re.M))
+    texts = [rendered(base) for base in BASES]
+    texts += [path.read_text(encoding="utf-8") for path in SCRIPTS.glob("submit-*.sh")]
+    texts += [path.read_text(encoding="utf-8") for path in SCRIPTS.glob(".env.*")]
+    named = {name for text in texts for name in re.findall(r"AGENT_PROMPT_FILE=(prompt[a-z0-9-]*\.md)\b", text)}
     missing = {n for n in named if n and n not in produced}
     assert not missing, (
         f"arms name prompt files materialize_shared.sh never writes: {sorted(missing)}. It produces {sorted(produced)}."

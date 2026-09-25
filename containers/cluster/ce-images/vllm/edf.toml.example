@@ -70,9 +70,8 @@ com.hooks.aws_ofi_nccl.variant = "rocm6"
 # It does NOT reproduce in a bare smoke -- 630756 served fine with plugins on -- because the
 # campaign also sets aiter env, which changes the import graph enough to close the cycle.
 # An ALLOWLIST, so naming the two LoRA resolvers excludes quark while keeping them. "" would
-# also work but drops the resolvers for no reason. This is the ONLY owner of the setting: it was
-# briefly also in .env.base-oss120b, and two owners that can disagree is worse than one -- a
-# campaign env exported under `set -a` could override the EDF and silently win.
+# also work but drops the resolvers for no reason. This is the ONLY owner of the setting: a
+# campaign env exported under `set -a` that also set it could override the EDF and silently win.
 VLLM_PLUGINS = "lora_filesystem_resolver,lora_hf_hub_resolver"
 # CSCS documents this one against a hang at NCCL initialisation time.
 HWLOC_COMPONENTS = "-gl"

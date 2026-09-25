@@ -7,7 +7,7 @@ adapted from it (slower -- no tl.dot support). Neither kernel is specifically tu
 import itertools
 import operator
 from functools import reduce
-from typing import Callable
+from collections.abc import Callable
 
 import torch
 import triton

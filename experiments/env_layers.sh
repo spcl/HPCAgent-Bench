@@ -1,40 +1,26 @@
 #!/usr/bin/env bash
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Layered env files. Source for the functions, or run: ./env_layers.sh render <file>.
-#
-# A layer names its parent on a "# extends: <path>" line, relative to its own directory:
-#   layers/common.env          defaults every model and campaign shares
-#   layers/model-<m>.env       one model's serving config            (extends common.env)
-#   .env.base-<m>              llr40 campaign base                  (extends the model layer)
-#   .env.llrbase-<m>-<lang>    llrblind/scicomp campaign base        (extends the model layer or -c)
-# A submitter renders one base, applies the arm's keys, and snapshots the result per submission.
+# Env rendering and per-submission snapshots. Source for the functions, or run:
+#   ./env_layers.sh render <arms.yaml entry | env file>
+#   ./env_layers.sh snapshot <env> <arm> [dir]
+# A base is layers/common.env -> layers/model-<m>.env -> one arms.yaml entry (env_spec.py). A
+# submitter renders one base, applies the arm's keys, and snapshots the result per submission.
 # Jobs only ever source a flat snapshot, never a layer.
-
-# render_env <file> -- the flat KEY=VALUE env <file> stands for: parents first, a later key wins
-# in its parent's position, comments and blank lines dropped. Values are copied verbatim (no
-# expansion), so ${SCRATCH:?} and friends still resolve where the job sources the result.
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
 # SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
-render_env() {
-    local file="$1" parent
-    local -a chain=()
-    while :; do
-        [[ -f "${file}" ]] || { echo "render_env: no such layer ${file}" >&2; return 2; }
-        chain=("${file}" "${chain[@]}")
-        parent="$(sed -n 's/^# extends: //p' "${file}")"
-        [[ -n "${parent}" ]] || break
-        file="$(dirname -- "${file}")/${parent}"
-    done
-    awk '/^[A-Za-z_][A-Za-z0-9_]*=/ {
-        key = substr($0, 1, index($0, "=") - 1)
-        if (!(key in line)) order[++n] = key
-        line[key] = $0
-    }
-    END { for (i = 1; i <= n; i++) print line[order[i]] }' "${chain[@]}"
+
+env_spec() {
+    "${PY:-${SCRATCH:?}/venv-hpcagent-bench-314/bin/python}" "$(dirname -- "${BASH_SOURCE[0]}")/env_spec.py" "$@"
 }
+
+# render_env <entry|file> -- the flat KEY=VALUE env an arms.yaml entry or a layered env file stands for.
+render_env() { env_spec render "$1"; }
+
+# base_exists <entry> -- true when arms.yaml declares <entry>.
+base_exists() { env_spec list | grep -qxF -- "$1"; }
 
 # publish_readonly <tmp> <dest> -- makes <tmp> read-only and hard-links it to <dest>, which must not
 # exist or must already hold the same bytes; <tmp> is removed either way. ln never replaces a file.
@@ -87,8 +73,8 @@ snapshot_env() {
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     set -euo pipefail
     case "${1:-}" in
-        render) render_env "${2:?usage: env_layers.sh render <file>}" ;;
+        render) render_env "${2:?usage: env_layers.sh render <entry|file>}" ;;
         snapshot) snapshot_env "${2:?usage: env_layers.sh snapshot <env> <arm> [dir]}" "${3:?arm}" "${4:-.rendered}" ;;
-        *) echo "usage: env_layers.sh render <file> | snapshot <env> <arm> [dir]" >&2; exit 2 ;;
+        *) echo "usage: env_layers.sh render <entry|file> | snapshot <env> <arm> [dir]" >&2; exit 2 ;;
     esac
 fi

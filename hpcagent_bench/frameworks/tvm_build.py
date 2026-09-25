@@ -6,7 +6,7 @@ pipeline, a shape-keyed compile cache, output allocation) so a per-kernel file i
 
 import os
 import tempfile
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 import tvm
@@ -138,7 +138,7 @@ class TvmKernel:
         self.build = build
         self.target_fn = target_fn
         self.device_fn = device_fn
-        self._exe: "tvm.runtime.Executable | None" = None
+        self._exe: tvm.runtime.Executable | None = None
         self._key: tuple[int | float | str, ...] | None = None
 
     def get(self, key: tuple[int | float | str, ...]) -> "tvm.runtime.Executable":

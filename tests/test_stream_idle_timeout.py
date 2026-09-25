@@ -45,7 +45,7 @@ def test_an_arm_naming_neither_var_gets_the_same_default_as_before_this_module_e
 
 
 def test_qwen38s_own_perf_playbook_config_already_needs_the_full_ceiling(module: types.ModuleType) -> None:
-    """262144-token context (models.py SERVED_CONTEXT['qwen38']) at AGENTS_PER_NODE=40: the derived,
+    """262144-token context (campaign:qwen38's CONTEXT_LENGTH) at AGENTS_PER_NODE=40: the derived,
     margined worst case is itself far past 30 minutes, so the ceiling is not generous -- it is the
     most patience the CLI will ever grant, and still short of the theoretical worst case."""
     pre_clamp_s = 262144 / (module.MEASURED_NODE_PROMPT_TOK_S / 40) * module.SAFETY_MARGIN

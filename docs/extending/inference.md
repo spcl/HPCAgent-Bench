@@ -2,15 +2,16 @@
 
 Two changes: (A) serving a new model on an engine the cluster path already runs (SGLang or vLLM),
 and (B) adding a third engine. Measured values (memory fraction, pool size, ready timeout) live in
-the comments of `experiments/.env.base-<tag>` and in `docs/serving/<tag>.md`. Copy them from there.
+the comments of `experiments/layers/model-<tag>.env`, `experiments/arms.yaml` and
+`docs/serving/<tag>.md`. Copy them from there.
 
 ## A. A new model on SGLang or vLLM
 
 | What you touch | Why |
 | --- | --- |
-| `experiments/.env.base-<tag>` | serving recipe plus agent knobs; campaign launchers copy it |
+| `experiments/layers/model-<tag>.env` | the serving recipe; every campaign renders it as `<campaign>:<tag>` |
+| `experiments/arms.yaml` `models.<tag>` | only where one campaign must differ for this model (optional) |
 | `hpcagent_bench/envs/registry.yaml` `models:` | display name, and the checkpoint the arms must serve |
-| model maps in `experiments/submit-*.sh` | launchers that do not read `.env.base-${model}` directly |
 | `docs/serving/<tag>.md` | the measurements behind the recipe |
 
 **1. Fetch the weights.** `<tag>` is the model token in arm names (`llr-focus40-<tag>-c`). The job
@@ -22,22 +23,21 @@ then restripes every blob over 1 GiB on the host; `AUDIT_ONLY=1` only checks the
 MODELS="org/Name" sbatch containers/cluster/ce-images/inference/fetch_weights.sbatch
 ```
 
-**2. Write `.env.base-<tag>`.** Copy the base with the same engine and node shape (`qwen38` and
-`oss120b` use one node, `kimi27sglang` and `glm53` four in `pp` mode) and edit the serving keys.
-Trimmed from `.env.base-qwen38`:
+**2. Write `layers/model-<tag>.env`.** Extend the family layers with the same engine and node
+shape (`replicas.env` for one node, `pp.env` for a 4-node pipeline, `sglang.env` for sglang,
+`service.env` for a hosted API) and set only what is this model's own. `layers/model-qwen38.env`:
 
 ```bash
-INFERENCE_NODES=1
-GPUS_PER_NODE=4
-INFERENCE_MODE=replicas
+# extends: replicas.env
+# extends: sglang.env
 INFERENCE_CE_ENV=hpcagent-bench-sglang-mi300-latest
-EFFORT_LADDER="low medium xhigh"
 VLLM_MODEL=Qwen/Qwen3.8-27B-FP8
-VLLM_SERVED_MODEL=hpcagent-bench-vllm
 HPCAGENT_BENCH_OPTIMIZER=Qwen/Qwen3.8-27B-FP8
-INFERENCE_ENGINE=sglang
-SGLANG_EXTRA_ARGS="--chat-template ${SCRIPT_DIR}/chat-template-qwen38.jinja --trust-remote-code --context-length 262144 --mem-fraction-static <measured> --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-metrics"
 ```
+
+The llr40 campaign then needs its window and ladder, in `arms.yaml` under `campaign.models.<tag>`
+(`EFFORT_LADDER`, `CONTEXT_LENGTH`, `SGLANG_EXTRA_ARGS` with `--mem-fraction-static <measured>` and
+both parsers). Check the result with `experiments/env_spec.py render campaign:<tag>`.
 
 | Key | Read by | Meaning |
 | --- | --- | --- |
@@ -55,11 +55,9 @@ Compaction needs no key of its own: `agent_driver.claude_context_env` reads `CON
 the trigger itself, capped at 262144. See [`docs/token_accounting.md`](../token_accounting.md#context-compaction).
 
 Model files such as a chat template sit in `experiments/`, named through `${SCRIPT_DIR}`, which
-`run_cluster.sh` sets before sourcing the env and mounts into the inference container. For a
-counterfactual of an existing model, add `layers/model-<tag>.env` (serving block only, extends
-`common.env`) and point `.env.base-<tag>` / `.env.llrbase-<tag>-c` at it with `# extends:`; language
-and skills siblings extend `-c` (see `experiments/README.md` "Env layers"). `make_model_arm.py
---to-model <tag>` still re-targets an existing rendered arm file (add a `MODELS` entry).
+`run_cluster.sh` sets before sourcing the env and mounts into the inference container. A
+counterfactual of an existing model is its own layer extending the same family layers (see
+`experiments/README.md` "Arm envs").
 
 **3. Serve it alone.** From `experiments/`, `SUBMIT=0 MODEL=<tag> ./serve-only.sbatch` prints the
 plan and `MODEL=<tag> ./serve-only.sbatch` runs the campaign's own `--vllm-node` role with the base
@@ -82,10 +80,7 @@ vLLM, `smoke-kimi-eager-pg.sbatch` takes `MODEL_REPO`, `TOOL_PARSER`, `REASONING
 **4. Register the tag** as `<tag>: {name: <Display Name>, serves: org/Name}` at the END of `models:` in
 `registry.yaml` (key order is marker order; `tests/test_palette.py` pins it); aliases go under `aliases.models`.
 
-**5. Name it in the launchers.** `submit-cpf-llr40.sh` reads `.env.base-${model}`, so `MODELS=<tag>`
-is enough. `submit-gpu-llr40.sh`, `submit-scicomp-dc.sh`, `submit-git-scicomp.sh` (`BASE_ENV`) and
-`submit-llrblind.sh` (`MAX_TOKENS_BY_MODEL`, `.env.llrbase-<tag>-<lang>`) keep their own per-model
-maps.
+**5. Submit.** Every launcher renders `<campaign>:${model}`, so `MODELS=<tag>` is enough.
 
 **In-process and API models.** The Python harness ignores these env files. An OpenAI-shaped endpoint
 is one `ModelSpec` entry in `MODELS` (`hpcagent_bench/harness/baselines.py`): `backend="openai"`,

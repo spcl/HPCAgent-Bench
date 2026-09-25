@@ -16,14 +16,13 @@ import shutil
 import subprocess
 import sys
 
+from tests.env_render import SPEC_INPUTS
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
 
 SUBMIT_INPUTS = (
-    # the layered bases' parents and their renderer (experiments/README.md "Env layers")
-    "env_layers.sh",
-    "layers/common.env",
-    "layers/model-qwen38.env",
+    *SPEC_INPUTS,
     "submit-harness20-caveman.sh",
     "submit_common.sh",
     "make_problems.py",
@@ -32,7 +31,6 @@ SUBMIT_INPUTS = (
     "arm_nodes.sh",
     "pin_env_kv.sh",
     "record_identity.sh",
-    ".env.llrbase-qwen38-c",
     "kernels-harness20.txt",
 )
 
@@ -185,7 +183,7 @@ def test_walltime_scales_with_the_subsets_own_kernel_count(tmp_path: pathlib.Pat
     three.write_text("tsvc_2_s235\nheat_3d\nkmp\n")
     result = run_submit(root, KERNELS_FILE="three.txt")
     assert result.returncode == 0, result.stderr
-    match = re.search(r"^prepared \S+ \(\d+ nodes, (\d\d:\d\d:\d\d)\)", result.stdout, re.M)
+    match = re.search(r"^prepared \S+ \(\d+ nodes, (\d\d:\d\d:\d\d)\)", result.stdout, re.MULTILINE)
     assert match, result.stdout
     # 1 worker, 3 kernels -> 3 batches of AGENT_TIMEOUT_SECONDS (21600s = 6h) + 3h staging = 21h
     assert match.group(1) == "21:00:00", result.stdout

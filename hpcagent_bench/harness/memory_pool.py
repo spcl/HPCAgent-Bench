@@ -23,7 +23,6 @@ place, without pretending to a pooling it does not do.
 """
 
 import pathlib
-from typing import Optional, Tuple
 
 GB = 1 << 30
 
@@ -34,7 +33,7 @@ MEMINFO = pathlib.Path("/proc/meminfo")
 MEMINFO_KEY = "MemAvailable:"
 
 
-def host_available_bytes() -> Optional[int]:
+def host_available_bytes() -> int | None:
     """What the kernel says a new allocation can get, or ``None`` off Linux."""
     if not MEMINFO.exists():
         return None
@@ -44,7 +43,7 @@ def host_available_bytes() -> Optional[int]:
     return None
 
 
-def reserve_device(total_bytes: int, device: int = 0) -> Tuple[bool, str]:
+def reserve_device(total_bytes: int, device: int = 0) -> tuple[bool, str]:
     """Install a cupy memory pool on ``device`` and warm it to ``total_bytes``.
 
     Returns ``(reserved, detail)``. ``False`` means there is no cupy or no driver -- a host-only
@@ -77,7 +76,7 @@ def reserve_device(total_bytes: int, device: int = 0) -> Tuple[bool, str]:
     )
 
 
-def reserve_host(total_bytes: int) -> Tuple[bool, str]:
+def reserve_host(total_bytes: int) -> tuple[bool, str]:
     """Check the host can meet ``total_bytes``; raise when it cannot. Never pools -- see the module
     docstring for why numpy has nothing to pool with."""
     available = host_available_bytes()
@@ -91,7 +90,7 @@ def reserve_host(total_bytes: int) -> Tuple[bool, str]:
     return False, f"host: {total_bytes / GB:.2f} GB of {available / GB:.2f} GB available, not pooled"
 
 
-def reserve(pool_bytes: int, workspace_bytes: int, device: Optional[int] = 0) -> Tuple[bool, str]:
+def reserve(pool_bytes: int, workspace_bytes: int, device: int | None = 0) -> tuple[bool, str]:
     """Reserve one judge's ``pool_bytes`` run pool plus its ``workspace_bytes`` scratch pool.
 
     ``device`` is the local GPU ordinal, or ``None`` for a CPU-only judge. Returns
