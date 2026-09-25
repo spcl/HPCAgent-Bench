@@ -8,11 +8,6 @@ runs from a repo MOUNTED into the image, so a baked-in install would be a second
 no way to install "the extras of a local project, without the project", so those files have to exist
 -- but they do not have to be a second hand-maintained list. They are derived here instead.
 
-That divergence was not hypothetical. Before this script, amd.txt and nvidia.txt carried a bare
-``pythran`` against pyproject's ``pythran==0.18.1`` -- the pin that exists because 0.19.0 turns
-subset_sum into a >600 s hang, then a SIG11 -- and neither declared ``ordered-set`` at all, which
-every dace import needs. The CE images installed exactly what those files said.
-
 ``--check`` re-renders in memory and diffs; :mod:`tests.test_requirements_cover_project_deps` runs it
 so drift fails a test run rather than a container build.
 """

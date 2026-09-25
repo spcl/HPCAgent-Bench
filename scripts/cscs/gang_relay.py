@@ -34,8 +34,8 @@ import sys
 import time
 
 #: Seconds either side may go without touching its heartbeat before the other declares it dead.
-#: These files live on Lustre; a tighter window reads propagation delay as a death, and a capstor
-#: stall has frozen the relay and the judges together for 4-5 minutes (mlscale smokes 2026-09-24).
+#: These files live on Lustre; a tighter window reads propagation delay as a death, and a
+#: filesystem stall can freeze the relay and the judges together for minutes.
 HEARTBEAT_S = 300.0
 #: A gap this long between two of the relay's OWN passes means the relay itself was stalled: the
 #: judges' heartbeats are then measured from its resumption, never across time it was not watching.
