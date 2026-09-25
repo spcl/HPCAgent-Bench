@@ -54,10 +54,6 @@ def seed_shard(path: pathlib.Path, *, run_id: str, kernel: str = "gemm", ts: int
     figure groups by is the ``runs`` row joined by ``run_id``."""
     conn = recording.connect(str(path))
     try:
-        conn.execute(
-            "INSERT OR REPLACE INTO benchmarks(name, track, dwarf, source) VALUES (?,?,?,?)",
-            (kernel, "scientific_computing", "dense_la", None),
-        )
         # The arm's language is one runs row per run, not a column on the measurement row.
         conn.execute(
             "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm, first_seen) "
