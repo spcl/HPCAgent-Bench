@@ -7,8 +7,11 @@ Bootstrap: docker
 From: ubuntu:26.04
 
 %files
-    requirements/cpu.txt /requirements/cpu.txt
-    requirements/optional.txt /requirements/optional.txt
+    pyproject.toml /opt/hpcagent-bench/pyproject.toml
+    scripts/install_dace.sh /opt/hpcagent-bench/scripts/install_dace.sh
+    containers/images/dace_refresh.sh /opt/hpcagent-bench/containers/images/dace_refresh.sh
+    containers/agent/harness/pins.env /opt/harness/pins.env
+    containers/agent/harness/install_tools.sh /opt/harness/install_tools.sh
     containers/lib/build-hptt.sh /build-hptt.sh
 
 %post
@@ -21,18 +24,16 @@ From: ubuntu:26.04
     python3 -m pip install --break-system-packages --no-cache-dir -U 'setuptools>=64' wheel
     # HPTT is not packaged (containers/README.md, Numeric libraries).
     sh /build-hptt.sh
-    # The CPU torch wheel first, so the requirements never pull the ~2 GB CUDA stack.
+    # The CPU torch wheel first, so the extra never pulls the ~2 GB CUDA stack.
     python3 -m pip install --break-system-packages --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-    export MPICC=mpicc.mpich
-    python3 -m pip install --break-system-packages --no-cache-dir -r /requirements/cpu.txt
-    # apache-tvm and mpi4py (kept out of cpu.txt so it installs on macOS arm64); mpi4py builds
-    # from source against this image's MPICH.
-    python3 -m pip install --break-system-packages --no-cache-dir --no-binary=mpi4py -r /requirements/optional.txt
-    # DaCe: editable spcl/dace@extended with submodules (its runtime headers live there).
-    git clone --depth 1 --recurse-submodules --shallow-submodules --branch extended https://github.com/spcl/dace.git /opt/dace
-    # Which tip this build got.
+    # pyproject.toml's `cpu` extra with the pinned uv; mpi4py builds from source against this
+    # image's MPICH.
+    sh /opt/harness/install_tools.sh /usr/local
+    MPICC=mpicc.mpich uv pip install --system --break-system-packages --no-cache --no-binary mpi4py \
+        -r /opt/hpcagent-bench/pyproject.toml --extra cpu
+    # DaCe: the release pin, editable with submodules (its runtime headers live there).
+    PYTHON=python3 PIP_BREAK_SYSTEM_PACKAGES=1 /opt/hpcagent-bench/scripts/install_dace.sh --editable /opt/dace
     git -C /opt/dace rev-parse HEAD > /opt/dace.commit
-    python3 -m pip install --break-system-packages --no-cache-dir -e /opt/dace
 
 %environment
     export LC_ALL=C

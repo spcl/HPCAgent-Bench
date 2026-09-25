@@ -48,7 +48,6 @@ ARG GCC_PPA_VERSION=16-20260315-1ubuntu1~24~ppa1
 # PPA signing key, fetched by fingerprint and checked.
 ARG GCC_PPA_KEY=C8EC952E2A0E1FBDC5090F6A2C277A0A352154E5
 ARG LLVM_MAJOR=22
-ARG PYTHON_REQUIREMENTS=requirements/cpu-image.txt
 
 # /usr/lib/llvm-${LLVM_MAJOR}/bin puts clang, flang and llvm-objdump on PATH under their bare names,
 # which is what languages.resolve_compiler probes; bare gcc names are symlinked into /usr/local/bin,
@@ -222,29 +221,27 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------------------------
 # 4. The python framework stack, in /opt/venv.
 #
-# torch from the CPU wheel index FIRST: the requirements' bare `torch` is then already satisfied, so
-# pip never pulls PyPI's x86_64 wheel with its CUDA libraries. mpi4py is built against the image's
-# MPICH, never a wheel's bundled MPI. optional.txt (apache-tvm) goes in a SECOND call: its --pre is
-# global to a pip run, and it would otherwise let numpy or scipy resolve to a pre-release.
-COPY requirements/ /requirements/
+# torch from the CPU wheel index FIRST: the extra's bare `torch` is then already satisfied, so the
+# resolver never pulls PyPI's x86_64 wheel with its CUDA libraries. Then pyproject.toml's `cpu` extra
+# and the judge-proxy group in ONE uv resolution (only pyproject.toml is copied, never the package
+# source): the pinned proxy stack is a constraint of the whole install. mpi4py is built against the
+# image's MPICH, never a wheel's bundled MPI. uv comes from the pins (install_tools.sh).
+COPY containers/agent/harness/pins.env containers/agent/harness/install_tools.sh /opt/harness/
+COPY pyproject.toml /opt/hpcagent-bench/pyproject.toml
 RUN set -eux; \
+    sh /opt/harness/install_tools.sh /usr/local; \
     python3 -m venv /opt/venv; \
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
     python3 -m pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch; \
-    MPICC=/usr/bin/mpicc.mpich python3 -m pip install --no-cache-dir --no-binary=mpi4py -r "/${PYTHON_REQUIREMENTS}"; \
-    python3 -m pip install --no-cache-dir -r /requirements/optional.txt; \
+    MPICC=/usr/bin/mpicc.mpich uv pip install --python /opt/venv/bin/python --no-cache --no-binary mpi4py \
+      -r /opt/hpcagent-bench/pyproject.toml --extra cpu --group /opt/hpcagent-bench/pyproject.toml:judge-proxy; \
     python3 -c "import torch; assert torch.version.cuda is None and torch.version.hip is None, 'not a CPU torch'; \
       print('torch', torch.__version__)"; \
     python3 -c "import mpi4py.MPI as M; v = M.Get_library_version(); assert 'MPICH' in v, v; print(v.splitlines()[0])"
 
-# Judge-side python: the crawl/browser stack, the proxy the arms talk through, and openai-agents.
-# One resolver pass.
-COPY containers/judge/requirements.txt /opt/harness/judge-requirements.txt
+# Judge-side python, installed above: the crawl/browser stack, the proxy the arms talk through, and
+# openai-agents. The pins are asserted here.
 RUN set -eux; \
-    python3 -m pip install --no-cache-dir \
-      -r /opt/harness/judge-requirements.txt \
-      "litellm[proxy]==1.94.0" fastapi uvicorn httpx "httpx2==2.12.0" "anyio==4.14.2" pydantic orjson tenacity rich typer \
-      openai-agents; \
     python3 -c "import importlib.metadata as m; \
 want = {'litellm': '1.94.0', 'httpx2': '2.12.0', 'anyio': '4.14.2'}; \
 got = {name: m.version(name) for name in want}; \
@@ -276,10 +273,8 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------------------------
 # 6. The agent side: node, the claude CLI, uv and man pages, from the checked-in pins shared with
 # the other judge-agent images (the npm lock carries both architectures).
-COPY containers/agent/harness/pins.env containers/agent/harness/install_tools.sh /opt/harness/
 COPY containers/agent/harness/node/package.json containers/agent/harness/node/package-lock.json /opt/harness/node/
 RUN set -eux; \
-    sh /opt/harness/install_tools.sh /usr/local; \
     cd /opt/harness/node; \
     npm_config_cache=/tmp/npm-cache npm ci --no-audit --no-fund; \
     rm -rf /tmp/npm-cache; \
@@ -297,15 +292,14 @@ RUN set -eux; \
     man -w gcc >/dev/null || { echo "manpages missing: unminimize did not take" >&2; exit 1; }
 
 # 6a. Isolated venvs for the Python harnesses, kept off /opt/venv so their deps cannot displace
-# litellm[proxy]==1.94.0. Tool scripts are bound at launch.
-COPY containers/agent/harness/requirements-miniswe.txt containers/agent/harness/requirements-openhands.txt \
-     /opt/harness/
+# litellm[proxy]==1.94.0; each installs pyproject.toml's harness-<name> group. Tool scripts are
+# bound at launch.
 RUN set -eux; \
     . /opt/harness/pins.env; \
     for venv in miniswe openhands; do \
       uv venv --python "/usr/bin/python${HARNESS_PYTHON}" "/opt/harness/${venv}"; \
       uv pip install --python "/opt/harness/${venv}/bin/python" --no-cache \
-        -r "/opt/harness/requirements-${venv}.txt"; \
+        --group "/opt/hpcagent-bench/pyproject.toml:harness-${venv}"; \
     done
 
 # 6b. Which BLAS a build gets. Debian's openblas-openmp must win the generic libblas.so.3/

@@ -323,7 +323,6 @@
  "tests/test_replay_cache_detection.py": 4,
  "tests/test_repo_pr.py": 28,
  "tests/test_reporting_e2e.py": 2,
- "tests/test_requirements_cover_project_deps.py": 1,
  "tests/test_resolve_outputs_and_validate.py": 2,
  "tests/test_results_schema_migration.py": 9,
  "tests/test_rng_streams.py": 9,

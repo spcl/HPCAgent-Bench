@@ -1,7 +1,6 @@
-# The single source of the package metadata, version and dependencies. requirements/*.txt are
-# rendered from this file by scripts/sync_requirements.py (the container images install those).
-# There is no lockfile: agent-aider pins numpy 1.26 against numpy>=2 here, and dace tracks a branch
-# tip, so no single resolution covers every extra.
+# The ONLY dependency list: package metadata, extras, the harness venvs' groups and the dace pin.
+# The images install from this file without the package source (`uv pip install -r pyproject.toml
+# --extra ...` installs the dependencies, never the project), so it holds nothing hidden.
 [build-system]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
@@ -37,8 +36,8 @@ classifiers = [
 # What the library imports at module level (hpcagent_bench/ outside benchmarks/ and tests/). The
 # framework matrix (torch/jax/tvm/triton/...) is per platform and lives in the extras; numba is core
 # because it is the default LLR/SciComp baseline.
-# dace is not declared anywhere: PyPI rejects direct-URL requirements and the suite grades through
-# the spcl/dace `extended` branch tip, so it is installed separately (README).
+# dace is not a dependency (PyPI rejects direct-URL requirements): scripts/install_dace.sh installs
+# the commit [tool.hpcagent-bench] dace-pin names below.
 dependencies = [
     "numpy>=2,<3",
     "scipy",
@@ -70,10 +69,14 @@ numpyto_cupy = "hpcagent_bench.translators.numpyto_cupy.cli:main"
 numpyto_numba = "hpcagent_bench.translators.numpyto_numba.cli:main"
 numpyto_pythran = "hpcagent_bench.translators.numpyto_pythran.cli:main"
 
-# A platform installs exactly one of cpu / nvidia / amd: they carry different builds of torch.
+# Exactly one of cpu / amd / nvidia is a COMPLETE install for that hardware: the grading stack, every
+# framework baseline, the judge, HF export, the agent clients and the developer tools ([dev]). Harbor
+# itself is the adapter's dependency (adapters/hpcagent_bench/pyproject.toml): its rich>=14.1 cannot
+# share an environment with the judge-proxy group below. The images install one of them (`uv pip install -r pyproject.toml --extra
+# amd`); they differ only in the accelerator builds.
 [project.optional-dependencies]
-# The grading stack shared by every platform (nothing whose build differs per accelerator).
-frameworks = [
+cpu = [
+    "hpcagent_bench[dev]",
     "pygount",
     "jsonschema",
     "setuptools",
@@ -94,51 +97,80 @@ frameworks = [
     "z3-solver",
     # The upstream KernelBench models the machine_learning ports are compared against import it.
     "einops",
-]
-# CPU jobs install torch from PyTorch's CPU index first (the PyPI wheel is the CUDA build); an index
-# cannot be named in a PEP 508 requirement (see .github/actions/setup/action.yml).
-cpu = ["hpcagent_bench[frameworks]", "torch", "jax"]
-nvidia = [
-    "hpcagent_bench[frameworks]",
+    # A CPU box installs torch from PyTorch's CPU index first (the PyPI wheel is the CUDA build); an
+    # index cannot be named in a PEP 508 requirement. On the AMD image torch, jax's ROCm plugin and
+    # triton come from the ROCm base image, not PyPI.
     "torch",
-    "jax[cuda13]",
-    "cupy-cuda13x",
-    "apache-tvm>=0.25.0rc0",
-    "triton",
-    "mpi4py",
-]
-amd = [
-    "hpcagent_bench[frameworks]",
-    "torch",
-    # The ROCm jax plugin and AMD's triton come from the ROCm base image, not PyPI (the PyPI
-    # triton is the NVIDIA build and would overwrite it).
     "jax",
     "apache-tvm>=0.25.0rc0",
+    "apache-tvm-ffi>=0.1.12",
+    # Built from source against the system MPI (MPICC).
     "mpi4py",
+    "gt4py",
+    # `hpcagent-bench export-hf`: parquet writer, load-back check, Hub push.
+    "pyarrow",
+    "datasets>=2.17",
+    "huggingface_hub",
+    # The judge: experiments/judge_service.py's router (starlette's TestClient needs httpx2), the bound
+    # judge tools' crawl/browser stack and openai-agents, without which the optimas harness cannot
+    # start. The proxy the arms talk through is the judge-proxy group below.
+    "fastapi",
+    "httpx",
+    "httpx2==2.12.0",
+    "crawl4ai",
+    "playwright",
+    "uvicorn",
+    "orjson",
+    "tenacity",
+    "rich",
+    "typer",
+    "openai-agents",
+    # Agent clients: the Anthropic API and a locally hosted transformers model, and the upstream OPRO
+    # proposer the optimas baseline opts into (baselines.opro_proposer_upstream).
+    "anthropic",
+    "transformers",
+    "accelerate",
+    "optimas-ai",
 ]
-mpi = ["mpi4py", "pytest-mpi"]
-tvm = ["apache-tvm>=0.25.0rc0", "apache-tvm-ffi>=0.1.12"]
-triton = ["triton"]
-gt4py = ["gt4py"]
-# `hpcagent-bench export-hf`: parquet writer, load-back check, Hub push.
-hf = ["pyarrow", "datasets>=2.17", "huggingface_hub"]
-# experiments/judge_service.py (FastAPI router). starlette's TestClient needs httpx2 to avoid a
-# deprecation warning.
-judge-proxy = ["fastapi", "httpx", "httpx2==2.12.0"]
-agent-anthropic = ["anthropic"]
-agent-local = ["transformers", "huggingface-hub", "accelerate"]
-agent-aider = ["aider-chat"]
-agent-optimas = ["optimas-ai"]
-harbor = ["harbor>=0.23"]  # the podman provider and flat numeric reward.json
+amd = ["hpcagent_bench[cpu]"]
+nvidia = ["hpcagent_bench[cpu]", "jax[cuda13]", "cupy-cuda13x", "triton"]
+# Tests and formatters, also part of every hardware extra so the suite runs inside each image.
+dev = [
+    "pytest",
+    "pytest-timeout",
+    "pytest-xdist",
+    # tests/ports/ runs each test in its own process (a bad ctypes index aborts the interpreter).
+    "pytest-forked",
+    "pytest-cov",
+    "pytest-mpi",
+    "coverage",
+    "ruff",
+    "pyright",
+    "fprettify",
+    "clang-format",
+    "pre-commit",
+]
 
-# PEP 735 groups: never published with the distribution. `pip install --group linting` installs
-# the formatters without the project.
+# PEP 735 groups: never published with the distribution, and installed without the project's own
+# dependencies. Each is a stack that cannot share one resolution with the hardware extras.
 [dependency-groups]
-# pytest-forked: tests/ports/ runs each test in its own process (a bad ctypes index aborts the
-# interpreter).
-testing = ["pytest", "pytest-timeout", "pytest-xdist", "pytest-forked", "pytest-cov", "coverage"]
-linting = ["ruff", "fprettify", "clang-format", "pre-commit"]
-dev = [{ include-group = "testing" }, { include-group = "linting" }]
+# The judge-agent images' LLM proxy the arms talk through, exactly as the recorded arms ran it; the
+# images install it after their hardware extra. litellm 1.94 needs rich<14, so harbor>=0.23 never
+# shares its environment.
+judge-proxy = ["litellm[proxy]==1.94.0", "httpx2==2.12.0", "anyio==4.14.2"]
+# The Python agent harnesses, each in its own image venv (/opt/harness/<name>) so its deps cannot
+# displace the judge's pinned proxy stack. Groups, not extras: a group installs without the
+# project's own dependencies.
+harness-miniswe = ["mini-swe-agent==2.4.6"]
+harness-openhands = ["openhands-sdk==1.47.0", "openhands-tools==1.47.0"]
+
+# The spcl/dace@extended commit this release is tested with, and the ONE place it is written.
+# scripts/install_dace.sh and the image builds install it; jobs refresh to the latest extended unless
+# HPCAGENT_BENCH_DACE_REF=pinned (containers/images/dace_refresh.sh, docs/configuration.md#dace).
+[tool.hpcagent-bench]
+# PLACEHOLDER until the extended commit carrying the lenet/vgg16 lowering fixes is pushed: every
+# pinned install refuses to run until it is a 40-character sha.
+dace-pin = "PLACEHOLDER-extended-commit-with-the-lenet-vgg16-fixes"
 
 [tool.setuptools]
 include-package-data = true

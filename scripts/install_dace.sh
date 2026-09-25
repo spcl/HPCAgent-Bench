@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # THE dace install. dace is not a PyPI dependency of hpcagent-bench (PyPI rejects direct-URL
-# requirements); a release runs the spcl/dace@extended commit scripts/dace_pin.env names, so every
+# requirements); a release runs the spcl/dace@extended commit pyproject.toml pins (dace-pin), so every
 # install path -- README, CI, rebuild_venv.sh, the release smoke -- runs this:
 #
 #   scripts/install_dace.sh                             # into python3: pip install "dace @ git+<url>@<pin>"

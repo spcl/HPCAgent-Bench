@@ -4,13 +4,14 @@
 
 Driven against a local ``origin`` (a file:// repository standing in for spcl/dace) and a stub
 ``python3``, so no network and no pip install ever happen. The script under test is a copy placed
-in a scratch tree next to its own ``scripts/dace_pin.env``, which is where ``pinned`` resolves.
+in a scratch tree next to its own ``pyproject.toml``, whose ``dace-pin`` is where ``pinned`` resolves.
 """
 
 import os
 import pathlib
 import shutil
 import subprocess
+import tomllib
 
 from hpcagent_bench import paths
 
@@ -44,10 +45,9 @@ def setup(tmp_path: pathlib.Path, pin: str = "") -> tuple[pathlib.Path, pathlib.
     second = commit(origin, "second")
     tree = tmp_path / "tree"
     (tree / "containers" / "images").mkdir(parents=True)
-    (tree / "scripts").mkdir()
     script = tree / "containers" / "images" / "dace_refresh.sh"
     shutil.copy2(SCRIPT, script)
-    (tree / "scripts" / "dace_pin.env").write_text(f"HPCAGENT_BENCH_DACE_PIN={pin or first}\n")
+    (tree / "pyproject.toml").write_text(f'[tool.hpcagent-bench]\ndace-pin = "{pin or first}"\n')
     bindir = tmp_path / "bin"
     bindir.mkdir()
     (bindir / "python3").write_text('#!/bin/sh\necho "python3 $*" >> "$STUB_LOG"\n')
@@ -139,15 +139,14 @@ def test_without_a_checkout_it_is_a_no_op_unless_a_commit_is_pinned(tmp_path: pa
     assert refresh(tmp_path, script, missing, ref=first).returncode == 1
 
 
-def test_the_release_pin_file_is_the_one_place_the_commit_is_written() -> None:
-    """Installs and image builds read scripts/dace_pin.env; nothing else spells a dace sha."""
-    pin_file = paths.ROOT / "scripts" / "dace_pin.env"
-    [line] = [line for line in pin_file.read_text().splitlines() if line and not line.startswith("#")]
-    assert line.startswith("HPCAGENT_BENCH_DACE_PIN=")
+def test_pyproject_is_the_one_place_the_release_pin_is_written() -> None:
+    """Installs and image builds read ``dace-pin`` from pyproject.toml; no other file spells it."""
+    with (paths.ROOT / "pyproject.toml").open("rb") as handle:
+        assert "dace-pin" in tomllib.load(handle)["tool"]["hpcagent-bench"]
     listed = subprocess.run(
-        ["git", "-C", str(paths.ROOT), "grep", "-l", "-E", "HPCAGENT_BENCH_DACE_PIN=[A-Za-z0-9]"],
+        ["git", "-C", str(paths.ROOT), "grep", "-l", "-E", "^dace-pin ="],
         capture_output=True,
         text=True,
         check=False,
     ).stdout.split()
-    assert listed == ["scripts/dace_pin.env"], listed
+    assert listed == ["pyproject.toml"], listed

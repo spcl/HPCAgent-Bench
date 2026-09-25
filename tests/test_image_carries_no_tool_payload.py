@@ -25,7 +25,7 @@ LAUNCH_CHECK: pathlib.Path = CE_IMAGES / "tools_launch_check.py"
 #: Image paths the tool scripts are bound at; no recipe may create or read them.
 TOOL_MOUNTS: tuple[str, ...] = ("/opt/hpcagent-bench-agent", "/opt/hpcagent-bench-judge")
 HARNESS_BUILD_INPUT: re.Pattern[str] = re.compile(
-    r"containers/agent/harness/(?:pins\.env|install_tools\.sh|requirements-[a-z]+\.txt|node/package(?:-lock)?\.json)"
+    r"containers/agent/harness/(?:pins\.env|install_tools\.sh|node/package(?:-lock)?\.json)"
 )
 
 
@@ -75,7 +75,7 @@ def test_a_judge_agent_image_copies_only_harness_build_inputs_from_containers_ag
             "COPY containers/agent/harness/pins.env \\\n     containers/agent/harness/run_miniswe.py /h/\n",
             ["containers/agent/harness/run_miniswe.py"],
         ),
-        ("COPY containers/agent/harness/requirements-miniswe.txt containers/agent/harness/node/package.json /h/\n", []),
+        ("COPY containers/agent/harness/install_tools.sh containers/agent/harness/node/package.json /h/\n", []),
     ],
 )
 def test_the_copy_scan_flags_each_agent_tree_copy_that_is_not_a_build_input(text: str, flagged: list[str]) -> None:

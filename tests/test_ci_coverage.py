@@ -99,13 +99,12 @@ def test_no_workflow_declares_the_same_key_twice() -> None:
 
 def test_every_pytest_plugin_the_workflow_asks_for_is_installed() -> None:
     """A plugin flag in PYTEST_ADDOPTS the install lacks fails every pytest call at argument parsing."""
-    groups = pyproject()["dependency-groups"]
-    installed = " ".join(str(entry) for entries in groups.values() for entry in entries)
+    installed = " ".join(pyproject()["project"]["optional-dependencies"]["dev"])
     text = WORKFLOW.read_text()
     plugins = {"--cov": "pytest-cov", "--timeout": "pytest-timeout", "-n ": "pytest-xdist", "--dist": "pytest-xdist"}
     asked = {dist for opt, dist in plugins.items() if re.search(rf"PYTEST_ADDOPTS:.*{re.escape(opt.strip())}", text)}
     missing = sorted(d for d in asked if d not in installed)
-    assert not missing, f"PYTEST_ADDOPTS asks for {missing}, which no pyproject.toml dependency group installs"
+    assert not missing, f"PYTEST_ADDOPTS asks for {missing}, which pyproject.toml's dev extra does not install"
 
 
 def test_asking_for_skip_reasons_does_not_hide_the_failures() -> None:
@@ -283,7 +282,6 @@ def test_ruff_and_pyright_target_the_python_floor() -> None:
 
 #: Distributions in ``[project.optional-dependencies]`` whose module name differs from the PyPI name.
 EXTRA_IMPORT_NAMES = {
-    "aider-chat": "aider",
     "apache-tvm": "tvm",
     "apache-tvm-ffi": "tvm_ffi",
     "cupy-cuda13x": "cupy",
@@ -297,9 +295,11 @@ ALWAYS_INSTALLED_EXTRAS = frozenset({"dace"})
 
 
 def optional_extra_modules() -> set[str]:
-    """Module names provided only by a pyproject extra, i.e. not installed unless a job asks."""
+    """Module names provided only by a hardware extra, i.e. not installed unless a job asks. The dev
+    extra (pytest and the formatters) is part of every install."""
     out: set[str] = set()
-    for requirements in pyproject()["project"]["optional-dependencies"].values():
+    extras = pyproject()["project"]["optional-dependencies"]
+    for requirements in (entries for name, entries in extras.items() if name != "dev"):
         for requirement in requirements:
             dist = re.split(r"[<>=!\[ ;@]", requirement.strip())[0]
             if not dist.startswith("hpcagent_bench"):

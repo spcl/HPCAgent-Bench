@@ -251,7 +251,7 @@ async def crawl_with_crawl4ai(
         from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(
-            "crawl4ai is required for live crawling; install requirements.txt and playwright chromium"
+            "crawl4ai is required for live crawling; pip install 'hpcagent-bench[cpu]' and playwright install chromium"
         ) from exc
 
     bm25_threshold = env_float("WEBSEARCH_BM25_THRESHOLD", 1.0)

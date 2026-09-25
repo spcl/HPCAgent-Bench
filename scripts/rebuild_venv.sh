@@ -58,13 +58,12 @@ fi
 # one of them: pythran==0.18.1, because 0.19.0 turns subset_sum into a >600 s hang and then a
 # SIG11. A bare "pip install pythran" installed 0.19.0, so the login venv graded kernels through
 # exactly the compiler the pin exists to keep out -- and it did it silently, because a pythran
-# status is only ever reached when its console script is on PATH. requirements/*.txt carried this
-# same bug and scripts/sync_requirements.py derives them for that reason; this was the last copy.
+# status is only ever reached when its console script is on PATH.
 mapfile -t TIER2 < <("${PY}" - "${REPO}/pyproject.toml" <<'PYSPEC'
 import pathlib, re, sys, tomllib
 
 # Every table pyproject can state a requirement in: the pins for these live under
-# optional-dependencies (frameworks), not in the core list, so reading one table finds nothing.
+# optional-dependencies (the cpu extra), not in the core list, so reading one table finds nothing.
 WANTED = ("torch", "numba", "pythran", "jax", "xgboost", "h5py", "netCDF4")
 path = pathlib.Path(sys.argv[1])
 project = tomllib.loads(path.read_text())["project"] if path.is_file() else {}

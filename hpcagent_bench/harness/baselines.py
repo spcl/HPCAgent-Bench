@@ -249,7 +249,7 @@ class AgentBaseline:
 #   * Weight tuning / router  -> not implemented (upstream's PPO needs trl<1.0's PPOTrainer).
 #
 # Upstream is the PyPI ``optimas-ai`` (not ``optimas``); its transformers pin is spurious, and only
-# its PPO surface is unusable on trl>=1.0. requirements/agent-optimas.txt has the working install.
+# its PPO surface is unusable on trl>=1.0. Every hardware extra of pyproject.toml installs it.
 # The in-repo implementation is the default and the control.
 
 #: Hard cap on a proposed instruction, in characters.
@@ -336,7 +336,7 @@ def optimas_proposer(
     *, llm_model: str = "gpt-4o", temperature: float = 0.7, max_tokens: int = 512
 ) -> Callable[[Sequence[Trial]], str]:
     """Drive the :attr:`OptimasBaseline.propose` seam with upstream Optimas' own OPRO (opt-in; install
-    per ``requirements/agent-optimas.txt``, import guarded here only).
+    with any hardware extra of pyproject.toml, import guarded here only).
 
     The component's variable is the instruction under search and OPRO's metric is our
     :class:`LocalReward`, so upstream optimizes against the local estimate and only the outer loop

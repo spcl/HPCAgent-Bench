@@ -10,7 +10,7 @@ values come from environment variables, each with one default place:
 | `scripts/cscs/account_env.sh` | the Slurm account, read from your own Slurm associations |
 | `experiments/env.sh` | the checkout and the venv; sources `scripts/repo_env.sh` and the two scripts above |
 | `scripts/repo_env.sh` | the import path: the checkout (and `DACE_TREE` ahead of it), `PYTHONHASHSEED=0` |
-| `scripts/dace_pin.env` | the dace commit a release installs and bakes into its images; jobs refresh to the latest extended ([below](#dace)) |
+| `pyproject.toml` (`[tool.hpcagent-bench] dace-pin`) | the dace commit a release installs and bakes into its images; jobs refresh to the latest extended ([below](#dace)) |
 | `hpcagent_bench/paths.py` | the Python side of the same roots (`scratch_root`, `fast_scratch_root`) |
 
 `cache_env.sh` and `account_env.sh` both load the site layer, so every submitter and every job sees
@@ -118,7 +118,7 @@ direct-URL requirements) and `pyproject.toml` names no version of it.
 
 | Variable | Default | Controls |
 |---|---|---|
-| `HPCAGENT_BENCH_DACE_PIN` | set in `scripts/dace_pin.env`, the one place it is written | the extended commit a release is tested with |
+| `dace-pin` (`pyproject.toml`, `[tool.hpcagent-bench]`) | the one place it is written | the extended commit a release is tested with |
 | `HPCAGENT_BENCH_DACE_REF` | installs and image builds: `pinned`; jobs: `extended` | which dace: `pinned` (the pin), a branch (its tip) or a full 40-character commit sha |
 | `DACE_TREE` | unset | a dace checkout to run instead, exactly as it is (a fix branch under test); `scripts/repo_env.sh` puts it ahead of the installed dace and nothing refreshes it |
 | `DACE_DIR` | `/opt/dace` | the image's editable dace checkout that `dace_refresh.sh` moves |

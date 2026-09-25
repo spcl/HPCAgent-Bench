@@ -61,9 +61,6 @@ esac
 VERSION=$("${PY}" -c "import tomllib; print(tomllib.load(open('${REPO_ROOT}/pyproject.toml', 'rb'))['project']['version'])")
 echo "=== hpcagent-bench ${VERSION} (HEAD $(git -C "${REPO_ROOT}" rev-parse --short HEAD)) ==="
 
-# PyPI rejects a Requires-Dist with a direct URL; fail here with a clearer message.
-"${PY}" "${REPO_ROOT}/scripts/check_direct_url_requirements.py" "${REPO_ROOT}/pyproject.toml"
-
 if [ -n "${UPLOAD}" ] && [ -n "$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=no)" ]; then
   echo "error: uncommitted changes; the release is built from HEAD, commit first" >&2
   git -C "${REPO_ROOT}" status --short --untracked-files=no >&2

@@ -6,7 +6,7 @@
 #   containers/images/dace_refresh.sh --resolve   # print the commit HPCAGENT_BENCH_DACE_REF names now
 #
 # HPCAGENT_BENCH_DACE_REF is a branch (default `extended`: its tip), `pinned` (the release's tested
-# commit, scripts/dace_pin.env) or a full commit sha. A job that spans several containers resolves
+# commit, pyproject.toml [tool.hpcagent-bench] dace-pin) or a full commit sha. A job that spans several containers resolves
 # the ref once on the batch host (--resolve) and exports the sha, so every rank runs the same commit
 # even if the branch moves. The image bakes the pin; this keeps a job on the latest extended.
 # Writes land in the container's writable layer, so the image itself never changes.
@@ -22,12 +22,12 @@ DACE_DIR="${DACE_DIR:-/opt/dace}"
 DACE_REF="${HPCAGENT_BENCH_DACE_REF:-extended}"
 DACE_URL="https://github.com/spcl/dace.git"
 COMMIT_FILE="${DACE_DIR}.commit"
-PIN_FILE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../scripts" && pwd)/dace_pin.env"
+PIN_FILE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)/pyproject.toml"
 
 is_sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
 
 if [[ "${DACE_REF}" == pinned ]]; then
-    DACE_REF="$(sed -n 's/^HPCAGENT_BENCH_DACE_PIN=//p' "${PIN_FILE}")"
+    DACE_REF="$(sed -n 's/^dace-pin = "\(.*\)"$/\1/p' "${PIN_FILE}")"
     is_sha "${DACE_REF}" || { echo "dace-refresh: ${PIN_FILE} holds no commit sha ('${DACE_REF}')" >&2; exit 2; }
 fi
 
