@@ -84,7 +84,7 @@ AMD MI300A cluster:
 
 ```bash
 cp experiments/layers/site-example.env experiments/layers/site.env  # once; edit for your cluster
-scripts/bootstrap_repos.sh && scripts/rebuild_venv.sh           # once per account
+python -m venv .venv && . .venv/bin/activate && pip install -e .   # once per account
 sbatch containers/cluster/ce-images/pull_images.sbatch           # once per cluster
 containers/cluster/ce-images/install_edfs.sh
 

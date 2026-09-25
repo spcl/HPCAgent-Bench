@@ -25,9 +25,9 @@ Three rules, because each one alone has been escaped:
    ``ulimit -c unlimited`` that still dumps, so a non-zero ``ulimit -c`` needs
    a same-line ``# core-dumps-ok: <reason>`` marker, so a deliberate one (a probe that gdbs its own
    core in a container's /tmp and deletes it) is reviewed rather than silent.
-3. A script that EMITS a batch script counts as one. ``scripts/preset_sweep.py --emit-sbatch``
-   writes a submittable header from an f-string, so the guard has to be inside the emitted text --
-   and a check keyed on the suffix never sees it. Those are reported, never auto-fixed: the
+3. A script that EMITS a batch script counts as one: a submittable header written from an
+   f-string needs the guard inside the emitted text, which a check keyed on the suffix never sees.
+   Those are reported, never auto-fixed: the
    insertion point sits inside a quoted template, where a blind splice would land in the wrong
    string.
 

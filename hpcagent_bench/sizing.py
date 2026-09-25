@@ -44,9 +44,8 @@ import functools
 import math
 import os
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass
-from typing import AbstractSet
 
 import numpy as np
 import yaml
@@ -408,7 +407,7 @@ def sparse_bytes(
     spec: BenchSpec,
     namespace: Mapping[str, object],
     dense: Mapping[str, int],
-    wanted: AbstractSet[str] | None = None,
+    wanted: Set[str] | None = None,
 ) -> int | None:
     """``dense`` corrected for every array a ``sparse_layouts`` block gives a physical format.
 
@@ -864,7 +863,7 @@ def derive_ladder(
 
 # Cost-aware corpus distribution: what a kernel is predicted to cost at a      #
 # rung, and how the corpus splits across ranks by it. Consumed by              #
-# ``support/collect/sweep.shard_names`` and ``scripts/size_audit.py --pack``.  #
+# ``support/collect/sweep.shard_names``.                                       #
 #: The unit :attr:`KernelCost.predicted_time` is quoted in -- one gibibyte of declared working
 #: set. The number is RELATIVE and has no clock in it: the packer only ever asks which of two
 #: kernels is bigger, never how many seconds either takes.

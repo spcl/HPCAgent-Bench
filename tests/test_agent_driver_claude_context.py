@@ -7,7 +7,7 @@ leaves proactive compaction off while that window's source is "auto", and waits 
 "prompt is too long" to compact reactively -- vLLM and SGLang say "maximum context length" instead,
 so Qwen episodes grew to 230674 input tokens and died on the 400. agent_driver.claude_context_env
 names the window (CLAUDE_CODE_MAX_CONTEXT_TOKENS, CLAUDE_CODE_AUTO_COMPACT_WINDOW) and places the
-trigger (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE); scripts/claude_compaction_stub.py proves it on the binary.
+trigger (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).
 
 USER 2026-09-22: the limit L is min(served window, 262144) for every model; the reply reserve R is
 min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, L // 8) and is exported as the reply cap; the trigger leaves R plus

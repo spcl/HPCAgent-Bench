@@ -69,7 +69,6 @@ What a migration removes, and nothing else:
 A retired table or column that fails its check makes `migrate` refuse (nothing is written); the
 source stays readable as it is. A `scaling_curves` row from before the law joined its key takes the
 one law its grade's points name. A column the schema never named (`host`, the machine name before `node`) is kept. A DB from before
-the `runs` table carries its identity only in the arm name; `migrate` refuses it and
-`scripts/migrate_db.py` derives the identity instead. The extracted observations CSV of a DB and of
+the `runs` table carries its identity only in the arm name; `migrate` refuses it. The extracted observations CSV of a DB and of
 its migrated copy are identical (`tests/test_results_db_migration.py`, over every schema vintage
 in `tests/data/results_db_vintages.json`).

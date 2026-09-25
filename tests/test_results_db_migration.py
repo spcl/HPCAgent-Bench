@@ -202,10 +202,10 @@ def test_the_legacy_host_column_is_kept(tmp_path: pathlib.Path) -> None:
 
 
 def test_a_db_from_before_the_runs_table_is_refused_and_nothing_is_written(tmp_path: pathlib.Path) -> None:
-    """Its identity lives in the arm name; ``scripts/migrate_db.py`` derives it, this does not."""
+    """Its identity lives in the arm name, which the migration does not parse."""
     old, out = tmp_path / "old.db", tmp_path / "out.db"
     build(old, PRE_RUNS)
-    with pytest.raises(ValueError, match="migrate_db.py"):
+    with pytest.raises(ValueError, match="predates the run identity"):
         recording.migrate(str(old), str(out))
     assert not out.exists()
 

@@ -8,10 +8,9 @@ autocomplete.
 ## 1. Set up Ollama + the models (sudoless)
 
 ```bash
-scripts/install_ollama.sh            # detects ollama; if missing, installs to ~/.local (no sudo)
-                                     # starts the server, pulls qwen2.5-coder:{7b,1.5b}
-# pull extra models:
-scripts/install_ollama.sh qwen2.5-coder:32b deepseek-coder-v2:16b
+curl -fsSL https://ollama.com/install.sh | sh   # or a release tarball unpacked under ~/.local
+ollama serve &
+ollama pull qwen2.5-coder:7b qwen2.5-coder:1.5b
 ```
 
 Works on **Linux, WSL, and macOS**. If Ollama is already on `PATH` it is reused;

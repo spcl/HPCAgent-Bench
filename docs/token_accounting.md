@@ -215,9 +215,8 @@ so a smaller window reserves a smaller `max_tokens` on every request too. `round
 turn's own measured growth headroom (p99.9 over 1583 requests of 28 llr-focus40 transcripts: 30.0k at
 262144), so the request the trigger lets through still cannot overflow the window on its own. Worked
 example, oss120b (`limit=131072`, default reply cap): `reply=16384`, `threshold=98959`, `pct=86.2854`.
-`scripts/claude_compaction_stub.py` proves the whole thing end to end against the real binary (2.1.197:
-3 compactions, 0 overflows at both 262144 and 131072; unfixed, 0 compactions and every request
-overflows). No `.env` key sets the compaction threshold (a `CLAUDE_AUTOCOMPACT` line in an arm file is
+Against the real binary (2.1.197) this gives 3 compactions and 0 overflows at both 262144 and
+131072; without it, 0 compactions and every request overflows. No `.env` key sets the compaction threshold (a `CLAUDE_AUTOCOMPACT` line in an arm file is
 inert): the driver computes the trigger from the
 window it actually observes, so no declared number can drift from it.
 

@@ -137,8 +137,7 @@ recorded, canonical key.
 - Colours come from `packet_color`/`hue_order`, which read `packets:` key order; that order is
   append-only, so a new packet's entry belongs at the end.
 - The `packets` table (one row per `(packet, language)` recorded so far) holds the resolved,
-  `fill=False` definition. `migrate_db.py`'s `backfill_packets` adds it to an older DB from
-  `runs.packet` history and is idempotent.
+  `fill=False` definition.
 - A running job sources its env once at launch; a registry edit reaches only a later, newly submitted arm.
 
 ## Validation

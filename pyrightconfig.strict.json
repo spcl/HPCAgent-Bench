@@ -15,8 +15,7 @@
     "hpcagent_bench/spec.py",
     "hpcagent_bench/stats/palette.py",
     "hpcagent_bench/stats/summary.py",
-    "hpcagent_bench/websearch.py",
-    "scripts/migrate_db.py"
+    "hpcagent_bench/websearch.py"
   ],
   "typeCheckingMode": "strict",
   "reportMissingImports": false,
