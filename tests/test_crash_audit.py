@@ -13,6 +13,8 @@ import sys
 
 import pytest
 
+from hpcagent_bench import campaigns
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "experiments"))
 
 import crash_audit  # noqa: E402  -- path insert above must run first
@@ -312,9 +314,10 @@ def test_delete_rows_matches_each_jobs_own_arm_not_the_callers_folded_identity(t
 
 def test_roster_tag_reads_the_wave_boards_own_campaign_table() -> None:
     """The tag lookup must be the SAME table the wave board scores arms under, not a second copy
-    that can drift from it."""
-    assert crash_audit.roster_tag("cpf-llr-focus40-oss120b-c") == "llr-focus40"
-    assert crash_audit.roster_tag("scicomp-dc-cpp-oss120b-plain") == "scicomp35"
+    that can drift from it: every registry campaign's arm resolves to that campaign's own tag, the
+    longest prefix winning (scicomp-dc-gpu over scicomp-dc)."""
+    for prefix, spec in campaigns.campaigns().items():
+        assert crash_audit.roster_tag(f"{prefix}-probe-arm") == spec.tag, prefix
 
 
 def test_roster_tag_raises_for_an_arm_no_campaign_owns() -> None:
