@@ -179,8 +179,8 @@ RUN set -eux; \
 #
 # AITER_JIT_DIR points INSIDE the image so a hit is a read off the squashfs. A miss still writes,
 # into the per-job CE overlay, so an op this prebuild did not cover degrades to a cold-cache
-# build rather than failing. run_cluster.sh reads it as ${AITER_JIT_DIR:-...}, so this value
-# wins over its scratch default without a launcher change.
+# build rather than failing. The EDF declares the same two paths, because the CE does not preserve
+# the image's ENV and run_cluster.sh would otherwise fall back to its scratch default.
 ENV AITER_JIT_DIR=/opt/aiter-jit \
     AITER_ROOT_DIR=/opt/aiter-root
 RUN mkdir -p /opt/aiter-jit /opt/aiter-root /tmp/aiter-home

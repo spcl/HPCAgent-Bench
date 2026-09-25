@@ -1,38 +1,27 @@
 # syntax=docker/dockerfile:1
 #
-# vLLM inference on AMD MI300A (gfx942). Serves oss120b, and nothing else: every campaign that
-# names a vLLM engine names vLLM 0.23.0, and the 12 of 18 v9 arms that serve qwen38 or kimi go to
-# the SGLang image instead.
+# vLLM inference on AMD MI300A (gfx942). Serves oss120b; qwen38, kimi and GLM-5.3 are on SGLang.
 #
-# Build context is the REPOSITORY ROOT, because this file bakes in two things that live in the
-# repo today and are reached from outside the image at run time:
+# Build context is the REPOSITORY ROOT, because this file bakes in two inputs that live in the
+# repo (the tuned MoE configs and the eager-PG patch):
 #   podman build -f containers/cluster/ce-images/vllm/Dockerfile -t hpcagent-bench-vllm .
 # build.sh does that with the right podman flags; build.sbatch runs build.sh on a compute node.
+# Read LIMITATION at the bottom: some gates need a serving job, not a build.
 #
-# NOT YET BUILT. It collapses into one file the six-job Slurm chain that produced the deployed
-# image (inference/build/build-chain.sh: phase1 OFI, phase1 gate, pytorch 2.11, numpy, vLLM
-# 0.23.0, flash-attn) plus the two in-place patch jobs that ran after it (add-aiter-pt211,
-# add-flash-attn-pt211). Read LIMITATION at the bottom before treating it as equivalent: the
-# chain validated on real GPUs at build time and a podman build cannot.
-#
-# vLLM is PINNED to 0.23.0. The recorded reason is that 0.27.1 routes gpt-oss through its mxfp4
-# path in process_weights_after_loading regardless of --dtype bfloat16, and that path imports
+# vLLM is PINNED to 0.23.0: 0.27.1 serves oss120b about 25% slower on one pinned node (2405 against
+# 3013 tok/s, all of it in decode; docs/serving/oss120b.md). 0.27.1 also routes gpt-oss through its
+# mxfp4 path in process_weights_after_loading regardless of --dtype bfloat16, and that path imports
 # triton_kernels.matmul_ogs (fused_moe/oracle/mxfp4.py:1137), which AMD's triton_kernels does not
-# have -- jobs 601854-601857 died there in ~7 minutes. That reason has since been MEASURED to be
-# repairable in one line, but the repair has only been proven to the import, not to a served and
-# accuracy-gated model, so the pin stands here. See the note at the end of this file.
+# carry under that name; see the note at the end of this file.
 ARG BASE_IMAGE=docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1\
 @sha256:a3b65813621095e3389269417e963725b59310184588c9d2490d44e6e83fa01c
 
 # ------------------------------------------------------------------------------------------------
 # ONE stage. This image builds NO fabric software -- no libfabric, no libcxi, no RCCL net plugin.
 #
-# It used to build an aws-ofi-nccl plugin against a from-source libfabric 2.3.1, with assertions
-# pinning it under the host's FABRIC_1.8 symbol ceiling, because the runtime libfabric came from
-# com.hooks.netstack.source = "host" -- a graft off whatever the login node ran that day. CSCS
-# ships the whole stack as one internally consistent artifact instead (its own libc, libcurl,
-# libcxi, libfabric and plugin), and the enroot hooks install it when the EDF sets
-# com.hooks.netstack / .cxi / .aws_ofi_nccl. Measured on an unmodified image in job 629967:
+# CSCS ships the whole stack as one internally consistent artifact (its own libc, libcurl, libcxi,
+# libfabric and plugin), and the enroot hooks install it when the EDF sets com.hooks.netstack /
+# .cxi / .aws_ofi_nccl. Measured on an unmodified image:
 #
 #     plugin:    /opt/cscs/netstack/librccl-net.so
 #     transport: NET/OFI, "Using network AWS Libfabric"
@@ -41,11 +30,9 @@ ARG BASE_IMAGE=docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release
 # A shipped copy would SHADOW that artifact, which is the failure the gate below refuses. vLLM
 # reaches the fabric through RCCL, not MPI, so unlike judge-agent-amd there is not even a
 # compile-time link target left to produce.
-# ------------------------------------------------------------------------------------------------
-# ------------------------------------------------------------------------------------------------
-# Stage 2: PyTorch 2.11 + vLLM 0.23.0 + flash-attn + aiter, in their own venv at /opt/pytorch211.
-# A SEPARATE venv from the base image's /opt/venv, deliberately: the base ships torch 2.9.1 and
-# the chain kept it intact as a control.
+#
+# PyTorch 2.11 + vLLM 0.23.0 + flash-attn + aiter live in their own venv at /opt/pytorch211,
+# separate from the base image's /opt/venv (torch 2.9.1), which stays intact as a control.
 # ------------------------------------------------------------------------------------------------
 FROM ${BASE_IMAGE} AS final
 USER root
@@ -55,10 +42,9 @@ ARG TORCH_VERSION=2.11.0+rocm7.2
 ARG TORCHVISION_VERSION=0.26.0+rocm7.2
 ARG TORCHAUDIO_VERSION=2.11.0+rocm7.2
 ARG FLASH_ATTN_VERSION=2.8.3
-# The aiter that is IN the deployed 0.23.0 image, read back from it: amd_aiter 0.1.13.post1 at
-# git 3a38da3991275e02e98a7906b7503b7087d67be3. Pinned to the tag rather than discovered from
-# vLLM's docker/ files, because 0.27.1 spells that pin `main` -- a moving branch, which is how
-# 600659 built whatever main was that day.
+# amd_aiter 0.1.13.post1 (git 3a38da3991275e02e98a7906b7503b7087d67be3). Pinned to the tag rather
+# than discovered from vLLM's docker/ files, because newer vLLM spells that pin `main`, a moving
+# branch.
 ARG AITER_REF=v0.1.13.post1
 ARG TORCH_INDEX=https://download.pytorch.org/whl/rocm7.2
 
@@ -102,34 +88,26 @@ ENV VIRTUAL_ENV=/opt/pytorch211 \
 # Read at IMPORT, not only at build: flash_attn_interface.py:11 picks .flash_attn_triton_amd on
 # TRUE and imports flash_attn_2_cuda -- the compiled CK extension a triton-only install does NOT
 # have -- on FALSE. vLLM wraps that import in try/except and merely reports the backend
-# unavailable, which is the 589001 "No valid MLA prefill backend" failure with the package
-# installed and looking fine. It must ALSO be in the EDF, because ENV alone does not survive
+# unavailable ("No valid MLA prefill backend") with the package installed and looking fine. It must ALSO be in the EDF, because ENV alone does not survive
 # every launcher path.
 ENV FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
 
-# aiter's master switch, OFF, stated in the image rather than left to the launcher. Turning it on
-# is what broke 610251/610252 (RPC timeout at step_counter=0), 600662 (MLA prefill on gfx942,
-# fmha_v3_varlen_fwd invalid arg) and both qwen38 legs of 610203/610204. Every oss120b arm that
-# has ever finished ran with it off. run_cluster.sh reads it as ${VLLM_ROCM_USE_AITER:-0}, so this
-# value stands unless an env file overrides it -- which is the intended way to retry aiter.
-#
-# It is an ARG so a candidate image can DECLARE the opposite without forking this file. The
-# GLM-5.3 candidate needs 1: the vLLM MI300X recipe for GlmMoeDsaForCausalLM serves with
-# VLLM_ROCM_USE_AITER=1 and --linear-backend aiter --moe-backend aiter, so an image that hard-
-# codes 0 cannot run it. Default stays 0, so hpcagent-bench-vllm.sqsh rebuilds byte-identical.
-ARG VLLM_ROCM_AITER_SWITCH=0
-ENV VLLM_ROCM_USE_AITER=${VLLM_ROCM_AITER_SWITCH}
-
+# aiter's master switch, OFF, stated in the image rather than left to the launcher. With it on,
+# serving fails: RPC timeout at step_counter=0, and MLA prefill on gfx942 dies with
+# "invalid argument for fmha_v3_varlen_fwd". Every oss120b arm runs with it off. run_cluster.sh
+# reads it as ${VLLM_ROCM_USE_AITER:-0}, so this value stands unless an env file overrides it --
+# which is the intended way to retry aiter.
+ENV VLLM_ROCM_USE_AITER=0
 
 # Every network git call goes through this, and where a mirror is mounted none of them
 # reaches GitHub at all. The `insteadOf` rewrite is what covers the callers the wrapper
 # cannot: spack clones its package repo in-process and vLLM's CMake FetchContent clones
-# triton itself, and both died on the same rate limiting with no retry of their own.
-# Conditional, so a build with no mirror mounted behaves exactly as it did before.
+# triton itself, and neither retries on GitHub's rate limiting. Conditional: a build with no
+# mirror mounted clones from GitHub.
 # `protocol.file.allow` goes with it: git has refused local-path submodule clones since the
 # CVE-2022-39253 fix, and the rewrite turns every submodule URL into exactly that, so
 # `submodule update` aborts with `transport 'file' not allowed` before it looks for the repo.
-# Every network git call goes through this. An unauthenticated clone or fetch from a busy egress
+# An unauthenticated clone or fetch from a busy egress
 # IP gets a 401, which git reports as `could not read Username for https://github.com`: it looks
 # like a credentials failure and is a transient one. GIT_TERMINAL_PROMPT=0 makes it fail instead
 # of blocking on a prompt no build has a terminal for; the backoff is what actually fixes it.
@@ -180,8 +158,8 @@ RUN set -eux; \
 
 # pybind11 pinned below 3.1: 3.1.0 bumped its internals id v11 -> v12 and refuses to share
 # registered types across that boundary, so a v12 build cannot accept tensors from the v11 torch
-# extensions (ROCm/aiter#4770, vllm-project/vllm#52400). This is the ABI split behind the
-# "invalid argument for fmha_v3_varlen_fwd" of 600662/600673/600688/600689 -- not a bad kernel.
+# extensions (ROCm/aiter#4770, vllm-project/vllm#52400). This ABI split, not a bad kernel, is
+# what surfaces as "invalid argument for fmha_v3_varlen_fwd".
 RUN /opt/pytorch211/bin/python -m pip install --no-cache-dir --upgrade \
       'cmake>=3.26.1,<4' ninja 'pybind11==3.0.*' 'packaging>=24.2' \
       'setuptools>=77.0.3,<81' 'setuptools-scm>=8' 'setuptools-rust>=1.9.0' wheel \
@@ -218,8 +196,7 @@ RUN set -eux; \
       /opt/pytorch211/bin/python -m pip install --no-cache-dir --no-build-isolation \
         "flash-attn==${FLASH_ATTN_VERSION}"
 
-# aiter. It is in the deployed image and dropping it here would be a regression, so it ships --
-# with its master switch off above. --no-build-isolation because aiter's setup imports torch and
+# aiter ships, with its master switch off above. --no-build-isolation because aiter's setup imports torch and
 # must see the image torch, not a fresh wheel.
 RUN set -eux; \
     gitretry clone https://github.com/ROCm/aiter.git /opt/aiter-src; \
@@ -234,45 +211,22 @@ RUN set -eux; \
     /opt/pytorch211/bin/python -m uv pip install --python /opt/pytorch211/bin/python \
       --no-build-isolation --no-cache .
 
-# NO aiter mask patch here, deliberately. The sibling 0.27.1 image carries one for the ASM v3
-# varlen path, and it does NOT belong in this image: its anchor is aiter v0.1.20's
-# can_impl_fmha_v3_fwd (mha.py:2858), and this image pins v0.1.13.post1, which has neither
-# _fmha_kv_byte_extent_ge_u32 nor that guard. Carried over anyway, the patch's own assert
-# stopped the build at `anchor count 0` -- which is the assert doing its job rather than
-# silently no-op'ing. This image also ships VLLM_ROCM_USE_AITER=0, so the path is off by
-# default. If a future pin here needs the guard, write it against THIS image's aiter.
+# NO aiter mask patch for the ASM v3 varlen path: its anchor is aiter v0.1.20's
+# can_impl_fmha_v3_fwd (mha.py:2858), and v0.1.13.post1 has neither _fmha_kv_byte_extent_ge_u32
+# nor that guard. This image also ships VLLM_ROCM_USE_AITER=0, so the path is off by default. A
+# later aiter pin that needs the guard gets one written against THAT aiter.
 
-# aiter's JIT, built HERE instead of on the first request.
-#
-# aiter ships no prebuilt .so. Every process JIT-builds module_aiter_core (21-58 s measured) and
-# then each op module lazily on FIRST USE -- behind a baton lock in AITER_JIT_DIR that outlives the
-# engine's RPC deadline. That is 598021 (no /v1/models for 5400 s), 610164 (300 s watchdog) and
-# 610251/610252 (TimeoutError on sample_tokens at step_counter=0). prebuild-aiter-jit.sbatch worked
-# around it as a separate GPU job; the wedge is a property of the image, so it is fixed in the image.
-#
-# A GPU IS needed, since aiter 0.1.19: `import aiter` runs utility/dtypes.py at module level, which
-# calls get_gfx_runtime(), which shells out to rocminfo and ignores GPU_ARCHS by design (its own
-# docstring says so). v0.1.13 used get_gfx() and read the env, which is why this step used to run
-# device-less. build.sh hands podman /dev/kfd; without it this step dies on `rocminfo returned
-# non-zero exit status 1`. The op calls below DO issue launches, which is what builds the op
-# modules at all -- /dev/dri and the seccomp/keep-groups flags in build_common.sh are what
-# make that work, and the gate below fails the build if they ever stop working.
-#
-# AITER_JIT_DIR points INSIDE the image so a hit is a read off the squashfs. A miss still writes,
-# into the per-job CE overlay, so an op this prebuild did not cover degrades to today's behaviour
-# rather than failing. run_cluster.sh reads it as ${AITER_JIT_DIR:-...}, so this value wins over
-# its scratch default without a launcher change.
 # ONE VERSION OF ONE THING: triton, restored after the resolver replaces it.
 #
 # xgrammar declares an unpinned `triton`. On PyPI that name is the NVIDIA distribution, so pip
 # installs it OVER the triton-rocm that torch brought -- same top-level package, two owners --
-# and leaves pip's `~riton` rename behind. Seen in jobs 619988 and 619989: `Collecting triton
-# (from xgrammar...)` followed by triton-3.8.0. torch 2.11.0+rocm7.2 is built against the ROCm
+# and leaves pip's `~riton` rename behind (`Collecting triton (from xgrammar...)` followed by
+# triton-3.8.0). torch 2.11.0+rocm7.2 is built against the ROCm
 # triton, so the intruder is removed and the ROCm build reinstalled to restore every file it owns.
 #
 # The version comes from /opt/triton-rocm.version, recorded right after the torch install. Reading
 # it back from pip HERE does not work: installing PyPI triton leaves triton-rocm's metadata gone,
-# not merely shadowed -- job 620069 died on `Package(s) not found: triton-rocm`. Recording it at
+# not merely shadowed (`Package(s) not found: triton-rocm`). Recording it at
 # the one moment it is known also keeps the repair from drifting from torch's actual dependency.
 RUN set -eux; \
     site="$(/opt/pytorch211/bin/python -c 'import site; print(site.getsitepackages()[0])')"; \
@@ -286,6 +240,22 @@ RUN set -eux; \
     /opt/pytorch211/bin/python -c "import triton, triton.backends; \
       assert 'amd' in triton.backends.backends, sorted(triton.backends.backends)"
 
+
+# aiter's JIT, built HERE instead of on the first request.
+#
+# aiter ships no prebuilt .so. Every process JIT-builds module_aiter_core (21-58 s measured) and
+# then each op module lazily on FIRST USE -- behind a baton lock in AITER_JIT_DIR that outlives the
+# engine's RPC deadline: no /v1/models for 5400 s, the 300 s watchdog, or a TimeoutError on
+# sample_tokens at step_counter=0. The wedge is a property of the image, so it is fixed in the image.
+#
+# The op calls below issue kernel launches, which is what builds the op modules at all: build.sh
+# hands podman /dev/kfd and /dev/dri with the seccomp/keep-groups flags from build_common.sh, and
+# the gate below fails the build if they ever stop working.
+#
+# AITER_JIT_DIR points INSIDE the image so a hit is a read off the squashfs. A miss still writes,
+# into the per-job CE overlay, so an op this prebuild did not cover degrades to a cold-cache build
+# rather than failing. The EDF declares the same two paths, because the CE does not preserve the
+# image's ENV and run_cluster.sh would otherwise fall back to its scratch default.
 ENV AITER_JIT_DIR=/opt/aiter-jit \
     AITER_ROOT_DIR=/opt/aiter-root
 RUN mkdir -p /opt/aiter-jit /opt/aiter-root /tmp/aiter-home
@@ -305,11 +275,10 @@ for name in ("aiter.ops.rmsnorm", "aiter.ops.norm", "aiter.ops.gemm_op_a8w8", "a
         print(f"skip {name}: {type(exc).__name__}: {exc}", flush=True)
 
 # Importing an op family does NOT build its kernel module. @compile_ops is lazy and builds on the
-# first CALL, so the loop above only ever produced module_aiter_core.so -- read back off the
-# deployed image, which carried exactly that one file. Every other module was still built at serve
-# time: module_rmsnorm_quant cost 74 s in 628158 and the sampling template ops another 77 s.
-# Measured in 628179, these calls build them here in 78 s total, and the sampling artefact hashes
-# match the ones the server asks for, so a serve is a cache hit rather than a near-miss.
+# first CALL, so the loop above produces only module_aiter_core.so. Built at serve time instead,
+# module_rmsnorm_quant costs 74 s and the sampling template ops another 77 s; these calls build
+# them here in 78 s total, and the sampling artefact hashes match the ones the server asks for, so
+# a serve is a cache hit rather than a near-miss.
 import os
 import pathlib
 
@@ -320,9 +289,8 @@ _jit = pathlib.Path(os.environ["AITER_JIT_DIR"])
 
 
 def _prebuild(label, fn):
-    # Report the module each call produced. 628185 built four .so and still failed a gate that
-    # asked for module_rmsnorm_quant.so by name: the three images here carry different aiter
-    # builds and the names do not match across them.
+    # Report the module each call produced rather than gate on a name: the three images here
+    # carry different aiter builds and the module names do not match across them.
     before = {p.name for p in _jit.rglob("*.so")}
     try:
         fn()
@@ -367,9 +335,9 @@ _prebuild("rms_norm", _rms_norm)
 _prebuild("top_k_top_p_sampling_from_probs", _top_k_top_p)
 _prebuild("top_p_sampling_from_probs", _top_p)
 _prebuild("top_k_renorm_probs", _top_k_renorm)
-# The serving path calls far more than sampling. These eight were read off what GLM-5.3 and kimi
-# actually JIT-built at serve time (628603 built module_custom_all_reduce during startup), so the
-# image ships them instead of paying for them behind a baton lock inside the RPC deadline.
+# The serving path calls far more than sampling. These eight are what GLM-5.3 and kimi JIT-build
+# at serve time, so the image ships them instead of paying for them behind a baton lock inside the
+# RPC deadline.
 _bf16, _fp8 = torch.bfloat16, torch.float8_e4m3fnuz
 
 
@@ -441,24 +409,20 @@ RUN set -eux; \
     rm -rf /tmp/aiter-home; \
     /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" /opt/aiter-jit
 
-# Tuned fused_moe Triton configs, keyed by (experts, N, device, dtype). Losing these once cost a
-# whole set of throughput numbers: without them kimi served on vLLM's default MoE config at ~90
-# tok/s aggregate, ~11x off the reference for its shape (595040/595049). E=128,N=192 is oss120b's,
-# which is this image's model; E=384,N=512 int4 is kimi's, kept because vLLM is still the engine
-# that can serve it and a config that exists nowhere is a config that is gone.
-#
-# run_cluster.sh:181 sets VLLM_TUNED_CONFIG_FOLDER only when the repo folder exists and only when
-# the variable is unset, so this ENV is what a launcher with that folder deleted will use.
+# Tuned fused_moe Triton configs, keyed by (experts, N, device, dtype): without them kimi serves on
+# vLLM's default MoE config at ~90 tok/s aggregate, ~11x off the reference for its shape.
+# E=128,N=192 is oss120b's, which is this image's model; E=384,N=512 int4 is kimi's, kept because
+# vLLM can still serve it. run_cluster.sh prefers this baked folder over the repo copy.
 COPY containers/cluster/ce-images/inference/moe-configs/ /opt/moe-configs/
 ENV VLLM_TUNED_CONFIG_FOLDER=/opt/moe-configs
 
-# The eager-PG / PP-collective-split / MLA-lse-layout patch, moved inside the image.
+# The eager-PG / PP-collective-split / MLA-lse-layout patch, under the image digest.
 #
 # NOT in site-packages, deliberately. A bare sitecustomize.py there runs at interpreter startup for
 # every process in this venv -- pip included -- and imports torch unconditionally, and its patches
 # default ON (VLLM_PP_COLLECTIVE_SPLIT, VLLM_FIX_MLA_LSE_LAYOUT), so installing it that way would
 # silently apply them to arms that never asked. Its own directory keeps the opt-in that
-# VLLM_EAGER_PG_PATCH=1 expresses, while putting the file itself under the image digest.
+# VLLM_EAGER_PG_PATCH=1 expresses (run_cluster.sh puts it on PYTHONPATH only then).
 COPY containers/cluster/ce-images/inference/external-eager-pg-patch/sitecustomize.py \
      /opt/vllm-eager-pg/sitecustomize.py
 
@@ -482,10 +446,9 @@ assert not cuda, f"CUDA packages leaked in: {cuda}"
 
 
 # --- ONE VERSION OF ONE THING: triton ----------------------------------------------------------
-# The sibling 0.27.1 image gates this and 0.23.0 did not, so job 619988 built and imported a green
-# image whose triton was PyPI's NVIDIA distribution: xgrammar declares an unpinned `triton`, pip
-# installs it over the triton-rocm that torch 2.11.0+rocm7.2 was built against, and nothing here
-# noticed. The repair RUN above removes the intruder; this is what proves the repair held.
+# Without this gate an image imports green with PyPI's NVIDIA triton: xgrammar declares an
+# unpinned `triton`, pip installs it over the triton-rocm that torch 2.11.0+rocm7.2 was built
+# against. The repair RUN above removes the intruder; this is what proves the repair held.
 #
 # The discriminator is the DISTRIBUTION NAME, not a version tag -- triton-rocm's version is a plain
 # 3.6.0 with no `+amd.rocm` local part -- and only the ROCm index publishes that name.
@@ -528,7 +491,7 @@ from vllm._aiter_ops import is_aiter_found
 assert is_aiter_found(), "vLLM does not find the aiter package"
 
 # The baked-in inputs, asserted rather than assumed: a COPY that silently landed nothing is how a
-# tuned-MoE folder goes missing again.
+# tuned-MoE folder goes missing.
 import json
 import pathlib
 
@@ -554,25 +517,14 @@ RUN set -eux; \
 
 # No fabric library ships. All three -- libfabric, libcxi and the RCCL net plugin -- arrive from
 # the pinned CSCS netstack artifact via the enroot hooks, and that artifact carries its own libc
-# and libcurl, so it is internally consistent in a way a host graft is not. A copy inside the
-# image would be found first and shadow it.
-# Ship no fabric library OF OUR OWN. The distinction matters and job 629985 is why: the gate used
-# to refuse ANY libfabric anywhere on the filesystem, and it killed the build on
-# /usr/lib/x86_64-linux-gnu/libfabric.so.1.20.0 -- which is not this image's file at all. That path
-# is where the CSCS hook BIND-MOUNTS the artifact's libfabric at run time, verified by mounting the
-# image with no annotations: the file that appears there is dated Aug 18 15:39 nobody:nogroup, the
-# artifact's own stamp, and lsof/mountinfo show it as a lustre bind from
-# a CSCS-managed artifact store. CONFIRMED 2026-09-16 by reading the hooks: the prefix was
-# /capstor/store/cscs/cscs/public/containers/netstack/$(uname -m)/<ver>/<name>, hardcoded in
-# 10-netstack.sh, 89-libfabric-cxi.sh and 90-aws-ofi-nccl.sh alike. That store no longer exists,
-# so the EDFs select netstack.source="host" instead,
-# which binds /opt/cray/libfabric/host/lib64/libfabric.so.1 and
-# /opt/cscs/aws-ofi-ccl-plugin/rocm6/librccl-net.so from the node. Refusing it forbade the
-# hook its own mount point.
+# and libcurl, so it is internally consistent in a way a host graft is not.
 #
-# What must NOT ship is a fabric library in a prefix WE control, because those are what RPATH can
-# bind to and RPATH is searched before everything else -- the 629966 failure, where MPICH held a
-# providerless libfabric and neither the hook nor LD_LIBRARY_PATH could displace it.
+# The gate checks only prefixes WE control, not the whole filesystem:
+# /usr/lib/x86_64-linux-gnu/libfabric.so.1.20.0 is where the CSCS hook BIND-MOUNTS the netstack
+# libfabric at run time, and refusing that path would forbid the hook its own mount point. A
+# fabric library in a prefix we control is what RPATH can bind to, and RPATH is searched before
+# everything else: an MPICH holding a providerless libfabric that way cannot be displaced by the
+# hook or by LD_LIBRARY_PATH.
 RUN set -eux; \
     rm -f /opt/ofi-sdk/lib/libfabric.so*; \
     found="$(find /opt/ofi-sdk /opt/ofi /opt/aws-ofi-nccl \
@@ -588,24 +540,17 @@ WORKDIR /workspace
 
 # LIMITATION -- read before trusting this file.
 #
-# The Slurm chain this replaces ran its install steps INSIDE a container on a 4-GPU node
-# (enroot start --root --rw, then enroot export) and could therefore assert things a podman build
-# cannot. Specifically, these gates from the chain have NO equivalent above:
+# The build has GPUs (the aiter prebuild launches kernels) but no Slingshot NIC and no serving
+# engine, so these gates need a serving smoke on a 4-GPU mi300 node before promotion:
 #
-#   * torch.cuda.device_count() == 4                       (build-pytorch211-phase1-inner.sh)
-#   * a real torch.distributed allreduce over the 4 GPUs   (torch-dist-allreduce-mi300.py)
-#   * the host-loader gate and one-rank RCCL init over CXI (run-phase1-one-rank.sh, job J1)
-#   * rocm_aiter_ops.is_fused_moe_enabled()                (add-aiter-pt211.sbatch; it needs a
-#     live device to resolve, so only is_aiter_found() is asserted here)
+#   * torch.cuda.device_count() == 4 and a real torch.distributed allreduce over the 4 GPUs
+#   * one-rank RCCL init over CXI
+#   * rocm_aiter_ops.is_fused_moe_enabled() (it needs a live device to resolve, so only
+#     is_aiter_found() is asserted here)
 #   * that the MLA prefill selector returns FlashAttnPrefillBackend
-#   * that the aiter modules prebuilt above actually LAUNCH
 #
-# So this Dockerfile proves strictly less at build time than the chain did. Until it has been built
-# AND smoke-tested end to end on a 4-GPU mi300 node, inference/build/build-chain.sh remains the
-# authority and this file is a candidate, not a replacement.
-#
-# THE 0.23.0 PIN, MEASURED. The recorded premise -- "AMD's triton_kernels has no matmul_ogs, only
-# upstream PyPI's does" -- is the wrong diagnosis. Measured in the deployed 0.27.1 image:
+# THE mxfp4 IMPORT ON 0.27.1, MEASURED. "AMD's triton_kernels has no matmul_ogs, only upstream
+# PyPI's does" is the wrong diagnosis. Measured in a 0.27.1 image:
 #
 #   * site-packages carries triton_kernels 1.0.0+amd.rocm7.2.0.git89002410, which has matmul.py and
 #     matmul_details/ where upstream had matmul_ogs.py. It is a RENAME in a newer snapshot, not an
@@ -618,8 +563,7 @@ WORKDIR /workspace
 #   * With AMD's package hidden and the vendored one aliased, the mxfp4.py:1137 import line
 #     succeeds: FlexCtx, PrecisionConfig and InFlexData all resolve.
 #
-# So the pin is retirable by removing AMD's triton_kernels from the 0.27.1 venv, and the target is
-# four images rather than five. Nothing in that venv imports the top-level package (aiter vendors
-# its own under aiter/ops/triton/_triton_kernels), so the removal has no other consumer. It is NOT
-# done here because an import is not a serve: it needs a served oss120b and an accuracy gate on
-# gfx942 before any campaign result rests on it.
+# So the import is repairable by removing AMD's triton_kernels from a 0.27.1 venv. Nothing in that
+# venv imports the top-level package (aiter vendors its own under aiter/ops/triton/_triton_kernels),
+# so the removal has no other consumer. An import is not a serve, though, and 0.27.1 is slower on
+# oss120b regardless.

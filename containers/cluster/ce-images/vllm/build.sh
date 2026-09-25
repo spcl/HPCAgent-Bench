@@ -9,9 +9,7 @@ set -euo pipefail
 # from outside the image at RUN time, which is the property that matters -- a build input is under
 # the image digest, an out-of-image PYTHONPATH is not.
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+# Slurm propagates the submitter's core limit and a dump lands in the CWD (an inode-quota checkout).
 ulimit -c 0
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../../.." && pwd)"
@@ -21,8 +19,7 @@ source "${SCRIPT_DIR}/../build_common.sh"
 IMAGE_TAG="${IMAGE_TAG:-hpcagent-bench-vllm:latest}"
 OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/hpcagent-bench-vllm.sqsh}"
 # Pinned by DIGEST, not by tag. rocm/pytorch has no 7.2.0-suffixed tag at all -- the 7.2.0 release
-# is published unsuffixed as rocm7.2_* -- and an unsuffixed tag is exactly the mutable name the
-# consolidation exists to stop trusting.
+# is published unsuffixed as rocm7.2_* -- and an unsuffixed tag is a mutable name.
 BASE_REPO="docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1"
 BASE_DIGEST="sha256:a3b65813621095e3389269417e963725b59310184588c9d2490d44e6e83fa01c"
 BASE_IMAGE="${BASE_IMAGE:-${BASE_REPO}@${BASE_DIGEST}}"
@@ -44,9 +41,8 @@ ce_gpu_args
 
 ce_cache_base_image
 
-# Pass-through for the ARGs a CANDIDATE image varies: VLLM_VERSION, AITER_REF and
-# VLLM_ROCM_AITER_SWITCH. Empty by default, so the live hpcagent-bench-vllm.sqsh build is unchanged.
-#   EXTRA_BUILD_ARGS="VLLM_VERSION=0.28.0 VLLM_ROCM_AITER_SWITCH=1" ./build.sh
+# Pass-through for the ARGs a CANDIDATE image varies (VLLM_VERSION, AITER_REF). Empty by default.
+#   EXTRA_BUILD_ARGS="VLLM_VERSION=0.28.0 AITER_REF=v0.1.13.post1" ./build.sh
 EXTRA_ARGS=()
 for kv in ${EXTRA_BUILD_ARGS:-}; do EXTRA_ARGS+=(--build-arg "${kv}"); done
 
