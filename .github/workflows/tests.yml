@@ -76,7 +76,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           # judge-proxy: test_judge_router_proxy.py; agent-optimas: test_agent_baselines.py;
-          # harbor: test_harbor_adapter.py checks task.toml against Harbor's own model.
+          # harbor: test_harbor.py checks task.toml against Harbor's own model.
           extras: "judge-proxy agent-optimas harbor"
           ccache: unit-${{ matrix.python }}-${{ matrix.shard }}
           # Only shard 0 carries an nvc++ case (test_parallelism_dispatch.py).
