@@ -32,11 +32,12 @@ Reported defaults (so a run's rigor is documented, not implicit):
   obeys too; the method is passed to scipy explicitly rather than left to its ``auto`` heuristic.
 """
 
+import enum
 import math
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
@@ -48,7 +49,7 @@ from hpcagent_bench.stats import signed_rank
 # scipy as well would put a second of import into every judge process to reach ten lines of
 # arithmetic. pandas is only ever an annotation here, so it never loads at runtime at all.
 if TYPE_CHECKING:
-    import pandas as pd
+    pass
 
 #: One timing sample per element. float64 is what ``np.asarray(..., dtype=float)`` produces.
 FloatArray = npt.NDArray[np.float64]
@@ -330,7 +331,14 @@ def usable_ratios(values: Samples, label: str = "", warn: bool = True) -> FloatA
     return x[keep]
 
 
-def geomean(values: Samples, unusable: Literal["raise", "drop"] = "raise") -> float:
+class Unusable(enum.StrEnum):
+    """What :func:`geomean` does with a zero, negative or non-finite entry."""
+
+    RAISE = "raise"
+    DROP = "drop"
+
+
+def geomean(values: Samples, unusable: Unusable = Unusable.RAISE) -> float:
     """Geometric mean of strictly positive ``values``, in log space so a long product cannot overflow.
 
     ``unusable="raise"`` (the default) raises on an empty sequence or a non-positive entry: both are
@@ -341,7 +349,7 @@ def geomean(values: Samples, unusable: Literal["raise", "drop"] = "raise") -> fl
     0.0 or a 1.0, which are the exact values of a total collapse and of no change.
     """
     x: FloatArray = np.asarray(values, dtype=np.float64)
-    if unusable == "drop":
+    if unusable == Unusable.DROP:
         x = x[np.isfinite(x) & (x > 0.0)]
         if x.size == 0:
             return math.nan
@@ -405,15 +413,6 @@ def signed_change(ratio: float) -> float:
     return ratio - 1.0 if ratio >= 1.0 else -(1.0 / ratio - 1.0)
 
 
-def signed_changes(ratios: Samples) -> FloatArray:
-    """:func:`signed_change` over an array, NaN where a ratio is not plottable."""
-    x: FloatArray = np.asarray(ratios, dtype=np.float64)
-    out: FloatArray = np.full(x.shape, np.nan, dtype=np.float64)
-    good: npt.NDArray[np.bool_] = np.isfinite(x) & (x > 0.0)
-    out[good] = np.where(x[good] >= 1.0, x[good] - 1.0, -(1.0 / x[good] - 1.0))
-    return out
-
-
 def log2_change(ratio: float) -> float:
     """Speedup ratio -> its base-2 logarithm. ``2x -> +1``, ``1x -> 0``, ``0.5x -> -1``: the same
     zero and the same sign as :func:`signed_change`, but every DOUBLING is the same distance apart
@@ -427,32 +426,6 @@ def log2_change(ratio: float) -> float:
     if not math.isfinite(ratio) or ratio <= 0.0:
         return math.nan
     return math.log2(ratio)
-
-
-def log2_changes(ratios: Samples) -> FloatArray:
-    """:func:`log2_change` over an array, NaN where a ratio is not plottable."""
-    x: FloatArray = np.asarray(ratios, dtype=np.float64)
-    out: FloatArray = np.full(x.shape, np.nan, dtype=np.float64)
-    good: npt.NDArray[np.bool_] = np.isfinite(x) & (x > 0.0)
-    out[good] = np.log2(x[good])
-    return out
-
-
-def median_per_kernel(
-    frame: "pd.DataFrame", value: str, kernel: str = "benchmark", within: Sequence[str] = ()
-) -> "pd.Series":
-    """One value per kernel -- the unit every corpus-level statistic here is taken over.
-
-    A summary must never be pooled over RAW rows. An agent that resubmits a kernel ten times
-    contributes it ten times to a pooled mean, which weights a kernel by the agent's patience
-    rather than by the corpus; and a kernel timed at more repetitions than its neighbours would
-    outvote them for the same non-reason. ``within`` names the columns that must be reduced BEFORE
-    the kernel is (``run_id`` for a per-episode quantity such as a token count, where the episode
-    total is a max over its rows rather than a median of them).
-    """
-    if within:
-        frame = frame.groupby([kernel, *within], as_index=False)[value].max()
-    return frame.groupby(kernel)[value].median()
 
 
 def walsh_averages(values: Samples) -> FloatArray:

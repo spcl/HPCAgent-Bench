@@ -11,7 +11,6 @@ paired estimate, its interval and its p value all describe the same quantity.
 import math
 
 import numpy as np
-import pandas as pd
 import pytest
 from scipy.stats import wilcoxon
 
@@ -36,11 +35,6 @@ def test_signed_axis_is_odd_about_no_change(ratio: float) -> None:
 def test_an_unmeasured_cell_is_not_no_change(bad: float) -> None:
     """0 is the exact value of "measured, and nothing changed". An absent measurement may not claim it."""
     assert math.isnan(summary.signed_change(bad))
-
-
-def test_signed_changes_matches_the_scalar_everywhere() -> None:
-    ratios = [0.25, 0.5, 1.0, 2.0, 4.0]
-    assert summary.signed_changes(ratios).tolist() == [summary.signed_change(r) for r in ratios]
 
 
 def test_geomean_is_the_ratio_whose_product_matches() -> None:
@@ -123,28 +117,6 @@ def test_the_paired_geomean_is_a_paired_t_test_with_a_log_t_interval() -> None:
 
 def test_the_interval_names_what_it_is_for() -> None:
     assert summary.geomean_ci([2.0, 4.0]).label() == "95% log-t CI for geomean"
-
-
-def test_median_per_kernel_weights_every_kernel_once() -> None:
-    """An agent that resubmits a kernel ten times must not weight it ten times."""
-    frame = pd.DataFrame(
-        {"benchmark": ["a"] * 5 + ["b"], "speedup": [1.0, 2.0, 3.0, 4.0, 5.0, 10.0]},
-    )
-    per_kernel = summary.median_per_kernel(frame, "speedup")
-    assert per_kernel.to_dict() == {"a": 3.0, "b": 10.0}
-
-
-def test_median_per_kernel_reduces_within_an_episode_first() -> None:
-    """A token count is a per-EPISODE total, so the episode is a max over its rows before the
-    kernel is a median over its episodes -- otherwise a chatty agent votes once per judge call."""
-    frame = pd.DataFrame(
-        {
-            "benchmark": ["a", "a", "a", "a"],
-            "run_id": ["r1", "r1", "r2", "r2"],
-            "tokens": [10.0, 40.0, 60.0, 20.0],
-        }
-    )
-    assert summary.median_per_kernel(frame, "tokens", within=("run_id",)).to_dict() == {"a": 50.0}
 
 
 def test_hodges_lehmann_is_the_median_of_the_walsh_averages() -> None:

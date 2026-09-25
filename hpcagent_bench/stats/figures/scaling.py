@@ -45,11 +45,11 @@ An aggregate line is the GEOMEAN over the arm's kernels at that P with its 95% i
 rule every ratio in this repo is summarized under.
 """
 
+import enum
 import dataclasses
 import math
 import pathlib
 from collections.abc import Callable, Iterable, Sequence
-from typing import Literal
 
 import matplotlib.axes
 import matplotlib.figure
@@ -125,8 +125,11 @@ def small_title_pt(type_: plotstyle.TypeScale) -> float:
 #: before :func:`disagreements` reports the row. A relative tolerance, because eta is a ratio.
 EFFICIENCY_RTOL: float = 1e-6
 
+
 #: What a figure draws: the efficiency eta(P), or the (work-scaled) speedup sigma(P).
-Quantity = Literal["efficiency", "speedup"]
+class Quantity(enum.StrEnum):
+    EFFICIENCY = "efficiency"
+    SPEEDUP = "speedup"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -155,7 +158,7 @@ class Point:
         the realized work ratio it is Gustafson's speedup and its ideal IS P, which is the line
         the panel draws.
         """
-        if quantity == "efficiency":
+        if quantity == Quantity.EFFICIENCY:
             return self.efficiency
         return self.achieved_speedup * self.work_ratio
 
@@ -550,7 +553,7 @@ def rank_ticks(ax: matplotlib.axes.Axes, ranks: Sequence[int]) -> None:
 
 def measured_axis(ax: matplotlib.axes.Axes, quantity: Quantity) -> None:
     """Grid, scale and ticks for Y, the axis carrying the measurement."""
-    if quantity == "speedup":
+    if quantity == Quantity.SPEEDUP:
         # log10 with 1-2-5 ticks: anchored at PyTorch a speedup spans 0.002x-8x, and a log2 axis
         # labels every octave of that (0.0078x, 0.0156x, ...).
         ax.set_yscale("log", base=10)
@@ -571,7 +574,7 @@ IDEAL_LABEL: str = "Ideal Scaling of the PyTorch Baseline"
 def ideal_mark(ax: matplotlib.axes.Axes, quantity: Quantity, ranks: Sequence[int]) -> Line2D:
     """The ideal reference: eta = 1, or sigma = P. Returns its legend handle."""
     style = {"color": plotstyle.REFERENCE, "linewidth": 1.1, "linestyle": (0, (4, 3)), "zorder": 2}
-    if quantity == "efficiency":
+    if quantity == Quantity.EFFICIENCY:
         ax.axhline(1.0, **style)
         return Line2D([], [], label="Ideal (Efficiency = 1)", **style)
     # Border to border: the bound is a line through the anchor, not a curve through the measured P.
@@ -632,7 +635,7 @@ def panel_curves(
 
 def axis_label(quantity: Quantity, mode: str) -> str:
     """The Y label: what was measured, and under which scaling law."""
-    if quantity == "efficiency":
+    if quantity == Quantity.EFFICIENCY:
         return "Parallel Efficiency $\\eta(P)$"
     return "Work-Scaled Speedup\nover PyTorch (1 GPU)" if mode == "weak" else "Speedup over\nPyTorch (1 GPU)"
 
@@ -717,7 +720,7 @@ def figure_efficiency(
     type_: plotstyle.TypeScale = plotstyle.AUTHOR_SCALE,
 ) -> matplotlib.figure.Figure | None:
     """eta(P) against P, weak and strong, with the ideal at 1.0."""
-    return figure_modes(curves_, "efficiency", width=width, type_=type_)
+    return figure_modes(curves_, Quantity.EFFICIENCY, width=width, type_=type_)
 
 
 def figure_speedup(
@@ -732,7 +735,7 @@ def figure_speedup(
 def figure_per_kernel(
     curves_: Sequence[Curve],
     mode: str,
-    quantity: Quantity = "efficiency",
+    quantity: Quantity = Quantity.EFFICIENCY,
     width: float = plotstyle.DOUBLE_COLUMN_WIDTH,
     type_: plotstyle.TypeScale = plotstyle.AUTHOR_SCALE,
     kernels: Sequence[str] = (),
@@ -794,7 +797,7 @@ def shared_ylabel(
 def figure_mode_grid(
     curves_: Sequence[Curve],
     kernels: Sequence[str] = (),
-    quantity: Quantity = "speedup",
+    quantity: Quantity = Quantity.SPEEDUP,
     width: float = plotstyle.ICLR_TEXT_WIDTH_IN,
     type_: plotstyle.TypeScale = plotstyle.PRINT_SCALE,
     geomean_panel: bool = True,

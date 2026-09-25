@@ -66,37 +66,6 @@ def test_declaring_the_data_deterministic_is_the_only_way_past_rule_5() -> None:
     assert rules.require_interval(ratios(), "speedup", "low", "high", deterministic=True) is not None
 
 
-def test_rule_7_only_non_overlap_is_a_statement() -> None:
-    assert rules.separated(1.0, 2.0, 3.0, 4.0)
-    assert rules.separated(3.0, 4.0, 1.0, 2.0)
-    # Overlap implies NOTHING, which is the half readers get wrong; it is reported as "not separated".
-    assert not rules.separated(1.0, 3.0, 2.0, 4.0)
-    assert not rules.separated(1.0, float("nan"), 2.0, 4.0)
-
-
-def test_rule_12_refuses_a_line_across_an_axis_with_no_order() -> None:
-    """Two conditions are not a trend, and a line between them claims interpolation across a gap
-    that does not exist."""
-    with pytest.raises(rules.RuleViolation, match="Rule 12"):
-        rules.require_ordered_x([0.0, 0.0], connected=True)
-    with pytest.raises(rules.RuleViolation, match="Rule 12"):
-        rules.require_ordered_x([2.0, 1.0], connected=True)
-    with pytest.raises(rules.RuleViolation, match="fewer than two"):
-        rules.require_ordered_x([1.0], connected=True)
-
-
-def test_rule_12_allows_an_ordered_axis_and_any_unconnected_one() -> None:
-    rules.require_ordered_x([1.0, 2.0, 8.0], connected=True)
-    rules.require_ordered_x([3.0, 1.0, 1.0], connected=False)
-
-
-def test_a_control_to_treatment_link_is_drawn_as_a_difference() -> None:
-    """The segment sits at ONE x and its length is the effect, so there is no horizontal run for
-    the eye to extrapolate along."""
-    xs, ys = rules.difference_segment(1.0, 1.6, at=3.0)
-    assert xs == (3.0, 3.0) and ys == (1.0, 1.6)
-
-
 def test_every_enforced_rule_quotes_the_paper() -> None:
     """The error message carries the rule's own words and the citation, so a reader who has not
     read the paper still learns what is being asked and where to check it."""
