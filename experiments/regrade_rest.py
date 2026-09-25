@@ -484,10 +484,7 @@ def main() -> int:
     if args.submit and not os.environ.get("SBATCH_ACCOUNT"):
         ap.error("--submit needs SBATCH_ACCOUNT: source scripts/cscs/account_env.sh first")
     scratch = pathlib.Path(args.scratch)
-    patterns = args.regrades or [
-        str(wave_board.HERE / "mwd-final-regrades-*"),
-        str(scratch / "owed-waves" / "promote-*" / "cells"),
-    ]
+    patterns = args.regrades or wave_board.default_regrade_patterns(scratch, pathlib.Path(args.runs))
     env_dirs = args.env_dir or [args.sbatch_dir]
     dirs = wave_board.job_dirs(pathlib.Path(args.runs))
     if args.job:

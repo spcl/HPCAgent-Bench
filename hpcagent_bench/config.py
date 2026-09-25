@@ -119,6 +119,19 @@ def env_value(name: str) -> str | None:
     return os.environ.get(name)
 
 
+def environment() -> dict[str, str]:
+    """``os.environ`` as this context resolves it: a :func:`scoped_environment` value replaces the
+    process's, and a scoped ``None`` removes it. What a child process must inherit to read the
+    configuration this context reads."""
+    merged = dict(os.environ)
+    for name, value in (SCOPED_ENVIRONMENT.get() or {}).items():
+        if value is None:
+            merged.pop(name, None)
+        else:
+            merged[name] = value
+    return merged
+
+
 def _coerce(s: str) -> ConfigValue:
     low = s.lower()
     if low in ("true", "false"):
