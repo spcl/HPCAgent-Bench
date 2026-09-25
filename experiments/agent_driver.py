@@ -1639,7 +1639,7 @@ def cost_record_fields(
     what `tokens` and the breakdown measure; what the crashed attempts spent is reported beside them
     as the `_crashed` pair and added to nothing (T1-T2).
 
-    Shared with ``scripts/migrate_tokens.py`` so a re-folded record and a freshly written one cannot
+    Shared with ``experiments/migrate_tokens.py`` so a re-folded record and a freshly written one cannot
     come out of two implementations of the same arithmetic.
     """
     fields: dict[str, float | int | str | None] = dict(cost_breakdown(transcript, output_counter))

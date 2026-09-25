@@ -42,16 +42,13 @@ from pathlib import Path
 
 import yaml
 
-REPO_ROOT: Path = Path(__file__).resolve().parent.parent
-
 # pre-commit runs this hook on the AMBIENT interpreter (``language: system``), which is not
 # required to have the package installed -- it passes here only because this checkout happens to
 # carry an editable install. Without the repo root on the path the import below is a bare
 # ModuleNotFoundError, and the hook fails on every commit rather than on a bad manifest.
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+from hpcagent_bench import paths
 
-from hpcagent_bench import paths  # noqa: E402  -- needs the sys.path bootstrap above
+REPO_ROOT: Path = Path(__file__).resolve().parent.parent
 
 
 def is_manifest(rel: str) -> bool:

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Process-oriented WebSearch tool for the future judge service.
 
 The tool is intentionally service-agnostic:
@@ -24,7 +26,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
+from collections.abc import Iterable
 
 
 @dataclass
@@ -77,8 +80,8 @@ def load_env_file(path: pathlib.Path) -> None:
         os.environ.setdefault(key, value)
 
 
-def discover_env_file(explicit: Optional[str]) -> None:
-    candidates: List[pathlib.Path] = []
+def discover_env_file(explicit: str | None) -> None:
+    candidates: list[pathlib.Path] = []
     if explicit:
         candidates.append(pathlib.Path(explicit))
     candidates.append(pathlib.Path.cwd() / ".env")
@@ -111,8 +114,8 @@ def env_bool(name: str, default: bool) -> bool:
 
 
 def post_json(
-    url: str, payload: Dict[str, Any], timeout: float, headers: Optional[Dict[str, str]] = None
-) -> Dict[str, Any]:
+    url: str, payload: dict[str, Any], timeout: float, headers: dict[str, str] | None = None
+) -> dict[str, Any]:
     data = json.dumps(payload).encode("utf-8")
     request_headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if headers:
@@ -126,7 +129,7 @@ def post_json(
         raise RuntimeError(f"HTTP {exc.code} from {url}: {body}") from exc
 
 
-def retryable_post_json(url: str, payload: Dict[str, Any], timeout: float, headers: Dict[str, str]) -> Dict[str, Any]:
+def retryable_post_json(url: str, payload: dict[str, Any], timeout: float, headers: dict[str, str]) -> dict[str, Any]:
     try:
         return post_json(url, payload, timeout, headers)
     except RuntimeError as exc:
@@ -153,7 +156,7 @@ def retryable_post_json(url: str, payload: Dict[str, Any], timeout: float, heade
         raise
 
 
-def get_json(url: str, params: Dict[str, str], timeout: float) -> Dict[str, Any]:
+def get_json(url: str, params: dict[str, str], timeout: float) -> dict[str, Any]:
     query = urllib.parse.urlencode(params)
     sep = "&" if "?" in url else "?"
     req = urllib.request.Request(f"{url}{sep}{query}", headers={"Accept": "application/json"})
@@ -161,7 +164,7 @@ def get_json(url: str, params: Dict[str, str], timeout: float) -> Dict[str, Any]
         return json.loads(response.read().decode("utf-8"))
 
 
-def call_serpapi(query: str, max_results: int, timeout: float) -> List[SearchResult]:
+def call_serpapi(query: str, max_results: int, timeout: float) -> list[SearchResult]:
     api_key = os.environ.get("SERPAPI_API_KEY", "").strip()
     serpapi_url = os.environ.get("SERPAPI_URL", "https://serpapi.com/search.json").strip()
     if not api_key and "localhost" not in serpapi_url and "127.0.0.1" not in serpapi_url:
@@ -180,7 +183,7 @@ def call_serpapi(query: str, max_results: int, timeout: float) -> List[SearchRes
     )
 
     organic = payload.get("organic_results") or payload.get("results") or []
-    results: List[SearchResult] = []
+    results: list[SearchResult] = []
     for item in organic:
         url = str(item.get("link") or item.get("url") or "").strip()
         if not url:
@@ -210,7 +213,7 @@ def markdown_references(markdown: Any) -> str:
     return str(getattr(markdown, "references_markdown", "") or "")
 
 
-async def collect_arun_many(crawler: Any, urls: List[str], config: Any) -> List[Any]:
+async def collect_arun_many(crawler: Any, urls: list[str], config: Any) -> list[Any]:
     crawled = crawler.arun_many(urls, config=config)
     if inspect.isawaitable(crawled):
         crawled = await crawled
@@ -221,7 +224,7 @@ async def collect_arun_many(crawler: Any, urls: List[str], config: Any) -> List[
 
 async def crawl_with_crawl4ai(
     results: Iterable[SearchResult], query: str, max_pages: int, max_chars: int
-) -> List[CrawledPage]:
+) -> list[CrawledPage]:
     fake = os.environ.get("WEBSEARCH_FAKE_CRAWL_JSON", "").strip()
     if fake:
         debug("using WEBSEARCH_FAKE_CRAWL_JSON instead of Crawl4AI")
@@ -276,7 +279,7 @@ async def crawl_with_crawl4ai(
         semaphore_count=semaphore_count,
     )
     browser_config = BrowserConfig(headless=True, verbose=False)
-    pages: List[CrawledPage] = []
+    pages: list[CrawledPage] = []
     selected = list(results)[:max_pages]
     debug(f"crawling {len(selected)} page(s) with Crawl4AI")
     by_url = {result.url: result for result in selected}
@@ -324,7 +327,7 @@ async def crawl_with_crawl4ai(
     return pages
 
 
-def build_llm_messages(query: str, pages: List[CrawledPage]) -> List[Dict[str, str]]:
+def build_llm_messages(query: str, pages: list[CrawledPage]) -> list[dict[str, str]]:
     context_blocks = []
     for idx, page in enumerate(pages, 1):
         if page.content:
@@ -356,7 +359,7 @@ def build_llm_messages(query: str, pages: List[CrawledPage]) -> List[Dict[str, s
     ]
 
 
-def call_llm(query: str, pages: List[CrawledPage], timeout: float) -> str:
+def call_llm(query: str, pages: list[CrawledPage], timeout: float) -> str:
     base = os.environ.get("WEBSEARCH_LLM_BASE_URL", "").strip().rstrip("/")
     model = os.environ.get("WEBSEARCH_LLM_MODEL", "").strip()
     if not base:
@@ -364,7 +367,7 @@ def call_llm(query: str, pages: List[CrawledPage], timeout: float) -> str:
     if not model:
         raise NotProvisionedError("WEBSEARCH_LLM_MODEL must be set")
 
-    headers: Dict[str, str] = {}
+    headers: dict[str, str] = {}
     api_key = os.environ.get("WEBSEARCH_LLM_API_KEY", "").strip()
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -414,7 +417,7 @@ def call_llm(query: str, pages: List[CrawledPage], timeout: float) -> str:
         raise RuntimeError(f"unexpected LLM response shape: {response}") from exc
 
 
-def result_dict(query: str, answer: str, results: List[SearchResult], pages: List[CrawledPage]) -> Dict[str, Any]:
+def result_dict(query: str, answer: str, results: list[SearchResult], pages: list[CrawledPage]) -> dict[str, Any]:
     return {
         "query": query,
         "answer": answer,
@@ -428,11 +431,11 @@ def result_dict(query: str, answer: str, results: List[SearchResult], pages: Lis
 
 def run_web_search(
     query: str,
-    max_results: Optional[int] = None,
-    max_pages: Optional[int] = None,
-    max_chars_per_page: Optional[int] = None,
-    timeout: Optional[float] = None,
-) -> Dict[str, Any]:
+    max_results: int | None = None,
+    max_pages: int | None = None,
+    max_chars_per_page: int | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
     seconds = timeout if timeout is not None else float(os.environ.get("WEBSEARCH_TIMEOUT_SECONDS", "60"))
     result_count = max_results if max_results is not None else env_int("WEBSEARCH_MAX_RESULTS", 5)
     page_count = max_pages if max_pages is not None else env_int("WEBSEARCH_MAX_PAGES", 3)
@@ -467,7 +470,7 @@ def main() -> int:
     try:
         output = run_web_search(args.query, args.max_results, args.max_pages, args.max_chars_per_page, args.timeout)
     except (RuntimeError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
-        body: Dict[str, Any] = {"ok": False, "error": str(exc), "query": args.query}
+        body: dict[str, Any] = {"ok": False, "error": str(exc), "query": args.query}
         if isinstance(exc, NotProvisionedError):
             body["cause"] = "not_provisioned"
         print(json.dumps(body, indent=2), file=sys.stderr)

@@ -16,6 +16,8 @@ import shutil
 import subprocess
 import sys
 
+from tests.fake_checkout import install_repo_env
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
 
@@ -60,6 +62,7 @@ def submit(
     (tmp_path / "scripts" / "cscs").mkdir(parents=True, exist_ok=True)
     shutil.copy2(REPO / "scripts" / "cscs" / "account_env.sh", tmp_path / "scripts" / "cscs" / "account_env.sh")
     shutil.copy2(REPO / "scripts" / "site_env.sh", tmp_path / "scripts" / "site_env.sh")
+    install_repo_env(tmp_path)
     stub(tmp_path / "bin", "sacctmgr", f"printf '{associations}'")  # a made-up name
     stub(tmp_path / "bin", "sbatch", 'printf \'%s\\n\' "$@" > "${STUB_MARKERS}/sbatch-argv.txt"; echo 999999')
     env = {

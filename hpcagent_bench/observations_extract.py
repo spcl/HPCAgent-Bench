@@ -722,7 +722,7 @@ def task_totals_by_dir(job_dirs: list[pathlib.Path], workers: int) -> dict[pathl
 
 #: The oldest fold whose ``tokens.json`` is trusted. From 2 on the record carries the output
 #: precedence (T9) and is the ONE place the task's numbers were computed, by the driver at task end or
-#: by ``scripts/migrate_tokens.py`` afterwards; below it -- or absent -- the record predates the
+#: by ``experiments/migrate_tokens.py`` afterwards; below it -- or absent -- the record predates the
 #: precedence and is ignored in favour of folding the transcripts here. The driver now writes fold 3
 #: (a compaction request's own tokens recovered, ``token_cost.fold_compaction_recovery``), but a
 #: fold-2 record stays exact: claude-code never compacted before the context fix (0 compactions in

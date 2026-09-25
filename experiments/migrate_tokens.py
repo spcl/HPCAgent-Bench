@@ -9,8 +9,8 @@ place from the transcripts they were folded from, through the same function the 
 with, and keeps whatever it changed under ``before_migration`` so a record is never the only copy of
 what it used to say.
 
-    scripts/migrate_tokens.py <run-root> [...]            # dry run: what would change
-    scripts/migrate_tokens.py --apply <run-root> [...]    # write it
+    experiments/migrate_tokens.py <run-root> [...]            # dry run: what would change
+    experiments/migrate_tokens.py --apply <run-root> [...]    # write it
 
 DRY RUN BY DEFAULT, and by default it skips a run directory whose job is still in the queue: the
 driver rewrites tokens.json when a task ends, so migrating a live run races the thing that owns the
@@ -23,8 +23,6 @@ import pathlib
 import subprocess
 import sys
 from collections.abc import Iterator
-
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "experiments"))
 
 import agent_driver
 import retokenize

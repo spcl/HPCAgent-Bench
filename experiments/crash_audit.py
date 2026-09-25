@@ -53,15 +53,12 @@ import os
 import pathlib
 import re
 import sqlite3
-import sys
 from typing import NamedTuple
-
-HERE = pathlib.Path(__file__).resolve().parent
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
 
 import remaining_kernels as rk  # noqa: E402  -- path insert above must run first
 import wave_board  # noqa: E402  -- path insert above must run first
+
+HERE = pathlib.Path(__file__).resolve().parent
 
 #: Every table keyed by (run_id, benchmark) that a rerun's stale rows must be found in before they
 #: are deleted (see the module docstring on ``submissions``/``attempts``/``calls`` in judge_service).

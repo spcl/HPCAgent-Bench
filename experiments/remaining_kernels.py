@@ -96,18 +96,16 @@ import subprocess
 import sys
 from collections.abc import Iterable
 
+import agent_driver  # noqa: E402  -- path insert above must run first
+import promote_unsubmitted  # noqa: E402  -- same
 import yaml
+
+from hpcagent_bench import experiment_tags, frozen_observations
 
 #: agent_driver.py is imported for its own exit-code constants and CANCELLED_MARKER name, the one
 #: place that assigns them, so this script's classification cannot desync from what actually wrote
 #: tokens.json. Stdlib-only module (see its own imports), safe to import outside a container.
 HERE = pathlib.Path(__file__).resolve().parent
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
-import agent_driver  # noqa: E402  -- path insert above must run first
-import promote_unsubmitted  # noqa: E402  -- same
-
-from hpcagent_bench import experiment_tags, frozen_observations
 
 #: The only table that means a kernel is DONE outright: see the module docstring for why ``attempts``
 #: alone does not count -- MOST ``attempts`` rows don't. :func:`genuine_attempts` names the ones
@@ -347,7 +345,7 @@ def manifest_text_at(sha: str, rel: pathlib.PurePath, opt: str) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def comparable_since_ms(kernel: str, opt: str) -> int:
     """Epoch ms of the OLDEST commit in the unbroken run, ending at HEAD, whose manifest yaml hashes
     the same as the current one under :func:`semantic_fingerprint` -- the earliest a ``submissions``
@@ -650,7 +648,7 @@ def recorded_arms(job_dir: str) -> set:
     return arms
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def roster(tag: str, opt: str) -> list:
     """A pure read of ``opt``'s checkout, so callers safely share one cached result per (tag, opt):
     several CAMPAIGNS entries can name the same tag, and each uncached call re-runs roster.sh's

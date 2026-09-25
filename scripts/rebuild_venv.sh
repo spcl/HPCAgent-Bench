@@ -107,7 +107,7 @@ for m in mods:
         bad.append(f"{m}: {exc.__class__.__name__}")
 print("core imports OK" if not bad else "core import FAILURES: " + "; ".join(bad))
 PY
-echo "=== hpcagent_bench import (repo on PYTHONPATH, never pip-installed) ==="
-PYTHONPATH="${REPO}" "${VENV}/bin/python3" -c \
+echo "=== hpcagent_bench import (the checkout via scripts/repo_python, never pip-installed) ==="
+REPO_PYTHON="${VENV}/bin/python3" "${REPO}/scripts/repo_python" -c \
   "import hpcagent_bench; print('hpcagent_bench OK')" || echo "hpcagent_bench IMPORT FAILED"
 echo "DONE"

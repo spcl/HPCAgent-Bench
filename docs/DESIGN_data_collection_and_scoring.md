@@ -372,7 +372,7 @@ job 630751 does).
 
 ### 8.4 Migration
 
-Records written before the fix carry fold 1. `scripts/migrate_tokens.py <run-root>` re-folds each
+Records written before the fix carry fold 1. `experiments/migrate_tokens.py <run-root>` re-folds each
 `tokens.json` through the driver's own `cost_record_fields`, stamps `token_fold: 2`, and keeps the
 fields whose value moved under `before_migration`. Dry run by default (`--apply` writes), and by
 default it skips a run directory whose name is a job id `squeue` still lists, because the driver
@@ -547,7 +547,7 @@ result record at all (killed at `AGENT_TIMEOUT_SECONDS`), so the server never re
 Fold 1 charged them their thinking estimate alone and fold 2 charges them nothing, which is why they
 carry `output_reported: 0` (T9) rather than an output of zero.
 
-Fixed in fold 2; records written before it are migrated by `scripts/migrate_tokens.py` (8.4).
+Fixed in fold 2; records written before it are migrated by `experiments/migrate_tokens.py` (8.4).
 
 F9. Qwen result records short of their own transcript. On `qwen38` (SGLang), some COMPLETE episodes
 report a `result` total far below what their transcript demonstrably contains. Worst measured, job

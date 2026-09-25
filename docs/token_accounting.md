@@ -252,7 +252,7 @@ compaction is counted once, in both, or not at all -- never twice and never in o
 Records written before this fix (fold 2) are stamped below the current minimum (fold 3,
 `observations_extract.MIN_RECORD_FOLD`), so the extractor re-folds them from their surviving
 transcripts on the next extraction rather than trusting the stale, undercounted number; run
-`scripts/migrate_tokens.py --apply` to rewrite a run root's `tokens.json` files in place instead of
+`experiments/migrate_tokens.py --apply` to rewrite a run root's `tokens.json` files in place instead of
 re-folding them every time.
 
 ## How other benchmarks count, and where ours sits

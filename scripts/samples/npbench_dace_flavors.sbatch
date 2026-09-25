@@ -116,7 +116,8 @@ for stage in "${STAGES[@]}"; do
     fi
     # PYTHONPATH from the SAVED base, never from the last iteration's: appending would leave both
     # trees on the path and the first one found would win every stage after the first.
-    export PYTHONPATH="${tree}${BASE_PYTHONPATH:+:${BASE_PYTHONPATH}}"
+    DACE_TREE="${tree}" PYTHONPATH="${BASE_PYTHONPATH}"
+    . "${REPO}/scripts/repo_env.sh"
     export FRAMEWORKS="${columns}"
     export RUN_TAG="${build}"
     # Stamped on every results row: two `dace_cpu_parallel` rows are otherwise indistinguishable

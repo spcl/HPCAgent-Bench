@@ -99,29 +99,30 @@ def test_build_and_verify_hands_its_checkout_to_verify_image() -> None:
     )
 
 
-def launch_check(agent_dir: pathlib.Path, judge_tools: pathlib.Path) -> subprocess.CompletedProcess[str]:
+def launch_check(agent_dir: pathlib.Path, web_search: pathlib.Path) -> subprocess.CompletedProcess[str]:
     command = [sys.executable, "-W", "error", str(LAUNCH_CHECK), "--agent-dir", str(agent_dir)]
-    return subprocess.run([*command, "--judge-tools", str(judge_tools)], capture_output=True, text=True, check=False)
+    return subprocess.run(
+        [*command, "--judge-web-search", str(web_search)], capture_output=True, text=True, check=False
+    )
 
 
 def fake_checkout(root: pathlib.Path, registry: str) -> tuple[pathlib.Path, pathlib.Path]:
-    agent_dir, judge_tools = root / "agent", root / "judge-tools"
+    agent_dir, web_search = root / "agent", root / "judge_web_search.py"
     (agent_dir / "tools").mkdir(parents=True)
-    judge_tools.mkdir()
     (agent_dir / "tools" / "mcp_server.py").write_text(registry, encoding="utf-8")
-    (judge_tools / "web_search.py").write_text("QUERY_LIMIT = 1\n", encoding="utf-8")
-    return agent_dir, judge_tools
+    web_search.write_text("QUERY_LIMIT = 1\n", encoding="utf-8")
+    return agent_dir, web_search
 
 
 def test_the_launch_check_passes_when_the_bound_registry_lists_a_tool(tmp_path: pathlib.Path) -> None:
-    agent_dir, judge_tools = fake_checkout(tmp_path, 'ALLOWED_TOOLS = ("score",)\n')
-    result = launch_check(agent_dir, judge_tools)
+    agent_dir, web_search = fake_checkout(tmp_path, 'ALLOWED_TOOLS = ("score",)\n')
+    result = launch_check(agent_dir, web_search)
     assert result.returncode == 0, result.stderr
     assert "agent tools: score" in result.stdout
 
 
 def test_the_launch_check_fails_naming_the_registry_that_has_no_allowed_tools(tmp_path: pathlib.Path) -> None:
-    agent_dir, judge_tools = fake_checkout(tmp_path, "REGISTRY = {}\n")
-    result = launch_check(agent_dir, judge_tools)
+    agent_dir, web_search = fake_checkout(tmp_path, "REGISTRY = {}\n")
+    result = launch_check(agent_dir, web_search)
     assert result.returncode != 0
     assert str(agent_dir / "tools" / "mcp_server.py") in result.stderr and "ALLOWED_TOOLS" in result.stderr
