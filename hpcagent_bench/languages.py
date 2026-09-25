@@ -1637,17 +1637,19 @@ def rpath_tokens(link_tokens: Sequence[str]) -> tuple[str, ...]:
 def pkg_modules(entry: dict[str, object]) -> tuple[str, ...]:
     """The pkg-config module names one catalog entry resolves through.
 
-    ``pkg:`` is one name or a LIST of them, and a list means ALL of them: fftw is the case that
-    forced it -- the emitter picks ``fftw_plan_dft_1d`` or ``fftwf_plan_dft_1d`` from the run's
-    precision, and those live in different libraries (``fftw3`` / ``fftw3f``) behind one catalog
-    name. Resolving only the double module made an fp32 FFT kernel link CLEAN (a shared object
-    keeps undefined symbols) and fail at ``dlopen``. One name, one meaning: available means every
-    module the emitter may reach for is here.
+    ``pkg:`` is one name or a LIST of them, and a list means ALL of them: fftw's emitter picks
+    ``fftw_plan_dft_1d`` or ``fftwf_plan_dft_1d`` from the run's precision, and those live in
+    different libraries (``fftw3`` / ``fftw3f``) behind one catalog name. A shared object links
+    clean with undefined symbols, so resolving only one module would fail at ``dlopen``.
     """
     pkg = entry.get("pkg")
     if not pkg:
         return ()
-    return (pkg,) if isinstance(pkg, str) else tuple(str(name) for name in pkg)  # type: ignore[union-attr]
+    if isinstance(pkg, str):
+        return (pkg,)
+    if isinstance(pkg, list):
+        return tuple(str(name) for name in pkg)
+    raise TypeError(f"catalog 'pkg' must be a name or a list of names, got {pkg!r}")
 
 
 @functools.lru_cache(maxsize=None, typed=True)
