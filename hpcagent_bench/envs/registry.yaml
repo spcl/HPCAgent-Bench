@@ -36,7 +36,7 @@ control_color: "#4d4d4d"
 # not, so identity survives a column-width figure and a greyscale print.
 markers: ["o", "s", "^", "D", "v", "P", "X", "*"]
 
-# The SHAPE POOL of treatments: every registered packet, then every harness, takes the next free
+# The SHAPE POOL of treatments: every registered harness, then every packet, takes the next free
 # shape in file order (append-only, so registering one never reshapes another), unless its packet
 # entry names a `marker:`. The circle is the control's and never in the pool. A matplotlib marker:
 # a one-character code, or [sides, style, angle] (style 0 polygon, 1 star, 2 asterisk). More
@@ -318,7 +318,7 @@ packets:
     skills:
       - opt-reports
   autokernel:
-    name: AutoKernel Method
+    name: AutoKernel
     method: autokernel
     env:
       AGENT_PACKET: autokernel

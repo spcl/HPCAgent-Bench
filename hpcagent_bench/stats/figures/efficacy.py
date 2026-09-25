@@ -611,10 +611,10 @@ COST_SIG_MARK: str = "+"
 #: no-packet twin -- and never on the arm's distance from the campaign's baseline, which nothing
 #: here tests. One row each, symbol first: a reader looking a symbol up wants it at the start of
 #: the row, not inside a sentence.
-SCORE_SIG_LABEL: str = "Speed-Up Change Significant (BH p < 0.05)"
-COST_SIG_LABEL: str = "Token Cost Change Significant (BH p < 0.05)"
+SCORE_SIG_LABEL: str = "Speed-Up Change Significant"
+COST_SIG_LABEL: str = "Cost Change Significant"
 #: Both superscripts in one key row, for a key that must fit three columns.
-JOINT_SIG_LABEL: str = "Significant (BH p < 0.05): Speed-Up, Token Cost"
+JOINT_SIG_LABEL: str = "Significant: Speed-Up, Cost"
 
 
 def axis_significance(stats: pd.DataFrame) -> dict[tuple[str, str], tuple[bool, bool]]:
@@ -1876,6 +1876,9 @@ def text_band(points: float, lines: int = 1) -> float:
     return points / 72.0 * LINE_BAND * lines
 
 
+#: Below this width (inches) a figure's key goes compact and two columns wide: a wrap figure.
+NARROW_FIGURE_IN: float = 3.0
+
 #: The length of a category tick mark, points.
 CATEGORY_TICK_PT: float = 2.5
 
@@ -2496,7 +2499,12 @@ def figure_arm_dots(
         left=0.1, right=0.99, top=1.0 - (band + MEASURE_PAD_IN) / height, bottom=0.01,
         hspace=0.14 + band / row_height_in,
     )  # fmt: skip
-    legend_h = style.legend_below(fig, handles, ncol=config.legend_ncol, y=0.005, fontsize=config.legend_pt)
+    # A figure as narrow as a wrap spends a compact key over two columns rather than one tall one.
+    narrow = float(fig.get_size_inches()[0]) < NARROW_FIGURE_IN
+    legend_h = style.legend_below(
+        fig, handles, ncol=2 if narrow else config.legend_ncol, y=0.005, fontsize=config.legend_pt,
+        **(style.COMPACT_KEY if narrow else {}),
+    )  # fmt: skip
     # The Y labels are wrapped but still the widest thing left of the panels; reserve what they
     # MEASURE rather than a fraction guessed for one label length.
     left_in = max(required_left_margin(fig, ax) for ax in axes[:, 0])
@@ -2640,7 +2648,8 @@ def dot_row_legend(columns: Sequence[DotColumn], channels: str, config: FigureCo
     # each panel's control there; a circle per panel repeated the same swatch three times.
     names = list(dict.fromkeys(column.control or packets.control_label([column.treatment]) for column in drawn))
     if names:
-        label = names[0] if len(names) == 1 else f"Control: {', '.join(names)}"
+        # Several controls in a key too narrow to list them: the caption names each panel's.
+        label = names[0] if len(names) == 1 else ("Control" if not config.key_notes else f"Control: {', '.join(names)}")
         handles.append(control_legend_mark([drawn[0].treatment], label, CONTROL_MARKER, config))
     symbols = (
         any(column.symbols[0] for column in columns),
@@ -2651,8 +2660,11 @@ def dot_row_legend(columns: Sequence[DotColumn], channels: str, config: FigureCo
     if config.key_notes and few_kernel_marks(rows, config):
         note = FEW_KERNELS_NOTE.format(config.min_interval_kernels)
         handles.append(Line2D([], [], linestyle="none", marker="none", label=note))
-    notes = alias_footnotes([row.leg for row in rows]) if config.key_notes else []
-    return handles + legend_tail(False, symbols, joint=not config.key_notes) + notes
+    if not config.key_notes:
+        # The two interval line styles are named in the caption; the key keeps only the significance.
+        return handles + joint_significance_mark(*symbols)
+    notes = alias_footnotes([row.leg for row in rows])
+    return handles + legend_tail(False, symbols) + notes
 
 
 #: The narrowest a column may be, in categories. A stub column has none, and at a width ratio of
@@ -2736,10 +2748,14 @@ def fit_legend(
     that could not fit a text-width page over the category names.
     """
     scale = 1.0
+    # A wrap-width figure: a compact key, allowed the whole canvas rather than the plot body, so it
+    # keeps two columns instead of one tall one.
+    narrow = float(fig.get_size_inches()[0]) < NARROW_FIGURE_IN
     while True:
         height = style.legend_below(
             fig, handles, ncol=config.legend_ncol, y=0.005, fontsize=config.legend_pt * scale,
-            markerscale=config.legend_marker_scale, span=span,
+            markerscale=config.legend_marker_scale, span=None if narrow else span,
+            **(style.COMPACT_KEY if narrow else {}),
         )  # fmt: skip
         if height <= config.legend_chrome_in or scale <= config.legend_min_scale:
             return height

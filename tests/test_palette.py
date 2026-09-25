@@ -286,11 +286,11 @@ def test_every_registered_treatment_wears_its_own_shape_and_none_wears_the_contr
 
 
 def test_a_packets_shape_does_not_move_when_a_later_treatment_is_registered() -> None:
-    """Append-only: the pool is handed out in file order, so the first packet keeps the pool's first
-    free shape whatever is registered after it."""
-    first = palette.hue_order("packets")[0]
+    """Append-only: the pool is handed out in file order (harnesses, then packets), so the first
+    harness keeps the pool's first free shape whatever is registered after it."""
+    first = palette.hue_order("harnesses")[0]
     pool = [shape for shape in palette.registry().shapes if shape != palette.CONTROL_MARKER]
-    assert palette.packet_marker(first) == pool[0]
+    assert palette.harness_marker(first) == pool[0]
 
 
 def test_an_unregistered_packet_marker_is_stable_and_warns(caplog: pytest.LogCaptureFixture) -> None:

@@ -215,14 +215,16 @@ CONTROL_MARKER: str = "o"
 
 @functools.lru_cache(maxsize=1, typed=True)
 def shape_table() -> dict[tuple[str, str], object]:
-    """``(kind, key) -> shape`` for every registered treatment: packets, then harnesses, each taking
+    """``(kind, key) -> shape`` for every registered treatment: harnesses, then packets, each taking
     the next free shape of the registry's pool in file order, or its packet entry's own ``marker:``.
     The control's circle is never handed out. Registering a treatment therefore gives it a shape of
     its own without reshaping any other; a pool too small, or two treatments on one shape, is a
     registry error raised here rather than two treatments drawn alike."""
     reg = registry()
-    entities = [("packets", key) for key in hue_order("packets")] + [
-        ("harnesses", key) for key in hue_order("harnesses")
+    # Harnesses first: there are few of them and each is drawn in every harness comparison, so they
+    # take the pool's clearest filled shapes; packets follow in file order.
+    entities = [("harnesses", key) for key in hue_order("harnesses")] + [
+        ("packets", key) for key in hue_order("packets")
     ]
     fixed = {("packets", key): d.marker for key, d in reg.packet_defs.items() if key and d.marker}
     taken = list(fixed.values())

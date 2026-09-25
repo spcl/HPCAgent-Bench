@@ -699,7 +699,7 @@ def main() -> None:
     )  # fmt: skip
     parser.add_argument(
         "--row-width",
-        choices=("natural", "iclr", "acm-column", "acm-text"),
+        choices=("natural", "iclr", "iclr-wrap", "acm-column", "acm-text"),
         default="acm-text",
         help=
         "the joined row's target width: a paper's page budget (style.ACM_TEXT_WIDTH_IN, the full "
@@ -875,6 +875,7 @@ def main() -> None:
     row_width = {
         "natural": None,
         "iclr": plotstyle.ICLR_TEXT_WIDTH_IN,
+        "iclr-wrap": plotstyle.ICLR_WRAP_WIDTH_IN,
         "acm-column": plotstyle.ACM_COLUMN_WIDTH_IN,
         "acm-text": plotstyle.ACM_TEXT_WIDTH_IN,
     }[args.row_width]
