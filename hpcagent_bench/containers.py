@@ -17,8 +17,7 @@ runs in both places. :func:`detect_backend` probes PATH when the answer should c
 machine rather than from a default.
 
 ``ce`` is a different SHAPE of backend, not just different flags: it has no wrapper argv at
-all. The container is selected by ``srun --environment=<edf>``
-(:func:`srun_container_flags`) and the command runs unwrapped, which is why
+all. The container is selected by ``srun --environment=<edf>`` and the command runs unwrapped, which is why
 :func:`local_run_command` returns it untouched.
 
 The per-backend flag SPELLINGS live in the language-neutral ``container_backends.txt`` (this
@@ -199,41 +198,13 @@ def detect_backend(candidates: Sequence[str] = KNOWN_BACKENDS) -> str | None:
     return None
 
 
-def srun_container_flags(backend: str | None = None, edf: str | None = None) -> list[str]:
-    """The flags to add to an ``srun`` line so the step runs inside the image, for backends that
-    select their container that way; ``[]`` for an exec wrapper, which needs none.
-
-    On Alps a step WITHOUT this flag silently runs outside the image, on the bare node, where the
-    toolchain and the pinned dace are absent. That failure looks like a broken environment rather
-    than a missing flag, so a ``ce`` backend with no EDF raises here instead of quietly returning
-    nothing.
-
-    :raises ValueError: When the resolved backend needs an EDF and neither ``edf`` nor
-        ``$HPCAGENT_BENCH_EDF`` supplies one.
-    """
-    chosen = resolve_backend(backend)
-    spelling = SPELLINGS[chosen]
-    if spelling.kind != "srun_env":
-        return []
-    path = edf or os.environ.get("HPCAGENT_BENCH_EDF")
-    if not path:
-        raise ValueError(
-            f"backend {chosen!r} selects its container with {spelling.srun_flag}=<edf>, but no EDF "
-            "was given; pass edf= or set $HPCAGENT_BENCH_EDF (see "
-            "scripts/cscs/mpi.toml.example)"
-        )
-    return [f"{spelling.srun_flag}={path}"]
-
-
 def default_image(backend: str, hardware: str = "cpu", repo_root: str | None = None) -> str:
     """The image reference for ``backend`` on ``hardware`` -- an ``$HPCAGENT_BENCH_SIF`` /
     ``$HPCAGENT_BENCH_DOCKER_IMAGE`` override, else the file's default (a sif path under
     ``repo_root``, or an ``hpcagent_bench:<hw>`` tag)."""
     spelling = SPELLINGS[backend]
     if spelling.image_form == "edf":
-        raise ValueError(
-            f"{backend!r} has no image reference of its own: its EDF names the image (see srun_container_flags)"
-        )
+        raise ValueError(f"{backend!r} has no image reference of its own: its EDF names the image (srun --environment)")
     if not spelling.image_form:
         raise ValueError(
             f"{backend!r} runs on the host and consumes no image; asking it for one is a "
@@ -293,7 +264,7 @@ def local_run_command(
 
     Two kinds return ``inner`` UNCHANGED, for the same reason: there is no wrapper argv to build.
     An ``srun_env`` backend (CSCS Alps' container engine) has its container chosen by the
-    ``--environment`` flag on the ``srun`` line (:func:`srun_container_flags`), and a ``none``
+    ``--environment`` flag on the ``srun`` line, and a ``none``
     backend (``native``) is not a container at all. Returning the bare command is the honest
     answer -- synthesising a wrapper a backend does not have would produce an argv that cannot
     run.

@@ -14,11 +14,6 @@
 # envs and problems files a job names relative to experiments/. Caches, run output, core dumps and
 # job logs are left out. Built beside <dest> and renamed into place, so a half-built copy is never
 # run and a requeued job id replaces its old copy whole.
-#
-# The copy then costs ~2k inodes instead of ~18k: scripts/cscs/frozen_store.py swaps every file for a
-# hard link into the content-addressed store beside .frozen (HPCAGENT_BENCH_FROZEN_STORE), which every
-# frozen tree shares; that script says why a shared inode stays immutable. A failed link step keeps
-# the plain copy (the tree is complete either way): it costs inodes, never a job.
 set -euo pipefail
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
@@ -53,10 +48,6 @@ git -C "${live}" ls-files -z --others | { grep -zvE "${junk}" || true; } |
 while IFS= read -r -d '' module; do
     copy --exclude=.git "${live}/${module}/" "${partial}/${module}/"
 done < <(git -C "${live}" ls-tree -r -z --full-tree "${sha}" | sed -z -n 's|^160000 commit [0-9a-f]*\t||p')
-
-store="${HPCAGENT_BENCH_FROZEN_STORE:-$(dirname -- "$(dirname -- "${dest}")")/.frozen-store}"
-python3 "$(dirname -- "${BASH_SOURCE[0]}")/frozen_store.py" link "${partial}" "${store}" >&2 ||
-    echo "code_snapshot: WARNING: could not link ${partial} into ${store}; keeping the plain copy" >&2
 
 rm -rf -- "${dest}"
 mv -- "${partial}" "${dest}"

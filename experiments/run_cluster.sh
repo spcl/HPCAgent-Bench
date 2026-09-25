@@ -821,10 +821,8 @@ case "${1:-}" in
         ;;
 esac
 
-# FROZEN TREE REMOVAL. The copy this batch step re-executed from (FROZEN TREE, above) costs ~2k
-# inodes of its own (its directories; its files are links into the shared .frozen-store, whose
-# unlinked entries scripts/cscs/frozen_store.py sweep removes) on a scratch whose quota is inodes,
-# so it goes when the job ends: from the EXIT trap, after
+# FROZEN TREE REMOVAL. The copy this batch step re-executed from (FROZEN TREE, above) costs inodes
+# on a scratch whose quota is inodes, so it goes when the job ends: from the EXIT trap, after
 # every step that runs from it is stopped and reaped (cleanup_steps_on_exit's `wait`) and after the
 # extraction that imports from it. Only here, past the role dispatch, so no role step ever removes
 # it; only the copy THIS job made (the exact path FROZEN TREE computed: under .frozen/, named

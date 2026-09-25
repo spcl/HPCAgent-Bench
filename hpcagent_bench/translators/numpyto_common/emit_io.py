@@ -70,11 +70,8 @@ def is_override(out_path: str | pathlib.Path) -> bool:
 
 
 def write_atomic_text(path: str | pathlib.Path, text: str) -> None:
-    """Replace ``path`` with ``text`` through a temp file and a rename, never by writing into it.
-
-    A job's frozen tree hard-links its files to ONE store inode that every other frozen tree shares
-    (scripts/cscs/frozen_store.py); writing into that inode would rewrite the file under all of them.
-    The rename gives the path a fresh inode instead, and a reader never sees a half-written file."""
+    """Replace ``path`` with ``text`` through a temp file and a rename, so a reader never sees a
+    half-written file."""
     p = pathlib.Path(path)
     tmp = p.with_name(f".{p.name}.tmp{os.getpid()}")
     tmp.write_text(text)
