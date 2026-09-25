@@ -8,7 +8,7 @@ FFTW3 plan/execute/destroy. FFTW is unnormalized in both directions, so the back
 
 import ast
 import dataclasses
-from typing import Any, cast
+from typing import cast
 
 #: ``norm_kind`` encoding in the marker: 0 ``backward``, 1 ``forward``, 2 ``ortho``.
 NORM_ORTHO = 2
@@ -53,7 +53,7 @@ def fftw_prefix(single: bool) -> str:
     return "fftwf" if single else "fftw"
 
 
-def marker_constant(node: ast.expr) -> Any:
+def marker_constant(node: ast.expr) -> int:
     """A literal marker argument (the lowering only ever writes constants there)."""
     return cast(ast.Constant, node).value
 

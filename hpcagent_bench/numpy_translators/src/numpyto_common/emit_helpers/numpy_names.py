@@ -15,10 +15,3 @@ REAL_IMAG_ATTRS = frozenset({"real", "imag"})
 def is_numpy_module(node: ast.AST) -> bool:
     """``np`` or ``numpy`` as a bare name."""
     return isinstance(node, ast.Name) and node.id in NUMPY_MODULE_NAMES
-
-
-def numpy_attr(node: ast.AST) -> str | None:
-    """``np.<attr>`` -> ``attr``; anything else -> ``None``."""
-    if isinstance(node, ast.Attribute) and is_numpy_module(node.value):
-        return node.attr
-    return None

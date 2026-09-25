@@ -6,4 +6,4 @@ Part of the unified ``numpy_translators`` package; shares
 
 from numpyto_jax.core import EmitError, emit_jax
 
-__all__ = ["emit_jax", "EmitError"]
+__all__ = ["EmitError", "emit_jax"]

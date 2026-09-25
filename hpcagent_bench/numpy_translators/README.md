@@ -13,6 +13,7 @@ in `numpyto_common`:
 | Target          | Folder                |
 |-----------------|-----------------------|
 | shared frontend | `src/numpyto_common/` |
+| helpers shared by several backends | `src/numpyto_common/emit_helpers/` |
 | C / C++ / Pluto | `src/numpyto_c/`      |
 | DaCe            | `src/numpyto_c/dace_emit.py` |
 | Fortran         | `src/numpyto_fortran/`|

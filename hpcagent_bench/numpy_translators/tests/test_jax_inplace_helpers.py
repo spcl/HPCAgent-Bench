@@ -5,10 +5,10 @@
 
 numpy helpers mutate an array passed by reference (a Fortran-style ``subroutine``);
 jax arrays are immutable, so the mutation only survives if the CALL SITE captures
-the helper's (functionalized) result back. ``_helper_mutation_map`` classifies each
+the helper's (functionalized) result back. ``helper_mutation_map`` classifies each
 returned slot as ``("mut", pos)`` -- the new value of the arg at ``pos`` -- or
 ``("val",)`` -- a genuine return value the LHS captures -- and
-``_rewrite_inplace_helper_calls`` rebinds every call site accordingly. This covers
+``rewrite_inplace_helper_calls`` rebinds every call site accordingly. This covers
 QE ``vexx_k``'s exchange helpers:
 
 * ``_addusxx_r(rhoc, ...)`` accumulates into ``rhoc`` AND ``return rhoc``
@@ -19,7 +19,7 @@ QE ``vexx_k``'s exchange helpers:
   ``cf``/``cd`` caches -> ``fac, cf, cd = _g2_convolution_all(cf, cd, ...)``.
 
 Before the fix the emitter either raised ``EmitError`` on the bare call or (worse)
-let ``_augment_returns`` grow the return into a tuple the value-capturing call site
+let ``augment_returns`` grow the return into a tuple the value-capturing call site
 silently bound whole, so ``fac`` became a 3-tuple and every downstream use broke.
 """
 
@@ -30,7 +30,8 @@ import pytest
 
 pytest.importorskip("jax")
 
-from numpyto_jax.core import _helper_mutation_map, emit_jax
+from numpyto_jax.core import emit_jax
+from numpyto_jax.mutation import helper_mutation_map
 
 _SRC = """
 import numpy as np
@@ -65,7 +66,7 @@ def _defs(src: str) -> dict[str, ast.FunctionDef]:
 
 
 def test_return_slots_classify_the_three_helper_shapes() -> None:
-    hm = _helper_mutation_map(list(_defs(_SRC).values()))
+    hm = helper_mutation_map(list(_defs(_SRC).values()))
     # return-value-plus-mutation: the value is captured, then the two caches rebind.
     assert hm["fill_col"] == [("val",), ("mut", 0), ("mut", 1)]
     # return-is-the-mutated-param: one mut slot at the mutated position.
@@ -87,7 +88,7 @@ def h(acc, x):
         return acc
     return acc
 """
-    hm = _helper_mutation_map(list(_defs(src).values()))
+    hm = helper_mutation_map(list(_defs(src).values()))
     # The nested (branch) return is unreachable by fn.body augmentation -> not rewritten.
     assert "h" not in hm
 

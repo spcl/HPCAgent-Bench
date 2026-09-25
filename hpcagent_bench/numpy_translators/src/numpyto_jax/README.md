@@ -13,6 +13,22 @@ jax_src = emit_jax(open("gemm_numpy.py").read(), "kernel")            # eager (d
 jax_src = emit_jax(open("gemm_numpy.py").read(), "kernel", jit=True)  # jit/compiled
 ```
 
+## Module layout
+
+| module | does |
+|---|---|
+| `core.py` | `emit_jax`: parses the module, picks the reachable helpers, assembles the emitted module |
+| `functions.py` | emits one function (kernel or helper), jit or eager |
+| `loops.py` | jit-mode statements: each loop -> vectorised op / `lax.fori_loop` / `lax.while_loop` |
+| `masks.py` | jit-mode boolean-mask and dynamic-slice rewrites into fixed-shape masked forms |
+| `prepasses.py` | function-level rewrites before emission (eigh, constant branches, tuple/chained targets) |
+| `statics.py` | which parameters must be static (concrete at trace time) |
+| `mutation.py` | in-place parameter mutation made functional (extra returns + call-site rebinds) |
+| `module_consts.py` | the kernel module's imports and constants carried into the emitted module |
+| `jnp.py`, `names.py`, `vocab.py` | `np` -> `jnp` rewrite, name-flow queries, call vocabularies |
+| `state.py` | per-emit state (jit mode, temp counters, constants), reset by `emit_jax` |
+| `errors.py` | `EmitError` |
+
 ## Eager mode (default)
 
 `jnp` mirrors `numpy`, so the bulk of the translation is mechanical: `np.` ->
