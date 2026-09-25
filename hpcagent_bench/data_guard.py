@@ -5,7 +5,8 @@
 Run roots and judge databases are the only copy of a campaign. Every tool that rewrites an output
 file or removes a tree calls one of these first:
 
-* :func:`check_output` -- the output must not be, contain, or sit inside any source it reads.
+* :func:`check_output` -- the output must not be, contain, or sit inside any source it reads,
+  except inside a directory of that source the reader skips (its own output directory).
 * :func:`safe_rmtree` -- a tree is removed only when it holds no SQLite database, is not a
   protected root (or an ancestor of one) and, inside a protected root, only under an allowlisted
   scratch subdirectory.
@@ -55,19 +56,31 @@ def _within(path: pathlib.Path, root: pathlib.Path) -> bool:
     return path == root or root in path.parents
 
 
-def check_output(dest: PathLike, sources: Iterable[PathLike]) -> pathlib.Path:
+def check_output(dest: PathLike, sources: Iterable[PathLike], *, unscanned: Iterable[PathLike] = ()) -> pathlib.Path:
     """``dest`` resolved; raises :class:`ProtectedPathError` when it overlaps any of ``sources``.
 
     Overlap is either direction: writing inside a source mixes outputs into inputs (and a rewrite
     deletes the input it replaces), and writing to an ancestor of a source wraps the source in the
-    output.
+    output. ``unscanned`` names directories the caller skips when it reads its sources (its own
+    output directory): a ``dest`` inside one of them, strictly inside a source, is not an input and
+    is allowed, unless that directory holds a ``*.db`` -- a judge database the skip would hide.
     """
     out = _real(dest)
+    skipped = [_real(path) for path in unscanned]
     for source in sources:
         src = _real(source)
-        if _within(out, src) or _within(src, out):
+        nested = _within(out, src) and any(
+            _within(out, skip) and _within(skip, src) and skip != src and not holds_judge_database(skip)
+            for skip in skipped
+        )
+        if _within(src, out) or (_within(out, src) and not nested):
             raise ProtectedPathError(f"output {out} overlaps source {src}; write it outside the sources")
     return out
+
+
+def holds_judge_database(path: pathlib.Path) -> bool:
+    """Whether the directory ``path`` holds a ``*.db`` file, the kind a run-root scan reads."""
+    return path.is_dir() and any(p.is_file() for p in path.rglob("*.db"))
 
 
 def holds_database(path: pathlib.Path) -> bool:

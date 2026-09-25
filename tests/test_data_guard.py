@@ -104,15 +104,40 @@ def test_removal_of_a_plain_tree(scratch: pathlib.Path) -> None:
     assert not tree.exists()
 
 
-def test_extract_refuses_an_output_under_the_runs_root(scratch: pathlib.Path, capsys: pytest.CaptureFixture) -> None:
-    """The extractor writes nothing when --out lies inside a run root it reads."""
+@pytest.mark.parametrize("out", ["camp/123/judge", "camp/123", "camp"])
+def test_extract_refuses_an_unscanned_output_that_is_a_source_or_holds_a_judge_database(
+    scratch: pathlib.Path, capsys: pytest.CaptureFixture, out: str
+) -> None:
+    """Skipping --out is no excuse to write into a judge database's directory (the skip would hide
+    it), into a job directory the scan reads, or over the run root itself."""
     runs = scratch / "hpcagent-bench-runs"
+    make_db(runs / "camp" / "123" / "judge" / "hpcagent_bench0.db")
     rc = observations_extract.main(
-        ["--runs", str(runs / "camp"), "--benchmarks", str(REPO), "--out", str(runs / "camp" / "extract")]
+        ["--runs", str(runs / "camp"), "--benchmarks", str(scratch / "frozen"), "--out", str(runs / out)]
     )
     assert rc == 1
     assert "overlaps source" in capsys.readouterr().err
-    assert not (runs / "camp" / "extract").exists()
+
+
+def test_extract_writes_a_jobs_own_record_inside_the_run_root_it_reads(scratch: pathlib.Path) -> None:
+    """run_cluster.sh freezes each job's record into <job>/observations, inside the --runs it reads:
+    allowed, because the scan skips its own --out."""
+    runs = scratch / "hpcagent-bench-runs"
+    job = runs / "camp" / "123"
+    out = job / "observations"
+    argv = ["--runs", str(job), "--benchmarks", str(scratch / "frozen"), "--out", str(out)]
+    assert observations_extract.main([*argv, "--db", str(out / "observations.sqlite")]) == 0
+    assert (out / "llr40_observations.csv").is_file() and (out / "observations.sqlite").is_file()
+    # Again over its own earlier record, as a re-run of the extraction does.
+    assert observations_extract.main([*argv, "--db", str(out / "observations.sqlite")]) == 0
+
+
+def test_the_run_root_scan_skips_the_extractions_own_output(tmp_path: pathlib.Path) -> None:
+    """A database under the output directory is never read back as a judge record."""
+    judge = make_db(tmp_path / "camp" / "123" / "judge" / "hpcagent_bench0.db")
+    make_db(tmp_path / "camp" / "123" / "observations" / "sources" / "copied.db")
+    found = observations_extract.discover_databases([str(tmp_path / "camp")], [tmp_path / "camp" / "123" / "observations"])
+    assert [db.path for db in found] == [judge.resolve()]
 
 
 def test_merge_results_refuses_to_overwrite_a_shard(tmp_path: pathlib.Path) -> None:

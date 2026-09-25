@@ -461,8 +461,10 @@ def job_directory(db: pathlib.Path, run_root: pathlib.Path) -> pathlib.Path:
     return db.parent if db.parent != run_root else run_root
 
 
-def discover_databases(run_globs: Iterable[str]) -> list[Database]:
-    """Every ``*.db`` under every matched run root, deduplicated and sorted for a stable CSV."""
+def discover_databases(run_globs: Iterable[str], skip: Iterable[pathlib.Path] = ()) -> list[Database]:
+    """Every ``*.db`` under every matched run root outside the ``skip`` directories (the extraction's
+    own output), deduplicated and sorted for a stable CSV."""
+    skipped = [path.resolve() for path in skip]
     found: dict[pathlib.Path, Database] = {}
     for pattern in run_globs:
         for match in sorted(glob.glob(pattern)):
@@ -470,6 +472,8 @@ def discover_databases(run_globs: Iterable[str]) -> list[Database]:
             paths = [root] if root.is_file() and root.suffix == ".db" else sorted(root.rglob("*.db"))
             for db in filter(judge_database, paths):
                 resolved = db.resolve()
+                if any(resolved.is_relative_to(path) for path in skipped):
+                    continue
                 job_dir = job_directory(resolved, root)
                 job = root.name if job_dir == root else job_dir.name
                 found[resolved] = Database(resolved, root.name, job_dir, job)
@@ -2140,6 +2144,8 @@ class Options:
     regrades: tuple[str, ...] = ()
     frozen_dir: pathlib.Path | None = None
     allow_unstamped: bool = False
+    #: Directories the run-root scan skips: the extraction's own output, when it lies in a run root.
+    skip: tuple[pathlib.Path, ...] = ()
 
 
 class Extracted(NamedTuple):
@@ -2162,7 +2168,7 @@ def extract(options: Options) -> Extracted:
     corpus, focus = manifest_kernels(args.benchmarks, args.focus_tag)
     print(f"corpus: {len(corpus)} kernels, {len(focus)} tagged {args.focus_tag}", file=sys.stderr)
 
-    databases = discover_databases(args.runs)
+    databases = discover_databases(args.runs, args.skip)
     print(f"databases: {len(databases)} under {len({d.run_root for d in databases})} run roots", file=sys.stderr)
     job_dirs = {(db.run_root, db.job): db.job_dir for db in databases}
 
@@ -2277,9 +2283,10 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     try:
         sources = source_roots(args)
+        # --out may sit inside a run root it reads (a job's own observations/ record): the scan skips it.
         for dest in (args.out, args.db):
             if dest is not None:
-                data_guard.check_output(dest, sources)
+                data_guard.check_output(dest, sources, unscanned=[args.out])
     except data_guard.ProtectedPathError as exc:
         print(exc, file=sys.stderr)
         return 1
@@ -2297,6 +2304,7 @@ def main(argv: list[str]) -> int:
                 regrades=tuple(args.regrades),
                 frozen_dir=frozen_observations.resolve(args.frozen_observations),
                 allow_unstamped=args.allow_unstamped,
+                skip=(args.out,),
             )
         )
     except ValueError as exc:

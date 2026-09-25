@@ -430,7 +430,7 @@ def test_main_refuses_unstamped_submissions_without_regrades_or_allow_unstamped(
     extract holds an unstamped timed submission and --regrades was not given."""
     fake_db = extract.Database(path=tmp_path / "d.db", run_root="root", job_dir=tmp_path, job="j1")
     result = extract.DbResult(observations=[obs(1, 3.0, "")], sources=[], undated_c=0, harnesses={}, packets={})
-    monkeypatch.setattr(extract, "discover_databases", lambda globs: [fake_db])
+    monkeypatch.setattr(extract, "discover_databases", lambda globs, skip=(): [fake_db])
     monkeypatch.setattr(extract, "manifest_kernels", lambda bench_root, focus_tag: ({}, frozenset()))
     monkeypatch.setattr(extract, "read_db", lambda *args, **kwargs: result)
     rc = extract.main(
@@ -459,7 +459,7 @@ def test_main_proceeds_past_the_refusal_with_allow_unstamped(
         harnesses={},
         packets={},
     )
-    monkeypatch.setattr(extract, "discover_databases", lambda globs: [fake_db])
+    monkeypatch.setattr(extract, "discover_databases", lambda globs, skip=(): [fake_db])
     monkeypatch.setattr(extract, "manifest_kernels", lambda bench_root, focus_tag: ({}, frozenset()))
     monkeypatch.setattr(extract, "read_db", lambda *args, **kwargs: result)
     rc = extract.main(
