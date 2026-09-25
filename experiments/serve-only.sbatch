@@ -8,7 +8,6 @@
 #   SUBMIT=0 ./serve-only.sbatch             print what would be submitted, submit nothing
 # Run it from experiments/. It derives --nodes from the env file, so never pass --nodes yourself.
 #SBATCH --job-name=serve-only
-#SBATCH --partition=mi300
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
@@ -20,7 +19,8 @@
 
 set -euo pipefail
 
-# Beverin's core_pattern is machine-global and drops a stub in the crashing process's CWD.
+# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
+# SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 
 # Under sbatch BASH_SOURCE is the spooled copy in /var/spool/slurmd, not this file.

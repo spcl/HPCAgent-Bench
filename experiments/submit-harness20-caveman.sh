@@ -115,6 +115,6 @@ if [[ "${SUBMIT:-0}" != 1 ]]; then
     echo "prepared ${arm}${file_sfx} (${nodes} nodes, ${limit}) -- not submitted, SUBMIT=1 submits"
     exit 0
 fi
-jid=$(sbatch --parsable --no-requeue --partition=mi300 --mem=0 --nodes="${nodes}" --time="${limit}" \
+jid=$(sbatch --parsable --no-requeue --mem=0 --nodes="${nodes}" --time="${limit}" \
     --job-name="${arm}${file_sfx}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${env}" beverin.sbatch)
 echo "submitted ${arm}${file_sfx} -> ${jid} (${nodes} nodes, ${limit})"

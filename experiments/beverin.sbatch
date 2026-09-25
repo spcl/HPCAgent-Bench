@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=hpcagent-bench-services
-#SBATCH --partition=mi300
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
@@ -13,9 +12,8 @@
 
 set -euo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the repo with 0-byte core_nid<node>_<pid> stubs (the size limit
-# truncates the dump after the kernel has created the file). Slurm propagates CORE to steps.
+# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
+# SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 
 # Under sbatch BASH_SOURCE is the spooled copy in /var/spool/slurmd, not this file.
@@ -32,14 +30,14 @@ fi
 
 # FABRIC GATE. Fails the allocation now rather than producing a slow, valid-looking result.
 #
-# The three CSCS network hooks default to netstack.source="artifact", whose tree is under
-# /capstor, which does not exist here. When it is missing the hooks do not error: they bind-mount files that
+# The container network hooks default to netstack.source="artifact", whose tree is on the host
+# (HPCAGENT_BENCH_NETSTACK_BASE, site layer). When it is missing the hooks do not error: they bind-mount files that
 # are not there and RCCL silently drops from CXI to TCP sockets. The arm still completes, the
 # numbers are still produced, and nothing in the log says the fabric was never used -- which is
 # why this is checked up front instead of being left to look like a slow model afterwards.
 #
 # It also asserts the libfabric the host symlink resolves to, because that symlink is root-owned
-# and CSCS can repoint it between two arms of one campaign.
+# and the site can repoint it between two arms of one campaign.
 _preflight="${HPCAGENT_BENCH_REPO:-${SCRIPT_DIR}/..}/scripts/cscs/netstack_preflight.sh"
 if [[ -x "${_preflight}" ]]; then
     "${_preflight}" || { echo "netstack preflight failed; refusing to spend the allocation" >&2; exit 2; }

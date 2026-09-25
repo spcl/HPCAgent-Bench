@@ -4,19 +4,14 @@
 #
 #   . "${HPCAGENT_BENCH_REPO}/scripts/cscs/account_env.sh"
 #
-# WHY THE ENVIRONMENT AND NOT -A. beverin now REJECTS every accountless job:
-#     ERROR: you must specify a project account (-A <account>)
-# This repo has 456 #SBATCH directives across 54 files and none carries an account, so as of the
-# Sep 2026 migration every campaign submission is refused outright. Slurm reads SBATCH_ACCOUNT,
-# SLURM_ACCOUNT and SALLOC_ACCOUNT natively (verified on beverin: SBATCH_ACCOUNT alone produced a
-# job recorded under that account), so exporting them here gives all 456 an account without
-# editing one of them -- and keeps the rule that no submitter spells an account of its own, which
-# is what stops a campaign silently splitting across two billing lines.
+# WHY THE ENVIRONMENT AND NOT -A. Slurm reads SBATCH_ACCOUNT, SLURM_ACCOUNT and SALLOC_ACCOUNT
+# natively, so exporting them gives every #SBATCH script an account without any of them naming
+# one -- which is what stops a campaign silently splitting across two billing lines. The site
+# layer (scripts/site_env.sh, sourced below) supplies the partition the same way (SBATCH_PARTITION).
 #
 # WHY IT IS DETECTED AND NOT A CONSTANT. An account name is site- and person-specific; writing one
 # into the repo makes the benchmark unrunnable for anybody else. The account is therefore read
-# from the user's own Slurm associations. `root` is excluded: every pre-migration job here ran
-# under it, so our fairshare there is ~0 (sshare -U) and a job on it queues behind everything.
+# from the user's own Slurm associations. `root` is excluded: it is never a project account.
 #
 # WHY AMBIGUITY IS A HARD ERROR. With more than one candidate, ANY automatic choice can differ
 # between two submissions of the same campaign -- pick-by-fairshare in particular re-decides every
@@ -32,9 +27,10 @@
 # associations" and refuse, which failed every pre-commit hook run through run_hook.sh.
 set -uo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+. "$(dirname -- "${BASH_SOURCE[0]}")/../site_env.sh" || return 1 2>/dev/null || exit 1
+
+# A dump lands in the crashing process's CWD (the checkout) and Slurm propagates the SUBMITTER's
+# core limit, so the floor has to be set here.
 ulimit -c 0
 # hpcagent_bench_accounts -- the user's associations but root, one per line; returns 3 when Slurm
 # accounting does not answer. No sacctmgr at all (CI, a laptop) is no associations.
@@ -73,8 +69,8 @@ hpcagent_bench_resolve_account() {
 
     n="$(printf '%s\n' "${candidates}" | grep -c . || true)"
     case "${n}" in
-        0) echo "no usable Slurm association for ${USER:-$(id -un)} (only 'root', which beverin" >&2
-           echo "  no longer accepts). Ask CSCS to add you to a project account." >&2
+        0) echo "no usable Slurm association for ${USER:-$(id -un)} (root is never used)." >&2
+           echo "  Ask your site to add you to a project account." >&2
            return 2 ;;
         1) printf '%s' "${candidates}"; return 0 ;;
         *) echo "several project accounts available and none chosen. Pick ONE for the whole" >&2
@@ -89,8 +85,7 @@ hpcagent_bench_resolve_account() {
 }
 
 # hpcagent_bench_require_account -- a submitter's last gate before sbatch: refuses when no account
-# was resolved. beverin no longer refuses an accountless job (its cli_filter is gone since
-# 2026-09-19): it runs it on root, where our fairshare is ~0, so it would queue behind everything.
+# was resolved, since a cluster may run an accountless job on a default account nobody chose.
 hpcagent_bench_require_account() {
     [ -n "${SBATCH_ACCOUNT:-}" ] && return 0
     echo "no Slurm account resolved (scripts/cscs/account_env.sh): refusing to submit on the default account" >&2

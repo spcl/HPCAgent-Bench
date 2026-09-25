@@ -307,6 +307,8 @@ experiments/*-[0-9]*.out
 .perf_reports/
 experiments/mwd-final-*/
 
+# per-user site layer, copied from experiments/layers/site-*.env
+experiments/layers/site.env
 # Skill pages staged into an image build context or a job's shared dir are copies of
 # hpcagent_bench/skills (the only source): never commit them.
 /containers/agent/skills/

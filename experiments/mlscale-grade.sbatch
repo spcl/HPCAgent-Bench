@@ -62,8 +62,6 @@
 # ITEM_ESTIMATE_S (2400), CLAIM_BATCH (1), STALE_S (600), END_MARGIN_S (300: kept free before --time).
 # EXPERIMENT (mlscale): the runs.experiment auto mode collects, e.g. mlscale-part2 for that roster.
 #SBATCH --job-name=mlscale-grade
-#SBATCH --account=a-g34
-#SBATCH --partition=mi300
 #SBATCH --exclusive
 #SBATCH --mem=0
 #SBATCH --time=08:00:00

@@ -19,7 +19,6 @@
 #   cd experiments && sbatch smoke-gpu-models.sbatch
 #
 #SBATCH --job-name=smoke-gpu-models
-#SBATCH --partition=mi300
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
@@ -34,8 +33,8 @@
 #SBATCH --error=%x-%j.out
 set -euo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD. Slurm propagates CORE to steps.
+# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
+# SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 
 REPO="${REPO:-$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}/.." && pwd)}"

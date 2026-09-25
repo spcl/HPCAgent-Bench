@@ -18,7 +18,6 @@
 # the rocm components); the login node has no libpapi at all, which the report says rather than
 # guessing around.
 #SBATCH --job-name=mpi-work-scaling
-#SBATCH --partition=mi300
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=24
@@ -30,8 +29,8 @@
 
 set -Eeuo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the repo with core_nid<node>_<pid> files. Slurm propagates CORE to steps.
+# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
+# SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
 REPO="${HPCAGENT_BENCH_REPO:-$(cd -- "${SUBMIT_DIR}" && git rev-parse --show-toplevel 2>/dev/null || echo "${SUBMIT_DIR}")}"

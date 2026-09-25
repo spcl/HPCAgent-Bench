@@ -76,13 +76,11 @@ repos:
         language: system
         require_serial: true
         files: '\.ya?ml$'
-      # A core dump lands in the crashing process's CWD (beverin's core_pattern is machine-global),
-      # so an agent segfault litters the checkout with core_<host>_<pid> files on a filesystem
+      # A core dump lands in the crashing process's CWD, so an agent segfault litters the checkout with core_<host>_<pid> files on a filesystem
       # whose quota is inodes. `ulimit -c 0` in the script body is the only thing that imposes a
       # floor -- --propagate can only carry the submitter's limit, never override it. The scope is
       # EVERY .sbatch AND .sh, not just the submitters: keying on .sbatch left the container launch
-      # wrappers, the login-node helpers and the sourced env layers open, and a login-node repro run
-      # through one of them left 21.6 GB of core_beverin-ln001_* on 2026-09-20. The check also
+      # wrappers, the login-node helpers and the sourced env layers open. The check also
       # rejects a later `ulimit -c unlimited` (the old substring test passed straight through one)
       # unless the line says why with `# core-dumps-ok: <reason>`.
       - id: hpcagent_bench-core-dumps

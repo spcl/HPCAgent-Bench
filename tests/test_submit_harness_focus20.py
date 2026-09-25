@@ -623,12 +623,13 @@ def test_a_model_with_no_serving_config_on_the_partition_is_refused(tmp_path: pa
 @pytest.mark.parametrize(
     ("knobs", "want", "absent"),
     [
-        ({}, ["--partition=mi300"], "--gpus-per-node"),
-        ({"PARTITION": "mi200"}, ["--partition=mi200", "--gpus-per-node=8"], "--partition=mi300"),
+        # the default partition comes from the site layer's SBATCH_PARTITION, not an argument
+        ({}, [], ("--partition", "--gpus-per-node")),
+        ({"PARTITION": "mi200"}, ["--partition=mi200", "--gpus-per-node=8"], ("--partition=mi300",)),
     ],
 )
 def test_the_job_lands_on_the_partition_with_its_gpu_count(
-    tmp_path: pathlib.Path, knobs: dict[str, str], want: list[str], absent: str
+    tmp_path: pathlib.Path, knobs: dict[str, str], want: list[str], absent: tuple[str, ...]
 ) -> None:
     root = submit_tree(tmp_path)
     stub(root / "bin", "sbatch", 'printf "%s\\n" "$@" > "${STUB_MARKERS}/sbatch-args"; echo 4242')

@@ -61,9 +61,8 @@
 
 set -euo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_nid<node>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
+# SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 
 REPO="${HPCAGENT_BENCH_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
@@ -109,10 +108,8 @@ esac
 
 BASE_PYTHONPATH="${PYTHONPATH:-}"
 # DaCe writes one .so per SDFG variant per kernel. Off /tmp, which is tmpfs on these nodes (the
-# build would compete with the run for RAM). $SCRATCH on Alps is the NFS scratch (/ritom, since the
-# general-scratch retirement) -- the flash tier (/iopsstor) may handle thousands of small compiler
-# writes better, so point DACE_BUILD_ROOT there if both are mounted. UNVERIFIED: only the mount
-# names are known here, from scripts/cscs/env.toml.example.
+# build would compete with the run for RAM). A flash tier (FAST_SCRATCH) may handle thousands of
+# small compiler writes better than $SCRATCH, so point DACE_BUILD_ROOT there if both are mounted.
 BUILD_ROOT="${DACE_BUILD_ROOT:-${SCRATCH:-${REPO}}}"
 failed=()
 

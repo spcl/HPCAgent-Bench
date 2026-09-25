@@ -314,7 +314,7 @@ def _exported_annotations(edf: pathlib.Path) -> dict[str, str]:
 RENDERED = sorted(pathlib.Path.home().joinpath(".edf").glob("hpcagent-bench-*-mi300-latest.toml"))
 
 
-@pytest.mark.beverin  # the EDFs install_edfs.sh renders into the Beverin user's ~/.edf
+@pytest.mark.site  # the EDFs install_edfs.sh renders into the user's ~/.edf
 @pytest.mark.parametrize("edf", RENDERED, ids=lambda p: p.stem)
 @pytest.mark.parametrize(
     "variable, expected",

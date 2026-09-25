@@ -111,7 +111,7 @@ def ppcg_lookup() -> tuple[str | None, str]:
     A candidate has to RUN, not merely exist, and that is what makes the ORDER safe. The cache
     outranks the image on purpose (a host pinning a build to test it must win), so an executable
     there that dies at startup would otherwise shadow the pinned ppcg the image carries and take
-    the column down with it -- measured: the cache build left over from the /ritom scratch
+    the column down with it -- measured: a cache build left over from a scratch
     migration still has its executable bit and still fails with ``libLLVM-17.so.1: cannot open
     shared object file``. Probed with the tool's own ``--version``, under exactly the environment
     :func:`run_ppcg` gives it (see :func:`_ppcg_run_env`), so what this accepts is the call the

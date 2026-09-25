@@ -36,7 +36,12 @@ def run_container(
     marker = tmp_path / "sbatch-argv.txt"
     stub_sbatch(bin_dir, marker)
     stub_account(bin_dir)
-    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path / "home"), "USER": "tester"}
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "HOME": str(tmp_path / "home"),
+        "USER": "tester",
+        "HPCAGENT_BENCH_CI_PARTITION": "ci-part",
+    }
     if scratch is not None:
         env["SCRATCH"] = scratch
     proc = subprocess.run(
@@ -58,7 +63,7 @@ def test_container_flag_submits_with_the_partition_and_sbatch_script(tmp_path: p
     argv = marker.read_text().splitlines()
     assert "--wait" in argv
     assert "-A" not in argv
-    assert "--partition=mi200" in argv
+    assert "--partition=ci-part" in argv, "the site layer's HPCAGENT_BENCH_CI_PARTITION picks it"
     assert str(CONTAINER_SBATCH) in argv
 
 
@@ -77,11 +82,12 @@ def test_container_flag_without_scratch_fails_before_touching_sbatch(tmp_path: p
     assert not marker.exists(), "sbatch was invoked despite SCRATCH being unset"
 
 
-def test_ci_sbatch_has_the_mi200_single_node_directives() -> None:
-    """A direct `sbatch scripts/ci_mi200.sbatch` (bypassing the wrapper) lands on one mi200 node and
-    never requeues."""
+def test_ci_sbatch_has_the_single_node_directives() -> None:
+    """A direct `sbatch scripts/ci_mi200.sbatch` (bypassing the wrapper) lands on one whole node and
+    never requeues; the partition comes from the command line or SBATCH_PARTITION, never a
+    directive (SBATCH_PARTITION would silently override one)."""
     text = CONTAINER_SBATCH.read_text()
-    assert "#SBATCH --partition=mi200" in text
+    assert "#SBATCH --partition" not in text
     assert "#SBATCH --no-requeue" in text
     assert "#SBATCH --nodes=1" in text
     assert "#SBATCH --mem=0" in text

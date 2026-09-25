@@ -51,7 +51,7 @@ To submit one arm directly against an existing `.env.<arm>` file:
 
 ```bash
 sbatch --nodes="$(. ./arm_nodes.sh; arm_nodes .env.<arm>)" \
-    --time=08:00:00 --partition=mi300 --job-name=<arm> \
+    --time=08:00:00 --job-name=<arm> \
     --export=ALL,CLUSTER_ENV_FILE="$PWD/.env.<arm>" beverin.sbatch
 ```
 
@@ -135,9 +135,8 @@ arm still carries partial results.
   dies before the model is up.
 
   It was never installer-managed, so `install_edfs.sh` has never repointed it, and the rendered
-  copy in `~/.edf` named a `/capstor` image that the Sep 2026 migration removed. That copy was
-  taken out of `~/.edf` on 2026-09-16 rather than left resolving to nothing; it is preserved at
-  `${SCRATCH}/.edf-stale-20260916/sglang-candidate.toml` so the container settings are not lost.
+  copy in `~/.edf` named an image a storage migration removed. That copy was taken out of
+  `~/.edf` rather than left resolving to nothing.
 
   **Fixing it needs a REBUILD, not a re-render** -- re-rendering would point at bytes that do not
   exist. Build the sglang role, promote it, then render the EDF, then re-check these 11 arms. No
@@ -181,9 +180,9 @@ cd containers/cluster/ce-images
 # The judge image pins compilers by MAJOR version only (gcc 16, LLVM 22) because the PPA serves
 # 16.0.1, not a fixed point release; the build records what it resolved to in
 # /usr/local/share/toolchain-provenance.
-sbatch --partition=mi300 --export=ALL,IMAGE_DIR=$PWD/judge-agent-amd judge-agent-amd/build.sbatch
-sbatch --partition=mi300 --export=ALL,IMAGE_DIR=$PWD/sglang         sglang/build.sbatch
-sbatch --partition=mi300 --export=ALL,IMAGE_DIR=$PWD/vllm           vllm/build.sbatch
+sbatch --export=ALL,IMAGE_DIR=$PWD/judge-agent-amd judge-agent-amd/build.sbatch
+sbatch --export=ALL,IMAGE_DIR=$PWD/sglang         sglang/build.sbatch
+sbatch --export=ALL,IMAGE_DIR=$PWD/vllm           vllm/build.sbatch
 ```
 
 `inference/build/` is the multi-phase chain that produced the upstream pulls these Dockerfiles

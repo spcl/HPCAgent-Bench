@@ -186,7 +186,7 @@ JUDGE_CE_ENV="${JUDGE_CE_ENV:-hpcagent-bench-judge-mi300-latest}"
 # The agent step's EDF. AMD_CE_ENV unless an arm names another: the optimas harness runs under
 # the judge image, because its runner imports hpcagent_bench and the agent image has none.
 AGENT_CE_ENV="${AGENT_CE_ENV:-${AMD_CE_ENV}}"
-# Weights only on iopsstor (FAST_SCRATCH, cache_env.sh's default): ~11x faster at 16 readers.
+# Weights only under FAST_SCRATCH (HF_HOME, cache_env.sh): the site's fast tier for many readers.
 # Build artefacts live on the general scratch under JIT_CACHE_ROOT -- see run_vllm_node.
 HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 RUN_ROOT="${RUN_ROOT:-${HPCAGENT_BENCH_REPO}/results/cluster}"
@@ -278,7 +278,7 @@ run_vllm_node() {
     fi
 
     # ONE cache root on the general scratch (30-day purge), never HOME (inode quota) and never the
-    # checkout. Weights stay on iopsstor (HF_HOME above).
+    # checkout. Weights stay under FAST_SCRATCH (HF_HOME above).
     #
     # HOME is overridden because the libraries do not agree on a knob: aiter template ops
     # (jit/core.py home_jit_dir) and aot/flydsl expanduser("~") despite AITER_JIT_DIR, Triton uses

@@ -12,9 +12,8 @@
 # The checkout is OPT / HPCAGENT_BENCH_REPO when the caller names one (the submitter tests run a
 # temp copy of experiments/ with no scripts/ beside it), else this file's own parent.
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
+# SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 . "${OPT:-${HPCAGENT_BENCH_REPO:-$(dirname -- "${BASH_SOURCE[0]}")/..}}/scripts/cscs/account_env.sh" || { echo "no Slurm account resolved; see scripts/cscs/account_env.sh" >&2; exit 2; }
 # render_env (a <campaign>:<model> base, flattened) and snapshot_env (the per-submission copy a job reads).
@@ -310,8 +309,9 @@ refuse_unfiltered_snapshot_problems() {
     fi
 }
 
-# PARTITION -- the Slurm partition the arms run on. Unset or mi300: nothing below changes an env or
-# an sbatch line. Any other value needs layers/partition-<P>.env (and -<model>.env for the serving
+# PARTITION -- the hardware profile the arms run on, named like its Slurm partition. Unset or mi300:
+# nothing below changes an env or an sbatch line, and the job lands on the site layer's
+# SBATCH_PARTITION. Any other value needs layers/partition-<P>.env (and -<model>.env for the serving
 # config); it is for smokes and overflow only, never paper data.
 partition_is_default() { [[ -z "${PARTITION:-}" || "${PARTITION}" == mi300 ]]; }
 
@@ -337,7 +337,7 @@ apply_partition() {
     }
 }
 
-# partition_sbatch_args -- the sbatch words that move a job off beverin.sbatch's mi300 header: the
+# partition_sbatch_args -- the sbatch words that move a job off the default partition: the
 # partition and its GPU count, one per line; nothing for the default partition.
 partition_sbatch_args() {
     partition_is_default && return 0

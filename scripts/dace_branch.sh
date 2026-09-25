@@ -17,9 +17,8 @@
 # its branch under them is not a job script's call. DACE_CHECKOUT=1 opts in, and even then a dirty
 # tree is refused rather than carried onto another branch.
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
+# SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 ensure_branch() {
     local tree="$1" want="$2" have

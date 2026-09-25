@@ -3,13 +3,9 @@
 """scripts/cscs/netstack_preflight.sh: gate on the artifact netstack, not "host".
 
 "host" mode's only installed plugin (variant=rocm6) needs libamdhip64.so.6, which the ROCm-7.2
-inference images do not ship (confirmed 2026-09-18: every job that reached RCCL init under
-host+rocm6 logged "libamdhip64.so.6: cannot open shared object file" then "Could not find: ofi."
-and fell back to Socket, or hard-failed with a forced NCCL_NET). "artifact" resolves under
-/capstor/store, which was unreachable during the 2026-09-17 /ritom migration (hence the earlier
-"host" substitute) and is reachable again as of 2026-09-17. This locks the gate to "artifact" and
-proves it actually checks the pinned version/name tree, using a fixture instead of the real
-CSCS-owned store.
+images do not ship, so RCCL falls back to sockets or hard-fails. These lock the gate to "artifact"
+and prove it checks the pinned version/name tree, using a fixture instead of the site's store
+(HPCAGENT_BENCH_NETSTACK_BASE, set by the site layer).
 """
 
 import pathlib
@@ -77,3 +73,11 @@ def test_a_repointed_name_is_a_loud_failure_not_a_silent_fallback(tmp_path: path
     assert result.returncode == 1
     assert "MISSING RCCL plugin" in result.stderr
     assert "some-other-build" in result.stderr
+
+
+def test_a_site_without_a_netstack_base_skips_the_check(tmp_path: pathlib.Path) -> None:
+    empty_site = tmp_path / "site.env"
+    empty_site.write_text("")
+    result = run_preflight(tmp_path, HPCAGENT_BENCH_NETSTACK_BASE="", HPCAGENT_BENCH_SITE_ENV=str(empty_site))
+    assert result.returncode == 0, result.stderr
+    assert "fabric check skipped" in result.stderr

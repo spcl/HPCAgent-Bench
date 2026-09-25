@@ -5,34 +5,27 @@
 #
 #   . scripts/cscs/netstack_preflight.sh   # or run it directly
 #
-# WHY THIS EXISTS, and why it aborts rather than warns.
-#
-# The three hooks (10-netstack, 89-libfabric-cxi, 90-aws-ofi-nccl) all begin with
+# The three hooks (10-netstack, 89-libfabric-cxi, 90-aws-ofi-nccl) default to
 #     netstack_src=${OCI_ANNOTATION_com__hooks__netstack__source:-artifact}
-# and the DEFAULT, artifact, resolves under
-#     /capstor/store/cscs/cscs/public/containers/netstack/$(uname -m)/<ver>/<name>
-# That tree was unreachable during the 2026-09-17 /ritom migration, so the EDFs moved to
-# com.hooks.netstack.source = "host" -- which turned out to point 90-aws-ofi-nccl.sh at a plugin
-# (variant=rocm6) built against libamdhip64.so.6, a library this ROCm-7.2 image does not ship
-# (confirmed 2026-09-18: every job that reached RCCL init logged "libamdhip64.so.6: cannot open
-# shared object file" then "Could not find: ofi." and fell back to Socket or hard-failed). The
-# artifact bundle below carries its own libamdhip64.so.7, matching this image, and is reachable
-# again as of 2026-09-17. So: back to "artifact", pinned by version+name so a CSCS-side bump is a
-# loud failure here instead of a campaign that silently straddles two fabric stacks.
+# which resolves under ${HPCAGENT_BENCH_NETSTACK_BASE}/$(uname -m)/<ver>/<name> (the site layer
+# names the base; no base means the site has no such hooks and the check is skipped). "host" mode's
+# only plugin (variant=rocm6) needs libamdhip64.so.6, which the ROCm-7.2 images do not ship, so RCCL
+# falls back to sockets. The artifact bundle carries its own libamdhip64.so.7, and is pinned by
+# version+name so a site-side bump is a loud failure here instead of a campaign that silently
+# straddles two fabric stacks.
 #
 # Override for a deliberate move: HPCAGENT_BENCH_NETSTACK_VERSION / _NAME, or "any" to accept
 # whatever exists under the pinned version.
 set -uo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+. "$(dirname -- "${BASH_SOURCE[0]}")/../site_env.sh" || return 1 2>/dev/null || exit 1
+
+# A dump lands in the crashing process's CWD (the checkout); Slurm propagates the submitter's limit.
 ulimit -c 0
 : "${HPCAGENT_BENCH_NETSTACK_SOURCE:=artifact}"  # must match the EDF annotation
 : "${HPCAGENT_BENCH_NETSTACK_VERSION:=26.08.1}"
 : "${HPCAGENT_BENCH_NETSTACK_NAME:=gpu_rocm7-cxi_13.1.0-ofi_2.6.0-aws_1.20.0}"
-# Override lets a test point this at a fixture tree instead of the real CSCS-owned artifact store.
-: "${HPCAGENT_BENCH_NETSTACK_BASE:=/capstor/store/cscs/cscs/public/containers/netstack}"
+: "${HPCAGENT_BENCH_NETSTACK_BASE:=}"
 
 netstack_preflight() {
     local rc=0 base lib plugin
@@ -43,6 +36,10 @@ netstack_preflight() {
         echo "  this image does not ship (ROCm 7.2 -> .so.7 only). Set" >&2
         echo "  com.hooks.netstack.source=\"artifact\" unless the image is ROCm 6.x." >&2
         return 1
+    fi
+    if [ -z "${HPCAGENT_BENCH_NETSTACK_BASE}" ]; then
+        echo "netstack: HPCAGENT_BENCH_NETSTACK_BASE unset (site layer); fabric check skipped" >&2
+        return 0
     fi
 
     base="${HPCAGENT_BENCH_NETSTACK_BASE}/$(uname -m)/${HPCAGENT_BENCH_NETSTACK_VERSION}"
