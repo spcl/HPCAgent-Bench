@@ -128,25 +128,10 @@ def emit_function_eager(fn: ast.FunctionDef, decorate: str | None, mutated: list
 
 def emit_eager_body(body: list[ast.stmt], indent: str) -> list[str]:
     """Recursively emit a statement list with control flow kept literal."""
-    inner = indent + "    "
     lines: list[str] = []
     for s in body:
-        if isinstance(s, ast.For):
-            if s.orelse:
-                raise EmitError("for-else not supported")
-            lines.append(f"{indent}for {unparse_jnp(s.target)} in {unparse_jnp(s.iter)}:")
-            lines += emit_eager_body(s.body, inner) or [inner + "pass"]
-        elif isinstance(s, ast.While):
-            if s.orelse:
-                raise EmitError("while-else not supported")
-            lines.append(f"{indent}while {unparse_jnp(s.test)}:")
-            lines += emit_eager_body(s.body, inner) or [inner + "pass"]
-        elif isinstance(s, ast.If):
-            lines.append(f"{indent}if {unparse_jnp(s.test)}:")
-            lines += emit_eager_body(s.body, inner) or [inner + "pass"]
-            if s.orelse:
-                lines.append(f"{indent}else:")
-                lines += emit_eager_body(s.orelse, inner) or [inner + "pass"]
+        if isinstance(s, (ast.For, ast.While, ast.If, ast.FunctionDef)):
+            lines += emit_eager_compound(s, indent)
         elif isinstance(s, (ast.Return, ast.Break, ast.Continue, ast.Pass)):
             lines.append(indent + unparse_jnp(s))
         elif isinstance(s, (ast.Assign, ast.AugAssign)):
@@ -161,16 +146,34 @@ def emit_eager_body(body: list[ast.stmt], indent: str) -> list[str]:
             lines.append(indent + unparse_jnp(fs))
         elif isinstance(s, (ast.Import, ast.ImportFrom, ast.Raise, ast.Assert)):
             continue  # input-validation guards never fire on oracle-valid inputs
-        elif isinstance(s, ast.FunctionDef):
-            # Nested helper def (velocity_tendencies' ``gat``) -- emit as a
-            # nested function, in scope for later calls. ast.unparse over the whole ``arguments``
-            # node for the same reason the jit path does it: a join of parameter NAMES drops every
-            # default, and vexx_k's ``def fwfft(col, batch=None)`` then refuses its own
-            # one-argument call site.
-            lines.append(f"{indent}def {s.name}({ast.unparse(s.args)}):")
-            lines += emit_eager_body(s.body, inner) or [inner + "pass"]
         else:
             raise EmitError(f"unsupported statement: {type(s).__name__}")
+    return lines
+
+
+def emit_eager_compound(s: ast.For | ast.While | ast.If | ast.FunctionDef, indent: str) -> list[str]:
+    """A loop, branch or nested ``def`` with its body emitted recursively."""
+    inner = indent + "    "
+    if isinstance(s, ast.For):
+        if s.orelse:
+            raise EmitError("for-else not supported")
+        head = f"{indent}for {unparse_jnp(s.target)} in {unparse_jnp(s.iter)}:"
+    elif isinstance(s, ast.While):
+        if s.orelse:
+            raise EmitError("while-else not supported")
+        head = f"{indent}while {unparse_jnp(s.test)}:"
+    elif isinstance(s, ast.If):
+        head = f"{indent}if {unparse_jnp(s.test)}:"
+    else:
+        # Nested helper def -- emitted as a nested function, in scope for later calls.
+        # ast.unparse over the whole ``arguments`` node for the same reason the jit path does it:
+        # a join of parameter NAMES would drop every default (``def fwfft(col, batch=None)``
+        # would then refuse its own one-argument call site).
+        head = f"{indent}def {s.name}({ast.unparse(s.args)}):"
+    lines = [head, *(emit_eager_body(s.body, inner) or [inner + "pass"])]
+    if isinstance(s, ast.If) and s.orelse:
+        lines.append(f"{indent}else:")
+        lines += emit_eager_body(s.orelse, inner) or [inner + "pass"]
     return lines
 
 

@@ -7,7 +7,7 @@ import functools
 import itertools
 import logging
 import re
-from typing import cast
+from typing import NamedTuple, cast
 from collections.abc import Callable, Iterable, Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
@@ -15,7 +15,7 @@ from hpcagent_bench.translators.numpyto_common import frontend as common_fronten
 from hpcagent_bench.translators.numpyto_common.frontend import PinnedValue, field_nodes, fold_shape_expr
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, shape_dimension_symbols
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, shape_dimension_symbols
 from hpcagent_bench.translators.numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
@@ -2015,70 +2015,64 @@ def version_rebound_names(
     updates it in a loop; declining the whole name for the loop left the View and the value under
     one name, which dace refuses. A name bound only to values keeps its name: dace rebinds those.
     """
+    versioner = RebindVersioner(fn, binding_of)
     declined: list[str] = []
-    blocks = statement_lists(fn)
-    stores: dict[str, list[ast.Name]] = {}
-    loads: dict[str, list[ast.Name]] = {}
-    for node in ast.walk(fn):
-        if isinstance(node, ast.Name):
-            (stores if isinstance(node.ctx, ast.Store) else loads).setdefault(node.id, []).append(node)
-    updates = inplace_update_targets(fn)
-    taken = set(loads) | set(stores) | {arg.arg for arg in fn.args.args}
-    # Node ids under each statement, walked once per call: renaming rewrites Name.id, never the tree.
-    subtree: dict[int, set[int]] = {}
-
-    def node_ids(stmt: ast.AST) -> set[int]:
-        found = subtree.get(id(stmt))
-        if found is None:
-            found = subtree[id(stmt)] = {id(node) for node in ast.walk(stmt)}
-        return found
-
-    for name in sorted({n for block in blocks for stmt in block if (n := binding_of(stmt))}):
+    for name in sorted({n for block in versioner.blocks for stmt in block if (n := binding_of(stmt))}):
         if candidates is not None and name not in candidates:
             continue
-        regions = binding_regions(blocks, name, binding_of)
-        if len(regions) < 2:
-            continue
-        bound_here = {id(binding.targets[0]) for binding, unused in regions}
-        if any(id(store) not in bound_here | updates for store in stores.get(name, [])):
+        if versioner.declines(name):
             declined.append(name)
-            continue  # something else writes the name; its value is no longer just these bindings
-        reached = [set().union(*map(node_ids, owned)) for unused, owned in regions]
+    return declined
+
+
+class RebindVersioner:
+    """The per-function tables :func:`version_rebound_names` decides and renames with."""
+
+    def __init__(self, fn: ast.FunctionDef, binding_of: Callable[[ast.stmt], str | None]) -> None:
+        self.fn = fn
+        self.binding_of = binding_of
+        self.blocks = statement_lists(fn)
+        self.stores: dict[str, list[ast.Name]] = {}
+        self.loads: dict[str, list[ast.Name]] = {}
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Name):
+                (self.stores if isinstance(node.ctx, ast.Store) else self.loads).setdefault(node.id, []).append(node)
+        self.updates = inplace_update_targets(fn)
+        self.taken = set(self.loads) | set(self.stores) | {arg.arg for arg in fn.args.args}
+        #: Node ids under each statement, walked once per call: renaming rewrites Name.id, never the tree.
+        self.subtree: dict[int, set[int]] = {}
+
+    def node_ids(self, stmt: ast.AST) -> set[int]:
+        found = self.subtree.get(id(stmt))
+        if found is None:
+            found = self.subtree[id(stmt)] = {id(node) for node in ast.walk(stmt)}
+        return found
+
+    def declines(self, name: str) -> bool:
+        """Version ``name``'s bindings in place; True when it cannot be versioned."""
+        regions = binding_regions(self.blocks, name, self.binding_of)
+        if len(regions) < 2:
+            return False
+        bound_here = {id(binding.targets[0]) for binding, unused in regions}
+        if any(id(store) not in bound_here | self.updates for store in self.stores.get(name, [])):
+            return True  # something else writes the name; its value is no longer just these bindings
+        reached = [set().union(*map(self.node_ids, owned)) for unused, owned in regions]
         nested = {
             id(binding) for binding, owned_statements in regions if any(id(binding) in nodes for nodes in reached)
         }
-        touches = [node for node in loads.get(name, []) + stores.get(name, []) if id(node) not in bound_here]
+        touches = [node for node in self.loads.get(name, []) + self.stores.get(name, []) if id(node) not in bound_here]
         if nested:
             # A nested value binding belongs to the one outer region enclosing it and renames with it.
             # Only done to separate a View from the values bound after it: dace rebinds a value name.
             outer = [index for index, (binding, owned_statements) in enumerate(regions) if id(binding) not in nested]
-            if (
-                len(outer) < 2
-                or not any(binds_a_view(regions[index][0]) for index in outer)
-                or any(view_binding(binding) for binding, owned_statements in regions if id(binding) in nested)
-                or any(sum(key in reached[index] for index in outer) != 1 for key in nested)
-            ):
-                owners = sole_reaching_bindings(fn, name, {id(binding) for binding, unused in regions}, touches)
-                if owners is None:
-                    declined.append(name)
-                    continue  # a binding NESTED in another's extent: the reads after it belong to both
-                # Every touch sees one binding, so each binding names its own touches wherever they sit.
-                spelled = {id(regions[0][0]): name}
-                for version, (binding, owned) in enumerate(regions[1:], start=2):
-                    spelled[id(binding)] = fresh_version(name, version, taken)
-                    bound = binding.targets[0]
-                    if isinstance(bound, ast.Name):
-                        bound.id = spelled[id(binding)]
-                for touch in touches:
-                    touch.id = spelled[owners[id(touch)]]
-                continue
+            if not nested_in_one_view_region(regions, reached, nested, outer):
+                return self.declines_by_reaching_bindings(name, regions, touches)
             regions = [regions[index] for index in outer]
             reached = [reached[index] for index in outer]
         if any(sum(id(touch) in nodes for nodes in reached) != 1 for touch in touches):
-            declined.append(name)
-            continue  # a read or update no region owns, or one two regions reach: neither is a rename
+            return True  # a read or update no region owns, or one two regions reach: neither is a rename
         for version, (binding, owned) in enumerate(regions[1:], start=2):
-            renamed = fresh_version(name, version, taken)
+            renamed = fresh_version(name, version, self.taken)
             bound = binding.targets[0]
             if isinstance(bound, ast.Name):
                 bound.id = renamed
@@ -2086,7 +2080,39 @@ def version_rebound_names(
                 for node in ast.walk(stmt):
                     if isinstance(node, ast.Name) and node.id == name:
                         node.id = renamed
-    return declined
+        return False
+
+    def declines_by_reaching_bindings(
+        self, name: str, regions: list[tuple[ast.Assign, list[ast.AST]]], touches: list[ast.Name]
+    ) -> bool:
+        """Version a name with a binding NESTED in another's extent when exactly one binding
+        reaches each touch; True (declined) otherwise, since the reads after it belong to both."""
+        owners = sole_reaching_bindings(self.fn, name, {id(binding) for binding, unused in regions}, touches)
+        if owners is None:
+            return True
+        # Every touch sees one binding, so each binding names its own touches wherever they sit.
+        spelled = {id(regions[0][0]): name}
+        for version, (binding, unused) in enumerate(regions[1:], start=2):
+            spelled[id(binding)] = fresh_version(name, version, self.taken)
+            bound = binding.targets[0]
+            if isinstance(bound, ast.Name):
+                bound.id = spelled[id(binding)]
+        for touch in touches:
+            touch.id = spelled[owners[id(touch)]]
+        return False
+
+
+def nested_in_one_view_region(
+    regions: list[tuple[ast.Assign, list[ast.AST]]], reached: list[set[int]], nested: set[int], outer: list[int]
+) -> bool:
+    """Two or more outer bindings, one of them a view, every nested binding a value, and each
+    nested binding inside exactly one outer region: the nested ones rename with that region."""
+    return not (
+        len(outer) < 2
+        or not any(binds_a_view(regions[index][0]) for index in outer)
+        or any(view_binding(binding) for binding, owned_statements in regions if id(binding) in nested)
+        or any(sum(key in reached[index] for index in outer) != 1 for key in nested)
+    )
 
 
 #: numpy allocators whose first arg is a shape tuple (dims dace requires to be symbolic).
@@ -2333,15 +2359,17 @@ class ResolveShapeReads(ast.NodeTransformer):
         if not isinstance(node, ast.Call):
             return None
         if isinstance(node.func, ast.Name):
-            # A scalar builtin over rank-0 arguments is rank 0. cp2k_grid_integrate reads its
-            # angular momenta as ``lamax = int(la_max[task])``, and leaving that rankless poisoned
-            # every extent downstream of it -- lp, nlp, and the index grids built from nlp.
+            # A scalar builtin over rank-0 arguments is rank 0 (``lamax = int(la_max[task])``);
+            # leaving it rankless would poison every extent downstream of it.
             if node.func.id not in SCALAR_BUILTINS_ or not all(self.infer(a) == [] for a in node.args):
                 return None
             return []
         if not isinstance(node.func, ast.Attribute):
             return None
-        name, args = node.func.attr, node.args
+        return self.method_call(node.func.attr, node.args)
+
+    def method_call(self, name: str, args: list[ast.expr]) -> list[str] | None:
+        """Extents of an ``np.<name>(*args)`` / ``x.<name>(*args)`` call."""
         if name in ALLOC_FUNCS and args:
             return self.tuple_tokens(args[0])
         if name == "reshape" and len(args) > 1:
@@ -4132,7 +4160,7 @@ def exits_with_valueless_return(body: list[ast.stmt]) -> bool:
 def without_valueless_returns(body: list[ast.stmt]) -> list[ast.stmt]:
     """``body``, in TAIL position, with every ``return`` that carries no value structured away.
 
-    :func:`numpyto_common.frontend._rewrite_returns_to_outparam` closes a promoted-return helper
+    :func:`numpyto_common.frontend.helper_specialize.rewrite_returns_to_outparam` closes a promoted-return helper
     with ``hret[:] = expr`` plus a bare ``return``, which is what the C and Fortran legs emit as a
     ``void`` out-param procedure. dace lowers any ``return`` into a ReturnBlock, and its codegen
     emits a nested program's blocks INLINE in the caller's function -- so that bare return becomes
@@ -4193,50 +4221,8 @@ def render_program(
     name = fn_name or kir.kernel_name
     arrays = {a.name: a for a in kir.arrays}
     scalars = {s.name: s for s in kir.scalars}
-    symbol_names = [s.name for s in kir.symbols]
-    # Sparse kirs carry size symbols only in array shapes; collect free idents so each is declared as a dc.symbol.
     arr_shapes = {a.name: [str(s) for s in a.shape] for a in kir.arrays}
-    known = set(arrays) | set(scalars)
-    shape_idents: set[str] = set()
-    for toks in arr_shapes.values():
-        for tok in toks:
-            for ident in IDENT_RE.findall(tok):
-                shape_idents.add(ident)
-                if ident not in known and ident not in symbol_names:
-                    symbol_names.append(ident)
-    # A scalar param used as an array shape (e.g. ``Nt`` sizing ``KE[Nt + 1]``) must be a dc.symbol:
-    # a dace shape annotation cannot reference a runtime scalar, and a name cannot be both. Promote it
-    # to a module-level symbol and drop it from the scalar params below (the caller binds it as a symbol).
-    # Ordered: the loop below appends into ``symbol_names``, which IS the emitted dc.symbol
-    # declaration block, so these have to keep the parameter order ``scalars`` came in.
-    # A scalar used ONLY as a body extent -- lenet's ``C_before_fc1`` in
-    # ``np.reshape(x, (N, C_before_fc1))`` -- appears in no declared array shape, so the scan above
-    # never sees it and it stays a runtime scalar. DaCe cannot take a data descriptor as an extent:
-    # the frontend tries to mint a symbol of that name and collides with the descriptor already
-    # bound to it. Normalized on a COPY so both reshape spellings reach ``shape_argument`` in the
-    # one form it reads. A rebound name is excluded -- a dc.symbol is immutable, and a name cannot
-    # be both symbol and data.
-    body_probe = NormalizeReshape().visit(copy.deepcopy(kir.tree))
-    rebound = {n.id for n in ast.walk(body_probe) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
-    rebound |= {
-        n.value.id
-        for n in ast.walk(body_probe)
-        if isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Store) and isinstance(n.value, ast.Name)
-    }
-    body_shape_idents: set[str] = set()
-    for node in ast.walk(body_probe):
-        shape_arg = shape_argument(node)
-        if shape_arg is None:
-            continue
-        elements = shape_arg.elts if isinstance(shape_arg, (ast.Tuple, ast.List)) else [shape_arg]
-        for element in elements:
-            for sub in ast.walk(element):
-                if isinstance(sub, ast.Name) and sub.id not in rebound:
-                    body_shape_idents.add(sub.id)
-    shape_scalars = OrderedSet(s for s in scalars if s in shape_idents or s in body_shape_idents)
-    for s in shape_scalars:
-        if s not in symbol_names:
-            symbol_names.append(s)
+    symbol_names, shape_scalars = program_symbols(kir, arrays, scalars, arr_shapes)
 
     # Program signature: arrays + scalars in original input_args order; symbols are module-level.
     params: list[str] = []
@@ -4252,20 +4238,7 @@ def render_program(
     )
 
     # Desugar the body with the same pass numba/pythran use for feature parity; falls back to verbatim on parse failure.
-    fn_ast = copy.deepcopy(kir.tree)
-    fn_ast.name = kir.kernel_name
-    try:
-        desugared = desugar_for_python_backend(ast.unparse(fn_ast), kir, backend="dace")
-        fn_ast = next(n for n in ast.parse(desugared).body if isinstance(n, ast.FunctionDef))
-    except Exception as error:  # noqa: BLE001 -- keep the verbatim body if desugar fails
-        logging.getLogger(__name__).warning(
-            "dace desugar fell back to the verbatim body for %s (%s): %s: %s",
-            kir.kernel_name,
-            kir.source_path,
-            type(error).__name__,
-            error,
-        )
-        fn_ast = kir.tree
+    fn_ast = desugared_function(kir)
     # Rewrite leaked np_float/np_complex tokens to the dace precision global the module binds.
     framework_dtype = RewriteFrameworkDtype()
     fn_ast = framework_dtype.visit(fn_ast)
@@ -4376,13 +4349,7 @@ def render_program(
     # recopies the previous layer's extents, and inlining one SPLICES its definition into the shape
     # arguments, exposing names that were in no shape before (resnet's ``__inl1_kh = 7``).
     known = set(arrays) | set(scalars) | set(symbol_names)
-    previous: set[str] = set()
-    for unused in range(INLINE_ALIAS_ROUNDS):
-        promotable, unused, unused = plan_size_promotion(fn_ast, known, set(symbol_names))
-        if set(promotable) == previous:
-            break  # nothing new was exposed: another round would substitute the same names again
-        previous = set(promotable)
-        fn_ast = inline_symbol_aliases(fn_ast, set(symbol_names) | set(promotable) | loop_syms, known)
+    fn_ast = inline_exposed_aliases(fn_ast, known, set(symbol_names), loop_syms)
     # AFTER the alias inliner: the tap-loop span reaches here as the name ``span_h``, and only the
     # inlining above turns it into the ``A * stride + 1`` this matches on.
     # Integer scalar PARAMETERS count as symbols here: dace promotes each to its own ``__sym_x``
@@ -4435,67 +4402,228 @@ def render_program(
     # with disjoint live ranges are renamed -- a phi is declined, not invented.
     version_rebound_names(fn_ast, value_binding)
     ast.fix_missing_locations(fn_ast)
-    body = list(fn_ast.body)
-    if (
-        body
-        and isinstance(body[0], ast.Expr)
-        and isinstance(body[0].value, ast.Constant)
-        and isinstance(body[0].value.value, str)
-    ):
-        body = body[1:]
-    body = without_valueless_returns(body)
+    body = without_valueless_returns(without_docstring(list(fn_ast.body)))
     # After the docstring, so the allocations do not displace it, and after every pass above, so
     # the argument expressions they rewrite have settled.
-    written_by = {
-        h.kernel_name: [any(a.name == p and a.is_output for a in h.arrays) for p in h.abi_param_order()]
-        for h in helpers
-    }
-    if written_by:
-        local_shapes = {nm: list(dims) for nm, dims in kir.zeros_locals.items()}
-        slice_dtypes = {a.name: a.dtype for a in kir.arrays}
-        slice_dtypes.update({nm: kir.local_dtypes.get(nm, default_dtype) for nm in local_shapes})
-        body = materialize_strided_helper_args(
-            body,
-            written_by,
-            {**arr_shapes, **local_shapes},
-            slice_dtypes,
-            set(arrays) | set(scalars) | set(symbol_names) | set(kir.pinned_consts) | set(kir.inlined_consts),
-        )
+    if helpers:
+        body = materialized_helper_args(kir, helpers, body, arr_shapes, symbol_names, default_dtype)
     # A kept helper's out-param: redeclare it with the extent its OWN body allocates, so the
     # closing ``hret[:] = out`` compares one expression with itself. See body_allocated_shape.
     hret = kir.return_kind if kir.return_kind in arrays else ""
     if hret:
-        resolvable = set(arrays) | set(scalars) | set(symbol_names)
-        allocated = body_allocated_shape(body, hret, set(scalars) | set(symbol_names))
-        if allocated and all(i in resolvable for d in allocated for i in IDENT_RE.findall(d)):
-            if nested:
-                # Only a NESTED program: the kernel's own symbols are bound by recipe from the
-                # harness (``symbol_defs``), and a name minted here would have none.
-                allocated, body, symbol_names = with_named_floor_extents(
-                    name, allocated, body, symbol_names, resolvable | set(bound_names(body))
-                )
-            rebuilt = array_annotation(dataclasses.replace(arrays[hret], shape=tuple(allocated)))
-            params = [f"{hret}: {rebuilt}" if p.split(":", 1)[0].strip() == hret else p for p in params]
+        params, body, symbol_names = redeclared_helper_return(
+            ProgramParts(name, params, body, symbol_names), arrays, set(scalars), hret, nested
+        )
     if kir.return_kind or reassigned:
         # A HELPER's symbol the settled program never names -- retired by the redeclaration above,
         # or cancelled out of an extent by extent_without_dead_symbols -- is not a symbol dace can
         # solve OR accept: passing a keyword the callee does not take is a DaceSyntaxError. A
         # reassigned size seeded from its recipe retires its own symbol the same way.
         prunable = set(symbol_names) if kir.return_kind else set(reassigned)
-        used = {i for param in params for i in IDENT_RE.findall(param.split(":", 1)[1])}
-        used |= {n.id for n in ast.walk(ast.Module(body=body, type_ignores=[])) if isinstance(n, ast.Name)}
-        while True:  # a kept recipe reads its operands, so they stay bound
-            kept = {n for n, unused in symbol_defs if n in used or n not in prunable}
-            reached = {i for n, e in symbol_defs if n in kept for i in IDENT_RE.findall(e)} - used
-            if not reached:
-                break
-            used |= reached
-        symbol_names = [s for s in symbol_names if s in used or s not in prunable]
-        symbol_defs = [(n, e) for n, e in symbol_defs if n in used or n not in prunable]
+        symbol_names, symbol_defs = retired_unused_symbols(params, body, symbol_names, symbol_defs, prunable)
+    params, body, symbol_names, symbol_defs, renames = renamed_sympy_reserved(params, body, symbol_names, symbol_defs)
+    symbol_names, symbol_defs, pinned = without_pinned_symbols(kir, params, body, symbol_names, symbol_defs)
 
-    # A bound name that collides with a sympy callable is not a variable to dace (see
-    # sympy_reserved). Rename every one of them and record the map: the emitted program is the only
-    # place the new spelling exists, so the caller has to rewrite its keyword arguments to match.
+    return RenderedProgram(
+        name=name,
+        params=params,
+        body=body,
+        symbol_names=symbol_names,
+        symbol_defs=symbol_defs,
+        renames=renames,
+        pinned=pinned,
+        needs_complex=needs_complex or framework_dtype.used_complex,
+    )
+
+
+def program_symbols(
+    kir: KernelIR, arrays: dict[str, ArrayDesc], scalars: dict[str, ScalarDesc], arr_shapes: dict[str, list[str]]
+) -> tuple[list[str], OrderedSet]:
+    """``(dc.symbol names, scalar params promoted to symbols)`` of a program.
+
+    Sparse kirs carry size symbols only in array shapes, so every free identifier of a declared
+    shape is declared as a dc.symbol too.
+    """
+    symbol_names = [s.name for s in kir.symbols]
+    known = set(arrays) | set(scalars)
+    shape_idents: set[str] = set()
+    for toks in arr_shapes.values():
+        for tok in toks:
+            for ident in IDENT_RE.findall(tok):
+                shape_idents.add(ident)
+                if ident not in known and ident not in symbol_names:
+                    symbol_names.append(ident)
+    # A scalar param used as an array shape (e.g. ``Nt`` sizing ``KE[Nt + 1]``) must be a dc.symbol:
+    # a dace shape annotation cannot reference a runtime scalar, and a name cannot be both. Promote it
+    # to a module-level symbol and drop it from the scalar params below (the caller binds it as a symbol).
+    # Ordered: the loop below appends into ``symbol_names``, which IS the emitted dc.symbol
+    # declaration block, so these have to keep the parameter order ``scalars`` came in.
+    # A scalar used ONLY as a body extent -- lenet's ``C_before_fc1`` in
+    # ``np.reshape(x, (N, C_before_fc1))`` -- appears in no declared array shape, so the scan above
+    # never sees it and it stays a runtime scalar. DaCe cannot take a data descriptor as an extent:
+    # the frontend tries to mint a symbol of that name and collides with the descriptor already
+    # bound to it. Normalized on a COPY so both reshape spellings reach ``shape_argument`` in the
+    # one form it reads. A rebound name is excluded -- a dc.symbol is immutable, and a name cannot
+    # be both symbol and data.
+    body_shape_idents = body_extent_names(kir.tree)
+    shape_scalars = OrderedSet(s for s in scalars if s in shape_idents or s in body_shape_idents)
+    for s in shape_scalars:
+        if s not in symbol_names:
+            symbol_names.append(s)
+
+    return symbol_names, shape_scalars
+
+
+def body_extent_names(tree: ast.FunctionDef) -> set[str]:
+    """The names the body's shape arguments read, bar a rebound one. Normalized on a COPY so both
+    reshape spellings reach ``shape_argument`` in the one form it reads."""
+    body_probe = NormalizeReshape().visit(copy.deepcopy(tree))
+    rebound = {n.id for n in ast.walk(body_probe) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    rebound |= {
+        n.value.id
+        for n in ast.walk(body_probe)
+        if isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Store) and isinstance(n.value, ast.Name)
+    }
+    names: set[str] = set()
+    for node in ast.walk(body_probe):
+        shape_arg = shape_argument(node)
+        if shape_arg is None:
+            continue
+        elements = shape_arg.elts if isinstance(shape_arg, (ast.Tuple, ast.List)) else [shape_arg]
+        for element in elements:
+            names |= {sub.id for sub in ast.walk(element) if isinstance(sub, ast.Name) and sub.id not in rebound}
+    return names
+
+
+def desugared_function(kir: KernelIR) -> ast.FunctionDef:
+    """The body desugared with the same pass numba/pythran use for feature parity; the verbatim
+    body when that pass fails."""
+    fn_ast = copy.deepcopy(kir.tree)
+    fn_ast.name = kir.kernel_name
+    try:
+        desugared = desugar_for_python_backend(ast.unparse(fn_ast), kir, backend="dace")
+        return next(n for n in ast.parse(desugared).body if isinstance(n, ast.FunctionDef))
+    except Exception as error:  # noqa: BLE001 -- keep the verbatim body if desugar fails
+        logging.getLogger(__name__).warning(
+            "dace desugar fell back to the verbatim body for %s (%s): %s: %s",
+            kir.kernel_name,
+            kir.source_path,
+            type(error).__name__,
+            error,
+        )
+        return kir.tree
+
+
+def inline_exposed_aliases(
+    fn_ast: ast.FunctionDef, known: set[str], symbols: set[str], loop_syms: set[str]
+) -> ast.FunctionDef:
+    """Inline symbol aliases over the names promotion is ABOUT to mint, to a FIXED POINT: each
+    inlined helper recopies the previous layer's extents, and inlining one SPLICES its definition
+    into the shape arguments, exposing names that were in no shape before."""
+    previous: set[str] = set()
+    for unused in range(INLINE_ALIAS_ROUNDS):
+        promotable, unused, unused = plan_size_promotion(fn_ast, known, symbols)
+        if set(promotable) == previous:
+            break  # nothing new was exposed: another round would substitute the same names again
+        previous = set(promotable)
+        fn_ast = inline_symbol_aliases(fn_ast, symbols | set(promotable) | loop_syms, known)
+    return fn_ast
+
+
+def without_docstring(body: list[ast.stmt]) -> list[ast.stmt]:
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        return body[1:]
+    return body
+
+
+def materialized_helper_args(
+    kir: KernelIR,
+    helpers: Sequence[KernelIR],
+    body: list[ast.stmt],
+    arr_shapes: dict[str, list[str]],
+    symbol_names: list[str],
+    default_dtype: str,
+) -> list[ast.stmt]:
+    """``body`` with each strided argument of a kept-helper call materialized (see
+    :func:`materialize_strided_helper_args`)."""
+    written_by = {
+        h.kernel_name: [any(a.name == p and a.is_output for a in h.arrays) for p in h.abi_param_order()]
+        for h in helpers
+    }
+    local_shapes = {nm: list(dims) for nm, dims in kir.zeros_locals.items()}
+    slice_dtypes = {a.name: a.dtype for a in kir.arrays}
+    slice_dtypes.update({nm: kir.local_dtypes.get(nm, default_dtype) for nm in local_shapes})
+    names = {a.name for a in kir.arrays} | {s.name for s in kir.scalars} | set(symbol_names)
+    return materialize_strided_helper_args(
+        body,
+        written_by,
+        {**arr_shapes, **local_shapes},
+        slice_dtypes,
+        names | set(kir.pinned_consts) | set(kir.inlined_consts),
+    )
+
+
+class ProgramParts(NamedTuple):
+    name: str
+    params: list[str]
+    body: list[ast.stmt]
+    symbol_names: list[str]
+
+
+def redeclared_helper_return(
+    parts: ProgramParts, arrays: dict[str, ArrayDesc], scalar_names: set[str], hret: str, nested: bool
+) -> tuple[list[str], list[ast.stmt], list[str]]:
+    """``(params, body, symbol_names)`` with the helper's out-param ``hret`` redeclared with the
+    extent its own body allocates, when every name of that extent resolves."""
+    name, params, body, symbol_names = parts
+    resolvable = set(arrays) | scalar_names | set(symbol_names)
+    allocated = body_allocated_shape(body, hret, scalar_names | set(symbol_names))
+    if not (allocated and all(i in resolvable for d in allocated for i in IDENT_RE.findall(d))):
+        return params, body, symbol_names
+    if nested:
+        # Only a NESTED program: the kernel's own symbols are bound by recipe from the
+        # harness (``symbol_defs``), and a name minted here would have none.
+        allocated, body, symbol_names = with_named_floor_extents(
+            name, allocated, body, symbol_names, resolvable | set(bound_names(body))
+        )
+    rebuilt = array_annotation(dataclasses.replace(arrays[hret], shape=tuple(allocated)))
+    params = [f"{hret}: {rebuilt}" if p.split(":", 1)[0].strip() == hret else p for p in params]
+    return params, body, symbol_names
+
+
+def retired_unused_symbols(
+    params: list[str],
+    body: list[ast.stmt],
+    symbol_names: list[str],
+    symbol_defs: list[tuple[str, str]],
+    prunable: set[str],
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """``(symbol_names, symbol_defs)`` without the prunable symbols the settled program never names;
+    a kept recipe reads its operands, so they stay bound."""
+    used = {i for param in params for i in IDENT_RE.findall(param.split(":", 1)[1])}
+    used |= {n.id for n in ast.walk(ast.Module(body=body, type_ignores=[])) if isinstance(n, ast.Name)}
+    while True:
+        kept = {n for n, unused in symbol_defs if n in used or n not in prunable}
+        reached = {i for n, e in symbol_defs if n in kept for i in IDENT_RE.findall(e)} - used
+        if not reached:
+            break
+        used |= reached
+    symbol_names = [s for s in symbol_names if s in used or s not in prunable]
+    symbol_defs = [(n, e) for n, e in symbol_defs if n in used or n not in prunable]
+    return symbol_names, symbol_defs
+
+
+def renamed_sympy_reserved(
+    params: list[str], body: list[ast.stmt], symbol_names: list[str], symbol_defs: list[tuple[str, str]]
+) -> tuple[list[str], list[ast.stmt], list[str], list[tuple[str, str]], dict[str, str]]:
+    """Rename every bound name that collides with a sympy callable (not a variable to dace, see
+    sympy_reserved) and return the map with the renamed parts: the emitted program is the only
+    place the new spelling exists, so the caller rewrites its keyword arguments to match."""
     param_names = [p.split(":", 1)[0].strip() for p in params]
     candidates = OrderedSet([*param_names, *symbol_names, *bound_names(body)])
     renames = {n: f"__{n}" for n in candidates if sympy_reserved(n)}
@@ -4509,37 +4637,36 @@ def render_program(
             (renames.get(n, n), ast.unparse(RenameNames(renames).visit(ast.parse(e, mode="eval")).body))
             for n, e in symbol_defs
         ]
+    return params, body, symbol_names, symbol_defs, renames
 
-    # A PINNED CONFIG knob is a constant, not a symbol: the C leg spells it ``constexpr int64_t
-    # max_iter = 100``, and lowering having promoted it (it sizes a workspace) must not turn it into
-    # a dc.symbol here. Nothing binds such a symbol -- ``bind_free_symbols`` recovers a symbol from
-    # an array's shape or from a recipe, and a config knob is neither -- so gmres' compiled SDFG
-    # died on "Missing program argument". Substituted into the recipes too, because the CALLER
-    # evaluates those outside this module, where the name does not exist.
+
+def without_pinned_symbols(
+    kir: KernelIR,
+    params: list[str],
+    body: list[ast.stmt],
+    symbol_names: list[str],
+    symbol_defs: list[tuple[str, str]],
+) -> tuple[list[str], list[tuple[str, str]], dict[str, PinnedValue]]:
+    """``(symbol_names, symbol_defs, pinned)``: a PINNED CONFIG knob is a constant, not a symbol.
+
+    The C leg spells it ``constexpr int64_t max_iter = 100``, and lowering having promoted it (it
+    sizes a workspace) must not turn it into a dc.symbol: nothing binds such a symbol --
+    ``bind_free_symbols`` recovers a symbol from an array's shape or from a recipe, and a config
+    knob is neither. Substituted into the recipes too, because the CALLER evaluates those outside
+    this module, where the name does not exist. Only the knobs the program names are kept, and the
+    SIGNATURE counts as a use: a knob may size a parameter and appear nowhere in the body.
+    """
     pinned = {n: v for n, v in (kir.pinned_consts or {}).items() if n in symbol_names}
-    if pinned:
-        symbol_names = [n for n in symbol_names if n not in pinned]
-        literals: dict[str, ast.expr] = {n: ast.Constant(value=v) for n, v in pinned.items()}
-        symbol_defs = [
-            (n, ast.unparse(SubstituteNames(literals).visit(ast.parse(e, mode="eval")).body)) for n, e in symbol_defs
-        ]
-        # The SIGNATURE counts as a use, not only the body: seissol's ``nb`` sizes ``Q[batch, nb, 9]``
-        # and appears nowhere else, so a body-only scan dropped both its symbol declaration and its
-        # constant, leaving the annotation reading a name the module never binds.
-        named = {node.id for stmt in body for node in ast.walk(stmt) if isinstance(node, ast.Name)}
-        named |= {ident for param in params for ident in IDENT_RE.findall(param)}
-        pinned = {n: v for n, v in pinned.items() if n in named}
-
-    return RenderedProgram(
-        name=name,
-        params=params,
-        body=body,
-        symbol_names=symbol_names,
-        symbol_defs=symbol_defs,
-        renames=renames,
-        pinned=pinned,
-        needs_complex=needs_complex or framework_dtype.used_complex,
-    )
+    if not pinned:
+        return symbol_names, symbol_defs, pinned
+    symbol_names = [n for n in symbol_names if n not in pinned]
+    literals: dict[str, ast.expr] = {n: ast.Constant(value=v) for n, v in pinned.items()}
+    symbol_defs = [
+        (n, ast.unparse(SubstituteNames(literals).visit(ast.parse(e, mode="eval")).body)) for n, e in symbol_defs
+    ]
+    named = {node.id for stmt in body for node in ast.walk(stmt) if isinstance(node, ast.Name)}
+    named |= {ident for param in params for ident in IDENT_RE.findall(param)}
+    return symbol_names, symbol_defs, {n: v for n, v in pinned.items() if n in named}
 
 
 def folded_with_constants(text: str, pinned: dict[str, PinnedValue]) -> str:
@@ -4651,108 +4778,135 @@ def helper_call_bindings(owner: ast.FunctionDef, hkir: KernelIR, pinned: dict[st
       unequal extents -- "could not broadcast [.., -kw + w + 1] into [.., -kh + w + 1]". A SCALAR
       parameter collapses the same way, onto the symbol its argument already names.
     """
-    sites = sum(
-        1
+    calls = [
+        node
         for node in ast.walk(owner)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == hkir.kernel_name
-    )
-    for node in ast.walk(owner):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == hkir.kernel_name):
+    ]
+    if not calls:
+        return HelperBinding()
+    node = calls[0]
+    abi = hkir.abi_param_order()
+    if node.keywords or len(node.args) != len(abi):
+        return HelperBinding()
+    own = {s.name for s in hkir.symbols}
+    scalar_names = {d.name for d in hkir.scalars}
+    captured = captured_parameter_names(hkir, abi, node.args)
+    binding = HelperBinding(pinned=dict(pinned))
+    arguments = list(zip(abi, node.args))
+    bind_symbol_arguments(binding, arguments, own, pinned, captured)
+    # A SCALAR parameter handed the very caller symbol one of the helper's own symbols already
+    # stands for is that symbol under a second name. ``_conv_transpose2d`` takes ``stride`` by
+    # value while its return descriptor spells the same quantity ``conv_transpose_stride``, so
+    # the body mints ``oh`` from a runtime scalar while the out-param is declared from a
+    # symbol, and dace refuses the write between two extents it cannot relate. The symbol is
+    # the canonical one -- a runtime scalar cannot size a dace descriptor at all.
+    #
+    # ONE call site, because respelling a SHAPE costs nothing at a second site (dace re-solves a
+    # declared extent per call) while retiring a runtime scalar spends the value that site would
+    # have passed. A symbol the descriptors state OUTRIGHT is no exception: dace solves such a
+    # symbol from the argument while the body's own name rides along as a keyword, so both are
+    # bound -- but BOUND IS NOT EQUAL, and a ``[N]`` declaration over a body allocating
+    # ``np.empty(n)`` has its closing write refused.
+    for pname, arg in arguments if len(calls) == 1 else []:
+        if pname not in scalar_names or not isinstance(arg, ast.Name):
             continue
-        abi = hkir.abi_param_order()
-        if node.keywords or len(node.args) != len(abi):
-            return HelperBinding()
-        own = {s.name for s in hkir.symbols}
-        scalar_names = {d.name for d in hkir.scalars}
-        captured = captured_parameter_names(hkir, abi, node.args)
-        binding = HelperBinding(pinned=dict(pinned))
-        bound_to: dict[str, list[str]] = {}
-        for pname, arg in zip(abi, node.args):
-            # A bare Name only: the helper's name stands for THIS extent, and an expression is not
-            # one the helper has a name for.
-            if pname not in own or not isinstance(arg, ast.Name):
-                continue
-            if arg.id in pinned:
-                binding.constants[pname] = pinned[arg.id]
-            elif arg.id in own:
-                bound_to.setdefault(arg.id, []).append(pname)
-        for caller_name, names in bound_to.items():
-            # A CAPTURED name cannot be the one kept: the descriptors already spell the caller's
-            # quantity with it, so keeping it would leave one symbol standing for two extents.
-            usable = [pname for pname in names if pname not in captured] or names
-            binding.aliases[caller_name] = usable[0]
-            for pname in names:
-                if pname != usable[0]:
-                    binding.collapse[pname] = usable[0]
-        # A SCALAR parameter handed the very caller symbol one of the helper's own symbols already
-        # stands for is that symbol under a second name. ``_conv_transpose2d`` takes ``stride`` by
-        # value while its return descriptor spells the same quantity ``conv_transpose_stride``, so
-        # the body mints ``oh`` from a runtime scalar while the out-param is declared from a
-        # symbol, and dace refuses the write between two extents it cannot relate. The symbol is
-        # the canonical one -- a runtime scalar cannot size a dace descriptor at all.
-        #
-        # ONE call site, because respelling a SHAPE costs nothing at a second site (dace re-solves a
-        # declared extent per call) while retiring a runtime scalar spends the value that site would
-        # have passed. A symbol the descriptors state OUTRIGHT is no exception, though it was read
-        # as one: the reading was that dace solves such a symbol from the argument while the body's
-        # own name rides along as a keyword, so both are bound -- but BOUND IS NOT EQUAL, and
-        # ``_scale`` declared ``[N]`` over a body allocating ``np.empty(n)`` had its closing write
-        # refused ("could not broadcast input array from shape [n] into shape [N]").
-        for pname, arg in zip(abi, node.args if sites == 1 else []):
-            if pname not in scalar_names or not isinstance(arg, ast.Name):
-                continue
-            canonical = binding.aliases.get(arg.id, arg.id if arg.id in own else None)
-            if canonical is not None and canonical != pname:
-                binding.collapse[pname] = canonical
-        for pname in captured:
-            if pname in binding.collapse:
-                continue  # respelled onto a name the descriptors do not already spell
-            if pname in binding.constants and pinned.get(pname) == binding.constants[pname]:
-                continue  # both spellings are the same pinned knob, so one value serves both
-            if common_frontend.HELPERS_KEPT_DISABLED:
-                # The inlined form is where a refusal would have LANDED, and this helper is still
-                # here: it resisted inlining, so refusing again only loses the kernel. Emit what
-                # the emitter emitted before the capture was recognised.
-                continue
-            raise NotImplementedError(
-                f"helper {hkir.kernel_name!r} takes {pname!r}, which its own descriptors already "
-                f"spell for the caller's {pname!r}; one dc.symbol cannot carry both extents, so "
-                f"the helper must be inlined into its caller"
-            )
-        # Scalars too, not only symbols: an extent the CALL SITE computes arrives as an integer
-        # scalar parameter (``c_out_per_group``) and only becomes a dc.symbol later, when
-        # render_program sees it size an array.
-        extents = own | scalar_names
-        ambiguous: set[str] = set()
-        for pname, arg in zip(abi, node.args):
-            if pname not in extents or pname in binding.constants or pname in binding.collapse:
-                continue
-            # A bare Name is the caller's own local for the quantity, so its DEFINITION is the
-            # expression a descriptor would have been written with.
-            recipe = caller_side_recipe(owner, arg, pinned)
-            if not recipe:
-                continue
-            # A recipe that folds to ONE name the helper already holds is that name: with
-            # ``groups`` pinned to 1, ``c_out_per_group = out_channels // groups`` IS
-            # ``out_channels``, and keeping both leaves the body writing ``c_out_per_group``
-            # columns into a ``bias`` declared ``out_channels`` long.
-            if IDENT_RE.fullmatch(recipe) and recipe in own and recipe != pname:
-                binding.collapse[pname] = recipe
-            elif recipe in binding.expressions:
-                # TWO parameters computed the same way. Picking either respells an extent with a
-                # name the body may not use for it -- ``_maxpool3d``'s input width ``w`` was
-                # declared ``ow``, the POOLED width, because a pinned kernel size made the two
-                # recipes fold alike. An ambiguous key answers for neither.
-                ambiguous.add(recipe)
-            else:
-                binding.expressions[recipe] = pname
-        for recipe in ambiguous:
-            binding.expressions.pop(recipe, None)
-        # An alias of a name to ITSELF retires the parameter it names; it is only here so a second
-        # parameter bound to the same argument collapses onto it.
-        binding.aliases = {caller: own_name for caller, own_name in binding.aliases.items() if caller != own_name}
-        return binding
-    return HelperBinding()
+        canonical = binding.aliases.get(arg.id, arg.id if arg.id in own else None)
+        if canonical is not None and canonical != pname:
+            binding.collapse[pname] = canonical
+    refuse_captured_parameters(binding, captured, pinned, hkir.kernel_name)
+    # Scalars too, not only symbols: an extent the CALL SITE computes arrives as an integer
+    # scalar parameter (``c_out_per_group``) and only becomes a dc.symbol later, when
+    # render_program sees it size an array.
+    bind_caller_expressions(binding, owner, arguments, own, own | scalar_names, pinned)
+    # An alias of a name to ITSELF retires the parameter it names; it is only here so a second
+    # parameter bound to the same argument collapses onto it.
+    binding.aliases = {caller: own_name for caller, own_name in binding.aliases.items() if caller != own_name}
+    return binding
+
+
+def bind_symbol_arguments(
+    binding: HelperBinding,
+    arguments: list[tuple[str, ast.expr]],
+    own: set[str],
+    pinned: dict[str, PinnedValue],
+    captured: list[str],
+) -> None:
+    """Record the CONSTANTS, ALIASES and COLLAPSE of a call's bare-Name symbol arguments."""
+    bound_to: dict[str, list[str]] = {}
+    for pname, arg in arguments:
+        # A bare Name only: the helper's name stands for THIS extent, and an expression is not
+        # one the helper has a name for.
+        if pname not in own or not isinstance(arg, ast.Name):
+            continue
+        if arg.id in pinned:
+            binding.constants[pname] = pinned[arg.id]
+        elif arg.id in own:
+            bound_to.setdefault(arg.id, []).append(pname)
+    for caller_name, names in bound_to.items():
+        # A CAPTURED name cannot be the one kept: the descriptors already spell the caller's
+        # quantity with it, so keeping it would leave one symbol standing for two extents.
+        usable = [pname for pname in names if pname not in captured] or names
+        binding.aliases[caller_name] = usable[0]
+        for pname in names:
+            if pname != usable[0]:
+                binding.collapse[pname] = usable[0]
+
+
+def refuse_captured_parameters(
+    binding: HelperBinding, captured: list[str], pinned: dict[str, PinnedValue], helper_name: str
+) -> None:
+    """Refuse a captured parameter the binding neither respells nor pins to the same knob."""
+    for pname in captured:
+        if pname in binding.collapse:
+            continue  # respelled onto a name the descriptors do not already spell
+        if pname in binding.constants and pinned.get(pname) == binding.constants[pname]:
+            continue  # both spellings are the same pinned knob, so one value serves both
+        if common_frontend.HELPERS_KEPT_DISABLED:
+            # The inlined form is where a refusal would land, and this helper is still here: it
+            # resisted inlining, so refusing again only loses the kernel. It is emitted unrespelled.
+            continue
+        raise NotImplementedError(
+            f"helper {helper_name!r} takes {pname!r}, which its own descriptors already "
+            f"spell for the caller's {pname!r}; one dc.symbol cannot carry both extents, so "
+            f"the helper must be inlined into its caller"
+        )
+
+
+def bind_caller_expressions(
+    binding: HelperBinding,
+    owner: ast.FunctionDef,
+    arguments: list[tuple[str, ast.expr]],
+    own: set[str],
+    extents: set[str],
+    pinned: dict[str, PinnedValue],
+) -> None:
+    """Record the EXPRESSIONS (and recipe COLLAPSE) of a call's extent arguments."""
+    ambiguous: set[str] = set()
+    for pname, arg in arguments:
+        if pname not in extents or pname in binding.constants or pname in binding.collapse:
+            continue
+        # A bare Name is the caller's own local for the quantity, so its DEFINITION is the
+        # expression a descriptor would have been written with.
+        recipe = caller_side_recipe(owner, arg, pinned)
+        if not recipe:
+            continue
+        # A recipe that folds to ONE name the helper already holds is that name: with
+        # ``groups`` pinned to 1, ``c_out_per_group = out_channels // groups`` IS
+        # ``out_channels``, and keeping both leaves the body writing ``c_out_per_group``
+        # columns into a ``bias`` declared ``out_channels`` long.
+        if IDENT_RE.fullmatch(recipe) and recipe in own and recipe != pname:
+            binding.collapse[pname] = recipe
+        elif recipe in binding.expressions:
+            # TWO parameters computed the same way. Picking either respells an extent with a
+            # name the body may not use for it (a pooled width for the input width, when a
+            # pinned kernel size makes the two recipes fold alike). An ambiguous key answers
+            # for neither.
+            ambiguous.add(recipe)
+        else:
+            binding.expressions[recipe] = pname
+    for recipe in ambiguous:
+        binding.expressions.pop(recipe, None)
 
 
 def transitive_rename(mapping: dict[str, str]) -> dict[str, str]:
@@ -5254,6 +5408,32 @@ def output_write_extents(
     return pairs
 
 
+def symbol_declarations(kir: KernelIR, helpers: list[KernelIR], symbol_names: list[str]) -> list[str]:
+    """One ``dc.symbol`` declaration per symbol of the module's programs."""
+    decls: list[str] = []
+    # dtype and sign are per-symbol facts. The assumption reaches sympy through
+    # dace.symbol's ``**assumptions`` and decides comparisons the solver would otherwise
+    # leave symbolic -- so only what is proven is declared, never what is merely likely.
+    desc_of = {s.name: s for s in kir.symbols}
+    for helper in helpers:
+        desc_of.update({s.name: s for s in helper.symbols if s.name not in desc_of})
+    # Re-derived rather than read off the descriptor: render_program's promotions append
+    # emit-local names no :func:`stamp_symbol_assumptions` pass has seen.
+    dims = shape_dimension_symbols([*kir.arrays, *(a for h in helpers for a in h.arrays)])
+    signs = dict(kir.symbol_signs)
+    for helper in helpers:
+        signs.update({n: v for n, v in helper.symbol_signs.items() if n not in signs})
+    for sym_name in symbol_names:
+        desc = desc_of.get(sym_name)
+        dtype = dace_dtype(desc.dtype) if desc else "dc.int64"
+        # A promoted scalar has no descriptor; its sign comes from the manifest binding
+        # the frontend carried over (``conv_padding: 0`` -> nonnegative).
+        sign = "positive" if sym_name in dims else (desc.assumption if desc else signs.get(sym_name, ""))
+        assumption = f", {sign}=True" if sign else ""
+        decls.append(f"{sym_name} = dc.symbol('{sym_name}', dtype={dtype}{assumption})")
+    return decls
+
+
 def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     """Return the source of a ``<short>_dace.py`` module for ``kir``.
 
@@ -5303,31 +5483,11 @@ def emit_dace(kir: KernelIR, fn_name: str | None = None) -> str:
     for rendered in programs:
         symbol_names.extend(n for n in rendered.symbol_names if n not in symbol_names)
     if symbol_names:
-        # One declaration per symbol: dtype and sign are per-symbol facts the generator spelling
-        # this replaced could carry neither of. The assumption reaches sympy through
-        # dace.symbol's ``**assumptions`` and decides comparisons the solver would otherwise
-        # leave symbolic -- so only what is proven is declared, never what is merely likely.
-        desc_of = {s.name: s for s in kir.symbols}
-        for helper, unused in helpers:
-            desc_of.update({s.name: s for s in helper.symbols if s.name not in desc_of})
-        # Re-derived rather than read off the descriptor: the promotions above append emit-local
-        # names no :func:`stamp_symbol_assumptions` pass has seen.
-        dims = shape_dimension_symbols([*kir.arrays, *(a for h, unused in helpers for a in h.arrays)])
-        signs = dict(kir.symbol_signs)
-        for helper, unused in helpers:
-            signs.update({n: v for n, v in helper.symbol_signs.items() if n not in signs})
-        for sym_name in symbol_names:
-            desc = desc_of.get(sym_name)
-            dtype = dace_dtype(desc.dtype) if desc else "dc.int64"
-            # A promoted scalar has no descriptor; its sign comes from the manifest binding
-            # the frontend carried over (``conv_padding: 0`` -> nonnegative).
-            sign = "positive" if sym_name in dims else (desc.assumption if desc else signs.get(sym_name, ""))
-            assumption = f", {sign}=True" if sign else ""
-            out.append(f"{sym_name} = dc.symbol('{sym_name}', dtype={dtype}{assumption})")
+        out += symbol_declarations(kir, [helper for helper, unused in helpers], symbol_names)
         out.append("")
     if main.symbol_defs:
         # Per-dimension binding recipe: caller evaluates these in order at call time. See
-        # sparse_oracle._run_dace. The KERNEL's alone -- a helper's extents come from the shapes
+        # sparse_oracle.run_dace. The KERNEL's alone -- a helper's extents come from the shapes
         # its call site passes, which dace resolves without the caller knowing they exist.
         out.append(f"__hpcagent_bench_symbol_defs__ = {main.symbol_defs!r}")
         out.append("")

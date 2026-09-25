@@ -6,7 +6,7 @@ from hpcagent_bench.translators.numpyto_common.ir import KernelIR, SparseArrayDe
 
 #: A CSR matrix's buffers ARE its transpose's CSC buffers, and back -- so ``A.T @ x`` needs the dual
 #: format name over the SAME buffers, never a second loop nest. Same relabelling the C path applies
-#: in ``lib_nodes._transpose_sparse_desc``.
+#: in ``lib_nodes.matmul_hoist.transpose_sparse_desc``.
 TRANSPOSE_DUAL_FORMAT = {"csr": "csc", "csc": "csr"}
 
 
