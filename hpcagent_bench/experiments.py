@@ -30,6 +30,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from hpcagent_bench import experiment_tags, frozen_observations
+from hpcagent_bench.stats import population
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -290,8 +291,9 @@ def read_table(path: pathlib.Path, table: str) -> "pd.DataFrame":
         return pd.read_sql_query(f"SELECT * FROM {table} ORDER BY rowid", conn)
 
 
-def read_observations(path: pathlib.Path) -> "pd.DataFrame":
-    """An observations table from its CSV, or from an extracted experiment ``.db``.
+def read_observations(path: pathlib.Path, platform: str = population.DEFAULT_PLATFORM) -> "pd.DataFrame":
+    """An observations table from its CSV, or from an extracted experiment ``.db``, cut to the rows
+    timed on ``platform`` (:func:`hpcagent_bench.stats.population.on_platform`; MI300A by default).
 
     Every figure and table reads through here, so a plot is a function of the committed file alone
     and the reproducibility artifact can ship one database per experiment instead of a CSV.
@@ -305,7 +307,9 @@ def read_observations(path: pathlib.Path) -> "pd.DataFrame":
         frame = pd.read_csv(path, low_memory=False)
     else:
         frame = read_table(path, OBSERVATIONS_TABLE)
-    frame = fill_arm_identity(drop_adhoc_rows(frame))
+    # first: a re-timing on another machine shares its answer's key, so every rule below would read
+    # it as a resubmission of that answer
+    frame = fill_arm_identity(drop_adhoc_rows(population.on_platform(frame, platform)))
     for rule in (
         fold_renamed_arms,
         drop_foreign_kernel_rows,

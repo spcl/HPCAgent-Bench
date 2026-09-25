@@ -35,7 +35,7 @@ import pathlib
 import random
 import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 
 import matplotlib.figure
 import matplotlib.pyplot as plt
@@ -279,6 +279,16 @@ SUMMARY_COLUMNS: tuple[str, ...] = (
 )
 
 
+#: The signed figure's mark and line sizes, in points: a cloud kernel's AREA and its key entry's
+#: size, the geomean mark, its interval's weight and cap, and the median tick and zero line.
+CLOUD_MARK_AREA: float = 11.0
+CLOUD_KEY_MARK_PT: float = 3.5
+GEOMEAN_MARK_PT: float = 5.5
+INTERVAL_LINE_WIDTH: float = 1.1
+INTERVAL_CAP_PT: float = 3.5
+RULE_LINE_WIDTH: float = 1.0
+
+
 def draw_row(ax: Axes, index: int, row: Row, color: str, jitter: random.Random) -> None:
     """One arm's cloud of kernels, its geomean with interval, and its median tick.
 
@@ -293,7 +303,7 @@ def draw_row(ax: Axes, index: int, row: Row, color: str, jitter: random.Random) 
     ax.scatter(  # pyright: ignore[reportUnknownMemberType]
         [signed_change(v) for v in values.tolist()],
         [index - 0.22 + jitter.uniform(-0.10, 0.10) for _ in range(values.size)],
-        s=11,
+        s=CLOUD_MARK_AREA,
         color=color,
         alpha=0.45,
         linewidth=0,
@@ -306,16 +316,16 @@ def draw_row(ax: Axes, index: int, row: Row, color: str, jitter: random.Random) 
         index + 0.24,
         xerr=[[centre - signed_change(interval.low)], [signed_change(interval.high) - centre]],
         fmt="o",
-        markersize=5.5,
+        markersize=GEOMEAN_MARK_PT,
         color=color,
         ecolor=style.REFERENCE,
-        elinewidth=1.1,
-        capsize=3.5,
+        elinewidth=INTERVAL_LINE_WIDTH,
+        capsize=INTERVAL_CAP_PT,
         zorder=4,
     )
     middle = signed_change(float(np.median(values)))
     ax.plot(  # pyright: ignore[reportUnknownMemberType]
-        [middle, middle], [index + 0.10, index + 0.38], color=style.INK, linewidth=1.0, zorder=3
+        [middle, middle], [index + 0.10, index + 0.38], color=style.INK, linewidth=RULE_LINE_WIDTH, zorder=3
     )
     style.right_label(ax, index, f"n={values.size}")
 
@@ -334,13 +344,15 @@ def draw(rows: Sequence[Row], title: str, xlabel: str, stem: pathlib.Path) -> pa
     colors = palette.framework_colors([row.framework for row in rows])
     for index, row in enumerate(rows):
         draw_row(ax, index, row, colors[row.framework], jitter)
-    ax.axvline(0.0, color=style.REFERENCE, linewidth=1.0, zorder=1)  # pyright: ignore[reportUnknownMemberType]
+    ax.axvline(  # pyright: ignore[reportUnknownMemberType]
+        0.0, color=style.REFERENCE, linewidth=RULE_LINE_WIDTH, zorder=1
+    )
     ax.margins(x=0.08)
     style.value_axis(ax, axis="x")
     handles: list[Line2D] = [
-        Line2D([], [], marker="o", linestyle="none", color=style.MUTED, markersize=3.5, alpha=0.5),
-        Line2D([], [], marker="o", linestyle="none", color=style.MUTED, markersize=5.5),
-        Line2D([], [], color=style.INK, linewidth=1.0),
+        Line2D([], [], marker="o", linestyle="none", color=style.MUTED, markersize=CLOUD_KEY_MARK_PT, alpha=0.5),
+        Line2D([], [], marker="o", linestyle="none", color=style.MUTED, markersize=GEOMEAN_MARK_PT),
+        Line2D([], [], color=style.INK, linewidth=RULE_LINE_WIDTH),
     ]
     for handle, label in zip(handles, ("One Kernel", f"Geomean, {DEFAULT_CONFIDENCE:.0%} t-Interval", "Median")):
         handle.set_label(label)
@@ -426,7 +438,7 @@ LLR40_CONDITIONS: tuple[str, ...] = ("cpf", "cpfsrc")
 
 #: Column order of the emitted token summary table.
 TOKEN_SUMMARY_COLUMNS: tuple[str, ...] = (
-    "row", "framework", "n", "median_tokens", "median_tokens_low", "median_tokens_high",
+    "row", "framework", "n", "gm_tokens", "gm_tokens_low", "gm_tokens_high",
 )  # fmt: skip
 
 
@@ -465,31 +477,37 @@ def canon_kernel_row(
     substituted = substituted & set(roster)
     base, cur = times.get(baseline, {}), times.get(column, {})
     kernels = sorted(roster)
-    ratios, delivered = canon.roster_speedups(times, baseline, column, kernels)
-    pending: frozenset[str] = frozenset()
-    if mark_pending:
-        status = canon.read_status(canon_frame)
-        base_run = status.get(baseline, {}).keys() | (
-            status.get(baseline_fallback, {}).keys() if baseline_fallback else set()
-        )
-        attempted = status.get(column, {}).keys() & base_run
-        pending = frozenset(k for k in kernels if k not in attempted)
-        ratios = {k: v for k, v in ratios.items() if k not in pending}
-        delivered = {k: v for k, v in delivered.items() if k not in pending}
+    pending = (
+        unattempted_kernels(canon_frame, column, kernels, baseline, baseline_fallback) if mark_pending else frozenset()
+    )
+    ratios, delivered = canon.roster_speedups(times, baseline, column, [k for k in kernels if k not in pending])
     nan = math.nan
     numerator_ms = {k: base.get(k, nan) for k in ratios}
     denominator_ms = {k: cur.get(k, nan) for k in ratios}
-    optimizer = experiment_tags.canonical("optimizers", column)
-    standalone = experiment_tags.names("optimizers")
-    label = (
-        standalone[optimizer] if optimizer in standalone else experiment_tags.names("frameworks").get(column, column)
-    )
+    notes = [note for note in (pending_note(pending), fallback_note(substituted, baseline_fallback)) if note != "none"]
     return Row(
-        column, label, ratios, numerator_ms, denominator_ms,
-        "; ".join(note for note in (pending_note(pending), fallback_note(substituted, baseline_fallback)) if note != "none")
-        or "none",
+        column, canon_label(column), ratios, numerator_ms, denominator_ms, "; ".join(notes) or "none",
         palette.framework_color(column), palette.marker(column), delivered=delivered, pending=pending,
     )  # fmt: skip
+
+
+def unattempted_kernels(
+    canon_frame: pd.DataFrame, column: str, kernels: Sequence[str], baseline: str, baseline_fallback: str
+) -> frozenset[str]:
+    """The ``kernels`` with no canon row yet for ``column`` or for ``baseline`` (or its fallback)."""
+    status = canon.read_status(canon_frame)
+    base_run = status.get(baseline, {}).keys() | (
+        status.get(baseline_fallback, {}).keys() if baseline_fallback else set()
+    )
+    attempted = status.get(column, {}).keys() & base_run
+    return frozenset(k for k in kernels if k not in attempted)
+
+
+def canon_label(column: str) -> str:
+    """A canon column's legend label: its optimizer's standalone name, else its framework name."""
+    optimizer = experiment_tags.canonical("optimizers", column)
+    standalone = experiment_tags.names("optimizers")
+    return standalone[optimizer] if optimizer in standalone else experiment_tags.names("frameworks").get(column, column)
 
 
 def fallback_note(substituted: frozenset[str], fallback: str) -> str:
@@ -534,38 +552,11 @@ def agent_kernel_row(
     behind the ratio), plus each kernel's OWN confidence interval over every graded episode that
     kernel ran (rules 5/7) -- the geomean of that kernel's repetitions, degenerate to a point below
     two samples (:func:`~hpcagent_bench.stats.summary.geomean_ci`)."""
-    subset = frame[frame["arm"].astype(str) == arm]
+    subset = frame.loc[frame["arm"].astype(str) == arm]
     answers = population.kernel_answers(subset, repeats=repeats, policy="solved")
     kernels = set(roster)
-    ratios: dict[str, float] = {}
-    numerator_ms: dict[str, float] = {}
-    denominator_ms: dict[str, float] = {}
-    if "speedup" in answers.columns:
-        for kernel, row in answers.iterrows():
-            kernel = str(kernel)
-            if kernel not in kernels:
-                continue
-            speedup = float(row["speedup"])
-            if not math.isfinite(speedup) or speedup <= 0.0:
-                continue
-            ratios[kernel] = speedup
-            numerator_ms[kernel] = float(row["baseline_ns"]) / 1.0e6
-            denominator_ms[kernel] = float(row["native_ns"]) / 1.0e6
-    ratios_low: dict[str, float] = {}
-    ratios_high: dict[str, float] = {}
-    graded = subset[subset["record"] == "submission"] if "record" in subset.columns else subset
-    episodes = population.graded_episode_rows(graded, population.SUBMISSION_ORDER)
-    if not episodes.empty:
-        for kernel, group in episodes.groupby("benchmark"):
-            kernel = str(kernel)
-            if kernel not in ratios:
-                continue
-            values = usable_ratios(group["speedup"].tolist(), label=f"{arm}@{kernel}")
-            if values.size == 0:
-                continue
-            interval = geomean_ci(values)
-            ratios_low[kernel] = interval.low
-            ratios_high[kernel] = interval.high
+    ratios, numerator_ms, denominator_ms = answer_ratios(answers, kernels)
+    ratios_low, ratios_high = kernel_intervals(subset, ratios.keys(), arm)
     raw_tokens, tokens_low, tokens_high = kernel_comparison.arm_tokens(subset, arm, repeats)
     del tokens_low, tokens_high  # under "latest" both are empty; a repeat's own range is not this figure's concern
     tokens = {k: v for k, v in raw_tokens.items() if k in kernels}
@@ -574,6 +565,49 @@ def agent_kernel_row(
         arm, label, ratios, numerator_ms, denominator_ms, pending_note(pending),
         palette.color(condition), palette.marker(model), ratios_low, ratios_high, tokens, pending=pending,
     )  # fmt: skip
+
+
+def answer_ratios(
+    answers: pd.DataFrame, kernels: set[str]
+) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    """Each ``kernels`` answer's positive finite speedup, with its baseline and native times in ms."""
+    ratios: dict[str, float] = {}
+    numerator_ms: dict[str, float] = {}
+    denominator_ms: dict[str, float] = {}
+    if "speedup" not in answers.columns:
+        return ratios, numerator_ms, denominator_ms
+    columns = zip(answers.index, answers["speedup"], answers["baseline_ns"], answers["native_ns"], strict=True)
+    for name, speedup, baseline_ns, native_ns in columns:
+        kernel = str(name)
+        if kernel not in kernels or not per_kernel.usable(float(speedup)):
+            continue
+        ratios[kernel] = float(speedup)
+        numerator_ms[kernel] = float(baseline_ns) / 1.0e6
+        denominator_ms[kernel] = float(native_ns) / 1.0e6
+    return ratios, numerator_ms, denominator_ms
+
+
+def kernel_intervals(
+    subset: pd.DataFrame, kernels: Collection[str], arm: str
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Each of ``kernels``' geomean-speedup CI over every graded episode of ``arm``, as (low, high)."""
+    ratios_low: dict[str, float] = {}
+    ratios_high: dict[str, float] = {}
+    graded = subset.loc[subset["record"] == "submission"] if "record" in subset.columns else subset
+    episodes = population.graded_episode_rows(graded, population.SUBMISSION_ORDER)
+    if episodes.empty:
+        return ratios_low, ratios_high
+    for kernel, group in episodes.groupby("benchmark"):
+        kernel = str(kernel)
+        if kernel not in kernels:
+            continue
+        values = usable_ratios(group["speedup"].tolist(), label=f"{arm}@{kernel}")
+        if values.size == 0:
+            continue
+        interval = geomean_ci(values)
+        ratios_low[kernel] = interval.low
+        ratios_high[kernel] = interval.high
+    return ratios_low, ratios_high
 
 
 def llr40_rows(
@@ -703,8 +737,8 @@ def llr40_figure(
     """The llr-focus40 compiler figure: DaCe's own canon-sweep columns and every model's CPF arm on
     ONE kernel axis, a speed-up panel (log2, ratio-labelled ticks) over a tokens-spent panel when
     any row spends tokens (:func:`llr40_metrics`), each with per_kernel's summary column past a
-    dashed separator -- one slot per row, the geomean with its 95% interval for speed-up and the
-    median for tokens, over the kernels the row solved, value printed.
+    dashed separator -- one slot per row, the geomean with its 95% interval on both panels, over
+    the kernels the row solved, value printed.
 
     Drawn by :func:`per_kernel.figure_panels` at the size it prints (text width,
     :data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH`, print type) with the kernels' short
@@ -729,17 +763,16 @@ def llr40_figure(
 
 
 def token_summary_table(rows: Sequence[Row]) -> pd.DataFrame:
-    """Each token-spending row's MEDIAN spend over the kernels it was served and has a task total
-    for, with the bootstrap interval the figure's token summary slot draws
-    (:func:`per_kernel.summary_point_tokens` over the same cells): tokens are not a ratio, so the
-    geomean rule does not apply to them. The interval is blank under
-    :data:`~hpcagent_bench.stats.summary.MIN_INTERVAL_SAMPLES` kernels, and a table where EVERY row
-    is that thin fails Rule 5 (:func:`hpcagent_bench.stats.rules.require_interval`). A row that
-    spends no tokens (a canon column) is ABSENT, never entered at zero."""
+    """Each token-spending row's GEOMEAN spend over the kernels it was served and has a task total
+    for, with the 95% log-t interval the figure's token summary slot draws
+    (:func:`per_kernel.summary_geomean` over the same cells). The interval is blank under
+    ``summary.MIN_PAIRS_FOR_INTERVAL`` kernels, and a table where EVERY row is that thin fails Rule 5
+    (:func:`hpcagent_bench.stats.rules.require_interval`). A row that spends no tokens (a canon
+    column) is ABSENT, never entered at zero."""
     records: list[dict[str, object]] = []
     for row in rows:
         cells = per_kernel.kernel_cells(row.tokens, sorted(row.tokens), fill=False)
-        point, low, high = per_kernel.summary_point_tokens(cells)
+        point, low, high = per_kernel.summary_geomean(cells)
         if not math.isfinite(point):
             continue
         records.append(
@@ -747,13 +780,13 @@ def token_summary_table(rows: Sequence[Row]) -> pd.DataFrame:
                 "row": row.label,
                 "framework": row.framework,
                 "n": len(per_kernel.kernel_medians(cells)),
-                "median_tokens": point,
-                "median_tokens_low": low,
-                "median_tokens_high": high,
+                "gm_tokens": point,
+                "gm_tokens_low": low,
+                "gm_tokens_high": high,
             }
         )
     frame = pd.DataFrame.from_records(records, columns=TOKEN_SUMMARY_COLUMNS)
-    return rules.require_interval(frame, "median_tokens", "median_tokens_low", "median_tokens_high")
+    return rules.require_interval(frame, "gm_tokens", "gm_tokens_low", "gm_tokens_high")
 
 
 def llr40_two_row_figure(

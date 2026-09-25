@@ -182,3 +182,10 @@ def test_segment_counts_sum_to_the_aggregate_total() -> None:
     seg = plot_parallelism.segment_counts(agg)
     assert seg == {"parallel": 1, "scan": 2, "timestep": 3, "residual": 4}
     assert sum(seg.values()) == agg["total"]
+
+
+def test_rotated_labels_in_measures_the_longest_label_and_keeps_a_margin_when_there_is_none() -> None:
+    from hpcagent_bench.stats.figures.helpers.axes import rotated_labels_in
+
+    assert rotated_labels_in(["ab", "abcd"], 12.0) == pytest.approx(4 * 12.0 * 0.6 / 72.0)
+    assert rotated_labels_in([], 12.0) == rotated_labels_in(["x" * 8], 12.0) > 0.0

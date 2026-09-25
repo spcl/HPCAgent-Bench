@@ -46,9 +46,8 @@ carries the series' overall value with its interval and prints the value (tagged
 :data:`~hpcagent_bench.stats.style.CLEAR_GID`, settled clear of the marks at save), over the
 SOLVED kernels only (:func:`kernel_medians`): an undelivered placeholder's 1x and a disowned claim
 are drawn, but neither is a measured speed-up. Speed-up is a ratio, so its overall
-value is the GEOMETRIC MEAN (:func:`summary_point_speedup`) -- never a median, which equals the
-geomean only when the values happen to be symmetric; tokens are not a ratio, so theirs is the
-median (:func:`summary_point_tokens`). The statistic is named ABOVE the panel, never as an x tick,
+value is the GEOMETRIC MEAN (:func:`summary_geomean`) -- never a median, which equals the
+geomean only when the values happen to be symmetric; tokens take the same geomean (paper rule). The statistic is named ABOVE the panel, never as an x tick,
 which a stacked figure's shared axis would hand to the wrong panel (:func:`draw_summary_column`).
 
 THE CANVAS IS MEASURED (:func:`fit_canvas`): the left margin from the Y labels, the top band and
@@ -56,8 +55,9 @@ the stack gap from what each panel prints above its frame, the bottom band from 
 names (first stepped down to the pitch) plus the key under them. A fixed band is right for one
 width and one label length; on any other it wastes the page or prints the key over the names. A
 figure is drawn at :data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH` at authoring size
-(:data:`AUTHOR_TYPE`), at a stated ``width_in`` at print size (:data:`PRINT_TYPE`), or as wide as
-a stated kernel pitch needs (:func:`roomy_pitch_in`); each panel is :data:`PANEL_HEIGHT_IN` tall.
+(:data:`AUTHOR_TYPE`), at a stated ``width_in`` at print size
+(:data:`~hpcagent_bench.stats.style.PRINT_SCALE`), or as wide as a stated kernel pitch needs
+(:func:`roomy_pitch_in`); each panel is :data:`PANEL_HEIGHT_IN` tall.
 """
 
 import dataclasses
@@ -96,36 +96,36 @@ PANEL_HEIGHT_IN: float = 1.8
 PRINT_PANEL_HEIGHT_IN: float = 1.12
 
 
-@dataclasses.dataclass(frozen=True, slots=True)
-class PanelType:
-    """A per-kernel figure's type sizes, in points."""
-
-    tick_pt: float
-    label_pt: float
-    #: The kernel names' starting size: :func:`fit_canvas` steps them down to the column pitch.
-    name_pt: float
-    legend_pt: float
-
-
-#: Authoring sizes, for a figure drawn at the double-column width and scaled when it is placed.
-AUTHOR_TYPE = PanelType(
-    plotstyle.TICK_PT * 0.55, plotstyle.LABEL_PT * 0.72, plotstyle.TICK_PT * 0.5, plotstyle.TICK_PT * 0.5
-)
-#: Print sizes, for a figure drawn at the width it is placed at: the tick and label sizes every paper
-#: figure starts from (:data:`hpcagent_bench.stats.style.PRINT_TICK_PT`), the key at tick size.
-PRINT_TYPE = PanelType(
-    plotstyle.PRINT_TICK_PT, plotstyle.PRINT_LABEL_PT, plotstyle.PRINT_TICK_PT, plotstyle.PRINT_LEGEND_PT
+#: Authoring sizes, for a figure drawn at the double-column width and placed near scale 1.0: the
+#: authoring scale's type cut to about half, kernel names and key at half its tick size, print weights.
+AUTHOR_TYPE: plotstyle.TypeScale = dataclasses.replace(
+    plotstyle.AUTHOR_SCALE,
+    tick_pt=plotstyle.AUTHOR_SCALE.tick_pt * 0.55,
+    label_pt=plotstyle.AUTHOR_SCALE.label_pt * 0.72,
+    legend_pt=plotstyle.AUTHOR_SCALE.tick_pt * 0.5,
+    annotation_pt=plotstyle.AUTHOR_SCALE.tick_pt * 0.5,
+    line_width=plotstyle.PRINT_SCALE.line_width,
 )
 
-#: How far the kernel names may shrink below ``name_pt`` to fit the column pitch.
+#: How far the kernel names may shrink below their starting ``annotation_pt`` to fit the column pitch.
 MIN_NAME_SCALE: float = 0.6
 
 
-def min_text_pt(type_: PanelType, size: float) -> float:
+def min_text_pt(type_: plotstyle.TypeScale, size: float) -> float:
     """The smallest a fitted text of ``size`` may get: the shared print floor at print size, where
     every figure of a page must agree, and :data:`MIN_NAME_SCALE` of it at authoring size."""
-    return plotstyle.PRINT_MIN_PT if type_ == PRINT_TYPE else size * MIN_NAME_SCALE
+    return plotstyle.PRINT_MIN_PT if type_ == plotstyle.PRINT_SCALE else size * MIN_NAME_SCALE
 
+
+#: Line weights in points beside the scale's own ``line_width`` (kernel intervals, box medians, the
+#: summary separator): the 1x reference, the major grid, a box's outline, a summary's interval, and
+#: the edges of the undelivered key cross and of a flagged mark.
+REFERENCE_LINE_WIDTH: float = 0.9
+GRID_LINE_WIDTH: float = 0.7
+BOX_LINE_WIDTH: float = 0.6
+SUMMARY_LINE_WIDTH: float = 1.3
+CROSS_EDGE_WIDTH: float = 1.2
+FLAGGED_EDGE_WIDTH: float = 1.4
 
 #: Air between the canvas edge and the chrome :func:`fit_canvas` measures, in inches.
 CHROME_PAD_IN: float = 0.04
@@ -171,6 +171,11 @@ def usable(value: float) -> bool:
     return math.isfinite(value) and value > 0.0
 
 
+def kernel_interval(low: float, high: float) -> tuple[float, float] | None:
+    """``(low, high)`` when both ends are usable and ``low < high``, else no interval."""
+    return (low, high) if usable(low) and usable(high) and low < high else None
+
+
 def kernel_cells(
     values: Mapping[str, float],
     kernels: Sequence[str],
@@ -198,8 +203,7 @@ def kernel_cells(
         if kernel in pending:
             cells.append(KernelCell(kernel, (population.NOT_DELIVERED,), delivered=False, pending=True))
         elif usable(value):
-            ends = (low.get(kernel, math.nan), high.get(kernel, math.nan))
-            interval = ends if usable(ends[0]) and usable(ends[1]) and ends[0] < ends[1] else None
+            interval = kernel_interval(low.get(kernel, math.nan), high.get(kernel, math.nan))
             cells.append(KernelCell(kernel, (float(value),), delivered.get(kernel, True), interval=interval))
         elif fill:
             cells.append(KernelCell(kernel, (population.NOT_DELIVERED,), delivered=False))
@@ -313,33 +317,12 @@ def kernel_medians(cells: Sequence[KernelCell]) -> np.ndarray:
     )
 
 
-def summary_point_speedup(cells: Sequence[KernelCell]) -> tuple[float, float, float]:
-    """``(geomean, low, high)`` over the plotted kernels' own median speed-ups.
-
-    Speed-up is a ratio, so its OVERALL value is the geometric mean
-    (:func:`hpcagent_bench.stats.summary.geomean_ci`) -- never a median, which equals the geomean
-    only when the per-kernel values happen to be symmetric. The same rule
-    :func:`hpcagent_bench.stats.population.kernel_medians` reports an arm's speed-up under.
-    """
-    medians = kernel_medians(cells)
-    medians = medians[medians > 0.0]
-    if medians.size == 0:
-        return math.nan, math.nan, math.nan
-    interval = summary.geomean_ci(medians)
+def summary_geomean(cells: Sequence[KernelCell]) -> tuple[float, float, float]:
+    """``(geomean, low, high)`` over the plotted kernels' own medians, speed-up and tokens alike: the
+    geometric mean with its 95% log-t interval (:func:`hpcagent_bench.stats.summary.geomean_interval`),
+    as :func:`hpcagent_bench.stats.population.kernel_medians` reports an arm."""
+    interval = summary.geomean_interval(kernel_medians(cells))
     return interval.point, interval.low, interval.high
-
-
-def summary_point_tokens(cells: Sequence[KernelCell]) -> tuple[float, float, float]:
-    """``(median, low, high)`` over the plotted kernels' own median tokens.
-
-    Tokens are not a ratio, so the geomean rule above does not apply here: the summary column stays
-    the bootstrap median, same as every per-kernel token cell.
-    """
-    medians = kernel_medians(cells)
-    if medians.size == 0:
-        return math.nan, math.nan, math.nan
-    med, low, high, _ = summary.median_ci(medians, drop=False, warn=False, min_n=summary.MIN_INTERVAL_SAMPLES)
-    return med, low, high
 
 
 #: A metric's summary reducer: the plotted kernels' cells in, ``(point, low, high)`` out.
@@ -420,8 +403,8 @@ def style_speedup_axis(
     plotstyle.minor_ticks(ax.yaxis, "ratio")
     pad = 2.0**VALUE_PAD_OCTAVES
     ax.set_ylim(ticks[0] / pad, ticks[-1] * pad)
-    ax.axhline(1.0, color=reference_color, linewidth=0.9, zorder=1)
-    ax.grid(axis="y", which="major", color=plotstyle.RULE, linewidth=0.7, zorder=0)
+    ax.axhline(1.0, color=reference_color, linewidth=REFERENCE_LINE_WIDTH, zorder=1)
+    ax.grid(axis="y", which="major", color=plotstyle.RULE, linewidth=GRID_LINE_WIDTH, zorder=0)
     ax.set_axisbelow(True)
 
 
@@ -520,12 +503,16 @@ def roomy_pitch_in(n_series: int, span: float = DODGE_SPAN) -> float:
 #: the "connector under fill" order :func:`~hpcagent_bench.stats.style.point_mark` documents.
 INTERVAL_Z: float = 2.0
 
-#: The mark for a disowned answer, and the superscript that separates it from an unanswered one.
+#: The mark for a disowned answer, the superscript that separates it from an unanswered one, and the
+#: mark's size in points.
 FLAGGED_MARKER: str = "X"
 FLAGGED_ANNOTATION: str = "*"
+FLAGGED_MARK_PT: float = 5.0
 
 
-def draw_flagged(ax: matplotlib.axes.Axes, x: float, value: float, color: str) -> None:
+def draw_flagged(
+    ax: matplotlib.axes.Axes, x: float, value: float, color: str, annotation_pt: float = AUTHOR_TYPE.annotation_pt
+) -> None:
     """A disowned answer at the value it claimed: a filled cross carrying a ``*``.
 
     An unanswered kernel is already a crossed mark at 1x, so a reader who has learnt that mark reads
@@ -534,16 +521,18 @@ def draw_flagged(ax: matplotlib.axes.Axes, x: float, value: float, color: str) -
     observation.
     """
     ax.plot(
-        [x], [value], marker=FLAGGED_MARKER, markersize=5.0, markeredgewidth=1.4, color=color,
-        linestyle="none", zorder=4,
+        [x], [value], marker=FLAGGED_MARKER, markersize=FLAGGED_MARK_PT, markeredgewidth=FLAGGED_EDGE_WIDTH,
+        color=color, linestyle="none", zorder=4,
     )  # fmt: skip
     ax.annotate(
         FLAGGED_ANNOTATION, (x, value), textcoords="offset points", xytext=(3.5, 2.0), color=color,
-        fontsize=7.0, ha="left", va="bottom", zorder=4, annotation_clip=False,
+        fontsize=annotation_pt, ha="left", va="bottom", zorder=4, annotation_clip=False,
     )  # fmt: skip
 
 
-def draw_status(ax: matplotlib.axes.Axes, cell: KernelCell, x: float, one: Series, size: float) -> bool:
+def draw_status(
+    ax: matplotlib.axes.Axes, cell: KernelCell, x: float, one: Series, size: float, type_: plotstyle.TypeScale
+) -> bool:
     """Draw ``cell`` as the mark its status calls for (pending, undelivered, flagged) and say so; a
     measured cell is left to the caller's style. One place decides these marks, so the ``ci`` and
     the ``box`` style cannot disagree about what a failure looks like."""
@@ -552,7 +541,7 @@ def draw_status(ax: matplotlib.axes.Axes, cell: KernelCell, x: float, one: Serie
     elif not cell.delivered:
         plotstyle.point_mark(ax, x, cell.median(), one.color, one.marker, filled=False, size=size, delivered=False)
     elif cell.flagged:
-        draw_flagged(ax, x, cell.median(), one.color)
+        draw_flagged(ax, x, cell.median(), one.color, type_.annotation_pt)
     else:
         return False
     return True
@@ -565,6 +554,7 @@ def draw_ci(
     log2_space: bool,
     offset: float = 0.0,
     size: float = MARK_PT**2,
+    type_: plotstyle.TypeScale = AUTHOR_TYPE,
 ) -> None:
     """``one``'s cells over the kernels of ``x_of``: each measured cell a point with its interval
     (:func:`cell_point`), each other cell the mark its status calls for (:func:`draw_status`)."""
@@ -572,41 +562,56 @@ def draw_ci(
         if cell.kernel not in x_of:
             continue
         x = x_of[cell.kernel] + offset
-        if draw_status(ax, cell, x, one, size):
+        if draw_status(ax, cell, x, one, size, type_):
             continue
         point, low, high = cell_point(cell, log2_space)
         if math.isfinite(low) and math.isfinite(high) and low < high:
-            ax.vlines(x, low, high, color=one.color, linewidth=1.0, alpha=0.6, zorder=INTERVAL_Z)
+            ax.vlines(x, low, high, color=one.color, linewidth=type_.line_width, alpha=0.6, zorder=INTERVAL_Z)
         plotstyle.point_mark(ax, x, point, one.color, one.marker, one.filled, size=size)
 
 
-def draw_box(ax: matplotlib.axes.Axes, one: Series, x_of: Mapping[str, int], size: float = MARK_PT**2) -> None:
+def draw_box(
+    ax: matplotlib.axes.Axes,
+    one: Series,
+    x_of: Mapping[str, int],
+    size: float = MARK_PT**2,
+    type_: plotstyle.TypeScale = AUTHOR_TYPE,
+) -> None:
     """A real box for a kernel with :data:`MIN_EPISODES_FOR_SPREAD`+ episodes; a point otherwise --
     mixing the two in one panel is deliberate (see the module docstring)."""
     boxed: list[KernelCell] = []
     for cell in one.cells:
-        if cell.kernel not in x_of or draw_status(ax, cell, x_of[cell.kernel], one, size):
+        if cell.kernel not in x_of or draw_status(ax, cell, x_of[cell.kernel], one, size, type_):
             continue
         if cell.n >= MIN_EPISODES_FOR_SPREAD:
             boxed.append(cell)
         else:
             plotstyle.point_mark(ax, x_of[cell.kernel], cell.median(), one.color, one.marker, one.filled, size=size)
-    if not boxed:
-        return
+    if boxed:
+        box_cells(ax, boxed, [x_of[cell.kernel] for cell in boxed], one.color, type_)
+
+
+def box_cells(
+    ax: matplotlib.axes.Axes,
+    cells: Sequence[KernelCell],
+    positions: Sequence[int],
+    color: str,
+    type_: plotstyle.TypeScale,
+) -> None:
+    """One box per cell over its episodes at ``positions``, filled and outlined in ``color``."""
     artists = ax.boxplot(
-        [list(cell.episodes) for cell in boxed],
-        positions=[x_of[cell.kernel] for cell in boxed],
+        [list(cell.episodes) for cell in cells],
+        positions=list(positions),
         widths=0.5,
         patch_artist=True,
         manage_ticks=False,
         showfliers=False,
-        medianprops={"color": "0.1", "linewidth": 1.0},
+        medianprops={"color": "0.1", "linewidth": type_.line_width},
     )
     for box in artists["boxes"]:
-        box.set(facecolor=one.color, edgecolor=one.color, alpha=0.55, linewidth=0.6)
-    for part in ("whiskers", "caps"):
-        for line in artists[part]:
-            line.set(color=one.color, linewidth=0.6)
+        box.set(facecolor=color, edgecolor=color, alpha=0.55, linewidth=BOX_LINE_WIDTH)
+    for line in [*artists["whiskers"], *artists["caps"]]:
+        line.set(color=color, linewidth=BOX_LINE_WIDTH)
 
 
 #: Gap (in x-axis units) between the last kernel column and the dashed separator, and between the
@@ -634,7 +639,12 @@ def summary_centre_x(n_kernels: int, slots: int) -> float:
 
 
 def draw_summary_column(
-    ax: matplotlib.axes.Axes, n_kernels: int, slots: int, label: str, label_pt: float, annotate: bool = True
+    ax: matplotlib.axes.Axes,
+    n_kernels: int,
+    slots: int,
+    label: str,
+    type_: plotstyle.TypeScale,
+    annotate: bool = True,
 ) -> None:
     """The dashed separator and a small label ABOVE the column's slots naming its own statistic.
 
@@ -645,13 +655,19 @@ def draw_summary_column(
     anchored to the panel's own data coordinates has no such sharing. Where every panel's statistic
     is the same, :func:`style_panel` names it once as an x tick instead and ``annotate`` is off.
     """
-    ax.axvline(summary_separator_x(n_kernels), color=plotstyle.RULE, linestyle=(0, (3, 3)), linewidth=1.0, zorder=1)
+    ax.axvline(
+        summary_separator_x(n_kernels),
+        color=plotstyle.RULE,
+        linestyle=(0, (3, 3)),
+        linewidth=type_.line_width,
+        zorder=1,
+    )
     if not annotate:
         return
     centre = summary_centre_x(n_kernels, slots)
     ax.annotate(
         label, xy=(centre, 1.0), xycoords=("data", "axes fraction"), xytext=(0, 3), textcoords="offset points",
-        ha="center", va="bottom", fontsize=label_pt, color=plotstyle.MUTED, annotation_clip=False,
+        ha="center", va="bottom", fontsize=type_.annotation_pt, color=plotstyle.MUTED, annotation_clip=False,
     )  # fmt: skip
 
 
@@ -661,7 +677,7 @@ def draw_summary_mark(
     x: float,
     one: Series,
     metric: "Metric",
-    value_pt: float,
+    type_: plotstyle.TypeScale,
     size: float,
     value: bool = True,
 ) -> None:
@@ -674,14 +690,14 @@ def draw_summary_mark(
     if not math.isfinite(point):
         return
     if math.isfinite(low) and math.isfinite(high) and low < high:
-        ax.vlines(x, low, high, color=one.color, linewidth=1.3, alpha=0.7, zorder=INTERVAL_Z)
+        ax.vlines(x, low, high, color=one.color, linewidth=SUMMARY_LINE_WIDTH, alpha=0.7, zorder=INTERVAL_Z)
     plotstyle.point_mark(ax, x, point, one.color, one.marker, one.filled, size=size)
     if not value:
         return
     ax.annotate(
         metric.value_label(point), xy=(x, high if math.isfinite(high) else point), xytext=(0, 2),
-        textcoords="offset points", rotation=90, ha="center", va="bottom", fontsize=value_pt, color=one.color,
-        gid=plotstyle.CLEAR_GID, annotation_clip=False,
+        textcoords="offset points", rotation=90, ha="center", va="bottom", fontsize=type_.annotation_pt,
+        color=one.color, gid=plotstyle.CLEAR_GID, annotation_clip=False,
     )  # fmt: skip
 
 
@@ -708,8 +724,7 @@ class Metric:
     :func:`style_panel` and :func:`draw_marks` need besides the shared kernel order.
 
     ``summary_reducer`` and ``summary_label`` carry the statistic the SUMMARY COLUMN is under: the
-    geomean for a ratio (speed-up), the median for a count (tokens) -- see
-    :func:`summary_point_speedup` and :func:`summary_point_tokens`.
+    the geomean on both axes -- see :func:`summary_geomean`.
     """
 
     series: tuple[Series, ...]
@@ -731,12 +746,12 @@ class Metric:
 
 def speedup_series_metric(series: Sequence[Series], ylabel: str, reference_color: str = plotstyle.REFERENCE) -> Metric:
     """A ratio panel: log2 axis, geomean summary, values printed as ratios."""
-    return Metric(tuple(series), True, ylabel, summary_point_speedup, "Geomean", reference_color=reference_color)
+    return Metric(tuple(series), True, ylabel, summary_geomean, "Geomean", reference_color=reference_color)
 
 
 def token_series_metric(series: Sequence[Series], ylabel: str) -> Metric:
-    """A count panel: log10 axis, median summary, values printed with a magnitude suffix."""
-    return Metric(tuple(series), False, ylabel, summary_point_tokens, "Median", plotstyle.decade_label)
+    """A count panel: log10 axis, geomean summary, values printed with a magnitude suffix."""
+    return Metric(tuple(series), False, ylabel, summary_geomean, "Geomean", plotstyle.decade_label)
 
 
 def style_panel(
@@ -745,7 +760,7 @@ def style_panel(
     kernels: Sequence[str],
     summary_column: bool,
     label_ticks: bool,
-    type_: PanelType = AUTHOR_TYPE,
+    type_: plotstyle.TypeScale = AUTHOR_TYPE,
     slots: int = 0,
     tick_label: Callable[[str], str] = kernel_tick_label,
     summary_tick: bool = False,
@@ -771,14 +786,31 @@ def style_panel(
     if label_ticks:
         # The tick is the kernel's short NAME; ``kernels`` are the identifiers the columns and the
         # results table are keyed by.
-        names = [tick_label(kernel) for kernel in kernels] + ([metric.summary_label] if named_summary else [])
-        ax.set_xticklabels(names, rotation=90, fontsize=type_.name_pt, linespacing=0.95)
-        if named_summary:
-            ax.get_xticklabels()[-1].set_rotation(0)
+        names = [tick_label(kernel) for kernel in kernels]
+        label_kernel_ticks(ax, names, metric.summary_label if named_summary else "", type_)
     else:
         ax.set_xticklabels([])
     if summary_column:
-        draw_summary_column(ax, n, slots, metric.summary_label, type_.name_pt, annotate=not named_summary)
+        draw_summary_column(ax, n, slots, metric.summary_label, type_, annotate=not named_summary)
+    style_value_axis(ax, metric, kernels, type_)
+    plotstyle.despine(ax)
+
+
+def label_kernel_ticks(
+    ax: matplotlib.axes.Axes, names: Sequence[str], summary: str, type_: plotstyle.TypeScale
+) -> None:
+    """The kernel ticks' ``names``, rotated, then -- when given -- ``summary`` horizontal under its column."""
+    ax.set_xticklabels(
+        [*names, summary] if summary else list(names), rotation=90, fontsize=type_.annotation_pt, linespacing=0.95
+    )
+    if summary:
+        ax.get_xticklabels()[-1].set_rotation(0)
+
+
+def style_value_axis(
+    ax: matplotlib.axes.Axes, metric: Metric, kernels: Sequence[str], type_: plotstyle.TypeScale
+) -> None:
+    """``metric``'s value axis, limits from its cells over ``kernels``, and its label."""
     named = set(kernels)
     cells = [cell for cell in metric.cells if cell.kernel in named]
     if metric.log2_space:
@@ -786,7 +818,6 @@ def style_panel(
     else:
         style_token_axis(ax, cells, type_.tick_pt)
     ax.set_ylabel(metric.ylabel, fontsize=type_.label_pt)
-    plotstyle.despine(ax)
 
 
 def draw_marks(
@@ -797,7 +828,7 @@ def draw_marks(
     summary_column: bool,
     size: float,
     span: float = DODGE_SPAN,
-    type_: PanelType = AUTHOR_TYPE,
+    type_: plotstyle.TypeScale = AUTHOR_TYPE,
     summary_values: bool = True,
 ) -> None:
     """Every series' cells over ``kernels``, spread by :func:`dodge_offsets`, plus each series'
@@ -807,16 +838,16 @@ def draw_marks(
     x_of = {kernel: i for i, kernel in enumerate(kernels)}
     for one, offset in zip(metric.series, dodge_offsets(len(metric.series), span), strict=True):
         if style_ == "box" and len(metric.series) == 1:
-            draw_box(ax, one, x_of, size)
+            draw_box(ax, one, x_of, size, type_)
         else:
-            draw_ci(ax, one, x_of, metric.log2_space, offset, size)
+            draw_ci(ax, one, x_of, metric.log2_space, offset, size, type_)
     if not summary_column:
         return
     summary_size = max(size, mark_size(column_pitch_in(ax), 1))
     for slot, one in enumerate(metric.series):
         cells = [cell for cell in one.cells if cell.kernel in x_of]
         x = summary_slot_x(len(kernels), slot)
-        draw_summary_mark(ax, cells, x, one, metric, type_.name_pt, summary_size, summary_values)
+        draw_summary_mark(ax, cells, x, one, metric, type_, summary_size, summary_values)
 
 
 def draw_panel(
@@ -826,7 +857,7 @@ def draw_panel(
     style_: Style,
     summary_column: bool,
     label_ticks: bool,
-    type_: PanelType = AUTHOR_TYPE,
+    type_: plotstyle.TypeScale = AUTHOR_TYPE,
     span: float = DODGE_SPAN,
 ) -> None:
     """One metric's panel on an axes the caller laid out: its chrome (:func:`style_panel`), then its
@@ -859,7 +890,7 @@ def status_handles(metrics: Sequence[Metric]) -> list[matplotlib.artist.Artist]:
                 marker="x",
                 linestyle="none",
                 color=plotstyle.MUTED,
-                markeredgewidth=1.2,
+                markeredgewidth=CROSS_EDGE_WIDTH,
                 markersize=LEGEND_MARK_PT,
                 label=plotstyle.NOT_DELIVERED_LABEL,
             )
@@ -904,7 +935,8 @@ def figure_panels(
 ) -> matplotlib.figure.Figure:
     """``metrics`` as panels stacked top to bottom on ONE kernel axis, names under the last.
 
-    ``width_in`` draws at that width at print size (:data:`PRINT_TYPE`), to be placed at scale 1.0;
+    ``width_in`` draws at that width at print size (:data:`~hpcagent_bench.stats.style.PRINT_SCALE`), to
+    be placed at scale 1.0;
     without it the figure is authored at :data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH`
     (:data:`AUTHOR_TYPE`), or -- given ``pitch_in`` -- as wide as that many inches per column plus
     its measured chrome. ``legend`` is a key drawn under the names; ``span`` is the dodge
@@ -915,12 +947,7 @@ def figure_panels(
     At print size the panels default to :data:`PRINT_PANEL_HEIGHT_IN` and the names to
     :func:`compact_tick_label`; authored, to :data:`PANEL_HEIGHT_IN` and :func:`kernel_tick_label`.
     """
-    type_ = AUTHOR_TYPE if width_in is None else PRINT_TYPE
-    if panel_height_in is None:
-        panel_height_in = PANEL_HEIGHT_IN if width_in is None else PRINT_PANEL_HEIGHT_IN
-    if tick_label is None:
-        tick_label = kernel_tick_label if width_in is None else compact_tick_label
-    width = plotstyle.DOUBLE_COLUMN_WIDTH if width_in is None else width_in
+    type_, width, panel_height_in, tick_label = size_defaults(width_in, panel_height_in, tick_label)
     fig, grid = plt.subplots(
         len(metrics), 1, sharex=True, figsize=(width, len(metrics) * panel_height_in), squeeze=False
     )
@@ -937,6 +964,21 @@ def figure_panels(
     return fig
 
 
+def size_defaults(
+    width_in: float | None, panel_height_in: float | None, tick_label: Callable[[str], str] | None
+) -> tuple[plotstyle.TypeScale, float, float, Callable[[str], str]]:
+    """``(type scale, width, panel height, tick label)``: print size when ``width_in`` is given,
+    authored size otherwise, each overridden by the caller's own ``panel_height_in``/``tick_label``."""
+    if width_in is None:
+        return (
+            AUTHOR_TYPE,
+            plotstyle.DOUBLE_COLUMN_WIDTH,
+            panel_height_in or PANEL_HEIGHT_IN,
+            tick_label or kernel_tick_label,
+        )
+    return plotstyle.PRINT_SCALE, width_in, panel_height_in or PRINT_PANEL_HEIGHT_IN, tick_label or compact_tick_label
+
+
 def split_in_two(text: str) -> str:
     """``text`` broken at the space nearest its middle: two balanced lines, or ``text`` itself when
     it has no space to break at."""
@@ -951,7 +993,7 @@ def fit_ylabels(
     fig: matplotlib.figure.Figure,
     axes: Sequence[matplotlib.axes.Axes],
     panel_height_in: float,
-    type_: PanelType = AUTHOR_TYPE,
+    type_: plotstyle.TypeScale = AUTHOR_TYPE,
 ) -> None:
     """Keep every Y label within its own panel's height: broken onto two lines, then stepped down
     to its floor (:func:`min_text_pt`). A rotated label taller than its panel runs past both ends
@@ -988,7 +1030,7 @@ def fit_canvas(
     axes: Sequence[matplotlib.axes.Axes],
     title: str,
     legend: Sequence[matplotlib.artist.Artist],
-    type_: PanelType,
+    type_: plotstyle.TypeScale,
     panel_height_in: float = PANEL_HEIGHT_IN,
     pitch_in: float | None = None,
 ) -> None:
@@ -1020,7 +1062,7 @@ def fit_canvas(
         fig.set_size_inches(left + (high - low) * pitch_in + right, float(fig.get_size_inches()[1]))
     width = float(fig.get_size_inches()[0])
     fig.subplots_adjust(left=left / width, right=1.0 - right / width)
-    plotstyle.shrink_crowded_ticks(fig, [axes[-1]], type_.name_pt, min_text_pt(type_, type_.name_pt))
+    plotstyle.shrink_crowded_ticks(fig, [axes[-1]], type_.annotation_pt, min_text_pt(type_, type_.annotation_pt))
     names = plotstyle.below_protrusion_in(fig, axes[-1])
     above = [plotstyle.above_protrusion_in(fig, ax) for ax in axes]
     top = (plotstyle.TITLE_BAND_IN if title else 0.0) + max(above[0], 0.0) + CHROME_PAD_IN

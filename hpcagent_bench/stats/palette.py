@@ -47,7 +47,7 @@ import matplotlib
 import matplotlib.colors
 
 from hpcagent_bench import packets
-from hpcagent_bench.experiment_tags import canonical, order, registry
+from hpcagent_bench.experiment_tags import Registry, canonical, order, registry
 
 LOG = logging.getLogger(__name__)
 
@@ -208,6 +208,19 @@ def marker(model: str) -> str:
     return shapes[zlib.crc32(str(model).encode()) % len(shapes)]
 
 
+def language_marker(language: str) -> str:
+    """The one SHAPE a delivery language wears in a figure whose colour is the model (the transfer
+    scatter): the registry's ``markers`` in ``languages`` order, so appending a language never
+    reshapes another."""
+    shapes = markers()
+    languages = order("languages")
+    resolved = canonical("languages", str(language).lower())
+    if resolved in languages:
+        return shapes[languages.index(resolved) % len(shapes)]
+    LOG.warning("palette: language %r is not in registry.yaml; using a hash marker", language)
+    return shapes[zlib.crc32(str(language).encode()) % len(shapes)]
+
+
 #: The control's shape, reserved: no packet or harness is ever assigned it, and the control is drawn
 #: hollow in its model's colour, so "no packet" reads the same in every figure.
 CONTROL_MARKER: str = "o"
@@ -226,21 +239,23 @@ def shape_table() -> dict[tuple[str, str], object]:
     entities = [("harnesses", key) for key in hue_order("harnesses")] + [
         ("packets", key) for key in hue_order("packets")
     ]
+    fixed = fixed_packet_markers(reg)
+    free = [shape for shape in reg.shapes if shape not in fixed.values() and shape != CONTROL_MARKER]
+    unfixed = [entity for entity in entities if entity not in fixed]
+    if len(unfixed) > len(free):
+        raise ValueError(f"registry: {len(entities)} treatments outgrow the {len(reg.shapes)}-shape pool")
+    table = dict(zip(unfixed, free)) | fixed
+    return {entity: table[entity] for entity in entities}
+
+
+def fixed_packet_markers(reg: Registry) -> dict[tuple[str, str], object]:
+    """``("packets", key) -> shape`` for every packet whose registry entry names its own ``marker:``;
+    raises when two share one or one takes the control's :data:`CONTROL_MARKER`."""
     fixed = {("packets", key): d.marker for key, d in reg.packet_defs.items() if key and d.marker}
     taken = list(fixed.values())
     if CONTROL_MARKER in taken or len(set(taken)) != len(taken):
         raise ValueError(f"registry: packet markers must be distinct and never {CONTROL_MARKER!r}: {fixed}")
-    free = iter(shape for shape in reg.shapes if shape not in taken and shape != CONTROL_MARKER)
-    table: dict[tuple[str, str], object] = {}
-    for entity in entities:
-        if entity in fixed:
-            table[entity] = fixed[entity]
-            continue
-        shape = next(free, None)
-        if shape is None:
-            raise ValueError(f"registry: {len(entities)} treatments outgrow the {len(reg.shapes)}-shape pool")
-        table[entity] = shape
-    return table
+    return fixed
 
 
 def treatment_shape(kind: str, name: str) -> object:

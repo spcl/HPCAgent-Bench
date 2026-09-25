@@ -374,37 +374,17 @@ def geomean_ci(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA) -> Inte
     )
 
 
-#: At or above this many samples the log-t interval is the one a ratio figure draws; below it the
-#: t quantile is being asked to stand in for a shape the sample does not pin down, and the log-space
-#: bootstrap is drawn instead. Both are reported through :attr:`Interval.method`, so a figure can
-#: always say which one it is showing.
-LOG_T_MIN_SAMPLES: int = 20
-
-
-def geomean_interval(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA, seed: int = 0) -> Interval:
-    """The geometric mean and the interval a RATIO FIGURE draws for it (SC15 Rules 4 and 5).
-
-    :func:`geomean_ci`'s log-t interval from :data:`LOG_T_MIN_SAMPLES` samples up; a percentile
-    bootstrap of the mean IN LOG SPACE below it, mapped back to ratios. Both come back naming
-    themselves in ``method`` ("log-t" or "bootstrap-percentile"), which is what the figure prints:
-    two differently derived intervals drawn the same way and labelled the same way are two claims a
-    reader cannot separate.
-    """
+def geomean_interval(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA) -> Interval:
+    """The geometric mean and the interval every figure and table draws for it: :func:`geomean_ci`'s
+    95% log-t interval, withheld (NaN ends, ``method`` ``"underpowered"``) below
+    :data:`MIN_PAIRS_FOR_INTERVAL` values. An empty set is all NaN."""
     x: FloatArray = np.asarray(values, dtype=np.float64)
-    if x.size >= LOG_T_MIN_SAMPLES or x.size < 2:
-        return geomean_ci(x, confidence=confidence)
-    logs = bootstrap_ci(
-        np.log(x), statistic=np.mean, name="geomean", confidence=confidence, method="percentile", seed=seed
-    )
-    return Interval(
-        "geomean",
-        geomean(x),
-        math.exp(logs.low),
-        math.exp(logs.high),
-        confidence,
-        logs.method,
-        int(x.size),
-    )
+    if x.size == 0:
+        return Interval("geomean", math.nan, math.nan, math.nan, confidence, "underpowered", 0)
+    interval = geomean_ci(x, confidence=confidence)
+    if interval.n < MIN_PAIRS_FOR_INTERVAL:
+        return Interval("geomean", interval.point, math.nan, math.nan, confidence, "underpowered", interval.n)
+    return interval
 
 
 def signed_change(ratio: float) -> float:
@@ -473,49 +453,6 @@ def median_per_kernel(
     if within:
         frame = frame.groupby([kernel, *within], as_index=False)[value].max()
     return frame.groupby(kernel)[value].median()
-
-
-def paired_total_ratio(
-    numerators: Samples,
-    denominators: Samples,
-    confidence: float = DEFAULT_CONFIDENCE,
-    n_resamples: int = DEFAULT_RESAMPLES,
-    seed: int = 0,
-) -> Interval:
-    """``sum(numerators) / sum(denominators)`` over the paired kernels, with a percentile bootstrap
-    interval that resamples KERNELS.
-
-    A DIFFERENT QUESTION FROM :func:`paired_geomean`, and a table reports both. The geomean ratio
-    answers "on a typical kernel, how much more did this arm spend"; the total ratio answers "over
-    the whole roster, how much more did this arm spend", and a single expensive kernel moves the
-    second and not the first. On a token axis both are wanted: a budget is a total, and a per-kernel
-    claim is a geomean.
-
-    The resample draws one index per kernel and reads BOTH sides at it, so the pairing survives:
-    resampling the two sums independently would widen the interval by the between-kernel spread the
-    pairing exists to remove. ``seed`` fixes the draw, so a published end point does not move
-    between runs.
-    """
-    a: FloatArray = np.asarray(numerators, dtype=np.float64)
-    b: FloatArray = np.asarray(denominators, dtype=np.float64)
-    if a.size != b.size:
-        raise ValueError(f"paired_total_ratio needs one denominator per numerator, got {a.size} and {b.size}")
-    n = int(a.size)
-    total_b = float(b.sum()) if n else 0.0
-    point = float(a.sum()) / total_b if total_b > 0.0 else math.nan
-    name = "total ratio"
-    method = f"bootstrap-percentile({n_resamples})"
-    if n < 3 or not math.isfinite(point):
-        return Interval(name, point, point, point, confidence, method, n)
-    draws = np.random.default_rng(seed).integers(0, n, size=(n_resamples, n))
-    sums_b = b[draws].sum(axis=1)
-    usable = sums_b > 0.0
-    ratios = a[draws].sum(axis=1)[usable] / sums_b[usable]
-    if ratios.size == 0:
-        return Interval(name, point, point, point, confidence, method, n)
-    tail = 100.0 * (1.0 - confidence) / 2.0
-    low, high = (float(value) for value in np.percentile(ratios, [tail, 100.0 - tail]))
-    return Interval(name, point, low, high, confidence, method, n)
 
 
 def walsh_averages(values: Samples) -> FloatArray:
@@ -589,7 +526,8 @@ def paired_geomean(log_ratios: Samples, alpha: float = DEFAULT_ALPHA) -> PairedC
     change would overstate the change of the rest.
 
     Below :data:`MIN_PAIRS_FOR_INTERVAL` the interval and p are withheld (``underpowered``); a set with
-    no spread has no t statistic and reads ``degenerate`` with no p, so neither enters a correction.
+    no spread has no t statistic and reads ``degenerate`` with no interval and no p, so neither enters
+    a correction. No pairs at all has no estimate either: NaN, never 0 (a 1x ratio).
     """
     x: FloatArray = np.asarray(log_ratios, dtype=np.float64)
     x = x[np.isfinite(x)]
@@ -597,13 +535,13 @@ def paired_geomean(log_ratios: Samples, alpha: float = DEFAULT_ALPHA) -> PairedC
     ties = int(np.count_nonzero(x == 0.0))
     n = int(x.size)
     if n == 0:
-        return PairedChange(0.0, math.nan, math.nan, math.nan, 0, wins, losses, ties, "degenerate")
+        return PairedChange(math.nan, math.nan, math.nan, math.nan, 0, wins, losses, ties, "degenerate")
     point = math.fsum(x.tolist()) / n
     if n < MIN_PAIRS_FOR_INTERVAL:
         return PairedChange(point, math.nan, math.nan, math.nan, n, wins, losses, ties, "underpowered")
     spread = float(np.std(x, ddof=1))
     if spread == 0.0:
-        return PairedChange(point, point, point, math.nan, n, wins, losses, ties, "degenerate")
+        return PairedChange(point, math.nan, math.nan, math.nan, n, wins, losses, ties, "degenerate")
     from scipy.stats import t  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 
     error = spread / math.sqrt(n)

@@ -24,9 +24,9 @@ The score leg is therefore paired over the kernels both arms SOLVED and the cost
 both arms have a token count for, each with its own n. Intersecting them drops graded kernels for
 want of a call row, which is the defect that withdrew the CPF cost claim.
 
-The family is every test in the output: both legs of every pair. Benjamini-Hochberg runs across it
-once, and a leg with fewer than ``summary.MIN_PAIRS_FOR_INTERVAL`` pairs reports ``underpowered``
-rather than a verdict -- a bootstrap flag at n = 2-4 is a coin toss.
+The family is every test in the output: the ``speedup`` and ``tokens`` legs of every pair.
+Benjamini-Hochberg runs across it once, and a leg with fewer than ``summary.MIN_PAIRS_FOR_INTERVAL``
+pairs reports ``underpowered`` rather than a verdict.
 
     python3 paired_arms.py --observations scored.db --observations blind.db \\
         --pair cpf-llr-focus40-oss120b-c,llrblind-oss120b-c \\
@@ -40,6 +40,7 @@ import argparse
 import math
 import pathlib
 import sys
+import warnings
 
 import pandas as pd
 
@@ -99,7 +100,9 @@ PAIR_COLUMNS = (
     "leg",
     "n_pairs",
     "n_tested",
-    "estimate_a_over_b",
+    # the paper's ratio, above 1 favoring arm_a on every leg: speedup rho_S = S_a / S_b,
+    # tokens rho_C = C_b / C_a (control over treated)
+    "rho",
     "ci_low",
     "ci_high",
     "wins_a",
@@ -109,9 +112,6 @@ PAIR_COLUMNS = (
     "p_value",
     "p_adjusted",
     "verdict",
-    "total_ratio",
-    "total_ci_low",
-    "total_ci_high",
 )
 
 ARM_COLUMNS = (
@@ -129,7 +129,7 @@ ARM_COLUMNS = (
     "geomean_ci_low",
     "geomean_ci_high",
     "median_solved",
-    "median_tokens",
+    "gm_tokens",
     "submissions",
     "episodes",
     "jobs",
@@ -141,8 +141,8 @@ ARM_COLUMNS = (
     "score_calls_per_task",
     "submit_calls_per_task",
     "accepted_submissions_per_task",
-    "median_tokens_ci_low",
-    "median_tokens_ci_high",
+    "gm_tokens_ci_low",
+    "gm_tokens_ci_high",
     "n_token_kernels",
     "cpf_uptake",
 )
@@ -169,9 +169,9 @@ IMPACT_COLUMNS = (
     "geomean_speedup",
     "geomean_ci_low",
     "geomean_ci_high",
-    "median_tokens",
-    "median_tokens_ci_low",
-    "median_tokens_ci_high",
+    "gm_tokens",
+    "gm_tokens_ci_low",
+    "gm_tokens_ci_high",
     "speedup_ratio",
     "speedup_ci_low",
     "speedup_ci_high",
@@ -184,9 +184,6 @@ IMPACT_COLUMNS = (
     "token_n",
     "token_p_adjusted",
     "token_verdict",
-    "token_total_ratio",
-    "token_total_ci_low",
-    "token_total_ci_high",
 )
 
 #: Impact-table column -> the per-arm table column it copies.
@@ -206,24 +203,15 @@ IMPACT_ARM_COLUMNS = {
     "geomean_speedup": "geomean_solved",
     "geomean_ci_low": "geomean_ci_low",
     "geomean_ci_high": "geomean_ci_high",
-    "median_tokens": "median_tokens",
-    "median_tokens_ci_low": "median_tokens_ci_low",
-    "median_tokens_ci_high": "median_tokens_ci_high",
-}
-
-#: The total-token columns a ``tokens`` leg carries, and the impact-table column each becomes. Only
-#: the token leg has them: a total speed-up over a roster is not a quantity (the kernels have no
-#: common unit), while a total token spend is the budget the arm actually cost.
-IMPACT_TOTAL_COLUMNS = {
-    "token_total_ratio": "total_ratio",
-    "token_total_ci_low": "total_ci_low",
-    "token_total_ci_high": "total_ci_high",
+    "gm_tokens": "gm_tokens",
+    "gm_tokens_ci_low": "gm_tokens_ci_low",
+    "gm_tokens_ci_high": "gm_tokens_ci_high",
 }
 
 #: Pairs-table leg -> impact-table column prefix, and the pairs-table column behind each suffix.
 IMPACT_LEGS = {"speedup": "speedup", "tokens": "token"}
 IMPACT_LEG_COLUMNS = {
-    "ratio": "estimate_a_over_b",
+    "ratio": "rho",
     "ci_low": "ci_low",
     "ci_high": "ci_high",
     "n": "n_pairs",
@@ -294,9 +282,6 @@ def impact_rows(pairs: list[tuple[str, str]], arm_frame: pd.DataFrame, pair_fram
             found = match.iloc[0] if control and not match.empty else None
             for suffix, source in IMPACT_LEG_COLUMNS.items():
                 row[f"{prefix}_{suffix}"] = found[source] if found is not None else math.nan
-            if leg == "tokens":
-                for column, source in IMPACT_TOTAL_COLUMNS.items():
-                    row[column] = found[source] if found is not None else math.nan
         rows.append(row)
     return pd.DataFrame(rows).reindex(columns=list(IMPACT_COLUMNS))
 
@@ -395,31 +380,13 @@ def shared_token_kernels(left: str, right: str, tokens: dict[tuple[str, str], fl
     return sorted({k[1] for k in tokens if k[0] == left} & {k[1] for k in tokens if k[0] == right})
 
 
-def cost_total(left: str, right: str, tokens: dict[tuple[str, str], float]) -> summary.Interval | None:
-    """What the whole roster cost: ``sum(left) / sum(right)`` over the shared kernels, with its
-    paired bootstrap interval (:func:`~hpcagent_bench.stats.summary.paired_total_ratio`).
-
-    Reported BESIDE the geomean ratio, never instead of it. The geomean is the typical kernel and
-    the total is the budget; on these arms the two differ whenever one kernel runs away with the
-    spend, and a reader who is sizing a campaign wants the second.
-    """
-    shared = shared_token_kernels(left, right, tokens)
-    if not shared:
-        return None
-    return summary.paired_total_ratio([tokens[(left, k)] for k in shared], [tokens[(right, k)] for k in shared])
-
-
 def cost_leg(left: str, right: str, tokens: dict[tuple[str, str], float]) -> tuple[summary.PairedChange, int] | None:
-    """The geomean token ratio over the kernels both arms have a token count for.
-
-    Oriented like the score leg -- ``a / b`` -- so a number above 1 means arm ``a`` spent MORE. It is
-    not inverted into a "gain": the two legs sit in one table and an axis that silently flips sign is
-    how a reader takes the effect from one row and the direction from another.
-    """
+    """The paper's ``rho_C = GM(C_b / C_a)`` over the kernels both arms have a token count for (``K``):
+    control over treated, so above 1 means arm ``a`` is CHEAPER, the same direction as ``rho_S``."""
     shared = shared_token_kernels(left, right, tokens)
     if not shared:
         return None
-    return summary.paired_geomean([math.log(tokens[(left, k)] / tokens[(right, k)]) for k in shared]), len(shared)
+    return summary.paired_geomean([math.log(tokens[(right, k)] / tokens[(left, k)]) for k in shared]), len(shared)
 
 
 def tested_p(change: summary.PairedChange) -> float:
@@ -436,18 +403,40 @@ def tested_p(change: summary.PairedChange) -> float:
     return change.pvalue
 
 
+def warn_missing_tokens(
+    arm_a: str, arm_b: str, both_served: frozenset[str], tokens: dict[tuple[str, str], float]
+) -> None:
+    """Warn, with counts, when the cost population ``K`` falls short of the kernels both arms were
+    served: a kernel without a task token total on either side leaves the tokens leg silently."""
+    missing = {arm: sorted(k for k in both_served if (arm, k) not in tokens) for arm in (arm_a, arm_b)}
+    if any(missing.values()):
+        detail = "; ".join(f"{arm} {len(kernels)} {kernels[:5]}" for arm, kernels in missing.items() if kernels)
+        warnings.warn(
+            f"tokens leg {arm_a},{arm_b}: no task token total for kernels both were served "
+            f"({len(both_served)}): {detail}",
+            stacklevel=2,
+        )
+
+
 def pair_rows(
     pairs: list[tuple[str, str]],
     table: dict[str, population.ArmAggregate],
     tokens: dict[tuple[str, str], float],
     roster: list[str],
     family: str,
+    served: dict[str, frozenset[str]] | None = None,
 ) -> list[dict[str, object]]:
-    """One row per leg per pair, with the family's Benjamini-Hochberg verdicts already applied."""
+    """One row per leg per pair, with the family's Benjamini-Hochberg verdicts already applied.
+
+    ``served`` is each arm's served kernels (:func:`served_by_arm`), the ``K`` the tokens leg is
+    checked against; without it every arm was served ``roster``."""
     rows: list[dict[str, object]] = []
     for arm_a, arm_b in pairs:
         left, right = table[arm_a], table[arm_b]
         gap = population.coverage(left, right, roster=roster)
+        kernels_a, kernels_b = ((served or {}).get(arm, frozenset(roster)) for arm in (arm_a, arm_b))
+        if served is not None:
+            warn_missing_tokens(arm_a, arm_b, kernels_a & kernels_b, tokens)
         head = {
             "family": family,
             "arm_a": arm_a,
@@ -461,25 +450,18 @@ def pair_rows(
             "coverage_p": population.mcnemar_exact(gap.n_only_left, gap.n_only_right),
         }
         score, n_score = score_leg(left, right)
-        empty: dict[str, object] = {"total_ratio": math.nan, "total_ci_low": math.nan, "total_ci_high": math.nan}
-        legs: list[tuple[str, summary.PairedChange, int, dict[str, object]]] = [("speedup", score, n_score, empty)]
+        legs: list[tuple[str, summary.PairedChange, int]] = [("speedup", score, n_score)]
         cost = cost_leg(arm_a, arm_b, tokens)
         if cost is not None:
-            total = cost_total(arm_a, arm_b, tokens)
-            extra = (
-                empty
-                if total is None
-                else {"total_ratio": total.point, "total_ci_low": total.low, "total_ci_high": total.high}
-            )
-            legs.append(("tokens", cost[0], cost[1], extra))
-        for name, change, n_pairs, extra in legs:
+            legs.append(("tokens", cost[0], cost[1]))
+        for name, change, n_pairs in legs:
             rows.append(
                 {
                     **head,
                     "leg": name,
                     "n_pairs": n_pairs,
                     "n_tested": change.n,
-                    "estimate_a_over_b": math.exp(change.estimate),
+                    "rho": math.exp(change.estimate),
                     "ci_low": math.exp(change.low) if math.isfinite(change.low) else math.nan,
                     "ci_high": math.exp(change.high) if math.isfinite(change.high) else math.nan,
                     "wins_a": change.wins,
@@ -487,7 +469,6 @@ def pair_rows(
                     "ties": change.ties,
                     "method": change.method,
                     "p_value": tested_p(change),
-                    **extra,
                 }
             )
     verdicts = efficacy.correct_family([float(row["p_value"]) for row in rows])
@@ -613,6 +594,12 @@ def task_usage(observations: pd.DataFrame, repeats: population.RepeatPolicy) -> 
     )
 
 
+def floored_geomean(values: summary.Samples) -> tuple[float, float, float]:
+    """``(GM, low, high)`` of :func:`~hpcagent_bench.stats.summary.geomean_interval` (spec A1, A2)."""
+    interval = summary.geomean_interval(values)
+    return interval.point, interval.low, interval.high
+
+
 def arm_rows(
     best: pd.DataFrame,
     graded: pd.DataFrame,
@@ -647,9 +634,8 @@ def arm_rows(
     ``coverage`` is verified over SERVED -- the kernels the arm has any recorded observation for --
     never over the full roster, because a kernel an arm was never given is a scheduling fact.
 
-    ``median_tokens`` is the arm's TYPICAL task cost: the median over its kernels of a per-kernel
-    total that is itself a sum of episode maxima. A kernel total and a typical task cost are
-    different quantities and neither is the sum of the raw rows.
+    ``gm_tokens`` is the arm's typical task cost: the geometric mean over EVERY kernel it has a token
+    total for (``K``, solved or not), priced with the table's cost card (spec A2).
     """
     no_submit = no_submit or {}
     uptake = uptake or {}
@@ -659,18 +645,11 @@ def arm_rows(
     for arm, item in sorted(table.items()):
         mine_best = best[best.arm == arm]
         values = mine_best.speedup
-        interval = summary.geomean_ci(item.values)
-        # spec A1: no interval below MIN_INTERVAL_SAMPLES kernels, the same floor the figures use
-        thin = item.n < summary.MIN_INTERVAL_SAMPLES
+        speed = floored_geomean(item.values)
         mine = graded[graded.arm == arm]
         n_served = len(served.get(arm, frozenset(item.kernels)))
         spend = [value for (owner, _kernel), value in tokens.items() if owner == arm]
-        # spec A2: median with its percentile-bootstrap interval, no outlier rejection, none below 5 kernels
-        spend_interval = (
-            summary.median_ci(spend, drop=False, warn=False, min_n=summary.MIN_INTERVAL_SAMPLES)[:3]
-            if spend
-            else (math.nan, math.nan, math.nan)
-        )
+        spend_interval = floored_geomean(spend)
         used = usage.loc[arm] if arm in usage.index else None
         rows.append(
             {
@@ -687,12 +666,12 @@ def arm_rows(
                 "no_submit_rate": no_submit.get(arm, math.nan),
                 "coverage": item.n_solved / n_served if n_served else math.nan,
                 "geomean_solved": item.geomean(),
-                "geomean_ci_low": math.nan if thin else interval.low,
-                "geomean_ci_high": math.nan if thin else interval.high,
+                "geomean_ci_low": speed[1],
+                "geomean_ci_high": speed[2],
                 "median_solved": item.median(),
-                "median_tokens": spend_interval[0],
-                "median_tokens_ci_low": spend_interval[1],
-                "median_tokens_ci_high": spend_interval[2],
+                "gm_tokens": spend_interval[0],
+                "gm_tokens_ci_low": spend_interval[1],
+                "gm_tokens_ci_high": spend_interval[2],
                 "n_token_kernels": len(spend),
                 "attempts_per_task": float(used.attempts_per_task) if used is not None else math.nan,
                 "relaunched_tasks": int(used.relaunched_tasks) if used is not None else 0,
@@ -754,7 +733,7 @@ def declared_roster(path: pathlib.Path | None, observations: pd.DataFrame) -> li
 
 
 def parse_pair(spec: str) -> tuple[str, str]:
-    """``ARM_A,ARM_B`` -> ``(ARM_A, ARM_B)``; every reported estimate is ``a / b``."""
+    """``ARM_A,ARM_B`` -> ``(ARM_A, ARM_B)``: treatment ``a``, control ``b``; ``rho`` above 1 favors ``a``."""
     arm_a, sep, arm_b = spec.partition(",")
     if not sep or not arm_a or not arm_b:
         raise SystemExit(f"--pair expects ARM_A,ARM_B, got {spec!r}")
@@ -798,13 +777,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="latest",
         help="a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
     )
-    ap.add_argument(
-        "--cost-model",
-        default=cost.DEFAULT_COST_MODEL,
-        help="the cost card the tokens leg is priced with: a name in envs/cost_models.yaml or --cost-models, "
-        "or inline weights fresh_input=1,cached_input=0.1,output=5",
-    )
-    ap.add_argument("--cost-models", type=pathlib.Path, default=None, help="a YAML file of extra cost cards")
+    cost.add_arguments(ap)
     ap.add_argument(
         "--policy",
         default=POLICY,
@@ -878,7 +851,7 @@ def main(argv: list[str]) -> int:
         .reindex(columns=list(ARM_COLUMNS))
     )
     pair_frame = (
-        pd.DataFrame(pair_rows(pairs, table, tokens, roster, args.family))
+        pd.DataFrame(pair_rows(pairs, table, tokens, roster, args.family, served))
         .assign(cost_model=card.key, score_rule=score_rule.SCORE_RULE, kernel_policy=args.policy)
         .reindex(columns=list(PAIR_COLUMNS))
     )

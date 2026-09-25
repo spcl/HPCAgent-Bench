@@ -17,7 +17,7 @@ import itertools
 import logging
 import math
 import pathlib
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Literal
 
 import matplotlib
@@ -53,10 +53,32 @@ REFERENCE: str = "#3a3a3e"
 #: grid (:data:`RULE` at 0.7pt), so it reads as a finer ruling of the same reference and never as a
 #: second one.
 MINOR_RULE: str = "#e8e8ea"
-MINOR_GRID_WIDTH: float = 0.35
+MINOR_GRID_WIDTH: float = 0.25
 #: A minor tick MARK against a major one, as fractions of the major's length and line width.
 MINOR_TICK_LENGTH: float = 0.55
 MINOR_TICK_WIDTH: float = 0.6
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class StatInk:
+    """Colours of STATISTICS and states, never of entities (palette.py owns those)."""
+
+    median: str = "#3b6fd4"  # median bar; blue so the geomean tick reads against it
+    geomean: str = "#d4772a"  # geomean tick; orange, far from the median blue
+    sample: str = "#2a78d6"  # one sample's own histogram / ECDF / violin
+    fit: str = "#d64550"  # a fitted curve drawn over that sample
+    raw_point: str = "#1baf7a"  # jittered raw samples, apart from the sample fill
+    no_gain: str = "#7a5cc0"  # correct but not faster; no model wears this purple
+    wrong: str = "#d64550"  # an incorrect answer
+    ungraded: str = "#9a9aa0"  # a grade that never ran; grey, blames nobody
+    track: str = "#eeeef1"  # roster surface a bar fills; pale so it is no series
+    parallel: str = "#2f8f55"  # parallelism bucket: parallel loops
+    scan: str = "#8a6fd4"  # parallelism bucket: scans
+    timestep: str = "#c9a227"  # parallelism bucket: time-step loops
+    residual: str = "#c0392b"  # parallelism bucket: sequential residue
+
+
+STAT_INK = StatInk()
 
 #: TEXT CASE, for every label a figure shows: Title Case, except articles, coordinating conjunctions
 #: and prepositions ("and", "or", "of", "per", "over", "to", "vs") inside the label. Identifiers
@@ -131,10 +153,22 @@ class TypeScale:
     annotation_pt: float
     line_width: float
     marker_size: float
+    #: A legend swatch's marker size, in points.
+    legend_mark_pt: float
+
+    @property
+    def hairline_width(self) -> float:
+        """A secondary stroke (median tick, whisker, reference line): half the data line."""
+        return self.line_width / 2.0
+
+    @property
+    def point_size(self) -> float:
+        """A raw-sample dot or a flier: half a data mark, so it never reads as a summary."""
+        return self.marker_size / 2.0
 
 
-AUTHOR_SCALE = TypeScale(TICK_PT, LABEL_PT, SUBTITLE_PT, TICK_PT, ANNOTATION_PT, 1.6, 6.0)
-PRINT_SCALE = TypeScale(PRINT_TICK_PT, PRINT_LABEL_PT, PRINT_LABEL_PT, PRINT_LEGEND_PT, PRINT_TICK_PT, 1.0, 4.0)
+AUTHOR_SCALE = TypeScale(TICK_PT, LABEL_PT, SUBTITLE_PT, TICK_PT, ANNOTATION_PT, 1.6, 6.0, 5.0)
+PRINT_SCALE = TypeScale(PRINT_TICK_PT, PRINT_LABEL_PT, PRINT_LABEL_PT, PRINT_LEGEND_PT, PRINT_TICK_PT, 1.0, 4.0, 5.0)
 
 
 def text_sizes(fig: Figure) -> list[tuple[str, float]]:
@@ -165,7 +199,7 @@ def apply() -> None:
             "axes.grid": False,  # each plot opts in on ONE axis; a full grid is noise
             "axes.axisbelow": True,  # data over guides, never the reverse
             "grid.color": RULE,
-            "grid.linewidth": 0.6,
+            "grid.linewidth": 0.4,  # thinner than 0.6 (user, 2026-09-25): the grid is a guide, not a mark
             "xtick.color": MUTED,  # the tick DASH stays a guide
             "ytick.color": MUTED,
             "xtick.labelcolor": INK,  # its NUMBER is text, and text is ink
@@ -370,18 +404,22 @@ def ratio_minor_exponents(majors: Sequence[float], low: float, high: float) -> l
     if len(exponents) < 2:
         return []
     step = min(b - a for a, b in itertools.pairwise(exponents))
-    octaves = range(math.floor(low), math.ceil(high) + 1)
-    if step > 1.0 + OCTAVE_TOLERANCE:
-        candidates = [float(octave) for octave in octaves]
-    elif step > 1.0 - OCTAVE_TOLERANCE:
-        candidates = [octave + math.log2(sub) for octave in octaves for sub in OCTAVE_SUBS]
-    else:
-        return []
+    candidates = ratio_minor_candidates(step, range(math.floor(low), math.ceil(high) + 1))
     return [
         value for value in candidates
         if low <= value <= high
         and not any(math.isclose(value, exponent, abs_tol=OCTAVE_TOLERANCE) for exponent in exponents)
     ]  # fmt: skip
+
+
+def ratio_minor_candidates(step: float, octaves: range) -> list[float]:
+    """Minor exponents over ``octaves`` for majors ``step`` octaves apart: every octave when the
+    majors skip some, :data:`OCTAVE_SUBS` inside each when they are one apart, none when closer."""
+    if step > 1.0 + OCTAVE_TOLERANCE:
+        return [float(octave) for octave in octaves]
+    if step > 1.0 - OCTAVE_TOLERANCE:
+        return [octave + math.log2(sub) for octave in octaves for sub in OCTAVE_SUBS]
+    return []
 
 
 def token_minor_values(majors: Sequence[float], low: float, high: float) -> list[float]:
@@ -675,6 +713,30 @@ UNDATED: dict[str, dict[str, None]] = {"pdf": {"CreationDate": None}, "svg": {"D
 SVG_HASH_SALT: str = "hpcagent-bench"
 
 
+#: The white margin a placed figure keeps left and right of its ink, in inches.
+PLACED_SIDE_PAD_IN: float = 0.02
+
+
+def fill_width(fig: Figure, pad_in: float = PLACED_SIDE_PAD_IN, rounds: int = 3) -> None:
+    """Stretch the axes horizontally so their ink (tick labels and axis labels included) spans the
+    canvas less ``pad_in`` per side. Figure-level artists (legends, figure texts) stay put, so a
+    figure that places a figure-level label beside its axes must not call this."""
+    width = float(fig.get_size_inches()[0])
+    axes = [ax for ax in fig.axes if ax.get_visible()]
+    for _ in range(rounds):
+        renderer = fig.canvas.get_renderer()
+        ink = Bbox.union([ax.get_tightbbox(renderer) for ax in axes])
+        left, right = ink.x0 / fig.dpi, ink.x1 / fig.dpi
+        if abs(left - pad_in) < 0.005 and abs(width - pad_in - right) < 0.005:
+            return
+        scale = (width - 2.0 * pad_in) / (right - left)
+        for ax in axes:
+            box = ax.get_position()
+            x0 = (pad_in + (box.x0 * width - left) * scale) / width
+            x1 = (pad_in + (box.x1 * width - left) * scale) / width
+            ax.set_position((x0, box.y0, x1 - x0, box.height))
+
+
 def placed_box(fig: Figure, width_in: float) -> Bbox:
     """The saved box of a paper figure placed at ``width_in``: the ink's own height, the canvas's width.
 
@@ -798,31 +860,50 @@ def shrink_crowded_ticks(fig: Figure, axes: Sequence[Axes], start_pt: float, flo
 def mark_boxes(ax: Axes) -> list[Bbox]:
     """The display box of every mark and interval drawn on ``ax``: one per scatter point, sized by
     its own marker area, one per interval segment, and one per marker of a plotted line."""
-    fig = ax.figure
-    dpi = fig.dpi
+    dpi = ax.figure.dpi
     boxes: list[Bbox] = []
     for collection in ax.collections:
-        if isinstance(collection, PathCollection) and len(collection.get_sizes()):
-            centres = collection.get_offset_transform().transform(collection.get_offsets())
-            sizes = np.broadcast_to(collection.get_sizes(), (len(centres),))
-            for (x, y), size in zip(centres, sizes, strict=True):
-                radius = math.sqrt(size) / 2.0 * dpi / 72.0
-                boxes.append(Bbox.from_extents(x - radius, y - radius, x + radius, y + radius))
+        if isinstance(collection, PathCollection):
+            boxes += scatter_boxes(collection, dpi)
         elif isinstance(collection, LineCollection):
-            for segment in collection.get_segments():
-                if len(segment):
-                    ends = collection.get_transform().transform(segment)
-                    boxes.append(Bbox.from_extents(*ends.min(axis=0), *ends.max(axis=0)))
+            boxes += segment_boxes(collection)
     for line in ax.lines:
-        if line.get_marker() in (None, "", "None", " ") or not line.get_visible():
-            continue
-        radius = line.get_markersize() / 2.0 * dpi / 72.0
-        # A line's data may arrive as Python lists of mixed int/float (an errorbar's caps), which
-        # stack into an OBJECT array that a log transform cannot take.
-        xs, ys = (np.asarray(values, dtype=float) for values in line.get_data())
-        for x, y in line.get_transform().transform(np.column_stack((xs, ys))):
-            boxes.append(Bbox.from_extents(x - radius, y - radius, x + radius, y + radius))
+        boxes += line_marker_boxes(line, dpi)
     return boxes
+
+
+def centred_box(x: float, y: float, radius: float) -> Bbox:
+    """The square display box of half-side ``radius`` pixels around ``(x, y)``."""
+    return Bbox.from_extents(x - radius, y - radius, x + radius, y + radius)
+
+
+def scatter_boxes(collection: PathCollection, dpi: float) -> list[Bbox]:
+    """One box per scatter point, sized by its own marker area; none for a sizeless collection."""
+    if not len(collection.get_sizes()):
+        return []
+    centres = collection.get_offset_transform().transform(collection.get_offsets())
+    sizes = np.broadcast_to(collection.get_sizes(), (len(centres),))
+    return [centred_box(x, y, math.sqrt(size) / 2.0 * dpi / 72.0) for (x, y), size in zip(centres, sizes, strict=True)]
+
+
+def segment_boxes(collection: LineCollection) -> list[Bbox]:
+    """One box per non-empty interval segment."""
+    transform = collection.get_transform()
+    return [
+        Bbox.from_extents(*ends.min(axis=0), *ends.max(axis=0))
+        for ends in (transform.transform(segment) for segment in collection.get_segments() if len(segment))
+    ]
+
+
+def line_marker_boxes(line: Line2D, dpi: float) -> list[Bbox]:
+    """One box per marker of a visible plotted line; none for a line drawn without markers."""
+    if line.get_marker() in (None, "", "None", " ") or not line.get_visible():
+        return []
+    radius = line.get_markersize() / 2.0 * dpi / 72.0
+    # A line's data may arrive as Python lists of mixed int/float (an errorbar's caps), which
+    # stack into an OBJECT array that a log transform cannot take.
+    xs, ys = (np.asarray(values, dtype=float) for values in line.get_data())
+    return [centred_box(x, y, radius) for x, y in line.get_transform().transform(np.column_stack((xs, ys)))]
 
 
 #: Tags an annotation :func:`settle_clear_labels` places clear of the marks, of the other tagged
@@ -844,10 +925,7 @@ def settle_clear_labels(fig: Figure) -> None:
     save time, when every limit and margin is final: a label's offset is in points, so a place clear
     before the last ``subplots_adjust`` need not be clear after it.
     """
-    tagged = [
-        (ax, text) for ax in fig.axes for text in ax.texts
-        if isinstance(text, Annotation) and text.get_gid() == CLEAR_GID and text.get_text()
-    ]  # fmt: skip
+    tagged = clear_labels(fig)
     if not tagged:
         return
     fig.canvas.draw()
@@ -858,10 +936,7 @@ def settle_clear_labels(fig: Figure) -> None:
     for ax, label in tagged:
         frame = ax.get_window_extent(renderer)
         if id(ax) not in obstacles:
-            others = [
-                text.get_window_extent(renderer) for text in ax.texts if id(text) not in labels and text.get_text()
-            ]
-            obstacles[id(ax)] = [box for box in mark_boxes(ax) + others if box.overlaps(frame)]
+            obstacles[id(ax)] = panel_obstacles(ax, renderer, labels)
         taken = obstacles[id(ax)]
         drawn = label.get_window_extent(renderer)
         box = clear_place(drawn, taken, frame, pad)
@@ -870,39 +945,64 @@ def settle_clear_labels(fig: Figure) -> None:
         label.xyann = (x + (box.x0 - drawn.x0) * 72.0 / fig.dpi, y + (box.y0 - drawn.y0) * 72.0 / fig.dpi)
 
 
+def clear_labels(fig: Figure) -> list[tuple[Axes, Annotation]]:
+    """``(axes, annotation)`` of every non-empty :data:`CLEAR_GID` annotation on ``fig``."""
+    return [
+        (ax, text) for ax in fig.axes for text in ax.texts
+        if isinstance(text, Annotation) and text.get_gid() == CLEAR_GID and text.get_text()
+    ]  # fmt: skip
+
+
+def panel_obstacles(ax: Axes, renderer: RendererBase, labels: set[int]) -> list[Bbox]:
+    """What a settled label on ``ax`` must keep clear of: its marks and its texts other than the
+    ``labels`` being settled, inside its frame."""
+    frame = ax.get_window_extent(renderer)
+    others = [text.get_window_extent(renderer) for text in ax.texts if id(text) not in labels and text.get_text()]
+    return [box for box in mark_boxes(ax) + others if box.overlaps(frame)]
+
+
 def clear_place(box: Bbox, taken: Sequence[Bbox], frame: Bbox, pad: float) -> Bbox:
     """Where :func:`settle_clear_labels` puts a label drawn at ``box``: inside ``frame``, clear of
     every box in ``taken`` by ``pad`` pixels, as near its drawn place as that allows."""
 
-    def hits(candidate: Bbox) -> list[Bbox]:
-        return [
-            other for other in taken
-            if other.x0 < candidate.x1 + pad and other.x1 > candidate.x0 - pad
-            and other.y0 < candidate.y1 + pad and other.y1 > candidate.y0 - pad
-        ]  # fmt: skip
-
     box = box.translated(max(0.0, frame.x0 + pad - box.x0) - max(0.0, box.x1 + pad - frame.x1), 0.0)
     for attempt in range(len(taken) + 1):
-        blocking = hits(box)
+        blocking = near_boxes(box, taken, pad)
         if not blocking:
             break
         box = box.translated(0.0, max(other.y1 for other in blocking) + pad - box.y0)
     held = box.translated(0.0, min(0.0, frame.y1 - pad - box.y1))
-    if not hits(held):
+    if not near_boxes(held, taken, pad):
         return held
-    # Held under the frame it lands on a mark again. Nearest first: slide it sideways at that height,
-    # up to two label widths each way inside the frame; failing that, the highest clear gap below.
-    step = held.width / 4.0
-    for shift in (sign * step * k for k in range(1, 9) for sign in (1.0, -1.0)):
-        candidate = held.translated(shift, 0.0)
-        if candidate.x0 >= frame.x0 + pad and candidate.x1 <= frame.x1 - pad and not hits(candidate):
-            return candidate
-    for other in sorted(taken, key=lambda other: -other.y0):
-        candidate = held.translated(0.0, other.y0 - pad - held.y1)
-        if candidate.y0 >= frame.y0 + pad and not hits(candidate):
+    for candidate in fallback_places(held, taken, frame, pad):
+        if not near_boxes(candidate, taken, pad):
             return candidate
     LOG.warning("style: no clear place for the label %r inside its panel", box)
     return held
+
+
+def fallback_places(held: Bbox, taken: Sequence[Bbox], frame: Bbox, pad: float) -> Iterator[Bbox]:
+    """Where a label held under the frame top at ``held`` may go when it lands on a mark there,
+    nearest first: sideways at that height, up to two label widths each way inside the frame; then
+    down into each gap under a taken box, highest first, above the frame bottom."""
+    step = held.width / 4.0
+    for shift in (sign * step * k for k in range(1, 9) for sign in (1.0, -1.0)):
+        candidate = held.translated(shift, 0.0)
+        if candidate.x0 >= frame.x0 + pad and candidate.x1 <= frame.x1 - pad:
+            yield candidate
+    for other in sorted(taken, key=lambda other: -other.y0):
+        candidate = held.translated(0.0, other.y0 - pad - held.y1)
+        if candidate.y0 >= frame.y0 + pad:
+            yield candidate
+
+
+def near_boxes(candidate: Bbox, taken: Sequence[Bbox], pad: float) -> list[Bbox]:
+    """The boxes of ``taken`` within ``pad`` pixels of ``candidate``."""
+    return [
+        other for other in taken
+        if other.x0 < candidate.x1 + pad and other.x1 > candidate.x0 - pad
+        and other.y0 < candidate.y1 + pad and other.y1 > candidate.y0 - pad
+    ]  # fmt: skip
 
 
 def right_protrusion_in(fig: Figure, ax: Axes) -> float:

@@ -8,8 +8,7 @@ rather than edited whenever the data changes.
 
 Two rows per pair, because the two legs answer different questions and a reader needs both beside
 the relaunch rate the final-attempt rule (T2) makes them conditional on:
-speed-up (geomean ratio, log-t interval, BH verdict) and tokens (the same, plus the total-token
-ratio with its paired bootstrap interval).
+speed-up and tokens (geomean ratio, log-t interval, BH verdict).
 
     python3 scripts/impact_markdown.py tables/impact_lang_skills_cpu.csv
     python3 scripts/impact_markdown.py --readme experiments/perf-playbook/README.md
@@ -36,9 +35,8 @@ HEADERS = (
     "relaunched",
     "speed-up ratio",
     "q",
-    "token ratio",
+    "cost ratio (control/treated)",
     "q",
-    "total tokens",
 )
 
 
@@ -72,7 +70,6 @@ def row_cells(row: "pd.Series[object]") -> list[str]:
         verdict(float(row.speedup_p_adjusted), row.speedup_verdict),
         ratio(float(row.token_ratio), float(row.token_ci_low), float(row.token_ci_high)),
         verdict(float(row.token_p_adjusted), row.token_verdict),
-        ratio(float(row.token_total_ratio), float(row.token_total_ci_low), float(row.token_total_ci_high)),
     ]
 
 

@@ -84,21 +84,9 @@ class NoBaselineRows(ValueError):
 #: Seed for every per-cell bootstrap so the same DB yields the same published figure.
 CI_SEED: int = 0
 
-#: STATISTIC colours for the per-sample diagnostic panels (the sample's own histogram/ECDF/violin,
-#: a fitted curve, the raw jittered points, the QQ reference line) -- not entity colours:
-#: palette.py reserves colour for a packet, a framework or a model, and none of these marks is one
-#: of those, the same precedent ``statistics/plot_canon_speedup.py``'s MEDIAN_HUE/GEOMEAN_HUE sets.
-SAMPLE_HUE: str = "#2a78d6"
-FITTED_HUE: str = "#d64550"
-RAW_POINT_HUE: str = "#1baf7a"
-QQ_REFERENCE_HUE: str = "#8a8a86"
-
-#: These dense, many-cell figures (a per-kernel grid, a two-panel diagnostic) would crowd under
-#: print-scale type -- their titles/labels/legend text trace to the shared :mod:`style` constants
-#: at these named fractions instead of each being its own bare literal.
-DENSE_SCALE: float = 0.5
-CELL_SCALE: float = 0.6
-TICK_SCALE: float = 0.43
+#: These dense, many-cell figures (a heatmap, a per-kernel grid, a two-panel diagnostic) are drawn
+#: at paper size, so their type and strokes are the shared print scale.
+TYPE: style.TypeScale = style.PRINT_SCALE
 
 #: The speed-up denominator. Named here because it is not just another series: every ratio in the
 #: heatmap divides by it, so it has to survive :func:`load_results` under its own name.
@@ -200,10 +188,9 @@ def abbreviate_runtime(x: float) -> str:
 
 
 def save_figure(output: str, fig: Figure) -> str:
-    """Write ``fig`` to ``output``, creating its directory."""
-    pathlib.Path(output).parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(output, dpi=600, bbox_inches="tight")
-    plt.close(fig)
+    """Write ``fig`` to ``output`` through :func:`style.save` (undated, fixed dpi) in ``output``'s format."""
+    path = pathlib.Path(output)
+    style.save(fig, path, formats=(path.suffix.lstrip(".") or "png",))
     return output
 
 
@@ -225,6 +212,25 @@ def load_results(
     with columns ``benchmark``, ``domain``, ``framework``, ``time``, plus the ``cpu`` / ``gpu``
     machine axes, which are deliberately NOT folded -- see :func:`machine_groups`.
     """
+    data = read_results_table(db)
+    data = data.drop(["timestamp"], axis=1).reset_index(drop=True)
+
+    if benchmark != "all":
+        keep: set[str] = set(select_short_names(benchmark))
+        data = data.loc[data["benchmark"].isin(list(keep))].reset_index(drop=True)
+
+    data = data.loc[data["domain"] != ""]
+    data = data.loc[data["validated"].eq(True)]
+    data = data.drop(["validated"], axis=1).reset_index(drop=True)
+
+    data = fold_build_axes(fold_variant(filter_datatype(data, datatype, db), variant), baseline)
+    data = data.loc[data["preset"] == preset]
+    data = data.drop(["preset"], axis=1).reset_index(drop=True)
+    return data
+
+
+def read_results_table(db: str | None) -> pd.DataFrame:
+    """The raw ``results`` table of ``db`` (default: the base DB), aggregated from its shards first."""
     # A distributed run leaves one DB per rank and no merged file until something asks for it; this
     # is that ask, so plotting a sharded run needs no separate aggregation step.
     target = db if db is not None else recording.base_db_path()
@@ -245,34 +251,36 @@ def load_results(
     conn = sqlite3.connect(aggregate)
     data: pd.DataFrame = pd.read_sql_query("SELECT * FROM results", conn)
     conn.close()
+    return data
 
-    data = data.drop(["timestamp"], axis=1).reset_index(drop=True)
 
-    if benchmark != "all":
-        keep: set[str] = set(select_short_names(benchmark))
-        data = data[data["benchmark"].isin(keep)].reset_index(drop=True)
-
-    data = data[data["domain"] != ""]
-    data = data[data["validated"] == True]
-    data = data.drop(["validated"], axis=1).reset_index(drop=True)
-
+def filter_datatype(data: pd.DataFrame, datatype: str, db: str | None) -> pd.DataFrame:
+    """``data``'s ``datatype`` rows (legacy NULL read as float64), the column dropped."""
     if "datatype" in data.columns:
         legacy_mask = data["datatype"].isna()
         data.loc[legacy_mask, "datatype"] = "float64"
-        data = data[data["datatype"] == datatype]
-        data = data.drop(["datatype"], axis=1).reset_index(drop=True)
-    elif datatype != "float64":
+        data = data.loc[data["datatype"] == datatype]
+        return data.drop(["datatype"], axis=1).reset_index(drop=True)
+    if datatype != "float64":
         raise RuntimeError(f"{db} predates the datatype column; cannot filter to --datatype={datatype}.")
+    return data
 
-    if "variant" in data.columns:
-        if variant is not None:
-            data = data[(data["variant"].isna()) | (data["variant"] == variant)]
-        sparse_mask = data["variant"].notna()
-        data.loc[sparse_mask, "benchmark"] = (
-            data.loc[sparse_mask, "benchmark"].astype(str) + "/" + data.loc[sparse_mask, "variant"].astype(str)
-        )
-        data = data.drop(["variant"], axis=1).reset_index(drop=True)
 
+def fold_variant(data: pd.DataFrame, variant: str | None) -> pd.DataFrame:
+    """``data`` restricted to ``variant`` (plus variant-less rows), the variant folded into ``benchmark``."""
+    if "variant" not in data.columns:
+        return data
+    if variant is not None:
+        data = data.loc[(data["variant"].isna()) | (data["variant"] == variant)]
+    sparse_mask = data["variant"].notna()
+    data.loc[sparse_mask, "benchmark"] = (
+        data.loc[sparse_mask, "benchmark"].astype(str) + "/" + data.loc[sparse_mask, "variant"].astype(str)
+    )
+    return data.drop(["variant"], axis=1).reset_index(drop=True)
+
+
+def fold_build_axes(data: pd.DataFrame, baseline: str) -> pd.DataFrame:
+    """``data`` with the ``flavor`` and ``build`` axes folded into every non-baseline ``framework``."""
     # `flavor` and `build` fold into `framework` exactly as `variant` folds into `benchmark` above:
     # they are stored apart so the DB can be queried on either axis, and joined here because a
     # figure plots one series per column. Without the fold, dace_cpu's three optimizers -- and the
@@ -291,9 +299,6 @@ def load_results(
                 data.loc[mask, "framework"].astype(str) + "/" + data.loc[mask, axis].astype(str)
             )
             data = data.drop([axis], axis=1).reset_index(drop=True)
-
-    data = data[data["preset"] == preset]
-    data = data.drop(["preset"], axis=1).reset_index(drop=True)
     return data
 
 
@@ -399,7 +404,7 @@ def draw_group_labels(ax: Axes, spans: Sequence[GroupSpan], x_right: float) -> N
     so the outside text is kept)."""
     for span in spans:
         if span.start > 0:
-            ax.axhline(span.start - 0.5, color="0.15", linewidth=1.1)
+            ax.axhline(span.start - 0.5, color=style.REFERENCE, linewidth=TYPE.line_width)
         mid = (span.start + span.end - 1) / 2.0
         ax.text(  # pyright: ignore[reportUnknownMemberType] -- matplotlib takes untyped **kwargs
             x_right,
@@ -408,7 +413,7 @@ def draw_group_labels(ax: Axes, spans: Sequence[GroupSpan], x_right: float) -> N
             ha="left",
             va="center",
             rotation=90,
-            fontsize=style.ANNOTATION_PT * DENSE_SCALE,
+            fontsize=TYPE.annotation_pt,
             clip_on=False,
         )
 
@@ -467,9 +472,9 @@ def plot_heatmap(
 
 
 def ink_for(ratio: float) -> str:
-    """Cell text colour: grey inside the pale middle of the ramp, white on its saturated ends."""
+    """Cell text colour: ink inside the pale middle of the ramp, white on its saturated ends."""
     magnitude = 1 / ratio if ratio < 1 else ratio
-    return "grey" if magnitude < 1.3 else "white"
+    return style.INK if magnitude < 1.3 else "white"
 
 
 def ci_superscript(summary: pd.DataFrame, benchmark: str, framework: str) -> str:
@@ -553,7 +558,7 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
                 ha="center",
                 va="center",
                 color=ink_for(ratio),
-                fontsize=style.ANNOTATION_PT * CELL_SCALE,
+                fontsize=TYPE.label_pt,
             )
         else:
             ax2.text(
@@ -563,7 +568,7 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
                 ha="center",
                 va="center",
                 color="white",
-                fontsize=style.ANNOTATION_PT * CELL_SCALE,
+                fontsize=TYPE.label_pt,
             )
 
     hm_data: pd.DataFrame = best_wide.drop(["benchmark", "domain"], axis=1)
@@ -588,8 +593,8 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
                     abbreviate_runtime(base_times[i]),
                     ha="center",
                     va="center",
-                    color="black",
-                    fontsize=style.ANNOTATION_PT * CELL_SCALE,
+                    color=style.INK,
+                    fontsize=TYPE.label_pt,
                 )
                 continue
             ratio = ratios[i, j]
@@ -603,7 +608,7 @@ def heatmap_figure(data: pd.DataFrame, order: str, output: str, baseline: str = 
                 ha="center",
                 va="center",
                 color=ink_for(ratio),
-                fontsize=style.ANNOTATION_PT * CELL_SCALE,
+                fontsize=TYPE.label_pt,
             )
 
     # Group separators + right-side y-axis group text (structured grids / tsvc2 / machine_learning / ...).
@@ -706,7 +711,6 @@ def distribution_figure(
     fig_h = max(2.1, nrows * 2.0)
     fig, axes = plt.subplots(nrows, ncols, figsize=(fig_w, fig_h), squeeze=False)
 
-    v_width = 0.8  # CONSTANT glyph width -- independent of how many frameworks a kernel has
     for idx, kernel in enumerate(ordered):
         ax = axes[idx // ncols][idx % ncols]
         sub = data[data["benchmark"] == kernel]
@@ -719,29 +723,16 @@ def distribution_figure(
             if kept.size == 0:
                 continue
             if kind == "violin":
-                parts = ax.violinplot([kept], positions=[slot], widths=v_width, showmedians=True, showextrema=False)
-                for body in cast("list[PolyCollection]", parts["bodies"]):
-                    body.set_facecolor(colors[fw])
-                    body.set_edgecolor(colors[fw])
-                    body.set_alpha(0.75)
-                if "cmedians" in parts:
-                    medians = cast("LineCollection", parts["cmedians"])
-                    medians.set_color("black")
-                    medians.set_linewidth(0.8)
+                draw_violin(ax, kept, slot, colors[fw], 0.75)
             else:
-                bp = ax.boxplot([kept], positions=[slot], widths=v_width * 0.75, showfliers=False, patch_artist=True)
-                for patch in cast("list[Patch]", bp["boxes"]):
-                    patch.set_facecolor(colors[fw])
-                    patch.set_alpha(0.75)
-                for med in cast("list[Line2D]", bp["medians"]):
-                    med.set_color("black")
+                draw_sample_box(ax, kept, slot, colors[fw])
         ax.set_xlim(-0.6, nslots - 0.4)  # CONSTANT across panels
         ax.set_xticks(range(nslots))
         ax.set_xticklabels([])  # framework identity lives in the shared legend, not per panel
-        ax.set_title(kernel, fontsize=style.ANNOTATION_PT * DENSE_SCALE)
-        ax.tick_params(axis="y", labelsize=style.TICK_PT * TICK_SCALE)
+        ax.set_title(kernel, fontsize=TYPE.annotation_pt)
+        ax.tick_params(axis="y", labelsize=TYPE.tick_pt)
         if idx % ncols == 0:
-            ax.set_ylabel("Time (ms)", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
+            ax.set_ylabel("Time (ms)", fontsize=TYPE.annotation_pt)
 
     # Blank any unused cells in the last row.
     for idx in range(len(ordered), nrows * ncols):
@@ -750,17 +741,44 @@ def distribution_figure(
     # One shared framework legend (colour -> framework), above the grid -- the same wrap-to-fit
     # helper every other figure's key uses, rather than a second hand-rolled ``fig.legend`` call.
     handles = [Rectangle((0, 0), 1, 1, color=colors[fw], label=fw) for fw in slots]
-    style.legend_below(fig, handles, ncol=min(nslots, 6), y=1.02, fontsize=style.ANNOTATION_PT * DENSE_SCALE)
+    style.legend_below(fig, handles, ncol=min(nslots, 6), y=1.02, fontsize=TYPE.legend_pt)
 
     plt.tight_layout()
     return save_figure(output, fig)
+
+
+#: A distribution glyph's CONSTANT width, independent of how many frameworks a kernel has.
+GLYPH_WIDTH: float = 0.8
+
+
+def draw_violin(ax: Axes, samples: FloatArray, position: float, color: str, alpha: float) -> None:
+    """One violin of ``samples`` at ``position`` in ``color``, its median in ink."""
+    parts = ax.violinplot([samples], positions=[position], widths=GLYPH_WIDTH, showmedians=True, showextrema=False)
+    for body in cast("list[PolyCollection]", parts["bodies"]):
+        body.set_facecolor(color)
+        body.set_edgecolor(color)
+        body.set_alpha(alpha)
+    if "cmedians" in parts:
+        medians = cast("LineCollection", parts["cmedians"])
+        medians.set_color(style.INK)
+        medians.set_linewidth(TYPE.line_width)
+
+
+def draw_sample_box(ax: Axes, samples: FloatArray, position: float, color: str) -> None:
+    """One box of ``samples`` at ``position`` in ``color``, no fliers, its median in ink."""
+    bp = ax.boxplot([samples], positions=[position], widths=GLYPH_WIDTH * 0.75, showfliers=False, patch_artist=True)
+    for patch in cast("list[Patch]", bp["boxes"]):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.75)
+    for med in cast("list[Line2D]", bp["medians"]):
+        med.set_color(style.INK)
 
 
 def draw_interval_band(
     ax: Axes,
     interval: inference.Interval,
     orientation: Literal["horizontal", "vertical"] = "horizontal",
-    color: str = FITTED_HUE,
+    color: str = style.STAT_INK.fit,
 ) -> None:
     """Shade an :class:`~hpcagent_bench.stats.inference.Interval` on ``ax`` and mark its point estimate.
 
@@ -771,10 +789,10 @@ def draw_interval_band(
         return
     if orientation == "horizontal":
         ax.axvspan(interval.low, interval.high, color=color, alpha=0.18, zorder=0)
-        ax.axvline(interval.point, color=color, linewidth=1.2, zorder=1)
+        ax.axvline(interval.point, color=color, linewidth=TYPE.line_width, zorder=1)
     else:
         ax.axhspan(interval.low, interval.high, color=color, alpha=0.18, zorder=0)
-        ax.axhline(interval.point, color=color, linewidth=1.2, zorder=1)
+        ax.axhline(interval.point, color=color, linewidth=TYPE.line_width, zorder=1)
 
 
 def plot_sample_diagnostics(
@@ -824,64 +842,93 @@ def plot_sample_diagnostics(
 
     fitted_handle: Line2D | None = None
     if verdict.normal:
-        bins = max(10, min(40, int(math.sqrt(x.size))))
-        ax_left.hist(x, bins=bins, density=True, color=SAMPLE_HUE, alpha=0.55, edgecolor="white", linewidth=0.4)
-        grid: FloatArray = np.linspace(float(x.min()), float(x.max()), 256)
-        mu, sigma = float(np.mean(x)), float(np.std(x, ddof=1))
-        if sigma > 0:  # a fitted curve is drawn ONLY on this branch
-            density = cast("FloatArray", norm.pdf(grid, mu, sigma))
-            (fitted_handle,) = ax_left.plot(grid, density, color=FITTED_HUE, linewidth=1.4, label="Fitted Normal")
-        draw_interval_band(ax_left, interval)
-        ax_left.set_xlabel(f"Time ({units})", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
-        ax_left.set_ylabel("Density", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
-
-        # QQ panel: the tails the histogram hides.
-        ordered = np.sort(x)
-        offset = 0.375 if ordered.size <= 10 else 0.5
-        probs = (np.arange(1, ordered.size + 1) - offset) / (ordered.size + 1 - 2 * offset)
-        theoretical = cast("FloatArray", norm.ppf(probs)) * sigma + mu
-        ax_right.plot(theoretical, ordered, marker="o", linestyle="none", markersize=2.4, color=SAMPLE_HUE)
-        lims = [float(min(theoretical.min(), ordered.min())), float(max(theoretical.max(), ordered.max()))]
-        ax_right.plot(lims, lims, color=QQ_REFERENCE_HUE, linewidth=0.9, linestyle="--")
-        ax_right.set_xlabel(f"Theoretical Quantile ({units})", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
-        ax_right.set_ylabel(f"Sample Quantile ({units})", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
-        ax_right.set_title(
-            f"QQ vs Normal (1-$r^2$ = {verdict.qq_departure:.2g})", fontsize=style.ANNOTATION_PT * DENSE_SCALE
-        )
+        fitted_handle = draw_fitted_histogram(ax_left, x, interval, units)
+        draw_qq(ax_right, x, verdict, units)
     else:
-        # ECDF: every sample visible, no binning choice, no implied smooth density.
-        ordered_samples = np.sort(x)
-        ecdf: FloatArray = np.arange(1, ordered_samples.size + 1) / ordered_samples.size
-        ax_left.step(ordered_samples, ecdf, where="post", color=SAMPLE_HUE, linewidth=1.2)
-        draw_interval_band(ax_left, interval)
-        ax_left.set_xlabel(f"Time ({units})", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
-        ax_left.set_ylabel("ECDF", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
-        ax_left.set_ylim(0.0, 1.0)
+        draw_ecdf(ax_left, x, interval, units)
+        draw_raw_violin(ax_right, x, interval, units)
 
-        parts = ax_right.violinplot([x], positions=[0], widths=0.8, showmedians=True, showextrema=False)
-        for body in parts["bodies"]:
-            body.set_facecolor(SAMPLE_HUE)
-            body.set_edgecolor(SAMPLE_HUE)
-            body.set_alpha(0.45)
-        if "cmedians" in parts:
-            parts["cmedians"].set_color("black")
-            parts["cmedians"].set_linewidth(0.8)
-        jitter: FloatArray = np.random.default_rng(CI_SEED).uniform(-0.16, 0.16, x.size)  # raw points, never hidden
-        ax_right.plot(jitter, x, marker="o", linestyle="none", markersize=2.0, color=RAW_POINT_HUE, alpha=0.7)
-        draw_interval_band(ax_right, interval, orientation="vertical")
-        ax_right.set_xticks([])
-        ax_right.set_xlim(-0.6, 0.6)
-        ax_right.set_ylabel(f"Time ({units})", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
-        ax_right.set_title("Raw Samples", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
-
-    ax_left.set_title(interval.label(), fontsize=style.ANNOTATION_PT * DENSE_SCALE)  # parametric vs bootstrap
+    ax_left.set_title(interval.label(), fontsize=TYPE.annotation_pt)  # parametric vs bootstrap
     for ax in (ax_left, ax_right):
-        ax.tick_params(axis="both", labelsize=style.TICK_PT * TICK_SCALE)
-    fig.suptitle(f"{head} -- n={verdict.n}, {verdict.reason}", fontsize=style.ANNOTATION_PT * DENSE_SCALE)
+        ax.tick_params(axis="both", labelsize=TYPE.tick_pt)
+    fig.suptitle(f"{head} -- n={verdict.n}, {verdict.reason}", fontsize=TYPE.annotation_pt)
     if fitted_handle is not None:
-        style.legend_below(fig, [fitted_handle], fontsize=style.TICK_PT * TICK_SCALE, y=0.02)
+        style.legend_below(fig, [fitted_handle], fontsize=TYPE.legend_pt, y=0.02)
     plt.tight_layout()
     return save_figure(output, fig)
+
+
+def draw_fitted_histogram(ax: Axes, x: FloatArray, interval: inference.Interval, units: str) -> Line2D | None:
+    """``x``'s density histogram with its fitted normal PDF and ``interval``; returns the PDF's line,
+    ``None`` for a zero-spread sample (no curve to fit)."""
+    fitted_handle: Line2D | None = None
+    bins = max(10, min(40, int(math.sqrt(x.size))))
+    ax.hist(
+        x,
+        bins=bins,
+        density=True,
+        color=style.STAT_INK.sample,
+        alpha=0.55,
+        edgecolor="white",
+        linewidth=TYPE.hairline_width,
+    )
+    grid: FloatArray = np.linspace(float(x.min()), float(x.max()), 256)
+    mu, sigma = float(np.mean(x)), float(np.std(x, ddof=1))
+    if sigma > 0:  # a fitted curve is drawn ONLY on the normal branch
+        density = cast("FloatArray", norm.pdf(grid, mu, sigma))
+        (fitted_handle,) = ax.plot(
+            grid, density, color=style.STAT_INK.fit, linewidth=TYPE.line_width, label="Fitted Normal"
+        )
+    draw_interval_band(ax, interval)
+    ax.set_xlabel(f"Time ({units})", fontsize=TYPE.annotation_pt)
+    ax.set_ylabel("Density", fontsize=TYPE.annotation_pt)
+    return fitted_handle
+
+
+def draw_qq(ax: Axes, x: FloatArray, verdict: inference.NormalityVerdict, units: str) -> None:
+    """``x``'s QQ plot against its fitted normal: the tails a histogram hides."""
+    mu, sigma = float(np.mean(x)), float(np.std(x, ddof=1))
+    ordered = np.sort(x)
+    offset = 0.375 if ordered.size <= 10 else 0.5
+    probs = (np.arange(1, ordered.size + 1) - offset) / (ordered.size + 1 - 2 * offset)
+    theoretical = cast("FloatArray", norm.ppf(probs)) * sigma + mu
+    ax.plot(theoretical, ordered, marker="o", linestyle="none", markersize=TYPE.point_size, color=style.STAT_INK.sample)
+    lims = [float(min(theoretical.min(), ordered.min())), float(max(theoretical.max(), ordered.max()))]
+    ax.plot(lims, lims, color=style.REFERENCE, linewidth=TYPE.line_width, linestyle="--")
+    ax.set_xlabel(f"Theoretical Quantile ({units})", fontsize=TYPE.annotation_pt)
+    ax.set_ylabel(f"Sample Quantile ({units})", fontsize=TYPE.annotation_pt)
+    ax.set_title(f"QQ vs Normal (1-$r^2$ = {verdict.qq_departure:.2g})", fontsize=TYPE.annotation_pt)
+
+
+def draw_ecdf(ax: Axes, x: FloatArray, interval: inference.Interval, units: str) -> None:
+    """``x``'s ECDF with ``interval``: every sample visible, no binning choice, no implied smooth density."""
+    ordered_samples = np.sort(x)
+    ecdf: FloatArray = np.arange(1, ordered_samples.size + 1) / ordered_samples.size
+    ax.step(ordered_samples, ecdf, where="post", color=style.STAT_INK.sample, linewidth=TYPE.line_width)
+    draw_interval_band(ax, interval)
+    ax.set_xlabel(f"Time ({units})", fontsize=TYPE.annotation_pt)
+    ax.set_ylabel("ECDF", fontsize=TYPE.annotation_pt)
+    ax.set_ylim(0.0, 1.0)
+
+
+def draw_raw_violin(ax: Axes, x: FloatArray, interval: inference.Interval, units: str) -> None:
+    """``x``'s violin with every raw sample jittered over it and ``interval`` as a vertical band."""
+    draw_violin(ax, x, 0, style.STAT_INK.sample, 0.45)
+    jitter: FloatArray = np.random.default_rng(CI_SEED).uniform(-0.16, 0.16, x.size)  # raw points, never hidden
+    ax.plot(
+        jitter,
+        x,
+        marker="o",
+        linestyle="none",
+        markersize=TYPE.point_size,
+        color=style.STAT_INK.raw_point,
+        alpha=0.7,
+    )
+    draw_interval_band(ax, interval, orientation="vertical")
+    ax.set_xticks([])
+    ax.set_xlim(-0.6, 0.6)
+    ax.set_ylabel(f"Time ({units})", fontsize=TYPE.annotation_pt)
+    ax.set_title("Raw Samples", fontsize=TYPE.annotation_pt)
 
 
 def corpus_comparisons(

@@ -37,7 +37,7 @@ from typing import Any
 import pandas as pd
 
 from hpcagent_bench import experiment_tags
-from hpcagent_bench.stats import palette
+from hpcagent_bench.stats import palette, population
 from hpcagent_bench.stats import style as plotstyle
 
 plotstyle.apply()
@@ -54,17 +54,9 @@ LEFT_INCHES: float = 1.05
 RIGHT_INCHES: float = 0.5
 BOTTOM_INCHES: float = 4.0
 
-#: The ways a kernel drops out of the funnel. Purple for a correct answer that was not faster, red
-#: for a wrong one, grey for a grade that never ran; each carries a hatch as well, so the segments
-#: stay apart in print and under CVD where hue alone would not be enough. All three are taken from
-#: the validated categorical palette rather than invented, and none is a hue a model in these
-#: figures wears.
-NO_GAIN: str = "#7a5cc0"
-WRONG: str = "#d64550"
-UNGRADED: str = "#9a9aa0"
-
-#: The roster a bar is a part of. Pale enough to read as a surface rather than as a fifth series.
-TRACK: str = "#eeeef1"
+#: Author-size type. Funnel segments draw in ``style.STAT_INK`` with a hatch each, so they stay
+#: apart in print and under CVD where hue alone would not.
+TYPE: plotstyle.TypeScale = plotstyle.AUTHOR_SCALE
 
 #: A gap between adjacent segments, in DATA units on an axis counting kernels. Without it two
 #: touching fills read as one bar of the darker colour.
@@ -134,12 +126,16 @@ def arm_label(row: pd.Series) -> str:
 def segments_for(row: Any, hue: str, gate: str) -> tuple[tuple[float, str, str], ...]:
     """The stacked parts of one bar, in funnel order. ``correct`` has no no-gain split to draw."""
     if gate == "correct":
-        return ((row.correct, hue, ""), (row.wrong, WRONG, "///"), (row.ungraded, UNGRADED, "..."))
+        return (
+            (row.correct, hue, ""),
+            (row.wrong, plotstyle.STAT_INK.wrong, "///"),
+            (row.ungraded, plotstyle.STAT_INK.ungraded, "..."),
+        )
     return (
         (row.scored, hue, ""),
-        (row.no_gain, NO_GAIN, "\\\\"),
-        (row.wrong, WRONG, "///"),
-        (row.ungraded, UNGRADED, "..."),
+        (row.no_gain, plotstyle.STAT_INK.no_gain, "\\\\"),
+        (row.wrong, plotstyle.STAT_INK.wrong, "///"),
+        (row.ungraded, plotstyle.STAT_INK.ungraded, "..."),
     )
 
 
@@ -151,7 +147,7 @@ def draw(ax: plt.Axes, table: pd.DataFrame, roster: int, gate: str) -> None:
         # The roster the arm was given, drawn first as a pale track. What the fills leave uncovered
         # is the kernels the arm never reached -- a real part of the comparison, so it gets a
         # surface of its own rather than being the white of the page.
-        ax.bar(x, roster, width=0.62, facecolor=TRACK, edgecolor="none", zorder=2)
+        ax.bar(x, roster, width=0.62, facecolor=plotstyle.STAT_INK.track, edgecolor="none", zorder=2)
         bottom = 0.0
         for height, colour, hatch in segments_for(row, hues[row.model], gate):
             if height <= 0:
@@ -176,12 +172,12 @@ def draw(ax: plt.Axes, table: pd.DataFrame, roster: int, gate: str) -> None:
                 f"{value:.0%}",
                 va="bottom",
                 ha="center",
-                fontsize=plotstyle.ANNOTATION_PT,
+                fontsize=TYPE.annotation_pt,
                 color=plotstyle.INK,
             )
 
     ax.set_xticks(list(xs))
-    ax.set_xticklabels([arm_label(row) for index, row in table.iterrows()], fontsize=plotstyle.TICK_PT, rotation=90)
+    ax.set_xticklabels([arm_label(row) for index, row in table.iterrows()], fontsize=TYPE.tick_pt, rotation=90)
     ax.set_ylabel(f"Kernels of the {roster}-Kernel Roster")
     ax.set_ylim(0, roster)
     plotstyle.value_axis(ax, "y")
@@ -198,11 +194,27 @@ def handles_for(table: pd.DataFrame, gate: str) -> list[plt.Rectangle]:
     ]
     states = []
     if gate == "speedup":
-        states.append(plt.Rectangle((0, 0), 1, 1, facecolor=NO_GAIN, hatch="\\\\", edgecolor="white", label="No Gain"))
+        states.append(
+            plt.Rectangle(
+                (0, 0), 1, 1, facecolor=plotstyle.STAT_INK.no_gain, hatch="\\\\", edgecolor="white", label="No Gain"
+            )
+        )
     states += [
-        plt.Rectangle((0, 0), 1, 1, facecolor=WRONG, hatch="///", edgecolor="white", label="Incorrect"),
-        plt.Rectangle((0, 0), 1, 1, facecolor=UNGRADED, hatch="...", edgecolor="white", label="Not Graded"),
-        plt.Rectangle((0, 0), 1, 1, facecolor=TRACK, edgecolor=plotstyle.RULE, linewidth=0.6, label="Never Reached"),
+        plt.Rectangle(
+            (0, 0), 1, 1, facecolor=plotstyle.STAT_INK.wrong, hatch="///", edgecolor="white", label="Incorrect"
+        ),
+        plt.Rectangle(
+            (0, 0), 1, 1, facecolor=plotstyle.STAT_INK.ungraded, hatch="...", edgecolor="white", label="Not Graded"
+        ),
+        plt.Rectangle(
+            (0, 0),
+            1,
+            1,
+            facecolor=plotstyle.STAT_INK.track,
+            edgecolor=plotstyle.RULE,
+            linewidth=TYPE.hairline_width,
+            label="Never Reached",
+        ),
     ]
     return marks + states
 
@@ -240,7 +252,7 @@ def main() -> None:
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("results/plots/single_shot_score.csv"))
     args = parser.parse_args()
 
-    frame = pd.read_csv(args.observations, low_memory=False)
+    frame = population.on_platform(pd.read_csv(args.observations, low_memory=False))
     shots = single_shot(frame)
     # The roster is the campaign's own union of kernels, never a number written here: a launcher
     # that changes the tag changes the denominator, and a constant would keep reporting the old one.
@@ -253,12 +265,11 @@ def main() -> None:
 
     fig = build_figure(table, roster, args.gate, args.label)
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
     args.table.parent.mkdir(parents=True, exist_ok=True)
     table.to_csv(args.table, index=False)
-    fig.savefig(args.out, bbox_inches=fig.bbox_inches)
-    fig.savefig(args.out.with_suffix(".png"), dpi=200, bbox_inches=fig.bbox_inches)
-    plt.close(fig)
+    plotstyle.save(
+        fig, args.out, formats=tuple(dict.fromkeys((args.out.suffix.lstrip(".") or "pdf", "png"))), fixed=True
+    )
     print(table.to_string(index=False))
     print(f"figure -> {args.out} (+ .png)\ntable  -> {args.table}")
 

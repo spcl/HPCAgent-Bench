@@ -84,6 +84,10 @@ def task_rows(arm: str, tokens: dict[str, float]) -> list[dict[str, object]]:
             "record": "task",
             "benchmark": kernel,
             "tokens": total,
+            # the task total as fresh input alone, so every cost card prices it at ``tokens``
+            "tokens_fresh_input": total,
+            "tokens_cached_input": 0.0,
+            "tokens_output": 0.0,
             "ts_ms": 1,
         }
         for kernel, total in tokens.items()
@@ -296,8 +300,10 @@ def test_the_geomean_row_is_the_summary_slots_number() -> None:
     table = plot.table_rows(series_list)
     geomean = table[(table.panel == plot.SPEEDUP_PANEL) & (table.kernel == "GEOMEAN")].iloc[0]
     cells = kernel_comparison.speedup_series(series_list[0], plot.kernels_of(series_list)).cells
-    point, low, high = per_kernel.summary_point_speedup(cells)
-    assert (float(geomean.ratio), float(geomean.low), float(geomean.high)) == pytest.approx((point, low, high))
+    point, low, high = per_kernel.summary_geomean(cells)
+    assert (float(geomean.ratio), float(geomean.low), float(geomean.high)) == pytest.approx(
+        (point, low, high), nan_ok=True
+    )
     assert float(geomean.ratio) == pytest.approx(1.0) and int(geomean.n) == 2
 
 

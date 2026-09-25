@@ -163,17 +163,17 @@ def draw_panel(ax: Axes, panel: OptimizerPanel, config: efficacy.FigureConfig, c
         held.append(point)
         ax.annotate(
             style.ratio_label(interval.point), (index, point), textcoords="offset points",
-            xytext=(config.label_offset_pt * 0.7, 0.0), ha="left", va="center", fontsize=config.point_pt,
+            xytext=(config.label_offset_pt * 0.7, 0.0), ha="left", va="center", fontsize=config.type_.annotation_pt,
             color=style.INK, zorder=style.MARK_Z + 1.0, gid=style.CLEAR_GID,
         )  # fmt: skip
     ax.axhline(0.0, color=style.REFERENCE, linewidth=1.0, zorder=1)
     # The denominator goes UNDER the ticks, not on the 1x line: a label on the line sits at the
     # right end, which is where the last optimizer's mark is, and its white box hid a 0.93x mark.
-    ax.set_xlabel(f"1x = {panel.baseline}", fontsize=config.point_pt, color=style.FAINT, labelpad=2.0)
+    ax.set_xlabel(f"1x = {panel.baseline}", fontsize=config.type_.annotation_pt, color=style.FAINT, labelpad=2.0)
     ax.set_xlim(-0.6, max(len(panel.marks) - 0.4, 0.6))
     ax.set_xticks(range(len(panel.marks)))
-    ax.set_xticklabels([mark.short for mark in panel.marks], fontsize=config.tick_pt)
-    title_pt = config.subtitle_pt * 0.72
+    ax.set_xticklabels([mark.short for mark in panel.marks], fontsize=config.type_.tick_pt)
+    title_pt = config.type_.title_pt * 0.72
     wrap = efficacy.panel_name_wrap(column_width_in, title_pt)
     ax.set_title(efficacy.wrapped_label(panel.title, wrap), loc="left", fontsize=title_pt, color=style.INK)
     return held
@@ -189,12 +189,12 @@ def style_shared_axis(axes: Sequence[Axes], held: Sequence[float], config: effic
         ax.yaxis.set_major_locator(MultipleLocator(efficacy.x_tick_step(reach, config.max_ticks)))
         ax.yaxis.set_major_formatter(FuncFormatter(style.log2_ratio_tick))
         efficacy.minor_grid(ax, "y", "log2", config)
-        ax.tick_params(axis="both", labelsize=config.tick_pt)
+        ax.tick_params(axis="both", labelsize=config.type_.tick_pt)
         style.despine(ax)
         efficacy.thin_rules(ax, config)
     axes[0].margins(y=config.margin)
     efficacy.snap_axis_to_ticks(axes[0], low, high)
-    axes[0].set_ylabel("Geomean Speed-Up", fontsize=config.label_pt)
+    axes[0].set_ylabel("Geomean Speed-Up", fontsize=config.type_.label_pt)
 
 
 def legend_handles(panels: Sequence[OptimizerPanel], config: efficacy.FigureConfig) -> list[Line2D]:
@@ -283,7 +283,7 @@ def figure_optimizer_row(
 
     body = (axes[0].get_position().x0, axes[-1].get_position().x1)
     legend_in = style.legend_below(
-        fig, handles, ncol=min(len(handles), config.legend_ncol), y=0.005, fontsize=config.legend_pt,
+        fig, handles, ncol=min(len(handles), config.legend_ncol), y=0.005, fontsize=config.type_.legend_pt,
         markerscale=config.legend_marker_scale, span=body,
     )  # fmt: skip
 

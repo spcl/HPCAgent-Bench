@@ -56,12 +56,13 @@ import matplotlib.figure
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.lines import Line2D
-from matplotlib.ticker import FixedFormatter, FixedLocator, FuncFormatter, LogLocator, MaxNLocator, NullFormatter
+from matplotlib.ticker import FixedFormatter, FixedLocator, FuncFormatter, LogLocator, NullFormatter
 
 from hpcagent_bench import experiment_tags
 from hpcagent_bench.harness import metric
 from hpcagent_bench.stats import palette, summary
 from hpcagent_bench.stats import style as plotstyle
+from hpcagent_bench.stats.figures.helpers.series import TORCH_DIST_ARM, series_style, torch_dist_style
 
 #: ``record`` value of a per-P scaling row in the observations table. A judge grade row keeps its
 #: own ``record`` ("submission" / "attempt"), so the two never mix in one selection.
@@ -76,10 +77,9 @@ MODES: tuple[str, ...] = ("weak", "strong")
 #: ``nodes``, ``scaling_mode`` and ``scaling_note``.
 REQUIRED_COLUMNS: tuple[str, ...] = ("record", "arm", "benchmark", "ranks", "ranked_ns", "single_rank_ns")
 
-#: The pseudo-arm (and model) of the torch.distributed baseline curve's rows, and its legend label.
-TORCH_DIST_ARM: str = "torch_dist"
+#: The torch.distributed baseline curve's legend label; its pseudo-arm and look are
+#: :mod:`hpcagent_bench.stats.figures.helpers.series`'s.
 TORCH_DIST_LABEL: str = "PyTorch Distributed"
-TORCH_DIST_MARKER: str = "x"
 
 #: Ranks per node on the track's machine (MI300A: 4 GPUs, 1 rank each). Used ONLY to fill a
 #: ``nodes`` a row did not record; a recorded value always wins, because how ranks were spread over
@@ -220,24 +220,6 @@ def series_keys(pairs: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
     packets = [""] + palette.in_order({packet for packet, _ in pairs if packet}, kind="packets")
     models = palette.in_order({model for _, model in pairs})
     return sorted(pairs, key=lambda pair: (packets.index(pair[0]), models.index(pair[1])))
-
-
-def torch_dist_style() -> dict[str, object]:
-    """The torch.distributed baseline curve's look: the control's grey, its own marker, filled."""
-    grey = palette.control_color()
-    return {"color": grey, "marker": TORCH_DIST_MARKER, "markerfacecolor": grey, "markeredgecolor": grey}
-
-
-def series_style(packet: str, model: str) -> dict[str, object]:
-    """Colour from the model, shape from the packet; the control's mark is hollow. The
-    torch.distributed baseline (:data:`TORCH_DIST_ARM`) wears :func:`torch_dist_style`."""
-    if model == TORCH_DIST_ARM:
-        return torch_dist_style()
-    # Two setups of one model share its hue; the control takes a lighter shade so their marks and
-    # intervals stay apart where they overlap.
-    hue = palette.model_shade(model, 0 if packet else palette.CONTROL_SHADE)
-    face = "none" if not packet else hue
-    return {"color": hue, "marker": palette.packet_marker(packet), "markerfacecolor": face, "markeredgecolor": hue}
 
 
 def series_handles(
@@ -630,25 +612,22 @@ def panel_curves(
     ranks: Sequence[int],
     band: bool = True,
     type_: plotstyle.TypeScale = plotstyle.AUTHOR_SCALE,
-) -> list[Line2D]:
-    """One panel: an ideal reference and one aggregated line per (packet, model). Returns the legend handles."""
-    handles = [ideal_mark(ax, quantity, ranks)]
+) -> Line2D:
+    """One panel: an ideal reference, one aggregated line per (packet, model) and the torch.distributed
+    baseline dashed. Returns the ideal's legend handle; the series' are :func:`series_handles`'."""
+    ideal = ideal_mark(ax, quantity, ranks)
     agents = [curve for curve in curves_ if curve.model != TORCH_DIST_ARM]
     for packet, model in series_keys((packet_of(curve), curve.model) for curve in agents):
         part = [curve for curve in agents if curve.model == model and packet_of(curve) == packet]
         style, label = series_style(packet, model), series_label(packet, model)
         draw_series(ax, series(part, quantity), style, label, band=band, type_=type_)
-        handles.append(Line2D([], [], linewidth=type_.line_width, label=label, **style))
     baseline = [curve for curve in curves_ if curve.model == TORCH_DIST_ARM]
-    if baseline:
-        style = torch_dist_style()
-        draw_series(ax, series(baseline, quantity), style, TORCH_DIST_LABEL, band, type_, "--")
-        handles.append(Line2D([], [], linewidth=type_.line_width, linestyle="--", label=TORCH_DIST_LABEL, **style))
+    draw_series(ax, series(baseline, quantity), torch_dist_style(), TORCH_DIST_LABEL, band, type_, "--")
     rank_ticks(ax, ranks)
     measured_axis(ax, quantity)
     type_axes(ax, type_)
     plotstyle.despine(ax)
-    return handles
+    return ideal
 
 
 def axis_label(quantity: Quantity, mode: str) -> str:
@@ -658,9 +637,46 @@ def axis_label(quantity: Quantity, mode: str) -> str:
     return "Work-Scaled Speed-Up\nover PyTorch (1 GPU)" if mode == "weak" else "Speed-Up over\nPyTorch (1 GPU)"
 
 
+def modes_in(modes: set[str]) -> list[str]:
+    """The scaling laws among ``modes``, in panel order (:data:`MODES`)."""
+    return [mode for mode in MODES if mode in modes]
+
+
 def mode_label(mode: str) -> str:
     """A panel's own name."""
     return {"weak": "Weak Scaling", "strong": "Strong Scaling"}[mode]
+
+
+def title_panels(axes: Iterable[matplotlib.axes.Axes], names: Sequence[str], type_: plotstyle.TypeScale) -> None:
+    """Name each small-multiple panel, in :func:`small_title_pt` ink."""
+    for ax, name in zip(axes, names):
+        ax.set_title(name, fontsize=small_title_pt(type_), color=plotstyle.INK)
+
+
+def panel_kernels(drawn: Sequence[Curve], kernels: Sequence[str]) -> list[str]:
+    """The kernels that get a panel: ``kernels`` that have a drawable curve, in their order, else
+    every drawable kernel, alphabetical."""
+    return [k for k in kernels if any(c.kernel == k for c in drawn)] or sorted({c.kernel for c in drawn})
+
+
+def kernel_panels(drawn: Sequence[Curve], kernels: Sequence[str], geomean_panel: bool) -> list[list[Curve]]:
+    """The curves of each panel: one kernel's per panel, then, with ``geomean_panel``, all of them."""
+    panels = [[curve for curve in drawn if curve.kernel == kernel] for kernel in kernels]
+    return panels + [list(drawn)] if geomean_panel else panels
+
+
+def small_multiples(
+    panels: int, width: float, type_: plotstyle.TypeScale
+) -> tuple[matplotlib.figure.Figure, list[list[matplotlib.axes.Axes]]]:
+    """A grid of ``panels`` shared-axis panels, :data:`SMALL_MULTIPLE_COLUMNS` across, spare cells hidden."""
+    columns = min(SMALL_MULTIPLE_COLUMNS, panels)
+    rows = -(-panels // columns)
+    fig, axes = plt.subplots(
+        rows, columns, figsize=(width, canvas_height(type_, rows)), squeeze=False, sharex=True, sharey=True
+    )
+    for ax in list(axes.flat)[panels:]:
+        ax.set_visible(False)
+    return fig, [list(row) for row in axes]
 
 
 def figure_modes(
@@ -681,16 +697,17 @@ def figure_modes(
     if not present:
         return None
     fig, axes = plt.subplots(1, len(present), figsize=(width, canvas_height(type_)), squeeze=False)
-    handles: list[Line2D] = []
+    ideals = [
+        panel_curves(ax, drawn[mode], quantity, rank_axis(drawn[mode]), band, type_)
+        for ax, mode in zip(axes[0], present)
+    ]
     for ax, mode in zip(axes[0], present):
-        ranks = rank_axis(drawn[mode])
-        handles = panel_curves(ax, drawn[mode], quantity, ranks, band=band, type_=type_)[:1]
         ax.set_xlabel("Ranks $P$ (1 GPU per Rank)", fontsize=type_.label_pt)
         ax.set_ylabel(axis_label(quantity, mode), fontsize=type_.label_pt)
         ax.set_title(mode_label(mode), fontsize=type_.title_pt, color=plotstyle.INK)
     fig.tight_layout()
     curves_drawn = [c for mode in present for c in drawn[mode]]
-    place_legend(fig, handles + series_handles(curves_drawn, type_.line_width), list(axes[0]), type_)
+    place_legend(fig, [ideals[0], *series_handles(curves_drawn, type_.line_width)], list(axes[0]), type_)
     return fig
 
 
@@ -733,34 +750,45 @@ def figure_per_kernel(
     drawn = [curve for curve in drawable(curves_) if curve.mode == mode]
     if not drawn:
         return None
-    kernels = [k for k in kernels if any(c.kernel == k for c in drawn)] or sorted({curve.kernel for curve in drawn})
+    kernels = panel_kernels(drawn, kernels)
     ranks = rank_axis(drawn)
-    panels = len(kernels) + int(geomean_panel)
-    columns = min(SMALL_MULTIPLE_COLUMNS, panels)
-    rows = -(-panels // columns)
-    fig, axes = plt.subplots(
-        rows, columns, figsize=(width, canvas_height(type_, rows)), squeeze=False, sharex=True, sharey=True
+    panels = kernel_panels(drawn, kernels, geomean_panel)
+    fig, axes = small_multiples(len(panels), width, type_)
+    flat = [ax for row in axes for ax in row][: len(panels)]
+    # Only the geomean panel carries a band: one kernel's line is one measurement per P.
+    ideals = [
+        panel_curves(ax, part, quantity, ranks, i >= len(kernels), type_)
+        for i, (ax, part) in enumerate(zip(flat, panels))
+    ]
+    title_panels(
+        flat, [panel_title(k, kernels) for k in kernels] + [f"{GEOMEAN_LABEL} (all kernels)"] * geomean_panel, type_
     )
-    flat = [ax for row in axes for ax in row]
-    handles: list[Line2D] = []
-    for ax, kernel in zip(flat, kernels):
-        part = [curve for curve in drawn if curve.kernel == kernel]
-        handles = panel_curves(ax, part, quantity, ranks, band=False, type_=type_)[:1]
-        ax.set_title(panel_title(kernel, kernels), fontsize=small_title_pt(type_), color=plotstyle.INK)
-    if geomean_panel:
-        ax = flat[len(kernels)]
-        handles = panel_curves(ax, drawn, quantity, ranks, band=True, type_=type_)[:1]
-        ax.set_title(f"{GEOMEAN_LABEL} (all kernels)", fontsize=small_title_pt(type_), color=plotstyle.INK)
-    for ax in flat[panels:]:
-        ax.set_visible(False)
     for ax in axes[-1]:
         ax.set_xlabel("Ranks $P$", fontsize=type_.label_pt)
     for row in axes:
         row[0].set_ylabel(axis_label(quantity, mode), fontsize=type_.label_pt)
     fig.tight_layout()
-    handles += series_handles(drawn, type_.line_width, counted=geomean_panel)
-    place_legend(fig, handles, list(flat[:panels]), type_)
+    place_legend(fig, [ideals[0], *series_handles(drawn, type_.line_width, counted=geomean_panel)], flat, type_)
     return fig
+
+
+def decade_ticks(ax: matplotlib.axes.Axes) -> None:
+    """A log10 Y ruled at 1 and 3 per decade (2 and 5 as unlabelled minors): a 1-2-5 ruling crowds a
+    one-inch panel, decades alone leave it bare."""
+    ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 3.0)))
+    ax.yaxis.set_minor_locator(LogLocator(base=10.0, subs=(2.0, 5.0)))
+    ax.yaxis.set_minor_formatter(NullFormatter())
+
+
+def shared_ylabel(
+    fig: matplotlib.figure.Figure, column: Sequence[matplotlib.axes.Axes], text: str, type_: plotstyle.TypeScale
+) -> None:
+    """One Y label beside the first ``column`` of panels, centred on them rather than on the canvas
+    (whose lower part is the legend), with the rows' own labels aligned at one x whatever their tick
+    widths."""
+    fig.align_ylabels(list(column))
+    middle = (column[-1].get_position().y0 + column[0].get_position().y1) / 2.0
+    fig.text(0.0, middle, text, rotation=90, ha="left", va="center", fontsize=type_.label_pt)
 
 
 def figure_mode_grid(
@@ -775,44 +803,38 @@ def figure_mode_grid(
     every drawable kernel) and, with ``geomean_panel``, a last column with each series' geomean
     over ALL its kernels of that law and its 95% band. Every panel of a row shares the Y scale."""
     drawn = drawable(curves_)
-    present = [mode for mode in MODES if any(curve.mode == mode for curve in drawn)]
+    present = modes_in({curve.mode for curve in drawn})
     if not present:
         return None
-    kernels = [k for k in kernels if any(c.kernel == k for c in drawn)] or sorted({c.kernel for c in drawn})
+    kernels = panel_kernels(drawn, kernels)
     ranks = rank_axis(drawn)
     columns = len(kernels) + int(geomean_panel)
     height = GRID_PANEL_HEIGHT_IN * len(present) + PRINT_CHROME_IN
     fig, axes = plt.subplots(
         len(present), columns, figsize=(width, height), squeeze=False, sharex=True, sharey="row"
     )  # fmt: skip
-    handles: list[Line2D] = []
+    ideals: list[Line2D] = []
     for row, mode in zip(axes, present):
-        part = [curve for curve in drawn if curve.mode == mode]
-        for ax, kernel in zip(row, kernels):
-            handles = panel_curves(ax, [c for c in part if c.kernel == kernel], quantity, ranks, False, type_)[:1]
-        if geomean_panel:
-            panel_curves(row[-1], part, quantity, ranks, band=True, type_=type_)
+        panels = kernel_panels([curve for curve in drawn if curve.mode == mode], kernels, geomean_panel)
+        ideals += [
+            panel_curves(ax, part, quantity, ranks, i >= len(kernels), type_)
+            for i, (ax, part) in enumerate(zip(row, panels))
+        ]
         row[0].set_ylabel(mode_label(mode), fontsize=type_.label_pt)
-    names = [experiment_tags.kernel_short_display_name(k) for k in kernels]
-    names += [GEOMEAN_LABEL] if geomean_panel else []
-    for ax, name in zip(axes[0], names):
-        ax.set_title(name, fontsize=small_title_pt(type_), color=plotstyle.INK)
+    title_panels(
+        axes[0],
+        [experiment_tags.kernel_short_display_name(k) for k in kernels] + [GEOMEAN_LABEL] * geomean_panel,
+        type_,
+    )
     for ax in axes.flat:
-        # 1-3 per decade: a 1-2-5 ruling crowds a one-inch log panel, decades alone leave it bare.
-        ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 3.0)))
-        ax.yaxis.set_minor_locator(LogLocator(base=10.0, subs=(2.0, 5.0)))
-        ax.yaxis.set_minor_formatter(NullFormatter())
+        decade_ticks(ax)
     # Room for the shared label's one line and no more: tight_layout's own pad would sit between it
     # and the row labels.
     ylabel_in = type_.label_pt * 1.25 / 72.0
     fig.tight_layout(pad=0.2, w_pad=1.2, h_pad=0.8, rect=(ylabel_in / width, 0.0, 1.0, 1.0))
-    handles += series_handles(drawn, type_.line_width, counted=geomean_panel)
+    handles = [ideals[0], *series_handles(drawn, type_.line_width, counted=geomean_panel)]
     place_legend(fig, handles, list(axes[-1]), type_, xlabel="GPUs $P$")
-    # Row labels at one x whatever their tick labels' widths; the shared label centred on the panels,
-    # not on the canvas (whose lower part is the legend).
-    fig.align_ylabels(list(axes[:, 0]))
-    middle = (axes[-1, 0].get_position().y0 + axes[0, 0].get_position().y1) / 2.0
-    fig.text(0.0, middle, SPEEDUP_LABEL, rotation=90, ha="left", va="center", fontsize=type_.label_pt)
+    shared_ylabel(fig, list(axes[:, 0]), SPEEDUP_LABEL, type_)
     return fig
 
 
@@ -830,6 +852,67 @@ def summary_rows(curves_: Sequence[Curve]) -> list[tuple[str, str, str, summary.
     ]
 
 
+def drawn_ends(interval: summary.Interval) -> tuple[float, float]:
+    """``interval``'s ends, or the point twice where the interval was withheld."""
+    if math.isfinite(interval.low) and math.isfinite(interval.high):
+        return interval.low, interval.high
+    return interval.point, interval.point
+
+
+def summary_mark(
+    ax: matplotlib.axes.Axes,
+    index: int,
+    row: tuple[str, str, str, summary.Interval, int],
+    type_: plotstyle.TypeScale,
+) -> None:
+    """One arm's geomean eta at X ``index`` with its 95% interval, and its kernel count below it."""
+    arm, model, _, interval, n_kernels = row
+    # below summary.MIN_PAIRS_FOR_INTERVAL kernels the interval is withheld: a bare point
+    low, high = drawn_ends(interval)
+    ax.errorbar(
+        index,
+        interval.point,
+        yerr=[[interval.point - low], [high - interval.point]],
+        markersize=type_.marker_size * 4.0 / 3.0,
+        linestyle="",
+        elinewidth=type_.line_width * 0.75,
+        capsize=type_.marker_size / 2.0,
+        zorder=5,
+        **series_style(experiment_tags.packet_of(arm), model),
+    )
+    # BELOW the mark: above it the label lands on the ideal line and on the panel's name.
+    # Neighbours alternate between two depths so their labels never share a line.
+    ax.annotate(
+        f"n={n_kernels}",
+        (index, low),
+        textcoords="offset points",
+        xytext=(0, -2.0 - (index % 2) * (type_.annotation_pt + 1.0)),
+        ha="center",
+        va="top",
+        fontsize=type_.annotation_pt,
+        color=plotstyle.MUTED,
+    )
+
+
+def summary_panel(
+    ax: matplotlib.axes.Axes,
+    part: Sequence[tuple[str, str, str, summary.Interval, int]],
+    ceiling: float,
+    type_: plotstyle.TypeScale,
+) -> None:
+    """One scaling law's panel of :func:`figure_summary`: a mark per arm, the ideal at 1, Y from 0 to
+    ``ceiling`` (shared by both panels)."""
+    for index, row in enumerate(part):
+        summary_mark(ax, index, row, type_)
+    ax.axhline(1.0, color=plotstyle.REFERENCE, linewidth=1.1, linestyle=(0, (4, 3)), zorder=2)
+    ax.set_xticks([])
+    ax.set_xlim(-0.6, len(part) - 0.4)
+    ax.set_ylim(0.0, ceiling)
+    plotstyle.value_axis(ax, "y")
+    type_axes(ax, type_)
+    plotstyle.despine(ax)
+
+
 def figure_summary(
     curves_: Sequence[Curve],
     width: float = plotstyle.DOUBLE_COLUMN_WIDTH,
@@ -843,46 +926,15 @@ def figure_summary(
     rows = summary_rows(curves_)
     if not rows:
         return None
-    present = [mode for mode in MODES if any(row[2] == mode for row in rows)]
+    present = modes_in({row[2] for row in rows})
     fig, axes = plt.subplots(1, len(present), figsize=(width, canvas_height(type_)), squeeze=False, sharey=True)
     # Series are named by the shared legend, not by X tick labels: two-line (model, packet) labels
     # overprint one another at four or more marks per panel.
     handles = [Line2D([], [], color=plotstyle.REFERENCE, linestyle=(0, (4, 3)), label="Ideal (Efficiency = 1)")]
-    ceiling = max(1.0, max(row[3].high for row in rows)) * 1.15
+    ceiling = max(1.0, max(drawn_ends(row[3])[1] for row in rows)) * 1.15
     for ax, mode in zip(axes[0], present):
-        part = [row for row in rows if row[2] == mode]
-        for index, (arm, model, row_mode, interval, n_kernels) in enumerate(part):
-            ax.errorbar(
-                index,
-                interval.point,
-                yerr=[[interval.point - interval.low], [interval.high - interval.point]],
-                markersize=type_.marker_size * 4.0 / 3.0,
-                linestyle="",
-                elinewidth=type_.line_width * 0.75,
-                capsize=type_.marker_size / 2.0,
-                zorder=5,
-                **series_style(experiment_tags.packet_of(arm), model),
-            )
-            # BELOW the mark: above it the label lands on the ideal line and on the panel's name.
-            # Neighbours alternate between two depths so their labels never share a line.
-            ax.annotate(
-                f"n={n_kernels}",
-                (index, interval.low),
-                textcoords="offset points",
-                xytext=(0, -2.0 - (index % 2) * (type_.annotation_pt + 1.0)),
-                ha="center",
-                va="top",
-                fontsize=type_.annotation_pt,
-                color=plotstyle.MUTED,
-            )
-        ax.axhline(1.0, color=plotstyle.REFERENCE, linewidth=1.1, linestyle=(0, (4, 3)), zorder=2)
-        ax.set_xticks([])
-        ax.set_xlim(-0.6, len(part) - 0.4)
-        ax.set_ylim(0.0, ceiling)
+        summary_panel(ax, [row for row in rows if row[2] == mode], ceiling, type_)
         ax.set_title(mode_label(mode), fontsize=type_.title_pt, color=plotstyle.INK)
-        plotstyle.value_axis(ax, "y")
-        type_axes(ax, type_)
-        plotstyle.despine(ax)
     axes[0][0].set_ylabel("Geomean $\\eta$ over Kernels", fontsize=type_.label_pt)
     fig.tight_layout()
     keys = series_keys((experiment_tags.packet_of(row[0]), row[1]) for row in rows)
@@ -901,180 +953,9 @@ GRID_PANEL_HEIGHT_IN: float = 0.72 * PRINT_PANEL_HEIGHT_IN
 #: The one Y label of :func:`figure_mode_grid`, shared by both rows.
 SPEEDUP_LABEL: str = "Speed-Up over PyTorch (1 GPU)"
 
-#: Horizontal spread of one kernel's marks in :func:`figure_kernel_row`, in category units.
-KERNEL_ROW_DODGE: float = 0.6
-
-#: Above this max/min ratio of the plotted eta, :func:`figure_kernel_row` draws Y on a log2 axis.
-LOG_SPAN: float = 4.0
-
-#: The right-hand column of :func:`figure_kernel_row`: every series' geomean over its kernels.
+#: The right-hand panel of :func:`figure_per_kernel` and :func:`figure_mode_grid`: every series'
+#: geomean over its kernels.
 GEOMEAN_LABEL: str = "Geomean"
-
-
-def efficiency_at(curve: Curve, ranks: int) -> float:
-    """``curve``'s eta at ``ranks``, NaN when that P was not measured."""
-    return next((point.efficiency for point in curve.points if point.ranks == ranks), math.nan)
-
-
-def figure_kernel_row(
-    curves_: Sequence[Curve],
-    ranks: int = 0,
-    width: float = plotstyle.ICLR_TEXT_WIDTH_IN,
-    type_: plotstyle.TypeScale = plotstyle.PRINT_SCALE,
-    roster: Sequence[str] = (),
-) -> matplotlib.figure.Figure | None:
-    """eta at one rank count per kernel: one row per scaling mode (weak above strong), the kernels on
-    X and a Geomean column at the right, one unjoined mark per (packet, model) series.
-
-    ``roster`` names every kernel of the track, so a kernel no series has a curve for keeps an empty
-    column instead of vanishing. ``ranks`` defaults to the largest P any curve measured. A kernel mark is one measurement and has
-    no interval; the Geomean mark carries the 95% interval over the series' kernels
-    (:func:`hpcagent_bench.stats.summary.geomean_interval`). Y is fitted to the data, not drawn from
-    0: at a few ranks every eta sits near 1, and a 0-1 axis flattens the differences to nothing.
-    """
-    drawn = drawable(curves_)
-    present = [mode for mode in MODES if any(curve.mode == mode for curve in drawn)]
-    if not present:
-        return None
-    ranks = ranks or max(point.ranks for curve in drawn for point in curve.points)
-    kernels = sorted({*roster, *(curve.kernel for curve in drawn)})
-    keys = series_keys((packet_of(curve), curve.model) for curve in drawn)
-    fig, axes = plt.subplots(
-        len(present), 1, figsize=(width, canvas_height(type_, len(present))), sharex=True, squeeze=False
-    )
-    step = KERNEL_ROW_DODGE / max(1, len(keys))
-    for ax, mode in zip(axes[:, 0], present):
-        extent = [1.0]
-        for index, key in enumerate(keys):
-            offset = (index - (len(keys) - 1) / 2) * step
-            style = series_style(*key)
-            values = []
-            for column, kernel in enumerate(kernels):
-                curve = next(
-                    (c for c in drawn if c.mode == mode and c.kernel == kernel and (packet_of(c), c.model) == key), None
-                )
-                value = efficiency_at(curve, ranks) if curve else math.nan
-                if value > 0:
-                    values.append(value)
-                    extent.append(value)
-                    ax.plot(column + offset, value, linestyle="", markersize=type_.marker_size, zorder=5, **style)
-            if values:
-                interval = summary.geomean_interval(values)
-                extent += [interval.low, interval.high]
-                ax.errorbar(
-                    len(kernels) + offset,
-                    interval.point,
-                    yerr=[[interval.point - interval.low], [interval.high - interval.point]],
-                    linestyle="",
-                    markersize=type_.marker_size,
-                    elinewidth=type_.line_width * 0.8,
-                    capsize=type_.marker_size / 2.0,
-                    zorder=5,
-                    **style,
-                )
-        ax.axhline(1.0, color=plotstyle.REFERENCE, linewidth=type_.line_width, linestyle=(0, (4, 3)), zorder=2)
-        ax.axvline(len(kernels) - 0.5, color=plotstyle.RULE, linewidth=0.6, zorder=1)
-        low, high = min(extent), max(extent)
-        if high / low > LOG_SPAN:
-            # Anchored at PyTorch, eta spans orders of magnitude (a naive GEMM sits at 0.005): a
-            # linear axis would crush every kernel but the fastest onto its floor.
-            ax.set_yscale("log", base=10)
-            ax.set_ylim(low / 1.5, high * 1.5)
-        else:
-            pad = 0.08 * max(high - low, 0.05)
-            ax.set_ylim(low - pad, high + pad)
-        ax.set_ylabel(f"{mode_label(mode)}\n$\\eta$ at $P={ranks}$", fontsize=type_.label_pt)
-        if ax.get_yscale() == "log":
-            plotstyle.value_axis(ax, "y", log_base=10.0)
-            ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}x"))
-        else:
-            plotstyle.value_axis(ax, "y")
-            ax.yaxis.set_major_locator(MaxNLocator(5))
-            ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:.2f}"))
-        type_axes(ax, type_)
-        plotstyle.despine(ax)
-    bottom = axes[-1, 0]
-    bottom.set_xticks(range(len(kernels) + 1))
-    bottom.set_xticklabels([panel_title(k, kernels) for k in kernels] + [GEOMEAN_LABEL], rotation=45, ha="right")
-    bottom.set_xlim(-0.6, len(kernels) + 0.6)
-    fig.tight_layout()
-    ideal = Line2D([], [], color=plotstyle.REFERENCE, linestyle=(0, (4, 3)), label="Ideal ($\\eta = 1$)")
-    marks = [
-        Line2D([], [], linestyle="", markersize=type_.marker_size, label=series_label(*key), **series_style(*key))
-        for key in keys
-    ]
-    place_legend(fig, [ideal, *marks], [bottom], type_)
-    return fig
-
-
-#: The eta (against the anchor) each iso-line of :func:`figure_two_factor` marks: eta = x * y.
-ISO_ETA: tuple[float, ...] = (0.01, 0.1, 1.0)
-
-
-def two_factors(curve: Curve, ranks: int) -> tuple[float, float] | None:
-    """``(x, y)`` of one curve anchored at the baseline (PyTorch on one GPU): x = eta(1), the
-    submission's own one-GPU speed-up over the baseline; y = eta(P) / eta(1), its own scaling
-    efficiency at ``ranks``. Their product is eta(P). None without both points."""
-    first, last = efficiency_at(curve, 1), efficiency_at(curve, ranks)
-    if not (first > 0 and last > 0):
-        return None
-    return first, last / first
-
-
-def figure_two_factor(
-    curves_: Sequence[Curve],
-    mode: str = "strong",
-    ranks: int = 0,
-    width: float = plotstyle.ICLR_WRAP_WIDTH_IN,
-    type_: plotstyle.TypeScale = plotstyle.PRINT_SCALE,
-) -> matplotlib.figure.Figure | None:
-    """eta against the baseline split into its two factors, one mark per (series, kernel): X the
-    submission's one-GPU speed-up over the baseline, Y its own scaling efficiency at ``ranks`` (the
-    largest P measured by default), both log10. Dotted iso-lines mark constant eta = X * Y, so a
-    kernel far left scaled well from a slow start and a kernel low scaled a fast start badly -- two
-    failures one efficiency number cannot tell apart."""
-    drawn = [curve for curve in drawable(curves_) if curve.mode == mode]
-    if not drawn:
-        return None
-    ranks = ranks or max(point.ranks for curve in drawn for point in curve.points)
-    placed = [(curve, factors) for curve in drawn if (factors := two_factors(curve, ranks)) is not None]
-    if not placed:
-        return None
-    fig, ax = plt.subplots(figsize=(width, plotstyle.PRINT_BODY_HEIGHT_IN))
-    for curve, (x, y) in placed:
-        ax.plot(
-            x, y, linestyle="", markersize=type_.marker_size, zorder=5, **series_style(packet_of(curve), curve.model)
-        )
-    xs = [x for _, (x, _) in placed] + [1.0]
-    ys = [y for _, (_, y) in placed] + [1.0]
-    low_x, high_x = min(xs) / 2.0, max(xs) * 2.0
-    low_y, high_y = min(ys) / 1.5, max(max(ys) * 1.5, 1.5)
-    grid = [low_x * (high_x / low_x) ** (i / 60) for i in range(61)]
-    for eta in ISO_ETA:
-        ax.plot(grid, [eta / x for x in grid], color=plotstyle.FAINT, linewidth=0.6, linestyle=":", zorder=1)
-        label_x = min(high_x / 1.2, max(low_x * 1.2, eta / (high_y / 1.15)))
-        ax.annotate(f"$\\eta={eta:g}$", (label_x, eta / label_x), fontsize=type_.tick_pt, color=plotstyle.MUTED,
-                    ha="left", va="bottom", annotation_clip=True)  # fmt: skip
-    ax.axvline(1.0, color=plotstyle.REFERENCE, linewidth=type_.line_width, linestyle=(0, (4, 3)), zorder=2)
-    ax.axhline(1.0, color=plotstyle.REFERENCE, linewidth=type_.line_width, linestyle=(0, (4, 3)), zorder=2)
-    for axis in ("x", "y"):
-        getattr(ax, f"set_{axis}scale")("log", base=10)
-        plotstyle.value_axis(ax, axis, log_base=10.0)
-        getattr(ax, f"{axis}axis").set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}x"))
-    ax.set_xlim(low_x, high_x)
-    ax.set_ylim(low_y, high_y)
-    ax.set_xlabel("One-GPU Speed-Up over PyTorch", fontsize=type_.label_pt)
-    ax.set_ylabel(f"Own Efficiency at $P={ranks}$", fontsize=type_.label_pt)
-    type_axes(ax, type_)
-    plotstyle.despine(ax)
-    fig.tight_layout()
-    keys = series_keys((packet_of(curve), curve.model) for curve, _ in placed)
-    marks = [
-        Line2D([], [], linestyle="", markersize=type_.marker_size, label=series_label(*key), **series_style(*key))
-        for key in keys
-    ]
-    place_legend(fig, marks, [ax], type_)
-    return fig
 
 
 def points_table(curves_: Sequence[Curve]) -> pd.DataFrame:
@@ -1132,6 +1013,4 @@ BUILDERS: dict[str, Callable[..., matplotlib.figure.Figure | None]] = {
     "efficiency": figure_efficiency,
     "speedup": figure_speedup,
     "summary": figure_summary,
-    "kernel-row": figure_kernel_row,
-    "two-factor": figure_two_factor,
 }

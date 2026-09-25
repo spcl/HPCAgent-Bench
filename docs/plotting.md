@@ -21,18 +21,35 @@ Every figure in the HPCAgent-Bench papers follows these rules. A figure that bre
    geomean of per-kernel ratios with the log-space t 95% interval (`summary.geomean_ci`) for speed-up
    and cost. Nothing is joined by a trend line (rule 12); the emitted table carries raw milliseconds
    and token counts (rule 4). Speed-up and token cost never share one axis.
-4. **Colour = intervention, shape = optimizer.** Colour is the skill, tool, harness or packet
-   (`palette.color`; control is a hollow mark in `palette.control_color`). Shape is the optimizer
-   (`palette.marker`): an LLM or a standalone optimizer (registry `optimizers`, e.g. DaCe, CPF). CPF
-   given to an agent (`cpf`, `cpfsrc`) is a packet, so a colour. Where only one entity varies, colour
-   is that entity: `palette.framework_color` (compiler figures), `palette.harness_color`,
-   `palette.model_color`. Exception: `figures.efficacy` and `figures.kernel_comparison` colour by
-   model (`palette.model_color`) and give the whole panel one packet shape (`palette.packet_marker`),
-   since one panel already belongs to one packet.
-5. **Efficacy figure.** The paper figure (`--mode dots`, default) stacks one column per model and
-   delivery: geomean speed-up, tasks completed, token cost. The 2D form (`--mode paired`) puts log2
-   speed-up on X and token cost on Y, one mark per arm with its interval on both axes. Several
-   comparisons join as one row of panels (up to three square panels fit a single column).
+4. **Colour = model, shape = treatment.** One registry, one lookup per channel, the same answer in
+   every figure:
+   - **Colour** is the LLM: `palette.model_color`. A model drawn several times in one figure (with and
+     without a packet, on several devices, in several pairs) wears close shades of its colour,
+     `palette.model_shade(model, step)`; its no-packet control is `palette.CONTROL_SHADE` (one step)
+     lighter. Compilers and libraries take `palette.framework_color`, never a model colour.
+   - **Shape** is the treatment: every registered harness, then every registered packet (skill, tool,
+     method) takes the next free shape of the registry's `shapes:` pool in file order
+     (`palette.shape_table`, `palette.harness_marker`, `palette.packet_marker`). A packet may pin one
+     with `marker:` (the paper's Skills diamond, CPF square, Terse triangle, Git X). Two treatments
+     never share a shape; the pool outgrown is a registry error. Registering a treatment gives it a
+     shape without reshaping any other.
+   - **Control** is always the hollow circle `palette.CONTROL_MARKER` in its model's control shade,
+     whichever packet, harness or task form it is the control of. No treatment is ever given it.
+   - **Statistics** (a median line, a fit, a reference) are not entities: they use `style`'s neutral
+     inks and statistic inks, never a model or treatment colour. No figure carries a hex literal.
+   - Standalone optimizers (DaCe, CPF as a compiler, Pluto, PPCG) keep `palette.marker` shapes in
+     optimizer-row figures, where the optimizer is the entity.
+5. **Efficacy figure** (`plot_score_change.py`, dot rows only). One row of panels, each an
+   intervention against its control; rows: speed-up (log2, over each kernel's own baseline), solved
+   rate (%, no interval: a census), billed token cost. The x axis groups by delivery (C | Fortran,
+   HIP | Triton | OpenMP): one tick per language, its models side by side in their colours, a light
+   rule between languages. Several packets in one panel (`intervention=packets`) sit under their
+   language's tick in their own shapes; a harness panel (`intervention=harness`) gives each harness
+   its own group and shape. Speed-up and cost are geometric means over kernels with 95% log-t
+   intervals from five kernels. Compiler/framework comparators (`comparators=`) sit after the
+   models of their delivery on the speed-up and solved rows only, in `palette.framework_color` and
+   an optimizer shape no packet wears (`figures.efficacy.comparator_shapes`). The paper key has four
+   columns (`PAPER_CONFIG.legend_ncol`, compact spacing).
 6. **Per-kernel figure** (MPR/CPF): wide, two rows on one kernel axis: log2 speed-up per kernel with
    its interval on top, tokens per kernel below. Past a dashed separator, one summary slot per
    series: speed-up = geomean with 95% log-t interval over the SOLVED kernels, tokens = median over
@@ -41,10 +58,14 @@ Every figure in the HPCAgent-Bench papers follows these rules. A figure that bre
    (`population.NOT_DELIVERED`), is drawn crossed, named `style.NOT_DELIVERED_LABEL` in the key, and
    left out of every summary. Hollow alone means control. A `?` marks data not run yet
    (`--mark-pending`).
-8. **Sizing.** Physical inches come from the paper template (`style.ICLR_TEXT_WIDTH_IN`,
-   `ACM_COLUMN_WIDTH_IN`, `ACM_TEXT_WIDTH_IN`), never from `\includegraphics` scaling. The data box is
-   fixed and the chrome is measured around it (`style.*_protrusion_in`, `per_kernel.fit_canvas`), never
-   `tight_layout`; save with `style.save(..., fixed=True)`.
+8. **Sizing and type.** A paper figure is drawn at the width it is placed at (`style.ICLR_TEXT_WIDTH_IN`,
+   `style.ICLR_WRAP_WIDTH_IN`, `ACM_*`) on the print scale `style.PRINT_SCALE`: ticks and point labels
+   7 pt, axis labels and panel names 8 pt, keys 6 pt (`PRINT_LEGEND_PT`), nothing fitted below
+   5.5 pt (`PRINT_MIN_PT`). Authoring figures use `style.AUTHOR_SCALE`; a module never mixes the two.
+   Save with `style.save(fig, stem, width_in=...)` (or `print_size=True` for a self-sized canvas): it
+   refuses a canvas of another width and type off the print range.
+   `statistics/check_paper_figures.py <paper>` checks every `\includegraphics` places its PDF at
+   scale 1.0.
 9. **One legend per figure**, below it (`style.legend_below`), never `ax.legend`. It names the
    interval method, n and the undelivered cross.
 10. **Minor ticks.** Log axes, linear axes in log2 units and the tasks-completed row carry unlabelled
@@ -55,20 +76,21 @@ Every figure in the HPCAgent-Bench papers follows these rules. A figure that bre
 
 Further conventions:
 
-- **Identity keys by name.** `palette.color(name)`, `palette.model_color(name)`,
+- **Identity keys by name.** `palette.model_color(name)`, `palette.packet_marker(name)`,
   `palette.framework_color(name)` key by entity, never by list position. Key order in
-  `hpcagent_bench/envs/registry.yaml` is append-only; a mid-list insert recolours every published
-  figure (`tests/test_palette.py` pins colours).
+  `hpcagent_bench/envs/registry.yaml` is append-only; a mid-list insert recolours or reshapes every
+  published figure (`tests/test_palette.py` pins the rules: one shape per treatment, never the
+  control circle, shades stay the model's hue).
 - **Names come from the registry** through `hpcagent_bench.experiment_tags` (`display_name`,
   `model_name`, `packet_name`, `framework_name`), never literals. Serving details (`sglang`, `-FP8`)
   stay out of names.
 - **Baseline is a property of the data**: `figures.results.baseline_of(frame)` reads the column the
   judge stamped; `DEFAULT_BASELINE` (`numba`) is only the fallback.
-- **Costs add.** A kernel's tokens are the sum over the tasks the arm ran on it
-  (`population.kernel_tokens`); medians are taken over kernels, never over episodes in a cell.
-- **Intervals.** `summary.geomean_interval` (one arm's own kernels) uses log-t at or above
-  `summary.LOG_T_MIN_SAMPLES` (20) samples and a log-space bootstrap below. Paired figures always use
-  `summary.geomean_ci`. No interval under `summary.MIN_INTERVAL_SAMPLES` kernels.
+- **Costs.** A kernel's tokens come from its task row (`population.kernel_tokens`), priced with the
+  `billed` card unless `--cost-model` names another (`stats.cost.add_arguments`). A summary over
+  kernels is the geometric mean, never a median, and never over episodes in a cell.
+- **Intervals.** Every summary interval is the 95% log-t interval (`summary.geomean_interval`,
+  paired: `summary.paired_geomean`), withheld below `summary.MIN_PAIRS_FOR_INTERVAL` (6) values.
 - **Labels.** Title Case (identifiers keep their spelling). Ticks at 0 or 90 degrees. Values print
   with one decimal (`style.ratio_label`: `6.3x`, `0.04x` below 0.1x); tokens with
   `style.decade_label` (`35.5K`). Labels beside marks are tagged `style.CLEAR_GID` and settled clear
@@ -110,7 +132,7 @@ tokens). A predicate over both columns at once keeps neither record type.
 
 | script | figure | library |
 |---|---|---|
-| `plot_score_change.py` | efficacy: speed-up, tasks completed and token cost per comparison | `figures.efficacy.figure_dot_row`, `figure_row` |
+| `plot_score_change.py` | efficacy: speed-up, tasks completed and token cost per comparison | `figures.efficacy.figure_dot_row` |
 | `plot_optimizer_row.py` | one row of 1-D panels, speed-up only, LLM arms beside compilers over one roster | `figures.optimizers.figure_optimizer_row` |
 | `plot_llr40_compilers.py` | llr-focus40 per kernel: canon columns, Pluto, PPCG-HIP, optional CPF arms | `figures.signed.llr40_two_row_figure` |
 | `plot_kernel_comparison.py` | llr-focus40 per kernel: DaCe canon CPU and every complete agent arm | `figures.kernel_comparison` + `per_kernel` |
@@ -120,6 +142,7 @@ tokens). A predicate over both columns at once keeps neither record type.
 | `plot_tokens.py` | tokens per kernel, per model | `population.kernel_tokens` |
 | `plot_single_shot_score.py` | blind arm funnel: reached, correct, faster | `palette`, `style` |
 | `plot_scaling.py` | distributed track: eta(P), sigma(P), per-kernel, per-arm summary | `figures.scaling` |
+| `plot_transfer.py` | MI300A -> GH200 transfer: geomean strips and per-answer scatter, CPU over GPU | `figures.transfer` |
 | `plot_canon_speedup.py` | median speed-up per framework from one canon sweep (`--db`) | `stats.canon` |
 | `plot_parallelism.py` | SDFG parallelism taxonomy per DaCe column (`--db`) | `metrics.parallelism` |
 | `plot_speedup.py`, `plot_results.py` | corpus figures from the results DB | see [measurement_statistics.md](measurement_statistics.md) |
@@ -252,10 +275,11 @@ circle, treated = the packet's shape. Rows:
   slower answer keeps its sub-1 ratio. `--speedup-over served` draws every kernel with a failure at 1x.
 - **Tasks completed**: kernels solved per arm on a 0..N axis, no interval (census).
   `--no-success-row` drops it.
-- **Token cost**: every served kernel, failed ones included, priced with `--cost-model`.
+- **Token cost**: every served kernel, failed ones included, priced with `--cost-model` (the
+  library prices with the `billed` card when called without one: `figures.efficacy.paired_kernels`).
 
 `*` marks a significant speed-up change and `+` a significant token-cost change after
-Benjamini-Hochberg correction within the figure. An interval is cut at
+Benjamini-Hochberg correction within the panel's family: one family per panel, exactly the tests it draws. An interval is cut at
 `FigureConfig.interval_reach` past the outermost mark with an arrowhead; a mark over fewer than
 `FigureConfig.min_interval_kernels` kernels has none.
 
@@ -266,13 +290,15 @@ verdicts are the stars; the figure recomputes only the drawn point through
 
 | key | effect |
 |---|---|
-| `title`, `intervention` | panel title; registered packet key the treated side wears (hue, name) |
+| `title`, `intervention` | panel title; registered packet key the treated side wears (shape, name); `packets`/`harness`: each column wears its own packet's or harness's shape |
 | `observations=a.db,b.db` | observations for this panel; default the positional files |
 | `control-label=...` | legend name of a control that is not "no packet" |
 | `repeats=median` | median over designed repeats instead of latest run |
 | `placeholders=Fortran` | empty column for a leg with no data yet |
 | `pending=kimi27sglang,qwen38` | empty column per model with no pair yet; `?` with `--mark-pending` |
 | `difference=HIP:qwen38,...` | grey bar between a named pair's two marks, with its factor |
+| `comparators=<csv>` | compiler/framework marks from a `kernel,comparator,device,numba_ms,ms,speedup` table (one row per roster kernel, `speedup` blank where invalid; the artifact's `experiments/paper/comparators.py` writes it from the canon DB) |
+| `comparator-set=pluto:C,jax_cpu:C` | which comparators the panel draws and under which delivery; no `:group` = the panel's first delivery. One mark each: geomean of `speedup` over the valid kernels, 95% log-t interval from `summary.MIN_PAIRS_FOR_INTERVAL` kernels; solved row = valid / roster; nothing on the cost row. Numbers go to `<table>-comparators.csv` |
 
 A single comparison can also use top-level flags:
 
@@ -282,8 +308,8 @@ python statistics/plot_score_change.py scored.csv blind.csv \
     --out figures/blind.pdf --table data/blind.csv
 ```
 
-`--row-width {natural,iclr,acm-column,acm-text}` sizes a joined row to a page budget. `--mode paired`
-draws the 2D form; `--show-cloud` adds the per-kernel paired cloud behind it.
+`--row-width {natural,iclr,iclr-wrap,acm-column,acm-text}` sizes a joined row to a page budget.
+`--no-success-row` drops the solved row.
 
 The solve-rate table from the same pair tables:
 
@@ -292,6 +318,52 @@ python statistics/table_solve_rate.py "$AR/experiments/llr-cpu/data/llr-cpu.db" 
     --pairs-csv "$AR/experiments/llr-cpu/tables/skills_billed.csv" --intervention lang-skills \
     --out tables/solve-rate.tex
 ```
+
+## Transfer figure and the platform column
+
+Every observation row carries `platform`, the machine it was timed on: `mi300a` for every row a
+campaign's judge recorded (blank reads as `mi300a`). A final-grade regrade on another machine enters
+as a SECOND row per answer, beside the MI300A row, never replacing it:
+
+```bash
+python -m hpcagent_bench.dataset --experiment llr-focus40 --regrades "$RUN_ROOT/regrades/*" \
+    --platform-regrades "gh200=$DAINT/results*/*/rank-*/regrade-cells-*.db" --out data/llr40.db
+```
+
+`experiments.read_observations(path)` keeps `mi300a` rows only (`platform=` selects another), so no
+existing figure or statistic sees a GH200 row; `population.graded_episode_rows` refuses a slice that
+mixes platforms (`population.one_platform`).
+
+`statistics/plot_transfer.py` compares each LLR40 final answer on MI300A with its re-timing on GH200
+(Grace CPU, H100; HIP built on HIP's CUDA backend), in two designs, both CPU (C, Fortran) over GPU
+(HIP, Triton), colour = model (`palette.model_color`), paper models only (`transfer.PAPER_MODELS`),
+registry-dropped arms left out:
+
+- `<out>-geomean`: 1-D strips, one slot per model inside each language (the efficacy rows' spacing,
+  `efficacy.GROUP_STEP`); per slot the geomean speed-up over the answers solved on BOTH machines,
+  MI300A filled beside GH200 hollow, each with its 95% log-t interval (`summary.geomean_interval`,
+  none below six answers), and the answer count under the slot; a model with none solved on both
+  in a language takes no slot there.
+- `<out>-scatter`: one point per answer solved on both machines, x on MI300A, y on GH200, log-log,
+  y = x line, shape = language (`palette.language_marker`: the registry `markers` in `languages`
+  order). Failures on GH200 are not drawn (counted in the summary). Title: device and Spearman rho.
+
+A GH200 judge error counts as failed there (user, 2026-09-25); an answer not portable to GH200 was
+never graded and is counted apart. Panels with nothing to draw are pending stubs. Input is the paired
+frame (`transfer.PAIRED_COLUMNS`), from the observations or from the Daint join table
+(`collect.py`); there an answer with no MI300A final grade falls back to its live grade
+(`mi300a_grade = live`), and one the MI300A final grade left unsolved has no MI300A speed-up.
+
+```bash
+python statistics/plot_transfer.py --paired-csv data/transfer.csv --out figures/transfer --table tables/transfer.csv
+python statistics/plot_transfer.py --observations data/llr40.db --out figures/transfer --table tables/transfer.csv
+```
+
+`--table` is the per-answer CSV; beside it `<table>-summary.csv` (per panel: correct, failed, judge
+errors among them, correct share, Spearman rho, not portable per language, live-grade fallbacks,
+answers with no MI300A speed-up) and `<table>-geomean.csv` (per language and model: n, each machine's
+geomean and interval). Width: `--width`, default `style.ICLR_WRAP_WIDTH_IN` (the paper's wrap
+figure), `5.5` for text width; print type (`style.PRINT_SCALE`), checked by `style.save(width_in=...)`.
 
 ## Scaling figures
 

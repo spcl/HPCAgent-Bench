@@ -36,8 +36,6 @@ FIGURES: tuple[str, ...] = (
     "speedup",
     "per-kernel",
     "summary",
-    "kernel-row",
-    "two-factor",
     "mode-grid",
 )
 
@@ -137,7 +135,7 @@ def report(curves: list[scaling.Curve]) -> None:
             )
 
 
-def draw(curves: list[scaling.Curve], args: argparse.Namespace, roster: list[str]) -> list[pathlib.Path]:
+def draw(curves: list[scaling.Curve], args: argparse.Namespace) -> list[pathlib.Path]:
     """Every requested figure, saved under ``--out``. A figure with nothing to draw is skipped."""
     type_ = plotstyle.PRINT_SCALE if args.print_width else plotstyle.AUTHOR_SCALE
     width = args.print_width or args.width or plotstyle.DOUBLE_COLUMN_WIDTH
@@ -154,8 +152,7 @@ def draw(curves: list[scaling.Curve], args: argparse.Namespace, roster: list[str
             fig = scaling.figure_mode_grid(curves, args.kernels, args.quantity, width=width, type_=type_)
             stem = args.out.with_name(f"{args.out.name}-{name}")
         else:
-            extra = {"roster": roster} if name == "kernel-row" else {}
-            fig = scaling.BUILDERS[name](curves, width=width, type_=type_, **extra)
+            fig = scaling.BUILDERS[name](curves, width=width, type_=type_)
             stem = args.out.with_name(f"{args.out.name}-{name}")
         if fig is None:
             print(f"nothing drawable for --figure {name}", file=sys.stderr)
@@ -182,8 +179,7 @@ def main() -> None:
 
     write_tables(curves, args.table)
     report(curves)
-    roster = sorted({str(kernel).rsplit("/", 1)[-1] for kernel in frame.benchmark.dropna()})
-    for path in draw(curves, args, roster):
+    for path in draw(curves, args):
         print(f"figure -> {path}.pdf (+ .png)")
 
 
