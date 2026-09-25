@@ -45,7 +45,7 @@ LAWS = ("strong", "weak")
 SPECIAL: dict[str, Any] = {"run_id": RUN_ID, "benchmark": "gemm", "ranks": 2, "mpi_ranks": 2}
 
 
-def value(table: str, column: str, kind: str, row: int) -> Any:
+def value(table: str, column: str, kind: str, row: int) -> object:
     """A deterministic synthetic value; NULL for a column no writer ever filled."""
     if (table, column) in NEVER_WRITTEN:
         return None

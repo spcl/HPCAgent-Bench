@@ -59,13 +59,17 @@ and the full suite, runs on a compute node:
 . scripts/cscs/account_env.sh
 sbatch --partition=mi200 --nodes=1 --time=00:30:00 --no-requeue \
     --wrap "scripts/run_tests.sh -q -n 16 tests/test_metrics_autovec.py"
-sbatch --partition=mi200 scripts/suite.sbatch                      # the whole suite, about 3 hours
-sbatch --partition=mi200 scripts/run_tests_container.sbatch -q -n 16 hpcagent_bench/numpy_translators/tests
+sbatch scripts/ci_mi200.sbatch                                      # every CI job, about 3 hours
+sbatch scripts/ci_mi200.sbatch --ci --jobs unit,mpi                 # chosen CI jobs
+sbatch scripts/ci_mi200.sbatch -q -n 16 hpcagent_bench/numpy_translators/tests
 ```
 
-`run_tests_container.sbatch` runs the same command inside the judge image, whose gcc 16 accepts
-`-std=c23`; the cluster's own gcc does not, and about 720 translator cases fail outside the image
-for that reason alone. `scripts/run_tests.sh --container <args>` submits it and waits.
+`ci_mi200.sbatch` runs inside the judge image, whose gcc 16 accepts `-std=c23`; the cluster's own
+gcc does not, and about 720 translator cases fail outside the image for that reason alone. With no
+arguments it replays `.github/workflows/tests.yml` through `scripts/ci_replay.py` (each job's matrix
+legs, their test steps with the same env and flags) and writes per-step logs and `summary.txt` to
+`$SCRATCH/ci-replay/<jobid>`; `scripts/run_tests.sh --ci --list` prints what it would run.
+`scripts/run_tests.sh --container <args>` submits it and waits.
 
 **`-m sealed`.** The judge grades agent code in a child that unshares a user, mount and pid
 namespace (`hpcagent_bench/seal.py`). Tests of that child carry the `sealed` marker and skip, with
