@@ -1,13 +1,13 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Did an intervention buy speed-up, and what did it cost in tokens? One mark per arm, paired
+"""Did an intervention buy speedup, and what did it cost in tokens? One mark per arm, paired
 against its own control.
 
 ONE experiment, split by its own treatment: the treated arms against the no-packet arms of the same
 campaign, or an EXPLICIT pair list (``--pairs-csv``) for a comparison that is not a packet suffix at
 all -- llrblind against its scored arms (two campaigns), or git-scicomp (a kernel/repo scope). Both
 routes end in the same RAW tagged frame :mod:`hpcagent_bench.stats.figures.efficacy` draws from:
-stacked 1-D rows (speed-up, solved rate, token cost), one column per (LLM, delivery), each arm's
+stacked 1-D rows (speedup, solved rate, token cost), one column per (LLM, delivery), each arm's
 mark over the kernels it shares with its own control, with its 95% interval (SC15 Rules 4, 5, 7,
 12 -- see that module's docstring).
 
@@ -329,18 +329,18 @@ def same_rule(table: pd.DataFrame, source: pathlib.Path) -> None:
         )
 
 
-#: Column the family CSV carries its speed-up population under (``statistics/paired_arms.py``).
+#: Column the family CSV carries its speedup population under (``statistics/paired_arms.py``).
 KERNEL_POLICY_COLUMN: str = "kernel_policy"
 
 
 def same_policy(table: pd.DataFrame, source: pathlib.Path, over: population.KernelPolicy) -> None:
-    """Refuse a family CSV whose speed-up leg was taken over another kernel population: its stars
+    """Refuse a family CSV whose speedup leg was taken over another kernel population: its stars
     would test failures-at-1x while the marks leave failures out, or the reverse. A CSV written
     before the column existed was taken over every served kernel."""
     recorded = set(table[KERNEL_POLICY_COLUMN].dropna().astype(str)) if KERNEL_POLICY_COLUMN in table else set()
     if (recorded or {"served"}) != {over}:
         raise SystemExit(
-            f"{source} took its speed-up over {sorted(recorded or {'served'})}, the figure over {over!r}; "
+            f"{source} took its speedup over {sorted(recorded or {'served'})}, the figure over {over!r}; "
             f"rebuild it with statistics/paired_arms.py --policy {over}"
         )
 
@@ -417,7 +417,7 @@ def write_dot_rows(
     treatment: str,
     card: cost.CostModel,
 ) -> pathlib.Path:
-    """ONE comparison to ``--out``: speed-up over the baseline, the solved rate, then what it cost,
+    """ONE comparison to ``--out``: speedup over the baseline, the solved rate, then what it cost,
     one column per (LLM, delivery)."""
     args.out.parent.mkdir(parents=True, exist_ok=True)
     return efficacy_figures.figure_arm_dots(
@@ -715,7 +715,7 @@ def build_parser() -> argparse.ArgumentParser:
         "[;experiment=...][;comparators=<csv>;comparator-set=pluto:C,jax_cpu:C]'; repeatable -- joins "
         "into ONE row alongside --treatment, mixing a packet-suffix comparison and an explicit-pairs one "
         "in the same figure. comparators= draws compilers/frameworks (comparators.py's CSV) beside the "
-        "models of a delivery on the speed-up and solved rows",
+        "models of a delivery on the speedup and solved rows",
     )  # fmt: skip
     parser.add_argument(
         "--row-width",
@@ -753,7 +753,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--speedup-over",
         default=efficacy_figures.SPEEDUP_OVER,
         choices=population.POLICIES,
-        help="solved (default): speed-up over the kernels both arms answered correctly, failures shown as "
+        help="solved (default): speedup over the kernels both arms answered correctly, failures shown as "
         "the success-rate row; served: every kernel, a failure at 1x (the fallback reading)",
     )
     parser.add_argument(
@@ -781,13 +781,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="outside",
         choices=efficacy_figures.PANEL_LABELS,
         help="how a single comparison names its rows: none (Y labels alone), outside/inside (a bold 'a)'), or "
-        "subtitle ('a) Geomean Speed-Up ...' on one line above the row, no rotated Y label)",
+        "subtitle ('a) Geomean Speedup ...' on one line above the row, no rotated Y label)",
     )
     parser.add_argument(
         "--success-row",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="draw the half-height Solved row between speed-up and cost (default); "
+        help="draw the half-height Solved row between speedup and cost (default); "
         "--no-success-row drops it, which shortens the canvas and leaves every other box unchanged",
     )
     parser.add_argument(

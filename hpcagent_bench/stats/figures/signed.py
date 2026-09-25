@@ -6,7 +6,7 @@ TWO QUESTIONS, TWO FIGURES, ONE READER. :func:`arms_figure` puts several arms on
 denominator and answers "how fast is each arm". :func:`paired_figure` answers the different
 question an ablation is about: on a kernel BOTH tools compiled, which is faster -- so its
 denominator is the other TOOL, per kernel, and each row is a paired comparison rather than an
-independent arm. Dividing two geomeans taken over different kernel sets is not a speed-up of
+independent arm. Dividing two geomeans taken over different kernel sets is not a speedup of
 anything: an arm that fails on the kernels it is bad at comes out ahead by attrition.
 
 THE AXIS is the signed relative change (:func:`hpcagent_bench.stats.summary.signed_change`), not
@@ -57,7 +57,7 @@ ARMS: dict[str, str] = {
     "cc_llvm_autopar": "llvm + polly",
 }
 
-#: The speed-up DENOMINATOR: a SERIAL optimizing compile, not the interpreted reference.
+#: The speedup DENOMINATOR: a SERIAL optimizing compile, not the interpreted reference.
 #:
 #: cc, not numpy, and not the llvm+polly arm either. numpy flatters an auto-parallelizer for reasons
 #: that have nothing to do with parallelization, and polly is not defined on every kernel -- a
@@ -367,7 +367,7 @@ def arm_rows(root: pathlib.Path, arms: Mapping[str, str] = ARMS, baseline: str =
     if not reference.times:
         raise SystemExit(
             f"no {baseline} baseline in {root}: looked for {baseline}.csv and {baseline}.rank*.csv. "
-            f"Every speed-up here is a ratio against it, so there is nothing to plot without it."
+            f"Every speedup here is a ratio against it, so there is nothing to plot without it."
         )
     rows: list[Row] = []
     for framework, label in arms.items():
@@ -663,8 +663,8 @@ LLR40_PANEL_HEIGHT_IN: float = 1.5
 
 
 def llr40_baseline_label(baseline: str) -> str:
-    """The speed-up axis label, naming the baseline by its registry display name."""
-    return f"Speed-up over {experiment_tags.names('frameworks').get(baseline, baseline)}"
+    """The speedup axis label, naming the baseline by its registry display name."""
+    return f"Speedup over {experiment_tags.names('frameworks').get(baseline, baseline)}"
 
 
 def row_color(row: Row) -> str:
@@ -677,7 +677,7 @@ def llr40_metrics(
 ) -> list[per_kernel.Metric]:
     """The compiler figure's panels over ``sorted(roster)``, as :mod:`per_kernel` draws them.
 
-    Speed-up for every row: a kernel's own repeat interval (SC15 rules 5/7) as its whisker, a
+    Speedup for every row: a kernel's own repeat interval (SC15 rules 5/7) as its whisker, a
     compiler's 1x placeholder crossed (``Row.delivered``), an unanswered agent kernel filled at 1x and
     crossed, a pending kernel as "?"; the 1x line wears the baseline's own colour, since it IS the
     baseline. Tokens spent only when some row spends any -- a compiler-only render has nothing to
@@ -735,7 +735,7 @@ def llr40_figure(
     panel_height_in: float = LLR40_PANEL_HEIGHT_IN,
 ) -> matplotlib.figure.Figure:
     """The llr-focus40 compiler figure: DaCe's own canon-sweep columns and every model's CPF arm on
-    ONE kernel axis, a speed-up panel (log2, ratio-labelled ticks) over a tokens-spent panel when
+    ONE kernel axis, a speedup panel (log2, ratio-labelled ticks) over a tokens-spent panel when
     any row spends tokens (:func:`llr40_metrics`), each with per_kernel's summary column past a
     dashed separator -- one slot per row, the geomean with its 95% interval on both panels, over
     the kernels the row solved, value printed.
@@ -842,8 +842,8 @@ def arms_figure(root: pathlib.Path, out: pathlib.Path) -> pathlib.Path:
     write_tables(rows, out)
     return draw(
         rows,
-        f"TSVC Kernels, Signed Speed-Up Against Serial gcc {flags.OPT_LEVEL}",
-        f"signed relative speed-up vs serial gcc {flags.OPT_LEVEL}\n"
+        f"TSVC Kernels, Signed Speedup Against Serial gcc {flags.OPT_LEVEL}",
+        f"signed relative speedup vs serial gcc {flags.OPT_LEVEL}\n"
         "$+1$ = 2$\\times$ faster, 0 = no change, $-1$ = 2$\\times$ slower",
         out,
     )
@@ -856,7 +856,7 @@ def paired_figure(root: pathlib.Path, out: pathlib.Path) -> pathlib.Path:
     return draw(
         rows,
         "TSVC Kernels, Canonicalized dace Against Each Tool It Is Paired With",
-        "signed relative speed-up of dace canon\n$+1$ = 2$\\times$ faster, 0 = no change, $-1$ = 2$\\times$ slower",
+        "signed relative speedup of dace canon\n$+1$ = 2$\\times$ faster, 0 = no change, $-1$ = 2$\\times$ slower",
         out,
     )
 

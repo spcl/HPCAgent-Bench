@@ -3,7 +3,7 @@
 """paired_arms.py: arm-against-arm comparisons over a declared family.
 
 THE FIXTURE IS THE PRODUCTION SHAPE. Every episode here emits a graded ``submission`` row carrying a
-speed-up and NO token count, a ``call`` row, and a ``task`` row carrying the task's token total, because
+speedup and NO token count, a ``call`` row, and a ``task`` row carrying the task's token total, because
 that is what extraction writes (docs/DESIGN_data_collection_and_scoring.md, T3). Three earlier tests put both columns on
 one row, which is why a filter that AND-ed them -- and so kept only call rows and dropped every
 graded submission -- passed its tests and reached a published table.
@@ -267,7 +267,7 @@ def test_the_impact_table_has_one_row_per_arm_with_the_ratio_on_the_treatment_ro
     paired_arms: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """Spec section 10: every arm once, the control carrying no ratio, the treatment carrying
-    the paper's rho on both legs -- speed-up treatment/control 3/2, cost control/treated 100/50 = 2
+    the paper's rho on both legs -- speedup treatment/control 3/2, cost control/treated 100/50 = 2
     (above 1: the treatment is cheaper)."""
     table = impact_table(paired_arms, tmp_path).set_index("arm")
     assert list(table.index) == ["x-qwen38-c-cpf", "x-qwen38-c"]
@@ -280,7 +280,7 @@ def test_the_impact_table_has_one_row_per_arm_with_the_ratio_on_the_treatment_ro
 
 
 def test_the_impact_table_carries_usage_and_the_arm_aggregates(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
-    """Attempts come off the task rows, speed-up is the geomean (A1), cost the geomean task total with
+    """Attempts come off the task rows, speedup is the geomean (A1), cost the geomean task total with
     its log-t interval (A2), each over the 8 selected tasks."""
     table = impact_table(paired_arms, tmp_path).set_index("arm")
     treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
@@ -344,7 +344,7 @@ def test_a_pair_reports_what_the_intersection_dropped(paired_arms: ModuleType, t
     solved = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
     by_default = paired_arms.pair_rows([("a", "b")], solved, paired_arms.tokens_by_arm_kernel(obs), list(KERNELS), "f")
     speed = next(row for row in by_default if row["leg"] == "speedup")
-    # the default leg is over what BOTH solved; the two b alone answered move coverage, not speed-up
+    # the default leg is over what BOTH solved; the two b alone answered move coverage, not speedup
     assert (speed["n_a"], speed["n_b"], speed["n_pairs"]) == (6, 8, 6)
     assert (speed["n_both"], speed["n_only_a"], speed["n_only_b"]) == (6, 0, 2)
 
@@ -388,7 +388,7 @@ def test_the_correction_runs_over_every_leg_of_every_pair(paired_arms: ModuleTyp
 
     assert len(reported) == 4
     assert all(row["p_adjusted"] >= row["p_value"] for row in reported)
-    # the solved rate is reported, never tested: the family is the speed-up and cost legs only
+    # the solved rate is reported, never tested: the family is the speedup and cost legs only
     assert {row["leg"] for row in reported} == {"speedup", "tokens"}
 
 
@@ -653,7 +653,7 @@ def test_an_arm_short_of_the_declared_roster_leaves_the_family(paired_arms: Modu
 
 
 def test_one_baseline_keeps_the_named_reference_and_every_row_without_one(paired_arms: ModuleType) -> None:
-    """Spec P1: a speed-up divided by two references is not one quantity, so the caller splits by
+    """Spec P1: a speedup divided by two references is not one quantity, so the caller splits by
     reference. A task row carries the token total and no denominator, and must survive the split."""
     rows = frame(
         [
@@ -691,7 +691,7 @@ def test_a_kernel_the_arm_never_delivered_scores_one_and_still_costs_its_tokens(
 def test_by_default_a_wrong_answer_is_left_out_of_the_speedup_and_still_costs_its_tokens(
     paired_arms: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """A wrong answer is no speed-up (2026-09-21): the default leg is over the solved kernels only,
+    """A wrong answer is no speedup (2026-09-21): the default leg is over the solved kernels only,
     the failure shows as coverage, and its tokens are still spent."""
     rows: list[dict[str, object]] = []
     for kernel in KERNELS[:4]:

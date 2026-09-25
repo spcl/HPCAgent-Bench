@@ -195,7 +195,7 @@ def test_missing_reference_is_fatal(tmp_path: pathlib.Path) -> None:
 
 
 def test_the_table_carries_the_costs_behind_every_ratio(sweep: pathlib.Path) -> None:
-    """SC15 Rule 4: a speed-up alone is uninterpretable, so the milliseconds travel with it."""
+    """SC15 Rule 4: a speedup alone is uninterpretable, so the milliseconds travel with it."""
     frame = signed.table(signed.arm_rows(sweep))
     assert list(frame.columns) == list(signed.TABLE_COLUMNS)
     canon = frame[(frame.framework == "dace_cpu_canonicalize") & (frame.kernel == "tsvc_2_s1")].iloc[0]
@@ -421,7 +421,7 @@ def test_adding_compiler_columns_does_not_change_any_agent_rows_ratios(
 ) -> None:
     """Wiring Pluto/ppcg_hip into the figure (``statistics/plot_llr40_compilers.py``'s own
     ``--canon-columns`` default, 2026-09-20) only ADDS rows -- it must never change an agent arm's
-    own per-kernel speed-up (its S_i). ``pluto``/``ppcg_hip`` are absent from ``llr40_canon`` here
+    own per-kernel speedup (its S_i). ``pluto``/``ppcg_hip`` are absent from ``llr40_canon`` here
     (never a validated row, exactly the historical ppcg canon sweep, job 640520), so every roster
     kernel on those two rows fills at 1x -- and every agent row's ratios must be BIT-IDENTICAL to
     the two-column baseline."""
@@ -539,7 +539,7 @@ def test_log2_change_is_nan_off_a_placeholder() -> None:
 
 def test_the_speedup_panel_is_log2_geometry_read_back_in_ratios(llr40_canon: pd.DataFrame) -> None:
     """Every doubling the same distance apart (a linear signed change put one 75x outlier 74 units
-    from zero and swamped every other mark), and the ticks still read as speed-ups: the "2x" tick
+    from zero and swamped every other mark), and the ticks still read as speedups: the "2x" tick
     sits at the ratio 2 on a base-2 log axis."""
     fig = signed.llr40_figure(signed.llr40_rows(llr40_canon, None, ROSTER40), ROSTER40)
     try:
@@ -569,7 +569,7 @@ def test_figure_omits_the_tokens_panel_when_no_row_spends_tokens(llr40_canon: pd
     fig = signed.llr40_figure(rows, ROSTER40, "title")
     try:
         assert len(fig.axes) == 1
-        assert fig.axes[0].get_ylabel() == "Speed-up over Numba"
+        assert fig.axes[0].get_ylabel() == "Speedup over Numba"
     finally:
         plt.close(fig)
 
@@ -604,7 +604,7 @@ def test_standalone_optimizers_wear_their_own_shapes(llr40_canon: pd.DataFrame) 
 
 
 def test_figure_prints_at_text_width_and_names_its_summary_statistic(llr40_canon: pd.DataFrame) -> None:
-    """Drawn at the size the page prints it: a figure* is text width, and a single speed-up panel
+    """Drawn at the size the page prints it: a figure* is text width, and a single speedup panel
     is a short strip, not a page. The axis label names the baseline and the 1x tick stays a ratio;
     every kernel has a visible tick, and the one summary statistic is named by an x tick under its
     slots (user, 2026-09-22)."""
@@ -620,7 +620,7 @@ def test_figure_prints_at_text_width_and_names_its_summary_statistic(llr40_canon
         plt.close(fig)
     assert width == pytest.approx(style.DOUBLE_COLUMN_WIDTH)
     assert height < 2.6
-    assert "1x" in labels and fig.axes[0].get_ylabel() == "Speed-up over Numba"
+    assert "1x" in labels and fig.axes[0].get_ylabel() == "Speedup over Numba"
     assert len(kernel_ticks) == len(ROSTER40) + 1 and kernel_ticks[-1] == "Geomean"
     assert "Geomean" not in annotations
     assert tick_length > 0.0

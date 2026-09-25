@@ -1,7 +1,7 @@
 """Plan (and optionally submit) the final 4x5 regrade (mw4x5-final-v2) still owed to the paper.
 
 The owed set is the wave board's (``wave_board.add_regrade_status``): per paper arm identity (every
-board section but MLScale) and kernel, the newest credited /submit (speed-up > 0); owed when no
+board section but MLScale) and kernel, the newest credited /submit (speedup > 0); owed when no
 regrade shard GRADED that (job, run id, kernel) under mw4x5-final-v2. Items a queued or running
 regrade job is expected to reach before its wall time are left to that job; items it will not reach
 (and every item of a job that already ended) are owed again. Each owed item is planned at the time

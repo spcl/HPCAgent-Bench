@@ -7,7 +7,7 @@ Condition comes from the ARM NAME (:data:`kernel_comparison.ARM_PATTERN`), never
 for the same arm. Completeness is roster coverage (:func:`population.complete_arms`), applied
 before any per-kernel value is read, and a model whose every arm is incomplete gets no panel.
 
-ORIENTATION: the MEASURED quantity is on Y (speed-up on the top panel, tokens on the bottom) and the
+ORIENTATION: the MEASURED quantity is on Y (speedup on the top panel, tokens on the bottom) and the
 kernel NAMES are on X, rotated, on one axis both panels share; the geomean/median summary is a group
 past the last kernel at the RIGHT END of that axis, behind a dashed vertical separator. The drawing
 itself is :mod:`hpcagent_bench.stats.figures.per_kernel`'s (tests/test_plot_per_kernel.py); what is
@@ -223,7 +223,7 @@ def test_an_arms_condition_series_carries_the_packet_colour_the_arm_summary_figu
 def test_a_kernel_with_no_verified_answer_is_absent_from_a_series_own_values() -> None:
     """``Series.values`` (what a mark is drawn from) follows the framework's own scoring policy,
     never inventing a served-but-unsolved value: an arm complete on the roster (a row exists) but
-    with a negative/unusable speed-up on one kernel simply has no value there. The kernel still
+    with a negative/unusable speedup on one kernel simply has no value there. The kernel still
     reaches the table and the figure as a missing mark -- see the ``table_rows`` tests below."""
     rows = submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0})
     rows.append(
@@ -299,7 +299,7 @@ def test_table_rows_carries_one_row_per_series_per_roster_kernel_not_only_the_ve
 
 def test_summary_row_carries_the_geomean_of_the_plotted_per_kernel_speedups() -> None:
     """The ``row=summary`` ``statistic=geomean`` row's ``value`` equals the geometric mean of that
-    series' own per-kernel speed-ups over the roster -- the same values the speed-up panel draws."""
+    series' own per-kernel speedups over the roster -- the same values the speedup panel draws."""
     import math
 
     frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 8.0, "k3": 2.0})])
@@ -342,7 +342,7 @@ def test_summary_row_carries_the_geomean_of_the_plotted_per_kernel_tokens() -> N
 
 
 def test_the_canon_series_carries_no_summary_token_row() -> None:
-    """Canon has no tokens, so its series gets only the geomean speed-up summary row, never a median
+    """Canon has no tokens, so its series gets only the geomean speedup summary row, never a median
     tokens one."""
     frame = observations([*submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0, "k2": 2.0, "k3": 2.0})])
     canon = canon_frame(
@@ -514,7 +514,7 @@ def test_the_key_names_the_placeholder_cross_only_when_a_kernel_draws_one() -> N
 
 def test_the_two_panels_share_one_kernel_x_axis_and_keep_their_own_value_y_scales() -> None:
     """Every model draws into the SAME two panels, so one model reaching 120x (or 900K tokens) must
-    not stretch a scale the others are read against: the speed-up axis spans every series' values,
+    not stretch a scale the others are read against: the speedup axis spans every series' values,
     not the first one's. The two panels share the kernel axis -- a kernel is at the same x in both --
     while their value axes stay separate, log2 ratio vs log10 count being different quantities."""
     import matplotlib
@@ -536,7 +536,7 @@ def test_the_two_panels_share_one_kernel_x_axis_and_keep_their_own_value_y_scale
         assert list(speedup_ax.get_xticks()) == list(token_ax.get_xticks())
         assert speedup_ax.get_xlim() == token_ax.get_xlim()
         assert speedup_ax.get_ylim() != token_ax.get_ylim()
-        # both models' extremes fit the ONE speed-up axis, and both spends the ONE token axis
+        # both models' extremes fit the ONE speedup axis, and both spends the ONE token axis
         assert speedup_ax.get_ylim()[1] >= 120.0 and speedup_ax.get_ylim()[0] <= 2.0
         assert token_ax.get_ylim()[1] >= 900000.0 and token_ax.get_ylim()[0] <= 100.0
     finally:
@@ -635,9 +635,9 @@ def test_token_panel_draws_no_canon_series() -> None:
     fig = kernel_comparison.figure(panels, canon_mark, list(ROSTER), False, "title")
     try:
         speedup_ax, token_ax = fig.axes
-        # canon's marker (a diamond) is drawn once per kernel slot on the speed-up panel and never on
+        # canon's marker (a diamond) is drawn once per kernel slot on the speedup panel and never on
         # the token panel: one PathCollection per drawn mark (plotstyle.point_mark), two per point
-        # (white disc + coloured mark), so the token panel has strictly fewer than the speed-up one.
+        # (white disc + coloured mark), so the token panel has strictly fewer than the speedup one.
         assert len(token_ax.collections) < len(speedup_ax.collections)
     finally:
         import matplotlib.pyplot as plt
@@ -647,7 +647,7 @@ def test_token_panel_draws_no_canon_series() -> None:
 
 def test_a_kernel_with_no_token_total_draws_no_mark_on_the_token_panel() -> None:
     """A missing token total is no measurement (R7); a hollow mark at the axis edge would read as the
-    smallest spend on the panel. The speed-up panel still marks a kernel with no answer."""
+    smallest spend on the panel. The speedup panel still marks a kernel with no answer."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -871,7 +871,7 @@ def test_both_panels_rule_the_value_axis_and_leave_the_kernel_axis_bare() -> Non
 
 
 def test_a_kernel_with_no_verified_answer_enters_the_speedup_series_crossed_at_one() -> None:
-    """A real 1.0x speed-up and a kernel nobody answered land on the same coordinate -- 1x, what a
+    """A real 1.0x speedup and a kernel nobody answered land on the same coordinate -- 1x, what a
     served but unsolved kernel leaves standing -- so the two may not draw as one mark: the
     placeholder is an UNDELIVERED cell, which per_kernel draws hollow and crossed and keeps out of
     the summary."""
@@ -1011,7 +1011,7 @@ def test_the_speedup_axis_names_the_denominator_the_judge_recorded() -> None:
     )
     try:
         # the words, not the line breaks: a label taller than its panel is broken onto two lines
-        assert " ".join(fig.axes[0].get_ylabel().split()) == "Speed-Up vs c-autopar"
+        assert " ".join(fig.axes[0].get_ylabel().split()) == "Speedup vs c-autopar"
     finally:
         import matplotlib.pyplot as plt
 

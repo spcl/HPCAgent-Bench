@@ -8,7 +8,7 @@ working set in bytes, the largest single array, and the memory tier that working
 enough to be worth timing?*
 
 A preset whose whole working set fits in L2 is not a size, it is a latency measurement -- one
-timed repetition of it costs microseconds, so run-to-run dispersion swamps whatever speed-up a
+timed repetition of it costs microseconds, so run-to-run dispersion swamps whatever speedup a
 submission achieved. :data:`TIER_BYTES` names the boundaries and :func:`tier_of` classifies.
 
 Bytes are a LOWER BOUND on cost, never a runtime: a kernel with O(N^3) arithmetic over O(N^2)

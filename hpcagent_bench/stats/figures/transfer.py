@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Do the LLR40 final answers keep their speed-up on another machine? The geometric-mean speed-up
+"""Do the LLR40 final answers keep their speedup on another machine? The geometric-mean speedup
 of the answers solved on BOTH machines, on MI300A (Beverin) and re-timed on GH200 (Daint: Grace
 CPU, H100 GPU, HIP built on HIP's CUDA backend).
 
@@ -40,7 +40,7 @@ from hpcagent_bench.harness.timing import FINAL_GRADE_REDUCTIONS
 from hpcagent_bench.stats import palette, population, style, summary
 from hpcagent_bench.stats.figures.efficacy import GROUP_STEP
 
-#: One row per answer: its kernel, arm, model and language, its speed-up on each machine, which
+#: One row per answer: its kernel, arm, model and language, its speedup on each machine, which
 #: MI300A grade it carries (:data:`FINAL_GRADE` / :data:`LIVE_GRADE`) and its GH200 outcome.
 PAIRED_COLUMNS: tuple[str, ...] = (
     "benchmark",
@@ -61,7 +61,7 @@ NOT_PORTABLE: str = "not-portable"
 #: What counts as FAILED on GH200 (2026-09-25 user): unsolved, and every judge error too -- a
 #: numba config error, a failed dlopen, a SIGSEGV all left the answer without a grade there.
 FAILED_OUTCOMES: tuple[str, ...] = (FAILED, ERRORED)
-#: The MI300A speed-up is the final grade, or the live grade where the answer has no final one.
+#: The MI300A speedup is the final grade, or the live grade where the answer has no final one.
 FINAL_GRADE: str = "final"
 LIVE_GRADE: str = "live"
 #: Device class -> the languages its panel draws, in panel order, and the panel's title.
@@ -117,7 +117,7 @@ def kept_arms(frame: pd.DataFrame) -> pd.DataFrame:
 def paired_from_csv(frame: pd.DataFrame) -> pd.DataFrame:
     """The paired frame of the Daint join table: ``backend`` is the language, ``s_bar_*`` the final
     grade on each machine. An answer the MI300A final grade left unsolved (``graded``, no
-    ``s_bar``) has no MI300A speed-up; one with no MI300A final grade falls back to its live grade
+    ``s_bar``) has no MI300A speedup; one with no MI300A final grade falls back to its live grade
     (``original_speedup``) under :data:`LIVE_GRADE`. A graded GH200 task with no ``s_bar`` is
     unsolved there (:data:`FAILED`)."""
     frame = kept_arms(frame)
@@ -193,7 +193,7 @@ def paired_from_observations(mi300a: pd.DataFrame, gh200: pd.DataFrame) -> pd.Da
 
 
 def solved_on_both(rows: pd.DataFrame) -> pd.DataFrame:
-    """The answers credited on GH200 that carry an MI300A speed-up: the population every geomean
+    """The answers credited on GH200 that carry an MI300A speedup: the population every geomean
     and correlation is taken over."""
     return rows[(rows["status_gh200"] == CORRECT) & (rows["speedup_mi300a"].astype(float) > 0)]
 
@@ -209,17 +209,17 @@ class PanelStats:
     errored: int
     #: Language -> answers not built on GH200, in panel language order.
     not_portable: dict[str, int]
-    #: Answers whose MI300A speed-up is the live grade (:data:`LIVE_GRADE`).
+    #: Answers whose MI300A speedup is the live grade (:data:`LIVE_GRADE`).
     live_mi300a: int
-    #: Answers graded on GH200 with no MI300A speed-up (not solved there): in no statistic.
+    #: Answers graded on GH200 with no MI300A speedup (not solved there): in no statistic.
     no_mi300a: int
-    #: Spearman rank correlation of the two speed-ups over the answers solved on both machines;
+    #: Spearman rank correlation of the two speedups over the answers solved on both machines;
     #: NaN under :data:`MIN_CORRELATED` of them.
     spearman: float
 
     @property
     def ran(self) -> int:
-        """Answers graded on GH200 with an MI300A speed-up: correct or failed."""
+        """Answers graded on GH200 with an MI300A speedup: correct or failed."""
         return self.correct + self.failed
 
     @property
@@ -287,7 +287,7 @@ def models_of(paired: pd.DataFrame) -> list[str]:
 
 def geomean_table(paired: pd.DataFrame) -> pd.DataFrame:
     """One row per (language, model) slot: how many answers were solved on both machines, and the
-    geometric mean of each machine's speed-ups over them with its 95% log-t interval (NaN ends
+    geometric mean of each machine's speedups over them with its 95% log-t interval (NaN ends
     below :data:`summary.MIN_PAIRS_FOR_INTERVAL` answers)."""
     solved = solved_on_both(paired)
     records = []
@@ -326,7 +326,7 @@ def slot_x(counts: list[int]) -> list[list[float]]:
 
 
 def ratio_axis(ax: Axes, low: float, high: float) -> None:
-    """The log10 speed-up axis over ``[low, high]``, majors at the decades labelled as ratios, and
+    """The log10 speedup axis over ``[low, high]``, majors at the decades labelled as ratios, and
     the 1x reference line."""
     ax.set_yscale("log")
     ax.set_ylim(low, high)
@@ -440,7 +440,7 @@ def geomean_figure(
             (LEFT_IN / width_in, bottom / height_in, (width_in - LEFT_IN - RIGHT_IN) / width_in, BODY_IN / height_in)
         )
         draw_panel(ax, device, table[table["language"].isin(PANELS[device])], models, type_)
-        ax.set_ylabel("Geomean Speed-up", fontsize=type_.label_pt)
+        ax.set_ylabel("Geomean Speedup", fontsize=type_.label_pt)
     style.legend_below(
         fig,
         legend_handles(models, type_),
@@ -461,7 +461,7 @@ def scatter_title(stats: PanelStats) -> str:
 
 
 def scatter_limits(points: pd.DataFrame) -> tuple[float, float]:
-    """One range for both axes, so y = x is the diagonal: every drawn speed-up and 1x, padded by a
+    """One range for both axes, so y = x is the diagonal: every drawn speedup and 1x, padded by a
     fifth of a decade."""
     values = pd.concat([points["speedup_mi300a"], points["speedup_gh200"]]).astype(float)
     values = values[values > 0]
@@ -556,8 +556,8 @@ def scatter_figure(
             (left_in / width_in, bottom / height_in, SCATTER_BODY_IN / width_in, SCATTER_BODY_IN / height_in)
         )
         draw_scatter_panel(ax, panel_rows(paired, device), panel_stats(paired, device), type_)
-        ax.set_ylabel("Speed-up on GH200", fontsize=type_.label_pt)
-    ax.set_xlabel("Speed-up on MI300A", fontsize=type_.label_pt)
+        ax.set_ylabel("Speedup on GH200", fontsize=type_.label_pt)
+    ax.set_xlabel("Speedup on MI300A", fontsize=type_.label_pt)
     style.legend_below(
         fig,
         scatter_handles(paired, type_),

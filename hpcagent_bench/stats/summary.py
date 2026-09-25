@@ -388,12 +388,12 @@ def geomean_interval(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA) -
 
 
 def signed_change(ratio: float) -> float:
-    """Speed-up ratio -> signed relative change. ``2x -> +1``, ``1x -> 0``, ``0.5x -> -1``.
+    """Speedup ratio -> signed relative change. ``2x -> +1``, ``1x -> 0``, ``0.5x -> -1``.
 
     ``r >= 1`` maps to ``r - 1`` and ``r < 1`` to ``-(1/r - 1)``, so a 2x win (+1) and a 2x
     slow-down (-1) sit the same distance from 0 and the transform is odd about no change:
     ``signed_change(1/r) == -signed_change(r)`` exactly. A raw ratio axis crushes every slow-down
-    into the 0..1 sliver and gives every speed-up an unbounded tail, so the eye reads a 0.5x
+    into the 0..1 sliver and gives every speedup an unbounded tail, so the eye reads a 0.5x
     regression as a SMALLER event than a 1.5x win when they are the same magnitude.
 
     Anything that is not a finite POSITIVE ratio -- 0, negative, +/-inf, NaN, a cell that was
@@ -415,11 +415,11 @@ def signed_changes(ratios: Samples) -> FloatArray:
 
 
 def log2_change(ratio: float) -> float:
-    """Speed-up ratio -> its base-2 logarithm. ``2x -> +1``, ``1x -> 0``, ``0.5x -> -1``: the same
+    """Speedup ratio -> its base-2 logarithm. ``2x -> +1``, ``1x -> 0``, ``0.5x -> -1``: the same
     zero and the same sign as :func:`signed_change`, but every DOUBLING is the same distance apart
     rather than every additional multiple of the baseline -- a 75x outlier sits at +6.2, not at
     +74, and does not swamp an axis a reader is comparing every other ratio against. The axis this
-    draws on still reads as a speed-up (ticks labelled back in ratios,
+    draws on still reads as a speedup (ticks labelled back in ratios,
     :func:`~hpcagent_bench.stats.style.ratio_tick_label`); only the GEOMETRY is log2.
 
     Anything that is not a finite POSITIVE ratio returns NaN, matching :func:`signed_change`.

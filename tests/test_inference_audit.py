@@ -7,7 +7,7 @@ audit found broken or unverified on real campaign data. Where a test is red, the
 the correct one and the code is what has to move -- the numbers in the tables were checked
 against a second, independently written route before the property was written down.
 
-The paired sets used below have the shape the real ones do: per-kernel log speed-up ratios,
+The paired sets used below have the shape the real ones do: per-kernel log speedup ratios,
 right-tailed, a handful of kernels per arm pair (llr40's skill pairs are n = 2, 3 and 4), and a
 1% geometric quantisation ladder that guarantees ties in |d|.
 """
@@ -285,7 +285,7 @@ def test_the_normal_signed_rank_approximation_stays_within_a_bounded_gap_of_the_
 def test_an_absent_measurement_reads_the_same_way_at_every_geomean_call_site(
     values: list[float], description: str
 ) -> None:
-    """A missing speed-up must read the same in ``harness.metric`` and in the summary line the CLI
+    """A missing speedup must read the same in ``harness.metric`` and in the summary line the CLI
     prints for the same run, or one absence is reported as two different results depending on which
     line of the harness the reader is looking at. The CLI side is the CLI's own function, not a copy
     of its line: a copy kept the old ``else 0.0`` after the CLI stopped printing it."""

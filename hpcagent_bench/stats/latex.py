@@ -3,8 +3,8 @@
 """A table for a paper, written from the same frame a figure is drawn from.
 
 A NUMBER A FIGURE CANNOT CARRY still belongs beside it. A solve rate is the case this exists for:
-it is a count out of a roster, it moves in whole kernels, and a mark on a speed-up axis cannot say
-it -- but a reader who does not have it will read every speed-up as if the arms solved the same
+it is a count out of a roster, it moves in whole kernels, and a mark on a speedup axis cannot say
+it -- but a reader who does not have it will read every speedup as if the arms solved the same
 kernels. So the table comes out of the same reduction the figure does, in the same run, rather than
 being typed into the paper from a printout and drifting from the figure a revision later.
 

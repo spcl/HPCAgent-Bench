@@ -8,7 +8,7 @@ table behind it. Every mark, axis, summary slot and margin is drawn by
 :func:`speedup_series`/:func:`token_series` -- so this figure's columns, placeholders and summary
 read exactly like every other per-kernel figure's.
 
-TWO PANELS SHARING ONE 40-KERNEL X AXIS: a speed-up panel (log2 ratio over the judge's baseline on
+TWO PANELS SHARING ONE 40-KERNEL X AXIS: a speedup panel (log2 ratio over the judge's baseline on
 Y, the DaCe canon CPU column plus every model's arms) over a token panel (log10 spend on Y, agents
 only -- the canon column runs no agent and spends nothing, so it keeps an EMPTY series there, which
 leaves every arm at the same dodge offset and summary slot in both panels). The MEASURED quantity is
@@ -40,7 +40,7 @@ PER-KERNEL VALUES ARE WHATEVER THE FRAMEWORK'S OWN POLICY ASSIGNS UNDER ``--repe
 invented here (spec R3-R7). :func:`hpcagent_bench.stats.population.kernel_answers` is an arm's
 verified answer per kernel: the LATEST run's answer for a rerun kernel (default, none when that run
 verified nothing -- an earlier run's answer never stands in), the MEDIAN answer over runs that
-repeat by design. A kernel with no verified answer has no value here; the speed-up panel enters it
+repeat by design. A kernel with no verified answer has no value here; the speedup panel enters it
 at 1x, hollow and crossed, and the table names it ``status=no_verified_answer``. Tokens are
 :func:`hpcagent_bench.stats.population.kernel_tokens` under the SAME ``--repeats``: the latest
 run's own TASK TOKEN TOTAL, or the median of the runs' task totals, bracketed by that median's own
@@ -50,7 +50,7 @@ rows (T4). The canon column is :func:`hpcagent_bench.stats.canon.kernel_speedups
 deterministic sweep: no episodes, no policy to pick, and no tokens spent.
 
 EACH PANEL'S SUMMARY is per_kernel's: one slot per series past a dashed separator, the geometric
-mean with its 95% interval for speed-up (the project-wide rule for an overall speed-up, never a
+mean with its 95% interval for speedup (the project-wide rule for an overall speedup, never a
 median) and the same geomean for tokens, over the kernels the series solved -- the same
 statistics, over the same cells, the table's ``row=summary`` rows carry (:func:`series_summary_rows`).
 """
@@ -91,14 +91,14 @@ CANON_MARKER: str = "D"
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class SeriesValues:
-    """One series' per-kernel speed-up and token spend, keyed by the kernels it has a value for:
+    """One series' per-kernel speedup and token spend, keyed by the kernels it has a value for:
     the record the table is written from, and what :func:`speedup_series`/:func:`token_series` hand
     to :mod:`~hpcagent_bench.stats.figures.per_kernel` to draw.
 
     The canon series has an empty ``tokens`` -- it runs no agent. ``tokens_min``/``tokens_max``
     bracket a ``--repeats median`` kernel's token value with the minimum and maximum over its tasks
     (R5); empty under ``--repeats latest``, where one task IS the value and there is nothing to
-    bracket. ``delivered`` names the PRESENT speed-ups that are placeholders all the same (a ratio
+    bracket. ``delivered`` names the PRESENT speedups that are placeholders all the same (a ratio
     one side of which never delivered, ``statistics/plot_repo_vs_kernel.py``); empty means every
     present value is a measurement.
     """
@@ -174,7 +174,7 @@ def arm_tokens(
 def canon_speedups(
     canon_frame: pd.DataFrame, baseline: str = CANON_BASELINE, column: str = CANON_COLUMN
 ) -> dict[str, float]:
-    """The canon column's per-kernel speed-up over ``baseline`` (:func:`hpcagent_bench.stats.canon.kernel_speedups`)."""
+    """The canon column's per-kernel speedup over ``baseline`` (:func:`hpcagent_bench.stats.canon.kernel_speedups`)."""
     return canon.kernel_speedups(canon.read_times(canon_frame), baseline, column)
 
 
@@ -276,7 +276,7 @@ def build_panels(
 
 
 def speedup_series(values: SeriesValues, kernels: Sequence[str]) -> per_kernel.Series:
-    """``values``' speed-ups as a drawn series over ``kernels``. A kernel with no verified answer
+    """``values``' speedups as a drawn series over ``kernels``. A kernel with no verified answer
     enters at 1x, hollow and crossed (:func:`~hpcagent_bench.stats.figures.per_kernel.kernel_cells`):
     that is what a served but unsolved kernel leaves standing under every scoring policy this repo
     has, and a real 1.0x and a kernel nobody answered must not draw as one mark."""
@@ -337,7 +337,7 @@ def legend_handles(
 
 
 def speedup_label(baseline: str) -> str:
-    """The speed-up panel's axis label, naming the denominator the JUDGE recorded.
+    """The speedup panel's axis label, naming the denominator the JUDGE recorded.
 
     The baseline is a property of the data (:func:`hpcagent_bench.stats.figures.results.baseline_of`
     reads the column the judge stamped), never of the figure: llr-focus40 is graded against numba
@@ -345,7 +345,7 @@ def speedup_label(baseline: str) -> str:
     scientific_computing panel with a denominator no score in it ever saw. The canon series already
     names its own denominator the same way (:func:`build_panels`).
     """
-    return f"Speed-Up vs {baseline}"
+    return f"Speedup vs {baseline}"
 
 
 def two_panel_figure(
@@ -357,7 +357,7 @@ def two_panel_figure(
     token_ylabel: str,
     legend: Sequence[matplotlib.artist.Artist],
 ) -> matplotlib.figure.Figure:
-    """Speed-up over tokens for ``drawn`` on one kernel axis
+    """Speedup over tokens for ``drawn`` on one kernel axis
     (:func:`~hpcagent_bench.stats.figures.per_kernel.figure_panels`): a page insert at
     :data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH` under ``double_column``, otherwise as
     wide as the dodged marks want (:func:`~hpcagent_bench.stats.figures.per_kernel.roomy_pitch_in`).
@@ -384,7 +384,7 @@ def figure(
     condition_order: Sequence[str] = CONDITION_ORDER,
     baseline: str = DEFAULT_BASELINE,
 ) -> matplotlib.figure.Figure:
-    """The whole figure: a speed-up panel (every model's arms plus the canon column) ABOVE a token
+    """The whole figure: a speedup panel (every model's arms plus the canon column) ABOVE a token
     panel (agents only), both on ONE shared kernel axis.
 
     Every model in ONE panel rather than a panel column each: 40 rotated kernel names are what the
@@ -445,7 +445,7 @@ def median_over_packets(per_packet: Sequence[dict[str, float]]) -> dict[str, flo
 def llr40_model_value(
     frame: pd.DataFrame, model: str, packet_mode: str, repeats: population.RepeatPolicy, language: str = "c"
 ) -> tuple[dict[str, float], dict[str, float]]:
-    """``(speed-up, billed tokens)`` per kernel for one model under one packet selection.
+    """``(speedup, billed tokens)`` per kernel for one model under one packet selection.
 
     ``packet_mode`` is one of :data:`LLR40_PACKETS` (the bare control is ``""``) or
     :data:`LLR40_MEDIAN_MODE`, the per-kernel median over every packet arm that has a value there.
@@ -533,7 +533,7 @@ def llr40_model_figure(
     baseline: str = DEFAULT_BASELINE,
 ) -> matplotlib.figure.Figure:
     """LLR40 by MODEL: one dodged, coloured-by-model mark per kernel (:func:`llr40_model_panels`),
-    speed-up over billed token spend, on the SAME kernel axis :func:`figure` draws by packet -- the
+    speedup over billed token spend, on the SAME kernel axis :func:`figure` draws by packet -- the
     per-kernel twin of :mod:`hpcagent_bench.stats.figures.efficacy`'s geomean summary row. NO title:
     a paper caption carries it. The key sits under the kernel names in a band measured from them
     (:func:`per_kernel.fit_canvas`), so a long rotated name never runs through it.
@@ -554,7 +554,7 @@ def llr40_model_figure(
     )
 
 
-#: ``table_rows``' ``status`` column: whether a KERNEL row carries a real speed-up or names a
+#: ``table_rows``' ``status`` column: whether a KERNEL row carries a real speedup or names a
 #: kernel the series covers (roster-complete) but never verified. Blank on a ``summary`` row.
 STATUS_VERIFIED: str = "verified"
 STATUS_MISSING: str = "no_verified_answer"
@@ -575,7 +575,7 @@ TABLE_NOTE: str = (
     "this roster kernel but never verified an answer for it; speedup is blank. row=kernel rows carry "
     "one roster kernel each; row=summary rows (kernel blank) carry one series' OVERALL statistic, "
     "the one the figure's summary slot draws: statistic=geomean for speedup (the project rule for an "
-    "overall speed-up) with its 95% log-t interval low/high (blank under 6 kernels), over the n_kernels roster kernels the "
+    "overall speedup) with its 95% log-t interval low/high (blank under 6 kernels), over the n_kernels roster kernels the "
     "series solved; statistic=geomean_tokens for tokens with the same interval (blank under 6 kernels), "
     "over the n_kernels roster kernels the series has a task total for."
 )
@@ -594,7 +594,7 @@ def as_count(value: float) -> int | float:
 
 
 def series_rows(kind: str, model: str, series: SeriesValues, kernels: Sequence[str]) -> list[dict[str, object]]:
-    """One ``series``' per-kernel rows over ``kernels``: a real speed-up and token spend where it
+    """One ``series``' per-kernel rows over ``kernels``: a real speedup and token spend where it
     has them, blank otherwise -- so a missing kernel is a readable fact in the table, not a silently
     absent one. ``tokens_min``/``tokens_max`` are blank except under ``--repeats median``."""
     rows: list[dict[str, object]] = []
@@ -632,7 +632,7 @@ def table_row(kind: str, model: str, series: SeriesValues, **fields: object) -> 
 def series_summary_rows(kind: str, model: str, series: SeriesValues, kernels: Sequence[str]) -> list[dict[str, object]]:
     """``series``' own overall rows, over the SAME roster ``kernels`` the per-kernel rows list and
     from the SAME cells the figure draws (:func:`speedup_series`, :func:`token_series`), reduced by
-    the figure's own reducers -- so a summary slot and its row cannot disagree: the geomean speed-up
+    the figure's own reducers -- so a summary slot and its row cannot disagree: the geomean speedup
     over the solved kernels, and the geomean tokens when the series spends any (canon does not)."""
     rows: list[dict[str, object]] = []
     reductions = (

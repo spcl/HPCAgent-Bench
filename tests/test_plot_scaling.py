@@ -89,7 +89,7 @@ def test_weak_efficiency_divides_by_p_over_the_realized_work_ratio() -> None:
     point = only(scaling.curves(frame(rows))).points[0]
     assert point.ideal_speedup == pytest.approx(1.0)  # P / r = 4 / 4
     assert point.efficiency == pytest.approx(0.8)  # (1000/1250) / 1.0
-    # the work-SCALED speed-up is what the speed-up panel draws, and its ideal is P
+    # the work-SCALED speedup is what the speedup panel draws, and its ideal is P
     assert point.value("speedup") == pytest.approx(3.2)  # 4 * 1000 / 1250
     assert point.value("efficiency") == pytest.approx(0.8)
 

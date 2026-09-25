@@ -55,12 +55,12 @@ KernelPolicy = Literal["solved", "served"]
 
 POLICIES: tuple[KernelPolicy, ...] = ("solved", "served")
 
-#: What a kernel the arm was served but never verified scores under ``served``. A speed-up of 1.0
+#: What a kernel the arm was served but never verified scores under ``served``. A speedup of 1.0
 #: is exactly "the baseline stands", which is what a non-delivery leaves behind: S_i of an
 #: unsolved task (:mod:`hpcagent_bench.stats.score_rule`).
 NOT_DELIVERED: float = 1.0
 
-#: Column :func:`graded_episode_rows` keeps the judge's recorded speed-up in, once ``speedup``
+#: Column :func:`graded_episode_rows` keeps the judge's recorded speedup in, once ``speedup``
 #: holds the episode's S_i.
 RAW_SPEEDUP_COLUMN: str = "raw_speedup"
 
@@ -213,7 +213,7 @@ def one_denominator(values: Iterable[object], label: str = "") -> str:
     named = sorted({str(value).strip() for value in values if is_named(value)})
     prefix = f"{label}: " if label else ""
     if not named:
-        raise MixedPopulationError(f"{prefix}no baseline recorded; a speed-up with no denominator is not a ratio")
+        raise MixedPopulationError(f"{prefix}no baseline recorded; a speedup with no denominator is not a ratio")
     if len(named) > 1:
         raise MixedPopulationError(
             f"{prefix}this slice mixes baseline denominators {named}; split it by baseline rather than pooling it"
@@ -224,7 +224,7 @@ def one_denominator(values: Iterable[object], label: str = "") -> str:
 def one_node(values: Iterable[object], label: str = "") -> str | None:
     """The single node a candidate and its baseline were timed on, or raise; None when no row names one.
 
-    A speed-up divides a candidate time by a baseline time, and the node-to-node spread on one
+    A speedup divides a candidate time by a baseline time, and the node-to-node spread on one
     homogeneous cluster is about 30%, so a quotient across two nodes is a hardware comparison that
     every row still looks well-formed under. A blank cell is a row recorded before the column and
     constrains nothing; two DIFFERENT named nodes are refused.
@@ -239,12 +239,12 @@ def one_node(values: Iterable[object], label: str = "") -> str | None:
     return named[0] if named else None
 
 
-#: The recorded version of the reduction behind a row's speed-up, as ``submissions.timing_reduction``
+#: The recorded version of the reduction behind a row's speedup, as ``submissions.timing_reduction``
 #: spells it (:data:`hpcagent_bench.harness.timing.REDUCTIONS`).
 REDUCTION_COLUMN: str = "timing_reduction"
 
 #: What a row recorded before the stamp existed counts as: one reduction of its own, never pooled
-#: with a stamped one, because nothing in the row says which arithmetic produced its speed-up.
+#: with a stamped one, because nothing in the row says which arithmetic produced its speedup.
 UNSTAMPED: str = "unstamped"
 
 
@@ -355,7 +355,7 @@ def on_platform(frame: "pd.DataFrame", platform: str = DEFAULT_PLATFORM) -> "pd.
 
 
 def one_platform(values: Iterable[object], label: str = "") -> str:
-    """The single platform a slice was timed on, or raise: a speed-up on GH200 and one on MI300A
+    """The single platform a slice was timed on, or raise: a speedup on GH200 and one on MI300A
     are two measurements of one answer, and a mean over both counts it twice."""
     found = sorted({platform_of(value) for value in values})
     if len(found) > 1:
@@ -372,7 +372,7 @@ MIGRATION_COMMAND: str = "hpcagent-bench regrade (or reproducibility/llr40/extra
 
 
 def one_reduction(values: Iterable[object], label: str = "", *, allow_unstamped: bool = False) -> str:
-    """The single timing reduction a slice's speed-ups were credited under, or raise.
+    """The single timing reduction a slice's speedups were credited under, or raise.
 
     Two reductions are two estimators: a ratio of minima, a ratio of medians and the pessimistic
     grid credit floored at 1.0 answer different questions about the same samples, so a mean over
@@ -466,7 +466,7 @@ def policies_agree(left: str, right: str) -> bool:
 
 
 def one_baseline_policy(values: Iterable[object], label: str = "") -> str:
-    """The single baseline POLICY a slice's speed-ups were credited under, or raise.
+    """The single baseline POLICY a slice's speedups were credited under, or raise.
 
     Two policies are two definitions of ``S_i``. Under ``best-of-v1`` the denominator is the fastest
     of the track's candidates, timed in the candidate's own bracket; under ``single-v1`` it is the one
@@ -488,8 +488,8 @@ def one_baseline_policy(values: Iterable[object], label: str = "") -> str:
     if disagree:
         prefix = f"{label}: " if label else ""
         raise MixedPopulationError(
-            f"{prefix}this slice mixes baseline policies {found}; a speed-up over the fastest of a "
-            f"candidate set is not a speed-up over one fixed kind, so split it by "
+            f"{prefix}this slice mixes baseline policies {found}; a speedup over the fastest of a "
+            f"candidate set is not a speedup over one fixed kind, so split it by "
             f"{BASELINE_POLICY_COLUMN} rather than pooling it"
         )
     return chosen
@@ -609,13 +609,13 @@ def graded_episode_rows(
 ) -> "pd.DataFrame":
     """One row per EPISODE: its own last positive-speedup graded submission, scored as S_i.
 
-    The population every per-episode speed-up statistic is taken over, before any across-episode
+    The population every per-episode speedup statistic is taken over, before any across-episode
     reduction (the best final answer, a per-kernel distribution) is applied to it -- factored out
     of :func:`final_answers` so a caller wanting every episode's own answer (a boxplot of
-    per-episode speed-ups) does not have to re-derive the screening it shares with the
+    per-episode speedups) does not have to re-derive the screening it shares with the
     best-answer reduction.
 
-    ``frame`` must be the GRADED rows. A ``call`` row carries a speed-up for a round the judge did
+    ``frame`` must be the GRADED rows. A ``call`` row carries a speedup for a round the judge did
     not persist, and a reduction over those is over a population no claim is about.
 
     A SUSPECT FINAL ANSWER SCORES 1.0 (:func:`answer_score`), as the judge scores it: the episode's
@@ -733,7 +733,7 @@ def final_answers(
 #: ``attempt_index`` breaks it in the order the agent made them.
 SUBMISSION_ORDER: tuple[str, str] = ("ts_ms", "attempt_index")
 
-#: The speed-up of a kernel's winning answer and the two costs it is the ratio of (SC15 Rule 4).
+#: The speedup of a kernel's winning answer and the two costs it is the ratio of (SC15 Rule 4).
 ANSWER_COLUMNS: tuple[str, str, str] = ("speedup", "baseline_ns", "native_ns")
 
 #: Whether the kernel's row is a measurement or the :data:`NOT_DELIVERED` placeholder the ``served``
@@ -742,7 +742,7 @@ ANSWER_COLUMNS: tuple[str, str, str] = ("speedup", "baseline_ns", "native_ns")
 DELIVERED_COLUMN: str = "delivered"
 
 #: Whether the kernel's row is a VERIFIED answer (a ``submission`` row): what the success rate counts
-#: and what the ``solved`` speed-up is taken over. A graded-and-rejected ``attempt`` is delivered but
+#: and what the ``solved`` speedup is taken over. A graded-and-rejected ``attempt`` is delivered but
 #: not solved.
 SOLVED_COLUMN: str = "solved"
 
@@ -761,7 +761,7 @@ def arm_kernel_answers(
     run the last verified submission counts (:func:`graded_episode_rows`); when the judge flagged that
     answer suspect the run answered nothing. ACROSS runs ``latest``
     keeps the latest run's answer -- none, when that run verified nothing -- and ``median`` keeps the
-    median run's row (the lower middle one for an even count) carrying the median speed-up over all
+    median run's row (the lower middle one for an even count) carrying the median speedup over all
     of them, so its timings are that run's own.
     """
     policy = repeat_policy(repeats)
@@ -789,11 +789,11 @@ def kernel_answers(
     allow_unstamped: bool = False,
     policy: KernelPolicy = "served",
 ) -> "pd.DataFrame":
-    """One row per kernel of ``frame``: the FINAL answer, with the costs behind its speed-up.
+    """One row per kernel of ``frame``: the FINAL answer, with the costs behind its speedup.
 
     Each ``(arm, benchmark)`` reduced by :func:`arm_kernel_answers` under ``repeats``, then the best
     arm per kernel, so a slice holding several arms of one condition keeps its best answer. A
-    ``call`` row carries a speed-up for a round the judge never persisted, and a median over those
+    ``call`` row carries a speedup for a round the judge never persisted, and a median over those
     rows weights a kernel by how many rounds the agent spent on it. Indexed by ``benchmark``, sorted.
 
     Under ``served`` (the default) a kernel the slice has a row for and never answered is present at
@@ -924,10 +924,10 @@ def kernel_tokens(
 
 
 def kernel_medians(frame: "pd.DataFrame", *, repeats: RepeatPolicy = "latest") -> dict[str, float] | None:
-    """One slice's point over its KERNELS: the GEOMETRIC MEAN speed-up and the GEOMETRIC MEAN token
+    """One slice's point over its KERNELS: the GEOMETRIC MEAN speedup and the GEOMETRIC MEAN token
     spend, each with its 95% log-t interval (:func:`hpcagent_bench.stats.summary.geomean_interval`,
     withheld below ``summary.MIN_PAIRS_FOR_INTERVAL`` kernels), and the two median times every
-    speed-up is the quotient of (SC15 Rule 4). ``None`` when the slice has no answer or no spend.
+    speedup is the quotient of (SC15 Rule 4). ``None`` when the slice has no answer or no spend.
 
     One value per kernel on both axes (:func:`kernel_answers`, :func:`kernel_tokens`), so the two
     numbers describe one population. Tokens are whatever card the caller priced ``frame`` with
@@ -960,7 +960,7 @@ def kernel_medians(frame: "pd.DataFrame", *, repeats: RepeatPolicy = "latest") -
 
 @dataclass(frozen=True, slots=True)
 class ArmAggregate:
-    """One arm's speed-up aggregate, carrying the population it is over.
+    """One arm's speedup aggregate, carrying the population it is over.
 
     ``kernels`` and ``values`` are parallel and are the exact set behind the number, so two of these
     can be checked for comparability rather than assumed to be comparable.

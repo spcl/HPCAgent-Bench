@@ -1,15 +1,15 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""One row of 1-D panels comparing OPTIMIZERS on speed-up alone: LLM arms beside standalone
+"""One row of 1-D panels comparing OPTIMIZERS on speedup alone: LLM arms beside standalone
 compilers, one panel per track.
 
 The stacked 1-D efficacy row (:func:`hpcagent_bench.stats.figures.efficacy.figure_dot_row`) compares
 two conditions of ONE optimizer per column and carries a cost row under it. This figure answers a
-different question -- which optimizer reaches the highest speed-up on a track -- so each column is
+different question -- which optimizer reaches the highest speedup on a track -- so each column is
 one optimizer, there is one mark per column, and there is no cost row: a compiler spends no tokens,
 and an empty cost cell beside every compiler would read as "free".
 
-Every mark is the geomean speed-up over the panel's own baseline with its log-space Student-t 95%
+Every mark is the geomean speedup over the panel's own baseline with its log-space Student-t 95%
 interval (:func:`~hpcagent_bench.stats.summary.geomean_ci`), over the panel's ROSTER. A kernel an
 optimizer produced no verified answer for enters at 1x and is counted, never dropped (agents and
 :func:`~hpcagent_bench.stats.canon.roster_speedups` for compilers alike),
@@ -63,7 +63,7 @@ ROW_HEIGHT_IN: float = 1.25
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class OptimizerMark:
-    """One optimizer on one track: its per-kernel speed-ups over the panel baseline, roster-complete.
+    """One optimizer on one track: its per-kernel speedups over the panel baseline, roster-complete.
 
     ``delivered`` is False for a kernel the optimizer left no verified answer on; its ratio is the
     1x placeholder and it is counted in the geomean.
@@ -88,7 +88,7 @@ class OptimizerMark:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class OptimizerPanel:
-    """One track: its title, the denominator its speed-ups are against, and its optimizers."""
+    """One track: its title, the denominator its speedups are against, and its optimizers."""
 
     title: str
     baseline: str
@@ -180,7 +180,7 @@ def draw_panel(ax: Axes, panel: OptimizerPanel, config: efficacy.FigureConfig, c
 
 
 def style_shared_axis(axes: Sequence[Axes], held: Sequence[float], config: efficacy.FigureConfig) -> None:
-    """One log2 speed-up axis for the whole row, ticked in ratios, labelled on the first panel."""
+    """One log2 speedup axis for the whole row, ticked in ratios, labelled on the first panel."""
     finite = [v for v in held if math.isfinite(v)]
     low, high = (min(finite), max(finite)) if finite else (-1.0, 1.0)
     reach = max(high - low, config.min_span)
@@ -194,7 +194,7 @@ def style_shared_axis(axes: Sequence[Axes], held: Sequence[float], config: effic
         efficacy.thin_rules(ax, config)
     axes[0].margins(y=config.margin)
     efficacy.snap_axis_to_ticks(axes[0], low, high)
-    axes[0].set_ylabel("Geomean Speed-Up", fontsize=config.type_.label_pt)
+    axes[0].set_ylabel("Geomean Speedup", fontsize=config.type_.label_pt)
 
 
 def legend_handles(panels: Sequence[OptimizerPanel], config: efficacy.FigureConfig) -> list[Line2D]:

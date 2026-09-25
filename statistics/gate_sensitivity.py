@@ -196,8 +196,7 @@ def load_percell_ratios(path: pathlib.Path) -> pd.DataFrame:
     bad = frame[pd.to_numeric(frame["ratio"], errors="coerce").fillna(0.0) <= 0.0]
     if not bad.empty:
         raise MissingPerCellDataError(
-            f"{path} has {len(bad)} row(s) with a non-positive 'ratio'; a cell ratio is a timed "
-            "speed-up and must be > 0"
+            f"{path} has {len(bad)} row(s) with a non-positive 'ratio'; a cell ratio is a timed speedup and must be > 0"
         )
     return frame
 

@@ -405,7 +405,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="regrade shard DBs from `hpcagent-bench regrade` (or scripts/regrade.py), or directories holding "
         "them: run-mode regrade-<shard>.db (every unstamped timed submission takes its re-timed row, one "
         "without any re-timing is dropped; promotions are added) and per-cell regrade-cells-<shard>.db, whose "
-        "final-grade rows (mw4x5-final-v2, else the v5 mw4x5-final) set the FINAL speed-up of each "
+        "final-grade rows (mw4x5-final-v2, else the v5 mw4x5-final) set the FINAL speedup of each "
         "submission they re-timed; repeatable",
     )
     ap.add_argument(
@@ -832,7 +832,7 @@ def task_rows_for_job(
     are not. ``harness`` and ``packet`` are filled from the SAME ``runs`` table lookup a judge row
     of the same ``run_id`` would carry (the job's launch env when no grade wrote one,
     :func:`launch_identities`); every other column stays blank -- a task row measures token
-    cost, not a grade, and must carry no speed-up (R1-R2 only look at ``submission`` rows).
+    cost, not a grade, and must carry no speedup (R1-R2 only look at ``submission`` rows).
     ``totals`` holds precomputed :func:`task_totals_by_dir` results; without it each directory is
     folded here.
     """
@@ -1093,7 +1093,7 @@ def read_db(
         if "sources" in tables:
             for row in conn.execute("SELECT * FROM sources ORDER BY id"):
                 blobs[(row["run_id"] or "", row["benchmark"] or "", int(row["ts"] or 0))] = row
-        # The per-cell disclosure behind a recorded speed-up, keyed the same way. Absent on any DB
+        # The per-cell disclosure behind a recorded speedup, keyed the same way. Absent on any DB
         # written before the table existed, which every reader must treat as "not recorded".
         cells: dict[tuple[str, str, int], tuple[int, Any, Any]] = {}
         shapes: dict[tuple[str, str, int], str] = {}
@@ -1765,8 +1765,8 @@ def apply_regrades(
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Rows with every unstamped timed submission put on the current reduction.
 
-    A re-graded row that verified takes the new speed-up, times, stamp and suspect flag; one that no longer
-    verifies becomes an attempt with no speed-up; one never re-graded is dropped, so no speed-up from the
+    A re-graded row that verified takes the new speedup, times, stamp and suspect flag; one that no longer
+    verifies becomes an attempt with no speedup; one never re-graded is dropped, so no speedup from the
     old reduction reaches a table -- unless the mw4x5-final pass re-timed it (``retimed``), which
     :func:`apply_final_regrades` then resolves. Every other row is unchanged.
     """
@@ -1911,11 +1911,11 @@ def apply_final_regrades(
     Applied AFTER :func:`apply_regrades` and :func:`apply_promotions`: a run-mode regrade decides
     whether a row verifies (and whether a promotion is a submission at all -- the per-cell pass
     re-times, it does not re-verify), then the final row (v2, else v1: :func:`load_final_regrades`)
-    decides its speed-up, and ``timing_reduction`` names which (:func:`final_stamp`; counted per
+    decides its speedup, and ``timing_reduction`` names which (:func:`final_stamp`; counted per
     stamp beside the outcomes, the v1 share). A submission
     the rule credits takes S_i as ``speedup`` with its stamp and cells, ``suspect`` set when no
     input entered the geomean (every one suspect); one the rule leaves unsolved becomes an attempt with no
-    speed-up (and no ``s_bar``), as a run-mode regrade that no longer verifies does. One whose re-timing the JUDGE
+    speedup (and no ``s_bar``), as a run-mode regrade that no longer verifies does. One whose re-timing the JUDGE
     failed keeps its recorded row under its OLD stamp, flagged ``regrade_status`` error and counted
     -- read neither as unsolved nor as re-timed, and refused if pooled with final-grade rows
     (``population.one_reduction``). A submission the pass never re-timed is kept and counted, and
@@ -1987,7 +1987,7 @@ def apply_final_regrades(
             **row,
             "regrade_status": status,
             "regraded": "1",
-            # the speed-up the judge first recorded, not a run-mode regrade's in-between one
+            # the speedup the judge first recorded, not a run-mode regrade's in-between one
             "original_speedup": row.get("original_speedup", "") if str(row.get("regraded")) == "1" else row["speedup"],
             # an every-input-unmeasured task has no measured cell to stamp it, yet its final rule decided it
             "timing_reduction": new["timing_reduction"],
@@ -2018,7 +2018,7 @@ def platform_rows(
     ``rows`` are the finished MI300A rows; each submission ``final`` holds a row for is copied and
     graded by :func:`apply_final_regrades` exactly as its MI300A final grade was -- credited, an
     unsolved attempt, or a judge error -- then stamped ``platform``, the node that timed it and its
-    commit. An errored re-timing keeps no speed-up: the one it would keep is the MI300A grade. The
+    commit. An errored re-timing keeps no speedup: the one it would keep is the MI300A grade. The
     MI300A rows are not touched; a re-timed key no submission matched is counted (``unmatched``).
     """
     answers = [row for row in rows if row.get("record") == "submission" and row_key(row) in final]

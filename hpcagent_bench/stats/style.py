@@ -380,7 +380,7 @@ def ratio_label(value: float) -> str:
 
 #: What a value axis holds, as far as its minor ticks care (:func:`minor_ticks`). ``ratio``: a log2
 #: axis in ratio units, majors at powers of two. ``log2``: a LINEAR axis holding ``log2(ratio)``
-#: (the efficacy speed-up axes), majors at whole exponents. ``token``: a log10 token axis.
+#: (the efficacy speedup axes), majors at whole exponents. ``token``: a log10 token axis.
 #: ``count``: a linear count from 0 to N (the efficacy success row).
 MinorKind = Literal["ratio", "log2", "token", "count"]
 
@@ -550,7 +550,7 @@ def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, 
         if major:
             # A decade gets 1, 2, 5, more than one labelled tick even under two decades. A base-2
             # (ratio) axis gets 1 ONLY: a 1.5 sub would label 1.5x, 3x, 6x, 0.75x, ... -- ticks a
-            # reader cannot place on a log2 grid by eye (:func:`ratio_tick_label`). The caller widens its own limits (SC15 speed-up/ratio axes always
+            # reader cannot place on a log2 grid by eye (:func:`ratio_tick_label`). The caller widens its own limits (SC15 speedup/ratio axes always
             # do) so a narrow window still gets more than the one tick this alone would leave it.
             subs = (1.0, 2.0, 5.0) if log_base == 10.0 else (1.0,)
             target.set_major_locator(LogLocator(base=log_base, subs=subs, numticks=20))
