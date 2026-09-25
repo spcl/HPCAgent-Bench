@@ -46,7 +46,7 @@ GLOO_SOCKET_IFNAME = "hsn0"
 NCCL_DEBUG = "INFO"
 NCCL_DEBUG_SUBSYS = "INIT,NET"
 TORCH_NCCL_ASYNC_ERROR_HANDLING = "1"
-# vLLM's symmetric-memory all-reduce paths are not reliable on aarch64/GH200 (scripts/cscs/env.toml.example).
+# vLLM's symmetric-memory all-reduce paths are not reliable on aarch64/GH200.
 VLLM_ALLREDUCE_USE_SYMM_MEM = "0"
 VLLM_NCCL_USE_SYMM_MEM = "0"
 # hwloc's GL/OpenCL probes hang the topology probe inside a container.

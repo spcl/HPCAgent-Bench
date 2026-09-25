@@ -18,8 +18,6 @@ the REALISED dtype at an explicit precision rather than trusting the default.
 to weigh the buffer.
 """
 
-from typing import Dict, List, Tuple
-
 import numpy as np
 import pytest
 
@@ -27,9 +25,8 @@ from hpcagent_bench.dtypes import storage_dtype
 from hpcagent_bench.frameworks.benchmark import Benchmark
 from hpcagent_bench.spec import KERNELS
 
-#: The precision the check runs at where the kernel supports it. fp64 is what every job submission
-#: asks for (scripts/submit_xl.sbatch pins DATATYPE=float64), so it is the precision a
-#: disagreement is reached at in practice.
+#: The precision the check runs at where the kernel supports it: fp64, the precision a job submission
+#: asks for, so it is the precision a disagreement is reached at in practice.
 PRECISION = "float64"
 #: The Precision-enum spelling of :data:`PRECISION`, to test a manifest's ``precisions`` list against.
 PRECISION_NAME = "fp64"
@@ -42,9 +39,9 @@ KERNEL_NAMES = sorted(KERNELS.select_keys("all"))
 SPECS = KERNELS.specs()
 
 
-def declared_dtypes(spec) -> Dict[str, str]:
+def declared_dtypes(spec) -> dict[str, str]:
     """``{array: dtype}`` the manifest declares, from either spelling of the init block."""
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     if spec.init is None:
         return out
     for name, entry in (spec.init.shapes or {}).items():
@@ -66,7 +63,7 @@ def check_precision(spec) -> str:
     return PRECISION if PRECISION_NAME in spec.precisions else spec.precisions[0]
 
 
-def disagreements(key: str) -> List[Tuple[str, str, str]]:
+def disagreements(key: str) -> list[tuple[str, str, str]]:
     """``(array, declared, realised)`` for every array of ``key`` whose dtype does not match."""
     spec = SPECS[key]
     declared = declared_dtypes(spec)
@@ -93,7 +90,7 @@ def test_every_declared_array_dtype_is_the_one_materialised(key: str) -> None:
     )
 
 
-def undeclared_integer_arrays(key: str) -> List[Tuple[str, str]]:
+def undeclared_integer_arrays(key: str) -> list[tuple[str, str]]:
     """``(array, realised)`` for every integer array of ``key`` the manifest leaves undeclared."""
     spec = SPECS[key]
     if spec.init is None:
