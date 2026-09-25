@@ -372,9 +372,8 @@ def pin_build_caching() -> None:
 
 @dataclass(frozen=True, slots=True)
 class PipelineContext:
-    """What one :attr:`SdfgPipeline.transform` runs against, built once per
-    :meth:`DaceFramework.optimize` (also used by ``scripts/audit_canon_parallelism.py``). ``symbols``
-    is the shape binding ``auto_optimize`` specialises against."""
+    """The DaCe handles one :attr:`SdfgPipeline.transform` runs against, built once per
+    :meth:`DaceFramework.optimize`. ``symbols`` is the shape binding ``auto_optimize`` specialises against."""
 
     device: dace_dtypes.DeviceType
     symbols: dict[str, int] = field(default_factory=dict[str, int])

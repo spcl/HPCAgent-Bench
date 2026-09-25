@@ -16,8 +16,7 @@
 #   * The EDF must enable a Cray fabric hook. Without one, MPI/NCCL falls back to TCP over the
 #     management network and the run reads as poor scaling rather than as a misconfigured launch --
 #     which is precisely the measurement this job exists to produce. Use
-#     scripts/cscs/mpi.toml.example, NOT loop_level_reasoning.toml.example (that one enables no hook on
-#     purpose: its ranks never talk).
+#     scripts/cscs/mpi.toml.example.
 #   * The driver runs INSIDE a container step, so the launches it spawns are NESTED srun steps.
 #     See "NESTED STEPS" below -- it is the one part of this script that has no local equivalent.
 #
@@ -26,8 +25,8 @@
 #       sbatch -A <account> -N 2 --ntasks-per-node=4 scripts/cscs/submit_mpi_scaling_alps.sbatch
 #
 # `-A <account>` is mandatory on Alps (or export SBATCH_ACCOUNT first). The image is the same OCI
-# image every other track uses; CE pulls and converts it itself (see submit_loop_level_reasoning_alps.sbatch
-# for the pre-import optimisation and the aarch64 requirement).
+# image every other track uses; CE pulls and converts it itself (mpi.toml.example notes the
+# pre-import option and the aarch64 requirement).
 #
 # NESTED STEPS. The harness is a serial driver that SPAWNS the launcher (harness/mpi_call.py builds
 # `<launcher> -n <P> <program>`), and on Alps the only way into the image is a Slurm flag -- so the
@@ -39,9 +38,8 @@
 # script; on a site where the harness is installed on the compute nodes, the generic sibling avoids
 # the nesting entirely by running the driver in the batch shell.
 #
-# UNVERIFIED AGAINST THE SITE'S OWN SUBMISSION SCRIPTS, same caveat as
-# scripts/cscs/submit_loop_level_reasoning_alps.sbatch: the partition, the account, the scratch layout and the
-# exact hook names are the things most likely to need a local edit before this runs as-is.
+# UNVERIFIED AGAINST THE SITE'S OWN SUBMISSION SCRIPTS: the partition, the account, the scratch
+# layout and the exact hook names are the things most likely to need a local edit before this runs as-is.
 
 #SBATCH --job-name=hpcagent_bench-mpi-scaling
 #SBATCH --nodes=2                 # 2 nodes x 4 ranks/node = 8 ranks: the default [1,2,4,8] sweep
@@ -97,8 +95,7 @@ fi
 if ! grep -Eq '^[[:space:]]*com\.hooks\.[A-Za-z0-9_.]+\.enabled[[:space:]]*=[[:space:]]*"true"' "${EDF}"; then
     echo "EDF=${EDF} enables no com.hooks.*: the ranks would fall back to TCP over the management" >&2
     echo "  network and the scaling curve would measure that, not the fabric." >&2
-    echo "  Start from scripts/cscs/mpi.toml.example (loop_level_reasoning.toml.example enables no hook ON" >&2
-    echo "  PURPOSE -- its ranks never talk to each other)." >&2
+    echo "  Start from scripts/cscs/mpi.toml.example." >&2
     exit 2
 fi
 

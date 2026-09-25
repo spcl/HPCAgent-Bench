@@ -17,7 +17,7 @@
 # after this job: the judge, the drop-in staging and the launch gates only read the cache. A hit
 # renders nothing, so a rerun renders only what changed.
 #
-#   VIEW=<dir> KERNELS_FILE=kernels-scicomp40.txt sbatch prerender_cpf.sbatch
+#   VIEW=<dir> TAG=scicomp-focus40 sbatch prerender_cpf.sbatch
 #   VIEW=<dir> TAG=llr-focus40 TARGET=gpu sbatch prerender_cpf.sbatch
 #   VIEW=<dir> TAG=llr-focus40 CPF_POOL=1 sbatch prerender_cpf.sbatch   # one rank, per-core kernel pool
 #

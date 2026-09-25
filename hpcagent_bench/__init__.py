@@ -41,7 +41,7 @@ os.environ.setdefault("MPI4PY_RC_INITIALIZE", "0")
 
 #: A segfaulting dace/sympy parse writes its whole address space to the crashing process's CWD, on
 #: a filesystem whose quota may be inodes. The shell
-#: entry points carry `ulimit -c 0` (scripts/check_core_dumps.py), an ad-hoc login-node script does
+#: entry points carry `ulimit -c 0` (scripts/checks/check_core_dumps.py), an ad-hoc login-node script does
 #: not. Set at PACKAGE import so one line covers every entry point. Soft limit only, and
 #: HPCAGENT_BENCH_CORE_DUMPS=1 opts out.
 core_dumps.disable()

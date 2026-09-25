@@ -8,7 +8,7 @@ PyPI rejects an upload whose Requires-Dist names a URL. The published requiremen
 never reach the wheel's metadata and are not checked. The TOML is parsed, never grepped, so a
 comment that spells an install command (``pip install "dace @ git+..."``) is not a requirement.
 
-    python scripts/check_direct_url_requirements.py [pyproject.toml]
+    python scripts/checks/check_direct_url_requirements.py [pyproject.toml]
 
 Exit status: 0 when none is found, 1 when one or more are (each is printed).
 """

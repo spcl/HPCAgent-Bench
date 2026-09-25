@@ -35,7 +35,7 @@ from pathlib import Path
 
 from hpcagent_bench.precommit_support import git_tracked
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 SPDX_LINE = "# SPDX-License-Identifier: GPL-3.0-or-later"
 # What --fix writes into a headerless file (the canonical year).
@@ -128,7 +128,7 @@ def main(argv=None):
     print(f"check-headers: {len(offenders)} of {len(targets)} in-scope file(s) missing the copyright/SPDX header:\n")
     for rel in offenders:
         print(f"  {rel}")
-    print("\nFix with:  python scripts/check_headers.py --fix")
+    print("\nFix with:  python scripts/checks/check_headers.py --fix")
     return 1
 
 

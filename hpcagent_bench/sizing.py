@@ -807,7 +807,7 @@ def derive_ladder(
 
 
 # Cost-aware corpus distribution: what a kernel is predicted to cost at a rung, and how the corpus
-# splits across ranks by it (support/collect/sweep.shard_names, scripts/size_audit.py --pack).
+# splits across ranks by it (support/collect/sweep.shard_names).
 #: The unit :attr:`KernelCost.predicted_time` is quoted in -- one gibibyte of declared working
 #: set. The number is RELATIVE and has no clock in it: the packer only ever asks which of two
 #: kernels is bigger, never how many seconds either takes.

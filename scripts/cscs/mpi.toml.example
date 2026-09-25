@@ -8,10 +8,8 @@
 #
 # On Alps every `srun` must carry `--environment=<this file>` or the step runs outside the image.
 #
-# THE ONE DIFFERENCE FROM loop_level_reasoning.toml.example: the hooks. That file deliberately enables NONE,
-# and says so -- its ranks each run a single-node kernel shard and never talk to each other, so
-# there is no rank-to-rank traffic to accelerate and a fabric hook would buy nothing. Here the ranks
-# talk on every timestep, and the hooks are the entire reason this file exists.
+# The hooks are the reason this file exists: the ranks talk on every timestep, so the fabric hooks
+# below carry that traffic.
 #
 # The image is the same OCI image every other track uses; CE pulls it, converts it to SquashFS and
 # caches it. Compute nodes are GH200, i.e. aarch64 -- an amd64-only image fails at exec time inside

@@ -360,7 +360,7 @@ def clean_for_pythran(source: str, kir: KernelIR) -> str:
     (:class:`PythranSafeMatVec`).
 
     Nothing here handles numpy's ``out=``: no kernel writes through it, and
-    ``scripts/check_no_out_kwarg.py`` is what keeps it that way."""
+    ``scripts/checks/check_no_out_kwarg.py`` is what keeps it that way."""
     fp32 = any(a.dtype == "float32" for a in kir.arrays)
     subs = {
         "np_float": "np.float32" if fp32 else "np.float64",

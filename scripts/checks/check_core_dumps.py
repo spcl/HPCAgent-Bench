@@ -25,16 +25,16 @@ Three rules, because each one alone has been escaped:
    ``ulimit -c unlimited`` that still dumps, so a non-zero ``ulimit -c`` needs
    a same-line ``# core-dumps-ok: <reason>`` marker, so a deliberate one (a probe that gdbs its own
    core in a container's /tmp and deletes it) is reviewed rather than silent.
-3. A script that EMITS a batch script counts as one. ``scripts/preset_sweep.py --emit-sbatch``
-   writes a submittable header from an f-string, so the guard has to be inside the emitted text --
-   and a check keyed on the suffix never sees it. Those are reported, never auto-fixed: the
+3. A script that EMITS a batch script counts as one: a submittable header written from an
+   f-string needs the guard inside the emitted text, which a check keyed on the suffix never sees.
+   Those are reported, never auto-fixed: the
    insertion point sits inside a quoted template, where a blind splice would land in the wrong
    string.
 
 Python processes are covered from the other side by :mod:`hpcagent_bench.core_dumps`, which drops
 the limit at package import -- that is what catches an ad-hoc script outside the repo.
 
-    python scripts/check_core_dumps.py [--fix] [paths...]
+    python scripts/checks/check_core_dumps.py [--fix] [paths...]
 """
 
 import argparse
@@ -70,7 +70,7 @@ MARKER = "# core-dumps-ok:"
 
 
 def repo_root() -> pathlib.Path:
-    return pathlib.Path(__file__).resolve().parents[1]
+    return pathlib.Path(__file__).resolve().parents[2]
 
 
 def display(path: pathlib.Path) -> str:
@@ -187,7 +187,11 @@ def main() -> int:
     emitted = [p for p in emitters(args.paths) if GUARD not in p.read_text(encoding="utf-8", errors="ignore")]
 
     if offenders:
-        report("shell script(s) do not disable core dumps", offenders, "Run: python scripts/check_core_dumps.py --fix")
+        report(
+            "shell script(s) do not disable core dumps",
+            offenders,
+            "Run: python scripts/checks/check_core_dumps.py --fix",
+        )
     if rearmed:
         report(
             "script(s) re-enable core dumps",

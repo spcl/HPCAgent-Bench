@@ -91,7 +91,7 @@ jobs:
           base="${{ github.event.pull_request.base.ref || 'main' }}"
           git fetch --no-tags origin "$base"
           python -m pip install --group linting
-          python scripts/check_format.py --base "origin/$base"
+          python scripts/checks/check_format.py --base "origin/$base"
 
       # The papi group (test_papi_counters.py) needs libpapi; a hosted runner may still expose no
       # PMU, so the tests can skip for that reason alone.

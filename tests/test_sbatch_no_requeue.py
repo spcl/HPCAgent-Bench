@@ -5,35 +5,17 @@
 The standing rule is jobs never self-resubmit or requeue: a NODE_FAIL auto-requeue reran job
 637040 into the SAME run directory under the same id and stacked duplicate rows on top of the
 partial ones the failed attempt had already written. ``#SBATCH --no-requeue`` is the one-line fix,
-and commit 32b0e3d6f swept it into every ``*.sbatch`` file that lacked it. That sweep keyed on the
-``.sbatch`` suffix alone and missed two more surfaces the same policy has to cover:
-
-1. A tracked file that is itself a submittable batch script but does not carry the ``.sbatch``
-   suffix -- ``experiments/smoke_library_requests.sh``, whose own header comment documents
-   submitting it directly with ``sbatch experiments/smoke_library_requests.sh``. Any tracked file
-   that embeds a literal ``#SBATCH`` directive line is this kind of entry point, suffix aside.
-2. A script that EMITS an sbatch header from a template rather than shipping one as a file --
-   ``scripts/preset_sweep.py --emit-sbatch`` builds a submittable script from an f-string
-   (``render_sbatch``). The guard has to be inside the EMITTED text, so a check that only greps
-   the generator's own source (which never contains the literal line, just the code that writes
-   it) would not see a regression here; this loads the module and calls ``render_sbatch`` the same
-   way ``tests/test_preset_sweep.py`` does, and inspects what it actually returns.
-
-``scripts/smoke_level3.sbatch`` is the third surface a plain ``.sbatch``-suffix scan already
-covers once the directive is added to it: it ships with no ``#SBATCH`` header of its own (every
-flag arrives on the ``sbatch`` command line in its documented submit comment), so the fix there is
-the directive itself plus that documented line, both asserted below.
+and it is checked on every ``*.sbatch`` file and on any other tracked, shell-shebanged file that
+embeds a literal ``#SBATCH`` directive line.
 
 Scope: ``git ls-files`` (the same enumeration the review that raised this asked for) never
 descends into ``third_party/KernelBench`` -- a git submodule recorded as a single gitlink entry,
 not individual files -- so the vendored tree is excluded without a special case.
 """
 
-import importlib.util
 import pathlib
 import re
 import subprocess
-import sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -48,15 +30,13 @@ GUARD = "#SBATCH --no-requeue"
 DIRECTIVE = re.compile(r"^#SBATCH\s+--")
 
 #: A shebang naming a shell -- narrows the whole-tree scan to files that are actually RUN, the same
-#: signal ``scripts/check_core_dumps.py`` (``SHELL_SHEBANG``) uses for the identical question.
+#: signal ``scripts/checks/check_core_dumps.py`` (``SHELL_SHEBANG``) uses for the identical question.
 SHEBANG = re.compile(rb"^#!.*\b(?:ba|da|k|z|a)?sh\b")
-
-PRESET_SWEEP = REPO / "scripts" / "preset_sweep.py"
 
 
 def tracked(*globs: str) -> list[pathlib.Path]:
     """Tracked repo paths matching ``globs`` (all tracked files with none given), as absolute
-    paths -- mirrors ``scripts/check_core_dumps.py``'s helper of the same name and purpose."""
+    paths -- mirrors ``scripts/checks/check_core_dumps.py``'s helper of the same name and purpose."""
     out = subprocess.run(
         ["git", "-C", str(REPO), "ls-files", *globs], capture_output=True, text=True, check=True
     ).stdout.split()
@@ -82,17 +62,6 @@ def sbatch_entry_points() -> list[pathlib.Path]:
     return list(found)
 
 
-def load_preset_sweep():
-    """Load ``scripts/preset_sweep.py`` as a module (it is a script, not a package member) --
-    same loader ``tests/test_preset_sweep.py`` uses, kept local so this file does not depend on
-    another test module's internals."""
-    spec = importlib.util.spec_from_file_location("preset_sweep_no_requeue_check", PRESET_SWEEP)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 def test_every_sbatch_entry_point_never_requeues() -> None:
     """A tracked ``.sbatch`` file, or any other tracked file carrying an ``#SBATCH`` header,
     always disables Slurm's auto-requeue."""
@@ -101,24 +70,4 @@ def test_every_sbatch_entry_point_never_requeues() -> None:
         f"sbatch entry point(s) without `{GUARD}` (a NODE_FAIL requeue reruns the job id into the "
         f"same RUN_DIR and stacks rows -- see job 637040): "
         f"{sorted(str(p.relative_to(REPO)) for p in missing)}"
-    )
-
-
-def test_preset_sweep_emitted_header_never_requeues() -> None:
-    """``scripts/preset_sweep.py --emit-sbatch`` writes a submittable header from an f-string; the
-    guard has to be inside that EMITTED text, which a source-file grep would never see."""
-    module = load_preset_sweep()
-    emitted = module.render_sbatch("a", framework="numpy", presets=["L"], single_core_presets=(), repeat=1)
-    assert GUARD in emitted, f"scripts/preset_sweep.py render_sbatch() omits `{GUARD}` from its emitted header"
-
-
-def test_smoke_level3_documents_no_requeue_on_its_submit_line() -> None:
-    """``scripts/smoke_level3.sbatch`` carries no other ``#SBATCH`` directive (every flag arrives
-    on the command line), so its documented submit comment is the only place a caller who copies
-    it would ever see the flag -- it must carry ``--no-requeue`` too, not just the file's own
-    directive."""
-    text = (REPO / "scripts" / "smoke_level3.sbatch").read_text(encoding="utf-8")
-    submit_lines = [line for line in text.splitlines() if line.strip().startswith("#") and "sbatch " in line]
-    assert any("--no-requeue" in line for line in submit_lines), (
-        "scripts/smoke_level3.sbatch's documented `sbatch ...` submit line is missing --no-requeue"
     )

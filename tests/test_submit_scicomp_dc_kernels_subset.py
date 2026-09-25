@@ -15,7 +15,7 @@ import subprocess
 
 from tests.test_submit_scicomp_dc_cpfsrc import env_dict, run_submit, submit_tree
 
-#: Three real scientific_computing kernels, distinct from the fixture's own kernels-scicomp40.txt
+#: Three real scientific_computing kernels, a subset of the scicomp-focus40 roster
 #: roster ("kmp", "dfa"), so a differently-NAMED KERNELS_FILE narrows to its own subset.
 SUBSET_KERNELS = ("kmp", "dfa", "heat_3d")
 
@@ -53,8 +53,8 @@ def test_subset_env_and_problems_names_never_touch_the_canonical_files(tmp_path:
 
 
 def test_agent_nodes_and_walltime_scale_with_the_subsets_own_kernel_count(tmp_path: pathlib.Path) -> None:
-    """arm_walltime must size off the SUBSET's own kernel count, not the fixture's canonical
-    kernels-scicomp40.txt roster. AGENT_NODES=1/AGENTS_PER_NODE=1 (both fixed, so AGENT_NODES stays
+    """arm_walltime must size off the SUBSET's own kernel count, not the launcher's full
+    scicomp-focus40 roster. AGENT_NODES=1/AGENTS_PER_NODE=1 (both fixed, so AGENT_NODES stays
     put rather than being recomputed from the subset) forces one batch per kernel: 3 kernels -> 3
     batches of the 72000s (20h) budget plus the 3h staging allowance -- a different number than a
     2-kernel subset needs (see test_a_wave_without_clean_or_a_deadline_is_unchanged's 23:00:00)."""

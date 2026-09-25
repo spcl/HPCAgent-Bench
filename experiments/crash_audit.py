@@ -55,8 +55,8 @@ import re
 import sqlite3
 from typing import NamedTuple
 
-import remaining_kernels as rk  # noqa: E402  -- path insert above must run first
-import wave_board  # noqa: E402  -- path insert above must run first
+import remaining_kernels as rk
+import wave_board
 
 HERE = pathlib.Path(__file__).resolve().parent
 

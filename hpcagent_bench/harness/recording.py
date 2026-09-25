@@ -982,7 +982,7 @@ def upgrade(conn: sqlite3.Connection) -> None:
     point it at a DB worth keeping)."""
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     if "runs" not in tables and tables & {"submissions", "attempts", "calls"}:
-        raise ValueError("a results DB without a runs table predates the run identity: use scripts/migrate_db.py")
+        raise ValueError("a results DB without a runs table predates the run identity and cannot be migrated")
     ensure_schema(conn)  # first: a derived column's condition reads tables an old DB may lack
     label_legacy_curves(conn)
     refuse_lossy_retirement(conn)
