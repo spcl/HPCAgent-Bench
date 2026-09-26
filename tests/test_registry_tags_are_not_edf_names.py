@@ -7,7 +7,7 @@ kebab-case strings in images.env, one line apart, and a rename that walked the t
 names also rewrote two tags. The pull then asked the registry for a tag nobody ever pushed and
 got a 404 -- after a compute node had already spent twenty minutes fetching the other three.
 
-Published tags are role-scoped (`agent-latest`, `judge-latest`, `sglang-latest`, `vllm-latest`);
+Published tags are role-scoped (`agent-mi300-latest`, `judge-mi300-latest`, `sglang-latest`, `vllm-latest`);
 EDF names carry the project prefix. So a tag that begins with the project prefix is the signature
 of exactly this mistake.
 """
